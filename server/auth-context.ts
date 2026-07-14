@@ -22,7 +22,7 @@ interface AuthContextOptions {
   readState: () => Promise<RuntimeState>
 }
 
-const PUBLIC_PATHS = new Set(['/api/health', '/api/live', '/api/ready', '/api/metrics'])
+const PUBLIC_PATHS = new Set(['/api/health', '/api/live', '/api/ready', '/api/metrics', '/api/auth/pilot-login'])
 
 function encode(value: object) {
   return Buffer.from(JSON.stringify(value)).toString('base64url')
@@ -74,7 +74,7 @@ function isAnonymousGuestRequest(request: FastifyRequest) {
 }
 
 function assertActorBinding(request: FastifyRequest, actorId: string, runtimeMode: RuntimeMode) {
-  if (runtimeMode !== 'production' || !request.body || typeof request.body !== 'object') return
+  if (!['staging', 'production'].includes(runtimeMode) || !request.body || typeof request.body !== 'object') return
   const body = request.body as Record<string, unknown>
   for (const field of ['actorId', 'createdBy', 'submittedBy', 'requestedBy', 'decidedBy']) {
     const claimedActor = body[field]

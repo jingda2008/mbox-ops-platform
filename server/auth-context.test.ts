@@ -41,9 +41,9 @@ describe('request authentication boundary', () => {
     await app.close()
   })
 
-  it('requires signed sessions, disables dev routes and rejects actor impersonation in production', async () => {
+  it.each(['staging', 'production'] as const)('requires signed sessions, disables dev routes and rejects actor impersonation in %s', async (runtimeMode) => {
     const app = Fastify()
-    await registerAuthContext(app, { runtimeMode: 'production', sessionSecret: secret, readState: async () => createSeedState() })
+    await registerAuthContext(app, { runtimeMode, sessionSecret: secret, readState: async () => createSeedState() })
     app.post('/api/protected', async (request) => request.mboxActor)
     app.get('/api/dev/member', async () => ({ unsafe: true }))
     const token = signStaffSession({ actorId: 'emp-chen', storeId: 'mbox-lujiazui', issuedAt: Date.now(), expiresAt: Date.now() + 60_000 }, secret)

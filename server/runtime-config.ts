@@ -24,6 +24,8 @@ export interface RuntimeConfig {
   databasePoolMax: number
   metricsToken?: string
   publicBaseUrl?: string
+  pilotAccessCode?: string
+  pilotSessionHours: number
   wechatEnabled: boolean
   wechatAppId?: string
   wechatAppSecret?: string
@@ -100,6 +102,8 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
     databasePoolMax: parseInteger(env.MBOX_DATABASE_POOL_MAX, 10, 'MBOX_DATABASE_POOL_MAX', 1, 100),
     metricsToken: env.MBOX_METRICS_TOKEN?.trim() || undefined,
     publicBaseUrl: env.MBOX_PUBLIC_BASE_URL?.trim() || undefined,
+    pilotAccessCode: env.MBOX_PILOT_ACCESS_CODE?.trim() || undefined,
+    pilotSessionHours: parseInteger(env.MBOX_PILOT_SESSION_HOURS, 12, 'MBOX_PILOT_SESSION_HOURS', 1, 24),
     wechatEnabled: parseBoolean(env.MBOX_WECHAT_ENABLED),
     wechatAppId: env.MBOX_WECHAT_APP_ID?.trim() || undefined,
     wechatAppSecret: env.MBOX_WECHAT_APP_SECRET?.trim() || undefined,
@@ -134,6 +138,11 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
       throw new Error('启用微信身份必须配置至少32字符的MBOX_WECHAT_STATE_SECRET')
     }
     if (!config.wechatEncryptionKey) throw new Error('启用微信身份必须配置32字节加密密钥')
+  }
+
+  if (config.pilotAccessCode) {
+    if (runtimeMode !== 'staging') throw new Error('门店验证登录只能在staging环境启用')
+    if (config.pilotAccessCode.length < 10) throw new Error('MBOX_PILOT_ACCESS_CODE至少需要10个字符')
   }
 
   if (runtimeMode === 'staging' || runtimeMode === 'production') {

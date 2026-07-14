@@ -51,6 +51,26 @@ describe('runtime config', () => {
     expect(() => loadRuntimeConfig({ MBOX_BODY_LIMIT_BYTES: '10' })).toThrow('MBOX_BODY_LIMIT_BYTES')
   })
 
+  it('allows pilot login only in staging with a strong access code', () => {
+    const staging = {
+      MBOX_RUNTIME_MODE: 'staging',
+      MBOX_REPOSITORY: 'postgres',
+      DATABASE_URL: 'postgresql://mbox:secret@db/mbox',
+      MBOX_TENANT_ID: '11111111-1111-4111-8111-111111111111',
+      MBOX_STORE_UUID: '22222222-2222-4222-8222-222222222222',
+      MBOX_SESSION_SECRET: 's'.repeat(32),
+      MBOX_QR_SECRET: 'q'.repeat(32),
+      MBOX_METRICS_TOKEN: 'm'.repeat(32),
+      MBOX_CORS_ORIGINS: 'https://pilot.example.com',
+    }
+    expect(loadRuntimeConfig({ ...staging, MBOX_PILOT_ACCESS_CODE: 'pilot-code-strong' })).toMatchObject({
+      pilotAccessCode: 'pilot-code-strong',
+      pilotSessionHours: 12,
+    })
+    expect(() => loadRuntimeConfig({ ...staging, MBOX_PILOT_ACCESS_CODE: 'short' })).toThrow('至少需要10个字符')
+    expect(() => loadRuntimeConfig({ MBOX_PILOT_ACCESS_CODE: 'pilot-code-strong' })).toThrow('只能在staging')
+  })
+
   it('fails closed when WeChat identity is enabled without production cryptographic material', () => {
     expect(() => loadRuntimeConfig({ MBOX_WECHAT_ENABLED: 'true' })).toThrow('PostgreSQL')
     const base = {

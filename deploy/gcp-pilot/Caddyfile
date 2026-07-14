@@ -1,0 +1,7 @@
+{$MBOX_DOMAIN} {
+  encode zstd gzip
+  reverse_proxy app:8787
+  header {
+    -Server
+  }
+}

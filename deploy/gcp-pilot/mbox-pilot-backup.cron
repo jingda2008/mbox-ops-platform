@@ -1,0 +1,1 @@
+17 20 * * * root /opt/mbox/backup.sh >> /var/log/mbox-backup.log 2>&1

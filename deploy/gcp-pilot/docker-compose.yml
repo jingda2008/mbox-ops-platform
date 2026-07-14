@@ -1,0 +1,79 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: mbox-pilot-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mbox
+      POSTGRES_USER: mbox
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mbox -d mbox"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+
+  app:
+    image: ${MBOX_IMAGE}
+    container_name: mbox-pilot-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: 8787
+      MBOX_RUNTIME_MODE: staging
+      MBOX_REPOSITORY: postgres
+      DATABASE_URL: postgresql://mbox:${POSTGRES_PASSWORD}@db:5432/mbox
+      MBOX_TENANT_ID: ${MBOX_TENANT_ID}
+      MBOX_STORE_UUID: ${MBOX_STORE_UUID}
+      MBOX_SESSION_SECRET: ${MBOX_SESSION_SECRET}
+      MBOX_QR_SECRET: ${MBOX_QR_SECRET}
+      MBOX_METRICS_TOKEN: ${MBOX_METRICS_TOKEN}
+      MBOX_CORS_ORIGINS: https://${MBOX_DOMAIN}
+      MBOX_PUBLIC_BASE_URL: https://${MBOX_DOMAIN}
+      MBOX_PILOT_ACCESS_CODE: ${MBOX_PILOT_ACCESS_CODE}
+      MBOX_PILOT_SESSION_HOURS: 12
+      MBOX_LOG_LEVEL: info
+    volumes:
+      - ./bootstrap:/bootstrap
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8787/api/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  caddy:
+    image: caddy:2.10-alpine
+    container_name: mbox-pilot-caddy
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      MBOX_DOMAIN: ${MBOX_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:

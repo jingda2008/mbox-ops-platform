@@ -68,6 +68,7 @@ import {
 import { registerInventoryRoutes } from './inventory-api.js'
 import { registerReservationRoutes } from './reservation-api.js'
 import { registerWechatReservationRoutes } from './wechat-reservation-api.js'
+import { registerPilotAuthRoutes } from './pilot-auth.js'
 
 const runtimeConfig = loadRuntimeConfig()
 
@@ -109,6 +110,14 @@ await registerAuthContext(app, {
   sessionSecret: runtimeConfig.sessionSecret,
   readState: () => repository.read(),
 })
+
+if (runtimeConfig.pilotAccessCode) {
+  await registerPilotAuthRoutes(app, repository, {
+    accessCode: runtimeConfig.pilotAccessCode,
+    sessionSecret: runtimeConfig.sessionSecret!,
+    sessionHours: runtimeConfig.pilotSessionHours,
+  })
+}
 
 let wechatChallengeRepository: PostgresWechatChallengeRepository | undefined
 let wechatIdentityRepository: PostgresWechatIdentityRepository | undefined
@@ -322,7 +331,9 @@ if (runtimeConfig.runtimeMode === 'staging' || runtimeConfig.runtimeMode === 'pr
     if (request.url.startsWith('/api/')) {
       return reply.status(404).send({ code: 'ROUTE_NOT_FOUND', message: '接口不存在' })
     }
-    return reply.sendFile('index.html')
+    const path = request.url.split('?')[0]?.replace(/\/$/, '') || '/'
+    if (path === '/' || path === '/guest' || path === '/member') return reply.sendFile('index.html')
+    return reply.status(404).send({ code: 'PAGE_NOT_FOUND', message: '页面不存在' })
   })
 }
 

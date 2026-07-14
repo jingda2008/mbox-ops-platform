@@ -4,6 +4,8 @@ import {
   Clock3,
   CloudUpload,
   LoaderCircle,
+  LogIn,
+  LogOut,
   MapPin,
   Navigation,
   RefreshCw,
@@ -12,7 +14,7 @@ import {
   WifiOff,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { actOnTask, getBootstrap, replayQueuedTaskAction } from './api'
+import { ApiError, actOnTask, createPilotSession, getBootstrap, getPilotEmployees, replayQueuedTaskAction } from './api'
 import './App.css'
 import { GuestPortal } from './components/GuestPortal'
 import { MemberBenefitsPortal } from './components/MemberBenefitsPortal'
@@ -31,6 +33,7 @@ import {
   type OfflineStatus,
 } from './offline'
 import type { BootstrapResponse, TaskActionInput } from './shared/contracts'
+import type { PilotEmployeeOption } from './shared/auth-contracts'
 
 const RESTRICTED_OFFLINE_VIEWS = '.payment-view, .config-view, .benefit-view, .song-view, .master-view, .commerce-view, .reservation-view, .inventory-view'
 
@@ -41,6 +44,7 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<OfflineSnapshot | null>(null)
   const [error, setError] = useState('')
   const [guardNotice, setGuardNotice] = useState('')
+  const [requiresLogin, setRequiresLogin] = useState(false)
   const [offlineStatus, setOfflineStatus] = useState<OfflineStatus>(() => getOfflineStatus())
   const previousPendingCount = useRef(offlineStatus.pendingCount)
 
@@ -57,6 +61,7 @@ export default function App() {
         setGuardNotice('现场快照未能写入本机，断网重载时将不可用')
       }
     } catch (requestError) {
+      if (requestError instanceof ApiError && requestError.status === 401) setRequiresLogin(true)
       setError(requestError instanceof Error ? requestError.message : '无法连接运营服务')
     }
   }, [])
@@ -86,6 +91,14 @@ export default function App() {
 
   if (isGuest) return <GuestPortal />
   if (isMember) return <MemberBenefitsPortal />
+
+  if (requiresLogin) {
+    return <PilotLogin onAuthenticated={() => {
+      setRequiresLogin(false)
+      setError('')
+      void refresh()
+    }} />
+  }
 
   if (snapshot && !offlineStatus.online) {
     return (
@@ -130,6 +143,18 @@ export default function App() {
       onClickCapture={blockRestrictedOfflineAction}
     >
       <ConnectivityBanner status={offlineStatus} onRetry={refresh} />
+      {window.localStorage.getItem('mbox.auth.token') && (
+        <div className="pilot-session-bar">
+          <span>当前员工：<strong>{window.localStorage.getItem('mbox.actor.name') ?? '已登录员工'}</strong></span>
+          <button onClick={() => {
+            window.localStorage.removeItem('mbox.auth.token')
+            window.localStorage.removeItem('mbox.actor.id')
+            window.localStorage.removeItem('mbox.actor.name')
+            setData(null)
+            setRequiresLogin(true)
+          }}><LogOut size={15} />切换员工</button>
+        </div>
+      )}
       {guardNotice && (
         <div className="offline-guard-notice" role="alert">
           <ShieldAlert size={17} />{guardNotice}
@@ -138,6 +163,66 @@ export default function App() {
       )}
       <OperationsConsole data={data} onRefresh={refresh} />
     </div>
+  )
+}
+
+function PilotLogin({ onAuthenticated }: { onAuthenticated: () => void }) {
+  const [accessCode, setAccessCode] = useState('')
+  const [employees, setEmployees] = useState<PilotEmployeeOption[]>([])
+  const [actorId, setActorId] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  async function verifyAccess() {
+    setLoading(true)
+    setError('')
+    try {
+      const response = await getPilotEmployees(accessCode)
+      const options = response.employees ?? []
+      if (options.length === 0) throw new Error('当前没有可登录的在职员工')
+      setEmployees(options)
+      setActorId(options[0]!.id)
+    } catch (loginError) {
+      setError(loginError instanceof Error ? loginError.message : '验证失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function login() {
+    setLoading(true)
+    setError('')
+    try {
+      const response = await createPilotSession(accessCode, actorId)
+      if (!response.token || !response.employee) throw new Error('员工会话签发失败')
+      window.localStorage.setItem('mbox.auth.token', response.token)
+      window.localStorage.setItem('mbox.actor.id', response.employee.id)
+      window.localStorage.setItem('mbox.actor.name', response.employee.displayName)
+      onAuthenticated()
+    } catch (loginError) {
+      setError(loginError instanceof Error ? loginError.message : '登录失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <main className="pilot-login-shell">
+      <section className="pilot-login-panel">
+        <div className="pilot-login-brand"><span>M</span><div><strong>M-Box</strong><small>门店验证环境</small></div></div>
+        <h1>{employees.length === 0 ? '验证访问身份' : '选择当前员工'}</h1>
+        {employees.length === 0 ? (
+          <label><span>门店验证口令</span><input type="password" autoComplete="current-password" value={accessCode} onChange={(event) => setAccessCode(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && accessCode) void verifyAccess() }} /></label>
+        ) : (
+          <label><span>当前操作员工</span><select value={actorId} onChange={(event) => setActorId(event.target.value)}>{employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName} · {employee.roleName}</option>)}</select></label>
+        )}
+        {error && <p className="pilot-login-error" role="alert">{error}</p>}
+        <button className="primary-button" disabled={loading || (employees.length === 0 ? !accessCode : !actorId)} onClick={() => void (employees.length === 0 ? verifyAccess() : login())}>
+          {loading ? <LoaderCircle className="spin" size={17} /> : <LogIn size={17} />}{employees.length === 0 ? '继续' : '进入运营台'}
+        </button>
+        {employees.length > 0 && <button className="pilot-login-back" onClick={() => { setEmployees([]); setActorId(''); setError('') }}>重新输入口令</button>}
+      </section>
+    </main>
   )
 }
 

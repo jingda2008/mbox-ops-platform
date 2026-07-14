@@ -40,6 +40,7 @@ import type {
   BenefitRedemptionConfirmInput,
   BenefitRedemptionLockInput,
 } from './shared/benefit-redemption-contracts'
+import type { PilotLoginResponse } from './shared/auth-contracts'
 import type { ConfigVersionRecord } from './shared/config-versioning-contracts'
 import type { SongRequest } from './shared/song-contracts'
 import type {
@@ -72,6 +73,20 @@ export class OfflineWriteBlockedError extends Error {
     super('当前处于离线状态，此操作涉及支付、退款或运营配置，已禁止提交')
     this.name = 'OfflineWriteBlockedError'
   }
+}
+
+export function getPilotEmployees(accessCode: string) {
+  return request<PilotLoginResponse>('/api/auth/pilot-login', {
+    method: 'POST',
+    body: JSON.stringify({ accessCode }),
+  })
+}
+
+export function createPilotSession(accessCode: string, actorId: string) {
+  return request<PilotLoginResponse>('/api/auth/pilot-login', {
+    method: 'POST',
+    body: JSON.stringify({ accessCode, actorId }),
+  })
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

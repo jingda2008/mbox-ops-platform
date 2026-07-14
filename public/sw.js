@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'mbox-ops-shell-v2'
+const CACHE_VERSION = 'mbox-ops-shell-v3'
 const SHELL_URLS = ['/', '/manifest.webmanifest', '/favicon.svg', '/assets/mbox-floorplan.png']
 const SENSITIVE_PATH = /\/(api|member|members|payment|payments|refund|refunds)(\/|$)/i
 const STATIC_DESTINATIONS = new Set(['document', 'script', 'style', 'image', 'font'])

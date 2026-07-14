@@ -15,3 +15,16 @@ export interface RequestActorContext {
   runtimeMode: RuntimeMode
   authenticatedBy: 'local_header' | 'signed_session'
 }
+
+export interface PilotEmployeeOption {
+  id: string
+  displayName: string
+  roleName: string
+}
+
+export interface PilotLoginResponse {
+  employees?: PilotEmployeeOption[]
+  token?: string
+  expiresAt?: number
+  employee?: PilotEmployeeOption
+}

@@ -1,0 +1,40 @@
+<view class="page reservations-page">
+  <view class="top-band reservation-band">
+    <view class="brand-row"><view class="brand"><view class="brand-mark">M</view><text>预约到店</text></view><text wx:if="{{isDevelopment}}" class="dev-badge">开发模式</text></view>
+    <text class="reservation-band__title">提前安排，现场确认</text>
+    <text class="reservation-band__meta">本人微信会话仅可查看本人预约</text>
+  </view>
+
+  <state-panel wx:if="{{loading}}" type="loading" title="正在载入预约信息" />
+  <block wx:else>
+    <view wx:if="{{error}}" class="error-banner">{{error}}</view>
+    <view wx:if="{{success}}" class="success-banner">{{success}}</view>
+
+    <view class="section form-section">
+      <view class="section-title"><text>预约信息</text><text class="section-link">门店确认后生效</text></view>
+      <view class="panel reservation-form">
+        <label class="field"><text class="field__label">称呼</text><input class="field__input" maxlength="100" value="{{customerName}}" placeholder="如：林女士" bindinput="onNameInput" /></label>
+        <label class="field"><text class="field__label">人数</text><input class="field__input" type="number" value="{{partySize}}" bindinput="onPartySizeInput" /></label>
+        <view class="field-row">
+          <label class="field"><text class="field__label">日期</text><picker mode="date" value="{{reservationDate}}" start="{{minimumDate}}" bindchange="onDateChange"><view class="picker-field">{{reservationDate}}</view></picker></label>
+          <label class="field"><text class="field__label">时间</text><picker mode="time" value="{{reservationTime}}" bindchange="onTimeChange"><view class="picker-field">{{reservationTime}}</view></picker></label>
+        </view>
+        <label class="field"><text class="field__label">区域偏好</text><picker mode="selector" range="{{areaOptions}}" range-key="name" value="{{areaIndex}}" bindchange="onAreaChange"><view class="picker-field">{{areaOptions[areaIndex].name}}</view></picker></label>
+        <label class="field"><text class="field__label">到店场景</text><picker mode="selector" range="{{occasionOptions}}" range-key="name" value="{{occasionIndex}}" bindchange="onOccasionChange"><view class="picker-field">{{occasionOptions[occasionIndex].name}}</view></picker></label>
+        <label class="field"><text class="field__label">备注</text><textarea class="field__textarea" maxlength="500" value="{{occasionNote}}" placeholder="如生日称呼、希望安排的互动时间" bindinput="onNoteInput" /></label>
+        <button class="primary-button" loading="{{submitting}}" disabled="{{submitting}}" bindtap="submitReservation">提交预约</button>
+      </view>
+    </view>
+
+    <view class="section">
+      <view class="section-title"><text>我的预约</text><text class="section-link">{{reservations.length}} 条</text></view>
+      <view wx:if="{{reservations.length}}" class="panel reservation-list">
+        <view wx:for="{{reservations}}" wx:key="id" class="list-row reservation-row">
+          <view class="list-row__main"><text class="list-row__title">{{item.scheduledAtText}} · {{item.partySize}}人</text><text class="list-row__meta">{{item.areaName}}{{item.occasionName ? ' · ' + item.occasionName : ''}}</text><text wx:if="{{item.occasionNote}}" class="reservation-note">{{item.occasionNote}}</text></view>
+          <text class="status-tag status-tag--{{item.status}}">{{item.statusText}}</text>
+        </view>
+      </view>
+      <state-panel wx:else type="empty" title="暂无预约" message="提交后可在本页查看门店确认状态" />
+    </view>
+  </block>
+</view>

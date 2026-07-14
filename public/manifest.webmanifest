@@ -1,0 +1,21 @@
+{
+  "name": "M-Box 现场运营",
+  "short_name": "M-Box 运营",
+  "description": "M-Box 员工与管理现场服务任务系统",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f3f4f0",
+  "theme_color": "#1d1f1c",
+  "categories": ["business", "productivity"],
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+<view class="page">
+  <view class="top-band">
+    <view class="brand-row"><view><text class="eyebrow">{{tableCode}} · 客户可见状态</text><text class="status-title">处理进度</text></view><text wx:if="{{isDevelopment}}" class="dev-badge">开发模式</text></view>
+  </view>
+  <state-panel wx:if="{{loading}}" type="loading" title="正在同步最新状态" />
+  <block wx:else>
+    <view wx:if="{{warning}}" class="warning">{{warning}}</view>
+    <view wx:if="{{error}}" class="error-banner">{{error}}</view>
+    <view wx:if="{{success}}" class="success-banner">{{success}}</view>
+    <view class="section">
+      <view class="section-title"><text>服务进度</text><text class="section-link">下拉刷新</text></view>
+      <view wx:if="{{tasks.length}}" class="panel status-list">
+        <view wx:for="{{tasks}}" wx:key="id" class="status-item">
+          <view class="status-item__head"><view><text class="list-row__title">{{item.serviceName}}</text><text class="list-row__meta">{{item.createdAtText}} · {{item.ownerName}}</text></view><text class="status-chip">{{item.statusText}}</text></view>
+          <text wx:if="{{item.note}}" class="status-note">{{item.note}}</text>
+          <view wx:if="{{item.canFeedback}}" class="feedback-actions">
+            <button class="feedback-confirm" data-id="{{item.id}}" data-action="confirm" disabled="{{feedbackTaskId}}" bindtap="submitFeedback">已解决</button>
+            <button class="feedback-unresolved" data-id="{{item.id}}" data-action="unresolved" disabled="{{feedbackTaskId}}" bindtap="submitFeedback">仍未解决</button>
+          </view>
+        </view>
+      </view>
+      <state-panel wx:else type="empty" title="暂无服务记录" message="呼叫服务后，接单、到桌和完成状态会显示在这里" />
+    </view>
+    <view class="section">
+      <view class="section-title"><text>点歌状态</text><text class="section-link">与舞台同步</text></view>
+      <view wx:if="{{songRequests.length}}" class="panel status-list">
+        <view wx:for="{{songRequests}}" wx:key="id" class="status-item">
+          <view class="status-item__head"><view><text class="list-row__title">{{item.songTitle}}</text><text class="list-row__meta">{{item.singerName}} · {{item.createdAtText}}</text></view><text class="status-chip status-chip--song">{{item.statusText}}</text></view>
+        </view>
+      </view>
+      <state-panel wx:else type="empty" title="暂无点歌记录" message="提交点歌意向后，舞台确认与履约状态会显示在这里" />
+    </view>
+  </block>
+</view>

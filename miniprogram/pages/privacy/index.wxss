@@ -1,0 +1,7 @@
+.privacy-page { background: #ffffff; }
+.privacy-title { display: block; color: #ffffff; font-size: 44rpx; font-weight: 750; }
+.privacy-version { display: block; margin-top: 12rpx; color: #abb2bc; font-size: 22rpx; }
+.privacy-section { padding: 28rpx 0; border-bottom: 1rpx solid #e5e7eb; }
+.privacy-section text { display: block; }
+.privacy-section text:first-child { color: #25282e; font-size: 28rpx; font-weight: 700; }
+.privacy-section text:last-child { margin-top: 14rpx; color: #5f6772; font-size: 25rpx; line-height: 1.75; }

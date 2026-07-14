@@ -1,0 +1,26 @@
+{
+  "description": "M-Box 客户桌码小程序",
+  "appid": "touristappid",
+  "projectname": "mbox-guest-miniprogram",
+  "miniprogramRoot": "./",
+  "compileType": "miniprogram",
+  "setting": {
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "minified": true,
+    "urlCheck": false
+  },
+  "simulatorType": "wechat",
+  "condition": {
+    "miniprogram": {
+      "list": [
+        {
+          "name": "开发桌码 L01",
+          "pathName": "pages/home/index",
+          "query": "table=L01"
+        }
+      ]
+    }
+  }
+}

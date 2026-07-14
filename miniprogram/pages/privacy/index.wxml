@@ -1,0 +1,31 @@
+<view class="page privacy-page">
+  <view class="top-band">
+    <text class="eyebrow">M-Box 客户桌码服务</text>
+    <text class="privacy-title">隐私说明</text>
+    <text class="privacy-version">开发版 · 更新于 2026-07-14</text>
+  </view>
+  <view class="privacy-section">
+    <text>1. 我们处理哪些信息</text>
+    <text>为识别当前服务场景，小程序会处理门店编号、桌号、桌台会话令牌、您提交的服务或投诉说明，以及对应任务状态。会员页在您主动绑定身份后才应展示会员资料与权益。</text>
+  </view>
+  <view class="privacy-section">
+    <text>2. 信息如何使用</text>
+    <text>上述信息仅用于派发现场服务、同步进度、核对本桌订单、处理投诉、展示权益和点歌履约。投诉内容应限制在处理问题所需范围内。</text>
+  </view>
+  <view class="privacy-section">
+    <text>3. 支付与敏感凭证</text>
+    <text>当前小程序不发起或模拟支付。AppSecret、支付密钥、服务商 access token 和员工会话密钥不得写入小程序代码、缓存或日志，必须由后端保管。</text>
+  </view>
+  <view class="privacy-section">
+    <text>4. 开发模式</text>
+    <text>页面出现“开发模式”或“开发占位数据”时，相关数据只用于本地联调，不代表真实会员、订单、支付、通知送达或门店承诺。</text>
+  </view>
+  <view class="privacy-section">
+    <text>5. 您的选择</text>
+    <text>您可以不绑定会员身份，仍通过匿名桌码会话呼叫现场服务。需要更正或删除会员资料时，应通过门店公布的正式客服渠道申请。</text>
+  </view>
+  <view class="privacy-section">
+    <text>6. 正式发布前</text>
+    <text>运营主体需根据实际上线的数据字段、第三方 SDK、服务器域名、保存期限和联系方式补充并审核微信小程序隐私保护指引。</text>
+  </view>
+</view>

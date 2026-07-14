@@ -1,0 +1,9 @@
+.service-table { display: block; color: #ffffff; font-size: 48rpx; font-weight: 750; }
+.service-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16rpx; }
+.service-item { min-height: 154rpx; margin: 0; padding: 26rpx 22rpx; border: 1rpx solid #dfe2e7; border-radius: 8rpx; background: #ffffff; color: #202329; text-align: left; line-height: 1.2; }
+.service-item::after { border: 0; }
+.service-item[disabled] { background: #eef0f2; color: #8a9099; }
+.service-item__name { display: block; font-size: 28rpx; font-weight: 700; }
+.service-item__meta { display: block; margin-top: 14rpx; color: #777f8a; font-size: 21rpx; line-height: 1.4; }
+.note-field { margin-top: 30rpx; }
+.status-link { display: block; margin-top: 18rpx; text-align: center; }

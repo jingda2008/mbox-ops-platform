@@ -1,0 +1,13 @@
+.reservations-page { padding-top: 0; }
+.reservation-band { padding-top: 30rpx; padding-bottom: 38rpx; }
+.reservation-band__title { display: block; margin-top: 42rpx; font-size: 42rpx; font-weight: 720; }
+.reservation-band__meta { display: block; margin-top: 12rpx; color: #c8cdd4; font-size: 23rpx; }
+.form-section { margin-top: 0; }
+.reservation-form .field:last-of-type { margin-bottom: 28rpx; }
+.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 18rpx; }
+.picker-field { height: 82rpx; padding: 0 22rpx; border: 1rpx solid #ccd1d9; border-radius: 8rpx; background: #ffffff; color: #17191d; font-size: 27rpx; line-height: 82rpx; }
+.reservation-list { padding-top: 0; padding-bottom: 0; }
+.reservation-note { display: block; margin-top: 8rpx; color: #4f5661; font-size: 22rpx; line-height: 1.5; }
+.status-tag { flex: none; padding: 8rpx 12rpx; border-radius: 6rpx; background: #eef0f3; color: #4f5661; font-size: 21rpx; }
+.status-tag--confirmed, .status-tag--arrived, .status-tag--seated { background: #e7f4ec; color: #226242; }
+.status-tag--cancelled, .status-tag--no_show { background: #f4ecea; color: #8b3025; }

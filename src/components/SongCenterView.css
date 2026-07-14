@@ -1,0 +1,40 @@
+.song-view { overflow: hidden; border: 1px solid var(--line); background: #fff; }
+.song-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-block: 1px solid var(--line); }
+.song-metric { min-height: 70px; display: grid; place-content: center; gap: 2px; border-right: 1px solid var(--line); text-align: center; }
+.song-metric:last-child { border-right: 0; }
+.song-metric strong { font-size: 22px; }
+.song-metric span { color: var(--ink-soft); font-size: 10px; }
+.song-metric.is-warning { background: #fff5e9; color: var(--warning); }
+.performance-strip { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(190px, 1fr); overflow-x: auto; border-bottom: 1px solid var(--line); }
+.appearance-slot { min-height: 64px; display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 8px 12px; border: 0; border-right: 1px solid var(--line); background: #fff; color: var(--ink); text-align: left; }
+.appearance-slot.is-selected { background: #f3f7f1; box-shadow: inset 0 -3px var(--success); }
+.appearance-slot > span { display: grid; gap: 2px; }
+.appearance-slot strong { font-size: 12px; }
+.appearance-slot small { color: var(--ink-soft); font-size: 9px; }
+.appearance-slot b { color: var(--success); font-size: 9px; }
+.song-workspace { display: grid; grid-template-columns: minmax(320px, .8fr) minmax(500px, 1.2fr); }
+.song-order-form { display: grid; grid-template-columns: 1fr 1fr; align-content: start; gap: 10px; padding: 17px; border-right: 1px solid var(--line); }
+.song-order-form .form-heading, .song-order-form .wide-field, .song-order-form .song-payment-boundary, .song-order-form > button { grid-column: 1 / -1; }
+.song-order-form label { min-width: 0; display: grid; gap: 5px; }
+.song-order-form label > span { color: var(--ink-soft); font-size: 10px; font-weight: 750; }
+.song-order-form input, .song-order-form select, .song-request-actions input { width: 100%; min-width: 0; height: 36px; border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 8px; background: #fff; color: var(--ink); }
+.song-payment-boundary { display: flex; align-items: center; gap: 7px; padding: 8px 9px; background: #f6f4ee; color: #655d49; font-size: 10px; line-height: 1.4; }
+.song-queue { min-width: 0; }
+.song-queue-heading { min-height: 65px; display: flex; align-items: center; gap: 9px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+.song-queue-heading > div { display: grid; gap: 2px; }
+.song-queue-heading strong { font-size: 14px; }
+.song-queue-heading span { color: var(--ink-soft); font-size: 10px; }
+.song-request-row { min-height: 68px; display: grid; grid-template-columns: 60px minmax(160px, 1fr) minmax(220px, auto); align-items: center; gap: 9px; padding: 9px 13px; border-bottom: 1px solid var(--line); }
+.song-request-row > div:nth-child(2) { min-width: 0; display: grid; gap: 3px; }
+.song-request-row strong { font-size: 11px; }
+.song-request-row small { overflow: hidden; color: var(--ink-soft); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.song-status { padding: 4px 6px; border-radius: 3px; background: #edf0ec; color: #596257; font-size: 9px; font-weight: 800; text-align: center; }
+.status-refund_required { background: #fae8e9; color: #9f3037; }
+.status-performing { background: #fff0c8; color: #7b5d12; }
+.status-completed, .status-refunded { background: #e6f2e8; color: #337047; }
+.song-request-actions { display: flex; justify-content: flex-end; gap: 5px; }
+.song-request-actions input { width: 150px; height: 32px; font-size: 10px; }
+.song-request-actions button { min-height: 32px; padding: 0 8px; font-size: 10px; }
+.song-request-actions .icon-button { width: 32px; padding: 0; }
+@media (max-width: 1000px) { .song-workspace { grid-template-columns: 1fr; } .song-order-form { border-right: 0; border-bottom: 1px solid var(--line); } }
+@media (max-width: 700px) { .song-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .song-metric:nth-child(2) { border-right: 0; } .song-metric:nth-child(-n+2) { border-bottom: 1px solid var(--line); } .song-order-form { grid-template-columns: 1fr; } .song-order-form .form-heading, .song-order-form .wide-field, .song-order-form .song-payment-boundary, .song-order-form > button { grid-column: 1; } .song-request-row { grid-template-columns: 58px minmax(0, 1fr); } .song-request-actions { grid-column: 1 / -1; flex-wrap: wrap; } .song-request-actions input { flex: 1; width: auto; } }

@@ -1,0 +1,37 @@
+<view class="page">
+  <view class="top-band">
+    <view class="brand-row"><view><text class="eyebrow">当前桌台</text><text class="account-table">{{tableCode}} 桌账摘要</text></view><text wx:if="{{isDevelopment}}" class="dev-badge">开发模式</text></view>
+  </view>
+  <state-panel wx:if="{{loading}}" type="loading" title="正在核对桌账" />
+  <block wx:else>
+    <view wx:if="{{warning}}" class="warning">{{warning}}</view>
+    <view wx:if="{{error}}" class="error-banner">{{error}}</view>
+    <block wx:if="{{sessionId}}">
+      <view class="account-total panel">
+        <text class="eyebrow">当前应收余额</text>
+        <text class="account-total__amount">{{totals.balance}}</text>
+        <view class="account-breakdown">
+          <view><text>商品原价</text><text>{{totals.gross}}</text></view>
+          <view><text>折扣</text><text>-{{totals.discount}}</text></view>
+          <view><text>赠送</text><text>-{{totals.gift}}</text></view>
+          <view><text>订单应付</text><text>{{totals.payable}}</text></view>
+        </view>
+      </view>
+      <view class="warning payment-boundary">本页仅展示订单与桌账，不发起或模拟支付。金额有疑问请先呼叫买单服务，由收银核对。</view>
+      <view class="section">
+        <view class="section-title"><text>本桌订单</text><text class="section-link">下拉刷新</text></view>
+        <view wx:if="{{orders.length}}" class="order-list">
+          <view wx:for="{{orders}}" wx:key="id" class="panel order-card">
+            <view class="order-card__head"><view><text class="list-row__title">{{item.statusText}}</text><text class="list-row__meta">{{item.createdAtText}}</text></view><text class="amount">{{item.payableText}}</text></view>
+            <view wx:for="{{item.items}}" wx:for-item="product" wx:key="id" class="list-row">
+              <view class="list-row__main"><text class="list-row__title">{{product.name}} ×{{product.quantity}}</text><text class="list-row__meta">{{product.specification}} · {{product.fulfillmentText}}</text></view>
+              <text>{{product.amountText}}</text>
+            </view>
+          </view>
+        </view>
+        <state-panel wx:else type="empty" title="当前暂无订单" message="下单后，商品与出品进度会显示在这里" />
+      </view>
+    </block>
+    <state-panel wx:else type="empty" title="尚未找到有效桌台会话" message="请联系迎宾或服务人员确认开台状态" />
+  </block>
+</view>

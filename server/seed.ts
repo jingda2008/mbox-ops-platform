@@ -1,0 +1,292 @@
+import type { RuntimeState, StoreConfig } from '../src/shared/contracts.js'
+import { createOrderDomainState } from './order-domain.js'
+import { createPaymentDomainState } from './payment-domain.js'
+import { createSongState } from './song-domain.js'
+import { createInventoryDomainState } from './inventory-domain.js'
+import { createReservationState } from './reservation-domain.js'
+
+const now = new Date()
+const opened = new Date(now.getTime() - 42 * 60 * 1000).toISOString()
+const shiftStart = new Date(now)
+shiftStart.setHours(19, 0, 0, 0)
+const shiftEnd = new Date(shiftStart)
+shiftEnd.setDate(shiftEnd.getDate() + 1)
+shiftEnd.setHours(3, 0, 0, 0)
+
+export function createSeedConfig(): StoreConfig {
+  return {
+    version: 1,
+    status: 'published',
+    publishedAt: now.toISOString(),
+    roles: [
+      { id: 'server', name: '主服务员', maxConcurrentTasks: 2, canReceiveTasks: true },
+      { id: 'backup', name: '区域候补', maxConcurrentTasks: 3, canReceiveTasks: true },
+      { id: 'specialist', name: '服务专员', maxConcurrentTasks: 3, canReceiveTasks: true },
+      { id: 'supervisor', name: '领班', maxConcurrentTasks: 5, canReceiveTasks: true },
+      { id: 'manager', name: '值班经理', maxConcurrentTasks: 8, canReceiveTasks: true },
+    ],
+    proactiveOrderCare: {
+      enabled: true,
+      firstReminderSeconds: 300,
+      repeatReminderSeconds: 300,
+      maxReminders: 3,
+      serviceTypeId: 'order-help',
+    },
+    serviceTypes: [
+      {
+        id: 'water',
+        code: 'ADD_WATER',
+        name: '加水',
+        icon: 'water',
+        enabled: true,
+        priority: 'normal',
+        dispatchRoleIds: ['server', 'backup', 'supervisor', 'manager'],
+        sla: { warningSeconds: 30, escalateSeconds: 60, managerSeconds: 120 },
+        customerReply: '已收到，{employee}正在为您处理。',
+        actionScript: ['先补水并确认温度偏好', '顺带检查冰桶、柠檬和纸巾', '离桌前询问是否还有其他需要'],
+      },
+      {
+        id: 'ice',
+        code: 'ADD_ICE_LEMON',
+        name: '冰块/柠檬',
+        icon: 'ice',
+        enabled: true,
+        priority: 'normal',
+        dispatchRoleIds: ['server', 'backup', 'supervisor', 'manager'],
+        sla: { warningSeconds: 30, escalateSeconds: 60, managerSeconds: 120 },
+        customerReply: '已收到，{employee}马上为您准备。',
+        actionScript: ['确认需要冰块、柠檬或两者', '使用干净器具补充', '检查桌面空杯和垃圾'],
+      },
+      {
+        id: 'order-help',
+        code: 'ORDER_HELP',
+        name: '协助点单',
+        icon: 'order',
+        enabled: true,
+        priority: 'normal',
+        dispatchRoleIds: ['server', 'backup', 'supervisor', 'manager'],
+        sla: { warningSeconds: 30, escalateSeconds: 60, managerSeconds: 120 },
+        customerReply: '已收到，{employee}会到桌协助您点单。',
+        actionScript: ['先询问人数、口味和预算', '结合已点商品给出两项明确建议', '复述数量和价格后再提交订单'],
+      },
+      {
+        id: 'bill',
+        code: 'REQUEST_BILL',
+        name: '买单',
+        icon: 'bill',
+        enabled: true,
+        priority: 'high',
+        dispatchRoleIds: ['server', 'backup', 'supervisor', 'manager'],
+        sla: { warningSeconds: 20, escalateSeconds: 45, managerSeconds: 90 },
+        customerReply: '买单请求已收到，{employee}正在核对您的桌账。',
+        actionScript: ['先核对桌号与未送达商品', '向客户展示账单明细和优惠', '确认支付方式后创建支付意图'],
+      },
+      {
+        id: 'complaint',
+        code: 'COMPLAINT',
+        name: '投诉/不满意',
+        icon: 'complaint',
+        enabled: true,
+        priority: 'urgent',
+        dispatchRoleIds: ['supervisor', 'manager'],
+        sla: { warningSeconds: 10, escalateSeconds: 20, managerSeconds: 45 },
+        customerReply: '您的反馈已由值班领班接管，我们会尽快到桌处理。',
+        actionScript: ['先倾听并复述客户问题，不争辩', '确认客户期望和现场事实', '权限内立即补救，超权限当场升级'],
+      },
+      {
+        id: 'birthday',
+        code: 'BIRTHDAY_CARE',
+        name: '生日服务',
+        icon: 'birthday',
+        enabled: true,
+        priority: 'normal',
+        dispatchRoleIds: ['specialist', 'supervisor', 'manager'],
+        sla: { warningSeconds: 60, escalateSeconds: 180, managerSeconds: 300 },
+        customerReply: '生日安排已收到，服务专员会与您确认细节。',
+        actionScript: ['先确认庆祝对象、称呼和是否愿意公开互动', '核对当日权益和演出节奏', '协调礼物、歌曲和送达时间'],
+      },
+    ],
+  }
+}
+
+export function createSeedState(): RuntimeState {
+  const config = createSeedConfig()
+  return {
+    revision: 1,
+    store: {
+      id: 'mbox-lujiazui',
+      name: 'M-Box 陆家嘴店',
+      businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }),
+      timezone: 'Asia/Shanghai',
+    },
+    areas: [
+      { id: 'lounge', name: '大厅休闲区', shortName: '休闲', color: '#169bd5', sortOrder: 1 },
+      { id: 'interactive', name: '舞台互动区', shortName: '互动', color: '#e82734', sortOrder: 2 },
+      { id: 'social', name: '社交嗨玩区', shortName: '社交', color: '#e4bd19', sortOrder: 3 },
+      { id: 'walkin', name: '散客区', shortName: '散客', color: '#31366f', sortOrder: 4 },
+      { id: 'booth', name: '商务卡座区', shortName: '卡座', color: '#287f50', sortOrder: 5 },
+    ],
+    employees: [
+      { id: 'emp-lin', displayName: '小林', initials: '林', status: 'active', roleId: 'server', online: true, paused: false, areaIds: ['lounge'] },
+      { id: 'emp-jie', displayName: '阿杰', initials: '杰', status: 'active', roleId: 'backup', online: true, paused: false, areaIds: ['lounge', 'interactive'] },
+      { id: 'emp-wu', displayName: '小吴', initials: '吴', status: 'active', roleId: 'server', online: true, paused: false, areaIds: ['interactive', 'social'] },
+      { id: 'emp-qing', displayName: '小青', initials: '青', status: 'active', roleId: 'specialist', online: true, paused: false, areaIds: ['lounge', 'interactive', 'social'] },
+      { id: 'emp-mia', displayName: 'Mia', initials: 'M', status: 'active', roleId: 'supervisor', online: true, paused: false, areaIds: ['lounge', 'interactive', 'social', 'walkin', 'booth'] },
+      { id: 'emp-chen', displayName: '陈经理', initials: '陈', status: 'active', roleId: 'manager', online: true, paused: false, areaIds: ['lounge', 'interactive', 'social', 'walkin', 'booth'] },
+    ],
+    shiftAssignments: [
+      { id: 'shift-lin', employeeId: 'emp-lin', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'server', areaIds: ['lounge', 'walkin', 'booth'], isPrimary: true, status: 'active' },
+      { id: 'shift-jie', employeeId: 'emp-jie', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'backup', areaIds: ['lounge', 'interactive'], isPrimary: false, status: 'active' },
+      { id: 'shift-wu', employeeId: 'emp-wu', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'server', areaIds: ['interactive', 'social'], isPrimary: true, status: 'active' },
+      { id: 'shift-qing', employeeId: 'emp-qing', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'specialist', areaIds: ['lounge', 'interactive', 'social'], isPrimary: false, status: 'active' },
+      { id: 'shift-mia', employeeId: 'emp-mia', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'supervisor', areaIds: ['lounge', 'interactive', 'social', 'walkin', 'booth'], isPrimary: true, status: 'active' },
+      { id: 'shift-chen', employeeId: 'emp-chen', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'manager', areaIds: ['lounge', 'interactive', 'social', 'walkin', 'booth'], isPrimary: true, status: 'active' },
+    ],
+    products: [
+      { id: 'product-beer', sku: 'BEER-001', name: '精酿啤酒', specification: '330ml', listPriceAmount: 6800, costAmount: 1800, stationId: 'bar-main', enabled: true, configVersion: 1 },
+      { id: 'product-cocktail', sku: 'COCKTAIL-001', name: '招牌鸡尾酒', specification: '1杯', listPriceAmount: 8800, costAmount: 2200, stationId: 'bar-main', enabled: true, configVersion: 1 },
+      { id: 'product-fruit', sku: 'FOOD-001', name: '时令果盘', specification: '1份', listPriceAmount: 12800, costAmount: 3800, stationId: 'kitchen-cold', enabled: true, configVersion: 1 },
+      { id: 'product-snack', sku: 'FOOD-002', name: '小食拼盘', specification: '1份', listPriceAmount: 9800, costAmount: 3200, stationId: 'kitchen-hot', enabled: true, configVersion: 1 },
+    ],
+    orderDomain: createOrderDomainState([
+      { id: 'server-gift-authority', actorId: 'emp-lin', kinds: ['gift'], maxAmount: 8800, allowedSkuIds: ['product-beer', 'product-cocktail'], tableSessionIds: null, validFrom: new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString(), validUntil: shiftEnd.toISOString() },
+      { id: 'supervisor-commerce-authority', actorId: 'emp-mia', kinds: ['discount', 'gift'], maxAmount: 30000, allowedSkuIds: null, tableSessionIds: null, validFrom: new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString(), validUntil: shiftEnd.toISOString() },
+      { id: 'manager-commerce-authority', actorId: 'emp-chen', kinds: ['discount', 'gift'], maxAmount: 100000, allowedSkuIds: null, tableSessionIds: null, validFrom: new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString(), validUntil: shiftEnd.toISOString() },
+    ]),
+    paymentDomain: createPaymentDomainState(),
+    inventoryDomain: createInventoryDomainState(
+      { tenantId: 'mbox', storeId: 'mbox-lujiazui' },
+      {
+        policyAdminRoleIds: ['manager'],
+        receiptRoleIds: ['manager'],
+        stockCountRoleIds: ['supervisor', 'manager'],
+        stockCountApprovalRoleIds: ['manager'],
+        bottleDepositRoleIds: ['server', 'backup', 'specialist', 'supervisor', 'manager'],
+        bottleUseRoleIds: ['server', 'backup', 'specialist', 'supervisor', 'manager'],
+        bottleApprovalRoleIds: ['supervisor', 'manager'],
+      },
+    ),
+    reservationState: createReservationState(
+      { tenantId: 'mbox', storeId: 'mbox-lujiazui' },
+      {
+        version: 1,
+        minimumPartySize: 1,
+        maximumPartySize: 100,
+        sources: [
+          { code: 'phone', name: '电话', enabled: true, sortOrder: 10 },
+          { code: 'wechat', name: '微信', enabled: true, sortOrder: 20 },
+          { code: 'walk_in', name: '现场', enabled: true, sortOrder: 30 },
+        ],
+        areaPreferences: [
+          { code: 'lounge', name: '大厅休闲区', enabled: true, sortOrder: 10 },
+          { code: 'interactive', name: '舞台互动区', enabled: true, sortOrder: 20 },
+          { code: 'social', name: '社交嗨玩区', enabled: true, sortOrder: 30 },
+          { code: 'walkin', name: '散客区', enabled: true, sortOrder: 40 },
+          { code: 'booth', name: '商务卡座区', enabled: true, sortOrder: 50 },
+        ],
+        occasions: [
+          { code: 'birthday', name: '生日', enabled: true, serviceScript: ['确认生日称呼与庆祝时间', '通知值班经理审批生日权益', '协调歌手和灯光执行生日歌'] },
+          { code: 'anniversary', name: '纪念日', enabled: true, serviceScript: ['确认称呼与庆祝时间'] },
+          { code: 'business', name: '商务接待', enabled: true, serviceScript: ['确认主宾与结账负责人'] },
+          { code: 'other', name: '其他', enabled: true, serviceScript: [] },
+        ],
+      },
+    ),
+    awaitingOrderIntents: [],
+    members: [
+      { id: 'member-amy', displayName: 'Amy', phoneMasked: '138****2108', level: 'gold', tags: ['生日客', '鸡尾酒偏好'], lastVisitAt: new Date(now.getTime() - 12 * 86_400_000).toISOString(), visitCount: 18, totalSpendAmount: 286800, salesOwnerId: 'emp-lin', serviceAccountBound: true, wecomBound: true, notificationConsent: true },
+      { id: 'member-li', displayName: '李先生', phoneMasked: '186****7721', level: 'silver', tags: ['商务聚会'], lastVisitAt: new Date(now.getTime() - 45 * 86_400_000).toISOString(), visitCount: 7, totalSpendAmount: 128600, salesOwnerId: 'emp-mia', serviceAccountBound: true, wecomBound: false, notificationConsent: true },
+      { id: 'member-yu', displayName: '俞小姐', phoneMasked: '139****4820', level: 'platinum', tags: ['VIP', '点歌偏好'], lastVisitAt: new Date(now.getTime() - 67 * 86_400_000).toISOString(), visitCount: 31, totalSpendAmount: 628000, salesOwnerId: 'emp-chen', serviceAccountBound: true, wecomBound: true, notificationConsent: true },
+      { id: 'member-zhou', displayName: '周先生', phoneMasked: '177****6056', level: 'standard', tags: ['新会员'], lastVisitAt: new Date(now.getTime() - 90 * 86_400_000).toISOString(), visitCount: 2, totalSpendAmount: 23600, salesOwnerId: null, serviceAccountBound: false, wecomBound: true, notificationConsent: false },
+    ],
+    benefitTemplates: [
+      { id: 'benefit-beer', code: 'WELCOME_BEER', name: '精酿啤酒1杯', kind: 'product_gift', description: '到店消费时兑换一杯精酿啤酒', valueAmount: 6800, costAmount: 1800, productId: 'product-beer', validityDays: 14, maxPerMember: 2, enabled: true },
+      { id: 'benefit-cocktail', code: 'SIGNATURE_COCKTAIL', name: '招牌鸡尾酒1杯', kind: 'product_gift', description: '到店消费时兑换一杯招牌鸡尾酒', valueAmount: 8800, costAmount: 2200, productId: 'product-cocktail', validityDays: 14, maxPerMember: 2, enabled: true },
+      { id: 'benefit-return-50', code: 'RETURN_50', name: '老客召回50元券', kind: 'amount_coupon', description: '满300元可用，不与其他现金券叠加', valueAmount: 5000, costAmount: 5000, productId: null, validityDays: 30, maxPerMember: 1, enabled: true },
+      { id: 'benefit-song', code: 'FREE_SONG', name: '免费点歌1首', kind: 'song', description: '按当日演出排班和歌手歌单核销', valueAmount: 9800, costAmount: 5000, productId: null, validityDays: 30, maxPerMember: 1, enabled: true },
+      { id: 'benefit-birthday-fruit', code: 'BIRTHDAY_FRUIT', name: '生日果盘1份', kind: 'product_gift', description: '生日月到店可兑换时令果盘一份', valueAmount: 12800, costAmount: 3800, productId: 'product-fruit', validityDays: 31, maxPerMember: 1, enabled: true },
+    ],
+    benefitGrantPolicies: [
+      { id: 'policy-server', roleId: 'server', templateIds: ['benefit-beer'], maxCostPerGrantAmount: 2000, maxDailyCostAmount: 10000, canApprove: false, canLaunchCampaign: false },
+      { id: 'policy-backup', roleId: 'backup', templateIds: ['benefit-beer'], maxCostPerGrantAmount: 2000, maxDailyCostAmount: 10000, canApprove: false, canLaunchCampaign: false },
+      { id: 'policy-specialist', roleId: 'specialist', templateIds: ['benefit-song', 'benefit-birthday-fruit'], maxCostPerGrantAmount: 5000, maxDailyCostAmount: 20000, canApprove: false, canLaunchCampaign: false },
+      { id: 'policy-supervisor', roleId: 'supervisor', templateIds: ['benefit-beer', 'benefit-cocktail', 'benefit-song', 'benefit-birthday-fruit'], maxCostPerGrantAmount: 6000, maxDailyCostAmount: 30000, canApprove: true, canLaunchCampaign: false },
+      { id: 'policy-manager', roleId: 'manager', templateIds: ['benefit-beer', 'benefit-cocktail', 'benefit-return-50', 'benefit-song', 'benefit-birthday-fruit'], maxCostPerGrantAmount: 20000, maxDailyCostAmount: 100000, canApprove: true, canLaunchCampaign: true },
+    ],
+    benefitGrantRequests: [],
+    memberBenefits: [],
+    benefitRedemptions: [],
+    benefitCampaigns: [],
+    customerNotifications: [],
+    songState: createSongState({
+      businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }),
+      singers: [
+        { id: 'singer-tianti', displayName: '天天', actorId: 'singer-tianti', active: true },
+        { id: 'singer-zhengnan', displayName: '郑南', actorId: 'singer-zhengnan', active: true },
+        { id: 'singer-natalie', displayName: 'Natalie', actorId: 'singer-natalie', active: true },
+      ],
+      songs: [
+        { id: 'song-demo-1', title: '后来（演示曲目）', artist: '待正式歌单确认', durationSeconds: 260, active: true },
+        { id: 'song-demo-2', title: '成都（演示曲目）', artist: '待正式歌单确认', durationSeconds: 330, active: true },
+        { id: 'song-demo-3', title: '海阔天空（演示曲目）', artist: '待正式歌单确认', durationSeconds: 310, active: true },
+      ],
+      repertoire: [
+        { id: 'repertoire-tianti-1', singerId: 'singer-tianti', songId: 'song-demo-1', priceAmount: 9800, currency: 'CNY', configVersion: 1, enabled: true },
+        { id: 'repertoire-tianti-2', singerId: 'singer-tianti', songId: 'song-demo-2', priceAmount: 9800, currency: 'CNY', configVersion: 1, enabled: true },
+        { id: 'repertoire-zhengnan-1', singerId: 'singer-zhengnan', songId: 'song-demo-2', priceAmount: 12800, currency: 'CNY', configVersion: 1, enabled: true },
+        { id: 'repertoire-natalie-1', singerId: 'singer-natalie', songId: 'song-demo-3', priceAmount: 12800, currency: 'CNY', configVersion: 1, enabled: true },
+      ],
+      performanceSessions: [{
+        id: 'performance-today',
+        businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }),
+        title: '当日现场演出（演示排班）',
+        status: 'live',
+        startsAt: new Date(now.getTime() - 60 * 60_000).toISOString(),
+        endsAt: new Date(now.getTime() + 5 * 60 * 60_000).toISOString(),
+        appearances: [
+          { id: 'appearance-tianti', singerId: 'singer-tianti', startsAt: new Date(now.getTime() - 30 * 60_000).toISOString(), endsAt: new Date(now.getTime() + 90 * 60_000).toISOString(), requestOpensAt: new Date(now.getTime() - 60 * 60_000).toISOString(), requestClosesAt: new Date(now.getTime() + 60 * 60_000).toISOString(), acceptingRequests: true },
+          { id: 'appearance-zhengnan', singerId: 'singer-zhengnan', startsAt: new Date(now.getTime() + 90 * 60_000).toISOString(), endsAt: new Date(now.getTime() + 180 * 60_000).toISOString(), requestOpensAt: new Date(now.getTime() - 15 * 60_000).toISOString(), requestClosesAt: new Date(now.getTime() + 150 * 60_000).toISOString(), acceptingRequests: true },
+          { id: 'appearance-natalie', singerId: 'singer-natalie', startsAt: new Date(now.getTime() + 180 * 60_000).toISOString(), endsAt: new Date(now.getTime() + 270 * 60_000).toISOString(), requestOpensAt: new Date(now.getTime() + 60 * 60_000).toISOString(), requestClosesAt: new Date(now.getTime() + 240 * 60_000).toISOString(), acceptingRequests: true },
+        ],
+      }],
+      tableSessions: [
+        { id: `session:table-l01:${now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' })}`, tableId: 'table-l01', tableCode: 'L01', status: 'open', openedAt: opened, closedAt: null },
+        { id: `session:table-i01:${now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' })}`, tableId: 'table-i01', tableCode: 'I01', status: 'open', openedAt: opened, closedAt: null },
+        { id: `session:table-s01:${now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' })}`, tableId: 'table-s01', tableCode: 'S01', status: 'open', openedAt: opened, closedAt: null },
+      ],
+      managerActorIds: ['emp-chen'],
+    }),
+    tables: [
+      { id: 'table-l01', code: 'L01', displayName: '休闲01', areaId: 'lounge', capacity: 6, status: 'occupied', primaryEmployeeId: 'emp-lin', backupEmployeeIds: ['emp-jie'], guestCount: 4, openedAt: opened },
+      { id: 'table-l02', code: 'L02', displayName: '休闲02', areaId: 'lounge', capacity: 6, status: 'occupied', primaryEmployeeId: 'emp-lin', backupEmployeeIds: ['emp-jie'], guestCount: 5, openedAt: opened },
+      { id: 'table-l03', code: 'L03', displayName: '休闲03', areaId: 'lounge', capacity: 6, status: 'reserved', primaryEmployeeId: 'emp-lin', backupEmployeeIds: ['emp-jie'], guestCount: 0, openedAt: null },
+      { id: 'table-l04', code: 'L04', displayName: '休闲04', areaId: 'lounge', capacity: 6, status: 'available', primaryEmployeeId: 'emp-lin', backupEmployeeIds: ['emp-jie'], guestCount: 0, openedAt: null },
+      { id: 'table-i01', code: 'I01', displayName: '互动01', areaId: 'interactive', capacity: 6, status: 'occupied', primaryEmployeeId: 'emp-wu', backupEmployeeIds: ['emp-jie'], guestCount: 4, openedAt: opened },
+      { id: 'table-i02', code: 'I02', displayName: '互动02', areaId: 'interactive', capacity: 6, status: 'occupied', primaryEmployeeId: 'emp-wu', backupEmployeeIds: ['emp-jie'], guestCount: 6, openedAt: opened },
+      { id: 'table-i03', code: 'I03', displayName: '互动03', areaId: 'interactive', capacity: 3, status: 'available', primaryEmployeeId: 'emp-wu', backupEmployeeIds: ['emp-jie'], guestCount: 0, openedAt: null },
+      { id: 'table-s01', code: 'S01', displayName: '社交A', areaId: 'social', capacity: 12, status: 'occupied', primaryEmployeeId: 'emp-wu', backupEmployeeIds: ['emp-jie'], guestCount: 9, openedAt: opened },
+      { id: 'table-s02', code: 'S02', displayName: '社交B', areaId: 'social', capacity: 12, status: 'available', primaryEmployeeId: 'emp-wu', backupEmployeeIds: ['emp-jie'], guestCount: 0, openedAt: null },
+      { id: 'table-w01', code: 'W01', displayName: '散客01', areaId: 'walkin', capacity: 3, status: 'occupied', primaryEmployeeId: 'emp-lin', backupEmployeeIds: ['emp-mia'], guestCount: 2, openedAt: opened },
+      { id: 'table-b01', code: 'B01', displayName: '卡座A', areaId: 'booth', capacity: 10, status: 'occupied', primaryEmployeeId: 'emp-lin', backupEmployeeIds: ['emp-mia'], guestCount: 8, openedAt: opened },
+      { id: 'table-b02', code: 'B02', displayName: '卡座B', areaId: 'booth', capacity: 10, status: 'reserved', primaryEmployeeId: 'emp-lin', backupEmployeeIds: ['emp-mia'], guestCount: 0, openedAt: null },
+    ],
+    config,
+    configVersions: [{
+      id: `config_version_mbox-lujiazui_${config.version}`,
+      storeId: 'mbox-lujiazui',
+      version: config.version,
+      operation: 'baseline',
+      sourceVersion: null,
+      rollbackTargetVersion: null,
+      snapshot: structuredClone(config),
+      actorId: 'system-seed',
+      reason: '初始营业配置',
+      idempotencyKey: 'seed-config-baseline-v1',
+      createdAt: config.publishedAt!,
+    }],
+    draftConfig: null,
+    tasks: [],
+    taskEvents: [],
+    auditEntries: [],
+  }
+}

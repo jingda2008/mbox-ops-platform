@@ -1,0 +1,23 @@
+<view class="page">
+  <view class="top-band">
+    <view class="brand-row"><view><text class="eyebrow">当前桌台</text><text class="service-table">{{tableCode}}</text></view><text wx:if="{{isDevelopment}}" class="dev-badge">开发模式</text></view>
+  </view>
+  <state-panel wx:if="{{loading}}" type="loading" title="正在载入服务项目" />
+  <block wx:else>
+    <view wx:if="{{warning}}" class="warning">{{warning}}</view>
+    <view wx:if="{{error}}" class="error-banner">{{error}}</view>
+    <view wx:if="{{success}}" class="success-banner">{{success}}</view>
+    <view wx:if="{{serviceTypes.length}}" class="service-grid">
+      <button wx:for="{{serviceTypes}}" wx:key="id" class="service-item" data-id="{{item.id}}" disabled="{{submittingId || isFallback}}" bindtap="requestService">
+        <text class="service-item__name">{{submittingId === item.id ? '正在提交' : item.name}}</text>
+        <text class="service-item__meta">提交后可在状态页查看进度</text>
+      </button>
+    </view>
+    <state-panel wx:else type="empty" title="暂无可用服务项目" message="门店可能正在调整服务配置" />
+    <label class="field note-field">
+      <text class="field__label">补充说明（选填）</text>
+      <input class="field__input" maxlength="300" value="{{note}}" placeholder="例如：需要两杯温水" bindinput="onNoteInput" />
+    </label>
+    <navigator class="secondary-button status-link" url="/pages/status/index">查看服务进度</navigator>
+  </block>
+</view>

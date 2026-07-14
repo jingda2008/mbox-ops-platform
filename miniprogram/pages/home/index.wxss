@@ -1,0 +1,24 @@
+.home-page { padding-top: 0; }
+.home-hero { padding-top: 30rpx; padding-bottom: 42rpx; }
+.table-identity { margin-top: 46rpx; }
+.table-identity__label { display: block; color: #aeb4bd; font-size: 23rpx; }
+.table-identity__name { display: block; margin-top: 8rpx; font-size: 54rpx; font-weight: 750; }
+.table-identity__meta { display: block; margin-top: 12rpx; color: #d2d5da; font-size: 24rpx; }
+.summary-strip { display: grid; overflow: hidden; grid-template-columns: repeat(3, 1fr); border: 1rpx solid #dfe2e7; border-radius: 8rpx; background: #ffffff; }
+.summary-strip view { padding: 23rpx 10rpx; text-align: center; border-right: 1rpx solid #e7e9ed; }
+.summary-strip view:last-child { border-right: 0; }
+.summary-strip text:first-child { display: block; color: #202329; font-size: 28rpx; font-weight: 700; }
+.summary-strip text:last-child { display: block; margin-top: 7rpx; color: #737b86; font-size: 20rpx; }
+.portal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16rpx; }
+.portal { min-height: 204rpx; margin: 0; padding: 24rpx; border: 1rpx solid #dfe2e7; border-radius: 8rpx; background: #ffffff; color: #202329; text-align: left; line-height: 1.2; }
+.portal::after { border: 0; }
+.portal[disabled] { background: #eeeff1; color: #858b94; }
+.portal__code { display: block; color: #838b96; font-size: 21rpx; font-weight: 700; }
+.portal__title { display: block; margin-top: 28rpx; font-size: 29rpx; font-weight: 700; }
+.portal__meta { display: block; margin-top: 10rpx; color: #737b86; font-size: 22rpx; line-height: 1.45; }
+.portal--service { border-top: 6rpx solid #315f9a; }
+.portal--complaint { border-top: 6rpx solid #b53d2e; }
+.portal--song { border-top: 6rpx solid #9a7130; }
+.prearrival-section { margin-top: 0; margin-bottom: 32rpx; }
+.reservation-portal { width: 100%; min-height: 176rpx; }
+.portal--reservation { border-top: 6rpx solid #2d7654; }

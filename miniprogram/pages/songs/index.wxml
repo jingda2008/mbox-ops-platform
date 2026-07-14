@@ -1,0 +1,36 @@
+<view class="page">
+  <view class="top-band song-band">
+    <view class="brand-row"><view><text class="eyebrow">{{tableCode}} · 当日演出排班</text><text class="song-title">现场点歌</text></view><text wx:if="{{isDevelopment}}" class="dev-badge">开发模式</text></view>
+    <text class="song-subtitle">只展示当班歌手已发布曲目；提交意向不等于演出确认。</text>
+  </view>
+  <state-panel wx:if="{{loading}}" type="loading" title="正在读取当日歌单" />
+  <block wx:else>
+    <view wx:if="{{warning}}" class="warning">{{warning}}</view>
+    <view wx:if="{{error}}" class="error-banner">{{error}}</view>
+    <view wx:if="{{success}}" class="success-banner">{{success}}</view>
+    <view class="warning">本页不会创建、模拟或确认支付。舞台确认、支付接入和退款规则需以后端正式接口为准。</view>
+    <view wx:if="{{offers.length}}" class="offer-list">
+      <button wx:for="{{offers}}" wx:key="id" class="offer-card" data-id="{{item.id}}" bindtap="selectOffer">
+        <view class="offer-card__main"><text class="offer-card__song">{{item.songTitle}}</text><text class="offer-card__meta">{{item.songArtist}} · {{item.singerName}}</text><text class="offer-card__time">预计场次 {{item.timeText}}</text></view>
+        <view class="offer-card__side"><text>{{item.priceText}}</text><text>提交意向</text></view>
+      </button>
+    </view>
+    <state-panel wx:else type="empty" title="当前没有可提交曲目" message="歌单、歌手或受理时段可能尚未发布" />
+    <navigator class="secondary-button status-link" url="/pages/status/index">查看点歌状态</navigator>
+  </block>
+
+  <view wx:if="{{selectedOffer}}" class="sheet-mask" bindtap="closeSelection">
+    <view class="sheet" catchtap="noop">
+      <view class="sheet__handle"></view>
+      <text class="eyebrow">提交点歌意向</text>
+      <text class="sheet__title">{{selectedOffer.songTitle}}</text>
+      <text class="sheet__meta">{{selectedOffer.singerName}} · {{selectedOffer.priceText}}</text>
+      <label class="field">
+        <text class="field__label">祝福语或备注（选填）</text>
+        <textarea class="field__textarea" maxlength="300" value="{{customerNote}}" placeholder="舞台确认前不会承诺演出" bindinput="onNoteInput" />
+      </label>
+      <button class="primary-button" disabled="{{submitting || isFallback}}" bindtap="submitIntent">{{submitting ? '正在提交' : '确认提交意向'}}</button>
+      <button class="sheet__cancel" bindtap="closeSelection">取消</button>
+    </view>
+  </view>
+</view>

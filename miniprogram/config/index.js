@@ -1,0 +1,63 @@
+const DEVELOPMENT_DEFAULTS = Object.freeze({
+  mode: 'development',
+  apiBaseUrl: 'http://127.0.0.1:8787',
+  storeId: 'mbox-lujiazui',
+  defaultTableCode: 'L01',
+  defaultTableToken: '',
+  developmentActorId: 'emp-chen',
+  developmentMemberId: 'member-amy',
+  allowDevDataFallback: true,
+  requestTimeoutMs: 10000,
+  wechatIdentityEnabled: false,
+  identityTenantId: '',
+  identityStoreId: '',
+  wechatAppId: '',
+})
+
+const DEPLOYMENT_DEFAULTS = Object.freeze({
+  mode: 'production',
+  apiBaseUrl: '',
+  storeId: '',
+  defaultTableCode: '',
+  defaultTableToken: '',
+  developmentActorId: '',
+  developmentMemberId: '',
+  allowDevDataFallback: false,
+  requestTimeoutMs: 10000,
+  wechatIdentityEnabled: false,
+  identityTenantId: '',
+  identityStoreId: '',
+  wechatAppId: '',
+})
+
+function compact(object) {
+  return Object.keys(object || {}).reduce((result, key) => {
+    const value = object[key]
+    if (value !== undefined && value !== null && value !== '') result[key] = value
+    return result
+  }, {})
+}
+
+function getRuntimeConfig() {
+  let envVersion = 'develop'
+  try {
+    envVersion = wx.getAccountInfoSync().miniProgram.envVersion || 'develop'
+  } catch (_error) {
+    envVersion = 'develop'
+  }
+  let extConfig = {}
+  try {
+    extConfig = wx.getExtConfigSync ? wx.getExtConfigSync() : {}
+  } catch (_error) {
+    extConfig = {}
+  }
+  const stored = envVersion === 'develop' ? (wx.getStorageSync('mbox.runtime.config') || {}) : {}
+  const defaults = envVersion === 'develop' ? DEVELOPMENT_DEFAULTS : DEPLOYMENT_DEFAULTS
+  const merged = Object.assign({}, defaults, compact(extConfig.mbox || extConfig), compact(stored))
+  merged.apiBaseUrl = String(merged.apiBaseUrl || '').replace(/\/$/, '')
+  merged.isDevelopment = merged.mode === 'development'
+  merged.envVersion = envVersion
+  return merged
+}
+
+module.exports = { DEVELOPMENT_DEFAULTS, DEPLOYMENT_DEFAULTS, getRuntimeConfig }

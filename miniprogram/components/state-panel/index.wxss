@@ -1,0 +1,8 @@
+.state { display: flex; min-height: 240rpx; padding: 48rpx 32rpx; align-items: center; justify-content: center; flex-direction: column; text-align: center; box-sizing: border-box; }
+.state__mark { display: flex; width: 64rpx; height: 64rpx; margin-bottom: 20rpx; align-items: center; justify-content: center; border-radius: 50%; background: #e5e7eb; color: #5f6672; font-weight: 700; }
+.state--error .state__mark { background: #fff0ed; color: #b53d2e; }
+.state--loading .state__mark { background: #edf4ff; color: #315f9a; }
+.state__title { color: #16181d; font-size: 30rpx; font-weight: 700; }
+.state__message { max-width: 560rpx; margin-top: 12rpx; color: #68707d; font-size: 25rpx; line-height: 1.6; }
+.state__action { min-width: 180rpx; height: 72rpx; margin-top: 28rpx; padding: 0 30rpx; border: 1rpx solid #ccd1d9; border-radius: 8rpx; background: #ffffff; color: #24272d; font-size: 26rpx; line-height: 70rpx; }
+.state__action::after { border: 0; }

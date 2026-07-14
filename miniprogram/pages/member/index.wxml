@@ -1,0 +1,31 @@
+<view class="page">
+  <view class="top-band member-band">
+    <view class="brand-row"><view class="brand"><view class="brand-mark">M</view><text>会员中心</text></view><text wx:if="{{isDevelopment}}" class="dev-badge">开发模式</text></view>
+  </view>
+  <state-panel wx:if="{{loading}}" type="loading" title="正在载入会员权益" />
+  <state-panel wx:elif="{{error}}" type="error" title="会员账户暂不可用" message="{{error}}" actionText="重新加载" bind:action="loadData" />
+  <block wx:else>
+    <view wx:if="{{warning}}" class="warning">{{warning}}</view>
+    <view class="member-card panel">
+      <view class="member-avatar">{{member.initial}}</view>
+      <view class="member-main"><text>{{member.levelText}}</text><text>{{member.displayName}}</text><text>{{member.phoneMasked}}</text></view>
+      <text class="member-count">{{totalQuantity}}<text>项可用</text></text>
+    </view>
+    <view class="member-binding">
+      <view><text>{{member.serviceAccountBound ? '已绑定' : '未绑定'}}</text><text>微信服务号</text></view>
+      <view><text>{{member.wecomBound ? '已连接' : '未连接'}}</text><text>企业微信</text></view>
+    </view>
+    <view class="section">
+      <view class="section-title"><text>我的权益</text><text class="section-link">只读展示</text></view>
+      <view wx:if="{{benefits.length}}" class="panel benefit-list">
+        <view wx:for="{{benefits}}" wx:key="id" class="list-row">
+          <view class="benefit-kind">{{item.kindInitial}}</view>
+          <view class="list-row__main"><text class="list-row__title">{{item.name}}</text><text class="list-row__meta">{{item.description}}</text><text class="benefit-date">{{item.statusText}} · 有效期至 {{item.validUntilText}}</text></view>
+          <text class="benefit-quantity">{{item.quantityText}}</text>
+        </view>
+      </view>
+      <state-panel wx:else type="empty" title="暂无可用权益" message="权益到账与消息通知是两个独立结果" />
+    </view>
+    <view class="warning member-boundary">小程序当前只展示权益，不在前端直接核销。正式使用需由服务交付、订单或舞台确认后完成核销。</view>
+  </block>
+</view>

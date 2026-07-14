@@ -1,0 +1,26 @@
+{
+  "pages": [
+    "pages/home/index",
+    "pages/reservations/index",
+    "pages/service/index",
+    "pages/account/index",
+    "pages/complaint/index",
+    "pages/member/index",
+    "pages/songs/index",
+    "pages/status/index",
+    "pages/privacy/index"
+  ],
+  "window": {
+    "navigationBarBackgroundColor": "#111214",
+    "navigationBarTextStyle": "white",
+    "navigationBarTitleText": "M-Box 桌台服务",
+    "backgroundColor": "#f4f5f7",
+    "backgroundTextStyle": "dark"
+  },
+  "usingComponents": {
+    "state-panel": "/components/state-panel/index"
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json",
+  "lazyCodeLoading": "requiredComponents"
+}

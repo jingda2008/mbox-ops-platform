@@ -1,0 +1,9 @@
+.git
+.github
+.runtime
+dist
+dist-server
+node_modules
+*.log
+.env*
+!.env.example

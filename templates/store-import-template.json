@@ -1,0 +1,222 @@
+{
+  "schemaVersion": 1,
+  "packageId": "replace-with-unique-package-id",
+  "packageVersion": 1,
+  "targetStoreId": "replace-with-target-store-id",
+  "createdAt": "2026-07-14T10:00:00.000+08:00",
+  "source": {
+    "sourceSystem": "门店实施资料工作簿",
+    "sourceReference": "replace-with-signed-source-reference",
+    "preparedBy": "replace-with-preparer-id"
+  },
+  "declaredMissingData": [
+    "本文件是结构示例，所有示例资料必须替换并由门店确认"
+  ],
+  "policy": {
+    "target": "sandbox",
+    "sections": {
+      "store": { "completeness": "draft" },
+      "config": { "completeness": "draft" },
+      "areas": { "mode": "upsert", "completeness": "draft" },
+      "tables": { "mode": "upsert", "completeness": "draft" },
+      "employees": { "mode": "upsert", "completeness": "draft" },
+      "shiftAssignments": { "mode": "upsert", "completeness": "draft" },
+      "products": { "mode": "upsert", "completeness": "draft" },
+      "authorizationAuthorities": { "mode": "upsert", "completeness": "draft" }
+    },
+    "responsibilityRoles": {
+      "primaryRoleIds": ["server"],
+      "backupRoleIds": ["backup"],
+      "supervisorRoleIds": ["supervisor"],
+      "managerRoleIds": ["manager"]
+    },
+    "requireShiftRoleMatchEmployeeRole": true,
+    "allowZeroListPrice": false
+  },
+  "data": {
+    "store": {
+      "id": "replace-with-target-store-id",
+      "name": "示例门店（必须替换）",
+      "businessDate": "2026-07-14",
+      "timezone": "Asia/Shanghai"
+    },
+    "config": {
+      "version": 2,
+      "status": "published",
+      "publishedAt": "2026-07-14T09:00:00.000+08:00",
+      "serviceTypes": [
+        {
+          "id": "water",
+          "code": "ADD_WATER",
+          "name": "加水",
+          "icon": "water",
+          "enabled": true,
+          "priority": "normal",
+          "dispatchRoleIds": ["server", "backup", "supervisor", "manager"],
+          "sla": {
+            "warningSeconds": 30,
+            "escalateSeconds": 60,
+            "managerSeconds": 120
+          },
+          "customerReply": "已收到，服务人员正在为您处理。",
+          "actionScript": ["确认客户需求", "完成服务动作", "离桌前复核并询问其他需要"]
+        }
+      ],
+      "roles": [
+        { "id": "server", "name": "主服务员", "maxConcurrentTasks": 2, "canReceiveTasks": true },
+        { "id": "backup", "name": "区域候补", "maxConcurrentTasks": 3, "canReceiveTasks": true },
+        { "id": "supervisor", "name": "领班", "maxConcurrentTasks": 5, "canReceiveTasks": true },
+        { "id": "manager", "name": "值班经理", "maxConcurrentTasks": 8, "canReceiveTasks": true }
+      ],
+      "proactiveOrderCare": {
+        "enabled": true,
+        "firstReminderSeconds": 300,
+        "repeatReminderSeconds": 300,
+        "maxReminders": 3,
+        "serviceTypeId": "water"
+      }
+    },
+    "areas": [
+      {
+        "id": "example-area",
+        "name": "示例区域（必须替换）",
+        "shortName": "示例",
+        "color": "#169bd5",
+        "sortOrder": 1
+      }
+    ],
+    "tables": [
+      {
+        "id": "example-table-01",
+        "code": "EX01",
+        "displayName": "示例桌01（必须替换）",
+        "areaId": "example-area",
+        "capacity": 4,
+        "status": "available",
+        "primaryEmployeeId": "example-primary",
+        "backupEmployeeIds": ["example-backup"],
+        "guestCount": 0,
+        "openedAt": null
+      }
+    ],
+    "employees": [
+      {
+        "id": "example-primary",
+        "displayName": "示例主责",
+        "initials": "主",
+        "status": "active",
+        "roleId": "server",
+        "online": false,
+        "paused": false,
+        "areaIds": ["example-area"]
+      },
+      {
+        "id": "example-backup",
+        "displayName": "示例候补",
+        "initials": "候",
+        "status": "active",
+        "roleId": "backup",
+        "online": false,
+        "paused": false,
+        "areaIds": ["example-area"]
+      },
+      {
+        "id": "example-supervisor",
+        "displayName": "示例领班",
+        "initials": "领",
+        "status": "active",
+        "roleId": "supervisor",
+        "online": false,
+        "paused": false,
+        "areaIds": ["example-area"]
+      },
+      {
+        "id": "example-manager",
+        "displayName": "示例经理",
+        "initials": "经",
+        "status": "active",
+        "roleId": "manager",
+        "online": false,
+        "paused": false,
+        "areaIds": ["example-area"]
+      }
+    ],
+    "shiftAssignments": [
+      {
+        "id": "example-shift-primary",
+        "employeeId": "example-primary",
+        "businessDate": "2026-07-14",
+        "startAt": "2026-07-14T19:00:00.000+08:00",
+        "endAt": "2026-07-15T03:00:00.000+08:00",
+        "roleId": "server",
+        "areaIds": ["example-area"],
+        "isPrimary": true,
+        "status": "scheduled"
+      },
+      {
+        "id": "example-shift-backup",
+        "employeeId": "example-backup",
+        "businessDate": "2026-07-14",
+        "startAt": "2026-07-14T19:00:00.000+08:00",
+        "endAt": "2026-07-15T03:00:00.000+08:00",
+        "roleId": "backup",
+        "areaIds": ["example-area"],
+        "isPrimary": false,
+        "status": "scheduled"
+      },
+      {
+        "id": "example-shift-supervisor",
+        "employeeId": "example-supervisor",
+        "businessDate": "2026-07-14",
+        "startAt": "2026-07-14T19:00:00.000+08:00",
+        "endAt": "2026-07-15T03:00:00.000+08:00",
+        "roleId": "supervisor",
+        "areaIds": ["example-area"],
+        "isPrimary": false,
+        "status": "scheduled"
+      },
+      {
+        "id": "example-shift-manager",
+        "employeeId": "example-manager",
+        "businessDate": "2026-07-14",
+        "startAt": "2026-07-14T19:00:00.000+08:00",
+        "endAt": "2026-07-15T03:00:00.000+08:00",
+        "roleId": "manager",
+        "areaIds": ["example-area"],
+        "isPrimary": false,
+        "status": "scheduled"
+      }
+    ],
+    "products": [
+      {
+        "id": "example-product-water",
+        "sku": "EXAMPLE-001",
+        "name": "示例商品（必须替换）",
+        "specification": "1份",
+        "listPriceAmount": 10000,
+        "costAmount": 3000,
+        "stationId": "bar-main",
+        "enabled": true,
+        "configVersion": 2
+      }
+    ],
+    "authorizationAuthorities": [
+      {
+        "id": "example-authority-manager",
+        "actorId": "example-manager",
+        "kinds": ["discount", "gift"],
+        "maxAmount": 100000,
+        "allowedSkuIds": ["example-product-water"],
+        "tableSessionIds": null,
+        "validFrom": "2026-07-14T18:00:00.000+08:00",
+        "validUntil": "2026-07-15T04:00:00.000+08:00",
+        "approval": {
+          "operationsApproverId": "replace-with-operations-approver-id",
+          "financeApproverId": "replace-with-finance-approver-id",
+          "approvedAt": "2026-07-14T08:00:00.000+08:00",
+          "reason": "replace-with-signed-approval-reason"
+        }
+      }
+    ]
+  }
+}

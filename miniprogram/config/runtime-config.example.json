@@ -1,0 +1,11 @@
+{
+  "mbox": {
+    "mode": "production",
+    "apiBaseUrl": "https://api.example.com",
+    "storeId": "your-store-id",
+    "defaultTableCode": "",
+    "defaultTableToken": "",
+    "allowDevDataFallback": false,
+    "requestTimeoutMs": 10000
+  }
+}

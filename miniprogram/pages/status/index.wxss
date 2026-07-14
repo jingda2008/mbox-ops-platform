@@ -1,0 +1,13 @@
+.status-title { display: block; color: #ffffff; font-size: 42rpx; font-weight: 750; }
+.status-item { padding: 25rpx 0; border-bottom: 1rpx solid #e8eaee; }
+.status-item:first-child { padding-top: 0; }
+.status-item:last-child { padding-bottom: 0; border-bottom: 0; }
+.status-item__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20rpx; }
+.status-chip { flex: 0 0 auto; padding: 8rpx 12rpx; border-radius: 6rpx; background: #edf4ff; color: #315f9a; font-size: 20rpx; }
+.status-chip--song { background: #f3ead7; color: #805d22; }
+.status-note { display: block; margin-top: 14rpx; padding: 14rpx 16rpx; background: #f5f6f8; color: #5d6570; font-size: 22rpx; line-height: 1.5; }
+.feedback-actions { display: grid; margin-top: 18rpx; grid-template-columns: 1fr 1fr; gap: 14rpx; }
+.feedback-actions button { height: 68rpx; border-radius: 7rpx; font-size: 24rpx; line-height: 68rpx; }
+.feedback-actions button::after { border: 0; }
+.feedback-confirm { background: #e9f5ee; color: #236144; }
+.feedback-unresolved { background: #fff0ed; color: #9a3529; }

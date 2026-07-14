@@ -51,6 +51,7 @@ interface PaymentApi {
     reason: string,
   ) => Promise<unknown>
   approveAndCompleteRefund: (refundId: string) => Promise<unknown>
+  completePhysicalPosRefund: (refundId: string, terminalRefundTransactionId: string, reason: string) => Promise<unknown>
 }
 
 type BootstrapWithPayments = BootstrapResponse & { paymentDomain?: PaymentDomainState }
@@ -59,6 +60,7 @@ type RefundDraft = { paymentIntentId: string; orderId: string; orderItemId: stri
 
 const paymentClient = api as unknown as PaymentApi
 const ONLINE_SIMULATION_CHANNEL = 'wechat_mock'
+const DEVELOPMENT_PAYMENT_SIMULATOR = import.meta.env.DEV
 const emptyPaymentDomain: PaymentDomainState = {
   paymentIntents: [],
   paymentNotifications: [],
@@ -88,6 +90,8 @@ const refundStatusLabels: Record<RefundStatus, string> = {
 
 export function PaymentView({ data, onRefresh }: PaymentViewProps) {
   const paymentDomain = (data as BootstrapWithPayments).paymentDomain ?? emptyPaymentDomain
+  const currentActorId = api.getCurrentActorId()
+  const currentEmployee = data.employees.find((employee) => employee.id === currentActorId && employee.status === 'active')
   const [busyAction, setBusyAction] = useState('')
   const [notice, setNotice] = useState<Notice | null>(null)
   const [posIntentId, setPosIntentId] = useState('')
@@ -96,6 +100,7 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
   const [paymentMethod, setPaymentMethod] = useState('银行卡')
   const [receiptReference, setReceiptReference] = useState('')
   const [refundDraft, setRefundDraft] = useState<RefundDraft | null>(null)
+  const [refundCompletion, setRefundCompletion] = useState({ refundId: '', terminalRefundTransactionId: '', reason: '' })
 
   const tableAccounts = useMemo(
     () => buildTableAccounts(data, paymentDomain.paymentIntents, paymentDomain.refunds),
@@ -121,6 +126,10 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
   const openReceivable = tableAccounts.reduce((sum, account) => sum + account.collectableAmount, 0)
 
   async function execute(actionKey: string, successMessage: string, operation: () => Promise<unknown>) {
+    if (!currentEmployee) {
+      setNotice({ tone: 'error', message: '当前员工身份无效，请重新登录后进行收银操作' })
+      return
+    }
     setBusyAction(actionKey)
     setNotice(null)
     try {
@@ -191,6 +200,22 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
     )
   }
 
+  function completePhysicalRefund(event: FormEvent, refund: Refund) {
+    event.preventDefault()
+    if (!refundCompletion.terminalRefundTransactionId.trim() || !refundCompletion.reason.trim()) {
+      setNotice({ tone: 'error', message: '请填写POS退款流水号和审批说明' })
+      return
+    }
+    void execute(`refund-pos-complete:${refund.id}`, '物理POS退款已审批并登记完成', async () => {
+      await paymentClient.completePhysicalPosRefund(
+        refund.id,
+        refundCompletion.terminalRefundTransactionId.trim(),
+        refundCompletion.reason.trim(),
+      )
+      setRefundCompletion({ refundId: '', terminalRefundTransactionId: '', reason: '' })
+    })
+  }
+
   return (
     <section className="payment-view">
       <header className="payment-heading">
@@ -198,7 +223,10 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
           <span className="eyebrow">桌账、支付、退款与对账</span>
           <h2>收银工作台</h2>
         </div>
-        <span className="payment-mode"><CircleAlert size={15} />真实微信支付尚未接入</span>
+        <div>
+          <span className="payment-mode"><ShieldCheck size={15} />当前操作：{currentEmployee?.displayName ?? '身份失效，请重新登录'}</span>
+          <span className="payment-mode"><CircleAlert size={15} />真实微信支付尚未接入</span>
+        </div>
       </header>
 
       {notice && (
@@ -241,15 +269,17 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
                 ))}
               </div>
               <div className="table-account-actions">
-                <button
-                  className="primary-button"
-                  type="button"
-                  disabled={account.collectableAmount <= 0 || Boolean(busyAction)}
-                  onClick={() => createIntent(account.tableSessionId, ONLINE_SIMULATION_CHANNEL)}
-                >
-                  {busyAction === `create:${account.tableSessionId}:${ONLINE_SIMULATION_CHANNEL}` ? <LoaderCircle className="spin" size={16} /> : <Smartphone size={16} />}
-                  生成线上联调单
-                </button>
+                {DEVELOPMENT_PAYMENT_SIMULATOR && (
+                  <button
+                    className="primary-button"
+                    type="button"
+                    disabled={account.collectableAmount <= 0 || Boolean(busyAction)}
+                    onClick={() => createIntent(account.tableSessionId, ONLINE_SIMULATION_CHANNEL)}
+                  >
+                    {busyAction === `create:${account.tableSessionId}:${ONLINE_SIMULATION_CHANNEL}` ? <LoaderCircle className="spin" size={16} /> : <Smartphone size={16} />}
+                    生成线上联调单
+                  </button>
+                )}
                 <button
                   className="secondary-button"
                   type="button"
@@ -330,8 +360,10 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
         )}
         <div className="refund-list">
           {paymentDomain.refunds.length === 0 && !refundDraft && <EmptyState icon={ShieldCheck} text="暂无退款申请；请从已确认到账的商品明细发起" />}
-          {paymentDomain.refunds.toReversed().map((refund) => (
-            <article className="refund-row" key={refund.id}>
+          {paymentDomain.refunds.toReversed().map((refund) => {
+            const isPhysicalPosRefund = paymentDomain.paymentIntents
+              .some((intent) => intent.id === refund.paymentIntentId && intent.channel === PHYSICAL_POS_CHANNEL)
+            return <article className="refund-row" key={refund.id}>
               <div className="refund-status">
                 <span className={`payment-status status-${refund.status}`}>{refundStatusLabels[refund.status]}</span>
                 <small>{formatTime(refund.requestedAt)}</small>
@@ -341,14 +373,32 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
                 <span>{refund.reason} · 申请人 {refund.requestedBy}</span>
               </div>
               <b>{money(refund.amount)}</b>
-              {refund.status === 'requested' && (
+              {refund.status === 'requested' && DEVELOPMENT_PAYMENT_SIMULATOR && (
                 <button className="primary-button" type="button" disabled={Boolean(busyAction)} onClick={() => approveRefund(refund)}>
                   {busyAction === `refund-approve:${refund.id}` ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />}
                   审批并完成
                 </button>
               )}
+              {refund.status === 'requested' && isPhysicalPosRefund && !DEVELOPMENT_PAYMENT_SIMULATOR && refundCompletion.refundId !== refund.id && (
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={Boolean(busyAction)}
+                  onClick={() => setRefundCompletion({ refundId: refund.id, terminalRefundTransactionId: '', reason: '' })}
+                >
+                  <ShieldCheck size={16} />登记POS退款
+                </button>
+              )}
+              {refund.status === 'requested' && isPhysicalPosRefund && !DEVELOPMENT_PAYMENT_SIMULATOR && refundCompletion.refundId === refund.id && (
+                <form className="refund-request-form" onSubmit={(event) => completePhysicalRefund(event, refund)}>
+                  <label><span>POS退款流水号</span><input required value={refundCompletion.terminalRefundTransactionId} onChange={(event) => setRefundCompletion({ ...refundCompletion, terminalRefundTransactionId: event.target.value })} /></label>
+                  <label><span>审批说明</span><input required value={refundCompletion.reason} onChange={(event) => setRefundCompletion({ ...refundCompletion, reason: event.target.value })} /></label>
+                  <button className="primary-button" type="submit" disabled={Boolean(busyAction)}><FileCheck2 size={16} />确认退款完成</button>
+                  <button className="icon-button" title="取消登记" type="button" onClick={() => setRefundCompletion({ refundId: '', terminalRefundTransactionId: '', reason: '' })}>×</button>
+                </form>
+              )}
             </article>
-          ))}
+          })}
         </div>
       </section>
     </section>
@@ -389,7 +439,7 @@ function PaymentIntentRow({ data, intent, busyAction, onSimulate, onRefund }: {
           )
         })}
       </div>
-      {isSimulation && intent.status === 'pending' && (
+      {DEVELOPMENT_PAYMENT_SIMULATOR && isSimulation && intent.status === 'pending' && (
         <div className="simulation-action">
           <div><CircleAlert size={16} /><span><strong>仅供接口联调</strong>此操作生成模拟成功回调，不发生真实扣款或资金结算。</span></div>
           <button className="secondary-button" type="button" disabled={Boolean(busyAction)} onClick={() => onSimulate(intent)}>

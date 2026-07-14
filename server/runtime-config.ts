@@ -32,6 +32,15 @@ export interface RuntimeConfig {
   wechatStateSecret?: string
   wechatEncryptionKeyVersion: number
   wechatEncryptionKey?: Buffer
+  notificationHttpTimeoutMs: number
+  serviceAccountNotificationsEnabled: boolean
+  serviceAccountNotificationAppId?: string
+  serviceAccountNotificationAppSecret?: string
+  serviceAccountNotificationTemplates?: Record<string, { templateId: string; page?: string }>
+  wecomNotificationsEnabled: boolean
+  wecomCorpId?: string
+  wecomCorpSecret?: string
+  wecomAgentId?: string
 }
 
 function parseInteger(value: string | undefined, fallback: number, name: string, minimum: number, maximum: number) {
@@ -78,6 +87,20 @@ function parseEncryptionKey(value: string | undefined) {
   return key
 }
 
+function parseNotificationTemplates(value: string | undefined) {
+  if (!value?.trim()) return undefined
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value)
+  } catch {
+    throw new Error('MBOX_SERVICE_ACCOUNT_NOTIFICATION_TEMPLATES_JSON必须是有效JSON')
+  }
+  return z.record(z.string().trim().min(1), z.object({
+    templateId: z.string().trim().min(1),
+    page: z.string().trim().url().optional(),
+  })).parse(parsed)
+}
+
 export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig {
   const runtimeMode = runtimeModeSchema.parse(env.MBOX_RUNTIME_MODE ?? 'local')
   const repositoryMode = repositoryModeSchema.parse(
@@ -116,6 +139,23 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
       1_000_000,
     ),
     wechatEncryptionKey: parseEncryptionKey(env.MBOX_WECHAT_ENCRYPTION_KEY_BASE64),
+    notificationHttpTimeoutMs: parseInteger(
+      env.MBOX_NOTIFICATION_HTTP_TIMEOUT_MS,
+      10_000,
+      'MBOX_NOTIFICATION_HTTP_TIMEOUT_MS',
+      1,
+      60_000,
+    ),
+    serviceAccountNotificationsEnabled: parseBoolean(env.MBOX_SERVICE_ACCOUNT_NOTIFICATIONS_ENABLED),
+    serviceAccountNotificationAppId: env.MBOX_SERVICE_ACCOUNT_NOTIFICATION_APP_ID?.trim() || undefined,
+    serviceAccountNotificationAppSecret: env.MBOX_SERVICE_ACCOUNT_NOTIFICATION_APP_SECRET?.trim() || undefined,
+    serviceAccountNotificationTemplates: parseNotificationTemplates(
+      env.MBOX_SERVICE_ACCOUNT_NOTIFICATION_TEMPLATES_JSON,
+    ),
+    wecomNotificationsEnabled: parseBoolean(env.MBOX_WECOM_NOTIFICATIONS_ENABLED),
+    wecomCorpId: env.MBOX_WECOM_CORP_ID?.trim() || undefined,
+    wecomCorpSecret: env.MBOX_WECOM_CORP_SECRET?.trim() || undefined,
+    wecomAgentId: env.MBOX_WECOM_AGENT_ID?.trim() || undefined,
   }
 
   for (const origin of corsOrigins) assertUrl(origin, 'MBOX_CORS_ORIGINS', ['http:', 'https:'])
@@ -138,6 +178,21 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
       throw new Error('启用微信身份必须配置至少32字符的MBOX_WECHAT_STATE_SECRET')
     }
     if (!config.wechatEncryptionKey) throw new Error('启用微信身份必须配置32字节加密密钥')
+  }
+  if (config.serviceAccountNotificationsEnabled) {
+    if (!config.serviceAccountNotificationAppId || !config.serviceAccountNotificationAppSecret) {
+      throw new Error('启用服务号通知必须配置服务号AppID和AppSecret')
+    }
+    if (!config.serviceAccountNotificationTemplates || Object.keys(config.serviceAccountNotificationTemplates).length === 0) {
+      throw new Error('启用服务号通知必须配置至少一个消息模板')
+    }
+  }
+  if (config.wecomNotificationsEnabled && (!config.wecomCorpId || !config.wecomCorpSecret || !config.wecomAgentId)) {
+    throw new Error('启用企业微信通知必须配置CorpID、CorpSecret和AgentID')
+  }
+  if (config.serviceAccountNotificationsEnabled || config.wecomNotificationsEnabled) {
+    if (repositoryMode !== 'postgres') throw new Error('启用客户通知必须使用PostgreSQL仓储')
+    if (!config.wechatEncryptionKey) throw new Error('启用客户通知必须配置32字节微信身份加密密钥')
   }
 
   if (config.pilotAccessCode) {

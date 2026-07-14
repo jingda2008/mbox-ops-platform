@@ -89,6 +89,29 @@ export function createPilotSession(accessCode: string, actorId: string) {
   })
 }
 
+export function getCurrentActorId() {
+  if (typeof window === 'undefined') return ''
+  const sessionToken = window.localStorage.getItem('mbox.auth.token')?.trim()
+  if (sessionToken) return actorIdFromSessionToken(sessionToken)
+  const selectedActorId = window.localStorage.getItem('mbox.actor.id')?.trim()
+  if (selectedActorId) return selectedActorId
+  if (!import.meta.env.DEV) return ''
+  return String(import.meta.env.VITE_MBOX_LOCAL_ACTOR_ID ?? '').trim()
+}
+
+function actorIdFromSessionToken(token: string) {
+  try {
+    const payload = token.split('.')[0]
+    if (!payload) return ''
+    const normalized = payload.replace(/-/g, '+').replace(/_/g, '/')
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')
+    const claims = JSON.parse(window.atob(padded)) as { actorId?: unknown }
+    return typeof claims.actorId === 'string' ? claims.actorId.trim() : ''
+  } catch {
+    return ''
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const method = init?.method ?? 'GET'
   const highRiskWrite = isHighRiskOfflineWrite(path, method)
@@ -100,7 +123,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (sessionToken) {
     headers.set('Authorization', `Bearer ${sessionToken}`)
   } else {
-    headers.set('x-mbox-actor-id', window.localStorage.getItem('mbox.actor.id') ?? 'emp-chen')
+    const actorId = getCurrentActorId()
+    if (actorId) headers.set('x-mbox-actor-id', actorId)
     headers.set('x-mbox-store-id', 'mbox-lujiazui')
   }
   let response: Response
@@ -429,7 +453,6 @@ export function createTablePaymentIntent(tableSessionId: string, channel: 'wecha
     body: JSON.stringify({
       tableSessionId,
       channel,
-      actorId: 'emp-lin',
       deviceId: 'cashier-web',
       idempotencyKey: idempotencyKey('payment-intent'),
     }),
@@ -457,7 +480,6 @@ export function reportPhysicalPos(
       terminalTransactionId,
       paymentMethod,
       receiptReference,
-      actorId: 'emp-lin',
       deviceId: 'cashier-web',
       idempotencyKey: idempotencyKey('pos-report'),
     }),
@@ -478,7 +500,6 @@ export function requestItemRefund(
       orderItemId,
       quantity,
       reason,
-      actorId: 'emp-lin',
       idempotencyKey: idempotencyKey('refund-request'),
     }),
   })
@@ -488,8 +509,22 @@ export function approveAndCompleteRefund(refundId: string) {
   return request<Refund>(`/api/payments/refunds/${refundId}/dev-approve-complete`, {
     method: 'POST',
     body: JSON.stringify({
-      actorId: 'emp-chen',
       idempotencyKey: idempotencyKey('refund-complete'),
+    }),
+  })
+}
+
+export function completePhysicalPosRefund(
+  refundId: string,
+  terminalRefundTransactionId: string,
+  reason: string,
+) {
+  return request<Refund>(`/api/payments/refunds/${refundId}/physical-pos-complete`, {
+    method: 'POST',
+    body: JSON.stringify({
+      terminalRefundTransactionId,
+      reason,
+      idempotencyKey: idempotencyKey('physical-pos-refund'),
     }),
   })
 }

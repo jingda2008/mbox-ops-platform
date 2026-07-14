@@ -1,6 +1,6 @@
 import { CheckCheck, ChefHat, CircleDollarSign, PackageCheck, Play, Send, ShoppingCart } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
-import { actOnKdsTask, createQuickOrder } from '../api'
+import { actOnKdsTask, createQuickOrder, getCurrentActorId } from '../api'
 import type { BootstrapResponse } from '../shared/contracts'
 import type { KdsActionInput, QuickOrderInput } from '../shared/commerce-api'
 import type { KdsTask } from '../shared/order-contracts'
@@ -17,6 +17,8 @@ const kdsLabels: Record<KdsTask['status'], string> = {
 }
 
 export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
+  const currentActorId = getCurrentActorId()
+  const currentEmployee = data.employees.find((employee) => employee.id === currentActorId && employee.status === 'active')
   const occupiedTables = data.tables.filter((table) => table.status === 'occupied')
   const enabledProducts = data.products.filter((product) => product.enabled)
   const [tableId, setTableId] = useState(occupiedTables[0]?.id ?? '')
@@ -28,10 +30,14 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
 
   async function submit(event: FormEvent) {
     event.preventDefault()
+    if (!currentEmployee) {
+      onNotice('当前员工身份无效，请重新登录后下单')
+      return
+    }
     setBusy(true)
     try {
       const input: QuickOrderInput = {
-        tableId, productId, quantity, actorId: 'emp-lin', idempotencyKey: `quick-${crypto.randomUUID()}`,
+        tableId, productId, quantity, actorId: currentEmployee.id, idempotencyKey: `quick-${crypto.randomUUID()}`,
       }
       await createQuickOrder(input)
       onNotice('订单已提交并进入KDS')
@@ -44,9 +50,13 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
   }
 
   async function advance(task: KdsTask, action: KdsActionInput['action']) {
+    if (!currentEmployee) {
+      onNotice('当前员工身份无效，请重新登录后操作KDS')
+      return
+    }
     setBusy(true)
     try {
-      await actOnKdsTask(task.id, { action, actorId: action === 'start' || action === 'complete' ? 'bar-main' : 'emp-jie', idempotencyKey: `kds-${action}-${crypto.randomUUID()}` })
+      await actOnKdsTask(task.id, { action, actorId: currentEmployee.id, idempotencyKey: `kds-${action}-${crypto.randomUUID()}` })
       onNotice(`${task.itemName}已更新为${nextLabel(action)}`)
       await onRefresh()
     } catch (error) {
@@ -80,12 +90,12 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
         <label><span>桌台</span><select value={tableId} onChange={(event) => setTableId(event.target.value)}>{occupiedTables.map((table) => <option key={table.id} value={table.id}>{table.code} · {table.displayName}</option>)}</select></label>
         <label><span>商品</span><select value={productId} onChange={(event) => setProductId(event.target.value)}>{enabledProducts.map((product) => <option key={product.id} value={product.id}>{product.name} · {money(product.listPriceAmount)}</option>)}</select></label>
         <label><span>数量</span><input type="number" min={1} max={50} value={quantity} onChange={(event) => setQuantity(Number(event.target.value))} /></label>
-        <button className="primary-button" type="submit" disabled={busy || !tableId || !productId}><Send size={17} />提交订单</button>
+        <button className="primary-button" type="submit" disabled={busy || !currentEmployee || !tableId || !productId}><Send size={17} />提交订单</button>
       </form>
 
       <div className="commerce-grid">
         <section className="kds-section">
-          <div className="commerce-section-title"><ChefHat size={18} /><strong>KDS出品队列</strong></div>
+          <div className="commerce-section-title"><ChefHat size={18} /><strong>KDS出品队列</strong><span>当前操作：{currentEmployee?.displayName ?? '身份失效，请重新登录'}</span></div>
           <div className="kds-list">
             {activeKds.length === 0 && <div className="commerce-empty"><CheckCheck size={22} />当前没有待出品商品</div>}
             {activeKds.map((task) => {
@@ -93,9 +103,9 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
               const action = nextAction(task.status)
               return (
                 <article className={`kds-row kds-${task.status}`} key={task.id}>
-                  <div className="kds-status"><span>{kdsLabels[task.status]}</span><small>{task.stationId}</small></div>
+                  <div className="kds-status"><span>{kdsLabels[task.status]}</span><small>工位 {task.stationId}</small></div>
                   <div className="kds-product"><strong>{task.itemName} × {task.quantity}</strong><span>{task.specification} · {table?.code ?? '未知桌台'}</span></div>
-                  {action && <button className="secondary-button" disabled={busy} onClick={() => void advance(task, action)}>{actionIcon(action)}{nextLabel(action)}</button>}
+                  {action && <button className="secondary-button" disabled={busy || !currentEmployee} title={currentEmployee ? `由${currentEmployee.displayName}执行` : '请重新登录'} onClick={() => void advance(task, action)}>{actionIcon(action)}{nextLabel(action)}</button>}
                 </article>
               )
             })}

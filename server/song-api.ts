@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import type { RuntimeState } from '../src/shared/contracts.js'
 import type { SongRequest } from '../src/shared/song-contracts.js'
-import { requireRequestActor } from './auth-context.js'
+import { requireAnyRole } from './authorization.js'
 import type { RuntimeRepository } from './repository.js'
 import {
   acceptSongRequest,
@@ -17,6 +17,8 @@ import {
 } from './song-domain.js'
 
 const idempotencyKey = z.string().trim().min(8).max(128)
+const SONG_REQUEST_ROLES = ['server', 'backup', 'supervisor', 'manager'] as const
+const SONG_MANAGEMENT_ROLES = ['supervisor', 'manager'] as const
 
 function deterministicId(prefix: string, key: string) {
   return `${prefix}_${createHash('sha256').update(key).digest('hex').slice(0, 32)}`
@@ -28,7 +30,7 @@ const submitSchema = z.object({
   tableSessionId: z.string().trim().min(1),
   singerId: z.string().trim().min(1),
   songId: z.string().trim().min(1),
-  requestedBy: z.string().trim().min(1),
+  requestedBy: z.string().trim().min(1).optional(),
   customerNote: z.string().trim().max(300).default(''),
   idempotencyKey,
 })
@@ -55,9 +57,11 @@ function mutateSong(state: RuntimeState, operation: () => SongRequest) {
 export function registerSongRoutes(app: FastifyInstance, repository: RuntimeRepository) {
   app.post('/api/songs/requests', async (request, reply) => {
     const input = submitSchema.parse(request.body)
+    const actor = requireAnyRole(request, SONG_REQUEST_ROLES, 'song.request.submit', '提交员工点歌')
     const result = await repository.mutate((state) => mutateSong(state, () => submitSongRequest(state.songState, {
       ...input,
       requestId: deterministicId('song_request', input.idempotencyKey),
+      requestedBy: actor.actorId,
       occurredAt: new Date().toISOString(),
     })))
     return reply.status(201).send(result)
@@ -65,7 +69,7 @@ export function registerSongRoutes(app: FastifyInstance, repository: RuntimeRepo
 
   app.post<{ Params: { requestId: string } }>('/api/songs/requests/:requestId/payment', async (request) => {
     const input = paymentSchema.parse(request.body)
-    const actor = requireRequestActor(request)
+    const actor = requireAnyRole(request, SONG_MANAGEMENT_ROLES, 'song.request.payment', '确认点歌支付')
     return repository.mutate((state) => mutateSong(state, () => {
       const songRequest = state.songState.requests.find((item) => item.id === request.params.requestId)
       if (!songRequest) throw new Error('点歌请求不存在')
@@ -83,7 +87,7 @@ export function registerSongRoutes(app: FastifyInstance, repository: RuntimeRepo
 
   app.post<{ Params: { requestId: string } }>('/api/songs/requests/:requestId/actions', async (request) => {
     const input = actionSchema.parse(request.body)
-    const actor = requireRequestActor(request)
+    const actor = requireAnyRole(request, SONG_MANAGEMENT_ROLES, 'song.request.manage', '处理点歌请求')
     const command = {
       requestId: request.params.requestId,
       actor: { actorId: actor.actorId, role: 'manager' as const },

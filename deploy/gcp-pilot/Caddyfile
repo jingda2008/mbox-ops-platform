@@ -1,5 +1,9 @@
 {$MBOX_DOMAIN} {
   encode zstd gzip
+
+  @developmentPaymentEndpoints path /api/payments/*/dev-simulate-success /api/payments/refunds/*/dev-approve-complete
+  respond @developmentPaymentEndpoints 404
+
   reverse_proxy app:8787
   header {
     -Server

@@ -20,6 +20,7 @@ import {
 import type { RuntimeRepository } from './repository.js'
 import { completeAwaitingOrderOnOrder } from './proactive-service.js'
 import { consumeManagedInventoryForSubmittedOrder } from './inventory-order-integration.js'
+import { requireCommerceDecisionAuthority, requireOperation, requireOrderCreationRole } from './authorization.js'
 
 function tableSessionId(tableId: string, businessDate: string) {
   return `session:${tableId}:${businessDate}`
@@ -33,6 +34,7 @@ export function registerCommerceRoutes(app: FastifyInstance, repository: Runtime
   app.post('/api/commerce/quick-orders', async (request, reply) => {
     const input = quickOrderSchema.parse(request.body)
     const order = await repository.mutate((state) => {
+      const actor = requireOrderCreationRole(request, state)
       const previous = state.auditEntries.find(
         (entry) => entry.action === 'commerce.quick_order.v1' && entry.details.idempotencyKey === input.idempotencyKey,
       )
@@ -57,7 +59,7 @@ export function registerCommerceRoutes(app: FastifyInstance, repository: Runtime
       createOrderDraft(state.orderDomain, {
         orderId,
         tableSessionId: tableSessionId(table.id, state.store.businessDate),
-        createdBy: input.actorId,
+        createdBy: actor.actorId,
         occurredAt: now,
         idempotencyKey: `${input.idempotencyKey}:draft`,
       })
@@ -75,25 +77,25 @@ export function registerCommerceRoutes(app: FastifyInstance, repository: Runtime
           stationId: product.stationId,
           configVersion: product.configVersion,
         },
-        actorId: input.actorId,
+        actorId: actor.actorId,
         occurredAt: now,
         idempotencyKey: `${input.idempotencyKey}:item`,
       })
       const submitted = submitOrder(state.orderDomain, {
         orderId,
-        submittedBy: input.actorId,
+        submittedBy: actor.actorId,
         occurredAt: now,
         idempotencyKey: `${input.idempotencyKey}:submit`,
       })
       consumeManagedInventoryForSubmittedOrder(state.inventoryDomain, submitted, {
-        actorId: input.actorId,
+        actorId: actor.actorId,
         businessDate: state.store.businessDate,
         occurredAt: now,
       })
-      completeAwaitingOrderOnOrder(state, table.id, orderId, input.actorId, new Date(now))
+      completeAwaitingOrderOnOrder(state, table.id, orderId, actor.actorId, new Date(now))
       state.auditEntries.push({
         id: `audit_${randomUUID()}`,
-        actorId: input.actorId,
+        actorId: actor.actorId,
         action: 'commerce.quick_order.v1',
         objectType: 'order',
         objectId: orderId,
@@ -108,11 +110,12 @@ export function registerCommerceRoutes(app: FastifyInstance, repository: Runtime
 
   app.post<{ Params: { taskId: string } }>('/api/commerce/kds/:taskId/actions', async (request) => {
     const input = kdsActionSchema.parse(request.body)
+    const actor = requireOperation(request, ['start', 'complete'].includes(input.action) ? 'commerce.kds.prepare' : 'commerce.kds.deliver')
     return repository.mutate((state) => {
       const idempotencyCount = state.orderDomain.idempotencyRecords.length
       const command = {
         taskId: request.params.taskId,
-        actorId: input.actorId,
+        actorId: actor.actorId,
         occurredAt: new Date().toISOString(),
         idempotencyKey: input.idempotencyKey,
       }
@@ -126,7 +129,7 @@ export function registerCommerceRoutes(app: FastifyInstance, repository: Runtime
       if (state.orderDomain.idempotencyRecords.length !== idempotencyCount) {
         state.auditEntries.push({
           id: deterministicId('audit_kds', input.idempotencyKey),
-          actorId: input.actorId,
+          actorId: actor.actorId,
           action: `kds.${input.action}.v1`,
           objectType: 'kdsTask',
           objectId: task.id,
@@ -141,6 +144,7 @@ export function registerCommerceRoutes(app: FastifyInstance, repository: Runtime
 
   app.post('/api/commerce/authorizations', async (request, reply) => {
     const input = authorizationRequestSchema.parse(request.body)
+    const actor = requireOperation(request, 'commerce.authorization.request')
     const authorization = await repository.mutate((state) => {
       const idempotencyCount = state.orderDomain.idempotencyRecords.length
       const result = requestOrderAuthorization(state.orderDomain, {
@@ -148,7 +152,7 @@ export function registerCommerceRoutes(app: FastifyInstance, repository: Runtime
         orderId: input.orderId,
         kind: input.kind,
         lineIds: input.lineIds,
-        requestedBy: input.actorId,
+        requestedBy: actor.actorId,
         occurredAt: new Date().toISOString(),
         idempotencyKey: input.idempotencyKey,
       })
@@ -161,13 +165,15 @@ export function registerCommerceRoutes(app: FastifyInstance, repository: Runtime
   app.post<{ Params: { authorizationId: string } }>('/api/commerce/authorizations/:authorizationId/decision', async (request) => {
     const input = authorizationDecisionSchema.parse(request.body)
     return repository.mutate((state) => {
+      const now = new Date()
+      const actor = requireCommerceDecisionAuthority(request, state, request.params.authorizationId, now)
       const idempotencyCount = state.orderDomain.idempotencyRecords.length
       const result = decideOrderAuthorization(state.orderDomain, {
         authorizationId: request.params.authorizationId,
         decision: input.decision,
-        decidedBy: input.actorId,
+        decidedBy: actor.actorId,
         reason: input.reason,
-        occurredAt: new Date().toISOString(),
+        occurredAt: now.toISOString(),
         idempotencyKey: input.idempotencyKey,
       })
       if (state.orderDomain.idempotencyRecords.length !== idempotencyCount) state.revision += 1

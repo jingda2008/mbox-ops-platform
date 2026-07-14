@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createSeedState } from './seed.js'
 import { buildTableQrEntries } from './generate-table-qrs.js'
-import { verifyTableAccessToken } from './table-access.js'
+import { requireStaticTableQr, verifyTableAccessToken } from './table-access.js'
 
 describe('table QR manifest', () => {
   it('creates one unique signed URL per configured table without putting tokens in the audit hash', () => {
@@ -10,7 +10,11 @@ describe('table QR manifest', () => {
     expect(entries).toHaveLength(createSeedState().tables.length)
     expect(new Set(entries.map((entry) => entry.url)).size).toBe(entries.length)
     const token = new URL(entries[0]!.url).searchParams.get('token')!
-    expect(verifyTableAccessToken(token, secret).tableCode).toBe(entries[0]!.tableCode)
+    expect(requireStaticTableQr(verifyTableAccessToken(token, secret))).toMatchObject({
+      tokenType: 'table_qr',
+      tableCode: entries[0]!.tableCode,
+      tokenVersion: entries[0]!.tokenVersion,
+    })
     expect(entries[0]!.tokenSha256).not.toContain(token)
   })
 })

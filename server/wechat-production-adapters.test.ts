@@ -116,6 +116,12 @@ class FakePostgres implements PostgresPool, PostgresPoolClient {
       const row = this.identities.find((candidate) => candidate.openid_sha256 === values[3])
       return result(row ? [row] : []) as PostgresQueryResult<Row>
     }
+    if (sql.includes('wechat:notification-recipient')) {
+      const row = this.identities.find((candidate) => (
+        candidate.member_id === values[4] && candidate.app_id === values[3] && candidate.revoked_at === null
+      ))
+      return result(row ? [row] : []) as PostgresQueryResult<Row>
+    }
     if (sql.includes('wechat:identity-principal-for-update')) {
       const rows = this.identities.filter((candidate) => candidate.principal_id === values[2])
       return result(rows) as PostgresQueryResult<Row>
@@ -271,6 +277,35 @@ describe('OfficialWechatCodeSessionProvider', () => {
 })
 
 describe('PostgreSQL WeChat repositories', () => {
+  it('resolves a consented member notification identity without exposing encrypted storage details', async () => {
+    const pool = new FakePostgres()
+    const repository = new PostgresWechatIdentityRepository({
+      ...repositoryOptions(pool),
+      notificationAppIds: { service_account: APP_ID },
+    })
+    const identity: WechatIdentityRecord = {
+      id: 'wechat_identity_service_account_1',
+      principalId: 'wechat_member_principal_1',
+      tenantId: TENANT_ID,
+      storeId: STORE_ID,
+      appId: APP_ID,
+      openId: 'service-account-openid-secret',
+      unionId: null,
+      memberId: MEMBER_ID,
+      createdAt: new Date(NOW).toISOString(),
+      lastAuthenticatedAt: new Date(NOW).toISOString(),
+    }
+    await repository.save(identity)
+
+    await expect(repository.resolveRecipient('service_account', MEMBER_ID, 'BENEFIT_GRANTED')).resolves.toEqual({
+      ok: true,
+      value: { channel: 'service_account', openId: identity.openId },
+    })
+    const query = pool.queries.find(({ sql }) => sql.includes('wechat:notification-recipient'))!
+    expect(query.values).not.toContain(identity.openId)
+    expect(query.sql).toContain('member.notification_consent = true')
+  })
+
   it('persists challenge replay data encrypted while setting scoped RLS context', async () => {
     const pool = new FakePostgres()
     const repository = new PostgresWechatChallengeRepository(repositoryOptions(pool))

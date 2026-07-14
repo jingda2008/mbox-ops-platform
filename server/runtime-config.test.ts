@@ -96,4 +96,30 @@ describe('runtime config', () => {
     })
     expect(() => loadRuntimeConfig({ ...base, MBOX_WECHAT_ENCRYPTION_KEY_BASE64: 'dG9vLXNob3J0' })).toThrow('32字节')
   })
+
+  it('fails closed when customer notification channels are incomplete', () => {
+    expect(() => loadRuntimeConfig({ MBOX_SERVICE_ACCOUNT_NOTIFICATIONS_ENABLED: 'true' }))
+      .toThrow('服务号AppID和AppSecret')
+    expect(() => loadRuntimeConfig({
+      MBOX_WECOM_NOTIFICATIONS_ENABLED: 'true',
+      MBOX_WECOM_CORP_ID: 'corp-id',
+    })).toThrow('CorpID、CorpSecret和AgentID')
+  })
+
+  it('parses configured service-account templates before requiring production storage', () => {
+    expect(() => loadRuntimeConfig({
+      MBOX_SERVICE_ACCOUNT_NOTIFICATIONS_ENABLED: 'true',
+      MBOX_SERVICE_ACCOUNT_NOTIFICATION_APP_ID: 'wx-service-account',
+      MBOX_SERVICE_ACCOUNT_NOTIFICATION_APP_SECRET: 'provider-secret',
+      MBOX_SERVICE_ACCOUNT_NOTIFICATION_TEMPLATES_JSON: JSON.stringify({
+        BENEFIT_GRANTED: { templateId: 'template-001', page: 'https://mbox.example/member' },
+      }),
+    })).toThrow('PostgreSQL')
+    expect(() => loadRuntimeConfig({
+      MBOX_SERVICE_ACCOUNT_NOTIFICATIONS_ENABLED: 'true',
+      MBOX_SERVICE_ACCOUNT_NOTIFICATION_APP_ID: 'wx-service-account',
+      MBOX_SERVICE_ACCOUNT_NOTIFICATION_APP_SECRET: 'provider-secret',
+      MBOX_SERVICE_ACCOUNT_NOTIFICATION_TEMPLATES_JSON: '{bad-json',
+    })).toThrow('必须是有效JSON')
+  })
 })

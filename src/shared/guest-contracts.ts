@@ -3,13 +3,27 @@ import type { ServiceTask, ServiceTypeConfig } from './contracts.js'
 import type { ItemFulfillmentStatus, OrderStatus } from './order-contracts.js'
 import type { SongRequestStatus } from './song-contracts.js'
 
-export interface TableAccessClaims {
-  version: 1
+interface TableTokenClaimsBase {
+  version: 2
   storeId: string
   tableCode: string
   tokenVersion: number
   issuedAt: number
 }
+
+/** Long-lived credential printed on the physical table. It can only start a guest session. */
+export interface StaticTableQrClaims extends TableTokenClaimsBase {
+  tokenType: 'table_qr'
+}
+
+/** Short-lived write credential bound to one open visit of a table. */
+export interface GuestSessionClaims extends TableTokenClaimsBase {
+  tokenType: 'guest_session'
+  tableSessionId: string
+  expiresAt: number
+}
+
+export type TableAccessClaims = StaticTableQrClaims | GuestSessionClaims
 
 export interface GuestServiceType extends Pick<ServiceTypeConfig, 'id' | 'code' | 'name' | 'icon' | 'priority'> {}
 
@@ -66,6 +80,11 @@ export interface GuestSessionResponse {
     currency: string
     createdAt: string
   }>
+  guestSession: {
+    tableSessionId: string
+    expiresAt: string
+    tokenVersion: number
+  }
   tableToken: string
   serverNow: string
 }

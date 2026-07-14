@@ -1,12 +1,16 @@
+import Fastify from 'fastify'
 import { describe, expect, it } from 'vitest'
 import {
   decideBenefitGrant,
   launchBenefitCampaign,
   previewBenefitCampaign,
   requestBenefitGrant,
+  registerBenefitRoutes,
   updateBenefitPolicy,
   updateBenefitTemplate,
 } from './benefit-domain.js'
+import { registerAuthContext } from './auth-context.js'
+import { JsonRepository } from './repository.js'
 import { createSeedState } from './seed.js'
 
 const now = new Date('2026-07-14T12:00:00.000Z')
@@ -63,6 +67,18 @@ describe('member benefit grants', () => {
       decision: 'granted',
       note: '尝试越权批准',
     }, now)).toThrow('没有权益审批权限')
+  })
+
+  it('rejects approval for a benefit outside the approver policy template scope', () => {
+    const state = createSeedState()
+    const request = requestBenefitGrant(state, grantInput({ templateId: 'benefit-return-50' }), now)
+    expect(() => decideBenefitGrant(state, request.id, {
+      actorId: 'emp-mia',
+      decision: 'granted',
+      note: '尝试审批策略范围外权益',
+    }, now)).toThrow('没有该权益审批权限')
+    expect(request.status).toBe('pending')
+    expect(state.memberBenefits).toHaveLength(0)
   })
 
   it('launches a deduplicated dormant-member campaign and keeps unsendable messages explicit', () => {
@@ -145,5 +161,114 @@ describe('member benefit grants', () => {
     expect(request.status).toBe('granted')
     expect(state.benefitTemplates.find((item) => item.id === 'benefit-beer')?.validityDays).toBe(21)
     expect(state.auditEntries.some((entry) => entry.action === 'benefit.policy_updated.v1')).toBe(true)
+  })
+})
+
+async function routeFixture() {
+  const repository = new JsonRepository(`/tmp/mbox-benefit-domain-${crypto.randomUUID()}.json`)
+  await repository.init()
+  const app = Fastify()
+  await registerAuthContext(app, { runtimeMode: 'test', readState: () => repository.read() })
+  registerBenefitRoutes(app, repository)
+  return { app, repository }
+}
+
+function actorHeaders(actorId: string) {
+  return { 'x-mbox-actor-id': actorId, 'x-mbox-store-id': 'mbox-lujiazui' }
+}
+
+describe('benefit HTTP actor binding', () => {
+  it('uses the authenticated requester and approver instead of claimed body identities', async () => {
+    const { app, repository } = await routeFixture()
+    const grant = await app.inject({
+      method: 'POST',
+      url: '/api/benefits/grants',
+      headers: actorHeaders('emp-lin'),
+      payload: {
+        actorId: 'emp-chen',
+        requestedBy: 'emp-chen',
+        memberId: 'member-amy',
+        templateId: 'benefit-return-50',
+        quantity: 1,
+        reason: '验证发放身份不可冒用',
+        channel: 'none',
+        idempotencyKey: 'grant-http-impersonation-0001',
+      },
+    })
+    expect(grant.statusCode).toBe(201)
+    expect(grant.json()).toMatchObject({ status: 'pending', requestedBy: 'emp-lin' })
+
+    const denied = await app.inject({
+      method: 'POST',
+      url: `/api/benefits/grants/${grant.json().id}/decision`,
+      headers: actorHeaders('emp-lin'),
+      payload: {
+        actorId: 'emp-chen',
+        decidedBy: 'emp-chen',
+        decision: 'granted',
+        note: '冒用经理批准',
+      },
+    })
+    expect(denied.statusCode).toBe(403)
+    expect((await repository.read()).benefitGrantRequests[0]?.status).toBe('pending')
+
+    const approved = await app.inject({
+      method: 'POST',
+      url: `/api/benefits/grants/${grant.json().id}/decision`,
+      headers: actorHeaders('emp-chen'),
+      payload: {
+        actorId: 'emp-lin',
+        decidedBy: 'emp-lin',
+        decision: 'granted',
+        note: '经理本人批准',
+      },
+    })
+    expect(approved.statusCode).toBe(200)
+    expect(approved.json()).toMatchObject({ status: 'granted', decidedBy: 'emp-chen' })
+    expect((await repository.read()).memberBenefits[0]?.approvedBy).toBe('emp-chen')
+
+    await app.close()
+    await repository.close()
+  })
+
+  it('enforces campaign and policy write roles even when the body claims a manager identity', async () => {
+    const { app, repository } = await routeFixture()
+    const campaign = await app.inject({
+      method: 'POST',
+      url: '/api/benefits/campaigns',
+      headers: actorHeaders('emp-mia'),
+      payload: {
+        actorId: 'emp-chen',
+        requestedBy: 'emp-chen',
+        name: '冒用经理活动',
+        segment: 'vip',
+        templateId: 'benefit-song',
+        channel: 'wecom',
+        reason: '验证活动权限',
+        idempotencyKey: 'campaign-http-impersonation-0001',
+      },
+    })
+    expect(campaign.statusCode).toBe(403)
+
+    const policy = await app.inject({
+      method: 'PUT',
+      url: '/api/benefits/policies/policy-server',
+      headers: actorHeaders('emp-mia'),
+      payload: {
+        actorId: 'emp-chen',
+        authorizedBy: 'emp-chen',
+        templateIds: ['benefit-beer'],
+        maxCostPerGrantAmount: 2000,
+        maxDailyCostAmount: 10000,
+        canApprove: true,
+        canLaunchCampaign: true,
+      },
+    })
+    expect(policy.statusCode).toBe(403)
+    expect((await repository.read()).benefitGrantPolicies.find((item) => item.id === 'policy-server'))
+      .toMatchObject({ canApprove: false, canLaunchCampaign: false })
+
+    await app.close()
+    await repository.close()
   })
 })

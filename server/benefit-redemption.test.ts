@@ -1,14 +1,18 @@
+import Fastify from 'fastify'
 import { describe, expect, it } from 'vitest'
 import type { RuntimeState } from '../src/shared/contracts.js'
 import { requestBenefitGrant } from './benefit-domain.js'
+import { registerAuthContext } from './auth-context.js'
 import {
   BenefitRedemptionBusinessError,
   cancelBenefitRedemption,
   confirmBenefitRedemption,
   lockBenefitRedemption,
+  registerBenefitRedemptionRoutes,
 } from './benefit-redemption.js'
 import { createSeedState } from './seed.js'
 import { receiveInventory } from './inventory-domain.js'
+import { JsonRepository } from './repository.js'
 
 const issuedAt = new Date('2026-07-14T10:00:00.000Z')
 const lockedAt = '2026-07-14T10:10:00.000Z'
@@ -275,5 +279,129 @@ describe('benefit redemption', () => {
     expect(benefit.remainingQuantity).toBe(1)
     expect(state.benefitRedemptions).toHaveLength(0)
     expect(state.orderDomain.orders).toHaveLength(0)
+  })
+})
+
+async function redemptionRouteFixture() {
+  const repository = new JsonRepository(`/tmp/mbox-benefit-redemption-${crypto.randomUUID()}.json`)
+  await repository.init()
+  const benefitId = await repository.mutate((state) => {
+    state.orderDomain.authorizationAuthorities = state.orderDomain.authorizationAuthorities.map((authority) => ({
+      ...authority,
+      validFrom: '2026-01-01T00:00:00.000Z',
+      validUntil: '2026-12-31T23:59:59.999Z',
+    }))
+    const request = requestBenefitGrant(state, {
+      actorId: 'emp-chen',
+      memberId: 'member-amy',
+      templateId: 'benefit-beer',
+      quantity: 1,
+      reason: 'HTTP核销身份测试发放',
+      channel: 'none',
+      idempotencyKey: `redemption-http-grant-${crypto.randomUUID()}`,
+    })
+    receiveInventory(state.inventoryDomain!, {
+      movementId: `redemption-http-stock-${crypto.randomUUID()}`,
+      productId: 'product-beer',
+      unitCode: 'bottle',
+      quantity: 2,
+      actorId: 'emp-chen',
+      reason: 'HTTP核销测试入库',
+      businessDate: state.store.businessDate,
+      occurredAt: new Date().toISOString(),
+      idempotencyKey: `redemption-http-stock-${crypto.randomUUID()}`,
+    })
+    return request.benefitId!
+  })
+  const app = Fastify()
+  await registerAuthContext(app, { runtimeMode: 'test', readState: () => repository.read() })
+  registerBenefitRedemptionRoutes(app, repository)
+  return { app, repository, benefitId }
+}
+
+function redemptionActorHeaders(actorId: string) {
+  return { 'x-mbox-actor-id': actorId, 'x-mbox-store-id': 'mbox-lujiazui' }
+}
+
+describe('benefit redemption HTTP actor binding', () => {
+  it('ignores claimed lock and authorization identities and requires the authenticated approver authority', async () => {
+    const { app, repository, benefitId } = await redemptionRouteFixture()
+    const locked = await app.inject({
+      method: 'POST',
+      url: '/api/benefits/redemptions/locks',
+      headers: redemptionActorHeaders('emp-lin'),
+      payload: {
+        actorId: 'emp-chen',
+        requestedBy: 'emp-chen',
+        benefitId,
+        tableId: 'table-l01',
+        quantity: 1,
+        idempotencyKey: 'redemption-http-lock-0001',
+      },
+    })
+    expect(locked.statusCode).toBe(201)
+    expect(locked.json().lockedBy).toBe('emp-lin')
+
+    const denied = await app.inject({
+      method: 'POST',
+      url: `/api/benefits/redemptions/${locked.json().id}/confirm`,
+      headers: redemptionActorHeaders('emp-jie'),
+      payload: {
+        actorId: 'emp-lin',
+        decidedBy: 'emp-chen',
+        authorizedBy: 'emp-chen',
+        idempotencyKey: 'redemption-http-confirm-0001',
+      },
+    })
+    expect(denied.statusCode).toBe(403)
+    expect((await repository.read()).benefitRedemptions[0]?.status).toBe('locked')
+
+    const confirmed = await app.inject({
+      method: 'POST',
+      url: `/api/benefits/redemptions/${locked.json().id}/confirm`,
+      headers: redemptionActorHeaders('emp-chen'),
+      payload: {
+        actorId: 'emp-lin',
+        decidedBy: 'emp-lin',
+        authorizedBy: 'emp-lin',
+        idempotencyKey: 'redemption-http-confirm-0001',
+      },
+    })
+    expect(confirmed.statusCode).toBe(200)
+    expect(confirmed.json()).toMatchObject({ confirmedBy: 'emp-chen', authorizedBy: 'emp-chen' })
+
+    await app.close()
+    await repository.close()
+  })
+
+  it('does not let an unrelated employee cancel a lock by claiming the locker identity', async () => {
+    const { app, repository, benefitId } = await redemptionRouteFixture()
+    const locked = await app.inject({
+      method: 'POST',
+      url: '/api/benefits/redemptions/locks',
+      headers: redemptionActorHeaders('emp-lin'),
+      payload: {
+        benefitId,
+        tableId: 'table-l01',
+        quantity: 1,
+        idempotencyKey: 'redemption-http-lock-0002',
+      },
+    })
+    const cancelled = await app.inject({
+      method: 'POST',
+      url: `/api/benefits/redemptions/${locked.json().id}/cancel`,
+      headers: redemptionActorHeaders('emp-wu'),
+      payload: {
+        actorId: 'emp-lin',
+        requestedBy: 'emp-lin',
+        reason: '冒用锁定人取消',
+        idempotencyKey: 'redemption-http-cancel-0001',
+      },
+    })
+    expect(cancelled.statusCode).toBe(403)
+    expect((await repository.read()).benefitRedemptions[0]?.status).toBe('locked')
+
+    await app.close()
+    await repository.close()
   })
 })

@@ -2,8 +2,11 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { awaitingOrderActionSchema } from '../src/shared/contracts.js'
 import type { AwaitingOrderIntent, RuntimeState } from '../src/shared/contracts.js'
+import { requireAnyRole } from './authorization.js'
 import { applyTaskAction, createServiceTask, isOpenTask } from './domain.js'
 import type { RuntimeRepository } from './repository.js'
+
+const SERVICE_INITIATOR_ROLES = ['server', 'backup', 'supervisor', 'manager'] as const
 
 function tableSessionId(state: RuntimeState, tableId: string) {
   return `session:${tableId}:${state.store.businessDate}`
@@ -186,10 +189,16 @@ export function processAwaitingOrderReminders(state: RuntimeState, now = new Dat
 export function registerProactiveServiceRoutes(app: FastifyInstance, repository: RuntimeRepository) {
   app.post<{ Params: { tableId: string } }>('/api/tables/:tableId/awaiting-order/start', async (request, reply) => {
     const input = awaitingOrderActionSchema.parse(request.body)
+    const actor = requireAnyRole(
+      request,
+      SERVICE_INITIATOR_ROLES,
+      'proactive.awaiting-order.start',
+      '发起待点单服务',
+    )
     const intent = await repository.mutate((state) => startAwaitingOrder(
       state,
       request.params.tableId,
-      input.actorId,
+      actor.actorId,
       input.idempotencyKey,
     ))
     return reply.status(201).send(intent)
@@ -197,10 +206,16 @@ export function registerProactiveServiceRoutes(app: FastifyInstance, repository:
 
   app.post<{ Params: { tableId: string } }>('/api/tables/:tableId/awaiting-order/stop', async (request) => {
     const input = awaitingOrderActionSchema.parse(request.body)
+    const actor = requireAnyRole(
+      request,
+      SERVICE_INITIATOR_ROLES,
+      'proactive.awaiting-order.stop',
+      '停止待点单服务',
+    )
     return repository.mutate((state) => stopAwaitingOrder(
       state,
       request.params.tableId,
-      input.actorId,
+      actor.actorId,
       input.reason || 'employee_cancelled',
     ))
   })

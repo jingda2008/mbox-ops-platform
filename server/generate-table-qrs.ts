@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import QRCode from 'qrcode'
 import type { RuntimeState, Table } from '../src/shared/contracts.js'
 import { validateProvisionState } from './provision-runtime.js'
-import { signTableAccessToken } from './table-access.js'
+import { signStaticTableQrToken } from './table-access.js'
 
 export interface TableQrEntry {
   tableCode: string
@@ -26,7 +26,7 @@ export function buildTableQrEntries(state: RuntimeState, baseUrl: string, secret
   if (!['http:', 'https:'].includes(parsedUrl.protocol)) throw new Error('顾客入口必须是HTTP或HTTPS URL')
   return state.tables.toSorted((left, right) => left.code.localeCompare(right.code)).map((table): TableQrEntry => {
     const version = tokenVersion(table)
-    const token = signTableAccessToken({
+    const token = signStaticTableQrToken({
       storeId: state.store.id,
       tableCode: table.code,
       tokenVersion: version,

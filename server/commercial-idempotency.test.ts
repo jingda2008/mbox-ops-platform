@@ -5,11 +5,25 @@ import { registerPaymentRoutes } from './payment-api.js'
 import { JsonRepository } from './repository.js'
 import { receiveInventory } from './inventory-domain.js'
 
+function registerTestActor(app: ReturnType<typeof Fastify>) {
+  app.decorateRequest('mboxActor', null)
+  app.addHook('preHandler', async (request) => {
+    request.mboxActor = {
+      actorId: 'emp-lin',
+      storeId: 'mbox-lujiazui',
+      roleId: 'server',
+      runtimeMode: 'test',
+      authenticatedBy: 'local_header',
+    }
+  })
+}
+
 describe('commercial API idempotency', () => {
   it('replays order and payment creation without duplicate entities or audit entries', async () => {
     const repository = new JsonRepository(`/tmp/mbox-idempotency-${crypto.randomUUID()}.json`)
     await repository.init()
     const app = Fastify()
+    registerTestActor(app)
     registerCommerceRoutes(app, repository)
     app.setErrorHandler((error, _request, reply) => reply.status(400).send({ message: error.message }))
     registerPaymentRoutes(app, repository)
@@ -83,6 +97,7 @@ describe('commercial API idempotency', () => {
     const repository = new JsonRepository(`/tmp/mbox-stock-rollback-${crypto.randomUUID()}.json`)
     await repository.init()
     const app = Fastify()
+    registerTestActor(app)
     registerCommerceRoutes(app, repository)
     app.setErrorHandler((error, _request, reply) => reply.status(400).send({ message: error.message }))
 

@@ -12,6 +12,7 @@ import type {
   BenefitRedemptionLockCommand,
 } from '../src/shared/benefit-redemption-contracts.js'
 import type { AuditEntry, Employee, RuntimeState, Table } from '../src/shared/contracts.js'
+import { requireRequestActor } from './auth-context.js'
 import {
   addOrderItem,
   createOrderDraft,
@@ -21,6 +22,13 @@ import {
 } from './order-domain.js'
 import type { RuntimeRepository } from './repository.js'
 import { consumeManagedInventoryForSubmittedOrder } from './inventory-order-integration.js'
+
+const benefitRedemptionLockHttpSchema = benefitRedemptionLockSchema.omit({ actorId: true })
+const benefitRedemptionConfirmHttpSchema = benefitRedemptionConfirmSchema.omit({
+  actorId: true,
+  authorizedBy: true,
+})
+const benefitRedemptionCancelHttpSchema = benefitRedemptionCancelSchema.omit({ actorId: true })
 
 export class BenefitRedemptionBusinessError extends Error {
   constructor(
@@ -414,26 +422,33 @@ export function cancelBenefitRedemption(state: RuntimeState, redemptionId: strin
 
 export function registerBenefitRedemptionRoutes(app: FastifyInstance, repository: RuntimeRepository) {
   app.post('/api/benefits/redemptions/locks', async (request, reply) => {
-    const input = benefitRedemptionLockSchema.parse(request.body)
+    const actor = requireRequestActor(request)
+    const input = benefitRedemptionLockHttpSchema.parse(request.body)
     const result = await repository.mutate((state) => lockBenefitRedemption(state, {
       ...input,
+      actorId: actor.actorId,
       occurredAt: new Date().toISOString(),
     }))
     return reply.status(201).send(result)
   })
 
   app.post<{ Params: { redemptionId: string } }>('/api/benefits/redemptions/:redemptionId/confirm', async (request) => {
-    const input = benefitRedemptionConfirmSchema.parse(request.body)
+    const actor = requireRequestActor(request)
+    const input = benefitRedemptionConfirmHttpSchema.parse(request.body)
     return repository.mutate((state) => confirmBenefitRedemption(state, request.params.redemptionId, {
       ...input,
+      actorId: actor.actorId,
+      authorizedBy: actor.actorId,
       occurredAt: new Date().toISOString(),
     }))
   })
 
   app.post<{ Params: { redemptionId: string } }>('/api/benefits/redemptions/:redemptionId/cancel', async (request) => {
-    const input = benefitRedemptionCancelSchema.parse(request.body)
+    const actor = requireRequestActor(request)
+    const input = benefitRedemptionCancelHttpSchema.parse(request.body)
     return repository.mutate((state) => cancelBenefitRedemption(state, request.params.redemptionId, {
       ...input,
+      actorId: actor.actorId,
       occurredAt: new Date().toISOString(),
     }))
   })

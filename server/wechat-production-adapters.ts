@@ -11,6 +11,9 @@ import type {
   WechatAuthenticatedPrincipal,
   WechatFailure,
   WechatIdentityRecord,
+  WechatChannel,
+  WechatNotificationRecipient,
+  WechatNotificationRecipientResolver,
   WechatProviderResult,
 } from '../src/shared/wechat-contracts.js'
 import type {
@@ -249,6 +252,7 @@ export interface PostgresWechatRepositoryOptions extends WechatApplicationScope 
   mutationReplayTtlMs?: number
   revokedSessionRetentionMs?: number
   randomBytes?: (size: number) => Buffer
+  notificationAppIds?: Partial<Record<WechatChannel, string>>
 }
 
 interface IdentityRow extends Record<string, unknown> {
@@ -547,7 +551,7 @@ export interface WechatCleanupResult {
 
 export class PostgresWechatIdentityRepository
   extends ScopedWechatPostgresRepository
-  implements WechatApiIdentityRepository {
+  implements WechatApiIdentityRepository, WechatNotificationRecipientResolver {
   async findByAppOpenId(tenantId: string, appId: string, openId: string) {
     this.assertTenant(tenantId)
     if (appId !== this.appId) throw new Error('Cross-application WeChat identity access rejected')
@@ -587,6 +591,57 @@ export class PostgresWechatIdentityRepository
         [this.tenantId, this.storeId, principalId],
       )
       return result.rows.map((row) => this.decodeIdentity(row))
+    })
+  }
+
+  async resolveRecipient(
+    channel: WechatChannel,
+    memberId: string,
+    _templateCode: string,
+  ): Promise<WechatProviderResult<WechatNotificationRecipient>> {
+    const appId = this.options.notificationAppIds?.[channel]?.trim()
+    if (!appId) {
+      return {
+        ok: false,
+        failure: failure('configuration', 'NOTIFICATION_APP_ID_MISSING', '客户通知渠道缺少身份应用配置'),
+      }
+    }
+    return this.transaction(true, async (client) => {
+      const result = await client.query<IdentityRow>(
+        `/* wechat:notification-recipient */
+         SELECT identity.id, identity.external_identity_id, identity.principal_id,
+                identity.tenant_id, identity.store_id, identity.app_id,
+                identity.openid_sha256, identity.openid_ciphertext, identity.openid_key_version,
+                identity.unionid_sha256, identity.unionid_ciphertext, identity.unionid_key_version,
+                identity.member_id, identity.created_at, identity.updated_at, identity.last_authenticated_at
+         FROM mbox.wechat_identities identity
+         JOIN mbox.customer_members member
+           ON member.tenant_id = identity.tenant_id
+          AND member.store_id = identity.store_id
+          AND member.id = identity.member_id
+         WHERE identity.tenant_id = $1::uuid
+           AND identity.store_id = $2::uuid
+           AND identity.channel = $3
+           AND identity.app_id = $4
+           AND (member.id::text = $5 OR member.member_no = $5)
+           AND member.status = 'active'
+           AND member.notification_consent = true
+           AND identity.revoked_at IS NULL
+         ORDER BY identity.last_authenticated_at DESC
+         LIMIT 1`,
+        [this.tenantId, this.storeId, channel, appId, memberId],
+      )
+      const row = result.rows[0]
+      if (!row) {
+        return {
+          ok: false,
+          failure: failure('authorization', 'NOTIFICATION_RECIPIENT_NOT_BOUND', '会员未绑定可用通知身份或未授权通知'),
+        }
+      }
+      const identity = this.decodeIdentity(row)
+      return channel === 'service_account'
+        ? { ok: true, value: { channel, openId: identity.openId } }
+        : { ok: true, value: { channel, userId: identity.openId } }
     })
   }
 

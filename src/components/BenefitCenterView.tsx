@@ -1,6 +1,6 @@
 import { BadgeCheck, CalendarClock, ExternalLink, Gift, Megaphone, MessageSquareText, ShieldCheck, UserRoundCheck, XCircle } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { cancelMemberBenefitRedemption, confirmMemberBenefitRedemption, decideMemberBenefit, grantMemberBenefit, launchMemberCampaign, lockMemberBenefit, previewMemberCampaign, retryCustomerNotification } from '../api'
+import { cancelMemberBenefitRedemption, confirmMemberBenefitRedemption, decideMemberBenefit, getCurrentActorId, grantMemberBenefit, launchMemberCampaign, lockMemberBenefit, previewMemberCampaign, retryCustomerNotification } from '../api'
 import type { BenefitCampaignPreview } from '../api'
 import type { BenefitChannel } from '../shared/benefit-contracts'
 import type { BootstrapResponse } from '../shared/contracts'
@@ -26,8 +26,8 @@ const channelLabels = {
 }
 
 export function BenefitCenterView({ data, onRefresh, onNotice }: BenefitCenterViewProps) {
-  const manager = data.employees.find((employee) => employee.roleId === 'manager' && employee.status === 'active')
-  const [actorId, setActorId] = useState(data.employees.find((employee) => employee.roleId === 'server')?.id ?? data.employees[0]?.id ?? '')
+  const actorId = getCurrentActorId()
+  const currentEmployee = data.employees.find((employee) => employee.id === actorId && employee.status === 'active')
   const [memberId, setMemberId] = useState(data.members[0]?.id ?? '')
   const [templateId, setTemplateId] = useState(data.benefitTemplates.find((item) => item.enabled)?.id ?? '')
   const [quantity, setQuantity] = useState(1)
@@ -40,7 +40,6 @@ export function BenefitCenterView({ data, onRefresh, onNotice }: BenefitCenterVi
   const [campaignPreview, setCampaignPreview] = useState<BenefitCampaignPreview | null>(null)
   const occupiedTables = data.tables.filter((table) => table.status === 'occupied')
   const [redemptionTableId, setRedemptionTableId] = useState(occupiedTables[0]?.id ?? '')
-  const [authorizationActorId, setAuthorizationActorId] = useState(manager?.id ?? actorId)
   const [busy, setBusy] = useState(false)
 
   const pendingRequests = data.benefitGrantRequests.filter((request) => request.status === 'pending')
@@ -57,8 +56,15 @@ export function BenefitCenterView({ data, onRefresh, onNotice }: BenefitCenterVi
 
   useEffect(() => setCampaignPreview(null), [campaignSegment, campaignTemplateId, campaignChannel])
 
+  function hasCurrentEmployee() {
+    if (currentEmployee) return true
+    onNotice('当前员工身份无效，请重新登录后操作会员权益')
+    return false
+  }
+
   async function submitGrant(event: React.FormEvent) {
     event.preventDefault()
+    if (!hasCurrentEmployee()) return
     setBusy(true)
     try {
       const request = await grantMemberBenefit({
@@ -80,13 +86,13 @@ export function BenefitCenterView({ data, onRefresh, onNotice }: BenefitCenterVi
   }
 
   async function decide(requestId: string, decision: 'granted' | 'rejected') {
-    if (!manager) return
+    if (!hasCurrentEmployee()) return
     setBusy(true)
     try {
       await decideMemberBenefit(requestId, {
-        actorId: manager.id,
+        actorId,
         decision,
-        note: decision === 'granted' ? '值班经理确认符合会员关怀规则' : '不符合本次权益发放规则',
+        note: decision === 'granted' ? '当前审批人员确认符合会员关怀规则' : '不符合本次权益发放规则',
       })
       onNotice(decision === 'granted' ? '审批通过，权益已到账' : '权益申请已拒绝')
       await onRefresh()
@@ -99,11 +105,11 @@ export function BenefitCenterView({ data, onRefresh, onNotice }: BenefitCenterVi
 
   async function launchCampaign(event: React.FormEvent) {
     event.preventDefault()
-    if (!manager || !campaignPreview?.withinDailyBudget) return
+    if (!hasCurrentEmployee() || !campaignPreview?.withinDailyBudget) return
     setBusy(true)
     try {
       const campaign = await launchMemberCampaign({
-        actorId: manager.id,
+        actorId,
         name: campaignName,
         segment: campaignSegment,
         templateId: campaignTemplateId,
@@ -122,11 +128,11 @@ export function BenefitCenterView({ data, onRefresh, onNotice }: BenefitCenterVi
   }
 
   async function previewCampaign() {
-    if (!manager) return
+    if (!hasCurrentEmployee()) return
     setBusy(true)
     try {
       const preview = await previewMemberCampaign({
-        actorId: manager.id,
+        actorId,
         name: campaignName,
         segment: campaignSegment,
         templateId: campaignTemplateId,
@@ -144,6 +150,7 @@ export function BenefitCenterView({ data, onRefresh, onNotice }: BenefitCenterVi
   }
 
   async function retryNotification(notificationId: string) {
+    if (!hasCurrentEmployee()) return
     setBusy(true)
     try {
       await retryCustomerNotification(notificationId)
@@ -157,6 +164,7 @@ export function BenefitCenterView({ data, onRefresh, onNotice }: BenefitCenterVi
   }
 
   async function lockBenefit(benefitId: string) {
+    if (!hasCurrentEmployee()) return
     setBusy(true)
     try {
       await lockMemberBenefit({
@@ -176,11 +184,12 @@ export function BenefitCenterView({ data, onRefresh, onNotice }: BenefitCenterVi
   }
 
   async function confirmRedemption(redemptionId: string) {
+    if (!hasCurrentEmployee()) return
     setBusy(true)
     try {
       await confirmMemberBenefitRedemption(redemptionId, {
         actorId,
-        authorizedBy: authorizationActorId,
+        authorizedBy: actorId,
         idempotencyKey: `benefit-confirm-${crypto.randomUUID()}`,
       })
       onNotice('权益已核销，赠品订单已进入出品队列')
@@ -193,6 +202,7 @@ export function BenefitCenterView({ data, onRefresh, onNotice }: BenefitCenterVi
   }
 
   async function cancelRedemption(redemptionId: string) {
+    if (!hasCurrentEmployee()) return
     setBusy(true)
     try {
       await cancelMemberBenefitRedemption(redemptionId, {
@@ -227,7 +237,7 @@ export function BenefitCenterView({ data, onRefresh, onNotice }: BenefitCenterVi
         <form className="benefit-form" onSubmit={(event) => void submitGrant(event)}>
           <div className="form-heading"><Gift size={19} /><div><strong>单客权益发放</strong><span>权限内直接到账，超权限自动审批</span></div></div>
           <div className="form-grid">
-            <label><span>发放人员</span><select value={actorId} onChange={(event) => setActorId(event.target.value)}>{data.employees.filter((item) => item.status === 'active').map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName} · {data.config.roles.find((role) => role.id === employee.roleId)?.name}</option>)}</select></label>
+            <label><span>发放人员</span><input value={currentEmployee ? employeeLabel(data, currentEmployee.id) : '身份失效，请重新登录'} disabled /></label>
             <label><span>会员</span><select value={memberId} onChange={(event) => setMemberId(event.target.value)}>{data.members.map((member) => <option key={member.id} value={member.id}>{member.displayName} · {member.level.toUpperCase()}</option>)}</select></label>
             <label><span>权益</span><select value={templateId} onChange={(event) => setTemplateId(event.target.value)}>{data.benefitTemplates.filter((item) => item.enabled).map((template) => <option key={template.id} value={template.id}>{template.name} · 成本{money(template.costAmount)}</option>)}</select></label>
             <label><span>数量</span><input type="number" min={1} max={10} value={quantity} onChange={(event) => setQuantity(Number(event.target.value))} /></label>
@@ -235,7 +245,7 @@ export function BenefitCenterView({ data, onRefresh, onNotice }: BenefitCenterVi
             <label className="wide-field"><span>发放原因</span><input value={reason} onChange={(event) => setReason(event.target.value)} /></label>
           </div>
           <div className="policy-hint"><BadgeCheck size={16} /><span>{policySummary(data, actorId, policiesByRole)}</span></div>
-          <button className="primary-button" type="submit" disabled={busy || !actorId || !memberId || !templateId}><Gift size={17} />确认发放</button>
+          <button className="primary-button" type="submit" disabled={busy || !currentEmployee || !memberId || !templateId}><Gift size={17} />确认发放</button>
         </form>
 
         <form className="benefit-form" onSubmit={(event) => void launchCampaign(event)}>
@@ -245,12 +255,12 @@ export function BenefitCenterView({ data, onRefresh, onNotice }: BenefitCenterVi
             <label><span>目标客群</span><select value={campaignSegment} onChange={(event) => setCampaignSegment(event.target.value as keyof typeof segmentLabels)}>{Object.entries(segmentLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
             <label><span>发放权益</span><select value={campaignTemplateId} onChange={(event) => setCampaignTemplateId(event.target.value)}>{data.benefitTemplates.filter((item) => item.enabled).map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>
             <label><span>触达渠道</span><select value={campaignChannel} onChange={(event) => setCampaignChannel(event.target.value as 'service_account' | 'wecom')}><option value="service_account">微信服务号</option><option value="wecom">企业微信</option></select></label>
-            <label><span>执行人</span><input value={manager?.displayName ?? '未配置活动管理员'} disabled /></label>
+            <label><span>执行人</span><input value={currentEmployee ? employeeLabel(data, currentEmployee.id) : '身份失效，请重新登录'} disabled /></label>
           </div>
           <div className={campaignPreview && !campaignPreview.withinDailyBudget ? 'policy-hint is-danger' : 'policy-hint'}><CalendarClock size={16} /><span>{campaignPreview
             ? `符合${campaignPreview.eligibleCount}人，可到账${campaignPreview.issuableCount}人，可微信触达${campaignPreview.reachableCount}人，预计成本${money(campaignPreview.estimatedCostAmount)}${campaignPreview.withinDailyBudget ? '' : '，已超每日额度'}`
             : '先预估人数、可触达范围和成本，再确认批量发放。'}</span></div>
-          <div className="campaign-actions"><button className="secondary-button" type="button" disabled={busy || !manager} onClick={() => void previewCampaign()}><CalendarClock size={17} />预估范围</button><button className="primary-button" type="submit" disabled={busy || !manager || !campaignPreview?.withinDailyBudget}><Megaphone size={17} />确认发放</button></div>
+          <div className="campaign-actions"><button className="secondary-button" type="button" disabled={busy || !currentEmployee} onClick={() => void previewCampaign()}><CalendarClock size={17} />预估范围</button><button className="primary-button" type="submit" disabled={busy || !currentEmployee || !campaignPreview?.withinDailyBudget}><Megaphone size={17} />确认发放</button></div>
         </form>
       </div>
 
@@ -271,18 +281,18 @@ export function BenefitCenterView({ data, onRefresh, onNotice }: BenefitCenterVi
             })}
           </div>
           <div className="redemption-toolbar">
-            <label><span>核销人员</span><select value={actorId} onChange={(event) => setActorId(event.target.value)}>{data.employees.filter((item) => item.status === 'active').map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName}</option>)}</select></label>
+            <label><span>核销人员</span><input value={currentEmployee?.displayName ?? '身份失效，请重新登录'} disabled /></label>
             <label><span>入账桌台</span><select value={redemptionTableId} onChange={(event) => setRedemptionTableId(event.target.value)}>{occupiedTables.map((table) => <option key={table.id} value={table.id}>{table.code} · {table.displayName}</option>)}</select></label>
-            <label><span>赠送授权</span><select value={authorizationActorId} onChange={(event) => setAuthorizationActorId(event.target.value)}>{data.employees.filter((employee) => data.orderDomain.authorizationAuthorities.some((authority) => authority.actorId === employee.id && authority.kinds.includes('gift'))).map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName}</option>)}</select></label>
+            <label><span>赠送授权</span><input value={currentEmployee ? `${currentEmployee.displayName}（按本人权限）` : '身份失效，请重新登录'} disabled /></label>
           </div>
           <div className="selected-benefits">
             {selectedMemberBenefits.length === 0 ? <span>当前会员暂无可用权益</span> : selectedMemberBenefits.map((benefit) => {
               const template = data.benefitTemplates.find((item) => item.id === benefit.templateId)
               const redemption = data.benefitRedemptions.find((item) => item.memberBenefitId === benefit.id && item.status === 'locked')
               return <div className="benefit-account-item" key={benefit.id}><Gift size={16} /><span><strong>{template?.name}</strong><small>剩余{benefit.remainingQuantity} · {benefit.validUntil.slice(0, 10)}到期</small></span><span className="redemption-actions">{redemption
-                ? <><button className="primary-button" disabled={busy} onClick={() => void confirmRedemption(redemption.id)}><BadgeCheck size={14} />确认出品</button><button className="icon-button danger" title="取消核销并释放权益" disabled={busy} onClick={() => void cancelRedemption(redemption.id)}><XCircle size={15} /></button></>
+                ? <><button className="primary-button" disabled={busy || !currentEmployee} onClick={() => void confirmRedemption(redemption.id)}><BadgeCheck size={14} />确认出品</button><button className="icon-button danger" title="取消核销并释放权益" disabled={busy || !currentEmployee} onClick={() => void cancelRedemption(redemption.id)}><XCircle size={15} /></button></>
                 : template?.kind === 'product_gift'
-                  ? <button className="secondary-button" disabled={busy || !redemptionTableId} onClick={() => void lockBenefit(benefit.id)}><ShieldCheck size={14} />锁定核销</button>
+                  ? <button className="secondary-button" disabled={busy || !currentEmployee || !redemptionTableId} onClick={() => void lockBenefit(benefit.id)}><ShieldCheck size={14} />锁定核销</button>
                   : <b>待接{template?.kind === 'amount_coupon' ? '支付账务' : '履约模块'}</b>}</span></div>
             })}
           </div>
@@ -295,13 +305,13 @@ export function BenefitCenterView({ data, onRefresh, onNotice }: BenefitCenterVi
               const member = data.members.find((item) => item.id === request.memberId)
               const template = data.benefitTemplates.find((item) => item.id === request.templateId)
               const employee = data.employees.find((item) => item.id === request.requestedBy)
-              return <div className="approval-row" key={request.id}><div><strong>{member?.displayName} · {template?.name}</strong><span>{employee?.displayName}申请 · {request.reason}</span></div><div><button className="secondary-button" disabled={busy} onClick={() => void decide(request.id, 'rejected')}>拒绝</button><button className="primary-button" disabled={busy} onClick={() => void decide(request.id, 'granted')}>批准发放</button></div></div>
+              return <div className="approval-row" key={request.id}><div><strong>{member?.displayName} · {template?.name}</strong><span>{employee?.displayName}申请 · {request.reason}</span></div><div><button className="secondary-button" disabled={busy || !currentEmployee} onClick={() => void decide(request.id, 'rejected')}>拒绝</button><button className="primary-button" disabled={busy || !currentEmployee} onClick={() => void decide(request.id, 'granted')}>批准发放</button></div></div>
             })}
           </div>
           <div className="notification-list">
             {data.customerNotifications.slice(0, 8).map((notification) => {
               const member = data.members.find((item) => item.id === notification.memberId)
-              return <div key={notification.id}><MessageSquareText size={16} /><span><strong>{member?.displayName} · {channelLabels[notification.channel]}</strong><small>{notificationDetail(notification)}</small></span>{notification.status === 'failed' ? <button className="notification-retry" disabled={busy} onClick={() => void retryNotification(notification.id)}>重试</button> : <b className={`notification-${notification.status}`}>{notificationStatus(notification.status)}</b>}</div>
+              return <div key={notification.id}><MessageSquareText size={16} /><span><strong>{member?.displayName} · {channelLabels[notification.channel]}</strong><small>{notificationDetail(notification)}</small></span>{notification.status === 'failed' ? <button className="notification-retry" disabled={busy || !currentEmployee} onClick={() => void retryNotification(notification.id)}>重试</button> : <b className={`notification-${notification.status}`}>{notificationStatus(notification.status)}</b>}</div>
             })}
             {data.customerNotifications.length === 0 && <div className="compact-empty">暂无通知记录</div>}
           </div>
@@ -318,6 +328,12 @@ function BenefitMetric({ icon: Icon, label, value, warning = false }: { icon: ty
 
 function money(amount: number) {
   return new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY' }).format(amount / 100)
+}
+
+function employeeLabel(data: BootstrapResponse, actorId: string) {
+  const employee = data.employees.find((item) => item.id === actorId)
+  const role = employee && data.config.roles.find((item) => item.id === employee.roleId)
+  return employee ? `${employee.displayName}${role ? ` · ${role.name}` : ''}` : actorId
 }
 
 function policySummary(data: BootstrapResponse, actorId: string, policies: Map<string, BootstrapResponse['benefitGrantPolicies'][number]>) {

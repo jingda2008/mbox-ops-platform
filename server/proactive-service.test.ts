@@ -1,8 +1,12 @@
+import Fastify from 'fastify'
 import { describe, expect, it } from 'vitest'
+import { AuthorizationError } from './authorization.js'
+import { JsonRepository } from './repository.js'
 import { createSeedState } from './seed.js'
 import {
   completeAwaitingOrderOnOrder,
   processAwaitingOrderReminders,
+  registerProactiveServiceRoutes,
   startAwaitingOrder,
   stopAwaitingOrder,
 } from './proactive-service.js'
@@ -86,5 +90,87 @@ describe('awaiting order proactive service', () => {
     expect(cancelled.status).toBe('cancelled')
     expect(cancelled.nextReminderAt).toBeNull()
     expect(cancelled.stopReason).toContain('等朋友')
+  })
+
+  it('uses the authenticated employee for start and stop audit and rejects other roles', async () => {
+    const repository = new JsonRepository(`/tmp/mbox-proactive-rbac-${crypto.randomUUID()}.json`)
+    await repository.init()
+    const app = Fastify()
+    app.decorateRequest('mboxActor', null)
+    app.addHook('preHandler', async (request) => {
+      const roleId = String(request.headers['x-test-role'] ?? 'server')
+      const actorIds: Record<string, string> = {
+        server: 'emp-lin',
+        backup: 'emp-jie',
+        specialist: 'emp-qing',
+      }
+      request.mboxActor = {
+        actorId: actorIds[roleId] ?? 'emp-lin',
+        storeId: 'mbox-lujiazui',
+        roleId,
+        runtimeMode: 'test',
+        authenticatedBy: 'local_header',
+      }
+    })
+    app.setErrorHandler((error, _request, reply) => {
+      if (error instanceof AuthorizationError) {
+        return reply.status(error.statusCode).send({ code: error.code, operation: error.operation })
+      }
+      throw error
+    })
+    registerProactiveServiceRoutes(app, repository)
+
+    const denied = await app.inject({
+      method: 'POST',
+      url: '/api/tables/table-l02/awaiting-order/start',
+      headers: { 'x-test-role': 'specialist' },
+      payload: { actorId: 'emp-chen', idempotencyKey: 'proactive-denied-0001', reason: '' },
+    })
+    expect(denied.statusCode).toBe(403)
+    expect(denied.json()).toEqual({
+      code: 'AUTHORIZATION_DENIED',
+      operation: 'proactive.awaiting-order.start',
+    })
+
+    const started = await app.inject({
+      method: 'POST',
+      url: '/api/tables/table-l02/awaiting-order/start',
+      payload: { actorId: 'emp-chen', idempotencyKey: 'proactive-actor-start-0001', reason: '' },
+    })
+    expect(started.statusCode).toBe(201)
+    expect(started.json().startedBy).toBe('emp-lin')
+
+    const deniedStop = await app.inject({
+      method: 'POST',
+      url: '/api/tables/table-l02/awaiting-order/stop',
+      headers: { 'x-test-role': 'specialist' },
+      payload: {
+        actorId: 'emp-chen',
+        idempotencyKey: 'proactive-stop-denied-0001',
+        reason: '越权停止',
+      },
+    })
+    expect(deniedStop.statusCode).toBe(403)
+    expect(deniedStop.json().operation).toBe('proactive.awaiting-order.stop')
+
+    const stopped = await app.inject({
+      method: 'POST',
+      url: '/api/tables/table-l02/awaiting-order/stop',
+      headers: { 'x-test-role': 'backup' },
+      payload: {
+        actorId: 'emp-chen',
+        idempotencyKey: 'proactive-actor-stop-0001',
+        reason: '客人稍后再点',
+      },
+    })
+    expect(stopped.statusCode).toBe(200)
+    expect(stopped.json().stoppedBy).toBe('emp-jie')
+
+    const state = await repository.read()
+    expect(state.auditEntries.find((entry) => entry.action === 'awaiting_order.started.v1')?.actorId).toBe('emp-lin')
+    expect(state.auditEntries.find((entry) => entry.action === 'awaiting_order.cancelled.v1')?.actorId).toBe('emp-jie')
+
+    await app.close()
+    await repository.close()
   })
 })

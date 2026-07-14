@@ -4,6 +4,7 @@ import {
   completeRefundSchema,
   createTablePaymentIntentSchema,
   itemRefundRequestSchema,
+  physicalPosRefundCompletionSchema,
   physicalPosReportSchema,
   simulatePaymentSuccessSchema,
 } from '../src/shared/payment-api.js'
@@ -17,6 +18,8 @@ import {
   requestRefund,
   startRefund,
 } from './payment-domain.js'
+import { AuthenticationError, requireRequestActor } from './auth-context.js'
+import { requireOperation } from './authorization.js'
 import type { RuntimeRepository } from './repository.js'
 
 const ACTIVE_ALLOCATION_STATUSES = new Set<PaymentIntentStatus>([
@@ -28,6 +31,14 @@ const ACTIVE_ALLOCATION_STATUSES = new Set<PaymentIntentStatus>([
 
 function deterministicId(prefix: string, key: string) {
   return `${prefix}_${createHash('sha256').update(key).digest('hex').slice(0, 32)}`
+}
+
+function requireDevelopmentActor(request: Parameters<typeof requireRequestActor>[0]) {
+  const actor = requireRequestActor(request)
+  if (actor.runtimeMode !== 'local' && actor.runtimeMode !== 'test') {
+    throw new AuthenticationError('当前环境未启用支付模拟接口', 404, 'DEVELOPMENT_ENDPOINT_DISABLED')
+  }
+  return actor
 }
 
 function audit(
@@ -80,6 +91,10 @@ function remainingAllocations(
 export function registerPaymentRoutes(app: FastifyInstance, repository: RuntimeRepository) {
   app.post('/api/payments/table-intents', async (request, reply) => {
     const input = createTablePaymentIntentSchema.parse(request.body)
+    const actor = requireOperation(request, 'payment.intent.create')
+    if (input.channel === 'wechat_mock' && actor.runtimeMode !== 'local' && actor.runtimeMode !== 'test') {
+      throw new AuthenticationError('当前环境未启用模拟支付渠道', 404, 'DEVELOPMENT_CHANNEL_DISABLED')
+    }
     const intent = await repository.mutate((state) => {
       const existingRecord = state.paymentDomain.idempotencyRecords.find((record) => record.key === input.idempotencyKey)
       if (existingRecord) {
@@ -91,7 +106,7 @@ export function registerPaymentRoutes(app: FastifyInstance, repository: RuntimeR
         if (
           existingIntent.tableSessionId !== input.tableSessionId ||
           existingIntent.channel !== input.channel ||
-          existingIntent.createdBy !== input.actorId ||
+          existingIntent.createdBy !== actor.actorId ||
           existingIntent.deviceId !== input.deviceId
         ) {
           throw new Error('幂等键已用于不同请求')
@@ -114,14 +129,14 @@ export function registerPaymentRoutes(app: FastifyInstance, repository: RuntimeR
         currency: 'CNY',
         channel: input.channel,
         merchantId: 'mbox-lujiazui-demo',
-        createdBy: input.actorId,
+        createdBy: actor.actorId,
         deviceId: input.deviceId,
         occurredAt: now.toISOString(),
         expiresAt: new Date(now.getTime() + 15 * 60 * 1000).toISOString(),
         idempotencyKey: input.idempotencyKey,
       })
       if (state.paymentDomain.idempotencyRecords.length !== idempotencyCount) {
-        audit(state, input.actorId, 'payment.intent.created.v1', 'paymentIntent', result.id, {
+        audit(state, actor.actorId, 'payment.intent.created.v1', 'paymentIntent', result.id, {
           tableSessionId: input.tableSessionId,
           channel: input.channel,
           amount,
@@ -137,6 +152,7 @@ export function registerPaymentRoutes(app: FastifyInstance, repository: RuntimeR
   app.post<{ Params: { paymentIntentId: string } }>(
     '/api/payments/:paymentIntentId/dev-simulate-success',
     async (request) => {
+      const actor = requireDevelopmentActor(request)
       const input = simulatePaymentSuccessSchema.parse(request.body)
       return repository.mutate((state) => {
         const intent = state.paymentDomain.paymentIntents.find((item) => item.id === request.params.paymentIntentId)
@@ -158,7 +174,7 @@ export function registerPaymentRoutes(app: FastifyInstance, repository: RuntimeR
           receivedAt: now,
         })
         if (state.paymentDomain.paymentNotifications.length !== notificationCount) {
-          audit(state, 'system-dev-simulator', 'payment.mock.succeeded.v1', 'paymentIntent', intent.id, {
+          audit(state, actor.actorId, 'payment.mock.succeeded.v1', 'paymentIntent', intent.id, {
             warning: 'development simulator only',
           })
         }
@@ -171,6 +187,7 @@ export function registerPaymentRoutes(app: FastifyInstance, repository: RuntimeR
     '/api/payments/:paymentIntentId/physical-pos-reports',
     async (request, reply) => {
       const input = physicalPosReportSchema.parse(request.body)
+      const actor = requireOperation(request, 'payment.pos.report')
       const report = await repository.mutate((state) => {
         const idempotencyCount = state.paymentDomain.idempotencyRecords.length
         const intent = state.paymentDomain.paymentIntents.find((item) => item.id === request.params.paymentIntentId)
@@ -185,14 +202,14 @@ export function registerPaymentRoutes(app: FastifyInstance, repository: RuntimeR
           amount: intent.amount,
           currency: intent.currency,
           paidAt: now,
-          reportedBy: input.actorId,
+          reportedBy: actor.actorId,
           deviceId: input.deviceId,
           receiptReference: input.receiptReference,
           occurredAt: now,
           idempotencyKey: input.idempotencyKey,
         })
         if (state.paymentDomain.idempotencyRecords.length !== idempotencyCount) {
-          audit(state, input.actorId, 'payment.physical_pos.reported.v1', 'physicalPosReport', result.id, {
+          audit(state, actor.actorId, 'payment.physical_pos.reported.v1', 'physicalPosReport', result.id, {
             paymentIntentId: intent.id,
             amount: intent.amount,
             terminalId: input.terminalId,
@@ -208,6 +225,7 @@ export function registerPaymentRoutes(app: FastifyInstance, repository: RuntimeR
     '/api/payments/:paymentIntentId/refunds',
     async (request, reply) => {
       const input = itemRefundRequestSchema.parse(request.body)
+      const actor = requireOperation(request, 'payment.refund.request')
       const refund = await repository.mutate((state) => {
         const idempotencyCount = state.paymentDomain.idempotencyRecords.length
         const result = requestRefund(state.paymentDomain, {
@@ -215,12 +233,12 @@ export function registerPaymentRoutes(app: FastifyInstance, repository: RuntimeR
           paymentIntentId: request.params.paymentIntentId,
           items: [{ orderId: input.orderId, orderItemId: input.orderItemId, quantity: input.quantity }],
           reason: input.reason,
-          requestedBy: input.actorId,
+          requestedBy: actor.actorId,
           occurredAt: new Date().toISOString(),
           idempotencyKey: input.idempotencyKey,
         })
         if (state.paymentDomain.idempotencyRecords.length !== idempotencyCount) {
-          audit(state, input.actorId, 'refund.requested.v1', 'refund', result.id, {
+          audit(state, actor.actorId, 'refund.requested.v1', 'refund', result.id, {
             paymentIntentId: request.params.paymentIntentId,
             amount: result.amount,
             items: result.items,
@@ -234,15 +252,63 @@ export function registerPaymentRoutes(app: FastifyInstance, repository: RuntimeR
 
   // Development-only approval/channel completion; production uses RBAC plus provider refund callbacks.
   app.post<{ Params: { refundId: string } }>(
+    '/api/payments/refunds/:refundId/physical-pos-complete',
+    async (request) => {
+      const actor = requireOperation(request, 'payment.refund.approve')
+      const input = physicalPosRefundCompletionSchema.parse(request.body)
+      return repository.mutate((state) => {
+        const refund = state.paymentDomain.refunds.find((item) => item.id === request.params.refundId)
+        if (!refund) throw new Error('退款申请不存在')
+        if (refund.requestedBy === actor.actorId) throw new Error('退款申请人与审批确认人必须为不同员工')
+        const intent = state.paymentDomain.paymentIntents.find((item) => item.id === refund.paymentIntentId)
+        if (!intent || intent.channel !== 'physical_pos') throw new Error('该退款不属于物理POS交易')
+        const idempotencyCount = state.paymentDomain.idempotencyRecords.length
+        const now = new Date().toISOString()
+        const approved = approveRefund(state.paymentDomain, {
+          refundId: refund.id,
+          approvedBy: actor.actorId,
+          reason: input.reason,
+          occurredAt: now,
+          idempotencyKey: `${input.idempotencyKey}:approve`,
+        })
+        startRefund(state.paymentDomain, {
+          refundId: approved.id,
+          channelRefundId: deterministicId('pos_refund', input.terminalRefundTransactionId),
+          actorId: actor.actorId,
+          occurredAt: now,
+          idempotencyKey: `${input.idempotencyKey}:start`,
+        })
+        const completed = markRefundSucceeded(state.paymentDomain, {
+          refundId: approved.id,
+          channelRefundTransactionId: input.terminalRefundTransactionId,
+          refundedAmount: approved.amount,
+          currency: approved.currency,
+          occurredAt: now,
+          idempotencyKey: `${input.idempotencyKey}:success`,
+        })
+        if (state.paymentDomain.idempotencyRecords.length !== idempotencyCount) {
+          audit(state, actor.actorId, 'refund.physical_pos.completed.v1', 'refund', completed.id, {
+            paymentIntentId: intent.id,
+            amount: completed.amount,
+            terminalRefundTransactionId: input.terminalRefundTransactionId,
+          })
+        }
+        return completed
+      })
+    },
+  )
+
+  app.post<{ Params: { refundId: string } }>(
     '/api/payments/refunds/:refundId/dev-approve-complete',
     async (request) => {
+      const actor = requireDevelopmentActor(request)
       const input = completeRefundSchema.parse(request.body)
       return repository.mutate((state) => {
         const idempotencyCount = state.paymentDomain.idempotencyRecords.length
         const now = new Date().toISOString()
         const approved = approveRefund(state.paymentDomain, {
           refundId: request.params.refundId,
-          approvedBy: input.actorId,
+          approvedBy: actor.actorId,
           reason: '开发环境退款审批联调',
           occurredAt: now,
           idempotencyKey: `${input.idempotencyKey}:approve`,
@@ -250,7 +316,7 @@ export function registerPaymentRoutes(app: FastifyInstance, repository: RuntimeR
         startRefund(state.paymentDomain, {
           refundId: approved.id,
           channelRefundId: deterministicId('mock_channel_refund', input.idempotencyKey),
-          actorId: input.actorId,
+          actorId: actor.actorId,
           occurredAt: now,
           idempotencyKey: `${input.idempotencyKey}:start`,
         })
@@ -263,7 +329,7 @@ export function registerPaymentRoutes(app: FastifyInstance, repository: RuntimeR
           idempotencyKey: `${input.idempotencyKey}:success`,
         })
         if (state.paymentDomain.idempotencyRecords.length !== idempotencyCount) {
-          audit(state, input.actorId, 'refund.mock.succeeded.v1', 'refund', completed.id, {
+          audit(state, actor.actorId, 'refund.mock.succeeded.v1', 'refund', completed.id, {
             warning: 'development simulator only',
             amount: completed.amount,
           })

@@ -16,6 +16,14 @@ npm run dev
 - 会员端样例：`http://localhost:5173/member?member=member-amy`
 - API健康检查：`http://localhost:8787/api/health`
 
+门店同一Wi-Fi验证时，启动系统后执行：
+
+```bash
+npm run pilot:access
+```
+
+命令会显示平板和手机可访问的局域网地址。验证顺序、指标和停止条件见`docs/pilot-validation-plan.md`，每晚使用`templates/pilot-night-record.md`记录结果。
+
 本地Web会自动携带样例门店与员工上下文。`staging`和`production`只接受服务端签发的HMAC员工会话，并强制关闭`/api/dev/*`：
 
 ```bash

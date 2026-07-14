@@ -2,6 +2,8 @@
 
 先填写`go-live-input-checklist.md`汇总门店、支付、微信、云环境和验收责任；结构化且通过双签的数据再转换为`store-import-template.json`导入包。
 
+正式资料尚未齐备时，按`../docs/pilot-validation-plan.md`执行门店验证，并使用`pilot-night-record.md`记录每晚指标、异常、责任人和结论。
+
 `store-import-template.json` 是结构模板，不是 M-Box 陆家嘴正式门店资料。模板故意使用 `sandbox`、`draft`、示例 ID 和缺失声明，不能直接用于生产。
 
 ## 使用顺序

@@ -825,6 +825,7 @@ button:focus-visible, a:focus-visible, input:focus-visible {
   font-size: 14px;
   line-height: 1.45;
 }
+.guest-reply > svg { flex: 0 0 auto; color: var(--danger); stroke-width: 2.7; }
 .error-banner { min-height: 44px; margin: 14px 16px 0; padding: 10px 12px; border: 1px solid #efc7c9; border-radius: 6px; background: #fff0f0; color: #9f2f34; }
 .guest-services, .guest-progress { padding: 19px 16px 21px; border-bottom: 8px solid #f1f2ef; }
 .guest-orders { padding: 19px 16px 40px; background: #f3f4f0; }

@@ -151,7 +151,7 @@ export function GuestPortal() {
 
       {reply && (
         <div className="guest-reply" role="status">
-          <CheckCircle2 size={21} />
+          <CheckCircle2 size={24} />
           <span>{reply}</span>
         </div>
       )}

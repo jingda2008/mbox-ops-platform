@@ -59,4 +59,7 @@ COMMENT ON TABLE mbox.rate_limit_windows IS
 COMMENT ON FUNCTION mbox.cleanup_expired_rate_limits(integer) IS
   'Deletes one bounded batch of expired rate-limit rows visible under the caller transaction RLS context.';
 
+GRANT SELECT, INSERT, UPDATE, DELETE ON mbox.rate_limit_windows TO mbox_app;
+GRANT EXECUTE ON FUNCTION mbox.cleanup_expired_rate_limits(integer) TO mbox_app;
+
 COMMIT;

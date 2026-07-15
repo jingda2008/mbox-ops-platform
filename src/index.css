@@ -12,8 +12,45 @@
 html, body { min-width: 320px; min-height: 100%; background: #f3f4f0; }
 body { margin: 0; min-height: 100vh; }
 button, input, select, textarea { font: inherit; letter-spacing: 0; }
-button, a { -webkit-tap-highlight-color: transparent; }
+button, a, summary, select, input[type="checkbox"], input[type="radio"], [role="button"] { -webkit-tap-highlight-color: transparent; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: 0.55; }
 a { color: inherit; text-decoration: none; }
 img { max-width: 100%; }
+
+:where(button, a[href], summary, select, input[type="checkbox"], input[type="radio"], [role="button"]) {
+  transition: transform 100ms ease, filter 100ms ease, box-shadow 140ms ease, border-color 140ms ease, background-color 140ms ease, color 140ms ease;
+}
+
+:where(button:not(:disabled), a[href], summary, select:not(:disabled), input[type="checkbox"]:not(:disabled), input[type="radio"]:not(:disabled), [role="button"]:not([aria-disabled="true"])).is-interaction-pressed {
+  transform: translateY(1px) scale(.975);
+  filter: brightness(.9) saturate(1.08);
+  box-shadow: inset 0 0 0 2px rgba(22, 121, 74, .2);
+}
+
+:where(button:not(:disabled), a[href], summary, select:not(:disabled), input[type="checkbox"]:not(:disabled), input[type="radio"]:not(:disabled), [role="button"]:not([aria-disabled="true"])).is-interaction-confirmed {
+  animation: interaction-confirmed 190ms ease-out;
+}
+
+:where(input, textarea, select):focus-visible {
+  border-color: #2b789a;
+  box-shadow: 0 0 0 3px rgba(43, 120, 154, .16);
+  outline: 0;
+}
+
+@keyframes interaction-confirmed {
+  0% { transform: scale(.975); filter: brightness(.88) saturate(1.1); }
+  58% { transform: scale(1.015); filter: brightness(1.04); }
+  100% { transform: scale(1); filter: none; }
+}
+
+@media (hover: hover) {
+  :where(button:not(:disabled), a[href], summary, [role="button"]:not([aria-disabled="true"])):hover {
+    filter: brightness(.97);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where(button, a[href], summary, select, input[type="checkbox"], input[type="radio"], [role="button"]) { transition-duration: 0ms; }
+  :where(.is-interaction-pressed, .is-interaction-confirmed) { transform: none !important; animation: none !important; filter: brightness(.92); }
+}

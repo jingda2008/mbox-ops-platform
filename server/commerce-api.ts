@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import {
+  assistedPaymentLinkSchema,
   authorizationDecisionSchema,
   authorizationRequestSchema,
   cartOrderSchema,
@@ -39,12 +40,27 @@ import {
   syncDeliveryServiceTaskForKdsAction,
 } from './fulfillment-service.js'
 import { currentOpenTableSession } from './table-sessions.js'
+import { signGuestSessionToken } from './table-access.js'
+
+interface CommerceApiOptions {
+  guestTokenSecret: string
+  assistedPaymentTtlMs?: number
+  now?: () => number
+}
+
+const DEFAULT_COMMERCE_API_OPTIONS: CommerceApiOptions = {
+  guestTokenSecret: 'local-development-qr-secret-change-me',
+}
 
 function deterministicId(prefix: string, key: string) {
   return `${prefix}_${createHash('sha256').update(key).digest('hex').slice(0, 32)}`
 }
 
-export function registerCommerceRoutes(app: FastifyInstance, repository: RuntimeRepository) {
+export function registerCommerceRoutes(
+  app: FastifyInstance,
+  repository: RuntimeRepository,
+  options: CommerceApiOptions = DEFAULT_COMMERCE_API_OPTIONS,
+) {
   app.post('/api/commerce/orders', async (request, reply) => {
     const input = cartOrderSchema.parse(request.body)
     const order = await repository.mutate((state) => {
@@ -124,6 +140,70 @@ export function registerCommerceRoutes(app: FastifyInstance, repository: Runtime
       return submitted
     })
     return reply.status(201).send(order)
+  })
+
+  app.post<{ Params: { orderId: string } }>('/api/commerce/orders/:orderId/payment-link', async (request, reply) => {
+    const input = assistedPaymentLinkSchema.parse(request.body)
+    const result = await repository.mutate((state) => {
+      const actor = requireOrderCreationRole(request, state)
+      const order = state.orderDomain.orders.find((candidate) => candidate.id === request.params.orderId)
+      if (!order) throw new Error('订单不存在')
+      const tableSession = state.songState.tableSessions.find((candidate) => candidate.id === order.tableSessionId)
+      if (!tableSession || tableSession.status !== 'open') throw new Error('订单所属桌次已经结束')
+      requireTableDataScope(request, state, tableSession.tableId, 'commerce.order.payment_link')
+      const table = state.tables.find((candidate) => candidate.id === tableSession.tableId)
+      if (!table || table.status !== 'occupied') throw new Error('订单所属桌台未开台')
+      if (order.amounts.payableAmount <= 0) throw new Error('该订单无需支付，请核对赠送或折扣记录')
+      if (state.paymentDomain.paymentIntents.some((intent) => (
+        intent.orderIds.includes(order.id) && intent.status === 'succeeded'
+      ))) {
+        throw new Error('该订单已经支付，无需再次生成支付二维码')
+      }
+
+      const now = options.now?.() ?? Date.now()
+      const ttl = options.assistedPaymentTtlMs ?? 15 * 60_000
+      if (!Number.isSafeInteger(ttl) || ttl < 60_000 || ttl > 60 * 60_000) {
+        throw new Error('协助支付链接有效期必须在1分钟到60分钟之间')
+      }
+      const expiresAt = now + ttl
+      const configuredTokenVersion = (table as typeof table & { qrTokenVersion?: number }).qrTokenVersion
+      const tokenVersion = Number.isSafeInteger(configuredTokenVersion) && Number(configuredTokenVersion) > 0
+        ? Number(configuredTokenVersion)
+        : 1
+      const tableToken = signGuestSessionToken({
+        storeId: state.store.id,
+        tableCode: table.code,
+        tableSessionId: tableSession.id,
+        tokenVersion,
+        issuedAt: now,
+        expiresAt,
+      }, options.guestTokenSecret)
+      const previous = state.auditEntries.find((entry) => (
+        entry.action === 'commerce.guest_payment_link_issued.v1'
+        && entry.details.idempotencyKey === input.idempotencyKey
+      ))
+      if (previous && previous.objectId !== order.id) throw new Error('幂等键已用于其他订单的支付链接')
+      if (!previous) {
+        state.auditEntries.push({
+          id: deterministicId('audit_payment_link', input.idempotencyKey),
+          actorId: actor.actorId,
+          action: 'commerce.guest_payment_link_issued.v1',
+          objectType: 'order',
+          objectId: order.id,
+          occurredAt: new Date(now).toISOString(),
+          details: { tableId: table.id, tableSessionId: tableSession.id, idempotencyKey: input.idempotencyKey },
+        })
+        state.revision += 1
+      }
+      return {
+        orderId: order.id,
+        tableCode: table.code,
+        amount: order.amounts.payableAmount,
+        tableToken,
+        expiresAt: new Date(expiresAt).toISOString(),
+      }
+    })
+    return reply.status(201).send(result)
   })
 
   app.post('/api/commerce/quick-orders', async (request, reply) => {

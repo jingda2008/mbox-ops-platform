@@ -1,7 +1,7 @@
-import { CheckCircle2, ChevronRight, Clock3, ListChecks, MessageCircleMore, ShieldCheck, ShoppingBag } from 'lucide-react'
+import { CheckCircle2, ChevronRight, Clock3, CreditCard, ListChecks, MessageCircleMore, ShieldCheck, ShoppingBag } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { checkoutGuestOrder, createGuestOrder, createGuestTask, getGuestSession, submitGuestTaskFeedback } from '../api'
-import type { GuestSessionResponse, GuestTaskView } from '../shared/guest-contracts'
+import type { GuestSessionResponse, GuestTaskView, WechatJsapiParameters } from '../shared/guest-contracts'
 import { guestFeedbackIdempotencyKey } from './guest-portal-utils'
 import { ServiceIcon } from './ServiceIcon'
 import { MenuOrderingWorkspace, type MenuCartItem } from './MenuOrderingWorkspace'
@@ -21,13 +21,15 @@ export function GuestPortal() {
   const params = new URLSearchParams(window.location.search)
   const tableCode = params.get('table') ?? 'L01'
   const initialToken = params.get('token') ?? ''
+  const requestedPaymentOrderId = params.get('payOrder') ?? ''
   const [data, setData] = useState<GuestSessionResponse | null>(null)
   const [note, setNote] = useState('')
   const [reply, setReply] = useState('')
   const [pendingType, setPendingType] = useState<string | null>(null)
   const [error, setError] = useState('')
-  const [activeTab, setActiveTab] = useState<'menu' | 'service' | 'orders'>('menu')
+  const [activeTab, setActiveTab] = useState<'menu' | 'service' | 'orders'>(requestedPaymentOrderId ? 'orders' : 'menu')
   const [checkoutBusy, setCheckoutBusy] = useState(false)
+  const [payingOrderId, setPayingOrderId] = useState('')
 
   const refresh = useCallback(async () => {
     try {
@@ -81,6 +83,39 @@ export function GuestPortal() {
     }
   }
 
+  async function payOrder(orderId: string, idempotencyKey = `guest-pay-${crypto.randomUUID()}`) {
+    if (!data || payingOrderId) return
+    setPayingOrderId(orderId)
+    setError('')
+    try {
+      const result = await checkoutGuestOrder({
+        tableToken: data.tableToken,
+        orderId,
+        idempotencyKey,
+      })
+      if (result.providerRequired) {
+        const outcome = await invokeWechatJsapi(result.wechatJsapiParameters)
+        setReply(outcome === 'succeeded'
+          ? '微信支付已提交，正在等待到账确认。'
+          : outcome === 'cancelled'
+            ? '支付尚未完成，可以重新点击微信支付。'
+            : '订单已保留，微信商户支付参数尚未返回，请稍后继续支付或联系服务员。')
+      } else {
+        const fulfillmentMessage = result.order.createdBy.startsWith('guest-')
+          ? '订单已发送至出品岗位。'
+          : '服务员、收银与出品岗位已同步。'
+        setReply(`支付成功 ¥${(result.paymentIntent.amount / 100).toFixed(2)}，${fulfillmentMessage}`)
+      }
+      setActiveTab('orders')
+      await refresh()
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : '支付未完成')
+      throw requestError
+    } finally {
+      setPayingOrderId('')
+    }
+  }
+
   async function placeAndPay(items: MenuCartItem[]) {
     if (!data) return
     setCheckoutBusy(true)
@@ -88,21 +123,12 @@ export function GuestPortal() {
     const idempotencyKey = `guest-cart-${crypto.randomUUID()}`
     try {
       const order = await createGuestOrder({ tableToken: data.tableToken, items, idempotencyKey })
-      const result = await checkoutGuestOrder({
-        tableToken: data.tableToken,
-        orderId: order.id,
-        idempotencyKey: `${idempotencyKey}-pay`,
-      })
-      if (result.providerRequired) {
-        setReply('订单已保留，正式微信支付通道待商户号联调后会在此拉起。')
-      } else {
-        setReply(`支付成功 ¥${(result.paymentIntent.amount / 100).toFixed(2)}，订单已发送至出品岗位。`)
+      try {
+        await payOrder(order.id, `${idempotencyKey}-pay`)
+      } catch {
+        setActiveTab('orders')
+        await refresh()
       }
-      setActiveTab('orders')
-      await refresh()
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : '下单支付失败')
-      throw requestError
     } finally {
       setCheckoutBusy(false)
     }
@@ -200,18 +226,53 @@ export function GuestPortal() {
 
       {activeTab === 'orders' && <section className="guest-orders">
         <div className="guest-section-title"><span>订单与出品进度</span><ListChecks size={20} /></div>
+        {requestedPaymentOrderId && <div className="guest-payment-sync"><CreditCard size={18} /><span>服务员协助点单已同步，请核对商品和金额后支付。</span></div>}
         {(data?.account.orders.length ?? 0) === 0 ? <div className="guest-empty">本桌当前还没有订单</div> : (
           <div className="guest-order-list">{data?.account.orders.toReversed().map((order) => {
             const payment = data.account.payments.find((item) => item.orderIds.includes(order.id))
-            return <article className="guest-order" key={order.id}>
+            const paid = payment?.status === 'succeeded'
+            return <article className={`guest-order ${order.id === requestedPaymentOrderId ? 'is-payment-target' : ''}`} key={order.id}>
               <header><div><strong>¥{(order.payableAmount / 100).toFixed(2)}</strong><span>{new Date(order.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span></div><b className={payment?.status === 'succeeded' ? 'is-paid' : ''}>{payment?.status === 'succeeded' ? '已支付' : order.status === 'draft' ? '待支付' : '已下单'}</b></header>
               <div>{order.items.map((item) => <div className="guest-order-line" key={item.id}><span>{item.name} × {item.quantity}</span><strong>{fulfillmentLabel(item.fulfillmentStatus)}</strong></div>)}</div>
+              {!paid && order.payableAmount > 0 && <button className="guest-pay-button" disabled={Boolean(payingOrderId)} onClick={() => void payOrder(order.id)}><CreditCard size={18} />{payingOrderId === order.id ? '正在拉起微信支付' : `微信支付 ¥${(order.payableAmount / 100).toFixed(2)}`}</button>}
+              {!paid && order.payableAmount <= 0 && <div className="guest-no-payment"><CheckCircle2 size={16} />无需在线支付，请由服务员核对赠送或折扣</div>}
             </article>
           })}</div>
         )}
       </section>}
     </main>
   )
+}
+
+async function invokeWechatJsapi(parameters: WechatJsapiParameters | null) {
+  if (!parameters) return 'unavailable' as const
+  const bridge = await waitForWechatBridge()
+  if (!bridge) return 'unavailable' as const
+  return new Promise<'succeeded' | 'cancelled'>((resolve) => {
+    bridge.invoke('getBrandWCPayRequest', parameters, (result) => {
+      resolve(result.err_msg === 'get_brand_wcpay_request:ok' ? 'succeeded' : 'cancelled')
+    })
+  })
+}
+
+interface WechatBridge {
+  invoke: (method: string, parameters: WechatJsapiParameters, callback: (result: { err_msg: string }) => void) => void
+}
+
+function waitForWechatBridge() {
+  const current = (window as typeof window & { WeixinJSBridge?: WechatBridge }).WeixinJSBridge
+  if (current) return Promise.resolve(current)
+  return new Promise<WechatBridge | null>((resolve) => {
+    const onReady = () => {
+      window.clearTimeout(timer)
+      resolve((window as typeof window & { WeixinJSBridge?: WechatBridge }).WeixinJSBridge ?? null)
+    }
+    const timer = window.setTimeout(() => {
+      document.removeEventListener('WeixinJSBridgeReady', onReady)
+      resolve(null)
+    }, 1500)
+    document.addEventListener('WeixinJSBridgeReady', onReady, { once: true })
+  })
 }
 
 function fulfillmentLabel(status: GuestSessionResponse['account']['orders'][number]['items'][number]['fulfillmentStatus']) {

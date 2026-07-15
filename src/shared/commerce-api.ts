@@ -18,6 +18,18 @@ export const cartOrderSchema = z.object({
   idempotencyKey: z.string().min(8).max(128),
 })
 
+export const assistedPaymentLinkSchema = z.object({
+  idempotencyKey: z.string().min(8).max(128),
+})
+
+export interface AssistedPaymentLink {
+  orderId: string
+  tableCode: string
+  amount: number
+  tableToken: string
+  expiresAt: string
+}
+
 export const kdsActionSchema = z.object({
   action: z.enum(['start', 'complete', 'pickUp', 'deliver']),
   actorId: z.string().min(1),
@@ -51,5 +63,6 @@ export const authorityWriteSchema = z.object({
 
 export type QuickOrderInput = z.infer<typeof quickOrderSchema>
 export type CartOrderInput = z.infer<typeof cartOrderSchema>
+export type AssistedPaymentLinkInput = z.infer<typeof assistedPaymentLinkSchema>
 export type KdsActionInput = z.infer<typeof kdsActionSchema>
 export type AuthorityWriteInput = z.infer<typeof authorityWriteSchema>

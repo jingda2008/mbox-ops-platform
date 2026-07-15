@@ -415,7 +415,7 @@ app.post('/api/dev/reset', async (request) => {
   return repository.reset()
 })
 
-registerCommerceRoutes(app, repository)
+registerCommerceRoutes(app, repository, { guestTokenSecret: runtimeConfig.qrSecret })
 registerPaymentRoutes(app, repository)
 registerProactiveServiceRoutes(app, repository)
 registerTableSessionRoutes(app, repository)

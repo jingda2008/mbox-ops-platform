@@ -373,9 +373,23 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
       if (!order || order.tableSessionId !== tableSession.id) {
         throw new TableAccessError('不能支付其他桌次的订单', 'GUEST_ORDER_ACCESS_FORBIDDEN', 403)
       }
-      const existingIntent = state.paymentDomain.paymentIntents.find((intent) => intent.orderIds.includes(order.id))
-      if (existingIntent) return { paymentIntent: existingIntent, order, providerRequired: existingIntent.status !== 'succeeded' }
-      if (order.status !== 'draft') throw new TableAccessError('订单已经提交或支付', 'ORDER_NOT_PAYABLE', 409)
+      if (order.amounts.payableAmount <= 0) {
+        throw new TableAccessError('该订单无需微信支付，请联系服务员核对', 'ORDER_PAYMENT_NOT_REQUIRED', 409)
+      }
+      const existingIntent = state.paymentDomain.paymentIntents.find((intent) => (
+        intent.orderIds.includes(order.id) && !['failed', 'closed'].includes(intent.status)
+      ))
+      if (existingIntent) {
+        return {
+          paymentIntent: existingIntent,
+          order,
+          providerRequired: existingIntent.status !== 'succeeded',
+          wechatJsapiParameters: null,
+        }
+      }
+      if (!['draft', 'submitted', 'in_fulfillment', 'fulfilled'].includes(order.status)) {
+        throw new TableAccessError('订单当前状态不能支付', 'ORDER_NOT_PAYABLE', 409)
+      }
       const now = new Date().toISOString()
       const localPayment = options.runtimeMode === 'local' || options.runtimeMode === 'test'
       const channel = localPayment ? 'wechat_mock' : 'wechat_jsapi'
@@ -413,18 +427,20 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
           channelOccurredAt: now,
           receivedAt: now,
         })
-        submittedOrder = submitOrder(state.orderDomain, {
-          orderId: order.id,
-          submittedBy: `guest-${table.code}`,
-          occurredAt: now,
-          idempotencyKey: `${input.idempotencyKey}:submit`,
-        })
-        consumeManagedInventoryForSubmittedOrder(state.inventoryDomain, submittedOrder, {
-          actorId: `guest-${table.code}`,
-          businessDate: state.store.businessDate,
-          occurredAt: now,
-        })
-        completeAwaitingOrderOnOrder(state, table.id, order.id, `guest-${table.code}`, new Date(now))
+        if (order.status === 'draft') {
+          submittedOrder = submitOrder(state.orderDomain, {
+            orderId: order.id,
+            submittedBy: `guest-${table.code}`,
+            occurredAt: now,
+            idempotencyKey: `${input.idempotencyKey}:submit`,
+          })
+          consumeManagedInventoryForSubmittedOrder(state.inventoryDomain, submittedOrder, {
+            actorId: `guest-${table.code}`,
+            businessDate: state.store.businessDate,
+            occurredAt: now,
+          })
+          completeAwaitingOrderOnOrder(state, table.id, order.id, `guest-${table.code}`, new Date(now))
+        }
       }
       state.auditEntries.push({
         id: `audit_${randomUUID()}`,
@@ -436,7 +452,12 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
         details: { orderId: order.id, channel, idempotencyKey: input.idempotencyKey },
       })
       state.revision += 1
-      return { paymentIntent, order: submittedOrder, providerRequired: !localPayment }
+      return {
+        paymentIntent,
+        order: submittedOrder,
+        providerRequired: !localPayment,
+        wechatJsapiParameters: null,
+      }
     })
     return reply.status(201).send(result)
   })

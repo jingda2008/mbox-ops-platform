@@ -53,6 +53,22 @@
 .workstation-badge { display: grid; gap: 2px; padding: 6px 10px; border-left: 1px solid var(--line); }
 .workstation-badge span { color: var(--ink-soft); font-size: 10px; }
 .workstation-badge strong { font-size: 12px; }
+.assisted-payment-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 18px; background: rgba(19, 23, 19, .68); }
+.assisted-payment-dialog { width: min(470px, 100%); max-height: calc(100vh - 36px); overflow: auto; padding: 20px; border-radius: 8px; background: #fff; box-shadow: 0 20px 70px rgba(0, 0, 0, .28); }
+.assisted-payment-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.assisted-payment-dialog > header > div { display: grid; gap: 3px; }
+.assisted-payment-dialog > header span { color: var(--ink-soft); font-size: 12px; }
+.assisted-payment-dialog > header strong { font-size: 25px; }
+.assisted-payment-qr { width: min(310px, 78vw); aspect-ratio: 1; margin: 16px auto; padding: 10px; border: 1px solid var(--line); background: #fff; }
+.assisted-payment-qr img { width: 100%; height: 100%; display: block; }
+.assisted-payment-guidance { display: grid; gap: 7px; padding: 12px; background: #f4f5f1; }
+.assisted-payment-guidance p { display: grid; grid-template-columns: 22px 1fr; align-items: start; gap: 7px; font-size: 12px; line-height: 1.5; }
+.assisted-payment-guidance svg { margin-top: 1px; color: var(--ink-soft); }
+.assisted-copy, .assisted-done { width: 100%; min-height: 43px; justify-content: center; margin-top: 12px; }
+.assisted-payment-dialog > small { display: block; padding-top: 9px; color: var(--ink-soft); font-size: 10px; text-align: center; }
+.assisted-payment-success { min-height: 270px; display: grid; place-items: center; align-content: center; gap: 10px; color: var(--success); text-align: center; }
+.assisted-payment-success strong { font-size: 22px; }
+.assisted-payment-success span { color: var(--ink-soft); font-size: 12px; }
 @media (max-width: 1000px) { .commerce-grid { grid-template-columns: 1fr; } .kds-section { border-right: 0; border-bottom: 1px solid var(--line); } .workstation-badge { display: none; } }
 @media (max-width: 1180px) { .kds-row { grid-template-columns: 82px minmax(160px, 1fr) minmax(170px, .8fr); } .kds-row .secondary-button { grid-column: 2 / 4; justify-self: end; } }
 @media (max-width: 700px) { .commerce-metrics { grid-template-columns: repeat(3, 1fr); } .commerce-metrics > div { min-height: 68px; padding: 8px; grid-template-columns: 24px minmax(0, 1fr); } .commerce-metrics strong { font-size: 16px; } .quick-order-band { grid-template-columns: 1fr; } .kds-row { grid-template-columns: 72px minmax(0, 1fr); gap: 10px; } .kds-meta { grid-column: 1 / 3; } .kds-row .secondary-button { grid-column: 1 / 3; width: 100%; } }

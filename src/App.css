@@ -828,8 +828,10 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 .error-banner { min-height: 44px; margin: 14px 16px 0; padding: 10px 12px; border: 1px solid #efc7c9; border-radius: 6px; background: #fff0f0; color: #9f2f34; }
 .guest-services, .guest-progress { padding: 19px 16px 21px; border-bottom: 8px solid #f1f2ef; }
 .guest-orders { padding: 19px 16px 40px; background: #f3f4f0; }
+.guest-payment-sync { min-height: 48px; display: flex; align-items: center; gap: 9px; margin-bottom: 10px; padding: 9px 12px; border: 1px solid #e4ca78; background: #fff8dd; color: #70530e; font-size: 12px; line-height: 1.45; }
 .guest-order-list { display: grid; gap: 10px; }
 .guest-order { border: 1px solid var(--line); border-radius: 8px; background: #fff; overflow: hidden; }
+.guest-order.is-payment-target { border-color: #d3ad38; box-shadow: 0 0 0 2px rgba(211, 173, 56, .15); }
 .guest-order > header { min-height: 64px; display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid var(--line); }
 .guest-order > header > div { display: grid; gap: 2px; }
 .guest-order > header strong { font-size: 18px; }
@@ -839,6 +841,9 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 .guest-order-line { min-height: 46px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); font-size: 12px; }
 .guest-order-line:last-child { border-bottom: 0; }
 .guest-order-line strong { color: var(--ink-soft); font-size: 11px; }
+.guest-pay-button { width: calc(100% - 24px); min-height: 46px; display: flex; align-items: center; justify-content: center; gap: 8px; margin: 12px; border: 0; border-radius: 6px; background: #16794a; color: #fff; font-size: 14px; font-weight: 800; }
+.guest-pay-button:disabled { opacity: .5; }
+.guest-no-payment { min-height: 42px; display: flex; align-items: center; justify-content: center; gap: 7px; margin: 10px 12px 12px; padding: 8px; background: #eef4ee; color: #376044; font-size: 11px; text-align: center; }
 .guest-section-title { height: 32px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; color: var(--ink-soft); }
 .guest-section-title span { color: var(--ink); font-weight: 800; }
 .service-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }

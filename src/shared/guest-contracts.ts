@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import type { MenuProduct, ServiceTask, ServiceTypeConfig } from './contracts.js'
 import type { PaymentIntentStatus } from './payment-contracts.js'
+import type { PaymentIntent } from './payment-contracts.js'
+import type { Order } from './order-contracts.js'
 import type { ItemFulfillmentStatus, OrderStatus } from './order-contracts.js'
 import type { SongRequestStatus } from './song-contracts.js'
 
@@ -137,6 +139,22 @@ export const guestCheckoutSchema = z.object({
   orderId: z.string().trim().min(1).max(128),
   idempotencyKey: z.string().trim().min(8).max(128),
 })
+
+export interface WechatJsapiParameters {
+  appId: string
+  timeStamp: string
+  nonceStr: string
+  package: string
+  signType: 'RSA'
+  paySign: string
+}
+
+export interface GuestCheckoutResponse {
+  paymentIntent: PaymentIntent
+  order: Order
+  providerRequired: boolean
+  wechatJsapiParameters: WechatJsapiParameters | null
+}
 
 export type GuestTaskCreateInput = z.infer<typeof guestTaskCreateSchema>
 export type GuestTaskFeedbackInput = z.infer<typeof guestTaskFeedbackSchema>

@@ -1,8 +1,8 @@
-import { CheckCheck, ChefHat, CircleAlert, CircleDollarSign, Clock3, PackageCheck, Play, ShoppingCart, UserRound } from 'lucide-react'
+import { CheckCheck, ChefHat, CircleAlert, CircleDollarSign, Clock3, Copy, PackageCheck, Play, QrCode, ShoppingCart, Smartphone, UserRound, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { actOnKdsTask, createCartOrder, getCurrentActorId } from '../api'
+import { actOnKdsTask, createAssistedPaymentLink, createCartOrder, getCurrentActorId } from '../api'
 import type { BootstrapResponse } from '../shared/contracts'
-import type { KdsActionInput } from '../shared/commerce-api'
+import type { AssistedPaymentLink, KdsActionInput } from '../shared/commerce-api'
 import type { KdsTask } from '../shared/order-contracts'
 import { actionAllowedForAccess, getFulfillmentAccess, stationLabel, taskVisibleToAccess } from './commerce-workspace'
 import { MenuOrderingWorkspace, type MenuCartItem } from './MenuOrderingWorkspace'
@@ -18,6 +18,11 @@ const kdsLabels: Record<KdsTask['status'], string> = {
   queued: '待制作', preparing: '制作中', completed: '待取走', picked_up: '配送中', delivered: '已送达',
 }
 
+interface PaymentSheet extends AssistedPaymentLink {
+  paymentUrl: string
+  qrDataUrl: string
+}
+
 export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
   const currentActorId = getCurrentActorId()
   const access = getFulfillmentAccess(data, currentActorId)
@@ -26,6 +31,7 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
   const [tableId, setTableId] = useState(occupiedTables[0]?.id ?? '')
   const [workspaceMode, setWorkspaceMode] = useState<'order' | 'fulfillment'>(access.canOrder ? 'order' : 'fulfillment')
   const [busy, setBusy] = useState(false)
+  const [paymentSheet, setPaymentSheet] = useState<PaymentSheet | null>(null)
   const [now, setNow] = useState(() => Date.now())
   const ledgerTotal = data.orderDomain.tableLedgerEntries.reduce((sum, entry) => sum + entry.amount, 0)
   const activeKds = data.orderDomain.kdsTasks.filter((task) => task.status !== 'delivered')
@@ -44,6 +50,17 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
     return () => window.clearInterval(timer)
   }, [])
 
+  const sheetPayment = paymentSheet
+    ? data.paymentDomain.paymentIntents.find((intent) => intent.orderIds.includes(paymentSheet.orderId))
+    : undefined
+  const sheetPaid = sheetPayment?.status === 'succeeded'
+
+  useEffect(() => {
+    if (!paymentSheet || sheetPaid) return
+    const timer = window.setInterval(() => void onRefresh(), 2500)
+    return () => window.clearInterval(timer)
+  }, [onRefresh, paymentSheet, sheetPaid])
+
   async function submit(items: MenuCartItem[]) {
     if (!currentEmployee) {
       onNotice('当前员工身份无效，请重新登录后下单')
@@ -51,8 +68,18 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
     }
     setBusy(true)
     try {
-      await createCartOrder({ tableId, items, actorId: currentEmployee.id, idempotencyKey: `cart-${crypto.randomUUID()}` })
-      onNotice('商品已与客人核对，订单已进入出品流程')
+      const order = await createCartOrder({ tableId, items, actorId: currentEmployee.id, idempotencyKey: `cart-${crypto.randomUUID()}` })
+      const link = await createAssistedPaymentLink(order.id, { idempotencyKey: `pay-link-${crypto.randomUUID()}` })
+      const paymentUrl = assistedPaymentUrl(link)
+      const QRCode = await import('qrcode')
+      const qrDataUrl = await QRCode.toDataURL(paymentUrl, {
+        errorCorrectionLevel: 'M',
+        margin: 2,
+        width: 360,
+        color: { dark: '#151915', light: '#ffffff' },
+      })
+      setPaymentSheet({ ...link, paymentUrl, qrDataUrl })
+      onNotice('订单已确认，请客人扫码支付；客人手机订单页也已同步')
       await onRefresh()
     } catch (error) {
       onNotice(error instanceof Error ? error.message : '下单失败')
@@ -98,6 +125,24 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
         <span className="count-chip">{visibleKds.length}项当前职责</span>
       </div>
       {latestPaidSignal && <div className="paid-signal" role="status"><CheckCheck size={20} /><div><strong>{paidTable?.code ?? '桌台'} 已收款 {money(latestPaidSignal.amount)}</strong><span>{latestPaidSignal.channel === 'physical_pos' ? '物理POS待对账' : '支付成功，服务与收银已同步'}</span></div></div>}
+      {paymentSheet && <div className="assisted-payment-backdrop" role="presentation">
+        <section className={`assisted-payment-dialog ${sheetPaid ? 'is-paid' : ''}`} role="dialog" aria-modal="true" aria-label={`${paymentSheet.tableCode}订单支付`}>
+          <header>
+            <div><span>{sheetPaid ? '支付已确认' : '请客人扫码支付'}</span><strong>{paymentSheet.tableCode} · {money(paymentSheet.amount)}</strong></div>
+            <button className="icon-button" title="关闭支付窗口" onClick={() => setPaymentSheet(null)}><X size={20} /></button>
+          </header>
+          {sheetPaid ? <div className="assisted-payment-success"><CheckCheck size={54} /><strong>微信支付成功</strong><span>服务员、收银与出品岗位已同步到账状态</span></div> : <>
+            <div className="assisted-payment-qr"><img src={paymentSheet.qrDataUrl} alt={`${paymentSheet.tableCode}支付二维码`} /></div>
+            <div className="assisted-payment-guidance">
+              <p><QrCode size={18} /><span>客人使用微信扫描二维码，在手机订单页确认支付。</span></p>
+              <p><Smartphone size={18} /><span>客人已打开本桌页面时，订单会自动出现，点击“微信支付”即可。</span></p>
+            </div>
+            <button className="secondary-button assisted-copy" onClick={() => void navigator.clipboard.writeText(paymentSheet.paymentUrl)}><Copy size={16} />复制手机支付链接</button>
+            <small>二维码将在 {new Date(paymentSheet.expiresAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 失效</small>
+          </>}
+          {sheetPaid && <button className="primary-button assisted-done" onClick={() => setPaymentSheet(null)}>继续点单</button>}
+        </section>
+      </div>}
       {access.canOrder && <div className="commerce-mode-tabs">
         <button className={workspaceMode === 'order' ? 'is-active' : ''} onClick={() => setWorkspaceMode('order')}>全屏点单</button>
         <button className={workspaceMode === 'fulfillment' ? 'is-active' : ''} onClick={() => setWorkspaceMode('fulfillment')}>出品履约 <span>{visibleKds.length}</span></button>
@@ -183,6 +228,14 @@ function actionIcon(action: KdsActionInput['action']) {
 
 function money(amount: number) {
   return `¥${(amount / 100).toFixed(2)}`
+}
+
+function assistedPaymentUrl(link: AssistedPaymentLink) {
+  const configuredBase = String(import.meta.env.VITE_MBOX_GUEST_BASE_URL ?? '').trim()
+  const url = new URL(configuredBase || '/guest', window.location.origin)
+  url.searchParams.set('token', link.tableToken)
+  url.searchParams.set('payOrder', link.orderId)
+  return url.toString()
 }
 
 function taskTiming(task: KdsTask, data: BootstrapResponse, now: number) {

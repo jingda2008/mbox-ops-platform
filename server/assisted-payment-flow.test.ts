@@ -1,0 +1,134 @@
+import Fastify from 'fastify'
+import { describe, expect, it } from 'vitest'
+import type { GuestSessionResponse } from '../src/shared/guest-contracts.js'
+import { registerCommerceRoutes } from './commerce-api.js'
+import { registerGuestRoutes } from './guest-api.js'
+import { receiveInventory } from './inventory-domain.js'
+import { JsonRepository } from './repository.js'
+import { requireGuestSession, verifyTableAccessToken } from './table-access.js'
+
+const secret = 'assisted-payment-test-secret-00001'
+const now = Date.parse('2026-07-15T12:00:00.000Z')
+
+function registerTestActor(app: ReturnType<typeof Fastify>) {
+  app.decorateRequest('mboxActor', null)
+  app.addHook('preHandler', async (request) => {
+    request.mboxActor = {
+      actorId: 'emp-lin',
+      storeId: 'mbox-lujiazui',
+      roleId: 'server',
+      runtimeMode: 'test',
+      authenticatedBy: 'local_header',
+    }
+  })
+}
+
+describe('assisted ordering payment flow', () => {
+  it('syncs one staff order to the guest phone and pays it without duplicating fulfillment', async () => {
+    const repository = new JsonRepository(`/tmp/mbox-assisted-payment-${crypto.randomUUID()}.json`)
+    await repository.init()
+    const app = Fastify()
+    registerTestActor(app)
+    registerCommerceRoutes(app, repository, {
+      guestTokenSecret: secret,
+      assistedPaymentTtlMs: 15 * 60_000,
+      now: () => now,
+    })
+    registerGuestRoutes(app, repository, { secret, runtimeMode: 'test', now: () => now })
+    app.setErrorHandler((error, _request, reply) => {
+      const candidate = error as Error & { statusCode?: number; code?: string }
+      return reply.status(candidate.statusCode ?? 400).send({ code: candidate.code, message: candidate.message })
+    })
+
+    const initial = await repository.read()
+    const table = initial.tables.find((candidate) => candidate.status === 'occupied')!
+    const product = initial.products.find((candidate) => candidate.enabled)!
+    await repository.mutate((state) => {
+      receiveInventory(state.inventoryDomain, {
+        movementId: 'assisted-payment-receipt',
+        productId: product.id,
+        unitCode: 'bottle',
+        quantity: 10,
+        actorId: 'emp-lin',
+        reason: '协助支付测试入库',
+        businessDate: state.store.businessDate,
+        occurredAt: new Date(now).toISOString(),
+        idempotencyKey: 'assisted-payment-receipt-0001',
+      })
+      state.revision += 1
+    })
+
+    const orderResponse = await app.inject({
+      method: 'POST',
+      url: '/api/commerce/orders',
+      payload: {
+        tableId: table.id,
+        items: [{ productId: product.id, quantity: 1 }],
+        actorId: 'emp-lin',
+        idempotencyKey: 'assisted-cart-order-0001',
+      },
+    })
+    expect(orderResponse.statusCode).toBe(201)
+    expect(orderResponse.json()).toMatchObject({ status: 'submitted', amounts: { payableAmount: product.listPriceAmount } })
+    const kdsCountBeforePayment = (await repository.read()).orderDomain.kdsTasks.length
+    const saleCountBeforePayment = (await repository.read()).inventoryDomain.movements.filter((item) => item.type === 'sale').length
+
+    const linkPayload = { idempotencyKey: 'assisted-payment-link-0001' }
+    const linkResponse = await app.inject({
+      method: 'POST',
+      url: `/api/commerce/orders/${orderResponse.json().id}/payment-link`,
+      payload: linkPayload,
+    })
+    const replayedLink = await app.inject({
+      method: 'POST',
+      url: `/api/commerce/orders/${orderResponse.json().id}/payment-link`,
+      payload: linkPayload,
+    })
+    expect(linkResponse.statusCode).toBe(201)
+    expect(replayedLink.statusCode).toBe(201)
+    expect(linkResponse.json()).toMatchObject({ tableCode: table.code, amount: product.listPriceAmount })
+    const claims = requireGuestSession(verifyTableAccessToken(linkResponse.json().tableToken, secret, now))
+    expect(claims).toMatchObject({ tableSessionId: orderResponse.json().tableSessionId, expiresAt: now + 15 * 60_000 })
+
+    const sessionResponse = await app.inject({
+      method: 'GET',
+      url: `/api/guest/session?token=${encodeURIComponent(linkResponse.json().tableToken)}`,
+    })
+    expect(sessionResponse.statusCode).toBe(200)
+    const session = sessionResponse.json() as GuestSessionResponse
+    expect(session.account.orders).toContainEqual(expect.objectContaining({ id: orderResponse.json().id, status: 'submitted' }))
+
+    const checkoutResponse = await app.inject({
+      method: 'POST',
+      url: '/api/guest/checkout',
+      payload: {
+        tableToken: session.tableToken,
+        orderId: orderResponse.json().id,
+        idempotencyKey: 'assisted-guest-checkout-0001',
+      },
+    })
+    expect(checkoutResponse.statusCode).toBe(201)
+    expect(checkoutResponse.json()).toMatchObject({
+      providerRequired: false,
+      paymentIntent: { status: 'succeeded', orderIds: [orderResponse.json().id] },
+      order: { status: 'submitted' },
+      wechatJsapiParameters: null,
+    })
+
+    const final = await repository.read()
+    expect(final.orderDomain.kdsTasks).toHaveLength(kdsCountBeforePayment)
+    expect(final.inventoryDomain.movements.filter((item) => item.type === 'sale')).toHaveLength(saleCountBeforePayment)
+    expect(final.auditEntries.filter((entry) => entry.action === 'commerce.guest_payment_link_issued.v1')).toHaveLength(1)
+
+    const paidLink = await app.inject({
+      method: 'POST',
+      url: `/api/commerce/orders/${orderResponse.json().id}/payment-link`,
+      payload: { idempotencyKey: 'assisted-payment-link-after-paid' },
+    })
+    expect(paidLink.statusCode).toBe(400)
+    expect(paidLink.json().message).toContain('已经支付')
+
+    await app.close()
+    await repository.close()
+  })
+})

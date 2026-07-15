@@ -57,6 +57,7 @@ export default function App() {
       setData(liveData)
       setSnapshot(safeSnapshot)
       setError('')
+      setRequiresLogin(false)
       try {
         await saveOfflineSnapshot(safeSnapshot)
       } catch {

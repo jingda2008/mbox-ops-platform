@@ -121,6 +121,10 @@ const markdown = `# M-Box 自动发布证据
 - 测试：${evidence.verification.testFilesPassed ?? 'unknown'}个文件，${evidence.verification.testsPassed ?? 'unknown'}项
 - 依赖审计：${evidence.dependencyAudit.commandSucceeded ? `${evidence.dependencyAudit.result?.metadata?.vulnerabilities?.total ?? 'unknown'}项漏洞` : `未取得结果：${evidence.dependencyAudit.error}`}
 - 云端：${cloud}
+${evidence.cloud.configured ? `- 云端就绪：HTTP ${evidence.cloud.readiness?.status ?? 'unknown'}，应用状态版本 ${evidence.cloud.readiness?.body?.revision ?? 'unknown'}
+- 运行账号：\`${evidence.cloud.serviceAccount ?? 'unknown'}\`
+- Cloud SQL：\`${evidence.cloud.cloudSqlInstances ?? 'unknown'}\`
+- 流量：${evidence.cloud.traffic?.map((item) => `${item.revisionName ?? 'unknown'} ${item.percent ?? 0}%`).join('，') || 'unknown'}` : ''}
 
 机器可读证据：\`.runtime/release-evidence.json\`。
 `

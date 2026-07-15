@@ -47,6 +47,8 @@ gcloud compute ssh mbox-pilot-1 \
   --command="sudo bash /tmp/mbox-smoke-staff-logins.sh; rm -f /tmp/mbox-smoke-staff-logins.sh"
 ```
 
+每次发布还要运行`smoke-role-workflows.sh`。该脚本验证店长可读取候补并进入转桌业务校验、服务员不能读取候补或执行转桌，全程不改变营业数据。
+
 每日备份时间为上海时间04:17，保留云端30天、本机3天。每次发布后必须确认`mbox-pilot-app`与`mbox-pilot-db`健康，并执行一次真实桌码服务闭环。
 
 ## 暂停验证

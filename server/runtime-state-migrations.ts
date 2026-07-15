@@ -145,6 +145,22 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
     ...assignment,
     stationIds: assignment.stationIds ?? [],
   }))
+  migrated.tableTransfers ??= []
+  migrated.waitlistEntries ??= []
+  if (migrated.reservationState) {
+    migrated.reservationState.config.lateHoldMinutes ??= 30
+    migrated.reservationState.config.waitlistResponseMinutes ??= 10
+    migrated.reservationState.reservations = migrated.reservationState.reservations.map((reservation) => ({
+      ...reservation,
+      expectedArrivalAt: reservation.expectedArrivalAt ?? null,
+      lateContactReference: reservation.lateContactReference ?? null,
+      holdStatus: reservation.holdStatus ?? 'none',
+      holdUntil: reservation.holdUntil ?? null,
+      holdDecidedBy: reservation.holdDecidedBy ?? null,
+      holdDecidedAt: reservation.holdDecidedAt ?? null,
+      holdReason: reservation.holdReason ?? null,
+    }))
+  }
   migrateMissingOpenTableSessions(migrated)
   if (upgradeBuiltInRoles) {
     migrated.auditEntries.push({

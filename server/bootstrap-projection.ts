@@ -10,7 +10,7 @@ function effectiveRoleId(state: RuntimeState, actor: RequestActorContext) {
   return effectiveActorForState(actor, state).roleId
 }
 
-function tableIdFromSession(tableSessionId: string) {
+function legacyTableIdFromSession(tableSessionId: string) {
   if (!tableSessionId.startsWith('session:')) return null
   return tableSessionId.slice('session:'.length).split(':')[0] ?? null
 }
@@ -27,8 +27,9 @@ export function projectRuntimeStateForActor(state: RuntimeState, actor: RequestA
 
   const visibleTables = state.tables.filter((table) => canActorAccessTableDataScope(state, actor, table.id))
   const visibleTableIds = new Set(visibleTables.map((table) => table.id))
+  const sessionTableIds = new Map(state.songState.tableSessions.map((session) => [session.id, session.tableId]))
   const sessionVisible = (tableSessionId: string) => {
-    const tableId = tableIdFromSession(tableSessionId)
+    const tableId = sessionTableIds.get(tableSessionId) ?? legacyTableIdFromSession(tableSessionId)
     return tableId != null && visibleTableIds.has(tableId)
   }
 
@@ -44,6 +45,13 @@ export function projectRuntimeStateForActor(state: RuntimeState, actor: RequestA
   projected.awaitingOrderIntents = projected.awaitingOrderIntents.filter((intent) => (
     canAccessProjectedStore && visibleTableIds.has(intent.tableId)
   ))
+  projected.tableTransfers = (projected.tableTransfers ?? []).filter((record) => (
+    canAccessProjectedStore && (storeWide || visibleTableIds.has(record.sourceTableId) || visibleTableIds.has(record.targetTableId))
+  ))
+  const canUseWaitlist = permissions.has('reservation.view') || permissions.has('reservation.manage')
+  projected.waitlistEntries = canUseWaitlist && canAccessProjectedStore
+    ? projected.waitlistEntries
+    : []
 
   const canViewOrders = permissions.has('order.view')
   const canUseKds = permissions.has('kds.prepare') || permissions.has('kds.deliver')

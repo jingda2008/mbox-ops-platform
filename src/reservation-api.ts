@@ -10,6 +10,7 @@ import type {
   ReservationOccasionCode,
   ReservationStatus,
 } from './shared/reservation-contracts'
+import type { WaitlistEntry } from './shared/contracts'
 
 export interface ReservationListResponse {
   config: ReservationConfig | null
@@ -137,6 +138,32 @@ export function actOnReservation(reservationId: string, input: ReservationAction
   })
 }
 
+export function updateReservationDetails(reservationId: string, input: {
+  partySize: number
+  scheduledAt: string
+  areaPreferenceCode?: string
+  reason: string
+  idempotencyKey: string
+}) {
+  return reservationRequest<Reservation>(`/api/reservations/${encodeURIComponent(reservationId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
+}
+
+export function decideLateReservationHold(reservationId: string, input: {
+  decision: 'hold' | 'release'
+  expectedArrivalAt: string
+  contactReference: string
+  reason: string
+  idempotencyKey: string
+}) {
+  return reservationRequest<Reservation>(`/api/reservations/${encodeURIComponent(reservationId)}/late-hold`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
 export function recordDepositIntent(reservationId: string, input: DepositIntentInput) {
   return reservationRequest<Reservation>(`/api/reservations/${encodeURIComponent(reservationId)}/deposit-intent`, {
     method: 'POST',
@@ -167,6 +194,42 @@ export function confirmDepositRefund(reservationId: string, input: DepositRefund
 
 export function failDepositRefund(reservationId: string, input: DepositRefundFailureInput) {
   return reservationRequest<Reservation>(`/api/reservations/${encodeURIComponent(reservationId)}/deposit-refund-failure`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export interface WaitlistListResponse {
+  entries: WaitlistEntry[]
+  positions: Record<string, number>
+  responseMinutes: number
+}
+
+export interface CreateWaitlistInput {
+  customerReference: string
+  customerName: string
+  contactReference: string
+  partySize: number
+  areaPreferenceCode?: string
+  originalReservationId?: string
+  maximumWaitMinutes: number
+  idempotencyKey: string
+}
+
+export type WaitlistActionInput =
+  | { action: 'notify'; tableId: string; reason: string; idempotencyKey: string }
+  | { action: 'seat' | 'cancel' | 'skip' | 'expire'; reason: string; idempotencyKey: string }
+
+export function listWaitlist() {
+  return reservationRequest<WaitlistListResponse>('/api/waitlist')
+}
+
+export function createWaitlistEntry(input: CreateWaitlistInput) {
+  return reservationRequest<WaitlistEntry>('/api/waitlist', { method: 'POST', body: JSON.stringify(input) })
+}
+
+export function actOnWaitlistEntry(entryId: string, input: WaitlistActionInput) {
+  return reservationRequest<WaitlistEntry>(`/api/waitlist/${encodeURIComponent(entryId)}/actions`, {
     method: 'POST',
     body: JSON.stringify(input),
   })

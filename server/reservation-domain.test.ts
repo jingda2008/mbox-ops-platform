@@ -12,6 +12,8 @@ import {
   recordReservationDepositIntent,
   seatReservation,
   startReservationDepositRefund,
+  updateReservationDetails,
+  decideLateReservationHold,
 } from './reservation-domain.js'
 
 const T0 = '2026-07-14T10:00:00.000Z'
@@ -28,6 +30,8 @@ function state() {
     sources: [{ code: 'wechat', name: '微信', enabled: true, sortOrder: 1 }],
     areaPreferences: [{ code: 'stage', name: '舞台互动区', enabled: true, sortOrder: 1 }],
     occasions: [{ code: 'birthday', name: '生日', enabled: true, serviceScript: ['准备生日权益'] }],
+    lateHoldMinutes: 30,
+    waitlistResponseMinutes: 10,
   })
 }
 
@@ -157,6 +161,40 @@ describe('reservation configuration and lifecycle', () => {
       ...action('reservation-noshow-0001', '2026-07-14T12:30:00.000Z'),
       reason: '超过保留时间且两次联系未果',
     }).status).toBe('no_show')
+  })
+
+  it('records party-size changes and manager late-hold decisions without replacing the reservation', () => {
+    const domain = state()
+    const original = createReservation(domain, createCommand({ depositRequiredAmount: 0 }))
+    const updated = updateReservationDetails(domain, {
+      ...action('reservation-update-details-001', T1),
+      partySize: 8,
+      scheduledAt: '2026-07-14T12:30:00.000Z',
+      areaPreferenceCode: 'stage',
+      reason: '顾客确认增加两人',
+    })
+    expect(updated.id).toBe(original.id)
+    expect(updated).toMatchObject({ partySize: 8, scheduledAt: '2026-07-14T12:30:00.000Z', revision: 2 })
+    expect(domain.auditEvents.at(-1)).toMatchObject({
+      type: 'reservation.details_updated.v1',
+      details: { beforePartySize: 6, afterPartySize: 8 },
+    })
+
+    confirmReservation(domain, action('reservation-confirm-001', T2))
+    const held = decideLateReservationHold(domain, {
+      ...action('reservation-late-hold-001', '2026-07-14T12:20:00.000Z'),
+      decision: 'hold',
+      expectedArrivalAt: '2026-07-14T12:50:00.000Z',
+      contactReference: 'wecom-message-20260714-01',
+      reason: '顾客已联系并确认在途',
+    })
+    expect(held).toMatchObject({
+      id: original.id,
+      holdStatus: 'held',
+      holdUntil: '2026-07-14T13:20:00.000Z',
+      lateContactReference: 'wecom-message-20260714-01',
+    })
+    expect(domain.auditEvents.at(-1)?.type).toBe('reservation.late_hold_decided.v1')
   })
 })
 

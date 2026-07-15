@@ -36,6 +36,9 @@ function collectBlockers(state: Awaited<ReturnType<RuntimeRepository['read']>>) 
       blockers.push({ kind: 'unresolved_reservation_deposit', id: reservation.id, detail: reservation.deposit.status })
     }
   }
+  for (const entry of state.waitlistEntries.filter((item) => ['waiting', 'notified'].includes(item.status))) {
+    blockers.push({ kind: 'open_waitlist_entry', id: entry.id, detail: `${entry.status}:${entry.customerName}` })
+  }
   return blockers
 }
 

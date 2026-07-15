@@ -168,4 +168,43 @@ describe('runtime state operational migrations', () => {
     expect(migrated.config.workstations.find((station) => station.id === intentionallyNull!.id)?.deliveryServiceTypeId)
       .toBeNull()
   })
+
+  it('adds transfer, waitlist and late-arrival defaults to legacy persisted state', () => {
+    const legacy = structuredClone(createSeedState()) as RuntimeState & {
+      tableTransfers?: unknown
+      waitlistEntries?: unknown
+    }
+    delete legacy.tableTransfers
+    delete legacy.waitlistEntries
+    const legacyConfig = legacy.reservationState!.config as typeof legacy.reservationState.config & {
+      lateHoldMinutes?: number
+      waitlistResponseMinutes?: number
+    }
+    delete legacyConfig.lateHoldMinutes
+    delete legacyConfig.waitlistResponseMinutes
+    const legacyReservation = legacy.reservationState!.reservations[0]
+    if (legacyReservation) {
+      for (const field of [
+        'expectedArrivalAt', 'lateContactReference', 'holdStatus', 'holdUntil',
+        'holdDecidedBy', 'holdDecidedAt', 'holdReason',
+      ] as const) delete legacyReservation[field]
+    }
+
+    const migrated = migrateRuntimeState(legacy as RuntimeState)
+
+    expect(migrated.tableTransfers).toEqual([])
+    expect(migrated.waitlistEntries).toEqual([])
+    expect(migrated.reservationState?.config).toMatchObject({ lateHoldMinutes: 30, waitlistResponseMinutes: 10 })
+    if (legacyReservation) {
+      expect(migrated.reservationState?.reservations[0]).toMatchObject({
+        expectedArrivalAt: null,
+        lateContactReference: null,
+        holdStatus: 'none',
+        holdUntil: null,
+        holdDecidedBy: null,
+        holdDecidedAt: null,
+        holdReason: null,
+      })
+    }
+  })
 })

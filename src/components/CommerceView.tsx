@@ -155,7 +155,8 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
 }
 
 function tableFromSession(data: BootstrapResponse, sessionId: string) {
-  return data.tables.find((table) => sessionId.startsWith(`session:${table.id}:`))
+  const session = data.songState.tableSessions.find((item) => item.id === sessionId)
+  return data.tables.find((table) => table.id === session?.tableId)
 }
 
 function nextAction(status: KdsTask['status']): KdsActionInput['action'] | null {

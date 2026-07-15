@@ -26,9 +26,10 @@ import {
   History,
   Music2,
   PackageSearch,
+  ArrowRightLeft,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { actOnTask, getCurrentActorId, publishConfig, resetDemo, rollbackConfig, saveConfigDraft, startAwaitingOrder, stopAwaitingOrder } from '../api'
+import { actOnTask, getCurrentActorId, publishConfig, resetDemo, rollbackConfig, saveConfigDraft, startAwaitingOrder, stopAwaitingOrder, transferTableSession } from '../api'
 import type {
   BootstrapResponse,
   ConfigDraftInput,
@@ -107,6 +108,8 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
   const [configDirty, setConfigDirty] = useState(false)
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
+  const [transferTargetId, setTransferTargetId] = useState('')
+  const [transferKind, setTransferKind] = useState<'relocate' | 'temporary_to_final'>('relocate')
 
   useEffect(() => {
     if (!configDirty) setDraft(cloneConfig(data.draftConfig ?? data.config))
@@ -129,6 +132,17 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
         return session && order.tableSessionId === session.id && order.status !== 'draft'
       })
     : false
+  const currentRole = data.config.roles.find((role) => role.id === fulfillmentAccess.employee?.roleId)
+  const canTransferTable = currentRole?.permissionIds?.includes('table.manage') ?? false
+  const transferTargets = selectedTable
+    ? data.tables.filter((table) => table.status === 'available' && table.capacity >= selectedTable.guestCount)
+      .toSorted((left, right) => Number(left.areaId !== selectedTable.areaId) - Number(right.areaId !== selectedTable.areaId) || left.code.localeCompare(right.code))
+    : []
+
+  useEffect(() => {
+    setTransferTargetId('')
+    setTransferKind('relocate')
+  }, [selectedTableId])
 
   async function handleTaskAction(task: ServiceTask, action: TaskActionInput['action']) {
     const actorId = fulfillmentAccess.employee?.id
@@ -161,6 +175,28 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
       await onRefresh()
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '待点单状态操作失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleTableTransfer() {
+    if (!selectedTable || !transferTargetId) return
+    const target = data.tables.find((table) => table.id === transferTargetId)
+    if (!target) return
+    setBusy(true)
+    try {
+      await transferTableSession(selectedTable.id, {
+        targetTableId: target.id,
+        kind: transferKind,
+        reason: transferKind === 'temporary_to_final' ? '临时候客位转正式桌' : '顾客现场申请换位',
+      })
+      setNotice(`${selectedTable.code}已整体转至${target.code}，订单、账务、出品和服务任务保持同一桌次`)
+      setSelectedTableId(target.id)
+      setTransferTargetId('')
+      await onRefresh()
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '转桌失败')
     } finally {
       setBusy(false)
     }
@@ -340,6 +376,24 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
                       ) : (
                         <button className="primary-button" disabled={busy || selectedTableHasOrder} onClick={() => void handleAwaitingOrder('start')}><UtensilsCrossed size={17} />暂未点单</button>
                       )}
+                    </div>
+                  )}
+                  {selectedTable && selectedTable.status === 'occupied' && canTransferTable && (
+                    <div className="table-transfer-toolbar">
+                      <div className="table-transfer-heading"><ArrowRightLeft size={18} /><div><strong>整桌换位</strong><span>选择目标桌，确认后立即迁移全部现场责任</span></div></div>
+                      <div className="transfer-kind-control" aria-label="转桌类型">
+                        <button className={transferKind === 'relocate' ? 'is-active' : ''} onClick={() => setTransferKind('relocate')}>普通换位</button>
+                        <button className={transferKind === 'temporary_to_final' ? 'is-active' : ''} onClick={() => setTransferKind('temporary_to_final')}>临时转正式</button>
+                      </div>
+                      <div className="transfer-targets">
+                        {transferTargets.length === 0 && <span>当前没有容量合适的空桌</span>}
+                        {transferTargets.map((table) => (
+                          <button key={table.id} className={transferTargetId === table.id ? 'is-selected' : ''} onClick={() => setTransferTargetId(table.id)}>
+                            <strong>{table.code}</strong><small>{table.capacity}人 · {data.areas.find((area) => area.id === table.areaId)?.shortName}</small>
+                          </button>
+                        ))}
+                      </div>
+                      <button className="primary-button transfer-confirm" disabled={busy || !transferTargetId} onClick={() => void handleTableTransfer()}><ArrowRightLeft size={17} />确认转桌</button>
                     </div>
                   )}
                   <div className="area-list">

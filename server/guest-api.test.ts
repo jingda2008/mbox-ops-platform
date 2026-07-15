@@ -5,6 +5,7 @@ import type { GuestSessionResponse } from '../src/shared/guest-contracts.js'
 import { registerGuestRoutes } from './guest-api.js'
 import { JsonRepository } from './repository.js'
 import { requireGuestSession, signStaticTableQrToken, verifyTableAccessToken } from './table-access.js'
+import { transferOpenTableSession } from './table-session-api.js'
 
 const secret = 'q'.repeat(32)
 const sessionTtlMs = 5 * 60_000
@@ -224,6 +225,35 @@ describe('guest table API', () => {
     const nextSession = (await exchange(app, qrToken)).body
     expect(nextSession.guestSession.tableSessionId).toBe('session:table-l01:reopened')
     expect(nextSession.tableToken).not.toBe(firstSession.tableToken)
+    await closeFixture(app, repository)
+  })
+
+  it('revokes the old table token after transfer while the target QR keeps the same visit', async () => {
+    const { app, repository, now } = await fixture()
+    const original = (await exchange(app, staticQr(now()))).body
+    await repository.mutate((state) => transferOpenTableSession(state, 'table-l01', {
+      targetTableId: 'table-l04',
+      kind: 'relocate',
+      reason: '顾客现场申请更换位置',
+      idempotencyKey: 'guest-transfer-l01-l04-001',
+    }, 'emp-chen', new Date(now()).toISOString()))
+
+    const stale = await app.inject({
+      method: 'POST',
+      url: '/api/guest/tasks',
+      payload: {
+        tableToken: original.tableToken,
+        serviceTypeId: 'water',
+        note: '',
+        idempotencyKey: 'guest-task-after-transfer-old-table-001',
+      },
+    })
+    expect(stale.statusCode).toBe(410)
+    expect(stale.json().code).toBe('GUEST_SESSION_REVOKED')
+
+    const target = (await exchange(app, staticQr(now(), 'mbox-lujiazui', 'L04'))).body
+    expect(target.table.code).toBe('L04')
+    expect(target.guestSession.tableSessionId).toBe(original.guestSession.tableSessionId)
     await closeFixture(app, repository)
   })
 

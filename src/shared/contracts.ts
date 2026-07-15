@@ -231,6 +231,56 @@ export interface AwaitingOrderIntent {
   configVersion: number
 }
 
+export type TableTransferKind = 'relocate' | 'temporary_to_final'
+
+export interface TableTransferRecord {
+  id: string
+  tableSessionId: string
+  kind: TableTransferKind
+  sourceTableId: string
+  sourceTableCode: string
+  targetTableId: string
+  targetTableCode: string
+  guestCount: number
+  actorId: string
+  reason: string
+  occurredAt: string
+  idempotencyKey: string
+  movedServiceTaskIds: string[]
+  movedAwaitingOrderIntentIds: string[]
+  movedReservationIds: string[]
+  movedSongRequestIds: string[]
+  movedBenefitRedemptionIds: string[]
+}
+
+export type WaitlistStatus = 'waiting' | 'notified' | 'seated' | 'cancelled' | 'skipped' | 'expired'
+
+export interface WaitlistEntry {
+  id: string
+  customerReference: string
+  customerName: string
+  contactReference: string
+  partySize: number
+  areaPreferenceCode: string | null
+  originalReservationId: string | null
+  status: WaitlistStatus
+  joinedSequence: number
+  joinedAt: string
+  maximumWaitUntil: string
+  notifiedAt: string | null
+  responseExpiresAt: string | null
+  heldTableId: string | null
+  heldTableCode: string | null
+  tableSessionId: string | null
+  seatedAt: string | null
+  closedAt: string | null
+  closeReason: string | null
+  createdBy: string
+  updatedAt: string
+  revision: number
+  configVersion: number
+}
+
 export interface ServiceTask {
   id: string
   tableId: string
@@ -289,6 +339,8 @@ export interface RuntimeState {
   inventoryDomain?: InventoryDomainState
   reservationState?: ReservationState
   awaitingOrderIntents: AwaitingOrderIntent[]
+  tableTransfers: TableTransferRecord[]
+  waitlistEntries: WaitlistEntry[]
   members: MemberProfile[]
   benefitTemplates: BenefitTemplate[]
   benefitGrantPolicies: BenefitGrantPolicy[]
@@ -427,6 +479,15 @@ export const closeTableSessionSchema = z.object({
 }).strict()
 
 export type CloseTableSessionInput = z.infer<typeof closeTableSessionSchema>
+
+export const transferTableSessionSchema = z.object({
+  targetTableId: z.string().trim().min(1).max(128),
+  kind: z.enum(['relocate', 'temporary_to_final']).default('relocate'),
+  reason: z.string().trim().min(2).max(200),
+  idempotencyKey: z.string().trim().min(8).max(128),
+}).strict()
+
+export type TransferTableSessionInput = z.infer<typeof transferTableSessionSchema>
 
 export const employeeWriteSchema = z.object({
   displayName: z.string().trim().min(1).max(40),

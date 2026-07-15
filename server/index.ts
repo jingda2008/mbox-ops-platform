@@ -70,6 +70,7 @@ import {
 } from './wechat-production-adapters.js'
 import { registerInventoryRoutes } from './inventory-api.js'
 import { registerReservationRoutes } from './reservation-api.js'
+import { registerWaitlistRoutes } from './waitlist-api.js'
 import { registerWechatReservationRoutes } from './wechat-reservation-api.js'
 import { registerPilotAuthRoutes } from './pilot-auth.js'
 import { AuthorizationError, requireApprovalAmount, requireConfiguredOperation, requireTableDataScope } from './authorization.js'
@@ -429,6 +430,7 @@ registerPublicReservationRoutes(app, repository, { secret: runtimeConfig.qrSecre
 registerStoreImportRoutes(app, repository)
 registerInventoryRoutes(app, repository)
 registerReservationRoutes(app, repository)
+registerWaitlistRoutes(app, repository)
 
 if (runtimeConfig.runtimeMode === 'staging' || runtimeConfig.runtimeMode === 'production') {
   app.setNotFoundHandler(async (request, reply) => {

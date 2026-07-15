@@ -250,9 +250,13 @@ export function createSeedState(): RuntimeState {
           { code: 'business', name: '商务接待', enabled: true, serviceScript: ['确认主宾与结账负责人'] },
           { code: 'other', name: '其他', enabled: true, serviceScript: [] },
         ],
+        lateHoldMinutes: 30,
+        waitlistResponseMinutes: 10,
       },
     ),
     awaitingOrderIntents: [],
+    tableTransfers: [],
+    waitlistEntries: [],
     members: [
       { id: 'member-amy', displayName: 'Amy', phoneMasked: '138****2108', level: 'gold', tags: ['生日客', '鸡尾酒偏好'], lastVisitAt: new Date(now.getTime() - 12 * 86_400_000).toISOString(), visitCount: 18, totalSpendAmount: 286800, salesOwnerId: 'emp-lin', serviceAccountBound: true, wecomBound: true, notificationConsent: true },
       { id: 'member-li', displayName: '李先生', phoneMasked: '186****7721', level: 'silver', tags: ['商务聚会'], lastVisitAt: new Date(now.getTime() - 45 * 86_400_000).toISOString(), visitCount: 7, totalSpendAmount: 128600, salesOwnerId: 'emp-mia', serviceAccountBound: true, wecomBound: false, notificationConsent: true },

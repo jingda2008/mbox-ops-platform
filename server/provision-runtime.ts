@@ -12,6 +12,8 @@ const REQUIRED_ARRAYS: Array<keyof RuntimeState> = [
   'shiftAssignments',
   'products',
   'awaitingOrderIntents',
+  'tableTransfers',
+  'waitlistEntries',
   'members',
   'benefitTemplates',
   'benefitGrantPolicies',

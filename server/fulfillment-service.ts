@@ -66,6 +66,8 @@ function chooseDeliveryOwner(state: RuntimeState, tableId: string, deliveryRoleI
 }
 
 function tableIdForSession(state: RuntimeState, tableSessionId: string) {
+  const activeSession = state.songState.tableSessions.find((session) => session.id === tableSessionId)
+  if (activeSession) return activeSession.tableId
   return state.tables.find((table) => (
     tableSessionId === table.id || tableSessionId.startsWith(`session:${table.id}:`)
   ))?.id ?? tableSessionId.replace(/^session:/, '').split(':')[0]!

@@ -54,6 +54,8 @@ export interface ReservationConfig {
   sources: ReservationSourceConfig[]
   areaPreferences: ReservationAreaPreferenceConfig[]
   occasions: ReservationOccasionConfig[]
+  lateHoldMinutes: number
+  waitlistResponseMinutes: number
 }
 
 export interface ReservationDeposit {
@@ -98,6 +100,13 @@ export interface Reservation extends ReservationScope {
   updatedAt: string
   revision: number
   configVersion: number
+  expectedArrivalAt: string | null
+  lateContactReference: string | null
+  holdStatus: 'none' | 'held' | 'released'
+  holdUntil: string | null
+  holdDecidedBy: string | null
+  holdDecidedAt: string | null
+  holdReason: string | null
 }
 
 export type ReservationAuditEventType =
@@ -107,6 +116,8 @@ export type ReservationAuditEventType =
   | 'reservation.seated.v1'
   | 'reservation.cancelled.v1'
   | 'reservation.no_show.v1'
+  | 'reservation.details_updated.v1'
+  | 'reservation.late_hold_decided.v1'
   | 'reservation.deposit_intent_recorded.v1'
   | 'reservation.deposit_confirmed.v1'
   | 'reservation.deposit_refund_required.v1'
@@ -165,6 +176,20 @@ export interface ReservationActionCommand {
   actorId: string
   occurredAt: string
   idempotencyKey: string
+}
+
+export interface UpdateReservationCommand extends ReservationActionCommand {
+  partySize: number
+  scheduledAt: string
+  areaPreferenceCode?: string
+  reason: string
+}
+
+export interface DecideLateReservationHoldCommand extends ReservationActionCommand {
+  decision: 'hold' | 'release'
+  expectedArrivalAt: string
+  contactReference: string
+  reason: string
 }
 
 export interface RecordReservationDepositIntentCommand extends ReservationActionCommand {

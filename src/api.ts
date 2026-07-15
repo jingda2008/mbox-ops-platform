@@ -14,6 +14,8 @@ import type {
   ShiftWriteInput,
   StoreConfig,
   Table,
+  TableTransferRecord,
+  TransferTableSessionInput,
   TableWriteInput,
   TaskActionInput,
 } from './shared/contracts'
@@ -249,6 +251,13 @@ export function closeTableSession(tableId: string, reason: string) {
   return request<Table>(`/api/tables/${encodeURIComponent(tableId)}/close`, {
     method: 'POST',
     body: JSON.stringify({ reason, idempotencyKey: `table-close-${crypto.randomUUID()}` }),
+  })
+}
+
+export function transferTableSession(tableId: string, input: Omit<TransferTableSessionInput, 'idempotencyKey'>) {
+  return request<TableTransferRecord>(`/api/tables/${encodeURIComponent(tableId)}/transfer`, {
+    method: 'POST',
+    body: JSON.stringify({ ...input, idempotencyKey: `table-transfer-${crypto.randomUUID()}` }),
   })
 }
 

@@ -722,6 +722,12 @@ function semanticIssues(state: RuntimeState, input: StoreImportPackage, candidat
   for (const intent of state.awaitingOrderIntents.filter((intent) => intent.status === 'active')) {
     if (!tableIds.has(intent.tableId)) add('error', 'ACTIVE_INTENT_TABLE_REMOVED', `进行中的点单关怀 ${intent.id} 引用的桌台将被移除`, 'tables')
   }
+  for (const entry of state.waitlistEntries.filter((item) => ['waiting', 'notified'].includes(item.status))) {
+    if (!entry.heldTableId) continue
+    const table = candidate.tables.find((item) => item.id === entry.heldTableId)
+    if (!table) add('error', 'WAITLIST_HELD_TABLE_REMOVED', `候补 ${entry.id} 锁定的桌台将被移除`, 'tables')
+    else if (entry.heldTableCode && table.code !== entry.heldTableCode) add('error', 'WAITLIST_HELD_TABLE_CODE_CHANGED', `候补 ${entry.id} 锁定桌台编号不能变更`, 'tables', rowOf('tables', table.id), 'code')
+  }
   for (const session of state.songState.tableSessions.filter((session) => session.status === 'open')) {
     const table = candidate.tables.find((item) => item.id === session.tableId)
     if (!table) add('error', 'OPEN_SESSION_TABLE_REMOVED', `开放桌台会话 ${session.id} 的桌台将被移除`, 'tables')
@@ -748,6 +754,7 @@ function semanticIssues(state: RuntimeState, input: StoreImportPackage, candidat
   if (candidate.store.businessDate !== state.store.businessDate) {
     const hasLiveWork = state.tasks.some((task) => !['confirmed', 'cancelled'].includes(task.status)) ||
       state.awaitingOrderIntents.some((intent) => intent.status === 'active') ||
+      state.waitlistEntries.some((entry) => ['waiting', 'notified'].includes(entry.status)) ||
       state.songState.tableSessions.some((session) => session.status === 'open')
     if (hasLiveWork) add('error', 'BUSINESS_DATE_CHANGE_WITH_LIVE_WORK', '存在进行中任务或桌台会话时不能切换营业日', 'store', null, 'businessDate')
   }

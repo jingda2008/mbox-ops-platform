@@ -448,6 +448,22 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 .next-care svg { grid-row: 1 / 3; }
 .next-care span { font-size: 10px; }
 .next-care strong { color: var(--ink); font-size: 12px; }
+.table-transfer-toolbar { display: grid; grid-template-columns: auto auto minmax(220px, 1fr) auto; align-items: center; gap: 12px; margin: 8px 16px 0; padding: 10px 12px; border: 1px solid #cfd7df; border-left: 4px solid #176d96; background: #f5f8fa; }
+.table-transfer-heading { display: flex; align-items: center; gap: 8px; }
+.table-transfer-heading > div { display: grid; gap: 1px; }
+.table-transfer-heading strong { font-size: 13px; }
+.table-transfer-heading span { color: var(--ink-soft); font-size: 10px; }
+.transfer-kind-control { display: flex; border: 1px solid #c8d1d8; }
+.transfer-kind-control button { min-height: 34px; padding: 0 9px; border: 0; border-right: 1px solid #c8d1d8; background: #fff; color: var(--ink-soft); font-size: 11px; font-weight: 750; }
+.transfer-kind-control button:last-child { border-right: 0; }
+.transfer-kind-control button.is-active { background: #176d96; color: #fff; }
+.transfer-targets { display: flex; gap: 6px; min-width: 0; flex-wrap: wrap; }
+.transfer-targets > span { color: var(--ink-soft); font-size: 11px; }
+.transfer-targets button { min-width: 58px; min-height: 38px; display: grid; place-content: center; padding: 3px 7px; border: 1px solid #c8d1d8; background: #fff; color: var(--ink); }
+.transfer-targets button strong { font-size: 12px; }
+.transfer-targets button small { color: var(--ink-soft); font-size: 9px; }
+.transfer-targets button.is-selected { border-color: #176d96; box-shadow: inset 0 0 0 1px #176d96; background: #eaf4f8; }
+.transfer-confirm { white-space: nowrap; }
 .area-row {
   display: grid;
   grid-template-columns: 86px minmax(0, 1fr);
@@ -908,6 +924,11 @@ button:focus-visible, a:focus-visible, input:focus-visible {
   .script-config-name { padding-top: 0; }
   .dispatch-role-field, .script-steps-field { grid-column: 1; grid-row: auto; }
   .table-service-toolbar { align-items: stretch; flex-direction: column; }
+  .table-transfer-toolbar { grid-template-columns: 1fr; }
+  .transfer-kind-control { width: 100%; }
+  .transfer-kind-control button { flex: 1; }
+  .transfer-targets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .transfer-targets button { width: 100%; }
   .table-service-toolbar > button, .next-care { width: 100%; margin-left: 0; }
   .redemption-toolbar { grid-template-columns: 1fr; }
   .selected-benefits > div { grid-template-columns: 20px minmax(0, 1fr); }

@@ -69,6 +69,10 @@ function resolveOpenTableSession(state: RuntimeState, table: Table) {
 
 function resolveGuestSession(state: RuntimeState, claims: GuestSessionClaims) {
   const table = resolveTable(state, claims)
+  const claimedSession = state.songState.tableSessions.find((session) => session.id === claims.tableSessionId)
+  if (claimedSession?.status === 'open' && claimedSession.tableId !== table.id) {
+    throw new TableAccessError('客人已转至新桌，请扫描新桌二维码', 'GUEST_SESSION_REVOKED', 410)
+  }
   const tableSession = resolveOpenTableSession(state, table)
   if (claims.tableSessionId !== tableSession.id) {
     throw new TableAccessError('本次桌次已经结束，请重新扫描桌上二维码', 'GUEST_SESSION_REVOKED', 410)

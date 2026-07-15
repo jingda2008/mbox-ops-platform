@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { createSeedState } from './seed.js'
 import { projectRuntimeStateForActor } from './bootstrap-projection.js'
+import { createOrderDraft } from './order-domain.js'
+import { transferOpenTableSession } from './table-session-api.js'
 
 function actor(actorId: string, roleId: string) {
   return { actorId, roleId, storeId: 'mbox-lujiazui', runtimeMode: 'test' as const, authenticatedBy: 'local_header' as const }
@@ -117,5 +119,29 @@ describe('role scoped bootstrap projection', () => {
     expect(projected.tasks).toEqual([])
     expect(projected.orderDomain.orders).toEqual([])
     expect(projected.paymentDomain.paymentIntents).toEqual([])
+  })
+
+  it('resolves a transferred session through its current table instead of its original session id', () => {
+    const state = createSeedState()
+    const session = state.songState.tableSessions.find((item) => item.tableId === 'table-w01')!
+    createOrderDraft(state.orderDomain, {
+      orderId: 'order-moved-across-areas',
+      tableSessionId: session.id,
+      createdBy: 'emp-lin',
+      occurredAt: '2026-07-15T20:00:00+08:00',
+      idempotencyKey: 'order-moved-across-areas-001',
+    })
+    transferOpenTableSession(state, 'table-w01', {
+      targetTableId: 'table-i03',
+      kind: 'relocate',
+      reason: '顾客更换到互动区',
+      idempotencyKey: 'transfer-w01-i03-projection-001',
+    }, 'emp-chen', '2026-07-15T20:05:00+08:00')
+
+    const oldAreaServer = projectRuntimeStateForActor(state, actor('emp-lin', 'server'))
+    const newAreaServer = projectRuntimeStateForActor(state, actor('emp-wu', 'server'))
+    expect(oldAreaServer.orderDomain.orders.map((order) => order.id)).not.toContain('order-moved-across-areas')
+    expect(newAreaServer.orderDomain.orders.map((order) => order.id)).toContain('order-moved-across-areas')
+    expect(newAreaServer.tableTransfers[0]).toMatchObject({ sourceTableId: 'table-w01', targetTableId: 'table-i03' })
   })
 })

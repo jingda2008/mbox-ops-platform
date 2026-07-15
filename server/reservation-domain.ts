@@ -17,6 +17,8 @@ import type {
   ReservationStatus,
   SeatReservationCommand,
   StartReservationDepositRefundCommand,
+  UpdateReservationCommand,
+  DecideLateReservationHoldCommand,
 } from '../src/shared/reservation-contracts.js'
 
 export const DEFAULT_RESERVATION_CONFIG: ReservationConfig = {
@@ -35,6 +37,8 @@ export const DEFAULT_RESERVATION_CONFIG: ReservationConfig = {
     { code: 'business', name: '商务接待', enabled: true, serviceScript: [] },
     { code: 'other', name: '其他', enabled: true, serviceScript: [] },
   ],
+  lateHoldMinutes: 30,
+  waitlistResponseMinutes: 10,
 }
 
 export function createReservationState(
@@ -43,10 +47,15 @@ export function createReservationState(
 ): ReservationState {
   assertNonEmpty(scope.tenantId, '租户ID')
   assertNonEmpty(scope.storeId, '门店ID')
-  validateConfig(config)
+  const normalizedConfig = {
+    ...config,
+    lateHoldMinutes: config.lateHoldMinutes ?? DEFAULT_RESERVATION_CONFIG.lateHoldMinutes,
+    waitlistResponseMinutes: config.waitlistResponseMinutes ?? DEFAULT_RESERVATION_CONFIG.waitlistResponseMinutes,
+  }
+  validateConfig(normalizedConfig)
   return {
     ...scope,
-    config: structuredClone(config),
+    config: structuredClone(normalizedConfig),
     reservations: [],
     auditEvents: [],
     idempotencyRecords: [],
@@ -54,9 +63,14 @@ export function createReservationState(
 }
 
 export function updateReservationConfig(state: ReservationState, config: ReservationConfig) {
-  validateConfig(config)
-  if (config.version <= state.config.version) throw new Error('预约配置版本必须高于当前版本')
-  state.config = structuredClone(config)
+  const normalizedConfig = {
+    ...config,
+    lateHoldMinutes: config.lateHoldMinutes ?? state.config.lateHoldMinutes,
+    waitlistResponseMinutes: config.waitlistResponseMinutes ?? state.config.waitlistResponseMinutes,
+  }
+  validateConfig(normalizedConfig)
+  if (normalizedConfig.version <= state.config.version) throw new Error('预约配置版本必须高于当前版本')
+  state.config = structuredClone(normalizedConfig)
   return state.config
 }
 
@@ -83,6 +97,12 @@ function validateConfig(config: ReservationConfig) {
   if (!Number.isSafeInteger(config.minimumPartySize) || config.minimumPartySize < 1) throw new Error('最小预约人数不合法')
   if (!Number.isSafeInteger(config.maximumPartySize) || config.maximumPartySize < config.minimumPartySize) {
     throw new Error('最大预约人数不合法')
+  }
+  if (!Number.isSafeInteger(config.lateHoldMinutes) || config.lateHoldMinutes < 0 || config.lateHoldMinutes > 240) {
+    throw new Error('预约迟到保留分钟数不合法')
+  }
+  if (!Number.isSafeInteger(config.waitlistResponseMinutes) || config.waitlistResponseMinutes < 1 || config.waitlistResponseMinutes > 120) {
+    throw new Error('候补响应分钟数不合法')
   }
   for (const collection of [config.sources, config.areaPreferences, config.occasions]) {
     const codes = collection.map((item) => item.code)
@@ -251,12 +271,82 @@ export function createReservation(state: ReservationState, command: CreateReserv
       updatedAt: command.occurredAt,
       revision: 1,
       configVersion: state.config.version,
+      expectedArrivalAt: null,
+      lateContactReference: null,
+      holdStatus: 'none',
+      holdUntil: null,
+      holdDecidedBy: null,
+      holdDecidedAt: null,
+      holdReason: null,
     }
     state.reservations.push(reservation)
     audit(state, reservation, 'reservation.requested.v1', command.actorId, command.occurredAt, null, null, null, {
       sourceCode: command.sourceCode,
       partySize: command.partySize,
       birthday: command.occasionCode === 'birthday',
+    })
+    return reservation
+  })
+}
+
+export function updateReservationDetails(state: ReservationState, command: UpdateReservationCommand) {
+  assertAction(command)
+  assertTimestamp(command.scheduledAt, '预约时间')
+  assertNonEmpty(command.reason, '修改原因')
+  if (!Number.isSafeInteger(command.partySize) || command.partySize < state.config.minimumPartySize || command.partySize > state.config.maximumPartySize) {
+    throw new Error(`预约人数必须在${state.config.minimumPartySize}至${state.config.maximumPartySize}之间`)
+  }
+  if (command.areaPreferenceCode && !state.config.areaPreferences.some((item) => item.code === command.areaPreferenceCode && item.enabled)) {
+    throw new Error('区域偏好未配置或已停用')
+  }
+  return executeIdempotent(state, command.idempotencyKey, 'reservation.update_details', command, command.reservationId, () => {
+    const reservation = findReservation(state, command.reservationId)
+    if (!['requested', 'confirmed', 'arrived'].includes(reservation.status)) throw new Error('已入座或已结束预约不能修改人数和时间')
+    const before = {
+      partySize: reservation.partySize,
+      scheduledAt: reservation.scheduledAt,
+      areaPreferenceCode: reservation.areaPreferenceCode,
+    }
+    reservation.partySize = command.partySize
+    reservation.scheduledAt = command.scheduledAt
+    reservation.areaPreferenceCode = command.areaPreferenceCode?.trim() || null
+    touch(reservation, command.occurredAt)
+    audit(state, reservation, 'reservation.details_updated.v1', command.actorId, command.occurredAt, reservation.status, reservation.deposit.status, command.reason, {
+      beforePartySize: before.partySize,
+      afterPartySize: reservation.partySize,
+      beforeScheduledAt: before.scheduledAt,
+      afterScheduledAt: reservation.scheduledAt,
+      beforeAreaPreferenceCode: before.areaPreferenceCode,
+      afterAreaPreferenceCode: reservation.areaPreferenceCode,
+    })
+    return reservation
+  })
+}
+
+export function decideLateReservationHold(state: ReservationState, command: DecideLateReservationHoldCommand) {
+  assertAction(command)
+  assertTimestamp(command.expectedArrivalAt, '预计到店时间')
+  assertNonEmpty(command.contactReference, '联系记录')
+  assertNonEmpty(command.reason, '决定原因')
+  return executeIdempotent(state, command.idempotencyKey, 'reservation.decide_late_hold', command, command.reservationId, () => {
+    const reservation = findReservation(state, command.reservationId)
+    if (reservation.status !== 'confirmed') throw new Error('只有已确认且未到店预约可以处理迟到保留')
+    if (Date.parse(command.expectedArrivalAt) < Date.parse(reservation.scheduledAt)) throw new Error('预计到店时间不能早于预约时间')
+    reservation.expectedArrivalAt = command.expectedArrivalAt
+    reservation.lateContactReference = command.contactReference
+    reservation.holdStatus = command.decision === 'hold' ? 'held' : 'released'
+    reservation.holdUntil = command.decision === 'hold'
+      ? new Date(Date.parse(command.expectedArrivalAt) + state.config.lateHoldMinutes * 60_000).toISOString()
+      : null
+    reservation.holdDecidedBy = command.actorId
+    reservation.holdDecidedAt = command.occurredAt
+    reservation.holdReason = command.reason
+    touch(reservation, command.occurredAt)
+    audit(state, reservation, 'reservation.late_hold_decided.v1', command.actorId, command.occurredAt, reservation.status, reservation.deposit.status, command.reason, {
+      decision: command.decision,
+      expectedArrivalAt: command.expectedArrivalAt,
+      contactReference: command.contactReference,
+      holdUntil: reservation.holdUntil,
     })
     return reservation
   })

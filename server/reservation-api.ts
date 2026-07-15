@@ -21,6 +21,8 @@ import {
   seatReservation,
   startReservationDepositRefund,
   updateReservationConfig,
+  updateReservationDetails,
+  decideLateReservationHold,
 } from './reservation-domain.js'
 import type { RuntimeRepository } from './repository.js'
 
@@ -80,6 +82,22 @@ const actionSchema = z.discriminatedUnion('action', [
   noShowActionSchema,
 ])
 
+const updateDetailsSchema = z.object({
+  partySize: z.number().int().positive(),
+  scheduledAt: timestampSchema,
+  areaPreferenceCode: z.string().trim().min(1).max(64).optional(),
+  reason: z.string().trim().min(2).max(500),
+  idempotencyKey: idempotencyKeySchema,
+}).strict()
+
+const lateHoldSchema = z.object({
+  decision: z.enum(['hold', 'release']),
+  expectedArrivalAt: timestampSchema,
+  contactReference: z.string().trim().min(2).max(256),
+  reason: z.string().trim().min(2).max(500),
+  idempotencyKey: idempotencyKeySchema,
+}).strict()
+
 const depositIntentSchema = z.object({
   paymentIntentReference: z.string().trim().min(1).max(256),
   idempotencyKey: idempotencyKeySchema,
@@ -137,6 +155,8 @@ const reservationConfigSchema = z.object({
     enabled: z.boolean(),
     serviceScript: z.array(z.string().trim().min(1).max(160)).max(20),
   }).strict()).min(1).max(4),
+  lateHoldMinutes: z.number().int().min(0).max(240).default(30),
+  waitlistResponseMinutes: z.number().int().min(1).max(120).default(10),
 }).strict()
 
 const configUpdateSchema = z.object({
@@ -170,6 +190,8 @@ export function reservationsFor(state: RuntimeStateWithReservations) {
           { code: 'business', name: '商务接待', enabled: true, serviceScript: [] },
           { code: 'other', name: '其他', enabled: true, serviceScript: [] },
         ],
+        lateHoldMinutes: 30,
+        waitlistResponseMinutes: 10,
       },
     )
   }
@@ -348,6 +370,34 @@ export function registerReservationRoutes(app: FastifyInstance, repository: Runt
         if (input.action === 'cancel') return cancelReservation(domain, { ...command, reason: input.reason })
         return markReservationNoShow(domain, { ...command, reason: input.reason })
       })
+    })
+  })
+
+  app.put<{ Params: { reservationId: string } }>('/api/reservations/:reservationId', async (request) => {
+    const input = updateDetailsSchema.parse(request.body)
+    return repository.mutate((runtime) => {
+      const state = runtime as RuntimeStateWithReservations
+      const actor = requireConfiguredOperation(request, state, 'reservation.manage')
+      return mutateReservationState(state, (domain) => updateReservationDetails(domain, {
+        ...input,
+        reservationId: request.params.reservationId,
+        actorId: actor.actorId,
+        occurredAt: new Date().toISOString(),
+      }))
+    })
+  })
+
+  app.post<{ Params: { reservationId: string } }>('/api/reservations/:reservationId/late-hold', async (request) => {
+    const input = lateHoldSchema.parse(request.body)
+    return repository.mutate((runtime) => {
+      const state = runtime as RuntimeStateWithReservations
+      const actor = requireConfiguredOperation(request, state, 'reservation.manage')
+      return mutateReservationState(state, (domain) => decideLateReservationHold(domain, {
+        ...input,
+        reservationId: request.params.reservationId,
+        actorId: actor.actorId,
+        occurredAt: new Date().toISOString(),
+      }))
     })
   })
 

@@ -34,8 +34,9 @@ async function cloudEvidence() {
   ], true)
   if (!described.ok) return { configured: true, error: described.stderr || described.stdout }
   const document = JSON.parse(described.stdout)
+  const container = document.spec?.template?.spec?.containers?.[0] ?? {}
   const environment = Object.fromEntries(
-    (document.spec?.template?.spec?.containers?.[0]?.env ?? []).map((item) => [
+    (container.env ?? []).map((item) => [
       item.name,
       item.value ?? (item.valueFrom?.secretKeyRef ? `secret:${item.valueFrom.secretKeyRef.name}` : 'configured'),
     ]),
@@ -56,8 +57,12 @@ async function cloudEvidence() {
     service,
     region,
     revision: document.status?.latestReadyRevisionName ?? null,
+    image: container.image ?? null,
     publicUrl: publicUrl ?? null,
+    serviceAccount: document.spec?.template?.spec?.serviceAccountName ?? null,
+    cloudSqlInstances: document.spec?.template?.metadata?.annotations?.['run.googleapis.com/cloudsql-instances'] ?? null,
     maxScale: document.spec?.template?.metadata?.annotations?.['autoscaling.knative.dev/maxScale'] ?? null,
+    traffic: document.status?.traffic ?? [],
     environment,
     readiness,
   }
@@ -102,7 +107,7 @@ const evidence = {
 await mkdir('.runtime', { recursive: true })
 await writeFile('.runtime/release-evidence.json', `${JSON.stringify(evidence, null, 2)}\n`)
 const cloud = evidence.cloud.configured
-  ? `${evidence.cloud.project}/${evidence.cloud.region}/${evidence.cloud.service}，revision ${evidence.cloud.revision ?? 'unknown'}，仓储 ${evidence.cloud.environment?.MBOX_REPOSITORY ?? 'unknown'}`
+  ? `${evidence.cloud.project}/${evidence.cloud.region}/${evidence.cloud.service}，revision ${evidence.cloud.revision ?? 'unknown'}，镜像 ${evidence.cloud.image ?? 'unknown'}，仓储 ${evidence.cloud.environment?.MBOX_REPOSITORY ?? 'unknown'}`
   : '未提供云环境变量，本次未采集'
 const markdown = `# M-Box 自动发布证据
 
@@ -114,7 +119,7 @@ const markdown = `# M-Box 自动发布证据
 - 工作树干净：${evidence.git.clean ? '是' : '否'}
 - 全量检查：${evidence.verification.checkPassed ? 'PASS' : 'FAIL'}
 - 测试：${evidence.verification.testFilesPassed ?? 'unknown'}个文件，${evidence.verification.testsPassed ?? 'unknown'}项
-- 依赖审计：${evidence.dependencyAudit.commandSucceeded ? '已取得结果' : `未取得结果：${evidence.dependencyAudit.error}`}
+- 依赖审计：${evidence.dependencyAudit.commandSucceeded ? `${evidence.dependencyAudit.result?.metadata?.vulnerabilities?.total ?? 'unknown'}项漏洞` : `未取得结果：${evidence.dependencyAudit.error}`}
 - 云端：${cloud}
 
 机器可读证据：\`.runtime/release-evidence.json\`。

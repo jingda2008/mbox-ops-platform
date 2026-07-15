@@ -1,0 +1,369 @@
+/* Shared commercial UI layer: clear controls, compact operations, consistent hierarchy. */
+:root {
+  --control-line: #adb4aa;
+  --control-line-strong: #7f887c;
+  --panel-line: #d5d9d1;
+  --panel-shadow: 0 1px 2px rgba(30, 35, 29, .05);
+  --control-shadow: 0 1px 2px rgba(26, 31, 25, .09), inset 0 1px 0 rgba(255, 255, 255, .55);
+  --control-shadow-pressed: inset 0 2px 4px rgba(20, 24, 19, .2);
+  --focus-ring: rgba(32, 115, 148, .2);
+}
+
+/* Every command must read as an actionable control, including previously flat tabs. */
+button:not(.nav-backdrop) {
+  border: 1px solid var(--control-line) !important;
+  border-radius: 6px;
+  box-shadow: var(--control-shadow);
+}
+
+button:not(:disabled):not(.nav-backdrop):active,
+button:not(:disabled):not(.nav-backdrop).is-interaction-pressed {
+  box-shadow: var(--control-shadow-pressed) !important;
+}
+
+button:disabled {
+  border-color: #d4d8d1 !important;
+  box-shadow: none !important;
+  filter: saturate(.55);
+}
+
+button:focus-visible,
+[role="button"]:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.primary-button,
+.menu-submit-button,
+.guest-pay-button,
+.guest-submit-button,
+.public-reservation-submit {
+  border-color: #111510 !important;
+  background: #20251f;
+  color: #fff;
+  box-shadow: 0 1px 2px rgba(17, 20, 16, .24), inset 0 1px 0 rgba(255, 255, 255, .12);
+}
+
+.secondary-button,
+.icon-button,
+.menu-button {
+  border-color: var(--control-line) !important;
+  background: #fff;
+}
+
+.danger-button,
+.reservation-danger-button,
+button[class*="danger"] {
+  border-color: #b9353d !important;
+  box-shadow: 0 1px 2px rgba(150, 39, 47, .16), inset 0 1px 0 rgba(255, 255, 255, .3);
+}
+
+button.is-active,
+button[aria-selected="true"],
+button[aria-pressed="true"] {
+  border-color: #315f72 !important;
+  box-shadow: 0 0 0 1px rgba(49, 95, 114, .14), var(--control-shadow);
+}
+
+.nav-item {
+  border-color: #3c423a !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .035);
+}
+
+.nav-item.is-active {
+  border-color: #f1c83b !important;
+  box-shadow: 0 2px 7px rgba(0, 0, 0, .22), inset 0 1px 0 rgba(255, 255, 255, .38);
+}
+
+.nav-backdrop { border: 0 !important; box-shadow: none !important; }
+
+.segmented-tabs,
+.inventory-tabs,
+.commerce-tabs,
+.reservation-tabs,
+.collection-mode,
+.transfer-kind-control,
+.operation-area-picks,
+.waitlist-area-picks {
+  gap: 4px;
+}
+
+:is(.segmented-tabs, .inventory-tabs, .commerce-tabs, .reservation-tabs, .collection-mode, .transfer-kind-control) button {
+  min-height: 36px;
+  background: #f7f8f5;
+}
+
+:is(.segmented-tabs, .inventory-tabs, .commerce-tabs, .reservation-tabs, .collection-mode, .transfer-kind-control) button.is-active {
+  background: #fff;
+  color: #1d4f63;
+}
+
+.menu-categories button {
+  border-color: #c7ccc3 !important;
+  border-left-width: 3px !important;
+  background: rgba(255, 255, 255, .42);
+}
+
+.menu-categories button.is-active {
+  border-color: #d4ad20 !important;
+  background: #fff;
+}
+
+.menu-stepper button {
+  min-width: 32px;
+  border-color: #cbd0c7 !important;
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+.menu-add-button {
+  border-color: #111510 !important;
+  box-shadow: 0 2px 5px rgba(24, 29, 23, .25);
+}
+
+.role-home__metric,
+.role-home__todo,
+.role-home__navigation button {
+  border-color: #cbd0c7 !important;
+}
+
+.role-home__metric {
+  margin: 5px;
+  border-radius: 5px;
+  background: #fff;
+}
+
+.role-home__todo {
+  margin: 4px 6px;
+  border-left-width: 4px !important;
+  border-radius: 5px;
+  background: #fff;
+}
+
+.pilot-login-back,
+.pilot-session-bar button,
+.notice-bar button,
+.offline-guard-notice button,
+.waitlist-notice button {
+  min-height: 32px;
+  padding-inline: 9px;
+  background: rgba(255, 255, 255, .76);
+}
+
+input,
+select,
+textarea {
+  border-color: #b9c0b5 !important;
+  border-radius: 5px;
+  background: #fff;
+  box-shadow: inset 0 1px 2px rgba(28, 33, 27, .045);
+}
+
+input:hover,
+select:hover,
+textarea:hover { border-color: #8e978a !important; }
+
+/* Quiet surfaces and restrained shadows separate information without card clutter. */
+:is(
+  .floor-operations, .task-queue, .layout-view, .config-view, .benefit-view,
+  .role-home__header, .role-home__metrics, .role-home__section,
+  .payment-heading, .payment-section, .reservation-heading, .reservation-section,
+  .inventory-heading, .inventory-section, .master-section, .commerce-section,
+  .song-section, .menu-product, .menu-cart-panel
+) {
+  border-color: var(--panel-line);
+  box-shadow: var(--panel-shadow);
+}
+
+:is(
+  .section-heading, .role-home__section-heading, .payment-section-heading,
+  .reservation-section-heading, .inventory-section-heading, .commerce-section-heading,
+  .song-section-heading, .menu-cart-heading
+) {
+  background: #fafbf8;
+}
+
+:is(table) thead { background: #f0f2ed; }
+:is(table) th { color: #4f574e; font-size: 11px; }
+:is(table) tbody tr:hover { background: #f8faf6; }
+
+:is(
+  .status-pill, .reservation-status, .deposit-status, .count-chip,
+  .menu-product-status, .public-reservation-status
+) {
+  border: 1px solid rgba(74, 84, 72, .2);
+}
+
+/* Operational density: one viewport should contain the current decision and action. */
+.topbar {
+  min-height: 66px;
+  gap: 12px;
+  padding: 9px 16px;
+}
+
+.topbar h1 { margin-top: 1px; font-size: 20px; }
+.topbar .eyebrow { font-size: 10px; }
+.main-content { padding: 12px 16px 20px; }
+
+:is(
+  .role-home, .payment-view, .reservation-view, .inventory-view, .master-view,
+  .commerce-view, .song-view, .benefit-view, .config-view
+) { gap: 12px !important; }
+
+:is(
+  .role-home__header, .payment-heading, .reservation-heading, .inventory-heading,
+  .commerce-heading, .song-heading
+) {
+  min-height: 58px !important;
+  padding: 8px 12px !important;
+}
+
+:is(
+  .role-home__header, .payment-heading, .reservation-heading, .inventory-heading,
+  .commerce-heading, .song-heading
+) h2 { font-size: 18px !important; }
+
+.role-home__identity p { display: none; }
+.role-home__actor { padding-left: 12px; }
+
+:is(.metrics-grid, .role-home__metrics, .payment-metrics, .reservation-metrics, .inventory-metrics, .commerce-metrics) {
+  border-radius: 6px;
+}
+
+:is(.metric, .role-home__metric, .payment-metric, .reservation-metric, .inventory-metric, .commerce-metric) {
+  min-height: 64px !important;
+  padding: 8px 11px !important;
+}
+
+:is(.metric, .role-home__metric, .payment-metric, .reservation-metric, .inventory-metric, .commerce-metric) strong {
+  font-size: 19px;
+}
+
+.role-home__metric-icon,
+.metric-icon { width: 34px; height: 34px; }
+.role-home__work-grid, .live-grid { gap: 12px; margin-top: 12px; }
+
+:is(
+  .section-heading, .role-home__section-heading, .payment-section-heading,
+  .reservation-section-heading, .inventory-section-heading, .commerce-section-heading,
+  .song-section-heading, .member-section-heading
+) {
+  min-height: 48px !important;
+  padding: 7px 12px !important;
+}
+
+:is(
+  .section-heading, .role-home__section-heading, .payment-section-heading,
+  .reservation-section-heading, .inventory-section-heading, .commerce-section-heading,
+  .song-section-heading
+) h2,
+:is(
+  .section-heading, .role-home__section-heading, .payment-section-heading,
+  .reservation-section-heading, .inventory-section-heading, .commerce-section-heading,
+  .song-section-heading
+) h3 { font-size: 15px !important; }
+
+:is(
+  .role-home__empty, .payment-empty, .reservation-empty, .inventory-empty,
+  .commerce-empty, .menu-cart-empty, .member-empty, .waitlist-empty,
+  .guest-empty, .offline-empty, .public-reservation-empty
+) {
+  min-height: 58px !important;
+  padding: 10px 12px !important;
+  gap: 7px !important;
+}
+
+:is(
+  .role-home__empty, .payment-empty, .reservation-empty, .inventory-empty,
+  .commerce-empty, .menu-cart-empty, .member-empty, .waitlist-empty,
+  .guest-empty, .offline-empty, .public-reservation-empty
+) svg { width: 19px; height: 19px; }
+
+:is(.inventory-guidance, .pos-guidance, .assisted-payment-guidance) {
+  margin: 8px !important;
+  padding: 9px 11px !important;
+  gap: 5px !important;
+  border-radius: 5px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+:is(.inventory-guidance, .pos-guidance, .assisted-payment-guidance) p {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.menu-ordering-workspace { min-height: calc(100vh - 110px); }
+.menu-workspace-header { min-height: 56px; padding: 7px 12px; }
+.menu-workspace-header strong { font-size: 16px; }
+.menu-categories { padding: 9px 6px; }
+.menu-categories button { min-height: 40px; }
+.menu-product-grid { gap: 10px; padding: 10px; }
+.menu-product-info { gap: 6px; padding: 11px; }
+.menu-product-info > div strong { font-size: 15px; }
+.menu-product-info footer b { font-size: 18px; }
+.menu-cart-panel { padding: 11px; }
+.menu-cart-line { min-height: 58px; }
+.menu-cart-total { min-height: 50px; }
+.menu-submit-hint { padding-top: 5px; line-height: 1.3; }
+
+.member-header { height: 54px; }
+.member-identity { min-height: 94px; padding: 12px 17px; border-bottom-width: 4px; }
+.member-identity-avatar { width: 44px; height: 44px; font-size: 18px; }
+.member-identity h1 { font-size: 19px; }
+.member-benefit-summary > div { min-height: 58px; }
+.member-benefit-item { min-height: 82px; padding: 10px 15px; }
+.member-message-status { min-height: 44px; margin-top: 5px; }
+
+.notice-bar,
+.error-banner,
+.offline-guard-notice { min-height: 38px; padding-block: 5px; }
+.connectivity-banner { min-height: 42px; }
+
+@media (max-width: 900px) {
+  button:not(.nav-backdrop) { min-height: 40px; }
+  .main-content { padding: 10px; }
+  .topbar { min-height: 60px; padding: 8px 10px; }
+  .role-home__work-grid, .live-grid { gap: 10px; }
+}
+
+@media (max-width: 700px) {
+  .topbar h1 { font-size: 18px; }
+  .topbar .eyebrow { display: none; }
+  .main-content { padding: 8px; }
+
+  :is(
+    .role-home, .payment-view, .reservation-view, .inventory-view, .master-view,
+    .commerce-view, .song-view, .benefit-view, .config-view
+  ) { gap: 8px !important; }
+
+  :is(
+    .role-home__header, .payment-heading, .reservation-heading, .inventory-heading,
+    .commerce-heading, .song-heading
+  ) { min-height: 54px !important; padding: 7px 9px !important; }
+
+  :is(.segmented-tabs, .inventory-tabs, .commerce-tabs, .reservation-tabs) {
+    padding: 5px !important;
+    overflow-x: auto;
+  }
+
+  :is(.segmented-tabs, .inventory-tabs, .commerce-tabs, .reservation-tabs) button {
+    min-width: max-content;
+  }
+
+  .menu-categories button {
+    border-left-width: 1px !important;
+    border-bottom-width: 3px !important;
+  }
+
+  .menu-product-grid { gap: 8px; padding: 8px; }
+  .menu-product-info { padding: 9px; }
+  .menu-product-info p { line-height: 1.35; }
+}
+
+@media (max-width: 430px) {
+  .menu-product-image { min-height: 112px; }
+  .menu-product-info > div span { display: none; }
+  .member-benefit-item p { line-height: 1.25; }
+}

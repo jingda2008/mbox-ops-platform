@@ -20,21 +20,32 @@ export const createTablePaymentIntentSchema = z.object({
   tableSessionId: z.string().trim().min(1),
   channel: z.enum(['cash', 'wechat_mock', 'physical_pos', 'postar']),
   allocation: paymentAllocationSchema.default({ mode: 'all' }),
-  providerPayment: z.object({
-    payWay: z.enum(['wechat', 'alipay']),
-    payerId: z.string().trim().min(1).max(128),
-    wxAppid: z.string().trim().min(1).max(64).optional(),
-  }).strict().optional(),
+  providerPayment: z.union([
+    z.object({
+      presentation: z.literal('jsapi').default('jsapi'),
+      payWay: z.enum(['wechat', 'alipay']),
+      payerId: z.string().trim().min(1).max(128),
+      wxAppid: z.string().trim().min(1).max(64).optional(),
+    }).strict(),
+    z.object({ presentation: z.literal('qr') }).strict(),
+    z.object({
+      presentation: z.literal('barcode'),
+      customerAuthCode: z.string().trim().regex(
+        /^(?:1[0-5]\d{16}|(?:2[5-9]|30)\d{14,22}|62\d{17})$/,
+        '仅支持有效的微信、支付宝或云闪付付款码',
+      ),
+    }).strict(),
+  ]).optional(),
   deviceId: z.string().trim().min(1).default('cashier-web'),
   idempotencyKey: z.string().trim().min(8).max(128),
 }).superRefine((input, context) => {
   if (input.channel === 'postar' && !input.providerPayment) {
-    context.addIssue({ code: 'custom', path: ['providerPayment'], message: '星驿下单必须提供支付方式和付款人标识' })
+    context.addIssue({ code: 'custom', path: ['providerPayment'], message: '星驿下单必须提供JSAPI、客扫支付码或付款码方式' })
   }
   if (input.channel !== 'postar' && input.providerPayment) {
     context.addIssue({ code: 'custom', path: ['providerPayment'], message: '非星驿渠道不能携带星驿下单参数' })
   }
-  if (input.providerPayment?.payWay === 'wechat' && !input.providerPayment.wxAppid) {
+  if (input.providerPayment?.presentation === 'jsapi' && input.providerPayment.payWay === 'wechat' && !input.providerPayment.wxAppid) {
     context.addIssue({ code: 'custom', path: ['providerPayment', 'wxAppid'], message: '微信JSAPI下单必须提供wxAppid' })
   }
 })
@@ -80,15 +91,16 @@ const settlementAmountsSchema = z.object({
   physical_pos: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   wechat: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   alipay: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  unionpay: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
 }).strict()
 
 export const submitCashierHandoverSchema = z.object({
   confirmedActualAmounts: settlementAmountsSchema,
   issues: z.array(z.object({
-    channel: z.enum(['cash', 'physical_pos', 'wechat', 'alipay']),
+    channel: z.enum(['cash', 'physical_pos', 'wechat', 'alipay', 'unionpay']),
     reason: z.string().trim().min(2).max(300),
     nextDayOwnerId: z.string().trim().min(1).max(128),
-  }).strict()).max(4).default([]),
+  }).strict()).max(5).default([]),
   note: z.string().trim().max(500).optional(),
   deviceId: z.string().trim().min(1).default('cashier-web'),
   idempotencyKey: z.string().trim().min(8).max(128),

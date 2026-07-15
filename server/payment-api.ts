@@ -40,6 +40,9 @@ import {
   type PaymentProviderResolver,
 } from './payment-provider.js'
 import { PostgresOptimisticConcurrencyError } from './postgres-repository.js'
+import { submitOrder } from './order-domain.js'
+import { consumeManagedInventoryForSubmittedOrder } from './inventory-order-integration.js'
+import { completeAwaitingOrderOnOrder } from './proactive-service.js'
 
 const ACTIVE_ALLOCATION_STATUSES = new Set<PaymentIntentStatus>([
   'pending',
@@ -50,6 +53,19 @@ const ACTIVE_ALLOCATION_STATUSES = new Set<PaymentIntentStatus>([
 
 function deterministicId(prefix: string, key: string) {
   return `${prefix}_${createHash('sha256').update(key).digest('hex').slice(0, 32)}`
+}
+
+function paymentSelectionFingerprint(
+  allocation: PaymentAllocationInput,
+  providerPayment: ReturnType<typeof createTablePaymentIntentSchema.parse>['providerPayment'],
+) {
+  const safeProviderPayment = providerPayment?.presentation === 'barcode'
+    ? {
+        presentation: providerPayment.presentation,
+        customerAuthCodeSha256: createHash('sha256').update(providerPayment.customerAuthCode).digest('hex'),
+      }
+    : providerPayment ?? null
+  return JSON.stringify({ allocation, providerPayment: safeProviderPayment })
 }
 
 function deterministicProviderId(prefix: string, key: string) {
@@ -209,6 +225,37 @@ async function persistExternalResult<T>(repository: RuntimeRepository, mutation:
   throw new Error('外部支付结果未能持久化')
 }
 
+function submitOrdersAfterVerifiedPayment(
+  state: Awaited<ReturnType<RuntimeRepository['read']>>,
+  paymentIntentId: string,
+) {
+  const intent = state.paymentDomain.paymentIntents.find((item) => item.id === paymentIntentId)
+  if (!intent || intent.status !== 'succeeded' || !intent.paidAt) return
+  const tableSession = state.songState.tableSessions.find((item) => item.id === intent.tableSessionId)
+  for (const orderId of intent.orderIds) {
+    const order = state.orderDomain.orders.find((item) => item.id === orderId)
+    if (!order || order.status !== 'draft') continue
+    const submitted = submitOrder(state.orderDomain, {
+      orderId: order.id,
+      submittedBy: intent.createdBy,
+      occurredAt: intent.paidAt,
+      idempotencyKey: `verified-payment-submit:${intent.id}:${order.id}`,
+    })
+    consumeManagedInventoryForSubmittedOrder(state.inventoryDomain, submitted, {
+      actorId: intent.createdBy,
+      businessDate: state.store.businessDate,
+      occurredAt: intent.paidAt,
+    })
+    if (tableSession) {
+      completeAwaitingOrderOnOrder(state, tableSession.tableId, order.id, intent.createdBy, new Date(intent.paidAt))
+    }
+    audit(state, intent.createdBy, 'order.submitted_after_verified_payment.v1', 'order', order.id, {
+      paymentIntentId: intent.id,
+      channel: intent.channel,
+    })
+  }
+}
+
 export function registerPaymentRoutes(
   app: FastifyInstance,
   repository: RuntimeRepository,
@@ -227,7 +274,7 @@ export function registerPaymentRoutes(
       const prepared = await repository.mutate((state) => {
         const actor = requireConfiguredOperation(request, state, 'payment.intent.create')
         requireTableSessionDataScope(request, state, input.tableSessionId, 'payment.intent.create')
-        const selectionFingerprint = JSON.stringify({ allocation: input.allocation, providerPayment: input.providerPayment ?? null })
+        const selectionFingerprint = paymentSelectionFingerprint(input.allocation, input.providerPayment)
         const existingRecord = state.paymentDomain.idempotencyRecords.find((record) => record.key === input.idempotencyKey)
         let result
         if (existingRecord) {
@@ -259,7 +306,9 @@ export function registerPaymentRoutes(
             amount,
             currency: 'CNY',
             channel: input.channel,
-            settlementChannel: input.channel === 'postar' ? input.providerPayment?.payWay : undefined,
+            settlementChannel: input.channel === 'postar' && input.providerPayment?.presentation === 'jsapi'
+              ? input.providerPayment.payWay
+              : undefined,
             merchantId: providerRuntime?.merchantId ?? 'mbox-lujiazui-demo',
             createdBy: actor.actorId,
             deviceId: input.deviceId,
@@ -295,13 +344,15 @@ export function registerPaymentRoutes(
             amount: result.amount,
             currency: result.currency,
             expiresAt: result.expiresAt,
-            payWay: providerPayment.payWay,
-            payerId: providerPayment.payerId,
+            presentation: providerPayment.presentation,
+            payWay: providerPayment.presentation === 'jsapi' ? providerPayment.payWay : undefined,
+            payerId: providerPayment.presentation === 'jsapi' ? providerPayment.payerId : undefined,
+            customerAuthCode: providerPayment.presentation === 'barcode' ? providerPayment.customerAuthCode : undefined,
             clientIp: request.ip,
             callbackUrl: providerRuntime.callbackUrl,
             operatorId: actor.actorId,
             remark: `MBOX桌次${input.tableSessionId}`.slice(0, 120),
-            wxAppid: providerPayment.wxAppid,
+            wxAppid: providerPayment.presentation === 'jsapi' ? providerPayment.wxAppid : undefined,
           } : null,
         }
       })
@@ -350,6 +401,7 @@ export function registerPaymentRoutes(
           secrets: runtime.secrets,
           callback: { rawBody, headers, receivedAt: new Date().toISOString() },
         })
+        submitOrdersAfterVerifiedPayment(state, notification.paymentIntentId)
         if (state.paymentDomain.paymentNotifications.length !== notificationCount) {
           audit(state, `provider:${request.params.provider}`, 'payment.provider.callback_verified.v1', 'paymentNotification', notification.id, {
             paymentIntentId: notification.paymentIntentId,
@@ -394,6 +446,7 @@ export function registerPaymentRoutes(
             receivedAt: new Date().toISOString(),
             idempotencyKey: input.idempotencyKey,
           })
+          submitOrdersAfterVerifiedPayment(state, intent.id)
           if (state.paymentDomain.idempotencyRecords.length !== before) {
             audit(state, actor.actorId, 'payment.provider.queried.v1', 'paymentQuery', query.id, {
               paymentIntentId: intent.id,

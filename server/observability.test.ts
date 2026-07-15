@@ -10,6 +10,7 @@ describe('observability', () => {
     expect(response.statusCode).toBe(200)
     expect(response.json()).toMatchObject({ status: 'ready', repository: 'ok' })
     expect(response.headers['x-content-type-options']).toBe('nosniff')
+    expect(response.headers['permissions-policy']).toBe('camera=(self), microphone=(), geolocation=()')
     await app.close()
   })
 

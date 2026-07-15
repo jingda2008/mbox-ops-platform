@@ -14,6 +14,10 @@ import type {
 } from './shared/payment-contracts'
 
 export type PaymentCollectionChannel = 'cash' | 'wechat_mock' | 'physical_pos' | 'postar'
+export type ProviderPaymentMethod =
+  | { presentation: 'qr' }
+  | { presentation: 'barcode'; customerAuthCode: string }
+  | { presentation: 'jsapi'; payWay: 'wechat' | 'alipay'; payerId: string; wxAppid?: string }
 
 function idempotencyKey(prefix: string) {
   return `${prefix}-${crypto.randomUUID()}`
@@ -44,7 +48,7 @@ export function createTablePaymentIntent(
   tableSessionId: string,
   channel: PaymentCollectionChannel,
   allocation: PaymentAllocationInput,
-  providerPayment?: { payWay: 'wechat' | 'alipay'; payerId: string; wxAppid?: string },
+  providerPayment?: ProviderPaymentMethod,
 ) {
   return paymentRequest<PaymentIntent>('/api/payments/table-intents', {
     method: 'POST',

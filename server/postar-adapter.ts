@@ -72,6 +72,13 @@ function assertRefundMetadata(merchantId: string, tag: string) {
   }
 }
 
+function refundTagForChannel(channel: ProviderRefundRequest['settlementChannel']) {
+  if (channel === 'alipay') return '1' as const
+  if (channel === 'wechat') return '2' as const
+  if (channel === 'unionpay') return '9' as const
+  return undefined
+}
+
 function compactJson(value: unknown) {
   const serialized = JSON.stringify(value)
   if (serialized === undefined) throw new Error('星驿签名值不能序列化')
@@ -196,9 +203,7 @@ function parseSignedResponse(response: PostarHttpResponse, publicKey: string) {
   verifyEncryptedDigest(parsed as PostarTopLevelPayload, publicKey)
   const code = requiredString(parsed, 'code', '同步响应code')
   const msg = requiredString(parsed, 'msg', '同步响应msg')
-  const data = parsed.data
-  if (data !== undefined) assertObject(data, '星驿同步响应data')
-  return { ...parsed, code, msg, data } as PostarSynchronousResponse
+  return { ...parsed, code, msg, data: parsed.data as PostarJsonValue | undefined } as PostarSynchronousResponse
 }
 
 function parseMoney(value: unknown, label: string, options: { allowNegative?: boolean } = {}) {
@@ -292,9 +297,24 @@ function refundStatus(value: string): ProviderRefundObservation['status'] {
   }
 }
 
-function requireData(response: PostarSynchronousResponse) {
+function requireDataObject(response: PostarSynchronousResponse) {
   if (!response.data) throw new Error('星驿同步响应缺少data')
+  assertObject(response.data, '星驿同步响应data')
   return response.data as Record<string, unknown>
+}
+
+function requireDataString(response: PostarSynchronousResponse) {
+  if (typeof response.data !== 'string' || !response.data.trim()) {
+    throw new Error('星驿同步响应data必须是非空链接')
+  }
+  return response.data
+}
+
+function settlementChannel(value: unknown) {
+  if (value === '1') return 'alipay' as const
+  if (value === '2') return 'wechat' as const
+  if (value === '9') return 'unionpay' as const
+  return undefined
 }
 
 function assertAgency(data: Record<string, unknown>, agencyId: string) {
@@ -333,7 +353,7 @@ function parsePaymentObservation(
   if (!['000000', '222222', '555555'].includes(response.code)) {
     throw new Error(`星驿支付查询返回不可映射状态码: ${response.code} ${response.msg}`)
   }
-  const data = requireData(response)
+  const data = requireDataObject(response)
   assertAgency(data, agencyId)
   const paymentIntentId = requiredString(data, 'threeOrderNo')
   if (paymentIntentId !== request.paymentIntentId) throw new Error('星驿支付查询三方订单号不匹配')
@@ -351,6 +371,7 @@ function parsePaymentObservation(
     amount: parsePositiveMoney(data.txamt, '星驿支付金额'),
     currency: 'CNY',
     merchantId: request.merchantId,
+    settlementChannel: settlementChannel(data.payChannel),
     occurredAt: parsePostarDateTime(requiredString(data, 'orderTime'), '星驿支付完成时间'),
     paymentIntentId,
     providerTransactionId: requiredString(data, 'orderNo'),
@@ -386,7 +407,7 @@ function parseRefundQueryObservation(
   if (response.code !== '000000') {
     throw new Error(`星驿退款查询返回不可安全映射状态码: ${response.code} ${response.msg}`)
   }
-  const data = requireData(response)
+  const data = requireDataObject(response)
   assertAgency(data, agencyId)
   assertMerchant(data, request.merchantId)
   const refundAmount = Math.abs(parseMoney(data.refundAmt, '星驿退款金额', { allowNegative: true }))
@@ -495,15 +516,21 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
     if (!ALPHANUMERIC_ORDER_ID.test(request.paymentIntentId)) {
       throw new Error('星驿支付单号必须为1至40位大小写字母或数字')
     }
-    if (request.currency !== 'CNY') throw new Error('星驿JSAPI支付仅支持CNY')
+    if (request.currency !== 'CNY') throw new Error('星驿基础支付仅支持CNY')
     if (!Number.isSafeInteger(request.amount) || request.amount <= 0) throw new Error('星驿支付金额必须为正整数分')
     if (!request.merchantId.trim()) throw new Error('星驿支付商户号不能为空')
-    if (!request.payerId.trim()) throw new Error('星驿支付付款人标识不能为空')
-    if (!request.clientIp.trim()) throw new Error('星驿支付消费者IP不能为空')
+    if (request.presentation === 'jsapi' && !request.payerId?.trim()) throw new Error('星驿JSAPI支付付款人标识不能为空')
+    if (request.presentation === 'jsapi' && !request.payWay) throw new Error('星驿JSAPI支付方式不能为空')
+    if (request.presentation === 'jsapi' && !request.clientIp.trim()) throw new Error('星驿JSAPI支付消费者IP不能为空')
+    if (request.presentation === 'barcode' && !request.clientIp.trim()) throw new Error('星驿付款码支付交易IP不能为空')
+    if (request.presentation === 'barcode' && !request.customerAuthCode?.trim()) throw new Error('星驿付款码不能为空')
+    if (request.presentation === 'barcode' && !/^(?:1[0-5]\d{16}|(?:2[5-9]|30)\d{14,22}|62\d{17})$/.test(request.customerAuthCode ?? '')) {
+      throw new Error('星驿付款码格式无效')
+    }
     if (!request.operatorId.trim()) throw new Error('星驿支付操作员不能为空')
     const callbackUrl = new URL(request.callbackUrl)
     if (callbackUrl.protocol !== 'https:') throw new Error('星驿异步通知地址必须使用HTTPS')
-    if (request.payWay === 'wechat' && !request.wxAppid?.trim()) throw new Error('星驿微信支付必须提供wxAppid')
+    if (request.presentation === 'jsapi' && request.payWay === 'wechat' && !request.wxAppid?.trim()) throw new Error('星驿微信支付必须提供wxAppid')
     const expiresInMinutes = Math.ceil((Date.parse(request.expiresAt) - this.now().getTime()) / 60_000)
     if (!Number.isInteger(expiresInMinutes) || expiresInMinutes < 1 || expiresInMinutes > 15) {
       throw new Error('星驿支付有效期必须为1至15分钟')
@@ -514,29 +541,97 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
       this.agencyIdSecretName,
       this.publicKeySecretName,
     )
+    const commonPayload = {
+      agetId: agencyId,
+      asyncNotify: callbackUrl.toString(),
+      custId: request.merchantId,
+      orderNo: request.paymentIntentId,
+      outTime: String(expiresInMinutes),
+      remark: request.remark,
+      timeStamp: formatPostarTimestamp(this.now()),
+      txamt: String(request.amount),
+      version: VERSION,
+    }
+    if (request.presentation === 'qr') {
+      const response = parseSignedResponse(await this.options.httpClient.post({
+        body: signedRequestBody({
+          ...commonPayload,
+          payType: '00',
+          title: request.remark.slice(0, 30),
+        }, publicKey),
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+        url: `${this.baseUrl}${POSTAR_ENDPOINTS.createQrPayment}`,
+      }), publicKey)
+      if (response.code !== '000000') throw new Error(`星驿聚合支付码下单失败: ${response.code} ${response.msg}`)
+      const qrCodeUrl = requireDataString(response)
+      if (new URL(qrCodeUrl).protocol !== 'https:') throw new Error('星驿聚合支付码链接必须使用HTTPS')
+      return {
+        paymentIntentId: request.paymentIntentId,
+        providerTransactionId: null,
+        status: 'processing',
+        amount: request.amount,
+        currency: request.currency,
+        merchantId: request.merchantId,
+        occurredAt: this.now().toISOString(),
+        paymentPayload: { presentation: 'qr', qrCodeUrl, expiresAt: request.expiresAt },
+      }
+    }
+
+    if (request.presentation === 'barcode') {
+      const response = parseSignedResponse(await this.options.httpClient.post({
+        body: signedRequestBody({
+          ...commonPayload,
+          code: request.customerAuthCode,
+          operator: request.operatorId,
+          title: request.remark.slice(0, 30),
+          tradingIp: request.clientIp,
+          type: 'A',
+        }, publicKey),
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+        url: `${this.baseUrl}${POSTAR_ENDPOINTS.createBarcodePayment}`,
+      }), publicKey)
+      if (!['000000', '222222'].includes(response.code)) {
+        throw new Error(`星驿付款码支付失败: ${response.code} ${response.msg}`)
+      }
+      const data = requireDataObject(response)
+      assertAgency(data, agencyId)
+      const returnedIntentId = requiredString(data, 'threeOrderNo')
+      if (returnedIntentId !== request.paymentIntentId) throw new Error('星驿付款码响应三方单号不匹配')
+      const returnedAmount = optionalString(data, 'txamt')
+      if (returnedAmount !== undefined && parsePositiveMoney(returnedAmount, '星驿付款码响应金额') !== request.amount) {
+        throw new Error('星驿付款码响应金额不匹配')
+      }
+      const orderTime = optionalString(data, 'orderTime')
+      return {
+        paymentIntentId: request.paymentIntentId,
+        providerTransactionId: requiredString(data, 'orderNo'),
+        status: 'processing',
+        amount: request.amount,
+        currency: request.currency,
+        merchantId: request.merchantId,
+        occurredAt: orderTime ? parsePostarDateTime(orderTime, '星驿付款码订单时间') : this.now().toISOString(),
+        paymentPayload: {
+          presentation: 'barcode',
+          providerState: response.code === '000000' ? 'accepted' : 'processing',
+        },
+      }
+    }
+
     const response = parseSignedResponse(await this.options.httpClient.post({
       body: signedRequestBody({
-        agetId: agencyId,
-        asyncNotify: callbackUrl.toString(),
-        custId: request.merchantId,
+        ...commonPayload,
         ip: request.clientIp,
         openid: request.payerId,
         operator: request.operatorId,
-        orderNo: request.paymentIntentId,
-        outTime: String(expiresInMinutes),
         payWay: request.payWay === 'wechat' ? '1' : '2',
-        remark: request.remark,
         sceneType: '02',
-        timeStamp: formatPostarTimestamp(this.now()),
-        txamt: String(request.amount),
-        version: VERSION,
         wxAppid: request.payWay === 'wechat' ? request.wxAppid : undefined,
       }, publicKey),
       headers: { 'content-type': 'application/json; charset=utf-8' },
       url: `${this.baseUrl}${POSTAR_ENDPOINTS.createJsapiPayment}`,
     }), publicKey)
     if (response.code !== '000000') throw new Error(`星驿下单失败: ${response.code} ${response.msg}`)
-    const data = requireData(response)
+    const data = requireDataObject(response)
     assertAgency(data, agencyId)
     const returnedIntentId = requiredString(data, 'threeOrderNo')
     if (returnedIntentId !== request.paymentIntentId) throw new Error('星驿下单响应三方单号不匹配')
@@ -549,6 +644,7 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
     if (request.payWay === 'wechat') {
       if (requiredString(data, 'getPrepayId') !== '1') throw new Error('星驿微信预下单未返回可支付状态')
       paymentPayload = {
+        presentation: 'jsapi',
         appId: requiredString(data, 'jsapiAppid'),
         timeStamp: requiredString(data, 'jsapiTimestamp'),
         nonceStr: requiredString(data, 'jsapiNoncestr'),
@@ -558,7 +654,7 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
       }
     } else {
       if (requiredString(data, 'getprepayid') !== '1') throw new Error('星驿支付宝预下单未返回可支付状态')
-      paymentPayload = { tradeNO: requiredString(data, 'prepayid') }
+      paymentPayload = { presentation: 'jsapi', tradeNO: requiredString(data, 'prepayid') }
     }
 
     return {
@@ -590,6 +686,7 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
       amount: parsePositiveMoney(payload.TXAMT, '星驿回调支付金额'),
       currency: 'CNY',
       merchantId: requiredString(payload, 'CUST_ID'),
+      settlementChannel: settlementChannel(payload.PAY_CHANNEL),
       occurredAt: parsePostarDateTime(requiredString(payload, 'ORDER_TIME'), '星驿回调订单时间'),
       paymentIntentId: requiredString(payload, 'THREE_ORDER_NO'),
       providerEventId: `postar:${digest}`,
@@ -634,7 +731,8 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
     if (request.currency !== 'CNY') throw new Error('星驿普通退款仅支持CNY')
     if (!Number.isSafeInteger(request.amount) || request.amount <= 0) throw new Error('星驿退款金额必须为正整数分')
     const metadata = await this.options.metadataSource.getRefundMetadata(request)
-    assertRefundMetadata(metadata.merchantId, metadata.tag)
+    const refundTag = refundTagForChannel(request.settlementChannel) ?? metadata.tag
+    assertRefundMetadata(metadata.merchantId, refundTag)
     const { agencyId, publicKey } = await getCredentials(
       context,
       this.agencyIdSecretName,
@@ -647,7 +745,7 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
         orderNo: request.refundId,
         reOrderNo: request.providerTransactionId,
         refundAmount: String(request.amount),
-        tag: metadata.tag,
+        tag: refundTag,
         timeStamp: formatPostarTimestamp(this.now()),
         version: VERSION,
       }, publicKey),
@@ -656,7 +754,7 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
     }), publicKey)
     const occurredAt = this.now().toISOString()
     if (response.code !== '000000') return refundFailure(request, response, occurredAt)
-    const data = requireData(response)
+    const data = requireDataObject(response)
     assertAgency(data, agencyId)
     assertMerchant(data, metadata.merchantId)
     const returnedRefundId = requiredString(data, 'threeOrderNo')

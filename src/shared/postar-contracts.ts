@@ -15,10 +15,11 @@ export const POSTAR_BASE_URLS: Readonly<Record<PostarEnvironment, string>> = {
 export const POSTAR_ENDPOINTS = {
   closeTerminalOrder: '/yyfsevr/order/closeCashierPay',
   createJsapiPayment: '/yyfsevr/order/pay',
+  createQrPayment: '/yyfsevr/order/getCodeUrl',
+  createBarcodePayment: '/yyfsevr/order/scanByMerchant',
   queryPayment: '/yyfsevr/order/orderQuery',
   queryRefund: '/yyfsevr/order/refundQuery',
   refund: '/yyfsevr/order/refund',
-  terminalOrder: '/yyfsevr/order/cashierPay',
 } as const
 
 export type PostarRefundTag = '1' | '2' | '9' | '11' | '12' | '30'
@@ -94,7 +95,7 @@ export type PostarTopLevelPayload = Readonly<Record<string, PostarJsonValue | un
 export interface PostarSynchronousResponse {
   code: string
   msg: string
-  data?: Readonly<Record<string, PostarJsonValue>>
+  data?: PostarJsonValue
   /** Required by the safety specification but omitted from the endpoint response schemas. */
   sign: string
 }

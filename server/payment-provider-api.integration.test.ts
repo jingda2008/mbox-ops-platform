@@ -38,17 +38,19 @@ describe('payment provider API mainline', () => {
       provider: 'postar',
       createPayment: vi.fn(async (request) => {
         expect(repositoryMutationActive).toBe(false)
+        expect(request.presentation).toBe('barcode')
+        expect(request.customerAuthCode).toBe('101234567890123456')
         providerIntentId = request.paymentIntentId
         return {
           paymentIntentId: request.paymentIntentId, providerTransactionId: 'POSTAR-TX-001', status: 'processing' as const,
           amount: request.amount, currency: request.currency, merchantId: request.merchantId,
-          occurredAt: now(), paymentPayload: { package: 'prepay_id=verified-provider-order' },
+          occurredAt: now(), paymentPayload: { presentation: 'barcode', providerState: 'processing' },
         }
       }),
       verifyPaymentCallback: vi.fn(async () => ({
         paymentIntentId: providerIntentId, providerEventId: 'POSTAR-EVENT-001', providerTransactionId: 'POSTAR-TX-001',
         status: 'succeeded' as const, amount: product.listPriceAmount, currency: 'CNY', merchantId: 'POSTAR-MERCHANT-001',
-        occurredAt: now(),
+        settlementChannel: 'wechat' as const, occurredAt: now(),
       })),
       queryPayment: vi.fn(async () => ({
         paymentIntentId: providerIntentId, providerTransactionId: 'POSTAR-TX-001', status: 'succeeded' as const,
@@ -106,7 +108,7 @@ describe('payment provider API mainline', () => {
       method: 'POST', url: '/api/payments/table-intents',
       payload: {
         tableSessionId: tableSession.id, channel: 'postar', allocation: { mode: 'items', items: [{ orderId: 'provider-api-order', orderItemId: 'provider-api-line', quantity: 1 }] },
-        providerPayment: { payWay: 'wechat', payerId: 'openid-provider-test', wxAppid: 'wx-provider-test' },
+        providerPayment: { presentation: 'barcode', customerAuthCode: '101234567890123456' },
         deviceId: 'cashier-test', idempotencyKey: 'provider-api-intent-0001',
       },
     })
@@ -114,8 +116,9 @@ describe('payment provider API mainline', () => {
     expect(intentResponse.json()).toMatchObject({
       status: 'processing',
       channelTransactionId: 'POSTAR-TX-001',
-      settlementChannel: 'wechat',
+      providerPaymentPayload: { presentation: 'barcode', providerState: 'processing' },
     })
+    expect(JSON.stringify(await repository.read())).not.toContain('101234567890123456')
     expect(intentResponse.json().status).not.toBe('succeeded')
 
     const callbackResponse = await app.inject({
@@ -123,6 +126,9 @@ describe('payment provider API mainline', () => {
     })
     expect(callbackResponse.statusCode, callbackResponse.body).toBe(200)
     expect(callbackResponse.json()).toEqual({ rspCod: '000000', rspMsg: 'success' })
+    expect((await repository.read()).paymentDomain.paymentIntents[0]).toMatchObject({
+      status: 'succeeded', channelTransactionId: 'POSTAR-TX-001', settlementChannel: 'wechat',
+    })
 
     const queryResponse = await app.inject({
       method: 'POST', url: `/api/payments/${providerIntentId}/provider-query`,

@@ -67,6 +67,10 @@
 .assisted-payment-dialog > header > div { display: grid; gap: 3px; }
 .assisted-payment-dialog > header span { color: var(--ink-soft); font-size: 12px; }
 .assisted-payment-dialog > header strong { font-size: 25px; }
+.assisted-payment-methods { display: grid; grid-template-columns: 1fr 1fr; margin-top: 14px; border: 1px solid var(--line-strong); border-radius: 5px; overflow: hidden; }
+.assisted-payment-methods button { min-height: 42px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 0; border-right: 1px solid var(--line-strong); background: #fff; color: var(--ink); font-size: 12px; font-weight: 800; }
+.assisted-payment-methods button:last-child { border-right: 0; }
+.assisted-payment-methods button.is-active { background: #244f62; color: #fff; }
 .assisted-payment-qr { width: min(310px, 78vw); aspect-ratio: 1; margin: 16px auto; padding: 10px; border: 1px solid var(--line); background: #fff; }
 .assisted-payment-qr img { width: 100%; height: 100%; display: block; }
 .assisted-payment-guidance { display: grid; gap: 7px; padding: 12px; background: #f4f5f1; }
@@ -77,6 +81,9 @@
 .assisted-payment-success { min-height: 270px; display: grid; place-items: center; align-content: center; gap: 10px; color: var(--success); text-align: center; }
 .assisted-payment-success strong { font-size: 22px; }
 .assisted-payment-success span { color: var(--ink-soft); font-size: 12px; }
+.assisted-payment-processing { min-height: 270px; display: grid; place-items: center; align-content: center; gap: 10px; color: #176d96; text-align: center; }
+.assisted-payment-processing strong { font-size: 21px; }
+.assisted-payment-processing span { color: var(--ink-soft); font-size: 12px; }
 @media (max-width: 1000px) { .commerce-grid { grid-template-columns: 1fr; } .kds-section { border-right: 0; border-bottom: 1px solid var(--line); } .workstation-badge { display: none; } }
 @media (max-width: 1180px) { .kds-row { grid-template-columns: 82px minmax(160px, 1fr) minmax(170px, .8fr); } .kds-actions { grid-column: 2 / 4; justify-self: end; } }
 @media (max-width: 700px) { .commerce-metrics { grid-template-columns: repeat(3, 1fr); } .commerce-metrics > div { min-height: 68px; padding: 8px; grid-template-columns: 24px minmax(0, 1fr); } .commerce-metrics strong { font-size: 16px; } .quick-order-band { grid-template-columns: 1fr; } .kds-row { grid-template-columns: 72px minmax(0, 1fr); gap: 10px; } .kds-meta { grid-column: 1 / 3; } .kds-actions { width: 100%; grid-column: 1 / 3; justify-content: stretch; } .kds-actions .primary-button, .kds-actions .secondary-button { flex: 1 1 130px; justify-content: center; } }

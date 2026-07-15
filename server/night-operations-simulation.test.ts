@@ -685,7 +685,7 @@ describe('真实营业夜间全链路仿真', () => {
       url: `/api/business-days/${businessDate}/cashier-handovers`,
       headers: employeeHeaders('emp-cashier', 'cashier'),
       payload: {
-        confirmedActualAmounts: { cash: 0, physical_pos: 0, wechat: 0, alipay: 0 },
+        confirmedActualAmounts: { cash: 0, physical_pos: 0, wechat: 0, alipay: 0, unionpay: 0 },
         issues: [], deviceId: 'cashier-test', idempotencyKey: 'night-sim-handover-submit-0001',
       },
     })

@@ -2,7 +2,7 @@ import type { MoneyAmount } from './order-contracts.js'
 
 export const PHYSICAL_POS_CHANNEL = 'physical_pos'
 export const CASH_PAYMENT_CHANNEL = 'cash'
-export const SETTLEMENT_CHANNELS = ['cash', 'physical_pos', 'wechat', 'alipay'] as const
+export const SETTLEMENT_CHANNELS = ['cash', 'physical_pos', 'wechat', 'alipay', 'unionpay'] as const
 
 export type PaymentAllocationMode = 'all' | 'items' | 'amount'
 export type SettlementChannel = typeof SETTLEMENT_CHANNELS[number]
@@ -38,7 +38,7 @@ export interface PaymentIntent {
   amount: MoneyAmount
   currency: string
   channel: string
-  settlementChannel?: Extract<SettlementChannel, 'wechat' | 'alipay'>
+  settlementChannel?: Extract<SettlementChannel, 'wechat' | 'alipay' | 'unionpay'>
   merchantId: string
   status: PaymentIntentStatus
   channelTransactionId: string | null
@@ -226,7 +226,7 @@ export interface CreatePaymentIntentCommand {
   amount: MoneyAmount
   currency: string
   channel: string
-  settlementChannel?: Extract<SettlementChannel, 'wechat' | 'alipay'>
+  settlementChannel?: Extract<SettlementChannel, 'wechat' | 'alipay' | 'unionpay'>
   merchantId: string
   createdBy: string
   deviceId: string
@@ -258,6 +258,7 @@ export interface HandlePaymentNotificationCommand {
   amount: MoneyAmount
   currency: string
   merchantId: string
+  settlementChannel?: Extract<SettlementChannel, 'wechat' | 'alipay' | 'unionpay'>
   signatureVerified: boolean
   channelOccurredAt: string
   receivedAt: string
@@ -278,6 +279,7 @@ export interface ApplyPaymentQueryResultCommand {
   amount: MoneyAmount
   currency: string
   merchantId: string
+  settlementChannel?: Extract<SettlementChannel, 'wechat' | 'alipay' | 'unionpay'>
   channelOccurredAt: string
   receivedAt: string
   idempotencyKey: string

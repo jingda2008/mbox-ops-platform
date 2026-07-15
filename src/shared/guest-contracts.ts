@@ -154,6 +154,7 @@ export interface GuestCheckoutResponse {
   order: Order
   providerRequired: boolean
   wechatJsapiParameters: WechatJsapiParameters | null
+  paymentUrl: string | null
 }
 
 export type GuestTaskCreateInput = z.infer<typeof guestTaskCreateSchema>

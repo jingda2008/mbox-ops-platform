@@ -25,6 +25,7 @@ import {
 import { createRuntimeDependencies } from './repository-factory.js'
 import { registerCommerceRoutes } from './commerce-api.js'
 import { registerPaymentRoutes } from './payment-api.js'
+import { PaymentProviderUnavailableError } from './payment-provider.js'
 import { processAwaitingOrderReminders, registerProactiveServiceRoutes } from './proactive-service.js'
 import { registerBenefitRoutes } from './benefit-domain.js'
 import { buildMemberPortal, registerMemberPortalRoutes } from './member-portal.js'
@@ -226,6 +227,9 @@ app.setErrorHandler((error, _request, reply) => {
   }
   if (error instanceof TableAccessError) {
     return reply.status(error.statusCode).send({ code: error.code, message: error.message })
+  }
+  if (error instanceof PaymentProviderUnavailableError) {
+    return reply.status(503).send({ code: 'PAYMENT_PROVIDER_UNAVAILABLE', message: error.message })
   }
   if (error instanceof StoreImportValidationError) {
     return reply.status(422).send({ code: 'STORE_IMPORT_INVALID', message: error.message, issues: error.issues })

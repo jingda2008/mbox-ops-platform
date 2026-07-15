@@ -8,6 +8,7 @@ import {
   FileCheck2,
   Landmark,
   LoaderCircle,
+  ScanLine,
   ReceiptText,
   RefreshCcw,
   RotateCcw,
@@ -34,6 +35,7 @@ import {
   type SettlementChannel,
 } from '../shared/payment-contracts'
 import type { Order, OrderItem } from '../shared/order-contracts'
+import { CustomerPaymentCodeScanner } from './CustomerPaymentCodeScanner'
 import './PaymentView.css'
 
 interface PaymentViewProps {
@@ -50,6 +52,7 @@ type CollectionDraft = {
   quantities: Record<string, number>
 }
 type IssueDraft = { reason: string; nextDayOwnerId: string }
+type TableAccount = ReturnType<typeof buildTableAccounts>[number]
 
 const ONLINE_SIMULATION_CHANNEL = 'wechat_mock'
 const DEVELOPMENT_PAYMENT_SIMULATOR = import.meta.env.DEV
@@ -69,6 +72,7 @@ const settlementChannelLabels: Record<SettlementChannel, string> = {
   physical_pos: '物理POS',
   wechat: '微信',
   alipay: '支付宝',
+  unionpay: '云闪付',
 }
 
 const intentStatusLabels: Record<PaymentIntentStatus, string> = {
@@ -103,15 +107,17 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
   const [refundDraft, setRefundDraft] = useState<RefundDraft | null>(null)
   const [refundCompletion, setRefundCompletion] = useState({ refundId: '', terminalRefundTransactionId: '', reason: '' })
   const [collectionDrafts, setCollectionDrafts] = useState<Record<string, CollectionDraft>>({})
+  const [scannerAccount, setScannerAccount] = useState<TableAccount | null>(null)
   const [settlement, setSettlement] = useState<PaymentSettlementView | null>(null)
   const [actualAmounts, setActualAmounts] = useState<Record<SettlementChannel, string>>({
-    cash: '0.00', physical_pos: '0.00', wechat: '0.00', alipay: '0.00',
+    cash: '0.00', physical_pos: '0.00', wechat: '0.00', alipay: '0.00', unionpay: '0.00',
   })
   const [issueDrafts, setIssueDrafts] = useState<Record<SettlementChannel, IssueDraft>>({
     cash: { reason: '', nextDayOwnerId: '' },
     physical_pos: { reason: '', nextDayOwnerId: '' },
     wechat: { reason: '', nextDayOwnerId: '' },
     alipay: { reason: '', nextDayOwnerId: '' },
+    unionpay: { reason: '', nextDayOwnerId: '' },
   })
   const [handoverNote, setHandoverNote] = useState('')
   const [reviewNote, setReviewNote] = useState('')
@@ -193,12 +199,17 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
     }
   }
 
-  function createIntent(tableSessionId: string, channel: paymentApi.PaymentCollectionChannel, allocation: PaymentAllocationInput) {
+  function createIntent(
+    tableSessionId: string,
+    channel: paymentApi.PaymentCollectionChannel,
+    allocation: PaymentAllocationInput,
+    providerPayment?: paymentApi.ProviderPaymentMethod,
+  ) {
     const channelLabel = channel === PHYSICAL_POS_CHANNEL
       ? '物理POS收款单'
-      : channel === CASH_PAYMENT_CHANNEL ? '现金收款单' : '线上联调支付意图'
+      : channel === CASH_PAYMENT_CHANNEL ? '现金收款单' : channel === 'postar' ? '星驿支付码' : '线上联调支付意图'
     void execute(`create:${tableSessionId}:${channel}`, `${channelLabel}已创建`, () =>
-      paymentApi.createTablePaymentIntent(tableSessionId, channel, allocation),
+      paymentApi.createTablePaymentIntent(tableSessionId, channel, allocation, providerPayment),
     )
   }
 
@@ -284,8 +295,9 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
   }
 
   function createFromDraft(
-    account: ReturnType<typeof buildTableAccounts>[number],
+    account: TableAccount,
     channel: paymentApi.PaymentCollectionChannel,
+    providerPayment?: paymentApi.ProviderPaymentMethod,
   ) {
     const draft = collectionDrafts[account.tableSessionId] ?? emptyCollectionDraft()
     let allocation: PaymentAllocationInput
@@ -293,7 +305,7 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
       const amount = yuanInputToCents(draft.amountYuan)
       if (!amount || amount > account.collectableAmount) {
         setNotice({ tone: 'error', message: '指定收款金额必须大于0且不能超过剩余应收' })
-        return
+        return false
       }
       allocation = { mode: 'amount', amount }
     } else if (draft.mode === 'items') {
@@ -303,13 +315,19 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
       })
       if (items.length === 0) {
         setNotice({ tone: 'error', message: '请至少选择一个商品和收款数量' })
-        return
+        return false
       }
       allocation = { mode: 'items', items }
     } else {
       allocation = { mode: 'all' }
     }
-    createIntent(account.tableSessionId, channel, allocation)
+    createIntent(
+      account.tableSessionId,
+      channel,
+      allocation,
+      channel === 'postar' ? (providerPayment ?? { presentation: 'qr' }) : undefined,
+    )
+    return true
   }
 
   function updateCollectionDraft(tableSessionId: string, update: Partial<CollectionDraft>) {
@@ -461,6 +479,23 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
                     生成线上联调单
                   </button>
                 )}
+                <button
+                  className="primary-button"
+                  type="button"
+                  disabled={account.collectableAmount <= 0 || Boolean(busyAction)}
+                  onClick={() => createFromDraft(account, 'postar', { presentation: 'qr' })}
+                >
+                  {busyAction === `create:${account.tableSessionId}:postar` ? <LoaderCircle className="spin" size={16} /> : <Smartphone size={16} />}
+                  生成客扫支付码
+                </button>
+                <button
+                  className="primary-button"
+                  type="button"
+                  disabled={account.collectableAmount <= 0 || Boolean(busyAction)}
+                  onClick={() => setScannerAccount(account)}
+                >
+                  <ScanLine size={16} />扫客户付款码
+                </button>
                 <button
                   className="secondary-button"
                   type="button"
@@ -679,6 +714,18 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
           })}
         </div>
       </section>
+      {scannerAccount && (
+        <CustomerPaymentCodeScanner
+          tableCode={scannerAccount.tableCode}
+          amountLabel={money(selectedCollectionAmount(scannerAccount, collectionDrafts[scannerAccount.tableSessionId] ?? emptyCollectionDraft()))}
+          onClose={() => setScannerAccount(null)}
+          onConfirm={(customerAuthCode) => {
+            if (createFromDraft(scannerAccount, 'postar', { presentation: 'barcode', customerAuthCode })) {
+              setScannerAccount(null)
+            }
+          }}
+        />
+      )}
     </section>
   )
 }
@@ -786,7 +833,8 @@ function PaymentIntentRow({ data, intent, busyAction, onSimulate, onConfirmCash,
       )}
       {intent.channel === 'postar' && ['pending', 'processing'].includes(intent.status) && (
         <div className="simulation-action provider-query-action">
-          <div><ShieldCheck size={16} /><span><strong>正式渠道订单</strong>同步下单不代表到账，到账状态只接受验签回调或主动查单。</span></div>
+          {paymentQrCodeUrl(intent) && <ProviderQrCode value={paymentQrCodeUrl(intent)!} amount={intent.amount} />}
+          <div><ShieldCheck size={16} /><span><strong>正式渠道订单</strong>让客人使用微信、支付宝或云闪付扫码；仅验签回调或主动查单可以确认到账。</span></div>
           <button className="secondary-button" type="button" disabled={Boolean(busyAction)} onClick={() => onQueryProvider(intent)}>
             {busyAction === `provider-query:${intent.id}` ? <LoaderCircle className="spin" size={16} /> : <RefreshCcw size={16} />}
             主动查单
@@ -794,6 +842,28 @@ function PaymentIntentRow({ data, intent, busyAction, onSimulate, onConfirmCash,
         </div>
       )}
     </article>
+  )
+}
+
+function paymentQrCodeUrl(intent: PaymentIntent) {
+  const value = intent.providerPaymentPayload?.qrCodeUrl
+  return typeof value === 'string' && value.startsWith('https://') ? value : null
+}
+
+function ProviderQrCode({ value, amount }: { value: string; amount: number }) {
+  const [imageUrl, setImageUrl] = useState('')
+  useEffect(() => {
+    let active = true
+    void import('qrcode')
+      .then(({ default: QRCode }) => QRCode.toDataURL(value, { width: 240, margin: 1, errorCorrectionLevel: 'M' }))
+      .then((result) => { if (active) setImageUrl(result) })
+    return () => { active = false }
+  }, [value])
+  return (
+    <div className="provider-qr-code">
+      {imageUrl ? <img src={imageUrl} alt={`星驿支付二维码，金额${money(amount)}`} /> : <LoaderCircle className="spin" size={26} />}
+      <span><strong>{money(amount)}</strong><small>请客人扫码支付</small></span>
+    </div>
   )
 }
 
@@ -890,6 +960,14 @@ function refundItemLabel(data: BootstrapResponse, orderId: string, orderItemId: 
 
 function emptyCollectionDraft(): CollectionDraft {
   return { mode: 'items', amountYuan: '', quantities: {} }
+}
+
+function selectedCollectionAmount(account: TableAccount, draft: CollectionDraft) {
+  if (draft.mode === 'all') return account.collectableAmount
+  if (draft.mode === 'amount') return yuanInputToCents(draft.amountYuan) ?? 0
+  return account.remainingLines.reduce((sum, line) => (
+    sum + (draft.quantities[lineKey(line.orderId, line.orderItemId)] ?? 0) * line.unitPaidAmount
+  ), 0)
 }
 
 function lineKey(orderId: string, orderItemId: string) {

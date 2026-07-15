@@ -108,7 +108,7 @@ export async function requestPaymentThroughProvider(input: RequestProviderPaymen
   if (result.amount !== intent.amount || result.currency !== intent.currency || result.merchantId !== intent.merchantId) {
     throw new Error('渠道下单结果金额、币种或商户不一致')
   }
-  if (!result.providerTransactionId.trim()) throw new Error('渠道下单结果缺少交易号')
+  if (result.providerTransactionId !== null && !result.providerTransactionId.trim()) throw new Error('渠道下单结果交易号无效')
   if (Number.isNaN(Date.parse(result.occurredAt)) || Date.parse(result.occurredAt) < Date.parse(intent.createdAt)) {
     throw new Error('渠道下单结果时间无效')
   }
@@ -123,8 +123,16 @@ export function applyProviderPaymentCreation(
 ) {
   const intent = findIntent(state, request.paymentIntentId)
   assertProvider(intent.channel, adapterProvider)
+  if (intent.status === 'succeeded') {
+    if (result.providerTransactionId !== null && intent.channelTransactionId !== result.providerTransactionId) {
+      throw new Error('已到账支付意图绑定了不同渠道交易号')
+    }
+    intent.providerPaymentPayload ??= result.paymentPayload
+    intent.providerOrderCreatedAt ??= result.occurredAt
+    return intent
+  }
   if (intent.status === 'processing') {
-    if (intent.channelTransactionId !== result.providerTransactionId) {
+    if (result.providerTransactionId !== null && intent.channelTransactionId !== result.providerTransactionId) {
       throw new Error('渠道支付意图已绑定不同交易号')
     }
     return intent
@@ -133,13 +141,13 @@ export function applyProviderPaymentCreation(
   if (request.amount !== intent.amount || request.currency !== intent.currency || request.merchantId !== intent.merchantId) {
     throw new Error('渠道下单请求与支付意图不一致')
   }
-  assertPaymentObservation(result, intent.id)
+  if (result.paymentIntentId !== intent.id) throw new Error('渠道下单结果与支付意图不一致')
   if (result.status !== 'processing') throw new Error('渠道下单只能进入处理中状态')
   if (result.amount !== intent.amount || result.currency !== intent.currency || result.merchantId !== intent.merchantId) {
     throw new Error('渠道下单结果金额、币种或商户不一致')
   }
-  if (!result.providerTransactionId.trim()) throw new Error('渠道下单结果缺少交易号')
-  const duplicate = state.paymentIntents.find((item) => (
+  if (result.providerTransactionId !== null && !result.providerTransactionId.trim()) throw new Error('渠道下单结果交易号无效')
+  const duplicate = result.providerTransactionId === null ? undefined : state.paymentIntents.find((item) => (
     item.id !== intent.id
     && item.channel === intent.channel
     && item.channelTransactionId === result.providerTransactionId
@@ -239,6 +247,7 @@ export async function processPaymentProviderCallback(input: ProcessPaymentCallba
     amount: observation.amount,
     currency: observation.currency,
     merchantId: observation.merchantId,
+    settlementChannel: observation.settlementChannel,
     signatureVerified: true,
     channelOccurredAt: observation.occurredAt,
     receivedAt: input.callback.receivedAt,
@@ -274,6 +283,7 @@ export async function queryPaymentThroughProvider(input: QueryProviderPaymentInp
     amount: observation.amount,
     currency: observation.currency,
     merchantId: observation.merchantId,
+    settlementChannel: observation.settlementChannel,
     channelOccurredAt: observation.occurredAt,
     receivedAt: input.receivedAt,
     idempotencyKey: `${input.idempotencyKey}:result`,
@@ -297,6 +307,7 @@ export async function requestRefundThroughProvider(input: RequestProviderRefundI
       currency: refund.currency,
       items: refund.items,
       idempotencyKey: input.idempotencyKey,
+      settlementChannel: intent.settlementChannel,
     },
     { secrets: input.secrets },
   )

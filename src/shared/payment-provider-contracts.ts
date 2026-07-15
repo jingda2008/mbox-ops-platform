@@ -1,5 +1,5 @@
 import type { MoneyAmount } from './order-contracts.js'
-import type { ChannelPaymentStatus, RefundItem } from './payment-contracts.js'
+import type { ChannelPaymentStatus, RefundItem, SettlementChannel } from './payment-contracts.js'
 
 export type PaymentProviderHeaders = Readonly<
   Record<string, string | readonly string[] | undefined>
@@ -26,6 +26,7 @@ export interface ProviderPaymentObservation {
   amount: MoneyAmount
   currency: string
   merchantId: string
+  settlementChannel?: Extract<SettlementChannel, 'wechat' | 'alipay' | 'unionpay'>
   occurredAt: string
 }
 
@@ -39,8 +40,10 @@ export interface ProviderCreatePaymentRequest {
   amount: MoneyAmount
   currency: string
   expiresAt: string
-  payWay: 'wechat' | 'alipay'
-  payerId: string
+  presentation: 'jsapi' | 'qr' | 'barcode'
+  payWay?: 'wechat' | 'alipay'
+  payerId?: string
+  customerAuthCode?: string
   clientIp: string
   callbackUrl: string
   operatorId: string
@@ -50,7 +53,7 @@ export interface ProviderCreatePaymentRequest {
 
 export interface ProviderCreatePaymentResult {
   paymentIntentId: string
-  providerTransactionId: string
+  providerTransactionId: string | null
   status: 'processing'
   amount: MoneyAmount
   currency: string
@@ -75,6 +78,7 @@ export interface ProviderRefundRequest {
   currency: string
   items: readonly RefundItem[]
   idempotencyKey: string
+  settlementChannel?: Extract<SettlementChannel, 'wechat' | 'alipay' | 'unionpay'>
 }
 
 export interface ProviderRefundQueryRequest {

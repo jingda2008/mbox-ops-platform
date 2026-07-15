@@ -1,0 +1,22 @@
+.payment-scanner-overlay { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center; padding: 18px; background: rgba(19, 23, 19, .7); }
+.payment-scanner-dialog { width: min(430px, 100%); max-height: calc(100vh - 36px); overflow: auto; display: grid; gap: 14px; padding: 18px; border-radius: 8px; background: #fff; box-shadow: 0 20px 70px rgba(0, 0, 0, .3); }
+.payment-scanner-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.payment-scanner-dialog > header > div { display: grid; gap: 2px; }
+.payment-scanner-dialog > header span { color: var(--ink-soft); font-size: 11px; font-weight: 750; }
+.payment-scanner-dialog > header strong { font-size: 25px; }
+.payment-camera { position: relative; aspect-ratio: 16 / 9; overflow: hidden; display: grid; place-items: center; background: #1f2521; color: #fff; }
+.payment-camera video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.payment-camera::after { content: ''; position: absolute; inset: 24% 8%; border: 2px solid rgba(255, 255, 255, .9); box-shadow: 0 0 0 999px rgba(0, 0, 0, .18); }
+.payment-camera > span { z-index: 1; display: inline-flex; align-items: center; gap: 7px; padding: 7px 10px; border-radius: 4px; background: rgba(10, 12, 10, .76); font-size: 12px; font-weight: 800; }
+.payment-camera.is-unavailable video, .payment-camera.is-unavailable::after { display: none; }
+.payment-camera.is-detected > span { background: #a3262d; }
+.payment-code-field { display: grid; gap: 5px; }
+.payment-code-field > span { color: var(--ink-soft); font-size: 10px; font-weight: 800; }
+.payment-code-field input { width: 100%; height: 44px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 5px; background: #fff; color: var(--ink); font-size: 17px; }
+.payment-code-field small { color: var(--ink-soft); font-size: 10px; }
+.payment-code-error { min-height: 36px; display: flex; align-items: center; gap: 7px; padding: 7px 9px; border: 1px solid #e6b8ba; background: #fff1f1; color: #9b3035; font-size: 11px; font-weight: 750; }
+.payment-scanner-dialog > .primary-button { width: 100%; }
+@media (max-width: 560px) {
+  .payment-scanner-overlay { padding: 10px; }
+  .payment-scanner-dialog { max-height: calc(100vh - 20px); padding: 14px; }
+}

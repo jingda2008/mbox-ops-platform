@@ -325,6 +325,17 @@ function applyPaymentStatus(
   }
 }
 
+function applySettlementChannel(
+  intent: PaymentIntent,
+  channel: HandlePaymentNotificationCommand['settlementChannel'],
+) {
+  if (!channel) return
+  if (intent.settlementChannel && intent.settlementChannel !== channel) {
+    throw new Error('渠道支付方式与支付意图已记录方式不一致')
+  }
+  intent.settlementChannel = channel
+}
+
 export function handlePaymentNotification(
   state: PaymentDomainState,
   command: HandlePaymentNotificationCommand,
@@ -348,6 +359,7 @@ export function handlePaymentNotification(
   if (intent.channel === PHYSICAL_POS_CHANNEL) throw new Error('物理POS支付必须使用人工报送入口')
   if (command.channel !== intent.channel) throw new Error('支付通知渠道与支付意图不一致')
   assertPaymentObservation(intent, command)
+  applySettlementChannel(intent, command.settlementChannel)
   applyPaymentStatus(state, intent, command.status, command.channelTransactionId, command.channelOccurredAt)
 
   const notification: PaymentNotification = {
@@ -429,6 +441,7 @@ export function applyPaymentQueryResult(
       if (Date.parse(command.receivedAt) < Date.parse(query.requestedAt)) throw new Error('查询结果不能早于查询请求')
       const intent = findPaymentIntent(state, query.paymentIntentId)
       assertPaymentObservation(intent, command)
+      applySettlementChannel(intent, command.settlementChannel)
       applyPaymentStatus(state, intent, command.status, command.channelTransactionId, command.channelOccurredAt)
       query.status = 'completed'
       query.completedAt = command.receivedAt

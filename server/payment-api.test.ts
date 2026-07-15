@@ -260,7 +260,7 @@ describe('payment API security boundary', () => {
         tableSessionId: order.tableSessionId,
         channel: 'postar',
         allocation: { mode: 'all' },
-        providerPayment: { payWay: 'wechat', payerId: 'openid-test', wxAppid: 'wx-app-test' },
+        providerPayment: { presentation: 'jsapi', payWay: 'wechat', payerId: 'openid-test', wxAppid: 'wx-app-test' },
         deviceId: 'cashier-test',
         idempotencyKey: 'postar-missing-credentials-0001',
       },

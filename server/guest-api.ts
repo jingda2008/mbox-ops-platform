@@ -13,6 +13,8 @@ import {
   type TableAccessClaims,
 } from '../src/shared/guest-contracts.js'
 import type { RuntimeState, ServiceTask, Table } from '../src/shared/contracts.js'
+import type { PaymentIntent } from '../src/shared/payment-contracts.js'
+import type { Order } from '../src/shared/order-contracts.js'
 import { productAvailability } from '../src/shared/product-availability.js'
 import type { SongTableSession } from '../src/shared/song-contracts.js'
 import { applyTaskAction, createServiceTask } from './domain.js'
@@ -29,6 +31,12 @@ import { createPaymentIntent, handlePaymentNotification } from './payment-domain
 import { consumeManagedInventoryForSubmittedOrder } from './inventory-order-integration.js'
 import { completeAwaitingOrderOnOrder } from './proactive-service.js'
 import { routeProductToEnabledWorkstation, syncOrderFulfillmentWorkstations } from './fulfillment-workstations.js'
+import {
+  applyProviderPaymentCreation,
+  createEnvironmentPaymentProviderResolver,
+  requestPaymentThroughProvider,
+  type PaymentProviderResolver,
+} from './payment-provider.js'
 
 const DEFAULT_GUEST_SESSION_TTL_MS = 15 * 60_000
 
@@ -36,11 +44,33 @@ function deterministicId(prefix: string, key: string) {
   return `${prefix}_${createHash('sha256').update(key).digest('hex').slice(0, 32)}`
 }
 
+function paymentUrl(intent: PaymentIntent) {
+  const value = intent.providerPaymentPayload?.qrCodeUrl
+  return typeof value === 'string' && value.startsWith('https://') ? value : null
+}
+
+function publicCheckoutResult(input: {
+  paymentIntent: PaymentIntent
+  order: Order
+  providerRequired: boolean
+  wechatJsapiParameters: null
+  paymentUrl: string | null
+}) {
+  return {
+    paymentIntent: input.paymentIntent,
+    order: input.order,
+    providerRequired: input.paymentIntent.status !== 'succeeded',
+    wechatJsapiParameters: input.wechatJsapiParameters,
+    paymentUrl: paymentUrl(input.paymentIntent) ?? input.paymentUrl,
+  }
+}
+
 interface GuestApiOptions {
   secret: string
   runtimeMode: RuntimeMode
   guestSessionTtlMs?: number
   now?: () => number
+  providerResolver?: PaymentProviderResolver
 }
 
 function tableTokenVersion(table: Table) {
@@ -281,6 +311,7 @@ function writeAccessFromToken(state: RuntimeState, token: string, options: Guest
 }
 
 export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRepository, options: GuestApiOptions) {
+  const resolveProvider = options.providerResolver ?? createEnvironmentPaymentProviderResolver()
   app.get<{ Querystring: { token?: string; table?: string } }>('/api/guest/session', async (request) => {
     const state = await repository.read()
     const access = exchangeAccessFromRequest(state, request.query.token, request.query.table, options)
@@ -406,7 +437,7 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
 
   app.post('/api/guest/checkout', async (request, reply) => {
     const input = guestCheckoutSchema.parse(request.body)
-    const result = await repository.mutate((state) => {
+    const prepared = await repository.mutate((state) => {
       const { table, tableSession } = writeAccessFromToken(state, input.tableToken, options)
       const order = state.orderDomain.orders.find((candidate) => candidate.id === input.orderId)
       if (!order || order.tableSessionId !== tableSession.id) {
@@ -419,11 +450,28 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
         intent.orderIds.includes(order.id) && !['failed', 'closed'].includes(intent.status)
       ))
       if (existingIntent) {
+        const runtime = existingIntent.channel === 'postar' && existingIntent.status === 'pending'
+          ? resolveProvider(state.paymentDomain, 'postar')
+          : null
         return {
           paymentIntent: existingIntent,
           order,
           providerRequired: existingIntent.status !== 'succeeded',
           wechatJsapiParameters: null,
+          paymentUrl: paymentUrl(existingIntent),
+          providerRuntime: runtime,
+          providerRequest: runtime ? {
+            paymentIntentId: existingIntent.id,
+            merchantId: existingIntent.merchantId,
+            amount: existingIntent.amount,
+            currency: existingIntent.currency,
+            expiresAt: existingIntent.expiresAt,
+            presentation: 'qr' as const,
+            clientIp: request.ip,
+            callbackUrl: runtime.callbackUrl,
+            operatorId: `guest-${table.code}`,
+            remark: `MBOX桌台${table.code}`,
+          } : null,
         }
       }
       if (!['draft', 'submitted', 'in_fulfillment', 'fulfilled'].includes(order.status)) {
@@ -431,9 +479,12 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
       }
       const now = new Date().toISOString()
       const localPayment = options.runtimeMode === 'local' || options.runtimeMode === 'test'
-      const channel = localPayment ? 'wechat_mock' : 'wechat_jsapi'
+      const providerRuntime = localPayment ? null : resolveProvider(state.paymentDomain, 'postar')
+      const channel = localPayment ? 'wechat_mock' : 'postar'
       const paymentIntent = createPaymentIntent(state.paymentDomain, {
-        paymentIntentId: deterministicId('guest_payment', input.idempotencyKey),
+        paymentIntentId: localPayment
+          ? deterministicId('guest_payment', input.idempotencyKey)
+          : `Payment${createHash('sha256').update(input.idempotencyKey).digest('hex').slice(0, 32)}`,
         tableSessionId: tableSession.id,
         lineAllocations: order.items.map((item) => ({
           orderId: order.id,
@@ -444,7 +495,7 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
         amount: order.amounts.payableAmount,
         currency: 'CNY',
         channel,
-        merchantId: state.store.id,
+        merchantId: providerRuntime?.merchantId ?? state.store.id,
         createdBy: `guest-${table.code}`,
         deviceId: `guest-web-${table.code}`,
         occurredAt: now,
@@ -496,9 +547,51 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
         order: submittedOrder,
         providerRequired: !localPayment,
         wechatJsapiParameters: null,
+        paymentUrl: null,
+        providerRuntime,
+        providerRequest: providerRuntime ? {
+          paymentIntentId: paymentIntent.id,
+          merchantId: paymentIntent.merchantId,
+          amount: paymentIntent.amount,
+          currency: paymentIntent.currency,
+          expiresAt: paymentIntent.expiresAt,
+          presentation: 'qr' as const,
+          clientIp: request.ip,
+          callbackUrl: providerRuntime.callbackUrl,
+          operatorId: `guest-${table.code}`,
+          remark: `MBOX桌台${table.code}`,
+        } : null,
       }
     })
-    return reply.status(201).send(result)
+    if (!prepared.providerRuntime || !prepared.providerRequest) {
+      return reply.status(201).send(publicCheckoutResult(prepared))
+    }
+    const providerResult = await requestPaymentThroughProvider({
+      intent: prepared.paymentIntent,
+      adapter: prepared.providerRuntime.adapter,
+      secrets: prepared.providerRuntime.secrets,
+      request: prepared.providerRequest,
+    })
+    const paymentIntent = await repository.mutate((state) => {
+      const result = applyProviderPaymentCreation(
+        state.paymentDomain,
+        prepared.providerRuntime!.adapter.provider,
+        prepared.providerRequest!,
+        providerResult,
+      )
+      state.auditEntries.push({
+        id: `audit_${randomUUID()}`,
+        actorId: result.createdBy,
+        action: 'guest.provider_payment_order_created.v1',
+        objectType: 'paymentIntent',
+        objectId: result.id,
+        occurredAt: new Date().toISOString(),
+        details: { channel: result.channel, presentation: 'qr' },
+      })
+      state.revision += 1
+      return result
+    })
+    return reply.status(201).send(publicCheckoutResult({ ...prepared, paymentIntent }))
   })
 
   app.post<{ Params: { taskId: string } }>('/api/guest/tasks/:taskId/feedback', async (request) => {

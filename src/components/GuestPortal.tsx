@@ -108,6 +108,10 @@ export function GuestPortal() {
         idempotencyKey,
       })
       if (result.providerRequired) {
+        if (result.paymentUrl) {
+          window.location.assign(result.paymentUrl)
+          return
+        }
         const outcome = await invokeWechatJsapi(result.wechatJsapiParameters)
         setReply(outcome === 'succeeded'
           ? '微信支付已提交，正在等待到账确认。'

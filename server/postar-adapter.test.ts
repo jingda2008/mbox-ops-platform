@@ -98,6 +98,7 @@ const PAYMENT_CALLBACK = {
   ORDER_NO: 'POSTAR202607140001',
   ORDER_STATUS: '1',
   ORDER_TIME: '20260714120506',
+  PAY_CHANNEL: '2',
   THREE_ORDER_NO: 'PaymentABC123',
   TRAN_TYPE_SER: '01',
   TXAMT: '3000',
@@ -165,14 +166,14 @@ describe('Postar JSAPI payment creation', () => {
     const adapter = new PostarPaymentProviderAdapter(testOptions(post))
     const result = await adapter.createPayment({
       paymentIntentId: 'PaymentABC123', merchantId: 'MERCHANT001', amount: 3000, currency: 'CNY',
-      expiresAt: '2026-07-14T04:20:00.000Z', payWay: 'wechat', payerId: 'openid-1',
+      expiresAt: '2026-07-14T04:20:00.000Z', presentation: 'jsapi', payWay: 'wechat', payerId: 'openid-1',
       clientIp: '203.0.113.10', callbackUrl: 'https://pay.example.test/postar/callback',
       operatorId: 'cashier-1', remark: 'L01 table', wxAppid: 'wx-app-1',
     }, context)
 
     expect(result).toMatchObject({
       paymentIntentId: 'PaymentABC123', providerTransactionId: 'POSTAR202607140001', status: 'processing',
-      paymentPayload: { appId: 'wx-app-1', package: 'prepay_id=wx-prepay-1', paySign: 'pay-sign-1' },
+      paymentPayload: { presentation: 'jsapi', appId: 'wx-app-1', package: 'prepay_id=wx-prepay-1', paySign: 'pay-sign-1' },
     })
     const sent = post.mock.calls[0]![0]
     expect(sent.url).toBe(`${POSTAR_BASE_URLS.test}${POSTAR_ENDPOINTS.createJsapiPayment}`)
@@ -189,13 +190,79 @@ describe('Postar JSAPI payment creation', () => {
     })))
     const request = {
       paymentIntentId: 'PaymentABC123', merchantId: 'MERCHANT001', amount: 3000, currency: 'CNY',
-      expiresAt: '2026-07-14T04:20:00.000Z', payWay: 'alipay' as const, payerId: '2088000000000000',
+      expiresAt: '2026-07-14T04:20:00.000Z', presentation: 'jsapi' as const, payWay: 'alipay' as const, payerId: '2088000000000000',
       clientIp: '203.0.113.10', callbackUrl: 'https://pay.example.test/postar/callback',
       operatorId: 'cashier-1', remark: 'L01 table',
     }
     await expect(unsigned.createPayment(request, context)).rejects.toThrow('响应缺少签名')
     const declined = new PostarPaymentProviderAdapter(testOptions(async () => response({ code: 'E100', msg: 'merchant disabled' })))
     await expect(declined.createPayment(request, context)).rejects.toThrow('星驿下单失败: E100 merchant disabled')
+  })
+})
+
+describe('Postar Xingyi QR payment creation', () => {
+  it('creates a signed aggregate QR order without claiming payment success or a provider transaction id', async () => {
+    const post = vi.fn(async (_request: PostarHttpRequest) => response({
+      code: '000000',
+      data: 'https://pay.postar.example/qr/PaymentQR123',
+      msg: 'success',
+    }))
+    const adapter = new PostarPaymentProviderAdapter(testOptions(post))
+
+    const result = await adapter.createPayment({
+      paymentIntentId: 'PaymentQR123', merchantId: 'MERCHANT001', amount: 6800, currency: 'CNY',
+      expiresAt: '2026-07-14T04:20:00.000Z', presentation: 'qr',
+      clientIp: '203.0.113.10', callbackUrl: 'https://pay.example.test/postar/callback',
+      operatorId: 'cashier-1', remark: 'MBOX L01',
+    }, context)
+
+    expect(result).toMatchObject({
+      paymentIntentId: 'PaymentQR123', providerTransactionId: null, status: 'processing',
+      paymentPayload: {
+        presentation: 'qr',
+        qrCodeUrl: 'https://pay.postar.example/qr/PaymentQR123',
+      },
+    })
+    const sent = post.mock.calls[0]![0]
+    expect(sent.url).toBe(`${POSTAR_BASE_URLS.test}${POSTAR_ENDPOINTS.createQrPayment}`)
+    expect(decodeRequest(sent).payload).toMatchObject({
+      agetId: 'AGENCY001', custId: 'MERCHANT001', orderNo: 'PaymentQR123',
+      txamt: '6800', payType: '00', outTime: '15',
+    })
+  })
+})
+
+describe('Postar customer payment code collection', () => {
+  it('submits the signed merchant-scan request and never returns the customer code', async () => {
+    const post = vi.fn(async (_request: PostarHttpRequest) => response({
+      code: '222222',
+      data: {
+        agetId: 'AGENCY001', orderNo: 'POSTARBARCODE001', orderTime: '20260714120506',
+        threeOrderNo: 'PaymentBarcode123', txamt: '8800',
+      },
+      msg: 'paying',
+    }))
+    const adapter = new PostarPaymentProviderAdapter(testOptions(post))
+    const customerAuthCode = '101234567890123456'
+
+    const result = await adapter.createPayment({
+      paymentIntentId: 'PaymentBarcode123', merchantId: 'MERCHANT001', amount: 8800, currency: 'CNY',
+      expiresAt: '2026-07-14T04:20:00.000Z', presentation: 'barcode', customerAuthCode,
+      clientIp: '203.0.113.10', callbackUrl: 'https://pay.example.test/postar/callback',
+      operatorId: 'server-1', remark: 'MBOX L02',
+    }, context)
+
+    expect(result).toMatchObject({
+      paymentIntentId: 'PaymentBarcode123', providerTransactionId: 'POSTARBARCODE001', status: 'processing',
+      paymentPayload: { presentation: 'barcode', providerState: 'processing' },
+    })
+    expect(JSON.stringify(result)).not.toContain(customerAuthCode)
+    const sent = post.mock.calls[0]![0]
+    expect(sent.url).toBe(`${POSTAR_BASE_URLS.test}${POSTAR_ENDPOINTS.createBarcodePayment}`)
+    expect(decodeRequest(sent).payload).toMatchObject({
+      code: customerAuthCode, tradingIp: '203.0.113.10', type: 'A', operator: 'server-1',
+      agetId: 'AGENCY001', custId: 'MERCHANT001', orderNo: 'PaymentBarcode123', txamt: '8800',
+    })
   })
 })
 

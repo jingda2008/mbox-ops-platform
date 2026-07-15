@@ -16,6 +16,7 @@ import {
   requestRefund,
 } from './payment-domain.js'
 import {
+  applyProviderPaymentCreation,
   createPaymentThroughProvider,
   processPaymentProviderCallback,
   queryPaymentThroughProvider,
@@ -137,7 +138,7 @@ describe('payment provider callback boundary', () => {
       secrets,
       request: {
         paymentIntentId: 'pay-1', merchantId: 'merchant-mbox', amount: 3000, currency: 'CNY',
-        expiresAt: '2026-07-14T12:15:00.000Z', payWay: 'wechat', payerId: 'openid-1',
+        expiresAt: '2026-07-14T12:15:00.000Z', presentation: 'jsapi', payWay: 'wechat', payerId: 'openid-1',
         clientIp: '127.0.0.1', callbackUrl: 'https://example.test/postar/callback', operatorId: 'cashier-1',
         remark: 'table A', wxAppid: 'wx-app-1',
       },
@@ -176,6 +177,25 @@ describe('payment provider callback boundary', () => {
     expect(duplicate).toBe(first)
     expect(state.paymentNotifications).toHaveLength(1)
     expect(state.paymentIntents[0]?.status).toBe('succeeded')
+  })
+
+  it('keeps a verified success when the callback wins the race with order creation persistence', async () => {
+    const state = stateWithIntent()
+    await markIntentPaid(state)
+    const intent = applyProviderPaymentCreation(state, 'provider-a', {
+      paymentIntentId: 'pay-1', merchantId: 'merchant-mbox', amount: 3000, currency: 'CNY',
+      expiresAt: '2026-07-14T12:15:00.000Z', presentation: 'barcode', customerAuthCode: '101234567890123456',
+      clientIp: '127.0.0.1', callbackUrl: 'https://example.test/postar/callback', operatorId: 'cashier-1',
+      remark: 'table A',
+    }, {
+      paymentIntentId: 'pay-1', providerTransactionId: 'provider-tx-1', status: 'processing', amount: 3000,
+      currency: 'CNY', merchantId: 'merchant-mbox', occurredAt: '2026-07-14T12:00:30.000Z',
+      paymentPayload: { presentation: 'barcode', providerState: 'accepted' },
+    })
+
+    expect(intent.status).toBe('succeeded')
+    expect(intent.channelTransactionId).toBe('provider-tx-1')
+    expect(intent.providerPaymentPayload).toEqual({ presentation: 'barcode', providerState: 'accepted' })
   })
 })
 

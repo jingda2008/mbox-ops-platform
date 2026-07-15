@@ -1,4 +1,4 @@
-import { Ban, CheckCheck, ChefHat, CircleAlert, CircleDollarSign, Clock3, Copy, PackageCheck, PackageX, Play, QrCode, RotateCcw, ShoppingCart, Smartphone, UserRound, X } from 'lucide-react'
+import { Ban, CheckCheck, ChefHat, CircleAlert, CircleDollarSign, Clock3, Copy, PackageCheck, PackageX, Play, QrCode, RotateCcw, ScanLine, ShoppingCart, Smartphone, UserRound, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { actOnKdsTask, createAssistedPaymentLink, createCartOrder, decideKdsException, getCurrentActorId, reportKdsException } from '../api'
 import type { BootstrapResponse } from '../shared/contracts'
@@ -14,6 +14,8 @@ import {
   taskVisibleToAccess,
 } from './commerce-workspace'
 import { MenuOrderingWorkspace, type MenuCartItem } from './MenuOrderingWorkspace'
+import { CustomerPaymentCodeScanner } from './CustomerPaymentCodeScanner'
+import * as paymentApi from '../payment-api'
 import './CommerceView.css'
 
 interface CommerceViewProps {
@@ -29,6 +31,8 @@ const kdsLabels: Record<KdsTask['status'], string> = {
 interface PaymentSheet extends AssistedPaymentLink {
   paymentUrl: string
   qrDataUrl: string
+  tableSessionId: string
+  paymentItems: Array<{ orderId: string; orderItemId: string; quantity: number }>
 }
 
 export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
@@ -41,6 +45,7 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
   const [workspaceMode, setWorkspaceMode] = useState<'order' | 'fulfillment'>(access.canOrder ? 'order' : 'fulfillment')
   const [busy, setBusy] = useState(false)
   const [paymentSheet, setPaymentSheet] = useState<PaymentSheet | null>(null)
+  const [paymentCodeScannerOpen, setPaymentCodeScannerOpen] = useState(false)
   const [now, setNow] = useState(() => Date.now())
   const ledgerTotal = data.orderDomain.tableLedgerEntries.reduce((sum, entry) => sum + entry.amount, 0)
   const activeKds = data.orderDomain.kdsTasks.filter(kdsTaskOperationallyActive)
@@ -60,9 +65,13 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
   }, [])
 
   const sheetPayment = paymentSheet
-    ? data.paymentDomain.paymentIntents.find((intent) => intent.orderIds.includes(paymentSheet.orderId))
+    ? data.paymentDomain.paymentIntents
+        .filter((intent) => intent.orderIds.includes(paymentSheet.orderId))
+        .toSorted((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0]
     : undefined
   const sheetPaid = sheetPayment?.status === 'succeeded'
+  const sheetBarcodeProcessing = sheetPayment?.status === 'processing'
+    && sheetPayment.providerPaymentPayload?.presentation === 'barcode'
 
   useEffect(() => {
     if (!paymentSheet || sheetPaid) return
@@ -87,13 +96,38 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
         width: 360,
         color: { dark: '#151915', light: '#ffffff' },
       })
-      setPaymentSheet({ ...link, paymentUrl, qrDataUrl })
+      setPaymentSheet({
+        ...link,
+        paymentUrl,
+        qrDataUrl,
+        tableSessionId: order.tableSessionId,
+        paymentItems: order.items.map((item) => ({ orderId: order.id, orderItemId: item.id, quantity: item.quantity })),
+      })
       onNotice('订单已确认，请客人扫码支付；客人手机订单页也已同步')
       await onRefresh()
     } catch (error) {
       onNotice(error instanceof Error ? error.message : '下单失败')
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function collectCustomerPaymentCode(customerAuthCode: string) {
+    if (!paymentSheet) return false
+    try {
+      await paymentApi.createTablePaymentIntent(
+        paymentSheet.tableSessionId,
+        'postar',
+        { mode: 'items', items: paymentSheet.paymentItems },
+        { presentation: 'barcode', customerAuthCode },
+      )
+      setPaymentCodeScannerOpen(false)
+      onNotice(`${paymentSheet.tableCode}付款码收款已发起，正在等待渠道确认`)
+      await onRefresh()
+      return true
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : '付款码收款发起失败')
+      throw error
     }
   }
 
@@ -188,9 +222,13 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
         <section className={`assisted-payment-dialog ${sheetPaid ? 'is-paid' : ''}`} role="dialog" aria-modal="true" aria-label={`${paymentSheet.tableCode}订单支付`}>
           <header>
             <div><span>{sheetPaid ? '支付已确认' : '请客人扫码支付'}</span><strong>{paymentSheet.tableCode} · {money(paymentSheet.amount)}</strong></div>
-            <button className="icon-button" title="关闭支付窗口" onClick={() => setPaymentSheet(null)}><X size={20} /></button>
+            <button className="icon-button" title="关闭支付窗口" onClick={() => { setPaymentCodeScannerOpen(false); setPaymentSheet(null) }}><X size={20} /></button>
           </header>
-          {sheetPaid ? <div className="assisted-payment-success"><CheckCheck size={54} /><strong>微信支付成功</strong><span>服务员、收银与出品岗位已同步到账状态</span></div> : <>
+          {sheetPaid ? <div className="assisted-payment-success"><CheckCheck size={54} /><strong>支付成功</strong><span>服务员、收银与出品岗位已同步到账状态</span></div> : sheetBarcodeProcessing ? <div className="assisted-payment-processing"><Clock3 className="spin" size={48} /><strong>正在确认付款</strong><span>请勿重复扫码，到账后本页自动更新</span></div> : <>
+            <div className="assisted-payment-methods">
+              <button className="is-active" type="button"><QrCode size={17} />客人扫码支付</button>
+              <button type="button" onClick={() => setPaymentCodeScannerOpen(true)}><ScanLine size={17} />扫客户付款码</button>
+            </div>
             <div className="assisted-payment-qr"><img src={paymentSheet.qrDataUrl} alt={`${paymentSheet.tableCode}支付二维码`} /></div>
             <div className="assisted-payment-guidance">
               <p><QrCode size={18} /><span>客人使用微信扫描二维码，在手机订单页确认支付。</span></p>
@@ -202,6 +240,14 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
           {sheetPaid && <button className="primary-button assisted-done" onClick={() => setPaymentSheet(null)}>继续点单</button>}
         </section>
       </div>}
+      {paymentSheet && paymentCodeScannerOpen && (
+        <CustomerPaymentCodeScanner
+          tableCode={paymentSheet.tableCode}
+          amountLabel={money(paymentSheet.amount)}
+          onClose={() => setPaymentCodeScannerOpen(false)}
+          onConfirm={collectCustomerPaymentCode}
+        />
+      )}
       {access.canOrder && <div className="commerce-mode-tabs">
         <button className={workspaceMode === 'order' ? 'is-active' : ''} onClick={() => setWorkspaceMode('order')}>全屏点单</button>
         <button className={workspaceMode === 'fulfillment' ? 'is-active' : ''} onClick={() => setWorkspaceMode('fulfillment')}>出品履约 <span>{visibleKds.length}</span></button>

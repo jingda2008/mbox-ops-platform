@@ -178,6 +178,7 @@ const OPERATION_SCOPE_PATTERN = /^[a-z][a-z0-9_.-]{2,127}$/
 const DEFAULT_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000
 const DEFAULT_IDEMPOTENCY_LOCK_MS = 30 * 1000
 const DEFAULT_HEALTH_CHECK_TIMEOUT_MS = 2_000
+const READ_CACHE_VALIDATION_TTL_MS = 1_000
 
 const SQL = {
   beginRead: 'BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY',
@@ -277,6 +278,8 @@ export class PostgresRepository {
   private readonly inFlight = new Set<Promise<unknown>>()
   private cachedState: RuntimeState | null = null
   private cacheRefreshPromise: Promise<RuntimeState> | null = null
+  private readPromise: Promise<RuntimeState> | null = null
+  private cacheValidatedAt = 0
 
   constructor(options: PostgresRepositoryOptions) {
     assertUuid('tenantId', options.tenantId)
@@ -319,14 +322,30 @@ export class PostgresRepository {
   }
 
   async read(): Promise<RuntimeState> {
-    return this.track(() => this.withTransaction(true, async (client) => this.loadStateCached(client)))
+    if (this.cachedState && Date.now() - this.cacheValidatedAt < READ_CACHE_VALIDATION_TTL_MS) {
+      return structuredClone(this.cachedState)
+    }
+    if (!this.readPromise) {
+      this.readPromise = this.track(() => this.withTransaction(true, async (client) => this.loadStateCached(client)))
+        .then((state) => {
+          this.cacheValidatedAt = Date.now()
+          return state
+        })
+    }
+    const pending = this.readPromise
+    try {
+      return structuredClone(await pending)
+    } finally {
+      if (this.readPromise === pending) this.readPromise = null
+    }
   }
 
   async mutate<T>(
     mutation: (state: RuntimeState) => T | Promise<T>,
     options: PostgresMutationOptions = {},
   ): Promise<T> {
-    return this.track(() => this.withTransaction(false, async (client) => {
+    let stateChanged = false
+    const result = await this.track(() => this.withTransaction(false, async (client) => {
       const replay = options.idempotency
         ? await this.claimIdempotency<T>(client, options.idempotency)
         : null
@@ -351,6 +370,7 @@ export class PostgresRepository {
           expectedRevision,
         ])
         if (update.rowCount !== 1) throw new PostgresOptimisticConcurrencyError(expectedRevision)
+        stateChanged = true
       }
 
       if (options.idempotency) {
@@ -358,6 +378,8 @@ export class PostgresRepository {
       }
       return result
     }))
+    if (stateChanged) this.cacheValidatedAt = 0
+    return result
   }
 
   async reset(): Promise<RuntimeState> {

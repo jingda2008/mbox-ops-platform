@@ -285,6 +285,7 @@ describe('PostgresRepository', () => {
     const { pool, repository } = createRepository()
     await repository.init()
     const stateReadsBefore = pool.queries.filter(({ sql }) => sql.startsWith('SELECT revision, state, state_sha256')).length
+    const revisionReadsBefore = pool.queries.filter(({ sql }) => sql.startsWith('SELECT revision FROM mbox.runtime_states')).length
 
     const reads = await Promise.all(Array.from({ length: 20 }, () => repository.read()))
     reads[0]!.store.name = 'detached concurrent result'
@@ -292,6 +293,7 @@ describe('PostgresRepository', () => {
     expect(reads.every((state) => state.revision === 1)).toBe(true)
     expect(reads[1]!.store.name).not.toBe(reads[0]!.store.name)
     expect(pool.queries.filter(({ sql }) => sql.startsWith('SELECT revision, state, state_sha256'))).toHaveLength(stateReadsBefore + 1)
+    expect(pool.queries.filter(({ sql }) => sql.startsWith('SELECT revision FROM mbox.runtime_states'))).toHaveLength(revisionReadsBefore + 1)
   })
 
   it('commits one-step revisions and rejects stale compare-and-swap writes without partial state', async () => {

@@ -3,6 +3,7 @@ import type {
   PaymentProviderAdapter,
   PaymentProviderContext,
   PaymentProviderSecretSource,
+  ProviderCreatePaymentResult,
   ProviderPaymentObservation,
   ProviderRefundObservation,
   RawPaymentProviderCallback,
@@ -15,6 +16,7 @@ import {
   requestRefund,
 } from './payment-domain.js'
 import {
+  createPaymentThroughProvider,
   processPaymentProviderCallback,
   queryPaymentThroughProvider,
   queryRefundThroughProvider,
@@ -48,6 +50,16 @@ function verifiedCallbackObservation(): VerifiedProviderPaymentCallback {
 function fakeAdapter(overrides: Partial<PaymentProviderAdapter> = {}): PaymentProviderAdapter {
   return {
     provider: 'provider-a',
+    createPayment: vi.fn<PaymentProviderAdapter['createPayment']>(async (request): Promise<ProviderCreatePaymentResult> => ({
+      paymentIntentId: request.paymentIntentId,
+      providerTransactionId: 'provider-order-1',
+      status: 'processing',
+      amount: request.amount,
+      currency: request.currency,
+      merchantId: request.merchantId,
+      occurredAt: '2026-07-14T12:00:30.000Z',
+      paymentPayload: { token: 'provider-payment-token' },
+    })),
     verifyPaymentCallback: vi.fn<PaymentProviderAdapter['verifyPaymentCallback']>(
       async () => verifiedCallbackObservation(),
     ),
@@ -117,6 +129,24 @@ async function markIntentPaid(state: ReturnType<typeof stateWithIntent>) {
 }
 
 describe('payment provider callback boundary', () => {
+  it('moves a provider order only to processing and preserves the provider payment payload', async () => {
+    const state = stateWithIntent()
+    const intent = await createPaymentThroughProvider({
+      state,
+      adapter: fakeAdapter(),
+      secrets,
+      request: {
+        paymentIntentId: 'pay-1', merchantId: 'merchant-mbox', amount: 3000, currency: 'CNY',
+        expiresAt: '2026-07-14T12:15:00.000Z', payWay: 'wechat', payerId: 'openid-1',
+        clientIp: '127.0.0.1', callbackUrl: 'https://example.test/postar/callback', operatorId: 'cashier-1',
+        remark: 'table A', wxAppid: 'wx-app-1',
+      },
+    })
+    expect(intent.status).toBe('processing')
+    expect(intent.channelTransactionId).toBe('provider-order-1')
+    expect(intent.providerPaymentPayload).toEqual({ token: 'provider-payment-token' })
+  })
+
   it('passes raw evidence and injected secrets to verification before changing domain state', async () => {
     const state = stateWithIntent()
     const verifier = vi.fn(

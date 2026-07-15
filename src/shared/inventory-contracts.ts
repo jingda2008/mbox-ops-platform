@@ -5,10 +5,79 @@ export interface InventoryScope {
   storeId: string
 }
 
+export interface InventoryUnitConversion {
+  unitCode: string
+  /** Number of base units represented by one unitCode. */
+  baseQuantity: InventoryQuantity
+}
+
+export interface InventoryIngredientSku extends InventoryScope {
+  id: string
+  sku: string
+  name: string
+  baseUnitCode: string
+  costAmountPerBaseUnit: number
+  conversions: InventoryUnitConversion[]
+  enabled: boolean
+  revision: number
+  createdAt: string
+  updatedAt: string
+  updatedBy: string
+}
+
+export interface InventoryRecipeLine {
+  ingredientSkuId: string
+  /** Standard consumption for one sold/gifted/remade menu item, in the ingredient base unit. */
+  standardQuantity: InventoryQuantity
+  /** Variance tolerance for stock-loss analysis. It is not added to automatic order consumption. */
+  allowedLossBps: number
+}
+
+export interface InventoryRecipeVersion extends InventoryScope {
+  id: string
+  productId: string
+  version: number
+  status: 'active' | 'archived'
+  lines: InventoryRecipeLine[]
+  publishedBy: string
+  publishedAt: string
+  reason: string
+}
+
+export type InventoryConsumptionType = 'sale' | 'gift' | 'remake'
+
+export type InventoryMovementConfigurationSnapshot =
+  | {
+      kind: 'recipe'
+      consumptionType: InventoryConsumptionType
+      orderedProductId: string
+      orderedProductName: string
+      orderedQuantity: InventoryQuantity
+      recipe: InventoryRecipeVersion
+      ingredient: InventoryIngredientSku
+      recipeLine: InventoryRecipeLine
+    }
+  | {
+      kind: 'direct_product'
+      consumptionType: InventoryConsumptionType
+      orderedProductId: string
+      orderedProductName: string
+      orderedQuantity: InventoryQuantity
+      inventoryUnitCode: string
+    }
+  | {
+      kind: 'unit_conversion'
+      inputQuantity: InventoryQuantity
+      inputUnitCode: string
+      conversion: InventoryUnitConversion
+      ingredient: InventoryIngredientSku
+    }
+
 export type InventoryMovementType =
   | 'receipt'
   | 'sale'
   | 'gift'
+  | 'remake'
   | 'refund'
   | 'stock_count_gain'
   | 'stock_count_loss'
@@ -40,6 +109,8 @@ export interface InventoryMovement extends InventoryScope {
   reason: string
   businessDate: string
   occurredAt: string
+  /** Immutable configuration used to calculate this movement. */
+  configurationSnapshot?: InventoryMovementConfigurationSnapshot | null
 }
 
 export type StockCountStatus = 'pending_confirmation' | 'applied' | 'rejected'
@@ -128,7 +199,7 @@ export interface BottleStorageEvent extends InventoryScope {
 export interface InventoryAuditEvent extends InventoryScope {
   id: string
   action: string
-  objectType: 'inventory_movement' | 'stock_count' | 'bottle_storage_batch'
+  objectType: 'inventory_movement' | 'stock_count' | 'bottle_storage_batch' | 'ingredient_sku' | 'recipe_version'
   objectId: string
   actorId: string
   approvalId: string | null
@@ -144,6 +215,38 @@ export type InventoryDomainResultType =
   | 'stock_count'
   | 'bottle_storage_batch'
   | 'bottle_storage_event'
+  | 'ingredient_sku'
+  | 'recipe_version'
+
+export type InventoryApprovalAction = 'bottle_transfer' | 'bottle_void' | 'store_import'
+export type InventoryApprovalStatus = 'pending' | 'approved' | 'rejected'
+
+export interface InventoryApprovalActorSnapshot {
+  employeeId: string
+  displayName: string
+  roleId: string
+  authenticatedBy: 'signed_session' | 'local_header'
+}
+
+export interface InventoryApprovalRequest extends InventoryScope {
+  id: string
+  action: InventoryApprovalAction
+  status: InventoryApprovalStatus
+  targetId: string
+  requestPayload: Record<string, unknown>
+  beforeSnapshot: unknown
+  afterSnapshot: unknown | null
+  requestedBy: InventoryApprovalActorSnapshot
+  requestedAt: string
+  requestReason: string
+  requestIdempotencyKey: string
+  decision: 'approve' | 'reject' | null
+  decidedBy: InventoryApprovalActorSnapshot | null
+  decidedAt: string | null
+  decisionReason: string | null
+  decisionIdempotencyKey: string | null
+  executedAt: string | null
+}
 
 export interface InventoryIdempotencyRecord {
   key: string
@@ -155,12 +258,15 @@ export interface InventoryIdempotencyRecord {
 
 export interface InventoryDomainState extends InventoryScope {
   policy: InventoryOperationPolicy
+  ingredientSkus: InventoryIngredientSku[]
+  recipeVersions: InventoryRecipeVersion[]
   balances: InventoryBalance[]
   movements: InventoryMovement[]
   stockCounts: StockCount[]
   bottleBatches: BottleStorageBatch[]
   bottleEvents: BottleStorageEvent[]
   auditEvents: InventoryAuditEvent[]
+  approvalRequests: InventoryApprovalRequest[]
   idempotencyRecords: InventoryIdempotencyRecord[]
 }
 
@@ -184,6 +290,7 @@ export interface ReceiveInventoryCommand {
   businessDate: string
   occurredAt: string
   idempotencyKey: string
+  configurationSnapshot?: InventoryMovementConfigurationSnapshot | null
 }
 
 export interface ConsumeInventoryCommand {
@@ -197,6 +304,31 @@ export interface ConsumeInventoryCommand {
   actorId: string
   reason: string
   businessDate: string
+  occurredAt: string
+  idempotencyKey: string
+  configurationSnapshot?: InventoryMovementConfigurationSnapshot | null
+}
+
+export interface UpsertIngredientSkuCommand {
+  ingredientSkuId: string
+  sku: string
+  name: string
+  baseUnitCode: string
+  costAmountPerBaseUnit: number
+  conversions: InventoryUnitConversion[]
+  enabled: boolean
+  actorId: string
+  reason: string
+  occurredAt: string
+  idempotencyKey: string
+}
+
+export interface PublishRecipeVersionCommand {
+  recipeVersionId: string
+  productId: string
+  lines: InventoryRecipeLine[]
+  actorId: string
+  reason: string
   occurredAt: string
   idempotencyKey: string
 }

@@ -1,17 +1,18 @@
 import { BellRing, Check, Clock3, DoorOpen, LoaderCircle, Plus, UserRoundX, UsersRound, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { actOnWaitlistEntry, createWaitlistEntry, listWaitlist, type WaitlistListResponse } from '../reservation-api'
-import type { Area, Table } from '../shared/contracts'
+import type { Area, Employee, Table } from '../shared/contracts'
 
 interface Props {
   areas: Area[]
   tables: Table[]
+  employees: Employee[]
   canManage: boolean
 }
 
 const emptyResponse: WaitlistListResponse = { entries: [], positions: {}, responseMinutes: 10 }
 
-export function WaitlistPanel({ areas, tables, canManage }: Props) {
+export function WaitlistPanel({ areas, tables, employees, canManage }: Props) {
   const [data, setData] = useState(emptyResponse)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState('')
@@ -22,6 +23,7 @@ export function WaitlistPanel({ areas, tables, canManage }: Props) {
   const [partySize, setPartySize] = useState(2)
   const [areaCode, setAreaCode] = useState('')
   const [maximumWaitMinutes, setMaximumWaitMinutes] = useState(90)
+  const [salesEmployeeId, setSalesEmployeeId] = useState(employees[0]?.id ?? '')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -35,6 +37,9 @@ export function WaitlistPanel({ areas, tables, canManage }: Props) {
   }, [])
 
   useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    if (!salesEmployeeId && employees[0]) setSalesEmployeeId(employees[0].id)
+  }, [employees, salesEmployeeId])
 
   const activeEntries = useMemo(() => data.entries.filter((entry) => ['waiting', 'notified'].includes(entry.status)), [data.entries])
   const recentClosed = useMemo(() => data.entries.filter((entry) => !['waiting', 'notified'].includes(entry.status)).slice(-3).reverse(), [data.entries])
@@ -57,7 +62,7 @@ export function WaitlistPanel({ areas, tables, canManage }: Props) {
 
   async function submit(event: FormEvent) {
     event.preventDefault()
-    if (!name.trim() || !contact.trim()) return setNotice('请填写客人称呼和CRM/企微客户编号')
+    if (!name.trim() || !contact.trim() || !salesEmployeeId) return setNotice('请填写客人称呼、CRM/企微客户编号和销售归属')
     if (/^1\d{10}$/.test(contact.trim())) return setNotice('禁止录入明文手机号，请使用CRM或企微客户编号')
     const created = await run('create', () => createWaitlistEntry({
       customerReference: `staff-ref:${contact.trim()}`,
@@ -65,6 +70,7 @@ export function WaitlistPanel({ areas, tables, canManage }: Props) {
       contactReference: `staff-ref:${contact.trim()}`,
       partySize,
       areaPreferenceCode: areaCode || undefined,
+      salesEmployeeId,
       maximumWaitMinutes,
       idempotencyKey: key('join'),
     }), '候补已登记')
@@ -99,6 +105,7 @@ export function WaitlistPanel({ areas, tables, canManage }: Props) {
       <label><span>CRM/企微编号</span><input required maxLength={128} value={contact} onChange={(event) => setContact(event.target.value)} /></label>
       <label><span>人数</span><input required type="number" min={1} max={100} value={partySize} onChange={(event) => setPartySize(Number(event.target.value))} /></label>
       <label><span>最长等待</span><input required type="number" min={1} max={480} value={maximumWaitMinutes} onChange={(event) => setMaximumWaitMinutes(Number(event.target.value))} /></label>
+      <label><span>销售归属</span><select required value={salesEmployeeId} onChange={(event) => setSalesEmployeeId(event.target.value)}><option value="">请选择销售</option>{employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName}</option>)}</select></label>
       <div className="waitlist-area-picks"><span>区域偏好</span><button type="button" className={!areaCode ? 'is-active' : ''} onClick={() => setAreaCode('')}>不限</button>{areas.map((area) => <button type="button" key={area.id} className={areaCode === area.id ? 'is-active' : ''} onClick={() => setAreaCode(area.id)}>{area.shortName}</button>)}</div>
       <button className="primary-button" disabled={busy === 'create'}>{busy === 'create' ? <LoaderCircle className="reservation-spin" size={16} /> : <Check size={16} />}确认登记</button>
     </form>}

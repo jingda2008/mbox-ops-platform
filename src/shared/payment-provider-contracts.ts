@@ -33,6 +33,32 @@ export interface VerifiedProviderPaymentCallback extends ProviderPaymentObservat
   providerEventId: string
 }
 
+export interface ProviderCreatePaymentRequest {
+  paymentIntentId: string
+  merchantId: string
+  amount: MoneyAmount
+  currency: string
+  expiresAt: string
+  payWay: 'wechat' | 'alipay'
+  payerId: string
+  clientIp: string
+  callbackUrl: string
+  operatorId: string
+  remark: string
+  wxAppid?: string
+}
+
+export interface ProviderCreatePaymentResult {
+  paymentIntentId: string
+  providerTransactionId: string
+  status: 'processing'
+  amount: MoneyAmount
+  currency: string
+  merchantId: string
+  occurredAt: string
+  paymentPayload: Readonly<Record<string, unknown>>
+}
+
 export interface ProviderPaymentQueryRequest {
   paymentIntentId: string
   merchantId: string
@@ -88,6 +114,10 @@ export interface DownloadProviderBillRequest {
 
 export interface PaymentProviderAdapter {
   readonly provider: string
+  createPayment(
+    request: ProviderCreatePaymentRequest,
+    context: PaymentProviderContext,
+  ): Promise<ProviderCreatePaymentResult>
   verifyPaymentCallback(
     request: RawPaymentProviderCallback,
     context: PaymentProviderContext,

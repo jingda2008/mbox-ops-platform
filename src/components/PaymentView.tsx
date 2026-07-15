@@ -1,5 +1,6 @@
 import {
   Banknote,
+  CalendarCheck,
   CheckCircle2,
   CircleAlert,
   Clock3,
@@ -11,19 +12,26 @@ import {
   RefreshCcw,
   RotateCcw,
   ShieldCheck,
+  Send,
   Smartphone,
   WalletCards,
 } from 'lucide-react'
-import { useMemo, useState, type FormEvent } from 'react'
-import * as api from '../api'
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import * as coreApi from '../api'
+import * as paymentApi from '../payment-api'
+import type { PaymentAllocationInput } from '../shared/payment-api'
 import type { BootstrapResponse } from '../shared/contracts'
 import {
+  CASH_PAYMENT_CHANNEL,
   PHYSICAL_POS_CHANNEL,
+  SETTLEMENT_CHANNELS,
   type PaymentDomainState,
   type PaymentIntent,
   type PaymentIntentStatus,
+  type PaymentSettlementView,
   type Refund,
   type RefundStatus,
+  type SettlementChannel,
 } from '../shared/payment-contracts'
 import type { Order, OrderItem } from '../shared/order-contracts'
 import './PaymentView.css'
@@ -33,33 +41,16 @@ interface PaymentViewProps {
   onRefresh: () => Promise<void>
 }
 
-interface PaymentApi {
-  createTablePaymentIntent: (tableSessionId: string, channel: string) => Promise<unknown>
-  simulatePaymentSuccess: (paymentIntentId: string) => Promise<unknown>
-  reportPhysicalPos: (
-    paymentIntentId: string,
-    terminalId: string,
-    terminalTransactionId: string,
-    paymentMethod: string,
-    receiptReference: string,
-  ) => Promise<unknown>
-  requestItemRefund: (
-    paymentIntentId: string,
-    orderId: string,
-    orderItemId: string,
-    quantity: number,
-    reason: string,
-  ) => Promise<unknown>
-  approveAndCompleteRefund: (refundId: string) => Promise<unknown>
-  completePhysicalPosRefund: (refundId: string, terminalRefundTransactionId: string, reason: string) => Promise<unknown>
-  closeTableSession: (tableId: string, reason: string) => Promise<unknown>
-}
-
 type BootstrapWithPayments = BootstrapResponse & { paymentDomain?: PaymentDomainState }
 type Notice = { tone: 'success' | 'error'; message: string }
 type RefundDraft = { paymentIntentId: string; orderId: string; orderItemId: string; quantity: number; reason: string }
+type CollectionDraft = {
+  mode: PaymentAllocationInput['mode']
+  amountYuan: string
+  quantities: Record<string, number>
+}
+type IssueDraft = { reason: string; nextDayOwnerId: string }
 
-const paymentClient = api as unknown as PaymentApi
 const ONLINE_SIMULATION_CHANNEL = 'wechat_mock'
 const DEVELOPMENT_PAYMENT_SIMULATOR = import.meta.env.DEV
 const emptyPaymentDomain: PaymentDomainState = {
@@ -67,8 +58,17 @@ const emptyPaymentDomain: PaymentDomainState = {
   paymentNotifications: [],
   paymentStatusQueries: [],
   physicalPosReports: [],
+  cashPaymentConfirmations: [],
   refunds: [],
+  cashierHandovers: [],
   idempotencyRecords: [],
+}
+
+const settlementChannelLabels: Record<SettlementChannel, string> = {
+  cash: '现金',
+  physical_pos: '物理POS',
+  wechat: '微信',
+  alipay: '支付宝',
 }
 
 const intentStatusLabels: Record<PaymentIntentStatus, string> = {
@@ -91,7 +91,7 @@ const refundStatusLabels: Record<RefundStatus, string> = {
 
 export function PaymentView({ data, onRefresh }: PaymentViewProps) {
   const paymentDomain = (data as BootstrapWithPayments).paymentDomain ?? emptyPaymentDomain
-  const currentActorId = api.getCurrentActorId()
+  const currentActorId = coreApi.getCurrentActorId()
   const currentEmployee = data.employees.find((employee) => employee.id === currentActorId && employee.status === 'active')
   const [busyAction, setBusyAction] = useState('')
   const [notice, setNotice] = useState<Notice | null>(null)
@@ -102,6 +102,20 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
   const [receiptReference, setReceiptReference] = useState('')
   const [refundDraft, setRefundDraft] = useState<RefundDraft | null>(null)
   const [refundCompletion, setRefundCompletion] = useState({ refundId: '', terminalRefundTransactionId: '', reason: '' })
+  const [collectionDrafts, setCollectionDrafts] = useState<Record<string, CollectionDraft>>({})
+  const [settlement, setSettlement] = useState<PaymentSettlementView | null>(null)
+  const [actualAmounts, setActualAmounts] = useState<Record<SettlementChannel, string>>({
+    cash: '0.00', physical_pos: '0.00', wechat: '0.00', alipay: '0.00',
+  })
+  const [issueDrafts, setIssueDrafts] = useState<Record<SettlementChannel, IssueDraft>>({
+    cash: { reason: '', nextDayOwnerId: '' },
+    physical_pos: { reason: '', nextDayOwnerId: '' },
+    wechat: { reason: '', nextDayOwnerId: '' },
+    alipay: { reason: '', nextDayOwnerId: '' },
+  })
+  const [handoverNote, setHandoverNote] = useState('')
+  const [reviewNote, setReviewNote] = useState('')
+  const [nextBusinessDate, setNextBusinessDate] = useState(() => followingBusinessDate(data.store.businessDate))
 
   const tableAccounts = useMemo(
     () => buildTableAccounts(data, paymentDomain.paymentIntents, paymentDomain.refunds),
@@ -125,8 +139,42 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
     .filter((intent) => intent.status === 'reported_pending_reconciliation')
     .reduce((sum, intent) => sum + intent.amount, 0)
   const openReceivable = tableAccounts.reduce((sum, account) => sum + account.collectableAmount, 0)
+  const activeShift = data.shiftAssignments.find((shift) => (
+    shift.employeeId === currentActorId
+    && shift.businessDate === data.store.businessDate
+    && shift.status === 'active'
+  ))
+  const activeRoleIds = activeShift ? [activeShift.roleId, ...(activeShift.roleIds ?? [])] : []
+  const isCashier = activeRoleIds.includes('cashier')
+  const isManager = activeRoleIds.includes('manager') || currentEmployee?.roleId === 'manager'
 
-  async function execute(actionKey: string, successMessage: string, operation: () => Promise<unknown>) {
+  const loadSettlement = useCallback(async () => {
+    const result = await paymentApi.getPaymentSettlement(data.store.businessDate)
+    setSettlement(result)
+    setActualAmounts(Object.fromEntries(result.channels.map((item) => [
+      item.channel,
+      (item.confirmedActualAmount / 100).toFixed(2),
+    ])) as Record<SettlementChannel, string>)
+    if (result.latestHandover) {
+      setHandoverNote(result.latestHandover.note ?? '')
+      setIssueDrafts((current) => {
+        const next = { ...current }
+        for (const issue of result.latestHandover?.issues ?? []) {
+          next[issue.channel] = { reason: issue.reason, nextDayOwnerId: issue.nextDayOwnerId }
+        }
+        return next
+      })
+    }
+  }, [data.store.businessDate])
+
+  useEffect(() => {
+    setNextBusinessDate(followingBusinessDate(data.store.businessDate))
+    void loadSettlement().catch((error) => {
+      setNotice({ tone: 'error', message: error instanceof Error ? error.message : '营业日结算数据加载失败' })
+    })
+  }, [data.store.businessDate, data.revision, loadSettlement])
+
+  async function execute(actionKey: string, successMessage: string, operation: () => Promise<unknown>, reloadSettlement = true) {
     if (!currentEmployee) {
       setNotice({ tone: 'error', message: '当前员工身份无效，请重新登录后进行收银操作' })
       return
@@ -136,6 +184,7 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
     try {
       await operation()
       await onRefresh()
+      if (reloadSettlement) await loadSettlement()
       setNotice({ tone: 'success', message: successMessage })
     } catch (error) {
       setNotice({ tone: 'error', message: error instanceof Error ? error.message : '收银操作失败，请重试' })
@@ -144,17 +193,27 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
     }
   }
 
-  function createIntent(tableSessionId: string, channel: string) {
-    const channelLabel = channel === PHYSICAL_POS_CHANNEL ? '物理POS收款单' : '线上联调支付意图'
+  function createIntent(tableSessionId: string, channel: paymentApi.PaymentCollectionChannel, allocation: PaymentAllocationInput) {
+    const channelLabel = channel === PHYSICAL_POS_CHANNEL
+      ? '物理POS收款单'
+      : channel === CASH_PAYMENT_CHANNEL ? '现金收款单' : '线上联调支付意图'
     void execute(`create:${tableSessionId}:${channel}`, `${channelLabel}已创建`, () =>
-      paymentClient.createTablePaymentIntent(tableSessionId, channel),
+      paymentApi.createTablePaymentIntent(tableSessionId, channel, allocation),
     )
   }
 
   function simulateSuccess(intent: PaymentIntent) {
     void execute(`simulate:${intent.id}`, '联调模拟回调已完成，不代表真实资金入账', () =>
-      paymentClient.simulatePaymentSuccess(intent.id),
+      paymentApi.simulatePaymentSuccess(intent.id),
     )
+  }
+
+  function confirmCash(intent: PaymentIntent) {
+    void execute(`cash:${intent.id}`, '现金实收已由当前收银确认', () => paymentApi.confirmCashPayment(intent.id))
+  }
+
+  function queryProvider(intent: PaymentIntent) {
+    void execute(`provider-query:${intent.id}`, '已使用渠道查单结果更新支付状态', () => paymentApi.queryProviderPayment(intent.id))
   }
 
   function submitPhysicalPos(event: FormEvent) {
@@ -164,7 +223,7 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
       return
     }
     void execute(`pos:${effectivePosIntentId}`, 'POS收款已人工报送，当前状态为待对账', async () => {
-      await paymentClient.reportPhysicalPos(
+      await paymentApi.reportPhysicalPos(
         effectivePosIntentId,
         terminalId.trim(),
         terminalTransactionId.trim(),
@@ -184,7 +243,7 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
     }
     const draft = refundDraft
     void execute(`refund-request:${draft.orderItemId}`, '商品退款申请已提交审批', async () => {
-      await paymentClient.requestItemRefund(
+      await paymentApi.requestItemRefund(
         draft.paymentIntentId,
         draft.orderId,
         draft.orderItemId,
@@ -197,14 +256,14 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
 
   function approveRefund(refund: Refund) {
     void execute(`refund-approve:${refund.id}`, '退款已审批并完成联调处理', () =>
-      paymentClient.approveAndCompleteRefund(refund.id),
+      paymentApi.approveAndCompleteRefund(refund.id),
     )
   }
 
   function closeTable(tableId: string, tableCode: string) {
     if (!window.confirm(`确认${tableCode}所有商品已送达、服务已完成且款项已核实？`)) return
     void execute(`close:${tableId}`, `${tableCode}已结台，可以接待下一桌客人`, () =>
-      paymentClient.closeTableSession(tableId, '收银核对完成并结台'),
+      coreApi.closeTableSession(tableId, '收银核对完成并结台'),
     )
   }
 
@@ -215,13 +274,111 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
       return
     }
     void execute(`refund-pos-complete:${refund.id}`, '物理POS退款已审批并登记完成', async () => {
-      await paymentClient.completePhysicalPosRefund(
+      await paymentApi.completePhysicalPosRefund(
         refund.id,
         refundCompletion.terminalRefundTransactionId.trim(),
         refundCompletion.reason.trim(),
       )
       setRefundCompletion({ refundId: '', terminalRefundTransactionId: '', reason: '' })
     })
+  }
+
+  function createFromDraft(
+    account: ReturnType<typeof buildTableAccounts>[number],
+    channel: paymentApi.PaymentCollectionChannel,
+  ) {
+    const draft = collectionDrafts[account.tableSessionId] ?? emptyCollectionDraft()
+    let allocation: PaymentAllocationInput
+    if (draft.mode === 'amount') {
+      const amount = yuanInputToCents(draft.amountYuan)
+      if (!amount || amount > account.collectableAmount) {
+        setNotice({ tone: 'error', message: '指定收款金额必须大于0且不能超过剩余应收' })
+        return
+      }
+      allocation = { mode: 'amount', amount }
+    } else if (draft.mode === 'items') {
+      const items = account.remainingLines.flatMap((line) => {
+        const quantity = draft.quantities[lineKey(line.orderId, line.orderItemId)] ?? 0
+        return quantity > 0 ? [{ orderId: line.orderId, orderItemId: line.orderItemId, quantity }] : []
+      })
+      if (items.length === 0) {
+        setNotice({ tone: 'error', message: '请至少选择一个商品和收款数量' })
+        return
+      }
+      allocation = { mode: 'items', items }
+    } else {
+      allocation = { mode: 'all' }
+    }
+    createIntent(account.tableSessionId, channel, allocation)
+  }
+
+  function updateCollectionDraft(tableSessionId: string, update: Partial<CollectionDraft>) {
+    setCollectionDrafts((current) => ({
+      ...current,
+      [tableSessionId]: { ...(current[tableSessionId] ?? emptyCollectionDraft()), ...update },
+    }))
+  }
+
+  function updateLineQuantity(tableSessionId: string, key: string, quantity: number) {
+    const current = collectionDrafts[tableSessionId] ?? emptyCollectionDraft()
+    updateCollectionDraft(tableSessionId, { quantities: { ...current.quantities, [key]: quantity } })
+  }
+
+  function submitHandover(event: FormEvent) {
+    event.preventDefault()
+    if (!settlement) return
+    const confirmedActualAmounts = Object.fromEntries(SETTLEMENT_CHANNELS.map((channel) => [
+      channel,
+      yuanInputToCents(actualAmounts[channel]),
+    ])) as Record<SettlementChannel, number | null>
+    if (SETTLEMENT_CHANNELS.some((channel) => confirmedActualAmounts[channel] === null)) {
+      setNotice({ tone: 'error', message: '确认实收必须填写不小于0的金额，最多两位小数' })
+      return
+    }
+    const issues = SETTLEMENT_CHANNELS.flatMap((channel) => {
+      const summary = settlement.channels.find((item) => item.channel === channel)!
+      const difference = confirmedActualAmounts[channel]! - summary.systemReceivableAmount
+      if (summary.pendingReconciliationAmount === 0 && difference === 0) return []
+      const draft = issueDrafts[channel]
+      if (!draft.reason.trim() || !draft.nextDayOwnerId) return [{ channel, reason: '', nextDayOwnerId: '' }]
+      return [{ channel, reason: draft.reason.trim(), nextDayOwnerId: draft.nextDayOwnerId }]
+    })
+    if (issues.some((issue) => !issue.reason || !issue.nextDayOwnerId)) {
+      setNotice({ tone: 'error', message: '每个待对账或有差异的渠道都必须填写原因和次日责任人' })
+      return
+    }
+    void execute('handover-submit', '收银交班已提交，等待经理使用独立员工会话复核', () =>
+      paymentApi.submitCashierHandover(data.store.businessDate, {
+        confirmedActualAmounts: confirmedActualAmounts as Record<SettlementChannel, number>,
+        issues,
+        note: handoverNote.trim() || undefined,
+        deviceId: 'cashier-web',
+      }),
+    )
+  }
+
+  function reviewHandover(decision: 'approve' | 'reject') {
+    const handover = settlement?.latestHandover
+    if (!handover) return
+    if (decision === 'reject' && reviewNote.trim().length < 2) {
+      setNotice({ tone: 'error', message: '驳回交班时必须填写复核说明' })
+      return
+    }
+    void execute(`handover-review:${decision}`, decision === 'approve' ? '交班已复核通过，可以关账切日' : '交班已驳回，需收银重新提交', () =>
+      paymentApi.reviewCashierHandover(data.store.businessDate, handover.id, {
+        decision,
+        note: reviewNote.trim() || undefined,
+      }),
+    )
+  }
+
+  function closeBusinessDay(event: FormEvent) {
+    event.preventDefault()
+    if (!window.confirm(`确认关闭营业日 ${data.store.businessDate} 并切换到 ${nextBusinessDate}？`)) return
+    void execute('business-day-close', `营业日已切换到 ${nextBusinessDate}`, () =>
+      paymentApi.closeBusinessDay(data.store.businessDate, nextBusinessDate),
+      false,
+    )
   }
 
   return (
@@ -233,7 +390,7 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
         </div>
         <div>
           <span className="payment-mode"><ShieldCheck size={15} />当前操作：{currentEmployee?.displayName ?? '身份失效，请重新登录'}</span>
-          <span className="payment-mode"><CircleAlert size={15} />真实微信支付尚未接入</span>
+          <span className="payment-mode"><CircleAlert size={15} />正式聚合支付缺凭据时不可用</span>
         </div>
       </header>
 
@@ -276,13 +433,29 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
                   </div>
                 ))}
               </div>
+              <CollectionControls
+                account={account}
+                draft={collectionDrafts[account.tableSessionId] ?? emptyCollectionDraft()}
+                disabled={Boolean(busyAction)}
+                onMode={(mode) => updateCollectionDraft(account.tableSessionId, { mode })}
+                onAmount={(amountYuan) => updateCollectionDraft(account.tableSessionId, { amountYuan })}
+                onQuantity={(key, quantity) => updateLineQuantity(account.tableSessionId, key, quantity)}
+              />
               <div className="table-account-actions">
+                <button
+                  className="primary-button"
+                  type="button"
+                  disabled={account.collectableAmount <= 0 || Boolean(busyAction)}
+                  onClick={() => createFromDraft(account, CASH_PAYMENT_CHANNEL)}
+                >
+                  <Banknote size={16} />生成现金收款单
+                </button>
                 {DEVELOPMENT_PAYMENT_SIMULATOR && (
                   <button
                     className="primary-button"
                     type="button"
                     disabled={account.collectableAmount <= 0 || Boolean(busyAction)}
-                    onClick={() => createIntent(account.tableSessionId, ONLINE_SIMULATION_CHANNEL)}
+                    onClick={() => createFromDraft(account, ONLINE_SIMULATION_CHANNEL)}
                   >
                     {busyAction === `create:${account.tableSessionId}:${ONLINE_SIMULATION_CHANNEL}` ? <LoaderCircle className="spin" size={16} /> : <Smartphone size={16} />}
                     生成线上联调单
@@ -292,7 +465,7 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
                   className="secondary-button"
                   type="button"
                   disabled={account.collectableAmount <= 0 || Boolean(busyAction)}
-                  onClick={() => createIntent(account.tableSessionId, PHYSICAL_POS_CHANNEL)}
+                  onClick={() => createFromDraft(account, PHYSICAL_POS_CHANNEL)}
                 >
                   <CreditCard size={16} />生成POS收款单
                 </button>
@@ -319,6 +492,8 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
                 intent={intent}
                 busyAction={busyAction}
                 onSimulate={simulateSuccess}
+                onConfirmCash={confirmCash}
+                onQueryProvider={queryProvider}
                 onRefund={(draft) => setRefundDraft(draft)}
               />
             ))}
@@ -355,6 +530,96 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
           </form>
         </section>
       </div>
+
+      <section className="cashier-section settlement-section">
+        <SectionTitle
+          icon={CalendarCheck}
+          eyebrow="收银提交 · 经理独立复核"
+          title="交班与营业日关账"
+          meta={settlement?.latestHandover ? handoverStatusLabel(settlement.latestHandover.status) : '未提交'}
+        />
+        {!settlement && <EmptyState icon={LoaderCircle} text="正在读取营业日结算数据" />}
+        {settlement && (
+          <form className="settlement-form" onSubmit={submitHandover}>
+            <div className="settlement-channel-table">
+              <div className="settlement-channel-head">
+                <span>渠道</span><span>系统应收</span><span>确认实收</span><span>待对账</span><span>差异</span>
+              </div>
+              {settlement.channels.map((summary) => {
+                const difference = settlementDifference(summary.systemReceivableAmount, actualAmounts[summary.channel])
+                const unresolved = summary.pendingReconciliationAmount > 0 || difference !== 0
+                const issue = issueDrafts[summary.channel]
+                const locked = Boolean(settlement.latestHandover && settlement.latestHandover.status !== 'rejected')
+                return (
+                  <div className={`settlement-channel-row${unresolved ? ' has-difference' : ''}`} key={summary.channel}>
+                    <strong>{settlementChannelLabels[summary.channel]}</strong>
+                    <span>{money(summary.systemReceivableAmount)}</span>
+                    <label>
+                      <span className="sr-only">{settlementChannelLabels[summary.channel]}确认实收</span>
+                      <input
+                        inputMode="decimal"
+                        value={actualAmounts[summary.channel]}
+                        disabled={locked}
+                        onChange={(event) => setActualAmounts({ ...actualAmounts, [summary.channel]: event.target.value })}
+                      />
+                    </label>
+                    <span className={summary.pendingReconciliationAmount > 0 ? 'is-pending' : ''}>{money(summary.pendingReconciliationAmount)}</span>
+                    <b className={difference === 0 ? 'is-balanced' : 'is-difference'}>{signedMoney(difference)}</b>
+                    {unresolved && (
+                      <div className="settlement-issue-fields">
+                        <label><span>未对账原因</span><input required disabled={locked} value={issue.reason} onChange={(event) => setIssueDrafts({ ...issueDrafts, [summary.channel]: { ...issue, reason: event.target.value } })} /></label>
+                        <label><span>次日责任人</span><select required disabled={locked} value={issue.nextDayOwnerId} onChange={(event) => setIssueDrafts({ ...issueDrafts, [summary.channel]: { ...issue, nextDayOwnerId: event.target.value } })}>
+                          <option value="">请选择</option>
+                          {data.employees.filter((employee) => employee.status === 'active').map((employee) => <option value={employee.id} key={employee.id}>{employee.displayName}</option>)}
+                        </select></label>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+            <Field label="交班备注（选填）">
+              <input value={handoverNote} disabled={Boolean(settlement.latestHandover && settlement.latestHandover.status !== 'rejected')} onChange={(event) => setHandoverNote(event.target.value)} />
+            </Field>
+            {isCashier && (!settlement.latestHandover || settlement.latestHandover.status === 'rejected') && (
+              <button className="primary-button" type="submit" disabled={Boolean(busyAction)}>
+                {busyAction === 'handover-submit' ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}
+                提交收银交班
+              </button>
+            )}
+            {!isCashier && !settlement.latestHandover && <p className="settlement-role-note">等待当班收银提交交班数据。</p>}
+          </form>
+        )}
+
+        {settlement?.latestHandover?.status === 'submitted' && (
+          <div className="handover-review-panel">
+            <div>
+              <strong>提交人 {employeeName(data, settlement.latestHandover.submittedBy)}</strong>
+              <span>{formatTime(settlement.latestHandover.submittedAt)} · {settlement.latestHandover.issues.length}项转次日跟进</span>
+            </div>
+            {isManager && settlement.latestHandover.submittedBy !== currentActorId ? (
+              <>
+                <Field label="经理复核说明"><input value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} /></Field>
+                <div className="handover-review-actions">
+                  <button className="secondary-button" type="button" disabled={Boolean(busyAction)} onClick={() => reviewHandover('reject')}>驳回重提</button>
+                  <button className="primary-button" type="button" disabled={Boolean(busyAction)} onClick={() => reviewHandover('approve')}><ShieldCheck size={16} />复核通过</button>
+                </div>
+              </>
+            ) : <span className="settlement-role-note">必须由另一名有营业日关账权限的经理登录复核。</span>}
+          </div>
+        )}
+
+        {settlement?.latestHandover?.status === 'approved' && (
+          <form className="business-day-close-form" onSubmit={closeBusinessDay}>
+            <div><CheckCircle2 size={18} /><span>经理 {employeeName(data, settlement.latestHandover.reviewedBy ?? '')} 已复核。未对账项会保留原因和次日责任人，物理POS仍保持待对账。</span></div>
+            <Field label="下一营业日"><input type="date" min={followingBusinessDate(data.store.businessDate)} value={nextBusinessDate} onChange={(event) => setNextBusinessDate(event.target.value)} /></Field>
+            <button className="primary-button" type="submit" disabled={Boolean(busyAction) || settlement.latestHandover.reviewedBy !== currentActorId}>
+              {busyAction === 'business-day-close' ? <LoaderCircle className="spin" size={16} /> : <CalendarCheck size={16} />}
+              关账并切日
+            </button>
+          </form>
+        )}
+      </section>
 
       <section className="cashier-section refund-section">
         <SectionTitle icon={RefreshCcw} eyebrow="按原支付商品追溯" title="商品退款与审批" meta={`${pendingRefunds.length}笔待审批`} />
@@ -418,21 +683,70 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
   )
 }
 
-function PaymentIntentRow({ data, intent, busyAction, onSimulate, onRefund }: {
+function CollectionControls({ account, draft, disabled, onMode, onAmount, onQuantity }: {
+  account: ReturnType<typeof buildTableAccounts>[number]
+  draft: CollectionDraft
+  disabled: boolean
+  onMode: (mode: PaymentAllocationInput['mode']) => void
+  onAmount: (amountYuan: string) => void
+  onQuantity: (key: string, quantity: number) => void
+}) {
+  return (
+    <div className="collection-composer">
+      <div className="collection-mode" role="group" aria-label="收款拆分方式">
+        {([
+          ['items', '按商品/数量'],
+          ['amount', '指定金额'],
+          ['all', '全部剩余'],
+        ] as const).map(([mode, label]) => (
+          <button className={draft.mode === mode ? 'is-active' : ''} type="button" disabled={disabled} onClick={() => onMode(mode)} key={mode}>{label}</button>
+        ))}
+      </div>
+      {draft.mode === 'items' && (
+        <div className="collection-line-selector">
+          {account.remainingLines.map((line) => (
+            <label key={lineKey(line.orderId, line.orderItemId)}>
+              <span><strong>{line.name}</strong><small>{money(line.unitPaidAmount)} · 剩余 {money(line.remainingAmount)}</small></span>
+              <input
+                type="number"
+                min={0}
+                max={line.remainingQuantity}
+                disabled={disabled || line.remainingQuantity === 0}
+                value={draft.quantities[lineKey(line.orderId, line.orderItemId)] ?? 0}
+                onChange={(event) => onQuantity(lineKey(line.orderId, line.orderItemId), Math.min(line.remainingQuantity, Math.max(0, Number(event.target.value) || 0)))}
+              />
+            </label>
+          ))}
+          {account.remainingLines.every((line) => line.remainingQuantity === 0) && <span className="collection-partial-note">剩余应收不足一个完整商品单位，请使用指定金额收款。</span>}
+        </div>
+      )}
+      {draft.mode === 'amount' && (
+        <Field label={`本次收款金额（剩余 ${money(account.collectableAmount)}）`}>
+          <input inputMode="decimal" value={draft.amountYuan} disabled={disabled} onChange={(event) => onAmount(event.target.value)} placeholder="0.00" />
+        </Field>
+      )}
+      {draft.mode === 'all' && <span className="collection-partial-note">本次将分配当前桌次全部剩余应收 {money(account.collectableAmount)}。</span>}
+    </div>
+  )
+}
+
+function PaymentIntentRow({ data, intent, busyAction, onSimulate, onConfirmCash, onQueryProvider, onRefund }: {
   data: BootstrapResponse
   intent: PaymentIntent
   busyAction: string
   onSimulate: (intent: PaymentIntent) => void
+  onConfirmCash: (intent: PaymentIntent) => void
+  onQueryProvider: (intent: PaymentIntent) => void
   onRefund: (draft: RefundDraft) => void
 }) {
   const table = tableFromSession(data, intent.tableSessionId)
   const isSimulation = intent.channel === ONLINE_SIMULATION_CHANNEL
-  const canRefund = intent.status === 'succeeded'
+  const canRefund = ['succeeded', 'reported_pending_reconciliation'].includes(intent.status)
   return (
     <article className="payment-intent-row">
       <div className="intent-overview">
         <span className={`payment-status status-${intent.status}`}>{intentStatusLabels[intent.status]}</span>
-        <div><strong>{table?.code ?? shortId(intent.tableSessionId)} · {money(intent.amount)}</strong><small>{isSimulation ? '微信支付联调模拟器' : intent.channel === PHYSICAL_POS_CHANNEL ? '物理POS' : intent.channel}</small></div>
+        <div><strong>{table?.code ?? shortId(intent.tableSessionId)} · {money(intent.amount)}</strong><small>{isSimulation ? '微信支付联调模拟器' : intent.channel === PHYSICAL_POS_CHANNEL ? '物理POS' : intent.channel === CASH_PAYMENT_CHANNEL ? '现金' : intent.channel === 'postar' ? '星驿正式聚合支付' : intent.channel}</small></div>
         <time>{formatTime(intent.createdAt)}</time>
       </div>
       <div className="intent-lines">
@@ -458,6 +772,24 @@ function PaymentIntentRow({ data, intent, busyAction, onSimulate, onRefund }: {
           <button className="secondary-button" type="button" disabled={Boolean(busyAction)} onClick={() => onSimulate(intent)}>
             {busyAction === `simulate:${intent.id}` ? <LoaderCircle className="spin" size={16} /> : <Smartphone size={16} />}
             模拟支付成功
+          </button>
+        </div>
+      )}
+      {intent.channel === CASH_PAYMENT_CHANNEL && intent.status === 'pending' && (
+        <div className="simulation-action cash-confirmation-action">
+          <div><Banknote size={16} /><span><strong>现金人工确认</strong>仅在现金已经清点并收妥后确认实收。</span></div>
+          <button className="primary-button" type="button" disabled={Boolean(busyAction)} onClick={() => onConfirmCash(intent)}>
+            {busyAction === `cash:${intent.id}` ? <LoaderCircle className="spin" size={16} /> : <CheckCircle2 size={16} />}
+            确认现金实收
+          </button>
+        </div>
+      )}
+      {intent.channel === 'postar' && ['pending', 'processing'].includes(intent.status) && (
+        <div className="simulation-action provider-query-action">
+          <div><ShieldCheck size={16} /><span><strong>正式渠道订单</strong>同步下单不代表到账，到账状态只接受验签回调或主动查单。</span></div>
+          <button className="secondary-button" type="button" disabled={Boolean(busyAction)} onClick={() => onQueryProvider(intent)}>
+            {busyAction === `provider-query:${intent.id}` ? <LoaderCircle className="spin" size={16} /> : <RefreshCcw size={16} />}
+            主动查单
           </button>
         </div>
       )}
@@ -494,6 +826,13 @@ function buildTableAccounts(data: BootstrapResponse, intents: PaymentIntent[], r
     ordersBySession.set(order.tableSessionId, orders)
   }
   const activeIntents = intents.filter((intent) => !['failed', 'closed'].includes(intent.status))
+  const allocatedByLine = new Map<string, number>()
+  for (const intent of activeIntents) {
+    for (const line of intent.lineAllocations) {
+      const key = lineKey(line.orderId, line.orderItemId)
+      allocatedByLine.set(key, (allocatedByLine.get(key) ?? 0) + line.paidAmount)
+    }
+  }
   return Array.from(ordersBySession, ([tableSessionId, orders]) => {
     const table = tableFromSession(data, tableSessionId)
     const completedRefundAmount = refunds
@@ -509,12 +848,26 @@ function buildTableAccounts(data: BootstrapResponse, intents: PaymentIntent[], r
     const confirmedAllocatedAmount = activeIntents
       .filter((intent) => ['succeeded', 'reported_pending_reconciliation'].includes(intent.status))
       .reduce((sum, intent) => sum + intent.amount, 0)
+    const remainingLines = orders.flatMap((order) => order.items.flatMap((item) => {
+      const remainingAmount = Math.max(0, item.quantity * item.unitSalePriceAmount - (allocatedByLine.get(lineKey(order.id, item.id)) ?? 0))
+      if (remainingAmount === 0) return []
+      return [{
+        orderId: order.id,
+        orderItemId: item.id,
+        name: item.name,
+        specification: item.specification,
+        unitPaidAmount: item.unitSalePriceAmount,
+        remainingAmount,
+        remainingQuantity: Math.floor(remainingAmount / item.unitSalePriceAmount),
+      }]
+    }))
     return {
       tableSessionId,
       tableId: table?.id ?? null,
       tableCode: table?.code ?? '未知桌台',
       tableName: table?.displayName ?? '未匹配桌台',
       orders,
+      remainingLines,
       totalAmount,
       reservedAmount,
       collectableAmount: Math.max(0, totalAmount - allocatedAmount),
@@ -533,6 +886,44 @@ function findOrderItem(data: BootstrapResponse, orderId: string, orderItemId: st
 
 function refundItemLabel(data: BootstrapResponse, orderId: string, orderItemId: string) {
   return findOrderItem(data, orderId, orderItemId)?.name ?? `商品 ${shortId(orderItemId)}`
+}
+
+function emptyCollectionDraft(): CollectionDraft {
+  return { mode: 'items', amountYuan: '', quantities: {} }
+}
+
+function lineKey(orderId: string, orderItemId: string) {
+  return `${orderId}\u0000${orderItemId}`
+}
+
+function yuanInputToCents(value: string) {
+  const normalized = value.trim()
+  if (!/^\d+(?:\.\d{1,2})?$/.test(normalized)) return null
+  const amount = Math.round(Number(normalized) * 100)
+  return Number.isSafeInteger(amount) && amount >= 0 ? amount : null
+}
+
+function settlementDifference(systemAmount: number, actualAmount: string) {
+  return (yuanInputToCents(actualAmount) ?? 0) - systemAmount
+}
+
+function signedMoney(amount: number) {
+  if (amount === 0) return money(0)
+  return `${amount > 0 ? '+' : '-'}${money(Math.abs(amount))}`
+}
+
+function followingBusinessDate(businessDate: string) {
+  const date = new Date(`${businessDate}T00:00:00.000Z`)
+  date.setUTCDate(date.getUTCDate() + 1)
+  return date.toISOString().slice(0, 10)
+}
+
+function handoverStatusLabel(status: NonNullable<PaymentSettlementView['latestHandover']>['status']) {
+  return { submitted: '待经理复核', approved: '已复核·待切日', rejected: '已驳回', closed: '已关账' }[status]
+}
+
+function employeeName(data: BootstrapResponse, employeeId: string) {
+  return data.employees.find((employee) => employee.id === employeeId)?.displayName ?? employeeId
 }
 
 function money(amount: number) {

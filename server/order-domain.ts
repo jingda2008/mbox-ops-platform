@@ -2,9 +2,13 @@ import type {
   AddOrderItemCommand,
   AuthorizationKind,
   CreateOrderDraftCommand,
+  DecideKdsExceptionCommand,
   DecideOrderAuthorizationCommand,
   FulfillmentWorkstationConfig,
   IdempotencyRecord,
+  KdsExceptionEvent,
+  KdsExceptionKind,
+  KdsExceptionReasonCode,
   KdsTask,
   KdsTaskActionCommand,
   KdsTaskStatus,
@@ -14,6 +18,7 @@ import type {
   OrderAuthorizationAuthority,
   OrderDomainState,
   OrderItem,
+  ReportKdsExceptionCommand,
   RequestOrderAuthorizationCommand,
   SubmitOrderCommand,
   TableAccountSummary,
@@ -171,6 +176,36 @@ function findOrderItem(state: OrderDomainState, itemId: string) {
     if (item) return item
   }
   return undefined
+}
+
+function findKdsExceptionEvent(state: OrderDomainState, eventId: string) {
+  for (const task of state.kdsTasks) {
+    const event = task.exceptionEvents?.find((candidate) => candidate.id === eventId)
+    if (event) return event
+  }
+  return undefined
+}
+
+function findKdsExceptionReport(state: OrderDomainState, exceptionId: string) {
+  for (const task of state.kdsTasks) {
+    const event = task.exceptionEvents?.find((candidate) => (
+      candidate.exceptionId === exceptionId && candidate.type === 'reported'
+    ))
+    if (event) return { task, event }
+  }
+  return undefined
+}
+
+function exceptionDisposition(task: KdsTask, exceptionId: string) {
+  return task.exceptionEvents?.find((event) => (
+    event.exceptionId === exceptionId && event.type === 'manager_disposition'
+  ))
+}
+
+function taskBlockingException(task: KdsTask) {
+  const reports = task.exceptionEvents?.filter((event) => event.type === 'reported') ?? []
+  return reports.find((report) => !exceptionDisposition(task, report.exceptionId))
+    ?? reports.find((report) => exceptionDisposition(task, report.exceptionId))
 }
 
 function calculateOrderAmounts(items: OrderItem[]): OrderAmounts {
@@ -525,6 +560,8 @@ export function submitOrder(state: OrderDomainState, command: SubmitOrderCommand
           },
           pickupSla: { targetSeconds: workstation.pickupSlaSeconds, dueAt: null },
           deliveryServiceTask: null,
+          remakeOf: null,
+          exceptionEvents: [],
           queuedAt: command.occurredAt,
           startedAt: null,
           startedBy: null,
@@ -560,15 +597,244 @@ export function submitOrder(state: OrderDomainState, command: SubmitOrderCommand
   )
 }
 
-function syncOrderFulfillment(order: Order, occurredAt: string) {
-  if (order.items.every((item) => item.fulfillmentStatus === 'delivered')) {
+function effectiveKdsOutcome(state: OrderDomainState, item: OrderItem) {
+  let task = item.kdsTaskId ? state.kdsTasks.find((candidate) => candidate.id === item.kdsTaskId) : undefined
+  const visited = new Set<string>()
+
+  while (task && !visited.has(task.id)) {
+    visited.add(task.id)
+    const report = task.exceptionEvents?.find((event) => event.type === 'reported')
+    if (!report) return { task, cancelled: false, pendingException: false }
+    const disposition = exceptionDisposition(task, report.exceptionId)
+    if (!disposition) return { task, cancelled: false, pendingException: true }
+    if (disposition.managerDisposition === 'cancelled') {
+      return { task, cancelled: true, pendingException: false }
+    }
+    task = disposition.remakeKdsTaskId
+      ? state.kdsTasks.find((candidate) => candidate.id === disposition.remakeKdsTaskId)
+      : undefined
+  }
+
+  return { task, cancelled: false, pendingException: true }
+}
+
+function syncOrderFulfillment(state: OrderDomainState, order: Order, occurredAt: string) {
+  const outcomes = order.items.map((item) => effectiveKdsOutcome(state, item))
+  const allClosed = outcomes.every((outcome) => (
+    outcome.cancelled || (!outcome.pendingException && outcome.task?.status === 'delivered')
+  ))
+  if (allClosed) {
     order.status = 'fulfilled'
     order.fulfilledAt = occurredAt
     return
   }
-  if (order.items.some((item) => item.fulfillmentStatus !== 'queued')) {
+
+  order.fulfilledAt = null
+  const started = outcomes.some((outcome) => (
+    outcome.pendingException || outcome.task?.remakeOf != null || (outcome.task && outcome.task.status !== 'queued')
+  ))
+  if (started) {
     order.status = 'in_fulfillment'
+  } else if (['submitted', 'in_fulfillment', 'fulfilled'].includes(order.status)) {
+    order.status = 'submitted'
   }
+}
+
+const exceptionReasonCodesByKind: Record<KdsExceptionKind, ReadonlySet<KdsExceptionReasonCode>> = {
+  shortage: new Set(['product_out_of_stock', 'ingredient_out_of_stock', 'equipment_unavailable', 'other']),
+  production_rejection: new Set(['equipment_unavailable', 'quality_rejected', 'damaged', 'other']),
+  wrong_item: new Set(['wrong_product', 'wrong_specification', 'quality_rejected', 'damaged', 'other']),
+}
+
+function assertExceptionCanBeReported(task: KdsTask, exceptionKind: KdsExceptionKind) {
+  if (taskBlockingException(task)) throw new Error('该KDS任务已有异常记录，不能重复报告')
+  if (exceptionKind === 'wrong_item') {
+    if (!['preparing', 'completed', 'picked_up', 'delivered'].includes(task.status)) {
+      throw new Error('当前KDS状态不能报告错品')
+    }
+    return
+  }
+  if (!['queued', 'preparing'].includes(task.status)) throw new Error('当前KDS状态不能拒绝出品')
+}
+
+export function reportKdsException(state: OrderDomainState, command: ReportKdsExceptionCommand) {
+  assertNonEmpty(command.exceptionId, '异常ID')
+  assertNonEmpty(command.eventId, '异常事件ID')
+  assertNonEmpty(command.taskId, 'KDS任务ID')
+  assertNonEmpty(command.actorId, '操作人')
+  assertNonEmpty(command.actorRoleId, '操作岗位')
+  assertTimestamp(command.occurredAt)
+  if (!exceptionReasonCodesByKind[command.exceptionKind].has(command.reasonCode)) {
+    throw new Error('异常类型与原因不匹配')
+  }
+  if (command.reasonCode === 'other') assertNonEmpty(command.reasonNote, '其他原因说明')
+
+  return executeIdempotent(
+    state,
+    command.idempotencyKey,
+    'kds.exception.report.v1',
+    command,
+    'kds_exception_event',
+    (id) => findKdsExceptionEvent(state, id),
+    () => {
+      const task = state.kdsTasks.find((candidate) => candidate.id === command.taskId)
+      if (!task) throw new Error('KDS任务不存在')
+      assertExceptionCanBeReported(task, command.exceptionKind)
+      if (Date.parse(command.occurredAt) < Date.parse(task.queuedAt)) throw new Error('异常时间不能早于KDS排队时间')
+      if (findKdsExceptionReport(state, command.exceptionId)) throw new Error('异常ID已存在')
+      if (findKdsExceptionEvent(state, command.eventId)) throw new Error('异常事件ID已存在')
+
+      const order = findOrder(state, task.orderId)
+      const item = order.items.find((candidate) => candidate.id === task.orderItemId)
+      const originalOrderItemId = task.remakeOf?.orderItemId ?? task.orderItemId
+      const originalKdsTaskId = task.remakeOf?.kdsTaskId ?? task.id
+      if (!item || item.id !== originalOrderItemId || item.kdsTaskId !== originalKdsTaskId) {
+        throw new Error('KDS任务与原订单明细不一致')
+      }
+
+      const event: KdsExceptionEvent = {
+        id: command.eventId,
+        exceptionId: command.exceptionId,
+        type: 'reported',
+        exceptionKind: command.exceptionKind,
+        reasonCode: command.reasonCode,
+        reasonNote: command.reasonNote.trim() || null,
+        orderId: task.orderId,
+        orderItemId: task.orderItemId,
+        kdsTaskId: task.id,
+        originalOrderItemId,
+        originalKdsTaskId,
+        actorId: command.actorId,
+        actorRoleId: command.actorRoleId,
+        occurredAt: command.occurredAt,
+        managerDisposition: null,
+        remakeKdsTaskId: null,
+      }
+      task.exceptionEvents ??= []
+      task.exceptionEvents.push(event)
+      syncOrderFulfillment(state, order, command.occurredAt)
+      return event
+    },
+    (event) => event.id,
+  )
+}
+
+function cloneWorkstationSnapshot(workstation: FulfillmentWorkstationConfig): FulfillmentWorkstationConfig {
+  return {
+    ...workstation,
+    productionRoleIds: [...workstation.productionRoleIds],
+    deliveryRoleIds: [...workstation.deliveryRoleIds],
+    requiredSkillIds: [...workstation.requiredSkillIds],
+  }
+}
+
+export function decideKdsException(state: OrderDomainState, command: DecideKdsExceptionCommand) {
+  assertNonEmpty(command.eventId, '处置事件ID')
+  assertNonEmpty(command.exceptionId, '异常ID')
+  assertNonEmpty(command.actorId, '处置人')
+  assertNonEmpty(command.actorRoleId, '处置岗位')
+  assertTimestamp(command.occurredAt)
+  if (!['supervisor', 'manager'].includes(command.actorRoleId)) throw new Error('只有领班或经理可以处置KDS异常')
+  const allowedReasonCodes = command.disposition === 'cancelled'
+    ? ['unavailable_confirmed', 'guest_cancelled', 'manager_cancelled', 'other']
+    : ['service_recovery', 'quality_recovery', 'other']
+  if (!allowedReasonCodes.includes(command.reasonCode)) throw new Error('经理处置与原因不匹配')
+  if (command.reasonCode === 'other') assertNonEmpty(command.reasonNote, '其他处置原因说明')
+  if (command.disposition === 'remake' && !command.remakeTaskId) throw new Error('补做必须提供新KDS任务ID')
+  if (command.disposition === 'cancelled' && command.remakeTaskId) throw new Error('取消处置不能创建补做任务')
+
+  return executeIdempotent(
+    state,
+    command.idempotencyKey,
+    'kds.exception.decide.v1',
+    command,
+    'kds_exception_event',
+    (id) => findKdsExceptionEvent(state, id),
+    () => {
+      const reported = findKdsExceptionReport(state, command.exceptionId)
+      if (!reported) throw new Error('KDS异常不存在')
+      const { task, event: report } = reported
+      if (exceptionDisposition(task, command.exceptionId)) throw new Error('KDS异常已经处置')
+      if (Date.parse(command.occurredAt) < Date.parse(report.occurredAt)) throw new Error('处置时间不能早于异常报告时间')
+      if (findKdsExceptionEvent(state, command.eventId)) throw new Error('处置事件ID已存在')
+
+      const order = findOrder(state, task.orderId)
+      const item = order.items.find((candidate) => candidate.id === report.originalOrderItemId)
+      if (!item || item.kdsTaskId !== report.originalKdsTaskId) throw new Error('异常与原订单明细不一致')
+
+      let remakeTask: KdsTask | null = null
+      if (command.disposition === 'remake') {
+        if (state.kdsTasks.some((candidate) => candidate.id === command.remakeTaskId)) throw new Error('补做KDS任务ID已存在')
+        const workstation = cloneWorkstationSnapshot(task.workstation ?? resolveFulfillmentWorkstation(state, task.stationId))
+        const attempt = state.kdsTasks.filter((candidate) => (
+          candidate.remakeOf?.kdsTaskId === report.originalKdsTaskId
+        )).length + 1
+        remakeTask = {
+          id: command.remakeTaskId!,
+          orderId: task.orderId,
+          orderItemId: report.originalOrderItemId,
+          tableSessionId: task.tableSessionId,
+          tableCode: task.tableCode,
+          stationId: task.stationId,
+          itemName: task.itemName,
+          specification: task.specification,
+          quantity: task.quantity,
+          status: 'queued',
+          workstation,
+          productionSla: {
+            targetSeconds: workstation.productionSlaSeconds,
+            dueAt: isoAfter(command.occurredAt, workstation.productionSlaSeconds),
+          },
+          pickupSla: { targetSeconds: workstation.pickupSlaSeconds, dueAt: null },
+          deliveryServiceTask: null,
+          remakeOf: {
+            orderItemId: report.originalOrderItemId,
+            kdsTaskId: report.originalKdsTaskId,
+            exceptionId: report.exceptionId,
+            attempt,
+          },
+          exceptionEvents: [],
+          queuedAt: command.occurredAt,
+          startedAt: null,
+          startedBy: null,
+          completedAt: null,
+          completedBy: null,
+          pickedUpAt: null,
+          pickedUpBy: null,
+          deliveredAt: null,
+          deliveredBy: null,
+        }
+      }
+
+      const dispositionEvent: KdsExceptionEvent = {
+        id: command.eventId,
+        exceptionId: command.exceptionId,
+        type: 'manager_disposition',
+        exceptionKind: report.exceptionKind,
+        reasonCode: command.reasonCode,
+        reasonNote: command.reasonNote.trim() || null,
+        orderId: report.orderId,
+        orderItemId: report.orderItemId,
+        kdsTaskId: report.kdsTaskId,
+        originalOrderItemId: report.originalOrderItemId,
+        originalKdsTaskId: report.originalKdsTaskId,
+        actorId: command.actorId,
+        actorRoleId: command.actorRoleId,
+        occurredAt: command.occurredAt,
+        managerDisposition: command.disposition,
+        remakeKdsTaskId: remakeTask?.id ?? null,
+      }
+      task.exceptionEvents ??= []
+      task.exceptionEvents.push(dispositionEvent)
+      if (remakeTask) {
+        state.kdsTasks.push(remakeTask)
+        item.fulfillmentStatus = 'queued'
+      }
+      syncOrderFulfillment(state, order, command.occurredAt)
+      return dispositionEvent
+    },
+    (event) => event.id,
+  )
 }
 
 function applyKdsTransition(
@@ -594,6 +860,11 @@ function applyKdsTransition(
     () => {
       const task = state.kdsTasks.find((item) => item.id === command.taskId)
       if (!task) throw new Error('KDS任务不存在')
+      const blockingException = taskBlockingException(task)
+      if (blockingException) {
+        const disposition = exceptionDisposition(task, blockingException.exceptionId)
+        throw new Error(disposition ? '原KDS任务已由异常处置关闭' : 'KDS异常待领班或经理处置')
+      }
       if (task.status !== expectedStatus) throw new Error(`KDS任务不能从${task.status}跳转到${nextStatus}`)
       const priorTimestamp = previousAt(task)
       if (!priorTimestamp) throw new Error('KDS任务缺少前序时间')
@@ -601,12 +872,16 @@ function applyKdsTransition(
 
       const order = findOrder(state, task.orderId)
       const item = order.items.find((candidate) => candidate.id === task.orderItemId)
-      if (!item || item.kdsTaskId !== task.id) throw new Error('KDS任务与订单明细不一致')
+      const linkedToOriginal = item?.kdsTaskId === task.id
+      const linkedAsRemake = item != null
+        && task.remakeOf?.orderItemId === item.id
+        && task.remakeOf.kdsTaskId === item.kdsTaskId
+      if (!item || (!linkedToOriginal && !linkedAsRemake)) throw new Error('KDS任务与订单明细不一致')
 
       task.status = nextStatus
       update(task)
       item.fulfillmentStatus = nextStatus
-      syncOrderFulfillment(order, command.occurredAt)
+      syncOrderFulfillment(state, order, command.occurredAt)
       return task
     },
     (task) => task.id,

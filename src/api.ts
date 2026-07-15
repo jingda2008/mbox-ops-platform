@@ -14,14 +14,31 @@ import type {
   ShiftWriteInput,
   StoreConfig,
   Table,
+  TableCombinationInput,
+  TableCombinationRecord,
+  TableOperationsConfig,
+  TableOperationsConfigInput,
+  TableSessionSummary,
   TableTransferRecord,
   TransferTableSessionInput,
   TableWriteInput,
   TaskActionInput,
+  SalesAttributionInput,
+  SalesAttributionRecord,
+  WalkInOpenInput,
 } from './shared/contracts'
-import type { AssistedPaymentLink, AssistedPaymentLinkInput, CartOrderInput, KdsActionInput, QuickOrderInput } from './shared/commerce-api'
+import type { Reservation } from './shared/reservation-contracts'
+import type {
+  AssistedPaymentLink,
+  AssistedPaymentLinkInput,
+  CartOrderInput,
+  KdsActionInput,
+  KdsExceptionDecisionInput,
+  KdsExceptionReportInput,
+  QuickOrderInput,
+} from './shared/commerce-api'
 import type { AuthorityWriteInput } from './shared/commerce-api'
-import type { KdsTask, Order } from './shared/order-contracts'
+import type { KdsExceptionEvent, KdsTask, Order } from './shared/order-contracts'
 import type { OrderAuthorizationAuthority } from './shared/order-contracts'
 import type { PaymentIntent, PhysicalPosReport, Refund } from './shared/payment-contracts'
 import type {
@@ -261,10 +278,14 @@ export function stopAwaitingOrder(tableId: string, actorId: string, reason: stri
   })
 }
 
-export function closeTableSession(tableId: string, reason: string) {
+export function closeTableSession(tableId: string, reason: string, minimumSpendWaiverReason?: string) {
   return request<Table>(`/api/tables/${encodeURIComponent(tableId)}/close`, {
     method: 'POST',
-    body: JSON.stringify({ reason, idempotencyKey: `table-close-${crypto.randomUUID()}` }),
+    body: JSON.stringify({
+      reason,
+      minimumSpendWaiver: minimumSpendWaiverReason ? { reason: minimumSpendWaiverReason } : undefined,
+      idempotencyKey: `table-close-${crypto.randomUUID()}`,
+    }),
   })
 }
 
@@ -272,6 +293,45 @@ export function transferTableSession(tableId: string, input: Omit<TransferTableS
   return request<TableTransferRecord>(`/api/tables/${encodeURIComponent(tableId)}/transfer`, {
     method: 'POST',
     body: JSON.stringify({ ...input, idempotencyKey: `table-transfer-${crypto.randomUUID()}` }),
+  })
+}
+
+export function updateTableOperationsConfig(input: Omit<TableOperationsConfigInput, 'idempotencyKey'>) {
+  return request<TableOperationsConfig>('/api/table-operations/config', {
+    method: 'PUT',
+    body: JSON.stringify({ ...input, idempotencyKey: `table-ops-config-${crypto.randomUUID()}` }),
+  })
+}
+
+export function openWalkInTable(tableId: string, input: Omit<WalkInOpenInput, 'idempotencyKey'>) {
+  return request<{ table: Table; reservation: Reservation; summary: TableSessionSummary }>(
+    `/api/tables/${encodeURIComponent(tableId)}/walk-in-open`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ ...input, idempotencyKey: `walk-in-open-${crypto.randomUUID()}` }),
+    },
+  )
+}
+
+export function getTableSessionSummary(tableId: string) {
+  return request<TableSessionSummary>(`/api/tables/${encodeURIComponent(tableId)}/session-summary`)
+}
+
+export function assignTableSessionSales(sessionId: string, input: Omit<SalesAttributionInput, 'idempotencyKey'>) {
+  return request<SalesAttributionRecord>(`/api/table-sessions/${encodeURIComponent(sessionId)}/sales-attribution`, {
+    method: 'POST',
+    body: JSON.stringify({ ...input, idempotencyKey: `table-sales-${crypto.randomUUID()}` }),
+  })
+}
+
+type TableCombinationClientInput =
+  | Omit<Extract<TableCombinationInput, { action: 'merge' | 'add_table' }>, 'idempotencyKey'>
+  | Omit<Extract<TableCombinationInput, { action: 'split_back' }>, 'idempotencyKey'>
+
+export function operateTableCombination(tableId: string, input: TableCombinationClientInput) {
+  return request<TableCombinationRecord>(`/api/tables/${encodeURIComponent(tableId)}/combinations`, {
+    method: 'POST',
+    body: JSON.stringify({ ...input, idempotencyKey: `table-combination-${crypto.randomUUID()}` }),
   })
 }
 
@@ -479,6 +539,20 @@ export function createAssistedPaymentLink(orderId: string, input: AssistedPaymen
 
 export function actOnKdsTask(taskId: string, input: KdsActionInput) {
   return request<KdsTask>(`/api/commerce/kds/${taskId}/actions`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function reportKdsException(taskId: string, input: KdsExceptionReportInput) {
+  return request<KdsExceptionEvent>(`/api/commerce/kds/${taskId}/exceptions`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function decideKdsException(exceptionId: string, input: KdsExceptionDecisionInput) {
+  return request<KdsExceptionEvent>(`/api/commerce/kds/exceptions/${exceptionId}/decision`, {
     method: 'POST',
     body: JSON.stringify(input),
   })

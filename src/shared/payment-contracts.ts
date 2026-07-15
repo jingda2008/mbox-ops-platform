@@ -1,6 +1,11 @@
 import type { MoneyAmount } from './order-contracts.js'
 
 export const PHYSICAL_POS_CHANNEL = 'physical_pos'
+export const CASH_PAYMENT_CHANNEL = 'cash'
+export const SETTLEMENT_CHANNELS = ['cash', 'physical_pos', 'wechat', 'alipay'] as const
+
+export type PaymentAllocationMode = 'all' | 'items' | 'amount'
+export type SettlementChannel = typeof SETTLEMENT_CHANNELS[number]
 
 export type PaymentIntentStatus =
   | 'pending'
@@ -21,6 +26,8 @@ export interface PaymentLineAllocation {
   quantity: number
   unitPaidAmount: MoneyAmount
   paidAmount: MoneyAmount
+  allocationMode?: PaymentAllocationMode
+  sourceUnitPriceAmount?: MoneyAmount
 }
 
 export interface PaymentIntent {
@@ -31,6 +38,7 @@ export interface PaymentIntent {
   amount: MoneyAmount
   currency: string
   channel: string
+  settlementChannel?: Extract<SettlementChannel, 'wechat' | 'alipay'>
   merchantId: string
   status: PaymentIntentStatus
   channelTransactionId: string | null
@@ -42,6 +50,22 @@ export interface PaymentIntent {
   failedAt: string | null
   closedAt: string | null
   failureReason: string | null
+  businessDate?: string
+  allocationMode?: PaymentAllocationMode
+  requestSelectionFingerprint?: string
+  providerPaymentPayload?: Readonly<Record<string, unknown>>
+  providerOrderCreatedAt?: string
+}
+
+export interface CashPaymentConfirmation {
+  id: string
+  paymentIntentId: string
+  tableSessionId: string
+  amount: MoneyAmount
+  currency: string
+  confirmedBy: string
+  deviceId: string
+  confirmedAt: string
 }
 
 export interface PaymentNotification {
@@ -118,11 +142,54 @@ export interface Refund {
   failureReason: string | null
 }
 
+export interface SettlementChannelSummary {
+  channel: SettlementChannel
+  systemReceivableAmount: MoneyAmount
+  confirmedActualAmount: MoneyAmount
+  pendingReconciliationAmount: MoneyAmount
+  differenceAmount: MoneyAmount
+}
+
+export interface CashierHandoverIssue {
+  channel: SettlementChannel
+  amount: MoneyAmount
+  reason: string
+  nextDayOwnerId: string
+}
+
+export type CashierHandoverStatus = 'submitted' | 'approved' | 'rejected' | 'closed'
+
+export interface CashierHandover {
+  id: string
+  businessDate: string
+  shiftId: string
+  submittedBy: string
+  submittedAt: string
+  deviceId: string
+  note: string | null
+  status: CashierHandoverStatus
+  channels: SettlementChannelSummary[]
+  issues: CashierHandoverIssue[]
+  reviewedBy: string | null
+  reviewedAt: string | null
+  reviewNote: string | null
+  closedAt: string | null
+}
+
+export interface PaymentSettlementView {
+  businessDate: string
+  channels: SettlementChannelSummary[]
+  latestHandover: CashierHandover | null
+  canClose: boolean
+}
+
 export type PaymentDomainResultType =
   | 'payment_intent'
   | 'payment_query'
   | 'physical_pos_report'
+  | 'cash_payment_confirmation'
   | 'refund'
+  | 'cashier_handover'
 
 export interface PaymentIdempotencyRecord {
   key: string
@@ -137,7 +204,9 @@ export interface PaymentDomainState {
   paymentNotifications: PaymentNotification[]
   paymentStatusQueries: PaymentStatusQuery[]
   physicalPosReports: PhysicalPosReport[]
+  cashPaymentConfirmations?: CashPaymentConfirmation[]
   refunds: Refund[]
+  cashierHandovers?: CashierHandover[]
   idempotencyRecords: PaymentIdempotencyRecord[]
 }
 
@@ -146,6 +215,8 @@ export interface PaymentLineAllocationInput {
   orderItemId: string
   quantity: number
   unitPaidAmount: MoneyAmount
+  allocationMode?: PaymentAllocationMode
+  sourceUnitPriceAmount?: MoneyAmount
 }
 
 export interface CreatePaymentIntentCommand {
@@ -155,11 +226,26 @@ export interface CreatePaymentIntentCommand {
   amount: MoneyAmount
   currency: string
   channel: string
+  settlementChannel?: Extract<SettlementChannel, 'wechat' | 'alipay'>
   merchantId: string
   createdBy: string
   deviceId: string
   occurredAt: string
   expiresAt: string
+  idempotencyKey: string
+  businessDate?: string
+  allocationMode?: PaymentAllocationMode
+  requestSelectionFingerprint?: string
+}
+
+export interface ConfirmCashPaymentCommand {
+  confirmationId: string
+  paymentIntentId: string
+  amount: MoneyAmount
+  currency: string
+  confirmedBy: string
+  deviceId: string
+  occurredAt: string
   idempotencyKey: string
 }
 
@@ -209,6 +295,32 @@ export interface ReportPhysicalPosPaymentCommand {
   reportedBy: string
   deviceId: string
   receiptReference?: string
+  occurredAt: string
+  idempotencyKey: string
+}
+
+export interface SubmitCashierHandoverCommand {
+  handoverId: string
+  businessDate: string
+  shiftId: string
+  submittedBy: string
+  deviceId: string
+  note?: string
+  channels: SettlementChannelSummary[]
+  issues: Array<{
+    channel: SettlementChannel
+    reason: string
+    nextDayOwnerId: string
+  }>
+  occurredAt: string
+  idempotencyKey: string
+}
+
+export interface ReviewCashierHandoverCommand {
+  handoverId: string
+  decision: 'approve' | 'reject'
+  reviewedBy: string
+  note?: string
   occurredAt: string
   idempotencyKey: string
 }

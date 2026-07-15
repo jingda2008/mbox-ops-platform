@@ -5,11 +5,13 @@ import {
   completeKdsTask,
   createOrderDomainState,
   createOrderDraft,
+  decideKdsException,
   decideOrderAuthorization,
   deliverKdsTask,
   getTableAccountSummary,
   getTableBalance,
   pickUpKdsTask,
+  reportKdsException,
   requestOrderAuthorization,
   startKdsTask,
   submitOrder,
@@ -21,6 +23,12 @@ const T2 = '2026-07-14T10:02:00.000Z'
 const T3 = '2026-07-14T10:03:00.000Z'
 const T4 = '2026-07-14T10:04:00.000Z'
 const T5 = '2026-07-14T10:05:00.000Z'
+const T6 = '2026-07-14T10:06:00.000Z'
+const T7 = '2026-07-14T10:07:00.000Z'
+const T8 = '2026-07-14T10:08:00.000Z'
+const T9 = '2026-07-14T10:09:00.000Z'
+const T10 = '2026-07-14T10:10:00.000Z'
+const T11 = '2026-07-14T10:11:00.000Z'
 
 function draft(state: OrderDomainState, orderId = 'order-1', tableSessionId = 'table-session-1') {
   return createOrderDraft(state, {
@@ -450,6 +458,147 @@ describe('KDS item fulfillment', () => {
     expect(() => startKdsTask(state, { ...command, actorId: 'bartender-2' })).toThrow(
       '幂等键已用于不同请求',
     )
+  })
+})
+
+describe('KDS exception closure', () => {
+  it('keeps the original task and commercial order facts while a shortage is remade', () => {
+    const state = createOrderDomainState()
+    const order = draft(state)
+    addItem(state, order.id, itemInput())
+    submit(state)
+    const originalTask = state.kdsTasks[0]!
+    const originalTaskFacts = {
+      status: originalTask.status,
+      queuedAt: originalTask.queuedAt,
+      startedAt: originalTask.startedAt,
+      completedAt: originalTask.completedAt,
+    }
+    const originalAmounts = structuredClone(order.amounts)
+    const originalLedger = structuredClone(state.tableLedgerEntries)
+    const reportCommand = {
+      exceptionId: 'exception-shortage-1',
+      eventId: 'event-shortage-report-1',
+      taskId: originalTask.id,
+      exceptionKind: 'shortage' as const,
+      reasonCode: 'product_out_of_stock' as const,
+      reasonNote: '',
+      actorId: 'bartender-1',
+      actorRoleId: 'bartender',
+      occurredAt: T3,
+      idempotencyKey: 'exception-shortage-report-0001',
+    }
+
+    const reported = reportKdsException(state, reportCommand)
+    expect(reportKdsException(state, reportCommand)).toBe(reported)
+    expect(reported).toMatchObject({
+      type: 'reported', exceptionKind: 'shortage', reasonCode: 'product_out_of_stock',
+      originalOrderItemId: 'line-1', originalKdsTaskId: originalTask.id,
+      actorId: 'bartender-1', actorRoleId: 'bartender', occurredAt: T3,
+    })
+    expect(() => startKdsTask(state, {
+      taskId: originalTask.id, actorId: 'bartender-1', occurredAt: T4, idempotencyKey: 'blocked-original-start',
+    })).toThrow('KDS异常待领班或经理处置')
+
+    const decisionCommand = {
+      eventId: 'event-shortage-decision-1',
+      exceptionId: reported.exceptionId,
+      disposition: 'remake' as const,
+      reasonCode: 'service_recovery' as const,
+      reasonNote: '',
+      remakeTaskId: 'kds-remake-shortage-1',
+      actorId: 'supervisor-1',
+      actorRoleId: 'supervisor',
+      occurredAt: T4,
+      idempotencyKey: 'exception-shortage-remake-0001',
+    }
+    const decision = decideKdsException(state, decisionCommand)
+    expect(decideKdsException(state, decisionCommand)).toBe(decision)
+    const remake = state.kdsTasks.find((task) => task.id === decision.remakeKdsTaskId)!
+
+    expect(originalTask).toMatchObject(originalTaskFacts)
+    expect(originalTask.exceptionEvents).toHaveLength(2)
+    expect(order.items[0]?.kdsTaskId).toBe(originalTask.id)
+    expect(order.amounts).toEqual(originalAmounts)
+    expect(state.tableLedgerEntries).toEqual(originalLedger)
+    expect(remake).toMatchObject({
+      status: 'queued', orderItemId: 'line-1',
+      remakeOf: { orderItemId: 'line-1', kdsTaskId: originalTask.id, exceptionId: reported.exceptionId, attempt: 1 },
+    })
+    expect(() => startKdsTask(state, {
+      taskId: originalTask.id, actorId: 'bartender-1', occurredAt: T5, idempotencyKey: 'closed-original-start',
+    })).toThrow('原KDS任务已由异常处置关闭')
+
+    startKdsTask(state, { taskId: remake.id, actorId: 'bartender-1', occurredAt: T5, idempotencyKey: 'remake-start' })
+    completeKdsTask(state, { taskId: remake.id, actorId: 'bartender-1', occurredAt: T6, idempotencyKey: 'remake-complete' })
+    pickUpKdsTask(state, { taskId: remake.id, actorId: 'runner-1', occurredAt: T7, idempotencyKey: 'remake-pickup' })
+    deliverKdsTask(state, { taskId: remake.id, actorId: 'runner-1', occurredAt: T8, idempotencyKey: 'remake-deliver' })
+
+    expect(originalTask.status).toBe('queued')
+    expect(remake.status).toBe('delivered')
+    expect(order.status).toBe('fulfilled')
+    expect(order.items[0]?.fulfillmentStatus).toBe('delivered')
+  })
+
+  it('closes a shortage by manager cancellation without deleting the original KDS task', () => {
+    const state = createOrderDomainState()
+    const order = draft(state)
+    addItem(state, order.id, itemInput())
+    submit(state)
+    const task = state.kdsTasks[0]!
+    reportKdsException(state, {
+      exceptionId: 'exception-cancel-1', eventId: 'event-cancel-report-1', taskId: task.id,
+      exceptionKind: 'shortage', reasonCode: 'ingredient_out_of_stock', reasonNote: '',
+      actorId: 'bartender-1', actorRoleId: 'bartender', occurredAt: T3,
+      idempotencyKey: 'exception-cancel-report-0001',
+    })
+    const disposition = decideKdsException(state, {
+      eventId: 'event-cancel-decision-1', exceptionId: 'exception-cancel-1', disposition: 'cancelled',
+      reasonCode: 'unavailable_confirmed', reasonNote: '', remakeTaskId: null,
+      actorId: 'manager-1', actorRoleId: 'manager', occurredAt: T4,
+      idempotencyKey: 'exception-cancel-decision-0001',
+    })
+
+    expect(disposition).toMatchObject({ managerDisposition: 'cancelled', remakeKdsTaskId: null })
+    expect(state.kdsTasks).toHaveLength(1)
+    expect(task.status).toBe('queued')
+    expect(order.items[0]).toMatchObject({ id: 'line-1', kdsTaskId: task.id, fulfillmentStatus: 'queued' })
+    expect(order.status).toBe('fulfilled')
+  })
+
+  it('reopens a delivered wrong item and fulfills it again through a linked remake', () => {
+    const state = createOrderDomainState()
+    const order = draft(state)
+    addItem(state, order.id, itemInput())
+    submit(state)
+    const originalTask = state.kdsTasks[0]!
+    runKdsFlow(state, originalTask.id, 'wrong-item-original')
+    expect(order.status).toBe('fulfilled')
+
+    const report = reportKdsException(state, {
+      exceptionId: 'exception-wrong-item-1', eventId: 'event-wrong-item-report-1', taskId: originalTask.id,
+      exceptionKind: 'wrong_item', reasonCode: 'wrong_product', reasonNote: '',
+      actorId: 'runner-1', actorRoleId: 'runner', occurredAt: T6,
+      idempotencyKey: 'exception-wrong-item-report-0001',
+    })
+    expect(order.status).toBe('in_fulfillment')
+    const decision = decideKdsException(state, {
+      eventId: 'event-wrong-item-decision-1', exceptionId: report.exceptionId, disposition: 'remake',
+      reasonCode: 'quality_recovery', reasonNote: '', remakeTaskId: 'kds-remake-wrong-item-1',
+      actorId: 'manager-1', actorRoleId: 'manager', occurredAt: T7,
+      idempotencyKey: 'exception-wrong-item-remake-0001',
+    })
+    const remake = state.kdsTasks.find((task) => task.id === decision.remakeKdsTaskId)!
+    startKdsTask(state, { taskId: remake.id, actorId: 'bartender-1', occurredAt: T8, idempotencyKey: 'wrong-remake-start' })
+    completeKdsTask(state, { taskId: remake.id, actorId: 'bartender-1', occurredAt: T9, idempotencyKey: 'wrong-remake-complete' })
+    pickUpKdsTask(state, { taskId: remake.id, actorId: 'runner-1', occurredAt: T10, idempotencyKey: 'wrong-remake-pickup' })
+    deliverKdsTask(state, { taskId: remake.id, actorId: 'runner-1', occurredAt: T11, idempotencyKey: 'wrong-remake-deliver' })
+
+    expect(originalTask.status).toBe('delivered')
+    expect(originalTask.deliveredAt).toBe(T5)
+    expect(remake.remakeOf).toMatchObject({ orderItemId: 'line-1', kdsTaskId: originalTask.id })
+    expect(order.status).toBe('fulfilled')
+    expect(order.fulfilledAt).toBe(T11)
   })
 })
 

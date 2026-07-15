@@ -19,6 +19,7 @@
     "lint": "oxlint src server",
     "test": "vitest run",
     "test:watch": "vitest",
+    "evidence:capture": "node scripts/capture-release-evidence.mjs",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {

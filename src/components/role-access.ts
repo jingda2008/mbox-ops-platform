@@ -1,4 +1,5 @@
 import type { BootstrapResponse, Employee, StaffPermissionId } from '../shared/contracts'
+import { kdsTaskOperationallyActive } from './commerce-workspace'
 
 export const roleHomeNavigation = [
   { id: 'live', label: '现场' },
@@ -240,6 +241,7 @@ function buildCounts(data: BootstrapResponse, employee: Employee | undefined, ki
   const visibleKdsIds = new Set(visibleKdsTasks.map((task) => task.id))
   const readyForPickup = data.orderDomain.kdsTasks.filter((task) => (
     task.status === 'completed'
+    && kdsTaskOperationallyActive(task)
     && (
       kind === 'owner'
       || kind === 'admin'
@@ -282,7 +284,9 @@ function buildCounts(data: BootstrapResponse, employee: Employee | undefined, ki
 }
 
 function kdsTasksForRole(data: BootstrapResponse, employee: Employee | undefined, kind: RoleHomeKind) {
-  const activeTasks = data.orderDomain.kdsTasks.filter((task) => openKdsStatuses.has(task.status))
+  const activeTasks = data.orderDomain.kdsTasks.filter((task) => (
+    openKdsStatuses.has(task.status) && kdsTaskOperationallyActive(task)
+  ))
   if (['owner', 'admin', 'manager'].includes(kind)) return activeTasks
   if (!employee) return []
 

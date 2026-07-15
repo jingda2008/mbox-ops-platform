@@ -9,6 +9,9 @@ export interface RuntimeDependencies {
 }
 
 export function createRuntimeDependencies(config: RuntimeConfig): RuntimeDependencies {
+  if ((config.runtimeMode === 'staging' || config.runtimeMode === 'production') && config.repositoryMode !== 'postgres') {
+    throw new Error('预发布和生产环境必须使用PostgreSQL仓储')
+  }
   if (config.repositoryMode === 'json') return { repository: new JsonRepository(config.jsonStatePath) }
   const nativePool = new Pool({
     connectionString: config.databaseUrl,

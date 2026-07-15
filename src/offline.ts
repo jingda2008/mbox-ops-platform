@@ -58,6 +58,7 @@ export interface OfflineSnapshot {
 
 export interface QueuedTaskAction {
   id: string
+  actorId: string
   taskId: string
   input: TaskActionInput
   createdAt: string
@@ -84,7 +85,14 @@ export interface OfflineStatus {
 export interface ReplayResult {
   completedIds: string[]
   conflict: { item: QueuedTaskAction; message: string } | null
+  identityMismatch: QueuedTaskAction | null
   error: unknown | null
+}
+
+interface StoredOfflineSnapshot {
+  id: string
+  actorId: string
+  snapshot: OfflineSnapshot
 }
 
 type TaskActionSender = (item: QueuedTaskAction) => Promise<unknown>
@@ -93,6 +101,8 @@ type StatusListener = (status: OfflineStatus) => void
 let databasePromise: Promise<IDBDatabase> | null = null
 let taskActionSender: TaskActionSender | null = null
 let replayPromise: Promise<void> | null = null
+let offlineDataTransition: Promise<void> | null = null
+let identityTransitioning = false
 let networkReachable = true
 let currentStatus: OfflineStatus = {
   online: typeof navigator === 'undefined' ? true : navigator.onLine,
@@ -159,9 +169,11 @@ export function buildQueuedTaskAction(
   input: TaskActionInput,
   createdAt = new Date().toISOString(),
   sequence = Date.now() * 1000,
+  actorId = input.actorId,
 ): QueuedTaskAction {
   return {
     id: input.idempotencyKey,
+    actorId,
     taskId,
     input: { ...input },
     createdAt,
@@ -175,11 +187,15 @@ export function buildQueuedTaskAction(
 export async function replayQueuedActionsInOrder(
   items: QueuedTaskAction[],
   send: TaskActionSender,
+  actorId: string,
 ): Promise<ReplayResult> {
   const completedIds: string[] = []
   const ordered = [...items].sort((left, right) => left.sequence - right.sequence || left.id.localeCompare(right.id))
 
   for (const item of ordered) {
+    if (item.actorId !== actorId) {
+      return { completedIds, conflict: null, identityMismatch: item, error: null }
+    }
     try {
       await send(item)
       completedIds.push(item.id)
@@ -188,14 +204,15 @@ export async function replayQueuedActionsInOrder(
         return {
           completedIds,
           conflict: { item, message: errorMessage(error, '任务状态冲突') },
+          identityMismatch: null,
           error: null,
         }
       }
-      return { completedIds, conflict: null, error }
+      return { completedIds, conflict: null, identityMismatch: null, error }
     }
   }
 
-  return { completedIds, conflict: null, error: null }
+  return { completedIds, conflict: null, identityMismatch: null, error: null }
 }
 
 export function isHighRiskOfflineWrite(path: string, method = 'GET') {
@@ -234,21 +251,29 @@ export function reportNetworkAvailable() {
 }
 
 export async function saveOfflineSnapshot(snapshot: OfflineSnapshot) {
-  await putRecord(SNAPSHOT_STORE, { id: LATEST_SNAPSHOT_KEY, snapshot })
+  const actorId = requireOfflineActorId()
+  await putRecord(SNAPSHOT_STORE, { id: LATEST_SNAPSHOT_KEY, actorId, snapshot } satisfies StoredOfflineSnapshot)
 }
 
 export async function loadOfflineSnapshot(): Promise<OfflineSnapshot | null> {
-  const record = await getRecord<{ id: string; snapshot: OfflineSnapshot }>(SNAPSHOT_STORE, LATEST_SNAPSHOT_KEY)
-  return record?.snapshot ?? null
+  const actorId = activeOfflineActorId()
+  if (!actorId) return null
+  const record = await getRecord<StoredOfflineSnapshot>(SNAPSHOT_STORE, LATEST_SNAPSHOT_KEY)
+  return record?.actorId === actorId ? record.snapshot : null
 }
 
 export async function queueTaskAction(taskId: string, input: TaskActionInput) {
+  if (identityTransitioning) throw new Error('员工身份正在切换，无法保存离线动作')
+  const actorId = requireOfflineActorId()
   const existing = await getRecord<QueuedTaskAction>(QUEUE_STORE, input.idempotencyKey)
-  if (existing) return existing
+  if (existing) {
+    if (existing.actorId !== actorId) throw new Error('离线动作幂等键属于其他员工')
+    return existing
+  }
 
   const queued = await getAllRecords<QueuedTaskAction>(QUEUE_STORE)
   const sequence = Math.max(Date.now() * 1000, ...queued.map((item) => item.sequence + 1))
-  const item = buildQueuedTaskAction(taskId, input, new Date().toISOString(), sequence)
+  const item = buildQueuedTaskAction(taskId, input, new Date().toISOString(), sequence, actorId)
   await putRecord(QUEUE_STORE, item)
   await refreshOfflineStatus()
   return item
@@ -256,12 +281,16 @@ export async function queueTaskAction(taskId: string, input: TaskActionInput) {
 
 export async function replayTaskActionQueue() {
   if (replayPromise) return replayPromise
-  if (!taskActionSender || !isOnline()) return
+  const actorId = activeOfflineActorId()
+  if (!taskActionSender || !isOnline() || !actorId || identityTransitioning) return
 
   replayPromise = (async () => {
     setStatus({ online: true, syncing: true })
     const queued = await getAllRecords<QueuedTaskAction>(QUEUE_STORE)
-    const result = await replayQueuedActionsInOrder(queued, taskActionSender!)
+    const result = await replayQueuedActionsInOrder(queued, async (item) => {
+      if (activeOfflineActorId() !== actorId) throw new Error('员工身份已切换，离线同步已停止')
+      return taskActionSender!(item)
+    }, actorId)
 
     for (const id of result.completedIds) await deleteRecord(QUEUE_STORE, id)
 
@@ -274,6 +303,14 @@ export async function replayTaskActionQueue() {
       } satisfies QueuedTaskAction)
     }
 
+    if (result.identityMismatch) {
+      await putRecord(QUEUE_STORE, {
+        ...result.identityMismatch,
+        status: 'conflict',
+        conflictMessage: '离线动作属于其他员工，已阻止使用当前员工会话同步',
+      } satisfies QueuedTaskAction)
+    }
+
     await refreshOfflineStatus()
   })().finally(() => {
     replayPromise = null
@@ -281,6 +318,24 @@ export async function replayTaskActionQueue() {
   })
 
   return replayPromise
+}
+
+export function clearOfflineDataForEmployeeChange() {
+  return runOfflineDataTransition(clearOfflineStores)
+}
+
+export function prepareOfflineDataForEmployee(actorId: string) {
+  const nextActorId = actorId.trim()
+  if (!nextActorId) return Promise.reject(new Error('无法确认登录员工身份'))
+
+  return runOfflineDataTransition(async () => {
+    const queued = await getAllRecords<QueuedTaskAction>(QUEUE_STORE)
+    const snapshot = await getRecord<StoredOfflineSnapshot>(SNAPSHOT_STORE, LATEST_SNAPSHOT_KEY)
+    const ownershipMismatch = queued.some((item) => item.actorId !== nextActorId)
+      || (snapshot !== null && snapshot.actorId !== nextActorId)
+
+    if (activeOfflineActorId() !== nextActorId || ownershipMismatch) await clearOfflineStores()
+  })
 }
 
 export async function discardConflictedTaskAction(queueId: string) {
@@ -306,14 +361,47 @@ export function startOfflineRuntime(sender: TaskActionSender) {
 
   window.addEventListener('online', handleOnline)
   window.addEventListener('offline', handleOffline)
-  void refreshOfflineStatus().then(() => {
+  const actorId = activeOfflineActorId()
+  const prepare = actorId ? prepareOfflineDataForEmployee(actorId) : Promise.resolve()
+  void prepare.then(() => refreshOfflineStatus()).then(() => {
     if (isOnline()) void replayTaskActionQueue()
-  })
+  }).catch(() => setStatus({ syncing: false }))
 
   return () => {
     window.removeEventListener('online', handleOnline)
     window.removeEventListener('offline', handleOffline)
   }
+}
+
+function runOfflineDataTransition(operation: () => Promise<void>): Promise<void> {
+  if (offlineDataTransition) {
+    return offlineDataTransition.then(() => runOfflineDataTransition(operation))
+  }
+
+  identityTransitioning = true
+  const transition = (async () => {
+    if (replayPromise) await replayPromise
+    await operation()
+  })()
+  offlineDataTransition = transition
+
+  return transition.finally(() => {
+    if (offlineDataTransition === transition) offlineDataTransition = null
+    identityTransitioning = false
+  })
+}
+
+async function clearOfflineStores() {
+  const database = await openDatabase()
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction([QUEUE_STORE, SNAPSHOT_STORE], 'readwrite')
+    transaction.objectStore(QUEUE_STORE).clear()
+    transaction.objectStore(SNAPSHOT_STORE).clear()
+    transaction.oncomplete = () => resolve()
+    transaction.onerror = () => reject(transaction.error ?? new Error('清除离线数据失败'))
+    transaction.onabort = () => reject(transaction.error ?? new Error('清除离线数据已中止'))
+  })
+  setStatus({ online: isOnline(), pendingCount: 0, syncing: false, conflict: null })
 }
 
 async function refreshOfflineStatus() {
@@ -343,6 +431,36 @@ function setStatus(patch: Partial<OfflineStatus>) {
 
 function isOnline() {
   return (typeof navigator === 'undefined' || navigator.onLine) && networkReachable
+}
+
+function activeOfflineActorId() {
+  if (typeof window !== 'undefined') {
+    const sessionActorId = actorIdFromSessionToken(window.localStorage.getItem('mbox.auth.token') ?? '')
+    if (sessionActorId) return sessionActorId
+    const selectedActorId = window.localStorage.getItem('mbox.actor.id')?.trim()
+    if (selectedActorId) return selectedActorId
+  }
+  if (import.meta.env.DEV) return String(import.meta.env.VITE_MBOX_LOCAL_ACTOR_ID ?? 'local-development').trim()
+  return ''
+}
+
+function actorIdFromSessionToken(token: string) {
+  try {
+    const payload = token.split('.')[0]
+    if (!payload) return ''
+    const normalized = payload.replace(/-/g, '+').replace(/_/g, '/')
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')
+    const claims = JSON.parse(window.atob(padded)) as { actorId?: unknown }
+    return typeof claims.actorId === 'string' ? claims.actorId.trim() : ''
+  } catch {
+    return ''
+  }
+}
+
+function requireOfflineActorId() {
+  const actorId = activeOfflineActorId()
+  if (!actorId) throw new Error('无法确认当前员工身份，离线数据未保存')
+  return actorId
 }
 
 function httpStatus(error: unknown) {

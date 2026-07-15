@@ -221,6 +221,113 @@ export interface ProactiveOrderCareConfig {
   serviceTypeId: string
 }
 
+export type MinimumSpendTargetType = 'area' | 'table'
+
+export interface MinimumSpendRule {
+  id: string
+  name: string
+  enabled: boolean
+  targetType: MinimumSpendTargetType
+  targetId: string
+  /** JavaScript weekday values: 0 is Sunday and 6 is Saturday. */
+  weekdays: number[]
+  startTime: string
+  endTime: string
+  amount: number
+  currency: string
+}
+
+export interface MinimumSpendReminderConfig {
+  enabled: boolean
+  firstReminderMinutes: number
+  repeatMinutes: number
+  thresholdPercent: number
+}
+
+export interface TableOperationsConfig {
+  version: number
+  updatedAt: string
+  reminder: MinimumSpendReminderConfig
+  minimumSpendRules: MinimumSpendRule[]
+}
+
+export interface MinimumSpendSnapshot {
+  configVersion: number
+  ruleId: string | null
+  ruleName: string
+  targetType: MinimumSpendTargetType | null
+  targetId: string | null
+  weekday: number
+  startTime: string | null
+  endTime: string | null
+  amount: number
+  currency: string
+  reminder: MinimumSpendReminderConfig
+  capturedAt: string
+}
+
+export type TableSessionOpenSource = 'reservation' | 'waitlist' | 'walk_in' | 'added_table' | 'legacy'
+
+export interface TableSessionOperation {
+  tableSessionId: string
+  openedTableId: string
+  openedTableCode: string
+  source: TableSessionOpenSource
+  sourceId: string | null
+  minimumSpendSnapshot: MinimumSpendSnapshot
+  createdAt: string
+}
+
+export type SalesAttributionSubjectType = 'reservation' | 'waitlist' | 'walk_in' | 'table_session'
+
+export interface SalesAttributionRecord {
+  id: string
+  subjectType: SalesAttributionSubjectType
+  subjectId: string
+  salesEmployeeId: string
+  previousSalesEmployeeId: string | null
+  actorId: string
+  reason: string
+  occurredAt: string
+  idempotencyKey: string
+}
+
+export type TableCombinationKind = 'merge' | 'add_table'
+export type TableCombinationAction = TableCombinationKind | 'split_back'
+
+export interface TableCombinationRecord {
+  id: string
+  linkId: string
+  action: TableCombinationAction
+  kind: TableCombinationKind
+  primaryTableId: string
+  primaryTableCode: string
+  primaryTableSessionId: string
+  relatedTableId: string
+  relatedTableCode: string
+  relatedTableSessionId: string
+  actorId: string
+  reason: string
+  occurredAt: string
+  idempotencyKey: string
+}
+
+export interface TableSessionSummary {
+  tableId: string
+  tableCode: string
+  tableSessionId: string
+  minimumSpendAmount: number
+  spendAmount: number
+  differenceAmount: number
+  progressPercent: number
+  currency: string
+  configVersion: number
+  ruleName: string
+  reminderRequired: boolean
+  nextReminderAt: string | null
+  salesEmployeeId: string | null
+}
+
 export interface GuestServiceLimitsConfig {
   windowSeconds: number
   maxRequests: number
@@ -363,6 +470,10 @@ export interface RuntimeState {
   reservationState?: ReservationState
   awaitingOrderIntents: AwaitingOrderIntent[]
   tableTransfers: TableTransferRecord[]
+  tableOperationsConfig?: TableOperationsConfig
+  tableSessionOperations?: TableSessionOperation[]
+  salesAttributionRecords?: SalesAttributionRecord[]
+  tableCombinationRecords?: TableCombinationRecord[]
   waitlistEntries: WaitlistEntry[]
   members: MemberProfile[]
   benefitTemplates: BenefitTemplate[]
@@ -507,6 +618,9 @@ export type AwaitingOrderActionInput = z.infer<typeof awaitingOrderActionSchema>
 
 export const closeTableSessionSchema = z.object({
   reason: z.string().trim().min(2).max(200),
+  minimumSpendWaiver: z.object({
+    reason: z.string().trim().min(5).max(300),
+  }).strict().optional(),
   idempotencyKey: z.string().trim().min(8).max(128),
 }).strict()
 
@@ -520,6 +634,70 @@ export const transferTableSessionSchema = z.object({
 }).strict()
 
 export type TransferTableSessionInput = z.infer<typeof transferTableSessionSchema>
+
+const timeOfDaySchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, '时段必须使用HH:mm格式')
+
+export const minimumSpendRuleSchema = z.object({
+  id: z.string().trim().min(1).max(128),
+  name: z.string().trim().min(1).max(80),
+  enabled: z.boolean(),
+  targetType: z.enum(['area', 'table']),
+  targetId: z.string().trim().min(1).max(128),
+  weekdays: z.array(z.number().int().min(0).max(6)).min(1).max(7),
+  startTime: timeOfDaySchema,
+  endTime: timeOfDaySchema,
+  amount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  currency: z.string().regex(/^[A-Z]{3}$/),
+}).strict()
+
+export const tableOperationsConfigInputSchema = z.object({
+  reminder: z.object({
+    enabled: z.boolean(),
+    firstReminderMinutes: z.number().int().min(1).max(720),
+    repeatMinutes: z.number().int().min(1).max(720),
+    thresholdPercent: z.number().int().min(1).max(100),
+  }).strict(),
+  minimumSpendRules: z.array(minimumSpendRuleSchema).max(500),
+  reason: z.string().trim().min(2).max(300),
+  idempotencyKey: z.string().trim().min(8).max(128),
+}).strict()
+
+export type TableOperationsConfigInput = z.infer<typeof tableOperationsConfigInputSchema>
+
+export const walkInOpenSchema = z.object({
+  partySize: z.number().int().min(1).max(100),
+  salesEmployeeId: z.string().trim().min(1).max(128),
+  customerName: z.string().trim().min(1).max(100).default('现场客人'),
+  customerReference: z.string().trim().min(1).max(128).optional(),
+  idempotencyKey: z.string().trim().min(8).max(128),
+}).strict()
+
+export type WalkInOpenInput = z.infer<typeof walkInOpenSchema>
+
+export const salesAttributionSchema = z.object({
+  salesEmployeeId: z.string().trim().min(1).max(128),
+  reason: z.string().trim().min(2).max(300),
+  idempotencyKey: z.string().trim().min(8).max(128),
+}).strict()
+
+export type SalesAttributionInput = z.infer<typeof salesAttributionSchema>
+
+export const tableCombinationSchema = z.discriminatedUnion('action', [
+  z.object({
+    action: z.enum(['merge', 'add_table']),
+    targetTableId: z.string().trim().min(1).max(128),
+    reason: z.string().trim().min(2).max(300),
+    idempotencyKey: z.string().trim().min(8).max(128),
+  }).strict(),
+  z.object({
+    action: z.literal('split_back'),
+    linkId: z.string().trim().min(1).max(128),
+    reason: z.string().trim().min(2).max(300),
+    idempotencyKey: z.string().trim().min(8).max(128),
+  }).strict(),
+])
+
+export type TableCombinationInput = z.infer<typeof tableCombinationSchema>
 
 export const employeeWriteSchema = z.object({
   displayName: z.string().trim().min(1).max(40),

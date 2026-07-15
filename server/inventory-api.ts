@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
-import type { InventoryDomainState, InventoryOperationPolicy } from '../src/shared/inventory-contracts.js'
+import type {
+  InventoryApprovalActorSnapshot,
+  InventoryDomainState,
+  InventoryOperationPolicy,
+} from '../src/shared/inventory-contracts.js'
 import type { Employee, RuntimeState } from '../src/shared/contracts.js'
 import {
   AuthorizationError,
@@ -11,16 +15,27 @@ import {
 } from './authorization.js'
 import {
   confirmStockCount,
+  convertIngredientQuantityToBase,
   createInventoryDomainState,
   depositBottle,
+  normalizeInventoryDomainState,
+  publishRecipeVersion,
   receiveInventory,
   rejectStockCount,
   submitStockCount,
   transferStoredBottle,
+  upsertIngredientSku,
   useStoredBottle,
   voidStoredBottle,
 } from './inventory-domain.js'
 import type { RuntimeRepository } from './repository.js'
+import { consumeManagedInventoryForRemadeOrderItem } from './inventory-order-integration.js'
+import { requireRequestActor } from './auth-context.js'
+import {
+  beginDualApprovalDecision,
+  completeDualApprovalDecision,
+  requestDualApproval,
+} from './dual-approval.js'
 
 const identifier = z.string().trim().min(1).max(128)
 const idempotencyKey = z.string().trim().min(8).max(128)
@@ -36,6 +51,33 @@ const owner = z.discriminatedUnion('kind', [
     displayNameSnapshot: z.string().trim().min(1).max(80),
   }).strict(),
 ])
+const conversionSchema = z.object({ unitCode, baseQuantity: quantity }).strict()
+const recipeLineSchema = z.object({
+  ingredientSkuId: identifier,
+  standardQuantity: quantity,
+  allowedLossBps: z.number().int().min(0).max(10_000),
+}).strict()
+const bottleTransferRequestSchema = z.object({
+  recipientOwner: owner,
+  tableSessionId: identifier,
+  orderId: identifier.optional(),
+  reason,
+  occurredAt,
+  idempotencyKey,
+}).strict()
+const bottleVoidRequestSchema = z.object({
+  tableSessionId: identifier.optional(),
+  orderId: identifier.optional(),
+  reason,
+  occurredAt,
+  idempotencyKey,
+}).strict()
+const approvalDecisionSchema = z.object({
+  decision: z.enum(['approve', 'reject']),
+  reason,
+  occurredAt,
+  idempotencyKey,
+}).strict()
 
 const policySchema = z.object({
   policyAdminRoleIds: z.array(identifier).min(1),
@@ -66,14 +108,42 @@ function defaultPolicy(state: RuntimeState): InventoryOperationPolicy {
   }
 }
 
-function inventory(state: RuntimeState) {
+export function ensureInventoryDomainState(state: RuntimeState) {
   if (!state.inventoryDomain) {
     state.inventoryDomain = createInventoryDomainState(
       { tenantId: 'runtime', storeId: state.store.id },
       defaultPolicy(state),
     )
   }
-  return state.inventoryDomain
+  return normalizeInventoryDomainState(state.inventoryDomain)
+}
+
+const inventory = ensureInventoryDomainState
+
+function approvalActorSnapshot(request: FastifyRequest, employee: Employee): InventoryApprovalActorSnapshot {
+  const actor = requireRequestActor(request)
+  if (actor.actorId !== employee.id) throw new Error('认证员工与库存操作人不一致')
+  return {
+    employeeId: employee.id,
+    displayName: employee.displayName,
+    roleId: employee.roleId,
+    authenticatedBy: actor.authenticatedBy,
+  }
+}
+
+function appendApprovalAudit(
+  state: RuntimeState,
+  input: { id: string; actorId: string; action: string; occurredAt: string; details: Record<string, unknown> },
+) {
+  state.auditEntries.push({
+    id: deterministicId('audit_inventory_approval', `${input.id}:${input.action}:${input.occurredAt}`),
+    actorId: input.actorId,
+    action: input.action,
+    objectType: 'inventoryApproval',
+    objectId: input.id,
+    occurredAt: input.occurredAt,
+    details: structuredClone(input.details),
+  })
 }
 
 function requireConfiguredInventoryActor(
@@ -93,19 +163,6 @@ function requirePolicyRole(employee: Employee, allowedRoleIds: string[], operati
   }
 }
 
-function requireApprover(state: RuntimeState, approverId: string, actorId: string, roles: string[]) {
-  if (approverId === actorId) throw new Error('高风险库存操作必须由另一人审批')
-  const approver = state.employees.find((item) => item.id === approverId && item.status === 'active')
-  const configuredRole = approver && state.config.roles.find((role) => role.id === approver.roleId)
-  if (
-    !approver ||
-    !configuredRole?.permissionIds?.includes('inventory.approve') ||
-    !roles.includes(approver.roleId)
-  ) {
-    throw new AuthorizationError('审批人岗位无权批准该库存操作', 'inventory.approve')
-  }
-}
-
 function mutateInventory<T>(state: RuntimeState, operation: (domain: InventoryDomainState) => T) {
   const domain = inventory(state)
   const before = domain.idempotencyRecords.length
@@ -118,10 +175,59 @@ export function registerInventoryRoutes(app: FastifyInstance, repository: Runtim
   app.get('/api/inventory', async (request) => {
     const state = await repository.read()
     requireConfiguredOperation(request, state, 'inventory.view')
-    return state.inventoryDomain ?? createInventoryDomainState(
-      { tenantId: 'runtime', storeId: state.store.id },
-      defaultPolicy(state),
-    )
+    return state.inventoryDomain
+      ? normalizeInventoryDomainState(state.inventoryDomain)
+      : createInventoryDomainState({ tenantId: 'runtime', storeId: state.store.id }, defaultPolicy(state))
+  })
+
+  app.post('/api/inventory/ingredients', async (request, reply) => {
+    const input = z.object({
+      ingredientSkuId: identifier.optional(),
+      sku: z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/),
+      name: z.string().trim().min(1).max(120),
+      baseUnitCode: unitCode,
+      costAmountPerBaseUnit: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+      conversions: z.array(conversionSchema).min(1).max(20),
+      enabled: z.boolean().default(true),
+      reason,
+      occurredAt,
+      idempotencyKey,
+    }).strict().parse(request.body)
+    const result = await repository.mutate((state) => {
+      const actor = requireConfiguredInventoryActor(state, request, 'inventory.approve')
+      const domain = inventory(state)
+      requirePolicyRole(actor, domain.policy.policyAdminRoleIds, 'inventory.approve', '配置原料SKU')
+      return mutateInventory(state, (value) => upsertIngredientSku(value, {
+        ...input,
+        ingredientSkuId: input.ingredientSkuId ?? deterministicId('ingredient', input.idempotencyKey),
+        actorId: actor.id,
+      }))
+    })
+    return reply.status(201).send(result)
+  })
+
+  app.post('/api/inventory/recipes', async (request, reply) => {
+    const input = z.object({
+      productId: identifier,
+      lines: z.array(recipeLineSchema).min(1).max(50),
+      reason,
+      occurredAt,
+      idempotencyKey,
+    }).strict().parse(request.body)
+    const result = await repository.mutate((state) => {
+      const actor = requireConfiguredInventoryActor(state, request, 'inventory.approve')
+      const domain = inventory(state)
+      requirePolicyRole(actor, domain.policy.policyAdminRoleIds, 'inventory.approve', '发布配方')
+      if (!state.products.some((item) => item.id === input.productId && item.enabled)) {
+        throw new Error('配方商品不存在或已停用')
+      }
+      return mutateInventory(state, (value) => publishRecipeVersion(value, {
+        ...input,
+        recipeVersionId: deterministicId('recipe', input.idempotencyKey),
+        actorId: actor.id,
+      }))
+    })
+    return reply.status(201).send(result)
   })
 
   app.put('/api/inventory/policy', async (request) => {
@@ -163,15 +269,58 @@ export function registerInventoryRoutes(app: FastifyInstance, repository: Runtim
       const actor = requireConfiguredInventoryActor(state, request, 'inventory.manage')
       const domain = inventory(state)
       requirePolicyRole(actor, domain.policy.receiptRoleIds, 'inventory.manage', '登记入库')
-      if (!state.products.some((product) => product.id === input.productId)) throw new Error('入库商品不存在')
+      const ingredient = domain.ingredientSkus.find((item) => item.id === input.productId)
+      if (!ingredient && !state.products.some((product) => product.id === input.productId)) {
+        throw new Error('入库商品或原料不存在')
+      }
+      const converted = ingredient
+        ? convertIngredientQuantityToBase(domain, input.productId, input.unitCode, input.quantity)
+        : null
       return mutateInventory(state, (value) => receiveInventory(value, {
         ...input,
+        unitCode: converted?.ingredient.baseUnitCode ?? input.unitCode,
+        quantity: converted?.baseQuantity ?? input.quantity,
         movementId: deterministicId('inventory_movement', input.idempotencyKey),
         actorId: actor.id,
         businessDate: state.store.businessDate,
+        configurationSnapshot: converted ? {
+          kind: 'unit_conversion',
+          inputQuantity: input.quantity,
+          inputUnitCode: input.unitCode,
+          conversion: structuredClone(converted.conversion),
+          ingredient: structuredClone(converted.ingredient),
+        } : null,
       }))
     })
     return reply.status(201).send(result)
+  })
+
+  app.post('/api/inventory/remakes', async (request, reply) => {
+    const input = z.object({
+      orderId: identifier,
+      orderItemId: identifier,
+      quantity,
+      reason,
+      occurredAt,
+      idempotencyKey,
+    }).strict().parse(request.body)
+    const movements = await repository.mutate((state) => {
+      const actor = requireConfiguredInventoryActor(state, request, 'inventory.manage')
+      const domain = inventory(state)
+      requirePolicyRole(actor, domain.policy.bottleUseRoleIds, 'inventory.manage', '登记补做耗用')
+      const order = state.orderDomain.orders.find((item) => item.id === input.orderId)
+      const item = order?.items.find((candidate) => candidate.id === input.orderItemId)
+      if (!order || !item) throw new Error('补做关联的订单明细不存在')
+      return mutateInventory(state, (value) => consumeManagedInventoryForRemadeOrderItem(value, order, item, {
+        actorId: actor.id,
+        businessDate: state.store.businessDate,
+        occurredAt: input.occurredAt,
+        quantity: input.quantity,
+        reason: input.reason,
+        idempotencyKey: input.idempotencyKey,
+      }))
+    })
+    return reply.status(201).send(movements)
   })
 
   app.post('/api/inventory/stock-counts', async (request, reply) => {
@@ -200,8 +349,10 @@ export function registerInventoryRoutes(app: FastifyInstance, repository: Runtim
         const count = domain.stockCounts.find((item) => item.id === request.params.countId)
         if (!count) throw new Error('盘点记录不存在')
         const product = state.products.find((item) => item.id === count.productId)
-        if (!product) throw new Error('盘点商品不存在')
-        const adjustmentAmount = Math.abs(count.differenceQuantity) * product.costAmount
+        const ingredient = domain.ingredientSkus.find((item) => item.id === count.productId)
+        if (!product && !ingredient) throw new Error('盘点商品或原料不存在')
+        const adjustmentAmount = Math.abs(count.differenceQuantity) *
+          (product?.costAmount ?? ingredient?.costAmountPerBaseUnit ?? 0)
         if (!Number.isSafeInteger(adjustmentAmount)) throw new Error('库存调整成本金额超出安全范围')
         requireApprovalAmount(request, state, 'inventoryAdjustment', adjustmentAmount, 'inventory.approve')
       }
@@ -278,38 +429,161 @@ export function registerInventoryRoutes(app: FastifyInstance, repository: Runtim
     })
   })
 
-  app.post<{ Params: { batchId: string } }>('/api/inventory/bottles/:batchId/transfer', async (request) => {
-    const input = z.object({ recipientOwner: owner, tableSessionId: identifier, orderId: identifier.optional(), approvalId: identifier, approvedBy: identifier, reason, occurredAt, idempotencyKey }).strict().parse(request.body)
-    return repository.mutate((state) => {
+  app.post<{ Params: { batchId: string } }>('/api/inventory/bottles/:batchId/transfer', async (request, reply) => {
+    const input = bottleTransferRequestSchema.parse(request.body)
+    const approval = await repository.mutate((state) => {
       const actor = requireConfiguredInventoryActor(state, request, 'inventory.manage')
       const domain = inventory(state)
       requirePolicyRole(actor, domain.policy.bottleUseRoleIds, 'inventory.manage', '转赠存酒')
-      requireApprover(state, input.approvedBy, actor.id, domain.policy.bottleApprovalRoleIds)
-      return mutateInventory(state, (value) => transferStoredBottle(value, {
-        ...input,
-        sourceBatchId: request.params.batchId,
-        recipientBatchId: deterministicId('bottle_batch', input.idempotencyKey),
-        eventId: deterministicId('bottle_event', input.idempotencyKey),
-        actorId: actor.id,
-        businessDate: state.store.businessDate,
-      }))
+      const batch = domain.bottleBatches.find((item) => item.id === request.params.batchId)
+      if (!batch || !['stored', 'partially_used'].includes(batch.status)) throw new Error('只有有效存酒可以申请转赠')
+      if (input.recipientOwner.kind === 'member') {
+        const recipientMemberId = input.recipientOwner.memberId
+        if (!state.members.some((item) => item.id === recipientMemberId)) throw new Error('接收会员不存在')
+      }
+      const beforeCount = domain.approvalRequests.length
+      const result = requestDualApproval(domain, {
+        approvalId: deterministicId('inventory_approval', input.idempotencyKey),
+        action: 'bottle_transfer',
+        targetId: batch.id,
+        requestPayload: structuredClone(input),
+        beforeSnapshot: structuredClone(batch),
+        requestedBy: approvalActorSnapshot(request, actor),
+        reason: input.reason,
+        occurredAt: input.occurredAt,
+        idempotencyKey: input.idempotencyKey,
+      })
+      if (domain.approvalRequests.length !== beforeCount) {
+        state.revision += 1
+        appendApprovalAudit(state, {
+          id: result.id,
+          actorId: actor.id,
+          action: 'inventory.approval.requested.v1',
+          occurredAt: input.occurredAt,
+          details: { approvalAction: result.action, targetId: result.targetId, beforeSnapshot: result.beforeSnapshot },
+        })
+      }
+      return result
     })
+    return reply.status(202).send(approval)
   })
 
-  app.post<{ Params: { batchId: string } }>('/api/inventory/bottles/:batchId/void', async (request) => {
-    const input = z.object({ tableSessionId: identifier.optional(), orderId: identifier.optional(), approvalId: identifier, approvedBy: identifier, reason, occurredAt, idempotencyKey }).strict().parse(request.body)
-    return repository.mutate((state) => {
+  app.post<{ Params: { batchId: string } }>('/api/inventory/bottles/:batchId/void', async (request, reply) => {
+    const input = bottleVoidRequestSchema.parse(request.body)
+    const approval = await repository.mutate((state) => {
       const actor = requireConfiguredInventoryActor(state, request, 'inventory.manage')
       const domain = inventory(state)
       requirePolicyRole(actor, domain.policy.bottleUseRoleIds, 'inventory.manage', '作废存酒')
-      requireApprover(state, input.approvedBy, actor.id, domain.policy.bottleApprovalRoleIds)
-      return mutateInventory(state, (value) => voidStoredBottle(value, {
-        ...input,
-        batchId: request.params.batchId,
-        eventId: deterministicId('bottle_event', input.idempotencyKey),
+      const batch = domain.bottleBatches.find((item) => item.id === request.params.batchId)
+      if (!batch || !['stored', 'partially_used'].includes(batch.status)) throw new Error('只有有效存酒可以申请作废')
+      const beforeCount = domain.approvalRequests.length
+      const result = requestDualApproval(domain, {
+        approvalId: deterministicId('inventory_approval', input.idempotencyKey),
+        action: 'bottle_void',
+        targetId: batch.id,
+        requestPayload: structuredClone(input),
+        beforeSnapshot: structuredClone(batch),
+        requestedBy: approvalActorSnapshot(request, actor),
+        reason: input.reason,
+        occurredAt: input.occurredAt,
+        idempotencyKey: input.idempotencyKey,
+      })
+      if (domain.approvalRequests.length !== beforeCount) {
+        state.revision += 1
+        appendApprovalAudit(state, {
+          id: result.id,
+          actorId: actor.id,
+          action: 'inventory.approval.requested.v1',
+          occurredAt: input.occurredAt,
+          details: { approvalAction: result.action, targetId: result.targetId, beforeSnapshot: result.beforeSnapshot },
+        })
+      }
+      return result
+    })
+    return reply.status(202).send(approval)
+  })
+
+  app.post<{ Params: { approvalId: string } }>('/api/inventory/approvals/:approvalId/decision', async (request) => {
+    const input = approvalDecisionSchema.parse(request.body)
+    return repository.mutate((state) => {
+      const actor = requireConfiguredInventoryActor(state, request, 'inventory.approve')
+      const domain = inventory(state)
+      requirePolicyRole(actor, domain.policy.bottleApprovalRoleIds, 'inventory.approve', '审批存酒高风险操作')
+      const command = { ...input, decidedBy: approvalActorSnapshot(request, actor) }
+      const pending = beginDualApprovalDecision(domain, request.params.approvalId, command)
+      if (!['bottle_transfer', 'bottle_void'].includes(pending.approval.action)) {
+        throw new Error('该审批单不属于存酒操作')
+      }
+      if (pending.replay) return pending.approval
+
+      if (input.decision === 'reject') {
+        const rejected = completeDualApprovalDecision(domain, pending.approval.id, command, pending.approval.beforeSnapshot)
+        state.revision += 1
+        appendApprovalAudit(state, {
+          id: rejected.id,
+          actorId: actor.id,
+          action: 'inventory.approval.rejected.v1',
+          occurredAt: input.occurredAt,
+          details: { approvalAction: rejected.action, requestedBy: rejected.requestedBy.employeeId, reason: input.reason },
+        })
+        return rejected
+      }
+
+      const executionKey = `${pending.approval.id}:execute:v1`
+      let afterSnapshot: unknown
+      if (pending.approval.action === 'bottle_transfer') {
+        const payload = bottleTransferRequestSchema.parse(pending.approval.requestPayload)
+        const recipient = mutateInventory(state, (value) => transferStoredBottle(value, {
+          recipientOwner: payload.recipientOwner,
+          tableSessionId: payload.tableSessionId,
+          orderId: payload.orderId,
+          approvalId: pending.approval.id,
+          approvedBy: actor.id,
+          sourceBatchId: pending.approval.targetId,
+          recipientBatchId: deterministicId('bottle_batch', executionKey),
+          eventId: deterministicId('bottle_event', executionKey),
+          actorId: pending.approval.requestedBy.employeeId,
+          reason: `${pending.approval.requestReason}；审批意见：${input.reason}`,
+          businessDate: state.store.businessDate,
+          occurredAt: input.occurredAt,
+          idempotencyKey: executionKey,
+        }))
+        const source = domain.bottleBatches.find((item) => item.id === pending.approval.targetId)
+        const event = domain.bottleEvents.find((item) => item.approvalId === pending.approval.id)
+        afterSnapshot = { source, recipient, event }
+      } else {
+        const payload = bottleVoidRequestSchema.parse(pending.approval.requestPayload)
+        const event = mutateInventory(state, (value) => voidStoredBottle(value, {
+          tableSessionId: payload.tableSessionId,
+          orderId: payload.orderId,
+          approvalId: pending.approval.id,
+          approvedBy: actor.id,
+          batchId: pending.approval.targetId,
+          eventId: deterministicId('bottle_event', executionKey),
+          actorId: pending.approval.requestedBy.employeeId,
+          reason: `${pending.approval.requestReason}；审批意见：${input.reason}`,
+          businessDate: state.store.businessDate,
+          occurredAt: input.occurredAt,
+          idempotencyKey: executionKey,
+        }))
+        const batch = domain.bottleBatches.find((item) => item.id === pending.approval.targetId)
+        afterSnapshot = { batch, event }
+      }
+      const approved = completeDualApprovalDecision(domain, pending.approval.id, command, afterSnapshot)
+      state.revision += 1
+      appendApprovalAudit(state, {
+        id: approved.id,
         actorId: actor.id,
-        businessDate: state.store.businessDate,
-      }))
+        action: 'inventory.approval.approved_and_executed.v1',
+        occurredAt: input.occurredAt,
+        details: {
+          approvalAction: approved.action,
+          requestedBy: approved.requestedBy.employeeId,
+          beforeSnapshot: approved.beforeSnapshot,
+          afterSnapshot: approved.afterSnapshot,
+        },
+      })
+      return approved
     })
   })
 }

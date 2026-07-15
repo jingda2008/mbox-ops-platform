@@ -8,18 +8,22 @@ import type {
   ExpireStoredBottleCommand,
   InventoryAuditEvent,
   InventoryBalance,
+  InventoryIngredientSku,
   InventoryDomainResultType,
   InventoryDomainState,
   InventoryMovement,
   InventoryMovementType,
   InventoryOperationPolicy,
+  InventoryRecipeVersion,
   InventoryScope,
+  PublishRecipeVersionCommand,
   ReceiveInventoryCommand,
   RejectStockCountCommand,
   ReturnInventoryForRefundCommand,
   StockCount,
   SubmitStockCountCommand,
   TransferStoredBottleCommand,
+  UpsertIngredientSkuCommand,
   UseStoredBottleCommand,
   VoidStoredBottleCommand,
 } from '../src/shared/inventory-contracts.js'
@@ -43,14 +47,25 @@ export function createInventoryDomainState(
   return {
     ...scope,
     policy: structuredClone(policy),
+    ingredientSkus: [],
+    recipeVersions: [],
     balances: [],
     movements: [],
     stockCounts: [],
     bottleBatches: [],
     bottleEvents: [],
     auditEvents: [],
+    approvalRequests: [],
     idempotencyRecords: [],
   }
+}
+
+/** Repairs optional collections from inventory documents persisted before the feature existed. */
+export function normalizeInventoryDomainState(state: InventoryDomainState) {
+  state.ingredientSkus ??= []
+  state.recipeVersions ??= []
+  state.approvalRequests ??= []
+  return state
 }
 
 function assertNonEmpty(value: string, label: string) {
@@ -87,6 +102,12 @@ function safeAdd(left: number, right: number, label: string) {
   return result
 }
 
+function safeMultiply(left: number, right: number, label: string) {
+  const result = left * right
+  if (!Number.isSafeInteger(result)) throw new Error(`${label}超出安全整数范围`)
+  return result
+}
+
 function canonicalize(value: unknown): string {
   if (value === null) return 'null'
   if (Array.isArray(value)) return `[${value.map(canonicalize).join(',')}]`
@@ -116,6 +137,10 @@ function resolveResult(state: InventoryDomainState, resultType: InventoryDomainR
       return state.bottleBatches.find((item) => item.id === resultId)
     case 'bottle_storage_event':
       return state.bottleEvents.find((item) => item.id === resultId)
+    case 'ingredient_sku':
+      return state.ingredientSkus.find((item) => item.id === resultId)
+    case 'recipe_version':
+      return state.recipeVersions.find((item) => item.id === resultId)
   }
 }
 
@@ -255,6 +280,7 @@ export function receiveInventory(state: InventoryDomainState, command: ReceiveIn
       reason: command.reason,
       businessDate: command.businessDate,
       occurredAt: command.occurredAt,
+      configurationSnapshot: command.configurationSnapshot ? structuredClone(command.configurationSnapshot) : null,
     }),
     (result) => result.id,
   )
@@ -263,7 +289,7 @@ export function receiveInventory(state: InventoryDomainState, command: ReceiveIn
 function consumeInventory(
   state: InventoryDomainState,
   command: ConsumeInventoryCommand,
-  type: Extract<InventoryMovementType, 'sale' | 'gift'>,
+  type: Extract<InventoryMovementType, 'sale' | 'gift' | 'remake'>,
 ) {
   assertMovementContext(command)
   assertPositiveQuantity(command.quantity)
@@ -293,6 +319,7 @@ function consumeInventory(
       reason: command.reason,
       businessDate: command.businessDate,
       occurredAt: command.occurredAt,
+      configurationSnapshot: command.configurationSnapshot ? structuredClone(command.configurationSnapshot) : null,
     }),
     (result) => result.id,
   )
@@ -304,6 +331,10 @@ export function consumeInventoryForSale(state: InventoryDomainState, command: Co
 
 export function consumeInventoryForGift(state: InventoryDomainState, command: ConsumeInventoryCommand) {
   return consumeInventory(state, command, 'gift')
+}
+
+export function consumeInventoryForRemake(state: InventoryDomainState, command: ConsumeInventoryCommand) {
+  return consumeInventory(state, command, 'remake')
 }
 
 export function returnInventoryForRefund(
@@ -347,6 +378,176 @@ export function returnInventoryForRefund(
 export function getInventoryBalance(state: InventoryDomainState, productId: string) {
   assertNonEmpty(productId, '商品ID')
   return balanceFor(state, productId)?.onHandQuantity ?? 0
+}
+
+function assertIngredientSku(command: UpsertIngredientSkuCommand) {
+  assertNonEmpty(command.ingredientSkuId, '原料SKU ID')
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(command.sku)) throw new Error('原料SKU编码不合法')
+  assertNonEmpty(command.name, '原料名称')
+  assertUnitCode(command.baseUnitCode)
+  assertNonNegativeQuantity(command.costAmountPerBaseUnit, '基础单位成本')
+  assertNonEmpty(command.actorId, '操作人')
+  assertNonEmpty(command.reason, '调整原因')
+  assertTimestamp(command.occurredAt)
+  if (command.conversions.length === 0) throw new Error('原料至少需要一个单位换算')
+  const units = new Set<string>()
+  for (const conversion of command.conversions) {
+    assertUnitCode(conversion.unitCode)
+    assertPositiveQuantity(conversion.baseQuantity, '单位换算数量')
+    if (units.has(conversion.unitCode)) throw new Error('单位换算不能包含重复单位')
+    units.add(conversion.unitCode)
+  }
+  if (!command.conversions.some((item) => item.unitCode === command.baseUnitCode && item.baseQuantity === 1)) {
+    throw new Error('基础单位换算必须为1')
+  }
+}
+
+export function upsertIngredientSku(state: InventoryDomainState, command: UpsertIngredientSkuCommand) {
+  normalizeInventoryDomainState(state)
+  assertIngredientSku(command)
+  return executeIdempotent(
+    state,
+    command.idempotencyKey,
+    'inventory.ingredient.upsert',
+    command,
+    'ingredient_sku',
+    () => {
+      const duplicate = state.ingredientSkus.find(
+        (item) => item.sku.toLowerCase() === command.sku.toLowerCase() && item.id !== command.ingredientSkuId,
+      )
+      if (duplicate) throw new Error('原料SKU编码已存在')
+      const existing = state.ingredientSkus.find((item) => item.id === command.ingredientSkuId)
+      const balance = balanceFor(state, command.ingredientSkuId)
+      if (existing && balance && existing.baseUnitCode !== command.baseUnitCode) {
+        throw new Error('原料已有库存流水，不能修改基础单位')
+      }
+      const before = existing ? structuredClone(existing) : null
+      const ingredient: InventoryIngredientSku = existing ?? {
+        ...scope(state),
+        id: command.ingredientSkuId,
+        sku: command.sku,
+        name: command.name,
+        baseUnitCode: command.baseUnitCode,
+        costAmountPerBaseUnit: command.costAmountPerBaseUnit,
+        conversions: [],
+        enabled: command.enabled,
+        revision: 0,
+        createdAt: command.occurredAt,
+        updatedAt: command.occurredAt,
+        updatedBy: command.actorId,
+      }
+      Object.assign(ingredient, {
+        sku: command.sku,
+        name: command.name,
+        baseUnitCode: command.baseUnitCode,
+        costAmountPerBaseUnit: command.costAmountPerBaseUnit,
+        conversions: structuredClone(command.conversions),
+        enabled: command.enabled,
+        revision: ingredient.revision + 1,
+        updatedAt: command.occurredAt,
+        updatedBy: command.actorId,
+      })
+      if (!existing) state.ingredientSkus.push(ingredient)
+      audit(state, {
+        action: existing ? 'inventory.ingredient.updated.v1' : 'inventory.ingredient.created.v1',
+        objectType: 'ingredient_sku',
+        objectId: ingredient.id,
+        actorId: command.actorId,
+        approvalId: null,
+        tableSessionId: null,
+        orderId: null,
+        reason: command.reason,
+        occurredAt: command.occurredAt,
+        details: { before, after: structuredClone(ingredient) },
+      })
+      return ingredient
+    },
+    (result) => result.id,
+  )
+}
+
+export function publishRecipeVersion(state: InventoryDomainState, command: PublishRecipeVersionCommand) {
+  normalizeInventoryDomainState(state)
+  assertNonEmpty(command.recipeVersionId, '配方版本ID')
+  assertNonEmpty(command.productId, '菜单商品ID')
+  assertNonEmpty(command.actorId, '操作人')
+  assertNonEmpty(command.reason, '发布原因')
+  assertTimestamp(command.occurredAt)
+  if (command.lines.length === 0) throw new Error('配方至少需要一种原料')
+  const ingredientIds = new Set<string>()
+  for (const line of command.lines) {
+    assertNonEmpty(line.ingredientSkuId, '配方原料ID')
+    assertPositiveQuantity(line.standardQuantity, '标准耗用')
+    if (!Number.isSafeInteger(line.allowedLossBps) || line.allowedLossBps < 0 || line.allowedLossBps > 10_000) {
+      throw new Error('允许损耗必须在0%到100%之间')
+    }
+    if (ingredientIds.has(line.ingredientSkuId)) throw new Error('同一配方不能重复配置原料')
+    ingredientIds.add(line.ingredientSkuId)
+    if (!state.ingredientSkus.some((item) => item.id === line.ingredientSkuId && item.enabled)) {
+      throw new Error(`配方引用的原料不存在或已停用：${line.ingredientSkuId}`)
+    }
+  }
+  return executeIdempotent(
+    state,
+    command.idempotencyKey,
+    'inventory.recipe.publish',
+    command,
+    'recipe_version',
+    () => {
+      if (state.recipeVersions.some((item) => item.id === command.recipeVersionId)) throw new Error('配方版本ID已存在')
+      const previous = state.recipeVersions.filter((item) => item.productId === command.productId)
+      const version = Math.max(0, ...previous.map((item) => item.version)) + 1
+      previous.filter((item) => item.status === 'active').forEach((item) => { item.status = 'archived' })
+      const recipe: InventoryRecipeVersion = {
+        ...scope(state),
+        id: command.recipeVersionId,
+        productId: command.productId,
+        version,
+        status: 'active',
+        lines: structuredClone(command.lines),
+        publishedBy: command.actorId,
+        publishedAt: command.occurredAt,
+        reason: command.reason,
+      }
+      state.recipeVersions.push(recipe)
+      audit(state, {
+        action: 'inventory.recipe.published.v1',
+        objectType: 'recipe_version',
+        objectId: recipe.id,
+        actorId: command.actorId,
+        approvalId: null,
+        tableSessionId: null,
+        orderId: null,
+        reason: command.reason,
+        occurredAt: command.occurredAt,
+        details: {
+          archivedRecipeIds: previous.filter((item) => item.status === 'archived').map((item) => item.id),
+          recipe: structuredClone(recipe),
+        },
+      })
+      return recipe
+    },
+    (result) => result.id,
+  )
+}
+
+export function convertIngredientQuantityToBase(
+  state: InventoryDomainState,
+  ingredientSkuId: string,
+  inputUnitCode: string,
+  inputQuantity: number,
+) {
+  normalizeInventoryDomainState(state)
+  assertPositiveQuantity(inputQuantity)
+  const ingredient = state.ingredientSkus.find((item) => item.id === ingredientSkuId && item.enabled)
+  if (!ingredient) throw new Error('原料SKU不存在或已停用')
+  const conversion = ingredient.conversions.find((item) => item.unitCode === inputUnitCode)
+  if (!conversion) throw new Error(`原料未配置单位换算：${inputUnitCode}`)
+  return {
+    ingredient,
+    conversion,
+    baseQuantity: safeMultiply(inputQuantity, conversion.baseQuantity, '换算后入库数量'),
+  }
 }
 
 function findStockCount(state: InventoryDomainState, countId: string) {

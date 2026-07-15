@@ -191,4 +191,84 @@ describe('payment API security boundary', () => {
     await app.close()
     await repository.close()
   })
+
+  it('splits one item by specified amounts without assigning more than the remaining receivable', async () => {
+    const { app, repository } = fixture('test', 'emp-cashier', 'cashier')
+    const state = await repository.read()
+    const order = state.orderDomain.orders.find((candidate) => candidate.id === 'payment-api-order')!
+    const total = order.items[0]!.unitSalePriceAmount
+    const firstAmount = Math.floor(total / 2)
+    const first = await app.inject({
+      method: 'POST', url: '/api/payments/table-intents',
+      payload: {
+        tableSessionId: order.tableSessionId, channel: 'physical_pos', allocation: { mode: 'amount', amount: firstAmount },
+        deviceId: 'cashier-test', idempotencyKey: 'partial-payment-first-0001',
+      },
+    })
+    const second = await app.inject({
+      method: 'POST', url: '/api/payments/table-intents',
+      payload: {
+        tableSessionId: order.tableSessionId, channel: 'cash', allocation: { mode: 'amount', amount: total - firstAmount },
+        deviceId: 'cashier-test', idempotencyKey: 'partial-payment-second-0001',
+      },
+    })
+    const duplicate = await app.inject({
+      method: 'POST', url: '/api/payments/table-intents',
+      payload: {
+        tableSessionId: order.tableSessionId, channel: 'cash', allocation: { mode: 'all' },
+        deviceId: 'cashier-test', idempotencyKey: 'partial-payment-overallocate-0001',
+      },
+    })
+    expect(first.statusCode, first.body).toBe(201)
+    expect(second.statusCode, second.body).toBe(201)
+    expect(first.json().amount + second.json().amount).toBe(total)
+    expect(duplicate.statusCode).toBe(500)
+    expect(duplicate.json().message).toContain('没有可支付的订单商品')
+    await app.close()
+    await repository.close()
+  })
+
+  it('does not count a cash intent as received until the cashier confirms it', async () => {
+    const { app, repository } = fixture('test', 'emp-cashier', 'cashier')
+    const state = await repository.read()
+    const order = state.orderDomain.orders.find((candidate) => candidate.id === 'payment-api-order')!
+    const intentResponse = await app.inject({
+      method: 'POST', url: '/api/payments/table-intents',
+      payload: {
+        tableSessionId: order.tableSessionId, channel: 'cash', allocation: { mode: 'all' },
+        deviceId: 'cashier-test', idempotencyKey: 'cash-payment-intent-0001',
+      },
+    })
+    expect(intentResponse.json().status).toBe('pending')
+    const confirmation = await app.inject({
+      method: 'POST', url: `/api/payments/${intentResponse.json().id}/cash-confirmations`,
+      payload: { deviceId: 'cashier-test', idempotencyKey: 'cash-payment-confirm-0001' },
+    })
+    expect(confirmation.statusCode, confirmation.body).toBe(201)
+    expect((await repository.read()).paymentDomain.paymentIntents[0]?.status).toBe('succeeded')
+    await app.close()
+    await repository.close()
+  })
+
+  it('returns explicit provider unavailability and persists no intent when Postar credentials are missing', async () => {
+    const { app, repository } = fixture('production', 'emp-cashier', 'cashier')
+    const state = await repository.read()
+    const order = state.orderDomain.orders.find((candidate) => candidate.id === 'payment-api-order')!
+    const response = await app.inject({
+      method: 'POST', url: '/api/payments/table-intents',
+      payload: {
+        tableSessionId: order.tableSessionId,
+        channel: 'postar',
+        allocation: { mode: 'all' },
+        providerPayment: { payWay: 'wechat', payerId: 'openid-test', wxAppid: 'wx-app-test' },
+        deviceId: 'cashier-test',
+        idempotencyKey: 'postar-missing-credentials-0001',
+      },
+    })
+    expect(response.statusCode).toBe(503)
+    expect(response.json()).toMatchObject({ code: 'PAYMENT_PROVIDER_UNAVAILABLE' })
+    expect((await repository.read()).paymentDomain.paymentIntents).toHaveLength(0)
+    await app.close()
+    await repository.close()
+  })
 })

@@ -13,6 +13,17 @@ describe('runtime config', () => {
     expect(() => loadRuntimeConfig({ MBOX_RUNTIME_MODE: 'production' })).toThrow('DATABASE_URL')
   })
 
+  it.each(['staging', 'production'] as const)('rejects explicit JSON storage in %s', (runtimeMode) => {
+    expect(() => loadRuntimeConfig({
+      MBOX_RUNTIME_MODE: runtimeMode,
+      MBOX_REPOSITORY: 'json',
+    })).toThrow('预发布和生产环境必须使用PostgreSQL仓储')
+  })
+
+  it('defaults staging storage to PostgreSQL and requires its connection settings', () => {
+    expect(() => loadRuntimeConfig({ MBOX_RUNTIME_MODE: 'staging' })).toThrow('DATABASE_URL')
+  })
+
   it('loads a complete production configuration', () => {
     const config = loadRuntimeConfig({
       MBOX_RUNTIME_MODE: 'production',

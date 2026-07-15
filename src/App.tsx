@@ -22,9 +22,11 @@ import { OperationsConsole } from './components/OperationsConsole'
 import { PublicReservationPortal } from './components/PublicReservationPortal'
 import { ServiceIcon } from './components/ServiceIcon'
 import {
+  clearOfflineDataForEmployeeChange,
   discardConflictedTaskAction,
   getOfflineStatus,
   loadOfflineSnapshot,
+  prepareOfflineDataForEmployee,
   replayTaskActionQueue,
   sanitizeBootstrapSnapshot,
   saveOfflineSnapshot,
@@ -47,6 +49,7 @@ export default function App() {
   const [error, setError] = useState('')
   const [guardNotice, setGuardNotice] = useState('')
   const [requiresLogin, setRequiresLogin] = useState(false)
+  const [switchingEmployee, setSwitchingEmployee] = useState(false)
   const [offlineStatus, setOfflineStatus] = useState<OfflineStatus>(() => getOfflineStatus())
   const previousPendingCount = useRef(offlineStatus.pendingCount)
 
@@ -91,6 +94,28 @@ export default function App() {
     previousPendingCount.current = offlineStatus.pendingCount
     if (!isGuest && !isMember && !isPublicReservation && offlineStatus.online && syncJustCompleted) void refresh()
   }, [isGuest, isMember, isPublicReservation, offlineStatus.online, offlineStatus.pendingCount, refresh])
+
+  async function switchEmployee() {
+    if (switchingEmployee) return
+    if (offlineStatus.pendingCount > 0 && !window.confirm(
+      `本机还有${offlineStatus.pendingCount}项未同步服务动作。切换员工会清除这些动作，请确认现场已人工交接。`,
+    )) return
+    setSwitchingEmployee(true)
+    try {
+      await clearOfflineDataForEmployeeChange()
+      window.localStorage.removeItem('mbox.auth.token')
+      window.localStorage.removeItem('mbox.actor.id')
+      window.localStorage.removeItem('mbox.actor.name')
+      setData(null)
+      setSnapshot(null)
+      setError('')
+      setRequiresLogin(true)
+    } catch {
+      setGuardNotice('本机离线数据清理失败，已保留当前员工会话并阻止切换')
+    } finally {
+      setSwitchingEmployee(false)
+    }
+  }
 
   if (isGuest) return <GuestPortal />
   if (isMember) return <MemberBenefitsPortal />
@@ -150,13 +175,10 @@ export default function App() {
       {window.localStorage.getItem('mbox.auth.token') && (
         <div className="pilot-session-bar">
           <span>当前员工：<strong>{window.localStorage.getItem('mbox.actor.name') ?? '已登录员工'}</strong></span>
-          <button onClick={() => {
-            window.localStorage.removeItem('mbox.auth.token')
-            window.localStorage.removeItem('mbox.actor.id')
-            window.localStorage.removeItem('mbox.actor.name')
-            setData(null)
-            setRequiresLogin(true)
-          }}><LogOut size={15} />切换员工</button>
+          <button disabled={switchingEmployee} onClick={() => void switchEmployee()}>
+            {switchingEmployee ? <LoaderCircle className="spin" size={15} /> : <LogOut size={15} />}
+            {switchingEmployee ? '正在清理' : '切换员工'}
+          </button>
         </div>
       )}
       {guardNotice && (
@@ -200,6 +222,7 @@ function PilotLogin({ onAuthenticated }: { onAuthenticated: () => void }) {
     try {
       const response = await createPilotSession(accessCode, actorId, employeePin)
       if (!response.token || !response.employee) throw new Error('员工会话签发失败')
+      await prepareOfflineDataForEmployee(response.employee.id)
       window.localStorage.setItem('mbox.auth.token', response.token)
       window.localStorage.setItem('mbox.actor.id', response.employee.id)
       window.localStorage.setItem('mbox.actor.name', response.employee.displayName)

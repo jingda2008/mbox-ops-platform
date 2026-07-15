@@ -7,6 +7,8 @@ import { PHYSICAL_POS_CHANNEL } from '../src/shared/payment-contracts.js'
 import {
   applyPaymentQueryResult,
   approveRefund,
+  buildSettlementChannelSummaries,
+  confirmCashPayment,
   createPaymentDomainState,
   createPaymentIntent,
   handlePaymentNotification,
@@ -14,7 +16,9 @@ import {
   queryPaymentStatus,
   reportPhysicalPosPayment,
   requestRefund,
+  reviewCashierHandover,
   startRefund,
+  submitCashierHandover,
 } from './payment-domain.js'
 
 const CREATED_AT = '2026-07-14T12:00:00.000Z'
@@ -206,6 +210,59 @@ describe('physical POS reporting', () => {
         idempotencyKey: 'pos-report-key-2',
       }),
     ).toThrow('终端交易号已被报送')
+  })
+
+  it('keeps manual POS reports pending while requiring reason and next-day ownership at handover', () => {
+    const state = createPaymentDomainState()
+    const intent = createPaymentIntent(state, intentCommand({ channel: PHYSICAL_POS_CHANNEL, businessDate: '2026-07-14' }))
+    reportPhysicalPosPayment(state, {
+      reportId: 'pos-handover-report', paymentIntentId: intent.id, terminalId: 'POS-01',
+      terminalTransactionId: 'POS-HANDOVER-001', paymentMethod: 'bank_card', amount: intent.amount,
+      currency: intent.currency, paidAt: '2026-07-14T12:03:00.000Z', reportedBy: 'cashier-1',
+      deviceId: 'cashier-pc-1', occurredAt: '2026-07-14T12:03:30.000Z', idempotencyKey: 'pos-handover-report-key',
+    })
+    const channels = buildSettlementChannelSummaries(state, '2026-07-14', { physical_pos: 3000 })
+    expect(channels.find((item) => item.channel === 'physical_pos')).toMatchObject({
+      systemReceivableAmount: 3000,
+      confirmedActualAmount: 3000,
+      pendingReconciliationAmount: 3000,
+      differenceAmount: 0,
+    })
+    const command = {
+      handoverId: 'handover-1', businessDate: '2026-07-14', shiftId: 'shift-cashier',
+      submittedBy: 'cashier-1', deviceId: 'cashier-pc-1', channels,
+      issues: [], occurredAt: '2026-07-14T18:00:00.000Z', idempotencyKey: 'handover-submit-1',
+    }
+    expect(() => submitCashierHandover(state, command)).toThrow('必须填写原因和次日责任人')
+    const handover = submitCashierHandover(state, {
+      ...command,
+      issues: [{ channel: 'physical_pos', reason: '等待收单机构账单', nextDayOwnerId: 'cashier-2' }],
+    })
+    expect(() => reviewCashierHandover(state, {
+      handoverId: handover.id, decision: 'approve', reviewedBy: 'cashier-1',
+      occurredAt: '2026-07-14T18:01:00.000Z', idempotencyKey: 'handover-review-same-actor',
+    })).toThrow('必须为不同员工')
+    reviewCashierHandover(state, {
+      handoverId: handover.id, decision: 'approve', reviewedBy: 'manager-1', note: '小票和报送记录一致',
+      occurredAt: '2026-07-14T18:02:00.000Z', idempotencyKey: 'handover-review-manager',
+    })
+    expect(handover.status).toBe('approved')
+    expect(intent.status).toBe('reported_pending_reconciliation')
+  })
+})
+
+describe('cash payment confirmation', () => {
+  it('records cash as succeeded only after an explicit cashier confirmation', () => {
+    const state = createPaymentDomainState()
+    const intent = createPaymentIntent(state, intentCommand({ channel: 'cash', businessDate: '2026-07-14' }))
+    expect(intent.status).toBe('pending')
+    confirmCashPayment(state, {
+      confirmationId: 'cash-confirmation-1', paymentIntentId: intent.id, amount: intent.amount,
+      currency: intent.currency, confirmedBy: 'cashier-1', deviceId: 'cashier-pc-1',
+      occurredAt: '2026-07-14T12:01:00.000Z', idempotencyKey: 'cash-confirmation-key-1',
+    })
+    expect(intent.status).toBe('succeeded')
+    expect(state.cashPaymentConfirmations).toHaveLength(1)
   })
 })
 

@@ -4,9 +4,11 @@ import type {
   NotificationDispatchResult,
   NotificationProviderAdapter,
 } from './notification-dispatch.js'
-import { processDueNotifications } from './notification-dispatch.js'
+import { dispatchDueNotifications, processDueNotifications } from './notification-dispatch.js'
 import { requestBenefitGrant } from './benefit-domain.js'
 import { createSeedState } from './seed.js'
+import type { RuntimeRepository } from './repository.js'
+import type { RuntimeState } from '../src/shared/contracts.js'
 
 const NOW = new Date('2026-07-14T12:00:00.000Z')
 
@@ -36,7 +38,68 @@ function mockAdapter(
   return { channel, dispatch }
 }
 
+class MemoryRepository implements RuntimeRepository {
+  private queue = Promise.resolve()
+
+  constructor(readonly state: RuntimeState) {}
+
+  async init() {}
+  async read() { await this.queue; return structuredClone(this.state) }
+  async mutate<T>(mutation: (state: RuntimeState) => T | Promise<T>) {
+    let result!: T
+    this.queue = this.queue.then(async () => {
+      const working = structuredClone(this.state)
+      result = await mutation(working)
+      Object.assign(this.state, working)
+    })
+    await this.queue
+    return result
+  }
+  async reset() { return this.state }
+  async healthCheck() { return { ready: true, repository: 'memory', revision: this.state.revision } }
+  async close() {}
+}
+
 describe('customer notification dispatcher', () => {
+  it('does not steal an active lease and recovers it only after expiry', async () => {
+    const state = queuedState()
+    const notification = state.customerNotifications[0]!
+    notification.leaseOwner = 'worker-stopped'
+    notification.leaseExpiresAt = '2026-07-14T12:01:00.000Z'
+    const adapter = mockAdapter('service_account', [
+      { outcome: 'sent', providerMessageId: 'wx-recovered-message-001' },
+    ])
+
+    const activeLease = await processDueNotifications(state, [adapter], NOW)
+    expect(activeLease.attempted).toBe(0)
+    expect(adapter.dispatch).not.toHaveBeenCalled()
+
+    const recovered = await processDueNotifications(state, [adapter], new Date('2026-07-14T12:01:00.000Z'))
+    expect(recovered.sent).toBe(1)
+    expect(adapter.dispatch).toHaveBeenCalledTimes(1)
+  })
+
+  it('persists a worker lease before provider I/O so concurrent workers send once', async () => {
+    const repository = new MemoryRepository(queuedState())
+    const adapter = mockAdapter('service_account', [
+      { outcome: 'sent', providerMessageId: 'wx-leased-message-001' },
+    ])
+
+    const [first, second] = await Promise.all([
+      dispatchDueNotifications(repository, [adapter], 'worker-a', NOW),
+      dispatchDueNotifications(repository, [adapter], 'worker-b', NOW),
+    ])
+
+    expect(first.claimed + second.claimed).toBe(1)
+    expect(adapter.dispatch).toHaveBeenCalledTimes(1)
+    expect(repository.state.customerNotifications[0]).toMatchObject({
+      status: 'sent',
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      providerMessageId: 'wx-leased-message-001',
+    })
+  })
+
   it('keeps due notifications queued when the channel adapter is not configured', async () => {
     const state = queuedState()
     const notification = state.customerNotifications[0]!

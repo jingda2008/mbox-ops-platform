@@ -17,6 +17,8 @@ export function retryCustomerNotification(
   notification.failureReason = null
   notification.lastErrorCode = null
   notification.providerMessageId = null
+  notification.leaseOwner = null
+  notification.leaseExpiresAt = null
   notification.nextAttemptAt = now.toISOString()
   state.auditEntries.push({
     id: `audit_${randomUUID()}`,

@@ -27,14 +27,41 @@ import {
   Music2,
   PackageSearch,
   ArrowRightLeft,
+  CircleDollarSign,
+  DoorOpen,
+  Link2,
+  Minus,
+  Plus,
+  Trash2,
+  Unlink,
+  UserPlus,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { actOnTask, getCurrentActorId, publishConfig, resetDemo, rollbackConfig, saveConfigDraft, startAwaitingOrder, stopAwaitingOrder, transferTableSession } from '../api'
+import {
+  actOnTask,
+  assignTableSessionSales,
+  closeTableSession,
+  getCurrentActorId,
+  getTableSessionSummary,
+  openWalkInTable,
+  operateTableCombination,
+  publishConfig,
+  resetDemo,
+  rollbackConfig,
+  saveConfigDraft,
+  startAwaitingOrder,
+  stopAwaitingOrder,
+  transferTableSession,
+  updateTableOperationsConfig,
+} from '../api'
 import type {
   BootstrapResponse,
   ConfigDraftInput,
+  MinimumSpendRule,
   ServiceTask,
   StoreConfig,
+  TableOperationsConfig,
+  TableSessionSummary,
   TaskActionInput,
 } from '../shared/contracts'
 import { TaskQueue } from './TaskQueue'
@@ -45,9 +72,10 @@ import { BenefitCenterView } from './BenefitCenterView'
 import { SongCenterView } from './SongCenterView'
 import { ReservationView } from './ReservationView'
 import { InventoryView } from './InventoryView'
-import { getFulfillmentAccess, taskVisibleToAccess } from './commerce-workspace'
+import { getFulfillmentAccess, kdsTaskOperationallyActive, taskVisibleToAccess } from './commerce-workspace'
 import { RoleHomeView } from './RoleHomeView'
 import { getRoleHomeAccess, type RoleHomeNavigationId } from './role-access'
+import './OperationsConsole.css'
 
 type View = 'home' | RoleHomeNavigationId
 
@@ -86,8 +114,19 @@ const viewTitles: Record<View, string> = {
   config: '运营配置',
 }
 
+const weekdayLabels = ['日', '一', '二', '三', '四', '五', '六']
+
 function cloneConfig(config: StoreConfig) {
   return structuredClone(config)
+}
+
+function tableOperationsConfig(config?: TableOperationsConfig): TableOperationsConfig {
+  return structuredClone(config ?? {
+    version: 1,
+    updatedAt: '1970-01-01T00:00:00.000Z',
+    reminder: { enabled: true, firstReminderMinutes: 60, repeatMinutes: 30, thresholdPercent: 80 },
+    minimumSpendRules: [],
+  })
 }
 
 export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
@@ -110,10 +149,25 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
   const [busy, setBusy] = useState(false)
   const [transferTargetId, setTransferTargetId] = useState('')
   const [transferKind, setTransferKind] = useState<'relocate' | 'temporary_to_final'>('relocate')
+  const [sessionSummary, setSessionSummary] = useState<TableSessionSummary | null>(null)
+  const [walkInPartySize, setWalkInPartySize] = useState(2)
+  const [walkInSalesEmployeeId, setWalkInSalesEmployeeId] = useState('')
+  const [salesEmployeeId, setSalesEmployeeId] = useState('')
+  const [salesChangeReason, setSalesChangeReason] = useState('现场确认销售归属')
+  const [combinationAction, setCombinationAction] = useState<'merge' | 'add_table'>('add_table')
+  const [combinationTargetId, setCombinationTargetId] = useState('')
+  const [minimumSpendWaiverReason, setMinimumSpendWaiverReason] = useState('')
+  const [tableOpsDraft, setTableOpsDraft] = useState(() => tableOperationsConfig(data.tableOperationsConfig))
+  const [tableOpsDirty, setTableOpsDirty] = useState(false)
+  const [tableOpsReason, setTableOpsReason] = useState('')
 
   useEffect(() => {
     if (!configDirty) setDraft(cloneConfig(data.draftConfig ?? data.config))
   }, [data.config, data.draftConfig, configDirty])
+
+  useEffect(() => {
+    if (!tableOpsDirty) setTableOpsDraft(tableOperationsConfig(data.tableOperationsConfig))
+  }, [data.tableOperationsConfig, tableOpsDirty])
 
   const openTasks = fulfillmentAccess.mode === 'oversight'
     ? data.tasks.filter((task) => !['confirmed', 'cancelled'].includes(task.status))
@@ -121,7 +175,9 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
   const visibleServiceTasks = fulfillmentAccess.mode === 'oversight'
     ? data.tasks
     : data.tasks.filter((task) => task.ownerId === fulfillmentAccess.employee?.id)
-  const roleKdsCount = data.orderDomain.kdsTasks.filter((task) => taskVisibleToAccess(task, fulfillmentAccess)).length
+  const roleKdsCount = data.orderDomain.kdsTasks.filter((task) => (
+    kdsTaskOperationallyActive(task) && taskVisibleToAccess(task, fulfillmentAccess)
+  )).length
   const selectedTable = data.tables.find((table) => table.id === selectedTableId) ?? null
   const selectedAwaitingOrder = data.awaitingOrderIntents.find(
     (intent) => intent.tableId === selectedTableId && intent.status === 'active',
@@ -134,15 +190,58 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
     : false
   const currentRole = data.config.roles.find((role) => role.id === fulfillmentAccess.employee?.roleId)
   const canTransferTable = currentRole?.permissionIds?.includes('table.manage') ?? false
+  const canOpenWalkIn = currentRole?.permissionIds?.includes('reservation.manage') ?? false
+  const canWaiveMinimumSpend = ['manager', 'owner'].includes(fulfillmentAccess.employee?.roleId ?? '')
+  const salesEmployees = data.employees.filter((employee) => employee.status === 'active' && employee.online)
+  const selectedSession = selectedTable
+    ? data.songState.tableSessions.find((session) => session.tableId === selectedTable.id && session.status === 'open') ?? null
+    : null
+  const activeCombinationLinks = (() => {
+    const latest = new Map<string, NonNullable<BootstrapResponse['tableCombinationRecords']>[number]>()
+    for (const record of data.tableCombinationRecords ?? []) latest.set(record.linkId, record)
+    return [...latest.values()].filter((record) => record.action !== 'split_back')
+  })()
+  const selectedCombinationLinks = selectedTable
+    ? activeCombinationLinks.filter((record) => record.primaryTableId === selectedTable.id || record.relatedTableId === selectedTable.id)
+    : []
+  const groupedTableIds = new Set(activeCombinationLinks.flatMap((record) => [record.primaryTableId, record.relatedTableId]))
   const transferTargets = selectedTable
     ? data.tables.filter((table) => table.status === 'available' && table.capacity >= selectedTable.guestCount)
+      .toSorted((left, right) => Number(left.areaId !== selectedTable.areaId) - Number(right.areaId !== selectedTable.areaId) || left.code.localeCompare(right.code))
+    : []
+  const combinationTargets = selectedTable
+    ? data.tables.filter((table) => table.id !== selectedTable.id && !groupedTableIds.has(table.id))
+      .filter((table) => combinationAction === 'merge' ? table.status === 'occupied' : table.status === 'available')
       .toSorted((left, right) => Number(left.areaId !== selectedTable.areaId) - Number(right.areaId !== selectedTable.areaId) || left.code.localeCompare(right.code))
     : []
 
   useEffect(() => {
     setTransferTargetId('')
     setTransferKind('relocate')
+    setCombinationTargetId('')
+    setCombinationAction('add_table')
+    setMinimumSpendWaiverReason('')
+    setSessionSummary(null)
   }, [selectedTableId])
+
+  useEffect(() => {
+    if (!selectedTable || selectedTable.status !== 'occupied') return
+    let cancelled = false
+    void getTableSessionSummary(selectedTable.id)
+      .then((summary) => {
+        if (cancelled) return
+        setSessionSummary(summary)
+        setSalesEmployeeId(summary.salesEmployeeId ?? '')
+      })
+      .catch(() => { if (!cancelled) setSessionSummary(null) })
+    return () => { cancelled = true }
+  }, [data.revision, selectedTable])
+
+  useEffect(() => {
+    if (!walkInSalesEmployeeId && salesEmployees.length > 0) {
+      setWalkInSalesEmployeeId(salesEmployees.find((employee) => employee.id === fulfillmentAccess.employee?.id)?.id ?? salesEmployees[0]!.id)
+    }
+  }, [fulfillmentAccess.employee?.id, salesEmployees, walkInSalesEmployeeId])
 
   async function handleTaskAction(task: ServiceTask, action: TaskActionInput['action']) {
     const actorId = fulfillmentAccess.employee?.id
@@ -197,6 +296,150 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
       await onRefresh()
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '转桌失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleWalkInOpen() {
+    if (!selectedTable || selectedTable.status !== 'available' || !walkInSalesEmployeeId) return
+    setBusy(true)
+    try {
+      const result = await openWalkInTable(selectedTable.id, {
+        partySize: walkInPartySize,
+        salesEmployeeId: walkInSalesEmployeeId,
+        customerName: '现场客人',
+      })
+      setSessionSummary(result.summary)
+      setSalesEmployeeId(result.summary.salesEmployeeId ?? '')
+      setNotice(`${selectedTable.code}临客已开台，低消V${result.summary.configVersion}与销售归属已固化`)
+      await onRefresh()
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '临客开台失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleSalesChange() {
+    if (!selectedSession || !salesEmployeeId || !salesChangeReason.trim()) return
+    setBusy(true)
+    try {
+      await assignTableSessionSales(selectedSession.id, {
+        salesEmployeeId,
+        reason: salesChangeReason.trim(),
+      })
+      setNotice('桌次销售归属已更新并写入审计')
+      await onRefresh()
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '销售归属更新失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleCombination() {
+    if (!selectedTable || !combinationTargetId) return
+    const target = data.tables.find((table) => table.id === combinationTargetId)
+    if (!target) return
+    setBusy(true)
+    try {
+      await operateTableCombination(selectedTable.id, {
+        action: combinationAction,
+        targetTableId: target.id,
+        reason: combinationAction === 'merge' ? '现场确认两桌合并接待' : '现场确认主桌增加物理桌位',
+      })
+      setNotice(combinationAction === 'merge'
+        ? `${selectedTable.code}与${target.code}已建立合台关系，各自订单、支付和KDS保持独立`
+        : `${target.code}已作为${selectedTable.code}加桌，订单、支付和KDS未迁移`)
+      setCombinationTargetId('')
+      await onRefresh()
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '桌组操作失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleSplitBack(linkId: string) {
+    if (!selectedTable) return
+    setBusy(true)
+    try {
+      await operateTableCombination(selectedTable.id, {
+        action: 'split_back',
+        linkId,
+        reason: '现场确认结束合台/加桌关系',
+      })
+      setNotice('桌组关系已拆回并写入审计')
+      await onRefresh()
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '拆回失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleMinimumSpendWaiver() {
+    if (!selectedTable || !minimumSpendWaiverReason.trim()) return
+    setBusy(true)
+    try {
+      await closeTableSession(selectedTable.id, '经理核对后豁免低消差额并结台', minimumSpendWaiverReason.trim())
+      setNotice(`${selectedTable.code}低消差额已由经理豁免并完成结台`)
+      setSelectedTableId(null)
+      await onRefresh()
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '低消豁免结台失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function addMinimumSpendRule() {
+    const target = data.areas[0]
+    if (!target) return
+    const rule: MinimumSpendRule = {
+      id: `minimum-${crypto.randomUUID()}`,
+      name: `${target.shortName}常规低消`,
+      enabled: true,
+      targetType: 'area',
+      targetId: target.id,
+      weekdays: [0, 1, 2, 3, 4, 5, 6],
+      startTime: '20:00',
+      endTime: '02:00',
+      amount: 0,
+      currency: 'CNY',
+    }
+    setTableOpsDraft({ ...tableOpsDraft, minimumSpendRules: [...tableOpsDraft.minimumSpendRules, rule] })
+    setTableOpsDirty(true)
+  }
+
+  function updateMinimumSpendRule(index: number, patch: Partial<MinimumSpendRule>) {
+    setTableOpsDraft({
+      ...tableOpsDraft,
+      minimumSpendRules: tableOpsDraft.minimumSpendRules.map((rule, ruleIndex) => ruleIndex === index ? { ...rule, ...patch } : rule),
+    })
+    setTableOpsDirty(true)
+  }
+
+  async function saveTableOperationsConfig() {
+    if (!tableOpsReason.trim()) {
+      setNotice('请填写低消规则配置变更原因')
+      return
+    }
+    setBusy(true)
+    try {
+      const saved = await updateTableOperationsConfig({
+        reminder: tableOpsDraft.reminder,
+        minimumSpendRules: tableOpsDraft.minimumSpendRules,
+        reason: tableOpsReason.trim(),
+      })
+      setTableOpsDraft(saved)
+      setTableOpsDirty(false)
+      setTableOpsReason('')
+      setNotice(`桌台经营配置V${saved.version}已生效；已开桌次继续使用原快照`)
+      await onRefresh()
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '桌台经营配置保存失败')
     } finally {
       setBusy(false)
     }
@@ -360,6 +603,14 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
                     <div><span className="eyebrow">桌台责任区</span><h2>现场桌台</h2></div>
                     <div className="legend"><span><i className="dot occupied" />营业</span><span><i className="dot reserved" />预订</span><span><i className="dot available" />空台</span></div>
                   </div>
+                  {selectedTable && selectedTable.status === 'available' && canOpenWalkIn && (
+                    <div className="table-walkin-toolbar">
+                      <div className="table-business-heading"><DoorOpen size={19} /><div><strong>{selectedTable.code} 临客开台</strong><span>确认人数与销售后一次完成入座</span></div></div>
+                      <label><span>人数</span><div className="party-stepper"><button title="减少人数" disabled={walkInPartySize <= 1} onClick={() => setWalkInPartySize((value) => Math.max(1, value - 1))}><Minus size={15} /></button><b>{walkInPartySize}</b><button title="增加人数" disabled={walkInPartySize >= selectedTable.capacity} onClick={() => setWalkInPartySize((value) => Math.min(selectedTable.capacity, value + 1))}><Plus size={15} /></button></div></label>
+                      <label><span>销售归属</span><select value={walkInSalesEmployeeId} onChange={(event) => setWalkInSalesEmployeeId(event.target.value)}><option value="">请选择销售</option>{salesEmployees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName}</option>)}</select></label>
+                      <button className="primary-button" disabled={busy || !walkInSalesEmployeeId} onClick={() => void handleWalkInOpen()}><DoorOpen size={17} />确认开台</button>
+                    </div>
+                  )}
                   {selectedTable && selectedTable.status === 'occupied' && (
                     <div className="table-service-toolbar">
                       <div className="table-service-context">
@@ -379,7 +630,23 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
                       )}
                     </div>
                   )}
-                  {selectedTable && selectedTable.status === 'occupied' && canTransferTable && (
+                  {selectedTable && selectedTable.status === 'occupied' && sessionSummary && (
+                    <div className={`table-business-toolbar ${sessionSummary.reminderRequired ? 'is-warning' : ''}`}>
+                      <div className="minimum-spend-status">
+                        <CircleDollarSign size={20} />
+                        <span><small>{sessionSummary.ruleName} · 快照V{sessionSummary.configVersion}</small><strong>{money(sessionSummary.spendAmount)} / {money(sessionSummary.minimumSpendAmount)}</strong></span>
+                        <b>{sessionSummary.differenceAmount > 0 ? `差 ${money(sessionSummary.differenceAmount)}` : '低消已达成'}</b>
+                      </div>
+                      <div className="minimum-spend-progress"><span style={{ width: `${sessionSummary.progressPercent}%` }} /></div>
+                      <div className="sales-attribution-control">
+                        <label><span>桌次销售</span><select disabled={!canTransferTable} value={salesEmployeeId} onChange={(event) => setSalesEmployeeId(event.target.value)}><option value="">未指定</option>{salesEmployees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName}</option>)}</select></label>
+                        {canTransferTable && <><input aria-label="销售归属变更原因" maxLength={300} value={salesChangeReason} onChange={(event) => setSalesChangeReason(event.target.value)} /><button className="secondary-button" disabled={busy || !salesEmployeeId || salesEmployeeId === sessionSummary.salesEmployeeId} onClick={() => void handleSalesChange()}><UserPlus size={15} />变更</button></>}
+                      </div>
+                      {sessionSummary.reminderRequired && <div className="minimum-spend-reminder"><BellRing size={16} /><span>低消进度低于提醒阈值</span><small>{sessionSummary.nextReminderAt ? `${new Date(sessionSummary.nextReminderAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })}再次检查` : ''}</small></div>}
+                      {canWaiveMinimumSpend && sessionSummary.differenceAmount > 0 && <div className="minimum-spend-waiver"><input maxLength={300} placeholder="经理豁免原因（至少5字）" value={minimumSpendWaiverReason} onChange={(event) => setMinimumSpendWaiverReason(event.target.value)} /><button className="secondary-button" disabled={busy || minimumSpendWaiverReason.trim().length < 5} onClick={() => void handleMinimumSpendWaiver()}><ShieldCheck size={15} />豁免并结台</button></div>}
+                    </div>
+                  )}
+                  {selectedTable && selectedTable.status === 'occupied' && canTransferTable && selectedCombinationLinks.length === 0 && (
                     <div className="table-transfer-toolbar">
                       <div className="table-transfer-heading"><ArrowRightLeft size={18} /><div><strong>整桌换位</strong><span>选择目标桌，确认后立即迁移全部现场责任</span></div></div>
                       <div className="transfer-kind-control" aria-label="转桌类型">
@@ -395,6 +662,20 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
                         ))}
                       </div>
                       <button className="primary-button transfer-confirm" disabled={busy || !transferTargetId} onClick={() => void handleTableTransfer()}><ArrowRightLeft size={17} />确认转桌</button>
+                    </div>
+                  )}
+                  {selectedTable && selectedTable.status === 'occupied' && canTransferTable && (
+                    <div className="table-combination-toolbar">
+                      <div className="table-business-heading"><Link2 size={18} /><div><strong>专用合台 / 加桌</strong><span>仅建立现场桌组关系，不迁移订单、支付或KDS</span></div></div>
+                      {!selectedCombinationLinks.some((record) => record.relatedTableId === selectedTable.id) && <>
+                        <div className="transfer-kind-control" aria-label="桌组操作类型"><button className={combinationAction === 'add_table' ? 'is-active' : ''} onClick={() => { setCombinationAction('add_table'); setCombinationTargetId('') }}>加空桌</button><button className={combinationAction === 'merge' ? 'is-active' : ''} onClick={() => { setCombinationAction('merge'); setCombinationTargetId('') }}>合营业桌</button></div>
+                        <div className="transfer-targets">
+                          {combinationTargets.length === 0 && <span>{combinationAction === 'merge' ? '没有可合并的营业桌' : '没有可增加的空桌'}</span>}
+                          {combinationTargets.map((table) => <button key={table.id} className={combinationTargetId === table.id ? 'is-selected' : ''} onClick={() => setCombinationTargetId(table.id)}><strong>{table.code}</strong><small>{table.capacity}人 · {data.areas.find((area) => area.id === table.areaId)?.shortName}</small></button>)}
+                        </div>
+                        <button className="primary-button" disabled={busy || !combinationTargetId} onClick={() => void handleCombination()}><Link2 size={16} />确认{combinationAction === 'merge' ? '合台' : '加桌'}</button>
+                      </>}
+                      {selectedCombinationLinks.length > 0 && <div className="active-table-links">{selectedCombinationLinks.map((record) => <div key={record.linkId}><span><strong>{record.primaryTableCode}</strong><Link2 size={13} /><strong>{record.relatedTableCode}</strong><small>{record.kind === 'merge' ? '合台' : '加桌'}</small></span><button className="secondary-button" disabled={busy} onClick={() => void handleSplitBack(record.linkId)}><Unlink size={14} />拆回</button></div>)}</div>}
                     </div>
                   )}
                   <div className="area-list">
@@ -519,6 +800,42 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
                 {data.draftConfig && <p className="config-history-warning">存在未发布草稿，发布后才能回滚。</p>}
               </div>
 
+              <div className="config-section table-operations-config">
+                <div className="config-section-title table-ops-config-title">
+                  <CircleDollarSign size={19} />
+                  <div><strong>桌台低消与提醒</strong><span>区域/桌台、星期、跨午夜时段；入座后按版本快照执行</span></div>
+                  <b>当前 V{tableOpsDraft.version}</b>
+                  <button className="secondary-button" disabled={busy || tableOpsDraft.minimumSpendRules.length >= 500} onClick={addMinimumSpendRule}><Plus size={15} />新增规则</button>
+                </div>
+                <div className="minimum-reminder-config">
+                  <div className="switch-field"><span>启用提醒</span><label className="switch"><input type="checkbox" checked={tableOpsDraft.reminder.enabled} onChange={(event) => { setTableOpsDraft({ ...tableOpsDraft, reminder: { ...tableOpsDraft.reminder, enabled: event.target.checked } }); setTableOpsDirty(true) }} /><span /></label></div>
+                  <label><span>首次提醒（分钟）</span><input type="number" min={1} max={720} value={tableOpsDraft.reminder.firstReminderMinutes} onChange={(event) => { setTableOpsDraft({ ...tableOpsDraft, reminder: { ...tableOpsDraft.reminder, firstReminderMinutes: Number(event.target.value) } }); setTableOpsDirty(true) }} /></label>
+                  <label><span>重复间隔（分钟）</span><input type="number" min={1} max={720} value={tableOpsDraft.reminder.repeatMinutes} onChange={(event) => { setTableOpsDraft({ ...tableOpsDraft, reminder: { ...tableOpsDraft.reminder, repeatMinutes: Number(event.target.value) } }); setTableOpsDirty(true) }} /></label>
+                  <label><span>进度阈值（%）</span><input type="number" min={1} max={100} value={tableOpsDraft.reminder.thresholdPercent} onChange={(event) => { setTableOpsDraft({ ...tableOpsDraft, reminder: { ...tableOpsDraft.reminder, thresholdPercent: Number(event.target.value) } }); setTableOpsDirty(true) }} /></label>
+                </div>
+                <div className="minimum-rule-list">
+                  {tableOpsDraft.minimumSpendRules.length === 0 && <div className="minimum-rule-empty">尚未配置低消规则，新开桌次低消为0元。</div>}
+                  {tableOpsDraft.minimumSpendRules.map((rule, index) => {
+                    const targets = rule.targetType === 'table' ? data.tables : data.areas
+                    return <div className="minimum-rule-row" key={rule.id}>
+                      <div className="minimum-rule-enabled"><span>启用规则</span><label className="switch"><input type="checkbox" checked={rule.enabled} onChange={(event) => updateMinimumSpendRule(index, { enabled: event.target.checked })} /><span /></label></div>
+                      <label><span>规则名称</span><input maxLength={80} value={rule.name} onChange={(event) => updateMinimumSpendRule(index, { name: event.target.value })} /></label>
+                      <label><span>作用范围</span><select value={rule.targetType} onChange={(event) => { const targetType = event.target.value as MinimumSpendRule['targetType']; const targetId = targetType === 'table' ? data.tables[0]?.id : data.areas[0]?.id; if (targetId) updateMinimumSpendRule(index, { targetType, targetId }) }}><option value="area">区域</option><option value="table">桌台</option></select></label>
+                      <label><span>{rule.targetType === 'table' ? '桌台' : '区域'}</span><select value={rule.targetId} onChange={(event) => updateMinimumSpendRule(index, { targetId: event.target.value })}>{targets.map((target) => <option key={target.id} value={target.id}>{'code' in target ? `${target.code} · ${target.displayName}` : target.name}</option>)}</select></label>
+                      <div className="weekday-control"><span>星期</span><div>{weekdayLabels.map((label, weekday) => <label key={label}><input type="checkbox" checked={rule.weekdays.includes(weekday)} onChange={(event) => updateMinimumSpendRule(index, { weekdays: event.target.checked ? [...rule.weekdays, weekday].toSorted() : rule.weekdays.filter((value) => value !== weekday) })} />{label}</label>)}</div></div>
+                      <label><span>开始</span><input type="time" value={rule.startTime} onChange={(event) => updateMinimumSpendRule(index, { startTime: event.target.value })} /></label>
+                      <label><span>结束</span><input type="time" value={rule.endTime} onChange={(event) => updateMinimumSpendRule(index, { endTime: event.target.value })} /></label>
+                      <label><span>低消（元）</span><input type="number" min={0} step="1" value={rule.amount / 100} onChange={(event) => updateMinimumSpendRule(index, { amount: Math.round(Number(event.target.value) * 100) })} /></label>
+                      <button className="icon-button" title="删除规则" onClick={() => { setTableOpsDraft({ ...tableOpsDraft, minimumSpendRules: tableOpsDraft.minimumSpendRules.filter((_, ruleIndex) => ruleIndex !== index) }); setTableOpsDirty(true) }}><Trash2 size={16} /></button>
+                    </div>
+                  })}
+                </div>
+                <div className="table-ops-save">
+                  <label><span>变更原因</span><input maxLength={300} placeholder="例如：周末卡座低消调整" value={tableOpsReason} onChange={(event) => setTableOpsReason(event.target.value)} /></label>
+                  <button className="primary-button" disabled={busy || !tableOpsDirty || tableOpsReason.trim().length < 2} onClick={() => void saveTableOperationsConfig()}><Save size={16} />保存并生效</button>
+                </div>
+              </div>
+
               <div className="config-section">
                 <div className="config-section-title"><BellRing size={19} /><div><strong>服务SLA</strong><span>秒</span></div></div>
                 <div className="config-table-wrap">
@@ -612,6 +929,10 @@ function formatNextReminder(nextReminderAt: string | null) {
   const seconds = Math.max(0, Math.ceil((new Date(nextReminderAt).getTime() - Date.now()) / 1000))
   if (seconds < 60) return `${seconds}秒后`
   return `${Math.ceil(seconds / 60)}分钟后`
+}
+
+function money(amount: number) {
+  return new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY' }).format(amount / 100)
 }
 
 function configOperationLabel(operation: BootstrapResponse['configVersions'][number]['operation']) {

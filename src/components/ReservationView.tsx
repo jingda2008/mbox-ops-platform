@@ -18,12 +18,14 @@ import {
   UserCheck,
   UserRoundX,
   UsersRound,
+  UserPlus,
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { getBootstrap, getCurrentActorId } from '../api'
 import {
   actOnReservation,
+  assignReservationSales,
   confirmDeposit,
   confirmDepositRefund,
   createReservation,
@@ -37,7 +39,7 @@ import {
   type ReservationListResponse,
   type ReservationConfigWriteInput,
 } from '../reservation-api'
-import type { BootstrapResponse, StaffPermissionId, Table } from '../shared/contracts'
+import type { BootstrapResponse, Employee, StaffPermissionId, Table } from '../shared/contracts'
 import type {
   Reservation,
   ReservationDepositStatus,
@@ -50,7 +52,7 @@ import { WaitlistPanel } from './WaitlistPanel'
 
 type DateRange = 'today' | 'upcoming' | 'all'
 type Notice = { tone: 'success' | 'error'; message: string }
-type OperationType = 'edit' | 'late_hold' | 'late_release' | 'deposit_intent' | 'deposit_confirm' | 'seat' | 'cancel' | 'no_show' | 'refund_start' | 'refund_complete' | 'refund_fail'
+type OperationType = 'edit' | 'sales' | 'late_hold' | 'late_release' | 'deposit_intent' | 'deposit_confirm' | 'seat' | 'cancel' | 'no_show' | 'refund_start' | 'refund_complete' | 'refund_fail'
 type Operation = { type: OperationType; reservation: Reservation }
 
 interface CreateDraft {
@@ -63,6 +65,7 @@ interface CreateDraft {
   occasionNote: string
   scheduledAt: string
   depositYuan: string
+  salesEmployeeId: string
 }
 
 type ConfigDraft = ReservationConfigWriteInput
@@ -95,7 +98,7 @@ function defaultScheduledAt() {
   return toLocalInputValue(date)
 }
 
-function createEmptyDraft(): CreateDraft {
+function createEmptyDraft(salesEmployeeId = ''): CreateDraft {
   return {
     customerName: '',
     contactReference: '',
@@ -106,6 +109,7 @@ function createEmptyDraft(): CreateDraft {
     occasionNote: '',
     scheduledAt: defaultScheduledAt(),
     depositYuan: '0',
+    salesEmployeeId,
   }
 }
 
@@ -136,6 +140,7 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
   const [secondaryReference, setSecondaryReference] = useState('')
   const [reason, setReason] = useState('')
   const [selectedTableId, setSelectedTableId] = useState('')
+  const [selectedSalesEmployeeId, setSelectedSalesEmployeeId] = useState('')
   const [editPartySize, setEditPartySize] = useState(1)
   const [editScheduledAt, setEditScheduledAt] = useState('')
   const [editAreaCode, setEditAreaCode] = useState('')
@@ -146,6 +151,7 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
   )
   const role = data.config.roles.find((item) => item.id === (activeShift?.roleId ?? employee?.roleId))
   const permissions = new Set<StaffPermissionId>(role?.permissionIds ?? [])
+  const salesEmployees = data.employees.filter((item) => item.status === 'active' && item.online)
   const access: ReservationAccess = {
     manage: permissions.has('reservation.manage'),
     configure: permissions.has('reservation.config.manage'),
@@ -184,6 +190,12 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
     }
   }, [defaultSourceCode, draft.sourceCode])
 
+  useEffect(() => {
+    if (!draft.salesEmployeeId && salesEmployees.length > 0) {
+      setDraft((current) => ({ ...current, salesEmployeeId: salesEmployees.find((item) => item.id === actorId)?.id ?? salesEmployees[0]!.id }))
+    }
+  }, [actorId, draft.salesEmployeeId, salesEmployees])
+
   const reservations = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase('zh-CN')
     return response.reservations
@@ -196,6 +208,10 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
       ].some((value) => value.toLocaleLowerCase('zh-CN').includes(normalizedQuery)))
       .toSorted((left, right) => Date.parse(left.scheduledAt) - Date.parse(right.scheduledAt))
   }, [dateRange, query, response.reservations, statusFilter])
+  const salesByReservation = new Map<string, string>()
+  for (const record of data.salesAttributionRecords ?? []) {
+    if (record.subjectType === 'reservation') salesByReservation.set(record.subjectId, record.salesEmployeeId)
+  }
 
   const metrics = useMemo(() => ({
     today: response.reservations.filter((item) => inDateRange(item.scheduledAt, 'today')).length,
@@ -221,8 +237,8 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
 
   function submitCreate(event: FormEvent) {
     event.preventDefault()
-    if (!draft.customerName.trim() || !draft.contactReference.trim() || !draft.sourceCode || !draft.scheduledAt) {
-      setNotice({ tone: 'error', message: '请完整填写客人姓名、CRM/企微客户编号、来源和预约时间' })
+    if (!draft.customerName.trim() || !draft.contactReference.trim() || !draft.sourceCode || !draft.scheduledAt || !draft.salesEmployeeId) {
+      setNotice({ tone: 'error', message: '请完整填写客人姓名、CRM/企微客户编号、来源、预约时间和销售归属' })
       return
     }
     const externalCustomerReference = draft.contactReference.trim()
@@ -249,9 +265,10 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
         scheduledAt: new Date(draft.scheduledAt).toISOString(),
         depositRequiredAmount: depositAmount,
         depositCurrency: 'CNY',
+        salesEmployeeId: draft.salesEmployeeId,
         idempotencyKey: idempotencyKey('create'),
       })
-      setDraft(createEmptyDraft())
+      setDraft(createEmptyDraft(draft.salesEmployeeId))
       setShowCreate(false)
     })
   }
@@ -303,6 +320,7 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
     setSecondaryReference('')
     setReason('')
     setSelectedTableId(tables.find((table) => ['available', 'reserved'].includes(table.status))?.id ?? '')
+    setSelectedSalesEmployeeId(salesByReservation.get(reservation.id) ?? '')
     setEditPartySize(reservation.partySize)
     setEditScheduledAt(toLocalInputValue(new Date(reservation.scheduledAt)))
     setEditAreaCode(reservation.areaPreferenceCode ?? '')
@@ -320,6 +338,7 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
     setOperation(null)
     setReference('')
     setSecondaryReference('')
+    setSelectedSalesEmployeeId('')
     setReason('')
   }
 
@@ -331,6 +350,16 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
     const ref = reference.trim()
     const secondary = secondaryReference.trim()
     const note = reason.trim()
+
+    if (operation.type === 'sales') {
+      if (!selectedSalesEmployeeId || !note) return setNotice({ tone: 'error', message: '请选择销售并填写变更原因' })
+      void execute(key, '预约销售归属已更新并写入审计', () => assignReservationSales(reservation.id, {
+        salesEmployeeId: selectedSalesEmployeeId,
+        reason: note,
+        idempotencyKey: idempotencyKey('sales-attribution'),
+      }))
+      return
+    }
 
     if (operation.type === 'edit') {
       if (!editScheduledAt || !note) return setNotice({ tone: 'error', message: '请确认人数、时间并填写修改原因' })
@@ -445,7 +474,7 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
         <button type="button" title="关闭提示" onClick={() => setNotice(null)}><X size={15} /></button>
       </div>}
 
-      <WaitlistPanel areas={data.areas} tables={tables} canManage={access.manage} />
+      <WaitlistPanel areas={data.areas} tables={tables} employees={salesEmployees} canManage={access.manage} />
 
       <section className="reservation-metrics" aria-label="预约概览">
         <Metric icon={CalendarDays} value={String(metrics.today)} label="今日预约" />
@@ -481,6 +510,7 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
           <Field label="预约时间"><input required type="datetime-local" value={draft.scheduledAt} onChange={(event) => setDraft({ ...draft, scheduledAt: event.target.value })} /></Field>
           <Field label="人数"><input required type="number" min={config?.minimumPartySize ?? 1} max={config?.maximumPartySize ?? 100} value={draft.partySize} onChange={(event) => setDraft({ ...draft, partySize: Number(event.target.value) })} /></Field>
           <Field label="来源"><select required value={draft.sourceCode} onChange={(event) => setDraft({ ...draft, sourceCode: event.target.value })}><option value="">请选择</option>{enabledSources.map((source) => <option key={source.code} value={source.code}>{source.name}</option>)}</select></Field>
+          <Field label="销售归属"><select required value={draft.salesEmployeeId} onChange={(event) => setDraft({ ...draft, salesEmployeeId: event.target.value })}><option value="">请选择销售</option>{salesEmployees.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select></Field>
           <Field label="区域偏好"><select value={draft.areaPreferenceCode} onChange={(event) => setDraft({ ...draft, areaPreferenceCode: event.target.value })}><option value="">无指定</option>{enabledAreas.map((area) => <option key={area.code} value={area.code}>{area.name}</option>)}</select></Field>
           <Field label="到店场景"><select value={draft.occasionCode} onChange={(event) => setDraft({ ...draft, occasionCode: event.target.value as CreateDraft['occasionCode'] })}><option value="">普通到店</option>{enabledOccasions.map((occasion) => <option key={occasion.code} value={occasion.code}>{occasion.name}</option>)}</select></Field>
           <Field label="定金（元）"><input type="number" min={0} step="0.01" value={draft.depositYuan} onChange={(event) => setDraft({ ...draft, depositYuan: event.target.value })} /></Field>
@@ -502,6 +532,8 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
         editPartySize={editPartySize}
         editScheduledAt={editScheduledAt}
         editAreaCode={editAreaCode}
+        employees={salesEmployees}
+        selectedSalesEmployeeId={selectedSalesEmployeeId}
         busy={Boolean(busyAction)}
         onTableChange={setSelectedTableId}
         onReferenceChange={setReference}
@@ -510,6 +542,7 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
         onEditPartySize={setEditPartySize}
         onEditScheduledAt={setEditScheduledAt}
         onEditAreaCode={setEditAreaCode}
+        onSalesEmployeeChange={setSelectedSalesEmployeeId}
         onClose={closeOperation}
         onSubmit={submitOperation}
       />}
@@ -531,6 +564,7 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
           {!loading && reservations.map((reservation) => <ReservationRow
             key={reservation.id}
             reservation={reservation}
+            salesName={data.employees.find((employee) => employee.id === salesByReservation.get(reservation.id))?.displayName ?? '未指定销售'}
             access={access}
             busyAction={busyAction}
             onQuickAction={quickAction}
@@ -637,8 +671,9 @@ function ReservationConfigPanel({ currentVersion, draft, reason, busy, onChange,
   </form>
 }
 
-function ReservationRow({ reservation, access, busyAction, onQuickAction, onOpenOperation }: {
+function ReservationRow({ reservation, salesName, access, busyAction, onQuickAction, onOpenOperation }: {
   reservation: Reservation
+  salesName: string
   access: ReservationAccess
   busyAction: string
   onQuickAction: (reservation: Reservation, action: 'confirm' | 'arrive') => void
@@ -650,10 +685,11 @@ function ReservationRow({ reservation, access, busyAction, onQuickAction, onOpen
   return <article className={`reservation-row status-${reservation.status}`}>
     <div className="reservation-time"><strong>{formatDay(reservation.scheduledAt)}</strong><b>{formatTime(reservation.scheduledAt)}</b><span>{relativeTime(reservation.scheduledAt)}</span></div>
     <div className="reservation-customer"><div><strong>{reservation.customerName}</strong><span>{reservation.partySize}人 · {source}</span></div><small>{displayCustomerReference(reservation.contactReference)}</small>{reservation.occasionNote && <p>{reservation.occasionNote}</p>}</div>
-    <div className="reservation-placement"><span><MapPin size={13} />{reservation.tableCode ?? reservation.areaPreferenceCode ?? '区域待定'}</span>{reservation.occasionCode && <b>{occasionLabel(reservation.occasionCode)}</b>}</div>
+    <div className="reservation-placement"><span><MapPin size={13} />{reservation.tableCode ?? reservation.areaPreferenceCode ?? '区域待定'}</span><small><UserPlus size={12} />{salesName}</small>{reservation.occasionCode && <b>{occasionLabel(reservation.occasionCode)}</b>}</div>
     <div className="reservation-state"><span className={`reservation-status is-${reservation.status}`}>{statusLabels[reservation.status]}</span><small className={`deposit-status is-${reservation.deposit.status}`}>{depositLabels[reservation.deposit.status]}{reservation.deposit.requiredAmount > 0 ? ` · ${money(reservation.deposit.requiredAmount)}` : ''}</small></div>
     <fieldset className="reservation-actions" disabled={Boolean(busyAction)}>
       {access.manage && ['requested', 'confirmed', 'arrived'].includes(reservation.status) && <ActionButton icon={RefreshCw} label="修改人数/时间" onClick={() => onOpenOperation('edit', reservation)} />}
+      {access.manage && ['requested', 'confirmed', 'arrived', 'seated'].includes(reservation.status) && <ActionButton icon={UserPlus} label="变更销售" onClick={() => onOpenOperation('sales', reservation)} />}
       {access.manage && reservation.status === 'confirmed' && reservation.holdStatus !== 'held' && <ActionButton icon={Clock3} label="迟到保留" onClick={() => onOpenOperation('late_hold', reservation)} />}
       {access.manage && reservation.status === 'confirmed' && reservation.holdStatus === 'held' && <ActionButton icon={UserRoundX} label="释放保留" danger onClick={() => onOpenOperation('late_release', reservation)} />}
       {access.manage && reservation.deposit.status === 'payment_required' && <ActionButton icon={Banknote} label="登记支付单" onClick={() => onOpenOperation('deposit_intent', reservation)} />}
@@ -670,7 +706,7 @@ function ReservationRow({ reservation, access, busyAction, onQuickAction, onOpen
   </article>
 }
 
-function OperationPanel({ operation, tables, selectedTableId, reference, secondaryReference, reason, config, editPartySize, editScheduledAt, editAreaCode, busy, onTableChange, onReferenceChange, onSecondaryReferenceChange, onReasonChange, onEditPartySize, onEditScheduledAt, onEditAreaCode, onClose, onSubmit }: {
+function OperationPanel({ operation, tables, selectedTableId, reference, secondaryReference, reason, config, editPartySize, editScheduledAt, editAreaCode, employees, selectedSalesEmployeeId, busy, onTableChange, onReferenceChange, onSecondaryReferenceChange, onReasonChange, onEditPartySize, onEditScheduledAt, onEditAreaCode, onSalesEmployeeChange, onClose, onSubmit }: {
   operation: Operation
   tables: Table[]
   selectedTableId: string
@@ -681,6 +717,8 @@ function OperationPanel({ operation, tables, selectedTableId, reference, seconda
   editPartySize: number
   editScheduledAt: string
   editAreaCode: string
+  employees: Employee[]
+  selectedSalesEmployeeId: string
   busy: boolean
   onTableChange: (value: string) => void
   onReferenceChange: (value: string) => void
@@ -689,15 +727,17 @@ function OperationPanel({ operation, tables, selectedTableId, reference, seconda
   onEditPartySize: (value: number) => void
   onEditScheduledAt: (value: string) => void
   onEditAreaCode: (value: string) => void
+  onSalesEmployeeChange: (value: string) => void
   onClose: () => void
   onSubmit: (event: FormEvent) => void
 }) {
   const labels: Record<OperationType, string> = {
-    edit: '修改人数与时间', late_hold: '记录迟到并保留', late_release: '释放迟到预约', deposit_intent: '登记定金支付单', deposit_confirm: '确认定金到账', seat: '安排入座', cancel: '取消预约', no_show: '标记未到店', refund_start: '发起定金退款', refund_complete: '确认退款完成', refund_fail: '记录退款失败',
+    edit: '修改人数与时间', sales: '变更销售归属', late_hold: '记录迟到并保留', late_release: '释放迟到预约', deposit_intent: '登记定金支付单', deposit_confirm: '确认定金到账', seat: '安排入座', cancel: '取消预约', no_show: '标记未到店', refund_start: '发起定金退款', refund_complete: '确认退款完成', refund_fail: '记录退款失败',
   }
   return <form className="reservation-operation" onSubmit={onSubmit}>
     <div className="operation-identity"><span>当前操作</span><strong>{labels[operation.type]}</strong><small>{operation.reservation.customerName} · {formatDateTime(operation.reservation.scheduledAt)}</small></div>
     {operation.type === 'seat' && <Field label="入座桌台"><select required value={selectedTableId} onChange={(event) => onTableChange(event.target.value)}><option value="">请选择桌台</option>{tables.map((table) => <option key={table.id} value={table.id} disabled={['occupied', 'paused'].includes(table.status)}>{table.code} · {table.displayName} · {table.status === 'available' ? '可用' : table.status === 'reserved' ? '已预留' : table.status === 'occupied' ? '使用中' : '暂停'}</option>)}</select></Field>}
+    {operation.type === 'sales' && <><Field label="销售归属"><select required value={selectedSalesEmployeeId} onChange={(event) => onSalesEmployeeChange(event.target.value)}><option value="">请选择销售</option>{employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName}</option>)}</select></Field><Field label="变更原因"><input required minLength={2} maxLength={300} value={reason} onChange={(event) => onReasonChange(event.target.value)} /></Field></>}
     {operation.type === 'edit' && <><Field label="人数"><input required type="number" min={config?.minimumPartySize ?? 1} max={config?.maximumPartySize ?? 100} value={editPartySize} onChange={(event) => onEditPartySize(Number(event.target.value))} /></Field><Field label="预约时间"><input required type="datetime-local" value={editScheduledAt} onChange={(event) => onEditScheduledAt(event.target.value)} /></Field><div className="operation-area-picks"><span>区域偏好</span><button type="button" className={!editAreaCode ? 'is-active' : ''} onClick={() => onEditAreaCode('')}>不限</button>{config?.areaPreferences.filter((area) => area.enabled).map((area) => <button type="button" key={area.code} className={editAreaCode === area.code ? 'is-active' : ''} onClick={() => onEditAreaCode(area.code)}>{area.name}</button>)}</div><Field label="修改原因"><input required maxLength={500} value={reason} onChange={(event) => onReasonChange(event.target.value)} /></Field></>}
     {(operation.type === 'late_hold' || operation.type === 'late_release') && <><Field label="预计到店时间"><input required type="datetime-local" value={secondaryReference} onChange={(event) => onSecondaryReferenceChange(event.target.value)} /></Field><Field label="联系记录"><input required maxLength={256} placeholder="企微消息或电话记录编号" value={reference} onChange={(event) => onReferenceChange(event.target.value)} /></Field><Field label="决定原因"><input required maxLength={500} value={reason} onChange={(event) => onReasonChange(event.target.value)} /></Field></>}
     {operation.type === 'deposit_intent' && <Field label="外部支付单号"><input required autoFocus maxLength={256} value={reference} onChange={(event) => onReferenceChange(event.target.value)} /></Field>}
@@ -729,6 +769,7 @@ function operationHint(operation: Operation) {
   if (operation.type === 'refund_start') return `该操作仅记录已向支付渠道发起${amount}退款。`
   if (operation.type === 'refund_complete') return `仅在支付渠道返回成功后确认${amount}已退回。`
   if (operation.type === 'refund_fail') return '记录真实失败原因后，系统会允许重新发起退款。'
+  if (operation.type === 'sales') return '提交后保留原销售、现销售、操作人和原因，入座时传递到桌次。'
   if (operation.type === 'seat') return '桌台会与本次预约绑定，请确认现场桌台状态。'
   return '提交后会写入预约审计记录，请填写真实原因。'
 }

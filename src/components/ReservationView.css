@@ -26,10 +26,10 @@
 .waitlist-heading small { color: var(--ink-soft); font-size: 10px; }
 .waitlist-notice { min-height: 38px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 12px; border-bottom: 1px solid #c7d9e2; background: #eef6f9; color: #215f7a; font-size: 11px; font-weight: 750; }
 .waitlist-notice button { width: 28px; height: 28px; display: grid; place-items: center; border: 0; background: transparent; color: inherit; }
-.waitlist-create { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(170px, 1.2fr) 80px 90px minmax(240px, 1.5fr) auto; align-items: end; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: #f7f9f6; }
+.waitlist-create { display: grid; grid-template-columns: minmax(120px, .8fr) minmax(160px, 1fr) 72px 86px minmax(130px, .8fr) minmax(220px, 1.3fr) auto; align-items: end; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: #f7f9f6; }
 .waitlist-create label { min-width: 0; display: grid; gap: 4px; }
 .waitlist-create label span, .waitlist-area-picks > span { color: var(--ink-soft); font-size: 9px; font-weight: 750; }
-.waitlist-create input { width: 100%; min-width: 0; height: 36px; padding: 0 8px; border: 1px solid var(--line-strong); background: #fff; }
+.waitlist-create input, .waitlist-create select { width: 100%; min-width: 0; height: 36px; padding: 0 8px; border: 1px solid var(--line-strong); background: #fff; color: var(--ink); }
 .waitlist-area-picks { min-width: 0; display: flex; align-items: end; gap: 4px; flex-wrap: wrap; }
 .waitlist-area-picks > span { width: 100%; }
 .waitlist-area-picks button { min-width: 38px; min-height: 36px; padding: 0 7px; border: 1px solid var(--line-strong); background: #fff; color: var(--ink-soft); font-size: 10px; font-weight: 750; }
@@ -129,6 +129,7 @@
 .reservation-customer p { overflow-wrap: anywhere; color: #695922; font-size: 10px; }
 .reservation-placement { min-width: 0; display: grid; gap: 5px; }
 .reservation-placement span { min-width: 0; display: flex; align-items: center; gap: 5px; overflow-wrap: anywhere; color: var(--ink-soft); font-size: 10px; }
+.reservation-placement small { display: inline-flex; align-items: center; gap: 4px; color: #176d96; font-size: 9px; font-weight: 750; }
 .reservation-placement b { width: fit-content; padding: 3px 6px; border-radius: 4px; background: #fff1c9; color: #7a5812; font-size: 9px; }
 .reservation-state { min-width: 0; display: grid; gap: 5px; }
 .reservation-status, .deposit-status { width: fit-content; max-width: 100%; overflow-wrap: anywhere; border-radius: 4px; font-size: 10px; font-weight: 800; }

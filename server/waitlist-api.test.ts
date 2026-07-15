@@ -23,6 +23,7 @@ function guest(name: string, partySize: number, key: string) {
     customerName: name,
     contactReference: `wecom-${name}`,
     partySize,
+    salesEmployeeId: 'emp-lin',
     maximumWaitMinutes: 120,
     idempotencyKey: key,
   }
@@ -77,6 +78,9 @@ describe('waitlist API', () => {
     expect(state.awaitingOrderIntents.some((intent) => intent.tableId === 'table-l04' && intent.status === 'active')).toBe(true)
     expect(state.waitlistEntries).toHaveLength(3)
     expect(state.auditEntries.filter((entry) => entry.action === 'waitlist.seat.v1')).toHaveLength(1)
+    expect(state.salesAttributionRecords?.find((record) =>
+      record.subjectType === 'table_session' && record.subjectId === seatedC.json().tableSessionId,
+    )).toMatchObject({ salesEmployeeId: 'emp-lin' })
 
     await app.close()
     await repository.close()

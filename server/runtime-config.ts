@@ -119,7 +119,7 @@ function parsePilotEmployeePins(value: string | undefined) {
 export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig {
   const runtimeMode = runtimeModeSchema.parse(env.MBOX_RUNTIME_MODE ?? 'local')
   const repositoryMode = repositoryModeSchema.parse(
-    env.MBOX_REPOSITORY ?? (runtimeMode === 'production' ? 'postgres' : 'json'),
+    env.MBOX_REPOSITORY ?? (runtimeMode === 'staging' || runtimeMode === 'production' ? 'postgres' : 'json'),
   )
   const corsOrigins = parseCorsOrigins(env.MBOX_CORS_ORIGINS, runtimeMode)
   const config: RuntimeConfig = {
@@ -176,6 +176,9 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
 
   for (const origin of corsOrigins) assertUrl(origin, 'MBOX_CORS_ORIGINS', ['http:', 'https:'])
   if (config.publicBaseUrl) assertUrl(config.publicBaseUrl, 'MBOX_PUBLIC_BASE_URL', ['http:', 'https:'])
+  if ((runtimeMode === 'staging' || runtimeMode === 'production') && repositoryMode !== 'postgres') {
+    throw new Error('预发布和生产环境必须使用PostgreSQL仓储')
+  }
   if (repositoryMode === 'postgres' && !config.databaseUrl) {
     throw new Error('PostgreSQL仓储必须配置DATABASE_URL')
   }
@@ -233,7 +236,6 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
   }
 
   if (runtimeMode === 'production') {
-    if (repositoryMode !== 'postgres') throw new Error('生产环境必须使用PostgreSQL仓储')
     if (!config.publicBaseUrl?.startsWith('https://')) throw new Error('生产环境MBOX_PUBLIC_BASE_URL必须使用HTTPS')
     if (corsOrigins.some((origin) => !origin.startsWith('https://'))) {
       throw new Error('生产环境CORS来源必须全部使用HTTPS')

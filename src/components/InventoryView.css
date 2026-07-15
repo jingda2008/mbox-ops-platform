@@ -6,7 +6,7 @@
 .inventory-notice.is-success { border-color: #c8ddca; background: #eef6ed; color: #2d6841; }
 .inventory-notice.is-error { border-color: #e4c0c3; background: #fff1f1; color: #9b333a; }
 
-.inventory-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 1px solid var(--line); }
+.inventory-metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-bottom: 1px solid var(--line); }
 .inventory-metric { min-height: 76px; display: flex; align-items: center; gap: 11px; padding: 12px 16px; border-right: 1px solid var(--line); }
 .inventory-metric:last-child { border-right: 0; }
 .inventory-metric > span { width: 36px; height: 36px; flex: 0 0 36px; display: grid; place-items: center; border-radius: 6px; background: #edf1ec; color: #4c6551; }
@@ -112,9 +112,23 @@
 .policy-table th:not(:first-child), .policy-table td:not(:first-child) { width: 115px; text-align: center; }
 .policy-table input { width: 17px; height: 17px; accent-color: var(--success); }
 .policy-save-band { display: grid; grid-template-columns: minmax(240px, 1fr) auto; align-items: end; gap: 11px; padding: 13px 17px; border-top: 1px solid var(--line); background: #f7f8f5; }
+.recipe-lines { display: grid; gap: 8px; }
+.recipe-line { display: grid; grid-template-columns: minmax(180px, 1.4fr) minmax(130px, .8fr) minmax(120px, .7fr) 38px; align-items: end; gap: 8px; padding: 10px; border: 1px solid var(--line); background: #f7f8f5; }
+.recipe-line .icon-button { width: 38px; min-height: 38px; }
+.recipe-add-button { width: fit-content; }
+.recipe-version-list > div { min-height: 62px; display: grid; grid-template-columns: minmax(180px, .7fr) minmax(280px, 1.5fr) 110px; align-items: center; gap: 12px; padding: 9px 14px; border-top: 1px solid var(--line); font-size: 11px; }
+.recipe-version-list span, .recipe-version-list time { color: var(--ink-soft); font-size: 10px; line-height: 1.45; }
+.approval-list { min-width: 0; }
+.approval-row { min-height: 96px; display: grid; grid-template-columns: 90px minmax(220px, 1fr) minmax(220px, .8fr) auto; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.approval-row:last-child { border-bottom: 0; }
+.approval-row > div:first-child, .approval-detail { min-width: 0; display: grid; gap: 4px; }
+.approval-row small, .approval-detail span { color: var(--ink-soft); font-size: 10px; }
+.approval-actions { display: flex; gap: 7px; }
+.approval-actions button { min-height: 36px; padding-inline: 10px; font-size: 11px; }
 .inventory-state { min-height: 360px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 11px; color: var(--ink-soft); }
 
 @media (max-width: 980px) {
+  .inventory-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .inventory-event-row { grid-template-columns: 65px minmax(140px, 1fr) 95px 80px; }
   .inventory-event-row time { grid-column: 2 / -1; }
   .count-submit-band { grid-template-columns: minmax(160px, 1fr) 100px 130px; }
@@ -123,14 +137,17 @@
   .stock-count-actions { grid-column: 2 / -1; justify-content: flex-end; }
   .bottle-row { grid-template-columns: minmax(150px, 1fr) 105px minmax(180px, 1fr); }
   .bottle-actions { grid-column: 1 / -1; justify-content: flex-end; }
+  .approval-row { grid-template-columns: 85px minmax(190px, 1fr) minmax(190px, .8fr); }
+  .approval-actions { grid-column: 2 / -1; justify-content: flex-end; }
 }
 
 @media (max-width: 760px) {
   .inventory-heading { align-items: flex-start; }
   .inventory-heading .secondary-button { width: 42px; padding: 0; font-size: 0; }
   .inventory-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .inventory-metric:nth-child(2) { border-right: 0; }
-  .inventory-metric:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+  .inventory-metric:nth-child(even) { border-right: 0; }
+  .inventory-metric { border-bottom: 1px solid var(--line); }
+  .inventory-metric:last-child { border-bottom: 0; }
   .inventory-tabs { justify-content: flex-start; }
   .inventory-tabs button { min-width: 98px; padding-inline: 9px; }
   .inventory-content.inventory-two-column { grid-template-columns: 1fr; }
@@ -147,6 +164,14 @@
   .bottle-row { grid-template-columns: minmax(0, 1fr) auto; }
   .bottle-meta { grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .bottle-actions { grid-column: 1 / -1; }
+  .recipe-line { grid-template-columns: 1fr 1fr; }
+  .recipe-line .inventory-field:first-child { grid-column: 1 / -1; }
+  .recipe-version-list > div { grid-template-columns: 1fr auto; }
+  .recipe-version-list > div span { grid-column: 1 / -1; }
+  .approval-row { grid-template-columns: 80px minmax(0, 1fr); align-items: start; }
+  .approval-row > .inventory-field, .approval-actions { grid-column: 1 / -1; }
+  .approval-actions { justify-content: stretch; }
+  .approval-actions button { flex: 1; }
 }
 
 @media (max-width: 520px) {
@@ -169,6 +194,10 @@
   .bottle-actions { display: grid; grid-template-columns: 1fr 1fr 36px; }
   .policy-save-band { grid-template-columns: 1fr; padding-inline: 12px; }
   .policy-save-band button { width: 100%; }
+  .recipe-line { grid-template-columns: 1fr 38px; }
+  .recipe-line .inventory-field { grid-column: 1 / -1; }
+  .recipe-line .icon-button { grid-column: 2; }
+  .approval-actions { display: grid; grid-template-columns: 1fr 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) { .inventory-view .spin { animation: none; } }

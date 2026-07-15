@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
-import type { RuntimeState } from '../src/shared/contracts.js'
+import { salesAttributionSchema, type RuntimeState } from '../src/shared/contracts.js'
 import type { ReservationState, ReservationStatus } from '../src/shared/reservation-contracts.js'
 import { AuthorizationError, requireApprovalAmount, requireConfiguredOperation, requireTableDataScope } from './authorization.js'
 import { startAwaitingOrder } from './proactive-service.js'
 import { createServiceTask } from './domain.js'
-import { openTableSession } from './table-sessions.js'
+import { currentSalesEmployeeId, openTableSession, recordSalesAttribution } from './table-sessions.js'
 import {
   cancelReservation,
   completeReservationDepositRefund,
@@ -31,6 +31,10 @@ type RuntimeStateWithReservations = RuntimeState & { reservationState?: Reservat
 const idempotencyKeySchema = z.string().trim().min(8).max(128)
 const timestampSchema = z.string().datetime({ offset: true })
 
+function childIdempotencyKey(key: string, suffix: string) {
+  return `${key.slice(0, Math.max(8, 118 - suffix.length))}:${suffix}`
+}
+
 const createSchema = z.object({
   customerReference: z.string().trim().min(1).max(128),
   customerName: z.string().trim().min(1).max(100),
@@ -43,6 +47,7 @@ const createSchema = z.object({
   scheduledAt: timestampSchema,
   depositRequiredAmount: z.number().int().nonnegative(),
   depositCurrency: z.string().regex(/^[A-Z]{3}$/),
+  salesEmployeeId: z.string().trim().min(1).max(128).optional(),
   idempotencyKey: idempotencyKeySchema,
 }).strict()
 
@@ -285,18 +290,46 @@ export function registerReservationRoutes(app: FastifyInstance, repository: Runt
     const result = await repository.mutate((runtime) => {
       const state = runtime as RuntimeStateWithReservations
       const actor = requireConfiguredOperation(request, state, 'reservation.manage')
-      return mutateReservationState(state, (domain) => {
+      const { salesEmployeeId, ...reservationInput } = input
+      const reservation = mutateReservationState(state, (domain) => {
         const existing = domain.idempotencyRecords.find((record) => record.key === input.idempotencyKey)
         const reservationId = existing?.operation === 'reservation.create' ? existing.reservationId : randomUUID()
         return createReservation(domain, {
-          ...input,
+          ...reservationInput,
           reservationId,
           actorId: actor.actorId,
           occurredAt: new Date().toISOString(),
         })
       })
+      if (salesEmployeeId) {
+        recordSalesAttribution(state, {
+          subjectType: 'reservation', subjectId: reservation.id, salesEmployeeId,
+          actorId: actor.actorId, reason: '创建预约时指定销售', occurredAt: reservation.requestedAt,
+          idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'sales'),
+        })
+      }
+      return reservation
     })
     return reply.status(201).send(result)
+  })
+
+  app.post<{ Params: { reservationId: string } }>('/api/reservations/:reservationId/sales-attribution', async (request) => {
+    const input = salesAttributionSchema.parse(request.body)
+    return repository.mutate((runtime) => {
+      const state = runtime as RuntimeStateWithReservations
+      const actor = requireConfiguredOperation(request, state, 'reservation.manage')
+      if (!reservationsFor(state).reservations.some((reservation) => reservation.id === request.params.reservationId)) {
+        throw new Error('预约不存在')
+      }
+      const before = state.salesAttributionRecords?.length ?? 0
+      const record = recordSalesAttribution(state, {
+        subjectType: 'reservation', subjectId: request.params.reservationId,
+        salesEmployeeId: input.salesEmployeeId, actorId: actor.actorId, reason: input.reason,
+        occurredAt: new Date().toISOString(), idempotencyKey: input.idempotencyKey,
+      })
+      if ((state.salesAttributionRecords?.length ?? 0) > before) state.revision += 1
+      return record
+    })
   })
 
   app.post<{ Params: { reservationId: string } }>('/api/reservations/:reservationId/actions', async (request) => {
@@ -334,7 +367,9 @@ export function registerReservationRoutes(app: FastifyInstance, repository: Runt
             if (!primary.online || primary.paused || !activeShift || !activeShift.areaIds.includes(table.areaId)) {
               throw new Error('桌台主服务员当前不可接待，请先完成员工调度')
             }
-            tableSessionId = openTableSession(state, table, command.occurredAt).id
+            tableSessionId = openTableSession(state, table, command.occurredAt, {
+              source: 'reservation', sourceId: reservation.id,
+            }).id
           }
           if (!table || !tableSessionId) throw new Error('预约入座桌次不完整')
           const result = seatReservation(domain, {
@@ -350,6 +385,14 @@ export function registerReservationRoutes(app: FastifyInstance, repository: Runt
               details: { reservationId: reservation.id, tableSessionId, guestCount: reservation.partySize },
             })
             state.revision += 1
+            const salesEmployeeId = currentSalesEmployeeId(state, 'reservation', reservation.id)
+            if (salesEmployeeId) {
+              recordSalesAttribution(state, {
+                subjectType: 'table_session', subjectId: tableSessionId, salesEmployeeId,
+                actorId: actor.actorId, reason: '预约入座继承销售归属', occurredAt: command.occurredAt,
+                idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'sales'),
+              })
+            }
             if (state.config.proactiveOrderCare.enabled) {
               startAwaitingOrder(state, table.id, actor.actorId, `reservation-seat:${reservation.id}`, new Date(command.occurredAt))
             }

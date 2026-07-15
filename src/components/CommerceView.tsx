@@ -1,10 +1,18 @@
-import { CheckCheck, ChefHat, CircleAlert, CircleDollarSign, Clock3, Copy, PackageCheck, Play, QrCode, ShoppingCart, Smartphone, UserRound, X } from 'lucide-react'
+import { Ban, CheckCheck, ChefHat, CircleAlert, CircleDollarSign, Clock3, Copy, PackageCheck, PackageX, Play, QrCode, RotateCcw, ShoppingCart, Smartphone, UserRound, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { actOnKdsTask, createAssistedPaymentLink, createCartOrder, getCurrentActorId } from '../api'
+import { actOnKdsTask, createAssistedPaymentLink, createCartOrder, decideKdsException, getCurrentActorId, reportKdsException } from '../api'
 import type { BootstrapResponse } from '../shared/contracts'
-import type { AssistedPaymentLink, KdsActionInput } from '../shared/commerce-api'
-import type { KdsTask } from '../shared/order-contracts'
-import { actionAllowedForAccess, getFulfillmentAccess, stationLabel, taskVisibleToAccess } from './commerce-workspace'
+import type { AssistedPaymentLink, KdsActionInput, KdsExceptionDecisionInput, KdsExceptionReportInput } from '../shared/commerce-api'
+import type { KdsExceptionEvent, KdsTask } from '../shared/order-contracts'
+import {
+  actionAllowedForAccess,
+  canResolveKdsException,
+  getFulfillmentAccess,
+  kdsTaskOperationallyActive,
+  openKdsException,
+  stationLabel,
+  taskVisibleToAccess,
+} from './commerce-workspace'
 import { MenuOrderingWorkspace, type MenuCartItem } from './MenuOrderingWorkspace'
 import './CommerceView.css'
 
@@ -27,6 +35,7 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
   const currentActorId = getCurrentActorId()
   const access = getFulfillmentAccess(data, currentActorId)
   const currentEmployee = access.employee
+  const canResolveExceptions = canResolveKdsException(access)
   const occupiedTables = data.tables.filter((table) => table.status === 'occupied')
   const [tableId, setTableId] = useState(occupiedTables[0]?.id ?? '')
   const [workspaceMode, setWorkspaceMode] = useState<'order' | 'fulfillment'>(access.canOrder ? 'order' : 'fulfillment')
@@ -34,7 +43,7 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
   const [paymentSheet, setPaymentSheet] = useState<PaymentSheet | null>(null)
   const [now, setNow] = useState(() => Date.now())
   const ledgerTotal = data.orderDomain.tableLedgerEntries.reduce((sum, entry) => sum + entry.amount, 0)
-  const activeKds = data.orderDomain.kdsTasks.filter((task) => task.status !== 'delivered')
+  const activeKds = data.orderDomain.kdsTasks.filter(kdsTaskOperationallyActive)
   const visibleKds = useMemo(() => activeKds
     .filter((task) => taskVisibleToAccess(task, access))
     .toSorted((a, b) => {
@@ -100,6 +109,56 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
       await onRefresh()
     } catch (error) {
       onNotice(error instanceof Error ? error.message : 'KDS操作失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function reportException(
+    task: KdsTask,
+    exceptionKind: KdsExceptionReportInput['exceptionKind'],
+    reasonCode: KdsExceptionReportInput['reasonCode'],
+  ) {
+    if (!currentEmployee) {
+      onNotice('当前员工身份无效，请重新登录后报告异常')
+      return
+    }
+    setBusy(true)
+    try {
+      await reportKdsException(task.id, {
+        exceptionKind,
+        reasonCode,
+        reasonNote: '',
+        actorId: currentEmployee.id,
+        idempotencyKey: `kds-exception-${crypto.randomUUID()}`,
+      })
+      onNotice(`${task.itemName}已报告${exceptionKind === 'wrong_item' ? '错品' : exceptionKind === 'shortage' ? '缺货' : '拒绝出品'}，等待领班或经理处置`)
+      await onRefresh()
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : 'KDS异常报告失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function resolveException(event: KdsExceptionEvent, disposition: KdsExceptionDecisionInput['disposition']) {
+    if (!currentEmployee) {
+      onNotice('当前员工身份无效，请重新登录后处置异常')
+      return
+    }
+    setBusy(true)
+    try {
+      await decideKdsException(event.exceptionId, {
+        disposition,
+        reasonCode: disposition === 'remake' ? 'service_recovery' : 'manager_cancelled',
+        reasonNote: '',
+        actorId: currentEmployee.id,
+        idempotencyKey: `kds-decision-${crypto.randomUUID()}`,
+      })
+      onNotice(disposition === 'remake' ? `${event.exceptionKind === 'wrong_item' ? '错品' : '异常商品'}已创建补做任务` : '该出品项已由经理取消')
+      await onRefresh()
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : 'KDS异常处置失败')
     } finally {
       setBusy(false)
     }
@@ -177,17 +236,41 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
               const action = nextAction(task.status)
               const timing = taskTiming(task, data, now)
               const responsibleRole = taskResponsibleRole(task, data)
+              const exception = openKdsException(task)
+              const exceptionActor = exception ? data.employees.find((employee) => employee.id === exception.actorId) : undefined
+              const canReportProductionException = !exception && ['queued', 'preparing'].includes(task.status) && access.canPrepare
+              const canReportWrongItem = !exception && ['completed', 'picked_up'].includes(task.status) && access.canDeliver
               return (
-                <article className={`kds-row kds-${task.status} ${timing.overdue ? 'is-overdue' : ''}`} key={task.id}>
+                <article className={`kds-row kds-${task.status} ${timing.overdue ? 'is-overdue' : ''} ${exception ? 'has-exception' : ''}`} key={task.id}>
                   <div className="kds-table"><span>{table?.code ?? task.tableCode ?? '未知桌号'}</span><small>{table?.displayName ?? (task.tableCode ? '按桌号出品' : '桌台未匹配')}</small></div>
-                  <div className="kds-product"><strong>{task.itemName} × {task.quantity}</strong><span>{task.specification} · {task.workstation?.name ?? stationLabel(task.stationId)}</span></div>
-                  <div className="kds-meta">
-                    <span className={`kds-state state-${task.status}`}>{kdsLabels[task.status]}</span>
-                    <span><Clock3 size={13} />等待 {formatDuration(timing.waitSeconds)}</span>
-                    <span className={timing.overdue ? 'sla-overdue' : 'sla-normal'}>{timing.overdue ? `SLA超时 ${formatDuration(timing.overSeconds)}` : `SLA剩余 ${formatDuration(timing.remainingSeconds)}`}</span>
-                    <span>负责岗位 {responsibleRole}</span>
+                  <div className="kds-product">
+                    <strong>{task.itemName} × {task.quantity}</strong>
+                    <span>{task.specification} · {task.workstation?.name ?? stationLabel(task.stationId)}</span>
+                    {task.remakeOf && <span className="kds-remake-badge">第 {task.remakeOf.attempt} 次补做 · 关联原订单明细</span>}
                   </div>
-                  {action && actionAllowedForAccess(task.status, access) && <button className="secondary-button" disabled={busy || !currentEmployee} title={currentEmployee ? `由${currentEmployee.displayName}执行` : '请重新登录'} onClick={() => void advance(task, action)}>{actionIcon(action)}{nextLabel(action)}</button>}
+                  <div className="kds-meta">
+                    {exception ? <>
+                      <span className="kds-exception-state"><CircleAlert size={13} />{exceptionKindLabel(exception)}待处置</span>
+                      <span>{exceptionReasonLabel(exception.reasonCode)}</span>
+                      <span>{exceptionActor?.displayName ?? exception.actorId} · {formatEventTime(exception.occurredAt)}</span>
+                      <span>经理处置：待取消或补做</span>
+                    </> : <>
+                      <span className={`kds-state state-${task.status}`}>{kdsLabels[task.status]}</span>
+                      <span><Clock3 size={13} />等待 {formatDuration(timing.waitSeconds)}</span>
+                      <span className={timing.overdue ? 'sla-overdue' : 'sla-normal'}>{timing.overdue ? `SLA超时 ${formatDuration(timing.overSeconds)}` : `SLA剩余 ${formatDuration(timing.remainingSeconds)}`}</span>
+                      <span>负责岗位 {responsibleRole}</span>
+                    </>}
+                  </div>
+                  <div className="kds-actions">
+                    {!exception && action && actionAllowedForAccess(task.status, access) && <button className="secondary-button" disabled={busy || !currentEmployee} title={currentEmployee ? `由${currentEmployee.displayName}执行` : '请重新登录'} onClick={() => void advance(task, action)}>{actionIcon(action)}{nextLabel(action)}</button>}
+                    {canReportProductionException && <button className="secondary-button kds-exception-button" disabled={busy || !currentEmployee} title="按商品缺货报告，等待领班或经理处置" onClick={() => void reportException(task, 'shortage', 'product_out_of_stock')}><PackageX size={16} />报告缺货</button>}
+                    {canReportProductionException && task.status === 'preparing' && <button className="icon-button kds-reject-button" disabled={busy || !currentEmployee} title="质量不合格，拒绝本次出品" onClick={() => void reportException(task, 'production_rejection', 'quality_rejected')}><CircleAlert size={16} /></button>}
+                    {canReportWrongItem && <button className="secondary-button kds-exception-button" disabled={busy || !currentEmployee} title="报告错品并等待经理安排补做" onClick={() => void reportException(task, 'wrong_item', 'wrong_product')}><PackageX size={16} />报告错品</button>}
+                    {exception && canResolveExceptions && <>
+                      <button className="secondary-button kds-cancel-button" disabled={busy || !currentEmployee} title="保留原订单和原KDS记录，仅关闭本次出品" onClick={() => void resolveException(exception, 'cancelled')}><Ban size={16} />取消该项</button>
+                      <button className="primary-button" disabled={busy || !currentEmployee} title="创建关联原订单明细和原KDS任务的补做任务" onClick={() => void resolveException(exception, 'remake')}><RotateCcw size={16} />安排补做</button>
+                    </>}
+                  </div>
                 </article>
               )
             })}
@@ -225,6 +308,36 @@ function nextLabel(action: KdsActionInput['action']) {
 
 function actionIcon(action: KdsActionInput['action']) {
   return action === 'start' ? <Play size={16} /> : action === 'complete' ? <PackageCheck size={16} /> : action === 'pickUp' ? <ShoppingCart size={16} /> : <CheckCheck size={16} />
+}
+
+function exceptionKindLabel(event: KdsExceptionEvent) {
+  return event.exceptionKind === 'shortage' ? '缺货' : event.exceptionKind === 'wrong_item' ? '错品' : '拒绝出品'
+}
+
+function exceptionReasonLabel(reasonCode: KdsExceptionEvent['reasonCode']) {
+  const labels: Record<KdsExceptionEvent['reasonCode'], string> = {
+    product_out_of_stock: '商品缺货',
+    ingredient_out_of_stock: '原料缺货',
+    equipment_unavailable: '设备不可用',
+    quality_rejected: '质量不合格',
+    wrong_product: '商品错误',
+    wrong_specification: '规格错误',
+    damaged: '破损或洒漏',
+    unavailable_confirmed: '确认无法出品',
+    guest_cancelled: '客人取消',
+    manager_cancelled: '经理取消',
+    service_recovery: '服务补救',
+    quality_recovery: '质量补救',
+    other: '其他原因',
+  }
+  return labels[reasonCode]
+}
+
+function formatEventTime(value: string) {
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp)
+    ? new Date(timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+    : value
 }
 
 function money(amount: number) {

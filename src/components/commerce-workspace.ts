@@ -1,5 +1,5 @@
 import type { BootstrapResponse, Employee, RoleConfig } from '../shared/contracts'
-import type { KdsTask, KdsTaskStatus } from '../shared/order-contracts'
+import type { KdsExceptionEvent, KdsTask, KdsTaskStatus } from '../shared/order-contracts'
 
 export type FulfillmentMode = 'production' | 'delivery' | 'oversight'
 
@@ -106,6 +106,32 @@ export function taskVisibleToAccess(task: KdsTask, access: FulfillmentAccess) {
 
 export function actionAllowedForAccess(status: KdsTaskStatus, access: FulfillmentAccess) {
   return productionStatuses.has(status) ? access.canPrepare : deliveryStatuses.has(status) ? access.canDeliver : false
+}
+
+export function openKdsException(task: KdsTask): KdsExceptionEvent | undefined {
+  const events = task.exceptionEvents ?? []
+  return events.find((event) => (
+    event.type === 'reported'
+    && !events.some((candidate) => (
+      candidate.type === 'manager_disposition' && candidate.exceptionId === event.exceptionId
+    ))
+  ))
+}
+
+export function kdsTaskClosedByException(task: KdsTask) {
+  return (task.exceptionEvents ?? []).some((event) => event.type === 'manager_disposition')
+}
+
+export function kdsTaskOperationallyActive(task: KdsTask) {
+  if (openKdsException(task)) return true
+  if (kdsTaskClosedByException(task)) return false
+  return task.status !== 'delivered'
+}
+
+export function canResolveKdsException(access: FulfillmentAccess) {
+  const roleIds = [access.employee?.roleId, ...(access.employee?.roleIds ?? [])]
+    .filter((roleId): roleId is string => typeof roleId === 'string')
+  return access.mode === 'oversight' && roleIds.some((roleId) => ['supervisor', 'manager'].includes(roleId))
 }
 
 export function stationLabel(stationId: string) {

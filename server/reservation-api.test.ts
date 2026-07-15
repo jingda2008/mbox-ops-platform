@@ -113,8 +113,18 @@ describe('reservation employee API', () => {
 
   it('records external payment facts, seats the guest and preserves the table session binding', async () => {
     const { app, repository } = await fixture(true, 'manager')
-    const created = await app.inject({ method: 'POST', url: '/api/reservations', payload: reservationPayload })
+    const created = await app.inject({
+      method: 'POST', url: '/api/reservations',
+      payload: { ...reservationPayload, salesEmployeeId: 'emp-lin' },
+    })
     const reservationId = created.json().id as string
+
+    const changedSales = await app.inject({
+      method: 'POST',
+      url: `/api/reservations/${reservationId}/sales-attribution`,
+      payload: { salesEmployeeId: 'emp-mia', reason: '客户到店前确认改由Mia负责', idempotencyKey: 'reservation-sales-change-0001' },
+    })
+    expect(changedSales.json()).toMatchObject({ previousSalesEmployeeId: 'emp-lin', salesEmployeeId: 'emp-mia' })
 
     const intent = await app.inject({
       method: 'POST',
@@ -156,6 +166,10 @@ describe('reservation employee API', () => {
     expect(seated.statusCode, seated.body).toBe(200)
     expect(seated.json()).toMatchObject({ status: 'seated', tableCode: 'L04' })
     expect(seated.json().tableSessionId).toMatch(/^session:table-l04:/)
+    const state = await repository.read()
+    expect(state.salesAttributionRecords?.filter((record) => record.subjectType === 'reservation' && record.subjectId === reservationId)).toHaveLength(2)
+    expect(state.salesAttributionRecords?.find((record) => record.subjectType === 'table_session' && record.subjectId === seated.json().tableSessionId)).toMatchObject({ salesEmployeeId: 'emp-mia' })
+    expect(state.auditEntries.filter((entry) => entry.action === 'sales_attribution.changed.v1')).toHaveLength(1)
     await app.close()
     await repository.close()
   })

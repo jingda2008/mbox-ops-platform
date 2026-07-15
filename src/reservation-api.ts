@@ -10,7 +10,7 @@ import type {
   ReservationOccasionCode,
   ReservationStatus,
 } from './shared/reservation-contracts'
-import type { WaitlistEntry } from './shared/contracts'
+import type { SalesAttributionInput, SalesAttributionRecord, WaitlistEntry } from './shared/contracts'
 
 export interface ReservationListResponse {
   config: ReservationConfig | null
@@ -37,6 +37,7 @@ export interface CreateReservationInput {
   scheduledAt: string
   depositRequiredAmount: number
   depositCurrency: string
+  salesEmployeeId?: string
   idempotencyKey: string
 }
 
@@ -138,6 +139,13 @@ export function actOnReservation(reservationId: string, input: ReservationAction
   })
 }
 
+export function assignReservationSales(reservationId: string, input: SalesAttributionInput) {
+  return reservationRequest<SalesAttributionRecord>(`/api/reservations/${encodeURIComponent(reservationId)}/sales-attribution`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
 export function updateReservationDetails(reservationId: string, input: {
   partySize: number
   scheduledAt: string
@@ -212,6 +220,7 @@ export interface CreateWaitlistInput {
   partySize: number
   areaPreferenceCode?: string
   originalReservationId?: string
+  salesEmployeeId?: string
   maximumWaitMinutes: number
   idempotencyKey: string
 }

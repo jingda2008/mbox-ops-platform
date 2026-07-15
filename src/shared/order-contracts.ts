@@ -12,6 +12,25 @@ export type AuthorizationKind = 'discount' | 'gift'
 export type AuthorizationStatus = 'pending' | 'granted' | 'rejected'
 export type KdsTaskStatus = 'queued' | 'preparing' | 'completed' | 'picked_up' | 'delivered'
 export type ItemFulfillmentStatus = 'draft' | KdsTaskStatus
+export type KdsExceptionKind = 'shortage' | 'production_rejection' | 'wrong_item'
+export type KdsExceptionReasonCode =
+  | 'product_out_of_stock'
+  | 'ingredient_out_of_stock'
+  | 'equipment_unavailable'
+  | 'quality_rejected'
+  | 'wrong_product'
+  | 'wrong_specification'
+  | 'damaged'
+  | 'other'
+export type KdsExceptionEventType = 'reported' | 'manager_disposition'
+export type KdsManagerDisposition = 'cancelled' | 'remake'
+export type KdsManagerReasonCode =
+  | 'unavailable_confirmed'
+  | 'guest_cancelled'
+  | 'manager_cancelled'
+  | 'service_recovery'
+  | 'quality_recovery'
+  | 'other'
 export type TableLedgerEntryType = 'order_gross_charge' | 'order_discount' | 'order_gift'
 export type LinkedServiceTaskStatus =
   | 'pending'
@@ -113,6 +132,32 @@ export interface OrderAuthorizationAuthority {
   validUntil: string
 }
 
+export interface KdsRemakeLink {
+  orderItemId: string
+  kdsTaskId: string
+  exceptionId: string
+  attempt: number
+}
+
+export interface KdsExceptionEvent {
+  id: string
+  exceptionId: string
+  type: KdsExceptionEventType
+  exceptionKind: KdsExceptionKind
+  reasonCode: KdsExceptionReasonCode | KdsManagerReasonCode
+  reasonNote: string | null
+  orderId: string
+  orderItemId: string
+  kdsTaskId: string
+  originalOrderItemId: string
+  originalKdsTaskId: string
+  actorId: string
+  actorRoleId: string
+  occurredAt: string
+  managerDisposition: KdsManagerDisposition | null
+  remakeKdsTaskId: string | null
+}
+
 export interface KdsTask {
   id: string
   orderId: string
@@ -130,6 +175,10 @@ export interface KdsTask {
   productionSla?: FulfillmentSlaSnapshot
   pickupSla?: FulfillmentSlaSnapshot
   deliveryServiceTask?: KdsDeliveryServiceTaskLink | null
+  /** Present on compensation tasks; the original order item and KDS task are never replaced. */
+  remakeOf?: KdsRemakeLink | null
+  /** Append-only exception history. Optional only for tasks persisted before exception handling. */
+  exceptionEvents?: KdsExceptionEvent[]
   queuedAt: string
   startedAt: string | null
   startedBy: string | null
@@ -159,7 +208,7 @@ export interface IdempotencyRecord {
   key: string
   operation: string
   fingerprint: string
-  resultType: 'order' | 'order_item' | 'authorization' | 'kds_task'
+  resultType: 'order' | 'order_item' | 'authorization' | 'kds_task' | 'kds_exception_event'
   resultId: string
 }
 
@@ -232,6 +281,32 @@ export interface SubmitOrderCommand {
 export interface KdsTaskActionCommand {
   taskId: string
   actorId: string
+  occurredAt: string
+  idempotencyKey: string
+}
+
+export interface ReportKdsExceptionCommand {
+  exceptionId: string
+  eventId: string
+  taskId: string
+  exceptionKind: KdsExceptionKind
+  reasonCode: KdsExceptionReasonCode
+  reasonNote: string
+  actorId: string
+  actorRoleId: string
+  occurredAt: string
+  idempotencyKey: string
+}
+
+export interface DecideKdsExceptionCommand {
+  eventId: string
+  exceptionId: string
+  disposition: KdsManagerDisposition
+  reasonCode: KdsManagerReasonCode
+  reasonNote: string
+  remakeTaskId: string | null
+  actorId: string
+  actorRoleId: string
   occurredAt: string
   idempotencyKey: string
 }

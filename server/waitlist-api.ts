@@ -6,9 +6,13 @@ import { requireConfiguredOperation, requireTableDataScope } from './authorizati
 import { startAwaitingOrder } from './proactive-service.js'
 import type { RuntimeRepository } from './repository.js'
 import { reservationsFor } from './reservation-api.js'
-import { openTableSession } from './table-sessions.js'
+import { currentSalesEmployeeId, openTableSession, recordSalesAttribution } from './table-sessions.js'
 
 const idempotencyKeySchema = z.string().trim().min(8).max(128)
+
+function childIdempotencyKey(key: string, suffix: string) {
+  return `${key.slice(0, Math.max(8, 118 - suffix.length))}:${suffix}`
+}
 
 const createSchema = z.object({
   customerReference: z.string().trim().min(1).max(128),
@@ -17,6 +21,7 @@ const createSchema = z.object({
   partySize: z.number().int().min(1).max(100),
   areaPreferenceCode: z.string().trim().min(1).max(64).optional(),
   originalReservationId: z.string().trim().min(1).max(128).optional(),
+  salesEmployeeId: z.string().trim().min(1).max(128).optional(),
   maximumWaitMinutes: z.number().int().min(1).max(480),
   idempotencyKey: idempotencyKeySchema,
 }).strict()
@@ -123,6 +128,13 @@ export function registerWaitlistRoutes(app: FastifyInstance, repository: Runtime
         configVersion: config.version,
       }
       state.waitlistEntries.push(entry)
+      if (input.salesEmployeeId) {
+        recordSalesAttribution(state, {
+          subjectType: 'waitlist', subjectId: entry.id, salesEmployeeId: input.salesEmployeeId,
+          actorId: actor.actorId, reason: '候补登记时指定销售', occurredAt,
+          idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'sales'),
+        })
+      }
       audit(state, entry, actor.actorId, 'waitlist.joined.v1', occurredAt, { idempotencyKey: input.idempotencyKey, joinedSequence: entry.joinedSequence })
       state.revision += 1
       return entry
@@ -165,7 +177,7 @@ export function registerWaitlistRoutes(app: FastifyInstance, repository: Runtime
         if (entry.responseExpiresAt && Date.parse(entry.responseExpiresAt) < Date.parse(occurredAt)) throw new Error('候补响应时间已过，请先标记过期')
         const table = assertTargetPrimaryReady(state, entry.heldTableId)
         if (table.status !== 'reserved') throw new Error('候补锁定桌台状态已变化')
-        const session = openTableSession(state, table, occurredAt)
+        const session = openTableSession(state, table, occurredAt, { source: 'waitlist', sourceId: entry.id })
         table.status = 'occupied'
         table.guestCount = entry.partySize
         table.openedAt = occurredAt
@@ -173,6 +185,14 @@ export function registerWaitlistRoutes(app: FastifyInstance, repository: Runtime
         entry.tableSessionId = session.id
         entry.seatedAt = occurredAt
         entry.closedAt = occurredAt
+        const salesEmployeeId = currentSalesEmployeeId(state, 'waitlist', entry.id)
+        if (salesEmployeeId) {
+          recordSalesAttribution(state, {
+            subjectType: 'table_session', subjectId: session.id, salesEmployeeId,
+            actorId: actor.actorId, reason: '候补入座继承销售归属', occurredAt,
+            idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'sales'),
+          })
+        }
         if (state.config.proactiveOrderCare.enabled) {
           startAwaitingOrder(state, table.id, actor.actorId, `waitlist-seat:${entry.id}`, new Date(occurredAt))
         }

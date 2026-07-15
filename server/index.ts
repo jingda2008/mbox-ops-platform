@@ -1,7 +1,7 @@
 import cors from '@fastify/cors'
 import fastifyStatic from '@fastify/static'
 import Fastify from 'fastify'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { ZodError } from 'zod'
 import {
@@ -29,7 +29,7 @@ import { processAwaitingOrderReminders, registerProactiveServiceRoutes } from '.
 import { registerBenefitRoutes } from './benefit-domain.js'
 import { buildMemberPortal, registerMemberPortalRoutes } from './member-portal.js'
 import { registerNotificationRoutes } from './notification-api.js'
-import { processDueNotifications } from './notification-dispatch.js'
+import { dispatchDueNotifications } from './notification-dispatch.js'
 import { BenefitRedemptionBusinessError, registerBenefitRedemptionRoutes } from './benefit-redemption.js'
 import { AuthenticationError, registerAuthContext, requireRequestActor } from './auth-context.js'
 import type { RuntimeMode } from '../src/shared/auth-contracts.js'
@@ -452,12 +452,17 @@ if (runtimeConfig.runtimeMode === 'staging' || runtimeConfig.runtimeMode === 'pr
   })
 }
 
+let schedulerRunning = false
+const notificationWorkerId = `notification-worker:${process.pid}:${randomUUID()}`
 const scheduler = setInterval(() => {
-  void repository.mutate(async (state) => {
+  if (schedulerRunning) return
+  schedulerRunning = true
+  void repository.mutate((state) => {
     processAwaitingOrderReminders(state)
     escalateDueTasks(state)
-    return processDueNotifications(state, customerNotificationAdapters)
-  }).catch((error) => app.log.error(error))
+  }).then(() => dispatchDueNotifications(repository, customerNotificationAdapters, notificationWorkerId))
+    .catch((error) => app.log.error(error))
+    .finally(() => { schedulerRunning = false })
 }, 1000)
 scheduler.unref()
 

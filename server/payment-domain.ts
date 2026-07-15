@@ -1,7 +1,9 @@
 import type {
   ApplyPaymentQueryResultCommand,
   ApproveRefundCommand,
+  CashierHandover,
   ChannelPaymentStatus,
+  ConfirmCashPaymentCommand,
   CreatePaymentIntentCommand,
   HandlePaymentNotificationCommand,
   MarkRefundFailedCommand,
@@ -16,11 +18,19 @@ import type {
   RefundItem,
   RejectRefundCommand,
   ReportPhysicalPosPaymentCommand,
+  ReviewCashierHandoverCommand,
   RequestPaymentStatusQueryCommand,
   RequestRefundCommand,
+  SettlementChannel,
+  SettlementChannelSummary,
   StartRefundCommand,
+  SubmitCashierHandoverCommand,
 } from '../src/shared/payment-contracts.js'
-import { PHYSICAL_POS_CHANNEL } from '../src/shared/payment-contracts.js'
+import {
+  CASH_PAYMENT_CHANNEL,
+  PHYSICAL_POS_CHANNEL,
+  SETTLEMENT_CHANNELS,
+} from '../src/shared/payment-contracts.js'
 
 export function createPaymentDomainState(): PaymentDomainState {
   return {
@@ -28,9 +38,19 @@ export function createPaymentDomainState(): PaymentDomainState {
     paymentNotifications: [],
     paymentStatusQueries: [],
     physicalPosReports: [],
+    cashPaymentConfirmations: [],
     refunds: [],
+    cashierHandovers: [],
     idempotencyRecords: [],
   }
+}
+
+function cashPaymentConfirmations(state: PaymentDomainState) {
+  return state.cashPaymentConfirmations ?? (state.cashPaymentConfirmations = [])
+}
+
+export function cashierHandovers(state: PaymentDomainState) {
+  return state.cashierHandovers ?? (state.cashierHandovers = [])
 }
 
 function assertNonEmpty(value: string, label: string) {
@@ -47,6 +67,12 @@ function assertPositiveInteger(value: number, label: string) {
 
 function assertCurrency(value: string) {
   if (!/^[A-Z]{3}$/.test(value)) throw new Error('币种必须是三位大写代码')
+}
+
+function assertBusinessDate(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00.000Z`))) {
+    throw new Error('营业日必须是有效日期')
+  }
 }
 
 function safeAdd(left: number, right: number, label: string) {
@@ -145,8 +171,12 @@ function findResult(
       return state.paymentStatusQueries.find((item) => item.id === resultId)
     case 'physical_pos_report':
       return state.physicalPosReports.find((item) => item.id === resultId)
+    case 'cash_payment_confirmation':
+      return cashPaymentConfirmations(state).find((item) => item.id === resultId)
     case 'refund':
       return state.refunds.find((item) => item.id === resultId)
+    case 'cashier_handover':
+      return cashierHandovers(state).find((item) => item.id === resultId)
   }
 }
 
@@ -161,6 +191,7 @@ export function createPaymentIntent(state: PaymentDomainState, command: CreatePa
   assertTimestamp(command.expiresAt, '失效时间')
   assertPositiveInteger(command.amount, '支付金额')
   assertCurrency(command.currency)
+  if (command.businessDate) assertBusinessDate(command.businessDate)
   if (Date.parse(command.expiresAt) <= Date.parse(command.occurredAt)) throw new Error('失效时间必须晚于创建时间')
   if (command.lineAllocations.length === 0) throw new Error('支付意图必须明确关联订单商品')
 
@@ -171,6 +202,9 @@ export function createPaymentIntent(state: PaymentDomainState, command: CreatePa
     assertNonEmpty(allocation.orderItemId, '订单明细ID')
     assertPositiveInteger(allocation.quantity, '支付商品数量')
     assertPositiveInteger(allocation.unitPaidAmount, '商品实付单价')
+    if (allocation.sourceUnitPriceAmount !== undefined) {
+      assertPositiveInteger(allocation.sourceUnitPriceAmount, '商品原始单价')
+    }
     const key = `${allocation.orderId}\u0000${allocation.orderItemId}`
     if (allocationKeys.has(key)) throw new Error('支付商品明细不能重复')
     allocationKeys.add(key)
@@ -200,6 +234,7 @@ export function createPaymentIntent(state: PaymentDomainState, command: CreatePa
         amount: command.amount,
         currency: command.currency,
         channel: command.channel,
+        settlementChannel: command.settlementChannel,
         merchantId: command.merchantId,
         status: 'pending',
         channelTransactionId: null,
@@ -211,6 +246,9 @@ export function createPaymentIntent(state: PaymentDomainState, command: CreatePa
         failedAt: null,
         closedAt: null,
         failureReason: null,
+        businessDate: command.businessDate,
+        allocationMode: command.allocationMode ?? 'all',
+        requestSelectionFingerprint: command.requestSelectionFingerprint,
       }
       state.paymentIntents.push(intent)
       return intent
@@ -403,6 +441,53 @@ export function applyPaymentQueryResult(
 }
 
 export const recordPaymentQueryResult = applyPaymentQueryResult
+
+export function confirmCashPayment(state: PaymentDomainState, command: ConfirmCashPaymentCommand) {
+  assertNonEmpty(command.confirmationId, '现金确认ID')
+  assertNonEmpty(command.paymentIntentId, '支付意图ID')
+  assertNonEmpty(command.confirmedBy, '现金确认人')
+  assertNonEmpty(command.deviceId, '确认设备')
+  assertTimestamp(command.occurredAt, '现金确认时间')
+  assertPositiveInteger(command.amount, '现金实收金额')
+  assertCurrency(command.currency)
+
+  return executeIdempotent(
+    state,
+    command.idempotencyKey,
+    'payment.confirm_cash.v1',
+    command,
+    'cash_payment_confirmation',
+    (id) => cashPaymentConfirmations(state).find((item) => item.id === id),
+    () => {
+      const intent = findPaymentIntent(state, command.paymentIntentId)
+      if (intent.channel !== CASH_PAYMENT_CHANNEL) throw new Error('支付意图不是现金渠道')
+      if (!['pending', 'processing'].includes(intent.status)) throw new Error('当前支付意图不能确认现金实收')
+      if (command.amount !== intent.amount) throw new Error('现金实收金额与支付意图不一致')
+      if (command.currency !== intent.currency) throw new Error('现金实收币种与支付意图不一致')
+      if (Date.parse(command.occurredAt) < Date.parse(intent.createdAt)) throw new Error('现金确认时间不能早于支付意图')
+      if (cashPaymentConfirmations(state).some((item) => item.id === command.confirmationId)) {
+        throw new Error('现金确认ID已存在')
+      }
+      const confirmation = {
+        id: command.confirmationId,
+        paymentIntentId: intent.id,
+        tableSessionId: intent.tableSessionId,
+        amount: command.amount,
+        currency: command.currency,
+        confirmedBy: command.confirmedBy,
+        deviceId: command.deviceId,
+        confirmedAt: command.occurredAt,
+      }
+      cashPaymentConfirmations(state).push(confirmation)
+      intent.status = 'succeeded'
+      intent.channelTransactionId = command.confirmationId
+      intent.paidAt = command.occurredAt
+      intent.failureReason = null
+      return confirmation
+    },
+    (confirmation) => confirmation.id,
+  )
+}
 
 export function reportPhysicalPosPayment(
   state: PaymentDomainState,
@@ -728,6 +813,228 @@ export function markRefundFailed(state: PaymentDomainState, command: MarkRefundF
     },
     (refund) => refund.id,
   )
+}
+
+function shanghaiBusinessDate(value: string) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(value))
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? ''
+  return `${part('year')}-${part('month')}-${part('day')}`
+}
+
+function settlementChannelForIntent(intent: PaymentIntent): SettlementChannel | null {
+  if (intent.settlementChannel) return intent.settlementChannel
+  const channel = intent.channel.toLowerCase()
+  if (channel === CASH_PAYMENT_CHANNEL) return 'cash'
+  if (channel === PHYSICAL_POS_CHANNEL) return 'physical_pos'
+  if (channel.includes('wechat') || channel.includes('weixin')) return 'wechat'
+  if (channel.includes('alipay')) return 'alipay'
+  return null
+}
+
+function intentBusinessDate(intent: PaymentIntent) {
+  return intent.businessDate ?? shanghaiBusinessDate(intent.paidAt ?? intent.createdAt)
+}
+
+export function buildSettlementChannelSummaries(
+  state: PaymentDomainState,
+  businessDate: string,
+  confirmedActualAmounts: Partial<Record<SettlementChannel, number>> = {},
+) {
+  assertBusinessDate(businessDate)
+  const totals = new Map<SettlementChannel, { system: number; pending: number }>(
+    SETTLEMENT_CHANNELS.map((channel) => [channel, { system: 0, pending: 0 }]),
+  )
+
+  for (const intent of state.paymentIntents) {
+    const channel = settlementChannelForIntent(intent)
+    if (!channel || intentBusinessDate(intent) !== businessDate) continue
+    if (['succeeded', 'reported_pending_reconciliation'].includes(intent.status)) {
+      const total = totals.get(channel)!
+      total.system = safeAdd(total.system, intent.amount, '渠道系统应收')
+    }
+  }
+
+  for (const refund of state.refunds) {
+    if (refund.status !== 'succeeded' || !refund.succeededAt || shanghaiBusinessDate(refund.succeededAt) !== businessDate) continue
+    const intent = state.paymentIntents.find((item) => item.id === refund.paymentIntentId)
+    const channel = intent && settlementChannelForIntent(intent)
+    if (!channel) continue
+    const total = totals.get(channel)!
+    total.system = safeAdd(total.system, -refund.amount, '渠道退款后系统应收')
+  }
+
+  for (const report of state.physicalPosReports) {
+    const intent = state.paymentIntents.find((item) => item.id === report.paymentIntentId)
+    const reportBusinessDate = intent?.businessDate ?? shanghaiBusinessDate(report.paidAt)
+    if (report.status !== 'reported_pending_reconciliation' || reportBusinessDate !== businessDate) continue
+    const total = totals.get('physical_pos')!
+    total.pending = safeAdd(total.pending, report.amount, '物理POS待对账金额')
+  }
+
+  return SETTLEMENT_CHANNELS.map((channel): SettlementChannelSummary => {
+    const total = totals.get(channel)!
+    const confirmedActualAmount = confirmedActualAmounts[channel] ?? 0
+    if (!Number.isSafeInteger(confirmedActualAmount) || confirmedActualAmount < 0) {
+      throw new Error('确认实收必须是非负安全整数')
+    }
+    return {
+      channel,
+      systemReceivableAmount: total.system,
+      confirmedActualAmount,
+      pendingReconciliationAmount: total.pending,
+      differenceAmount: confirmedActualAmount - total.system,
+    }
+  })
+}
+
+export function latestCashierHandover(state: PaymentDomainState, businessDate: string) {
+  return cashierHandovers(state)
+    .filter((handover) => handover.businessDate === businessDate)
+    .sort((left, right) => right.submittedAt.localeCompare(left.submittedAt))[0] ?? null
+}
+
+export function handoverSnapshotMatches(
+  state: PaymentDomainState,
+  handover: CashierHandover,
+) {
+  const current = buildSettlementChannelSummaries(state, handover.businessDate)
+  return SETTLEMENT_CHANNELS.every((channel) => {
+    const submitted = handover.channels.find((item) => item.channel === channel)
+    const live = current.find((item) => item.channel === channel)!
+    return submitted?.systemReceivableAmount === live.systemReceivableAmount
+      && submitted.pendingReconciliationAmount === live.pendingReconciliationAmount
+  })
+}
+
+export function submitCashierHandover(state: PaymentDomainState, command: SubmitCashierHandoverCommand) {
+  assertNonEmpty(command.handoverId, '交班ID')
+  assertBusinessDate(command.businessDate)
+  assertNonEmpty(command.shiftId, '收银班次ID')
+  assertNonEmpty(command.submittedBy, '交班提交人')
+  assertNonEmpty(command.deviceId, '交班设备')
+  assertTimestamp(command.occurredAt, '交班提交时间')
+
+  return executeIdempotent(
+    state,
+    command.idempotencyKey,
+    'payment.cashier_handover.submit.v1',
+    command,
+    'cashier_handover',
+    (id) => cashierHandovers(state).find((item) => item.id === id),
+    () => {
+      if (cashierHandovers(state).some((item) => item.id === command.handoverId)) throw new Error('交班ID已存在')
+      const active = latestCashierHandover(state, command.businessDate)
+      if (active && active.status !== 'rejected') throw new Error('当前营业日已有未驳回的收银交班')
+
+      const channelMap = new Map(command.channels.map((item) => [item.channel, item]))
+      if (channelMap.size !== SETTLEMENT_CHANNELS.length) throw new Error('交班必须包含全部结算渠道且不能重复')
+      const channels = SETTLEMENT_CHANNELS.map((channel) => {
+        const summary = channelMap.get(channel)
+        if (!summary) throw new Error(`交班缺少${channel}渠道`)
+        for (const amount of [
+          summary.systemReceivableAmount,
+          summary.confirmedActualAmount,
+          summary.pendingReconciliationAmount,
+          summary.differenceAmount,
+        ]) {
+          if (!Number.isSafeInteger(amount)) throw new Error('交班金额必须是安全整数')
+        }
+        if (summary.confirmedActualAmount < 0 || summary.pendingReconciliationAmount < 0) {
+          throw new Error('确认实收和待对账金额不能为负数')
+        }
+        if (summary.differenceAmount !== summary.confirmedActualAmount - summary.systemReceivableAmount) {
+          throw new Error('交班差异计算不一致')
+        }
+        return { ...summary }
+      })
+
+      const unresolved = new Set(channels
+        .filter((item) => item.pendingReconciliationAmount > 0 || item.differenceAmount !== 0)
+        .map((item) => item.channel))
+      const issueMap = new Map<SettlementChannel, SubmitCashierHandoverCommand['issues'][number]>()
+      for (const issue of command.issues) {
+        assertNonEmpty(issue.reason, '未对账原因')
+        assertNonEmpty(issue.nextDayOwnerId, '次日责任人')
+        if (issueMap.has(issue.channel)) throw new Error('同一渠道只能登记一项未对账原因')
+        if (!unresolved.has(issue.channel)) throw new Error('无差异且无待对账金额的渠道不能登记未对账项')
+        issueMap.set(issue.channel, issue)
+      }
+      for (const channel of unresolved) {
+        if (!issueMap.has(channel)) throw new Error(`${channel}渠道未对账，必须填写原因和次日责任人`)
+      }
+      const issues = [...unresolved].map((channel) => {
+        const issue = issueMap.get(channel)!
+        const summary = channelMap.get(channel)!
+        return {
+          channel,
+          amount: Math.max(Math.abs(summary.differenceAmount), summary.pendingReconciliationAmount),
+          reason: issue.reason.trim(),
+          nextDayOwnerId: issue.nextDayOwnerId,
+        }
+      })
+      const handover: CashierHandover = {
+        id: command.handoverId,
+        businessDate: command.businessDate,
+        shiftId: command.shiftId,
+        submittedBy: command.submittedBy,
+        submittedAt: command.occurredAt,
+        deviceId: command.deviceId,
+        note: command.note?.trim() || null,
+        status: 'submitted',
+        channels,
+        issues,
+        reviewedBy: null,
+        reviewedAt: null,
+        reviewNote: null,
+        closedAt: null,
+      }
+      cashierHandovers(state).push(handover)
+      return handover
+    },
+    (handover) => handover.id,
+  )
+}
+
+export function reviewCashierHandover(state: PaymentDomainState, command: ReviewCashierHandoverCommand) {
+  assertNonEmpty(command.handoverId, '交班ID')
+  assertNonEmpty(command.reviewedBy, '复核人')
+  assertTimestamp(command.occurredAt, '复核时间')
+  if (command.decision === 'reject') assertNonEmpty(command.note ?? '', '驳回说明')
+
+  return executeIdempotent(
+    state,
+    command.idempotencyKey,
+    'payment.cashier_handover.review.v1',
+    command,
+    'cashier_handover',
+    (id) => cashierHandovers(state).find((item) => item.id === id),
+    () => {
+      const handover = cashierHandovers(state).find((item) => item.id === command.handoverId)
+      if (!handover) throw new Error('收银交班不存在')
+      if (handover.status !== 'submitted') throw new Error('只有待复核交班可以处理')
+      if (handover.submittedBy === command.reviewedBy) throw new Error('交班提交人与经理复核人必须为不同员工')
+      if (Date.parse(command.occurredAt) < Date.parse(handover.submittedAt)) throw new Error('复核时间不能早于交班提交时间')
+      handover.status = command.decision === 'approve' ? 'approved' : 'rejected'
+      handover.reviewedBy = command.reviewedBy
+      handover.reviewedAt = command.occurredAt
+      handover.reviewNote = command.note?.trim() || null
+      return handover
+    },
+    (handover) => handover.id,
+  )
+}
+
+export function closeCashierHandover(handover: CashierHandover, occurredAt: string) {
+  assertTimestamp(occurredAt, '关账时间')
+  if (handover.status !== 'approved') throw new Error('只有经理复核通过的交班可以关账')
+  handover.status = 'closed'
+  handover.closedAt = occurredAt
+  return handover
 }
 
 export function resolvePaymentDomainResult(

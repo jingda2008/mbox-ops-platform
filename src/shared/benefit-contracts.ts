@@ -113,6 +113,9 @@ export interface CustomerNotification {
   nextAttemptAt?: string | null
   providerMessageId?: string | null
   lastErrorCode?: string | null
+  /** Short-lived worker claim. Provider calls must only happen after this claim is persisted. */
+  leaseOwner?: string | null
+  leaseExpiresAt?: string | null
 }
 
 export const benefitGrantSchema = z.object({

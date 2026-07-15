@@ -28,9 +28,19 @@ npm run pilot:access
 
 ```bash
 MBOX_RUNTIME_MODE=production \
+MBOX_REPOSITORY=postgres \
+DATABASE_URL='postgresql://mbox:***@db.example.com/mbox?sslmode=verify-full' \
+MBOX_TENANT_ID='11111111-1111-4111-8111-111111111111' \
+MBOX_STORE_UUID='22222222-2222-4222-8222-222222222222' \
 MBOX_SESSION_SECRET='由密钥管理服务注入的至少32字符密钥' \
+MBOX_QR_SECRET='由密钥管理服务注入的至少32字符密钥' \
+MBOX_METRICS_TOKEN='由密钥管理服务注入的至少32字符令牌' \
+MBOX_CORS_ORIGINS='https://ops.example.com' \
+MBOX_PUBLIC_BASE_URL='https://api.example.com' \
 npm run start
 ```
+
+`staging`和`production`未指定`MBOX_REPOSITORY`时默认使用PostgreSQL；显式配置`json`会在运行配置加载和仓储工厂两层拒绝启动。两种环境都必须提供`DATABASE_URL`、`MBOX_TENANT_ID`和`MBOX_STORE_UUID`，JSON文件仓储只允许`local/test`。
 
 生产员工会话由受信任身份入口签发，前端仅保存短期令牌；员工ID、门店ID和过期时间均在签名载荷内，不能用请求Header冒用。微信小程序身份已具备防重放会话、身份映射和加密存储边界，真实启用仍需AppID、AppSecret、合法域名和微信审核。
 
@@ -67,6 +77,7 @@ npm run check
 
 - `server/`是模块化单体API和确定性业务内核；金额、权限、状态和SLA不交给大模型决定。
 - `.runtime/state.json`是仅供本地闭环验证的文件适配器；`staging/production`强制使用PostgreSQL仓储。
+- 共享平板的IndexedDB快照和待同步动作绑定当前员工；退出或换人会先停止身份切换期间的新离线写入，等待旧会话正在执行的同步结束，再清空快照和队列。清理失败时保留旧会话并阻止换人，旧员工动作不会由新员工会话重放。
 - `wechat_mock`以及`dev-approve-complete`只用于接口联调，不发生真实资金扣款或渠道退款。
 - 物理POS人工报送只进入待对账，不能替代银行/收单机构正式对账。
 - 正式服务号/企业微信消息、微信/聚合支付、POS对账、耳机和视觉能力通过适配器接入；未取得真实渠道回执时，Outbox待发送不代表微信已送达。

@@ -11,10 +11,19 @@ afterEach(async () => {
 })
 
 describe('repository factory', () => {
-  it('uses JSON only when explicitly configured or in local defaults', () => {
+  it('uses JSON for test defaults', () => {
     const repository = createRuntimeRepository(loadRuntimeConfig({ MBOX_RUNTIME_MODE: 'test' }))
     repositories.push(repository)
     expect(repository).toBeInstanceOf(JsonRepository)
+  })
+
+  it.each(['staging', 'production'] as const)('rejects %s JSON storage even when config loading is bypassed', (runtimeMode) => {
+    const unsafeConfig = {
+      ...loadRuntimeConfig({ MBOX_RUNTIME_MODE: 'test', MBOX_REPOSITORY: 'json' }),
+      runtimeMode,
+    }
+
+    expect(() => createRuntimeRepository(unsafeConfig)).toThrow('预发布和生产环境必须使用PostgreSQL仓储')
   })
 
   it('constructs a production PostgreSQL repository without opening a connection eagerly', () => {

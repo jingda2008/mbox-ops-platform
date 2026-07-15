@@ -150,6 +150,55 @@ describe('Postar payment callback', () => {
   })
 })
 
+describe('Postar JSAPI payment creation', () => {
+  it('creates a signed provider order and returns only processing payment parameters', async () => {
+    const post = vi.fn(async (_request: PostarHttpRequest) => response({
+      code: '000000',
+      data: {
+        actualPayAmt: '3000', agetId: 'AGENCY001', getPrepayId: '1',
+        jsapiAppid: 'wx-app-1', jsapiTimestamp: '1784001906', jsapiNoncestr: 'nonce-1',
+        jsapiPackage: 'prepay_id=wx-prepay-1', jsapiSignType: 'RSA', jsapiPaySign: 'pay-sign-1',
+        orderNo: 'POSTAR202607140001', orderTime: '20260714120506', threeOrderNo: 'PaymentABC123',
+      },
+      msg: 'success',
+    }))
+    const adapter = new PostarPaymentProviderAdapter(testOptions(post))
+    const result = await adapter.createPayment({
+      paymentIntentId: 'PaymentABC123', merchantId: 'MERCHANT001', amount: 3000, currency: 'CNY',
+      expiresAt: '2026-07-14T04:20:00.000Z', payWay: 'wechat', payerId: 'openid-1',
+      clientIp: '203.0.113.10', callbackUrl: 'https://pay.example.test/postar/callback',
+      operatorId: 'cashier-1', remark: 'L01 table', wxAppid: 'wx-app-1',
+    }, context)
+
+    expect(result).toMatchObject({
+      paymentIntentId: 'PaymentABC123', providerTransactionId: 'POSTAR202607140001', status: 'processing',
+      paymentPayload: { appId: 'wx-app-1', package: 'prepay_id=wx-prepay-1', paySign: 'pay-sign-1' },
+    })
+    const sent = post.mock.calls[0]![0]
+    expect(sent.url).toBe(`${POSTAR_BASE_URLS.test}${POSTAR_ENDPOINTS.createJsapiPayment}`)
+    expect(decodeRequest(sent).payload).toMatchObject({
+      agetId: 'AGENCY001', asyncNotify: 'https://pay.example.test/postar/callback', custId: 'MERCHANT001',
+      ip: '203.0.113.10', openid: 'openid-1', orderNo: 'PaymentABC123', outTime: '15', payWay: '1',
+      txamt: '3000', wxAppid: 'wx-app-1',
+    })
+  })
+
+  it('fails closed on unsigned or provider-declined creation responses', async () => {
+    const unsigned = new PostarPaymentProviderAdapter(testOptions(async () => ({
+      body: new TextEncoder().encode('{"code":"000000","msg":"success"}'), headers: {}, status: 200,
+    })))
+    const request = {
+      paymentIntentId: 'PaymentABC123', merchantId: 'MERCHANT001', amount: 3000, currency: 'CNY',
+      expiresAt: '2026-07-14T04:20:00.000Z', payWay: 'alipay' as const, payerId: '2088000000000000',
+      clientIp: '203.0.113.10', callbackUrl: 'https://pay.example.test/postar/callback',
+      operatorId: 'cashier-1', remark: 'L01 table',
+    }
+    await expect(unsigned.createPayment(request, context)).rejects.toThrow('响应缺少签名')
+    const declined = new PostarPaymentProviderAdapter(testOptions(async () => response({ code: 'E100', msg: 'merchant disabled' })))
+    await expect(declined.createPayment(request, context)).rejects.toThrow('星驿下单失败: E100 merchant disabled')
+  })
+})
+
 describe('Postar active payment query', () => {
   it('uses the whitelisted endpoint, injected HTTP/key/metadata sources and verifies response signing', async () => {
     const post = vi.fn(async (_request: PostarHttpRequest) => response({

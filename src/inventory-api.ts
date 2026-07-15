@@ -9,9 +9,14 @@ import type {
   BottleOwner,
   BottleStorageBatch,
   BottleStorageEvent,
+  InventoryApprovalAction,
+  InventoryApprovalRequest,
   InventoryDomainState,
+  InventoryIngredientSku,
   InventoryMovement,
   InventoryOperationPolicy,
+  InventoryRecipeLine,
+  InventoryRecipeVersion,
   StockCount,
 } from './shared/inventory-contracts'
 
@@ -66,14 +71,36 @@ export interface BottleTransferInput {
   recipientOwner: BottleOwner
   tableSessionId: string
   orderId?: string
-  approvedBy: string
   reason: string
 }
 
 export interface BottleVoidInput {
   tableSessionId?: string
   orderId?: string
-  approvedBy: string
+  reason: string
+}
+
+export interface IngredientSkuInput {
+  ingredientSkuId?: string
+  sku: string
+  name: string
+  baseUnitCode: string
+  costAmountPerBaseUnit: number
+  conversions: Array<{ unitCode: string; baseQuantity: number }>
+  enabled: boolean
+  reason: string
+}
+
+export interface RecipeVersionInput {
+  productId: string
+  lines: InventoryRecipeLine[]
+  reason: string
+}
+
+export interface RemakeConsumptionInput {
+  orderId: string
+  orderItemId: string
+  quantity: number
   reason: string
 }
 
@@ -134,6 +161,27 @@ export function receiveInventory(input: InventoryReceiptInput) {
   })
 }
 
+export function upsertIngredientSku(input: IngredientSkuInput) {
+  return inventoryRequest<InventoryIngredientSku>('/api/inventory/ingredients', {
+    method: 'POST',
+    body: JSON.stringify(operationEnvelope(input, 'inventory-ingredient')),
+  })
+}
+
+export function publishRecipeVersion(input: RecipeVersionInput) {
+  return inventoryRequest<InventoryRecipeVersion>('/api/inventory/recipes', {
+    method: 'POST',
+    body: JSON.stringify(operationEnvelope(input, 'inventory-recipe')),
+  })
+}
+
+export function recordRemakeConsumption(input: RemakeConsumptionInput) {
+  return inventoryRequest<InventoryMovement[]>('/api/inventory/remakes', {
+    method: 'POST',
+    body: JSON.stringify(operationEnvelope(input, 'inventory-remake')),
+  })
+}
+
 export function submitStockCount(input: StockCountInput) {
   return inventoryRequest<StockCount>('/api/inventory/stock-counts', {
     method: 'POST',
@@ -163,23 +211,33 @@ export function useBottle(batchId: string, input: BottleUseInput) {
 }
 
 export function transferBottle(batchId: string, input: BottleTransferInput) {
-  return inventoryRequest<BottleStorageBatch>(`/api/inventory/bottles/${encodeURIComponent(batchId)}/transfer`, {
+  return inventoryRequest<InventoryApprovalRequest>(`/api/inventory/bottles/${encodeURIComponent(batchId)}/transfer`, {
     method: 'POST',
-    body: JSON.stringify(operationEnvelope({
-      ...input,
-      approvalId: `inventory-approval-${crypto.randomUUID()}`,
-    }, 'inventory-bottle-transfer')),
+    body: JSON.stringify(operationEnvelope(input, 'inventory-bottle-transfer')),
   })
 }
 
 export function voidBottle(batchId: string, input: BottleVoidInput) {
-  return inventoryRequest<BottleStorageEvent>(`/api/inventory/bottles/${encodeURIComponent(batchId)}/void`, {
+  return inventoryRequest<InventoryApprovalRequest>(`/api/inventory/bottles/${encodeURIComponent(batchId)}/void`, {
     method: 'POST',
-    body: JSON.stringify(operationEnvelope({
-      ...input,
-      approvalId: `inventory-approval-${crypto.randomUUID()}`,
-    }, 'inventory-bottle-void')),
+    body: JSON.stringify(operationEnvelope(input, 'inventory-bottle-void')),
   })
+}
+
+export function decideApproval(
+  approvalId: string,
+  action: InventoryApprovalAction,
+  decision: 'approve' | 'reject',
+  reason: string,
+) {
+  const prefix = action === 'store_import' ? '/api/store-import/approvals' : '/api/inventory/approvals'
+  return inventoryRequest<InventoryApprovalRequest | { approval: InventoryApprovalRequest }>(
+    `${prefix}/${encodeURIComponent(approvalId)}/decision`,
+    {
+      method: 'POST',
+      body: JSON.stringify(operationEnvelope({ decision, reason }, `inventory-approval-${decision}`)),
+    },
+  )
 }
 
 export function updateInventoryPolicy(policy: InventoryOperationPolicy, reason: string) {

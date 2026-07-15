@@ -1,21 +1,27 @@
 import { createHash, randomUUID } from 'node:crypto'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import {
   assistedPaymentLinkSchema,
   authorizationDecisionSchema,
   authorizationRequestSchema,
   cartOrderSchema,
   kdsActionSchema,
+  kdsExceptionDecisionSchema,
+  kdsExceptionReportSchema,
   quickOrderSchema,
 } from '../src/shared/commerce-api.js'
+import type { RuntimeState } from '../src/shared/contracts.js'
+import type { KdsTask } from '../src/shared/order-contracts.js'
 import { productAvailability } from '../src/shared/product-availability.js'
 import {
   addOrderItem,
   completeKdsTask,
   createOrderDraft,
+  decideKdsException,
   decideOrderAuthorization,
   deliverKdsTask,
   pickUpKdsTask,
+  reportKdsException,
   requestOrderAuthorization,
   startKdsTask,
   submitOrder,
@@ -55,6 +61,46 @@ const DEFAULT_COMMERCE_API_OPTIONS: CommerceApiOptions = {
 
 function deterministicId(prefix: string, key: string) {
   return `${prefix}_${createHash('sha256').update(key).digest('hex').slice(0, 32)}`
+}
+
+function requireKdsTaskActor(
+  request: FastifyRequest,
+  state: RuntimeState,
+  task: KdsTask,
+  phase: 'production' | 'delivery',
+) {
+  const operation = phase === 'production' ? 'commerce.kds.prepare' : 'commerce.kds.deliver'
+  const actionName = phase === 'production' ? '执行该工作站出品操作' : '执行该工作站取送操作'
+  requireConfiguredOperation(request, state, operation)
+  const actor = requireAnyRole(
+    request,
+    state,
+    allowedFulfillmentRoleIds(state.orderDomain, task, phase === 'production' ? 'start' : 'deliver'),
+    operation,
+    actionName,
+  )
+  if (['supervisor', 'manager'].includes(actor.roleId)) return actor
+
+  const employee = state.employees.find((item) => item.id === actor.actorId)
+  if (!employee || employee.status !== 'active' || !employee.online || employee.paused) {
+    throw new AuthorizationError('当前员工不在可执行任务状态', operation)
+  }
+  const activeShift = state.shiftAssignments.find((shift) => (
+    shift.employeeId === actor.actorId &&
+    shift.businessDate === state.store.businessDate &&
+    shift.status === 'active'
+  ))
+  if (!activeShift) throw new AuthorizationError('当前员工没有有效当班记录', operation)
+  if (activeShift.stationIds?.length && !activeShift.stationIds.includes(task.stationId)) {
+    throw new AuthorizationError('当前工作站不在本班次责任范围内', operation)
+  }
+  if (phase === 'production') {
+    const requiredSkillIds = task.workstation?.requiredSkillIds ?? []
+    if (requiredSkillIds.some((skillId) => !employee.skillIds?.includes(skillId))) {
+      throw new AuthorizationError('当前员工缺少该工作站要求的出品技能', operation)
+    }
+  }
+  return actor
 }
 
 export function registerCommerceRoutes(
@@ -297,37 +343,12 @@ export function registerCommerceRoutes(
       syncOrderFulfillmentWorkstations(state)
       const currentTask = state.orderDomain.kdsTasks.find((item) => item.id === request.params.taskId)
       if (!currentTask) throw new Error('KDS任务不存在')
-      const operation = ['start', 'complete'].includes(input.action) ? 'commerce.kds.prepare' : 'commerce.kds.deliver'
-      const actionName = ['start', 'complete'].includes(input.action) ? '执行该工作站出品操作' : '执行该工作站取送操作'
-      requireConfiguredOperation(request, state, operation)
-      const actor = requireAnyRole(
+      const actor = requireKdsTaskActor(
         request,
         state,
-        allowedFulfillmentRoleIds(state.orderDomain, currentTask, input.action),
-        operation,
-        actionName,
+        currentTask,
+        ['start', 'complete'].includes(input.action) ? 'production' : 'delivery',
       )
-      if (!['supervisor', 'manager'].includes(actor.roleId)) {
-        const employee = state.employees.find((item) => item.id === actor.actorId)
-        if (!employee || employee.status !== 'active' || !employee.online || employee.paused) {
-          throw new AuthorizationError('当前员工不在可执行任务状态', operation)
-        }
-        const activeShift = state.shiftAssignments.find((shift) => (
-          shift.employeeId === actor.actorId &&
-          shift.businessDate === state.store.businessDate &&
-          shift.status === 'active'
-        ))
-        if (!activeShift) throw new AuthorizationError('当前员工没有有效当班记录', operation)
-        if (activeShift.stationIds?.length && !activeShift.stationIds.includes(currentTask.stationId)) {
-          throw new AuthorizationError('当前工作站不在本班次责任范围内', operation)
-        }
-        if (['start', 'complete'].includes(input.action)) {
-          const requiredSkillIds = currentTask.workstation?.requiredSkillIds ?? []
-          if (requiredSkillIds.some((skillId) => !employee.skillIds?.includes(skillId))) {
-            throw new AuthorizationError('当前员工缺少该工作站要求的出品技能', operation)
-          }
-        }
-      }
       const idempotencyCount = state.orderDomain.idempotencyRecords.length
       const serviceTaskCount = state.tasks.length
       const taskEventCount = state.taskEvents.length
@@ -372,6 +393,112 @@ export function registerCommerceRoutes(
       }
       if (changed) state.revision += 1
       return task
+    })
+  })
+
+  app.post<{ Params: { taskId: string } }>('/api/commerce/kds/:taskId/exceptions', async (request, reply) => {
+    const input = kdsExceptionReportSchema.parse(request.body)
+    const event = await repository.mutate((state) => {
+      syncOrderFulfillmentWorkstations(state)
+      const currentTask = state.orderDomain.kdsTasks.find((item) => item.id === request.params.taskId)
+      if (!currentTask) throw new Error('KDS任务不存在')
+      const phase = input.exceptionKind === 'wrong_item' && ['completed', 'picked_up', 'delivered'].includes(currentTask.status)
+        ? 'delivery'
+        : 'production'
+      const actor = requireKdsTaskActor(request, state, currentTask, phase)
+      const idempotencyCount = state.orderDomain.idempotencyRecords.length
+      const occurredAt = new Date().toISOString()
+      const result = reportKdsException(state.orderDomain, {
+        exceptionId: deterministicId('kds_exception', input.idempotencyKey),
+        eventId: deterministicId('kds_exception_report', input.idempotencyKey),
+        taskId: currentTask.id,
+        exceptionKind: input.exceptionKind,
+        reasonCode: input.reasonCode,
+        reasonNote: input.reasonNote,
+        actorId: actor.actorId,
+        actorRoleId: actor.roleId,
+        occurredAt,
+        idempotencyKey: input.idempotencyKey,
+      })
+      if (state.orderDomain.idempotencyRecords.length !== idempotencyCount) {
+        state.auditEntries.push({
+          id: deterministicId('audit_kds_exception', input.idempotencyKey),
+          actorId: actor.actorId,
+          action: 'kds.exception.reported.v1',
+          objectType: 'kdsTask',
+          objectId: currentTask.id,
+          occurredAt,
+          details: {
+            exceptionId: result.exceptionId,
+            exceptionKind: result.exceptionKind,
+            reasonCode: result.reasonCode,
+            reasonNote: result.reasonNote,
+            orderId: result.orderId,
+            orderItemId: result.originalOrderItemId,
+            kdsTaskId: result.originalKdsTaskId,
+          },
+        })
+        state.revision += 1
+      }
+      return result
+    })
+    return reply.status(201).send(event)
+  })
+
+  app.post<{ Params: { exceptionId: string } }>('/api/commerce/kds/exceptions/:exceptionId/decision', async (request) => {
+    const input = kdsExceptionDecisionSchema.parse(request.body)
+    return repository.mutate((state) => {
+      syncOrderFulfillmentWorkstations(state)
+      const reportedTask = state.orderDomain.kdsTasks.find((task) => task.exceptionEvents?.some((event) => (
+        event.exceptionId === request.params.exceptionId && event.type === 'reported'
+      )))
+      if (!reportedTask) throw new Error('KDS异常不存在')
+      requireConfiguredOperation(request, state, 'commerce.kds.prepare')
+      const actor = requireAnyRole(
+        request,
+        state,
+        ['supervisor', 'manager'],
+        'commerce.kds.prepare',
+        '处置KDS异常',
+      )
+      const idempotencyCount = state.orderDomain.idempotencyRecords.length
+      const occurredAt = new Date().toISOString()
+      const result = decideKdsException(state.orderDomain, {
+        eventId: deterministicId('kds_exception_decision', input.idempotencyKey),
+        exceptionId: request.params.exceptionId,
+        disposition: input.disposition,
+        reasonCode: input.reasonCode,
+        reasonNote: input.reasonNote,
+        remakeTaskId: input.disposition === 'remake'
+          ? deterministicId('kds_remake', input.idempotencyKey)
+          : null,
+        actorId: actor.actorId,
+        actorRoleId: actor.roleId,
+        occurredAt,
+        idempotencyKey: input.idempotencyKey,
+      })
+      if (state.orderDomain.idempotencyRecords.length !== idempotencyCount) {
+        state.auditEntries.push({
+          id: deterministicId('audit_kds_exception_decision', input.idempotencyKey),
+          actorId: actor.actorId,
+          action: `kds.exception.${input.disposition}.v1`,
+          objectType: 'kdsTask',
+          objectId: reportedTask.id,
+          occurredAt,
+          details: {
+            exceptionId: result.exceptionId,
+            disposition: result.managerDisposition,
+            reasonCode: result.reasonCode,
+            reasonNote: result.reasonNote,
+            orderId: result.orderId,
+            orderItemId: result.originalOrderItemId,
+            kdsTaskId: result.originalKdsTaskId,
+            remakeKdsTaskId: result.remakeKdsTaskId,
+          },
+        })
+        state.revision += 1
+      }
+      return result
     })
   })
 

@@ -680,6 +680,24 @@ describe('真实营业夜间全链路仿真', () => {
       }
     })
 
+    const handoverResponse = await app.inject({
+      method: 'POST',
+      url: `/api/business-days/${businessDate}/cashier-handovers`,
+      headers: employeeHeaders('emp-cashier', 'cashier'),
+      payload: {
+        confirmedActualAmounts: { cash: 0, physical_pos: 0, wechat: 0, alipay: 0 },
+        issues: [], deviceId: 'cashier-test', idempotencyKey: 'night-sim-handover-submit-0001',
+      },
+    })
+    expect(handoverResponse.statusCode, handoverResponse.body).toBe(201)
+    const reviewResponse = await app.inject({
+      method: 'POST',
+      url: `/api/business-days/${businessDate}/cashier-handovers/${handoverResponse.json().id}/review`,
+      headers: employeeHeaders('emp-chen', 'manager'),
+      payload: { decision: 'approve', note: '经理独立核对通过', idempotencyKey: 'night-sim-handover-review-0001' },
+    })
+    expect(reviewResponse.statusCode, reviewResponse.body).toBe(200)
+
     const request = {
       method: 'POST' as const,
       url: `/api/business-days/${businessDate}/close`,

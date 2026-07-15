@@ -10,6 +10,8 @@ import type {
   PaymentProviderAdapter,
   PaymentProviderContext,
   ProviderBillEntry,
+  ProviderCreatePaymentRequest,
+  ProviderCreatePaymentResult,
   ProviderPaymentObservation,
   ProviderPaymentQueryRequest,
   ProviderRefundObservation,
@@ -484,6 +486,91 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
     this.agencyIdSecretName = options.agencyIdSecretName ?? DEFAULT_AGENCY_ID_SECRET
     this.publicKeySecretName = options.publicKeySecretName ?? DEFAULT_PUBLIC_KEY_SECRET
     this.now = options.now ?? (() => new Date())
+  }
+
+  async createPayment(
+    request: ProviderCreatePaymentRequest,
+    context: PaymentProviderContext,
+  ): Promise<ProviderCreatePaymentResult> {
+    if (!ALPHANUMERIC_ORDER_ID.test(request.paymentIntentId)) {
+      throw new Error('星驿支付单号必须为1至40位大小写字母或数字')
+    }
+    if (request.currency !== 'CNY') throw new Error('星驿JSAPI支付仅支持CNY')
+    if (!Number.isSafeInteger(request.amount) || request.amount <= 0) throw new Error('星驿支付金额必须为正整数分')
+    if (!request.merchantId.trim()) throw new Error('星驿支付商户号不能为空')
+    if (!request.payerId.trim()) throw new Error('星驿支付付款人标识不能为空')
+    if (!request.clientIp.trim()) throw new Error('星驿支付消费者IP不能为空')
+    if (!request.operatorId.trim()) throw new Error('星驿支付操作员不能为空')
+    const callbackUrl = new URL(request.callbackUrl)
+    if (callbackUrl.protocol !== 'https:') throw new Error('星驿异步通知地址必须使用HTTPS')
+    if (request.payWay === 'wechat' && !request.wxAppid?.trim()) throw new Error('星驿微信支付必须提供wxAppid')
+    const expiresInMinutes = Math.ceil((Date.parse(request.expiresAt) - this.now().getTime()) / 60_000)
+    if (!Number.isInteger(expiresInMinutes) || expiresInMinutes < 1 || expiresInMinutes > 15) {
+      throw new Error('星驿支付有效期必须为1至15分钟')
+    }
+
+    const { agencyId, publicKey } = await getCredentials(
+      context,
+      this.agencyIdSecretName,
+      this.publicKeySecretName,
+    )
+    const response = parseSignedResponse(await this.options.httpClient.post({
+      body: signedRequestBody({
+        agetId: agencyId,
+        asyncNotify: callbackUrl.toString(),
+        custId: request.merchantId,
+        ip: request.clientIp,
+        openid: request.payerId,
+        operator: request.operatorId,
+        orderNo: request.paymentIntentId,
+        outTime: String(expiresInMinutes),
+        payWay: request.payWay === 'wechat' ? '1' : '2',
+        remark: request.remark,
+        sceneType: '02',
+        timeStamp: formatPostarTimestamp(this.now()),
+        txamt: String(request.amount),
+        version: VERSION,
+        wxAppid: request.payWay === 'wechat' ? request.wxAppid : undefined,
+      }, publicKey),
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+      url: `${this.baseUrl}${POSTAR_ENDPOINTS.createJsapiPayment}`,
+    }), publicKey)
+    if (response.code !== '000000') throw new Error(`星驿下单失败: ${response.code} ${response.msg}`)
+    const data = requireData(response)
+    assertAgency(data, agencyId)
+    const returnedIntentId = requiredString(data, 'threeOrderNo')
+    if (returnedIntentId !== request.paymentIntentId) throw new Error('星驿下单响应三方单号不匹配')
+    const actualPayAmount = optionalString(data, 'actualPayAmt')
+    if (actualPayAmount !== undefined && parsePositiveMoney(actualPayAmount, '星驿下单响应金额') !== request.amount) {
+      throw new Error('星驿下单响应金额不匹配')
+    }
+
+    let paymentPayload: Readonly<Record<string, unknown>>
+    if (request.payWay === 'wechat') {
+      if (requiredString(data, 'getPrepayId') !== '1') throw new Error('星驿微信预下单未返回可支付状态')
+      paymentPayload = {
+        appId: requiredString(data, 'jsapiAppid'),
+        timeStamp: requiredString(data, 'jsapiTimestamp'),
+        nonceStr: requiredString(data, 'jsapiNoncestr'),
+        package: requiredString(data, 'jsapiPackage'),
+        signType: requiredString(data, 'jsapiSignType'),
+        paySign: requiredString(data, 'jsapiPaySign'),
+      }
+    } else {
+      if (requiredString(data, 'getprepayid') !== '1') throw new Error('星驿支付宝预下单未返回可支付状态')
+      paymentPayload = { tradeNO: requiredString(data, 'prepayid') }
+    }
+
+    return {
+      paymentIntentId: request.paymentIntentId,
+      providerTransactionId: requiredString(data, 'orderNo'),
+      status: 'processing',
+      amount: request.amount,
+      currency: request.currency,
+      merchantId: request.merchantId,
+      occurredAt: parsePostarDateTime(requiredString(data, 'orderTime'), '星驿订单创建时间'),
+      paymentPayload,
+    }
   }
 
   async verifyPaymentCallback(

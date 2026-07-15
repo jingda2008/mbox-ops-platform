@@ -281,6 +281,19 @@ describe('PostgresRepository', () => {
     expect(contexts).toHaveLength(transactions.length)
   })
 
+  it('coalesces concurrent full-state cache refreshes', async () => {
+    const { pool, repository } = createRepository()
+    await repository.init()
+    const stateReadsBefore = pool.queries.filter(({ sql }) => sql.startsWith('SELECT revision, state, state_sha256')).length
+
+    const reads = await Promise.all(Array.from({ length: 20 }, () => repository.read()))
+    reads[0]!.store.name = 'detached concurrent result'
+
+    expect(reads.every((state) => state.revision === 1)).toBe(true)
+    expect(reads[1]!.store.name).not.toBe(reads[0]!.store.name)
+    expect(pool.queries.filter(({ sql }) => sql.startsWith('SELECT revision, state, state_sha256'))).toHaveLength(stateReadsBefore + 1)
+  })
+
   it('commits one-step revisions and rejects stale compare-and-swap writes without partial state', async () => {
     const { pool, repository } = createRepository()
     await repository.init()

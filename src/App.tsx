@@ -94,10 +94,18 @@ export default function App() {
   const [switchingEmployee, setSwitchingEmployee] = useState(false)
   const [offlineStatus, setOfflineStatus] = useState<OfflineStatus>(() => getOfflineStatus())
   const previousPendingCount = useRef(offlineStatus.pendingCount)
+  const latestRevision = useRef<number | null>(null)
 
   const refresh = useCallback(async () => {
     try {
-      const liveData = await getBootstrap()
+      const liveData = latestRevision.current === null
+        ? await getBootstrap()
+        : await getBootstrap(latestRevision.current)
+      if (!liveData) {
+        setError('')
+        return
+      }
+      latestRevision.current = liveData.revision
       const safeSnapshot = sanitizeBootstrapSnapshot(liveData)
       setData(liveData)
       setSnapshot(safeSnapshot)
@@ -111,6 +119,7 @@ export default function App() {
     } catch (requestError) {
       if (requestError instanceof ApiError && requestError.status === 401) {
         clearStoredStaffSession()
+        latestRevision.current = null
         setRequiresLogin(true)
       }
       setError(requestError instanceof Error ? requestError.message : '无法连接运营服务')
@@ -148,6 +157,7 @@ export default function App() {
       } catch (heartbeatError) {
         if (heartbeatError instanceof ApiError && heartbeatError.status === 401) {
           clearStoredStaffSession()
+          latestRevision.current = null
           setRequiresLogin(true)
           setData(null)
           setSnapshot(null)
@@ -181,6 +191,7 @@ export default function App() {
       }
       await clearOfflineDataForEmployeeChange()
       clearStoredStaffSession()
+      latestRevision.current = null
       setData(null)
       setSnapshot(null)
       setError('')
@@ -198,6 +209,9 @@ export default function App() {
 
   if (requiresLogin) {
     return <PilotLogin onAuthenticated={() => {
+      latestRevision.current = null
+      setData(null)
+      setSnapshot(null)
       setRequiresLogin(false)
       setError('')
     }} />

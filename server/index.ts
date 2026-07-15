@@ -284,9 +284,12 @@ app.setErrorHandler((error, _request, reply) => {
 
 app.get('/api/health', async () => ({ status: 'ok', time: new Date().toISOString() }))
 
-app.get('/api/bootstrap', async (request) => {
-  const state = await repository.read()
+app.get('/api/bootstrap', async (request, reply) => {
+  const state = request.mboxAuthState ?? await repository.read()
   const actor = requireRequestActor(request)
+  const etag = `"${state.revision}"`
+  reply.header('etag', etag).header('cache-control', 'private, no-cache')
+  if (request.headers['if-none-match'] === etag) return reply.status(304).send()
   const permissionIds = effectivePermissionIdsForEmployee(state, actor.actorId)
   const projected = projectRuntimeStateForActor(state, actor)
   return { ...projected, serverNow: new Date().toISOString(), metrics: calculateMetrics(projected), viewer: { actorId: actor.actorId, permissionIds } }

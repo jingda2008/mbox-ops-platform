@@ -148,16 +148,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const highRiskWrite = isHighRiskOfflineWrite(path, method)
   if (highRiskWrite && !browserIsOnline()) throw new OfflineWriteBlockedError()
 
-  const headers = new Headers(init?.headers)
-  if (init?.body) headers.set('Content-Type', 'application/json')
-  const sessionToken = window.localStorage.getItem('mbox.auth.token')
-  if (sessionToken) {
-    headers.set('Authorization', `Bearer ${sessionToken}`)
-  } else {
-    const actorId = getCurrentActorId()
-    if (actorId) headers.set('x-mbox-actor-id', actorId)
-    headers.set('x-mbox-store-id', 'mbox-lujiazui')
-  }
+  const headers = authenticatedHeaders(init)
   let response: Response
   try {
     response = await fetch(path, { ...init, headers })
@@ -171,6 +162,43 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let body: T & { message?: string }
   try {
     body = (await response.json()) as T & { message?: string }
+  } catch {
+    throw new ApiError('系统返回了无法识别的响应', response.status)
+  }
+  if (!response.ok) throw new ApiError(body.message ?? '系统请求失败', response.status)
+  return body
+}
+
+function authenticatedHeaders(init?: RequestInit) {
+  const headers = new Headers(init?.headers)
+  if (init?.body) headers.set('Content-Type', 'application/json')
+  const sessionToken = window.localStorage.getItem('mbox.auth.token')
+  if (sessionToken) {
+    headers.set('Authorization', `Bearer ${sessionToken}`)
+  } else {
+    const actorId = getCurrentActorId()
+    if (actorId) headers.set('x-mbox-actor-id', actorId)
+    headers.set('x-mbox-store-id', 'mbox-lujiazui')
+  }
+  return headers
+}
+
+async function requestBootstrap(revision?: number): Promise<BootstrapResponse | null> {
+  const headers = authenticatedHeaders()
+  if (revision !== undefined) headers.set('If-None-Match', `"${revision}"`)
+  let response: Response
+  try {
+    response = await fetch('/api/bootstrap', { headers })
+  } catch (error) {
+    reportNetworkUnavailable()
+    throw error
+  }
+  reportNetworkAvailable()
+  if (response.status === 304) return null
+
+  let body: BootstrapResponse & { message?: string }
+  try {
+    body = (await response.json()) as BootstrapResponse & { message?: string }
   } catch {
     throw new ApiError('系统返回了无法识别的响应', response.status)
   }
@@ -232,8 +260,10 @@ export function checkoutGuestOrder(input: GuestCheckoutInput) {
   })
 }
 
-export function getBootstrap() {
-  return request<BootstrapResponse>('/api/bootstrap')
+export function getBootstrap(): Promise<BootstrapResponse>
+export function getBootstrap(revision: number): Promise<BootstrapResponse | null>
+export function getBootstrap(revision?: number) {
+  return requestBootstrap(revision)
 }
 
 export function createTask(input: CreateTaskInput) {

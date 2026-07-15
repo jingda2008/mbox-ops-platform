@@ -276,6 +276,7 @@ export class PostgresRepository {
   private closePromise: Promise<void> | null = null
   private readonly inFlight = new Set<Promise<unknown>>()
   private cachedState: RuntimeState | null = null
+  private cacheRefreshPromise: Promise<RuntimeState> | null = null
 
   constructor(options: PostgresRepositoryOptions) {
     assertUuid('tenantId', options.tenantId)
@@ -513,9 +514,21 @@ export class PostgresRepository {
     const revision = parseRevision(revisionValue)
     if (this.cachedState?.revision === revision) return structuredClone(this.cachedState)
 
-    const loaded = await this.loadState(client)
-    this.cachedState = structuredClone(loaded)
-    return loaded
+    if (this.cacheRefreshPromise) {
+      const shared = await this.cacheRefreshPromise
+      if (shared.revision >= revision) return structuredClone(shared)
+    }
+
+    const refresh = this.loadState(client).then((loaded) => {
+      this.cachedState = structuredClone(loaded)
+      return loaded
+    })
+    this.cacheRefreshPromise = refresh
+    try {
+      return structuredClone(await refresh)
+    } finally {
+      if (this.cacheRefreshPromise === refresh) this.cacheRefreshPromise = null
+    }
   }
 
   private async claimIdempotency<T>(

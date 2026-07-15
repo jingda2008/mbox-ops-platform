@@ -6,6 +6,7 @@ import type { RuntimeState } from '../src/shared/contracts.js'
 declare module 'fastify' {
   interface FastifyRequest {
     mboxActor: RequestActorContext | null
+    mboxAuthState: RuntimeState | null
   }
 }
 
@@ -94,6 +95,7 @@ export async function registerAuthContext(app: FastifyInstance, options: AuthCon
     throw new Error('预发布和生产环境必须配置至少32字符的MBOX_SESSION_SECRET')
   }
   app.decorateRequest('mboxActor', null)
+  app.decorateRequest('mboxAuthState', null)
   app.addHook('preHandler', async (request) => {
     const path = request.url.split('?')[0] ?? request.url
     if (!path.startsWith('/api/') || PUBLIC_PATHS.has(path) || isAnonymousGuestRequest(request)) return
@@ -132,6 +134,7 @@ export async function registerAuthContext(app: FastifyInstance, options: AuthCon
     const employee = state.employees.find((item) => item.id === actorId && item.status === 'active')
     if (!employee) throw new AuthenticationError('员工不存在或已停用', 403, 'ACTOR_NOT_ACTIVE')
     assertActorBinding(request, actorId, options.runtimeMode)
+    request.mboxAuthState = state
     request.mboxActor = {
       actorId,
       storeId,

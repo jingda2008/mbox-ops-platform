@@ -68,6 +68,7 @@ function publicCheckoutResult(input: {
 interface GuestApiOptions {
   secret: string
   runtimeMode: RuntimeMode
+  allowPaymentSimulation?: boolean
   guestSessionTtlMs?: number
   now?: () => number
   providerResolver?: PaymentProviderResolver
@@ -478,11 +479,13 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
         throw new TableAccessError('订单当前状态不能支付', 'ORDER_NOT_PAYABLE', 409)
       }
       const now = new Date().toISOString()
-      const localPayment = options.runtimeMode === 'local' || options.runtimeMode === 'test'
-      const providerRuntime = localPayment ? null : resolveProvider(state.paymentDomain, 'postar')
-      const channel = localPayment ? 'wechat_mock' : 'postar'
+      const simulatedPayment = options.runtimeMode === 'local'
+        || options.runtimeMode === 'test'
+        || (options.runtimeMode === 'staging' && options.allowPaymentSimulation === true)
+      const providerRuntime = simulatedPayment ? null : resolveProvider(state.paymentDomain, 'postar')
+      const channel = simulatedPayment ? 'wechat_mock' : 'postar'
       const paymentIntent = createPaymentIntent(state.paymentDomain, {
-        paymentIntentId: localPayment
+        paymentIntentId: simulatedPayment
           ? deterministicId('guest_payment', input.idempotencyKey)
           : `Payment${createHash('sha256').update(input.idempotencyKey).digest('hex').slice(0, 32)}`,
         tableSessionId: tableSession.id,
@@ -503,7 +506,7 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
         idempotencyKey: `${input.idempotencyKey}:intent`,
       })
       let submittedOrder = order
-      if (localPayment) {
+      if (simulatedPayment) {
         handlePaymentNotification(state.paymentDomain, {
           channel,
           notificationId: deterministicId('notification', input.idempotencyKey),
@@ -535,7 +538,7 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
       state.auditEntries.push({
         id: `audit_${randomUUID()}`,
         actorId: `guest-${table.code}`,
-        action: localPayment ? 'guest.payment_succeeded.v1' : 'guest.payment_initiated.v1',
+        action: simulatedPayment ? 'guest.payment_succeeded.v1' : 'guest.payment_initiated.v1',
         objectType: 'paymentIntent',
         objectId: paymentIntent.id,
         occurredAt: now,
@@ -545,7 +548,7 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
       return {
         paymentIntent,
         order: submittedOrder,
-        providerRequired: !localPayment,
+        providerRequired: !simulatedPayment,
         wechatJsapiParameters: null,
         paymentUrl: null,
         providerRuntime,

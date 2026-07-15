@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import { describe, expect, it } from 'vitest'
 import type { RuntimeState, Table } from '../src/shared/contracts.js'
+import type { RuntimeMode } from '../src/shared/auth-contracts.js'
 import type { GuestSessionResponse } from '../src/shared/guest-contracts.js'
 import { registerGuestRoutes } from './guest-api.js'
 import { JsonRepository } from './repository.js'
@@ -10,12 +11,18 @@ import { transferOpenTableSession } from './table-session-api.js'
 const secret = 'q'.repeat(32)
 const sessionTtlMs = 5 * 60_000
 
-async function fixture() {
+async function fixture(runtimeMode: RuntimeMode = 'test', allowPaymentSimulation = false) {
   let now = Date.now()
   const repository = new JsonRepository(`/tmp/mbox-guest-${crypto.randomUUID()}.json`)
   await repository.init()
   const app = Fastify()
-  registerGuestRoutes(app, repository, { secret, runtimeMode: 'test', guestSessionTtlMs: sessionTtlMs, now: () => now })
+  registerGuestRoutes(app, repository, {
+    secret,
+    runtimeMode,
+    allowPaymentSimulation,
+    guestSessionTtlMs: sessionTtlMs,
+    now: () => now,
+  })
   return { app, repository, now: () => now, setNow: (value: number) => { now = value } }
 }
 
@@ -405,6 +412,36 @@ describe('guest table API', () => {
     const state = await repository.read()
     expect(state.orderDomain.kdsTasks).toHaveLength(2)
     expect(state.paymentDomain.paymentIntents[0]).toMatchObject({ status: 'succeeded', orderIds: [orderResponse.json().id] })
+    await closeFixture(app, repository)
+  })
+
+  it('allows automatic non-settling checkout in an explicitly enabled staging pilot', async () => {
+    const { app, repository, now } = await fixture('staging', true)
+    const session = (await exchange(app, staticQr(now()))).body
+    const orderResponse = await app.inject({
+      method: 'POST',
+      url: '/api/guest/orders',
+      payload: {
+        tableToken: session.tableToken,
+        items: [{ productId: 'product-beer', quantity: 1 }],
+        idempotencyKey: 'staging-pilot-guest-order-0001',
+      },
+    })
+    const checkout = await app.inject({
+      method: 'POST',
+      url: '/api/guest/checkout',
+      payload: {
+        tableToken: session.tableToken,
+        orderId: orderResponse.json().id,
+        idempotencyKey: 'staging-pilot-guest-checkout-0001',
+      },
+    })
+    expect(checkout.statusCode).toBe(201)
+    expect(checkout.json()).toMatchObject({
+      providerRequired: false,
+      paymentIntent: { status: 'succeeded', channel: 'wechat_mock' },
+      order: { status: 'submitted' },
+    })
     await closeFixture(app, repository)
   })
 

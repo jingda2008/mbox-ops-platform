@@ -14,6 +14,7 @@ import {
   type PaymentAllocationInput,
 } from '../src/shared/payment-api.js'
 import type { PaymentIntentStatus, PaymentLineAllocationInput } from '../src/shared/payment-contracts.js'
+import type { RuntimeMode } from '../src/shared/auth-contracts.js'
 import {
   approveRefund,
   confirmCashPayment,
@@ -74,6 +75,7 @@ function deterministicProviderId(prefix: string, key: string) {
 
 export interface PaymentRouteOptions {
   providerResolver?: PaymentProviderResolver
+  allowPilotSimulation?: boolean
 }
 
 function providerUnavailable(reply: FastifyReply, error: unknown) {
@@ -92,9 +94,16 @@ function requireTableSessionDataScope(
   return requireTableDataScope(request, state, session.tableId, operation)
 }
 
-function requireDevelopmentActor(request: Parameters<typeof requireRequestActor>[0]) {
+function simulationAllowed(runtimeMode: RuntimeMode, allowPilotSimulation: boolean) {
+  return runtimeMode === 'local' || runtimeMode === 'test' || (runtimeMode === 'staging' && allowPilotSimulation)
+}
+
+function requireSimulationActor(
+  request: Parameters<typeof requireRequestActor>[0],
+  allowPilotSimulation: boolean,
+) {
   const actor = requireRequestActor(request)
-  if (actor.runtimeMode !== 'local' && actor.runtimeMode !== 'test') {
+  if (!simulationAllowed(actor.runtimeMode, allowPilotSimulation)) {
     throw new AuthenticationError('当前环境未启用支付模拟接口', 404, 'DEVELOPMENT_ENDPOINT_DISABLED')
   }
   return actor
@@ -262,11 +271,12 @@ export function registerPaymentRoutes(
   options: PaymentRouteOptions = {},
 ) {
   const resolveProvider = options.providerResolver ?? createEnvironmentPaymentProviderResolver()
+  const allowPilotSimulation = options.allowPilotSimulation === true
 
   app.post('/api/payments/table-intents', async (request, reply) => {
     const input = createTablePaymentIntentSchema.parse(request.body)
     const requestActor = requireRequestActor(request)
-    if (input.channel === 'wechat_mock' && requestActor.runtimeMode !== 'local' && requestActor.runtimeMode !== 'test') {
+    if (input.channel === 'wechat_mock' && !simulationAllowed(requestActor.runtimeMode, allowPilotSimulation)) {
       throw new AuthenticationError('当前环境未启用模拟支付渠道', 404, 'DEVELOPMENT_CHANNEL_DISABLED')
     }
     let intent
@@ -467,7 +477,7 @@ export function registerPaymentRoutes(
   app.post<{ Params: { paymentIntentId: string } }>(
     '/api/payments/:paymentIntentId/dev-simulate-success',
     async (request) => {
-      const actor = requireDevelopmentActor(request)
+      const actor = requireSimulationActor(request, allowPilotSimulation)
       const input = simulatePaymentSuccessSchema.parse(request.body)
       return repository.mutate((state) => {
         const intent = state.paymentDomain.paymentIntents.find((item) => item.id === request.params.paymentIntentId)
@@ -762,7 +772,7 @@ export function registerPaymentRoutes(
   app.post<{ Params: { refundId: string } }>(
     '/api/payments/refunds/:refundId/dev-approve-complete',
     async (request) => {
-      const actor = requireDevelopmentActor(request)
+      const actor = requireSimulationActor(request, allowPilotSimulation)
       const input = completeRefundSchema.parse(request.body)
       return repository.mutate((state) => {
         requireConfiguredOperation(request, state, 'payment.refund.approve')

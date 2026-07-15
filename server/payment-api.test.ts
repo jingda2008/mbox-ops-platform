@@ -7,7 +7,12 @@ import { registerPaymentRoutes } from './payment-api.js'
 import type { RuntimeRepository } from './repository.js'
 import { createSeedState } from './seed.js'
 
-function fixture(runtimeMode: RuntimeMode, actorId = 'emp-lin', roleId = 'server') {
+function fixture(
+  runtimeMode: RuntimeMode,
+  actorId = 'emp-lin',
+  roleId = 'server',
+  allowPilotSimulation = false,
+) {
   let state = createSeedState()
   state.paymentDomain = createPaymentDomainState()
   const tableSession = state.songState.tableSessions.find((candidate) => candidate.status === 'open')!
@@ -53,7 +58,7 @@ function fixture(runtimeMode: RuntimeMode, actorId = 'emp-lin', roleId = 'server
       authenticatedBy: runtimeMode === 'local' || runtimeMode === 'test' ? 'local_header' : 'signed_session',
     }
   })
-  registerPaymentRoutes(app, repository)
+  registerPaymentRoutes(app, repository, { allowPilotSimulation })
   return {
     app,
     repository,
@@ -95,6 +100,32 @@ describe('payment API security boundary', () => {
     })
     expect(response.statusCode).toBe(404)
     expect(response.json().code).toBe('DEVELOPMENT_CHANNEL_DISABLED')
+    await app.close()
+    await repository.close()
+  })
+
+  it('allows the explicit non-settling simulator only in staging pilot mode', async () => {
+    const { app, repository } = fixture('staging', 'emp-lin', 'server', true)
+    const state = await repository.read()
+    const order = state.orderDomain.orders.find((candidate) => candidate.status !== 'draft')!
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/payments/table-intents',
+      payload: {
+        tableSessionId: order.tableSessionId,
+        channel: 'wechat_mock',
+        deviceId: 'pilot-cashier-test',
+        idempotencyKey: 'pilot-mock-payment-intent-0001',
+      },
+    })
+    expect(created.statusCode).toBe(201)
+    const simulated = await app.inject({
+      method: 'POST',
+      url: `/api/payments/${created.json().id}/dev-simulate-success`,
+      payload: { idempotencyKey: 'pilot-mock-payment-success-0001' },
+    })
+    expect(simulated.statusCode).toBe(200)
+    expect(simulated.json()).toMatchObject({ channel: 'wechat_mock', status: 'succeeded' })
     await app.close()
     await repository.close()
   })

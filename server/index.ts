@@ -429,7 +429,9 @@ app.post('/api/dev/reset', async (request) => {
 })
 
 registerCommerceRoutes(app, repository, { guestTokenSecret: runtimeConfig.qrSecret })
-registerPaymentRoutes(app, repository)
+registerPaymentRoutes(app, repository, {
+  allowPilotSimulation: runtimeConfig.pilotPaymentSimulationEnabled,
+})
 registerProactiveServiceRoutes(app, repository)
 registerTableSessionRoutes(app, repository)
 registerBusinessDayRoutes(app, repository)
@@ -438,7 +440,11 @@ registerMemberPortalRoutes(app, repository)
 registerNotificationRoutes(app, repository)
 registerBenefitRedemptionRoutes(app, repository)
 registerSongRoutes(app, repository)
-registerGuestRoutes(app, repository, { secret: runtimeConfig.qrSecret, runtimeMode: runtimeConfig.runtimeMode })
+registerGuestRoutes(app, repository, {
+  secret: runtimeConfig.qrSecret,
+  runtimeMode: runtimeConfig.runtimeMode,
+  allowPaymentSimulation: runtimeConfig.pilotPaymentSimulationEnabled,
+})
 registerPublicReservationRoutes(app, repository, { secret: runtimeConfig.qrSecret })
 registerStoreImportRoutes(app, repository)
 registerInventoryRoutes(app, repository)

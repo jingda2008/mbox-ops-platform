@@ -25,7 +25,7 @@ describe('runtime config', () => {
   })
 
   it('loads a complete production configuration', () => {
-    const config = loadRuntimeConfig({
+    const production = {
       MBOX_RUNTIME_MODE: 'production',
       MBOX_REPOSITORY: 'postgres',
       DATABASE_URL: 'postgresql://mbox:secret@db/mbox?sslmode=verify-full',
@@ -36,9 +36,12 @@ describe('runtime config', () => {
       MBOX_METRICS_TOKEN: 'm'.repeat(32),
       MBOX_CORS_ORIGINS: 'https://ops.example.com,https://staff.example.com',
       MBOX_PUBLIC_BASE_URL: 'https://api.example.com',
-    })
+    }
+    const config = loadRuntimeConfig(production)
     expect(config.repositoryMode).toBe('postgres')
     expect(config.corsOrigins).toHaveLength(2)
+    expect(() => loadRuntimeConfig({ ...production, MBOX_PILOT_PAYMENT_SIMULATION_ENABLED: 'true' }))
+      .toThrow('只能在staging')
   })
 
   it('rejects wildcard or insecure production origins', () => {
@@ -78,7 +81,12 @@ describe('runtime config', () => {
     expect(loadRuntimeConfig({ ...staging, MBOX_PILOT_ACCESS_CODE: 'pilot-code-strong' })).toMatchObject({
       pilotAccessCode: 'pilot-code-strong',
       pilotSessionHours: 12,
+      pilotPaymentSimulationEnabled: false,
     })
+    expect(loadRuntimeConfig({ ...staging, MBOX_PILOT_PAYMENT_SIMULATION_ENABLED: 'true' }))
+      .toMatchObject({ pilotPaymentSimulationEnabled: true })
+    expect(() => loadRuntimeConfig({ MBOX_PILOT_PAYMENT_SIMULATION_ENABLED: 'true' }))
+      .toThrow('只能在staging')
     expect(() => loadRuntimeConfig({ ...staging, MBOX_PILOT_ACCESS_CODE: 'short' })).toThrow('至少需要10个字符')
     expect(() => loadRuntimeConfig({ ...staging, MBOX_PILOT_ACCESS_CODE: 'pilot-code-strong', MBOX_PILOT_EMPLOYEE_PINS_JSON: '' })).toThrow('EMPLOYEE_PINS')
     expect(() => loadRuntimeConfig({ ...staging, MBOX_PILOT_ACCESS_CODE: 'pilot-code-strong', MBOX_PILOT_EMPLOYEE_PINS_JSON: JSON.stringify({ a: '100001', b: '100001' }) })).toThrow('不能重复')

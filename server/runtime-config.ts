@@ -27,6 +27,7 @@ export interface RuntimeConfig {
   pilotAccessCode?: string
   pilotEmployeePins?: Record<string, string>
   pilotSessionHours: number
+  pilotPaymentSimulationEnabled: boolean
   wechatEnabled: boolean
   wechatAppId?: string
   wechatAppSecret?: string
@@ -143,6 +144,7 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
     pilotAccessCode: env.MBOX_PILOT_ACCESS_CODE?.trim() || undefined,
     pilotEmployeePins: parsePilotEmployeePins(env.MBOX_PILOT_EMPLOYEE_PINS_JSON),
     pilotSessionHours: parseInteger(env.MBOX_PILOT_SESSION_HOURS, 12, 'MBOX_PILOT_SESSION_HOURS', 1, 24),
+    pilotPaymentSimulationEnabled: parseBoolean(env.MBOX_PILOT_PAYMENT_SIMULATION_ENABLED),
     wechatEnabled: parseBoolean(env.MBOX_WECHAT_ENABLED),
     wechatAppId: env.MBOX_WECHAT_APP_ID?.trim() || undefined,
     wechatAppSecret: env.MBOX_WECHAT_APP_SECRET?.trim() || undefined,
@@ -220,6 +222,9 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
     if (!config.pilotEmployeePins || Object.keys(config.pilotEmployeePins).length === 0) {
       throw new Error('门店验证登录必须配置MBOX_PILOT_EMPLOYEE_PINS_JSON')
     }
+  }
+  if (config.pilotPaymentSimulationEnabled && runtimeMode !== 'staging') {
+    throw new Error('支付模拟开关只能在staging环境启用')
   }
 
   if (runtimeMode === 'staging' || runtimeMode === 'production') {

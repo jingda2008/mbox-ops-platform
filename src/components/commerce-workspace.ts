@@ -26,21 +26,26 @@ const deliveryTerms = ['server', 'waiter', 'runner', 'backup', 'service', '服�
 export function getFulfillmentAccess(data: BootstrapResponse, actorId: string): FulfillmentAccess {
   const employee = data.employees.find((item) => item.id === actorId && item.status === 'active')
   const role = employee ? data.config.roles.find((item) => item.id === employee.roleId) : undefined
-  const roleKey = `${employee?.roleId ?? ''} ${role?.name ?? ''}`.toLowerCase()
-  const configuredPermissions = role?.permissionIds
+  const roleIds = effectiveEmployeeRoleIds(data, employee)
+  const roles = data.config.roles.filter((item) => roleIds.includes(item.id))
+  const roleKey = roles.flatMap((item) => [item.id, item.name]).join(' ').toLowerCase()
+  const configuredPermissions = [...new Set([
+    ...(employee?.permissionIds ?? []),
+    ...roles.flatMap((item) => item.permissionIds ?? []),
+  ])]
   const configuredCanPrepare = configuredPermissions?.includes('kds.prepare') ?? false
   const configuredCanDeliver = configuredPermissions?.includes('kds.deliver') ?? false
   const configuredOversight = Boolean(
     configuredPermissions?.includes('dashboard.view')
-    && ['store', 'all_stores'].includes(role?.dataScope ?? ''),
+    && roles.some((item) => ['store', 'all_stores'].includes(item.dataScope ?? '')),
   )
   const capabilities = readStringArray(employee, ['capabilities', 'commerceCapabilities', 'kdsCapabilities'])
     .concat(readStringArray(role, ['capabilities', 'commerceCapabilities', 'kdsCapabilities']))
     .map((item) => item.toLowerCase())
   const explicitMode = readMode(employee) ?? readMode(role)
   const configuredWorkstations = readRecordArray((data.config as unknown as Record<string, unknown>).workstations)
-  const configuredForProduction = configuredWorkstations.some((item) => item.enabled !== false && readStringArray(item, ['productionRoleIds']).includes(employee?.roleId ?? ''))
-  const configuredForDelivery = configuredWorkstations.some((item) => item.enabled !== false && readStringArray(item, ['deliveryRoleIds']).includes(employee?.roleId ?? ''))
+  const configuredForProduction = configuredWorkstations.some((item) => item.enabled !== false && readStringArray(item, ['productionRoleIds']).some((id) => roleIds.includes(id)))
+  const configuredForDelivery = configuredWorkstations.some((item) => item.enabled !== false && readStringArray(item, ['deliveryRoleIds']).some((id) => roleIds.includes(id)))
   const mode = explicitMode
     ?? (configuredOversight ? 'oversight'
       : configuredPermissions && configuredCanPrepare && !configuredCanDeliver ? 'production'
@@ -70,7 +75,7 @@ export function getFulfillmentAccess(data: BootstrapResponse, actorId: string): 
     canViewLedger: configuredPermissions?.includes('order.view') ?? mode !== 'production',
     stationIds,
     stationScoped,
-    roleLabel: role?.name ?? employee?.roleId ?? '身份未识别',
+    roleLabel: roles.map((item) => item.name).join(' / ') || employee?.roleId || '身份未识别',
     scopeLabel: mode === 'oversight'
       ? '全流程监管'
       : mode === 'production'
@@ -80,18 +85,19 @@ export function getFulfillmentAccess(data: BootstrapResponse, actorId: string): 
 }
 
 export function taskVisibleToAccess(task: KdsTask, access: FulfillmentAccess) {
+  const employeeRoleIds = [access.employee?.roleId, ...(access.employee?.roleIds ?? [])].filter(Boolean)
   if (task.status === 'delivered') return false
   if (access.mode === 'production') {
     const configuredRoles = readStringArray(task.workstation, ['productionRoleIds'])
     return productionStatuses.has(task.status)
-      && (configuredRoles.length === 0 || configuredRoles.includes(access.employee?.roleId ?? ''))
+      && (configuredRoles.length === 0 || configuredRoles.some((roleId) => employeeRoleIds.includes(roleId)))
       && (access.stationScoped ? access.stationIds.includes(task.stationId) : access.stationIds.length === 0 || access.stationIds.includes(task.stationId))
   }
   if (access.mode === 'delivery') {
     const configuredRoles = readStringArray(task.workstation, ['deliveryRoleIds'])
     const assignedOwnerId = task.deliveryServiceTask?.ownerId
     return deliveryStatuses.has(task.status)
-      && (configuredRoles.length === 0 || configuredRoles.includes(access.employee?.roleId ?? ''))
+      && (configuredRoles.length === 0 || configuredRoles.some((roleId) => employeeRoleIds.includes(roleId)))
       && (!assignedOwnerId || assignedOwnerId === access.employee?.id)
       && (access.stationScoped ? access.stationIds.includes(task.stationId) : access.stationIds.length === 0 || access.stationIds.includes(task.stationId))
   }
@@ -132,7 +138,8 @@ function assignedStationIds(data: BootstrapResponse, employee: Employee | undefi
       if (!isRecord(item) || item.enabled === false) continue
       const explicitlyAssigned = assignmentMatches(item, employee, role)
       const roleIds = readStringArray(item, [mode === 'production' ? 'productionRoleIds' : 'deliveryRoleIds'])
-      const roleAssigned = mode !== 'oversight' && Boolean(employee && roleIds.includes(employee.roleId))
+      const employeeRoleIds = employee ? [employee.roleId, ...(employee.roleIds ?? [])] : []
+      const roleAssigned = mode !== 'oversight' && roleIds.some((roleId) => employeeRoleIds.includes(roleId))
       const requiredSkills = readStringArray(item, ['requiredSkillIds'])
       const employeeSkills = readStringArray(employee, ['skillIds'])
       const hasSkills = mode !== 'production' || requiredSkills.every((skillId) => employeeSkills.includes(skillId))
@@ -146,6 +153,20 @@ function assignedStationIds(data: BootstrapResponse, employee: Employee | undefi
   if (activeShiftStationIds.size === 0) return stationScoped ? [] : [...eligibleIds]
   if (eligibleIds.size === 0) return [...activeShiftStationIds]
   return [...activeShiftStationIds].filter((id) => eligibleIds.has(id))
+}
+
+function effectiveEmployeeRoleIds(data: BootstrapResponse, employee: Employee | undefined) {
+  if (!employee) return []
+  const activeShifts = data.shiftAssignments.filter((shift) => (
+    shift.employeeId === employee.id
+    && shift.businessDate === data.store.businessDate
+    && shift.status === 'active'
+  ))
+  if (activeShifts.length > 0) return [...new Set([
+    ...activeShifts.flatMap((shift) => [shift.roleId, ...(shift.roleIds ?? [])]),
+    ...(employee.roleIds ?? []),
+  ])]
+  return [...new Set([employee.roleId, ...(employee.roleIds ?? [])])]
 }
 
 function assignmentMatches(record: Record<string, unknown>, employee: Employee | undefined, role: RoleConfig | undefined) {

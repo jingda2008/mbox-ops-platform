@@ -781,13 +781,16 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 
 /* Guest mobile experience */
 .guest-shell {
-  width: min(100%, 560px);
+  width: 100%;
   min-height: 100vh;
   margin: 0 auto;
   background: #fff;
   border-left: 1px solid var(--line);
   border-right: 1px solid var(--line);
 }
+.guest-tabs { min-height: 56px; display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--line); background: #fff; }
+.guest-tabs button { display: flex; align-items: center; justify-content: center; gap: 7px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--ink-soft); font-weight: 750; }
+.guest-tabs button.is-active { border-bottom-color: var(--brand-yellow); color: var(--ink); }
 .guest-header { height: 64px; display: flex; align-items: center; justify-content: space-between; padding: 0 18px; background: #fff; border-bottom: 1px solid var(--line); }
 .guest-brand { display: flex; align-items: center; gap: 9px; }
 .guest-brand > span { width: 32px; height: 32px; font-size: 17px; }
@@ -824,6 +827,18 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 }
 .error-banner { min-height: 44px; margin: 14px 16px 0; padding: 10px 12px; border: 1px solid #efc7c9; border-radius: 6px; background: #fff0f0; color: #9f2f34; }
 .guest-services, .guest-progress { padding: 19px 16px 21px; border-bottom: 8px solid #f1f2ef; }
+.guest-orders { padding: 19px 16px 40px; background: #f3f4f0; }
+.guest-order-list { display: grid; gap: 10px; }
+.guest-order { border: 1px solid var(--line); border-radius: 8px; background: #fff; overflow: hidden; }
+.guest-order > header { min-height: 64px; display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.guest-order > header > div { display: grid; gap: 2px; }
+.guest-order > header strong { font-size: 18px; }
+.guest-order > header span { color: var(--ink-soft); font-size: 10px; }
+.guest-order > header b { padding: 4px 7px; border-radius: 4px; background: #f3ecda; color: #795810; font-size: 11px; }
+.guest-order > header b.is-paid { background: #e8f4ec; color: #286343; }
+.guest-order-line { min-height: 46px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.guest-order-line:last-child { border-bottom: 0; }
+.guest-order-line strong { color: var(--ink-soft); font-size: 11px; }
 .guest-section-title { height: 32px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; color: var(--ink-soft); }
 .guest-section-title span { color: var(--ink); font-weight: 800; }
 .service-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }

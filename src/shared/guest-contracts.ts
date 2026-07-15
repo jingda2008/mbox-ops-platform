@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import type { ServiceTask, ServiceTypeConfig } from './contracts.js'
+import type { MenuProduct, ServiceTask, ServiceTypeConfig } from './contracts.js'
+import type { PaymentIntentStatus } from './payment-contracts.js'
 import type { ItemFulfillmentStatus, OrderStatus } from './order-contracts.js'
 import type { SongRequestStatus } from './song-contracts.js'
 
@@ -40,6 +41,7 @@ export interface GuestSessionResponse {
   table: { code: string; displayName: string; status: string; occupied: boolean }
   primaryServiceName: string | null
   serviceTypes: GuestServiceType[]
+  products: MenuProduct[]
   tasks: GuestTaskView[]
   account: {
     tableSessionId: string | null
@@ -57,6 +59,14 @@ export interface GuestSessionResponse {
         amount: number
         fulfillmentStatus: ItemFulfillmentStatus
       }>
+    }>
+    payments: Array<{
+      id: string
+      orderIds: string[]
+      amount: number
+      status: PaymentIntentStatus
+      channel: string
+      paidAt: string | null
     }>
   }
   songOffers: Array<{
@@ -113,6 +123,23 @@ export const guestSongRequestSchema = z.object({
   idempotencyKey: z.string().trim().min(8).max(128),
 })
 
+export const guestCartOrderSchema = z.object({
+  tableToken: z.string().trim().min(20).max(2048),
+  items: z.array(z.object({
+    productId: z.string().trim().min(1).max(128),
+    quantity: z.number().int().min(1).max(50),
+  })).min(1).max(50),
+  idempotencyKey: z.string().trim().min(8).max(128),
+})
+
+export const guestCheckoutSchema = z.object({
+  tableToken: z.string().trim().min(20).max(2048),
+  orderId: z.string().trim().min(1).max(128),
+  idempotencyKey: z.string().trim().min(8).max(128),
+})
+
 export type GuestTaskCreateInput = z.infer<typeof guestTaskCreateSchema>
 export type GuestTaskFeedbackInput = z.infer<typeof guestTaskFeedbackSchema>
 export type GuestSongRequestInput = z.infer<typeof guestSongRequestSchema>
+export type GuestCartOrderInput = z.infer<typeof guestCartOrderSchema>
+export type GuestCheckoutInput = z.infer<typeof guestCheckoutSchema>

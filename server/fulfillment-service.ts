@@ -14,18 +14,9 @@ import {
   resolveKdsWorkstation,
 } from './fulfillment-workstations.js'
 import { deliverKdsTask, pickUpKdsTask } from './order-domain.js'
+import { effectiveRoleIdsForEmployee } from '../src/shared/staff-access.js'
 
 const closedServiceTaskStatuses = new Set<ServiceTask['status']>(['confirmed', 'cancelled'])
-
-function effectiveRoleId(state: RuntimeState, employeeId: string) {
-  const employee = state.employees.find((item) => item.id === employeeId)
-  if (!employee) return null
-  return state.shiftAssignments.find((shift) => (
-    shift.employeeId === employee.id &&
-    shift.businessDate === state.store.businessDate &&
-    shift.status === 'active'
-  ))?.roleId ?? employee.roleId
-}
 
 function activeTaskCount(state: RuntimeState, employeeId: string) {
   return state.tasks.filter((task) => task.ownerId === employeeId && !closedServiceTaskStatuses.has(task.status)).length
@@ -34,9 +25,10 @@ function activeTaskCount(state: RuntimeState, employeeId: string) {
 function canReceiveTask(state: RuntimeState, employeeId: string) {
   const employee = state.employees.find((item) => item.id === employeeId)
   if (!employee || employee.status !== 'active' || !employee.online || employee.paused) return false
-  const roleId = effectiveRoleId(state, employeeId)
-  const role = state.config.roles.find((item) => item.id === roleId)
-  return !role || (role.canReceiveTasks && activeTaskCount(state, employeeId) < role.maxConcurrentTasks)
+  const roles = effectiveRoleIdsForEmployee(state, employeeId)
+    .map((roleId) => state.config.roles.find((item) => item.id === roleId))
+    .filter((role) => role?.canReceiveTasks)
+  return roles.length > 0 && roles.some((role) => activeTaskCount(state, employeeId) < (role?.maxConcurrentTasks ?? 0))
 }
 
 function candidatesForRoles(state: RuntimeState, tableId: string, roleIds: readonly string[], stationId: string) {
@@ -54,11 +46,11 @@ function candidatesForRoles(state: RuntimeState, tableId: string, roleIds: reado
         assignment.status === 'active'
       ))
       const stationEligible = !shift?.stationIds?.length || shift.stationIds.includes(stationId)
-      return stationEligible && roleIds.includes(effectiveRoleId(state, employeeId) ?? '') && canReceiveTask(state, employeeId)
+      return stationEligible && effectiveRoleIdsForEmployee(state, employeeId).some((roleId) => roleIds.includes(roleId)) && canReceiveTask(state, employeeId)
     })
     .sort((left, right) => {
-      const leftRoleRank = roleRank.get(effectiveRoleId(state, left) ?? '') ?? Number.MAX_SAFE_INTEGER
-      const rightRoleRank = roleRank.get(effectiveRoleId(state, right) ?? '') ?? Number.MAX_SAFE_INTEGER
+      const leftRoleRank = Math.min(...effectiveRoleIdsForEmployee(state, left).map((roleId) => roleRank.get(roleId) ?? Number.MAX_SAFE_INTEGER))
+      const rightRoleRank = Math.min(...effectiveRoleIdsForEmployee(state, right).map((roleId) => roleRank.get(roleId) ?? Number.MAX_SAFE_INTEGER))
       return leftRoleRank - rightRoleRank ||
         activeTaskCount(state, left) - activeTaskCount(state, right) ||
         (employeeRank.get(left) ?? Number.MAX_SAFE_INTEGER) - (employeeRank.get(right) ?? Number.MAX_SAFE_INTEGER)

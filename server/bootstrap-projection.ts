@@ -5,10 +5,11 @@ import {
   canActorAccessTableDataScope,
   effectiveActorForState,
 } from './authorization.js'
-
-function effectiveRoleId(state: RuntimeState, actor: RequestActorContext) {
-  return effectiveActorForState(actor, state).roleId
-}
+import {
+  effectiveDataScopeForEmployee,
+  effectivePermissionIdsForEmployee,
+  effectiveRoleIdsForEmployee,
+} from '../src/shared/staff-access.js'
 
 function legacyTableIdFromSession(tableSessionId: string) {
   if (!tableSessionId.startsWith('session:')) return null
@@ -18,9 +19,10 @@ function legacyTableIdFromSession(tableSessionId: string) {
 /** Returns the maximum data this authenticated role needs for its configured workspace. */
 export function projectRuntimeStateForActor(state: RuntimeState, actor: RequestActorContext): RuntimeState {
   const projected = structuredClone(state)
-  const role = state.config.roles.find((item) => item.id === effectiveRoleId(state, actor))
-  const permissions = new Set<StaffPermissionId>(role?.permissionIds ?? [])
-  const scope = role?.dataScope ?? 'own'
+  const effectiveActor = effectiveActorForState(actor, state)
+  const roleIds = effectiveRoleIdsForEmployee(state, effectiveActor.actorId)
+  const permissions = new Set<StaffPermissionId>(effectivePermissionIdsForEmployee(state, effectiveActor.actorId))
+  const scope = effectiveDataScopeForEmployee(state, effectiveActor.actorId)
   const canAccessProjectedStore = scope === 'all_stores' || actor.storeId === state.store.id
   const visibleAreaIds = new Set(canAccessProjectedStore ? assignedAreaIdsForActor(state, actor.actorId) : [])
   const storeWide = scope === 'all_stores' || (scope === 'store' && actor.storeId === state.store.id)
@@ -73,8 +75,8 @@ export function projectRuntimeStateForActor(state: RuntimeState, actor: RequestA
       ?? state.orderDomain.fulfillmentWorkstations?.find((item) => item.id === task.stationId)
       ?? state.config.workstations.find((item) => item.id === task.stationId)
     if (!workstation) return false
-    return (permissions.has('kds.prepare') && workstation.productionRoleIds.includes(role?.id ?? ''))
-      || (permissions.has('kds.deliver') && workstation.deliveryRoleIds.includes(role?.id ?? ''))
+    return (permissions.has('kds.prepare') && roleIds.some((roleId) => workstation.productionRoleIds.includes(roleId)))
+      || (permissions.has('kds.deliver') && roleIds.some((roleId) => workstation.deliveryRoleIds.includes(roleId)))
   }
   projected.orderDomain.orders = canViewOrders
     ? projected.orderDomain.orders.filter((order) => storeWide || sessionVisible(order.tableSessionId))
@@ -104,7 +106,7 @@ export function projectRuntimeStateForActor(state: RuntimeState, actor: RequestA
       items: order.items.map((item) => ({ ...item, unitCostAmount: 0 })),
     }))
   }
-  const canUsePayments = canViewFinance || [
+  const canUsePayments = canViewFinance || permissions.has('order.view') || [
     'payment.collect', 'payment.pos_report', 'payment.refund.request', 'payment.refund.approve',
   ].some((permission) => permissions.has(permission as StaffPermissionId))
   if (!canUsePayments) {

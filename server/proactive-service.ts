@@ -188,7 +188,7 @@ export function registerProactiveServiceRoutes(app: FastifyInstance, repository:
     const input = awaitingOrderActionSchema.parse(request.body)
     const intent = await repository.mutate((state) => {
       const actor = requireAnyRole(
-        request, SERVICE_INITIATOR_ROLES, 'proactive.awaiting-order.start', '发起待点单服务',
+        request, state, SERVICE_INITIATOR_ROLES, 'proactive.awaiting-order.start', '发起待点单服务',
       )
       requireTableDataScope(request, state, request.params.tableId, 'proactive.awaiting-order.start')
       return startAwaitingOrder(state, request.params.tableId, actor.actorId, input.idempotencyKey)
@@ -200,7 +200,7 @@ export function registerProactiveServiceRoutes(app: FastifyInstance, repository:
     const input = awaitingOrderActionSchema.parse(request.body)
     return repository.mutate((state) => {
       const actor = requireAnyRole(
-        request, SERVICE_INITIATOR_ROLES, 'proactive.awaiting-order.stop', '停止待点单服务',
+        request, state, SERVICE_INITIATOR_ROLES, 'proactive.awaiting-order.stop', '停止待点单服务',
       )
       requireTableDataScope(request, state, request.params.tableId, 'proactive.awaiting-order.stop')
       return stopAwaitingOrder(state, request.params.tableId, actor.actorId, input.reason || 'employee_cancelled')

@@ -128,7 +128,7 @@ function EmployeeSection({ data, run }: SectionProps) {
     await run(() => createEmployeeRequest({
       displayName: trimmed,
       initials: Array.from(trimmed)[0] ?? '员',
-      status: 'active', roleId, online: false, paused: false, areaIds: areaId ? [areaId] : [], skillIds: [],
+      status: 'active', roleId, roleIds: [roleId], permissionIds: [], online: false, paused: false, areaIds: areaId ? [areaId] : [], skillIds: [],
     }), `员工${trimmed}已建立`)
     setName('')
   }
@@ -156,6 +156,11 @@ function EmployeeRow({ employee, data, run }: { employee: Employee; data: Bootst
     <div className="master-row employee-row">
       <label><span>姓名</span><input value={draft.displayName} onChange={(event) => setDraft({ ...draft, displayName: event.target.value })} /></label>
       <label><span>岗位</span><select value={draft.roleId} onChange={(event) => setDraft({ ...draft, roleId: event.target.value })}>{data.config.roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}</select></label>
+      <details className="employee-access-details">
+        <summary>岗位与权限 <span>{draft.roleIds?.length ?? 0}个兼任 · {draft.permissionIds?.length ?? 0}项个人授权</span></summary>
+        <div className="area-selector"><span>兼任岗位</span><div>{data.config.roles.map((role) => <label key={role.id}><input type="checkbox" checked={[draft.roleId, ...(draft.roleIds ?? [])].includes(role.id)} disabled={role.id === draft.roleId} onChange={(event) => setDraft({ ...draft, roleIds: toggleValue(draft.roleIds ?? [], role.id, event.target.checked) })} />{role.name}</label>)}</div></div>
+        <div className="area-selector"><span>个人权限</span><div>{staffPermissionIds.map((permissionId) => <label key={permissionId}><input type="checkbox" checked={draft.permissionIds?.includes(permissionId) ?? false} onChange={(event) => setDraft({ ...draft, permissionIds: toggleValue(draft.permissionIds ?? [], permissionId, event.target.checked) as StaffPermissionId[] })} />{permissionLabels[permissionId]}</label>)}</div></div>
+      </details>
       <div className="area-selector"><span>责任区</span><div>{data.areas.map((area) => <label key={area.id}><input type="checkbox" checked={draft.areaIds.includes(area.id)} onChange={(event) => setDraft({ ...draft, areaIds: event.target.checked ? [...draft.areaIds, area.id] : draft.areaIds.filter((id) => id !== area.id) })} />{area.shortName}</label>)}</div></div>
       <div className="area-selector"><span>技能</span><div>{effectiveConfig(data).skills.filter((skill) => skill.enabled || draft.skillIds?.includes(skill.id)).map((skill) => <label key={skill.id}><input type="checkbox" checked={draft.skillIds?.includes(skill.id) ?? false} onChange={(event) => setDraft({ ...draft, skillIds: toggleValue(draft.skillIds ?? [], skill.id, event.target.checked) })} />{skill.name}</label>)}</div></div>
       <label><span>状态</span><select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as EmployeeWriteInput['status'] })}><option value="active">在职</option><option value="inactive">停用</option></select></label>
@@ -186,7 +191,7 @@ function ShiftSection({ data, run }: SectionProps) {
     event.preventDefault()
     await run(() => createShiftRequest({
       employeeId, businessDate: data.store.businessDate, startAt: new Date(startAt).toISOString(),
-      endAt: new Date(endAt).toISOString(), roleId, areaIds: [areaId], stationIds: stationId ? [stationId] : [], isPrimary: false, status: 'scheduled',
+      endAt: new Date(endAt).toISOString(), roleId, roleIds: [roleId], areaIds: [areaId], stationIds: stationId ? [stationId] : [], isPrimary: false, status: 'scheduled',
     }), '新班次已建立')
   }
 
@@ -216,6 +221,7 @@ function ShiftRow({ shift, data, run }: { shift: ShiftAssignment; data: Bootstra
     <div className="master-row shift-row">
       <div className="row-identity"><strong>{employee?.displayName ?? '未知员工'}</strong><span>{shift.businessDate}</span></div>
       <label><span>岗位</span><select value={draft.roleId} onChange={(event) => setDraft({ ...draft, roleId: event.target.value })}>{data.config.roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}</select></label>
+      <details className="employee-access-details shift-role-details"><summary>当班兼任 <span>{draft.roleIds?.length ?? 0}个</span></summary><div className="area-selector"><span>当班兼任</span><div>{data.config.roles.map((role) => <label key={role.id}><input type="checkbox" checked={[draft.roleId, ...(draft.roleIds ?? [])].includes(role.id)} disabled={role.id === draft.roleId} onChange={(event) => setDraft({ ...draft, roleIds: toggleValue(draft.roleIds ?? [], role.id, event.target.checked) })} />{role.name}</label>)}</div></div></details>
       <div className="area-selector"><span>工作站</span><div>{effectiveConfig(data).workstations.filter((station) => station.enabled || draft.stationIds?.includes(station.id)).map((station) => <label key={station.id}><input type="checkbox" checked={draft.stationIds?.includes(station.id) ?? false} onChange={(event) => setDraft({ ...draft, stationIds: toggleValue(draft.stationIds ?? [], station.id, event.target.checked) })} />{station.name}</label>)}</div></div>
       <label><span>开始</span><input type="datetime-local" value={toLocalInput(draft.startAt)} onChange={(event) => setDraft({ ...draft, startAt: new Date(event.target.value).toISOString() })} /></label>
       <label><span>结束</span><input type="datetime-local" value={toLocalInput(draft.endAt)} onChange={(event) => setDraft({ ...draft, endAt: new Date(event.target.value).toISOString() })} /></label>
@@ -528,7 +534,7 @@ function ProductSection({ data, run }: SectionProps) {
   async function submit(event: FormEvent) {
     event.preventDefault()
     await run(() => createProductRequest({
-      sku, name, specification: '1份', listPriceAmount: yuanToFen(price), costAmount: 0,
+      sku, name, specification: '1份', categoryId: 'featured', categoryName: '推荐', description: '', imageUrl: '', tags: [], sortOrder: data.products.length + 1, listPriceAmount: yuanToFen(price), costAmount: 0,
       stationId, enabled: true,
     }), `${name}已建立`)
     setSku('')
@@ -557,6 +563,9 @@ function ProductRow({ product, workstations, run }: { product: MenuProduct; work
       <div className="row-identity"><strong>{product.sku}</strong><span>版本 {product.configVersion}</span></div>
       <label><span>商品名称</span><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
       <label><span>规格</span><input value={draft.specification} onChange={(event) => setDraft({ ...draft, specification: event.target.value })} /></label>
+      <label><span>菜单分类</span><input value={draft.categoryName ?? ''} onChange={(event) => setDraft({ ...draft, categoryName: event.target.value, categoryId: draft.categoryId ?? 'featured' })} /></label>
+      <label><span>商品图片</span><input value={draft.imageUrl ?? ''} onChange={(event) => setDraft({ ...draft, imageUrl: event.target.value })} placeholder="/menu/product.jpg" /></label>
+      <label><span>菜单描述</span><input value={draft.description ?? ''} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
       <label><span>标价（元）</span><input type="number" min={0} value={fenToYuan(draft.listPriceAmount)} onChange={(event) => setDraft({ ...draft, listPriceAmount: yuanToFen(Number(event.target.value)) })} /></label>
       <label><span>成本（元）</span><input type="number" min={0} value={fenToYuan(draft.costAmount)} onChange={(event) => setDraft({ ...draft, costAmount: yuanToFen(Number(event.target.value)) })} /></label>
       <label><span>出品口</span><select value={draft.stationId} onChange={(event) => setDraft({ ...draft, stationId: event.target.value })}>{!workstations.some((station) => station.id === draft.stationId) && <option value={draft.stationId}>{draft.stationId}（旧配置）</option>}{workstations.map((station) => <option key={station.id} value={station.id}>{station.name}{station.enabled ? '' : '（停用）'}</option>)}</select></label>

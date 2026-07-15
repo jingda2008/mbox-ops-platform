@@ -1,10 +1,11 @@
-import { CheckCheck, ChefHat, CircleAlert, CircleDollarSign, Clock3, PackageCheck, Play, Send, ShoppingCart, UserRound } from 'lucide-react'
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
-import { actOnKdsTask, createQuickOrder, getCurrentActorId } from '../api'
+import { CheckCheck, ChefHat, CircleAlert, CircleDollarSign, Clock3, PackageCheck, Play, ShoppingCart, UserRound } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { actOnKdsTask, createCartOrder, getCurrentActorId } from '../api'
 import type { BootstrapResponse } from '../shared/contracts'
-import type { KdsActionInput, QuickOrderInput } from '../shared/commerce-api'
+import type { KdsActionInput } from '../shared/commerce-api'
 import type { KdsTask } from '../shared/order-contracts'
 import { actionAllowedForAccess, getFulfillmentAccess, stationLabel, taskVisibleToAccess } from './commerce-workspace'
+import { MenuOrderingWorkspace, type MenuCartItem } from './MenuOrderingWorkspace'
 import './CommerceView.css'
 
 interface CommerceViewProps {
@@ -22,10 +23,8 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
   const access = getFulfillmentAccess(data, currentActorId)
   const currentEmployee = access.employee
   const occupiedTables = data.tables.filter((table) => table.status === 'occupied')
-  const enabledProducts = data.products.filter((product) => product.enabled)
   const [tableId, setTableId] = useState(occupiedTables[0]?.id ?? '')
-  const [productId, setProductId] = useState(enabledProducts[0]?.id ?? '')
-  const [quantity, setQuantity] = useState(1)
+  const [workspaceMode, setWorkspaceMode] = useState<'order' | 'fulfillment'>(access.canOrder ? 'order' : 'fulfillment')
   const [busy, setBusy] = useState(false)
   const [now, setNow] = useState(() => Date.now())
   const ledgerTotal = data.orderDomain.tableLedgerEntries.reduce((sum, entry) => sum + entry.amount, 0)
@@ -45,19 +44,15 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
     return () => window.clearInterval(timer)
   }, [])
 
-  async function submit(event: FormEvent) {
-    event.preventDefault()
+  async function submit(items: MenuCartItem[]) {
     if (!currentEmployee) {
       onNotice('当前员工身份无效，请重新登录后下单')
       return
     }
     setBusy(true)
     try {
-      const input: QuickOrderInput = {
-        tableId, productId, quantity, actorId: currentEmployee.id, idempotencyKey: `quick-${crypto.randomUUID()}`,
-      }
-      await createQuickOrder(input)
-      onNotice('订单已提交并进入KDS')
+      await createCartOrder({ tableId, items, actorId: currentEmployee.id, idempotencyKey: `cart-${crypto.randomUUID()}` })
+      onNotice('商品已与客人核对，订单已进入出品流程')
       await onRefresh()
     } catch (error) {
       onNotice(error instanceof Error ? error.message : '下单失败')
@@ -90,6 +85,11 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
     }
     return Array.from(grouped, ([sessionId, balance]) => ({ sessionId, balance }))
   }, [data.orderDomain.tableLedgerEntries])
+  const latestPaidSignal = data.paymentDomain.paymentIntents
+    .filter((intent) => ['succeeded', 'reported_pending_reconciliation'].includes(intent.status))
+    .toSorted((left, right) => Date.parse(right.paidAt ?? right.createdAt) - Date.parse(left.paidAt ?? left.createdAt))[0]
+  const paidTable = latestPaidSignal ? tableFromSession(data, latestPaidSignal.tableSessionId) : undefined
+  const selectedTable = occupiedTables.find((table) => table.id === tableId)
 
   return (
     <section className="commerce-view">
@@ -97,6 +97,23 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
         <div><span className="eyebrow">{access.roleLabel} · {access.scopeLabel}</span><h2>岗位履约工作台</h2></div>
         <span className="count-chip">{visibleKds.length}项当前职责</span>
       </div>
+      {latestPaidSignal && <div className="paid-signal" role="status"><CheckCheck size={20} /><div><strong>{paidTable?.code ?? '桌台'} 已收款 {money(latestPaidSignal.amount)}</strong><span>{latestPaidSignal.channel === 'physical_pos' ? '物理POS待对账' : '支付成功，服务与收银已同步'}</span></div></div>}
+      {access.canOrder && <div className="commerce-mode-tabs">
+        <button className={workspaceMode === 'order' ? 'is-active' : ''} onClick={() => setWorkspaceMode('order')}>全屏点单</button>
+        <button className={workspaceMode === 'fulfillment' ? 'is-active' : ''} onClick={() => setWorkspaceMode('fulfillment')}>出品履约 <span>{visibleKds.length}</span></button>
+      </div>}
+
+      {workspaceMode === 'order' && access.canOrder ? (
+        <MenuOrderingWorkspace
+          products={data.products}
+          tableLabel={selectedTable ? `${selectedTable.code} · ${selectedTable.displayName}` : '请选择桌台'}
+          tableControl={<select aria-label="选择桌台" value={tableId} onChange={(event) => setTableId(event.target.value)}>{occupiedTables.map((table) => <option key={table.id} value={table.id}>{table.code} · {table.displayName} · {table.guestCount}人</option>)}</select>}
+          submitLabel="核对无误，确认下单"
+          submitHint="提交后自动分发到对应吧台或厨房；完成制作后自动通知取送人员。"
+          busy={busy}
+          onSubmit={submit}
+        />
+      ) : <>
       <div className="commerce-metrics">
         <div><ChefHat size={19} /><strong>{visibleKds.length}</strong><span>{access.mode === 'production' ? '待制作' : access.mode === 'delivery' ? '待取送' : '全部待履约'}</span></div>
         <div className={overdueCount > 0 ? 'is-risk' : ''}><CircleAlert size={19} /><strong>{overdueCount}</strong><span>SLA超时</span></div>
@@ -104,14 +121,6 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
           ? <div><CircleDollarSign size={19} /><strong>{money(ledgerTotal)}</strong><span>桌账应收</span></div>
           : <div><UserRound size={19} /><strong>{access.stationIds.length || '全'}</strong><span>负责制作工位</span></div>}
       </div>
-
-      {access.canOrder && <form className="quick-order-band" onSubmit={(event) => void submit(event)}>
-        <label><span>桌台</span><select value={tableId} onChange={(event) => setTableId(event.target.value)}>{occupiedTables.map((table) => <option key={table.id} value={table.id}>{table.code} · {table.displayName}</option>)}</select></label>
-        <label><span>商品</span><select value={productId} onChange={(event) => setProductId(event.target.value)}>{enabledProducts.map((product) => <option key={product.id} value={product.id}>{product.name} · {money(product.listPriceAmount)}</option>)}</select></label>
-        <label><span>数量</span><input type="number" min={1} max={50} value={quantity} onChange={(event) => setQuantity(Number(event.target.value))} /></label>
-        <button className="primary-button" type="submit" disabled={busy || !currentEmployee || !tableId || !productId}><Send size={17} />提交订单</button>
-      </form>}
-
       <div className={access.canViewLedger ? 'commerce-grid' : 'commerce-grid is-task-only'}>
         <section className="kds-section">
           <div className="commerce-section-title"><ChefHat size={18} /><strong>{access.mode === 'production' ? '可制作任务' : access.mode === 'delivery' ? '待取送任务' : 'KDS全流程'}</strong><span>当前操作：{currentEmployee?.displayName ?? '身份失效，请重新登录'}</span></div>
@@ -150,6 +159,7 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
           </div>
         </section>}
       </div>
+      </>}
     </section>
   )
 }

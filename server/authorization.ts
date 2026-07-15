@@ -14,11 +14,17 @@ import {
   getRoleApprovalLimit,
   getRolePolicy,
   isPolicyHighRiskOperation,
+  STAFF_OPERATION_PERMISSION_IDS,
   type ApprovalLimitType,
   type DataScope,
   type PermissionPolicy,
   type StaffOperation,
 } from './permission-policy.js'
+import {
+  effectiveDataScopeForEmployee,
+  effectivePermissionIdsForEmployee,
+  effectiveRoleIdsForEmployee,
+} from '../src/shared/staff-access.js'
 
 export type {
   ApprovalLimitType,
@@ -142,15 +148,14 @@ export function canActorAccessTableDataScope(
   tableId: string,
 ) {
   const effectiveActor = effectiveActorForState(actor, state)
-  const policy = createPermissionPolicyFromRuntimeState(state)
-  const scope = getRolePolicy(effectiveActor.roleId, policy)?.dataScope
+  const scope = effectiveDataScopeForEmployee(state, effectiveActor.actorId)
   const table = state.tables.find((item) => item.id === tableId)
   if (!scope || !table) return false
 
-  if (scope === 'all_stores' || scope === 'organization') return true
+  if (scope === 'all_stores') return true
   if (effectiveActor.storeId !== state.store.id) return false
   if (scope === 'store') return true
-  if (scope === 'assigned_areas' || scope === 'area') {
+  if (scope === 'assigned_areas') {
     return assignedAreaIdsForActor(state, effectiveActor.actorId).includes(table.areaId)
   }
   return table.primaryEmployeeId === effectiveActor.actorId
@@ -164,9 +169,8 @@ export function requireTableDataScope(
   operation = 'table.access',
 ) {
   const actor = effectiveRequestActor(request, state)
-  const policy = createPermissionPolicyFromRuntimeState(state)
-  const role = getRolePolicy(actor.roleId, policy)
-  if (!role) {
+  const roleIds = effectiveRoleIdsForEmployee(state, actor.actorId)
+  if (roleIds.length === 0) {
     throw new AuthorizationError(`岗位 ${actor.roleId} 未配置桌台数据范围`, operation, {
       reason: 'role_not_configured',
       roleId: actor.roleId,
@@ -178,7 +182,7 @@ export function requireTableDataScope(
     throw new AuthorizationError(`岗位 ${actor.roleId} 无权访问桌台 ${table?.code ?? tableId}`, operation, {
       reason: 'scope_not_allowed',
       roleId: actor.roleId,
-      grantedScope: role.dataScope,
+      grantedScope: effectiveDataScopeForEmployee(state, actor.actorId),
       tableId,
       areaId: table?.areaId,
     })
@@ -201,17 +205,29 @@ export function requireConfiguredOperation(
   operation: StaffOperation,
 ) {
   const actor = effectiveRequestActor(request, state)
-  return requireRoleOperation(actor, actor.roleId, operation, createPermissionPolicyFromRuntimeState(state))
+  const policy = createPermissionPolicyFromRuntimeState(state)
+  const configuredRoleIds = effectiveRoleIdsForEmployee(state, actor.actorId)
+  const roleIds = configuredRoleIds.length > 0 ? configuredRoleIds : [actor.roleId]
+  const matchedRoleId = roleIds
+    .find((roleId) => canPerformOperation(roleId, operation, policy))
+  if (matchedRoleId) return actor.roleId === matchedRoleId ? actor : { ...actor, roleId: matchedRoleId }
+  if (effectivePermissionIdsForEmployee(state, actor.actorId).includes(STAFF_OPERATION_PERMISSION_IDS[operation])) return actor
+  return requireRoleOperation(actor, actor.roleId, operation, policy)
 }
 
 export function requireAnyRole(
   request: FastifyRequest,
+  state: RuntimeState,
   allowedRoleIds: readonly string[],
   operation: string,
   actionName = operation,
 ) {
-  const actor = requireRequestActor(request)
-  if (!allowedRoleIds.includes(actor.roleId)) {
+  const requestActor = requireRequestActor(request)
+  const actor = effectiveRequestActor(request, state)
+  const configuredRoleIds = effectiveRoleIdsForEmployee(state, actor.actorId)
+  const roleIds = configuredRoleIds.includes(requestActor.roleId) ? configuredRoleIds : [requestActor.roleId]
+  const matchedRoleId = roleIds.find((roleId) => allowedRoleIds.includes(roleId))
+  if (!matchedRoleId) {
     const allowedRoles = allowedRoleIds.length > 0 ? allowedRoleIds.join('、') : '无'
     throw new AuthorizationError(`岗位 ${actor.roleId} 无权${actionName}；允许岗位：${allowedRoles}`, operation, {
       reason: 'role_not_allowed',
@@ -219,7 +235,7 @@ export function requireAnyRole(
       allowedRoleIds: [...allowedRoleIds],
     })
   }
-  return actor
+  return actor.roleId === matchedRoleId ? actor : { ...actor, roleId: matchedRoleId }
 }
 
 export function canAccessDataScope(
@@ -256,14 +272,17 @@ export function requireApprovalAmount(
 ) {
   const actor = effectiveRequestActor(request, state)
   const policy = createPermissionPolicyFromRuntimeState(state)
-  if (!getRolePolicy(actor.roleId, policy)) {
+  const configuredRoleIds = effectiveRoleIdsForEmployee(state, actor.actorId)
+  const roleIds = configuredRoleIds.length > 0 ? configuredRoleIds : [actor.roleId]
+  if (!roleIds.some((roleId) => getRolePolicy(roleId, policy))) {
     throw new AuthorizationError(`岗位 ${actor.roleId} 未配置审批额度`, operation, {
       reason: 'role_not_configured',
       roleId: actor.roleId,
     })
   }
-  const approvalLimit = getRoleApprovalLimit(actor.roleId, limitType, policy)
-  if (!canApproveAmount(actor.roleId, limitType, amount, policy)) {
+  const approvalLimit = Math.max(0, ...roleIds.map((roleId) => getRoleApprovalLimit(roleId, limitType, policy)))
+  const approvalRoleId = roleIds.find((roleId) => canApproveAmount(roleId, limitType, amount, policy))
+  if (!approvalRoleId) {
     throw new AuthorizationError(
       `岗位 ${actor.roleId} 的${approvalLimitNames[limitType]}额度不足：申请 ${amount} 分，上限 ${approvalLimit} 分`,
       operation,
@@ -276,7 +295,7 @@ export function requireApprovalAmount(
       },
     )
   }
-  return actor
+  return actor.roleId === approvalRoleId ? actor : { ...actor, roleId: approvalRoleId }
 }
 
 export function requireDataScope(

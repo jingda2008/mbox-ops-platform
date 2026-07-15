@@ -315,4 +315,47 @@ describe('guest table API', () => {
     expect((await repository.read()).songState.requests).toHaveLength(1)
     await closeFixture(app, repository)
   })
+
+  it('keeps guest orders in draft until payment succeeds, then publishes KDS and paid signals', async () => {
+    const { app, repository, now } = await fixture()
+    const session = (await exchange(app, staticQr(now()))).body
+    expect(session.products.map((product) => product.imageUrl)).toContain('/menu/cocktail.jpg')
+    expect(session.products.every((product) => product.costAmount === 0)).toBe(true)
+
+    const orderResponse = await app.inject({
+      method: 'POST',
+      url: '/api/guest/orders',
+      payload: {
+        tableToken: session.tableToken,
+        items: [
+          { productId: 'product-cocktail', quantity: 2 },
+          { productId: 'product-fruit', quantity: 1 },
+        ],
+        idempotencyKey: 'guest-cart-payment-0001',
+      },
+    })
+    expect(orderResponse.statusCode).toBe(201)
+    expect(orderResponse.json()).toMatchObject({ status: 'draft', amounts: { payableAmount: 30_400 } })
+    expect((await repository.read()).orderDomain.kdsTasks).toHaveLength(0)
+
+    const checkout = await app.inject({
+      method: 'POST',
+      url: '/api/guest/checkout',
+      payload: {
+        tableToken: session.tableToken,
+        orderId: orderResponse.json().id,
+        idempotencyKey: 'guest-cart-payment-checkout-0001',
+      },
+    })
+    expect(checkout.statusCode).toBe(201)
+    expect(checkout.json()).toMatchObject({
+      providerRequired: false,
+      paymentIntent: { status: 'succeeded', amount: 30_400, channel: 'wechat_mock' },
+      order: { status: 'submitted' },
+    })
+    const state = await repository.read()
+    expect(state.orderDomain.kdsTasks).toHaveLength(2)
+    expect(state.paymentDomain.paymentIntents[0]).toMatchObject({ status: 'succeeded', orderIds: [orderResponse.json().id] })
+    await closeFixture(app, repository)
+  })
 })

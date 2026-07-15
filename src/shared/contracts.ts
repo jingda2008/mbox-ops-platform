@@ -65,6 +65,10 @@ export interface Employee {
   initials: string
   status: 'active' | 'inactive'
   roleId: string
+  /** Additional duties this account may perform; roleId remains the default home identity. */
+  roleIds?: string[]
+  /** Optional personal grants are merged with all configured role permissions. */
+  permissionIds?: StaffPermissionId[]
   online: boolean
   paused: boolean
   areaIds: string[]
@@ -78,6 +82,8 @@ export interface ShiftAssignment {
   startAt: string
   endAt: string
   roleId: string
+  /** Additional duties active for this shift; roleId remains the primary duty. */
+  roleIds?: string[]
   areaIds: string[]
   stationIds?: string[]
   isPrimary: boolean
@@ -89,6 +95,12 @@ export interface MenuProduct {
   sku: string
   name: string
   specification: string
+  categoryId?: string
+  categoryName?: string
+  description?: string
+  imageUrl?: string
+  tags?: string[]
+  sortOrder?: number
   listPriceAmount: number
   costAmount: number
   stationId: string
@@ -494,6 +506,8 @@ export const employeeWriteSchema = z.object({
   initials: z.string().trim().min(1).max(4),
   status: z.enum(['active', 'inactive']),
   roleId: z.string().trim().min(1).max(64),
+  roleIds: z.array(z.string().trim().min(1).max(64)).max(12).optional(),
+  permissionIds: z.array(z.enum(staffPermissionIds)).max(staffPermissionIds.length).optional(),
   online: z.boolean(),
   paused: z.boolean(),
   areaIds: z.array(z.string().trim().min(1)).max(20),
@@ -519,6 +533,7 @@ export const shiftWriteSchema = z.object({
   startAt: z.iso.datetime(),
   endAt: z.iso.datetime(),
   roleId: z.string().trim().min(1),
+  roleIds: z.array(z.string().trim().min(1).max(64)).max(12).optional(),
   areaIds: z.array(z.string().trim().min(1)).min(1).max(20),
   stationIds: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
   isPrimary: z.boolean(),
@@ -540,6 +555,12 @@ export const productWriteSchema = z.object({
   sku: z.string().trim().min(1).max(40),
   name: z.string().trim().min(1).max(80),
   specification: z.string().trim().min(1).max(80),
+  categoryId: z.string().trim().min(1).max(64).optional(),
+  categoryName: z.string().trim().min(1).max(40).optional(),
+  description: z.string().trim().max(240).optional(),
+  imageUrl: z.string().trim().max(500).optional(),
+  tags: z.array(z.string().trim().min(1).max(24)).max(8).optional(),
+  sortOrder: z.number().int().min(0).max(9999).optional(),
   listPriceAmount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   costAmount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   stationId: z.string().trim().min(1).max(64),

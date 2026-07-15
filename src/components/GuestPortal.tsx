@@ -1,9 +1,10 @@
-import { CheckCircle2, ChevronRight, Clock3, MessageCircleMore, ShieldCheck } from 'lucide-react'
+import { CheckCircle2, ChevronRight, Clock3, ListChecks, MessageCircleMore, ShieldCheck, ShoppingBag } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { createGuestTask, getGuestSession, submitGuestTaskFeedback } from '../api'
+import { checkoutGuestOrder, createGuestOrder, createGuestTask, getGuestSession, submitGuestTaskFeedback } from '../api'
 import type { GuestSessionResponse, GuestTaskView } from '../shared/guest-contracts'
 import { guestFeedbackIdempotencyKey } from './guest-portal-utils'
 import { ServiceIcon } from './ServiceIcon'
+import { MenuOrderingWorkspace, type MenuCartItem } from './MenuOrderingWorkspace'
 
 const guestStatus: Record<GuestTaskView['status'], string> = {
   pending: '等待接单',
@@ -25,6 +26,8 @@ export function GuestPortal() {
   const [reply, setReply] = useState('')
   const [pendingType, setPendingType] = useState<string | null>(null)
   const [error, setError] = useState('')
+  const [activeTab, setActiveTab] = useState<'menu' | 'service' | 'orders'>('menu')
+  const [checkoutBusy, setCheckoutBusy] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
@@ -78,6 +81,33 @@ export function GuestPortal() {
     }
   }
 
+  async function placeAndPay(items: MenuCartItem[]) {
+    if (!data) return
+    setCheckoutBusy(true)
+    setError('')
+    const idempotencyKey = `guest-cart-${crypto.randomUUID()}`
+    try {
+      const order = await createGuestOrder({ tableToken: data.tableToken, items, idempotencyKey })
+      const result = await checkoutGuestOrder({
+        tableToken: data.tableToken,
+        orderId: order.id,
+        idempotencyKey: `${idempotencyKey}-pay`,
+      })
+      if (result.providerRequired) {
+        setReply('订单已保留，正式微信支付通道待商户号联调后会在此拉起。')
+      } else {
+        setReply(`支付成功 ¥${(result.paymentIntent.amount / 100).toFixed(2)}，订单已发送至出品岗位。`)
+      }
+      setActiveTab('orders')
+      await refresh()
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : '下单支付失败')
+      throw requestError
+    } finally {
+      setCheckoutBusy(false)
+    }
+  }
+
   return (
     <main className="guest-shell">
       <header className="guest-header">
@@ -101,7 +131,22 @@ export function GuestPortal() {
       )}
       {error && <div className="error-banner" role="alert">{error}</div>}
 
-      <section className="guest-services">
+      <nav className="guest-tabs" aria-label="桌台功能">
+        <button className={activeTab === 'menu' ? 'is-active' : ''} onClick={() => setActiveTab('menu')}><ShoppingBag size={18} />点单</button>
+        <button className={activeTab === 'service' ? 'is-active' : ''} onClick={() => setActiveTab('service')}><MessageCircleMore size={18} />服务</button>
+        <button className={activeTab === 'orders' ? 'is-active' : ''} onClick={() => setActiveTab('orders')}><ListChecks size={18} />订单</button>
+      </nav>
+
+      {activeTab === 'menu' && <MenuOrderingWorkspace
+        products={data?.products ?? []}
+        tableLabel={data?.table.displayName ?? tableCode}
+        submitLabel="确认订单并微信支付"
+        submitHint="验证环境会模拟微信付款；付款成功后服务员、收银和出品岗位会同时收到状态。"
+        busy={checkoutBusy}
+        onSubmit={placeAndPay}
+      />}
+
+      {activeTab === 'service' && <><section className="guest-services">
         <div className="guest-section-title">
           <span>呼叫服务</span>
           <MessageCircleMore size={20} aria-hidden="true" />
@@ -151,7 +196,25 @@ export function GuestPortal() {
             })}
           </div>
         )}
-      </section>
+      </section></>}
+
+      {activeTab === 'orders' && <section className="guest-orders">
+        <div className="guest-section-title"><span>订单与出品进度</span><ListChecks size={20} /></div>
+        {(data?.account.orders.length ?? 0) === 0 ? <div className="guest-empty">本桌当前还没有订单</div> : (
+          <div className="guest-order-list">{data?.account.orders.toReversed().map((order) => {
+            const payment = data.account.payments.find((item) => item.orderIds.includes(order.id))
+            return <article className="guest-order" key={order.id}>
+              <header><div><strong>¥{(order.payableAmount / 100).toFixed(2)}</strong><span>{new Date(order.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span></div><b className={payment?.status === 'succeeded' ? 'is-paid' : ''}>{payment?.status === 'succeeded' ? '已支付' : order.status === 'draft' ? '待支付' : '已下单'}</b></header>
+              <div>{order.items.map((item) => <div className="guest-order-line" key={item.id}><span>{item.name} × {item.quantity}</span><strong>{fulfillmentLabel(item.fulfillmentStatus)}</strong></div>)}</div>
+            </article>
+          })}</div>
+        )}
+      </section>}
     </main>
   )
+}
+
+function fulfillmentLabel(status: GuestSessionResponse['account']['orders'][number]['items'][number]['fulfillmentStatus']) {
+  const labels = { draft: '待支付', queued: '待制作', preparing: '制作中', completed: '待取送', picked_up: '配送中', delivered: '已送达' }
+  return labels[status]
 }

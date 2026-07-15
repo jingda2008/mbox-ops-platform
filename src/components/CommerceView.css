@@ -1,4 +1,12 @@
 .commerce-view { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.paid-signal { min-height: 58px; display: flex; align-items: center; gap: 10px; padding: 9px 17px; border-bottom: 1px solid #b9dcc5; background: #eaf6ee; color: #286343; }
+.paid-signal > div { display: grid; gap: 2px; }
+.paid-signal strong { font-size: 14px; }
+.paid-signal span { color: #4b785e; font-size: 11px; }
+.commerce-mode-tabs { min-height: 50px; display: flex; align-items: end; gap: 4px; padding: 7px 16px 0; border-bottom: 1px solid var(--line); background: #fff; }
+.commerce-mode-tabs button { min-height: 42px; padding: 0 16px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--ink-soft); font-weight: 750; }
+.commerce-mode-tabs button.is-active { border-bottom-color: var(--brand-yellow); color: var(--ink); }
+.commerce-mode-tabs button span { min-width: 20px; height: 20px; display: inline-grid; place-items: center; margin-left: 4px; border-radius: 50%; background: #eef0eb; font-size: 10px; }
 .commerce-metrics { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--line); }
 .commerce-metrics > div { min-height: 74px; display: grid; grid-template-columns: 30px auto; grid-template-rows: auto auto; align-content: center; padding: 10px 17px; border-right: 1px solid var(--line); }
 .commerce-metrics > div:last-child { border-right: 0; }

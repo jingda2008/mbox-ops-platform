@@ -139,11 +139,24 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
   }))
   migrated.employees = migrated.employees.map((employee) => ({
     ...employee,
+    roleIds: [...new Set(employee.roleIds ?? [])].filter((roleId) => roleId !== employee.roleId),
+    permissionIds: employee.permissionIds ?? [],
     skillIds: employee.skillIds ?? [],
   }))
   migrated.shiftAssignments = migrated.shiftAssignments.map((assignment) => ({
     ...assignment,
+    roleIds: [...new Set(assignment.roleIds ?? [])].filter((roleId) => roleId !== assignment.roleId),
     stationIds: assignment.stationIds ?? [],
+  }))
+  const menuDefaults = new Map([
+    ['product-cocktail', { categoryId: 'drinks', categoryName: '酒水', description: '柑橘香气与清爽气泡，现场现调。', imageUrl: '/menu/cocktail.jpg', tags: ['招牌', '现调'], sortOrder: 1 }],
+    ['product-beer', { categoryId: 'drinks', categoryName: '酒水', description: '冰镇精酿，入口清爽，适合分享。', imageUrl: '/menu/beer.jpg', tags: ['冰镇'], sortOrder: 2 }],
+    ['product-fruit', { categoryId: 'food', categoryName: '餐食', description: '当日鲜切水果，适合多人分享。', imageUrl: '/menu/fruit.jpg', tags: ['鲜切'], sortOrder: 3 }],
+    ['product-snack', { categoryId: 'food', categoryName: '餐食', description: '热制下酒小食组合，出品约八分钟。', imageUrl: '/menu/snack.jpg', tags: ['热食'], sortOrder: 4 }],
+  ])
+  migrated.products = migrated.products.map((product) => ({
+    ...(menuDefaults.get(product.id) ?? { categoryId: 'featured', categoryName: '推荐', description: '', imageUrl: '', tags: [], sortOrder: 99 }),
+    ...product,
   }))
   migrated.tableTransfers ??= []
   migrated.waitlistEntries ??= []

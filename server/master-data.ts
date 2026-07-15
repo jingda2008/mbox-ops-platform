@@ -34,6 +34,16 @@ function assertRole(state: RuntimeState, roleId: string) {
   if (!state.config.roles.some((role) => role.id === roleId)) throw new Error('岗位不存在')
 }
 
+function normalizedRoleIds(roleId: string, roleIds: string[] | undefined) {
+  return [...new Set(roleIds ?? [])].filter((id) => id !== roleId)
+}
+
+function assertRoles(state: RuntimeState, roleId: string, roleIds: string[] | undefined) {
+  const normalized = normalizedRoleIds(roleId, roleIds)
+  ;[roleId, ...normalized].forEach((id) => assertRole(state, id))
+  return normalized
+}
+
 function assertAreas(state: RuntimeState, areaIds: string[]) {
   const unique = new Set(areaIds)
   if (unique.size !== areaIds.length) throw new Error('责任区不能重复')
@@ -41,12 +51,12 @@ function assertAreas(state: RuntimeState, areaIds: string[]) {
 }
 
 export function createEmployee(state: RuntimeState, input: EmployeeWriteInput, actorId: string) {
-  assertRole(state, input.roleId)
+  const roleIds = assertRoles(state, input.roleId, input.roleIds)
   assertAreas(state, input.areaIds)
   if (state.employees.some((employee) => employee.displayName === input.displayName && employee.status === 'active')) {
     throw new Error('已有同名在职员工')
   }
-  const employee = { id: `emp_${randomUUID()}`, ...input }
+  const employee = { id: `emp_${randomUUID()}`, ...input, roleIds, permissionIds: [...new Set(input.permissionIds ?? [])] }
   state.employees.push(employee)
   audit(state, actorId, 'employee.created.v1', 'employee', employee.id, { after: employee })
   return employee
@@ -60,7 +70,7 @@ export function updateEmployee(
 ) {
   const employee = state.employees.find((item) => item.id === employeeId)
   if (!employee) throw new Error('员工不存在')
-  assertRole(state, input.roleId)
+  const roleIds = assertRoles(state, input.roleId, input.roleIds)
   assertAreas(state, input.areaIds)
   if (
     input.status === 'inactive' &&
@@ -69,7 +79,7 @@ export function updateEmployee(
     throw new Error('员工仍有未关闭任务，不能停用')
   }
   const before = structuredClone(employee)
-  Object.assign(employee, input)
+  Object.assign(employee, input, { roleIds, permissionIds: [...new Set(input.permissionIds ?? [])] })
   if (employee.status === 'inactive') {
     employee.online = false
     employee.paused = true
@@ -103,7 +113,7 @@ export function updateTable(
 function validateShift(state: RuntimeState, input: ShiftWriteInput) {
   const employee = state.employees.find((item) => item.id === input.employeeId)
   if (!employee || employee.status !== 'active') throw new Error('排班员工不存在或已停用')
-  assertRole(state, input.roleId)
+  assertRoles(state, input.roleId, input.roleIds)
   assertAreas(state, input.areaIds)
   if (new Date(input.startAt) >= new Date(input.endAt)) throw new Error('班次结束时间必须晚于开始时间')
 }
@@ -118,7 +128,7 @@ export function createShift(state: RuntimeState, input: ShiftWriteInput, actorId
       new Date(shift.endAt) > new Date(input.startAt),
   )
   if (overlapping) throw new Error('该员工已有重叠班次')
-  const shift: ShiftAssignment = { id: `shift_${randomUUID()}`, ...input }
+  const shift: ShiftAssignment = { id: `shift_${randomUUID()}`, ...input, roleIds: normalizedRoleIds(input.roleId, input.roleIds) }
   state.shiftAssignments.push(shift)
   audit(state, actorId, 'shift.created.v1', 'shiftAssignment', shift.id, { after: shift })
   return shift
@@ -143,7 +153,7 @@ export function updateShift(
   )
   if (overlapping) throw new Error('该员工已有重叠班次')
   const before = structuredClone(shift)
-  Object.assign(shift, input)
+  Object.assign(shift, input, { roleIds: normalizedRoleIds(input.roleId, input.roleIds) })
   audit(state, actorId, 'shift.updated.v1', 'shiftAssignment', shift.id, { before, after: shift })
   return shift
 }

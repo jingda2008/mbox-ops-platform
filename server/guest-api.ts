@@ -1,10 +1,12 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import type { RuntimeMode } from '../src/shared/auth-contracts.js'
 import {
   guestTaskCreateSchema,
   guestTaskFeedbackSchema,
   guestSongRequestSchema,
+  guestCartOrderSchema,
+  guestCheckoutSchema,
   type GuestSessionClaims,
   type GuestSessionResponse,
   type GuestTaskView,
@@ -21,6 +23,11 @@ import {
   verifyTableAccessToken,
 } from './table-access.js'
 import { submitSongRequest } from './song-domain.js'
+import { addOrderItem, createOrderDraft, submitOrder } from './order-domain.js'
+import { createPaymentIntent, handlePaymentNotification } from './payment-domain.js'
+import { consumeManagedInventoryForSubmittedOrder } from './inventory-order-integration.js'
+import { completeAwaitingOrderOnOrder } from './proactive-service.js'
+import { routeProductToEnabledWorkstation, syncOrderFulfillmentWorkstations } from './fulfillment-workstations.js'
 
 const DEFAULT_GUEST_SESSION_TTL_MS = 15 * 60_000
 
@@ -130,7 +137,9 @@ function sessionView(
   const primary = state.employees.find((employee) => employee.id === table.primaryEmployeeId)
   const orders = state.orderDomain.orders.filter((order) => order.tableSessionId === tableSession.id)
   const ledgerEntries = state.orderDomain.tableLedgerEntries.filter((entry) => entry.tableSessionId === tableSession.id)
-  const balanceAmount = ledgerEntries.at(-1)?.balanceAfter ?? orders.reduce((sum, order) => sum + order.amounts.payableAmount, 0)
+  const balanceAmount = ledgerEntries.at(-1)?.balanceAfter ?? orders
+    .filter((order) => order.status !== 'draft')
+    .reduce((sum, order) => sum + order.amounts.payableAmount, 0)
   const songOffers = state.songState.performanceSessions
     .filter((performance) => performance.status === 'scheduled' || performance.status === 'live')
     .flatMap((performance) => performance.appearances
@@ -167,6 +176,10 @@ function sessionView(
     serviceTypes: state.config.serviceTypes
       .filter((serviceType) => serviceType.enabled && serviceType.guestVisible !== false)
       .map(({ id, code, name, icon, priority }) => ({ id, code, name, icon, priority })),
+    products: state.products
+      .filter((product) => product.enabled)
+      .sort((left, right) => (left.sortOrder ?? 999) - (right.sortOrder ?? 999))
+      .map((product) => ({ ...product, costAmount: 0 })),
     tasks: state.tasks
       .filter((task) => task.tableId === table.id && Date.parse(task.createdAt) >= Date.parse(tableSession.openedAt))
       .slice(0, 10)
@@ -188,6 +201,18 @@ function sessionView(
           fulfillmentStatus: item.fulfillmentStatus,
         })),
       })),
+      payments: state.paymentDomain.paymentIntents
+        .filter((intent) => intent.tableSessionId === tableSession.id)
+        .slice(-20)
+        .reverse()
+        .map((intent) => ({
+          id: intent.id,
+          orderIds: intent.orderIds,
+          amount: intent.amount,
+          status: intent.status,
+          channel: intent.channel,
+          paidAt: intent.paidAt,
+        })),
     },
     songOffers,
     songRequests: state.songState.requests
@@ -273,6 +298,145 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
         idempotencyKey: input.idempotencyKey,
       })
       return taskView(state, task)
+    })
+    return reply.status(201).send(result)
+  })
+
+  app.post('/api/guest/orders', async (request, reply) => {
+    const input = guestCartOrderSchema.parse(request.body)
+    const order = await repository.mutate((state) => {
+      const { table, tableSession } = writeAccessFromToken(state, input.tableToken, options)
+      const existing = state.orderDomain.orders.find((candidate) => (
+        candidate.id === deterministicId('guest_order', input.idempotencyKey)
+      ))
+      if (existing) return existing
+      if (new Set(input.items.map((item) => item.productId)).size !== input.items.length) {
+        throw new Error('购物车商品不能重复，请合并数量')
+      }
+      const products = input.items.map((item) => {
+        const product = state.products.find((candidate) => candidate.id === item.productId && candidate.enabled)
+        if (!product) throw new TableAccessError('购物车包含已下架商品', 'PRODUCT_NOT_AVAILABLE', 409)
+        return { product, quantity: item.quantity }
+      })
+      syncOrderFulfillmentWorkstations(state)
+      const now = new Date().toISOString()
+      const actorId = `guest-${table.code}`
+      const orderId = deterministicId('guest_order', input.idempotencyKey)
+      createOrderDraft(state.orderDomain, {
+        orderId,
+        tableSessionId: tableSession.id,
+        createdBy: actorId,
+        occurredAt: now,
+        idempotencyKey: `${input.idempotencyKey}:draft`,
+      })
+      products.forEach(({ product, quantity }, index) => {
+        const workstation = routeProductToEnabledWorkstation(state, product.stationId)
+        addOrderItem(state.orderDomain, {
+          orderId,
+          item: {
+            id: deterministicId('guest_line', `${input.idempotencyKey}:${index}`),
+            skuId: product.id,
+            name: product.name,
+            specification: product.specification,
+            quantity,
+            unitListPriceAmount: product.listPriceAmount,
+            unitSalePriceAmount: product.listPriceAmount,
+            unitCostAmount: product.costAmount,
+            stationId: workstation.id,
+            configVersion: product.configVersion,
+          },
+          actorId,
+          occurredAt: now,
+          idempotencyKey: `${input.idempotencyKey}:item:${index}`,
+        })
+      })
+      state.auditEntries.push({
+        id: `audit_${randomUUID()}`,
+        actorId,
+        action: 'guest.cart_order_created.v1',
+        objectType: 'order',
+        objectId: orderId,
+        occurredAt: now,
+        details: { tableId: table.id, items: input.items, idempotencyKey: input.idempotencyKey },
+      })
+      state.revision += 1
+      return state.orderDomain.orders.find((candidate) => candidate.id === orderId)!
+    })
+    return reply.status(201).send(order)
+  })
+
+  app.post('/api/guest/checkout', async (request, reply) => {
+    const input = guestCheckoutSchema.parse(request.body)
+    const result = await repository.mutate((state) => {
+      const { table, tableSession } = writeAccessFromToken(state, input.tableToken, options)
+      const order = state.orderDomain.orders.find((candidate) => candidate.id === input.orderId)
+      if (!order || order.tableSessionId !== tableSession.id) {
+        throw new TableAccessError('不能支付其他桌次的订单', 'GUEST_ORDER_ACCESS_FORBIDDEN', 403)
+      }
+      const existingIntent = state.paymentDomain.paymentIntents.find((intent) => intent.orderIds.includes(order.id))
+      if (existingIntent) return { paymentIntent: existingIntent, order, providerRequired: existingIntent.status !== 'succeeded' }
+      if (order.status !== 'draft') throw new TableAccessError('订单已经提交或支付', 'ORDER_NOT_PAYABLE', 409)
+      const now = new Date().toISOString()
+      const localPayment = options.runtimeMode === 'local' || options.runtimeMode === 'test'
+      const channel = localPayment ? 'wechat_mock' : 'wechat_jsapi'
+      const paymentIntent = createPaymentIntent(state.paymentDomain, {
+        paymentIntentId: deterministicId('guest_payment', input.idempotencyKey),
+        tableSessionId: tableSession.id,
+        lineAllocations: order.items.map((item) => ({
+          orderId: order.id,
+          orderItemId: item.id,
+          quantity: item.quantity,
+          unitPaidAmount: item.unitSalePriceAmount,
+        })),
+        amount: order.amounts.payableAmount,
+        currency: 'CNY',
+        channel,
+        merchantId: state.store.id,
+        createdBy: `guest-${table.code}`,
+        deviceId: `guest-web-${table.code}`,
+        occurredAt: now,
+        expiresAt: new Date(Date.parse(now) + 15 * 60_000).toISOString(),
+        idempotencyKey: `${input.idempotencyKey}:intent`,
+      })
+      let submittedOrder = order
+      if (localPayment) {
+        handlePaymentNotification(state.paymentDomain, {
+          channel,
+          notificationId: deterministicId('notification', input.idempotencyKey),
+          paymentIntentId: paymentIntent.id,
+          channelTransactionId: deterministicId('wechat_transaction', input.idempotencyKey),
+          status: 'succeeded',
+          amount: paymentIntent.amount,
+          currency: paymentIntent.currency,
+          merchantId: paymentIntent.merchantId,
+          signatureVerified: true,
+          channelOccurredAt: now,
+          receivedAt: now,
+        })
+        submittedOrder = submitOrder(state.orderDomain, {
+          orderId: order.id,
+          submittedBy: `guest-${table.code}`,
+          occurredAt: now,
+          idempotencyKey: `${input.idempotencyKey}:submit`,
+        })
+        consumeManagedInventoryForSubmittedOrder(state.inventoryDomain, submittedOrder, {
+          actorId: `guest-${table.code}`,
+          businessDate: state.store.businessDate,
+          occurredAt: now,
+        })
+        completeAwaitingOrderOnOrder(state, table.id, order.id, `guest-${table.code}`, new Date(now))
+      }
+      state.auditEntries.push({
+        id: `audit_${randomUUID()}`,
+        actorId: `guest-${table.code}`,
+        action: localPayment ? 'guest.payment_succeeded.v1' : 'guest.payment_initiated.v1',
+        objectType: 'paymentIntent',
+        objectId: paymentIntent.id,
+        occurredAt: now,
+        details: { orderId: order.id, channel, idempotencyKey: input.idempotencyKey },
+      })
+      state.revision += 1
+      return { paymentIntent, order: submittedOrder, providerRequired: !localPayment }
     })
     return reply.status(201).send(result)
   })

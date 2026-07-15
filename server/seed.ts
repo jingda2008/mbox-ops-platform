@@ -202,10 +202,10 @@ export function createSeedState(): RuntimeState {
       { id: 'shift-host', employeeId: 'emp-host', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'host', areaIds: ['lounge', 'interactive', 'social', 'walkin', 'booth'], stationIds: [], isPrimary: false, status: 'active' },
     ],
     products: [
-      { id: 'product-beer', sku: 'BEER-001', name: '精酿啤酒', specification: '330ml', listPriceAmount: 6800, costAmount: 1800, stationId: 'bar-main', enabled: true, configVersion: 1 },
-      { id: 'product-cocktail', sku: 'COCKTAIL-001', name: '招牌鸡尾酒', specification: '1杯', listPriceAmount: 8800, costAmount: 2200, stationId: 'bar-main', enabled: true, configVersion: 1 },
-      { id: 'product-fruit', sku: 'FOOD-001', name: '时令果盘', specification: '1份', listPriceAmount: 12800, costAmount: 3800, stationId: 'kitchen-cold', enabled: true, configVersion: 1 },
-      { id: 'product-snack', sku: 'FOOD-002', name: '小食拼盘', specification: '1份', listPriceAmount: 9800, costAmount: 3200, stationId: 'kitchen-hot', enabled: true, configVersion: 1 },
+      { id: 'product-cocktail', sku: 'COCKTAIL-001', name: '招牌鸡尾酒', specification: '1杯', categoryId: 'drinks', categoryName: '酒水', description: '柑橘香气与清爽气泡，现场现调。', imageUrl: '/menu/cocktail.jpg', tags: ['招牌', '现调'], sortOrder: 1, listPriceAmount: 8800, costAmount: 2200, stationId: 'bar-main', enabled: true, configVersion: 1 },
+      { id: 'product-beer', sku: 'BEER-001', name: '精酿啤酒', specification: '330ml', categoryId: 'drinks', categoryName: '酒水', description: '冰镇精酿，入口清爽，适合分享。', imageUrl: '/menu/beer.jpg', tags: ['冰镇'], sortOrder: 2, listPriceAmount: 6800, costAmount: 1800, stationId: 'bar-main', enabled: true, configVersion: 1 },
+      { id: 'product-fruit', sku: 'FOOD-001', name: '时令果盘', specification: '1份', categoryId: 'food', categoryName: '餐食', description: '当日鲜切水果，适合多人分享。', imageUrl: '/menu/fruit.jpg', tags: ['鲜切'], sortOrder: 3, listPriceAmount: 12800, costAmount: 3800, stationId: 'kitchen-cold', enabled: true, configVersion: 1 },
+      { id: 'product-snack', sku: 'FOOD-002', name: '小食拼盘', specification: '1份', categoryId: 'food', categoryName: '餐食', description: '热制下酒小食组合，出品约八分钟。', imageUrl: '/menu/snack.jpg', tags: ['热食'], sortOrder: 4, listPriceAmount: 9800, costAmount: 3200, stationId: 'kitchen-hot', enabled: true, configVersion: 1 },
     ],
     orderDomain: createOrderDomainState([
       { id: 'server-gift-authority', actorId: 'emp-lin', kinds: ['gift'], maxAmount: 8800, allowedSkuIds: ['product-beer', 'product-cocktail'], tableSessionIds: null, validFrom: new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString(), validUntil: shiftEnd.toISOString() },

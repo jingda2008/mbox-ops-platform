@@ -8,6 +8,16 @@ export const quickOrderSchema = z.object({
   idempotencyKey: z.string().min(8).max(128),
 })
 
+export const cartOrderSchema = z.object({
+  tableId: z.string().min(1),
+  items: z.array(z.object({
+    productId: z.string().min(1),
+    quantity: z.number().int().min(1).max(50),
+  })).min(1).max(50),
+  actorId: z.string().min(1),
+  idempotencyKey: z.string().min(8).max(128),
+})
+
 export const kdsActionSchema = z.object({
   action: z.enum(['start', 'complete', 'pickUp', 'deliver']),
   actorId: z.string().min(1),
@@ -40,5 +50,6 @@ export const authorityWriteSchema = z.object({
 })
 
 export type QuickOrderInput = z.infer<typeof quickOrderSchema>
+export type CartOrderInput = z.infer<typeof cartOrderSchema>
 export type KdsActionInput = z.infer<typeof kdsActionSchema>
 export type AuthorityWriteInput = z.infer<typeof authorityWriteSchema>

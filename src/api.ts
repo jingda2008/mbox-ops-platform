@@ -19,7 +19,7 @@ import type {
   TableWriteInput,
   TaskActionInput,
 } from './shared/contracts'
-import type { KdsActionInput, QuickOrderInput } from './shared/commerce-api'
+import type { CartOrderInput, KdsActionInput, QuickOrderInput } from './shared/commerce-api'
 import type { AuthorityWriteInput } from './shared/commerce-api'
 import type { KdsTask, Order } from './shared/order-contracts'
 import type { OrderAuthorizationAuthority } from './shared/order-contracts'
@@ -47,6 +47,8 @@ import type { ConfigVersionRecord } from './shared/config-versioning-contracts'
 import type { SongRequest } from './shared/song-contracts'
 import type {
   GuestSessionResponse,
+  GuestCartOrderInput,
+  GuestCheckoutInput,
   GuestTaskCreateInput,
   GuestTaskFeedbackInput,
   GuestTaskView,
@@ -187,6 +189,17 @@ export function createGuestTask(input: GuestTaskCreateInput) {
 
 export function submitGuestTaskFeedback(taskId: string, input: GuestTaskFeedbackInput) {
   return guestRequest<GuestTaskView>(`/api/guest/tasks/${encodeURIComponent(taskId)}/feedback`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function createGuestOrder(input: GuestCartOrderInput) {
+  return guestRequest<Order>('/api/guest/orders', { method: 'POST', body: JSON.stringify(input) })
+}
+
+export function checkoutGuestOrder(input: GuestCheckoutInput) {
+  return guestRequest<{ paymentIntent: PaymentIntent; order: Order; providerRequired: boolean }>('/api/guest/checkout', {
     method: 'POST',
     body: JSON.stringify(input),
   })
@@ -450,6 +463,10 @@ export function updateCommerceAuthority(authorityId: string, input: AuthorityWri
 
 export function createQuickOrder(input: QuickOrderInput) {
   return request<Order>('/api/commerce/quick-orders', { method: 'POST', body: JSON.stringify(input) })
+}
+
+export function createCartOrder(input: CartOrderInput) {
+  return request<Order>('/api/commerce/orders', { method: 'POST', body: JSON.stringify(input) })
 }
 
 export function actOnKdsTask(taskId: string, input: KdsActionInput) {

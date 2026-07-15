@@ -174,7 +174,26 @@ export function isRoleNavigationAllowed(access: RoleHomeAccess, navigationId: Ro
 
 export function buildRoleHomeModel(data: BootstrapResponse, employeeId: string): RoleHomeModel {
   const employee = data.employees.find((item) => item.id === employeeId && item.status === 'active')
-  const access = getRoleHomeAccess(data, employee?.roleId ?? '')
+  const baseAccess = getRoleHomeAccess(data, employee?.roleId ?? '')
+  const activeShifts = data.shiftAssignments.filter((shift) => (
+    shift.employeeId === employee?.id
+    && shift.businessDate === data.store.businessDate
+    && shift.status === 'active'
+  ))
+  const roleIds = [...new Set((activeShifts.length > 0
+    ? [...activeShifts.flatMap((shift) => [shift.roleId, ...(shift.roleIds ?? [])]), ...(employee?.roleIds ?? [])]
+    : [employee?.roleId, ...(employee?.roleIds ?? [])]
+  ).filter(Boolean))]
+  const permissionIds = [...new Set([
+    ...(employee?.permissionIds ?? []),
+    ...data.config.roles.filter((role) => roleIds.includes(role.id)).flatMap((role) => role.permissionIds ?? []),
+  ])]
+  const configuredNavigation = navigationForPermissions(permissionIds)
+  const access = {
+    ...baseAccess,
+    roleLabel: data.config.roles.filter((role) => roleIds.includes(role.id)).map((role) => role.name).join(' / ') || baseAccess.roleLabel,
+    allowedNavigationIds: configuredNavigation.length > 0 ? configuredNavigation : baseAccess.allowedNavigationIds,
+  }
   const counts = buildCounts(data, employee, access.kind)
   const { metrics, todos } = buildRoleContent(access.kind, counts)
 

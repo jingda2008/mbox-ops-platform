@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import {
   authorizationDecisionSchema,
   authorizationRequestSchema,
+  cartOrderSchema,
   kdsActionSchema,
   quickOrderSchema,
 } from '../src/shared/commerce-api.js'
@@ -44,6 +45,87 @@ function deterministicId(prefix: string, key: string) {
 }
 
 export function registerCommerceRoutes(app: FastifyInstance, repository: RuntimeRepository) {
+  app.post('/api/commerce/orders', async (request, reply) => {
+    const input = cartOrderSchema.parse(request.body)
+    const order = await repository.mutate((state) => {
+      const actor = requireOrderCreationRole(request, state)
+      requireTableDataScope(request, state, input.tableId, 'commerce.order.create')
+      const previous = state.auditEntries.find(
+        (entry) => entry.action === 'commerce.cart_order.v1' && entry.details.idempotencyKey === input.idempotencyKey,
+      )
+      if (previous) {
+        const existingOrder = state.orderDomain.orders.find((item) => item.id === previous.objectId)
+        if (!existingOrder) throw new Error('购物车订单幂等记录异常')
+        return existingOrder
+      }
+      if (new Set(input.items.map((item) => item.productId)).size !== input.items.length) {
+        throw new Error('购物车商品不能重复，请合并数量')
+      }
+      const table = state.tables.find((item) => item.id === input.tableId)
+      if (!table || table.status !== 'occupied') throw new Error('只能向已开台桌台下单')
+      const products = input.items.map((item) => {
+        const product = state.products.find((candidate) => candidate.id === item.productId && candidate.enabled)
+        if (!product) throw new Error('购物车包含不存在或已停用商品')
+        return { product, quantity: item.quantity }
+      })
+      syncOrderFulfillmentWorkstations(state)
+      const now = new Date().toISOString()
+      const orderId = deterministicId('order', input.idempotencyKey)
+      createOrderDraft(state.orderDomain, {
+        orderId,
+        tableSessionId: currentOpenTableSession(state, table.id).id,
+        createdBy: actor.actorId,
+        occurredAt: now,
+        idempotencyKey: `${input.idempotencyKey}:draft`,
+      })
+      products.forEach(({ product, quantity }, index) => {
+        const workstation = routeProductToEnabledWorkstation(state, product.stationId)
+        addOrderItem(state.orderDomain, {
+          orderId,
+          item: {
+            id: deterministicId('line', `${input.idempotencyKey}:item:${index}`),
+            skuId: product.id,
+            name: product.name,
+            specification: product.specification,
+            quantity,
+            unitListPriceAmount: product.listPriceAmount,
+            unitSalePriceAmount: product.listPriceAmount,
+            unitCostAmount: product.costAmount,
+            stationId: workstation.id,
+            configVersion: product.configVersion,
+          },
+          actorId: actor.actorId,
+          occurredAt: now,
+          idempotencyKey: `${input.idempotencyKey}:item:${index}`,
+        })
+      })
+      const submitted = submitOrder(state.orderDomain, {
+        orderId,
+        submittedBy: actor.actorId,
+        occurredAt: now,
+        idempotencyKey: `${input.idempotencyKey}:submit`,
+      })
+      consumeManagedInventoryForSubmittedOrder(state.inventoryDomain, submitted, {
+        actorId: actor.actorId,
+        businessDate: state.store.businessDate,
+        occurredAt: now,
+      })
+      completeAwaitingOrderOnOrder(state, table.id, orderId, actor.actorId, new Date(now))
+      state.auditEntries.push({
+        id: `audit_${randomUUID()}`,
+        actorId: actor.actorId,
+        action: 'commerce.cart_order.v1',
+        objectType: 'order',
+        objectId: orderId,
+        occurredAt: now,
+        details: { tableId: table.id, items: input.items, idempotencyKey: input.idempotencyKey },
+      })
+      state.revision += 1
+      return submitted
+    })
+    return reply.status(201).send(order)
+  })
+
   app.post('/api/commerce/quick-orders', async (request, reply) => {
     const input = quickOrderSchema.parse(request.body)
     const order = await repository.mutate((state) => {
@@ -135,6 +217,7 @@ export function registerCommerceRoutes(app: FastifyInstance, repository: Runtime
       requireConfiguredOperation(request, state, operation)
       const actor = requireAnyRole(
         request,
+        state,
         allowedFulfillmentRoleIds(state.orderDomain, currentTask, input.action),
         operation,
         actionName,

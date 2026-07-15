@@ -234,7 +234,7 @@ export function createPaymentIntent(state: PaymentDomainState, command: CreatePa
         amount: command.amount,
         currency: command.currency,
         channel: command.channel,
-        settlementChannel: command.settlementChannel,
+        ...(command.settlementChannel ? { settlementChannel: command.settlementChannel } : {}),
         merchantId: command.merchantId,
         status: 'pending',
         channelTransactionId: null,
@@ -246,9 +246,11 @@ export function createPaymentIntent(state: PaymentDomainState, command: CreatePa
         failedAt: null,
         closedAt: null,
         failureReason: null,
-        businessDate: command.businessDate,
+        ...(command.businessDate ? { businessDate: command.businessDate } : {}),
         allocationMode: command.allocationMode ?? 'all',
-        requestSelectionFingerprint: command.requestSelectionFingerprint,
+        ...(command.requestSelectionFingerprint
+          ? { requestSelectionFingerprint: command.requestSelectionFingerprint }
+          : {}),
       }
       state.paymentIntents.push(intent)
       return intent

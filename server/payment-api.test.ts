@@ -6,6 +6,7 @@ import { createPaymentDomainState } from './payment-domain.js'
 import { registerPaymentRoutes } from './payment-api.js'
 import type { RuntimeRepository } from './repository.js'
 import { createSeedState } from './seed.js'
+import { serializeRuntimeState } from './postgres-repository.js'
 
 function fixture(
   runtimeMode: RuntimeMode,
@@ -126,6 +127,8 @@ describe('payment API security boundary', () => {
     })
     expect(simulated.statusCode).toBe(200)
     expect(simulated.json()).toMatchObject({ channel: 'wechat_mock', status: 'succeeded' })
+    const persisted = await repository.read()
+    expect(() => serializeRuntimeState(persisted)).not.toThrow()
     await app.close()
     await repository.close()
   })

@@ -31,6 +31,7 @@ import type {
   InventoryApprovalRequest,
   InventoryDomainState,
   InventoryRecipeLine,
+  InventoryRecipeVersion,
   InventoryOperationPolicy,
   StockCount,
 } from '../shared/inventory-contracts'
@@ -46,6 +47,14 @@ type InventoryItemOption = {
   specification: string
   defaultUnitCode: string
   kind: 'product' | 'ingredient'
+}
+type InventoryBalanceRow = {
+  item: InventoryItemOption
+  balance?: InventoryDomainState['balances'][number]
+  quantity: number
+  unitCode: string
+  recipe?: InventoryRecipeVersion
+  updatedAt?: string
 }
 
 const LOW_STOCK_QUANTITY = 5
@@ -113,7 +122,27 @@ export function InventoryView() {
 
   const { inventory, context } = workspace
   const products = context.products.filter((product) => product.enabled)
+  const activeRecipes = inventory.recipeVersions.filter((recipe) => recipe.status === 'active')
+  const recipeProductIds = new Set(activeRecipes.map((recipe) => recipe.productId))
   const inventoryItems: InventoryItemOption[] = [
+    ...products.filter((product) => !recipeProductIds.has(product.id)).map((product) => ({
+      id: product.id,
+      name: product.name,
+      sku: product.sku,
+      specification: product.specification,
+      defaultUnitCode: 'unit',
+      kind: 'product' as const,
+    })),
+    ...inventory.ingredientSkus.filter((item) => item.enabled).map((item) => ({
+      id: item.id,
+      name: item.name,
+      sku: item.sku,
+      specification: '原料SKU',
+      defaultUnitCode: item.baseUnitCode,
+      kind: 'ingredient' as const,
+    })),
+  ]
+  const overviewItems: InventoryItemOption[] = [
     ...products.map((product) => ({
       id: product.id,
       name: product.name,
@@ -131,9 +160,23 @@ export function InventoryView() {
       kind: 'ingredient' as const,
     })),
   ]
-  const balanceRows = inventoryItems.map((item) => {
+  const balanceRows: InventoryBalanceRow[] = overviewItems.map((item) => {
+    const recipe = activeRecipes.find((candidate) => candidate.productId === item.id)
+    if (recipe) {
+      const ingredientBalances = recipe.lines.map((line) => inventory.balances.find((balance) => balance.productId === line.ingredientSkuId))
+      const theoreticalQuantity = recipe.lines.length === 0 ? 0 : Math.min(...recipe.lines.map((line, index) => (
+        Math.floor((ingredientBalances[index]?.onHandQuantity ?? 0) / line.standardQuantity)
+      )))
+      return {
+        item,
+        quantity: theoreticalQuantity,
+        unitCode: '杯（理论）',
+        recipe,
+        updatedAt: ingredientBalances.map((balance) => balance?.updatedAt).filter((value): value is string => Boolean(value)).sort().at(-1),
+      }
+    }
     const balance = inventory.balances.find((balance) => balance.productId === item.id)
-    return { item, balance, quantity: balance?.onHandQuantity ?? 0, unitCode: balance?.unitCode ?? item.defaultUnitCode }
+    return { item, balance, quantity: balance?.onHandQuantity ?? 0, unitCode: balance?.unitCode ?? item.defaultUnitCode, updatedAt: balance?.updatedAt }
   })
   const lowStockCount = balanceRows.filter((row) => row.quantity <= LOW_STOCK_QUANTITY).length
   const pendingCounts = inventory.stockCounts.filter((item) => item.status === 'pending_confirmation')
@@ -205,7 +248,7 @@ function InventoryOverview({
 }: {
   inventory: InventoryDomainState
   products: MenuProduct[]
-  rows: Array<{ item: InventoryItemOption; balance?: InventoryDomainState['balances'][number]; quantity: number; unitCode: string }>
+  rows: InventoryBalanceRow[]
 }) {
   const productName = (id: string) => rows.find((row) => row.item.id === id)?.item.name ?? id
   return (
@@ -216,13 +259,13 @@ function InventoryOverview({
           <table className="inventory-table balance-table">
             <thead><tr><th>商品</th><th>SKU / 规格</th><th>可用数量</th><th>单位</th><th>最近更新</th><th>状态</th></tr></thead>
             <tbody>
-              {rows.map(({ item, balance, quantity, unitCode }) => (
+              {rows.map(({ item, balance, quantity, unitCode, recipe, updatedAt }) => (
                 <tr key={item.id} className={quantity <= LOW_STOCK_QUANTITY ? 'is-low-stock' : ''}>
-                  <td><strong>{item.name}</strong><small>{item.kind === 'ingredient' ? '原料' : '整件商品'}</small></td>
+                  <td><strong>{item.name}</strong><small>{item.kind === 'ingredient' ? '原料' : recipe ? `配方商品 · v${recipe.version}` : '整件商品'}</small></td>
                   <td>{item.sku}<small>{item.specification}</small></td>
                   <td className="quantity-cell">{quantity}</td>
                   <td>{unitCode}</td>
-                  <td>{balance ? formatDateTime(balance.updatedAt) : '尚无流水'}</td>
+                  <td>{updatedAt ? formatDateTime(updatedAt) : balance ? formatDateTime(balance.updatedAt) : '尚无流水'}</td>
                   <td><StatusPill tone={quantity === 0 ? 'danger' : quantity <= LOW_STOCK_QUANTITY ? 'warning' : 'success'}>{quantity === 0 ? '零库存' : quantity <= LOW_STOCK_QUANTITY ? '需关注' : '正常'}</StatusPill></td>
                 </tr>
               ))}

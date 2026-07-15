@@ -124,7 +124,7 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
               const responsibleRole = taskResponsibleRole(task, data)
               return (
                 <article className={`kds-row kds-${task.status} ${timing.overdue ? 'is-overdue' : ''}`} key={task.id}>
-                  <div className="kds-table"><span>{table?.code ?? '未知桌号'}</span><small>{table?.displayName ?? '桌台未匹配'}</small></div>
+                  <div className="kds-table"><span>{table?.code ?? task.tableCode ?? '未知桌号'}</span><small>{table?.displayName ?? (task.tableCode ? '按桌号出品' : '桌台未匹配')}</small></div>
                   <div className="kds-product"><strong>{task.itemName} × {task.quantity}</strong><span>{task.specification} · {task.workstation?.name ?? stationLabel(task.stationId)}</span></div>
                   <div className="kds-meta">
                     <span className={`kds-state state-${task.status}`}>{kdsLabels[task.status]}</span>

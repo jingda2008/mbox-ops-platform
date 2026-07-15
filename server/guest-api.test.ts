@@ -103,6 +103,7 @@ describe('guest table API', () => {
     const first = await app.inject({ method: 'POST', url: '/api/guest/tasks', payload: taskBody })
     const replay = await app.inject({ method: 'POST', url: '/api/guest/tasks', payload: taskBody })
     expect(first.statusCode).toBe(201)
+    expect(first.json().serviceTypeName).toBe('加水')
     expect(replay.json().id).toBe(first.json().id)
     await repository.mutate((state) => {
       const task = state.tasks.find((candidate) => candidate.id === first.json().id)!

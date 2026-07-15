@@ -28,6 +28,10 @@ export function projectRuntimeStateForActor(state: RuntimeState, actor: RequestA
   const visibleTables = state.tables.filter((table) => canActorAccessTableDataScope(state, actor, table.id))
   const visibleTableIds = new Set(visibleTables.map((table) => table.id))
   const sessionTableIds = new Map(state.songState.tableSessions.map((session) => [session.id, session.tableId]))
+  const tableCodesBySession = new Map(state.songState.tableSessions.map((session) => [
+    session.id,
+    state.tables.find((table) => table.id === session.tableId)?.code ?? session.tableCode,
+  ]))
   const sessionVisible = (tableSessionId: string) => {
     const tableId = sessionTableIds.get(tableSessionId) ?? legacyTableIdFromSession(tableSessionId)
     return tableId != null && visibleTableIds.has(tableId)
@@ -79,7 +83,7 @@ export function projectRuntimeStateForActor(state: RuntimeState, actor: RequestA
   projected.orderDomain.kdsTasks = canUseKds || canViewOrders
     ? projected.orderDomain.kdsTasks.filter((task) => (
       storeWide || sessionVisible(task.tableSessionId) || workstationTaskVisible(task)
-    ))
+    )).map((task) => ({ ...task, tableCode: tableCodesBySession.get(task.tableSessionId) ?? task.tableCode }))
     : []
   projected.orderDomain.authorizations = canViewOrders
     ? projected.orderDomain.authorizations.filter((authorization) => visibleOrderIds.has(authorization.orderId))

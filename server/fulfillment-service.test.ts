@@ -83,21 +83,46 @@ describe('automatic fulfillment delivery service task', () => {
     let state = await repository.read()
     const kdsTask = state.orderDomain.kdsTasks[0]!
     expect(state.tasks.filter((task) => task.triggerId === `fulfillment-delivery:${kdsTask.id}`)).toHaveLength(1)
-    expect(kdsTask.deliveryServiceTask).toMatchObject({ status: 'pending', ownerId: 'emp-lin' })
+    expect(kdsTask.deliveryServiceTask).toMatchObject({ status: 'pending', ownerId: 'emp-tao' })
     const deliveryTask = state.tasks.find((task) => task.id === kdsTask.deliveryServiceTask?.id)!
     expect(deliveryTask).toMatchObject({
-      serviceTypeId: 'fulfillment-delivery', source: 'system', ownerId: 'emp-lin', status: 'pending',
+      serviceTypeId: 'fulfillment-delivery', source: 'system', ownerId: 'emp-tao', status: 'pending',
     })
     expect(deliveryTask.serviceTypeId).not.toBe('order-help')
 
-    expect((await action(app, 'pickUp', 'fulfillment-pickup-0001', 'server', 'emp-lin')).statusCode).toBe(200)
-    expect((await action(app, 'deliver', 'fulfillment-deliver-0001', 'server', 'emp-lin')).statusCode).toBe(200)
+    expect((await action(app, 'pickUp', 'fulfillment-pickup-0001', 'runner', 'emp-tao')).statusCode).toBe(200)
+    expect((await action(app, 'deliver', 'fulfillment-deliver-0001', 'runner', 'emp-tao')).statusCode).toBe(200)
     state = await repository.read()
     expect(state.tasks.find((task) => task.id === deliveryTask.id)).toMatchObject({
       status: 'completed', resolution: '商品已送达桌台，待确认',
     })
     expect(state.orderDomain.kdsTasks[0]?.deliveryServiceTask?.status).toBe('completed')
 
+    await app.close()
+    await repository.close()
+  })
+
+  it('falls back to the next configured delivery role when the runner is unavailable', async () => {
+    const repository = new JsonRepository(`/tmp/mbox-fulfillment-fallback-${crypto.randomUUID()}.json`)
+    await repository.init()
+    await repository.mutate((state) => {
+      state.employees.find((employee) => employee.id === 'emp-tao')!.online = false
+      state.revision += 1
+    })
+    await createSubmittedOrder(repository)
+    const app = Fastify()
+    registerTestActor(app)
+    app.setErrorHandler((error, _request, reply) => reply.status(error.statusCode ?? 400).send({ message: error.message }))
+    registerCommerceRoutes(app, repository)
+
+    expect((await action(app, 'start', 'fulfillment-fallback-start', 'specialist', 'emp-qing')).statusCode).toBe(200)
+    expect((await action(app, 'complete', 'fulfillment-fallback-complete', 'specialist', 'emp-qing')).statusCode).toBe(200)
+
+    const state = await repository.read()
+    expect(state.tasks.find((task) => task.triggerId?.startsWith('fulfillment-delivery:'))).toMatchObject({
+      ownerId: 'emp-lin',
+      status: 'pending',
+    })
     await app.close()
     await repository.close()
   })

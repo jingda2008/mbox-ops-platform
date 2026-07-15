@@ -31,6 +31,7 @@ export interface GuestTaskView extends Pick<
   ServiceTask,
   'id' | 'serviceTypeId' | 'status' | 'priority' | 'createdAt' | 'updatedAt' | 'customerReply'
 > {
+  serviceTypeName: string
   ownerName: string | null
 }
 

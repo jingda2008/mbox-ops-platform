@@ -118,6 +118,8 @@ export interface KdsTask {
   orderId: string
   orderItemId: string
   tableSessionId: string
+  /** Minimal routing label projected to workstation roles without exposing table details. */
+  tableCode?: string
   stationId: string
   itemName: string
   specification: string

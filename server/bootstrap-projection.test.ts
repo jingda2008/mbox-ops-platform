@@ -101,6 +101,7 @@ describe('role scoped bootstrap projection', () => {
 
     const projected = projectRuntimeStateForActor(state, actor('emp-qing', 'bartender'))
     expect(projected.orderDomain.kdsTasks.map((task) => task.id)).toContain('kds-booth-cocktail')
+    expect(projected.orderDomain.kdsTasks.find((task) => task.id === 'kds-booth-cocktail')?.tableCode).toBe('B01')
     expect(projected.tables.some((table) => table.id === 'table-b01')).toBe(false)
     expect(projected.orderDomain.orders.some((order) => order.id === 'order-booth')).toBe(false)
 

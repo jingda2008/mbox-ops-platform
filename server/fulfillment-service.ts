@@ -44,7 +44,8 @@ function candidatesForRoles(state: RuntimeState, tableId: string, roleIds: reado
   const preferredIds = [table?.primaryEmployeeId, ...(table?.backupEmployeeIds ?? [])]
     .filter((employeeId): employeeId is string => Boolean(employeeId))
   const allIds = state.employees.map((employee) => employee.id)
-  const rank = new Map([...preferredIds, ...allIds].map((employeeId, index) => [employeeId, index]))
+  const employeeRank = new Map([...preferredIds, ...allIds].map((employeeId, index) => [employeeId, index]))
+  const roleRank = new Map(roleIds.map((roleId, index) => [roleId, index]))
   return [...new Set([...preferredIds, ...allIds])]
     .filter((employeeId) => {
       const shift = state.shiftAssignments.find((assignment) => (
@@ -55,8 +56,13 @@ function candidatesForRoles(state: RuntimeState, tableId: string, roleIds: reado
       const stationEligible = !shift?.stationIds?.length || shift.stationIds.includes(stationId)
       return stationEligible && roleIds.includes(effectiveRoleId(state, employeeId) ?? '') && canReceiveTask(state, employeeId)
     })
-    .sort((left, right) => activeTaskCount(state, left) - activeTaskCount(state, right) ||
-      (rank.get(left) ?? Number.MAX_SAFE_INTEGER) - (rank.get(right) ?? Number.MAX_SAFE_INTEGER))
+    .sort((left, right) => {
+      const leftRoleRank = roleRank.get(effectiveRoleId(state, left) ?? '') ?? Number.MAX_SAFE_INTEGER
+      const rightRoleRank = roleRank.get(effectiveRoleId(state, right) ?? '') ?? Number.MAX_SAFE_INTEGER
+      return leftRoleRank - rightRoleRank ||
+        activeTaskCount(state, left) - activeTaskCount(state, right) ||
+        (employeeRank.get(left) ?? Number.MAX_SAFE_INTEGER) - (employeeRank.get(right) ?? Number.MAX_SAFE_INTEGER)
+    })
 }
 
 function chooseDeliveryOwner(state: RuntimeState, tableId: string, deliveryRoleIds: string[], stationId: string) {

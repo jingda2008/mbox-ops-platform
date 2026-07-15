@@ -110,6 +110,7 @@ function taskView(state: RuntimeState, task: ServiceTask): GuestTaskView {
   return {
     id: task.id,
     serviceTypeId: task.serviceTypeId,
+    serviceTypeName: state.config.serviceTypes.find((serviceType) => serviceType.id === task.serviceTypeId)?.name ?? '服务进度',
     status: task.status,
     priority: task.priority,
     createdAt: task.createdAt,

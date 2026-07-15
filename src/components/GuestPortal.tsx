@@ -2,6 +2,7 @@ import { CheckCircle2, ChevronRight, Clock3, MessageCircleMore, ShieldCheck } fr
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createGuestTask, getGuestSession, submitGuestTaskFeedback } from '../api'
 import type { GuestSessionResponse, GuestTaskView } from '../shared/guest-contracts'
+import { guestFeedbackIdempotencyKey } from './guest-portal-utils'
 import { ServiceIcon } from './ServiceIcon'
 
 const guestStatus: Record<GuestTaskView['status'], string> = {
@@ -68,7 +69,7 @@ export function GuestPortal() {
         tableToken: data?.tableToken ?? initialToken,
         action,
         note: action === 'unresolved' ? '客户反馈仍未解决' : '',
-        idempotencyKey: `guest-feedback-${task.id}-${action}-${crypto.randomUUID()}`,
+        idempotencyKey: guestFeedbackIdempotencyKey(action),
       })
       setReply(action === 'confirm' ? '感谢确认，本次服务已完成。' : '已为您升级处理，值班领班会继续跟进。')
       await refresh()
@@ -136,7 +137,7 @@ export function GuestPortal() {
               return (
                 <article className="guest-task" key={task.id}>
                   <div>
-                    <strong>{serviceType?.name}</strong>
+                    <strong>{task.serviceTypeName || serviceType?.name || '服务进度'}</strong>
                     <span>{guestStatus[task.status]} · {task.ownerName ?? '领班调度池'}</span>
                   </div>
                   {task.status === 'completed' && (

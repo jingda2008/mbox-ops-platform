@@ -407,4 +407,31 @@ describe('guest table API', () => {
     expect(state.paymentDomain.paymentIntents[0]).toMatchObject({ status: 'succeeded', orderIds: [orderResponse.json().id] })
     await closeFixture(app, repository)
   })
+
+  it('rejects a stale guest cart when the administrator has just marked the product sold out', async () => {
+    const { app, repository, now } = await fixture()
+    const session = (await exchange(app, staticQr(now()))).body
+    expect(session.products.find((product) => product.id === 'product-cocktail')?.soldOut).toBe(false)
+
+    await repository.mutate((state) => {
+      const product = state.products.find((candidate) => candidate.id === 'product-cocktail')!
+      product.soldOut = true
+      product.soldOutReason = '今晚基酒已售完'
+      state.revision += 1
+    })
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/guest/orders',
+      payload: {
+        tableToken: session.tableToken,
+        items: [{ productId: 'product-cocktail', quantity: 1 }],
+        idempotencyKey: 'guest-stale-cart-soldout-0001',
+      },
+    })
+    expect(response.statusCode).toBe(409)
+    expect(response.json().message).toContain('今晚基酒已售完')
+    expect((await repository.read()).orderDomain.orders).toHaveLength(0)
+    await closeFixture(app, repository)
+  })
 })

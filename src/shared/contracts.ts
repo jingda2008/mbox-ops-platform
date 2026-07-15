@@ -101,6 +101,10 @@ export interface MenuProduct {
   imageUrl?: string
   tags?: string[]
   sortOrder?: number
+  soldOut?: boolean
+  soldOutReason?: string
+  availableFrom?: string | null
+  availableUntil?: string | null
   listPriceAmount: number
   costAmount: number
   stationId: string
@@ -388,6 +392,10 @@ export interface OperationsMetrics {
 export interface BootstrapResponse extends RuntimeState {
   serverNow: string
   metrics: OperationsMetrics
+  viewer?: {
+    actorId: string
+    permissionIds: StaffPermissionId[]
+  }
 }
 
 export const createTaskSchema = z.object({
@@ -573,10 +581,23 @@ export const productWriteSchema = z.object({
   imageUrl: z.string().trim().max(500).optional(),
   tags: z.array(z.string().trim().min(1).max(24)).max(8).optional(),
   sortOrder: z.number().int().min(0).max(9999).optional(),
+  soldOut: z.boolean().optional(),
+  soldOutReason: z.string().trim().max(80).optional(),
+  availableFrom: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
+  availableUntil: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
   listPriceAmount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   costAmount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   stationId: z.string().trim().min(1).max(64),
   enabled: z.boolean(),
+}).superRefine((product, context) => {
+  const hasStart = Boolean(product.availableFrom)
+  const hasEnd = Boolean(product.availableUntil)
+  if (hasStart !== hasEnd) {
+    context.addIssue({ code: 'custom', message: '供应开始和结束时间必须同时填写', path: ['availableFrom'] })
+  }
+  if (hasStart && product.availableFrom === product.availableUntil) {
+    context.addIssue({ code: 'custom', message: '供应开始和结束时间不能相同', path: ['availableUntil'] })
+  }
 })
 
 export type ProductWriteInput = z.infer<typeof productWriteSchema>

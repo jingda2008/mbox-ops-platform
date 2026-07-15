@@ -156,6 +156,7 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
           submitLabel="核对无误，确认下单"
           submitHint="提交后自动分发到对应吧台或厨房；完成制作后自动通知取送人员。"
           busy={busy}
+          timeZone={data.store.timezone}
           onSubmit={submit}
         />
       ) : <>

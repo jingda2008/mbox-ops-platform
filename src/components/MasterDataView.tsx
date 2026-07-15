@@ -1,5 +1,5 @@
-import { BadgeDollarSign, CalendarClock, GlassWater, MapPinned, Plus, Route, Save, TableProperties, UserRoundCog } from 'lucide-react'
-import { useEffect, useState, type FormEvent } from 'react'
+import { BadgeDollarSign, CalendarClock, CheckCircle2, CircleOff, Clock3, EyeOff, GlassWater, MapPinned, Pencil, Plus, RotateCcw, Route, Save, Search, TableProperties, UserRoundCog, X } from 'lucide-react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
   createCommerceAuthority,
   createEmployee as createEmployeeRequest,
@@ -33,6 +33,7 @@ import type {
 import { staffPermissionIds } from '../shared/contracts'
 import type { AuthorityWriteInput } from '../shared/commerce-api'
 import type { OrderAuthorizationAuthority } from '../shared/order-contracts'
+import { productAvailability } from '../shared/product-availability'
 import './MasterDataView.css'
 
 type MasterView = 'employees' | 'shifts' | 'tables' | 'products' | 'routing' | 'authorities' | 'areas'
@@ -83,8 +84,10 @@ export function MasterDataView({ data, onRefresh, onNotice }: MasterDataViewProp
       await action()
       onNotice(success)
       await onRefresh()
+      return true
     } catch (error) {
       onNotice(error instanceof Error ? error.message : '主数据保存失败')
+      return false
     }
   }
 
@@ -520,10 +523,38 @@ function AuthorityRow({ authority, data, run }: { authority: OrderAuthorizationA
 
 function ProductSection({ data, run }: SectionProps) {
   const workstations = effectiveConfig(data).workstations
+  const canManageCosts = data.viewer?.permissionIds.includes('finance.view') ?? false
+  const categories = useMemo(() => Array.from(new Map(data.products.map((product) => [product.categoryId ?? 'featured', product.categoryName ?? '推荐'])).entries()), [data.products])
   const [sku, setSku] = useState('')
   const [name, setName] = useState('')
   const [price, setPrice] = useState(68)
+  const [categoryId, setCategoryId] = useState(categories[0]?.[0] ?? 'featured')
   const [stationId, setStationId] = useState(workstations.find((station) => station.enabled)?.id ?? '')
+  const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState<'all' | 'available' | 'sold_out' | 'hidden' | 'timed'>('all')
+  const [categoryFilter, setCategoryFilter] = useState('all')
+  const [stationFilter, setStationFilter] = useState('all')
+  const [editingProductId, setEditingProductId] = useState<string | null>(null)
+
+  const productStates = useMemo(() => new Map(data.products.map((product) => [product.id, productAvailability(product, new Date(data.serverNow), data.store.timezone)])), [data.products, data.serverNow, data.store.timezone])
+  const sortedProducts = useMemo(() => [...data.products].sort((left, right) => (left.sortOrder ?? 999) - (right.sortOrder ?? 999) || left.name.localeCompare(right.name, 'zh-CN')), [data.products])
+  const visibleProducts = useMemo(() => sortedProducts.filter((product) => {
+    const keyword = search.trim().toLowerCase()
+    const state = productStates.get(product.id)?.state
+    if (keyword && ![product.name, product.sku, product.categoryName, product.description, ...(product.tags ?? [])].filter(Boolean).some((value) => String(value).toLowerCase().includes(keyword))) return false
+    if (statusFilter === 'timed' && !(product.availableFrom && product.availableUntil)) return false
+    if (statusFilter !== 'all' && statusFilter !== 'timed' && state !== statusFilter) return false
+    if (categoryFilter !== 'all' && (product.categoryId ?? 'featured') !== categoryFilter) return false
+    if (stationFilter !== 'all' && product.stationId !== stationFilter) return false
+    return true
+  }), [categoryFilter, productStates, search, sortedProducts, stationFilter, statusFilter])
+
+  const counts = useMemo(() => ({
+    available: data.products.filter((product) => productStates.get(product.id)?.state === 'available').length,
+    soldOut: data.products.filter((product) => productStates.get(product.id)?.state === 'sold_out').length,
+    hidden: data.products.filter((product) => productStates.get(product.id)?.state === 'hidden').length,
+    timed: data.products.filter((product) => product.availableFrom && product.availableUntil).length,
+  }), [data.products, productStates])
 
   useEffect(() => {
     if (!workstations.some((station) => station.id === stationId && station.enabled)) {
@@ -534,45 +565,142 @@ function ProductSection({ data, run }: SectionProps) {
   async function submit(event: FormEvent) {
     event.preventDefault()
     await run(() => createProductRequest({
-      sku, name, specification: '1份', categoryId: 'featured', categoryName: '推荐', description: '', imageUrl: '', tags: [], sortOrder: data.products.length + 1, listPriceAmount: yuanToFen(price), costAmount: 0,
-      stationId, enabled: true,
+      sku, name, specification: '1份', categoryId, categoryName: categories.find(([id]) => id === categoryId)?.[1] ?? '推荐', description: '', imageUrl: '', tags: [], sortOrder: data.products.length + 1, listPriceAmount: yuanToFen(price), costAmount: 0,
+      stationId, enabled: true, soldOut: false, soldOutReason: '', availableFrom: null, availableUntil: null,
     }), `${name}已建立`)
     setSku('')
     setName('')
   }
 
   return (
-    <div className="master-section">
-      <form className="inline-create" onSubmit={(event) => void submit(event)}>
+    <div className="master-section product-operations">
+      <div className="product-ops-summary" aria-label="商品经营状态">
+        <button type="button" className={statusFilter === 'available' ? 'is-active' : ''} onClick={() => setStatusFilter(statusFilter === 'available' ? 'all' : 'available')}><CheckCircle2 size={18} /><span>当前可售</span><strong>{counts.available}</strong></button>
+        <button type="button" className={statusFilter === 'sold_out' ? 'is-active' : ''} onClick={() => setStatusFilter(statusFilter === 'sold_out' ? 'all' : 'sold_out')}><CircleOff size={18} /><span>临时售罄</span><strong>{counts.soldOut}</strong></button>
+        <button type="button" className={statusFilter === 'hidden' ? 'is-active' : ''} onClick={() => setStatusFilter(statusFilter === 'hidden' ? 'all' : 'hidden')}><EyeOff size={18} /><span>菜单隐藏</span><strong>{counts.hidden}</strong></button>
+        <button type="button" className={statusFilter === 'timed' ? 'is-active' : ''} onClick={() => setStatusFilter(statusFilter === 'timed' ? 'all' : 'timed')}><Clock3 size={18} /><span>限时供应</span><strong>{counts.timed}</strong></button>
+      </div>
+
+      <form className="product-create" onSubmit={(event) => void submit(event)}>
         <label><span>SKU</span><input value={sku} onChange={(event) => setSku(event.target.value)} /></label>
         <label><span>商品名称</span><input value={name} onChange={(event) => setName(event.target.value)} /></label>
         <label><span>标价（元）</span><input type="number" min={0} value={price} onChange={(event) => setPrice(Number(event.target.value))} /></label>
+        <label><span>菜单分类</span><select value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>{categories.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
         <label><span>出品口</span><select value={stationId} onChange={(event) => setStationId(event.target.value)}>{workstations.filter((station) => station.enabled).map((station) => <option key={station.id} value={station.id}>{station.name}</option>)}</select></label>
         <button className="primary-button" type="submit" disabled={!sku.trim() || !name.trim() || !stationId}><Plus size={17} />新增商品</button>
       </form>
-      <div className="master-rows">{data.products.map((product) => <ProductRow key={product.id} product={product} workstations={workstations} run={run} />)}</div>
+
+      <div className="product-toolbar">
+        <label className="product-search"><Search size={17} /><input aria-label="搜索商品" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索名称、SKU、标签" /></label>
+        <select aria-label="按分类筛选" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}><option value="all">全部分类</option>{categories.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select>
+        <select aria-label="按出品口筛选" value={stationFilter} onChange={(event) => setStationFilter(event.target.value)}><option value="all">全部出品口</option>{workstations.map((station) => <option key={station.id} value={station.id}>{station.name}</option>)}</select>
+        <span className="product-result-count">显示 {visibleProducts.length} / {data.products.length}</span>
+      </div>
+
+      {visibleProducts.length > 0 ? <div className="product-control-grid">{visibleProducts.map((product) => <ProductControlCard key={product.id} product={product} availability={productStates.get(product.id)} workstations={workstations} run={run} onEdit={() => setEditingProductId(product.id)} />)}</div> : <div className="product-empty">没有符合当前条件的商品</div>}
+      {editingProductId && <ProductEditor product={data.products.find((product) => product.id === editingProductId)!} workstations={workstations} canManageCosts={canManageCosts} run={run} onClose={() => setEditingProductId(null)} />}
     </div>
   )
 }
 
-function ProductRow({ product, workstations, run }: { product: MenuProduct; workstations: WorkstationConfig[]; run: RunAction }) {
-  const [draft, setDraft] = useState<ProductWriteInput>(() => product)
-  useEffect(() => setDraft(product), [product])
+function ProductControlCard({ product, availability, workstations, run, onEdit }: { product: MenuProduct; availability?: ReturnType<typeof productAvailability>; workstations: WorkstationConfig[]; run: RunAction; onEdit: () => void }) {
+  const stationName = workstations.find((station) => station.id === product.stationId)?.name ?? product.stationId
+  const draft = toProductDraft(product)
+  const restore = () => run(() => updateProductRequest(product.id, { ...draft, enabled: true, soldOut: false, soldOutReason: '' }), `${product.name}已恢复供应`)
+  const markSoldOut = () => run(() => updateProductRequest(product.id, { ...draft, enabled: true, soldOut: true, soldOutReason: '现场售罄' }), `${product.name}已标记售罄`)
+  const hide = () => run(() => updateProductRequest(product.id, { ...draft, enabled: false }), `${product.name}已从菜单隐藏`)
+
   return (
-    <div className="master-row product-row">
-      <div className="row-identity"><strong>{product.sku}</strong><span>版本 {product.configVersion}</span></div>
-      <label><span>商品名称</span><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
-      <label><span>规格</span><input value={draft.specification} onChange={(event) => setDraft({ ...draft, specification: event.target.value })} /></label>
-      <label><span>菜单分类</span><input value={draft.categoryName ?? ''} onChange={(event) => setDraft({ ...draft, categoryName: event.target.value, categoryId: draft.categoryId ?? 'featured' })} /></label>
-      <label><span>商品图片</span><input value={draft.imageUrl ?? ''} onChange={(event) => setDraft({ ...draft, imageUrl: event.target.value })} placeholder="/menu/product.jpg" /></label>
-      <label><span>菜单描述</span><input value={draft.description ?? ''} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
-      <label><span>标价（元）</span><input type="number" min={0} value={fenToYuan(draft.listPriceAmount)} onChange={(event) => setDraft({ ...draft, listPriceAmount: yuanToFen(Number(event.target.value)) })} /></label>
-      <label><span>成本（元）</span><input type="number" min={0} value={fenToYuan(draft.costAmount)} onChange={(event) => setDraft({ ...draft, costAmount: yuanToFen(Number(event.target.value)) })} /></label>
-      <label><span>出品口</span><select value={draft.stationId} onChange={(event) => setDraft({ ...draft, stationId: event.target.value })}>{!workstations.some((station) => station.id === draft.stationId) && <option value={draft.stationId}>{draft.stationId}（旧配置）</option>}{workstations.map((station) => <option key={station.id} value={station.id}>{station.name}{station.enabled ? '' : '（停用）'}</option>)}</select></label>
-      <label className="binary-field"><span>启用</span><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} /></label>
-      <button className="icon-button" title={`保存${product.name}`} onClick={() => void run(() => updateProductRequest(product.id, draft), `${draft.name}已保存`)}><Save size={17} /></button>
+    <article className={`product-control-card status-${availability?.state ?? 'available'}`}>
+      <div className="product-card-media">{product.imageUrl ? <img src={product.imageUrl} alt="" /> : <span>{Array.from(product.name)[0]}</span>}</div>
+      <div className="product-card-content">
+        <div className="product-card-heading"><strong>{product.name}</strong><span className="product-state-badge">{availability?.label ?? '可下单'}</span></div>
+        <span className="product-card-code">{product.sku} · {product.categoryName ?? '推荐'} · 版本 {product.configVersion}</span>
+        <div className="product-card-facts"><strong>¥{fenToYuan(product.listPriceAmount).toFixed(2)}</strong><span>{stationName}</span>{product.availableFrom && product.availableUntil ? <span><Clock3 size={13} />{product.availableFrom}-{product.availableUntil}</span> : <span>全时段</span>}</div>
+        {(product.tags?.length ?? 0) > 0 && <div className="product-card-tags">{product.tags?.map((tag) => <span key={tag}>{tag}</span>)}</div>}
+      </div>
+      <div className="product-card-actions">
+        {availability?.state === 'available' || availability?.state === 'scheduled' ? <button type="button" className="icon-button danger-action" title="临时售罄" onClick={() => void markSoldOut()}><CircleOff size={17} /></button> : <button type="button" className="icon-button restore-action" title="恢复供应" onClick={() => void restore()}><RotateCcw size={17} /></button>}
+        {availability?.state !== 'hidden' && <button type="button" className="icon-button" title="从客人菜单隐藏" onClick={() => void hide()}><EyeOff size={17} /></button>}
+        <button type="button" className="icon-button" title="编辑商品" onClick={onEdit}><Pencil size={17} /></button>
+      </div>
+    </article>
+  )
+}
+
+function ProductEditor({ product, workstations, canManageCosts, run, onClose }: { product: MenuProduct; workstations: WorkstationConfig[]; canManageCosts: boolean; run: RunAction; onClose: () => void }) {
+  const [draft, setDraft] = useState<ProductWriteInput>(() => toProductDraft(product))
+  const [tagsText, setTagsText] = useState(() => (product.tags ?? []).join('、'))
+
+  async function save(event: FormEvent) {
+    event.preventDefault()
+    const tags = tagsText.split(/[、,，]/).map((tag) => tag.trim()).filter(Boolean)
+    const saved = await run(() => updateProductRequest(product.id, { ...draft, tags: [...new Set(tags)].slice(0, 8) }), `${draft.name}已保存`)
+    if (saved) onClose()
+  }
+
+  function setStatus(status: 'available' | 'sold_out' | 'hidden') {
+    if (status === 'available') setDraft({ ...draft, enabled: true, soldOut: false, soldOutReason: '' })
+    if (status === 'sold_out') setDraft({ ...draft, enabled: true, soldOut: true, soldOutReason: draft.soldOutReason || '暂时售罄' })
+    if (status === 'hidden') setDraft({ ...draft, enabled: false })
+  }
+
+  const status = !draft.enabled ? 'hidden' : draft.soldOut ? 'sold_out' : 'available'
+  return (
+    <div className="product-editor-backdrop" role="presentation">
+      <form className="product-editor" role="dialog" aria-modal="true" aria-labelledby="product-editor-title" onSubmit={(event) => void save(event)}>
+        <header><div><span className="eyebrow">商品配置</span><h3 id="product-editor-title">{product.name}</h3></div><button type="button" className="icon-button" title="关闭" onClick={onClose}><X size={18} /></button></header>
+        <div className="product-editor-status" aria-label="商品状态">
+          <button type="button" aria-pressed={status === 'available'} onClick={() => setStatus('available')}><CheckCircle2 size={17} />正常供应</button>
+          <button type="button" aria-pressed={status === 'sold_out'} onClick={() => setStatus('sold_out')}><CircleOff size={17} />临时售罄</button>
+          <button type="button" aria-pressed={status === 'hidden'} onClick={() => setStatus('hidden')}><EyeOff size={17} />菜单隐藏</button>
+        </div>
+        <div className="product-editor-body">
+          <aside className="product-image-preview">{draft.imageUrl ? <img src={draft.imageUrl} alt={`${draft.name}预览`} /> : <span>{Array.from(draft.name || '商')[0]}</span>}<small>客人菜单图片预览</small></aside>
+          <div className="product-editor-fields">
+            <label><span>SKU</span><input required value={draft.sku} onChange={(event) => setDraft({ ...draft, sku: event.target.value })} /></label>
+            <label><span>商品名称</span><input required value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
+            <label><span>规格</span><input required value={draft.specification} onChange={(event) => setDraft({ ...draft, specification: event.target.value })} /></label>
+            <label><span>分类编码</span><input required value={draft.categoryId ?? ''} onChange={(event) => setDraft({ ...draft, categoryId: event.target.value })} /></label>
+            <label><span>分类名称</span><input required value={draft.categoryName ?? ''} onChange={(event) => setDraft({ ...draft, categoryName: event.target.value })} /></label>
+            <label><span>标价（元）</span><input type="number" min={0} step="0.01" required value={fenToYuan(draft.listPriceAmount)} onChange={(event) => setDraft({ ...draft, listPriceAmount: yuanToFen(Number(event.target.value)) })} /></label>
+            {canManageCosts ? <label><span>成本（元）</span><input type="number" min={0} step="0.01" required value={fenToYuan(draft.costAmount)} onChange={(event) => setDraft({ ...draft, costAmount: yuanToFen(Number(event.target.value)) })} /></label> : <label><span>成本（财务权限）</span><input value="已保护，不会修改" disabled /></label>}
+            <label><span>出品口</span><select value={draft.stationId} onChange={(event) => setDraft({ ...draft, stationId: event.target.value })}>{!workstations.some((station) => station.id === draft.stationId) && <option value={draft.stationId}>{draft.stationId}（旧配置）</option>}{workstations.map((station) => <option key={station.id} value={station.id}>{station.name}{station.enabled ? '' : '（停用）'}</option>)}</select></label>
+            <label><span>菜单排序</span><input type="number" min={0} max={9999} value={draft.sortOrder ?? 999} onChange={(event) => setDraft({ ...draft, sortOrder: Number(event.target.value) })} /></label>
+            <label><span>供应开始</span><input type="time" value={draft.availableFrom ?? ''} onChange={(event) => setDraft({ ...draft, availableFrom: event.target.value || null })} /></label>
+            <label><span>供应结束</span><input type="time" value={draft.availableUntil ?? ''} onChange={(event) => setDraft({ ...draft, availableUntil: event.target.value || null })} /></label>
+            <label className="wide-field"><span>图片地址</span><input value={draft.imageUrl ?? ''} onChange={(event) => setDraft({ ...draft, imageUrl: event.target.value })} placeholder="/menu/product.jpg 或 HTTPS 地址" /></label>
+            <label className="wide-field"><span>标签（顿号或逗号分隔，最多8个）</span><input value={tagsText} onChange={(event) => setTagsText(event.target.value)} placeholder="招牌、低度、适合分享" /></label>
+            <label className="wide-field"><span>菜单描述</span><textarea maxLength={240} value={draft.description ?? ''} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
+            {status === 'sold_out' && <label className="wide-field"><span>售罄原因（客人可见）</span><input maxLength={80} value={draft.soldOutReason ?? ''} onChange={(event) => setDraft({ ...draft, soldOutReason: event.target.value })} placeholder="例如：今晚原料已售完" /></label>}
+          </div>
+        </div>
+        <footer><span>{draft.availableFrom && draft.availableUntil ? `每日 ${draft.availableFrom}-${draft.availableUntil} 供应，支持跨午夜` : canManageCosts ? '未设置时段，营业期间均可供应' : '未设置时段，营业期间均可供应；成本受财务权限保护'}</span><div><button type="button" className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" type="submit"><Save size={17} />保存商品</button></div></footer>
+      </form>
     </div>
   )
+}
+
+function toProductDraft(product: MenuProduct): ProductWriteInput {
+  return {
+    sku: product.sku,
+    name: product.name,
+    specification: product.specification,
+    categoryId: product.categoryId ?? 'featured',
+    categoryName: product.categoryName ?? '推荐',
+    description: product.description ?? '',
+    imageUrl: product.imageUrl ?? '',
+    tags: product.tags ?? [],
+    sortOrder: product.sortOrder ?? 999,
+    soldOut: product.soldOut ?? false,
+    soldOutReason: product.soldOutReason ?? '',
+    availableFrom: product.availableFrom ?? null,
+    availableUntil: product.availableUntil ?? null,
+    listPriceAmount: product.listPriceAmount,
+    costAmount: product.costAmount,
+    stationId: product.stationId,
+    enabled: product.enabled,
+  }
 }
 
 function AreaRow({ area, run }: { area: Area; run: RunAction }) {
@@ -590,7 +718,7 @@ function AreaRow({ area, run }: { area: Area; run: RunAction }) {
 }
 
 interface SectionProps { data: BootstrapResponse; run: RunAction }
-type RunAction = (action: () => Promise<unknown>, success: string) => Promise<void>
+type RunAction = (action: () => Promise<unknown>, success: string) => Promise<boolean>
 
 function effectiveConfig(data: BootstrapResponse) {
   return data.draftConfig ?? data.config

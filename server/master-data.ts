@@ -169,8 +169,9 @@ export function updateArea(state: RuntimeState, areaId: string, input: AreaWrite
 
 export function createProduct(state: RuntimeState, input: ProductWriteInput, actorId: string) {
   if (state.products.some((product) => product.sku === input.sku)) throw new Error('商品SKU已存在')
-  if (input.costAmount > input.listPriceAmount) throw new Error('商品成本不能高于标价')
-  const product = { id: `product_${randomUUID()}`, ...input, configVersion: 1 }
+  const normalized = normalizeProductInput(input)
+  validateProductInput(normalized)
+  const product = { id: `product_${randomUUID()}`, ...normalized, configVersion: 1 }
   state.products.push(product)
   audit(state, actorId, 'product.created.v1', 'product', product.id, { after: product })
   return product
@@ -185,11 +186,35 @@ export function updateProduct(
   const product = state.products.find((item) => item.id === productId)
   if (!product) throw new Error('商品不存在')
   if (state.products.some((item) => item.id !== productId && item.sku === input.sku)) throw new Error('商品SKU已存在')
-  if (input.costAmount > input.listPriceAmount) throw new Error('商品成本不能高于标价')
+  const normalized = normalizeProductInput(input)
+  validateProductInput(normalized)
   const before = structuredClone(product)
-  Object.assign(product, input, { configVersion: product.configVersion + 1 })
+  Object.assign(product, normalized, { configVersion: product.configVersion + 1 })
   audit(state, actorId, 'product.updated.v1', 'product', product.id, { before, after: product })
   return product
+}
+
+function normalizeProductInput(input: ProductWriteInput): ProductWriteInput {
+  const soldOut = input.soldOut ?? false
+  return {
+    ...input,
+    categoryId: input.categoryId ?? 'featured',
+    categoryName: input.categoryName ?? '推荐',
+    description: input.description ?? '',
+    imageUrl: input.imageUrl ?? '',
+    tags: [...new Set(input.tags ?? [])],
+    sortOrder: input.sortOrder ?? 999,
+    soldOut,
+    soldOutReason: soldOut ? input.soldOutReason?.trim() || '暂时售罄' : '',
+    availableFrom: input.availableFrom || null,
+    availableUntil: input.availableUntil || null,
+  }
+}
+
+function validateProductInput(input: ProductWriteInput) {
+  if (input.costAmount > input.listPriceAmount) throw new Error('商品成本不能高于标价')
+  if (Boolean(input.availableFrom) !== Boolean(input.availableUntil)) throw new Error('供应开始和结束时间必须同时填写')
+  if (input.availableFrom && input.availableFrom === input.availableUntil) throw new Error('供应开始和结束时间不能相同')
 }
 
 function validateAuthority(state: RuntimeState, input: AuthorityWriteInput) {

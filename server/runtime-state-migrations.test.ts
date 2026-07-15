@@ -20,6 +20,12 @@ describe('runtime state operational migrations', () => {
     )
     legacy.employees = legacy.employees.map(({ skillIds: _skillIds, ...employee }) => employee)
     legacy.shiftAssignments = legacy.shiftAssignments.map(({ stationIds: _stationIds, ...shift }) => shift)
+    for (const product of legacy.products) {
+      delete product.soldOut
+      delete product.soldOutReason
+      delete product.availableFrom
+      delete product.availableUntil
+    }
 
     const migrated = migrateRuntimeState(legacy)
 
@@ -45,6 +51,12 @@ describe('runtime state operational migrations', () => {
     })
     expect(migrated.employees.every((employee) => Array.isArray(employee.skillIds))).toBe(true)
     expect(migrated.shiftAssignments.every((shift) => Array.isArray(shift.stationIds))).toBe(true)
+    expect(migrated.products.every((product) => (
+      product.soldOut === false
+      && product.soldOutReason === ''
+      && product.availableFrom === null
+      && product.availableUntil === null
+    ))).toBe(true)
     expect(migrated.config.roles.find((role) => role.id === 'server')).toMatchObject({
       dataScope: 'assigned_areas',
       approvalLimits: { giftAmount: 8800 },

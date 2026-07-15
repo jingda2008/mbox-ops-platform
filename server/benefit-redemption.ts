@@ -13,6 +13,7 @@ import type {
 } from '../src/shared/benefit-redemption-contracts.js'
 import { currentOpenTableSession } from './table-sessions.js'
 import type { AuditEntry, Employee, RuntimeState, Table } from '../src/shared/contracts.js'
+import { productAvailability } from '../src/shared/product-availability.js'
 import { requireConfiguredOperation, requireTableDataScope } from './authorization.js'
 import {
   addOrderItem,
@@ -181,6 +182,8 @@ export function lockBenefitRedemption(state: RuntimeState, command: BenefitRedem
   if (!template.productId) businessError('BENEFIT_PRODUCT_NOT_CONFIGURED', '商品赠品权益未关联商品')
   const product = state.products.find((item) => item.id === template.productId && item.enabled)
   if (!product) businessError('BENEFIT_PRODUCT_UNAVAILABLE', '权益关联商品不存在或已停用')
+  const availability = productAvailability(product, new Date(), state.store.timezone)
+  if (!availability.orderable) businessError('BENEFIT_PRODUCT_UNAVAILABLE', `权益关联商品当前不可出品：${availability.label}`)
   if (product.listPriceAmount !== template.valueAmount || product.costAmount !== template.costAmount) {
     businessError('BENEFIT_PRODUCT_SNAPSHOT_MISMATCH', '权益面值或成本与关联商品不一致，请先更新权益配置')
   }
@@ -266,6 +269,8 @@ export function confirmBenefitRedemption(state: RuntimeState, redemptionId: stri
   }
   const product = state.products.find((item) => item.id === template.productId && item.enabled)
   if (!product) businessError('BENEFIT_PRODUCT_UNAVAILABLE', '权益关联商品不存在或已停用')
+  const availability = productAvailability(product, new Date(), state.store.timezone)
+  if (!availability.orderable) businessError('BENEFIT_PRODUCT_UNAVAILABLE', `权益关联商品当前不可出品：${availability.label}`)
   if (product.listPriceAmount !== template.valueAmount || product.costAmount !== template.costAmount) {
     businessError('BENEFIT_PRODUCT_SNAPSHOT_MISMATCH', '权益面值或成本与关联商品不一致，请取消后重新处理')
   }

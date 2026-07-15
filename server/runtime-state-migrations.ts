@@ -156,6 +156,10 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
     ['product-snack', { categoryId: 'food', categoryName: '餐食', description: '热制下酒小食组合，出品约八分钟。', imageUrl: '/menu/snack.jpg', tags: ['热食'], sortOrder: 4 }],
   ])
   migrated.products = migrated.products.map((product) => ({
+    soldOut: false,
+    soldOutReason: '',
+    availableFrom: null,
+    availableUntil: null,
     ...(menuDefaults.get(product.id) ?? { categoryId: 'featured', categoryName: '推荐', description: '', imageUrl: '', tags: [], sortOrder: 99 }),
     ...product,
   }))

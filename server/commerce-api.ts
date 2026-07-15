@@ -8,6 +8,7 @@ import {
   kdsActionSchema,
   quickOrderSchema,
 } from '../src/shared/commerce-api.js'
+import { productAvailability } from '../src/shared/product-availability.js'
 import {
   addOrderItem,
   completeKdsTask,
@@ -82,6 +83,8 @@ export function registerCommerceRoutes(
       const products = input.items.map((item) => {
         const product = state.products.find((candidate) => candidate.id === item.productId && candidate.enabled)
         if (!product) throw new Error('购物车包含不存在或已停用商品')
+        const availability = productAvailability(product, new Date(), state.store.timezone)
+        if (!availability.orderable) throw new Error(`${product.name}当前不可下单：${availability.label}`)
         return { product, quantity: item.quantity }
       })
       syncOrderFulfillmentWorkstations(state)
@@ -230,6 +233,8 @@ export function registerCommerceRoutes(
       if (!table || table.status !== 'occupied') throw new Error('只能向已开台桌台下单')
       const product = state.products.find((item) => item.id === input.productId && item.enabled)
       if (!product) throw new Error('商品不存在或已停用')
+      const availability = productAvailability(product, new Date(), state.store.timezone)
+      if (!availability.orderable) throw new Error(`${product.name}当前不可下单：${availability.label}`)
       syncOrderFulfillmentWorkstations(state)
       const workstation = routeProductToEnabledWorkstation(state, product.stationId)
       const now = new Date().toISOString()

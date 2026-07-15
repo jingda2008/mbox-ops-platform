@@ -13,6 +13,7 @@ import {
   type TableAccessClaims,
 } from '../src/shared/guest-contracts.js'
 import type { RuntimeState, ServiceTask, Table } from '../src/shared/contracts.js'
+import { productAvailability } from '../src/shared/product-availability.js'
 import type { SongTableSession } from '../src/shared/song-contracts.js'
 import { applyTaskAction, createServiceTask } from './domain.js'
 import type { RuntimeRepository } from './repository.js'
@@ -165,7 +166,7 @@ function sessionView(
           }]
         })))
   return {
-    store: { id: state.store.id, name: state.store.name, businessDate: state.store.businessDate },
+    store: { id: state.store.id, name: state.store.name, businessDate: state.store.businessDate, timezone: state.store.timezone },
     table: {
       code: table.code,
       displayName: table.displayName,
@@ -349,6 +350,11 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
       const products = input.items.map((item) => {
         const product = state.products.find((candidate) => candidate.id === item.productId && candidate.enabled)
         if (!product) throw new TableAccessError('购物车包含已下架商品', 'PRODUCT_NOT_AVAILABLE', 409)
+        const availability = productAvailability(product, new Date(options.now?.() ?? Date.now()), state.store.timezone)
+        if (!availability.orderable) {
+          const code = availability.state === 'sold_out' ? 'PRODUCT_SOLD_OUT' : 'PRODUCT_OUTSIDE_SERVICE_TIME'
+          throw new TableAccessError(`${product.name}：${availability.label}`, code, 409)
+        }
         return { product, quantity: item.quantity }
       })
       syncOrderFulfillmentWorkstations(state)

@@ -77,6 +77,8 @@ import { AuthorizationError, requireApprovalAmount, requireConfiguredOperation, 
 import { createCustomerNotificationAdapters } from './notification-runtime.js'
 import { syncKdsFromFulfillmentServiceTaskAction } from './fulfillment-service.js'
 import { projectRuntimeStateForActor } from './bootstrap-projection.js'
+import { effectivePermissionIdsForEmployee } from '../src/shared/staff-access.js'
+import { preserveProtectedProductCost, productCostView } from './product-cost-policy.js'
 
 const runtimeConfig = loadRuntimeConfig()
 
@@ -250,8 +252,10 @@ app.get('/api/bootstrap', async (request) => {
     return escalateDueTasks(state)
   })
   const state = await repository.read()
-  const projected = projectRuntimeStateForActor(state, requireRequestActor(request))
-  return { ...projected, serverNow: new Date().toISOString(), metrics: calculateMetrics(projected) }
+  const actor = requireRequestActor(request)
+  const permissionIds = effectivePermissionIdsForEmployee(state, actor.actorId)
+  const projected = projectRuntimeStateForActor(state, actor)
+  return { ...projected, serverNow: new Date().toISOString(), metrics: calculateMetrics(projected), viewer: { actorId: actor.actorId, permissionIds } }
 })
 
 app.post('/api/tasks', async (request, reply) => {
@@ -378,7 +382,8 @@ app.post('/api/master-data/products', async (request, reply) => {
   const input = productWriteSchema.parse(request.body)
   const product = await repository.mutate((state) => {
     const actor = requireConfiguredOperation(request, state, 'master-data.write')
-    return createProduct(state, input, actor.actorId)
+    const canViewFinance = effectivePermissionIdsForEmployee(state, actor.actorId).includes('finance.view')
+    return productCostView(createProduct(state, input, actor.actorId), canViewFinance)
   })
   return reply.status(201).send(product)
 })
@@ -387,7 +392,11 @@ app.put<{ Params: { productId: string } }>('/api/master-data/products/:productId
   const input = productWriteSchema.parse(request.body)
   return repository.mutate((state) => {
     const actor = requireConfiguredOperation(request, state, 'master-data.write')
-    return updateProduct(state, request.params.productId, input, actor.actorId)
+    const product = state.products.find((candidate) => candidate.id === request.params.productId)
+    if (!product) throw new Error('商品不存在')
+    const canViewFinance = effectivePermissionIdsForEmployee(state, actor.actorId).includes('finance.view')
+    const protectedInput = preserveProtectedProductCost(input, product.costAmount, canViewFinance)
+    return productCostView(updateProduct(state, request.params.productId, protectedInput, actor.actorId), canViewFinance)
   })
 })
 

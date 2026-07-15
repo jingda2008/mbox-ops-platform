@@ -183,6 +183,7 @@ export function GuestPortal() {
         submitLabel="确认订单并微信支付"
         submitHint="验证环境会模拟微信付款；付款成功后服务员、收银和出品岗位会同时收到状态。"
         busy={checkoutBusy}
+        timeZone={data?.store.timezone}
         onSubmit={placeAndPay}
       />}
 

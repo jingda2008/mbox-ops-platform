@@ -29,6 +29,7 @@ function draftWithWaterWarning(state = createSeedState(), warningSeconds = 15) {
       canReceiveTasks: role.canReceiveTasks,
     })),
     proactiveOrderCare: { ...state.config.proactiveOrderCare },
+    guestServiceLimits: { ...state.config.guestServiceLimits },
   }, 'emp-chen')
   return state
 }

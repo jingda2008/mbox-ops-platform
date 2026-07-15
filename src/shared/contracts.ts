@@ -217,6 +217,12 @@ export interface ProactiveOrderCareConfig {
   serviceTypeId: string
 }
 
+export interface GuestServiceLimitsConfig {
+  windowSeconds: number
+  maxRequests: number
+  duplicateSeconds: number
+}
+
 export interface StoreConfig {
   version: number
   status: 'published' | 'draft'
@@ -226,6 +232,7 @@ export interface StoreConfig {
   skills: SkillConfig[]
   workstations: WorkstationConfig[]
   proactiveOrderCare: ProactiveOrderCareConfig
+  guestServiceLimits: GuestServiceLimitsConfig
 }
 
 export interface AwaitingOrderIntent {
@@ -472,6 +479,11 @@ export const configDraftSchema = z.object({
     repeatReminderSeconds: z.number().int().min(30).max(3600),
     maxReminders: z.number().int().min(1).max(10),
     serviceTypeId: z.string().trim().min(1),
+  }),
+  guestServiceLimits: z.object({
+    windowSeconds: z.number().int().min(10).max(600),
+    maxRequests: z.number().int().min(1).max(30),
+    duplicateSeconds: z.number().int().min(5).max(600),
   }),
 })
 

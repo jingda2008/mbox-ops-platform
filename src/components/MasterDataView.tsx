@@ -625,6 +625,7 @@ function configDraftPayload(
     skills: structuredClone(skills),
     workstations: structuredClone(workstations),
     proactiveOrderCare: { ...source.proactiveOrderCare },
+    guestServiceLimits: { ...source.guestServiceLimits },
   }
 }
 

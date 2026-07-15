@@ -1,4 +1,4 @@
-import { CheckCircle2, ChevronRight, Clock3, CreditCard, ListChecks, MessageCircleMore, ShieldCheck, ShoppingBag } from 'lucide-react'
+import { CheckCircle2, ChevronRight, Clock3, CreditCard, ListChecks, MessageCircleMore, Send, ShieldCheck, ShoppingBag } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { checkoutGuestOrder, createGuestOrder, createGuestTask, getGuestSession, submitGuestTaskFeedback } from '../api'
 import type { GuestSessionResponse, GuestTaskView, WechatJsapiParameters } from '../shared/guest-contracts'
@@ -47,15 +47,17 @@ export function GuestPortal() {
   }, [refresh])
 
   const tableTasks = useMemo(() => data?.tasks.slice(0, 5) ?? [], [data?.tasks])
+  const customRequestType = data?.serviceTypes.find((serviceType) => serviceType.code === 'CUSTOM_REQUEST')
+  const quickServiceTypes = data?.serviceTypes.filter((serviceType) => serviceType.code !== 'CUSTOM_REQUEST') ?? []
 
-  async function requestService(serviceTypeId: string) {
+  async function requestService(serviceTypeId: string, requestNote = '') {
     setPendingType(serviceTypeId)
     setError('')
     try {
       const task = await createGuestTask({
         tableToken: data?.tableToken ?? initialToken,
         serviceTypeId,
-        note,
+        note: requestNote,
         idempotencyKey: `guest-${tableCode}-${serviceTypeId}-${crypto.randomUUID()}`,
       })
       setReply(task.customerReply)
@@ -66,6 +68,18 @@ export function GuestPortal() {
     } finally {
       setPendingType(null)
     }
+  }
+
+  async function submitCustomRequest() {
+    if (!customRequestType) {
+      setError('个性化需求服务暂未启用，请直接呼叫服务员')
+      return
+    }
+    if (!note.trim()) {
+      setError('请先填写您的个性化需求')
+      return
+    }
+    await requestService(customRequestType.id, note.trim())
   }
 
   async function giveFeedback(task: GuestTaskView, action: 'confirm' | 'unresolved') {
@@ -178,7 +192,7 @@ export function GuestPortal() {
           <MessageCircleMore size={20} aria-hidden="true" />
         </div>
         <div className="service-grid">
-          {data?.serviceTypes.map((serviceType) => (
+          {quickServiceTypes.map((serviceType) => (
             <button
               key={serviceType.id}
               className={serviceType.id === 'complaint' ? 'service-button service-button--complaint' : 'service-button'}
@@ -191,10 +205,21 @@ export function GuestPortal() {
             </button>
           ))}
         </div>
-        <label className="guest-note">
-          <span>补充说明</span>
-          <input value={note} onChange={(event) => setNote(event.target.value)} maxLength={300} placeholder="例如：需要两杯温水" />
-        </label>
+        <div className="guest-note">
+          <span>个性化需求</span>
+          <div className="guest-note-row">
+            <input
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && note.trim() && pendingType === null) void submitCustomRequest()
+              }}
+              maxLength={300}
+              placeholder="例如：需要两杯温水"
+            />
+            <button disabled={!note.trim() || pendingType !== null || !customRequestType} onClick={() => void submitCustomRequest()}><Send size={17} />{pendingType === customRequestType?.id ? '提交中' : '提交'}</button>
+          </div>
+        </div>
       </section>
 
       <section className="guest-progress">

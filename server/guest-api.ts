@@ -289,7 +289,40 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
   app.post('/api/guest/tasks', async (request, reply) => {
     const input = guestTaskCreateSchema.parse(request.body)
     const result = await repository.mutate((state) => {
-      const { table } = writeAccessFromToken(state, input.tableToken, options)
+      const { table, tableSession } = writeAccessFromToken(state, input.tableToken, options)
+      const serviceType = state.config.serviceTypes.find((candidate) => candidate.id === input.serviceTypeId && candidate.enabled)
+      if (!serviceType) throw new TableAccessError('服务类型未启用', 'GUEST_SERVICE_NOT_AVAILABLE', 409)
+      const normalizedNote = input.note.trim().replace(/\s+/g, ' ').toLowerCase()
+      if (serviceType.code === 'CUSTOM_REQUEST' && !normalizedNote) {
+        throw new TableAccessError('请填写个性化需求后再提交', 'GUEST_CUSTOM_REQUEST_REQUIRED', 400)
+      }
+      const limits = state.config.guestServiceLimits
+      const now = options.now?.() ?? Date.now()
+      const duplicateCutoff = now - limits.duplicateSeconds * 1000
+      const duplicate = state.tasks.find((candidate) => (
+        candidate.tableId === table.id
+        && candidate.source === 'guest'
+        && candidate.serviceTypeId === input.serviceTypeId
+        && candidate.note.trim().replace(/\s+/g, ' ').toLowerCase() === normalizedNote
+        && !['confirmed', 'cancelled'].includes(candidate.status)
+        && Date.parse(candidate.createdAt) >= duplicateCutoff
+        && Date.parse(candidate.createdAt) >= Date.parse(tableSession.openedAt)
+      ))
+      if (duplicate) return taskView(state, duplicate)
+      const windowCutoff = now - limits.windowSeconds * 1000
+      const recentCount = state.tasks.filter((candidate) => (
+        candidate.tableId === table.id
+        && candidate.source === 'guest'
+        && Date.parse(candidate.createdAt) >= windowCutoff
+        && Date.parse(candidate.createdAt) >= Date.parse(tableSession.openedAt)
+      )).length
+      if (recentCount >= limits.maxRequests) {
+        throw new TableAccessError(
+          `您的需求已收到，请稍候再提交；每${limits.windowSeconds}秒最多${limits.maxRequests}次`,
+          'GUEST_SERVICE_RATE_LIMITED',
+          429,
+        )
+      }
       const task = createServiceTask(state, {
         tableCode: table.code,
         serviceTypeId: input.serviceTypeId,

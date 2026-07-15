@@ -12,6 +12,7 @@ const developmentBootstrap = {
       { id: 'order', code: 'order', name: '协助点单', icon: 'order', enabled: true },
       { id: 'bill', code: 'bill', name: '买单协助', icon: 'bill', enabled: true },
       { id: 'complaint', code: 'complaint', name: '投诉', icon: 'complaint', enabled: true },
+      { id: 'custom-request', code: 'CUSTOM_REQUEST', name: '个性化需求', icon: 'order', enabled: true },
     ],
   },
   tasks: [],

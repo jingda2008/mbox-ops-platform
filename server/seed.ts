@@ -66,6 +66,11 @@ export function createSeedConfig(): StoreConfig {
       maxReminders: 3,
       serviceTypeId: 'order-help',
     },
+    guestServiceLimits: {
+      windowSeconds: 60,
+      maxRequests: 5,
+      duplicateSeconds: 60,
+    },
     serviceTypes: [
       {
         id: 'water',
@@ -138,6 +143,18 @@ export function createSeedConfig(): StoreConfig {
         sla: { warningSeconds: 60, escalateSeconds: 180, managerSeconds: 300 },
         customerReply: '生日安排已收到，服务专员会与您确认细节。',
         actionScript: ['先确认庆祝对象、称呼和是否愿意公开互动', '核对当日权益和演出节奏', '协调礼物、歌曲和送达时间'],
+      },
+      {
+        id: 'custom-request',
+        code: 'CUSTOM_REQUEST',
+        name: '个性化需求',
+        icon: 'order',
+        enabled: true,
+        priority: 'normal',
+        dispatchRoleIds: ['server', 'backup', 'supervisor', 'manager'],
+        sla: { warningSeconds: 30, escalateSeconds: 60, managerSeconds: 120 },
+        customerReply: '您的个性化需求已收到，{employee}正在为您处理。',
+        actionScript: ['先复述客户需求并确认数量、时间和偏好', '能立即完成则执行，涉及权限或资源时马上升级', '完成后回到桌边请客户确认'],
       },
       {
         id: 'fulfillment-delivery',

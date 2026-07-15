@@ -223,6 +223,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
         approvalLimits: role.approvalLimits,
       })),
       proactiveOrderCare: { ...draft.proactiveOrderCare },
+      guestServiceLimits: { ...draft.guestServiceLimits },
     }
   }
 
@@ -535,6 +536,15 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
                       ))}
                     </tbody>
                   </table>
+                </div>
+              </div>
+
+              <div className="config-section">
+                <div className="config-section-title"><ShieldCheck size={19} /><div><strong>客户连续呼叫保护</strong><span>相同需求自动合并，不重复派单</span></div></div>
+                <div className="proactive-config-grid">
+                  <label><span>统计窗口（秒）</span><input className="number-input" type="number" min={10} max={600} value={draft.guestServiceLimits.windowSeconds} onChange={(event) => { const next = cloneConfig(draft); next.guestServiceLimits.windowSeconds = Number(event.target.value); setDraft(next); setConfigDirty(true) }} /></label>
+                  <label><span>窗口内最多提交</span><input className="number-input" type="number" min={1} max={30} value={draft.guestServiceLimits.maxRequests} onChange={(event) => { const next = cloneConfig(draft); next.guestServiceLimits.maxRequests = Number(event.target.value); setDraft(next); setConfigDirty(true) }} /></label>
+                  <label><span>相同需求合并（秒）</span><input className="number-input" type="number" min={5} max={600} value={draft.guestServiceLimits.duplicateSeconds} onChange={(event) => { const next = cloneConfig(draft); next.guestServiceLimits.duplicateSeconds = Number(event.target.value); setDraft(next); setConfigDirty(true) }} /></label>
                 </div>
               </div>
 

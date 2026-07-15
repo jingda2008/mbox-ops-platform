@@ -14,10 +14,13 @@
       </button>
     </view>
     <state-panel wx:else type="empty" title="暂无可用服务项目" message="门店可能正在调整服务配置" />
-    <label class="field note-field">
-      <text class="field__label">补充说明（选填）</text>
-      <input class="field__input" maxlength="300" value="{{note}}" placeholder="例如：需要两杯温水" bindinput="onNoteInput" />
-    </label>
+    <view class="field note-field">
+      <text class="field__label">个性化需求</text>
+      <view class="custom-request-row">
+        <input class="field__input" maxlength="300" value="{{note}}" placeholder="例如：需要两杯温水" bindinput="onNoteInput" />
+        <button class="custom-request-button" disabled="{{!note || submittingId || isFallback || !customServiceTypeId}}" bindtap="submitCustomRequest">{{submittingId === customServiceTypeId ? '提交中' : '提交'}}</button>
+      </view>
+    </view>
     <navigator class="secondary-button status-link" url="/pages/status/index">查看服务进度</navigator>
   </block>
 </view>

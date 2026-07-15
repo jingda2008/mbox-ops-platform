@@ -76,7 +76,7 @@ function configWithOperationalDefaults(
   const roleIds = new Set(config.roles.map((role) => role.id))
   const skillIds = new Set((config.skills ?? []).map((skill) => skill.id))
   const requiredServiceTypes = defaults.serviceTypes.filter(
-    (type) => type.code === 'FULFILLMENT_DELIVERY' && !serviceTypeIds.has(type.id),
+    (type) => ['FULFILLMENT_DELIVERY', 'CUSTOM_REQUEST'].includes(type.code) && !serviceTypeIds.has(type.id),
   )
   const enriched = {
     ...config,
@@ -90,6 +90,7 @@ function configWithOperationalDefaults(
     skills: [...(config.skills ?? []), ...structuredClone(defaults.skills.filter((skill) => !skillIds.has(skill.id)))],
     workstations: config.workstations ?? structuredClone(defaults.workstations),
     proactiveOrderCare: config.proactiveOrderCare ?? structuredClone(defaults.proactiveOrderCare),
+    guestServiceLimits: config.guestServiceLimits ?? structuredClone(defaults.guestServiceLimits),
   }
   return migrateWorkstationDeliveryServices(enriched)
 }

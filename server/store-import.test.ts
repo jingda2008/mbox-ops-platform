@@ -99,6 +99,11 @@ function completePackage(): StoreImportPackage {
           maxReminders: 3,
           serviceTypeId: 'water',
         },
+        guestServiceLimits: {
+          windowSeconds: 60,
+          maxRequests: 5,
+          duplicateSeconds: 60,
+        },
       },
       areas: [{ id: 'area-a', name: 'A区', shortName: 'A区', color: '#169bd5', sortOrder: 1 }],
       employees: [

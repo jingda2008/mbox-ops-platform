@@ -137,6 +137,11 @@ const configSchema = z.object({
     maxReminders: z.number().int().min(1).max(10),
     serviceTypeId: shortIdentifierSchema,
   }).strict(),
+  guestServiceLimits: z.object({
+    windowSeconds: z.number().int().min(10).max(600),
+    maxRequests: z.number().int().min(1).max(30),
+    duplicateSeconds: z.number().int().min(5).max(600),
+  }).strict(),
 }).strict()
 
 export const storeImportCompletenessValues = ['complete', 'partial', 'draft'] as const

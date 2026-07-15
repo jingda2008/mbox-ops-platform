@@ -134,6 +134,55 @@ describe('guest table API', () => {
     await closeFixture(app, repository)
   })
 
+  it('submits standalone custom requests, merges duplicates and limits each table to five requests per minute', async () => {
+    const { app, repository, now, setNow } = await fixture()
+    const session = (await exchange(app, staticQr(now()))).body
+    const customType = session.serviceTypes.find((serviceType) => serviceType.code === 'CUSTOM_REQUEST')
+    expect(customType).toMatchObject({ id: 'custom-request', name: '个性化需求' })
+
+    const empty = await app.inject({
+      method: 'POST',
+      url: '/api/guest/tasks',
+      payload: {
+        tableToken: session.tableToken,
+        serviceTypeId: customType!.id,
+        note: '',
+        idempotencyKey: 'custom-empty-0001',
+      },
+    })
+    expect(empty.statusCode).toBe(400)
+    expect(empty.json().code).toBe('GUEST_CUSTOM_REQUEST_REQUIRED')
+
+    const submit = (note: string, suffix: string) => app.inject({
+      method: 'POST',
+      url: '/api/guest/tasks',
+      payload: {
+        tableToken: session.tableToken,
+        serviceTypeId: customType!.id,
+        note,
+        idempotencyKey: `custom-request-${suffix}`,
+      },
+    })
+    const first = await submit('需要两杯温水', '0001')
+    const duplicate = await submit('需要两杯温水', '0002')
+    expect(first.statusCode).toBe(201)
+    expect(first.json()).toMatchObject({ serviceTypeName: '个性化需求' })
+    expect(duplicate.statusCode).toBe(201)
+    expect(duplicate.json().id).toBe(first.json().id)
+
+    for (const [index, note] of ['需要婴儿椅', '需要纸巾', '空调温度调高', '稍后安排生日歌'].entries()) {
+      expect((await submit(note, `000${index + 3}`)).statusCode).toBe(201)
+    }
+    const limited = await submit('再拿一个杯子', '0007')
+    expect(limited.statusCode).toBe(429)
+    expect(limited.json()).toMatchObject({ code: 'GUEST_SERVICE_RATE_LIMITED' })
+    expect((await repository.read()).tasks.filter((task) => task.serviceTypeId === customType!.id)).toHaveLength(5)
+
+    setNow(now() + 61_000)
+    expect((await submit('一分钟后再拿一个杯子', '0008')).statusCode).toBe(201)
+    await closeFixture(app, repository)
+  })
+
   it('rejects the long-lived static QR on every guest write endpoint', async () => {
     const { app, repository, now } = await fixture()
     const qrToken = staticQr(now())

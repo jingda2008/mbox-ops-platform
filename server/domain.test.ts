@@ -129,13 +129,22 @@ describe('versioned store configuration', () => {
       canReceiveTasks: role.canReceiveTasks,
     }))
 
-    saveConfigDraft(state, { serviceTypes, roles, proactiveOrderCare: state.config.proactiveOrderCare }, 'manager-demo')
+    const guestServiceLimits = { ...state.config.guestServiceLimits, maxRequests: 4 }
+    saveConfigDraft(state, {
+      serviceTypes,
+      roles,
+      proactiveOrderCare: state.config.proactiveOrderCare,
+      guestServiceLimits,
+    }, 'manager-demo')
     expect(state.config.serviceTypes.find((type) => type.id === 'water')?.sla.warningSeconds).toBe(30)
+    expect(state.config.guestServiceLimits.maxRequests).toBe(5)
     expect(state.draftConfig?.serviceTypes.find((type) => type.id === 'water')?.sla.warningSeconds).toBe(15)
+    expect(state.draftConfig?.guestServiceLimits.maxRequests).toBe(4)
 
     const published = publishConfig(state, 'manager-demo')
     expect(published.version).toBe(2)
     expect(published.serviceTypes.find((type) => type.id === 'water')?.sla.warningSeconds).toBe(15)
+    expect(published.guestServiceLimits.maxRequests).toBe(4)
     expect(state.draftConfig).toBeNull()
   })
 
@@ -162,6 +171,7 @@ describe('versioned store configuration', () => {
       skills: state.config.skills,
       workstations: state.config.workstations,
       proactiveOrderCare: state.config.proactiveOrderCare,
+      guestServiceLimits: state.config.guestServiceLimits,
     }, 'emp-chen')
     expect(state.draftConfig?.roles.find((role) => role.id === 'concierge')).toMatchObject({
       name: '客户体验专员',
@@ -178,6 +188,7 @@ describe('versioned store configuration', () => {
       skills: state.config.skills,
       workstations: invalidWorkstations,
       proactiveOrderCare: state.config.proactiveOrderCare,
+      guestServiceLimits: state.config.guestServiceLimits,
     }, 'emp-chen')).toThrow('必须绑定已启用的专用取送任务类型')
   })
 })

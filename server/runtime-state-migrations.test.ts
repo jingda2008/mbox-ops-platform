@@ -11,10 +11,13 @@ describe('runtime state operational migrations', () => {
     const originalTableName = legacy.tables[0]!.displayName
     delete legacy.config.skills
     delete legacy.config.workstations
+    delete (legacy.config as Partial<RuntimeState['config']>).guestServiceLimits
     legacy.config.roles = legacy.config.roles
       .filter((role) => !['owner', 'admin', 'bartender', 'kitchen', 'runner', 'cashier', 'host'].includes(role.id))
       .map(({ permissionIds: _permissionIds, dataScope: _dataScope, approvalLimits: _approvalLimits, ...role }) => role)
-    legacy.config.serviceTypes = legacy.config.serviceTypes.filter((type) => type.code !== 'FULFILLMENT_DELIVERY')
+    legacy.config.serviceTypes = legacy.config.serviceTypes.filter(
+      (type) => !['FULFILLMENT_DELIVERY', 'CUSTOM_REQUEST'].includes(type.code),
+    )
     legacy.employees = legacy.employees.map(({ skillIds: _skillIds, ...employee }) => employee)
     legacy.shiftAssignments = legacy.shiftAssignments.map(({ stationIds: _stationIds, ...shift }) => shift)
 
@@ -29,6 +32,16 @@ describe('runtime state operational migrations', () => {
     )
     expect(migrated.config.serviceTypes.find((type) => type.code === 'FULFILLMENT_DELIVERY')).toMatchObject({
       guestVisible: false,
+    })
+    expect(migrated.config.serviceTypes.find((type) => type.code === 'CUSTOM_REQUEST')).toMatchObject({
+      id: 'custom-request',
+      name: '个性化需求',
+      dispatchRoleIds: expect.arrayContaining(['server', 'supervisor', 'manager']),
+    })
+    expect(migrated.config.guestServiceLimits).toEqual({
+      windowSeconds: 60,
+      maxRequests: 5,
+      duplicateSeconds: 60,
     })
     expect(migrated.employees.every((employee) => Array.isArray(employee.skillIds))).toBe(true)
     expect(migrated.shiftAssignments.every((shift) => Array.isArray(shift.stationIds))).toBe(true)

@@ -86,12 +86,14 @@ export class JsonRepository {
         config: {
           ...(loaded.config ?? seed.config),
           proactiveOrderCare: loaded.config?.proactiveOrderCare ?? seed.config.proactiveOrderCare,
+          guestServiceLimits: loaded.config?.guestServiceLimits ?? seed.config.guestServiceLimits,
         },
         configVersions: migrateConfigVersions(loaded, seed),
         draftConfig: loaded.draftConfig
           ? {
               ...loaded.draftConfig,
               proactiveOrderCare: loaded.draftConfig.proactiveOrderCare ?? seed.config.proactiveOrderCare,
+              guestServiceLimits: loaded.draftConfig.guestServiceLimits ?? seed.config.guestServiceLimits,
             }
           : null,
       })

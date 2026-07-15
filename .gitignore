@@ -20,6 +20,11 @@ dist-server
 private/
 backups/
 
+# Local pilot handoff artifacts may contain access codes, employee PINs, or signed table QR tokens.
+deliverables/
+output/
+tmp/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

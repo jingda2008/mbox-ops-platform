@@ -11,8 +11,9 @@ import type {
   BenefitRedemptionConfirmCommand,
   BenefitRedemptionLockCommand,
 } from '../src/shared/benefit-redemption-contracts.js'
+import { currentOpenTableSession } from './table-sessions.js'
 import type { AuditEntry, Employee, RuntimeState, Table } from '../src/shared/contracts.js'
-import { requireRequestActor } from './auth-context.js'
+import { requireConfiguredOperation, requireTableDataScope } from './authorization.js'
 import {
   addOrderItem,
   createOrderDraft,
@@ -63,7 +64,7 @@ function redemptions(state: RuntimeState) {
 }
 
 function currentTableSessionId(state: RuntimeState, tableId: string) {
-  return `session:${tableId}:${state.store.businessDate}`
+  return currentOpenTableSession(state, tableId).id
 }
 
 function findActiveEmployee(state: RuntimeState, actorId: string, label = '操作人员') {
@@ -422,34 +423,38 @@ export function cancelBenefitRedemption(state: RuntimeState, redemptionId: strin
 
 export function registerBenefitRedemptionRoutes(app: FastifyInstance, repository: RuntimeRepository) {
   app.post('/api/benefits/redemptions/locks', async (request, reply) => {
-    const actor = requireRequestActor(request)
     const input = benefitRedemptionLockHttpSchema.parse(request.body)
-    const result = await repository.mutate((state) => lockBenefitRedemption(state, {
-      ...input,
-      actorId: actor.actorId,
-      occurredAt: new Date().toISOString(),
-    }))
+    const result = await repository.mutate((state) => {
+      const actor = requireConfiguredOperation(request, state, 'benefit.grant')
+      requireTableDataScope(request, state, input.tableId, 'benefit.grant')
+      return lockBenefitRedemption(state, { ...input, actorId: actor.actorId, occurredAt: new Date().toISOString() })
+    })
     return reply.status(201).send(result)
   })
 
   app.post<{ Params: { redemptionId: string } }>('/api/benefits/redemptions/:redemptionId/confirm', async (request) => {
-    const actor = requireRequestActor(request)
     const input = benefitRedemptionConfirmHttpSchema.parse(request.body)
-    return repository.mutate((state) => confirmBenefitRedemption(state, request.params.redemptionId, {
-      ...input,
-      actorId: actor.actorId,
-      authorizedBy: actor.actorId,
-      occurredAt: new Date().toISOString(),
-    }))
+    return repository.mutate((state) => {
+      const actor = requireConfiguredOperation(request, state, 'benefit.approve')
+      const redemption = state.benefitRedemptions.find((item) => item.id === request.params.redemptionId)
+      if (!redemption) businessError('REDEMPTION_NOT_FOUND', '权益核销记录不存在', 404)
+      requireTableDataScope(request, state, redemption.tableId, 'benefit.approve')
+      return confirmBenefitRedemption(state, request.params.redemptionId, {
+        ...input, actorId: actor.actorId, authorizedBy: actor.actorId, occurredAt: new Date().toISOString(),
+      })
+    })
   })
 
   app.post<{ Params: { redemptionId: string } }>('/api/benefits/redemptions/:redemptionId/cancel', async (request) => {
-    const actor = requireRequestActor(request)
     const input = benefitRedemptionCancelHttpSchema.parse(request.body)
-    return repository.mutate((state) => cancelBenefitRedemption(state, request.params.redemptionId, {
-      ...input,
-      actorId: actor.actorId,
-      occurredAt: new Date().toISOString(),
-    }))
+    return repository.mutate((state) => {
+      const actor = requireConfiguredOperation(request, state, 'benefit.grant')
+      const redemption = state.benefitRedemptions.find((item) => item.id === request.params.redemptionId)
+      if (!redemption) businessError('REDEMPTION_NOT_FOUND', '权益核销记录不存在', 404)
+      requireTableDataScope(request, state, redemption.tableId, 'benefit.grant')
+      return cancelBenefitRedemption(state, request.params.redemptionId, {
+        ...input, actorId: actor.actorId, occurredAt: new Date().toISOString(),
+      })
+    })
   })
 }

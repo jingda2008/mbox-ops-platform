@@ -8,6 +8,7 @@ import { signStaffSession } from './auth-context.js'
 const pilotLoginSchema = z.object({
   accessCode: z.string().min(1).max(256),
   actorId: z.string().min(1).max(128).optional(),
+  employeePin: z.string().regex(/^\d{6,12}$/).optional(),
 }).strict()
 
 interface AttemptWindow {
@@ -17,6 +18,7 @@ interface AttemptWindow {
 
 interface PilotAuthOptions {
   accessCode: string
+  employeePins: Record<string, string>
   sessionSecret: string
   sessionHours: number
 }
@@ -61,14 +63,22 @@ export async function registerPilotAuthRoutes(
       attempts.set(key, window)
       return reply.status(401).send({ code: 'PILOT_ACCESS_DENIED', message: '门店验证口令错误' })
     }
-    attempts.delete(key)
-
     const state = await repository.read()
     const employees = employeeOptions(state)
-    if (!input.actorId) return { employees }
+    if (!input.actorId) {
+      attempts.delete(key)
+      return { employees }
+    }
 
     const employee = employees.find((item) => item.id === input.actorId)
     if (!employee) return reply.status(403).send({ code: 'PILOT_ACTOR_FORBIDDEN', message: '员工不存在或已停用' })
+    const expectedPin = options.employeePins[employee.id]
+    if (!input.employeePin || !expectedPin || !sameSecret(input.employeePin, expectedPin)) {
+      window.count += 1
+      attempts.set(key, window)
+      return reply.status(401).send({ code: 'PILOT_EMPLOYEE_PIN_DENIED', message: '员工PIN错误' })
+    }
+    attempts.delete(key)
     const expiresAt = now + options.sessionHours * 60 * 60_000
     return {
       token: signStaffSession({ actorId: employee.id, storeId: state.store.id, issuedAt: now, expiresAt }, options.sessionSecret),

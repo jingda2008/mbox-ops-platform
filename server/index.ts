@@ -31,7 +31,7 @@ import { buildMemberPortal, registerMemberPortalRoutes } from './member-portal.j
 import { registerNotificationRoutes } from './notification-api.js'
 import { processDueNotifications } from './notification-dispatch.js'
 import { BenefitRedemptionBusinessError, registerBenefitRedemptionRoutes } from './benefit-redemption.js'
-import { AuthenticationError, registerAuthContext } from './auth-context.js'
+import { AuthenticationError, registerAuthContext, requireRequestActor } from './auth-context.js'
 import type { RuntimeMode } from '../src/shared/auth-contracts.js'
 import { publishConfigVersion, rollbackConfigVersion } from './config-versioning.js'
 import { publishConfigVersionSchema, rollbackConfigVersionSchema } from '../src/shared/config-versioning-contracts.js'
@@ -51,8 +51,11 @@ import {
 import { loadRuntimeConfig } from './runtime-config.js'
 import { registerObservability } from './observability.js'
 import { registerGuestRoutes } from './guest-api.js'
+import { registerPublicReservationRoutes } from './public-reservation-api.js'
 import { TableAccessError } from './table-access.js'
 import { registerStoreImportRoutes } from './store-import-api.js'
+import { registerTableSessionRoutes } from './table-session-api.js'
+import { registerBusinessDayRoutes } from './business-day-api.js'
 import { StoreImportValidationError } from './store-import.js'
 import {
   PostgresIdempotencyConflictError,
@@ -69,8 +72,10 @@ import { registerInventoryRoutes } from './inventory-api.js'
 import { registerReservationRoutes } from './reservation-api.js'
 import { registerWechatReservationRoutes } from './wechat-reservation-api.js'
 import { registerPilotAuthRoutes } from './pilot-auth.js'
-import { AuthorizationError, requireOperation } from './authorization.js'
+import { AuthorizationError, requireApprovalAmount, requireConfiguredOperation, requireTableDataScope } from './authorization.js'
 import { createCustomerNotificationAdapters } from './notification-runtime.js'
+import { syncKdsFromFulfillmentServiceTaskAction } from './fulfillment-service.js'
+import { projectRuntimeStateForActor } from './bootstrap-projection.js'
 
 const runtimeConfig = loadRuntimeConfig()
 
@@ -116,6 +121,7 @@ await registerAuthContext(app, {
 if (runtimeConfig.pilotAccessCode) {
   await registerPilotAuthRoutes(app, repository, {
     accessCode: runtimeConfig.pilotAccessCode,
+    employeePins: runtimeConfig.pilotEmployeePins!,
     sessionSecret: runtimeConfig.sessionSecret!,
     sessionHours: runtimeConfig.pilotSessionHours,
   })
@@ -237,36 +243,58 @@ app.setErrorHandler((error, _request, reply) => {
 
 app.get('/api/health', async () => ({ status: 'ok', time: new Date().toISOString() }))
 
-app.get('/api/bootstrap', async () => {
+app.get('/api/bootstrap', async (request) => {
   await repository.mutate((state) => {
     processAwaitingOrderReminders(state)
     return escalateDueTasks(state)
   })
   const state = await repository.read()
-  return { ...state, serverNow: new Date().toISOString(), metrics: calculateMetrics(state) }
+  const projected = projectRuntimeStateForActor(state, requireRequestActor(request))
+  return { ...projected, serverNow: new Date().toISOString(), metrics: calculateMetrics(projected) }
 })
 
 app.post('/api/tasks', async (request, reply) => {
   const input = createTaskSchema.parse(request.body)
-  const task = await repository.mutate((state) => createServiceTask(state, input))
+  const task = await repository.mutate((state) => {
+    const actor = requireConfiguredOperation(request, state, 'service.task.create')
+    const table = state.tables.find((item) => item.code === input.tableCode)
+    if (!table) throw new Error('桌台不存在')
+    requireTableDataScope(request, state, table.id, 'service.task.create')
+    return createServiceTask(state, { ...input, source: 'employee', requestedBy: actor.actorId })
+  })
   return reply.status(201).send(task)
 })
 
 app.post<{ Params: { taskId: string } }>('/api/tasks/:taskId/actions', async (request) => {
   const input = taskActionSchema.parse(request.body)
-  return repository.mutate((state) => applyTaskAction(state, request.params.taskId, input))
+  const actor = requireRequestActor(request)
+  if (input.actorId !== actor.actorId) {
+    throw new AuthorizationError('任务操作人必须与当前登录员工一致', 'service.task.action')
+  }
+  return repository.mutate((state) => {
+    requireConfiguredOperation(request, state, 'service.task.action')
+    const currentTask = state.tasks.find((item) => item.id === request.params.taskId)
+    if (!currentTask) throw new Error('任务不存在')
+    requireTableDataScope(request, state, currentTask.tableId, 'service.task.action')
+    const action = { ...input, actorId: actor.actorId }
+    const task = applyTaskAction(state, request.params.taskId, action)
+    syncKdsFromFulfillmentServiceTaskAction(state, task, action)
+    return task
+  })
 })
 
 app.put('/api/config/draft', async (request) => {
-  const actor = requireOperation(request, 'config.write')
   const input = configDraftSchema.parse(request.body)
-  return repository.mutate((state) => saveConfigDraft(state, input, actor.actorId))
+  return repository.mutate((state) => {
+    const actor = requireConfiguredOperation(request, state, 'config.write')
+    return saveConfigDraft(state, input, actor.actorId)
+  })
 })
 
 app.post('/api/config/publish', async (request) => {
-  const actor = requireOperation(request, 'config.write')
   const input = publishConfigVersionSchema.omit({ actorId: true, occurredAt: true }).parse(request.body)
   return repository.mutate((state) => {
+    const actor = requireConfiguredOperation(request, state, 'config.write')
     const result = publishConfigVersion(state, state.configVersions, {
       ...input,
       actorId: actor.actorId,
@@ -280,10 +308,10 @@ app.post('/api/config/publish', async (request) => {
 app.get('/api/config/versions', async () => (await repository.read()).configVersions.toSorted((left, right) => right.version - left.version))
 
 app.post<{ Params: { version: string } }>('/api/config/versions/:version/rollback', async (request) => {
-  const actor = requireOperation(request, 'config.write')
   const input = rollbackConfigVersionSchema.omit({ actorId: true, occurredAt: true, targetVersion: true }).parse(request.body)
   const targetVersion = Number(request.params.version)
   return repository.mutate((state) => {
+    const actor = requireConfiguredOperation(request, state, 'config.write')
     const result = rollbackConfigVersion(state, state.configVersions, {
       ...input,
       targetVersion,
@@ -296,80 +324,108 @@ app.post<{ Params: { version: string } }>('/api/config/versions/:version/rollbac
 })
 
 app.post('/api/master-data/employees', async (request, reply) => {
-  const actor = requireOperation(request, 'master-data.write')
   const input = employeeWriteSchema.parse(request.body)
-  const employee = await repository.mutate((state) => createEmployee(state, input, actor.actorId))
+  const employee = await repository.mutate((state) => {
+    const actor = requireConfiguredOperation(request, state, 'identity.write')
+    return createEmployee(state, input, actor.actorId)
+  })
   return reply.status(201).send(employee)
 })
 
 app.put<{ Params: { employeeId: string } }>('/api/master-data/employees/:employeeId', async (request) => {
-  const actor = requireOperation(request, 'master-data.write')
   const input = employeeWriteSchema.parse(request.body)
-  return repository.mutate((state) => updateEmployee(state, request.params.employeeId, input, actor.actorId))
+  return repository.mutate((state) => {
+    const actor = requireConfiguredOperation(request, state, 'identity.write')
+    return updateEmployee(state, request.params.employeeId, input, actor.actorId)
+  })
 })
 
 app.put<{ Params: { tableId: string } }>('/api/master-data/tables/:tableId', async (request) => {
-  const actor = requireOperation(request, 'master-data.write')
   const input = tableWriteSchema.parse(request.body)
-  return repository.mutate((state) => updateTable(state, request.params.tableId, input, actor.actorId))
+  return repository.mutate((state) => {
+    const actor = requireConfiguredOperation(request, state, 'table.write')
+    return updateTable(state, request.params.tableId, input, actor.actorId)
+  })
 })
 
 app.post('/api/master-data/shifts', async (request, reply) => {
-  const actor = requireOperation(request, 'master-data.write')
   const input = shiftWriteSchema.parse(request.body)
-  const shift = await repository.mutate((state) => createShift(state, input, actor.actorId))
+  const shift = await repository.mutate((state) => {
+    const actor = requireConfiguredOperation(request, state, 'shift.write')
+    return createShift(state, input, actor.actorId)
+  })
   return reply.status(201).send(shift)
 })
 
 app.put<{ Params: { shiftId: string } }>('/api/master-data/shifts/:shiftId', async (request) => {
-  const actor = requireOperation(request, 'master-data.write')
   const input = shiftWriteSchema.parse(request.body)
-  return repository.mutate((state) => updateShift(state, request.params.shiftId, input, actor.actorId))
+  return repository.mutate((state) => {
+    const actor = requireConfiguredOperation(request, state, 'shift.write')
+    return updateShift(state, request.params.shiftId, input, actor.actorId)
+  })
 })
 
 app.put<{ Params: { areaId: string } }>('/api/master-data/areas/:areaId', async (request) => {
-  const actor = requireOperation(request, 'master-data.write')
   const input = areaWriteSchema.parse(request.body)
-  return repository.mutate((state) => updateArea(state, request.params.areaId, input, actor.actorId))
+  return repository.mutate((state) => {
+    const actor = requireConfiguredOperation(request, state, 'master-data.write')
+    return updateArea(state, request.params.areaId, input, actor.actorId)
+  })
 })
 
 app.post('/api/master-data/products', async (request, reply) => {
-  const actor = requireOperation(request, 'master-data.write')
   const input = productWriteSchema.parse(request.body)
-  const product = await repository.mutate((state) => createProduct(state, input, actor.actorId))
+  const product = await repository.mutate((state) => {
+    const actor = requireConfiguredOperation(request, state, 'master-data.write')
+    return createProduct(state, input, actor.actorId)
+  })
   return reply.status(201).send(product)
 })
 
 app.put<{ Params: { productId: string } }>('/api/master-data/products/:productId', async (request) => {
-  const actor = requireOperation(request, 'master-data.write')
   const input = productWriteSchema.parse(request.body)
-  return repository.mutate((state) => updateProduct(state, request.params.productId, input, actor.actorId))
+  return repository.mutate((state) => {
+    const actor = requireConfiguredOperation(request, state, 'master-data.write')
+    return updateProduct(state, request.params.productId, input, actor.actorId)
+  })
 })
 
 app.post('/api/master-data/commerce-authorities', async (request, reply) => {
-  const actor = requireOperation(request, 'commerce-authority.write')
   const input = authorityWriteSchema.parse(request.body)
-  const authority = await repository.mutate((state) => createAuthority(state, input, actor.actorId))
+  const authority = await repository.mutate((state) => {
+    const actor = requireConfiguredOperation(request, state, 'commerce-authority.write')
+    input.kinds.forEach((kind) => requireApprovalAmount(request, state, kind, input.maxAmount, 'commerce-authority.write'))
+    return createAuthority(state, input, actor.actorId)
+  })
   return reply.status(201).send(authority)
 })
 
 app.put<{ Params: { authorityId: string } }>('/api/master-data/commerce-authorities/:authorityId', async (request) => {
-  const actor = requireOperation(request, 'commerce-authority.write')
   const input = authorityWriteSchema.parse(request.body)
-  return repository.mutate((state) => updateAuthority(state, request.params.authorityId, input, actor.actorId))
+  return repository.mutate((state) => {
+    const actor = requireConfiguredOperation(request, state, 'commerce-authority.write')
+    input.kinds.forEach((kind) => requireApprovalAmount(request, state, kind, input.maxAmount, 'commerce-authority.write'))
+    return updateAuthority(state, request.params.authorityId, input, actor.actorId)
+  })
 })
 
-app.post('/api/dev/reset', async () => repository.reset())
+app.post('/api/dev/reset', async (request) => {
+  await repository.mutate((state) => requireConfiguredOperation(request, state, 'config.write'))
+  return repository.reset()
+})
 
 registerCommerceRoutes(app, repository)
 registerPaymentRoutes(app, repository)
 registerProactiveServiceRoutes(app, repository)
+registerTableSessionRoutes(app, repository)
+registerBusinessDayRoutes(app, repository)
 registerBenefitRoutes(app, repository)
 registerMemberPortalRoutes(app, repository)
 registerNotificationRoutes(app, repository)
 registerBenefitRedemptionRoutes(app, repository)
 registerSongRoutes(app, repository)
 registerGuestRoutes(app, repository, { secret: runtimeConfig.qrSecret, runtimeMode: runtimeConfig.runtimeMode })
+registerPublicReservationRoutes(app, repository, { secret: runtimeConfig.qrSecret })
 registerStoreImportRoutes(app, repository)
 registerInventoryRoutes(app, repository)
 registerReservationRoutes(app, repository)
@@ -380,7 +436,7 @@ if (runtimeConfig.runtimeMode === 'staging' || runtimeConfig.runtimeMode === 'pr
       return reply.status(404).send({ code: 'ROUTE_NOT_FOUND', message: '接口不存在' })
     }
     const path = request.url.split('?')[0]?.replace(/\/$/, '') || '/'
-    if (path === '/' || path === '/guest' || path === '/member') return reply.sendFile('index.html')
+    if (path === '/' || path === '/guest' || path === '/member' || path === '/reserve') return reply.sendFile('index.html')
     return reply.status(404).send({ code: 'PAGE_NOT_FOUND', message: '页面不存在' })
   })
 }

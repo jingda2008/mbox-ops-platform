@@ -160,7 +160,7 @@ function sessionView(
     },
     primaryServiceName: primary?.displayName ?? null,
     serviceTypes: state.config.serviceTypes
-      .filter((serviceType) => serviceType.enabled)
+      .filter((serviceType) => serviceType.enabled && serviceType.guestVisible !== false)
       .map(({ id, code, name, icon, priority }) => ({ id, code, name, icon, priority })),
     tasks: state.tasks
       .filter((task) => task.tableId === table.id && Date.parse(task.createdAt) >= Date.parse(tableSession.openedAt))

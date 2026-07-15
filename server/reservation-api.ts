@@ -3,7 +3,10 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import type { RuntimeState } from '../src/shared/contracts.js'
 import type { ReservationState, ReservationStatus } from '../src/shared/reservation-contracts.js'
-import { requireRequestActor } from './auth-context.js'
+import { AuthorizationError, requireApprovalAmount, requireConfiguredOperation, requireTableDataScope } from './authorization.js'
+import { startAwaitingOrder } from './proactive-service.js'
+import { createServiceTask } from './domain.js'
+import { openTableSession } from './table-sessions.js'
 import {
   cancelReservation,
   completeReservationDepositRefund,
@@ -54,8 +57,6 @@ const arriveActionSchema = z.object({
 const seatActionSchema = z.object({
   action: z.literal('seat'),
   tableId: z.string().trim().min(1).max(128),
-  tableCode: z.string().trim().min(1).max(64),
-  tableSessionId: z.string().trim().min(1).max(128),
   idempotencyKey: idempotencyKeySchema,
 }).strict()
 
@@ -183,11 +184,34 @@ export function mutateReservationState<T>(state: RuntimeStateWithReservations, o
   return result
 }
 
+function requireSeparateRefundApprover(
+  domain: ReservationState,
+  reservationId: string,
+  refundRequestReference: string,
+  approverId: string,
+) {
+  const operation = 'reservation.deposit.refund.approve'
+  for (let index = domain.auditEvents.length - 1; index >= 0; index -= 1) {
+    const event = domain.auditEvents[index]
+    if (
+      event?.type === 'reservation.deposit_refund_started.v1' &&
+      event.reservationId === reservationId &&
+      event.details.refundRequestReference === refundRequestReference
+    ) {
+      if (event.actorId === approverId) {
+        throw new AuthorizationError('退款申请人与审批人必须由不同员工担任', operation)
+      }
+      return
+    }
+  }
+  throw new AuthorizationError('无法核验退款申请人，禁止确认退款完成', operation)
+}
+
 export function registerReservationRoutes(app: FastifyInstance, repository: RuntimeRepository) {
   app.get('/api/reservations', async (request) => {
-    requireRequestActor(request)
     const query = listQuerySchema.parse(request.query)
     const state = await repository.read() as RuntimeStateWithReservations
+    requireConfiguredOperation(request, state, 'reservation.view')
     const domain = reservationsFor(state)
     const reservations = domain.reservations
     return {
@@ -197,11 +221,10 @@ export function registerReservationRoutes(app: FastifyInstance, repository: Runt
   })
 
   app.put('/api/reservations/config', async (request) => {
-    const actor = requireRequestActor(request)
-    if (actor.roleId !== 'manager') throw new Error('只有经理可以修改预约规则')
     const input = configUpdateSchema.parse(request.body)
     return repository.mutate((runtime) => {
       const state = runtime as RuntimeStateWithReservations
+      const actor = requireConfiguredOperation(request, state, 'reservation.config.write')
       const domain = reservationsFor(state)
       const existing = state.auditEntries.find((entry) =>
         entry.action === 'reservation.config.updated.v1' && entry.details.idempotencyKey === input.idempotencyKey,
@@ -236,102 +259,173 @@ export function registerReservationRoutes(app: FastifyInstance, repository: Runt
   })
 
   app.post('/api/reservations', async (request, reply) => {
-    const actor = requireRequestActor(request)
     const input = createSchema.parse(request.body)
-    const result = await repository.mutate((runtime) => mutateReservationState(runtime as RuntimeStateWithReservations, (domain) => {
-      const existing = domain.idempotencyRecords.find((record) => record.key === input.idempotencyKey)
-      const reservationId = existing?.operation === 'reservation.create' ? existing.reservationId : randomUUID()
-      return createReservation(domain, {
-        ...input,
-        reservationId,
-        actorId: actor.actorId,
-        occurredAt: new Date().toISOString(),
+    const result = await repository.mutate((runtime) => {
+      const state = runtime as RuntimeStateWithReservations
+      const actor = requireConfiguredOperation(request, state, 'reservation.manage')
+      return mutateReservationState(state, (domain) => {
+        const existing = domain.idempotencyRecords.find((record) => record.key === input.idempotencyKey)
+        const reservationId = existing?.operation === 'reservation.create' ? existing.reservationId : randomUUID()
+        return createReservation(domain, {
+          ...input,
+          reservationId,
+          actorId: actor.actorId,
+          occurredAt: new Date().toISOString(),
+        })
       })
-    }))
+    })
     return reply.status(201).send(result)
   })
 
   app.post<{ Params: { reservationId: string } }>('/api/reservations/:reservationId/actions', async (request) => {
-    const actor = requireRequestActor(request)
     const input = actionSchema.parse(request.body)
-    return repository.mutate((runtime) => mutateReservationState(runtime as RuntimeStateWithReservations, (domain) => {
-      const command = {
-        reservationId: request.params.reservationId,
-        actorId: actor.actorId,
-        occurredAt: new Date().toISOString(),
-        idempotencyKey: input.idempotencyKey,
-      }
-      if (input.action === 'confirm') return confirmReservation(domain, command)
-      if (input.action === 'arrive') return markReservationArrived(domain, command)
-      if (input.action === 'seat') return seatReservation(domain, { ...command, ...input })
-      if (input.action === 'cancel') return cancelReservation(domain, { ...command, reason: input.reason })
-      return markReservationNoShow(domain, { ...command, reason: input.reason })
-    }))
+    return repository.mutate((runtime) => {
+      const state = runtime as RuntimeStateWithReservations
+      const actor = requireConfiguredOperation(request, state, 'reservation.manage')
+      return mutateReservationState(state, (domain) => {
+        const command = {
+          reservationId: request.params.reservationId,
+          actorId: actor.actorId,
+          occurredAt: new Date().toISOString(),
+          idempotencyKey: input.idempotencyKey,
+        }
+        if (input.action === 'confirm') return confirmReservation(domain, command)
+        if (input.action === 'arrive') return markReservationArrived(domain, command)
+        if (input.action === 'seat') {
+          const reservation = domain.reservations.find((item) => item.id === request.params.reservationId)
+          if (!reservation) throw new Error('预约不存在')
+          const isReplay = domain.idempotencyRecords.some((record) =>
+            record.key === input.idempotencyKey && record.operation === 'reservation.seat',
+          )
+          let table = state.tables.find((item) => item.id === input.tableId)
+          let tableSessionId = reservation.tableSessionId
+          if (!isReplay) {
+            if (!table) throw new Error('入座桌台不存在')
+            requireTableDataScope(request, state, table.id, 'reservation.manage')
+            if (!['available', 'reserved'].includes(table.status)) throw new Error('入座桌台当前不可用')
+            if (reservation.partySize > table.capacity) throw new Error(`到店人数超过桌台容量：${reservation.partySize}/${table.capacity}`)
+            const primary = state.employees.find((employee) => employee.id === table.primaryEmployeeId && employee.status === 'active')
+            if (!primary) throw new Error('桌台没有有效主服务员，不能安排入座')
+            const activeShift = state.shiftAssignments.find((shift) =>
+              shift.employeeId === primary.id && shift.businessDate === state.store.businessDate && shift.status === 'active',
+            )
+            if (!primary.online || primary.paused || !activeShift || !activeShift.areaIds.includes(table.areaId)) {
+              throw new Error('桌台主服务员当前不可接待，请先完成员工调度')
+            }
+            tableSessionId = openTableSession(state, table, command.occurredAt).id
+          }
+          if (!table || !tableSessionId) throw new Error('预约入座桌次不完整')
+          const result = seatReservation(domain, {
+            ...command, tableId: table.id, tableCode: table.code, tableSessionId,
+          })
+          if (!isReplay) {
+            table.status = 'occupied'
+            table.guestCount = reservation.partySize
+            table.openedAt = command.occurredAt
+            state.auditEntries.push({
+              id: randomUUID(), actorId: actor.actorId, action: 'table.opened_from_reservation.v1',
+              objectType: 'table', objectId: table.id, occurredAt: command.occurredAt,
+              details: { reservationId: reservation.id, tableSessionId, guestCount: reservation.partySize },
+            })
+            state.revision += 1
+            if (state.config.proactiveOrderCare.enabled) {
+              startAwaitingOrder(state, table.id, actor.actorId, `reservation-seat:${reservation.id}`, new Date(command.occurredAt))
+            }
+            if (reservation.occasionCode === 'birthday') {
+              createServiceTask(state, {
+                tableCode: table.code,
+                serviceTypeId: 'birthday',
+                source: 'system',
+                triggerId: reservation.id,
+                note: `${reservation.customerName}生日到店：${reservation.occasionNote || '请到桌确认称呼、公开互动意愿和庆祝时间'}`,
+                idempotencyKey: `reservation-birthday:${reservation.id}`,
+                requestedBy: actor.actorId,
+              })
+            }
+          }
+          return result
+        }
+        if (input.action === 'cancel') return cancelReservation(domain, { ...command, reason: input.reason })
+        return markReservationNoShow(domain, { ...command, reason: input.reason })
+      })
+    })
   })
 
   app.post<{ Params: { reservationId: string } }>('/api/reservations/:reservationId/deposit-intent', async (request) => {
-    const actor = requireRequestActor(request)
     const input = depositIntentSchema.parse(request.body)
-    return repository.mutate((runtime) => mutateReservationState(runtime as RuntimeStateWithReservations, (domain) => (
-      recordReservationDepositIntent(domain, {
+    return repository.mutate((runtime) => {
+      const state = runtime as RuntimeStateWithReservations
+      const actor = requireConfiguredOperation(request, state, 'reservation.manage')
+      return mutateReservationState(state, (domain) => recordReservationDepositIntent(domain, {
         ...input,
         reservationId: request.params.reservationId,
         actorId: actor.actorId,
         occurredAt: new Date().toISOString(),
-      })
-    )))
+      }))
+    })
   })
 
   app.post<{ Params: { reservationId: string } }>('/api/reservations/:reservationId/deposit-confirmation', async (request) => {
-    const actor = requireRequestActor(request)
     const input = depositConfirmationSchema.parse(request.body)
-    return repository.mutate((runtime) => mutateReservationState(runtime as RuntimeStateWithReservations, (domain) => (
-      confirmReservationDeposit(domain, {
+    return repository.mutate((runtime) => {
+      const state = runtime as RuntimeStateWithReservations
+      const actor = requireConfiguredOperation(request, state, 'reservation.deposit.confirm')
+      return mutateReservationState(state, (domain) => confirmReservationDeposit(domain, {
         ...input,
         reservationId: request.params.reservationId,
         actorId: actor.actorId,
         occurredAt: new Date().toISOString(),
-      })
-    )))
+      }))
+    })
   })
 
   app.post<{ Params: { reservationId: string } }>('/api/reservations/:reservationId/deposit-refunds', async (request) => {
-    const actor = requireRequestActor(request)
     const input = refundStartSchema.parse(request.body)
-    return repository.mutate((runtime) => mutateReservationState(runtime as RuntimeStateWithReservations, (domain) => (
-      startReservationDepositRefund(domain, {
+    return repository.mutate((runtime) => {
+      const state = runtime as RuntimeStateWithReservations
+      const actor = requireConfiguredOperation(request, state, 'reservation.deposit.refund.request')
+      const reservation = state.reservationState?.reservations.find((item) => item.id === request.params.reservationId)
+      if (!reservation) throw new Error('预约不存在')
+      requireApprovalAmount(request, state, 'refundRequest', reservation.deposit.requiredAmount, 'reservation.deposit.refund.request')
+      return mutateReservationState(state, (domain) => startReservationDepositRefund(domain, {
         ...input,
         reservationId: request.params.reservationId,
         actorId: actor.actorId,
         occurredAt: new Date().toISOString(),
-      })
-    )))
+      }))
+    })
   })
 
   app.post<{ Params: { reservationId: string } }>('/api/reservations/:reservationId/deposit-refund-confirmation', async (request) => {
-    const actor = requireRequestActor(request)
     const input = refundConfirmationSchema.parse(request.body)
-    return repository.mutate((runtime) => mutateReservationState(runtime as RuntimeStateWithReservations, (domain) => (
-      completeReservationDepositRefund(domain, {
-        ...input,
-        reservationId: request.params.reservationId,
-        actorId: actor.actorId,
-        occurredAt: new Date().toISOString(),
+    return repository.mutate((runtime) => {
+      const state = runtime as RuntimeStateWithReservations
+      const actor = requireConfiguredOperation(request, state, 'reservation.deposit.refund.approve')
+      requireApprovalAmount(request, state, 'refundApprove', input.refundedAmount, 'reservation.deposit.refund.approve')
+      return mutateReservationState(state, (domain) => {
+        requireSeparateRefundApprover(domain, request.params.reservationId, input.refundRequestReference, actor.actorId)
+        return completeReservationDepositRefund(domain, {
+          ...input,
+          reservationId: request.params.reservationId,
+          actorId: actor.actorId,
+          occurredAt: new Date().toISOString(),
+        })
       })
-    )))
+    })
   })
 
   app.post<{ Params: { reservationId: string } }>('/api/reservations/:reservationId/deposit-refund-failure', async (request) => {
-    const actor = requireRequestActor(request)
     const input = refundFailureSchema.parse(request.body)
-    return repository.mutate((runtime) => mutateReservationState(runtime as RuntimeStateWithReservations, (domain) => (
-      failReservationDepositRefund(domain, {
+    return repository.mutate((runtime) => {
+      const state = runtime as RuntimeStateWithReservations
+      const actor = requireConfiguredOperation(request, state, 'reservation.deposit.refund.request')
+      return mutateReservationState(state, (domain) => failReservationDepositRefund(domain, {
         ...input,
         reservationId: request.params.reservationId,
         actorId: actor.actorId,
         occurredAt: new Date().toISOString(),
-      })
-    )))
+      }))
+    })
   })
 }
 

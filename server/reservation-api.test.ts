@@ -3,14 +3,15 @@ import { describe, expect, it } from 'vitest'
 import { registerReservationRoutes } from './reservation-api.js'
 import { JsonRepository } from './repository.js'
 
-async function fixture(authenticated = true, roleId = 'server') {
+async function fixture(authenticated = true, roleId = 'host') {
   const repository = new JsonRepository(`/tmp/mbox-reservations-${crypto.randomUUID()}.json`)
   await repository.init()
   const app = Fastify()
   if (authenticated) {
     app.addHook('preHandler', async (request) => {
+      const actorId = roleId === 'manager' ? 'emp-chen' : 'emp-host'
       request.mboxActor = {
-        actorId: 'emp-chen',
+        actorId,
         storeId: 'mbox-lujiazui',
         roleId,
         runtimeMode: 'test',
@@ -71,7 +72,7 @@ describe('reservation employee API', () => {
     await repository.close()
   })
 
-  it('rejects reservation configuration changes from a service role', async () => {
+  it('rejects reservation configuration changes from a host role', async () => {
     const { app, repository } = await fixture()
     const response = await app.inject({
       method: 'PUT',
@@ -88,8 +89,8 @@ describe('reservation employee API', () => {
         idempotencyKey: 'reservation-config-denied-0001',
       },
     })
-    expect(response.statusCode).toBe(500)
-    expect(response.json().message).toContain('只有经理')
+    expect(response.statusCode).toBe(403)
+    expect(response.json().code).toBe('AUTHORIZATION_DENIED')
     await app.close()
     await repository.close()
   })
@@ -111,7 +112,7 @@ describe('reservation employee API', () => {
   })
 
   it('records external payment facts, seats the guest and preserves the table session binding', async () => {
-    const { app, repository } = await fixture()
+    const { app, repository } = await fixture(true, 'manager')
     const created = await app.inject({ method: 'POST', url: '/api/reservations', payload: reservationPayload })
     const reservationId = created.json().id as string
 
@@ -148,13 +149,13 @@ describe('reservation employee API', () => {
       url: `/api/reservations/${reservationId}/actions`,
       payload: {
         action: 'seat',
-        tableId: 'table-l18',
-        tableCode: 'L18',
-        tableSessionId: 'session-l18-20300714',
+        tableId: 'table-l04',
         idempotencyKey: 'reservation-api-seat-0001',
       },
     })
-    expect(seated.json()).toMatchObject({ status: 'seated', tableCode: 'L18', tableSessionId: 'session-l18-20300714' })
+    expect(seated.statusCode, seated.body).toBe(200)
+    expect(seated.json()).toMatchObject({ status: 'seated', tableCode: 'L04' })
+    expect(seated.json().tableSessionId).toMatch(/^session:table-l04:/)
     await app.close()
     await repository.close()
   })

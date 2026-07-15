@@ -21,7 +21,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
-import { getBootstrap } from '../api'
+import { getBootstrap, getCurrentActorId } from '../api'
 import {
   actOnReservation,
   confirmDeposit,
@@ -35,7 +35,7 @@ import {
   type ReservationListResponse,
   type ReservationConfigWriteInput,
 } from '../reservation-api'
-import type { Table } from '../shared/contracts'
+import type { BootstrapResponse, StaffPermissionId, Table } from '../shared/contracts'
 import type {
   Reservation,
   ReservationDepositStatus,
@@ -106,10 +106,17 @@ function createEmptyDraft(): CreateDraft {
   }
 }
 
-export function ReservationView() {
+interface ReservationAccess {
+  manage: boolean
+  configure: boolean
+  confirmDeposit: boolean
+  requestRefund: boolean
+  approveRefund: boolean
+}
+
+export function ReservationView({ data }: { data: BootstrapResponse }) {
   const [response, setResponse] = useState<ReservationListResponse>(emptyResponse)
   const [tables, setTables] = useState<Table[]>([])
-  const [businessDate, setBusinessDate] = useState('')
   const [loading, setLoading] = useState(true)
   const [busyAction, setBusyAction] = useState('')
   const [notice, setNotice] = useState<Notice | null>(null)
@@ -126,6 +133,20 @@ export function ReservationView() {
   const [secondaryReference, setSecondaryReference] = useState('')
   const [reason, setReason] = useState('')
   const [selectedTableId, setSelectedTableId] = useState('')
+  const actorId = getCurrentActorId()
+  const employee = data.employees.find((item) => item.id === actorId)
+  const activeShift = data.shiftAssignments.find((shift) =>
+    shift.employeeId === actorId && shift.businessDate === data.store.businessDate && shift.status === 'active',
+  )
+  const role = data.config.roles.find((item) => item.id === (activeShift?.roleId ?? employee?.roleId))
+  const permissions = new Set<StaffPermissionId>(role?.permissionIds ?? [])
+  const access: ReservationAccess = {
+    manage: permissions.has('reservation.manage'),
+    configure: permissions.has('reservation.config.manage'),
+    confirmDeposit: permissions.has('payment.collect'),
+    requestRefund: permissions.has('payment.refund.request'),
+    approveRefund: permissions.has('payment.refund.approve'),
+  }
 
   const load = useCallback(async (withSpinner = true) => {
     if (withSpinner) setLoading(true)
@@ -133,7 +154,6 @@ export function ReservationView() {
       const [reservations, bootstrap] = await Promise.all([listReservations(), getBootstrap()])
       setResponse(reservations)
       setTables(bootstrap.tables)
-      setBusinessDate(bootstrap.store.businessDate)
       setNotice(null)
     } catch (error) {
       setNotice({ tone: 'error', message: errorMessage(error, '预约数据加载失败') })
@@ -317,12 +337,9 @@ export function ReservationView() {
     if (operation.type === 'seat') {
       const table = tables.find((item) => item.id === selectedTableId)
       if (!table) return setNotice({ tone: 'error', message: '请选择入座桌台' })
-      const serviceDate = businessDate || new Date().toISOString().slice(0, 10)
       void execute(key, `客人已安排至${table.code}`, () => actOnReservation(reservation.id, {
         action: 'seat',
         tableId: table.id,
-        tableCode: table.code,
-        tableSessionId: `session:${table.id}:${serviceDate}`,
         idempotencyKey: idempotencyKey('seat'),
       }))
       return
@@ -373,12 +390,12 @@ export function ReservationView() {
           <button className="icon-button" type="button" title="刷新预约" disabled={loading || Boolean(busyAction)} onClick={() => void load()}>
             <RefreshCw className={loading ? 'reservation-spin' : ''} size={17} />
           </button>
-          <button className="secondary-button" type="button" disabled={!config || Boolean(busyAction)} onClick={showConfig ? closeConfig : openConfig}>
+          {access.configure && <button className="secondary-button" type="button" disabled={!config || Boolean(busyAction)} onClick={showConfig ? closeConfig : openConfig}>
             {showConfig ? <X size={17} /> : <Settings2 size={17} />}{showConfig ? '关闭配置' : '经理配置'}
-          </button>
-          <button className="primary-button" type="button" onClick={() => { setShowCreate((current) => !current); closeConfig() }}>
+          </button>}
+          {access.manage && <button className="primary-button" type="button" onClick={() => { setShowCreate((current) => !current); closeConfig() }}>
             {showCreate ? <X size={17} /> : <Plus size={17} />}{showCreate ? '关闭创建' : '新建预约'}
-          </button>
+          </button>}
         </div>
       </header>
 
@@ -464,6 +481,7 @@ export function ReservationView() {
           {!loading && reservations.map((reservation) => <ReservationRow
             key={reservation.id}
             reservation={reservation}
+            access={access}
             busyAction={busyAction}
             onQuickAction={quickAction}
             onOpenOperation={openOperation}
@@ -567,8 +585,9 @@ function ReservationConfigPanel({ currentVersion, draft, reason, busy, onChange,
   </form>
 }
 
-function ReservationRow({ reservation, busyAction, onQuickAction, onOpenOperation }: {
+function ReservationRow({ reservation, access, busyAction, onQuickAction, onOpenOperation }: {
   reservation: Reservation
+  access: ReservationAccess
   busyAction: string
   onQuickAction: (reservation: Reservation, action: 'confirm' | 'arrive') => void
   onOpenOperation: (type: OperationType, reservation: Reservation) => void
@@ -582,15 +601,15 @@ function ReservationRow({ reservation, busyAction, onQuickAction, onOpenOperatio
     <div className="reservation-placement"><span><MapPin size={13} />{reservation.tableCode ?? reservation.areaPreferenceCode ?? '区域待定'}</span>{reservation.occasionCode && <b>{occasionLabel(reservation.occasionCode)}</b>}</div>
     <div className="reservation-state"><span className={`reservation-status is-${reservation.status}`}>{statusLabels[reservation.status]}</span><small className={`deposit-status is-${reservation.deposit.status}`}>{depositLabels[reservation.deposit.status]}{reservation.deposit.requiredAmount > 0 ? ` · ${money(reservation.deposit.requiredAmount)}` : ''}</small></div>
     <fieldset className="reservation-actions" disabled={Boolean(busyAction)}>
-      {reservation.deposit.status === 'payment_required' && <ActionButton icon={Banknote} label="登记支付单" onClick={() => onOpenOperation('deposit_intent', reservation)} />}
-      {reservation.deposit.status === 'payment_intent_recorded' && <ActionButton icon={Banknote} label="确认定金到账" primary onClick={() => onOpenOperation('deposit_confirm', reservation)} />}
-      {canConfirm && <ActionButton icon={Check} label="确认预约" primary loading={busyAction === `confirm:${reservation.id}`} onClick={() => onQuickAction(reservation, 'confirm')} />}
-      {reservation.status === 'confirmed' && <ActionButton icon={UserCheck} label="确认到店" primary loading={busyAction === `arrive:${reservation.id}`} onClick={() => onQuickAction(reservation, 'arrive')} />}
-      {reservation.status === 'arrived' && <ActionButton icon={DoorOpen} label="安排入座" primary onClick={() => onOpenOperation('seat', reservation)} />}
-      {['requested', 'confirmed', 'arrived'].includes(reservation.status) && <ActionButton icon={X} label="取消" onClick={() => onOpenOperation('cancel', reservation)} />}
-      {canNoShow && <ActionButton icon={UserRoundX} label="未到店" danger onClick={() => onOpenOperation('no_show', reservation)} />}
-      {['refund_required', 'refund_failed'].includes(reservation.deposit.status) && <ActionButton icon={RotateCcw} label={reservation.deposit.status === 'refund_failed' ? '重试退款' : '发起退款'} primary onClick={() => onOpenOperation('refund_start', reservation)} />}
-      {reservation.deposit.status === 'refund_processing' && <><ActionButton icon={Check} label="确认退款" primary onClick={() => onOpenOperation('refund_complete', reservation)} /><ActionButton icon={CircleAlert} label="记录失败" danger onClick={() => onOpenOperation('refund_fail', reservation)} /></>}
+      {access.manage && reservation.deposit.status === 'payment_required' && <ActionButton icon={Banknote} label="登记支付单" onClick={() => onOpenOperation('deposit_intent', reservation)} />}
+      {access.confirmDeposit && reservation.deposit.status === 'payment_intent_recorded' && <ActionButton icon={Banknote} label="确认定金到账" primary onClick={() => onOpenOperation('deposit_confirm', reservation)} />}
+      {access.manage && canConfirm && <ActionButton icon={Check} label="确认预约" primary loading={busyAction === `confirm:${reservation.id}`} onClick={() => onQuickAction(reservation, 'confirm')} />}
+      {access.manage && reservation.status === 'confirmed' && <ActionButton icon={UserCheck} label="确认到店" primary loading={busyAction === `arrive:${reservation.id}`} onClick={() => onQuickAction(reservation, 'arrive')} />}
+      {access.manage && reservation.status === 'arrived' && <ActionButton icon={DoorOpen} label="安排入座" primary onClick={() => onOpenOperation('seat', reservation)} />}
+      {access.manage && ['requested', 'confirmed', 'arrived'].includes(reservation.status) && <ActionButton icon={X} label="取消" onClick={() => onOpenOperation('cancel', reservation)} />}
+      {access.manage && canNoShow && <ActionButton icon={UserRoundX} label="未到店" danger onClick={() => onOpenOperation('no_show', reservation)} />}
+      {access.requestRefund && ['refund_required', 'refund_failed'].includes(reservation.deposit.status) && <ActionButton icon={RotateCcw} label={reservation.deposit.status === 'refund_failed' ? '重试退款' : '发起退款'} primary onClick={() => onOpenOperation('refund_start', reservation)} />}
+      {reservation.deposit.status === 'refund_processing' && <>{access.approveRefund && <ActionButton icon={Check} label="确认退款" primary onClick={() => onOpenOperation('refund_complete', reservation)} />}{access.requestRefund && <ActionButton icon={CircleAlert} label="记录失败" danger onClick={() => onOpenOperation('refund_fail', reservation)} />}</>}
       {['seated', 'cancelled', 'no_show'].includes(reservation.status) && !['refund_required', 'refund_processing', 'refund_failed'].includes(reservation.deposit.status) && <span className="reservation-closed">流程已结束</span>}
     </fieldset>
   </article>

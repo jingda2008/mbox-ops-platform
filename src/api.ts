@@ -82,10 +82,10 @@ export function getPilotEmployees(accessCode: string) {
   })
 }
 
-export function createPilotSession(accessCode: string, actorId: string) {
+export function createPilotSession(accessCode: string, actorId: string, employeePin: string) {
   return request<PilotLoginResponse>('/api/auth/pilot-login', {
     method: 'POST',
-    body: JSON.stringify({ accessCode, actorId }),
+    body: JSON.stringify({ accessCode, actorId, employeePin }),
   })
 }
 
@@ -242,6 +242,13 @@ export function stopAwaitingOrder(tableId: string, actorId: string, reason: stri
   return request<AwaitingOrderIntent>(`/api/tables/${tableId}/awaiting-order/stop`, {
     method: 'POST',
     body: JSON.stringify({ actorId, idempotencyKey: `stop-awaiting-order-${crypto.randomUUID()}`, reason }),
+  })
+}
+
+export function closeTableSession(tableId: string, reason: string) {
+  return request<Table>(`/api/tables/${encodeURIComponent(tableId)}/close`, {
+    method: 'POST',
+    body: JSON.stringify({ reason, idempotencyKey: `table-close-${crypto.randomUUID()}` }),
   })
 }
 

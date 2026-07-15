@@ -65,6 +65,7 @@ describe('guest table API', () => {
     expect(response.statusCode).toBe(200)
     const body = response.json() as GuestSessionResponse
     expect(body.table.code).toBe('L01')
+    expect(body.serviceTypes.map((type) => type.code)).not.toContain('FULFILLMENT_DELIVERY')
     expect(requireGuestSession(verifyTableAccessToken(body.tableToken, secret, now())).tableSessionId)
       .toBe(body.account.tableSessionId)
     await closeFixture(app, repository)

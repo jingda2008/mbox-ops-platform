@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { staffPermissionIds } from './contracts.js'
 
 const identifierSchema = z.string().trim().min(1).max(128)
 const shortIdentifierSchema = z.string().trim().min(1).max(64)
@@ -93,6 +94,15 @@ const roleSchema = z.object({
   name: z.string().trim().min(1).max(40),
   maxConcurrentTasks: z.number().int().min(1).max(20),
   canReceiveTasks: z.boolean(),
+  permissionIds: z.array(z.enum(staffPermissionIds)).max(staffPermissionIds.length).optional(),
+  dataScope: z.enum(['own', 'assigned_areas', 'store', 'all_stores']).optional(),
+  approvalLimits: z.object({
+    giftAmount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+    discountAmount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+    refundRequestAmount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+    refundApproveAmount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+    inventoryAdjustmentAmount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  }).strict().optional(),
 }).strict()
 
 const slaSchema = z.object({

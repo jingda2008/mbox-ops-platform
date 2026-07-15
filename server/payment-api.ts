@@ -19,7 +19,7 @@ import {
   startRefund,
 } from './payment-domain.js'
 import { AuthenticationError, requireRequestActor } from './auth-context.js'
-import { requireOperation } from './authorization.js'
+import { requireApprovalAmount, requireConfiguredOperation, requireTableDataScope } from './authorization.js'
 import type { RuntimeRepository } from './repository.js'
 
 const ACTIVE_ALLOCATION_STATUSES = new Set<PaymentIntentStatus>([
@@ -31,6 +31,17 @@ const ACTIVE_ALLOCATION_STATUSES = new Set<PaymentIntentStatus>([
 
 function deterministicId(prefix: string, key: string) {
   return `${prefix}_${createHash('sha256').update(key).digest('hex').slice(0, 32)}`
+}
+
+function requireTableSessionDataScope(
+  request: Parameters<typeof requireTableDataScope>[0],
+  state: Awaited<ReturnType<RuntimeRepository['read']>>,
+  tableSessionId: string,
+  operation: string,
+) {
+  const session = state.songState.tableSessions.find((item) => item.id === tableSessionId)
+  if (!session) throw new Error('桌次不存在')
+  return requireTableDataScope(request, state, session.tableId, operation)
 }
 
 function requireDevelopmentActor(request: Parameters<typeof requireRequestActor>[0]) {
@@ -91,11 +102,13 @@ function remainingAllocations(
 export function registerPaymentRoutes(app: FastifyInstance, repository: RuntimeRepository) {
   app.post('/api/payments/table-intents', async (request, reply) => {
     const input = createTablePaymentIntentSchema.parse(request.body)
-    const actor = requireOperation(request, 'payment.intent.create')
-    if (input.channel === 'wechat_mock' && actor.runtimeMode !== 'local' && actor.runtimeMode !== 'test') {
+    const requestActor = requireRequestActor(request)
+    if (input.channel === 'wechat_mock' && requestActor.runtimeMode !== 'local' && requestActor.runtimeMode !== 'test') {
       throw new AuthenticationError('当前环境未启用模拟支付渠道', 404, 'DEVELOPMENT_CHANNEL_DISABLED')
     }
     const intent = await repository.mutate((state) => {
+      const actor = requireConfiguredOperation(request, state, 'payment.intent.create')
+      requireTableSessionDataScope(request, state, input.tableSessionId, 'payment.intent.create')
       const existingRecord = state.paymentDomain.idempotencyRecords.find((record) => record.key === input.idempotencyKey)
       if (existingRecord) {
         if (existingRecord.operation !== 'payment.create_intent.v1' || existingRecord.resultType !== 'payment_intent') {
@@ -157,6 +170,7 @@ export function registerPaymentRoutes(app: FastifyInstance, repository: RuntimeR
       return repository.mutate((state) => {
         const intent = state.paymentDomain.paymentIntents.find((item) => item.id === request.params.paymentIntentId)
         if (!intent) throw new Error('支付意图不存在')
+        requireTableSessionDataScope(request, state, intent.tableSessionId, 'payment.pos.report')
         if (intent.channel !== 'wechat_mock') throw new Error('只有联调模拟渠道可以执行此操作')
         const now = new Date().toISOString()
         const notificationCount = state.paymentDomain.paymentNotifications.length
@@ -187,8 +201,8 @@ export function registerPaymentRoutes(app: FastifyInstance, repository: RuntimeR
     '/api/payments/:paymentIntentId/physical-pos-reports',
     async (request, reply) => {
       const input = physicalPosReportSchema.parse(request.body)
-      const actor = requireOperation(request, 'payment.pos.report')
       const report = await repository.mutate((state) => {
+        const actor = requireConfiguredOperation(request, state, 'payment.pos.report')
         const idempotencyCount = state.paymentDomain.idempotencyRecords.length
         const intent = state.paymentDomain.paymentIntents.find((item) => item.id === request.params.paymentIntentId)
         if (!intent) throw new Error('支付意图不存在')
@@ -225,8 +239,11 @@ export function registerPaymentRoutes(app: FastifyInstance, repository: RuntimeR
     '/api/payments/:paymentIntentId/refunds',
     async (request, reply) => {
       const input = itemRefundRequestSchema.parse(request.body)
-      const actor = requireOperation(request, 'payment.refund.request')
       const refund = await repository.mutate((state) => {
+        const actor = requireConfiguredOperation(request, state, 'payment.refund.request')
+        const intent = state.paymentDomain.paymentIntents.find((item) => item.id === request.params.paymentIntentId)
+        if (!intent) throw new Error('支付意图不存在')
+        requireTableSessionDataScope(request, state, intent.tableSessionId, 'payment.refund.request')
         const idempotencyCount = state.paymentDomain.idempotencyRecords.length
         const result = requestRefund(state.paymentDomain, {
           refundId: deterministicId('refund', input.idempotencyKey),
@@ -237,6 +254,7 @@ export function registerPaymentRoutes(app: FastifyInstance, repository: RuntimeR
           occurredAt: new Date().toISOString(),
           idempotencyKey: input.idempotencyKey,
         })
+        requireApprovalAmount(request, state, 'refundRequest', result.amount, 'payment.refund.request')
         if (state.paymentDomain.idempotencyRecords.length !== idempotencyCount) {
           audit(state, actor.actorId, 'refund.requested.v1', 'refund', result.id, {
             paymentIntentId: request.params.paymentIntentId,
@@ -254,14 +272,16 @@ export function registerPaymentRoutes(app: FastifyInstance, repository: RuntimeR
   app.post<{ Params: { refundId: string } }>(
     '/api/payments/refunds/:refundId/physical-pos-complete',
     async (request) => {
-      const actor = requireOperation(request, 'payment.refund.approve')
       const input = physicalPosRefundCompletionSchema.parse(request.body)
       return repository.mutate((state) => {
+        const actor = requireConfiguredOperation(request, state, 'payment.refund.approve')
         const refund = state.paymentDomain.refunds.find((item) => item.id === request.params.refundId)
         if (!refund) throw new Error('退款申请不存在')
+        requireApprovalAmount(request, state, 'refundApprove', refund.amount, 'payment.refund.approve')
         if (refund.requestedBy === actor.actorId) throw new Error('退款申请人与审批确认人必须为不同员工')
         const intent = state.paymentDomain.paymentIntents.find((item) => item.id === refund.paymentIntentId)
         if (!intent || intent.channel !== 'physical_pos') throw new Error('该退款不属于物理POS交易')
+        requireTableSessionDataScope(request, state, intent.tableSessionId, 'payment.refund.approve')
         const idempotencyCount = state.paymentDomain.idempotencyRecords.length
         const now = new Date().toISOString()
         const approved = approveRefund(state.paymentDomain, {
@@ -304,6 +324,13 @@ export function registerPaymentRoutes(app: FastifyInstance, repository: RuntimeR
       const actor = requireDevelopmentActor(request)
       const input = completeRefundSchema.parse(request.body)
       return repository.mutate((state) => {
+        requireConfiguredOperation(request, state, 'payment.refund.approve')
+        const refund = state.paymentDomain.refunds.find((item) => item.id === request.params.refundId)
+        if (!refund) throw new Error('退款申请不存在')
+        const intent = state.paymentDomain.paymentIntents.find((item) => item.id === refund.paymentIntentId)
+        if (!intent) throw new Error('支付意图不存在')
+        requireTableSessionDataScope(request, state, intent.tableSessionId, 'payment.refund.approve')
+        requireApprovalAmount(request, state, 'refundApprove', refund.amount, 'payment.refund.approve')
         const idempotencyCount = state.paymentDomain.idempotencyRecords.length
         const now = new Date().toISOString()
         const approved = approveRefund(state.paymentDomain, {

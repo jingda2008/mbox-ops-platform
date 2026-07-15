@@ -137,7 +137,70 @@ function completePackage(): StoreImportPackage {
   }
 }
 
+function extendedPackage() {
+  const input = structuredClone(completePackage()) as unknown as Record<string, unknown>
+  const data = input.data as Record<string, unknown>
+  const config = data.config as Record<string, unknown>
+  const serviceTypes = config.serviceTypes as Array<Record<string, unknown>>
+  const employees = data.employees as Array<Record<string, unknown>>
+  const shifts = data.shiftAssignments as Array<Record<string, unknown>>
+  config.skills = [{ id: 'skill-water', name: '饮品出品', enabled: true }]
+  serviceTypes.push({
+    id: 'fulfillment-delivery', code: 'FULFILLMENT_DELIVERY', name: '出品取送', icon: 'order',
+    enabled: true, guestVisible: false, priority: 'normal',
+    dispatchRoleIds: ['server', 'backup', 'supervisor', 'manager'],
+    sla: { warningSeconds: 30, escalateSeconds: 60, managerSeconds: 120 },
+    customerReply: '出品已完成，服务人员正在取送。',
+    actionScript: ['取货并核对桌号', '送达后确认'],
+  })
+  config.workstations = [{
+    id: 'bar-main', name: '测试吧台', kind: 'hybrid', enabled: true,
+    productionRoleIds: ['server', 'supervisor', 'manager'],
+    deliveryRoleIds: ['backup', 'supervisor', 'manager'],
+    requiredSkillIds: ['skill-water'], productionSlaSeconds: 120, pickupSlaSeconds: 45,
+    deliveryServiceTypeId: 'fulfillment-delivery', fallbackStationId: null,
+  }]
+  employees[0]!.skillIds = ['skill-water']
+  shifts[0]!.stationIds = ['bar-main']
+  return input
+}
+
 describe('store import preflight', () => {
+  it('accepts workstation, skill, assignment and guest visibility extensions', () => {
+    const result = preflightStoreImportPackage(sourceState(), extendedPackage())
+
+    expect(result.valid).toBe(true)
+    expect(result.issues).toEqual([])
+  })
+
+  it('rejects using a guest service type for automatic fulfillment delivery', () => {
+    const input = extendedPackage()
+    const data = input.data as Record<string, unknown>
+    const config = data.config as Record<string, unknown>
+    const workstations = config.workstations as Array<Record<string, unknown>>
+    workstations[0]!.deliveryServiceTypeId = 'water'
+
+    const result = preflightStoreImportPackage(sourceState(), input)
+
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: 'WORKSTATION_DELIVERY_SERVICE_INVALID', section: 'config',
+    }))
+  })
+
+  it('rejects products that reference a workstation omitted by explicit configuration', () => {
+    const input = extendedPackage()
+    const data = input.data as Record<string, unknown>
+    const config = data.config as Record<string, unknown>
+    const workstations = config.workstations as Array<Record<string, unknown>>
+    workstations[0]!.id = 'another-station'
+
+    const result = preflightStoreImportPackage(sourceState(), input)
+
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: 'WORKSTATION_REFERENCE_MISSING', section: 'products', field: 'stationId',
+    }))
+  })
+
   it('locates schema errors at section, row and field without creating a preview', () => {
     const input = completePackage() as unknown as Record<string, unknown>
     const data = input.data as Record<string, unknown>
@@ -253,6 +316,10 @@ describe('atomic store import application', () => {
     expect(result.state.areas.map((area) => area.id)).toEqual(['area-a'])
     expect(result.state.tables.map((table) => table.code)).toEqual(['A01'])
     expect(result.state.config.version).toBe(2)
+    expect(result.state.config.skills).toEqual([])
+    expect(result.state.config.workstations).toEqual([
+      expect.objectContaining({ id: 'bar-main', kind: 'hybrid', deliveryServiceTypeId: null }),
+    ])
     expect(result.state.configVersions.at(-1)).toMatchObject({
       storeId: 'mbox-lujiazui', version: 2, operation: 'publish', sourceVersion: 1,
       actorId: 'implementation-admin',
@@ -264,6 +331,25 @@ describe('atomic store import application', () => {
     })
     expect(result.preview.areas).toMatchObject({ added: 1, removed: 5 })
     expect(result.preview.config.updated).toBe(1)
+  })
+
+  it('applies extended routing data without mutating the import package', () => {
+    const input = extendedPackage()
+    const before = structuredClone(input)
+    const result = applyStoreImportPackage(sourceState(), input, {
+      actorId: 'implementation-admin',
+      occurredAt: '2026-07-14T10:30:00.000Z',
+      reason: '导入工作站技能和岗位路由',
+    })
+
+    expect(input).toEqual(before)
+    expect(result.state.config.serviceTypes.find((type) => type.id === 'fulfillment-delivery')?.guestVisible).toBe(false)
+    expect(result.state.config.skills).toEqual([{ id: 'skill-water', name: '饮品出品', enabled: true }])
+    expect(result.state.config.workstations[0]).toMatchObject({
+      id: 'bar-main', requiredSkillIds: ['skill-water'], deliveryRoleIds: ['backup', 'supervisor', 'manager'],
+    })
+    expect(result.state.employees[0]?.skillIds).toEqual(['skill-water'])
+    expect(result.state.shiftAssignments[0]?.stationIds).toEqual(['bar-main'])
   })
 
   it('throws before cloning/applying when preflight has blocking errors', () => {

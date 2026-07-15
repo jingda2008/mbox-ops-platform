@@ -2,15 +2,12 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { awaitingOrderActionSchema } from '../src/shared/contracts.js'
 import type { AwaitingOrderIntent, RuntimeState } from '../src/shared/contracts.js'
-import { requireAnyRole } from './authorization.js'
+import { requireAnyRole, requireTableDataScope } from './authorization.js'
 import { applyTaskAction, createServiceTask, isOpenTask } from './domain.js'
 import type { RuntimeRepository } from './repository.js'
+import { currentOpenTableSession } from './table-sessions.js'
 
 const SERVICE_INITIATOR_ROLES = ['server', 'backup', 'supervisor', 'manager'] as const
-
-function tableSessionId(state: RuntimeState, tableId: string) {
-  return `session:${tableId}:${state.store.businessDate}`
-}
 
 function audit(
   state: RuntimeState,
@@ -68,7 +65,7 @@ export function startAwaitingOrder(
   if (!state.config.proactiveOrderCare.enabled) throw new Error('待点单主动服务当前未启用')
   if (activeIntent(state, tableId)) throw new Error('该桌台已经处于待点单提醒中')
   if (state.orderDomain.orders.some(
-    (order) => order.tableSessionId === tableSessionId(state, tableId) && order.status !== 'draft',
+    (order) => order.tableSessionId === currentOpenTableSession(state, tableId).id && order.status !== 'draft',
   )) {
     throw new Error('该桌台当前桌次已经产生订单')
   }
@@ -132,7 +129,7 @@ export function processAwaitingOrderReminders(state: RuntimeState, now = new Dat
   let changed = false
   for (const intent of state.awaitingOrderIntents.filter((item) => item.status === 'active')) {
     const submittedOrder = state.orderDomain.orders.find(
-      (order) => order.tableSessionId === tableSessionId(state, intent.tableId) && order.submittedAt && order.submittedAt >= intent.startedAt,
+      (order) => order.tableSessionId === currentOpenTableSession(state, intent.tableId).id && order.submittedAt && order.submittedAt >= intent.startedAt,
     )
     if (submittedOrder) {
       stopAwaitingOrder(state, intent.tableId, 'system', `order_submitted:${submittedOrder.id}`, 'completed', now)
@@ -189,34 +186,24 @@ export function processAwaitingOrderReminders(state: RuntimeState, now = new Dat
 export function registerProactiveServiceRoutes(app: FastifyInstance, repository: RuntimeRepository) {
   app.post<{ Params: { tableId: string } }>('/api/tables/:tableId/awaiting-order/start', async (request, reply) => {
     const input = awaitingOrderActionSchema.parse(request.body)
-    const actor = requireAnyRole(
-      request,
-      SERVICE_INITIATOR_ROLES,
-      'proactive.awaiting-order.start',
-      '发起待点单服务',
-    )
-    const intent = await repository.mutate((state) => startAwaitingOrder(
-      state,
-      request.params.tableId,
-      actor.actorId,
-      input.idempotencyKey,
-    ))
+    const intent = await repository.mutate((state) => {
+      const actor = requireAnyRole(
+        request, SERVICE_INITIATOR_ROLES, 'proactive.awaiting-order.start', '发起待点单服务',
+      )
+      requireTableDataScope(request, state, request.params.tableId, 'proactive.awaiting-order.start')
+      return startAwaitingOrder(state, request.params.tableId, actor.actorId, input.idempotencyKey)
+    })
     return reply.status(201).send(intent)
   })
 
   app.post<{ Params: { tableId: string } }>('/api/tables/:tableId/awaiting-order/stop', async (request) => {
     const input = awaitingOrderActionSchema.parse(request.body)
-    const actor = requireAnyRole(
-      request,
-      SERVICE_INITIATOR_ROLES,
-      'proactive.awaiting-order.stop',
-      '停止待点单服务',
-    )
-    return repository.mutate((state) => stopAwaitingOrder(
-      state,
-      request.params.tableId,
-      actor.actorId,
-      input.reason || 'employee_cancelled',
-    ))
+    return repository.mutate((state) => {
+      const actor = requireAnyRole(
+        request, SERVICE_INITIATOR_ROLES, 'proactive.awaiting-order.stop', '停止待点单服务',
+      )
+      requireTableDataScope(request, state, request.params.tableId, 'proactive.awaiting-order.stop')
+      return stopAwaitingOrder(state, request.params.tableId, actor.actorId, input.reason || 'employee_cancelled')
+    })
   })
 }

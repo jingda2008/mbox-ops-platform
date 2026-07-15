@@ -45,7 +45,7 @@
   padding-bottom: 16px;
   border-bottom: 1px solid var(--line);
 }
-.inline-create.shift-create { grid-template-columns: repeat(5, minmax(130px, 1fr)) auto; }
+.inline-create.shift-create { grid-template-columns: repeat(6, minmax(120px, 1fr)) auto; }
 .inline-create label, .master-row > label, .area-selector {
   min-width: 0;
   display: grid;
@@ -76,8 +76,8 @@
   border-bottom: 1px solid var(--line);
 }
 .master-row:last-child { border-bottom: 0; }
-.employee-row { grid-template-columns: minmax(100px, .8fr) 130px minmax(240px, 1.5fr) 90px 55px 75px 42px; }
-.shift-row { grid-template-columns: minmax(100px, .7fr) 130px minmax(160px, 1fr) minmax(160px, 1fr) 100px 42px; }
+.employee-row { grid-template-columns: minmax(100px, .7fr) 120px minmax(180px, 1.2fr) minmax(180px, 1fr) 90px 55px 75px 42px; }
+.shift-row { grid-template-columns: minmax(100px, .7fr) 120px minmax(190px, 1fr) minmax(150px, 1fr) minmax(150px, 1fr) 100px 42px; }
 .table-config-row { grid-template-columns: 80px minmax(110px, .8fr) 90px 70px 100px 100px 42px; }
 .area-config-row { grid-template-columns: 70px minmax(180px, 1fr) 120px 80px 42px; }
 .product-row { grid-template-columns: 90px minmax(120px, 1fr) 100px 90px 90px 100px 55px 42px; }
@@ -94,11 +94,92 @@
 .color-field { justify-items: start; }
 .color-field input { width: 40px; height: 38px; padding: 2px; border: 1px solid var(--line-strong); border-radius: 5px; background: #fff; }
 
+.routing-section { display: grid; gap: 18px; }
+.routing-toolbar {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.routing-create {
+  display: grid;
+  grid-template-columns: minmax(120px, .8fr) minmax(150px, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+.routing-create label, .workstation-summary label, .workstation-routing-grid > label { min-width: 0; display: grid; gap: 5px; }
+.routing-create label > span, .workstation-summary label > span, .workstation-routing-grid > label > span {
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 700;
+}
+.routing-create input {
+  width: 100%;
+  height: 38px;
+  min-width: 0;
+  padding: 0 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--ink);
+}
+.routing-group { min-width: 0; }
+.routing-group-heading, .routing-savebar {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+.routing-group-heading strong { color: var(--ink); font-size: 14px; }
+.skill-row { grid-template-columns: minmax(170px, .8fr) minmax(220px, 1fr) 70px; }
+.role-policy-row { display: grid; gap: 13px; padding: 14px 0; }
+.role-policy-summary { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(170px, 1fr) 130px 100px 75px; align-items: end; gap: 10px; }
+.role-policy-summary label, .role-limit-grid label { min-width: 0; display: grid; gap: 5px; }
+.role-policy-summary label > span, .role-limit-grid label > span { color: var(--ink-soft); font-size: 11px; font-weight: 700; }
+.role-limit-grid { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 10px; }
+.workstation-list { gap: 12px; }
+.workstation-row {
+  display: grid;
+  gap: 13px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fafbf8;
+}
+.workstation-summary {
+  display: grid;
+  grid-template-columns: minmax(150px, .8fr) minmax(180px, 1fr) 130px 60px;
+  align-items: end;
+  gap: 10px;
+}
+.workstation-routing-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.workstation-routing-grid .area-selector > div { align-content: start; min-height: 38px; }
+.routing-savebar {
+  position: sticky;
+  bottom: 0;
+  padding: 10px 0 0;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
 @media (max-width: 1180px) {
   .inline-create.shift-create { grid-template-columns: repeat(3, minmax(150px, 1fr)); }
   .employee-row, .shift-row, .table-config-row, .area-config-row, .product-row, .authority-row {
     grid-template-columns: repeat(3, minmax(150px, 1fr));
   }
+  .routing-toolbar { grid-template-columns: 1fr; }
+  .workstation-routing-grid { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
+  .role-policy-summary, .role-limit-grid { grid-template-columns: repeat(3, minmax(140px, 1fr)); }
   .master-row .icon-button { align-self: end; }
 }
 
@@ -106,6 +187,9 @@
   .inline-create, .inline-create.shift-create, .employee-row, .shift-row, .table-config-row, .area-config-row, .product-row, .authority-row {
     grid-template-columns: 1fr;
   }
+  .routing-create, .skill-row, .workstation-summary, .workstation-routing-grid, .role-policy-summary, .role-limit-grid { grid-template-columns: 1fr; }
+  .routing-savebar { align-items: stretch; flex-direction: column; }
+  .routing-savebar .primary-button { width: 100%; }
   .inline-create .primary-button { width: 100%; }
   .binary-field { justify-items: start; }
   .master-row .icon-button { width: 100%; }

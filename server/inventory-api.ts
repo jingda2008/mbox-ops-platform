@@ -2,8 +2,13 @@ import { createHash } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import type { InventoryDomainState, InventoryOperationPolicy } from '../src/shared/inventory-contracts.js'
-import type { RuntimeState } from '../src/shared/contracts.js'
-import { requireRequestActor } from './auth-context.js'
+import type { Employee, RuntimeState } from '../src/shared/contracts.js'
+import {
+  AuthorizationError,
+  requireApprovalAmount,
+  requireConfiguredOperation,
+  type StaffOperation,
+} from './authorization.js'
 import {
   confirmStockCount,
   createInventoryDomainState,
@@ -48,8 +53,8 @@ function deterministicId(prefix: string, key: string) {
 
 function defaultPolicy(state: RuntimeState): InventoryOperationPolicy {
   const roleIds = state.config.roles.map((role) => role.id)
-  const managers = roleIds.filter((roleId) => roleId === 'manager')
-  const supervisors = roleIds.filter((roleId) => roleId === 'supervisor' || roleId === 'manager')
+  const managers = roleIds.filter((roleId) => roleId === 'owner' || roleId === 'manager')
+  const supervisors = roleIds.filter((roleId) => roleId === 'owner' || roleId === 'supervisor' || roleId === 'manager')
   return {
     policyAdminRoleIds: managers,
     receiptRoleIds: managers,
@@ -71,17 +76,34 @@ function inventory(state: RuntimeState) {
   return state.inventoryDomain
 }
 
-function requireRole(state: RuntimeState, request: FastifyRequest, allowedRoleIds: string[], action: string) {
-  const actor = requireRequestActor(request)
+function requireConfiguredInventoryActor(
+  state: RuntimeState,
+  request: FastifyRequest,
+  operation: StaffOperation,
+) {
+  const actor = requireConfiguredOperation(request, state, operation)
   const employee = state.employees.find((item) => item.id === actor.actorId && item.status === 'active')
-  if (!employee || !allowedRoleIds.includes(employee.roleId)) throw new Error(`当前岗位无权${action}`)
-  return employee
+  if (!employee) throw new AuthorizationError('库存操作人不存在或已停用', operation)
+  return employee.roleId === actor.roleId ? employee : { ...employee, roleId: actor.roleId }
+}
+
+function requirePolicyRole(employee: Employee, allowedRoleIds: string[], operation: StaffOperation, action: string) {
+  if (!allowedRoleIds.includes(employee.roleId)) {
+    throw new AuthorizationError(`当前岗位无权${action}`, operation)
+  }
 }
 
 function requireApprover(state: RuntimeState, approverId: string, actorId: string, roles: string[]) {
   if (approverId === actorId) throw new Error('高风险库存操作必须由另一人审批')
   const approver = state.employees.find((item) => item.id === approverId && item.status === 'active')
-  if (!approver || !roles.includes(approver.roleId)) throw new Error('审批人岗位无权批准该库存操作')
+  const configuredRole = approver && state.config.roles.find((role) => role.id === approver.roleId)
+  if (
+    !approver ||
+    !configuredRole?.permissionIds?.includes('inventory.approve') ||
+    !roles.includes(approver.roleId)
+  ) {
+    throw new AuthorizationError('审批人岗位无权批准该库存操作', 'inventory.approve')
+  }
 }
 
 function mutateInventory<T>(state: RuntimeState, operation: (domain: InventoryDomainState) => T) {
@@ -93,8 +115,9 @@ function mutateInventory<T>(state: RuntimeState, operation: (domain: InventoryDo
 }
 
 export function registerInventoryRoutes(app: FastifyInstance, repository: RuntimeRepository) {
-  app.get('/api/inventory', async () => {
+  app.get('/api/inventory', async (request) => {
     const state = await repository.read()
+    requireConfiguredOperation(request, state, 'inventory.view')
     return state.inventoryDomain ?? createInventoryDomainState(
       { tenantId: 'runtime', storeId: state.store.id },
       defaultPolicy(state),
@@ -104,8 +127,9 @@ export function registerInventoryRoutes(app: FastifyInstance, repository: Runtim
   app.put('/api/inventory/policy', async (request) => {
     const input = z.object({ policy: policySchema, reason, idempotencyKey }).strict().parse(request.body)
     return repository.mutate((state) => {
+      const actor = requireConfiguredInventoryActor(state, request, 'inventory.approve')
       const domain = inventory(state)
-      const actor = requireRole(state, request, domain.policy.policyAdminRoleIds, '修改库存权限')
+      requirePolicyRole(actor, domain.policy.policyAdminRoleIds, 'inventory.approve', '修改库存权限')
       const validRoles = new Set(state.config.roles.map((role) => role.id))
       for (const [field, roleIds] of Object.entries(input.policy)) {
         if (new Set(roleIds).size !== roleIds.length) throw new Error(`${field}不能包含重复岗位`)
@@ -136,8 +160,9 @@ export function registerInventoryRoutes(app: FastifyInstance, repository: Runtim
   app.post('/api/inventory/receipts', async (request, reply) => {
     const input = z.object({ productId: identifier, unitCode, quantity, reason, occurredAt, idempotencyKey }).strict().parse(request.body)
     const result = await repository.mutate((state) => {
+      const actor = requireConfiguredInventoryActor(state, request, 'inventory.manage')
       const domain = inventory(state)
-      const actor = requireRole(state, request, domain.policy.receiptRoleIds, '登记入库')
+      requirePolicyRole(actor, domain.policy.receiptRoleIds, 'inventory.manage', '登记入库')
       if (!state.products.some((product) => product.id === input.productId)) throw new Error('入库商品不存在')
       return mutateInventory(state, (value) => receiveInventory(value, {
         ...input,
@@ -152,8 +177,9 @@ export function registerInventoryRoutes(app: FastifyInstance, repository: Runtim
   app.post('/api/inventory/stock-counts', async (request, reply) => {
     const input = z.object({ productId: identifier, unitCode, countedQuantity: z.number().int().nonnegative(), approvalId: identifier.optional(), occurredAt, idempotencyKey }).strict().parse(request.body)
     const result = await repository.mutate((state) => {
+      const actor = requireConfiguredInventoryActor(state, request, 'inventory.manage')
       const domain = inventory(state)
-      const actor = requireRole(state, request, domain.policy.stockCountRoleIds, '提交盘点')
+      requirePolicyRole(actor, domain.policy.stockCountRoleIds, 'inventory.manage', '提交盘点')
       return mutateInventory(state, (value) => submitStockCount(value, {
         ...input,
         countId: deterministicId('stock_count', input.idempotencyKey),
@@ -167,8 +193,18 @@ export function registerInventoryRoutes(app: FastifyInstance, repository: Runtim
   app.post<{ Params: { countId: string } }>('/api/inventory/stock-counts/:countId/decision', async (request) => {
     const input = z.object({ decision: z.enum(['confirm', 'reject']), approvalId: identifier, reason, occurredAt, idempotencyKey }).strict().parse(request.body)
     return repository.mutate((state) => {
+      const actor = requireConfiguredInventoryActor(state, request, 'inventory.approve')
       const domain = inventory(state)
-      const actor = requireRole(state, request, domain.policy.stockCountApprovalRoleIds, '复核盘点差异')
+      requirePolicyRole(actor, domain.policy.stockCountApprovalRoleIds, 'inventory.approve', '复核盘点差异')
+      if (input.decision === 'confirm') {
+        const count = domain.stockCounts.find((item) => item.id === request.params.countId)
+        if (!count) throw new Error('盘点记录不存在')
+        const product = state.products.find((item) => item.id === count.productId)
+        if (!product) throw new Error('盘点商品不存在')
+        const adjustmentAmount = Math.abs(count.differenceQuantity) * product.costAmount
+        if (!Number.isSafeInteger(adjustmentAmount)) throw new Error('库存调整成本金额超出安全范围')
+        requireApprovalAmount(request, state, 'inventoryAdjustment', adjustmentAmount, 'inventory.approve')
+      }
       return mutateInventory(state, (value) => input.decision === 'confirm'
         ? confirmStockCount(value, {
             countId: request.params.countId,
@@ -208,8 +244,9 @@ export function registerInventoryRoutes(app: FastifyInstance, repository: Runtim
       idempotencyKey,
     }).strict().parse(request.body)
     const result = await repository.mutate((state) => {
+      const actor = requireConfiguredInventoryActor(state, request, 'inventory.manage')
       const domain = inventory(state)
-      const actor = requireRole(state, request, domain.policy.bottleDepositRoleIds, '登记存酒')
+      requirePolicyRole(actor, domain.policy.bottleDepositRoleIds, 'inventory.manage', '登记存酒')
       const memberId = input.owner.kind === 'member' ? input.owner.memberId : null
       if (memberId && !state.members.some((member) => member.id === memberId)) {
         throw new Error('存酒会员不存在')
@@ -228,8 +265,9 @@ export function registerInventoryRoutes(app: FastifyInstance, repository: Runtim
   app.post<{ Params: { batchId: string } }>('/api/inventory/bottles/:batchId/use', async (request) => {
     const input = z.object({ quantity, tableSessionId: identifier, orderId: identifier, orderItemId: identifier.optional(), reason, occurredAt, idempotencyKey }).strict().parse(request.body)
     return repository.mutate((state) => {
+      const actor = requireConfiguredInventoryActor(state, request, 'inventory.manage')
       const domain = inventory(state)
-      const actor = requireRole(state, request, domain.policy.bottleUseRoleIds, '取用存酒')
+      requirePolicyRole(actor, domain.policy.bottleUseRoleIds, 'inventory.manage', '取用存酒')
       return mutateInventory(state, (value) => useStoredBottle(value, {
         ...input,
         batchId: request.params.batchId,
@@ -243,8 +281,9 @@ export function registerInventoryRoutes(app: FastifyInstance, repository: Runtim
   app.post<{ Params: { batchId: string } }>('/api/inventory/bottles/:batchId/transfer', async (request) => {
     const input = z.object({ recipientOwner: owner, tableSessionId: identifier, orderId: identifier.optional(), approvalId: identifier, approvedBy: identifier, reason, occurredAt, idempotencyKey }).strict().parse(request.body)
     return repository.mutate((state) => {
+      const actor = requireConfiguredInventoryActor(state, request, 'inventory.manage')
       const domain = inventory(state)
-      const actor = requireRole(state, request, domain.policy.bottleUseRoleIds, '转赠存酒')
+      requirePolicyRole(actor, domain.policy.bottleUseRoleIds, 'inventory.manage', '转赠存酒')
       requireApprover(state, input.approvedBy, actor.id, domain.policy.bottleApprovalRoleIds)
       return mutateInventory(state, (value) => transferStoredBottle(value, {
         ...input,
@@ -260,8 +299,9 @@ export function registerInventoryRoutes(app: FastifyInstance, repository: Runtim
   app.post<{ Params: { batchId: string } }>('/api/inventory/bottles/:batchId/void', async (request) => {
     const input = z.object({ tableSessionId: identifier.optional(), orderId: identifier.optional(), approvalId: identifier, approvedBy: identifier, reason, occurredAt, idempotencyKey }).strict().parse(request.body)
     return repository.mutate((state) => {
+      const actor = requireConfiguredInventoryActor(state, request, 'inventory.manage')
       const domain = inventory(state)
-      const actor = requireRole(state, request, domain.policy.bottleUseRoleIds, '作废存酒')
+      requirePolicyRole(actor, domain.policy.bottleUseRoleIds, 'inventory.manage', '作废存酒')
       requireApprover(state, input.approvedBy, actor.id, domain.policy.bottleApprovalRoleIds)
       return mutateInventory(state, (value) => voidStoredBottle(value, {
         ...input,

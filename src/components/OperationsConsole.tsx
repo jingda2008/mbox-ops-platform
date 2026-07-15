@@ -8,6 +8,7 @@ import {
   CookingPot,
   ExternalLink,
   LayoutDashboard,
+  House,
   ListTodo,
   Map as MapIcon,
   Menu,
@@ -26,8 +27,8 @@ import {
   Music2,
   PackageSearch,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
-import { actOnTask, publishConfig, resetDemo, rollbackConfig, saveConfigDraft, startAwaitingOrder, stopAwaitingOrder } from '../api'
+import { useEffect, useState } from 'react'
+import { actOnTask, getCurrentActorId, publishConfig, resetDemo, rollbackConfig, saveConfigDraft, startAwaitingOrder, stopAwaitingOrder } from '../api'
 import type {
   BootstrapResponse,
   ConfigDraftInput,
@@ -43,8 +44,11 @@ import { BenefitCenterView } from './BenefitCenterView'
 import { SongCenterView } from './SongCenterView'
 import { ReservationView } from './ReservationView'
 import { InventoryView } from './InventoryView'
+import { getFulfillmentAccess, taskVisibleToAccess } from './commerce-workspace'
+import { RoleHomeView } from './RoleHomeView'
+import { getRoleHomeAccess, type RoleHomeNavigationId } from './role-access'
 
-type View = 'live' | 'tasks' | 'reservations' | 'commerce' | 'inventory' | 'payments' | 'benefits' | 'songs' | 'layout' | 'master' | 'config'
+type View = 'home' | RoleHomeNavigationId
 
 interface OperationsConsoleProps {
   data: BootstrapResponse
@@ -52,6 +56,7 @@ interface OperationsConsoleProps {
 }
 
 const navigation: Array<{ id: View; label: string; icon: typeof LayoutDashboard }> = [
+  { id: 'home', label: '首页', icon: House },
   { id: 'live', label: '现场', icon: LayoutDashboard },
   { id: 'tasks', label: '任务', icon: ListTodo },
   { id: 'reservations', label: '预约', icon: CalendarDays },
@@ -66,6 +71,7 @@ const navigation: Array<{ id: View; label: string; icon: typeof LayoutDashboard 
 ]
 
 const viewTitles: Record<View, string> = {
+  home: '岗位工作台',
   live: '全店现场',
   tasks: '服务任务',
   reservations: '预约与订金',
@@ -84,7 +90,17 @@ function cloneConfig(config: StoreConfig) {
 }
 
 export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
-  const [view, setView] = useState<View>('live')
+  const fulfillmentAccess = getFulfillmentAccess(data, getCurrentActorId())
+  const roleHomeAccess = getRoleHomeAccess(data, fulfillmentAccess.employee?.roleId ?? '')
+  const ownOpenTasks = data.tasks.filter((task) => (
+    task.ownerId === fulfillmentAccess.employee?.id
+    && !['confirmed', 'cancelled'].includes(task.status)
+  ))
+  const availableNavigation = navigation.filter((item) => {
+    if (item.id === 'home') return true
+    return roleHomeAccess.allowedNavigationIds.includes(item.id)
+  })
+  const [view, setView] = useState<View>('home')
   const [selectedTableId, setSelectedTableId] = useState<string | null>(null)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [draft, setDraft] = useState(() => cloneConfig(data.draftConfig ?? data.config))
@@ -96,25 +112,33 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
     if (!configDirty) setDraft(cloneConfig(data.draftConfig ?? data.config))
   }, [data.config, data.draftConfig, configDirty])
 
-  const openTasks = useMemo(
-    () => data.tasks.filter((task) => !['confirmed', 'cancelled'].includes(task.status)),
-    [data.tasks],
-  )
+  const openTasks = fulfillmentAccess.mode === 'oversight'
+    ? data.tasks.filter((task) => !['confirmed', 'cancelled'].includes(task.status))
+    : ownOpenTasks
+  const visibleServiceTasks = fulfillmentAccess.mode === 'oversight'
+    ? data.tasks
+    : data.tasks.filter((task) => task.ownerId === fulfillmentAccess.employee?.id)
+  const roleKdsCount = data.orderDomain.kdsTasks.filter((task) => taskVisibleToAccess(task, fulfillmentAccess)).length
   const selectedTable = data.tables.find((table) => table.id === selectedTableId) ?? null
   const selectedAwaitingOrder = data.awaitingOrderIntents.find(
     (intent) => intent.tableId === selectedTableId && intent.status === 'active',
   ) ?? null
   const selectedTableHasOrder = selectedTable
-    ? data.orderDomain.orders.some(
-        (order) => order.tableSessionId === `session:${selectedTable.id}:${data.store.businessDate}` && order.status !== 'draft',
-      )
+    ? data.orderDomain.orders.some((order) => {
+        const session = data.songState.tableSessions.find((item) => item.tableId === selectedTable.id && item.status === 'open')
+        return session && order.tableSessionId === session.id && order.status !== 'draft'
+      })
     : false
 
   async function handleTaskAction(task: ServiceTask, action: TaskActionInput['action']) {
-    if (!task.ownerId) return
+    const actorId = fulfillmentAccess.employee?.id
+    if (!actorId || task.ownerId !== actorId) {
+      setNotice('该任务当前不由您负责，请联系领班重新派单')
+      return
+    }
     setBusy(true)
     try {
-      await actOnTask(task.id, { action, actorId: task.ownerId, note: action === 'complete' ? '现场服务完成' : '' })
+      await actOnTask(task.id, { action, actorId, note: action === 'complete' ? '现场服务完成' : '' })
       await onRefresh()
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '任务操作失败')
@@ -155,8 +179,12 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
       })),
       roles: draft.roles.map((role) => ({
         id: role.id,
+        name: role.name,
         maxConcurrentTasks: role.maxConcurrentTasks,
         canReceiveTasks: role.canReceiveTasks,
+        permissionIds: role.permissionIds,
+        dataScope: role.dataScope,
+        approvalLimits: role.approvalLimits,
       })),
       proactiveOrderCare: { ...draft.proactiveOrderCare },
     }
@@ -227,7 +255,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
         <div className="brand-lockup"><span>M</span><div><strong>M-Box</strong><small>现场运营</small></div></div>
         <button className="sidebar-close" title="关闭导航" onClick={() => setMobileNavOpen(false)}><X size={20} /></button>
         <nav>
-          {navigation.map((item) => {
+          {availableNavigation.map((item) => {
             const Icon = item.icon
             return (
               <button
@@ -237,6 +265,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
               >
                 <Icon size={19} /><span>{item.label}</span>
                 {item.id === 'tasks' && openTasks.length > 0 && <b>{openTasks.length}</b>}
+                {item.id === 'commerce' && roleKdsCount > 0 && <b>{roleKdsCount}</b>}
               </button>
             )
           })}
@@ -253,13 +282,16 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
         <header className="topbar">
           <button className="menu-button" title="打开导航" onClick={() => setMobileNavOpen(true)}><Menu size={21} /></button>
           <div>
-            <span className="eyebrow">{data.store.businessDate} · 营业中</span>
+            <span className="eyebrow">{data.store.businessDate} · 营业中 · {fulfillmentAccess.roleLabel}</span>
             <h1>{viewTitles[view]}</h1>
           </div>
+          <div className="workstation-badge"><span>{fulfillmentAccess.employee?.displayName ?? '身份失效'}</span><strong>{roleHomeAccess.focusLabel}</strong></div>
           <div className="topbar-actions">
-            <button className="secondary-button reset-button" disabled={busy} onClick={() => void handleReset()}>
-              <RefreshCw size={17} />重置数据
-            </button>
+            {roleHomeAccess.allowedNavigationIds.includes('config') && (
+              <button className="secondary-button reset-button" disabled={busy} onClick={() => void handleReset()}>
+                <RefreshCw size={17} />重置数据
+              </button>
+            )}
             <a className="primary-button" href="/guest?table=L01" target="_blank" rel="noreferrer">
               <ExternalLink size={17} />顾客端
             </a>
@@ -269,6 +301,13 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
         {notice && <div className="notice-bar" role="status">{notice}<button onClick={() => setNotice('')}><X size={16} /></button></div>}
 
         <main className="main-content" aria-busy={busy}>
+          {view === 'home' && (
+            <RoleHomeView
+              data={data}
+              employeeId={fulfillmentAccess.employee?.id ?? ''}
+              onNavigate={(nextView) => setView(nextView)}
+            />
+          )}
           {view === 'live' && (
             <>
               <section className="metrics-grid">
@@ -337,7 +376,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
 
                 <TaskQueue
                   compact
-                  tasks={data.tasks}
+                  tasks={visibleServiceTasks}
                   tables={data.tables}
                   employees={data.employees}
                   serviceTypes={data.config.serviceTypes}
@@ -351,7 +390,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
 
           {view === 'tasks' && (
             <TaskQueue
-              tasks={data.tasks}
+              tasks={visibleServiceTasks}
               tables={data.tables}
               employees={data.employees}
               serviceTypes={data.config.serviceTypes}
@@ -365,7 +404,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
             <CommerceView data={data} onRefresh={onRefresh} onNotice={setNotice} />
           )}
 
-          {view === 'reservations' && <ReservationView />}
+          {view === 'reservations' && <ReservationView data={data} />}
 
           {view === 'inventory' && <InventoryView />}
 

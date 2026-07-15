@@ -19,6 +19,7 @@ import './App.css'
 import { GuestPortal } from './components/GuestPortal'
 import { MemberBenefitsPortal } from './components/MemberBenefitsPortal'
 import { OperationsConsole } from './components/OperationsConsole'
+import { PublicReservationPortal } from './components/PublicReservationPortal'
 import { ServiceIcon } from './components/ServiceIcon'
 import {
   discardConflictedTaskAction,
@@ -40,6 +41,7 @@ const RESTRICTED_OFFLINE_VIEWS = '.payment-view, .config-view, .benefit-view, .s
 export default function App() {
   const isGuest = window.location.pathname.startsWith('/guest')
   const isMember = window.location.pathname.startsWith('/member')
+  const isPublicReservation = window.location.pathname.startsWith('/reserve')
   const [data, setData] = useState<BootstrapResponse | null>(null)
   const [snapshot, setSnapshot] = useState<OfflineSnapshot | null>(null)
   const [error, setError] = useState('')
@@ -69,28 +71,29 @@ export default function App() {
   useEffect(() => subscribeOfflineStatus(setOfflineStatus), [])
 
   useEffect(() => {
-    if (isGuest || isMember) return
+    if (isGuest || isMember || isPublicReservation) return
     return startOfflineRuntime(replayQueuedTaskAction)
-  }, [isGuest, isMember])
+  }, [isGuest, isMember, isPublicReservation])
 
   useEffect(() => {
-    if (isGuest || isMember) return
+    if (isGuest || isMember || isPublicReservation) return
     void loadOfflineSnapshot().then(setSnapshot).catch(() => undefined)
     void refresh()
     const timer = window.setInterval(() => {
       if (getOfflineStatus().online) void refresh()
     }, 2000)
     return () => window.clearInterval(timer)
-  }, [isGuest, isMember, refresh])
+  }, [isGuest, isMember, isPublicReservation, refresh])
 
   useEffect(() => {
     const syncJustCompleted = previousPendingCount.current > 0 && offlineStatus.pendingCount === 0
     previousPendingCount.current = offlineStatus.pendingCount
-    if (!isGuest && !isMember && offlineStatus.online && syncJustCompleted) void refresh()
-  }, [isGuest, isMember, offlineStatus.online, offlineStatus.pendingCount, refresh])
+    if (!isGuest && !isMember && !isPublicReservation && offlineStatus.online && syncJustCompleted) void refresh()
+  }, [isGuest, isMember, isPublicReservation, offlineStatus.online, offlineStatus.pendingCount, refresh])
 
   if (isGuest) return <GuestPortal />
   if (isMember) return <MemberBenefitsPortal />
+  if (isPublicReservation) return <PublicReservationPortal />
 
   if (requiresLogin) {
     return <PilotLogin onAuthenticated={() => {
@@ -170,6 +173,7 @@ function PilotLogin({ onAuthenticated }: { onAuthenticated: () => void }) {
   const [accessCode, setAccessCode] = useState('')
   const [employees, setEmployees] = useState<PilotEmployeeOption[]>([])
   const [actorId, setActorId] = useState('')
+  const [employeePin, setEmployeePin] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -193,7 +197,7 @@ function PilotLogin({ onAuthenticated }: { onAuthenticated: () => void }) {
     setLoading(true)
     setError('')
     try {
-      const response = await createPilotSession(accessCode, actorId)
+      const response = await createPilotSession(accessCode, actorId, employeePin)
       if (!response.token || !response.employee) throw new Error('员工会话签发失败')
       window.localStorage.setItem('mbox.auth.token', response.token)
       window.localStorage.setItem('mbox.actor.id', response.employee.id)
@@ -214,13 +218,13 @@ function PilotLogin({ onAuthenticated }: { onAuthenticated: () => void }) {
         {employees.length === 0 ? (
           <label><span>门店验证口令</span><input type="password" autoComplete="current-password" value={accessCode} onChange={(event) => setAccessCode(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && accessCode) void verifyAccess() }} /></label>
         ) : (
-          <label><span>当前操作员工</span><select value={actorId} onChange={(event) => setActorId(event.target.value)}>{employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName} · {employee.roleName}</option>)}</select></label>
+          <><label><span>当前操作员工</span><select value={actorId} onChange={(event) => { setActorId(event.target.value); setEmployeePin('') }}>{employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName} · {employee.roleName}</option>)}</select></label><label><span>员工PIN</span><input type="password" inputMode="numeric" autoComplete="current-password" minLength={6} maxLength={12} value={employeePin} onChange={(event) => setEmployeePin(event.target.value.replace(/\D/g, '').slice(0, 12))} onKeyDown={(event) => { if (event.key === 'Enter' && employeePin.length >= 6) void login() }} /></label></>
         )}
         {error && <p className="pilot-login-error" role="alert">{error}</p>}
-        <button className="primary-button" disabled={loading || (employees.length === 0 ? !accessCode : !actorId)} onClick={() => void (employees.length === 0 ? verifyAccess() : login())}>
+        <button className="primary-button" disabled={loading || (employees.length === 0 ? !accessCode : !actorId || employeePin.length < 6)} onClick={() => void (employees.length === 0 ? verifyAccess() : login())}>
           {loading ? <LoaderCircle className="spin" size={17} /> : <LogIn size={17} />}{employees.length === 0 ? '继续' : '进入运营台'}
         </button>
-        {employees.length > 0 && <button className="pilot-login-back" onClick={() => { setEmployees([]); setActorId(''); setError('') }}>重新输入口令</button>}
+        {employees.length > 0 && <button className="pilot-login-back" onClick={() => { setEmployees([]); setActorId(''); setEmployeePin(''); setError('') }}>重新输入口令</button>}
       </section>
     </main>
   )

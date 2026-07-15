@@ -31,6 +31,7 @@ describe('request authentication boundary', () => {
     await registerAuthContext(app, { runtimeMode: 'local', readState: async () => createSeedState() })
     app.get('/api/protected', async (request) => request.mboxActor)
     app.post('/api/guest/tasks', async () => ({ accepted: true }))
+    app.get('/api/public/reservations', async () => ({ accepted: true }))
 
     expect((await app.inject({ method: 'GET', url: '/api/protected' })).statusCode).toBe(401)
     expect((await app.inject({ method: 'GET', url: '/api/protected', headers: {
@@ -38,6 +39,7 @@ describe('request authentication boundary', () => {
       'x-mbox-store-id': 'mbox-lujiazui',
     } })).json()).toMatchObject({ actorId: 'emp-chen', authenticatedBy: 'local_header' })
     expect((await app.inject({ method: 'POST', url: '/api/guest/tasks', payload: {} })).statusCode).toBe(200)
+    expect((await app.inject({ method: 'GET', url: '/api/public/reservations' })).statusCode).toBe(200)
     await app.close()
   })
 

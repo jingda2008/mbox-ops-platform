@@ -1,0 +1,357 @@
+.role-home {
+  width: 100%;
+  display: grid;
+  gap: 18px;
+  color: var(--ink, #20231f);
+}
+
+.role-home__header {
+  min-height: 88px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 18px;
+  padding: 15px 18px;
+  border: 1px solid var(--line, #dde0d8);
+  border-radius: 6px;
+  background: var(--surface, #fff);
+}
+
+.role-home__identity,
+.role-home__actor {
+  min-width: 0;
+  display: grid;
+}
+
+.role-home__store {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-soft, #5e645d);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.role-home__identity h2 {
+  margin: 3px 0 0;
+  font-size: 21px;
+  line-height: 1.25;
+}
+
+.role-home__identity p {
+  margin: 2px 0 0;
+  color: var(--ink-soft, #5e645d);
+  font-size: 12px;
+}
+
+.role-home__actor {
+  justify-items: end;
+  padding-left: 18px;
+  border-left: 1px solid var(--line, #dde0d8);
+}
+
+.role-home__actor span,
+.role-home__actor small {
+  color: var(--ink-soft, #5e645d);
+  font-size: 10px;
+}
+
+.role-home__actor strong {
+  margin: 1px 0;
+  font-size: 13px;
+}
+
+.role-home__restricted {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border: 1px solid #d8c88c;
+  border-radius: 5px;
+  background: #fff9e8;
+  color: #765b13;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.role-home__metrics {
+  display: grid;
+  border: 1px solid var(--line, #dde0d8);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface, #fff);
+}
+
+.role-home__metrics--4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.role-home__metrics--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.role-home__metrics--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+.role-home__metric {
+  min-width: 0;
+  min-height: 82px;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 11px;
+  padding: 13px 15px;
+  border: 0;
+  border-right: 1px solid var(--line, #dde0d8);
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.role-home__metric:last-child { border-right: 0; }
+.role-home__metric:hover { background: #f8f9f6; }
+
+.role-home__metric-icon {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  background: #eef0eb;
+  color: #4d554c;
+}
+
+.role-home__metric.is-info .role-home__metric-icon { background: #e8f3f7; color: #176d96; }
+.role-home__metric.is-warning .role-home__metric-icon { background: #fff3d7; color: #86600e; }
+.role-home__metric.is-danger .role-home__metric-icon { background: #faeaeb; color: var(--danger, #c63e44); }
+.role-home__metric.is-success .role-home__metric-icon { background: #eaf4ed; color: var(--success, #2f7a4d); }
+
+.role-home__metric-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.role-home__metric-copy strong {
+  overflow-wrap: anywhere;
+  font-size: 23px;
+  line-height: 1;
+}
+
+.role-home__metric-copy small {
+  overflow-wrap: anywhere;
+  color: var(--ink-soft, #5e645d);
+  font-size: 11px;
+}
+
+.role-home__metric-arrow { color: #a0a69d; }
+
+.role-home__work-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(330px, .9fr);
+  align-items: start;
+  gap: 18px;
+}
+
+.role-home__section {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line, #dde0d8);
+  border-radius: 6px;
+  background: var(--surface, #fff);
+}
+
+.role-home__section-heading {
+  min-height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line, #dde0d8);
+}
+
+.role-home__section-heading > div {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.role-home__section-heading span {
+  overflow-wrap: anywhere;
+  color: var(--ink-soft, #5e645d);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.role-home__section-heading h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.role-home__section-heading > b {
+  min-width: 27px;
+  height: 27px;
+  display: grid;
+  place-items: center;
+  padding: 0 7px;
+  border-radius: 5px;
+  background: #eef0eb;
+  color: #4d554c;
+  font-size: 11px;
+}
+
+.role-home__todo-list,
+.role-home__navigation { display: grid; }
+
+.role-home__todo {
+  min-width: 0;
+  min-height: 68px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border: 0;
+  border-bottom: 1px solid var(--line, #dde0d8);
+  border-left: 4px solid #aeb4aa;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.role-home__todo:last-child { border-bottom: 0; }
+.role-home__todo:hover { background: #f8f9f6; }
+.role-home__todo.is-info { border-left-color: #2c7ea2; }
+.role-home__todo.is-warning { border-left-color: var(--warning, #b77c13); }
+.role-home__todo.is-danger { border-left-color: var(--danger, #c63e44); }
+
+.role-home__todo-count {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  background: #f0f1ed;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.role-home__todo-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.role-home__todo-copy strong,
+.role-home__todo-copy small { overflow-wrap: anywhere; }
+.role-home__todo-copy strong { font-size: 13px; }
+.role-home__todo-copy small { color: var(--ink-soft, #5e645d); font-size: 10px; }
+.role-home__todo > svg { color: #9ba198; }
+
+.role-home__empty {
+  min-height: 150px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 24px;
+  color: var(--ink-soft, #5e645d);
+  text-align: center;
+}
+
+.role-home__empty strong { font-size: 12px; }
+
+.role-home__navigation {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.role-home__navigation button {
+  min-width: 0;
+  min-height: 60px;
+  display: grid;
+  grid-template-columns: 31px minmax(0, 1fr) auto 16px;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 12px;
+  border: 0;
+  border-right: 1px solid var(--line, #dde0d8);
+  border-bottom: 1px solid var(--line, #dde0d8);
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.role-home__navigation button:nth-child(2n) { border-right: 0; }
+.role-home__navigation button:last-child,
+.role-home__navigation button:nth-last-child(2):nth-child(odd) { border-bottom: 0; }
+.role-home__navigation button:hover { background: #f8f9f6; }
+
+.role-home__navigation button > span {
+  width: 31px;
+  height: 31px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  background: #eef0eb;
+  color: #4d554c;
+}
+
+.role-home__navigation button > strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
+.role-home__navigation button > b {
+  min-width: 21px;
+  height: 21px;
+  display: grid;
+  place-items: center;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: #fff0d1;
+  color: #815b10;
+  font-size: 10px;
+}
+
+.role-home__navigation button > svg { color: #a0a69d; }
+
+@media (max-width: 1040px) {
+  .role-home__metrics--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .role-home__metrics--4 .role-home__metric:nth-child(2) { border-right: 0; }
+  .role-home__metrics--4 .role-home__metric:nth-child(-n + 2) { border-bottom: 1px solid var(--line, #dde0d8); }
+  .role-home__work-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 680px) {
+  .role-home { gap: 12px; }
+  .role-home__header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+    padding: 13px 14px;
+  }
+  .role-home__identity { grid-column: 1 / 3; }
+  .role-home__actor {
+    justify-items: start;
+    padding: 0;
+    border-left: 0;
+  }
+  .role-home__metrics--4,
+  .role-home__metrics--3,
+  .role-home__metrics--2 { grid-template-columns: 1fr; }
+  .role-home__metric,
+  .role-home__metrics--4 .role-home__metric:nth-child(2) {
+    min-height: 70px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line, #dde0d8);
+  }
+  .role-home__metric:last-child,
+  .role-home__metrics--4 .role-home__metric:last-child { border-bottom: 0; }
+  .role-home__navigation { grid-template-columns: 1fr; }
+  .role-home__navigation button,
+  .role-home__navigation button:nth-child(2n),
+  .role-home__navigation button:nth-last-child(-n + 2) {
+    border-right: 0;
+    border-bottom: 1px solid var(--line, #dde0d8);
+  }
+  .role-home__navigation button:last-child { border-bottom: 0; }
+}

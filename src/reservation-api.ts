@@ -42,7 +42,7 @@ export interface CreateReservationInput {
 export type ReservationActionInput =
   | { action: 'confirm'; idempotencyKey: string }
   | { action: 'arrive'; idempotencyKey: string }
-  | { action: 'seat'; tableId: string; tableCode: string; tableSessionId: string; idempotencyKey: string }
+  | { action: 'seat'; tableId: string; idempotencyKey: string }
   | { action: 'cancel'; reason: string; idempotencyKey: string }
   | { action: 'no_show'; reason: string; idempotencyKey: string }
 

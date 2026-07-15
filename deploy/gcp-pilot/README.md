@@ -33,6 +33,20 @@
 5. 将`mbox-pilot-backup.cron`安装到`/etc/cron.d/mbox-pilot-backup`，权限`0644`。
 6. 验证`/api/live`、`/api/ready`、员工登录、签名桌码和备份上传。
 
+后续版本发布将新版`docker-compose.yml`复制到`/tmp/mbox-docker-compose.yml`，并以
+`MBOX_IMAGE`和Base64编码的`MBOX_PILOT_EMPLOYEE_PINS_B64`调用`release.sh`。脚本会备份
+现有`.env`、执行数据库迁移、替换应用容器并等待健康检查，不在命令行输出PIN明文。
+
+员工登录冒烟脚本必须在虚拟机内运行，因为它需要以root读取权限为`600`的`.env`：
+
+```bash
+gcloud compute scp smoke-staff-logins.sh mbox-pilot-1:/tmp/mbox-smoke-staff-logins.sh \
+  --project=mbox-pilot-jingda-20260714 --zone=asia-east2-a
+gcloud compute ssh mbox-pilot-1 \
+  --project=mbox-pilot-jingda-20260714 --zone=asia-east2-a \
+  --command="sudo bash /tmp/mbox-smoke-staff-logins.sh; rm -f /tmp/mbox-smoke-staff-logins.sh"
+```
+
 每日备份时间为上海时间04:17，保留云端30天、本机3天。每次发布后必须确认`mbox-pilot-app`与`mbox-pilot-db`健康，并执行一次真实桌码服务闭环。
 
 ## 暂停验证

@@ -13,6 +13,40 @@ export type AuthorizationStatus = 'pending' | 'granted' | 'rejected'
 export type KdsTaskStatus = 'queued' | 'preparing' | 'completed' | 'picked_up' | 'delivered'
 export type ItemFulfillmentStatus = 'draft' | KdsTaskStatus
 export type TableLedgerEntryType = 'order_gross_charge' | 'order_discount' | 'order_gift'
+export type LinkedServiceTaskStatus =
+  | 'pending'
+  | 'accepted'
+  | 'arrived'
+  | 'completed'
+  | 'confirmed'
+  | 'reopened'
+  | 'escalated'
+  | 'cancelled'
+
+export interface FulfillmentWorkstationConfig {
+  id: string
+  name: string
+  productionRoleIds: string[]
+  deliveryRoleIds: string[]
+  requiredSkillIds: string[]
+  /** Optional only for workstation snapshots persisted before automatic delivery tasks. */
+  deliveryServiceTypeId?: string
+  productionSlaSeconds: number
+  pickupSlaSeconds: number
+  configVersion: number
+}
+
+export interface FulfillmentSlaSnapshot {
+  targetSeconds: number
+  dueAt: string | null
+}
+
+export interface KdsDeliveryServiceTaskLink {
+  id: string
+  status: LinkedServiceTaskStatus
+  ownerId: string | null
+  createdAt: string
+}
 
 export interface OrderAmounts {
   grossAmount: MoneyAmount
@@ -89,6 +123,11 @@ export interface KdsTask {
   specification: string
   quantity: number
   status: KdsTaskStatus
+  /** Snapshot of routing, roles and SLA so an in-flight task is not changed by later configuration. */
+  workstation?: FulfillmentWorkstationConfig
+  productionSla?: FulfillmentSlaSnapshot
+  pickupSla?: FulfillmentSlaSnapshot
+  deliveryServiceTask?: KdsDeliveryServiceTaskLink | null
   queuedAt: string
   startedAt: string | null
   startedBy: string | null
@@ -126,6 +165,8 @@ export interface OrderDomainState {
   orders: Order[]
   authorizations: OrderAuthorization[]
   authorizationAuthorities: OrderAuthorizationAuthority[]
+  /** Optional only for persisted states created before workstation routing was introduced. */
+  fulfillmentWorkstations?: FulfillmentWorkstationConfig[]
   kdsTasks: KdsTask[]
   tableLedgerEntries: TableLedgerEntry[]
   idempotencyRecords: IdempotencyRecord[]

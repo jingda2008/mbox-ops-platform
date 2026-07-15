@@ -10,6 +10,7 @@ import type {
   TaskActionInput,
   TaskEvent,
 } from '../src/shared/contracts.js'
+import { withDefaultRolePolicy } from '../src/shared/role-policy.js'
 
 const closedStatuses = new Set(['confirmed', 'cancelled'])
 
@@ -96,7 +97,7 @@ function chooseAssignee(
   )
 }
 
-export function createServiceTask(state: RuntimeState, input: CreateTaskInput & { triggerId?: string }) {
+export function createServiceTask(state: RuntimeState, input: CreateTaskInput & { triggerId?: string; requestedBy?: string }) {
   const existing = state.auditEntries.find(
     (entry) => entry.action === 'service.requested.v1' && entry.details.idempotencyKey === input.idempotencyKey,
   )
@@ -145,7 +146,7 @@ export function createServiceTask(state: RuntimeState, input: CreateTaskInput & 
   state.tasks.unshift(task)
   state.auditEntries.push({
     id: `audit_${randomUUID()}`,
-    actorId: input.source,
+    actorId: input.requestedBy ?? input.source,
     action: 'service.requested.v1',
     objectType: 'serviceTask',
     objectId: task.id,
@@ -290,6 +291,7 @@ export function saveConfigDraft(state: RuntimeState, input: ConfigDraftInput, ac
       ? {
           ...serviceType,
           enabled: update.enabled,
+          guestVisible: update.guestVisible ?? serviceType.guestVisible,
           priority: update.priority,
           dispatchRoleIds: [...update.dispatchRoleIds],
           customerReply: update.customerReply,
@@ -298,12 +300,41 @@ export function saveConfigDraft(state: RuntimeState, input: ConfigDraftInput, ac
         }
       : serviceType
   })
-  draft.roles = draft.roles.map((role) => {
-    const update = input.roles.find((item) => item.id === role.id)
-    return update
-      ? { ...role, maxConcurrentTasks: update.maxConcurrentTasks, canReceiveTasks: update.canReceiveTasks }
-      : role
-  })
+  const currentRoles = new Map(draft.roles.map((role) => [role.id, role]))
+  draft.roles = input.roles.map((role) => withDefaultRolePolicy({
+    id: role.id,
+    name: role.name ?? currentRoles.get(role.id)?.name ?? role.id,
+    maxConcurrentTasks: role.maxConcurrentTasks,
+    canReceiveTasks: role.canReceiveTasks,
+    permissionIds: role.permissionIds ?? currentRoles.get(role.id)?.permissionIds,
+    dataScope: role.dataScope ?? currentRoles.get(role.id)?.dataScope,
+    approvalLimits: role.approvalLimits ?? currentRoles.get(role.id)?.approvalLimits,
+  }))
+  draft.skills = structuredClone(input.skills ?? draft.skills)
+  draft.workstations = structuredClone(input.workstations ?? draft.workstations)
+  const roleIds = new Set(draft.roles.map((role) => role.id))
+  const skillIds = new Set(draft.skills.map((skill) => skill.id))
+  const deliveryServiceTypeIds = new Set(draft.serviceTypes.filter(
+    (type) => type.enabled && type.code === 'FULFILLMENT_DELIVERY',
+  ).map((type) => type.id))
+  const workstationIds = new Set(draft.workstations.map((station) => station.id))
+  if (skillIds.size !== draft.skills.length) throw new Error('技能配置ID不能重复')
+  if (roleIds.size !== draft.roles.length) throw new Error('岗位配置ID不能重复')
+  if (workstationIds.size !== draft.workstations.length) throw new Error('工作站配置ID不能重复')
+  if (state.employees.some((employee) => !roleIds.has(employee.roleId))) throw new Error('不能删除仍有员工使用的岗位')
+  if (state.shiftAssignments.some((shift) => !roleIds.has(shift.roleId))) throw new Error('不能删除仍有班次使用的岗位')
+  for (const station of draft.workstations) {
+    if (station.productionRoleIds.length === 0) throw new Error(`${station.name}至少需要一个出品岗位`)
+    if (station.productionRoleIds.some((roleId) => !roleIds.has(roleId))) throw new Error(`${station.name}引用了不存在的出品岗位`)
+    if (station.deliveryRoleIds.some((roleId) => !roleIds.has(roleId))) throw new Error(`${station.name}引用了不存在的取送岗位`)
+    if (station.requiredSkillIds.some((skillId) => !skillIds.has(skillId))) throw new Error(`${station.name}引用了不存在的技能`)
+    if (station.deliveryServiceTypeId && !deliveryServiceTypeIds.has(station.deliveryServiceTypeId)) {
+      throw new Error(`${station.name}必须绑定已启用的专用取送任务类型`)
+    }
+    if (station.fallbackStationId === station.id || (station.fallbackStationId && !workstationIds.has(station.fallbackStationId))) {
+      throw new Error(`${station.name}的候补工作站配置无效`)
+    }
+  }
   const proactiveServiceType = draft.serviceTypes.find(
     (serviceType) => serviceType.id === input.proactiveOrderCare.serviceTypeId && serviceType.enabled,
   )

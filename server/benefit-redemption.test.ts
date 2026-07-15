@@ -96,7 +96,7 @@ describe('benefit redemption', () => {
     expect(state.benefitRedemptions).toHaveLength(1)
     expect(benefit.status).toBe('locked')
     expect(benefit.remainingQuantity).toBe(2)
-    expect(redemption.tableSessionId).toBe('session:table-l01:2026-07-14')
+    expect(redemption.tableSessionId).toBe(`session:table-l01:${state.store.businessDate}`)
     expect(state.auditEntries.at(-1)?.action).toBe('benefit.redemption_locked.v1')
   })
 

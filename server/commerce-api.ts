@@ -20,11 +20,24 @@ import {
 import type { RuntimeRepository } from './repository.js'
 import { completeAwaitingOrderOnOrder } from './proactive-service.js'
 import { consumeManagedInventoryForSubmittedOrder } from './inventory-order-integration.js'
-import { requireCommerceDecisionAuthority, requireOperation, requireOrderCreationRole } from './authorization.js'
-
-function tableSessionId(tableId: string, businessDate: string) {
-  return `session:${tableId}:${businessDate}`
-}
+import {
+  AuthorizationError,
+  requireAnyRole,
+  requireCommerceDecisionAuthority,
+  requireConfiguredOperation,
+  requireOrderCreationRole,
+  requireTableDataScope,
+} from './authorization.js'
+import {
+  allowedFulfillmentRoleIds,
+  routeProductToEnabledWorkstation,
+  syncOrderFulfillmentWorkstations,
+} from './fulfillment-workstations.js'
+import {
+  ensureDeliveryServiceTask,
+  syncDeliveryServiceTaskForKdsAction,
+} from './fulfillment-service.js'
+import { currentOpenTableSession } from './table-sessions.js'
 
 function deterministicId(prefix: string, key: string) {
   return `${prefix}_${createHash('sha256').update(key).digest('hex').slice(0, 32)}`
@@ -35,6 +48,7 @@ export function registerCommerceRoutes(app: FastifyInstance, repository: Runtime
     const input = quickOrderSchema.parse(request.body)
     const order = await repository.mutate((state) => {
       const actor = requireOrderCreationRole(request, state)
+      requireTableDataScope(request, state, input.tableId, 'commerce.order.create')
       const previous = state.auditEntries.find(
         (entry) => entry.action === 'commerce.quick_order.v1' && entry.details.idempotencyKey === input.idempotencyKey,
       )
@@ -54,11 +68,13 @@ export function registerCommerceRoutes(app: FastifyInstance, repository: Runtime
       if (!table || table.status !== 'occupied') throw new Error('只能向已开台桌台下单')
       const product = state.products.find((item) => item.id === input.productId && item.enabled)
       if (!product) throw new Error('商品不存在或已停用')
+      syncOrderFulfillmentWorkstations(state)
+      const workstation = routeProductToEnabledWorkstation(state, product.stationId)
       const now = new Date().toISOString()
       const orderId = deterministicId('order', input.idempotencyKey)
       createOrderDraft(state.orderDomain, {
         orderId,
-        tableSessionId: tableSessionId(table.id, state.store.businessDate),
+        tableSessionId: currentOpenTableSession(state, table.id).id,
         createdBy: actor.actorId,
         occurredAt: now,
         idempotencyKey: `${input.idempotencyKey}:draft`,
@@ -74,7 +90,7 @@ export function registerCommerceRoutes(app: FastifyInstance, repository: Runtime
           unitListPriceAmount: product.listPriceAmount,
           unitSalePriceAmount: product.listPriceAmount,
           unitCostAmount: product.costAmount,
-          stationId: product.stationId,
+          stationId: workstation.id,
           configVersion: product.configVersion,
         },
         actorId: actor.actorId,
@@ -110,9 +126,43 @@ export function registerCommerceRoutes(app: FastifyInstance, repository: Runtime
 
   app.post<{ Params: { taskId: string } }>('/api/commerce/kds/:taskId/actions', async (request) => {
     const input = kdsActionSchema.parse(request.body)
-    const actor = requireOperation(request, ['start', 'complete'].includes(input.action) ? 'commerce.kds.prepare' : 'commerce.kds.deliver')
     return repository.mutate((state) => {
+      syncOrderFulfillmentWorkstations(state)
+      const currentTask = state.orderDomain.kdsTasks.find((item) => item.id === request.params.taskId)
+      if (!currentTask) throw new Error('KDS任务不存在')
+      const operation = ['start', 'complete'].includes(input.action) ? 'commerce.kds.prepare' : 'commerce.kds.deliver'
+      const actionName = ['start', 'complete'].includes(input.action) ? '执行该工作站出品操作' : '执行该工作站取送操作'
+      requireConfiguredOperation(request, state, operation)
+      const actor = requireAnyRole(
+        request,
+        allowedFulfillmentRoleIds(state.orderDomain, currentTask, input.action),
+        operation,
+        actionName,
+      )
+      if (!['supervisor', 'manager'].includes(actor.roleId)) {
+        const employee = state.employees.find((item) => item.id === actor.actorId)
+        if (!employee || employee.status !== 'active' || !employee.online || employee.paused) {
+          throw new AuthorizationError('当前员工不在可执行任务状态', operation)
+        }
+        const activeShift = state.shiftAssignments.find((shift) => (
+          shift.employeeId === actor.actorId &&
+          shift.businessDate === state.store.businessDate &&
+          shift.status === 'active'
+        ))
+        if (!activeShift) throw new AuthorizationError('当前员工没有有效当班记录', operation)
+        if (activeShift.stationIds?.length && !activeShift.stationIds.includes(currentTask.stationId)) {
+          throw new AuthorizationError('当前工作站不在本班次责任范围内', operation)
+        }
+        if (['start', 'complete'].includes(input.action)) {
+          const requiredSkillIds = currentTask.workstation?.requiredSkillIds ?? []
+          if (requiredSkillIds.some((skillId) => !employee.skillIds?.includes(skillId))) {
+            throw new AuthorizationError('当前员工缺少该工作站要求的出品技能', operation)
+          }
+        }
+      }
       const idempotencyCount = state.orderDomain.idempotencyRecords.length
+      const serviceTaskCount = state.tasks.length
+      const taskEventCount = state.taskEvents.length
       const command = {
         taskId: request.params.taskId,
         actorId: actor.actorId,
@@ -126,6 +176,21 @@ export function registerCommerceRoutes(app: FastifyInstance, repository: Runtime
           : input.action === 'pickUp'
             ? pickUpKdsTask(state.orderDomain, command)
             : deliverKdsTask(state.orderDomain, command)
+      if (input.action === 'complete') {
+        ensureDeliveryServiceTask(state, task, command.occurredAt)
+      } else if (input.action === 'pickUp' || input.action === 'deliver') {
+        ensureDeliveryServiceTask(state, task, task.completedAt ?? command.occurredAt)
+        syncDeliveryServiceTaskForKdsAction(
+          state,
+          task,
+          input.action,
+          actor.actorId,
+          command.occurredAt,
+          input.idempotencyKey,
+        )
+      }
+      const changed = state.orderDomain.idempotencyRecords.length !== idempotencyCount ||
+        state.tasks.length !== serviceTaskCount || state.taskEvents.length !== taskEventCount
       if (state.orderDomain.idempotencyRecords.length !== idempotencyCount) {
         state.auditEntries.push({
           id: deterministicId('audit_kds', input.idempotencyKey),
@@ -136,16 +201,16 @@ export function registerCommerceRoutes(app: FastifyInstance, repository: Runtime
           occurredAt: command.occurredAt,
           details: { orderId: task.orderId, tableSessionId: task.tableSessionId, status: task.status },
         })
-        state.revision += 1
       }
+      if (changed) state.revision += 1
       return task
     })
   })
 
   app.post('/api/commerce/authorizations', async (request, reply) => {
     const input = authorizationRequestSchema.parse(request.body)
-    const actor = requireOperation(request, 'commerce.authorization.request')
     const authorization = await repository.mutate((state) => {
+      const actor = requireConfiguredOperation(request, state, 'commerce.authorization.request')
       const idempotencyCount = state.orderDomain.idempotencyRecords.length
       const result = requestOrderAuthorization(state.orderDomain, {
         authorizationId: deterministicId('authorization', input.idempotencyKey),

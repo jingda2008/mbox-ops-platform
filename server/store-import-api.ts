@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { storeImportPackageSchema } from '../src/shared/store-import-contracts.js'
-import { requireRequestActor } from './auth-context.js'
+import { AuthorizationError, requireConfiguredOperation } from './authorization.js'
 import type { RuntimeRepository } from './repository.js'
 import { applyStoreImportPackage, preflightStoreImportPackage } from './store-import.js'
 
@@ -13,22 +13,23 @@ const applyRequestSchema = z.object({
 
 export function registerStoreImportRoutes(app: FastifyInstance, repository: RuntimeRepository) {
   app.post('/api/store-import/preflight', async (request) => {
-    const actor = requireRequestActor(request)
-    if (!['supervisor', 'manager'].includes(actor.roleId)) throw new Error('只有领班或经理可以预检整店导入包')
-    return preflightStoreImportPackage(await repository.read(), request.body)
+    const state = await repository.read()
+    requireConfiguredOperation(request, state, 'master-data.write')
+    return preflightStoreImportPackage(state, request.body)
   })
 
   app.post('/api/store-import/apply', async (request) => {
-    const actor = requireRequestActor(request)
     const input = applyRequestSchema.parse(request.body)
-    if (actor.roleId !== 'manager') throw new Error('只有经理可以应用整店导入包')
-    if (input.approvalActorId === actor.actorId) throw new Error('整店导入必须由另一名管理人员复核')
     return repository.mutate((state) => {
+      const actor = requireConfiguredOperation(request, state, 'store-import.apply')
+      if (input.approvalActorId === actor.actorId) throw new AuthorizationError('整店导入必须由另一名管理人员复核', 'store-import.apply')
       const approver = state.employees.find((employee) =>
-        employee.id === input.approvalActorId && employee.status === 'active' &&
-        ['supervisor', 'manager'].includes(employee.roleId),
+        employee.id === input.approvalActorId && employee.status === 'active',
       )
-      if (!approver) throw new Error('复核人必须是在职领班或经理')
+      const approverRole = approver && state.config.roles.find((role) => role.id === approver.roleId)
+      if (!approver || !approverRole?.permissionIds?.includes('store_import.apply')) {
+        throw new AuthorizationError('复核人岗位无权批准整店导入', 'store-import.apply')
+      }
       const result = applyStoreImportPackage(state, input.package, {
         actorId: actor.actorId,
         occurredAt: new Date().toISOString(),

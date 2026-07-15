@@ -62,12 +62,15 @@ describe('runtime config', () => {
       MBOX_QR_SECRET: 'q'.repeat(32),
       MBOX_METRICS_TOKEN: 'm'.repeat(32),
       MBOX_CORS_ORIGINS: 'https://pilot.example.com',
+      MBOX_PILOT_EMPLOYEE_PINS_JSON: JSON.stringify({ 'emp-owner': '100001', 'emp-host': '100002' }),
     }
     expect(loadRuntimeConfig({ ...staging, MBOX_PILOT_ACCESS_CODE: 'pilot-code-strong' })).toMatchObject({
       pilotAccessCode: 'pilot-code-strong',
       pilotSessionHours: 12,
     })
     expect(() => loadRuntimeConfig({ ...staging, MBOX_PILOT_ACCESS_CODE: 'short' })).toThrow('至少需要10个字符')
+    expect(() => loadRuntimeConfig({ ...staging, MBOX_PILOT_ACCESS_CODE: 'pilot-code-strong', MBOX_PILOT_EMPLOYEE_PINS_JSON: '' })).toThrow('EMPLOYEE_PINS')
+    expect(() => loadRuntimeConfig({ ...staging, MBOX_PILOT_ACCESS_CODE: 'pilot-code-strong', MBOX_PILOT_EMPLOYEE_PINS_JSON: JSON.stringify({ a: '100001', b: '100001' }) })).toThrow('不能重复')
     expect(() => loadRuntimeConfig({ MBOX_PILOT_ACCESS_CODE: 'pilot-code-strong' })).toThrow('只能在staging')
   })
 

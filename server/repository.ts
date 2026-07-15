@@ -3,6 +3,7 @@ import { dirname } from 'node:path'
 import type { RuntimeState } from '../src/shared/contracts.js'
 import type { ConfigVersionRecord } from '../src/shared/config-versioning-contracts.js'
 import { createSeedState } from './seed.js'
+import { migrateRuntimeState } from './runtime-state-migrations.js'
 
 export interface RuntimeRepositoryHealth {
   ready: boolean
@@ -53,7 +54,7 @@ export class JsonRepository {
     try {
       const loaded = JSON.parse(await readFile(this.filePath, 'utf8')) as RuntimeState
       const seed = createSeedState()
-      this.state = {
+      this.state = migrateRuntimeState({
         ...seed,
         ...loaded,
         employees: (loaded.employees ?? seed.employees).map((employee) => ({
@@ -93,7 +94,7 @@ export class JsonRepository {
               proactiveOrderCare: loaded.draftConfig.proactiveOrderCare ?? seed.config.proactiveOrderCare,
             }
           : null,
-      }
+      })
       await this.persist(this.state)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error

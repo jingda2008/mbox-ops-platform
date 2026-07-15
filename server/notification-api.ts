@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import type { RuntimeState } from '../src/shared/contracts.js'
 import type { RuntimeRepository } from './repository.js'
-import { requireOperation } from './authorization.js'
+import { requireConfiguredOperation } from './authorization.js'
 
 export function retryCustomerNotification(
   state: RuntimeState,
@@ -33,7 +33,9 @@ export function retryCustomerNotification(
 
 export function registerNotificationRoutes(app: FastifyInstance, repository: RuntimeRepository) {
   app.post<{ Params: { notificationId: string } }>('/api/notifications/:notificationId/retry', async (request) => {
-    const actor = requireOperation(request, 'notification.retry')
-    return repository.mutate((state) => retryCustomerNotification(state, request.params.notificationId, actor.actorId))
+    return repository.mutate((state) => {
+      const actor = requireConfiguredOperation(request, state, 'notification.retry')
+      return retryCustomerNotification(state, request.params.notificationId, actor.actorId)
+    })
   })
 }

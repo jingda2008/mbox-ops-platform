@@ -3,6 +3,7 @@ import type {
   AuthorizationKind,
   CreateOrderDraftCommand,
   DecideOrderAuthorizationCommand,
+  FulfillmentWorkstationConfig,
   IdempotencyRecord,
   KdsTask,
   KdsTaskActionCommand,
@@ -19,11 +20,23 @@ import type {
   TableLedgerEntry,
   TableLedgerEntryType,
 } from '../src/shared/order-contracts.js'
+import {
+  defaultFulfillmentWorkstations,
+  normalizeOrderFulfillmentState,
+  resolveFulfillmentWorkstation,
+  validateFulfillmentWorkstations,
+} from './fulfillment-workstations.js'
 
 type IdempotencyResultType = IdempotencyRecord['resultType']
 
 export function createOrderDomainState(
   authorizationAuthorities: OrderAuthorizationAuthority[] = [],
+  fulfillmentWorkstations: FulfillmentWorkstationConfig[] = defaultFulfillmentWorkstations.map((item) => ({
+    ...item,
+    productionRoleIds: [...item.productionRoleIds],
+    deliveryRoleIds: [...item.deliveryRoleIds],
+    requiredSkillIds: [...item.requiredSkillIds],
+  })),
 ): OrderDomainState {
   if (new Set(authorizationAuthorities.map((authority) => authority.id)).size !== authorizationAuthorities.length) {
     throw new Error('授权配置ID不能重复')
@@ -39,6 +52,7 @@ export function createOrderDomainState(
     authority.tableSessionIds?.forEach((tableSessionId) => assertNonEmpty(tableSessionId, '授权桌台会话ID'))
     authority.allowedSkuIds?.forEach((skuId) => assertNonEmpty(skuId, '授权商品ID'))
   }
+  validateFulfillmentWorkstations(fulfillmentWorkstations)
   return {
     orders: [],
     authorizations: [],
@@ -47,6 +61,12 @@ export function createOrderDomainState(
       kinds: [...authority.kinds],
       allowedSkuIds: authority.allowedSkuIds ? [...authority.allowedSkuIds] : null,
       tableSessionIds: authority.tableSessionIds ? [...authority.tableSessionIds] : null,
+    })),
+    fulfillmentWorkstations: fulfillmentWorkstations.map((workstation) => ({
+      ...workstation,
+      productionRoleIds: [...workstation.productionRoleIds],
+      deliveryRoleIds: [...workstation.deliveryRoleIds],
+      requiredSkillIds: [...workstation.requiredSkillIds],
     })),
     kdsTasks: [],
     tableLedgerEntries: [],
@@ -112,6 +132,7 @@ function executeIdempotent<T>(
   execute: () => T,
   resultId: (result: T) => string,
 ) {
+  normalizeOrderFulfillmentState(state)
   assertNonEmpty(key, '幂等键')
   const fingerprintPayload = typeof payload === 'object' && payload !== null
     ? Object.fromEntries(Object.entries(payload).filter(([field]) => field !== 'occurredAt'))
@@ -237,6 +258,7 @@ export function addOrderItem(state: OrderDomainState, command: AddOrderItemComma
   if (command.item.unitSalePriceAmount > command.item.unitListPriceAmount) {
     throw new Error('商品成交价不能高于原价')
   }
+  resolveFulfillmentWorkstation(state, command.item.stationId)
 
   return executeIdempotent(
     state,
@@ -406,6 +428,10 @@ function kdsTaskId(orderId: string, itemId: string) {
   return `kds:${orderId}:${itemId}`
 }
 
+function isoAfter(value: string, seconds: number) {
+  return new Date(Date.parse(value) + seconds * 1000).toISOString()
+}
+
 function buildLedgerEntries(state: OrderDomainState, order: Order, actorId: string, occurredAt: string) {
   const drafts: Array<{ type: TableLedgerEntryType; amount: number; lineIds: string[] }> = [
     {
@@ -480,26 +506,36 @@ export function submitOrder(state: OrderDomainState, command: SubmitOrderCommand
         throw new Error(hasPending ? '订单授权尚未完成' : '订单缺少折扣或赠送授权')
       }
 
-      const tasks = order.items.map((item): KdsTask => ({
-        id: kdsTaskId(order.id, item.id),
-        orderId: order.id,
-        orderItemId: item.id,
-        tableSessionId: order.tableSessionId,
-        stationId: item.stationId,
-        itemName: item.name,
-        specification: item.specification,
-        quantity: item.quantity,
-        status: 'queued',
-        queuedAt: command.occurredAt,
-        startedAt: null,
-        startedBy: null,
-        completedAt: null,
-        completedBy: null,
-        pickedUpAt: null,
-        pickedUpBy: null,
-        deliveredAt: null,
-        deliveredBy: null,
-      }))
+      const tasks = order.items.map((item): KdsTask => {
+        const workstation = resolveFulfillmentWorkstation(state, item.stationId)
+        return {
+          id: kdsTaskId(order.id, item.id),
+          orderId: order.id,
+          orderItemId: item.id,
+          tableSessionId: order.tableSessionId,
+          stationId: workstation.id,
+          itemName: item.name,
+          specification: item.specification,
+          quantity: item.quantity,
+          status: 'queued',
+          workstation,
+          productionSla: {
+            targetSeconds: workstation.productionSlaSeconds,
+            dueAt: isoAfter(command.occurredAt, workstation.productionSlaSeconds),
+          },
+          pickupSla: { targetSeconds: workstation.pickupSlaSeconds, dueAt: null },
+          deliveryServiceTask: null,
+          queuedAt: command.occurredAt,
+          startedAt: null,
+          startedBy: null,
+          completedAt: null,
+          completedBy: null,
+          pickedUpAt: null,
+          pickedUpBy: null,
+          deliveredAt: null,
+          deliveredBy: null,
+        }
+      })
       if (tasks.some((task) => state.kdsTasks.some((existing) => existing.id === task.id))) {
         throw new Error('KDS任务ID已存在')
       }
@@ -603,6 +639,13 @@ export function completeKdsTask(state: OrderDomainState, command: KdsTaskActionC
     (task) => {
       task.completedAt = command.occurredAt
       task.completedBy = command.actorId
+      const pickupSlaSeconds = task.pickupSla?.targetSeconds ?? task.workstation?.pickupSlaSeconds
+      if (pickupSlaSeconds) {
+        task.pickupSla = {
+          targetSeconds: pickupSlaSeconds,
+          dueAt: isoAfter(command.occurredAt, pickupSlaSeconds),
+        }
+      }
     },
   )
 }
@@ -638,6 +681,7 @@ export function deliverKdsTask(state: OrderDomainState, command: KdsTaskActionCo
 }
 
 export function getTableBalance(state: OrderDomainState, tableSessionId: string) {
+  normalizeOrderFulfillmentState(state)
   assertNonEmpty(tableSessionId, '桌台会话ID')
   return state.tableLedgerEntries
     .filter((entry) => entry.tableSessionId === tableSessionId)

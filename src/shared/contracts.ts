@@ -68,6 +68,7 @@ export interface Employee {
   online: boolean
   paused: boolean
   areaIds: string[]
+  skillIds?: string[]
 }
 
 export interface ShiftAssignment {
@@ -78,6 +79,7 @@ export interface ShiftAssignment {
   endAt: string
   roleId: string
   areaIds: string[]
+  stationIds?: string[]
   isPrimary: boolean
   status: 'scheduled' | 'active' | 'completed' | 'cancelled'
 }
@@ -94,11 +96,85 @@ export interface MenuProduct {
   configVersion: number
 }
 
+export const staffPermissionIds = [
+  'dashboard.view',
+  'finance.view',
+  'audit.view',
+  'config.manage',
+  'identity.manage',
+  'master_data.manage',
+  'shift.manage',
+  'table.manage',
+  'table.close',
+  'business_day.close',
+  'reservation.view',
+  'reservation.manage',
+  'reservation.config.manage',
+  'service.execute',
+  'complaint.handle',
+  'order.create',
+  'order.view',
+  'kds.prepare',
+  'kds.deliver',
+  'payment.collect',
+  'payment.pos_report',
+  'payment.refund.request',
+  'payment.refund.approve',
+  'commerce.authorization.request',
+  'commerce.authorization.approve',
+  'inventory.view',
+  'inventory.manage',
+  'inventory.approve',
+  'benefit.view',
+  'benefit.grant',
+  'benefit.approve',
+  'benefit.manage',
+  'song.view',
+  'song.manage',
+  'store_import.apply',
+] as const
+
+export type StaffPermissionId = (typeof staffPermissionIds)[number]
+export type RoleDataScope = 'own' | 'assigned_areas' | 'store' | 'all_stores'
+
+export interface RoleApprovalLimits {
+  giftAmount: number
+  discountAmount: number
+  refundRequestAmount: number
+  refundApproveAmount: number
+  inventoryAdjustmentAmount: number
+}
+
 export interface RoleConfig {
   id: string
   name: string
   maxConcurrentTasks: number
   canReceiveTasks: boolean
+  permissionIds?: StaffPermissionId[]
+  dataScope?: RoleDataScope
+  approvalLimits?: RoleApprovalLimits
+}
+
+export interface SkillConfig {
+  id: string
+  name: string
+  enabled: boolean
+}
+
+export type WorkstationKind = 'production' | 'delivery' | 'hybrid'
+
+export interface WorkstationConfig {
+  id: string
+  name: string
+  kind: WorkstationKind
+  enabled: boolean
+  productionRoleIds: string[]
+  deliveryRoleIds: string[]
+  requiredSkillIds: string[]
+  productionSlaSeconds: number
+  pickupSlaSeconds: number
+  deliveryServiceTypeId: string | null
+  fallbackStationId: string | null
 }
 
 export interface SlaConfig {
@@ -113,6 +189,7 @@ export interface ServiceTypeConfig {
   name: string
   icon: 'water' | 'ice' | 'order' | 'bill' | 'complaint' | 'birthday'
   enabled: boolean
+  guestVisible?: boolean
   priority: TaskPriority
   dispatchRoleIds: string[]
   sla: SlaConfig
@@ -134,6 +211,8 @@ export interface StoreConfig {
   publishedAt: string | null
   serviceTypes: ServiceTypeConfig[]
   roles: RoleConfig[]
+  skills: SkillConfig[]
+  workstations: WorkstationConfig[]
   proactiveOrderCare: ProactiveOrderCareConfig
 }
 
@@ -271,11 +350,32 @@ const slaSchema = z
     { message: 'SLA必须满足预警 < 首次升级 < 经理接管' },
   )
 
+export const skillConfigSchema = z.object({
+  id: z.string().trim().min(1).max(64),
+  name: z.string().trim().min(1).max(40),
+  enabled: z.boolean(),
+})
+
+export const workstationConfigSchema = z.object({
+  id: z.string().trim().min(1).max(64),
+  name: z.string().trim().min(1).max(40),
+  kind: z.enum(['production', 'delivery', 'hybrid']),
+  enabled: z.boolean(),
+  productionRoleIds: z.array(z.string().trim().min(1).max(64)).max(20),
+  deliveryRoleIds: z.array(z.string().trim().min(1).max(64)).max(20),
+  requiredSkillIds: z.array(z.string().trim().min(1).max(64)).max(20),
+  productionSlaSeconds: z.number().int().min(5).max(7200),
+  pickupSlaSeconds: z.number().int().min(5).max(7200),
+  deliveryServiceTypeId: z.string().trim().min(1).max(64).nullable(),
+  fallbackStationId: z.string().trim().min(1).max(64).nullable(),
+})
+
 export const configDraftSchema = z.object({
   serviceTypes: z.array(
     z.object({
       id: z.string().min(1),
       enabled: z.boolean(),
+      guestVisible: z.boolean().optional(),
       priority: z.enum(['low', 'normal', 'high', 'urgent']),
       dispatchRoleIds: z.array(z.string().min(1)).min(1),
       customerReply: z.string().trim().min(1).max(200),
@@ -286,10 +386,22 @@ export const configDraftSchema = z.object({
   roles: z.array(
     z.object({
       id: z.string().min(1),
+      name: z.string().trim().min(1).max(40).optional(),
       maxConcurrentTasks: z.number().int().min(1).max(20),
       canReceiveTasks: z.boolean(),
+      permissionIds: z.array(z.enum(staffPermissionIds)).max(staffPermissionIds.length).optional(),
+      dataScope: z.enum(['own', 'assigned_areas', 'store', 'all_stores']).optional(),
+      approvalLimits: z.object({
+        giftAmount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+        discountAmount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+        refundRequestAmount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+        refundApproveAmount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+        inventoryAdjustmentAmount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+      }).optional(),
     }),
   ),
+  skills: z.array(skillConfigSchema).optional(),
+  workstations: z.array(workstationConfigSchema).optional(),
   proactiveOrderCare: z.object({
     enabled: z.boolean(),
     firstReminderSeconds: z.number().int().min(30).max(3600),
@@ -309,6 +421,13 @@ export const awaitingOrderActionSchema = z.object({
 
 export type AwaitingOrderActionInput = z.infer<typeof awaitingOrderActionSchema>
 
+export const closeTableSessionSchema = z.object({
+  reason: z.string().trim().min(2).max(200),
+  idempotencyKey: z.string().trim().min(8).max(128),
+}).strict()
+
+export type CloseTableSessionInput = z.infer<typeof closeTableSessionSchema>
+
 export const employeeWriteSchema = z.object({
   displayName: z.string().trim().min(1).max(40),
   initials: z.string().trim().min(1).max(4),
@@ -317,6 +436,7 @@ export const employeeWriteSchema = z.object({
   online: z.boolean(),
   paused: z.boolean(),
   areaIds: z.array(z.string().trim().min(1)).max(20),
+  skillIds: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
 })
 
 export type EmployeeWriteInput = z.infer<typeof employeeWriteSchema>
@@ -339,6 +459,7 @@ export const shiftWriteSchema = z.object({
   endAt: z.iso.datetime(),
   roleId: z.string().trim().min(1),
   areaIds: z.array(z.string().trim().min(1)).min(1).max(20),
+  stationIds: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
   isPrimary: z.boolean(),
   status: z.enum(['scheduled', 'active', 'completed', 'cancelled']),
 })

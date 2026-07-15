@@ -25,6 +25,7 @@ export interface RuntimeConfig {
   metricsToken?: string
   publicBaseUrl?: string
   pilotAccessCode?: string
+  pilotEmployeePins?: Record<string, string>
   pilotSessionHours: number
   wechatEnabled: boolean
   wechatAppId?: string
@@ -101,6 +102,20 @@ function parseNotificationTemplates(value: string | undefined) {
   })).parse(parsed)
 }
 
+function parsePilotEmployeePins(value: string | undefined) {
+  if (!value?.trim()) return undefined
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value)
+  } catch {
+    throw new Error('MBOX_PILOT_EMPLOYEE_PINS_JSON必须是有效JSON')
+  }
+  const pins = z.record(z.string().trim().min(1).max(128), z.string().regex(/^\d{6,12}$/, '员工PIN必须是6至12位数字')).parse(parsed)
+  const values = Object.values(pins)
+  if (new Set(values).size !== values.length) throw new Error('门店验证员工PIN不能重复')
+  return pins
+}
+
 export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig {
   const runtimeMode = runtimeModeSchema.parse(env.MBOX_RUNTIME_MODE ?? 'local')
   const repositoryMode = repositoryModeSchema.parse(
@@ -126,6 +141,7 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
     metricsToken: env.MBOX_METRICS_TOKEN?.trim() || undefined,
     publicBaseUrl: env.MBOX_PUBLIC_BASE_URL?.trim() || undefined,
     pilotAccessCode: env.MBOX_PILOT_ACCESS_CODE?.trim() || undefined,
+    pilotEmployeePins: parsePilotEmployeePins(env.MBOX_PILOT_EMPLOYEE_PINS_JSON),
     pilotSessionHours: parseInteger(env.MBOX_PILOT_SESSION_HOURS, 12, 'MBOX_PILOT_SESSION_HOURS', 1, 24),
     wechatEnabled: parseBoolean(env.MBOX_WECHAT_ENABLED),
     wechatAppId: env.MBOX_WECHAT_APP_ID?.trim() || undefined,
@@ -198,6 +214,9 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
   if (config.pilotAccessCode) {
     if (runtimeMode !== 'staging') throw new Error('门店验证登录只能在staging环境启用')
     if (config.pilotAccessCode.length < 10) throw new Error('MBOX_PILOT_ACCESS_CODE至少需要10个字符')
+    if (!config.pilotEmployeePins || Object.keys(config.pilotEmployeePins).length === 0) {
+      throw new Error('门店验证登录必须配置MBOX_PILOT_EMPLOYEE_PINS_JSON')
+    }
   }
 
   if (runtimeMode === 'staging' || runtimeMode === 'production') {

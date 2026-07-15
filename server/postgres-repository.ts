@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { Pool as PgPool } from 'pg'
 import type { RuntimeState } from '../src/shared/contracts.js'
+import { migrateRuntimeState } from './runtime-state-migrations.js'
 
 export interface PostgresQueryResult<Row extends Record<string, unknown> = Record<string, unknown>> {
   rows: Row[]
@@ -496,7 +497,7 @@ export class PostgresRepository {
     if (sha256(serialized) !== row.state_sha256.trim()) {
       throw new PostgresStateCorruptionError('Runtime state checksum mismatch')
     }
-    return state
+    return migrateRuntimeState(state)
   }
 
   private async claimIdempotency<T>(

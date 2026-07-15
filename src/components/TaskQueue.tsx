@@ -83,6 +83,7 @@ export function TaskQueue({
           const owner = employees.find((item) => item.id === task.ownerId)
           const serviceType = serviceTypes.find((item) => item.id === task.serviceTypeId)
           if (!table || !serviceType) return null
+          const fulfillmentDelivery = serviceType.code === 'FULFILLMENT_DELIVERY'
           const atRisk = Date.now() >= new Date(task.warningAt).getTime() && !['arrived', 'completed'].includes(task.status)
 
           return (
@@ -94,7 +95,7 @@ export function TaskQueue({
                 <div className="task-item__identity">
                   <div className="task-title-row">
                     <strong>{serviceType.name}</strong>
-                    <span className={`status-tag status-${task.status}`}>{statusLabels[task.status]}</span>
+                    <span className={`status-tag status-${task.status}`}>{fulfillmentDelivery && task.status === 'arrived' ? '配送中' : statusLabels[task.status]}</span>
                   </div>
                   <div className="task-meta">
                     <span><MapPin size={14} />{table.displayName}</span>
@@ -115,17 +116,17 @@ export function TaskQueue({
               <div className="task-actions">
                 {['pending', 'escalated', 'reopened'].includes(task.status) && task.ownerId && (
                   <button className="primary-button" onClick={() => void onAction(task, 'accept')}>
-                    <Check size={17} />接单
+                    <Check size={17} />{fulfillmentDelivery ? '接取送任务' : '接单'}
                   </button>
                 )}
                 {task.status === 'accepted' && (
                   <button className="primary-button" onClick={() => void onAction(task, 'arrive')}>
-                    <Navigation size={17} />已到桌
+                    <Navigation size={17} />{fulfillmentDelivery ? '确认取货' : '已到桌'}
                   </button>
                 )}
                 {task.status === 'arrived' && (
                   <button className="primary-button" onClick={() => void onAction(task, 'complete')}>
-                    <CheckCheck size={17} />完成服务
+                    <CheckCheck size={17} />{fulfillmentDelivery ? '确认送达' : '完成服务'}
                   </button>
                 )}
                 <span className="task-source">{task.source === 'guest' ? '顾客呼叫' : task.source === 'system' ? '系统触发' : '员工创建'}</span>

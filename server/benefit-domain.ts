@@ -20,8 +20,7 @@ import type {
   MemberProfile,
 } from '../src/shared/benefit-contracts.js'
 import type { RuntimeState } from '../src/shared/contracts.js'
-import { requireRequestActor } from './auth-context.js'
-import { requireAnyRole } from './authorization.js'
+import { requireConfiguredOperation } from './authorization.js'
 import type { RuntimeRepository } from './repository.js'
 
 const benefitGrantHttpSchema = benefitGrantSchema.omit({ actorId: true })
@@ -375,90 +374,51 @@ export function updateBenefitPolicy(
 
 export function registerBenefitRoutes(app: FastifyInstance, repository: RuntimeRepository) {
   app.post('/api/benefits/grants', async (request, reply) => {
-    const actor = requireRequestActor(request)
     const input = benefitGrantHttpSchema.parse(request.body)
-    const result = await repository.mutate((state) => requestBenefitGrant(state, {
-      ...input,
-      actorId: actor.actorId,
-    }))
+    const result = await repository.mutate((state) => {
+      const actor = requireConfiguredOperation(request, state, 'benefit.grant')
+      return requestBenefitGrant(state, { ...input, actorId: actor.actorId })
+    })
     return reply.status(201).send(result)
   })
 
   app.post<{ Params: { requestId: string } }>('/api/benefits/grants/:requestId/decision', async (request) => {
-    const state = await repository.read()
-    const grantRequest = state.benefitGrantRequests.find((item) => item.id === request.params.requestId)
-    const actor = requireAnyRole(
-      request,
-      state.benefitGrantPolicies
-        .filter((policy) => policy.canApprove && (!grantRequest || policy.templateIds.includes(grantRequest.templateId)))
-        .map((policy) => policy.roleId),
-      'benefit.grant.decide',
-      '审批经营权益',
-    )
     const input = benefitDecisionHttpSchema.parse(request.body)
-    return repository.mutate((currentState) => decideBenefitGrant(currentState, request.params.requestId, {
-      ...input,
-      actorId: actor.actorId,
-    }))
+    return repository.mutate((state) => {
+      const actor = requireConfiguredOperation(request, state, 'benefit.approve')
+      return decideBenefitGrant(state, request.params.requestId, { ...input, actorId: actor.actorId })
+    })
   })
 
   app.post('/api/benefits/campaigns', async (request, reply) => {
-    const state = await repository.read()
-    const actor = requireAnyRole(
-      request,
-      state.benefitGrantPolicies.filter((policy) => policy.canLaunchCampaign).map((policy) => policy.roleId),
-      'benefit.campaign.launch',
-      '发起权益活动',
-    )
     const input = benefitCampaignHttpSchema.parse(request.body)
-    const result = await repository.mutate((currentState) => launchBenefitCampaign(currentState, {
-      ...input,
-      actorId: actor.actorId,
-    }))
+    const result = await repository.mutate((state) => {
+      const actor = requireConfiguredOperation(request, state, 'benefit.manage')
+      return launchBenefitCampaign(state, { ...input, actorId: actor.actorId })
+    })
     return reply.status(201).send(result)
   })
 
   app.post('/api/benefits/campaigns/preview', async (request) => {
     const state = await repository.read()
-    const actor = requireAnyRole(
-      request,
-      state.benefitGrantPolicies.filter((policy) => policy.canLaunchCampaign).map((policy) => policy.roleId),
-      'benefit.campaign.preview',
-      '预览权益活动',
-    )
+    const actor = requireConfiguredOperation(request, state, 'benefit.manage')
     const input = benefitCampaignHttpSchema.parse(request.body)
     return previewBenefitCampaign(state, { ...input, actorId: actor.actorId })
   })
 
   app.put<{ Params: { templateId: string } }>('/api/benefits/templates/:templateId', async (request) => {
-    const actor = requireAnyRole(
-      request,
-      ['supervisor', 'manager'],
-      'benefit.template.write',
-      '修改权益模板',
-    )
     const input = benefitTemplateWriteSchema.parse(request.body)
-    return repository.mutate((state) => updateBenefitTemplate(
-      state,
-      request.params.templateId,
-      input,
-      actor.actorId,
-    ))
+    return repository.mutate((state) => {
+      const actor = requireConfiguredOperation(request, state, 'benefit.manage')
+      return updateBenefitTemplate(state, request.params.templateId, input, actor.actorId)
+    })
   })
 
   app.put<{ Params: { policyId: string } }>('/api/benefits/policies/:policyId', async (request) => {
-    const actor = requireAnyRole(
-      request,
-      ['manager'],
-      'benefit.policy.write',
-      '修改权益授权策略',
-    )
     const input = benefitPolicyWriteSchema.parse(request.body)
-    return repository.mutate((state) => updateBenefitPolicy(
-      state,
-      request.params.policyId,
-      input,
-      actor.actorId,
-    ))
+    return repository.mutate((state) => {
+      const actor = requireConfiguredOperation(request, state, 'benefit.manage')
+      return updateBenefitPolicy(state, request.params.policyId, input, actor.actorId)
+    })
   })
 }

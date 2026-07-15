@@ -52,6 +52,7 @@ interface PaymentApi {
   ) => Promise<unknown>
   approveAndCompleteRefund: (refundId: string) => Promise<unknown>
   completePhysicalPosRefund: (refundId: string, terminalRefundTransactionId: string, reason: string) => Promise<unknown>
+  closeTableSession: (tableId: string, reason: string) => Promise<unknown>
 }
 
 type BootstrapWithPayments = BootstrapResponse & { paymentDomain?: PaymentDomainState }
@@ -200,6 +201,13 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
     )
   }
 
+  function closeTable(tableId: string, tableCode: string) {
+    if (!window.confirm(`确认${tableCode}所有商品已送达、服务已完成且款项已核实？`)) return
+    void execute(`close:${tableId}`, `${tableCode}已结台，可以接待下一桌客人`, () =>
+      paymentClient.closeTableSession(tableId, '收银核对完成并结台'),
+    )
+  }
+
   function completePhysicalRefund(event: FormEvent, refund: Refund) {
     event.preventDefault()
     if (!refundCompletion.terminalRefundTransactionId.trim() || !refundCompletion.reason.trim()) {
@@ -244,7 +252,7 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
       </section>
 
       <section className="cashier-section table-account-section">
-        <SectionTitle icon={ReceiptText} eyebrow="按桌次归集" title="未收款订单" meta={`${tableAccounts.length}个桌次`} />
+        <SectionTitle icon={ReceiptText} eyebrow="按桌次归集" title="营业桌账与结台" meta={`${tableAccounts.length}个桌次`} />
         <div className="table-account-list">
           {tableAccounts.length === 0 && <EmptyState icon={FileCheck2} text="当前没有可收款桌账" />}
           {tableAccounts.map((account) => (
@@ -288,6 +296,11 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
                 >
                   <CreditCard size={16} />生成POS收款单
                 </button>
+                {account.canClose && account.tableId && (
+                  <button className="primary-button" type="button" disabled={Boolean(busyAction)} onClick={() => closeTable(account.tableId!, account.tableCode)}>
+                    {busyAction === `close:${account.tableId}` ? <LoaderCircle className="spin" size={16} /> : <CheckCircle2 size={16} />}结台
+                  </button>
+                )}
               </div>
             </article>
           ))}
@@ -470,6 +483,10 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 function buildTableAccounts(data: BootstrapResponse, intents: PaymentIntent[], refunds: Refund[]) {
   const ordersBySession = new Map<string, Order[]>()
+  for (const session of data.songState.tableSessions) {
+    const table = data.tables.find((item) => item.id === session.tableId)
+    if (session.status === 'open' && table?.status === 'occupied') ordersBySession.set(session.id, [])
+  }
   for (const order of data.orderDomain.orders) {
     if (order.status === 'draft' || order.status === 'authorization_pending') continue
     const orders = ordersBySession.get(order.tableSessionId) ?? []
@@ -489,16 +506,21 @@ function buildTableAccounts(data: BootstrapResponse, intents: PaymentIntent[], r
     const reservedAmount = activeIntents
       .filter((intent) => intent.tableSessionId === tableSessionId && intent.status !== 'succeeded')
       .reduce((sum, intent) => sum + intent.amount, 0)
+    const confirmedAllocatedAmount = activeIntents
+      .filter((intent) => ['succeeded', 'reported_pending_reconciliation'].includes(intent.status))
+      .reduce((sum, intent) => sum + intent.amount, 0)
     return {
       tableSessionId,
+      tableId: table?.id ?? null,
       tableCode: table?.code ?? '未知桌台',
       tableName: table?.displayName ?? '未匹配桌台',
       orders,
       totalAmount,
       reservedAmount,
       collectableAmount: Math.max(0, totalAmount - allocatedAmount),
+      canClose: confirmedAllocatedAmount >= totalAmount,
     }
-  }).filter((account) => account.totalAmount > 0)
+  })
 }
 
 function tableFromSession(data: BootstrapResponse, tableSessionId: string) {

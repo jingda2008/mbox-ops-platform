@@ -1,6 +1,17 @@
-import type { AuditEntry, RuntimeState, StoreConfig } from '../src/shared/contracts.js'
+import {
+  skillConfigSchema,
+  workstationConfigSchema,
+  type AuditEntry,
+  type Employee,
+  type RuntimeState,
+  type ShiftAssignment,
+  type SkillConfig,
+  type StoreConfig,
+  type WorkstationConfig,
+} from '../src/shared/contracts.js'
 import type { OrderAuthorizationAuthority } from '../src/shared/order-contracts.js'
-import type { ZodError } from 'zod'
+import { z, type ZodError } from 'zod'
+import { withDefaultRolePolicy } from '../src/shared/role-policy.js'
 import {
   storeImportApplyCommandSchema,
   storeImportPackageSchema,
@@ -33,6 +44,18 @@ interface ImportCandidate {
   products: RuntimeState['products']
   authorizationAuthorities: OrderAuthorizationAuthority[]
 }
+
+interface ImportExtensions {
+  skills?: SkillConfig[]
+  workstations?: WorkstationConfig[]
+  serviceTypeGuestVisible: Map<string, boolean>
+  employeeSkillIds: Map<string, string[]>
+  shiftStationIds: Map<string, string[]>
+}
+
+type ParsedImportPackage =
+  | { success: true; data: StoreImportPackage }
+  | { success: false; issues: StoreImportIssue[] }
 
 export interface StoreImportApplyResult {
   state: RuntimeState
@@ -118,11 +141,142 @@ function runtimeAuthority(authority: StoreImportAuthority): OrderAuthorizationAu
   return structuredClone(record)
 }
 
+function inferredLegacyWorkstations(input: StoreImportPackage): WorkstationConfig[] {
+  const stationIds = [...new Set(input.data.products.map((product) => product.stationId))]
+  const roleIds = input.data.config.roles.filter((role) => role.canReceiveTasks).map((role) => role.id)
+  const deliveryServiceTypeId = input.data.config.serviceTypes.find((serviceType) => (
+    serviceType.enabled && serviceType.code === 'FULFILLMENT_DELIVERY'
+  ))?.id ?? null
+  return stationIds.map((stationId) => ({
+    id: stationId,
+    name: stationId,
+    kind: 'hybrid',
+    enabled: true,
+    productionRoleIds: [...roleIds],
+    deliveryRoleIds: [...roleIds],
+    requiredSkillIds: [],
+    productionSlaSeconds: 300,
+    pickupSlaSeconds: 90,
+    deliveryServiceTypeId,
+    fallbackStationId: null,
+  }))
+}
+
+function extensionSchemaIssues(error: ZodError, prefix: PropertyKey[]) {
+  return error.issues.map((issue): StoreImportIssue => ({
+    severity: 'error',
+    code: 'SCHEMA_INVALID',
+    message: issue.message,
+    ...schemaIssueLocation([...prefix, ...issue.path]),
+  }))
+}
+
+function prepareImportExtensions(rawInput: unknown) {
+  const baseInput = structuredClone(rawInput)
+  const extensions: ImportExtensions = {
+    serviceTypeGuestVisible: new Map(),
+    employeeSkillIds: new Map(),
+    shiftStationIds: new Map(),
+  }
+  const issues: StoreImportIssue[] = []
+  if (!baseInput || typeof baseInput !== 'object' || Array.isArray(baseInput)) {
+    return { baseInput, extensions, issues }
+  }
+  const data = (baseInput as { data?: unknown }).data
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return { baseInput, extensions, issues }
+  const mutableData = data as Record<string, unknown>
+  const config = mutableData.config
+  if (config && typeof config === 'object' && !Array.isArray(config)) {
+    const mutableConfig = config as Record<string, unknown>
+    if ('skills' in mutableConfig) {
+      const result = z.array(skillConfigSchema).safeParse(mutableConfig.skills)
+      if (result.success) extensions.skills = result.data
+      else issues.push(...extensionSchemaIssues(result.error, ['data', 'config', 'skills']))
+      delete mutableConfig.skills
+    }
+    if ('workstations' in mutableConfig) {
+      const result = z.array(workstationConfigSchema).safeParse(mutableConfig.workstations)
+      if (result.success) extensions.workstations = result.data
+      else issues.push(...extensionSchemaIssues(result.error, ['data', 'config', 'workstations']))
+      delete mutableConfig.workstations
+    }
+    const serviceTypes = mutableConfig.serviceTypes
+    if (Array.isArray(serviceTypes)) {
+      serviceTypes.forEach((serviceType, index) => {
+        if (!serviceType || typeof serviceType !== 'object' || Array.isArray(serviceType)) return
+        const mutableServiceType = serviceType as Record<string, unknown>
+        if (!('guestVisible' in mutableServiceType)) return
+        const result = z.boolean().safeParse(mutableServiceType.guestVisible)
+        if (result.success && typeof mutableServiceType.id === 'string') {
+          extensions.serviceTypeGuestVisible.set(mutableServiceType.id, result.data)
+        } else if (!result.success) {
+          issues.push(...extensionSchemaIssues(result.error, ['data', 'config', 'serviceTypes', index, 'guestVisible']))
+        }
+        delete mutableServiceType.guestVisible
+      })
+    }
+  }
+
+  const employees = mutableData.employees
+  if (Array.isArray(employees)) {
+    employees.forEach((employee, index) => {
+      if (!employee || typeof employee !== 'object' || Array.isArray(employee)) return
+      const mutableEmployee = employee as Record<string, unknown>
+      if (!('skillIds' in mutableEmployee)) return
+      const result = z.array(z.string().trim().min(1).max(64)).max(20).safeParse(mutableEmployee.skillIds)
+      if (result.success && typeof mutableEmployee.id === 'string') extensions.employeeSkillIds.set(mutableEmployee.id, result.data)
+      else if (!result.success) issues.push(...extensionSchemaIssues(result.error, ['data', 'employees', index, 'skillIds']))
+      delete mutableEmployee.skillIds
+    })
+  }
+
+  const shifts = mutableData.shiftAssignments
+  if (Array.isArray(shifts)) {
+    shifts.forEach((shift, index) => {
+      if (!shift || typeof shift !== 'object' || Array.isArray(shift)) return
+      const mutableShift = shift as Record<string, unknown>
+      if (!('stationIds' in mutableShift)) return
+      const result = z.array(z.string().trim().min(1).max(64)).max(20).safeParse(mutableShift.stationIds)
+      if (result.success && typeof mutableShift.id === 'string') extensions.shiftStationIds.set(mutableShift.id, result.data)
+      else if (!result.success) issues.push(...extensionSchemaIssues(result.error, ['data', 'shiftAssignments', index, 'stationIds']))
+      delete mutableShift.stationIds
+    })
+  }
+  return { baseInput, extensions, issues }
+}
+
+function parseImportPackage(rawInput: unknown): ParsedImportPackage {
+  const { baseInput, extensions, issues } = prepareImportExtensions(rawInput)
+  const parsed = storeImportPackageSchema.safeParse(baseInput)
+  if (!parsed.success) issues.push(...schemaIssues(parsed.error))
+  if (!parsed.success || issues.length > 0) return { success: false, issues }
+
+  const config = parsed.data.data.config as unknown as StoreConfig
+  config.skills = structuredClone(extensions.skills ?? [])
+  config.workstations = structuredClone(extensions.workstations ?? inferredLegacyWorkstations(parsed.data))
+  for (const serviceType of config.serviceTypes) {
+    const guestVisible = extensions.serviceTypeGuestVisible.get(serviceType.id)
+    if (guestVisible !== undefined) serviceType.guestVisible = guestVisible
+  }
+  for (const employee of parsed.data.data.employees as unknown as Employee[]) {
+    const skillIds = extensions.employeeSkillIds.get(employee.id)
+    if (skillIds) employee.skillIds = structuredClone(skillIds)
+  }
+  for (const shift of parsed.data.data.shiftAssignments as unknown as ShiftAssignment[]) {
+    const stationIds = extensions.shiftStationIds.get(shift.id)
+    if (stationIds) shift.stationIds = structuredClone(stationIds)
+  }
+  return { success: true, data: parsed.data }
+}
+
 function buildCandidate(state: RuntimeState, input: StoreImportPackage): ImportCandidate {
   const { sections } = input.policy
   return {
     store: structuredClone(input.data.store),
-    config: structuredClone(input.data.config),
+    config: {
+      ...(structuredClone(input.data.config) as StoreConfig),
+      roles: input.data.config.roles.map((role) => withDefaultRolePolicy(structuredClone(role))),
+    },
     areas: mergeById(state.areas, input.data.areas, sections.areas.mode),
     tables: mergeById(state.tables, input.data.tables, sections.tables.mode),
     employees: mergeById(state.employees, input.data.employees, sections.employees.mode),
@@ -301,6 +455,10 @@ function semanticIssues(state: RuntimeState, input: StoreImportPackage, candidat
   checkUnique(candidate.config.roles, (item) => item.name, '岗位名称', 'config', 'roles.name', true)
   checkUnique(candidate.config.serviceTypes, (item) => item.id, '服务类型ID', 'config', 'serviceTypes.id')
   checkUnique(candidate.config.serviceTypes, (item) => item.code, '服务类型代码', 'config', 'serviceTypes.code', true)
+  checkUnique(candidate.config.skills, (item) => item.id, '技能ID', 'config', 'skills.id')
+  checkUnique(candidate.config.skills, (item) => item.name, '技能名称', 'config', 'skills.name', true)
+  checkUnique(candidate.config.workstations, (item) => item.id, '工作站ID', 'config', 'workstations.id')
+  checkUnique(candidate.config.workstations, (item) => item.name, '工作站名称', 'config', 'workstations.name', true)
   checkMergedUnique(candidate.areas, (item) => item.name, '区域名称', 'areas', 'name', true)
   checkMergedUnique(candidate.areas, (item) => item.sortOrder, '区域排序号', 'areas', 'sortOrder')
   checkMergedUnique(candidate.tables, (item) => item.code, '桌台编号', 'tables', 'code', true)
@@ -316,6 +474,8 @@ function semanticIssues(state: RuntimeState, input: StoreImportPackage, candidat
 
   const roleIds = new Set(candidate.config.roles.map((role) => role.id))
   const serviceTypeIds = new Set(candidate.config.serviceTypes.map((serviceType) => serviceType.id))
+  const skillIds = new Set(candidate.config.skills.map((skill) => skill.id))
+  const workstations = new Map(candidate.config.workstations.map((station) => [station.id, station]))
   const responsibilityRoleOwners = new Map<string, string>()
   for (const [group, configuredRoleIds] of Object.entries(input.policy.responsibilityRoles)) {
     const unique = new Set(configuredRoleIds)
@@ -342,6 +502,42 @@ function semanticIssues(state: RuntimeState, input: StoreImportPackage, candidat
     const { warningSeconds, escalateSeconds, managerSeconds } = serviceType.sla
     if (!(warningSeconds < escalateSeconds && escalateSeconds < managerSeconds)) {
       add('error', 'SLA_ORDER_INVALID', `服务类型 ${serviceType.id} 必须满足预警 < 升级 < 经理接管`, 'config', null, `serviceTypes.${serviceType.id}.sla`)
+    }
+  }
+  for (const station of candidate.config.workstations) {
+    const roleGroups: Array<[string, string[]]> = [
+      ['productionRoleIds', station.productionRoleIds],
+      ['deliveryRoleIds', station.deliveryRoleIds],
+    ]
+    for (const [field, configuredRoleIds] of roleGroups) {
+      if (new Set(configuredRoleIds).size !== configuredRoleIds.length) {
+        add('error', 'WORKSTATION_ROLE_DUPLICATE', `工作站 ${station.id} 的岗位重复`, 'config', null, `workstations.${station.id}.${field}`)
+      }
+      for (const roleId of configuredRoleIds) {
+        if (!roleIds.has(roleId)) add('error', 'ROLE_REFERENCE_MISSING', `工作站 ${station.id} 引用了不存在的岗位 ${roleId}`, 'config', null, `workstations.${station.id}.${field}`)
+      }
+    }
+    if (station.kind !== 'delivery' && station.productionRoleIds.length === 0) {
+      add('error', 'WORKSTATION_PRODUCTION_ROLE_REQUIRED', `工作站 ${station.id} 缺少生产岗位`, 'config', null, `workstations.${station.id}.productionRoleIds`)
+    }
+    if (station.kind !== 'production' && station.deliveryRoleIds.length === 0) {
+      add('error', 'WORKSTATION_DELIVERY_ROLE_REQUIRED', `工作站 ${station.id} 缺少配送岗位`, 'config', null, `workstations.${station.id}.deliveryRoleIds`)
+    }
+    if (new Set(station.requiredSkillIds).size !== station.requiredSkillIds.length) {
+      add('error', 'WORKSTATION_SKILL_DUPLICATE', `工作站 ${station.id} 的技能重复`, 'config', null, `workstations.${station.id}.requiredSkillIds`)
+    }
+    for (const skillId of station.requiredSkillIds) {
+      if (!skillIds.has(skillId)) add('error', 'SKILL_REFERENCE_MISSING', `工作站 ${station.id} 引用了不存在的技能 ${skillId}`, 'config', null, `workstations.${station.id}.requiredSkillIds`)
+    }
+    if (station.deliveryServiceTypeId && !serviceTypeIds.has(station.deliveryServiceTypeId)) {
+      add('error', 'SERVICE_TYPE_REFERENCE_MISSING', `工作站 ${station.id} 的取送服务类型不存在`, 'config', null, `workstations.${station.id}.deliveryServiceTypeId`)
+    } else if (station.deliveryServiceTypeId && candidate.config.serviceTypes.find((type) => type.id === station.deliveryServiceTypeId)?.code !== 'FULFILLMENT_DELIVERY') {
+      add('error', 'WORKSTATION_DELIVERY_SERVICE_INVALID', `工作站 ${station.id} 必须使用专用的出品取送任务类型`, 'config', null, `workstations.${station.id}.deliveryServiceTypeId`)
+    }
+    if (station.fallbackStationId === station.id) {
+      add('error', 'WORKSTATION_FALLBACK_SELF', `工作站 ${station.id} 不能回退到自身`, 'config', null, `workstations.${station.id}.fallbackStationId`)
+    } else if (station.fallbackStationId && !workstations.has(station.fallbackStationId)) {
+      add('error', 'WORKSTATION_REFERENCE_MISSING', `工作站 ${station.id} 的回退工作站不存在`, 'config', null, `workstations.${station.id}.fallbackStationId`)
     }
   }
   if (!serviceTypeIds.has(candidate.config.proactiveOrderCare.serviceTypeId)) {
@@ -371,6 +567,11 @@ function semanticIssues(state: RuntimeState, input: StoreImportPackage, candidat
     if (new Set(employee.areaIds).size !== employee.areaIds.length) add('error', 'AREA_REFERENCE_DUPLICATE', `员工 ${employee.id} 的责任区重复`, 'employees', row, 'areaIds')
     for (const areaId of employee.areaIds) {
       if (!areas.has(areaId)) add('error', 'AREA_REFERENCE_MISSING', `员工 ${employee.id} 引用了不存在的区域 ${areaId}`, 'employees', row, 'areaIds')
+    }
+    const employeeSkillIds = employee.skillIds ?? []
+    if (new Set(employeeSkillIds).size !== employeeSkillIds.length) add('error', 'SKILL_REFERENCE_DUPLICATE', `员工 ${employee.id} 的技能重复`, 'employees', row, 'skillIds')
+    for (const skillId of employeeSkillIds) {
+      if (!skillIds.has(skillId)) add('error', 'SKILL_REFERENCE_MISSING', `员工 ${employee.id} 引用了不存在的技能 ${skillId}`, 'employees', row, 'skillIds')
     }
     if (employee.status === 'inactive' && (employee.online || !employee.paused)) {
       add('error', 'INACTIVE_EMPLOYEE_STATE_INVALID', `停用员工 ${employee.id} 必须离线且暂停派单`, 'employees', row, 'status')
@@ -417,6 +618,22 @@ function semanticIssues(state: RuntimeState, input: StoreImportPackage, candidat
     for (const areaId of shift.areaIds) {
       if (!areas.has(areaId)) add('error', 'AREA_REFERENCE_MISSING', `班次 ${shift.id} 的区域 ${areaId} 不存在`, 'shiftAssignments', row, 'areaIds')
     }
+    const stationIds = shift.stationIds ?? []
+    if (new Set(stationIds).size !== stationIds.length) add('error', 'WORKSTATION_REFERENCE_DUPLICATE', `班次 ${shift.id} 的工作站重复`, 'shiftAssignments', row, 'stationIds')
+    for (const stationId of stationIds) {
+      const station = workstations.get(stationId)
+      if (!station) {
+        add('error', 'WORKSTATION_REFERENCE_MISSING', `班次 ${shift.id} 引用了不存在的工作站 ${stationId}`, 'shiftAssignments', row, 'stationIds')
+        continue
+      }
+      const productionRoute = station.productionRoleIds.includes(shift.roleId)
+      const deliveryRoute = station.deliveryRoleIds.includes(shift.roleId)
+      if (!productionRoute && !deliveryRoute) add('error', 'SHIFT_WORKSTATION_ROLE_MISMATCH', `班次 ${shift.id} 的岗位不能路由到工作站 ${stationId}`, 'shiftAssignments', row, 'stationIds')
+      if (productionRoute && employee) {
+        const missingSkills = station.requiredSkillIds.filter((skillId) => !(employee.skillIds ?? []).includes(skillId))
+        if (missingSkills.length > 0) add('error', 'SHIFT_WORKSTATION_SKILL_MISMATCH', `班次 ${shift.id} 缺少工作站 ${stationId} 所需技能 ${missingSkills.join('、')}`, 'shiftAssignments', row, 'stationIds')
+      }
+    }
     if (Date.parse(shift.startAt) >= Date.parse(shift.endAt)) add('error', 'SHIFT_TIME_INVALID', `班次 ${shift.id} 结束时间必须晚于开始时间`, 'shiftAssignments', row, 'endAt')
   }
   const activeShifts = candidate.shiftAssignments.filter((shift) => shift.status !== 'cancelled')
@@ -454,6 +671,7 @@ function semanticIssues(state: RuntimeState, input: StoreImportPackage, candidat
     if (product.costAmount > product.listPriceAmount) add('error', 'PRODUCT_COST_EXCEEDS_PRICE', `商品 ${product.sku} 成本不能高于标价`, 'products', row, 'costAmount')
     if (!input.policy.allowZeroListPrice && product.listPriceAmount === 0) add('error', 'ZERO_PRICE_FORBIDDEN', `商品 ${product.sku} 标价为0，但导入策略不允许零价`, 'products', row, 'listPriceAmount')
     if (product.configVersion > candidate.config.version) add('error', 'PRODUCT_VERSION_AHEAD_OF_CONFIG', `商品 ${product.sku} 的配置版本不能高于门店配置版本`, 'products', row, 'configVersion')
+    if (!workstations.has(product.stationId)) add('error', 'WORKSTATION_REFERENCE_MISSING', `商品 ${product.sku} 的工作站不存在`, 'products', row, 'stationId')
     const currentProduct = state.products.find((item) => item.id === product.id)
     if (currentProduct && !sameValue(currentProduct, product) && product.configVersion <= currentProduct.configVersion) {
       add('error', 'PRODUCT_VERSION_NOT_MONOTONIC', `已变更商品 ${product.sku} 的配置版本必须大于当前版本 ${currentProduct.configVersion}`, 'products', row, 'configVersion')
@@ -545,8 +763,8 @@ function parsedPreflight(state: RuntimeState, input: StoreImportPackage) {
 }
 
 export function preflightStoreImportPackage(state: RuntimeState, input: unknown): StoreImportPreflightResult {
-  const parsed = storeImportPackageSchema.safeParse(input)
-  if (!parsed.success) return { valid: false, issues: schemaIssues(parsed.error), preview: null }
+  const parsed = parseImportPackage(input)
+  if (!parsed.success) return { valid: false, issues: parsed.issues, preview: null }
   const { preview, issues } = parsedPreflight(state, parsed.data)
   return {
     valid: !issues.some((issue) => issue.severity === 'error'),
@@ -592,8 +810,8 @@ export function applyStoreImportPackage(
   rawInput: unknown,
   rawCommand: StoreImportApplyCommand,
 ): StoreImportApplyResult {
-  const parsedInput = storeImportPackageSchema.safeParse(rawInput)
-  if (!parsedInput.success) throw new StoreImportValidationError(schemaIssues(parsedInput.error))
+  const parsedInput = parseImportPackage(rawInput)
+  if (!parsedInput.success) throw new StoreImportValidationError(parsedInput.issues)
   const input = parsedInput.data
   const command = storeImportApplyCommandSchema.parse(rawCommand)
   const { candidate, preview, issues } = parsedPreflight(sourceState, input)

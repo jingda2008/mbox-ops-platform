@@ -138,4 +138,46 @@ describe('versioned store configuration', () => {
     expect(published.serviceTypes.find((type) => type.id === 'water')?.sla.warningSeconds).toBe(15)
     expect(state.draftConfig).toBeNull()
   })
+
+  it('adds a new role and rejects a normal guest service type as a delivery workflow', () => {
+    const state = createSeedState()
+    const serviceTypes = state.config.serviceTypes.map((type) => ({
+      id: type.id,
+      enabled: type.enabled,
+      guestVisible: type.guestVisible,
+      priority: type.priority,
+      dispatchRoleIds: type.dispatchRoleIds,
+      customerReply: type.customerReply,
+      actionScript: type.actionScript,
+      sla: type.sla,
+    }))
+    const roles = [
+      ...state.config.roles.map((role) => ({ ...role })),
+      { id: 'concierge', name: '客户体验专员', maxConcurrentTasks: 3, canReceiveTasks: true },
+    ]
+
+    saveConfigDraft(state, {
+      serviceTypes,
+      roles,
+      skills: state.config.skills,
+      workstations: state.config.workstations,
+      proactiveOrderCare: state.config.proactiveOrderCare,
+    }, 'emp-chen')
+    expect(state.draftConfig?.roles.find((role) => role.id === 'concierge')).toMatchObject({
+      name: '客户体验专员',
+      dataScope: 'own',
+      permissionIds: [],
+    })
+
+    const invalidWorkstations = state.config.workstations.map((station) => (
+      station.id === 'bar-main' ? { ...station, deliveryServiceTypeId: 'order-help' } : station
+    ))
+    expect(() => saveConfigDraft(state, {
+      serviceTypes,
+      roles,
+      skills: state.config.skills,
+      workstations: invalidWorkstations,
+      proactiveOrderCare: state.config.proactiveOrderCare,
+    }, 'emp-chen')).toThrow('必须绑定已启用的专用取送任务类型')
+  })
 })

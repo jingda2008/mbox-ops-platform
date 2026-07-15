@@ -7,7 +7,7 @@ import { registerPaymentRoutes } from './payment-api.js'
 import type { RuntimeRepository } from './repository.js'
 import { createSeedState } from './seed.js'
 
-function fixture(runtimeMode: RuntimeMode, actorId = 'emp-wu', roleId = 'server') {
+function fixture(runtimeMode: RuntimeMode, actorId = 'emp-lin', roleId = 'server') {
   let state = createSeedState()
   state.paymentDomain = createPaymentDomainState()
   const tableSession = state.songState.tableSessions.find((candidate) => candidate.status === 'open')!
@@ -100,7 +100,7 @@ describe('payment API security boundary', () => {
   })
 
   it('takes the payment audit actor from the authenticated request, never from the payload', async () => {
-    const { app, repository } = fixture('test', 'emp-wu')
+    const { app, repository } = fixture('test', 'emp-lin')
     const state = await repository.read()
     const order = state.orderDomain.orders.find((candidate) => candidate.status !== 'draft')
     expect(order).toBeDefined()
@@ -118,10 +118,10 @@ describe('payment API security boundary', () => {
     })
 
     expect(response.statusCode).toBe(201)
-    expect(response.json().createdBy).toBe('emp-wu')
+    expect(response.json().createdBy).toBe('emp-lin')
     const persisted = await repository.read()
     expect(persisted.auditEntries.at(-1)).toMatchObject({
-      actorId: 'emp-wu',
+      actorId: 'emp-lin',
       action: 'payment.intent.created.v1',
     })
     await app.close()
@@ -129,7 +129,7 @@ describe('payment API security boundary', () => {
   })
 
   it('completes a physical POS item refund with a different authorized employee', async () => {
-    const { app, repository, setActor } = fixture('test', 'emp-wu', 'server')
+    const { app, repository, setActor } = fixture('test', 'emp-lin', 'server')
     const state = await repository.read()
     const order = state.orderDomain.orders.find((candidate) => candidate.status !== 'draft')!
     const intentResponse = await app.inject({
@@ -143,7 +143,7 @@ describe('payment API security boundary', () => {
       },
     })
     const intent = intentResponse.json()
-    setActor('emp-mia', 'supervisor')
+    setActor('emp-cashier', 'cashier')
     expect((await app.inject({
       method: 'POST',
       url: `/api/payments/${intent.id}/physical-pos-reports`,
@@ -152,7 +152,7 @@ describe('payment API security boundary', () => {
         deviceId: 'cashier-test', idempotencyKey: 'physical-pos-report-0001',
       },
     })).statusCode).toBe(201)
-    setActor('emp-wu', 'server')
+    setActor('emp-lin', 'server')
     const refundResponse = await app.inject({
       method: 'POST',
       url: `/api/payments/${intent.id}/refunds`,

@@ -17,6 +17,7 @@ import type {
   InventoryOperationPolicy,
   InventoryRecipeLine,
   InventoryRecipeVersion,
+  InventoryStockAlertRule,
   StockCount,
 } from './shared/inventory-contracts'
 
@@ -247,6 +248,20 @@ export function updateInventoryPolicy(policy: InventoryOperationPolicy, reason: 
       policy,
       reason,
       idempotencyKey: `inventory-policy-${crypto.randomUUID()}`,
+    }),
+  })
+}
+
+export function updateStockAlertRules(
+  rules: Array<Pick<InventoryStockAlertRule, 'itemId' | 'enabled' | 'warningQuantity'>>,
+  reason: string,
+) {
+  return inventoryRequest<InventoryStockAlertRule[]>('/api/inventory/stock-alerts', {
+    method: 'PUT',
+    body: JSON.stringify({
+      rules,
+      reason,
+      idempotencyKey: `inventory-stock-alerts-${crypto.randomUUID()}`,
     }),
   })
 }

@@ -33,6 +33,7 @@ import type {
   InventoryRecipeLine,
   InventoryRecipeVersion,
   InventoryOperationPolicy,
+  InventoryStockAlertRule,
   StockCount,
 } from '../shared/inventory-contracts'
 import './InventoryView.css'
@@ -55,9 +56,10 @@ type InventoryBalanceRow = {
   unitCode: string
   recipe?: InventoryRecipeVersion
   updatedAt?: string
+  alertRule: Pick<InventoryStockAlertRule, 'itemId' | 'enabled' | 'warningQuantity'>
 }
 
-const LOW_STOCK_QUANTITY = 5
+const DEFAULT_LOW_STOCK_QUANTITY = 5
 const policyLabels: Record<keyof InventoryOperationPolicy, string> = {
   policyAdminRoleIds: '修改库存权限',
   receiptRoleIds: '登记入库',
@@ -161,6 +163,8 @@ export function InventoryView() {
     })),
   ]
   const balanceRows: InventoryBalanceRow[] = overviewItems.map((item) => {
+    const configuredAlert = inventory.stockAlertRules.find((rule) => rule.itemId === item.id)
+    const alertRule = configuredAlert ?? { itemId: item.id, enabled: true, warningQuantity: DEFAULT_LOW_STOCK_QUANTITY }
     const recipe = activeRecipes.find((candidate) => candidate.productId === item.id)
     if (recipe) {
       const ingredientBalances = recipe.lines.map((line) => inventory.balances.find((balance) => balance.productId === line.ingredientSkuId))
@@ -173,12 +177,13 @@ export function InventoryView() {
         unitCode: '杯（理论）',
         recipe,
         updatedAt: ingredientBalances.map((balance) => balance?.updatedAt).filter((value): value is string => Boolean(value)).sort().at(-1),
+        alertRule,
       }
     }
     const balance = inventory.balances.find((balance) => balance.productId === item.id)
-    return { item, balance, quantity: balance?.onHandQuantity ?? 0, unitCode: balance?.unitCode ?? item.defaultUnitCode, updatedAt: balance?.updatedAt }
+    return { item, balance, quantity: balance?.onHandQuantity ?? 0, unitCode: balance?.unitCode ?? item.defaultUnitCode, updatedAt: balance?.updatedAt, alertRule }
   })
-  const lowStockCount = balanceRows.filter((row) => row.quantity <= LOW_STOCK_QUANTITY).length
+  const lowStockCount = balanceRows.filter((row) => row.alertRule.enabled && row.quantity <= row.alertRule.warningQuantity).length
   const pendingCounts = inventory.stockCounts.filter((item) => item.status === 'pending_confirmation')
   const activeBottles = inventory.bottleBatches.filter((item) => ['stored', 'partially_used'].includes(item.status))
   const pendingApprovals = inventory.approvalRequests.filter((item) => item.status === 'pending')
@@ -202,7 +207,7 @@ export function InventoryView() {
 
       <div className="inventory-metrics" aria-label="库存概览">
         <Metric icon={<Boxes size={19} />} value={String(balanceRows.length)} label="在管商品" />
-        <Metric icon={<CircleAlert size={19} />} value={String(lowStockCount)} label={`关注库存 ≤ ${LOW_STOCK_QUANTITY}`} warning={lowStockCount > 0} />
+        <Metric icon={<CircleAlert size={19} />} value={String(lowStockCount)} label="按各项水位关注" warning={lowStockCount > 0} />
         <Metric icon={<ClipboardCheck size={19} />} value={String(pendingCounts.length)} label="待复核盘点" warning={pendingCounts.length > 0} />
         <Metric icon={<Wine size={19} />} value={String(activeBottles.length)} label="有效客存酒" />
         <Metric icon={<ShieldAlert size={19} />} value={String(pendingApprovals.length)} label="待审批单" warning={pendingApprovals.length > 0} />
@@ -216,7 +221,7 @@ export function InventoryView() {
         <TabButton active={tab === 'remake'} icon={<RotateCcw size={16} />} label="补做耗用" onClick={() => setTab('remake')} />
         <TabButton active={tab === 'bottles'} icon={<Wine size={16} />} label="客存酒" onClick={() => setTab('bottles')} />
         <TabButton active={tab === 'approvals'} icon={<ShieldAlert size={16} />} label="待审批" badge={pendingApprovals.length} onClick={() => setTab('approvals')} />
-        <TabButton active={tab === 'policy'} icon={<Settings2 size={16} />} label="权限策略" onClick={() => setTab('policy')} />
+        <TabButton active={tab === 'policy'} icon={<Settings2 size={16} />} label="库存配置" onClick={() => setTab('policy')} />
       </nav>
 
       {tab === 'overview' && <InventoryOverview inventory={inventory} products={products} rows={balanceRows} />}
@@ -237,7 +242,7 @@ export function InventoryView() {
         />
       )}
       {tab === 'approvals' && <ApprovalPanel approvals={inventory.approvalRequests} currentActorId={context.viewer?.actorId ?? currentActor()} busy={busyAction} execute={execute} />}
-      {tab === 'policy' && <PolicyPanel inventory={inventory} roles={context.config.roles} employees={context.employees} busy={busyAction} execute={execute} />}
+      {tab === 'policy' && <PolicyPanel inventory={inventory} roles={context.config.roles} employees={context.employees} rows={balanceRows} busy={busyAction} execute={execute} />}
     </section>
   )
 }
@@ -259,16 +264,19 @@ function InventoryOverview({
           <table className="inventory-table balance-table">
             <thead><tr><th>商品</th><th>SKU / 规格</th><th>可用数量</th><th>单位</th><th>最近更新</th><th>状态</th></tr></thead>
             <tbody>
-              {rows.map(({ item, balance, quantity, unitCode, recipe, updatedAt }) => (
-                <tr key={item.id} className={quantity <= LOW_STOCK_QUANTITY ? 'is-low-stock' : ''}>
+              {rows.map(({ item, balance, quantity, unitCode, recipe, updatedAt, alertRule }) => {
+                const lowStock = alertRule.enabled && quantity <= alertRule.warningQuantity
+                return (
+                <tr key={item.id} className={lowStock ? 'is-low-stock' : ''}>
                   <td><strong>{item.name}</strong><small>{item.kind === 'ingredient' ? '原料' : recipe ? `配方商品 · v${recipe.version}` : '整件商品'}</small></td>
                   <td>{item.sku}<small>{item.specification}</small></td>
                   <td className="quantity-cell">{quantity}</td>
                   <td>{unitCode}</td>
                   <td>{updatedAt ? formatDateTime(updatedAt) : balance ? formatDateTime(balance.updatedAt) : '尚无流水'}</td>
-                  <td><StatusPill tone={quantity === 0 ? 'danger' : quantity <= LOW_STOCK_QUANTITY ? 'warning' : 'success'}>{quantity === 0 ? '零库存' : quantity <= LOW_STOCK_QUANTITY ? '需关注' : '正常'}</StatusPill></td>
+                  <td><StatusPill tone={!alertRule.enabled ? 'neutral' : quantity === 0 ? 'danger' : lowStock ? 'warning' : 'success'}>{!alertRule.enabled ? '未监控' : quantity === 0 ? '零库存' : lowStock ? `需关注 ≤ ${alertRule.warningQuantity}` : '正常'}</StatusPill></td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         </div>
@@ -782,13 +790,17 @@ function ApprovalPanel({
   return <div className="inventory-content"><section className="inventory-section"><SectionHeading icon={<ShieldAlert size={18} />} title="双人审批单" meta={`${approvals.filter((item) => item.status === 'pending').length}笔待处理`} /><div className="approval-list">{approvals.length === 0 && <EmptyState icon={<ShieldCheck size={24} />} text="暂无高风险审批单" />}{approvals.toReversed().map((approval) => { const own = approval.requestedBy.employeeId === currentActorId; const decisionReason = reasons[approval.id] ?? ''; return <article className="approval-row" key={approval.id}><div><StatusPill tone={approval.status === 'approved' ? 'success' : approval.status === 'rejected' ? 'danger' : 'warning'}>{approval.status === 'pending' ? '待审批' : approval.status === 'approved' ? '已执行' : '已驳回'}</StatusPill><small>{actionLabel(approval.action)}</small></div><div className="approval-detail"><strong>{approval.requestReason}</strong><span>发起：{approval.requestedBy.displayName} · {formatDateTime(approval.requestedAt)}</span><small>{approval.requestedBy.authenticatedBy === 'signed_session' ? '签名会话' : '本地开发身份'} · {shortId(approval.targetId)}</small>{approval.decidedBy && <small>决定：{approval.decidedBy.displayName} · {formatDateTime(approval.decidedAt!)}</small>}</div>{approval.status === 'pending' && <><Field label="审批意见"><input value={decisionReason} disabled={own || Boolean(busy)} placeholder={own ? '发起人不能自批' : '必填，写明核验依据'} onChange={(event) => setReasons((current) => ({ ...current, [approval.id]: event.target.value }))} /></Field><div className="approval-actions"><button className="primary-button" type="button" disabled={own || !decisionReason.trim() || Boolean(busy)} onClick={() => decide(approval, 'approve')}><Check size={16} />批准并执行</button><button className="secondary-button" type="button" disabled={own || !decisionReason.trim() || Boolean(busy)} onClick={() => decide(approval, 'reject')}><Ban size={16} />驳回</button></div></>}</article>})}</div></section></div>
 }
 
-function PolicyPanel({ inventory, roles, employees, busy, execute }: { inventory: InventoryDomainState; roles: RoleConfig[]; employees: Employee[]; busy: string; execute: ExecuteOperation }) {
+function PolicyPanel({ inventory, roles, employees, rows, busy, execute }: { inventory: InventoryDomainState; roles: RoleConfig[]; employees: Employee[]; rows: InventoryBalanceRow[]; busy: string; execute: ExecuteOperation }) {
   const [draft, setDraft] = useState<InventoryOperationPolicy>(() => structuredClone(inventory.policy))
   const [reason, setReason] = useState('按门店库存岗位职责调整')
+  const alertDraftSource = JSON.stringify(rows.map((row) => row.alertRule))
+  const [alertDraft, setAlertDraft] = useState<Array<Pick<InventoryStockAlertRule, 'itemId' | 'enabled' | 'warningQuantity'>>>(() => JSON.parse(alertDraftSource))
+  const [alertReason, setAlertReason] = useState('按实际备货周期调整预警水位')
   const actor = employees.find((employee) => employee.id === currentActor())
   const canEdit = Boolean(actor && inventory.policy.policyAdminRoleIds.includes(actor.roleId))
 
   useEffect(() => setDraft(structuredClone(inventory.policy)), [inventory.policy])
+  useEffect(() => setAlertDraft(JSON.parse(alertDraftSource)), [alertDraftSource])
 
   function toggle(field: keyof InventoryOperationPolicy, roleId: string) {
     setDraft((current) => ({
@@ -800,6 +812,11 @@ function PolicyPanel({ inventory, roles, employees, busy, execute }: { inventory
   function submit(event: FormEvent) {
     event.preventDefault()
     void execute('policy', '库存岗位权限已更新并写入审计记录', () => inventoryApi.updateInventoryPolicy(draft, reason.trim()))
+  }
+
+  function submitAlerts(event: FormEvent) {
+    event.preventDefault()
+    void execute('stock-alerts', '库存预警水位已更新并写入审计记录', () => inventoryApi.updateStockAlertRules(alertDraft, alertReason.trim()))
   }
 
   return (
@@ -816,6 +833,26 @@ function PolicyPanel({ inventory, roles, employees, busy, execute }: { inventory
           <div className="policy-save-band">
             <Field label="调整原因"><input required minLength={2} maxLength={500} value={reason} disabled={!canEdit} onChange={(event) => setReason(event.target.value)} /></Field>
             <button className="primary-button" type="submit" disabled={!canEdit || !reason.trim() || Boolean(busy)}>{busy === 'policy' ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />}保存权限</button>
+          </div>
+        </form>
+      </section>
+      <section className="inventory-section">
+        <SectionHeading icon={<CircleAlert size={18} />} title="库存预警水位" meta={canEdit ? '每项独立配置' : '当前只读'} />
+        <form onSubmit={submitAlerts}>
+          <div className="stock-alert-grid">
+            {rows.map((row) => {
+              const rule = alertDraft.find((item) => item.itemId === row.item.id) ?? row.alertRule
+              return <div className="stock-alert-row" key={row.item.id}>
+                <div><strong>{row.item.name}</strong><small>{row.item.kind === 'ingredient' ? `原料 · ${row.unitCode}` : row.recipe ? '配方商品 · 理论出品数' : `整件商品 · ${row.unitCode}`}</small></div>
+                <label className="switch"><input aria-label={`${row.item.name}启用库存预警`} type="checkbox" checked={rule.enabled} disabled={!canEdit || Boolean(busy)} onChange={(event) => setAlertDraft((current) => current.map((item) => item.itemId === row.item.id ? { ...item, enabled: event.target.checked } : item))} /><span /></label>
+                <Field label="预警水位"><input aria-label={`${row.item.name}预警水位`} type="number" min={0} step={1} value={rule.warningQuantity} disabled={!canEdit || !rule.enabled || Boolean(busy)} onChange={(event) => setAlertDraft((current) => current.map((item) => item.itemId === row.item.id ? { ...item, warningQuantity: Math.max(0, Math.floor(Number(event.target.value) || 0)) } : item))} /></Field>
+                <span className={rule.enabled && row.quantity <= rule.warningQuantity ? 'stock-alert-current is-warning' : 'stock-alert-current'}>当前 {row.quantity}</span>
+              </div>
+            })}
+          </div>
+          <div className="policy-save-band">
+            <Field label="调整原因"><input required minLength={2} maxLength={500} value={alertReason} disabled={!canEdit} onChange={(event) => setAlertReason(event.target.value)} /></Field>
+            <button className="primary-button" type="submit" disabled={!canEdit || !alertReason.trim() || Boolean(busy)}>{busy === 'stock-alerts' ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />}保存水位</button>
           </div>
         </form>
       </section>

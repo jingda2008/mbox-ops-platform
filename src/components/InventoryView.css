@@ -112,6 +112,13 @@
 .policy-table th:not(:first-child), .policy-table td:not(:first-child) { width: 115px; text-align: center; }
 .policy-table input { width: 17px; height: 17px; accent-color: var(--success); }
 .policy-save-band { display: grid; grid-template-columns: minmax(240px, 1fr) auto; align-items: end; gap: 11px; padding: 13px 17px; border-top: 1px solid var(--line); background: #f7f8f5; }
+.stock-alert-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.stock-alert-row { min-height: 70px; display: grid; grid-template-columns: minmax(130px, 1fr) 42px 110px 90px; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.stock-alert-row:nth-child(odd) { border-right: 1px solid var(--line); }
+.stock-alert-row > div:first-child { min-width: 0; display: grid; gap: 3px; }
+.stock-alert-row > div:first-child small { color: var(--ink-soft); font-size: 9px; }
+.stock-alert-current { color: var(--ink-soft); font-size: 10px; text-align: right; }
+.stock-alert-current.is-warning { color: var(--danger); font-weight: 750; }
 .recipe-lines { display: grid; gap: 8px; }
 .recipe-line { display: grid; grid-template-columns: minmax(180px, 1.4fr) minmax(130px, .8fr) minmax(120px, .7fr) 38px; align-items: end; gap: 8px; padding: 10px; border: 1px solid var(--line); background: #f7f8f5; }
 .recipe-line .icon-button { width: 38px; min-height: 38px; }
@@ -172,6 +179,8 @@
   .approval-row > .inventory-field, .approval-actions { grid-column: 1 / -1; }
   .approval-actions { justify-content: stretch; }
   .approval-actions button { flex: 1; }
+  .stock-alert-grid { grid-template-columns: 1fr; }
+  .stock-alert-row:nth-child(odd) { border-right: 0; }
 }
 
 @media (max-width: 520px) {
@@ -194,6 +203,8 @@
   .bottle-actions { display: grid; grid-template-columns: 1fr 1fr 36px; }
   .policy-save-band { grid-template-columns: 1fr; padding-inline: 12px; }
   .policy-save-band button { width: 100%; }
+  .stock-alert-row { grid-template-columns: minmax(0, 1fr) 38px 92px; }
+  .stock-alert-current { grid-column: 1 / -1; text-align: left; }
   .recipe-line { grid-template-columns: 1fr 38px; }
   .recipe-line .inventory-field { grid-column: 1 / -1; }
   .recipe-line .icon-button { grid-column: 2; }

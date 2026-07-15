@@ -47,6 +47,7 @@ export function createInventoryDomainState(
   return {
     ...scope,
     policy: structuredClone(policy),
+    stockAlertRules: [],
     ingredientSkus: [],
     recipeVersions: [],
     balances: [],
@@ -62,6 +63,7 @@ export function createInventoryDomainState(
 
 /** Repairs optional collections from inventory documents persisted before the feature existed. */
 export function normalizeInventoryDomainState(state: InventoryDomainState) {
+  state.stockAlertRules ??= []
   state.ingredientSkus ??= []
   state.recipeVersions ??= []
   state.approvalRequests ??= []

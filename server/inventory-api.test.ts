@@ -221,6 +221,38 @@ describe('inventory API', () => {
     await repository.close()
   })
 
+  it('persists per-item stock alert levels with permission checks and audit evidence', async () => {
+    const { app, repository } = await fixture()
+    const payload = {
+      rules: [
+        { itemId: 'product-beer', enabled: true, warningQuantity: 24 },
+        { itemId: 'product-cocktail', enabled: false, warningQuantity: 10 },
+      ],
+      reason: '啤酒按一箱备货，鸡尾酒暂按原料监控',
+      idempotencyKey: 'inventory-stock-alerts-0001',
+    }
+    const denied = await app.inject({
+      method: 'PUT', url: '/api/inventory/stock-alerts', headers: headers('emp-mia'), payload,
+    })
+    expect(denied.statusCode).toBe(403)
+
+    const updated = await app.inject({
+      method: 'PUT', url: '/api/inventory/stock-alerts', headers: headers('emp-chen'), payload,
+    })
+    expect(updated.statusCode, updated.body).toBe(200)
+    expect(updated.json()).toMatchObject(payload.rules)
+
+    const replay = await app.inject({
+      method: 'PUT', url: '/api/inventory/stock-alerts', headers: headers('emp-chen'), payload,
+    })
+    expect(replay.statusCode).toBe(200)
+    const state = await repository.read()
+    expect(state.inventoryDomain?.stockAlertRules).toMatchObject(payload.rules)
+    expect(state.auditEntries.filter((entry) => entry.action === 'inventory.stock_alerts.updated.v1')).toHaveLength(1)
+    await app.close()
+    await repository.close()
+  })
+
   it('enforces the approver cost limit before applying a stock-count variance', async () => {
     const { app, repository } = await fixture()
     const occurredAt = new Date().toISOString()

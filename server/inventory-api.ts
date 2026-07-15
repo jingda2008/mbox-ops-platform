@@ -5,6 +5,7 @@ import type {
   InventoryApprovalActorSnapshot,
   InventoryDomainState,
   InventoryOperationPolicy,
+  InventoryStockAlertRule,
 } from '../src/shared/inventory-contracts.js'
 import type { Employee, RuntimeState } from '../src/shared/contracts.js'
 import {
@@ -87,6 +88,11 @@ const policySchema = z.object({
   bottleDepositRoleIds: z.array(identifier),
   bottleUseRoleIds: z.array(identifier),
   bottleApprovalRoleIds: z.array(identifier),
+}).strict()
+const stockAlertRuleSchema = z.object({
+  itemId: identifier,
+  enabled: z.boolean(),
+  warningQuantity: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
 }).strict()
 
 function deterministicId(prefix: string, key: string) {
@@ -260,6 +266,58 @@ export function registerInventoryRoutes(app: FastifyInstance, repository: Runtim
         details: { reason: input.reason, idempotencyKey: input.idempotencyKey, policy: structuredClone(input.policy) },
       })
       return domain.policy
+    })
+  })
+
+  app.put('/api/inventory/stock-alerts', async (request) => {
+    const input = z.object({
+      rules: z.array(stockAlertRuleSchema).max(1_000),
+      reason,
+      idempotencyKey,
+    }).strict().parse(request.body)
+    return repository.mutate((state) => {
+      const actor = requireConfiguredInventoryActor(state, request, 'inventory.approve')
+      const domain = inventory(state)
+      requirePolicyRole(actor, domain.policy.policyAdminRoleIds, 'inventory.approve', '修改库存预警水位')
+      const itemIds = new Set([...state.products.map((item) => item.id), ...domain.ingredientSkus.map((item) => item.id)])
+      const submittedIds = new Set<string>()
+      for (const rule of input.rules) {
+        if (!itemIds.has(rule.itemId)) throw new Error(`库存预警引用了不存在的商品或原料：${rule.itemId}`)
+        if (submittedIds.has(rule.itemId)) throw new Error(`库存预警不能重复配置：${rule.itemId}`)
+        submittedIds.add(rule.itemId)
+      }
+      const existing = state.auditEntries.find((entry) =>
+        entry.action === 'inventory.stock_alerts.updated.v1' && entry.details.idempotencyKey === input.idempotencyKey,
+      )
+      if (existing) {
+        if (JSON.stringify(existing.details.rules) !== JSON.stringify(input.rules)) throw new Error('幂等键已用于不同库存预警配置')
+        return domain.stockAlertRules
+      }
+      const before = structuredClone(domain.stockAlertRules)
+      const now = new Date().toISOString()
+      const rules: InventoryStockAlertRule[] = input.rules.map((rule) => ({
+        ...rule,
+        updatedAt: now,
+        updatedBy: actor.id,
+      }))
+      domain.stockAlertRules = rules
+      state.revision += 1
+      state.auditEntries.push({
+        id: deterministicId('audit_inventory_stock_alerts', input.idempotencyKey),
+        actorId: actor.id,
+        action: 'inventory.stock_alerts.updated.v1',
+        objectType: 'inventoryStockAlerts',
+        objectId: state.store.id,
+        occurredAt: now,
+        details: {
+          reason: input.reason,
+          idempotencyKey: input.idempotencyKey,
+          before,
+          rules: structuredClone(input.rules),
+          after: structuredClone(rules),
+        },
+      })
+      return rules
     })
   })
 

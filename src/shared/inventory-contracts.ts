@@ -90,6 +90,15 @@ export interface InventoryBalance extends InventoryScope {
   updatedAt: string
 }
 
+export interface InventoryStockAlertRule {
+  itemId: string
+  enabled: boolean
+  /** Warning threshold in the item's inventory unit, or theoretical servings for recipe products. */
+  warningQuantity: InventoryQuantity
+  updatedAt: string
+  updatedBy: string
+}
+
 /** Inventory movements are immutable facts. Corrections are represented by new movements. */
 export interface InventoryMovement extends InventoryScope {
   id: string
@@ -258,6 +267,7 @@ export interface InventoryIdempotencyRecord {
 
 export interface InventoryDomainState extends InventoryScope {
   policy: InventoryOperationPolicy
+  stockAlertRules: InventoryStockAlertRule[]
   ingredientSkus: InventoryIngredientSku[]
   recipeVersions: InventoryRecipeVersion[]
   balances: InventoryBalance[]

@@ -6,12 +6,14 @@ import type { Reservation, ReservationState } from '../src/shared/reservation-co
 import { createReservation } from './reservation-domain.js'
 import { mutateReservationState, reservationsFor } from './reservation-api.js'
 import type { RuntimeRepository } from './repository.js'
+import type { RateLimitStore } from './rate-limit.js'
 
 type RuntimeStateWithReservations = RuntimeState & { reservationState?: ReservationState }
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60_000
 const SESSION_ISSUE_LIMIT = 20
 const SESSION_ISSUE_WINDOW_MS = 60 * 60_000
+const SESSION_ISSUE_SCOPE = 'public.reservation-session'
 
 const createSchema = z.object({
   customerName: z.string().trim().min(1).max(100),
@@ -121,22 +123,23 @@ function bearerToken(request: FastifyRequest, reply: FastifyReply) {
 export function registerPublicReservationRoutes(
   app: FastifyInstance,
   repository: RuntimeRepository,
-  options: { secret: string; now?: () => number },
+  options: { secret: string; now?: () => number; rateLimitStore?: RateLimitStore },
 ) {
+  if (!options.rateLimitStore) throw new Error('Public reservation API requires a persistent rateLimitStore')
   const now = options.now ?? Date.now
-  const issues = new Map<string, { startedAt: number; count: number }>()
+  const rateLimitStore = options.rateLimitStore
 
   app.post('/api/public/reservation-session', async (request, reply) => {
     const current = now()
-    const existing = issues.get(request.ip)
-    const window = !existing || current - existing.startedAt >= SESSION_ISSUE_WINDOW_MS
-      ? { startedAt: current, count: 0 }
-      : existing
-    if (window.count >= SESSION_ISSUE_LIMIT) {
+    const decision = await rateLimitStore.consume({
+      scope: SESSION_ISSUE_SCOPE,
+      key: request.ip,
+      limit: SESSION_ISSUE_LIMIT,
+      windowMs: SESSION_ISSUE_WINDOW_MS,
+    })
+    if (!decision.allowed) {
       return reply.status(429).send({ code: 'PUBLIC_RESERVATION_RATE_LIMITED', message: '请求过于频繁，请稍后再试' })
     }
-    window.count += 1
-    issues.set(request.ip, window)
     const state = await repository.read()
     const expiresAt = current + SESSION_TTL_MS
     return {

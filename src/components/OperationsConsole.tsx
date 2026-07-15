@@ -36,7 +36,7 @@ import {
   Unlink,
   UserPlus,
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import {
   actOnTask,
   assignTableSessionSales,
@@ -65,17 +65,18 @@ import type {
   TaskActionInput,
 } from '../shared/contracts'
 import { TaskQueue } from './TaskQueue'
-import { MasterDataView } from './MasterDataView'
-import { CommerceView } from './CommerceView'
-import { PaymentView } from './PaymentView'
-import { BenefitCenterView } from './BenefitCenterView'
-import { SongCenterView } from './SongCenterView'
-import { ReservationView } from './ReservationView'
-import { InventoryView } from './InventoryView'
 import { getFulfillmentAccess, kdsTaskOperationallyActive, taskVisibleToAccess } from './commerce-workspace'
 import { RoleHomeView } from './RoleHomeView'
 import { getRoleHomeAccess, type RoleHomeNavigationId } from './role-access'
 import './OperationsConsole.css'
+
+const MasterDataView = lazy(() => import('./MasterDataView').then((module) => ({ default: module.MasterDataView })))
+const CommerceView = lazy(() => import('./CommerceView').then((module) => ({ default: module.CommerceView })))
+const PaymentView = lazy(() => import('./PaymentView').then((module) => ({ default: module.PaymentView })))
+const BenefitCenterView = lazy(() => import('./BenefitCenterView').then((module) => ({ default: module.BenefitCenterView })))
+const SongCenterView = lazy(() => import('./SongCenterView').then((module) => ({ default: module.SongCenterView })))
+const ReservationView = lazy(() => import('./ReservationView').then((module) => ({ default: module.ReservationView })))
+const InventoryView = lazy(() => import('./InventoryView').then((module) => ({ default: module.InventoryView })))
 
 type View = 'home' | RoleHomeNavigationId
 
@@ -581,6 +582,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
         {notice && <div className="notice-bar" role="status">{notice}<button onClick={() => setNotice('')}><X size={16} /></button></div>}
 
         <main className="main-content" aria-busy={busy}>
+          <Suspense fallback={<div className="empty-state" role="status">正在载入当前工作台</div>}>
           {view === 'home' && (
             <RoleHomeView
               data={data}
@@ -905,6 +907,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
               </div>
             </section>
           )}
+          </Suspense>
         </main>
       </div>
     </div>

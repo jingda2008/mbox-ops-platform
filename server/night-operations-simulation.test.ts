@@ -662,7 +662,7 @@ describe('真实营业夜间全链路仿真', () => {
     ]))
   })
 
-  it('所有阻断项清零后经理可日结，班次与员工状态同步关闭且重放幂等', async () => {
+  it('所有阻断项清零后经理可日结，生成次日班次且重放幂等', async () => {
     const { app, repository } = await buildFixture()
     apps.push(app)
     const businessDate = repository.state.store.businessDate
@@ -709,12 +709,17 @@ describe('真实营业夜间全链路仿真', () => {
     expect(first.statusCode, first.body).toBe(200)
     expect(replay.statusCode, replay.body).toBe(200)
     expect(replay.json()).toEqual(first.json())
-    expect(first.json()).toMatchObject({ status: 'closed', businessDate, nextBusinessDate: followingDate })
+    expect(first.json()).toMatchObject({
+      status: 'closed', businessDate, nextBusinessDate: followingDate,
+      shiftContinuity: { source: 'copied' },
+    })
 
     const state = await repository.read()
     expect(state.store.businessDate).toBe(followingDate)
     expect(state.shiftAssignments.filter((shift) => shift.businessDate === businessDate).every((shift) => shift.status === 'completed')).toBe(true)
+    expect(state.shiftAssignments.filter((shift) => shift.businessDate === followingDate && shift.status === 'active')).toHaveLength(12)
     expect(state.employees.every((employee) => !employee.online && !employee.paused)).toBe(true)
     expect(state.auditEntries.filter((entry) => entry.action === 'business_day.closed.v1')).toHaveLength(1)
+    expect(state.auditEntries.filter((entry) => entry.action === 'business_day.shift_continuity_prepared.v1')).toHaveLength(1)
   })
 })

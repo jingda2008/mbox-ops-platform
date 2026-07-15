@@ -4,6 +4,7 @@ import type { RuntimeState } from '../src/shared/contracts.js'
 import type { RuntimeRepository, RuntimeRepositoryHealth } from './repository.js'
 import { createSeedState } from './seed.js'
 import { registerPublicReservationRoutes, signPublicReservationSession } from './public-reservation-api.js'
+import { MemoryRateLimitStore, type RateLimitStore } from './rate-limit.js'
 
 const NOW = Date.parse('2030-07-14T10:00:00.000Z')
 const SECRET = 'r'.repeat(32)
@@ -23,10 +24,16 @@ class MemoryRepository implements RuntimeRepository {
   async close() {}
 }
 
-async function fixture() {
+function rateLimitStore() {
+  return new MemoryRateLimitStore({
+    usage: 'test', tenantId: 'tenant-test', storeId: 'mbox-lujiazui', hashSecret: 'l'.repeat(32), now: () => NOW,
+  })
+}
+
+async function fixture(limiter: RateLimitStore = rateLimitStore()) {
   const app = Fastify()
   const repository = new MemoryRepository()
-  registerPublicReservationRoutes(app, repository, { secret: SECRET, now: () => NOW })
+  registerPublicReservationRoutes(app, repository, { secret: SECRET, now: () => NOW, rateLimitStore: limiter })
   await app.ready()
   return { app, repository }
 }
@@ -83,5 +90,21 @@ describe('public reservation pilot API', () => {
     expect(unsigned.statusCode).toBe(401)
     expect(invalidTime.statusCode).toBe(400)
     expect(invalidTime.json()).toMatchObject({ code: 'PUBLIC_RESERVATION_TIME_INVALID' })
+  })
+
+  it('shares session issuance limits across route instances', async () => {
+    const sharedLimiter = rateLimitStore()
+    const first = await fixture(sharedLimiter)
+    const second = await fixture(sharedLimiter)
+    apps.push(first.app, second.app)
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const target = attempt % 2 === 0 ? first.app : second.app
+      const response = await target.inject({ method: 'POST', url: '/api/public/reservation-session' })
+      expect(response.statusCode).toBe(200)
+    }
+    const blocked = await second.app.inject({ method: 'POST', url: '/api/public/reservation-session' })
+    expect(blocked.statusCode).toBe(429)
+    expect(blocked.json().code).toBe('PUBLIC_RESERVATION_RATE_LIMITED')
   })
 })

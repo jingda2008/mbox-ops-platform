@@ -2,6 +2,7 @@ export type RuntimeMode = 'local' | 'test' | 'staging' | 'production'
 
 export interface StaffSessionClaims {
   version: 1
+  sessionId: string
   actorId: string
   storeId: string
   issuedAt: number
@@ -14,6 +15,8 @@ export interface RequestActorContext {
   roleId: string
   runtimeMode: RuntimeMode
   authenticatedBy: 'local_header' | 'signed_session'
+  sessionId: string | null
+  sessionExpiresAt: number | null
 }
 
 export interface PilotEmployeeOption {
@@ -27,4 +30,14 @@ export interface PilotLoginResponse {
   token?: string
   expiresAt?: number
   employee?: PilotEmployeeOption
+  sessionId?: string
+  presenceExpiresAt?: number
+}
+
+export interface StaffPresenceResponse {
+  sessionId: string
+  actorId: string
+  online: boolean
+  leaseExpiresAt: number | null
+  heartbeatAfterMs: number
 }

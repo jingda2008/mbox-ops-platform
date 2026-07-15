@@ -13,13 +13,18 @@ import {
   TriangleAlert,
   WifiOff,
 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { ApiError, actOnTask, createPilotSession, getBootstrap, getPilotEmployees, replayQueuedTaskAction } from './api'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import {
+  ApiError,
+  actOnTask,
+  createPilotSession,
+  endStaffPresence,
+  getBootstrap,
+  getPilotEmployees,
+  heartbeatStaffPresence,
+  replayQueuedTaskAction,
+} from './api'
 import './App.css'
-import { GuestPortal } from './components/GuestPortal'
-import { MemberBenefitsPortal } from './components/MemberBenefitsPortal'
-import { OperationsConsole } from './components/OperationsConsole'
-import { PublicReservationPortal } from './components/PublicReservationPortal'
 import { ServiceIcon } from './components/ServiceIcon'
 import {
   clearOfflineDataForEmployeeChange,
@@ -40,6 +45,42 @@ import type { PilotEmployeeOption } from './shared/auth-contracts'
 import './system-ui.css'
 
 const RESTRICTED_OFFLINE_VIEWS = '.payment-view, .config-view, .benefit-view, .song-view, .master-view, .commerce-view, .reservation-view, .inventory-view'
+const BOOTSTRAP_POLL_INTERVAL_MS = 2000
+const GuestPortal = lazy(() => import('./components/GuestPortal').then((module) => ({ default: module.GuestPortal })))
+const MemberBenefitsPortal = lazy(() => import('./components/MemberBenefitsPortal').then((module) => ({ default: module.MemberBenefitsPortal })))
+const OperationsConsole = lazy(() => import('./components/OperationsConsole').then((module) => ({ default: module.OperationsConsole })))
+const PublicReservationPortal = lazy(() => import('./components/PublicReservationPortal').then((module) => ({ default: module.PublicReservationPortal })))
+
+function WorkspaceLoading() {
+  return <main className="system-state"><LoaderCircle className="spin" size={28} /><strong>正在载入工作台</strong></main>
+}
+
+function LazyWorkspace({ children }: { children: React.ReactNode }) {
+  return <Suspense fallback={<WorkspaceLoading />}>{children}</Suspense>
+}
+
+// oxlint-disable-next-line react/only-export-components -- exported for deterministic lifecycle tests
+export function startBootstrapPolling(
+  enabled: boolean,
+  refresh: () => void | Promise<void>,
+  isOnline: () => boolean = () => getOfflineStatus().online,
+  schedule: (callback: () => void, delay: number) => number = window.setInterval,
+  cancel: (timer: number) => void = window.clearInterval,
+) {
+  if (!enabled) return () => undefined
+
+  void refresh()
+  const timer = schedule(() => {
+    if (isOnline()) void refresh()
+  }, BOOTSTRAP_POLL_INTERVAL_MS)
+  return () => cancel(timer)
+}
+
+function clearStoredStaffSession() {
+  window.localStorage.removeItem('mbox.auth.token')
+  window.localStorage.removeItem('mbox.actor.id')
+  window.localStorage.removeItem('mbox.actor.name')
+}
 
 export default function App() {
   const isGuest = window.location.pathname.startsWith('/guest')
@@ -68,7 +109,10 @@ export default function App() {
         setGuardNotice('现场快照未能写入本机，断网重载时将不可用')
       }
     } catch (requestError) {
-      if (requestError instanceof ApiError && requestError.status === 401) setRequiresLogin(true)
+      if (requestError instanceof ApiError && requestError.status === 401) {
+        clearStoredStaffSession()
+        setRequiresLogin(true)
+      }
       setError(requestError instanceof Error ? requestError.message : '无法连接运营服务')
     }
   }, [])
@@ -83,12 +127,41 @@ export default function App() {
   useEffect(() => {
     if (isGuest || isMember || isPublicReservation) return
     void loadOfflineSnapshot().then(setSnapshot).catch(() => undefined)
-    void refresh()
-    const timer = window.setInterval(() => {
-      if (getOfflineStatus().online) void refresh()
-    }, 2000)
-    return () => window.clearInterval(timer)
-  }, [isGuest, isMember, isPublicReservation, refresh])
+  }, [isGuest, isMember, isPublicReservation])
+
+  useEffect(() => startBootstrapPolling(
+    !isGuest && !isMember && !isPublicReservation && !requiresLogin,
+    refresh,
+  ), [isGuest, isMember, isPublicReservation, refresh, requiresLogin])
+
+  useEffect(() => {
+    if (isGuest || isMember || isPublicReservation || requiresLogin || !window.localStorage.getItem('mbox.auth.token')) return
+    let stopped = false
+    let timer: number | undefined
+    const schedule = (delay: number) => {
+      timer = window.setTimeout(() => void heartbeat(), Math.max(5_000, delay))
+    }
+    const heartbeat = async () => {
+      try {
+        const presence = await heartbeatStaffPresence()
+        if (!stopped) schedule(presence.heartbeatAfterMs)
+      } catch (heartbeatError) {
+        if (heartbeatError instanceof ApiError && heartbeatError.status === 401) {
+          clearStoredStaffSession()
+          setRequiresLogin(true)
+          setData(null)
+          setSnapshot(null)
+          return
+        }
+        if (!stopped) schedule(15_000)
+      }
+    }
+    void heartbeat()
+    return () => {
+      stopped = true
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
+  }, [isGuest, isMember, isPublicReservation, requiresLogin])
 
   useEffect(() => {
     const syncJustCompleted = previousPendingCount.current > 0 && offlineStatus.pendingCount === 0
@@ -103,10 +176,11 @@ export default function App() {
     )) return
     setSwitchingEmployee(true)
     try {
+      if (offlineStatus.online && window.localStorage.getItem('mbox.auth.token')) {
+        await endStaffPresence().catch(() => undefined)
+      }
       await clearOfflineDataForEmployeeChange()
-      window.localStorage.removeItem('mbox.auth.token')
-      window.localStorage.removeItem('mbox.actor.id')
-      window.localStorage.removeItem('mbox.actor.name')
+      clearStoredStaffSession()
       setData(null)
       setSnapshot(null)
       setError('')
@@ -118,15 +192,14 @@ export default function App() {
     }
   }
 
-  if (isGuest) return <GuestPortal />
-  if (isMember) return <MemberBenefitsPortal />
-  if (isPublicReservation) return <PublicReservationPortal />
+  if (isGuest) return <LazyWorkspace><GuestPortal /></LazyWorkspace>
+  if (isMember) return <LazyWorkspace><MemberBenefitsPortal /></LazyWorkspace>
+  if (isPublicReservation) return <LazyWorkspace><PublicReservationPortal /></LazyWorkspace>
 
   if (requiresLogin) {
     return <PilotLogin onAuthenticated={() => {
       setRequiresLogin(false)
       setError('')
-      void refresh()
     }} />
   }
 
@@ -188,7 +261,7 @@ export default function App() {
           <button title="关闭提示" onClick={() => setGuardNotice('')}>关闭</button>
         </div>
       )}
-      <OperationsConsole data={data} onRefresh={refresh} />
+      <LazyWorkspace><OperationsConsole data={data} onRefresh={refresh} /></LazyWorkspace>
     </div>
   )
 }

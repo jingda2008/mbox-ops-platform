@@ -75,6 +75,17 @@ export interface Employee {
   skillIds?: string[]
 }
 
+export interface PresenceLease {
+  sessionId: string
+  actorId: string
+  storeId: string
+  businessDate: string
+  establishedAt: number
+  lastSeenAt: number
+  expiresAt: number
+  sessionExpiresAt: number
+}
+
 export interface ShiftAssignment {
   id: string
   employeeId: string
@@ -462,6 +473,8 @@ export interface RuntimeState {
   areas: Area[]
   tables: Table[]
   employees: Employee[]
+  /** Active device leases. Legacy snapshots are initialized by runtime migration. */
+  presenceLeases?: PresenceLease[]
   shiftAssignments: ShiftAssignment[]
   products: MenuProduct[]
   orderDomain: OrderDomainState
@@ -706,7 +719,8 @@ export const employeeWriteSchema = z.object({
   roleId: z.string().trim().min(1).max(64),
   roleIds: z.array(z.string().trim().min(1).max(64)).max(12).optional(),
   permissionIds: z.array(z.enum(staffPermissionIds)).max(staffPermissionIds.length).optional(),
-  online: z.boolean(),
+  // Kept in the transport contract for old clients; presence leases are authoritative.
+  online: z.boolean().transform(() => false),
   paused: z.boolean(),
   areaIds: z.array(z.string().trim().min(1)).max(20),
   skillIds: z.array(z.string().trim().min(1).max(64)).max(20).optional(),

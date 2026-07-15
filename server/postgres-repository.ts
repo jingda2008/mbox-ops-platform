@@ -275,6 +275,7 @@ export class PostgresRepository {
   private initPromise: Promise<void> | null = null
   private closePromise: Promise<void> | null = null
   private readonly inFlight = new Set<Promise<unknown>>()
+  private cachedState: RuntimeState | null = null
 
   constructor(options: PostgresRepositoryOptions) {
     assertUuid('tenantId', options.tenantId)
@@ -317,7 +318,7 @@ export class PostgresRepository {
   }
 
   async read(): Promise<RuntimeState> {
-    return this.track(() => this.withTransaction(true, async (client) => this.loadState(client)))
+    return this.track(() => this.withTransaction(true, async (client) => this.loadStateCached(client)))
   }
 
   async mutate<T>(
@@ -498,6 +499,23 @@ export class PostgresRepository {
       throw new PostgresStateCorruptionError('Runtime state checksum mismatch')
     }
     return migrateRuntimeState(state)
+  }
+
+  private async loadStateCached(client: PostgresPoolClient): Promise<RuntimeState> {
+    const revisionResult = await client.query<{ revision: number | string }>(SQL.selectRevision, [
+      this.tenantId,
+      this.storeId,
+    ])
+    const revisionValue = revisionResult.rows[0]?.revision
+    if (revisionResult.rowCount !== 1 || revisionValue === undefined) {
+      throw new PostgresRuntimeStateNotInitializedError()
+    }
+    const revision = parseRevision(revisionValue)
+    if (this.cachedState?.revision === revision) return structuredClone(this.cachedState)
+
+    const loaded = await this.loadState(client)
+    this.cachedState = structuredClone(loaded)
+    return loaded
   }
 
   private async claimIdempotency<T>(

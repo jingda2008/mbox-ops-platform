@@ -1,6 +1,7 @@
 import type { RoleConfig, RuntimeState, StaffPermissionId, StoreConfig } from '../src/shared/contracts.js'
 import { createSeedConfig } from './seed.js'
 import { withDefaultRolePolicy } from '../src/shared/role-policy.js'
+import { reconcilePresence } from './presence.js'
 
 interface BuiltInRoleUpgrade {
   requiredPermissionIds: StaffPermissionId[]
@@ -149,6 +150,7 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
     roleIds: [...new Set(assignment.roleIds ?? [])].filter((roleId) => roleId !== assignment.roleId),
     stationIds: assignment.stationIds ?? [],
   }))
+  reconcilePresence(migrated, Date.now(), false)
   const menuDefaults = new Map([
     ['product-cocktail', { categoryId: 'drinks', categoryName: '酒水', description: '柑橘香气与清爽气泡，现场现调。', imageUrl: '/menu/cocktail.jpg', tags: ['招牌', '现调'], sortOrder: 1 }],
     ['product-beer', { categoryId: 'drinks', categoryName: '酒水', description: '冰镇精酿，入口清爽，适合分享。', imageUrl: '/menu/beer.jpg', tags: ['冰镇'], sortOrder: 2 }],

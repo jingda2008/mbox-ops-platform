@@ -44,6 +44,7 @@ async function signedFixture() {
 function signedHeaders(actorId: string, now = Date.now()) {
   return {
     authorization: `Bearer ${signStaffSession({
+      sessionId: `session-${actorId}`,
       actorId,
       storeId: 'mbox-lujiazui',
       issuedAt: now - 1000,

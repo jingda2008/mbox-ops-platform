@@ -69,6 +69,60 @@ describe('role home access', () => {
       { id: 'kds', value: 1, navigationId: 'commerce' },
     ])
   })
+
+  it('uses every active shift role when counting production KDS metrics and todos', () => {
+    const data = bootstrapForRole('bartender', '吧台')
+    data.config.roles.push({
+      ...data.config.roles[0]!,
+      id: 'kitchen',
+      name: '厨房',
+    })
+    data.shiftAssignments[0]!.roleIds = ['kitchen']
+    const baseTask = data.orderDomain.kdsTasks[0]!
+    data.orderDomain.kdsTasks = [
+      {
+        ...baseTask,
+        id: 'kds-secondary-production',
+        status: 'queued',
+        workstation: { ...baseTask.workstation!, productionRoleIds: ['kitchen'], deliveryRoleIds: [] },
+        deliveryServiceTask: undefined,
+      },
+      {
+        ...baseTask,
+        id: 'kds-secondary-handoff',
+        status: 'completed',
+        workstation: { ...baseTask.workstation!, productionRoleIds: ['kitchen'], deliveryRoleIds: [] },
+        deliveryServiceTask: undefined,
+      },
+    ]
+
+    const model = buildRoleHomeModel(data, 'employee-current')
+
+    expect(model.metrics.find((item) => item.id === 'production')?.value).toBe(1)
+    expect(model.metrics.find((item) => item.id === 'pickup')?.value).toBe(1)
+    expect(model.todos.find((item) => item.id === 'production')?.count).toBe(1)
+    expect(model.todos.find((item) => item.id === 'handoff')?.count).toBe(1)
+  })
+
+  it('includes employee additional roles alongside active shift roles in KDS work', () => {
+    const data = bootstrapForRole('custom-night', '夜班机动岗')
+    data.config.roles.push({
+      ...data.config.roles[0]!,
+      id: 'runner',
+      name: '传菜员',
+    })
+    data.employees[0]!.roleIds = ['runner']
+    data.orderDomain.kdsTasks[0]!.workstation = {
+      ...data.orderDomain.kdsTasks[0]!.workstation!,
+      productionRoleIds: [],
+      deliveryRoleIds: ['runner'],
+    }
+
+    const model = buildRoleHomeModel(data, 'employee-current')
+
+    expect(model.metrics.find((item) => item.id === 'kds')?.value).toBe(1)
+    expect(model.todos.find((item) => item.id === 'kds')?.count).toBe(1)
+  })
 })
 
 function bootstrapForRole(roleId: string, roleName: string) {

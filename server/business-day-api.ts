@@ -16,6 +16,8 @@ import {
   submitCashierHandover,
 } from './payment-domain.js'
 import type { RuntimeRepository } from './repository.js'
+import { clearPresenceLeases } from './presence.js'
+import type { ShiftAssignment } from '../src/shared/contracts.js'
 
 const closeSchema = z.object({
   nextBusinessDate: z.iso.date(),
@@ -24,6 +26,63 @@ const closeSchema = z.object({
 
 type RuntimeState = Awaited<ReturnType<RuntimeRepository['read']>>
 type Blocker = { kind: string; id: string; detail: string }
+
+export interface ShiftContinuityResult {
+  source: 'existing' | 'copied'
+  shiftIds: string[]
+}
+
+function shiftedTimestamp(timestamp: string, currentBusinessDate: string, nextBusinessDate: string) {
+  const current = Date.parse(`${currentBusinessDate}T00:00:00.000Z`)
+  const next = Date.parse(`${nextBusinessDate}T00:00:00.000Z`)
+  return new Date(Date.parse(timestamp) + (next - current)).toISOString()
+}
+
+function rolloverShiftId(state: RuntimeState, sourceId: string, nextBusinessDate: string) {
+  const base = `shift_rollover_${nextBusinessDate}_${sourceId}`
+  const ids = new Set(state.shiftAssignments.map((shift) => shift.id))
+  if (!ids.has(base)) return base
+  let suffix = 2
+  while (ids.has(`${base}_${suffix}`)) suffix += 1
+  return `${base}_${suffix}`
+}
+
+export function prepareNextBusinessDayShifts(
+  state: RuntimeState,
+  currentBusinessDate: string,
+  nextBusinessDate: string,
+): ShiftContinuityResult {
+  const activeEmployeeIds = new Set(
+    state.employees.filter((employee) => employee.status === 'active').map((employee) => employee.id),
+  )
+  const existing = state.shiftAssignments.filter((shift) => (
+    shift.businessDate === nextBusinessDate
+    && ['scheduled', 'active'].includes(shift.status)
+    && activeEmployeeIds.has(shift.employeeId)
+  ))
+  if (existing.length > 0) {
+    for (const shift of existing) shift.status = 'active'
+    return { source: 'existing', shiftIds: existing.map((shift) => shift.id) }
+  }
+
+  const current = state.shiftAssignments.filter((shift) => (
+    shift.businessDate === currentBusinessDate
+    && shift.status === 'active'
+    && activeEmployeeIds.has(shift.employeeId)
+  ))
+  if (current.length === 0) throw new Error('下一营业日无排班，且当前营业日无可复制的有效班次')
+
+  const copies: ShiftAssignment[] = current.map((shift) => ({
+    ...structuredClone(shift),
+    id: rolloverShiftId(state, shift.id, nextBusinessDate),
+    businessDate: nextBusinessDate,
+    startAt: shiftedTimestamp(shift.startAt, currentBusinessDate, nextBusinessDate),
+    endAt: shiftedTimestamp(shift.endAt, currentBusinessDate, nextBusinessDate),
+    status: 'active',
+  }))
+  state.shiftAssignments.push(...copies)
+  return { source: 'copied', shiftIds: copies.map((shift) => shift.id) }
+}
 
 function collectBlockers(state: RuntimeState, closingActorId: string) {
   const blockers: Blocker[] = []
@@ -195,53 +254,81 @@ export function registerBusinessDayRoutes(app: FastifyInstance, repository: Runt
 
   app.post<{ Params: { businessDate: string } }>('/api/business-days/:businessDate/close', async (request, reply) => {
     const input = closeSchema.parse(request.body)
-    const state = await repository.read()
-    const actor = requireConfiguredOperation(request, state, 'business-day.close')
-    const previous = state.auditEntries.find((entry) =>
-      entry.action === 'business_day.closed.v1' && entry.details.idempotencyKey === input.idempotencyKey,
-    )
-    if (previous) {
-      if (previous.objectId !== request.params.businessDate || previous.details.nextBusinessDate !== input.nextBusinessDate) {
-        throw new Error('幂等键已用于其他营业日关闭操作')
+    const result = await repository.mutate((working) => {
+      const actor = requireConfiguredOperation(request, working, 'business-day.close')
+      const previous = working.auditEntries.find((entry) =>
+        entry.action === 'business_day.closed.v1' && entry.details.idempotencyKey === input.idempotencyKey,
+      )
+      if (previous) {
+        if (previous.objectId !== request.params.businessDate || previous.details.nextBusinessDate !== input.nextBusinessDate) {
+          throw new Error('幂等键已用于其他营业日关闭操作')
+        }
+        return {
+          kind: 'closed' as const,
+          status: 'closed' as const,
+          businessDate: previous.objectId,
+          nextBusinessDate: String(previous.details.nextBusinessDate),
+          handoverId: String(previous.details.handoverId),
+          shiftContinuity: previous.details.shiftContinuity as unknown as ShiftContinuityResult,
+          blockers: [] as Blocker[],
+        }
       }
-      return {
-        status: 'closed',
-        businessDate: previous.objectId,
-        nextBusinessDate: previous.details.nextBusinessDate,
-        handoverId: previous.details.handoverId,
-        blockers: [],
+      if (request.params.businessDate !== working.store.businessDate) throw new Error('只能关闭当前营业日')
+      if (input.nextBusinessDate <= working.store.businessDate) throw new Error('下一营业日必须晚于当前营业日')
+      const blockers = collectBlockers(working, actor.actorId)
+      if (blockers.length > 0) {
+        return {
+          kind: 'blocked' as const,
+          code: 'NIGHT_CLOSE_BLOCKED' as const,
+          message: `仍有${blockers.length}项未完成事项，禁止关闭营业日`,
+          businessDate: working.store.businessDate,
+          nextBusinessDate: input.nextBusinessDate,
+          blockers,
+        }
       }
-    }
-    if (request.params.businessDate !== state.store.businessDate) throw new Error('只能关闭当前营业日')
-    if (input.nextBusinessDate <= state.store.businessDate) throw new Error('下一营业日必须晚于当前营业日')
-    const blockers = collectBlockers(state, actor.actorId)
-    if (blockers.length > 0) {
-      return reply.status(409).send({
-        code: 'NIGHT_CLOSE_BLOCKED', message: `仍有${blockers.length}项未完成事项，禁止关闭营业日`,
-        businessDate: state.store.businessDate, nextBusinessDate: input.nextBusinessDate, blockers,
-      })
-    }
-    return repository.mutate((working) => {
       const occurredAt = new Date().toISOString()
       const closedBusinessDate = working.store.businessDate
       const approvedHandover = latestCashierHandover(working.paymentDomain, closedBusinessDate)
       if (!approvedHandover || approvedHandover.reviewedBy !== actor.actorId) throw new Error('收银交班复核状态已变化')
+      const shiftContinuity = prepareNextBusinessDayShifts(working, closedBusinessDate, input.nextBusinessDate)
       closeCashierHandover(approvedHandover, occurredAt)
       for (const shift of working.shiftAssignments) {
         if (shift.businessDate === closedBusinessDate && shift.status === 'active') shift.status = 'completed'
       }
+      const endedPresenceSessionIds = clearPresenceLeases(working, Date.parse(occurredAt))
       for (const employee of working.employees) {
-        employee.online = false
         employee.paused = false
       }
       working.store.businessDate = input.nextBusinessDate
       working.auditEntries.push({
+        id: `audit_${randomUUID()}`, actorId: actor.actorId, action: 'business_day.shift_continuity_prepared.v1',
+        objectType: 'businessDay', objectId: input.nextBusinessDate, occurredAt,
+        details: { previousBusinessDate: closedBusinessDate, ...shiftContinuity },
+      })
+      working.auditEntries.push({
         id: `audit_${randomUUID()}`, actorId: actor.actorId, action: 'business_day.closed.v1',
         objectType: 'businessDay', objectId: closedBusinessDate, occurredAt,
-        details: { nextBusinessDate: input.nextBusinessDate, idempotencyKey: input.idempotencyKey, handoverId: approvedHandover.id },
+        details: {
+          nextBusinessDate: input.nextBusinessDate,
+          idempotencyKey: input.idempotencyKey,
+          handoverId: approvedHandover.id,
+          shiftContinuity,
+          endedPresenceSessionIds,
+        },
       })
       working.revision += 1
-      return { status: 'closed', businessDate: closedBusinessDate, nextBusinessDate: input.nextBusinessDate, handoverId: approvedHandover.id, blockers: [] }
+      return {
+        kind: 'closed' as const,
+        status: 'closed' as const,
+        businessDate: closedBusinessDate,
+        nextBusinessDate: input.nextBusinessDate,
+        handoverId: approvedHandover.id,
+        shiftContinuity,
+        blockers: [] as Blocker[],
+      }
     })
+    if (result.kind === 'blocked') return reply.status(409).send(result)
+    const { kind: _kind, ...response } = result
+    return response
   })
 }

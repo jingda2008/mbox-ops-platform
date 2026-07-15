@@ -13,7 +13,7 @@ const sessionSecret = 'store-import-approval-session-secret-32-characters'
 function signedHeaders(actorId: string, now = Date.now()) {
   return {
     authorization: `Bearer ${signStaffSession({
-      actorId, storeId: 'mbox-lujiazui', issuedAt: now - 1000, expiresAt: now + 60_000,
+      sessionId: `session-${actorId}`, actorId, storeId: 'mbox-lujiazui', issuedAt: now - 1000, expiresAt: now + 60_000,
     }, sessionSecret)}`,
   }
 }

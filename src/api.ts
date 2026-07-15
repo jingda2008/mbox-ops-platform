@@ -28,6 +28,7 @@ import type {
   WalkInOpenInput,
 } from './shared/contracts'
 import type { Reservation } from './shared/reservation-contracts'
+import type { StaffPresenceResponse } from './shared/auth-contracts'
 import type {
   AssistedPaymentLink,
   AssistedPaymentLinkInput,
@@ -109,6 +110,14 @@ export function createPilotSession(accessCode: string, actorId: string, employee
     method: 'POST',
     body: JSON.stringify({ accessCode, actorId, employeePin }),
   })
+}
+
+export function heartbeatStaffPresence() {
+  return request<StaffPresenceResponse>('/api/auth/presence/heartbeat', { method: 'POST' })
+}
+
+export function endStaffPresence() {
+  return request<StaffPresenceResponse>('/api/auth/logout', { method: 'POST' })
 }
 
 export function getCurrentActorId() {

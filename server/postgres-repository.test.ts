@@ -267,12 +267,14 @@ describe('PostgresRepository', () => {
     await repository.init()
     await repository.init()
 
+    const stateReadsBefore = pool.queries.filter(({ sql }) => sql.startsWith('SELECT revision, state, state_sha256')).length
     const first = await repository.read()
     first.store.name = 'changed outside the repository'
     const second = await repository.read()
 
     expect(second.revision).toBe(1)
     expect(second.store.name).not.toBe(first.store.name)
+    expect(pool.queries.filter(({ sql }) => sql.startsWith('SELECT revision, state, state_sha256'))).toHaveLength(stateReadsBefore + 1)
     expect(pool.queries.filter(({ sql }) => sql.startsWith('INSERT INTO mbox.runtime_states'))).toHaveLength(1)
     const transactions = pool.queries.filter(({ sql }) => sql.startsWith('BEGIN ISOLATION LEVEL'))
     const contexts = pool.queries.filter(({ sql }) => sql.startsWith("SELECT set_config('app.tenant_id'"))

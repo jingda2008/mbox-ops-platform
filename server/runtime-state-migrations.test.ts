@@ -232,4 +232,18 @@ describe('runtime state operational migrations', () => {
       })
     }
   })
+
+  it('migrates legacy manual online flags to an empty lease-backed presence state', () => {
+    const legacy = structuredClone(createSeedState()) as RuntimeState & { presenceLeases?: unknown }
+    delete legacy.presenceLeases
+    expect(legacy.employees.some((employee) => employee.online)).toBe(true)
+
+    const migrated = migrateRuntimeState(legacy as RuntimeState)
+
+    expect(migrated.presenceLeases).toEqual([])
+    expect(migrated.employees.every((employee) => !employee.online)).toBe(true)
+    const migratedAgain = migrateRuntimeState(migrated)
+    expect(migratedAgain.presenceLeases).toEqual([])
+    expect(migratedAgain.employees.every((employee) => !employee.online)).toBe(true)
+  })
 })

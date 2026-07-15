@@ -184,7 +184,7 @@ export function buildRoleHomeModel(data: BootstrapResponse, employeeId: string):
   const roleIds = [...new Set((activeShifts.length > 0
     ? [...activeShifts.flatMap((shift) => [shift.roleId, ...(shift.roleIds ?? [])]), ...(employee?.roleIds ?? [])]
     : [employee?.roleId, ...(employee?.roleIds ?? [])]
-  ).filter(Boolean))]
+  ).filter((roleId): roleId is string => Boolean(roleId)))]
   const permissionIds = [...new Set([
     ...(employee?.permissionIds ?? []),
     ...data.config.roles.filter((role) => roleIds.includes(role.id)).flatMap((role) => role.permissionIds ?? []),
@@ -195,7 +195,11 @@ export function buildRoleHomeModel(data: BootstrapResponse, employeeId: string):
     roleLabel: data.config.roles.filter((role) => roleIds.includes(role.id)).map((role) => role.name).join(' / ') || baseAccess.roleLabel,
     allowedNavigationIds: configuredNavigation.length > 0 ? configuredNavigation : baseAccess.allowedNavigationIds,
   }
-  const counts = buildCounts(data, employee, access.kind)
+  const hasFullKdsAccess = roleIds.some((roleId) => {
+    const role = data.config.roles.find((item) => item.id === roleId)
+    return ['owner', 'admin', 'manager'].includes(resolveRoleHomeKind(roleId, role?.name))
+  })
+  const counts = buildCounts(data, employee, roleIds, hasFullKdsAccess)
   const { metrics, todos } = buildRoleContent(access.kind, counts)
 
   return {
@@ -232,22 +236,25 @@ interface RoleCounts {
   configVersion: number
 }
 
-function buildCounts(data: BootstrapResponse, employee: Employee | undefined, kind: RoleHomeKind): RoleCounts {
+function buildCounts(
+  data: BootstrapResponse,
+  employee: Employee | undefined,
+  roleIds: string[],
+  hasFullKdsAccess: boolean,
+): RoleCounts {
   const openTasks = data.tasks.filter((task) => openServiceStatuses.has(task.status))
   const ownTasks = openTasks.filter((task) => task.ownerId === employee?.id)
   const now = new Date(data.serverNow).getTime()
-  const visibleKdsTasks = kdsTasksForRole(data, employee, kind)
+  const visibleKdsTasks = kdsTasksForRole(data, employee, roleIds, hasFullKdsAccess)
   const productionKds = visibleKdsTasks.filter((task) => ['queued', 'preparing'].includes(task.status))
   const visibleKdsIds = new Set(visibleKdsTasks.map((task) => task.id))
   const readyForPickup = data.orderDomain.kdsTasks.filter((task) => (
     task.status === 'completed'
     && kdsTaskOperationallyActive(task)
     && (
-      kind === 'owner'
-      || kind === 'admin'
-      || kind === 'manager'
+      hasFullKdsAccess
       || visibleKdsIds.has(task.id)
-      || (['bartender', 'kitchen'].includes(kind) && productionTaskMatchesEmployee(data, task, employee))
+      || productionTaskMatchesEmployee(data, task, employee, roleIds)
     )
   ))
   const pendingAuthorizations = data.orderDomain.authorizations.filter((item) => item.status === 'pending').length
@@ -283,11 +290,16 @@ function buildCounts(data: BootstrapResponse, employee: Employee | undefined, ki
   }
 }
 
-function kdsTasksForRole(data: BootstrapResponse, employee: Employee | undefined, kind: RoleHomeKind) {
+function kdsTasksForRole(
+  data: BootstrapResponse,
+  employee: Employee | undefined,
+  roleIds: string[],
+  hasFullKdsAccess: boolean,
+) {
   const activeTasks = data.orderDomain.kdsTasks.filter((task) => (
     openKdsStatuses.has(task.status) && kdsTaskOperationallyActive(task)
   ))
-  if (['owner', 'admin', 'manager'].includes(kind)) return activeTasks
+  if (hasFullKdsAccess) return activeTasks
   if (!employee) return []
 
   const activeShiftStations = new Set(data.shiftAssignments
@@ -298,17 +310,25 @@ function kdsTasksForRole(data: BootstrapResponse, employee: Employee | undefined
     const workstation = task.workstation
     const stationAllowed = activeShiftStations.size === 0 || activeShiftStations.has(task.stationId)
     if (!stationAllowed) return false
-    if (['bartender', 'kitchen'].includes(kind)) {
-      return ['queued', 'preparing'].includes(task.status) && (workstation?.productionRoleIds.includes(employee.roleId) ?? false)
-    }
-    return ['completed', 'picked_up'].includes(task.status)
-      && (workstation?.deliveryRoleIds.includes(employee.roleId) ?? false)
+    const matchesProductionRole = workstation?.productionRoleIds.some((roleId) => roleIds.includes(roleId)) ?? false
+    const matchesDeliveryRole = workstation?.deliveryRoleIds.some((roleId) => roleIds.includes(roleId)) ?? false
+    return (
+      ['queued', 'preparing'].includes(task.status) && matchesProductionRole
+    ) || (
+      ['completed', 'picked_up'].includes(task.status)
+      && matchesDeliveryRole
       && (!task.deliveryServiceTask?.ownerId || task.deliveryServiceTask.ownerId === employee.id)
+    )
   })
 }
 
-function productionTaskMatchesEmployee(data: BootstrapResponse, task: BootstrapResponse['orderDomain']['kdsTasks'][number], employee: Employee | undefined) {
-  if (!employee || !task.workstation?.productionRoleIds.includes(employee.roleId)) return false
+function productionTaskMatchesEmployee(
+  data: BootstrapResponse,
+  task: BootstrapResponse['orderDomain']['kdsTasks'][number],
+  employee: Employee | undefined,
+  roleIds: string[],
+) {
+  if (!employee || !task.workstation?.productionRoleIds.some((roleId) => roleIds.includes(roleId))) return false
   const activeShifts = data.shiftAssignments.filter((shift) => (
     shift.employeeId === employee.id
     && shift.businessDate === data.store.businessDate

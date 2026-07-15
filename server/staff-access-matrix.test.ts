@@ -4,6 +4,7 @@ import type { StaffPermissionId, RoleDataScope } from '../src/shared/contracts.j
 import { roleHasPermission } from '../src/shared/role-policy.js'
 import { verifyStaffSession } from './auth-context.js'
 import { registerPilotAuthRoutes } from './pilot-auth.js'
+import { MemoryRateLimitStore } from './rate-limit.js'
 import type { RuntimeRepository } from './repository.js'
 import { createSeedState } from './seed.js'
 
@@ -116,6 +117,9 @@ async function createLoginApp() {
     employeePins,
     sessionSecret,
     sessionHours: 12,
+    rateLimitStore: new MemoryRateLimitStore({
+      usage: 'test', tenantId: 'tenant-test', storeId: 'mbox-lujiazui', hashSecret: 'l'.repeat(32),
+    }),
   })
   return app
 }

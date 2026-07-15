@@ -55,7 +55,9 @@ export function verifyStaffSession(token: string, secret: string, now = Date.now
   } catch {
     throw new AuthenticationError('员工会话载荷无效')
   }
-  if (claims.version !== 1 || !claims.actorId || !claims.storeId) throw new AuthenticationError('员工会话声明无效')
+  if (claims.version !== 1 || !claims.sessionId || !claims.actorId || !claims.storeId) {
+    throw new AuthenticationError('员工会话声明无效')
+  }
   if (!Number.isSafeInteger(claims.issuedAt) || !Number.isSafeInteger(claims.expiresAt)) {
     throw new AuthenticationError('员工会话时间无效')
   }
@@ -105,6 +107,8 @@ export async function registerAuthContext(app: FastifyInstance, options: AuthCon
     let actorId: string
     let storeId: string
     let authenticatedBy: RequestActorContext['authenticatedBy']
+    let sessionId: string | null = null
+    let sessionExpiresAt: number | null = null
     if (requiresSignedSession || request.headers.authorization) {
       const authorization = request.headers.authorization
       if (!authorization?.startsWith('Bearer ') || !options.sessionSecret) {
@@ -114,6 +118,8 @@ export async function registerAuthContext(app: FastifyInstance, options: AuthCon
       actorId = claims.actorId
       storeId = claims.storeId
       authenticatedBy = 'signed_session'
+      sessionId = claims.sessionId
+      sessionExpiresAt = claims.expiresAt
     } else {
       actorId = String(request.headers['x-mbox-actor-id'] ?? '')
       storeId = String(request.headers['x-mbox-store-id'] ?? '')
@@ -126,7 +132,15 @@ export async function registerAuthContext(app: FastifyInstance, options: AuthCon
     const employee = state.employees.find((item) => item.id === actorId && item.status === 'active')
     if (!employee) throw new AuthenticationError('员工不存在或已停用', 403, 'ACTOR_NOT_ACTIVE')
     assertActorBinding(request, actorId, options.runtimeMode)
-    request.mboxActor = { actorId, storeId, roleId: employee.roleId, runtimeMode: options.runtimeMode, authenticatedBy }
+    request.mboxActor = {
+      actorId,
+      storeId,
+      roleId: employee.roleId,
+      runtimeMode: options.runtimeMode,
+      authenticatedBy,
+      sessionId,
+      sessionExpiresAt,
+    }
   })
 }
 

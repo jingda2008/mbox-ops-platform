@@ -59,6 +59,7 @@ import { registerTableSessionRoutes } from './table-session-api.js'
 import { registerBusinessDayRoutes } from './business-day-api.js'
 import { StoreImportValidationError } from './store-import.js'
 import {
+  PostgresRepositoryError,
   PostgresIdempotencyConflictError,
   PostgresIdempotencyInProgressError,
   PostgresOptimisticConcurrencyError,
@@ -80,6 +81,8 @@ import { syncKdsFromFulfillmentServiceTaskAction } from './fulfillment-service.j
 import { projectRuntimeStateForActor } from './bootstrap-projection.js'
 import { effectivePermissionIdsForEmployee } from '../src/shared/staff-access.js'
 import { preserveProtectedProductCost, productCostView } from './product-cost-policy.js'
+import { MemoryRateLimitStore, PostgresRateLimitStore } from './rate-limit.js'
+import { registerPresenceRoutes } from './presence.js'
 
 const runtimeConfig = loadRuntimeConfig()
 
@@ -90,6 +93,19 @@ const app = Fastify({
 })
 const runtimeDependencies = createRuntimeDependencies(runtimeConfig)
 const repository = runtimeDependencies.repository
+const rateLimitStore = runtimeDependencies.postgresPool
+  ? new PostgresRateLimitStore({
+      pool: runtimeDependencies.postgresPool,
+      tenantId: runtimeConfig.tenantId!,
+      storeId: runtimeConfig.storeUuid!,
+      hashSecret: runtimeConfig.sessionSecret ?? runtimeConfig.qrSecret,
+    })
+  : new MemoryRateLimitStore({
+      usage: 'test',
+      tenantId: '00000000-0000-4000-8000-000000000001',
+      storeId: '00000000-0000-4000-8000-000000000002',
+      hashSecret: runtimeConfig.qrSecret,
+    })
 
 await repository.init()
 await app.register(cors, {
@@ -121,6 +137,9 @@ await registerAuthContext(app, {
   sessionSecret: runtimeConfig.sessionSecret,
   readState: () => repository.read(),
 })
+if (runtimeConfig.runtimeMode === 'staging' || runtimeConfig.runtimeMode === 'production') {
+  await registerPresenceRoutes(app, repository)
+}
 
 if (runtimeConfig.pilotAccessCode) {
   await registerPilotAuthRoutes(app, repository, {
@@ -128,6 +147,7 @@ if (runtimeConfig.pilotAccessCode) {
     employeePins: runtimeConfig.pilotEmployeePins!,
     sessionSecret: runtimeConfig.sessionSecret!,
     sessionHours: runtimeConfig.pilotSessionHours,
+    rateLimitStore,
   })
 }
 
@@ -212,6 +232,13 @@ const customerNotificationAdapters = createCustomerNotificationAdapters({
   }, diagnostic.message),
 })
 
+function isPersistenceFailure(error: unknown) {
+  if (error instanceof PostgresRepositoryError) return true
+  if (!error || typeof error !== 'object' || !('code' in error)) return false
+  const code = String((error as { code?: unknown }).code ?? '')
+  return /^[0-9A-Z]{5}$/.test(code) || ['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EPIPE'].includes(code)
+}
+
 app.setErrorHandler((error, _request, reply) => {
   if (error instanceof ZodError) {
     return reply.status(400).send({ code: 'VALIDATION_ERROR', message: error.issues[0]?.message ?? '输入无效' })
@@ -241,6 +268,13 @@ app.setErrorHandler((error, _request, reply) => {
   ) {
     return reply.status(409).send({ code: 'CONCURRENT_WRITE_CONFLICT', message: '数据已发生变化，请刷新后重试' })
   }
+  if (isPersistenceFailure(error)) {
+    app.log.error(error)
+    return reply.status(503).send({
+      code: 'PERSISTENCE_UNAVAILABLE',
+      message: '经营数据服务暂时不可用，请稍后重试',
+    })
+  }
   app.log.error(error)
   return reply.status(400).send({
     code: 'BUSINESS_ERROR',
@@ -251,10 +285,6 @@ app.setErrorHandler((error, _request, reply) => {
 app.get('/api/health', async () => ({ status: 'ok', time: new Date().toISOString() }))
 
 app.get('/api/bootstrap', async (request) => {
-  await repository.mutate((state) => {
-    processAwaitingOrderReminders(state)
-    return escalateDueTasks(state)
-  })
   const state = await repository.read()
   const actor = requireRequestActor(request)
   const permissionIds = effectivePermissionIdsForEmployee(state, actor.actorId)
@@ -445,7 +475,7 @@ registerGuestRoutes(app, repository, {
   runtimeMode: runtimeConfig.runtimeMode,
   allowPaymentSimulation: runtimeConfig.pilotPaymentSimulationEnabled,
 })
-registerPublicReservationRoutes(app, repository, { secret: runtimeConfig.qrSecret })
+registerPublicReservationRoutes(app, repository, { secret: runtimeConfig.qrSecret, rateLimitStore })
 registerStoreImportRoutes(app, repository)
 registerInventoryRoutes(app, repository)
 registerReservationRoutes(app, repository)
@@ -486,6 +516,13 @@ const wechatCleanupScheduler = runtimeConfig.wechatEnabled
   : null
 wechatCleanupScheduler?.unref()
 
+const rateLimitCleanupScheduler = runtimeDependencies.postgresPool
+  ? setInterval(() => {
+      void rateLimitStore.cleanupExpired(1_000).catch((error) => app.log.error(error))
+    }, 15 * 60_000)
+  : null
+rateLimitCleanupScheduler?.unref()
+
 let shuttingDown = false
 async function shutdown(signal: string) {
   if (shuttingDown) return
@@ -493,6 +530,7 @@ async function shutdown(signal: string) {
   app.log.info({ signal }, 'graceful shutdown started')
   clearInterval(scheduler)
   if (wechatCleanupScheduler) clearInterval(wechatCleanupScheduler)
+  if (rateLimitCleanupScheduler) clearInterval(rateLimitCleanupScheduler)
   const forceTimer = setTimeout(() => {
     app.log.fatal({ signal }, 'graceful shutdown timed out')
     process.exit(1)

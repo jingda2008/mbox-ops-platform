@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { MenuProduct, ServiceTask, ServiceTypeConfig } from './contracts.js'
+import type { CommunityBrandPresentation, MenuProduct, ServiceTask, ServiceTypeConfig } from './contracts.js'
 import type { PaymentIntentStatus } from './payment-contracts.js'
 import type { PaymentIntent } from './payment-contracts.js'
 import type { Order } from './order-contracts.js'
@@ -40,6 +40,7 @@ export interface GuestTaskView extends Pick<
 
 export interface GuestSessionResponse {
   store: { id: string; name: string; businessDate: string; timezone: string }
+  communityBrand: CommunityBrandPresentation | null
   table: { code: string; displayName: string; status: string; occupied: boolean }
   primaryServiceName: string | null
   serviceTypes: GuestServiceType[]

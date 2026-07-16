@@ -5,6 +5,7 @@ import type { GuestSessionResponse, GuestTaskView, WechatJsapiParameters } from 
 import { guestFeedbackIdempotencyKey } from './guest-portal-utils'
 import { ServiceIcon } from './ServiceIcon'
 import { MenuOrderingWorkspace, type MenuCartItem } from './MenuOrderingWorkspace'
+import { SuperHighCommunityBand } from './SuperHighCommunityBand'
 
 const guestStatus: Record<GuestTaskView['status'], string> = {
   pending: '等待接单',
@@ -276,6 +277,7 @@ export function GuestPortal() {
             </article>
           })}</div>
         )}
+        {data?.communityBrand && <SuperHighCommunityBand brand={data.communityBrand} compact />}
       </section>}
     </main>
   )

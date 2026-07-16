@@ -16,6 +16,7 @@ import {
   Save,
   Settings2,
   ShieldCheck,
+  Sparkles,
   Timer,
   Upload,
   UtensilsCrossed,
@@ -468,6 +469,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
       })),
       proactiveOrderCare: { ...draft.proactiveOrderCare },
       guestServiceLimits: { ...draft.guestServiceLimits },
+      communityBrand: structuredClone(draft.communityBrand),
     }
   }
 
@@ -866,6 +868,27 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
                   <label><span>统计窗口（秒）</span><input className="number-input" type="number" min={10} max={600} value={draft.guestServiceLimits.windowSeconds} onChange={(event) => { const next = cloneConfig(draft); next.guestServiceLimits.windowSeconds = Number(event.target.value); setDraft(next); setConfigDirty(true) }} /></label>
                   <label><span>窗口内最多提交</span><input className="number-input" type="number" min={1} max={30} value={draft.guestServiceLimits.maxRequests} onChange={(event) => { const next = cloneConfig(draft); next.guestServiceLimits.maxRequests = Number(event.target.value); setDraft(next); setConfigDirty(true) }} /></label>
                   <label><span>相同需求合并（秒）</span><input className="number-input" type="number" min={5} max={600} value={draft.guestServiceLimits.duplicateSeconds} onChange={(event) => { const next = cloneConfig(draft); next.guestServiceLimits.duplicateSeconds = Number(event.target.value); setDraft(next); setConfigDirty(true) }} /></label>
+                </div>
+              </div>
+
+              <div className="config-section">
+                <div className="config-section-title"><Sparkles size={19} /><div><strong>超嗨部落品牌</strong><span>M-Box 负责到店经营，超嗨部落承接会员文化与活动关系</span></div></div>
+                <div className="community-brand-config">
+                  <div className="community-brand-switches">
+                    <div className="switch-field"><span>启用品牌</span><label className="switch"><input type="checkbox" checked={draft.communityBrand.enabled} onChange={(event) => { const next = cloneConfig(draft); next.communityBrand.enabled = event.target.checked; setDraft(next); setConfigDirty(true) }} /><span /></label></div>
+                    <div className="switch-field"><span>订单页露出</span><label className="switch"><input type="checkbox" checked={draft.communityBrand.guestOrderVisible} onChange={(event) => { const next = cloneConfig(draft); next.communityBrand.guestOrderVisible = event.target.checked; setDraft(next); setConfigDirty(true) }} /><span /></label></div>
+                    <div className="switch-field"><span>会员中心露出</span><label className="switch"><input type="checkbox" checked={draft.communityBrand.memberPortalVisible} onChange={(event) => { const next = cloneConfig(draft); next.communityBrand.memberPortalVisible = event.target.checked; setDraft(next); setConfigDirty(true) }} /><span /></label></div>
+                  </div>
+                  <div className="community-brand-fields">
+                    <label><span>品牌名称</span><input maxLength={40} value={draft.communityBrand.name} onChange={(event) => { const next = cloneConfig(draft); next.communityBrand.name = event.target.value; setDraft(next); setConfigDirty(true) }} /></label>
+                    <label><span>英文标识</span><input maxLength={60} value={draft.communityBrand.eyebrow} onChange={(event) => { const next = cloneConfig(draft); next.communityBrand.eyebrow = event.target.value; setDraft(next); setConfigDirty(true) }} /></label>
+                    <label className="wide"><span>品牌口号</span><input maxLength={120} value={draft.communityBrand.tagline} onChange={(event) => { const next = cloneConfig(draft); next.communityBrand.tagline = event.target.value; setDraft(next); setConfigDirty(true) }} /></label>
+                    <label className="wide"><span>品牌标识图片</span><input maxLength={240} value={draft.communityBrand.markUrl} onChange={(event) => { const next = cloneConfig(draft); next.communityBrand.markUrl = event.target.value; setDraft(next); setConfigDirty(true) }} /></label>
+                  </div>
+                  <div className="community-brand-highlights">
+                    <div><strong>活动关键词</strong><button className="secondary-button" disabled={draft.communityBrand.highlights.length >= 6} onClick={() => { const next = cloneConfig(draft); next.communityBrand.highlights.push('新关键词'); setDraft(next); setConfigDirty(true) }}><Plus size={14} />添加</button></div>
+                    <div>{draft.communityBrand.highlights.map((highlight, index) => <label key={index}><input maxLength={20} value={highlight} onChange={(event) => { const next = cloneConfig(draft); next.communityBrand.highlights[index] = event.target.value; setDraft(next); setConfigDirty(true) }} /><button className="icon-button" title="删除关键词" disabled={draft.communityBrand.highlights.length <= 1} onClick={() => { const next = cloneConfig(draft); next.communityBrand.highlights.splice(index, 1); setDraft(next); setConfigDirty(true) }}><Trash2 size={14} /></button></label>)}</div>
+                  </div>
                 </div>
               </div>
 

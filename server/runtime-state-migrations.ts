@@ -92,6 +92,7 @@ function configWithOperationalDefaults(
     workstations: config.workstations ?? structuredClone(defaults.workstations),
     proactiveOrderCare: config.proactiveOrderCare ?? structuredClone(defaults.proactiveOrderCare),
     guestServiceLimits: config.guestServiceLimits ?? structuredClone(defaults.guestServiceLimits),
+    communityBrand: config.communityBrand ?? structuredClone(defaults.communityBrand),
   }
   return migrateWorkstationDeliveryServices(enriched)
 }

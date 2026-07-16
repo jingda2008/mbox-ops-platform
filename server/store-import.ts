@@ -275,6 +275,7 @@ function buildCandidate(state: RuntimeState, input: StoreImportPackage): ImportC
     store: structuredClone(input.data.store),
     config: {
       ...(structuredClone(input.data.config) as StoreConfig),
+      communityBrand: structuredClone(input.data.config.communityBrand ?? state.config.communityBrand),
       roles: input.data.config.roles.map((role) => withDefaultRolePolicy(structuredClone(role))),
     },
     areas: mergeById(state.areas, input.data.areas, sections.areas.mode),

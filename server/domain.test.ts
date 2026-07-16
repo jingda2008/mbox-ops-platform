@@ -130,21 +130,26 @@ describe('versioned store configuration', () => {
     }))
 
     const guestServiceLimits = { ...state.config.guestServiceLimits, maxRequests: 4 }
+    const communityBrand = { ...state.config.communityBrand, name: '超嗨社群测试版' }
     saveConfigDraft(state, {
       serviceTypes,
       roles,
       proactiveOrderCare: state.config.proactiveOrderCare,
       guestServiceLimits,
+      communityBrand,
     }, 'manager-demo')
     expect(state.config.serviceTypes.find((type) => type.id === 'water')?.sla.warningSeconds).toBe(30)
     expect(state.config.guestServiceLimits.maxRequests).toBe(5)
+    expect(state.config.communityBrand.name).toBe('超嗨部落')
     expect(state.draftConfig?.serviceTypes.find((type) => type.id === 'water')?.sla.warningSeconds).toBe(15)
     expect(state.draftConfig?.guestServiceLimits.maxRequests).toBe(4)
+    expect(state.draftConfig?.communityBrand.name).toBe('超嗨社群测试版')
 
     const published = publishConfig(state, 'manager-demo')
     expect(published.version).toBe(2)
     expect(published.serviceTypes.find((type) => type.id === 'water')?.sla.warningSeconds).toBe(15)
     expect(published.guestServiceLimits.maxRequests).toBe(4)
+    expect(published.communityBrand.name).toBe('超嗨社群测试版')
     expect(state.draftConfig).toBeNull()
   })
 

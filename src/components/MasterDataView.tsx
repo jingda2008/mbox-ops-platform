@@ -754,6 +754,7 @@ function configDraftPayload(
     workstations: structuredClone(workstations),
     proactiveOrderCare: { ...source.proactiveOrderCare },
     guestServiceLimits: { ...source.guestServiceLimits },
+    communityBrand: structuredClone(source.communityBrand),
   }
 }
 

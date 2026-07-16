@@ -1,6 +1,7 @@
 import { BadgeCheck, CalendarDays, Gift, LoaderCircle, MessageSquareText, Music2, Ticket, Wine } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { MemberPortalBenefit, MemberPortalResponse } from '../shared/member-portal-contracts'
+import { SuperHighCommunityBand } from './SuperHighCommunityBand'
 
 const levelNames = { standard: '会员', silver: '银卡会员', gold: '金卡会员', platinum: '白金会员' }
 
@@ -31,6 +32,7 @@ export function MemberBenefitsPortal() {
         <div><small>{levelNames[data.member.level]}</small><h1>{data.member.displayName}</h1><p>{data.member.phoneMasked}</p></div>
         <BadgeCheck size={22} />
       </section>
+      {data.communityBrand && <SuperHighCommunityBand brand={data.communityBrand} />}
       <section className="member-benefit-summary"><div><strong>{data.benefits.reduce((sum, benefit) => sum + benefit.remainingQuantity, 0)}</strong><span>可用权益</span></div><div><strong>{data.member.serviceAccountBound ? '已绑定' : '未绑定'}</strong><span>微信服务号</span></div><div><strong>{data.member.wecomBound ? '已连接' : '未连接'}</strong><span>企业微信</span></div></section>
       <section className="member-benefit-list">
         <div className="member-section-heading"><Gift size={18} /><h2>我的权益</h2></div>

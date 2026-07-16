@@ -12,6 +12,7 @@ describe('runtime state operational migrations', () => {
     delete legacy.config.skills
     delete legacy.config.workstations
     delete (legacy.config as Partial<RuntimeState['config']>).guestServiceLimits
+    delete (legacy.config as Partial<RuntimeState['config']>).communityBrand
     legacy.config.roles = legacy.config.roles
       .filter((role) => !['owner', 'admin', 'bartender', 'kitchen', 'runner', 'cashier', 'host'].includes(role.id))
       .map(({ permissionIds: _permissionIds, dataScope: _dataScope, approvalLimits: _approvalLimits, ...role }) => role)
@@ -48,6 +49,12 @@ describe('runtime state operational migrations', () => {
       windowSeconds: 60,
       maxRequests: 5,
       duplicateSeconds: 60,
+    })
+    expect(migrated.config.communityBrand).toMatchObject({
+      enabled: true,
+      name: '超嗨部落',
+      guestOrderVisible: true,
+      memberPortalVisible: true,
     })
     expect(migrated.employees.every((employee) => Array.isArray(employee.skillIds))).toBe(true)
     expect(migrated.shiftAssignments.every((shift) => Array.isArray(shift.stationIds))).toBe(true)

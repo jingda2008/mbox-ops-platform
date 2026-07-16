@@ -152,6 +152,16 @@ const configSchema = z.object({
     maxRequests: z.number().int().min(1).max(30),
     duplicateSeconds: z.number().int().min(5).max(600),
   }).strict(),
+  communityBrand: z.object({
+    enabled: z.boolean(),
+    name: z.string().trim().min(1).max(40),
+    eyebrow: z.string().trim().min(1).max(60),
+    tagline: z.string().trim().min(1).max(120),
+    markUrl: z.string().trim().min(1).max(240),
+    highlights: z.array(z.string().trim().min(1).max(20)).min(1).max(6),
+    guestOrderVisible: z.boolean(),
+    memberPortalVisible: z.boolean(),
+  }).strict().optional(),
 }).strict()
 
 export const storeImportCompletenessValues = ['complete', 'partial', 'draft'] as const

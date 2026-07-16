@@ -198,6 +198,15 @@ function sessionView(
         })))
   return {
     store: { id: state.store.id, name: state.store.name, businessDate: state.store.businessDate, timezone: state.store.timezone },
+    communityBrand: state.config.communityBrand.enabled && state.config.communityBrand.guestOrderVisible
+      ? {
+          name: state.config.communityBrand.name,
+          eyebrow: state.config.communityBrand.eyebrow,
+          tagline: state.config.communityBrand.tagline,
+          markUrl: state.config.communityBrand.markUrl,
+          highlights: [...state.config.communityBrand.highlights],
+        }
+      : null,
     table: {
       code: table.code,
       displayName: table.displayName,

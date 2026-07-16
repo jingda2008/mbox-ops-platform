@@ -341,6 +341,7 @@ export function saveConfigDraft(state: RuntimeState, input: ConfigDraftInput, ac
   if (!proactiveServiceType) throw new Error('待点单提醒必须绑定已启用的服务类型')
   draft.proactiveOrderCare = { ...input.proactiveOrderCare }
   draft.guestServiceLimits = { ...input.guestServiceLimits }
+  draft.communityBrand = structuredClone(input.communityBrand ?? draft.communityBrand)
   state.draftConfig = draft
   state.auditEntries.push({
     id: `audit_${randomUUID()}`,

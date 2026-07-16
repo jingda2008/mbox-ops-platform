@@ -71,6 +71,16 @@ export function createSeedConfig(): StoreConfig {
       maxRequests: 5,
       duplicateSeconds: 60,
     },
+    communityBrand: {
+      enabled: true,
+      name: '超嗨部落',
+      eyebrow: 'M-BOX MEMBER COMMUNITY',
+      tagline: '由 M-Box 相识，在超嗨部落持续相聚',
+      markUrl: '/brand/superhigh-mark.png',
+      highlights: ['主题活动', '现场互动', '同好社群'],
+      guestOrderVisible: true,
+      memberPortalVisible: true,
+    },
     serviceTypes: [
       {
         id: 'water',

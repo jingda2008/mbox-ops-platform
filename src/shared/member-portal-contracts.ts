@@ -1,3 +1,5 @@
+import type { CommunityBrandPresentation } from './contracts.js'
+
 export interface MemberPortalBenefit {
   id: string
   name: string
@@ -9,6 +11,7 @@ export interface MemberPortalBenefit {
 }
 
 export interface MemberPortalResponse {
+  communityBrand: CommunityBrandPresentation | null
   member: {
     id: string
     displayName: string

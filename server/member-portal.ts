@@ -7,6 +7,15 @@ export function buildMemberPortal(state: RuntimeState, memberId: string): Member
   const member = state.members.find((item) => item.id === memberId)
   if (!member) throw new Error('会员不存在')
   return {
+    communityBrand: state.config.communityBrand.enabled && state.config.communityBrand.memberPortalVisible
+      ? {
+          name: state.config.communityBrand.name,
+          eyebrow: state.config.communityBrand.eyebrow,
+          tagline: state.config.communityBrand.tagline,
+          markUrl: state.config.communityBrand.markUrl,
+          highlights: [...state.config.communityBrand.highlights],
+        }
+      : null,
     member: {
       id: member.id,
       displayName: member.displayName,

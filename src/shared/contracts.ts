@@ -345,6 +345,22 @@ export interface GuestServiceLimitsConfig {
   duplicateSeconds: number
 }
 
+export interface CommunityBrandConfig {
+  enabled: boolean
+  name: string
+  eyebrow: string
+  tagline: string
+  markUrl: string
+  highlights: string[]
+  guestOrderVisible: boolean
+  memberPortalVisible: boolean
+}
+
+export type CommunityBrandPresentation = Pick<
+  CommunityBrandConfig,
+  'name' | 'eyebrow' | 'tagline' | 'markUrl' | 'highlights'
+>
+
 export interface StoreConfig {
   version: number
   status: 'published' | 'draft'
@@ -355,6 +371,7 @@ export interface StoreConfig {
   workstations: WorkstationConfig[]
   proactiveOrderCare: ProactiveOrderCareConfig
   guestServiceLimits: GuestServiceLimitsConfig
+  communityBrand: CommunityBrandConfig
 }
 
 export interface AwaitingOrderIntent {
@@ -617,6 +634,16 @@ export const configDraftSchema = z.object({
     maxRequests: z.number().int().min(1).max(30),
     duplicateSeconds: z.number().int().min(5).max(600),
   }),
+  communityBrand: z.object({
+    enabled: z.boolean(),
+    name: z.string().trim().min(1).max(40),
+    eyebrow: z.string().trim().min(1).max(60),
+    tagline: z.string().trim().min(1).max(120),
+    markUrl: z.string().trim().min(1).max(240),
+    highlights: z.array(z.string().trim().min(1).max(20)).min(1).max(6),
+    guestOrderVisible: z.boolean(),
+    memberPortalVisible: z.boolean(),
+  }).optional(),
 })
 
 export type ConfigDraftInput = z.infer<typeof configDraftSchema>

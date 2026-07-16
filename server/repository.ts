@@ -87,6 +87,7 @@ export class JsonRepository {
           ...(loaded.config ?? seed.config),
           proactiveOrderCare: loaded.config?.proactiveOrderCare ?? seed.config.proactiveOrderCare,
           guestServiceLimits: loaded.config?.guestServiceLimits ?? seed.config.guestServiceLimits,
+          communityBrand: loaded.config?.communityBrand ?? seed.config.communityBrand,
         },
         configVersions: migrateConfigVersions(loaded, seed),
         draftConfig: loaded.draftConfig
@@ -94,6 +95,7 @@ export class JsonRepository {
               ...loaded.draftConfig,
               proactiveOrderCare: loaded.draftConfig.proactiveOrderCare ?? seed.config.proactiveOrderCare,
               guestServiceLimits: loaded.draftConfig.guestServiceLimits ?? seed.config.guestServiceLimits,
+              communityBrand: loaded.draftConfig.communityBrand ?? seed.config.communityBrand,
             }
           : null,
       })

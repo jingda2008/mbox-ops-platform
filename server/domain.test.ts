@@ -67,6 +67,17 @@ describe('service task domain', () => {
     expect(state.tasks).toHaveLength(1)
   })
 
+  it('does not let an employee impersonate the guest service confirmation', () => {
+    const state = createSeedState()
+    const task = createServiceTask(state, taskInput())
+    applyTaskAction(state, task.id, { action: 'accept', actorId: 'emp-lin', note: '', idempotencyKey: 'staff-accept-0001' })
+    applyTaskAction(state, task.id, { action: 'arrive', actorId: 'emp-lin', note: '', idempotencyKey: 'staff-arrive-0001' })
+    applyTaskAction(state, task.id, { action: 'complete', actorId: 'emp-lin', note: '已送到桌', idempotencyKey: 'staff-complete-0001' })
+
+    expect(() => applyTaskAction(state, task.id, { action: 'confirm', actorId: 'emp-lin', note: '', idempotencyKey: 'staff-fake-confirm-0001' }))
+      .toThrow('仅客人可以确认服务已经解决')
+  })
+
   it('enforces accept, arrive, complete and customer confirmation order', () => {
     const state = createSeedState()
     const task = createServiceTask(state, taskInput())
@@ -88,6 +99,23 @@ describe('service task domain', () => {
       'task.completed.v1',
       'service.confirmed.v1',
     ])
+  })
+
+  it('restarts SLA and notifies the replacement when the guest says service is unresolved', () => {
+    const state = createSeedState()
+    const task = createServiceTask(state, taskInput())
+    applyTaskAction(state, task.id, { action: 'accept', actorId: 'emp-lin', note: '', idempotencyKey: 'reopen-accept-0001' })
+    applyTaskAction(state, task.id, { action: 'arrive', actorId: 'emp-lin', note: '', idempotencyKey: 'reopen-arrive-0001' })
+    applyTaskAction(state, task.id, { action: 'complete', actorId: 'emp-lin', note: '客人仍不满意', idempotencyKey: 'reopen-complete-0001' })
+    task.warningAt = '2020-01-01T00:00:00.000Z'
+    task.escalateAt = '2020-01-01T00:00:00.000Z'
+    task.managerAt = '2020-01-01T00:00:00.000Z'
+
+    const reopened = applyTaskAction(state, task.id, { action: 'unresolved', actorId: 'guest-L01', note: '还没有送到', idempotencyKey: 'reopen-unresolved-0001' })
+
+    expect(reopened).toMatchObject({ status: 'reopened', completedAt: null, resolution: null })
+    expect(Date.parse(reopened.warningAt)).toBeGreaterThan(Date.now())
+    expect(reopened.notifiedEmployeeIds).toContain(reopened.ownerId)
   })
 
   it('replays a task action without adding another event or revision', () => {

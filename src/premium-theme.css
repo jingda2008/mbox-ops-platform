@@ -556,6 +556,40 @@ body {
   height: 20px;
 }
 
+.guest-reply > span,
+.guest-error-banner > span {
+  min-width: 0;
+  flex: 1;
+}
+
+.guest-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.guest-notice-close {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: currentColor;
+  cursor: pointer;
+}
+
+.guest-notice-close:hover,
+.guest-notice-close:focus-visible {
+  background: rgba(17, 21, 18, .07);
+  outline: 2px solid currentColor;
+  outline-offset: -2px;
+}
+
 .guest-mood-section {
   display: grid;
   grid-template-columns: 170px minmax(0, 540px);
@@ -876,6 +910,22 @@ body {
   font-weight: 700;
 }
 
+.guest-required-mark {
+  color: var(--brand-red);
+}
+
+.guest-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .guest-custom-song-fields input,
 .guest-custom-song-fields select {
   width: 100%;
@@ -953,6 +1003,100 @@ body {
   border-color: #c8cdc5;
   border-radius: 6px;
   box-shadow: 0 5px 16px rgba(13, 16, 14, .07);
+}
+
+.guest-song-progress {
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #cfd3cc;
+}
+
+.guest-song-progress > header,
+.guest-song-progress > header > div {
+  display: flex;
+  align-items: center;
+}
+
+.guest-song-progress > header {
+  min-height: 38px;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.guest-song-progress > header > div {
+  gap: 7px;
+  color: #18231f;
+}
+
+.guest-song-progress > header > span {
+  color: #6d7571;
+  font-size: 11px;
+}
+
+.guest-song-request-list {
+  display: grid;
+  gap: 7px;
+}
+
+.guest-song-request {
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 11px;
+  border: 1px solid #c8cdc5;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.guest-song-request > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.guest-song-request > div > strong {
+  overflow: hidden;
+  color: #17201d;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.guest-song-request > div > span {
+  color: #717976;
+  font-size: 11px;
+}
+
+.guest-song-request > b {
+  max-width: 150px;
+  flex: 0 0 auto;
+  padding-left: 8px;
+  border-left: 3px solid var(--brand-blue);
+  color: #1b5f99;
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: right;
+}
+
+.guest-song-request > b[data-status="performing"] {
+  border-left-color: var(--brand-yellow);
+  color: #765a08;
+}
+
+.guest-song-request > b[data-status="complete"],
+.guest-song-request > b[data-status="completed"] {
+  border-left-color: #3d7a50;
+  color: #316742;
+}
+
+.guest-song-request > b[data-status="rejected"],
+.guest-song-request > b[data-status="cancelled"],
+.guest-song-request > b[data-status="refund_required"],
+.guest-song-request > b[data-status="refunded"] {
+  border-left-color: var(--brand-red);
+  color: #963039;
 }
 
 .menu-ordering-workspace,

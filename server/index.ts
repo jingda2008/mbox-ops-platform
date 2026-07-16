@@ -310,6 +310,9 @@ app.post('/api/tasks', async (request, reply) => {
 app.post<{ Params: { taskId: string } }>('/api/tasks/:taskId/actions', async (request) => {
   const input = taskActionSchema.parse(request.body)
   const actor = requireRequestActor(request)
+  if (['confirm', 'unresolved'].includes(input.action)) {
+    throw new AuthorizationError('客户确认必须由客人端提交', 'service.task.action')
+  }
   if (input.actorId !== actor.actorId) {
     throw new AuthorizationError('任务操作人必须与当前登录员工一致', 'service.task.action')
   }

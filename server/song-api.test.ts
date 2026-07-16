@@ -1,4 +1,4 @@
-import Fastify from 'fastify'
+import Fastify, { type FastifyInstance } from 'fastify'
 import { describe, expect, it } from 'vitest'
 import { AuthorizationError } from './authorization.js'
 import { JsonRepository } from './repository.js'
@@ -56,6 +56,15 @@ async function submitPayload(repository: JsonRepository, idempotencyKey = 'song-
     customerNote: '',
     idempotencyKey,
   }
+}
+
+async function confirmRequest(app: FastifyInstance, requestId: string, idempotencyKey: string) {
+  return app.inject({
+    method: 'POST',
+    url: `/api/songs/requests/${requestId}/actions`,
+    headers: { 'x-test-role': 'server' },
+    payload: { action: 'confirm', reason: '', refundReference: '', idempotencyKey },
+  })
 }
 
 describe('song API employee authorization', () => {
@@ -127,7 +136,7 @@ describe('song API employee authorization', () => {
     await repository.close()
   })
 
-  it('allows the cashier to register payment and binds the audit to the authenticated employee', async () => {
+  it('requires staff confirmation, then lets the cashier register onsite collection', async () => {
     const { app, repository } = await fixture()
     const submitted = await app.inject({
       method: 'POST',
@@ -136,15 +145,20 @@ describe('song API employee authorization', () => {
     })
     expect(submitted.statusCode).toBe(201)
     const requestId = submitted.json().id as string
+    expect(submitted.json().status).toBe('pending_confirmation')
+
+    const confirmed = await confirmRequest(app, requestId, 'song-api-confirm-server-0001')
+    expect(confirmed.statusCode).toBe(200)
+    expect(confirmed.json()).toMatchObject({ status: 'pending_payment', confirmedBy: 'emp-lin' })
 
     const paid = await app.inject({
       method: 'POST',
       url: `/api/songs/requests/${requestId}/payment`,
       headers: { 'x-test-role': 'cashier' },
-      payload: { paymentReference: 'payment-cashier', idempotencyKey: 'song-api-payment-cashier-0001' },
+      payload: { paymentReference: 'pos-cashier', collectionChannel: 'physical_pos', idempotencyKey: 'song-api-payment-cashier-0001' },
     })
     expect(paid.statusCode).toBe(200)
-    expect(paid.json().status).toBe('paid')
+    expect(paid.json()).toMatchObject({ status: 'paid', payment: { collectionChannel: 'physical_pos' } })
 
     const audit = (await repository.read()).songState.auditEvents.filter((event) => event.requestId === requestId)
     expect(audit.find((event) => event.type === 'song_request.submitted.v1')?.actorId).toBe('emp-lin')
@@ -167,7 +181,7 @@ describe('song API employee authorization', () => {
       method: 'POST',
       url: `/api/songs/requests/${requestId}/payment`,
       headers: { 'x-test-role': roleId },
-      payload: { paymentReference: `payment-${roleId}-denied`, idempotencyKey: `song-api-payment-${roleId}-denied-0001` },
+      payload: { paymentReference: `pos-${roleId}-denied`, collectionChannel: 'physical_pos', idempotencyKey: `song-api-payment-${roleId}-denied-0001` },
     })
     expect(deniedPayment.statusCode).toBe(403)
     expect(deniedPayment.json().operation).toBe('payment.intent.create')
@@ -180,13 +194,13 @@ describe('song API employee authorization', () => {
     })
     expect(deniedAction.statusCode).toBe(403)
     expect(deniedAction.json().operation).toBe('song.manage')
-    expect((await repository.read()).songState.requests.find((item) => item.id === requestId)?.status).toBe('pending_payment')
+    expect((await repository.read()).songState.requests.find((item) => item.id === requestId)?.status).toBe('pending_confirmation')
 
     await app.close()
     await repository.close()
   })
 
-  it('allows manager and owner management while preserving the song-domain manager actor list', async () => {
+  it('allows supervisor and owner management according to configured permissions', async () => {
     const { app, repository } = await fixture()
     const acceptedRequest = await app.inject({
       method: 'POST',
@@ -194,11 +208,12 @@ describe('song API employee authorization', () => {
       payload: await submitPayload(repository, 'song-api-submit-owner-accept-0001'),
     })
     const acceptedRequestId = acceptedRequest.json().id as string
+    await confirmRequest(app, acceptedRequestId, 'song-api-confirm-owner-accept-0001')
     await app.inject({
       method: 'POST',
       url: `/api/songs/requests/${acceptedRequestId}/payment`,
       headers: { 'x-test-role': 'cashier' },
-      payload: { paymentReference: 'payment-owner-accept', idempotencyKey: 'song-api-payment-owner-accept-0001' },
+      payload: { paymentReference: 'pos-owner-accept', collectionChannel: 'physical_pos', idempotencyKey: 'song-api-payment-owner-accept-0001' },
     })
 
     const accepted = await app.inject({
@@ -216,30 +231,22 @@ describe('song API employee authorization', () => {
       payload: await submitPayload(repository, 'song-api-submit-manager-refund-0001'),
     })
     const rejectedRequestId = rejectedRequest.json().id as string
+    await confirmRequest(app, rejectedRequestId, 'song-api-confirm-manager-refund-0001')
     await app.inject({
       method: 'POST',
       url: `/api/songs/requests/${rejectedRequestId}/payment`,
       headers: { 'x-test-role': 'cashier' },
-      payload: { paymentReference: 'payment-manager-refund', idempotencyKey: 'song-api-payment-manager-refund-0001' },
+      payload: { paymentReference: 'cash-manager-refund', collectionChannel: 'cash', idempotencyKey: 'song-api-payment-manager-refund-0001' },
     })
 
-    const supervisorDenied = await app.inject({
+    const supervisorRejected = await app.inject({
       method: 'POST',
       url: `/api/songs/requests/${rejectedRequestId}/actions`,
       headers: { 'x-test-role': 'supervisor' },
-      payload: { action: 'reject', reason: '领班越权', refundReference: '', idempotencyKey: 'song-api-action-supervisor-denied-0001' },
+      payload: { action: 'reject', reason: '歌手临时无法演出', refundReference: '', idempotencyKey: 'song-api-action-supervisor-reject-0001' },
     })
-    expect(supervisorDenied.statusCode).toBe(500)
-    expect((await repository.read()).songState.requests.find((item) => item.id === rejectedRequestId)?.status).toBe('paid')
-
-    const rejected = await app.inject({
-      method: 'POST',
-      url: `/api/songs/requests/${rejectedRequestId}/actions`,
-      headers: { 'x-test-role': 'manager' },
-      payload: { action: 'reject', reason: '歌手临时无法演出', refundReference: '', idempotencyKey: 'song-api-action-manager-reject-0001' },
-    })
-    expect(rejected.statusCode).toBe(200)
-    expect(rejected.json().status).toBe('refund_required')
+    expect(supervisorRejected.statusCode).toBe(200)
+    expect(supervisorRejected.json().status).toBe('refund_required')
 
     const refunded = await app.inject({
       method: 'POST',
@@ -254,7 +261,7 @@ describe('song API employee authorization', () => {
     const acceptedAudit = state.songState.auditEvents.filter((event) => event.requestId === acceptedRequestId)
     const refundedAudit = state.songState.auditEvents.filter((event) => event.requestId === rejectedRequestId)
     expect(acceptedAudit.find((event) => event.type === 'song_request.accepted.v1')?.actorId).toBe('emp-owner')
-    expect(refundedAudit.find((event) => event.type === 'song_request.refund_required.v1')?.actorId).toBe('emp-chen')
+    expect(refundedAudit.find((event) => event.type === 'song_request.refund_required.v1')?.actorId).toBe('emp-mia')
     expect(refundedAudit.find((event) => event.type === 'song_request.refunded.v1')?.actorId).toBe('emp-owner')
 
     await app.close()

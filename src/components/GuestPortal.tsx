@@ -1,8 +1,8 @@
 import { Bell, CakeSlice, CheckCircle2, ChevronRight, Clock3, CreditCard, GlassWater, ListChecks, MapPin, MessageCircleMore, Mic2, Music2, Send, ShieldCheck, ShoppingBag, X } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { checkoutGuestOrder, createGuestOrder, createGuestSongRequest, createGuestTask, getGuestSession, submitGuestTaskFeedback } from '../api'
 import type { GuestSessionResponse, GuestTaskView, WechatJsapiParameters } from '../shared/guest-contracts'
-import { formatGuestCountdown, guestCustomSongServiceNote, guestErrorMessage, guestFeedbackIdempotencyKey, guestMoodServiceNote, resolveGuestStage } from './guest-portal-utils'
+import { formatGuestCountdown, guestCustomSongServiceNote, guestErrorMessage, guestFeedbackIdempotencyKey, guestMoodServiceNote, guestReplyNotice, guestSongReplyNotice, guestSongStatusLabel, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks, type GuestReplyNotice } from './guest-portal-utils'
 import { ServiceIcon } from './ServiceIcon'
 import { MenuOrderingWorkspace, type MenuCartItem } from './MenuOrderingWorkspace'
 import { SuperHighCommunityBand } from './SuperHighCommunityBand'
@@ -28,6 +28,10 @@ const guestMoods = [
 ] as const
 
 type GuestMoodId = typeof guestMoods[number]['id']
+type GuestErrorNotice = { message: string; source: 'refresh' | 'action' }
+
+const REPLY_DISMISS_MS = 12_000
+const ERROR_DISMISS_MS = 8_000
 
 export function GuestPortal() {
   const params = new URLSearchParams(window.location.search)
@@ -36,9 +40,9 @@ export function GuestPortal() {
   const requestedPaymentOrderId = params.get('payOrder') ?? ''
   const [data, setData] = useState<GuestSessionResponse | null>(null)
   const [note, setNote] = useState('')
-  const [reply, setReply] = useState('')
+  const [reply, setReply] = useState<GuestReplyNotice | null>(null)
   const [pendingType, setPendingType] = useState<string | null>(null)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<GuestErrorNotice | null>(null)
   const [activeTab, setActiveTab] = useState<'menu' | 'service' | 'orders'>(requestedPaymentOrderId ? 'orders' : 'menu')
   const [checkoutBusy, setCheckoutBusy] = useState(false)
   const [payingOrderId, setPayingOrderId] = useState('')
@@ -58,20 +62,42 @@ export function GuestPortal() {
   const [quickPendingKey, setQuickPendingKey] = useState('')
   const [stageClock, setStageClock] = useState(() => Date.now())
   const [singerProfileId, setSingerProfileId] = useState('')
+  const [terminalSongSeenAt, setTerminalSongSeenAt] = useState<Record<string, number>>({})
+  const latestTableToken = useRef(initialToken)
+  const refreshSequence = useRef(0)
 
   const refresh = useCallback(async () => {
+    const sequence = ++refreshSequence.current
     try {
-      setData(await getGuestSession(initialToken, tableCode))
-      setError('')
+      const nextData = await getGuestSession(latestTableToken.current, tableCode)
+      if (sequence !== refreshSequence.current) return
+      latestTableToken.current = nextData.tableToken
+      setData(nextData)
+      setReply((current) => reconcileGuestReply(current, nextData.tasks, nextData.songRequests))
+      setTerminalSongSeenAt((current) => trackGuestSongTerminalStates(current, nextData.songRequests, Date.now()))
+      setError((current) => current?.source === 'refresh' ? null : current)
     } catch (requestError) {
-      setError(guestErrorMessage(requestError, '现场有点忙，我们正在重新连接服务，稍等一下就好。'))
+      if (sequence !== refreshSequence.current) return
+      setError({
+        message: guestErrorMessage(requestError, '现场有点忙，我们正在重新连接服务，稍等一下就好。'),
+        source: 'refresh',
+      })
     }
-  }, [initialToken, tableCode])
+  }, [tableCode])
 
   useEffect(() => {
-    void refresh()
-    const timer = window.setInterval(() => void refresh(), 5000)
-    return () => window.clearInterval(timer)
+    let stopped = false
+    let timer: number | undefined
+    const poll = async () => {
+      await refresh()
+      if (!stopped) timer = window.setTimeout(() => void poll(), 5000)
+    }
+    void poll()
+    return () => {
+      stopped = true
+      refreshSequence.current += 1
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
   }, [refresh])
 
   useEffect(() => {
@@ -79,7 +105,23 @@ export function GuestPortal() {
     return () => window.clearInterval(timer)
   }, [])
 
-  const tableTasks = useMemo(() => data?.tasks.slice(0, 5) ?? [], [data?.tasks])
+  useEffect(() => {
+    if (!reply) return
+    const timer = window.setTimeout(() => setReply(null), REPLY_DISMISS_MS)
+    return () => window.clearTimeout(timer)
+  }, [reply])
+
+  useEffect(() => {
+    if (!error) return
+    const timer = window.setTimeout(() => setError(null), ERROR_DISMISS_MS)
+    return () => window.clearTimeout(timer)
+  }, [error])
+
+  const tableTasks = useMemo(() => visibleGuestTasks(data?.tasks ?? []), [data?.tasks])
+  const visibleSongRequests = useMemo(
+    () => visibleGuestSongRequests(data?.songRequests ?? [], terminalSongSeenAt, stageClock),
+    [data?.songRequests, terminalSongSeenAt, stageClock],
+  )
   const customRequestType = data?.serviceTypes.find((serviceType) => serviceType.code === 'CUSTOM_REQUEST')
   const quickServiceTypes = data?.serviceTypes.filter((serviceType) => serviceType.code !== 'CUSTOM_REQUEST') ?? []
   const serviceTypeByCode = useMemo(() => new Map(data?.serviceTypes.map((serviceType) => [serviceType.code, serviceType]) ?? []), [data?.serviceTypes])
@@ -107,21 +149,24 @@ export function GuestPortal() {
 
   async function requestService(serviceTypeId: string, requestNote = '') {
     setPendingType(serviceTypeId)
-    setError('')
+    setError(null)
     try {
       const task = await createGuestTask({
-        tableToken: data?.tableToken ?? initialToken,
+        tableToken: latestTableToken.current,
         serviceTypeId,
         note: requestNote,
         idempotencyKey: `guest-${tableCode}-${serviceTypeId}-${crypto.randomUUID()}`,
       })
-      setReply(task.customerReply)
+      setReply(guestTaskReplyNotice(task.customerReply, task))
       setNote('')
       await refresh()
-      return true
+      return task
     } catch (requestError) {
-      setError(guestErrorMessage(requestError, '这次召唤没有顺利送达，再轻点一次试试；还不行就直接招呼身边伙伴。'))
-      return false
+      setError({
+        message: guestErrorMessage(requestError, '这次召唤没有顺利送达，再轻点一次试试；还不行就直接招呼身边伙伴。'),
+        source: 'action',
+      })
+      return null
     } finally {
       setPendingType(null)
     }
@@ -130,7 +175,7 @@ export function GuestPortal() {
   async function recordMood(mood: typeof guestMoods[number]) {
     if (selectedMood === mood.id || pendingType) return
     if (!customRequestType) {
-      setError('今晚状态小卡暂时开小差了，您仍可以直接呼叫我们。')
+      setError({ message: '今晚状态小卡暂时开小差了，您仍可以直接呼叫我们。', source: 'action' })
       return
     }
     const previousLabel = guestMoods.find((item) => item.id === selectedMood)?.label ?? ''
@@ -144,7 +189,7 @@ export function GuestPortal() {
   async function requestQuickService(key: string, serviceCode: string, requestNote = '') {
     const serviceType = serviceTypeByCode.get(serviceCode)
     if (!serviceType) {
-      setError('这个快捷服务今晚暂时没开，去“服务”里告诉我们也一样好使。')
+      setError({ message: '这个快捷服务今晚暂时没开，去“服务”里告诉我们也一样好使。', source: 'action' })
       return
     }
     setQuickPendingKey(key)
@@ -155,21 +200,21 @@ export function GuestPortal() {
   async function chooseSong(offer: GuestSessionResponse['songOffers'][number]) {
     if (!data || songBusyId) return
     setSongBusyId(offer.id)
-    setError('')
+    setError(null)
     try {
-      await createGuestSongRequest({
-        tableToken: data.tableToken,
+      const request = await createGuestSongRequest({
+        tableToken: latestTableToken.current,
         appearanceId: offer.appearanceId,
         singerId: offer.singerId,
         songId: offer.songId,
         customerNote: '',
         idempotencyKey: `guest-song-${crypto.randomUUID()}`,
       })
-      setReply(`《${offer.songTitle}》已经替您递给${offer.singerName}啦～点歌费 ¥${(offer.priceAmount / 100).toFixed(2)}，服务伙伴会先来和您确认，点头后再收款。`)
+      setReply(guestSongReplyNotice(`《${offer.songTitle}》已经替您递给${offer.singerName}啦～点歌费 ¥${(offer.priceAmount / 100).toFixed(2)}，服务伙伴会先来和您确认，点头后再收款。`, request))
       setSongPickerOpen(false)
       await refresh()
     } catch (requestError) {
-      setError(guestErrorMessage(requestError, '这首歌刚才没递出去，再点一次试试，或者让服务伙伴来帮您。'))
+      setError({ message: guestErrorMessage(requestError, '这首歌刚才没递出去，再点一次试试，或者让服务伙伴来帮您。'), source: 'action' })
     } finally {
       setSongBusyId('')
     }
@@ -189,23 +234,23 @@ export function GuestPortal() {
 
   async function submitCustomSong() {
     if (!customRequestType) {
-      setError('歌单外点歌暂时没连上，点一下“呼叫”，我们到桌帮您问歌手。')
+      setError({ message: '歌单外点歌暂时没连上，点一下“呼叫”，我们到桌帮您问歌手。', source: 'action' })
       return
     }
     if (!customSongTitle.trim()) {
-      setError('先告诉我们歌名吧～记得一两个字也可以，我们陪您一起找。')
+      setError({ message: '先告诉我们歌名吧～记得一两个字也可以，我们陪您一起找。', source: 'action' })
       return
     }
     const singerName = data?.stageSchedule.find((appearance) => appearance.singerId === customSongSingerId)?.singerName ?? '不限歌手'
     setCustomSongBusy(true)
-    const succeeded = await requestService(customRequestType.id, guestCustomSongServiceNote({
+    const task = await requestService(customRequestType.id, guestCustomSongServiceNote({
       title: customSongTitle,
       artist: customSongArtist,
       singerName,
       customerNote: customSongNote,
     }))
-    if (succeeded) {
-      setReply('收到这首私藏啦～服务伙伴这就去问歌手，能不能唱、多少钱、什么时候安排，都会先回来和您确认。')
+    if (task) {
+      setReply(guestTaskReplyNotice('收到这首私藏啦～服务伙伴这就去问歌手，能不能唱、多少钱、什么时候安排，都会先回来和您确认。', task))
       setCustomSongTitle('')
       setCustomSongArtist('')
       setCustomSongNote('')
@@ -216,11 +261,11 @@ export function GuestPortal() {
 
   async function submitCustomRequest() {
     if (!customRequestType) {
-      setError('特别需求通道暂时开小差了，点一下“呼叫”，我们亲自到桌听您说。')
+      setError({ message: '特别需求通道暂时开小差了，点一下“呼叫”，我们亲自到桌听您说。', source: 'action' })
       return
     }
     if (!note.trim()) {
-      setError('悄悄告诉我们您想要什么吧～写几个字就能送到服务伙伴手里。')
+      setError({ message: '悄悄告诉我们您想要什么吧～写几个字就能送到服务伙伴手里。', source: 'action' })
       return
     }
     await requestService(customRequestType.id, note.trim())
@@ -228,28 +273,28 @@ export function GuestPortal() {
 
   async function giveFeedback(task: GuestTaskView, action: 'confirm' | 'unresolved') {
     try {
-      await submitGuestTaskFeedback(task.id, {
-        tableToken: data?.tableToken ?? initialToken,
+      const updatedTask = await submitGuestTaskFeedback(task.id, {
+        tableToken: latestTableToken.current,
         action,
         note: action === 'unresolved' ? '客户反馈仍未解决' : '',
         idempotencyKey: guestFeedbackIdempotencyKey(action),
       })
-      setReply(action === 'confirm'
+      setReply(guestTaskReplyNotice(action === 'confirm'
         ? '谢谢您的点头～能照顾好今晚的您，我们也很开心。'
-        : '还没照顾到位，抱歉让您再说一次。值班领班已经接手，会继续跟到解决。')
+        : '还没照顾到位，抱歉让您再说一次。值班领班已经接手，会继续跟到解决。', updatedTask))
       await refresh()
     } catch (requestError) {
-      setError(guestErrorMessage(requestError, '刚才的反馈没有送到，再点一次，我们不让这件事掉在地上。'))
+      setError({ message: guestErrorMessage(requestError, '刚才的反馈没有送到，再点一次，我们不让这件事掉在地上。'), source: 'action' })
     }
   }
 
   async function payOrder(orderId: string, idempotencyKey = `guest-pay-${crypto.randomUUID()}`) {
     if (!data || payingOrderId) return
     setPayingOrderId(orderId)
-    setError('')
+    setError(null)
     try {
       const result = await checkoutGuestOrder({
-        tableToken: data.tableToken,
+        tableToken: latestTableToken.current,
         orderId,
         idempotencyKey,
       })
@@ -259,21 +304,21 @@ export function GuestPortal() {
           return
         }
         const outcome = await invokeWechatJsapi(result.wechatJsapiParameters)
-        setReply(outcome === 'succeeded'
+        setReply(guestReplyNotice(outcome === 'succeeded'
           ? '微信支付已经提交～我们正在确认到账，确认后马上更新订单。'
           : outcome === 'cancelled'
             ? '没关系，订单还替您留着～准备好时再点一次微信支付就行。'
-            : '订单已经替您留好，但微信支付刚才没有拉起来。稍后再试一次，或呼叫服务伙伴来帮您。')
+            : '订单已经替您留好，但微信支付刚才没有拉起来。稍后再试一次，或呼叫服务伙伴来帮您。'))
       } else {
         const fulfillmentMessage = result.order.createdBy.startsWith('guest-')
           ? '酒水和餐食伙伴已经收到，正在为您准备。'
           : '服务伙伴和出品伙伴都已经收到，不用再重复确认。'
-        setReply(`支付成功 ¥${(result.paymentIntent.amount / 100).toFixed(2)}～今晚的快乐继续，${fulfillmentMessage}`)
+        setReply(guestReplyNotice(`支付成功 ¥${(result.paymentIntent.amount / 100).toFixed(2)}～今晚的快乐继续，${fulfillmentMessage}`))
       }
       setActiveTab('orders')
       await refresh()
     } catch (requestError) {
-      setError(guestErrorMessage(requestError, '这次支付没有完成，订单还在，不会重复下单。您可以再试一次或呼叫服务伙伴。'))
+      setError({ message: guestErrorMessage(requestError, '这次支付没有完成，订单还在，不会重复下单。您可以再试一次或呼叫服务伙伴。'), source: 'action' })
       throw requestError
     } finally {
       setPayingOrderId('')
@@ -283,10 +328,10 @@ export function GuestPortal() {
   async function placeAndPay(items: MenuCartItem[]) {
     if (!data) return
     setCheckoutBusy(true)
-    setError('')
+    setError(null)
     const idempotencyKey = `guest-cart-${crypto.randomUUID()}`
     try {
-      const order = await createGuestOrder({ tableToken: data.tableToken, items, idempotencyKey })
+      const order = await createGuestOrder({ tableToken: latestTableToken.current, items, idempotencyKey })
       try {
         await payOrder(order.id, `${idempotencyKey}-pay`)
       } catch {
@@ -354,12 +399,13 @@ export function GuestPortal() {
       </div>}
 
       {reply && (
-        <div className="guest-reply" role="status">
-          <CheckCircle2 size={24} />
-          <span>{reply}</span>
+        <div className="guest-reply" role="status" aria-live="polite">
+          <CheckCircle2 size={24} aria-hidden="true" />
+          <span>{reply.message}</span>
+          <button className="guest-notice-close" type="button" title="关闭提示" aria-label="关闭提示" onClick={() => setReply(null)}><X size={17} aria-hidden="true" /></button>
         </div>
       )}
-      {error && <div className="error-banner" role="alert">{error}</div>}
+      {error && <div className="error-banner guest-error-banner" role="alert"><span>{error.message}</span><button className="guest-notice-close" type="button" title="关闭错误提示" aria-label="关闭错误提示" onClick={() => setError(null)}><X size={17} aria-hidden="true" /></button></div>}
 
       <nav className="guest-tabs" aria-label="桌台功能">
         <button className={activeTab === 'menu' ? 'is-active' : ''} onClick={() => setActiveTab('menu')}><ShoppingBag size={18} />点单</button>
@@ -404,7 +450,7 @@ export function GuestPortal() {
           </> : <div className="guest-custom-song">
             <header><Music2 size={17} /><div><strong>歌单里没找到？</strong><span>把私藏曲目告诉我们，先替您问歌手</span></div></header>
             <div className="guest-custom-song-fields">
-              <label><span>歌曲名称 *</span><input value={customSongTitle} maxLength={60} placeholder="输入想点的歌" onChange={(event) => setCustomSongTitle(event.target.value)} /></label>
+              <label><span>歌曲名称 <span className="guest-required-mark" aria-hidden="true">*</span><span className="guest-visually-hidden">（必填）</span></span><input value={customSongTitle} maxLength={60} required aria-required="true" placeholder="输入想点的歌" onChange={(event) => setCustomSongTitle(event.target.value)} /></label>
               <label><span>原唱</span><input value={customSongArtist} maxLength={60} placeholder="选填" onChange={(event) => setCustomSongArtist(event.target.value)} /></label>
               <label><span>希望歌手</span><select value={customSongSingerId} onChange={(event) => setCustomSongSingerId(event.target.value)}><option value="">不限歌手</option>{songSingers.map((singer) => <option key={singer.singerId} value={singer.singerId}>{singer.singerName}</option>)}</select></label>
               <label><span>补充信息</span><input value={customSongNote} maxLength={80} placeholder="祝福语或演唱偏好" onChange={(event) => setCustomSongNote(event.target.value)} /></label>
@@ -491,6 +537,13 @@ export function GuestPortal() {
       {activeTab === 'orders' && <section className="guest-orders">
         <div className="guest-section-title"><span>订单与出品进度</span><ListChecks size={20} /></div>
         {requestedPaymentOrderId && <div className="guest-payment-sync"><CreditCard size={18} /><span>服务伙伴已经把订单送到您手机啦～确认商品和金额后就可以付款。</span></div>}
+        {visibleSongRequests.length > 0 && <div className="guest-song-progress">
+          <header><div><Music2 size={18} aria-hidden="true" /><strong>点歌进度</strong></div><span>现场确认与收费</span></header>
+          <div className="guest-song-request-list">{visibleSongRequests.map((request) => <article className="guest-song-request" key={request.id}>
+            <div><strong>《{request.songTitle}》</strong><span>{request.singerName} · ¥{(request.priceAmount / 100).toFixed(2)}</span></div>
+            <b data-status={request.status}>{guestSongStatusLabel(request.status)}</b>
+          </article>)}</div>
+        </div>}
         {(data?.account.orders.length ?? 0) === 0 ? <div className="guest-empty">还没有点单，慢慢看；想听推荐就叫我们。</div> : (
           <div className="guest-order-list">{data?.account.orders.toReversed().map((order) => {
             const payment = data.account.payments.find((item) => item.orderIds.includes(order.id))

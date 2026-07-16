@@ -30,7 +30,7 @@ const openTaskStatuses = new Set(['pending', 'accepted', 'arrived', 'completed',
 const confirmedPaymentStatuses = new Set(['succeeded', 'reported_pending_reconciliation'])
 const pendingRefundStatuses = new Set(['requested', 'approved', 'processing'])
 const openServiceTaskStatuses = new Set(['pending', 'accepted', 'arrived', 'completed', 'reopened', 'escalated'])
-const activeSongStatuses = new Set(['pending_payment', 'paid', 'accepted', 'performing', 'refund_required'])
+const activeSongStatuses = new Set(['pending_confirmation', 'pending_payment', 'paid', 'accepted', 'performing', 'refund_required'])
 
 function childIdempotencyKey(key: string, suffix: string) {
   return `${key.slice(0, Math.max(8, 118 - suffix.length))}:${suffix}`

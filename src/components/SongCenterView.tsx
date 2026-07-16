@@ -1,6 +1,6 @@
 import { Banknote, CheckCircle2, Clock3, Image, Mic2, Music2, Play, RotateCcw, Save, XCircle } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { actOnSongRequest, reportSongPayment, submitPaidSongRequest, updateSingerProfile } from '../api'
+import { actOnSongRequest, reportSongOnsiteCollection, submitStaffSongRequest, updateSingerProfile } from '../api'
 import type { BootstrapResponse } from '../shared/contracts'
 import type { Singer, SingerProfileWriteInput, SongRequest, SongRequestStatus } from '../shared/song-contracts'
 import './SongCenterView.css'
@@ -22,6 +22,7 @@ export function SongCenterView({ data, onRefresh, onNotice }: SongCenterViewProp
   const [requestedBy, setRequestedBy] = useState('现场客人')
   const [customerNote, setCustomerNote] = useState('')
   const [references, setReferences] = useState<Record<string, string>>({})
+  const [collectionChannels, setCollectionChannels] = useState<Record<string, 'cash' | 'physical_pos'>>({})
   const [busy, setBusy] = useState(false)
 
   const effectiveSongId = offers.some((item) => item.songId === songId) ? songId : offers[0]?.songId ?? ''
@@ -43,7 +44,7 @@ export function SongCenterView({ data, onRefresh, onNotice }: SongCenterViewProp
   async function submit(event: React.FormEvent) {
     event.preventDefault()
     if (!selected || !selectedOffer) return
-    await run(() => submitPaidSongRequest({
+    await run(() => submitStaffSongRequest({
       performanceSessionId: selected.session.id,
       appearanceId: selected.appearance.id,
       tableSessionId,
@@ -51,7 +52,7 @@ export function SongCenterView({ data, onRefresh, onNotice }: SongCenterViewProp
       songId: selectedOffer.songId,
       requestedBy,
       customerNote,
-    }), '点歌已创建，等待支付结果')
+    }), '点歌已创建，先确认歌手能否演唱')
   }
 
   const openRequests = data.songState.requests.filter((item) => !['completed', 'cancelled', 'rejected', 'refunded'].includes(item.status))
@@ -83,12 +84,12 @@ export function SongCenterView({ data, onRefresh, onNotice }: SongCenterViewProp
           <label className="wide-field"><span>歌曲</span><select value={effectiveSongId} onChange={(event) => setSongId(event.target.value)}>{offers.map((offer) => { const song = data.songState.songs.find((item) => item.id === offer.songId); return <option key={offer.id} value={offer.songId}>{song?.title} · {money(offer.priceAmount)}</option> })}</select></label>
           <label><span>客人称呼</span><input value={requestedBy} onChange={(event) => setRequestedBy(event.target.value)} /></label>
           <label className="wide-field"><span>备注</span><input value={customerNote} onChange={(event) => setCustomerNote(event.target.value)} placeholder="祝福语、互动偏好或不能公开的信息" /></label>
-          <div className="song-payment-boundary"><Banknote size={16} /><span>创建请求不代表已付款；只有支付或物理POS凭证确认后才能进入歌手队列。</span></div>
+          <div className="song-payment-boundary"><Banknote size={16} /><span>点歌不发起线上支付；先确认歌手可以演唱，再由服务员到桌使用现金或物理POS现场收费。</span></div>
           <button className="primary-button" disabled={busy || !selectedOffer || !tableSessionId || !requestedBy.trim()}><Music2 size={16} />创建点歌</button>
         </form>
         <div className="song-queue">
-          <div className="song-queue-heading"><Mic2 size={19} /><div><strong>点歌队列</strong><span>支付、接单、演唱与退款状态分离</span></div></div>
-          {data.songState.requests.length === 0 ? <div className="compact-empty">暂无点歌请求</div> : data.songState.requests.toReversed().map((request) => <SongRequestRow key={request.id} request={request} reference={references[request.id] ?? ''} setReference={(value) => setReferences({ ...references, [request.id]: value })} busy={busy} run={run} />)}
+          <div className="song-queue-heading"><Mic2 size={19} /><div><strong>点歌队列</strong><span>服务确认、现场收费、歌手接单和演唱状态实时联动</span></div></div>
+          {data.songState.requests.length === 0 ? <div className="compact-empty">暂无点歌请求</div> : data.songState.requests.toReversed().map((request) => <SongRequestRow key={request.id} request={request} reference={references[request.id] ?? ''} setReference={(value) => setReferences({ ...references, [request.id]: value })} collectionChannel={collectionChannels[request.id] ?? 'physical_pos'} setCollectionChannel={(value) => setCollectionChannels({ ...collectionChannels, [request.id]: value })} busy={busy} run={run} />)}
         </div>
       </div>
     </section>
@@ -127,11 +128,11 @@ function SingerProfileEditor({ singer, busy, onSave }: { singer: Singer; busy: b
   </form>
 }
 
-function SongRequestRow({ request, reference, setReference, busy, run }: { request: SongRequest; reference: string; setReference: (value: string) => void; busy: boolean; run: (operation: () => Promise<unknown>, success: string) => Promise<void> }) {
-  return <div className="song-request-row"><span className={`song-status status-${request.status}`}>{statusLabel(request.status)}</span><div><strong>{request.tableCode} · {request.priceSnapshot.songTitle}</strong><small>{request.priceSnapshot.singerName} · {money(request.priceSnapshot.priceAmount)} · {request.requestedBy}</small></div><div className="song-request-actions">{request.status === 'pending_payment' && <><input value={reference} onChange={(event) => setReference(event.target.value)} placeholder="支付/物理POS流水号" /><button className="primary-button" disabled={busy || reference.trim().length < 4} onClick={() => void run(() => reportSongPayment(request.id, reference.trim()), '点歌收款凭证已登记')}><Banknote size={14} />登记收款</button><button className="icon-button danger" title="取消未支付点歌" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'cancel', '客人未支付前取消'), '点歌已取消')}><XCircle size={15} /></button></>}{request.status === 'paid' && <><button className="primary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'accept'), '歌手队列已接单')}><CheckCircle2 size={14} />接单</button><button className="secondary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'reject', '现场无法履约，经理发起退款'), '已拒绝并进入退款队列')}>拒绝并退款</button></>}{request.status === 'accepted' && <><button className="primary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'start'), '已开始演唱')}><Play size={14} />开始演唱</button><button className="secondary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'reject', '现场无法履约，经理发起退款'), '已拒绝并进入退款队列')}>拒绝并退款</button></>}{request.status === 'performing' && <button className="primary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'complete'), '本次点歌已完成')}><CheckCircle2 size={14} />完成</button>}{request.status === 'refund_required' && <><input value={reference} onChange={(event) => setReference(event.target.value)} placeholder="退款流水号" /><button className="primary-button" disabled={busy || reference.trim().length < 4} onClick={() => void run(() => actOnSongRequest(request.id, 'refund', '', reference.trim()), '点歌退款已登记')}><RotateCcw size={14} />确认退款</button></>}</div></div>
+function SongRequestRow({ request, reference, setReference, collectionChannel, setCollectionChannel, busy, run }: { request: SongRequest; reference: string; setReference: (value: string) => void; collectionChannel: 'cash' | 'physical_pos'; setCollectionChannel: (value: 'cash' | 'physical_pos') => void; busy: boolean; run: (operation: () => Promise<unknown>, success: string) => Promise<void> }) {
+  return <div className="song-request-row"><span className={`song-status status-${request.status}`}>{statusLabel(request.status)}</span><div><strong>{request.tableCode} · {request.priceSnapshot.songTitle}</strong><small>{request.priceSnapshot.singerName} · {money(request.priceSnapshot.priceAmount)} · {request.requestedBy}</small></div><div className="song-request-actions">{request.status === 'pending_confirmation' && <><button className="primary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'confirm'), '已确认可以演唱，请到桌现场收费')}><CheckCircle2 size={14} />确认可唱</button><button className="secondary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'reject', '歌手或现场安排无法演唱'), '已反馈客人本次无法安排')}>无法安排</button></>}{request.status === 'pending_payment' && <><select aria-label="现场收费方式" value={collectionChannel} onChange={(event) => setCollectionChannel(event.target.value as 'cash' | 'physical_pos')}><option value="physical_pos">物理POS</option><option value="cash">现金</option></select><input value={reference} onChange={(event) => setReference(event.target.value)} placeholder="现场收款凭证号" /><button className="primary-button" disabled={busy || reference.trim().length < 4} onClick={() => void run(() => reportSongOnsiteCollection(request.id, reference.trim(), collectionChannel), '现场收款已登记，等待歌手接单')}><Banknote size={14} />登记现场收款</button><button className="icon-button danger" title="取消未收款点歌" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'cancel', '客人现场付款前取消'), '点歌已取消')}><XCircle size={15} /></button></>}{request.status === 'paid' && <><button className="primary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'accept'), '歌手队列已接单')}><CheckCircle2 size={14} />接单</button><button className="secondary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'reject', '现场无法履约，经理发起退款'), '已拒绝并进入退款队列')}>拒绝并退款</button></>}{request.status === 'accepted' && <><button className="primary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'start'), '已开始演唱')}><Play size={14} />开始演唱</button><button className="secondary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'reject', '现场无法履约，经理发起退款'), '已拒绝并进入退款队列')}>拒绝并退款</button></>}{request.status === 'performing' && <button className="primary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'complete'), '本次点歌已完成')}><CheckCircle2 size={14} />完成</button>}{request.status === 'refund_required' && <><input value={reference} onChange={(event) => setReference(event.target.value)} placeholder="退款流水号" /><button className="primary-button" disabled={busy || reference.trim().length < 4} onClick={() => void run(() => actOnSongRequest(request.id, 'refund', '', reference.trim()), '点歌退款已登记')}><RotateCcw size={14} />确认退款</button></>}</div></div>
 }
 
 function SongMetric({ label, value, warning = false }: { label: string; value: number; warning?: boolean }) { return <div className={warning && value > 0 ? 'song-metric is-warning' : 'song-metric'}><strong>{value}</strong><span>{label}</span></div> }
-function statusLabel(status: SongRequestStatus) { return ({ pending_payment: '待付款', paid: '已付款', accepted: '已接单', performing: '演唱中', completed: '已完成', rejected: '已拒绝', cancelled: '已取消', refund_required: '待退款', refunded: '已退款' } as const)[status] }
+function statusLabel(status: SongRequestStatus) { return ({ pending_confirmation: '待确认', pending_payment: '待现场收费', paid: '现场已收款', accepted: '已接单', performing: '演唱中', completed: '已完成', rejected: '无法安排', cancelled: '已取消', refund_required: '待退款', refunded: '已退款' } as const)[status] }
 function money(amount: number) { return new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY' }).format(amount / 100) }
 function timeRange(startsAt: string, endsAt: string) { const format = (value: string) => new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }); return `${format(startsAt)}-${format(endsAt)}` }

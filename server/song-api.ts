@@ -9,6 +9,7 @@ import {
   acceptSongRequest,
   cancelSongRequest,
   completeSongRequest,
+  confirmSongRequest,
   markSongRequestPaid,
   markSongRequestRefunded,
   rejectSongRequest,
@@ -34,11 +35,12 @@ const submitSchema = z.object({
 
 const paymentSchema = z.object({
   paymentReference: z.string().trim().min(4).max(128),
+  collectionChannel: z.enum(['cash', 'physical_pos']),
   idempotencyKey,
 })
 
 const actionSchema = z.object({
-  action: z.enum(['accept', 'start', 'complete', 'reject', 'cancel', 'refund']),
+  action: z.enum(['confirm', 'accept', 'start', 'complete', 'reject', 'cancel', 'refund']),
   reason: z.string().trim().max(300).default(''),
   refundReference: z.string().trim().max(128).default(''),
   idempotencyKey,
@@ -104,7 +106,8 @@ export function registerSongRoutes(app: FastifyInstance, repository: RuntimeRepo
           paymentReference: input.paymentReference,
           paidAmount: songRequest.priceSnapshot.priceAmount,
           currency: songRequest.priceSnapshot.currency,
-          actor: { actorId: actor.actorId, role: 'manager' },
+          collectionChannel: input.collectionChannel,
+          actor: { actorId: actor.actorId, role: 'staff' },
           occurredAt: new Date().toISOString(),
           idempotencyKey: input.idempotencyKey,
         })
@@ -115,14 +118,18 @@ export function registerSongRoutes(app: FastifyInstance, repository: RuntimeRepo
   app.post<{ Params: { requestId: string } }>('/api/songs/requests/:requestId/actions', async (request) => {
     const input = actionSchema.parse(request.body)
     return repository.mutate((state) => {
-      const actor = requireConfiguredOperation(request, state, 'song.manage')
+      const songRequest = state.songState.requests.find((item) => item.id === request.params.requestId)
+      if (!songRequest) throw new Error('点歌请求不存在')
+      const serviceDecision = input.action === 'confirm' || (input.action === 'reject' && songRequest.status === 'pending_confirmation')
+      const actor = requireConfiguredOperation(request, state, serviceDecision ? 'song.request' : 'song.manage')
       const command = {
         requestId: request.params.requestId,
-        actor: { actorId: actor.actorId, role: 'manager' as const },
+        actor: { actorId: actor.actorId, role: serviceDecision ? 'staff' as const : 'manager' as const },
         occurredAt: new Date().toISOString(),
         idempotencyKey: input.idempotencyKey,
       }
       return mutateSong(state, () => {
+        if (input.action === 'confirm') return confirmSongRequest(state.songState, command)
         if (input.action === 'accept') return acceptSongRequest(state.songState, command)
         if (input.action === 'start') return startSongPerformance(state.songState, command)
         if (input.action === 'complete') return completeSongRequest(state.songState, command)

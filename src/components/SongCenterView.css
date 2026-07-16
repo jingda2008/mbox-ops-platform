@@ -32,7 +32,7 @@
 .song-order-form .form-heading, .song-order-form .wide-field, .song-order-form .song-payment-boundary, .song-order-form > button { grid-column: 1 / -1; }
 .song-order-form label { min-width: 0; display: grid; gap: 5px; }
 .song-order-form label > span { color: var(--ink-soft); font-size: 10px; font-weight: 750; }
-.song-order-form input, .song-order-form select, .song-request-actions input { width: 100%; min-width: 0; height: 36px; border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 8px; background: #fff; color: var(--ink); }
+.song-order-form input, .song-order-form select, .song-request-actions input, .song-request-actions select { width: 100%; min-width: 0; height: 36px; border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 8px; background: #fff; color: var(--ink); }
 .song-payment-boundary { display: flex; align-items: center; gap: 7px; padding: 8px 9px; background: #f6f4ee; color: #655d49; font-size: 10px; line-height: 1.4; }
 .song-queue { min-width: 0; }
 .song-queue-heading { min-height: 65px; display: flex; align-items: center; gap: 9px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
@@ -44,11 +44,14 @@
 .song-request-row strong { font-size: 11px; }
 .song-request-row small { overflow: hidden; color: var(--ink-soft); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .song-status { padding: 4px 6px; border-radius: 3px; background: #edf0ec; color: #596257; font-size: 9px; font-weight: 800; text-align: center; }
+.status-pending_confirmation { background: #fff3cf; color: #795a0e; }
+.status-pending_payment { background: #e9f1f7; color: #245d7d; }
 .status-refund_required { background: #fae8e9; color: #9f3037; }
 .status-performing { background: #fff0c8; color: #7b5d12; }
 .status-completed, .status-refunded { background: #e6f2e8; color: #337047; }
 .song-request-actions { display: flex; justify-content: flex-end; gap: 5px; }
 .song-request-actions input { width: 150px; height: 32px; font-size: 10px; }
+.song-request-actions select { width: 90px; height: 32px; font-size: 10px; }
 .song-request-actions button { min-height: 32px; padding: 0 8px; font-size: 10px; }
 .song-request-actions .icon-button { width: 32px; padding: 0; }
 @media (max-width: 1000px) { .singer-profile-editor { grid-template-columns: 76px minmax(0, 1fr); } .singer-profile-preview { width: 76px; height: 76px; } .singer-profile-actions { grid-column: 1 / -1; flex-direction: row; align-items: center; } .song-workspace { grid-template-columns: 1fr; } .song-order-form { border-right: 0; border-bottom: 1px solid var(--line); } }

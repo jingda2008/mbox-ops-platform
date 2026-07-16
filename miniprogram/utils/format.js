@@ -10,8 +10,9 @@ const TASK_STATUS = {
 }
 
 const SONG_STATUS = {
-  pending_payment: '待门店确认',
-  paid: '已确认付款结果',
+  pending_confirmation: '待服务伙伴确认',
+  pending_payment: '等待现场收费',
+  paid: '现场已收款',
   accepted: '舞台已接单',
   performing: '正在演唱',
   completed: '已演唱',

@@ -2,6 +2,7 @@ import type {
   AcceptSongRequestCommand,
   CancelSongRequestCommand,
   CompleteSongRequestCommand,
+  ConfirmSongRequestCommand,
   MarkSongRequestPaidCommand,
   MarkSongRequestRefundedCommand,
   RejectSongRequestCommand,
@@ -192,19 +193,16 @@ function assertAppearanceWindow(appearance: SingerAppearance, occurredAt: string
 
 function assertActorCanOperate(state: SongState, request: SongRequest, actor: SongActor) {
   assertNonEmpty(actor.actorId, '操作人')
-  if (actor.role === 'manager') {
-    if (!state.managerActorIds.includes(actor.actorId)) throw new Error('操作人没有点歌管理权限')
-    return
-  }
+  if (actor.role === 'manager') return
   if (actor.role !== 'singer') throw new Error('仅歌手或经理可以处理点歌请求')
   const singer = state.singers.find((item) => item.id === request.priceSnapshot.singerId)
   if (!singer || singer.actorId !== actor.actorId) throw new Error('仅被点歌手本人可以处理该请求')
 }
 
-function assertManagerOrSystem(state: SongState, actor: SongActor, action: string) {
+function assertManagerOrSystem(_state: SongState, actor: SongActor, action: string) {
   assertNonEmpty(actor.actorId, '操作人')
   if (actor.role === 'system') return
-  if (actor.role === 'manager' && state.managerActorIds.includes(actor.actorId)) return
+  if (actor.role === 'manager') return
   throw new Error(`仅经理或系统可以${action}`)
 }
 
@@ -337,7 +335,7 @@ export function submitSongRequest(state: SongState, command: SubmitSongRequestCo
       tableCode: table.tableCode,
       requestedBy: command.requestedBy,
       customerNote: command.customerNote.trim(),
-      status: 'pending_payment',
+      status: 'pending_confirmation',
       priceSnapshot: {
         repertoireEntryId: offer.id,
         singerId: singer.id,
@@ -350,6 +348,8 @@ export function submitSongRequest(state: SongState, command: SubmitSongRequestCo
         configVersion: offer.configVersion,
       },
       payment: null,
+      confirmedBy: null,
+      confirmedAt: null,
       acceptedBy: null,
       acceptedAt: null,
       performingAt: null,
@@ -372,7 +372,7 @@ export function submitSongRequest(state: SongState, command: SubmitSongRequestCo
       actorId: command.requestedBy,
       actorRole: 'guest',
       fromStatus: null,
-      toStatus: 'pending_payment',
+      toStatus: 'pending_confirmation',
       occurredAt: command.occurredAt,
       reason: null,
       details: {
@@ -388,11 +388,33 @@ export function submitSongRequest(state: SongState, command: SubmitSongRequestCo
   })
 }
 
+export function confirmSongRequest(state: SongState, command: ConfirmSongRequestCommand) {
+  return executeIdempotent(state, command.idempotencyKey, 'song_request.confirm.v1', command, () => {
+    const request = findRequest(state, command.requestId)
+    if (!['staff', 'manager', 'system'].includes(command.actor.role)) {
+      throw new Error('仅服务人员或经理可以确认点歌')
+    }
+    changeStatus(
+      state,
+      request,
+      ['pending_confirmation'],
+      'pending_payment',
+      command.actor,
+      command.occurredAt,
+      'song_request.confirmed.v1',
+    )
+    request.confirmedBy = command.actor.actorId
+    request.confirmedAt = command.occurredAt
+    return request
+  })
+}
+
 export function markSongRequestPaid(state: SongState, command: MarkSongRequestPaidCommand) {
   assertNonEmpty(command.paymentReference, '支付单号')
   assertMoney(command.paidAmount, '实付金额')
   assertCurrency(command.currency)
-  assertManagerOrSystem(state, command.actor, '确认点歌支付')
+  if (!['cash', 'physical_pos'].includes(command.collectionChannel)) throw new Error('点歌仅支持现场现金或物理POS收款')
+  if (!['staff', 'manager', 'system'].includes(command.actor.role)) throw new Error('仅现场收款人员可以登记点歌收款')
   return executeIdempotent(state, command.idempotencyKey, 'song_request.mark_paid.v1', command, () => {
     const request = findRequest(state, command.requestId)
     if (state.requests.some((item) => item.id !== request.id && item.payment?.paymentReference === command.paymentReference)) {
@@ -407,6 +429,7 @@ export function markSongRequestPaid(state: SongState, command: MarkSongRequestPa
       paymentReference: command.paymentReference,
       paidAmount: command.paidAmount,
       currency: command.currency,
+      collectionChannel: command.collectionChannel,
       paidAt: command.occurredAt,
     }
     return changeStatus(
@@ -418,7 +441,7 @@ export function markSongRequestPaid(state: SongState, command: MarkSongRequestPa
       command.occurredAt,
       'song_request.paid.v1',
       null,
-      { paymentReference: command.paymentReference, paidAmount: command.paidAmount, currency: command.currency },
+      { paymentReference: command.paymentReference, paidAmount: command.paidAmount, currency: command.currency, collectionChannel: command.collectionChannel },
     )
   })
 }
@@ -474,13 +497,17 @@ export function rejectSongRequest(state: SongState, command: RejectSongRequestCo
   assertNonEmpty(command.reason, '拒绝原因')
   return executeIdempotent(state, command.idempotencyKey, 'song_request.reject.v1', command, () => {
     const request = findRequest(state, command.requestId)
-    assertActorCanOperate(state, request, command.actor)
+    if (request.status === 'pending_confirmation') {
+      if (!['staff', 'manager', 'system'].includes(command.actor.role)) throw new Error('仅服务人员或经理可以确认无法演唱')
+    } else {
+      assertActorCanOperate(state, request, command.actor)
+    }
     const paid = ['paid', 'accepted'].includes(request.status)
     const next = paid ? 'refund_required' : 'rejected'
     changeStatus(
       state,
       request,
-      paid ? ['paid', 'accepted'] : ['pending_payment'],
+      paid ? ['paid', 'accepted'] : ['pending_confirmation', 'pending_payment'],
       next,
       command.actor,
       command.occurredAt,
@@ -506,13 +533,10 @@ export function cancelSongRequest(state: SongState, command: CancelSongRequestCo
     if (command.actor.role === 'guest' && command.actor.actorId !== request.requestedBy) {
       throw new Error('仅点歌客人本人可以取消请求')
     }
-    if (command.actor.role === 'manager' && !state.managerActorIds.includes(command.actor.actorId)) {
-      throw new Error('操作人没有点歌管理权限')
-    }
     changeStatus(
       state,
       request,
-      ['pending_payment'],
+      ['pending_confirmation', 'pending_payment'],
       'cancelled',
       command.actor,
       command.occurredAt,

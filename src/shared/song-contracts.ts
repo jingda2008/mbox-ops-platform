@@ -4,6 +4,7 @@ export type SongMoneyAmount = number
 export type PerformanceSessionStatus = 'scheduled' | 'live' | 'completed' | 'cancelled'
 export type SongTableSessionStatus = 'open' | 'closed'
 export type SongRequestStatus =
+  | 'pending_confirmation'
   | 'pending_payment'
   | 'paid'
   | 'accepted'
@@ -14,7 +15,8 @@ export type SongRequestStatus =
   | 'refund_required'
   | 'refunded'
 
-export type SongActorRole = 'guest' | 'singer' | 'manager' | 'system'
+export type SongActorRole = 'guest' | 'singer' | 'staff' | 'manager' | 'system'
+export type SongCollectionChannel = 'cash' | 'physical_pos'
 
 export interface Singer {
   id: string
@@ -101,6 +103,7 @@ export interface PaidSongSnapshot {
   paymentReference: string
   paidAmount: SongMoneyAmount
   currency: string
+  collectionChannel: SongCollectionChannel
   paidAt: string
 }
 
@@ -116,6 +119,8 @@ export interface SongRequest {
   status: SongRequestStatus
   priceSnapshot: SongPriceSnapshot
   payment: PaidSongSnapshot | null
+  confirmedBy: string | null
+  confirmedAt: string | null
   acceptedBy: string | null
   acceptedAt: string | null
   performingAt: string | null
@@ -138,6 +143,7 @@ export interface SongAuditEvent {
   requestId: string
   type:
     | 'song_request.submitted.v1'
+    | 'song_request.confirmed.v1'
     | 'song_request.paid.v1'
     | 'song_request.accepted.v1'
     | 'song_request.performing.v1'
@@ -198,10 +204,13 @@ export interface MarkSongRequestPaidCommand {
   paymentReference: string
   paidAmount: SongMoneyAmount
   currency: string
+  collectionChannel: SongCollectionChannel
   actor: SongActor
   occurredAt: string
   idempotencyKey: string
 }
+
+export interface ConfirmSongRequestCommand extends AcceptSongRequestCommand {}
 
 export interface AcceptSongRequestCommand {
   requestId: string

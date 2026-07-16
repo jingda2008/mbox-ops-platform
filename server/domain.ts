@@ -201,11 +201,13 @@ export function applyTaskAction(state: RuntimeState, taskId: string, input: Task
       appendTaskEvent(state, task.id, 'task.completed.v1', input.actorId, { ...eventPayload, resolution: task.resolution })
       break
     case 'confirm':
+      if (!input.actorId.startsWith('guest-')) throw new Error('仅客人可以确认服务已经解决')
       if (task.status !== 'completed') throw new Error('任务尚未完成')
       task.status = 'confirmed'
       appendTaskEvent(state, task.id, 'service.confirmed.v1', input.actorId, eventPayload)
       break
     case 'unresolved': {
+      if (!input.actorId.startsWith('guest-')) throw new Error('仅客人可以反馈服务仍未解决')
       if (task.status !== 'completed') throw new Error('任务尚未完成')
       const previousOwnerId = task.ownerId
       const serviceType = state.config.serviceTypes.find((item) => item.id === task.serviceTypeId)
@@ -215,6 +217,15 @@ export function applyTaskAction(state: RuntimeState, taskId: string, input: Task
       task.priority = task.priority === 'urgent' ? 'urgent' : 'high'
       task.ownerId = nextOwner?.id ?? previousOwnerId
       task.escalationLevel = Math.max(task.escalationLevel, 1)
+      const reopenedAt = new Date(now)
+      task.warningAt = isoAt(reopenedAt, serviceType.sla.warningSeconds)
+      task.escalateAt = isoAt(reopenedAt, serviceType.sla.escalateSeconds)
+      task.managerAt = isoAt(reopenedAt, serviceType.sla.managerSeconds)
+      task.acceptedAt = null
+      task.arrivedAt = null
+      task.completedAt = null
+      task.resolution = null
+      if (task.ownerId && !task.notifiedEmployeeIds.includes(task.ownerId)) task.notifiedEmployeeIds.push(task.ownerId)
       appendTaskEvent(state, task.id, 'task.reopened.v1', input.actorId, {
         ...eventPayload,
         previousOwnerId,

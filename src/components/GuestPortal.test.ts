@@ -1,5 +1,112 @@
 import { describe, expect, it } from 'vitest'
-import { formatGuestCountdown, guestCustomSongServiceNote, guestErrorMessage, guestFeedbackIdempotencyKey, guestMoodServiceNote, resolveGuestStage } from './guest-portal-utils'
+import type { GuestTaskView } from '../shared/guest-contracts'
+import { formatGuestCountdown, guestCustomSongServiceNote, guestErrorMessage, guestFeedbackIdempotencyKey, guestMoodServiceNote, guestReplyNotice, guestSongReplyNotice, guestSongStatusLabel, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks } from './guest-portal-utils'
+
+function guestTask(status: GuestTaskView['status'], id = `task-${status}`): GuestTaskView {
+  return {
+    id,
+    serviceTypeId: 'water',
+    serviceTypeName: '加水',
+    status,
+    priority: 'normal',
+    createdAt: '2026-07-16T20:00:00+08:00',
+    updatedAt: '2026-07-16T20:00:00+08:00',
+    customerReply: '已经收到',
+    ownerName: null,
+  }
+}
+
+describe('guest service progress', () => {
+  it('hides terminal tasks while keeping completed tasks for guest confirmation', () => {
+    const tasks = [
+      guestTask('confirmed'),
+      guestTask('completed'),
+      guestTask('cancelled'),
+      guestTask('accepted'),
+    ]
+
+    expect(visibleGuestTasks(tasks).map((task) => task.status)).toEqual(['completed', 'accepted'])
+  })
+
+  it('applies the display limit after terminal tasks are removed', () => {
+    const tasks = [
+      guestTask('confirmed', 'confirmed-1'),
+      guestTask('cancelled', 'cancelled-1'),
+      guestTask('pending', 'pending-1'),
+      guestTask('accepted', 'accepted-1'),
+    ]
+
+    expect(visibleGuestTasks(tasks, 2).map((task) => task.id)).toEqual(['pending-1', 'accepted-1'])
+  })
+})
+
+describe('guest task reply lifecycle', () => {
+  it('keeps a reply while the refreshed task remains in the same state', () => {
+    const task = guestTask('pending', 'task-1')
+    const notice = guestTaskReplyNotice('正在安排', task)
+
+    expect(reconcileGuestReply(notice, [task], [])).toBe(notice)
+  })
+
+  it('dismisses a reply as soon as refreshed task state advances', () => {
+    const notice = guestTaskReplyNotice('正在安排', guestTask('pending', 'task-1'))
+
+    expect(reconcileGuestReply(notice, [guestTask('accepted', 'task-1')], [])).toBeNull()
+    expect(reconcileGuestReply(notice, [], [])).toBeNull()
+  })
+
+  it('dismisses a task reply when the same status has newer task data', () => {
+    const task = guestTask('accepted', 'task-1')
+    const notice = guestTaskReplyNotice('服务伙伴正在赶来', task)
+
+    expect(reconcileGuestReply(notice, [{ ...task, updatedAt: '2026-07-16T20:01:00+08:00' }], [])).toBeNull()
+  })
+
+  it('leaves non-task replies for the fallback timeout or manual close', () => {
+    const notice = guestReplyNotice('支付成功')
+
+    expect(reconcileGuestReply(notice, [guestTask('accepted')], [])).toBe(notice)
+  })
+
+  it('dismisses a point-song reply when its refreshed status advances', () => {
+    const notice = guestSongReplyNotice('已经递给歌手', { id: 'song-1', status: 'pending_confirmation' })
+
+    expect(reconcileGuestReply(notice, [], [{ id: 'song-1', status: 'pending_confirmation' }])).toBe(notice)
+    expect(reconcileGuestReply(notice, [], [{ id: 'song-1', status: 'pending_payment' }])).toBeNull()
+  })
+})
+
+describe('guest song request progress', () => {
+  it('provides guest-facing copy for confirmation, onsite payment, and performance states', () => {
+    expect(guestSongStatusLabel('pending_confirmation')).toBe('待服务伙伴确认')
+    expect(guestSongStatusLabel('pending_payment')).toBe('已确认 · 等待现场收费')
+    expect(guestSongStatusLabel('paid')).toBe('现场已收款')
+    expect(guestSongStatusLabel('accepted')).toBe('歌手已接单')
+    expect(guestSongStatusLabel('performing')).toBe('正在演唱')
+    expect(guestSongStatusLabel('completed')).toBe('演唱完成')
+  })
+
+  it('keeps active requests and briefly retains terminal requests from first observation', () => {
+    const requests = [
+      { id: 'song-active', status: 'accepted' },
+      { id: 'song-complete', status: 'completed' },
+    ]
+    const seenAt = trackGuestSongTerminalStates({}, requests, 1_000)
+
+    expect(visibleGuestSongRequests(requests, seenAt, 20_999, 20_000).map((item) => item.id)).toEqual(['song-active', 'song-complete'])
+    expect(visibleGuestSongRequests(requests, seenAt, 21_000, 20_000).map((item) => item.id)).toEqual(['song-active'])
+  })
+
+  it('starts a fresh terminal window only when a request enters a terminal state', () => {
+    const initial = trackGuestSongTerminalStates({}, [{ id: 'song-1', status: 'performing' }], 1_000)
+    const completed = trackGuestSongTerminalStates(initial, [{ id: 'song-1', status: 'completed' }], 5_000)
+    const refreshed = trackGuestSongTerminalStates(completed, [{ id: 'song-1', status: 'completed' }], 9_000)
+
+    expect(initial).toEqual({})
+    expect(completed).toEqual({ 'song-1': 5_000 })
+    expect(refreshed).toEqual({ 'song-1': 5_000 })
+  })
+})
 
 describe('guest feedback idempotency key', () => {
   it('stays within the API limit regardless of the service task ID length', () => {

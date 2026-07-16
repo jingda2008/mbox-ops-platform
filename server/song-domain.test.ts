@@ -3,6 +3,7 @@ import {
   acceptSongRequest,
   cancelSongRequest,
   completeSongRequest,
+  confirmSongRequest,
   createSongState,
   markSongRequestPaid,
   markSongRequestRefunded,
@@ -14,6 +15,7 @@ import {
 const guest = { actorId: 'member-1', role: 'guest' as const }
 const singer = { actorId: 'actor-singer-1', role: 'singer' as const }
 const manager = { actorId: 'manager-1', role: 'manager' as const }
+const staff = { actorId: 'server-1', role: 'staff' as const }
 
 function makeState() {
   return createSongState({
@@ -90,12 +92,22 @@ function submit(state = makeState(), overrides: Partial<Parameters<typeof submit
 }
 
 function pay(state: ReturnType<typeof makeState>, requestId = 'request-1') {
+  const request = state.requests.find((item) => item.id === requestId)
+  if (request?.status === 'pending_confirmation') {
+    confirmSongRequest(state, {
+      requestId,
+      actor: staff,
+      occurredAt: '2026-07-14T20:35:30+08:00',
+      idempotencyKey: `confirm-${requestId}`,
+    })
+  }
   return markSongRequestPaid(state, {
     requestId,
-    paymentReference: `wechat-pay-${requestId}`,
+    paymentReference: `pos-${requestId}`,
     paidAmount: 8800,
     currency: 'CNY',
-    actor: { actorId: 'wechat-callback', role: 'system' },
+    collectionChannel: 'physical_pos',
+    actor: staff,
     occurredAt: '2026-07-14T20:36:00+08:00',
     idempotencyKey: `paid-${requestId}`,
   })
@@ -104,7 +116,7 @@ function pay(state: ReturnType<typeof makeState>, requestId = 'request-1') {
 describe('paid song request lifecycle', () => {
   it('keeps price snapshot and completes the singer workflow with an audit trail', () => {
     const { state, request } = submit()
-    expect(request.status).toBe('pending_payment')
+    expect(request.status).toBe('pending_confirmation')
     expect(request.priceSnapshot).toMatchObject({
       songTitle: '海阔天空',
       singerName: '小霆',
@@ -134,8 +146,9 @@ describe('paid song request lifecycle', () => {
     })
 
     expect(completed.status).toBe('completed')
-    expect(completed.payment?.paymentReference).toBe('wechat-pay-request-1')
+    expect(completed.payment).toMatchObject({ paymentReference: 'pos-request-1', collectionChannel: 'physical_pos' })
     expect(state.auditEvents.map((event) => event.toStatus)).toEqual([
+      'pending_confirmation',
       'pending_payment',
       'paid',
       'accepted',
@@ -208,6 +221,12 @@ describe('paid song request lifecycle', () => {
   it('uses the captured price even when the repertoire is reconfigured later', () => {
     const { state, request } = submit()
     state.repertoire[0]!.priceAmount = 12800
+    confirmSongRequest(state, {
+      requestId: request.id,
+      actor: staff,
+      occurredAt: '2026-07-14T20:35:30+08:00',
+      idempotencyKey: 'confirm-before-wrong-price',
+    })
 
     expect(() =>
       markSongRequestPaid(state, {
@@ -215,7 +234,8 @@ describe('paid song request lifecycle', () => {
         paymentReference: 'wechat-pay-wrong-price',
         paidAmount: 12800,
         currency: 'CNY',
-        actor: { actorId: 'wechat-callback', role: 'system' },
+        collectionChannel: 'physical_pos',
+        actor: staff,
         occurredAt: '2026-07-14T20:36:00+08:00',
         idempotencyKey: 'wrong-price-payment',
       }),
@@ -249,18 +269,40 @@ describe('song request business validation', () => {
 
   it('does not allow the guest client to mark its own request paid', () => {
     const { state, request } = submit()
+    confirmSongRequest(state, {
+      requestId: request.id,
+      actor: staff,
+      occurredAt: '2026-07-14T20:35:30+08:00',
+      idempotencyKey: 'confirm-before-guest-payment',
+    })
     expect(() =>
       markSongRequestPaid(state, {
         requestId: request.id,
         paymentReference: 'untrusted-client-payment',
         paidAmount: 8800,
         currency: 'CNY',
+        collectionChannel: 'cash',
         actor: guest,
         occurredAt: '2026-07-14T20:36:00+08:00',
         idempotencyKey: 'guest-marks-paid',
       }),
-    ).toThrow('仅经理或系统可以确认点歌支付')
+    ).toThrow('仅现场收款人员可以登记点歌收款')
     expect(request.status).toBe('pending_payment')
+  })
+
+  it('requires service confirmation before onsite collection', () => {
+    const { state, request } = submit()
+    expect(() => markSongRequestPaid(state, {
+      requestId: request.id,
+      paymentReference: 'pos-too-early',
+      paidAmount: 8800,
+      currency: 'CNY',
+      collectionChannel: 'physical_pos',
+      actor: staff,
+      occurredAt: '2026-07-14T20:35:30+08:00',
+      idempotencyKey: 'onsite-before-confirmation',
+    })).toThrow('点歌请求状态pending_confirmation不能确认支付')
+    expect(request.payment).toBeNull()
   })
 
   it('allows cancellation only before payment', () => {
@@ -296,7 +338,7 @@ describe('song request business validation', () => {
         occurredAt: '2026-07-14T20:36:00+08:00',
         idempotencyKey: 'accept-before-pay',
       }),
-    ).toThrow('点歌请求状态pending_payment不能变更为accepted')
+    ).toThrow('点歌请求状态pending_confirmation不能变更为accepted')
 
     pay(state)
     expect(() =>

@@ -178,6 +178,14 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
     roleIds: [...new Set(assignment.roleIds ?? [])].filter((roleId) => roleId !== assignment.roleId),
     stationIds: assignment.stationIds ?? [],
   }))
+  migrated.songState.requests = migrated.songState.requests.map((request) => ({
+    ...request,
+    confirmedBy: request.confirmedBy ?? (request.status === 'pending_confirmation' ? null : 'legacy-system'),
+    confirmedAt: request.confirmedAt ?? (request.status === 'pending_confirmation' ? null : request.createdAt),
+    payment: request.payment
+      ? { ...request.payment, collectionChannel: request.payment.collectionChannel ?? 'physical_pos' }
+      : null,
+  }))
   reconcilePresence(migrated, Date.now(), false)
   const menuDefaults = new Map([
     ['product-cocktail', { categoryId: 'drinks', categoryName: '酒水', description: '柑橘香气与清爽气泡，现场现调。', imageUrl: '/menu/cocktail.jpg', tags: ['招牌', '现调'], sortOrder: 1 }],

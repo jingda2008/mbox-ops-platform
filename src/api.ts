@@ -441,7 +441,7 @@ export interface SubmitSongRequestInput {
   customerNote: string
 }
 
-export function submitPaidSongRequest(input: SubmitSongRequestInput) {
+export function submitStaffSongRequest(input: SubmitSongRequestInput) {
   return request<SongRequest>('/api/songs/requests', {
     method: 'POST',
     body: JSON.stringify({ ...input, idempotencyKey: `song-submit-${crypto.randomUUID()}` }),
@@ -455,16 +455,16 @@ export function updateSingerProfile(singerId: string, input: SingerProfileWriteI
   })
 }
 
-export function reportSongPayment(requestId: string, paymentReference: string) {
+export function reportSongOnsiteCollection(requestId: string, paymentReference: string, collectionChannel: 'cash' | 'physical_pos') {
   return request<SongRequest>(`/api/songs/requests/${requestId}/payment`, {
     method: 'POST',
-    body: JSON.stringify({ paymentReference, idempotencyKey: `song-payment-${crypto.randomUUID()}` }),
+    body: JSON.stringify({ paymentReference, collectionChannel, idempotencyKey: `song-onsite-collection-${crypto.randomUUID()}` }),
   })
 }
 
 export function actOnSongRequest(
   requestId: string,
-  action: 'accept' | 'start' | 'complete' | 'reject' | 'cancel' | 'refund',
+  action: 'confirm' | 'accept' | 'start' | 'complete' | 'reject' | 'cancel' | 'refund',
   reason = '',
   refundReference = '',
 ) {

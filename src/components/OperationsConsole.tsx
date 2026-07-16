@@ -573,9 +573,11 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
                 <RefreshCw size={17} />重置数据
               </button>
             )}
-            <a className="primary-button" href="/guest?table=L01" target="_blank" rel="noreferrer">
-              <ExternalLink size={17} />顾客端
-            </a>
+            {import.meta.env.DEV && (
+              <a className="primary-button" href="/guest?table=L01" target="_blank" rel="noreferrer">
+                <ExternalLink size={17} />顾客端
+              </a>
+            )}
           </div>
         </header>
 

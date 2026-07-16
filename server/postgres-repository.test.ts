@@ -307,6 +307,10 @@ describe('PostgresRepository', () => {
     })
     expect(result).toBe(2)
     expect((await repository.read()).store.name).toBe('Production store')
+    expect(pool.queries.some(({ sql }) => (
+      sql.startsWith('SELECT revision, state, state_sha256 FROM mbox.runtime_states')
+      && sql.endsWith('FOR UPDATE')
+    ))).toBe(true)
 
     pool.failNextCompareAndSwap = true
     await expect(repository.mutate((state) => {

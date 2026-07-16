@@ -208,6 +208,12 @@ const SQL = {
     FROM mbox.runtime_states
     WHERE tenant_id = $1::uuid AND store_id = $2::uuid
   `,
+  selectStateForUpdate: `
+    SELECT revision, state, state_sha256
+    FROM mbox.runtime_states
+    WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+    FOR UPDATE
+  `,
   selectRevision: `
     SELECT revision
     FROM mbox.runtime_states
@@ -351,7 +357,10 @@ export class PostgresRepository {
         : null
       if (replay?.replayed) return replay.value as T
 
-      const current = await this.loadState(client)
+      // RuntimeState is currently one aggregate document. Lock its row so
+      // concurrent Cloud Run instances queue writes instead of surfacing CAS
+      // conflicts to staff during the service peak.
+      const current = await this.loadState(client, true)
       const expectedRevision = current.revision
       const workingCopy = structuredClone(current)
       const result = await mutation(workingCopy)
@@ -503,8 +512,11 @@ export class PostgresRepository {
     }
   }
 
-  private async loadState(client: PostgresPoolClient): Promise<RuntimeState> {
-    const result = await client.query<RuntimeStateRow>(SQL.selectState, [this.tenantId, this.storeId])
+  private async loadState(client: PostgresPoolClient, forUpdate = false): Promise<RuntimeState> {
+    const result = await client.query<RuntimeStateRow>(forUpdate ? SQL.selectStateForUpdate : SQL.selectState, [
+      this.tenantId,
+      this.storeId,
+    ])
     if (result.rowCount !== 1 || !result.rows[0]) {
       throw new PostgresRuntimeStateNotInitializedError()
     }

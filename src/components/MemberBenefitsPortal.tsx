@@ -26,14 +26,14 @@ export function MemberBenefitsPortal() {
 
   return (
     <main className="member-portal">
-      <header className="member-header"><div className="guest-brand"><span>M</span><strong>M-BOX</strong></div><span>会员中心</span></header>
+      <header className="member-header"><div className="guest-brand"><span>M</span><div><strong>M-BOX</strong>{data.communityBrand && <small>{data.communityBrand.name}旗下空间</small>}</div></div><span>会员中心</span></header>
       <section className="member-identity">
         <span className="member-identity-avatar">{data.member.displayName.slice(0, 1)}</span>
         <div><small>{levelNames[data.member.level]}</small><h1>{data.member.displayName}</h1><p>{data.member.phoneMasked}</p></div>
         <BadgeCheck size={22} />
       </section>
-      {data.communityBrand && <SuperHighCommunityBand brand={data.communityBrand} />}
       <section className="member-benefit-summary"><div><strong>{data.benefits.reduce((sum, benefit) => sum + benefit.remainingQuantity, 0)}</strong><span>可用权益</span></div><div><strong>{data.member.serviceAccountBound ? '已绑定' : '未绑定'}</strong><span>微信服务号</span></div><div><strong>{data.member.wecomBound ? '已连接' : '未连接'}</strong><span>企业微信</span></div></section>
+      {data.communityBrand && <SuperHighCommunityBand brand={data.communityBrand} />}
       <section className="member-benefit-list">
         <div className="member-section-heading"><Gift size={18} /><h2>我的权益</h2></div>
         {data.benefits.length === 0 ? <div className="member-empty"><Gift size={28} /><strong>暂无可用权益</strong></div> : data.benefits.map((benefit) => <BenefitItem key={benefit.id} benefit={benefit} />)}

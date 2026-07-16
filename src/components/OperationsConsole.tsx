@@ -25,6 +25,7 @@ import {
   X,
   Gift,
   History,
+  Heart,
   Music2,
   PackageSearch,
   ArrowRightLeft,
@@ -535,7 +536,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
   return (
     <div className="app-shell">
       <aside className={mobileNavOpen ? 'sidebar is-open' : 'sidebar'}>
-        <div className="brand-lockup"><span>M</span><div><strong>M-BOX</strong><small>现场运营</small></div></div>
+        <div className="brand-lockup"><span>M</span><div><strong>M-BOX</strong><small>现场运营</small>{data.config.communityBrand.enabled && <em>{data.config.communityBrand.name}旗下空间</em>}</div></div>
         <button className="sidebar-close" title="关闭导航" onClick={() => setMobileNavOpen(false)}><X size={20} /></button>
         <nav>
           {availableNavigation.map((item) => {
@@ -555,6 +556,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
         </nav>
         <div className="sidebar-status">
           <span><Wifi size={16} />系统在线</span>
+          {data.config.communityBrand.enabled && <span className="sidebar-culture-mark" title={data.config.communityBrand.tagline}><Heart size={12} />SUPERHIGH CULTURE</span>}
           <small>配置 V{data.config.version}</small>
         </div>
       </aside>
@@ -872,7 +874,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
               </div>
 
               <div className="config-section">
-                <div className="config-section-title"><Sparkles size={19} /><div><strong>超嗨部落品牌</strong><span>M-Box 负责到店经营，超嗨部落承接会员文化与活动关系</span></div></div>
+                <div className="config-section-title"><Sparkles size={19} /><div><strong>超嗨部落母品牌</strong><span>M-Box 是旗下现场空间，母品牌元素以轻量方式进入客人与员工触点</span></div></div>
                 <div className="community-brand-config">
                   <div className="community-brand-switches">
                     <div className="switch-field"><span>启用品牌</span><label className="switch"><input type="checkbox" checked={draft.communityBrand.enabled} onChange={(event) => { const next = cloneConfig(draft); next.communityBrand.enabled = event.target.checked; setDraft(next); setConfigDirty(true) }} /><span /></label></div>

@@ -76,6 +76,13 @@ function configWithOperationalDefaults(
   const serviceTypeIds = new Set(config.serviceTypes.map((type) => type.id))
   const roleIds = new Set(config.roles.map((role) => role.id))
   const skillIds = new Set((config.skills ?? []).map((skill) => skill.id))
+  const communityBrand = structuredClone(config.communityBrand ?? defaults.communityBrand)
+  if (communityBrand.eyebrow === 'M-BOX MEMBER COMMUNITY') {
+    communityBrand.eyebrow = defaults.communityBrand.eyebrow
+  }
+  if (communityBrand.tagline === '由 M-Box 相识，在超嗨部落持续相聚') {
+    communityBrand.tagline = defaults.communityBrand.tagline
+  }
   const requiredServiceTypes = defaults.serviceTypes.filter(
     (type) => ['FULFILLMENT_DELIVERY', 'CUSTOM_REQUEST'].includes(type.code) && !serviceTypeIds.has(type.id),
   )
@@ -92,7 +99,7 @@ function configWithOperationalDefaults(
     workstations: config.workstations ?? structuredClone(defaults.workstations),
     proactiveOrderCare: config.proactiveOrderCare ?? structuredClone(defaults.proactiveOrderCare),
     guestServiceLimits: config.guestServiceLimits ?? structuredClone(defaults.guestServiceLimits),
-    communityBrand: config.communityBrand ?? structuredClone(defaults.communityBrand),
+    communityBrand,
   }
   return migrateWorkstationDeliveryServices(enriched)
 }

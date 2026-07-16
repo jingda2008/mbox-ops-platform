@@ -1,4 +1,4 @@
-import { CheckCircle2, ChevronRight, Clock3, CreditCard, ListChecks, MessageCircleMore, Send, ShieldCheck, ShoppingBag } from 'lucide-react'
+import { CheckCircle2, ChevronRight, Clock3, CreditCard, Heart, ListChecks, MessageCircleMore, Send, ShieldCheck, ShoppingBag } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { checkoutGuestOrder, createGuestOrder, createGuestTask, getGuestSession, submitGuestTaskFeedback } from '../api'
 import type { GuestSessionResponse, GuestTaskView, WechatJsapiParameters } from '../shared/guest-contracts'
@@ -166,7 +166,7 @@ export function GuestPortal() {
       <section className="guest-table-band">
         <div className="guest-table-context">
           <span>当前桌台</span>
-          <small><i aria-hidden="true" />LIVE SERVICE</small>
+          <small><i aria-hidden="true" />LIVE SERVICE <Heart className="superhigh-heart-mark" size={12} aria-hidden="true" /></small>
         </div>
         <div>
           <h1>{data?.table.displayName ?? tableCode}</h1>

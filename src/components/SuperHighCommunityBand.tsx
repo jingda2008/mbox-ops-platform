@@ -7,15 +7,14 @@ interface SuperHighCommunityBandProps {
 
 export function SuperHighCommunityBand({ brand, compact = false }: SuperHighCommunityBandProps) {
   return (
-    <section className={`superhigh-community-band${compact ? ' is-compact' : ''}`} aria-label={brand.name}>
-      <div className="superhigh-color-rail" aria-hidden="true"><i /><i /><i /><i /><i /></div>
+    <section className={`superhigh-brand-signature${compact ? ' is-compact' : ''}`} aria-label={`${brand.name}母品牌标识`}>
       <img src={brand.markUrl} alt={`${brand.name}品牌标识`} />
-      <div className="superhigh-community-copy">
+      <div className="superhigh-signature-copy">
         <small>{brand.eyebrow}</small>
-        <strong>{brand.name}</strong>
         <p>{brand.tagline}</p>
-        {!compact && <div className="superhigh-community-highlights">{brand.highlights.map((item) => <span key={item}>{item}</span>)}</div>}
+        {!compact && <span>{brand.highlights.join(' · ')}</span>}
       </div>
+      <div className="superhigh-signature-colors" aria-hidden="true"><i /><i /><i /><i /></div>
     </section>
   )
 }

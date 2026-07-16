@@ -74,8 +74,8 @@ export function createSeedConfig(): StoreConfig {
     communityBrand: {
       enabled: true,
       name: '超嗨部落',
-      eyebrow: 'M-BOX MEMBER COMMUNITY',
-      tagline: '由 M-Box 相识，在超嗨部落持续相聚',
+      eyebrow: 'SUPERHIGH TRIBE · CULTURE MARK',
+      tagline: 'M-Box · 超嗨部落旗下现场空间',
       markUrl: '/brand/superhigh-mark.png',
       highlights: ['主题活动', '现场互动', '同好社群'],
       guestOrderVisible: true,

@@ -71,6 +71,22 @@ describe('runtime state operational migrations', () => {
     expect(migrated.config.roles.find((role) => role.id === 'admin')?.permissionIds).not.toContain('finance.view')
   })
 
+  it('softens only the previously shipped community-brand copy', () => {
+    const legacy = createSeedState()
+    legacy.config.communityBrand.eyebrow = 'M-BOX MEMBER COMMUNITY'
+    legacy.config.communityBrand.tagline = '由 M-Box 相识，在超嗨部落持续相聚'
+    legacy.draftConfig = structuredClone(legacy.config)
+    legacy.draftConfig.communityBrand.tagline = '管理员自定义口号'
+
+    const migrated = migrateRuntimeState(legacy)
+
+    expect(migrated.config.communityBrand).toMatchObject({
+      eyebrow: 'SUPERHIGH TRIBE · CULTURE MARK',
+      tagline: 'M-Box · 超嗨部落旗下现场空间',
+    })
+    expect(migrated.draftConfig?.communityBrand.tagline).toBe('管理员自定义口号')
+  })
+
   it('conservatively upgrades permissions for unchanged built-in roles in all persisted configs', () => {
     const legacy = structuredClone(createSeedState())
     legacy.draftConfig = structuredClone(legacy.config)

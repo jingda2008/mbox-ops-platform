@@ -2,20 +2,20 @@ import { Bell, CakeSlice, CheckCircle2, ChevronRight, Clock3, CreditCard, GlassW
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { checkoutGuestOrder, createGuestOrder, createGuestSongRequest, createGuestTask, getGuestSession, submitGuestTaskFeedback } from '../api'
 import type { GuestSessionResponse, GuestTaskView, WechatJsapiParameters } from '../shared/guest-contracts'
-import { formatGuestCountdown, guestCustomSongServiceNote, guestFeedbackIdempotencyKey, guestMoodServiceNote, resolveGuestStage } from './guest-portal-utils'
+import { formatGuestCountdown, guestCustomSongServiceNote, guestErrorMessage, guestFeedbackIdempotencyKey, guestMoodServiceNote, resolveGuestStage } from './guest-portal-utils'
 import { ServiceIcon } from './ServiceIcon'
 import { MenuOrderingWorkspace, type MenuCartItem } from './MenuOrderingWorkspace'
 import { SuperHighCommunityBand } from './SuperHighCommunityBand'
 
 const guestStatus: Record<GuestTaskView['status'], string> = {
-  pending: '等待接单',
-  accepted: '服务人员已接单',
-  arrived: '服务人员已到桌',
-  completed: '请确认是否解决',
-  confirmed: '已解决',
-  reopened: '已升级继续处理',
-  escalated: '已升级处理',
-  cancelled: '已取消',
+  pending: '正在为您安排伙伴',
+  accepted: '服务伙伴正在赶来',
+  arrived: '已经到您桌边',
+  completed: '想请您确认一下',
+  confirmed: '这件事已照顾好',
+  reopened: '领班正在继续跟进',
+  escalated: '领班已优先接手',
+  cancelled: '这次需求已取消',
 }
 
 const guestMoods = [
@@ -64,7 +64,7 @@ export function GuestPortal() {
       setData(await getGuestSession(initialToken, tableCode))
       setError('')
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : '服务暂时不可用')
+      setError(guestErrorMessage(requestError, '现场有点忙，我们正在重新连接服务，稍等一下就好。'))
     }
   }, [initialToken, tableCode])
 
@@ -120,7 +120,7 @@ export function GuestPortal() {
       await refresh()
       return true
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : '请求未提交')
+      setError(guestErrorMessage(requestError, '这次召唤没有顺利送达，再轻点一次试试；还不行就直接招呼身边伙伴。'))
       return false
     } finally {
       setPendingType(null)
@@ -130,7 +130,7 @@ export function GuestPortal() {
   async function recordMood(mood: typeof guestMoods[number]) {
     if (selectedMood === mood.id || pendingType) return
     if (!customRequestType) {
-      setError('今晚状态记录暂未启用')
+      setError('今晚状态小卡暂时开小差了，您仍可以直接呼叫我们。')
       return
     }
     const previousLabel = guestMoods.find((item) => item.id === selectedMood)?.label ?? ''
@@ -144,7 +144,7 @@ export function GuestPortal() {
   async function requestQuickService(key: string, serviceCode: string, requestNote = '') {
     const serviceType = serviceTypeByCode.get(serviceCode)
     if (!serviceType) {
-      setError('该服务暂未启用，请进入服务页选择其他需求')
+      setError('这个快捷服务今晚暂时没开，去“服务”里告诉我们也一样好使。')
       return
     }
     setQuickPendingKey(key)
@@ -165,11 +165,11 @@ export function GuestPortal() {
         customerNote: '',
         idempotencyKey: `guest-song-${crypto.randomUUID()}`,
       })
-      setReply(`已提交《${offer.songTitle}》，金额 ¥${(offer.priceAmount / 100).toFixed(2)}，服务员会到桌确认并完成收款。`)
+      setReply(`《${offer.songTitle}》已经替您递给${offer.singerName}啦～点歌费 ¥${(offer.priceAmount / 100).toFixed(2)}，服务伙伴会先来和您确认，点头后再收款。`)
       setSongPickerOpen(false)
       await refresh()
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : '点歌未提交')
+      setError(guestErrorMessage(requestError, '这首歌刚才没递出去，再点一次试试，或者让服务伙伴来帮您。'))
     } finally {
       setSongBusyId('')
     }
@@ -189,11 +189,11 @@ export function GuestPortal() {
 
   async function submitCustomSong() {
     if (!customRequestType) {
-      setError('自定义点歌申请暂未启用，请呼叫服务员')
+      setError('歌单外点歌暂时没连上，点一下“呼叫”，我们到桌帮您问歌手。')
       return
     }
     if (!customSongTitle.trim()) {
-      setError('请填写想点的歌曲名称')
+      setError('先告诉我们歌名吧～记得一两个字也可以，我们陪您一起找。')
       return
     }
     const singerName = data?.stageSchedule.find((appearance) => appearance.singerId === customSongSingerId)?.singerName ?? '不限歌手'
@@ -205,7 +205,7 @@ export function GuestPortal() {
       customerNote: customSongNote,
     }))
     if (succeeded) {
-      setReply('自定义点歌申请已收到，服务员会确认歌手能否演唱、价格和安排时间，确认前不会收款。')
+      setReply('收到这首私藏啦～服务伙伴这就去问歌手，能不能唱、多少钱、什么时候安排，都会先回来和您确认。')
       setCustomSongTitle('')
       setCustomSongArtist('')
       setCustomSongNote('')
@@ -216,11 +216,11 @@ export function GuestPortal() {
 
   async function submitCustomRequest() {
     if (!customRequestType) {
-      setError('个性化需求服务暂未启用，请直接呼叫服务员')
+      setError('特别需求通道暂时开小差了，点一下“呼叫”，我们亲自到桌听您说。')
       return
     }
     if (!note.trim()) {
-      setError('请先填写您的个性化需求')
+      setError('悄悄告诉我们您想要什么吧～写几个字就能送到服务伙伴手里。')
       return
     }
     await requestService(customRequestType.id, note.trim())
@@ -234,10 +234,12 @@ export function GuestPortal() {
         note: action === 'unresolved' ? '客户反馈仍未解决' : '',
         idempotencyKey: guestFeedbackIdempotencyKey(action),
       })
-      setReply(action === 'confirm' ? '感谢确认，本次服务已完成。' : '已为您升级处理，值班领班会继续跟进。')
+      setReply(action === 'confirm'
+        ? '谢谢您的点头～能照顾好今晚的您，我们也很开心。'
+        : '还没照顾到位，抱歉让您再说一次。值班领班已经接手，会继续跟到解决。')
       await refresh()
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : '反馈未提交')
+      setError(guestErrorMessage(requestError, '刚才的反馈没有送到，再点一次，我们不让这件事掉在地上。'))
     }
   }
 
@@ -258,20 +260,20 @@ export function GuestPortal() {
         }
         const outcome = await invokeWechatJsapi(result.wechatJsapiParameters)
         setReply(outcome === 'succeeded'
-          ? '微信支付已提交，正在等待到账确认。'
+          ? '微信支付已经提交～我们正在确认到账，确认后马上更新订单。'
           : outcome === 'cancelled'
-            ? '支付尚未完成，可以重新点击微信支付。'
-            : '订单已保留，微信商户支付参数尚未返回，请稍后继续支付或联系服务员。')
+            ? '没关系，订单还替您留着～准备好时再点一次微信支付就行。'
+            : '订单已经替您留好，但微信支付刚才没有拉起来。稍后再试一次，或呼叫服务伙伴来帮您。')
       } else {
         const fulfillmentMessage = result.order.createdBy.startsWith('guest-')
-          ? '订单已发送至出品岗位。'
-          : '服务员、收银与出品岗位已同步。'
-        setReply(`支付成功 ¥${(result.paymentIntent.amount / 100).toFixed(2)}，${fulfillmentMessage}`)
+          ? '酒水和餐食伙伴已经收到，正在为您准备。'
+          : '服务伙伴和出品伙伴都已经收到，不用再重复确认。'
+        setReply(`支付成功 ¥${(result.paymentIntent.amount / 100).toFixed(2)}～今晚的快乐继续，${fulfillmentMessage}`)
       }
       setActiveTab('orders')
       await refresh()
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : '支付未完成')
+      setError(guestErrorMessage(requestError, '这次支付没有完成，订单还在，不会重复下单。您可以再试一次或呼叫服务伙伴。'))
       throw requestError
     } finally {
       setPayingOrderId('')
@@ -341,11 +343,11 @@ export function GuestPortal() {
             <h2>{profileAppearance.singerName}</h2>
             <strong>{profileAppearance.profile.headline || 'M-BOX LIVEHOUSE 驻场歌手'}</strong>
             {profileAppearance.profile.styleTags.length > 0 && <div className="guest-singer-tags">{profileAppearance.profile.styleTags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
-            <p>{profileAppearance.profile.bio || '歌手资料正在完善，您可以先查看当晚演出时间与可点歌曲。'}</p>
+            <p>{profileAppearance.profile.bio || '这位歌手的故事还在整理中，今晚的演出时间和可点歌曲已经先为您备好。'}</p>
             <div className="guest-singer-schedule"><Clock3 size={17} /><div><span>今晚演出</span><strong>{formatGuestTimeRange(profileAppearance.startsAt, profileAppearance.endsAt, data?.store.timezone)}</strong></div></div>
             <div className="guest-singer-songs">
               <header><span>可点歌曲</span><b>{profileSongOffers.length} 首展示</b></header>
-              {profileSongOffers.length > 0 ? profileSongOffers.map((offer) => <button key={offer.id} onClick={() => { setSingerProfileId(''); setSongSingerId(profileAppearance.singerId); setCustomSongSingerId(profileAppearance.singerId); setSongPickerMode('repertoire'); setSongPickerOpen(true) }}><span>{offer.songTitle}<small>{offer.songArtist}</small></span><b>¥{(offer.priceAmount / 100).toFixed(0)}</b><ChevronRight size={15} /></button>) : <p>当前歌手暂未开放点歌</p>}
+              {profileSongOffers.length > 0 ? profileSongOffers.map((offer) => <button key={offer.id} onClick={() => { setSingerProfileId(''); setSongSingerId(profileAppearance.singerId); setCustomSongSingerId(profileAppearance.singerId); setSongPickerMode('repertoire'); setSongPickerOpen(true) }}><span>{offer.songTitle}<small>{offer.songArtist}</small></span><b>¥{(offer.priceAmount / 100).toFixed(0)}</b><ChevronRight size={15} /></button>) : <p>今晚的歌单还在确认，想听什么可以让我们替您问问。</p>}
             </div>
           </div>
         </section>
@@ -380,10 +382,10 @@ export function GuestPortal() {
         </section>
 
         <section className="guest-quick-service" aria-label="快捷服务">
-          <button disabled={pendingType !== null} onClick={() => void requestQuickService('water', 'ADD_WATER')}><GlassWater size={19} /><span>{quickPendingKey === 'water' ? '提交中' : '加水'}</span></button>
-          <button disabled={pendingType !== null} onClick={() => void openSongService()}><Music2 size={19} /><span>{quickPendingKey === 'song' ? '提交中' : '点歌'}</span></button>
-          <button disabled={pendingType !== null} onClick={() => void requestQuickService('birthday', 'BIRTHDAY_CARE')}><CakeSlice size={19} /><span>{quickPendingKey === 'birthday' ? '提交中' : '生日'}</span></button>
-          <button disabled={pendingType !== null} onClick={() => void requestQuickService('call', 'ORDER_HELP', '客人呼叫服务员到桌，请尽快响应。')}><Bell size={19} /><span>{quickPendingKey === 'call' ? '提交中' : '呼叫'}</span></button>
+          <button disabled={pendingType !== null} onClick={() => void requestQuickService('water', 'ADD_WATER')}><GlassWater size={19} /><span>{quickPendingKey === 'water' ? '正在送达' : '加水'}</span></button>
+          <button disabled={pendingType !== null} onClick={() => void openSongService()}><Music2 size={19} /><span>{quickPendingKey === 'song' ? '正在帮您问' : '点歌'}</span></button>
+          <button disabled={pendingType !== null} onClick={() => void requestQuickService('birthday', 'BIRTHDAY_CARE')}><CakeSlice size={19} /><span>{quickPendingKey === 'birthday' ? '正在安排' : '生日'}</span></button>
+          <button disabled={pendingType !== null} onClick={() => void requestQuickService('call', 'ORDER_HELP', '客人呼叫服务员到桌，请尽快响应。')}><Bell size={19} /><span>{quickPendingKey === 'call' ? '正在叫人' : '呼叫'}</span></button>
         </section>
 
         {songPickerOpen && <section className="guest-song-picker" aria-label="当晚可点歌曲">
@@ -396,18 +398,18 @@ export function GuestPortal() {
             {songSingers.length > 1 && <div className="guest-song-singer-filter"><button className={!songSingerId ? 'is-active' : ''} onClick={() => setSongSingerId('')}>全部</button>{songSingers.map((singer) => <button key={singer.singerId} className={songSingerId === singer.singerId ? 'is-active' : ''} onClick={() => { setSongSingerId(singer.singerId); setCustomSongSingerId(singer.singerId) }}>{singer.singerName}</button>)}</div>}
             <div className="guest-song-list">{visibleSongChoices.map((offer) => <article key={offer.id}>
               <div><strong>{offer.songTitle}</strong><span>{offer.songArtist} · {offer.singerName}</span></div>
-              <button disabled={Boolean(songBusyId)} onClick={() => void chooseSong(offer)}>{songBusyId === offer.id ? '提交中' : `¥${(offer.priceAmount / 100).toFixed(2)} 点歌`}</button>
+              <button disabled={Boolean(songBusyId)} onClick={() => void chooseSong(offer)}>{songBusyId === offer.id ? '正在递歌' : `¥${(offer.priceAmount / 100).toFixed(2)} 点歌`}</button>
             </article>)}</div>
-            <p>提交后由服务员到桌确认并完成收款，歌手接单后会同步状态。</p>
+            <p>选好后，服务伙伴会先来确认歌曲和费用，您点头后再付款。</p>
           </> : <div className="guest-custom-song">
-            <header><Music2 size={17} /><div><strong>歌单里没有？</strong><span>提交后由服务员确认能否演唱</span></div></header>
+            <header><Music2 size={17} /><div><strong>歌单里没找到？</strong><span>把私藏曲目告诉我们，先替您问歌手</span></div></header>
             <div className="guest-custom-song-fields">
               <label><span>歌曲名称 *</span><input value={customSongTitle} maxLength={60} placeholder="输入想点的歌" onChange={(event) => setCustomSongTitle(event.target.value)} /></label>
               <label><span>原唱</span><input value={customSongArtist} maxLength={60} placeholder="选填" onChange={(event) => setCustomSongArtist(event.target.value)} /></label>
               <label><span>希望歌手</span><select value={customSongSingerId} onChange={(event) => setCustomSongSingerId(event.target.value)}><option value="">不限歌手</option>{songSingers.map((singer) => <option key={singer.singerId} value={singer.singerId}>{singer.singerName}</option>)}</select></label>
               <label><span>补充信息</span><input value={customSongNote} maxLength={80} placeholder="祝福语或演唱偏好" onChange={(event) => setCustomSongNote(event.target.value)} /></label>
             </div>
-            <button disabled={customSongBusy || pendingType !== null || !customSongTitle.trim()} onClick={() => void submitCustomSong()}><Send size={16} />{customSongBusy ? '正在提交' : '请服务员确认'}</button>
+            <button disabled={customSongBusy || pendingType !== null || !customSongTitle.trim()} onClick={() => void submitCustomSong()}><Send size={16} />{customSongBusy ? '正在帮您问' : '帮我问问'}</button>
           </div>}
         </section>}
 
@@ -415,7 +417,7 @@ export function GuestPortal() {
           products={data?.products ?? []}
           tableLabel={data?.table.displayName ?? tableCode}
           submitLabel="确认订单并微信支付"
-          submitHint="验证环境会模拟微信付款；付款成功后服务员、收银和出品岗位会同时收到状态。"
+          submitHint="付款成功后，订单会直接送到吧台和厨房，不用再招呼我们确认。"
           busy={checkoutBusy}
           timeZone={data?.store.timezone}
           onSubmit={placeAndPay}
@@ -437,7 +439,7 @@ export function GuestPortal() {
               onClick={() => void requestService(serviceType.id)}
             >
               <ServiceIcon icon={serviceType.icon} size={23} />
-              <span>{pendingType === serviceType.id ? '正在提交' : serviceType.name}</span>
+              <span>{pendingType === serviceType.id ? '正在送达' : serviceType.name}</span>
               <ChevronRight size={17} aria-hidden="true" />
             </button>
           ))}
@@ -452,9 +454,9 @@ export function GuestPortal() {
                 if (event.key === 'Enter' && note.trim() && pendingType === null) void submitCustomRequest()
               }}
               maxLength={300}
-              placeholder="例如：需要两杯温水"
+              placeholder="悄悄告诉我们：例如需要两杯温水"
             />
-            <button disabled={!note.trim() || pendingType !== null || !customRequestType} onClick={() => void submitCustomRequest()}><Send size={17} />{pendingType === customRequestType?.id ? '提交中' : '提交'}</button>
+            <button disabled={!note.trim() || pendingType !== null || !customRequestType} onClick={() => void submitCustomRequest()}><Send size={17} />{pendingType === customRequestType?.id ? '正在送达' : '告诉我们'}</button>
           </div>
         </div>
       </section>
@@ -462,7 +464,7 @@ export function GuestPortal() {
       <section className="guest-progress">
         <div className="guest-section-title"><span>服务进度</span><Clock3 size={20} /></div>
         {tableTasks.length === 0 ? (
-          <div className="guest-empty">暂无进行中的服务</div>
+          <div className="guest-empty">现在没有待处理的需求，有需要随时叫我们。</div>
         ) : (
           <div className="guest-task-list">
             {tableTasks.map((task) => {
@@ -471,7 +473,7 @@ export function GuestPortal() {
                 <article className="guest-task" key={task.id}>
                   <div>
                     <strong>{task.serviceTypeName || serviceType?.name || '服务进度'}</strong>
-                    <span>{guestStatus[task.status]} · {task.ownerName ?? '领班调度池'}</span>
+                    <span>{guestStatus[task.status]} · {task.ownerName ?? '服务团队正在安排'}</span>
                   </div>
                   {task.status === 'completed' && (
                     <div className="guest-feedback">
@@ -488,8 +490,8 @@ export function GuestPortal() {
 
       {activeTab === 'orders' && <section className="guest-orders">
         <div className="guest-section-title"><span>订单与出品进度</span><ListChecks size={20} /></div>
-        {requestedPaymentOrderId && <div className="guest-payment-sync"><CreditCard size={18} /><span>服务员协助点单已同步，请核对商品和金额后支付。</span></div>}
-        {(data?.account.orders.length ?? 0) === 0 ? <div className="guest-empty">本桌当前还没有订单</div> : (
+        {requestedPaymentOrderId && <div className="guest-payment-sync"><CreditCard size={18} /><span>服务伙伴已经把订单送到您手机啦～确认商品和金额后就可以付款。</span></div>}
+        {(data?.account.orders.length ?? 0) === 0 ? <div className="guest-empty">还没有点单，慢慢看；想听推荐就叫我们。</div> : (
           <div className="guest-order-list">{data?.account.orders.toReversed().map((order) => {
             const payment = data.account.payments.find((item) => item.orderIds.includes(order.id))
             const paid = payment?.status === 'succeeded'
@@ -497,7 +499,7 @@ export function GuestPortal() {
               <header><div><strong>¥{(order.payableAmount / 100).toFixed(2)}</strong><span>{new Date(order.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span></div><b className={payment?.status === 'succeeded' ? 'is-paid' : ''}>{payment?.status === 'succeeded' ? '已支付' : order.status === 'draft' ? '待支付' : '已下单'}</b></header>
               <div>{order.items.map((item) => <div className="guest-order-line" key={item.id}><span>{item.name} × {item.quantity}</span><strong>{fulfillmentLabel(item.fulfillmentStatus)}</strong></div>)}</div>
               {!paid && order.payableAmount > 0 && <button className="guest-pay-button" disabled={Boolean(payingOrderId)} onClick={() => void payOrder(order.id)}><CreditCard size={18} />{payingOrderId === order.id ? '正在拉起微信支付' : `微信支付 ¥${(order.payableAmount / 100).toFixed(2)}`}</button>}
-              {!paid && order.payableAmount <= 0 && <div className="guest-no-payment"><CheckCircle2 size={16} />无需在线支付，请由服务员核对赠送或折扣</div>}
+              {!paid && order.payableAmount <= 0 && <div className="guest-no-payment"><CheckCircle2 size={16} />这单已使用赠送或折扣，不用在线付款；服务伙伴会来陪您核对。</div>}
             </article>
           })}</div>
         )}
@@ -539,7 +541,7 @@ function waitForWechatBridge() {
 }
 
 function fulfillmentLabel(status: GuestSessionResponse['account']['orders'][number]['items'][number]['fulfillmentStatus']) {
-  const labels = { draft: '待支付', queued: '待制作', preparing: '制作中', completed: '待取送', picked_up: '配送中', delivered: '已送达' }
+  const labels = { draft: '等您付款', queued: '吧台或厨房已收到', preparing: '正在认真制作', completed: '已经做好', picked_up: '正在送来', delivered: '已送到桌' }
   return labels[status]
 }
 

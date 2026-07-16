@@ -37,17 +37,17 @@ export function signGuestSessionToken(claims: Omit<GuestSessionClaims, 'version'
 
 export function verifyTableAccessToken(token: string, secret: string, now = Date.now()): TableAccessClaims {
   const [payload, suppliedSignature, extra] = token.split('.')
-  if (!payload || !suppliedSignature || extra) throw new TableAccessError('桌码格式无效')
+  if (!payload || !suppliedSignature || extra) throw new TableAccessError('这个二维码没有扫完整，请重新扫一下桌面二维码。')
   const expected = Buffer.from(signature(payload, secret))
   const supplied = Buffer.from(suppliedSignature)
   if (expected.length !== supplied.length || !timingSafeEqual(expected, supplied)) {
-    throw new TableAccessError('桌码签名无效')
+    throw new TableAccessError('这个二维码不是本店当前使用的桌码，请重新扫一下桌面二维码。')
   }
   let claims: TableAccessClaims
   try {
     claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as TableAccessClaims
   } catch {
-    throw new TableAccessError('桌码载荷无效')
+    throw new TableAccessError('这个二维码没有读取完整，请重新扫一下桌面二维码。')
   }
   if (
     claims.version !== 2 || !claims.storeId || !claims.tableCode ||
@@ -55,17 +55,17 @@ export function verifyTableAccessToken(token: string, secret: string, now = Date
     !Number.isSafeInteger(claims.issuedAt) || claims.issuedAt > now + 60_000 ||
     !['table_qr', 'guest_session'].includes(claims.tokenType)
   ) {
-    throw new TableAccessError('桌码声明无效')
+    throw new TableAccessError('这个二维码的信息不完整，请重新扫一下桌面二维码。')
   }
   if (claims.tokenType === 'guest_session') {
     if (
       !claims.tableSessionId || !Number.isSafeInteger(claims.expiresAt) ||
       claims.expiresAt <= claims.issuedAt || claims.expiresAt - claims.issuedAt > MAX_GUEST_SESSION_TTL_MS
     ) {
-      throw new TableAccessError('客人桌次令牌声明无效')
+      throw new TableAccessError('这次桌边服务的信息不完整，请重新扫一下桌面二维码。')
     }
     if (claims.expiresAt <= now) {
-      throw new TableAccessError('客人桌次令牌已过期，请重新扫码', 'GUEST_SESSION_EXPIRED', 401)
+      throw new TableAccessError('这次桌边服务已过期～重新扫一下桌面二维码，我们马上继续照顾您。', 'GUEST_SESSION_EXPIRED', 401)
     }
   }
   return claims
@@ -73,14 +73,14 @@ export function verifyTableAccessToken(token: string, secret: string, now = Date
 
 export function requireStaticTableQr(claims: TableAccessClaims): StaticTableQrClaims {
   if (claims.tokenType !== 'table_qr') {
-    throw new TableAccessError('需要实体桌码凭证', 'TABLE_QR_REQUIRED', 401)
+    throw new TableAccessError('这里需要实体桌码，请重新扫描桌面上的二维码。', 'TABLE_QR_REQUIRED', 401)
   }
   return claims
 }
 
 export function requireGuestSession(claims: TableAccessClaims): GuestSessionClaims {
   if (claims.tokenType !== 'guest_session') {
-    throw new TableAccessError('请先用桌上二维码建立本次桌台会话', 'GUEST_SESSION_REQUIRED', 401)
+    throw new TableAccessError('还没建立本次桌台会话～请先扫桌上二维码，我们才知道去哪里找您。', 'GUEST_SESSION_REQUIRED', 401)
   }
   return claims
 }

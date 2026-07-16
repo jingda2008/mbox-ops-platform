@@ -36,3 +36,12 @@ export function guestCustomSongServiceNote(input: { title: string; artist: strin
   const confirmation = '。请服务员确认歌手能否演唱、价格和预计安排时间，确认前不要收款。'
   return `${parts.join('；').slice(0, 300 - confirmation.length)}${confirmation}`
 }
+
+export function guestErrorMessage(error: unknown, fallback: string) {
+  if (!(error instanceof Error)) return fallback
+  if (/failed to fetch|networkerror|load failed|network request failed/i.test(error.message)) {
+    return '现场网络打了个盹～您的内容还在，再轻点一次；需要时也可以直接招呼身边伙伴。'
+  }
+  if (/系统返回了无法识别的响应|系统请求失败/.test(error.message)) return fallback
+  return error.message
+}

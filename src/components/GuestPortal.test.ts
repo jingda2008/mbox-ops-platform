@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatGuestCountdown, guestCustomSongServiceNote, guestFeedbackIdempotencyKey, guestMoodServiceNote, resolveGuestStage } from './guest-portal-utils'
+import { formatGuestCountdown, guestCustomSongServiceNote, guestErrorMessage, guestFeedbackIdempotencyKey, guestMoodServiceNote, resolveGuestStage } from './guest-portal-utils'
 
 describe('guest feedback idempotency key', () => {
   it('stays within the API limit regardless of the service task ID length', () => {
@@ -63,5 +63,15 @@ describe('custom song service note', () => {
     const note = guestCustomSongServiceNote({ title: '歌'.repeat(80), artist: '原唱'.repeat(40), singerName: '歌手'.repeat(40), customerNote: '祝福'.repeat(80) })
     expect(note).toHaveLength(300)
     expect(note).toMatch(/确认前不要收款。$/)
+  })
+})
+
+describe('guest-facing error copy', () => {
+  it('turns browser network failures into a service-minded retry message', () => {
+    expect(guestErrorMessage(new TypeError('Failed to fetch'), '稍后再试')).toContain('网络打了个盹')
+  })
+
+  it('preserves an already humanized server message', () => {
+    expect(guestErrorMessage(new Error('这张桌子的服务还没接上，请招呼身边伙伴。'), '稍后再试')).toBe('这张桌子的服务还没接上，请招呼身边伙伴。')
   })
 })

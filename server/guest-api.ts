@@ -80,25 +80,27 @@ function tableTokenVersion(table: Table) {
 }
 
 function resolveTable(state: RuntimeState, claims: TableAccessClaims) {
-  if (claims.storeId !== state.store.id) throw new TableAccessError('桌码不属于当前门店', 'TABLE_STORE_MISMATCH', 403)
+  if (claims.storeId !== state.store.id) throw new TableAccessError('这个桌码好像走错门店了，请扫一下桌面上的 M-BOX 二维码。', 'TABLE_STORE_MISMATCH', 403)
   const table = state.tables.find((candidate) => candidate.code.toLowerCase() === claims.tableCode.toLowerCase())
-  if (!table) throw new TableAccessError('桌台不存在', 'TABLE_NOT_FOUND', 404)
+  if (!table) throw new TableAccessError('没有找到这张桌子，请让迎宾伙伴帮您确认一下桌码。', 'TABLE_NOT_FOUND', 404)
   if (claims.tokenVersion !== tableTokenVersion(table)) {
-    throw new TableAccessError('桌码已经失效，请联系服务人员', 'TABLE_TOKEN_REVOKED', 410)
+    throw new TableAccessError('这张桌码已经换新啦，请重新扫一下桌面二维码，我们马上接上服务。', 'TABLE_TOKEN_REVOKED', 410)
   }
   return table
 }
 
 function resolveOpenTableSession(state: RuntimeState, table: Table) {
   if (table.status !== 'occupied') {
-    throw new TableAccessError('该桌台尚未开台，请呼叫迎宾', 'TABLE_SESSION_NOT_OPEN', 409)
+    throw new TableAccessError('欢迎到店～这张桌子还没完成入座登记，请招呼迎宾伙伴帮您开台。', 'TABLE_SESSION_NOT_OPEN', 409)
   }
   const sessions = state.songState.tableSessions.filter(
     (candidate) => candidate.tableId === table.id && candidate.status === 'open',
   )
   if (sessions.length !== 1) {
     throw new TableAccessError(
-      sessions.length === 0 ? '当前桌台没有有效桌次，请联系服务人员' : '当前桌台存在重复开放桌次，请联系服务人员',
+      sessions.length === 0
+        ? '这张桌子的服务还没接上，请招呼身边伙伴，我们马上帮您处理。'
+        : '这张桌子的状态需要我们确认一下，请呼叫服务伙伴，马上帮您处理。',
       sessions.length === 0 ? 'TABLE_SESSION_NOT_OPEN' : 'TABLE_SESSION_AMBIGUOUS',
       409,
     )
@@ -110,11 +112,11 @@ function resolveGuestSession(state: RuntimeState, claims: GuestSessionClaims) {
   const table = resolveTable(state, claims)
   const claimedSession = state.songState.tableSessions.find((session) => session.id === claims.tableSessionId)
   if (claimedSession?.status === 'open' && claimedSession.tableId !== table.id) {
-    throw new TableAccessError('客人已转至新桌，请扫描新桌二维码', 'GUEST_SESSION_REVOKED', 410)
+    throw new TableAccessError('新座位已经为您接好啦～请扫一下新桌二维码，服务会跟着您一起过去。', 'GUEST_SESSION_REVOKED', 410)
   }
   const tableSession = resolveOpenTableSession(state, table)
   if (claims.tableSessionId !== tableSession.id) {
-    throw new TableAccessError('本次桌次已经结束，请重新扫描桌上二维码', 'GUEST_SESSION_REVOKED', 410)
+    throw new TableAccessError('这一桌的服务旅程已经结束啦，需要继续时重新扫一下桌面二维码就好。', 'GUEST_SESSION_REVOKED', 410)
   }
   return { table, tableSession }
 }
@@ -326,7 +328,7 @@ function exchangeAccessFromRequest(
   }
   if ((options.runtimeMode === 'local' || options.runtimeMode === 'test') && legacyTable) {
     const table = state.tables.find((candidate) => candidate.code.toLowerCase() === legacyTable.toLowerCase())
-    if (!table) throw new TableAccessError('桌台不存在', 'TABLE_NOT_FOUND', 404)
+  if (!table) throw new TableAccessError('没有找到这张桌子，请让迎宾伙伴帮您确认一下桌码。', 'TABLE_NOT_FOUND', 404)
     const tableSession = resolveOpenTableSession(state, table)
     const sessionClaims = mintGuestSession(state.store.id, table, tableSession, options, now)
     return {
@@ -336,7 +338,7 @@ function exchangeAccessFromRequest(
       token: signGuestSessionToken(sessionClaims, options.secret),
     }
   }
-  throw new TableAccessError('缺少有效桌码')
+  throw new TableAccessError('还差一步～请扫描桌面二维码进入，这样我们才知道去哪里找您。')
 }
 
 function writeAccessFromToken(state: RuntimeState, token: string, options: GuestApiOptions) {
@@ -357,10 +359,10 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
     const result = await repository.mutate((state) => {
       const { table, tableSession } = writeAccessFromToken(state, input.tableToken, options)
       const serviceType = state.config.serviceTypes.find((candidate) => candidate.id === input.serviceTypeId && candidate.enabled)
-      if (!serviceType) throw new TableAccessError('服务类型未启用', 'GUEST_SERVICE_NOT_AVAILABLE', 409)
+      if (!serviceType) throw new TableAccessError('这个服务今晚暂时没有开放，您可以选择“呼叫”，我们到桌听您说。', 'GUEST_SERVICE_NOT_AVAILABLE', 409)
       const normalizedNote = input.note.trim().replace(/\s+/g, ' ').toLowerCase()
       if (serviceType.code === 'CUSTOM_REQUEST' && !normalizedNote) {
-        throw new TableAccessError('请填写个性化需求后再提交', 'GUEST_CUSTOM_REQUEST_REQUIRED', 400)
+        throw new TableAccessError('把想要的内容告诉我们吧，写几个字就可以。', 'GUEST_CUSTOM_REQUEST_REQUIRED', 400)
       }
       const limits = state.config.guestServiceLimits
       const now = options.now?.() ?? Date.now()
@@ -410,15 +412,18 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
       ))
       if (existing) return existing
       if (new Set(input.items.map((item) => item.productId)).size !== input.items.length) {
-        throw new Error('购物车商品不能重复，请合并数量')
+        throw new TableAccessError('购物车里同一款出现了两次，我们没敢替您重复下单；合并数量后再试一次就好。', 'GUEST_CART_DUPLICATE_PRODUCT', 400)
       }
       const products = input.items.map((item) => {
         const product = state.products.find((candidate) => candidate.id === item.productId && candidate.enabled)
-        if (!product) throw new TableAccessError('购物车包含已下架商品', 'PRODUCT_NOT_AVAILABLE', 409)
+        if (!product) throw new TableAccessError('购物车里有一款刚刚下架了，抱歉让您空欢喜；换一个试试，我们也可以帮您推荐。', 'PRODUCT_NOT_AVAILABLE', 409)
         const availability = productAvailability(product, new Date(options.now?.() ?? Date.now()), state.store.timezone)
         if (!availability.orderable) {
           const code = availability.state === 'sold_out' ? 'PRODUCT_SOLD_OUT' : 'PRODUCT_OUTSIDE_SERVICE_TIME'
-          throw new TableAccessError(`${product.name}：${availability.label}`, code, 409)
+          const message = availability.state === 'sold_out'
+            ? `抱歉，${product.name}刚刚没法继续供应了（${availability.label}）～换一款试试，想听推荐就叫我们。`
+            : `这会儿还没到${product.name}的供应时间，先看看其他选择，也可以让服务伙伴帮您搭配。`
+          throw new TableAccessError(message, code, 409)
         }
         return { product, quantity: item.quantity }
       })
@@ -475,10 +480,10 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
       const { table, tableSession } = writeAccessFromToken(state, input.tableToken, options)
       const order = state.orderDomain.orders.find((candidate) => candidate.id === input.orderId)
       if (!order || order.tableSessionId !== tableSession.id) {
-        throw new TableAccessError('不能支付其他桌次的订单', 'GUEST_ORDER_ACCESS_FORBIDDEN', 403)
+        throw new TableAccessError('这张订单不属于当前桌位，请让服务伙伴来帮您核对，别担心，我们会处理好。', 'GUEST_ORDER_ACCESS_FORBIDDEN', 403)
       }
       if (order.amounts.payableAmount <= 0) {
-        throw new TableAccessError('该订单无需微信支付，请联系服务员核对', 'ORDER_PAYMENT_NOT_REQUIRED', 409)
+        throw new TableAccessError('这张订单已经有其他结账安排啦，请让服务伙伴来为您核对，避免重复付款。', 'ORDER_PAYMENT_NOT_REQUIRED', 409)
       }
       const existingIntent = state.paymentDomain.paymentIntents.find((intent) => (
         intent.orderIds.includes(order.id) && !['failed', 'closed'].includes(intent.status)
@@ -509,7 +514,7 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
         }
       }
       if (!['draft', 'submitted', 'in_fulfillment', 'fulfilled'].includes(order.status)) {
-        throw new TableAccessError('订单当前状态不能支付', 'ORDER_NOT_PAYABLE', 409)
+        throw new TableAccessError('这张订单现在还不能付款，我们正在确认状态；呼叫服务伙伴就能马上帮您看。', 'ORDER_NOT_PAYABLE', 409)
       }
       const now = new Date().toISOString()
       const simulatedPayment = options.runtimeMode === 'local'
@@ -639,7 +644,7 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
         !task || task.tableId !== table.id ||
         Date.parse(task.createdAt) < Date.parse(tableSession.openedAt)
       ) {
-        throw new TableAccessError('不能操作其他桌台的任务', 'GUEST_TASK_ACCESS_FORBIDDEN', 403)
+        throw new TableAccessError('这条服务记录不属于当前桌位，请刷新一下；需要帮助就直接呼叫我们。', 'GUEST_TASK_ACCESS_FORBIDDEN', 403)
       }
       return taskView(state, applyTaskAction(state, task.id, {
         action: input.action,
@@ -657,7 +662,7 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
       const performance = state.songState.performanceSessions.find((candidate) =>
         candidate.appearances.some((appearance) => appearance.id === input.appearanceId),
       )
-      if (!performance) throw new TableAccessError('演出场次不存在', 'PERFORMANCE_NOT_FOUND', 404)
+      if (!performance) throw new TableAccessError('这一轮演出刚刚有调整，先看看最新排班，也可以让服务伙伴帮您问歌手。', 'PERFORMANCE_NOT_FOUND', 404)
       const idempotencyCount = state.songState.idempotencyRecords.length
       const songRequest = submitSongRequest(state.songState, {
         requestId: deterministicId('song_request', input.idempotencyKey),

@@ -44,6 +44,18 @@ describe('service task domain', () => {
     expect(second.ownerId).toBe('emp-jie')
   })
 
+  it('keeps the scene-specific reply while the service team is arranging coverage', () => {
+    const state = createSeedState()
+    for (const employee of state.employees) employee.paused = true
+
+    const task = createServiceTask(state, taskInput())
+
+    expect(task.ownerId).toBeNull()
+    expect(task.customerReply).toContain('水水马上到')
+    expect(task.customerReply).toContain('服务团队')
+    expect(task.customerReply).not.toContain('值班领班正在安排人员')
+  })
+
   it('returns the same task for a repeated idempotency key', () => {
     const state = createSeedState()
     const input = taskInput({ idempotencyKey: 'same-request-key' })

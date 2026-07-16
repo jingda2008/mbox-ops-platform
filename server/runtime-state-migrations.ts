@@ -39,6 +39,17 @@ const builtInRoleUpgrades: Record<string, BuiltInRoleUpgrade> = {
 
 const permissionPolicyMigrationAction = 'runtime.permission_policy_v2_migrated.v1'
 
+const legacyGuestRepliesByCode = new Map<string, string>([
+  ['ADD_WATER', '已收到，{employee}正在为您处理。'],
+  ['ADD_ICE_LEMON', '已收到，{employee}马上为您准备。'],
+  ['ORDER_HELP', '已收到，{employee}会到桌协助您点单。'],
+  ['REQUEST_BILL', '买单请求已收到，{employee}正在核对您的桌账。'],
+  ['COMPLAINT', '您的反馈已由值班领班接管，我们会尽快到桌处理。'],
+  ['BIRTHDAY_CARE', '生日安排已收到，服务专员会与您确认细节。'],
+  ['CUSTOM_REQUEST', '您的个性化需求已收到，{employee}正在为您处理。'],
+  ['FULFILLMENT_DELIVERY', '出品已完成，服务人员正在取送。'],
+])
+
 function withBuiltInRoleUpgrade(role: RoleConfig): RoleConfig {
   const upgrade = builtInRoleUpgrades[role.id]
   if (!upgrade || !role.permissionIds) return role
@@ -86,9 +97,18 @@ function configWithOperationalDefaults(
   const requiredServiceTypes = defaults.serviceTypes.filter(
     (type) => ['FULFILLMENT_DELIVERY', 'CUSTOM_REQUEST'].includes(type.code) && !serviceTypeIds.has(type.id),
   )
+  const defaultServiceTypes = new Map(defaults.serviceTypes.map((serviceType) => [serviceType.code, serviceType]))
   const enriched = {
     ...config,
-    serviceTypes: [...config.serviceTypes, ...structuredClone(requiredServiceTypes)],
+    serviceTypes: [
+      ...config.serviceTypes.map((serviceType) => {
+        const legacyReply = legacyGuestRepliesByCode.get(serviceType.code)
+        const defaultServiceType = defaultServiceTypes.get(serviceType.code)
+        if (!legacyReply || !defaultServiceType || serviceType.customerReply !== legacyReply) return serviceType
+        return { ...serviceType, customerReply: defaultServiceType.customerReply }
+      }),
+      ...structuredClone(requiredServiceTypes),
+    ],
     roles: [
       ...config.roles.map(withDefaultRolePolicy).map((role) => (
         upgradeBuiltInRoles ? withBuiltInRoleUpgrade(role) : role

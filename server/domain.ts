@@ -115,9 +115,7 @@ export function createServiceTask(state: RuntimeState, input: CreateTaskInput & 
 
   const now = new Date()
   const assignee = chooseAssignee(state, table.id, serviceType)
-  const customerReply = assignee
-    ? serviceType.customerReply.replace('{employee}', assignee.displayName)
-    : '已收到，值班领班正在安排人员。'
+  const customerReply = serviceType.customerReply.replace('{employee}', assignee?.displayName ?? '服务团队')
   const task: ServiceTask = {
     id: `task_${randomUUID()}`,
     tableId: table.id,

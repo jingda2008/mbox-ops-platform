@@ -87,6 +87,39 @@ describe('runtime state operational migrations', () => {
     expect(migrated.draftConfig?.communityBrand.tagline).toBe('管理员自定义口号')
   })
 
+  it('upgrades only shipped guest replies and preserves manager-written service copy', () => {
+    const legacy = createSeedState()
+    const defaults = legacy.config.serviceTypes.map((serviceType) => ({ code: serviceType.code, reply: serviceType.customerReply }))
+    const oldReplies = new Map([
+      ['ADD_WATER', '已收到，{employee}正在为您处理。'],
+      ['ADD_ICE_LEMON', '已收到，{employee}马上为您准备。'],
+      ['ORDER_HELP', '已收到，{employee}会到桌协助您点单。'],
+      ['REQUEST_BILL', '买单请求已收到，{employee}正在核对您的桌账。'],
+      ['COMPLAINT', '您的反馈已由值班领班接管，我们会尽快到桌处理。'],
+      ['BIRTHDAY_CARE', '生日安排已收到，服务专员会与您确认细节。'],
+      ['CUSTOM_REQUEST', '您的个性化需求已收到，{employee}正在为您处理。'],
+      ['FULFILLMENT_DELIVERY', '出品已完成，服务人员正在取送。'],
+    ])
+    for (const serviceType of legacy.config.serviceTypes) {
+      const oldReply = oldReplies.get(serviceType.code)
+      if (oldReply) serviceType.customerReply = oldReply
+    }
+    legacy.config.serviceTypes.find((serviceType) => serviceType.code === 'COMPLAINT')!.customerReply = '经理自定义：我马上到桌。'
+
+    const migrated = migrateRuntimeState(legacy)
+
+    expect(migrated.config.serviceTypes.find((serviceType) => serviceType.code === 'COMPLAINT')?.customerReply).toBe('经理自定义：我马上到桌。')
+    for (const expected of defaults.filter((item) => item.code !== 'COMPLAINT')) {
+      expect(migrated.config.serviceTypes.find((serviceType) => serviceType.code === expected.code)?.customerReply).toBe(expected.reply)
+    }
+  })
+
+  it('ships a distinct customer reply for every service scene', () => {
+    const replies = createSeedState().config.serviceTypes.map((serviceType) => serviceType.customerReply)
+    expect(new Set(replies).size).toBe(replies.length)
+    expect(replies.every((reply) => !reply.startsWith('已收到'))).toBe(true)
+  })
+
   it('conservatively upgrades permissions for unchanged built-in roles in all persisted configs', () => {
     const legacy = structuredClone(createSeedState())
     legacy.draftConfig = structuredClone(legacy.config)

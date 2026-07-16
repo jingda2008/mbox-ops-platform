@@ -91,7 +91,7 @@ export function createSeedConfig(): StoreConfig {
         priority: 'normal',
         dispatchRoleIds: ['server', 'backup', 'supervisor', 'manager'],
         sla: { warningSeconds: 30, escalateSeconds: 60, managerSeconds: 120 },
-        customerReply: '已收到，{employee}正在为您处理。',
+        customerReply: '水水马上到～{employee}正在帮您安排，也会顺手看看桌上还缺不缺冰块和柠檬。',
         actionScript: ['先补水并确认温度偏好', '顺带检查冰桶、柠檬和纸巾', '离桌前询问是否还有其他需要'],
       },
       {
@@ -103,7 +103,7 @@ export function createSeedConfig(): StoreConfig {
         priority: 'normal',
         dispatchRoleIds: ['server', 'backup', 'supervisor', 'manager'],
         sla: { warningSeconds: 30, escalateSeconds: 60, managerSeconds: 120 },
-        customerReply: '已收到，{employee}马上为您准备。',
+        customerReply: '清凉补给收到～{employee}正在准备冰块和柠檬，很快送到桌边。',
         actionScript: ['确认需要冰块、柠檬或两者', '使用干净器具补充', '检查桌面空杯和垃圾'],
       },
       {
@@ -115,7 +115,7 @@ export function createSeedConfig(): StoreConfig {
         priority: 'normal',
         dispatchRoleIds: ['server', 'backup', 'supervisor', 'manager'],
         sla: { warningSeconds: 30, escalateSeconds: 60, managerSeconds: 120 },
-        customerReply: '已收到，{employee}会到桌协助您点单。',
+        customerReply: '选择困难交给我们～{employee}马上到桌，陪您挑到今晚最合适的酒和小食。',
         actionScript: ['先询问人数、口味和预算', '结合已点商品给出两项明确建议', '复述数量和价格后再提交订单'],
       },
       {
@@ -127,7 +127,7 @@ export function createSeedConfig(): StoreConfig {
         priority: 'high',
         dispatchRoleIds: ['server', 'backup', 'supervisor', 'manager'],
         sla: { warningSeconds: 20, escalateSeconds: 45, managerSeconds: 90 },
-        customerReply: '买单请求已收到，{employee}正在核对您的桌账。',
+        customerReply: '好的～{employee}正在仔细核对账单和优惠，整理好就来陪您确认。',
         actionScript: ['先核对桌号与未送达商品', '向客户展示账单明细和优惠', '确认支付方式后创建支付意图'],
       },
       {
@@ -139,7 +139,7 @@ export function createSeedConfig(): StoreConfig {
         priority: 'urgent',
         dispatchRoleIds: ['supervisor', 'manager'],
         sla: { warningSeconds: 10, escalateSeconds: 20, managerSeconds: 45 },
-        customerReply: '您的反馈已由值班领班接管，我们会尽快到桌处理。',
+        customerReply: '谢谢您愿意告诉我们。值班领班已经接手，会尽快到桌认真听您说并现场解决。',
         actionScript: ['先倾听并复述客户问题，不争辩', '确认客户期望和现场事实', '权限内立即补救，超权限当场升级'],
       },
       {
@@ -151,7 +151,7 @@ export function createSeedConfig(): StoreConfig {
         priority: 'normal',
         dispatchRoleIds: ['specialist', 'supervisor', 'manager'],
         sla: { warningSeconds: 60, escalateSeconds: 180, managerSeconds: 300 },
-        customerReply: '生日安排已收到，服务专员会与您确认细节。',
+        customerReply: '生日小惊喜收到啦～服务专员会悄悄来和您确认，尽量把仪式感安排得刚刚好。',
         actionScript: ['先确认庆祝对象、称呼和是否愿意公开互动', '核对当日权益和演出节奏', '协调礼物、歌曲和送达时间'],
       },
       {
@@ -163,7 +163,7 @@ export function createSeedConfig(): StoreConfig {
         priority: 'normal',
         dispatchRoleIds: ['server', 'backup', 'supervisor', 'manager'],
         sla: { warningSeconds: 30, escalateSeconds: 60, managerSeconds: 120 },
-        customerReply: '您的个性化需求已收到，{employee}正在为您处理。',
+        customerReply: '懂您～这个特别需求已经交给{employee}，我们先确认细节，能安排的马上帮您安排。',
         actionScript: ['先复述客户需求并确认数量、时间和偏好', '能立即完成则执行，涉及权限或资源时马上升级', '完成后回到桌边请客户确认'],
       },
       {
@@ -176,7 +176,7 @@ export function createSeedConfig(): StoreConfig {
         priority: 'normal',
         dispatchRoleIds: ['runner', 'server', 'backup', 'supervisor', 'manager'],
         sla: { warningSeconds: 45, escalateSeconds: 90, managerSeconds: 180 },
-        customerReply: '出品已完成，服务人员正在取送。',
+        customerReply: '新鲜出品已经准备好啦～服务伙伴正在取送，很快送到您桌上。',
         actionScript: ['到工作站取货并核对桌号', '送达后与客人确认商品'],
       },
     ],

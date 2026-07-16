@@ -43,7 +43,7 @@ describe('signed table access', () => {
     const future = signStaticTableQrToken({
       storeId: 'mbox-lujiazui', tableCode: 'L01', tokenVersion: 1, issuedAt: now + 120_000,
     }, secret)
-    expect(() => verifyTableAccessToken(future, secret, now)).toThrow('声明无效')
+    expect(() => verifyTableAccessToken(future, secret, now)).toThrow(TableAccessError)
 
     const expired = signGuestSessionToken({
       storeId: 'mbox-lujiazui', tableCode: 'L01', tableSessionId: 'visit-l01-1',

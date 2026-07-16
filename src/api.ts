@@ -62,7 +62,7 @@ import type {
 } from './shared/benefit-redemption-contracts'
 import type { PilotLoginResponse } from './shared/auth-contracts'
 import type { ConfigVersionRecord } from './shared/config-versioning-contracts'
-import type { SongRequest } from './shared/song-contracts'
+import type { Singer, SingerProfileWriteInput, SongRequest } from './shared/song-contracts'
 import type {
   GuestSessionResponse,
   GuestCartOrderInput,
@@ -445,6 +445,13 @@ export function submitPaidSongRequest(input: SubmitSongRequestInput) {
   return request<SongRequest>('/api/songs/requests', {
     method: 'POST',
     body: JSON.stringify({ ...input, idempotencyKey: `song-submit-${crypto.randomUUID()}` }),
+  })
+}
+
+export function updateSingerProfile(singerId: string, input: SingerProfileWriteInput) {
+  return request<Singer>(`/api/songs/singers/${encodeURIComponent(singerId)}/profile`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
   })
 }
 

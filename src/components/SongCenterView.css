@@ -12,6 +12,21 @@
 .appearance-slot strong { font-size: 12px; }
 .appearance-slot small { color: var(--ink-soft); font-size: 9px; }
 .appearance-slot b { color: var(--success); font-size: 9px; }
+.singer-profile-editor { display: grid; grid-template-columns: 86px minmax(0, 1fr) auto; align-items: stretch; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: #f6f7f4; }
+.singer-profile-preview { width: 86px; height: 86px; overflow: hidden; border: 1px solid var(--line-strong); background: #171b18; }
+.singer-profile-preview img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.singer-profile-preview > span { height: 100%; display: grid; place-content: center; justify-items: center; gap: 5px; color: #c2a751; }
+.singer-profile-preview small { color: #aeb5af; font-size: 8px; }
+.singer-profile-fields { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.singer-profile-fields label { min-width: 0; display: grid; gap: 4px; }
+.singer-profile-fields label > span { color: var(--ink-soft); font-size: 9px; font-weight: 750; }
+.singer-profile-fields input, .singer-profile-fields textarea { width: 100%; min-width: 0; border: 1px solid var(--line-strong); border-radius: 4px; background: #fff; color: var(--ink); }
+.singer-profile-fields input { height: 34px; padding: 0 8px; }
+.singer-profile-fields textarea { min-height: 54px; padding: 7px 8px; resize: vertical; }
+.singer-profile-fields .wide-field { grid-column: 1 / -1; }
+.singer-profile-actions { min-width: 132px; display: flex; flex-direction: column; justify-content: space-between; align-items: stretch; gap: 8px; }
+.singer-profile-actions > label { display: flex; align-items: center; gap: 6px; color: var(--ink-soft); font-size: 10px; }
+.singer-profile-actions button { min-height: 38px; }
 .song-workspace { display: grid; grid-template-columns: minmax(320px, .8fr) minmax(500px, 1.2fr); }
 .song-order-form { display: grid; grid-template-columns: 1fr 1fr; align-content: start; gap: 10px; padding: 17px; border-right: 1px solid var(--line); }
 .song-order-form .form-heading, .song-order-form .wide-field, .song-order-form .song-payment-boundary, .song-order-form > button { grid-column: 1 / -1; }
@@ -36,5 +51,5 @@
 .song-request-actions input { width: 150px; height: 32px; font-size: 10px; }
 .song-request-actions button { min-height: 32px; padding: 0 8px; font-size: 10px; }
 .song-request-actions .icon-button { width: 32px; padding: 0; }
-@media (max-width: 1000px) { .song-workspace { grid-template-columns: 1fr; } .song-order-form { border-right: 0; border-bottom: 1px solid var(--line); } }
-@media (max-width: 700px) { .song-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .song-metric:nth-child(2) { border-right: 0; } .song-metric:nth-child(-n+2) { border-bottom: 1px solid var(--line); } .song-order-form { grid-template-columns: 1fr; } .song-order-form .form-heading, .song-order-form .wide-field, .song-order-form .song-payment-boundary, .song-order-form > button { grid-column: 1; } .song-request-row { grid-template-columns: 58px minmax(0, 1fr); } .song-request-actions { grid-column: 1 / -1; flex-wrap: wrap; } .song-request-actions input { flex: 1; width: auto; } }
+@media (max-width: 1000px) { .singer-profile-editor { grid-template-columns: 76px minmax(0, 1fr); } .singer-profile-preview { width: 76px; height: 76px; } .singer-profile-actions { grid-column: 1 / -1; flex-direction: row; align-items: center; } .song-workspace { grid-template-columns: 1fr; } .song-order-form { border-right: 0; border-bottom: 1px solid var(--line); } }
+@media (max-width: 700px) { .song-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .song-metric:nth-child(2) { border-right: 0; } .song-metric:nth-child(-n+2) { border-bottom: 1px solid var(--line); } .singer-profile-editor { grid-template-columns: 1fr; } .singer-profile-preview { width: 100%; height: 120px; } .singer-profile-fields { grid-template-columns: 1fr; } .singer-profile-fields .wide-field { grid-column: 1; } .song-order-form { grid-template-columns: 1fr; } .song-order-form .form-heading, .song-order-form .wide-field, .song-order-form .song-payment-boundary, .song-order-form > button { grid-column: 1; } .song-request-row { grid-template-columns: 58px minmax(0, 1fr); } .song-request-actions { grid-column: 1 / -1; flex-wrap: wrap; } .song-request-actions input { flex: 1; width: auto; } }

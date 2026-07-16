@@ -44,6 +44,15 @@ const actionSchema = z.object({
   idempotencyKey,
 })
 
+const singerProfileSchema = z.object({
+  displayName: z.string().trim().min(1).max(80),
+  photoUrl: z.string().trim().max(500).refine((value) => !value || value.startsWith('/') || value.startsWith('https://'), '照片地址必须是站内路径或HTTPS地址'),
+  headline: z.string().trim().max(100),
+  bio: z.string().trim().max(600),
+  styleTags: z.array(z.string().trim().min(1).max(20)).max(6),
+  active: z.boolean(),
+})
+
 function mutateSong(state: RuntimeState, operation: () => SongRequest) {
   const idempotencyCount = state.songState.idempotencyRecords.length
   const result = operation()
@@ -52,6 +61,23 @@ function mutateSong(state: RuntimeState, operation: () => SongRequest) {
 }
 
 export function registerSongRoutes(app: FastifyInstance, repository: RuntimeRepository) {
+  app.put<{ Params: { singerId: string } }>('/api/songs/singers/:singerId/profile', async (request) => {
+    const input = singerProfileSchema.parse(request.body)
+    return repository.mutate((state) => {
+      requireConfiguredOperation(request, state, 'song.manage')
+      const singer = state.songState.singers.find((item) => item.id === request.params.singerId)
+      if (!singer) throw new Error('歌手不存在')
+      singer.displayName = input.displayName
+      singer.photoUrl = input.photoUrl
+      singer.headline = input.headline
+      singer.bio = input.bio
+      singer.styleTags = [...new Set(input.styleTags)]
+      singer.active = input.active
+      state.revision += 1
+      return singer
+    })
+  })
+
   app.post('/api/songs/requests', async (request, reply) => {
     const input = submitSchema.parse(request.body)
     const result = await repository.mutate((state) => {

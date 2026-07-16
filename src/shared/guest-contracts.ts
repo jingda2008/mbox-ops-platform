@@ -85,6 +85,22 @@ export interface GuestSessionResponse {
     currency: string
     startsAt: string
   }>
+  stageSchedule: Array<{
+    performanceSessionId: string
+    performanceTitle: string
+    appearanceId: string
+    singerId: string
+    singerName: string
+    startsAt: string
+    endsAt: string
+    acceptingRequests: boolean
+    profile: {
+      photoUrl: string
+      headline: string
+      bio: string
+      styleTags: string[]
+    }
+  }>
   songRequests: Array<{
     id: string
     status: SongRequestStatus

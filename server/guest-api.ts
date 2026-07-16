@@ -196,6 +196,29 @@ function sessionView(
             startsAt: appearance.startsAt,
           }]
         })))
+  const stageSchedule = state.songState.performanceSessions
+    .filter((performance) => performance.businessDate === state.songState.businessDate && ['scheduled', 'live'].includes(performance.status))
+    .flatMap((performance) => performance.appearances.flatMap((appearance) => {
+      const singer = state.songState.singers.find((item) => item.id === appearance.singerId && item.active)
+      if (!singer) return []
+      return [{
+        performanceSessionId: performance.id,
+        performanceTitle: performance.title,
+        appearanceId: appearance.id,
+        singerId: singer.id,
+        singerName: singer.displayName,
+        startsAt: appearance.startsAt,
+        endsAt: appearance.endsAt,
+        acceptingRequests: appearance.acceptingRequests,
+        profile: {
+          photoUrl: singer.photoUrl?.trim() ?? '',
+          headline: singer.headline?.trim() ?? '',
+          bio: singer.bio?.trim() ?? '',
+          styleTags: (singer.styleTags ?? []).filter(Boolean).slice(0, 6),
+        },
+      }]
+    }))
+    .sort((left, right) => Date.parse(left.startsAt) - Date.parse(right.startsAt))
   return {
     store: { id: state.store.id, name: state.store.name, businessDate: state.store.businessDate, timezone: state.store.timezone },
     communityBrand: state.config.communityBrand.enabled && state.config.communityBrand.guestOrderVisible
@@ -256,6 +279,7 @@ function sessionView(
         })),
     },
     songOffers,
+    stageSchedule,
     songRequests: state.songState.requests
       .filter((request) => request.tableSessionId === tableSession.id)
       .slice(-20)

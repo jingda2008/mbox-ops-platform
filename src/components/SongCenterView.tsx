@@ -1,8 +1,8 @@
-import { Banknote, CheckCircle2, Clock3, Mic2, Music2, Play, RotateCcw, XCircle } from 'lucide-react'
+import { Banknote, CheckCircle2, Clock3, Image, Mic2, Music2, Play, RotateCcw, Save, XCircle } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { actOnSongRequest, reportSongPayment, submitPaidSongRequest } from '../api'
+import { actOnSongRequest, reportSongPayment, submitPaidSongRequest, updateSingerProfile } from '../api'
 import type { BootstrapResponse } from '../shared/contracts'
-import type { SongRequest, SongRequestStatus } from '../shared/song-contracts'
+import type { Singer, SingerProfileWriteInput, SongRequest, SongRequestStatus } from '../shared/song-contracts'
 import './SongCenterView.css'
 
 interface SongCenterViewProps {
@@ -15,6 +15,7 @@ export function SongCenterView({ data, onRefresh, onNotice }: SongCenterViewProp
   const appearances = data.songState.performanceSessions.flatMap((session) => session.appearances.map((appearance) => ({ session, appearance })))
   const [appearanceId, setAppearanceId] = useState(appearances.find((item) => item.appearance.acceptingRequests)?.appearance.id ?? appearances[0]?.appearance.id ?? '')
   const selected = appearances.find((item) => item.appearance.id === appearanceId)
+  const selectedSinger = data.songState.singers.find((item) => item.id === selected?.appearance.singerId)
   const offers = useMemo(() => data.songState.repertoire.filter((item) => item.singerId === selected?.appearance.singerId && item.enabled), [data.songState.repertoire, selected?.appearance.singerId])
   const [songId, setSongId] = useState(offers[0]?.songId ?? '')
   const [tableSessionId, setTableSessionId] = useState(data.songState.tableSessions.find((item) => item.status === 'open')?.id ?? '')
@@ -73,6 +74,7 @@ export function SongCenterView({ data, onRefresh, onNotice }: SongCenterViewProp
           return <button key={appearance.id} className={appearance.id === appearanceId ? 'appearance-slot is-selected' : 'appearance-slot'} onClick={() => { setAppearanceId(appearance.id); setSongId(data.songState.repertoire.find((item) => item.singerId === appearance.singerId && item.enabled)?.songId ?? '') }}><Clock3 size={15} /><span><strong>{singer?.displayName}</strong><small>{timeRange(appearance.startsAt, appearance.endsAt)}</small></span><b>{appearance.acceptingRequests ? '接单中' : '暂停'}</b></button>
         })}
       </div>
+      {selectedSinger && <SingerProfileEditor key={selectedSinger.id} singer={selectedSinger} busy={busy} onSave={(input) => run(() => updateSingerProfile(selectedSinger.id, input), '歌手资料已保存，顾客端将自动更新')} />}
       <div className="song-workspace">
         <form className="song-order-form" onSubmit={(event) => void submit(event)}>
           <div className="form-heading"><Music2 size={19} /><div><strong>员工辅助点歌</strong><span>绑定桌台、歌手排班和价格快照</span></div></div>
@@ -91,6 +93,38 @@ export function SongCenterView({ data, onRefresh, onNotice }: SongCenterViewProp
       </div>
     </section>
   )
+}
+
+function SingerProfileEditor({ singer, busy, onSave }: { singer: Singer; busy: boolean; onSave: (input: SingerProfileWriteInput) => Promise<void> }) {
+  const [displayName, setDisplayName] = useState(singer.displayName)
+  const [photoUrl, setPhotoUrl] = useState(singer.photoUrl ?? '')
+  const [headline, setHeadline] = useState(singer.headline ?? '')
+  const [bio, setBio] = useState(singer.bio ?? '')
+  const [styleTags, setStyleTags] = useState((singer.styleTags ?? []).join('、'))
+  const [active, setActive] = useState(singer.active)
+
+  function submit(event: React.FormEvent) {
+    event.preventDefault()
+    const tags = styleTags.split(/[、,，]/).map((item) => item.trim()).filter(Boolean).slice(0, 6)
+    void onSave({ displayName: displayName.trim(), photoUrl: photoUrl.trim(), headline: headline.trim(), bio: bio.trim(), styleTags: [...new Set(tags)], active })
+  }
+
+  return <form className="singer-profile-editor" onSubmit={submit}>
+    <div className="singer-profile-preview">{photoUrl
+      ? <img src={photoUrl} alt="歌手照片预览" />
+      : <span><Image size={22} /><small>照片预览</small></span>}</div>
+    <div className="singer-profile-fields">
+      <label><span>歌手名称</span><input value={displayName} maxLength={80} onChange={(event) => setDisplayName(event.target.value)} /></label>
+      <label><span>照片地址</span><input value={photoUrl} maxLength={500} placeholder="/singers/name.jpg 或 https://..." onChange={(event) => setPhotoUrl(event.target.value)} /></label>
+      <label><span>亮点文案</span><input value={headline} maxLength={100} placeholder="例如：英文流行 · 氛围女声" onChange={(event) => setHeadline(event.target.value)} /></label>
+      <label><span>风格标签</span><input value={styleTags} maxLength={120} placeholder="华语流行、情歌、互动" onChange={(event) => setStyleTags(event.target.value)} /></label>
+      <label className="wide-field"><span>歌手简介</span><textarea value={bio} maxLength={600} placeholder="介绍声音特色、擅长曲风和现场互动风格" onChange={(event) => setBio(event.target.value)} /></label>
+    </div>
+    <div className="singer-profile-actions">
+      <label><input type="checkbox" checked={active} onChange={(event) => setActive(event.target.checked)} /><span>顾客端显示</span></label>
+      <button className="primary-button" disabled={busy || !displayName.trim()}><Save size={15} />保存歌手资料</button>
+    </div>
+  </form>
 }
 
 function SongRequestRow({ request, reference, setReference, busy, run }: { request: SongRequest; reference: string; setReference: (value: string) => void; busy: boolean; run: (operation: () => Promise<unknown>, success: string) => Promise<void> }) {

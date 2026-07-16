@@ -1,8 +1,8 @@
-import { Bell, CakeSlice, CheckCircle2, ChevronRight, Clock3, CreditCard, GlassWater, ListChecks, MapPin, MessageCircleMore, Music2, Send, ShieldCheck, ShoppingBag, X } from 'lucide-react'
+import { Bell, CakeSlice, CheckCircle2, ChevronRight, Clock3, CreditCard, GlassWater, ListChecks, MapPin, MessageCircleMore, Mic2, Music2, Send, ShieldCheck, ShoppingBag, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { checkoutGuestOrder, createGuestOrder, createGuestSongRequest, createGuestTask, getGuestSession, submitGuestTaskFeedback } from '../api'
 import type { GuestSessionResponse, GuestTaskView, WechatJsapiParameters } from '../shared/guest-contracts'
-import { guestFeedbackIdempotencyKey, guestMoodServiceNote } from './guest-portal-utils'
+import { formatGuestCountdown, guestCustomSongServiceNote, guestFeedbackIdempotencyKey, guestMoodServiceNote, resolveGuestStage } from './guest-portal-utils'
 import { ServiceIcon } from './ServiceIcon'
 import { MenuOrderingWorkspace, type MenuCartItem } from './MenuOrderingWorkspace'
 import { SuperHighCommunityBand } from './SuperHighCommunityBand'
@@ -47,8 +47,17 @@ export function GuestPortal() {
     return guestMoods.some((mood) => mood.id === stored) ? stored as GuestMoodId : null
   })
   const [songPickerOpen, setSongPickerOpen] = useState(false)
+  const [songPickerMode, setSongPickerMode] = useState<'repertoire' | 'custom'>('repertoire')
   const [songBusyId, setSongBusyId] = useState('')
+  const [songSingerId, setSongSingerId] = useState('')
+  const [customSongTitle, setCustomSongTitle] = useState('')
+  const [customSongArtist, setCustomSongArtist] = useState('')
+  const [customSongSingerId, setCustomSongSingerId] = useState('')
+  const [customSongNote, setCustomSongNote] = useState('')
+  const [customSongBusy, setCustomSongBusy] = useState(false)
   const [quickPendingKey, setQuickPendingKey] = useState('')
+  const [stageClock, setStageClock] = useState(() => Date.now())
+  const [singerProfileId, setSingerProfileId] = useState('')
 
   const refresh = useCallback(async () => {
     try {
@@ -65,15 +74,22 @@ export function GuestPortal() {
     return () => window.clearInterval(timer)
   }, [refresh])
 
+  useEffect(() => {
+    const timer = window.setInterval(() => setStageClock(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+
   const tableTasks = useMemo(() => data?.tasks.slice(0, 5) ?? [], [data?.tasks])
   const customRequestType = data?.serviceTypes.find((serviceType) => serviceType.code === 'CUSTOM_REQUEST')
   const quickServiceTypes = data?.serviceTypes.filter((serviceType) => serviceType.code !== 'CUSTOM_REQUEST') ?? []
   const serviceTypeByCode = useMemo(() => new Map(data?.serviceTypes.map((serviceType) => [serviceType.code, serviceType]) ?? []), [data?.serviceTypes])
-  const featuredSongOffer = useMemo(() => {
-    if (!data?.songOffers.length) return null
-    const now = Date.parse(data.serverNow)
-    return data.songOffers.toSorted((left, right) => Math.abs(Date.parse(left.startsAt) - now) - Math.abs(Date.parse(right.startsAt) - now))[0]
-  }, [data])
+  const stage = useMemo(() => {
+    const serverOffset = data ? Date.parse(data.serverNow) - Date.now() : 0
+    return resolveGuestStage(data?.stageSchedule ?? [], stageClock + serverOffset)
+  }, [data, stageClock])
+  const featuredAppearance = stage.current ?? stage.next
+  const profileAppearance = data?.stageSchedule.find((appearance) => appearance.singerId === singerProfileId) ?? null
+  const profileSongOffers = data?.songOffers.filter((offer) => offer.singerId === singerProfileId).slice(0, 6) ?? []
   const songChoices = useMemo(() => {
     const seen = new Set<string>()
     return (data?.songOffers ?? []).filter((offer) => {
@@ -81,8 +97,13 @@ export function GuestPortal() {
       if (seen.has(key)) return false
       seen.add(key)
       return true
-    }).slice(0, 8)
+    })
   }, [data?.songOffers])
+  const songSingers = useMemo(() => {
+    const singerIds = new Set(songChoices.map((offer) => offer.singerId))
+    return (data?.stageSchedule ?? []).filter((appearance, index, items) => singerIds.has(appearance.singerId) && items.findIndex((item) => item.singerId === appearance.singerId) === index)
+  }, [data?.stageSchedule, songChoices])
+  const visibleSongChoices = (songSingerId ? songChoices.filter((offer) => offer.singerId === songSingerId) : songChoices).slice(0, 8)
 
   async function requestService(serviceTypeId: string, requestNote = '') {
     setPendingType(serviceTypeId)
@@ -107,12 +128,13 @@ export function GuestPortal() {
   }
 
   async function recordMood(mood: typeof guestMoods[number]) {
-    if (selectedMood || pendingType) return
+    if (selectedMood === mood.id || pendingType) return
     if (!customRequestType) {
       setError('今晚状态记录暂未启用')
       return
     }
-    const succeeded = await requestService(customRequestType.id, guestMoodServiceNote(mood.label, mood.care))
+    const previousLabel = guestMoods.find((item) => item.id === selectedMood)?.label ?? ''
+    const succeeded = await requestService(customRequestType.id, guestMoodServiceNote(mood.label, mood.care, previousLabel))
     if (succeeded) {
       setSelectedMood(mood.id)
       window.sessionStorage.setItem(`mbox-guest-mood-${tableCode}`, mood.id)
@@ -155,10 +177,41 @@ export function GuestPortal() {
 
   async function openSongService() {
     if (songChoices.length > 0) {
+      const defaultSingerId = featuredAppearance?.singerId ?? ''
+      setSongSingerId(defaultSingerId)
+      setCustomSongSingerId(defaultSingerId)
+      setSongPickerMode('repertoire')
       setSongPickerOpen(true)
       return
     }
     await requestQuickService('song', 'ORDER_HELP', '客人希望点歌，请到桌协助查看当日可选歌单。')
+  }
+
+  async function submitCustomSong() {
+    if (!customRequestType) {
+      setError('自定义点歌申请暂未启用，请呼叫服务员')
+      return
+    }
+    if (!customSongTitle.trim()) {
+      setError('请填写想点的歌曲名称')
+      return
+    }
+    const singerName = data?.stageSchedule.find((appearance) => appearance.singerId === customSongSingerId)?.singerName ?? '不限歌手'
+    setCustomSongBusy(true)
+    const succeeded = await requestService(customRequestType.id, guestCustomSongServiceNote({
+      title: customSongTitle,
+      artist: customSongArtist,
+      singerName,
+      customerNote: customSongNote,
+    }))
+    if (succeeded) {
+      setReply('自定义点歌申请已收到，服务员会确认歌手能否演唱、价格和安排时间，确认前不会收款。')
+      setCustomSongTitle('')
+      setCustomSongArtist('')
+      setCustomSongNote('')
+      setSongPickerOpen(false)
+    }
+    setCustomSongBusy(false)
   }
 
   async function submitCustomRequest() {
@@ -256,16 +309,47 @@ export function GuestPortal() {
 
       <section className="guest-table-band">
         <div className="guest-table-copy">
-          <small><i aria-hidden="true" />{featuredSongOffer ? `TONIGHT · ${formatGuestTime(featuredSongOffer.startsAt, data?.store.timezone)}` : 'LIVE SERVICE · 服务在线'}</small>
+          <small><i aria-hidden="true" />{stage.mode === 'live' && stage.current
+            ? `LIVE NOW · ${formatGuestTimeRange(stage.current.startsAt, stage.current.endsAt, data?.store.timezone)}`
+            : stage.mode === 'upcoming' && stage.next
+              ? `NEXT · ${formatGuestTime(stage.next.startsAt, data?.store.timezone)}`
+              : stage.mode === 'finished' ? 'TONIGHT · 演出已结束' : 'LIVE SERVICE · 服务在线'}</small>
           <h1>{data?.table.displayName ?? tableCode}</h1>
           <p><MapPin size={13} />服务专员 · {data?.primaryServiceName ?? '正在安排'}</p>
         </div>
-        <div className="guest-stage-status">
-          {featuredSongOffer ? <Music2 size={17} /> : <ShieldCheck size={17} />}
-          <strong>{featuredSongOffer?.singerName ?? data?.primaryServiceName ?? 'M-BOX'}</strong>
-          <span>{featuredSongOffer ? '点歌开放' : '服务在线'}</span>
-        </div>
+        <button className="guest-stage-status" disabled={!featuredAppearance} onClick={() => featuredAppearance && setSingerProfileId(featuredAppearance.singerId)}>
+          {featuredAppearance ? <Music2 size={17} /> : <ShieldCheck size={17} />}
+          <strong>{featuredAppearance?.singerName ?? 'M-BOX'}</strong>
+          <span>{stage.mode === 'live'
+            ? `演出中 · ${formatGuestCountdown(stage.countdownMs)}`
+            : stage.mode === 'upcoming' ? `${formatGuestCountdown(stage.countdownMs)} 后登场` : stage.mode === 'finished' ? '今晚演出结束' : '服务在线'}</span>
+          {stage.mode === 'live' && stage.next && <em>下一位 {stage.next.singerName} · {formatGuestTime(stage.next.startsAt, data?.store.timezone)}</em>}
+          {featuredAppearance && <ChevronRight className="guest-stage-chevron" size={15} aria-hidden="true" />}
+        </button>
       </section>
+
+      {profileAppearance && <div className="guest-singer-backdrop" role="presentation" onClick={() => setSingerProfileId('')}>
+        <section className="guest-singer-sheet" role="dialog" aria-modal="true" aria-label={`${profileAppearance.singerName}歌手资料`} onClick={(event) => event.stopPropagation()}>
+          <header>
+            <div className="guest-singer-photo">{profileAppearance.profile.photoUrl
+              ? <img src={profileAppearance.profile.photoUrl} alt={profileAppearance.singerName} />
+              : <div><Mic2 size={30} /><span>M-BOX LIVE</span></div>}</div>
+            <button className="icon-button" title="关闭歌手资料" onClick={() => setSingerProfileId('')}><X size={19} /></button>
+          </header>
+          <div className="guest-singer-content">
+            <small>ARTIST PROFILE</small>
+            <h2>{profileAppearance.singerName}</h2>
+            <strong>{profileAppearance.profile.headline || 'M-BOX LIVEHOUSE 驻场歌手'}</strong>
+            {profileAppearance.profile.styleTags.length > 0 && <div className="guest-singer-tags">{profileAppearance.profile.styleTags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
+            <p>{profileAppearance.profile.bio || '歌手资料正在完善，您可以先查看当晚演出时间与可点歌曲。'}</p>
+            <div className="guest-singer-schedule"><Clock3 size={17} /><div><span>今晚演出</span><strong>{formatGuestTimeRange(profileAppearance.startsAt, profileAppearance.endsAt, data?.store.timezone)}</strong></div></div>
+            <div className="guest-singer-songs">
+              <header><span>可点歌曲</span><b>{profileSongOffers.length} 首展示</b></header>
+              {profileSongOffers.length > 0 ? profileSongOffers.map((offer) => <button key={offer.id} onClick={() => { setSingerProfileId(''); setSongSingerId(profileAppearance.singerId); setCustomSongSingerId(profileAppearance.singerId); setSongPickerMode('repertoire'); setSongPickerOpen(true) }}><span>{offer.songTitle}<small>{offer.songArtist}</small></span><b>¥{(offer.priceAmount / 100).toFixed(0)}</b><ChevronRight size={15} /></button>) : <p>当前歌手暂未开放点歌</p>}
+            </div>
+          </div>
+        </section>
+      </div>}
 
       {reply && (
         <div className="guest-reply" role="status">
@@ -282,14 +366,14 @@ export function GuestPortal() {
       </nav>
 
       {activeTab === 'menu' && <>
-        <section className="guest-mood-section">
-          <header><div><small>YOUR MOOD</small><strong>今晚想怎么嗨？</strong></div><span>{selectedMood ? '已记录' : '可选'}</span></header>
+        <section className={`guest-mood-section${selectedMood ? ' has-selection' : ''}`}>
+          <header><div><small>YOUR MOOD</small><strong>今晚想怎么嗨？</strong></div><span>{selectedMood ? '已记录 · 可重选' : '可选'}</span></header>
           <div className="guest-mood-row">
             {guestMoods.map((mood) => <button
               key={mood.id}
               className={selectedMood === mood.id ? 'is-selected' : ''}
               aria-pressed={selectedMood === mood.id}
-              disabled={Boolean(selectedMood) || pendingType !== null}
+              disabled={pendingType !== null}
               onClick={() => void recordMood(mood)}
             ><img src={`/brand/moods-v2/${mood.id}.png`} alt="" /><span>{mood.label}</span></button>)}
           </div>
@@ -304,11 +388,27 @@ export function GuestPortal() {
 
         {songPickerOpen && <section className="guest-song-picker" aria-label="当晚可点歌曲">
           <header><div><small>LIVE SONGS</small><strong>选择歌曲</strong></div><button className="icon-button" title="关闭点歌" onClick={() => setSongPickerOpen(false)}><X size={18} /></button></header>
-          <div className="guest-song-list">{songChoices.map((offer) => <article key={offer.id}>
-            <div><strong>{offer.songTitle}</strong><span>{offer.songArtist} · {offer.singerName}</span></div>
-            <button disabled={Boolean(songBusyId)} onClick={() => void chooseSong(offer)}>{songBusyId === offer.id ? '提交中' : `¥${(offer.priceAmount / 100).toFixed(2)} 点歌`}</button>
-          </article>)}</div>
-          <p>提交后由服务员到桌确认并完成收款，歌手接单后会同步状态。</p>
+          <div className="guest-song-mode" role="tablist" aria-label="点歌方式">
+            <button role="tab" aria-selected={songPickerMode === 'repertoire'} className={songPickerMode === 'repertoire' ? 'is-active' : ''} onClick={() => setSongPickerMode('repertoire')}>歌手歌单</button>
+            <button role="tab" aria-selected={songPickerMode === 'custom'} className={songPickerMode === 'custom' ? 'is-active' : ''} onClick={() => setSongPickerMode('custom')}>歌单外点歌</button>
+          </div>
+          {songPickerMode === 'repertoire' ? <>
+            {songSingers.length > 1 && <div className="guest-song-singer-filter"><button className={!songSingerId ? 'is-active' : ''} onClick={() => setSongSingerId('')}>全部</button>{songSingers.map((singer) => <button key={singer.singerId} className={songSingerId === singer.singerId ? 'is-active' : ''} onClick={() => { setSongSingerId(singer.singerId); setCustomSongSingerId(singer.singerId) }}>{singer.singerName}</button>)}</div>}
+            <div className="guest-song-list">{visibleSongChoices.map((offer) => <article key={offer.id}>
+              <div><strong>{offer.songTitle}</strong><span>{offer.songArtist} · {offer.singerName}</span></div>
+              <button disabled={Boolean(songBusyId)} onClick={() => void chooseSong(offer)}>{songBusyId === offer.id ? '提交中' : `¥${(offer.priceAmount / 100).toFixed(2)} 点歌`}</button>
+            </article>)}</div>
+            <p>提交后由服务员到桌确认并完成收款，歌手接单后会同步状态。</p>
+          </> : <div className="guest-custom-song">
+            <header><Music2 size={17} /><div><strong>歌单里没有？</strong><span>提交后由服务员确认能否演唱</span></div></header>
+            <div className="guest-custom-song-fields">
+              <label><span>歌曲名称 *</span><input value={customSongTitle} maxLength={60} placeholder="输入想点的歌" onChange={(event) => setCustomSongTitle(event.target.value)} /></label>
+              <label><span>原唱</span><input value={customSongArtist} maxLength={60} placeholder="选填" onChange={(event) => setCustomSongArtist(event.target.value)} /></label>
+              <label><span>希望歌手</span><select value={customSongSingerId} onChange={(event) => setCustomSongSingerId(event.target.value)}><option value="">不限歌手</option>{songSingers.map((singer) => <option key={singer.singerId} value={singer.singerId}>{singer.singerName}</option>)}</select></label>
+              <label><span>补充信息</span><input value={customSongNote} maxLength={80} placeholder="祝福语或演唱偏好" onChange={(event) => setCustomSongNote(event.target.value)} /></label>
+            </div>
+            <button disabled={customSongBusy || pendingType !== null || !customSongTitle.trim()} onClick={() => void submitCustomSong()}><Send size={16} />{customSongBusy ? '正在提交' : '请服务员确认'}</button>
+          </div>}
         </section>}
 
         <MenuOrderingWorkspace
@@ -445,4 +545,8 @@ function fulfillmentLabel(status: GuestSessionResponse['account']['orders'][numb
 
 function formatGuestTime(timestamp: string, timeZone = 'Asia/Shanghai') {
   return new Date(timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone })
+}
+
+function formatGuestTimeRange(startsAt: string, endsAt: string, timeZone = 'Asia/Shanghai') {
+  return `${formatGuestTime(startsAt, timeZone)}-${formatGuestTime(endsAt, timeZone)}`
 }

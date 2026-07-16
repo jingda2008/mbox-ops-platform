@@ -65,7 +65,7 @@ export async function registerObservability(app: FastifyInstance, options: Obser
     void reply.header('permissions-policy', 'camera=(self), microphone=(), geolocation=()')
     void reply.header(
       'content-security-policy',
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
     )
     if (options.runtimeMode === 'production') {
       void reply.header('strict-transport-security', 'max-age=31536000; includeSubDomains')

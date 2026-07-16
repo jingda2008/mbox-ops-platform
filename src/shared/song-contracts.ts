@@ -21,6 +21,19 @@ export interface Singer {
   displayName: string
   actorId: string
   active: boolean
+  photoUrl?: string
+  headline?: string
+  bio?: string
+  styleTags?: string[]
+}
+
+export interface SingerProfileWriteInput {
+  displayName: string
+  photoUrl: string
+  headline: string
+  bio: string
+  styleTags: string[]
+  active: boolean
 }
 
 export interface SongCatalogItem {

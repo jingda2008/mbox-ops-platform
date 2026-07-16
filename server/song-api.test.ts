@@ -59,6 +59,30 @@ async function submitPayload(repository: JsonRepository, idempotencyKey = 'song-
 }
 
 describe('song API employee authorization', () => {
+  it('lets a manager maintain the singer profile shown to guests', async () => {
+    const { app, repository } = await fixture()
+    const singer = (await repository.read()).songState.singers[0]!
+    const response = await app.inject({
+      method: 'PUT',
+      url: `/api/songs/singers/${singer.id}/profile`,
+      headers: { 'x-test-role': 'manager' },
+      payload: {
+        displayName: '天天',
+        photoUrl: '/singers/tianti.jpg',
+        headline: '温暖声线 · 华语流行',
+        bio: '擅长华语流行情歌和轻松的现场互动。',
+        styleTags: ['华语流行', '情歌', '互动'],
+        active: true,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({ photoUrl: '/singers/tianti.jpg', styleTags: ['华语流行', '情歌', '互动'] })
+    expect((await repository.read()).songState.singers[0]?.bio).toContain('现场互动')
+    await app.close()
+    await repository.close()
+  })
+
   it('allows a server to submit for a guest and reads current configured permissions inside the mutation', async () => {
     const { app, repository } = await fixture()
     const submitted = await app.inject({

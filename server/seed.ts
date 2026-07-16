@@ -313,9 +313,9 @@ export function createSeedState(): RuntimeState {
     songState: createSongState({
       businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }),
       singers: [
-        { id: 'singer-tianti', displayName: '天天', actorId: 'singer-tianti', active: true },
-        { id: 'singer-zhengnan', displayName: '郑南', actorId: 'singer-zhengnan', active: true },
-        { id: 'singer-natalie', displayName: 'Natalie', actorId: 'singer-natalie', active: true },
+        { id: 'singer-tianti', displayName: '天天', actorId: 'singer-tianti', active: true, photoUrl: '', headline: '温暖声线 · 华语流行', bio: '擅长以细腻声线演绎华语流行情歌，适合轻松聊天与沉浸听歌的现场时段。', styleTags: ['华语流行', '情歌', '互动'] },
+        { id: 'singer-zhengnan', displayName: '郑南', actorId: 'singer-zhengnan', active: true, photoUrl: '', headline: '现场感染力 · 经典金曲', bio: '现场节奏鲜明，擅长经典金曲和全场互动，适合聚会与庆祝氛围。', styleTags: ['经典金曲', '摇滚', '全场互动'] },
+        { id: 'singer-natalie', displayName: 'Natalie', actorId: 'singer-natalie', active: true, photoUrl: '', headline: '英文流行 · 氛围女声', bio: '以英文流行和轻节奏作品为主，声音清澈，适合夜间微醺与朋友聚会。', styleTags: ['英文流行', '轻节奏', '女声'] },
       ],
       songs: [
         { id: 'song-demo-1', title: '后来（演示曲目）', artist: '待正式歌单确认', durationSeconds: 260, active: true },

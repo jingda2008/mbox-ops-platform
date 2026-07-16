@@ -75,6 +75,13 @@ describe('guest table API', () => {
     expect(body.table.code).toBe('L01')
     expect(body.communityBrand).toMatchObject({ name: '超嗨部落', markUrl: '/brand/superhigh-mark.png' })
     expect(body.serviceTypes.map((type) => type.code)).not.toContain('FULFILLMENT_DELIVERY')
+    expect(body.stageSchedule.length).toBeGreaterThan(0)
+    expect(body.stageSchedule[0]).toMatchObject({
+      singerName: expect.any(String),
+      startsAt: expect.any(String),
+      endsAt: expect.any(String),
+      profile: { styleTags: expect.any(Array) },
+    })
     expect(requireGuestSession(verifyTableAccessToken(body.tableToken, secret, now())).tableSessionId)
       .toBe(body.account.tableSessionId)
     await closeFixture(app, repository)

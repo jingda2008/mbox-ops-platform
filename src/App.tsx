@@ -43,6 +43,7 @@ import {
 import type { BootstrapResponse, TaskActionInput } from './shared/contracts'
 import type { PilotEmployeeOption } from './shared/auth-contracts'
 import './system-ui.css'
+import './premium-theme.css'
 
 const RESTRICTED_OFFLINE_VIEWS = '.payment-view, .config-view, .benefit-view, .song-view, .master-view, .commerce-view, .reservation-view, .inventory-view'
 const BOOTSTRAP_POLL_INTERVAL_MS = 2000

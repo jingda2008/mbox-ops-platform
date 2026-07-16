@@ -1,0 +1,414 @@
+/* M-Box premium night theme: venue-first, operationally restrained. */
+:root {
+  --ink: #111512;
+  --ink-soft: #626a64;
+  --canvas: #e9eae6;
+  --surface: #fff;
+  --line: #d4d7d1;
+  --line-strong: #b9beb7;
+  --brand-yellow: #d8b45a;
+  --brand-red: #e76064;
+  --brand-blue: #0066cc;
+  --wechat-green: #16794a;
+  --success: #5e803d;
+  --danger: #c64248;
+  --warning: #8b6c24;
+  --sidebar: #0f1310;
+  --control-line: #aeb4ac;
+  --control-line-strong: #7e8780;
+  --focus-ring: rgba(0, 102, 204, .2);
+}
+
+html,
+body {
+  background: var(--canvas);
+}
+
+.app-shell {
+  background: var(--canvas);
+}
+
+.sidebar {
+  border-right: 1px solid #303631;
+  background: #0f1310;
+  box-shadow: none;
+}
+
+.brand-lockup {
+  margin: 0 0 20px;
+  padding: 12px;
+  border: 1px solid #343a35;
+  border-left: 4px solid var(--brand-yellow);
+  border-radius: 5px;
+  background: #161b17;
+}
+
+.brand-lockup > span,
+.pilot-login-brand > span {
+  border: 1px solid #5f5639;
+  background: var(--brand-yellow);
+  color: #111512;
+}
+
+.brand-lockup small {
+  color: #d1d6d1;
+}
+
+.brand-lockup em {
+  color: #929b94;
+}
+
+.nav-item {
+  border-color: #343a35 !important;
+  color: #c4cbc5;
+}
+
+.nav-item:hover {
+  border-color: #4a514b !important;
+  background: #1a201c;
+}
+
+.nav-item.is-active {
+  border-color: #665d3c !important;
+  background: #20251f;
+  color: #fff;
+  box-shadow: inset 4px 0 var(--brand-yellow) !important;
+}
+
+.nav-item.is-active svg {
+  color: var(--brand-yellow);
+}
+
+.sidebar-status {
+  border-top-color: #343b36;
+}
+
+.sidebar-status .sidebar-culture-mark {
+  color: #9ba39d;
+}
+
+.topbar {
+  border-top: 3px solid var(--brand-yellow);
+  border-bottom-color: #cfd3cc;
+  background: rgba(255, 255, 255, .97);
+  box-shadow: 0 2px 12px rgba(12, 15, 13, .05);
+}
+
+.eyebrow {
+  color: #73623b;
+}
+
+.primary-button {
+  border-color: #0058b0 !important;
+  background: var(--brand-blue);
+}
+
+.primary-button:hover {
+  background: #005bb7;
+}
+
+.panel,
+.metric-card,
+.ops-panel,
+.config-section,
+.role-home-card {
+  border-color: #c9cdc6;
+  box-shadow: 0 4px 14px rgba(13, 16, 14, .05);
+}
+
+.pilot-login-shell {
+  background: #e8e9e5;
+}
+
+.pilot-login-panel {
+  border-top: 4px solid var(--brand-yellow);
+  border-radius: 6px;
+  box-shadow: 0 18px 42px rgba(12, 15, 13, .14);
+}
+
+.guest-shell {
+  background: #f0f1ed;
+  border-color: #cfd2cc;
+}
+
+.guest-header {
+  border-bottom-color: #c9cdc6;
+}
+
+.guest-brand > span {
+  border: 1px solid #2e3430;
+  background: #0b0e0c;
+  color: var(--brand-yellow);
+}
+
+.secure-label {
+  border-color: #c7cbc4;
+  background: #f8f9f6;
+}
+
+.guest-table-band {
+  isolation: isolate;
+  min-height: 126px;
+  overflow: hidden;
+  border-bottom: 2px solid var(--brand-yellow);
+  background: #0b0e0c;
+  box-shadow: none;
+}
+
+.guest-table-band::before {
+  width: 4px;
+  inset: 18px auto 22px 0;
+  background: var(--brand-yellow);
+}
+
+.guest-table-band::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 0 0 0 48%;
+  background: url('/menu/cocktail.jpg') center / cover no-repeat;
+  opacity: .13;
+}
+
+.guest-table-band > * {
+  position: relative;
+  z-index: 1;
+}
+
+.guest-table-context > span {
+  color: #d8b45a;
+}
+
+.guest-table-context small {
+  color: #e5e8e4;
+}
+
+.guest-table-context i {
+  background: #8ead45;
+  box-shadow: 0 0 0 4px rgba(142, 173, 69, .14);
+  animation: premium-live-pulse 1.8s ease-in-out infinite;
+}
+
+.guest-table-context .superhigh-heart-mark {
+  color: #e76064;
+  fill: rgba(231, 96, 100, .14);
+}
+
+.guest-tabs {
+  border-bottom-color: #cfd3cc;
+  box-shadow: 0 4px 12px rgba(13, 16, 14, .05);
+}
+
+.guest-tabs button {
+  border-color: transparent !important;
+  border-bottom-width: 3px !important;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.guest-tabs button.is-active {
+  border-bottom-color: var(--brand-yellow) !important;
+  background: #fff;
+  color: #111512;
+}
+
+.guest-reply {
+  border-color: #e3b9bb;
+  border-left-color: var(--brand-red);
+  box-shadow: 0 5px 16px rgba(13, 16, 14, .06);
+}
+
+.guest-services,
+.guest-progress {
+  border-bottom-color: #e3e5e0;
+}
+
+.service-grid {
+  gap: 8px;
+}
+
+.service-button {
+  border-color: #cbd0c8 !important;
+  background: #fff;
+  box-shadow: 0 3px 10px rgba(13, 16, 14, .05);
+}
+
+.service-button svg:first-child {
+  color: var(--brand-blue);
+}
+
+.service-button--complaint {
+  border-color: #dfb5b7 !important;
+  background: #fff9f9;
+}
+
+.guest-note-row button,
+.menu-add-button {
+  border-color: #005bb7 !important;
+  background: var(--brand-blue) !important;
+}
+
+.guest-order,
+.menu-product {
+  border-color: #c8cdc5;
+  border-radius: 6px;
+  box-shadow: 0 5px 16px rgba(13, 16, 14, .07);
+}
+
+.menu-ordering-workspace,
+.menu-categories {
+  background: #eceee9;
+}
+
+.menu-workspace-header,
+.menu-cart-panel {
+  background: #fff;
+}
+
+.menu-categories button.is-active {
+  border-color: var(--brand-yellow) !important;
+  background: #fff;
+  color: #111512;
+}
+
+.menu-product-image > span {
+  border-color: rgba(216, 180, 90, .65);
+  background: rgba(11, 14, 12, .9);
+  color: #f0d98f;
+}
+
+.menu-product-info footer b,
+.menu-cart-total strong {
+  color: #111512;
+}
+
+.guest-shell .menu-cart-panel {
+  border-top-color: var(--brand-yellow);
+  background: #0b0e0c;
+  color: #fff;
+}
+
+.guest-shell .menu-cart-total strong {
+  color: #fff;
+}
+
+.guest-shell .menu-submit-button,
+.guest-shell .guest-pay-button {
+  border-color: #2377c8 !important;
+  background: var(--brand-blue);
+}
+
+.member-portal {
+  border-color: #cfd2cc;
+  background: #f0f1ed;
+}
+
+.member-header {
+  border-bottom-color: #c9cdc6;
+}
+
+.member-identity {
+  position: relative;
+  overflow: hidden;
+  border-bottom: 2px solid var(--brand-yellow);
+  background: #0b0e0c;
+}
+
+.member-identity::after {
+  content: 'MBOX / LIVEHOUSE / LUJIAZUI';
+  position: absolute;
+  right: 18px;
+  bottom: 8px;
+  color: rgba(255, 255, 255, .1);
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.member-identity-avatar {
+  border: 1px solid #e3c879;
+  background: #f5f2e9;
+  color: #111512;
+  box-shadow: 0 0 0 5px rgba(216, 180, 90, .08);
+}
+
+.member-identity small,
+.member-identity > svg {
+  color: var(--brand-yellow);
+}
+
+.superhigh-brand-signature {
+  border-color: #d0d4cd;
+  border-left: 3px solid var(--brand-yellow);
+  background: #f8f8f5;
+}
+
+.superhigh-signature-colors i {
+  height: 2px;
+}
+
+.member-benefit-item {
+  border-left-color: #d8b45a;
+}
+
+.member-benefit-item:nth-of-type(4n+2) {
+  border-left-color: #0066cc;
+}
+
+.member-benefit-item:nth-of-type(4n+3) {
+  border-left-color: #e76064;
+}
+
+.member-benefit-item:nth-of-type(4n+4) {
+  border-left-color: #8ead45;
+}
+
+.member-benefit-icon {
+  border: 1px solid #d0d4cd;
+  background: #f6f7f4;
+  color: #6f5a24;
+}
+
+.public-reservation-header {
+  border-bottom: 2px solid var(--brand-yellow);
+  background: #0b0e0c;
+}
+
+.public-reservation-brand > span {
+  border: 1px solid #6d603c;
+  background: var(--brand-yellow);
+}
+
+.public-reservation-intro > span {
+  color: #856b2a;
+}
+
+.public-reservation-submit {
+  border-color: #005bb7 !important;
+  background: var(--brand-blue);
+}
+
+@keyframes premium-live-pulse {
+  0%, 100% { opacity: .65; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .guest-table-context i {
+    animation: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .guest-table-band {
+    min-height: 112px;
+  }
+
+  .guest-table-band::after {
+    left: 42%;
+  }
+
+  .guest-shell .menu-cart-total,
+  .guest-shell .menu-submit-button {
+    color: #fff;
+  }
+}

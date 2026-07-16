@@ -68,6 +68,7 @@ import type {
   GuestCartOrderInput,
   GuestCheckoutInput,
   GuestCheckoutResponse,
+  GuestSongRequestInput,
   GuestTaskCreateInput,
   GuestTaskFeedbackInput,
   GuestTaskView,
@@ -237,6 +238,13 @@ export function getGuestSession(tableToken: string, localTableCode = '') {
 
 export function createGuestTask(input: GuestTaskCreateInput) {
   return guestRequest<GuestTaskView>('/api/guest/tasks', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function createGuestSongRequest(input: GuestSongRequestInput) {
+  return guestRequest<SongRequest>('/api/guest/song-requests', {
     method: 'POST',
     body: JSON.stringify(input),
   })

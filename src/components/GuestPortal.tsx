@@ -1,8 +1,8 @@
-import { CheckCircle2, ChevronRight, Clock3, CreditCard, Heart, ListChecks, MessageCircleMore, Send, ShieldCheck, ShoppingBag } from 'lucide-react'
+import { Bell, CakeSlice, CheckCircle2, ChevronRight, Clock3, CreditCard, GlassWater, ListChecks, MapPin, MessageCircleMore, Music2, Send, ShieldCheck, ShoppingBag, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { checkoutGuestOrder, createGuestOrder, createGuestTask, getGuestSession, submitGuestTaskFeedback } from '../api'
+import { checkoutGuestOrder, createGuestOrder, createGuestSongRequest, createGuestTask, getGuestSession, submitGuestTaskFeedback } from '../api'
 import type { GuestSessionResponse, GuestTaskView, WechatJsapiParameters } from '../shared/guest-contracts'
-import { guestFeedbackIdempotencyKey } from './guest-portal-utils'
+import { guestFeedbackIdempotencyKey, guestMoodServiceNote } from './guest-portal-utils'
 import { ServiceIcon } from './ServiceIcon'
 import { MenuOrderingWorkspace, type MenuCartItem } from './MenuOrderingWorkspace'
 import { SuperHighCommunityBand } from './SuperHighCommunityBand'
@@ -18,6 +18,17 @@ const guestStatus: Record<GuestTaskView['status'], string> = {
   cancelled: '已取消',
 }
 
+const guestMoods = [
+  { id: 'happy', label: '开心', care: '客人心情开心，适合主动问候并推荐互动或点歌。' },
+  { id: 'listen', label: '听歌', care: '客人想专心听歌，可简短介绍当晚演出和点歌，避免高频打断。' },
+  { id: 'tipsy', label: '微醺', care: '请主动补水，关注饮酒节奏和身体状态，避免继续强推酒水。' },
+  { id: 'interactive', label: '互动', care: '客人互动意愿较强，适合用当晚演出、点歌或同桌话题自然破冰。' },
+  { id: 'celebrate', label: '庆祝', care: '请询问庆祝主题和称呼，确认是否需要生日歌、小礼物或合影。' },
+  { id: 'quiet', label: '安静', care: '客人希望安静放松，请降低打扰频率，仅在补水、安全或结账等必要节点轻声询问。' },
+] as const
+
+type GuestMoodId = typeof guestMoods[number]['id']
+
 export function GuestPortal() {
   const params = new URLSearchParams(window.location.search)
   const tableCode = params.get('table') ?? 'L01'
@@ -31,6 +42,13 @@ export function GuestPortal() {
   const [activeTab, setActiveTab] = useState<'menu' | 'service' | 'orders'>(requestedPaymentOrderId ? 'orders' : 'menu')
   const [checkoutBusy, setCheckoutBusy] = useState(false)
   const [payingOrderId, setPayingOrderId] = useState('')
+  const [selectedMood, setSelectedMood] = useState<GuestMoodId | null>(() => {
+    const stored = window.sessionStorage.getItem(`mbox-guest-mood-${tableCode}`)
+    return guestMoods.some((mood) => mood.id === stored) ? stored as GuestMoodId : null
+  })
+  const [songPickerOpen, setSongPickerOpen] = useState(false)
+  const [songBusyId, setSongBusyId] = useState('')
+  const [quickPendingKey, setQuickPendingKey] = useState('')
 
   const refresh = useCallback(async () => {
     try {
@@ -50,6 +68,21 @@ export function GuestPortal() {
   const tableTasks = useMemo(() => data?.tasks.slice(0, 5) ?? [], [data?.tasks])
   const customRequestType = data?.serviceTypes.find((serviceType) => serviceType.code === 'CUSTOM_REQUEST')
   const quickServiceTypes = data?.serviceTypes.filter((serviceType) => serviceType.code !== 'CUSTOM_REQUEST') ?? []
+  const serviceTypeByCode = useMemo(() => new Map(data?.serviceTypes.map((serviceType) => [serviceType.code, serviceType]) ?? []), [data?.serviceTypes])
+  const featuredSongOffer = useMemo(() => {
+    if (!data?.songOffers.length) return null
+    const now = Date.parse(data.serverNow)
+    return data.songOffers.toSorted((left, right) => Math.abs(Date.parse(left.startsAt) - now) - Math.abs(Date.parse(right.startsAt) - now))[0]
+  }, [data])
+  const songChoices = useMemo(() => {
+    const seen = new Set<string>()
+    return (data?.songOffers ?? []).filter((offer) => {
+      const key = `${offer.singerId}:${offer.songId}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    }).slice(0, 8)
+  }, [data?.songOffers])
 
   async function requestService(serviceTypeId: string, requestNote = '') {
     setPendingType(serviceTypeId)
@@ -64,11 +97,68 @@ export function GuestPortal() {
       setReply(task.customerReply)
       setNote('')
       await refresh()
+      return true
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : '请求未提交')
+      return false
     } finally {
       setPendingType(null)
     }
+  }
+
+  async function recordMood(mood: typeof guestMoods[number]) {
+    if (selectedMood || pendingType) return
+    if (!customRequestType) {
+      setError('今晚状态记录暂未启用')
+      return
+    }
+    const succeeded = await requestService(customRequestType.id, guestMoodServiceNote(mood.label, mood.care))
+    if (succeeded) {
+      setSelectedMood(mood.id)
+      window.sessionStorage.setItem(`mbox-guest-mood-${tableCode}`, mood.id)
+    }
+  }
+
+  async function requestQuickService(key: string, serviceCode: string, requestNote = '') {
+    const serviceType = serviceTypeByCode.get(serviceCode)
+    if (!serviceType) {
+      setError('该服务暂未启用，请进入服务页选择其他需求')
+      return
+    }
+    setQuickPendingKey(key)
+    await requestService(serviceType.id, requestNote)
+    setQuickPendingKey('')
+  }
+
+  async function chooseSong(offer: GuestSessionResponse['songOffers'][number]) {
+    if (!data || songBusyId) return
+    setSongBusyId(offer.id)
+    setError('')
+    try {
+      await createGuestSongRequest({
+        tableToken: data.tableToken,
+        appearanceId: offer.appearanceId,
+        singerId: offer.singerId,
+        songId: offer.songId,
+        customerNote: '',
+        idempotencyKey: `guest-song-${crypto.randomUUID()}`,
+      })
+      setReply(`已提交《${offer.songTitle}》，金额 ¥${(offer.priceAmount / 100).toFixed(2)}，服务员会到桌确认并完成收款。`)
+      setSongPickerOpen(false)
+      await refresh()
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : '点歌未提交')
+    } finally {
+      setSongBusyId('')
+    }
+  }
+
+  async function openSongService() {
+    if (songChoices.length > 0) {
+      setSongPickerOpen(true)
+      return
+    }
+    await requestQuickService('song', 'ORDER_HELP', '客人希望点歌，请到桌协助查看当日可选歌单。')
   }
 
   async function submitCustomRequest() {
@@ -156,21 +246,24 @@ export function GuestPortal() {
   return (
     <main className="guest-shell">
       <header className="guest-header">
-        <div className="guest-brand">
-          <span>M</span>
-          <div><strong>M-BOX LIVEHOUSE</strong><small>上海 · 陆家嘴</small></div>
+        <div className="guest-brand-lockup">
+          <img src="/brand/superhigh-horizontal.png" alt="SUPERHIGH" />
+          <i aria-hidden="true" />
+          <div><strong>M-BOX</strong><small>LIVEHOUSE · LUJIAZUI</small></div>
         </div>
-        <span className="secure-label"><ShieldCheck size={16} />安全桌码</span>
+        <span className="secure-label" title="安全桌码"><ShieldCheck size={16} /><span>安全桌码</span></span>
       </header>
 
       <section className="guest-table-band">
-        <div className="guest-table-context">
-          <span>当前桌台</span>
-          <small><i aria-hidden="true" />LIVE SERVICE <Heart className="superhigh-heart-mark" size={12} aria-hidden="true" /></small>
-        </div>
-        <div>
+        <div className="guest-table-copy">
+          <small><i aria-hidden="true" />{featuredSongOffer ? `TONIGHT · ${formatGuestTime(featuredSongOffer.startsAt, data?.store.timezone)}` : 'LIVE SERVICE · 服务在线'}</small>
           <h1>{data?.table.displayName ?? tableCode}</h1>
-          <p>服务专员 · {data?.primaryServiceName ?? '正在安排'}</p>
+          <p><MapPin size={13} />服务专员 · {data?.primaryServiceName ?? '正在安排'}</p>
+        </div>
+        <div className="guest-stage-status">
+          {featuredSongOffer ? <Music2 size={17} /> : <ShieldCheck size={17} />}
+          <strong>{featuredSongOffer?.singerName ?? data?.primaryServiceName ?? 'M-BOX'}</strong>
+          <span>{featuredSongOffer ? '点歌开放' : '服务在线'}</span>
         </div>
       </section>
 
@@ -188,15 +281,46 @@ export function GuestPortal() {
         <button className={activeTab === 'orders' ? 'is-active' : ''} onClick={() => setActiveTab('orders')}><ListChecks size={18} />订单</button>
       </nav>
 
-      {activeTab === 'menu' && <MenuOrderingWorkspace
-        products={data?.products ?? []}
-        tableLabel={data?.table.displayName ?? tableCode}
-        submitLabel="确认订单并微信支付"
-        submitHint="验证环境会模拟微信付款；付款成功后服务员、收银和出品岗位会同时收到状态。"
-        busy={checkoutBusy}
-        timeZone={data?.store.timezone}
-        onSubmit={placeAndPay}
-      />}
+      {activeTab === 'menu' && <>
+        <section className="guest-mood-section">
+          <header><div><small>YOUR MOOD</small><strong>今晚想怎么嗨？</strong></div><span>{selectedMood ? '已记录' : '可选'}</span></header>
+          <div className="guest-mood-row">
+            {guestMoods.map((mood) => <button
+              key={mood.id}
+              className={selectedMood === mood.id ? 'is-selected' : ''}
+              aria-pressed={selectedMood === mood.id}
+              disabled={Boolean(selectedMood) || pendingType !== null}
+              onClick={() => void recordMood(mood)}
+            ><img src={`/brand/moods-v2/${mood.id}.png`} alt="" /><span>{mood.label}</span></button>)}
+          </div>
+        </section>
+
+        <section className="guest-quick-service" aria-label="快捷服务">
+          <button disabled={pendingType !== null} onClick={() => void requestQuickService('water', 'ADD_WATER')}><GlassWater size={19} /><span>{quickPendingKey === 'water' ? '提交中' : '加水'}</span></button>
+          <button disabled={pendingType !== null} onClick={() => void openSongService()}><Music2 size={19} /><span>{quickPendingKey === 'song' ? '提交中' : '点歌'}</span></button>
+          <button disabled={pendingType !== null} onClick={() => void requestQuickService('birthday', 'BIRTHDAY_CARE')}><CakeSlice size={19} /><span>{quickPendingKey === 'birthday' ? '提交中' : '生日'}</span></button>
+          <button disabled={pendingType !== null} onClick={() => void requestQuickService('call', 'ORDER_HELP', '客人呼叫服务员到桌，请尽快响应。')}><Bell size={19} /><span>{quickPendingKey === 'call' ? '提交中' : '呼叫'}</span></button>
+        </section>
+
+        {songPickerOpen && <section className="guest-song-picker" aria-label="当晚可点歌曲">
+          <header><div><small>LIVE SONGS</small><strong>选择歌曲</strong></div><button className="icon-button" title="关闭点歌" onClick={() => setSongPickerOpen(false)}><X size={18} /></button></header>
+          <div className="guest-song-list">{songChoices.map((offer) => <article key={offer.id}>
+            <div><strong>{offer.songTitle}</strong><span>{offer.songArtist} · {offer.singerName}</span></div>
+            <button disabled={Boolean(songBusyId)} onClick={() => void chooseSong(offer)}>{songBusyId === offer.id ? '提交中' : `¥${(offer.priceAmount / 100).toFixed(2)} 点歌`}</button>
+          </article>)}</div>
+          <p>提交后由服务员到桌确认并完成收款，歌手接单后会同步状态。</p>
+        </section>}
+
+        <MenuOrderingWorkspace
+          products={data?.products ?? []}
+          tableLabel={data?.table.displayName ?? tableCode}
+          submitLabel="确认订单并微信支付"
+          submitHint="验证环境会模拟微信付款；付款成功后服务员、收银和出品岗位会同时收到状态。"
+          busy={checkoutBusy}
+          timeZone={data?.store.timezone}
+          onSubmit={placeAndPay}
+        />
+      </>}
 
       {activeTab === 'service' && <><section className="guest-services">
         <div className="guest-section-title">
@@ -317,4 +441,8 @@ function waitForWechatBridge() {
 function fulfillmentLabel(status: GuestSessionResponse['account']['orders'][number]['items'][number]['fulfillmentStatus']) {
   const labels = { draft: '待支付', queued: '待制作', preparing: '制作中', completed: '待取送', picked_up: '配送中', delivered: '已送达' }
   return labels[status]
+}
+
+function formatGuestTime(timestamp: string, timeZone = 'Asia/Shanghai') {
+  return new Date(timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone })
 }

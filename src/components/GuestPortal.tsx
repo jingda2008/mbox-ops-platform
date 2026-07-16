@@ -2,7 +2,7 @@ import { Bell, CakeSlice, CheckCircle2, ChevronRight, Clock3, CreditCard, GlassW
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { checkoutGuestOrder, createGuestOrder, createGuestSongRequest, createGuestTask, getGuestSession, submitGuestTaskFeedback } from '../api'
 import type { GuestSessionResponse, GuestTaskView, WechatJsapiParameters } from '../shared/guest-contracts'
-import { formatGuestCountdown, guestCustomSongServiceNote, guestErrorMessage, guestFeedbackIdempotencyKey, guestMoodServiceNote, guestReplyNotice, guestSongReplyNotice, guestSongStatusLabel, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks, type GuestReplyNotice } from './guest-portal-utils'
+import { formatGuestCompactCountdown, guestCustomSongServiceNote, guestErrorMessage, guestFeedbackIdempotencyKey, guestMoodServiceNote, guestReplyNotice, guestSongReplyNotice, guestSongStatusLabel, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks, type GuestReplyNotice } from './guest-portal-utils'
 import { ServiceIcon } from './ServiceIcon'
 import { MenuOrderingWorkspace, type MenuCartItem } from './MenuOrderingWorkspace'
 import { SuperHighCommunityBand } from './SuperHighCommunityBand'
@@ -369,12 +369,14 @@ export function GuestPortal() {
           <p><MapPin size={13} />服务专员 · {data?.primaryServiceName ?? '正在安排'}</p>
         </div>
         <button className="guest-stage-status" disabled={!featuredAppearance} onClick={() => featuredAppearance && setSingerProfileId(featuredAppearance.singerId)}>
-          {featuredAppearance ? <Music2 size={17} /> : <ShieldCheck size={17} />}
-          <strong>{featuredAppearance?.singerName ?? 'M-BOX'}</strong>
-          <span>{stage.mode === 'live'
-            ? `演出中 · ${formatGuestCountdown(stage.countdownMs)}`
-            : stage.mode === 'upcoming' ? `${formatGuestCountdown(stage.countdownMs)} 后登场` : stage.mode === 'finished' ? '今晚演出结束' : '服务在线'}</span>
-          {stage.mode === 'live' && stage.next && <em>下一位 {stage.next.singerName} · {formatGuestTime(stage.next.startsAt, data?.store.timezone)} · {formatGuestCountdown(Math.max(0, Date.parse(stage.next.startsAt) - stageClock))} 后登场</em>}
+          <span className="guest-stage-heading">
+            {featuredAppearance ? <Music2 size={13} /> : <ShieldCheck size={13} />}
+            <strong>{featuredAppearance?.singerName ?? 'M-BOX'}</strong>
+          </span>
+          <span className="guest-stage-current">{stage.mode === 'live'
+            ? <><b>演出中</b><small>剩余 {formatGuestCompactCountdown(stage.countdownMs)}</small></>
+            : stage.mode === 'upcoming' ? <><b>即将登场</b><small>{formatGuestCompactCountdown(stage.countdownMs)} 后</small></> : stage.mode === 'finished' ? <b>今晚演出结束</b> : <b>服务在线</b>}</span>
+          {stage.mode === 'live' && stage.next && <em className="guest-stage-next"><span>下一位 <b>{stage.next.singerName}</b></span><small>{formatGuestTime(stage.next.startsAt, data?.store.timezone)} 登场 · {formatGuestCompactCountdown(Math.max(0, Date.parse(stage.next.startsAt) - stageClock))}后</small></em>}
           {featuredAppearance && <ChevronRight className="guest-stage-chevron" size={15} aria-hidden="true" />}
         </button>
       </section>

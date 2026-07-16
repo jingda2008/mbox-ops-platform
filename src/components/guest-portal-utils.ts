@@ -100,6 +100,11 @@ export function formatGuestCountdown(durationMs: number) {
   return [hours, minutes, seconds].map((value) => String(value).padStart(2, '0')).join(':')
 }
 
+export function formatGuestCompactCountdown(durationMs: number) {
+  const formatted = formatGuestCountdown(durationMs)
+  return formatted.startsWith('00:') ? formatted.slice(3) : formatted.replace(/^0/, '')
+}
+
 export function guestMoodServiceNote(label: string, care: string, previousLabel = '') {
   const state = previousLabel && previousLabel !== label
     ? `客户心情更新：${previousLabel} → ${label}，请以最新状态为准。`

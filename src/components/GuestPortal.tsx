@@ -147,7 +147,7 @@ export function GuestPortal() {
   }, [data?.stageSchedule, songChoices])
   const visibleSongChoices = (songSingerId ? songChoices.filter((offer) => offer.singerId === songSingerId) : songChoices).slice(0, 8)
 
-  async function requestService(serviceTypeId: string, requestNote = '') {
+  async function requestService(serviceTypeId: string, requestNote = '', options: { showReply?: boolean } = {}) {
     setPendingType(serviceTypeId)
     setError(null)
     try {
@@ -157,7 +157,7 @@ export function GuestPortal() {
         note: requestNote,
         idempotencyKey: `guest-${tableCode}-${serviceTypeId}-${crypto.randomUUID()}`,
       })
-      setReply(guestTaskReplyNotice(task.customerReply, task))
+      if (options.showReply !== false) setReply(guestTaskReplyNotice(task.customerReply, task))
       setNote('')
       await refresh()
       return task
@@ -179,7 +179,11 @@ export function GuestPortal() {
       return
     }
     const previousLabel = guestMoods.find((item) => item.id === selectedMood)?.label ?? ''
-    const succeeded = await requestService(customRequestType.id, guestMoodServiceNote(mood.label, mood.care, previousLabel))
+    const succeeded = await requestService(
+      customRequestType.id,
+      guestMoodServiceNote(mood.label, mood.care, previousLabel),
+      { showReply: false },
+    )
     if (succeeded) {
       setSelectedMood(mood.id)
       window.sessionStorage.setItem(`mbox-guest-mood-${tableCode}`, mood.id)

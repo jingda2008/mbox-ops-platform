@@ -44,6 +44,18 @@ button:focus-visible,
   box-shadow: 0 1px 2px rgba(17, 20, 16, .24), inset 0 1px 0 rgba(255, 255, 255, .12);
 }
 
+.guest-shell .menu-submit-button,
+.guest-shell .guest-pay-button {
+  border-color: #0d633b !important;
+  background: var(--wechat-green);
+}
+
+.guest-shell .menu-add-button,
+.guest-shell .guest-note-row button {
+  border-color: #b9232e !important;
+  background: var(--brand-red);
+}
+
 .secondary-button,
 .icon-button,
 .menu-button {

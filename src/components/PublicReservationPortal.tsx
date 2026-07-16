@@ -90,7 +90,7 @@ export function PublicReservationPortal() {
   return (
     <main className="public-reservation-shell">
       <header className="public-reservation-header">
-        <div className="public-reservation-brand"><span>M</span><div><strong>M-Box</strong><small>陆家嘴店</small></div></div>
+        <div className="public-reservation-brand"><span>M</span><div><strong>M-BOX</strong><small>陆家嘴店</small></div></div>
         <CalendarDays size={22} />
       </header>
 

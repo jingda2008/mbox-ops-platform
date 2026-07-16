@@ -325,7 +325,7 @@ function PilotLogin({ onAuthenticated }: { onAuthenticated: () => void }) {
   return (
     <main className="pilot-login-shell">
       <section className="pilot-login-panel">
-        <div className="pilot-login-brand"><span>M</span><div><strong>M-Box</strong><small>门店验证环境</small></div></div>
+        <div className="pilot-login-brand"><span>M</span><div><strong>M-BOX</strong><small>门店验证环境</small></div></div>
         <h1>{employees.length === 0 ? '验证访问身份' : '选择当前员工'}</h1>
         {employees.length === 0 ? (
           <label><span>门店验证口令</span><input type="password" autoComplete="current-password" value={accessCode} onChange={(event) => setAccessCode(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && accessCode) void verifyAccess() }} /></label>

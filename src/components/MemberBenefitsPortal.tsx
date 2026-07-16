@@ -25,7 +25,7 @@ export function MemberBenefitsPortal() {
 
   return (
     <main className="member-portal">
-      <header className="member-header"><div className="guest-brand"><span>M</span><strong>M-Box</strong></div><span>会员中心</span></header>
+      <header className="member-header"><div className="guest-brand"><span>M</span><strong>M-BOX</strong></div><span>会员中心</span></header>
       <section className="member-identity">
         <span className="member-identity-avatar">{data.member.displayName.slice(0, 1)}</span>
         <div><small>{levelNames[data.member.level]}</small><h1>{data.member.displayName}</h1><p>{data.member.phoneMasked}</p></div>

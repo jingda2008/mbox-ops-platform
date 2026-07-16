@@ -155,12 +155,18 @@ export function GuestPortal() {
   return (
     <main className="guest-shell">
       <header className="guest-header">
-        <div className="guest-brand"><span>M</span><strong>M-Box</strong></div>
-        <span className="secure-label"><ShieldCheck size={16} />桌台会话</span>
+        <div className="guest-brand">
+          <span>M</span>
+          <div><strong>M-BOX LIVEHOUSE</strong><small>上海 · 陆家嘴</small></div>
+        </div>
+        <span className="secure-label"><ShieldCheck size={16} />安全桌码</span>
       </header>
 
       <section className="guest-table-band">
-        <span>当前桌台</span>
+        <div className="guest-table-context">
+          <span>当前桌台</span>
+          <small><i aria-hidden="true" />LIVE SERVICE</small>
+        </div>
         <div>
           <h1>{data?.table.displayName ?? tableCode}</h1>
           <p>服务专员 · {data?.primaryServiceName ?? '正在安排'}</p>
@@ -201,6 +207,7 @@ export function GuestPortal() {
             <button
               key={serviceType.id}
               className={serviceType.id === 'complaint' ? 'service-button service-button--complaint' : 'service-button'}
+              data-service-code={serviceType.code.toLowerCase()}
               disabled={pendingType !== null}
               onClick={() => void requestService(serviceType.id)}
             >

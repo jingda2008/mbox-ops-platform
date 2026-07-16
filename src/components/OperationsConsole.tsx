@@ -533,7 +533,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
   return (
     <div className="app-shell">
       <aside className={mobileNavOpen ? 'sidebar is-open' : 'sidebar'}>
-        <div className="brand-lockup"><span>M</span><div><strong>M-Box</strong><small>现场运营</small></div></div>
+        <div className="brand-lockup"><span>M</span><div><strong>M-BOX</strong><small>现场运营</small></div></div>
         <button className="sidebar-close" title="关闭导航" onClick={() => setMobileNavOpen(false)}><X size={20} /></button>
         <nav>
           {availableNavigation.map((item) => {

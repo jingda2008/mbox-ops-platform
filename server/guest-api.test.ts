@@ -190,7 +190,11 @@ describe('guest table API', () => {
     }
     const limited = await submit('再拿一个杯子', '0007')
     expect(limited.statusCode).toBe(429)
-    expect(limited.json()).toMatchObject({ code: 'GUEST_SERVICE_RATE_LIMITED' })
+    expect(limited.json()).toMatchObject({
+      code: 'GUEST_SERVICE_RATE_LIMITED',
+      message: '收到啦～你的召唤已经闪到我们这边，小伙伴正在赶来，再给我们一点点时间哦。',
+    })
+    expect(limited.json().message).not.toMatch(/60|5次|最多/)
     expect((await repository.read()).tasks.filter((task) => task.serviceTypeId === customType!.id)).toHaveLength(5)
 
     setNow(now() + 61_000)

@@ -384,7 +384,7 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
       )).length
       if (recentCount >= limits.maxRequests) {
         throw new TableAccessError(
-          `您的需求已收到，请稍候再提交；每${limits.windowSeconds}秒最多${limits.maxRequests}次`,
+          '收到啦～你的召唤已经闪到我们这边，小伙伴正在赶来，再给我们一点点时间哦。',
           'GUEST_SERVICE_RATE_LIMITED',
           429,
         )

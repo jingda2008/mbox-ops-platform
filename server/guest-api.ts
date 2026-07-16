@@ -174,8 +174,10 @@ function sessionView(
   const balanceAmount = ledgerEntries.at(-1)?.balanceAfter ?? orders
     .filter((order) => order.status !== 'draft')
     .reduce((sum, order) => sum + order.amounts.payableAmount, 0)
-  const songOffers = state.songState.performanceSessions
+  const todaysPerformances = state.songState.performanceSessions
+    .filter((performance) => performance.businessDate === state.songState.businessDate)
     .filter((performance) => performance.status === 'scheduled' || performance.status === 'live')
+  const songOffers = todaysPerformances
     .flatMap((performance) => performance.appearances
       .filter((appearance) => appearance.acceptingRequests)
       .flatMap((appearance) => state.songState.repertoire
@@ -198,8 +200,7 @@ function sessionView(
             startsAt: appearance.startsAt,
           }]
         })))
-  const stageSchedule = state.songState.performanceSessions
-    .filter((performance) => performance.businessDate === state.songState.businessDate && ['scheduled', 'live'].includes(performance.status))
+  const stageSchedule = todaysPerformances
     .flatMap((performance) => performance.appearances.flatMap((appearance) => {
       const singer = state.songState.singers.find((item) => item.id === appearance.singerId && item.active)
       if (!singer) return []

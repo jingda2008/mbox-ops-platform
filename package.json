@@ -12,6 +12,7 @@
     "db:migrate": "tsx server/migrate.ts",
     "db:verify": "node scripts/verify-database.mjs",
     "db:provision": "tsx server/provision-runtime.ts",
+    "demo:performance": "tsx server/load-demo-performance.ts",
     "qr:generate": "tsx server/generate-table-qrs.ts",
     "pilot:access": "node scripts/print-pilot-access.mjs",
     "check": "npm run lint && npm run check:miniprogram && npm test && npm run build",

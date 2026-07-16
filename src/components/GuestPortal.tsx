@@ -374,7 +374,7 @@ export function GuestPortal() {
           <span>{stage.mode === 'live'
             ? `演出中 · ${formatGuestCountdown(stage.countdownMs)}`
             : stage.mode === 'upcoming' ? `${formatGuestCountdown(stage.countdownMs)} 后登场` : stage.mode === 'finished' ? '今晚演出结束' : '服务在线'}</span>
-          {stage.mode === 'live' && stage.next && <em>下一位 {stage.next.singerName} · {formatGuestTime(stage.next.startsAt, data?.store.timezone)}</em>}
+          {stage.mode === 'live' && stage.next && <em>下一位 {stage.next.singerName} · {formatGuestTime(stage.next.startsAt, data?.store.timezone)} · {formatGuestCountdown(Math.max(0, Date.parse(stage.next.startsAt) - stageClock))} 后登场</em>}
           {featuredAppearance && <ChevronRight className="guest-stage-chevron" size={15} aria-hidden="true" />}
         </button>
       </section>

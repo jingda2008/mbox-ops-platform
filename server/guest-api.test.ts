@@ -87,6 +87,57 @@ describe('guest table API', () => {
     await closeFixture(app, repository)
   })
 
+  it('only exposes singers and song offers from the current business-date schedule', async () => {
+    const { app, repository } = await fixture()
+    await repository.mutate((state) => {
+      state.songState.singers.push({
+        id: 'singer-future-only',
+        displayName: '未来场歌手',
+        actorId: 'singer-future-only',
+        active: true,
+        photoUrl: '/singers/future.png',
+        headline: '未来场次',
+        bio: '这位歌手只安排在未来日期，不应出现在今天的客户点歌页面。',
+        styleTags: ['未来场次'],
+      })
+      state.songState.songs.push({ id: 'song-future-only', title: '未来的歌', artist: '演示', durationSeconds: 240, active: true })
+      state.songState.repertoire.push({
+        id: 'repertoire-future-only',
+        singerId: 'singer-future-only',
+        songId: 'song-future-only',
+        priceAmount: 8800,
+        currency: 'CNY',
+        configVersion: 1,
+        enabled: true,
+      })
+      state.songState.performanceSessions.push({
+        id: 'performance-future-only',
+        businessDate: '2099-01-01',
+        title: '未来演出',
+        status: 'scheduled',
+        startsAt: '2099-01-01T12:00:00.000Z',
+        endsAt: '2099-01-01T14:00:00.000Z',
+        appearances: [{
+          id: 'appearance-future-only',
+          singerId: 'singer-future-only',
+          startsAt: '2099-01-01T12:30:00.000Z',
+          endsAt: '2099-01-01T13:30:00.000Z',
+          requestOpensAt: '2099-01-01T12:00:00.000Z',
+          requestClosesAt: '2099-01-01T13:45:00.000Z',
+          acceptingRequests: true,
+        }],
+      })
+      state.revision += 1
+    })
+
+    const body = (await app.inject({ method: 'GET', url: '/api/guest/session?table=L01' })).json() as GuestSessionResponse
+
+    expect(body.stageSchedule.map((item) => item.singerId)).not.toContain('singer-future-only')
+    expect(body.songOffers.map((item) => item.singerId)).not.toContain('singer-future-only')
+    expect(body.songOffers.every((offer) => body.stageSchedule.some((appearance) => appearance.appearanceId === offer.appearanceId))).toBe(true)
+    await closeFixture(app, repository)
+  })
+
   it('exchanges a static QR for a short-lived token bound to the current open table visit', async () => {
     const { app, repository, now } = await fixture()
     const qrToken = staticQr(now())

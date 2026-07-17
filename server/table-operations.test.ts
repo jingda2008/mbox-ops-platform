@@ -66,6 +66,43 @@ function nextDate(date: string) {
 }
 
 describe('table operating line', () => {
+  it('lets an assigned service employee open and turn a table without guest confirmation', async () => {
+    const { app, repository, useActor } = await fixture()
+    useActor('emp-lin', 'server')
+
+    const opened = await app.inject({
+      method: 'POST',
+      url: '/api/tables/table-l04/walk-in-open',
+      payload: {
+        partySize: 3,
+        salesEmployeeId: 'emp-lin',
+        customerName: '现场客人',
+        idempotencyKey: 'server-open-l04-0001',
+      },
+    })
+
+    expect(opened.statusCode, opened.body).toBe(201)
+    expect(opened.json()).toMatchObject({ table: { id: 'table-l04', status: 'occupied', guestCount: 3 } })
+
+    const closed = await app.inject({
+      method: 'POST',
+      url: '/api/tables/table-l04/close',
+      payload: {
+        reason: '服务员确认客人离店并完成翻台',
+        idempotencyKey: 'server-close-l04-0001',
+      },
+    })
+
+    expect(closed.statusCode, closed.body).toBe(200)
+    expect(closed.json()).toMatchObject({ id: 'table-l04', status: 'available', guestCount: 0, openedAt: null })
+    const state = await repository.read()
+    expect(state.songState.tableSessions.find((session) => session.tableId === 'table-l04')).toMatchObject({ status: 'closed' })
+    expect(state.auditEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ actorId: 'emp-lin', action: 'table.walk_in_opened.v1', objectId: 'table-l04' }),
+      expect.objectContaining({ actorId: 'emp-lin', action: 'table.closed.v1', objectId: 'table-l04' }),
+    ]))
+  })
+
   it('lets a manager audit and release a stale table visit without mutating its old orders', async () => {
     const { app, repository, useActor } = await fixture()
     let sessionId = ''

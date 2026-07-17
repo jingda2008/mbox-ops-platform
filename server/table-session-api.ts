@@ -375,8 +375,8 @@ export function registerTableSessionRoutes(app: FastifyInstance, repository: Run
   app.post<{ Params: { tableId: string } }>('/api/tables/:tableId/walk-in-open', async (request, reply) => {
     const input = walkInOpenSchema.parse(request.body)
     const result = await repository.mutate((state) => {
-      const actor = requireConfiguredOperation(request, state, 'reservation.manage')
-      requireTableDataScope(request, state, request.params.tableId, 'reservation.manage')
+      const actor = requireConfiguredOperation(request, state, 'table.open')
+      requireTableDataScope(request, state, request.params.tableId, 'table.open')
       const replay = state.auditEntries.find((entry) =>
         entry.action === 'table.walk_in_opened.v1' && entry.details.idempotencyKey === input.idempotencyKey,
       )

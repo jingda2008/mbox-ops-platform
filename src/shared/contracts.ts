@@ -131,6 +131,7 @@ export const staffPermissionIds = [
   'identity.manage',
   'master_data.manage',
   'shift.manage',
+  'table.open',
   'table.manage',
   'table.close',
   'business_day.close',

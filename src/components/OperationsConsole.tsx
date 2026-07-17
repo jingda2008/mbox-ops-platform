@@ -3,6 +3,7 @@ import {
   BellRing,
   CalendarDays,
   CircleAlert,
+  CircleCheckBig,
   CircleDot,
   ContactRound,
   CookingPot,
@@ -220,11 +221,15 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
         return session && order.tableSessionId === session.id && order.status !== 'draft'
       })
     : false
-  const currentRole = data.config.roles.find((role) => role.id === fulfillmentAccess.employee?.roleId)
-  const canTransferTable = currentRole?.permissionIds?.includes('table.manage') ?? false
-  const canOpenWalkIn = currentRole?.permissionIds?.includes('reservation.manage') ?? false
-  const canHandoverLegacyTable = currentRole?.permissionIds?.includes('business_day.close') ?? false
-  const canWaiveMinimumSpend = ['manager', 'operations_director', 'owner'].includes(fulfillmentAccess.employee?.roleId ?? '')
+  const effectivePermissions = new Set(data.viewer?.permissionIds ?? [])
+  const effectiveRoleIds = fulfillmentAccess.employee
+    ? effectiveRoleIdsForEmployee(data, fulfillmentAccess.employee.id)
+    : []
+  const canTransferTable = effectivePermissions.has('table.manage')
+  const canOpenWalkIn = effectivePermissions.has('table.open')
+  const canCloseTable = effectivePermissions.has('table.close')
+  const canHandoverLegacyTable = effectivePermissions.has('business_day.close')
+  const canWaiveMinimumSpend = effectiveRoleIds.some((roleId) => ['manager', 'operations_director', 'owner'].includes(roleId))
   const salesEmployees = data.employees.filter((employee) => employee.status === 'active' && employee.online)
   const selectedSession = selectedTable
     ? data.songState.tableSessions.find((session) => session.tableId === selectedTable.id && session.status === 'open') ?? null
@@ -446,6 +451,24 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
       await onRefresh()
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '低消豁免结台失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleCloseTable() {
+    if (!selectedTable || !canCloseTable) return
+    if (!window.confirm(`确认${selectedTable.code}客人已经离店并结台翻台？`)) return
+    setBusy(true)
+    try {
+      await closeTableSession(selectedTable.id, '服务员工确认客人离店并完成结台翻台')
+      setNotice(`操作成功：${selectedTable.code}已结台并释放，可接待下一桌客人`)
+      setSelectedTableId(null)
+      setSessionSummary(null)
+      await onRefresh()
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : '请稍后重试'
+      setNotice(`结台未完成：${reason}`)
     } finally {
       setBusy(false)
     }
@@ -721,6 +744,12 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
                       </div>
                       {sessionSummary.reminderRequired && <div className="minimum-spend-reminder"><BellRing size={16} /><span>低消进度低于提醒阈值</span><small>{sessionSummary.nextReminderAt ? `北京时间 ${formatChinaTime(sessionSummary.nextReminderAt)} 再次检查` : ''}</small></div>}
                       {canWaiveMinimumSpend && sessionSummary.differenceAmount > 0 && <div className="minimum-spend-waiver"><input maxLength={300} placeholder="经理豁免原因（至少5字）" value={minimumSpendWaiverReason} onChange={(event) => setMinimumSpendWaiverReason(event.target.value)} /><button className="secondary-button" disabled={busy || minimumSpendWaiverReason.trim().length < 5} onClick={() => void handleMinimumSpendWaiver()}><ShieldCheck size={15} />豁免并结台</button></div>}
+                    </div>
+                  )}
+                  {selectedTable && selectedTable.status === 'occupied' && !selectedSessionNeedsHandover && sessionSummary && canCloseTable && sessionSummary.differenceAmount === 0 && (
+                    <div className="table-close-toolbar">
+                      <div className="table-business-heading"><CircleCheckBig size={19} /><div><strong>客人离店 · 结台翻台</strong><span>系统会先检查未支付、未出品、退款、点歌和桌组关系</span></div></div>
+                      <button className="primary-button" disabled={busy || selectedCombinationLinks.length > 0} onClick={() => void handleCloseTable()}><CircleCheckBig size={16} />确认结台</button>
                     </div>
                   )}
                   {selectedTable && selectedTable.status === 'occupied' && !selectedSessionNeedsHandover && canTransferTable && selectedCombinationLinks.length === 0 && (

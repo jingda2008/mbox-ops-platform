@@ -22,7 +22,7 @@ export const defaultRolePolicies: Record<string, RolePolicy> = {
   owner: policy(
     [
       'dashboard.view', 'finance.view', 'audit.view', 'config.manage', 'identity.manage',
-      'master_data.manage', 'shift.manage', 'table.manage', 'table.close', 'business_day.close', 'reservation.view', 'reservation.manage',
+      'master_data.manage', 'shift.manage', 'table.open', 'table.manage', 'table.close', 'business_day.close', 'reservation.view', 'reservation.manage',
       'reservation.config.manage',
       'service.execute', 'complaint.handle', 'order.create', 'order.view', 'kds.prepare',
       'kds.deliver', 'payment.collect', 'payment.pos_report', 'payment.refund.request',
@@ -43,7 +43,7 @@ export const defaultRolePolicies: Record<string, RolePolicy> = {
   operations_director: policy(
     [
       'dashboard.view', 'finance.view', 'audit.view', 'config.manage', 'master_data.manage',
-      'shift.manage', 'table.manage', 'table.close', 'business_day.close', 'reservation.view',
+      'shift.manage', 'table.open', 'table.manage', 'table.close', 'business_day.close', 'reservation.view',
       'reservation.manage', 'reservation.config.manage', 'service.execute', 'complaint.handle',
       'order.create', 'order.view', 'kds.prepare', 'kds.deliver', 'payment.collect',
       'payment.pos_report', 'payment.refund.request', 'payment.refund.approve',
@@ -67,7 +67,7 @@ export const defaultRolePolicies: Record<string, RolePolicy> = {
   manager: policy(
     [
       'dashboard.view', 'finance.view', 'audit.view', 'master_data.manage', 'shift.manage',
-      'table.manage', 'table.close', 'business_day.close', 'reservation.view', 'reservation.manage', 'reservation.config.manage', 'service.execute', 'complaint.handle',
+      'table.open', 'table.manage', 'table.close', 'business_day.close', 'reservation.view', 'reservation.manage', 'reservation.config.manage', 'service.execute', 'complaint.handle',
       'order.create', 'order.view', 'kds.prepare', 'kds.deliver', 'payment.collect',
       'payment.pos_report', 'payment.refund.request', 'payment.refund.approve',
       'commerce.authorization.request', 'commerce.authorization.approve', 'inventory.view',
@@ -85,7 +85,7 @@ export const defaultRolePolicies: Record<string, RolePolicy> = {
   ),
   supervisor: policy(
     [
-      'dashboard.view', 'shift.manage', 'table.manage', 'reservation.view', 'reservation.manage',
+      'dashboard.view', 'shift.manage', 'table.open', 'table.manage', 'table.close', 'reservation.view', 'reservation.manage',
       'service.execute', 'complaint.handle', 'order.create', 'order.view', 'kds.prepare',
       'kds.deliver', 'payment.collect', 'payment.pos_report', 'payment.refund.request',
       'commerce.authorization.request', 'commerce.authorization.approve', 'inventory.view',
@@ -97,7 +97,7 @@ export const defaultRolePolicies: Record<string, RolePolicy> = {
   ),
   server: policy(
     [
-      'dashboard.view', 'service.execute', 'order.create', 'order.view', 'kds.deliver',
+      'dashboard.view', 'table.open', 'table.manage', 'table.close', 'service.execute', 'order.create', 'order.view', 'kds.deliver',
       'payment.collect', 'payment.refund.request', 'commerce.authorization.request',
       'inventory.view', 'benefit.view', 'benefit.grant', 'song.view',
     ],
@@ -105,12 +105,12 @@ export const defaultRolePolicies: Record<string, RolePolicy> = {
     { giftAmount: 8_800, refundRequestAmount: 100_000 },
   ),
   backup: policy(
-    ['dashboard.view', 'service.execute', 'order.create', 'order.view', 'kds.deliver', 'payment.collect', 'commerce.authorization.request', 'inventory.view', 'benefit.view', 'song.view'],
+    ['dashboard.view', 'table.open', 'table.manage', 'table.close', 'service.execute', 'order.create', 'order.view', 'kds.deliver', 'payment.collect', 'commerce.authorization.request', 'inventory.view', 'benefit.view', 'song.view'],
     'assigned_areas',
     { giftAmount: 8_800, refundRequestAmount: 100_000 },
   ),
   specialist: policy(
-    ['dashboard.view', 'service.execute', 'complaint.handle', 'order.create', 'order.view', 'kds.prepare', 'kds.deliver', 'commerce.authorization.request', 'benefit.view', 'benefit.grant', 'song.view'],
+    ['dashboard.view', 'table.open', 'table.manage', 'table.close', 'service.execute', 'complaint.handle', 'order.create', 'order.view', 'kds.prepare', 'kds.deliver', 'commerce.authorization.request', 'benefit.view', 'benefit.grant', 'song.view'],
     'assigned_areas',
     { giftAmount: 8_800 },
   ),
@@ -123,7 +123,7 @@ export const defaultRolePolicies: Record<string, RolePolicy> = {
     { refundRequestAmount: 100_000 },
   ),
   host: policy(
-    ['dashboard.view', 'table.manage', 'reservation.view', 'reservation.manage', 'service.execute', 'benefit.view'],
+    ['dashboard.view', 'table.open', 'table.manage', 'reservation.view', 'reservation.manage', 'service.execute', 'benefit.view'],
     'store',
   ),
 }

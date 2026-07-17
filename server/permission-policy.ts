@@ -13,6 +13,7 @@ export type StaffOperation =
   | 'master-data.write'
   | 'identity.write'
   | 'shift.write'
+  | 'table.open'
   | 'table.write'
   | 'table.close'
   | 'business-day.close'
@@ -102,6 +103,7 @@ export const STAFF_OPERATION_PERMISSION_IDS: Record<StaffOperation, StaffPermiss
   'master-data.write': 'master_data.manage',
   'identity.write': 'identity.manage',
   'shift.write': 'shift.manage',
+  'table.open': 'table.open',
   'table.write': 'table.manage',
   'table.close': 'table.close',
   'business-day.close': 'business_day.close',
@@ -141,6 +143,7 @@ const defaultOperations: Record<StaffOperation, OperationPermissionPolicy> = {
   'master-data.write': { name: '修改门店主数据', permissionId: 'master_data.manage', risk: 'high' },
   'identity.write': { name: '管理员工身份', permissionId: 'identity.manage', risk: 'high' },
   'shift.write': { name: '管理班次', permissionId: 'shift.manage', risk: 'high' },
+  'table.open': { name: '开台接客', permissionId: 'table.open', risk: 'standard' },
   'table.write': { name: '管理桌台', permissionId: 'table.manage', risk: 'high' },
   'table.close': { name: '结台清台', permissionId: 'table.close', risk: 'high' },
   'business-day.close': { name: '关闭营业日', permissionId: 'business_day.close', risk: 'high' },

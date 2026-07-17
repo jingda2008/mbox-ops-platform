@@ -35,9 +35,23 @@ describe('table transfer API authorization', () => {
     await repository.close()
   })
 
-  it('denies a server even for an assigned table', async () => {
+  it('allows a server to transfer a table inside the assigned area', async () => {
     const { app, repository } = await fixture('emp-lin', 'server')
     const response = await app.inject({ method: 'POST', url: '/api/tables/table-l01/transfer', payload })
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({ sourceTableId: 'table-l01', targetTableId: 'table-l04', actorId: 'emp-lin' })
+    expect((await repository.read()).tableTransfers).toHaveLength(1)
+    await app.close()
+    await repository.close()
+  })
+
+  it('denies a server transfer outside the assigned area', async () => {
+    const { app, repository } = await fixture('emp-lin', 'server')
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/tables/table-l01/transfer',
+      payload: { ...payload, targetTableId: 'table-i03', idempotencyKey: 'table-transfer-api-002' },
+    })
     expect(response.statusCode).toBe(403)
     expect(response.json().code).toBe('AUTHORIZATION_DENIED')
     expect((await repository.read()).tableTransfers).toHaveLength(0)

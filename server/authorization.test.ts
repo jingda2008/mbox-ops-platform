@@ -68,6 +68,9 @@ describe('staff role authorization', () => {
     ['manager', 'payment.refund.approve'],
     ['supervisor', 'benefit.grant'],
     ['server', 'commerce.order.create'],
+    ['server', 'table.open'],
+    ['server', 'table.write'],
+    ['server', 'table.close'],
     ['bartender', 'commerce.kds.prepare'],
     ['kitchen', 'commerce.kds.prepare'],
     ['cashier', 'payment.pos.report'],
@@ -79,8 +82,16 @@ describe('staff role authorization', () => {
 
   it('keeps the legacy backup and specialist permissions', () => {
     expect(canPerformOperation('backup', 'commerce.order.create')).toBe(true)
+    expect(canPerformOperation('backup', 'table.open')).toBe(true)
+    expect(canPerformOperation('backup', 'table.write')).toBe(true)
+    expect(canPerformOperation('backup', 'table.close')).toBe(true)
     expect(canPerformOperation('specialist', 'commerce.kds.prepare')).toBe(true)
     expect(canPerformOperation('specialist', 'commerce.order.create')).toBe(true)
+    expect(canPerformOperation('specialist', 'table.open')).toBe(true)
+    expect(canPerformOperation('specialist', 'table.write')).toBe(true)
+    expect(canPerformOperation('specialist', 'table.close')).toBe(true)
+    expect(canPerformOperation('host', 'table.open')).toBe(true)
+    expect(canPerformOperation('bartender', 'table.open')).toBe(false)
   })
 
   it('supports policy overrides without changing the default policy', async () => {

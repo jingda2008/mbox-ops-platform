@@ -197,6 +197,68 @@ describe('runtime state operational migrations', () => {
     )).toHaveLength(1)
   })
 
+  it('upgrades frontline table operations once without overwriting later permission revocations', () => {
+    const legacy = structuredClone(createSeedState())
+    legacy.auditEntries = legacy.auditEntries.filter(
+      (entry) => entry.action !== 'runtime.frontline_table_operations_v1_migrated.v1',
+    )
+    for (const config of [legacy.config, ...legacy.configVersions.map((record) => record.snapshot)]) {
+      for (const role of config.roles) {
+        if (!['owner', 'operations_director', 'manager', 'supervisor', 'server', 'backup', 'specialist', 'host'].includes(role.id)) continue
+        role.permissionIds = role.permissionIds?.filter((permissionId) => ![
+          'table.open',
+          ...(role.id === 'supervisor' || ['server', 'backup', 'specialist'].includes(role.id)
+            ? ['table.close'] as const
+            : []),
+          ...(['server', 'backup', 'specialist'].includes(role.id) ? ['table.manage'] as const : []),
+        ].includes(permissionId as never))
+      }
+    }
+
+    const upgraded = migrateRuntimeState(legacy)
+    for (const config of [upgraded.config, ...upgraded.configVersions.map((record) => record.snapshot)]) {
+      expect(config.roles.find((role) => role.id === 'server')?.permissionIds).toEqual(expect.arrayContaining([
+        'table.open', 'table.manage', 'table.close',
+      ]))
+      expect(config.roles.find((role) => role.id === 'backup')?.permissionIds).toEqual(expect.arrayContaining([
+        'table.open', 'table.manage', 'table.close',
+      ]))
+      expect(config.roles.find((role) => role.id === 'specialist')?.permissionIds).toEqual(expect.arrayContaining([
+        'table.open', 'table.manage', 'table.close',
+      ]))
+      expect(config.roles.find((role) => role.id === 'supervisor')?.permissionIds).toEqual(expect.arrayContaining([
+        'table.open', 'table.close',
+      ]))
+      expect(config.roles.find((role) => role.id === 'host')?.permissionIds).toContain('table.open')
+    }
+
+    const server = upgraded.config.roles.find((role) => role.id === 'server')!
+    server.permissionIds = server.permissionIds?.filter((permissionId) => permissionId !== 'table.close')
+    const migratedAgain = migrateRuntimeState(upgraded)
+
+    expect(migratedAgain.config.roles.find((role) => role.id === 'server')?.permissionIds).not.toContain('table.close')
+    expect(migratedAgain.auditEntries.filter(
+      (entry) => entry.action === 'runtime.frontline_table_operations_v1_migrated.v1',
+    )).toHaveLength(1)
+  })
+
+  it('does not grant frontline table operations when a service-role prerequisite was removed', () => {
+    const legacy = structuredClone(createSeedState())
+    legacy.auditEntries = legacy.auditEntries.filter(
+      (entry) => entry.action !== 'runtime.frontline_table_operations_v1_migrated.v1',
+    )
+    const server = legacy.config.roles.find((role) => role.id === 'server')!
+    server.permissionIds = server.permissionIds?.filter((permissionId) => ![
+      'service.execute', 'table.open', 'table.manage', 'table.close',
+    ].includes(permissionId))
+
+    const migrated = migrateRuntimeState(legacy)
+
+    expect(migrated.config.roles.find((role) => role.id === 'server')?.permissionIds).not.toEqual(expect.arrayContaining([
+      'table.open', 'table.manage', 'table.close',
+    ]))
+  })
+
   it('does not expand custom roles or built-in roles with a removed prerequisite', () => {
     const legacy = structuredClone(createSeedState())
     const owner = legacy.config.roles.find((role) => role.id === 'owner')!

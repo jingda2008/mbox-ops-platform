@@ -58,7 +58,7 @@ const sections: Array<{ id: MasterView; label: string; icon: typeof UserRoundCog
 const permissionLabels: Record<StaffPermissionId, string> = {
   'dashboard.view': '现场看板', 'finance.view': '财务数据', 'audit.view': '审计记录',
   'config.manage': '系统配置', 'identity.manage': '账号权限', 'master_data.manage': '主数据',
-  'shift.manage': '排班调度', 'table.manage': '桌台管理', 'table.close': '结台清台', 'business_day.close': '营业日关账', 'reservation.view': '查看预约',
+  'shift.manage': '排班调度', 'table.open': '开台接客', 'table.manage': '桌台管理', 'table.close': '结台清台', 'business_day.close': '营业日关账', 'reservation.view': '查看预约',
   'reservation.manage': '预约接待', 'reservation.config.manage': '预约规则',
   'service.execute': '执行服务', 'complaint.handle': '处理投诉', 'order.create': '创建订单',
   'order.view': '查看订单', 'kds.prepare': '出品制作', 'kds.deliver': '取送确认',

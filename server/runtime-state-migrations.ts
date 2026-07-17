@@ -39,7 +39,43 @@ const builtInRoleUpgrades: Record<string, BuiltInRoleUpgrade> = {
 }
 
 const permissionPolicyMigrationAction = 'runtime.permission_policy_v2_migrated.v1'
+const frontlineTableOperationsMigrationAction = 'runtime.frontline_table_operations_v1_migrated.v1'
 const chinaTimezoneMigrationAction = 'runtime.china_timezone_normalized.v1'
+
+const frontlineTableOperationUpgrades: Record<string, BuiltInRoleUpgrade> = {
+  owner: {
+    requiredPermissionIds: ['config.manage', 'table.manage', 'table.close'],
+    addedPermissionIds: ['table.open'],
+  },
+  operations_director: {
+    requiredPermissionIds: ['config.manage', 'table.manage', 'table.close'],
+    addedPermissionIds: ['table.open'],
+  },
+  manager: {
+    requiredPermissionIds: ['shift.manage', 'table.manage', 'table.close'],
+    addedPermissionIds: ['table.open'],
+  },
+  supervisor: {
+    requiredPermissionIds: ['service.execute', 'table.manage', 'reservation.manage'],
+    addedPermissionIds: ['table.open', 'table.close'],
+  },
+  server: {
+    requiredPermissionIds: ['service.execute', 'order.create', 'kds.deliver'],
+    addedPermissionIds: ['table.open', 'table.manage', 'table.close'],
+  },
+  backup: {
+    requiredPermissionIds: ['service.execute', 'order.create', 'kds.deliver'],
+    addedPermissionIds: ['table.open', 'table.manage', 'table.close'],
+  },
+  specialist: {
+    requiredPermissionIds: ['service.execute', 'order.create', 'song.view'],
+    addedPermissionIds: ['table.open', 'table.manage', 'table.close'],
+  },
+  host: {
+    requiredPermissionIds: ['table.manage', 'reservation.manage'],
+    addedPermissionIds: ['table.open'],
+  },
+}
 
 const legacyGuestRepliesByCode = new Map<string, string>([
   ['ADD_WATER', '已收到，{employee}正在为您处理。'],
@@ -54,6 +90,16 @@ const legacyGuestRepliesByCode = new Map<string, string>([
 
 function withBuiltInRoleUpgrade(role: RoleConfig): RoleConfig {
   const upgrade = builtInRoleUpgrades[role.id]
+  if (!upgrade || !role.permissionIds) return role
+
+  const permissions = new Set(role.permissionIds)
+  if (!upgrade.requiredPermissionIds.every((permissionId) => permissions.has(permissionId))) return role
+  for (const permissionId of upgrade.addedPermissionIds) permissions.add(permissionId)
+  return { ...role, permissionIds: [...permissions] }
+}
+
+function withFrontlineTableOperationUpgrade(role: RoleConfig): RoleConfig {
+  const upgrade = frontlineTableOperationUpgrades[role.id]
   if (!upgrade || !role.permissionIds) return role
 
   const permissions = new Set(role.permissionIds)
@@ -85,6 +131,7 @@ function configWithOperationalDefaults(
   config: StoreConfig,
   defaults: StoreConfig,
   upgradeBuiltInRoles: boolean,
+  upgradeFrontlineTableOperations: boolean,
 ): StoreConfig {
   const serviceTypeIds = new Set(config.serviceTypes.map((type) => type.id))
   const roleIds = new Set(config.roles.map((role) => role.id))
@@ -114,6 +161,8 @@ function configWithOperationalDefaults(
     roles: [
       ...config.roles.map(withDefaultRolePolicy).map((role) => (
         upgradeBuiltInRoles ? withBuiltInRoleUpgrade(role) : role
+      )).map((role) => (
+        upgradeFrontlineTableOperations ? withFrontlineTableOperationUpgrade(role) : role
       )),
       ...structuredClone(defaults.roles.filter((role) => !roleIds.has(role.id))),
     ],
@@ -197,14 +246,17 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
   const upgradeBuiltInRoles = !migrated.auditEntries.some(
     (entry) => entry.action === permissionPolicyMigrationAction,
   )
+  const upgradeFrontlineTableOperations = !migrated.auditEntries.some(
+    (entry) => entry.action === frontlineTableOperationsMigrationAction,
+  )
 
-  migrated.config = configWithOperationalDefaults(migrated.config, defaults, upgradeBuiltInRoles)
+  migrated.config = configWithOperationalDefaults(migrated.config, defaults, upgradeBuiltInRoles, upgradeFrontlineTableOperations)
   migrated.draftConfig = migrated.draftConfig
-    ? configWithOperationalDefaults(migrated.draftConfig, defaults, upgradeBuiltInRoles)
+    ? configWithOperationalDefaults(migrated.draftConfig, defaults, upgradeBuiltInRoles, upgradeFrontlineTableOperations)
     : null
   migrated.configVersions = (migrated.configVersions ?? []).map((record) => ({
     ...record,
-    snapshot: configWithOperationalDefaults(record.snapshot, defaults, upgradeBuiltInRoles),
+    snapshot: configWithOperationalDefaults(record.snapshot, defaults, upgradeBuiltInRoles, upgradeFrontlineTableOperations),
   }))
   migrated.employees = migrated.employees.map((employee) => ({
     ...employee,
@@ -290,6 +342,20 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
       objectId: migrated.store.id,
       occurredAt: `${migrated.store.businessDate}T00:00:00+08:00`,
       details: { strategy: 'built-in-role-capability-fingerprint' },
+    })
+  }
+  if (upgradeFrontlineTableOperations) {
+    migrated.auditEntries.push({
+      id: 'runtime-migration-frontline-table-operations-v1',
+      actorId: 'system',
+      action: frontlineTableOperationsMigrationAction,
+      objectType: 'store',
+      objectId: migrated.store.id,
+      occurredAt: `${migrated.store.businessDate}T00:00:00+08:00`,
+      details: {
+        strategy: 'built-in-service-role-capability-fingerprint',
+        permissions: ['table.open', 'table.manage', 'table.close'],
+      },
     })
   }
   if (normalizeChinaTimezone && !migrated.auditEntries.some((entry) => entry.action === chinaTimezoneMigrationAction)) {

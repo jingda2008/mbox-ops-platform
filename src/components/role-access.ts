@@ -16,7 +16,7 @@ export const roleHomeNavigation = [
 ] as const
 
 export type RoleHomeNavigationId = (typeof roleHomeNavigation)[number]['id']
-export type RoleHomeKind = 'owner' | 'admin' | 'manager' | 'server' | 'bartender' | 'kitchen' | 'cashier' | 'host' | 'runner' | 'custom'
+export type RoleHomeKind = 'owner' | 'operations_director' | 'admin' | 'manager' | 'server' | 'bartender' | 'kitchen' | 'cashier' | 'host' | 'runner' | 'custom'
 export type RoleHomeIndicator = 'tables' | 'tasks' | 'risk' | 'kds' | 'people' | 'config' | 'payments' | 'reservations'
 export type RoleHomeTone = 'neutral' | 'info' | 'warning' | 'danger' | 'success'
 
@@ -65,6 +65,7 @@ const allNavigation = roleHomeNavigation.map((item) => item.id)
 
 const roleProfiles: Record<RoleHomeKind, RoleProfile> = {
   owner: { title: '老板工作台', focusLabel: '全店经营与风险', navigation: allNavigation },
+  operations_director: { title: '运营负责人工作台', focusLabel: '经营执行与风险闭环', navigation: allNavigation },
   admin: { title: '管理员工作台', focusLabel: '系统运行与配置', navigation: allNavigation },
   manager: {
     title: '店长工作台',
@@ -110,6 +111,7 @@ const roleProfiles: Record<RoleHomeKind, RoleProfile> = {
 
 const roleAliases: Record<Exclude<RoleHomeKind, 'custom'>, readonly string[]> = {
   owner: ['owner', 'boss', 'proprietor', 'store-owner', '老板', '店主'],
+  operations_director: ['operations-director', '运营负责人'],
   admin: ['admin', 'administrator', 'system-admin', 'super-admin', '管理员', '系统管理员'],
   manager: ['manager', 'store-manager', 'shift-manager', 'general-manager', 'supervisor', '店长', '值班经理', '领班'],
   server: ['server', 'backup', 'specialist', 'waiter', 'waitstaff', 'service', '服务员', '主服务员', '区域候补', '服务专员'],
@@ -197,7 +199,7 @@ export function buildRoleHomeModel(data: BootstrapResponse, employeeId: string):
   }
   const hasFullKdsAccess = roleIds.some((roleId) => {
     const role = data.config.roles.find((item) => item.id === roleId)
-    return ['owner', 'admin', 'manager'].includes(resolveRoleHomeKind(roleId, role?.name))
+    return ['owner', 'operations_director', 'admin', 'manager'].includes(resolveRoleHomeKind(roleId, role?.name))
   })
   const counts = buildCounts(data, employee, roleIds, hasFullKdsAccess)
   const { metrics, todos } = buildRoleContent(access.kind, counts)
@@ -350,6 +352,7 @@ function unsettledTableCount(data: BootstrapResponse) {
 
 function buildRoleContent(kind: RoleHomeKind, counts: RoleCounts): Pick<RoleHomeModel, 'metrics' | 'todos'> {
   if (kind === 'owner') return managementContent(counts, '营业桌台', '待经营复核')
+  if (kind === 'operations_director') return managementContent(counts, '营业桌台', '待运营接管')
   if (kind === 'admin') {
     return {
       metrics: [

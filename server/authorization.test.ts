@@ -57,7 +57,7 @@ describe('staff role authorization', () => {
     expect(response.statusCode).toBe(403)
     expect(response.json()).toEqual({
       code: 'AUTHORIZATION_DENIED',
-      message: '岗位 server 无权修改门店配置；允许岗位：owner、admin',
+      message: '岗位 server 无权修改门店配置；允许岗位：owner、operations_director、admin',
       operation: 'config.write',
     })
   })

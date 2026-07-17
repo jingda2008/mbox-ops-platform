@@ -24,7 +24,7 @@ function repository(): RuntimeRepository {
 }
 
 const employeePins = {
-  'emp-owner': '1001', 'emp-admin': '1002', 'emp-lin': '1003', 'emp-jie': '1004',
+  'emp-owner': '1001', 'emp-operations-director': '1013', 'emp-admin': '1002', 'emp-lin': '1003', 'emp-jie': '1004',
   'emp-wu': '1005', 'emp-qing': '1006', 'emp-han': '1007', 'emp-tao': '1008',
   'emp-mia': '1009', 'emp-chen': '1010', 'emp-cashier': '1011', 'emp-host': '1012',
 }

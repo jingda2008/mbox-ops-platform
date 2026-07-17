@@ -718,7 +718,7 @@ describe('真实营业夜间全链路仿真', () => {
     expect(state.store.businessDate).toBe(followingDate)
     expect(state.songState.businessDate).toBe(followingDate)
     expect(state.shiftAssignments.filter((shift) => shift.businessDate === businessDate).every((shift) => shift.status === 'completed')).toBe(true)
-    expect(state.shiftAssignments.filter((shift) => shift.businessDate === followingDate && shift.status === 'active')).toHaveLength(12)
+    expect(state.shiftAssignments.filter((shift) => shift.businessDate === followingDate && shift.status === 'active')).toHaveLength(13)
     expect(state.employees.every((employee) => !employee.online && !employee.paused)).toBe(true)
     expect(state.auditEntries.filter((entry) => entry.action === 'business_day.closed.v1')).toHaveLength(1)
     expect(state.auditEntries.filter((entry) => entry.action === 'business_day.shift_continuity_prepared.v1')).toHaveLength(1)

@@ -8,6 +8,7 @@ import { createSeedState } from './seed.js'
 
 export const PILOT_EMPLOYEE_IDS = [
   'emp-owner',
+  'emp-operations-director',
   'emp-admin',
   'emp-lin',
   'emp-jie',
@@ -23,6 +24,7 @@ export const PILOT_EMPLOYEE_IDS = [
 
 const PILOT_ROLE_IDS = [
   'owner',
+  'operations_director',
   'backup',
   'specialist',
   'market_design',
@@ -81,6 +83,8 @@ export interface PilotStaffReconciliationResult {
   updatedShiftIds: string[]
   updatedTableIds: string[]
   updatedAuthorityIds: string[]
+  addedAuthorityIds: string[]
+  updatedPolicySections: string[]
   changed: boolean
 }
 
@@ -98,6 +102,8 @@ export function reconcilePilotStaff(
     updatedShiftIds: [],
     updatedTableIds: [],
     updatedAuthorityIds: [],
+    addedAuthorityIds: [],
+    updatedPolicySections: [],
     changed: false,
   }
   const shiftWindow = state.shiftAssignments.find((shift) => (
@@ -168,9 +174,46 @@ export function reconcilePilotStaff(
 
   for (const referenceAuthority of reference.orderDomain.authorizationAuthorities) {
     const authority = state.orderDomain.authorizationAuthorities.find((candidate) => candidate.id === referenceAuthority.id)
-    if (!authority || authority.actorId === referenceAuthority.actorId) continue
+    if (!authority) {
+      if (referenceAuthority.id === 'operations-director-commerce-authority') {
+        state.orderDomain.authorizationAuthorities.push(structuredClone(referenceAuthority))
+        result.addedAuthorityIds.push(referenceAuthority.id)
+      }
+      continue
+    }
+    if (authority.actorId === referenceAuthority.actorId) continue
     authority.actorId = referenceAuthority.actorId
     result.updatedAuthorityIds.push(authority.id)
+  }
+
+  const referenceBenefitPolicy = reference.benefitGrantPolicies.find((policy) => policy.roleId === 'operations_director')
+  if (!referenceBenefitPolicy) throw new Error('验证权益模板缺少运营负责人策略')
+  const benefitPolicy = state.benefitGrantPolicies.find((policy) => policy.roleId === 'operations_director')
+  if (!benefitPolicy) {
+    state.benefitGrantPolicies.push(structuredClone(referenceBenefitPolicy))
+    result.updatedPolicySections.push('benefit.operations_director')
+  } else if (JSON.stringify(benefitPolicy) !== JSON.stringify(referenceBenefitPolicy)) {
+    Object.assign(benefitPolicy, structuredClone(referenceBenefitPolicy))
+    result.updatedPolicySections.push('benefit.operations_director')
+  }
+
+  const referenceInventory = reference.inventoryDomain
+  const inventory = state.inventoryDomain
+  if (!referenceInventory || !inventory) throw new Error('验证门店缺少库存策略')
+  const inventoryPolicyKeys = Object.keys(referenceInventory.policy) as Array<keyof typeof referenceInventory.policy>
+  let inventoryPolicyChanged = false
+  for (const key of inventoryPolicyKeys) {
+    const missingRoleIds = referenceInventory.policy[key].filter((roleId) => !inventory.policy[key].includes(roleId))
+    if (missingRoleIds.length === 0) continue
+    inventory.policy[key] = [...inventory.policy[key], ...missingRoleIds]
+    inventoryPolicyChanged = true
+  }
+  if (inventoryPolicyChanged) result.updatedPolicySections.push('inventory.operations_director')
+
+  const missingSongManagers = reference.songState.managerActorIds.filter((actorId) => !state.songState.managerActorIds.includes(actorId))
+  if (missingSongManagers.length > 0) {
+    state.songState.managerActorIds.push(...missingSongManagers)
+    result.updatedPolicySections.push('song.manager_actors')
   }
 
   result.changed = result.addedRoleIds.length > 0
@@ -180,7 +223,9 @@ export function reconcilePilotStaff(
     || result.addedShiftIds.length > 0
     || result.updatedShiftIds.length > 0
     || result.updatedTableIds.length > 0
+    || result.addedAuthorityIds.length > 0
     || result.updatedAuthorityIds.length > 0
+    || result.updatedPolicySections.length > 0
   if (!result.changed) return result
 
   state.auditEntries.push({
@@ -198,7 +243,9 @@ export function reconcilePilotStaff(
       addedShiftIds: result.addedShiftIds,
       updatedShiftIds: result.updatedShiftIds,
       updatedTableIds: result.updatedTableIds,
+      addedAuthorityIds: result.addedAuthorityIds,
       updatedAuthorityIds: result.updatedAuthorityIds,
+      updatedPolicySections: result.updatedPolicySections,
     },
   })
   state.revision += 1

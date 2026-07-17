@@ -161,7 +161,9 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
   ))
   const activeRoleIds = activeShift ? [activeShift.roleId, ...(activeShift.roleIds ?? [])] : []
   const isCashier = activeRoleIds.includes('cashier')
-  const isManager = activeRoleIds.includes('manager') || currentEmployee?.roleId === 'manager'
+  const managementRoleIds = ['manager', 'operations_director', 'owner']
+  const isManager = managementRoleIds.some((roleId) => activeRoleIds.includes(roleId))
+    || managementRoleIds.includes(currentEmployee?.roleId ?? '')
 
   useEffect(() => {
     setExpandedAccountId((current) => (

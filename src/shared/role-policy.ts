@@ -40,6 +40,26 @@ export const defaultRolePolicies: Record<string, RolePolicy> = {
       inventoryAdjustmentAmount: 9_999_999,
     },
   ),
+  operations_director: policy(
+    [
+      'dashboard.view', 'finance.view', 'audit.view', 'config.manage', 'master_data.manage',
+      'shift.manage', 'table.manage', 'table.close', 'business_day.close', 'reservation.view',
+      'reservation.manage', 'reservation.config.manage', 'service.execute', 'complaint.handle',
+      'order.create', 'order.view', 'kds.prepare', 'kds.deliver', 'payment.collect',
+      'payment.pos_report', 'payment.refund.request', 'payment.refund.approve',
+      'commerce.authorization.request', 'commerce.authorization.approve', 'inventory.view',
+      'inventory.manage', 'inventory.approve', 'benefit.view', 'benefit.grant',
+      'benefit.approve', 'benefit.manage', 'song.view', 'song.manage', 'store_import.apply',
+    ],
+    'store',
+    {
+      giftAmount: 500_000,
+      discountAmount: 500_000,
+      refundRequestAmount: 500_000,
+      refundApproveAmount: 500_000,
+      inventoryAdjustmentAmount: 500_000,
+    },
+  ),
   admin: policy(
     ['dashboard.view', 'audit.view', 'config.manage', 'identity.manage', 'master_data.manage', 'shift.manage', 'table.manage', 'store_import.apply'],
     'store',

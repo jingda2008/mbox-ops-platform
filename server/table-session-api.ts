@@ -731,7 +731,7 @@ export function registerTableSessionRoutes(app: FastifyInstance, repository: Run
         if (!input.minimumSpendWaiver) {
           throw new Error(`当前消费${summary.spendAmount}分，距低消还差${summary.differenceAmount}分；需要经理填写原因后豁免`)
         }
-        if (!['manager', 'owner'].includes(actor.roleId)) throw new Error('只有经理或店主可以豁免低消差额')
+        if (!['manager', 'operations_director', 'owner'].includes(actor.roleId)) throw new Error('只有店长、运营负责人或老板可以豁免低消差额')
         state.auditEntries.push({
           id: `audit_${randomUUID()}`,
           actorId: actor.actorId,

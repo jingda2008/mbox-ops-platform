@@ -223,7 +223,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
   const canTransferTable = currentRole?.permissionIds?.includes('table.manage') ?? false
   const canOpenWalkIn = currentRole?.permissionIds?.includes('reservation.manage') ?? false
   const canHandoverLegacyTable = currentRole?.permissionIds?.includes('business_day.close') ?? false
-  const canWaiveMinimumSpend = ['manager', 'owner'].includes(fulfillmentAccess.employee?.roleId ?? '')
+  const canWaiveMinimumSpend = ['manager', 'operations_director', 'owner'].includes(fulfillmentAccess.employee?.roleId ?? '')
   const salesEmployees = data.employees.filter((employee) => employee.status === 'active' && employee.online)
   const selectedSession = selectedTable
     ? data.songState.tableSessions.find((session) => session.tableId === selectedTable.id && session.status === 'open') ?? null

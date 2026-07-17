@@ -13,6 +13,7 @@ const sessionSecret = 's'.repeat(32)
 
 const employeePins = {
   'emp-owner': '1001',
+  'emp-operations-director': '1013',
   'emp-admin': '1002',
   'emp-lin': '1003',
   'emp-jie': '1004',
@@ -37,9 +38,14 @@ interface StaffAccessExpectation {
 
 const staffAccessMatrix: StaffAccessExpectation[] = [
   {
-    employeeId: 'emp-owner', displayName: '护古', roleId: 'owner', dataScope: 'all_stores',
+    employeeId: 'emp-owner', displayName: '陈方宇', roleId: 'owner', dataScope: 'all_stores',
     allowed: ['config.manage', 'business_day.close', 'payment.refund.approve', 'benefit.manage'],
     forbidden: [],
+  },
+  {
+    employeeId: 'emp-operations-director', displayName: '护古', roleId: 'operations_director', dataScope: 'store',
+    allowed: ['config.manage', 'business_day.close', 'payment.refund.approve', 'inventory.approve', 'benefit.manage'],
+    forbidden: ['identity.manage'],
   },
   {
     employeeId: 'emp-admin', displayName: '乌鸦', roleId: 'admin', dataScope: 'store',
@@ -124,8 +130,8 @@ async function createLoginApp() {
   return app
 }
 
-describe('12名员工独立登录验收', () => {
-  it('矩阵完整覆盖种子中的12名在职员工，且每人PIN唯一', () => {
+describe('13名员工独立登录验收', () => {
+  it('矩阵完整覆盖种子中的13名在职员工，且每人PIN唯一', () => {
     const state = createSeedState()
     const activeEmployeeIds = state.employees
       .filter((employee) => employee.status === 'active')
@@ -134,7 +140,7 @@ describe('12名员工独立登录验收', () => {
     const matrixEmployeeIds = staffAccessMatrix.map((employee) => employee.employeeId).sort()
 
     expect(matrixEmployeeIds, '员工验收矩阵必须与种子中的在职员工完全一致').toEqual(activeEmployeeIds)
-    expect(new Set(Object.values(employeePins)).size, '12名员工必须使用互不相同的PIN').toBe(staffAccessMatrix.length)
+    expect(new Set(Object.values(employeePins)).size, '13名员工必须使用互不相同的PIN').toBe(staffAccessMatrix.length)
   })
 
   it.each(staffAccessMatrix)(
@@ -183,7 +189,7 @@ describe('12名员工独立登录验收', () => {
   )
 })
 
-describe('12名员工岗位权限矩阵验收', () => {
+describe('13名员工岗位权限矩阵验收', () => {
   it.each(staffAccessMatrix)(
     '$displayName [$employeeId/$roleId] 的岗位、数据范围和核心职责正确',
     ({ employeeId, displayName, roleId, dataScope, allowed, forbidden }) => {

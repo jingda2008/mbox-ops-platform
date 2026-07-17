@@ -101,8 +101,8 @@ function deterministicId(prefix: string, key: string) {
 
 function defaultPolicy(state: RuntimeState): InventoryOperationPolicy {
   const roleIds = state.config.roles.map((role) => role.id)
-  const managers = roleIds.filter((roleId) => roleId === 'owner' || roleId === 'manager')
-  const supervisors = roleIds.filter((roleId) => roleId === 'owner' || roleId === 'supervisor' || roleId === 'manager')
+  const managers = roleIds.filter((roleId) => roleId === 'owner' || roleId === 'operations_director' || roleId === 'manager')
+  const supervisors = roleIds.filter((roleId) => roleId === 'owner' || roleId === 'operations_director' || roleId === 'supervisor' || roleId === 'manager')
   return {
     policyAdminRoleIds: managers,
     receiptRoleIds: managers,

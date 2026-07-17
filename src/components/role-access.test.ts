@@ -4,6 +4,7 @@ import { buildRoleHomeModel, getRoleHomeAccess, resolveRoleHomeKind } from './ro
 
 const expectedKinds = [
   ['owner', 'owner', ['live', 'tasks', 'reservations', 'commerce', 'inventory', 'payments', 'benefits', 'songs', 'layout', 'master', 'config']],
+  ['operations_director', 'operations_director', ['live', 'tasks', 'reservations', 'commerce', 'inventory', 'payments', 'benefits', 'songs', 'layout', 'master', 'config']],
   ['admin', 'admin', ['live', 'tasks', 'reservations', 'commerce', 'inventory', 'payments', 'benefits', 'songs', 'layout', 'master', 'config']],
   ['manager', 'manager', ['live', 'tasks', 'reservations', 'commerce', 'inventory', 'payments', 'benefits', 'songs', 'layout']],
   ['server', 'server', ['live', 'tasks', 'commerce', 'benefits', 'songs']],

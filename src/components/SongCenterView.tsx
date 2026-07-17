@@ -4,6 +4,7 @@ import { actOnSongRequest, createSinger, createSingerRepertoire, reportSongOnsit
 import type { BootstrapResponse } from '../shared/contracts'
 import type { PerformanceSession, PerformanceSessionStatus, RepertoireWriteInput, Singer, SingerProfileWriteInput, SingerRepertoireEntry, SongCatalogItem, SongRequest, SongRequestStatus } from '../shared/song-contracts'
 import { chinaDateTimeLocalValue, chinaLocalDateTimeToIso, formatChinaTime } from '../shared/china-time'
+import { moveLocalDatetimeToBusinessDate } from './performance-schedule'
 import './SongCenterView.css'
 
 interface SongCenterViewProps {
@@ -370,15 +371,3 @@ function money(amount: number) { return new Intl.NumberFormat('zh-CN', { style: 
 function timeRange(startsAt: string, endsAt: string) { return `${formatChinaTime(startsAt)}-${formatChinaTime(endsAt)}` }
 function localDatetime(value: string) { return chinaDateTimeLocalValue(value) }
 function shiftLocalDatetime(value: string, minutes: number) { return localDatetime(new Date(Date.parse(chinaLocalDateTimeToIso(value)) + minutes * 60_000).toISOString()) }
-// oxlint-disable-next-line react/only-export-components
-export function moveLocalDatetimeToBusinessDate(value: string, previousBusinessDate: string, nextBusinessDate: string) {
-  if (!value || !previousBusinessDate || !nextBusinessDate) return value
-  const currentDate = value.slice(0, 10)
-  const dayOffset = dateOrdinal(currentDate) - dateOrdinal(previousBusinessDate)
-  return `${dateFromOrdinal(dateOrdinal(nextBusinessDate) + dayOffset)}${value.slice(10)}`
-}
-function dateOrdinal(value: string) {
-  const [year, month, day] = value.split('-').map(Number)
-  return Math.floor(Date.UTC(year!, month! - 1, day!) / 86_400_000)
-}
-function dateFromOrdinal(value: number) { return new Date(value * 86_400_000).toISOString().slice(0, 10) }

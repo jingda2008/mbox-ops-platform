@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { moveLocalDatetimeToBusinessDate, scheduleDateFieldLabels } from './SongCenterView'
+import { scheduleDateFieldLabels } from './SongCenterView'
+import { moveLocalDatetimeToBusinessDate } from './performance-schedule'
 
 const scheduleStyles = readFileSync(new URL('./SongCenterView.css', import.meta.url), 'utf8')
 

@@ -20,6 +20,17 @@ import {
 } from './song-domain.js'
 
 const idempotencyKey = z.string().trim().min(8).max(128)
+
+export class SongConfigVersionConflictError extends Error {
+  readonly code = 'SONG_PERFORMANCE_VERSION_CONFLICT'
+  readonly statusCode = 409
+
+  constructor(readonly currentVersion: number) {
+    super(`演出排班已更新为V${currentVersion}，请刷新后再保存`)
+    this.name = 'SongConfigVersionConflictError'
+  }
+}
+
 function deterministicId(prefix: string, key: string) {
   return `${prefix}_${createHash('sha256').update(key).digest('hex').slice(0, 32)}`
 }
@@ -78,6 +89,9 @@ const appearanceSchema = z.object({
   requestOpensAt: z.iso.datetime({ offset: true }),
   requestClosesAt: z.iso.datetime({ offset: true }),
   acceptingRequests: z.boolean(),
+  advanceBookingEnabled: z.boolean().default(true),
+  extensionNegotiationEnabled: z.boolean().default(true),
+  extensionThresholdMinutes: z.number().int().min(1).max(60).default(10),
 })
 
 const performanceSchema = z.object({
@@ -87,6 +101,7 @@ const performanceSchema = z.object({
   startsAt: z.iso.datetime({ offset: true }),
   endsAt: z.iso.datetime({ offset: true }),
   appearances: z.array(appearanceSchema).min(1).max(30),
+  expectedVersion: z.number().int().positive().optional(),
 })
 
 function mutateSong(state: RuntimeState, operation: () => SongRequest) {
@@ -185,13 +200,28 @@ export function registerSongRoutes(app: FastifyInstance, repository: RuntimeRepo
     const input = performanceSchema.parse(request.body)
     return repository.mutate((state) => {
       requireConfiguredOperation(request, state, 'song.manage')
-      const session: PerformanceSession = { id: request.params.sessionId, ...input }
-      const index = state.songState.performanceSessions.findIndex((item) => item.id === session.id)
+      const index = state.songState.performanceSessions.findIndex((item) => item.id === request.params.sessionId)
+      const previous = index === -1 ? null : state.songState.performanceSessions[index]!
+      const previousVersion = previous?.configVersion ?? (previous ? 1 : 0)
+      if (input.expectedVersion !== undefined && input.expectedVersion !== previousVersion) {
+        throw new SongConfigVersionConflictError(previousVersion)
+      }
+      const { expectedVersion: _expectedVersion, ...snapshot } = input
+      const session: PerformanceSession = { id: request.params.sessionId, ...snapshot, configVersion: previousVersion + 1 }
       if (index === -1) state.songState.performanceSessions.push(session)
       else state.songState.performanceSessions[index] = session
       if (session.businessDate === state.store.businessDate) state.songState.businessDate = state.store.businessDate
       validateSongConfiguration(state.songState)
       state.revision += 1
+      state.auditEntries.push({
+        id: `audit_${randomUUID()}`,
+        actorId: request.mboxActor!.actorId,
+        action: 'song.performance_config_saved.v1',
+        objectType: 'performanceSession',
+        objectId: session.id,
+        occurredAt: new Date().toISOString(),
+        details: { previousVersion, version: session.configVersion, businessDate: session.businessDate },
+      })
       return session
     })
   })

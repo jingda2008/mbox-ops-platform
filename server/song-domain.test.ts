@@ -253,11 +253,26 @@ describe('song request business validation', () => {
     expect(state.auditEvents).toHaveLength(0)
   })
 
-  it('rejects requests outside the singer request window', () => {
+  it('turns a song that no longer fits the current slot into an extension negotiation', () => {
     const state = makeState()
-    expect(() => submit(state, { occurredAt: '2026-07-14T20:46:00+08:00' })).toThrow(
-      '当前不在该歌手可点歌时段',
-    )
+    const { request } = submit(state, { occurredAt: '2026-07-14T20:46:00+08:00' })
+    expect(request).toMatchObject({ requestMode: 'extension_negotiation', scheduleVersion: 1 })
+  })
+
+  it('rejects an overrun when the singer disabled extension negotiation', () => {
+    const state = makeState()
+    state.performanceSessions[0]!.appearances[0]!.extensionNegotiationEnabled = false
+    expect(() => submit(state, { occurredAt: '2026-07-14T20:46:00+08:00' })).toThrow('当前不在该歌手可预约或协商的点歌时段')
+  })
+
+  it('accepts an advance reservation and keeps the schedule and repertoire versions', () => {
+    const state = makeState()
+    const performance = state.performanceSessions[0]!
+    performance.startsAt = '2026-07-14T12:00:00+08:00'
+    performance.configVersion = 4
+    performance.appearances[0]!.requestOpensAt = '2026-07-14T12:00:00+08:00'
+    const { request } = submit(state, { occurredAt: '2026-07-14T20:00:00+08:00' })
+    expect(request).toMatchObject({ requestMode: 'advance_reservation', scheduleVersion: 4, priceSnapshot: { configVersion: 3 } })
   })
 
   it('requires an open table session', () => {

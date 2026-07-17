@@ -9,7 +9,7 @@ describe('performance schedule editor presentation', () => {
     expect(scheduleDateFieldLabels).toEqual({
       startsAt: '演出开始',
       endsAt: '演出结束',
-      requestOpensAt: '点歌开放',
+      requestOpensAt: '预约开放',
       requestClosesAt: '点歌截止',
     })
   })

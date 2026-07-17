@@ -41,7 +41,7 @@ import { AuthenticationError, registerAuthContext, requireRequestActor } from '.
 import type { RuntimeMode } from '../src/shared/auth-contracts.js'
 import { publishConfigVersion, rollbackConfigVersion } from './config-versioning.js'
 import { publishConfigVersionSchema, rollbackConfigVersionSchema } from '../src/shared/config-versioning-contracts.js'
-import { registerSongRoutes } from './song-api.js'
+import { registerSongRoutes, SongConfigVersionConflictError } from './song-api.js'
 import {
   createEmployee,
   createAuthority,
@@ -267,6 +267,9 @@ app.setErrorHandler((error, _request, reply) => {
   }
   if (error instanceof CommerceRequestError) {
     return reply.status(error.statusCode).send({ code: error.code, message: error.message })
+  }
+  if (error instanceof SongConfigVersionConflictError) {
+    return reply.status(error.statusCode).send({ code: error.code, message: error.message, currentVersion: error.currentVersion })
   }
   if (error instanceof TableAccessError) {
     return reply.status(error.statusCode).send({ code: error.code, message: error.message })

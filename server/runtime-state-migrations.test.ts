@@ -284,7 +284,7 @@ describe('runtime state operational migrations', () => {
     expect(migrated.reservationState?.config).toMatchObject({
       lateHoldMinutes: 30,
       waitlistResponseMinutes: 10,
-      businessHours: { timeZone: 'Asia/Shanghai', openingTime: '20:30', closingTime: '02:00', slotMinutes: 30 },
+      businessHours: { timeZone: 'Asia/Shanghai', openingTime: '12:00', closingTime: '02:00', slotMinutes: 30 },
       capacity: { defaultDailyCapacity: 120, defaultSlotCapacity: 20 },
       publicRules: { minimumLeadMinutes: 15, maximumAdvanceDays: 180, duplicateWindowMinutes: 60 },
     })

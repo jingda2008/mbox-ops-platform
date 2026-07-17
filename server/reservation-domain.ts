@@ -41,7 +41,7 @@ export const DEFAULT_RESERVATION_CONFIG: ReservationConfig = {
   waitlistResponseMinutes: 10,
   businessHours: {
     timeZone: 'Asia/Shanghai',
-    openingTime: '20:30',
+    openingTime: '12:00',
     closingTime: '02:00',
     slotMinutes: 30,
     closedWeekdays: [],

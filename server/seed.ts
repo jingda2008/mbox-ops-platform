@@ -293,7 +293,7 @@ export function createSeedState(): RuntimeState {
         lateHoldMinutes: 30,
         waitlistResponseMinutes: 10,
         businessHours: {
-          timeZone: 'Asia/Shanghai', openingTime: '20:30', closingTime: '02:00', slotMinutes: 30, closedWeekdays: [],
+          timeZone: 'Asia/Shanghai', openingTime: '12:00', closingTime: '02:00', slotMinutes: 30, closedWeekdays: [],
         },
         capacity: { defaultDailyCapacity: 120, defaultSlotCapacity: 20, dateOverrides: [] },
         publicRules: {

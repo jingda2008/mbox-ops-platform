@@ -141,8 +141,8 @@ describe('guest mood service note', () => {
 describe('guest stage schedule', () => {
   const profile = { photoUrl: '', headline: '', bio: '', styleTags: [] }
   const schedule = [
-    { performanceSessionId: 'p1', performanceTitle: '第一轮', appearanceId: 'a1', singerId: 's1', singerName: '天天', startsAt: '2026-07-16T20:30:00+08:00', endsAt: '2026-07-16T21:15:00+08:00', acceptingRequests: true, profile },
-    { performanceSessionId: 'p1', performanceTitle: '第一轮', appearanceId: 'a2', singerId: 's2', singerName: '郑南', startsAt: '2026-07-16T21:35:00+08:00', endsAt: '2026-07-16T22:20:00+08:00', acceptingRequests: true, profile },
+    { performanceSessionId: 'p1', performanceTitle: '第一轮', appearanceId: 'a1', singerId: 's1', singerName: '天天', startsAt: '2026-07-16T20:30:00+08:00', endsAt: '2026-07-16T21:15:00+08:00', acceptingRequests: true, scheduleVersion: 1, advanceBookingEnabled: true, extensionNegotiationEnabled: true, extensionThresholdMinutes: 10, profile },
+    { performanceSessionId: 'p1', performanceTitle: '第一轮', appearanceId: 'a2', singerId: 's2', singerName: '郑南', startsAt: '2026-07-16T21:35:00+08:00', endsAt: '2026-07-16T22:20:00+08:00', acceptingRequests: true, scheduleVersion: 1, advanceBookingEnabled: true, extensionNegotiationEnabled: true, extensionThresholdMinutes: 10, profile },
   ]
 
   it('shows the current and next singer while a set is live', () => {

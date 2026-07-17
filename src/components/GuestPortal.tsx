@@ -146,10 +146,10 @@ export function GuestPortal() {
   const stage = useMemo(() => resolveGuestStage(data?.stageSchedule ?? [], serverClock), [data?.stageSchedule, serverClock])
   const featuredAppearance = stage.current ?? stage.next
   const profileAppearance = data?.stageSchedule.find((appearance) => appearance.appearanceId === singerProfileAppearanceId) ?? null
-  const profileSongOffers = data?.songOffers.filter((offer) => offer.appearanceId === singerProfileAppearanceId).slice(0, 6) ?? []
+  const profileSongOffers = data?.songOffers.filter((offer) => offer.appearanceId === singerProfileAppearanceId).slice(0, 8) ?? []
   const songChoices = useMemo(() => {
     const seen = new Set<string>()
-    return (data?.songOffers ?? []).filter((offer) => {
+    return (data?.songOffers ?? []).filter((offer) => offer.requestAvailable).filter((offer) => {
       const key = `${offer.singerId}:${offer.songId}`
       if (seen.has(key)) return false
       seen.add(key)
@@ -236,7 +236,7 @@ export function GuestPortal() {
   }
 
   async function chooseSong(offer: GuestSessionResponse['songOffers'][number]) {
-    if (!data || songBusyId) return
+    if (!data || songBusyId || !offer.requestAvailable) return
     accelerateRefresh()
     setSongBusyId(offer.id)
     setError(null)
@@ -249,7 +249,10 @@ export function GuestPortal() {
         customerNote: '',
         idempotencyKey: `guest-song-${crypto.randomUUID()}`,
       })
-      setReply(guestSongReplyNotice(`《${offer.songTitle}》已经替您递给${offer.singerName}啦～点歌费 ¥${(offer.priceAmount / 100).toFixed(2)}，服务伙伴会先来和您确认，点头后再收款。`, request))
+      const action = offer.requestMode === 'advance_reservation' ? '预约已经递给'
+        : offer.requestMode === 'extension_negotiation' ? '延长演出的小请求已经递给'
+          : '已经替您递给'
+      setReply(guestSongReplyNotice(`《${offer.songTitle}》${action}${offer.singerName}啦～服务伙伴会先确认歌手和时间，可以安排再到桌收款。`, request))
       setSongPickerOpen(false)
       await refresh()
     } catch (requestError) {
@@ -407,7 +410,9 @@ export function GuestPortal() {
           <small><i aria-hidden="true" />{stage.mode === 'live' && stage.current
             ? `LIVE NOW · ${formatGuestTimeRange(stage.current.startsAt, stage.current.endsAt, data?.store.timezone)}`
             : stage.mode === 'upcoming' && stage.next
-              ? `NEXT · ${formatGuestTime(stage.next.startsAt, data?.store.timezone)}`
+              ? stage.countdownMs > 60 * 60_000
+                ? `AFTERNOON · 咖啡与轻饮营业中`
+                : `NEXT · ${formatGuestTime(stage.next.startsAt, data?.store.timezone)}`
               : stage.mode === 'finished' ? 'TONIGHT · 演出已结束' : 'LIVE SERVICE · 服务在线'}</small>
           <h1>{data?.table.displayName ?? tableCode}</h1>
           <p><MapPin size={13} />服务专员 · {data?.primaryServiceName ?? '正在安排'}</p>
@@ -420,7 +425,9 @@ export function GuestPortal() {
             </span>
             <span className="guest-stage-current">{stage.mode === 'live'
               ? <><b>演出中</b><small>剩余 {formatGuestCompactCountdown(stage.countdownMs)}</small></>
-              : stage.mode === 'upcoming' ? <><b>即将登场</b><small>{formatGuestCompactCountdown(stage.countdownMs)} 后</small></> : stage.mode === 'finished' ? <b>今晚演出结束</b> : <b>服务在线</b>}</span>
+              : stage.mode === 'upcoming' ? stage.countdownMs > 60 * 60_000
+                ? <><b>今晚首场</b><small>{formatGuestTime(stage.next!.startsAt, data?.store.timezone)} 开始</small></>
+                : <><b>即将登场</b><small>{formatGuestCompactCountdown(stage.countdownMs)} 后</small></> : stage.mode === 'finished' ? <b>今晚演出结束</b> : <b>咖啡与轻饮营业中</b>}</span>
             {featuredAppearance && <ChevronRight className="guest-stage-chevron" size={15} aria-hidden="true" />}
           </button>
           {stage.mode === 'live' && stage.next && <button className="guest-stage-next" onClick={() => setSingerProfileAppearanceId(stage.next!.appearanceId)}><span>下一位 <b>{stage.next.singerName}</b></span><small>{formatGuestTime(stage.next.startsAt, data?.store.timezone)} 登场 · {formatGuestCompactCountdown(Math.max(0, Date.parse(stage.next.startsAt) - serverClock))}后</small><ChevronRight size={12} aria-hidden="true" /></button>}
@@ -448,8 +455,8 @@ export function GuestPortal() {
             <p>{profileAppearance.profile.bio || '这位歌手的故事还在整理中，今晚的演出时间和可点歌曲已经先为您备好。'}</p>
             <div className="guest-singer-schedule"><Clock3 size={17} /><div><span>今晚演出</span><strong>{formatGuestTimeRange(profileAppearance.startsAt, profileAppearance.endsAt, data?.store.timezone)}</strong></div></div>
             <div className="guest-singer-songs">
-              <header><span>可点歌曲</span><b>{profileSongOffers.length} 首展示</b></header>
-              {profileSongOffers.length > 0 ? profileSongOffers.map((offer) => <button key={offer.id} onClick={() => { setSingerProfileAppearanceId(''); setSongSingerId(profileAppearance.singerId); setCustomSongSingerId(profileAppearance.singerId); setSongPickerMode('repertoire'); setSongPickerOpen(true) }}><span>{offer.songTitle}<small>{offer.songArtist}</small></span><b>¥{(offer.priceAmount / 100).toFixed(0)}</b><ChevronRight size={15} /></button>) : <p>今晚的歌单还在确认，想听什么可以让我们替您问问。</p>}
+              <header><span>今晚歌单</span><b>排班V{profileAppearance.scheduleVersion} · {profileSongOffers.length}首</b></header>
+              {profileSongOffers.length > 0 ? profileSongOffers.map((offer) => <button key={offer.id} disabled={!offer.requestAvailable || Boolean(songBusyId)} onClick={() => { setSingerProfileAppearanceId(''); void chooseSong(offer) }}><span>{offer.songTitle}<small>{offer.songArtist} · {songRequestModeLabel(offer.requestMode, offer.requestUnavailableReason ?? undefined)}</small></span><b>{offer.requestAvailable ? songRequestActionLabel(offer.requestMode) : '暂未开放'}</b><ChevronRight size={15} /></button>) : <p>今晚的歌单还在确认，想听什么可以让我们替您问问。</p>}
             </div>
           </div>
         </section>
@@ -501,9 +508,9 @@ export function GuestPortal() {
             {repertoireSingers.length > 1 && <div className="guest-song-singer-filter"><button className={!songSingerId ? 'is-active' : ''} onClick={() => setSongSingerId('')}>全部</button>{repertoireSingers.map((singer) => <button key={singer.singerId} className={songSingerId === singer.singerId ? 'is-active' : ''} onClick={() => { setSongSingerId(singer.singerId); setCustomSongSingerId(singer.singerId) }}>{singer.singerName}</button>)}</div>}
             <div className="guest-song-list">{visibleSongChoices.map((offer) => <article key={offer.id}>
               <div><strong>{offer.songTitle}</strong><span>{offer.songArtist} · {offer.singerName}</span></div>
-              <button disabled={Boolean(songBusyId)} onClick={() => void chooseSong(offer)}>{songBusyId === offer.id ? '正在递歌' : `¥${(offer.priceAmount / 100).toFixed(2)} 点歌`}</button>
+              <button disabled={Boolean(songBusyId)} onClick={() => void chooseSong(offer)}>{songBusyId === offer.id ? '正在递歌' : `¥${(offer.priceAmount / 100).toFixed(2)} ${songRequestActionLabel(offer.requestMode)}`}</button>
             </article>)}</div>
-            <p>选好后，服务伙伴会先来确认歌曲和费用，您点头后再付款。</p>
+            <p>预约和延长演出都要先问歌手；确认时间与费用后，服务伙伴才会到桌收款。</p>
           </> : <div className="guest-custom-song">
             <header><Music2 size={17} /><div><strong>歌单里没找到？</strong><span>把私藏曲目告诉我们，先替您问歌手</span></div></header>
             <div className="guest-custom-song-fields">
@@ -597,7 +604,7 @@ export function GuestPortal() {
         {visibleSongRequests.length > 0 && <div className="guest-song-progress">
           <header><div><Music2 size={18} aria-hidden="true" /><strong>点歌进度</strong></div><span>现场确认与收费</span></header>
           <div className="guest-song-request-list">{visibleSongRequests.map((request) => <article className="guest-song-request" key={request.id}>
-            <div><strong>《{request.songTitle}》</strong><span>{request.singerName} · ¥{(request.priceAmount / 100).toFixed(2)}</span></div>
+            <div><strong>《{request.songTitle}》</strong><span>{request.singerName} · {songRequestModeLabel(request.requestMode)} · ¥{(request.priceAmount / 100).toFixed(2)}</span></div>
             <b data-status={request.status}>{guestSongStatusLabel(request.status)}</b>
           </article>)}</div>
         </div>}
@@ -661,4 +668,17 @@ function formatGuestTime(timestamp: string, timeZone = 'Asia/Shanghai') {
 
 function formatGuestTimeRange(startsAt: string, endsAt: string, timeZone = 'Asia/Shanghai') {
   return `${formatGuestTime(startsAt, timeZone)}-${formatGuestTime(endsAt, timeZone)}`
+}
+
+function songRequestActionLabel(mode: GuestSessionResponse['songOffers'][number]['requestMode']) {
+  if (mode === 'advance_reservation') return '预约'
+  if (mode === 'extension_negotiation') return '协商延长'
+  return '点歌'
+}
+
+function songRequestModeLabel(mode: GuestSessionResponse['songOffers'][number]['requestMode'], unavailableReason = '') {
+  if (mode === 'advance_reservation') return '歌手到场后确认'
+  if (mode === 'extension_negotiation') return '需协商延长演出'
+  if (mode === 'standard') return '本轮点歌'
+  return unavailableReason || '暂未开放'
 }

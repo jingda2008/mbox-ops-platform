@@ -5,6 +5,7 @@ import type { PaymentIntent } from './payment-contracts.js'
 import type { Order } from './order-contracts.js'
 import type { ItemFulfillmentStatus, OrderStatus } from './order-contracts.js'
 import type { SongRequestStatus } from './song-contracts.js'
+import type { SongRequestMode } from './song-contracts.js'
 
 interface TableTokenClaimsBase {
   version: 2
@@ -88,6 +89,13 @@ export interface GuestSessionResponse {
     priceAmount: number
     currency: string
     startsAt: string
+    endsAt: string
+    durationSeconds: number
+    requestMode: SongRequestMode | null
+    requestAvailable: boolean
+    requestUnavailableReason: string | null
+    scheduleVersion: number
+    repertoireVersion: number
   }>
   stageSchedule: Array<{
     performanceSessionId: string
@@ -98,6 +106,10 @@ export interface GuestSessionResponse {
     startsAt: string
     endsAt: string
     acceptingRequests: boolean
+    scheduleVersion: number
+    advanceBookingEnabled: boolean
+    extensionNegotiationEnabled: boolean
+    extensionThresholdMinutes: number
     profile: {
       photoUrl: string
       headline: string
@@ -113,6 +125,7 @@ export interface GuestSessionResponse {
     priceAmount: number
     currency: string
     createdAt: string
+    requestMode: SongRequestMode
   }>
   guestSession: {
     tableSessionId: string

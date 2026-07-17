@@ -146,7 +146,7 @@ describe('guest table API', () => {
     await closeFixture(app, repository)
   })
 
-  it('keeps the stage schedule visible but only offers songs inside the request window', async () => {
+  it('keeps the singer repertoire visible while accurately marking the reservation window', async () => {
     const { app, repository, setNow } = await fixture()
     const state = await repository.read()
     const performance = state.songState.performanceSessions.find((item) => item.businessDate === state.store.businessDate)!
@@ -156,12 +156,65 @@ describe('guest table API', () => {
 
     const beforeOpen = (await app.inject({ method: 'GET', url: '/api/guest/session?table=L01' })).json() as GuestSessionResponse
     expect(beforeOpen.stageSchedule.map((item) => item.appearanceId)).toContain(appearance.id)
-    expect(beforeOpen.songOffers.map((item) => item.appearanceId)).not.toContain(appearance.id)
+    expect(beforeOpen.songOffers.find((item) => item.appearanceId === appearance.id)).toMatchObject({ requestAvailable: false, requestMode: null })
     expect(beforeOpen.serverNow).toBe(new Date(beforeOpenTime).toISOString())
 
     setNow(Date.parse(appearance.requestOpensAt))
     const opened = (await app.inject({ method: 'GET', url: '/api/guest/session?table=L01' })).json() as GuestSessionResponse
-    expect(opened.songOffers.map((item) => item.appearanceId)).toContain(appearance.id)
+    expect(opened.songOffers.find((item) => item.appearanceId === appearance.id)).toMatchObject({ requestAvailable: true })
+    await closeFixture(app, repository)
+  })
+
+  it('submits an advance reservation for the next singer before arrival', async () => {
+    const { app, repository, now } = await fixture()
+    await repository.mutate((state) => {
+      const performance = state.songState.performanceSessions.find((item) => item.businessDate === state.store.businessDate)!
+      const appearance = performance.appearances[0]!
+      performance.startsAt = new Date(now() - 60_000).toISOString()
+      performance.endsAt = new Date(now() + 2 * 60 * 60_000).toISOString()
+      performance.configVersion = 7
+      appearance.startsAt = new Date(now() + 30 * 60_000).toISOString()
+      appearance.endsAt = new Date(now() + 75 * 60_000).toISOString()
+      appearance.requestOpensAt = new Date(now() - 60_000).toISOString()
+      appearance.requestClosesAt = new Date(now() + 70 * 60_000).toISOString()
+      appearance.advanceBookingEnabled = true
+      state.revision += 1
+    })
+    const session = (await exchange(app, staticQr(now()))).body
+    const offer = session.songOffers.find((item) => item.requestMode === 'advance_reservation')!
+    expect(offer).toMatchObject({ requestAvailable: true, scheduleVersion: 7 })
+    const submitted = await app.inject({ method: 'POST', url: '/api/guest/song-requests', payload: {
+      tableToken: session.tableToken, appearanceId: offer.appearanceId, singerId: offer.singerId, songId: offer.songId,
+      customerNote: '', idempotencyKey: 'advance-guest-song-0001',
+    } })
+    expect(submitted.statusCode, submitted.body).toBe(201)
+    expect(submitted.json()).toMatchObject({ requestMode: 'advance_reservation', scheduleVersion: 7, status: 'pending_confirmation' })
+    await closeFixture(app, repository)
+  })
+
+  it('submits an extension negotiation when the current slot cannot fit the song', async () => {
+    const { app, repository, now } = await fixture()
+    await repository.mutate((state) => {
+      const performance = state.songState.performanceSessions.find((item) => item.businessDate === state.store.businessDate)!
+      const appearance = performance.appearances[0]!
+      performance.startsAt = new Date(now() - 60 * 60_000).toISOString()
+      performance.endsAt = new Date(now() + 60 * 60_000).toISOString()
+      appearance.startsAt = new Date(now() - 30 * 60_000).toISOString()
+      appearance.endsAt = new Date(now() + 2 * 60_000).toISOString()
+      appearance.requestOpensAt = new Date(now() - 60 * 60_000).toISOString()
+      appearance.requestClosesAt = new Date(now() - 60_000).toISOString()
+      appearance.extensionNegotiationEnabled = true
+      state.revision += 1
+    })
+    const session = (await exchange(app, staticQr(now()))).body
+    const offer = session.songOffers.find((item) => item.requestMode === 'extension_negotiation')!
+    expect(offer).toMatchObject({ requestAvailable: true })
+    const submitted = await app.inject({ method: 'POST', url: '/api/guest/song-requests', payload: {
+      tableToken: session.tableToken, appearanceId: offer.appearanceId, singerId: offer.singerId, songId: offer.songId,
+      customerNote: '', idempotencyKey: 'extension-guest-song-0001',
+    } })
+    expect(submitted.statusCode, submitted.body).toBe(201)
+    expect(submitted.json()).toMatchObject({ requestMode: 'extension_negotiation', status: 'pending_confirmation' })
     await closeFixture(app, repository)
   })
 

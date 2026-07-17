@@ -17,6 +17,7 @@ export type SongRequestStatus =
 
 export type SongActorRole = 'guest' | 'singer' | 'staff' | 'manager' | 'system'
 export type SongCollectionChannel = 'cash' | 'physical_pos'
+export type SongRequestMode = 'standard' | 'advance_reservation' | 'extension_negotiation'
 
 export interface Singer {
   id: string
@@ -51,7 +52,7 @@ export interface RepertoireWriteInput {
   enabled: boolean
 }
 
-export type PerformanceSessionWriteInput = Omit<PerformanceSession, 'id'>
+export type PerformanceSessionWriteInput = Omit<PerformanceSession, 'id' | 'configVersion'> & { expectedVersion?: number }
 
 export interface SongCatalogItem {
   id: string
@@ -80,6 +81,9 @@ export interface SingerAppearance {
   requestOpensAt: string
   requestClosesAt: string
   acceptingRequests: boolean
+  advanceBookingEnabled?: boolean
+  extensionNegotiationEnabled?: boolean
+  extensionThresholdMinutes?: number
 }
 
 export interface PerformanceSession {
@@ -90,6 +94,7 @@ export interface PerformanceSession {
   startsAt: string
   endsAt: string
   appearances: SingerAppearance[]
+  configVersion?: number
 }
 
 /** An open table visit. The ID must change whenever the table is reopened. */
@@ -131,6 +136,8 @@ export interface SongRequest {
   tableCode: string
   requestedBy: string
   customerNote: string
+  requestMode: SongRequestMode
+  scheduleVersion: number
   status: SongRequestStatus
   priceSnapshot: SongPriceSnapshot
   payment: PaidSongSnapshot | null

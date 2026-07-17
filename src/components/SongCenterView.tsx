@@ -170,13 +170,16 @@ interface ScheduleRowDraft {
   requestOpensAt: string
   requestClosesAt: string
   acceptingRequests: boolean
+  advanceBookingEnabled: boolean
+  extensionNegotiationEnabled: boolean
+  extensionThresholdMinutes: number
 }
 
 // oxlint-disable-next-line react/only-export-components
 export const scheduleDateFieldLabels = {
   startsAt: '演出开始',
   endsAt: '演出结束',
-  requestOpensAt: '点歌开放',
+  requestOpensAt: '预约开放',
   requestClosesAt: '点歌截止',
 } as const
 
@@ -185,14 +188,25 @@ function PerformanceScheduleEditor({ data, session, busy, run }: { data: Bootstr
   const [title, setTitle] = useState(session?.title ?? 'M-BOX 今晚现场')
   const [status, setStatus] = useState<PerformanceSessionStatus>(session?.status ?? 'scheduled')
   const [sessionId] = useState(session?.id ?? `performance_${crypto.randomUUID()}`)
-  const [rows, setRows] = useState<ScheduleRowDraft[]>(session?.appearances.map((item) => ({ ...item, startsAt: localDatetime(item.startsAt), endsAt: localDatetime(item.endsAt), requestOpensAt: localDatetime(item.requestOpensAt), requestClosesAt: localDatetime(item.requestClosesAt) })) ?? [])
+  const [rows, setRows] = useState<ScheduleRowDraft[]>(session?.appearances.map((item) => ({
+    ...item,
+    startsAt: localDatetime(item.startsAt), endsAt: localDatetime(item.endsAt),
+    requestOpensAt: localDatetime(item.requestOpensAt), requestClosesAt: localDatetime(item.requestClosesAt),
+    advanceBookingEnabled: item.advanceBookingEnabled ?? true,
+    extensionNegotiationEnabled: item.extensionNegotiationEnabled ?? true,
+    extensionThresholdMinutes: item.extensionThresholdMinutes ?? 10,
+  })) ?? [])
 
   function addAppearance() {
     const singerId = data.songState.singers.find((item) => item.active)?.id ?? data.songState.singers[0]?.id ?? ''
     const previousEnd = rows.at(-1)?.endsAt
     const startsAt = previousEnd ? shiftLocalDatetime(previousEnd, 20) : `${businessDate}T20:30`
     const endsAt = shiftLocalDatetime(startsAt, 45)
-    setRows([...rows, { id: `appearance_${crypto.randomUUID()}`, singerId, startsAt, endsAt, requestOpensAt: shiftLocalDatetime(startsAt, -15), requestClosesAt: shiftLocalDatetime(endsAt, -5), acceptingRequests: true }])
+    setRows([...rows, {
+      id: `appearance_${crypto.randomUUID()}`, singerId, startsAt, endsAt,
+      requestOpensAt: `${businessDate}T12:00`, requestClosesAt: shiftLocalDatetime(endsAt, -5),
+      acceptingRequests: true, advanceBookingEnabled: true, extensionNegotiationEnabled: true, extensionThresholdMinutes: 10,
+    }])
   }
 
   function save(event: React.FormEvent) {
@@ -201,13 +215,13 @@ function PerformanceScheduleEditor({ data, session, busy, run }: { data: Bootstr
     const appearances = rows.map((row) => ({ ...row, startsAt: new Date(row.startsAt).toISOString(), endsAt: new Date(row.endsAt).toISOString(), requestOpensAt: new Date(row.requestOpensAt).toISOString(), requestClosesAt: new Date(row.requestClosesAt).toISOString() }))
     const startsAt = appearances.flatMap((item) => [item.startsAt, item.requestOpensAt]).toSorted()[0]!
     const endsAt = appearances.flatMap((item) => [item.endsAt, item.requestClosesAt]).toSorted().at(-1)!
-    void run(() => updatePerformanceSession(sessionId, { businessDate, title: title.trim(), status, startsAt, endsAt, appearances }), '演出排班已保存，顾客端将在下一次刷新时更新')
+    void run(() => updatePerformanceSession(sessionId, { businessDate, title: title.trim(), status, startsAt, endsAt, appearances, expectedVersion: session?.configVersion ?? (session ? 1 : undefined) }), '演出排班新版本已保存，顾客端将在下一次刷新时更新')
   }
 
   return <form className="schedule-editor" onSubmit={save}>
     <div className="schedule-toolbar">
       <label><span>营业日</span><input type="date" value={businessDate} onChange={(event) => setBusinessDate(event.target.value)} /></label>
-      <label className="schedule-title"><span>场次名称</span><input value={title} maxLength={120} onChange={(event) => setTitle(event.target.value)} /></label>
+      <label className="schedule-title"><span>场次名称 · 排班V{session?.configVersion ?? (session ? 1 : 0)}</span><input value={title} maxLength={120} onChange={(event) => setTitle(event.target.value)} /></label>
       <label><span>状态</span><select value={status} onChange={(event) => setStatus(event.target.value as PerformanceSessionStatus)}><option value="scheduled">待演出</option><option value="live">演出中</option><option value="completed">已结束</option><option value="cancelled">已取消</option></select></label>
       <button type="button" className="secondary-button" disabled={busy || data.songState.singers.length === 0} onClick={addAppearance}><Plus size={15} />增加一轮</button>
     </div>
@@ -217,14 +231,18 @@ function PerformanceScheduleEditor({ data, session, busy, run }: { data: Bootstr
           <strong>第{index + 1}轮</strong>
           <button type="button" className="icon-button danger" title={`删除第${index + 1}轮`} aria-label={`删除第${index + 1}轮`} onClick={() => setRows(rows.filter((item) => item.id !== row.id))}><XCircle size={16} /></button>
         </div>
-        <div className="schedule-fields">
+        <div className="schedule-row-body"><div className="schedule-fields">
           <label className="schedule-field schedule-singer-field"><span>歌手</span><select aria-label={`第${index + 1}轮歌手`} value={row.singerId} onChange={(event) => setRows(rows.map((item) => item.id === row.id ? { ...item, singerId: event.target.value } : item))}>{data.songState.singers.filter((item) => item.active || item.id === row.singerId).map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select></label>
           {(Object.keys(scheduleDateFieldLabels) as Array<keyof typeof scheduleDateFieldLabels>).map((field) => <label className="schedule-field" key={field}><span>{scheduleDateFieldLabels[field]}</span><input aria-label={`第${index + 1}轮${scheduleDateFieldLabels[field]}`} type="datetime-local" value={row[field]} onChange={(event) => setRows(rows.map((item) => item.id === row.id ? { ...item, [field]: event.target.value } : item))} /></label>)}
           <label className="schedule-field schedule-request-status"><span>点歌状态</span><span className="enabled-toggle"><input type="checkbox" checked={row.acceptingRequests} onChange={(event) => setRows(rows.map((item) => item.id === row.id ? { ...item, acceptingRequests: event.target.checked } : item))} /><span>{row.acceptingRequests ? '可点歌' : '暂停'}</span></span></label>
-        </div>
+        </div><div className="schedule-policy-fields">
+          <label className="enabled-toggle"><input type="checkbox" checked={row.advanceBookingEnabled} onChange={(event) => setRows(rows.map((item) => item.id === row.id ? { ...item, advanceBookingEnabled: event.target.checked } : item))} /><span>允许歌手到场前预约</span></label>
+          <label className="enabled-toggle"><input type="checkbox" checked={row.extensionNegotiationEnabled} onChange={(event) => setRows(rows.map((item) => item.id === row.id ? { ...item, extensionNegotiationEnabled: event.target.checked } : item))} /><span>允许剩余时间不足时协商延长</span></label>
+          <label><span>协商阈值</span><input type="number" min={1} max={60} value={row.extensionThresholdMinutes} onChange={(event) => setRows(rows.map((item) => item.id === row.id ? { ...item, extensionThresholdMinutes: Number(event.target.value) } : item))} /><b>分钟</b></label>
+        </div></div>
       </div>)}
     </div>
-    <div className="schedule-actions"><span>点歌开放与截止时间可早于或覆盖歌手演出时段，但必须处于整场演出的时间范围内。</span><button className="primary-button" disabled={busy || rows.length === 0 || !title.trim()}><Save size={15} />保存整晚排班</button></div>
+    <div className="schedule-actions"><span>门店12:00营业不代表开始演出；预约开放可设为12:00，歌手仍按20:30后的排班时间登台。</span><button className="primary-button" disabled={busy || rows.length === 0 || !title.trim()}><Save size={15} />发布排班新版本</button></div>
   </form>
 }
 
@@ -261,7 +279,8 @@ function SingerProfileEditor({ singer, busy, onSave }: { singer: Singer; busy: b
 }
 
 function SongRequestRow({ request, reference, setReference, collectionChannel, setCollectionChannel, busy, run }: { request: SongRequest; reference: string; setReference: (value: string) => void; collectionChannel: 'cash' | 'physical_pos'; setCollectionChannel: (value: 'cash' | 'physical_pos') => void; busy: boolean; run: (operation: () => Promise<unknown>, success: string) => Promise<void> }) {
-  return <div className="song-request-row"><span className={`song-status status-${request.status}`}>{statusLabel(request.status)}</span><div><strong>{request.tableCode} · {request.priceSnapshot.songTitle}</strong><small>{request.priceSnapshot.singerName} · {money(request.priceSnapshot.priceAmount)} · {request.requestedBy}</small></div><div className="song-request-actions">{request.status === 'pending_confirmation' && <><button className="primary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'confirm'), '已确认可以演唱，请到桌现场收费')}><CheckCircle2 size={14} />确认可唱</button><button className="secondary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'reject', '歌手或现场安排无法演唱'), '已反馈客人本次无法安排')}>无法安排</button></>}{request.status === 'pending_payment' && <><select aria-label="现场收费方式" value={collectionChannel} onChange={(event) => setCollectionChannel(event.target.value as 'cash' | 'physical_pos')}><option value="physical_pos">物理POS</option><option value="cash">现金</option></select><input value={reference} onChange={(event) => setReference(event.target.value)} placeholder="现场收款凭证号" /><button className="primary-button" disabled={busy || reference.trim().length < 4} onClick={() => void run(() => reportSongOnsiteCollection(request.id, reference.trim(), collectionChannel), '现场收款已登记，等待歌手接单')}><Banknote size={14} />登记现场收款</button><button className="icon-button danger" title="取消未收款点歌" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'cancel', '客人现场付款前取消'), '点歌已取消')}><XCircle size={15} /></button></>}{request.status === 'paid' && <><button className="primary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'accept'), '歌手队列已接单')}><CheckCircle2 size={14} />接单</button><button className="secondary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'reject', '现场无法履约，经理发起退款'), '已拒绝并进入退款队列')}>拒绝并退款</button></>}{request.status === 'accepted' && <><button className="primary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'start'), '已开始演唱')}><Play size={14} />开始演唱</button><button className="secondary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'reject', '现场无法履约，经理发起退款'), '已拒绝并进入退款队列')}>拒绝并退款</button></>}{request.status === 'performing' && <button className="primary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'complete'), '本次点歌已完成')}><CheckCircle2 size={14} />完成</button>}{request.status === 'refund_required' && <><input value={reference} onChange={(event) => setReference(event.target.value)} placeholder="退款流水号" /><button className="primary-button" disabled={busy || reference.trim().length < 4} onClick={() => void run(() => actOnSongRequest(request.id, 'refund', '', reference.trim()), '点歌退款已登记')}><RotateCcw size={14} />确认退款</button></>}</div></div>
+  const modeLabel = request.requestMode === 'advance_reservation' ? '提前预约' : request.requestMode === 'extension_negotiation' ? '延长协商' : '本轮点歌'
+  return <div className="song-request-row"><span className={`song-status status-${request.status}`}>{statusLabel(request.status)}</span><div><strong>{request.tableCode} · {request.priceSnapshot.songTitle}</strong><small>{request.priceSnapshot.singerName} · {modeLabel} · 排班V{request.scheduleVersion} / 歌单V{request.priceSnapshot.configVersion} · {money(request.priceSnapshot.priceAmount)}</small></div><div className="song-request-actions">{request.status === 'pending_confirmation' && <><button className="primary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'confirm'), '歌手、时间与费用已确认，请到桌现场收费')}><CheckCircle2 size={14} />确认可安排</button><button className="secondary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'reject', '歌手或现场安排无法演唱'), '已反馈客人本次无法安排')}>无法安排</button></>}{request.status === 'pending_payment' && <><select aria-label="现场收费方式" value={collectionChannel} onChange={(event) => setCollectionChannel(event.target.value as 'cash' | 'physical_pos')}><option value="physical_pos">物理POS</option><option value="cash">现金</option></select><input value={reference} onChange={(event) => setReference(event.target.value)} placeholder="现场收款凭证号" /><button className="primary-button" disabled={busy || reference.trim().length < 4} onClick={() => void run(() => reportSongOnsiteCollection(request.id, reference.trim(), collectionChannel), '现场收款已登记，等待歌手接单')}><Banknote size={14} />登记现场收款</button><button className="icon-button danger" title="取消未收款点歌" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'cancel', '客人现场付款前取消'), '点歌已取消')}><XCircle size={15} /></button></>}{request.status === 'paid' && <><button className="primary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'accept'), '歌手队列已接单')}><CheckCircle2 size={14} />接单</button><button className="secondary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'reject', '现场无法履约，经理发起退款'), '已拒绝并进入退款队列')}>拒绝并退款</button></>}{request.status === 'accepted' && <><button className="primary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'start'), '已开始演唱')}><Play size={14} />开始演唱</button><button className="secondary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'reject', '现场无法履约，经理发起退款'), '已拒绝并进入退款队列')}>拒绝并退款</button></>}{request.status === 'performing' && <button className="primary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'complete'), '本次点歌已完成')}><CheckCircle2 size={14} />完成</button>}{request.status === 'refund_required' && <><input value={reference} onChange={(event) => setReference(event.target.value)} placeholder="退款流水号" /><button className="primary-button" disabled={busy || reference.trim().length < 4} onClick={() => void run(() => actOnSongRequest(request.id, 'refund', '', reference.trim()), '点歌退款已登记')}><RotateCcw size={14} />确认退款</button></>}</div></div>
 }
 
 function SongMetric({ label, value, warning = false }: { label: string; value: number; warning?: boolean }) { return <div className={warning && value > 0 ? 'song-metric is-warning' : 'song-metric'}><strong>{value}</strong><span>{label}</span></div> }

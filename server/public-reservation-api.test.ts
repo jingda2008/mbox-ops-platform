@@ -68,7 +68,7 @@ describe('public reservation commercial API', () => {
     expect(list.statusCode).toBe(200)
     expect(list.json().reservations).toEqual([])
     expect(list.json().config).toMatchObject({
-      businessHours: { timeZone: 'Asia/Shanghai', openingTime: '20:30', closingTime: '02:00', slotMinutes: 30 },
+      businessHours: { timeZone: 'Asia/Shanghai', openingTime: '12:00', closingTime: '02:00', slotMinutes: 30 },
       capacity: { defaultDailyCapacity: 120, defaultSlotCapacity: 20 },
       publicRules: { minimumLeadMinutes: 15, maximumAdvanceDays: 180, acceptedContactMethods: ['phone', 'wechat'] },
     })
@@ -109,7 +109,7 @@ describe('public reservation commercial API', () => {
     apps.push(app)
     const noContact = await app.inject({ method: 'POST', url: '/api/public/reservations', headers: headers(), payload: createInput({ phone: undefined }) })
     const beforeOpening = await app.inject({ method: 'POST', url: '/api/public/reservations', headers: headers(), payload: createInput({
-      scheduledAt: '2030-07-15T12:00:00.000Z', idempotencyKey: 'public-reservation-before-opening',
+      scheduledAt: '2030-07-15T03:00:00.000Z', idempotencyKey: 'public-reservation-before-opening',
     }) })
     const afterMidnight = await app.inject({ method: 'POST', url: '/api/public/reservations', headers: headers('customer-b'), payload: createInput({
       phone: undefined, wechatId: 'amy-night', scheduledAt: '2030-07-15T17:30:00.000Z', idempotencyKey: 'public-reservation-after-midnight',

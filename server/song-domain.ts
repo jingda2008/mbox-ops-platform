@@ -10,6 +10,7 @@ import type {
   SongActor,
   SongAuditEvent,
   SongRequest,
+  SongRequestMode,
   SongRequestStatus,
   SongState,
   StartSongPerformanceCommand,
@@ -144,6 +145,9 @@ function assertConfigurationIntegrity(state: SongState) {
     const starts = Date.parse(performance.startsAt)
     const ends = Date.parse(performance.endsAt)
     if (starts >= ends) throw new Error('演出场次结束时间必须晚于开始时间')
+    if (performance.configVersion !== undefined && (!Number.isSafeInteger(performance.configVersion) || performance.configVersion < 1)) {
+      throw new Error('演出排班版本不合法')
+    }
     for (const appearance of performance.appearances) {
       assertNonEmpty(appearance.id, '歌手排班ID')
       if (!singerIds.has(appearance.singerId)) throw new Error('歌手排班引用了不存在的歌手')
@@ -154,6 +158,8 @@ function assertConfigurationIntegrity(state: SongState) {
       if (Date.parse(appearance.requestOpensAt) < starts || Date.parse(appearance.requestClosesAt) > ends) {
         throw new Error('点歌窗口必须位于演出场次时段内')
       }
+      const threshold = appearance.extensionThresholdMinutes ?? 10
+      if (!Number.isSafeInteger(threshold) || threshold < 1 || threshold > 60) throw new Error('延长协商阈值必须为1至60分钟')
     }
   }
 
@@ -195,6 +201,27 @@ function assertAppearanceWindow(appearance: SingerAppearance, occurredAt: string
     throw new Error('歌手演出及点歌时段配置不合法')
   }
   if (occurred < opens || occurred > closes) throw new Error('当前不在该歌手可点歌时段')
+}
+
+export function resolveSongRequestMode(
+  appearance: SingerAppearance,
+  songDurationSeconds: number,
+  occurredAt: string,
+): SongRequestMode | null {
+  if (!appearance.acceptingRequests) return null
+  const occurred = Date.parse(occurredAt)
+  const opens = Date.parse(appearance.requestOpensAt)
+  const closes = Date.parse(appearance.requestClosesAt)
+  const starts = Date.parse(appearance.startsAt)
+  const ends = Date.parse(appearance.endsAt)
+  if ([occurred, opens, closes, starts, ends].some(Number.isNaN) || occurred < opens || occurred >= ends) return null
+  if (occurred < starts) return appearance.advanceBookingEnabled !== false ? 'advance_reservation' : null
+  const remainingMs = ends - occurred
+  const needsExtension = occurred > closes
+    || songDurationSeconds * 1_000 > remainingMs
+    || remainingMs <= (appearance.extensionThresholdMinutes ?? 10) * 60_000
+  if (needsExtension) return appearance.extensionNegotiationEnabled !== false ? 'extension_negotiation' : null
+  return occurred <= closes ? 'standard' : null
 }
 
 function assertActorCanOperate(state: SongState, request: SongRequest, actor: SongActor) {
@@ -272,7 +299,13 @@ export function createSongState(
     repertoire: configuration.repertoire.map((item) => ({ ...item })),
     performanceSessions: configuration.performanceSessions.map((item) => ({
       ...item,
-      appearances: item.appearances.map((appearance) => ({ ...appearance })),
+      configVersion: item.configVersion ?? 1,
+      appearances: item.appearances.map((appearance) => ({
+        ...appearance,
+        advanceBookingEnabled: appearance.advanceBookingEnabled ?? true,
+        extensionNegotiationEnabled: appearance.extensionNegotiationEnabled ?? true,
+        extensionThresholdMinutes: appearance.extensionThresholdMinutes ?? 10,
+      })),
     })),
     tableSessions: configuration.tableSessions.map((item) => ({ ...item })),
     managerActorIds: [...configuration.managerActorIds],
@@ -317,12 +350,13 @@ export function submitSongRequest(state: SongState, command: SubmitSongRequestCo
     const appearance = performance.appearances.find((item) => item.id === command.appearanceId)
     if (!appearance || appearance.singerId !== command.singerId) throw new Error('歌手不在所选演出排班')
     if (!appearance.acceptingRequests) throw new Error('该歌手当前暂停接受点歌')
-    assertAppearanceWindow(appearance, command.occurredAt)
 
     const singer = state.singers.find((item) => item.id === command.singerId)
     if (!singer || !singer.active) throw new Error('歌手不存在或已停用')
     const song = state.songs.find((item) => item.id === command.songId)
     if (!song || !song.active) throw new Error('歌曲不存在或已下架')
+    const requestMode = resolveSongRequestMode(appearance, song.durationSeconds, command.occurredAt)
+    if (!requestMode) throw new Error('当前不在该歌手可预约或协商的点歌时段')
     const offer = state.repertoire.find(
       (item) => item.singerId === singer.id && item.songId === song.id && item.enabled,
     )
@@ -340,6 +374,8 @@ export function submitSongRequest(state: SongState, command: SubmitSongRequestCo
       tableCode: table.tableCode,
       requestedBy: command.requestedBy,
       customerNote: command.customerNote.trim(),
+      requestMode,
+      scheduleVersion: performance.configVersion ?? 1,
       status: 'pending_confirmation',
       priceSnapshot: {
         repertoireEntryId: offer.id,
@@ -387,6 +423,8 @@ export function submitSongRequest(state: SongState, command: SubmitSongRequestCo
         priceAmount: offer.priceAmount,
         currency: offer.currency,
         configVersion: offer.configVersion,
+        scheduleVersion: performance.configVersion ?? 1,
+        requestMode,
       },
     })
     return request

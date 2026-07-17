@@ -580,6 +580,14 @@ body {
   font-size: 11px;
 }
 
+.guest-singer-songs > button:disabled {
+  background: #f6f7f5;
+  color: #8a918c;
+  cursor: not-allowed;
+}
+
+.guest-singer-songs > button:disabled > b { color: #8a918c; }
+
 .guest-singer-songs > p {
   margin: 0;
   padding: 12px 0;

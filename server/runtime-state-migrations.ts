@@ -180,11 +180,23 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
   }))
   migrated.songState.requests = migrated.songState.requests.map((request) => ({
     ...request,
+    requestMode: request.requestMode ?? 'standard',
+    scheduleVersion: request.scheduleVersion ?? 1,
     confirmedBy: request.confirmedBy ?? (request.status === 'pending_confirmation' ? null : 'legacy-system'),
     confirmedAt: request.confirmedAt ?? (request.status === 'pending_confirmation' ? null : request.createdAt),
     payment: request.payment
       ? { ...request.payment, collectionChannel: request.payment.collectionChannel ?? 'physical_pos' }
       : null,
+  }))
+  migrated.songState.performanceSessions = migrated.songState.performanceSessions.map((session) => ({
+    ...session,
+    configVersion: session.configVersion ?? 1,
+    appearances: session.appearances.map((appearance) => ({
+      ...appearance,
+      advanceBookingEnabled: appearance.advanceBookingEnabled ?? true,
+      extensionNegotiationEnabled: appearance.extensionNegotiationEnabled ?? true,
+      extensionThresholdMinutes: appearance.extensionThresholdMinutes ?? 10,
+    })),
   }))
   reconcilePresence(migrated, Date.now(), false)
   const menuDefaults = new Map([
@@ -207,7 +219,7 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
     migrated.reservationState.config.lateHoldMinutes ??= 30
     migrated.reservationState.config.waitlistResponseMinutes ??= 10
     migrated.reservationState.config.businessHours ??= {
-      timeZone: 'Asia/Shanghai', openingTime: '20:30', closingTime: '02:00', slotMinutes: 30, closedWeekdays: [],
+      timeZone: 'Asia/Shanghai', openingTime: '12:00', closingTime: '02:00', slotMinutes: 30, closedWeekdays: [],
     }
     migrated.reservationState.config.capacity ??= {
       defaultDailyCapacity: 120, defaultSlotCapacity: 20, dateOverrides: [],

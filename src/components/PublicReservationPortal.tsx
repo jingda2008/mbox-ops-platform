@@ -76,7 +76,7 @@ function businessDateFor(value: string, config: PublicReservationConfigView) {
 }
 
 function slotOptions(config?: PublicReservationConfigView) {
-  if (!config) return ['20:30']
+  if (!config) return ['12:00']
   const opening = clockMinutes(config.businessHours.openingTime)
   const closing = clockMinutes(config.businessHours.closingTime)
   const duration = closing > opening ? closing - opening : 1_440 - opening + closing
@@ -102,7 +102,7 @@ export function PublicReservationPortal() {
   const [wechatId, setWechatId] = useState('')
   const [partySize, setPartySize] = useState(2)
   const [date, setDate] = useState(() => defaultDate())
-  const [time, setTime] = useState('20:30')
+  const [time, setTime] = useState('12:00')
   const [areaPreferenceCode, setAreaPreferenceCode] = useState('')
   const [occasionCode, setOccasionCode] = useState<'' | ReservationOccasionCode>('')
   const [occasionNote, setOccasionNote] = useState('')
@@ -149,7 +149,7 @@ export function PublicReservationPortal() {
     setWechatId('')
     setPartySize(Math.max(2, config?.minimumPartySize ?? 1))
     setDate(defaultDate(config?.businessHours.timeZone))
-    setTime(config?.businessHours.openingTime ?? '20:30')
+    setTime(config?.businessHours.openingTime ?? '12:00')
     setAreaPreferenceCode('')
     setOccasionCode('')
     setOccasionNote('')

@@ -648,7 +648,7 @@ function ReservationConfigPanel({ currentVersion, draft, reason, busy, onChange,
     </section>
 
     <section className="reservation-config-section">
-      <div className="reservation-config-section-title"><strong>公开预约营业时间</strong><span>支持跨午夜，例如20:30至次日02:00；顾客端按时段展示</span></div>
+      <div className="reservation-config-section-title"><strong>公开预约营业时间</strong><span>M-BOX默认12:00营业、次日02:00结束；20:30后的演出排班单独管理</span></div>
       <div className="reservation-config-business-grid">
         <Field label="门店时区"><input required maxLength={80} value={draft.businessHours.timeZone} onChange={(event) => onChange({ ...draft, businessHours: { ...draft.businessHours, timeZone: event.target.value } })} /></Field>
         <Field label="开始"><input required type="time" value={draft.businessHours.openingTime} onChange={(event) => onChange({ ...draft, businessHours: { ...draft.businessHours, openingTime: event.target.value } })} /></Field>

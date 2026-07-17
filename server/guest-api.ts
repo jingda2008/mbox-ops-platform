@@ -25,7 +25,7 @@ import {
   TableAccessError,
   verifyTableAccessToken,
 } from './table-access.js'
-import { submitSongRequest } from './song-domain.js'
+import { resolveSongRequestMode, submitSongRequest } from './song-domain.js'
 import { addOrderItem, createOrderDraft, submitOrder } from './order-domain.js'
 import { createPaymentIntent, expirePaymentIntents, handlePaymentNotification } from './payment-domain.js'
 import { consumeManagedInventoryForSubmittedOrder } from './inventory-order-integration.js'
@@ -182,17 +182,22 @@ function sessionView(
   const todaysPerformances = state.songState.performanceSessions
     .filter((performance) => performance.businessDate === state.store.businessDate)
     .filter((performance) => performance.status === 'scheduled' || performance.status === 'live')
+  const occurredAt = new Date(nowMs).toISOString()
   const songOffers = todaysPerformances
     .flatMap((performance) => performance.appearances
-      .filter((appearance) => appearance.acceptingRequests
-        && Date.parse(appearance.requestOpensAt) <= nowMs
-        && nowMs <= Date.parse(appearance.requestClosesAt))
       .flatMap((appearance) => state.songState.repertoire
         .filter((entry) => entry.enabled && entry.singerId === appearance.singerId)
         .flatMap((entry) => {
           const singer = state.songState.singers.find((item) => item.id === entry.singerId && item.active)
           const song = state.songState.songs.find((item) => item.id === entry.songId && item.active)
           if (!singer || !song) return []
+          const requestMode = resolveSongRequestMode(appearance, song.durationSeconds, occurredAt)
+          const requestUnavailableReason = requestMode ? null
+            : !appearance.acceptingRequests ? '歌手暂时暂停接收点歌'
+              : nowMs < Date.parse(appearance.requestOpensAt) ? `预约将在${new Date(appearance.requestOpensAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: state.store.timezone })}开放`
+                : nowMs >= Date.parse(appearance.endsAt) ? '这轮演出已经结束'
+                  : nowMs < Date.parse(appearance.startsAt) && appearance.advanceBookingEnabled === false ? '这位歌手暂未开放提前预约'
+                    : '本轮剩余时间不足，歌手未开放延长协商'
           return [{
             id: `${appearance.id}:${entry.id}`,
             performanceSessionId: performance.id,
@@ -205,6 +210,13 @@ function sessionView(
             priceAmount: entry.priceAmount,
             currency: entry.currency,
             startsAt: appearance.startsAt,
+            endsAt: appearance.endsAt,
+            durationSeconds: song.durationSeconds,
+            requestMode,
+            requestAvailable: requestMode !== null,
+            requestUnavailableReason,
+            scheduleVersion: performance.configVersion ?? 1,
+            repertoireVersion: entry.configVersion,
           }]
         })))
   const stageSchedule = todaysPerformances
@@ -220,6 +232,10 @@ function sessionView(
         startsAt: appearance.startsAt,
         endsAt: appearance.endsAt,
         acceptingRequests: appearance.acceptingRequests,
+        scheduleVersion: performance.configVersion ?? 1,
+        advanceBookingEnabled: appearance.advanceBookingEnabled ?? true,
+        extensionNegotiationEnabled: appearance.extensionNegotiationEnabled ?? true,
+        extensionThresholdMinutes: appearance.extensionThresholdMinutes ?? 10,
         profile: {
           photoUrl: singer.photoUrl?.trim() ?? '',
           headline: singer.headline?.trim() ?? '',
@@ -306,6 +322,7 @@ function sessionView(
         priceAmount: request.priceSnapshot.priceAmount,
         currency: request.priceSnapshot.currency,
         createdAt: request.createdAt,
+        requestMode: request.requestMode,
       })),
     guestSession: {
       tableSessionId: tableSession.id,

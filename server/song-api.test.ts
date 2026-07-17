@@ -2,7 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { describe, expect, it } from 'vitest'
 import { AuthorizationError } from './authorization.js'
 import { JsonRepository } from './repository.js'
-import { registerSongRoutes } from './song-api.js'
+import { registerSongRoutes, SongConfigVersionConflictError } from './song-api.js'
 
 function employeeId(roleId: string) {
   if (roleId === 'owner') return 'emp-owner'
@@ -33,6 +33,9 @@ async function fixture() {
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof AuthorizationError) {
       return reply.status(error.statusCode).send({ code: error.code, operation: error.operation })
+    }
+    if (error instanceof SongConfigVersionConflictError) {
+      return reply.status(error.statusCode).send({ code: error.code, message: error.message, currentVersion: error.currentVersion })
     }
     throw error
   })
@@ -121,6 +124,33 @@ describe('song API employee authorization', () => {
     })
     expect(denied.statusCode).toBe(403)
     expect(denied.json()).toEqual({ code: 'AUTHORIZATION_DENIED', operation: 'song.manage' })
+    await app.close()
+    await repository.close()
+  })
+
+  it('versions performance schedules and rejects a stale manager overwrite', async () => {
+    const { app, repository } = await fixture()
+    const existing = (await repository.read()).songState.performanceSessions[0]!
+    const payload = {
+      businessDate: existing.businessDate,
+      title: `${existing.title} · 版本测试`,
+      status: existing.status,
+      startsAt: existing.startsAt,
+      endsAt: existing.endsAt,
+      appearances: existing.appearances,
+      expectedVersion: existing.configVersion ?? 1,
+    }
+    const saved = await app.inject({ method: 'PUT', url: `/api/songs/performances/${existing.id}`, headers: { 'x-test-role': 'manager' }, payload })
+    expect(saved.statusCode, saved.body).toBe(200)
+    expect(saved.json().configVersion).toBe((existing.configVersion ?? 1) + 1)
+
+    const stale = await app.inject({ method: 'PUT', url: `/api/songs/performances/${existing.id}`, headers: { 'x-test-role': 'manager' }, payload })
+    expect(stale.statusCode).toBe(409)
+    expect(stale.json().code).toBe('SONG_PERFORMANCE_VERSION_CONFLICT')
+    expect(stale.json().currentVersion).toBe((existing.configVersion ?? 1) + 1)
+    expect(stale.json().message).toContain('请刷新后再保存')
+    const audit = (await repository.read()).auditEntries.filter((entry) => entry.action === 'song.performance_config_saved.v1')
+    expect(audit.at(-1)?.details).toMatchObject({ previousVersion: existing.configVersion ?? 1, version: (existing.configVersion ?? 1) + 1 })
     await app.close()
     await repository.close()
   })

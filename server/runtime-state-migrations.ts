@@ -151,6 +151,40 @@ function migrateMissingOpenTableSessions(state: RuntimeState) {
   }
 }
 
+function migrateServiceTaskVisits(state: RuntimeState) {
+  const liveStatuses = new Set(['pending', 'accepted', 'arrived', 'completed', 'reopened', 'escalated'])
+  state.tasks = state.tasks.map((task) => {
+    const createdAt = Date.parse(task.createdAt)
+    const matchingSession = state.songState.tableSessions
+      .filter((session) => session.tableId === task.tableId)
+      .filter((session) => {
+        const openedAt = Date.parse(session.openedAt)
+        const closedAt = session.closedAt ? Date.parse(session.closedAt) : Number.POSITIVE_INFINITY
+        return openedAt <= createdAt && createdAt <= closedAt
+      })
+      .toSorted((left, right) => Date.parse(right.openedAt) - Date.parse(left.openedAt))[0] ?? null
+    const session = task.tableSessionId
+      ? state.songState.tableSessions.find((candidate) => candidate.id === task.tableSessionId) ?? matchingSession
+      : matchingSession
+    const table = state.tables.find((candidate) => candidate.id === task.tableId)
+    const shouldArchive = Boolean(task.archivedAt || session?.closedAt || (!session && table?.status !== 'occupied'))
+    const previousStatus = task.archivedFromStatus ?? (shouldArchive ? task.status : null)
+    const archiveOutcome = task.archiveOutcome ?? (shouldArchive
+      ? ['confirmed', 'cancelled'].includes(previousStatus ?? '') ? 'resolved'
+        : previousStatus === 'completed' ? 'unconfirmed' : 'unresolved'
+      : null)
+    return {
+      ...task,
+      tableSessionId: task.tableSessionId ?? session?.id ?? null,
+      archivedAt: task.archivedAt ?? (shouldArchive ? session?.closedAt ?? task.updatedAt : null),
+      archiveOutcome,
+      archivedFromStatus: previousStatus,
+      status: shouldArchive && liveStatuses.has(task.status) ? 'cancelled' as const : task.status,
+      resolution: task.resolution ?? (archiveOutcome === 'unresolved' ? '桌次结束时需求仍未完成' : null),
+    }
+  })
+}
+
 /** Enriches older persisted documents without discarding store-specific state. */
 export function migrateRuntimeState(state: RuntimeState): RuntimeState {
   const defaults = createSeedConfig()
@@ -240,6 +274,7 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
     }))
   }
   migrateMissingOpenTableSessions(migrated)
+  migrateServiceTaskVisits(migrated)
   if (upgradeBuiltInRoles) {
     migrated.auditEntries.push({
       id: 'runtime-migration-permission-policy-v2',

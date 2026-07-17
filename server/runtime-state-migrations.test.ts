@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { RuntimeState } from '../src/shared/contracts.js'
 import { createSeedState } from './seed.js'
 import { migrateRuntimeState } from './runtime-state-migrations.js'
+import { createServiceTask } from './domain.js'
 
 describe('runtime state operational migrations', () => {
   it('adds configurable fulfillment defaults without replacing existing store data', () => {
@@ -231,6 +232,34 @@ describe('runtime state operational migrations', () => {
     expect(migrateRuntimeState(migrated).songState.tableSessions.filter(
       (session) => session.tableId === table.id && session.status === 'open',
     )).toHaveLength(1)
+  })
+
+  it('binds legacy service tasks to their visit and archives tasks from a closed visit', () => {
+    const legacy = structuredClone(createSeedState())
+    const task = createServiceTask(legacy, {
+      tableCode: 'L01', serviceTypeId: 'water', source: 'guest', note: '遗留未响应需求',
+      idempotencyKey: 'legacy-service-visit-migration-0001',
+    })
+    const table = legacy.tables.find((candidate) => candidate.id === task.tableId)!
+    const session = legacy.songState.tableSessions.find((candidate) => candidate.tableId === table.id && candidate.status === 'open')!
+    session.closedAt = new Date(Date.parse(task.createdAt) + 60_000).toISOString()
+    session.status = 'closed'
+    table.status = 'available'
+    table.guestCount = 0
+    table.openedAt = null
+    delete (task as Partial<typeof task>).tableSessionId
+    delete (task as Partial<typeof task>).archivedAt
+    delete (task as Partial<typeof task>).archiveOutcome
+    delete (task as Partial<typeof task>).archivedFromStatus
+
+    const migrated = migrateRuntimeState(legacy)
+    expect(migrated.tasks.find((candidate) => candidate.id === task.id)).toMatchObject({
+      tableSessionId: session.id,
+      status: 'cancelled',
+      archiveOutcome: 'unresolved',
+      archivedFromStatus: task.status,
+      archivedAt: session.closedAt,
+    })
   })
 
   it('repairs legacy workstation delivery references without changing null or valid references', () => {

@@ -150,6 +150,7 @@ export function ensureDeliveryServiceTask(
   const serviceTask: ServiceTask = {
     id: expectedId,
     tableId,
+    tableSessionId: kdsTask.tableSessionId,
     serviceTypeId: deliveryServiceTypeId,
     source: 'system',
     note: `${workstation.name}取送：${kdsTask.itemName} x ${kdsTask.quantity}`,
@@ -173,6 +174,9 @@ export function ensureDeliveryServiceTask(
     actionScript: [...serviceType.actionScript],
     resolution: null,
     triggerId: expectedTriggerId,
+    archivedAt: null,
+    archiveOutcome: null,
+    archivedFromStatus: null,
   }
   state.tasks.unshift(serviceTask)
   state.auditEntries.push({

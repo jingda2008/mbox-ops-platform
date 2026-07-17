@@ -54,6 +54,7 @@ export function TaskQueue({
 }: TaskQueueProps) {
   const [visibleCount, setVisibleCount] = useState(12)
   const visibleTasks = tasks
+    .filter((task) => !task.archivedAt)
     .filter((task) => !['confirmed', 'cancelled'].includes(task.status))
     .filter((task) => !selectedTableId || task.tableId === selectedTableId)
     .sort((a, b) => {

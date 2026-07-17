@@ -12,6 +12,7 @@ import type {
 } from '../src/shared/contracts.js'
 import { withDefaultRolePolicy } from '../src/shared/role-policy.js'
 import { effectiveDataScopeForEmployee, effectiveRoleIdsForEmployee } from '../src/shared/staff-access.js'
+import { currentOpenTableSession } from './table-sessions.js'
 
 const closedStatuses = new Set(['confirmed', 'cancelled'])
 const claimableStatuses = new Set<ServiceTask['status']>(['pending', 'escalated', 'reopened'])
@@ -149,6 +150,7 @@ export function createServiceTask(state: RuntimeState, input: CreateTaskInput & 
   const table = state.tables.find((item) => item.code.toLowerCase() === input.tableCode.toLowerCase())
   if (!table) throw new Error('未找到桌台')
   if (table.status !== 'occupied') throw new Error('该桌台当前未开台')
+  const tableSession = currentOpenTableSession(state, table.id)
 
   const serviceType = state.config.serviceTypes.find((item) => item.id === input.serviceTypeId && item.enabled)
   if (!serviceType) throw new Error('服务类型未启用')
@@ -162,6 +164,7 @@ export function createServiceTask(state: RuntimeState, input: CreateTaskInput & 
   const task: ServiceTask = {
     id: `task_${randomUUID()}`,
     tableId: table.id,
+    tableSessionId: tableSession.id,
     serviceTypeId: serviceType.id,
     source: input.source,
     note: input.note,
@@ -183,6 +186,9 @@ export function createServiceTask(state: RuntimeState, input: CreateTaskInput & 
     actionScript: [...serviceType.actionScript],
     resolution: null,
     triggerId: 'triggerId' in input && typeof input.triggerId === 'string' ? input.triggerId : null,
+    archivedAt: null,
+    archiveOutcome: null,
+    archivedFromStatus: null,
   }
   state.tasks.unshift(task)
   state.auditEntries.push({
@@ -192,15 +198,55 @@ export function createServiceTask(state: RuntimeState, input: CreateTaskInput & 
     objectType: 'serviceTask',
     objectId: task.id,
     occurredAt: now.toISOString(),
-    details: { idempotencyKey: input.idempotencyKey, tableCode: table.code, configVersion: state.config.version },
+    details: {
+      idempotencyKey: input.idempotencyKey,
+      tableCode: table.code,
+      tableSessionId: tableSession.id,
+      configVersion: state.config.version,
+    },
   })
   appendTaskEvent(state, task.id, 'task.created.v1', 'system', {
     ownerId: task.ownerId,
     tableId: table.id,
+    tableSessionId: tableSession.id,
     configVersion: task.configVersion,
   })
   state.revision += 1
   return task
+}
+
+function tableCloseOutcome(status: ServiceTask['status']): NonNullable<ServiceTask['archiveOutcome']> {
+  if (['confirmed', 'cancelled'].includes(status)) return 'resolved'
+  if (status === 'completed') return 'unconfirmed'
+  return 'unresolved'
+}
+
+/** Removes a finished visit from live dispatch while retaining its full analytical trail. */
+export function archiveServiceTasksForTableSession(
+  state: RuntimeState,
+  tableSessionId: string,
+  occurredAt: string,
+  actorId: string,
+  reason: string,
+) {
+  const archived: ServiceTask[] = []
+  for (const task of state.tasks.filter((item) => item.tableSessionId === tableSessionId && !item.archivedAt)) {
+    const previousStatus = task.status
+    task.archivedAt = occurredAt
+    task.archiveOutcome = tableCloseOutcome(previousStatus)
+    task.archivedFromStatus = previousStatus
+    task.updatedAt = occurredAt
+    if (!['confirmed', 'cancelled'].includes(previousStatus)) task.status = 'cancelled'
+    if (!task.resolution && task.archiveOutcome === 'unresolved') task.resolution = '桌次结束时需求仍未完成'
+    appendTaskEvent(state, task.id, 'task.archived_with_table_visit.v1', actorId, {
+      tableSessionId,
+      previousStatus,
+      archiveOutcome: task.archiveOutcome,
+      reason,
+    })
+    archived.push(task)
+  }
+  return archived
 }
 
 function assertActor(task: ServiceTask, actorId: string) {

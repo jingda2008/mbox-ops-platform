@@ -8,7 +8,7 @@ import { JsonRepository } from './repository.js'
 import { requireGuestSession, signStaticTableQrToken, verifyTableAccessToken } from './table-access.js'
 import { transferOpenTableSession } from './table-session-api.js'
 import { createPaymentIntent } from './payment-domain.js'
-import { applyTaskAction } from './domain.js'
+import { applyTaskAction, createServiceTask } from './domain.js'
 
 const secret = 'q'.repeat(32)
 const sessionTtlMs = 5 * 60_000
@@ -569,6 +569,12 @@ describe('guest table API', () => {
     const { app, repository, now, setNow } = await fixture()
     const qrToken = staticQr(now())
     const firstSession = (await exchange(app, qrToken)).body
+    await repository.mutate((state) => {
+      createServiceTask(state, {
+        tableCode: 'L01', serviceTypeId: 'water', source: 'guest', note: '上一桌的加水需求',
+        idempotencyKey: 'previous-visit-water-task-0001',
+      })
+    })
     setNow(now() + 1_000)
     await replaceOpenSession(repository, 'L01', 'session:table-l01:reopened', new Date(now()).toISOString())
 
@@ -588,6 +594,7 @@ describe('guest table API', () => {
     const nextSession = (await exchange(app, qrToken)).body
     expect(nextSession.guestSession.tableSessionId).toBe('session:table-l01:reopened')
     expect(nextSession.tableToken).not.toBe(firstSession.tableToken)
+    expect(nextSession.tasks).toEqual([])
     await closeFixture(app, repository)
   })
 

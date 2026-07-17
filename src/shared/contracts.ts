@@ -444,6 +444,8 @@ export interface WaitlistEntry {
 export interface ServiceTask {
   id: string
   tableId: string
+  /** Immutable visit ownership. A table may have many visits in one business day. */
+  tableSessionId: string | null
   serviceTypeId: string
   source: 'guest' | 'employee' | 'system'
   note: string
@@ -465,6 +467,9 @@ export interface ServiceTask {
   actionScript: string[]
   resolution: string | null
   triggerId: string | null
+  archivedAt: string | null
+  archiveOutcome: 'resolved' | 'unconfirmed' | 'unresolved' | null
+  archivedFromStatus: TaskStatus | null
 }
 
 export interface TaskEvent {

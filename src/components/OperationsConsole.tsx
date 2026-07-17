@@ -155,6 +155,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
   }).map((task) => task.id))
   const ownOpenTasks = data.tasks.filter((task) => (
     (task.ownerId === currentEmployee?.id || claimableTaskIds.has(task.id))
+    && !task.archivedAt
     && !['confirmed', 'cancelled'].includes(task.status)
   ))
   const availableNavigation = navigation.filter((item) => {
@@ -192,7 +193,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
   }, [data.tableOperationsConfig, tableOpsDirty])
 
   const openTasks = fulfillmentAccess.mode === 'oversight'
-    ? data.tasks.filter((task) => !['confirmed', 'cancelled'].includes(task.status))
+    ? data.tasks.filter((task) => !task.archivedAt && !['confirmed', 'cancelled'].includes(task.status))
     : ownOpenTasks
   const visibleServiceTasks = fulfillmentAccess.mode === 'oversight'
     ? data.tasks
@@ -658,10 +659,10 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
                   </div>
                   {selectedTable && selectedTable.status === 'available' && canOpenWalkIn && (
                     <div className="table-walkin-toolbar">
-                      <div className="table-business-heading"><DoorOpen size={19} /><div><strong>{selectedTable.code} 临客开台</strong><span>确认人数与销售后一次完成入座</span></div></div>
+                      <div className="table-business-heading"><DoorOpen size={19} /><div><strong>{selectedTable.code} 临客开台</strong><span>员工选择人数与销售后直接开台，客户无需确认</span></div></div>
                       <label><span>人数</span><div className="party-stepper"><button title="减少人数" disabled={walkInPartySize <= 1} onClick={() => setWalkInPartySize((value) => Math.max(1, value - 1))}><Minus size={15} /></button><b>{walkInPartySize}</b><button title="增加人数" disabled={walkInPartySize >= selectedTable.capacity} onClick={() => setWalkInPartySize((value) => Math.min(selectedTable.capacity, value + 1))}><Plus size={15} /></button></div></label>
                       <label><span>销售归属</span><select value={walkInSalesEmployeeId} onChange={(event) => setWalkInSalesEmployeeId(event.target.value)}><option value="">请选择销售</option>{salesEmployees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName}</option>)}</select></label>
-                      <button className="primary-button" disabled={busy || !walkInSalesEmployeeId} onClick={() => void handleWalkInOpen()}><DoorOpen size={17} />确认开台</button>
+                      <button className="primary-button" disabled={busy || !walkInSalesEmployeeId} onClick={() => void handleWalkInOpen()}><DoorOpen size={17} />立即开台</button>
                     </div>
                   )}
                   {selectedTable && selectedTable.status === 'occupied' && (

@@ -30,9 +30,9 @@ import { mutateReservationState, reservationsFor } from './reservation-api.js'
 import { confirmReservation, createReservation, markReservationArrived, seatReservation } from './reservation-domain.js'
 import {
   isKdsTaskOperationallyClosed,
-  isServiceTaskOperationallyClosed,
   isSongRequestOperationallyClosed,
 } from './operational-closure.js'
+import { archiveServiceTasksForTableSession } from './domain.js'
 
 const confirmedPaymentStatuses = new Set(['succeeded', 'reported_pending_reconciliation'])
 const pendingRefundStatuses = new Set(['requested', 'approved', 'processing'])
@@ -48,18 +48,36 @@ function childIdempotencyKey(key: string, suffix: string) {
   return `${key.slice(0, Math.max(8, 118 - suffix.length))}:${suffix}`
 }
 
-function assertTablePrimaryReady(state: RuntimeState, tableId: string) {
+function assertTablePrimaryReady(state: RuntimeState, tableId: string, actorId: string) {
   const table = state.tables.find((candidate) => candidate.id === tableId)
   if (!table) throw new Error('桌台不存在')
-  const primary = state.employees.find((employee) => employee.id === table.primaryEmployeeId && employee.status === 'active')
-  const activeShift = primary && state.shiftAssignments.find((shift) =>
-    shift.employeeId === primary.id && shift.businessDate === state.store.businessDate &&
-    shift.status === 'active' && shift.areaIds.includes(table.areaId),
-  )
-  if (!primary || !primary.online || primary.paused || !activeShift) {
+  const canTakeTable = (employeeId: string) => {
+    const employee = state.employees.find((candidate) => candidate.id === employeeId && candidate.status === 'active')
+    const activeShift = employee && state.shiftAssignments.find((shift) =>
+      shift.employeeId === employee.id && shift.businessDate === state.store.businessDate &&
+      shift.status === 'active' && shift.areaIds.includes(table.areaId),
+    )
+    return employee && employee.online && !employee.paused && activeShift ? employee : null
+  }
+  const currentPrimary = canTakeTable(table.primaryEmployeeId)
+  if (currentPrimary) return { table, reassignedFrom: null, reassignedTo: currentPrimary.id }
+
+  const scheduledFallbackIds = [...table.backupEmployeeIds, ...state.employees
+    .filter((employee) => ['manager', 'supervisor'].includes(employee.roleId))
+    .map((employee) => employee.id)]
+  const scheduledFallback = [...new Set(scheduledFallbackIds)].map(canTakeTable).find(Boolean)
+  const actorFallback = state.employees.find((employee) => (
+    employee.id === actorId && employee.status === 'active' && employee.online && !employee.paused
+  )) ?? null
+  const fallback = scheduledFallback ?? actorFallback
+  if (!fallback) {
     throw new Error('桌台主服务员当前不可接待，请先完成员工调度')
   }
-  return table
+  const previousPrimaryId = table.primaryEmployeeId
+  table.primaryEmployeeId = fallback.id
+  table.backupEmployeeIds = [...new Set([previousPrimaryId, ...table.backupEmployeeIds])]
+    .filter((employeeId) => employeeId !== fallback.id)
+  return { table, reassignedFrom: previousPrimaryId, reassignedTo: fallback.id }
 }
 
 function validateTableOperationsConfig(state: RuntimeState, rules: ReturnType<typeof tableOperationsConfigInputSchema.parse>['minimumSpendRules']) {
@@ -155,7 +173,7 @@ export function transferOpenTableSession(
 
   const session = currentOpenTableSession(state, source.id)
   const guestCount = source.guestCount
-  const movedServiceTasks = state.tasks.filter((task) => task.tableId === source.id && openServiceTaskStatuses.has(task.status))
+  const movedServiceTasks = state.tasks.filter((task) => task.tableSessionId === session.id && openServiceTaskStatuses.has(task.status))
   const movedAwaitingOrderIntents = state.awaitingOrderIntents.filter((intent) =>
     intent.tableId === source.id && intent.status === 'active',
   )
@@ -243,16 +261,11 @@ export function transferOpenTableSession(
   return record
 }
 
-function assertSessionCanClose(state: RuntimeState, tableId: string, tableSessionId: string) {
+function assertSessionCanClose(state: RuntimeState, tableSessionId: string) {
   const openKds = state.orderDomain.kdsTasks.filter((task) =>
     task.tableSessionId === tableSessionId && !isKdsTaskOperationallyClosed(state.orderDomain, task),
   )
   if (openKds.length > 0) throw new Error(`仍有${openKds.length}项商品未送达，不能结台`)
-
-  const openTasks = state.tasks.filter((task) => (
-    task.tableId === tableId && !isServiceTaskOperationallyClosed(task)
-  ))
-  if (openTasks.length > 0) throw new Error(`仍有${openTasks.length}项服务任务未关闭，不能结台`)
 
   const lockedBenefits = state.benefitRedemptions.filter((item) =>
     item.tableSessionId === tableSessionId && item.status === 'locked',
@@ -375,10 +388,22 @@ export function registerTableSessionRoutes(app: FastifyInstance, repository: Run
         if (!table || !session || !reservation) throw new Error('临客开台幂等记录不完整')
         return { table, reservation, summary: tableSessionSummary(state, session) }
       }
-      const table = assertTablePrimaryReady(state, request.params.tableId)
+      const readiness = assertTablePrimaryReady(state, request.params.tableId, actor.actorId)
+      const table = readiness.table
       if (table.status !== 'available') throw new Error('只有空桌可以临客开台')
       if (input.partySize > table.capacity) throw new Error(`到店人数超过桌台容量：${input.partySize}/${table.capacity}`)
       const occurredAt = new Date().toISOString()
+      if (readiness.reassignedFrom) {
+        state.auditEntries.push({
+          id: `audit_${randomUUID()}`,
+          actorId: actor.actorId,
+          action: 'table.primary_auto_reassigned.v1',
+          objectType: 'table',
+          objectId: table.id,
+          occurredAt,
+          details: { fromEmployeeId: readiness.reassignedFrom, toEmployeeId: readiness.reassignedTo, reason: 'walk_in_open_primary_unavailable' },
+        })
+      }
       const reservationId = `walk-in:${randomUUID()}`
       const customerReference = input.customerReference ?? reservationId
       const reservation = mutateReservationState(state, (domain) => {
@@ -527,6 +552,7 @@ export function registerTableSessionRoutes(app: FastifyInstance, repository: Run
       const activeCare = state.awaitingOrderIntents.find((intent) => intent.tableId === table.id && intent.status === 'active')
       if (activeCare) stopAwaitingOrder(state, table.id, actor.actorId, 'legacy_session_handover')
 
+      archiveServiceTasksForTableSession(state, session.id, occurredAt, actor.actorId, input.reason)
       session.status = 'closed'
       session.closedAt = occurredAt
       table.status = 'available'
@@ -590,6 +616,7 @@ export function registerTableSessionRoutes(app: FastifyInstance, repository: Run
           if (!relatedTable || !relatedSession || relatedSession.status !== 'open') throw new Error('加桌当前状态不完整，不能拆回')
           const activeCare = state.awaitingOrderIntents.find((intent) => intent.tableId === relatedTable.id && intent.status === 'active')
           if (activeCare) stopAwaitingOrder(state, relatedTable.id, actor.actorId, 'added_table_split_back')
+          archiveServiceTasksForTableSession(state, relatedSession.id, occurredAt, actor.actorId, input.reason)
           relatedSession.status = 'closed'
           relatedSession.closedAt = occurredAt
           relatedTable.status = 'available'
@@ -623,7 +650,7 @@ export function registerTableSessionRoutes(app: FastifyInstance, repository: Run
           if (relatedTable.status !== 'occupied') throw new Error('合台目标必须是营业中的桌台；空桌请使用加桌')
           relatedSession = currentOpenTableSession(state, relatedTable.id)
         } else {
-          assertTablePrimaryReady(state, relatedTable.id)
+          assertTablePrimaryReady(state, relatedTable.id, actor.actorId)
           if (relatedTable.status !== 'available') throw new Error('加桌目标必须是空桌')
           relatedSession = openTableSession(state, relatedTable, occurredAt, { source: 'added_table', sourceId: primarySession.id })
           relatedTable.status = 'occupied'
@@ -698,7 +725,7 @@ export function registerTableSessionRoutes(app: FastifyInstance, repository: Run
       const session = currentOpenTableSession(state, table.id)
       const combinations = currentCombinationForTable(state, table.id)
       if (combinations.length > 0) throw new Error('桌台仍在合台/加桌关系中，请先拆回再结台')
-      assertSessionCanClose(state, table.id, session.id)
+      assertSessionCanClose(state, session.id)
       const summary = tableSessionSummary(state, session)
       if (summary.differenceAmount > 0) {
         if (!input.minimumSpendWaiver) {
@@ -726,6 +753,7 @@ export function registerTableSessionRoutes(app: FastifyInstance, repository: Run
       const activeCare = state.awaitingOrderIntents.find((intent) => intent.tableId === table.id && intent.status === 'active')
       if (activeCare) stopAwaitingOrder(state, table.id, actor.actorId, 'table_closed')
       const closedAt = new Date().toISOString()
+      const archivedTasks = archiveServiceTasksForTableSession(state, session.id, closedAt, actor.actorId, input.reason)
       session.status = 'closed'
       session.closedAt = closedAt
       table.status = 'available'
@@ -738,7 +766,13 @@ export function registerTableSessionRoutes(app: FastifyInstance, repository: Run
         objectType: 'table',
         objectId: table.id,
         occurredAt: closedAt,
-        details: { tableSessionId: session.id, reason: input.reason, idempotencyKey: input.idempotencyKey },
+        details: {
+          tableSessionId: session.id,
+          reason: input.reason,
+          archivedServiceTaskIds: archivedTasks.map((task) => task.id),
+          unresolvedServiceTaskIds: archivedTasks.filter((task) => task.archiveOutcome === 'unresolved').map((task) => task.id),
+          idempotencyKey: input.idempotencyKey,
+        },
       })
       state.revision += 1
       return table

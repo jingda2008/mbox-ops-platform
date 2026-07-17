@@ -271,7 +271,7 @@ function sessionView(
       .sort((left, right) => (left.sortOrder ?? 999) - (right.sortOrder ?? 999))
       .map((product) => ({ ...product, costAmount: 0 })),
     tasks: (frozen ? [] : state.tasks)
-      .filter((task) => task.tableId === table.id && Date.parse(task.createdAt) >= Date.parse(tableSession.openedAt))
+      .filter((task) => task.tableSessionId === tableSession.id && !task.archivedAt)
       .slice(0, 10)
       .map((task) => taskView(state, task)),
     account: {
@@ -414,21 +414,21 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
       const now = options.now?.() ?? Date.now()
       const duplicateCutoff = now - limits.duplicateSeconds * 1000
       const duplicate = state.tasks.find((candidate) => (
-        candidate.tableId === table.id
+        candidate.tableSessionId === tableSession.id
+        && !candidate.archivedAt
         && candidate.source === 'guest'
         && candidate.serviceTypeId === input.serviceTypeId
         && candidate.note.trim().replace(/\s+/g, ' ').toLowerCase() === normalizedNote
         && !['confirmed', 'cancelled'].includes(candidate.status)
         && Date.parse(candidate.createdAt) >= duplicateCutoff
-        && Date.parse(candidate.createdAt) >= Date.parse(tableSession.openedAt)
       ))
       if (duplicate) return taskView(state, duplicate)
       const windowCutoff = now - limits.windowSeconds * 1000
       const recentCount = state.tasks.filter((candidate) => (
-        candidate.tableId === table.id
+        candidate.tableSessionId === tableSession.id
+        && !candidate.archivedAt
         && candidate.source === 'guest'
         && Date.parse(candidate.createdAt) >= windowCutoff
-        && Date.parse(candidate.createdAt) >= Date.parse(tableSession.openedAt)
       )).length
       if (recentCount >= limits.maxRequests) {
         throw new TableAccessError(

@@ -131,7 +131,7 @@ describe('table operating line', () => {
     expect((await repository.read()).tables.find((table) => table.id === 'table-l01')?.status).toBe('available')
   })
 
-  it('allows completed ordinary service to close but keeps completed urgent care open', async () => {
+  it('archives completed but unconfirmed urgent care instead of leaking it into the next visit', async () => {
     const { app, repository } = await fixture()
     await repository.mutate((state) => {
       const ordinary = createServiceTask(state, {
@@ -157,8 +157,9 @@ describe('table operating line', () => {
       payload: { reason: '投诉尚未确认', idempotencyKey: 'table-close-completed-urgent-blocked' },
     })
     expect(ordinaryClose.statusCode, ordinaryClose.body).toBe(200)
-    expect(urgentClose.statusCode).toBe(500)
-    expect(urgentClose.json().message).toContain('服务任务未关闭')
+    expect(urgentClose.statusCode, urgentClose.body).toBe(200)
+    const urgent = (await repository.read()).tasks.find((task) => task.note === '等待明确结案')
+    expect(urgent).toMatchObject({ status: 'cancelled', archiveOutcome: 'unconfirmed', archivedFromStatus: 'completed' })
   })
 
   it('blocks table close while a song request is active or awaiting refund', async () => {
@@ -298,6 +299,86 @@ describe('table operating line', () => {
     expect(state.tableSessionOperations).toHaveLength(1)
     expect(state.salesAttributionRecords?.filter((record) => record.subjectId === reservation?.id)).toHaveLength(2)
     expect(state.auditEntries.some((entry) => entry.action === 'table.walk_in_opened.v1')).toBe(true)
+  })
+
+  it('lets the logged-in manager open a table when its configured primary server is offline', async () => {
+    const { app, repository, useActor } = await fixture()
+    await repository.mutate((state) => {
+      const table = state.tables.find((candidate) => candidate.id === 'table-l04')!
+      const primary = state.employees.find((employee) => employee.id === table.primaryEmployeeId)!
+      primary.online = false
+      primary.paused = false
+      table.backupEmployeeIds = []
+      const manager = state.employees.find((employee) => employee.id === 'emp-chen')!
+      manager.online = true
+      manager.paused = false
+      state.shiftAssignments = state.shiftAssignments.filter((shift) => shift.employeeId !== manager.id)
+      for (const employee of state.employees.filter((candidate) => (
+        candidate.id !== manager.id && ['manager', 'supervisor'].includes(candidate.roleId)
+      ))) employee.online = false
+      state.revision += 1
+    })
+    useActor('emp-chen', 'manager')
+
+    const opened = await app.inject({
+      method: 'POST', url: '/api/tables/table-l04/walk-in-open',
+      payload: { partySize: 2, salesEmployeeId: 'emp-chen', idempotencyKey: 'walk-in-manager-fallback-0001' },
+    })
+
+    expect(opened.statusCode, opened.body).toBe(201)
+    const state = await repository.read()
+    const table = state.tables.find((candidate) => candidate.id === 'table-l04')!
+    expect(table).toMatchObject({ status: 'occupied', primaryEmployeeId: 'emp-chen' })
+    expect(state.auditEntries.find((entry) => entry.action === 'table.primary_auto_reassigned.v1')).toMatchObject({
+      actorId: 'emp-chen',
+      objectId: 'table-l04',
+      details: { toEmployeeId: 'emp-chen', reason: 'walk_in_open_primary_unavailable' },
+    })
+  })
+
+  it('archives unresolved service requests at turnover without deleting their analysis trail', async () => {
+    const { app, repository, useActor } = await fixture()
+    useActor('emp-chen', 'manager')
+    const opened = await app.inject({
+      method: 'POST', url: '/api/tables/table-l04/walk-in-open',
+      payload: { partySize: 2, salesEmployeeId: 'emp-lin', idempotencyKey: 'walk-in-archive-0001' },
+    })
+    expect(opened.statusCode, opened.body).toBe(201)
+    const firstSessionId = opened.json().summary.tableSessionId as string
+    let taskId = ''
+    await repository.mutate((state) => {
+      taskId = createServiceTask(state, {
+        tableCode: 'L04', serviceTypeId: 'water', source: 'guest', note: '一直没有人来加水',
+        idempotencyKey: 'turnover-unresolved-task-0001',
+      }).id
+    })
+
+    const closed = await app.inject({
+      method: 'POST', url: '/api/tables/table-l04/close',
+      payload: { reason: '客人已离店，保留未响应需求用于复盘', idempotencyKey: 'turnover-archive-close-0001' },
+    })
+    expect(closed.statusCode, closed.body).toBe(200)
+    const archivedState = await repository.read()
+    expect(archivedState.tasks.find((task) => task.id === taskId)).toMatchObject({
+      tableSessionId: firstSessionId,
+      status: 'cancelled',
+      archiveOutcome: 'unresolved',
+      archivedFromStatus: 'pending',
+      resolution: '桌次结束时需求仍未完成',
+    })
+    expect(archivedState.taskEvents.find((event) => event.taskId === taskId && event.type === 'task.archived_with_table_visit.v1')).toMatchObject({
+      payload: { tableSessionId: firstSessionId, previousStatus: 'pending', archiveOutcome: 'unresolved' },
+    })
+
+    const reopened = await app.inject({
+      method: 'POST', url: '/api/tables/table-l04/walk-in-open',
+      payload: { partySize: 3, salesEmployeeId: 'emp-lin', idempotencyKey: 'walk-in-archive-0002' },
+    })
+    expect(reopened.statusCode, reopened.body).toBe(201)
+    expect(reopened.json().summary.tableSessionId).not.toBe(firstSessionId)
+    expect((await repository.read()).tasks.filter((task) => (
+      task.tableSessionId === reopened.json().summary.tableSessionId && !task.archivedAt
+    ))).toHaveLength(0)
   })
 
   it('keeps the seated snapshot after config changes and requires a manager reason to waive the difference', async () => {

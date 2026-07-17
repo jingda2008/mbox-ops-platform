@@ -13,7 +13,7 @@ import { applyTaskAction, createServiceTask } from './domain.js'
 const secret = 'q'.repeat(32)
 const sessionTtlMs = 5 * 60_000
 
-async function fixture(runtimeMode: RuntimeMode = 'test', allowPaymentSimulation = false) {
+async function fixture(runtimeMode: RuntimeMode = 'test', allowPaymentSimulation = false, ttlMs: number | null = sessionTtlMs) {
   let now = Date.now()
   const repository = new JsonRepository(`/tmp/mbox-guest-${crypto.randomUUID()}.json`)
   await repository.init()
@@ -22,7 +22,7 @@ async function fixture(runtimeMode: RuntimeMode = 'test', allowPaymentSimulation
     secret,
     runtimeMode,
     allowPaymentSimulation,
-    guestSessionTtlMs: sessionTtlMs,
+    ...(ttlMs === null ? {} : { guestSessionTtlMs: ttlMs }),
     now: () => now,
   })
   return { app, repository, now: () => now, setNow: (value: number) => { now = value } }
@@ -75,6 +75,17 @@ async function replaceOpenSession(repository: JsonRepository, tableCode: string,
 }
 
 describe('guest table API', () => {
+  it('issues a 60-minute rolling session by default', async () => {
+    const { app, repository, now } = await fixture('test', false, null)
+    const response = await app.inject({ method: 'GET', url: '/api/guest/session?table=L01' })
+    const body = response.json() as GuestSessionResponse
+    const claims = requireGuestSession(verifyTableAccessToken(body.tableToken, secret, now()))
+
+    expect(response.statusCode).toBe(200)
+    expect(claims.expiresAt - claims.issuedAt).toBe(60 * 60_000)
+    await closeFixture(app, repository)
+  })
+
   it('keeps the local table-code sample by issuing the same short-lived session token', async () => {
     const { app, repository, now } = await fixture()
     const response = await app.inject({ method: 'GET', url: '/api/guest/session?table=L01' })

@@ -39,7 +39,7 @@ import {
 } from './payment-provider.js'
 import { tableSessionBusinessDate, tableSessionRequiresHandover } from './table-sessions.js'
 
-const DEFAULT_GUEST_SESSION_TTL_MS = 15 * 60_000
+const DEFAULT_GUEST_SESSION_TTL_MS = 60 * 60_000
 
 function deterministicId(prefix: string, key: string) {
   return `${prefix}_${createHash('sha256').update(key).digest('hex').slice(0, 32)}`

@@ -2,7 +2,7 @@ import { Bell, CakeSlice, CheckCircle2, ChevronRight, Clock3, CreditCard, GlassW
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { checkoutGuestOrder, createGuestOrder, createGuestSongRequest, createGuestTask, getGuestSession, submitGuestTaskFeedback } from '../api'
 import type { GuestSessionResponse, GuestTaskView, WechatJsapiParameters } from '../shared/guest-contracts'
-import { formatGuestCompactCountdown, guestCustomSongServiceNote, guestErrorMessage, guestFeedbackIdempotencyKey, guestMoodServiceNote, guestReplyNotice, guestSongReplyNotice, guestSongStatusLabel, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks, type GuestReplyNotice } from './guest-portal-utils'
+import { formatGuestCompactCountdown, guestCustomSongServiceNote, guestErrorMessage, guestFeedbackIdempotencyKey, guestMoodServiceNote, guestReplyNotice, guestSessionHistoryUrl, guestSongReplyNotice, guestSongStatusLabel, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks, type GuestReplyNotice } from './guest-portal-utils'
 import { ServiceIcon } from './ServiceIcon'
 import { MenuOrderingWorkspace, type MenuCartItem } from './MenuOrderingWorkspace'
 import { SuperHighCommunityBand } from './SuperHighCommunityBand'
@@ -77,6 +77,7 @@ export function GuestPortal() {
       const nextData = await getGuestSession(latestTableToken.current, tableCode)
       if (sequence !== refreshSequence.current) return
       latestTableToken.current = nextData.tableToken
+      window.history.replaceState(window.history.state, '', guestSessionHistoryUrl(window.location.href, nextData.tableToken))
       setData(nextData)
       setReply((current) => reconcileGuestReply(current, nextData.tasks, nextData.songRequests))
       setTerminalSongSeenAt((current) => trackGuestSongTerminalStates(current, nextData.songRequests, Date.now()))

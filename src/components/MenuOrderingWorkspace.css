@@ -4,8 +4,6 @@
 .menu-workspace-header span { color: var(--ink-soft); font-size: 11px; }
 .menu-workspace-header strong { font-size: 18px; }
 .menu-workspace-header select { width: min(280px, 36vw); height: 42px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 5px; background: #fff; font-weight: 750; }
-.menu-cart-count { margin-left: auto; display: flex; align-items: center; gap: 6px; }
-.menu-cart-count strong { min-width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%; background: var(--brand-yellow); font-size: 13px; }
 .menu-workspace-body { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 330px; }
 .menu-catalog { min-width: 0; display: grid; grid-template-columns: 104px minmax(0, 1fr); }
 .menu-categories { display: flex; flex-direction: column; gap: 5px; padding: 14px 8px; border-right: 1px solid var(--line); background: #e9ebe5; }
@@ -42,6 +40,8 @@
 .menu-cart-line > div:first-child strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .menu-cart-line > div:first-child span { font-size: 11px; }
 .menu-cart-total { min-height: 60px; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--line); }
+.menu-cart-total > span { display: flex; align-items: center; gap: 4px; }
+.menu-cart-total > span b { min-width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; background: var(--brand-yellow); color: #111512; font-size: 11px; }
 .menu-cart-total strong { font-size: 24px; }
 .menu-submit-button { min-height: 48px; display: flex; align-items: center; justify-content: center; gap: 8px; border: 0; border-radius: 6px; background: var(--wechat-green); color: #fff; font-size: 15px; font-weight: 800; }
 .menu-submit-button:disabled { opacity: .42; }
@@ -80,7 +80,5 @@
 }
 
 @media (max-width: 760px) {
-  .guest-shell .menu-workspace-header { min-height: 48px; padding-block: 5px; }
-  .guest-shell .menu-workspace-header > div:first-child { display: none; }
-  .guest-shell .menu-cart-count { margin-left: 0; width: 100%; justify-content: flex-end; }
+  .guest-shell .menu-workspace-header { display: none; }
 }

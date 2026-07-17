@@ -97,7 +97,6 @@ export function MenuOrderingWorkspace({
           <strong>{tableLabel}</strong>
         </div>
         {tableControl}
-        <div className="menu-cart-count"><ShoppingCart size={18} /><strong>{itemCount}</strong><span>件</span></div>
       </header>
 
       <div className="menu-workspace-body">
@@ -161,7 +160,7 @@ export function MenuOrderingWorkspace({
               </div>
             ))}
           </div>
-          <div className="menu-cart-total"><span>已选 {itemCount} 件 · 合计</span><strong>¥{(total / 100).toFixed(2)}</strong></div>
+          <div className="menu-cart-total"><span><ShoppingCart size={16} /><b>{itemCount}</b>件 · 合计</span><strong>¥{(total / 100).toFixed(2)}</strong></div>
           <button className="menu-submit-button" disabled={cartProducts.length === 0 || busy} onClick={() => void submit()}>
             <Check size={19} />{busy ? '正在提交' : submitLabel}
           </button>

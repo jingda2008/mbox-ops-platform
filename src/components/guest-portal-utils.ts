@@ -9,6 +9,12 @@ export function guestReplyNotice(message: string): GuestReplyNotice {
   return { message }
 }
 
+export function guestSessionHistoryUrl(currentHref: string, tableToken: string) {
+  const url = new URL(currentHref)
+  url.searchParams.set('token', tableToken)
+  return `${url.pathname}${url.search}${url.hash}`
+}
+
 export function guestTaskReplyNotice(message: string, task: GuestTaskView): GuestReplyNotice {
   return { message, related: { kind: 'task', id: task.id, status: task.status, updatedAt: task.updatedAt } }
 }

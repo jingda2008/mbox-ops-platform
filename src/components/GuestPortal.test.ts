@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { GuestTaskView } from '../shared/guest-contracts'
-import { formatGuestCompactCountdown, formatGuestCountdown, guestCustomSongServiceNote, guestErrorMessage, guestFeedbackIdempotencyKey, guestMoodServiceNote, guestReplyNotice, guestSongReplyNotice, guestSongStatusLabel, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks } from './guest-portal-utils'
+import { formatGuestCompactCountdown, formatGuestCountdown, guestCustomSongServiceNote, guestErrorMessage, guestFeedbackIdempotencyKey, guestMoodServiceNote, guestReplyNotice, guestSessionHistoryUrl, guestSongReplyNotice, guestSongStatusLabel, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks } from './guest-portal-utils'
 
 function guestTask(status: GuestTaskView['status'], id = `task-${status}`): GuestTaskView {
   return {
@@ -37,6 +37,15 @@ describe('guest service progress', () => {
     ]
 
     expect(visibleGuestTasks(tasks, 2).map((task) => task.id)).toEqual(['pending-1', 'accepted-1'])
+  })
+})
+
+describe('guest session renewal URL', () => {
+  it('replaces only the table token while preserving payment context and the hash', () => {
+    expect(guestSessionHistoryUrl(
+      'https://mbox.example/guest?token=old-token&payOrder=order-1#orders',
+      'new token/+',
+    )).toBe('/guest?token=new+token%2F%2B&payOrder=order-1#orders')
   })
 })
 

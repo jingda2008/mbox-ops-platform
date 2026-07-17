@@ -27,6 +27,10 @@ export function createSeedConfig(): StoreConfig {
         permissionIds: ['dashboard.view', 'reservation.view', 'benefit.view'], dataScope: 'store',
       },
       {
+        id: 'market_operations', name: '市场运营总监', maxConcurrentTasks: 2, canReceiveTasks: false,
+        permissionIds: ['dashboard.view', 'reservation.view', 'benefit.view'], dataScope: 'store',
+      },
+      {
         id: 'technical', name: '调音灯光', maxConcurrentTasks: 2, canReceiveTasks: false,
         permissionIds: ['dashboard.view', 'song.view'], dataScope: 'store',
       },
@@ -223,7 +227,7 @@ export function createSeedState(): RuntimeState {
     ],
     employees: [
       { id: 'emp-owner', displayName: '护古', initials: '护', status: 'active', roleId: 'owner', online: true, paused: false, areaIds: ['lounge', 'interactive', 'social', 'walkin', 'booth'], skillIds: [] },
-      { id: 'emp-admin', displayName: '乌鸦', initials: '乌', status: 'active', roleId: 'admin', roleIds: ['market_design'], permissionIds: ['reservation.view', 'benefit.view', 'benefit.manage'], online: true, paused: false, areaIds: [], skillIds: [] },
+      { id: 'emp-admin', displayName: '乌鸦', initials: '乌', status: 'active', roleId: 'admin', roleIds: ['market_operations'], permissionIds: ['reservation.view', 'benefit.view', 'benefit.manage'], online: true, paused: false, areaIds: [], skillIds: [] },
       { id: 'emp-lin', displayName: 'Tom', initials: 'T', status: 'active', roleId: 'server', permissionIds: ['reservation.view', 'reservation.manage'], online: true, paused: false, areaIds: ['lounge', 'walkin', 'booth'], skillIds: ['skill-runner'] },
       { id: 'emp-jie', displayName: 'Tyke', initials: 'T', status: 'active', roleId: 'backup', roleIds: ['server'], permissionIds: ['reservation.view', 'reservation.manage'], online: true, paused: false, areaIds: ['lounge', 'interactive', 'social', 'walkin', 'booth'], skillIds: ['skill-runner'] },
       { id: 'emp-wu', displayName: 'Jerry', initials: 'J', status: 'active', roleId: 'server', permissionIds: ['reservation.view', 'reservation.manage'], online: true, paused: false, areaIds: ['interactive', 'social'], skillIds: ['skill-runner'] },
@@ -237,7 +241,7 @@ export function createSeedState(): RuntimeState {
     ],
     shiftAssignments: [
       { id: 'shift-owner', employeeId: 'emp-owner', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'owner', areaIds: ['lounge', 'interactive', 'social', 'walkin', 'booth'], stationIds: [], isPrimary: false, status: 'active' },
-      { id: 'shift-admin', employeeId: 'emp-admin', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'admin', roleIds: ['market_design'], areaIds: [], stationIds: [], isPrimary: false, status: 'active' },
+      { id: 'shift-admin', employeeId: 'emp-admin', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'admin', roleIds: ['market_operations'], areaIds: [], stationIds: [], isPrimary: false, status: 'active' },
       { id: 'shift-lin', employeeId: 'emp-lin', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'server', areaIds: ['lounge', 'walkin', 'booth'], stationIds: ['bar-main', 'kitchen-cold', 'kitchen-hot'], isPrimary: true, status: 'active' },
       { id: 'shift-jie', employeeId: 'emp-jie', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'backup', roleIds: ['server'], areaIds: ['lounge', 'interactive', 'social', 'walkin', 'booth'], stationIds: ['bar-main', 'kitchen-cold', 'kitchen-hot'], isPrimary: false, status: 'active' },
       { id: 'shift-wu', employeeId: 'emp-wu', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'server', areaIds: ['interactive', 'social'], stationIds: ['bar-main', 'kitchen-cold', 'kitchen-hot'], isPrimary: true, status: 'active' },

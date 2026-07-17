@@ -21,6 +21,15 @@ export const PILOT_EMPLOYEE_IDS = [
   'emp-host',
 ] as const
 
+const PILOT_ROLE_IDS = [
+  'owner',
+  'backup',
+  'specialist',
+  'market_design',
+  'market_operations',
+  'technical',
+] as const
+
 function sameList(left: readonly string[] | undefined, right: readonly string[] | undefined) {
   return JSON.stringify(left ?? []) === JSON.stringify(right ?? [])
 }
@@ -64,6 +73,8 @@ function reconcileShift(existing: ShiftAssignment, reference: ShiftAssignment) {
 }
 
 export interface PilotStaffReconciliationResult {
+  addedRoleIds: string[]
+  updatedRoleIds: string[]
   addedEmployeeIds: string[]
   updatedEmployeeIds: string[]
   addedShiftIds: string[]
@@ -79,6 +90,8 @@ export function reconcilePilotStaff(
   occurredAt = new Date().toISOString(),
 ): PilotStaffReconciliationResult {
   const result: PilotStaffReconciliationResult = {
+    addedRoleIds: [],
+    updatedRoleIds: [],
     addedEmployeeIds: [],
     updatedEmployeeIds: [],
     addedShiftIds: [],
@@ -90,6 +103,19 @@ export function reconcilePilotStaff(
   const shiftWindow = state.shiftAssignments.find((shift) => (
     shift.businessDate === state.store.businessDate && shift.status === 'active'
   ))
+
+  for (const roleId of PILOT_ROLE_IDS) {
+    const referenceRole = reference.config.roles.find((role) => role.id === roleId)
+    if (!referenceRole) throw new Error(`验证岗位模板缺少 ${roleId}`)
+    const existingRole = state.config.roles.find((role) => role.id === roleId)
+    if (!existingRole) {
+      state.config.roles.push(structuredClone(referenceRole))
+      result.addedRoleIds.push(roleId)
+    } else if (existingRole.name !== referenceRole.name) {
+      existingRole.name = referenceRole.name
+      result.updatedRoleIds.push(roleId)
+    }
+  }
 
   for (const employeeId of PILOT_EMPLOYEE_IDS) {
     const referenceEmployee = reference.employees.find((employee) => employee.id === employeeId)
@@ -147,7 +173,9 @@ export function reconcilePilotStaff(
     result.updatedAuthorityIds.push(authority.id)
   }
 
-  result.changed = result.addedEmployeeIds.length > 0
+  result.changed = result.addedRoleIds.length > 0
+    || result.updatedRoleIds.length > 0
+    || result.addedEmployeeIds.length > 0
     || result.updatedEmployeeIds.length > 0
     || result.addedShiftIds.length > 0
     || result.updatedShiftIds.length > 0
@@ -163,6 +191,8 @@ export function reconcilePilotStaff(
     objectId: state.store.id,
     occurredAt,
     details: {
+      addedRoleIds: result.addedRoleIds,
+      updatedRoleIds: result.updatedRoleIds,
       addedEmployeeIds: result.addedEmployeeIds,
       updatedEmployeeIds: result.updatedEmployeeIds,
       addedShiftIds: result.addedShiftIds,

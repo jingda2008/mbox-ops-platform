@@ -4,13 +4,36 @@ import { AuthorizationError } from './authorization.js'
 import { registerReservationRoutes } from './reservation-api.js'
 import { JsonRepository } from './repository.js'
 
-function auth(roleId: string, actorId = `emp-${roleId}`) {
+function auth(roleId: string, actorId = roleId === 'host' ? 'emp-host' : `test-${roleId}`) {
   return { 'x-test-role': roleId, 'x-test-actor': actorId }
 }
 
 async function fixture() {
   const repository = new JsonRepository(`/tmp/mbox-reservation-authorization-${crypto.randomUUID()}.json`)
   await repository.init()
+  await repository.mutate((state) => {
+    const host = state.employees.find((item) => item.id === 'emp-host')!
+    host.roleId = 'host'
+    host.roleIds = []
+    host.permissionIds = []
+    host.areaIds = state.areas.map((area) => area.id)
+    host.online = true
+    host.paused = false
+    state.shiftAssignments = state.shiftAssignments.filter((shift) => shift.employeeId !== host.id)
+    state.shiftAssignments.push({
+      id: 'shift-test-host',
+      employeeId: host.id,
+      businessDate: state.store.businessDate,
+      startAt: `${state.store.businessDate}T12:00:00+08:00`,
+      endAt: `${state.store.businessDate}T23:59:59+08:00`,
+      roleId: 'host',
+      areaIds: state.areas.map((area) => area.id),
+      stationIds: [],
+      isPrimary: false,
+      status: 'active',
+    })
+    state.revision += 1
+  })
   const app = Fastify()
   app.addHook('preHandler', async (request) => {
     const roleId = String(request.headers['x-test-role'] ?? 'host')
@@ -50,7 +73,7 @@ async function create(app: FastifyInstance, suffix: string, depositRequiredAmoun
   return app.inject({
     method: 'POST',
     url: '/api/reservations',
-    headers: auth('host', `emp-host-${suffix}`),
+    headers: auth('host'),
     payload: payload(suffix, depositRequiredAmount, scheduledAt),
   })
 }
@@ -64,7 +87,7 @@ async function prepareRefund(app: FastifyInstance, suffix: string) {
   const intent = await app.inject({
     method: 'POST',
     url: `/api/reservations/${reservationId}/deposit-intent`,
-    headers: auth('host', `emp-host-${suffix}`),
+    headers: auth('host'),
     payload: { paymentIntentReference: intentReference, idempotencyKey: `reservation-intent-${suffix}` },
   })
   expect(intent.statusCode).toBe(200)
@@ -86,7 +109,7 @@ async function prepareRefund(app: FastifyInstance, suffix: string) {
   const cancelled = await app.inject({
     method: 'POST',
     url: `/api/reservations/${reservationId}/actions`,
-    headers: auth('host', `emp-host-${suffix}`),
+    headers: auth('host'),
     payload: { action: 'cancel', reason: '顾客取消', idempotencyKey: `reservation-cancel-${suffix}` },
   })
   expect(cancelled.statusCode).toBe(200)
@@ -122,7 +145,10 @@ describe('reservation operation authorization', () => {
         idempotencyKey: 'reservation-host-seat',
       },
     })
-    expect(seated.json().status).toBe('seated')
+    expect({ statusCode: seated.statusCode, body: seated.json() }).toEqual({
+      statusCode: 200,
+      body: expect.objectContaining({ status: 'seated' }),
+    })
     const openedTable = (await repository.read()).tables.find((table) => table.id === 'table-l04')
     expect(openedTable).toMatchObject({ status: 'occupied', guestCount: 6 })
     expect((await repository.read()).awaitingOrderIntents).toHaveLength(1)

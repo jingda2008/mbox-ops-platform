@@ -12,7 +12,7 @@ const pilotLoginSchema = z.object({
   accessCode: z.string().min(1).max(256).optional(),
   storeAccessToken: z.string().min(20).max(4096).optional(),
   actorId: z.string().min(1).max(128).optional(),
-  employeePin: z.string().regex(/^\d{6,12}$/).optional(),
+  employeePin: z.string().regex(/^\d{4}$/).optional(),
 }).strict().refine((input) => Boolean(input.accessCode || input.storeAccessToken), {
   message: '需要门店验证口令或当日凭证',
 })
@@ -27,7 +27,7 @@ interface PilotAuthOptions {
   now?: () => number
 }
 
-const PILOT_LOGIN_RATE_LIMIT = { scope: 'pilot.login', limit: 5, windowMs: 10 * 60_000 } as const
+const PILOT_LOGIN_RATE_LIMIT = { scope: 'pilot.login', limit: 5, windowMs: 15 * 60_000 } as const
 
 function sameSecret(left: string, right: string) {
   const leftHash = createHash('sha256').update(left).digest()
@@ -61,7 +61,7 @@ export async function registerPilotAuthRoutes(
     const rejectFailedLogin = async (statusCode: 401 | 403, code: string, message: string) => {
       const decision = await rateLimitStore.consume({ ...PILOT_LOGIN_RATE_LIMIT, key })
       if (!decision.allowed) {
-        return reply.status(429).send({ code: 'PILOT_LOGIN_RATE_LIMITED', message: '验证失败次数过多，请10分钟后重试' })
+        return reply.status(429).send({ code: 'PILOT_LOGIN_RATE_LIMITED', message: '验证失败次数过多，请15分钟后重试' })
       }
       return reply.status(statusCode).send({ code, message })
     }

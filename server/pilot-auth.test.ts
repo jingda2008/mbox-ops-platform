@@ -24,9 +24,9 @@ function repository(): RuntimeRepository {
 }
 
 const employeePins = {
-  'emp-owner': '100001', 'emp-admin': '100002', 'emp-lin': '100003', 'emp-jie': '100004',
-  'emp-wu': '100005', 'emp-qing': '100006', 'emp-han': '100007', 'emp-tao': '100008',
-  'emp-mia': '100009', 'emp-chen': '100010', 'emp-cashier': '100011', 'emp-host': '100012',
+  'emp-owner': '1001', 'emp-admin': '1002', 'emp-lin': '1003', 'emp-jie': '1004',
+  'emp-wu': '1005', 'emp-qing': '1006', 'emp-han': '1007', 'emp-tao': '1008',
+  'emp-mia': '1009', 'emp-chen': '1010', 'emp-cashier': '1011', 'emp-host': '1012',
 }
 
 function rateLimitStore(now: () => number = Date.now) {
@@ -131,7 +131,7 @@ describe('pilot employee auth', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/auth/pilot-login',
-      payload: { accessCode: 'store-pilot-code', actorId: 'missing-employee', employeePin: '100099' },
+      payload: { accessCode: 'store-pilot-code', actorId: 'missing-employee', employeePin: '9999' },
     })
     expect(response.statusCode).toBe(403)
     await app.close()
@@ -162,7 +162,7 @@ describe('pilot employee auth', () => {
     expect(blocked.statusCode).toBe(429)
     expect(blocked.json().code).toBe('PILOT_LOGIN_RATE_LIMITED')
 
-    limiterNow += 10 * 60_000
+    limiterNow += 15 * 60_000
     const expired = await app.inject({ method: 'POST', url: '/api/auth/pilot-login', payload: { accessCode: 'wrong' } })
     expect(expired.statusCode).toBe(401)
     const successful = await app.inject({

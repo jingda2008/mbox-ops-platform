@@ -26,26 +26,40 @@ function sameList(left: readonly string[] | undefined, right: readonly string[] 
 }
 
 function reconcileEmployee(existing: Employee, reference: Employee) {
-  const changed = existing.status !== 'active'
+  const changed = existing.displayName !== reference.displayName
+    || existing.initials !== reference.initials
+    || existing.status !== 'active'
     || existing.roleId !== reference.roleId
+    || !sameList(existing.roleIds, reference.roleIds)
+    || !sameList(existing.permissionIds, reference.permissionIds)
     || !sameList(existing.areaIds, reference.areaIds)
     || !sameList(existing.skillIds, reference.skillIds)
   if (!changed) return false
+  existing.displayName = reference.displayName
+  existing.initials = reference.initials
   existing.status = 'active'
   existing.roleId = reference.roleId
+  existing.roleIds = [...(reference.roleIds ?? [])]
+  existing.permissionIds = [...(reference.permissionIds ?? [])]
   existing.areaIds = [...reference.areaIds]
   existing.skillIds = [...(reference.skillIds ?? [])]
+  existing.online = false
+  existing.paused = false
   return true
 }
 
 function reconcileShift(existing: ShiftAssignment, reference: ShiftAssignment) {
   const changed = existing.roleId !== reference.roleId
+    || !sameList(existing.roleIds, reference.roleIds)
     || !sameList(existing.areaIds, reference.areaIds)
     || !sameList(existing.stationIds, reference.stationIds)
+    || existing.isPrimary !== reference.isPrimary
   if (!changed) return false
   existing.roleId = reference.roleId
+  existing.roleIds = [...(reference.roleIds ?? [])]
   existing.areaIds = [...reference.areaIds]
   existing.stationIds = [...(reference.stationIds ?? [])]
+  existing.isPrimary = reference.isPrimary
   return true
 }
 
@@ -54,6 +68,8 @@ export interface PilotStaffReconciliationResult {
   updatedEmployeeIds: string[]
   addedShiftIds: string[]
   updatedShiftIds: string[]
+  updatedTableIds: string[]
+  updatedAuthorityIds: string[]
   changed: boolean
 }
 
@@ -67,6 +83,8 @@ export function reconcilePilotStaff(
     updatedEmployeeIds: [],
     addedShiftIds: [],
     updatedShiftIds: [],
+    updatedTableIds: [],
+    updatedAuthorityIds: [],
     changed: false,
   }
   const shiftWindow = state.shiftAssignments.find((shift) => (
@@ -110,10 +128,31 @@ export function reconcilePilotStaff(
     result.addedShiftIds.push(shiftId)
   }
 
+  for (const referenceTable of reference.tables) {
+    const table = state.tables.find((candidate) => candidate.id === referenceTable.id)
+    if (!table) continue
+    if (
+      table.primaryEmployeeId === referenceTable.primaryEmployeeId
+      && sameList(table.backupEmployeeIds, referenceTable.backupEmployeeIds)
+    ) continue
+    table.primaryEmployeeId = referenceTable.primaryEmployeeId
+    table.backupEmployeeIds = [...referenceTable.backupEmployeeIds]
+    result.updatedTableIds.push(table.id)
+  }
+
+  for (const referenceAuthority of reference.orderDomain.authorizationAuthorities) {
+    const authority = state.orderDomain.authorizationAuthorities.find((candidate) => candidate.id === referenceAuthority.id)
+    if (!authority || authority.actorId === referenceAuthority.actorId) continue
+    authority.actorId = referenceAuthority.actorId
+    result.updatedAuthorityIds.push(authority.id)
+  }
+
   result.changed = result.addedEmployeeIds.length > 0
     || result.updatedEmployeeIds.length > 0
     || result.addedShiftIds.length > 0
     || result.updatedShiftIds.length > 0
+    || result.updatedTableIds.length > 0
+    || result.updatedAuthorityIds.length > 0
   if (!result.changed) return result
 
   state.auditEntries.push({
@@ -128,6 +167,8 @@ export function reconcilePilotStaff(
       updatedEmployeeIds: result.updatedEmployeeIds,
       addedShiftIds: result.addedShiftIds,
       updatedShiftIds: result.updatedShiftIds,
+      updatedTableIds: result.updatedTableIds,
+      updatedAuthorityIds: result.updatedAuthorityIds,
     },
   })
   state.revision += 1

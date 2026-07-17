@@ -86,7 +86,7 @@ describe('member benefit grants', () => {
     const state = createSeedState()
     const request = requestBenefitGrant(state, grantInput({ templateId: 'benefit-return-50' }), now)
     expect(() => decideBenefitGrant(state, request.id, {
-      actorId: 'emp-mia',
+      actorId: 'emp-qing',
       decision: 'granted',
       note: '尝试审批策略范围外权益',
     }, now)).toThrow('没有该权益审批权限')

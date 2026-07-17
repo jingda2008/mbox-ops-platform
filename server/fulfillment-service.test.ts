@@ -83,15 +83,15 @@ describe('automatic fulfillment delivery service task', () => {
     let state = await repository.read()
     const kdsTask = state.orderDomain.kdsTasks[0]!
     expect(state.tasks.filter((task) => task.triggerId === `fulfillment-delivery:${kdsTask.id}`)).toHaveLength(1)
-    expect(kdsTask.deliveryServiceTask).toMatchObject({ status: 'pending', ownerId: 'emp-tao' })
+    expect(kdsTask.deliveryServiceTask).toMatchObject({ status: 'pending', ownerId: 'emp-lin' })
     const deliveryTask = state.tasks.find((task) => task.id === kdsTask.deliveryServiceTask?.id)!
     expect(deliveryTask).toMatchObject({
-      serviceTypeId: 'fulfillment-delivery', source: 'system', ownerId: 'emp-tao', status: 'pending',
+      serviceTypeId: 'fulfillment-delivery', source: 'system', ownerId: 'emp-lin', status: 'pending',
     })
     expect(deliveryTask.serviceTypeId).not.toBe('order-help')
 
-    expect((await action(app, 'pickUp', 'fulfillment-pickup-0001', 'runner', 'emp-tao')).statusCode).toBe(200)
-    expect((await action(app, 'deliver', 'fulfillment-deliver-0001', 'runner', 'emp-tao')).statusCode).toBe(200)
+    expect((await action(app, 'pickUp', 'fulfillment-pickup-0001', 'server', 'emp-lin')).statusCode).toBe(200)
+    expect((await action(app, 'deliver', 'fulfillment-deliver-0001', 'server', 'emp-lin')).statusCode).toBe(200)
     state = await repository.read()
     expect(state.tasks.find((task) => task.id === deliveryTask.id)).toMatchObject({
       status: 'completed', resolution: '商品已送达桌台，待确认',

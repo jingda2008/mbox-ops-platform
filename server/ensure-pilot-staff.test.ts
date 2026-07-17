@@ -9,7 +9,9 @@ describe('pilot staff reconciliation', () => {
     state.employees = state.employees.filter((employee) => retainedIds.has(employee.id))
     state.shiftAssignments = state.shiftAssignments.filter((shift) => retainedIds.has(shift.employeeId))
     const bartender = state.employees.find((employee) => employee.id === 'emp-qing')!
+    bartender.displayName = '虚拟员工'
     bartender.roleId = 'specialist'
+    bartender.roleIds = []
     bartender.skillIds = []
     const bartenderShift = state.shiftAssignments.find((shift) => shift.employeeId === 'emp-qing')!
     bartenderShift.roleId = 'specialist'
@@ -22,10 +24,12 @@ describe('pilot staff reconciliation', () => {
     ]) })
     expect(state.employees.map((employee) => employee.id).filter((id) => PILOT_EMPLOYEE_IDS.includes(id as typeof PILOT_EMPLOYEE_IDS[number]))).toHaveLength(12)
     expect(state.employees.find((employee) => employee.id === 'emp-qing')).toMatchObject({
-      roleId: 'bartender', skillIds: ['skill-bar'],
+      displayName: '冷言志', roleId: 'bartender', roleIds: ['supervisor'],
+      skillIds: ['skill-bar', 'skill-runner'],
     })
     expect(state.shiftAssignments.find((shift) => shift.employeeId === 'emp-qing')).toMatchObject({
-      roleId: 'bartender', stationIds: ['bar-main'],
+      roleId: 'bartender', roleIds: ['supervisor'],
+      stationIds: ['bar-main', 'kitchen-cold', 'kitchen-hot'],
     })
     expect(state.revision).toBe(previousRevision + 1)
     expect(state.auditEntries.at(-1)?.action).toBe('pilot.staff_roster_reconciled.v1')

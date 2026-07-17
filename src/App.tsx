@@ -374,10 +374,10 @@ function PilotLogin({ onAuthenticated }: { onAuthenticated: () => void }) {
         {employees.length === 0 ? (
           <label><span>门店验证口令</span><input type="password" autoComplete="current-password" value={accessCode} onChange={(event) => setAccessCode(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && accessCode) void verifyAccess() }} /></label>
         ) : (
-          <><label><span>当前操作员工</span><select value={actorId} onChange={(event) => { setActorId(event.target.value); setEmployeePin('') }}>{employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName} · {employee.roleName}</option>)}</select></label><label><span>员工PIN</span><input type="password" inputMode="numeric" autoComplete="current-password" minLength={6} maxLength={12} value={employeePin} onChange={(event) => setEmployeePin(event.target.value.replace(/\D/g, '').slice(0, 12))} onKeyDown={(event) => { if (event.key === 'Enter' && employeePin.length >= 6) void login() }} /></label></>
+          <><label><span>当前操作员工</span><select value={actorId} onChange={(event) => { setActorId(event.target.value); setEmployeePin('') }}>{employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName} · {employee.roleName}</option>)}</select></label><label><span>员工PIN</span><input type="password" inputMode="numeric" autoComplete="current-password" minLength={4} maxLength={4} value={employeePin} onChange={(event) => setEmployeePin(event.target.value.replace(/\D/g, '').slice(0, 4))} onKeyDown={(event) => { if (event.key === 'Enter' && employeePin.length === 4) void login() }} /></label></>
         )}
         {error && <p className="pilot-login-error" role="alert">{error}</p>}
-        <button className="primary-button" disabled={loading || (employees.length === 0 ? !accessCode : !actorId || employeePin.length < 6)} onClick={() => void (employees.length === 0 ? verifyAccess() : login())}>
+        <button className="primary-button" disabled={loading || (employees.length === 0 ? !accessCode : !actorId || employeePin.length !== 4)} onClick={() => void (employees.length === 0 ? verifyAccess() : login())}>
           {loading ? <LoaderCircle className="spin" size={17} /> : <LogIn size={17} />}{employees.length === 0 ? '继续' : '进入运营台'}
         </button>
         {employees.length > 0 && <button className="pilot-login-back" onClick={() => { clearStoreAccess(); setEmployees([]); setActorId(''); setEmployeePin(''); setError('') }}>重新验证门店口令</button>}

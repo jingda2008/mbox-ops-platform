@@ -1,7 +1,7 @@
 import Fastify from 'fastify'
 import { describe, expect, it } from 'vitest'
 import type { StaffPermissionId, RoleDataScope } from '../src/shared/contracts.js'
-import { roleHasPermission } from '../src/shared/role-policy.js'
+import { effectiveDataScopeForEmployee, effectivePermissionIdsForEmployee } from '../src/shared/staff-access.js'
 import { verifyStaffSession } from './auth-context.js'
 import { registerPilotAuthRoutes } from './pilot-auth.js'
 import { MemoryRateLimitStore } from './rate-limit.js'
@@ -12,18 +12,18 @@ const accessCode = 'store-pilot-code'
 const sessionSecret = 's'.repeat(32)
 
 const employeePins = {
-  'emp-owner': '100001',
-  'emp-admin': '100002',
-  'emp-lin': '100003',
-  'emp-jie': '100004',
-  'emp-wu': '100005',
-  'emp-qing': '100006',
-  'emp-han': '100007',
-  'emp-tao': '100008',
-  'emp-mia': '100009',
-  'emp-chen': '100010',
-  'emp-cashier': '100011',
-  'emp-host': '100012',
+  'emp-owner': '1001',
+  'emp-admin': '1002',
+  'emp-lin': '1003',
+  'emp-jie': '1004',
+  'emp-wu': '1005',
+  'emp-qing': '1006',
+  'emp-han': '1007',
+  'emp-tao': '1008',
+  'emp-mia': '1009',
+  'emp-chen': '1010',
+  'emp-cashier': '1011',
+  'emp-host': '1012',
 } as const
 
 interface StaffAccessExpectation {
@@ -37,64 +37,64 @@ interface StaffAccessExpectation {
 
 const staffAccessMatrix: StaffAccessExpectation[] = [
   {
-    employeeId: 'emp-owner', displayName: '周总', roleId: 'owner', dataScope: 'all_stores',
+    employeeId: 'emp-owner', displayName: '护古', roleId: 'owner', dataScope: 'all_stores',
     allowed: ['config.manage', 'business_day.close', 'payment.refund.approve', 'benefit.manage'],
     forbidden: [],
   },
   {
-    employeeId: 'emp-admin', displayName: '系统管理员', roleId: 'admin', dataScope: 'store',
-    allowed: ['config.manage', 'identity.manage', 'master_data.manage', 'shift.manage', 'table.manage', 'store_import.apply'],
+    employeeId: 'emp-admin', displayName: '乌鸦', roleId: 'admin', dataScope: 'store',
+    allowed: ['config.manage', 'identity.manage', 'master_data.manage', 'shift.manage', 'table.manage', 'store_import.apply', 'benefit.manage'],
     forbidden: ['finance.view', 'service.execute', 'order.create', 'payment.collect'],
   },
   {
-    employeeId: 'emp-lin', displayName: '小林', roleId: 'server', dataScope: 'assigned_areas',
-    allowed: ['service.execute', 'order.create', 'kds.deliver', 'payment.collect', 'payment.refund.request', 'benefit.grant'],
-    forbidden: ['kds.prepare', 'payment.refund.approve', 'reservation.manage', 'config.manage'],
+    employeeId: 'emp-lin', displayName: 'Tom', roleId: 'server', dataScope: 'assigned_areas',
+    allowed: ['service.execute', 'order.create', 'kds.deliver', 'payment.collect', 'payment.refund.request', 'benefit.grant', 'reservation.manage'],
+    forbidden: ['kds.prepare', 'payment.refund.approve', 'config.manage'],
   },
   {
-    employeeId: 'emp-jie', displayName: '阿杰', roleId: 'backup', dataScope: 'assigned_areas',
-    allowed: ['service.execute', 'order.create', 'kds.deliver', 'payment.collect'],
-    forbidden: ['kds.prepare', 'payment.refund.request', 'benefit.grant', 'reservation.manage'],
+    employeeId: 'emp-jie', displayName: 'Tyke', roleId: 'backup', dataScope: 'assigned_areas',
+    allowed: ['service.execute', 'order.create', 'kds.deliver', 'payment.collect', 'payment.refund.request', 'benefit.grant', 'reservation.manage'],
+    forbidden: ['kds.prepare', 'payment.refund.approve', 'config.manage'],
   },
   {
-    employeeId: 'emp-wu', displayName: '小吴', roleId: 'server', dataScope: 'assigned_areas',
-    allowed: ['service.execute', 'order.create', 'kds.deliver', 'payment.collect', 'payment.refund.request', 'benefit.grant'],
-    forbidden: ['kds.prepare', 'payment.refund.approve', 'reservation.manage', 'config.manage'],
+    employeeId: 'emp-wu', displayName: 'Jerry', roleId: 'server', dataScope: 'assigned_areas',
+    allowed: ['service.execute', 'order.create', 'kds.deliver', 'payment.collect', 'payment.refund.request', 'benefit.grant', 'reservation.manage'],
+    forbidden: ['kds.prepare', 'payment.refund.approve', 'config.manage'],
   },
   {
-    employeeId: 'emp-qing', displayName: '小青', roleId: 'bartender', dataScope: 'own',
-    allowed: ['service.execute', 'order.view', 'kds.prepare', 'inventory.view'],
-    forbidden: ['order.create', 'kds.deliver', 'payment.collect', 'inventory.manage'],
-  },
-  {
-    employeeId: 'emp-han', displayName: '韩师傅', roleId: 'kitchen', dataScope: 'own',
-    allowed: ['service.execute', 'order.view', 'kds.prepare', 'inventory.view'],
-    forbidden: ['order.create', 'kds.deliver', 'payment.collect', 'inventory.manage'],
-  },
-  {
-    employeeId: 'emp-tao', displayName: '小陶', roleId: 'runner', dataScope: 'assigned_areas',
-    allowed: ['service.execute', 'order.view', 'kds.deliver'],
-    forbidden: ['order.create', 'kds.prepare', 'payment.collect', 'inventory.view'],
-  },
-  {
-    employeeId: 'emp-mia', displayName: 'Mia', roleId: 'supervisor', dataScope: 'store',
-    allowed: ['shift.manage', 'reservation.manage', 'complaint.handle', 'order.create', 'payment.collect', 'benefit.approve'],
+    employeeId: 'emp-qing', displayName: '冷言志', roleId: 'bartender', dataScope: 'store',
+    allowed: ['service.execute', 'order.create', 'kds.prepare', 'kds.deliver', 'payment.collect', 'reservation.manage', 'benefit.approve'],
     forbidden: ['config.manage', 'identity.manage', 'payment.refund.approve', 'business_day.close'],
   },
   {
-    employeeId: 'emp-chen', displayName: '陈经理', roleId: 'manager', dataScope: 'store',
+    employeeId: 'emp-han', displayName: '申良良', roleId: 'kitchen', dataScope: 'own',
+    allowed: ['service.execute', 'order.view', 'kds.prepare', 'inventory.view'],
+    forbidden: ['order.create', 'kds.deliver', 'payment.collect', 'inventory.manage'],
+  },
+  {
+    employeeId: 'emp-tao', displayName: '阿金', roleId: 'technical', dataScope: 'store',
+    allowed: ['dashboard.view', 'song.view'],
+    forbidden: ['service.execute', 'order.create', 'kds.prepare', 'kds.deliver', 'payment.collect', 'inventory.view'],
+  },
+  {
+    employeeId: 'emp-mia', displayName: '付淳羽', roleId: 'specialist', dataScope: 'assigned_areas',
+    allowed: ['service.execute', 'order.create', 'kds.prepare', 'kds.deliver', 'benefit.grant', 'song.manage', 'reservation.view'],
+    forbidden: ['config.manage', 'payment.collect', 'payment.refund.approve', 'inventory.manage'],
+  },
+  {
+    employeeId: 'emp-chen', displayName: '李艳', roleId: 'manager', dataScope: 'store',
     allowed: ['business_day.close', 'reservation.config.manage', 'complaint.handle', 'payment.refund.approve', 'inventory.approve'],
     forbidden: ['config.manage', 'identity.manage'],
   },
   {
-    employeeId: 'emp-cashier', displayName: '小薇', roleId: 'cashier', dataScope: 'store',
+    employeeId: 'emp-cashier', displayName: '三沐', roleId: 'cashier', dataScope: 'store',
     allowed: ['finance.view', 'reservation.view', 'table.close', 'payment.collect', 'payment.pos_report', 'payment.refund.request'],
     forbidden: ['reservation.manage', 'order.create', 'payment.refund.approve', 'business_day.close'],
   },
   {
-    employeeId: 'emp-host', displayName: '安安', roleId: 'host', dataScope: 'store',
-    allowed: ['table.manage', 'reservation.view', 'reservation.manage', 'service.execute', 'benefit.view'],
-    forbidden: ['reservation.config.manage', 'order.create', 'payment.collect', 'config.manage'],
+    employeeId: 'emp-host', displayName: '挞挞', roleId: 'market_design', dataScope: 'store',
+    allowed: ['dashboard.view', 'reservation.view', 'benefit.view'],
+    forbidden: ['reservation.manage', 'service.execute', 'order.create', 'payment.collect', 'config.manage'],
   },
 ]
 
@@ -189,7 +189,6 @@ describe('12名员工岗位权限矩阵验收', () => {
     ({ employeeId, displayName, roleId, dataScope, allowed, forbidden }) => {
       const state = createSeedState()
       const employee = state.employees.find((item) => item.id === employeeId)
-      const role = state.config.roles.find((item) => item.id === roleId)
       const activeShift = state.shiftAssignments.find(
         (item) => item.employeeId === employeeId && item.status === 'active',
       )
@@ -197,13 +196,14 @@ describe('12名员工岗位权限矩阵验收', () => {
 
       expect(employee, `${failureContext} 必须存在于员工种子`).toMatchObject({ displayName, roleId, status: 'active' })
       expect(activeShift, `${failureContext} 必须有匹配岗位的有效班次`).toMatchObject({ roleId, status: 'active' })
-      expect(role?.dataScope, `${failureContext} 数据范围不正确`).toBe(dataScope)
+      expect(effectiveDataScopeForEmployee(state, employeeId), `${failureContext} 数据范围不正确`).toBe(dataScope)
+      const effectivePermissions = effectivePermissionIdsForEmployee(state, employeeId)
 
       for (const permissionId of allowed) {
-        expect(roleHasPermission(role, permissionId), `${failureContext} 应允许 ${permissionId}`).toBe(true)
+        expect(effectivePermissions, `${failureContext} 应允许 ${permissionId}`).toContain(permissionId)
       }
       for (const permissionId of forbidden) {
-        expect(roleHasPermission(role, permissionId), `${failureContext} 应禁止 ${permissionId}`).toBe(false)
+        expect(effectivePermissions, `${failureContext} 应禁止 ${permissionId}`).not.toContain(permissionId)
       }
     },
   )

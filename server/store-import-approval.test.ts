@@ -104,9 +104,11 @@ async function fixture() {
   await repository.mutate((state) => {
     const areaId = 'approval-area'
     state.areas = [{ id: areaId, name: '审批测试区', shortName: '审批', color: '#169bd5', sortOrder: 1 }]
-    const selected = ['emp-owner', 'emp-lin', 'emp-jie', 'emp-mia', 'emp-chen']
+    const selected = ['emp-owner', 'emp-lin', 'emp-jie', 'emp-qing', 'emp-chen']
     state.employees = state.employees.filter((item) => selected.includes(item.id)).map((item) => ({
       ...item,
+      roleId: item.id === 'emp-qing' ? 'supervisor' : item.roleId,
+      roleIds: item.id === 'emp-qing' ? [] : item.roleIds,
       areaIds: item.id === 'emp-owner' ? [] : [areaId],
     }))
     state.tables = [{
@@ -116,7 +118,7 @@ async function fixture() {
     }]
     const shiftActors = [
       ['emp-lin', 'server', true], ['emp-jie', 'backup', false],
-      ['emp-mia', 'supervisor', false], ['emp-chen', 'manager', false],
+      ['emp-qing', 'supervisor', false], ['emp-chen', 'manager', false],
     ] as const
     state.shiftAssignments = shiftActors.map(([employeeId, roleId, isPrimary]) => ({
       id: `approval-shift-${employeeId}`, employeeId, businessDate: state.store.businessDate,

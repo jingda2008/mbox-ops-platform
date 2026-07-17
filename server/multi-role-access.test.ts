@@ -18,7 +18,7 @@ describe('configurable multi-role account access', () => {
     shift.roleIds = ['server', 'runner']
     const actor = request({
       actorId: employee.id,
-      roleId: 'host',
+      roleId: 'market_design',
       storeId: state.store.id,
       runtimeMode: 'test',
       authenticatedBy: 'local_header',
@@ -27,6 +27,6 @@ describe('configurable multi-role account access', () => {
     expect(requireConfiguredOperation(actor, state, 'commerce.order.create')).toMatchObject({ actorId: employee.id, roleId: 'server' })
     expect(requireConfiguredOperation(actor, state, 'commerce.kds.deliver')).toMatchObject({ actorId: employee.id })
     expect(requireAnyRole(actor, state, ['runner'], 'delivery')).toMatchObject({ actorId: employee.id, roleId: 'runner' })
-    expect(employee.roleId).toBe('host')
+    expect(employee.roleId).toBe('market_design')
   })
 })

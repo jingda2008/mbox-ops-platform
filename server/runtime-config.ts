@@ -111,7 +111,7 @@ function parsePilotEmployeePins(value: string | undefined) {
   } catch {
     throw new Error('MBOX_PILOT_EMPLOYEE_PINS_JSON必须是有效JSON')
   }
-  const pins = z.record(z.string().trim().min(1).max(128), z.string().regex(/^\d{6,12}$/, '员工PIN必须是6至12位数字')).parse(parsed)
+  const pins = z.record(z.string().trim().min(1).max(128), z.string().regex(/^\d{4}$/, '员工PIN必须是4位数字')).parse(parsed)
   const values = Object.values(pins)
   if (new Set(values).size !== values.length) throw new Error('门店验证员工PIN不能重复')
   return pins

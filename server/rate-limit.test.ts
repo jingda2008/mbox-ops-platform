@@ -128,7 +128,7 @@ describe('distributed fixed-window rate limits', () => {
     const pool = new SharedRateLimitPool()
     const firstInstance = postgresStore(pool)
     const secondInstance = postgresStore(pool)
-    const rawKey = 'ip=203.0.113.8;pin=100001'
+    const rawKey = 'ip=203.0.113.8;pin=1001'
     const input = { scope: 'pilot.login', key: rawKey, limit: 5, windowMs: WINDOW_MS }
 
     for (let attempt = 1; attempt <= 5; attempt += 1) {
@@ -140,7 +140,7 @@ describe('distributed fixed-window rate limits', () => {
 
     const queryValues = JSON.stringify(pool.queries.map((query) => query.values))
     expect(queryValues).not.toContain('203.0.113.8')
-    expect(queryValues).not.toContain('100001')
+    expect(queryValues).not.toContain('1001')
     expect([...pool.windows.keys()][0]).toMatch(/[0-9a-f]{64}$/)
     expect(pool.queries.some((query) => query.sql.includes('ON CONFLICT'))).toBe(true)
 

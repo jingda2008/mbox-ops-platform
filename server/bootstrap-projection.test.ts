@@ -20,11 +20,11 @@ describe('role scoped bootstrap projection', () => {
     expect(projected.draftConfig).toBeNull()
   })
 
-  it('gives an admin configuration data without payment or business benefits', () => {
+  it('gives the market administrator configuration and member benefits without payment data', () => {
     const projected = projectRuntimeStateForActor(createSeedState(), actor('emp-admin', 'admin'))
     expect(projected.configVersions.length).toBeGreaterThan(0)
     expect(projected.paymentDomain.paymentIntents).toEqual([])
-    expect(projected.members).toEqual([])
+    expect(projected.members.length).toBeGreaterThan(0)
     expect(projected.orderDomain.orders).toEqual([])
   })
 
@@ -65,6 +65,8 @@ describe('role scoped bootstrap projection', () => {
   it('shows an assigned workstation task outside the production employee table areas without leaking table data', () => {
     const state = createSeedState()
     const shift = state.shiftAssignments.find((item) => item.employeeId === 'emp-qing')!
+    state.employees.find((item) => item.id === 'emp-qing')!.roleIds = []
+    shift.roleIds = []
     shift.areaIds = ['lounge']
     shift.stationIds = ['bar-main']
     state.orderDomain.kdsTasks.push({

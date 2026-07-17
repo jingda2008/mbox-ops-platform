@@ -51,8 +51,9 @@ function audit(
 function actorContext(state: RuntimeState, actorId: string) {
   const employee = state.employees.find((item) => item.id === actorId && item.status === 'active')
   if (!employee) throw new Error('发放人员不存在或已停用')
-  const policy = state.benefitGrantPolicies.find((item) => item.roleId === employee.roleId)
-  return { employee, policy }
+  const roleIds = [...new Set([employee.roleId, ...(employee.roleIds ?? [])])]
+  const policies = state.benefitGrantPolicies.filter((item) => roleIds.includes(item.roleId))
+  return { employee, policy: policies[0], policies }
 }
 
 function availableQuantity(state: RuntimeState, memberId: string, templateId: string) {
@@ -177,14 +178,13 @@ export function requestBenefitGrant(state: RuntimeState, input: BenefitGrantInpu
   const member = state.members.find((item) => item.id === input.memberId)
   if (!member) throw new Error('会员不存在')
   const template = ensureMemberCapacity(state, input.memberId, input.templateId, input.quantity)
-  const { policy } = actorContext(state, input.actorId)
+  const { policies } = actorContext(state, input.actorId)
   const cost = template.costAmount * input.quantity
-  const directAllowed = Boolean(
-    policy &&
+  const directAllowed = policies.some((policy) => (
     policy.templateIds.includes(template.id) &&
     cost <= policy.maxCostPerGrantAmount &&
-    actorDailyCost(state, input.actorId, now) + cost <= policy.maxDailyCostAmount,
-  )
+    actorDailyCost(state, input.actorId, now) + cost <= policy.maxDailyCostAmount
+  ))
   const request: BenefitGrantRequest = {
     id: `benefit_request_${randomUUID()}`,
     memberId: member.id,
@@ -224,9 +224,12 @@ export function decideBenefitGrant(
   const request = state.benefitGrantRequests.find((item) => item.id === requestId)
   if (!request) throw new Error('权益申请不存在')
   if (request.status !== 'pending') return request
-  const { policy } = actorContext(state, input.actorId)
-  if (!policy?.canApprove) throw new Error('当前人员没有权益审批权限')
-  if (!policy.templateIds.includes(request.templateId)) throw new Error('当前人员没有该权益审批权限')
+  const { policies } = actorContext(state, input.actorId)
+  const approvalPolicies = policies.filter((policy) => policy.canApprove)
+  if (approvalPolicies.length === 0) throw new Error('当前人员没有权益审批权限')
+  if (!approvalPolicies.some((policy) => policy.templateIds.includes(request.templateId))) {
+    throw new Error('当前人员没有该权益审批权限')
+  }
   if (input.decision === 'granted') {
     createMemberBenefit(state, request, input.actorId, now)
   } else {
@@ -249,10 +252,14 @@ function memberMatchesSegment(member: MemberProfile, segment: BenefitCampaignInp
 }
 
 export function previewBenefitCampaign(state: RuntimeState, input: BenefitCampaignInput, now = new Date()) {
-  const { policy } = actorContext(state, input.actorId)
-  if (!policy?.canLaunchCampaign) throw new Error('当前人员没有活动批量发放权限')
+  const { policies } = actorContext(state, input.actorId)
+  const campaignPolicies = policies.filter((policy) => policy.canLaunchCampaign)
+  if (campaignPolicies.length === 0) throw new Error('当前人员没有活动批量发放权限')
   const template = state.benefitTemplates.find((item) => item.id === input.templateId && item.enabled)
-  if (!template || !policy.templateIds.includes(template.id)) throw new Error('该权益不在活动发放权限范围内')
+  const policy = template
+    ? campaignPolicies.find((candidate) => candidate.templateIds.includes(template.id))
+    : undefined
+  if (!template || !policy) throw new Error('该权益不在活动发放权限范围内')
   const eligibleMembers = state.members.filter((member) => memberMatchesSegment(member, input.segment, now))
   const issuableMembers = eligibleMembers.filter(
     (member) => availableQuantity(state, member.id, template.id) < template.maxPerMember,
@@ -274,10 +281,14 @@ export function previewBenefitCampaign(state: RuntimeState, input: BenefitCampai
 export function launchBenefitCampaign(state: RuntimeState, input: BenefitCampaignInput, now = new Date()) {
   const previous = state.benefitCampaigns.find((item) => item.idempotencyKey === input.idempotencyKey)
   if (previous) return previous
-  const { policy } = actorContext(state, input.actorId)
-  if (!policy?.canLaunchCampaign) throw new Error('当前人员没有活动批量发放权限')
+  const { policies } = actorContext(state, input.actorId)
+  const campaignPolicies = policies.filter((policy) => policy.canLaunchCampaign)
+  if (campaignPolicies.length === 0) throw new Error('当前人员没有活动批量发放权限')
   const template = state.benefitTemplates.find((item) => item.id === input.templateId && item.enabled)
-  if (!template || !policy.templateIds.includes(template.id)) throw new Error('该权益不在活动发放权限范围内')
+  const policy = template
+    ? campaignPolicies.find((candidate) => candidate.templateIds.includes(template.id))
+    : undefined
+  if (!template || !policy) throw new Error('该权益不在活动发放权限范围内')
   const eligibleMembers = state.members.filter((member) => memberMatchesSegment(member, input.segment, now))
   const projectedCost = eligibleMembers.length * template.costAmount
   if (actorDailyCost(state, input.actorId, now) + projectedCost > policy.maxDailyCostAmount) {

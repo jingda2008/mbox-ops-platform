@@ -27,7 +27,7 @@ async function signedFixture() {
   await repository.init()
   const now = Date.now()
   await repository.mutate((state) => {
-    state.presenceLeases = ['emp-mia', 'emp-chen'].map((actorId) => ({
+    state.presenceLeases = ['emp-qing', 'emp-chen'].map((actorId) => ({
       sessionId: `session-${actorId}`, actorId, storeId: state.store.id, businessDate: state.store.businessDate,
       establishedAt: now, lastSeenAt: now, expiresAt: now + 60_000, sessionExpiresAt: now + 60_000,
     }))
@@ -194,7 +194,7 @@ describe('inventory API', () => {
       idempotencyKey: 'inventory-policy-auth-0001',
     }
     const denied = await app.inject({
-      method: 'PUT', url: '/api/inventory/policy', headers: headers('emp-mia'), payload,
+      method: 'PUT', url: '/api/inventory/policy', headers: headers('emp-qing'), payload,
     })
     expect(denied.statusCode).toBe(403)
     expect(denied.json()).toMatchObject({ code: 'AUTHORIZATION_DENIED', operation: 'inventory.approve' })
@@ -241,7 +241,7 @@ describe('inventory API', () => {
       idempotencyKey: 'inventory-stock-alerts-0001',
     }
     const denied = await app.inject({
-      method: 'PUT', url: '/api/inventory/stock-alerts', headers: headers('emp-mia'), payload,
+      method: 'PUT', url: '/api/inventory/stock-alerts', headers: headers('emp-qing'), payload,
     })
     expect(denied.statusCode).toBe(403)
 
@@ -278,7 +278,7 @@ describe('inventory API', () => {
     const count = await app.inject({
       method: 'POST',
       url: '/api/inventory/stock-counts',
-      headers: headers('emp-mia'),
+      headers: headers('emp-qing'),
       payload: {
         productId: 'product-beer', unitCode: 'bottle', countedQuantity: 0,
         approvalId: 'approval-inventory-limit-0001', occurredAt,
@@ -313,7 +313,7 @@ describe('inventory API', () => {
     const deposit = await app.inject({
       method: 'POST',
       url: '/api/inventory/bottles',
-      headers: headers('emp-mia'),
+      headers: headers('emp-qing'),
       payload: {
         productId: 'product-beer',
         skuSnapshot: 'BEER-001',
@@ -335,7 +335,7 @@ describe('inventory API', () => {
     const requested = await app.inject({
       method: 'POST',
       url: `/api/inventory/bottles/${deposit.json().id}/transfer`,
-      headers: headers('emp-mia'),
+      headers: headers('emp-qing'),
       payload: {
         recipientOwner: { kind: 'member', memberId: 'member-li' },
         tableSessionId: 'session-l01',
@@ -351,7 +351,7 @@ describe('inventory API', () => {
     const selfApproved = await app.inject({
       method: 'POST',
       url: `/api/inventory/approvals/${requested.json().id}/decision`,
-      headers: headers('emp-mia'),
+      headers: headers('emp-qing'),
       payload: {
         decision: 'approve',
         reason: '本人尝试批准',
@@ -384,7 +384,7 @@ describe('inventory API', () => {
     const { app, repository } = await signedFixture()
     const now = Date.now()
     const deposit = await app.inject({
-      method: 'POST', url: '/api/inventory/bottles', headers: signedHeaders('emp-mia', now),
+      method: 'POST', url: '/api/inventory/bottles', headers: signedHeaders('emp-qing', now),
       payload: {
         productId: 'product-beer', skuSnapshot: 'BEER-001', productNameSnapshot: '精酿啤酒',
         owner: { kind: 'member', memberId: 'member-amy' }, capacityQuantity: 500, unitCode: 'ml',
@@ -395,14 +395,14 @@ describe('inventory API', () => {
     })
     expect(deposit.statusCode, deposit.body).toBe(201)
     const requested = await app.inject({
-      method: 'POST', url: `/api/inventory/bottles/${deposit.json().id}/void`, headers: signedHeaders('emp-mia', now),
+      method: 'POST', url: `/api/inventory/bottles/${deposit.json().id}/void`, headers: signedHeaders('emp-qing', now),
       payload: {
         reason: '发现登记批次错误，申请作废', occurredAt: new Date(now + 1000).toISOString(),
         idempotencyKey: 'signed-bottle-void-request-0001',
       },
     })
     expect(requested.statusCode, requested.body).toBe(202)
-    expect(requested.json().requestedBy).toMatchObject({ employeeId: 'emp-mia', authenticatedBy: 'signed_session' })
+    expect(requested.json().requestedBy).toMatchObject({ employeeId: 'emp-qing', authenticatedBy: 'signed_session' })
 
     const approved = await app.inject({
       method: 'POST', url: `/api/inventory/approvals/${requested.json().id}/decision`, headers: signedHeaders('emp-chen', now),
@@ -414,7 +414,7 @@ describe('inventory API', () => {
     expect(approved.statusCode, approved.body).toBe(200)
     expect(approved.json()).toMatchObject({
       status: 'approved',
-      requestedBy: { employeeId: 'emp-mia', authenticatedBy: 'signed_session' },
+      requestedBy: { employeeId: 'emp-qing', authenticatedBy: 'signed_session' },
       decidedBy: { employeeId: 'emp-chen', authenticatedBy: 'signed_session' },
     })
     await app.close()

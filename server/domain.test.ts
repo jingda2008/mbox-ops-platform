@@ -29,7 +29,7 @@ describe('service task domain', () => {
 
     expect(task.ownerId).toBe('emp-lin')
     expect(task.configVersion).toBe(1)
-    expect(task.customerReply).toContain('小林')
+    expect(task.customerReply).toContain('Tom')
     expect(state.taskEvents.at(-1)?.type).toBe('task.created.v1')
   })
 
@@ -38,6 +38,8 @@ describe('service task domain', () => {
     const serverRole = state.config.roles.find((role) => role.id === 'server')
     if (!serverRole) throw new Error('missing server role')
     serverRole.maxConcurrentTasks = 1
+    state.config.roles.find((role) => role.id === 'host')!.maxConcurrentTasks = 1
+    state.config.roles.find((role) => role.id === 'runner')!.maxConcurrentTasks = 1
 
     const first = createServiceTask(state, taskInput())
     const second = createServiceTask(state, taskInput())
@@ -54,6 +56,7 @@ describe('service task domain', () => {
     primary.paused = true
     backup.paused = true
     state.employees.find((item) => item.id === 'emp-wu')!.paused = true
+    for (const employee of state.employees) employee.paused = true
     const host = state.employees.find((item) => item.id === 'emp-host')!
     const hostShift = state.shiftAssignments.find((item) => item.employeeId === host.id)!
     hostShift.roleIds = ['server']
@@ -158,7 +161,7 @@ describe('service task domain', () => {
     const state = createSeedState()
     for (const employee of state.employees) employee.online = false
     const task = createServiceTask(state, taskInput({ serviceTypeId: 'complaint' }))
-    const supervisor = state.employees.find((employee) => employee.id === 'emp-mia')!
+    const supervisor = state.employees.find((employee) => employee.id === 'emp-qing')!
     const manager = state.employees.find((employee) => employee.id === 'emp-chen')!
     supervisor.online = true
     manager.online = true

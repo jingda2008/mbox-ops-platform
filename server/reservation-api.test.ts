@@ -3,13 +3,13 @@ import { describe, expect, it } from 'vitest'
 import { registerReservationRoutes } from './reservation-api.js'
 import { JsonRepository } from './repository.js'
 
-async function fixture(authenticated = true, roleId = 'host') {
+async function fixture(authenticated = true, roleId = 'server') {
   const repository = new JsonRepository(`/tmp/mbox-reservations-${crypto.randomUUID()}.json`)
   await repository.init()
   const app = Fastify()
   if (authenticated) {
     app.addHook('preHandler', async (request) => {
-      const actorId = roleId === 'manager' ? 'emp-chen' : 'emp-host'
+      const actorId = roleId === 'manager' ? 'emp-chen' : 'emp-lin'
       request.mboxActor = {
         actorId,
         storeId: 'mbox-lujiazui',
@@ -83,7 +83,7 @@ describe('reservation employee API', () => {
     await repository.close()
   })
 
-  it('rejects reservation configuration changes from a host role', async () => {
+  it('rejects reservation configuration changes from a service reception account', async () => {
     const { app, repository } = await fixture()
     const response = await app.inject({
       method: 'PUT',

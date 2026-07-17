@@ -504,8 +504,8 @@ describe('guest table API', () => {
     const refreshed = (await exchange(app, staticQr(now()))).body
     expect(refreshed.tasks.find((task) => task.id === created.json().id)).toMatchObject({
       status: 'accepted',
-      ownerName: '小林',
-      customerReply: expect.stringContaining('小林'),
+      ownerName: 'Tom',
+      customerReply: expect.stringContaining('Tom'),
     })
     await closeFixture(app, repository)
   })

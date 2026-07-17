@@ -224,7 +224,7 @@ describe('真实营业夜间全链路仿真', () => {
       const response = await app.inject({
         method: 'POST',
         url: `/api/reservations/${reservationId}/actions`,
-        headers: employeeHeaders('emp-host', 'host'),
+        headers: employeeHeaders('emp-lin', 'server'),
         payload: { action, idempotencyKey: key },
       })
       expect(response.statusCode).toBe(200)
@@ -233,7 +233,7 @@ describe('真实营业夜间全链路仿真', () => {
     const seatedResponse = await app.inject({
       method: 'POST',
       url: `/api/reservations/${reservationId}/actions`,
-      headers: employeeHeaders('emp-host', 'host'),
+      headers: employeeHeaders('emp-lin', 'server'),
       payload: {
         action: 'seat',
         tableId: 'table-l03',
@@ -264,7 +264,7 @@ describe('真实营业夜间全链路仿真', () => {
     const created = await app.inject({
       method: 'POST',
       url: '/api/reservations',
-      headers: employeeHeaders('emp-host', 'host'),
+      headers: employeeHeaders('emp-lin', 'server'),
       payload: {
         customerReference: 'walk-in-night-sim-guest',
         customerName: '临时到店客人',
@@ -292,7 +292,7 @@ describe('真实营业夜间全链路仿真', () => {
       const response = await app.inject({
         method: 'POST',
         url: `/api/reservations/${reservationId}/actions`,
-        headers: employeeHeaders('emp-host', 'host'),
+        headers: employeeHeaders('emp-lin', 'server'),
         payload: { action, ...payload },
       })
       expect(response.statusCode, response.body).toBe(200)
@@ -315,7 +315,7 @@ describe('真实营业夜间全链路仿真', () => {
       const created = await app.inject({
         method: 'POST',
         url: '/api/reservations',
-        headers: employeeHeaders('emp-host', 'host'),
+        headers: employeeHeaders('emp-lin', 'server'),
         payload: {
           customerReference: `walk-in-turnover-${suffix}`,
           customerName: `翻台客人${suffix}`,
@@ -334,7 +334,7 @@ describe('真实营业夜间全链路仿真', () => {
         const response = await app.inject({
           method: 'POST',
           url: `/api/reservations/${created.json().id}/actions`,
-          headers: employeeHeaders('emp-host', 'host'),
+          headers: employeeHeaders('emp-lin', 'server'),
           payload: action === 'seat'
             ? { action, tableId: 'table-l04', idempotencyKey: `night-sim-turnover-${action}-${suffix}` }
             : { action, idempotencyKey: `night-sim-turnover-${action}-${suffix}` },
@@ -441,7 +441,7 @@ describe('真实营业夜间全链路仿真', () => {
     state = await repository.read()
     expect(state.tasks.find((task) => task.serviceTypeId === 'complaint')).toMatchObject({
       priority: 'urgent',
-      ownerId: 'emp-mia',
+      ownerId: 'emp-qing',
       status: 'confirmed',
     })
     expect(state.tasks.find((task) => task.serviceTypeId === 'birthday')).toMatchObject({ status: 'confirmed' })
@@ -465,8 +465,8 @@ describe('真实营业夜间全链路仿真', () => {
     ] as const) {
       await kdsAction(app, taskId, 'start', actorId, roleId)
       await kdsAction(app, taskId, 'complete', actorId, roleId)
-      await kdsAction(app, taskId, 'pickUp', 'emp-tao', 'runner')
-      await kdsAction(app, taskId, 'deliver', 'emp-tao', 'runner')
+      await kdsAction(app, taskId, 'pickUp', 'emp-lin', 'server')
+      await kdsAction(app, taskId, 'deliver', 'emp-lin', 'server')
     }
 
     state = await repository.read()
@@ -478,8 +478,8 @@ describe('真实营业夜间全链路仿真', () => {
       expect.objectContaining({ status: 'completed' }),
     ])
     expect(state.taskEvents.filter((event) => event.type === 'fulfillment.delivered.v1')).toEqual([
-      expect.objectContaining({ actorId: 'emp-tao' }),
-      expect.objectContaining({ actorId: 'emp-tao' }),
+      expect.objectContaining({ actorId: 'emp-lin' }),
+      expect.objectContaining({ actorId: 'emp-lin' }),
     ])
   })
 

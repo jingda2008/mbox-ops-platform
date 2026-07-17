@@ -107,29 +107,29 @@ describe('KDS exception API', () => {
       disposition: 'remake',
       reasonCode: 'service_recovery',
       reasonNote: '',
-      actorId: 'emp-mia',
+      actorId: 'emp-qing',
       idempotencyKey: 'kds-shortage-remake-api-0001',
     }
 
     const denied = await app.inject({
       method: 'POST',
       url: `/api/commerce/kds/exceptions/${exceptionId}/decision`,
-      headers: headers('emp-qing', 'bartender'),
-      payload: { ...decisionPayload, actorId: 'emp-qing' },
+      headers: headers('emp-han', 'kitchen'),
+      payload: { ...decisionPayload, actorId: 'emp-han' },
     })
     expect(denied.statusCode).toBe(403)
 
     const decided = await app.inject({
       method: 'POST',
       url: `/api/commerce/kds/exceptions/${exceptionId}/decision`,
-      headers: headers('emp-mia', 'supervisor'),
+      headers: headers('emp-qing', 'bartender'),
       payload: decisionPayload,
     })
     expect(decided.statusCode).toBe(200)
     expect(decided.json()).toMatchObject({
       type: 'manager_disposition',
       managerDisposition: 'remake',
-      actorId: 'emp-mia',
+      actorId: 'emp-qing',
       actorRoleId: 'supervisor',
       originalOrderItemId: 'line-kds-exception',
       originalKdsTaskId: taskId,
@@ -137,7 +137,7 @@ describe('KDS exception API', () => {
     const replayedDecision = await app.inject({
       method: 'POST',
       url: `/api/commerce/kds/exceptions/${exceptionId}/decision`,
-      headers: headers('emp-mia', 'supervisor'),
+      headers: headers('emp-qing', 'bartender'),
       payload: decisionPayload,
     })
     expect(replayedDecision.statusCode).toBe(200)

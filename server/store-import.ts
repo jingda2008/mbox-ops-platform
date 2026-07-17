@@ -12,6 +12,7 @@ import {
 import type { OrderAuthorizationAuthority } from '../src/shared/order-contracts.js'
 import { z, type ZodError } from 'zod'
 import { withDefaultRolePolicy } from '../src/shared/role-policy.js'
+import { CHINA_TIME_ZONE } from '../src/shared/china-time.js'
 import {
   storeImportApplyCommandSchema,
   storeImportPackageSchema,
@@ -418,6 +419,9 @@ function semanticIssues(state: RuntimeState, input: StoreImportPackage, candidat
     new Intl.DateTimeFormat('zh-CN', { timeZone: candidate.store.timezone }).format()
   } catch {
     add('error', 'TIMEZONE_INVALID', `无效时区：${candidate.store.timezone}`, 'store', null, 'timezone')
+  }
+  if (candidate.store.timezone !== CHINA_TIME_ZONE) {
+    add('error', 'TIMEZONE_MUST_BE_CHINA_STANDARD', 'M-BOX陆家嘴必须使用Asia/Shanghai（北京时间）', 'store', null, 'timezone')
   }
 
   const sectionEntries = Object.entries(input.policy.sections) as Array<[

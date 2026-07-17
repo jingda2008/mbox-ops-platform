@@ -24,6 +24,7 @@ import * as coreApi from '../api'
 import * as paymentApi from '../payment-api'
 import type { PaymentAllocationInput } from '../shared/payment-api'
 import type { BootstrapResponse } from '../shared/contracts'
+import { formatChinaDateTime } from '../shared/china-time'
 import {
   CASH_PAYMENT_CHANNEL,
   PHYSICAL_POS_CHANNEL,
@@ -1074,5 +1075,5 @@ function shortId(value: string) {
 }
 
 function formatTime(value: string) {
-  return new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value))
+  return formatChinaDateTime(value, { year: undefined, second: undefined })
 }

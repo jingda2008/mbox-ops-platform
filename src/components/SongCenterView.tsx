@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react'
 import { actOnSongRequest, createSinger, createSingerRepertoire, reportSongOnsiteCollection, submitStaffSongRequest, updatePerformanceSession, updateSingerProfile, updateSingerRepertoire } from '../api'
 import type { BootstrapResponse } from '../shared/contracts'
 import type { PerformanceSession, PerformanceSessionStatus, RepertoireWriteInput, Singer, SingerProfileWriteInput, SingerRepertoireEntry, SongCatalogItem, SongRequest, SongRequestStatus } from '../shared/song-contracts'
+import { chinaDateTimeLocalValue, chinaLocalDateTimeToIso, formatChinaTime } from '../shared/china-time'
 import './SongCenterView.css'
 
 interface SongCenterViewProps {
@@ -212,7 +213,7 @@ function PerformanceScheduleEditor({ data, session, busy, run }: { data: Bootstr
   function save(event: React.FormEvent) {
     event.preventDefault()
     if (rows.length === 0) return
-    const appearances = rows.map((row) => ({ ...row, startsAt: new Date(row.startsAt).toISOString(), endsAt: new Date(row.endsAt).toISOString(), requestOpensAt: new Date(row.requestOpensAt).toISOString(), requestClosesAt: new Date(row.requestClosesAt).toISOString() }))
+    const appearances = rows.map((row) => ({ ...row, startsAt: chinaLocalDateTimeToIso(row.startsAt), endsAt: chinaLocalDateTimeToIso(row.endsAt), requestOpensAt: chinaLocalDateTimeToIso(row.requestOpensAt), requestClosesAt: chinaLocalDateTimeToIso(row.requestClosesAt) }))
     const startsAt = appearances.flatMap((item) => [item.startsAt, item.requestOpensAt]).toSorted()[0]!
     const endsAt = appearances.flatMap((item) => [item.endsAt, item.requestClosesAt]).toSorted().at(-1)!
     void run(() => updatePerformanceSession(sessionId, { businessDate, title: title.trim(), status, startsAt, endsAt, appearances, expectedVersion: session?.configVersion ?? (session ? 1 : undefined) }), '演出排班新版本已保存，顾客端将在下一次刷新时更新')
@@ -242,7 +243,7 @@ function PerformanceScheduleEditor({ data, session, busy, run }: { data: Bootstr
         </div></div>
       </div>)}
     </div>
-    <div className="schedule-actions"><span>门店12:00营业不代表开始演出；预约开放可设为12:00，歌手仍按20:30后的排班时间登台。</span><button className="primary-button" disabled={busy || rows.length === 0 || !title.trim()}><Save size={15} />发布排班新版本</button></div>
+    <div className="schedule-actions"><span>以上全部为北京时间。门店12:00营业不代表开始演出；预约开放可设为12:00，歌手仍按20:30后的排班时间登台。</span><button className="primary-button" disabled={busy || rows.length === 0 || !title.trim()}><Save size={15} />发布排班新版本</button></div>
   </form>
 }
 
@@ -286,10 +287,6 @@ function SongRequestRow({ request, reference, setReference, collectionChannel, s
 function SongMetric({ label, value, warning = false }: { label: string; value: number; warning?: boolean }) { return <div className={warning && value > 0 ? 'song-metric is-warning' : 'song-metric'}><strong>{value}</strong><span>{label}</span></div> }
 function statusLabel(status: SongRequestStatus) { return ({ pending_confirmation: '待确认', pending_payment: '待现场收费', paid: '现场已收款', accepted: '已接单', performing: '演唱中', completed: '已完成', rejected: '无法安排', cancelled: '已取消', refund_required: '待退款', refunded: '已退款' } as const)[status] }
 function money(amount: number) { return new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY' }).format(amount / 100) }
-function timeRange(startsAt: string, endsAt: string) { const format = (value: string) => new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }); return `${format(startsAt)}-${format(endsAt)}` }
-function localDatetime(value: string) {
-  const date = new Date(value)
-  const pad = (part: number) => String(part).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
-}
-function shiftLocalDatetime(value: string, minutes: number) { return localDatetime(new Date(new Date(value).getTime() + minutes * 60_000).toISOString()) }
+function timeRange(startsAt: string, endsAt: string) { return `${formatChinaTime(startsAt)}-${formatChinaTime(endsAt)}` }
+function localDatetime(value: string) { return chinaDateTimeLocalValue(value) }
+function shiftLocalDatetime(value: string, minutes: number) { return localDatetime(new Date(Date.parse(chinaLocalDateTimeToIso(value)) + minutes * 60_000).toISOString()) }

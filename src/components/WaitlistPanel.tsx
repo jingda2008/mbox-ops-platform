@@ -2,6 +2,7 @@ import { BellRing, Check, Clock3, DoorOpen, LoaderCircle, Plus, UserRoundX, User
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { actOnWaitlistEntry, createWaitlistEntry, listWaitlist, type WaitlistListResponse } from '../reservation-api'
 import type { Area, Employee, Table } from '../shared/contracts'
+import { formatChinaTime } from '../shared/china-time'
 
 interface Props {
   areas: Area[]
@@ -132,5 +133,5 @@ export function WaitlistPanel({ areas, tables, employees, canManage }: Props) {
 }
 
 function key(scope: string) { return `waitlist-ui-${scope}-${crypto.randomUUID()}` }
-function time(value: string | null) { return value ? new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }) : '--:--' }
+function time(value: string | null) { return value ? formatChinaTime(value) : '--:--' }
 function status(value: string) { return value === 'seated' ? '已入座' : value === 'cancelled' ? '已离队' : value === 'skipped' ? '已跳过' : '已过期' }

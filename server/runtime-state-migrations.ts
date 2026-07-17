@@ -2,6 +2,7 @@ import type { RoleConfig, RuntimeState, StaffPermissionId, StoreConfig } from '.
 import { createSeedConfig } from './seed.js'
 import { withDefaultRolePolicy } from '../src/shared/role-policy.js'
 import { reconcilePresence } from './presence.js'
+import { CHINA_TIME_ZONE } from '../src/shared/china-time.js'
 
 interface BuiltInRoleUpgrade {
   requiredPermissionIds: StaffPermissionId[]
@@ -38,6 +39,7 @@ const builtInRoleUpgrades: Record<string, BuiltInRoleUpgrade> = {
 }
 
 const permissionPolicyMigrationAction = 'runtime.permission_policy_v2_migrated.v1'
+const chinaTimezoneMigrationAction = 'runtime.china_timezone_normalized.v1'
 
 const legacyGuestRepliesByCode = new Map<string, string>([
   ['ADD_WATER', '已收到，{employee}正在为您处理。'],
@@ -189,6 +191,10 @@ function migrateServiceTaskVisits(state: RuntimeState) {
 export function migrateRuntimeState(state: RuntimeState): RuntimeState {
   const defaults = createSeedConfig()
   const migrated = structuredClone(state)
+  const normalizeChinaTimezone = migrated.store.timezone !== CHINA_TIME_ZONE
+    || (migrated.reservationState?.config.businessHours?.timeZone !== undefined
+      && migrated.reservationState.config.businessHours.timeZone !== CHINA_TIME_ZONE)
+  migrated.store.timezone = CHINA_TIME_ZONE
   const upgradeBuiltInRoles = !migrated.auditEntries.some(
     (entry) => entry.action === permissionPolicyMigrationAction,
   )
@@ -253,8 +259,9 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
     migrated.reservationState.config.lateHoldMinutes ??= 30
     migrated.reservationState.config.waitlistResponseMinutes ??= 10
     migrated.reservationState.config.businessHours ??= {
-      timeZone: 'Asia/Shanghai', openingTime: '12:00', closingTime: '02:00', slotMinutes: 30, closedWeekdays: [],
+      timeZone: CHINA_TIME_ZONE, openingTime: '12:00', closingTime: '02:00', slotMinutes: 30, closedWeekdays: [],
     }
+    migrated.reservationState.config.businessHours.timeZone = CHINA_TIME_ZONE
     migrated.reservationState.config.capacity ??= {
       defaultDailyCapacity: 120, defaultSlotCapacity: 20, dateOverrides: [],
     }
@@ -284,6 +291,17 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
       objectId: migrated.store.id,
       occurredAt: `${migrated.store.businessDate}T00:00:00+08:00`,
       details: { strategy: 'built-in-role-capability-fingerprint' },
+    })
+  }
+  if (normalizeChinaTimezone && !migrated.auditEntries.some((entry) => entry.action === chinaTimezoneMigrationAction)) {
+    migrated.auditEntries.push({
+      id: 'runtime-migration-china-timezone-v1',
+      actorId: 'system',
+      action: chinaTimezoneMigrationAction,
+      objectType: 'store',
+      objectId: migrated.store.id,
+      occurredAt: new Date().toISOString(),
+      details: { timeZone: CHINA_TIME_ZONE, utcOffset: '+08:00' },
     })
   }
 

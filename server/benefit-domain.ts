@@ -20,6 +20,7 @@ import type {
   MemberProfile,
 } from '../src/shared/benefit-contracts.js'
 import type { RuntimeState } from '../src/shared/contracts.js'
+import { chinaDateKey } from '../src/shared/china-time.js'
 import { requireConfiguredOperation } from './authorization.js'
 import type { RuntimeRepository } from './repository.js'
 
@@ -70,9 +71,9 @@ function ensureMemberCapacity(state: RuntimeState, memberId: string, templateId:
 }
 
 function actorDailyCost(state: RuntimeState, actorId: string, now: Date) {
-  const day = now.toISOString().slice(0, 10)
+  const day = chinaDateKey(now)
   return state.memberBenefits
-    .filter((item) => item.issuedBy === actorId && item.issuedAt.slice(0, 10) === day && item.status !== 'revoked')
+    .filter((item) => item.issuedBy === actorId && chinaDateKey(item.issuedAt) === day && item.status !== 'revoked')
     .reduce((total, item) => {
       const template = state.benefitTemplates.find((candidate) => candidate.id === item.templateId)
       return total + (template?.costAmount ?? 0) * item.quantity

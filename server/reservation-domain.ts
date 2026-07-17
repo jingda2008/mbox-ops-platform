@@ -20,6 +20,7 @@ import type {
   UpdateReservationCommand,
   DecideLateReservationHoldCommand,
 } from '../src/shared/reservation-contracts.js'
+import { CHINA_TIME_ZONE } from '../src/shared/china-time.js'
 
 export const DEFAULT_RESERVATION_CONFIG: ReservationConfig = {
   version: 1,
@@ -152,6 +153,7 @@ function validateConfig(config: ReservationConfig) {
     throw new Error('候补响应分钟数不合法')
   }
   validateTimeZone(config.businessHours.timeZone)
+  if (config.businessHours.timeZone !== CHINA_TIME_ZONE) throw new Error('M-BOX陆家嘴预约时区必须使用Asia/Shanghai（北京时间）')
   const openingMinutes = parseClock(config.businessHours.openingTime, '营业开始时间')
   const closingMinutes = parseClock(config.businessHours.closingTime, '营业结束时间')
   if (openingMinutes === closingMinutes) throw new Error('营业开始和结束时间不能相同')

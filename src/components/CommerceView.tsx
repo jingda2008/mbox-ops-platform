@@ -4,6 +4,7 @@ import { actOnKdsTask, createAssistedPaymentLink, createCartOrder, decideKdsExce
 import type { BootstrapResponse } from '../shared/contracts'
 import type { AssistedPaymentLink, KdsActionInput, KdsExceptionDecisionInput, KdsExceptionReportInput } from '../shared/commerce-api'
 import type { KdsExceptionEvent, KdsTask } from '../shared/order-contracts'
+import { formatChinaTime } from '../shared/china-time'
 import {
   actionAllowedForAccess,
   canResolveKdsException,
@@ -235,7 +236,7 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
               <p><Smartphone size={18} /><span>客人已打开本桌页面时，订单会自动出现，点击“微信支付”即可。</span></p>
             </div>
             <button className="secondary-button assisted-copy" onClick={() => void navigator.clipboard.writeText(paymentSheet.paymentUrl)}><Copy size={16} />复制手机支付链接</button>
-            <small>二维码将在 {new Date(paymentSheet.expiresAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 失效</small>
+            <small>二维码将在北京时间 {formatChinaTime(paymentSheet.expiresAt)} 失效</small>
           </>}
           {sheetPaid && <button className="primary-button assisted-done" onClick={() => setPaymentSheet(null)}>继续点单</button>}
         </section>
@@ -382,7 +383,7 @@ function exceptionReasonLabel(reasonCode: KdsExceptionEvent['reasonCode']) {
 function formatEventTime(value: string) {
   const timestamp = Date.parse(value)
   return Number.isFinite(timestamp)
-    ? new Date(timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+    ? formatChinaTime(timestamp)
     : value
 }
 

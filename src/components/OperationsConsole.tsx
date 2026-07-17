@@ -30,6 +30,7 @@ import {
   PackageSearch,
   ArrowRightLeft,
   CircleDollarSign,
+  Clock3,
   DoorOpen,
   Link2,
   Minus,
@@ -68,6 +69,7 @@ import type {
   TaskActionInput,
 } from '../shared/contracts'
 import { effectiveDataScopeForEmployee, effectiveRoleIdsForEmployee } from '../shared/staff-access'
+import { chinaDateKey, formatChinaDateTime, formatChinaTime } from '../shared/china-time'
 import { TaskQueue } from './TaskQueue'
 import { getFulfillmentAccess, kdsTaskOperationallyActive, taskVisibleToAccess } from './commerce-workspace'
 import { RoleHomeView } from './RoleHomeView'
@@ -169,6 +171,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
   const [configDirty, setConfigDirty] = useState(false)
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
+  const [chinaClock, setChinaClock] = useState(() => Date.now())
   const [transferTargetId, setTransferTargetId] = useState('')
   const [transferKind, setTransferKind] = useState<'relocate' | 'temporary_to_final'>('relocate')
   const [sessionSummary, setSessionSummary] = useState<TableSessionSummary | null>(null)
@@ -191,6 +194,11 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
   useEffect(() => {
     if (!tableOpsDirty) setTableOpsDraft(tableOperationsConfig(data.tableOperationsConfig))
   }, [data.tableOperationsConfig, tableOpsDirty])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setChinaClock(Date.now()), 1_000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   const openTasks = fulfillmentAccess.mode === 'oversight'
     ? data.tasks.filter((task) => !task.archivedAt && !['confirmed', 'cancelled'].includes(task.status))
@@ -613,8 +621,13 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
         <header className="topbar">
           <button className="menu-button" title="打开导航" onClick={() => setMobileNavOpen(true)}><Menu size={21} /></button>
           <div>
-            <span className="eyebrow">{data.store.businessDate} · 营业中 · {fulfillmentAccess.roleLabel}</span>
+            <span className="eyebrow">营业日 {data.store.businessDate} · 营业中 · {fulfillmentAccess.roleLabel}</span>
             <h1>{viewTitles[view]}</h1>
+          </div>
+          <div className="beijing-clock" title={formatChinaDateTime(chinaClock + Date.parse(data.serverNow) - Date.now())}>
+            <Clock3 size={15} />
+            <span><span className="beijing-clock-date">{chinaDateKey(chinaClock + Date.parse(data.serverNow) - Date.now())} </span>北京时间</span>
+            <strong>{formatChinaTime(chinaClock + Date.parse(data.serverNow) - Date.now(), { second: '2-digit' })}</strong>
           </div>
           <div className="workstation-badge"><span>{fulfillmentAccess.employee?.displayName ?? '身份失效'}</span><strong>{roleHomeAccess.focusLabel}</strong></div>
           <div className="topbar-actions">
@@ -705,7 +718,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
                         <label><span>桌次销售</span><select disabled={!canTransferTable} value={salesEmployeeId} onChange={(event) => setSalesEmployeeId(event.target.value)}><option value="">未指定</option>{salesEmployees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName}</option>)}</select></label>
                         {canTransferTable && <><input aria-label="销售归属变更原因" maxLength={300} value={salesChangeReason} onChange={(event) => setSalesChangeReason(event.target.value)} /><button className="secondary-button" disabled={busy || !salesEmployeeId || salesEmployeeId === sessionSummary.salesEmployeeId} onClick={() => void handleSalesChange()}><UserPlus size={15} />变更</button></>}
                       </div>
-                      {sessionSummary.reminderRequired && <div className="minimum-spend-reminder"><BellRing size={16} /><span>低消进度低于提醒阈值</span><small>{sessionSummary.nextReminderAt ? `${new Date(sessionSummary.nextReminderAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })}再次检查` : ''}</small></div>}
+                      {sessionSummary.reminderRequired && <div className="minimum-spend-reminder"><BellRing size={16} /><span>低消进度低于提醒阈值</span><small>{sessionSummary.nextReminderAt ? `北京时间 ${formatChinaTime(sessionSummary.nextReminderAt)} 再次检查` : ''}</small></div>}
                       {canWaiveMinimumSpend && sessionSummary.differenceAmount > 0 && <div className="minimum-spend-waiver"><input maxLength={300} placeholder="经理豁免原因（至少5字）" value={minimumSpendWaiverReason} onChange={(event) => setMinimumSpendWaiverReason(event.target.value)} /><button className="secondary-button" disabled={busy || minimumSpendWaiverReason.trim().length < 5} onClick={() => void handleMinimumSpendWaiver()}><ShieldCheck size={15} />豁免并结台</button></div>}
                     </div>
                   )}
@@ -857,7 +870,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
                   {data.configVersions.toSorted((left, right) => right.version - left.version).slice(0, 8).map((record) => (
                     <div className={record.version === data.config.version ? 'config-version-row is-current' : 'config-version-row'} key={record.id}>
                       <span><strong>V{record.version}</strong><small>{configOperationLabel(record.operation)} · {record.reason}</small></span>
-                      <time>{new Date(record.createdAt).toLocaleString('zh-CN', { hour12: false })}</time>
+                      <time>{formatChinaDateTime(record.createdAt)}</time>
                       {record.version === data.config.version
                         ? <b>当前版本</b>
                         : <button className="secondary-button" disabled={busy || Boolean(data.draftConfig)} onClick={() => void rollbackVersion(record.version)}><RefreshCw size={14} />回滚</button>}

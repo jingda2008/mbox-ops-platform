@@ -47,6 +47,7 @@ import type {
   ReservationOccasionCode,
   ReservationStatus,
 } from '../shared/reservation-contracts'
+import { CHINA_TIME_ZONE, chinaDateTimeLocalValue, chinaLocalDateTimeToIso, chinaStartOfDay, formatChinaDateTime, formatChinaTime } from '../shared/china-time'
 import './ReservationView.css'
 import { WaitlistPanel } from './WaitlistPanel'
 
@@ -95,7 +96,7 @@ const emptyResponse: ReservationListResponse = { config: null, reservations: [] 
 function defaultScheduledAt() {
   const date = new Date()
   date.setMinutes(date.getMinutes() + 60 - (date.getMinutes() % 15), 0, 0)
-  return toLocalInputValue(date)
+  return chinaDateTimeLocalValue(date)
 }
 
 function createEmptyDraft(salesEmployeeId = ''): CreateDraft {
@@ -262,7 +263,7 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
         areaPreferenceCode: draft.areaPreferenceCode || undefined,
         occasionCode: draft.occasionCode || undefined,
         occasionNote: draft.occasionNote.trim() || undefined,
-        scheduledAt: new Date(draft.scheduledAt).toISOString(),
+        scheduledAt: chinaLocalDateTimeToIso(draft.scheduledAt),
         depositRequiredAmount: depositAmount,
         depositCurrency: 'CNY',
         salesEmployeeId: draft.salesEmployeeId,
@@ -322,14 +323,14 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
     setSelectedTableId(tables.find((table) => ['available', 'reserved'].includes(table.status))?.id ?? '')
     setSelectedSalesEmployeeId(salesByReservation.get(reservation.id) ?? '')
     setEditPartySize(reservation.partySize)
-    setEditScheduledAt(toLocalInputValue(new Date(reservation.scheduledAt)))
+    setEditScheduledAt(chinaDateTimeLocalValue(reservation.scheduledAt))
     setEditAreaCode(reservation.areaPreferenceCode ?? '')
     if (type === 'late_hold' || type === 'late_release') {
       setReference(reservation.lateContactReference ?? '')
       const expected = reservation.expectedArrivalAt
         ? new Date(reservation.expectedArrivalAt)
         : new Date(Math.max(Date.now(), Date.parse(reservation.scheduledAt)) + 20 * 60_000)
-      setSecondaryReference(toLocalInputValue(expected))
+      setSecondaryReference(chinaDateTimeLocalValue(expected))
       setReason(type === 'late_hold' ? '顾客已联系并确认在途' : '超过保留时间，释放桌位')
     }
   }
@@ -365,7 +366,7 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
       if (!editScheduledAt || !note) return setNotice({ tone: 'error', message: '请确认人数、时间并填写修改原因' })
       void execute(key, '预约人数和时间已更新', () => updateReservationDetails(reservation.id, {
         partySize: editPartySize,
-        scheduledAt: new Date(editScheduledAt).toISOString(),
+        scheduledAt: chinaLocalDateTimeToIso(editScheduledAt),
         areaPreferenceCode: editAreaCode || undefined,
         reason: note,
         idempotencyKey: idempotencyKey('update-details'),
@@ -376,7 +377,7 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
       if (!ref || !secondary || !note) return setNotice({ tone: 'error', message: '请填写预计到店时间、联系记录和决定原因' })
       void execute(key, operation.type === 'late_hold' ? '迟到保留决定已记录' : '预约桌位已释放', () => decideLateReservationHold(reservation.id, {
         decision: operation.type === 'late_hold' ? 'hold' : 'release',
-        expectedArrivalAt: new Date(secondary).toISOString(),
+        expectedArrivalAt: chinaLocalDateTimeToIso(secondary),
         contactReference: ref,
         reason: note,
         idempotencyKey: idempotencyKey(operation.type),
@@ -507,7 +508,7 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
         <div className="reservation-form-grid">
           <Field label="客人姓名"><input required maxLength={100} value={draft.customerName} onChange={(event) => setDraft({ ...draft, customerName: event.target.value })} /></Field>
           <Field label="CRM/企微客户编号"><input required maxLength={118} autoComplete="off" placeholder="例如 CRM-102938 或 wm_xxx" value={draft.contactReference} onChange={(event) => setDraft({ ...draft, contactReference: event.target.value })} /></Field>
-          <Field label="预约时间"><input required type="datetime-local" value={draft.scheduledAt} onChange={(event) => setDraft({ ...draft, scheduledAt: event.target.value })} /></Field>
+          <Field label="预约时间（北京时间）"><input required type="datetime-local" value={draft.scheduledAt} onChange={(event) => setDraft({ ...draft, scheduledAt: event.target.value })} /></Field>
           <Field label="人数"><input required type="number" min={config?.minimumPartySize ?? 1} max={config?.maximumPartySize ?? 100} value={draft.partySize} onChange={(event) => setDraft({ ...draft, partySize: Number(event.target.value) })} /></Field>
           <Field label="来源"><select required value={draft.sourceCode} onChange={(event) => setDraft({ ...draft, sourceCode: event.target.value })}><option value="">请选择</option>{enabledSources.map((source) => <option key={source.code} value={source.code}>{source.name}</option>)}</select></Field>
           <Field label="销售归属"><select required value={draft.salesEmployeeId} onChange={(event) => setDraft({ ...draft, salesEmployeeId: event.target.value })}><option value="">请选择销售</option>{salesEmployees.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select></Field>
@@ -792,8 +793,8 @@ function OperationPanel({ operation, tables, selectedTableId, reference, seconda
     <div className="operation-identity"><span>当前操作</span><strong>{labels[operation.type]}</strong><small>{operation.reservation.customerName} · {formatDateTime(operation.reservation.scheduledAt)}</small></div>
     {operation.type === 'seat' && <Field label="入座桌台"><select required value={selectedTableId} onChange={(event) => onTableChange(event.target.value)}><option value="">请选择桌台</option>{tables.map((table) => <option key={table.id} value={table.id} disabled={['occupied', 'paused'].includes(table.status)}>{table.code} · {table.displayName} · {table.status === 'available' ? '可用' : table.status === 'reserved' ? '已预留' : table.status === 'occupied' ? '使用中' : '暂停'}</option>)}</select></Field>}
     {operation.type === 'sales' && <><Field label="销售归属"><select required value={selectedSalesEmployeeId} onChange={(event) => onSalesEmployeeChange(event.target.value)}><option value="">请选择销售</option>{employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName}</option>)}</select></Field><Field label="变更原因"><input required minLength={2} maxLength={300} value={reason} onChange={(event) => onReasonChange(event.target.value)} /></Field></>}
-    {operation.type === 'edit' && <><Field label="人数"><input required type="number" min={config?.minimumPartySize ?? 1} max={config?.maximumPartySize ?? 100} value={editPartySize} onChange={(event) => onEditPartySize(Number(event.target.value))} /></Field><Field label="预约时间"><input required type="datetime-local" value={editScheduledAt} onChange={(event) => onEditScheduledAt(event.target.value)} /></Field><div className="operation-area-picks"><span>区域偏好</span><button type="button" className={!editAreaCode ? 'is-active' : ''} onClick={() => onEditAreaCode('')}>不限</button>{config?.areaPreferences.filter((area) => area.enabled).map((area) => <button type="button" key={area.code} className={editAreaCode === area.code ? 'is-active' : ''} onClick={() => onEditAreaCode(area.code)}>{area.name}</button>)}</div><Field label="修改原因"><input required maxLength={500} value={reason} onChange={(event) => onReasonChange(event.target.value)} /></Field></>}
-    {(operation.type === 'late_hold' || operation.type === 'late_release') && <><Field label="预计到店时间"><input required type="datetime-local" value={secondaryReference} onChange={(event) => onSecondaryReferenceChange(event.target.value)} /></Field><Field label="联系记录"><input required maxLength={256} placeholder="企微消息或电话记录编号" value={reference} onChange={(event) => onReferenceChange(event.target.value)} /></Field><Field label="决定原因"><input required maxLength={500} value={reason} onChange={(event) => onReasonChange(event.target.value)} /></Field></>}
+    {operation.type === 'edit' && <><Field label="人数"><input required type="number" min={config?.minimumPartySize ?? 1} max={config?.maximumPartySize ?? 100} value={editPartySize} onChange={(event) => onEditPartySize(Number(event.target.value))} /></Field><Field label="预约时间（北京时间）"><input required type="datetime-local" value={editScheduledAt} onChange={(event) => onEditScheduledAt(event.target.value)} /></Field><div className="operation-area-picks"><span>区域偏好</span><button type="button" className={!editAreaCode ? 'is-active' : ''} onClick={() => onEditAreaCode('')}>不限</button>{config?.areaPreferences.filter((area) => area.enabled).map((area) => <button type="button" key={area.code} className={editAreaCode === area.code ? 'is-active' : ''} onClick={() => onEditAreaCode(area.code)}>{area.name}</button>)}</div><Field label="修改原因"><input required maxLength={500} value={reason} onChange={(event) => onReasonChange(event.target.value)} /></Field></>}
+    {(operation.type === 'late_hold' || operation.type === 'late_release') && <><Field label="预计到店（北京时间）"><input required type="datetime-local" value={secondaryReference} onChange={(event) => onSecondaryReferenceChange(event.target.value)} /></Field><Field label="联系记录"><input required maxLength={256} placeholder="企微消息或电话记录编号" value={reference} onChange={(event) => onReferenceChange(event.target.value)} /></Field><Field label="决定原因"><input required maxLength={500} value={reason} onChange={(event) => onReasonChange(event.target.value)} /></Field></>}
     {operation.type === 'deposit_intent' && <Field label="外部支付单号"><input required autoFocus maxLength={256} value={reference} onChange={(event) => onReferenceChange(event.target.value)} /></Field>}
     {operation.type === 'deposit_confirm' && <><Field label="支付单号"><input disabled value={operation.reservation.deposit.paymentIntentReference ?? reference} /></Field><Field label="到账确认流水"><input required autoFocus maxLength={256} value={secondaryReference} onChange={(event) => onSecondaryReferenceChange(event.target.value)} /></Field></>}
     {operation.type === 'refund_start' && <Field label="退款请求单号"><input required autoFocus maxLength={256} value={reference} onChange={(event) => onReferenceChange(event.target.value)} /></Field>}
@@ -962,22 +963,20 @@ function inDateRange(value: string, range: DateRange) {
 }
 
 function startOfToday() {
-  const date = new Date()
-  date.setHours(0, 0, 0, 0)
-  return date
+  return chinaStartOfDay()
 }
 
 function formatDay(value: string) {
   const date = new Date(value)
-  return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit', weekday: 'short' })
+  return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit', weekday: 'short', timeZone: CHINA_TIME_ZONE })
 }
 
 function formatTime(value: string) {
-  return new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
+  return formatChinaTime(value)
 }
 
 function formatDateTime(value: string) {
-  return new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
+  return formatChinaDateTime(value, { year: undefined, second: undefined })
 }
 
 function relativeTime(value: string) {
@@ -995,11 +994,6 @@ function occasionLabel(code: ReservationOccasionCode) {
 
 function money(amount: number) {
   return `¥${(amount / 100).toFixed(2)}`
-}
-
-function toLocalInputValue(date: Date) {
-  const offset = date.getTimezoneOffset() * 60_000
-  return new Date(date.getTime() - offset).toISOString().slice(0, 16)
 }
 
 function idempotencyKey(scope: string) {

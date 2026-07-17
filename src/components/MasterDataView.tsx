@@ -34,6 +34,7 @@ import { staffPermissionIds } from '../shared/contracts'
 import type { AuthorityWriteInput } from '../shared/commerce-api'
 import type { OrderAuthorizationAuthority } from '../shared/order-contracts'
 import { productAvailability } from '../shared/product-availability'
+import { chinaDateTimeLocalValue, chinaLocalDateTimeToIso, shiftDateKey } from '../shared/china-time'
 import './MasterDataView.css'
 
 type MasterView = 'employees' | 'shifts' | 'tables' | 'products' | 'routing' | 'authorities' | 'areas'
@@ -178,23 +179,18 @@ function ShiftSection({ data, run }: SectionProps) {
   const firstEmployee = data.employees.find((employee) => employee.status === 'active')
   const firstArea = data.areas[0]
   const firstRole = data.config.roles[0]
-  const defaultStart = new Date()
-  defaultStart.setHours(19, 0, 0, 0)
-  const defaultEnd = new Date(defaultStart)
-  defaultEnd.setDate(defaultEnd.getDate() + 1)
-  defaultEnd.setHours(3, 0, 0, 0)
   const [employeeId, setEmployeeId] = useState(firstEmployee?.id ?? '')
   const [roleId, setRoleId] = useState(firstRole?.id ?? '')
   const [areaId, setAreaId] = useState(firstArea?.id ?? '')
   const [stationId, setStationId] = useState(effectiveConfig(data).workstations.find((station) => station.enabled)?.id ?? '')
-  const [startAt, setStartAt] = useState(toLocalInput(defaultStart.toISOString()))
-  const [endAt, setEndAt] = useState(toLocalInput(defaultEnd.toISOString()))
+  const [startAt, setStartAt] = useState(`${data.store.businessDate}T19:00`)
+  const [endAt, setEndAt] = useState(`${shiftDateKey(data.store.businessDate, 1)}T03:00`)
 
   async function submit(event: FormEvent) {
     event.preventDefault()
     await run(() => createShiftRequest({
-      employeeId, businessDate: data.store.businessDate, startAt: new Date(startAt).toISOString(),
-      endAt: new Date(endAt).toISOString(), roleId, roleIds: [roleId], areaIds: [areaId], stationIds: stationId ? [stationId] : [], isPrimary: false, status: 'scheduled',
+      employeeId, businessDate: data.store.businessDate, startAt: chinaLocalDateTimeToIso(startAt),
+      endAt: chinaLocalDateTimeToIso(endAt), roleId, roleIds: [roleId], areaIds: [areaId], stationIds: stationId ? [stationId] : [], isPrimary: false, status: 'scheduled',
     }), '新班次已建立')
   }
 
@@ -205,8 +201,8 @@ function ShiftSection({ data, run }: SectionProps) {
         <label><span>岗位</span><select value={roleId} onChange={(event) => setRoleId(event.target.value)}>{data.config.roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}</select></label>
         <label><span>区域</span><select value={areaId} onChange={(event) => setAreaId(event.target.value)}>{data.areas.map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}</select></label>
         <label><span>工作站</span><select value={stationId} onChange={(event) => setStationId(event.target.value)}><option value="">不限工作站</option>{effectiveConfig(data).workstations.filter((station) => station.enabled).map((station) => <option key={station.id} value={station.id}>{station.name}</option>)}</select></label>
-        <label><span>开始</span><input type="datetime-local" value={startAt} onChange={(event) => setStartAt(event.target.value)} /></label>
-        <label><span>结束</span><input type="datetime-local" value={endAt} onChange={(event) => setEndAt(event.target.value)} /></label>
+        <label><span>开始（北京时间）</span><input type="datetime-local" value={startAt} onChange={(event) => setStartAt(event.target.value)} /></label>
+        <label><span>结束（北京时间）</span><input type="datetime-local" value={endAt} onChange={(event) => setEndAt(event.target.value)} /></label>
         <button className="primary-button" type="submit"><Plus size={17} />新增班次</button>
       </form>
       <div className="master-rows">
@@ -226,8 +222,8 @@ function ShiftRow({ shift, data, run }: { shift: ShiftAssignment; data: Bootstra
       <label><span>岗位</span><select value={draft.roleId} onChange={(event) => setDraft({ ...draft, roleId: event.target.value })}>{data.config.roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}</select></label>
       <details className="employee-access-details shift-role-details"><summary>当班兼任 <span>{draft.roleIds?.length ?? 0}个</span></summary><div className="area-selector"><span>当班兼任</span><div>{data.config.roles.map((role) => <label key={role.id}><input type="checkbox" checked={[draft.roleId, ...(draft.roleIds ?? [])].includes(role.id)} disabled={role.id === draft.roleId} onChange={(event) => setDraft({ ...draft, roleIds: toggleValue(draft.roleIds ?? [], role.id, event.target.checked) })} />{role.name}</label>)}</div></div></details>
       <div className="area-selector"><span>工作站</span><div>{effectiveConfig(data).workstations.filter((station) => station.enabled || draft.stationIds?.includes(station.id)).map((station) => <label key={station.id}><input type="checkbox" checked={draft.stationIds?.includes(station.id) ?? false} onChange={(event) => setDraft({ ...draft, stationIds: toggleValue(draft.stationIds ?? [], station.id, event.target.checked) })} />{station.name}</label>)}</div></div>
-      <label><span>开始</span><input type="datetime-local" value={toLocalInput(draft.startAt)} onChange={(event) => setDraft({ ...draft, startAt: new Date(event.target.value).toISOString() })} /></label>
-      <label><span>结束</span><input type="datetime-local" value={toLocalInput(draft.endAt)} onChange={(event) => setDraft({ ...draft, endAt: new Date(event.target.value).toISOString() })} /></label>
+      <label><span>开始（北京时间）</span><input type="datetime-local" value={toLocalInput(draft.startAt)} onChange={(event) => setDraft({ ...draft, startAt: chinaLocalDateTimeToIso(event.target.value) })} /></label>
+      <label><span>结束（北京时间）</span><input type="datetime-local" value={toLocalInput(draft.endAt)} onChange={(event) => setDraft({ ...draft, endAt: chinaLocalDateTimeToIso(event.target.value) })} /></label>
       <label><span>状态</span><select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as ShiftWriteInput['status'] })}><option value="scheduled">已排班</option><option value="active">当班</option><option value="completed">已结束</option><option value="cancelled">已取消</option></select></label>
       <button className="icon-button" title={`保存${employee?.displayName ?? ''}班次`} onClick={() => void run(() => updateShiftRequest(shift.id, draft), '班次已保存')}><Save size={17} /></button>
     </div>
@@ -515,7 +511,7 @@ function AuthorityRow({ authority, data, run }: { authority: OrderAuthorizationA
       <div className="area-selector"><span>可审批</span><div><label><input type="checkbox" checked={draft.kinds.includes('gift')} onChange={(event) => toggleKind('gift', event.target.checked)} />赠送</label><label><input type="checkbox" checked={draft.kinds.includes('discount')} onChange={(event) => toggleKind('discount', event.target.checked)} />折扣</label></div></div>
       <label><span>单次上限（元）</span><input type="number" min={0} value={fenToYuan(draft.maxAmount)} onChange={(event) => setDraft({ ...draft, maxAmount: yuanToFen(Number(event.target.value)) })} /></label>
       <div className="area-selector product-authority"><span>允许商品</span><div><label><input type="checkbox" checked={draft.allowedSkuIds === null} onChange={(event) => setDraft({ ...draft, allowedSkuIds: event.target.checked ? null : [] })} />全部</label>{data.products.map((product) => <label key={product.id}><input type="checkbox" disabled={draft.allowedSkuIds === null} checked={draft.allowedSkuIds?.includes(product.id) ?? false} onChange={(event) => toggleProduct(product.id, event.target.checked)} />{product.name}</label>)}</div></div>
-      <label><span>有效至</span><input type="datetime-local" value={toLocalInput(draft.validUntil)} onChange={(event) => setDraft({ ...draft, validUntil: new Date(event.target.value).toISOString() })} /></label>
+      <label><span>有效至（北京时间）</span><input type="datetime-local" value={toLocalInput(draft.validUntil)} onChange={(event) => setDraft({ ...draft, validUntil: chinaLocalDateTimeToIso(event.target.value) })} /></label>
       <button className="icon-button" title={`保存${employee?.displayName ?? ''}经营权限`} disabled={draft.kinds.length === 0 || draft.allowedSkuIds?.length === 0} onClick={() => void run(() => updateCommerceAuthority(authority.id, draft), '经营权限已保存')}><Save size={17} /></button>
     </div>
   )
@@ -763,9 +759,7 @@ function toggleValue(values: string[], value: string, checked: boolean) {
 }
 
 function toLocalInput(iso: string) {
-  const date = new Date(iso)
-  const offset = date.getTimezoneOffset() * 60_000
-  return new Date(date.getTime() - offset).toISOString().slice(0, 16)
+  return chinaDateTimeLocalValue(iso)
 }
 
 function yuanToFen(amount: number) { return Math.round(amount * 100) }

@@ -14,6 +14,7 @@ import {
   startReservationDepositRefund,
   updateReservationDetails,
   decideLateReservationHold,
+  DEFAULT_RESERVATION_CONFIG,
 } from './reservation-domain.js'
 
 const T0 = '2026-07-14T10:00:00.000Z'
@@ -75,6 +76,16 @@ function payDeposit(domain: ReturnType<typeof state>) {
 }
 
 describe('reservation configuration and lifecycle', () => {
+  it('rejects reservation configuration outside China standard time', () => {
+    expect(() => createReservationState(
+      { tenantId: 'tenant-mbox', storeId: 'store-lujiazui' },
+      {
+        ...structuredClone(DEFAULT_RESERVATION_CONFIG),
+        businessHours: { ...DEFAULT_RESERVATION_CONFIG.businessHours, timeZone: 'UTC' },
+      },
+    )).toThrow('必须使用Asia/Shanghai')
+  })
+
   it('captures configurable source, party size, area preference and birthday context', () => {
     const domain = state()
     const reservation = createReservation(domain, createCommand())

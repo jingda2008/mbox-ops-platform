@@ -29,6 +29,19 @@ function grantInput(overrides: Partial<Parameters<typeof requestBenefitGrant>[1]
 }
 
 describe('member benefit grants', () => {
+  it('resets the employee daily benefit budget at Beijing midnight', () => {
+    const state = createSeedState()
+    state.benefitGrantPolicies.find((policy) => policy.roleId === 'server')!.maxDailyCostAmount = 1800
+    const beforeMidnight = new Date('2026-07-17T15:30:00.000Z')
+    const afterMidnight = new Date('2026-07-17T16:30:00.000Z')
+
+    const first = requestBenefitGrant(state, grantInput({ idempotencyKey: 'grant-beijing-day-1' }), beforeMidnight)
+    const second = requestBenefitGrant(state, grantInput({ memberId: 'member-li', idempotencyKey: 'grant-beijing-day-2' }), afterMidnight)
+
+    expect(first.status).toBe('granted')
+    expect(second.status).toBe('granted')
+  })
+
   it('allows a server to grant an authorized low-cost benefit directly', () => {
     const state = createSeedState()
     const request = requestBenefitGrant(state, grantInput(), now)

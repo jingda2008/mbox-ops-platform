@@ -42,6 +42,7 @@ import {
 } from './offline'
 import type { BootstrapResponse, TaskActionInput } from './shared/contracts'
 import type { PilotEmployeeOption } from './shared/auth-contracts'
+import { formatChinaDateTime, formatChinaTime } from './shared/china-time'
 import './system-ui.css'
 import './premium-theme.css'
 
@@ -440,7 +441,7 @@ function OfflineSnapshotView({
         <div className="brand-lockup"><span>M</span><div><strong>{snapshot.store.name}</strong><small>现场离线快照</small></div></div>
         <div>
           <strong>{snapshot.store.businessDate}</strong>
-          <span>快照 {new Date(snapshot.capturedAt).toLocaleString('zh-CN', { hour12: false })}</span>
+          <span>快照 {formatChinaDateTime(snapshot.capturedAt)}</span>
         </div>
       </header>
 
@@ -474,7 +475,7 @@ function OfflineSnapshotView({
                   </div>
                   <div className="offline-task-meta">
                     <span><MapPin size={14} />{table?.displayName ?? task.tableId}</span>
-                    <span><Clock3 size={14} />{new Date(task.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })}</span>
+                    <span><Clock3 size={14} />{formatChinaTime(task.createdAt)}</span>
                   </div>
                   <ol>{task.actionScript.map((step) => <li key={step}>{step}</li>)}</ol>
                   <div className="offline-task-action">

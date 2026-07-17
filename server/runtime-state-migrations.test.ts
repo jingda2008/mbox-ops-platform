@@ -5,6 +5,21 @@ import { migrateRuntimeState } from './runtime-state-migrations.js'
 import { createServiceTask } from './domain.js'
 
 describe('runtime state operational migrations', () => {
+  it('normalizes legacy store and reservation timezones to China standard time', () => {
+    const legacy = createSeedState()
+    legacy.store.timezone = 'UTC'
+    legacy.reservationState!.config.businessHours.timeZone = 'America/New_York'
+
+    const migrated = migrateRuntimeState(legacy)
+
+    expect(migrated.store.timezone).toBe('Asia/Shanghai')
+    expect(migrated.reservationState?.config.businessHours.timeZone).toBe('Asia/Shanghai')
+    expect(migrated.auditEntries).toContainEqual(expect.objectContaining({
+      action: 'runtime.china_timezone_normalized.v1',
+      details: { timeZone: 'Asia/Shanghai', utcOffset: '+08:00' },
+    }))
+  })
+
   it('adds configurable fulfillment defaults without replacing existing store data', () => {
     const legacy = structuredClone(createSeedState()) as RuntimeState & {
       config: RuntimeState['config'] & { skills?: unknown; workstations?: unknown }

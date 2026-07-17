@@ -25,6 +25,7 @@ import {
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import * as inventoryApi from '../inventory-api'
 import type { Employee, MenuProduct, RoleConfig } from '../shared/contracts'
+import { chinaDateKey, formatChinaDateTime, shiftDateKey } from '../shared/china-time'
 import type {
   BottleOwner,
   BottleStorageBatch,
@@ -904,17 +905,15 @@ function shortId(value: string) {
 }
 
 function formatDateTime(value: string) {
-  return new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value))
+  return formatChinaDateTime(value, { year: undefined, second: undefined })
 }
 
 function todayDate() {
-  return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' })
+  return chinaDateKey()
 }
 
 function defaultExpiryDate() {
-  const value = new Date()
-  value.setDate(value.getDate() + 90)
-  return value.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' })
+  return shiftDateKey(chinaDateKey(), 90)
 }
 
 function movementLabel(type: InventoryDomainState['movements'][number]['type']) {

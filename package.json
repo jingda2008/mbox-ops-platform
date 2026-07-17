@@ -1,7 +1,7 @@
 {
   "name": "@mbox/ops-platform",
   "private": true,
-  "version": "1.0.0-rc.9",
+  "version": "1.0.0-rc.10",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n API,WEB -c yellow,cyan \"npm:dev:api\" \"npm:dev:web\"",
@@ -15,11 +15,13 @@
     "demo:performance": "tsx server/load-demo-performance.ts",
     "qr:generate": "tsx server/generate-table-qrs.ts",
     "pilot:access": "node scripts/print-pilot-access.mjs",
-    "check": "npm run lint && npm run check:miniprogram && npm test && npm run build",
+    "check": "npm run lint && npm run check:miniprogram && npm run tc:verify && npm test && npm run build",
     "check:miniprogram": "node scripts/check-miniprogram.mjs",
     "lint": "oxlint src server",
     "test": "vitest run",
     "test:watch": "vitest",
+    "tc:register": "node scripts/build-tc-execution-register.mjs",
+    "tc:verify": "node scripts/build-tc-execution-register.mjs --check",
     "evidence:capture": "node scripts/capture-release-evidence.mjs",
     "preview": "vite preview --host 0.0.0.0"
   },

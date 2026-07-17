@@ -352,6 +352,7 @@ function sessionView(
       .map((product) => ({ ...product, costAmount: 0 })),
     tasks: (frozen ? [] : state.tasks)
       .filter((task) => task.tableSessionId === tableSession.id && !task.archivedAt)
+      .filter((task) => !['completed', 'confirmed', 'cancelled'].includes(task.status))
       .slice(0, 10)
       .map((task) => taskView(state, task)),
     account: {

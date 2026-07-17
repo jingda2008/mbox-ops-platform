@@ -268,22 +268,25 @@ describe('guest table API', () => {
     expect(replay.json().id).toBe(first.json().id)
     await repository.mutate((state) => {
       const task = state.tasks.find((candidate) => candidate.id === first.json().id)!
-      task.status = 'completed'
-      task.completedAt = new Date(now()).toISOString()
-      state.revision += 1
+      for (const [action, note] of [
+        ['accept', ''],
+        ['arrive', ''],
+        ['complete', '已补水'],
+      ] as const) {
+        applyTaskAction(state, task.id, {
+          action,
+          actorId: task.ownerId!,
+          note,
+          idempotencyKey: `guest-service-close-${action}`,
+        })
+      }
     })
-    const feedback = await app.inject({
-      method: 'POST',
-      url: `/api/guest/tasks/${encodeURIComponent(first.json().id)}/feedback`,
-      payload: {
-        tableToken: body.tableToken,
-        action: 'confirm',
-        note: '',
-        idempotencyKey: 'guest-feedback-0001',
-      },
+    const refreshed = await app.inject({
+      method: 'GET',
+      url: `/api/guest/session?token=${encodeURIComponent(body.tableToken)}`,
     })
-    expect(feedback.statusCode).toBe(200)
-    expect(feedback.json().status).toBe('confirmed')
+    expect((await repository.read()).tasks.find((candidate) => candidate.id === first.json().id)?.status).toBe('confirmed')
+    expect(refreshed.json().tasks).not.toContainEqual(expect.objectContaining({ id: first.json().id }))
     await closeFixture(app, repository)
   })
 

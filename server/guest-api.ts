@@ -37,7 +37,7 @@ import {
   requestPaymentThroughProvider,
   type PaymentProviderResolver,
 } from './payment-provider.js'
-import { isCurrentBusinessDateTableSession, tableSessionBusinessDate } from './table-sessions.js'
+import { tableSessionBusinessDate, tableSessionRequiresHandover } from './table-sessions.js'
 
 const DEFAULT_GUEST_SESSION_TTL_MS = 15 * 60_000
 
@@ -169,10 +169,11 @@ function sessionView(
   sessionClaims: Omit<GuestSessionClaims, 'version' | 'tokenType'>,
   tableToken: string,
   nowMs: number,
+  enforceMaximumOpenHours: boolean,
 ): GuestSessionResponse {
   const primary = state.employees.find((employee) => employee.id === table.primaryEmployeeId)
   const sessionBusinessDate = tableSessionBusinessDate(state, tableSession)
-  const frozen = sessionBusinessDate !== state.store.businessDate
+  const frozen = tableSessionRequiresHandover(state, tableSession, nowMs, enforceMaximumOpenHours)
   const orders = frozen ? [] : state.orderDomain.orders.filter((order) => order.tableSessionId === tableSession.id)
   const ledgerEntries = frozen ? [] : state.orderDomain.tableLedgerEntries.filter((entry) => entry.tableSessionId === tableSession.id)
   const balanceAmount = ledgerEntries.at(-1)?.balanceAfter ?? orders
@@ -261,7 +262,7 @@ function sessionView(
       tableSessionId: tableSession.id,
       sessionBusinessDate,
       frozen,
-      frozenReason: frozen ? '上一营业日桌次尚未完成经理交接，旧账已冻结且不会在本页展示或收款。' : null,
+      frozenReason: frozen ? '这桌属于上一营业日或已经超过安全开放时长，旧账已冻结且不会在本页展示或收款。' : null,
       requiresManagerHandover: frozen,
       balanceAmount,
       orders: orders.map((order) => ({
@@ -355,7 +356,8 @@ function exchangeAccessFromRequest(
 function writeAccessFromToken(state: RuntimeState, token: string, options: GuestApiOptions) {
   const claims = requireGuestSession(verifyTableAccessToken(token, options.secret, options.now?.() ?? Date.now()))
   const access = resolveGuestSession(state, claims)
-  if (!isCurrentBusinessDateTableSession(state, access.tableSession)) {
+  const enforceMaximumOpenHours = options.runtimeMode === 'staging' || options.runtimeMode === 'production'
+  if (tableSessionRequiresHandover(state, access.tableSession, options.now?.() ?? Date.now(), enforceMaximumOpenHours)) {
     throw new TableAccessError(
       '这张桌子正在做上一班账务交接，旧账已经冻结。请让值班经理处理后重新扫码，我们不会让您看到或误付上一桌账单。',
       'TABLE_SESSION_HANDOVER_REQUIRED',
@@ -370,7 +372,15 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
   app.get<{ Querystring: { token?: string; table?: string } }>('/api/guest/session', async (request) => {
     const state = await repository.read()
     const access = exchangeAccessFromRequest(state, request.query.token, request.query.table, options)
-    return sessionView(state, access.table, access.tableSession, access.sessionClaims, access.token, options.now?.() ?? Date.now())
+    return sessionView(
+      state,
+      access.table,
+      access.tableSession,
+      access.sessionClaims,
+      access.token,
+      options.now?.() ?? Date.now(),
+      options.runtimeMode === 'staging' || options.runtimeMode === 'production',
+    )
   })
 
   app.post('/api/guest/tasks', async (request, reply) => {

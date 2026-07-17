@@ -364,6 +364,16 @@ export function getTableSessionSummary(tableId: string) {
   return request<TableSessionSummary>(`/api/tables/${encodeURIComponent(tableId)}/session-summary`)
 }
 
+export function handoverLegacyTableSession(sessionId: string, reason: string) {
+  return request<{ status: 'handed_over'; tableCode: string; unresolvedOrderIds: string[]; unresolvedPaymentIntentIds: string[] }>(
+    `/api/table-sessions/${encodeURIComponent(sessionId)}/legacy-handover`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ reason, idempotencyKey: `legacy-handover-${crypto.randomUUID()}` }),
+    },
+  )
+}
+
 export function assignTableSessionSales(sessionId: string, input: Omit<SalesAttributionInput, 'idempotencyKey'>) {
   return request<SalesAttributionRecord>(`/api/table-sessions/${encodeURIComponent(sessionId)}/sales-attribution`, {
     method: 'POST',

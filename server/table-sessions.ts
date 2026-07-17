@@ -17,6 +17,7 @@ import type { SongTableSession } from '../src/shared/song-contracts.js'
 export const DEFAULT_TABLE_OPERATIONS_CONFIG: TableOperationsConfig = {
   version: 1,
   updatedAt: '1970-01-01T00:00:00.000Z',
+  maximumOpenHours: 12,
   reminder: {
     enabled: true,
     firstReminderMinutes: 60,
@@ -61,7 +62,11 @@ function ruleMatches(rule: MinimumSpendRule, table: Table, weekday: number, minu
 }
 
 function currentConfig(state: RuntimeState) {
-  return state.tableOperationsConfig ?? DEFAULT_TABLE_OPERATIONS_CONFIG
+  return {
+    ...DEFAULT_TABLE_OPERATIONS_CONFIG,
+    ...(state.tableOperationsConfig ?? {}),
+    maximumOpenHours: state.tableOperationsConfig?.maximumOpenHours ?? DEFAULT_TABLE_OPERATIONS_CONFIG.maximumOpenHours,
+  }
 }
 
 function minimumSpendSnapshot(state: RuntimeState, table: Table, capturedAt: string): MinimumSpendSnapshot {
@@ -142,6 +147,19 @@ export function tableSessionBusinessDate(state: RuntimeState, session: SongTable
 
 export function isCurrentBusinessDateTableSession(state: RuntimeState, session: SongTableSession) {
   return tableSessionBusinessDate(state, session) === state.store.businessDate
+}
+
+export function tableSessionRequiresHandover(
+  state: RuntimeState,
+  session: SongTableSession,
+  now = Date.now(),
+  enforceMaximumOpenHours = true,
+) {
+  if (!isCurrentBusinessDateTableSession(state, session)) return true
+  if (!enforceMaximumOpenHours) return false
+  const openedAt = Date.parse(session.openedAt)
+  const maximumOpenHours = currentConfig(state).maximumOpenHours ?? 12
+  return !Number.isFinite(openedAt) || now < openedAt - 5 * 60_000 || now - openedAt > maximumOpenHours * 60 * 60_000
 }
 
 export function tableSessionOperation(

@@ -318,6 +318,35 @@ describe('guest table API', () => {
     await closeFixture(app, repository)
   })
 
+  it('freezes an overlong table visit in production even when the business date was never advanced', async () => {
+    const { app, repository, now } = await fixture('production')
+    const openedAt = new Date(now() - 13 * 60 * 60_000).toISOString()
+    await replaceOpenSession(repository, 'L01', 'session:table-l01:current-overlong', openedAt)
+
+    const exchanged = await exchange(app, staticQr(now()))
+    expect(exchanged.response.statusCode, exchanged.response.body).toBe(200)
+    expect(exchanged.body.account).toMatchObject({
+      frozen: true,
+      requiresManagerHandover: true,
+      orders: [],
+      payments: [],
+    })
+
+    const blocked = await app.inject({
+      method: 'POST',
+      url: '/api/guest/tasks',
+      payload: {
+        tableToken: exchanged.body.tableToken,
+        serviceTypeId: 'water',
+        note: '',
+        idempotencyKey: 'overlong-session-task-0001',
+      },
+    })
+    expect(blocked.statusCode).toBe(409)
+    expect(blocked.json().code).toBe('TABLE_SESSION_HANDOVER_REQUIRED')
+    await closeFixture(app, repository)
+  })
+
   it('keeps an unowned guest request visible and reflects the employee who later claims it', async () => {
     const { app, repository, now } = await fixture()
     await repository.mutate((state) => {

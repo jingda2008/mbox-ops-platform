@@ -258,6 +258,8 @@ export interface MinimumSpendReminderConfig {
 export interface TableOperationsConfig {
   version: number
   updatedAt: string
+  /** Safety cutoff for forgotten handovers; normal M-Box sessions span less than one night. */
+  maximumOpenHours?: number
   reminder: MinimumSpendReminderConfig
   minimumSpendRules: MinimumSpendRule[]
 }
@@ -691,6 +693,7 @@ export const minimumSpendRuleSchema = z.object({
 }).strict()
 
 export const tableOperationsConfigInputSchema = z.object({
+  maximumOpenHours: z.number().int().min(6).max(48).default(12),
   reminder: z.object({
     enabled: z.boolean(),
     firstReminderMinutes: z.number().int().min(1).max(720),

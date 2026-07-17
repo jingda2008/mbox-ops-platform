@@ -45,6 +45,7 @@ import {
   closeTableSession,
   getCurrentActorId,
   getTableSessionSummary,
+  handoverLegacyTableSession,
   openWalkInTable,
   operateTableCombination,
   publishConfig,
@@ -128,9 +129,10 @@ function tableOperationsConfig(config?: TableOperationsConfig): TableOperationsC
   return structuredClone(config ?? {
     version: 1,
     updatedAt: '1970-01-01T00:00:00.000Z',
+    maximumOpenHours: 12,
     reminder: { enabled: true, firstReminderMinutes: 60, repeatMinutes: 30, thresholdPercent: 80 },
     minimumSpendRules: [],
-  })
+  }) as TableOperationsConfig
 }
 
 export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
@@ -179,6 +181,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
   const [tableOpsDraft, setTableOpsDraft] = useState(() => tableOperationsConfig(data.tableOperationsConfig))
   const [tableOpsDirty, setTableOpsDirty] = useState(false)
   const [tableOpsReason, setTableOpsReason] = useState('')
+  const [legacyHandoverReason, setLegacyHandoverReason] = useState('经理已核对客人离店，旧账转交后台处理')
 
   useEffect(() => {
     if (!configDirty) setDraft(cloneConfig(data.draftConfig ?? data.config))
@@ -210,11 +213,19 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
   const currentRole = data.config.roles.find((role) => role.id === fulfillmentAccess.employee?.roleId)
   const canTransferTable = currentRole?.permissionIds?.includes('table.manage') ?? false
   const canOpenWalkIn = currentRole?.permissionIds?.includes('reservation.manage') ?? false
+  const canHandoverLegacyTable = currentRole?.permissionIds?.includes('business_day.close') ?? false
   const canWaiveMinimumSpend = ['manager', 'owner'].includes(fulfillmentAccess.employee?.roleId ?? '')
   const salesEmployees = data.employees.filter((employee) => employee.status === 'active' && employee.online)
   const selectedSession = selectedTable
     ? data.songState.tableSessions.find((session) => session.tableId === selectedTable.id && session.status === 'open') ?? null
     : null
+  const selectedSessionBusinessDate = selectedSession?.id.match(/:(\d{4}-\d{2}-\d{2})(?::|$)/)?.[1]
+  const selectedSessionOpenedAt = selectedSession ? Date.parse(selectedSession.openedAt) : Number.NaN
+  const selectedSessionNeedsHandover = Boolean(selectedSession && (
+    (selectedSessionBusinessDate && selectedSessionBusinessDate !== data.store.businessDate)
+    || !Number.isFinite(selectedSessionOpenedAt)
+    || Date.parse(data.serverNow) - selectedSessionOpenedAt > (tableOpsDraft.maximumOpenHours ?? 12) * 60 * 60_000
+  ))
   const activeCombinationLinks = (() => {
     const latest = new Map<string, NonNullable<BootstrapResponse['tableCombinationRecords']>[number]>()
     for (const record of data.tableCombinationRecords ?? []) latest.set(record.linkId, record)
@@ -240,8 +251,25 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
     setCombinationTargetId('')
     setCombinationAction('add_table')
     setMinimumSpendWaiverReason('')
+    setLegacyHandoverReason('经理已核对客人离店，旧账转交后台处理')
     setSessionSummary(null)
   }, [selectedTableId])
+
+  async function handleLegacyHandover() {
+    if (!selectedSession || legacyHandoverReason.trim().length < 5) return
+    setBusy(true)
+    try {
+      const result = await handoverLegacyTableSession(selectedSession.id, legacyHandoverReason.trim())
+      const unresolved = result.unresolvedOrderIds.length + result.unresolvedPaymentIntentIds.length
+      setNotice(`${result.tableCode}旧桌已释放${unresolved > 0 ? `，${unresolved}项遗留账务已留存待核对` : ''}`)
+      setSelectedTableId(null)
+      await onRefresh()
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '旧桌交接失败')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   useEffect(() => {
     if (!selectedTable || selectedTable.status !== 'occupied') return
@@ -448,6 +476,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
     setBusy(true)
     try {
       const saved = await updateTableOperationsConfig({
+        maximumOpenHours: tableOpsDraft.maximumOpenHours ?? 12,
         reminder: tableOpsDraft.reminder,
         minimumSpendRules: tableOpsDraft.minimumSpendRules,
         reason: tableOpsReason.trim(),
@@ -644,7 +673,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
                           ? <small>等待点单 {elapsedMinutes(selectedAwaitingOrder.startedAt)}分钟 · 已提醒{selectedAwaitingOrder.reminderCount}次</small>
                           : <small>{selectedTableHasOrder ? '当前桌次已产生订单' : '服务员可标记客人暂未点单'}</small>}
                       </div>
-                      {selectedAwaitingOrder ? (
+                      {selectedSessionNeedsHandover ? <strong className="stale-table-label">已冻结，等待经理交接</strong> : selectedAwaitingOrder ? (
                         <>
                           <div className="next-care"><Timer size={17} /><span>下次检查</span><strong>{formatNextReminder(selectedAwaitingOrder.nextReminderAt)}</strong></div>
                           <button className="secondary-button" disabled={busy} onClick={() => void handleAwaitingOrder('stop')}>结束提醒</button>
@@ -654,7 +683,16 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
                       )}
                     </div>
                   )}
-                  {selectedTable && selectedTable.status === 'occupied' && sessionSummary && (
+                  {selectedTable && selectedTable.status === 'occupied' && selectedSessionNeedsHandover && (
+                    <div className="legacy-handover-toolbar">
+                      <div className="table-business-heading"><History size={19} /><div><strong>旧桌安全交接</strong><span>客人端旧订单和支付已隐藏，交接不会删除历史记录</span></div></div>
+                      <input aria-label="旧桌交接原因" maxLength={300} value={legacyHandoverReason} onChange={(event) => setLegacyHandoverReason(event.target.value)} />
+                      {canHandoverLegacyTable
+                        ? <button className="primary-button" disabled={busy || legacyHandoverReason.trim().length < 5} onClick={() => void handleLegacyHandover()}><ShieldCheck size={16} />核对并释放桌台</button>
+                        : <span className="handover-permission-note">请通知店长或老板处理</span>}
+                    </div>
+                  )}
+                  {selectedTable && selectedTable.status === 'occupied' && !selectedSessionNeedsHandover && sessionSummary && (
                     <div className={`table-business-toolbar ${sessionSummary.reminderRequired ? 'is-warning' : ''}`}>
                       <div className="minimum-spend-status">
                         <CircleDollarSign size={20} />
@@ -670,7 +708,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
                       {canWaiveMinimumSpend && sessionSummary.differenceAmount > 0 && <div className="minimum-spend-waiver"><input maxLength={300} placeholder="经理豁免原因（至少5字）" value={minimumSpendWaiverReason} onChange={(event) => setMinimumSpendWaiverReason(event.target.value)} /><button className="secondary-button" disabled={busy || minimumSpendWaiverReason.trim().length < 5} onClick={() => void handleMinimumSpendWaiver()}><ShieldCheck size={15} />豁免并结台</button></div>}
                     </div>
                   )}
-                  {selectedTable && selectedTable.status === 'occupied' && canTransferTable && selectedCombinationLinks.length === 0 && (
+                  {selectedTable && selectedTable.status === 'occupied' && !selectedSessionNeedsHandover && canTransferTable && selectedCombinationLinks.length === 0 && (
                     <div className="table-transfer-toolbar">
                       <div className="table-transfer-heading"><ArrowRightLeft size={18} /><div><strong>整桌换位</strong><span>选择目标桌，确认后立即迁移全部现场责任</span></div></div>
                       <div className="transfer-kind-control" aria-label="转桌类型">
@@ -688,7 +726,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
                       <button className="primary-button transfer-confirm" disabled={busy || !transferTargetId} onClick={() => void handleTableTransfer()}><ArrowRightLeft size={17} />确认转桌</button>
                     </div>
                   )}
-                  {selectedTable && selectedTable.status === 'occupied' && canTransferTable && (
+                  {selectedTable && selectedTable.status === 'occupied' && !selectedSessionNeedsHandover && canTransferTable && (
                     <div className="table-combination-toolbar">
                       <div className="table-business-heading"><Link2 size={18} /><div><strong>专用合台 / 加桌</strong><span>仅建立现场桌组关系，不迁移订单、支付或KDS</span></div></div>
                       {!selectedCombinationLinks.some((record) => record.relatedTableId === selectedTable.id) && <>
@@ -836,6 +874,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
                   <button className="secondary-button" disabled={busy || tableOpsDraft.minimumSpendRules.length >= 500} onClick={addMinimumSpendRule}><Plus size={15} />新增规则</button>
                 </div>
                 <div className="minimum-reminder-config">
+                  <label><span>最长开台（小时）</span><input type="number" min={6} max={48} value={tableOpsDraft.maximumOpenHours ?? 12} onChange={(event) => { setTableOpsDraft({ ...tableOpsDraft, maximumOpenHours: Number(event.target.value) }); setTableOpsDirty(true) }} /></label>
                   <div className="switch-field"><span>启用提醒</span><label className="switch"><input type="checkbox" checked={tableOpsDraft.reminder.enabled} onChange={(event) => { setTableOpsDraft({ ...tableOpsDraft, reminder: { ...tableOpsDraft.reminder, enabled: event.target.checked } }); setTableOpsDirty(true) }} /><span /></label></div>
                   <label><span>首次提醒（分钟）</span><input type="number" min={1} max={720} value={tableOpsDraft.reminder.firstReminderMinutes} onChange={(event) => { setTableOpsDraft({ ...tableOpsDraft, reminder: { ...tableOpsDraft.reminder, firstReminderMinutes: Number(event.target.value) } }); setTableOpsDirty(true) }} /></label>
                   <label><span>重复间隔（分钟）</span><input type="number" min={1} max={720} value={tableOpsDraft.reminder.repeatMinutes} onChange={(event) => { setTableOpsDraft({ ...tableOpsDraft, reminder: { ...tableOpsDraft.reminder, repeatMinutes: Number(event.target.value) } }); setTableOpsDirty(true) }} /></label>

@@ -12,12 +12,14 @@ async function fixture() {
   const repository = new JsonRepository(`/tmp/mbox-table-operations-${crypto.randomUUID()}.json`)
   await repository.init()
   const app = Fastify()
-  let actor = { actorId: 'emp-owner', roleId: 'owner' }
+  let actor: { actorId: string; roleId: string; runtimeMode: 'test' | 'staging' | 'production' } = {
+    actorId: 'emp-owner', roleId: 'owner', runtimeMode: 'test',
+  }
   app.addHook('preHandler', async (request) => {
     request.mboxActor = {
       ...actor,
       storeId: 'mbox-lujiazui',
-      runtimeMode: 'test',
+      runtimeMode: actor.runtimeMode,
       authenticatedBy: 'local_header',
     }
   })
@@ -26,7 +28,7 @@ async function fixture() {
   return {
     app,
     repository,
-    useActor(actorId: string, roleId: string) { actor = { actorId, roleId } },
+    useActor(actorId: string, roleId: string, runtimeMode: 'test' | 'staging' | 'production' = 'test') { actor = { actorId, roleId, runtimeMode } },
   }
 }
 
@@ -104,6 +106,29 @@ describe('table operating line', () => {
     expect(state.tables.find((table) => table.id === 'table-l01')).toMatchObject({ status: 'available', guestCount: 0, openedAt: null })
     expect(state.orderDomain.orders.find((order) => order.id === 'legacy-handover-order')).toBeTruthy()
     expect(state.auditEntries.filter((entry) => entry.action === 'table.legacy_session_handed_over.v1')).toHaveLength(1)
+  })
+
+  it('lets a production manager release an overlong visit without changing the business date', async () => {
+    const { app, repository, useActor } = await fixture()
+    let sessionId = ''
+    await repository.mutate((state) => {
+      const session = state.songState.tableSessions.find((candidate) => candidate.tableId === 'table-l01' && candidate.status === 'open')!
+      session.openedAt = new Date(Date.now() - 13 * 60 * 60_000).toISOString()
+      state.tableOperationsConfig = { ...state.tableOperationsConfig!, maximumOpenHours: 12 }
+      sessionId = session.id
+      state.revision += 1
+    })
+    useActor('emp-chen', 'manager', 'production')
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/table-sessions/${encodeURIComponent(sessionId)}/legacy-handover`,
+      payload: { reason: '经理核对客人已经离店并释放超时旧桌', idempotencyKey: 'overlong-handover-0001' },
+    })
+
+    expect(response.statusCode, response.body).toBe(200)
+    expect(response.json()).toMatchObject({ status: 'handed_over', tableSessionId: sessionId })
+    expect((await repository.read()).tables.find((table) => table.id === 'table-l01')?.status).toBe('available')
   })
 
   it('allows completed ordinary service to close but keeps completed urgent care open', async () => {

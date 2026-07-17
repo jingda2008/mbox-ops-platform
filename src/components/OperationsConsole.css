@@ -1,5 +1,6 @@
 .table-walkin-toolbar,
 .table-business-toolbar,
+.legacy-handover-toolbar,
 .table-combination-toolbar {
   min-width: 0;
   margin: 8px 16px 0;
@@ -7,6 +8,22 @@
   border-left: 4px solid #176d96;
   background: #f5f8fa;
 }
+
+.legacy-handover-toolbar {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(220px, .8fr) minmax(280px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 16px 0;
+  padding: 10px 12px;
+  border: 1px solid #e1b8b8;
+  border-left: 4px solid #ba3f45;
+  background: #fff7f7;
+}
+.legacy-handover-toolbar input { width: 100%; min-width: 0; height: 36px; border: 1px solid var(--line-strong); background: #fff; color: var(--ink); padding: 0 8px; }
+.stale-table-label { color: #a52f36; font-size: 12px; }
+.handover-permission-note { color: #a52f36; font-size: 11px; font-weight: 750; }
 
 .table-walkin-toolbar {
   display: grid;
@@ -85,6 +102,7 @@
 @media (max-width: 900px) {
   .table-walkin-toolbar,
   .table-business-toolbar,
+  .legacy-handover-toolbar,
   .table-combination-toolbar { grid-template-columns: 1fr; }
   .minimum-spend-progress { grid-column: 1; }
   .active-table-links { grid-column: 1; }

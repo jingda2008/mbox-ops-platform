@@ -18,11 +18,11 @@ import {
   activeTableCombinationLinks,
   currentOpenTableSession,
   currentSalesEmployeeId,
-  isCurrentBusinessDateTableSession,
   openTableSession,
   recordSalesAttribution,
   tableSessionBusinessDate,
   tableOperationsConfig,
+  tableSessionRequiresHandover,
   tableSessionSummary,
 } from './table-sessions.js'
 import { startAwaitingOrder, stopAwaitingOrder } from './proactive-service.js'
@@ -318,6 +318,7 @@ export function registerTableSessionRoutes(app: FastifyInstance, repository: Run
       )
       if (replay) {
         if (
+          replay.details.maximumOpenHours !== input.maximumOpenHours ||
           JSON.stringify(replay.details.minimumSpendRules) !== JSON.stringify(input.minimumSpendRules) ||
           JSON.stringify(replay.details.reminder) !== JSON.stringify(input.reminder) ||
           replay.details.reason !== input.reason
@@ -332,6 +333,7 @@ export function registerTableSessionRoutes(app: FastifyInstance, repository: Run
       state.tableOperationsConfig = {
         version: previous.version + 1,
         updatedAt: occurredAt,
+        maximumOpenHours: input.maximumOpenHours,
         reminder: structuredClone(input.reminder),
         minimumSpendRules: structuredClone(input.minimumSpendRules),
       }
@@ -346,6 +348,7 @@ export function registerTableSessionRoutes(app: FastifyInstance, repository: Run
           previousVersion: previous.version,
           version: state.tableOperationsConfig.version,
           reason: input.reason,
+          maximumOpenHours: input.maximumOpenHours,
           reminder: structuredClone(input.reminder),
           minimumSpendRules: structuredClone(input.minimumSpendRules),
           idempotencyKey: input.idempotencyKey,
@@ -486,7 +489,10 @@ export function registerTableSessionRoutes(app: FastifyInstance, repository: Run
 
       const session = state.songState.tableSessions.find((candidate) => candidate.id === request.params.sessionId)
       if (!session || session.status !== 'open') throw new Error('遗留桌次不存在或已经完成交接')
-      if (isCurrentBusinessDateTableSession(state, session)) throw new Error('当前营业日桌次不能走遗留交接，请使用正常结台流程')
+      const enforceMaximumOpenHours = actor.runtimeMode === 'staging' || actor.runtimeMode === 'production'
+      if (!tableSessionRequiresHandover(state, session, Date.now(), enforceMaximumOpenHours)) {
+        throw new Error('当前营业日桌次不能走遗留交接，请使用正常结台流程')
+      }
       const table = state.tables.find((candidate) => candidate.id === session.tableId)
       if (!table || table.status !== 'occupied') throw new Error('遗留桌次与桌台状态不一致，请先由管理员核对数据')
       const openSessions = state.songState.tableSessions.filter((candidate) => candidate.tableId === table.id && candidate.status === 'open')

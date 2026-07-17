@@ -70,7 +70,7 @@ describe('business day operational closure', () => {
     })
   })
 
-  it('accepts completed ordinary service but keeps completed urgent care open', () => {
+  it('accepts completed ordinary and authorized urgent service without guest confirmation', () => {
     const state = createSeedState()
     const ordinary = createServiceTask(state, {
       tableCode: 'L01', serviceTypeId: 'water', source: 'employee', note: '',
@@ -87,7 +87,7 @@ describe('business day operational closure', () => {
 
     const serviceBlockers = collectBlockers(state, 'emp-chen').filter((item) => item.kind === 'open_service_task')
     expect(serviceBlockers.map((item) => item.id)).not.toContain(ordinary.id)
-    expect(serviceBlockers.map((item) => item.id)).toContain(urgent.id)
+    expect(serviceBlockers.map((item) => item.id)).not.toContain(urgent.id)
   })
 
   it('treats a manager-cancelled KDS exception as operationally closed', () => {

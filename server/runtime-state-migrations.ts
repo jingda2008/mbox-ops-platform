@@ -154,7 +154,7 @@ function migrateMissingOpenTableSessions(state: RuntimeState) {
 }
 
 function migrateServiceTaskVisits(state: RuntimeState) {
-  const liveStatuses = new Set(['pending', 'accepted', 'arrived', 'completed', 'reopened', 'escalated'])
+  const liveStatuses = new Set(['pending', 'accepted', 'arrived', 'reopened', 'escalated'])
   state.tasks = state.tasks.map((task) => {
     const createdAt = Date.parse(task.createdAt)
     const matchingSession = state.songState.tableSessions
@@ -172,8 +172,7 @@ function migrateServiceTaskVisits(state: RuntimeState) {
     const shouldArchive = Boolean(task.archivedAt || session?.closedAt || (!session && table?.status !== 'occupied'))
     const previousStatus = task.archivedFromStatus ?? (shouldArchive ? task.status : null)
     const archiveOutcome = task.archiveOutcome ?? (shouldArchive
-      ? ['confirmed', 'cancelled'].includes(previousStatus ?? '') ? 'resolved'
-        : previousStatus === 'completed' ? 'unconfirmed' : 'unresolved'
+      ? ['completed', 'confirmed', 'cancelled'].includes(previousStatus ?? '') ? 'resolved' : 'unresolved'
       : null)
     return {
       ...task,

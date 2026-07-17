@@ -74,7 +74,7 @@ export function updateEmployee(
   assertAreas(state, input.areaIds)
   if (
     input.status === 'inactive' &&
-    state.tasks.some((task) => task.ownerId === employeeId && !['confirmed', 'cancelled'].includes(task.status))
+    state.tasks.some((task) => task.ownerId === employeeId && !['completed', 'confirmed', 'cancelled'].includes(task.status))
   ) {
     throw new Error('员工仍有未关闭任务，不能停用')
   }

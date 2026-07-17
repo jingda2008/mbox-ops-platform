@@ -14,7 +14,7 @@ import { withDefaultRolePolicy } from '../src/shared/role-policy.js'
 import { effectiveDataScopeForEmployee, effectiveRoleIdsForEmployee } from '../src/shared/staff-access.js'
 import { currentOpenTableSession } from './table-sessions.js'
 
-const closedStatuses = new Set(['confirmed', 'cancelled'])
+const closedStatuses = new Set<ServiceTask['status']>(['completed', 'confirmed', 'cancelled'])
 const claimableStatuses = new Set<ServiceTask['status']>(['pending', 'escalated', 'reopened'])
 
 function isoAt(base: Date, seconds: number) {
@@ -216,8 +216,7 @@ export function createServiceTask(state: RuntimeState, input: CreateTaskInput & 
 }
 
 function tableCloseOutcome(status: ServiceTask['status']): NonNullable<ServiceTask['archiveOutcome']> {
-  if (['confirmed', 'cancelled'].includes(status)) return 'resolved'
-  if (status === 'completed') return 'unconfirmed'
+  if (closedStatuses.has(status)) return 'resolved'
   return 'unresolved'
 }
 
@@ -236,7 +235,7 @@ export function archiveServiceTasksForTableSession(
     task.archiveOutcome = tableCloseOutcome(previousStatus)
     task.archivedFromStatus = previousStatus
     task.updatedAt = occurredAt
-    if (!['confirmed', 'cancelled'].includes(previousStatus)) task.status = 'cancelled'
+    if (!closedStatuses.has(previousStatus)) task.status = 'cancelled'
     if (!task.resolution && task.archiveOutcome === 'unresolved') task.resolution = '桌次结束时需求仍未完成'
     appendTaskEvent(state, task.id, 'task.archived_with_table_visit.v1', actorId, {
       tableSessionId,
@@ -299,20 +298,25 @@ export function applyTaskAction(state: RuntimeState, taskId: string, input: Task
     case 'complete':
       assertActor(task, input.actorId)
       if (task.status !== 'arrived') throw new Error('必须先确认到桌')
-      task.status = 'completed'
+      task.status = 'confirmed'
       task.completedAt = now
       task.resolution = input.note || '员工确认完成'
       appendTaskEvent(state, task.id, 'task.completed.v1', input.actorId, { ...eventPayload, resolution: task.resolution })
+      appendTaskEvent(state, task.id, 'service.closed_by_staff.v1', input.actorId, {
+        ...eventPayload,
+        resolution: task.resolution,
+        customerConfirmationRequired: false,
+      })
       break
     case 'confirm':
       if (!input.actorId.startsWith('guest-')) throw new Error('仅客人可以确认服务已经解决')
-      if (task.status !== 'completed') throw new Error('任务尚未完成')
+      if (!['completed', 'confirmed'].includes(task.status)) throw new Error('任务尚未完成')
       task.status = 'confirmed'
       appendTaskEvent(state, task.id, 'service.confirmed.v1', input.actorId, eventPayload)
       break
     case 'unresolved': {
       if (!input.actorId.startsWith('guest-')) throw new Error('仅客人可以反馈服务仍未解决')
-      if (task.status !== 'completed') throw new Error('任务尚未完成')
+      if (!['completed', 'confirmed'].includes(task.status)) throw new Error('任务尚未完成')
       const previousOwnerId = task.ownerId
       const serviceType = state.config.serviceTypes.find((item) => item.id === task.serviceTypeId)
       if (!serviceType) throw new Error('服务类型配置不存在')

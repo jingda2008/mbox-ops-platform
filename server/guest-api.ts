@@ -537,7 +537,7 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
         && candidate.source === 'guest'
         && candidate.serviceTypeId === input.serviceTypeId
         && candidate.note.trim().replace(/\s+/g, ' ').toLowerCase() === normalizedNote
-        && !['confirmed', 'cancelled'].includes(candidate.status)
+        && !['completed', 'confirmed', 'cancelled'].includes(candidate.status)
         && Date.parse(candidate.createdAt) >= duplicateCutoff
       ))
       if (duplicate) return taskView(state, duplicate)

@@ -131,7 +131,7 @@ describe('table operating line', () => {
     expect((await repository.read()).tables.find((table) => table.id === 'table-l01')?.status).toBe('available')
   })
 
-  it('archives completed but unconfirmed urgent care instead of leaking it into the next visit', async () => {
+  it('archives completed service as resolved without requiring guest confirmation', async () => {
     const { app, repository } = await fixture()
     await repository.mutate((state) => {
       const ordinary = createServiceTask(state, {
@@ -154,12 +154,12 @@ describe('table operating line', () => {
     })
     const urgentClose = await app.inject({
       method: 'POST', url: '/api/tables/table-l02/close',
-      payload: { reason: '投诉尚未确认', idempotencyKey: 'table-close-completed-urgent-blocked' },
+      payload: { reason: '投诉已由有权人完成', idempotencyKey: 'table-close-completed-urgent-resolved' },
     })
     expect(ordinaryClose.statusCode, ordinaryClose.body).toBe(200)
     expect(urgentClose.statusCode, urgentClose.body).toBe(200)
     const urgent = (await repository.read()).tasks.find((task) => task.note === '等待明确结案')
-    expect(urgent).toMatchObject({ status: 'cancelled', archiveOutcome: 'unconfirmed', archivedFromStatus: 'completed' })
+    expect(urgent).toMatchObject({ status: 'completed', archiveOutcome: 'resolved', archivedFromStatus: 'completed' })
   })
 
   it('blocks table close while a song request is active or awaiting refund', async () => {

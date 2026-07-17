@@ -158,7 +158,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
   const ownOpenTasks = data.tasks.filter((task) => (
     (task.ownerId === currentEmployee?.id || claimableTaskIds.has(task.id))
     && !task.archivedAt
-    && !['confirmed', 'cancelled'].includes(task.status)
+    && !['completed', 'confirmed', 'cancelled'].includes(task.status)
   ))
   const availableNavigation = navigation.filter((item) => {
     if (item.id === 'home') return true
@@ -201,7 +201,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
   }, [])
 
   const openTasks = fulfillmentAccess.mode === 'oversight'
-    ? data.tasks.filter((task) => !task.archivedAt && !['confirmed', 'cancelled'].includes(task.status))
+    ? data.tasks.filter((task) => !task.archivedAt && !['completed', 'confirmed', 'cancelled'].includes(task.status))
     : ownOpenTasks
   const visibleServiceTasks = fulfillmentAccess.mode === 'oversight'
     ? data.tasks

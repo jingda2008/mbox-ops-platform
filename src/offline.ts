@@ -149,7 +149,7 @@ export function sanitizeBootstrapSnapshot(data: BootstrapResponse): OfflineSnaps
       actionScript: [...actionScript],
     })),
     tasks: data.tasks
-      .filter((task) => !['confirmed', 'cancelled'].includes(task.status))
+      .filter((task) => !['completed', 'confirmed', 'cancelled'].includes(task.status))
       .map(({ id, tableId, serviceTypeId, status, priority, ownerId, createdAt, warningAt, actionScript }) => ({
         id,
         tableId,

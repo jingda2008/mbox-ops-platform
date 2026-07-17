@@ -39,7 +39,7 @@ export function reconcileGuestReply(
 }
 
 export function visibleGuestTasks(tasks: GuestTaskView[], limit = 5) {
-  return tasks.filter((task) => task.status !== 'confirmed' && task.status !== 'cancelled').slice(0, limit)
+  return tasks.filter((task) => !['completed', 'confirmed', 'cancelled'].includes(task.status)).slice(0, limit)
 }
 
 export const GUEST_SONG_TERMINAL_DISPLAY_MS = 20_000
@@ -83,10 +83,6 @@ export function visibleGuestSongRequests<T extends { id: string; status: string 
     !terminalGuestSongStatuses.has(request.status)
     || now - (terminalSeenAt[request.id] ?? now) < terminalDisplayMs
   ))
-}
-
-export function guestFeedbackIdempotencyKey(action: 'confirm' | 'unresolved') {
-  return `guest-feedback-${action}-${crypto.randomUUID()}`
 }
 
 export function resolveGuestStage(schedule: GuestSessionResponse['stageSchedule'], now: number) {

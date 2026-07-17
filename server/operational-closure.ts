@@ -7,8 +7,7 @@ const ACTIVE_SONG_REQUEST_STATUSES = new Set([
 ])
 
 export function isServiceTaskOperationallyClosed(task: ServiceTask) {
-  if (['confirmed', 'cancelled'].includes(task.status)) return true
-  return task.status === 'completed' && task.priority !== 'urgent'
+  return ['completed', 'confirmed', 'cancelled'].includes(task.status)
 }
 
 export function isKdsTaskOperationallyClosed(orderDomain: OrderDomainState, task: KdsTask) {

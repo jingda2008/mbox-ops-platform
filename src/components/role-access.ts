@@ -122,7 +122,7 @@ const roleAliases: Record<Exclude<RoleHomeKind, 'custom'>, readonly string[]> = 
   runner: ['runner', 'food-runner', '传菜员', '传菜', '传菜取送'],
 }
 
-const openServiceStatuses = new Set(['pending', 'accepted', 'arrived', 'completed', 'reopened', 'escalated'])
+const openServiceStatuses = new Set(['pending', 'accepted', 'arrived', 'reopened', 'escalated'])
 const openKdsStatuses = new Set(['queued', 'preparing', 'completed', 'picked_up'])
 
 export function getRoleHomeAccess(data: BootstrapResponse, roleId: string): RoleHomeAccess {

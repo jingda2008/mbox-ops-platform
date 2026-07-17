@@ -16,7 +16,7 @@ import {
 import { deliverKdsTask, pickUpKdsTask } from './order-domain.js'
 import { effectiveRoleIdsForEmployee } from '../src/shared/staff-access.js'
 
-const closedServiceTaskStatuses = new Set<ServiceTask['status']>(['confirmed', 'cancelled'])
+const closedServiceTaskStatuses = new Set<ServiceTask['status']>(['completed', 'confirmed', 'cancelled'])
 
 function activeTaskCount(state: RuntimeState, employeeId: string) {
   return state.tasks.filter((task) => task.ownerId === employeeId && !closedServiceTaskStatuses.has(task.status)).length

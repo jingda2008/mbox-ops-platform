@@ -71,6 +71,16 @@ describe('role home access', () => {
     ])
   })
 
+  it('drops completed service from the employee home task count', () => {
+    const data = bootstrapForRole('server', '服务员')
+    data.tasks.find((task) => task.id === 'task-own')!.status = 'confirmed'
+
+    const model = buildRoleHomeModel(data, 'employee-current')
+
+    expect(model.metrics.find((item) => item.id === 'tasks')).toBeUndefined()
+    expect(model.todos.find((item) => item.id === 'tasks')).toBeUndefined()
+  })
+
   it('uses every active shift role when counting production KDS metrics and todos', () => {
     const data = bootstrapForRole('bartender', '吧台')
     data.config.roles.push({

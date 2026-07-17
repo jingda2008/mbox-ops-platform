@@ -3,8 +3,8 @@ import { resolve } from 'node:path'
 
 const root = resolve(import.meta.dirname, '..')
 const baselinePath = resolve(root, 'docs/comprehensive-operating-test-cases.md')
-const reportPath = resolve(root, 'docs/tc-execution-report-2026-07-17.md')
-const csvPath = resolve(root, 'docs/tc-execution-register-2026-07-17.csv')
+const reportPath = resolve(root, 'docs/tc-execution-report-2026-07-18.md')
+const csvPath = resolve(root, 'docs/tc-execution-register-2026-07-18.csv')
 const checkMode = process.argv.includes('--check')
 
 const baseline = readFileSync(baselinePath, 'utf8')
@@ -49,7 +49,7 @@ const blocked = new Set([
 const evidenceByDomain = {
   PER: '569项自动化测试；13名真实员工云端登录与权限隔离检查',
   GST: 'reservation/table-access/table-transfer/waitlist测试；固定桌码签名交换',
-  SVC: '服务任务、限流、升级链测试；云端L01接单→到桌→完成→客人确认闭环',
+  SVC: '服务任务、限流、升级链测试；接单→到桌→员工完成即关闭并移出待办',
   ORD: '订单、KDS、履约、库存集成测试；移动端购物车视觉交互检查',
   PAY: '支付领域、退款、双人审批、幂等和服务商适配器模拟测试',
   MBR: '匿名身份、会员、权益发放/核销、活动审批和隐私边界测试',
@@ -101,11 +101,11 @@ const p0p1Breakdown = releaseBlocking.reduce((summary, row) => {
 
 const report = `# M-BOX 213条经营TC执行报告
 
-执行日期：\`2026-07-17\`  
-执行版本：\`1.0.0-rc.10\`  
-时区：\`Asia/Shanghai\`  
-原始基线：[comprehensive-operating-test-cases.md](comprehensive-operating-test-cases.md)  
-逐条登记：[tc-execution-register-2026-07-17.csv](tc-execution-register-2026-07-17.csv)
+执行日期：\`2026-07-18\`
+执行版本：\`1.0.0-rc.11\`
+时区：\`Asia/Shanghai\`
+原始基线：[comprehensive-operating-test-cases.md](comprehensive-operating-test-cases.md)
+逐条登记：[tc-execution-register-2026-07-18.csv](tc-execution-register-2026-07-18.csv)
 
 ## 结论
 
@@ -128,7 +128,7 @@ const report = `# M-BOX 213条经营TC执行报告
 | 依赖安全 | \`npm audit --omit=dev\`：0项已知漏洞 |
 | 云端角色 | 13名真实员工全部可登录并获得各自职责；护古无\`identity.manage\` |
 | 固定桌码 | 无签名桌号请求返回\`TABLE_ACCESS_INVALID\`；签名固定桌码可交换当前桌次会话 |
-| 服务闭环 | L01创建个性化需求，由Tom接单、到桌、完成，客人确认后状态为\`confirmed\` |
+| 服务闭环 | L01创建个性化需求，由Tom接单、到桌、完成；员工完成即关闭并从待处理队列消失 |
 | 客户视觉/交互 | 390、1024、1200宽度无横向溢出；按钮有反馈；心情选择高亮/灰化；购物车显示\`1件 · ¥88.00\`；控制台0错误 |
 | 300人峰值 | 300人、75桌、613请求、并发40；请求失败0、流程失败0、负库存0；最慢业务p95为员工bootstrap 233.5ms |
 

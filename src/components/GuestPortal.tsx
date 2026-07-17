@@ -1,9 +1,9 @@
 import { Bell, CakeSlice, CheckCircle2, ChevronRight, Clock3, CreditCard, GlassWater, ListChecks, MapPin, MessageCircleMore, Mic2, Music2, Send, ShieldCheck, ShoppingBag, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { checkoutGuestOrder, createGuestOrder, createGuestSongRequest, createGuestTask, getGuestSession, submitGuestTaskFeedback, trackGuestBehavior } from '../api'
+import { checkoutGuestOrder, createGuestOrder, createGuestSongRequest, createGuestTask, getGuestSession, trackGuestBehavior } from '../api'
 import type { GuestSessionResponse, GuestTaskView, WechatJsapiParameters } from '../shared/guest-contracts'
 import type { GuestBehaviorEventType, GuestBehaviorValue } from '../shared/guest-insight-contracts'
-import { formatGuestCompactCountdown, guestCustomSongServiceNote, guestErrorMessage, guestFeedbackIdempotencyKey, guestMoodServiceNote, guestReplyNotice, guestSessionHistoryUrl, guestSongReplyNotice, guestSongStatusLabel, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks, type GuestReplyNotice } from './guest-portal-utils'
+import { formatGuestCompactCountdown, guestCustomSongServiceNote, guestErrorMessage, guestMoodServiceNote, guestReplyNotice, guestSessionHistoryUrl, guestSongReplyNotice, guestSongStatusLabel, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks, type GuestReplyNotice } from './guest-portal-utils'
 import { ServiceIcon } from './ServiceIcon'
 import { MenuOrderingWorkspace, type MenuCartItem } from './MenuOrderingWorkspace'
 import { SuperHighCommunityBand } from './SuperHighCommunityBand'
@@ -12,7 +12,7 @@ const guestStatus: Record<GuestTaskView['status'], string> = {
   pending: '正在为您安排伙伴',
   accepted: '服务伙伴正在赶来',
   arrived: '已经到您桌边',
-  completed: '想请您确认一下',
+  completed: '这件事已照顾好',
   confirmed: '这件事已照顾好',
   reopened: '领班正在继续跟进',
   escalated: '领班已优先接手',
@@ -343,24 +343,6 @@ export function GuestPortal() {
     await requestService(customRequestType.id, note.trim())
   }
 
-  async function giveFeedback(task: GuestTaskView, action: 'confirm' | 'unresolved') {
-    accelerateRefresh()
-    try {
-      const updatedTask = await submitGuestTaskFeedback(task.id, {
-        tableToken: latestTableToken.current,
-        action,
-        note: action === 'unresolved' ? '客户反馈仍未解决' : '',
-        idempotencyKey: guestFeedbackIdempotencyKey(action),
-      })
-      setReply(guestTaskReplyNotice(action === 'confirm'
-        ? '谢谢您的点头～能照顾好今晚的您，我们也很开心。'
-        : '还没照顾到位，抱歉让您再说一次。值班领班已经接手，会继续跟到解决。', updatedTask))
-      await refresh()
-    } catch (requestError) {
-      setError({ message: guestErrorMessage(requestError, '刚才的反馈没有送到，再点一次，我们不让这件事掉在地上。'), source: 'action' })
-    }
-  }
-
   async function payOrder(orderId: string, idempotencyKey = `guest-pay-${crypto.randomUUID()}`) {
     if (!data || payingOrderId) return
     accelerateRefresh()
@@ -617,12 +599,6 @@ export function GuestPortal() {
                     <strong>{task.serviceTypeName || serviceType?.name || '服务进度'}</strong>
                     <span>{guestStatus[task.status]} · {task.ownerName ?? '服务团队正在安排'}</span>
                   </div>
-                  {task.status === 'completed' && (
-                    <div className="guest-feedback">
-                      <button onClick={() => void giveFeedback(task, 'confirm')}>已解决</button>
-                      <button className="text-danger" onClick={() => void giveFeedback(task, 'unresolved')}>仍未解决</button>
-                    </div>
-                  )}
                 </article>
               )
             })}

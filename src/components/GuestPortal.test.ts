@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { GuestTaskView } from '../shared/guest-contracts'
-import { formatGuestCompactCountdown, formatGuestCountdown, guestCustomSongServiceNote, guestErrorMessage, guestFeedbackIdempotencyKey, guestMoodServiceNote, guestReplyNotice, guestSessionHistoryUrl, guestSongReplyNotice, guestSongStatusLabel, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks } from './guest-portal-utils'
+import { formatGuestCompactCountdown, formatGuestCountdown, guestCustomSongServiceNote, guestErrorMessage, guestMoodServiceNote, guestReplyNotice, guestSessionHistoryUrl, guestSongReplyNotice, guestSongStatusLabel, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks } from './guest-portal-utils'
 
 function guestTask(status: GuestTaskView['status'], id = `task-${status}`): GuestTaskView {
   return {
@@ -17,7 +17,7 @@ function guestTask(status: GuestTaskView['status'], id = `task-${status}`): Gues
 }
 
 describe('guest service progress', () => {
-  it('hides terminal tasks while keeping completed tasks for guest confirmation', () => {
+  it('hides staff-completed and other terminal tasks without requiring guest confirmation', () => {
     const tasks = [
       guestTask('confirmed'),
       guestTask('completed'),
@@ -25,7 +25,7 @@ describe('guest service progress', () => {
       guestTask('accepted'),
     ]
 
-    expect(visibleGuestTasks(tasks).map((task) => task.status)).toEqual(['completed', 'accepted'])
+    expect(visibleGuestTasks(tasks).map((task) => task.status)).toEqual(['accepted'])
   })
 
   it('applies the display limit after terminal tasks are removed', () => {
@@ -114,17 +114,6 @@ describe('guest song request progress', () => {
     expect(initial).toEqual({})
     expect(completed).toEqual({ 'song-1': 5_000 })
     expect(refreshed).toEqual({ 'song-1': 5_000 })
-  })
-})
-
-describe('guest feedback idempotency key', () => {
-  it('stays within the API limit regardless of the service task ID length', () => {
-    const first = guestFeedbackIdempotencyKey('confirm')
-    const second = guestFeedbackIdempotencyKey('confirm')
-
-    expect(first.length).toBeLessThanOrEqual(128)
-    expect(first).toMatch(/^guest-feedback-confirm-/)
-    expect(second).not.toBe(first)
   })
 })
 

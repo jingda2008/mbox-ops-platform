@@ -229,11 +229,11 @@
 - **前置：** `L04`已开台，Tom在线且未超载；顾客手机打开本桌服务页。
 - **参与岗位：** 顾客、Tom、Tyke、冷言志。
 - **步骤：** 顾客点击“加水”并附温度偏好；5秒内查看已收到回复；Tom接单、到桌，按动作卡补水并检查冰桶/纸巾；Tom填写解决结果并完成；顾客确认解决。
-- **预期：** 5秒内系统确认、60秒内接单、3分钟内到桌；状态依次为`pending -> accepted -> arrived -> completed -> confirmed`；顾客自由文本不泄露到其他桌。
-- **审计证据：** `service.requested.v1`、`task.created/accepted/arrived/completed.v1`、`service.confirmed.v1`、桌台、actorId、SLA时间和resolution。
+- **预期：** 5秒内系统确认、60秒内接单、3分钟内到桌；状态依次为`pending -> accepted -> arrived -> confirmed`，员工完成后任务立即从待处理队列消失，不要求顾客二次确认；顾客自由文本不泄露到其他桌。
+- **审计证据：** `service.requested.v1`、`task.created/accepted/arrived/completed.v1`、`service.closed_by_staff.v1`、桌台、actorId、SLA时间和resolution。
 - **失败升级：** 跨桌可见为P0；到桌或完成时间缺失为P1审计缺口；单次通知失败为P2。
 
-### SVC-02 未解决重开、重复点击与弱网恢复
+### SVC-02 再次呼叫关联、重复点击与弱网恢复
 
 - **前置：** `I01`已开台，Jerry主责、Tyke候补；员工设备可模拟断网。
 - **参与岗位：** 顾客、Jerry、Tyke、冷言志。
@@ -308,9 +308,9 @@
 
 - **前置：** `I01`存在超过SLA的服务任务；顾客手机可提交投诉。
 - **参与岗位：** 顾客、Jerry、冷言志、李艳。
-- **步骤：** 顾客提交“叫了两次无人来”；系统立即创建紧急投诉；冷言志在20秒内接单、45秒前到桌，复述问题并查原任务；权限内给出补救，超权限交李艳；顾客确认解决或选择未解决重开。
+- **步骤：** 顾客提交“叫了两次无人来”；系统立即创建紧急投诉；冷言志在20秒内接单、45秒前到桌，复述问题并查原任务；权限内给出补救，超权限交李艳；有权人记录结果并完成，顾客无需二次确认；若顾客再次呼叫则关联原任务继续处理。
 - **预期：** 投诉不派普通服务员独自关闭；2分钟内经理可见并确认；原服务任务与投诉关联；补偿、话术、解决结果和客户反馈完整。
-- **审计证据：** complaint taskId、原任务ID、`task.accepted/arrived/completed/escalated/reopened.v1`、补偿授权ID、resolution和客户确认。
+- **审计证据：** complaint taskId、原任务ID、`task.accepted/arrived/completed/escalated.v1`、`service.closed_by_staff.v1`、补偿授权ID、resolution和完成人。
 - **失败升级：** 投诉被普通完成动作直接关闭或闭店仍无负责人为P1；跨桌查看投诉文本为P0。
 
 ### CMP-02 错品/少品投诉与账务补救

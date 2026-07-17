@@ -445,7 +445,7 @@ function OfflineSnapshotView({
 }) {
   const [busyTaskId, setBusyTaskId] = useState('')
   const [notice, setNotice] = useState('')
-  const openTasks = snapshot.tasks.filter((task) => !['confirmed', 'cancelled'].includes(task.status))
+  const openTasks = snapshot.tasks.filter((task) => !['completed', 'confirmed', 'cancelled'].includes(task.status))
 
   async function handleAction(task: OfflineSnapshot['tasks'][number], action: TaskActionInput['action']) {
     if (!task.ownerId) {
@@ -548,7 +548,7 @@ function availableTaskAction(status: OfflineSnapshot['tasks'][number]['status'])
 function nextTaskStatus(action: TaskActionInput['action']): OfflineSnapshot['tasks'][number]['status'] {
   if (action === 'accept') return 'accepted'
   if (action === 'arrive') return 'arrived'
-  if (action === 'complete') return 'completed'
+  if (action === 'complete') return 'confirmed'
   return 'pending'
 }
 
@@ -557,7 +557,7 @@ function taskStatusLabel(status: OfflineSnapshot['tasks'][number]['status']) {
     pending: '待接单',
     accepted: '已接单',
     arrived: '已到桌',
-    completed: '待客户确认',
+    completed: '已完成',
     confirmed: '已解决',
     reopened: '仍未解决',
     escalated: '已升级',

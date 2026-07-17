@@ -1,7 +1,7 @@
 import { Check, CheckCheck, Clock3, MapPin, Navigation, RotateCcw, UserRound } from 'lucide-react'
 import { useState } from 'react'
 import { ServiceIcon } from './ServiceIcon'
-import { taskAcceptMode } from './task-queue'
+import { taskAcceptMode, taskQueueIsOpen } from './task-queue'
 import type {
   Employee,
   ServiceTask,
@@ -14,7 +14,7 @@ const statusLabels: Record<ServiceTask['status'], string> = {
   pending: '待接单',
   accepted: '已接单',
   arrived: '已到桌',
-  completed: '待客户确认',
+  completed: '已完成',
   confirmed: '已解决',
   reopened: '仍未解决',
   escalated: '已升级',
@@ -55,7 +55,7 @@ export function TaskQueue({
   const [visibleCount, setVisibleCount] = useState(12)
   const visibleTasks = tasks
     .filter((task) => !task.archivedAt)
-    .filter((task) => !['confirmed', 'cancelled'].includes(task.status))
+    .filter(taskQueueIsOpen)
     .filter((task) => !selectedTableId || task.tableId === selectedTableId)
     .sort((a, b) => {
       const priority = { urgent: 4, high: 3, normal: 2, low: 1 }

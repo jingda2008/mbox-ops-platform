@@ -719,7 +719,7 @@ function semanticIssues(state: RuntimeState, input: StoreImportPackage, candidat
   }
 
   const tableIds = new Set(candidate.tables.map((table) => table.id))
-  for (const task of state.tasks.filter((task) => !['confirmed', 'cancelled'].includes(task.status))) {
+  for (const task of state.tasks.filter((task) => !['completed', 'confirmed', 'cancelled'].includes(task.status))) {
     if (!tableIds.has(task.tableId)) add('error', 'OPEN_TASK_TABLE_REMOVED', `未关闭任务 ${task.id} 引用的桌台将被移除`, 'tables')
     if (task.ownerId && employees.get(task.ownerId)?.status !== 'active') add('error', 'OPEN_TASK_OWNER_REMOVED', `未关闭任务 ${task.id} 的责任员工将被移除或停用`, 'employees')
     if (!serviceTypeIds.has(task.serviceTypeId)) add('error', 'OPEN_TASK_SERVICE_TYPE_REMOVED', `未关闭任务 ${task.id} 的服务类型将被移除`, 'config')
@@ -757,7 +757,7 @@ function semanticIssues(state: RuntimeState, input: StoreImportPackage, candidat
     }
   }
   if (candidate.store.businessDate !== state.store.businessDate) {
-    const hasLiveWork = state.tasks.some((task) => !['confirmed', 'cancelled'].includes(task.status)) ||
+  const hasLiveWork = state.tasks.some((task) => !['completed', 'confirmed', 'cancelled'].includes(task.status)) ||
       state.awaitingOrderIntents.some((intent) => intent.status === 'active') ||
       state.waitlistEntries.some((entry) => ['waiting', 'notified'].includes(entry.status)) ||
       state.songState.tableSessions.some((session) => session.status === 'open')

@@ -192,7 +192,7 @@ describe('service task domain', () => {
       .toThrow('仅客人可以确认服务已经解决')
   })
 
-  it('enforces accept, arrive, complete and customer confirmation order', () => {
+  it('closes the task as soon as the responsible employee completes service', () => {
     const state = createSeedState()
     const task = createServiceTask(state, taskInput())
 
@@ -202,8 +202,7 @@ describe('service task domain', () => {
 
     applyTaskAction(state, task.id, { action: 'accept', actorId: 'emp-lin', note: '', idempotencyKey: 'task-accept-0001' })
     applyTaskAction(state, task.id, { action: 'arrive', actorId: 'emp-lin', note: '', idempotencyKey: 'task-arrive-0001' })
-    applyTaskAction(state, task.id, { action: 'complete', actorId: 'emp-lin', note: '已补水', idempotencyKey: 'task-complete-0001' })
-    const confirmed = applyTaskAction(state, task.id, { action: 'confirm', actorId: 'guest-L01', note: '', idempotencyKey: 'task-confirm-0001' })
+    const confirmed = applyTaskAction(state, task.id, { action: 'complete', actorId: 'emp-lin', note: '已补水', idempotencyKey: 'task-complete-0001' })
 
     expect(confirmed.status).toBe('confirmed')
     expect(state.taskEvents.map((event) => event.type)).toEqual([
@@ -211,7 +210,7 @@ describe('service task domain', () => {
       'task.accepted.v1',
       'task.arrived.v1',
       'task.completed.v1',
-      'service.confirmed.v1',
+      'service.closed_by_staff.v1',
     ])
   })
 

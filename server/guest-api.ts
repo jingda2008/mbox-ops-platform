@@ -37,6 +37,7 @@ import {
   requestPaymentThroughProvider,
   type PaymentProviderResolver,
 } from './payment-provider.js'
+import { isCurrentBusinessDateTableSession, tableSessionBusinessDate } from './table-sessions.js'
 
 const DEFAULT_GUEST_SESSION_TTL_MS = 15 * 60_000
 
@@ -170,8 +171,10 @@ function sessionView(
   nowMs: number,
 ): GuestSessionResponse {
   const primary = state.employees.find((employee) => employee.id === table.primaryEmployeeId)
-  const orders = state.orderDomain.orders.filter((order) => order.tableSessionId === tableSession.id)
-  const ledgerEntries = state.orderDomain.tableLedgerEntries.filter((entry) => entry.tableSessionId === tableSession.id)
+  const sessionBusinessDate = tableSessionBusinessDate(state, tableSession)
+  const frozen = sessionBusinessDate !== state.store.businessDate
+  const orders = frozen ? [] : state.orderDomain.orders.filter((order) => order.tableSessionId === tableSession.id)
+  const ledgerEntries = frozen ? [] : state.orderDomain.tableLedgerEntries.filter((entry) => entry.tableSessionId === tableSession.id)
   const balanceAmount = ledgerEntries.at(-1)?.balanceAfter ?? orders
     .filter((order) => order.status !== 'draft')
     .reduce((sum, order) => sum + order.amounts.payableAmount, 0)
@@ -250,12 +253,16 @@ function sessionView(
       .filter((product) => product.enabled)
       .sort((left, right) => (left.sortOrder ?? 999) - (right.sortOrder ?? 999))
       .map((product) => ({ ...product, costAmount: 0 })),
-    tasks: state.tasks
+    tasks: (frozen ? [] : state.tasks)
       .filter((task) => task.tableId === table.id && Date.parse(task.createdAt) >= Date.parse(tableSession.openedAt))
       .slice(0, 10)
       .map((task) => taskView(state, task)),
     account: {
       tableSessionId: tableSession.id,
+      sessionBusinessDate,
+      frozen,
+      frozenReason: frozen ? '上一营业日桌次尚未完成经理交接，旧账已冻结且不会在本页展示或收款。' : null,
+      requiresManagerHandover: frozen,
       balanceAmount,
       orders: orders.map((order) => ({
         id: order.id,
@@ -271,7 +278,7 @@ function sessionView(
           fulfillmentStatus: item.fulfillmentStatus,
         })),
       })),
-      payments: state.paymentDomain.paymentIntents
+      payments: (frozen ? [] : state.paymentDomain.paymentIntents)
         .filter((intent) => intent.tableSessionId === tableSession.id)
         .slice(-20)
         .reverse()
@@ -286,7 +293,7 @@ function sessionView(
     },
     songOffers,
     stageSchedule,
-    songRequests: state.songState.requests
+    songRequests: (frozen ? [] : state.songState.requests)
       .filter((request) => request.tableSessionId === tableSession.id)
       .slice(-20)
       .reverse()
@@ -347,7 +354,15 @@ function exchangeAccessFromRequest(
 
 function writeAccessFromToken(state: RuntimeState, token: string, options: GuestApiOptions) {
   const claims = requireGuestSession(verifyTableAccessToken(token, options.secret, options.now?.() ?? Date.now()))
-  return resolveGuestSession(state, claims)
+  const access = resolveGuestSession(state, claims)
+  if (!isCurrentBusinessDateTableSession(state, access.tableSession)) {
+    throw new TableAccessError(
+      '这张桌子正在做上一班账务交接，旧账已经冻结。请让值班经理处理后重新扫码，我们不会让您看到或误付上一桌账单。',
+      'TABLE_SESSION_HANDOVER_REQUIRED',
+      409,
+    )
+  }
+  return access
 }
 
 export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRepository, options: GuestApiOptions) {

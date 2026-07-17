@@ -260,9 +260,15 @@ describe('runtime state operational migrations', () => {
     const legacyConfig = legacy.reservationState!.config as typeof legacy.reservationState.config & {
       lateHoldMinutes?: number
       waitlistResponseMinutes?: number
+      businessHours?: typeof legacy.reservationState.config.businessHours
+      capacity?: typeof legacy.reservationState.config.capacity
+      publicRules?: typeof legacy.reservationState.config.publicRules
     }
     delete legacyConfig.lateHoldMinutes
     delete legacyConfig.waitlistResponseMinutes
+    delete legacyConfig.businessHours
+    delete legacyConfig.capacity
+    delete legacyConfig.publicRules
     const legacyReservation = legacy.reservationState!.reservations[0]
     if (legacyReservation) {
       for (const field of [
@@ -275,7 +281,13 @@ describe('runtime state operational migrations', () => {
 
     expect(migrated.tableTransfers).toEqual([])
     expect(migrated.waitlistEntries).toEqual([])
-    expect(migrated.reservationState?.config).toMatchObject({ lateHoldMinutes: 30, waitlistResponseMinutes: 10 })
+    expect(migrated.reservationState?.config).toMatchObject({
+      lateHoldMinutes: 30,
+      waitlistResponseMinutes: 10,
+      businessHours: { timeZone: 'Asia/Shanghai', openingTime: '20:30', closingTime: '02:00', slotMinutes: 30 },
+      capacity: { defaultDailyCapacity: 120, defaultSlotCapacity: 20 },
+      publicRules: { minimumLeadMinutes: 15, maximumAdvanceDays: 180, duplicateWindowMinutes: 60 },
+    })
     if (legacyReservation) {
       expect(migrated.reservationState?.reservations[0]).toMatchObject({
         expectedArrivalAt: null,

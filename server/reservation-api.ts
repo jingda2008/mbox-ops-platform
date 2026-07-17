@@ -17,12 +17,14 @@ import {
   failReservationDepositRefund,
   markReservationArrived,
   markReservationNoShow,
+  normalizeReservationConfig,
   recordReservationDepositIntent,
   seatReservation,
   startReservationDepositRefund,
   updateReservationConfig,
   updateReservationDetails,
   decideLateReservationHold,
+  DEFAULT_RESERVATION_CONFIG,
 } from './reservation-domain.js'
 import type { RuntimeRepository } from './repository.js'
 
@@ -162,6 +164,36 @@ const reservationConfigSchema = z.object({
   }).strict()).min(1).max(4),
   lateHoldMinutes: z.number().int().min(0).max(240).default(30),
   waitlistResponseMinutes: z.number().int().min(1).max(120).default(10),
+  businessHours: z.object({
+    timeZone: z.string().trim().min(1).max(80),
+    openingTime: z.string().regex(/^\d{2}:\d{2}$/),
+    closingTime: z.string().regex(/^\d{2}:\d{2}$/),
+    slotMinutes: z.number().int().min(5).max(240),
+    closedWeekdays: z.array(z.number().int().min(0).max(6)).max(7),
+  }).strict().optional(),
+  capacity: z.object({
+    defaultDailyCapacity: z.number().int().min(1).max(10_000),
+    defaultSlotCapacity: z.number().int().min(1).max(1_000),
+    dateOverrides: z.array(z.object({
+      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      enabled: z.boolean(),
+      totalCapacity: z.number().int().min(0).max(10_000),
+      slotCapacities: z.array(z.object({
+        time: z.string().regex(/^\d{2}:\d{2}$/),
+        capacity: z.number().int().min(0).max(1_000),
+      }).strict()).max(100),
+    }).strict()).max(366),
+  }).strict().optional(),
+  publicRules: z.object({
+    minimumLeadMinutes: z.number().int().min(0).max(10_080),
+    maximumAdvanceDays: z.number().int().min(1).max(730),
+    duplicateWindowMinutes: z.number().int().min(0).max(1_440),
+    acceptedContactMethods: z.array(z.enum(['phone', 'wechat'])).min(1).max(2),
+    createRateLimit: z.object({
+      limit: z.number().int().min(1).max(100),
+      windowMinutes: z.number().int().min(1).max(1_440),
+    }).strict(),
+  }).strict().optional(),
 }).strict()
 
 const configUpdateSchema = z.object({
@@ -197,9 +229,13 @@ export function reservationsFor(state: RuntimeStateWithReservations) {
         ],
         lateHoldMinutes: 30,
         waitlistResponseMinutes: 10,
+        businessHours: structuredClone(DEFAULT_RESERVATION_CONFIG.businessHours),
+        capacity: structuredClone(DEFAULT_RESERVATION_CONFIG.capacity),
+        publicRules: structuredClone(DEFAULT_RESERVATION_CONFIG.publicRules),
       },
     )
   }
+  state.reservationState.config = normalizeReservationConfig(state.reservationState.config)
   return state.reservationState
 }
 
@@ -262,10 +298,14 @@ export function registerReservationRoutes(app: FastifyInstance, repository: Runt
         }
         return domain.config
       }
-      const config = updateReservationConfig(domain, {
+      const config = updateReservationConfig(domain, normalizeReservationConfig({
+        ...domain.config,
         ...input.config,
+        businessHours: input.config.businessHours ?? domain.config.businessHours,
+        capacity: input.config.capacity ?? domain.config.capacity,
+        publicRules: input.config.publicRules ?? domain.config.publicRules,
         version: domain.config.version + 1,
-      })
+      }))
       state.revision += 1
       state.auditEntries.push({
         id: randomUUID(),

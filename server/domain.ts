@@ -11,9 +11,10 @@ import type {
   TaskEvent,
 } from '../src/shared/contracts.js'
 import { withDefaultRolePolicy } from '../src/shared/role-policy.js'
-import { effectiveRoleIdsForEmployee } from '../src/shared/staff-access.js'
+import { effectiveDataScopeForEmployee, effectiveRoleIdsForEmployee } from '../src/shared/staff-access.js'
 
 const closedStatuses = new Set(['confirmed', 'cancelled'])
+const claimableStatuses = new Set<ServiceTask['status']>(['pending', 'escalated', 'reopened'])
 
 function isoAt(base: Date, seconds: number) {
   return new Date(base.getTime() + seconds * 1000).toISOString()
@@ -90,6 +91,50 @@ function chooseAssignee(
         !employee.paused,
     ) ?? null
   )
+}
+
+function employeeHasTableResponsibility(state: RuntimeState, employee: Employee, task: ServiceTask) {
+  if (task.notifiedEmployeeIds.includes(employee.id)) return true
+  const table = state.tables.find((item) => item.id === task.tableId)
+  if (!table) return false
+  const scope = effectiveDataScopeForEmployee(state, employee.id)
+  if (scope === 'all_stores' || scope === 'store') return true
+  if (scope === 'assigned_areas') return employee.areaIds.includes(table.areaId)
+  return table.primaryEmployeeId === employee.id || table.backupEmployeeIds.includes(employee.id)
+}
+
+/** Authoritative eligibility check for manually claiming an unowned service task. */
+export function canEmployeeClaimTask(state: RuntimeState, task: ServiceTask, employeeId: string) {
+  if (task.ownerId !== null || !claimableStatuses.has(task.status)) return false
+  const employee = state.employees.find((item) => item.id === employeeId)
+  if (!employee || employee.status !== 'active' || !employee.online || employee.paused) return false
+  const serviceType = state.config.serviceTypes.find((item) => item.id === task.serviceTypeId && item.enabled)
+  if (!serviceType) return false
+  const roleIds = effectiveRoleIdsForEmployee(state, employee.id)
+  if (!roleIds.some((roleId) => serviceType.dispatchRoleIds.includes(roleId))) return false
+  return employeeHasTableResponsibility(state, employee, task)
+}
+
+/** Assigns waiting work when staff return online. The caller owns the aggregate revision update. */
+export function redispatchUnownedTasks(state: RuntimeState, now = new Date()) {
+  let changed = false
+  for (const task of state.tasks) {
+    if (task.ownerId !== null || !claimableStatuses.has(task.status)) continue
+    const serviceType = state.config.serviceTypes.find((item) => item.id === task.serviceTypeId && item.enabled)
+    if (!serviceType) continue
+    const assignee = chooseAssignee(state, task.tableId, serviceType)
+    if (!assignee) continue
+    task.ownerId = assignee.id
+    task.updatedAt = now.toISOString()
+    task.customerReply = serviceType.customerReply.replace('{employee}', assignee.displayName)
+    if (!task.notifiedEmployeeIds.includes(assignee.id)) task.notifiedEmployeeIds.push(assignee.id)
+    appendTaskEvent(state, task.id, 'task.assigned.v1', 'system', {
+      ownerId: assignee.id,
+      reason: 'employee_online',
+    })
+    changed = true
+  }
+  return changed
 }
 
 export function createServiceTask(state: RuntimeState, input: CreateTaskInput & { triggerId?: string; requestedBy?: string; dispatchRoleIds?: string[] }) {
@@ -177,11 +222,26 @@ export function applyTaskAction(state: RuntimeState, taskId: string, input: Task
 
   switch (input.action) {
     case 'accept':
-      assertActor(task, input.actorId)
-      if (!['pending', 'escalated', 'reopened'].includes(task.status)) throw new Error('当前状态不能接单')
+      if (!claimableStatuses.has(task.status)) {
+        if (task.status === 'accepted' && task.ownerId !== input.actorId) throw new Error('任务已由其他员工接单')
+        throw new Error('当前状态不能接单')
+      }
+      if (task.ownerId === null) {
+        if (!canEmployeeClaimTask(state, task, input.actorId)) throw new Error('您当前不在该任务的通知或责任范围内')
+        task.ownerId = input.actorId
+        if (!task.notifiedEmployeeIds.includes(input.actorId)) task.notifiedEmployeeIds.push(input.actorId)
+        const serviceType = state.config.serviceTypes.find((item) => item.id === task.serviceTypeId)
+        const employee = state.employees.find((item) => item.id === input.actorId)
+        if (serviceType && employee) task.customerReply = serviceType.customerReply.replace('{employee}', employee.displayName)
+      } else {
+        assertActor(task, input.actorId)
+      }
       task.status = 'accepted'
       task.acceptedAt = now
-      appendTaskEvent(state, task.id, 'task.accepted.v1', input.actorId, eventPayload)
+      appendTaskEvent(state, task.id, 'task.accepted.v1', input.actorId, {
+        ...eventPayload,
+        ownerId: task.ownerId,
+      })
       break
     case 'arrive':
       assertActor(task, input.actorId)

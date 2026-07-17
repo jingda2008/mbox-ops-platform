@@ -48,6 +48,10 @@ export interface GuestSessionResponse {
   tasks: GuestTaskView[]
   account: {
     tableSessionId: string | null
+    sessionBusinessDate: string
+    frozen: boolean
+    frozenReason: string | null
+    requiresManagerHandover: boolean
     balanceAmount: number
     orders: Array<{
       id: string

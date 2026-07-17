@@ -47,6 +47,45 @@ export interface ReservationOccasionConfig {
   serviceScript: string[]
 }
 
+export type ReservationContactMethod = 'phone' | 'wechat'
+
+export interface ReservationBusinessHoursConfig {
+  timeZone: string
+  openingTime: string
+  closingTime: string
+  slotMinutes: number
+  closedWeekdays: number[]
+}
+
+export interface ReservationSlotCapacityOverride {
+  time: string
+  capacity: number
+}
+
+export interface ReservationDateCapacityOverride {
+  date: string
+  enabled: boolean
+  totalCapacity: number
+  slotCapacities: ReservationSlotCapacityOverride[]
+}
+
+export interface ReservationCapacityConfig {
+  defaultDailyCapacity: number
+  defaultSlotCapacity: number
+  dateOverrides: ReservationDateCapacityOverride[]
+}
+
+export interface ReservationPublicRulesConfig {
+  minimumLeadMinutes: number
+  maximumAdvanceDays: number
+  duplicateWindowMinutes: number
+  acceptedContactMethods: ReservationContactMethod[]
+  createRateLimit: {
+    limit: number
+    windowMinutes: number
+  }
+}
+
 export interface ReservationConfig {
   version: number
   minimumPartySize: number
@@ -56,6 +95,9 @@ export interface ReservationConfig {
   occasions: ReservationOccasionConfig[]
   lateHoldMinutes: number
   waitlistResponseMinutes: number
+  businessHours: ReservationBusinessHoursConfig
+  capacity: ReservationCapacityConfig
+  publicRules: ReservationPublicRulesConfig
 }
 
 export interface ReservationDeposit {
@@ -179,9 +221,13 @@ export interface ReservationActionCommand {
 }
 
 export interface UpdateReservationCommand extends ReservationActionCommand {
+  customerName?: string
+  contactReference?: string
   partySize: number
   scheduledAt: string
   areaPreferenceCode?: string
+  occasionCode?: ReservationOccasionCode | null
+  occasionNote?: string
   reason: string
 }
 

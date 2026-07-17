@@ -1,4 +1,5 @@
 import type { PaymentDomainState, PaymentIntent, Refund } from '../src/shared/payment-contracts.js'
+import { createPublicKey } from 'node:crypto'
 import type {
   PaymentProviderAdapter,
   PaymentProviderSecretSource,
@@ -403,10 +404,24 @@ export type PaymentProviderResolver = (
   provider: string,
 ) => PaymentProviderRuntime
 
+export interface PaymentRuntimeReadiness {
+  mode: 'manual_only' | 'postar'
+  onlinePaymentReady: boolean
+}
+
 function requireEnvironmentValue(environment: NodeJS.ProcessEnv, name: string) {
   const value = environment[name]?.trim()
   if (!value) throw new PaymentProviderUnavailableError(`支付渠道不可用：缺少环境变量 ${name}`)
   return value
+}
+
+function assertPostarPublicKey(value: string) {
+  try {
+    const key = createPublicKey(value)
+    if (key.asymmetricKeyType !== 'rsa') throw new Error('not rsa')
+  } catch {
+    throw new PaymentProviderUnavailableError('星驿支付不可用：MBOX_POSTAR_PUBLIC_KEY 必须是有效RSA公钥')
+  }
 }
 
 function compactShanghaiDate(value: string) {
@@ -432,6 +447,7 @@ export function createEnvironmentPaymentProviderResolver(
     const merchantId = requireEnvironmentValue(environment, 'MBOX_POSTAR_MERCHANT_ID')
     const agencyId = requireEnvironmentValue(environment, 'MBOX_POSTAR_AGENCY_ID')
     const publicKey = requireEnvironmentValue(environment, 'MBOX_POSTAR_PUBLIC_KEY')
+    assertPostarPublicKey(publicKey)
     const callbackUrl = requireEnvironmentValue(environment, 'MBOX_POSTAR_CALLBACK_URL')
     const refundTag = requireEnvironmentValue(environment, 'MBOX_POSTAR_REFUND_TAG')
     if (!['1', '2', '9', '11', '12', '30'].includes(refundTag)) {
@@ -505,4 +521,15 @@ export function createEnvironmentPaymentProviderResolver(
       callbackAcknowledgement: { rspCod: callbackCode, rspMsg: 'success' },
     }
   }
+}
+
+export function validateEnvironmentPaymentRuntime(
+  state: PaymentDomainState,
+  environment: NodeJS.ProcessEnv = process.env,
+): PaymentRuntimeReadiness {
+  if (environment.MBOX_POSTAR_ENABLED !== 'true') {
+    return { mode: 'manual_only', onlinePaymentReady: false }
+  }
+  createEnvironmentPaymentProviderResolver(environment)(state, 'postar')
+  return { mode: 'postar', onlinePaymentReady: true }
 }

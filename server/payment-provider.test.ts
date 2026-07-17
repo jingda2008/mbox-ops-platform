@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { generateKeyPairSync } from 'node:crypto'
 import type {
   PaymentProviderAdapter,
   PaymentProviderContext,
@@ -22,12 +23,52 @@ import {
   queryPaymentThroughProvider,
   queryRefundThroughProvider,
   submitRefundThroughProvider,
+  validateEnvironmentPaymentRuntime,
 } from './payment-provider.js'
 
 const CREATED_AT = '2026-07-14T12:00:00.000Z'
 const secrets: PaymentProviderSecretSource = {
   getSecret: vi.fn(async () => 'injected-test-secret'),
 }
+
+describe('payment runtime readiness', () => {
+  it('reports manual-only mode while the provider is disabled', () => {
+    expect(validateEnvironmentPaymentRuntime(createPaymentDomainState(), {})).toEqual({
+      mode: 'manual_only',
+      onlinePaymentReady: false,
+    })
+  })
+
+  it('fails before serving traffic when enabled provider credentials are incomplete or invalid', () => {
+    expect(() => validateEnvironmentPaymentRuntime(createPaymentDomainState(), {
+      MBOX_POSTAR_ENABLED: 'true',
+      MBOX_POSTAR_ENVIRONMENT: 'uat',
+    })).toThrow('MBOX_POSTAR_MERCHANT_ID')
+
+    expect(() => validateEnvironmentPaymentRuntime(createPaymentDomainState(), {
+      MBOX_POSTAR_ENABLED: 'true',
+      MBOX_POSTAR_ENVIRONMENT: 'uat',
+      MBOX_POSTAR_MERCHANT_ID: 'merchant-1',
+      MBOX_POSTAR_AGENCY_ID: 'agency-1',
+      MBOX_POSTAR_PUBLIC_KEY: 'not-a-public-key',
+    })).toThrow('有效RSA公钥')
+  })
+
+  it('marks Postar ready only after every startup requirement is valid', () => {
+    const { publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+    expect(validateEnvironmentPaymentRuntime(createPaymentDomainState(), {
+      MBOX_POSTAR_ENABLED: 'true',
+      MBOX_POSTAR_ENVIRONMENT: 'uat',
+      MBOX_POSTAR_MERCHANT_ID: 'merchant-1',
+      MBOX_POSTAR_AGENCY_ID: 'agency-1',
+      MBOX_POSTAR_PUBLIC_KEY: publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+      MBOX_POSTAR_CALLBACK_URL: 'https://mbox.example/api/payments/providers/postar/callback',
+      MBOX_POSTAR_CALLBACK_SUCCESS_CODE: '000000',
+      MBOX_POSTAR_REFUND_TAG: '2',
+      MBOX_POSTAR_HTTP_TIMEOUT_MS: '10000',
+    })).toEqual({ mode: 'postar', onlinePaymentReady: true })
+  })
+})
 
 function paymentObservation(
   overrides: Partial<ProviderPaymentObservation> = {},

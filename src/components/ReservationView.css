@@ -62,6 +62,15 @@
 .reservation-config-rows { display: grid; }
 .reservation-config-row { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(190px, 1fr) 100px; align-items: end; gap: 12px; padding: 11px 16px; border-bottom: 1px solid #eceee9; }
 .reservation-config-row:last-child { border-bottom: 0; }
+.reservation-config-business-grid { display: grid; grid-template-columns: minmax(180px, 1.4fr) repeat(3, minmax(110px, .7fr)); gap: 12px; padding: 12px 16px; }
+.reservation-config-business-grid.is-rules { grid-template-columns: repeat(4, minmax(120px, 1fr)); }
+.reservation-config-choice-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 0 16px 13px; color: var(--ink-soft); font-size: 11px; }
+.reservation-config-choice-row > span { color: var(--ink); font-weight: 800; }
+.reservation-config-choice-row label { display: inline-flex; align-items: center; gap: 5px; }
+.reservation-config-section-title.is-nested { border-top: 1px solid var(--line); }
+.reservation-config-date-row { display: grid; grid-template-columns: minmax(145px, .8fr) 120px minmax(190px, 1.2fr) 90px 38px; align-items: end; gap: 10px; padding: 11px 16px; border-bottom: 1px solid #eceee9; }
+.reservation-config-date-row textarea { min-height: 48px; resize: vertical; }
+.reservation-config-remove { width: 36px; height: 36px; padding: 0; display: grid; place-items: center; }
 .reservation-config-toggle { min-width: 0; display: grid; grid-template-columns: 30px minmax(0, 1fr); grid-template-rows: auto 38px; align-items: center; gap: 5px 8px; }
 .reservation-config-toggle > span { grid-column: 1 / 3; color: var(--ink-soft); font-size: 10px; font-weight: 750; }
 .reservation-config-toggle input { width: 19px; height: 19px; margin: 0; accent-color: var(--success); }
@@ -168,6 +177,9 @@
   .reservation-metrics > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
   .reservation-form-grid { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
   .reservation-config-general { grid-template-columns: 1fr 1fr; }
+  .reservation-config-business-grid, .reservation-config-business-grid.is-rules { grid-template-columns: 1fr 1fr; }
+  .reservation-config-date-row { grid-template-columns: 1fr 1fr; }
+  .reservation-config-date-row .reservation-script-field { grid-column: 1 / 3; }
   .reservation-config-general .reservation-config-section-title { grid-column: 1 / 3; padding: 0 0 8px; border-bottom: 0; }
   .reservation-occasion-row { grid-template-columns: 150px minmax(0, 1fr); }
   .reservation-script-field { grid-column: 1 / 3; }
@@ -206,6 +218,9 @@
   .reservation-config-section-title span { grid-column: 1 / 3; grid-row: 2; }
   .reservation-config-section-title button { grid-column: 2; grid-row: 1; }
   .reservation-config-row { grid-template-columns: minmax(110px, .8fr) minmax(0, 1.2fr); }
+  .reservation-config-business-grid, .reservation-config-business-grid.is-rules, .reservation-config-date-row { grid-template-columns: 1fr; }
+  .reservation-config-date-row .reservation-script-field { grid-column: 1; }
+  .reservation-config-date-row .reservation-config-toggle { grid-column: 1; }
   .reservation-config-toggle { grid-column: 1 / 3; grid-template-columns: 26px minmax(0, 1fr); grid-template-rows: auto 30px; }
   .reservation-config-toggle > span { grid-column: 1 / 3; }
   .reservation-occasion-row { grid-template-columns: 1fr; }

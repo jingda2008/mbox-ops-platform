@@ -164,6 +164,21 @@ export function GuestPortal() {
     return songSingers.filter((singer) => availableSingerIds.has(singer.singerId))
   }, [songChoices, songSingers])
   const visibleSongChoices = (songSingerId ? songChoices.filter((offer) => offer.singerId === songSingerId) : songChoices).slice(0, 8)
+  const accountFrozen = data?.account.frozen ?? false
+
+  useEffect(() => {
+    if (accountFrozen) setActiveTab('orders')
+  }, [accountFrozen])
+
+  function orderTimeLabel(createdAt: string) {
+    const value = new Date(createdAt)
+    const timeZone = data?.store.timezone
+    const date = value.toLocaleDateString('sv-SE', { timeZone })
+    const time = value.toLocaleTimeString('zh-CN', { timeZone, hour: '2-digit', minute: '2-digit', hour12: false })
+    return date === data?.store.businessDate
+      ? time
+      : `${value.toLocaleDateString('zh-CN', { timeZone, month: 'numeric', day: 'numeric' })} ${time}`
+  }
 
   async function requestService(serviceTypeId: string, requestNote = '', options: { showReply?: boolean } = {}) {
     accelerateRefresh()
@@ -412,6 +427,11 @@ export function GuestPortal() {
         </div>
       </section>
 
+      {accountFrozen && <section className="guest-account-frozen" role="alert">
+        <ShieldCheck size={22} aria-hidden="true" />
+        <div><strong>本桌正在交接，上一桌账单已冻结</strong><span>{data?.account.frozenReason} 请让值班经理处理后重新扫码。</span></div>
+      </section>}
+
       {profileAppearance && <div className="guest-singer-backdrop" role="presentation" onClick={() => setSingerProfileAppearanceId('')}>
         <section className="guest-singer-sheet" role="dialog" aria-modal="true" aria-label={`${profileAppearance.singerName}歌手资料`} onClick={(event) => event.stopPropagation()}>
           <header>
@@ -445,12 +465,12 @@ export function GuestPortal() {
       {error && <div className="error-banner guest-error-banner" role="alert"><span>{error.message}</span><button className="guest-notice-close" type="button" title="关闭错误提示" aria-label="关闭错误提示" onClick={() => setError(null)}><X size={17} aria-hidden="true" /></button></div>}
 
       <nav className="guest-tabs" aria-label="桌台功能">
-        <button className={activeTab === 'menu' ? 'is-active' : ''} onClick={() => setActiveTab('menu')}><ShoppingBag size={18} />点单</button>
-        <button className={activeTab === 'service' ? 'is-active' : ''} onClick={() => setActiveTab('service')}><MessageCircleMore size={18} />服务</button>
+        <button disabled={accountFrozen} className={activeTab === 'menu' ? 'is-active' : ''} onClick={() => setActiveTab('menu')}><ShoppingBag size={18} />点单</button>
+        <button disabled={accountFrozen} className={activeTab === 'service' ? 'is-active' : ''} onClick={() => setActiveTab('service')}><MessageCircleMore size={18} />服务</button>
         <button className={activeTab === 'orders' ? 'is-active' : ''} onClick={() => setActiveTab('orders')}><ListChecks size={18} />订单</button>
       </nav>
 
-      {activeTab === 'menu' && <>
+      {activeTab === 'menu' && !accountFrozen && <>
         <section className={`guest-mood-section${selectedMood ? ' has-selection' : ''}`}>
           <header><div><small>YOUR MOOD</small><strong>今晚想怎么嗨？</strong></div><span>{selectedMood ? '已记录 · 可重选' : '可选'}</span></header>
           <div className="guest-mood-row">
@@ -507,7 +527,7 @@ export function GuestPortal() {
         />
       </>}
 
-      {activeTab === 'service' && <><section className="guest-services">
+      {activeTab === 'service' && !accountFrozen && <><section className="guest-services">
         <div className="guest-section-title">
           <span>呼叫服务</span>
           <MessageCircleMore size={20} aria-hidden="true" />
@@ -573,7 +593,7 @@ export function GuestPortal() {
 
       {activeTab === 'orders' && <section className="guest-orders">
         <div className="guest-section-title"><span>订单与出品进度</span><ListChecks size={20} /></div>
-        {requestedPaymentOrderId && <div className="guest-payment-sync"><CreditCard size={18} /><span>服务伙伴已经把订单送到您手机啦～确认商品和金额后就可以付款。</span></div>}
+        {requestedPaymentOrderId && !accountFrozen && <div className="guest-payment-sync"><CreditCard size={18} /><span>服务伙伴已经把订单送到您手机啦～确认商品和金额后就可以付款。</span></div>}
         {visibleSongRequests.length > 0 && <div className="guest-song-progress">
           <header><div><Music2 size={18} aria-hidden="true" /><strong>点歌进度</strong></div><span>现场确认与收费</span></header>
           <div className="guest-song-request-list">{visibleSongRequests.map((request) => <article className="guest-song-request" key={request.id}>
@@ -581,12 +601,12 @@ export function GuestPortal() {
             <b data-status={request.status}>{guestSongStatusLabel(request.status)}</b>
           </article>)}</div>
         </div>}
-        {(data?.account.orders.length ?? 0) === 0 ? <div className="guest-empty">还没有点单，慢慢看；想听推荐就叫我们。</div> : (
+        {accountFrozen ? <div className="guest-empty guest-frozen-empty">为了不让您误付上一桌账单，这里的历史订单已经隐藏。经理完成换客交接后，请重新扫描桌码。</div> : (data?.account.orders.length ?? 0) === 0 ? <div className="guest-empty">还没有点单，慢慢看；想听推荐就叫我们。</div> : (
           <div className="guest-order-list">{data?.account.orders.toReversed().map((order) => {
             const payment = data.account.payments.find((item) => item.orderIds.includes(order.id))
             const paid = payment?.status === 'succeeded'
             return <article className={`guest-order ${order.id === requestedPaymentOrderId ? 'is-payment-target' : ''}`} key={order.id}>
-              <header><div><strong>¥{(order.payableAmount / 100).toFixed(2)}</strong><span>{new Date(order.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span></div><b className={payment?.status === 'succeeded' ? 'is-paid' : ''}>{payment?.status === 'succeeded' ? '已支付' : order.status === 'draft' ? '待支付' : '已下单'}</b></header>
+              <header><div><strong>¥{(order.payableAmount / 100).toFixed(2)}</strong><span>{orderTimeLabel(order.createdAt)}</span></div><b className={payment?.status === 'succeeded' ? 'is-paid' : ''}>{payment?.status === 'succeeded' ? '已支付' : order.status === 'draft' ? '待支付' : '已下单'}</b></header>
               <div>{order.items.map((item) => <div className="guest-order-line" key={item.id}><span>{item.name} × {item.quantity}</span><strong>{fulfillmentLabel(item.fulfillmentStatus)}</strong></div>)}</div>
               {!paid && order.payableAmount > 0 && <button className="guest-pay-button" disabled={Boolean(payingOrderId)} onClick={() => void payOrder(order.id)}><CreditCard size={18} />{payingOrderId === order.id ? '正在拉起微信支付' : `微信支付 ¥${(order.payableAmount / 100).toFixed(2)}`}</button>}
               {!paid && order.payableAmount <= 0 && <div className="guest-no-payment"><CheckCircle2 size={16} />这单已使用赠送或折扣，不用在线付款；服务伙伴会来陪您核对。</div>}

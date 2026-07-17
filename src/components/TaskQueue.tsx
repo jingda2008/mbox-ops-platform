@@ -1,6 +1,7 @@
 import { Check, CheckCheck, Clock3, MapPin, Navigation, RotateCcw, UserRound } from 'lucide-react'
 import { useState } from 'react'
 import { ServiceIcon } from './ServiceIcon'
+import { taskAcceptMode } from './task-queue'
 import type {
   Employee,
   ServiceTask,
@@ -34,6 +35,8 @@ interface TaskQueueProps {
   selectedTableId: string | null
   onClearTable: () => void
   onAction: (task: ServiceTask, action: TaskActionInput['action']) => Promise<void>
+  currentEmployeeId: string
+  claimableTaskIds: ReadonlySet<string>
   compact?: boolean
 }
 
@@ -45,6 +48,8 @@ export function TaskQueue({
   selectedTableId,
   onClearTable,
   onAction,
+  currentEmployeeId,
+  claimableTaskIds,
   compact = false,
 }: TaskQueueProps) {
   const [visibleCount, setVisibleCount] = useState(12)
@@ -88,6 +93,7 @@ export function TaskQueue({
           if (!table || !serviceType) return null
           const fulfillmentDelivery = serviceType.code === 'FULFILLMENT_DELIVERY'
           const atRisk = Date.now() >= new Date(task.warningAt).getTime() && !['arrived', 'completed'].includes(task.status)
+          const acceptMode = taskAcceptMode(task, currentEmployeeId, claimableTaskIds.has(task.id))
 
           return (
             <article className={`task-item priority-${task.priority} ${atRisk ? 'is-at-risk' : ''}`} key={task.id}>
@@ -117,9 +123,9 @@ export function TaskQueue({
               </div>
 
               <div className="task-actions">
-                {['pending', 'escalated', 'reopened'].includes(task.status) && task.ownerId && (
+                {acceptMode && (
                   <button className="primary-button" onClick={() => void onAction(task, 'accept')}>
-                    <Check size={17} />{fulfillmentDelivery ? '接取送任务' : '接单'}
+                    <Check size={17} />{acceptMode === 'claim' ? '认领并接单' : fulfillmentDelivery ? '接取送任务' : '接单'}
                   </button>
                 )}
                 {task.status === 'accepted' && (

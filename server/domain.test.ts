@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest'
 import type { CreateTaskInput } from '../src/shared/contracts.js'
 import {
   applyTaskAction,
+  canEmployeeClaimTask,
   createServiceTask,
   escalateDueTasks,
   publishConfig,
   saveConfigDraft,
 } from './domain.js'
 import { createSeedState } from './seed.js'
+import { JsonRepository } from './repository.js'
 
 function taskInput(overrides: Partial<CreateTaskInput> = {}): CreateTaskInput {
   return {
@@ -74,6 +76,95 @@ describe('service task domain', () => {
     expect(task.customerReply).toContain('水水马上到')
     expect(task.customerReply).toContain('服务团队')
     expect(task.customerReply).not.toContain('值班领班正在安排人员')
+  })
+
+  it('lets an eligible online employee atomically claim an unowned task', () => {
+    const state = createSeedState()
+    for (const employee of state.employees) employee.online = false
+    const task = createServiceTask(state, taskInput())
+    const primary = state.employees.find((employee) => employee.id === 'emp-lin')!
+    primary.online = true
+
+    expect(canEmployeeClaimTask(state, task, primary.id)).toBe(true)
+    const claimed = applyTaskAction(state, task.id, {
+      action: 'accept', actorId: primary.id, note: '', idempotencyKey: 'claim-unowned-task-0001',
+    })
+
+    expect(claimed).toMatchObject({ ownerId: primary.id, status: 'accepted' })
+    expect(claimed.notifiedEmployeeIds).toContain(primary.id)
+    expect(state.taskEvents.at(-1)).toMatchObject({
+      taskId: task.id,
+      type: 'task.accepted.v1',
+      actorId: primary.id,
+      payload: { ownerId: primary.id },
+    })
+  })
+
+  it('rejects an ineligible claimant and keeps the first claimant as the only owner', () => {
+    const state = createSeedState()
+    for (const employee of state.employees) employee.online = false
+    const task = createServiceTask(state, taskInput())
+    const primary = state.employees.find((employee) => employee.id === 'emp-lin')!
+    const backup = state.employees.find((employee) => employee.id === 'emp-jie')!
+    const cashier = state.employees.find((employee) => employee.id === 'emp-cashier')!
+    primary.online = true
+    backup.online = true
+    cashier.online = true
+
+    expect(canEmployeeClaimTask(state, task, cashier.id)).toBe(false)
+    expect(() => applyTaskAction(state, task.id, {
+      action: 'accept', actorId: cashier.id, note: '', idempotencyKey: 'claim-wrong-role-0001',
+    })).toThrow('通知或责任范围')
+
+    applyTaskAction(state, task.id, {
+      action: 'accept', actorId: primary.id, note: '', idempotencyKey: 'claim-first-wins-0001',
+    })
+    expect(() => applyTaskAction(state, task.id, {
+      action: 'accept', actorId: backup.id, note: '', idempotencyKey: 'claim-second-loses-0001',
+    })).toThrow('已由其他员工接单')
+    expect(task).toMatchObject({ ownerId: primary.id, status: 'accepted' })
+    expect(state.taskEvents.filter((event) => event.type === 'task.accepted.v1')).toHaveLength(1)
+  })
+
+  it('serializes simultaneous claims so exactly one employee wins', async () => {
+    const repository = new JsonRepository(`/tmp/mbox-task-claim-${crypto.randomUUID()}.json`)
+    await repository.init()
+    const taskId = await repository.mutate((state) => {
+      for (const employee of state.employees) employee.online = false
+      const task = createServiceTask(state, taskInput({ idempotencyKey: 'concurrent-claim-task-0001' }))
+      state.employees.find((employee) => employee.id === 'emp-lin')!.online = true
+      state.employees.find((employee) => employee.id === 'emp-jie')!.online = true
+      return task.id
+    })
+
+    const results = await Promise.allSettled([
+      repository.mutate((state) => applyTaskAction(state, taskId, {
+        action: 'accept', actorId: 'emp-lin', note: '', idempotencyKey: 'concurrent-claim-lin-0001',
+      })),
+      repository.mutate((state) => applyTaskAction(state, taskId, {
+        action: 'accept', actorId: 'emp-jie', note: '', idempotencyKey: 'concurrent-claim-jie-0001',
+      })),
+    ])
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1)
+
+    const state = await repository.read()
+    expect(state.tasks.find((task) => task.id === taskId)).toMatchObject({ status: 'accepted', ownerId: 'emp-lin' })
+    expect(state.taskEvents.filter((event) => event.taskId === taskId && event.type === 'task.accepted.v1')).toHaveLength(1)
+    await repository.close()
+  })
+
+  it('keeps supervisor and manager coverage available for unowned escalations', () => {
+    const state = createSeedState()
+    for (const employee of state.employees) employee.online = false
+    const task = createServiceTask(state, taskInput({ serviceTypeId: 'complaint' }))
+    const supervisor = state.employees.find((employee) => employee.id === 'emp-mia')!
+    const manager = state.employees.find((employee) => employee.id === 'emp-chen')!
+    supervisor.online = true
+    manager.online = true
+
+    expect(canEmployeeClaimTask(state, task, supervisor.id)).toBe(true)
+    expect(canEmployeeClaimTask(state, task, manager.id)).toBe(true)
   })
 
   it('returns the same task for a repeated idempotency key', () => {

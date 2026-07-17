@@ -58,12 +58,23 @@ describe('reservation employee API', () => {
       sources: [{ code: 'wechat', name: '微信预约', enabled: true, sortOrder: 10 }],
       areaPreferences: [{ code: 'lounge', name: '大厅休闲区', enabled: true, sortOrder: 10 }],
       occasions: [{ code: 'birthday', name: '生日', enabled: true, serviceScript: ['准备生日权益'] }],
+      businessHours: { timeZone: 'Asia/Shanghai', openingTime: '21:00', closingTime: '03:00', slotMinutes: 20, closedWeekdays: [1] },
+      capacity: { defaultDailyCapacity: 90, defaultSlotCapacity: 12, dateOverrides: [{ date: '2030-08-01', enabled: false, totalCapacity: 0, slotCapacities: [] }] },
+      publicRules: {
+        minimumLeadMinutes: 30, maximumAdvanceDays: 90, duplicateWindowMinutes: 45,
+        acceptedContactMethods: ['phone'], createRateLimit: { limit: 3, windowMinutes: 20 },
+      },
     }
     const payload = { config, reason: '陆家嘴预约规则生效', idempotencyKey: 'reservation-config-update-0001' }
     const first = await app.inject({ method: 'PUT', url: '/api/reservations/config', payload })
     const replay = await app.inject({ method: 'PUT', url: '/api/reservations/config', payload })
     expect(first.statusCode).toBe(200)
-    expect(first.json()).toMatchObject({ version: 2, minimumPartySize: 2 })
+    expect(first.json()).toMatchObject({
+      version: 2, minimumPartySize: 2,
+      businessHours: { openingTime: '21:00', closingTime: '03:00' },
+      capacity: { defaultDailyCapacity: 90, defaultSlotCapacity: 12 },
+      publicRules: { minimumLeadMinutes: 30, acceptedContactMethods: ['phone'] },
+    })
     expect(replay.json()).toEqual(first.json())
 
     const state = await repository.read()

@@ -8,6 +8,7 @@ import { JsonRepository } from './repository.js'
 import { requireGuestSession, signStaticTableQrToken, verifyTableAccessToken } from './table-access.js'
 import { transferOpenTableSession } from './table-session-api.js'
 import { createPaymentIntent } from './payment-domain.js'
+import { applyTaskAction } from './domain.js'
 
 const secret = 'q'.repeat(32)
 const sessionTtlMs = 5 * 60_000
@@ -29,6 +30,12 @@ async function fixture(runtimeMode: RuntimeMode = 'test', allowPaymentSimulation
 
 function staticQr(now: number, storeId = 'mbox-lujiazui', tableCode = 'L01', tokenVersion = 1) {
   return signStaticTableQrToken({ storeId, tableCode, tokenVersion, issuedAt: now }, secret)
+}
+
+function nextDate(date: string) {
+  const value = new Date(`${date}T12:00:00.000Z`)
+  value.setUTCDate(value.getUTCDate() + 1)
+  return value.toISOString().slice(0, 10)
 }
 
 async function exchange(app: FastifyInstance, token: string) {
@@ -209,6 +216,140 @@ describe('guest table API', () => {
     })
     expect(feedback.statusCode).toBe(200)
     expect(feedback.json().status).toBe('confirmed')
+    await closeFixture(app, repository)
+  })
+
+  it('freezes a previous-business-day table visit without exposing or accepting payment for its orders', async () => {
+    const { app, repository, now } = await fixture()
+    const current = (await exchange(app, staticQr(now()))).body
+    const order = await app.inject({
+      method: 'POST',
+      url: '/api/guest/orders',
+      payload: {
+        tableToken: current.tableToken,
+        items: [{ productId: 'product-beer', quantity: 1 }],
+        idempotencyKey: 'stale-session-order-0001',
+      },
+    })
+    expect(order.statusCode, order.body).toBe(201)
+
+    await repository.mutate((state) => {
+      state.store.businessDate = nextDate(state.store.businessDate)
+      state.songState.businessDate = state.store.businessDate
+      state.revision += 1
+    })
+
+    const frozenResponse = await app.inject({
+      method: 'GET',
+      url: `/api/guest/session?token=${encodeURIComponent(current.tableToken)}`,
+    })
+    expect(frozenResponse.statusCode, frozenResponse.body).toBe(200)
+    expect(frozenResponse.json().account).toMatchObject({
+      frozen: true,
+      requiresManagerHandover: true,
+      balanceAmount: 0,
+      orders: [],
+      payments: [],
+    })
+    expect(frozenResponse.json().tasks).toEqual([])
+
+    const newGuestScan = await exchange(app, staticQr(now()))
+    expect(newGuestScan.response.statusCode, newGuestScan.response.body).toBe(200)
+    expect(newGuestScan.body.account).toMatchObject({ frozen: true, orders: [], payments: [] })
+    const blockedNewOrder = await app.inject({
+      method: 'POST',
+      url: '/api/guest/orders',
+      payload: {
+        tableToken: newGuestScan.body.tableToken,
+        items: [{ productId: 'product-beer', quantity: 1 }],
+        idempotencyKey: 'stale-session-new-guest-order-0001',
+      },
+    })
+    expect(blockedNewOrder.statusCode).toBe(409)
+    expect(blockedNewOrder.json().code).toBe('TABLE_SESSION_HANDOVER_REQUIRED')
+
+    const checkout = await app.inject({
+      method: 'POST',
+      url: '/api/guest/checkout',
+      payload: {
+        tableToken: current.tableToken,
+        orderId: order.json().id,
+        idempotencyKey: 'stale-session-checkout-0001',
+      },
+    })
+    expect(checkout.statusCode).toBe(409)
+    expect(checkout.json().code).toBe('TABLE_SESSION_HANDOVER_REQUIRED')
+    expect((await repository.read()).paymentDomain.paymentIntents).toHaveLength(0)
+
+    const rolledState = await repository.read()
+    const reopenedAt = `${rolledState.store.businessDate}T20:30:00+08:00`
+    await replaceOpenSession(
+      repository,
+      'L01',
+      `session:table-l01:${rolledState.store.businessDate}:new-guest`,
+      reopenedAt,
+    )
+    const nextGuest = await exchange(app, staticQr(now()))
+    expect(nextGuest.response.statusCode, nextGuest.response.body).toBe(200)
+    expect(nextGuest.body.account).toMatchObject({
+      sessionBusinessDate: rolledState.store.businessDate,
+      frozen: false,
+      orders: [],
+      payments: [],
+    })
+    expect((await repository.read()).orderDomain.orders.some((candidate) => candidate.id === order.json().id)).toBe(true)
+    await closeFixture(app, repository)
+  })
+
+  it('keeps an after-midnight visit in the current nightclub business date', async () => {
+    const { app, repository, now } = await fixture()
+    const state = await repository.read()
+    const openedAt = `${nextDate(state.store.businessDate)}T01:30:00+08:00`
+    await replaceOpenSession(repository, 'L01', 'legacy-after-midnight-session', openedAt)
+
+    const response = await exchange(app, staticQr(now()))
+
+    expect(response.response.statusCode, response.response.body).toBe(200)
+    expect(response.body.account).toMatchObject({
+      sessionBusinessDate: state.store.businessDate,
+      frozen: false,
+      requiresManagerHandover: false,
+    })
+    await closeFixture(app, repository)
+  })
+
+  it('keeps an unowned guest request visible and reflects the employee who later claims it', async () => {
+    const { app, repository, now } = await fixture()
+    await repository.mutate((state) => {
+      for (const employee of state.employees) employee.online = false
+      state.revision += 1
+    })
+    const session = (await exchange(app, staticQr(now()))).body
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/guest/tasks',
+      payload: {
+        tableToken: session.tableToken,
+        serviceTypeId: 'water',
+        note: '',
+        idempotencyKey: 'guest-unowned-claim-0001',
+      },
+    })
+    expect(created.statusCode).toBe(201)
+    expect(created.json()).toMatchObject({ status: 'pending', ownerName: null })
+
+    await repository.mutate((state) => {
+      state.employees.find((employee) => employee.id === 'emp-lin')!.online = true
+      applyTaskAction(state, created.json().id, {
+        action: 'accept', actorId: 'emp-lin', note: '', idempotencyKey: 'guest-unowned-claimed-0001',
+      })
+    })
+    const refreshed = (await exchange(app, staticQr(now()))).body
+    expect(refreshed.tasks.find((task) => task.id === created.json().id)).toMatchObject({
+      status: 'accepted',
+      ownerName: '小林',
+      customerReply: expect.stringContaining('小林'),
+    })
     await closeFixture(app, repository)
   })
 

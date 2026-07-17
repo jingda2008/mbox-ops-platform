@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
+import { z } from 'zod'
 import {
   closeTableSessionSchema,
   salesAttributionSchema,
@@ -17,8 +18,10 @@ import {
   activeTableCombinationLinks,
   currentOpenTableSession,
   currentSalesEmployeeId,
+  isCurrentBusinessDateTableSession,
   openTableSession,
   recordSalesAttribution,
+  tableSessionBusinessDate,
   tableOperationsConfig,
   tableSessionSummary,
 } from './table-sessions.js'
@@ -35,6 +38,11 @@ const confirmedPaymentStatuses = new Set(['succeeded', 'reported_pending_reconci
 const pendingRefundStatuses = new Set(['requested', 'approved', 'processing'])
 const openServiceTaskStatuses = new Set(['pending', 'accepted', 'arrived', 'completed', 'reopened', 'escalated'])
 const activeSongStatuses = new Set(['pending_confirmation', 'pending_payment', 'paid', 'accepted', 'performing', 'refund_required'])
+
+const legacyHandoverSchema = z.object({
+  reason: z.string().trim().min(5).max(300),
+  idempotencyKey: z.string().trim().min(8).max(128),
+}).strict()
 
 function childIdempotencyKey(key: string, suffix: string) {
   return `${key.slice(0, Math.max(8, 118 - suffix.length))}:${suffix}`
@@ -458,6 +466,90 @@ export function registerTableSessionRoutes(app: FastifyInstance, repository: Run
       })
       if ((state.salesAttributionRecords?.length ?? 0) > before) state.revision += 1
       return record
+    })
+  })
+
+  app.post<{ Params: { sessionId: string } }>('/api/table-sessions/:sessionId/legacy-handover', async (request) => {
+    const input = legacyHandoverSchema.parse(request.body)
+    return repository.mutate((state) => {
+      const actor = requireConfiguredOperation(request, state, 'business-day.close')
+      const replay = state.auditEntries.find((entry) => (
+        entry.action === 'table.legacy_session_handed_over.v1'
+        && entry.details.idempotencyKey === input.idempotencyKey
+      ))
+      if (replay) {
+        if (replay.objectId !== request.params.sessionId || replay.details.reason !== input.reason) {
+          throw new Error('幂等键已用于其他遗留桌次交接')
+        }
+        return { status: 'handed_over', ...structuredClone(replay.details) }
+      }
+
+      const session = state.songState.tableSessions.find((candidate) => candidate.id === request.params.sessionId)
+      if (!session || session.status !== 'open') throw new Error('遗留桌次不存在或已经完成交接')
+      if (isCurrentBusinessDateTableSession(state, session)) throw new Error('当前营业日桌次不能走遗留交接，请使用正常结台流程')
+      const table = state.tables.find((candidate) => candidate.id === session.tableId)
+      if (!table || table.status !== 'occupied') throw new Error('遗留桌次与桌台状态不一致，请先由管理员核对数据')
+      const openSessions = state.songState.tableSessions.filter((candidate) => candidate.tableId === table.id && candidate.status === 'open')
+      if (openSessions.length !== 1 || openSessions[0]?.id !== session.id) {
+        throw new Error('桌台存在多个开放桌次，请先由管理员核对数据，不能自动释放')
+      }
+      requireTableDataScope(request, state, table.id, 'business-day.close')
+
+      const occurredAt = new Date().toISOString()
+      const previousBusinessDate = tableSessionBusinessDate(state, session)
+      const orders = state.orderDomain.orders.filter((order) => order.tableSessionId === session.id)
+      const paymentIntents = state.paymentDomain.paymentIntents.filter((intent) => intent.tableSessionId === session.id)
+      const confirmedPaymentIntents = paymentIntents.filter((intent) => (
+        intent.status === 'succeeded' || intent.status === 'reported_pending_reconciliation'
+      ))
+      const unresolvedOrderIds = orders
+        .filter((order) => (
+          ['draft', 'authorization_pending'].includes(order.status)
+          || order.items.length === 0
+          || order.items.some((item) => {
+            const paidAmount = confirmedPaymentIntents
+              .flatMap((intent) => intent.lineAllocations)
+              .filter((allocation) => allocation.orderId === order.id && allocation.orderItemId === item.id)
+              .reduce((sum, allocation) => sum + allocation.paidAmount, 0)
+            return paidAmount < item.quantity * item.unitSalePriceAmount
+          })
+        ))
+        .map((order) => order.id)
+      const unresolvedPaymentIntentIds = paymentIntents
+        .filter((intent) => ['pending', 'processing'].includes(intent.status))
+        .map((intent) => intent.id)
+      const activeCare = state.awaitingOrderIntents.find((intent) => intent.tableId === table.id && intent.status === 'active')
+      if (activeCare) stopAwaitingOrder(state, table.id, actor.actorId, 'legacy_session_handover')
+
+      session.status = 'closed'
+      session.closedAt = occurredAt
+      table.status = 'available'
+      table.guestCount = 0
+      table.openedAt = null
+      const details = {
+        tableId: table.id,
+        tableCode: table.code,
+        tableSessionId: session.id,
+        previousBusinessDate,
+        currentBusinessDate: state.store.businessDate,
+        orderIds: orders.map((order) => order.id),
+        unresolvedOrderIds,
+        paymentIntentIds: paymentIntents.map((intent) => intent.id),
+        unresolvedPaymentIntentIds,
+        reason: input.reason,
+        idempotencyKey: input.idempotencyKey,
+      }
+      state.auditEntries.push({
+        id: `audit_${randomUUID()}`,
+        actorId: actor.actorId,
+        action: 'table.legacy_session_handed_over.v1',
+        objectType: 'tableSession',
+        objectId: session.id,
+        occurredAt,
+        details,
+      })
+      state.revision += 1
+      return { status: 'handed_over', ...details }
     })
   })
 

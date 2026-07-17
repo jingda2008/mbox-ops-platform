@@ -18,6 +18,7 @@ import { authorityWriteSchema } from '../src/shared/commerce-api.js'
 import {
   applyTaskAction,
   calculateMetrics,
+  canEmployeeClaimTask,
   createServiceTask,
   escalateDueTasks,
   saveConfigDraft,
@@ -25,7 +26,11 @@ import {
 import { createRuntimeDependencies } from './repository-factory.js'
 import { CommerceRequestError, registerCommerceRoutes } from './commerce-api.js'
 import { registerPaymentRoutes } from './payment-api.js'
-import { PaymentProviderUnavailableError } from './payment-provider.js'
+import {
+  createEnvironmentPaymentProviderResolver,
+  PaymentProviderUnavailableError,
+  validateEnvironmentPaymentRuntime,
+} from './payment-provider.js'
 import { processAwaitingOrderReminders, registerProactiveServiceRoutes } from './proactive-service.js'
 import { registerBenefitRoutes } from './benefit-domain.js'
 import { buildMemberPortal, registerMemberPortalRoutes } from './member-portal.js'
@@ -109,6 +114,8 @@ const rateLimitStore = runtimeDependencies.postgresPool
     })
 
 await repository.init()
+const paymentProviderResolver = createEnvironmentPaymentProviderResolver()
+const paymentRuntime = validateEnvironmentPaymentRuntime((await repository.read()).paymentDomain)
 await app.register(cors, {
   origin: runtimeConfig.corsOrigins,
   credentials: true,
@@ -128,7 +135,12 @@ await registerObservability(app, {
     const status = await repository.healthCheck()
     return {
       ready: status.ready,
-      details: { repository: status.repository, revision: status.revision ?? -1 },
+      details: {
+        repository: status.repository,
+        revision: status.revision ?? -1,
+        paymentMode: runtimeConfig.pilotPaymentSimulationEnabled ? 'simulation' : paymentRuntime.mode,
+        commercialOnlinePaymentReady: paymentRuntime.onlinePaymentReady && !runtimeConfig.pilotPaymentSimulationEnabled,
+      },
     }
   },
 })
@@ -324,7 +336,10 @@ app.post<{ Params: { taskId: string } }>('/api/tasks/:taskId/actions', async (re
     requireConfiguredOperation(request, state, 'service.task.action')
     const currentTask = state.tasks.find((item) => item.id === request.params.taskId)
     if (!currentTask) throw new Error('任务不存在')
-    requireTableDataScope(request, state, currentTask.tableId, 'service.task.action')
+    const eligibleNotifiedClaim = input.action === 'accept'
+      && currentTask.ownerId === null
+      && canEmployeeClaimTask(state, currentTask, actor.actorId)
+    if (!eligibleNotifiedClaim) requireTableDataScope(request, state, currentTask.tableId, 'service.task.action')
     const action = { ...input, actorId: actor.actorId }
     const task = applyTaskAction(state, request.params.taskId, action)
     syncKdsFromFulfillmentServiceTaskAction(state, task, action)
@@ -475,6 +490,7 @@ app.post('/api/dev/reset', async (request) => {
 registerCommerceRoutes(app, repository, { guestTokenSecret: runtimeConfig.qrSecret })
 registerPaymentRoutes(app, repository, {
   allowPilotSimulation: runtimeConfig.pilotPaymentSimulationEnabled,
+  providerResolver: paymentProviderResolver,
 })
 registerProactiveServiceRoutes(app, repository)
 registerTableSessionRoutes(app, repository)
@@ -488,6 +504,7 @@ registerGuestRoutes(app, repository, {
   secret: runtimeConfig.qrSecret,
   runtimeMode: runtimeConfig.runtimeMode,
   allowPaymentSimulation: runtimeConfig.pilotPaymentSimulationEnabled,
+  providerResolver: paymentProviderResolver,
 })
 registerPublicReservationRoutes(app, repository, { secret: runtimeConfig.qrSecret, rateLimitStore })
 registerStoreImportRoutes(app, repository)

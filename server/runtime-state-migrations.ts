@@ -206,6 +206,16 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
   if (migrated.reservationState) {
     migrated.reservationState.config.lateHoldMinutes ??= 30
     migrated.reservationState.config.waitlistResponseMinutes ??= 10
+    migrated.reservationState.config.businessHours ??= {
+      timeZone: 'Asia/Shanghai', openingTime: '20:30', closingTime: '02:00', slotMinutes: 30, closedWeekdays: [],
+    }
+    migrated.reservationState.config.capacity ??= {
+      defaultDailyCapacity: 120, defaultSlotCapacity: 20, dateOverrides: [],
+    }
+    migrated.reservationState.config.publicRules ??= {
+      minimumLeadMinutes: 15, maximumAdvanceDays: 180, duplicateWindowMinutes: 60,
+      acceptedContactMethods: ['phone', 'wechat'], createRateLimit: { limit: 5, windowMinutes: 10 },
+    }
     migrated.reservationState.reservations = migrated.reservationState.reservations.map((reservation) => ({
       ...reservation,
       expectedArrivalAt: reservation.expectedArrivalAt ?? null,

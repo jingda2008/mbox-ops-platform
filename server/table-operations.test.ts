@@ -57,7 +57,55 @@ function minimumConfig(amount: number, idempotencyKey: string) {
   }
 }
 
+function nextDate(date: string) {
+  const value = new Date(`${date}T12:00:00.000Z`)
+  value.setUTCDate(value.getUTCDate() + 1)
+  return value.toISOString().slice(0, 10)
+}
+
 describe('table operating line', () => {
+  it('lets a manager audit and release a stale table visit without mutating its old orders', async () => {
+    const { app, repository, useActor } = await fixture()
+    let sessionId = ''
+    await repository.mutate((state) => {
+      const session = state.songState.tableSessions.find((candidate) => candidate.tableId === 'table-l01' && candidate.status === 'open')!
+      sessionId = session.id
+      createOrderDraft(state.orderDomain, {
+        orderId: 'legacy-handover-order', tableSessionId: session.id, createdBy: 'emp-owner',
+        occurredAt: session.openedAt, idempotencyKey: 'legacy-handover-order-create',
+      })
+      state.store.businessDate = nextDate(state.store.businessDate)
+      state.songState.businessDate = state.store.businessDate
+      state.revision += 1
+    })
+
+    const payload = {
+      reason: '经理确认旧客已经离店，遗留账务转交次日处理',
+      idempotencyKey: 'legacy-handover-l01-0001',
+    }
+    useActor('emp-lin', 'server')
+    const denied = await app.inject({ method: 'POST', url: `/api/table-sessions/${encodeURIComponent(sessionId)}/legacy-handover`, payload })
+    expect(denied.statusCode).toBe(403)
+
+    useActor('emp-chen', 'manager')
+    const handedOver = await app.inject({ method: 'POST', url: `/api/table-sessions/${encodeURIComponent(sessionId)}/legacy-handover`, payload })
+    expect(handedOver.statusCode, handedOver.body).toBe(200)
+    expect(handedOver.json()).toMatchObject({
+      status: 'handed_over',
+      tableCode: 'L01',
+      tableSessionId: sessionId,
+      unresolvedOrderIds: ['legacy-handover-order'],
+    })
+    const replay = await app.inject({ method: 'POST', url: `/api/table-sessions/${encodeURIComponent(sessionId)}/legacy-handover`, payload })
+    expect(replay.statusCode, replay.body).toBe(200)
+
+    const state = await repository.read()
+    expect(state.songState.tableSessions.find((session) => session.id === sessionId)?.status).toBe('closed')
+    expect(state.tables.find((table) => table.id === 'table-l01')).toMatchObject({ status: 'available', guestCount: 0, openedAt: null })
+    expect(state.orderDomain.orders.find((order) => order.id === 'legacy-handover-order')).toBeTruthy()
+    expect(state.auditEntries.filter((entry) => entry.action === 'table.legacy_session_handed_over.v1')).toHaveLength(1)
+  })
+
   it('allows completed ordinary service to close but keeps completed urgent care open', async () => {
     const { app, repository } = await fixture()
     await repository.mutate((state) => {

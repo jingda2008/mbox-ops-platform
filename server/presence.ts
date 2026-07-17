@@ -4,7 +4,7 @@ import type { StaffPresenceResponse } from '../src/shared/auth-contracts.js'
 import type { PresenceLease, RuntimeState } from '../src/shared/contracts.js'
 import { requireRequestActor } from './auth-context.js'
 import type { RuntimeRepository } from './repository.js'
-import { releaseTasksForOfflineEmployee } from './domain.js'
+import { redispatchUnownedTasks, releaseTasksForOfflineEmployee } from './domain.js'
 
 export const DEFAULT_PRESENCE_LEASE_TTL_MS = 90_000
 export const DEFAULT_PRESENCE_SWEEP_INTERVAL_MS = 15_000
@@ -88,6 +88,7 @@ export function establishPresenceLease(state: RuntimeState, input: EstablishPres
   if (!employee) throw new Error('员工不存在或已停用')
 
   synchronizeOnlineProjection(state, input.now)
+  const wasOnline = employee.online
   state.presenceLeases = state.presenceLeases!.filter((lease) => lease.sessionId !== input.sessionId)
   const lease: PresenceLease = {
     sessionId: input.sessionId,
@@ -101,6 +102,7 @@ export function establishPresenceLease(state: RuntimeState, input: EstablishPres
   }
   state.presenceLeases.push(lease)
   synchronizeOnlineProjection(state, input.now)
+  if (!wasOnline && employee.online) redispatchUnownedTasks(state, new Date(input.now))
   appendAudit(state, input.actorId, 'staff_presence.established.v1', input.sessionId, input.now, {
     businessDate: input.businessDate,
     leaseExpiresAt: lease.expiresAt,

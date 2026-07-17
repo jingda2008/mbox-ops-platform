@@ -292,6 +292,14 @@ export function createSeedState(): RuntimeState {
         ],
         lateHoldMinutes: 30,
         waitlistResponseMinutes: 10,
+        businessHours: {
+          timeZone: 'Asia/Shanghai', openingTime: '20:30', closingTime: '02:00', slotMinutes: 30, closedWeekdays: [],
+        },
+        capacity: { defaultDailyCapacity: 120, defaultSlotCapacity: 20, dateOverrides: [] },
+        publicRules: {
+          minimumLeadMinutes: 15, maximumAdvanceDays: 180, duplicateWindowMinutes: 60,
+          acceptedContactMethods: ['phone', 'wechat'], createRateLimit: { limit: 5, windowMinutes: 10 },
+        },
       },
     ),
     awaitingOrderIntents: [],

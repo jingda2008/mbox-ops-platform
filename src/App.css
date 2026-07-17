@@ -876,6 +876,13 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 .guest-services, .guest-progress { padding: 19px 16px 21px; border-bottom: 8px solid #e9ebe6; background: #fff; }
 .guest-orders { padding: 19px 16px 40px; background: #f3f4f0; }
 .guest-payment-sync { min-height: 48px; display: flex; align-items: center; gap: 9px; margin-bottom: 10px; padding: 9px 12px; border: 1px solid #e4ca78; background: #fff8dd; color: #70530e; font-size: 12px; line-height: 1.45; }
+.guest-account-frozen { display: flex; align-items: flex-start; gap: 10px; margin: 10px 12px; padding: 12px 14px; border: 1px solid #d8ae3f; border-left: 4px solid #c99a22; background: #fff9e7; color: #5c4611; }
+.guest-account-frozen svg { flex: 0 0 auto; margin-top: 1px; color: #9a7112; }
+.guest-account-frozen div { display: grid; gap: 3px; min-width: 0; }
+.guest-account-frozen strong { font-size: 14px; line-height: 1.35; }
+.guest-account-frozen span { color: #776124; font-size: 12px; line-height: 1.5; }
+.guest-tabs button:disabled { cursor: not-allowed; color: #a4aaa5; background: #f2f3f1; }
+.guest-frozen-empty { border: 1px dashed #d8c17a; background: #fffdf5; color: #705c22; line-height: 1.65; }
 .guest-order-list { display: grid; gap: 10px; }
 .guest-order { border: 1px solid var(--line); border-radius: 8px; background: #fff; overflow: hidden; }
 .guest-order.is-payment-target { border-color: #d3ad38; box-shadow: 0 0 0 2px rgba(211, 173, 56, .15); }

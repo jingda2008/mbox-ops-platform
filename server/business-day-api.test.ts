@@ -57,6 +57,19 @@ describe('business day shift continuity', () => {
 })
 
 describe('business day operational closure', () => {
+  it('identifies an open previous-day table visit as requiring manager handover', () => {
+    const state = createSeedState()
+    const session = state.songState.tableSessions.find((candidate) => candidate.status === 'open')!
+    const previousBusinessDate = state.store.businessDate
+    state.store.businessDate = nextDate(previousBusinessDate)
+
+    expect(collectBlockers(state, 'emp-chen')).toContainEqual({
+      kind: 'legacy_table_session_handover_required',
+      id: session.id,
+      detail: `${session.tableCode}:${previousBusinessDate}->${state.store.businessDate}`,
+    })
+  })
+
   it('accepts completed ordinary service but keeps completed urgent care open', () => {
     const state = createSeedState()
     const ordinary = createServiceTask(state, {

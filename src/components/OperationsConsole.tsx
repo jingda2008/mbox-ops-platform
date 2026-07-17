@@ -66,6 +66,7 @@ import type {
   TableSessionSummary,
   TaskActionInput,
 } from '../shared/contracts'
+import { effectiveDataScopeForEmployee, effectiveRoleIdsForEmployee } from '../shared/staff-access'
 import { TaskQueue } from './TaskQueue'
 import { getFulfillmentAccess, kdsTaskOperationallyActive, taskVisibleToAccess } from './commerce-workspace'
 import { RoleHomeView } from './RoleHomeView'
@@ -135,8 +136,23 @@ function tableOperationsConfig(config?: TableOperationsConfig): TableOperationsC
 export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
   const fulfillmentAccess = getFulfillmentAccess(data, getCurrentActorId())
   const roleHomeAccess = getRoleHomeAccess(data, fulfillmentAccess.employee?.roleId ?? '')
+  const currentEmployee = fulfillmentAccess.employee
+  const claimableTaskIds = new Set(data.tasks.filter((task) => {
+    if (!currentEmployee || currentEmployee.status !== 'active' || !currentEmployee.online || currentEmployee.paused) return false
+    if (task.ownerId !== null || !['pending', 'escalated', 'reopened'].includes(task.status)) return false
+    if (!data.viewer?.permissionIds.includes('service.execute')) return false
+    const serviceType = data.config.serviceTypes.find((item) => item.id === task.serviceTypeId && item.enabled)
+    if (!serviceType || !effectiveRoleIdsForEmployee(data, currentEmployee.id).some((roleId) => serviceType.dispatchRoleIds.includes(roleId))) return false
+    if (task.notifiedEmployeeIds.includes(currentEmployee.id)) return true
+    const table = data.tables.find((item) => item.id === task.tableId)
+    if (!table) return false
+    const scope = effectiveDataScopeForEmployee(data, currentEmployee.id)
+    if (scope === 'all_stores' || scope === 'store') return true
+    if (scope === 'assigned_areas') return currentEmployee.areaIds.includes(table.areaId)
+    return table.primaryEmployeeId === currentEmployee.id || table.backupEmployeeIds.includes(currentEmployee.id)
+  }).map((task) => task.id))
   const ownOpenTasks = data.tasks.filter((task) => (
-    task.ownerId === fulfillmentAccess.employee?.id
+    (task.ownerId === currentEmployee?.id || claimableTaskIds.has(task.id))
     && !['confirmed', 'cancelled'].includes(task.status)
   ))
   const availableNavigation = navigation.filter((item) => {
@@ -177,7 +193,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
     : ownOpenTasks
   const visibleServiceTasks = fulfillmentAccess.mode === 'oversight'
     ? data.tasks
-    : data.tasks.filter((task) => task.ownerId === fulfillmentAccess.employee?.id)
+    : data.tasks.filter((task) => task.ownerId === currentEmployee?.id || claimableTaskIds.has(task.id))
   const roleKdsCount = data.orderDomain.kdsTasks.filter((task) => (
     kdsTaskOperationallyActive(task) && taskVisibleToAccess(task, fulfillmentAccess)
   )).length
@@ -248,7 +264,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
 
   async function handleTaskAction(task: ServiceTask, action: TaskActionInput['action']) {
     const actorId = fulfillmentAccess.employee?.id
-    if (!actorId || task.ownerId !== actorId) {
+    if (!actorId || (task.ownerId !== null && task.ownerId !== actorId)) {
       setNotice('该任务当前不由您负责，请联系领班重新派单')
       return
     }
@@ -727,6 +743,8 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
                   selectedTableId={selectedTableId}
                   onClearTable={() => setSelectedTableId(null)}
                   onAction={handleTaskAction}
+                  currentEmployeeId={fulfillmentAccess.employee?.id ?? ''}
+                  claimableTaskIds={claimableTaskIds}
                 />
               </div>
             </>
@@ -741,6 +759,8 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
               selectedTableId={selectedTableId}
               onClearTable={() => setSelectedTableId(null)}
               onAction={handleTaskAction}
+              currentEmployeeId={fulfillmentAccess.employee?.id ?? ''}
+              claimableTaskIds={claimableTaskIds}
             />
           )}
 

@@ -39,6 +39,55 @@ export const DEFAULT_RESERVATION_CONFIG: ReservationConfig = {
   ],
   lateHoldMinutes: 30,
   waitlistResponseMinutes: 10,
+  businessHours: {
+    timeZone: 'Asia/Shanghai',
+    openingTime: '20:30',
+    closingTime: '02:00',
+    slotMinutes: 30,
+    closedWeekdays: [],
+  },
+  capacity: {
+    defaultDailyCapacity: 120,
+    defaultSlotCapacity: 20,
+    dateOverrides: [],
+  },
+  publicRules: {
+    minimumLeadMinutes: 15,
+    maximumAdvanceDays: 180,
+    duplicateWindowMinutes: 60,
+    acceptedContactMethods: ['phone', 'wechat'],
+    createRateLimit: { limit: 5, windowMinutes: 10 },
+  },
+}
+
+export function normalizeReservationConfig(config: ReservationConfig): ReservationConfig {
+  const candidate = config as Partial<ReservationConfig>
+  return {
+    ...DEFAULT_RESERVATION_CONFIG,
+    ...config,
+    businessHours: {
+      ...DEFAULT_RESERVATION_CONFIG.businessHours,
+      ...(candidate.businessHours ?? {}),
+      closedWeekdays: [...(candidate.businessHours?.closedWeekdays ?? DEFAULT_RESERVATION_CONFIG.businessHours.closedWeekdays)],
+    },
+    capacity: {
+      ...DEFAULT_RESERVATION_CONFIG.capacity,
+      ...(candidate.capacity ?? {}),
+      dateOverrides: (candidate.capacity?.dateOverrides ?? DEFAULT_RESERVATION_CONFIG.capacity.dateOverrides).map((item) => ({
+        ...item,
+        slotCapacities: item.slotCapacities.map((slot) => ({ ...slot })),
+      })),
+    },
+    publicRules: {
+      ...DEFAULT_RESERVATION_CONFIG.publicRules,
+      ...(candidate.publicRules ?? {}),
+      acceptedContactMethods: [...(candidate.publicRules?.acceptedContactMethods ?? DEFAULT_RESERVATION_CONFIG.publicRules.acceptedContactMethods)],
+      createRateLimit: {
+        ...DEFAULT_RESERVATION_CONFIG.publicRules.createRateLimit,
+        ...(candidate.publicRules?.createRateLimit ?? {}),
+      },
+    },
+  }
 }
 
 export function createReservationState(
@@ -47,11 +96,7 @@ export function createReservationState(
 ): ReservationState {
   assertNonEmpty(scope.tenantId, '租户ID')
   assertNonEmpty(scope.storeId, '门店ID')
-  const normalizedConfig = {
-    ...config,
-    lateHoldMinutes: config.lateHoldMinutes ?? DEFAULT_RESERVATION_CONFIG.lateHoldMinutes,
-    waitlistResponseMinutes: config.waitlistResponseMinutes ?? DEFAULT_RESERVATION_CONFIG.waitlistResponseMinutes,
-  }
+  const normalizedConfig = normalizeReservationConfig(config)
   validateConfig(normalizedConfig)
   return {
     ...scope,
@@ -63,11 +108,13 @@ export function createReservationState(
 }
 
 export function updateReservationConfig(state: ReservationState, config: ReservationConfig) {
-  const normalizedConfig = {
+  const normalizedConfig = normalizeReservationConfig({
+    ...state.config,
     ...config,
-    lateHoldMinutes: config.lateHoldMinutes ?? state.config.lateHoldMinutes,
-    waitlistResponseMinutes: config.waitlistResponseMinutes ?? state.config.waitlistResponseMinutes,
-  }
+    businessHours: config.businessHours ?? state.config.businessHours,
+    capacity: config.capacity ?? state.config.capacity,
+    publicRules: config.publicRules ?? state.config.publicRules,
+  })
   validateConfig(normalizedConfig)
   if (normalizedConfig.version <= state.config.version) throw new Error('预约配置版本必须高于当前版本')
   state.config = structuredClone(normalizedConfig)
@@ -104,11 +151,174 @@ function validateConfig(config: ReservationConfig) {
   if (!Number.isSafeInteger(config.waitlistResponseMinutes) || config.waitlistResponseMinutes < 1 || config.waitlistResponseMinutes > 120) {
     throw new Error('候补响应分钟数不合法')
   }
+  validateTimeZone(config.businessHours.timeZone)
+  const openingMinutes = parseClock(config.businessHours.openingTime, '营业开始时间')
+  const closingMinutes = parseClock(config.businessHours.closingTime, '营业结束时间')
+  if (openingMinutes === closingMinutes) throw new Error('营业开始和结束时间不能相同')
+  if (!Number.isSafeInteger(config.businessHours.slotMinutes) || config.businessHours.slotMinutes < 5 || config.businessHours.slotMinutes > 240) {
+    throw new Error('预约时段分钟数必须在5至240之间')
+  }
+  if (new Set(config.businessHours.closedWeekdays).size !== config.businessHours.closedWeekdays.length
+    || config.businessHours.closedWeekdays.some((day) => !Number.isSafeInteger(day) || day < 0 || day > 6)) {
+    throw new Error('每周闭店日期配置不合法')
+  }
+  if (!Number.isSafeInteger(config.capacity.defaultDailyCapacity) || config.capacity.defaultDailyCapacity < 1 || config.capacity.defaultDailyCapacity > 10_000) {
+    throw new Error('营业日预约容量必须在1至10000之间')
+  }
+  if (!Number.isSafeInteger(config.capacity.defaultSlotCapacity) || config.capacity.defaultSlotCapacity < 1 || config.capacity.defaultSlotCapacity > 1_000) {
+    throw new Error('时段预约容量必须在1至1000之间')
+  }
+  const overrideDates = config.capacity.dateOverrides.map((item) => item.date)
+  if (new Set(overrideDates).size !== overrideDates.length) throw new Error('指定日期容量不能重复')
+  for (const override of config.capacity.dateOverrides) {
+    assertDate(override.date, '指定营业日期')
+    if (!Number.isSafeInteger(override.totalCapacity) || override.totalCapacity < 0 || override.totalCapacity > 10_000) {
+      throw new Error('指定日期预约容量必须在0至10000之间')
+    }
+    if (override.enabled && override.totalCapacity < 1) throw new Error('营业日期的预约容量至少为1')
+    const slotTimes = override.slotCapacities.map((item) => item.time)
+    if (new Set(slotTimes).size !== slotTimes.length) throw new Error('指定日期时段容量不能重复')
+    for (const slot of override.slotCapacities) {
+      parseClock(slot.time, '指定时段')
+      if (!Number.isSafeInteger(slot.capacity) || slot.capacity < 0 || slot.capacity > 1_000) {
+        throw new Error('指定时段预约容量必须在0至1000之间')
+      }
+    }
+  }
+  if (!Number.isSafeInteger(config.publicRules.minimumLeadMinutes) || config.publicRules.minimumLeadMinutes < 0 || config.publicRules.minimumLeadMinutes > 10_080) {
+    throw new Error('预约提前分钟数必须在0至10080之间')
+  }
+  if (!Number.isSafeInteger(config.publicRules.maximumAdvanceDays) || config.publicRules.maximumAdvanceDays < 1 || config.publicRules.maximumAdvanceDays > 730) {
+    throw new Error('最远预约天数必须在1至730之间')
+  }
+  if (!Number.isSafeInteger(config.publicRules.duplicateWindowMinutes) || config.publicRules.duplicateWindowMinutes < 0 || config.publicRules.duplicateWindowMinutes > 1_440) {
+    throw new Error('防重复时间窗口必须在0至1440分钟之间')
+  }
+  if (config.publicRules.acceptedContactMethods.length < 1
+    || new Set(config.publicRules.acceptedContactMethods).size !== config.publicRules.acceptedContactMethods.length
+    || config.publicRules.acceptedContactMethods.some((method) => !['phone', 'wechat'].includes(method))) {
+    throw new Error('至少需要启用一种公开预约联系方式')
+  }
+  if (!Number.isSafeInteger(config.publicRules.createRateLimit.limit) || config.publicRules.createRateLimit.limit < 1 || config.publicRules.createRateLimit.limit > 100) {
+    throw new Error('公开预约创建限流次数必须在1至100之间')
+  }
+  if (!Number.isSafeInteger(config.publicRules.createRateLimit.windowMinutes) || config.publicRules.createRateLimit.windowMinutes < 1 || config.publicRules.createRateLimit.windowMinutes > 1_440) {
+    throw new Error('公开预约限流窗口必须在1至1440分钟之间')
+  }
   for (const collection of [config.sources, config.areaPreferences, config.occasions]) {
     const codes = collection.map((item) => item.code)
     if (new Set(codes).size !== codes.length) throw new Error('预约配置代码不能重复')
     collection.forEach((item) => assertNonEmpty(item.code, '预约配置代码'))
   }
+}
+
+function parseClock(value: string, label: string) {
+  if (!/^\d{2}:\d{2}$/.test(value)) throw new Error(`${label}必须使用HH:mm格式`)
+  const [hour, minute] = value.split(':').map(Number)
+  if (hour === undefined || minute === undefined || hour > 23 || minute > 59) throw new Error(`${label}不合法`)
+  return hour * 60 + minute
+}
+
+function assertDate(value: string, label: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00.000Z`))) {
+    throw new Error(`${label}必须使用YYYY-MM-DD格式`)
+  }
+}
+
+function validateTimeZone(value: string) {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value }).format(0)
+  } catch {
+    throw new Error('预约营业时区不合法')
+  }
+}
+
+function zonedParts(timestamp: string, timeZone: string) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date(timestamp))
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? ''
+  const date = `${value('year')}-${value('month')}-${value('day')}`
+  return { date, minutes: Number(value('hour')) * 60 + Number(value('minute')) }
+}
+
+function shiftDate(date: string, days: number) {
+  const value = new Date(`${date}T12:00:00.000Z`)
+  value.setUTCDate(value.getUTCDate() + days)
+  return value.toISOString().slice(0, 10)
+}
+
+function weekday(date: string) {
+  return new Date(`${date}T12:00:00.000Z`).getUTCDay()
+}
+
+function businessSlot(config: ReservationConfig, scheduledAt: string) {
+  assertTimestamp(scheduledAt, '预约时间')
+  const local = zonedParts(scheduledAt, config.businessHours.timeZone)
+  const opening = parseClock(config.businessHours.openingTime, '营业开始时间')
+  const closing = parseClock(config.businessHours.closingTime, '营业结束时间')
+  const crossesMidnight = closing < opening
+  const inHours = crossesMidnight
+    ? local.minutes >= opening || local.minutes < closing
+    : local.minutes >= opening && local.minutes < closing
+  if (!inHours) throw new Error(`可预约时间为${config.businessHours.openingTime}至${crossesMidnight ? '次日' : ''}${config.businessHours.closingTime}`)
+  const businessDate = crossesMidnight && local.minutes < closing ? shiftDate(local.date, -1) : local.date
+  if (config.businessHours.closedWeekdays.includes(weekday(businessDate))) throw new Error('所选日期暂停接受预约')
+  const elapsed = local.minutes >= opening ? local.minutes - opening : 1_440 - opening + local.minutes
+  if (elapsed % config.businessHours.slotMinutes !== 0) {
+    throw new Error(`预约时间需按${config.businessHours.slotMinutes}分钟时段选择`)
+  }
+  const slotTime = `${String(Math.floor(local.minutes / 60)).padStart(2, '0')}:${String(local.minutes % 60).padStart(2, '0')}`
+  return { businessDate, slotTime }
+}
+
+function contactIdentities(value: string) {
+  const identities = value.split('|').map((item) => item.trim().toLocaleLowerCase('en-US')).filter(Boolean)
+  return identities.length > 0 ? identities : [value.trim().toLocaleLowerCase('en-US')]
+}
+
+export function assertPublicReservationAvailability(state: ReservationState, input: {
+  scheduledAt: string
+  occurredAt: string
+  contactReference: string
+  excludeReservationId?: string
+}) {
+  const config = normalizeReservationConfig(state.config)
+  const scheduledAt = Date.parse(input.scheduledAt)
+  const occurredAt = Date.parse(input.occurredAt)
+  if (!Number.isFinite(scheduledAt) || !Number.isFinite(occurredAt)) throw new Error('预约时间无效')
+  const minimum = occurredAt + config.publicRules.minimumLeadMinutes * 60_000
+  const maximum = occurredAt + config.publicRules.maximumAdvanceDays * 24 * 60 * 60_000
+  if (scheduledAt < minimum || scheduledAt > maximum) {
+    throw new Error(`请至少提前${config.publicRules.minimumLeadMinutes}分钟预约，最远可预约未来${config.publicRules.maximumAdvanceDays}天`)
+  }
+  const target = businessSlot(config, input.scheduledAt)
+  const dateOverride = config.capacity.dateOverrides.find((item) => item.date === target.businessDate)
+  if (dateOverride && !dateOverride.enabled) throw new Error('所选日期暂停接受预约，换一天再来吧')
+  const active = state.reservations.filter((reservation) =>
+    reservation.id !== input.excludeReservationId && !['cancelled', 'no_show'].includes(reservation.status),
+  )
+  const identities = new Set(contactIdentities(input.contactReference))
+  const duplicateWindowMs = config.publicRules.duplicateWindowMinutes * 60_000
+  const duplicate = active.find((reservation) =>
+    contactIdentities(reservation.contactReference).some((identity) => identities.has(identity))
+    && Math.abs(Date.parse(reservation.scheduledAt) - scheduledAt) <= duplicateWindowMs,
+  )
+  if (duplicate) throw new Error('这个联系方式在相近时间已经有预约啦，可以在“我的预约”里修改')
+
+  const placed = active.flatMap((reservation) => {
+    try { return [{ reservation, slot: businessSlot(config, reservation.scheduledAt) }] } catch { return [] }
+  })
+  const dailyCount = placed.filter((item) => item.slot.businessDate === target.businessDate).length
+  const dailyCapacity = dateOverride?.totalCapacity ?? config.capacity.defaultDailyCapacity
+  if (dailyCount >= dailyCapacity) throw new Error('这一天的预约已经满啦，换一天看看吧')
+  const slotCount = placed.filter((item) => item.slot.businessDate === target.businessDate && item.slot.slotTime === target.slotTime).length
+  const slotCapacity = dateOverride?.slotCapacities.find((item) => item.time === target.slotTime)?.capacity
+    ?? config.capacity.defaultSlotCapacity
+  if (slotCount >= slotCapacity) throw new Error('这个时段已经约满啦，换个时间更从容')
+  return target
 }
 
 function canonicalize(value: unknown): string {
@@ -293,31 +503,49 @@ export function updateReservationDetails(state: ReservationState, command: Updat
   assertAction(command)
   assertTimestamp(command.scheduledAt, '预约时间')
   assertNonEmpty(command.reason, '修改原因')
+  if (command.customerName !== undefined) assertNonEmpty(command.customerName, '顾客称呼')
+  if (command.contactReference !== undefined) assertNonEmpty(command.contactReference, '联系方式引用')
   if (!Number.isSafeInteger(command.partySize) || command.partySize < state.config.minimumPartySize || command.partySize > state.config.maximumPartySize) {
     throw new Error(`预约人数必须在${state.config.minimumPartySize}至${state.config.maximumPartySize}之间`)
   }
   if (command.areaPreferenceCode && !state.config.areaPreferences.some((item) => item.code === command.areaPreferenceCode && item.enabled)) {
     throw new Error('区域偏好未配置或已停用')
   }
+  if (command.occasionCode && !state.config.occasions.some((item) => item.code === command.occasionCode && item.enabled)) {
+    throw new Error('特殊场景未配置或已停用')
+  }
   return executeIdempotent(state, command.idempotencyKey, 'reservation.update_details', command, command.reservationId, () => {
     const reservation = findReservation(state, command.reservationId)
     if (!['requested', 'confirmed', 'arrived'].includes(reservation.status)) throw new Error('已入座或已结束预约不能修改人数和时间')
     const before = {
+      customerName: reservation.customerName,
+      contactReference: reservation.contactReference,
       partySize: reservation.partySize,
       scheduledAt: reservation.scheduledAt,
       areaPreferenceCode: reservation.areaPreferenceCode,
+      occasionCode: reservation.occasionCode,
+      occasionNote: reservation.occasionNote,
     }
+    if (command.customerName !== undefined) reservation.customerName = command.customerName.trim()
+    if (command.contactReference !== undefined) reservation.contactReference = command.contactReference.trim()
     reservation.partySize = command.partySize
     reservation.scheduledAt = command.scheduledAt
     reservation.areaPreferenceCode = command.areaPreferenceCode?.trim() || null
+    if (command.occasionCode !== undefined) reservation.occasionCode = command.occasionCode
+    if (command.occasionNote !== undefined) reservation.occasionNote = command.occasionNote.trim()
     touch(reservation, command.occurredAt)
     audit(state, reservation, 'reservation.details_updated.v1', command.actorId, command.occurredAt, reservation.status, reservation.deposit.status, command.reason, {
       beforePartySize: before.partySize,
       afterPartySize: reservation.partySize,
+      contactChanged: before.contactReference !== reservation.contactReference,
+      customerNameChanged: before.customerName !== reservation.customerName,
       beforeScheduledAt: before.scheduledAt,
       afterScheduledAt: reservation.scheduledAt,
       beforeAreaPreferenceCode: before.areaPreferenceCode,
       afterAreaPreferenceCode: reservation.areaPreferenceCode,
+      beforeOccasionCode: before.occasionCode,
+      afterOccasionCode: reservation.occasionCode,
+      occasionNoteChanged: before.occasionNote !== reservation.occasionNote,
     })
     return reservation
   })

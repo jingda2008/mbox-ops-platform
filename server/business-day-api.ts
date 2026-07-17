@@ -23,6 +23,7 @@ import {
   isServiceTaskOperationallyClosed,
   isSongRequestOperationallyClosed,
 } from './operational-closure.js'
+import { isCurrentBusinessDateTableSession, tableSessionBusinessDate } from './table-sessions.js'
 
 const closeSchema = z.object({
   nextBusinessDate: z.iso.date(),
@@ -98,7 +99,12 @@ export function collectBlockers(state: RuntimeState, closingActorId: string) {
     blockers.push({ kind: 'undelivered_kds', id: task.id, detail: `${task.stationId}:${task.status}` })
   }
   for (const session of state.songState.tableSessions.filter((item) => item.status === 'open')) {
-    blockers.push({ kind: 'open_table_session', id: session.id, detail: session.tableCode })
+    const stale = !isCurrentBusinessDateTableSession(state, session)
+    blockers.push({
+      kind: stale ? 'legacy_table_session_handover_required' : 'open_table_session',
+      id: session.id,
+      detail: stale ? `${session.tableCode}:${tableSessionBusinessDate(state, session)}->${state.store.businessDate}` : session.tableCode,
+    })
   }
   for (const intent of state.paymentDomain.paymentIntents.filter((item) => ['pending', 'processing'].includes(item.status))) {
     blockers.push({ kind: 'unresolved_payment', id: intent.id, detail: intent.status })

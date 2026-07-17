@@ -1,7 +1,9 @@
 import type {
   PublicReservationCreateInput,
+  PublicReservationCancelInput,
   PublicReservationListResponse,
   PublicReservationSessionResponse,
+  PublicReservationUpdateInput,
   PublicReservationView,
 } from './shared/public-reservation-contracts'
 
@@ -48,6 +50,20 @@ export function listPublicReservations() {
 export function createPublicReservation(input: PublicReservationCreateInput) {
   return request<PublicReservationView>('/api/public/reservations', {
     method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function updatePublicReservation(reservationId: string, input: PublicReservationUpdateInput) {
+  return request<PublicReservationView>(`/api/public/reservations/${encodeURIComponent(reservationId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
+}
+
+export function cancelPublicReservation(reservationId: string, input: PublicReservationCancelInput) {
+  return request<PublicReservationView>(`/api/public/reservations/${encodeURIComponent(reservationId)}`, {
+    method: 'DELETE',
     body: JSON.stringify(input),
   })
 }

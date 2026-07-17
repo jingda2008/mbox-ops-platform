@@ -93,6 +93,38 @@ describe('staff presence domain', () => {
     expect(task).toMatchObject({ status: 'reopened', ownerId: 'emp-jie', acceptedAt: null, arrivedAt: null })
     expect(state.taskEvents.at(-1)).toMatchObject({ taskId: task.id, type: 'task.reopened.v1', payload: { reason: 'owner_offline' } })
   })
+
+  it('redispatches unowned waiting work when an eligible employee comes online', () => {
+    const state = createSeedState()
+    const now = Date.parse('2026-07-16T12:00:00.000Z')
+    for (const employee of state.employees) employee.online = false
+    state.config.roles.find((role) => role.id === 'server')!.maxConcurrentTasks = 10
+    const tasks = (['pending', 'escalated', 'reopened'] as const).map((status) => {
+      const task = createServiceTask(state, {
+        tableCode: 'L01', serviceTypeId: 'water', source: 'guest', note: '', idempotencyKey: `presence-unowned-${status}`,
+      })
+      task.status = status
+      return task
+    })
+
+    expect(tasks.every((task) => task.ownerId === null)).toBe(true)
+    establish(state, 'server-returned', now, 5_000, now + 60_000, 'emp-lin')
+
+    expect(tasks.map((task) => ({ ownerId: task.ownerId, status: task.status }))).toEqual([
+      { ownerId: 'emp-lin', status: 'pending' },
+      { ownerId: 'emp-lin', status: 'escalated' },
+      { ownerId: 'emp-lin', status: 'reopened' },
+    ])
+    for (const task of tasks) {
+      expect(task.notifiedEmployeeIds).toContain('emp-lin')
+      expect(state.taskEvents).toContainEqual(expect.objectContaining({
+        taskId: task.id,
+        type: 'task.assigned.v1',
+        actorId: 'system',
+        payload: { ownerId: 'emp-lin', reason: 'employee_online' },
+      }))
+    }
+  })
 })
 
 describe('staff presence routes', () => {

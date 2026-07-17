@@ -615,6 +615,24 @@ function ReservationConfigPanel({ currentVersion, draft, reason, busy, onChange,
     })
   }
 
+  function updateDateOverride(index: number, patch: Partial<ConfigDraft['capacity']['dateOverrides'][number]>) {
+    onChange({ ...draft, capacity: { ...draft.capacity, dateOverrides: draft.capacity.dateOverrides.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) } })
+  }
+
+  function toggleClosedWeekday(day: number) {
+    const closedWeekdays = draft.businessHours.closedWeekdays.includes(day)
+      ? draft.businessHours.closedWeekdays.filter((item) => item !== day)
+      : [...draft.businessHours.closedWeekdays, day].toSorted((left, right) => left - right)
+    onChange({ ...draft, businessHours: { ...draft.businessHours, closedWeekdays } })
+  }
+
+  function toggleContactMethod(method: 'phone' | 'wechat') {
+    const acceptedContactMethods = draft.publicRules.acceptedContactMethods.includes(method)
+      ? draft.publicRules.acceptedContactMethods.filter((item) => item !== method)
+      : [...draft.publicRules.acceptedContactMethods, method]
+    onChange({ ...draft, publicRules: { ...draft.publicRules, acceptedContactMethods } })
+  }
+
   return <form className="reservation-config-panel" onSubmit={onSubmit}>
     <header className="reservation-config-heading">
       <div><Settings2 size={19} /><span><small>经理权限</small><strong>预约规则配置</strong></span></div>
@@ -627,6 +645,42 @@ function ReservationConfigPanel({ currentVersion, draft, reason, busy, onChange,
       <Field label="最多人数"><input required type="number" min={1} max={100} value={draft.maximumPartySize} onChange={(event) => onChange({ ...draft, maximumPartySize: Number(event.target.value) })} /></Field>
       <Field label="迟到保留（分钟）"><input required type="number" min={0} max={240} value={draft.lateHoldMinutes} onChange={(event) => onChange({ ...draft, lateHoldMinutes: Number(event.target.value) })} /></Field>
       <Field label="候补响应（分钟）"><input required type="number" min={1} max={120} value={draft.waitlistResponseMinutes} onChange={(event) => onChange({ ...draft, waitlistResponseMinutes: Number(event.target.value) })} /></Field>
+    </section>
+
+    <section className="reservation-config-section">
+      <div className="reservation-config-section-title"><strong>公开预约营业时间</strong><span>支持跨午夜，例如20:30至次日02:00；顾客端按时段展示</span></div>
+      <div className="reservation-config-business-grid">
+        <Field label="门店时区"><input required maxLength={80} value={draft.businessHours.timeZone} onChange={(event) => onChange({ ...draft, businessHours: { ...draft.businessHours, timeZone: event.target.value } })} /></Field>
+        <Field label="开始"><input required type="time" value={draft.businessHours.openingTime} onChange={(event) => onChange({ ...draft, businessHours: { ...draft.businessHours, openingTime: event.target.value } })} /></Field>
+        <Field label="结束"><input required type="time" value={draft.businessHours.closingTime} onChange={(event) => onChange({ ...draft, businessHours: { ...draft.businessHours, closingTime: event.target.value } })} /></Field>
+        <Field label="时段（分钟）"><input required type="number" min={5} max={240} value={draft.businessHours.slotMinutes} onChange={(event) => onChange({ ...draft, businessHours: { ...draft.businessHours, slotMinutes: Number(event.target.value) } })} /></Field>
+      </div>
+      <div className="reservation-config-choice-row"><span>每周闭店</span>{['周日', '周一', '周二', '周三', '周四', '周五', '周六'].map((label, day) => <label key={label}><input type="checkbox" checked={draft.businessHours.closedWeekdays.includes(day)} onChange={() => toggleClosedWeekday(day)} />{label}</label>)}</div>
+    </section>
+
+    <section className="reservation-config-section">
+      <div className="reservation-config-section-title"><strong>容量与公开规则</strong><span>容量按预约笔数计算；指定日期可闭店或覆盖总量</span></div>
+      <div className="reservation-config-business-grid is-rules">
+        <Field label="每日容量"><input required type="number" min={1} max={10_000} value={draft.capacity.defaultDailyCapacity} onChange={(event) => onChange({ ...draft, capacity: { ...draft.capacity, defaultDailyCapacity: Number(event.target.value) } })} /></Field>
+        <Field label="每时段容量"><input required type="number" min={1} max={1_000} value={draft.capacity.defaultSlotCapacity} onChange={(event) => onChange({ ...draft, capacity: { ...draft.capacity, defaultSlotCapacity: Number(event.target.value) } })} /></Field>
+        <Field label="至少提前（分钟）"><input required type="number" min={0} max={10_080} value={draft.publicRules.minimumLeadMinutes} onChange={(event) => onChange({ ...draft, publicRules: { ...draft.publicRules, minimumLeadMinutes: Number(event.target.value) } })} /></Field>
+        <Field label="最远预约（天）"><input required type="number" min={1} max={730} value={draft.publicRules.maximumAdvanceDays} onChange={(event) => onChange({ ...draft, publicRules: { ...draft.publicRules, maximumAdvanceDays: Number(event.target.value) } })} /></Field>
+        <Field label="防重复窗口（分钟）"><input required type="number" min={0} max={1_440} value={draft.publicRules.duplicateWindowMinutes} onChange={(event) => onChange({ ...draft, publicRules: { ...draft.publicRules, duplicateWindowMinutes: Number(event.target.value) } })} /></Field>
+        <Field label="限流次数"><input required type="number" min={1} max={100} value={draft.publicRules.createRateLimit.limit} onChange={(event) => onChange({ ...draft, publicRules: { ...draft.publicRules, createRateLimit: { ...draft.publicRules.createRateLimit, limit: Number(event.target.value) } } })} /></Field>
+        <Field label="限流窗口（分钟）"><input required type="number" min={1} max={1_440} value={draft.publicRules.createRateLimit.windowMinutes} onChange={(event) => onChange({ ...draft, publicRules: { ...draft.publicRules, createRateLimit: { ...draft.publicRules.createRateLimit, windowMinutes: Number(event.target.value) } } })} /></Field>
+      </div>
+      <div className="reservation-config-choice-row"><span>联系方式</span><label><input type="checkbox" checked={draft.publicRules.acceptedContactMethods.includes('phone')} onChange={() => toggleContactMethod('phone')} />手机号</label><label><input type="checkbox" checked={draft.publicRules.acceptedContactMethods.includes('wechat')} onChange={() => toggleContactMethod('wechat')} />微信号</label></div>
+      <div className="reservation-config-section-title is-nested"><strong>指定日期</strong><span>时段覆盖格式：20:30=8，每行一个；0表示关闭该时段</span><button className="secondary-button" type="button" disabled={busy || draft.capacity.dateOverrides.length >= 366} onClick={() => onChange({ ...draft, capacity: { ...draft.capacity, dateOverrides: [...draft.capacity.dateOverrides, { date: '', enabled: true, totalCapacity: draft.capacity.defaultDailyCapacity, slotCapacities: [] }] } })}><Plus size={15} />新增日期</button></div>
+      <div className="reservation-config-rows">
+        {draft.capacity.dateOverrides.length === 0 && <div className="reservation-config-empty">没有特殊日期，使用默认容量</div>}
+        {draft.capacity.dateOverrides.map((item, index) => <div className="reservation-config-date-row" key={`${item.date}-${index}`}>
+          <Field label="日期"><input required type="date" value={item.date} onChange={(event) => updateDateOverride(index, { date: event.target.value })} /></Field>
+          <Field label="当日总容量"><input required type="number" min={item.enabled ? 1 : 0} max={10_000} value={item.totalCapacity} onChange={(event) => updateDateOverride(index, { totalCapacity: Number(event.target.value) })} /></Field>
+          <label className="reservation-script-field"><span>时段容量覆盖</span><textarea rows={2} placeholder="20:30=8" value={item.slotCapacities.map((slot) => `${slot.time}=${slot.capacity}`).join('\n')} onChange={(event) => updateDateOverride(index, { slotCapacities: parseSlotCapacityLines(event.target.value) })} /></label>
+          <label className="reservation-config-toggle"><span>状态</span><input type="checkbox" checked={item.enabled} onChange={(event) => updateDateOverride(index, { enabled: event.target.checked, totalCapacity: event.target.checked ? Math.max(1, item.totalCapacity) : 0 })} /><b>{item.enabled ? '接预约' : '闭店'}</b></label>
+          <button className="secondary-button reservation-config-remove" type="button" title="删除日期规则" onClick={() => onChange({ ...draft, capacity: { ...draft.capacity, dateOverrides: draft.capacity.dateOverrides.filter((_, itemIndex) => itemIndex !== index) } })}><X size={15} /></button>
+        </div>)}
+      </div>
     </section>
 
     <section className="reservation-config-section">
@@ -789,6 +843,18 @@ function configWriteDraft(config: ReservationConfig): ConfigDraft {
     sources: config.sources.map((item) => ({ ...item })),
     areaPreferences: config.areaPreferences.map((item) => ({ ...item })),
     occasions: config.occasions.map((item) => ({ ...item, serviceScript: [...item.serviceScript] })),
+    businessHours: { ...config.businessHours, closedWeekdays: [...config.businessHours.closedWeekdays] },
+    capacity: {
+      ...config.capacity,
+      dateOverrides: config.capacity.dateOverrides.map((item) => ({
+        ...item, slotCapacities: item.slotCapacities.map((slot) => ({ ...slot })),
+      })),
+    },
+    publicRules: {
+      ...config.publicRules,
+      acceptedContactMethods: [...config.publicRules.acceptedContactMethods],
+      createRateLimit: { ...config.publicRules.createRateLimit },
+    },
   }
 }
 
@@ -805,6 +871,18 @@ function normalizeConfigDraft(draft: ConfigDraft): ConfigDraft {
       name: item.name.trim(),
       serviceScript: item.serviceScript.map((step) => step.trim()).filter(Boolean),
     })),
+    businessHours: { ...draft.businessHours, timeZone: draft.businessHours.timeZone.trim(), closedWeekdays: [...draft.businessHours.closedWeekdays] },
+    capacity: {
+      ...draft.capacity,
+      dateOverrides: draft.capacity.dateOverrides.map((item) => ({
+        ...item, date: item.date.trim(), slotCapacities: item.slotCapacities.map((slot) => ({ ...slot, time: slot.time.trim() })),
+      })),
+    },
+    publicRules: {
+      ...draft.publicRules,
+      acceptedContactMethods: [...draft.publicRules.acceptedContactMethods],
+      createRateLimit: { ...draft.publicRules.createRateLimit },
+    },
   }
 }
 
@@ -813,6 +891,21 @@ function validateConfigDraft(draft: ConfigDraft, reason: string) {
   if (!Number.isInteger(draft.maximumPartySize) || draft.maximumPartySize < draft.minimumPartySize || draft.maximumPartySize > 300) return '最多人数必须是不小于最少人数且不超过300的整数'
   if (!Number.isInteger(draft.lateHoldMinutes) || draft.lateHoldMinutes < 0 || draft.lateHoldMinutes > 240) return '迟到保留时间必须是0至240分钟'
   if (!Number.isInteger(draft.waitlistResponseMinutes) || draft.waitlistResponseMinutes < 1 || draft.waitlistResponseMinutes > 120) return '候补响应时间必须是1至120分钟'
+  if (!draft.businessHours.timeZone.trim()) return '门店时区不能为空'
+  if (!/^\d{2}:\d{2}$/.test(draft.businessHours.openingTime) || !/^\d{2}:\d{2}$/.test(draft.businessHours.closingTime) || draft.businessHours.openingTime === draft.businessHours.closingTime) return '请填写有效且不同的营业开始、结束时间'
+  if (!Number.isInteger(draft.businessHours.slotMinutes) || draft.businessHours.slotMinutes < 5 || draft.businessHours.slotMinutes > 240) return '预约时段必须是5至240分钟'
+  if (!Number.isInteger(draft.capacity.defaultDailyCapacity) || draft.capacity.defaultDailyCapacity < 1 || draft.capacity.defaultDailyCapacity > 10_000) return '每日预约容量必须是1至10000'
+  if (!Number.isInteger(draft.capacity.defaultSlotCapacity) || draft.capacity.defaultSlotCapacity < 1 || draft.capacity.defaultSlotCapacity > 1_000) return '每时段预约容量必须是1至1000'
+  if (new Set(draft.capacity.dateOverrides.map((item) => item.date)).size !== draft.capacity.dateOverrides.length) return '指定日期不能重复'
+  if (draft.capacity.dateOverrides.some((item) => !/^\d{4}-\d{2}-\d{2}$/.test(item.date))) return '请填写完整的指定日期'
+  if (draft.capacity.dateOverrides.some((item) => !Number.isInteger(item.totalCapacity) || item.totalCapacity < (item.enabled ? 1 : 0) || item.totalCapacity > 10_000)) return '指定日期容量不合法'
+  if (draft.capacity.dateOverrides.some((item) => item.slotCapacities.some((slot) => !/^\d{2}:\d{2}$/.test(slot.time) || !Number.isInteger(slot.capacity) || slot.capacity < 0 || slot.capacity > 1_000))) return '时段容量覆盖格式或数值不合法'
+  if (!Number.isInteger(draft.publicRules.minimumLeadMinutes) || draft.publicRules.minimumLeadMinutes < 0 || draft.publicRules.minimumLeadMinutes > 10_080) return '预约提前时间不合法'
+  if (!Number.isInteger(draft.publicRules.maximumAdvanceDays) || draft.publicRules.maximumAdvanceDays < 1 || draft.publicRules.maximumAdvanceDays > 730) return '最远预约天数不合法'
+  if (!Number.isInteger(draft.publicRules.duplicateWindowMinutes) || draft.publicRules.duplicateWindowMinutes < 0 || draft.publicRules.duplicateWindowMinutes > 1_440) return '防重复时间窗口不合法'
+  if (draft.publicRules.acceptedContactMethods.length < 1) return '手机号和微信号至少启用一种'
+  if (!Number.isInteger(draft.publicRules.createRateLimit.limit) || draft.publicRules.createRateLimit.limit < 1 || draft.publicRules.createRateLimit.limit > 100) return '公开预约限流次数不合法'
+  if (!Number.isInteger(draft.publicRules.createRateLimit.windowMinutes) || draft.publicRules.createRateLimit.windowMinutes < 1 || draft.publicRules.createRateLimit.windowMinutes > 1_440) return '公开预约限流窗口不合法'
   if (draft.sources.length < 1 || draft.sources.length > 50) return '预约来源数量必须为1至50个'
   if (!draft.sources.some((item) => item.enabled)) return '至少需要启用一个预约来源'
   const sourceError = validateNamedCodes(draft.sources, '预约来源')
@@ -826,6 +919,13 @@ function validateConfigDraft(draft: ConfigDraft, reason: string) {
   if (draft.occasions.some((item) => item.serviceScript.some((step) => step.length > 160))) return '单条服务脚本不能超过160个字符'
   if (reason.trim().length < 2) return '请填写至少2个字符的保存原因'
   return ''
+}
+
+function parseSlotCapacityLines(value: string) {
+  return value.split('\n').map((line) => line.trim()).filter(Boolean).map((line) => {
+    const [time = '', capacity = ''] = line.split('=').map((item) => item.trim())
+    return { time, capacity: Number(capacity) }
+  })
 }
 
 function validateNamedCodes(items: Array<{ code: string; name: string }>, label: string) {
@@ -848,7 +948,8 @@ function looksLikePlaintextMobile(value: string) {
 }
 
 function displayCustomerReference(value: string) {
-  return value.startsWith('staff-ref:') ? value.slice('staff-ref:'.length) : value
+  const displayed = value.startsWith('staff-ref:') ? value.slice('staff-ref:'.length) : value
+  return displayed.replace(/phone:\+86(\d{3})\d{4}(\d{4})/, 'phone:+86$1****$2')
 }
 
 function inDateRange(value: string, range: DateRange) {

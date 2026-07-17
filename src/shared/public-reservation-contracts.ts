@@ -14,6 +14,28 @@ export interface PublicReservationConfigView {
   maximumPartySize: number
   areaPreferences: Array<{ code: string; name: string }>
   occasions: Array<{ code: ReservationOccasionCode; name: string }>
+  businessHours: {
+    timeZone: string
+    openingTime: string
+    closingTime: string
+    slotMinutes: number
+    closedWeekdays: number[]
+  }
+  capacity: {
+    defaultDailyCapacity: number
+    defaultSlotCapacity: number
+    dateOverrides: Array<{
+      date: string
+      enabled: boolean
+      totalCapacity: number
+      slotCapacities: Array<{ time: string; capacity: number }>
+    }>
+  }
+  publicRules: {
+    minimumLeadMinutes: number
+    maximumAdvanceDays: number
+    acceptedContactMethods: Array<'phone' | 'wechat'>
+  }
 }
 
 export interface PublicReservationView {
@@ -28,6 +50,8 @@ export interface PublicReservationView {
   tableCode: string | null
   requestedAt: string
   updatedAt: string
+  phone: string | null
+  wechatId: string | null
 }
 
 export interface PublicReservationListResponse {
@@ -37,10 +61,29 @@ export interface PublicReservationListResponse {
 
 export interface PublicReservationCreateInput {
   customerName: string
+  phone?: string
+  wechatId?: string
   partySize: number
   areaPreferenceCode?: string
   occasionCode?: ReservationOccasionCode
   occasionNote?: string
   scheduledAt: string
+  idempotencyKey: string
+}
+
+export interface PublicReservationUpdateInput {
+  customerName: string
+  phone?: string
+  wechatId?: string
+  partySize: number
+  areaPreferenceCode?: string
+  occasionCode?: ReservationOccasionCode | null
+  occasionNote?: string
+  scheduledAt: string
+  idempotencyKey: string
+}
+
+export interface PublicReservationCancelInput {
+  reason?: string
   idempotencyKey: string
 }

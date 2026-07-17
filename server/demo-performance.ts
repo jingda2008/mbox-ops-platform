@@ -47,15 +47,6 @@ function upsertById<T extends { id: string }>(items: T[], next: T) {
   else items[index] = next
 }
 
-function shanghaiBusinessDate(date: Date) {
-  return new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(date)
-}
-
 export function loadDemoPerformance(state: RuntimeState, now = new Date()) {
   const minute = 60_000
   const currentStartsAt = new Date(now.getTime() - 10 * minute)
@@ -64,7 +55,7 @@ export function loadDemoPerformance(state: RuntimeState, now = new Date()) {
   const nextEndsAt = new Date(now.getTime() + 80 * minute)
   const session: PerformanceSession = {
     id: DEMO_PERFORMANCE_SESSION_ID,
-    businessDate: shanghaiBusinessDate(now),
+    businessDate: state.store.businessDate,
     title: 'M-BOX 今晚现场（功能演示）',
     status: 'live',
     startsAt: new Date(now.getTime() - 30 * minute).toISOString(),
@@ -95,7 +86,7 @@ export function loadDemoPerformance(state: RuntimeState, now = new Date()) {
   DEMO_SONGS.forEach((song) => upsertById(state.songState.songs, structuredClone(song)))
   DEMO_REPERTOIRE.forEach((entry) => upsertById(state.songState.repertoire, structuredClone(entry)))
   upsertById(state.songState.performanceSessions, session)
-  state.songState.businessDate = session.businessDate
+  state.songState.businessDate = state.store.businessDate
   state.auditEntries.unshift({
     id: randomUUID(),
     actorId: 'system-demo-loader',

@@ -7,6 +7,7 @@ describe('demo performance fixture', () => {
   it('creates a current singer, a next singer, profiles, photos, and repertoire', () => {
     const now = new Date('2026-07-16T23:15:00+08:00')
     const state = createSeedState(now)
+    state.store.businessDate = '2026-07-15'
     const revision = state.revision
 
     const performance = loadDemoPerformance(state, now)
@@ -32,6 +33,8 @@ describe('demo performance fixture', () => {
     const stage = resolveGuestStage(schedule, now.getTime())
 
     expect(performance.id).toBe(DEMO_PERFORMANCE_SESSION_ID)
+    expect(performance.businessDate).toBe(state.store.businessDate)
+    expect(state.songState.businessDate).toBe(state.store.businessDate)
     expect(stage).toMatchObject({ mode: 'live', current: { singerName: '林小满' }, next: { singerName: '周奕辰' } })
     expect(stage.countdownMs).toBe(35 * 60_000)
     expect(schedule[0]?.profile).toMatchObject({ photoUrl: '/singers/lin-xiaoman.jpg' })

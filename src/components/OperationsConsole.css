@@ -12,7 +12,7 @@
 .legacy-handover-toolbar {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(220px, .8fr) minmax(280px, 1fr) auto;
+  grid-template-columns: minmax(150px, .7fr) minmax(180px, 1fr) auto;
   align-items: center;
   gap: 10px;
   margin: 8px 16px 0;
@@ -22,6 +22,7 @@
   background: #fff7f7;
 }
 .legacy-handover-toolbar input { width: 100%; min-width: 0; height: 36px; border: 1px solid var(--line-strong); background: #fff; color: var(--ink); padding: 0 8px; }
+.legacy-handover-toolbar button { min-width: 146px; white-space: nowrap; }
 .stale-table-label { color: #a52f36; font-size: 12px; }
 .handover-permission-note { color: #a52f36; font-size: 11px; font-weight: 750; }
 

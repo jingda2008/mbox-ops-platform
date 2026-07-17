@@ -716,6 +716,7 @@ describe('真实营业夜间全链路仿真', () => {
 
     const state = await repository.read()
     expect(state.store.businessDate).toBe(followingDate)
+    expect(state.songState.businessDate).toBe(followingDate)
     expect(state.shiftAssignments.filter((shift) => shift.businessDate === businessDate).every((shift) => shift.status === 'completed')).toBe(true)
     expect(state.shiftAssignments.filter((shift) => shift.businessDate === followingDate && shift.status === 'active')).toHaveLength(12)
     expect(state.employees.every((employee) => !employee.online && !employee.paused)).toBe(true)

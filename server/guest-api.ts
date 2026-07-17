@@ -167,6 +167,7 @@ function sessionView(
   tableSession: SongTableSession,
   sessionClaims: Omit<GuestSessionClaims, 'version' | 'tokenType'>,
   tableToken: string,
+  nowMs: number,
 ): GuestSessionResponse {
   const primary = state.employees.find((employee) => employee.id === table.primaryEmployeeId)
   const orders = state.orderDomain.orders.filter((order) => order.tableSessionId === tableSession.id)
@@ -175,11 +176,13 @@ function sessionView(
     .filter((order) => order.status !== 'draft')
     .reduce((sum, order) => sum + order.amounts.payableAmount, 0)
   const todaysPerformances = state.songState.performanceSessions
-    .filter((performance) => performance.businessDate === state.songState.businessDate)
+    .filter((performance) => performance.businessDate === state.store.businessDate)
     .filter((performance) => performance.status === 'scheduled' || performance.status === 'live')
   const songOffers = todaysPerformances
     .flatMap((performance) => performance.appearances
-      .filter((appearance) => appearance.acceptingRequests)
+      .filter((appearance) => appearance.acceptingRequests
+        && Date.parse(appearance.requestOpensAt) <= nowMs
+        && nowMs <= Date.parse(appearance.requestClosesAt))
       .flatMap((appearance) => state.songState.repertoire
         .filter((entry) => entry.enabled && entry.singerId === appearance.singerId)
         .flatMap((entry) => {
@@ -302,7 +305,7 @@ function sessionView(
       tokenVersion: sessionClaims.tokenVersion,
     },
     tableToken,
-    serverNow: new Date().toISOString(),
+    serverNow: new Date(nowMs).toISOString(),
   }
 }
 
@@ -352,7 +355,7 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
   app.get<{ Querystring: { token?: string; table?: string } }>('/api/guest/session', async (request) => {
     const state = await repository.read()
     const access = exchangeAccessFromRequest(state, request.query.token, request.query.table, options)
-    return sessionView(state, access.table, access.tableSession, access.sessionClaims, access.token)
+    return sessionView(state, access.table, access.tableSession, access.sessionClaims, access.token, options.now?.() ?? Date.now())
   })
 
   app.post('/api/guest/tasks', async (request, reply) => {

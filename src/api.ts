@@ -62,7 +62,7 @@ import type {
 } from './shared/benefit-redemption-contracts'
 import type { PilotLoginResponse } from './shared/auth-contracts'
 import type { ConfigVersionRecord } from './shared/config-versioning-contracts'
-import type { Singer, SingerProfileWriteInput, SongRequest } from './shared/song-contracts'
+import type { PerformanceSession, PerformanceSessionWriteInput, RepertoireWriteInput, Singer, SingerProfileWriteInput, SingerRepertoireEntry, SingerWriteInput, SongCatalogItem, SongRequest } from './shared/song-contracts'
 import type {
   GuestSessionResponse,
   GuestCartOrderInput,
@@ -450,6 +450,31 @@ export function submitStaffSongRequest(input: SubmitSongRequestInput) {
 
 export function updateSingerProfile(singerId: string, input: SingerProfileWriteInput) {
   return request<Singer>(`/api/songs/singers/${encodeURIComponent(singerId)}/profile`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
+}
+
+export function createSinger(input: SingerWriteInput) {
+  return request<Singer>('/api/songs/singers', { method: 'POST', body: JSON.stringify(input) })
+}
+
+export function createSingerRepertoire(singerId: string, input: RepertoireWriteInput) {
+  return request<{ song: SongCatalogItem; offer: SingerRepertoireEntry }>(`/api/songs/singers/${encodeURIComponent(singerId)}/repertoire`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function updateSingerRepertoire(entryId: string, input: RepertoireWriteInput) {
+  return request<{ song: SongCatalogItem; offer: SingerRepertoireEntry }>(`/api/songs/repertoire/${encodeURIComponent(entryId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
+}
+
+export function updatePerformanceSession(sessionId: string, input: PerformanceSessionWriteInput) {
+  return request<PerformanceSession>(`/api/songs/performances/${encodeURIComponent(sessionId)}`, {
     method: 'PUT',
     body: JSON.stringify(input),
   })

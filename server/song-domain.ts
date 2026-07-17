@@ -178,6 +178,12 @@ function assertConfigurationIntegrity(state: SongState) {
   state.managerActorIds.forEach((actorId) => assertNonEmpty(actorId, '经理操作人ID'))
 }
 
+export function validateSongConfiguration(state: SongState) {
+  assertBusinessDate(state.businessDate)
+  assertUniqueConfiguration(state)
+  assertConfigurationIntegrity(state)
+}
+
 function assertAppearanceWindow(appearance: SingerAppearance, occurredAt: string) {
   const occurred = Date.parse(occurredAt)
   const opens = Date.parse(appearance.requestOpensAt)
@@ -274,8 +280,7 @@ export function createSongState(
     auditEvents: [],
     idempotencyRecords: [],
   }
-  assertUniqueConfiguration(state)
-  assertConfigurationIntegrity(state)
+  validateSongConfiguration(state)
   return state
 }
 

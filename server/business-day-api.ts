@@ -300,6 +300,7 @@ export function registerBusinessDayRoutes(app: FastifyInstance, repository: Runt
         employee.paused = false
       }
       working.store.businessDate = input.nextBusinessDate
+      working.songState.businessDate = input.nextBusinessDate
       working.auditEntries.push({
         id: `audit_${randomUUID()}`, actorId: actor.actorId, action: 'business_day.shift_continuity_prepared.v1',
         objectType: 'businessDay', objectId: input.nextBusinessDate, occurredAt,

@@ -38,6 +38,21 @@ export interface SingerProfileWriteInput {
   active: boolean
 }
 
+export interface SingerWriteInput extends SingerProfileWriteInput {
+  actorId?: string
+}
+
+export interface RepertoireWriteInput {
+  title: string
+  artist: string
+  durationSeconds: number
+  priceAmount: number
+  currency: string
+  enabled: boolean
+}
+
+export type PerformanceSessionWriteInput = Omit<PerformanceSession, 'id'>
+
 export interface SongCatalogItem {
   id: string
   title: string

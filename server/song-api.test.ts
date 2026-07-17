@@ -68,6 +68,63 @@ async function confirmRequest(app: FastifyInstance, requestId: string, idempoten
 }
 
 describe('song API employee authorization', () => {
+  it('lets a manager configure singers, repertoire and a cross-midnight schedule', async () => {
+    const { app, repository } = await fixture()
+    const businessDate = (await repository.read()).store.businessDate
+    const followingDate = new Date(`${businessDate}T00:00:00.000Z`)
+    followingDate.setUTCDate(followingDate.getUTCDate() + 1)
+    const nextDate = followingDate.toISOString().slice(0, 10)
+    const singerResponse = await app.inject({
+      method: 'POST', url: '/api/songs/singers', headers: { 'x-test-role': 'manager' },
+      payload: { displayName: '测试驻唱', photoUrl: '', headline: '现场互动', bio: '用于排班配置测试', styleTags: ['流行'], active: true },
+    })
+    expect(singerResponse.statusCode, singerResponse.body).toBe(201)
+    const singerId = singerResponse.json().id as string
+
+    const repertoireResponse = await app.inject({
+      method: 'POST', url: `/api/songs/singers/${singerId}/repertoire`, headers: { 'x-test-role': 'manager' },
+      payload: { title: '测试歌曲', artist: '测试原唱', durationSeconds: 240, priceAmount: 9800, currency: 'CNY', enabled: true },
+    })
+    expect(repertoireResponse.statusCode, repertoireResponse.body).toBe(201)
+
+    const performanceResponse = await app.inject({
+      method: 'PUT', url: '/api/songs/performances/performance-config-test', headers: { 'x-test-role': 'manager' },
+      payload: {
+        businessDate, title: '跨午夜演出测试', status: 'scheduled',
+        startsAt: `${businessDate}T20:00:00+08:00`, endsAt: `${nextDate}T02:00:00+08:00`,
+        appearances: [{
+          id: 'appearance-config-test', singerId,
+          startsAt: `${businessDate}T20:30:00+08:00`, endsAt: `${businessDate}T21:15:00+08:00`,
+          requestOpensAt: `${businessDate}T20:15:00+08:00`, requestClosesAt: `${businessDate}T21:10:00+08:00`,
+          acceptingRequests: true,
+        }],
+      },
+    })
+    expect(performanceResponse.statusCode, performanceResponse.body).toBe(200)
+    const state = await repository.read()
+    expect(state.songState.repertoire.some((item) => item.singerId === singerId && item.priceAmount === 9800)).toBe(true)
+    expect(state.songState.performanceSessions.find((item) => item.id === 'performance-config-test')).toMatchObject({ businessDate, title: '跨午夜演出测试' })
+    await app.close()
+    await repository.close()
+  })
+
+  it('keeps performance configuration behind song management permission', async () => {
+    const { app, repository } = await fixture()
+    const denied = await app.inject({
+      method: 'PUT', url: '/api/songs/performances/performance-denied', headers: { 'x-test-role': 'server' },
+      payload: {
+        businessDate: (await repository.read()).store.businessDate,
+        title: '越权排班', status: 'scheduled',
+        startsAt: '2026-07-17T20:00:00+08:00', endsAt: '2026-07-17T23:00:00+08:00',
+        appearances: [{ id: 'appearance-denied', singerId: 'singer-tianti', startsAt: '2026-07-17T20:30:00+08:00', endsAt: '2026-07-17T21:15:00+08:00', requestOpensAt: '2026-07-17T20:15:00+08:00', requestClosesAt: '2026-07-17T21:10:00+08:00', acceptingRequests: true }],
+      },
+    })
+    expect(denied.statusCode).toBe(403)
+    expect(denied.json()).toEqual({ code: 'AUTHORIZATION_DENIED', operation: 'song.manage' })
+    await app.close()
+    await repository.close()
+  })
+
   it('lets a manager maintain the singer profile shown to guests', async () => {
     const { app, repository } = await fixture()
     const singer = (await repository.read()).songState.singers[0]!

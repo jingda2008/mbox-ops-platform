@@ -138,6 +138,25 @@ describe('guest table API', () => {
     await closeFixture(app, repository)
   })
 
+  it('keeps the stage schedule visible but only offers songs inside the request window', async () => {
+    const { app, repository, setNow } = await fixture()
+    const state = await repository.read()
+    const performance = state.songState.performanceSessions.find((item) => item.businessDate === state.store.businessDate)!
+    const appearance = performance.appearances[0]!
+    const beforeOpenTime = Date.parse(appearance.requestOpensAt) - 60_000
+    setNow(beforeOpenTime)
+
+    const beforeOpen = (await app.inject({ method: 'GET', url: '/api/guest/session?table=L01' })).json() as GuestSessionResponse
+    expect(beforeOpen.stageSchedule.map((item) => item.appearanceId)).toContain(appearance.id)
+    expect(beforeOpen.songOffers.map((item) => item.appearanceId)).not.toContain(appearance.id)
+    expect(beforeOpen.serverNow).toBe(new Date(beforeOpenTime).toISOString())
+
+    setNow(Date.parse(appearance.requestOpensAt))
+    const opened = (await app.inject({ method: 'GET', url: '/api/guest/session?table=L01' })).json() as GuestSessionResponse
+    expect(opened.songOffers.map((item) => item.appearanceId)).toContain(appearance.id)
+    await closeFixture(app, repository)
+  })
+
   it('exchanges a static QR for a short-lived token bound to the current open table visit', async () => {
     const { app, repository, now } = await fixture()
     const qrToken = staticQr(now())

@@ -61,10 +61,15 @@ export function GuestPortal() {
   const [customSongBusy, setCustomSongBusy] = useState(false)
   const [quickPendingKey, setQuickPendingKey] = useState('')
   const [stageClock, setStageClock] = useState(() => Date.now())
-  const [singerProfileId, setSingerProfileId] = useState('')
+  const [singerProfileAppearanceId, setSingerProfileAppearanceId] = useState('')
   const [terminalSongSeenAt, setTerminalSongSeenAt] = useState<Record<string, number>>({})
   const latestTableToken = useRef(initialToken)
   const refreshSequence = useRef(0)
+  const fastPollUntil = useRef(0)
+
+  function accelerateRefresh() {
+    fastPollUntil.current = Date.now() + 45_000
+  }
 
   const refresh = useCallback(async () => {
     const sequence = ++refreshSequence.current
@@ -90,13 +95,23 @@ export function GuestPortal() {
     let timer: number | undefined
     const poll = async () => {
       await refresh()
-      if (!stopped) timer = window.setTimeout(() => void poll(), 5000)
+      if (!stopped) {
+        const delay = document.hidden ? 45_000 : Date.now() < fastPollUntil.current ? 3_000 : 15_000
+        timer = window.setTimeout(() => void poll(), delay)
+      }
     }
+    const handleVisibility = () => {
+      if (document.hidden) return
+      accelerateRefresh()
+      void refresh()
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
     void poll()
     return () => {
       stopped = true
       refreshSequence.current += 1
       if (timer !== undefined) window.clearTimeout(timer)
+      document.removeEventListener('visibilitychange', handleVisibility)
     }
   }, [refresh])
 
@@ -125,13 +140,13 @@ export function GuestPortal() {
   const customRequestType = data?.serviceTypes.find((serviceType) => serviceType.code === 'CUSTOM_REQUEST')
   const quickServiceTypes = data?.serviceTypes.filter((serviceType) => serviceType.code !== 'CUSTOM_REQUEST') ?? []
   const serviceTypeByCode = useMemo(() => new Map(data?.serviceTypes.map((serviceType) => [serviceType.code, serviceType]) ?? []), [data?.serviceTypes])
-  const stage = useMemo(() => {
-    const serverOffset = data ? Date.parse(data.serverNow) - Date.now() : 0
-    return resolveGuestStage(data?.stageSchedule ?? [], stageClock + serverOffset)
-  }, [data, stageClock])
+  const serverNow = data?.serverNow
+  const serverOffset = useMemo(() => serverNow ? Date.parse(serverNow) - Date.now() : 0, [serverNow])
+  const serverClock = stageClock + serverOffset
+  const stage = useMemo(() => resolveGuestStage(data?.stageSchedule ?? [], serverClock), [data?.stageSchedule, serverClock])
   const featuredAppearance = stage.current ?? stage.next
-  const profileAppearance = data?.stageSchedule.find((appearance) => appearance.singerId === singerProfileId) ?? null
-  const profileSongOffers = data?.songOffers.filter((offer) => offer.singerId === singerProfileId).slice(0, 6) ?? []
+  const profileAppearance = data?.stageSchedule.find((appearance) => appearance.appearanceId === singerProfileAppearanceId) ?? null
+  const profileSongOffers = data?.songOffers.filter((offer) => offer.appearanceId === singerProfileAppearanceId).slice(0, 6) ?? []
   const songChoices = useMemo(() => {
     const seen = new Set<string>()
     return (data?.songOffers ?? []).filter((offer) => {
@@ -142,12 +157,16 @@ export function GuestPortal() {
     })
   }, [data?.songOffers])
   const songSingers = useMemo(() => {
-    const singerIds = new Set(songChoices.map((offer) => offer.singerId))
-    return (data?.stageSchedule ?? []).filter((appearance, index, items) => singerIds.has(appearance.singerId) && items.findIndex((item) => item.singerId === appearance.singerId) === index)
-  }, [data?.stageSchedule, songChoices])
+    return (data?.stageSchedule ?? []).filter((appearance, index, items) => items.findIndex((item) => item.singerId === appearance.singerId) === index)
+  }, [data?.stageSchedule])
+  const repertoireSingers = useMemo(() => {
+    const availableSingerIds = new Set(songChoices.map((offer) => offer.singerId))
+    return songSingers.filter((singer) => availableSingerIds.has(singer.singerId))
+  }, [songChoices, songSingers])
   const visibleSongChoices = (songSingerId ? songChoices.filter((offer) => offer.singerId === songSingerId) : songChoices).slice(0, 8)
 
   async function requestService(serviceTypeId: string, requestNote = '', options: { showReply?: boolean } = {}) {
+    accelerateRefresh()
     setPendingType(serviceTypeId)
     setError(null)
     try {
@@ -203,6 +222,7 @@ export function GuestPortal() {
 
   async function chooseSong(offer: GuestSessionResponse['songOffers'][number]) {
     if (!data || songBusyId) return
+    accelerateRefresh()
     setSongBusyId(offer.id)
     setError(null)
     try {
@@ -226,10 +246,17 @@ export function GuestPortal() {
 
   async function openSongService() {
     if (songChoices.length > 0) {
-      const defaultSingerId = featuredAppearance?.singerId ?? ''
+      const featuredSingerId = featuredAppearance?.singerId ?? ''
+      const defaultSingerId = songChoices.some((offer) => offer.singerId === featuredSingerId) ? featuredSingerId : songChoices[0]?.singerId ?? ''
       setSongSingerId(defaultSingerId)
       setCustomSongSingerId(defaultSingerId)
       setSongPickerMode('repertoire')
+      setSongPickerOpen(true)
+      return
+    }
+    if (songSingers.length > 0) {
+      setCustomSongSingerId(featuredAppearance?.singerId ?? songSingers[0]?.singerId ?? '')
+      setSongPickerMode('custom')
       setSongPickerOpen(true)
       return
     }
@@ -276,6 +303,7 @@ export function GuestPortal() {
   }
 
   async function giveFeedback(task: GuestTaskView, action: 'confirm' | 'unresolved') {
+    accelerateRefresh()
     try {
       const updatedTask = await submitGuestTaskFeedback(task.id, {
         tableToken: latestTableToken.current,
@@ -294,6 +322,7 @@ export function GuestPortal() {
 
   async function payOrder(orderId: string, idempotencyKey = `guest-pay-${crypto.randomUUID()}`) {
     if (!data || payingOrderId) return
+    accelerateRefresh()
     setPayingOrderId(orderId)
     setError(null)
     try {
@@ -368,26 +397,28 @@ export function GuestPortal() {
           <h1>{data?.table.displayName ?? tableCode}</h1>
           <p><MapPin size={13} />服务专员 · {data?.primaryServiceName ?? '正在安排'}</p>
         </div>
-        <button className="guest-stage-status" disabled={!featuredAppearance} onClick={() => featuredAppearance && setSingerProfileId(featuredAppearance.singerId)}>
-          <span className="guest-stage-heading">
-            {featuredAppearance ? <Music2 size={13} /> : <ShieldCheck size={13} />}
-            <strong>{featuredAppearance?.singerName ?? 'M-BOX'}</strong>
-          </span>
-          <span className="guest-stage-current">{stage.mode === 'live'
-            ? <><b>演出中</b><small>剩余 {formatGuestCompactCountdown(stage.countdownMs)}</small></>
-            : stage.mode === 'upcoming' ? <><b>即将登场</b><small>{formatGuestCompactCountdown(stage.countdownMs)} 后</small></> : stage.mode === 'finished' ? <b>今晚演出结束</b> : <b>服务在线</b>}</span>
-          {stage.mode === 'live' && stage.next && <em className="guest-stage-next"><span>下一位 <b>{stage.next.singerName}</b></span><small>{formatGuestTime(stage.next.startsAt, data?.store.timezone)} 登场 · {formatGuestCompactCountdown(Math.max(0, Date.parse(stage.next.startsAt) - stageClock))}后</small></em>}
-          {featuredAppearance && <ChevronRight className="guest-stage-chevron" size={15} aria-hidden="true" />}
-        </button>
+        <div className="guest-stage-status">
+          <button className="guest-stage-primary" disabled={!featuredAppearance} onClick={() => featuredAppearance && setSingerProfileAppearanceId(featuredAppearance.appearanceId)}>
+            <span className="guest-stage-heading">
+              {featuredAppearance ? <Music2 size={13} /> : <ShieldCheck size={13} />}
+              <strong>{featuredAppearance?.singerName ?? 'M-BOX'}</strong>
+            </span>
+            <span className="guest-stage-current">{stage.mode === 'live'
+              ? <><b>演出中</b><small>剩余 {formatGuestCompactCountdown(stage.countdownMs)}</small></>
+              : stage.mode === 'upcoming' ? <><b>即将登场</b><small>{formatGuestCompactCountdown(stage.countdownMs)} 后</small></> : stage.mode === 'finished' ? <b>今晚演出结束</b> : <b>服务在线</b>}</span>
+            {featuredAppearance && <ChevronRight className="guest-stage-chevron" size={15} aria-hidden="true" />}
+          </button>
+          {stage.mode === 'live' && stage.next && <button className="guest-stage-next" onClick={() => setSingerProfileAppearanceId(stage.next!.appearanceId)}><span>下一位 <b>{stage.next.singerName}</b></span><small>{formatGuestTime(stage.next.startsAt, data?.store.timezone)} 登场 · {formatGuestCompactCountdown(Math.max(0, Date.parse(stage.next.startsAt) - serverClock))}后</small><ChevronRight size={12} aria-hidden="true" /></button>}
+        </div>
       </section>
 
-      {profileAppearance && <div className="guest-singer-backdrop" role="presentation" onClick={() => setSingerProfileId('')}>
+      {profileAppearance && <div className="guest-singer-backdrop" role="presentation" onClick={() => setSingerProfileAppearanceId('')}>
         <section className="guest-singer-sheet" role="dialog" aria-modal="true" aria-label={`${profileAppearance.singerName}歌手资料`} onClick={(event) => event.stopPropagation()}>
           <header>
             <div className="guest-singer-photo">{profileAppearance.profile.photoUrl
               ? <img src={profileAppearance.profile.photoUrl} alt={profileAppearance.singerName} />
               : <div><Mic2 size={30} /><span>M-BOX LIVE</span></div>}</div>
-            <button className="icon-button" title="关闭歌手资料" onClick={() => setSingerProfileId('')}><X size={19} /></button>
+            <button className="icon-button" title="关闭歌手资料" onClick={() => setSingerProfileAppearanceId('')}><X size={19} /></button>
           </header>
           <div className="guest-singer-content">
             <small>ARTIST PROFILE</small>
@@ -398,7 +429,7 @@ export function GuestPortal() {
             <div className="guest-singer-schedule"><Clock3 size={17} /><div><span>今晚演出</span><strong>{formatGuestTimeRange(profileAppearance.startsAt, profileAppearance.endsAt, data?.store.timezone)}</strong></div></div>
             <div className="guest-singer-songs">
               <header><span>可点歌曲</span><b>{profileSongOffers.length} 首展示</b></header>
-              {profileSongOffers.length > 0 ? profileSongOffers.map((offer) => <button key={offer.id} onClick={() => { setSingerProfileId(''); setSongSingerId(profileAppearance.singerId); setCustomSongSingerId(profileAppearance.singerId); setSongPickerMode('repertoire'); setSongPickerOpen(true) }}><span>{offer.songTitle}<small>{offer.songArtist}</small></span><b>¥{(offer.priceAmount / 100).toFixed(0)}</b><ChevronRight size={15} /></button>) : <p>今晚的歌单还在确认，想听什么可以让我们替您问问。</p>}
+              {profileSongOffers.length > 0 ? profileSongOffers.map((offer) => <button key={offer.id} onClick={() => { setSingerProfileAppearanceId(''); setSongSingerId(profileAppearance.singerId); setCustomSongSingerId(profileAppearance.singerId); setSongPickerMode('repertoire'); setSongPickerOpen(true) }}><span>{offer.songTitle}<small>{offer.songArtist}</small></span><b>¥{(offer.priceAmount / 100).toFixed(0)}</b><ChevronRight size={15} /></button>) : <p>今晚的歌单还在确认，想听什么可以让我们替您问问。</p>}
             </div>
           </div>
         </section>
@@ -447,7 +478,7 @@ export function GuestPortal() {
             <button role="tab" aria-selected={songPickerMode === 'custom'} className={songPickerMode === 'custom' ? 'is-active' : ''} onClick={() => setSongPickerMode('custom')}>歌单外点歌</button>
           </div>
           {songPickerMode === 'repertoire' ? <>
-            {songSingers.length > 1 && <div className="guest-song-singer-filter"><button className={!songSingerId ? 'is-active' : ''} onClick={() => setSongSingerId('')}>全部</button>{songSingers.map((singer) => <button key={singer.singerId} className={songSingerId === singer.singerId ? 'is-active' : ''} onClick={() => { setSongSingerId(singer.singerId); setCustomSongSingerId(singer.singerId) }}>{singer.singerName}</button>)}</div>}
+            {repertoireSingers.length > 1 && <div className="guest-song-singer-filter"><button className={!songSingerId ? 'is-active' : ''} onClick={() => setSongSingerId('')}>全部</button>{repertoireSingers.map((singer) => <button key={singer.singerId} className={songSingerId === singer.singerId ? 'is-active' : ''} onClick={() => { setSongSingerId(singer.singerId); setCustomSongSingerId(singer.singerId) }}>{singer.singerName}</button>)}</div>}
             <div className="guest-song-list">{visibleSongChoices.map((offer) => <article key={offer.id}>
               <div><strong>{offer.songTitle}</strong><span>{offer.songArtist} · {offer.singerName}</span></div>
               <button disabled={Boolean(songBusyId)} onClick={() => void chooseSong(offer)}>{songBusyId === offer.id ? '正在递歌' : `¥${(offer.priceAmount / 100).toFixed(2)} 点歌`}</button>

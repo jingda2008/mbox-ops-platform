@@ -1,8 +1,8 @@
-import { Banknote, CheckCircle2, Clock3, Image, Mic2, Music2, Play, RotateCcw, Save, XCircle } from 'lucide-react'
+import { Banknote, CalendarDays, CheckCircle2, Clock3, Image, ListChecks, ListMusic, Mic2, Music2, Play, Plus, RotateCcw, Save, UserRound, XCircle } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { actOnSongRequest, reportSongOnsiteCollection, submitStaffSongRequest, updateSingerProfile } from '../api'
+import { actOnSongRequest, createSinger, createSingerRepertoire, reportSongOnsiteCollection, submitStaffSongRequest, updatePerformanceSession, updateSingerProfile, updateSingerRepertoire } from '../api'
 import type { BootstrapResponse } from '../shared/contracts'
-import type { Singer, SingerProfileWriteInput, SongRequest, SongRequestStatus } from '../shared/song-contracts'
+import type { PerformanceSession, PerformanceSessionStatus, RepertoireWriteInput, Singer, SingerProfileWriteInput, SingerRepertoireEntry, SongCatalogItem, SongRequest, SongRequestStatus } from '../shared/song-contracts'
 import './SongCenterView.css'
 
 interface SongCenterViewProps {
@@ -12,10 +12,12 @@ interface SongCenterViewProps {
 }
 
 export function SongCenterView({ data, onRefresh, onNotice }: SongCenterViewProps) {
-  const appearances = data.songState.performanceSessions.flatMap((session) => session.appearances.map((appearance) => ({ session, appearance })))
+  const canManage = data.viewer?.permissionIds.includes('song.manage') ?? false
+  const [workspaceMode, setWorkspaceMode] = useState<'operations' | 'library' | 'schedule'>('operations')
+  const todaysSessions = data.songState.performanceSessions.filter((session) => session.businessDate === data.store.businessDate)
+  const appearances = todaysSessions.flatMap((session) => session.appearances.map((appearance) => ({ session, appearance })))
   const [appearanceId, setAppearanceId] = useState(appearances.find((item) => item.appearance.acceptingRequests)?.appearance.id ?? appearances[0]?.appearance.id ?? '')
   const selected = appearances.find((item) => item.appearance.id === appearanceId)
-  const selectedSinger = data.songState.singers.find((item) => item.id === selected?.appearance.singerId)
   const offers = useMemo(() => data.songState.repertoire.filter((item) => item.singerId === selected?.appearance.singerId && item.enabled), [data.songState.repertoire, selected?.appearance.singerId])
   const [songId, setSongId] = useState(offers[0]?.songId ?? '')
   const [tableSessionId, setTableSessionId] = useState(data.songState.tableSessions.find((item) => item.status === 'open')?.id ?? '')
@@ -64,19 +66,24 @@ export function SongCenterView({ data, onRefresh, onNotice }: SongCenterViewProp
         <span className="count-chip">{openRequests.length}待处理</span>
       </div>
       <div className="song-metrics">
-        <SongMetric label="今日场次" value={data.songState.performanceSessions.length} />
+        <SongMetric label="今日场次" value={todaysSessions.length} />
         <SongMetric label="在册歌手" value={data.songState.singers.filter((item) => item.active).length} />
         <SongMetric label="可点曲目" value={data.songState.repertoire.filter((item) => item.enabled).length} />
         <SongMetric label="待退款" value={data.songState.requests.filter((item) => item.status === 'refund_required').length} warning />
       </div>
-      <div className="performance-strip">
-        {appearances.map(({ appearance }) => {
-          const singer = data.songState.singers.find((item) => item.id === appearance.singerId)
-          return <button key={appearance.id} className={appearance.id === appearanceId ? 'appearance-slot is-selected' : 'appearance-slot'} onClick={() => { setAppearanceId(appearance.id); setSongId(data.songState.repertoire.find((item) => item.singerId === appearance.singerId && item.enabled)?.songId ?? '') }}><Clock3 size={15} /><span><strong>{singer?.displayName}</strong><small>{timeRange(appearance.startsAt, appearance.endsAt)}</small></span><b>{appearance.acceptingRequests ? '接单中' : '暂停'}</b></button>
-        })}
-      </div>
-      {selectedSinger && <SingerProfileEditor key={selectedSinger.id} singer={selectedSinger} busy={busy} onSave={(input) => run(() => updateSingerProfile(selectedSinger.id, input), '歌手资料已保存，顾客端将自动更新')} />}
-      <div className="song-workspace">
+      {canManage && <nav className="song-view-tabs" aria-label="点歌中心功能">
+        <button className={workspaceMode === 'operations' ? 'is-active' : ''} onClick={() => setWorkspaceMode('operations')}><ListChecks size={15} />现场履约</button>
+        <button className={workspaceMode === 'library' ? 'is-active' : ''} onClick={() => setWorkspaceMode('library')}><UserRound size={15} />歌手曲库</button>
+        <button className={workspaceMode === 'schedule' ? 'is-active' : ''} onClick={() => setWorkspaceMode('schedule')}><CalendarDays size={15} />演出排班</button>
+      </nav>}
+      {workspaceMode === 'operations' && <>
+        <div className="performance-strip">
+          {appearances.length === 0 ? <div className="song-inline-empty">今天还没有演出排班</div> : appearances.map(({ appearance }) => {
+            const singer = data.songState.singers.find((item) => item.id === appearance.singerId)
+            return <button key={appearance.id} className={appearance.id === appearanceId ? 'appearance-slot is-selected' : 'appearance-slot'} onClick={() => { setAppearanceId(appearance.id); setSongId(data.songState.repertoire.find((item) => item.singerId === appearance.singerId && item.enabled)?.songId ?? '') }}><Clock3 size={15} /><span><strong>{singer?.displayName}</strong><small>{timeRange(appearance.startsAt, appearance.endsAt)}</small></span><b>{appearance.acceptingRequests ? '接单中' : '暂停'}</b></button>
+          })}
+        </div>
+        <div className="song-workspace">
         <form className="song-order-form" onSubmit={(event) => void submit(event)}>
           <div className="form-heading"><Music2 size={19} /><div><strong>员工辅助点歌</strong><span>绑定桌台、歌手排班和价格快照</span></div></div>
           <label><span>营业桌台</span><select value={tableSessionId} onChange={(event) => setTableSessionId(event.target.value)}>{data.songState.tableSessions.filter((item) => item.status === 'open').map((item) => <option key={item.id} value={item.id}>{item.tableCode}</option>)}</select></label>
@@ -91,9 +98,122 @@ export function SongCenterView({ data, onRefresh, onNotice }: SongCenterViewProp
           <div className="song-queue-heading"><Mic2 size={19} /><div><strong>点歌队列</strong><span>服务确认、现场收费、歌手接单和演唱状态实时联动</span></div></div>
           {data.songState.requests.length === 0 ? <div className="compact-empty">暂无点歌请求</div> : data.songState.requests.toReversed().map((request) => <SongRequestRow key={request.id} request={request} reference={references[request.id] ?? ''} setReference={(value) => setReferences({ ...references, [request.id]: value })} collectionChannel={collectionChannels[request.id] ?? 'physical_pos'} setCollectionChannel={(value) => setCollectionChannels({ ...collectionChannels, [request.id]: value })} busy={busy} run={run} />)}
         </div>
-      </div>
+        </div>
+      </>}
+      {canManage && workspaceMode === 'library' && <SingerLibraryManager key={data.revision} data={data} busy={busy} run={run} />}
+      {canManage && workspaceMode === 'schedule' && <PerformanceScheduleEditor key={`${data.revision}:${data.store.businessDate}`} data={data} session={todaysSessions[0] ?? null} busy={busy} run={run} />}
     </section>
   )
+}
+
+function SingerLibraryManager({ data, busy, run }: { data: BootstrapResponse; busy: boolean; run: (operation: () => Promise<unknown>, success: string) => Promise<void> }) {
+  const [singerId, setSingerId] = useState(data.songState.singers.find((item) => item.active)?.id ?? data.songState.singers[0]?.id ?? '')
+  const [newSingerName, setNewSingerName] = useState('')
+  const singer = data.songState.singers.find((item) => item.id === singerId) ?? data.songState.singers[0]
+  const repertoire = data.songState.repertoire.filter((item) => item.singerId === singer?.id)
+
+  return <div className="song-config-page">
+    <div className="song-config-toolbar">
+      <label><span>管理歌手</span><select value={singer?.id ?? ''} onChange={(event) => setSingerId(event.target.value)}>{data.songState.singers.map((item) => <option key={item.id} value={item.id}>{item.displayName}{item.active ? '' : '（停用）'}</option>)}</select></label>
+      <form onSubmit={(event) => { event.preventDefault(); if (!newSingerName.trim()) return; void run(() => createSinger({ displayName: newSingerName.trim(), photoUrl: '', headline: '', bio: '', styleTags: [], active: true }), '歌手已新增，请继续完善资料和歌单') }}>
+        <input value={newSingerName} maxLength={80} placeholder="新歌手名称" onChange={(event) => setNewSingerName(event.target.value)} />
+        <button className="secondary-button" disabled={busy || !newSingerName.trim()}><Plus size={15} />新增歌手</button>
+      </form>
+    </div>
+    {singer ? <>
+      <SingerProfileEditor singer={singer} busy={busy} onSave={(input) => run(() => updateSingerProfile(singer.id, input), '歌手资料已保存，顾客端将自动更新')} />
+      <RepertoireManager data={data} singer={singer} repertoire={repertoire} busy={busy} run={run} />
+    </> : <div className="compact-empty">先新增一位歌手，再维护资料和歌单。</div>}
+  </div>
+}
+
+function RepertoireManager({ data, singer, repertoire, busy, run }: { data: BootstrapResponse; singer: Singer; repertoire: SingerRepertoireEntry[]; busy: boolean; run: (operation: () => Promise<unknown>, success: string) => Promise<void> }) {
+  const [draft, setDraft] = useState({ title: '', artist: '', durationSeconds: 240, priceYuan: '98' })
+  return <section className="repertoire-manager">
+    <div className="form-heading"><ListMusic size={19} /><div><strong>{singer.displayName}的可点歌单</strong><span>曲目、原唱、演唱时长和现场收费价格均可配置</span></div></div>
+    <form className="repertoire-create" onSubmit={(event) => {
+      event.preventDefault()
+      const priceAmount = Math.round(Number(draft.priceYuan) * 100)
+      if (!draft.title.trim() || !draft.artist.trim() || !Number.isSafeInteger(priceAmount) || priceAmount <= 0) return
+      void run(() => createSingerRepertoire(singer.id, { title: draft.title.trim(), artist: draft.artist.trim(), durationSeconds: draft.durationSeconds, priceAmount, currency: 'CNY', enabled: true }), '歌曲已加入该歌手的可点歌单')
+    }}>
+      <input value={draft.title} placeholder="歌曲名称" onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
+      <input value={draft.artist} placeholder="原唱" onChange={(event) => setDraft({ ...draft, artist: event.target.value })} />
+      <label><span>时长(秒)</span><input type="number" min={30} max={1800} value={draft.durationSeconds} onChange={(event) => setDraft({ ...draft, durationSeconds: Number(event.target.value) })} /></label>
+      <label><span>价格(元)</span><input inputMode="decimal" value={draft.priceYuan} onChange={(event) => setDraft({ ...draft, priceYuan: event.target.value })} /></label>
+      <button className="primary-button" disabled={busy || !draft.title.trim() || !draft.artist.trim()}><Plus size={15} />加入歌单</button>
+    </form>
+    <div className="repertoire-list">{repertoire.length === 0 ? <div className="compact-empty">这位歌手还没有可点歌曲</div> : repertoire.map((offer) => {
+      const song = data.songState.songs.find((item) => item.id === offer.songId)
+      return song ? <RepertoireRow key={offer.id} song={song} offer={offer} busy={busy} run={run} /> : null
+    })}</div>
+  </section>
+}
+
+function RepertoireRow({ song, offer, busy, run }: { song: SongCatalogItem; offer: SingerRepertoireEntry; busy: boolean; run: (operation: () => Promise<unknown>, success: string) => Promise<void> }) {
+  const [draft, setDraft] = useState<RepertoireWriteInput>({ title: song.title, artist: song.artist, durationSeconds: song.durationSeconds, priceAmount: offer.priceAmount, currency: offer.currency, enabled: offer.enabled })
+  return <form className="repertoire-row" onSubmit={(event) => { event.preventDefault(); void run(() => updateSingerRepertoire(offer.id, draft), '曲目与价格已更新') }}>
+    <input aria-label="歌曲名称" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
+    <input aria-label="歌曲原唱" value={draft.artist} onChange={(event) => setDraft({ ...draft, artist: event.target.value })} />
+    <input aria-label="歌曲时长（秒）" type="number" min={30} max={1800} value={draft.durationSeconds} onChange={(event) => setDraft({ ...draft, durationSeconds: Number(event.target.value) })} />
+    <label className="price-input"><span>¥</span><input aria-label="点歌价格（元）" inputMode="decimal" value={(draft.priceAmount / 100).toString()} onChange={(event) => setDraft({ ...draft, priceAmount: Math.round(Number(event.target.value) * 100) })} /></label>
+    <label className="enabled-toggle"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} /><span>{draft.enabled ? '顾客可见' : '已暂停'}</span></label>
+    <button className="secondary-button" disabled={busy || !draft.title.trim() || !draft.artist.trim() || !Number.isSafeInteger(draft.durationSeconds) || draft.durationSeconds < 30 || !Number.isSafeInteger(draft.priceAmount) || draft.priceAmount <= 0}><Save size={14} />保存</button>
+  </form>
+}
+
+interface ScheduleRowDraft {
+  id: string
+  singerId: string
+  startsAt: string
+  endsAt: string
+  requestOpensAt: string
+  requestClosesAt: string
+  acceptingRequests: boolean
+}
+
+function PerformanceScheduleEditor({ data, session, busy, run }: { data: BootstrapResponse; session: PerformanceSession | null; busy: boolean; run: (operation: () => Promise<unknown>, success: string) => Promise<void> }) {
+  const [businessDate, setBusinessDate] = useState(session?.businessDate ?? data.store.businessDate)
+  const [title, setTitle] = useState(session?.title ?? 'M-BOX 今晚现场')
+  const [status, setStatus] = useState<PerformanceSessionStatus>(session?.status ?? 'scheduled')
+  const [sessionId] = useState(session?.id ?? `performance_${crypto.randomUUID()}`)
+  const [rows, setRows] = useState<ScheduleRowDraft[]>(session?.appearances.map((item) => ({ ...item, startsAt: localDatetime(item.startsAt), endsAt: localDatetime(item.endsAt), requestOpensAt: localDatetime(item.requestOpensAt), requestClosesAt: localDatetime(item.requestClosesAt) })) ?? [])
+
+  function addAppearance() {
+    const singerId = data.songState.singers.find((item) => item.active)?.id ?? data.songState.singers[0]?.id ?? ''
+    const previousEnd = rows.at(-1)?.endsAt
+    const startsAt = previousEnd ? shiftLocalDatetime(previousEnd, 20) : `${businessDate}T20:30`
+    const endsAt = shiftLocalDatetime(startsAt, 45)
+    setRows([...rows, { id: `appearance_${crypto.randomUUID()}`, singerId, startsAt, endsAt, requestOpensAt: shiftLocalDatetime(startsAt, -15), requestClosesAt: shiftLocalDatetime(endsAt, -5), acceptingRequests: true }])
+  }
+
+  function save(event: React.FormEvent) {
+    event.preventDefault()
+    if (rows.length === 0) return
+    const appearances = rows.map((row) => ({ ...row, startsAt: new Date(row.startsAt).toISOString(), endsAt: new Date(row.endsAt).toISOString(), requestOpensAt: new Date(row.requestOpensAt).toISOString(), requestClosesAt: new Date(row.requestClosesAt).toISOString() }))
+    const startsAt = appearances.flatMap((item) => [item.startsAt, item.requestOpensAt]).toSorted()[0]!
+    const endsAt = appearances.flatMap((item) => [item.endsAt, item.requestClosesAt]).toSorted().at(-1)!
+    void run(() => updatePerformanceSession(sessionId, { businessDate, title: title.trim(), status, startsAt, endsAt, appearances }), '演出排班已保存，顾客端将在下一次刷新时更新')
+  }
+
+  return <form className="schedule-editor" onSubmit={save}>
+    <div className="schedule-toolbar">
+      <label><span>营业日</span><input type="date" value={businessDate} onChange={(event) => setBusinessDate(event.target.value)} /></label>
+      <label className="schedule-title"><span>场次名称</span><input value={title} maxLength={120} onChange={(event) => setTitle(event.target.value)} /></label>
+      <label><span>状态</span><select value={status} onChange={(event) => setStatus(event.target.value as PerformanceSessionStatus)}><option value="scheduled">待演出</option><option value="live">演出中</option><option value="completed">已结束</option><option value="cancelled">已取消</option></select></label>
+      <button type="button" className="secondary-button" disabled={busy || data.songState.singers.length === 0} onClick={addAppearance}><Plus size={15} />增加一轮</button>
+    </div>
+    <div className="schedule-list">
+      <div className="schedule-head"><span>歌手</span><span>演出开始</span><span>演出结束</span><span>点歌开放</span><span>点歌截止</span><span>状态</span><span /></div>
+      {rows.length === 0 ? <div className="compact-empty">还没有演出轮次，点击“增加一轮”开始排班。</div> : rows.map((row, index) => <div className="schedule-row" key={row.id}>
+        <select aria-label={`第${index + 1}轮歌手`} value={row.singerId} onChange={(event) => setRows(rows.map((item) => item.id === row.id ? { ...item, singerId: event.target.value } : item))}>{data.songState.singers.filter((item) => item.active || item.id === row.singerId).map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select>
+        {(['startsAt', 'endsAt', 'requestOpensAt', 'requestClosesAt'] as const).map((field) => <input key={field} aria-label={field} type="datetime-local" value={row[field]} onChange={(event) => setRows(rows.map((item) => item.id === row.id ? { ...item, [field]: event.target.value } : item))} />)}
+        <label className="enabled-toggle"><input type="checkbox" checked={row.acceptingRequests} onChange={(event) => setRows(rows.map((item) => item.id === row.id ? { ...item, acceptingRequests: event.target.checked } : item))} /><span>{row.acceptingRequests ? '可点歌' : '暂停'}</span></label>
+        <button type="button" className="icon-button danger" title="删除这一轮" onClick={() => setRows(rows.filter((item) => item.id !== row.id))}><XCircle size={16} /></button>
+      </div>)}
+    </div>
+    <div className="schedule-actions"><span>点歌开放与截止时间可早于或覆盖歌手演出时段，但必须处于整场演出的时间范围内。</span><button className="primary-button" disabled={busy || rows.length === 0 || !title.trim()}><Save size={15} />保存整晚排班</button></div>
+  </form>
 }
 
 function SingerProfileEditor({ singer, busy, onSave }: { singer: Singer; busy: boolean; onSave: (input: SingerProfileWriteInput) => Promise<void> }) {
@@ -136,3 +256,9 @@ function SongMetric({ label, value, warning = false }: { label: string; value: n
 function statusLabel(status: SongRequestStatus) { return ({ pending_confirmation: '待确认', pending_payment: '待现场收费', paid: '现场已收款', accepted: '已接单', performing: '演唱中', completed: '已完成', rejected: '无法安排', cancelled: '已取消', refund_required: '待退款', refunded: '已退款' } as const)[status] }
 function money(amount: number) { return new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY' }).format(amount / 100) }
 function timeRange(startsAt: string, endsAt: string) { const format = (value: string) => new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }); return `${format(startsAt)}-${format(endsAt)}` }
+function localDatetime(value: string) {
+  const date = new Date(value)
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+function shiftLocalDatetime(value: string, minutes: number) { return localDatetime(new Date(new Date(value).getTime() + minutes * 60_000).toISOString()) }

@@ -267,17 +267,26 @@ body {
   flex: 0 0 auto;
   display: grid;
   align-content: center;
-  justify-items: stretch;
-  gap: 4px;
-  padding: 8px 22px 8px 10px;
+  overflow: hidden;
+  padding: 0;
   border: 1px solid rgba(216, 180, 90, .5);
   border-radius: 5px;
   background: rgba(8, 10, 9, .76);
   color: #fff;
+}
+
+.guest-stage-primary {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  padding: 8px 22px 6px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
   text-align: left !important;
 }
 
-.guest-stage-status:disabled {
+.guest-stage-primary:disabled {
   cursor: default;
   opacity: 1;
 }
@@ -325,14 +334,17 @@ body {
 }
 
 .guest-stage-next {
+  position: relative;
   min-width: 0;
   display: grid;
   gap: 1px;
-  padding-top: 4px;
+  padding: 4px 18px 6px 10px;
+  border: 0;
   border-top: 1px solid rgba(216, 180, 90, .22);
+  background: transparent;
   color: #d8b45a;
-  font-style: normal;
   line-height: 1.2;
+  text-align: left;
 }
 
 .guest-stage-next span {
@@ -352,6 +364,14 @@ body {
   color: #bda65f;
   font-size: 8px;
   white-space: nowrap;
+}
+
+.guest-stage-next > svg {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  color: #bda65f;
+  transform: translateY(-50%);
 }
 
 .guest-stage-chevron {

@@ -76,6 +76,55 @@
   white-space: nowrap;
 }
 
+.role-home__next-action {
+  min-height: 76px;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 13px;
+  padding: 11px 14px;
+  border: 1px solid #b9ccd4;
+  border-left: 5px solid #2c7ea2;
+  border-radius: 6px;
+  background: #f4fafc;
+}
+
+.role-home__next-action.is-warning { border-color: #dfc47b; border-left-color: var(--warning, #b77c13); background: #fffaf0; }
+.role-home__next-action.is-danger { border-color: #e1a7aa; border-left-color: var(--danger, #c63e44); background: #fff6f6; }
+.role-home__next-action.is-success { border-color: #a9cfb5; border-left-color: var(--success, #2f7a4d); background: #f4faf6; }
+
+.role-home__next-number {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #20231f;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 850;
+}
+
+.role-home__next-copy { min-width: 0; display: grid; gap: 1px; }
+.role-home__next-copy small { color: var(--ink-soft, #5e645d); font-size: 10px; font-weight: 800; }
+.role-home__next-copy strong { overflow-wrap: anywhere; font-size: 16px; }
+.role-home__next-copy > span { overflow-wrap: anywhere; color: var(--ink-soft, #5e645d); font-size: 10px; }
+.role-home__next-action > button {
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 15px;
+  border: 1px solid #171a17;
+  border-radius: 5px;
+  background: #20231f;
+  color: #fff;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.role-home__next-action > button b { min-width: 21px; height: 21px; display: grid; place-items: center; border-radius: 3px; background: #fff; color: #20231f; font-size: 10px; }
+
 .role-home__metrics {
   display: grid;
   border: 1px solid var(--line, #dde0d8);
@@ -147,6 +196,12 @@
   grid-template-columns: minmax(0, 1.1fr) minmax(330px, .9fr);
   align-items: start;
   gap: 18px;
+}
+
+@media (max-width: 700px) {
+  .role-home__next-action { grid-template-columns: 38px minmax(0, 1fr); }
+  .role-home__next-number { width: 38px; height: 38px; }
+  .role-home__next-action > button { grid-column: 1 / -1; width: 100%; }
 }
 
 .role-home__section {

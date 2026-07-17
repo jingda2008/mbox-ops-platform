@@ -73,7 +73,7 @@ import { chinaDateKey, formatChinaDateTime, formatChinaTime } from '../shared/ch
 import { TaskQueue } from './TaskQueue'
 import { getFulfillmentAccess, kdsTaskOperationallyActive, taskVisibleToAccess } from './commerce-workspace'
 import { RoleHomeView } from './RoleHomeView'
-import { getRoleHomeAccess, type RoleHomeNavigationId } from './role-access'
+import { buildRoleHomeModel, getRoleHomeAccess, type RoleHomeNavigationId } from './role-access'
 import './OperationsConsole.css'
 
 const MasterDataView = lazy(() => import('./MasterDataView').then((module) => ({ default: module.MasterDataView })))
@@ -140,6 +140,8 @@ function tableOperationsConfig(config?: TableOperationsConfig): TableOperationsC
 export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
   const fulfillmentAccess = getFulfillmentAccess(data, getCurrentActorId())
   const roleHomeAccess = getRoleHomeAccess(data, fulfillmentAccess.employee?.roleId ?? '')
+  const roleHomeModel = buildRoleHomeModel(data, fulfillmentAccess.employee?.id ?? '')
+  const roleNavigationLabels = new Map(roleHomeModel.navigation.map((item) => [item.id, item.label]))
   const currentEmployee = fulfillmentAccess.employee
   const claimableTaskIds = new Set(data.tasks.filter((task) => {
     if (!currentEmployee || currentEmployee.status !== 'active' || !currentEmployee.online || currentEmployee.paused) return false
@@ -160,10 +162,9 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
     && !task.archivedAt
     && !['completed', 'confirmed', 'cancelled'].includes(task.status)
   ))
-  const availableNavigation = navigation.filter((item) => {
-    if (item.id === 'home') return true
-    return roleHomeAccess.allowedNavigationIds.includes(item.id)
-  })
+  const availableNavigation = navigation
+    .filter((item) => item.id === 'home' || roleHomeAccess.allowedNavigationIds.includes(item.id))
+    .map((item) => item.id === 'home' ? item : { ...item, label: roleNavigationLabels.get(item.id) ?? item.label })
   const [view, setView] = useState<View>('home')
   const [selectedTableId, setSelectedTableId] = useState<string | null>(null)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
@@ -493,10 +494,10 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
       setTableOpsDraft(saved)
       setTableOpsDirty(false)
       setTableOpsReason('')
-      setNotice(`桌台经营配置V${saved.version}已生效；已开桌次继续使用原快照`)
+      setNotice(`保存成功：桌台经营配置V${saved.version}已生效；已开桌次继续使用原快照`)
       await onRefresh()
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : '桌台经营配置保存失败')
+      setNotice(`保存失败：${error instanceof Error ? error.message : '桌台经营配置未保存'}`)
     } finally {
       setBusy(false)
     }
@@ -533,10 +534,10 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
     try {
       await saveConfigDraft(configPayload())
       setConfigDirty(false)
-      setNotice('配置草稿已保存')
+      setNotice('保存成功：配置草稿已保存，可以继续检查或发布')
       await onRefresh()
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : '草稿保存失败')
+      setNotice(`保存失败：${error instanceof Error ? error.message : '配置草稿未保存'}`)
     } finally {
       setBusy(false)
     }
@@ -548,10 +549,10 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
       if (configDirty) await saveConfigDraft(configPayload())
       const published = await publishConfig()
       setConfigDirty(false)
-      setNotice(`配置V${published.version}已发布`)
+      setNotice(`发布成功：配置V${published.version}已生效`)
       await onRefresh()
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : '配置发布失败')
+      setNotice(`发布失败：${error instanceof Error ? error.message : '配置未生效'}`)
     } finally {
       setBusy(false)
     }
@@ -563,10 +564,10 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
       const published = await rollbackConfig(version, `回滚到V${version}的营业配置`)
       setConfigDirty(false)
       setDraft(cloneConfig(published))
-      setNotice(`已按V${version}快照生成并发布V${published.version}`)
+      setNotice(`发布成功：已按V${version}快照生成并生效为V${published.version}`)
       await onRefresh()
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : '配置回滚失败')
+      setNotice(`发布失败：${error instanceof Error ? error.message : '回滚配置未生效'}`)
     } finally {
       setBusy(false)
     }
@@ -644,7 +645,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
           </div>
         </header>
 
-        {notice && <div className="notice-bar" role="status">{notice}<button onClick={() => setNotice('')}><X size={16} /></button></div>}
+        {notice && <div className={`notice-bar ${/失败|错误|无效|不能|不可|拒绝|未保存/.test(notice) ? 'is-error' : 'is-success'}`} role="status" aria-live="polite">{notice}<button title="关闭提示" onClick={() => setNotice('')}><X size={16} /></button></div>}
 
         <main className="main-content" aria-busy={busy}>
           <Suspense fallback={<div className="empty-state" role="status">正在载入当前工作台</div>}>

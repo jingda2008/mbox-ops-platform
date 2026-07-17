@@ -83,11 +83,11 @@ export function MasterDataView({ data, onRefresh, onNotice }: MasterDataViewProp
   async function run(action: () => Promise<unknown>, success: string) {
     try {
       await action()
-      onNotice(success)
+      onNotice(`保存成功：${success}`)
       await onRefresh()
       return true
     } catch (error) {
-      onNotice(error instanceof Error ? error.message : '主数据保存失败')
+      onNotice(`保存失败：${error instanceof Error ? error.message : '主数据未保存'}`)
       return false
     }
   }

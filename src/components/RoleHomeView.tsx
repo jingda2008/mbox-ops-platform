@@ -61,6 +61,8 @@ const navigationIcons: Record<RoleHomeNavigationId, LucideIcon> = {
 export function RoleHomeView({ data, employeeId, onNavigate }: RoleHomeViewProps) {
   const model = buildRoleHomeModel(data, employeeId)
   const activeTodos = model.todos.filter((item) => item.count > 0)
+  const primaryTodo = activeTodos[0]
+  const remainingTodos = activeTodos.slice(1)
   const attentionByNavigation = new Map<RoleHomeNavigationId, number>()
   for (const item of activeTodos) {
     attentionByNavigation.set(item.navigationId, (attentionByNavigation.get(item.navigationId) ?? 0) + item.count)
@@ -86,6 +88,20 @@ export function RoleHomeView({ data, employeeId, onNavigate }: RoleHomeViewProps
         )}
       </header>
 
+      {primaryTodo && (
+        <div className={`role-home__next-action is-${primaryTodo.tone}`} role="status">
+          <span className="role-home__next-number">1</span>
+          <span className="role-home__next-copy">
+            <small>现在先做</small>
+            <strong>{primaryTodo.label}</strong>
+            <span>{primaryTodo.detail}</span>
+          </span>
+          <button type="button" onClick={() => onNavigate(primaryTodo.navigationId)}>
+            开始处理 <b>{primaryTodo.count}</b><ArrowRight size={17} aria-hidden="true" />
+          </button>
+        </div>
+      )}
+
       <div className={`role-home__metrics role-home__metrics--${Math.min(model.metrics.length, 4)}`} aria-label="岗位摘要">
         {model.metrics.map((item) => {
           const Icon = indicatorIcons[item.indicator]
@@ -108,17 +124,17 @@ export function RoleHomeView({ data, employeeId, onNavigate }: RoleHomeViewProps
       <div className="role-home__work-grid">
         <section className="role-home__section" aria-labelledby="role-home-todos">
           <div className="role-home__section-heading">
-            <div><span>当前班次</span><h3 id="role-home-todos">待办</h3></div>
-            <b>{activeTodos.reduce((sum, item) => sum + item.count, 0)}</b>
+            <div><span>完成第一项后再看这里</span><h3 id="role-home-todos">接下来</h3></div>
+            <b>{remainingTodos.reduce((sum, item) => sum + item.count, 0)}</b>
           </div>
-          {activeTodos.length === 0 ? (
+          {remainingTodos.length === 0 ? (
             <div className="role-home__empty">
               <CheckCheck size={23} aria-hidden="true" />
-              <strong>当前没有待处理事项</strong>
+              <strong>{primaryTodo ? '没有其他待办，先完成上面的事项' : '当前没有待处理事项'}</strong>
             </div>
           ) : (
             <div className="role-home__todo-list">
-              {activeTodos.map((item) => (
+              {remainingTodos.map((item) => (
                 <button
                   className={`role-home__todo is-${item.tone}`}
                   key={item.id}

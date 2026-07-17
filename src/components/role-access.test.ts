@@ -115,6 +115,16 @@ describe('role home access', () => {
     expect(model.todos.find((item) => item.id === 'handoff')?.count).toBe(1)
   })
 
+  it('uses plain workplace language for each role navigation', () => {
+    const server = buildRoleHomeModel(bootstrapForRole('server', '服务员'), 'employee-current')
+    const bartender = buildRoleHomeModel(bootstrapForRole('bartender', '调酒师'), 'employee-current')
+    const host = buildRoleHomeModel(bootstrapForRole('host', '门迎'), 'employee-current')
+
+    expect(server.navigation.find((item) => item.id === 'commerce')?.label).toBe('点单与送餐')
+    expect(bartender.navigation.find((item) => item.id === 'commerce')?.label).toBe('酒水制作')
+    expect(host.navigation.find((item) => item.id === 'reservations')?.label).toBe('预约与入座')
+  })
+
   it('includes employee additional roles alongside active shift roles in KDS work', () => {
     const data = bootstrapForRole('custom-night', '夜班机动岗')
     data.config.roles.push({

@@ -51,9 +51,51 @@
 .enabled-toggle { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-soft); font-size: 10px; white-space: nowrap; }
 .enabled-toggle input { width: 15px !important; height: 15px !important; padding: 0; }
 .schedule-editor { min-height: 360px; }
+.schedule-manager { min-height: 360px; }
+.schedule-manager-bar {
+  min-height: 62px;
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+}
+.schedule-manager-bar > label { min-width: min(520px, 60%); display: grid; gap: 4px; }
+.schedule-manager-bar label > span { color: var(--ink-soft); font-size: 9px; font-weight: 750; }
+.schedule-manager-bar select { width: 100%; height: 36px; border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 9px; background: #fff; color: var(--ink); }
+.schedule-manager-actions { display: flex; gap: 7px; }
+.schedule-manager-actions button { min-height: 36px; }
+.schedule-manager-note {
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  background: #f5f7f3;
+}
+.schedule-manager-note strong { font-size: 11px; white-space: nowrap; }
+.schedule-manager-note span { color: var(--ink-soft); font-size: 9px; line-height: 1.4; }
 .schedule-toolbar { display: grid; grid-template-columns: 150px minmax(220px, 1fr) 130px auto; align-items: end; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
 .schedule-toolbar label { min-width: 0; display: grid; gap: 4px; }
 .schedule-toolbar button { min-height: 34px; }
+.schedule-date-warning {
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 14px;
+  border-bottom: 1px solid #e5c277;
+  border-left: 5px solid var(--warning);
+  background: #fff8e8;
+}
+.schedule-date-warning > span { min-width: 0; display: grid; gap: 2px; }
+.schedule-date-warning strong { font-size: 11px; }
+.schedule-date-warning small { color: var(--ink-soft); font-size: 9px; }
+.schedule-date-warning button { min-height: 34px; white-space: nowrap; }
 .schedule-list { min-width: 0; }
 .schedule-row { display: grid; grid-template-columns: 66px minmax(0, 1fr); align-items: start; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
 .schedule-row-heading { min-height: 55px; display: flex; flex-direction: column; align-items: flex-start; justify-content: space-between; gap: 7px; padding-top: 16px; }
@@ -99,6 +141,6 @@
 .song-request-actions button { min-height: 32px; padding: 0 8px; font-size: 10px; }
 .song-request-actions .icon-button { width: 32px; padding: 0; }
 @media (max-width: 1000px) { .singer-profile-editor { grid-template-columns: 76px minmax(0, 1fr); } .singer-profile-preview { width: 76px; height: 76px; } .singer-profile-actions { grid-column: 1 / -1; flex-direction: row; align-items: center; } .song-workspace { grid-template-columns: 1fr; } .song-order-form { border-right: 0; border-bottom: 1px solid var(--line); } .repertoire-create { grid-template-columns: repeat(2, minmax(0, 1fr)); } .repertoire-create button { grid-column: 1 / -1; } .repertoire-row { grid-template-columns: 1fr 1fr 80px 90px; } .repertoire-row .enabled-toggle, .repertoire-row button { grid-column: span 2; } .schedule-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 700px) { .song-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .song-metric:nth-child(2) { border-right: 0; } .song-metric:nth-child(-n+2) { border-bottom: 1px solid var(--line); } .song-view-tabs { overflow-x: auto; } .song-view-tabs button { min-width: 108px; } .song-config-toolbar { align-items: stretch; flex-direction: column; } .song-config-toolbar > label { min-width: 0; } .song-config-toolbar form input { flex: 1; } .singer-profile-editor { grid-template-columns: 1fr; } .singer-profile-preview { width: 100%; height: 120px; } .singer-profile-fields { grid-template-columns: 1fr; } .singer-profile-fields .wide-field { grid-column: 1; } .repertoire-create, .repertoire-row { grid-template-columns: 1fr; } .repertoire-create button, .repertoire-row .enabled-toggle, .repertoire-row button { grid-column: 1; } .schedule-toolbar { grid-template-columns: 1fr 1fr; } .schedule-title { grid-column: 1 / -1; grid-row: 1; } .schedule-row { grid-template-columns: 1fr; } .schedule-row-heading { min-height: 34px; flex-direction: row; align-items: center; padding-top: 0; } .song-order-form { grid-template-columns: 1fr; } .song-order-form .form-heading, .song-order-form .wide-field, .song-order-form .song-payment-boundary, .song-order-form > button { grid-column: 1; } .song-request-row { grid-template-columns: 58px minmax(0, 1fr); } .song-request-actions { grid-column: 1 / -1; flex-wrap: wrap; } .song-request-actions input { flex: 1; width: auto; } }
-@media (max-width: 520px) { .schedule-toolbar, .schedule-fields { grid-template-columns: 1fr; } .schedule-title { grid-column: 1; grid-row: auto; } .schedule-toolbar button, .schedule-actions button { width: 100%; } .schedule-actions { align-items: stretch; flex-direction: column; } }
+@media (max-width: 700px) { .song-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .song-metric:nth-child(2) { border-right: 0; } .song-metric:nth-child(-n+2) { border-bottom: 1px solid var(--line); } .song-view-tabs { overflow-x: auto; } .song-view-tabs button { min-width: 108px; } .song-config-toolbar { align-items: stretch; flex-direction: column; } .song-config-toolbar > label { min-width: 0; } .song-config-toolbar form input { flex: 1; } .singer-profile-editor { grid-template-columns: 1fr; } .singer-profile-preview { width: 100%; height: 120px; } .singer-profile-fields { grid-template-columns: 1fr; } .singer-profile-fields .wide-field { grid-column: 1; } .repertoire-create, .repertoire-row { grid-template-columns: 1fr; } .repertoire-create button, .repertoire-row .enabled-toggle, .repertoire-row button { grid-column: 1; } .schedule-manager-bar { align-items: stretch; flex-direction: column; } .schedule-manager-bar > label { min-width: 0; width: 100%; } .schedule-manager-actions { display: grid; grid-template-columns: 1fr 1fr; } .schedule-manager-note { align-items: flex-start; flex-direction: column; gap: 3px; } .schedule-toolbar { grid-template-columns: 1fr 1fr; } .schedule-title { grid-column: 1 / -1; grid-row: 1; } .schedule-row { grid-template-columns: 1fr; } .schedule-row-heading { min-height: 34px; flex-direction: row; align-items: center; padding-top: 0; } .song-order-form { grid-template-columns: 1fr; } .song-order-form .form-heading, .song-order-form .wide-field, .song-order-form .song-payment-boundary, .song-order-form > button { grid-column: 1; } .song-request-row { grid-template-columns: 58px minmax(0, 1fr); } .song-request-actions { grid-column: 1 / -1; flex-wrap: wrap; } .song-request-actions input { flex: 1; width: auto; } }
+@media (max-width: 520px) { .schedule-manager-actions { grid-template-columns: 1fr; } .schedule-date-warning { align-items: stretch; flex-direction: column; } .schedule-date-warning button { width: 100%; } .schedule-toolbar, .schedule-fields { grid-template-columns: 1fr; } .schedule-title { grid-column: 1; grid-row: auto; } .schedule-toolbar button, .schedule-actions button { width: 100%; } .schedule-actions { align-items: stretch; flex-direction: column; } }
 @media (max-width: 700px) { .schedule-policy-fields { align-items: flex-start; flex-direction: column; gap: 9px; } }

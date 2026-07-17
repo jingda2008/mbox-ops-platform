@@ -69,10 +69,10 @@ export function BenefitConfiguration({ data, onRefresh, onNotice }: BenefitConfi
         })
       }
       setDirty(false)
-      onNotice('权益模板和岗位授权配置已保存')
+      onNotice('保存成功：权益模板和岗位授权配置已生效')
       await onRefresh()
     } catch (error) {
-      onNotice(error instanceof Error ? error.message : '权益配置保存失败')
+      onNotice(`保存失败：${error instanceof Error ? error.message : '权益配置未保存'}`)
     } finally {
       setBusy(false)
     }

@@ -207,6 +207,13 @@ button:focus-visible, a:focus-visible, input:focus-visible {
   background: transparent;
   color: inherit;
 }
+.notice-bar.is-error {
+  border-bottom-color: #edb8bb;
+  border-left: 5px solid var(--danger);
+  background: #fff1f2;
+  color: #9f3037;
+}
+.notice-bar.is-success { border-left: 5px solid var(--success); }
 .connectivity-banner {
   min-height: 48px;
   position: sticky;

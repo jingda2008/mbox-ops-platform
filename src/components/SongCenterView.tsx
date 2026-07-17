@@ -1,4 +1,4 @@
-import { Banknote, CalendarDays, CheckCircle2, Clock3, Image, ListChecks, ListMusic, Mic2, Music2, Play, Plus, RotateCcw, Save, UserRound, XCircle } from 'lucide-react'
+import { Banknote, CalendarDays, CheckCircle2, Clock3, Copy, Image, ListChecks, ListMusic, Mic2, Music2, Play, Plus, RotateCcw, Save, UserRound, XCircle } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { actOnSongRequest, createSinger, createSingerRepertoire, reportSongOnsiteCollection, submitStaffSongRequest, updatePerformanceSession, updateSingerProfile, updateSingerRepertoire } from '../api'
 import type { BootstrapResponse } from '../shared/contracts'
@@ -11,6 +11,8 @@ interface SongCenterViewProps {
   onRefresh: () => Promise<void>
   onNotice: (message: string) => void
 }
+
+type SongOperationRunner = (operation: () => Promise<unknown>, success: string) => Promise<boolean>
 
 export function SongCenterView({ data, onRefresh, onNotice }: SongCenterViewProps) {
   const canManage = data.viewer?.permissionIds.includes('song.manage') ?? false
@@ -31,14 +33,16 @@ export function SongCenterView({ data, onRefresh, onNotice }: SongCenterViewProp
   const effectiveSongId = offers.some((item) => item.songId === songId) ? songId : offers[0]?.songId ?? ''
   const selectedOffer = offers.find((item) => item.songId === effectiveSongId)
 
-  async function run(operation: () => Promise<unknown>, success: string) {
+  async function run(operation: () => Promise<unknown>, success: string): Promise<boolean> {
     setBusy(true)
     try {
       await operation()
-      onNotice(success)
+      onNotice(`操作成功：${success}`)
       await onRefresh()
+      return true
     } catch (error) {
-      onNotice(error instanceof Error ? error.message : '点歌操作失败')
+      onNotice(`操作失败：${error instanceof Error ? error.message : '本次操作未保存'}`)
+      return false
     } finally {
       setBusy(false)
     }
@@ -102,12 +106,12 @@ export function SongCenterView({ data, onRefresh, onNotice }: SongCenterViewProp
         </div>
       </>}
       {canManage && workspaceMode === 'library' && <SingerLibraryManager key={data.revision} data={data} busy={busy} run={run} />}
-      {canManage && workspaceMode === 'schedule' && <PerformanceScheduleEditor key={`${data.revision}:${data.store.businessDate}`} data={data} session={todaysSessions[0] ?? null} busy={busy} run={run} />}
+      {canManage && workspaceMode === 'schedule' && <PerformanceScheduleManager data={data} busy={busy} run={run} />}
     </section>
   )
 }
 
-function SingerLibraryManager({ data, busy, run }: { data: BootstrapResponse; busy: boolean; run: (operation: () => Promise<unknown>, success: string) => Promise<void> }) {
+function SingerLibraryManager({ data, busy, run }: { data: BootstrapResponse; busy: boolean; run: SongOperationRunner }) {
   const [singerId, setSingerId] = useState(data.songState.singers.find((item) => item.active)?.id ?? data.songState.singers[0]?.id ?? '')
   const [newSingerName, setNewSingerName] = useState('')
   const singer = data.songState.singers.find((item) => item.id === singerId) ?? data.songState.singers[0]
@@ -128,7 +132,7 @@ function SingerLibraryManager({ data, busy, run }: { data: BootstrapResponse; bu
   </div>
 }
 
-function RepertoireManager({ data, singer, repertoire, busy, run }: { data: BootstrapResponse; singer: Singer; repertoire: SingerRepertoireEntry[]; busy: boolean; run: (operation: () => Promise<unknown>, success: string) => Promise<void> }) {
+function RepertoireManager({ data, singer, repertoire, busy, run }: { data: BootstrapResponse; singer: Singer; repertoire: SingerRepertoireEntry[]; busy: boolean; run: SongOperationRunner }) {
   const [draft, setDraft] = useState({ title: '', artist: '', durationSeconds: 240, priceYuan: '98' })
   return <section className="repertoire-manager">
     <div className="form-heading"><ListMusic size={19} /><div><strong>{singer.displayName}的可点歌单</strong><span>曲目、原唱、演唱时长和现场收费价格均可配置</span></div></div>
@@ -151,7 +155,7 @@ function RepertoireManager({ data, singer, repertoire, busy, run }: { data: Boot
   </section>
 }
 
-function RepertoireRow({ song, offer, busy, run }: { song: SongCatalogItem; offer: SingerRepertoireEntry; busy: boolean; run: (operation: () => Promise<unknown>, success: string) => Promise<void> }) {
+function RepertoireRow({ song, offer, busy, run }: { song: SongCatalogItem; offer: SingerRepertoireEntry; busy: boolean; run: SongOperationRunner }) {
   const [draft, setDraft] = useState<RepertoireWriteInput>({ title: song.title, artist: song.artist, durationSeconds: song.durationSeconds, priceAmount: offer.priceAmount, currency: offer.currency, enabled: offer.enabled })
   return <form className="repertoire-row" onSubmit={(event) => { event.preventDefault(); void run(() => updateSingerRepertoire(offer.id, draft), '曲目与价格已更新') }}>
     <input aria-label="歌曲名称" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
@@ -184,12 +188,63 @@ export const scheduleDateFieldLabels = {
   requestClosesAt: '点歌截止',
 } as const
 
-function PerformanceScheduleEditor({ data, session, busy, run }: { data: BootstrapResponse; session: PerformanceSession | null; busy: boolean; run: (operation: () => Promise<unknown>, success: string) => Promise<void> }) {
-  const [businessDate, setBusinessDate] = useState(session?.businessDate ?? data.store.businessDate)
-  const [title, setTitle] = useState(session?.title ?? 'M-BOX 今晚现场')
+function PerformanceScheduleManager({ data, busy, run }: { data: BootstrapResponse; busy: boolean; run: SongOperationRunner }) {
+  const sessions = data.songState.performanceSessions.toSorted((left, right) => (
+    right.businessDate.localeCompare(left.businessDate) || right.startsAt.localeCompare(left.startsAt)
+  ))
+  const todaySession = sessions.find((item) => item.businessDate === data.store.businessDate)
+  const [selectedSessionId, setSelectedSessionId] = useState(todaySession?.id ?? sessions[0]?.id ?? '')
+  const [draftId, setDraftId] = useState(sessions.length === 0 ? `performance_${crypto.randomUUID()}` : '')
+  const [template, setTemplate] = useState<PerformanceSession | null>(null)
+  const selectedSession = sessions.find((item) => item.id === selectedSessionId) ?? null
+  const isNew = Boolean(draftId)
+
+  function editSession(sessionId: string) {
+    setSelectedSessionId(sessionId)
+    setDraftId('')
+    setTemplate(null)
+  }
+
+  function newSchedule(source: PerformanceSession | null = null) {
+    setSelectedSessionId('')
+    setTemplate(source)
+    setDraftId(`performance_${crypto.randomUUID()}`)
+  }
+
+  return <div className="schedule-manager">
+    <div className="schedule-manager-bar">
+      <label><span>正在编辑</span><select value={isNew ? '__new__' : selectedSessionId} onChange={(event) => event.target.value === '__new__' ? newSchedule() : editSession(event.target.value)}>
+        {isNew && <option value="__new__">新排班（尚未发布）</option>}
+        {sessions.map((item) => <option key={item.id} value={item.id}>{item.businessDate} · {item.title} · V{item.configVersion ?? 1}</option>)}
+      </select></label>
+      <div className="schedule-manager-actions">
+        <button type="button" className="secondary-button" onClick={() => newSchedule()}><Plus size={15} />新建空白排班</button>
+        <button type="button" className="secondary-button" disabled={!selectedSession} onClick={() => newSchedule(selectedSession)}><Copy size={15} />复制当前排班</button>
+      </div>
+    </div>
+    <div className="schedule-manager-note">
+      <strong>{isNew ? template ? '已复制，先修改营业日和时间' : '从空白排班开始' : `${selectedSession?.businessDate} 已发布版本`}</strong>
+      <span>歌手、顺序、时间、预约开关和点歌规则都可修改；保存后客户页面自动读取最新版本。</span>
+    </div>
+    <PerformanceScheduleEditor
+      key={selectedSession?.id ?? draftId}
+      data={data}
+      session={selectedSession}
+      template={template}
+      sessionId={selectedSession?.id ?? draftId}
+      busy={busy}
+      run={run}
+      onSaved={editSession}
+    />
+  </div>
+}
+
+function PerformanceScheduleEditor({ data, session, template, sessionId, busy, run, onSaved }: { data: BootstrapResponse; session: PerformanceSession | null; template: PerformanceSession | null; sessionId: string; busy: boolean; run: SongOperationRunner; onSaved: (sessionId: string) => void }) {
+  const source = session ?? template
+  const [businessDate, setBusinessDate] = useState(source?.businessDate ?? data.store.businessDate)
+  const [title, setTitle] = useState(source?.title ?? '')
   const [status, setStatus] = useState<PerformanceSessionStatus>(session?.status ?? 'scheduled')
-  const [sessionId] = useState(session?.id ?? `performance_${crypto.randomUUID()}`)
-  const [rows, setRows] = useState<ScheduleRowDraft[]>(session?.appearances.map((item) => ({
+  const [rows, setRows] = useState<ScheduleRowDraft[]>(source?.appearances.map((item) => ({
     ...item,
     startsAt: localDatetime(item.startsAt), endsAt: localDatetime(item.endsAt),
     requestOpensAt: localDatetime(item.requestOpensAt), requestClosesAt: localDatetime(item.requestClosesAt),
@@ -197,6 +252,19 @@ function PerformanceScheduleEditor({ data, session, busy, run }: { data: Bootstr
     extensionNegotiationEnabled: item.extensionNegotiationEnabled ?? true,
     extensionThresholdMinutes: item.extensionThresholdMinutes ?? 10,
   })) ?? [])
+  const firstAppearanceDate = rows[0]?.startsAt.slice(0, 10) ?? businessDate
+  const datesNeedAlignment = rows.length > 0 && firstAppearanceDate !== businessDate
+
+  function changeBusinessDate(nextBusinessDate: string) {
+    setRows((currentRows) => currentRows.map((row) => ({
+      ...row,
+      startsAt: moveLocalDatetimeToBusinessDate(row.startsAt, businessDate, nextBusinessDate),
+      endsAt: moveLocalDatetimeToBusinessDate(row.endsAt, businessDate, nextBusinessDate),
+      requestOpensAt: moveLocalDatetimeToBusinessDate(row.requestOpensAt, businessDate, nextBusinessDate),
+      requestClosesAt: moveLocalDatetimeToBusinessDate(row.requestClosesAt, businessDate, nextBusinessDate),
+    })))
+    setBusinessDate(nextBusinessDate)
+  }
 
   function addAppearance() {
     const singerId = data.songState.singers.find((item) => item.active)?.id ?? data.songState.singers[0]?.id ?? ''
@@ -210,22 +278,34 @@ function PerformanceScheduleEditor({ data, session, busy, run }: { data: Bootstr
     }])
   }
 
-  function save(event: React.FormEvent) {
+  function alignDatesToBusinessDate() {
+    setRows((currentRows) => currentRows.map((row) => ({
+      ...row,
+      startsAt: moveLocalDatetimeToBusinessDate(row.startsAt, firstAppearanceDate, businessDate),
+      endsAt: moveLocalDatetimeToBusinessDate(row.endsAt, firstAppearanceDate, businessDate),
+      requestOpensAt: moveLocalDatetimeToBusinessDate(row.requestOpensAt, firstAppearanceDate, businessDate),
+      requestClosesAt: moveLocalDatetimeToBusinessDate(row.requestClosesAt, firstAppearanceDate, businessDate),
+    })))
+  }
+
+  async function save(event: React.FormEvent) {
     event.preventDefault()
     if (rows.length === 0) return
     const appearances = rows.map((row) => ({ ...row, startsAt: chinaLocalDateTimeToIso(row.startsAt), endsAt: chinaLocalDateTimeToIso(row.endsAt), requestOpensAt: chinaLocalDateTimeToIso(row.requestOpensAt), requestClosesAt: chinaLocalDateTimeToIso(row.requestClosesAt) }))
     const startsAt = appearances.flatMap((item) => [item.startsAt, item.requestOpensAt]).toSorted()[0]!
     const endsAt = appearances.flatMap((item) => [item.endsAt, item.requestClosesAt]).toSorted().at(-1)!
-    void run(() => updatePerformanceSession(sessionId, { businessDate, title: title.trim(), status, startsAt, endsAt, appearances, expectedVersion: session?.configVersion ?? (session ? 1 : undefined) }), '演出排班新版本已保存，顾客端将在下一次刷新时更新')
+    const saved = await run(() => updatePerformanceSession(sessionId, { businessDate, title: title.trim(), status, startsAt, endsAt, appearances, expectedVersion: session?.configVersion ?? (session ? 1 : undefined) }), '演出排班已发布，顾客端会自动更新')
+    if (saved) onSaved(sessionId)
   }
 
-  return <form className="schedule-editor" onSubmit={save}>
+  return <form className="schedule-editor" onSubmit={(event) => void save(event)}>
     <div className="schedule-toolbar">
-      <label><span>营业日</span><input type="date" value={businessDate} onChange={(event) => setBusinessDate(event.target.value)} /></label>
-      <label className="schedule-title"><span>场次名称 · 排班V{session?.configVersion ?? (session ? 1 : 0)}</span><input value={title} maxLength={120} onChange={(event) => setTitle(event.target.value)} /></label>
+      <label><span>1. 营业日</span><input type="date" value={businessDate} onChange={(event) => changeBusinessDate(event.target.value)} /></label>
+      <label className="schedule-title"><span>2. 排班名称 · {session ? `当前V${session.configVersion ?? 1}` : '新排班'}</span><input value={title} maxLength={120} placeholder="例如：周五现场演出" onChange={(event) => setTitle(event.target.value)} /></label>
       <label><span>状态</span><select value={status} onChange={(event) => setStatus(event.target.value as PerformanceSessionStatus)}><option value="scheduled">待演出</option><option value="live">演出中</option><option value="completed">已结束</option><option value="cancelled">已取消</option></select></label>
-      <button type="button" className="secondary-button" disabled={busy || data.songState.singers.length === 0} onClick={addAppearance}><Plus size={15} />增加一轮</button>
+      <button type="button" className="secondary-button" disabled={busy || data.songState.singers.length === 0} onClick={addAppearance}><Plus size={15} />3. 添加歌手轮次</button>
     </div>
+    {datesNeedAlignment && <div className="schedule-date-warning" role="alert"><span><strong>轮次日期与营业日不一致</strong><small>当前轮次从{firstAppearanceDate}开始，保存前请对齐到{businessDate}。</small></span><button type="button" className="secondary-button" onClick={alignDatesToBusinessDate}>一键对齐日期</button></div>}
     <div className="schedule-list">
       {rows.length === 0 ? <div className="compact-empty">还没有演出轮次，点击“增加一轮”开始排班。</div> : rows.map((row, index) => <div className="schedule-row" key={row.id}>
         <div className="schedule-row-heading">
@@ -243,11 +323,11 @@ function PerformanceScheduleEditor({ data, session, busy, run }: { data: Bootstr
         </div></div>
       </div>)}
     </div>
-    <div className="schedule-actions"><span>以上全部为北京时间。门店12:00营业不代表开始演出；预约开放可设为12:00，歌手仍按20:30后的排班时间登台。</span><button className="primary-button" disabled={busy || rows.length === 0 || !title.trim()}><Save size={15} />发布排班新版本</button></div>
+    <div className="schedule-actions"><span>全部为北京时间。修改营业日时，所有轮次会自动平移到新日期。</span><button className="primary-button" disabled={busy || rows.length === 0 || !title.trim() || datesNeedAlignment}><Save size={15} />4. 保存并发布</button></div>
   </form>
 }
 
-function SingerProfileEditor({ singer, busy, onSave }: { singer: Singer; busy: boolean; onSave: (input: SingerProfileWriteInput) => Promise<void> }) {
+function SingerProfileEditor({ singer, busy, onSave }: { singer: Singer; busy: boolean; onSave: (input: SingerProfileWriteInput) => Promise<boolean> }) {
   const [displayName, setDisplayName] = useState(singer.displayName)
   const [photoUrl, setPhotoUrl] = useState(singer.photoUrl ?? '')
   const [headline, setHeadline] = useState(singer.headline ?? '')
@@ -279,7 +359,7 @@ function SingerProfileEditor({ singer, busy, onSave }: { singer: Singer; busy: b
   </form>
 }
 
-function SongRequestRow({ request, reference, setReference, collectionChannel, setCollectionChannel, busy, run }: { request: SongRequest; reference: string; setReference: (value: string) => void; collectionChannel: 'cash' | 'physical_pos'; setCollectionChannel: (value: 'cash' | 'physical_pos') => void; busy: boolean; run: (operation: () => Promise<unknown>, success: string) => Promise<void> }) {
+function SongRequestRow({ request, reference, setReference, collectionChannel, setCollectionChannel, busy, run }: { request: SongRequest; reference: string; setReference: (value: string) => void; collectionChannel: 'cash' | 'physical_pos'; setCollectionChannel: (value: 'cash' | 'physical_pos') => void; busy: boolean; run: SongOperationRunner }) {
   const modeLabel = request.requestMode === 'advance_reservation' ? '提前预约' : request.requestMode === 'extension_negotiation' ? '延长协商' : '本轮点歌'
   return <div className="song-request-row"><span className={`song-status status-${request.status}`}>{statusLabel(request.status)}</span><div><strong>{request.tableCode} · {request.priceSnapshot.songTitle}</strong><small>{request.priceSnapshot.singerName} · {modeLabel} · 排班V{request.scheduleVersion} / 歌单V{request.priceSnapshot.configVersion} · {money(request.priceSnapshot.priceAmount)}</small></div><div className="song-request-actions">{request.status === 'pending_confirmation' && <><button className="primary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'confirm'), '歌手、时间与费用已确认，请到桌现场收费')}><CheckCircle2 size={14} />确认可安排</button><button className="secondary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'reject', '歌手或现场安排无法演唱'), '已反馈客人本次无法安排')}>无法安排</button></>}{request.status === 'pending_payment' && <><select aria-label="现场收费方式" value={collectionChannel} onChange={(event) => setCollectionChannel(event.target.value as 'cash' | 'physical_pos')}><option value="physical_pos">物理POS</option><option value="cash">现金</option></select><input value={reference} onChange={(event) => setReference(event.target.value)} placeholder="现场收款凭证号" /><button className="primary-button" disabled={busy || reference.trim().length < 4} onClick={() => void run(() => reportSongOnsiteCollection(request.id, reference.trim(), collectionChannel), '现场收款已登记，等待歌手接单')}><Banknote size={14} />登记现场收款</button><button className="icon-button danger" title="取消未收款点歌" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'cancel', '客人现场付款前取消'), '点歌已取消')}><XCircle size={15} /></button></>}{request.status === 'paid' && <><button className="primary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'accept'), '歌手队列已接单')}><CheckCircle2 size={14} />接单</button><button className="secondary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'reject', '现场无法履约，经理发起退款'), '已拒绝并进入退款队列')}>拒绝并退款</button></>}{request.status === 'accepted' && <><button className="primary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'start'), '已开始演唱')}><Play size={14} />开始演唱</button><button className="secondary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'reject', '现场无法履约，经理发起退款'), '已拒绝并进入退款队列')}>拒绝并退款</button></>}{request.status === 'performing' && <button className="primary-button" disabled={busy} onClick={() => void run(() => actOnSongRequest(request.id, 'complete'), '本次点歌已完成')}><CheckCircle2 size={14} />完成</button>}{request.status === 'refund_required' && <><input value={reference} onChange={(event) => setReference(event.target.value)} placeholder="退款流水号" /><button className="primary-button" disabled={busy || reference.trim().length < 4} onClick={() => void run(() => actOnSongRequest(request.id, 'refund', '', reference.trim()), '点歌退款已登记')}><RotateCcw size={14} />确认退款</button></>}</div></div>
 }
@@ -290,3 +370,15 @@ function money(amount: number) { return new Intl.NumberFormat('zh-CN', { style: 
 function timeRange(startsAt: string, endsAt: string) { return `${formatChinaTime(startsAt)}-${formatChinaTime(endsAt)}` }
 function localDatetime(value: string) { return chinaDateTimeLocalValue(value) }
 function shiftLocalDatetime(value: string, minutes: number) { return localDatetime(new Date(Date.parse(chinaLocalDateTimeToIso(value)) + minutes * 60_000).toISOString()) }
+// oxlint-disable-next-line react/only-export-components
+export function moveLocalDatetimeToBusinessDate(value: string, previousBusinessDate: string, nextBusinessDate: string) {
+  if (!value || !previousBusinessDate || !nextBusinessDate) return value
+  const currentDate = value.slice(0, 10)
+  const dayOffset = dateOrdinal(currentDate) - dateOrdinal(previousBusinessDate)
+  return `${dateFromOrdinal(dateOrdinal(nextBusinessDate) + dayOffset)}${value.slice(10)}`
+}
+function dateOrdinal(value: string) {
+  const [year, month, day] = value.split('-').map(Number)
+  return Math.floor(Date.UTC(year!, month! - 1, day!) / 86_400_000)
+}
+function dateFromOrdinal(value: number) { return new Date(value * 86_400_000).toISOString().slice(0, 10) }

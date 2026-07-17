@@ -52,7 +52,7 @@ export interface RoleHomeModel {
   access: RoleHomeAccess
   metrics: RoleHomeMetric[]
   todos: RoleHomeTodo[]
-  navigation: Array<(typeof roleHomeNavigation)[number]>
+  navigation: Array<{ id: RoleHomeNavigationId; label: string }>
 }
 
 interface RoleProfile {
@@ -107,6 +107,20 @@ const roleProfiles: Record<RoleHomeKind, RoleProfile> = {
     focusLabel: '已分配任务与 KDS',
     navigation: ['tasks', 'commerce'],
   },
+}
+
+const roleNavigationLabels: Partial<Record<RoleHomeKind, Partial<Record<RoleHomeNavigationId, string>>>> = {
+  owner: { live: '全店现场', commerce: '订单与出品', payments: '收银与账务', master: '人员与岗位' },
+  operations_director: { live: '全店现场', commerce: '订单与出品', master: '人员与岗位', config: '运营规则' },
+  admin: { live: '运行状态', master: '人员与权限', config: '系统配置' },
+  manager: { live: '现场调度', commerce: '订单与出品', payments: '收银与退款', songs: '演出与点歌' },
+  server: { live: '我的桌台', tasks: '服务提醒', commerce: '点单与送餐', benefits: '赠送权益', songs: '协助点歌' },
+  bartender: { tasks: '服务提醒', commerce: '酒水制作', inventory: '吧台库存' },
+  kitchen: { tasks: '服务提醒', commerce: '餐品制作', inventory: '后厨库存' },
+  cashier: { reservations: '预约订金', tasks: '收银提醒', payments: '收银与退款', inventory: '盘点交接' },
+  host: { live: '桌台状态', tasks: '接待提醒', reservations: '预约与入座', benefits: '客户权益' },
+  runner: { live: '桌台位置', tasks: '配送提醒', commerce: '取货与送达' },
+  custom: { tasks: '我的任务', commerce: '我的出品' },
 }
 
 const roleAliases: Record<Exclude<RoleHomeKind, 'custom'>, readonly string[]> = {
@@ -209,7 +223,9 @@ export function buildRoleHomeModel(data: BootstrapResponse, employeeId: string):
     access,
     metrics,
     todos,
-    navigation: roleHomeNavigation.filter((item) => access.allowedNavigationIds.includes(item.id)),
+    navigation: roleHomeNavigation
+      .filter((item) => access.allowedNavigationIds.includes(item.id))
+      .map((item) => ({ ...item, label: roleNavigationLabels[access.kind]?.[item.id] ?? item.label })),
   }
 }
 

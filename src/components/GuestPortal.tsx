@@ -1,7 +1,8 @@
 import { Bell, CakeSlice, CheckCircle2, ChevronRight, Clock3, CreditCard, GlassWater, ListChecks, MapPin, MessageCircleMore, Mic2, Music2, Send, ShieldCheck, ShoppingBag, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { checkoutGuestOrder, createGuestOrder, createGuestSongRequest, createGuestTask, getGuestSession, submitGuestTaskFeedback } from '../api'
+import { checkoutGuestOrder, createGuestOrder, createGuestSongRequest, createGuestTask, getGuestSession, submitGuestTaskFeedback, trackGuestBehavior } from '../api'
 import type { GuestSessionResponse, GuestTaskView, WechatJsapiParameters } from '../shared/guest-contracts'
+import type { GuestBehaviorEventType, GuestBehaviorValue } from '../shared/guest-insight-contracts'
 import { formatGuestCompactCountdown, guestCustomSongServiceNote, guestErrorMessage, guestFeedbackIdempotencyKey, guestMoodServiceNote, guestReplyNotice, guestSessionHistoryUrl, guestSongReplyNotice, guestSongStatusLabel, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks, type GuestReplyNotice } from './guest-portal-utils'
 import { ServiceIcon } from './ServiceIcon'
 import { MenuOrderingWorkspace, type MenuCartItem } from './MenuOrderingWorkspace'
@@ -69,6 +70,26 @@ export function GuestPortal() {
 
   function accelerateRefresh() {
     fastPollUntil.current = Date.now() + 45_000
+  }
+
+  function recordBehavior(eventType: GuestBehaviorEventType, metadata: Record<string, GuestBehaviorValue> = {}) {
+    if (!latestTableToken.current) return
+    void trackGuestBehavior({
+      tableToken: latestTableToken.current,
+      eventType,
+      metadata,
+      idempotencyKey: `guest-behavior-${crypto.randomUUID()}`,
+    }).catch(() => undefined)
+  }
+
+  function selectTab(tab: 'menu' | 'service' | 'orders') {
+    setActiveTab(tab)
+    recordBehavior('tab_viewed', { tab })
+  }
+
+  function openSingerProfile(appearanceId: string, singerId: string) {
+    setSingerProfileAppearanceId(appearanceId)
+    recordBehavior('singer_profile_viewed', { appearanceId, singerId })
   }
 
   const refresh = useCallback(async () => {
@@ -222,6 +243,7 @@ export function GuestPortal() {
     if (succeeded) {
       setSelectedMood(mood.id)
       window.sessionStorage.setItem(`mbox-guest-mood-${tableCode}`, mood.id)
+      recordBehavior('mood_selected', { moodId: mood.id, previousMoodId: selectedMood })
     }
   }
 
@@ -383,6 +405,10 @@ export function GuestPortal() {
     setError(null)
     const idempotencyKey = `guest-cart-${crypto.randomUUID()}`
     try {
+      recordBehavior('cart_submitted', {
+        itemCount: items.reduce((sum, item) => sum + item.quantity, 0),
+        distinctProductCount: items.length,
+      })
       const order = await createGuestOrder({ tableToken: latestTableToken.current, items, idempotencyKey })
       try {
         await payOrder(order.id, `${idempotencyKey}-pay`)
@@ -419,7 +445,7 @@ export function GuestPortal() {
           <p><MapPin size={13} />服务专员 · {data?.primaryServiceName ?? '正在安排'}</p>
         </div>
         <div className="guest-stage-status">
-          <button className="guest-stage-primary" disabled={!featuredAppearance} onClick={() => featuredAppearance && setSingerProfileAppearanceId(featuredAppearance.appearanceId)}>
+          <button className="guest-stage-primary" disabled={!featuredAppearance} onClick={() => featuredAppearance && openSingerProfile(featuredAppearance.appearanceId, featuredAppearance.singerId)}>
             <span className="guest-stage-heading">
               {featuredAppearance ? <Music2 size={13} /> : <ShieldCheck size={13} />}
               <strong>{featuredAppearance?.singerName ?? 'M-BOX'}</strong>
@@ -431,7 +457,7 @@ export function GuestPortal() {
                 : <><b>即将登场</b><small>{formatGuestCompactCountdown(stage.countdownMs)} 后</small></> : stage.mode === 'finished' ? <b>今晚演出结束</b> : <b>咖啡与轻饮营业中</b>}</span>
             {featuredAppearance && <ChevronRight className="guest-stage-chevron" size={15} aria-hidden="true" />}
           </button>
-          {stage.mode === 'live' && stage.next && <button className="guest-stage-next" onClick={() => setSingerProfileAppearanceId(stage.next!.appearanceId)}><span>下一位 <b>{stage.next.singerName}</b></span><small>{formatGuestTime(stage.next.startsAt, data?.store.timezone)} 登场 · {formatGuestCompactCountdown(Math.max(0, Date.parse(stage.next.startsAt) - serverClock))}后</small><ChevronRight size={12} aria-hidden="true" /></button>}
+          {stage.mode === 'live' && stage.next && <button className="guest-stage-next" onClick={() => openSingerProfile(stage.next!.appearanceId, stage.next!.singerId)}><span>下一位 <b>{stage.next.singerName}</b></span><small>{formatGuestTime(stage.next.startsAt, data?.store.timezone)} 登场 · {formatGuestCompactCountdown(Math.max(0, Date.parse(stage.next.startsAt) - serverClock))}后</small><ChevronRight size={12} aria-hidden="true" /></button>}
         </div>
       </section>
 
@@ -473,9 +499,9 @@ export function GuestPortal() {
       {error && <div className="error-banner guest-error-banner" role="alert"><span>{error.message}</span><button className="guest-notice-close" type="button" title="关闭错误提示" aria-label="关闭错误提示" onClick={() => setError(null)}><X size={17} aria-hidden="true" /></button></div>}
 
       <nav className="guest-tabs" aria-label="桌台功能">
-        <button disabled={accountFrozen} className={activeTab === 'menu' ? 'is-active' : ''} onClick={() => setActiveTab('menu')}><ShoppingBag size={18} />点单</button>
-        <button disabled={accountFrozen} className={activeTab === 'service' ? 'is-active' : ''} onClick={() => setActiveTab('service')}><MessageCircleMore size={18} />服务</button>
-        <button className={activeTab === 'orders' ? 'is-active' : ''} onClick={() => setActiveTab('orders')}><ListChecks size={18} />订单</button>
+        <button disabled={accountFrozen} className={activeTab === 'menu' ? 'is-active' : ''} onClick={() => selectTab('menu')}><ShoppingBag size={18} />点单</button>
+        <button disabled={accountFrozen} className={activeTab === 'service' ? 'is-active' : ''} onClick={() => selectTab('service')}><MessageCircleMore size={18} />服务</button>
+        <button className={activeTab === 'orders' ? 'is-active' : ''} onClick={() => selectTab('orders')}><ListChecks size={18} />订单</button>
       </nav>
 
       {activeTab === 'menu' && !accountFrozen && <>
@@ -532,6 +558,11 @@ export function GuestPortal() {
           busy={checkoutBusy}
           timeZone={data?.store.timezone}
           onSubmit={placeAndPay}
+          onInteraction={(interaction) => recordBehavior(interaction.type, {
+            productId: interaction.productId ?? null,
+            categoryId: interaction.categoryId ?? null,
+            quantity: interaction.quantity ?? null,
+          })}
         />
       </>}
 

@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
-import type { RequestActorContext, RuntimeMode, StaffSessionClaims } from '../src/shared/auth-contracts.js'
+import type { RequestActorContext, RuntimeMode, StaffSessionClaims, StoreAccessPassClaims } from '../src/shared/auth-contracts.js'
 import type { RuntimeState } from '../src/shared/contracts.js'
 
 declare module 'fastify' {
@@ -44,6 +44,39 @@ export function signStaffSession(
   if (secret.length < 32) throw new Error('会话密钥至少需要32个字符')
   const payload = encode({ version: 1, ...claims })
   return `${payload}.${signature(payload, secret)}`
+}
+
+export function signStoreAccessPass(
+  claims: Omit<StoreAccessPassClaims, 'version' | 'tokenType'>,
+  secret: string,
+) {
+  if (secret.length < 32) throw new Error('会话密钥至少需要32个字符')
+  const payload = encode({ version: 1, tokenType: 'store_access', ...claims })
+  return `${payload}.${signature(payload, secret)}`
+}
+
+export function verifyStoreAccessPass(token: string, secret: string, now = Date.now()): StoreAccessPassClaims {
+  const [payload, suppliedSignature, extra] = token.split('.')
+  if (!payload || !suppliedSignature || extra) throw new AuthenticationError('门店当日凭证格式无效')
+  const expected = Buffer.from(signature(payload, secret))
+  const supplied = Buffer.from(suppliedSignature)
+  if (expected.length !== supplied.length || !timingSafeEqual(expected, supplied)) {
+    throw new AuthenticationError('门店当日凭证签名无效')
+  }
+  let claims: StoreAccessPassClaims
+  try {
+    claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as StoreAccessPassClaims
+  } catch {
+    throw new AuthenticationError('门店当日凭证载荷无效')
+  }
+  if (
+    claims.version !== 1 || claims.tokenType !== 'store_access' || !claims.storeId ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(claims.chinaDate) ||
+    !Number.isSafeInteger(claims.issuedAt) || !Number.isSafeInteger(claims.expiresAt)
+  ) throw new AuthenticationError('门店当日凭证声明无效')
+  if (claims.issuedAt > now + 60_000) throw new AuthenticationError('门店当日凭证签发时间异常')
+  if (claims.expiresAt <= now) throw new AuthenticationError('今天需要重新验证门店口令', 401, 'STORE_ACCESS_PASS_EXPIRED')
+  return claims
 }
 
 export function verifyStaffSession(token: string, secret: string, now = Date.now()): StaffSessionClaims {

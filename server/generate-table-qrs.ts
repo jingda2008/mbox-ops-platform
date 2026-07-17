@@ -82,8 +82,8 @@ if (isDirectRun) {
   if (process.env.MBOX_RUNTIME_MODE === 'production' && !baseUrl.startsWith('https://')) {
     throw new Error('生产桌码入口必须使用HTTPS')
   }
-  const outputDirectory = resolve(process.env.MBOX_QR_OUTPUT_DIR?.trim() || `private/table-qrs/${state.store.businessDate}`)
+  const outputDirectory = resolve(process.env.MBOX_QR_OUTPUT_DIR?.trim() || `private/table-qrs/${storeCode}/permanent`)
   const entries = buildTableQrEntries(state, baseUrl, required('MBOX_QR_SECRET'))
   await generateTableQrFiles(entries, outputDirectory)
-  process.stdout.write(`generated ${entries.length} table QR files in ${basename(outputDirectory)}\n`)
+  process.stdout.write(`generated ${entries.length} permanent table QR files in ${basename(outputDirectory)}\n`)
 }

@@ -73,6 +73,7 @@ import type {
   GuestTaskFeedbackInput,
   GuestTaskView,
 } from './shared/guest-contracts'
+import type { GuestBehaviorAccepted, GuestBehaviorEventInput } from './shared/guest-insight-contracts'
 import {
   isHighRiskOfflineWrite,
   getOfflineStatus,
@@ -99,17 +100,17 @@ export class OfflineWriteBlockedError extends Error {
   }
 }
 
-export function getPilotEmployees(accessCode: string) {
+export function getPilotEmployees(accessCode = '', storeAccessToken = '') {
   return request<PilotLoginResponse>('/api/auth/pilot-login', {
     method: 'POST',
-    body: JSON.stringify({ accessCode }),
+    body: JSON.stringify(accessCode ? { accessCode } : { storeAccessToken }),
   })
 }
 
-export function createPilotSession(accessCode: string, actorId: string, employeePin: string) {
+export function createPilotSession(storeAccessToken: string, actorId: string, employeePin: string) {
   return request<PilotLoginResponse>('/api/auth/pilot-login', {
     method: 'POST',
-    body: JSON.stringify({ accessCode, actorId, employeePin }),
+    body: JSON.stringify({ storeAccessToken, actorId, employeePin }),
   })
 }
 
@@ -210,6 +211,9 @@ async function requestBootstrap(revision?: number): Promise<BootstrapResponse | 
 async function guestRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers)
   if (init?.body) headers.set('Content-Type', 'application/json')
+  const anonymousGuestId = window.localStorage.getItem('mbox.guest.anonymous-id.v1')?.trim()
+  if (anonymousGuestId) headers.set('x-mbox-guest-id', anonymousGuestId)
+  headers.set('x-mbox-guest-source', 'guest_web')
   let response: Response
   try {
     response = await fetch(path, { ...init, headers })
@@ -226,6 +230,10 @@ async function guestRequest<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError('系统返回了无法识别的响应', response.status)
   }
   if (!response.ok) throw new ApiError(body.message ?? '系统请求失败', response.status)
+  const identity = (body as { guestIdentity?: { anonymousId?: unknown } }).guestIdentity
+  if (typeof identity?.anonymousId === 'string') {
+    window.localStorage.setItem('mbox.guest.anonymous-id.v1', identity.anonymousId)
+  }
   return body
 }
 
@@ -263,6 +271,13 @@ export function createGuestOrder(input: GuestCartOrderInput) {
 
 export function checkoutGuestOrder(input: GuestCheckoutInput) {
   return guestRequest<GuestCheckoutResponse>('/api/guest/checkout', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function trackGuestBehavior(input: GuestBehaviorEventInput) {
+  return guestRequest<GuestBehaviorAccepted>('/api/guest/events', {
     method: 'POST',
     body: JSON.stringify(input),
   })

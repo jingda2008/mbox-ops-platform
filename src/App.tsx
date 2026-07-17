@@ -284,11 +284,51 @@ export default function App() {
 
 function PilotLogin({ onAuthenticated }: { onAuthenticated: () => void }) {
   const [accessCode, setAccessCode] = useState('')
+  const [storeAccessToken, setStoreAccessToken] = useState('')
   const [employees, setEmployees] = useState<PilotEmployeeOption[]>([])
   const [actorId, setActorId] = useState('')
   const [employeePin, setEmployeePin] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+
+  function rememberStoreAccess(response: { storeAccessToken?: string; storeAccessExpiresAt?: number }) {
+    if (!response.storeAccessToken || !response.storeAccessExpiresAt) return
+    window.localStorage.setItem('mbox.store-access.token', response.storeAccessToken)
+    window.localStorage.setItem('mbox.store-access.expires-at', String(response.storeAccessExpiresAt))
+    setStoreAccessToken(response.storeAccessToken)
+  }
+
+  function clearStoreAccess() {
+    window.localStorage.removeItem('mbox.store-access.token')
+    window.localStorage.removeItem('mbox.store-access.expires-at')
+    setStoreAccessToken('')
+  }
+
+  useEffect(() => {
+    const token = window.localStorage.getItem('mbox.store-access.token') ?? ''
+    const expiresAt = Number(window.localStorage.getItem('mbox.store-access.expires-at') ?? 0)
+    if (!token || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) {
+      clearStoreAccess()
+      return
+    }
+    let active = true
+    setLoading(true)
+    void getPilotEmployees('', token).then((response) => {
+      if (!active) return
+      const options = response.employees ?? []
+      if (options.length === 0) throw new Error('当前没有可登录的在职员工')
+      rememberStoreAccess(response)
+      setEmployees(options)
+      setActorId(options[0]!.id)
+    }).catch((loginError) => {
+      if (!active) return
+      clearStoreAccess()
+      setError(loginError instanceof Error ? loginError.message : '今天需要重新验证门店口令')
+    }).finally(() => {
+      if (active) setLoading(false)
+    })
+    return () => { active = false }
+  }, [])
 
   async function verifyAccess() {
     setLoading(true)
@@ -297,6 +337,7 @@ function PilotLogin({ onAuthenticated }: { onAuthenticated: () => void }) {
       const response = await getPilotEmployees(accessCode)
       const options = response.employees ?? []
       if (options.length === 0) throw new Error('当前没有可登录的在职员工')
+      rememberStoreAccess(response)
       setEmployees(options)
       setActorId(options[0]!.id)
     } catch (loginError) {
@@ -310,8 +351,9 @@ function PilotLogin({ onAuthenticated }: { onAuthenticated: () => void }) {
     setLoading(true)
     setError('')
     try {
-      const response = await createPilotSession(accessCode, actorId, employeePin)
+      const response = await createPilotSession(storeAccessToken, actorId, employeePin)
       if (!response.token || !response.employee) throw new Error('员工会话签发失败')
+      rememberStoreAccess(response)
       await prepareOfflineDataForEmployee(response.employee.id)
       window.localStorage.setItem('mbox.auth.token', response.token)
       window.localStorage.setItem('mbox.actor.id', response.employee.id)
@@ -338,7 +380,7 @@ function PilotLogin({ onAuthenticated }: { onAuthenticated: () => void }) {
         <button className="primary-button" disabled={loading || (employees.length === 0 ? !accessCode : !actorId || employeePin.length < 6)} onClick={() => void (employees.length === 0 ? verifyAccess() : login())}>
           {loading ? <LoaderCircle className="spin" size={17} /> : <LogIn size={17} />}{employees.length === 0 ? '继续' : '进入运营台'}
         </button>
-        {employees.length > 0 && <button className="pilot-login-back" onClick={() => { setEmployees([]); setActorId(''); setEmployeePin(''); setError('') }}>重新输入口令</button>}
+        {employees.length > 0 && <button className="pilot-login-back" onClick={() => { clearStoreAccess(); setEmployees([]); setActorId(''); setEmployeePin(''); setError('') }}>重新验证门店口令</button>}
       </section>
     </main>
   )

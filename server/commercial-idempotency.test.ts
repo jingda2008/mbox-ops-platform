@@ -4,6 +4,7 @@ import { registerCommerceRoutes } from './commerce-api.js'
 import { registerPaymentRoutes } from './payment-api.js'
 import { JsonRepository } from './repository.js'
 import { receiveInventory } from './inventory-domain.js'
+import { anonymousVisitId, MemoryGuestInsightsStore } from './guest-insights.js'
 
 function registerTestActor(app: ReturnType<typeof Fastify>) {
   app.decorateRequest('mboxActor', null)
@@ -19,6 +20,59 @@ function registerTestActor(app: ReturnType<typeof Fastify>) {
 }
 
 describe('commercial API idempotency', () => {
+  it('assigns a visit identity and records staff-assisted menu ordering', async () => {
+    const repository = new JsonRepository(`/tmp/mbox-assisted-insight-${crypto.randomUUID()}.json`)
+    await repository.init()
+    const guestInsights = new MemoryGuestInsightsStore()
+    const app = Fastify()
+    registerTestActor(app)
+    registerCommerceRoutes(app, repository, {
+      guestTokenSecret: 'q'.repeat(32),
+      guestInsights,
+    })
+
+    const initial = await repository.read()
+    const table = initial.tables.find((item) => item.status === 'occupied')!
+    const product = initial.products.find((item) => item.enabled)!
+    await repository.mutate((state) => {
+      receiveInventory(state.inventoryDomain!, {
+        movementId: 'assisted-insight-receipt-1',
+        productId: product.id,
+        unitCode: 'bottle',
+        quantity: 10,
+        actorId: 'emp-chen',
+        reason: '协助点单匿名行为测试入库',
+        businessDate: state.store.businessDate,
+        occurredAt: new Date().toISOString(),
+        idempotencyKey: 'assisted-insight-receipt-0001',
+      })
+      state.revision += 1
+    })
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/commerce/orders',
+      payload: {
+        tableId: table.id,
+        items: [{ productId: product.id, quantity: 2 }],
+        actorId: 'emp-lin',
+        idempotencyKey: 'assisted-insight-order-0001',
+      },
+    })
+    expect(response.statusCode).toBe(201)
+    expect(guestInsights.events).toEqual([
+      expect.objectContaining({
+        anonymousId: anonymousVisitId(response.json().tableSessionId),
+        tableSessionId: response.json().tableSessionId,
+        eventType: 'order_created',
+        source: 'staff_assisted',
+        metadata: expect.objectContaining({ itemCount: 2 }),
+      }),
+    ])
+    await app.close()
+    await repository.close()
+  })
+
   it('replays order and payment creation without duplicate entities or audit entries', async () => {
     const repository = new JsonRepository(`/tmp/mbox-idempotency-${crypto.randomUUID()}.json`)
     await repository.init()

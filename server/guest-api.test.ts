@@ -9,6 +9,7 @@ import { requireGuestSession, signStaticTableQrToken, verifyTableAccessToken } f
 import { transferOpenTableSession } from './table-session-api.js'
 import { createPaymentIntent } from './payment-domain.js'
 import { applyTaskAction, createServiceTask } from './domain.js'
+import { MemoryGuestInsightsStore } from './guest-insights.js'
 
 const secret = 'q'.repeat(32)
 const sessionTtlMs = 5 * 60_000
@@ -18,14 +19,17 @@ async function fixture(runtimeMode: RuntimeMode = 'test', allowPaymentSimulation
   const repository = new JsonRepository(`/tmp/mbox-guest-${crypto.randomUUID()}.json`)
   await repository.init()
   const app = Fastify()
+  const guestInsights = new MemoryGuestInsightsStore()
+  await guestInsights.init()
   registerGuestRoutes(app, repository, {
     secret,
     runtimeMode,
     allowPaymentSimulation,
     ...(ttlMs === null ? {} : { guestSessionTtlMs: ttlMs }),
     now: () => now,
+    guestInsights,
   })
-  return { app, repository, now: () => now, setNow: (value: number) => { now = value } }
+  return { app, repository, guestInsights, now: () => now, setNow: (value: number) => { now = value } }
 }
 
 function staticQr(now: number, storeId = 'mbox-lujiazui', tableCode = 'L01', tokenVersion = 1) {
@@ -280,6 +284,66 @@ describe('guest table API', () => {
     })
     expect(feedback.statusCode).toBe(200)
     expect(feedback.json().status).toBe('confirmed')
+    await closeFixture(app, repository)
+  })
+
+  it('keeps one anonymous guest identity across the visit and records meaningful behavior idempotently', async () => {
+    const { app, repository, guestInsights, now } = await fixture()
+    const first = await exchange(app, staticQr(now()))
+    const anonymousId = first.body.guestIdentity.anonymousId
+    expect(anonymousId).toMatch(/^[0-9a-f-]{36}$/)
+
+    const refreshed = await app.inject({
+      method: 'GET',
+      url: `/api/guest/session?token=${encodeURIComponent(first.body.tableToken)}`,
+      headers: { 'x-mbox-guest-id': anonymousId },
+    })
+    expect(refreshed.statusCode).toBe(200)
+    expect(refreshed.json().guestIdentity.anonymousId).toBe(anonymousId)
+
+    const mood = await app.inject({
+      method: 'POST',
+      url: '/api/guest/events',
+      headers: { 'x-mbox-guest-id': anonymousId },
+      payload: {
+        tableToken: first.body.tableToken,
+        eventType: 'mood_selected',
+        metadata: { moodId: 'happy' },
+        idempotencyKey: 'mood-event-0001',
+      },
+    })
+    expect(mood.statusCode).toBe(202)
+
+    const forgedPayment = await app.inject({
+      method: 'POST',
+      url: '/api/guest/events',
+      headers: { 'x-mbox-guest-id': anonymousId },
+      payload: {
+        tableToken: first.body.tableToken,
+        eventType: 'payment_completed',
+        metadata: { amount: 1 },
+        idempotencyKey: 'forged-payment-0001',
+      },
+    })
+    expect(forgedPayment.statusCode).toBe(400)
+    expect(forgedPayment.json().code).toBe('GUEST_EVENT_SERVER_OWNED')
+
+    const service = await app.inject({
+      method: 'POST',
+      url: '/api/guest/tasks',
+      headers: { 'x-mbox-guest-id': anonymousId },
+      payload: {
+        tableToken: first.body.tableToken,
+        serviceTypeId: first.body.serviceTypes[0]!.id,
+        note: '',
+        idempotencyKey: 'anonymous-service-0001',
+      },
+    })
+    expect(service.statusCode).toBe(201)
+    expect(guestInsights.profiles.get(anonymousId)).toMatchObject({ visitCount: 1 })
+    expect(guestInsights.events.filter((event) => event.anonymousId === anonymousId).map((event) => event.eventType))
+      .toEqual(expect.arrayContaining(['session_started', 'mood_selected', 'service_requested']))
+    expect(guestInsights.events.filter((event) => event.eventType === 'session_started')).toHaveLength(1)
     await closeFixture(app, repository)
   })
 

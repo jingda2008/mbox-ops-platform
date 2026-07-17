@@ -46,13 +46,15 @@ import {
   ensureDeliveryServiceTask,
   syncDeliveryServiceTaskForKdsAction,
 } from './fulfillment-service.js'
-import { currentOpenTableSession } from './table-sessions.js'
+import { currentOpenTableSession, tableSessionBusinessDate } from './table-sessions.js'
 import { signGuestSessionToken } from './table-access.js'
+import { anonymousVisitId, type GuestInsightsStore } from './guest-insights.js'
 
 interface CommerceApiOptions {
   guestTokenSecret: string
   assistedPaymentTtlMs?: number
   now?: () => number
+  guestInsights?: GuestInsightsStore
 }
 
 export class CommerceRequestError extends Error {
@@ -117,6 +119,7 @@ export function registerCommerceRoutes(
 ) {
   app.post('/api/commerce/orders', async (request, reply) => {
     const input = cartOrderSchema.parse(request.body)
+    let insightContext: { tableSessionId: string; tableCode: string; businessDate: string } | null = null
     const order = await repository.mutate((state) => {
       const actor = requireOrderCreationRole(request, state)
       requireTableDataScope(request, state, input.tableId, 'commerce.order.create')
@@ -154,9 +157,11 @@ export function registerCommerceRoutes(
       syncOrderFulfillmentWorkstations(state)
       const now = new Date().toISOString()
       const orderId = deterministicId('order', input.idempotencyKey)
+      const tableSession = currentOpenTableSession(state, table.id)
+      insightContext = { tableSessionId: tableSession.id, tableCode: table.code, businessDate: tableSessionBusinessDate(state, tableSession) }
       createOrderDraft(state.orderDomain, {
         orderId,
-        tableSessionId: currentOpenTableSession(state, table.id).id,
+        tableSessionId: tableSession.id,
         createdBy: actor.actorId,
         occurredAt: now,
         idempotencyKey: `${input.idempotencyKey}:draft`,
@@ -206,6 +211,26 @@ export function registerCommerceRoutes(
       state.revision += 1
       return submitted
     })
+    if (options.guestInsights && insightContext) {
+      const context = insightContext as { tableSessionId: string; tableCode: string; businessDate: string }
+      try {
+        await options.guestInsights.recordEvent({
+          anonymousId: anonymousVisitId(context.tableSessionId),
+          ...context,
+          eventType: 'order_created',
+          source: 'staff_assisted',
+          occurredAt: order.createdAt,
+          metadata: {
+            orderId: order.id,
+            itemCount: input.items.reduce((sum, item) => sum + item.quantity, 0),
+            payableAmount: order.amounts.payableAmount,
+          },
+          idempotencyKey: `staff-order-created:${input.idempotencyKey}`,
+        })
+      } catch (error) {
+        request.log.error({ err: error, orderId: order.id }, 'staff assisted guest insight persistence failed')
+      }
+    }
     return reply.status(201).send(order)
   })
 

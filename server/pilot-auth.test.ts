@@ -42,6 +42,41 @@ function authOptions(store: RateLimitStore = rateLimitStore()) {
 }
 
 describe('pilot employee auth', () => {
+  it('reuses the daily store pass when switching employees and expires it at Beijing midnight', async () => {
+    let now = Date.parse('2026-07-17T10:00:00.000Z')
+    const app = Fastify()
+    await registerPilotAuthRoutes(app, repository(), { ...authOptions(), now: () => now })
+
+    const verified = await app.inject({
+      method: 'POST', url: '/api/auth/pilot-login', payload: { accessCode: 'store-pilot-code' },
+    })
+    expect(verified.statusCode).toBe(200)
+    expect(verified.json()).toMatchObject({
+      storeAccessToken: expect.any(String),
+      storeAccessExpiresAt: Date.parse('2026-07-17T16:00:00.000Z'),
+    })
+
+    const switched = await app.inject({
+      method: 'POST',
+      url: '/api/auth/pilot-login',
+      payload: {
+        storeAccessToken: verified.json().storeAccessToken,
+        actorId: 'emp-host',
+        employeePin: employeePins['emp-host'],
+      },
+    })
+    expect(switched.statusCode).toBe(200)
+    expect(switched.json()).toMatchObject({ employee: { id: 'emp-host' } })
+
+    now = Date.parse('2026-07-17T16:00:00.000Z')
+    const nextDay = await app.inject({
+      method: 'POST', url: '/api/auth/pilot-login', payload: { storeAccessToken: verified.json().storeAccessToken },
+    })
+    expect(nextDay.statusCode).toBe(401)
+    expect(nextDay.json().code).toBe('STORE_ACCESS_PASS_INVALID')
+    await app.close()
+  })
+
   it('verifies the access code before listing active employees and signing a session', async () => {
     const app = Fastify()
     const secret = 's'.repeat(32)

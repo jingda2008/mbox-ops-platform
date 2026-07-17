@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { RuntimeMode } from '../src/shared/auth-contracts.js'
 import {
   guestTaskCreateSchema,
@@ -12,6 +12,7 @@ import {
   type GuestTaskView,
   type TableAccessClaims,
 } from '../src/shared/guest-contracts.js'
+import { guestBehaviorEventSchema, type GuestBehaviorEventType, type GuestBehaviorValue } from '../src/shared/guest-insight-contracts.js'
 import type { RuntimeState, ServiceTask, Table } from '../src/shared/contracts.js'
 import type { PaymentIntent } from '../src/shared/payment-contracts.js'
 import type { Order } from '../src/shared/order-contracts.js'
@@ -38,6 +39,7 @@ import {
   type PaymentProviderResolver,
 } from './payment-provider.js'
 import { tableSessionBusinessDate, tableSessionRequiresHandover } from './table-sessions.js'
+import { MemoryGuestInsightsStore, type GuestInsightsStore } from './guest-insights.js'
 
 const DEFAULT_GUEST_SESSION_TTL_MS = 60 * 60_000
 
@@ -73,6 +75,83 @@ interface GuestApiOptions {
   guestSessionTtlMs?: number
   now?: () => number
   providerResolver?: PaymentProviderResolver
+  guestInsights?: GuestInsightsStore
+}
+
+const guestIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const guestSources = new Set(['guest_web', 'miniprogram', 'service_account', 'staff_assisted'])
+type GuestInsightCoordinates = { tableSessionId: string; tableCode: string; businessDate: string }
+const clientGuestEventMetadata = {
+  tab_viewed: new Set(['tab']),
+  mood_selected: new Set(['moodId', 'previousMoodId']),
+  category_viewed: new Set(['categoryId']),
+  product_added: new Set(['productId', 'quantity']),
+  product_removed: new Set(['productId', 'quantity']),
+  cart_cleared: new Set<string>(),
+  cart_submitted: new Set(['itemCount', 'distinctProductCount']),
+  singer_profile_viewed: new Set(['appearanceId', 'singerId']),
+} as const
+
+function clientBehaviorMetadata(
+  eventType: GuestBehaviorEventType,
+  metadata: Record<string, GuestBehaviorValue>,
+) {
+  const allowed = clientGuestEventMetadata[eventType as keyof typeof clientGuestEventMetadata]
+  if (!allowed) throw new TableAccessError('这个行为只能由系统确认后记录', 'GUEST_EVENT_SERVER_OWNED', 400)
+  return Object.fromEntries(Object.entries(metadata).filter(([key]) => allowed.has(key as never)))
+}
+
+function deterministicGuestId(value: string) {
+  const hex = createHash('sha256').update(value).digest('hex').slice(0, 32).split('')
+  hex[12] = '4'
+  hex[16] = ['8', '9', 'a', 'b'][Number.parseInt(hex[16]!, 16) % 4]!
+  return `${hex.slice(0, 8).join('')}-${hex.slice(8, 12).join('')}-${hex.slice(12, 16).join('')}-${hex.slice(16, 20).join('')}-${hex.slice(20).join('')}`
+}
+
+function guestIdentityFromRequest(request: FastifyRequest, fallback: () => string) {
+  const supplied = String(request.headers['x-mbox-guest-id'] ?? '').trim()
+  return guestIdPattern.test(supplied) ? supplied.toLowerCase() : fallback()
+}
+
+function guestIdentityForWrite(request: FastifyRequest, tableToken: string, options: GuestApiOptions) {
+  const claims = requireGuestSession(verifyTableAccessToken(tableToken, options.secret, options.now?.() ?? Date.now()))
+  return guestIdentityFromRequest(request, () => deterministicGuestId(`legacy-table-session:${claims.tableSessionId}`))
+}
+
+function guestSourceFromRequest(request: FastifyRequest) {
+  const supplied = String(request.headers['x-mbox-guest-source'] ?? '').trim()
+  return guestSources.has(supplied) ? supplied as 'guest_web' | 'miniprogram' | 'service_account' | 'staff_assisted' : 'guest_web'
+}
+
+async function recordGuestInsight(
+  request: FastifyRequest,
+  store: GuestInsightsStore,
+  input: {
+    anonymousId: string
+    tableSessionId: string
+    tableCode: string
+    businessDate: string
+    eventType: GuestBehaviorEventType
+    metadata?: Record<string, GuestBehaviorValue>
+    idempotencyKey: string
+    occurredAt?: string
+  },
+) {
+  try {
+    await store.recordEvent({
+      anonymousId: input.anonymousId,
+      tableSessionId: input.tableSessionId,
+      tableCode: input.tableCode,
+      businessDate: input.businessDate,
+      eventType: input.eventType,
+      source: guestSourceFromRequest(request),
+      occurredAt: input.occurredAt ?? new Date().toISOString(),
+      metadata: input.metadata ?? {},
+      idempotencyKey: input.idempotencyKey,
+    })
+  } catch (error) {
+    request.log.error({ err: error, eventType: input.eventType }, 'guest insight event persistence failed')
+  }
 }
 
 function tableTokenVersion(table: Table) {
@@ -170,6 +249,7 @@ function sessionView(
   tableToken: string,
   nowMs: number,
   enforceMaximumOpenHours: boolean,
+  anonymousId: string,
 ): GuestSessionResponse {
   const primary = state.employees.find((employee) => employee.id === table.primaryEmployeeId)
   const sessionBusinessDate = tableSessionBusinessDate(state, tableSession)
@@ -329,6 +409,7 @@ function sessionView(
       expiresAt: new Date(sessionClaims.expiresAt).toISOString(),
       tokenVersion: sessionClaims.tokenVersion,
     },
+    guestIdentity: { anonymousId, memberLinked: false, wechatLinked: false },
     tableToken,
     serverNow: new Date(nowMs).toISOString(),
   }
@@ -386,9 +467,21 @@ function writeAccessFromToken(state: RuntimeState, token: string, options: Guest
 
 export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRepository, options: GuestApiOptions) {
   const resolveProvider = options.providerResolver ?? createEnvironmentPaymentProviderResolver()
+  const guestInsights = options.guestInsights ?? new MemoryGuestInsightsStore()
   app.get<{ Querystring: { token?: string; table?: string } }>('/api/guest/session', async (request) => {
     const state = await repository.read()
     const access = exchangeAccessFromRequest(state, request.query.token, request.query.table, options)
+    const anonymousId = guestIdentityFromRequest(request, randomUUID)
+    await recordGuestInsight(request, guestInsights, {
+      anonymousId,
+      tableSessionId: access.tableSession.id,
+      tableCode: access.table.code,
+      businessDate: tableSessionBusinessDate(state, access.tableSession),
+      eventType: 'session_started',
+      metadata: { entry: request.query.token ? 'table_qr_or_session' : 'local_table_sample' },
+      idempotencyKey: `guest-session-started:${anonymousId}:${access.tableSession.id}`,
+      occurredAt: new Date(options.now?.() ?? Date.now()).toISOString(),
+    })
     return sessionView(
       state,
       access.table,
@@ -397,13 +490,38 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
       access.token,
       options.now?.() ?? Date.now(),
       options.runtimeMode === 'staging' || options.runtimeMode === 'production',
+      anonymousId,
     )
+  })
+
+  app.post('/api/guest/events', async (request, reply) => {
+    const input = guestBehaviorEventSchema.parse(request.body)
+    const state = await repository.read()
+    const { table, tableSession } = writeAccessFromToken(state, input.tableToken, options)
+    const anonymousId = guestIdentityFromRequest(
+      request,
+      () => deterministicGuestId(`legacy-table-session:${tableSession.id}`),
+    )
+    await recordGuestInsight(request, guestInsights, {
+      anonymousId,
+      tableSessionId: tableSession.id,
+      tableCode: table.code,
+      businessDate: tableSessionBusinessDate(state, tableSession),
+      eventType: input.eventType,
+      metadata: clientBehaviorMetadata(input.eventType, input.metadata),
+      idempotencyKey: `client:${anonymousId}:${input.idempotencyKey}`,
+      occurredAt: new Date(options.now?.() ?? Date.now()).toISOString(),
+    })
+    return reply.status(202).send({ accepted: true, anonymousId })
   })
 
   app.post('/api/guest/tasks', async (request, reply) => {
     const input = guestTaskCreateSchema.parse(request.body)
+    const anonymousId = guestIdentityForWrite(request, input.tableToken, options)
+    let insightContext: { tableSessionId: string; tableCode: string; businessDate: string } | null = null
     const result = await repository.mutate((state) => {
       const { table, tableSession } = writeAccessFromToken(state, input.tableToken, options)
+      insightContext = { tableSessionId: tableSession.id, tableCode: table.code, businessDate: tableSessionBusinessDate(state, tableSession) }
       const serviceType = state.config.serviceTypes.find((candidate) => candidate.id === input.serviceTypeId && candidate.enabled)
       if (!serviceType) throw new TableAccessError('这个服务今晚暂时没有开放，您可以选择“呼叫”，我们到桌听您说。', 'GUEST_SERVICE_NOT_AVAILABLE', 409)
       const normalizedNote = input.note.trim().replace(/\s+/g, ' ').toLowerCase()
@@ -446,13 +564,23 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
       })
       return taskView(state, task)
     })
+    if (insightContext) await recordGuestInsight(request, guestInsights, {
+      anonymousId,
+      ...(insightContext as GuestInsightCoordinates),
+      eventType: 'service_requested',
+      metadata: { serviceTypeId: input.serviceTypeId },
+      idempotencyKey: `service-requested:${anonymousId}:${input.idempotencyKey}`,
+    })
     return reply.status(201).send(result)
   })
 
   app.post('/api/guest/orders', async (request, reply) => {
     const input = guestCartOrderSchema.parse(request.body)
+    const anonymousId = guestIdentityForWrite(request, input.tableToken, options)
+    let insightContext: { tableSessionId: string; tableCode: string; businessDate: string } | null = null
     const order = await repository.mutate((state) => {
       const { table, tableSession } = writeAccessFromToken(state, input.tableToken, options)
+      insightContext = { tableSessionId: tableSession.id, tableCode: table.code, businessDate: tableSessionBusinessDate(state, tableSession) }
       const existing = state.orderDomain.orders.find((candidate) => (
         candidate.id === deterministicId('guest_order', input.idempotencyKey)
       ))
@@ -532,13 +660,23 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
       state.revision += 1
       return state.orderDomain.orders.find((candidate) => candidate.id === orderId)!
     })
+    if (insightContext) await recordGuestInsight(request, guestInsights, {
+      anonymousId,
+      ...(insightContext as GuestInsightCoordinates),
+      eventType: 'order_created',
+      metadata: { orderId: order.id, itemCount: input.items.reduce((sum, item) => sum + item.quantity, 0), payableAmount: order.amounts.payableAmount },
+      idempotencyKey: `order-created:${anonymousId}:${input.idempotencyKey}`,
+    })
     return reply.status(201).send(order)
   })
 
   app.post('/api/guest/checkout', async (request, reply) => {
     const input = guestCheckoutSchema.parse(request.body)
+    const anonymousId = guestIdentityForWrite(request, input.tableToken, options)
+    let insightContext: { tableSessionId: string; tableCode: string; businessDate: string } | null = null
     const prepared = await repository.mutate((state) => {
       const { table, tableSession } = writeAccessFromToken(state, input.tableToken, options)
+      insightContext = { tableSessionId: tableSession.id, tableCode: table.code, businessDate: tableSessionBusinessDate(state, tableSession) }
       const order = state.orderDomain.orders.find((candidate) => candidate.id === input.orderId)
       if (!order || order.tableSessionId !== tableSession.id) {
         throw new TableAccessError('这张订单不属于当前桌位，请让服务伙伴来帮您核对，别担心，我们会处理好。', 'GUEST_ORDER_ACCESS_FORBIDDEN', 403)
@@ -669,6 +807,22 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
         } : null,
       }
     })
+    if (insightContext) {
+      await recordGuestInsight(request, guestInsights, {
+        anonymousId,
+        ...(insightContext as GuestInsightCoordinates),
+        eventType: 'checkout_started',
+        metadata: { orderId: prepared.order.id, amount: prepared.paymentIntent.amount, channel: prepared.paymentIntent.channel },
+        idempotencyKey: `checkout-started:${anonymousId}:${input.idempotencyKey}`,
+      })
+      if (prepared.paymentIntent.status === 'succeeded') await recordGuestInsight(request, guestInsights, {
+        anonymousId,
+        ...(insightContext as GuestInsightCoordinates),
+        eventType: 'payment_completed',
+        metadata: { orderId: prepared.order.id, amount: prepared.paymentIntent.amount, channel: prepared.paymentIntent.channel },
+        idempotencyKey: `payment-completed:${anonymousId}:${prepared.paymentIntent.id}`,
+      })
+    }
     if (!prepared.providerRuntime || !prepared.providerRequest) {
       return reply.status(201).send(publicCheckoutResult(prepared))
     }
@@ -702,8 +856,11 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
 
   app.post<{ Params: { taskId: string } }>('/api/guest/tasks/:taskId/feedback', async (request) => {
     const input = guestTaskFeedbackSchema.parse(request.body)
-    return repository.mutate((state) => {
+    const anonymousId = guestIdentityForWrite(request, input.tableToken, options)
+    let insightContext: { tableSessionId: string; tableCode: string; businessDate: string } | null = null
+    const result = await repository.mutate((state) => {
       const { table, tableSession } = writeAccessFromToken(state, input.tableToken, options)
+      insightContext = { tableSessionId: tableSession.id, tableCode: table.code, businessDate: tableSessionBusinessDate(state, tableSession) }
       const task = state.tasks.find((candidate) => candidate.id === request.params.taskId)
       if (
         !task || task.tableId !== table.id ||
@@ -718,12 +875,23 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
         idempotencyKey: input.idempotencyKey,
       }))
     })
+    if (insightContext) await recordGuestInsight(request, guestInsights, {
+      anonymousId,
+      ...(insightContext as GuestInsightCoordinates),
+      eventType: 'service_feedback',
+      metadata: { taskId: request.params.taskId, action: input.action },
+      idempotencyKey: `service-feedback:${anonymousId}:${input.idempotencyKey}`,
+    })
+    return result
   })
 
   app.post('/api/guest/song-requests', async (request, reply) => {
     const input = guestSongRequestSchema.parse(request.body)
+    const anonymousId = guestIdentityForWrite(request, input.tableToken, options)
+    let insightContext: { tableSessionId: string; tableCode: string; businessDate: string } | null = null
     const result = await repository.mutate((state) => {
       const { table, tableSession } = writeAccessFromToken(state, input.tableToken, options)
+      insightContext = { tableSessionId: tableSession.id, tableCode: table.code, businessDate: tableSessionBusinessDate(state, tableSession) }
       const performance = state.songState.performanceSessions.find((candidate) =>
         candidate.appearances.some((appearance) => appearance.id === input.appearanceId),
       )
@@ -743,6 +911,13 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
       })
       if (state.songState.idempotencyRecords.length !== idempotencyCount) state.revision += 1
       return songRequest
+    })
+    if (insightContext) await recordGuestInsight(request, guestInsights, {
+      anonymousId,
+      ...(insightContext as GuestInsightCoordinates),
+      eventType: 'song_requested',
+      metadata: { appearanceId: input.appearanceId, singerId: input.singerId, songId: input.songId },
+      idempotencyKey: `song-requested:${anonymousId}:${input.idempotencyKey}`,
     })
     return reply.status(201).send(result)
   })

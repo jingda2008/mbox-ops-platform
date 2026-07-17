@@ -89,6 +89,7 @@ import { effectivePermissionIdsForEmployee } from '../src/shared/staff-access.js
 import { preserveProtectedProductCost, productCostView } from './product-cost-policy.js'
 import { MemoryRateLimitStore, PostgresRateLimitStore } from './rate-limit.js'
 import { registerPresenceRoutes } from './presence.js'
+import { MemoryGuestInsightsStore, PostgresGuestInsightsStore } from './guest-insights.js'
 
 const runtimeConfig = loadRuntimeConfig()
 
@@ -99,6 +100,13 @@ const app = Fastify({
 })
 const runtimeDependencies = createRuntimeDependencies(runtimeConfig)
 const repository = runtimeDependencies.repository
+const guestInsights = runtimeDependencies.postgresPool
+  ? new PostgresGuestInsightsStore({
+      pool: runtimeDependencies.postgresPool,
+      tenantId: runtimeConfig.tenantId!,
+      storeId: runtimeConfig.storeUuid!,
+    })
+  : new MemoryGuestInsightsStore()
 const rateLimitStore = runtimeDependencies.postgresPool
   ? new PostgresRateLimitStore({
       pool: runtimeDependencies.postgresPool,
@@ -114,6 +122,7 @@ const rateLimitStore = runtimeDependencies.postgresPool
     })
 
 await repository.init()
+await guestInsights.init()
 const paymentProviderResolver = createEnvironmentPaymentProviderResolver()
 const paymentRuntime = validateEnvironmentPaymentRuntime((await repository.read()).paymentDomain)
 await app.register(cors, {
@@ -196,6 +205,12 @@ if (runtimeConfig.wechatEnabled || customerNotificationsEnabled) {
         storeId: runtimeConfig.storeUuid!,
         appId: runtimeConfig.wechatAppId!,
       }],
+      onIdentityAuthenticated: async ({ anonymousGuestId, principal, occurredAt }) => {
+        await guestInsights.linkIdentity(anonymousGuestId, {
+          wechatPrincipalId: principal.principalId,
+          memberId: principal.memberId,
+        }, occurredAt)
+      },
     })
     app.get('/api/wechat/member-portal', async (request, reply) => {
       const authorization = request.headers.authorization
@@ -490,7 +505,7 @@ app.post('/api/dev/reset', async (request) => {
   return repository.reset()
 })
 
-registerCommerceRoutes(app, repository, { guestTokenSecret: runtimeConfig.qrSecret })
+registerCommerceRoutes(app, repository, { guestTokenSecret: runtimeConfig.qrSecret, guestInsights })
 registerPaymentRoutes(app, repository, {
   allowPilotSimulation: runtimeConfig.pilotPaymentSimulationEnabled,
   providerResolver: paymentProviderResolver,
@@ -508,6 +523,7 @@ registerGuestRoutes(app, repository, {
   runtimeMode: runtimeConfig.runtimeMode,
   allowPaymentSimulation: runtimeConfig.pilotPaymentSimulationEnabled,
   providerResolver: paymentProviderResolver,
+  guestInsights,
 })
 registerPublicReservationRoutes(app, repository, { secret: runtimeConfig.qrSecret, rateLimitStore })
 registerStoreImportRoutes(app, repository)

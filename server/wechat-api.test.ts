@@ -116,6 +116,29 @@ describe('wechat Fastify API registration and anonymous boundary', () => {
 })
 
 describe('wechat code authentication idempotency and failures', () => {
+  it('links a pre-login anonymous guest history after WeChat authentication', async () => {
+    const linked: Array<{ anonymousGuestId: string; principalId: string }> = []
+    const { app } = await buildApp({
+      onIdentityAuthenticated: async ({ anonymousGuestId, principal }) => {
+        linked.push({ anonymousGuestId, principalId: principal.principalId })
+      },
+    })
+    const challenge = await issueChallenge(app)
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/wechat/code-authentication',
+      payload: {
+        ...authenticationPayload(challenge),
+        anonymousGuestId: 'ef27c8ad-c4ef-4e36-86ed-214965067e84',
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(linked).toEqual([{
+      anonymousGuestId: 'ef27c8ad-c4ef-4e36-86ed-214965067e84',
+      principalId: response.json().principal.principalId,
+    }])
+  })
+
   it('replays a completed idempotency key without exchanging code twice and rejects challenge replay under a new key', async () => {
     const { app, identityRepository, provider } = await buildApp()
     const challenge = await issueChallenge(app)

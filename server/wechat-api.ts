@@ -29,6 +29,7 @@ const codeAuthenticationSchema = scopeSchema.extend({
   state: z.string().trim().min(16).max(4096),
   nonce: z.string().trim().min(16).max(512),
   idempotencyKey: idempotencyKeySchema,
+  anonymousGuestId: z.string().uuid().optional(),
   memberBinding: z.object({
     memberId: z.string().trim().min(1).max(128),
     grantToken: z.string().trim().min(24).max(512),
@@ -124,6 +125,26 @@ export interface WechatApiOptions {
   sessionTtlMs?: number
   now?: () => number
   anonymousRequestGuard?: (request: FastifyRequest) => Promise<WechatProviderResult<void>>
+  onIdentityAuthenticated?: (input: {
+    anonymousGuestId: string
+    principal: WechatAuthenticatedPrincipal
+    occurredAt: string
+  }) => Promise<void>
+}
+
+async function linkAnonymousGuest(
+  request: FastifyRequest,
+  options: WechatApiOptions,
+  anonymousGuestId: string | undefined,
+  principal: WechatAuthenticatedPrincipal,
+  occurredAt: number,
+) {
+  if (!anonymousGuestId || !options.onIdentityAuthenticated) return
+  try {
+    await options.onIdentityAuthenticated({ anonymousGuestId, principal, occurredAt: new Date(occurredAt).toISOString() })
+  } catch (error) {
+    request.log.error({ err: error, anonymousGuestId }, 'anonymous guest identity link failed')
+  }
 }
 
 function failure(
@@ -313,6 +334,7 @@ async function installWechatApi(app: FastifyInstance, options: WechatApiOptions)
         return sendFailure(reply, failure('replay', 'IDEMPOTENCY_KEY_REUSED', '幂等键已用于不同的微信登录请求'))
       }
       reply.header('Idempotent-Replayed', 'true')
+      await linkAnonymousGuest(request, options, input.anonymousGuestId, replay.response.principal, now())
       return reply.send(replay.response)
     }
 
@@ -378,6 +400,7 @@ async function installWechatApi(app: FastifyInstance, options: WechatApiOptions)
       return sendFailure(reply, failure('replay', 'IDEMPOTENCY_KEY_REUSED', '幂等键已用于不同的微信登录请求'))
     }
     if (committed.outcome === 'replayed') reply.header('Idempotent-Replayed', 'true')
+    await linkAnonymousGuest(request, options, input.anonymousGuestId, committed.record.response.principal, now())
     return reply.send(committed.record.response)
   })
 

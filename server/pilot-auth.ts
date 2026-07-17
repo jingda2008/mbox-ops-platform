@@ -3,15 +3,19 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod'
 import type { PilotEmployeeOption } from '../src/shared/auth-contracts.js'
 import type { RuntimeRepository } from './repository.js'
-import { signStaffSession } from './auth-context.js'
+import { signStaffSession, signStoreAccessPass, verifyStoreAccessPass } from './auth-context.js'
 import { DEFAULT_PRESENCE_LEASE_TTL_MS, establishPresenceLease } from './presence.js'
 import type { RateLimitStore } from './rate-limit.js'
+import { chinaDateKey, chinaStartOfDay, shiftDateKey } from '../src/shared/china-time.js'
 
 const pilotLoginSchema = z.object({
-  accessCode: z.string().min(1).max(256),
+  accessCode: z.string().min(1).max(256).optional(),
+  storeAccessToken: z.string().min(20).max(4096).optional(),
   actorId: z.string().min(1).max(128).optional(),
   employeePin: z.string().regex(/^\d{6,12}$/).optional(),
-}).strict()
+}).strict().refine((input) => Boolean(input.accessCode || input.storeAccessToken), {
+  message: '需要门店验证口令或当日凭证',
+})
 
 interface PilotAuthOptions {
   accessCode: string
@@ -20,6 +24,7 @@ interface PilotAuthOptions {
   sessionHours: number
   presenceLeaseTtlMs?: number
   rateLimitStore?: RateLimitStore
+  now?: () => number
 }
 
 const PILOT_LOGIN_RATE_LIMIT = { scope: 'pilot.login', limit: 5, windowMs: 10 * 60_000 } as const
@@ -51,7 +56,7 @@ export async function registerPilotAuthRoutes(
   const rateLimitStore = options.rateLimitStore
 
   app.post('/api/auth/pilot-login', async (request, reply) => {
-    const now = Date.now()
+    const now = options.now?.() ?? Date.now()
     const key = request.ip
     const rejectFailedLogin = async (statusCode: 401 | 403, code: string, message: string) => {
       const decision = await rateLimitStore.consume({ ...PILOT_LOGIN_RATE_LIMIT, key })
@@ -62,13 +67,35 @@ export async function registerPilotAuthRoutes(
     }
 
     const input = pilotLoginSchema.parse(request.body)
-    if (!sameSecret(input.accessCode, options.accessCode)) {
-      return rejectFailedLogin(401, 'PILOT_ACCESS_DENIED', '门店验证口令错误')
-    }
     const state = await repository.read()
+    let storeAccessToken = input.storeAccessToken ?? ''
+    let storeAccessExpiresAt = 0
+    if (input.storeAccessToken) {
+      try {
+        const claims = verifyStoreAccessPass(input.storeAccessToken, options.sessionSecret, now)
+        if (claims.storeId !== state.store.id || claims.chinaDate !== chinaDateKey(now)) {
+          return rejectFailedLogin(401, 'STORE_ACCESS_PASS_INVALID', '今天需要重新验证门店口令')
+        }
+        storeAccessExpiresAt = claims.expiresAt
+      } catch {
+        return rejectFailedLogin(401, 'STORE_ACCESS_PASS_INVALID', '今天需要重新验证门店口令')
+      }
+    } else {
+      if (!input.accessCode || !sameSecret(input.accessCode, options.accessCode)) {
+        return rejectFailedLogin(401, 'PILOT_ACCESS_DENIED', '门店验证口令错误')
+      }
+      storeAccessExpiresAt = chinaStartOfDay(shiftDateKey(chinaDateKey(now), 1)).getTime()
+      storeAccessToken = signStoreAccessPass({
+        storeId: state.store.id,
+        chinaDate: chinaDateKey(now),
+        issuedAt: now,
+        expiresAt: storeAccessExpiresAt,
+      }, options.sessionSecret)
+    }
     const employees = employeeOptions(state)
     if (!input.actorId) {
-      return { employees }
+      await rateLimitStore.clear({ scope: PILOT_LOGIN_RATE_LIMIT.scope, key })
+      return { employees, storeAccessToken, storeAccessExpiresAt }
     }
 
     const employee = employees.find((item) => item.id === input.actorId)
@@ -101,6 +128,8 @@ export async function registerPilotAuthRoutes(
       sessionId,
       presenceExpiresAt: loggedIn.presenceExpiresAt,
       employee: loggedIn.employee,
+      storeAccessToken,
+      storeAccessExpiresAt,
     }
   })
 }

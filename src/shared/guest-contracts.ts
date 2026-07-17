@@ -6,6 +6,7 @@ import type { Order } from './order-contracts.js'
 import type { ItemFulfillmentStatus, OrderStatus } from './order-contracts.js'
 import type { SongRequestStatus } from './song-contracts.js'
 import type { SongRequestMode } from './song-contracts.js'
+import type { GuestIdentityView } from './guest-insight-contracts.js'
 
 interface TableTokenClaimsBase {
   version: 2
@@ -132,6 +133,7 @@ export interface GuestSessionResponse {
     expiresAt: string
     tokenVersion: number
   }
+  guestIdentity: GuestIdentityView
   tableToken: string
   serverNow: string
 }

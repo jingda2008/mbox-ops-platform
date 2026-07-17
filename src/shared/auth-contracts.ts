@@ -9,6 +9,15 @@ export interface StaffSessionClaims {
   expiresAt: number
 }
 
+export interface StoreAccessPassClaims {
+  version: 1
+  tokenType: 'store_access'
+  storeId: string
+  chinaDate: string
+  issuedAt: number
+  expiresAt: number
+}
+
 export interface RequestActorContext {
   actorId: string
   storeId: string
@@ -27,6 +36,8 @@ export interface PilotEmployeeOption {
 
 export interface PilotLoginResponse {
   employees?: PilotEmployeeOption[]
+  storeAccessToken?: string
+  storeAccessExpiresAt?: number
   token?: string
   expiresAt?: number
   employee?: PilotEmployeeOption

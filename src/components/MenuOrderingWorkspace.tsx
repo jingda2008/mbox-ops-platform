@@ -9,6 +9,13 @@ export interface MenuCartItem {
   quantity: number
 }
 
+export interface MenuInteraction {
+  type: 'category_viewed' | 'product_added' | 'product_removed' | 'cart_cleared'
+  productId?: string
+  categoryId?: string
+  quantity?: number
+}
+
 interface MenuOrderingWorkspaceProps {
   products: MenuProduct[]
   tableLabel: string
@@ -18,6 +25,7 @@ interface MenuOrderingWorkspaceProps {
   busy?: boolean
   timeZone?: string
   onSubmit: (items: MenuCartItem[]) => Promise<void>
+  onInteraction?: (interaction: MenuInteraction) => void
 }
 
 export function MenuOrderingWorkspace({
@@ -29,6 +37,7 @@ export function MenuOrderingWorkspace({
   busy = false,
   timeZone = 'Asia/Shanghai',
   onSubmit,
+  onInteraction,
 }: MenuOrderingWorkspaceProps) {
   const [cart, setCart] = useState<Record<string, number>>({})
   const [categoryId, setCategoryId] = useState('all')
@@ -72,8 +81,8 @@ export function MenuOrderingWorkspace({
   }, [clock, products, timeZone])
 
   function changeQuantity(productId: string, delta: number) {
+    const nextQuantity = Math.max(0, Math.min(50, (cart[productId] ?? 0) + delta))
     setCart((current) => {
-      const nextQuantity = Math.max(0, Math.min(50, (current[productId] ?? 0) + delta))
       if (nextQuantity === 0) {
         const next = { ...current }
         delete next[productId]
@@ -81,12 +90,27 @@ export function MenuOrderingWorkspace({
       }
       return { ...current, [productId]: nextQuantity }
     })
+    onInteraction?.({
+      type: delta > 0 ? 'product_added' : 'product_removed',
+      productId,
+      quantity: nextQuantity,
+    })
+  }
+
+  function removeProduct(productId: string) {
+    setCart((current) => {
+      const next = { ...current }
+      delete next[productId]
+      return next
+    })
+    onInteraction?.({ type: 'product_removed', productId, quantity: 0 })
   }
 
   async function submit() {
     if (cartProducts.length === 0 || busy) return
     await onSubmit(cartProducts.map((product) => ({ productId: product.id, quantity: cart[product.id]! })))
     setCart({})
+    onInteraction?.({ type: 'cart_cleared' })
   }
 
   return (
@@ -103,7 +127,7 @@ export function MenuOrderingWorkspace({
         <div className="menu-catalog">
           <nav className="menu-categories" aria-label="菜单分类">
             {categories.map((category) => (
-              <button key={category.id} className={categoryId === category.id ? 'is-active' : ''} onClick={() => setCategoryId(category.id)}>
+              <button key={category.id} className={categoryId === category.id ? 'is-active' : ''} onClick={() => { setCategoryId(category.id); onInteraction?.({ type: 'category_viewed', categoryId: category.id }) }}>
                 {category.name}
               </button>
             ))}
@@ -153,7 +177,7 @@ export function MenuOrderingWorkspace({
               <div className="menu-cart-line" key={product.id}>
                 <div><strong>{product.name}</strong><span>¥{(product.listPriceAmount / 100).toFixed(0)} × {cart[product.id]}</span></div>
                 <div className="menu-stepper">
-                  <button title={`移除${product.name}`} onClick={() => setCart((current) => ({ ...current, [product.id]: 0 }))}><Trash2 size={15} /></button>
+                  <button title={`移除${product.name}`} onClick={() => removeProduct(product.id)}><Trash2 size={15} /></button>
                   <strong>{cart[product.id]}</strong>
                   <button title={`增加${product.name}`} onClick={() => changeQuantity(product.id, 1)}><Plus size={15} /></button>
                 </div>

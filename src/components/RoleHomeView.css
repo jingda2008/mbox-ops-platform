@@ -342,21 +342,22 @@
   }
   .role-home__metrics--4,
   .role-home__metrics--3,
-  .role-home__metrics--2 { grid-template-columns: 1fr; }
+  .role-home__metrics--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .role-home__metric,
   .role-home__metrics--4 .role-home__metric:nth-child(2) {
     min-height: 70px;
-    border-right: 0;
+    border-right: 1px solid var(--line, #dde0d8);
     border-bottom: 1px solid var(--line, #dde0d8);
   }
-  .role-home__metric:last-child,
-  .role-home__metrics--4 .role-home__metric:last-child { border-bottom: 0; }
-  .role-home__navigation { grid-template-columns: 1fr; }
+  .role-home__metric:nth-child(2n) { border-right: 0; }
+  .role-home__metric:nth-last-child(-n + 2) { border-bottom: 0; }
+  .role-home__navigation { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .role-home__navigation button,
   .role-home__navigation button:nth-child(2n),
   .role-home__navigation button:nth-last-child(-n + 2) {
-    border-right: 0;
+    border-right: 1px solid var(--line, #dde0d8);
     border-bottom: 1px solid var(--line, #dde0d8);
   }
-  .role-home__navigation button:last-child { border-bottom: 0; }
+  .role-home__navigation button:nth-child(2n) { border-right: 0; }
+  .role-home__navigation button:nth-last-child(-n + 2) { border-bottom: 0; }
 }

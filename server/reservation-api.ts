@@ -358,6 +358,12 @@ export function registerReservationRoutes(app: FastifyInstance, repository: Runt
             if (!table) throw new Error('入座桌台不存在')
             requireTableDataScope(request, state, table.id, 'reservation.manage')
             if (!['available', 'reserved'].includes(table.status)) throw new Error('入座桌台当前不可用')
+            const activeWaitlistHold = state.waitlistEntries.find((entry) => (
+              entry.heldTableId === table.id
+              && entry.status === 'notified'
+              && (!entry.responseExpiresAt || Date.parse(entry.responseExpiresAt) >= Date.parse(command.occurredAt))
+            ))
+            if (activeWaitlistHold) throw new Error(`该桌已锁给候补客人${activeWaitlistHold.customerName}，请先释放候补锁桌`)
             if (reservation.partySize > table.capacity) throw new Error(`到店人数超过桌台容量：${reservation.partySize}/${table.capacity}`)
             const primary = state.employees.find((employee) => employee.id === table.primaryEmployeeId && employee.status === 'active')
             if (!primary) throw new Error('桌台没有有效主服务员，不能安排入座')

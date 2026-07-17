@@ -2,6 +2,8 @@ import {
   Banknote,
   CalendarCheck,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   CircleAlert,
   Clock3,
   CreditCard,
@@ -108,6 +110,8 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
   const [refundCompletion, setRefundCompletion] = useState({ refundId: '', terminalRefundTransactionId: '', reason: '' })
   const [collectionDrafts, setCollectionDrafts] = useState<Record<string, CollectionDraft>>({})
   const [scannerAccount, setScannerAccount] = useState<TableAccount | null>(null)
+  const [activeWorkspace, setActiveWorkspace] = useState<'collection' | 'tracking' | 'refunds' | 'handover'>('collection')
+  const [showAllAccounts, setShowAllAccounts] = useState(false)
   const [settlement, setSettlement] = useState<PaymentSettlementView | null>(null)
   const [actualAmounts, setActualAmounts] = useState<Record<SettlementChannel, string>>({
     cash: '0.00', physical_pos: '0.00', wechat: '0.00', alipay: '0.00', unionpay: '0.00',
@@ -127,6 +131,10 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
     () => buildTableAccounts(data, paymentDomain.paymentIntents, paymentDomain.refunds),
     [data, paymentDomain.paymentIntents, paymentDomain.refunds],
   )
+  const preferredExpandedAccountId = preferredTableAccountId(tableAccounts)
+  const actionableAccounts = tableAccounts.filter((account) => account.collectableAmount > 0 || account.reservedAmount > 0 || account.orders.length > 0)
+  const visibleTableAccounts = showAllAccounts ? tableAccounts : actionableAccounts
+  const [expandedAccountId, setExpandedAccountId] = useState(preferredExpandedAccountId)
   const physicalPosIntents = paymentDomain.paymentIntents.filter(
     (intent) => intent.channel === PHYSICAL_POS_CHANNEL && intent.status === 'pending',
   )
@@ -153,6 +161,14 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
   const activeRoleIds = activeShift ? [activeShift.roleId, ...(activeShift.roleIds ?? [])] : []
   const isCashier = activeRoleIds.includes('cashier')
   const isManager = activeRoleIds.includes('manager') || currentEmployee?.roleId === 'manager'
+
+  useEffect(() => {
+    setExpandedAccountId((current) => (
+      tableAccounts.some((account) => account.tableSessionId === current)
+        ? current
+        : preferredExpandedAccountId
+    ))
+  }, [preferredExpandedAccountId, tableAccounts])
 
   const loadSettlement = useCallback(async () => {
     const result = await paymentApi.getPaymentSettlement(data.store.businessDate)
@@ -426,40 +442,74 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
         <Metric icon={RotateCcw} value={String(pendingRefunds.length)} label="待审批退款" />
       </section>
 
-      <section className="cashier-section table-account-section">
-        <SectionTitle icon={ReceiptText} eyebrow="按桌次归集" title="营业桌账与结台" meta={`${tableAccounts.length}个桌次`} />
+      <nav className="payment-workspace-tabs" aria-label="收银工作分类">
+        {([
+          ['collection', '收款', tableAccounts.filter((account) => account.collectableAmount > 0).length],
+          ['tracking', '支付追踪', paymentDomain.paymentIntents.length],
+          ['refunds', '退款', pendingRefunds.length],
+          ['handover', '交班关账', settlement?.latestHandover ? 1 : 0],
+        ] as const).map(([id, label, count]) => (
+          <button key={id} type="button" className={activeWorkspace === id ? 'is-active' : ''} aria-pressed={activeWorkspace === id} onClick={() => setActiveWorkspace(id)}>
+            {label}<span>{count}</span>
+          </button>
+        ))}
+      </nav>
+
+      {activeWorkspace === 'collection' && <section className="cashier-section table-account-section">
+        <SectionTitle icon={ReceiptText} eyebrow="按桌次归集" title="待收桌账与结台" meta={`${actionableAccounts.length}个待处理`} />
+        <div className="table-account-filter">
+          <span>{showAllAccounts ? `显示全部 ${tableAccounts.length} 个营业桌次` : '仅显示有订单、待收款或支付中的桌次'}</span>
+          <button className="secondary-button" type="button" onClick={() => setShowAllAccounts((value) => !value)}>
+            {showAllAccounts ? '只看待处理' : `查看全部桌次 (${tableAccounts.length})`}
+          </button>
+        </div>
         <div className="table-account-list">
-          {tableAccounts.length === 0 && <EmptyState icon={FileCheck2} text="当前没有可收款桌账" />}
-          {tableAccounts.map((account) => (
-            <article className="table-account-row" key={account.tableSessionId}>
-              <div className="table-account-identity">
-                <span>{account.tableCode}</span>
-                <strong>{account.tableName}</strong>
-                <small>{account.orders.length}笔订单 · 桌次 {shortId(account.tableSessionId)}</small>
+          {visibleTableAccounts.length === 0 && <EmptyState icon={FileCheck2} text="当前没有待收款桌账" />}
+          {visibleTableAccounts.map((account) => {
+            const isExpanded = expandedAccountId === account.tableSessionId
+            const detailsId = `table-account-details-${account.tableSessionId.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+            return <article className={isExpanded ? 'table-account-row is-expanded' : 'table-account-row'} key={account.tableSessionId}>
+              <div className="table-account-summary">
+                <div className="table-account-identity">
+                  <span>{account.tableCode}</span>
+                  <strong>{account.tableName}</strong>
+                  <small>{account.orders.length}笔订单 · 桌次 {shortId(account.tableSessionId)}</small>
+                </div>
+                <div className="table-account-amounts">
+                  <span>桌账应收<strong>{money(account.totalAmount)}</strong></span>
+                  <span>支付处理中<strong>{money(account.reservedAmount)}</strong></span>
+                  <span className="is-due">本次可收<strong>{money(account.collectableAmount)}</strong></span>
+                </div>
+                <button
+                  className="secondary-button table-account-toggle"
+                  type="button"
+                  aria-expanded={isExpanded}
+                  aria-controls={detailsId}
+                  onClick={() => setExpandedAccountId(isExpanded ? '' : account.tableSessionId)}
+                >
+                  {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                  {isExpanded ? '收起桌账' : account.collectableAmount > 0 ? '办理收款' : '查看桌账'}
+                </button>
               </div>
-              <div className="table-account-amounts">
-                <span>桌账应收<strong>{money(account.totalAmount)}</strong></span>
-                <span>支付处理中<strong>{money(account.reservedAmount)}</strong></span>
-                <span className="is-due">本次可收<strong>{money(account.collectableAmount)}</strong></span>
-              </div>
-              <div className="table-account-orders">
-                {account.orders.map((order) => (
-                  <div className="order-summary" key={order.id}>
-                    <span>订单 {shortId(order.id)}</span>
-                    <strong>{order.items.map((item) => `${item.name}×${item.quantity}`).join('、')}</strong>
-                    <b>{money(order.amounts.payableAmount)}</b>
-                  </div>
-                ))}
-              </div>
-              <CollectionControls
-                account={account}
-                draft={collectionDrafts[account.tableSessionId] ?? emptyCollectionDraft()}
-                disabled={Boolean(busyAction)}
-                onMode={(mode) => updateCollectionDraft(account.tableSessionId, { mode })}
-                onAmount={(amountYuan) => updateCollectionDraft(account.tableSessionId, { amountYuan })}
-                onQuantity={(key, quantity) => updateLineQuantity(account.tableSessionId, key, quantity)}
-              />
-              <div className="table-account-actions">
+              {isExpanded && <div className="table-account-details" id={detailsId}>
+                <div className="table-account-orders">
+                  {account.orders.map((order) => (
+                    <div className="order-summary" key={order.id}>
+                      <span>订单 {shortId(order.id)}</span>
+                      <strong>{order.items.map((item) => `${item.name}×${item.quantity}`).join('、')}</strong>
+                      <b>{money(order.amounts.payableAmount)}</b>
+                    </div>
+                  ))}
+                </div>
+                <CollectionControls
+                  account={account}
+                  draft={collectionDrafts[account.tableSessionId] ?? emptyCollectionDraft()}
+                  disabled={Boolean(busyAction)}
+                  onMode={(mode) => updateCollectionDraft(account.tableSessionId, { mode })}
+                  onAmount={(amountYuan) => updateCollectionDraft(account.tableSessionId, { amountYuan })}
+                  onQuantity={(key, quantity) => updateLineQuantity(account.tableSessionId, key, quantity)}
+                />
+                <div className="table-account-actions">
                 <button
                   className="primary-button"
                   type="button"
@@ -509,14 +559,15 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
                     {busyAction === `close:${account.tableId}` ? <LoaderCircle className="spin" size={16} /> : <CheckCircle2 size={16} />}结台
                   </button>
                 )}
-              </div>
+                </div>
+              </div>}
             </article>
-          ))}
+          })}
         </div>
-      </section>
+      </section>}
 
-      <div className="payment-work-grid">
-        <section className="cashier-section intent-section">
+      {(activeWorkspace === 'collection' || activeWorkspace === 'tracking') && <div className="payment-work-grid is-single">
+        {activeWorkspace === 'tracking' && <section className="cashier-section intent-section">
           <SectionTitle icon={Landmark} eyebrow="逐笔追踪商品分摊" title="支付意图" meta={`${paymentDomain.paymentIntents.length}笔`} />
           <div className="payment-intent-list">
             {paymentDomain.paymentIntents.length === 0 && <EmptyState icon={ReceiptText} text="尚未创建支付意图" />}
@@ -529,13 +580,16 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
                 onSimulate={simulateSuccess}
                 onConfirmCash={confirmCash}
                 onQueryProvider={queryProvider}
-                onRefund={(draft) => setRefundDraft(draft)}
+                onRefund={(draft) => {
+                  setRefundDraft(draft)
+                  setActiveWorkspace('refunds')
+                }}
               />
             ))}
           </div>
-        </section>
+        </section>}
 
-        <section className="cashier-section pos-section">
+        {activeWorkspace === 'collection' && <section className="cashier-section pos-section">
           <SectionTitle icon={CreditCard} eyebrow="外部终端收款" title="物理POS人工报送" meta={`${physicalPosIntents.length}笔待报送`} />
           <div className="pos-guidance">
             <CircleAlert size={17} />
@@ -563,10 +617,10 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
               确认人工报送
             </button>
           </form>
-        </section>
-      </div>
+        </section>}
+      </div>}
 
-      <section className="cashier-section settlement-section">
+      {activeWorkspace === 'handover' && <section className="cashier-section settlement-section">
         <SectionTitle
           icon={CalendarCheck}
           eyebrow="收银提交 · 经理独立复核"
@@ -654,9 +708,9 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
             </button>
           </form>
         )}
-      </section>
+      </section>}
 
-      <section className="cashier-section refund-section">
+      {activeWorkspace === 'refunds' && <section className="cashier-section refund-section">
         <SectionTitle icon={RefreshCcw} eyebrow="按原支付商品追溯" title="商品退款与审批" meta={`${pendingRefunds.length}笔待审批`} />
         {refundDraft && (
           <form className="refund-request-form" onSubmit={submitRefund}>
@@ -713,7 +767,7 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
             </article>
           })}
         </div>
-      </section>
+      </section>}
       {scannerAccount && (
         <CustomerPaymentCodeScanner
           tableCode={scannerAccount.tableCode}
@@ -946,8 +1000,15 @@ function buildTableAccounts(data: BootstrapResponse, intents: PaymentIntent[], r
   })
 }
 
-function tableFromSession(data: BootstrapResponse, tableSessionId: string) {
-  return data.tables.find((table) => tableSessionId.startsWith(`session:${table.id}:`))
+// oxlint-disable-next-line react/only-export-components
+export function tableFromSession(data: BootstrapResponse, tableSessionId: string) {
+  const currentTableId = data.songState.tableSessions.find((session) => session.id === tableSessionId)?.tableId
+  return data.tables.find((table) => table.id === currentTableId)
+}
+
+// oxlint-disable-next-line react/only-export-components
+export function preferredTableAccountId(accounts: Array<{ tableSessionId: string; collectableAmount: number }>) {
+  return accounts.find((account) => account.collectableAmount > 0)?.tableSessionId ?? ''
 }
 
 function findOrderItem(data: BootstrapResponse, orderId: string, orderItemId: string): OrderItem | undefined {

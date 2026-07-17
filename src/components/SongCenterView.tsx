@@ -172,6 +172,14 @@ interface ScheduleRowDraft {
   acceptingRequests: boolean
 }
 
+// oxlint-disable-next-line react/only-export-components
+export const scheduleDateFieldLabels = {
+  startsAt: '演出开始',
+  endsAt: '演出结束',
+  requestOpensAt: '点歌开放',
+  requestClosesAt: '点歌截止',
+} as const
+
 function PerformanceScheduleEditor({ data, session, busy, run }: { data: BootstrapResponse; session: PerformanceSession | null; busy: boolean; run: (operation: () => Promise<unknown>, success: string) => Promise<void> }) {
   const [businessDate, setBusinessDate] = useState(session?.businessDate ?? data.store.businessDate)
   const [title, setTitle] = useState(session?.title ?? 'M-BOX 今晚现场')
@@ -204,12 +212,16 @@ function PerformanceScheduleEditor({ data, session, busy, run }: { data: Bootstr
       <button type="button" className="secondary-button" disabled={busy || data.songState.singers.length === 0} onClick={addAppearance}><Plus size={15} />增加一轮</button>
     </div>
     <div className="schedule-list">
-      <div className="schedule-head"><span>歌手</span><span>演出开始</span><span>演出结束</span><span>点歌开放</span><span>点歌截止</span><span>状态</span><span /></div>
       {rows.length === 0 ? <div className="compact-empty">还没有演出轮次，点击“增加一轮”开始排班。</div> : rows.map((row, index) => <div className="schedule-row" key={row.id}>
-        <select aria-label={`第${index + 1}轮歌手`} value={row.singerId} onChange={(event) => setRows(rows.map((item) => item.id === row.id ? { ...item, singerId: event.target.value } : item))}>{data.songState.singers.filter((item) => item.active || item.id === row.singerId).map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select>
-        {(['startsAt', 'endsAt', 'requestOpensAt', 'requestClosesAt'] as const).map((field) => <input key={field} aria-label={field} type="datetime-local" value={row[field]} onChange={(event) => setRows(rows.map((item) => item.id === row.id ? { ...item, [field]: event.target.value } : item))} />)}
-        <label className="enabled-toggle"><input type="checkbox" checked={row.acceptingRequests} onChange={(event) => setRows(rows.map((item) => item.id === row.id ? { ...item, acceptingRequests: event.target.checked } : item))} /><span>{row.acceptingRequests ? '可点歌' : '暂停'}</span></label>
-        <button type="button" className="icon-button danger" title="删除这一轮" onClick={() => setRows(rows.filter((item) => item.id !== row.id))}><XCircle size={16} /></button>
+        <div className="schedule-row-heading">
+          <strong>第{index + 1}轮</strong>
+          <button type="button" className="icon-button danger" title={`删除第${index + 1}轮`} aria-label={`删除第${index + 1}轮`} onClick={() => setRows(rows.filter((item) => item.id !== row.id))}><XCircle size={16} /></button>
+        </div>
+        <div className="schedule-fields">
+          <label className="schedule-field schedule-singer-field"><span>歌手</span><select aria-label={`第${index + 1}轮歌手`} value={row.singerId} onChange={(event) => setRows(rows.map((item) => item.id === row.id ? { ...item, singerId: event.target.value } : item))}>{data.songState.singers.filter((item) => item.active || item.id === row.singerId).map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select></label>
+          {(Object.keys(scheduleDateFieldLabels) as Array<keyof typeof scheduleDateFieldLabels>).map((field) => <label className="schedule-field" key={field}><span>{scheduleDateFieldLabels[field]}</span><input aria-label={`第${index + 1}轮${scheduleDateFieldLabels[field]}`} type="datetime-local" value={row[field]} onChange={(event) => setRows(rows.map((item) => item.id === row.id ? { ...item, [field]: event.target.value } : item))} /></label>)}
+          <label className="schedule-field schedule-request-status"><span>点歌状态</span><span className="enabled-toggle"><input type="checkbox" checked={row.acceptingRequests} onChange={(event) => setRows(rows.map((item) => item.id === row.id ? { ...item, acceptingRequests: event.target.checked } : item))} /><span>{row.acceptingRequests ? '可点歌' : '暂停'}</span></span></label>
+        </div>
       </div>)}
     </div>
     <div className="schedule-actions"><span>点歌开放与截止时间可早于或覆盖歌手演出时段，但必须处于整场演出的时间范围内。</span><button className="primary-button" disabled={busy || rows.length === 0 || !title.trim()}><Save size={15} />保存整晚排班</button></div>

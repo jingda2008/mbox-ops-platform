@@ -259,6 +259,28 @@ export function createPaymentIntent(state: PaymentDomainState, command: CreatePa
   )
 }
 
+const PAYMENT_EXPIRED_REASON = '支付意图已过期'
+
+export function expirePaymentIntents(
+  state: PaymentDomainState,
+  occurredAt: string,
+  tableSessionId?: string,
+) {
+  assertTimestamp(occurredAt, '支付意图过期处理时间')
+  const occurredAtMs = Date.parse(occurredAt)
+  const expired = state.paymentIntents.filter((intent) => (
+    ['pending', 'processing'].includes(intent.status)
+    && (!tableSessionId || intent.tableSessionId === tableSessionId)
+    && Date.parse(intent.expiresAt) <= occurredAtMs
+  ))
+  for (const intent of expired) {
+    intent.status = 'closed'
+    intent.closedAt = occurredAt
+    intent.failureReason = PAYMENT_EXPIRED_REASON
+  }
+  return expired
+}
+
 function assertPaymentObservation(
   intent: PaymentIntent,
   observation: {
@@ -303,7 +325,19 @@ function applyPaymentStatus(
     if (status !== 'succeeded') throw new Error('已成功支付不能回退状态')
     return
   }
-  if (['failed', 'closed'].includes(intent.status)) throw new Error('终态支付意图不能继续变更')
+  if (intent.status === 'closed') {
+    const paidBeforeExpiry = status === 'succeeded'
+      && intent.failureReason === PAYMENT_EXPIRED_REASON
+      && Date.parse(occurredAt) <= Date.parse(intent.expiresAt)
+    if (!paidBeforeExpiry) throw new Error('终态支付意图不能继续变更')
+    intent.status = 'succeeded'
+    intent.channelTransactionId = channelTransactionId
+    intent.paidAt = occurredAt
+    intent.closedAt = null
+    intent.failureReason = null
+    return
+  }
+  if (intent.status === 'failed') throw new Error('终态支付意图不能继续变更')
 
   intent.channelTransactionId = channelTransactionId
   switch (status) {
@@ -748,7 +782,7 @@ export function startRefund(state: PaymentDomainState, command: StartRefundComma
     (id) => state.refunds.find((item) => item.id === id),
     () => {
       const refund = findRefund(state, command.refundId)
-      if (refund.status !== 'approved') throw new Error('只有已批准退款可以提交渠道')
+      if (!['approved', 'failed'].includes(refund.status)) throw new Error('只有已批准或渠道失败的退款可以提交渠道')
       if (Date.parse(command.occurredAt) < Date.parse(refund.decidedAt ?? refund.requestedAt)) {
         throw new Error('退款处理时间不能早于审批时间')
       }
@@ -759,6 +793,10 @@ export function startRefund(state: PaymentDomainState, command: StartRefundComma
       refund.status = 'processing'
       refund.channelRefundId = command.channelRefundId
       refund.processingAt = command.occurredAt
+      refund.channelRefundTransactionId = null
+      refund.succeededAt = null
+      refund.failedAt = null
+      refund.failureReason = null
       return refund
     },
     (refund) => refund.id,

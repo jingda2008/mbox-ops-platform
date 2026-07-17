@@ -23,7 +23,7 @@ import {
   saveConfigDraft,
 } from './domain.js'
 import { createRuntimeDependencies } from './repository-factory.js'
-import { registerCommerceRoutes } from './commerce-api.js'
+import { CommerceRequestError, registerCommerceRoutes } from './commerce-api.js'
 import { registerPaymentRoutes } from './payment-api.js'
 import { PaymentProviderUnavailableError } from './payment-provider.js'
 import { processAwaitingOrderReminders, registerProactiveServiceRoutes } from './proactive-service.js'
@@ -78,6 +78,7 @@ import { registerPilotAuthRoutes } from './pilot-auth.js'
 import { AuthorizationError, requireApprovalAmount, requireConfiguredOperation, requireTableDataScope } from './authorization.js'
 import { createCustomerNotificationAdapters } from './notification-runtime.js'
 import { syncKdsFromFulfillmentServiceTaskAction } from './fulfillment-service.js'
+import { processOverdueProductionTasks } from './kds-production-alerts.js'
 import { projectRuntimeStateForActor } from './bootstrap-projection.js'
 import { effectivePermissionIdsForEmployee } from '../src/shared/staff-access.js'
 import { preserveProtectedProductCost, productCostView } from './product-cost-policy.js'
@@ -252,6 +253,9 @@ app.setErrorHandler((error, _request, reply) => {
   if (error instanceof AuthorizationError) {
     return reply.status(error.statusCode).send({ code: error.code, message: error.message, operation: error.operation })
   }
+  if (error instanceof CommerceRequestError) {
+    return reply.status(error.statusCode).send({ code: error.code, message: error.message })
+  }
   if (error instanceof TableAccessError) {
     return reply.status(error.statusCode).send({ code: error.code, message: error.message })
   }
@@ -350,7 +354,11 @@ app.post('/api/config/publish', async (request) => {
   })
 })
 
-app.get('/api/config/versions', async () => (await repository.read()).configVersions.toSorted((left, right) => right.version - left.version))
+app.get('/api/config/versions', async (request) => {
+  const state = await repository.read()
+  requireConfiguredOperation(request, state, 'config.write')
+  return state.configVersions.toSorted((left, right) => right.version - left.version)
+})
 
 app.post<{ Params: { version: string } }>('/api/config/versions/:version/rollback', async (request) => {
   const input = rollbackConfigVersionSchema.omit({ actorId: true, occurredAt: true, targetVersion: true }).parse(request.body)
@@ -505,6 +513,7 @@ const scheduler = setInterval(() => {
   schedulerRunning = true
   void repository.mutate((state) => {
     processAwaitingOrderReminders(state)
+    processOverdueProductionTasks(state)
     escalateDueTasks(state)
   }).then(() => dispatchDueNotifications(repository, customerNotificationAdapters, notificationWorkerId))
     .catch((error) => app.log.error(error))

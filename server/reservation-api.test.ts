@@ -191,4 +191,39 @@ describe('reservation employee API', () => {
     await app.close()
     await repository.close()
   })
+
+  it('does not seat a reservation at a table actively held for a waitlist guest', async () => {
+    const { app, repository } = await fixture(true, 'manager')
+    const created = await app.inject({
+      method: 'POST', url: '/api/reservations',
+      payload: { ...reservationPayload, occasionCode: 'other', idempotencyKey: 'reservation-held-table-create' },
+    })
+    const reservationId = created.json().id as string
+    await repository.mutate((state) => {
+      const now = new Date().toISOString()
+      state.reservationState!.reservations.find((reservation) => reservation.id === reservationId)!.status = 'arrived'
+      const table = state.tables.find((item) => item.id === 'table-l04')!
+      table.status = 'reserved'
+      state.waitlistEntries.push({
+        id: 'waitlist-held-table', customerReference: 'customer-held', customerName: '候补李女士', contactReference: 'contact-held',
+        partySize: 2, areaPreferenceCode: null, originalReservationId: null, status: 'notified', joinedSequence: 1,
+        joinedAt: now, maximumWaitUntil: new Date(Date.now() + 30 * 60_000).toISOString(), notifiedAt: now,
+        responseExpiresAt: new Date(Date.now() + 10 * 60_000).toISOString(), heldTableId: table.id, heldTableCode: table.code,
+        tableSessionId: null, seatedAt: null, closedAt: null, closeReason: null, createdBy: 'emp-chen', updatedAt: now,
+        revision: 1, configVersion: state.reservationState!.config.version,
+      })
+      state.revision += 1
+    })
+
+    const response = await app.inject({
+      method: 'POST', url: `/api/reservations/${reservationId}/actions`,
+      payload: { action: 'seat', tableId: 'table-l04', idempotencyKey: 'reservation-held-table-seat' },
+    })
+
+    expect(response.statusCode).toBe(500)
+    expect(response.json().message).toContain('已锁给候补客人候补李女士')
+    expect((await repository.read()).tables.find((table) => table.id === 'table-l04')?.status).toBe('reserved')
+    await app.close()
+    await repository.close()
+  })
 })

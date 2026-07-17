@@ -262,6 +262,40 @@ describe('payment API security boundary', () => {
     await repository.close()
   })
 
+  it('closes an expired processing intent and creates a fresh payment with a new key', async () => {
+    const { app, repository } = fixture('test', 'emp-cashier', 'cashier')
+    const order = (await repository.read()).orderDomain.orders.find((candidate) => candidate.id === 'payment-api-order')!
+    const first = await app.inject({
+      method: 'POST', url: '/api/payments/table-intents',
+      payload: {
+        tableSessionId: order.tableSessionId, channel: 'physical_pos', allocation: { mode: 'all' },
+        deviceId: 'cashier-test', idempotencyKey: 'expired-payment-first-0001',
+      },
+    })
+    expect(first.statusCode, first.body).toBe(201)
+    await repository.mutate((state) => {
+      const intent = state.paymentDomain.paymentIntents.find((candidate) => candidate.id === first.json().id)!
+      intent.status = 'processing'
+      intent.expiresAt = new Date(Date.now() - 1_000).toISOString()
+    })
+
+    const replacement = await app.inject({
+      method: 'POST', url: '/api/payments/table-intents',
+      payload: {
+        tableSessionId: order.tableSessionId, channel: 'cash', allocation: { mode: 'all' },
+        deviceId: 'cashier-test', idempotencyKey: 'expired-payment-replacement-0001',
+      },
+    })
+    expect(replacement.statusCode, replacement.body).toBe(201)
+    const persisted = await repository.read()
+    expect(persisted.paymentDomain.paymentIntents.find((candidate) => candidate.id === first.json().id)).toMatchObject({
+      status: 'closed', failureReason: '支付意图已过期',
+    })
+    expect(replacement.json()).toMatchObject({ status: 'pending', amount: order.amounts.payableAmount })
+    await app.close()
+    await repository.close()
+  })
+
   it('does not count a cash intent as received until the cashier confirms it', async () => {
     const { app, repository } = fixture('test', 'emp-cashier', 'cashier')
     const state = await repository.read()

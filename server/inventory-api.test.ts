@@ -25,6 +25,14 @@ const sessionSecret = 'inventory-api-test-session-secret-32-characters'
 async function signedFixture() {
   const repository = new JsonRepository(`/tmp/mbox-inventory-api-signed-${crypto.randomUUID()}.json`)
   await repository.init()
+  const now = Date.now()
+  await repository.mutate((state) => {
+    state.presenceLeases = ['emp-mia', 'emp-chen'].map((actorId) => ({
+      sessionId: `session-${actorId}`, actorId, storeId: state.store.id, businessDate: state.store.businessDate,
+      establishedAt: now, lastSeenAt: now, expiresAt: now + 60_000, sessionExpiresAt: now + 60_000,
+    }))
+    state.revision += 1
+  })
   const app = Fastify()
   await registerAuthContext(app, {
     runtimeMode: 'production',

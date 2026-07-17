@@ -11,6 +11,7 @@ import type {
   TaskEvent,
 } from '../src/shared/contracts.js'
 import { withDefaultRolePolicy } from '../src/shared/role-policy.js'
+import { effectiveRoleIdsForEmployee } from '../src/shared/staff-access.js'
 
 const closedStatuses = new Set(['confirmed', 'cancelled'])
 
@@ -45,16 +46,10 @@ export function employeeLoad(state: RuntimeState, employeeId: string) {
 }
 
 function roleLimit(state: RuntimeState, employee: Employee) {
-  return state.config.roles.find((role) => role.id === effectiveRoleId(state, employee))
-}
-
-function effectiveRoleId(state: RuntimeState, employee: Employee) {
-  return state.shiftAssignments.find(
-    (shift) =>
-      shift.employeeId === employee.id &&
-      shift.businessDate === state.store.businessDate &&
-      shift.status === 'active',
-  )?.roleId ?? employee.roleId
+  return effectiveRoleIdsForEmployee(state, employee.id)
+    .map((roleId) => state.config.roles.find((role) => role.id === roleId))
+    .filter((role) => role?.canReceiveTasks)
+    .toSorted((left, right) => (right?.maxConcurrentTasks ?? 0) - (left?.maxConcurrentTasks ?? 0))[0]
 }
 
 function chooseAssignee(
@@ -70,7 +65,7 @@ function chooseAssignee(
     table.primaryEmployeeId,
     ...table.backupEmployeeIds,
     ...serviceType.dispatchRoleIds.flatMap((roleId) =>
-      state.employees.filter((employee) => effectiveRoleId(state, employee) === roleId).map((employee) => employee.id),
+      state.employees.filter((employee) => effectiveRoleIdsForEmployee(state, employee.id).includes(roleId)).map((employee) => employee.id),
     ),
   ]
 
@@ -80,7 +75,7 @@ function chooseAssignee(
     seen.add(employeeId)
     const employee = state.employees.find((item) => item.id === employeeId)
     if (!employee || employee.status !== 'active' || !employee.online || employee.paused) continue
-    if (!serviceType.dispatchRoleIds.includes(effectiveRoleId(state, employee))) continue
+    if (!effectiveRoleIdsForEmployee(state, employee.id).some((roleId) => serviceType.dispatchRoleIds.includes(roleId))) continue
     const role = roleLimit(state, employee)
     if (!role?.canReceiveTasks || employeeLoad(state, employee.id) >= role.maxConcurrentTasks) continue
     return employee
@@ -89,7 +84,7 @@ function chooseAssignee(
   return (
     state.employees.find(
       (employee) =>
-        effectiveRoleId(state, employee) === 'manager' &&
+        effectiveRoleIdsForEmployee(state, employee.id).includes('manager') &&
         employee.status === 'active' &&
         employee.online &&
         !employee.paused,
@@ -97,7 +92,7 @@ function chooseAssignee(
   )
 }
 
-export function createServiceTask(state: RuntimeState, input: CreateTaskInput & { triggerId?: string; requestedBy?: string }) {
+export function createServiceTask(state: RuntimeState, input: CreateTaskInput & { triggerId?: string; requestedBy?: string; dispatchRoleIds?: string[] }) {
   const existing = state.auditEntries.find(
     (entry) => entry.action === 'service.requested.v1' && entry.details.idempotencyKey === input.idempotencyKey,
   )
@@ -112,9 +107,12 @@ export function createServiceTask(state: RuntimeState, input: CreateTaskInput & 
 
   const serviceType = state.config.serviceTypes.find((item) => item.id === input.serviceTypeId && item.enabled)
   if (!serviceType) throw new Error('服务类型未启用')
+  const dispatchServiceType = input.dispatchRoleIds?.length
+    ? { ...serviceType, dispatchRoleIds: [...new Set(input.dispatchRoleIds)] }
+    : serviceType
 
   const now = new Date()
-  const assignee = chooseAssignee(state, table.id, serviceType)
+  const assignee = chooseAssignee(state, table.id, dispatchServiceType)
   const customerReply = serviceType.customerReply.replace('{employee}', assignee?.displayName ?? '服务团队')
   const task: ServiceTask = {
     id: `task_${randomUUID()}`,
@@ -263,7 +261,7 @@ export function escalateDueTasks(state: RuntimeState, now = new Date()) {
     if (shouldManagerEscalate) {
       nextOwner = state.employees.find(
         (employee) =>
-          effectiveRoleId(state, employee) === 'manager' && employee.status === 'active' && employee.online,
+          effectiveRoleIdsForEmployee(state, employee.id).includes('manager') && employee.status === 'active' && employee.online,
       ) ?? null
       level = 2
     } else {
@@ -287,6 +285,37 @@ export function escalateDueTasks(state: RuntimeState, now = new Date()) {
     changed = true
   }
   if (changed) state.revision += 1
+  return changed
+}
+
+/** Releases in-flight work when the employee's last online lease ends so coverage can continue. */
+export function releaseTasksForOfflineEmployee(state: RuntimeState, employeeId: string, now = new Date()) {
+  let changed = false
+  for (const task of state.tasks) {
+    if (task.ownerId !== employeeId || !['accepted', 'arrived'].includes(task.status)) continue
+    const serviceType = state.config.serviceTypes.find((item) => item.id === task.serviceTypeId)
+    if (!serviceType) continue
+    const nextOwner = chooseAssignee(state, task.tableId, serviceType, [employeeId])
+    task.status = 'reopened'
+    task.ownerId = nextOwner?.id ?? null
+    task.priority = task.priority === 'urgent' ? 'urgent' : 'high'
+    task.escalationLevel = Math.max(1, task.escalationLevel)
+    task.acceptedAt = null
+    task.arrivedAt = null
+    task.completedAt = null
+    task.resolution = null
+    task.warningAt = isoAt(now, serviceType.sla.warningSeconds)
+    task.escalateAt = isoAt(now, serviceType.sla.escalateSeconds)
+    task.managerAt = isoAt(now, serviceType.sla.managerSeconds)
+    task.updatedAt = now.toISOString()
+    if (task.ownerId && !task.notifiedEmployeeIds.includes(task.ownerId)) task.notifiedEmployeeIds.push(task.ownerId)
+    appendTaskEvent(state, task.id, 'task.reopened.v1', 'system', {
+      previousOwnerId: employeeId,
+      ownerId: task.ownerId,
+      reason: 'owner_offline',
+    })
+    changed = true
+  }
   return changed
 }
 

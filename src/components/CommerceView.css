@@ -46,10 +46,10 @@
 .kds-remake-badge { width: fit-content; padding: 2px 6px; border-radius: 4px; background: #e8f4f8; color: #176181 !important; font-weight: 750; }
 .sla-overdue { color: var(--danger); font-weight: 800; }
 .sla-normal { color: var(--success); font-weight: 750; }
-.kds-row .secondary-button { min-height: 36px; font-size: 12px; }
+.kds-row .secondary-button { min-height: 48px; font-size: 12px; }
 .kds-actions { min-width: 150px; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
-.kds-actions .primary-button, .kds-actions .secondary-button { min-height: 36px; padding: 0 10px; font-size: 12px; white-space: nowrap; }
-.kds-actions .icon-button { width: 36px; height: 36px; flex: 0 0 36px; }
+.kds-actions .primary-button, .kds-actions .secondary-button { min-height: 48px; padding: 0 12px; font-size: 12px; white-space: nowrap; }
+.kds-actions .icon-button { width: 48px; height: 48px; flex: 0 0 48px; }
 .kds-exception-button { border-color: #dc9d91; color: #9d3428; }
 .kds-reject-button, .kds-cancel-button { color: var(--danger); }
 .ledger-row { min-height: 61px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--line); }

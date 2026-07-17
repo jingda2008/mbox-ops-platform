@@ -293,8 +293,8 @@ export async function queryPaymentThroughProvider(input: QueryProviderPaymentInp
 export async function requestRefundThroughProvider(input: RequestProviderRefundInput) {
   const { refund, intent } = input
   assertProvider(intent.channel, input.adapter.provider)
-  if (refund.status !== 'approved') {
-    throw new Error('只有已批准退款可以提交渠道')
+  if (!['approved', 'failed'].includes(refund.status)) {
+    throw new Error('只有已批准或渠道失败的退款可以提交渠道')
   }
   if (!intent.channelTransactionId) throw new Error('原支付缺少渠道交易号，不能提交退款')
 
@@ -326,13 +326,13 @@ export function applyProviderRefundSubmission(
   const refund = findRefund(state, refundId)
   const intent = findIntent(state, refund.paymentIntentId)
   assertProvider(intent.channel, adapterProvider)
-  if (['processing', 'succeeded', 'failed'].includes(refund.status)) {
+  if (['processing', 'succeeded'].includes(refund.status)) {
     if (refund.channelRefundId !== observation.providerRefundId) {
       throw new Error('渠道退款结果与已记录退款单号不一致')
     }
     return refund
   }
-  if (refund.status !== 'approved') throw new Error('只有已批准退款可以记录渠道结果')
+  if (!['approved', 'failed'].includes(refund.status)) throw new Error('只有已批准或渠道失败的退款可以记录渠道结果')
   assertRefundObservation(observation, refund)
   startRefund(state, {
     refundId: refund.id,
@@ -346,7 +346,7 @@ export function applyProviderRefundSubmission(
 
 export async function submitRefundThroughProvider(input: SubmitProviderRefundInput) {
   const refund = findRefund(input.state, input.refundId)
-  if (['processing', 'succeeded', 'failed'].includes(refund.status)) return refund
+  if (['processing', 'succeeded'].includes(refund.status)) return refund
   const intent = findIntent(input.state, refund.paymentIntentId)
   const observation = await requestRefundThroughProvider({
     refund,

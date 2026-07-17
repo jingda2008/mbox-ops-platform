@@ -126,7 +126,7 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
   const config: RuntimeConfig = {
     runtimeMode,
     host: env.API_HOST?.trim() || '0.0.0.0',
-    apiPort: parseInteger(env.API_PORT, 8787, 'API_PORT', 1, 65_535),
+    apiPort: parseInteger(env.API_PORT ?? env.PORT, 8787, env.API_PORT === undefined && env.PORT !== undefined ? 'PORT' : 'API_PORT', 1, 65_535),
     logLevel: logLevelSchema.parse(env.MBOX_LOG_LEVEL ?? 'info'),
     bodyLimitBytes: parseInteger(env.MBOX_BODY_LIMIT_BYTES, 1_048_576, 'MBOX_BODY_LIMIT_BYTES', 16_384, 10_485_760),
     shutdownGraceMs: parseInteger(env.MBOX_SHUTDOWN_GRACE_MS, 10_000, 'MBOX_SHUTDOWN_GRACE_MS', 1_000, 60_000),

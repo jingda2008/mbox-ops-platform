@@ -18,6 +18,11 @@ import {
 import type { RuntimeRepository } from './repository.js'
 import { clearPresenceLeases } from './presence.js'
 import type { ShiftAssignment } from '../src/shared/contracts.js'
+import {
+  isKdsTaskOperationallyClosed,
+  isServiceTaskOperationallyClosed,
+  isSongRequestOperationallyClosed,
+} from './operational-closure.js'
 
 const closeSchema = z.object({
   nextBusinessDate: z.iso.date(),
@@ -84,12 +89,12 @@ export function prepareNextBusinessDayShifts(
   return { source: 'copied', shiftIds: copies.map((shift) => shift.id) }
 }
 
-function collectBlockers(state: RuntimeState, closingActorId: string) {
+export function collectBlockers(state: RuntimeState, closingActorId: string) {
   const blockers: Blocker[] = []
-  for (const task of state.tasks.filter((item) => !['confirmed', 'cancelled'].includes(item.status))) {
+  for (const task of state.tasks.filter((item) => !isServiceTaskOperationallyClosed(item))) {
     blockers.push({ kind: 'open_service_task', id: task.id, detail: `${task.serviceTypeId}:${task.status}` })
   }
-  for (const task of state.orderDomain.kdsTasks.filter((item) => item.status !== 'delivered')) {
+  for (const task of state.orderDomain.kdsTasks.filter((item) => !isKdsTaskOperationallyClosed(state.orderDomain, item))) {
     blockers.push({ kind: 'undelivered_kds', id: task.id, detail: `${task.stationId}:${task.status}` })
   }
   for (const session of state.songState.tableSessions.filter((item) => item.status === 'open')) {
@@ -100,6 +105,9 @@ function collectBlockers(state: RuntimeState, closingActorId: string) {
   }
   for (const refund of state.paymentDomain.refunds.filter((item) => ['requested', 'approved', 'processing'].includes(item.status))) {
     blockers.push({ kind: 'unresolved_refund', id: refund.id, detail: refund.status })
+  }
+  for (const request of state.songState.requests.filter((item) => !isSongRequestOperationallyClosed(item))) {
+    blockers.push({ kind: 'active_song_request', id: request.id, detail: `${request.tableCode}:${request.status}` })
   }
   for (const redemption of state.benefitRedemptions.filter((item) => item.status === 'locked')) {
     blockers.push({ kind: 'locked_benefit', id: redemption.id, detail: redemption.tableSessionId })

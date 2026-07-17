@@ -4,6 +4,7 @@ import type { StaffPresenceResponse } from '../src/shared/auth-contracts.js'
 import type { PresenceLease, RuntimeState } from '../src/shared/contracts.js'
 import { requireRequestActor } from './auth-context.js'
 import type { RuntimeRepository } from './repository.js'
+import { releaseTasksForOfflineEmployee } from './domain.js'
 
 export const DEFAULT_PRESENCE_LEASE_TTL_MS = 90_000
 export const DEFAULT_PRESENCE_SWEEP_INTERVAL_MS = 15_000
@@ -59,7 +60,9 @@ function synchronizeOnlineProjection(state: RuntimeState, now: number) {
   for (const employee of state.employees) {
     const online = employee.status === 'active' && onlineEmployeeIds.has(employee.id)
     if (employee.online !== online) {
+      const wentOffline = employee.online && !online
       employee.online = online
+      if (wentOffline) releaseTasksForOfflineEmployee(state, employee.id, new Date(now))
       changed = true
     }
   }

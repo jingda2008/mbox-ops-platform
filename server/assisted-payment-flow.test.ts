@@ -24,6 +24,34 @@ function registerTestActor(app: ReturnType<typeof Fastify>) {
 }
 
 describe('assisted ordering payment flow', () => {
+  it('rejects reuse of a staff cart key for different contents', async () => {
+    const repository = new JsonRepository(`/tmp/mbox-assisted-idempotency-${crypto.randomUUID()}.json`)
+    await repository.init()
+    const app = Fastify()
+    registerTestActor(app)
+    registerCommerceRoutes(app, repository, { guestTokenSecret: secret, now: () => now })
+    app.setErrorHandler((error, _request, reply) => {
+      const candidate = error as Error & { statusCode?: number; code?: string }
+      return reply.status(candidate.statusCode ?? 400).send({ code: candidate.code, message: candidate.message })
+    })
+    const state = await repository.read()
+    const table = state.tables.find((candidate) => candidate.status === 'occupied')!
+    const products = state.products.filter((candidate) => candidate.enabled)
+    const payload = {
+      tableId: table.id, actorId: 'emp-lin', idempotencyKey: 'staff-cart-conflict-0001',
+      items: [{ productId: products[0]!.id, quantity: 1 }],
+    }
+    expect((await app.inject({ method: 'POST', url: '/api/commerce/orders', payload })).statusCode).toBe(201)
+    const conflict = await app.inject({
+      method: 'POST', url: '/api/commerce/orders',
+      payload: { ...payload, items: [{ productId: products[1]!.id, quantity: 1 }] },
+    })
+    expect(conflict.statusCode).toBe(409)
+    expect(conflict.json().code).toBe('COMMERCE_ORDER_IDEMPOTENCY_CONFLICT')
+    await app.close()
+    await repository.close()
+  })
+
   it('syncs one staff order to the guest phone and pays it without duplicating fulfillment', async () => {
     const repository = new JsonRepository(`/tmp/mbox-assisted-payment-${crypto.randomUUID()}.json`)
     await repository.init()

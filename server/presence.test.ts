@@ -11,6 +11,7 @@ import {
 } from './presence.js'
 import type { RuntimeRepository, RuntimeRepositoryHealth } from './repository.js'
 import { createSeedState } from './seed.js'
+import { createServiceTask } from './domain.js'
 
 class MemoryRepository implements RuntimeRepository {
   state = createSeedState()
@@ -38,10 +39,11 @@ function establish(
   now: number,
   leaseTtlMs: number,
   sessionExpiresAt = now + 60_000,
+  actorId = 'emp-chen',
 ) {
   return establishPresenceLease(state, {
     sessionId,
-    actorId: 'emp-chen',
+    actorId,
     storeId: state.store.id,
     businessDate: state.store.businessDate,
     now,
@@ -72,6 +74,24 @@ describe('staff presence domain', () => {
     })
 
     expect(parsed.online).toBe(false)
+  })
+
+  it('reopens accepted work for a replacement when the last device lease expires', () => {
+    const state = createSeedState()
+    const now = Date.parse('2026-07-16T12:00:00.000Z')
+    establish(state, 'server-device', now, 1_000, now + 60_000, 'emp-lin')
+    establish(state, 'backup-device', now, 5_000, now + 60_000, 'emp-jie')
+    const task = createServiceTask(state, {
+      tableCode: 'L01', serviceTypeId: 'water', source: 'guest', note: '', idempotencyKey: 'presence-reassign-test',
+    })
+    task.status = 'arrived'
+    task.acceptedAt = new Date(now).toISOString()
+    task.arrivedAt = new Date(now).toISOString()
+
+    reconcilePresence(state, now + 1_001)
+
+    expect(task).toMatchObject({ status: 'reopened', ownerId: 'emp-jie', acceptedAt: null, arrivedAt: null })
+    expect(state.taskEvents.at(-1)).toMatchObject({ taskId: task.id, type: 'task.reopened.v1', payload: { reason: 'owner_offline' } })
   })
 })
 

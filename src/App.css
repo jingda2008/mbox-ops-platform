@@ -602,8 +602,10 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 .task-actions { min-height: 42px; display: flex; align-items: flex-end; gap: 8px; margin: 10px 0 0 44px; }
 .task-actions .primary-button { min-height: 36px; padding: 0 12px; font-size: 13px; }
 .task-source { margin-left: auto; color: #7b8179; font-size: 11px; }
+.task-list-more { min-height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 16px; background: #f6f7f3; color: var(--ink-soft); font-size: 11px; }
+.task-list-more .secondary-button { min-height: 40px; }
 .empty-state {
-  min-height: 190px;
+  min-height: 88px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -956,7 +958,7 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 
 @media (max-width: 1180px) {
   .live-grid { grid-template-columns: 1fr; }
-  .task-queue--compact .task-list { max-height: none; }
+  .task-queue--compact .task-list { max-height: min(72vh, 760px); }
   .script-config-row { grid-template-columns: 110px 90px minmax(240px, 1fr); }
   .dispatch-role-field { grid-column: 2 / 4; }
   .script-steps-field { grid-column: 1 / 4; grid-row: auto; }

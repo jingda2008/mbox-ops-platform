@@ -95,7 +95,7 @@ function configWithOperationalDefaults(
     communityBrand.tagline = defaults.communityBrand.tagline
   }
   const requiredServiceTypes = defaults.serviceTypes.filter(
-    (type) => ['FULFILLMENT_DELIVERY', 'CUSTOM_REQUEST'].includes(type.code) && !serviceTypeIds.has(type.id),
+    (type) => ['FULFILLMENT_DELIVERY', 'CUSTOM_REQUEST', 'KDS_PRODUCTION_DELAY'].includes(type.code) && !serviceTypeIds.has(type.id),
   )
   const defaultServiceTypes = new Map(defaults.serviceTypes.map((serviceType) => [serviceType.code, serviceType]))
   const enriched = {

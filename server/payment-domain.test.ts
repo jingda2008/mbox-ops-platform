@@ -11,7 +11,9 @@ import {
   confirmCashPayment,
   createPaymentDomainState,
   createPaymentIntent,
+  expirePaymentIntents,
   handlePaymentNotification,
+  markRefundFailed,
   markRefundSucceeded,
   queryPaymentStatus,
   reportPhysicalPosPayment,
@@ -86,6 +88,21 @@ describe('payment intent and channel result', () => {
         intentCommand({ paymentIntentId: 'pay-3', amount: 30.5, idempotencyKey: 'create-pay-3' }),
       ),
     ).toThrow('支付金额必须是正安全整数')
+  })
+
+  it('closes expired active intents while preserving a verified payment completed before expiry', () => {
+    const state = createPaymentDomainState()
+    const intent = createPaymentIntent(state, intentCommand())
+    intent.status = 'processing'
+
+    expect(expirePaymentIntents(state, '2026-07-14T12:16:00.000Z')).toEqual([intent])
+    expect(intent).toMatchObject({ status: 'closed', failureReason: '支付意图已过期' })
+
+    handlePaymentNotification(state, successNotification({
+      channelOccurredAt: '2026-07-14T12:14:59.000Z',
+      receivedAt: '2026-07-14T12:16:01.000Z',
+    }))
+    expect(intent).toMatchObject({ status: 'succeeded', closedAt: null, failureReason: null })
   })
 
   it('processes the same verified callback exactly once and rejects conflicting reuse', () => {
@@ -360,5 +377,42 @@ describe('item-level refund state machine', () => {
         idempotencyKey: 'refund-request-2',
       }),
     ).toThrow('商品累计退款数量超过原支付数量')
+  })
+
+  it('retries a failed channel refund with a new idempotency key and keeps replays safe', () => {
+    const state = createPaymentDomainState()
+    const intent = createPaymentIntent(state, intentCommand())
+    handlePaymentNotification(state, successNotification())
+    const refund = requestRefund(state, {
+      refundId: 'refund-retry', paymentIntentId: intent.id,
+      items: [{ orderId: 'order-A', orderItemId: 'line-A1', quantity: 1 }],
+      reason: '首次渠道失败后重试', requestedBy: 'server-1',
+      occurredAt: '2026-07-14T12:04:00.000Z', idempotencyKey: 'refund-retry-request',
+    })
+    approveRefund(state, {
+      refundId: refund.id, approvedBy: 'manager-1', reason: '复核通过',
+      occurredAt: '2026-07-14T12:05:00.000Z', idempotencyKey: 'refund-retry-approve',
+    })
+    startRefund(state, {
+      refundId: refund.id, channelRefundId: 'channel-refund-failed', actorId: 'cashier-1',
+      occurredAt: '2026-07-14T12:06:00.000Z', idempotencyKey: 'refund-retry-start-1',
+    })
+    markRefundFailed(state, {
+      refundId: refund.id, reason: '渠道暂时不可用',
+      occurredAt: '2026-07-14T12:07:00.000Z', idempotencyKey: 'refund-retry-failed-1',
+    })
+
+    const retried = startRefund(state, {
+      refundId: refund.id, channelRefundId: 'channel-refund-retry', actorId: 'cashier-1',
+      occurredAt: '2026-07-14T12:08:00.000Z', idempotencyKey: 'refund-retry-start-2',
+    })
+    const replay = startRefund(state, {
+      refundId: refund.id, channelRefundId: 'channel-refund-retry', actorId: 'cashier-1',
+      occurredAt: '2026-07-14T12:08:00.000Z', idempotencyKey: 'refund-retry-start-2',
+    })
+    expect(replay).toBe(retried)
+    expect(retried).toMatchObject({
+      status: 'processing', channelRefundId: 'channel-refund-retry', failedAt: null, failureReason: null,
+    })
   })
 })

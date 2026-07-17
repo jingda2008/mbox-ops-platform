@@ -1,4 +1,5 @@
 import { Check, CheckCheck, Clock3, MapPin, Navigation, RotateCcw, UserRound } from 'lucide-react'
+import { useState } from 'react'
 import { ServiceIcon } from './ServiceIcon'
 import type {
   Employee,
@@ -46,6 +47,7 @@ export function TaskQueue({
   onAction,
   compact = false,
 }: TaskQueueProps) {
+  const [visibleCount, setVisibleCount] = useState(12)
   const visibleTasks = tasks
     .filter((task) => !['confirmed', 'cancelled'].includes(task.status))
     .filter((task) => !selectedTableId || task.tableId === selectedTableId)
@@ -53,6 +55,7 @@ export function TaskQueue({
       const priority = { urgent: 4, high: 3, normal: 2, low: 1 }
       return priority[b.priority] - priority[a.priority] || +new Date(a.createdAt) - +new Date(b.createdAt)
     })
+  const displayedTasks = visibleTasks.slice(0, visibleCount)
 
   return (
     <section className={`task-queue ${compact ? 'task-queue--compact' : ''}`}>
@@ -78,7 +81,7 @@ export function TaskQueue({
             <strong>当前没有待处理任务</strong>
           </div>
         )}
-        {visibleTasks.map((task) => {
+        {displayedTasks.map((task) => {
           const table = tables.find((item) => item.id === task.tableId)
           const owner = employees.find((item) => item.id === task.ownerId)
           const serviceType = serviceTypes.find((item) => item.id === task.serviceTypeId)
@@ -134,6 +137,14 @@ export function TaskQueue({
             </article>
           )
         })}
+        {displayedTasks.length < visibleTasks.length && (
+          <div className="task-list-more">
+            <span>优先展示前 {displayedTasks.length} 条</span>
+            <button className="secondary-button" type="button" onClick={() => setVisibleCount((count) => count + 12)}>
+              再看 {Math.min(12, visibleTasks.length - displayedTasks.length)} 条
+            </button>
+          </div>
+        )}
       </div>
     </section>
   )

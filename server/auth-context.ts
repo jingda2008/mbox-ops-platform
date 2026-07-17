@@ -25,6 +25,10 @@ interface AuthContextOptions {
 
 const PUBLIC_PATHS = new Set(['/api/health', '/api/live', '/api/ready', '/api/metrics', '/api/auth/pilot-login'])
 
+function isPaymentProviderCallback(path: string) {
+  return /^\/api\/payments\/providers\/[^/]+\/callback$/.test(path)
+}
+
 function encode(value: object) {
   return Buffer.from(JSON.stringify(value)).toString('base64url')
 }
@@ -98,7 +102,7 @@ export async function registerAuthContext(app: FastifyInstance, options: AuthCon
   app.decorateRequest('mboxAuthState', null)
   app.addHook('preHandler', async (request) => {
     const path = request.url.split('?')[0] ?? request.url
-    if (!path.startsWith('/api/') || PUBLIC_PATHS.has(path) || isAnonymousGuestRequest(request)) return
+    if (!path.startsWith('/api/') || PUBLIC_PATHS.has(path) || isAnonymousGuestRequest(request) || isPaymentProviderCallback(path)) return
     if (isDevelopmentPath(path)) {
       if (requiresSignedSession) {
         throw new AuthenticationError('当前环境未启用开发接口', 404, 'DEVELOPMENT_ENDPOINT_DISABLED')
@@ -133,6 +137,18 @@ export async function registerAuthContext(app: FastifyInstance, options: AuthCon
     if (storeId !== state.store.id) throw new AuthenticationError('员工会话不属于当前门店', 403, 'STORE_ACCESS_FORBIDDEN')
     const employee = state.employees.find((item) => item.id === actorId && item.status === 'active')
     if (!employee) throw new AuthenticationError('员工不存在或已停用', 403, 'ACTOR_NOT_ACTIVE')
+    if (authenticatedBy === 'signed_session') {
+      const now = Date.now()
+      const lease = state.presenceLeases?.find((candidate) => (
+        candidate.sessionId === sessionId
+        && candidate.actorId === actorId
+        && candidate.storeId === storeId
+        && candidate.businessDate === state.store.businessDate
+        && candidate.expiresAt > now
+        && candidate.sessionExpiresAt > now
+      ))
+      if (!lease) throw new AuthenticationError('员工会话已退出或在线租约已过期', 401, 'STAFF_SESSION_REVOKED')
+    }
     assertActorBinding(request, actorId, options.runtimeMode)
     request.mboxAuthState = state
     request.mboxActor = {

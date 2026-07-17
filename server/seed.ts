@@ -179,6 +179,19 @@ export function createSeedConfig(): StoreConfig {
         customerReply: '新鲜出品已经准备好啦～服务伙伴正在取送，很快送到您桌上。',
         actionScript: ['到工作站取货并核对桌号', '送达后与客人确认商品'],
       },
+      {
+        id: 'kds-production-delay',
+        code: 'KDS_PRODUCTION_DELAY',
+        name: '出品超时处理',
+        icon: 'order',
+        enabled: true,
+        guestVisible: false,
+        priority: 'high',
+        dispatchRoleIds: ['bartender', 'kitchen', 'supervisor', 'manager'],
+        sla: { warningSeconds: 15, escalateSeconds: 30, managerSeconds: 60 },
+        customerReply: '出品进度正在由现场团队处理。',
+        actionScript: ['立即核对制作状态和缺料情况', '向传菜与桌台服务人员同步预计时间', '无法按时完成时由主管决定替代、补做或取消'],
+      },
     ],
   }
 }

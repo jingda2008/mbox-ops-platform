@@ -45,14 +45,48 @@ describe('request authentication boundary', () => {
 
   it.each(['staging', 'production'] as const)('requires signed sessions, disables dev routes and rejects actor impersonation in %s', async (runtimeMode) => {
     const app = Fastify()
-    await registerAuthContext(app, { runtimeMode, sessionSecret: secret, readState: async () => createSeedState() })
+    const state = createSeedState()
+    const issuedAt = Date.now()
+    const expiresAt = issuedAt + 60_000
+    state.presenceLeases = [{
+      sessionId: `session-${runtimeMode}`, actorId: 'emp-chen', storeId: state.store.id,
+      businessDate: state.store.businessDate, establishedAt: issuedAt, lastSeenAt: issuedAt,
+      expiresAt, sessionExpiresAt: expiresAt,
+    }]
+    await registerAuthContext(app, { runtimeMode, sessionSecret: secret, readState: async () => state })
     app.post('/api/protected', async (request) => request.mboxActor)
     app.get('/api/dev/member', async () => ({ unsafe: true }))
-    const token = signStaffSession({ sessionId: `session-${runtimeMode}`, actorId: 'emp-chen', storeId: 'mbox-lujiazui', issuedAt: Date.now(), expiresAt: Date.now() + 60_000 }, secret)
+    const token = signStaffSession({ sessionId: `session-${runtimeMode}`, actorId: 'emp-chen', storeId: 'mbox-lujiazui', issuedAt, expiresAt }, secret)
 
     expect((await app.inject({ method: 'GET', url: '/api/dev/member' })).statusCode).toBe(404)
     expect((await app.inject({ method: 'POST', url: '/api/protected', headers: { authorization: `Bearer ${token}` }, payload: { actorId: 'emp-lin' } })).statusCode).toBe(403)
     expect((await app.inject({ method: 'POST', url: '/api/protected', headers: { authorization: `Bearer ${token}` }, payload: { actorId: 'emp-chen' } })).statusCode).toBe(200)
+    await app.close()
+  })
+
+  it('permits only the provider callback path without staff authentication', async () => {
+    const app = Fastify()
+    await registerAuthContext(app, { runtimeMode: 'production', sessionSecret: secret, readState: async () => createSeedState() })
+    app.post('/api/payments/providers/postar/callback', async () => ({ accepted: true }))
+    app.post('/api/payments/providers/postar/provider-query', async () => ({ unsafe: true }))
+
+    expect((await app.inject({ method: 'POST', url: '/api/payments/providers/postar/callback' })).statusCode).toBe(200)
+    expect((await app.inject({ method: 'POST', url: '/api/payments/providers/postar/provider-query' })).statusCode).toBe(401)
+    await app.close()
+  })
+
+  it('rejects a signed token after its presence lease is removed', async () => {
+    const app = Fastify()
+    const state = createSeedState()
+    const issuedAt = Date.now()
+    const expiresAt = issuedAt + 60_000
+    const token = signStaffSession({ sessionId: 'revoked-session', actorId: 'emp-chen', storeId: state.store.id, issuedAt, expiresAt }, secret)
+    await registerAuthContext(app, { runtimeMode: 'production', sessionSecret: secret, readState: async () => state })
+    app.get('/api/protected', async () => ({ unsafe: true }))
+
+    const response = await app.inject({ method: 'GET', url: '/api/protected', headers: { authorization: `Bearer ${token}` } })
+    expect(response.statusCode).toBe(401)
+    expect(response.json().code).toBe('STAFF_SESSION_REVOKED')
     await app.close()
   })
 })

@@ -7,6 +7,7 @@ import { registerGuestRoutes } from './guest-api.js'
 import { JsonRepository } from './repository.js'
 import { requireGuestSession, signStaticTableQrToken, verifyTableAccessToken } from './table-access.js'
 import { transferOpenTableSession } from './table-session-api.js'
+import { createPaymentIntent } from './payment-domain.js'
 
 const secret = 'q'.repeat(32)
 const sessionTtlMs = 5 * 60_000
@@ -485,7 +486,7 @@ describe('guest table API', () => {
         idempotencyKey: 'guest-cart-payment-checkout-0001',
       },
     })
-    expect(checkout.statusCode).toBe(201)
+    expect(checkout.statusCode, checkout.body).toBe(201)
     expect(checkout.json()).toMatchObject({
       providerRequired: false,
       paymentIntent: { status: 'succeeded', amount: 30_400, channel: 'wechat_mock' },
@@ -494,6 +495,65 @@ describe('guest table API', () => {
     const state = await repository.read()
     expect(state.orderDomain.kdsTasks).toHaveLength(2)
     expect(state.paymentDomain.paymentIntents[0]).toMatchObject({ status: 'succeeded', orderIds: [orderResponse.json().id] })
+    await closeFixture(app, repository)
+  })
+
+  it('rejects reuse of a guest order key with different cart contents', async () => {
+    const { app, repository, now } = await fixture()
+    const session = (await exchange(app, staticQr(now()))).body
+    const base = {
+      tableToken: session.tableToken,
+      items: [{ productId: 'product-beer', quantity: 1 }],
+      idempotencyKey: 'guest-cart-conflict-0001',
+    }
+    expect((await app.inject({ method: 'POST', url: '/api/guest/orders', payload: base })).statusCode).toBe(201)
+    const conflict = await app.inject({
+      method: 'POST', url: '/api/guest/orders',
+      payload: { ...base, items: [{ productId: 'product-beer', quantity: 2 }] },
+    })
+    expect(conflict.statusCode).toBe(409)
+    expect(conflict.json().code).toBe('GUEST_ORDER_IDEMPOTENCY_CONFLICT')
+    expect((await repository.read()).orderDomain.orders).toHaveLength(1)
+    await closeFixture(app, repository)
+  })
+
+  it('closes an expired checkout intent and creates a replacement', async () => {
+    const { app, repository, now, setNow } = await fixture()
+    const session = (await exchange(app, staticQr(now()))).body
+    const order = await app.inject({
+      method: 'POST', url: '/api/guest/orders',
+      payload: {
+        tableToken: session.tableToken,
+        items: [{ productId: 'product-beer', quantity: 1 }],
+        idempotencyKey: 'guest-expired-order-0001',
+      },
+    })
+    const checkoutPayload = {
+      tableToken: session.tableToken,
+      orderId: order.json().id,
+      idempotencyKey: 'guest-expired-checkout-0001',
+    }
+    await repository.mutate((state) => {
+      const createdOrder = state.orderDomain.orders.find((candidate) => candidate.id === order.json().id)!
+      createPaymentIntent(state.paymentDomain, {
+        paymentIntentId: 'expired-guest-intent', tableSessionId: createdOrder.tableSessionId,
+        lineAllocations: createdOrder.items.map((item) => ({
+          orderId: createdOrder.id, orderItemId: item.id, quantity: item.quantity, unitPaidAmount: item.unitSalePriceAmount,
+        })),
+        amount: createdOrder.amounts.payableAmount, currency: 'CNY', channel: 'postar', merchantId: state.store.id,
+        createdBy: 'guest-L01', deviceId: 'guest-web-L01', occurredAt: new Date(now()).toISOString(),
+        expiresAt: new Date(now() + 100).toISOString(), idempotencyKey: 'expired-guest-intent-create-0001',
+      })
+      state.revision += 1
+    })
+    setNow(now() + 101)
+    const replacement = await app.inject({ method: 'POST', url: '/api/guest/checkout', payload: checkoutPayload })
+    expect(replacement.statusCode).toBe(201)
+    expect(replacement.json().paymentIntent.id).not.toBe('expired-guest-intent')
+    const intents = (await repository.read()).paymentDomain.paymentIntents
+    expect(intents).toHaveLength(2)
+    expect(intents[0]).toMatchObject({ status: 'closed', failureReason: '支付意图已过期' })
+    expect(intents[1].status).toBe('succeeded')
     await closeFixture(app, repository)
   })
 
@@ -518,7 +578,7 @@ describe('guest table API', () => {
         idempotencyKey: 'staging-pilot-guest-checkout-0001',
       },
     })
-    expect(checkout.statusCode).toBe(201)
+    expect(checkout.statusCode, checkout.body).toBe(201)
     expect(checkout.json()).toMatchObject({
       providerRequired: false,
       paymentIntent: { status: 'succeeded', channel: 'wechat_mock' },

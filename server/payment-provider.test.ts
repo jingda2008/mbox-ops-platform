@@ -258,7 +258,7 @@ describe('provider active query and partial refund', () => {
         actorId: 'cashier-1',
         idempotencyKey: 'provider-refund-submit-1',
       }),
-    ).rejects.toThrow('只有已批准退款可以提交渠道')
+    ).rejects.toThrow('只有已批准或渠道失败的退款可以提交渠道')
     expect(requestProviderRefund).not.toHaveBeenCalled()
 
     approveRefund(state, {
@@ -292,5 +292,50 @@ describe('provider active query and partial refund', () => {
     })
     expect(refund.status).toBe('succeeded')
     expect(refund.channelRefundTransactionId).toBe('provider-refund-tx-1')
+  })
+
+  it('submits a failed provider refund again only under a new idempotency key', async () => {
+    const state = stateWithIntent()
+    await markIntentPaid(state)
+    const refund = requestRefund(state, {
+      refundId: 'refund-retry-provider', paymentIntentId: 'pay-1',
+      items: [{ orderId: 'order-A', orderItemId: 'line-A1', quantity: 1 }],
+      reason: '渠道失败重试', requestedBy: 'server-1',
+      occurredAt: '2026-07-14T12:04:00.000Z', idempotencyKey: 'refund-provider-retry-request',
+    })
+    approveRefund(state, {
+      refundId: refund.id, approvedBy: 'manager-1', reason: '复核通过',
+      occurredAt: '2026-07-14T12:05:00.000Z', idempotencyKey: 'refund-provider-retry-approve',
+    })
+    const requestProviderRefund = vi.fn<PaymentProviderAdapter['requestRefund']>()
+      .mockResolvedValueOnce({
+        refundId: refund.id, providerRefundId: 'provider-refund-failed', providerRefundTransactionId: null,
+        status: 'failed', amount: refund.amount, currency: refund.currency,
+        occurredAt: '2026-07-14T12:06:00.000Z', failureReason: '渠道繁忙',
+      })
+      .mockResolvedValueOnce({
+        refundId: refund.id, providerRefundId: 'provider-refund-retry', providerRefundTransactionId: 'provider-refund-tx-retry',
+        status: 'succeeded', amount: refund.amount, currency: refund.currency,
+        occurredAt: '2026-07-14T12:07:00.000Z',
+      })
+    const adapter = fakeAdapter({ requestRefund: requestProviderRefund })
+
+    await submitRefundThroughProvider({
+      state, adapter, secrets, refundId: refund.id, actorId: 'cashier-1', idempotencyKey: 'refund-provider-submit-1',
+    })
+    expect(refund.status).toBe('failed')
+    await submitRefundThroughProvider({
+      state, adapter, secrets, refundId: refund.id, actorId: 'cashier-1', idempotencyKey: 'refund-provider-submit-2',
+    })
+    const replay = await submitRefundThroughProvider({
+      state, adapter, secrets, refundId: refund.id, actorId: 'cashier-1', idempotencyKey: 'refund-provider-submit-2',
+    })
+
+    expect(requestProviderRefund).toHaveBeenCalledTimes(2)
+    expect(replay).toBe(refund)
+    expect(refund).toMatchObject({
+      status: 'succeeded', channelRefundId: 'provider-refund-retry',
+      channelRefundTransactionId: 'provider-refund-tx-retry', failureReason: null,
+    })
   })
 })

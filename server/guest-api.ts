@@ -27,7 +27,7 @@ import {
 } from './table-access.js'
 import { submitSongRequest } from './song-domain.js'
 import { addOrderItem, createOrderDraft, submitOrder } from './order-domain.js'
-import { createPaymentIntent, handlePaymentNotification } from './payment-domain.js'
+import { createPaymentIntent, expirePaymentIntents, handlePaymentNotification } from './payment-domain.js'
 import { consumeManagedInventoryForSubmittedOrder } from './inventory-order-integration.js'
 import { completeAwaitingOrderOnOrder } from './proactive-service.js'
 import { routeProductToEnabledWorkstation, syncOrderFulfillmentWorkstations } from './fulfillment-workstations.js'
@@ -414,7 +414,22 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
       const existing = state.orderDomain.orders.find((candidate) => (
         candidate.id === deterministicId('guest_order', input.idempotencyKey)
       ))
-      if (existing) return existing
+      if (existing) {
+        const requestedItems = input.items
+          .map((item) => `${item.productId}:${item.quantity}`)
+          .toSorted()
+        const existingItems = existing.items
+          .map((item) => `${item.skuId}:${item.quantity}`)
+          .toSorted()
+        if (existing.tableSessionId !== tableSession.id || JSON.stringify(requestedItems) !== JSON.stringify(existingItems)) {
+          throw new TableAccessError(
+            '这次购物车和刚才那次不一样，我们没有重复提交。请重新确认后再下单。',
+            'GUEST_ORDER_IDEMPOTENCY_CONFLICT',
+            409,
+          )
+        }
+        return existing
+      }
       if (new Set(input.items.map((item) => item.productId)).size !== input.items.length) {
         throw new TableAccessError('购物车里同一款出现了两次，我们没敢替您重复下单；合并数量后再试一次就好。', 'GUEST_CART_DUPLICATE_PRODUCT', 400)
       }
@@ -432,7 +447,7 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
         return { product, quantity: item.quantity }
       })
       syncOrderFulfillmentWorkstations(state)
-      const now = new Date().toISOString()
+      const now = new Date(options.now?.() ?? Date.now()).toISOString()
       const actorId = `guest-${table.code}`
       const orderId = deterministicId('guest_order', input.idempotencyKey)
       createOrderDraft(state.orderDomain, {
@@ -489,6 +504,9 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
       if (order.amounts.payableAmount <= 0) {
         throw new TableAccessError('这张订单已经有其他结账安排啦，请让服务伙伴来为您核对，避免重复付款。', 'ORDER_PAYMENT_NOT_REQUIRED', 409)
       }
+      const now = new Date(options.now?.() ?? Date.now()).toISOString()
+      const expiredIntents = expirePaymentIntents(state.paymentDomain, now, tableSession.id)
+      if (expiredIntents.length > 0) state.revision += 1
       const existingIntent = state.paymentDomain.paymentIntents.find((intent) => (
         intent.orderIds.includes(order.id) && !['failed', 'closed'].includes(intent.status)
       ))
@@ -520,16 +538,17 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
       if (!['draft', 'submitted', 'in_fulfillment', 'fulfilled'].includes(order.status)) {
         throw new TableAccessError('这张订单现在还不能付款，我们正在确认状态；呼叫服务伙伴就能马上帮您看。', 'ORDER_NOT_PAYABLE', 409)
       }
-      const now = new Date().toISOString()
       const simulatedPayment = options.runtimeMode === 'local'
         || options.runtimeMode === 'test'
         || (options.runtimeMode === 'staging' && options.allowPaymentSimulation === true)
       const providerRuntime = simulatedPayment ? null : resolveProvider(state.paymentDomain, 'postar')
       const channel = simulatedPayment ? 'wechat_mock' : 'postar'
+      const attemptNumber = state.paymentDomain.paymentIntents.filter((intent) => intent.orderIds.includes(order.id)).length + 1
+      const attemptKey = `${input.idempotencyKey}:attempt:${attemptNumber}`
       const paymentIntent = createPaymentIntent(state.paymentDomain, {
         paymentIntentId: simulatedPayment
-          ? deterministicId('guest_payment', input.idempotencyKey)
-          : `Payment${createHash('sha256').update(input.idempotencyKey).digest('hex').slice(0, 32)}`,
+          ? deterministicId('guest_payment', attemptKey)
+          : `Payment${createHash('sha256').update(attemptKey).digest('hex').slice(0, 32)}`,
         tableSessionId: tableSession.id,
         lineAllocations: order.items.map((item) => ({
           orderId: order.id,
@@ -545,7 +564,7 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
         deviceId: `guest-web-${table.code}`,
         occurredAt: now,
         expiresAt: new Date(Date.parse(now) + 15 * 60_000).toISOString(),
-        idempotencyKey: `${input.idempotencyKey}:intent`,
+        idempotencyKey: `${attemptKey}:intent`,
       })
       let submittedOrder = order
       if (simulatedPayment) {

@@ -65,6 +65,11 @@ describe('runtime config', () => {
     expect(() => loadRuntimeConfig({ MBOX_BODY_LIMIT_BYTES: '10' })).toThrow('MBOX_BODY_LIMIT_BYTES')
   })
 
+  it('uses the platform PORT when API_PORT is not configured', () => {
+    expect(loadRuntimeConfig({ PORT: '9090' }).apiPort).toBe(9090)
+    expect(loadRuntimeConfig({ API_PORT: '8788', PORT: '9090' }).apiPort).toBe(8788)
+  })
+
   it('allows pilot login only in staging with a strong access code', () => {
     const staging = {
       MBOX_RUNTIME_MODE: 'staging',

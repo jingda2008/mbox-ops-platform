@@ -18,5 +18,5 @@ USER mbox
 ENV MBOX_JSON_STATE_PATH=/data/state.json
 VOLUME ["/data"]
 EXPOSE 8787
-HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 CMD wget -q -O - http://127.0.0.1:8787/api/live || exit 1
+HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 CMD wget -q -O - "http://127.0.0.1:${PORT:-8787}/api/live" || exit 1
 CMD ["node", "dist-server/server/index.js"]

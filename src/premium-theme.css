@@ -318,7 +318,7 @@ body {
   justify-content: space-between;
   gap: 5px;
   color: #b9c0ba;
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.2;
 }
 
@@ -350,7 +350,7 @@ body {
 .guest-stage-next span {
   overflow: hidden;
   color: #d8b45a;
-  font-size: 9px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -683,8 +683,8 @@ body {
 
 .guest-mood-section header small,
 .guest-song-picker header small {
-  color: #777f79;
-  font-size: 8px;
+  color: #68706a;
+  font-size: 10px;
   font-weight: 800;
 }
 

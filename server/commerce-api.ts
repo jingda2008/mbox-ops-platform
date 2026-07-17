@@ -55,6 +55,13 @@ interface CommerceApiOptions {
   now?: () => number
 }
 
+export class CommerceRequestError extends Error {
+  constructor(message: string, readonly code: string, readonly statusCode = 409) {
+    super(message)
+    this.name = 'CommerceRequestError'
+  }
+}
+
 const DEFAULT_COMMERCE_API_OPTIONS: CommerceApiOptions = {
   guestTokenSecret: 'local-development-qr-secret-change-me',
 }
@@ -119,6 +126,17 @@ export function registerCommerceRoutes(
       if (previous) {
         const existingOrder = state.orderDomain.orders.find((item) => item.id === previous.objectId)
         if (!existingOrder) throw new Error('购物车订单幂等记录异常')
+        const previousTableId = typeof previous.details.tableId === 'string' ? previous.details.tableId : ''
+        const previousItems = Array.isArray(previous.details.items)
+          ? previous.details.items
+              .map((item) => item as { productId?: unknown; quantity?: unknown })
+              .map((item) => `${String(item.productId)}:${String(item.quantity)}`)
+              .toSorted()
+          : []
+        const requestedItems = input.items.map((item) => `${item.productId}:${item.quantity}`).toSorted()
+        if (previousTableId !== input.tableId || JSON.stringify(previousItems) !== JSON.stringify(requestedItems)) {
+          throw new CommerceRequestError('同一个提交标识不能用于不同桌台或不同购物车内容', 'COMMERCE_ORDER_IDEMPOTENCY_CONFLICT')
+        }
         return existingOrder
       }
       if (new Set(input.items.map((item) => item.productId)).size !== input.items.length) {

@@ -19,6 +19,7 @@ import {
   approveRefund,
   confirmCashPayment,
   createPaymentIntent,
+  expirePaymentIntents,
   handlePaymentNotification,
   markRefundSucceeded,
   reportPhysicalPosPayment,
@@ -284,6 +285,8 @@ export function registerPaymentRoutes(
       const prepared = await repository.mutate((state) => {
         const actor = requireConfiguredOperation(request, state, 'payment.intent.create')
         requireTableSessionDataScope(request, state, input.tableSessionId, 'payment.intent.create')
+        const occurredAt = new Date()
+        expirePaymentIntents(state.paymentDomain, occurredAt.toISOString(), input.tableSessionId)
         const selectionFingerprint = paymentSelectionFingerprint(input.allocation, input.providerPayment)
         const existingRecord = state.paymentDomain.idempotencyRecords.find((record) => record.key === input.idempotencyKey)
         let result
@@ -305,7 +308,6 @@ export function registerPaymentRoutes(
         } else {
           const idempotencyCount = state.paymentDomain.idempotencyRecords.length
           const { allocations, amount } = buildRequestedAllocations(state, input.tableSessionId, input.allocation)
-          const now = new Date()
           const providerRuntime = input.channel === 'postar' ? resolveProvider(state.paymentDomain, input.channel) : null
           result = createPaymentIntent(state.paymentDomain, {
             paymentIntentId: input.channel === 'postar'
@@ -322,8 +324,8 @@ export function registerPaymentRoutes(
             merchantId: providerRuntime?.merchantId ?? 'mbox-lujiazui-demo',
             createdBy: actor.actorId,
             deviceId: input.deviceId,
-            occurredAt: now.toISOString(),
-            expiresAt: new Date(now.getTime() + 15 * 60 * 1000).toISOString(),
+            occurredAt: occurredAt.toISOString(),
+            expiresAt: new Date(occurredAt.getTime() + 15 * 60 * 1000).toISOString(),
             idempotencyKey: input.idempotencyKey,
             businessDate: state.store.businessDate,
             allocationMode: input.allocation.mode,
@@ -644,7 +646,9 @@ export function registerPaymentRoutes(
               amount: refund.amount,
             })
           }
-          const runtime = refund.status === 'approved' ? resolveProvider(state.paymentDomain, intent.channel) : null
+          const runtime = ['approved', 'failed'].includes(refund.status)
+            ? resolveProvider(state.paymentDomain, intent.channel)
+            : null
           return { actorId: actor.actorId, refund, intent, runtime }
         })
         if (!prepared.runtime) return prepared.refund

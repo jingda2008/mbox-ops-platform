@@ -139,6 +139,11 @@ async function fixture() {
     state.songState.tableSessions = []
     state.songState.requests = []
     state.songState.managerActorIds = []
+    const sessionNow = Date.now()
+    state.presenceLeases = ['emp-chen', 'emp-owner'].map((actorId) => ({
+      sessionId: `session-${actorId}`, actorId, storeId: state.store.id, businessDate: state.store.businessDate,
+      establishedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionNow + 60_000, sessionExpiresAt: sessionNow + 60_000,
+    }))
     state.revision += 1
   })
   const app = Fastify()

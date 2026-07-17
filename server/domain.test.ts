@@ -44,6 +44,26 @@ describe('service task domain', () => {
     expect(second.ownerId).toBe('emp-jie')
   })
 
+  it('dispatches to an employee serving a compatible secondary shift role', () => {
+    const state = createSeedState()
+    const table = state.tables.find((item) => item.code === 'L01')!
+    const primary = state.employees.find((item) => item.id === table.primaryEmployeeId)!
+    const backup = state.employees.find((item) => item.id === table.backupEmployeeIds[0])!
+    primary.paused = true
+    backup.paused = true
+    state.employees.find((item) => item.id === 'emp-wu')!.paused = true
+    const host = state.employees.find((item) => item.id === 'emp-host')!
+    const hostShift = state.shiftAssignments.find((item) => item.employeeId === host.id)!
+    hostShift.roleIds = ['server']
+    host.online = true
+    host.paused = false
+
+    const task = createServiceTask(state, taskInput())
+
+    expect(task.ownerId).toBe(host.id)
+    expect(task.customerReply).toContain(host.displayName)
+  })
+
   it('keeps the scene-specific reply while the service team is arranging coverage', () => {
     const state = createSeedState()
     for (const employee of state.employees) employee.paused = true

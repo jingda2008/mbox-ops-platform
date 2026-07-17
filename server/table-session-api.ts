@@ -25,8 +25,12 @@ import {
 import { startAwaitingOrder, stopAwaitingOrder } from './proactive-service.js'
 import { mutateReservationState, reservationsFor } from './reservation-api.js'
 import { confirmReservation, createReservation, markReservationArrived, seatReservation } from './reservation-domain.js'
+import {
+  isKdsTaskOperationallyClosed,
+  isServiceTaskOperationallyClosed,
+  isSongRequestOperationallyClosed,
+} from './operational-closure.js'
 
-const openTaskStatuses = new Set(['pending', 'accepted', 'arrived', 'completed', 'reopened', 'escalated'])
 const confirmedPaymentStatuses = new Set(['succeeded', 'reported_pending_reconciliation'])
 const pendingRefundStatuses = new Set(['requested', 'approved', 'processing'])
 const openServiceTaskStatuses = new Set(['pending', 'accepted', 'arrived', 'completed', 'reopened', 'escalated'])
@@ -233,11 +237,13 @@ export function transferOpenTableSession(
 
 function assertSessionCanClose(state: RuntimeState, tableId: string, tableSessionId: string) {
   const openKds = state.orderDomain.kdsTasks.filter((task) =>
-    task.tableSessionId === tableSessionId && task.status !== 'delivered',
+    task.tableSessionId === tableSessionId && !isKdsTaskOperationallyClosed(state.orderDomain, task),
   )
   if (openKds.length > 0) throw new Error(`仍有${openKds.length}项商品未送达，不能结台`)
 
-  const openTasks = state.tasks.filter((task) => task.tableId === tableId && openTaskStatuses.has(task.status))
+  const openTasks = state.tasks.filter((task) => (
+    task.tableId === tableId && !isServiceTaskOperationallyClosed(task)
+  ))
   if (openTasks.length > 0) throw new Error(`仍有${openTasks.length}项服务任务未关闭，不能结台`)
 
   const lockedBenefits = state.benefitRedemptions.filter((item) =>
@@ -249,6 +255,11 @@ function assertSessionCanClose(state: RuntimeState, tableId: string, tableSessio
     refund.tableSessionId === tableSessionId && pendingRefundStatuses.has(refund.status),
   )
   if (pendingRefunds.length > 0) throw new Error(`仍有${pendingRefunds.length}笔退款处理中，不能结台`)
+
+  const activeSongs = state.songState.requests.filter((request) => (
+    request.tableSessionId === tableSessionId && !isSongRequestOperationallyClosed(request)
+  ))
+  if (activeSongs.length > 0) throw new Error(`仍有${activeSongs.length}首点歌未完成或退款未结，不能结台`)
 
   const orders = state.orderDomain.orders.filter((order) => order.tableSessionId === tableSessionId)
   if (orders.some((order) => ['draft', 'authorization_pending'].includes(order.status))) {
@@ -262,14 +273,20 @@ function assertSessionCanClose(state: RuntimeState, tableId: string, tableSessio
   )
   for (const order of orders) {
     for (const item of order.items) {
-      const paidQuantity = confirmedIntents.flatMap((intent) => intent.lineAllocations)
+      const paidAmount = confirmedIntents.flatMap((intent) => intent.lineAllocations)
         .filter((allocation) => allocation.orderId === order.id && allocation.orderItemId === item.id)
-        .reduce((sum, allocation) => sum + allocation.quantity, 0)
-      const refundedQuantity = completedRefunds.flatMap((refund) => refund.items)
+        .reduce((sum, allocation) => sum + allocation.paidAmount, 0)
+      const refundedAmount = completedRefunds.flatMap((refund) => refund.items)
         .filter((refundItem) => refundItem.orderId === order.id && refundItem.orderItemId === item.id)
-        .reduce((sum, refundItem) => sum + refundItem.quantity, 0)
-      if (paidQuantity < item.quantity - refundedQuantity) {
-        throw new Error(`商品“${item.name}”尚未完成收款，不能结台`)
+        .reduce((sum, refundItem) => sum + refundItem.amount, 0)
+      const payableAmount = item.quantity * item.unitSalePriceAmount
+      const netPaidAmount = paidAmount - refundedAmount
+      const netPayableAmount = payableAmount - refundedAmount
+      if (
+        !Number.isSafeInteger(payableAmount) || !Number.isSafeInteger(netPaidAmount) ||
+        netPaidAmount !== netPayableAmount
+      ) {
+        throw new Error(`商品“${item.name}”尚未完成收款：实付${netPaidAmount}分，应付${netPayableAmount}分，不能结台`)
       }
     }
   }

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { GuestBehaviorEventType, GuestBehaviorValue } from '../src/shared/guest-insight-contracts.js'
-import type { PostgresPool } from './postgres-repository.js'
+import type { PostgresPool, PostgresPoolClient } from './postgres-repository.js'
 
 export interface GuestProfileRecord {
   anonymousId: string
@@ -83,43 +83,10 @@ export class MemoryGuestInsightsStore implements GuestInsightsStore {
   }
 }
 
-const SCHEMA_SQL = `
-CREATE SCHEMA IF NOT EXISTS mbox;
-CREATE TABLE IF NOT EXISTS mbox.guest_profiles (
-  tenant_id uuid NOT NULL,
-  store_id uuid NOT NULL,
-  anonymous_id uuid NOT NULL,
-  member_id text,
-  wechat_principal_id text,
-  first_seen_at timestamptz NOT NULL,
-  last_seen_at timestamptz NOT NULL,
-  visit_count integer NOT NULL DEFAULT 0 CHECK (visit_count >= 0),
-  PRIMARY KEY (tenant_id, store_id, anonymous_id)
-);
-CREATE TABLE IF NOT EXISTS mbox.guest_behavior_events (
-  tenant_id uuid NOT NULL,
-  store_id uuid NOT NULL,
-  event_id uuid NOT NULL,
-  anonymous_id uuid NOT NULL,
-  table_session_id text NOT NULL,
-  table_code text NOT NULL,
-  business_date date NOT NULL,
-  event_type text NOT NULL,
-  source text NOT NULL,
-  occurred_at timestamptz NOT NULL,
-  metadata jsonb NOT NULL CHECK (jsonb_typeof(metadata) = 'object'),
-  idempotency_key text NOT NULL,
-  PRIMARY KEY (tenant_id, store_id, event_id),
-  UNIQUE (tenant_id, store_id, idempotency_key),
-  FOREIGN KEY (tenant_id, store_id, anonymous_id)
-    REFERENCES mbox.guest_profiles (tenant_id, store_id, anonymous_id)
-);
-CREATE INDEX IF NOT EXISTS guest_behavior_events_profile_time_idx
-  ON mbox.guest_behavior_events (tenant_id, store_id, anonymous_id, occurred_at DESC);
-CREATE INDEX IF NOT EXISTS guest_behavior_events_type_time_idx
-  ON mbox.guest_behavior_events (tenant_id, store_id, event_type, occurred_at DESC);
-CREATE INDEX IF NOT EXISTS guest_behavior_events_visit_idx
-  ON mbox.guest_behavior_events (tenant_id, store_id, table_session_id, occurred_at);
+const SET_CONTEXT_SQL = `
+  SELECT
+    set_config('app.tenant_id', $1, true) AS tenant_id,
+    set_config('app.store_id', $2, true) AS store_id
 `
 
 interface PostgresGuestInsightsOptions {
@@ -132,18 +99,14 @@ export class PostgresGuestInsightsStore implements GuestInsightsStore {
   constructor(private readonly options: PostgresGuestInsightsOptions) {}
 
   async init() {
-    const client = await this.options.pool.connect()
-    try {
-      await client.query(SCHEMA_SQL)
-    } finally {
-      client.release()
-    }
+    await this.withTransaction(async (client) => {
+      await client.query('SELECT anonymous_id FROM mbox.guest_profiles LIMIT 0')
+      await client.query('SELECT event_id FROM mbox.guest_behavior_events LIMIT 0')
+    })
   }
 
   async recordEvent(input: RecordGuestBehaviorInput) {
-    const client = await this.options.pool.connect()
-    try {
-      await client.query('BEGIN')
+    return this.withTransaction(async (client) => {
       await client.query(`
         INSERT INTO mbox.guest_profiles (
           tenant_id, store_id, anonymous_id, first_seen_at, last_seen_at, visit_count
@@ -173,19 +136,21 @@ export class PostgresGuestInsightsStore implements GuestInsightsStore {
           WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND anonymous_id = $3::uuid
         `, [this.options.tenantId, this.options.storeId, input.anonymousId])
       }
-      await client.query('COMMIT')
-      return { ...structuredClone(input), id: inserted.rows[0]?.event_id ?? eventId }
-    } catch (error) {
-      try { await client.query('ROLLBACK') } catch {}
-      throw error
-    } finally {
-      client.release()
-    }
+      let persistedEventId = inserted.rows[0]?.event_id
+      if (!persistedEventId) {
+        const existing = await client.query<{ event_id: string }>(`
+          SELECT event_id::text FROM mbox.guest_behavior_events
+          WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND idempotency_key = $3
+        `, [this.options.tenantId, this.options.storeId, input.idempotencyKey])
+        persistedEventId = existing.rows[0]?.event_id
+      }
+      if (!persistedEventId) throw new Error('客户行为事件写入后无法读取')
+      return { ...structuredClone(input), id: persistedEventId }
+    })
   }
 
   async linkIdentity(anonymousId: string, input: { memberId?: string | null; wechatPrincipalId?: string | null }, occurredAt: string) {
-    const client = await this.options.pool.connect()
-    try {
+    return this.withTransaction(async (client) => {
       const result = await client.query<{
         anonymous_id: string
         member_id: string | null
@@ -213,6 +178,22 @@ export class PostgresGuestInsightsStore implements GuestInsightsStore {
         lastSeenAt: new Date(row.last_seen_at).toISOString(),
         visitCount: Number(row.visit_count),
       }
+    })
+  }
+
+  private async withTransaction<T>(operation: (client: PostgresPoolClient) => Promise<T>) {
+    const client = await this.options.pool.connect()
+    let transactionStarted = false
+    try {
+      await client.query('BEGIN ISOLATION LEVEL READ COMMITTED')
+      transactionStarted = true
+      await client.query(SET_CONTEXT_SQL, [this.options.tenantId, this.options.storeId])
+      const result = await operation(client)
+      await client.query('COMMIT')
+      return result
+    } catch (error) {
+      if (transactionStarted) await client.query('ROLLBACK').catch(() => undefined)
+      throw error
     } finally {
       client.release()
     }

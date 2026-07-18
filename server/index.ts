@@ -556,6 +556,7 @@ registerBenefitRedemptionRoutes(app, repository)
 registerSongRoutes(app, repository)
 registerGuestRoutes(app, repository, {
   secret: runtimeConfig.qrSecret,
+  previousSecret: runtimeConfig.qrPreviousSecret,
   runtimeMode: runtimeConfig.runtimeMode,
   allowPaymentSimulation: runtimeConfig.pilotPaymentSimulationEnabled,
   providerResolver: paymentProviderResolver,

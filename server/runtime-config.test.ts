@@ -56,15 +56,21 @@ describe('runtime config', () => {
       MBOX_STORE_UUID: '22222222-2222-4222-8222-222222222222',
       MBOX_SESSION_SECRET: 's'.repeat(32),
       MBOX_QR_SECRET: 'q'.repeat(32),
+      MBOX_QR_PREVIOUS_SECRET: 'p'.repeat(32),
       MBOX_METRICS_TOKEN: 'm'.repeat(32),
       MBOX_CORS_ORIGINS: 'https://ops.example.com,https://staff.example.com',
       MBOX_PUBLIC_BASE_URL: 'https://api.example.com',
     }
     const config = loadRuntimeConfig(production)
     expect(config.repositoryMode).toBe('postgres')
+    expect(config.qrPreviousSecret).toBe('p'.repeat(32))
     expect(config.corsOrigins).toHaveLength(2)
     expect(() => loadRuntimeConfig({ ...production, MBOX_PILOT_PAYMENT_SIMULATION_ENABLED: 'true' }))
       .toThrow('只能在staging')
+    expect(() => loadRuntimeConfig({ ...production, MBOX_QR_PREVIOUS_SECRET: 'short' }))
+      .toThrow('MBOX_QR_PREVIOUS_SECRET至少需要32个字符')
+    expect(() => loadRuntimeConfig({ ...production, MBOX_QR_PREVIOUS_SECRET: production.MBOX_QR_SECRET }))
+      .toThrow('MBOX_QR_PREVIOUS_SECRET不能与MBOX_QR_SECRET相同')
   })
 
   it('rejects wildcard or insecure production origins', () => {

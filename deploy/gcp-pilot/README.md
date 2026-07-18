@@ -24,6 +24,13 @@
 
 数据库端口不对公网开放，SSH只允许通过Google IAP进入。虚拟机服务账号仅具有拉取镜像、写入日志/指标和写入备份桶所需权限。
 
+## Cloud Run迁移兼容入口
+
+旧版实体桌码仍包含上述 `sslip.io` 地址。迁移期间，虚拟机上的Caddy使用
+`Caddyfile.cloud-alias`将全部业务流量转发到当前Cloud Run验证服务，旧版应用和数据库
+不再作为对外业务状态源。Cloud Run仅用旧签名密钥验证静态桌码，随后签发当前密钥的
+短会话。全部实体桌贴更换后，应删除旧密钥、停用该兼容入口并停止虚拟机。
+
 ## 部署顺序
 
 1. 运行`startup.sh`安装Docker、cron和Google Cloud Ops Agent。

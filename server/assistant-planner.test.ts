@@ -15,6 +15,34 @@ function planningInput() {
 }
 
 describe('Gemini assistant planner', () => {
+  it('asks for the actual party size before calling the model for open-table work', async () => {
+    let modelCalled = false
+    const planner = new GeminiAssistantPlanner({
+      apiKey: 'test-key',
+      model: 'gemini-3.5-flash',
+      timeoutMs: 2_000,
+      fetchImpl: async () => {
+        modelCalled = true
+        throw new Error('model must not be called')
+      },
+    })
+
+    const result = await planner.plan({ ...planningInput(), message: 'L01开台' })
+
+    expect(modelCalled).toBe(false)
+    expect(result).toMatchObject({
+      providerRequestId: null,
+      inputTokens: null,
+      outputTokens: null,
+      output: {
+        kind: 'clarification',
+        reply: 'L01准备开台，请告诉我实际到店人数。',
+        steps: [],
+        choices: ['1位', '2位', '3位', '4位', '其他人数'],
+      },
+    })
+  })
+
   it('requests non-retained structured Interactions output and validates the plan', async () => {
     let requestBody: Record<string, unknown> | null = null
     let requestHeaders: Headers | null = null

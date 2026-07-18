@@ -5,7 +5,12 @@ import type { RuntimeMode } from '../src/shared/auth-contracts.js'
 import type { GuestSessionResponse } from '../src/shared/guest-contracts.js'
 import { registerGuestRoutes } from './guest-api.js'
 import { JsonRepository } from './repository.js'
-import { requireGuestSession, signStaticTableQrToken, verifyTableAccessToken } from './table-access.js'
+import {
+  requireGuestSession,
+  signGuestSessionToken,
+  signStaticTableQrToken,
+  verifyTableAccessToken,
+} from './table-access.js'
 import { transferOpenTableSession } from './table-session-api.js'
 import { createPaymentIntent } from './payment-domain.js'
 import { applyTaskAction, createServiceTask } from './domain.js'
@@ -14,7 +19,12 @@ import { MemoryGuestInsightsStore } from './guest-insights.js'
 const secret = 'q'.repeat(32)
 const sessionTtlMs = 5 * 60_000
 
-async function fixture(runtimeMode: RuntimeMode = 'test', allowPaymentSimulation = false, ttlMs: number | null = sessionTtlMs) {
+async function fixture(
+  runtimeMode: RuntimeMode = 'test',
+  allowPaymentSimulation = false,
+  ttlMs: number | null = sessionTtlMs,
+  previousSecret?: string,
+) {
   let now = Date.now()
   const repository = new JsonRepository(`/tmp/mbox-guest-${crypto.randomUUID()}.json`)
   await repository.init()
@@ -23,6 +33,7 @@ async function fixture(runtimeMode: RuntimeMode = 'test', allowPaymentSimulation
   await guestInsights.init()
   registerGuestRoutes(app, repository, {
     secret,
+    previousSecret,
     runtimeMode,
     allowPaymentSimulation,
     ...(ttlMs === null ? {} : { guestSessionTtlMs: ttlMs }),
@@ -32,8 +43,8 @@ async function fixture(runtimeMode: RuntimeMode = 'test', allowPaymentSimulation
   return { app, repository, guestInsights, now: () => now, setNow: (value: number) => { now = value } }
 }
 
-function staticQr(now: number, storeId = 'mbox-lujiazui', tableCode = 'L01', tokenVersion = 1) {
-  return signStaticTableQrToken({ storeId, tableCode, tokenVersion, issuedAt: now }, secret)
+function staticQr(now: number, storeId = 'mbox-lujiazui', tableCode = 'L01', tokenVersion = 1, signingSecret = secret) {
+  return signStaticTableQrToken({ storeId, tableCode, tokenVersion, issuedAt: now }, signingSecret)
 }
 
 function nextDate(date: string) {
@@ -290,6 +301,36 @@ describe('guest table API', () => {
     await closeFixture(app, repository)
   })
 
+  it('accepts a previous static QR key only for migration and rotates the guest session to the current key', async () => {
+    const previousSecret = 'p'.repeat(32)
+    const { app, repository, now } = await fixture('test', false, sessionTtlMs, previousSecret)
+    const { response, body } = await exchange(app, staticQr(now(), 'mbox-lujiazui', 'L01', 1, previousSecret))
+
+    expect(response.statusCode).toBe(200)
+    expect(requireGuestSession(verifyTableAccessToken(body.tableToken, secret, now()))).toMatchObject({
+      tableCode: 'L01',
+      tableSessionId: body.account.tableSessionId,
+    })
+    expect(() => verifyTableAccessToken(body.tableToken, previousSecret, now())).toThrow()
+
+    const previousGuestSession = signGuestSessionToken({
+      storeId: 'mbox-lujiazui',
+      tableCode: 'L01',
+      tableSessionId: body.account.tableSessionId,
+      tokenVersion: 1,
+      issuedAt: now(),
+      expiresAt: now() + sessionTtlMs,
+    }, previousSecret)
+    const rejected = await app.inject({
+      method: 'GET',
+      url: `/api/guest/session?token=${encodeURIComponent(previousGuestSession)}`,
+    })
+    expect(rejected.statusCode).toBe(401)
+    expect(rejected.json()).toMatchObject({ code: 'TABLE_QR_REQUIRED' })
+
+    await closeFixture(app, repository)
+  })
+
   it('keeps one anonymous guest identity across the visit and records meaningful behavior idempotently', async () => {
     const { app, repository, guestInsights, now } = await fixture()
     const first = await exchange(app, staticQr(now()))
@@ -349,7 +390,6 @@ describe('guest table API', () => {
     expect(guestInsights.events.filter((event) => event.eventType === 'session_started')).toHaveLength(1)
     await closeFixture(app, repository)
   })
-
   it('freezes a previous-business-day table visit without exposing or accepting payment for its orders', async () => {
     const { app, repository, now } = await fixture()
     const current = (await exchange(app, staticQr(now()))).body

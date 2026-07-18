@@ -66,7 +66,6 @@ export interface VoiceCommandModelAdapter {
 export interface DeterministicVoiceCommandPlannerOptions {
   modelEnabled?: boolean
   modelAdapter?: VoiceCommandModelAdapter
-  defaultOpenTablePartySize?: number
   defaultOpenTableSalesOwner?: string
 }
 
@@ -74,7 +73,6 @@ const splitPattern = /[，,；;。！？!?\n]+|\s*(?:然后|接着|并且|同时
 const terminalPunctuationPattern = /[，,；;。！？!?]+$/u
 const compactOpenTablePattern = /^(?:请(?:帮我)?|帮我)?\s*([a-z]\d{1,4})\s*(?:来了|到店|入座)?\s*([0-9]{1,3}|[零〇一二两三四五六七八九十百]{1,6})\s*(?:位|人)(?:客人)?\s*[，,]?\s*(?:请(?:帮我)?|帮我)?\s*(?:立即)?开台\s*(?:并(?:且)?|然后|接着|再|同时)\s*(?:销售)?归属(?:给|选择)?\s*([a-z][a-z0-9._'-]*(?:\s+[a-z][a-z0-9._'-]*)*|[\u3400-\u9fff·]{1,20})$/iu
 const compactOpenTableWithoutSalesPattern = /^(?:请(?:帮我)?|帮我)?\s*([a-z]\d{1,4})\s*(?:来了|到店|入座)?\s*([0-9]{1,3}|[零〇一二两三四五六七八九十百]{1,6})\s*(?:位|人)(?:客人)?\s*[，,]?\s*(?:请(?:帮我)?|帮我)?\s*(?:立即)?开台$/iu
-const compactOpenTableWithDefaultsPattern = /^(?:请(?:帮我)?|帮我)?\s*([a-z]\d{1,4})\s*(?:立即)?开台$/iu
 
 const highRiskTerms = [
   '支付',
@@ -133,7 +131,6 @@ interface CompactOpenTableCommand {
 }
 
 interface OpenTableDefaults {
-  partySize?: number
   salesOwner?: string
 }
 
@@ -193,23 +190,6 @@ function parseCompactOpenTableCommand(
     return {
       tableCode: withoutSalesMatch[1].toUpperCase(),
       partySize,
-      salesOwner: defaults.salesOwner.trim(),
-    }
-  }
-
-  const withDefaultsMatch = normalized.match(compactOpenTableWithDefaultsPattern)
-  const defaultPartySize = defaults.partySize
-  if (
-    withDefaultsMatch
-    && Number.isInteger(defaultPartySize)
-    && defaultPartySize !== undefined
-    && defaultPartySize >= 1
-    && defaultPartySize <= 999
-    && defaults.salesOwner?.trim()
-  ) {
-    return {
-      tableCode: withDefaultsMatch[1].toUpperCase(),
-      partySize: defaultPartySize,
       salesOwner: defaults.salesOwner.trim(),
     }
   }
@@ -317,7 +297,6 @@ export class DeterministicVoiceCommandPlanner {
       throw new Error('DeterministicVoiceCommandPlanner does not permit model calls')
     }
     this.openTableDefaults = {
-      partySize: options.defaultOpenTablePartySize,
       salesOwner: options.defaultOpenTableSalesOwner?.trim(),
     }
   }

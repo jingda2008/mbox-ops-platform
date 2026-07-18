@@ -113,7 +113,23 @@ const systemInstruction = `你是上海 M-BOX 陆家嘴店的员工运营助手�
 7. 普通咨询返回 answer；只有员工明确要求打开、填写、修改、创建、处理或执行时才返回 plan。类似“我现在有什么任务”“哪桌在等待”“谁在演出”的问题，直接依据现场状态回答，不要包装成打开页面的计划。
 8. 回复员工要简洁、自然、有服务意识，不使用技术术语，不重复问候或自称，不编造不存在的桌台、人员、商品或状态。
 9. 页面能力只是候选动作。计划最终仍由M-BOX权限、实时状态、确认和审计系统决定是否执行。
-10. 严格只返回符合指定结构的JSON，不要添加Markdown代码块、说明文字或前后缀。`
+10. 开台必须使用员工明确说出的实际到店人数；没有人数时必须返回clarification，绝不能猜测、默认或沿用其他桌人数。
+11. 严格只返回符合指定结构的JSON，不要添加Markdown代码块、说明文字或前后缀。`
+
+const openTableWithTableCodePattern = /(?:([a-z]\d{1,4})[\s\S]{0,24}开台|开台[\s\S]{0,24}([a-z]\d{1,4}))/iu
+const explicitPartySizePattern = /(?:[0-9]{1,3}|[零〇一二两三四五六七八九十百]{1,6})\s*(?:位|人|名|个(?:人|客人|顾客))/u
+
+function missingOpenTablePartySize(message: string): AssistantModelOutput | null {
+  const match = message.match(openTableWithTableCodePattern)
+  if (!match || explicitPartySizePattern.test(message)) return null
+  const tableCode = (match[1] ?? match[2])!.toUpperCase()
+  return {
+    kind: 'clarification',
+    reply: `${tableCode}准备开台，请告诉我实际到店人数。`,
+    steps: [],
+    choices: ['1位', '2位', '3位', '4位', '其他人数'],
+  }
+}
 
 export interface GeminiAssistantPlannerOptions {
   apiKey: string
@@ -135,6 +151,16 @@ export class GeminiAssistantPlanner implements AssistantPlanner {
   }
 
   async plan(input: AssistantPlanningRequest): Promise<AssistantPlanningResult> {
+    const requiredPartySize = missingOpenTablePartySize(input.message)
+    if (requiredPartySize) {
+      return {
+        output: requiredPartySize,
+        model: this.model,
+        providerRequestId: null,
+        inputTokens: null,
+        outputTokens: null,
+      }
+    }
     const prompt = JSON.stringify({
       conversation: input.history,
       currentEmployeeMessage: input.message,

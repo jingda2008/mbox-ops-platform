@@ -22,6 +22,7 @@ import { applyTaskAction, createServiceTask } from './domain.js'
 import type { RuntimeRepository } from './repository.js'
 import {
   requireGuestSession,
+  requireStaticTableQr,
   signGuestSessionToken,
   TableAccessError,
   verifyTableAccessToken,
@@ -70,12 +71,29 @@ function publicCheckoutResult(input: {
 
 interface GuestApiOptions {
   secret: string
+  previousSecret?: string
   runtimeMode: RuntimeMode
   allowPaymentSimulation?: boolean
   guestSessionTtlMs?: number
   now?: () => number
   providerResolver?: PaymentProviderResolver
   guestInsights?: GuestInsightsStore
+}
+
+function verifyGuestEntryToken(token: string, options: GuestApiOptions, now: number) {
+  try {
+    return verifyTableAccessToken(token, options.secret, now)
+  } catch (currentSecretError) {
+    if (!options.previousSecret) throw currentSecretError
+    try {
+      return requireStaticTableQr(verifyTableAccessToken(token, options.previousSecret, now))
+    } catch (previousSecretError) {
+      if (previousSecretError instanceof TableAccessError && previousSecretError.code === 'TABLE_QR_REQUIRED') {
+        throw previousSecretError
+      }
+      throw currentSecretError
+    }
+  }
 }
 
 const guestIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -424,7 +442,7 @@ function exchangeAccessFromRequest(
 ) {
   const now = options.now?.() ?? Date.now()
   if (token) {
-    const claims = verifyTableAccessToken(token, options.secret, now)
+    const claims = verifyGuestEntryToken(token, options, now)
     const table = resolveTable(state, claims)
     const tableSession = claims.tokenType === 'guest_session'
       ? resolveGuestSession(state, claims).tableSession

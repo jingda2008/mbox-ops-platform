@@ -75,27 +75,19 @@ describe('DeterministicVoiceCommandPlanner.plan', () => {
     expect(plan.steps[3].entities).toEqual({ salesOwner: 'Alice' })
   })
 
-  it('expands a short open-table command with visible employee defaults', () => {
+  it('does not invent a party size for a short open-table command', () => {
     const planner = new DeterministicVoiceCommandPlanner({
-      defaultOpenTablePartySize: 2,
       defaultOpenTableSalesOwner: 'Tom',
     })
     const plan = planner.plan('L01开台')
 
-    expect(plan.steps.map((step) => step.action)).toEqual([
-      'open_live',
-      'select_table',
-      'set_party_size',
-      'assign_sales',
-      'open_table_now',
-    ])
-    expect(plan.steps[2].entities).toEqual({ partySize: 2 })
-    expect(plan.steps[3].entities).toEqual({ salesOwner: 'Tom' })
+    expect(plan.steps).toHaveLength(1)
+    expect(plan.steps[0]).toMatchObject({ action: 'execute_command', command: 'L01开台' })
+    expect(plan.steps[0]?.entities).toEqual({})
   })
 
   it('uses the spoken party size while defaulting sales to the current employee', () => {
     const plan = new DeterministicVoiceCommandPlanner({
-      defaultOpenTablePartySize: 2,
       defaultOpenTableSalesOwner: 'Tom',
     }).plan('L01四位客人开台')
 
@@ -105,7 +97,6 @@ describe('DeterministicVoiceCommandPlanner.plan', () => {
 
   it('normalizes a natural arrival sentence into the verified five-step open-table workflow', () => {
     const plan = new DeterministicVoiceCommandPlanner({
-      defaultOpenTablePartySize: 2,
       defaultOpenTableSalesOwner: 'Tom',
     }).plan('L04来了四位客人，帮我开台并归属Tom')
 

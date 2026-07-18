@@ -17,6 +17,7 @@ export interface RuntimeConfig {
   shutdownGraceMs: number
   sessionSecret?: string
   qrSecret: string
+  qrPreviousSecret?: string
   corsOrigins: string[]
   repositoryMode: z.infer<typeof repositoryModeSchema>
   jsonStatePath: string
@@ -139,6 +140,7 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
     shutdownGraceMs: parseInteger(env.MBOX_SHUTDOWN_GRACE_MS, 10_000, 'MBOX_SHUTDOWN_GRACE_MS', 1_000, 60_000),
     sessionSecret: env.MBOX_SESSION_SECRET?.trim() || undefined,
     qrSecret: env.MBOX_QR_SECRET?.trim() || 'local-development-qr-secret-change-me',
+    qrPreviousSecret: env.MBOX_QR_PREVIOUS_SECRET?.trim() || undefined,
     corsOrigins,
     repositoryMode,
     jsonStatePath: resolve(env.MBOX_JSON_STATE_PATH?.trim() || '.runtime/state.json'),
@@ -260,6 +262,12 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
       throw new Error('预发布和生产环境必须配置至少32字符的MBOX_SESSION_SECRET')
     }
     if (config.qrSecret.length < 32) throw new Error('预发布和生产环境必须配置至少32字符的MBOX_QR_SECRET')
+    if (config.qrPreviousSecret && config.qrPreviousSecret.length < 32) {
+      throw new Error('MBOX_QR_PREVIOUS_SECRET至少需要32个字符')
+    }
+    if (config.qrPreviousSecret === config.qrSecret) {
+      throw new Error('MBOX_QR_PREVIOUS_SECRET不能与MBOX_QR_SECRET相同')
+    }
     if (!config.metricsToken || config.metricsToken.length < 32) {
       throw new Error('预发布和生产环境必须配置至少32字符的MBOX_METRICS_TOKEN')
     }

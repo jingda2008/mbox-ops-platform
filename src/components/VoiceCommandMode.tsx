@@ -159,7 +159,6 @@ function agentStepStatusLabel(step: VoiceCommandPlan['steps'][number]) {
 export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: VoiceCommandModeProps) {
   const model = useMemo(() => buildRoleHomeModel(data, employeeId), [data, employeeId])
   const deterministicPlanner = useMemo(() => new DeterministicVoiceCommandPlanner({
-    defaultOpenTablePartySize: 2,
     defaultOpenTableSalesOwner: model.employee?.displayName,
   }), [model.employee?.displayName])
   const navigationSuggestions = voiceSuggestionsForNavigation(model.access.allowedNavigationIds)

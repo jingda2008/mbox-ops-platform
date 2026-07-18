@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { classifyVoicePageRisk, planVoicePageCommand, type VoicePageControl } from './voice-page-controls'
+import {
+  canConfirmVoicePageStateChange,
+  classifyVoicePageRisk,
+  planVoicePageCommand,
+  requiresExplicitVoiceFeedback,
+  type VoicePageControl,
+  type VoicePageStateSnapshot,
+} from './voice-page-controls'
 
 function control(overrides: Partial<VoicePageControl> & Pick<VoicePageControl, 'id' | 'kind' | 'label'>): VoicePageControl {
   return {
@@ -51,6 +58,19 @@ describe('planVoicePageCommand', () => {
       action: 'select_option',
       value: 'cash',
       optionLabel: '现金',
+    })
+  })
+
+  it('treats “选择桌台” as a button target when there is no matching select field', () => {
+    const controls = [
+      control({ id: 'nav-live', kind: 'button', label: '我的桌台', zone: 'navigation' }),
+      control({ id: 'table-l04', kind: 'button', label: 'L04 休闲04 可开台', displayName: '桌台责任区 · L04 休闲04 可开台' }),
+    ]
+
+    expect(planVoicePageCommand('选择桌台 L04', controls)).toMatchObject({
+      kind: 'ready',
+      controlId: 'table-l04',
+      action: 'activate',
     })
   })
 
@@ -129,5 +149,47 @@ describe('classifyVoicePageRisk', () => {
     expect(classifyVoicePageRisk('确认退款')).toBe('high')
     expect(classifyVoicePageRisk('保存权益配置')).toBe('high')
     expect(classifyVoicePageRisk('刷新预约')).toBe('normal')
+  })
+})
+
+describe('requiresExplicitVoiceFeedback', () => {
+  it('requires positive outcome evidence for business mutations and every high-risk activation', () => {
+    expect(requiresExplicitVoiceFeedback('立即开台', 'activate', 'normal')).toBe(true)
+    expect(requiresExplicitVoiceFeedback('保存员工', 'activate', 'high')).toBe(true)
+    expect(requiresExplicitVoiceFeedback('确认退款', 'activate', 'high')).toBe(true)
+  })
+
+  it('allows visible UI transitions and field changes to use immediate state evidence', () => {
+    expect(requiresExplicitVoiceFeedback('L04 休闲04 可开台', 'activate', 'normal')).toBe(false)
+    expect(requiresExplicitVoiceFeedback('人数', 'set_value', 'normal')).toBe(false)
+    expect(requiresExplicitVoiceFeedback('销售归属', 'select_option', 'normal')).toBe(false)
+  })
+})
+
+describe('canConfirmVoicePageStateChange', () => {
+  const before: VoicePageStateSnapshot = { heading: '现场桌台', feedback: [], stateSignature: 'before', busy: false }
+
+  it('accepts a stable UI state change for low-risk navigation', () => {
+    expect(canConfirmVoicePageStateChange(
+      before,
+      { ...before, stateSignature: 'after' },
+      false,
+    )).toBe(true)
+  })
+
+  it('never treats a generic UI change as explicit business completion evidence', () => {
+    expect(canConfirmVoicePageStateChange(
+      before,
+      { ...before, stateSignature: 'after' },
+      true,
+    )).toBe(false)
+  })
+
+  it('waits while the changed page is still busy', () => {
+    expect(canConfirmVoicePageStateChange(
+      before,
+      { ...before, stateSignature: 'after', busy: true },
+      false,
+    )).toBe(false)
   })
 })

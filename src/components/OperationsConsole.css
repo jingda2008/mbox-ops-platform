@@ -57,7 +57,9 @@
 .party-stepper button { display: grid; place-items: center; border: 0; background: transparent; color: var(--ink); }
 .party-stepper button:first-child { border-right: 1px solid var(--line); }
 .party-stepper button:last-child { border-left: 1px solid var(--line); }
-.party-stepper b { display: grid; place-items: center; font-size: 13px; }
+.party-stepper input { width: 100%; min-width: 0; border: 0; background: #fff; color: var(--ink); font-size: 13px; font-weight: 800; text-align: center; appearance: textfield; }
+.party-stepper input::-webkit-inner-spin-button,
+.party-stepper input::-webkit-outer-spin-button { margin: 0; appearance: none; }
 
 .table-business-toolbar { display: grid; grid-template-columns: minmax(250px, .8fr) minmax(260px, 1fr); gap: 10px 16px; padding: 11px 12px; }
 .table-business-toolbar.is-warning { border-left-color: #c68a23; background: #fff9ed; }

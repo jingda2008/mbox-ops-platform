@@ -19,6 +19,7 @@
     "check:miniprogram": "node scripts/check-miniprogram.mjs",
     "lint": "oxlint src server",
     "test": "vitest run",
+    "test:voice": "vitest run src/components/voice-command.test.ts src/components/voice-command-agent.test.ts src/components/voice-command-dictionary.test.ts src/components/voice-page-controls.test.ts src/components/voice-speech.test.ts",
     "test:watch": "vitest",
     "tc:register": "node scripts/build-tc-execution-register.mjs",
     "tc:verify": "node scripts/build-tc-execution-register.mjs --check",

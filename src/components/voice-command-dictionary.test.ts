@@ -5,6 +5,7 @@ import {
   buildVoiceCommandDictionary,
   canonicalizeVoiceCommand,
   chooseBestVoiceTranscript,
+  chooseBestVoiceTranscriptSelection,
   dictionaryBiasPhrases,
   type VoiceCommandDictionaryEntry,
 } from './voice-command-dictionary'
@@ -147,7 +148,7 @@ describe('buildVoiceCommandDictionary', () => {
     ]))
     expect(findEntry(entries, 'employee', 'Tom').boost).toBeGreaterThan(0)
     expect(findEntry(entries, 'role', '接待')).toBeDefined()
-    expect(findEntry(entries, 'table', 'A01桌')).toBeDefined()
+    expect(findEntry(entries, 'table', 'A01')).toBeDefined()
     expect(findEntry(entries, 'area', '贵宾卡座区').aliases).toContain('卡座')
     expect(findEntry(entries, 'singer', 'Jerry')).toBeDefined()
     expect(findEntry(entries, 'song', '海阔天空').aliases).toContain('Beyond海阔天空')
@@ -167,7 +168,7 @@ describe('buildVoiceCommandDictionary', () => {
     const tom = findEntry(entries, 'employee', 'Tom')
     const jerry = findEntry(entries, 'employee', 'Jerry')
     const tyke = findEntry(entries, 'employee', 'Tyke')
-    const table = findEntry(entries, 'table', 'A01桌')
+    const table = findEntry(entries, 'table', 'A01')
 
     expect(zhang.pinyin).toBe('zhang san')
     expect(zhang.initials).toBe('zs')
@@ -175,7 +176,7 @@ describe('buildVoiceCommandDictionary', () => {
     expect(jerry.aliases).toEqual(expect.arrayContaining(['杰瑞', '杰里']))
     expect(tyke.aliases).toEqual(expect.arrayContaining(['泰克', '太克']))
     expect(table.aliases).toEqual(expect.arrayContaining([
-      'A-01',
+      'A01桌',
       'A1桌',
       'A零一号桌',
       '诶洞幺号桌',
@@ -220,14 +221,14 @@ describe('canonicalizeVoiceCommand', () => {
     expect(canonicalizeVoiceCommand(
       '请让汤姆去诶洞幺号桌，服务类型选宋水',
       dictionary(),
-    )).toBe('请让Tom去A01桌,服务类型选送水')
+    )).toBe('请让Tom去A01,服务类型选送水')
   })
 
   it('accepts full pinyin and bounded pinyin initials', () => {
     const entries = dictionary()
 
-    expect(canonicalizeVoiceCommand('请找tangmu去A1桌', entries)).toBe('请找Tom去A01桌')
-    expect(canonicalizeVoiceCommand('请去A01号桌处理', entries)).toBe('请去A01桌处理')
+    expect(canonicalizeVoiceCommand('请找tangmu去A1桌', entries)).toBe('请找Tom去A01')
+    expect(canonicalizeVoiceCommand('请去A01号桌处理', entries)).toBe('请去A01处理')
     expect(canonicalizeVoiceCommand('请找zs处理', entries)).toBe('请找张三处理')
     expect(canonicalizeVoiceCommand('zscore保持原样', entries)).toBe('zscore保持原样')
   })
@@ -239,6 +240,16 @@ describe('canonicalizeVoiceCommand', () => {
     ]
 
     expect(canonicalizeVoiceCommand('请找宋水', entries)).toBe('请找宋水')
+  })
+
+  it('applies aliases once without recursively rewriting the replacement output', () => {
+    const entries: VoiceCommandDictionaryEntry[] = [
+      { canonical: 'L04', category: 'table', aliases: ['休闲04'], pinyin: 'l04', initials: 'l', boost: 9 },
+      { canonical: '大厅休闲区', category: 'area', aliases: ['休闲'], pinyin: 'da ting xiu xian qu', initials: 'dtxxq', boost: 7 },
+    ]
+
+    expect(canonicalizeVoiceCommand('休闲04四位客人开台', entries)).toBe('L04四位客人开台')
+    expect(canonicalizeVoiceCommand('大厅休闲区04四位客人开台', entries)).toBe('大厅休闲区04四位客人开台')
   })
 })
 
@@ -260,6 +271,24 @@ describe('chooseBestVoiceTranscript', () => {
 
     expect(chooseBestVoiceTranscript(alternatives, dictionary())).toBe('请找Tom')
     expect(chooseBestVoiceTranscript([], dictionary())).toBe('')
+  })
+
+  it('does not create an executable plan from unsupported low-confidence speech', () => {
+    expect(chooseBestVoiceTranscriptSelection([
+      { transcript: '帮我处理那个事情', confidence: 0.31 },
+    ], dictionary())).toMatchObject({
+      canonicalized: '帮我处理那个事情',
+      safeToPlan: false,
+    })
+  })
+
+  it('allows a low-confidence exact hotword to continue to the normal confirmation flow', () => {
+    expect(chooseBestVoiceTranscriptSelection([
+      { transcript: '汤姆', confidence: 0.18 },
+    ], dictionary())).toMatchObject({
+      canonicalized: 'Tom',
+      safeToPlan: true,
+    })
   })
 })
 

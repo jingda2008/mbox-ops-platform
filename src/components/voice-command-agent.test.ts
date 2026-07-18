@@ -48,7 +48,7 @@ describe('DeterministicVoiceCommandPlanner.plan', () => {
     ])
     expect(plan.steps.map((step) => step.command)).toEqual([
       '打开现场桌台',
-      '选择桌台 K2',
+      '点击K2',
       '客人人数输入4',
       '销售归属选择 Tom',
       '点击立即开台',

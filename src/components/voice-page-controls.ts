@@ -41,6 +41,7 @@ export type VoicePagePlan =
       risk: VoicePageRisk
       summary: string
       controlFingerprint: string
+      requiresExplicitFeedback: boolean
     }
   | { kind: 'ambiguous'; message: string; candidates: VoicePageCandidate[] }
   | { kind: 'blocked'; message: string }
@@ -54,6 +55,18 @@ export interface VoicePageExecutionResult {
 export interface VoicePageStateSnapshot {
   heading: string
   feedback: string[]
+  stateSignature: string
+  busy: boolean
+}
+
+export function canConfirmVoicePageStateChange(
+  before: VoicePageStateSnapshot,
+  after: VoicePageStateSnapshot,
+  requiresExplicitFeedback: boolean,
+) {
+  return !requiresExplicitFeedback
+    && !after.busy
+    && after.stateSignature !== before.stateSignature
 }
 
 interface RuntimeVoicePageControl extends VoicePageControl {
@@ -65,6 +78,7 @@ let nextControlId = 1
 
 const sensitiveFieldPattern = /pin|密码|密钥|secret|token|口令|验证码|付款码|银行卡|身份证/i
 const highRiskPattern = /退款|支付|付款|收款|结台|翻台|转桌|换位|合台|加桌|拆回|赠送|折扣|确认发放|批准发放|入库|出库|盘点|报损|保存|新增|创建|改价|调整价格|删除|作废|重置|发布|权限|授权|撤销|清空|售罄|确认到账|关闭桌台|取消预约|切换员工|退出登录/i
+const explicitOutcomePattern = /立即开台|确认开台|接单|到桌|开始制作|制作完成|确认送达|完成服务|确认完成|暂未点单|结束提醒|提交|保存|发布|退款|付款|收款|赠送|折扣|批准|发放|新增|创建|改价|删除|作废|撤销|重置|清空|售罄|确认到账|结台|翻台|转桌|换位|合台|加桌|拆回|入库|出库|盘点|报损|变更|取消预约/i
 const feedbackSelector = '[role="alert"], [role="status"], .notice-bar, .error-banner, .waitlist-notice, .offline-guard-notice'
 
 function compactText(value: string | null | undefined, maximum = 80) {
@@ -84,6 +98,14 @@ export function classifyVoicePageRisk(
 ): VoicePageRisk {
   if (options.zone === 'navigation' || options.safeDisclosure) return 'normal'
   return options.danger || highRiskPattern.test(label) ? 'high' : 'normal'
+}
+
+export function requiresExplicitVoiceFeedback(
+  label: string,
+  action: VoicePageAction,
+  risk: VoicePageRisk,
+) {
+  return action === 'activate' && (risk === 'high' || explicitOutcomePattern.test(label))
 }
 
 function controlId(element: Element) {
@@ -319,6 +341,7 @@ function stripActivationWords(command: string) {
     .trim()
     .replace(/^(请|麻烦|帮我|我要|我想|给我)+/g, '')
     .replace(/^(点击|点一下|按下|执行|打开|进入|调用|选择|切换到|切换)/, '')
+    .replace(/^(?:桌台|桌号)\s*(?=[a-z]\d|\d)/i, '')
     .replace(/(这个|一下|按钮)$/g, '')
     .trim()
 }
@@ -366,6 +389,7 @@ function readyPlan(
     risk: control.risk,
     summary,
     controlFingerprint: controlFingerprint(control),
+    requiresExplicitFeedback: requiresExplicitVoiceFeedback(control.label, action, control.risk),
     ...extras,
   }
 }
@@ -397,29 +421,31 @@ export function planVoicePageCommand(command: string, controls: VoicePageControl
       `当前页面没有找到“${fieldName}”选择框。`,
       (control) => `${control.displayName}选择${requestedOption}`,
     )
-    if ('plan' in selected) return selected.plan
-    const availableOptions = (selected.control.options ?? []).filter((option) => !option.disabled)
-    const scoredOptions = availableOptions
-      .map((option) => ({ option, score: matchScore(requestedOption, option.label) }))
-      .filter((candidate) => candidate.score >= 58)
-      .sort((left, right) => right.score - left.score)
-    if (scoredOptions.length === 0) return { kind: 'blocked', message: `“${selected.control.displayName}”没有“${requestedOption}”这个可选项。` }
-    if (scoredOptions.length > 1 && scoredOptions[0]!.score - scoredOptions[1]!.score <= 5) {
-      return {
-        kind: 'ambiguous',
-        message: '有几个选项听起来很像，请点选正确的一项。',
-        candidates: scoredOptions.slice(0, 6).map((item) => ({
-          id: `${selected.control.id}:option:${item.option.value}`,
-          label: item.option.label,
-          description: selected.control.displayName,
-          command: `${selected.control.displayName}选择${item.option.label}`,
-          disabled: item.option.disabled,
-          risk: selected.control.risk,
-        })),
+    if ('control' in selected) {
+      const availableOptions = (selected.control.options ?? []).filter((option) => !option.disabled)
+      const scoredOptions = availableOptions
+        .map((option) => ({ option, score: matchScore(requestedOption, option.label) }))
+        .filter((candidate) => candidate.score >= 58)
+        .sort((left, right) => right.score - left.score)
+      if (scoredOptions.length === 0) return { kind: 'blocked', message: `“${selected.control.displayName}”没有“${requestedOption}”这个可选项。` }
+      if (scoredOptions.length > 1 && scoredOptions[0]!.score - scoredOptions[1]!.score <= 5) {
+        return {
+          kind: 'ambiguous',
+          message: '有几个选项听起来很像，请点选正确的一项。',
+          candidates: scoredOptions.slice(0, 6).map((item) => ({
+            id: `${selected.control.id}:option:${item.option.value}`,
+            label: item.option.label,
+            description: selected.control.displayName,
+            command: `${selected.control.displayName}选择${item.option.label}`,
+            disabled: item.option.disabled,
+            risk: selected.control.risk,
+          })),
+        }
       }
+      const option = scoredOptions[0]!.option
+      return readyPlan(selected.control, 'select_option', `把“${selected.control.displayName}”选择为“${option.label}”。`, { value: option.value, optionLabel: option.label })
     }
-    const option = scoredOptions[0]!.option
-    return readyPlan(selected.control, 'select_option', `把“${selected.control.displayName}”选择为“${option.label}”。`, { value: option.value, optionLabel: option.label })
+    if (selected.plan.kind !== 'unknown') return selected.plan
   }
 
   const toggleMatch = cleanCommand.match(/^(?:请|帮我)?(打开|开启|启用|关闭|停用|取消)(.+)$/)
@@ -507,5 +533,23 @@ export function readVoicePageState(root: ParentNode): VoicePageStateSnapshot {
     .filter((element) => visibleForVoice(element))
     .map((element) => compactText(element.innerText || element.textContent, 160))
     .filter(Boolean)
-  return { heading: compactText(headingElement?.innerText || headingElement?.textContent), feedback: [...new Set(feedback)] }
+  const stateSignature = runtimeControls(root).map((control) => {
+    const element = control.element
+    return [
+      control.id,
+      control.kind,
+      control.disabled ? 'disabled' : 'enabled',
+      element.getAttribute('aria-expanded') ?? '',
+      element.getAttribute('aria-pressed') ?? '',
+      element.getAttribute('aria-selected') ?? '',
+      element.classList.contains('is-active') ? 'active' : '',
+    ].join(':')
+  }).join('|')
+  const busy = [...root.querySelectorAll<HTMLElement>('[aria-busy="true"]')].some((element) => visibleForVoice(element))
+  return {
+    heading: compactText(headingElement?.innerText || headingElement?.textContent),
+    feedback: [...new Set(feedback)],
+    stateSignature,
+    busy,
+  }
 }

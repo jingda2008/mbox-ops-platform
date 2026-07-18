@@ -17,6 +17,7 @@ import type { BootstrapResponse } from '../shared/contracts'
 import type { OperationsConsoleView } from './OperationsConsole'
 import { buildRoleHomeModel } from './role-access'
 import {
+  canConfirmVoicePageStateChange,
   collectVoicePageControls,
   executeVoicePagePlan,
   planVoicePageCommand,
@@ -34,7 +35,7 @@ import {
 import {
   buildVoiceCommandDictionary,
   canonicalizeVoiceCommand,
-  chooseBestVoiceTranscript,
+  chooseBestVoiceTranscriptSelection,
   dictionaryBiasPhrases,
 } from './voice-command-dictionary'
 import { naturalizeSpokenFeedback, rankChineseVoices, selectPreferredChineseVoice } from './voice-speech'
@@ -72,6 +73,8 @@ type VoiceWindow = Window & {
 type ResolvedCommand =
   | { source: 'page'; plan: VoicePagePlan }
   | { source: 'navigation'; resolution: VoiceCommandResolution }
+
+type ExecutionTone = 'success' | 'error' | 'working' | 'info' | 'warning'
 
 interface VoiceCommandModeProps {
   data: BootstrapResponse
@@ -117,6 +120,13 @@ function resolvedCommandReady(resolved: ResolvedCommand | null) {
   return resolved.resolution.kind === 'ready'
 }
 
+function agentStepStatusLabel(step: VoiceCommandPlan['steps'][number]) {
+  if (step.status === 'completed') return step.risk === 'high' ? '已完成 · 已单独确认' : '已完成'
+  if (step.status === 'running') return '正在处理'
+  if (step.status === 'blocked') return step.blockedReason || '未执行'
+  return step.risk === 'high' ? '待执行 · 需要单独确认' : '待执行'
+}
+
 export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: VoiceCommandModeProps) {
   const model = useMemo(() => buildRoleHomeModel(data, employeeId), [data, employeeId])
   const deterministicPlanner = useMemo(() => new DeterministicVoiceCommandPlanner(), [])
@@ -133,7 +143,7 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
   const [listening, setListening] = useState(false)
   const [voiceMessage, setVoiceMessage] = useState('')
   const [executionMessage, setExecutionMessage] = useState('')
-  const [executionTone, setExecutionTone] = useState<'success' | 'error' | 'working'>('success')
+  const [executionTone, setExecutionTone] = useState<ExecutionTone>('success')
   const [speechEnabled, setSpeechEnabled] = useState(true)
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([])
   const [selectedVoiceURI, setSelectedVoiceURI] = useState(() => window.localStorage.getItem('mbox.voice.tts.voice-uri') ?? '')
@@ -204,7 +214,7 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
     setAgentPlan(nextPlan)
   }
 
-  function announce(message: string, tone: 'success' | 'error' | 'working' = 'success') {
+  function announce(message: string, tone: ExecutionTone = 'success') {
     setExecutionMessage(message)
     setExecutionTone(tone)
     if (!speechEnabled || !('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') return
@@ -221,6 +231,14 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
     utterance.pitch = 1.02
     utterance.volume = 0.96
     window.speechSynthesis.speak(utterance)
+  }
+
+  function cancelCurrentCommand() {
+    setResolved(null)
+    setAwaitingHighRiskConfirmation(false)
+    pausedAgentStepIdRef.current = null
+    updateAgentPlan(null)
+    announce('已取消，刚才的命令没有执行。')
   }
 
   function resolveCommand(nextCommand: string) {
@@ -249,11 +267,7 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
       return true
     }
     if (/^(取消|取消执行|不要执行|算了)$/.test(normalized)) {
-      setResolved(null)
-      setAwaitingHighRiskConfirmation(false)
-      pausedAgentStepIdRef.current = null
-      updateAgentPlan(null)
-      announce('已取消，刚才的命令没有执行。')
+      cancelCurrentCommand()
       return true
     }
     if (/^(确认|确认执行|继续执行|执行)$/.test(normalized)) {
@@ -299,6 +313,7 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
     const rawCommand = nextCommand.trim()
     const cleanCommand = canonicalizeVoiceCommand(rawCommand, voiceDictionary).trim()
     if (!cleanCommand) return
+    setExecutionMessage('')
     setCommand(cleanCommand)
     setVoiceMessage('')
     if (handleInternalCommand(cleanCommand)) return
@@ -309,7 +324,7 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
       setAwaitingHighRiskConfirmation(false)
       pausedAgentStepIdRef.current = null
       updateAgentPlan(nextAgentPlan)
-      announce(`我把这句话整理成${nextAgentPlan.steps.length}步，请先核对计划再执行。`, 'working')
+      announce(`我把这句话整理成${nextAgentPlan.steps.length}步，请先核对计划再执行。`, 'info')
       return
     }
     updateAgentPlan(null)
@@ -319,7 +334,7 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
 
     if (nextResolved.source === 'page') {
       if (nextResolved.plan.kind === 'blocked') announce(nextResolved.plan.message, 'error')
-      if (nextResolved.plan.kind === 'ambiguous') announce(nextResolved.plan.message, 'working')
+      if (nextResolved.plan.kind === 'ambiguous') announce(nextResolved.plan.message, 'info')
       return
     }
     if (nextResolved.resolution.kind === 'denied') announce(`当前岗位没有${nextResolved.resolution.label}权限，命令没有执行。`, 'error')
@@ -344,7 +359,7 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
         updateAgentPlan({ ...current, steps })
       }
     }
-    announce('好的，已经选中这一项，请核对后确认执行。', 'working')
+    announce('好的，已经选中这一项，请核对后确认执行。', 'info')
   }
 
   function startListening() {
@@ -376,11 +391,15 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
         transcript: candidate.transcript,
         confidence: candidate.confidence,
       })) : []
-      const transcript = latest?.isFinal
-        ? chooseBestVoiceTranscript(alternatives, voiceDictionary)
-        : latest?.[0]?.transcript?.trim() ?? ''
+      const selection = latest?.isFinal
+        ? chooseBestVoiceTranscriptSelection(alternatives, voiceDictionary)
+        : null
+      const transcript = selection?.canonicalized ?? latest?.[0]?.transcript?.trim() ?? ''
       setCommand(transcript)
-      if (latest?.isFinal) prepareCommand(transcript)
+      if (latest?.isFinal && selection?.safeToPlan) prepareCommand(transcript)
+      if (latest?.isFinal && selection && !selection.safeToPlan) {
+        setVoiceMessage(`我听到“${selection.canonicalized}”，但不太确定。请核对文字后点击“理解”。`)
+      }
     }
     recognition.onerror = (event) => {
       const messages: Record<string, string> = {
@@ -407,13 +426,17 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
     sequence: number,
     before: VoicePageStateSnapshot,
     fallbackMessage: string,
+    requiresExplicitFeedback: boolean,
   ): Promise<boolean> {
+    let sawUiChange = false
+    let latest = before
     for (let attempt = 0; attempt < 12; attempt += 1) {
       await new Promise((resolve) => window.setTimeout(resolve, 250))
       if (executionSequence.current !== sequence) return false
       const scope = getVoiceScope()
       if (!scope) return false
       const after = readVoicePageState(scope)
+      latest = after
       const newFeedback = after.feedback.find((message) => !before.feedback.includes(message))
       if (newFeedback) {
         if (/正在载入|正在加载|加载中|处理中/.test(newFeedback)) {
@@ -430,10 +453,28 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
         refreshControls()
         return true
       }
+      if (after.stateSignature !== before.stateSignature) {
+        sawUiChange = true
+        if (canConfirmVoicePageStateChange(before, after, requiresExplicitFeedback)) {
+          announce(fallbackMessage)
+          refreshControls()
+          return true
+        }
+      }
     }
-    announce(fallbackMessage)
+    if (sawUiChange && canConfirmVoicePageStateChange(before, latest, requiresExplicitFeedback)) {
+      announce(fallbackMessage)
+      refreshControls()
+      return true
+    }
+    announce(
+      requiresExplicitFeedback
+        ? '页面没有返回明确的完成结果，计划已暂停，请回岗位页面核对。'
+        : '页面没有出现预期变化，命令未继续执行，请重新核对目标。',
+      'error',
+    )
     refreshControls()
-    return true
+    return false
   }
 
   async function performResolvedCommand(currentResolved: ResolvedCommand): Promise<boolean> {
@@ -475,7 +516,7 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
       return true
     }
     announce(`${result.message}正在等待页面反馈。`, 'working')
-    return waitForPageFeedback(sequence, before, result.message)
+    return waitForPageFeedback(sequence, before, result.message, currentResolved.plan.requiresExplicitFeedback)
   }
 
   async function executeResolvedCommand() {
@@ -507,7 +548,7 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
       if (pagePlan?.kind === 'ambiguous') {
         pausedAgentStepIdRef.current = pendingStep.id
         setResolved(stepResolution)
-        announce(`第${index + 1}步需要您选一下目标。`, 'working')
+        announce(`第${index + 1}步需要您选一下目标。`, 'info')
         return
       }
       if (pagePlan?.kind === 'blocked' || navigationResolution?.kind === 'denied' || navigationResolution?.kind === 'unknown') {
@@ -525,7 +566,7 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
         pausedAgentStepIdRef.current = pendingStep.id
         setResolved(stepResolution)
         setAwaitingHighRiskConfirmation(false)
-        announce(`第${index + 1}步属于高风险操作，需要单独确认。`, 'error')
+        announce(`第${index + 1}步属于高风险操作，需要单独确认。`, 'warning')
         return
       }
 
@@ -572,13 +613,13 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
       return
     }
     if (!resolvedCommandReady(resolved)) {
-      announce('请先从相似选项中选定一个操作。', 'working')
+      announce('请先从相似选项中选定一个操作。', 'info')
       return
     }
     const pagePlan = planReady(resolved)
     if (pagePlan?.risk === 'high' && !awaitingHighRiskConfirmation) {
       setAwaitingHighRiskConfirmation(true)
-      announce('这是高风险操作，请再次说“确认执行”，或者点击红色确认按钮。', 'error')
+      announce('这是高风险操作，请再次说“确认执行”，或者点击红色确认按钮。', 'warning')
       return
     }
     if (pausedAgentStepIdRef.current) {
@@ -674,6 +715,7 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
                 setCommand(event.target.value)
                 setResolved(null)
                 setAwaitingHighRiskConfirmation(false)
+                setExecutionMessage('')
                 pausedAgentStepIdRef.current = null
                 updateAgentPlan(null)
               }}
@@ -691,15 +733,27 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
                 {agentPlan.steps.map((step) => (
                   <div className={`is-${step.status}`} key={step.id}>
                     <b>{step.status === 'completed' ? <Check size={13} /> : step.position}</b>
-                    <span><strong>{step.label}</strong><small>{step.risk === 'high' ? '需要单独确认' : step.status === 'running' ? '正在处理' : step.status === 'blocked' ? step.blockedReason : '待执行'}</small></span>
+                    <span><strong>{step.label}</strong><small>{agentStepStatusLabel(step)}</small></span>
                   </div>
                 ))}
               </div>
               {agentPlan.status === 'pending' && (
                 <div className="voice-agent-actions">
                   <p>系统将逐步操作；已经完成的步骤不会因后续失败而自动撤回。</p>
-                  <button className="secondary-button" onClick={() => { pausedAgentStepIdRef.current = null; updateAgentPlan(null) }}><X size={15} />取消</button>
+                  <button className="secondary-button" onClick={cancelCurrentCommand}><X size={15} />取消</button>
                   <button className="primary-button" onClick={() => void runAgentPlan(agentPlan)}><Check size={15} />确认并执行计划</button>
+                </div>
+              )}
+              {agentPlan.status === 'running' && pausedAgentStepIdRef.current && (
+                <div className="voice-agent-actions is-paused">
+                  <p>计划已暂停，您可以选定目标继续，也可以取消整个计划。</p>
+                  <button className="secondary-button" onClick={cancelCurrentCommand}><X size={15} />取消整个计划</button>
+                </div>
+              )}
+              {agentPlan.status === 'blocked' && (
+                <div className="voice-agent-actions is-paused">
+                  <p>后续步骤没有执行，请回岗位页面核对已经完成的步骤。</p>
+                  <button className="secondary-button" onClick={cancelCurrentCommand}><X size={15} />结束计划</button>
                 </div>
               )}
             </section>
@@ -709,7 +763,7 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
             <div className={`voice-confirmation ${readyRisk === 'high' ? 'is-high-risk' : ''}`} role="status">
               <div>{readyRisk === 'high' ? <ShieldAlert size={21} /> : <Check size={21} />}<span><small>{readyRisk === 'high' ? '高风险操作' : '我理解的是'}</small><strong>{readySummary}</strong>{readyRisk === 'high' && <p>需要再次确认，仍由原页面权限、审批和校验决定是否成功。</p>}</span></div>
               <div className="voice-confirm-actions">
-                <button className="secondary-button" onClick={() => { setResolved(null); setAwaitingHighRiskConfirmation(false) }}><X size={16} />取消</button>
+                <button className="secondary-button" onClick={cancelCurrentCommand}><X size={16} />取消</button>
                 <button className={awaitingHighRiskConfirmation ? 'voice-danger-confirm' : 'primary-button'} onClick={() => void requestExecution()}>
                   <Check size={16} />{awaitingHighRiskConfirmation ? '再次确认执行' : '确认执行'}
                 </button>
@@ -740,8 +794,8 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
 
           {executionMessage && (
             <div className={`voice-execution-result is-${executionTone}`} role="status" aria-live="polite">
-              {executionTone === 'error' ? <ShieldAlert size={18} /> : <Check size={18} />}
-              <span><small>{executionTone === 'working' ? '执行中' : executionTone === 'error' ? '未执行/执行失败' : '执行反馈'}</small><strong>{executionMessage}</strong></span>
+              {executionTone === 'error' || executionTone === 'warning' ? <ShieldAlert size={18} /> : <Check size={18} />}
+              <span><small>{executionTone === 'working' ? '执行中' : executionTone === 'info' ? '待确认' : executionTone === 'warning' ? '请注意' : executionTone === 'error' ? '未执行/执行失败' : '执行反馈'}</small><strong>{executionMessage}</strong></span>
             </div>
           )}
 

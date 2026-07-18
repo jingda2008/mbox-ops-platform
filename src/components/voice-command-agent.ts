@@ -209,7 +209,7 @@ function compactOpenTableSteps(command: CompactOpenTableCommand) {
   const { tableCode, partySize, salesOwner } = command
   return [
     createStep(1, 'open_live', '打开现场', '打开现场桌台'),
-    createStep(2, 'select_table', `选择桌台 ${tableCode}`, `选择桌台 ${tableCode}`, { tableCode }),
+    createStep(2, 'select_table', `选择桌台 ${tableCode}`, `点击${tableCode}`, { tableCode }),
     createStep(3, 'set_party_size', `填写人数 ${partySize}`, `客人人数输入${partySize}`, { partySize }),
     createStep(4, 'assign_sales', `销售归属 ${salesOwner}`, `销售归属选择 ${salesOwner}`, { salesOwner }),
     createStep(5, 'open_table_now', '立即开台', '点击立即开台'),

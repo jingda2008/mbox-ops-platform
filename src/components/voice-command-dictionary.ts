@@ -31,6 +31,15 @@ export interface VoiceTranscriptCandidate {
 
 export type VoiceTranscript = string | VoiceTranscriptCandidate
 
+export interface VoiceTranscriptSelection {
+  transcript: string
+  canonicalized: string
+  confidence: number
+  dictionarySupport: number
+  score: number
+  safeToPlan: boolean
+}
+
 interface PinyinToken {
   origin: string
   result: string
@@ -43,6 +52,11 @@ interface Replacement {
   canonical: string
   boost: number
   rank: number
+}
+
+interface ReplacementMatch extends Replacement {
+  start: number
+  end: number
 }
 
 const categoryOrder: readonly VoiceCommandCategory[] = [
@@ -243,6 +257,10 @@ function tableAliases(codeValue: string, displayName: string) {
   return uniquePhrases(aliases, displayName)
 }
 
+function canonicalTableCode(codeValue: string) {
+  return cleanPhrase(codeValue).toLocaleUpperCase('zh-CN').replace(/[\s_-]+/g, '')
+}
+
 function configSources(data: BootstrapResponse): StoreConfig[] {
   return data.draftConfig ? [data.config, data.draftConfig] : [data.config]
 }
@@ -280,8 +298,8 @@ export function buildVoiceCommandDictionary(
   }
   for (const area of data.areas) add('area', area.name, [area.shortName])
   for (const table of data.tables) {
-    const canonical = cleanPhrase(table.displayName) || cleanPhrase(table.code)
-    add('table', canonical, tableAliases(table.code, canonical))
+    const canonical = canonicalTableCode(table.code) || cleanPhrase(table.displayName)
+    add('table', canonical, [table.displayName, ...tableAliases(table.code, table.displayName)])
   }
   for (const product of data.products) {
     add('product', product.name, [
@@ -359,15 +377,53 @@ function directReplacements(dictionary: readonly VoiceCommandDictionaryEntry[]) 
 }
 
 function applyDirectReplacements(command: string, dictionary: readonly VoiceCommandDictionaryEntry[]) {
-  let result = cleanPhrase(command)
+  const source = cleanPhrase(command)
+  const protectedSpans = dictionary.flatMap((entry) => {
+    const pattern = replacementPattern(entry.canonical)
+    return [...source.matchAll(pattern)].flatMap((match) => match.index === undefined ? [] : [{
+      start: match.index,
+      end: match.index + match[0].length,
+      canonical: entry.canonical,
+    }])
+  })
+  const matches: ReplacementMatch[] = []
   for (const replacement of directReplacements(dictionary)) {
     if (comparable(replacement.form) === comparable(replacement.canonical)) continue
-    result = result.replace(replacementPattern(replacement.form), (match, offset: number, source: string) => {
-      const existingCanonical = source.slice(offset, offset + replacement.canonical.length)
-      return comparable(existingCanonical) === comparable(replacement.canonical) ? match : replacement.canonical
-    })
+    for (const match of source.matchAll(replacementPattern(replacement.form))) {
+      if (match.index === undefined) continue
+      const start = match.index
+      const end = start + match[0].length
+      if (protectedSpans.some((span) => (
+        start < span.end
+        && end > span.start
+        && !(span.canonical === replacement.canonical && start <= span.start && end >= span.end)
+      ))) continue
+      matches.push({ ...replacement, start, end })
+    }
   }
-  return result
+  matches.sort((left, right) => (
+    left.start - right.start
+    || (right.end - right.start) - (left.end - left.start)
+    || right.rank - left.rank
+    || right.boost - left.boost
+  ))
+
+  const selected: ReplacementMatch[] = []
+  let cursor = 0
+  for (const match of matches) {
+    if (match.start < cursor) continue
+    selected.push(match)
+    cursor = match.end
+  }
+  if (selected.length === 0) return source
+
+  let result = ''
+  cursor = 0
+  for (const match of selected) {
+    result += `${source.slice(cursor, match.start)}${match.canonical}`
+    cursor = match.end
+  }
+  return `${result}${source.slice(cursor)}`
 }
 
 function applyHomophoneReplacements(command: string, dictionary: readonly VoiceCommandDictionaryEntry[]) {
@@ -487,21 +543,26 @@ function normalizedConfidence(confidence: number | undefined) {
   return Math.min(1, Math.max(0, confidence))
 }
 
-export function chooseBestVoiceTranscript(
+export function chooseBestVoiceTranscriptSelection(
   transcripts: readonly VoiceTranscript[] | ArrayLike<VoiceTranscript>,
   dictionary: readonly VoiceCommandDictionaryEntry[],
-) {
+): VoiceTranscriptSelection | null {
   const candidates = Array.from(transcripts).flatMap((candidate, index) => {
     const transcript = cleanPhrase(typeof candidate === 'string' ? candidate : candidate.transcript)
     if (!transcript) return []
     const confidence = normalizedConfidence(typeof candidate === 'string' ? undefined : candidate.confidence)
     const canonicalized = canonicalizeVoiceCommand(transcript, dictionary)
+    const dictionarySupport = dictionarySupportScore(transcript, canonicalized, dictionary)
     return [{
       transcript,
       canonicalized,
       confidence,
+      dictionarySupport,
       index,
-      score: confidence * 100 + dictionarySupportScore(transcript, canonicalized, dictionary),
+      score: confidence * 100 + dictionarySupport,
+      safeToPlan: confidence >= 0.65
+        || dictionarySupport >= 45
+        || confidence >= 0.45 && dictionarySupport >= 24,
     }]
   })
   candidates.sort((left, right) => (
@@ -509,7 +570,23 @@ export function chooseBestVoiceTranscript(
     || right.confidence - left.confidence
     || left.index - right.index
   ))
-  return candidates[0]?.canonicalized ?? ''
+  const best = candidates[0]
+  if (!best) return null
+  return {
+    transcript: best.transcript,
+    canonicalized: best.canonicalized,
+    confidence: best.confidence,
+    dictionarySupport: best.dictionarySupport,
+    score: best.score,
+    safeToPlan: best.safeToPlan,
+  }
+}
+
+export function chooseBestVoiceTranscript(
+  transcripts: readonly VoiceTranscript[] | ArrayLike<VoiceTranscript>,
+  dictionary: readonly VoiceCommandDictionaryEntry[],
+) {
+  return chooseBestVoiceTranscriptSelection(transcripts, dictionary)?.canonicalized ?? ''
 }
 
 export function dictionaryBiasPhrases(

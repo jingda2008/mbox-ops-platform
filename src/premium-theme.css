@@ -1509,6 +1509,7 @@ body {
   color: #fff;
 }
 
+.guest-shell .menu-submit-button,
 .guest-shell .guest-pay-button {
   border-color: #0d633b !important;
   background: var(--wechat-green) !important;

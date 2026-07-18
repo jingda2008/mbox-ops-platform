@@ -13,6 +13,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { transcribeVoiceAudio } from '../api'
 import type { BootstrapResponse } from '../shared/contracts'
 import type { OperationsConsoleView } from './OperationsConsole'
 import { buildRoleHomeModel } from './role-access'
@@ -75,6 +76,29 @@ type ResolvedCommand =
   | { source: 'navigation'; resolution: VoiceCommandResolution }
 
 type ExecutionTone = 'success' | 'error' | 'working' | 'info' | 'warning'
+type RecordingMode = 'native' | 'cloud' | null
+
+const MAX_CLOUD_RECORDING_MS = 20_000
+
+function cloudRecordingMimeType() {
+  if (typeof MediaRecorder === 'undefined') return null
+  const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg'] as const
+  return candidates.find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) ?? null
+}
+
+function blobToBase64(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error('录音读取失败'))
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : ''
+      const content = result.split(',')[1]
+      if (!content) reject(new Error('录音内容为空'))
+      else resolve(content)
+    }
+    reader.readAsDataURL(blob)
+  })
+}
 
 interface VoiceCommandModeProps {
   data: BootstrapResponse
@@ -135,6 +159,13 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
   }), [model.employee?.displayName])
   const navigationSuggestions = voiceSuggestionsForNavigation(model.access.allowedNavigationIds)
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
+  const listeningRef = useRef(false)
+  const stopRequestedRef = useRef(false)
+  const pendingTranscriptRef = useRef('')
+  const recordingModeRef = useRef<RecordingMode>(null)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const mediaStreamRef = useRef<MediaStream | null>(null)
+  const recordingTimeoutRef = useRef<number | null>(null)
   const controlsSignatureRef = useRef('')
   const executionSequence = useRef(0)
   const agentPlanRef = useRef<VoiceCommandPlan | null>(null)
@@ -144,6 +175,12 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
   const [command, setCommand] = useState('')
   const [resolved, setResolved] = useState<ResolvedCommand | null>(null)
   const [listening, setListening] = useState(false)
+  const [startingListening, setStartingListening] = useState(false)
+  const [forceCloudRecognition, setForceCloudRecognition] = useState(false)
+  const [inputFocused, setInputFocused] = useState(false)
+  const [voiceViewportHeight, setVoiceViewportHeight] = useState(() => window.visualViewport?.height ?? window.innerHeight)
+  const [voiceViewportTop, setVoiceViewportTop] = useState(() => window.visualViewport?.offsetTop ?? 0)
+  const [keyboardOpen, setKeyboardOpen] = useState(false)
   const [voiceMessage, setVoiceMessage] = useState('')
   const [executionMessage, setExecutionMessage] = useState('')
   const [executionTone, setExecutionTone] = useState<ExecutionTone>('success')
@@ -152,9 +189,15 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
   const [selectedVoiceURI, setSelectedVoiceURI] = useState(() => window.localStorage.getItem('mbox.voice.tts.voice-uri') ?? '')
   const [agentPlan, setAgentPlan] = useState<VoiceCommandPlan | null>(null)
   const [awaitingHighRiskConfirmation, setAwaitingHighRiskConfirmation] = useState(false)
-  const recognitionSupported = Boolean(
+  const nativeRecognitionSupported = Boolean(
     (window as VoiceWindow).SpeechRecognition || (window as VoiceWindow).webkitSpeechRecognition,
   )
+  const recorderMimeType = cloudRecordingMimeType()
+  const cloudRecordingSupported = Boolean(
+    recorderMimeType
+    && typeof navigator.mediaDevices?.getUserMedia === 'function',
+  )
+  const recognitionSupported = nativeRecognitionSupported || cloudRecordingSupported
   const voiceDictionary = useMemo(() => buildVoiceCommandDictionary(data, controls), [controls, data])
 
   const refreshControls = useCallback(() => {
@@ -200,9 +243,43 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
   }, [refreshControls])
 
   useEffect(() => () => {
+    listeningRef.current = false
     recognitionRef.current?.abort()
+    const recorder = mediaRecorderRef.current
+    if (recorder) {
+      recorder.ondataavailable = null
+      recorder.onstop = null
+      recorder.onerror = null
+      if (recorder.state === 'recording') recorder.stop()
+    }
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop())
+    if (recordingTimeoutRef.current !== null) window.clearTimeout(recordingTimeoutRef.current)
     window.speechSynthesis?.cancel()
   }, [])
+
+  useEffect(() => {
+    if (!executionMessage || executionTone === 'working') return undefined
+    const duration = executionTone === 'success' ? 4_000 : executionTone === 'info' ? 6_000 : 8_000
+    const timer = window.setTimeout(() => setExecutionMessage(''), duration)
+    return () => window.clearTimeout(timer)
+  }, [executionMessage, executionTone])
+
+  useEffect(() => {
+    const viewport = window.visualViewport
+    if (!viewport) return undefined
+    const synchronizeViewport = () => {
+      setVoiceViewportHeight(viewport.height)
+      setVoiceViewportTop(viewport.offsetTop)
+      setKeyboardOpen(inputFocused && window.innerHeight - viewport.height > 120)
+    }
+    synchronizeViewport()
+    viewport.addEventListener('resize', synchronizeViewport)
+    viewport.addEventListener('scroll', synchronizeViewport)
+    return () => {
+      viewport.removeEventListener('resize', synchronizeViewport)
+      viewport.removeEventListener('scroll', synchronizeViewport)
+    }
+  }, [inputFocused])
 
   useEffect(() => {
     if (!('speechSynthesis' in window)) return undefined
@@ -365,21 +442,119 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
     announce('好的，已经选中这一项，请核对后确认执行。', 'info')
   }
 
-  function startListening() {
-    if (listening) {
-      recognitionRef.current?.stop()
+  function setListeningState(next: boolean) {
+    listeningRef.current = next
+    setListening(next)
+  }
+
+  function stopMediaStream() {
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop())
+    mediaStreamRef.current = null
+    mediaRecorderRef.current = null
+    if (recordingTimeoutRef.current !== null) {
+      window.clearTimeout(recordingTimeoutRef.current)
+      recordingTimeoutRef.current = null
+    }
+  }
+
+  function acceptRecognizedTranscript(transcript: string, confidence?: number) {
+    const selection = chooseBestVoiceTranscriptSelection([{ transcript, confidence }], voiceDictionary)
+    if (!selection) {
+      setVoiceMessage('这次没有听清，请靠近麦克风再说一次。')
       return
     }
+    setCommand(selection.canonicalized)
+    if (selection.safeToPlan) {
+      prepareCommand(selection.canonicalized)
+      setVoiceMessage('识别好了，请核对后确认。')
+      return
+    }
+    setVoiceMessage(`我听到“${selection.canonicalized}”，但不太确定。请核对文字后点击“理解”。`)
+  }
+
+  async function transcribeCloudRecording(blob: Blob, mimeType: NonNullable<ReturnType<typeof cloudRecordingMimeType>>) {
+    setVoiceMessage('正在识别，请稍等。')
+    try {
+      const result = await transcribeVoiceAudio({
+        audioBase64: await blobToBase64(blob),
+        mimeType,
+        phrases: dictionaryBiasPhrases(voiceDictionary, 180),
+      })
+      acceptRecognizedTranscript(result.transcript, result.confidence ?? undefined)
+    } catch (error) {
+      setVoiceMessage(error instanceof Error ? error.message : '语音识别暂时繁忙，可以重试或直接输入命令。')
+    }
+  }
+
+  async function startCloudListening() {
+    if (!recorderMimeType) {
+      setVoiceMessage('当前浏览器不支持网页录音，可以直接输入命令。')
+      return
+    }
+    setStartingListening(true)
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      })
+      const chunks: BlobPart[] = []
+      const recorder = new MediaRecorder(stream, { mimeType: recorderMimeType })
+      mediaStreamRef.current = stream
+      mediaRecorderRef.current = recorder
+      recordingModeRef.current = 'cloud'
+      stopRequestedRef.current = false
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunks.push(event.data)
+      }
+      recorder.onerror = () => {
+        stopMediaStream()
+        recordingModeRef.current = null
+        setListeningState(false)
+        setVoiceMessage('录音启动失败，请检查麦克风权限。')
+      }
+      recorder.onstop = () => {
+        const blob = new Blob(chunks, { type: recorderMimeType })
+        stopMediaStream()
+        recordingModeRef.current = null
+        setListeningState(false)
+        if (blob.size === 0) {
+          setVoiceMessage('没有录到声音，请重新点击开始。')
+          return
+        }
+        void transcribeCloudRecording(blob, recorderMimeType)
+      }
+      recorder.start(250)
+      setListeningState(true)
+      setVoiceMessage('录音已开始，说完后再点一次停止。')
+      recordingTimeoutRef.current = window.setTimeout(() => {
+        stopRequestedRef.current = true
+        setVoiceMessage('已录满20秒，正在自动停止并识别。')
+        if (recorder.state === 'recording') recorder.stop()
+      }, MAX_CLOUD_RECORDING_MS)
+    } catch (error) {
+      stopMediaStream()
+      recordingModeRef.current = null
+      setListeningState(false)
+      const denied = error instanceof DOMException && ['NotAllowedError', 'SecurityError'].includes(error.name)
+      setVoiceMessage(denied ? '麦克风没有授权，请在浏览器地址栏中允许麦克风。' : '麦克风暂时无法启动，可以直接输入命令。')
+    } finally {
+      setStartingListening(false)
+    }
+  }
+
+  function startNativeListening() {
     const Recognition = (window as VoiceWindow).SpeechRecognition ?? (window as VoiceWindow).webkitSpeechRecognition
     if (!Recognition) {
-      setVoiceMessage('这台设备暂不支持语音识别，可以直接输入命令。')
+      void startCloudListening()
       return
     }
     const recognition = new Recognition()
     recognition.lang = 'zh-CN'
-    recognition.continuous = false
+    recognition.continuous = true
     recognition.interimResults = true
     recognition.maxAlternatives = 5
+    stopRequestedRef.current = false
+    pendingTranscriptRef.current = ''
+    recordingModeRef.current = 'native'
     const Phrase = (window as VoiceWindow).SpeechRecognitionPhrase
     if (Phrase) {
       try {
@@ -398,31 +573,71 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
         ? chooseBestVoiceTranscriptSelection(alternatives, voiceDictionary)
         : null
       const transcript = selection?.canonicalized ?? latest?.[0]?.transcript?.trim() ?? ''
+      if (!transcript) return
+      pendingTranscriptRef.current = transcript
       setCommand(transcript)
-      if (latest?.isFinal && selection?.safeToPlan) prepareCommand(transcript)
-      if (latest?.isFinal && selection && !selection.safeToPlan) {
-        setVoiceMessage(`我听到“${selection.canonicalized}”，但不太确定。请核对文字后点击“理解”。`)
-      }
     }
     recognition.onerror = (event) => {
       const messages: Record<string, string> = {
-        'not-allowed': '麦克风没有授权，可以继续输入命令。',
-        'no-speech': '没有听清，再说一次或直接输入命令。',
-        network: '语音识别暂时无法连接，请直接输入命令。',
+        'not-allowed': '麦克风没有授权，请在浏览器地址栏中允许麦克风。',
+        'no-speech': '没有听清，请重新点击开始。',
+        network: cloudRecordingSupported
+          ? '浏览器识别连接失败，下次点击将改用云端识别。'
+          : '语音识别暂时无法连接，请直接输入命令。',
       }
+      if (event.error === 'network' && cloudRecordingSupported) setForceCloudRecognition(true)
       setVoiceMessage(messages[event.error] ?? '这次没有听清，请再说一次。')
-      setListening(false)
+      recordingModeRef.current = null
+      setListeningState(false)
     }
-    recognition.onend = () => setListening(false)
+    recognition.onend = () => {
+      if (stopRequestedRef.current) {
+        const transcript = pendingTranscriptRef.current
+        recordingModeRef.current = null
+        setListeningState(false)
+        if (transcript) acceptRecognizedTranscript(transcript)
+        else setVoiceMessage('没有听清，请重新点击开始。')
+        return
+      }
+      if (!listeningRef.current) return
+      window.setTimeout(() => {
+        if (!listeningRef.current || stopRequestedRef.current) return
+        try {
+          recognition.start()
+        } catch {
+          recordingModeRef.current = null
+          setListeningState(false)
+          setVoiceMessage('语音识别已中断，请重新点击开始。')
+        }
+      }, 150)
+    }
     recognitionRef.current = recognition
-    setVoiceMessage('正在听，请说出按钮、字段或要完成的操作。')
-    setListening(true)
+    setVoiceMessage('识别已开启，说完后再点一次停止。')
+    setListeningState(true)
     try {
       recognition.start()
     } catch {
-      setListening(false)
+      recordingModeRef.current = null
+      setListeningState(false)
       setVoiceMessage('麦克风暂时无法启动，可以直接输入命令。')
     }
+  }
+
+  function toggleListening() {
+    if (startingListening) return
+    if (listeningRef.current) {
+      stopRequestedRef.current = true
+      setVoiceMessage('正在停止并识别。')
+      if (recordingModeRef.current === 'cloud') {
+        const recorder = mediaRecorderRef.current
+        if (recorder?.state === 'recording') recorder.stop()
+      } else {
+        recognitionRef.current?.stop()
+      }
+      return
+    }
+    if (forceCloudRecognition || !nativeRecognitionSupported) void startCloudListening()
+    else startNativeListening()
   }
 
   async function waitForPageFeedback(
@@ -656,7 +871,14 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
   return (
     <>
       <button className="voice-mode-backdrop" data-voice-ignore aria-label="返回岗位页面" onClick={onReturn} />
-      <aside className="voice-command-mode" data-voice-ignore role="dialog" aria-modal="true" aria-label="语音命令模式">
+      <aside
+        className={`voice-command-mode${inputFocused ? ' is-input-focused' : ''}${keyboardOpen ? ' is-keyboard-open' : ''}`}
+        style={{ height: `${voiceViewportHeight}px`, top: `${voiceViewportTop}px`, bottom: 'auto' }}
+        data-voice-ignore
+        role="dialog"
+        aria-modal="true"
+        aria-label="语音命令模式"
+      >
         <header className="voice-mode-header">
           <div className="voice-mode-brand"><span>M</span><div><strong>M-BOX 语音命令</strong><small>{model.employee?.displayName ?? '当前员工'} · {model.access.roleLabel}</small></div></div>
           <div className="voice-mode-header-actions">
@@ -704,20 +926,25 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
           <button
             className={listening ? 'voice-mic-button is-listening' : 'voice-mic-button'}
             aria-pressed={listening}
-            onClick={startListening}
+            aria-label={listening ? '停止语音识别' : '开始语音识别'}
+            disabled={!recognitionSupported || startingListening}
+            onClick={toggleListening}
           >
             {listening ? <MicOff size={29} /> : <Mic size={29} />}
-            <span>{listening ? '点击结束' : recognitionSupported ? '点击说话' : '语音不可用'}</span>
+            <span>{startingListening ? '正在启动' : listening ? '点击停止' : recognitionSupported ? '点击开始' : '语音不可用'}</span>
           </button>
           {voiceMessage && <div className="voice-inline-message" role="status">{voiceMessage}</div>}
 
-          <form className="voice-command-input" onSubmit={(event) => { event.preventDefault(); prepareCommand(command) }}>
+          <form className="voice-command-input" onSubmit={(event) => { event.preventDefault(); prepareCommand(command); event.currentTarget.querySelector('input')?.blur() }}>
             <Keyboard size={18} />
             <input
               aria-label="输入自然语言命令"
               value={command}
               maxLength={160}
+              enterKeyHint="done"
               placeholder="输入按钮、字段或操作名称"
+              onFocus={() => setInputFocused(true)}
+              onBlur={() => window.setTimeout(() => setInputFocused(false), 180)}
               onChange={(event) => {
                 setCommand(event.target.value)
                 setResolved(null)

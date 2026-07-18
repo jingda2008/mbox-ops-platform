@@ -7,6 +7,14 @@ describe('runtime config', () => {
     expect(config.runtimeMode).toBe('local')
     expect(config.repositoryMode).toBe('json')
     expect(config.corsOrigins).toContain('http://localhost:5173')
+    expect(config.voiceTranscriptionProvider).toBe('disabled')
+  })
+
+  it('accepts only supported voice transcription providers', () => {
+    expect(loadRuntimeConfig({ MBOX_VOICE_TRANSCRIPTION_PROVIDER: 'google_v1' }).voiceTranscriptionProvider)
+      .toBe('google_v1')
+    expect(() => loadRuntimeConfig({ MBOX_VOICE_TRANSCRIPTION_PROVIDER: 'unknown' }))
+      .toThrow()
   })
 
   it('rejects production with unsafe defaults', () => {

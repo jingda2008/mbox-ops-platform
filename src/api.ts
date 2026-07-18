@@ -132,6 +132,22 @@ export function getCurrentActorId() {
   return String(import.meta.env.VITE_MBOX_LOCAL_ACTOR_ID ?? '').trim()
 }
 
+export interface VoiceTranscriptionResponse {
+  transcript: string
+  confidence: number | null
+}
+
+export function transcribeVoiceAudio(input: {
+  audioBase64: string
+  mimeType: 'audio/webm' | 'audio/webm;codecs=opus' | 'audio/ogg' | 'audio/ogg;codecs=opus'
+  phrases: string[]
+}) {
+  return request<VoiceTranscriptionResponse>('/api/voice/transcribe', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
 function actorIdFromSessionToken(token: string) {
   try {
     const payload = token.split('.')[0]

@@ -5,6 +5,7 @@ import type { RuntimeMode } from '../src/shared/auth-contracts.js'
 const runtimeModeSchema = z.enum(['local', 'test', 'staging', 'production'])
 const repositoryModeSchema = z.enum(['json', 'postgres'])
 const logLevelSchema = z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
+const voiceTranscriptionProviderSchema = z.enum(['disabled', 'google_v1'])
 
 export interface RuntimeConfig {
   runtimeMode: RuntimeMode
@@ -43,6 +44,7 @@ export interface RuntimeConfig {
   wecomCorpId?: string
   wecomCorpSecret?: string
   wecomAgentId?: string
+  voiceTranscriptionProvider: z.infer<typeof voiceTranscriptionProviderSchema>
 }
 
 function parseInteger(value: string | undefined, fallback: number, name: string, minimum: number, maximum: number) {
@@ -174,6 +176,9 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
     wecomCorpId: env.MBOX_WECOM_CORP_ID?.trim() || undefined,
     wecomCorpSecret: env.MBOX_WECOM_CORP_SECRET?.trim() || undefined,
     wecomAgentId: env.MBOX_WECOM_AGENT_ID?.trim() || undefined,
+    voiceTranscriptionProvider: voiceTranscriptionProviderSchema.parse(
+      env.MBOX_VOICE_TRANSCRIPTION_PROVIDER ?? 'disabled',
+    ),
   }
 
   for (const origin of corsOrigins) assertUrl(origin, 'MBOX_CORS_ORIGINS', ['http:', 'https:'])

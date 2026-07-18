@@ -90,6 +90,7 @@ import { preserveProtectedProductCost, productCostView } from './product-cost-po
 import { MemoryRateLimitStore, PostgresRateLimitStore } from './rate-limit.js'
 import { registerPresenceRoutes } from './presence.js'
 import { MemoryGuestInsightsStore, PostgresGuestInsightsStore } from './guest-insights.js'
+import { GoogleCloudVoiceTranscriber, registerVoiceTranscriptionRoutes } from './voice-transcription.js'
 
 const runtimeConfig = loadRuntimeConfig()
 
@@ -149,6 +150,7 @@ await registerObservability(app, {
         revision: status.revision ?? -1,
         paymentMode: runtimeConfig.pilotPaymentSimulationEnabled ? 'simulation' : paymentRuntime.mode,
         commercialOnlinePaymentReady: paymentRuntime.onlinePaymentReady && !runtimeConfig.pilotPaymentSimulationEnabled,
+        voiceTranscription: runtimeConfig.voiceTranscriptionProvider,
       },
     }
   },
@@ -158,6 +160,12 @@ await registerAuthContext(app, {
   runtimeMode: runtimeConfig.runtimeMode as RuntimeMode,
   sessionSecret: runtimeConfig.sessionSecret,
   readState: () => repository.read(),
+})
+await registerVoiceTranscriptionRoutes(app, {
+  rateLimitStore,
+  transcriber: runtimeConfig.voiceTranscriptionProvider === 'google_v1'
+    ? new GoogleCloudVoiceTranscriber()
+    : undefined,
 })
 if (runtimeConfig.runtimeMode === 'staging' || runtimeConfig.runtimeMode === 'production') {
   await registerPresenceRoutes(app, repository)

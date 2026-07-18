@@ -82,6 +82,7 @@
 .voice-mic-button:hover { transform: translateY(-1px); }
 .voice-mic-button:active { transform: translateY(2px); box-shadow: 0 4px 10px rgba(30, 34, 29, .12), inset 0 2px #d9ddd5 !important; }
 .voice-mic-button.is-listening { border-color: var(--brand-red) !important; background: #fff4f4; color: var(--brand-red); animation: voice-pulse 1.4s ease-in-out infinite; }
+.voice-mic-button:disabled { cursor: not-allowed; opacity: .58; transform: none; animation: none; }
 
 .voice-inline-message { min-height: 18px; color: var(--ink-soft); font-size: 11px; text-align: center; }
 .voice-command-input { min-height: 52px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 5px 6px 5px 10px; border: 1px solid var(--line-strong); border-radius: 7px; background: #fff; box-shadow: 0 5px 16px rgba(28, 32, 27, .07); }
@@ -135,7 +136,7 @@
 .voice-agent-actions p { color: #73623b; font-size: 9px; line-height: 1.4; }
 .voice-agent-actions button { min-height: 36px; font-size: 10px; }
 .voice-agent-actions.is-paused { grid-template-columns: minmax(0, 1fr) auto; border-top: 1px solid #ded7be; padding-top: 7px; }
-.voice-execution-result { min-height: 50px; display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: center; gap: 8px; padding: 9px 10px; border: 1px solid #bdd3c1; border-left: 5px solid var(--success); border-radius: 6px; background: #f7fbf7; color: #295d3a; }
+.voice-execution-result { min-height: 50px; display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: center; gap: 8px; padding: 9px 10px; border: 1px solid #bdd3c1; border-left: 5px solid var(--success); border-radius: 6px; background: #f7fbf7; color: #295d3a; animation: voice-feedback-in .16s ease-out; }
 .voice-execution-result span { min-width: 0; display: grid; gap: 2px; }
 .voice-execution-result small { font-size: 9px; }
 .voice-execution-result strong { overflow-wrap: anywhere; font-size: 12px; line-height: 1.35; }
@@ -164,6 +165,11 @@
   50% { box-shadow: 0 0 0 10px rgba(217, 47, 58, 0), 0 8px 20px rgba(30, 34, 29, .12); }
 }
 
+@keyframes voice-feedback-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 @media (max-width: 620px) {
   .voice-mode-backdrop { display: none; }
   .voice-command-mode { width: 100vw; border-left: 0; box-shadow: none; }
@@ -173,11 +179,23 @@
   .voice-command-stage { gap: 9px; padding: 10px; }
   .voice-command-heading h1 { font-size: 18px; }
   .voice-mic-button { width: 82px; height: 82px; }
+  .voice-command-input { grid-template-columns: 18px minmax(0, 1fr) 82px; }
+  .voice-command-input input { font-size: 16px; }
+  .voice-command-input .primary-button { width: 82px; padding-inline: 7px; white-space: nowrap; }
+  .voice-command-mode.is-input-focused .voice-command-stage { gap: 6px; padding: 6px 10px; overscroll-behavior: contain; }
+  .voice-command-mode.is-input-focused .voice-page-status,
+  .voice-command-mode.is-input-focused .voice-tts-control,
+  .voice-command-mode.is-input-focused .voice-command-heading,
+  .voice-command-mode.is-input-focused .voice-mic-button,
+  .voice-command-mode.is-input-focused .voice-inline-message,
+  .voice-command-mode.is-input-focused .voice-mode-footer { display: none; }
+  .voice-command-mode.is-input-focused .voice-command-input { position: sticky; top: 0; z-index: 3; box-shadow: 0 6px 18px rgba(20, 24, 21, .16); }
 }
 
 @media (max-width: 350px) {
-  .voice-command-input { grid-template-columns: auto minmax(0, 1fr); }
-  .voice-command-input .primary-button { grid-column: 1 / -1; width: 100%; }
+  .voice-command-input { grid-template-columns: minmax(0, 1fr) 70px; padding-left: 7px; }
+  .voice-command-input > svg, .voice-command-input .primary-button svg { display: none; }
+  .voice-command-input .primary-button { grid-column: auto; width: 70px; }
   .voice-suggestions > div, .voice-command-catalog > div { grid-template-columns: 1fr; }
   .voice-agent-actions { grid-template-columns: 1fr 1fr; }
   .voice-agent-actions p { grid-column: 1 / -1; }

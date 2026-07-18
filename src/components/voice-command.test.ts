@@ -10,7 +10,16 @@ describe('resolveVoiceCommand', () => {
       kind: 'ready',
       target: 'live',
       label: '现场桌台',
+      protectedActionRequested: true,
       summary: '先打开现场桌台并定位操作；涉及业务状态变更时仍需在原页面核对并确认。',
+    })
+  })
+
+  it('marks ordinary navigation as complete only when no business action was requested', () => {
+    expect(resolveVoiceCommand('打开现场桌台', serverNavigation)).toMatchObject({
+      kind: 'ready',
+      target: 'live',
+      protectedActionRequested: false,
     })
   })
 

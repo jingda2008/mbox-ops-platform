@@ -815,6 +815,7 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
                             return (
                               <button
                                 key={table.id}
+                                aria-label={table.status === 'available' ? `开台桌台 ${table.code}` : undefined}
                                 className={`table-tile status-${table.status} ${awaitingOrder ? 'is-awaiting-order' : ''} ${selectedTableId === table.id ? 'is-selected' : ''}`}
                                 onClick={() => setSelectedTableId(selectedTableId === table.id ? null : table.id)}
                               >

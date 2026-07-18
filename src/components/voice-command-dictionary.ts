@@ -240,8 +240,10 @@ function tableAliases(codeValue: string, displayName: string) {
   const digitReading = [...digits].map((digit) => spokenDigits[digit] ?? digit).join('')
   const radioReading = [...digits].map((digit) => radioDigits[digit] ?? digit).join('')
   const cardinalReading = chineseInteger(Number(digits))
+  const speechLetterCode = compactCode.replaceAll('0', 'O')
   const bases = uniquePhrases([
     compactCode,
+    speechLetterCode,
     `${letters}${compactNumber}`,
     `${letters}${digitReading}`,
     `${letters}${radioReading}`,

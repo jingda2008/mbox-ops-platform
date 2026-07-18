@@ -48,7 +48,7 @@ describe('DeterministicVoiceCommandPlanner.plan', () => {
     ])
     expect(plan.steps.map((step) => step.command)).toEqual([
       '打开现场桌台',
-      '点击K2',
+      '点击开台桌台K2',
       '客人人数输入4',
       '销售归属选择 Tom',
       '点击立即开台',
@@ -72,6 +72,34 @@ describe('DeterministicVoiceCommandPlanner.plan', () => {
     expect(plan.steps[1].entities).toEqual({ tableCode: 'K12' })
     expect(plan.steps[2].entities).toEqual({ partySize: 18 })
     expect(plan.steps[3].entities).toEqual({ salesOwner: 'Alice' })
+  })
+
+  it('expands a short open-table command with visible employee defaults', () => {
+    const planner = new DeterministicVoiceCommandPlanner({
+      defaultOpenTablePartySize: 2,
+      defaultOpenTableSalesOwner: 'Tom',
+    })
+    const plan = planner.plan('L01开台')
+
+    expect(plan.steps.map((step) => step.action)).toEqual([
+      'open_live',
+      'select_table',
+      'set_party_size',
+      'assign_sales',
+      'open_table_now',
+    ])
+    expect(plan.steps[2].entities).toEqual({ partySize: 2 })
+    expect(plan.steps[3].entities).toEqual({ salesOwner: 'Tom' })
+  })
+
+  it('uses the spoken party size while defaulting sales to the current employee', () => {
+    const plan = new DeterministicVoiceCommandPlanner({
+      defaultOpenTablePartySize: 2,
+      defaultOpenTableSalesOwner: 'Tom',
+    }).plan('L01四位客人开台')
+
+    expect(plan.steps[2].entities).toEqual({ partySize: 4 })
+    expect(plan.steps[3].entities).toEqual({ salesOwner: 'Tom' })
   })
 
   it('caps general plans, reports omitted steps, and remains deterministic', () => {

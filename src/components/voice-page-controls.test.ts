@@ -117,6 +117,20 @@ describe('planVoicePageCommand', () => {
     })
   })
 
+  it('selects the available table tile instead of duplicate transfer and add-table targets', () => {
+    const controls = [
+      control({ id: 'transfer-l04', kind: 'button', label: 'L04 6人 · 休闲', context: '整桌换位' }),
+      control({ id: 'combine-l04', kind: 'button', label: 'L04 6人 · 休闲', context: '专用合台 / 加桌' }),
+      control({ id: 'open-l04', kind: 'button', label: '开台桌台 L04', context: '桌台责任区' }),
+    ]
+
+    expect(planVoicePageCommand('点击开台桌台L04', controls)).toMatchObject({
+      kind: 'ready',
+      controlId: 'open-l04',
+      action: 'activate',
+    })
+  })
+
   it('uses the canonical navigation control when a page shortcut has the same label', () => {
     const controls = [
       control({ id: 'nav-live', kind: 'button', label: '现场调度', zone: 'navigation', displayName: '岗位工作台 · 现场调度' }),

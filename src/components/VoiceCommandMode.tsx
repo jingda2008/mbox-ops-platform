@@ -129,7 +129,10 @@ function agentStepStatusLabel(step: VoiceCommandPlan['steps'][number]) {
 
 export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: VoiceCommandModeProps) {
   const model = useMemo(() => buildRoleHomeModel(data, employeeId), [data, employeeId])
-  const deterministicPlanner = useMemo(() => new DeterministicVoiceCommandPlanner(), [])
+  const deterministicPlanner = useMemo(() => new DeterministicVoiceCommandPlanner({
+    defaultOpenTablePartySize: 2,
+    defaultOpenTableSalesOwner: model.employee?.displayName,
+  }), [model.employee?.displayName])
   const navigationSuggestions = voiceSuggestionsForNavigation(model.access.allowedNavigationIds)
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
   const controlsSignatureRef = useRef('')
@@ -488,6 +491,10 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
       announce(`正在打开${navigationLabel}。`, 'working')
       await new Promise((resolve) => window.setTimeout(resolve, 450))
       refreshControls()
+      if (currentResolved.resolution.protectedActionRequested) {
+        announce(`已打开${navigationLabel}，但业务操作尚未执行。请补充页面要求的信息并确认。`, 'info')
+        return false
+      }
       announce(`已打开${navigationLabel}。`)
       return true
     }

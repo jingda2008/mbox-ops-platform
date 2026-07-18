@@ -2,7 +2,7 @@ import type { RoleHomeNavigationId } from './role-access'
 import type { OperationsConsoleView } from './OperationsConsole'
 
 export type VoiceCommandResolution =
-  | { kind: 'ready'; target: OperationsConsoleView; label: string; summary: string }
+  | { kind: 'ready'; target: OperationsConsoleView; label: string; summary: string; protectedActionRequested: boolean }
   | { kind: 'denied'; target: RoleHomeNavigationId; label: string }
   | { kind: 'unknown' }
 
@@ -55,6 +55,7 @@ export function resolveVoiceCommand(
     kind: 'ready',
     target: route.target,
     label: route.label,
+    protectedActionRequested: hasProtectedAction,
     summary: hasProtectedAction
       ? `先打开${route.label}并定位操作；涉及业务状态变更时仍需在原页面核对并确认。`
       : `打开您有权限使用的${route.label}。`,

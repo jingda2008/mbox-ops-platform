@@ -233,6 +233,10 @@ describe('canonicalizeVoiceCommand', () => {
     expect(canonicalizeVoiceCommand('zscore保持原样', entries)).toBe('zscore保持原样')
   })
 
+  it('corrects the speech recognizer letter O to zero inside configured table codes', () => {
+    expect(canonicalizeVoiceCommand('AO1开台', dictionary())).toBe('A01开台')
+  })
+
   it('does not rewrite an exact dictionary phrase merely because it is homophonic', () => {
     const entries: VoiceCommandDictionaryEntry[] = [
       { canonical: '送水', category: 'service', aliases: [], pinyin: 'song shui', initials: 'ss', boost: 9 },

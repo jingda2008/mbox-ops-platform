@@ -66,11 +66,15 @@ export interface VoiceCommandModelAdapter {
 export interface DeterministicVoiceCommandPlannerOptions {
   modelEnabled?: boolean
   modelAdapter?: VoiceCommandModelAdapter
+  defaultOpenTablePartySize?: number
+  defaultOpenTableSalesOwner?: string
 }
 
 const splitPattern = /[，,；;。！？!?\n]+|\s*(?:然后|接着|并且|同时|再(?!次))\s*/u
 const terminalPunctuationPattern = /[，,；;。！？!?]+$/u
 const compactOpenTablePattern = /^(?:请(?:帮我)?|帮我)?\s*([a-z]\d{1,4})\s*([0-9]{1,3}|[零〇一二两三四五六七八九十百]{1,6})\s*(?:位|人)(?:客人)?\s*(?:立即)?开台\s*(?:并(?:且)?|然后|接着|再|同时)\s*(?:销售)?归属(?:给|选择)?\s*([a-z][a-z0-9._'-]*(?:\s+[a-z][a-z0-9._'-]*)*|[\u3400-\u9fff·]{1,20})$/iu
+const compactOpenTableWithoutSalesPattern = /^(?:请(?:帮我)?|帮我)?\s*([a-z]\d{1,4})\s*([0-9]{1,3}|[零〇一二两三四五六七八九十百]{1,6})\s*(?:位|人)(?:客人)?\s*(?:立即)?开台$/iu
+const compactOpenTableWithDefaultsPattern = /^(?:请(?:帮我)?|帮我)?\s*([a-z]\d{1,4})\s*(?:立即)?开台$/iu
 
 const highRiskTerms = [
   '支付',
@@ -128,6 +132,11 @@ interface CompactOpenTableCommand {
   salesOwner: string
 }
 
+interface OpenTableDefaults {
+  partySize?: number
+  salesOwner?: string
+}
+
 function splitAll(command: string) {
   return command
     .trim()
@@ -160,19 +169,52 @@ function parsePartySize(value: string) {
   return parsed >= 1 && parsed <= 999 ? parsed : null
 }
 
-function parseCompactOpenTableCommand(command: string): CompactOpenTableCommand | null {
+function parseCompactOpenTableCommand(
+  command: string,
+  defaults: OpenTableDefaults = {},
+): CompactOpenTableCommand | null {
   const normalized = command.trim().replace(terminalPunctuationPattern, '').trim()
-  const match = normalized.match(compactOpenTablePattern)
-  if (!match) return null
+  const completeMatch = normalized.match(compactOpenTablePattern)
+  if (completeMatch) {
+    const partySize = parsePartySize(completeMatch[2])
+    if (partySize === null) return null
 
-  const partySize = parsePartySize(match[2])
-  if (partySize === null) return null
-
-  return {
-    tableCode: match[1].toUpperCase(),
-    partySize,
-    salesOwner: match[3].trim(),
+    return {
+      tableCode: completeMatch[1].toUpperCase(),
+      partySize,
+      salesOwner: completeMatch[3].trim(),
+    }
   }
+
+  const withoutSalesMatch = normalized.match(compactOpenTableWithoutSalesPattern)
+  if (withoutSalesMatch && defaults.salesOwner?.trim()) {
+    const partySize = parsePartySize(withoutSalesMatch[2])
+    if (partySize === null) return null
+    return {
+      tableCode: withoutSalesMatch[1].toUpperCase(),
+      partySize,
+      salesOwner: defaults.salesOwner.trim(),
+    }
+  }
+
+  const withDefaultsMatch = normalized.match(compactOpenTableWithDefaultsPattern)
+  const defaultPartySize = defaults.partySize
+  if (
+    withDefaultsMatch
+    && Number.isInteger(defaultPartySize)
+    && defaultPartySize !== undefined
+    && defaultPartySize >= 1
+    && defaultPartySize <= 999
+    && defaults.salesOwner?.trim()
+  ) {
+    return {
+      tableCode: withDefaultsMatch[1].toUpperCase(),
+      partySize: defaultPartySize,
+      salesOwner: defaults.salesOwner.trim(),
+    }
+  }
+
+  return null
 }
 
 function matchingHighRiskTerms(command: string) {
@@ -209,7 +251,7 @@ function compactOpenTableSteps(command: CompactOpenTableCommand) {
   const { tableCode, partySize, salesOwner } = command
   return [
     createStep(1, 'open_live', '打开现场', '打开现场桌台'),
-    createStep(2, 'select_table', `选择桌台 ${tableCode}`, `点击${tableCode}`, { tableCode }),
+    createStep(2, 'select_table', `选择桌台 ${tableCode}`, `点击开台桌台${tableCode}`, { tableCode }),
     createStep(3, 'set_party_size', `填写人数 ${partySize}`, `客人人数输入${partySize}`, { partySize }),
     createStep(4, 'assign_sales', `销售归属 ${salesOwner}`, `销售归属选择 ${salesOwner}`, { salesOwner }),
     createStep(5, 'open_table_now', '立即开台', '点击立即开台'),
@@ -247,10 +289,15 @@ function createPlan(
  */
 export class DeterministicVoiceCommandPlanner {
   readonly modelEnabled = false
+  private readonly openTableDefaults: OpenTableDefaults
 
   constructor(options: DeterministicVoiceCommandPlannerOptions = {}) {
     if (options.modelEnabled) {
       throw new Error('DeterministicVoiceCommandPlanner does not permit model calls')
+    }
+    this.openTableDefaults = {
+      partySize: options.defaultOpenTablePartySize,
+      salesOwner: options.defaultOpenTableSalesOwner?.trim(),
     }
   }
 
@@ -259,7 +306,7 @@ export class DeterministicVoiceCommandPlanner {
   }
 
   plan(command: string): VoiceCommandPlan {
-    const compactCommand = parseCompactOpenTableCommand(command)
+    const compactCommand = parseCompactOpenTableCommand(command, this.openTableDefaults)
     if (compactCommand) return createPlan(command, compactOpenTableSteps(compactCommand))
 
     const segments = splitAll(command)

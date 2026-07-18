@@ -7,6 +7,7 @@ import {
   completeAwaitingOrderOnOrder,
   processAwaitingOrderReminders,
   registerProactiveServiceRoutes,
+  snoozeAwaitingOrder,
   startAwaitingOrder,
   stopAwaitingOrder,
 } from './proactive-service.js'
@@ -92,6 +93,37 @@ describe('awaiting order proactive service', () => {
     expect(cancelled.stopReason).toContain('等朋友')
   })
 
+  it('snoozes without duplicate reminders and resumes exactly at the selected time', () => {
+    const state = createSeedState()
+    const intent = startAwaitingOrder(state, 'table-l01', 'emp-lin', 'await-order-snooze-start', T0)
+    processAwaitingOrderReminders(state, new Date('2026-07-14T12:05:00.000Z'))
+    expect(state.tasks).toHaveLength(1)
+
+    const snoozed = snoozeAwaitingOrder(
+      state,
+      'table-l01',
+      'emp-lin',
+      30,
+      '客人正在等朋友',
+      'await-order-snooze-0001',
+      new Date('2026-07-14T12:06:00.000Z'),
+    )
+    expect(snoozed.id).toBe(intent.id)
+    expect(snoozed.status).toBe('active')
+    expect(snoozed.nextReminderAt).toBe('2026-07-14T12:36:00.000Z')
+    expect(state.tasks[0]?.status).toBe('cancelled')
+
+    processAwaitingOrderReminders(state, new Date('2026-07-14T12:35:59.000Z'))
+    expect(state.tasks).toHaveLength(1)
+    processAwaitingOrderReminders(state, new Date('2026-07-14T12:36:00.000Z'))
+    expect(state.tasks).toHaveLength(2)
+    expect(state.tasks.filter((task) => task.triggerId === intent.id && task.status === 'pending')).toHaveLength(1)
+    expect(state.auditEntries.find((entry) => entry.action === 'awaiting_order.snoozed.v1')).toMatchObject({
+      actorId: 'emp-lin',
+      details: { snoozeMinutes: 30, reason: '客人正在等朋友' },
+    })
+  })
+
   it('uses the authenticated employee for start and stop audit and rejects other roles', async () => {
     const repository = new JsonRepository(`/tmp/mbox-proactive-rbac-${crypto.randomUUID()}.json`)
     await repository.init()
@@ -140,6 +172,19 @@ describe('awaiting order proactive service', () => {
     expect(started.statusCode).toBe(201)
     expect(started.json().startedBy).toBe('emp-lin')
 
+    const snoozed = await app.inject({
+      method: 'POST',
+      url: '/api/tables/table-l02/awaiting-order/snooze',
+      payload: {
+        actorId: 'emp-chen',
+        snoozeMinutes: 30,
+        idempotencyKey: 'proactive-route-snooze-0001',
+        reason: '客人希望半小时后再问',
+      },
+    })
+    expect(snoozed.statusCode).toBe(200)
+    expect(snoozed.json()).toMatchObject({ status: 'active', startedBy: 'emp-lin' })
+
     const deniedStop = await app.inject({
       method: 'POST',
       url: '/api/tables/table-l02/awaiting-order/stop',
@@ -168,6 +213,7 @@ describe('awaiting order proactive service', () => {
 
     const state = await repository.read()
     expect(state.auditEntries.find((entry) => entry.action === 'awaiting_order.started.v1')?.actorId).toBe('emp-lin')
+    expect(state.auditEntries.find((entry) => entry.action === 'awaiting_order.snoozed.v1')?.actorId).toBe('emp-lin')
     expect(state.auditEntries.find((entry) => entry.action === 'awaiting_order.cancelled.v1')?.actorId).toBe('emp-jie')
 
     await app.close()

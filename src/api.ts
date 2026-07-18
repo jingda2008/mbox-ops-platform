@@ -340,6 +340,18 @@ export function stopAwaitingOrder(tableId: string, actorId: string, reason: stri
   })
 }
 
+export function snoozeAwaitingOrder(tableId: string, actorId: string, snoozeMinutes: number) {
+  return request<AwaitingOrderIntent>(`/api/tables/${tableId}/awaiting-order/snooze`, {
+    method: 'POST',
+    body: JSON.stringify({
+      actorId,
+      snoozeMinutes,
+      idempotencyKey: `snooze-awaiting-order-${crypto.randomUUID()}`,
+      reason: `客人希望${snoozeMinutes}分钟后再询问`,
+    }),
+  })
+}
+
 export function closeTableSession(tableId: string, reason: string, minimumSpendWaiverReason?: string) {
   return request<Table>(`/api/tables/${encodeURIComponent(tableId)}/close`, {
     method: 'POST',

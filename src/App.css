@@ -480,6 +480,11 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 .next-care svg { grid-row: 1 / 3; }
 .next-care span { font-size: 10px; }
 .next-care strong { color: var(--ink); font-size: 12px; }
+.awaiting-order-snooze { display: flex; border: 1px solid var(--line-strong); background: #fff; }
+.awaiting-order-snooze button { min-width: 58px; min-height: 34px; border: 0; border-right: 1px solid var(--line); background: #fff; color: var(--ink); font-size: 11px; font-weight: 750; }
+.awaiting-order-snooze button:last-child { border-right: 0; }
+.awaiting-order-snooze button:hover:not(:disabled) { background: #edf5ee; color: #235d36; }
+.awaiting-order-snooze button:active:not(:disabled) { transform: translateY(1px); }
 .table-transfer-toolbar { display: grid; grid-template-columns: auto auto minmax(220px, 1fr) auto; align-items: center; gap: 12px; margin: 8px 16px 0; padding: 10px 12px; border: 1px solid #cfd7df; border-left: 4px solid #176d96; background: #f5f8fa; }
 .table-transfer-heading { display: flex; align-items: center; gap: 8px; }
 .table-transfer-heading > div { display: grid; gap: 1px; }
@@ -1050,7 +1055,8 @@ button:focus-visible, a:focus-visible, input:focus-visible {
   .transfer-kind-control button { flex: 1; }
   .transfer-targets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .transfer-targets button { width: 100%; }
-  .table-service-toolbar > button, .next-care { width: 100%; margin-left: 0; }
+  .table-service-toolbar > button, .next-care, .awaiting-order-snooze { width: 100%; margin-left: 0; }
+  .awaiting-order-snooze button { flex: 1; }
   .redemption-toolbar { grid-template-columns: 1fr; }
   .selected-benefits > div { grid-template-columns: 20px minmax(0, 1fr); }
   .redemption-actions { grid-column: 1 / -1; justify-content: flex-end; }

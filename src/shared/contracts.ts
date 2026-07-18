@@ -660,6 +660,7 @@ export const awaitingOrderActionSchema = z.object({
   actorId: z.string().trim().min(1),
   idempotencyKey: z.string().trim().min(8).max(128),
   reason: z.string().trim().max(200).default(''),
+  snoozeMinutes: z.number().int().min(5).max(240).optional(),
 })
 
 export type AwaitingOrderActionInput = z.infer<typeof awaitingOrderActionSchema>

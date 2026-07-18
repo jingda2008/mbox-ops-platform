@@ -54,6 +54,7 @@ import {
   resetDemo,
   rollbackConfig,
   saveConfigDraft,
+  snoozeAwaitingOrder,
   startAwaitingOrder,
   stopAwaitingOrder,
   transferTableSession,
@@ -322,16 +323,19 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
     }
   }
 
-  async function handleAwaitingOrder(action: 'start' | 'stop') {
+  async function handleAwaitingOrder(action: 'start' | 'stop' | 'snooze', snoozeMinutes = 30) {
     if (!selectedTable) return
     setBusy(true)
     try {
       if (action === 'start') {
         await startAwaitingOrder(selectedTable.id, selectedTable.primaryEmployeeId)
         setNotice(`${selectedTable.code}已标记暂未点单，系统将在合适时间提醒服务`)
-      } else {
+      } else if (action === 'stop') {
         await stopAwaitingOrder(selectedTable.id, selectedTable.primaryEmployeeId, '客人暂不需要点单服务')
         setNotice(`${selectedTable.code}待点单提醒已结束`)
+      } else {
+        const intent = await snoozeAwaitingOrder(selectedTable.id, selectedTable.primaryEmployeeId, snoozeMinutes)
+        setNotice(`${selectedTable.code}已尊重客人选择，${snoozeMinutes}分钟内不再打扰；北京时间${formatChinaTime(intent.nextReminderAt!)}再关注一次`)
       }
       await onRefresh()
     } catch (error) {
@@ -714,6 +718,7 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
                       {selectedSessionNeedsHandover ? <strong className="stale-table-label">已冻结，等待经理交接</strong> : selectedAwaitingOrder ? (
                         <>
                           <div className="next-care"><Timer size={17} /><span>下次检查</span><strong>{formatNextReminder(selectedAwaitingOrder.nextReminderAt)}</strong></div>
+                          <div className="awaiting-order-snooze" aria-label="延后点单提醒"><button disabled={busy} onClick={() => void handleAwaitingOrder('snooze', 15)}>15分钟</button><button disabled={busy} onClick={() => void handleAwaitingOrder('snooze', 30)}>30分钟</button><button disabled={busy} onClick={() => void handleAwaitingOrder('snooze', 60)}>60分钟</button></div>
                           <button className="secondary-button" disabled={busy} onClick={() => void handleAwaitingOrder('stop')}>结束提醒</button>
                         </>
                       ) : (

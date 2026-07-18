@@ -113,6 +113,39 @@ export function stopAwaitingOrder(
   return intent
 }
 
+export function snoozeAwaitingOrder(
+  state: RuntimeState,
+  tableId: string,
+  actorId: string,
+  snoozeMinutes: number,
+  reason: string,
+  idempotencyKey: string,
+  now = new Date(),
+) {
+  const previous = state.auditEntries.find(
+    (entry) => entry.action === 'awaiting_order.snoozed.v1' && entry.details.idempotencyKey === idempotencyKey,
+  )
+  if (previous) {
+    const existing = state.awaitingOrderIntents.find((intent) => intent.id === previous.objectId)
+    if (existing) return existing
+  }
+
+  const intent = activeIntent(state, tableId)
+  if (!intent) throw new Error('该桌台没有进行中的待点单提醒')
+  const previousNextReminderAt = intent.nextReminderAt
+  intent.nextReminderAt = new Date(now.getTime() + snoozeMinutes * 60_000).toISOString()
+  closeTriggeredTasks(state, intent.id, actorId, '客人希望稍后再询问，当前提醒已延后')
+  audit(state, actorId, 'awaiting_order.snoozed.v1', intent, {
+    tableId,
+    snoozeMinutes,
+    snoozeUntil: intent.nextReminderAt,
+    previousNextReminderAt,
+    reason,
+    idempotencyKey,
+  })
+  return intent
+}
+
 export function completeAwaitingOrderOnOrder(
   state: RuntimeState,
   tableId: string,
@@ -204,6 +237,26 @@ export function registerProactiveServiceRoutes(app: FastifyInstance, repository:
       )
       requireTableDataScope(request, state, request.params.tableId, 'proactive.awaiting-order.stop')
       return stopAwaitingOrder(state, request.params.tableId, actor.actorId, input.reason || 'employee_cancelled')
+    })
+  })
+
+  app.post<{ Params: { tableId: string } }>('/api/tables/:tableId/awaiting-order/snooze', async (request) => {
+    const input = awaitingOrderActionSchema.parse(request.body)
+    if (!input.snoozeMinutes) throw new Error('请选择稍后提醒时间')
+    const snoozeMinutes = input.snoozeMinutes
+    return repository.mutate((state) => {
+      const actor = requireAnyRole(
+        request, state, SERVICE_INITIATOR_ROLES, 'proactive.awaiting-order.snooze', '延后待点单服务',
+      )
+      requireTableDataScope(request, state, request.params.tableId, 'proactive.awaiting-order.snooze')
+      return snoozeAwaitingOrder(
+        state,
+        request.params.tableId,
+        actor.actorId,
+        snoozeMinutes,
+        input.reason || '客人希望稍后再询问',
+        input.idempotencyKey,
+      )
     })
   })
 }

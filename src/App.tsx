@@ -289,7 +289,7 @@ export default function App() {
               <LayoutDashboard size={15} />岗位页面
             </button>
             <button className={staffMode === 'voice' ? 'is-active' : ''} aria-pressed={staffMode === 'voice'} onClick={() => setStaffMode('voice')}>
-              <Mic size={15} />语音命令
+              <Mic size={15} />AI助理
             </button>
           </div>
           <button disabled={switchingEmployee} onClick={() => void switchEmployee()}>

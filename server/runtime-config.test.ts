@@ -8,6 +8,7 @@ describe('runtime config', () => {
     expect(config.repositoryMode).toBe('json')
     expect(config.corsOrigins).toContain('http://localhost:5173')
     expect(config.voiceTranscriptionProvider).toBe('disabled')
+    expect(config.assistantProvider).toBe('disabled')
   })
 
   it('accepts only supported voice transcription providers', () => {
@@ -15,6 +16,20 @@ describe('runtime config', () => {
       .toBe('google_v1')
     expect(() => loadRuntimeConfig({ MBOX_VOICE_TRANSCRIPTION_PROVIDER: 'unknown' }))
       .toThrow()
+  })
+
+  it('requires a server-side Gemini key when conversational assistance is enabled', () => {
+    expect(() => loadRuntimeConfig({ MBOX_ASSISTANT_PROVIDER: 'gemini_interactions' }))
+      .toThrow('MBOX_GEMINI_API_KEY')
+    expect(loadRuntimeConfig({
+      MBOX_ASSISTANT_PROVIDER: 'gemini_interactions',
+      MBOX_GEMINI_API_KEY: 'server-side-gemini-key-at-least-20-characters',
+      MBOX_GEMINI_MODEL: 'gemini-3.5-flash',
+    })).toMatchObject({
+      assistantProvider: 'gemini_interactions',
+      geminiModel: 'gemini-3.5-flash',
+      assistantHttpTimeoutMs: 20_000,
+    })
   })
 
   it('rejects production with unsafe defaults', () => {

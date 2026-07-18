@@ -6,6 +6,7 @@ const runtimeModeSchema = z.enum(['local', 'test', 'staging', 'production'])
 const repositoryModeSchema = z.enum(['json', 'postgres'])
 const logLevelSchema = z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
 const voiceTranscriptionProviderSchema = z.enum(['disabled', 'google_v1'])
+const assistantProviderSchema = z.enum(['disabled', 'gemini_interactions'])
 
 export interface RuntimeConfig {
   runtimeMode: RuntimeMode
@@ -45,6 +46,10 @@ export interface RuntimeConfig {
   wecomCorpSecret?: string
   wecomAgentId?: string
   voiceTranscriptionProvider: z.infer<typeof voiceTranscriptionProviderSchema>
+  assistantProvider: z.infer<typeof assistantProviderSchema>
+  geminiApiKey?: string
+  geminiModel: string
+  assistantHttpTimeoutMs: number
 }
 
 function parseInteger(value: string | undefined, fallback: number, name: string, minimum: number, maximum: number) {
@@ -179,6 +184,16 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
     voiceTranscriptionProvider: voiceTranscriptionProviderSchema.parse(
       env.MBOX_VOICE_TRANSCRIPTION_PROVIDER ?? 'disabled',
     ),
+    assistantProvider: assistantProviderSchema.parse(env.MBOX_ASSISTANT_PROVIDER ?? 'disabled'),
+    geminiApiKey: env.MBOX_GEMINI_API_KEY?.trim() || undefined,
+    geminiModel: env.MBOX_GEMINI_MODEL?.trim() || 'gemini-3.5-flash',
+    assistantHttpTimeoutMs: parseInteger(
+      env.MBOX_ASSISTANT_HTTP_TIMEOUT_MS,
+      20_000,
+      'MBOX_ASSISTANT_HTTP_TIMEOUT_MS',
+      2_000,
+      60_000,
+    ),
   }
 
   for (const origin of corsOrigins) assertUrl(origin, 'MBOX_CORS_ORIGINS', ['http:', 'https:'])
@@ -219,6 +234,14 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
   if (config.serviceAccountNotificationsEnabled || config.wecomNotificationsEnabled) {
     if (repositoryMode !== 'postgres') throw new Error('启用客户通知必须使用PostgreSQL仓储')
     if (!config.wechatEncryptionKey) throw new Error('启用客户通知必须配置32字节微信身份加密密钥')
+  }
+  if (config.assistantProvider === 'gemini_interactions') {
+    if (!config.geminiApiKey || config.geminiApiKey.length < 20) {
+      throw new Error('Gemini智能对话启用时必须配置有效的MBOX_GEMINI_API_KEY')
+    }
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{1,99}$/.test(config.geminiModel)) {
+      throw new Error('MBOX_GEMINI_MODEL格式无效')
+    }
   }
 
   if (config.pilotAccessCode) {

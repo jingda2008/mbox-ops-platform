@@ -60,8 +60,21 @@
 .voice-tts-control span { font-size: 10px; font-weight: 750; white-space: nowrap; }
 .voice-tts-control select { min-width: 0; min-height: 26px; padding: 2px 25px 2px 7px; border: 0 !important; background-color: #fff; color: var(--ink); font-size: 10px; }
 .voice-command-heading { display: grid; gap: 3px; }
-.voice-command-heading h1 { font-size: 20px; line-height: 1.2; }
+.voice-command-heading h1 { display: flex; align-items: center; gap: 7px; font-size: 20px; line-height: 1.2; }
+.voice-command-heading h1 svg { flex: 0 0 auto; color: #8d6a12; }
 .voice-command-heading p { color: var(--ink-soft); font-size: 11px; }
+
+.assistant-conversation { min-height: 76px; max-height: 190px; display: grid; gap: 7px; padding: 8px; overflow-y: auto; border: 1px solid #cfd4cc; border-radius: 6px; background: #fff; }
+.assistant-message { max-width: 90%; display: grid; gap: 2px; padding: 7px 9px; border: 1px solid #d9ddd7; border-radius: 6px; background: #f4f6f2; }
+.assistant-message.is-user { justify-self: end; border-color: #d7c27f; background: #fff9e8; }
+.assistant-message.is-assistant { justify-self: start; border-left: 4px solid #d6ae38; background: #f8faf7; }
+.assistant-message small { color: var(--ink-soft); font-size: 8px; font-weight: 800; }
+.assistant-message p { overflow-wrap: anywhere; font-size: 11px; line-height: 1.45; }
+.assistant-thinking { min-height: 30px; display: flex; align-items: center; gap: 6px; color: #6d5b29; font-size: 10px; }
+.assistant-thinking svg { animation: voice-pulse 1.4s ease-in-out infinite; }
+.assistant-choice-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.assistant-choice-list button { min-height: 38px; padding: 6px 8px; border-color: #c7b36d !important; background: #fff; color: var(--ink); font-size: 10px; text-align: left; }
+.assistant-choice-list button:hover { background: #fff9e8; }
 
 .voice-mic-button {
   width: 92px;
@@ -190,6 +203,7 @@
   .voice-command-mode.is-input-focused .voice-inline-message,
   .voice-command-mode.is-input-focused .voice-mode-footer { display: none; }
   .voice-command-mode.is-input-focused .voice-command-input { position: sticky; top: 0; z-index: 3; box-shadow: 0 6px 18px rgba(20, 24, 21, .16); }
+  .voice-command-mode.is-input-focused .assistant-conversation { max-height: 92px; }
 }
 
 @media (max-width: 350px) {
@@ -197,6 +211,7 @@
   .voice-command-input > svg, .voice-command-input .primary-button svg { display: none; }
   .voice-command-input .primary-button { grid-column: auto; width: 70px; }
   .voice-suggestions > div, .voice-command-catalog > div { grid-template-columns: 1fr; }
+  .assistant-choice-list { grid-template-columns: 1fr; }
   .voice-agent-actions { grid-template-columns: 1fr 1fr; }
   .voice-agent-actions p { grid-column: 1 / -1; }
 }

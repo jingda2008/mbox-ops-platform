@@ -61,6 +61,7 @@ import type {
   BenefitRedemptionLockInput,
 } from './shared/benefit-redemption-contracts'
 import type { PilotLoginResponse } from './shared/auth-contracts'
+import type { AssistantTurnRequest, AssistantTurnResponse } from './shared/assistant-contracts'
 import type { ConfigVersionRecord } from './shared/config-versioning-contracts'
 import type { PerformanceSession, PerformanceSessionWriteInput, RepertoireWriteInput, Singer, SingerProfileWriteInput, SingerRepertoireEntry, SingerWriteInput, SongCatalogItem, SongRequest } from './shared/song-contracts'
 import type {
@@ -143,6 +144,13 @@ export function transcribeVoiceAudio(input: {
   phrases: string[]
 }) {
   return request<VoiceTranscriptionResponse>('/api/voice/transcribe', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function sendAssistantTurn(input: AssistantTurnRequest) {
+  return request<AssistantTurnResponse>('/api/assistant/turn', {
     method: 'POST',
     body: JSON.stringify(input),
   })

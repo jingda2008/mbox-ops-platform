@@ -91,6 +91,12 @@ import { MemoryRateLimitStore, PostgresRateLimitStore } from './rate-limit.js'
 import { registerPresenceRoutes } from './presence.js'
 import { MemoryGuestInsightsStore, PostgresGuestInsightsStore } from './guest-insights.js'
 import { GoogleCloudVoiceTranscriber, registerVoiceTranscriptionRoutes } from './voice-transcription.js'
+import { registerAssistantRoutes } from './assistant-api.js'
+import { GeminiAssistantPlanner } from './assistant-planner.js'
+import {
+  MemoryAssistantConversationStore,
+  PostgresAssistantConversationStore,
+} from './assistant-conversation-store.js'
 
 const runtimeConfig = loadRuntimeConfig()
 
@@ -121,9 +127,17 @@ const rateLimitStore = runtimeDependencies.postgresPool
       storeId: '00000000-0000-4000-8000-000000000002',
       hashSecret: runtimeConfig.qrSecret,
     })
+const assistantConversationStore = runtimeDependencies.postgresPool
+  ? new PostgresAssistantConversationStore({
+      pool: runtimeDependencies.postgresPool,
+      tenantId: runtimeConfig.tenantId!,
+      storeId: runtimeConfig.storeUuid!,
+    })
+  : new MemoryAssistantConversationStore()
 
 await repository.init()
 await guestInsights.init()
+await assistantConversationStore.init()
 const paymentProviderResolver = createEnvironmentPaymentProviderResolver()
 const paymentRuntime = validateEnvironmentPaymentRuntime((await repository.read()).paymentDomain)
 await app.register(cors, {
@@ -151,6 +165,8 @@ await registerObservability(app, {
         paymentMode: runtimeConfig.pilotPaymentSimulationEnabled ? 'simulation' : paymentRuntime.mode,
         commercialOnlinePaymentReady: paymentRuntime.onlinePaymentReady && !runtimeConfig.pilotPaymentSimulationEnabled,
         voiceTranscription: runtimeConfig.voiceTranscriptionProvider,
+        assistant: runtimeConfig.assistantProvider,
+        assistantModel: runtimeConfig.assistantProvider === 'gemini_interactions' ? runtimeConfig.geminiModel : 'disabled',
       },
     }
   },
@@ -165,6 +181,18 @@ await registerVoiceTranscriptionRoutes(app, {
   rateLimitStore,
   transcriber: runtimeConfig.voiceTranscriptionProvider === 'google_v1'
     ? new GoogleCloudVoiceTranscriber()
+    : undefined,
+})
+await registerAssistantRoutes(app, {
+  repository,
+  conversationStore: assistantConversationStore,
+  rateLimitStore,
+  planner: runtimeConfig.assistantProvider === 'gemini_interactions'
+    ? new GeminiAssistantPlanner({
+        apiKey: runtimeConfig.geminiApiKey!,
+        model: runtimeConfig.geminiModel,
+        timeoutMs: runtimeConfig.assistantHttpTimeoutMs,
+      })
     : undefined,
 })
 if (runtimeConfig.runtimeMode === 'staging' || runtimeConfig.runtimeMode === 'production') {

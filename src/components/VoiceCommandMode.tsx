@@ -1,5 +1,6 @@
 import {
   ArrowLeft,
+  Bot,
   Check,
   ChevronRight,
   Keyboard,
@@ -8,12 +9,14 @@ import {
   ShieldAlert,
   ShieldCheck,
   Sparkles,
+  Send,
   Volume2,
   VolumeX,
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { transcribeVoiceAudio } from '../api'
+import { sendAssistantTurn, transcribeVoiceAudio } from '../api'
+import type { AssistantConversationMessage, AssistantTurnResponse } from '../shared/assistant-contracts'
 import type { BootstrapResponse } from '../shared/contracts'
 import type { OperationsConsoleView } from './OperationsConsole'
 import { buildRoleHomeModel } from './role-access'
@@ -30,6 +33,7 @@ import {
 import { resolveVoiceCommand, voiceSuggestionsForNavigation, type VoiceCommandResolution } from './voice-command'
 import {
   DeterministicVoiceCommandPlanner,
+  createModelVoiceCommandPlan,
   transitionVoiceCommandStep,
   type VoiceCommandPlan,
 } from './voice-command-agent'
@@ -40,6 +44,7 @@ import {
   dictionaryBiasPhrases,
 } from './voice-command-dictionary'
 import { naturalizeSpokenFeedback, rankChineseVoices, selectPreferredChineseVoice } from './voice-speech'
+import { assistantPageCapabilities } from './assistant-page-capabilities'
 import './VoiceCommandMode.css'
 
 interface SpeechRecognitionEventLike {
@@ -189,6 +194,10 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
   const [selectedVoiceURI, setSelectedVoiceURI] = useState(() => window.localStorage.getItem('mbox.voice.tts.voice-uri') ?? '')
   const [agentPlan, setAgentPlan] = useState<VoiceCommandPlan | null>(null)
   const [awaitingHighRiskConfirmation, setAwaitingHighRiskConfirmation] = useState(false)
+  const [assistantSessionId, setAssistantSessionId] = useState<string | null>(null)
+  const [assistantMessages, setAssistantMessages] = useState<AssistantConversationMessage[]>([])
+  const [assistantChoices, setAssistantChoices] = useState<string[]>([])
+  const [assistantBusy, setAssistantBusy] = useState(false)
   const nativeRecognitionSupported = Boolean(
     (window as VoiceWindow).SpeechRecognition || (window as VoiceWindow).webkitSpeechRecognition,
   )
@@ -265,6 +274,16 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
   }, [executionMessage, executionTone])
 
   useEffect(() => {
+    if (agentPlan?.status !== 'completed') return undefined
+    const timer = window.setTimeout(() => {
+      if (agentPlanRef.current?.status !== 'completed') return
+      agentPlanRef.current = null
+      setAgentPlan(null)
+    }, 5_000)
+    return () => window.clearTimeout(timer)
+  }, [agentPlan?.status])
+
+  useEffect(() => {
     const viewport = window.visualViewport
     if (!viewport) return undefined
     const synchronizeViewport = () => {
@@ -292,6 +311,28 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
   function updateAgentPlan(nextPlan: VoiceCommandPlan | null) {
     agentPlanRef.current = nextPlan
     setAgentPlan(nextPlan)
+  }
+
+  function addAssistantMessage(role: AssistantConversationMessage['role'], content: string) {
+    setAssistantMessages((messages) => [...messages, {
+      id: crypto.randomUUID(),
+      role,
+      content,
+      createdAt: new Date().toISOString(),
+    }].slice(-10))
+  }
+
+  function resetAssistantConversation() {
+    setAssistantSessionId(null)
+    setAssistantMessages([])
+    setAssistantChoices([])
+    setCommand('')
+    setResolved(null)
+    setAwaitingHighRiskConfirmation(false)
+    pausedAgentStepIdRef.current = null
+    updateAgentPlan(null)
+    setExecutionMessage('')
+    setVoiceMessage('新对话已经准备好。')
   }
 
   function announce(message: string, tone: ExecutionTone = 'success') {
@@ -421,6 +462,70 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
     if (nextResolved.resolution.kind === 'unknown') announce('这句话还不能安全匹配到当前页面操作，请说出完整按钮或字段名称。', 'error')
   }
 
+  function assistantCapabilities() {
+    const pageCapabilities = assistantPageCapabilities(controls)
+    const navigationCapabilities = navigationSuggestions.map((suggestion) => ({
+      id: `navigation:${suggestion.target}`,
+      label: suggestion.command,
+      command: suggestion.command,
+      description: '打开当前岗位有权访问的工作页面',
+      risk: 'normal' as const,
+      disabled: false,
+    }))
+    return [...pageCapabilities, ...navigationCapabilities].slice(0, 120)
+  }
+
+  function applyAssistantResponse(message: string, response: AssistantTurnResponse) {
+    setAssistantSessionId(response.sessionId)
+    addAssistantMessage('assistant', response.reply)
+    setAssistantChoices(response.choices)
+    setResolved(null)
+    setAwaitingHighRiskConfirmation(false)
+    pausedAgentStepIdRef.current = null
+    if (response.kind === 'plan') {
+      const deterministicWorkflow = deterministicPlanner.plan(message)
+      const plan = deterministicWorkflow.steps.some((step) => step.action !== 'execute_command')
+        ? { ...deterministicWorkflow, modelUsed: true }
+        : createModelVoiceCommandPlan(message, response.steps)
+      updateAgentPlan(plan)
+      announce(`${response.reply} 请核对计划后再执行。`, 'info')
+      return
+    }
+    updateAgentPlan(null)
+    if (response.kind === 'clarification') announce(response.reply, 'info')
+    else announce(response.reply, 'success')
+  }
+
+  async function submitAssistantMessage(nextCommand: string) {
+    const message = nextCommand.trim()
+    if (!message || assistantBusy) return
+    addAssistantMessage('user', message)
+    setCommand('')
+    setVoiceMessage('')
+    setExecutionMessage('')
+    setAssistantChoices([])
+    setAssistantBusy(true)
+    try {
+      const response = await sendAssistantTurn({
+        requestId: crypto.randomUUID(),
+        sessionId: assistantSessionId ?? undefined,
+        message,
+        page: {
+          heading: pageHeading,
+          capabilities: assistantCapabilities(),
+        },
+      })
+      applyAssistantResponse(message, response)
+    } catch (error) {
+      const fallbackMessage = error instanceof Error ? error.message : '智能理解暂时不可用'
+      addAssistantMessage('assistant', `${fallbackMessage}。我已切换到快速命令。`)
+      setVoiceMessage('智能理解暂时不可用，已切换到快速命令。')
+      prepareCommand(message)
+    } finally {
+      setAssistantBusy(false)
+    }
+  }
+
   function selectAmbiguousCandidate(candidateCommand: string) {
     setCommand(candidateCommand)
     const nextResolved = resolveCommand(candidateCommand)
@@ -465,11 +570,11 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
     }
     setCommand(selection.canonicalized)
     if (selection.safeToPlan) {
-      prepareCommand(selection.canonicalized)
-      setVoiceMessage('识别好了，请核对后确认。')
+      void submitAssistantMessage(selection.canonicalized)
+      setVoiceMessage('识别好了，正在理解您的意思。')
       return
     }
-    setVoiceMessage(`我听到“${selection.canonicalized}”，但不太确定。请核对文字后点击“理解”。`)
+    setVoiceMessage(`我听到“${selection.canonicalized}”，但不太确定。请核对文字后点击“发送”。`)
   }
 
   async function transcribeCloudRecording(blob: Blob, mimeType: NonNullable<ReturnType<typeof cloudRecordingMimeType>>) {
@@ -877,15 +982,16 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
         data-voice-ignore
         role="dialog"
         aria-modal="true"
-        aria-label="语音命令模式"
+        aria-label="AI助理模式"
       >
         <header className="voice-mode-header">
-          <div className="voice-mode-brand"><span>M</span><div><strong>M-BOX 语音命令</strong><small>{model.employee?.displayName ?? '当前员工'} · {model.access.roleLabel}</small></div></div>
+          <div className="voice-mode-brand"><span>M</span><div><strong>M-BOX AI 助理</strong><small>{model.employee?.displayName ?? '当前员工'} · {model.access.roleLabel}</small></div></div>
           <div className="voice-mode-header-actions">
             <button className="icon-button" title={speechEnabled ? '关闭语音播报' : '打开语音播报'} onClick={() => {
               window.speechSynthesis?.cancel()
               setSpeechEnabled((enabled) => !enabled)
             }}>{speechEnabled ? <Volume2 size={17} /> : <VolumeX size={17} />}</button>
+            <button className="icon-button" title="开始新对话" onClick={resetAssistantConversation}><Sparkles size={17} /></button>
             <button className="secondary-button" onClick={onReturn}><ArrowLeft size={17} />岗位页面</button>
           </div>
         </header>
@@ -919,9 +1025,21 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
             </div>
           )}
           <div className="voice-command-heading">
-            <h1>说出按钮或要完成的操作</h1>
-            <p>例如“点击立即开台”“人数输入4”“收费方式选择现金”。</p>
+            <h1><Bot size={21} />直接说，我来帮您处理</h1>
+            <p>可以询问现场情况，也可以一次说出多步工作；执行前仍会让您核对。</p>
           </div>
+
+          {assistantMessages.length > 0 && (
+            <section className="assistant-conversation" aria-label="AI助理对话">
+              {assistantMessages.map((message) => (
+                <div className={`assistant-message is-${message.role}`} key={message.id}>
+                  <small>{message.role === 'user' ? '我' : 'M-BOX助理'}</small>
+                  <p>{message.content}</p>
+                </div>
+              ))}
+              {assistantBusy && <div className="assistant-thinking"><Sparkles size={14} />正在结合当前岗位和现场状态理解...</div>}
+            </section>
+          )}
 
           <button
             className={listening ? 'voice-mic-button is-listening' : 'voice-mic-button'}
@@ -935,14 +1053,14 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
           </button>
           {voiceMessage && <div className="voice-inline-message" role="status">{voiceMessage}</div>}
 
-          <form className="voice-command-input" onSubmit={(event) => { event.preventDefault(); prepareCommand(command); event.currentTarget.querySelector('input')?.blur() }}>
+          <form className="voice-command-input" onSubmit={(event) => { event.preventDefault(); void submitAssistantMessage(command); event.currentTarget.querySelector('input')?.blur() }}>
             <Keyboard size={18} />
             <input
               aria-label="输入自然语言命令"
               value={command}
               maxLength={160}
               enterKeyHint="done"
-              placeholder="输入按钮、字段或操作名称"
+              placeholder="直接描述问题或要完成的工作"
               onFocus={() => setInputFocused(true)}
               onBlur={() => window.setTimeout(() => setInputFocused(false), 180)}
               onChange={(event) => {
@@ -954,13 +1072,21 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
                 updateAgentPlan(null)
               }}
             />
-            <button className="primary-button" disabled={!command.trim()}><Sparkles size={16} />理解</button>
+            <button className="primary-button" disabled={!command.trim() || assistantBusy}><Send size={16} />发送</button>
           </form>
+
+          {assistantChoices.length > 0 && (
+            <div className="assistant-choice-list" role="group" aria-label="请选择一个答案">
+              {assistantChoices.map((choice) => (
+                <button key={choice} disabled={assistantBusy} onClick={() => void submitAssistantMessage(choice)}>{choice}</button>
+              ))}
+            </div>
+          )}
 
           {agentPlan && (
             <section className={`voice-agent-plan is-${agentPlan.status}`} aria-label="连续命令执行计划">
               <header>
-                <span><Sparkles size={16} />连续命令计划</span>
+                <span><Sparkles size={16} />{agentPlan.modelUsed ? 'AI执行计划' : '连续命令计划'}</span>
                 <strong>{agentPlan.steps.filter((step) => step.status === 'completed').length}/{agentPlan.steps.length}</strong>
               </header>
               <div className="voice-agent-steps">
@@ -1036,13 +1162,13 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
           <div className="voice-suggestions">
             <span>当前页常用</span>
             <div>
-              {pageSuggestions.map((control) => <button key={control.id} onClick={() => prepareCommand(commandForControl(control))}>{commandForControl(control)}</button>)}
+              {pageSuggestions.map((control) => <button key={control.id} onClick={() => prepareCommand(commandForControl(control))}>{control.label}</button>)}
               {pageSuggestions.length === 0 && navigationSuggestions.slice(0, 4).map((item) => <button key={item.command} onClick={() => prepareCommand(item.command)}>{item.command}</button>)}
             </div>
           </div>
 
           <details className="voice-command-catalog">
-            <summary>查看本页全部语音命令 <ChevronRight size={15} /></summary>
+            <summary>查看本页全部快捷命令 <ChevronRight size={15} /></summary>
             <div>{controls.map((control) => (
               <button key={control.id} disabled={control.disabled} onClick={() => prepareCommand(commandForControl(control))}>
                 <span>{commandForControl(control)}</span><small>{control.disabled ? '当前不可用' : control.risk === 'high' ? '需要二次确认' : control.kind}</small>

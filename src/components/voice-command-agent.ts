@@ -40,7 +40,7 @@ export interface VoiceCommandPlan {
   omittedStepCount: number
   executionMode: 'sequential-ui'
   serverTransactionAtomic: false
-  modelUsed: false
+  modelUsed: boolean
 }
 
 export interface VoiceCommandModelPlanningRequest {
@@ -72,8 +72,8 @@ export interface DeterministicVoiceCommandPlannerOptions {
 
 const splitPattern = /[，,；;。！？!?\n]+|\s*(?:然后|接着|并且|同时|再(?!次))\s*/u
 const terminalPunctuationPattern = /[，,；;。！？!?]+$/u
-const compactOpenTablePattern = /^(?:请(?:帮我)?|帮我)?\s*([a-z]\d{1,4})\s*([0-9]{1,3}|[零〇一二两三四五六七八九十百]{1,6})\s*(?:位|人)(?:客人)?\s*(?:立即)?开台\s*(?:并(?:且)?|然后|接着|再|同时)\s*(?:销售)?归属(?:给|选择)?\s*([a-z][a-z0-9._'-]*(?:\s+[a-z][a-z0-9._'-]*)*|[\u3400-\u9fff·]{1,20})$/iu
-const compactOpenTableWithoutSalesPattern = /^(?:请(?:帮我)?|帮我)?\s*([a-z]\d{1,4})\s*([0-9]{1,3}|[零〇一二两三四五六七八九十百]{1,6})\s*(?:位|人)(?:客人)?\s*(?:立即)?开台$/iu
+const compactOpenTablePattern = /^(?:请(?:帮我)?|帮我)?\s*([a-z]\d{1,4})\s*(?:来了|到店|入座)?\s*([0-9]{1,3}|[零〇一二两三四五六七八九十百]{1,6})\s*(?:位|人)(?:客人)?\s*[，,]?\s*(?:请(?:帮我)?|帮我)?\s*(?:立即)?开台\s*(?:并(?:且)?|然后|接着|再|同时)\s*(?:销售)?归属(?:给|选择)?\s*([a-z][a-z0-9._'-]*(?:\s+[a-z][a-z0-9._'-]*)*|[\u3400-\u9fff·]{1,20})$/iu
+const compactOpenTableWithoutSalesPattern = /^(?:请(?:帮我)?|帮我)?\s*([a-z]\d{1,4})\s*(?:来了|到店|入座)?\s*([0-9]{1,3}|[零〇一二两三四五六七八九十百]{1,6})\s*(?:位|人)(?:客人)?\s*[，,]?\s*(?:请(?:帮我)?|帮我)?\s*(?:立即)?开台$/iu
 const compactOpenTableWithDefaultsPattern = /^(?:请(?:帮我)?|帮我)?\s*([a-z]\d{1,4})\s*(?:立即)?开台$/iu
 
 const highRiskTerms = [
@@ -280,6 +280,27 @@ function createPlan(
     executionMode: 'sequential-ui',
     serverTransactionAtomic: false,
     modelUsed: false,
+  }
+}
+
+export function createModelVoiceCommandPlan(
+  source: string,
+  suggestions: readonly VoiceCommandModelSuggestedStep[],
+): VoiceCommandPlan {
+  const planned = suggestions.slice(0, MAX_VOICE_COMMAND_STEPS)
+  return {
+    ...createPlan(
+      source,
+      planned.map((suggestion, index) => createStep(
+        index + 1,
+        'execute_command',
+        suggestion.label,
+        suggestion.command,
+        suggestion.entities ?? {},
+      )),
+      Math.max(0, suggestions.length - planned.length),
+    ),
+    modelUsed: true,
   }
 }
 

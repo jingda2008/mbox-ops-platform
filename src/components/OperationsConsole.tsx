@@ -76,6 +76,7 @@ import { TaskQueue } from './TaskQueue'
 import { getFulfillmentAccess, kdsTaskOperationallyActive, taskVisibleToAccess } from './commerce-workspace'
 import { RoleHomeView } from './RoleHomeView'
 import { buildRoleHomeModel, type RoleHomeNavigationId } from './role-access'
+import { salesAttributionEmployees } from './sales-attribution'
 import './OperationsConsole.css'
 
 const MasterDataView = lazy(() => import('./MasterDataView').then((module) => ({ default: module.MasterDataView })))
@@ -243,7 +244,7 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
   const canCloseTable = effectivePermissions.has('table.close')
   const canHandoverLegacyTable = effectivePermissions.has('business_day.close')
   const canWaiveMinimumSpend = effectiveRoleIds.some((roleId) => ['manager', 'operations_director', 'owner'].includes(roleId))
-  const salesEmployees = data.employees.filter((employee) => employee.status === 'active' && employee.online)
+  const salesEmployees = salesAttributionEmployees(data.employees)
   const selectedSession = selectedTable
     ? data.songState.tableSessions.find((session) => session.tableId === selectedTable.id && session.status === 'open') ?? null
     : null

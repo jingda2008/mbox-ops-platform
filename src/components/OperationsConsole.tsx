@@ -40,7 +40,7 @@ import {
   Unlink,
   UserPlus,
 } from 'lucide-react'
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import {
   actOnTask,
   assignTableSessionSales,
@@ -86,11 +86,13 @@ const SongCenterView = lazy(() => import('./SongCenterView').then((module) => ({
 const ReservationView = lazy(() => import('./ReservationView').then((module) => ({ default: module.ReservationView })))
 const InventoryView = lazy(() => import('./InventoryView').then((module) => ({ default: module.InventoryView })))
 
-type View = 'home' | RoleHomeNavigationId
+export type OperationsConsoleView = 'home' | RoleHomeNavigationId
+type View = OperationsConsoleView
 
 interface OperationsConsoleProps {
   data: BootstrapResponse
   onRefresh: () => Promise<void>
+  navigationRequest?: { id: number; target: OperationsConsoleView } | null
 }
 
 const navigation: Array<{ id: View; label: string; icon: typeof LayoutDashboard }> = [
@@ -139,7 +141,7 @@ function tableOperationsConfig(config?: TableOperationsConfig): TableOperationsC
   }) as TableOperationsConfig
 }
 
-export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
+export function OperationsConsole({ data, onRefresh, navigationRequest = null }: OperationsConsoleProps) {
   const fulfillmentAccess = getFulfillmentAccess(data, getCurrentActorId())
   const roleHomeAccess = getRoleHomeAccess(data, fulfillmentAccess.employee?.roleId ?? '')
   const roleHomeModel = buildRoleHomeModel(data, fulfillmentAccess.employee?.id ?? '')
@@ -189,6 +191,16 @@ export function OperationsConsole({ data, onRefresh }: OperationsConsoleProps) {
   const [tableOpsDirty, setTableOpsDirty] = useState(false)
   const [tableOpsReason, setTableOpsReason] = useState('')
   const [legacyHandoverReason, setLegacyHandoverReason] = useState('经理已核对客人离店，旧账转交后台处理')
+  const allowedNavigationKey = roleHomeAccess.allowedNavigationIds.join(',')
+  const handledNavigationRequestId = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (!navigationRequest || handledNavigationRequestId.current === navigationRequest.id) return
+    handledNavigationRequestId.current = navigationRequest.id
+    if (navigationRequest.target !== 'home' && !allowedNavigationKey.split(',').includes(navigationRequest.target)) return
+    setView(navigationRequest.target)
+    setMobileNavOpen(false)
+  }, [allowedNavigationKey, navigationRequest])
 
   useEffect(() => {
     if (!configDirty) setDraft(cloneConfig(data.draftConfig ?? data.config))

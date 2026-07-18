@@ -81,7 +81,10 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 .pilot-login-error { padding: 10px 12px; border: 1px solid #efc7c9; border-radius: 6px; background: #fff0f0; color: #9f2f34; font-size: 13px; }
 .pilot-login-back { min-height: 36px; border: 0; background: transparent; color: var(--ink-soft); font-weight: 700; }
 .pilot-session-bar { min-height: 38px; display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 5px 16px; border-bottom: 1px solid var(--line); background: #fff; color: var(--ink-soft); font-size: 12px; }
-.pilot-session-bar button { min-height: 28px; display: inline-flex; align-items: center; gap: 5px; border: 0; background: transparent; color: var(--ink); font-size: 12px; font-weight: 750; }
+.pilot-session-bar > button { min-height: 30px; display: inline-flex; align-items: center; gap: 5px; padding: 0 9px; border: 1px solid var(--line); border-radius: 5px; background: #fff; color: var(--ink); font-size: 12px; font-weight: 750; }
+.staff-mode-switch { display: inline-flex; padding: 2px; border: 1px solid var(--line-strong); border-radius: 6px; background: #f1f2ee; }
+.staff-mode-switch button { min-height: 28px; display: inline-flex; align-items: center; gap: 5px; padding: 0 9px; border: 0; border-radius: 4px; background: transparent; color: var(--ink-soft); font-size: 12px; font-weight: 750; }
+.staff-mode-switch button.is-active { background: #fff; color: var(--ink); box-shadow: 0 1px 4px rgba(26, 30, 25, .13); }
 .sidebar {
   position: sticky;
   top: 0;
@@ -1080,6 +1083,10 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 }
 
 @media (max-width: 430px) {
+  .pilot-session-bar { justify-content: space-between; flex-wrap: wrap; gap: 6px; padding: 6px 10px; }
+  .pilot-session-bar > span { width: 100%; }
+  .staff-mode-switch { flex: 1; }
+  .staff-mode-switch button { flex: 1; justify-content: center; }
   .guest-shell { border: 0; }
   .service-grid { grid-template-columns: 1fr; }
   .guest-task { align-items: flex-start; flex-direction: column; }

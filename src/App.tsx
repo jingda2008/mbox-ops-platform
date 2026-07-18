@@ -4,9 +4,11 @@ import {
   Clock3,
   CloudUpload,
   LoaderCircle,
+  LayoutDashboard,
   LogIn,
   LogOut,
   MapPin,
+  Mic,
   Navigation,
   RefreshCw,
   ShieldAlert,
@@ -20,6 +22,7 @@ import {
   createPilotSession,
   endStaffPresence,
   getBootstrap,
+  getCurrentActorId,
   getPilotEmployees,
   heartbeatStaffPresence,
   replayQueuedTaskAction,
@@ -42,6 +45,7 @@ import {
 } from './offline'
 import type { BootstrapResponse, TaskActionInput } from './shared/contracts'
 import type { PilotEmployeeOption } from './shared/auth-contracts'
+import type { OperationsConsoleView } from './components/OperationsConsole'
 import { formatChinaDateTime, formatChinaTime } from './shared/china-time'
 import './system-ui.css'
 import './premium-theme.css'
@@ -51,6 +55,7 @@ const BOOTSTRAP_POLL_INTERVAL_MS = 2000
 const GuestPortal = lazy(() => import('./components/GuestPortal').then((module) => ({ default: module.GuestPortal })))
 const MemberBenefitsPortal = lazy(() => import('./components/MemberBenefitsPortal').then((module) => ({ default: module.MemberBenefitsPortal })))
 const OperationsConsole = lazy(() => import('./components/OperationsConsole').then((module) => ({ default: module.OperationsConsole })))
+const VoiceCommandMode = lazy(() => import('./components/VoiceCommandMode').then((module) => ({ default: module.VoiceCommandMode })))
 const PublicReservationPortal = lazy(() => import('./components/PublicReservationPortal').then((module) => ({ default: module.PublicReservationPortal })))
 
 function WorkspaceLoading() {
@@ -94,9 +99,12 @@ export default function App() {
   const [guardNotice, setGuardNotice] = useState('')
   const [requiresLogin, setRequiresLogin] = useState(false)
   const [switchingEmployee, setSwitchingEmployee] = useState(false)
+  const [staffMode, setStaffMode] = useState<'workspace' | 'voice'>('workspace')
+  const [navigationRequest, setNavigationRequest] = useState<{ id: number; target: OperationsConsoleView } | null>(null)
   const [offlineStatus, setOfflineStatus] = useState<OfflineStatus>(() => getOfflineStatus())
   const previousPendingCount = useRef(offlineStatus.pendingCount)
   const latestRevision = useRef<number | null>(null)
+  const nextNavigationRequestId = useRef(0)
 
   const refresh = useCallback(async () => {
     try {
@@ -193,6 +201,8 @@ export default function App() {
       }
       await clearOfflineDataForEmployeeChange()
       clearStoredStaffSession()
+      setStaffMode('workspace')
+      setNavigationRequest(null)
       latestRevision.current = null
       setData(null)
       setSnapshot(null)
@@ -216,6 +226,8 @@ export default function App() {
       setSnapshot(null)
       setRequiresLogin(false)
       setError('')
+      setStaffMode('workspace')
+      setNavigationRequest(null)
     }} />
   }
 
@@ -244,6 +256,12 @@ export default function App() {
     return <main className="system-state"><LoaderCircle className="spin" size={28} /><strong>正在载入现场状态</strong></main>
   }
 
+  const currentActorId = getCurrentActorId()
+  const currentActorName = window.localStorage.getItem('mbox.actor.name')
+    ?? data.employees.find((employee) => employee.id === currentActorId)?.displayName
+    ?? '已登录员工'
+  const hasStaffIdentity = Boolean(window.localStorage.getItem('mbox.auth.token') || (import.meta.env.DEV && currentActorId))
+
   function blockRestrictedOfflineAction(event: ReactMouseEvent<HTMLDivElement>) {
     if (offlineStatus.online) return
     const target = event.target
@@ -262,9 +280,17 @@ export default function App() {
       onClickCapture={blockRestrictedOfflineAction}
     >
       <ConnectivityBanner status={offlineStatus} onRetry={refresh} />
-      {window.localStorage.getItem('mbox.auth.token') && (
+      {hasStaffIdentity && (
         <div className="pilot-session-bar">
-          <span>当前员工：<strong>{window.localStorage.getItem('mbox.actor.name') ?? '已登录员工'}</strong></span>
+          <span>当前员工：<strong>{currentActorName}</strong></span>
+          <div className="staff-mode-switch" role="group" aria-label="操作模式">
+            <button className={staffMode === 'workspace' ? 'is-active' : ''} aria-pressed={staffMode === 'workspace'} onClick={() => setStaffMode('workspace')}>
+              <LayoutDashboard size={15} />岗位页面
+            </button>
+            <button className={staffMode === 'voice' ? 'is-active' : ''} aria-pressed={staffMode === 'voice'} onClick={() => setStaffMode('voice')}>
+              <Mic size={15} />语音命令
+            </button>
+          </div>
           <button disabled={switchingEmployee} onClick={() => void switchEmployee()}>
             {switchingEmployee ? <LoaderCircle className="spin" size={15} /> : <LogOut size={15} />}
             {switchingEmployee ? '正在清理' : '切换员工'}
@@ -277,7 +303,22 @@ export default function App() {
           <button title="关闭提示" onClick={() => setGuardNotice('')}>关闭</button>
         </div>
       )}
-      <LazyWorkspace><OperationsConsole data={data} onRefresh={refresh} /></LazyWorkspace>
+      <LazyWorkspace>
+        {staffMode === 'voice' ? (
+          <VoiceCommandMode
+            data={data}
+            employeeId={currentActorId}
+            onReturn={() => setStaffMode('workspace')}
+            onNavigate={(target) => {
+              nextNavigationRequestId.current += 1
+              setNavigationRequest({ id: nextNavigationRequestId.current, target })
+              setStaffMode('workspace')
+            }}
+          />
+        ) : (
+          <OperationsConsole data={data} onRefresh={refresh} navigationRequest={navigationRequest} />
+        )}
+      </LazyWorkspace>
     </div>
   )
 }

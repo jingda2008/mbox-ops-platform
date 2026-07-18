@@ -1,0 +1,122 @@
+.voice-command-mode {
+  min-height: calc(100vh - 39px);
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  background: #f0f2ee;
+  color: var(--ink);
+}
+
+.voice-mode-header {
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 12px 22px;
+  border-bottom: 1px solid var(--line);
+  box-shadow: inset 0 3px var(--brand-yellow);
+  background: #fff;
+}
+
+.voice-mode-brand { display: flex; align-items: center; gap: 11px; }
+.voice-mode-brand > span { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 6px; background: var(--brand-yellow); font-size: 20px; font-weight: 900; }
+.voice-mode-brand > div { display: grid; gap: 2px; }
+.voice-mode-brand small { color: var(--ink-soft); font-size: 12px; }
+
+.voice-command-stage {
+  width: min(760px, calc(100% - 32px));
+  margin: 0 auto;
+  align-self: center;
+  display: grid;
+  justify-items: center;
+  gap: 18px;
+  padding: 34px 0;
+}
+
+.voice-safety-label { display: inline-flex; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid #c7daca; border-radius: 5px; background: #f5faf5; color: #2f6842; font-size: 12px; font-weight: 750; }
+.voice-command-heading { display: grid; justify-items: center; gap: 6px; text-align: center; }
+.voice-command-heading > span { color: #80671d; font-size: 11px; font-weight: 800; }
+.voice-command-heading h1 { font-size: 29px; }
+.voice-command-heading p { color: var(--ink-soft); font-size: 14px; }
+
+.voice-mic-button {
+  width: 118px;
+  height: 118px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  border: 2px solid #2f332e;
+  border-radius: 50%;
+  background: #fff;
+  color: var(--ink);
+  box-shadow: 0 10px 24px rgba(30, 34, 29, .12), inset 0 -4px #e5e7e1;
+  font-size: 13px;
+  font-weight: 800;
+}
+.voice-mic-button:hover { transform: translateY(-1px); box-shadow: 0 13px 28px rgba(30, 34, 29, .16), inset 0 -4px #e5e7e1; }
+.voice-mic-button:active { transform: translateY(2px); box-shadow: 0 5px 12px rgba(30, 34, 29, .12), inset 0 2px #d9ddd5; }
+.voice-mic-button.is-listening { border-color: var(--brand-red); background: #fff4f4; color: var(--brand-red); animation: voice-pulse 1.4s ease-in-out infinite; }
+
+.voice-inline-message { min-height: 22px; color: var(--ink-soft); font-size: 13px; }
+.voice-command-input { width: 100%; min-height: 58px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 7px 8px 7px 15px; border: 1px solid var(--line-strong); border-radius: 7px; background: #fff; box-shadow: 0 7px 22px rgba(28, 32, 27, .07); }
+.voice-command-input > svg { color: var(--ink-soft); }
+.voice-command-input input { min-width: 0; height: 40px; border: 0; outline: 0; background: transparent; color: var(--ink); font-size: 16px; }
+
+.voice-confirmation { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 16px; border: 1px solid #bdd3c1; border-left: 5px solid var(--success); border-radius: 7px; background: #f7fbf7; }
+.voice-confirmation > div:first-child { min-width: 0; display: flex; align-items: flex-start; gap: 11px; }
+.voice-confirmation > div:first-child > svg { flex: 0 0 auto; margin-top: 3px; color: var(--success); }
+.voice-confirmation span { display: grid; gap: 3px; }
+.voice-confirmation small { color: var(--ink-soft); font-size: 11px; }
+.voice-confirmation strong { font-size: 17px; }
+.voice-confirmation p { color: var(--ink-soft); font-size: 12px; }
+.voice-confirm-actions { flex: 0 0 auto; display: flex; gap: 8px; }
+.voice-command-warning { width: 100%; padding: 12px 14px; border: 1px solid #e5c789; border-left: 5px solid var(--warning); border-radius: 6px; background: #fff9e9; color: #70500e; font-size: 13px; }
+
+.voice-suggestions { width: 100%; display: grid; gap: 8px; }
+.voice-suggestions > span { color: var(--ink-soft); font-size: 12px; font-weight: 750; }
+.voice-suggestions > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.voice-suggestions button { min-height: 42px; padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: 6px; background: #fff; color: var(--ink); font-weight: 700; text-align: left; }
+.voice-suggestions button:hover { border-color: #9f892f; background: #fffbea; }
+.voice-suggestions button:active { transform: translateY(1px); background: #f8f0cc; }
+.voice-mode-footer { padding: 12px 18px 16px; color: #777d75; font-size: 11px; text-align: center; }
+
+@keyframes voice-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(217, 47, 58, .12), 0 10px 24px rgba(30, 34, 29, .12); }
+  50% { box-shadow: 0 0 0 12px rgba(217, 47, 58, 0), 0 10px 24px rgba(30, 34, 29, .12); }
+}
+
+@media (max-width: 900px) {
+  .voice-command-mode { min-height: calc(100vh - 57px); }
+}
+
+@media (max-width: 620px) {
+  .voice-command-mode { min-height: calc(100vh - 57px); }
+  .voice-mode-header { min-height: 64px; padding: 9px 12px; }
+  .voice-mode-header .secondary-button { min-height: 38px; padding: 0 10px; font-size: 12px; }
+  .voice-command-stage { width: calc(100% - 20px); gap: 14px; padding: 22px 0; align-self: start; }
+  .voice-command-heading h1 { font-size: 24px; }
+  .voice-command-heading p { font-size: 12px; }
+  .voice-mic-button { width: 102px; height: 102px; }
+  .voice-confirmation { align-items: stretch; flex-direction: column; }
+  .voice-confirm-actions > button { flex: 1; }
+}
+
+@media (max-width: 430px) {
+  .voice-command-mode { min-height: calc(100vh - 82px); }
+  .voice-command-stage { gap: 10px; padding: 14px 0; align-self: center; }
+  .voice-command-heading { gap: 3px; }
+  .voice-command-heading h1 { font-size: 22px; }
+  .voice-mic-button { width: 92px; height: 92px; }
+  .voice-command-input { min-height: 52px; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px; padding: 5px 6px 5px 10px; }
+  .voice-command-input input { font-size: 14px; }
+  .voice-command-input .primary-button { min-height: 40px; padding: 0 9px; font-size: 12px; }
+  .voice-suggestions > div { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .voice-suggestions button { min-height: 40px; padding: 6px 8px; font-size: 12px; }
+  .voice-mode-footer { padding: 8px 12px 10px; }
+}
+
+@media (max-width: 350px) {
+  .voice-command-input { grid-template-columns: auto minmax(0, 1fr); }
+  .voice-command-input .primary-button { grid-column: 1 / -1; width: 100%; }
+}

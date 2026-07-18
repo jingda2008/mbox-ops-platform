@@ -86,7 +86,10 @@ describe('planVoicePageCommand', () => {
     ]
     expect(planVoicePageCommand('点击保存', controls)).toMatchObject({
       kind: 'ambiguous',
-      candidates: ['班次配置 · 保存', '商品配置 · 保存'],
+      candidates: [
+        { id: 'save-shift', label: '班次配置 · 保存', command: '点击班次配置 · 保存' },
+        { id: 'save-product', label: '商品配置 · 保存', command: '点击商品配置 · 保存' },
+      ],
     })
     expect(planVoicePageCommand('点击商品配置保存', controls)).toMatchObject({
       kind: 'ready',

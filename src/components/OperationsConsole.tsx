@@ -75,7 +75,7 @@ import { chinaDateKey, formatChinaDateTime, formatChinaTime } from '../shared/ch
 import { TaskQueue } from './TaskQueue'
 import { getFulfillmentAccess, kdsTaskOperationallyActive, taskVisibleToAccess } from './commerce-workspace'
 import { RoleHomeView } from './RoleHomeView'
-import { buildRoleHomeModel, getRoleHomeAccess, type RoleHomeNavigationId } from './role-access'
+import { buildRoleHomeModel, type RoleHomeNavigationId } from './role-access'
 import './OperationsConsole.css'
 
 const MasterDataView = lazy(() => import('./MasterDataView').then((module) => ({ default: module.MasterDataView })))
@@ -143,8 +143,8 @@ function tableOperationsConfig(config?: TableOperationsConfig): TableOperationsC
 
 export function OperationsConsole({ data, onRefresh, navigationRequest = null }: OperationsConsoleProps) {
   const fulfillmentAccess = getFulfillmentAccess(data, getCurrentActorId())
-  const roleHomeAccess = getRoleHomeAccess(data, fulfillmentAccess.employee?.roleId ?? '')
   const roleHomeModel = buildRoleHomeModel(data, fulfillmentAccess.employee?.id ?? '')
+  const roleHomeAccess = roleHomeModel.access
   const roleNavigationLabels = new Map(roleHomeModel.navigation.map((item) => [item.id, item.label]))
   const currentEmployee = fulfillmentAccess.employee
   const claimableTaskIds = new Set(data.tasks.filter((task) => {

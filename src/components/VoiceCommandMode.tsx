@@ -26,10 +26,22 @@ import {
   type VoicePageStateSnapshot,
 } from './voice-page-controls'
 import { resolveVoiceCommand, voiceSuggestionsForNavigation, type VoiceCommandResolution } from './voice-command'
+import {
+  DeterministicVoiceCommandPlanner,
+  transitionVoiceCommandStep,
+  type VoiceCommandPlan,
+} from './voice-command-agent'
+import {
+  buildVoiceCommandDictionary,
+  canonicalizeVoiceCommand,
+  chooseBestVoiceTranscript,
+  dictionaryBiasPhrases,
+} from './voice-command-dictionary'
+import { naturalizeSpokenFeedback, rankChineseVoices, selectPreferredChineseVoice } from './voice-speech'
 import './VoiceCommandMode.css'
 
 interface SpeechRecognitionEventLike {
-  results: ArrayLike<{ 0: { transcript: string }; isFinal: boolean }>
+  results: ArrayLike<ArrayLike<{ transcript: string; confidence?: number }> & { isFinal: boolean }>
 }
 
 interface SpeechRecognitionErrorEventLike {
@@ -40,6 +52,8 @@ interface SpeechRecognitionLike {
   lang: string
   continuous: boolean
   interimResults: boolean
+  maxAlternatives?: number
+  phrases?: unknown
   onresult: ((event: SpeechRecognitionEventLike) => void) | null
   onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null
   onend: (() => void) | null
@@ -52,6 +66,7 @@ type SpeechRecognitionConstructor = new () => SpeechRecognitionLike
 type VoiceWindow = Window & {
   SpeechRecognition?: SpeechRecognitionConstructor
   webkitSpeechRecognition?: SpeechRecognitionConstructor
+  SpeechRecognitionPhrase?: new (phrase: string, boost: number) => unknown
 }
 
 type ResolvedCommand =
@@ -96,12 +111,21 @@ function planReady(resolved: ResolvedCommand | null) {
   return null
 }
 
+function resolvedCommandReady(resolved: ResolvedCommand | null) {
+  if (!resolved) return false
+  if (resolved.source === 'page') return resolved.plan.kind === 'ready'
+  return resolved.resolution.kind === 'ready'
+}
+
 export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: VoiceCommandModeProps) {
   const model = useMemo(() => buildRoleHomeModel(data, employeeId), [data, employeeId])
+  const deterministicPlanner = useMemo(() => new DeterministicVoiceCommandPlanner(), [])
   const navigationSuggestions = voiceSuggestionsForNavigation(model.access.allowedNavigationIds)
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
   const controlsSignatureRef = useRef('')
   const executionSequence = useRef(0)
+  const agentPlanRef = useRef<VoiceCommandPlan | null>(null)
+  const pausedAgentStepIdRef = useRef<string | null>(null)
   const [controls, setControls] = useState<VoicePageControl[]>([])
   const [pageHeading, setPageHeading] = useState('岗位工作台')
   const [command, setCommand] = useState('')
@@ -111,10 +135,14 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
   const [executionMessage, setExecutionMessage] = useState('')
   const [executionTone, setExecutionTone] = useState<'success' | 'error' | 'working'>('success')
   const [speechEnabled, setSpeechEnabled] = useState(true)
+  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([])
+  const [selectedVoiceURI, setSelectedVoiceURI] = useState(() => window.localStorage.getItem('mbox.voice.tts.voice-uri') ?? '')
+  const [agentPlan, setAgentPlan] = useState<VoiceCommandPlan | null>(null)
   const [awaitingHighRiskConfirmation, setAwaitingHighRiskConfirmation] = useState(false)
   const recognitionSupported = Boolean(
     (window as VoiceWindow).SpeechRecognition || (window as VoiceWindow).webkitSpeechRecognition,
   )
+  const voiceDictionary = useMemo(() => buildVoiceCommandDictionary(data, controls), [controls, data])
 
   const refreshControls = useCallback(() => {
     const scope = getVoiceScope()
@@ -163,14 +191,35 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
     window.speechSynthesis?.cancel()
   }, [])
 
+  useEffect(() => {
+    if (!('speechSynthesis' in window)) return undefined
+    const refreshVoices = () => setAvailableVoices(window.speechSynthesis.getVoices())
+    refreshVoices()
+    window.speechSynthesis.addEventListener?.('voiceschanged', refreshVoices)
+    return () => window.speechSynthesis.removeEventListener?.('voiceschanged', refreshVoices)
+  }, [])
+
+  function updateAgentPlan(nextPlan: VoiceCommandPlan | null) {
+    agentPlanRef.current = nextPlan
+    setAgentPlan(nextPlan)
+  }
+
   function announce(message: string, tone: 'success' | 'error' | 'working' = 'success') {
     setExecutionMessage(message)
     setExecutionTone(tone)
     if (!speechEnabled || !('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') return
+    const spokenMessage = naturalizeSpokenFeedback(message)
+    if (!spokenMessage) return
     window.speechSynthesis.cancel()
-    const utterance = new SpeechSynthesisUtterance(message)
+    const utterance = new SpeechSynthesisUtterance(spokenMessage)
     utterance.lang = 'zh-CN'
-    utterance.rate = 1.05
+    utterance.voice = selectPreferredChineseVoice(
+      availableVoices,
+      window.localStorage.getItem('mbox.voice.tts.voice-uri') ?? selectedVoiceURI,
+    )
+    utterance.rate = 0.96
+    utterance.pitch = 1.02
+    utterance.volume = 0.96
     window.speechSynthesis.speak(utterance)
   }
 
@@ -187,9 +236,23 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
 
   function handleInternalCommand(nextCommand: string) {
     const normalized = nextCommand.replace(/\s+/g, '')
+    const ordinalMatch = normalized.match(/^(?:选择|选|点)?第?([一二三四五六123456])(?:个|项)?$/)
+    const ambiguousPlan = resolved?.source === 'page' && resolved.plan.kind === 'ambiguous' ? resolved.plan : null
+    if (ordinalMatch && ambiguousPlan) {
+      const ordinalMap: Record<string, number> = { 一: 0, 二: 1, 三: 2, 四: 3, 五: 4, 六: 5, '1': 0, '2': 1, '3': 2, '4': 3, '5': 4, '6': 5 }
+      const candidate = ambiguousPlan.candidates[ordinalMap[ordinalMatch[1]!] ?? -1]
+      if (!candidate || candidate.disabled) {
+        announce('这个选项现在不能执行，请换一个。', 'error')
+        return true
+      }
+      selectAmbiguousCandidate(candidate.command)
+      return true
+    }
     if (/^(取消|取消执行|不要执行|算了)$/.test(normalized)) {
       setResolved(null)
       setAwaitingHighRiskConfirmation(false)
+      pausedAgentStepIdRef.current = null
+      updateAgentPlan(null)
       announce('已取消，刚才的命令没有执行。')
       return true
     }
@@ -233,22 +296,55 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
   }
 
   function prepareCommand(nextCommand: string) {
-    const cleanCommand = nextCommand.trim()
+    const rawCommand = nextCommand.trim()
+    const cleanCommand = canonicalizeVoiceCommand(rawCommand, voiceDictionary).trim()
     if (!cleanCommand) return
     setCommand(cleanCommand)
     setVoiceMessage('')
     if (handleInternalCommand(cleanCommand)) return
+    const rawAgentPlan = deterministicPlanner.plan(rawCommand)
+    const nextAgentPlan = rawAgentPlan.steps.length > 1 ? rawAgentPlan : deterministicPlanner.plan(cleanCommand)
+    if (nextAgentPlan.steps.length > 1) {
+      setResolved(null)
+      setAwaitingHighRiskConfirmation(false)
+      pausedAgentStepIdRef.current = null
+      updateAgentPlan(nextAgentPlan)
+      announce(`我把这句话整理成${nextAgentPlan.steps.length}步，请先核对计划再执行。`, 'working')
+      return
+    }
+    updateAgentPlan(null)
     const nextResolved = resolveCommand(cleanCommand)
     setResolved(nextResolved)
     setAwaitingHighRiskConfirmation(false)
 
     if (nextResolved.source === 'page') {
       if (nextResolved.plan.kind === 'blocked') announce(nextResolved.plan.message, 'error')
-      if (nextResolved.plan.kind === 'ambiguous') announce(nextResolved.plan.message, 'error')
+      if (nextResolved.plan.kind === 'ambiguous') announce(nextResolved.plan.message, 'working')
       return
     }
     if (nextResolved.resolution.kind === 'denied') announce(`当前岗位没有${nextResolved.resolution.label}权限，命令没有执行。`, 'error')
     if (nextResolved.resolution.kind === 'unknown') announce('这句话还不能安全匹配到当前页面操作，请说出完整按钮或字段名称。', 'error')
+  }
+
+  function selectAmbiguousCandidate(candidateCommand: string) {
+    setCommand(candidateCommand)
+    const nextResolved = resolveCommand(candidateCommand)
+    setResolved(nextResolved)
+    setAwaitingHighRiskConfirmation(false)
+    if (!resolvedCommandReady(nextResolved)) {
+      announce('这个选项的页面状态已经变化，请重新说一次。', 'error')
+      return
+    }
+    if (pausedAgentStepIdRef.current) {
+      const current = agentPlanRef.current
+      if (current) {
+        const steps = current.steps.map((step) => step.id === pausedAgentStepIdRef.current
+          ? { ...step, command: candidateCommand, label: candidateCommand }
+          : step)
+        updateAgentPlan({ ...current, steps })
+      }
+    }
+    announce('好的，已经选中这一项，请核对后确认执行。', 'working')
   }
 
   function startListening() {
@@ -265,11 +361,26 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
     recognition.lang = 'zh-CN'
     recognition.continuous = false
     recognition.interimResults = true
+    recognition.maxAlternatives = 5
+    const Phrase = (window as VoiceWindow).SpeechRecognitionPhrase
+    if (Phrase) {
+      try {
+        recognition.phrases = dictionaryBiasPhrases(voiceDictionary, 180).map((phrase) => new Phrase(phrase, 5))
+      } catch {
+        // Contextual phrase bias is experimental; local dictionary matching remains active.
+      }
+    }
     recognition.onresult = (event) => {
-      let transcript = ''
-      for (let index = 0; index < event.results.length; index += 1) transcript += event.results[index]?.[0]?.transcript ?? ''
-      setCommand(transcript.trim())
-      if (event.results[event.results.length - 1]?.isFinal) prepareCommand(transcript)
+      const latest = event.results[event.results.length - 1]
+      const alternatives = latest ? Array.from(latest).map((candidate) => ({
+        transcript: candidate.transcript,
+        confidence: candidate.confidence,
+      })) : []
+      const transcript = latest?.isFinal
+        ? chooseBestVoiceTranscript(alternatives, voiceDictionary)
+        : latest?.[0]?.transcript?.trim() ?? ''
+      setCommand(transcript)
+      if (latest?.isFinal) prepareCommand(transcript)
     }
     recognition.onerror = (event) => {
       const messages: Record<string, string> = {
@@ -296,12 +407,12 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
     sequence: number,
     before: VoicePageStateSnapshot,
     fallbackMessage: string,
-  ) {
+  ): Promise<boolean> {
     for (let attempt = 0; attempt < 12; attempt += 1) {
       await new Promise((resolve) => window.setTimeout(resolve, 250))
-      if (executionSequence.current !== sequence) return
+      if (executionSequence.current !== sequence) return false
       const scope = getVoiceScope()
-      if (!scope) return
+      if (!scope) return false
       const after = readVoicePageState(scope)
       const newFeedback = after.feedback.find((message) => !before.feedback.includes(message))
       if (newFeedback) {
@@ -309,68 +420,150 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
           announce(newFeedback, 'working')
           continue
         }
-        announce(newFeedback, /失败|错误|拒绝|不能|不可|无效|未保存/.test(newFeedback) ? 'error' : 'success')
+        const failed = /失败|错误|拒绝|不能|不可|无效|未保存|未完成/.test(newFeedback)
+        announce(newFeedback, failed ? 'error' : 'success')
         refreshControls()
-        return
+        return !failed
       }
       if (after.heading && before.heading && after.heading !== before.heading) {
         announce(`已打开${after.heading}。`)
         refreshControls()
-        return
+        return true
       }
     }
     announce(fallbackMessage)
     refreshControls()
+    return true
+  }
+
+  async function performResolvedCommand(currentResolved: ResolvedCommand): Promise<boolean> {
+    if (currentResolved.source === 'navigation') {
+      if (currentResolved.resolution.kind !== 'ready') {
+        announce('当前命令没有通过权限检查。', 'error')
+        return false
+      }
+      const navigationLabel = currentResolved.resolution.label
+      onNavigate(currentResolved.resolution.target)
+      announce(`正在打开${navigationLabel}。`, 'working')
+      await new Promise((resolve) => window.setTimeout(resolve, 450))
+      refreshControls()
+      announce(`已打开${navigationLabel}。`)
+      return true
+    }
+
+    if (currentResolved.plan.kind !== 'ready') {
+      announce('当前命令还不能执行，请重新说完整命令。', 'error')
+      return false
+    }
+    const scope = getVoiceScope()
+    if (!scope) {
+      announce('岗位页面暂时不可用，命令没有执行。', 'error')
+      return false
+    }
+    const before = readVoicePageState(scope)
+    const sequence = executionSequence.current + 1
+    executionSequence.current = sequence
+    const result = executeVoicePagePlan(currentResolved.plan, scope)
+    if (!result.ok) {
+      announce(result.message, 'error')
+      return false
+    }
+    if (currentResolved.plan.action !== 'activate') {
+      announce(result.message)
+      refreshControls()
+      await new Promise((resolve) => window.setTimeout(resolve, 120))
+      return true
+    }
+    announce(`${result.message}正在等待页面反馈。`, 'working')
+    return waitForPageFeedback(sequence, before, result.message)
   }
 
   async function executeResolvedCommand() {
     if (!resolved) {
       announce('当前没有等待确认的命令。', 'error')
-      return
+      return false
     }
     setAwaitingHighRiskConfirmation(false)
+    const currentResolved = resolved
+    setResolved(null)
+    return performResolvedCommand(currentResolved)
+  }
 
-    if (resolved.source === 'navigation') {
-      if (resolved.resolution.kind !== 'ready') {
-        announce('当前命令没有通过权限检查。', 'error')
+  async function runAgentPlan(startPlan: VoiceCommandPlan, startIndex = 0) {
+    let currentPlan = startPlan
+    for (let index = startIndex; index < currentPlan.steps.length; index += 1) {
+      const pendingStep = currentPlan.steps[index]!
+      if (pendingStep.status === 'completed') continue
+      currentPlan = transitionVoiceCommandStep(currentPlan, pendingStep.id, 'running')
+      updateAgentPlan(currentPlan)
+      announce(`正在执行第${index + 1}步：${pendingStep.label}。`, 'working')
+      await new Promise((resolve) => window.setTimeout(resolve, 80))
+
+      const stepCommand = canonicalizeVoiceCommand(pendingStep.command, voiceDictionary)
+      const stepResolution = resolveCommand(stepCommand)
+      const pagePlan = stepResolution.source === 'page' ? stepResolution.plan : null
+      const navigationResolution = stepResolution.source === 'navigation' ? stepResolution.resolution : null
+
+      if (pagePlan?.kind === 'ambiguous') {
+        pausedAgentStepIdRef.current = pendingStep.id
+        setResolved(stepResolution)
+        announce(`第${index + 1}步需要您选一下目标。`, 'working')
         return
       }
-      const navigationLabel = resolved.resolution.label
-      onNavigate(resolved.resolution.target)
-      setResolved(null)
-      announce(`正在打开${navigationLabel}。`, 'working')
-      window.setTimeout(() => {
-        refreshControls()
-        announce(`已打开${navigationLabel}。`)
-      }, 350)
-      return
-    }
+      if (pagePlan?.kind === 'blocked' || navigationResolution?.kind === 'denied' || navigationResolution?.kind === 'unknown') {
+        const reason = pagePlan && 'message' in pagePlan
+          ? pagePlan.message
+          : navigationResolution?.kind === 'denied' ? `当前岗位没有${navigationResolution.label}权限。` : '没有匹配到可执行操作。'
+        currentPlan = transitionVoiceCommandStep(currentPlan, pendingStep.id, 'blocked', reason)
+        updateAgentPlan(currentPlan)
+        setResolved(stepResolution)
+        announce(`计划停在第${index + 1}步：${reason}`, 'error')
+        return
+      }
 
-    if (resolved.plan.kind !== 'ready') {
-      announce('当前命令还不能执行，请重新说完整命令。', 'error')
-      return
+      if (planReady(stepResolution)?.risk === 'high') {
+        pausedAgentStepIdRef.current = pendingStep.id
+        setResolved(stepResolution)
+        setAwaitingHighRiskConfirmation(false)
+        announce(`第${index + 1}步属于高风险操作，需要单独确认。`, 'error')
+        return
+      }
+
+      const succeeded = await performResolvedCommand(stepResolution)
+      currentPlan = transitionVoiceCommandStep(
+        currentPlan,
+        pendingStep.id,
+        succeeded ? 'completed' : 'blocked',
+        succeeded ? undefined : '页面返回失败或状态已经变化',
+      )
+      updateAgentPlan(currentPlan)
+      if (!succeeded) return
     }
-    const scope = getVoiceScope()
-    if (!scope) {
-      announce('岗位页面暂时不可用，命令没有执行。', 'error')
-      return
-    }
-    const before = readVoicePageState(scope)
-    const sequence = executionSequence.current + 1
-    executionSequence.current = sequence
-    const result = executeVoicePagePlan(resolved.plan, scope)
+    pausedAgentStepIdRef.current = null
     setResolved(null)
-    if (!result.ok) {
-      announce(result.message, 'error')
-      return
-    }
-    if (resolved.plan.action !== 'activate') {
-      announce(result.message)
-      refreshControls()
-      return
-    }
-    announce(`${result.message}正在等待页面反馈。`, 'working')
-    await waitForPageFeedback(sequence, before, result.message)
+    announce(`计划中的${currentPlan.steps.length}步已经全部完成。`)
+  }
+
+  async function executePausedAgentStep() {
+    const pausedStepId = pausedAgentStepIdRef.current
+    const currentPlan = agentPlanRef.current
+    if (!pausedStepId || !currentPlan || !resolved) return false
+    const stepIndex = currentPlan.steps.findIndex((step) => step.id === pausedStepId)
+    if (stepIndex < 0) return false
+    const succeeded = await executeResolvedCommand()
+    let nextPlan = transitionVoiceCommandStep(
+      currentPlan,
+      pausedStepId,
+      succeeded ? 'completed' : 'blocked',
+      succeeded ? undefined : '候选操作未完成或页面状态已经变化',
+    )
+    updateAgentPlan(nextPlan)
+    pausedAgentStepIdRef.current = null
+    if (!succeeded) return false
+    await new Promise((resolve) => window.setTimeout(resolve, 160))
+    nextPlan = agentPlanRef.current ?? nextPlan
+    await runAgentPlan(nextPlan, stepIndex + 1)
+    return true
   }
 
   async function requestExecution() {
@@ -378,10 +571,18 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
       announce('当前没有等待确认的命令。', 'error')
       return
     }
+    if (!resolvedCommandReady(resolved)) {
+      announce('请先从相似选项中选定一个操作。', 'working')
+      return
+    }
     const pagePlan = planReady(resolved)
     if (pagePlan?.risk === 'high' && !awaitingHighRiskConfirmation) {
       setAwaitingHighRiskConfirmation(true)
       announce('这是高风险操作，请再次说“确认执行”，或者点击红色确认按钮。', 'error')
+      return
+    }
+    if (pausedAgentStepIdRef.current) {
+      await executePausedAgentStep()
       return
     }
     await executeResolvedCommand()
@@ -400,6 +601,9 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
     : navigationResolution?.kind === 'ready' ? navigationResolution.summary : ''
   const readyRisk = pagePlan?.kind === 'ready' ? pagePlan.risk : 'normal'
   const ready = pagePlan?.kind === 'ready' || navigationResolution?.kind === 'ready'
+  const voiceOptions = rankChineseVoices(availableVoices, selectedVoiceURI)
+    .filter((voice) => /^(?:zh|cmn|yue)(?:-|_)/i.test(voice.lang) || /中文|普通话|普通話|chinese|mandarin/i.test(voice.name))
+    .slice(0, 10)
 
   return (
     <>
@@ -419,8 +623,26 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
         <section className="voice-command-stage">
           <div className="voice-page-status">
             <span><ShieldCheck size={15} />{pageHeading}</span>
-            <strong>{controls.length} 个可语音控件{generatedLabelCount > 0 ? ` · ${generatedLabelCount} 个待命名` : ''}</strong>
+            <strong>{controls.length} 个控件 · {voiceDictionary.length} 个热词{generatedLabelCount > 0 ? ` · ${generatedLabelCount} 个待命名` : ''}</strong>
           </div>
+          {voiceOptions.length > 0 && (
+            <label className="voice-tts-control">
+              <Volume2 size={14} />
+              <span>播报声线</span>
+              <select
+                aria-label="选择语音播报声线"
+                value={selectedVoiceURI || selectPreferredChineseVoice(voiceOptions)?.voiceURI || ''}
+                onChange={(event) => {
+                  const voiceURI = event.target.value
+                  setSelectedVoiceURI(voiceURI)
+                  window.localStorage.setItem('mbox.voice.tts.voice-uri', voiceURI)
+                  window.setTimeout(() => announce('好的，接下来由这个声音为您播报。'), 0)
+                }}
+              >
+                {voiceOptions.map((voice) => <option key={voice.voiceURI} value={voice.voiceURI}>{voice.name}</option>)}
+              </select>
+            </label>
+          )}
           {generatedLabelCount > 0 && (
             <div className="voice-command-warning" role="alert">
               当前页有 {generatedLabelCount} 个控件缺少明确名称，暂用页面位置命名；管理员应补齐名称后再作为正式口令使用。
@@ -448,10 +670,40 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
               value={command}
               maxLength={160}
               placeholder="输入按钮、字段或操作名称"
-              onChange={(event) => { setCommand(event.target.value); setResolved(null); setAwaitingHighRiskConfirmation(false) }}
+              onChange={(event) => {
+                setCommand(event.target.value)
+                setResolved(null)
+                setAwaitingHighRiskConfirmation(false)
+                pausedAgentStepIdRef.current = null
+                updateAgentPlan(null)
+              }}
             />
             <button className="primary-button" disabled={!command.trim()}><Sparkles size={16} />理解</button>
           </form>
+
+          {agentPlan && (
+            <section className={`voice-agent-plan is-${agentPlan.status}`} aria-label="连续命令执行计划">
+              <header>
+                <span><Sparkles size={16} />连续命令计划</span>
+                <strong>{agentPlan.steps.filter((step) => step.status === 'completed').length}/{agentPlan.steps.length}</strong>
+              </header>
+              <div className="voice-agent-steps">
+                {agentPlan.steps.map((step) => (
+                  <div className={`is-${step.status}`} key={step.id}>
+                    <b>{step.status === 'completed' ? <Check size={13} /> : step.position}</b>
+                    <span><strong>{step.label}</strong><small>{step.risk === 'high' ? '需要单独确认' : step.status === 'running' ? '正在处理' : step.status === 'blocked' ? step.blockedReason : '待执行'}</small></span>
+                  </div>
+                ))}
+              </div>
+              {agentPlan.status === 'pending' && (
+                <div className="voice-agent-actions">
+                  <p>系统将逐步操作；已经完成的步骤不会因后续失败而自动撤回。</p>
+                  <button className="secondary-button" onClick={() => { pausedAgentStepIdRef.current = null; updateAgentPlan(null) }}><X size={15} />取消</button>
+                  <button className="primary-button" onClick={() => void runAgentPlan(agentPlan)}><Check size={15} />确认并执行计划</button>
+                </div>
+              )}
+            </section>
+          )}
 
           {ready && (
             <div className={`voice-confirmation ${readyRisk === 'high' ? 'is-high-risk' : ''}`} role="status">
@@ -465,7 +717,22 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
             </div>
           )}
           {pagePlan?.kind === 'ambiguous' && (
-            <div className="voice-command-warning" role="alert"><strong>{pagePlan.message}</strong><span>{pagePlan.candidates.join('；')}</span></div>
+            <div className="voice-candidate-panel" role="group" aria-label="相似操作候选">
+              <div><strong>{pagePlan.message}</strong><span>点选后还会显示确认卡，也可以说“第一个”。</span></div>
+              <div className="voice-candidate-list">
+                {pagePlan.candidates.map((candidate, index) => (
+                  <button
+                    key={candidate.id}
+                    disabled={candidate.disabled}
+                    onClick={() => selectAmbiguousCandidate(candidate.command)}
+                  >
+                    <b>{index + 1}</b>
+                    <span><strong>{candidate.label}</strong><small>{candidate.description}{candidate.risk === 'high' ? ' · 需要二次确认' : ''}</small></span>
+                    <ChevronRight size={16} />
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
           {(pagePlan?.kind === 'blocked' || pagePlan?.kind === 'unknown') && <div className="voice-command-warning" role="alert">{pagePlan.message}</div>}
           {navigationResolution?.kind === 'denied' && <div className="voice-command-warning" role="alert">当前岗位没有“{navigationResolution.label}”权限，命令未执行。</div>}

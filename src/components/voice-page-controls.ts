@@ -17,6 +17,15 @@ export interface VoicePageControl {
   options?: Array<{ label: string; value: string; disabled: boolean }>
 }
 
+export interface VoicePageCandidate {
+  id: string
+  label: string
+  description: string
+  command: string
+  disabled: boolean
+  risk: VoicePageRisk
+}
+
 export type VoicePageAction = 'activate' | 'set_value' | 'select_option' | 'set_checked'
 
 export type VoicePagePlan =
@@ -31,8 +40,9 @@ export type VoicePagePlan =
       checked?: boolean
       risk: VoicePageRisk
       summary: string
+      controlFingerprint: string
     }
-  | { kind: 'ambiguous'; message: string; candidates: string[] }
+  | { kind: 'ambiguous'; message: string; candidates: VoicePageCandidate[] }
   | { kind: 'blocked'; message: string }
   | { kind: 'unknown'; message: string }
 
@@ -54,7 +64,7 @@ const controlIds = new WeakMap<Element, string>()
 let nextControlId = 1
 
 const sensitiveFieldPattern = /pin|密码|密钥|secret|token|口令|验证码|付款码|银行卡|身份证/i
-const highRiskPattern = /退款|支付|付款|收款|结台|翻台|转桌|换位|合台|加桌|拆回|赠送|折扣|确认发放|批准发放|入库|出库|盘点|报损|保存|删除|作废|重置|发布|权限|授权|撤销|清空|售罄|确认到账|关闭桌台|取消预约|切换员工|退出登录/i
+const highRiskPattern = /退款|支付|付款|收款|结台|翻台|转桌|换位|合台|加桌|拆回|赠送|折扣|确认发放|批准发放|入库|出库|盘点|报损|保存|新增|创建|改价|调整价格|删除|作废|重置|发布|权限|授权|撤销|清空|售罄|确认到账|关闭桌台|取消预约|切换员工|退出登录/i
 const feedbackSelector = '[role="alert"], [role="status"], .notice-bar, .error-banner, .waitlist-notice, .offline-guard-notice'
 
 function compactText(value: string | null | undefined, maximum = 80) {
@@ -280,6 +290,10 @@ function matchScore(query: string, candidate: string) {
   return Math.round((overlap / Math.max(queryParts.size, candidateParts.size, 1)) * 80)
 }
 
+function controlFingerprint(control: Pick<VoicePageControl, 'kind' | 'label' | 'risk' | 'sensitive'>) {
+  return [control.kind, normalizeVoiceText(control.label), control.risk, control.sensitive ? 'sensitive' : 'standard'].join('|')
+}
+
 function selectControl(query: string, controls: VoicePageControl[], allowedKinds: VoicePageControlKind[]) {
   const scored = controls
     .filter((control) => allowedKinds.includes(control.kind))
@@ -295,7 +309,7 @@ function selectControl(query: string, controls: VoicePageControl[], allowedKinds
       && normalizeVoiceText(candidate.control.label) === normalizeVoiceText(query)
     ))
     if (exactNavigation.length === 1) return { kind: 'selected' as const, control: exactNavigation[0]!.control }
-    return { kind: 'ambiguous' as const, candidates: close.slice(0, 4).map((candidate) => candidate.control.displayName) }
+    return { kind: 'ambiguous' as const, candidates: close.slice(0, 6).map((candidate) => candidate.control) }
   }
   return { kind: 'selected' as const, control: best.control }
 }
@@ -312,10 +326,24 @@ function stripActivationWords(command: string) {
 function blockedOrAmbiguous(
   selected: ReturnType<typeof selectControl>,
   unavailableMessage: string,
+  commandForCandidate: (control: VoicePageControl) => string = (control) => `点击${control.displayName}`,
 ): { plan: VoicePagePlan } | { control: VoicePageControl } {
   if (selected.kind === 'none') return { plan: { kind: 'unknown', message: unavailableMessage } }
   if (selected.kind === 'ambiguous') {
-    return { plan: { kind: 'ambiguous', message: '找到多个相似控件，请说得更具体一些。', candidates: selected.candidates } }
+    return {
+      plan: {
+        kind: 'ambiguous',
+        message: '我找到了几个相似操作，请点选您要执行的这一项。',
+        candidates: selected.candidates.map((control) => ({
+          id: control.id,
+          label: control.displayName,
+          description: control.disabled ? '当前不可用' : control.context || '当前页面',
+          command: commandForCandidate(control),
+          disabled: control.disabled,
+          risk: control.risk,
+        })),
+      },
+    }
   }
   if (selected.control.disabled) {
     return { plan: { kind: 'blocked', message: `“${selected.control.displayName}”当前不可用，请先完成页面要求的前置信息。` } }
@@ -337,6 +365,7 @@ function readyPlan(
     action,
     risk: control.risk,
     summary,
+    controlFingerprint: controlFingerprint(control),
     ...extras,
   }
 }
@@ -349,7 +378,11 @@ export function planVoicePageCommand(command: string, controls: VoicePageControl
   if (valueMatch) {
     const fieldName = valueMatch[1]!.trim()
     const value = valueMatch[2]!.trim()
-    const selected = blockedOrAmbiguous(selectControl(fieldName, controls, ['input', 'textarea']), `当前页面没有找到“${fieldName}”输入框。`)
+    const selected = blockedOrAmbiguous(
+      selectControl(fieldName, controls, ['input', 'textarea']),
+      `当前页面没有找到“${fieldName}”输入框。`,
+      (control) => `在${control.displayName}输入${value}`,
+    )
     if ('plan' in selected) return selected.plan
     if (selected.control.sensitive) return { kind: 'blocked', message: `“${selected.control.displayName}”属于敏感字段，请在原页面手工输入。` }
     return readyPlan(selected.control, 'set_value', `在“${selected.control.displayName}”填写“${value}”。`, { value })
@@ -359,7 +392,11 @@ export function planVoicePageCommand(command: string, controls: VoicePageControl
   if (optionMatch) {
     const fieldName = optionMatch[1]!.trim()
     const requestedOption = optionMatch[2]!.trim()
-    const selected = blockedOrAmbiguous(selectControl(fieldName, controls, ['select']), `当前页面没有找到“${fieldName}”选择框。`)
+    const selected = blockedOrAmbiguous(
+      selectControl(fieldName, controls, ['select']),
+      `当前页面没有找到“${fieldName}”选择框。`,
+      (control) => `${control.displayName}选择${requestedOption}`,
+    )
     if ('plan' in selected) return selected.plan
     const availableOptions = (selected.control.options ?? []).filter((option) => !option.disabled)
     const scoredOptions = availableOptions
@@ -368,7 +405,18 @@ export function planVoicePageCommand(command: string, controls: VoicePageControl
       .sort((left, right) => right.score - left.score)
     if (scoredOptions.length === 0) return { kind: 'blocked', message: `“${selected.control.displayName}”没有“${requestedOption}”这个可选项。` }
     if (scoredOptions.length > 1 && scoredOptions[0]!.score - scoredOptions[1]!.score <= 5) {
-      return { kind: 'ambiguous', message: '找到多个相似选项，请说完整选项名称。', candidates: scoredOptions.slice(0, 4).map((item) => item.option.label) }
+      return {
+        kind: 'ambiguous',
+        message: '有几个选项听起来很像，请点选正确的一项。',
+        candidates: scoredOptions.slice(0, 6).map((item) => ({
+          id: `${selected.control.id}:option:${item.option.value}`,
+          label: item.option.label,
+          description: selected.control.displayName,
+          command: `${selected.control.displayName}选择${item.option.label}`,
+          disabled: item.option.disabled,
+          risk: selected.control.risk,
+        })),
+      }
     }
     const option = scoredOptions[0]!.option
     return readyPlan(selected.control, 'select_option', `把“${selected.control.displayName}”选择为“${option.label}”。`, { value: option.value, optionLabel: option.label })
@@ -378,7 +426,11 @@ export function planVoicePageCommand(command: string, controls: VoicePageControl
   if (toggleMatch) {
     const checked = ['打开', '开启', '启用'].includes(toggleMatch[1]!)
     const fieldName = toggleMatch[2]!.trim()
-    const selected = blockedOrAmbiguous(selectControl(fieldName, controls, ['checkbox', 'radio']), `当前页面没有找到“${fieldName}”开关。`)
+    const selected = blockedOrAmbiguous(
+      selectControl(fieldName, controls, ['checkbox', 'radio']),
+      `当前页面没有找到“${fieldName}”开关。`,
+      (control) => `${checked ? '打开' : '关闭'}${control.displayName}`,
+    )
     if ('control' in selected) {
       return readyPlan(selected.control, 'set_checked', `${checked ? '打开' : '关闭'}“${selected.control.displayName}”。`, { checked })
     }
@@ -408,6 +460,9 @@ function setNativeValue(element: HTMLInputElement | HTMLTextAreaElement, value: 
 export function executeVoicePagePlan(plan: Extract<VoicePagePlan, { kind: 'ready' }>, root: ParentNode): VoicePageExecutionResult {
   const runtime = runtimeControls(root).find((control) => control.id === plan.controlId)
   if (!runtime) return { ok: false, message: '页面状态已经变化，请重新说一次命令。' }
+  if (controlFingerprint(runtime) !== plan.controlFingerprint) {
+    return { ok: false, message: '操作内容或风险等级已经变化，请重新核对命令。' }
+  }
   if (runtime.disabled) return { ok: false, message: `“${runtime.displayName}”当前不可用，命令没有执行。` }
   if (runtime.sensitive && plan.action === 'set_value') return { ok: false, message: '敏感字段不允许通过语音填写。' }
 

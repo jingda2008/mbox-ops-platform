@@ -1398,3 +1398,275 @@ body {
     padding: 0;
   }
 }
+
+/* Commercial visual V1: dark venue frame around a flat, dense work canvas. */
+.app-shell {
+  --info: #256d8f;
+  --success: #3f7651;
+  --warning: #94681f;
+  --danger: #b53d44;
+  --panel-line: #c8cdc6;
+  --panel-shadow: none;
+  --control-shadow: 0 1px 1px rgba(20, 24, 21, .08);
+  background: #111411;
+}
+
+.app-shell > .workspace {
+  background: #e7e9e4;
+}
+
+.app-shell > .sidebar {
+  border-right-color: #373c37;
+  background: #0c0f0d;
+}
+
+.app-shell > .sidebar .brand-lockup {
+  border-color: #3a403a;
+  border-left-color: var(--brand-yellow);
+  background: #151a16;
+}
+
+.app-shell > .sidebar .nav-item {
+  box-shadow: none;
+}
+
+.app-shell > .sidebar .nav-item.is-active {
+  border-color: #6d6040 !important;
+  background: #20251f;
+  box-shadow: inset 4px 0 var(--brand-yellow) !important;
+}
+
+.app-shell > .workspace > .topbar {
+  border-top-color: var(--brand-yellow);
+  border-bottom-color: #c7cbc4;
+  background: #fbfcf9;
+  box-shadow: none;
+}
+
+.app-shell .main-content {
+  min-width: 0;
+  background: #e7e9e4;
+}
+
+.app-shell .main-content :is(
+  .floor-operations, .task-queue, .layout-view, .config-view, .benefit-view,
+  .role-home__header, .role-home__metrics, .role-home__section,
+  .payment-heading, .payment-section, .reservation-heading, .reservation-section,
+  .inventory-heading, .inventory-section, .master-section, .commerce-section,
+  .song-section, .metrics-grid
+) {
+  border-color: #c8cdc6;
+  box-shadow: none;
+}
+
+.app-shell .main-content :is(
+  .section-heading, .role-home__section-heading, .payment-section-heading,
+  .reservation-section-heading, .inventory-section-heading, .commerce-section-heading,
+  .song-section-heading, .panel-heading, .config-section-title
+) {
+  background: #f6f7f3;
+}
+
+.app-shell .main-content :is(.config-section, .benefit-panel, .metric, .benefit-metric) {
+  box-shadow: none;
+}
+
+.app-shell .main-content small {
+  font-size: 11px;
+}
+
+.app-shell .main-content label > span,
+.app-shell > .workspace > .topbar .eyebrow,
+.app-shell > .workspace > .topbar .beijing-clock span,
+.app-shell > .sidebar :is(.brand-lockup em, .sidebar-culture-mark, .sidebar-status small) {
+  font-size: 10px;
+}
+
+.app-shell .main-content :is(.metric-blue, .is-info) .metric-icon {
+  background: #e8f2f6;
+  color: var(--info);
+}
+
+.app-shell .main-content :is(.metric-yellow, .is-warning) .metric-icon {
+  background: #faf0d8;
+  color: var(--warning);
+}
+
+.app-shell .main-content :is(.metric-red, .is-danger) .metric-icon {
+  background: #f8e8e9;
+  color: var(--danger);
+}
+
+.app-shell .main-content .is-success .metric-icon {
+  background: #e9f2eb;
+  color: var(--success);
+}
+
+/* Keep customer purchase actions semantically distinct from staff commands. */
+.guest-shell .menu-add-button {
+  border-color: #b62d36 !important;
+  background: var(--brand-red) !important;
+  color: #fff;
+}
+
+.guest-shell .guest-pay-button {
+  border-color: #0d633b !important;
+  background: var(--wechat-green) !important;
+  color: #fff;
+}
+
+.guest-shell small,
+.member-portal small,
+.public-reservation-shell small {
+  font-size: 10px;
+}
+
+/* Tablets retain a compact workstation rail instead of switching to a drawer. */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .app-shell {
+    grid-template-columns: 76px minmax(0, 1fr);
+  }
+
+  .app-shell > .sidebar,
+  .app-shell > .sidebar.is-open {
+    width: auto;
+    height: 100vh;
+    position: sticky;
+    inset: 0 auto auto 0;
+    z-index: 24;
+    padding: 12px 8px 10px;
+    transform: none;
+    transition: none;
+  }
+
+  .app-shell > .sidebar .brand-lockup {
+    min-height: 54px;
+    justify-content: center;
+    margin-bottom: 12px;
+    padding: 7px;
+    border-left-width: 1px;
+    border-bottom: 3px solid var(--brand-yellow);
+  }
+
+  .app-shell > .sidebar .brand-lockup > div,
+  .app-shell > .sidebar .nav-item > span,
+  .app-shell > .sidebar .sidebar-status small,
+  .app-shell > .sidebar .sidebar-culture-mark {
+    display: none;
+  }
+
+  .app-shell > .sidebar .nav-item {
+    height: 48px;
+    position: relative;
+    grid-template-columns: 1fr;
+    justify-items: center;
+    padding: 0;
+  }
+
+  .app-shell > .sidebar .nav-item > b {
+    min-width: 18px;
+    height: 18px;
+    position: absolute;
+    right: 2px;
+    top: 2px;
+    padding: 0 4px;
+    font-size: 10px;
+  }
+
+  .app-shell > .sidebar .nav-item.is-active {
+    box-shadow: inset 0 -3px var(--brand-yellow) !important;
+  }
+
+  .app-shell > .sidebar .sidebar-status {
+    justify-items: center;
+    padding-inline: 0;
+  }
+
+  .app-shell > .sidebar .sidebar-status > span:first-child {
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+    font-size: 10px;
+    line-height: 1.2;
+    text-align: center;
+  }
+
+  .app-shell > .sidebar .sidebar-status > span:first-child svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .app-shell > .workspace > .topbar {
+    min-height: 60px;
+    gap: 8px;
+    padding: 7px 10px;
+  }
+
+  .app-shell > .workspace > .topbar > div:first-of-type {
+    min-width: 0;
+  }
+
+  .app-shell > .workspace > .topbar h1 {
+    overflow: hidden;
+    font-size: 18px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .app-shell > .workspace > .topbar .beijing-clock {
+    min-width: 116px;
+  }
+
+  .app-shell > .workspace > .topbar .topbar-actions {
+    gap: 6px;
+  }
+
+  .app-shell > .workspace > .topbar .reset-button {
+    width: 40px;
+    padding: 0;
+    font-size: 0;
+  }
+
+  .app-shell > .sidebar .sidebar-close,
+  .app-shell > .workspace .menu-button,
+  .app-shell > .nav-backdrop {
+    display: none !important;
+  }
+}
+
+@media (max-width: 767px) {
+  .app-shell,
+  .app-shell > .workspace,
+  .app-shell > .workspace > .topbar,
+  .app-shell .main-content {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .app-shell > .workspace > .topbar {
+    gap: 6px;
+    padding-inline: 8px;
+  }
+
+  .app-shell > .workspace > .topbar > div:first-of-type {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .app-shell > .workspace > .topbar h1 {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .app-shell > .workspace > .topbar .beijing-clock {
+    min-width: 64px;
+    flex: 0 0 auto;
+  }
+
+  .app-shell > .workspace > .topbar .topbar-actions {
+    margin-left: 0;
+    flex: 0 0 auto;
+  }
+}

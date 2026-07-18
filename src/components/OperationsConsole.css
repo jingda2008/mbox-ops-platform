@@ -139,3 +139,83 @@
   .weekday-control > div { height: auto; min-height: 34px; flex-wrap: wrap; }
   .minimum-rule-row > .icon-button { justify-self: end; }
 }
+
+/* Topbar identity belongs to the console, not to a lazy-loaded workspace. */
+.app-shell > .workspace > .topbar > .workstation-badge {
+  min-width: 108px;
+  display: grid;
+  gap: 2px;
+  padding: 5px 10px;
+  border-left: 1px solid var(--line);
+}
+
+.app-shell > .workspace > .topbar > .workstation-badge span {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-shell > .workspace > .topbar > .workstation-badge strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.minimum-spend-status small,
+.sales-attribution-control label span,
+.minimum-spend-reminder small,
+.minimum-rule-row > label > span,
+.weekday-control > span,
+.minimum-rule-enabled > span,
+.weekday-control label {
+  font-size: 10px;
+}
+
+@media (min-width: 768px) and (max-width: 1023px) {
+  .table-walkin-toolbar {
+    grid-template-columns: minmax(220px, 1fr) minmax(110px, .45fr);
+  }
+
+  .table-business-toolbar {
+    grid-template-columns: minmax(240px, .8fr) minmax(250px, 1fr);
+  }
+
+  .legacy-handover-toolbar,
+  .table-combination-toolbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .active-table-links {
+    grid-column: 1 / -1;
+  }
+
+  .app-shell > .workspace > .topbar > .workstation-badge {
+    min-width: 92px;
+    max-width: 126px;
+    padding-inline: 8px;
+  }
+}
+
+@media (max-width: 767px) {
+  .app-shell > .workspace > .topbar > .workstation-badge {
+    display: none;
+  }
+}
+
+@media (max-width: 620px) {
+  .table-walkin-toolbar,
+  .table-business-toolbar,
+  .legacy-handover-toolbar,
+  .table-combination-toolbar,
+  .table-close-toolbar {
+    margin-inline: 8px;
+  }
+
+  .active-table-links > div {
+    width: 100%;
+    min-width: 0;
+  }
+}

@@ -277,6 +277,7 @@ export default function App() {
   return (
     <div
       className={offlineStatus.online ? 'app-connectivity-root' : 'app-connectivity-root is-offline'}
+      data-voice-scope="staff"
       onClickCapture={blockRestrictedOfflineAction}
     >
       <ConnectivityBanner status={offlineStatus} onRetry={refresh} />
@@ -304,7 +305,8 @@ export default function App() {
         </div>
       )}
       <LazyWorkspace>
-        {staffMode === 'voice' ? (
+        <OperationsConsole data={data} onRefresh={refresh} navigationRequest={navigationRequest} />
+        {staffMode === 'voice' && (
           <VoiceCommandMode
             data={data}
             employeeId={currentActorId}
@@ -312,11 +314,8 @@ export default function App() {
             onNavigate={(target) => {
               nextNavigationRequestId.current += 1
               setNavigationRequest({ id: nextNavigationRequestId.current, target })
-              setStaffMode('workspace')
             }}
           />
-        ) : (
-          <OperationsConsole data={data} onRefresh={refresh} navigationRequest={navigationRequest} />
         )}
       </LazyWorkspace>
     </div>

@@ -89,14 +89,14 @@ export function BenefitConfiguration({ data, onRefresh, onNotice }: BenefitConfi
         <table className="benefit-config-table template-table">
           <thead><tr><th>启用</th><th>权益名称</th><th>类型</th><th>关联商品</th><th>面值/元</th><th>成本/元</th><th>有效天数</th><th>会员持有上限</th></tr></thead>
           <tbody>{templates.map((template, index) => <tr key={template.id}>
-            <td><label className="switch"><input type="checkbox" checked={template.enabled} onChange={(event) => updateTemplate(index, { enabled: event.target.checked })} /><span /></label></td>
-            <td><input value={template.name} onChange={(event) => updateTemplate(index, { name: event.target.value })} /></td>
-            <td><select value={template.kind} onChange={(event) => updateTemplate(index, { kind: event.target.value as BenefitKind, productId: event.target.value === 'product_gift' ? template.productId ?? data.products[0]?.id ?? null : null })}>{Object.entries(kindLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></td>
-            <td><select value={template.productId ?? ''} disabled={template.kind !== 'product_gift'} onChange={(event) => updateTemplate(index, { productId: event.target.value || null })}><option value="">无</option>{data.products.filter((item) => item.enabled).map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></td>
-            <td><input type="number" min={0} step="0.01" value={template.valueAmount / 100} onChange={(event) => updateTemplate(index, { valueAmount: Math.round(Number(event.target.value) * 100) })} /></td>
-            <td><input type="number" min={0} step="0.01" value={template.costAmount / 100} onChange={(event) => updateTemplate(index, { costAmount: Math.round(Number(event.target.value) * 100) })} /></td>
-            <td><input type="number" min={1} max={730} value={template.validityDays} onChange={(event) => updateTemplate(index, { validityDays: Number(event.target.value) })} /></td>
-            <td><input type="number" min={1} max={100} value={template.maxPerMember} onChange={(event) => updateTemplate(index, { maxPerMember: Number(event.target.value) })} /></td>
+            <td><label className="switch"><input aria-label={`${template.name} 启用`} type="checkbox" checked={template.enabled} onChange={(event) => updateTemplate(index, { enabled: event.target.checked })} /><span /></label></td>
+            <td><input aria-label={`${template.name} 权益名称`} value={template.name} onChange={(event) => updateTemplate(index, { name: event.target.value })} /></td>
+            <td><select aria-label={`${template.name} 类型`} value={template.kind} onChange={(event) => updateTemplate(index, { kind: event.target.value as BenefitKind, productId: event.target.value === 'product_gift' ? template.productId ?? data.products[0]?.id ?? null : null })}>{Object.entries(kindLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></td>
+            <td><select aria-label={`${template.name} 关联商品`} value={template.productId ?? ''} disabled={template.kind !== 'product_gift'} onChange={(event) => updateTemplate(index, { productId: event.target.value || null })}><option value="">无</option>{data.products.filter((item) => item.enabled).map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></td>
+            <td><input aria-label={`${template.name} 面值/元`} type="number" min={0} step="0.01" value={template.valueAmount / 100} onChange={(event) => updateTemplate(index, { valueAmount: Math.round(Number(event.target.value) * 100) })} /></td>
+            <td><input aria-label={`${template.name} 成本/元`} type="number" min={0} step="0.01" value={template.costAmount / 100} onChange={(event) => updateTemplate(index, { costAmount: Math.round(Number(event.target.value) * 100) })} /></td>
+            <td><input aria-label={`${template.name} 有效天数`} type="number" min={1} max={730} value={template.validityDays} onChange={(event) => updateTemplate(index, { validityDays: Number(event.target.value) })} /></td>
+            <td><input aria-label={`${template.name} 会员持有上限`} type="number" min={1} max={100} value={template.maxPerMember} onChange={(event) => updateTemplate(index, { maxPerMember: Number(event.target.value) })} /></td>
           </tr>)}</tbody>
         </table>
       </div>
@@ -104,14 +104,17 @@ export function BenefitConfiguration({ data, onRefresh, onNotice }: BenefitConfi
       <div className="benefit-config-table-wrap policy-table-wrap">
         <table className="benefit-config-table policy-table">
           <thead><tr><th>岗位</th><th>可直接发放权益</th><th>单次成本/元</th><th>每日成本/元</th><th>可审批</th><th>可发活动</th></tr></thead>
-          <tbody>{policies.map((policy, index) => <tr key={policy.id}>
-            <td><strong>{data.config.roles.find((role) => role.id === policy.roleId)?.name ?? policy.roleId}</strong></td>
+          <tbody>{policies.map((policy, index) => {
+            const roleName = data.config.roles.find((role) => role.id === policy.roleId)?.name ?? policy.roleId
+            return <tr key={policy.id}>
+            <td><strong>{roleName}</strong></td>
             <td><div className="policy-template-options">{templates.map((template) => <label key={template.id}><input type="checkbox" checked={policy.templateIds.includes(template.id)} onChange={(event) => updatePolicy(index, { templateIds: event.target.checked ? [...policy.templateIds, template.id] : policy.templateIds.filter((id) => id !== template.id) })} />{template.name}</label>)}</div></td>
-            <td><input type="number" min={0} step="0.01" value={policy.maxCostPerGrantAmount / 100} onChange={(event) => updatePolicy(index, { maxCostPerGrantAmount: Math.round(Number(event.target.value) * 100) })} /></td>
-            <td><input type="number" min={0} step="0.01" value={policy.maxDailyCostAmount / 100} onChange={(event) => updatePolicy(index, { maxDailyCostAmount: Math.round(Number(event.target.value) * 100) })} /></td>
-            <td><label className="switch"><input type="checkbox" checked={policy.canApprove} onChange={(event) => updatePolicy(index, { canApprove: event.target.checked })} /><span /></label></td>
-            <td><label className="switch"><input type="checkbox" checked={policy.canLaunchCampaign} onChange={(event) => updatePolicy(index, { canLaunchCampaign: event.target.checked })} /><span /></label></td>
-          </tr>)}</tbody>
+            <td><input aria-label={`${roleName} 单次成本/元`} type="number" min={0} step="0.01" value={policy.maxCostPerGrantAmount / 100} onChange={(event) => updatePolicy(index, { maxCostPerGrantAmount: Math.round(Number(event.target.value) * 100) })} /></td>
+            <td><input aria-label={`${roleName} 每日成本/元`} type="number" min={0} step="0.01" value={policy.maxDailyCostAmount / 100} onChange={(event) => updatePolicy(index, { maxDailyCostAmount: Math.round(Number(event.target.value) * 100) })} /></td>
+            <td><label className="switch"><input aria-label={`${roleName} 可审批`} type="checkbox" checked={policy.canApprove} onChange={(event) => updatePolicy(index, { canApprove: event.target.checked })} /><span /></label></td>
+            <td><label className="switch"><input aria-label={`${roleName} 可发活动`} type="checkbox" checked={policy.canLaunchCampaign} onChange={(event) => updatePolicy(index, { canLaunchCampaign: event.target.checked })} /><span /></label></td>
+          </tr>
+          })}</tbody>
         </table>
       </div>
     </div>

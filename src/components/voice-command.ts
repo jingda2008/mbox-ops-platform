@@ -1,5 +1,6 @@
 import type { RoleHomeNavigationId } from './role-access'
 import type { OperationsConsoleView } from './OperationsConsole'
+import type { DutyManagerRisk } from '../shared/assistant-contracts'
 
 export type VoiceCommandResolution =
   | { kind: 'ready'; target: OperationsConsoleView; label: string; summary: string; protectedActionRequested: boolean }
@@ -32,6 +33,21 @@ const commandRoutes: readonly CommandRoute[] = [
     actionKeywords: ['开台', '翻台', '结台', '换桌', '转桌', '合台', '加桌'],
   },
 ]
+
+const dutyRiskTargets: Record<DutyManagerRisk['category'], OperationsConsoleView> = {
+  system: 'home',
+  service: 'tasks',
+  fulfillment: 'commerce',
+  staffing: 'live',
+  sop: 'config',
+  approval: 'config',
+  reservation: 'reservations',
+  hardware: 'devices',
+}
+
+export function dutyRiskNavigationTarget(category: DutyManagerRisk['category']) {
+  return dutyRiskTargets[category]
+}
 
 function normalizeCommand(command: string) {
   return command.trim().replace(/[，。！？、,.!?\s]+/g, '')

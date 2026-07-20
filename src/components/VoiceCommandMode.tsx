@@ -46,7 +46,7 @@ import {
   type VoicePagePlan,
   type VoicePageStateSnapshot,
 } from './voice-page-controls'
-import { resolveVoiceCommand, voiceSuggestionsForNavigation, type VoiceCommandResolution } from './voice-command'
+import { dutyRiskNavigationTarget, resolveVoiceCommand, voiceSuggestionsForNavigation, type VoiceCommandResolution } from './voice-command'
 import {
   DeterministicVoiceCommandPlanner,
   createModelVoiceCommandPlan,
@@ -424,6 +424,11 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
     } finally {
       setDutyActionBusy(null)
     }
+  }
+
+  function openDutyRisk(risk: DutyManagerRisk) {
+    onNavigate(dutyRiskNavigationTarget(risk.category))
+    onReturn()
   }
 
   function announce(message: string, tone: ExecutionTone = 'success') {
@@ -1152,12 +1157,13 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
               <p>{dutyBriefing.headline}</p>
               {dutyBriefing.risks.length > 0 && <div className="duty-risk-list">
                 {dutyBriefing.risks.slice(0, 5).map((risk) => <article className={`duty-risk-item is-${risk.incidentStatus}`} key={risk.id}>
-                  <button className="duty-risk-main" onClick={() => void submitAssistantMessage(`${risk.title}，请根据我的权限协助处理`)}>
+                  <button className="duty-risk-main" aria-label={`去处理：${risk.title}`} onClick={() => openDutyRisk(risk)}>
                     <i className={`is-${risk.severity}`} />
                     <span>
                       <strong>{risk.title}</strong>
                       <small>{risk.incidentStatus === 'acknowledged' ? `${risk.handledByName ?? '现场伙伴'}已接管 · ` : ''}{risk.detail}</small>
                     </span>
+                    <em>去处理</em>
                     <ChevronRight size={15} />
                   </button>
                   {(dutyBriefing.actions.canAcknowledge || dutyBriefing.actions.canManage) && <div className="duty-risk-actions">

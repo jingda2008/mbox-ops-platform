@@ -61,11 +61,52 @@ test.describe.serial('跨客户端经营流转', () => {
     await staffPage.getByTitle('打开导航').click()
     await staffPage.locator('.sidebar nav').getByRole('button', { name: '预约' }).click()
     await expect(staffPage.getByRole('heading', { name: '预约接待台' })).toBeVisible()
-    await staffPage.getByRole('button', { name: '未来7天' }).click()
+    await staffPage.getByRole('button', { name: '未来7个营业日' }).click()
     await staffPage.getByLabel('搜索预约').fill(customerName)
     await expect(staffPage.getByText(customerName)).toBeVisible()
 
     await staffContext.close()
     await guestContext.close()
+  })
+
+  test('李艳可从巡场预约警报直接进入本营业日预约并完成确认', async ({ page }) => {
+    const customerName = `巡场预约${Date.now().toString().slice(-6)}`
+    const actorHeaders = {
+      'x-mbox-actor-id': 'emp-chen',
+      'x-mbox-store-id': 'mbox-lujiazui',
+    }
+    const bootstrap = await page.request.get('/api/bootstrap', { headers: actorHeaders })
+    expect(bootstrap.ok()).toBeTruthy()
+    const businessDate = String((await bootstrap.json()).store.businessDate)
+    const created = await page.request.post('/api/reservations', {
+      headers: actorHeaders,
+      data: {
+        customerReference: customerName,
+        customerName,
+        phone: '13800138000',
+        sourceCode: 'phone',
+        partySize: 4,
+        scheduledAt: `${businessDate}T20:30:00+08:00`,
+        depositRequiredAmount: 0,
+        depositCurrency: 'CNY',
+        salesEmployeeId: 'emp-chen',
+        idempotencyKey: `e2e-duty-reservation-${crypto.randomUUID()}`,
+      },
+    })
+    expect(created.status()).toBe(201)
+
+    await useStaffIdentity(page, 'emp-chen', '李艳')
+    await page.goto('/')
+    await page.getByRole('button', { name: 'AI值班经理' }).click()
+    await expect(page.getByRole('button', { name: `去处理：${customerName}的今日预约待确认` })).toBeVisible()
+    await page.getByRole('button', { name: `去处理：${customerName}的今日预约待确认` }).click()
+
+    await expect(page.getByRole('heading', { name: '预约接待台' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '本营业日' })).toHaveClass(/is-active/)
+    const reservation = page.locator('.reservation-row').filter({ hasText: customerName })
+    await expect(reservation).toBeVisible()
+    await reservation.getByRole('button', { name: '确认预约' }).click()
+    await expect(page.getByRole('status')).toContainText('预约已确认')
+    await expect(reservation).toContainText('已确认')
   })
 })

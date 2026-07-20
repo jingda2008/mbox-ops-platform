@@ -48,7 +48,7 @@ import type {
   ReservationOccasionCode,
   ReservationStatus,
 } from '../shared/reservation-contracts'
-import { CHINA_TIME_ZONE, chinaDateTimeLocalValue, chinaLocalDateTimeToIso, chinaStartOfDay, formatChinaDateTime, formatChinaTime } from '../shared/china-time'
+import { CHINA_TIME_ZONE, chinaBusinessDateKey, chinaDateTimeLocalValue, chinaLocalDateTimeToIso, formatChinaDateTime, formatChinaTime, shiftDateKey } from '../shared/china-time'
 import './ReservationView.css'
 import { WaitlistPanel } from './WaitlistPanel'
 import { useRevealPanelScroll } from './use-reveal-panel-scroll'
@@ -243,6 +243,7 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
   const activeShift = data.shiftAssignments.find((shift) =>
     shift.employeeId === actorId && shift.businessDate === data.store.businessDate && shift.status === 'active',
   )
+  const businessDayRolloverHour = data.tableOperationsConfig?.businessDayRolloverHour ?? 6
   const role = data.config.roles.find((item) => item.id === (activeShift?.roleId ?? employee?.roleId))
   const permissions = new Set<StaffPermissionId>(role?.permissionIds ?? [])
   const salesEmployees = data.employees.filter((item) => item.status === 'active' && item.online)
@@ -303,7 +304,12 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
   const reservations = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase('zh-CN')
     return response.reservations
-      .filter((reservation) => inDateRange(reservation.scheduledAt, dateRange))
+      .filter((reservation) => reservationInBusinessDateRange(
+        reservation.scheduledAt,
+        dateRange,
+        data.store.businessDate,
+        businessDayRolloverHour,
+      ))
       .filter((reservation) => statusFilter === 'all' || reservation.status === statusFilter)
       .filter((reservation) => !normalizedQuery || [
         reservation.customerName,
@@ -311,18 +317,23 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
         reservation.tableCode ?? '',
       ].some((value) => value.toLocaleLowerCase('zh-CN').includes(normalizedQuery)))
       .toSorted((left, right) => Date.parse(left.scheduledAt) - Date.parse(right.scheduledAt))
-  }, [dateRange, query, response.reservations, statusFilter])
+  }, [businessDayRolloverHour, data.store.businessDate, dateRange, query, response.reservations, statusFilter])
   const salesByReservation = new Map<string, string>()
   for (const record of data.salesAttributionRecords ?? []) {
     if (record.subjectType === 'reservation') salesByReservation.set(record.subjectId, record.salesEmployeeId)
   }
 
   const metrics = useMemo(() => ({
-    today: response.reservations.filter((item) => inDateRange(item.scheduledAt, 'today')).length,
+    today: response.reservations.filter((item) => reservationInBusinessDateRange(
+      item.scheduledAt,
+      'today',
+      data.store.businessDate,
+      businessDayRolloverHour,
+    )).length,
     requested: response.reservations.filter((item) => item.status === 'requested').length,
     arriving: response.reservations.filter((item) => item.status === 'confirmed' && Date.parse(item.scheduledAt) <= Date.now() + 2 * 60 * 60 * 1000).length,
     refunds: response.reservations.filter((item) => ['refund_required', 'refund_processing', 'refund_failed'].includes(item.deposit.status)).length,
-  }), [response.reservations])
+  }), [businessDayRolloverHour, data.store.businessDate, response.reservations])
 
   async function execute(actionKey: string, successMessage: string, action: () => Promise<unknown>) {
     setBusyAction(actionKey)
@@ -581,7 +592,7 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
       <WaitlistPanel areas={data.areas} tables={tables} employees={salesEmployees} canManage={access.manage} />
 
       <section className="reservation-metrics" aria-label="预约概览">
-        <Metric icon={CalendarDays} value={String(metrics.today)} label="今日预约" />
+        <Metric icon={CalendarDays} value={String(metrics.today)} label="本营业日预约" />
         <Metric icon={Clock3} value={String(metrics.requested)} label="待确认" />
         <Metric icon={UserCheck} value={String(metrics.arriving)} label="两小时内待到店" />
         <Metric icon={RotateCcw} value={String(metrics.refunds)} label="定金退款待办" warning={metrics.refunds > 0} />
@@ -658,7 +669,7 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
       <section className="reservation-list-section">
         <div className="reservation-toolbar">
           <div className="reservation-tabs" aria-label="预约日期范围">
-            {([['today', '今日'], ['upcoming', '未来7天'], ['all', '全部']] as const).map(([id, label]) => <button key={id} className={dateRange === id ? 'is-active' : ''} type="button" onClick={() => setDateRange(id)}>{label}</button>)}
+            {([['today', '本营业日'], ['upcoming', '未来7个营业日'], ['all', '全部']] as const).map(([id, label]) => <button key={id} className={dateRange === id ? 'is-active' : ''} type="button" onClick={() => setDateRange(id)}>{label}</button>)}
           </div>
           <label className="reservation-search"><Search size={16} /><input aria-label="搜索预约" placeholder="姓名、客户编号、桌号" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
           <select className="reservation-status-filter" aria-label="预约状态" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}>
@@ -1191,17 +1202,17 @@ function downloadReservationCard(reservation: Reservation, config: ReservationCo
   }, 'image/png')
 }
 
-function inDateRange(value: string, range: DateRange) {
+// oxlint-disable-next-line react/only-export-components -- deterministic business-day boundary is tested independently.
+export function reservationInBusinessDateRange(
+  value: string,
+  range: DateRange,
+  businessDate: string,
+  rolloverHour = 6,
+) {
   if (range === 'all') return true
-  const target = new Date(value)
-  const start = startOfToday()
-  const end = new Date(start)
-  end.setDate(end.getDate() + (range === 'today' ? 1 : 7))
-  return target >= start && target < end
-}
-
-function startOfToday() {
-  return chinaStartOfDay()
+  const targetBusinessDate = chinaBusinessDateKey(value, rolloverHour)
+  if (range === 'today') return targetBusinessDate === businessDate
+  return targetBusinessDate >= businessDate && targetBusinessDate < shiftDateKey(businessDate, 7)
 }
 
 function formatDay(value: string) {

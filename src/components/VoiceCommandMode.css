@@ -77,12 +77,13 @@
 .duty-risk-list { display: grid; gap: 4px; }
 .duty-risk-item { display: grid; border: 1px solid #d7dcd6; border-radius: 5px; background: #fff; overflow: hidden; }
 .duty-risk-item.is-acknowledged { border-color: #a9c8b1; background: #f8fcf8; }
-.duty-risk-main { min-height: 44px; display: grid; grid-template-columns: 6px minmax(0, 1fr) 15px; align-items: center; gap: 7px; padding: 5px 7px; border: 0 !important; border-radius: 0 !important; background: transparent; text-align: left; }
+.duty-risk-main { min-height: 44px; display: grid; grid-template-columns: 6px minmax(0, 1fr) auto 15px; align-items: center; gap: 7px; padding: 5px 7px; border: 0 !important; border-radius: 0 !important; background: transparent; text-align: left; }
 .duty-risk-main > i { width: 6px; height: 28px; border-radius: 2px; background: #879089; }
 .duty-risk-main > i.is-critical { background: var(--danger); }
 .duty-risk-main > i.is-high { background: #d07a19; }
 .duty-risk-main > i.is-medium { background: #c6a23f; }
 .duty-risk-main > span { min-width: 0; display: grid; gap: 1px; }
+.duty-risk-main > em { color: #27603b; font-size: 9px; font-style: normal; font-weight: 800; white-space: nowrap; }
 .duty-risk-list strong, .duty-risk-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .duty-risk-list strong { font-size: 10px; }
 .duty-risk-list small { color: var(--ink-soft); font-size: 8px; }

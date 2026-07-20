@@ -1,5 +1,18 @@
 import { describe, expect, it, vi } from 'vitest'
-import { startReservationPolling } from './ReservationView'
+import { reservationInBusinessDateRange, startReservationPolling } from './ReservationView'
+
+describe('reservation business-day filtering', () => {
+  it('keeps the prior calendar date visible until the 06:00 Beijing rollover', () => {
+    expect(reservationInBusinessDateRange('2026-07-20T12:00:00+08:00', 'today', '2026-07-20', 6)).toBe(true)
+    expect(reservationInBusinessDateRange('2026-07-21T02:30:00+08:00', 'today', '2026-07-20', 6)).toBe(true)
+    expect(reservationInBusinessDateRange('2026-07-21T06:00:00+08:00', 'today', '2026-07-20', 6)).toBe(false)
+  })
+
+  it('uses business dates for the seven-day range', () => {
+    expect(reservationInBusinessDateRange('2026-07-27T05:59:59+08:00', 'upcoming', '2026-07-20', 6)).toBe(true)
+    expect(reservationInBusinessDateRange('2026-07-27T06:00:00+08:00', 'upcoming', '2026-07-20', 6)).toBe(false)
+  })
+})
 
 describe('reservation polling', () => {
   it('uses self-scheduling list refreshes without overlapping requests', async () => {

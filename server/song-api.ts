@@ -81,6 +81,24 @@ const repertoireSchema = z.object({
   enabled: z.boolean().default(true),
 })
 
+function repertoireKey(title: string, artist: string) {
+  const normalize = (value: string) => value.trim().replace(/\s+/g, ' ').toLocaleLowerCase('zh-CN')
+  return `${normalize(title)}\u0000${normalize(artist)}`
+}
+
+const repertoireImportSchema = z.object({
+  rows: z.array(repertoireSchema).min(1).max(2000),
+}).superRefine(({ rows }, context) => {
+  const seen = new Set<string>()
+  rows.forEach((row, index) => {
+    const key = repertoireKey(row.title, row.artist)
+    if (seen.has(key)) {
+      context.addIssue({ code: 'custom', message: '文件内歌曲名称和原唱不能重复', path: ['rows', index] })
+    }
+    seen.add(key)
+  })
+})
+
 const appearanceSchema = z.object({
   id: z.string().trim().min(1).max(128),
   singerId: z.string().trim().min(1).max(128),
@@ -172,6 +190,76 @@ export function registerSongRoutes(app: FastifyInstance, repository: RuntimeRepo
       return { song, offer }
     })
     return reply.status(201).send(result)
+  })
+
+  app.post<{ Params: { singerId: string } }>('/api/songs/singers/:singerId/repertoire/import', async (request) => {
+    const input = repertoireImportSchema.parse(request.body)
+    return repository.mutate((state) => {
+      requireConfiguredOperation(request, state, 'song.manage')
+      const singer = state.songState.singers.find((item) => item.id === request.params.singerId)
+      if (!singer) throw new Error('歌手不存在')
+
+      const existingByKey = new Map<string, { song: SongCatalogItem; offer: SingerRepertoireEntry }>()
+      for (const offer of state.songState.repertoire.filter((item) => item.singerId === singer.id)) {
+        const song = state.songState.songs.find((item) => item.id === offer.songId)
+        if (!song) continue
+        const key = repertoireKey(song.title, song.artist)
+        const current = existingByKey.get(key)
+        if (!current || offer.enabled) existingByKey.set(key, { song, offer })
+      }
+
+      let created = 0
+      let updated = 0
+      for (const row of input.rows) {
+        const existing = existingByKey.get(repertoireKey(row.title, row.artist))
+        if (existing) {
+          existing.song.title = row.title
+          existing.song.artist = row.artist
+          existing.song.durationSeconds = row.durationSeconds
+          existing.song.active = true
+          existing.offer.priceAmount = row.priceAmount
+          existing.offer.currency = row.currency
+          existing.offer.enabled = row.enabled
+          existing.offer.configVersion += 1
+          updated += 1
+          continue
+        }
+
+        const song: SongCatalogItem = {
+          id: `song_${randomUUID()}`,
+          title: row.title,
+          artist: row.artist,
+          durationSeconds: row.durationSeconds,
+          active: true,
+        }
+        const offer: SingerRepertoireEntry = {
+          id: `repertoire_${randomUUID()}`,
+          singerId: singer.id,
+          songId: song.id,
+          priceAmount: row.priceAmount,
+          currency: row.currency,
+          configVersion: 1,
+          enabled: row.enabled,
+        }
+        state.songState.songs.push(song)
+        state.songState.repertoire.push(offer)
+        existingByKey.set(repertoireKey(row.title, row.artist), { song, offer })
+        created += 1
+      }
+
+      validateSongConfiguration(state.songState)
+      state.revision += 1
+      state.auditEntries.push({
+        id: `audit_${randomUUID()}`,
+        actorId: request.mboxActor!.actorId,
+        action: 'song.repertoire_imported.v1',
+        objectType: 'singer',
+        objectId: singer.id,
+        occurredAt: new Date().toISOString(),
+        details: { singerName: singer.displayName, total: input.rows.length, created, updated },
+      })
+      return { total: input.rows.length, created, updated }
+    })
   })
 
   app.put<{ Params: { entryId: string } }>('/api/songs/repertoire/:entryId', async (request) => {

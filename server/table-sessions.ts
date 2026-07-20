@@ -17,6 +17,8 @@ import type { SongTableSession } from '../src/shared/song-contracts.js'
 export const DEFAULT_TABLE_OPERATIONS_CONFIG: TableOperationsConfig = {
   version: 1,
   updatedAt: '1970-01-01T00:00:00.000Z',
+  automaticBusinessDayRollover: true,
+  businessDayRolloverHour: 6,
   maximumOpenHours: 12,
   reminder: {
     enabled: true,
@@ -65,6 +67,10 @@ function currentConfig(state: RuntimeState) {
   return {
     ...DEFAULT_TABLE_OPERATIONS_CONFIG,
     ...(state.tableOperationsConfig ?? {}),
+    automaticBusinessDayRollover: state.tableOperationsConfig?.automaticBusinessDayRollover
+      ?? DEFAULT_TABLE_OPERATIONS_CONFIG.automaticBusinessDayRollover,
+    businessDayRolloverHour: state.tableOperationsConfig?.businessDayRolloverHour
+      ?? DEFAULT_TABLE_OPERATIONS_CONFIG.businessDayRolloverHour,
     maximumOpenHours: state.tableOperationsConfig?.maximumOpenHours ?? DEFAULT_TABLE_OPERATIONS_CONFIG.maximumOpenHours,
   }
 }

@@ -1,0 +1,44 @@
+{
+  "packageId": "com.superhigh.mbox.ops",
+  "host": "mbox-ops-validation-845187646287.asia-east1.run.app",
+  "name": "M-BOX 现场运营验证版",
+  "launcherName": "M-BOX运营",
+  "display": "standalone",
+  "themeColor": "#111310",
+  "themeColorDark": "#111310",
+  "navigationColor": "#111310",
+  "navigationColorDark": "#111310",
+  "navigationDividerColor": "#d8af4b",
+  "navigationDividerColorDark": "#d8af4b",
+  "backgroundColor": "#f3f4f0",
+  "enableNotifications": true,
+  "startUrl": "/",
+  "iconUrl": "https://mbox-ops-validation-845187646287.asia-east1.run.app/icons/app-icon-512.png",
+  "maskableIconUrl": "https://mbox-ops-validation-845187646287.asia-east1.run.app/icons/app-icon-maskable-512.png",
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "/Users/jingda/.mbox-secrets/android/mbox-ops-validation.p12",
+    "alias": "mbox-ops-validation"
+  },
+  "appVersionCode": 1401,
+  "appVersion": "1.0.0-rc.14-validation.1",
+  "generatorApp": "bubblewrap-cli",
+  "webManifestUrl": "https://mbox-ops-validation-845187646287.asia-east1.run.app/manifest.webmanifest",
+  "fallbackType": "customtabs",
+  "alphaDependencies": {
+    "enabled": false
+  },
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false,
+  "isMetaQuest": false,
+  "minSdkVersion": 26,
+  "orientation": "any",
+  "fingerprints": [
+    {
+      "name": "validation-signing-key",
+      "value": "36:AF:57:C1:00:9D:E0:A1:ED:19:AB:DF:6A:62:86:B3:A9:BA:47:58:63:EF:90:FB:92:41:B0:F4:8F:5C:C7:A3"
+    }
+  ],
+  "additionalTrustedOrigins": [],
+  "retainedBundles": []
+}

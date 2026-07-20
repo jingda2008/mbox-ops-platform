@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  chinaBusinessDateKey,
   chinaDateKey,
   chinaDateTimeLocalValue,
   chinaLocalDateTimeToIso,
@@ -22,5 +23,11 @@ describe('China standard time', () => {
 
   it('creates the Beijing start of day as an absolute instant', () => {
     expect(chinaStartOfDay('2026-07-17T16:30:00.000Z').toISOString()).toBe('2026-07-17T16:00:00.000Z')
+  })
+
+  it('keeps the previous business date until 06:00 Beijing time', () => {
+    expect(chinaBusinessDateKey('2026-07-19T17:30:00.000Z')).toBe('2026-07-19')
+    expect(chinaBusinessDateKey('2026-07-19T22:30:00.000Z')).toBe('2026-07-20')
+    expect(chinaBusinessDateKey('2026-07-20T02:00:00.000Z')).toBe('2026-07-20')
   })
 })

@@ -17,6 +17,7 @@ import { createSeedState } from './seed.js'
 import type { WechatApiSessionRecord } from './wechat-api.js'
 import { registerWechatReservationRoutes } from './wechat-reservation-api.js'
 import { registerBusinessDayRoutes } from './business-day-api.js'
+import { reconcileAutomaticBusinessDay } from './business-day-rollover.js'
 import { registerTableSessionRoutes } from './table-session-api.js'
 
 const WECHAT_TOKEN = 'n'.repeat(43)
@@ -197,6 +198,47 @@ afterEach(async () => {
 })
 
 describe('真实营业夜间全链路仿真', () => {
+  it('北京时间06:00自动切日后仍可补交并复核前一营业日财务', async () => {
+    const { app, repository } = await buildFixture()
+    apps.push(app)
+    const businessDate = repository.state.store.businessDate
+    const followingDate = nextBusinessDate(businessDate)
+    const rolloverAt = new Date(`${followingDate}T06:00:00+08:00`)
+
+    const rollover = await repository.mutate((state) => reconcileAutomaticBusinessDay(state, rolloverAt))
+    expect(rollover.status).toBe('rolled_over')
+    expect(repository.state.store.businessDate).toBe(followingDate)
+
+    const settlement = await app.inject({
+      method: 'GET', url: `/api/business-days/${businessDate}/payment-settlement`,
+      headers: employeeHeaders('emp-cashier', 'cashier'),
+    })
+    expect(settlement.statusCode, settlement.body).toBe(200)
+
+    const handover = await app.inject({
+      method: 'POST', url: `/api/business-days/${businessDate}/cashier-handovers`,
+      headers: employeeHeaders('emp-cashier', 'cashier'),
+      payload: {
+        confirmedActualAmounts: { cash: 0, physical_pos: 0, wechat: 0, alipay: 0, unionpay: 0 },
+        issues: [], deviceId: 'cashier-historical-close', idempotencyKey: 'historical-handover-submit-0001',
+      },
+    })
+    expect(handover.statusCode, handover.body).toBe(201)
+
+    const review = await app.inject({
+      method: 'POST', url: `/api/business-days/${businessDate}/cashier-handovers/${handover.json().id}/review`,
+      headers: employeeHeaders('emp-chen', 'manager'),
+      payload: { decision: 'approve', note: '补核对完成', idempotencyKey: 'historical-handover-review-0001' },
+    })
+    expect(review.statusCode, review.body).toBe(200)
+    expect(review.json().status).toBe('closed')
+    expect(repository.state.store.businessDate).toBe(followingDate)
+    expect(repository.state.auditEntries).toContainEqual(expect.objectContaining({
+      action: 'cashier_handover.approved_and_closed.v1',
+      objectId: handover.json().id,
+    }))
+  })
+
   it('手机预约到店入座后应真正开台，并让生日执行任务保留预约关联', async () => {
     const { app, repository, now } = await buildFixture()
     apps.push(app)
@@ -625,12 +667,14 @@ describe('真实营业夜间全链路仿真', () => {
     expect(state.paymentDomain.refunds).toEqual([expect.objectContaining({ status: 'succeeded' })])
   })
 
-  it('闭店时应返回所有未完成事项并阻止营业日切换', async () => {
+  it('闭店时自动归档未完成现场事项，保留原状态并以干净现场进入下一营业日', async () => {
     const { app, repository } = await buildFixture()
     apps.push(app)
+    const businessDate = repository.state.store.businessDate
+    const followingDate = nextBusinessDate(businessDate)
     await createQuickOrder(app, 'table-l01', 'product-fruit', 1, 'night-sim-unfinished-order-0001')
-    await repository.mutate((state) => {
-      createServiceTask(state, {
+    const unfinishedTask = await repository.mutate((state) => {
+      const task = createServiceTask(state, {
         tableCode: 'L01',
         serviceTypeId: 'complaint',
         source: 'employee',
@@ -638,28 +682,69 @@ describe('真实营业夜间全链路仿真', () => {
         idempotencyKey: 'night-sim-unfinished-complaint-0001',
         requestedBy: 'emp-mia',
       })
+      state.dutyManagerIncidents = [{
+        id: 'incident-night-close', riskId: 'risk-night-close', cycle: 1, businessDate,
+        severity: 'high', category: 'service', title: '闭店前服务未完成', detail: '用于验证日结归档',
+        tableCode: 'L01', recommendedCommand: '打开任务', status: 'acknowledged',
+        firstDetectedAt: new Date().toISOString(), lastDetectedAt: new Date().toISOString(), observationCount: 1,
+        acknowledgedAt: new Date().toISOString(), acknowledgedBy: 'emp-chen', deferredAt: null, deferredBy: null,
+        deferredUntil: null, dismissedAt: null, dismissedBy: null, dismissedReason: null,
+        resolvedAt: null, resolvedBy: null, resolution: null,
+      }]
+      return task
     })
 
-    const response = await app.inject({
+    const blocked = await app.inject({
       method: 'POST',
-      url: `/api/business-days/${repository.state.store.businessDate}/close`,
+      url: `/api/business-days/${businessDate}/close`,
       headers: employeeHeaders('emp-chen', 'manager'),
       payload: {
-        nextBusinessDate: nextBusinessDate(repository.state.store.businessDate),
+        nextBusinessDate: followingDate,
         idempotencyKey: 'night-sim-close-business-day-0001',
       },
     })
+    expect(blocked.statusCode, blocked.body).toBe(409)
+    expect(blocked.json().blockers).toEqual([
+      expect.objectContaining({ kind: 'cashier_handover_missing' }),
+    ])
+    expect((await repository.read()).tasks.find((task) => task.id === unfinishedTask.id)?.archivedAt).toBeNull()
 
-    expect(response.statusCode, response.body).toBe(409)
-    expect(response.json()).toMatchObject({
-      code: 'NIGHT_CLOSE_BLOCKED',
-      businessDate: repository.state.store.businessDate,
+    const handover = await app.inject({
+      method: 'POST', url: `/api/business-days/${businessDate}/cashier-handovers`,
+      headers: employeeHeaders('emp-cashier', 'cashier'),
+      payload: {
+        confirmedActualAmounts: { cash: 0, physical_pos: 0, wechat: 0, alipay: 0, unionpay: 0 },
+        issues: [], deviceId: 'cashier-night-close', idempotencyKey: 'night-sim-archive-handover-0001',
+      },
     })
-    expect(response.json().blockers).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 'open_service_task' }),
-      expect.objectContaining({ kind: 'undelivered_kds' }),
-      expect.objectContaining({ kind: 'open_table_session' }),
-    ]))
+    expect(handover.statusCode, handover.body).toBe(201)
+    const review = await app.inject({
+      method: 'POST', url: `/api/business-days/${businessDate}/cashier-handovers/${handover.json().id}/review`,
+      headers: employeeHeaders('emp-chen', 'manager'),
+      payload: { decision: 'approve', note: '账务核对完成', idempotencyKey: 'night-sim-archive-review-0001' },
+    })
+    expect(review.statusCode, review.body).toBe(200)
+    const response = await app.inject({
+      method: 'POST', url: `/api/business-days/${businessDate}/close`,
+      headers: employeeHeaders('emp-chen', 'manager'),
+      payload: { nextBusinessDate: followingDate, idempotencyKey: 'night-sim-close-business-day-0001' },
+    })
+    expect(response.statusCode, response.body).toBe(200)
+
+    const state = await repository.read()
+    expect(state.store.businessDate).toBe(followingDate)
+    expect(state.tasks.find((task) => task.id === unfinishedTask.id)).toMatchObject({
+      status: 'cancelled', archivedFromStatus: 'pending', archiveOutcome: 'unresolved',
+      resolution: '营业日结束时需求仍未完成',
+    })
+    expect(state.orderDomain.kdsTasks.every((task) => task.exceptionEvents?.some((event) => (
+      event.type === 'manager_disposition' && event.managerDisposition === 'cancelled'
+    )))).toBe(true)
+    expect(state.songState.tableSessions.every((session) => session.status === 'closed')).toBe(true)
+    expect(state.tables.every((table) => !['occupied', 'reserved'].includes(table.status))).toBe(true)
+    expect(state.dutyManagerIncidents?.every((incident) => incident.status === 'resolved')).toBe(true)
+    expect(state.auditEntries.find((entry) => entry.action === 'business_day.closed.v1')?.details.archiveSummary)
+      .toMatchObject({ serviceTasks: expect.any(Number), kdsTasks: expect.any(Number), dutyIncidents: 1 })
   })
 
   it('所有阻断项清零后经理可日结，生成次日班次且重放幂等', async () => {

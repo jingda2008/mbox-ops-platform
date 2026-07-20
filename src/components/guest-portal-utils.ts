@@ -94,6 +94,11 @@ export function resolveGuestStage(schedule: GuestSessionResponse['stageSchedule'
   return { mode: ordered.length > 0 ? 'finished' as const : 'idle' as const, current: null, next: null, countdownMs: 0 }
 }
 
+export function guestStageIsBeforeFirstSet(schedule: GuestSessionResponse['stageSchedule'], now: number) {
+  if (schedule.length === 0) return false
+  return now < Math.min(...schedule.map((appearance) => Date.parse(appearance.startsAt)))
+}
+
 export function formatGuestCountdown(durationMs: number) {
   const totalSeconds = Math.max(0, Math.ceil(durationMs / 1000))
   const hours = Math.floor(totalSeconds / 3600)

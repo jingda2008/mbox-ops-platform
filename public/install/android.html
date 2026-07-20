@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#111310" />
+    <meta name="format-detection" content="telephone=no" />
+    <title>M-BOX Android 验证版下载</title>
+    <style>
+      :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif; background: #111310; color: #f7f5ef; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100dvh; background: #111310; }
+      main { width: min(100%, 520px); margin: 0 auto; padding: max(28px, env(safe-area-inset-top)) 20px max(32px, env(safe-area-inset-bottom)); }
+      header { display: flex; align-items: center; gap: 14px; padding-bottom: 24px; border-bottom: 1px solid #353732; }
+      .mark { width: 56px; height: 56px; display: grid; place-items: center; border: 1px solid #d8b64c; border-radius: 8px; background: #d8b64c; color: #111310; font-size: 30px; font-weight: 850; }
+      .brand { margin: 0; font-size: 22px; line-height: 1.2; letter-spacing: 0; }
+      .eyebrow { margin: 5px 0 0; color: #a8aca5; font-size: 13px; }
+      .intro { padding: 28px 0 18px; }
+      h1 { margin: 0; font-size: 30px; line-height: 1.2; letter-spacing: 0; }
+      .intro p { margin: 12px 0 0; color: #c5c7c1; font-size: 16px; line-height: 1.7; }
+      .release { display: flex; justify-content: space-between; gap: 14px; margin: 0 0 18px; padding: 12px 0; border-top: 1px solid #353732; border-bottom: 1px solid #353732; color: #aeb1aa; font-size: 13px; }
+      .release strong { color: #f7f5ef; font-weight: 650; }
+      .actions { display: grid; gap: 12px; }
+      .button { min-height: 54px; display: flex; align-items: center; justify-content: center; gap: 10px; border: 1px solid #d8b64c; border-radius: 8px; padding: 14px 18px; color: #111310; background: #d8b64c; text-decoration: none; font-weight: 750; font-size: 17px; -webkit-tap-highlight-color: transparent; }
+      .button:active { transform: scale(.985); filter: brightness(.92); }
+      .button.secondary { color: #f7f5ef; background: #1a1c19; border-color: #4b4e48; }
+      .note { margin-top: 14px; color: #8f938c; font-size: 13px; line-height: 1.6; }
+      ol { list-style: none; margin: 28px 0 0; padding: 0; border-top: 1px solid #353732; }
+      li { display: grid; grid-template-columns: 38px 1fr; gap: 12px; padding: 18px 0; border-bottom: 1px solid #353732; }
+      .step { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid #d8b64c; border-radius: 50%; color: #d8b64c; font-weight: 750; }
+      h2 { margin: 1px 0 5px; font-size: 16px; letter-spacing: 0; }
+      li p { margin: 0; color: #aeb1aa; font-size: 14px; line-height: 1.6; }
+      .warning { margin-top: 22px; padding: 15px; border-left: 3px solid #d8b64c; background: #191b18; color: #c9cbc5; font-size: 13px; line-height: 1.65; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div class="mark" aria-hidden="true">M</div>
+        <div>
+          <p class="brand">M-BOX 现场运营</p>
+          <p class="eyebrow">LUJIAZUI · ANDROID 验证版</p>
+        </div>
+      </header>
+      <section class="intro">
+        <h1>下载员工端安装包</h1>
+        <p>适用于门店 Android 手机和平板，安装后全屏进入现场运营系统。</p>
+      </section>
+      <div class="release">
+        <span>版本 <strong>rc.14-validation.1</strong></span>
+        <span>Android 8.0+</span>
+      </div>
+      <div class="actions">
+        <a class="button" href="/downloads/MBOX-Ops-Validation-latest.apk">下载 Android 安装包</a>
+        <a class="button secondary" href="/">先在浏览器打开系统</a>
+      </div>
+      <p class="note">安装包约 1.1MB。请只从本页面更新，避免不同签名版本覆盖失败。</p>
+      <ol>
+        <li><span class="step">1</span><div><h2>下载安装包</h2><p>点击上方按钮，浏览器提示时选择继续下载。</p></div></li>
+        <li><span class="step">2</span><div><h2>允许本次安装</h2><p>首次侧载时，按系统提示允许当前浏览器安装未知应用。</p></div></li>
+        <li><span class="step">3</span><div><h2>开始值班</h2><p>安装完成后点击 M-BOX运营 图标，输入门店口令和员工 PIN。</p></div></li>
+      </ol>
+      <div class="warning">这是门店验证版，当前仍使用验证环境和模拟支付。正式商用前将通过受控应用分发或应用市场发布。</div>
+    </main>
+  </body>
+</html>

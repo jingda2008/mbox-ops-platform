@@ -1,10 +1,12 @@
-import { Banknote, CalendarDays, CheckCircle2, Clock3, Copy, Image, ListChecks, ListMusic, Mic2, Music2, Play, Plus, RotateCcw, Save, UserRound, XCircle } from 'lucide-react'
+import { Banknote, CalendarDays, CheckCircle2, Clock3, Copy, Download, FileUp, Image, ListChecks, ListMusic, Mic2, Music2, Play, Plus, RotateCcw, Save, Search, UserRound, XCircle } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { actOnSongRequest, createSinger, createSingerRepertoire, reportSongOnsiteCollection, submitStaffSongRequest, updatePerformanceSession, updateSingerProfile, updateSingerRepertoire } from '../api'
+import { actOnSongRequest, createSinger, createSingerRepertoire, importSingerRepertoire, reportSongOnsiteCollection, submitStaffSongRequest, updatePerformanceSession, updateSingerProfile, updateSingerRepertoire } from '../api'
 import type { BootstrapResponse } from '../shared/contracts'
-import type { PerformanceSession, PerformanceSessionStatus, RepertoireWriteInput, Singer, SingerProfileWriteInput, SingerRepertoireEntry, SongCatalogItem, SongRequest, SongRequestStatus } from '../shared/song-contracts'
+import type { PerformanceSession, PerformanceSessionStatus, RepertoireImportResult, RepertoireWriteInput, Singer, SingerProfileWriteInput, SingerRepertoireEntry, SongCatalogItem, SongRequest, SongRequestStatus } from '../shared/song-contracts'
 import { chinaDateTimeLocalValue, chinaLocalDateTimeToIso, formatChinaTime } from '../shared/china-time'
 import { moveLocalDatetimeToBusinessDate } from './performance-schedule'
+import { downloadRepertoireTemplate, parseRepertoireFile, type RepertoireImportPreview } from './repertoire-file'
+import { useRevealPanelScroll } from './use-reveal-panel-scroll'
 import './SongCenterView.css'
 
 interface SongCenterViewProps {
@@ -13,7 +15,7 @@ interface SongCenterViewProps {
   onNotice: (message: string) => void
 }
 
-type SongOperationRunner = (operation: () => Promise<unknown>, success: string) => Promise<boolean>
+type SongOperationRunner = (operation: () => Promise<unknown>, success: string | ((result: unknown) => string)) => Promise<boolean>
 
 export function SongCenterView({ data, onRefresh, onNotice }: SongCenterViewProps) {
   const canManage = data.viewer?.permissionIds.includes('song.manage') ?? false
@@ -29,16 +31,25 @@ export function SongCenterView({ data, onRefresh, onNotice }: SongCenterViewProp
   const [customerNote, setCustomerNote] = useState('')
   const [references, setReferences] = useState<Record<string, string>>({})
   const [collectionChannels, setCollectionChannels] = useState<Record<string, 'cash' | 'physical_pos'>>({})
+  const [songSearch, setSongSearch] = useState('')
   const [busy, setBusy] = useState(false)
 
-  const effectiveSongId = offers.some((item) => item.songId === songId) ? songId : offers[0]?.songId ?? ''
-  const selectedOffer = offers.find((item) => item.songId === effectiveSongId)
+  const assistedOffers = useMemo(() => {
+    const keyword = songSearch.trim().toLocaleLowerCase('zh-CN')
+    if (!keyword) return offers
+    return offers.filter((offer) => {
+      const song = data.songState.songs.find((item) => item.id === offer.songId)
+      return `${song?.title ?? ''} ${song?.artist ?? ''}`.toLocaleLowerCase('zh-CN').includes(keyword)
+    })
+  }, [data.songState.songs, offers, songSearch])
+  const effectiveSongId = assistedOffers.some((item) => item.songId === songId) ? songId : assistedOffers[0]?.songId ?? ''
+  const selectedOffer = assistedOffers.find((item) => item.songId === effectiveSongId)
 
-  async function run(operation: () => Promise<unknown>, success: string): Promise<boolean> {
+  async function run(operation: () => Promise<unknown>, success: string | ((result: unknown) => string)): Promise<boolean> {
     setBusy(true)
     try {
-      await operation()
-      onNotice(`操作成功：${success}`)
+      const result = await operation()
+      onNotice(`操作成功：${typeof success === 'function' ? success(result) : success}`)
       await onRefresh()
       return true
     } catch (error) {
@@ -94,7 +105,8 @@ export function SongCenterView({ data, onRefresh, onNotice }: SongCenterViewProp
           <div className="form-heading"><Music2 size={19} /><div><strong>员工辅助点歌</strong><span>绑定桌台、歌手排班和价格快照</span></div></div>
           <label><span>营业桌台</span><select value={tableSessionId} onChange={(event) => setTableSessionId(event.target.value)}>{data.songState.tableSessions.filter((item) => item.status === 'open').map((item) => <option key={item.id} value={item.id}>{item.tableCode}</option>)}</select></label>
           <label><span>演唱歌手</span><select value={appearanceId} onChange={(event) => setAppearanceId(event.target.value)}>{appearances.map(({ appearance }) => <option key={appearance.id} value={appearance.id}>{data.songState.singers.find((item) => item.id === appearance.singerId)?.displayName} · {timeRange(appearance.startsAt, appearance.endsAt)}</option>)}</select></label>
-          <label className="wide-field"><span>歌曲</span><select value={effectiveSongId} onChange={(event) => setSongId(event.target.value)}>{offers.map((offer) => { const song = data.songState.songs.find((item) => item.id === offer.songId); return <option key={offer.id} value={offer.songId}>{song?.title} · {money(offer.priceAmount)}</option> })}</select></label>
+          <label className="wide-field song-assist-search"><span>搜索歌曲或原唱</span><span className="song-search-control"><Search size={15} /><input type="search" value={songSearch} placeholder="输入歌名或原唱" onChange={(event) => setSongSearch(event.target.value)} /></span></label>
+          <label className="wide-field"><span>歌曲</span><select value={effectiveSongId} onChange={(event) => setSongId(event.target.value)}>{assistedOffers.length === 0 && <option value="">没有匹配歌曲</option>}{assistedOffers.map((offer) => { const song = data.songState.songs.find((item) => item.id === offer.songId); return <option key={offer.id} value={offer.songId}>{song?.title} · {song?.artist} · {money(offer.priceAmount)}</option> })}</select></label>
           <label><span>客人称呼</span><input value={requestedBy} onChange={(event) => setRequestedBy(event.target.value)} /></label>
           <label className="wide-field"><span>备注</span><input value={customerNote} onChange={(event) => setCustomerNote(event.target.value)} placeholder="祝福语、互动偏好或不能公开的信息" /></label>
           <div className="song-payment-boundary"><Banknote size={16} /><span>点歌不发起线上支付；先确认歌手可以演唱，再由服务员到桌使用现金或物理POS现场收费。</span></div>
@@ -115,6 +127,7 @@ export function SongCenterView({ data, onRefresh, onNotice }: SongCenterViewProp
 function SingerLibraryManager({ data, busy, run }: { data: BootstrapResponse; busy: boolean; run: SongOperationRunner }) {
   const [singerId, setSingerId] = useState(data.songState.singers.find((item) => item.active)?.id ?? data.songState.singers[0]?.id ?? '')
   const [newSingerName, setNewSingerName] = useState('')
+  const [detailMode, setDetailMode] = useState<'repertoire' | 'profile'>('repertoire')
   const singer = data.songState.singers.find((item) => item.id === singerId) ?? data.songState.singers[0]
   const repertoire = data.songState.repertoire.filter((item) => item.singerId === singer?.id)
 
@@ -126,17 +139,73 @@ function SingerLibraryManager({ data, busy, run }: { data: BootstrapResponse; bu
         <button className="secondary-button" disabled={busy || !newSingerName.trim()}><Plus size={15} />新增歌手</button>
       </form>
     </div>
+    <div className="singer-library-tabs" role="tablist" aria-label="歌手资料功能">
+      <button role="tab" aria-selected={detailMode === 'repertoire'} className={detailMode === 'repertoire' ? 'is-active' : ''} onClick={() => setDetailMode('repertoire')}><ListMusic size={15} />歌单管理</button>
+      <button role="tab" aria-selected={detailMode === 'profile'} className={detailMode === 'profile' ? 'is-active' : ''} onClick={() => setDetailMode('profile')}><UserRound size={15} />歌手资料</button>
+    </div>
     {singer ? <>
-      <SingerProfileEditor singer={singer} busy={busy} onSave={(input) => run(() => updateSingerProfile(singer.id, input), '歌手资料已保存，顾客端将自动更新')} />
-      <RepertoireManager data={data} singer={singer} repertoire={repertoire} busy={busy} run={run} />
+      {detailMode === 'profile' && <SingerProfileEditor singer={singer} busy={busy} onSave={(input) => run(() => updateSingerProfile(singer.id, input), '歌手资料已保存，顾客端将自动更新')} />}
+      {detailMode === 'repertoire' && <RepertoireManager key={singer.id} data={data} singer={singer} repertoire={repertoire} busy={busy} run={run} />}
     </> : <div className="compact-empty">先新增一位歌手，再维护资料和歌单。</div>}
   </div>
 }
 
 function RepertoireManager({ data, singer, repertoire, busy, run }: { data: BootstrapResponse; singer: Singer; repertoire: SingerRepertoireEntry[]; busy: boolean; run: SongOperationRunner }) {
   const [draft, setDraft] = useState({ title: '', artist: '', durationSeconds: 240, priceYuan: '98' })
+  const [query, setQuery] = useState('')
+  const [fileName, setFileName] = useState('')
+  const [fileReading, setFileReading] = useState(false)
+  const [preview, setPreview] = useState<RepertoireImportPreview | null>(null)
+  const songById = useMemo(() => new Map(data.songState.songs.map((song) => [song.id, song])), [data.songState.songs])
+  const filteredRepertoire = useMemo(() => {
+    const keyword = query.trim().toLocaleLowerCase('zh-CN')
+    if (!keyword) return repertoire
+    return repertoire.filter((offer) => {
+      const song = songById.get(offer.songId)
+      return `${song?.title ?? ''} ${song?.artist ?? ''}`.toLocaleLowerCase('zh-CN').includes(keyword)
+    })
+  }, [query, repertoire, songById])
+  const visibleRepertoire = filteredRepertoire.slice(0, 200)
+
+  async function readFile(file: File) {
+    setFileName(file.name)
+    setFileReading(true)
+    try {
+      setPreview(await parseRepertoireFile(file))
+    } catch (error) {
+      setPreview({ rows: [], errors: [error instanceof Error ? error.message : '文件读取失败'] })
+    } finally {
+      setFileReading(false)
+    }
+  }
+
   return <section className="repertoire-manager">
     <div className="form-heading"><ListMusic size={19} /><div><strong>{singer.displayName}的可点歌单</strong><span>曲目、原唱、演唱时长和现场收费价格均可配置</span></div></div>
+    <section className="repertoire-import" aria-label="批量导入歌单">
+      <div className="repertoire-import-heading">
+        <div><strong>一次导入整份歌单</strong><span>支持 Excel (.xlsx) 和 CSV；同名同原唱会更新，不会重复新增。</span></div>
+        <div>
+          <button type="button" className="secondary-button" onClick={downloadRepertoireTemplate}><Download size={15} />下载模板</button>
+          <label className="primary-button repertoire-file-button"><FileUp size={15} />选择文件<input type="file" accept=".xlsx,.csv" onChange={(event) => { const file = event.target.files?.[0]; if (file) void readFile(file); event.currentTarget.value = '' }} /></label>
+        </div>
+      </div>
+      {fileReading && <div className="repertoire-import-status">正在读取并校验歌单…</div>}
+      {!fileReading && preview && <div className={`repertoire-import-preview${preview.errors.length > 0 ? ' has-errors' : ''}`}>
+        <div className="repertoire-import-summary">
+          <span><strong>{fileName}</strong><small>{preview.rows.length}首可导入{preview.errors.length > 0 ? ` · ${preview.errors.length}处需修改` : ' · 校验通过'}</small></span>
+          <button type="button" className="primary-button" disabled={busy || preview.rows.length === 0 || preview.errors.length > 0} onClick={() => void run(
+            () => importSingerRepertoire(singer.id, { rows: preview.rows }),
+            (result) => {
+              const imported = result as RepertoireImportResult
+              return `${singer.displayName}歌单导入完成：新增${imported.created}首，更新${imported.updated}首`
+            },
+          )}><FileUp size={15} />确认导入{preview.rows.length}首</button>
+        </div>
+        {preview.errors.length > 0 && <div className="repertoire-import-errors" role="alert">{preview.errors.slice(0, 8).map((error) => <span key={error}>{error}</span>)}{preview.errors.length > 8 && <b>另有{preview.errors.length - 8}处，请修改文件后重新选择。</b>}</div>}
+        {preview.errors.length === 0 && <div className="repertoire-import-sample">{preview.rows.slice(0, 5).map((row) => <span key={`${row.title}-${row.artist}`}><strong>{row.title}</strong><small>{row.artist} · {row.durationSeconds}秒 · ¥{(row.priceAmount / 100).toFixed(2)} · {row.enabled ? '启用' : '停用'}</small></span>)}</div>}
+      </div>}
+    </section>
+    <div className="repertoire-subheading"><strong>单首录入</strong><span>临时增加歌曲时使用</span></div>
     <form className="repertoire-create" onSubmit={(event) => {
       event.preventDefault()
       const priceAmount = Math.round(Number(draft.priceYuan) * 100)
@@ -149,10 +218,14 @@ function RepertoireManager({ data, singer, repertoire, busy, run }: { data: Boot
       <label><span>价格(元)</span><input inputMode="decimal" value={draft.priceYuan} onChange={(event) => setDraft({ ...draft, priceYuan: event.target.value })} /></label>
       <button className="primary-button" disabled={busy || !draft.title.trim() || !draft.artist.trim()}><Plus size={15} />加入歌单</button>
     </form>
-    <div className="repertoire-list">{repertoire.length === 0 ? <div className="compact-empty">这位歌手还没有可点歌曲</div> : repertoire.map((offer) => {
-      const song = data.songState.songs.find((item) => item.id === offer.songId)
+    <div className="repertoire-list-toolbar">
+      <span className="song-search-control"><Search size={15} /><input type="search" value={query} placeholder="搜索歌曲或原唱" onChange={(event) => setQuery(event.target.value)} /></span>
+      <b>{filteredRepertoire.length}/{repertoire.length}首</b>
+    </div>
+    <div className="repertoire-list">{repertoire.length === 0 ? <div className="compact-empty">这位歌手还没有可点歌曲</div> : filteredRepertoire.length === 0 ? <div className="compact-empty">没有匹配的歌曲</div> : visibleRepertoire.map((offer) => {
+      const song = songById.get(offer.songId)
       return song ? <RepertoireRow key={offer.id} song={song} offer={offer} busy={busy} run={run} /> : null
-    })}</div>
+    })}{filteredRepertoire.length > visibleRepertoire.length && <div className="repertoire-list-limit">当前显示前200首，请输入歌名或原唱继续缩小范围。</div>}</div>
   </section>
 }
 
@@ -197,6 +270,8 @@ function PerformanceScheduleManager({ data, busy, run }: { data: BootstrapRespon
   const [selectedSessionId, setSelectedSessionId] = useState(todaySession?.id ?? sessions[0]?.id ?? '')
   const [draftId, setDraftId] = useState(sessions.length === 0 ? `performance_${crypto.randomUUID()}` : '')
   const [template, setTemplate] = useState<PerformanceSession | null>(null)
+  const [editorRevealTick, setEditorRevealTick] = useState(0)
+  const editorPanelRef = useRevealPanelScroll<HTMLDivElement>(editorRevealTick)
   const selectedSession = sessions.find((item) => item.id === selectedSessionId) ?? null
   const isNew = Boolean(draftId)
 
@@ -210,6 +285,7 @@ function PerformanceScheduleManager({ data, busy, run }: { data: BootstrapRespon
     setSelectedSessionId('')
     setTemplate(source)
     setDraftId(`performance_${crypto.randomUUID()}`)
+    setEditorRevealTick((value) => value + 1)
   }
 
   return <div className="schedule-manager">
@@ -227,16 +303,18 @@ function PerformanceScheduleManager({ data, busy, run }: { data: BootstrapRespon
       <strong>{isNew ? template ? '已复制，先修改营业日和时间' : '从空白排班开始' : `${selectedSession?.businessDate} 已发布版本`}</strong>
       <span>歌手、顺序、时间、预约开关和点歌规则都可修改；保存后客户页面自动读取最新版本。</span>
     </div>
-    <PerformanceScheduleEditor
-      key={selectedSession?.id ?? draftId}
-      data={data}
-      session={selectedSession}
-      template={template}
-      sessionId={selectedSession?.id ?? draftId}
-      busy={busy}
-      run={run}
-      onSaved={editSession}
-    />
+    <div className="reveal-panel-target" ref={editorPanelRef}>
+      <PerformanceScheduleEditor
+        key={selectedSession?.id ?? draftId}
+        data={data}
+        session={selectedSession}
+        template={template}
+        sessionId={selectedSession?.id ?? draftId}
+        busy={busy}
+        run={run}
+        onSaved={editSession}
+      />
+    </div>
   </div>
 }
 
@@ -253,6 +331,8 @@ function PerformanceScheduleEditor({ data, session, template, sessionId, busy, r
     extensionNegotiationEnabled: item.extensionNegotiationEnabled ?? true,
     extensionThresholdMinutes: item.extensionThresholdMinutes ?? 10,
   })) ?? [])
+  const [appearanceRevealTick, setAppearanceRevealTick] = useState(0)
+  const appearancePanelRef = useRevealPanelScroll<HTMLDivElement>(appearanceRevealTick)
   const firstAppearanceDate = rows[0]?.startsAt.slice(0, 10) ?? businessDate
   const datesNeedAlignment = rows.length > 0 && firstAppearanceDate !== businessDate
 
@@ -277,6 +357,7 @@ function PerformanceScheduleEditor({ data, session, template, sessionId, busy, r
       requestOpensAt: `${businessDate}T12:00`, requestClosesAt: shiftLocalDatetime(endsAt, -5),
       acceptingRequests: true, advanceBookingEnabled: true, extensionNegotiationEnabled: true, extensionThresholdMinutes: 10,
     }])
+    setAppearanceRevealTick((value) => value + 1)
   }
 
   function alignDatesToBusinessDate() {
@@ -308,7 +389,7 @@ function PerformanceScheduleEditor({ data, session, template, sessionId, busy, r
     </div>
     {datesNeedAlignment && <div className="schedule-date-warning" role="alert"><span><strong>轮次日期与营业日不一致</strong><small>当前轮次从{firstAppearanceDate}开始，保存前请对齐到{businessDate}。</small></span><button type="button" className="secondary-button" onClick={alignDatesToBusinessDate}>一键对齐日期</button></div>}
     <div className="schedule-list">
-      {rows.length === 0 ? <div className="compact-empty">还没有演出轮次，点击“增加一轮”开始排班。</div> : rows.map((row, index) => <div className="schedule-row" key={row.id}>
+      {rows.length === 0 ? <div className="compact-empty">还没有演出轮次，点击“增加一轮”开始排班。</div> : rows.map((row, index) => <div className={index === rows.length - 1 ? 'schedule-row reveal-panel-target' : 'schedule-row'} ref={index === rows.length - 1 ? appearancePanelRef : undefined} key={row.id}>
         <div className="schedule-row-heading">
           <strong>第{index + 1}轮</strong>
           <button type="button" className="icon-button danger" title={`删除第${index + 1}轮`} aria-label={`删除第${index + 1}轮`} onClick={() => setRows(rows.filter((item) => item.id !== row.id))}><XCircle size={16} /></button>

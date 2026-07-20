@@ -578,9 +578,39 @@ export function submitStockCount(state: InventoryDomainState, command: SubmitSto
       if (current && current.unitCode !== command.unitCode) throw new Error('商品库存计量单位不一致')
       const expectedQuantity = current?.onHandQuantity ?? 0
       const differenceQuantity = safeAdd(command.countedQuantity, -expectedQuantity, '盘点差异')
-      if (differenceQuantity !== 0 && !command.approvalId?.trim()) {
+      const acceptedLossBps = command.acceptedLossBps ?? 0
+      if (!Number.isSafeInteger(acceptedLossBps) || acceptedLossBps < 0 || acceptedLossBps > 10_000) {
+        throw new Error('合理损耗比例必须是0至10000基点')
+      }
+      const lossWithinTolerance = differenceQuantity < 0
+        && expectedQuantity > 0
+        && Math.abs(differenceQuantity) * 10_000 <= expectedQuantity * acceptedLossBps
+      if (differenceQuantity !== 0 && !lossWithinTolerance && !command.approvalId?.trim()) {
         throw new Error('盘点差异必须关联审批')
       }
+      if (lossWithinTolerance && !command.automaticAdjustmentMovementId?.trim()) {
+        throw new Error('合理损耗自动入账必须提供调整流水ID')
+      }
+      const automaticAdjustment = lossWithinTolerance
+        ? applyMovement(state, {
+            id: command.automaticAdjustmentMovementId!,
+            productId: command.productId,
+            unitCode: command.unitCode,
+            type: 'stock_count_loss',
+            direction: 'out',
+            quantity: Math.abs(differenceQuantity),
+            tableSessionId: null,
+            orderId: null,
+            orderItemId: null,
+            refundId: null,
+            stockCountId: command.countId,
+            approvalId: null,
+            actorId: command.countedBy,
+            reason: `合理经营损耗自动入账（上限${(acceptedLossBps / 100).toFixed(2)}%）`,
+            businessDate: command.businessDate,
+            occurredAt: command.occurredAt,
+          })
+        : null
       const count: StockCount = {
         ...scope(state),
         id: command.countId,
@@ -589,28 +619,30 @@ export function submitStockCount(state: InventoryDomainState, command: SubmitSto
         expectedQuantity,
         countedQuantity: command.countedQuantity,
         differenceQuantity,
-        status: differenceQuantity === 0 ? 'applied' : 'pending_confirmation',
+        status: differenceQuantity === 0 || lossWithinTolerance ? 'applied' : 'pending_confirmation',
         countedBy: command.countedBy,
         countedAt: command.occurredAt,
-        approvalId: command.approvalId?.trim() || null,
-        confirmedBy: null,
-        confirmedAt: differenceQuantity === 0 ? command.occurredAt : null,
-        decisionReason: differenceQuantity === 0 ? '盘点无差异' : null,
-        adjustmentMovementId: null,
+        approvalId: lossWithinTolerance ? null : command.approvalId?.trim() || null,
+        confirmedBy: lossWithinTolerance ? command.countedBy : null,
+        confirmedAt: differenceQuantity === 0 || lossWithinTolerance ? command.occurredAt : null,
+        decisionReason: differenceQuantity === 0 ? '盘点无差异' : lossWithinTolerance ? '鸡尾酒合理损耗自动入账' : null,
+        adjustmentMovementId: automaticAdjustment?.id ?? null,
         businessDate: command.businessDate,
       }
       state.stockCounts.push(count)
       audit(state, {
-        action: differenceQuantity === 0 ? 'inventory.stock_count.applied.v1' : 'inventory.stock_count.submitted.v1',
+        action: lossWithinTolerance
+          ? 'inventory.stock_count.operating_loss_applied.v1'
+          : differenceQuantity === 0 ? 'inventory.stock_count.applied.v1' : 'inventory.stock_count.submitted.v1',
         objectType: 'stock_count',
         objectId: count.id,
         actorId: command.countedBy,
         approvalId: count.approvalId,
         tableSessionId: null,
         orderId: null,
-        reason: differenceQuantity === 0 ? 'no_variance' : 'variance_requires_second_person',
+        reason: differenceQuantity === 0 ? 'no_variance' : lossWithinTolerance ? 'accepted_operating_loss' : 'variance_requires_second_person',
         occurredAt: command.occurredAt,
-        details: { expectedQuantity, countedQuantity: command.countedQuantity, differenceQuantity },
+        details: { expectedQuantity, countedQuantity: command.countedQuantity, differenceQuantity, acceptedLossBps, lossWithinTolerance },
       })
       return count
     },

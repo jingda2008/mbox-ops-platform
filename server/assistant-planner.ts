@@ -4,6 +4,7 @@ import {
   type AssistantCapability,
   type AssistantModelOutput,
 } from '../src/shared/assistant-contracts.js'
+import type { DutyManagerHandover, DutyManagerRisk } from '../src/shared/assistant-contracts.js'
 
 export interface AssistantPlanningContext {
   actor: {
@@ -28,6 +29,9 @@ export interface AssistantPlanningContext {
     serviceTasks: Array<Record<string, unknown>>
     kdsTasks: Array<Record<string, unknown>>
     performances: Array<Record<string, unknown>>
+    operationalRisks: DutyManagerRisk[]
+    operationalHealth: Record<string, unknown>
+    dutyHandover: DutyManagerHandover
   }
 }
 
@@ -101,7 +105,7 @@ const responseFormat = {
   },
 } as const
 
-const systemInstruction = `你是上海 M-BOX 陆家嘴店的员工运营助手，负责理解员工自然语言并提出可审计的操作计划。
+const systemInstruction = `你是上海 M-BOX 陆家嘴店的AI值班经理，负责依据实时经营数据理解员工自然语言、解释现场风险，并提出可审计的操作计划。
 
 必须遵守：
 1. 你只回答、追问或提出计划，绝不能声称操作已经完成。
@@ -114,7 +118,8 @@ const systemInstruction = `你是上海 M-BOX 陆家嘴店的员工运营助手�
 8. 回复员工要简洁、自然、有服务意识，不使用技术术语，不重复问候或自称，不编造不存在的桌台、人员、商品或状态。
 9. 页面能力只是候选动作。计划最终仍由M-BOX权限、实时状态、确认和审计系统决定是否执行。
 10. 开台必须使用员工明确说出的实际到店人数；没有人数时必须返回clarification，绝不能猜测、默认或沿用其他桌人数。
-11. 严格只返回符合指定结构的JSON，不要添加Markdown代码块、说明文字或前后缀。`
+11. 已接管、延后、误报和交班数据是人工运营事实；不要把已延后的风险说成无人处理，也不要把误报当成真实事故继续升级。
+12. 严格只返回符合指定结构的JSON，不要添加Markdown代码块、说明文字或前后缀。`
 
 const openTableWithTableCodePattern = /(?:([a-z]\d{1,4})[\s\S]{0,24}开台|开台[\s\S]{0,24}([a-z]\d{1,4}))/iu
 const explicitPartySizePattern = /(?:[0-9]{1,3}|[零〇一二两三四五六七八九十百]{1,6})\s*(?:位|人|名|个(?:人|客人|顾客))/u

@@ -33,9 +33,12 @@ import type {
   AssistedPaymentLink,
   AssistedPaymentLinkInput,
   CartOrderInput,
+  ComplimentaryOrderInput,
   KdsActionInput,
   KdsExceptionDecisionInput,
   KdsExceptionReportInput,
+  ManagerKdsCancellationInput,
+  ManagerKdsCancellationResult,
   QuickOrderInput,
 } from './shared/commerce-api'
 import type { AuthorityWriteInput } from './shared/commerce-api'
@@ -61,9 +64,17 @@ import type {
   BenefitRedemptionLockInput,
 } from './shared/benefit-redemption-contracts'
 import type { PilotLoginResponse } from './shared/auth-contracts'
-import type { AssistantTurnRequest, AssistantTurnResponse } from './shared/assistant-contracts'
+import type {
+  AssistantTurnRequest,
+  AssistantTurnResponse,
+  DutyManagerActionInput,
+  DutyManagerActionResponse,
+  DutyManagerBriefing,
+  DutyManagerHandover,
+} from './shared/assistant-contracts'
 import type { ConfigVersionRecord } from './shared/config-versioning-contracts'
-import type { PerformanceSession, PerformanceSessionWriteInput, RepertoireWriteInput, Singer, SingerProfileWriteInput, SingerRepertoireEntry, SingerWriteInput, SongCatalogItem, SongRequest } from './shared/song-contracts'
+import type { SopActionRecord, SopActionResolutionInput } from './shared/sop-contracts'
+import type { PerformanceSession, PerformanceSessionWriteInput, RepertoireImportInput, RepertoireImportResult, RepertoireWriteInput, Singer, SingerProfileWriteInput, SingerRepertoireEntry, SingerWriteInput, SongCatalogItem, SongRequest } from './shared/song-contracts'
 import type {
   GuestSessionResponse,
   GuestCartOrderInput,
@@ -86,11 +97,15 @@ import {
 
 export class ApiError extends Error {
   readonly status: number
+  readonly code: string
+  readonly details: Record<string, unknown> | null
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code = 'API_ERROR', details: Record<string, unknown> | null = null) {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    this.code = code
+    this.details = details
   }
 }
 
@@ -117,6 +132,13 @@ export function createPilotSession(storeAccessToken: string, actorId: string, em
 
 export function heartbeatStaffPresence() {
   return request<StaffPresenceResponse>('/api/auth/presence/heartbeat', { method: 'POST' })
+}
+
+export function resolveSopAction(recordId: string, input: SopActionResolutionInput) {
+  return request<SopActionRecord>(`/api/sop/actions/${encodeURIComponent(recordId)}/resolve`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
 }
 
 export function endStaffPresence() {
@@ -156,6 +178,21 @@ export function sendAssistantTurn(input: AssistantTurnRequest) {
   })
 }
 
+export function getDutyManagerBriefing() {
+  return request<DutyManagerBriefing>('/api/assistant/briefing')
+}
+
+export function updateDutyManagerRisks(input: DutyManagerActionInput) {
+  return request<DutyManagerActionResponse>('/api/assistant/duty-actions', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function getDutyManagerHandover() {
+  return request<DutyManagerHandover>('/api/assistant/handover')
+}
+
 function actorIdFromSessionToken(token: string) {
   try {
     const payload = token.split('.')[0]
@@ -185,13 +222,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   reportNetworkAvailable()
 
-  let body: T & { message?: string }
+  let body: T & { message?: string; code?: string; details?: Record<string, unknown> }
   try {
     body = (await response.json()) as T & { message?: string }
   } catch {
     throw new ApiError('系统返回了无法识别的响应', response.status)
   }
-  if (!response.ok) throw new ApiError(body.message ?? '系统请求失败', response.status)
+  if (!response.ok) throw new ApiError(body.message ?? '系统请求失败', response.status, body.code, body.details ?? null)
   return body
 }
 
@@ -209,9 +246,13 @@ function authenticatedHeaders(init?: RequestInit) {
   return headers
 }
 
+let latestBootstrapViewEtag: string | null = null
+
 async function requestBootstrap(revision?: number): Promise<BootstrapResponse | null> {
   const headers = authenticatedHeaders()
-  if (revision !== undefined) headers.set('If-None-Match', `"${revision}"`)
+  if (revision !== undefined) {
+    headers.set('If-None-Match', latestBootstrapViewEtag ?? `"${revision}"`)
+  }
   let response: Response
   try {
     response = await fetch('/api/bootstrap', { headers })
@@ -221,6 +262,7 @@ async function requestBootstrap(revision?: number): Promise<BootstrapResponse | 
   }
   reportNetworkAvailable()
   if (response.status === 304) return null
+  latestBootstrapViewEtag = response.headers.get('etag')
 
   let body: BootstrapResponse & { message?: string }
   try {
@@ -247,13 +289,13 @@ async function guestRequest<T>(path: string, init?: RequestInit): Promise<T> {
   }
   reportNetworkAvailable()
 
-  let body: T & { message?: string }
+  let body: T & { message?: string; code?: string; details?: Record<string, unknown> }
   try {
-    body = (await response.json()) as T & { message?: string }
+    body = (await response.json()) as T & { message?: string; code?: string; details?: Record<string, unknown> }
   } catch {
     throw new ApiError('系统返回了无法识别的响应', response.status)
   }
-  if (!response.ok) throw new ApiError(body.message ?? '系统请求失败', response.status)
+  if (!response.ok) throw new ApiError(body.message ?? '系统请求失败', response.status, body.code, body.details ?? null)
   const identity = (body as { guestIdentity?: { anonymousId?: unknown } }).guestIdentity
   if (typeof identity?.anonymousId === 'string') {
     window.localStorage.setItem('mbox.guest.anonymous-id.v1', identity.anonymousId)
@@ -527,6 +569,13 @@ export function createSingerRepertoire(singerId: string, input: RepertoireWriteI
   })
 }
 
+export function importSingerRepertoire(singerId: string, input: RepertoireImportInput) {
+  return request<RepertoireImportResult>(`/api/songs/singers/${encodeURIComponent(singerId)}/repertoire/import`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
 export function updateSingerRepertoire(entryId: string, input: RepertoireWriteInput) {
   return request<{ song: SongCatalogItem; offer: SingerRepertoireEntry }>(`/api/songs/repertoire/${encodeURIComponent(entryId)}`, {
     method: 'PUT',
@@ -670,6 +719,10 @@ export function createCartOrder(input: CartOrderInput) {
   return request<Order>('/api/commerce/orders', { method: 'POST', body: JSON.stringify(input) })
 }
 
+export function createComplimentaryOrder(input: ComplimentaryOrderInput) {
+  return request<Order>('/api/commerce/complimentary-orders', { method: 'POST', body: JSON.stringify(input) })
+}
+
 export function createAssistedPaymentLink(orderId: string, input: AssistedPaymentLinkInput) {
   return request<AssistedPaymentLink>(`/api/commerce/orders/${encodeURIComponent(orderId)}/payment-link`, {
     method: 'POST',
@@ -693,6 +746,13 @@ export function reportKdsException(taskId: string, input: KdsExceptionReportInpu
 
 export function decideKdsException(exceptionId: string, input: KdsExceptionDecisionInput) {
   return request<KdsExceptionEvent>(`/api/commerce/kds/exceptions/${exceptionId}/decision`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function managerCancelKdsTask(taskId: string, input: ManagerKdsCancellationInput) {
+  return request<ManagerKdsCancellationResult>(`/api/commerce/kds/${encodeURIComponent(taskId)}/manager-cancel`, {
     method: 'POST',
     body: JSON.stringify(input),
   })

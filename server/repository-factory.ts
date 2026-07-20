@@ -27,6 +27,7 @@ export function createRuntimeDependencies(config: RuntimeConfig): RuntimeDepende
     tenantId: config.tenantId!,
     storeId: config.storeUuid!,
     seedState: null,
+    readCacheValidationTtlMs: config.stateReadCacheMs,
   }), postgresPool }
 }
 

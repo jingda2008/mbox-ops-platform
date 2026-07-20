@@ -62,3 +62,114 @@ export interface AssistantConversationMessage {
   content: string
   createdAt: string
 }
+
+export type DutyManagerRiskSeverity = 'critical' | 'high' | 'medium' | 'info'
+export type DutyManagerRiskCategory = 'system' | 'service' | 'fulfillment' | 'staffing' | 'sop' | 'approval' | 'reservation' | 'hardware'
+export type DutyManagerIncidentStatus = 'open' | 'acknowledged' | 'deferred' | 'dismissed' | 'resolved'
+
+export interface DutyManagerIncident {
+  id: string
+  riskId: string
+  cycle: number
+  businessDate: string
+  severity: DutyManagerRiskSeverity
+  category: DutyManagerRiskCategory
+  title: string
+  detail: string
+  tableCode: string | null
+  recommendedCommand: string
+  status: DutyManagerIncidentStatus
+  firstDetectedAt: string
+  lastDetectedAt: string
+  observationCount: number
+  acknowledgedAt: string | null
+  acknowledgedBy: string | null
+  deferredAt: string | null
+  deferredBy: string | null
+  deferredUntil: string | null
+  dismissedAt: string | null
+  dismissedBy: string | null
+  dismissedReason: string | null
+  resolvedAt: string | null
+  resolvedBy: string | null
+  resolution: 'source_cleared' | 'dismissed_false_positive' | null
+}
+
+export interface DutyManagerRisk {
+  id: string
+  severity: DutyManagerRiskSeverity
+  category: DutyManagerRiskCategory
+  title: string
+  detail: string
+  tableCode: string | null
+  ownerName: string | null
+  recommendedCommand: string
+  detectedAt: string
+  occurrences: number
+  sourceRiskIds: string[]
+  incidentIds: string[]
+  incidentStatus: Exclude<DutyManagerIncidentStatus, 'dismissed' | 'resolved'>
+  handledByName: string | null
+}
+
+export interface DutyManagerBriefing {
+  generatedAt: string
+  businessDate: string
+  health: 'critical' | 'attention' | 'stable'
+  headline: string
+  counts: {
+    critical: number
+    high: number
+    medium: number
+    openServiceTasks: number
+    overdueFulfillmentTasks: number
+    blockedSopExecutions: number
+    pendingApprovals: number
+    activeIncidents: number
+    unacknowledgedIncidents: number
+    acknowledgedIncidents: number
+    deferredIncidents: number
+  }
+  actions: {
+    canAcknowledge: boolean
+    canManage: boolean
+  }
+  risks: DutyManagerRisk[]
+}
+
+export const dutyManagerActionSchema = z.object({
+  idempotencyKey: z.string().uuid(),
+  action: z.enum(['acknowledge', 'defer', 'dismiss_false_positive']),
+  riskIds: z.array(z.string().trim().min(1).max(120)).min(1).max(50),
+  deferMinutes: z.number().int().min(5).max(120).optional(),
+  note: z.string().trim().max(240).optional(),
+}).superRefine((input, context) => {
+  if (input.action === 'defer' && input.deferMinutes === undefined) {
+    context.addIssue({ code: 'custom', path: ['deferMinutes'], message: '延后处理必须填写分钟数' })
+  }
+  if (input.action === 'dismiss_false_positive' && (!input.note || input.note.length < 2)) {
+    context.addIssue({ code: 'custom', path: ['note'], message: '标记误报必须记录复核原因' })
+  }
+})
+
+export type DutyManagerActionInput = z.infer<typeof dutyManagerActionSchema>
+
+export interface DutyManagerActionResponse {
+  message: string
+  replayed: boolean
+  briefing: DutyManagerBriefing
+}
+
+export interface DutyManagerHandover {
+  generatedAt: string
+  businessDate: string
+  summary: string
+  detected: number
+  active: number
+  acknowledged: number
+  deferred: number
+  dismissed: number
+  resolved: number
+  averageAcknowledgeMinutes: number | null
+  oldestActiveMinutes: number | null
+}

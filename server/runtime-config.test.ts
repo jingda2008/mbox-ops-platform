@@ -9,6 +9,7 @@ describe('runtime config', () => {
     expect(config.corsOrigins).toContain('http://localhost:5173')
     expect(config.voiceTranscriptionProvider).toBe('disabled')
     expect(config.assistantProvider).toBe('disabled')
+    expect(config.stateReadCacheMs).toBe(3_000)
   })
 
   it('accepts only supported voice transcription providers', () => {
@@ -16,6 +17,25 @@ describe('runtime config', () => {
       .toBe('google_v1')
     expect(() => loadRuntimeConfig({ MBOX_VOICE_TRANSCRIPTION_PROVIDER: 'unknown' }))
       .toThrow()
+  })
+
+  it('loads bounded SOP adapter configuration and rejects unsafe webhook credentials', () => {
+    expect(loadRuntimeConfig({
+      MBOX_SOP_WECOM_EMPLOYEE_USER_IDS_JSON: JSON.stringify({ 'emp-lin': 'tom.wecom' }),
+      MBOX_SOP_HEADSET_WEBHOOK_URL: 'https://headset.example.com/mbox/events',
+      MBOX_SOP_HEADSET_WEBHOOK_TOKEN: 'h'.repeat(20),
+    })).toMatchObject({
+      sopWecomEmployeeUserIds: { 'emp-lin': 'tom.wecom' },
+      sopHeadsetWebhookUrl: 'https://headset.example.com/mbox/events',
+    })
+    expect(() => loadRuntimeConfig({
+      MBOX_SOP_CAMERA_WEBHOOK_URL: 'http://camera.example.com/frames',
+      MBOX_SOP_CAMERA_WEBHOOK_TOKEN: 'c'.repeat(20),
+    })).toThrow('https:')
+    expect(() => loadRuntimeConfig({
+      MBOX_SOP_HEADSET_WEBHOOK_URL: 'https://headset.example.com/events',
+      MBOX_SOP_HEADSET_WEBHOOK_TOKEN: 'short',
+    })).toThrow('至少20字符')
   })
 
   it('requires a server-side Gemini key when conversational assistance is enabled', () => {
@@ -92,6 +112,8 @@ describe('runtime config', () => {
   it('rejects invalid integer settings', () => {
     expect(() => loadRuntimeConfig({ API_PORT: '8787.5' })).toThrow('API_PORT')
     expect(() => loadRuntimeConfig({ MBOX_BODY_LIMIT_BYTES: '10' })).toThrow('MBOX_BODY_LIMIT_BYTES')
+    expect(() => loadRuntimeConfig({ MBOX_STATE_READ_CACHE_MS: '499' })).toThrow('MBOX_STATE_READ_CACHE_MS')
+    expect(() => loadRuntimeConfig({ MBOX_STATE_READ_CACHE_MS: '10001' })).toThrow('MBOX_STATE_READ_CACHE_MS')
   })
 
   it('uses the platform PORT when API_PORT is not configured', () => {
@@ -114,7 +136,7 @@ describe('runtime config', () => {
     }
     expect(loadRuntimeConfig({ ...staging, MBOX_PILOT_ACCESS_CODE: 'pilot-code-strong' })).toMatchObject({
       pilotAccessCode: 'pilot-code-strong',
-      pilotSessionHours: 12,
+      pilotSessionHours: 6,
       pilotPaymentSimulationEnabled: false,
     })
     expect(loadRuntimeConfig({ ...staging, MBOX_PILOT_PAYMENT_SIMULATION_ENABLED: 'true' }))

@@ -7,6 +7,7 @@ import type { ItemFulfillmentStatus, OrderStatus } from './order-contracts.js'
 import type { SongRequestStatus } from './song-contracts.js'
 import type { SongRequestMode } from './song-contracts.js'
 import type { GuestIdentityView } from './guest-insight-contracts.js'
+import type { OrderSafetyConfig } from './commercial-ops-contracts.js'
 
 interface TableTokenClaimsBase {
   version: 2
@@ -45,6 +46,7 @@ export interface GuestSessionResponse {
   communityBrand: CommunityBrandPresentation | null
   table: { code: string; displayName: string; status: string; occupied: boolean }
   primaryServiceName: string | null
+  orderSafety: OrderSafetyConfig
   serviceTypes: GuestServiceType[]
   products: MenuProduct[]
   tasks: GuestTaskView[]
@@ -167,6 +169,7 @@ export const guestCartOrderSchema = z.object({
     productId: z.string().trim().min(1).max(128),
     quantity: z.number().int().min(1).max(50),
   })).min(1).max(50),
+  confirmedDuplicateOrderId: z.string().trim().min(1).max(128).optional(),
   idempotencyKey: z.string().trim().min(8).max(128),
 })
 

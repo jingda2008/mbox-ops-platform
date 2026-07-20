@@ -734,7 +734,9 @@ export function decideKdsException(state: OrderDomainState, command: DecideKdsEx
   assertNonEmpty(command.actorId, '处置人')
   assertNonEmpty(command.actorRoleId, '处置岗位')
   assertTimestamp(command.occurredAt)
-  if (!['supervisor', 'manager'].includes(command.actorRoleId)) throw new Error('只有领班或经理可以处置KDS异常')
+  if (!['supervisor', 'manager', 'operations_director', 'owner'].includes(command.actorRoleId)) {
+    throw new Error('只有领班、店长、运营负责人或老板可以处置KDS异常')
+  }
   const allowedReasonCodes = command.disposition === 'cancelled'
     ? ['unavailable_confirmed', 'guest_cancelled', 'manager_cancelled', 'other']
     : ['service_recovery', 'quality_recovery', 'other']
@@ -774,7 +776,7 @@ export function decideKdsException(state: OrderDomainState, command: DecideKdsEx
           orderId: task.orderId,
           orderItemId: report.originalOrderItemId,
           tableSessionId: task.tableSessionId,
-          tableCode: task.tableCode,
+          ...(task.tableCode === undefined ? {} : { tableCode: task.tableCode }),
           stationId: task.stationId,
           itemName: task.itemName,
           specification: task.specification,

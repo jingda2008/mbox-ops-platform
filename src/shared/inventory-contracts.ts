@@ -366,6 +366,9 @@ export interface SubmitStockCountCommand {
   countedQuantity: InventoryQuantity
   countedBy: string
   approvalId?: string
+  /** A negative variance within this rate can be applied as an audited operating loss without second-person approval. */
+  acceptedLossBps?: number
+  automaticAdjustmentMovementId?: string
   businessDate: string
   occurredAt: string
   idempotencyKey: string

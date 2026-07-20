@@ -40,11 +40,12 @@ function mockAdapter(
 
 class MemoryRepository implements RuntimeRepository {
   private queue = Promise.resolve()
+  readCount = 0
 
   constructor(readonly state: RuntimeState) {}
 
   async init() {}
-  async read() { await this.queue; return structuredClone(this.state) }
+  async read() { this.readCount += 1; await this.queue; return structuredClone(this.state) }
   async mutate<T>(mutation: (state: RuntimeState) => T | Promise<T>) {
     let result!: T
     this.queue = this.queue.then(async () => {
@@ -61,6 +62,17 @@ class MemoryRepository implements RuntimeRepository {
 }
 
 describe('customer notification dispatcher', () => {
+  it('reuses the scheduler snapshot when checking for due work', async () => {
+    const state = createSeedState()
+    const repository = new MemoryRepository(state)
+    const adapter = mockAdapter('service_account', [])
+
+    await dispatchDueNotifications(repository, [adapter], 'worker-a', NOW, {}, structuredClone(state))
+
+    expect(repository.readCount).toBe(0)
+    expect(adapter.dispatch).not.toHaveBeenCalled()
+  })
+
   it('does not steal an active lease and recovers it only after expiry', async () => {
     const state = queuedState()
     const notification = state.customerNotifications[0]!

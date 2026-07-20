@@ -36,6 +36,21 @@ export interface PublicReservationConfigView {
     maximumAdvanceDays: number
     acceptedContactMethods: Array<'phone' | 'wechat'>
   }
+  depositPolicy: {
+    enabled: boolean
+    currency: string
+    defaultDepositAmount: number
+    defaultMinimumSpendAmount: number
+    defaultDeductibleRateBps: number
+    customerNotice: string
+    areaRules: Array<{
+      areaPreferenceCode: string
+      depositAmount: number
+      minimumSpendAmount: number
+      deductibleRateBps: number
+      customerNotice: string
+    }>
+  }
 }
 
 export interface PublicReservationView {

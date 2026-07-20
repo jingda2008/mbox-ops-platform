@@ -122,7 +122,7 @@ async function createLoginApp() {
     accessCode,
     employeePins,
     sessionSecret,
-    sessionHours: 12,
+    sessionHours: 6,
     rateLimitStore: new MemoryRateLimitStore({
       usage: 'test', tenantId: 'tenant-test', storeId: 'mbox-lujiazui', hashSecret: 'l'.repeat(32),
     }),

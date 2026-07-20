@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import { registerCommerceRoutes } from './commerce-api.js'
 import { addOrderItem, createOrderDraft, submitOrder } from './order-domain.js'
 import { syncOrderFulfillmentWorkstations } from './fulfillment-workstations.js'
+import { receiveInventory } from './inventory-domain.js'
+import { createPaymentIntent, handlePaymentNotification } from './payment-domain.js'
 import { JsonRepository } from './repository.js'
 
 function registerTestActor(app: ReturnType<typeof Fastify>) {
@@ -165,6 +167,144 @@ describe('KDS exception API', () => {
     expect(state.orderDomain.orders[0]?.items[0]?.kdsTaskId).toBe(taskId)
     expect(state.auditEntries.filter((entry) => entry.action === 'kds.exception.reported.v1')).toHaveLength(1)
     expect(state.auditEntries.filter((entry) => entry.action === 'kds.exception.remake.v1')).toHaveLength(1)
+
+    await app.close()
+    await repository.close()
+  })
+
+  it('lets a manager cancel an undelivered item without changing order or payment amounts', async () => {
+    const repository = new JsonRepository(`/tmp/mbox-kds-manager-cancel-${crypto.randomUUID()}.json`)
+    await repository.init()
+    await createSubmittedOrder(repository)
+    const taskId = 'kds:order-kds-exception:line-kds-exception'
+    await repository.mutate((state) => {
+      const task = state.orderDomain.kdsTasks.find((candidate) => candidate.id === taskId)!
+      task.status = 'completed'
+      task.startedAt = '2026-07-15T12:01:00.000Z'
+      task.completedAt = '2026-07-15T12:02:00.000Z'
+      const payment = createPaymentIntent(state.paymentDomain, {
+        paymentIntentId: 'manager-cancel-paid-intent', tableSessionId: task.tableSessionId,
+        lineAllocations: [{ orderId: task.orderId, orderItemId: task.orderItemId, quantity: 1, unitPaidAmount: 6800 }],
+        amount: 6800, currency: 'CNY', channel: 'wechat_mock', merchantId: state.store.id,
+        createdBy: 'emp-chen', deviceId: 'test', occurredAt: '2026-07-15T12:02:01.000Z',
+        expiresAt: '2026-07-15T12:17:01.000Z', idempotencyKey: 'manager-cancel-payment-create',
+      })
+      handlePaymentNotification(state.paymentDomain, {
+        channel: payment.channel, notificationId: 'manager-cancel-payment-notification', paymentIntentId: payment.id,
+        channelTransactionId: 'manager-cancel-payment-transaction', status: 'succeeded', amount: 6800,
+        currency: 'CNY', merchantId: state.store.id, signatureVerified: true,
+        channelOccurredAt: '2026-07-15T12:02:02.000Z', receivedAt: '2026-07-15T12:02:02.000Z',
+      })
+      state.revision += 1
+    })
+    const app = Fastify()
+    registerTestActor(app)
+    app.setErrorHandler((error, _request, reply) => reply.status(error.statusCode ?? 400).send({ message: error.message }))
+    registerCommerceRoutes(app, repository)
+    const payload = {
+      reasonCode: 'manager_cancelled',
+      reasonNote: '翻台检查发现商品尚未送达',
+      idempotencyKey: 'manager-turnover-cancel-0001',
+    }
+
+    const denied = await app.inject({
+      method: 'POST', url: `/api/commerce/kds/${taskId}/manager-cancel`,
+      headers: headers('emp-han', 'kitchen'), payload,
+    })
+    expect(denied.statusCode).toBe(403)
+
+    const cancelled = await app.inject({
+      method: 'POST', url: `/api/commerce/kds/${taskId}/manager-cancel`,
+      headers: headers('emp-chen', 'manager'), payload,
+    })
+    expect(cancelled.statusCode, cancelled.body).toBe(200)
+    expect(cancelled.json()).toMatchObject({
+      taskId,
+      itemName: '精酿啤酒',
+      accounting: {
+        policy: 'manual_confirmation_required',
+        mutationApplied: false,
+        recommendation: 'review_refund',
+        payableAmount: 6800,
+        paidAmount: 6800,
+        refundedAmount: 0,
+        suggestedAmount: 6800,
+      },
+    })
+    const replayed = await app.inject({
+      method: 'POST', url: `/api/commerce/kds/${taskId}/manager-cancel`,
+      headers: headers('emp-chen', 'manager'), payload,
+    })
+    expect(replayed.statusCode, replayed.body).toBe(200)
+    expect(replayed.json().cancellationEventId).toBe(cancelled.json().cancellationEventId)
+
+    const state = await repository.read()
+    expect(state.orderDomain.orders[0]?.amounts).toEqual({
+      grossAmount: 6800, discountAmount: 0, giftAmount: 0, payableAmount: 6800,
+    })
+    expect(state.paymentDomain.refunds).toHaveLength(0)
+    expect(state.orderDomain.kdsTasks.find((task) => task.id === taskId)?.exceptionEvents).toHaveLength(2)
+    expect(state.auditEntries.filter((entry) => entry.action === 'kds.manager_cancelled.v1')).toHaveLength(1)
+
+    await app.close()
+    await repository.close()
+  })
+
+  it('creates a separately audited gift order only within the configured employee authority', async () => {
+    const repository = new JsonRepository(`/tmp/mbox-complimentary-order-${crypto.randomUUID()}.json`)
+    await repository.init()
+    const initial = await repository.read()
+    const table = initial.tables.find((candidate) => candidate.status === 'occupied')!
+    const product = initial.products.find((candidate) => candidate.id === 'product-fruit')!
+    await repository.mutate((state) => {
+      receiveInventory(state.inventoryDomain!, {
+        movementId: 'gift-order-receipt', productId: product.id, unitCode: 'portion', quantity: 5,
+        actorId: 'emp-chen', reason: '赠送订单测试入库', businessDate: state.store.businessDate,
+        occurredAt: new Date().toISOString(), idempotencyKey: 'gift-order-receipt-0001',
+      })
+      state.revision += 1
+    })
+    const app = Fastify()
+    registerTestActor(app)
+    app.setErrorHandler((error, _request, reply) => reply.status(error.statusCode ?? 400).send({ message: error.message }))
+    registerCommerceRoutes(app, repository)
+    const payload = {
+      tableId: table.id,
+      items: [{ productId: product.id, quantity: 1 }],
+      reason: '未上菜服务补偿',
+      sourceKdsTaskId: 'source-kds-test',
+      idempotencyKey: 'manager-gift-order-0001',
+    }
+
+    const denied = await app.inject({
+      method: 'POST', url: '/api/commerce/complimentary-orders',
+      headers: headers('emp-lin', 'server'), payload,
+    })
+    expect(denied.statusCode).toBe(403)
+
+    const created = await app.inject({
+      method: 'POST', url: '/api/commerce/complimentary-orders',
+      headers: headers('emp-chen', 'manager'), payload,
+    })
+    expect(created.statusCode, created.body).toBe(201)
+    expect(created.json()).toMatchObject({
+      status: 'submitted',
+      amounts: { grossAmount: 12800, discountAmount: 0, giftAmount: 12800, payableAmount: 0 },
+      items: [{ skuId: product.id, unitSalePriceAmount: 0 }],
+    })
+    const replayed = await app.inject({
+      method: 'POST', url: '/api/commerce/complimentary-orders',
+      headers: headers('emp-chen', 'manager'), payload,
+    })
+    expect(replayed.statusCode, replayed.body).toBe(201)
+    expect(replayed.json().id).toBe(created.json().id)
+
+    const state = await repository.read()
+    expect(state.orderDomain.kdsTasks.filter((task) => task.orderId === created.json().id)).toHaveLength(1)
+    expect(state.inventoryDomain?.movements.filter((movement) => movement.orderId === created.json().id)).toEqual([
+      expect.objectContaining({ type: 'gift', productId: product.id, quantity: 1 }),
+    ])
+    expect(state.auditEntries.filter((entry) => entry.action === 'commerce.complimentary_order.v1')).toHaveLength(1)
 
     await app.close()
     await repository.close()

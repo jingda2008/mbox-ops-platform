@@ -253,3 +253,11 @@
   .reservation-actions { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { .reservation-spin { animation: none; } }
+.reservation-deposit-preview { min-height: 44px; display: flex; align-items: center; gap: 9px; grid-column: 1 / -1; padding: 10px 12px; border: 1px solid #dfcf94; border-radius: 5px; background: #fff9e4; color: #5d4b13; font-size: 12px; }
+.reservation-deposit-rule-list { display: grid; gap: 8px; margin-top: 12px; }
+.reservation-deposit-rule { display: grid; grid-template-columns: minmax(120px, 1fr) repeat(3, minmax(120px, 1fr)); align-items: end; gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: #f7f8f4; }
+.reservation-deposit-rule > strong { align-self: center; }
+@media (max-width: 760px) {
+  .reservation-deposit-rule { grid-template-columns: 1fr 1fr; }
+  .reservation-deposit-rule > strong { grid-column: 1 / -1; }
+}

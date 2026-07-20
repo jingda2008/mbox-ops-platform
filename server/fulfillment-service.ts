@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type {
   RuntimeState,
   ServiceTask,
@@ -9,7 +10,6 @@ import type {
   KdsTask,
 } from '../src/shared/order-contracts.js'
 import {
-  fulfillmentFallbackRoleIds,
   normalizeOrderFulfillmentState,
   resolveKdsWorkstation,
 } from './fulfillment-workstations.js'
@@ -59,7 +59,6 @@ function candidatesForRoles(state: RuntimeState, tableId: string, roleIds: reado
 
 function chooseDeliveryOwner(state: RuntimeState, tableId: string, deliveryRoleIds: string[], stationId: string) {
   return candidatesForRoles(state, tableId, deliveryRoleIds, stationId)[0]
-    ?? candidatesForRoles(state, tableId, fulfillmentFallbackRoleIds, stationId)[0]
     ?? null
 }
 
@@ -75,8 +74,9 @@ function isoAfter(value: string, seconds: number) {
   return new Date(Date.parse(value) + seconds * 1000).toISOString()
 }
 
-function serviceTaskId(kdsTaskId: string) {
-  return `task:fulfillment:${kdsTaskId}`
+export function fulfillmentServiceTaskId(kdsTaskId: string) {
+  const digest = createHash('sha256').update(kdsTaskId).digest('hex').slice(0, 32)
+  return `task:fulfillment:${digest}`
 }
 
 function triggerId(kdsTaskId: string) {
@@ -128,7 +128,7 @@ export function ensureDeliveryServiceTask(
   }
 
   const expectedTriggerId = triggerId(kdsTask.id)
-  const expectedId = serviceTaskId(kdsTask.id)
+  const expectedId = fulfillmentServiceTaskId(kdsTask.id)
   const existing = state.tasks.find((task) => task.id === kdsTask.deliveryServiceTask?.id)
     ?? state.tasks.find((task) => task.triggerId === expectedTriggerId)
     ?? state.tasks.find((task) => task.id === expectedId)

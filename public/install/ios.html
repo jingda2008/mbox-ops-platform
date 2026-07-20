@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#111310" />
+    <meta name="format-detection" content="telephone=no" />
+    <title>M-BOX iPhone 验证安装</title>
+    <style>
+      :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif; background: #111310; color: #f7f5ef; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100dvh; background: #111310; }
+      main { width: min(100%, 520px); margin: 0 auto; padding: max(28px, env(safe-area-inset-top)) 20px max(32px, env(safe-area-inset-bottom)); }
+      header { display: flex; align-items: center; gap: 14px; padding-bottom: 24px; border-bottom: 1px solid #353732; }
+      .mark { width: 56px; height: 56px; display: grid; place-items: center; border: 1px solid #d8b64c; border-radius: 8px; background: #d8b64c; color: #111310; font-size: 30px; font-weight: 850; }
+      .brand { margin: 0; font-size: 22px; line-height: 1.2; letter-spacing: 0; }
+      .eyebrow { margin: 5px 0 0; color: #a8aca5; font-size: 13px; }
+      .intro { padding: 28px 0 20px; }
+      h1 { margin: 0; font-size: 30px; line-height: 1.2; letter-spacing: 0; }
+      .intro p { margin: 12px 0 0; color: #c5c7c1; font-size: 16px; line-height: 1.7; }
+      .actions { display: grid; gap: 12px; }
+      .button { min-height: 54px; display: flex; align-items: center; justify-content: center; gap: 10px; border: 1px solid #d8b64c; border-radius: 8px; padding: 14px 18px; color: #111310; background: #d8b64c; text-decoration: none; font-weight: 750; font-size: 17px; -webkit-tap-highlight-color: transparent; }
+      .button:active { transform: scale(.985); filter: brightness(.92); }
+      .button.secondary { color: #f7f5ef; background: #1a1c19; border-color: #4b4e48; }
+      .note { margin-top: 14px; color: #8f938c; font-size: 13px; line-height: 1.6; }
+      ol { list-style: none; margin: 28px 0 0; padding: 0; border-top: 1px solid #353732; }
+      li { display: grid; grid-template-columns: 38px 1fr; gap: 12px; padding: 18px 0; border-bottom: 1px solid #353732; }
+      .step { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid #d8b64c; border-radius: 50%; color: #d8b64c; font-weight: 750; }
+      h2 { margin: 1px 0 5px; font-size: 16px; letter-spacing: 0; }
+      li p { margin: 0; color: #aeb1aa; font-size: 14px; line-height: 1.6; }
+      .warning { margin-top: 22px; padding: 15px; border-left: 3px solid #d8b64c; background: #191b18; color: #c9cbc5; font-size: 13px; line-height: 1.65; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div class="mark" aria-hidden="true">M</div>
+        <div>
+          <p class="brand">M-BOX 现场运营</p>
+          <p class="eyebrow">LUJIAZUI · iPhone 验证版</p>
+        </div>
+      </header>
+      <section class="intro">
+        <h1>把运营台放到主屏幕</h1>
+        <p>安装后可像应用一样全屏打开，继续使用现有员工账号和六小时登录会话。</p>
+      </section>
+      <div class="actions">
+        <a class="button" href="/downloads/MBOX-Ops-Validation.mobileconfig">下载 iPhone 验证安装包</a>
+        <a class="button secondary" href="/">先在 Safari 打开系统</a>
+      </div>
+      <p class="note">请使用 iPhone 自带 Safari 打开此页面。配置包可随时在“设置”中移除。</p>
+      <ol>
+        <li><span class="step">1</span><div><h2>下载配置</h2><p>点击上方按钮，在系统询问时允许下载。</p></div></li>
+        <li><span class="step">2</span><div><h2>确认安装</h2><p>打开“设置”里的“已下载描述文件”，核对 M-BOX 运营验证版并安装。</p></div></li>
+        <li><span class="step">3</span><div><h2>开始值班</h2><p>回到主屏幕，点击 M-BOX运营 图标进入员工系统。</p></div></li>
+      </ol>
+      <div class="warning">这是门店验证入口，不是 App Store 正式发行包。正式 IPA/TestFlight 版本仍需 Apple Developer 签名与设备发行授权。</div>
+    </main>
+  </body>
+</html>

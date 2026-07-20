@@ -1,0 +1,4 @@
+interface:
+  display_name: "M-BOX Commercial Validation"
+  short_description: "Run the M-BOX commercial release gate"
+  default_prompt: "Validate M-BOX across unit, browser, load, TC, and staging release checks."

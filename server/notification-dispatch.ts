@@ -258,8 +258,14 @@ export async function dispatchDueNotifications(
   workerId: string,
   now = new Date(),
   options: NotificationDispatchOptions = {},
+  snapshot?: RuntimeState,
 ) {
   if (adapters.length === 0) return { claimed: 0, sent: 0, retryScheduled: 0, failed: 0 }
+  const settings = validateOptions(options)
+  const configuredChannels = new Set(adapters.map((adapter) => adapter.channel))
+  const hasDueNotification = selectDueNotifications(snapshot ?? await repository.read(), now, settings.limit)
+    .some((notification) => configuredChannels.has(notification.channel))
+  if (!hasDueNotification) return { claimed: 0, sent: 0, retryScheduled: 0, failed: 0 }
   const claims = await repository.mutate((state) => claimDueNotifications(
     state,
     workerId,

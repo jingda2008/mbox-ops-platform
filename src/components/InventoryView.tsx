@@ -37,6 +37,7 @@ import type {
   InventoryStockAlertRule,
   StockCount,
 } from '../shared/inventory-contracts'
+import { useRevealPanelScroll } from './use-reveal-panel-scroll'
 import './InventoryView.css'
 
 type InventoryTab = 'overview' | 'receipt' | 'count' | 'recipes' | 'remake' | 'bottles' | 'approvals' | 'policy'
@@ -465,6 +466,8 @@ function BottlePanel(props: BottlePanelProps) {
   const selectedBatch = activeBatches.find((item) => item.id === selectedBatchId) ?? null
   const employeeName = (id: string) => employees.find((item) => item.id === id)?.displayName ?? id
   const openSessions = tableSessions.filter((item) => item.status === 'open')
+  const depositPanelRef = useRevealPanelScroll<HTMLDivElement>(showDeposit ? 'bottle-deposit' : '')
+  const actionPanelRef = useRevealPanelScroll<HTMLDivElement>(selectedBatch ? `${selectedBatch.id}:${action}` : '')
 
   function openAction(batch: BottleStorageBatch, nextAction: BottleAction) {
     setSelectedBatchId(batch.id)
@@ -478,8 +481,8 @@ function BottlePanel(props: BottlePanelProps) {
           <div><Wine size={18} /><span><strong>客存酒台账</strong><small>{activeBatches.length}批有效存酒</small></span></div>
           <button className="primary-button" type="button" onClick={() => setShowDeposit((value) => !value)}><PackageOpen size={16} />{showDeposit ? '收起登记' : '登记存酒'}</button>
         </div>
-        {showDeposit && <BottleDepositForm products={products} members={members} sessions={openSessions} orders={orders} busy={busy} execute={execute} onDone={() => setShowDeposit(false)} />}
-        {selectedBatch && <BottleActionPanel batch={selectedBatch} action={action} members={members} sessions={openSessions} orders={orders} busy={busy} execute={execute} onClose={() => setSelectedBatchId('')} />}
+        {showDeposit && <div className="reveal-panel-target" ref={depositPanelRef}><BottleDepositForm products={products} members={members} sessions={openSessions} orders={orders} busy={busy} execute={execute} onDone={() => setShowDeposit(false)} /></div>}
+        {selectedBatch && <div className="reveal-panel-target" ref={actionPanelRef}><BottleActionPanel batch={selectedBatch} action={action} members={members} sessions={openSessions} orders={orders} busy={busy} execute={execute} onClose={() => setSelectedBatchId('')} /></div>}
         <div className="bottle-list">
           {inventory.bottleBatches.length === 0 && <EmptyState icon={<Wine size={24} />} text="暂无客存酒记录" />}
           {inventory.bottleBatches.toReversed().map((batch) => {

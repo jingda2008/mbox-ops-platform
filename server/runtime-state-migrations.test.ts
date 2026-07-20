@@ -87,6 +87,71 @@ describe('runtime state operational migrations', () => {
     expect(migrated.config.roles.find((role) => role.id === 'admin')?.permissionIds).not.toContain('finance.view')
   })
 
+  it('adds complex SOP defaults to legacy configs and runtime state', () => {
+    const legacy = structuredClone(createSeedState())
+    delete (legacy.config as Partial<RuntimeState['config']>).sopRules
+    for (const version of legacy.configVersions) {
+      delete (version.snapshot as Partial<RuntimeState['config']>).sopRules
+    }
+    delete (legacy as Partial<RuntimeState>).sopExecutions
+    delete (legacy as Partial<RuntimeState>).dutyManagerIncidents
+
+    const migrated = migrateRuntimeState(legacy)
+
+    expect(migrated.config.sopRules).toEqual([])
+    expect(migrated.configVersions.every((version) => Array.isArray(version.snapshot.sopRules))).toBe(true)
+    expect(migrated.sopExecutions).toEqual([])
+    expect(migrated.dutyManagerIncidents).toEqual([])
+  })
+
+  it('adds disabled hardware defaults and upgrades only built-in device roles once', () => {
+    const legacy = structuredClone(createSeedState())
+    delete (legacy as Partial<RuntimeState>).hardwareState
+    legacy.auditEntries = legacy.auditEntries.filter((entry) => entry.action !== 'runtime.hardware_permissions_v1_migrated.v1')
+    for (const role of legacy.config.roles) {
+      role.permissionIds = role.permissionIds?.filter((permissionId) => !permissionId.startsWith('hardware.'))
+    }
+
+    const migrated = migrateRuntimeState(legacy)
+
+    expect(migrated.hardwareState?.devices).toHaveLength(5)
+    expect(migrated.hardwareState?.devices.every((device) => !device.enabled && device.status === 'disabled')).toBe(true)
+    expect(migrated.config.roles.find((role) => role.id === 'admin')?.permissionIds).toEqual(expect.arrayContaining([
+      'hardware.view', 'hardware.operate', 'hardware.manage',
+    ]))
+    expect(migrated.config.roles.find((role) => role.id === 'manager')?.permissionIds).toEqual(expect.arrayContaining([
+      'hardware.view', 'hardware.operate',
+    ]))
+    expect(migrated.config.roles.find((role) => role.id === 'server')?.permissionIds).not.toContain('hardware.view')
+    expect(migrated.auditEntries.filter((entry) => entry.action === 'runtime.hardware_permissions_v1_migrated.v1')).toHaveLength(1)
+
+    const manager = migrated.config.roles.find((role) => role.id === 'manager')!
+    manager.permissionIds = manager.permissionIds?.filter((permissionId) => permissionId !== 'hardware.operate')
+    expect(migrateRuntimeState(migrated).config.roles.find((role) => role.id === 'manager')?.permissionIds).not.toContain('hardware.operate')
+  })
+
+  it('separates legacy management roles from production while preserving customized workstation roles', () => {
+    const legacy = createSeedState()
+    legacy.config.workstations.find((item) => item.id === 'bar-main')!.productionRoleIds = [
+      'bartender', 'specialist', 'supervisor', 'manager',
+    ]
+    legacy.config.workstations.find((item) => item.id === 'kitchen-cold')!.productionRoleIds = [
+      'kitchen', 'specialist', 'supervisor', 'manager',
+    ]
+    legacy.config.workstations.find((item) => item.id === 'kitchen-hot')!.productionRoleIds = ['kitchen', 'manager']
+    legacy.draftConfig = structuredClone(legacy.config)
+
+    const migrated = migrateRuntimeState(legacy)
+
+    expect(migrated.config.workstations.find((item) => item.id === 'bar-main')?.productionRoleIds).toEqual(['bartender'])
+    expect(migrated.config.workstations.find((item) => item.id === 'kitchen-cold')?.productionRoleIds).toEqual(['kitchen'])
+    expect(migrated.config.workstations.find((item) => item.id === 'kitchen-hot')?.productionRoleIds).toEqual(['kitchen', 'manager'])
+    expect(migrated.draftConfig?.workstations.find((item) => item.id === 'bar-main')?.productionRoleIds).toEqual(['bartender'])
+    expect(migrated.auditEntries).toContainEqual(expect.objectContaining({
+      action: 'runtime.workstation_production_roles_v1_migrated.v1',
+    }))
+  })
+
   it('softens only the previously shipped community-brand copy', () => {
     const legacy = createSeedState()
     legacy.config.communityBrand.eyebrow = 'M-BOX MEMBER COMMUNITY'

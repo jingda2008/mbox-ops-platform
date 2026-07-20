@@ -51,6 +51,8 @@
   gap: 11px;
   padding: 13px;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .voice-page-status { min-height: 34px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 9px; border: 1px solid #c7daca; border-radius: 5px; background: #f7fbf7; color: #2f6842; font-size: 11px; }
@@ -64,6 +66,37 @@
 .voice-command-heading h1 svg { flex: 0 0 auto; color: #8d6a12; }
 .voice-command-heading p { color: var(--ink-soft); font-size: 11px; }
 
+.duty-briefing { display: grid; gap: 7px; padding: 9px; border: 1px solid #c7cec7; border-left: 5px solid #6c786f; border-radius: 6px; background: #fff; }
+.duty-briefing.is-critical { border-color: #e2b4b7; border-left-color: var(--danger); background: #fff7f7; }
+.duty-briefing.is-attention { border-color: #e2cf91; border-left-color: #b88413; background: #fffdf5; }
+.duty-briefing.is-stable { border-color: #bdd3c1; border-left-color: var(--success); background: #f7fbf7; }
+.duty-briefing > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.duty-briefing > header span { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; }
+.duty-briefing > header small { color: var(--ink-soft); font-size: 9px; white-space: nowrap; }
+.duty-briefing > p { color: var(--ink); font-size: 11px; font-weight: 750; line-height: 1.4; }
+.duty-risk-list { display: grid; gap: 4px; }
+.duty-risk-item { display: grid; border: 1px solid #d7dcd6; border-radius: 5px; background: #fff; overflow: hidden; }
+.duty-risk-item.is-acknowledged { border-color: #a9c8b1; background: #f8fcf8; }
+.duty-risk-main { min-height: 44px; display: grid; grid-template-columns: 6px minmax(0, 1fr) 15px; align-items: center; gap: 7px; padding: 5px 7px; border: 0 !important; border-radius: 0 !important; background: transparent; text-align: left; }
+.duty-risk-main > i { width: 6px; height: 28px; border-radius: 2px; background: #879089; }
+.duty-risk-main > i.is-critical { background: var(--danger); }
+.duty-risk-main > i.is-high { background: #d07a19; }
+.duty-risk-main > i.is-medium { background: #c6a23f; }
+.duty-risk-main > span { min-width: 0; display: grid; gap: 1px; }
+.duty-risk-list strong, .duty-risk-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.duty-risk-list strong { font-size: 10px; }
+.duty-risk-list small { color: var(--ink-soft); font-size: 8px; }
+.duty-risk-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid #e3e6e1; }
+.duty-risk-actions button { min-height: 30px; display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 3px 5px; border: 0 !important; border-right: 1px solid #e3e6e1 !important; border-radius: 0 !important; background: #fafbf9; color: #4f5851; font-size: 8px; }
+.duty-risk-actions button:last-child { border-right: 0 !important; }
+.duty-risk-actions button:first-child { color: #27603b; font-weight: 800; }
+.duty-risk-dismiss-confirm { min-height: 38px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 5px; padding: 5px 7px; border-top: 1px solid #e7b7ba; background: #fff4f4; color: #8a3136; font-size: 8px; }
+.duty-risk-dismiss-confirm button { min-height: 28px; padding: 3px 7px; font-size: 8px; }
+.duty-handover-strip { min-height: 31px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: center; border-top: 1px solid #d9ded8; color: var(--ink-soft); font-size: 8px; text-align: center; }
+.duty-handover-strip span + span { border-left: 1px solid #d9ded8; }
+.duty-handover-strip b { color: var(--ink); font-size: 9px; }
+.voice-mode-header-actions .is-spinning { animation: duty-spin .9s linear infinite; }
+
 .assistant-conversation { min-height: 76px; max-height: 190px; display: grid; gap: 7px; padding: 8px; overflow-y: auto; border: 1px solid #cfd4cc; border-radius: 6px; background: #fff; }
 .assistant-message { max-width: 90%; display: grid; gap: 2px; padding: 7px 9px; border: 1px solid #d9ddd7; border-radius: 6px; background: #f4f6f2; }
 .assistant-message.is-user { justify-self: end; border-color: #d7c27f; background: #fff9e8; }
@@ -76,10 +109,31 @@
 .assistant-choice-list button { min-height: 38px; padding: 6px 8px; border-color: #c7b36d !important; background: #fff; color: var(--ink); font-size: 10px; text-align: left; }
 .assistant-choice-list button:hover { background: #fff9e8; }
 
+.voice-record-control {
+  min-height: 82px;
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  display: grid;
+  grid-template-columns: 66px minmax(0, 1fr);
+  align-items: center;
+  gap: 11px;
+  padding: 7px 10px;
+  border: 1px solid #c9cec6;
+  border-left: 5px solid #d3b145;
+  border-radius: 7px;
+  background: #fff;
+  box-shadow: 0 7px 18px rgba(28, 32, 27, .13);
+}
+.voice-record-control.is-listening { border-color: #e0a7ab; border-left-color: var(--brand-red); background: #fff8f8; }
+.voice-record-copy { min-width: 0; display: grid; gap: 3px; }
+.voice-record-copy strong { color: var(--ink); font-size: 13px; }
+.voice-record-copy span { overflow-wrap: anywhere; line-height: 1.35; }
+
 .voice-mic-button {
-  width: 92px;
-  height: 92px;
-  justify-self: center;
+  width: 62px;
+  height: 62px;
+  justify-self: start;
   display: grid;
   place-items: center;
   align-content: center;
@@ -91,13 +145,15 @@
   box-shadow: 0 8px 20px rgba(30, 34, 29, .12), inset 0 -4px #e5e7e1 !important;
   font-size: 12px;
   font-weight: 800;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 .voice-mic-button:hover { transform: translateY(-1px); }
 .voice-mic-button:active { transform: translateY(2px); box-shadow: 0 4px 10px rgba(30, 34, 29, .12), inset 0 2px #d9ddd5 !important; }
 .voice-mic-button.is-listening { border-color: var(--brand-red) !important; background: #fff4f4; color: var(--brand-red); animation: voice-pulse 1.4s ease-in-out infinite; }
 .voice-mic-button:disabled { cursor: not-allowed; opacity: .58; transform: none; animation: none; }
 
-.voice-inline-message { min-height: 18px; color: var(--ink-soft); font-size: 11px; text-align: center; }
+.voice-inline-message { min-height: 18px; color: var(--ink-soft); font-size: 11px; text-align: left; }
 .voice-command-input { min-height: 52px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 5px 6px 5px 10px; border: 1px solid var(--line-strong); border-radius: 7px; background: #fff; box-shadow: 0 5px 16px rgba(28, 32, 27, .07); }
 .voice-command-input > svg { color: var(--ink-soft); }
 .voice-command-input input { min-width: 0; height: 38px; border: 0 !important; outline: 0; background: transparent; color: var(--ink); font-size: 14px; box-shadow: none !important; }
@@ -183,6 +239,8 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes duty-spin { to { transform: rotate(360deg); } }
+
 @media (max-width: 620px) {
   .voice-mode-backdrop { display: none; }
   .voice-command-mode { width: 100vw; border-left: 0; box-shadow: none; }
@@ -191,7 +249,8 @@
   .voice-mode-header-actions .secondary-button svg { width: 18px; height: 18px; }
   .voice-command-stage { gap: 9px; padding: 10px; }
   .voice-command-heading h1 { font-size: 18px; }
-  .voice-mic-button { width: 82px; height: 82px; }
+  .voice-record-control { min-height: 76px; grid-template-columns: 60px minmax(0, 1fr); gap: 9px; padding: 6px 8px; }
+  .voice-mic-button { width: 56px; height: 56px; font-size: 10px; }
   .voice-command-input { grid-template-columns: 18px minmax(0, 1fr) 82px; }
   .voice-command-input input { font-size: 16px; }
   .voice-command-input .primary-button { width: 82px; padding-inline: 7px; white-space: nowrap; }
@@ -199,8 +258,8 @@
   .voice-command-mode.is-input-focused .voice-page-status,
   .voice-command-mode.is-input-focused .voice-tts-control,
   .voice-command-mode.is-input-focused .voice-command-heading,
-  .voice-command-mode.is-input-focused .voice-mic-button,
-  .voice-command-mode.is-input-focused .voice-inline-message,
+  .voice-command-mode.is-input-focused .duty-briefing,
+  .voice-command-mode.is-input-focused .voice-record-control,
   .voice-command-mode.is-input-focused .voice-mode-footer { display: none; }
   .voice-command-mode.is-input-focused .voice-command-input { position: sticky; top: 0; z-index: 3; box-shadow: 0 6px 18px rgba(20, 24, 21, .16); }
   .voice-command-mode.is-input-focused .assistant-conversation { max-height: 92px; }

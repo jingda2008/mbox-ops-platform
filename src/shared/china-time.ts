@@ -27,6 +27,13 @@ export function chinaDateKey(value: TimeInput = Date.now()) {
   return `${parts.year}-${parts.month}-${parts.day}`
 }
 
+export function chinaBusinessDateKey(value: TimeInput = Date.now(), rolloverHour = 6) {
+  if (!Number.isInteger(rolloverHour) || rolloverHour < 0 || rolloverHour > 23) throw new Error('营业日切换小时无效')
+  const parts = chinaParts(value)
+  const date = `${parts.year}-${parts.month}-${parts.day}`
+  return Number(parts.hour) < rolloverHour ? shiftDateKey(date, -1) : date
+}
+
 export function chinaDateTimeLocalValue(value: TimeInput) {
   const parts = chinaParts(value)
   return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`

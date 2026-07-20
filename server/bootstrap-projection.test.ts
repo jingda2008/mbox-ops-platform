@@ -3,6 +3,7 @@ import { createSeedState } from './seed.js'
 import { projectRuntimeStateForActor } from './bootstrap-projection.js'
 import { createOrderDraft } from './order-domain.js'
 import { transferOpenTableSession } from './table-session-api.js'
+import { createServiceTask } from './domain.js'
 
 function actor(actorId: string, roleId: string) {
   return { actorId, roleId, storeId: 'mbox-lujiazui', runtimeMode: 'test' as const, authenticatedBy: 'local_header' as const }
@@ -30,11 +31,61 @@ describe('role scoped bootstrap projection', () => {
 
   it('keeps owner store-wide financial and audit data', () => {
     const state = createSeedState()
-    state.auditEntries.push({ id: 'audit-1', actorId: 'emp-chen', action: 'visible', objectType: 'order', objectId: '1', occurredAt: new Date().toISOString(), details: {} })
+    state.auditEntries.push({
+      id: 'audit-1', actorId: 'emp-chen', action: 'visible', objectType: 'order', objectId: '1',
+      occurredAt: `${state.store.businessDate}T12:00:00+08:00`, details: {},
+    })
     const projected = projectRuntimeStateForActor(state, actor('emp-owner', 'owner'))
     expect(projected.tables).toHaveLength(state.tables.length)
     expect(projected.products.some((product) => product.costAmount > 0)).toBe(true)
     expect(projected.auditEntries).toHaveLength(1)
+  })
+
+  it('keeps only current-day operational rows in the polling snapshot', () => {
+    const state = createSeedState(new Date('2026-07-20T12:00:00.000Z'))
+    const activeTask = createServiceTask(state, {
+      tableCode: 'L01', serviceTypeId: state.config.serviceTypes[0]!.id,
+      source: 'system', note: '', idempotencyKey: 'projection-history-live-task', requestedBy: 'system',
+    })
+    for (let index = 0; index < 90; index += 1) {
+      const occurredAt = new Date(Date.UTC(2026, 6, 20, 10, index)).toISOString()
+      state.tasks.push({
+        ...structuredClone(activeTask), id: `archived-task-${index}`, status: 'cancelled',
+        updatedAt: occurredAt, archivedAt: occurredAt, archiveOutcome: 'resolved', archivedFromStatus: 'cancelled',
+      })
+      state.taskEvents.push({
+        id: `archived-event-${index}`, taskId: `archived-task-${index}`,
+        type: 'task.cancelled.v1', actorId: 'system', occurredAt, payload: {},
+      })
+    }
+    for (let index = 0; index < 300; index += 1) {
+      state.auditEntries.push({
+        id: `audit-history-${index}`, actorId: 'system', action: 'history', objectType: 'task',
+        objectId: `${index}`, occurredAt: new Date(Date.UTC(2026, 6, 19, 0, index)).toISOString(), details: {},
+      })
+    }
+    const currentSession = state.songState.tableSessions.find((session) => session.status === 'open')!
+    const historicalSessionId = `session:${currentSession.tableId}:2026-07-19:historical`
+    state.songState.tableSessions.push({
+      ...structuredClone(currentSession), id: historicalSessionId, status: 'closed',
+      openedAt: '2026-07-19T20:00:00+08:00', closedAt: '2026-07-20T02:00:00+08:00',
+    })
+    createOrderDraft(state.orderDomain, {
+      orderId: 'historical-order', tableSessionId: historicalSessionId, createdBy: 'emp-owner',
+      occurredAt: '2026-07-19T20:10:00+08:00', idempotencyKey: 'projection-historical-order',
+    })
+
+    const projected = projectRuntimeStateForActor(state, actor('emp-owner', 'owner'))
+    expect(projected.tasks.find((task) => task.id === activeTask.id)).toBeDefined()
+    expect(projected.tasks.every((task) => task.archivedAt === null)).toBe(true)
+    expect(projected.tasks.find((task) => task.id.startsWith('archived-task-'))).toBeUndefined()
+    expect(projected.taskEvents.every((event) => projected.tasks.some((task) => task.id === event.taskId))).toBe(true)
+    expect(projected.auditEntries.every((entry) => !entry.id.startsWith('audit-history-'))).toBe(true)
+    expect(projected.songState.tableSessions.map((session) => session.id)).not.toContain(historicalSessionId)
+    expect(projected.orderDomain.orders.map((order) => order.id)).not.toContain('historical-order')
+    expect(projected.shiftAssignments.every((shift) => (
+      shift.businessDate >= state.store.businessDate || shift.employeeId === 'emp-owner'
+    ))).toBe(true)
   })
 
   it('uses active shift areas instead of stale employee areas', () => {

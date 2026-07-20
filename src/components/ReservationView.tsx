@@ -13,6 +13,7 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
+  ImageDown,
   Search,
   Settings2,
   UserCheck,
@@ -21,8 +22,8 @@ import {
   UserPlus,
   X,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
-import { getBootstrap, getCurrentActorId } from '../api'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { getCurrentActorId } from '../api'
 import {
   actOnReservation,
   assignReservationSales,
@@ -50,6 +51,7 @@ import type {
 import { CHINA_TIME_ZONE, chinaDateTimeLocalValue, chinaLocalDateTimeToIso, chinaStartOfDay, formatChinaDateTime, formatChinaTime } from '../shared/china-time'
 import './ReservationView.css'
 import { WaitlistPanel } from './WaitlistPanel'
+import { useRevealPanelScroll } from './use-reveal-panel-scroll'
 
 type DateRange = 'today' | 'upcoming' | 'all'
 type Notice = { tone: 'success' | 'error'; message: string }
@@ -58,7 +60,9 @@ type Operation = { type: OperationType; reservation: Reservation }
 
 interface CreateDraft {
   customerName: string
-  contactReference: string
+  customerReference: string
+  phone: string
+  wechatId: string
   sourceCode: string
   partySize: number
   areaPreferenceCode: string
@@ -92,6 +96,90 @@ const depositLabels: Record<ReservationDepositStatus, string> = {
 }
 
 const emptyResponse: ReservationListResponse = { config: null, reservations: [] }
+const RESERVATION_POLL_INTERVAL_MS = 10_000
+
+interface ReservationPollingOptions {
+  isVisible?: () => boolean
+  schedule?: (callback: () => void, delay: number) => number
+  cancel?: (timer: number) => void
+  visibilityTarget?: Pick<Document, 'addEventListener' | 'removeEventListener'>
+  pageShowTarget?: Pick<Window, 'addEventListener' | 'removeEventListener'>
+}
+
+// oxlint-disable-next-line react/only-export-components -- exported for lifecycle tests
+export function startReservationPolling(
+  refresh: () => void | Promise<void>,
+  options: ReservationPollingOptions = {},
+) {
+  const isVisible = options.isVisible ?? (() => document.visibilityState === 'visible')
+  const schedule = options.schedule ?? ((callback, delay) => window.setTimeout(callback, delay))
+  const cancel = options.cancel ?? ((timer) => window.clearTimeout(timer))
+  const visibilityTarget = options.visibilityTarget ?? document
+  const pageShowTarget = options.pageShowTarget ?? window
+  let stopped = false
+  let timer: number | undefined
+  let running = false
+  let refreshAfterCurrent = false
+
+  const clearTimer = () => {
+    if (timer === undefined) return
+    cancel(timer)
+    timer = undefined
+  }
+  const scheduleNext = () => {
+    clearTimer()
+    if (stopped || !isVisible()) return
+    timer = schedule(() => {
+      timer = undefined
+      void poll()
+    }, RESERVATION_POLL_INTERVAL_MS)
+  }
+  const poll = async () => {
+    if (stopped || running || !isVisible()) return
+    running = true
+    try {
+      await refresh()
+    } catch {
+      // ReservationView owns the visible error notice; keep the polling loop recoverable.
+    } finally {
+      running = false
+    }
+    if (stopped || !isVisible()) return
+    if (refreshAfterCurrent) {
+      refreshAfterCurrent = false
+      void poll()
+      return
+    }
+    scheduleNext()
+  }
+  const refreshNow = () => {
+    clearTimer()
+    if (!isVisible()) return
+    if (running) {
+      refreshAfterCurrent = true
+      return
+    }
+    void poll()
+  }
+  const handleVisibilityChange = () => {
+    if (isVisible()) refreshNow()
+    else {
+      refreshAfterCurrent = false
+      clearTimer()
+    }
+  }
+
+  visibilityTarget.addEventListener('visibilitychange', handleVisibilityChange)
+  pageShowTarget.addEventListener('pageshow', refreshNow)
+  refreshNow()
+  return () => {
+    stopped = true
+    refreshAfterCurrent = false
+    clearTimer()
+    visibilityTarget.removeEventListener('visibilitychange', handleVisibilityChange)
+    pageShowTarget.removeEventListener('pageshow', refreshNow)
+  }
+}
 
 function defaultScheduledAt() {
   const date = new Date()
@@ -102,7 +190,9 @@ function defaultScheduledAt() {
 function createEmptyDraft(salesEmployeeId = ''): CreateDraft {
   return {
     customerName: '',
-    contactReference: '',
+    customerReference: '',
+    phone: '',
+    wechatId: '',
     sourceCode: '',
     partySize: 2,
     areaPreferenceCode: '',
@@ -124,7 +214,6 @@ interface ReservationAccess {
 
 export function ReservationView({ data }: { data: BootstrapResponse }) {
   const [response, setResponse] = useState<ReservationListResponse>(emptyResponse)
-  const [tables, setTables] = useState<Table[]>([])
   const [loading, setLoading] = useState(true)
   const [busyAction, setBusyAction] = useState('')
   const [notice, setNotice] = useState<Notice | null>(null)
@@ -145,6 +234,10 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
   const [editPartySize, setEditPartySize] = useState(1)
   const [editScheduledAt, setEditScheduledAt] = useState('')
   const [editAreaCode, setEditAreaCode] = useState('')
+  const configPanelRef = useRevealPanelScroll<HTMLDivElement>(showConfig && configDraft ? 'config' : '')
+  const createPanelRef = useRevealPanelScroll<HTMLFormElement>(showCreate ? 'create' : '')
+  const operationPanelRef = useRevealPanelScroll<HTMLDivElement>(operation ? `${operation.type}:${operation.reservation.id}` : '')
+  const loadInFlight = useRef<Promise<void> | null>(null)
   const actorId = getCurrentActorId()
   const employee = data.employees.find((item) => item.id === actorId)
   const activeShift = data.shiftAssignments.find((shift) =>
@@ -161,24 +254,34 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
     approveRefund: permissions.has('payment.refund.approve'),
   }
 
-  const load = useCallback(async (withSpinner = true) => {
+  const load = useCallback(async (withSpinner = true, refreshAfterActiveRequest = false) => {
+    if (loadInFlight.current) {
+      await loadInFlight.current
+      if (!refreshAfterActiveRequest) return
+      if (loadInFlight.current) await loadInFlight.current
+    }
     if (withSpinner) setLoading(true)
+    const request = (async () => {
+      try {
+        setResponse(await listReservations())
+        setNotice(null)
+      } catch (error) {
+        setNotice({ tone: 'error', message: errorMessage(error, '预约数据加载失败') })
+      } finally {
+        setLoading(false)
+      }
+    })()
+    loadInFlight.current = request
     try {
-      const [reservations, bootstrap] = await Promise.all([listReservations(), getBootstrap()])
-      setResponse(reservations)
-      setTables(bootstrap.tables)
-      setNotice(null)
-    } catch (error) {
-      setNotice({ tone: 'error', message: errorMessage(error, '预约数据加载失败') })
+      await request
     } finally {
-      setLoading(false)
+      if (loadInFlight.current === request) loadInFlight.current = null
     }
   }, [])
 
-  useEffect(() => {
-    void load()
-  }, [load])
+  useEffect(() => startReservationPolling(() => load(false)), [load])
 
+  const tables = data.tables
   const config = response.config
   const enabledSources = config?.sources.filter((item) => item.enabled).toSorted((a, b) => a.sortOrder - b.sortOrder) ?? []
   const enabledAreas = config?.areaPreferences.filter((item) => item.enabled).toSorted((a, b) => a.sortOrder - b.sortOrder) ?? []
@@ -226,7 +329,7 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
     setNotice(null)
     try {
       await action()
-      await load(false)
+      await load(false, true)
       setNotice({ tone: 'success', message: successMessage })
       closeOperation()
     } catch (error) {
@@ -238,13 +341,12 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
 
   function submitCreate(event: FormEvent) {
     event.preventDefault()
-    if (!draft.customerName.trim() || !draft.contactReference.trim() || !draft.sourceCode || !draft.scheduledAt || !draft.salesEmployeeId) {
-      setNotice({ tone: 'error', message: '请完整填写客人姓名、CRM/企微客户编号、来源、预约时间和销售归属' })
+    if (!draft.customerName.trim() || !draft.customerReference.trim() || (!draft.phone.trim() && !draft.wechatId.trim()) || !draft.sourceCode || !draft.scheduledAt || !draft.salesEmployeeId) {
+      setNotice({ tone: 'error', message: '请填写客人姓名、顾客ID、手机号或微信号、来源、预约时间和销售归属' })
       return
     }
-    const externalCustomerReference = draft.contactReference.trim()
-    if (looksLikePlaintextMobile(externalCustomerReference)) {
-      setNotice({ tone: 'error', message: '禁止录入明文手机号，请填写CRM或企微客户编号' })
+    if (draft.phone.trim() && !/^1\d{10}$/.test(draft.phone.trim())) {
+      setNotice({ tone: 'error', message: '手机号需填写11位中国大陆号码' })
       return
     }
     const depositAmount = Math.round(Number(draft.depositYuan) * 100)
@@ -253,11 +355,11 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
       return
     }
     void execute('create', '预约已创建，进入待确认队列', async () => {
-      const staffReference = `staff-ref:${externalCustomerReference}`
-      await createReservation({
-        customerReference: staffReference,
+      const created = await createReservation({
+        customerReference: draft.customerReference.trim(),
         customerName: draft.customerName.trim(),
-        contactReference: staffReference,
+        phone: draft.phone.trim() || undefined,
+        wechatId: draft.wechatId.trim() || undefined,
         sourceCode: draft.sourceCode,
         partySize: draft.partySize,
         areaPreferenceCode: draft.areaPreferenceCode || undefined,
@@ -269,6 +371,7 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
         salesEmployeeId: draft.salesEmployeeId,
         idempotencyKey: idempotencyKey('create'),
       })
+      downloadReservationCard(created, config)
       setDraft(createEmptyDraft(draft.salesEmployeeId))
       setShowCreate(false)
     })
@@ -490,9 +593,10 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
         <span><Clock3 size={15} /><strong>迟到保留</strong>{config.lateHoldMinutes}分钟</span>
         <span><Search size={15} /><strong>来源</strong>{enabledSources.map((item) => item.name).join('、') || '未配置'}</span>
         <span><CalendarClock size={15} /><strong>场景</strong>{enabledOccasions.map((item) => item.name).join('、') || '未配置'}</span>
+        <span><Banknote size={15} /><strong>定金</strong>{config.depositPolicy.enabled ? '按区域自动计算' : '未开启'}</span>
       </div>}
 
-      {showConfig && configDraft && config && <ReservationConfigPanel
+      {showConfig && configDraft && config && <div className="reveal-panel-target" ref={configPanelRef}><ReservationConfigPanel
         currentVersion={config.version}
         draft={configDraft}
         reason={configReason}
@@ -501,20 +605,23 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
         onReasonChange={setConfigReason}
         onClose={closeConfig}
         onSubmit={submitConfig}
-      />}
+      /></div>}
 
-      {showCreate && <form className="reservation-create" onSubmit={submitCreate}>
+      {showCreate && <form className="reservation-create reveal-panel-target" ref={createPanelRef} onSubmit={submitCreate}>
         <div className="reservation-section-title"><Plus size={18} /><div><span>人工录入</span><h3>创建预约</h3></div></div>
         <div className="reservation-form-grid">
           <Field label="客人姓名"><input required maxLength={100} value={draft.customerName} onChange={(event) => setDraft({ ...draft, customerName: event.target.value })} /></Field>
-          <Field label="CRM/企微客户编号"><input required maxLength={118} autoComplete="off" placeholder="例如 CRM-102938 或 wm_xxx" value={draft.contactReference} onChange={(event) => setDraft({ ...draft, contactReference: event.target.value })} /></Field>
+          <Field label="顾客ID（支持中文）"><input required maxLength={128} autoComplete="off" placeholder="例如 李先生0720 / 企业客户A" value={draft.customerReference} onChange={(event) => setDraft({ ...draft, customerReference: event.target.value })} /></Field>
+          <Field label="联系电话"><input inputMode="tel" maxLength={11} placeholder="电话预约建议必填" value={draft.phone} onChange={(event) => setDraft({ ...draft, phone: event.target.value.replace(/\D/g, '').slice(0, 11) })} /></Field>
+          <Field label="微信号"><input maxLength={80} placeholder="手机号、微信号至少填一项" value={draft.wechatId} onChange={(event) => setDraft({ ...draft, wechatId: event.target.value })} /></Field>
           <Field label="预约时间（北京时间）"><input required type="datetime-local" value={draft.scheduledAt} onChange={(event) => setDraft({ ...draft, scheduledAt: event.target.value })} /></Field>
           <Field label="人数"><input required type="number" min={config?.minimumPartySize ?? 1} max={config?.maximumPartySize ?? 100} value={draft.partySize} onChange={(event) => setDraft({ ...draft, partySize: Number(event.target.value) })} /></Field>
           <Field label="来源"><select required value={draft.sourceCode} onChange={(event) => setDraft({ ...draft, sourceCode: event.target.value })}><option value="">请选择</option>{enabledSources.map((source) => <option key={source.code} value={source.code}>{source.name}</option>)}</select></Field>
           <Field label="销售归属"><select required value={draft.salesEmployeeId} onChange={(event) => setDraft({ ...draft, salesEmployeeId: event.target.value })}><option value="">请选择销售</option>{salesEmployees.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select></Field>
           <Field label="区域偏好"><select value={draft.areaPreferenceCode} onChange={(event) => setDraft({ ...draft, areaPreferenceCode: event.target.value })}><option value="">无指定</option>{enabledAreas.map((area) => <option key={area.code} value={area.code}>{area.name}</option>)}</select></Field>
           <Field label="到店场景"><select value={draft.occasionCode} onChange={(event) => setDraft({ ...draft, occasionCode: event.target.value as CreateDraft['occasionCode'] })}><option value="">普通到店</option>{enabledOccasions.map((occasion) => <option key={occasion.code} value={occasion.code}>{occasion.name}</option>)}</select></Field>
-          <Field label="定金（元）"><input type="number" min={0} step="0.01" value={draft.depositYuan} onChange={(event) => setDraft({ ...draft, depositYuan: event.target.value })} /></Field>
+          <Field label="定金（元）"><input type="number" min={0} step="0.01" disabled={config?.depositPolicy.enabled} value={config?.depositPolicy.enabled ? String(depositRuleForDraft(config, draft.areaPreferenceCode).depositAmount / 100) : draft.depositYuan} onChange={(event) => setDraft({ ...draft, depositYuan: event.target.value })} /></Field>
+          {config?.depositPolicy.enabled && <div className="reservation-deposit-preview"><Banknote size={16} /><span>此位置定金 <b>{money(depositRuleForDraft(config, draft.areaPreferenceCode).depositAmount)}</b> · 可抵消费 {(depositRuleForDraft(config, draft.areaPreferenceCode).deductibleRateBps / 100).toFixed(0)}% · 低消 {money(depositRuleForDraft(config, draft.areaPreferenceCode).minimumSpendAmount)}</span></div>}
           <Field label="接待备注" wide><input maxLength={500} placeholder="生日称呼、座位要求或其他交接事项" value={draft.occasionNote} onChange={(event) => setDraft({ ...draft, occasionNote: event.target.value })} /></Field>
           <button className="primary-button" type="submit" disabled={Boolean(busyAction) || !config}>
             {busyAction === 'create' ? <LoaderCircle className="reservation-spin" size={17} /> : <Check size={17} />}保存预约
@@ -522,7 +629,7 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
         </div>
       </form>}
 
-      {operation && <OperationPanel
+      {operation && <div className="reveal-panel-target" ref={operationPanelRef}><OperationPanel
         operation={operation}
         tables={tables}
         selectedTableId={selectedTableId}
@@ -546,7 +653,7 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
         onSalesEmployeeChange={setSelectedSalesEmployeeId}
         onClose={closeOperation}
         onSubmit={submitOperation}
-      />}
+      /></div>}
 
       <section className="reservation-list-section">
         <div className="reservation-toolbar">
@@ -570,6 +677,7 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
             busyAction={busyAction}
             onQuickAction={quickAction}
             onOpenOperation={openOperation}
+            onSaveCard={(item) => downloadReservationCard(item, config)}
           />)}
         </div>
       </section>
@@ -634,6 +742,21 @@ function ReservationConfigPanel({ currentVersion, draft, reason, busy, onChange,
     onChange({ ...draft, publicRules: { ...draft.publicRules, acceptedContactMethods } })
   }
 
+  function updateDepositAreaRule(areaPreferenceCode: string, patch: Partial<ConfigDraft['depositPolicy']['areaRules'][number]>) {
+    const existing = draft.depositPolicy.areaRules.find((item) => item.areaPreferenceCode === areaPreferenceCode)
+    const next = existing
+      ? draft.depositPolicy.areaRules.map((item) => item.areaPreferenceCode === areaPreferenceCode ? { ...item, ...patch } : item)
+      : [...draft.depositPolicy.areaRules, {
+          areaPreferenceCode,
+          depositAmount: draft.depositPolicy.defaultDepositAmount,
+          minimumSpendAmount: draft.depositPolicy.defaultMinimumSpendAmount,
+          deductibleRateBps: draft.depositPolicy.defaultDeductibleRateBps,
+          customerNotice: '',
+          ...patch,
+        }]
+    onChange({ ...draft, depositPolicy: { ...draft.depositPolicy, areaRules: next } })
+  }
+
   return <form className="reservation-config-panel" onSubmit={onSubmit}>
     <header className="reservation-config-heading">
       <div><Settings2 size={19} /><span><small>经理权限</small><strong>预约规则配置</strong></span></div>
@@ -646,6 +769,34 @@ function ReservationConfigPanel({ currentVersion, draft, reason, busy, onChange,
       <Field label="最多人数"><input required type="number" min={1} max={100} value={draft.maximumPartySize} onChange={(event) => onChange({ ...draft, maximumPartySize: Number(event.target.value) })} /></Field>
       <Field label="迟到保留（分钟）"><input required type="number" min={0} max={240} value={draft.lateHoldMinutes} onChange={(event) => onChange({ ...draft, lateHoldMinutes: Number(event.target.value) })} /></Field>
       <Field label="候补响应（分钟）"><input required type="number" min={1} max={120} value={draft.waitlistResponseMinutes} onChange={(event) => onChange({ ...draft, waitlistResponseMinutes: Number(event.target.value) })} /></Field>
+    </section>
+
+    <section className="reservation-config-section">
+      <div className="reservation-config-section-title"><strong>预约定金与位置低消</strong><span>开启后由系统按区域自动计算，员工不能随意改金额</span></div>
+      <div className="reservation-config-choice-row"><span>定金模式</span><label><input type="checkbox" checked={draft.depositPolicy.enabled} onChange={(event) => onChange({ ...draft, depositPolicy: { ...draft.depositPolicy, enabled: event.target.checked } })} />{draft.depositPolicy.enabled ? '已开启' : '未开启'}</label></div>
+      <div className="reservation-config-business-grid is-rules">
+        <Field label="默认定金（元）"><input type="number" min={0} step="0.01" value={draft.depositPolicy.defaultDepositAmount / 100} onChange={(event) => onChange({ ...draft, depositPolicy: { ...draft.depositPolicy, defaultDepositAmount: Math.max(0, Math.round(Number(event.target.value) * 100)) } })} /></Field>
+        <Field label="默认低消（元）"><input type="number" min={0} step="0.01" value={draft.depositPolicy.defaultMinimumSpendAmount / 100} onChange={(event) => onChange({ ...draft, depositPolicy: { ...draft.depositPolicy, defaultMinimumSpendAmount: Math.max(0, Math.round(Number(event.target.value) * 100)) } })} /></Field>
+        <Field label="默认可抵消费（%）"><input type="number" min={0} max={100} step={1} value={draft.depositPolicy.defaultDeductibleRateBps / 100} onChange={(event) => onChange({ ...draft, depositPolicy: { ...draft.depositPolicy, defaultDeductibleRateBps: Math.max(0, Math.min(10_000, Math.round(Number(event.target.value) * 100))) } })} /></Field>
+      </div>
+      <Field label="顾客提示" wide><input required maxLength={300} value={draft.depositPolicy.customerNotice} onChange={(event) => onChange({ ...draft, depositPolicy: { ...draft.depositPolicy, customerNotice: event.target.value } })} /></Field>
+      <div className="reservation-deposit-rule-list">
+        {draft.areaPreferences.filter((area) => area.enabled).map((area) => {
+          const rule = draft.depositPolicy.areaRules.find((item) => item.areaPreferenceCode === area.code) ?? {
+            areaPreferenceCode: area.code,
+            depositAmount: draft.depositPolicy.defaultDepositAmount,
+            minimumSpendAmount: draft.depositPolicy.defaultMinimumSpendAmount,
+            deductibleRateBps: draft.depositPolicy.defaultDeductibleRateBps,
+            customerNotice: '',
+          }
+          return <div className="reservation-deposit-rule" key={area.code}>
+            <strong>{area.name}</strong>
+            <Field label="定金（元）"><input type="number" min={0} step="0.01" value={rule.depositAmount / 100} onChange={(event) => updateDepositAreaRule(area.code, { depositAmount: Math.max(0, Math.round(Number(event.target.value) * 100)) })} /></Field>
+            <Field label="低消（元）"><input type="number" min={0} step="0.01" value={rule.minimumSpendAmount / 100} onChange={(event) => updateDepositAreaRule(area.code, { minimumSpendAmount: Math.max(0, Math.round(Number(event.target.value) * 100)) })} /></Field>
+            <Field label="抵扣（%）"><input type="number" min={0} max={100} value={rule.deductibleRateBps / 100} onChange={(event) => updateDepositAreaRule(area.code, { deductibleRateBps: Math.max(0, Math.min(10_000, Math.round(Number(event.target.value) * 100))) })} /></Field>
+          </div>
+        })}
+      </div>
     </section>
 
     <section className="reservation-config-section">
@@ -726,13 +877,14 @@ function ReservationConfigPanel({ currentVersion, draft, reason, busy, onChange,
   </form>
 }
 
-function ReservationRow({ reservation, salesName, access, busyAction, onQuickAction, onOpenOperation }: {
+function ReservationRow({ reservation, salesName, access, busyAction, onQuickAction, onOpenOperation, onSaveCard }: {
   reservation: Reservation
   salesName: string
   access: ReservationAccess
   busyAction: string
   onQuickAction: (reservation: Reservation, action: 'confirm' | 'arrive') => void
   onOpenOperation: (type: OperationType, reservation: Reservation) => void
+  onSaveCard: (reservation: Reservation) => void
 }) {
   const canConfirm = reservation.status === 'requested' && ['not_required', 'payment_confirmed'].includes(reservation.deposit.status)
   const canNoShow = reservation.status === 'confirmed' && Date.parse(reservation.scheduledAt) <= Date.now()
@@ -743,6 +895,7 @@ function ReservationRow({ reservation, salesName, access, busyAction, onQuickAct
     <div className="reservation-placement"><span><MapPin size={13} />{reservation.tableCode ?? reservation.areaPreferenceCode ?? '区域待定'}</span><small><UserPlus size={12} />{salesName}</small>{reservation.occasionCode && <b>{occasionLabel(reservation.occasionCode)}</b>}</div>
     <div className="reservation-state"><span className={`reservation-status is-${reservation.status}`}>{statusLabels[reservation.status]}</span><small className={`deposit-status is-${reservation.deposit.status}`}>{depositLabels[reservation.deposit.status]}{reservation.deposit.requiredAmount > 0 ? ` · ${money(reservation.deposit.requiredAmount)}` : ''}</small></div>
     <fieldset className="reservation-actions" disabled={Boolean(busyAction)}>
+      <ActionButton icon={ImageDown} label="保存预约卡" onClick={() => onSaveCard(reservation)} />
       {access.manage && ['requested', 'confirmed', 'arrived'].includes(reservation.status) && <ActionButton icon={RefreshCw} label="修改人数/时间" onClick={() => onOpenOperation('edit', reservation)} />}
       {access.manage && ['requested', 'confirmed', 'arrived', 'seated'].includes(reservation.status) && <ActionButton icon={UserPlus} label="变更销售" onClick={() => onOpenOperation('sales', reservation)} />}
       {access.manage && reservation.status === 'confirmed' && reservation.holdStatus !== 'held' && <ActionButton icon={Clock3} label="迟到保留" onClick={() => onOpenOperation('late_hold', reservation)} />}
@@ -856,6 +1009,10 @@ function configWriteDraft(config: ReservationConfig): ConfigDraft {
       acceptedContactMethods: [...config.publicRules.acceptedContactMethods],
       createRateLimit: { ...config.publicRules.createRateLimit },
     },
+    depositPolicy: {
+      ...config.depositPolicy,
+      areaRules: config.depositPolicy.areaRules.map((item) => ({ ...item })),
+    },
   }
 }
 
@@ -884,6 +1041,14 @@ function normalizeConfigDraft(draft: ConfigDraft): ConfigDraft {
       acceptedContactMethods: [...draft.publicRules.acceptedContactMethods],
       createRateLimit: { ...draft.publicRules.createRateLimit },
     },
+    depositPolicy: {
+      ...draft.depositPolicy,
+      customerNotice: draft.depositPolicy.customerNotice.trim(),
+      areaRules: draft.depositPolicy.areaRules.map((item) => ({
+        ...item,
+        customerNotice: item.customerNotice.trim(),
+      })),
+    },
   }
 }
 
@@ -907,6 +1072,11 @@ function validateConfigDraft(draft: ConfigDraft, reason: string) {
   if (draft.publicRules.acceptedContactMethods.length < 1) return '手机号和微信号至少启用一种'
   if (!Number.isInteger(draft.publicRules.createRateLimit.limit) || draft.publicRules.createRateLimit.limit < 1 || draft.publicRules.createRateLimit.limit > 100) return '公开预约限流次数不合法'
   if (!Number.isInteger(draft.publicRules.createRateLimit.windowMinutes) || draft.publicRules.createRateLimit.windowMinutes < 1 || draft.publicRules.createRateLimit.windowMinutes > 1_440) return '公开预约限流窗口不合法'
+  if (!draft.depositPolicy.customerNotice.trim()) return '请填写定金抵扣规则的顾客提示'
+  if (!Number.isInteger(draft.depositPolicy.defaultDepositAmount) || draft.depositPolicy.defaultDepositAmount < 0) return '默认定金金额不合法'
+  if (!Number.isInteger(draft.depositPolicy.defaultMinimumSpendAmount) || draft.depositPolicy.defaultMinimumSpendAmount < 0) return '默认低消金额不合法'
+  if (!Number.isInteger(draft.depositPolicy.defaultDeductibleRateBps) || draft.depositPolicy.defaultDeductibleRateBps < 0 || draft.depositPolicy.defaultDeductibleRateBps > 10_000) return '默认定金抵扣比例不合法'
+  if (new Set(draft.depositPolicy.areaRules.map((item) => item.areaPreferenceCode)).size !== draft.depositPolicy.areaRules.length) return '同一位置不能配置两条定金规则'
   if (draft.sources.length < 1 || draft.sources.length > 50) return '预约来源数量必须为1至50个'
   if (!draft.sources.some((item) => item.enabled)) return '至少需要启用一个预约来源'
   const sourceError = validateNamedCodes(draft.sources, '预约来源')
@@ -943,14 +1113,82 @@ function normalizeCodeInput(value: string) {
   return value.toLocaleLowerCase('en-US').replace(/[^a-z0-9_-]/g, '')
 }
 
-function looksLikePlaintextMobile(value: string) {
-  const compact = value.replace(/[\s()+-]/g, '')
-  return /^(?:86)?1[3-9]\d{9}$/.test(compact)
-}
-
 function displayCustomerReference(value: string) {
   const displayed = value.startsWith('staff-ref:') ? value.slice('staff-ref:'.length) : value
-  return displayed.replace(/phone:\+86(\d{3})\d{4}(\d{4})/, 'phone:+86$1****$2')
+  return displayed
+    .replace(/phone:(?:\+86)?(\d{3})\d{4}(\d{4})/, '电话：$1****$2')
+    .replace(/wechat:/g, '微信：')
+}
+
+function depositRuleForDraft(config: ReservationConfig, areaPreferenceCode: string) {
+  const policy = config.depositPolicy
+  const areaRule = policy.areaRules.find((item) => item.areaPreferenceCode === areaPreferenceCode)
+  return {
+    depositAmount: areaRule?.depositAmount ?? policy.defaultDepositAmount,
+    minimumSpendAmount: areaRule?.minimumSpendAmount ?? policy.defaultMinimumSpendAmount,
+    deductibleRateBps: areaRule?.deductibleRateBps ?? policy.defaultDeductibleRateBps,
+    customerNotice: areaRule?.customerNotice || policy.customerNotice,
+  }
+}
+
+function downloadReservationCard(reservation: Reservation, config: ReservationConfig | null) {
+  const canvas = document.createElement('canvas')
+  canvas.width = 1080
+  canvas.height = 1350
+  const context = canvas.getContext('2d')
+  if (!context) return
+  context.fillStyle = '#111310'
+  context.fillRect(0, 0, canvas.width, canvas.height)
+  context.fillStyle = '#d8b84e'
+  context.fillRect(0, 0, canvas.width, 22)
+  context.fillStyle = '#f7f7f2'
+  context.font = '700 68px sans-serif'
+  context.fillText('M-BOX', 88, 130)
+  context.font = '500 28px sans-serif'
+  context.fillStyle = '#c6c9c1'
+  context.fillText('LIVEHOUSE · LUJIAZUI', 88, 178)
+  context.fillStyle = '#f7f7f2'
+  context.font = '700 48px sans-serif'
+  context.fillText('预约确认', 88, 292)
+  context.strokeStyle = '#42483f'
+  context.lineWidth = 2
+  context.strokeRect(72, 340, 936, 690)
+  const rows = [
+    ['预约姓名', reservation.customerName],
+    ['预约时间', formatChinaDateTime(reservation.scheduledAt, { second: undefined })],
+    ['到店人数', `${reservation.partySize}人`],
+    ['区域偏好', config?.areaPreferences.find((area) => area.code === reservation.areaPreferenceCode)?.name ?? '到店安排'],
+    ['预约编号', reservation.id.slice(0, 12).toUpperCase()],
+    ['定金金额', money(reservation.deposit.requiredAmount)],
+  ]
+  rows.forEach(([label, value], index) => {
+    const y = 430 + index * 96
+    context.fillStyle = '#999f95'
+    context.font = '500 27px sans-serif'
+    context.fillText(label!, 112, y)
+    context.fillStyle = '#f7f7f2'
+    context.font = '650 32px sans-serif'
+    context.fillText(value!, 340, y)
+  })
+  const depositRule = config ? depositRuleForDraft(config, reservation.areaPreferenceCode ?? '') : null
+  context.fillStyle = '#d8b84e'
+  context.font = '600 27px sans-serif'
+  context.fillText(depositRule && reservation.deposit.requiredAmount > 0
+    ? `定金可抵消费 ${(depositRule.deductibleRateBps / 100).toFixed(0)}% · 本位置低消 ${money(depositRule.minimumSpendAmount)}`
+    : '到店后由服务伙伴为您安排座位与接待', 88, 1125)
+  context.fillStyle = '#aeb3aa'
+  context.font = '500 25px sans-serif'
+  context.fillText('地址：上海市浦东南路889号陆家嘴中心RG05', 88, 1210)
+  context.fillText('预约如有变化，请提前联系门店。', 88, 1258)
+  canvas.toBlob((blob) => {
+    if (!blob) return
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `MBOX预约-${reservation.customerName}-${reservation.scheduledAt.slice(0, 10)}.png`
+    anchor.click()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000)
+  }, 'image/png')
 }
 
 function inDateRange(value: string, range: DateRange) {

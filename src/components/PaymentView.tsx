@@ -38,6 +38,7 @@ import {
   type SettlementChannel,
 } from '../shared/payment-contracts'
 import type { Order, OrderItem } from '../shared/order-contracts'
+import { useRevealPanelScroll } from './use-reveal-panel-scroll'
 import { CustomerPaymentCodeScanner } from './CustomerPaymentCodeScanner'
 import './PaymentView.css'
 
@@ -114,6 +115,7 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
   const [activeWorkspace, setActiveWorkspace] = useState<'collection' | 'tracking' | 'refunds' | 'handover'>('collection')
   const [showAllAccounts, setShowAllAccounts] = useState(false)
   const [settlement, setSettlement] = useState<PaymentSettlementView | null>(null)
+  const [settlementBusinessDate, setSettlementBusinessDate] = useState(data.store.businessDate)
   const [actualAmounts, setActualAmounts] = useState<Record<SettlementChannel, string>>({
     cash: '0.00', physical_pos: '0.00', wechat: '0.00', alipay: '0.00', unionpay: '0.00',
   })
@@ -126,7 +128,6 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
   })
   const [handoverNote, setHandoverNote] = useState('')
   const [reviewNote, setReviewNote] = useState('')
-  const [nextBusinessDate, setNextBusinessDate] = useState(() => followingBusinessDate(data.store.businessDate))
 
   const tableAccounts = useMemo(
     () => buildTableAccounts(data, paymentDomain.paymentIntents, paymentDomain.refunds),
@@ -136,6 +137,10 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
   const actionableAccounts = tableAccounts.filter((account) => account.collectableAmount > 0 || account.reservedAmount > 0 || account.orders.length > 0)
   const visibleTableAccounts = showAllAccounts ? tableAccounts : actionableAccounts
   const [expandedAccountId, setExpandedAccountId] = useState(preferredExpandedAccountId)
+  const [accountRevealTick, setAccountRevealTick] = useState(0)
+  const accountPanelRef = useRevealPanelScroll<HTMLDivElement>(accountRevealTick)
+  const refundDraftRef = useRevealPanelScroll<HTMLFormElement>(refundDraft?.paymentIntentId ?? '')
+  const refundCompletionRef = useRevealPanelScroll<HTMLFormElement>(refundCompletion.refundId)
   const physicalPosIntents = paymentDomain.paymentIntents.filter(
     (intent) => intent.channel === PHYSICAL_POS_CHANNEL && intent.status === 'pending',
   )
@@ -154,15 +159,15 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
     .filter((intent) => intent.status === 'reported_pending_reconciliation')
     .reduce((sum, intent) => sum + intent.amount, 0)
   const openReceivable = tableAccounts.reduce((sum, account) => sum + account.collectableAmount, 0)
-  const activeShift = data.shiftAssignments.find((shift) => (
+  const settlementShift = data.shiftAssignments.find((shift) => (
     shift.employeeId === currentActorId
-    && shift.businessDate === data.store.businessDate
-    && shift.status === 'active'
+    && shift.businessDate === settlementBusinessDate
+    && (settlementBusinessDate === data.store.businessDate ? shift.status === 'active' : shift.status !== 'cancelled')
   ))
-  const activeRoleIds = activeShift ? [activeShift.roleId, ...(activeShift.roleIds ?? [])] : []
-  const isCashier = activeRoleIds.includes('cashier')
+  const settlementRoleIds = settlementShift ? [settlementShift.roleId, ...(settlementShift.roleIds ?? [])] : []
+  const isCashier = settlementRoleIds.includes('cashier')
   const managementRoleIds = ['manager', 'operations_director', 'owner']
-  const isManager = managementRoleIds.some((roleId) => activeRoleIds.includes(roleId))
+  const isManager = managementRoleIds.some((roleId) => settlementRoleIds.includes(roleId))
     || managementRoleIds.includes(currentEmployee?.roleId ?? '')
 
   useEffect(() => {
@@ -174,7 +179,7 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
   }, [preferredExpandedAccountId, tableAccounts])
 
   const loadSettlement = useCallback(async () => {
-    const result = await paymentApi.getPaymentSettlement(data.store.businessDate)
+    const result = await paymentApi.getPaymentSettlement(settlementBusinessDate)
     setSettlement(result)
     setActualAmounts(Object.fromEntries(result.channels.map((item) => [
       item.channel,
@@ -190,14 +195,17 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
         return next
       })
     }
+  }, [settlementBusinessDate])
+
+  useEffect(() => {
+    setSettlementBusinessDate(data.store.businessDate)
   }, [data.store.businessDate])
 
   useEffect(() => {
-    setNextBusinessDate(followingBusinessDate(data.store.businessDate))
     void loadSettlement().catch((error) => {
       setNotice({ tone: 'error', message: error instanceof Error ? error.message : '营业日结算数据加载失败' })
     })
-  }, [data.store.businessDate, data.revision, loadSettlement])
+  }, [data.revision, loadSettlement])
 
   async function execute(actionKey: string, successMessage: string, operation: () => Promise<unknown>, reloadSettlement = true) {
     if (!currentEmployee) {
@@ -385,7 +393,7 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
       return
     }
     void execute('handover-submit', '收银交班已提交，等待经理使用独立员工会话复核', () =>
-      paymentApi.submitCashierHandover(data.store.businessDate, {
+      paymentApi.submitCashierHandover(settlementBusinessDate, {
         confirmedActualAmounts: confirmedActualAmounts as Record<SettlementChannel, number>,
         issues,
         note: handoverNote.trim() || undefined,
@@ -401,20 +409,14 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
       setNotice({ tone: 'error', message: '驳回交班时必须填写复核说明' })
       return
     }
-    void execute(`handover-review:${decision}`, decision === 'approve' ? '交班已复核通过，可以关账切日' : '交班已驳回，需收银重新提交', () =>
-      paymentApi.reviewCashierHandover(data.store.businessDate, handover.id, {
+    const historical = settlementBusinessDate < data.store.businessDate
+    void execute(`handover-review:${decision}`, decision === 'approve'
+      ? historical ? '历史营业日已复核并完成财务关账' : '交班已复核通过，系统将在北京时间06:00自动切换营业日'
+      : '交班已驳回，需收银重新提交', () =>
+      paymentApi.reviewCashierHandover(settlementBusinessDate, handover.id, {
         decision,
         note: reviewNote.trim() || undefined,
       }),
-    )
-  }
-
-  function closeBusinessDay(event: FormEvent) {
-    event.preventDefault()
-    if (!window.confirm(`确认关闭营业日 ${data.store.businessDate} 并切换到 ${nextBusinessDate}？`)) return
-    void execute('business-day-close', `营业日已切换到 ${nextBusinessDate}`, () =>
-      paymentApi.closeBusinessDay(data.store.businessDate, nextBusinessDate),
-      false,
     )
   }
 
@@ -488,13 +490,20 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
                   type="button"
                   aria-expanded={isExpanded}
                   aria-controls={detailsId}
-                  onClick={() => setExpandedAccountId(isExpanded ? '' : account.tableSessionId)}
+                  onClick={() => {
+                    if (isExpanded) {
+                      setExpandedAccountId('')
+                      return
+                    }
+                    setExpandedAccountId(account.tableSessionId)
+                    setAccountRevealTick((value) => value + 1)
+                  }}
                 >
                   {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                   {isExpanded ? '收起桌账' : account.collectableAmount > 0 ? '办理收款' : '查看桌账'}
                 </button>
               </div>
-              {isExpanded && <div className="table-account-details" id={detailsId}>
+              {isExpanded && <div className="table-account-details reveal-panel-target" id={detailsId} ref={accountPanelRef}>
                 <div className="table-account-orders">
                   {account.orders.map((order) => (
                     <div className="order-summary" key={order.id}>
@@ -630,6 +639,12 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
           title="交班与营业日关账"
           meta={settlement?.latestHandover ? handoverStatusLabel(settlement.latestHandover.status) : '未提交'}
         />
+        <div className="settlement-date-selector">
+          <Field label="结算营业日">
+            <input type="date" max={data.store.businessDate} value={settlementBusinessDate} onChange={(event) => setSettlementBusinessDate(event.target.value)} />
+          </Field>
+          <span>营业日按北京时间06:00自动切换；可选择历史营业日补交和复核。</span>
+        </div>
         {!settlement && <EmptyState icon={LoaderCircle} text="正在读取营业日结算数据" />}
         {settlement && (
           <form className="settlement-form" onSubmit={submitHandover}>
@@ -702,21 +717,16 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
         )}
 
         {settlement?.latestHandover?.status === 'approved' && (
-          <form className="business-day-close-form" onSubmit={closeBusinessDay}>
-            <div><CheckCircle2 size={18} /><span>经理 {employeeName(data, settlement.latestHandover.reviewedBy ?? '')} 已复核。未对账项会保留原因和次日责任人，物理POS仍保持待对账。</span></div>
-            <Field label="下一营业日"><input type="date" min={followingBusinessDate(data.store.businessDate)} value={nextBusinessDate} onChange={(event) => setNextBusinessDate(event.target.value)} /></Field>
-            <button className="primary-button" type="submit" disabled={Boolean(busyAction) || settlement.latestHandover.reviewedBy !== currentActorId}>
-              {busyAction === 'business-day-close' ? <LoaderCircle className="spin" size={16} /> : <CalendarCheck size={16} />}
-              关账并切日
-            </button>
-          </form>
+          <div className="business-day-close-form">
+            <div><CheckCircle2 size={18} /><span>经理 {employeeName(data, settlement.latestHandover.reviewedBy ?? '')} 已复核。系统将在北京时间06:00自动关账并切换营业日，无需手工操作；未对账项仍保留原因和责任人。</span></div>
+          </div>
         )}
       </section>}
 
       {activeWorkspace === 'refunds' && <section className="cashier-section refund-section">
         <SectionTitle icon={RefreshCcw} eyebrow="按原支付商品追溯" title="商品退款与审批" meta={`${pendingRefunds.length}笔待审批`} />
         {refundDraft && (
-          <form className="refund-request-form" onSubmit={submitRefund}>
+          <form className="refund-request-form reveal-panel-target" ref={refundDraftRef} onSubmit={submitRefund}>
             <div>
               <span>申请退款</span>
               <strong>{refundItemLabel(data, refundDraft.orderId, refundDraft.orderItemId)}</strong>
@@ -760,7 +770,7 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
                 </button>
               )}
               {refund.status === 'requested' && isPhysicalPosRefund && !DEVELOPMENT_PAYMENT_SIMULATOR && refundCompletion.refundId === refund.id && (
-                <form className="refund-request-form" onSubmit={(event) => completePhysicalRefund(event, refund)}>
+                <form className="refund-request-form reveal-panel-target" ref={refundCompletionRef} onSubmit={(event) => completePhysicalRefund(event, refund)}>
                   <label><span>POS退款流水号</span><input required value={refundCompletion.terminalRefundTransactionId} onChange={(event) => setRefundCompletion({ ...refundCompletion, terminalRefundTransactionId: event.target.value })} /></label>
                   <label><span>审批说明</span><input required value={refundCompletion.reason} onChange={(event) => setRefundCompletion({ ...refundCompletion, reason: event.target.value })} /></label>
                   <button className="primary-button" type="submit" disabled={Boolean(busyAction)}><FileCheck2 size={16} />确认退款完成</button>
@@ -1054,14 +1064,8 @@ function signedMoney(amount: number) {
   return `${amount > 0 ? '+' : '-'}${money(Math.abs(amount))}`
 }
 
-function followingBusinessDate(businessDate: string) {
-  const date = new Date(`${businessDate}T00:00:00.000Z`)
-  date.setUTCDate(date.getUTCDate() + 1)
-  return date.toISOString().slice(0, 10)
-}
-
 function handoverStatusLabel(status: NonNullable<PaymentSettlementView['latestHandover']>['status']) {
-  return { submitted: '待经理复核', approved: '已复核·待切日', rejected: '已驳回', closed: '已关账' }[status]
+  return { submitted: '待经理复核', approved: '已复核·等待06:00自动切日', rejected: '已驳回', closed: '已关账' }[status]
 }
 
 function employeeName(data: BootstrapResponse, employeeId: string) {

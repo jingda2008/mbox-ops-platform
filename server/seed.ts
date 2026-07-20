@@ -5,14 +5,11 @@ import { createSongState } from './song-domain.js'
 import { createInventoryDomainState } from './inventory-domain.js'
 import { createReservationState } from './reservation-domain.js'
 import { withDefaultRolePolicy } from '../src/shared/role-policy.js'
+import { createCommercialOpsState } from './commercial-ops.js'
+import { createHardwareState } from './hardware-domain.js'
+import { chinaBusinessDateKey, shiftDateKey } from '../src/shared/china-time.js'
 
 const now = new Date()
-const opened = new Date(now.getTime() - 42 * 60 * 1000).toISOString()
-const shiftStart = new Date(now)
-shiftStart.setHours(19, 0, 0, 0)
-const shiftEnd = new Date(shiftStart)
-shiftEnd.setDate(shiftEnd.getDate() + 1)
-shiftEnd.setHours(3, 0, 0, 0)
 
 export function createSeedConfig(): StoreConfig {
   return {
@@ -33,7 +30,7 @@ export function createSeedConfig(): StoreConfig {
       },
       {
         id: 'technical', name: '调音灯光', maxConcurrentTasks: 2, canReceiveTasks: false,
-        permissionIds: ['dashboard.view', 'song.view'], dataScope: 'store',
+        permissionIds: ['dashboard.view', 'song.view', 'hardware.view', 'hardware.operate'], dataScope: 'store',
       },
       { id: 'server', name: '主服务员', maxConcurrentTasks: 2, canReceiveTasks: true },
       { id: 'backup', name: '服务员·全店候补', maxConcurrentTasks: 3, canReceiveTasks: true },
@@ -55,19 +52,19 @@ export function createSeedConfig(): StoreConfig {
     workstations: [
       {
         id: 'bar-main', name: '主吧台', kind: 'hybrid', enabled: true,
-        productionRoleIds: ['bartender', 'specialist', 'supervisor', 'manager'], deliveryRoleIds: ['runner', 'server', 'backup', 'supervisor', 'manager'],
+        productionRoleIds: ['bartender'], deliveryRoleIds: ['runner', 'server', 'backup', 'supervisor', 'manager'],
         requiredSkillIds: ['skill-bar'], productionSlaSeconds: 180, pickupSlaSeconds: 60,
         deliveryServiceTypeId: 'fulfillment-delivery', fallbackStationId: null,
       },
       {
         id: 'kitchen-cold', name: '冷菜间', kind: 'production', enabled: true,
-        productionRoleIds: ['kitchen', 'specialist', 'supervisor', 'manager'], deliveryRoleIds: ['runner', 'server', 'backup', 'supervisor', 'manager'],
+        productionRoleIds: ['kitchen'], deliveryRoleIds: ['runner', 'server', 'backup', 'supervisor', 'manager'],
         requiredSkillIds: ['skill-cold-kitchen'], productionSlaSeconds: 300, pickupSlaSeconds: 90,
         deliveryServiceTypeId: 'fulfillment-delivery', fallbackStationId: 'bar-main',
       },
       {
         id: 'kitchen-hot', name: '热厨', kind: 'production', enabled: true,
-        productionRoleIds: ['kitchen', 'specialist', 'supervisor', 'manager'], deliveryRoleIds: ['runner', 'server', 'backup', 'supervisor', 'manager'],
+        productionRoleIds: ['kitchen'], deliveryRoleIds: ['runner', 'server', 'backup', 'supervisor', 'manager'],
         requiredSkillIds: ['skill-hot-kitchen'], productionSlaSeconds: 480, pickupSlaSeconds: 90,
         deliveryServiceTypeId: 'fulfillment-delivery', fallbackStationId: 'bar-main',
       },
@@ -94,6 +91,7 @@ export function createSeedConfig(): StoreConfig {
       guestOrderVisible: true,
       memberPortalVisible: true,
     },
+    sopRules: [],
     serviceTypes: [
       {
         id: 'water',
@@ -209,14 +207,19 @@ export function createSeedConfig(): StoreConfig {
   }
 }
 
-export function createSeedState(): RuntimeState {
+export function createSeedState(referenceNow = now): RuntimeState {
+  const now = referenceNow
+  const businessDate = chinaBusinessDateKey(now)
+  const opened = new Date(now.getTime() - 42 * 60 * 1000).toISOString()
+  const shiftStart = new Date(`${businessDate}T19:00:00+08:00`)
+  const shiftEnd = new Date(`${shiftDateKey(businessDate, 1)}T03:00:00+08:00`)
   const config = createSeedConfig()
   return {
     revision: 1,
     store: {
       id: 'mbox-lujiazui',
       name: 'M-Box 陆家嘴店',
-      businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }),
+      businessDate,
       timezone: 'Asia/Shanghai',
     },
     areas: [
@@ -242,19 +245,19 @@ export function createSeedState(): RuntimeState {
       { id: 'emp-host', displayName: '挞挞', initials: '挞', status: 'active', roleId: 'market_design', online: true, paused: false, areaIds: [], skillIds: [] },
     ],
     shiftAssignments: [
-      { id: 'shift-owner', employeeId: 'emp-owner', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'owner', areaIds: ['lounge', 'interactive', 'social', 'walkin', 'booth'], stationIds: [], isPrimary: false, status: 'active' },
-      { id: 'shift-operations-director', employeeId: 'emp-operations-director', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'operations_director', areaIds: ['lounge', 'interactive', 'social', 'walkin', 'booth'], stationIds: [], isPrimary: false, status: 'active' },
-      { id: 'shift-admin', employeeId: 'emp-admin', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'admin', roleIds: ['market_operations'], areaIds: [], stationIds: [], isPrimary: false, status: 'active' },
-      { id: 'shift-lin', employeeId: 'emp-lin', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'server', areaIds: ['lounge', 'walkin', 'booth'], stationIds: ['bar-main', 'kitchen-cold', 'kitchen-hot'], isPrimary: true, status: 'active' },
-      { id: 'shift-jie', employeeId: 'emp-jie', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'backup', roleIds: ['server'], areaIds: ['lounge', 'interactive', 'social', 'walkin', 'booth'], stationIds: ['bar-main', 'kitchen-cold', 'kitchen-hot'], isPrimary: false, status: 'active' },
-      { id: 'shift-wu', employeeId: 'emp-wu', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'server', areaIds: ['interactive', 'social'], stationIds: ['bar-main', 'kitchen-cold', 'kitchen-hot'], isPrimary: true, status: 'active' },
-      { id: 'shift-qing', employeeId: 'emp-qing', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'bartender', roleIds: ['supervisor'], areaIds: ['lounge', 'interactive', 'social', 'walkin', 'booth'], stationIds: ['bar-main'], isPrimary: true, status: 'active' },
-      { id: 'shift-han', employeeId: 'emp-han', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'kitchen', areaIds: ['lounge', 'interactive', 'social'], stationIds: ['kitchen-cold', 'kitchen-hot'], isPrimary: false, status: 'active' },
-      { id: 'shift-tao', employeeId: 'emp-tao', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'technical', areaIds: ['interactive', 'social'], stationIds: [], isPrimary: false, status: 'active' },
-      { id: 'shift-mia', employeeId: 'emp-mia', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'specialist', areaIds: ['lounge', 'interactive', 'social', 'walkin', 'booth'], stationIds: [], isPrimary: false, status: 'active' },
-      { id: 'shift-chen', employeeId: 'emp-chen', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'manager', areaIds: ['lounge', 'interactive', 'social', 'walkin', 'booth'], stationIds: ['bar-main', 'kitchen-cold', 'kitchen-hot'], isPrimary: true, status: 'active' },
-      { id: 'shift-cashier', employeeId: 'emp-cashier', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'cashier', areaIds: ['lounge', 'interactive', 'social', 'walkin', 'booth'], stationIds: [], isPrimary: false, status: 'active' },
-      { id: 'shift-host', employeeId: 'emp-host', businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'market_design', areaIds: [], stationIds: [], isPrimary: false, status: 'active' },
+      { id: 'shift-owner', employeeId: 'emp-owner', businessDate, startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'owner', areaIds: ['lounge', 'interactive', 'social', 'walkin', 'booth'], stationIds: [], isPrimary: false, status: 'active' },
+      { id: 'shift-operations-director', employeeId: 'emp-operations-director', businessDate, startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'operations_director', areaIds: ['lounge', 'interactive', 'social', 'walkin', 'booth'], stationIds: [], isPrimary: false, status: 'active' },
+      { id: 'shift-admin', employeeId: 'emp-admin', businessDate, startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'admin', roleIds: ['market_operations'], areaIds: [], stationIds: [], isPrimary: false, status: 'active' },
+      { id: 'shift-lin', employeeId: 'emp-lin', businessDate, startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'server', areaIds: ['lounge', 'walkin', 'booth'], stationIds: ['bar-main', 'kitchen-cold', 'kitchen-hot'], isPrimary: true, status: 'active' },
+      { id: 'shift-jie', employeeId: 'emp-jie', businessDate, startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'backup', roleIds: ['server'], areaIds: ['lounge', 'interactive', 'social', 'walkin', 'booth'], stationIds: ['bar-main', 'kitchen-cold', 'kitchen-hot'], isPrimary: false, status: 'active' },
+      { id: 'shift-wu', employeeId: 'emp-wu', businessDate, startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'server', areaIds: ['interactive', 'social'], stationIds: ['bar-main', 'kitchen-cold', 'kitchen-hot'], isPrimary: true, status: 'active' },
+      { id: 'shift-qing', employeeId: 'emp-qing', businessDate, startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'bartender', roleIds: ['supervisor'], areaIds: ['lounge', 'interactive', 'social', 'walkin', 'booth'], stationIds: ['bar-main'], isPrimary: true, status: 'active' },
+      { id: 'shift-han', employeeId: 'emp-han', businessDate, startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'kitchen', areaIds: ['lounge', 'interactive', 'social'], stationIds: ['kitchen-cold', 'kitchen-hot'], isPrimary: false, status: 'active' },
+      { id: 'shift-tao', employeeId: 'emp-tao', businessDate, startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'technical', areaIds: ['interactive', 'social'], stationIds: [], isPrimary: false, status: 'active' },
+      { id: 'shift-mia', employeeId: 'emp-mia', businessDate, startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'specialist', areaIds: ['lounge', 'interactive', 'social', 'walkin', 'booth'], stationIds: [], isPrimary: false, status: 'active' },
+      { id: 'shift-chen', employeeId: 'emp-chen', businessDate, startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'manager', areaIds: ['lounge', 'interactive', 'social', 'walkin', 'booth'], stationIds: ['bar-main', 'kitchen-cold', 'kitchen-hot'], isPrimary: true, status: 'active' },
+      { id: 'shift-cashier', employeeId: 'emp-cashier', businessDate, startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'cashier', areaIds: ['lounge', 'interactive', 'social', 'walkin', 'booth'], stationIds: [], isPrimary: false, status: 'active' },
+      { id: 'shift-host', employeeId: 'emp-host', businessDate, startAt: shiftStart.toISOString(), endAt: shiftEnd.toISOString(), roleId: 'market_design', areaIds: [], stationIds: [], isPrimary: false, status: 'active' },
     ],
     products: [
       { id: 'product-cocktail', sku: 'COCKTAIL-001', name: '招牌鸡尾酒', specification: '1杯', categoryId: 'drinks', categoryName: '酒水', description: '柑橘香气与清爽气泡，现场现调。', imageUrl: '/menu/cocktail.jpg', tags: ['招牌', '现调'], sortOrder: 1, soldOut: false, soldOutReason: '', availableFrom: null, availableUntil: null, listPriceAmount: 8800, costAmount: 2200, stationId: 'bar-main', enabled: true, configVersion: 1 },
@@ -318,6 +321,11 @@ export function createSeedState(): RuntimeState {
         },
       },
     ),
+    commercialOps: createCommercialOpsState(),
+    hardwareState: createHardwareState(now, true),
+    sopExecutions: [],
+    sopActionRecords: [],
+    dutyManagerIncidents: [],
     awaitingOrderIntents: [],
     tableTransfers: [],
     waitlistEntries: [],
@@ -349,7 +357,7 @@ export function createSeedState(): RuntimeState {
     benefitCampaigns: [],
     customerNotifications: [],
     songState: createSongState({
-      businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }),
+      businessDate,
       singers: [
         { id: 'singer-tianti', displayName: '天天', actorId: 'singer-tianti', active: true, photoUrl: '', headline: '温暖声线 · 华语流行', bio: '擅长以细腻声线演绎华语流行情歌，适合轻松聊天与沉浸听歌的现场时段。', styleTags: ['华语流行', '情歌', '互动'] },
         { id: 'singer-zhengnan', displayName: '郑南', actorId: 'singer-zhengnan', active: true, photoUrl: '', headline: '现场感染力 · 经典金曲', bio: '现场节奏鲜明，擅长经典金曲和全场互动，适合聚会与庆祝氛围。', styleTags: ['经典金曲', '摇滚', '全场互动'] },
@@ -368,7 +376,7 @@ export function createSeedState(): RuntimeState {
       ],
       performanceSessions: [{
         id: 'performance-today',
-        businessDate: now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }),
+        businessDate,
         title: '当日现场演出（演示排班）',
         status: 'live',
         startsAt: new Date(now.getTime() - 60 * 60_000).toISOString(),
@@ -380,13 +388,13 @@ export function createSeedState(): RuntimeState {
         ],
       }],
       tableSessions: [
-        { id: `session:table-l01:${now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' })}`, tableId: 'table-l01', tableCode: 'L01', status: 'open', openedAt: opened, closedAt: null },
-        { id: `session:table-l02:${now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' })}`, tableId: 'table-l02', tableCode: 'L02', status: 'open', openedAt: opened, closedAt: null },
-        { id: `session:table-i01:${now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' })}`, tableId: 'table-i01', tableCode: 'I01', status: 'open', openedAt: opened, closedAt: null },
-        { id: `session:table-i02:${now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' })}`, tableId: 'table-i02', tableCode: 'I02', status: 'open', openedAt: opened, closedAt: null },
-        { id: `session:table-s01:${now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' })}`, tableId: 'table-s01', tableCode: 'S01', status: 'open', openedAt: opened, closedAt: null },
-        { id: `session:table-w01:${now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' })}`, tableId: 'table-w01', tableCode: 'W01', status: 'open', openedAt: opened, closedAt: null },
-        { id: `session:table-b01:${now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' })}`, tableId: 'table-b01', tableCode: 'B01', status: 'open', openedAt: opened, closedAt: null },
+        { id: `session:table-l01:${businessDate}`, tableId: 'table-l01', tableCode: 'L01', status: 'open', openedAt: opened, closedAt: null },
+        { id: `session:table-l02:${businessDate}`, tableId: 'table-l02', tableCode: 'L02', status: 'open', openedAt: opened, closedAt: null },
+        { id: `session:table-i01:${businessDate}`, tableId: 'table-i01', tableCode: 'I01', status: 'open', openedAt: opened, closedAt: null },
+        { id: `session:table-i02:${businessDate}`, tableId: 'table-i02', tableCode: 'I02', status: 'open', openedAt: opened, closedAt: null },
+        { id: `session:table-s01:${businessDate}`, tableId: 'table-s01', tableCode: 'S01', status: 'open', openedAt: opened, closedAt: null },
+        { id: `session:table-w01:${businessDate}`, tableId: 'table-w01', tableCode: 'W01', status: 'open', openedAt: opened, closedAt: null },
+        { id: `session:table-b01:${businessDate}`, tableId: 'table-b01', tableCode: 'B01', status: 'open', openedAt: opened, closedAt: null },
       ],
       managerActorIds: ['emp-owner', 'emp-operations-director', 'emp-chen', 'emp-cashier'],
     }),

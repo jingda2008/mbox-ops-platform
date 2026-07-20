@@ -3,6 +3,10 @@ import { createSeedConfig } from './seed.js'
 import { withDefaultRolePolicy } from '../src/shared/role-policy.js'
 import { reconcilePresence } from './presence.js'
 import { CHINA_TIME_ZONE } from '../src/shared/china-time.js'
+import { normalizeCommercialOpsState } from './commercial-ops.js'
+import { normalizeReservationConfig } from './reservation-domain.js'
+import { normalizeHardwareState } from './hardware-domain.js'
+import { fulfillmentServiceTaskId } from './fulfillment-service.js'
 
 interface BuiltInRoleUpgrade {
   requiredPermissionIds: StaffPermissionId[]
@@ -41,6 +45,38 @@ const builtInRoleUpgrades: Record<string, BuiltInRoleUpgrade> = {
 const permissionPolicyMigrationAction = 'runtime.permission_policy_v2_migrated.v1'
 const frontlineTableOperationsMigrationAction = 'runtime.frontline_table_operations_v1_migrated.v1'
 const chinaTimezoneMigrationAction = 'runtime.china_timezone_normalized.v1'
+const workstationProductionRoleMigrationAction = 'runtime.workstation_production_roles_v1_migrated.v1'
+const hardwarePermissionMigrationAction = 'runtime.hardware_permissions_v1_migrated.v1'
+const fulfillmentTaskIdMigrationAction = 'runtime.fulfillment_task_ids_v1_migrated.v1'
+
+const hardwareRoleUpgrades: Record<string, BuiltInRoleUpgrade> = {
+  owner: {
+    requiredPermissionIds: ['config.manage', 'audit.view', 'master_data.manage'],
+    addedPermissionIds: ['hardware.view', 'hardware.operate', 'hardware.manage'],
+  },
+  operations_director: {
+    requiredPermissionIds: ['config.manage', 'audit.view', 'master_data.manage'],
+    addedPermissionIds: ['hardware.view', 'hardware.operate', 'hardware.manage'],
+  },
+  admin: {
+    requiredPermissionIds: ['config.manage', 'identity.manage', 'master_data.manage'],
+    addedPermissionIds: ['hardware.view', 'hardware.operate', 'hardware.manage'],
+  },
+  manager: {
+    requiredPermissionIds: ['shift.manage', 'table.manage', 'audit.view'],
+    addedPermissionIds: ['hardware.view', 'hardware.operate'],
+  },
+  technical: {
+    requiredPermissionIds: ['dashboard.view', 'song.view'],
+    addedPermissionIds: ['hardware.view', 'hardware.operate'],
+  },
+}
+
+const legacyWorkstationProductionRoles = new Map<string, string[]>([
+  ['bar-main', ['bartender', 'specialist', 'supervisor', 'manager']],
+  ['kitchen-cold', ['kitchen', 'specialist', 'supervisor', 'manager']],
+  ['kitchen-hot', ['kitchen', 'specialist', 'supervisor', 'manager']],
+])
 
 const frontlineTableOperationUpgrades: Record<string, BuiltInRoleUpgrade> = {
   owner: {
@@ -108,6 +144,19 @@ function withFrontlineTableOperationUpgrade(role: RoleConfig): RoleConfig {
   return { ...role, permissionIds: [...permissions] }
 }
 
+function withHardwarePermissionUpgrade(role: RoleConfig): RoleConfig {
+  const upgrade = hardwareRoleUpgrades[role.id]
+  if (!upgrade || !role.permissionIds) return role
+  const permissions = new Set(role.permissionIds)
+  if (!upgrade.requiredPermissionIds.every((permissionId) => permissions.has(permissionId))) return role
+  for (const permissionId of upgrade.addedPermissionIds) permissions.add(permissionId)
+  return { ...role, permissionIds: [...permissions] }
+}
+
+function migrateHardwarePermissions(config: StoreConfig): StoreConfig {
+  return { ...config, roles: config.roles.map(withHardwarePermissionUpgrade) }
+}
+
 function migrateWorkstationDeliveryServices(config: StoreConfig): StoreConfig {
   const fulfillmentService = config.serviceTypes.find(
     (serviceType) => serviceType.id === 'fulfillment-delivery' && serviceType.code === 'FULFILLMENT_DELIVERY',
@@ -123,6 +172,21 @@ function migrateWorkstationDeliveryServices(config: StoreConfig): StoreConfig {
       )
       if (referencedService?.code === 'FULFILLMENT_DELIVERY') return workstation
       return { ...workstation, deliveryServiceTypeId: fulfillmentService.id }
+    }),
+  }
+}
+
+function migrateLegacyWorkstationProductionRoles(config: StoreConfig): StoreConfig {
+  return {
+    ...config,
+    workstations: config.workstations.map((workstation) => {
+      const legacyRoles = legacyWorkstationProductionRoles.get(workstation.id)
+      if (!legacyRoles || legacyRoles.length !== workstation.productionRoleIds.length) return workstation
+      if (!legacyRoles.every((roleId, index) => workstation.productionRoleIds[index] === roleId)) return workstation
+      return {
+        ...workstation,
+        productionRoleIds: [workstation.id === 'bar-main' ? 'bartender' : 'kitchen'],
+      }
     }),
   }
 }
@@ -171,6 +235,7 @@ function configWithOperationalDefaults(
     proactiveOrderCare: config.proactiveOrderCare ?? structuredClone(defaults.proactiveOrderCare),
     guestServiceLimits: config.guestServiceLimits ?? structuredClone(defaults.guestServiceLimits),
     communityBrand,
+    sopRules: structuredClone(config.sopRules ?? defaults.sopRules ?? []),
   }
   return migrateWorkstationDeliveryServices(enriched)
 }
@@ -235,6 +300,58 @@ function migrateServiceTaskVisits(state: RuntimeState) {
   })
 }
 
+function migrateFulfillmentTaskIds(state: RuntimeState) {
+  let migratedCount = 0
+  for (const kdsTask of state.orderDomain.kdsTasks) {
+    const expectedTriggerId = `fulfillment-delivery:${kdsTask.id}`
+    const serviceTask = state.tasks.find((task) => task.id === kdsTask.deliveryServiceTask?.id)
+      ?? state.tasks.find((task) => task.triggerId === expectedTriggerId)
+    if (!serviceTask || serviceTask.triggerId !== expectedTriggerId) continue
+
+    const previousId = serviceTask.id
+    const nextId = fulfillmentServiceTaskId(kdsTask.id)
+    const collision = state.tasks.find((task) => task.id === nextId && task !== serviceTask)
+    if (collision) {
+      if (collision.triggerId !== expectedTriggerId) continue
+      kdsTask.deliveryServiceTask = {
+        id: collision.id,
+        status: collision.status,
+        ownerId: collision.ownerId,
+        createdAt: collision.createdAt,
+      }
+      continue
+    }
+    if (previousId !== nextId) {
+      serviceTask.id = nextId
+      for (const event of state.taskEvents) {
+        if (event.taskId === previousId) event.taskId = nextId
+      }
+      for (const audit of state.auditEntries) {
+        if (audit.objectType === 'serviceTask' && audit.objectId === previousId) audit.objectId = nextId
+      }
+      migratedCount += 1
+    }
+    kdsTask.deliveryServiceTask = {
+      id: serviceTask.id,
+      status: serviceTask.status,
+      ownerId: serviceTask.ownerId,
+      createdAt: serviceTask.createdAt,
+    }
+  }
+
+  if (migratedCount > 0 && !state.auditEntries.some((entry) => entry.action === fulfillmentTaskIdMigrationAction)) {
+    state.auditEntries.push({
+      id: 'runtime-migration-fulfillment-task-ids-v1',
+      actorId: 'system',
+      action: fulfillmentTaskIdMigrationAction,
+      objectType: 'store',
+      objectId: state.store.id,
+      occurredAt: new Date().toISOString(),
+      details: { migratedCount, strategy: 'sha256-prefix-32' },
+    })
+  }
+}
+
 /** Enriches older persisted documents without discarding store-specific state. */
 export function migrateRuntimeState(state: RuntimeState): RuntimeState {
   const defaults = createSeedConfig()
@@ -243,20 +360,68 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
     || (migrated.reservationState?.config.businessHours?.timeZone !== undefined
       && migrated.reservationState.config.businessHours.timeZone !== CHINA_TIME_ZONE)
   migrated.store.timezone = CHINA_TIME_ZONE
+  migrated.commercialOps = normalizeCommercialOpsState(migrated.commercialOps)
+  migrated.hardwareState = normalizeHardwareState(migrated.hardwareState)
+  migrated.sopExecutions ??= []
+  migrated.sopActionRecords = (migrated.sopActionRecords ?? []).map((record) => ({
+    ...record,
+    nextAttemptAt: record.nextAttemptAt ?? (record.status === 'queued' ? record.requestedAt : null),
+    leaseOwner: record.leaseOwner ?? null,
+    leaseExpiresAt: record.leaseExpiresAt ?? null,
+  }))
+  migrated.sopExecutions = migrated.sopExecutions.map((execution) => ({
+    ...execution,
+    steps: execution.steps.map((step) => ({
+      ...step,
+      actionRecordIds: step.actionRecordIds ?? [],
+      reason: step.reason ?? null,
+      failureHandledAt: step.failureHandledAt ?? null,
+    })),
+  }))
+  migrated.dutyManagerIncidents = (migrated.dutyManagerIncidents ?? []).map((incident) => ({
+    ...incident,
+    cycle: incident.cycle ?? 1,
+    observationCount: incident.observationCount ?? 1,
+    acknowledgedAt: incident.acknowledgedAt ?? null,
+    acknowledgedBy: incident.acknowledgedBy ?? null,
+    deferredAt: incident.deferredAt ?? null,
+    deferredBy: incident.deferredBy ?? null,
+    deferredUntil: incident.deferredUntil ?? null,
+    dismissedAt: incident.dismissedAt ?? null,
+    dismissedBy: incident.dismissedBy ?? null,
+    dismissedReason: incident.dismissedReason ?? null,
+    resolvedAt: incident.resolvedAt ?? null,
+    resolvedBy: incident.resolvedBy ?? null,
+    resolution: incident.resolution ?? null,
+  }))
   const upgradeBuiltInRoles = !migrated.auditEntries.some(
     (entry) => entry.action === permissionPolicyMigrationAction,
   )
   const upgradeFrontlineTableOperations = !migrated.auditEntries.some(
     (entry) => entry.action === frontlineTableOperationsMigrationAction,
   )
+  const upgradeWorkstationProductionRoles = !migrated.auditEntries.some(
+    (entry) => entry.action === workstationProductionRoleMigrationAction,
+  )
+  const upgradeHardwarePermissions = !migrated.auditEntries.some(
+    (entry) => entry.action === hardwarePermissionMigrationAction,
+  )
 
   migrated.config = configWithOperationalDefaults(migrated.config, defaults, upgradeBuiltInRoles, upgradeFrontlineTableOperations)
+  if (upgradeHardwarePermissions) migrated.config = migrateHardwarePermissions(migrated.config)
+  if (upgradeWorkstationProductionRoles) migrated.config = migrateLegacyWorkstationProductionRoles(migrated.config)
   migrated.draftConfig = migrated.draftConfig
     ? configWithOperationalDefaults(migrated.draftConfig, defaults, upgradeBuiltInRoles, upgradeFrontlineTableOperations)
     : null
+  if (upgradeWorkstationProductionRoles && migrated.draftConfig) {
+    migrated.draftConfig = migrateLegacyWorkstationProductionRoles(migrated.draftConfig)
+  }
+  if (upgradeHardwarePermissions && migrated.draftConfig) migrated.draftConfig = migrateHardwarePermissions(migrated.draftConfig)
   migrated.configVersions = (migrated.configVersions ?? []).map((record) => ({
     ...record,
-    snapshot: configWithOperationalDefaults(record.snapshot, defaults, upgradeBuiltInRoles, upgradeFrontlineTableOperations),
+    snapshot: upgradeHardwarePermissions
+      ? migrateHardwarePermissions(configWithOperationalDefaults(record.snapshot, defaults, upgradeBuiltInRoles, upgradeFrontlineTableOperations))
+      : configWithOperationalDefaults(record.snapshot, defaults, upgradeBuiltInRoles, upgradeFrontlineTableOperations),
   }))
   migrated.employees = migrated.employees.map((employee) => ({
     ...employee,
@@ -307,6 +472,7 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
   migrated.tableTransfers ??= []
   migrated.waitlistEntries ??= []
   if (migrated.reservationState) {
+    migrated.reservationState.config = normalizeReservationConfig(migrated.reservationState.config)
     migrated.reservationState.config.lateHoldMinutes ??= 30
     migrated.reservationState.config.waitlistResponseMinutes ??= 10
     migrated.reservationState.config.businessHours ??= {
@@ -333,6 +499,7 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
   }
   migrateMissingOpenTableSessions(migrated)
   migrateServiceTaskVisits(migrated)
+  migrateFulfillmentTaskIds(migrated)
   if (upgradeBuiltInRoles) {
     migrated.auditEntries.push({
       id: 'runtime-migration-permission-policy-v2',
@@ -367,6 +534,35 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
       objectId: migrated.store.id,
       occurredAt: new Date().toISOString(),
       details: { timeZone: CHINA_TIME_ZONE, utcOffset: '+08:00' },
+    })
+  }
+  if (upgradeWorkstationProductionRoles) {
+    migrated.auditEntries.push({
+      id: 'runtime-migration-workstation-production-roles-v1',
+      actorId: 'system',
+      action: workstationProductionRoleMigrationAction,
+      objectType: 'store',
+      objectId: migrated.store.id,
+      occurredAt: new Date().toISOString(),
+      details: {
+        strategy: 'legacy-default-workstation-fingerprint',
+        productionRoles: { 'bar-main': ['bartender'], 'kitchen-cold': ['kitchen'], 'kitchen-hot': ['kitchen'] },
+      },
+    })
+  }
+  if (upgradeHardwarePermissions) {
+    migrated.auditEntries.push({
+      id: 'runtime-migration-hardware-permissions-v1',
+      actorId: 'system',
+      action: hardwarePermissionMigrationAction,
+      objectType: 'store',
+      objectId: migrated.store.id,
+      occurredAt: new Date().toISOString(),
+      details: {
+        strategy: 'built-in-hardware-role-capability-fingerprint',
+        managedRoles: ['owner', 'operations_director', 'admin'],
+        operatingRoles: ['manager', 'technical'],
+      },
     })
   }
 

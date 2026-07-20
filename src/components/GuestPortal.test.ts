@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { GuestTaskView } from '../shared/guest-contracts'
-import { formatGuestCompactCountdown, formatGuestCountdown, guestCustomSongServiceNote, guestErrorMessage, guestMoodServiceNote, guestReplyNotice, guestSessionHistoryUrl, guestSongReplyNotice, guestSongStatusLabel, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks } from './guest-portal-utils'
+import { formatGuestCompactCountdown, formatGuestCountdown, guestCustomSongServiceNote, guestErrorMessage, guestMoodServiceNote, guestReplyNotice, guestSessionHistoryUrl, guestSongReplyNotice, guestSongStatusLabel, guestStageIsBeforeFirstSet, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks } from './guest-portal-utils'
 
 function guestTask(status: GuestTaskView['status'], id = `task-${status}`): GuestTaskView {
   return {
@@ -153,6 +153,15 @@ describe('guest stage schedule', () => {
     const stage = resolveGuestStage(schedule, Date.parse('2026-07-16T21:20:00+08:00'))
     expect(stage).toMatchObject({ mode: 'upcoming', current: null, next: { singerName: '郑南' } })
     expect(formatGuestCountdown(stage.countdownMs)).toBe('00:15:00')
+  })
+
+  it('distinguishes the daytime pre-show schedule from a live changeover', () => {
+    expect(guestStageIsBeforeFirstSet(schedule, Date.parse('2026-07-16T10:00:00+08:00'))).toBe(true)
+    expect(guestStageIsBeforeFirstSet(schedule, Date.parse('2026-07-16T21:20:00+08:00'))).toBe(false)
+    expect(resolveGuestStage(schedule, Date.parse('2026-07-16T10:00:00+08:00'))).toMatchObject({
+      mode: 'upcoming',
+      next: { singerName: '天天', startsAt: '2026-07-16T20:30:00+08:00' },
+    })
   })
 
   it('uses a compact countdown inside the stage card', () => {

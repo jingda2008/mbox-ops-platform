@@ -8,7 +8,12 @@ import type {
 const MAX_GUEST_SESSION_TTL_MS = 60 * 60_000
 
 export class TableAccessError extends Error {
-  constructor(message: string, readonly code = 'TABLE_ACCESS_INVALID', readonly statusCode = 401) {
+  constructor(
+    message: string,
+    readonly code = 'TABLE_ACCESS_INVALID',
+    readonly statusCode = 401,
+    readonly details?: Record<string, unknown>,
+  ) {
     super(message)
   }
 }

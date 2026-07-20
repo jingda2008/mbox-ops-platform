@@ -2,6 +2,7 @@ import Fastify from 'fastify'
 import { describe, expect, it } from 'vitest'
 import type { RequestActorContext } from '../src/shared/auth-contracts.js'
 import { createSeedState } from './seed.js'
+import { createServiceTask } from './domain.js'
 import { registerAssistantRoutes } from './assistant-api.js'
 import { MemoryAssistantConversationStore } from './assistant-conversation-store.js'
 import type { AssistantPlanner, AssistantPlanningRequest } from './assistant-planner.js'
@@ -9,7 +10,7 @@ import { MemoryRateLimitStore } from './rate-limit.js'
 import type { RuntimeRepository } from './repository.js'
 
 function repository(): RuntimeRepository & { snapshot: () => ReturnType<typeof createSeedState> } {
-  let state = createSeedState()
+  let state = createSeedState(new Date('2026-07-18T12:00:00.000Z'))
   return {
     init: async () => undefined,
     read: async () => structuredClone(state),
@@ -82,6 +83,9 @@ describe('assistant API', () => {
       },
     }
     const { app, repository: runtimeRepository } = await testApp(planner)
+    await runtimeRepository.mutate((state) => {
+      for (const task of state.orderDomain.kdsTasks) task.queuedAt = '2026-07-17T12:00:00.000Z'
+    })
     const first = await app.inject({ method: 'POST', url: '/api/assistant/turn', payload })
     const firstBody = first.json()
     const replay = await app.inject({
@@ -101,6 +105,9 @@ describe('assistant API', () => {
     expect(captured?.context.actor.permissions).not.toContain('finance.view')
     expect(captured?.context.page.capabilities).toHaveLength(1)
     expect(captured?.context.store.currentTime).toBe('2026-07-18T20:00:00+08:00')
+    expect(captured?.context.live.operationalHealth).toHaveProperty('health')
+    expect(Array.isArray(captured?.context.live.operationalRisks)).toBe(true)
+    expect(captured?.context.live.kdsTasks).toEqual([])
     expect(runtimeRepository.snapshot().auditEntries.at(-1)).toMatchObject({
       action: 'assistant.turn.proposed.v1',
       details: { executed: false, stepCount: 0, model: 'gemini-3.5-flash' },
@@ -203,6 +210,99 @@ describe('assistant API', () => {
 
     expect(response.statusCode).toBe(503)
     expect(response.json()).toMatchObject({ code: 'ASSISTANT_DISABLED' })
+    await app.close()
+  })
+
+  it('returns a deterministic role-scoped duty briefing even when the model is disabled', async () => {
+    const { app } = await testApp()
+    const response = await app.inject({ method: 'GET', url: '/api/assistant/briefing' })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({
+      businessDate: expect.stringMatching(/^2026-07-\d{2}$/),
+      counts: expect.objectContaining({ openServiceTasks: expect.any(Number) }),
+      risks: expect.any(Array),
+    })
+    await app.close()
+  })
+
+  it('tracks manager acknowledgement, deferral and false-positive decisions idempotently', async () => {
+    const { app, repository: runtimeRepository } = await testApp(undefined, { actorId: 'emp-chen', roleId: 'manager' })
+    await runtimeRepository.mutate((state) => {
+      const task = createServiceTask(state, {
+        tableCode: 'L01', serviceTypeId: 'water', source: 'guest', note: '值班经理风险处置测试',
+        idempotencyKey: 'assistant-duty-risk-source-0001', requestedBy: 'guest-test',
+      })
+      task.createdAt = '2026-07-18T11:00:00.000Z'
+      task.updatedAt = task.createdAt
+      task.warningAt = '2026-07-18T11:00:00.000Z'
+      task.escalateAt = '2026-07-18T11:15:00.000Z'
+      task.managerAt = '2026-07-18T11:30:00.000Z'
+    })
+    const initial = (await app.inject({ method: 'GET', url: '/api/assistant/briefing' })).json()
+    const risk = initial.risks[0]
+    expect(risk.sourceRiskIds.length).toBeGreaterThan(0)
+
+    const acknowledgePayload = {
+      idempotencyKey: '00000000-0000-4000-8000-000000000101',
+      action: 'acknowledge',
+      riskIds: risk.sourceRiskIds,
+    }
+    const acknowledged = await app.inject({ method: 'POST', url: '/api/assistant/duty-actions', payload: acknowledgePayload })
+    const replayed = await app.inject({ method: 'POST', url: '/api/assistant/duty-actions', payload: acknowledgePayload })
+    expect(acknowledged.statusCode).toBe(200)
+    expect(acknowledged.json()).toMatchObject({ replayed: false, briefing: { counts: { acknowledgedIncidents: expect.any(Number) } } })
+    expect(replayed.json()).toMatchObject({ replayed: true })
+
+    const deferred = await app.inject({ method: 'POST', url: '/api/assistant/duty-actions', payload: {
+      idempotencyKey: '00000000-0000-4000-8000-000000000102',
+      action: 'defer', riskIds: risk.sourceRiskIds, deferMinutes: 10,
+    } })
+    expect(deferred.statusCode).toBe(200)
+    expect(deferred.json().briefing.risks.flatMap((item: { sourceRiskIds: string[] }) => item.sourceRiskIds)).not.toContain(risk.sourceRiskIds[0])
+
+    const dismissed = await app.inject({ method: 'POST', url: '/api/assistant/duty-actions', payload: {
+      idempotencyKey: '00000000-0000-4000-8000-000000000103',
+      action: 'dismiss_false_positive', riskIds: risk.sourceRiskIds, note: '现场复核确认误报',
+    } })
+    const handover = await app.inject({ method: 'GET', url: '/api/assistant/handover' })
+    expect(dismissed.statusCode).toBe(200)
+    expect(handover.json()).toMatchObject({ dismissed: expect.any(Number), detected: expect.any(Number) })
+    expect(runtimeRepository.snapshot().auditEntries.filter((entry) => entry.action === 'duty.incident.action.v1')).toHaveLength(3)
+    await app.close()
+  })
+
+  it('lets frontline staff acknowledge visible risks but blocks manager-only deferral', async () => {
+    const { app, repository: runtimeRepository } = await testApp(undefined, { actorId: 'emp-lin', roleId: 'server' })
+    await runtimeRepository.mutate((state) => {
+      const task = createServiceTask(state, { tableCode: 'L01', serviceTypeId: 'water', source: 'guest', note: '加水' })
+      task.createdAt = '2026-07-18T11:50:00.000Z'
+      task.updatedAt = task.createdAt
+      task.warningAt = '2026-07-18T11:55:00.000Z'
+      task.escalateAt = '2026-07-18T11:56:00.000Z'
+      task.managerAt = '2026-07-18T11:57:00.000Z'
+      state.revision += 1
+    })
+    const briefing = (await app.inject({ method: 'GET', url: '/api/assistant/briefing' })).json()
+    const risk = briefing.risks.find((item: { category: string }) => item.category !== 'system')
+    expect(risk).toBeTruthy()
+
+    const acknowledged = await app.inject({ method: 'POST', url: '/api/assistant/duty-actions', payload: {
+      idempotencyKey: '00000000-0000-4000-8000-000000000105',
+      action: 'acknowledge', riskIds: risk.sourceRiskIds,
+    } })
+    expect(acknowledged.statusCode).toBe(200)
+    expect(acknowledged.json()).toMatchObject({
+      replayed: false,
+      briefing: { risks: expect.arrayContaining([expect.objectContaining({ handledByName: 'Tom' })]) },
+    })
+
+    const deferred = await app.inject({ method: 'POST', url: '/api/assistant/duty-actions', payload: {
+      idempotencyKey: '00000000-0000-4000-8000-000000000104',
+      action: 'defer', riskIds: risk.sourceRiskIds, deferMinutes: 10,
+    } })
+    expect(deferred.statusCode).toBe(403)
+    expect(deferred.json()).toMatchObject({ code: 'DUTY_MANAGE_FORBIDDEN' })
     await app.close()
   })
 

@@ -331,6 +331,8 @@ export function registerTableSessionRoutes(app: FastifyInstance, repository: Run
       )
       if (replay) {
         if (
+          replay.details.automaticBusinessDayRollover !== input.automaticBusinessDayRollover ||
+          replay.details.businessDayRolloverHour !== input.businessDayRolloverHour ||
           replay.details.maximumOpenHours !== input.maximumOpenHours ||
           JSON.stringify(replay.details.minimumSpendRules) !== JSON.stringify(input.minimumSpendRules) ||
           JSON.stringify(replay.details.reminder) !== JSON.stringify(input.reminder) ||
@@ -346,6 +348,8 @@ export function registerTableSessionRoutes(app: FastifyInstance, repository: Run
       state.tableOperationsConfig = {
         version: previous.version + 1,
         updatedAt: occurredAt,
+        automaticBusinessDayRollover: input.automaticBusinessDayRollover,
+        businessDayRolloverHour: input.businessDayRolloverHour,
         maximumOpenHours: input.maximumOpenHours,
         reminder: structuredClone(input.reminder),
         minimumSpendRules: structuredClone(input.minimumSpendRules),
@@ -361,6 +365,8 @@ export function registerTableSessionRoutes(app: FastifyInstance, repository: Run
           previousVersion: previous.version,
           version: state.tableOperationsConfig.version,
           reason: input.reason,
+          automaticBusinessDayRollover: input.automaticBusinessDayRollover,
+          businessDayRolloverHour: input.businessDayRolloverHour,
           maximumOpenHours: input.maximumOpenHours,
           reminder: structuredClone(input.reminder),
           minimumSpendRules: structuredClone(input.minimumSpendRules),

@@ -53,6 +53,40 @@ button:focus-visible, a:focus-visible, input:focus-visible {
   grid-template-columns: 212px minmax(0, 1fr);
   background: var(--canvas);
 }
+
+html.staff-viewport,
+html.staff-viewport body,
+html.staff-viewport #root,
+html.staff-viewport .app-connectivity-root {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+/* WeChat can retain a desktop layout width after page zoom. Device-width
+   fallback keeps the staff console in drawer mode even in that state. */
+html.staff-phone-device .app-shell {
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+html.staff-phone-device .app-shell > .sidebar,
+html.staff-phone-device .app-shell > .sidebar.is-open {
+  width: min(84vw, 280px);
+  height: 100dvh;
+  position: fixed;
+  inset: 0 auto 0 0;
+  transform: translateX(-100%);
+  transition: transform 180ms ease;
+}
+
+html.staff-phone-device .app-shell > .sidebar.is-open { transform: translateX(0); }
+html.staff-phone-device .app-shell > .workspace { width: 100%; min-width: 0; }
+html.staff-phone-device .app-shell > .workspace .menu-button { display: inline-flex; }
+html.staff-phone-device .app-shell > .sidebar .sidebar-close { display: grid; }
+html.staff-phone-device .app-shell > .nav-backdrop { display: block; }
 .pilot-login-shell {
   min-height: 100vh;
   display: grid;
@@ -89,8 +123,14 @@ button:focus-visible, a:focus-visible, input:focus-visible {
   position: sticky;
   top: 0;
   height: 100vh;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
   background: var(--sidebar);
   color: #fff;
   padding: 22px 14px 16px;
@@ -126,7 +166,7 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 .brand-lockup strong { letter-spacing: 0; }
 .brand-lockup small { color: #aeb4aa; font-size: 12px; }
 .brand-lockup em { color: #7f8980; font-size: 8px; font-style: normal; font-weight: 750; }
-.sidebar nav { display: grid; gap: 5px; }
+.sidebar nav { flex: 0 0 auto; display: grid; gap: 5px; }
 .nav-item {
   width: 100%;
   height: 46px;

@@ -525,6 +525,7 @@ describe('KDS exception closure', () => {
       status: 'queued', orderItemId: 'line-1',
       remakeOf: { orderItemId: 'line-1', kdsTaskId: originalTask.id, exceptionId: reported.exceptionId, attempt: 1 },
     })
+    expect(Object.hasOwn(remake, 'tableCode')).toBe(false)
     expect(() => startKdsTask(state, {
       taskId: originalTask.id, actorId: 'bartender-1', occurredAt: T5, idempotencyKey: 'closed-original-start',
     })).toThrow('原KDS任务已由异常处置关闭')

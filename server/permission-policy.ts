@@ -41,6 +41,10 @@ export type StaffOperation =
   | 'benefit.manage'
   | 'song.request'
   | 'song.manage'
+  | 'hardware.view'
+  | 'hardware.command.execute'
+  | 'hardware.config.write'
+  | 'hardware.device.heartbeat'
   | 'store-import.apply'
   | 'service.task.create'
   | 'service.task.action'
@@ -131,6 +135,10 @@ export const STAFF_OPERATION_PERMISSION_IDS: Record<StaffOperation, StaffPermiss
   'benefit.manage': 'benefit.manage',
   'song.request': 'song.view',
   'song.manage': 'song.manage',
+  'hardware.view': 'hardware.view',
+  'hardware.command.execute': 'hardware.operate',
+  'hardware.config.write': 'hardware.manage',
+  'hardware.device.heartbeat': 'hardware.manage',
   'store-import.apply': 'store_import.apply',
   'service.task.create': 'service.execute',
   'service.task.action': 'service.execute',
@@ -177,6 +185,10 @@ const defaultOperations: Record<StaffOperation, OperationPermissionPolicy> = {
   'benefit.manage': { name: '管理权益规则', permissionId: 'benefit.manage', risk: 'high' },
   'song.request': { name: '提交点歌', permissionId: 'song.view', risk: 'standard' },
   'song.manage': { name: '管理点歌', permissionId: 'song.manage', risk: 'standard' },
+  'hardware.view': { name: '查看设备中心', permissionId: 'hardware.view', risk: 'standard' },
+  'hardware.command.execute': { name: '执行设备命令', permissionId: 'hardware.operate', risk: 'standard' },
+  'hardware.config.write': { name: '修改设备配置', permissionId: 'hardware.manage', risk: 'high' },
+  'hardware.device.heartbeat': { name: '更新设备状态', permissionId: 'hardware.manage', risk: 'high' },
   'store-import.apply': { name: '应用整店导入', permissionId: 'store_import.apply', risk: 'high' },
   'service.task.create': { name: '创建服务任务', permissionId: 'service.execute', risk: 'standard' },
   'service.task.action': { name: '处理服务任务', permissionId: 'service.execute', risk: 'standard' },

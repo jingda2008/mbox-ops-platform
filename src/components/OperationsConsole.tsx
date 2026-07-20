@@ -29,9 +29,10 @@ import {
   Heart,
   Music2,
   PackageSearch,
+  Cpu,
+  ChartNoAxesCombined,
   ArrowRightLeft,
   CircleDollarSign,
-  Clock3,
   DoorOpen,
   Link2,
   Minus,
@@ -45,9 +46,11 @@ import {
   actOnTask,
   assignTableSessionSales,
   closeTableSession,
+  createComplimentaryOrder,
   getCurrentActorId,
   getTableSessionSummary,
   handoverLegacyTableSession,
+  managerCancelKdsTask,
   openWalkInTable,
   operateTableCombination,
   publishConfig,
@@ -60,6 +63,7 @@ import {
   transferTableSession,
   updateTableOperationsConfig,
 } from '../api'
+import type { ManagerKdsCancellationInput, ManagerKdsCancellationResult } from '../shared/commerce-api'
 import type {
   BootstrapResponse,
   ConfigDraftInput,
@@ -71,12 +75,15 @@ import type {
   TaskActionInput,
 } from '../shared/contracts'
 import { effectiveDataScopeForEmployee, effectiveRoleIdsForEmployee } from '../shared/staff-access'
-import { chinaDateKey, formatChinaDateTime, formatChinaTime } from '../shared/china-time'
+import { formatChinaDateTime, formatChinaTime } from '../shared/china-time'
 import { TaskQueue } from './TaskQueue'
 import { getFulfillmentAccess, kdsTaskOperationallyActive, taskVisibleToAccess } from './commerce-workspace'
 import { RoleHomeView } from './RoleHomeView'
 import { buildRoleHomeModel, type RoleHomeNavigationId } from './role-access'
 import { salesAttributionEmployees } from './sales-attribution'
+import { useRevealPanelScroll } from './use-reveal-panel-scroll'
+import { SopVerificationInbox } from './SopVerificationInbox'
+import { BeijingClock } from './live-time'
 import './OperationsConsole.css'
 
 const MasterDataView = lazy(() => import('./MasterDataView').then((module) => ({ default: module.MasterDataView })))
@@ -86,6 +93,9 @@ const BenefitCenterView = lazy(() => import('./BenefitCenterView').then((module)
 const SongCenterView = lazy(() => import('./SongCenterView').then((module) => ({ default: module.SongCenterView })))
 const ReservationView = lazy(() => import('./ReservationView').then((module) => ({ default: module.ReservationView })))
 const InventoryView = lazy(() => import('./InventoryView').then((module) => ({ default: module.InventoryView })))
+const CommercialOpsView = lazy(() => import('./CommercialOpsView').then((module) => ({ default: module.CommercialOpsView })))
+const HardwareCenterView = lazy(() => import('./HardwareCenterView').then((module) => ({ default: module.HardwareCenterView })))
+const SopRulesEditor = lazy(() => import('./SopRulesEditor').then((module) => ({ default: module.SopRulesEditor })))
 
 export type OperationsConsoleView = 'home' | RoleHomeNavigationId
 type View = OperationsConsoleView
@@ -105,6 +115,8 @@ const navigation: Array<{ id: View; label: string; icon: typeof LayoutDashboard 
   { id: 'inventory', label: '库存/存酒', icon: PackageSearch },
   { id: 'payments', label: '收银/支付', icon: Banknote },
   { id: 'benefits', label: '会员权益', icon: Gift },
+  { id: 'operations', label: '经营工具', icon: ChartNoAxesCombined },
+  { id: 'devices', label: '设备中心', icon: Cpu },
   { id: 'songs', label: '演出/点歌', icon: Music2 },
   { id: 'layout', label: '布局', icon: MapIcon },
   { id: 'master', label: '主数据', icon: ContactRound },
@@ -120,6 +132,8 @@ const viewTitles: Record<View, string> = {
   inventory: '库存与存酒',
   payments: '收银与支付',
   benefits: '会员与权益',
+  operations: '经营工具',
+  devices: '设备与边缘',
   songs: '演出与点歌',
   layout: '桌台布局',
   master: '门店主数据',
@@ -136,6 +150,8 @@ function tableOperationsConfig(config?: TableOperationsConfig): TableOperationsC
   return structuredClone(config ?? {
     version: 1,
     updatedAt: '1970-01-01T00:00:00.000Z',
+    automaticBusinessDayRollover: true,
+    businessDayRolloverHour: 6,
     maximumOpenHours: 12,
     reminder: { enabled: true, firstReminderMinutes: 60, repeatMinutes: 30, thresholdPercent: 80 },
     minimumSpendRules: [],
@@ -177,7 +193,6 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
   const [configDirty, setConfigDirty] = useState(false)
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
-  const [chinaClock, setChinaClock] = useState(() => Date.now())
   const [transferTargetId, setTransferTargetId] = useState('')
   const [transferKind, setTransferKind] = useState<'relocate' | 'temporary_to_final'>('relocate')
   const [sessionSummary, setSessionSummary] = useState<TableSessionSummary | null>(null)
@@ -192,8 +207,16 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
   const [tableOpsDirty, setTableOpsDirty] = useState(false)
   const [tableOpsReason, setTableOpsReason] = useState('')
   const [legacyHandoverReason, setLegacyHandoverReason] = useState('经理已核对客人离店，旧账转交后台处理')
+  const [turnoverReviewOpen, setTurnoverReviewOpen] = useState(false)
+  const [turnoverReasonCode, setTurnoverReasonCode] = useState<ManagerKdsCancellationInput['reasonCode']>('manager_cancelled')
+  const [turnoverReasonNote, setTurnoverReasonNote] = useState('翻台检查发现商品尚未送达')
+  const [turnoverAccounting, setTurnoverAccounting] = useState<ManagerKdsCancellationResult | null>(null)
+  const [giftProductId, setGiftProductId] = useState('')
+  const [giftQuantity, setGiftQuantity] = useState(1)
+  const [giftReason, setGiftReason] = useState('未上菜服务补偿')
   const allowedNavigationKey = roleHomeAccess.allowedNavigationIds.join(',')
   const handledNavigationRequestId = useRef<number | null>(null)
+  const tablePanelRef = useRevealPanelScroll<HTMLDivElement>(view === 'live' ? selectedTableId : '')
 
   useEffect(() => {
     if (!navigationRequest || handledNavigationRequestId.current === navigationRequest.id) return
@@ -210,11 +233,6 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
   useEffect(() => {
     if (!tableOpsDirty) setTableOpsDraft(tableOperationsConfig(data.tableOperationsConfig))
   }, [data.tableOperationsConfig, tableOpsDirty])
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setChinaClock(Date.now()), 1_000)
-    return () => window.clearInterval(timer)
-  }, [])
 
   const openTasks = fulfillmentAccess.mode === 'oversight'
     ? data.tasks.filter((task) => !task.archivedAt && !['completed', 'confirmed', 'cancelled'].includes(task.status))
@@ -248,6 +266,21 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
   const selectedSession = selectedTable
     ? data.songState.tableSessions.find((session) => session.tableId === selectedTable.id && session.status === 'open') ?? null
     : null
+  const selectedOpenKds = selectedSession
+    ? data.orderDomain.kdsTasks.filter((task) => task.tableSessionId === selectedSession.id && kdsTaskOperationallyActive(task))
+    : []
+  const canCancelTurnoverItem = canCloseTable && effectiveRoleIds.some((roleId) => (
+    ['supervisor', 'manager', 'operations_director', 'owner'].includes(roleId)
+  ))
+  const giftLimit = Math.max(0, ...effectiveRoleIds.map((roleId) => (
+    data.config.roles.find((role) => role.id === roleId)?.approvalLimits?.giftAmount ?? 0
+  )))
+  const canGiftAtTable = giftLimit > 0
+    && effectivePermissions.has('order.create')
+    && effectivePermissions.has('commerce.authorization.request')
+  const giftProducts = data.products.filter((product) => product.enabled)
+  const selectedGiftProduct = giftProducts.find((product) => product.id === giftProductId)
+  const giftRequestAmount = (selectedGiftProduct?.listPriceAmount ?? 0) * giftQuantity
   const selectedSessionBusinessDate = selectedSession?.id.match(/:(\d{4}-\d{2}-\d{2})(?::|$)/)?.[1]
   const selectedSessionOpenedAt = selectedSession ? Date.parse(selectedSession.openedAt) : Number.NaN
   const selectedSessionNeedsHandover = Boolean(selectedSession && (
@@ -281,6 +314,11 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
     setCombinationAction('add_table')
     setMinimumSpendWaiverReason('')
     setLegacyHandoverReason('经理已核对客人离店，旧账转交后台处理')
+    setTurnoverReviewOpen(false)
+    setTurnoverAccounting(null)
+    setGiftProductId('')
+    setGiftQuantity(1)
+    setGiftReason('未上菜服务补偿')
     setSessionSummary(null)
   }, [selectedTableId])
 
@@ -475,6 +513,12 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
 
   async function handleCloseTable() {
     if (!selectedTable || !canCloseTable) return
+    if (selectedOpenKds.length > 0) {
+      setTurnoverReviewOpen(true)
+      setTurnoverAccounting(null)
+      setNotice(`结台前发现${selectedOpenKds.length}项商品尚未送达，请先核对出品；系统不会自动改账`)
+      return
+    }
     if (!window.confirm(`确认${selectedTable.code}客人已经离店并结台翻台？`)) return
     setBusy(true)
     try {
@@ -486,6 +530,52 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
     } catch (error) {
       const reason = error instanceof Error ? error.message : '请稍后重试'
       setNotice(`结台未完成：${reason}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleManagerCancelKds(taskId: string) {
+    if (!canCancelTurnoverItem || turnoverReasonNote.trim().length < 2) return
+    setBusy(true)
+    try {
+      const sourceTask = data.orderDomain.kdsTasks.find((task) => task.id === taskId)
+      const sourceItem = sourceTask
+        ? data.orderDomain.orders.find((order) => order.id === sourceTask.orderId)?.items.find((item) => item.id === sourceTask.orderItemId)
+        : undefined
+      const result = await managerCancelKdsTask(taskId, {
+        reasonCode: turnoverReasonCode,
+        reasonNote: turnoverReasonNote.trim(),
+        idempotencyKey: `turnover-kds-cancel-${crypto.randomUUID()}`,
+      })
+      setTurnoverAccounting(result)
+      setGiftProductId(sourceItem?.skuId ?? data.products.find((product) => product.enabled)?.id ?? '')
+      setNotice(`${result.itemName}已停止制作；订单、收款和退款均未自动变更`)
+      await onRefresh()
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '取消出品失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleGiftReplacement() {
+    if (!selectedTable || !turnoverAccounting || !giftProductId || !canGiftAtTable) return
+    setBusy(true)
+    try {
+      const order = await createComplimentaryOrder({
+        tableId: selectedTable.id,
+        items: [{ productId: giftProductId, quantity: giftQuantity }],
+        reason: giftReason.trim(),
+        sourceKdsTaskId: turnoverAccounting.taskId,
+        idempotencyKey: `turnover-gift-${crypto.randomUUID()}`,
+      })
+      const product = data.products.find((candidate) => candidate.id === giftProductId)
+      setNotice(`${product?.name ?? '赠品'}已按权限赠送并进入出品，赠送金额${money(order.amounts.giftAmount)}已留痕`)
+      setTurnoverAccounting(null)
+      await onRefresh()
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '赠送失败')
     } finally {
       setBusy(false)
     }
@@ -526,6 +616,8 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
     setBusy(true)
     try {
       const saved = await updateTableOperationsConfig({
+        automaticBusinessDayRollover: tableOpsDraft.automaticBusinessDayRollover ?? true,
+        businessDayRolloverHour: tableOpsDraft.businessDayRolloverHour ?? 6,
         maximumOpenHours: tableOpsDraft.maximumOpenHours ?? 12,
         reminder: tableOpsDraft.reminder,
         minimumSpendRules: tableOpsDraft.minimumSpendRules,
@@ -566,6 +658,7 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
       proactiveOrderCare: { ...draft.proactiveOrderCare },
       guestServiceLimits: { ...draft.guestServiceLimits },
       communityBrand: structuredClone(draft.communityBrand),
+      sopRules: structuredClone(draft.sopRules ?? []),
     }
   }
 
@@ -665,11 +758,7 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
             <span className="eyebrow">营业日 {data.store.businessDate} · 营业中 · {fulfillmentAccess.roleLabel}</span>
             <h1>{viewTitles[view]}</h1>
           </div>
-          <div className="beijing-clock" title={formatChinaDateTime(chinaClock + Date.parse(data.serverNow) - Date.now())}>
-            <Clock3 size={15} />
-            <span><span className="beijing-clock-date">{chinaDateKey(chinaClock + Date.parse(data.serverNow) - Date.now())} </span>北京时间</span>
-            <strong>{formatChinaTime(chinaClock + Date.parse(data.serverNow) - Date.now(), { second: '2-digit' })}</strong>
-          </div>
+          <BeijingClock serverNow={data.serverNow} />
           <div className="workstation-badge"><span>{fulfillmentAccess.employee?.displayName ?? '身份失效'}</span><strong>{roleHomeAccess.focusLabel}</strong></div>
           <div className="topbar-actions">
             {roleHomeAccess.allowedNavigationIds.includes('config') && (
@@ -686,6 +775,57 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
         </header>
 
         {notice && <div className={`notice-bar ${/失败|错误|无效|不能|不可|拒绝|未保存/.test(notice) ? 'is-error' : 'is-success'}`} role="status" aria-live="polite">{notice}<button title="关闭提示" onClick={() => setNotice('')}><X size={16} /></button></div>}
+
+        {turnoverReviewOpen && selectedTable && (
+          <div className="turnover-review-backdrop" role="presentation">
+            <section className="turnover-review-dialog" role="dialog" aria-modal="true" aria-label={`${selectedTable.code}结台前出品核对`}>
+              <header>
+                <div><span>结台前核对</span><strong>{selectedTable.code} · 未送达商品处理</strong></div>
+                <button className="icon-button" title="关闭核对窗口" onClick={() => setTurnoverReviewOpen(false)}><X size={20} /></button>
+              </header>
+              <div className="turnover-accounting-boundary"><ShieldCheck size={18} /><span><strong>系统只停止制作，不自动退款、改单或冲销。</strong>账务处理由有权限人员另行确认。</span></div>
+              {selectedOpenKds.length > 0 ? (
+                <div className="turnover-kds-list">
+                  {selectedOpenKds.map((task) => (
+                    <div className="turnover-kds-row" key={task.id}>
+                      <div><strong>{task.itemName} × {task.quantity}</strong><span>{task.specification} · {turnoverKdsStatus(task.status)}</span></div>
+                      {canCancelTurnoverItem
+                        ? <button className="danger-button" disabled={busy || turnoverReasonNote.trim().length < 2} onClick={() => void handleManagerCancelKds(task.id)}>取消制作</button>
+                        : <span className="turnover-permission-note">请店长或授权主管处理</span>}
+                    </div>
+                  ))}
+                </div>
+              ) : <div className="turnover-clear-state"><CircleCheckBig size={22} /><span>未送达出品阻断已处理，可以重新检查结台条件。</span></div>}
+              {selectedOpenKds.length > 0 && canCancelTurnoverItem && (
+                <div className="turnover-reason-fields">
+                  <label><span>取消原因</span><select value={turnoverReasonCode} onChange={(event) => setTurnoverReasonCode(event.target.value as ManagerKdsCancellationInput['reasonCode'])}><option value="manager_cancelled">店长现场取消</option><option value="guest_cancelled">客人取消</option><option value="unavailable_confirmed">确认无法制作</option><option value="other">其他</option></select></label>
+                  <label><span>情况说明</span><input maxLength={200} value={turnoverReasonNote} onChange={(event) => setTurnoverReasonNote(event.target.value)} /></label>
+                </div>
+              )}
+              {turnoverAccounting && (
+                <div className="turnover-accounting-review">
+                  <div className="turnover-accounting-title"><Banknote size={18} /><div><strong>账务建议 · 仅供确认</strong><span>{accountingRecommendation(turnoverAccounting)}</span></div></div>
+                  <dl><div><dt>商品应付</dt><dd>{money(turnoverAccounting.accounting.payableAmount)}</dd></div><div><dt>已收金额</dt><dd>{money(turnoverAccounting.accounting.paidAmount)}</dd></div><div><dt>已退金额</dt><dd>{money(turnoverAccounting.accounting.refundedAmount)}</dd></div></dl>
+                  {canGiftAtTable && (
+                    <div className="turnover-gift-form">
+                      <div className="turnover-accounting-title"><Gift size={18} /><div><strong>赠送同品或替代品</strong><span>独立零应付订单，正常扣库存并进入出品</span></div></div>
+                      <label><span>赠送商品</span><select value={giftProductId} onChange={(event) => setGiftProductId(event.target.value)}>{giftProducts.map((product) => <option key={product.id} value={product.id}>{product.name} · {money(product.listPriceAmount)}</option>)}</select></label>
+                      <label><span>数量</span><input type="number" min={1} max={50} value={giftQuantity} onChange={(event) => setGiftQuantity(Math.max(1, Math.min(50, Number(event.target.value) || 1)))} /></label>
+                      <label><span>赠送原因</span><input maxLength={200} value={giftReason} onChange={(event) => setGiftReason(event.target.value)} /></label>
+                      <button className="secondary-button" disabled={busy || !selectedGiftProduct || giftReason.trim().length < 2 || giftRequestAmount > giftLimit} onClick={() => void handleGiftReplacement()}><Gift size={16} />确认赠送</button>
+                      <small>本次 {money(giftRequestAmount)} / 当前岗位单次额度 {money(giftLimit)}</small>
+                    </div>
+                  )}
+                </div>
+              )}
+              <footer>
+                <button className="secondary-button" onClick={() => { setTurnoverReviewOpen(false); setNotice('账务保持原状，取消记录已留存，可稍后由店长或收银处理') }}>否，暂不处理</button>
+                {roleHomeAccess.allowedNavigationIds.includes('payments') && <button className="secondary-button" onClick={() => { setTurnoverReviewOpen(false); setView('payments'); setNotice('已进入收银工作台，请根据现场情况决定是否退款或调整应收') }}><Banknote size={16} />是，去收银处理</button>}
+                {selectedOpenKds.length === 0 && <button className="primary-button" disabled={busy} onClick={() => { setTurnoverReviewOpen(false); void handleCloseTable() }}><CircleCheckBig size={16} />重新检查并结台</button>}
+              </footer>
+            </section>
+          </div>
+        )}
 
         <main className="main-content" aria-busy={busy}>
           <Suspense fallback={<div className="empty-state" role="status">正在载入当前工作台</div>}>
@@ -711,6 +851,7 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
                     <div><span className="eyebrow">桌台责任区</span><h2>现场桌台</h2></div>
                     <div className="legend"><span><i className="dot occupied" />营业</span><span><i className="dot reserved" />预订</span><span><i className="dot available" />空台</span></div>
                   </div>
+                  {selectedTable && <div className="reveal-panel-target" ref={tablePanelRef} aria-hidden="true" />}
                   {selectedTable && selectedTable.status === 'available' && canOpenWalkIn && (
                     <div className="table-walkin-toolbar">
                       <div className="table-business-heading"><DoorOpen size={19} /><div><strong>{selectedTable.code} 临客开台</strong><span>员工选择人数与销售后直接开台，客户无需确认</span></div></div>
@@ -852,17 +993,20 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
           )}
 
           {view === 'tasks' && (
-            <TaskQueue
-              tasks={visibleServiceTasks}
-              tables={data.tables}
-              employees={data.employees}
-              serviceTypes={data.config.serviceTypes}
-              selectedTableId={selectedTableId}
-              onClearTable={() => setSelectedTableId(null)}
-              onAction={handleTaskAction}
-              currentEmployeeId={fulfillmentAccess.employee?.id ?? ''}
-              claimableTaskIds={claimableTaskIds}
-            />
+            <>
+              <SopVerificationInbox data={data} employee={currentEmployee ?? null} onRefresh={onRefresh} onNotice={setNotice} />
+              <TaskQueue
+                tasks={visibleServiceTasks}
+                tables={data.tables}
+                employees={data.employees}
+                serviceTypes={data.config.serviceTypes}
+                selectedTableId={selectedTableId}
+                onClearTable={() => setSelectedTableId(null)}
+                onAction={handleTaskAction}
+                currentEmployeeId={fulfillmentAccess.employee?.id ?? ''}
+                claimableTaskIds={claimableTaskIds}
+              />
+            </>
           )}
 
           {view === 'commerce' && (
@@ -876,6 +1020,10 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
           {view === 'payments' && <PaymentView data={data} onRefresh={onRefresh} />}
 
           {view === 'benefits' && <BenefitCenterView data={data} onRefresh={onRefresh} onNotice={setNotice} />}
+
+          {view === 'operations' && <CommercialOpsView data={data} onRefresh={onRefresh} />}
+
+          {view === 'devices' && <HardwareCenterView data={data} onRefresh={onRefresh} />}
 
           {view === 'songs' && <SongCenterView data={data} onRefresh={onRefresh} onNotice={setNotice} />}
 
@@ -929,6 +1077,25 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
                 {data.draftConfig && <p className="config-history-warning">存在未发布草稿，发布后才能回滚。</p>}
               </div>
 
+              <SopRulesEditor
+                rules={draft.sopRules ?? []}
+                executions={data.sopExecutions ?? []}
+                actionRecords={data.sopActionRecords ?? []}
+                serviceTypes={draft.serviceTypes}
+                roles={draft.roles}
+                areas={data.areas}
+                tables={data.tables}
+                products={data.products}
+                employees={data.employees}
+                workstations={draft.workstations}
+                onChange={(sopRules) => {
+                  const next = cloneConfig(draft)
+                  next.sopRules = sopRules
+                  setDraft(next)
+                  setConfigDirty(true)
+                }}
+              />
+
               <div className="config-section table-operations-config">
                 <div className="config-section-title table-ops-config-title">
                   <CircleDollarSign size={19} />
@@ -937,6 +1104,8 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
                   <button className="secondary-button" disabled={busy || tableOpsDraft.minimumSpendRules.length >= 500} onClick={addMinimumSpendRule}><Plus size={15} />新增规则</button>
                 </div>
                 <div className="minimum-reminder-config">
+                  <div className="switch-field"><span>营业日自动切换</span><label className="switch"><input type="checkbox" checked={tableOpsDraft.automaticBusinessDayRollover ?? true} onChange={(event) => { setTableOpsDraft({ ...tableOpsDraft, automaticBusinessDayRollover: event.target.checked }); setTableOpsDirty(true) }} /><span /></label></div>
+                  <label><span>切换时间（北京时间整点）</span><input type="number" min={0} max={23} value={tableOpsDraft.businessDayRolloverHour ?? 6} onChange={(event) => { setTableOpsDraft({ ...tableOpsDraft, businessDayRolloverHour: Number(event.target.value) }); setTableOpsDirty(true) }} /></label>
                   <label><span>最长开台（小时）</span><input type="number" min={6} max={48} value={tableOpsDraft.maximumOpenHours ?? 12} onChange={(event) => { setTableOpsDraft({ ...tableOpsDraft, maximumOpenHours: Number(event.target.value) }); setTableOpsDirty(true) }} /></label>
                   <div className="switch-field"><span>启用提醒</span><label className="switch"><input type="checkbox" checked={tableOpsDraft.reminder.enabled} onChange={(event) => { setTableOpsDraft({ ...tableOpsDraft, reminder: { ...tableOpsDraft.reminder, enabled: event.target.checked } }); setTableOpsDirty(true) }} /><span /></label></div>
                   <label><span>首次提醒（分钟）</span><input type="number" min={1} max={720} value={tableOpsDraft.reminder.firstReminderMinutes} onChange={(event) => { setTableOpsDraft({ ...tableOpsDraft, reminder: { ...tableOpsDraft.reminder, firstReminderMinutes: Number(event.target.value) } }); setTableOpsDirty(true) }} /></label>
@@ -1085,6 +1254,18 @@ function formatNextReminder(nextReminderAt: string | null) {
 
 function money(amount: number) {
   return new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY' }).format(amount / 100)
+}
+
+function turnoverKdsStatus(status: BootstrapResponse['orderDomain']['kdsTasks'][number]['status']) {
+  return ({ queued: '待制作', preparing: '制作中', completed: '待取走', picked_up: '配送中', delivered: '已送达' })[status]
+}
+
+function accountingRecommendation(result: ManagerKdsCancellationResult) {
+  if (result.accounting.recommendation === 'no_financial_action') return '该商品为赠品，建议核对后不做金额处理。'
+  if (result.accounting.recommendation === 'review_refund') {
+    return `已收款，建议核对后决定是否申请部分退款 ${money(result.accounting.suggestedAmount)}。`
+  }
+  return `尚未收款，建议核对后决定是否调整应收 ${money(result.accounting.suggestedAmount)}。`
 }
 
 function configOperationLabel(operation: BootstrapResponse['configVersions'][number]['operation']) {

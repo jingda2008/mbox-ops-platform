@@ -37,12 +37,49 @@
 .song-config-toolbar label > span, .repertoire-create label > span, .schedule-toolbar label > span { color: var(--ink-soft); font-size: 9px; font-weight: 750; }
 .song-config-toolbar form { display: flex; align-items: center; gap: 6px; }
 .song-config-toolbar input, .song-config-toolbar select, .repertoire-manager input, .repertoire-manager select, .schedule-editor input, .schedule-editor select { min-width: 0; height: 34px; border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 8px; background: #fff; color: var(--ink); }
+.singer-library-tabs { min-height: 48px; display: flex; align-items: stretch; gap: 5px; padding: 6px 14px; border-bottom: 1px solid var(--line); background: #f5f6f3; }
+.singer-library-tabs button { min-width: 118px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--line); border-radius: 4px; background: #fff; color: var(--ink-soft); font-size: 10px; font-weight: 750; }
+.singer-library-tabs button.is-active { border-color: #b7953c; background: #171b18; color: #f1d36b; }
 .repertoire-manager { padding: 14px; }
 .repertoire-manager > .form-heading { margin-bottom: 10px; }
+.repertoire-import { margin-bottom: 12px; border: 1px solid var(--line-strong); background: #f7f8f5; }
+.repertoire-import-heading { min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; }
+.repertoire-import-heading > div:first-child { min-width: 0; display: grid; gap: 3px; }
+.repertoire-import-heading strong { font-size: 12px; }
+.repertoire-import-heading span { color: var(--ink-soft); font-size: 9px; line-height: 1.4; }
+.repertoire-import-heading > div:last-child { display: flex; gap: 7px; }
+.repertoire-import-heading button, .repertoire-file-button { min-height: 36px; white-space: nowrap; }
+.repertoire-file-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 12px; cursor: pointer; }
+.repertoire-file-button input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.repertoire-import-status { padding: 10px 12px; border-top: 1px solid var(--line); color: var(--ink-soft); font-size: 10px; }
+.repertoire-import-preview { border-top: 1px solid var(--line); background: #fff; }
+.repertoire-import-preview.has-errors { border-left: 4px solid var(--danger); }
+.repertoire-import-summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 11px; }
+.repertoire-import-summary > span { min-width: 0; display: grid; gap: 2px; }
+.repertoire-import-summary strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repertoire-import-summary small { color: var(--ink-soft); font-size: 9px; }
+.repertoire-import-summary button { min-height: 34px; white-space: nowrap; }
+.repertoire-import-errors, .repertoire-import-sample { display: grid; gap: 4px; padding: 0 11px 10px; }
+.repertoire-import-errors span, .repertoire-import-errors b { color: var(--danger); font-size: 9px; line-height: 1.4; }
+.repertoire-import-sample { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.repertoire-import-sample > span { min-width: 0; display: grid; gap: 2px; padding: 7px; border: 1px solid var(--line); }
+.repertoire-import-sample strong, .repertoire-import-sample small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repertoire-import-sample strong { font-size: 10px; }
+.repertoire-import-sample small { color: var(--ink-soft); font-size: 8px; }
+.repertoire-subheading { display: flex; align-items: center; gap: 8px; margin: 2px 0 7px; }
+.repertoire-subheading strong { font-size: 11px; }
+.repertoire-subheading span { color: var(--ink-soft); font-size: 9px; }
 .repertoire-create { display: grid; grid-template-columns: 1.2fr 1fr 100px 100px auto; align-items: end; gap: 7px; padding: 10px; border: 1px solid var(--line); background: #f7f8f5; }
 .repertoire-create > label { display: grid; gap: 4px; }
 .repertoire-create button { min-height: 34px; white-space: nowrap; }
+.repertoire-list-toolbar { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 9px; border: 1px solid var(--line); border-bottom: 0; background: #fff; }
+.repertoire-list-toolbar b { color: var(--ink-soft); font-size: 9px; white-space: nowrap; }
+.song-search-control { min-width: 0; display: flex; align-items: center; gap: 7px; border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 8px; background: #fff; }
+.song-search-control svg { flex: 0 0 auto; color: var(--ink-soft); }
+.song-search-control input { width: 100%; min-width: 0; height: 34px; border: 0 !important; padding: 0 !important; outline: 0; background: transparent !important; }
+.repertoire-list-toolbar .song-search-control { width: min(440px, 70%); }
 .repertoire-list { border-inline: 1px solid var(--line); }
+.repertoire-list-limit { padding: 10px; border-bottom: 1px solid var(--line); color: var(--ink-soft); font-size: 9px; text-align: center; }
 .repertoire-row { display: grid; grid-template-columns: 1.2fr 1fr 86px 96px 100px 76px; align-items: center; gap: 6px; padding: 7px 9px; border-bottom: 1px solid var(--line); }
 .repertoire-row input { width: 100%; }
 .price-input { display: flex; align-items: center; border: 1px solid var(--line-strong); border-radius: 4px; background: #fff; }
@@ -140,7 +177,8 @@
 .song-request-actions select { width: 90px; height: 32px; font-size: 10px; }
 .song-request-actions button { min-height: 32px; padding: 0 8px; font-size: 10px; }
 .song-request-actions .icon-button { width: 32px; padding: 0; }
-@media (max-width: 1000px) { .singer-profile-editor { grid-template-columns: 76px minmax(0, 1fr); } .singer-profile-preview { width: 76px; height: 76px; } .singer-profile-actions { grid-column: 1 / -1; flex-direction: row; align-items: center; } .song-workspace { grid-template-columns: 1fr; } .song-order-form { border-right: 0; border-bottom: 1px solid var(--line); } .repertoire-create { grid-template-columns: repeat(2, minmax(0, 1fr)); } .repertoire-create button { grid-column: 1 / -1; } .repertoire-row { grid-template-columns: 1fr 1fr 80px 90px; } .repertoire-row .enabled-toggle, .repertoire-row button { grid-column: span 2; } .schedule-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 700px) { .song-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .song-metric:nth-child(2) { border-right: 0; } .song-metric:nth-child(-n+2) { border-bottom: 1px solid var(--line); } .song-view-tabs { overflow-x: auto; } .song-view-tabs button { min-width: 108px; } .song-config-toolbar { align-items: stretch; flex-direction: column; } .song-config-toolbar > label { min-width: 0; } .song-config-toolbar form input { flex: 1; } .singer-profile-editor { grid-template-columns: 1fr; } .singer-profile-preview { width: 100%; height: 120px; } .singer-profile-fields { grid-template-columns: 1fr; } .singer-profile-fields .wide-field { grid-column: 1; } .repertoire-create, .repertoire-row { grid-template-columns: 1fr; } .repertoire-create button, .repertoire-row .enabled-toggle, .repertoire-row button { grid-column: 1; } .schedule-manager-bar { align-items: stretch; flex-direction: column; } .schedule-manager-bar > label { min-width: 0; width: 100%; } .schedule-manager-actions { display: grid; grid-template-columns: 1fr 1fr; } .schedule-manager-note { align-items: flex-start; flex-direction: column; gap: 3px; } .schedule-toolbar { grid-template-columns: 1fr 1fr; } .schedule-title { grid-column: 1 / -1; grid-row: 1; } .schedule-row { grid-template-columns: 1fr; } .schedule-row-heading { min-height: 34px; flex-direction: row; align-items: center; padding-top: 0; } .song-order-form { grid-template-columns: 1fr; } .song-order-form .form-heading, .song-order-form .wide-field, .song-order-form .song-payment-boundary, .song-order-form > button { grid-column: 1; } .song-request-row { grid-template-columns: 58px minmax(0, 1fr); } .song-request-actions { grid-column: 1 / -1; flex-wrap: wrap; } .song-request-actions input { flex: 1; width: auto; } }
+@media (max-width: 1000px) { .singer-profile-editor { grid-template-columns: 76px minmax(0, 1fr); } .singer-profile-preview { width: 76px; height: 76px; } .singer-profile-actions { grid-column: 1 / -1; flex-direction: row; align-items: center; } .song-workspace { grid-template-columns: 1fr; } .song-order-form { border-right: 0; border-bottom: 1px solid var(--line); } .repertoire-create { grid-template-columns: repeat(2, minmax(0, 1fr)); } .repertoire-create button { grid-column: 1 / -1; } .repertoire-row { grid-template-columns: 1fr 1fr 80px 90px; } .repertoire-row .enabled-toggle, .repertoire-row button { grid-column: span 2; } .repertoire-import-sample { grid-template-columns: repeat(3, minmax(0, 1fr)); } .schedule-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 700px) { .song-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .song-metric:nth-child(2) { border-right: 0; } .song-metric:nth-child(-n+2) { border-bottom: 1px solid var(--line); } .song-view-tabs { overflow-x: auto; } .song-view-tabs button { min-width: 108px; } .song-config-toolbar { align-items: stretch; flex-direction: column; } .song-config-toolbar > label { min-width: 0; } .song-config-toolbar form input { flex: 1; } .singer-library-tabs { display: grid; grid-template-columns: 1fr 1fr; } .singer-library-tabs button { min-width: 0; } .singer-profile-editor { grid-template-columns: 1fr; } .singer-profile-preview { width: 100%; height: 120px; } .singer-profile-fields { grid-template-columns: 1fr; } .singer-profile-fields .wide-field { grid-column: 1; } .repertoire-import-heading, .repertoire-import-summary { align-items: stretch; flex-direction: column; } .repertoire-import-heading > div:last-child { display: grid; grid-template-columns: 1fr 1fr; } .repertoire-import-summary button { width: 100%; } .repertoire-import-sample { grid-template-columns: 1fr 1fr; } .repertoire-list-toolbar .song-search-control { width: 100%; } .repertoire-create, .repertoire-row { grid-template-columns: 1fr; } .repertoire-create button, .repertoire-row .enabled-toggle, .repertoire-row button { grid-column: 1; } .schedule-manager-bar { align-items: stretch; flex-direction: column; } .schedule-manager-bar > label { min-width: 0; width: 100%; } .schedule-manager-actions { display: grid; grid-template-columns: 1fr 1fr; } .schedule-manager-note { align-items: flex-start; flex-direction: column; gap: 3px; } .schedule-toolbar { grid-template-columns: 1fr 1fr; } .schedule-title { grid-column: 1 / -1; grid-row: 1; } .schedule-toolbar button, .schedule-actions button { width: 100%; } .schedule-actions { align-items: stretch; flex-direction: column; } }
 @media (max-width: 520px) { .schedule-manager-actions { grid-template-columns: 1fr; } .schedule-date-warning { align-items: stretch; flex-direction: column; } .schedule-date-warning button { width: 100%; } .schedule-toolbar, .schedule-fields { grid-template-columns: 1fr; } .schedule-title { grid-column: 1; grid-row: auto; } .schedule-toolbar button, .schedule-actions button { width: 100%; } .schedule-actions { align-items: stretch; flex-direction: column; } }
 @media (max-width: 700px) { .schedule-policy-fields { align-items: flex-start; flex-direction: column; gap: 9px; } }
+@media (max-width: 700px) { .schedule-row { grid-template-columns: 1fr; } .schedule-row-heading { min-height: 34px; flex-direction: row; align-items: center; padding-top: 0; } .song-order-form { grid-template-columns: 1fr; } .song-order-form .form-heading, .song-order-form .wide-field, .song-order-form .song-payment-boundary, .song-order-form > button { grid-column: 1; } .song-request-row { grid-template-columns: 58px minmax(0, 1fr); } .song-request-actions { grid-column: 1 / -1; flex-wrap: wrap; } .song-request-actions input { flex: 1; width: auto; } }

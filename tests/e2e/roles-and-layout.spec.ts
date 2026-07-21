@@ -54,6 +54,49 @@ test.describe('视觉与移动端适配', () => {
     expect(results.violations.filter((item) => ['serious', 'critical'].includes(item.impact ?? ''))).toEqual([])
   })
 
+  test('顾客端购物车与金额合并到底部支付栏，明细按需展开', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto('/guest?table=L01')
+
+    await page.getByTitle('加入招牌鸡尾酒').click()
+    await expect(page.locator('.menu-cart-panel')).toHaveCount(0)
+    const dock = page.getByRole('complementary', { name: '订单结算' })
+    await expect(dock).toBeVisible()
+    await expect(dock.getByRole('button', { name: /查看购物车，1件商品/ })).toContainText('¥88.00')
+    await expect(dock.getByRole('button', { name: '确认订单并微信支付' })).toBeVisible()
+
+    await dock.getByRole('button', { name: /查看购物车/ }).click()
+    const drawer = page.getByRole('dialog', { name: '购物车明细' })
+    await expect(drawer).toBeVisible()
+    await expect(drawer.getByText('招牌鸡尾酒', { exact: true })).toBeVisible()
+    expect((await drawer.boundingBox())?.height ?? 0).toBeGreaterThan(100)
+    await drawer.getByTitle('增加招牌鸡尾酒').click()
+    await expect(dock.getByRole('button', { name: /查看购物车，2件商品/ })).toContainText('¥176.00')
+
+    await drawer.getByTitle('关闭购物车').click()
+    await dock.getByRole('button', { name: '确认订单并微信支付' }).click()
+    await expect(page.getByRole('dialog', { name: '确认上单' })).toBeVisible()
+    await expectNoHorizontalOverflow(page)
+  })
+
+  test('平板点单优先展示商品，主动打开购物车后才显示金额和支付', async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 })
+    await page.goto('/guest?table=L01')
+
+    await page.getByTitle('加入招牌鸡尾酒').click()
+    const dock = page.getByRole('complementary', { name: '订单结算' })
+    await expect(dock).toBeVisible()
+    await expect(dock.locator('.menu-cart-summary > strong')).toBeHidden()
+    await expect(dock.getByRole('button', { name: '确认订单并微信支付' })).toBeHidden()
+
+    await dock.getByRole('button', { name: /查看购物车/ }).click()
+    const drawer = page.getByRole('dialog', { name: '购物车明细' })
+    await expect(drawer.getByText('招牌鸡尾酒', { exact: true })).toBeVisible()
+    await expect(drawer.getByText('¥88.00', { exact: true })).toBeVisible()
+    await expect(drawer.getByRole('button', { name: '确认订单并微信支付' })).toBeVisible()
+    await expectNoHorizontalOverflow(page)
+  })
+
   test('情绪选择不等待网络即可立即高亮，送达失败前不误报完成', async ({ page }) => {
     await page.setViewportSize({ width: 430, height: 932 })
     let releaseRequest = () => undefined

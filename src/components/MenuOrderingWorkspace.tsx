@@ -27,6 +27,7 @@ interface MenuOrderingWorkspaceProps {
   busy?: boolean
   timeZone?: string
   orderSafety?: OrderSafetyConfig
+  compactCart?: boolean
   onSubmit: (items: MenuCartItem[], options: { confirmedDuplicateOrderId?: string }) => Promise<void>
   onInteraction?: (interaction: MenuInteraction) => void
 }
@@ -42,6 +43,7 @@ export function MenuOrderingWorkspace({
   onSubmit,
   onInteraction,
   orderSafety,
+  compactCart = false,
 }: MenuOrderingWorkspaceProps) {
   const [cart, setCart] = useState<Record<string, number>>({})
   const [categoryId, setCategoryId] = useState('all')
@@ -51,6 +53,7 @@ export function MenuOrderingWorkspace({
   const [confirmedDuplicateOrderId, setConfirmedDuplicateOrderId] = useState('')
   const [pendingProductId, setPendingProductId] = useState('')
   const [lastSubmittedAt, setLastSubmittedAt] = useState(0)
+  const [cartOpen, setCartOpen] = useState(false)
   useEffect(() => {
     const interval = window.setInterval(() => setClock(Date.now()), 30_000)
     return () => window.clearInterval(interval)
@@ -78,6 +81,10 @@ export function MenuOrderingWorkspace({
   ))
   const itemCount = cartProducts.reduce((sum, product) => sum + (cart[product.id] ?? 0), 0)
   const total = cartProducts.reduce((sum, product) => sum + product.listPriceAmount * (cart[product.id] ?? 0), 0)
+
+  useEffect(() => {
+    if (itemCount === 0) setCartOpen(false)
+  }, [itemCount])
 
   useEffect(() => {
     setCart((current) => {
@@ -149,6 +156,7 @@ export function MenuOrderingWorkspace({
         { confirmedDuplicateOrderId: duplicateOrderId },
       )
       setCart({})
+      setCartOpen(false)
       setLastSubmittedAt(Date.now())
       setConfirmation(null)
       setConfirmationError('')
@@ -174,8 +182,21 @@ export function MenuOrderingWorkspace({
     setConfirmationError('')
   }
 
+  const cartLines = cartProducts.length === 0 ? (
+    <div className="menu-cart-empty"><ShoppingCart size={28} /><span>点击商品图片旁的加号</span></div>
+  ) : cartProducts.map((product) => (
+    <div className="menu-cart-line" key={product.id}>
+      <div><strong>{product.name}</strong><span>¥{(product.listPriceAmount / 100).toFixed(0)} × {cart[product.id]}</span></div>
+      <div className="menu-stepper">
+        <button title={`移除${product.name}`} onClick={() => removeProduct(product.id)}><Trash2 size={15} /></button>
+        <strong>{cart[product.id]}</strong>
+        <button title={`增加${product.name}`} onClick={() => changeQuantity(product.id, 1)}><Plus size={15} /></button>
+      </div>
+    </div>
+  ))
+
   return (
-    <section className="menu-ordering-workspace">
+    <section className={`menu-ordering-workspace${compactCart ? ' has-compact-cart' : ''}`}>
       <header className="menu-workspace-header">
         <div>
           <span>当前桌台</span>
@@ -229,28 +250,47 @@ export function MenuOrderingWorkspace({
           </div>
         </div>
 
-        <aside className="menu-cart-panel">
-          <div className="menu-cart-heading"><ShoppingCart size={20} /><strong>已选商品</strong><span>{itemCount} 件</span></div>
-          <div className="menu-cart-lines">
-            {cartProducts.length === 0 ? (
-              <div className="menu-cart-empty"><ShoppingCart size={28} /><span>点击商品图片旁的加号</span></div>
-            ) : cartProducts.map((product) => (
-              <div className="menu-cart-line" key={product.id}>
-                <div><strong>{product.name}</strong><span>¥{(product.listPriceAmount / 100).toFixed(0)} × {cart[product.id]}</span></div>
-                <div className="menu-stepper">
-                  <button title={`移除${product.name}`} onClick={() => removeProduct(product.id)}><Trash2 size={15} /></button>
-                  <strong>{cart[product.id]}</strong>
-                  <button title={`增加${product.name}`} onClick={() => changeQuantity(product.id, 1)}><Plus size={15} /></button>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="menu-cart-total"><span><ShoppingCart size={16} /><b>{itemCount}</b>件 · 合计</span><strong>¥{(total / 100).toFixed(2)}</strong></div>
-          <button className="menu-submit-button" disabled={cartProducts.length === 0 || busy} onClick={() => void submit()}>
-            <Check size={19} />{busy ? '正在提交' : submitLabel}
-          </button>
-          <p className="menu-submit-hint">{submitHint}</p>
-        </aside>
+        {compactCart ? <>
+          {cartOpen && <button className="menu-cart-drawer-backdrop" type="button" aria-label="关闭购物车" onClick={() => setCartOpen(false)} />}
+          {cartOpen && (
+            <aside className="menu-cart-drawer" role="dialog" aria-modal="true" aria-label="购物车明细">
+              <div className="menu-cart-heading"><ShoppingCart size={20} /><strong>已选商品</strong><span>{itemCount} 件</span><button className="icon-button" title="关闭购物车" onClick={() => setCartOpen(false)}><X size={18} /></button></div>
+              <div className="menu-cart-lines">{cartLines}</div>
+              <footer className="menu-cart-drawer-footer">
+                <div><span>合计</span><strong>¥{(total / 100).toFixed(2)}</strong></div>
+                <button className="menu-submit-button" disabled={cartProducts.length === 0 || busy} onClick={() => void submit()}>
+                  <Check size={18} />{busy ? '正在提交' : submitLabel}
+                </button>
+              </footer>
+            </aside>
+          )}
+          <aside className={`menu-cart-dock${itemCount === 0 ? ' is-empty' : ''}`} aria-label="订单结算">
+            <button
+              className="menu-cart-summary"
+              type="button"
+              disabled={itemCount === 0}
+              aria-expanded={cartOpen}
+              aria-label={`查看购物车，${itemCount}件商品，合计${(total / 100).toFixed(2)}元`}
+              onClick={() => setCartOpen((open) => !open)}
+            >
+              <span><ShoppingCart size={20} /><b>{itemCount}</b><small>件</small><em>购物车</em></span>
+              <strong>¥{(total / 100).toFixed(2)}</strong>
+            </button>
+            <button className="menu-submit-button" disabled={cartProducts.length === 0 || busy} onClick={() => void submit()}>
+              <Check size={19} />{busy ? '正在提交' : submitLabel}
+            </button>
+          </aside>
+        </> : (
+          <aside className="menu-cart-panel">
+            <div className="menu-cart-heading"><ShoppingCart size={20} /><strong>已选商品</strong><span>{itemCount} 件</span></div>
+            <div className="menu-cart-lines">{cartLines}</div>
+            <div className="menu-cart-total"><span><ShoppingCart size={16} /><b>{itemCount}</b>件 · 合计</span><strong>¥{(total / 100).toFixed(2)}</strong></div>
+            <button className="menu-submit-button" disabled={cartProducts.length === 0 || busy} onClick={() => void submit()}>
+              <Check size={19} />{busy ? '正在提交' : submitLabel}
+            </button>
+            <p className="menu-submit-hint">{submitHint}</p>
+          </aside>
+        )}
       </div>
 
       {confirmation && <div className="menu-confirm-backdrop" role="presentation" onClick={() => setConfirmation(null)}>

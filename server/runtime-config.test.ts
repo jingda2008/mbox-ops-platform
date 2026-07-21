@@ -121,7 +121,7 @@ describe('runtime config', () => {
     expect(loadRuntimeConfig({ API_PORT: '8788', PORT: '9090' }).apiPort).toBe(8788)
   })
 
-  it('allows pilot login only in staging with a strong access code', () => {
+  it('allows pilot login only in staging with a store access code of at least seven characters', () => {
     const staging = {
       MBOX_RUNTIME_MODE: 'staging',
       MBOX_REPOSITORY: 'postgres',
@@ -139,11 +139,14 @@ describe('runtime config', () => {
       pilotSessionHours: 6,
       pilotPaymentSimulationEnabled: false,
     })
+    expect(loadRuntimeConfig({ ...staging, MBOX_PILOT_ACCESS_CODE: 'MBOX521' })).toMatchObject({
+      pilotAccessCode: 'MBOX521',
+    })
     expect(loadRuntimeConfig({ ...staging, MBOX_PILOT_PAYMENT_SIMULATION_ENABLED: 'true' }))
       .toMatchObject({ pilotPaymentSimulationEnabled: true })
     expect(() => loadRuntimeConfig({ MBOX_PILOT_PAYMENT_SIMULATION_ENABLED: 'true' }))
       .toThrow('只能在staging')
-    expect(() => loadRuntimeConfig({ ...staging, MBOX_PILOT_ACCESS_CODE: 'short' })).toThrow('至少需要10个字符')
+    expect(() => loadRuntimeConfig({ ...staging, MBOX_PILOT_ACCESS_CODE: 'MBOX52' })).toThrow('至少需要7个字符')
     expect(() => loadRuntimeConfig({ ...staging, MBOX_PILOT_ACCESS_CODE: 'pilot-code-strong', MBOX_PILOT_EMPLOYEE_PINS_JSON: '' })).toThrow('EMPLOYEE_PINS')
     expect(() => loadRuntimeConfig({ ...staging, MBOX_PILOT_ACCESS_CODE: 'pilot-code-strong', MBOX_PILOT_EMPLOYEE_PINS_JSON: JSON.stringify({ a: '1001', b: '1001' }) })).toThrow('不能重复')
     expect(() => loadRuntimeConfig({ MBOX_PILOT_ACCESS_CODE: 'pilot-code-strong' })).toThrow('只能在staging')

@@ -283,7 +283,7 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
 
   if (config.pilotAccessCode) {
     if (runtimeMode !== 'staging') throw new Error('门店验证登录只能在staging环境启用')
-    if (config.pilotAccessCode.length < 10) throw new Error('MBOX_PILOT_ACCESS_CODE至少需要10个字符')
+    if (config.pilotAccessCode.length < 7) throw new Error('MBOX_PILOT_ACCESS_CODE至少需要7个字符')
     if (!config.pilotEmployeePins || Object.keys(config.pilotEmployeePins).length === 0) {
       throw new Error('门店验证登录必须配置MBOX_PILOT_EMPLOYEE_PINS_JSON')
     }

@@ -1,0 +1,123 @@
+import { describe, expect, it } from 'vitest'
+import { createSeedState } from './seed.js'
+import {
+  hydrateRuntimeStateFromOperationalTables,
+  OperationalReadRevisionError,
+  PostgresOperationalReadStore,
+  type OperationalReadSnapshot,
+} from './operational-read-store.js'
+import type { PostgresPool, PostgresPoolClient, PostgresQueryResult } from './postgres-repository.js'
+
+const tenantId = '11111111-1111-4111-8111-111111111111'
+const storeId = '22222222-2222-4222-8222-222222222222'
+
+function snapshotForState(state: ReturnType<typeof createSeedState>): OperationalReadSnapshot {
+  return {
+    revision: state.revision,
+    tables: structuredClone(state.tables),
+    tableSessions: structuredClone(state.songState.tableSessions),
+    serviceTasks: structuredClone(state.tasks),
+    orders: structuredClone(state.orderDomain.orders),
+    kdsTasks: structuredClone(state.orderDomain.kdsTasks),
+    paymentIntents: structuredClone(state.paymentDomain.paymentIntents),
+    inventoryBalances: structuredClone(state.inventoryDomain?.balances ?? []),
+  }
+}
+
+function result<Row extends Record<string, unknown>>(rows: Row[]): PostgresQueryResult<Row> {
+  return { rows, rowCount: rows.length }
+}
+
+class OperationalReadPool implements PostgresPool {
+  readonly queries: string[] = []
+  releases = 0
+
+  constructor(private readonly snapshot: OperationalReadSnapshot) {}
+
+  async connect(): Promise<PostgresPoolClient> {
+    return {
+      query: async <Row extends Record<string, unknown>>(text: string, values: unknown[] = []) => {
+        const sql = text.replace(/\s+/g, ' ').trim()
+        this.queries.push(sql)
+        if (sql.startsWith('BEGIN ')) return result([]) as PostgresQueryResult<Row>
+        if (sql.startsWith("SELECT set_config('app.tenant_id'")) {
+          expect(values).toEqual([tenantId, storeId])
+          return result([{ tenant_id: tenantId, store_id: storeId }]) as PostgresQueryResult<Row>
+        }
+        if (sql.startsWith('SELECT checkpoint.runtime_revision')) {
+          expect(values).toEqual([tenantId, storeId, '2026-07-21'])
+          return result([{
+            runtime_revision: this.snapshot.revision,
+            tables: this.snapshot.tables,
+            table_sessions: this.snapshot.tableSessions,
+            service_tasks: this.snapshot.serviceTasks,
+            orders: this.snapshot.orders,
+            kds_tasks: this.snapshot.kdsTasks,
+            payment_intents: this.snapshot.paymentIntents,
+            inventory_balances: this.snapshot.inventoryBalances,
+          }]) as PostgresQueryResult<Row>
+        }
+        if (sql === 'COMMIT' || sql === 'ROLLBACK') return result([]) as PostgresQueryResult<Row>
+        throw new Error(`Unexpected SQL: ${sql}`)
+      },
+      release: () => { this.releases += 1 },
+    }
+  }
+
+  async end() {}
+}
+
+describe('normalized operational read store', () => {
+  it('reads all high-frequency entities with one indexed snapshot statement', async () => {
+    const state = createSeedState(new Date('2026-07-21T12:00:00.000Z'))
+    const pool = new OperationalReadPool(snapshotForState(state))
+    const store = new PostgresOperationalReadStore(pool, { tenantId, storeId })
+
+    const snapshot = await store.read(state.revision, '2026-07-21')
+
+    expect(snapshot).toEqual(snapshotForState(state))
+    expect(pool.queries.filter((query) => query.startsWith('SELECT checkpoint.runtime_revision'))).toHaveLength(1)
+    expect(pool.queries.find((query) => query.startsWith('SELECT checkpoint.runtime_revision'))).not.toContain(
+      'snapshot_revision = checkpoint.runtime_revision',
+    )
+    expect(pool.releases).toBe(1)
+  })
+
+  it('keeps unchanged rows visible when another entity advances the checkpoint revision', async () => {
+    const state = createSeedState(new Date('2026-07-21T12:00:00.000Z'))
+    const pool = new OperationalReadPool(snapshotForState(state))
+    const store = new PostgresOperationalReadStore(pool, { tenantId, storeId })
+
+    const snapshot = await store.read(state.revision, '2026-07-21')
+
+    expect(snapshot.tables).toHaveLength(state.tables.length)
+    expect(pool.queries.find((query) => query.startsWith('SELECT checkpoint.runtime_revision'))).toContain(
+      'runtime.revision = checkpoint.runtime_revision',
+    )
+  })
+
+  it('rejects a mixed aggregate and table revision instead of serving stale entities', async () => {
+    const state = createSeedState(new Date('2026-07-21T12:00:00.000Z'))
+    const pool = new OperationalReadPool({ ...snapshotForState(state), revision: state.revision + 1 })
+    const store = new PostgresOperationalReadStore(pool, { tenantId, storeId })
+
+    await expect(store.read(state.revision, '2026-07-21')).rejects.toBeInstanceOf(OperationalReadRevisionError)
+    expect(pool.queries).toContain('ROLLBACK')
+  })
+
+  it('hydrates only high-frequency domains and keeps configuration in the compatibility aggregate', () => {
+    const aggregate = createSeedState(new Date('2026-07-21T12:00:00.000Z'))
+    const snapshot = snapshotForState(aggregate)
+    snapshot.tables = snapshot.tables.map((table) => table.id === 'table-l01'
+      ? { ...table, guestCount: 9 }
+      : table)
+    snapshot.serviceTasks = snapshot.serviceTasks.slice(0, 1)
+
+    const hydrated = hydrateRuntimeStateFromOperationalTables(aggregate, snapshot)
+
+    expect(hydrated.tables.find((table) => table.id === 'table-l01')?.guestCount).toBe(9)
+    expect(hydrated.tasks).toEqual(snapshot.serviceTasks)
+    expect(hydrated.config).toEqual(aggregate.config)
+    expect(aggregate.tables.find((table) => table.id === 'table-l01')?.guestCount).not.toBe(9)
+  })
+})

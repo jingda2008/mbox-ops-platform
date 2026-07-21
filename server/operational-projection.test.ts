@@ -21,12 +21,14 @@ describe('normalized operational projection', () => {
     const state = createSeedState(new Date('2026-07-20T12:00:00.000Z'))
     const projection = new Map(buildOperationalProjection(state).map((set) => [set.table, set.rows]))
 
+    expect(projection.get('operational_tables')).toHaveLength(state.tables.length)
     expect(projection.get('operational_table_sessions')).toHaveLength(state.songState.tableSessions.length)
     expect(projection.get('operational_service_tasks')).toHaveLength(state.tasks.length)
     expect(projection.get('operational_orders')).toHaveLength(state.orderDomain.orders.length)
     expect(projection.get('operational_order_items')).toHaveLength(
       state.orderDomain.orders.reduce((total, order) => total + order.items.length, 0),
     )
+    expect(projection.get('operational_kds_tasks')).toHaveLength(state.orderDomain.kdsTasks.length)
     expect(projection.get('operational_payment_intents')).toHaveLength(state.paymentDomain.paymentIntents.length)
     expect(projection.get('operational_inventory_balances')).toHaveLength(state.inventoryDomain?.balances.length ?? 0)
   })
@@ -39,17 +41,19 @@ describe('normalized operational projection', () => {
       storeId: '00000000-0000-4000-8000-000000000002',
     }, null, state)
 
-    expect(calls.filter((call) => call.text.startsWith('DELETE FROM mbox.operational_'))).toHaveLength(6)
+    expect(calls.filter((call) => call.text.startsWith('DELETE FROM mbox.operational_'))).toHaveLength(8)
     expect(calls.at(-1)?.text).toContain('operational_projection_checkpoints')
     expect(calls.at(-1)?.values?.[2]).toBe(state.revision)
   })
 
   it('accepts equivalent checkpoint counts independent of JSON key order', async () => {
     const expected = {
+      operational_tables: 7,
       operational_table_sessions: 1,
       operational_service_tasks: 2,
       operational_orders: 3,
       operational_order_items: 4,
+      operational_kds_tasks: 8,
       operational_payment_intents: 5,
       operational_inventory_balances: 6,
     }

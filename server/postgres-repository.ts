@@ -360,6 +360,15 @@ export class PostgresRepository {
     }
   }
 
+  async readFresh(): Promise<RuntimeState> {
+    const loaded = await this.track(() => this.withTransaction(true, async (client) => this.loadState(client)))
+    if (!this.cachedState || loaded.revision >= this.cachedState.revision) {
+      this.cachedState = structuredClone(loaded)
+    }
+    this.cacheValidatedAt = Date.now()
+    return structuredClone(this.cachedState)
+  }
+
   async mutate<T>(
     mutation: (state: RuntimeState) => T | Promise<T>,
     options: PostgresMutationOptions = {},

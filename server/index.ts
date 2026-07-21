@@ -83,6 +83,11 @@ import { applyScheduledOperations, scheduledOperationsWouldChange } from './oper
 import { projectRuntimeStateForActor } from './bootstrap-projection.js'
 import { buildBootstrapViewEtag } from './bootstrap-etag.js'
 import { RevisionScopedCache } from './revision-scoped-cache.js'
+import {
+  hydrateRuntimeStateFromOperationalTables,
+  OperationalReadRevisionError,
+  OperationalReadStoreError,
+} from './operational-read-store.js'
 import { effectivePermissionIdsForEmployee } from '../src/shared/staff-access.js'
 import { preserveProtectedProductCost, productCostView } from './product-cost-policy.js'
 import { MemoryRateLimitStore, PostgresRateLimitStore } from './rate-limit.js'
@@ -109,11 +114,16 @@ const app = Fastify({
 })
 const runtimeDependencies = createRuntimeDependencies(runtimeConfig)
 const repository = runtimeDependencies.repository
+const operationalStateCache = new RevisionScopedCache<Promise<{
+  state: Awaited<ReturnType<typeof repository.read>>
+  source: 'normalized_tables' | 'aggregate_compatibility'
+}>>(8)
 const bootstrapViewCache = new RevisionScopedCache<{
   projected: ReturnType<typeof projectRuntimeStateForActor>
   etag: string
   permissionIds: ReturnType<typeof effectivePermissionIdsForEmployee>
   metrics: ReturnType<typeof calculateMetrics>
+  source: 'normalized_tables' | 'aggregate_compatibility'
 }>(64)
 const guestInsights = runtimeDependencies.postgresPool
   ? new PostgresGuestInsightsStore({
@@ -221,6 +231,8 @@ await registerObservability(app, {
         projectionReady: status.projectionReady ?? status.repository !== 'postgres',
         projectionRevision: status.projectionRevision ?? -1,
         projectionCountsMatch: status.projectionCountsMatch ?? status.repository !== 'postgres',
+        operationalReadPath: runtimeDependencies.operationalReadStore ? 'normalized_tables' : 'aggregate_compatibility',
+        operationalReadEntityTypes: runtimeDependencies.operationalReadStore ? 8 : 0,
         paymentMode: runtimeConfig.pilotPaymentSimulationEnabled ? 'simulation' : paymentRuntime.mode,
         commercialOnlinePaymentReady: paymentRuntime.onlinePaymentReady && !runtimeConfig.pilotPaymentSimulationEnabled,
         voiceTranscription: runtimeConfig.voiceTranscriptionProvider,
@@ -368,7 +380,7 @@ const customerNotificationAdapters = createCustomerNotificationAdapters({
 const sopActionAdapters = createSopActionAdapters(runtimeConfig)
 
 function isPersistenceFailure(error: unknown) {
-  if (error instanceof PostgresRepositoryError) return true
+  if (error instanceof PostgresRepositoryError || error instanceof OperationalReadStoreError) return true
   if (!error || typeof error !== 'object' || !('code' in error)) return false
   const code = String((error as { code?: unknown }).code ?? '')
   return /^[0-9A-Z]{5}$/.test(code) || ['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EPIPE'].includes(code)
@@ -432,8 +444,34 @@ app.setErrorHandler((error, _request, reply) => {
 app.get('/api/health', async () => ({ status: 'ok', time: new Date().toISOString() }))
 
 app.get('/api/bootstrap', async (request, reply) => {
-  const state = request.mboxAuthState ?? await repository.read()
+  const aggregateState = request.mboxAuthState ?? await repository.read()
   const actor = requireRequestActor(request)
+  const authoritativePromise = operationalStateCache.getOrCreate(actor.storeId, aggregateState.revision, async () => {
+    if (!runtimeDependencies.operationalReadStore) {
+      return { state: aggregateState, source: 'aggregate_compatibility' as const }
+    }
+    let currentState = aggregateState
+    let snapshot
+    try {
+      snapshot = await runtimeDependencies.operationalReadStore.read(currentState.revision, currentState.store.businessDate)
+    } catch (error) {
+      if (!(error instanceof OperationalReadRevisionError) || !repository.readFresh) throw error
+      currentState = await repository.readFresh()
+      snapshot = await runtimeDependencies.operationalReadStore.read(currentState.revision, currentState.store.businessDate)
+    }
+    return {
+      state: hydrateRuntimeStateFromOperationalTables(currentState, snapshot),
+      source: 'normalized_tables' as const,
+    }
+  })
+  let authoritative: Awaited<typeof authoritativePromise>
+  try {
+    authoritative = await authoritativePromise
+  } catch (error) {
+    operationalStateCache.delete(actor.storeId, aggregateState.revision)
+    throw error
+  }
+  const state = authoritative.state
   const view = bootstrapViewCache.getOrCreate(`${actor.storeId}:${actor.actorId}`, state.revision, () => {
     const projected = projectRuntimeStateForActor(state, actor)
     return {
@@ -441,10 +479,14 @@ app.get('/api/bootstrap', async (request, reply) => {
       etag: buildBootstrapViewEtag(projected),
       permissionIds: effectivePermissionIdsForEmployee(state, actor.actorId),
       metrics: calculateMetrics(projected),
+      source: authoritative.source,
     }
   })
   const legacyRevisionEtag = `"${state.revision}"`
-  reply.header('etag', view.etag).header('cache-control', 'private, no-cache')
+  reply
+    .header('etag', view.etag)
+    .header('cache-control', 'private, no-cache')
+    .header('x-mbox-operational-source', view.source)
   if ([view.etag, legacyRevisionEtag].includes(request.headers['if-none-match'] ?? '')) {
     return reply.status(304).send()
   }

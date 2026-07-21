@@ -26,4 +26,12 @@ describe('revision scoped cache', () => {
     expect(cache.getOrCreate('employee-a', 1, () => 10)).toBe(1)
     expect(cache.getOrCreate('employee-b', 1, () => 20)).toBe(20)
   })
+
+  it('can evict a rejected single-flight promise so a transient read can retry', async () => {
+    const cache = new RevisionScopedCache<Promise<number>>()
+    const failed = cache.getOrCreate('store-a', 9, async () => { throw new Error('temporary') })
+    await expect(failed).rejects.toThrow('temporary')
+    expect(cache.delete('store-a', 9)).toBe(true)
+    await expect(cache.getOrCreate('store-a', 9, async () => 11)).resolves.toBe(11)
+  })
 })

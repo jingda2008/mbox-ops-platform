@@ -34,6 +34,20 @@ interface ProjectionSet {
   rows: ProjectionRow[]
 }
 
+function tableRows(state: RuntimeState): ProjectionRow[] {
+  return state.tables.map((table) => ({
+    source_id: table.id,
+    table_code: table.code,
+    area_id: table.areaId,
+    status: table.status,
+    primary_employee_id: table.primaryEmployeeId,
+    guest_count: table.guestCount,
+    opened_at: table.openedAt,
+    payload: JSON.stringify(table),
+    snapshot_revision: state.revision,
+  }))
+}
+
 function tableSessionRows(state: RuntimeState): ProjectionRow[] {
   return state.songState.tableSessions.map((session) => {
     const table = state.tables.find((candidate) => candidate.id === session.tableId)
@@ -46,6 +60,7 @@ function tableSessionRows(state: RuntimeState): ProjectionRow[] {
       guest_count: session.status === 'open' ? table?.guestCount ?? 0 : 0,
       opened_at: session.openedAt,
       closed_at: session.closedAt,
+      payload: JSON.stringify(session),
       snapshot_revision: state.revision,
     }
   })
@@ -67,6 +82,7 @@ function serviceTaskRows(state: RuntimeState): ProjectionRow[] {
     arrived_at: task.arrivedAt,
     completed_at: task.completedAt,
     archived_at: task.archivedAt,
+    payload: JSON.stringify(task),
     snapshot_revision: state.revision,
   }))
 }
@@ -85,6 +101,7 @@ function orderRows(state: RuntimeState): ProjectionRow[] {
     created_at: order.createdAt,
     submitted_at: order.submittedAt,
     fulfilled_at: order.fulfilledAt,
+    payload: JSON.stringify(order),
     snapshot_revision: state.revision,
   }))
 }
@@ -103,8 +120,28 @@ function orderItemRows(state: RuntimeState): ProjectionRow[] {
     fulfillment_status: item.fulfillmentStatus,
     added_by: item.addedBy,
     added_at: item.addedAt,
+    payload: JSON.stringify(item),
     snapshot_revision: state.revision,
   })))
+}
+
+function kdsTaskRows(state: RuntimeState): ProjectionRow[] {
+  return state.orderDomain.kdsTasks.map((task) => ({
+    source_id: task.id,
+    order_id: task.orderId,
+    order_item_id: task.orderItemId,
+    table_session_id: task.tableSessionId,
+    table_code: task.tableCode ?? null,
+    station_id: task.stationId,
+    item_name: task.itemName,
+    quantity: task.quantity,
+    status: task.status,
+    queued_at: task.queuedAt,
+    completed_at: task.completedAt,
+    delivered_at: task.deliveredAt,
+    payload: JSON.stringify(task),
+    snapshot_revision: state.revision,
+  }))
 }
 
 function paymentRows(state: RuntimeState): ProjectionRow[] {
@@ -119,6 +156,7 @@ function paymentRows(state: RuntimeState): ProjectionRow[] {
     created_at: intent.createdAt,
     paid_at: intent.paidAt,
     failed_at: intent.failedAt,
+    payload: JSON.stringify(intent),
     snapshot_revision: state.revision,
   }))
 }
@@ -130,16 +168,19 @@ function inventoryRows(state: RuntimeState): ProjectionRow[] {
     on_hand_quantity: balance.onHandQuantity,
     source_revision: balance.revision,
     source_updated_at: balance.updatedAt,
+    payload: JSON.stringify(balance),
     snapshot_revision: state.revision,
   }))
 }
 
 export function buildOperationalProjection(state: RuntimeState): ProjectionSet[] {
   return [
+    { table: 'operational_tables', keyColumns: ['source_id'], rows: tableRows(state) },
     { table: 'operational_table_sessions', keyColumns: ['source_id'], rows: tableSessionRows(state) },
     { table: 'operational_service_tasks', keyColumns: ['source_id'], rows: serviceTaskRows(state) },
     { table: 'operational_orders', keyColumns: ['source_id'], rows: orderRows(state) },
     { table: 'operational_order_items', keyColumns: ['source_id'], rows: orderItemRows(state) },
+    { table: 'operational_kds_tasks', keyColumns: ['source_id'], rows: kdsTaskRows(state) },
     { table: 'operational_payment_intents', keyColumns: ['source_id'], rows: paymentRows(state) },
     { table: 'operational_inventory_balances', keyColumns: ['product_id', 'unit_code'], rows: inventoryRows(state) },
   ]
@@ -278,10 +319,12 @@ export class PostgresOperationalProjector implements RuntimeStateProjector {
       }>(`
         SELECT checkpoint.runtime_revision, checkpoint.entity_counts,
           jsonb_build_object(
+            'operational_tables', (SELECT count(*) FROM mbox.operational_tables WHERE tenant_id = $1::uuid AND store_id = $2::uuid),
             'operational_table_sessions', (SELECT count(*) FROM mbox.operational_table_sessions WHERE tenant_id = $1::uuid AND store_id = $2::uuid),
             'operational_service_tasks', (SELECT count(*) FROM mbox.operational_service_tasks WHERE tenant_id = $1::uuid AND store_id = $2::uuid),
             'operational_orders', (SELECT count(*) FROM mbox.operational_orders WHERE tenant_id = $1::uuid AND store_id = $2::uuid),
             'operational_order_items', (SELECT count(*) FROM mbox.operational_order_items WHERE tenant_id = $1::uuid AND store_id = $2::uuid),
+            'operational_kds_tasks', (SELECT count(*) FROM mbox.operational_kds_tasks WHERE tenant_id = $1::uuid AND store_id = $2::uuid),
             'operational_payment_intents', (SELECT count(*) FROM mbox.operational_payment_intents WHERE tenant_id = $1::uuid AND store_id = $2::uuid),
             'operational_inventory_balances', (SELECT count(*) FROM mbox.operational_inventory_balances WHERE tenant_id = $1::uuid AND store_id = $2::uuid)
           ) AS actual_counts

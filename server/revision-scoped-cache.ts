@@ -24,6 +24,10 @@ export class RevisionScopedCache<T> {
     return value
   }
 
+  delete(scope: string, revision: number) {
+    return this.entries.delete(`${scope}:${revision}`)
+  }
+
   get size() {
     return this.entries.size
   }

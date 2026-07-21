@@ -158,6 +158,7 @@ jobs:
         if: always()
         env:
           MBOX_EVIDENCE_SKIP_CHECK: '1'
+          MBOX_EVIDENCE_VERIFICATION_SOURCE: ${{ github.event.workflow_run.html_url }}
           MBOX_EVIDENCE_GCP_PROJECT: ${{ env.PROJECT_ID }}
           MBOX_EVIDENCE_GCP_REGION: ${{ env.REGION }}
           MBOX_EVIDENCE_CLOUD_RUN_SERVICE: ${{ env.SERVICE }}

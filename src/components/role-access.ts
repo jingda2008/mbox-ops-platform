@@ -38,6 +38,7 @@ export interface RoleHomeMetric {
   indicator: RoleHomeIndicator
   tone: RoleHomeTone
   navigationId: RoleHomeNavigationId
+  focusQuery?: string
 }
 
 export interface RoleHomeTodo {
@@ -47,6 +48,7 @@ export interface RoleHomeTodo {
   count: number
   tone: RoleHomeTone
   navigationId: RoleHomeNavigationId
+  focusQuery?: string
 }
 
 export interface RoleHomeModel {
@@ -378,12 +380,12 @@ function buildRoleContent(kind: RoleHomeKind, counts: RoleCounts): Pick<RoleHome
       metrics: [
         metric('online', '在线员工', counts.onlineEmployees, 'people', 'neutral', 'master'),
         metric('version', '当前配置', `V${counts.configVersion}`, 'config', 'info', 'config'),
-        metric('exceptions', '升级任务', counts.escalatedTasks, 'risk', counts.escalatedTasks ? 'danger' : 'success', 'tasks'),
+        metric('exceptions', '升级任务', counts.escalatedTasks, 'risk', counts.escalatedTasks ? 'danger' : 'success', 'tasks', 'service-escalated'),
         metric('approvals', '待处理审批', counts.pendingApprovals, 'tasks', counts.pendingApprovals ? 'warning' : 'success', 'master'),
       ],
       todos: [
         todo('approvals', '处理待审批事项', '订单、退款与库存审批', counts.pendingApprovals, 'warning', 'master'),
-        todo('escalated', '复核升级任务', '检查责任人和处理进度', counts.escalatedTasks, 'danger', 'tasks'),
+        todo('escalated', '复核升级任务', '检查责任人和处理进度', counts.escalatedTasks, 'danger', 'tasks', 'service-escalated'),
         todo('payment-reconcile', '核对支付上报', '处理待对账支付记录', counts.paymentReconciliation, 'warning', 'payments'),
       ],
     }
@@ -393,13 +395,13 @@ function buildRoleContent(kind: RoleHomeKind, counts: RoleCounts): Pick<RoleHome
     return {
       metrics: [
         metric('tables', '责任桌台', counts.assignedTables, 'tables', 'neutral', 'live'),
-        metric('own-tasks', '我的任务', counts.ownTasks, 'tasks', counts.ownTasks ? 'info' : 'success', 'tasks'),
-        metric('delivery', '待送出品', counts.visibleKds, 'kds', counts.visibleKds ? 'warning' : 'success', 'commerce'),
+        metric('own-tasks', '我的任务', counts.ownTasks, 'tasks', counts.ownTasks ? 'info' : 'success', 'tasks', 'service-open'),
+        metric('delivery', '待送出品', counts.visibleKds, 'kds', counts.visibleKds ? 'warning' : 'success', 'commerce', 'kds-active'),
         metric('awaiting', '待点单桌台', counts.awaitingOrders, 'tables', counts.awaitingOrders ? 'warning' : 'success', 'live'),
       ],
       todos: [
-        todo('service', '处理服务任务', '按优先级完成责任任务', counts.ownTasks, 'info', 'tasks'),
-        todo('delivery', '取送已完成出品', '从 KDS 确认取货并送达', counts.visibleKds, 'warning', 'commerce'),
+        todo('service', '处理服务任务', '按优先级完成责任任务', counts.ownTasks, 'info', 'tasks', 'service-open'),
+        todo('delivery', '取送已完成出品', '从 KDS 确认取货并送达', counts.visibleKds, 'warning', 'commerce', 'kds-active'),
         todo('order-care', '跟进待点单桌台', '确认客人当前点单需求', counts.awaitingOrders, 'warning', 'live'),
       ],
     }
@@ -426,38 +428,38 @@ function buildRoleContent(kind: RoleHomeKind, counts: RoleCounts): Pick<RoleHome
         metric('reservations', '今日待到店', counts.reservations, 'reservations', 'neutral', 'reservations'),
         metric('requested', '待确认预约', counts.requestedReservations, 'reservations', counts.requestedReservations ? 'warning' : 'success', 'reservations'),
         metric('arrivals', '待迎宾入座', counts.arrivals, 'tables', counts.arrivals ? 'info' : 'success', 'reservations'),
-        metric('tasks', '接待任务', counts.ownTasks, 'tasks', counts.ownTasks ? 'info' : 'success', 'tasks'),
+        metric('tasks', '接待任务', counts.ownTasks, 'tasks', counts.ownTasks ? 'info' : 'success', 'tasks', 'service-open'),
       ],
       todos: [
         todo('confirm', '确认预约信息', '核对到店时间、人数和区域', counts.requestedReservations, 'warning', 'reservations'),
         todo('seat', '安排到店入座', '完成迎宾和桌台交接', counts.arrivals, 'info', 'reservations'),
-        todo('host-tasks', '处理接待任务', '跟进当前分配事项', counts.ownTasks, 'info', 'tasks'),
+        todo('host-tasks', '处理接待任务', '跟进当前分配事项', counts.ownTasks, 'info', 'tasks', 'service-open'),
       ],
     }
   }
   if (kind === 'runner') {
     return {
       metrics: [
-        metric('pickup', '待取货', counts.readyForPickup, 'kds', counts.readyForPickup ? 'warning' : 'success', 'commerce'),
-        metric('delivery', '配送中', counts.inDelivery, 'kds', counts.inDelivery ? 'info' : 'success', 'commerce'),
-        metric('tasks', '我的任务', counts.ownTasks, 'tasks', counts.ownTasks ? 'info' : 'success', 'tasks'),
-        metric('risk', 'SLA 风险', counts.atRiskTasks, 'risk', counts.atRiskTasks ? 'danger' : 'success', 'tasks'),
+        metric('pickup', '待取货', counts.readyForPickup, 'kds', counts.readyForPickup ? 'warning' : 'success', 'commerce', 'kds-pickup'),
+        metric('delivery', '配送中', counts.inDelivery, 'kds', counts.inDelivery ? 'info' : 'success', 'commerce', 'kds-delivery'),
+        metric('tasks', '我的任务', counts.ownTasks, 'tasks', counts.ownTasks ? 'info' : 'success', 'tasks', 'service-open'),
+        metric('risk', 'SLA 风险', counts.atRiskTasks, 'risk', counts.atRiskTasks ? 'danger' : 'success', 'tasks', 'service-sla-risk'),
       ],
       todos: [
-        todo('pickup', '领取已完成出品', '按桌台和出品站取货', counts.readyForPickup, 'warning', 'commerce'),
-        todo('deliver', '完成配送确认', '送达后及时更新 KDS', counts.inDelivery, 'info', 'commerce'),
-        todo('runner-tasks', '处理取送任务', '按责任队列继续执行', counts.ownTasks, 'info', 'tasks'),
+        todo('pickup', '领取已完成出品', '按桌台和出品站取货', counts.readyForPickup, 'warning', 'commerce', 'kds-pickup'),
+        todo('deliver', '完成配送确认', '送达后及时更新 KDS', counts.inDelivery, 'info', 'commerce', 'kds-delivery'),
+        todo('runner-tasks', '处理取送任务', '按责任队列继续执行', counts.ownTasks, 'info', 'tasks', 'service-open'),
       ],
     }
   }
   return {
     metrics: [
-      metric('tasks', '我的任务', counts.ownTasks, 'tasks', counts.ownTasks ? 'info' : 'success', 'tasks'),
-      metric('kds', 'KDS 任务', counts.visibleKds, 'kds', counts.visibleKds ? 'warning' : 'success', 'commerce'),
+      metric('tasks', '我的任务', counts.ownTasks, 'tasks', counts.ownTasks ? 'info' : 'success', 'tasks', 'service-open'),
+      metric('kds', 'KDS 任务', counts.visibleKds, 'kds', counts.visibleKds ? 'warning' : 'success', 'commerce', 'kds-active'),
     ],
     todos: [
-      todo('tasks', '处理已分配任务', '仅显示本人责任任务', counts.ownTasks, 'info', 'tasks'),
-      todo('kds', '处理岗位 KDS', '仅显示岗位和工位匹配任务', counts.visibleKds, 'warning', 'commerce'),
+      todo('tasks', '处理已分配任务', '仅显示本人责任任务', counts.ownTasks, 'info', 'tasks', 'service-open'),
+      todo('kds', '处理岗位 KDS', '仅显示岗位和工位匹配任务', counts.visibleKds, 'warning', 'commerce', 'kds-active'),
     ],
   }
 }
@@ -466,13 +468,13 @@ function managementContent(counts: RoleCounts, tableLabel: string, taskLabel: st
   return {
     metrics: [
       metric('tables', tableLabel, counts.occupiedTables, 'tables', 'neutral', 'live'),
-      metric('tasks', '待处理任务', counts.openTasks, 'tasks', counts.openTasks ? 'info' : 'success', 'tasks'),
-      metric('risk', 'SLA 风险', counts.atRiskTasks, 'risk', counts.atRiskTasks ? 'danger' : 'success', 'tasks'),
-      metric('kds', 'KDS 待办', counts.visibleKds, 'kds', counts.visibleKds ? 'warning' : 'success', 'commerce'),
+      metric('tasks', '待处理任务', counts.openTasks, 'tasks', counts.openTasks ? 'info' : 'success', 'tasks', 'service-open'),
+      metric('risk', 'SLA 风险', counts.atRiskTasks, 'risk', counts.atRiskTasks ? 'danger' : 'success', 'tasks', 'service-sla-risk'),
+      metric('kds', 'KDS 待办', counts.visibleKds, 'kds', counts.visibleKds ? 'warning' : 'success', 'commerce', 'kds-active'),
     ],
     todos: [
-      todo('risk', '接管 SLA 风险', '优先处理即将或已经超时任务', counts.atRiskTasks, 'danger', 'tasks'),
-      todo('escalated', taskLabel, '检查升级任务和责任分配', counts.escalatedTasks, 'warning', 'tasks'),
+      todo('risk', '接管 SLA 风险', '优先处理即将或已经超时任务', counts.atRiskTasks, 'danger', 'tasks', 'service-sla-risk'),
+      todo('escalated', taskLabel, '检查升级任务和责任分配', counts.escalatedTasks, 'warning', 'tasks', 'service-escalated'),
       todo('approvals', '处理运营审批', '复核订单、退款与库存事项', counts.pendingApprovals, 'warning', 'payments'),
     ],
   }
@@ -481,25 +483,25 @@ function managementContent(counts: RoleCounts, tableLabel: string, taskLabel: st
 function productionContent(counts: RoleCounts, label: string): Pick<RoleHomeModel, 'metrics' | 'todos'> {
   return {
     metrics: [
-      metric('production', label, counts.productionKds, 'kds', counts.productionKds ? 'info' : 'success', 'commerce'),
-      metric('overdue', '制作超时', counts.overdueKds, 'risk', counts.overdueKds ? 'danger' : 'success', 'commerce'),
-      metric('pickup', '待取走', counts.readyForPickup, 'kds', counts.readyForPickup ? 'warning' : 'success', 'commerce'),
-      metric('tasks', '我的任务', counts.ownTasks, 'tasks', counts.ownTasks ? 'info' : 'success', 'tasks'),
+      metric('production', label, counts.productionKds, 'kds', counts.productionKds ? 'info' : 'success', 'commerce', 'kds-production'),
+      metric('overdue', '制作超时', counts.overdueKds, 'risk', counts.overdueKds ? 'danger' : 'success', 'commerce', 'kds-overdue'),
+      metric('pickup', '待取走', counts.readyForPickup, 'kds', counts.readyForPickup ? 'warning' : 'success', 'commerce', 'kds-pickup'),
+      metric('tasks', '我的任务', counts.ownTasks, 'tasks', counts.ownTasks ? 'info' : 'success', 'tasks', 'service-open'),
     ],
     todos: [
-      todo('overdue', '优先处理超时出品', '按制作 SLA 排序处理', counts.overdueKds, 'danger', 'commerce'),
-      todo('production', '继续制作队列', '及时更新开始和完成状态', counts.productionKds, 'info', 'commerce'),
-      todo('handoff', '确认待取走出品', '核对桌台并完成交接', counts.readyForPickup, 'warning', 'commerce'),
+      todo('overdue', '优先处理超时出品', '按制作 SLA 排序处理', counts.overdueKds, 'danger', 'commerce', 'kds-overdue'),
+      todo('production', '继续制作队列', '及时更新开始和完成状态', counts.productionKds, 'info', 'commerce', 'kds-production'),
+      todo('handoff', '确认待取走出品', '核对桌台并完成交接', counts.readyForPickup, 'warning', 'commerce', 'kds-pickup'),
     ],
   }
 }
 
-function metric(id: string, label: string, value: number | string, indicator: RoleHomeIndicator, tone: RoleHomeTone, navigationId: RoleHomeNavigationId): RoleHomeMetric {
-  return { id, label, value, indicator, tone, navigationId }
+function metric(id: string, label: string, value: number | string, indicator: RoleHomeIndicator, tone: RoleHomeTone, navigationId: RoleHomeNavigationId, focusQuery?: string): RoleHomeMetric {
+  return { id, label, value, indicator, tone, navigationId, focusQuery }
 }
 
-function todo(id: string, label: string, detail: string, count: number, tone: RoleHomeTone, navigationId: RoleHomeNavigationId): RoleHomeTodo {
-  return { id, label, detail, count, tone: count > 0 ? tone : 'success', navigationId }
+function todo(id: string, label: string, detail: string, count: number, tone: RoleHomeTone, navigationId: RoleHomeNavigationId, focusQuery?: string): RoleHomeTodo {
+  return { id, label, detail, count, tone: count > 0 ? tone : 'success', navigationId, focusQuery }
 }
 
 function normalizeRoleToken(value: string) {

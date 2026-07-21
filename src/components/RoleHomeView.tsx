@@ -32,7 +32,7 @@ import './RoleHomeView.css'
 export interface RoleHomeViewProps {
   data: BootstrapResponse
   employeeId: string
-  onNavigate: (view: RoleHomeNavigationId) => void
+  onNavigate: (view: RoleHomeNavigationId, focusQuery?: string) => void
 }
 
 const indicatorIcons: Record<RoleHomeIndicator, LucideIcon> = {
@@ -100,7 +100,7 @@ export function RoleHomeView({ data, employeeId, onNavigate }: RoleHomeViewProps
             <strong>{primaryTodo.label}</strong>
             <span>{primaryTodo.detail}</span>
           </span>
-          <button type="button" onClick={() => onNavigate(primaryTodo.navigationId)}>
+          <button type="button" onClick={() => onNavigate(primaryTodo.navigationId, primaryTodo.focusQuery)}>
             开始处理 <b>{primaryTodo.count}</b><ArrowRight size={17} aria-hidden="true" />
           </button>
         </div>
@@ -114,7 +114,7 @@ export function RoleHomeView({ data, employeeId, onNavigate }: RoleHomeViewProps
               className={`role-home__metric is-${item.tone}`}
               key={item.id}
               type="button"
-              onClick={() => onNavigate(item.navigationId)}
+              onClick={() => onNavigate(item.navigationId, item.focusQuery)}
               title={`打开${item.label}`}
             >
               <span className="role-home__metric-icon"><Icon size={19} aria-hidden="true" /></span>
@@ -143,7 +143,7 @@ export function RoleHomeView({ data, employeeId, onNavigate }: RoleHomeViewProps
                   className={`role-home__todo is-${item.tone}`}
                   key={item.id}
                   type="button"
-                  onClick={() => onNavigate(item.navigationId)}
+                  onClick={() => onNavigate(item.navigationId, item.focusQuery)}
                 >
                   <span className="role-home__todo-count">{item.count}</span>
                   <span className="role-home__todo-copy"><strong>{item.label}</strong><small>{item.detail}</small></span>

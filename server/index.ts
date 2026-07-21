@@ -84,9 +84,8 @@ import { projectRuntimeStateForActor } from './bootstrap-projection.js'
 import { buildBootstrapViewEtag } from './bootstrap-etag.js'
 import { RevisionScopedCache } from './revision-scoped-cache.js'
 import {
-  hydrateRuntimeStateFromOperationalTables,
-  OperationalReadRevisionError,
   OperationalReadStoreError,
+  resolveOperationalRuntimeState,
 } from './operational-read-store.js'
 import { effectivePermissionIdsForEmployee } from '../src/shared/staff-access.js'
 import { preserveProtectedProductCost, productCostView } from './product-cost-policy.js'
@@ -450,19 +449,21 @@ app.get('/api/bootstrap', async (request, reply) => {
     if (!runtimeDependencies.operationalReadStore) {
       return { state: aggregateState, source: 'aggregate_compatibility' as const }
     }
-    let currentState = aggregateState
-    let snapshot
-    try {
-      snapshot = await runtimeDependencies.operationalReadStore.read(currentState.revision, currentState.store.businessDate)
-    } catch (error) {
-      if (!(error instanceof OperationalReadRevisionError) || !repository.readFresh) throw error
-      currentState = await repository.readFresh()
-      snapshot = await runtimeDependencies.operationalReadStore.read(currentState.revision, currentState.store.businessDate)
+    if (!repository.readFresh) {
+      return { state: aggregateState, source: 'aggregate_compatibility' as const }
     }
-    return {
-      state: hydrateRuntimeStateFromOperationalTables(currentState, snapshot),
-      source: 'normalized_tables' as const,
+    const resolved = await resolveOperationalRuntimeState({
+      initialState: aggregateState,
+      readFresh: () => repository.readFresh!(),
+      readSnapshot: (revision, businessDate) => runtimeDependencies.operationalReadStore!.read(revision, businessDate),
+    })
+    if (resolved.source === 'aggregate_compatibility') {
+      app.log.warn({
+        revision: resolved.state.revision,
+        revisionMismatches: resolved.revisionMismatches,
+      }, 'operational read revision kept advancing; served fresh aggregate fallback')
     }
+    return { state: resolved.state, source: resolved.source }
   })
   let authoritative: Awaited<typeof authoritativePromise>
   try {

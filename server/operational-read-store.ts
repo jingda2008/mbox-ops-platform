@@ -12,6 +12,12 @@ export interface OperationalReadSnapshot {
   inventoryBalances: NonNullable<RuntimeState['inventoryDomain']>['balances']
 }
 
+export interface OperationalRuntimeStateResult {
+  state: RuntimeState
+  source: 'normalized_tables' | 'aggregate_compatibility'
+  revisionMismatches: number
+}
+
 interface OperationalReadRow extends Record<string, unknown> {
   runtime_revision: number | string
   tables: unknown
@@ -105,6 +111,41 @@ export function hydrateRuntimeStateFromOperationalTables(
     throw new OperationalReadStoreError('Inventory balances exist without an inventory domain')
   }
   return hydrated
+}
+
+export async function resolveOperationalRuntimeState(options: {
+  initialState: RuntimeState
+  readFresh: () => Promise<RuntimeState>
+  readSnapshot: (revision: number, businessDate: string) => Promise<OperationalReadSnapshot>
+  maxAttempts?: number
+}): Promise<OperationalRuntimeStateResult> {
+  const maxAttempts = options.maxAttempts ?? 3
+  if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1) {
+    throw new Error('maxAttempts must be a positive integer')
+  }
+
+  let currentState = options.initialState
+  let revisionMismatches = 0
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const snapshot = await options.readSnapshot(currentState.revision, currentState.store.businessDate)
+      return {
+        state: hydrateRuntimeStateFromOperationalTables(currentState, snapshot),
+        source: 'normalized_tables',
+        revisionMismatches,
+      }
+    } catch (error) {
+      if (!(error instanceof OperationalReadRevisionError)) throw error
+      revisionMismatches += 1
+      currentState = await options.readFresh()
+    }
+  }
+
+  return {
+    state: currentState,
+    source: 'aggregate_compatibility',
+    revisionMismatches,
+  }
 }
 
 const READ_OPERATIONAL_SNAPSHOT_SQL = `

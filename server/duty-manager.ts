@@ -473,6 +473,161 @@ function servicePerformance(state: RuntimeState, businessDate: string, now: numb
   }
 }
 
+function orderBusinessDate(state: RuntimeState, value: { submittedAt: string | null; createdAt: string }) {
+  return configuredBusinessDate(state, value.submittedAt ?? value.createdAt)
+}
+
+function businessPerformance(state: RuntimeState, businessDate: string) {
+  const orders = state.orderDomain.orders.filter((order) => (
+    order.status !== 'draft' && orderBusinessDate(state, order) === businessDate
+  ))
+  const paymentIntents = state.paymentDomain.paymentIntents.filter((intent) => (
+    (intent.businessDate ?? configuredBusinessDate(state, intent.paidAt ?? intent.createdAt)) === businessDate
+  ))
+  const confirmed = paymentIntents.filter((intent) => intent.status === 'succeeded')
+  const pendingReconciliation = paymentIntents.filter((intent) => intent.status === 'reported_pending_reconciliation')
+  const refunds = state.paymentDomain.refunds.filter((refund) => (
+    refund.status === 'succeeded'
+    && refund.succeededAt
+    && configuredBusinessDate(state, refund.succeededAt) === businessDate
+  ))
+  const grossSalesAmount = orders.reduce((total, order) => total + order.amounts.payableAmount, 0)
+  const confirmedRevenueAmount = confirmed.reduce((total, intent) => total + intent.amount, 0)
+  const pendingReconciliationAmount = pendingReconciliation.reduce((total, intent) => total + intent.amount, 0)
+  const refundedAmount = refunds.reduce((total, refund) => total + refund.amount, 0)
+  const netRevenueAmount = Math.max(0, confirmedRevenueAmount + pendingReconciliationAmount - refundedAmount)
+  const costAmount = orders.reduce((total, order) => total + order.items.reduce((sum, item) => (
+    sum + item.unitCostAmount * item.quantity
+  ), 0), 0)
+  return {
+    submittedOrders: orders.length,
+    fulfilledOrders: orders.filter((order) => order.status === 'fulfilled').length,
+    grossSalesAmount,
+    confirmedRevenueAmount,
+    pendingReconciliationAmount,
+    refundedAmount,
+    netRevenueAmount,
+    estimatedGrossProfitAmount: netRevenueAmount - costAmount,
+    averageCheckAmount: orders.length > 0 ? Math.round(grossSalesAmount / orders.length) : null,
+    paymentConversionRate: rate(paymentIntents.filter((intent) => (
+      ['succeeded', 'reported_pending_reconciliation'].includes(intent.status)
+    )).length, paymentIntents.length),
+  }
+}
+
+function experiencePerformance(state: RuntimeState, businessDate: string) {
+  const tasks = state.tasks.filter((task) => configuredBusinessDate(state, task.createdAt) === businessDate)
+  const guestRequests = tasks.filter((task) => task.source === 'guest')
+  const complaintServiceTypeIds = new Set(state.config.serviceTypes.filter((serviceType) => (
+    serviceType.code === 'COMPLAINT'
+  )).map((serviceType) => serviceType.id))
+  const birthdayServiceTypeIds = new Set(state.config.serviceTypes.filter((serviceType) => (
+    serviceType.code === 'BIRTHDAY_CARE'
+  )).map((serviceType) => serviceType.id))
+  const complaints = guestRequests.filter((task) => complaintServiceTypeIds.has(task.serviceTypeId))
+  const resolvedComplaints = complaints.filter((task) => Boolean(task.completedAt))
+  const complaintResolutionMinutes = resolvedComplaints.flatMap((task) => task.completedAt
+    ? [Math.max(0, (Date.parse(task.completedAt) - Date.parse(task.createdAt)) / 60_000)]
+    : [])
+  const reopenedTaskIds = new Set(state.taskEvents.filter((event) => (
+    event.type === 'task.reopened.v1' && configuredBusinessDate(state, event.occurredAt) === businessDate
+  )).map((event) => event.taskId))
+  return {
+    guestRequests: guestRequests.length,
+    complaints: complaints.length,
+    complaintRate: rate(complaints.length, guestRequests.length),
+    averageComplaintResolutionMinutes: complaintResolutionMinutes.length > 0
+      ? Math.round(complaintResolutionMinutes.reduce((sum, value) => sum + value, 0) / complaintResolutionMinutes.length * 10) / 10
+      : null,
+    reopenedRequests: reopenedTaskIds.size,
+    unresolvedArchivedRequests: guestRequests.filter((task) => task.archiveOutcome === 'unresolved').length,
+    birthdayCareCompleted: guestRequests.filter((task) => (
+      birthdayServiceTypeIds.has(task.serviceTypeId) && Boolean(task.completedAt)
+    )).length,
+    serviceRecoveryRate: rate(resolvedComplaints.length, complaints.length),
+  }
+}
+
+function employeeCapacity(state: RuntimeState, employeeId: string) {
+  const employee = state.employees.find((candidate) => candidate.id === employeeId)
+  if (!employee) return 0
+  const roleIds = new Set([employee.roleId, ...(employee.roleIds ?? [])])
+  return Math.max(0, ...state.config.roles.filter((role) => (
+    roleIds.has(role.id) && role.canReceiveTasks
+  )).map((role) => role.maxConcurrentTasks))
+}
+
+function workforcePerformance(state: RuntimeState, businessDate: string, now: number) {
+  const activeEmployees = state.employees.filter((employee) => employee.status === 'active')
+  const activeLeaseIds = new Set((state.presenceLeases ?? []).filter((lease) => (
+    lease.businessDate === businessDate && lease.expiresAt > now && lease.sessionExpiresAt > now
+  )).map((lease) => lease.actorId))
+  const onlineEmployees = activeEmployees.filter((employee) => activeLeaseIds.has(employee.id) || employee.online)
+  const openTasks = state.tasks.filter((task) => (
+    !task.archivedAt && openServiceStatuses.has(task.status) && configuredBusinessDate(state, task.createdAt) === businessDate
+  ))
+  const assignedOpenTasks = openTasks.filter((task) => Boolean(task.ownerId))
+  const onlineCapacity = onlineEmployees.reduce((total, employee) => total + employeeCapacity(state, employee.id), 0)
+  const loadByEmployee = new Map<string, number>()
+  for (const task of assignedOpenTasks) loadByEmployee.set(task.ownerId!, (loadByEmployee.get(task.ownerId!) ?? 0) + 1)
+  const overloadedEmployees = onlineEmployees.filter((employee) => {
+    const capacity = employeeCapacity(state, employee.id)
+    return capacity > 0 && (loadByEmployee.get(employee.id) ?? 0) >= capacity
+  }).length
+  return {
+    activeEmployees: activeEmployees.length,
+    onlineEmployees: onlineEmployees.length,
+    assignedOpenTasks: assignedOpenTasks.length,
+    unownedTasks: openTasks.length - assignedOpenTasks.length,
+    overloadedEmployees,
+    utilizationRate: rate(assignedOpenTasks.length, onlineCapacity),
+    tasksPerOnlineEmployee: onlineEmployees.length > 0
+      ? Math.round(openTasks.length / onlineEmployees.length * 10) / 10
+      : null,
+  }
+}
+
+function inventoryMovementCost(state: RuntimeState, movement: NonNullable<RuntimeState['inventoryDomain']>['movements'][number]) {
+  const snapshot = movement.configurationSnapshot
+  if (snapshot?.kind === 'recipe') return movement.quantity * snapshot.ingredient.costAmountPerBaseUnit
+  if (snapshot?.kind === 'unit_conversion') return movement.quantity * snapshot.ingredient.costAmountPerBaseUnit
+  const ingredient = state.inventoryDomain?.ingredientSkus.find((item) => item.id === movement.productId)
+  if (ingredient) return movement.quantity * ingredient.costAmountPerBaseUnit
+  const product = state.products.find((item) => item.id === movement.productId)
+  return movement.quantity * (product?.costAmount ?? 0)
+}
+
+function lossPreventionPerformance(
+  state: RuntimeState,
+  businessDate: string,
+  business: ReturnType<typeof businessPerformance>,
+) {
+  const movements = (state.inventoryDomain?.movements ?? []).filter((movement) => movement.businessDate === businessDate)
+  const stockLoss = movements.filter((movement) => movement.type === 'stock_count_loss')
+  const stockGain = movements.filter((movement) => movement.type === 'stock_count_gain')
+  const orders = state.orderDomain.orders.filter((order) => (
+    order.status !== 'draft' && orderBusinessDate(state, order) === businessDate
+  ))
+  const refunds = state.paymentDomain.refunds.filter((refund) => (
+    configuredBusinessDate(state, refund.requestedAt) === businessDate
+  ))
+  const pendingRefunds = refunds.filter((refund) => ['requested', 'approved', 'processing', 'failed'].includes(refund.status))
+  return {
+    stockLossQuantity: Math.round(stockLoss.reduce((total, movement) => total + movement.quantity, 0) * 10_000) / 10_000,
+    stockLossCostAmount: Math.round(stockLoss.reduce((total, movement) => total + inventoryMovementCost(state, movement), 0)),
+    stockGainQuantity: Math.round(stockGain.reduce((total, movement) => total + movement.quantity, 0) * 10_000) / 10_000,
+    complimentaryAmount: orders.reduce((total, order) => total + order.amounts.giftAmount, 0),
+    discountAmount: orders.reduce((total, order) => total + order.amounts.discountAmount, 0),
+    refundAmount: business.refundedAmount,
+    pendingRefundAmount: pendingRefunds.reduce((total, refund) => total + refund.amount, 0),
+    pendingReconciliationAmount: business.pendingReconciliationAmount,
+    exceptionCount: stockLoss.length + pendingRefunds.length
+      + state.orderDomain.kdsTasks.filter((task) => (
+        task.exceptionEvents?.some((event) => configuredBusinessDate(state, event.occurredAt) === businessDate)
+      )).length,
+  }
+}
+
 export function calculateDutyManagerEffectiveness(
   state: RuntimeState,
   now = Date.now(),
@@ -481,6 +636,10 @@ export function calculateDutyManagerEffectiveness(
   const previousDate = previousBusinessDate(businessDate)
   const service = servicePerformance(state, businessDate, now)
   const previous = servicePerformance(state, previousDate, now)
+  const business = businessPerformance(state, businessDate)
+  const experience = experiencePerformance(state, businessDate)
+  const workforce = workforcePerformance(state, businessDate, now)
+  const lossPrevention = lossPreventionPerformance(state, businessDate, business)
   const sopExecutions = (state.sopExecutions ?? []).filter((execution) => (
     configuredBusinessDate(state, execution.anchorAt) === businessDate
   ))
@@ -498,7 +657,13 @@ export function calculateDutyManagerEffectiveness(
     else if ((responseDelta ?? 0) <= -5 || (medianResponseDelta ?? 0) >= 15) trend = 'declining'
     else trend = 'steady'
   }
-  const summary = service.responseSampleSize < 3
+  const summary = workforce.unownedTasks > 0
+    ? `${workforce.unownedTasks}项现场任务无人接手，先补齐主服务或候补再继续派单。`
+    : lossPrevention.pendingReconciliationAmount > 0
+      ? `有¥${(lossPrevention.pendingReconciliationAmount / 100).toFixed(2)}物理POS收款待对账，交班前必须留痕。`
+    : experience.unresolvedArchivedRequests > 0
+      ? `${experience.unresolvedArchivedRequests}项客户需求在翻台时仍未解决，建议复盘责任与补救。`
+    : service.responseSampleSize < 3
     ? `今日已有${service.responseSampleSize}次服务形成首响结果，累计到3次后开始判断服务趋势。`
     : (service.responseWithinSlaRate ?? 0) < 90
       ? `按时响应率${service.responseWithinSlaRate ?? 0}%，建议先补足忙桌候补并检查首响SLA。`
@@ -515,6 +680,10 @@ export function calculateDutyManagerEffectiveness(
       blockedExecutions: blockedSop,
       completionRate: rate(completedSop, sopExecutions.length),
     },
+    business,
+    experience,
+    workforce,
+    lossPrevention,
     comparison: {
       previousBusinessDate: previousDate,
       previousSampleSize: previous.sampleSize,

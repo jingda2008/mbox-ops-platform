@@ -145,6 +145,67 @@ describe('AI duty manager briefing', () => {
     expect(buildDutyManagerBriefing(state, now).effectiveness).toEqual(effectiveness)
   })
 
+  it('measures service, revenue, guest experience, workforce load and loss prevention together', () => {
+    const now = Date.parse('2026-07-20T13:00:00.000Z')
+    const state = createSeedState(new Date(now))
+    state.tasks = []
+    state.taskEvents = []
+    state.orderDomain.orders = [{
+      id: 'order-five-dimensions', tableSessionId: 'session-five-dimensions', status: 'fulfilled', revision: 1,
+      amounts: { grossAmount: 12_000, discountAmount: 1_000, giftAmount: 500, payableAmount: 10_500 },
+      items: [{
+        id: 'line-five-dimensions', skuId: state.products[0]!.id, name: state.products[0]!.name,
+        specification: '1份', quantity: 2, unitListPriceAmount: 6_000, unitSalePriceAmount: 5_250,
+        unitCostAmount: 1_500, stationId: state.products[0]!.stationId, configVersion: 1,
+        fulfillmentStatus: 'delivered', kdsTaskId: null, addedBy: 'emp-lin', addedAt: '2026-07-20T12:00:00.000Z',
+      }],
+      createdBy: 'emp-lin', createdAt: '2026-07-20T12:00:00.000Z', submittedBy: 'emp-lin',
+      submittedAt: '2026-07-20T12:01:00.000Z', fulfilledAt: '2026-07-20T12:10:00.000Z',
+    }]
+    state.orderDomain.kdsTasks = []
+    state.paymentDomain.paymentIntents = [{
+      id: 'payment-five-dimensions', tableSessionId: 'session-five-dimensions', orderIds: ['order-five-dimensions'],
+      lineAllocations: [], amount: 10_500, currency: 'CNY', channel: 'wechat', settlementChannel: 'wechat',
+      merchantId: 'merchant', status: 'succeeded', channelTransactionId: 'channel-five-dimensions',
+      createdBy: 'emp-cashier', deviceId: 'cashier', createdAt: '2026-07-20T12:02:00.000Z',
+      expiresAt: '2026-07-20T12:17:00.000Z', paidAt: '2026-07-20T12:03:00.000Z', failedAt: null,
+      closedAt: null, failureReason: null, businessDate: '2026-07-20',
+    }]
+    state.paymentDomain.refunds = []
+    const complaint = createServiceTask(state, {
+      tableCode: 'L01', serviceTypeId: 'complaint', source: 'guest', note: '体验不满意', idempotencyKey: 'five-dimensions-complaint',
+    })
+    complaint.createdAt = '2026-07-20T12:00:00.000Z'
+    complaint.acceptedAt = '2026-07-20T12:00:10.000Z'
+    complaint.completedAt = '2026-07-20T12:05:00.000Z'
+    complaint.status = 'confirmed'
+    complaint.ownerId = 'emp-chen'
+    state.employees.forEach((employee) => { employee.online = employee.id === 'emp-chen' })
+    state.inventoryDomain!.movements = [{
+      id: 'loss-five-dimensions', tenantId: state.inventoryDomain!.tenantId, storeId: state.inventoryDomain!.storeId,
+      productId: state.products[0]!.id, unitCode: 'item', type: 'stock_count_loss', direction: 'out', quantity: 2,
+      balanceAfter: 10, tableSessionId: null, orderId: null, orderItemId: null, refundId: null,
+      stockCountId: 'count-five-dimensions', approvalId: null, actorId: 'emp-chen', reason: '盘点差异',
+      businessDate: '2026-07-20', occurredAt: '2026-07-20T12:20:00.000Z',
+    }]
+
+    const result = calculateDutyManagerEffectiveness(state, now)
+
+    expect(result.business).toMatchObject({
+      submittedOrders: 1, fulfilledOrders: 1, grossSalesAmount: 10_500,
+      confirmedRevenueAmount: 10_500, netRevenueAmount: 10_500, estimatedGrossProfitAmount: 7_500,
+      averageCheckAmount: 10_500, paymentConversionRate: 100,
+    })
+    expect(result.experience).toMatchObject({
+      guestRequests: 1, complaints: 1, complaintRate: 100,
+      averageComplaintResolutionMinutes: 5, serviceRecoveryRate: 100,
+    })
+    expect(result.workforce).toMatchObject({ onlineEmployees: 1, unownedTasks: 0, overloadedEmployees: 0 })
+    expect(result.lossPrevention).toMatchObject({
+      stockLossQuantity: 2, complimentaryAmount: 500, discountAmount: 1_000, exceptionCount: 1,
+    })
+  })
+
   it('does not count a new task as a missed response before its SLA deadline', () => {
     const now = Date.parse('2026-07-20T13:00:00.000Z')
     const state = createSeedState(new Date(now))

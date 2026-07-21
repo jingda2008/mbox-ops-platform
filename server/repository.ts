@@ -9,6 +9,10 @@ export interface RuntimeRepositoryHealth {
   ready: boolean
   repository: string
   revision: number | null
+  projectionReady?: boolean
+  projectionRevision?: number | null
+  projectionCountsMatch?: boolean
+  projectionError?: string
 }
 
 export interface RuntimeRepository {

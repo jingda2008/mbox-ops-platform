@@ -1,3 +1,5 @@
+import type { AssistantToolCall } from '../shared/assistant-tool-contracts'
+
 export const MAX_VOICE_COMMAND_STEPS = 5
 
 export type VoiceCommandStepStatus = 'pending' | 'running' | 'completed' | 'blocked'
@@ -10,6 +12,7 @@ export type VoiceCommandStepAction =
   | 'set_party_size'
   | 'assign_sales'
   | 'open_table_now'
+  | 'execute_server_tool'
   | 'execute_command'
 
 export type VoiceCommandEntityValue = string | number | boolean
@@ -25,6 +28,8 @@ export interface VoiceCommandPlanStep {
   risk: VoiceCommandRisk
   riskTerms: readonly string[]
   blockedReason?: string
+  toolCall?: AssistantToolCall
+  executionId?: string
 }
 
 /**
@@ -51,6 +56,7 @@ export interface VoiceCommandModelPlanningRequest {
 export interface VoiceCommandModelSuggestedStep {
   label: string
   command: string
+  toolCall?: AssistantToolCall
   action?: string
   entities?: Readonly<Record<string, VoiceCommandEntityValue>>
 }
@@ -212,6 +218,7 @@ function createStep(
   label: string,
   command: string,
   entities: Readonly<Record<string, VoiceCommandEntityValue>> = {},
+  toolCall?: AssistantToolCall,
 ): VoiceCommandPlanStep {
   const riskTerms = matchingHighRiskTerms(command)
   return {
@@ -224,6 +231,8 @@ function createStep(
     status: 'pending',
     risk: riskTerms.length > 0 ? 'high' : 'normal',
     riskTerms,
+    toolCall,
+    executionId: toolCall ? globalThis.crypto.randomUUID() : undefined,
   }
 }
 
@@ -273,10 +282,11 @@ export function createModelVoiceCommandPlan(
       source,
       planned.map((suggestion, index) => createStep(
         index + 1,
-        'execute_command',
+        suggestion.toolCall ? 'execute_server_tool' : 'execute_command',
         suggestion.label,
         suggestion.command,
         suggestion.entities ?? {},
+        suggestion.toolCall,
       )),
       Math.max(0, suggestions.length - planned.length),
     ),

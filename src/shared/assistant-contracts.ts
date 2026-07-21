@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { assistantToolCallSchema } from './assistant-tool-contracts.js'
 
 export const assistantCapabilitySchema = z.object({
   id: z.string().trim().min(1).max(160),
@@ -26,6 +27,7 @@ export type AssistantTurnRequest = z.infer<typeof assistantTurnRequestSchema>
 export const assistantSuggestedStepSchema = z.object({
   label: z.string().trim().min(1).max(100),
   command: z.string().trim().min(1).max(180),
+  toolCall: assistantToolCallSchema.optional(),
 })
 
 export type AssistantSuggestedStep = z.infer<typeof assistantSuggestedStepSchema>
@@ -134,6 +136,48 @@ export interface DutyManagerEffectiveness {
     completedExecutions: number
     blockedExecutions: number
     completionRate: number | null
+  }
+  business: {
+    submittedOrders: number
+    fulfilledOrders: number
+    grossSalesAmount: number
+    confirmedRevenueAmount: number
+    pendingReconciliationAmount: number
+    refundedAmount: number
+    netRevenueAmount: number
+    estimatedGrossProfitAmount: number
+    averageCheckAmount: number | null
+    paymentConversionRate: number | null
+  }
+  experience: {
+    guestRequests: number
+    complaints: number
+    complaintRate: number | null
+    averageComplaintResolutionMinutes: number | null
+    reopenedRequests: number
+    unresolvedArchivedRequests: number
+    birthdayCareCompleted: number
+    serviceRecoveryRate: number | null
+  }
+  workforce: {
+    activeEmployees: number
+    onlineEmployees: number
+    assignedOpenTasks: number
+    unownedTasks: number
+    overloadedEmployees: number
+    utilizationRate: number | null
+    tasksPerOnlineEmployee: number | null
+  }
+  lossPrevention: {
+    stockLossQuantity: number
+    stockLossCostAmount: number
+    stockGainQuantity: number
+    complimentaryAmount: number
+    discountAmount: number
+    refundAmount: number
+    pendingRefundAmount: number
+    pendingReconciliationAmount: number
+    exceptionCount: number
   }
   comparison: {
     previousBusinessDate: string

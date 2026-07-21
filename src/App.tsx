@@ -421,6 +421,7 @@ export default function App() {
             data={data}
             employeeId={currentActorId}
             onReturn={() => setStaffMode('workspace')}
+            onRefresh={refreshWorkspace}
             onNavigate={(target: OperationsConsoleView, focus?: OperationsConsoleFocus) => {
               nextNavigationRequestId.current += 1
               setNavigationRequest({ id: nextNavigationRequestId.current, target, focus })

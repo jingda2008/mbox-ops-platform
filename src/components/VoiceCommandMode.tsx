@@ -22,6 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   getDutyManagerBriefing,
   getDutyManagerHandover,
+  executeAssistantTool,
   sendAssistantTurn,
   transcribeVoiceAudio,
   updateDutyManagerRisks,
@@ -127,6 +128,7 @@ interface VoiceCommandModeProps {
   employeeId: string
   onReturn: () => void
   onNavigate: (target: OperationsConsoleView, focus?: OperationsConsoleFocus) => void
+  onRefresh: () => void | Promise<void>
 }
 
 function getVoiceScope() {
@@ -173,7 +175,7 @@ function agentStepStatusLabel(step: VoiceCommandPlan['steps'][number]) {
   return step.risk === 'high' ? '待执行 · 需要单独确认' : '待执行'
 }
 
-export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: VoiceCommandModeProps) {
+export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRefresh }: VoiceCommandModeProps) {
   const model = useMemo(() => buildRoleHomeModel(data, employeeId), [data, employeeId])
   const deterministicPlanner = useMemo(() => new DeterministicVoiceCommandPlanner({
     defaultOpenTableSalesOwner: model.employee?.displayName,
@@ -598,7 +600,9 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
     pausedAgentStepIdRef.current = null
     if (response.kind === 'plan') {
       const deterministicWorkflow = deterministicPlanner.plan(message)
-      const plan = deterministicWorkflow.steps.some((step) => step.action !== 'execute_command')
+      const plan = response.steps.some((step) => step.toolCall)
+        ? createModelVoiceCommandPlan(message, response.steps)
+        : deterministicWorkflow.steps.some((step) => step.action !== 'execute_command')
         ? { ...deterministicWorkflow, modelUsed: true }
         : createModelVoiceCommandPlan(message, response.steps)
       updateAgentPlan(plan)
@@ -1003,6 +1007,29 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
       announce(`正在执行第${index + 1}步：${pendingStep.label}。`, 'working')
       await new Promise((resolve) => window.setTimeout(resolve, 80))
 
+      if (pendingStep.action === 'execute_server_tool' && pendingStep.toolCall) {
+        try {
+          if (!pendingStep.executionId) throw new Error('AI执行编号缺失，请重新生成计划')
+          const result = await executeAssistantTool({ executionId: pendingStep.executionId, toolCall: pendingStep.toolCall })
+          currentPlan = transitionVoiceCommandStep(currentPlan, pendingStep.id, 'completed')
+          updateAgentPlan(currentPlan)
+          announce(result.message, 'success')
+          try {
+            await onRefresh()
+          } catch {
+            announce(`${result.message} 页面暂未刷新，请点刷新查看最新状态。`, 'success')
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, 120))
+          continue
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : '服务端没有确认执行结果'
+          currentPlan = transitionVoiceCommandStep(currentPlan, pendingStep.id, 'blocked', reason)
+          updateAgentPlan(currentPlan)
+          announce(`计划停在第${index + 1}步：${reason}`, 'error')
+          return
+        }
+      }
+
       const stepCommand = canonicalizeVoiceCommand(pendingStep.command, voiceDictionary)
       const stepResolution = resolveCommand(stepCommand)
       const pagePlan = stepResolution.source === 'page' ? stepResolution.plan : null
@@ -1166,9 +1193,9 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
                   </div>}
                 </article>})}
               </div>}
-              <section className="duty-effectiveness" aria-label="今日服务成效">
+              <section className="duty-effectiveness" aria-label="今日经营成效">
                 <header>
-                  <strong>今日服务成效</strong>
+                  <strong>今日五维经营成效</strong>
                   <span className={`is-${dutyBriefing.effectiveness.trend}`}>{{
                     improving: '较昨日改善',
                     steady: '与昨日持平',
@@ -1176,13 +1203,13 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
                     insufficient_data: '样本积累中',
                   }[dutyBriefing.effectiveness.trend]}</span>
                 </header>
-                <div>
-                  <span><small>首响中位</small><b>{dutyBriefing.effectiveness.service.medianFirstResponseSeconds === null ? '--' : `${dutyBriefing.effectiveness.service.medianFirstResponseSeconds}秒`}</b></span>
-                  <span><small>按时响应</small><b>{dutyBriefing.effectiveness.service.responseWithinSlaRate === null ? '--' : `${dutyBriefing.effectiveness.service.responseWithinSlaRate}%`}</b></span>
-                  <span><small>服务闭环</small><b>{dutyBriefing.effectiveness.service.completionRate === null ? '--' : `${dutyBriefing.effectiveness.service.completionRate}%`}</b></span>
-                  <span><small>自动派单</small><b>{dutyBriefing.effectiveness.service.automaticAssignmentRate === null ? '--' : `${dutyBriefing.effectiveness.service.automaticAssignmentRate}%`}</b></span>
-                  <span><small>SOP闭环</small><b>{dutyBriefing.effectiveness.sop.completionRate === null ? '--' : `${dutyBriefing.effectiveness.sop.completionRate}%`}</b></span>
-                  <span><small>升级率</small><b>{dutyBriefing.effectiveness.service.escalationRate === null ? '--' : `${dutyBriefing.effectiveness.service.escalationRate}%`}</b></span>
+                <div className="duty-effectiveness-grid">
+                  <span><small>服务 · 按时响应</small><b>{dutyBriefing.effectiveness.service.responseWithinSlaRate === null ? '--' : `${dutyBriefing.effectiveness.service.responseWithinSlaRate}%`}</b></span>
+                  <span><small>收入 · 净实收</small><b>¥{(dutyBriefing.effectiveness.business.netRevenueAmount / 100).toFixed(2)}</b></span>
+                  <span><small>体验 · 投诉闭环</small><b>{dutyBriefing.effectiveness.experience.serviceRecoveryRate === null ? '--' : `${dutyBriefing.effectiveness.experience.serviceRecoveryRate}%`}</b></span>
+                  <span><small>人员 · 负荷率</small><b>{dutyBriefing.effectiveness.workforce.utilizationRate === null ? '--' : `${dutyBriefing.effectiveness.workforce.utilizationRate}%`}</b></span>
+                  <span><small>防损 · 异常项</small><b>{dutyBriefing.effectiveness.lossPrevention.exceptionCount}</b></span>
+                  <span><small>防损 · 待对账</small><b>¥{(dutyBriefing.effectiveness.lossPrevention.pendingReconciliationAmount / 100).toFixed(2)}</b></span>
                 </div>
                 <p><Sparkles size={11} />{dutyBriefing.effectiveness.summary}</p>
               </section>

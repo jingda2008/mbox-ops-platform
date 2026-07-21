@@ -57,6 +57,8 @@ export interface RuntimeConfig {
   geminiApiKey?: string
   geminiModel: string
   assistantHttpTimeoutMs: number
+  releaseSha: string
+  releaseImageDigest: string
 }
 
 function parseInteger(value: string | undefined, fallback: number, name: string, minimum: number, maximum: number) {
@@ -219,6 +221,8 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
       2_000,
       60_000,
     ),
+    releaseSha: env.MBOX_RELEASE_SHA?.trim() || 'development',
+    releaseImageDigest: env.MBOX_RELEASE_IMAGE_DIGEST?.trim() || 'unavailable',
   }
 
   for (const origin of corsOrigins) assertUrl(origin, 'MBOX_CORS_ORIGINS', ['http:', 'https:'])

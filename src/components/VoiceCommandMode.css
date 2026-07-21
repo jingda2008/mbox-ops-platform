@@ -103,10 +103,10 @@
 .duty-effectiveness > header span { padding: 2px 5px; border: 1px solid #cdd2cc; border-radius: 4px; color: var(--ink-soft); font-size: 8px; font-weight: 800; }
 .duty-effectiveness > header span.is-improving { border-color: #a6c9ae; background: #eef8f0; color: #2f6842; }
 .duty-effectiveness > header span.is-declining { border-color: #e1b0b3; background: #fff2f2; color: #9b3439; }
-.duty-effectiveness > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid #dde1dc; border-radius: 4px; background: #fff; overflow: hidden; }
-.duty-effectiveness > div > span { min-height: 42px; display: grid; align-content: center; gap: 1px; padding: 5px 7px; }
-.duty-effectiveness > div > span:not(:nth-child(3n + 1)) { border-left: 1px solid #e2e5e1; }
-.duty-effectiveness > div > span:nth-child(n + 4) { border-top: 1px solid #e2e5e1; }
+.duty-effectiveness-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid #dde1dc; border-radius: 4px; background: #fff; overflow: hidden; }
+.duty-effectiveness-grid > span { min-height: 42px; display: grid; align-content: center; gap: 1px; padding: 5px 7px; }
+.duty-effectiveness-grid > span:not(:nth-child(3n + 1)) { border-left: 1px solid #e2e5e1; }
+.duty-effectiveness-grid > span:nth-child(n + 4) { border-top: 1px solid #e2e5e1; }
 .duty-effectiveness small { color: var(--ink-soft); font-size: 8px; }
 .duty-effectiveness b { color: var(--ink); font-size: 11px; }
 .duty-effectiveness > p { display: flex; align-items: flex-start; gap: 5px; color: #5f532f; font-size: 8px; line-height: 1.45; }

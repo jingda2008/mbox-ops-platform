@@ -13,7 +13,7 @@ MBOX_EVIDENCE_GCP_REGION=asia-east1 \
 npm run evidence:capture
 ```
 
-命令会先执行完整`npm run check`和`npm audit --omit=dev`，再读取当前Git commit、工作树状态、Cloud Run revision、镜像、专用服务账号、仓储方式、流量和`/api/ready`结果。
+命令会先执行完整`npm run check`和`npm audit --omit=dev`，再读取当前Git commit、工作树状态、实际承接100%流量的Cloud Run revision、不可变镜像摘要、专用服务账号、仓储方式、流量和`/api/ready`结果，并核对云端声明的commit与镜像摘要。
 
 - 可审阅结果：`docs/release-evidence.generated.md`
 - 机器可读结果：`.runtime/release-evidence.json`（本地生成，不提交密钥）
@@ -22,11 +22,7 @@ npm run evidence:capture
 
 ## 当前工程证据
 
-- 67个测试文件、433项测试和56个小程序文件通过；前后端类型检查与生产构建通过。
-- 12个员工使用独立PIN完成签名登录和岗位允许/禁止权限冒烟。
-- Cloud Run使用PostgreSQL仓储、专用最小权限服务账号和Cloud SQL连接；验证revision为`mbox-ops-validation-00007-gh8`。
-- 云端已验证管理员低消/SLA配置入口、老板库存/BOM/独立预警水位入口、拆分收款、四渠道日结和顾客桌码页面。
-- Postar工程主链路已完成，但因没有真实商户/KYC参数保持禁用；物理POS和现金可用于影子运行，不得把人工报送伪装为渠道成功。
+具体测试数量、提交、镜像摘要、承接流量的revision和线上就绪状态只以`docs/release-evidence.generated.md`与同次工作流上传的JSON为准，本文不再复制会过期的数字。Postar工程主链路已完成，但没有真实商户/KYC参数时必须保持禁用；物理POS和现金可用于影子运行，不得把人工报送伪装为渠道成功。
 
 ## 正式上线阻断
 

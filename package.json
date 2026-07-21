@@ -1,7 +1,7 @@
 {
   "name": "@mbox/ops-platform",
   "private": true,
-  "version": "1.0.0-rc.32",
+  "version": "1.0.0-rc.33",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n API,WEB -c yellow,cyan \"npm:dev:api\" \"npm:dev:web\"",
@@ -28,6 +28,7 @@
     "tc:register": "node scripts/build-tc-execution-register.mjs",
     "tc:verify": "node scripts/build-tc-execution-register.mjs --check",
     "evidence:capture": "node scripts/capture-release-evidence.mjs",
+    "release:verify": "node scripts/verify-release-smoke.mjs",
     "android:build:validation": "bash scripts/build-android-validation.sh",
     "ios:assets": "capacitor-assets generate --ios --iconBackgroundColor '#111310' --iconBackgroundColorDark '#111310' --splashBackgroundColor '#111310' --splashBackgroundColorDark '#111310'",
     "ios:profile": "node scripts/generate-ios-validation-profile.mjs",

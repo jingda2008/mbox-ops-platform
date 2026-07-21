@@ -2,6 +2,7 @@ import { Pool } from 'pg'
 import { asPostgresPool, PostgresRepository, type PostgresPool } from './postgres-repository.js'
 import { JsonRepository, type RuntimeRepository } from './repository.js'
 import type { RuntimeConfig } from './runtime-config.js'
+import { PostgresOperationalProjector } from './operational-projection.js'
 
 export interface RuntimeDependencies {
   repository: RuntimeRepository
@@ -28,6 +29,7 @@ export function createRuntimeDependencies(config: RuntimeConfig): RuntimeDepende
     storeId: config.storeUuid!,
     seedState: null,
     readCacheValidationTtlMs: config.stateReadCacheMs,
+    projector: new PostgresOperationalProjector(),
   }), postgresPool }
 }
 

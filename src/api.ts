@@ -72,6 +72,7 @@ import type {
   DutyManagerBriefing,
   DutyManagerHandover,
 } from './shared/assistant-contracts'
+import type { AssistantToolExecutionRequest, AssistantToolExecutionResponse } from './shared/assistant-tool-contracts'
 import type { ConfigVersionRecord } from './shared/config-versioning-contracts'
 import type { SopActionRecord, SopActionResolutionInput } from './shared/sop-contracts'
 import type { PerformanceSession, PerformanceSessionWriteInput, RepertoireImportInput, RepertoireImportResult, RepertoireWriteInput, Singer, SingerProfileWriteInput, SingerRepertoireEntry, SingerWriteInput, SongCatalogItem, SongRequest } from './shared/song-contracts'
@@ -173,6 +174,13 @@ export function transcribeVoiceAudio(input: {
 
 export function sendAssistantTurn(input: AssistantTurnRequest) {
   return request<AssistantTurnResponse>('/api/assistant/turn', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function executeAssistantTool(input: AssistantToolExecutionRequest) {
+  return request<AssistantToolExecutionResponse>('/api/assistant/tool-executions', {
     method: 'POST',
     body: JSON.stringify(input),
   })

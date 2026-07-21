@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { assistantTurnRequestSchema, dutyManagerActionSchema, type DutyManagerIncident } from '../src/shared/assistant-contracts.js'
+import { assistantToolExecutionRequestSchema } from '../src/shared/assistant-tool-contracts.js'
 import {
   effectiveDataScopeForEmployee,
   effectivePermissionIdsForEmployee,
@@ -24,6 +25,7 @@ import {
 } from './duty-manager.js'
 import { isKdsTaskActiveForBusinessDate } from './operational-closure.js'
 import { tableOperationsConfig } from './table-sessions.js'
+import { AssistantToolBus, availableAssistantTools } from './assistant-tool-bus.js'
 
 const ASSISTANT_RATE_LIMIT = { scope: 'staff_assistant_turn', limit: 15, windowMs: 60_000 }
 
@@ -97,6 +99,7 @@ function buildPlanningContext(
       heading: page.heading,
       capabilities: page.capabilities.filter((capability) => !capability.disabled),
     },
+    tools: availableAssistantTools(state, actor.actorId),
     live: {
       tables: projected.tables.slice(0, 80).map((table) => ({
         code: table.code,
@@ -168,9 +171,29 @@ export interface AssistantRoutesOptions {
   rateLimitStore: RateLimitStore
   planner?: AssistantPlanner
   now?: () => number
+  toolBus?: AssistantToolBus
 }
 
 export async function registerAssistantRoutes(app: FastifyInstance, options: AssistantRoutesOptions) {
+  const toolBus = options.toolBus ?? new AssistantToolBus(options.repository)
+
+  app.get('/api/assistant/tools', async (request) => {
+    const actor = requireRequestActor(request)
+    const state = await options.repository.read()
+    return { tools: availableAssistantTools(state, actor.actorId) }
+  })
+
+  app.post('/api/assistant/tool-executions', async (request, reply) => {
+    const input = assistantToolExecutionRequestSchema.parse(request.body)
+    try {
+      return await toolBus.execute(request, input.executionId, input.toolCall)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'AI操作没有完成'
+      request.log.warn({ toolId: input.toolCall.toolId, message }, 'assistant server tool execution rejected')
+      return reply.code(409).send({ code: 'ASSISTANT_TOOL_REJECTED', message })
+    }
+  })
+
   app.get('/api/assistant/briefing', async (request) => {
     const actor = requireRequestActor(request)
     const now = options.now?.() ?? Date.now()

@@ -1,0 +1,199 @@
+name: deploy-cloud-run
+
+on:
+  workflow_run:
+    workflows: [ci]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: deploy a verified commit or roll traffic back
+        required: true
+        default: deploy
+        type: choice
+        options: [deploy, rollback]
+      commit_sha:
+        description: exact commit to deploy; blank uses main HEAD
+        required: false
+        type: string
+      rollback_revision:
+        description: existing Cloud Run revision for rollback
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: mbox-cloud-run-production
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  REGION: ${{ vars.GCP_REGION }}
+  SERVICE: ${{ vars.GCP_CLOUD_RUN_SERVICE }}
+  ARTIFACT_REPOSITORY: ${{ vars.GCP_ARTIFACT_REPOSITORY }}
+  MIGRATION_JOB: ${{ vars.GCP_MIGRATION_JOB }}
+
+jobs:
+  deploy:
+    if: >-
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'workflow_dispatch' && inputs.action == 'deploy')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    steps:
+      - name: Resolve verified commit
+        id: source
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            SHA="${{ github.event.workflow_run.head_sha }}"
+          elif [[ -n "${{ inputs.commit_sha }}" ]]; then
+            SHA="${{ inputs.commit_sha }}"
+          else
+            SHA="${{ github.sha }}"
+          fi
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit SHA"; exit 1; }
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHA:0:8}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.source.outputs.sha }}
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v3
+      - name: Validate deployment configuration
+        shell: bash
+        run: |
+          for value in PROJECT_ID REGION SERVICE ARTIFACT_REPOSITORY MIGRATION_JOB; do
+            [[ -n "${!value}" ]] || { echo "missing repository variable $value"; exit 1; }
+          done
+      - name: Capture previous serving revision
+        id: previous
+        shell: bash
+        run: |
+          DETAILS="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json)"
+          REVISION="$(printf '%s' "$DETAILS" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const d=JSON.parse(s);process.stdout.write((d.status?.traffic??[]).find(x=>x.percent===100)?.revisionName??'')})")"
+          URL="$(printf '%s' "$DETAILS" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(JSON.parse(s).status?.url??''))")"
+          [[ -n "$REVISION" && -n "$URL" ]] || { echo "current serving revision was not found"; exit 1; }
+          echo "revision=$REVISION" >> "$GITHUB_OUTPUT"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+      - name: Build and push immutable image
+        id: image
+        shell: bash
+        run: |
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          IMAGE_BASE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REPOSITORY}/mbox-ops"
+          IMAGE_TAG="${IMAGE_BASE}:${{ steps.source.outputs.sha }}"
+          docker build --build-arg "MBOX_RELEASE_SHA=${{ steps.source.outputs.sha }}" -t "$IMAGE_TAG" .
+          docker push "$IMAGE_TAG"
+          DIGEST="$(gcloud artifacts docker images describe "$IMAGE_TAG" --project "$PROJECT_ID" --format='value(image_summary.digest)')"
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "registry did not return an immutable digest"; exit 1; }
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "ref=${IMAGE_BASE}@${DIGEST}" >> "$GITHUB_OUTPUT"
+      - name: Apply backward-compatible database migrations
+        shell: bash
+        run: |
+          gcloud run jobs update "$MIGRATION_JOB" --project "$PROJECT_ID" --region "$REGION" \
+            --image "${{ steps.image.outputs.ref }}" --command node --args dist-server/server/migrate.js --quiet
+          gcloud run jobs execute "$MIGRATION_JOB" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+      - name: Deploy zero-traffic candidate
+        id: candidate
+        uses: google-github-actions/deploy-cloudrun@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          region: ${{ env.REGION }}
+          service: ${{ env.SERVICE }}
+          image: ${{ steps.image.outputs.ref }}
+          suffix: g${{ steps.source.outputs.short_sha }}
+          tag: candidate-${{ steps.source.outputs.short_sha }}
+          no_traffic: true
+          env_vars_update_strategy: merge
+          env_vars: |-
+            MBOX_RELEASE_SHA=${{ steps.source.outputs.sha }}
+            MBOX_RELEASE_IMAGE_DIGEST=${{ steps.image.outputs.digest }}
+      - name: Resolve and verify candidate URL
+        id: candidate_smoke
+        shell: bash
+        env:
+          MBOX_RELEASE_EXPECTED_SHA: ${{ steps.source.outputs.sha }}
+          MBOX_RELEASE_EXPECTED_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          TAG="candidate-${{ steps.source.outputs.short_sha }}"
+          DETAILS="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json)"
+          URL="$(printf '%s' "$DETAILS" | TAG="$TAG" node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const d=JSON.parse(s);process.stdout.write((d.status?.traffic??[]).find(x=>x.tag===process.env.TAG)?.url??'')})")"
+          [[ -n "$URL" ]] || URL="${{ steps.candidate.outputs.url }}"
+          MBOX_RELEASE_SMOKE_URL="$URL" npm run release:verify
+          REVISION="$(printf '%s' "$DETAILS" | TAG="$TAG" node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const d=JSON.parse(s);process.stdout.write((d.status?.traffic??[]).find(x=>x.tag===process.env.TAG)?.revisionName??'')})")"
+          [[ -n "$REVISION" ]] || { echo "candidate revision was not found"; exit 1; }
+          echo "revision=$REVISION" >> "$GITHUB_OUTPUT"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+      - name: Switch all traffic to verified revision
+        id: traffic
+        shell: bash
+        run: |
+          gcloud run services update-traffic "$SERVICE" --project "$PROJECT_ID" --region "$REGION" \
+            --to-revisions "${{ steps.candidate_smoke.outputs.revision }}=100" --quiet
+          echo "switched=true" >> "$GITHUB_OUTPUT"
+      - name: Verify public traffic after switch
+        env:
+          MBOX_RELEASE_SMOKE_URL: ${{ steps.previous.outputs.url }}
+          MBOX_RELEASE_EXPECTED_SHA: ${{ steps.source.outputs.sha }}
+          MBOX_RELEASE_EXPECTED_DIGEST: ${{ steps.image.outputs.digest }}
+        run: npm run release:verify
+      - name: Roll back traffic after failed cutover
+        if: failure() && steps.traffic.outputs.switched == 'true'
+        shell: bash
+        run: |
+          gcloud run services update-traffic "$SERVICE" --project "$PROJECT_ID" --region "$REGION" \
+            --to-revisions "${{ steps.previous.outputs.revision }}=100" --quiet
+      - name: Capture release evidence
+        if: always()
+        env:
+          MBOX_EVIDENCE_SKIP_CHECK: '1'
+          MBOX_EVIDENCE_GCP_PROJECT: ${{ env.PROJECT_ID }}
+          MBOX_EVIDENCE_GCP_REGION: ${{ env.REGION }}
+          MBOX_EVIDENCE_CLOUD_RUN_SERVICE: ${{ env.SERVICE }}
+        run: npm run evidence:capture
+      - name: Upload immutable release evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-evidence-${{ steps.source.outputs.short_sha }}
+          path: |
+            .runtime/release-evidence.json
+            docs/release-evidence.generated.md
+          if-no-files-found: error
+          retention-days: 90
+
+  rollback:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'rollback'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - name: Require rollback revision
+        run: '[[ -n "${{ inputs.rollback_revision }}" ]] || { echo "rollback_revision is required"; exit 1; }'
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v3
+      - name: Route all traffic to requested revision
+        run: >-
+          gcloud run services update-traffic "$SERVICE"
+          --project "$PROJECT_ID" --region "$REGION"
+          --to-revisions "${{ inputs.rollback_revision }}=100" --quiet
+      - name: Confirm rollback target is serving
+        shell: bash
+        run: |
+          URL="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+          curl --fail --retry 12 --retry-delay 5 --retry-all-errors "${URL}/api/ready"

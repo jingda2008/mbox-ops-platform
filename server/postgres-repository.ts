@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { Pool as PgPool } from 'pg'
 import type { RuntimeState } from '../src/shared/contracts.js'
 import { migrateRuntimeState } from './runtime-state-migrations.js'
+import type { RuntimeStateProjector } from './operational-projection.js'
 
 export interface PostgresQueryResult<Row extends Record<string, unknown> = Record<string, unknown>> {
   rows: Row[]
@@ -53,6 +54,7 @@ export interface PostgresRepositoryOptions extends PostgresTenantContext {
   defaultIdempotencyLockMs?: number
   healthCheckTimeoutMs?: number
   readCacheValidationTtlMs?: number
+  projector?: RuntimeStateProjector
 }
 
 export interface PostgresRepositoryHealth {
@@ -67,6 +69,10 @@ export interface PostgresRepositoryHealth {
     waiting: number | null
   }
   error?: string
+  projectionReady?: boolean
+  projectionRevision?: number | null
+  projectionCountsMatch?: boolean
+  projectionError?: string
 }
 
 export class PostgresRepositoryError extends Error {}
@@ -280,6 +286,7 @@ export class PostgresRepository {
   private readonly defaultIdempotencyLockMs: number
   private readonly healthCheckTimeoutMs: number
   private readonly readCacheValidationTtlMs: number
+  private readonly projector: RuntimeStateProjector | null
   private lifecycle: Lifecycle = 'new'
   private initPromise: Promise<void> | null = null
   private closePromise: Promise<void> | null = null
@@ -313,6 +320,7 @@ export class PostgresRepository {
       'readCacheValidationTtlMs',
       options.readCacheValidationTtlMs ?? DEFAULT_READ_CACHE_VALIDATION_TTL_MS,
     )
+    this.projector = options.projector ?? null
   }
 
   async init(): Promise<void> {
@@ -386,6 +394,9 @@ export class PostgresRepository {
           expectedRevision,
         ])
         if (update.rowCount !== 1) throw new PostgresOptimisticConcurrencyError(expectedRevision)
+        if (this.projector) {
+          await this.projector.project(client, this.tenantContext(), current, workingCopy)
+        }
         stateChanged = true
         committedState = structuredClone(workingCopy)
       }
@@ -417,7 +428,7 @@ export class PostgresRepository {
     const startedAt = performance.now()
     const pool = this.poolHealth()
     try {
-      const revision = await this.track(() => this.withTransaction(true, async (client) => {
+      const health = await this.track(() => this.withTransaction(true, async (client) => {
         await client.query(SQL.setStatementTimeout, [`${this.healthCheckTimeoutMs}ms`])
         const result = await client.query<{ revision: number | string }>(SQL.selectRevision, [
           this.tenantId,
@@ -426,15 +437,23 @@ export class PostgresRepository {
         if (result.rowCount !== 1 || !result.rows[0]) {
           throw new PostgresRuntimeStateNotInitializedError()
         }
-        return parseRevision(result.rows[0].revision)
+        const revision = parseRevision(result.rows[0].revision)
+        const projection = this.projector
+          ? await this.projector.healthCheck(client, this.tenantContext(), revision)
+          : null
+        return { revision, projection }
       }))
       return {
-        ready: true,
+        ready: health.projection?.ready ?? true,
         repository: 'postgres',
-        healthy: true,
+        healthy: health.projection?.ready ?? true,
         latencyMs: performance.now() - startedAt,
-        revision,
+        revision: health.revision,
         pool,
+        projectionReady: health.projection?.ready,
+        projectionRevision: health.projection?.projectedRevision,
+        projectionCountsMatch: health.projection?.countsMatch,
+        projectionError: health.projection?.error,
       }
     } catch (error) {
       return {
@@ -490,8 +509,18 @@ export class PostgresRepository {
           sha256(serialized),
         ])
       }
-      await this.loadState(transactionClient)
+      // Serialize startup rebuilds with live writers. Without this row lock a
+      // newly starting revision could project an older snapshot after a live
+      // instance had already committed a newer one.
+      const state = await this.loadState(transactionClient, true)
+      if (this.projector) {
+        await this.projector.project(transactionClient, this.tenantContext(), null, state)
+      }
     })
+  }
+
+  private tenantContext(): PostgresTenantContext {
+    return { tenantId: this.tenantId, storeId: this.storeId }
   }
 
   private async withTransaction<T>(

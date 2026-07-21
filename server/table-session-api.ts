@@ -80,6 +80,112 @@ function assertTablePrimaryReady(state: RuntimeState, tableId: string, actorId: 
   return { table, reassignedFrom: previousPrimaryId, reassignedTo: fallback.id }
 }
 
+export function openWalkInTableSession(
+  state: RuntimeState,
+  tableId: string,
+  input: ReturnType<typeof walkInOpenSchema.parse>,
+  actorId: string,
+  occurredAt = new Date().toISOString(),
+) {
+  const replay = state.auditEntries.find((entry) =>
+    entry.action === 'table.walk_in_opened.v1' && entry.details.idempotencyKey === input.idempotencyKey,
+  )
+  if (replay) {
+    if (replay.objectId !== tableId) throw new Error('幂等键已用于其他桌台')
+    const table = state.tables.find((candidate) => candidate.id === tableId)
+    const session = state.songState.tableSessions.find((candidate) => candidate.id === replay.details.tableSessionId)
+    const reservation = reservationsFor(state).reservations.find((candidate) => candidate.id === replay.details.reservationId)
+    if (!table || !session || !reservation) throw new Error('临客开台幂等记录不完整')
+    return { table, reservation, summary: tableSessionSummary(state, session), replayed: true }
+  }
+  const readiness = assertTablePrimaryReady(state, tableId, actorId)
+  const table = readiness.table
+  if (table.status !== 'available') throw new Error('只有空桌可以临客开台')
+  if (input.partySize > table.capacity) throw new Error(`到店人数超过桌台容量：${input.partySize}/${table.capacity}`)
+  if (readiness.reassignedFrom) {
+    state.auditEntries.push({
+      id: `audit_${randomUUID()}`,
+      actorId,
+      action: 'table.primary_auto_reassigned.v1',
+      objectType: 'table',
+      objectId: table.id,
+      occurredAt,
+      details: { fromEmployeeId: readiness.reassignedFrom, toEmployeeId: readiness.reassignedTo, reason: 'walk_in_open_primary_unavailable' },
+    })
+  }
+  const reservationId = `walk-in:${randomUUID()}`
+  const customerReference = input.customerReference ?? reservationId
+  const reservation = mutateReservationState(state, (domain) => {
+    createReservation(domain, {
+      reservationId,
+      customerReference,
+      customerName: input.customerName,
+      contactReference: customerReference,
+      sourceCode: 'walk_in',
+      partySize: input.partySize,
+      areaPreferenceCode: table.areaId,
+      scheduledAt: occurredAt,
+      depositRequiredAmount: 0,
+      depositCurrency: 'CNY',
+      actorId,
+      occurredAt,
+      idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'create'),
+    })
+    confirmReservation(domain, {
+      reservationId, actorId, occurredAt,
+      idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'confirm'),
+    })
+    markReservationArrived(domain, {
+      reservationId, actorId, occurredAt,
+      idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'arrive'),
+    })
+    const session = openTableSession(state, table, occurredAt, { source: 'walk_in', sourceId: reservationId })
+    return seatReservation(domain, {
+      reservationId, actorId, occurredAt, tableId: table.id, tableCode: table.code,
+      tableSessionId: session.id, idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'seat'),
+    })
+  })
+  const session = currentOpenTableSession(state, table.id)
+  table.status = 'occupied'
+  table.guestCount = input.partySize
+  table.openedAt = occurredAt
+  recordSalesAttribution(state, {
+    subjectType: 'reservation', subjectId: reservation.id, salesEmployeeId: input.salesEmployeeId,
+    actorId, reason: '临客开台指定销售', occurredAt,
+    idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'reservation-sales'),
+  })
+  recordSalesAttribution(state, {
+    subjectType: 'walk_in', subjectId: reservation.id, salesEmployeeId: input.salesEmployeeId,
+    actorId, reason: '临客开台指定销售', occurredAt,
+    idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'walkin-sales'),
+  })
+  recordSalesAttribution(state, {
+    subjectType: 'table_session', subjectId: session.id, salesEmployeeId: input.salesEmployeeId,
+    actorId, reason: '临客开台继承销售归属', occurredAt,
+    idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'session-sales'),
+  })
+  if (state.config.proactiveOrderCare.enabled) {
+    startAwaitingOrder(state, table.id, actorId, `walk-in-open:${reservation.id}`, new Date(occurredAt))
+  }
+  state.auditEntries.push({
+    id: `audit_${randomUUID()}`,
+    actorId,
+    action: 'table.walk_in_opened.v1',
+    objectType: 'table',
+    objectId: table.id,
+    occurredAt,
+    details: {
+      reservationId: reservation.id,
+      tableSessionId: session.id,
+      guestCount: input.partySize,
+      salesEmployeeId: input.salesEmployeeId,
+      idempotencyKey: input.idempotencyKey,
+    },
+  })
+  state.revision += 1
+  return { table, reservation, summary: tableSessionSummary(state, session), replayed: false }
+}
+
 function validateTableOperationsConfig(state: RuntimeState, rules: ReturnType<typeof tableOperationsConfigInputSchema.parse>['minimumSpendRules']) {
   if (new Set(rules.map((rule) => rule.id)).size !== rules.length) throw new Error('低消规则ID不能重复')
   for (const rule of rules) {
@@ -383,104 +489,7 @@ export function registerTableSessionRoutes(app: FastifyInstance, repository: Run
     const result = await repository.mutate((state) => {
       const actor = requireConfiguredOperation(request, state, 'table.open')
       requireTableDataScope(request, state, request.params.tableId, 'table.open')
-      const replay = state.auditEntries.find((entry) =>
-        entry.action === 'table.walk_in_opened.v1' && entry.details.idempotencyKey === input.idempotencyKey,
-      )
-      if (replay) {
-        if (replay.objectId !== request.params.tableId) throw new Error('幂等键已用于其他桌台')
-        const table = state.tables.find((candidate) => candidate.id === request.params.tableId)
-        const session = state.songState.tableSessions.find((candidate) => candidate.id === replay.details.tableSessionId)
-        const reservation = reservationsFor(state).reservations.find((candidate) => candidate.id === replay.details.reservationId)
-        if (!table || !session || !reservation) throw new Error('临客开台幂等记录不完整')
-        return { table, reservation, summary: tableSessionSummary(state, session) }
-      }
-      const readiness = assertTablePrimaryReady(state, request.params.tableId, actor.actorId)
-      const table = readiness.table
-      if (table.status !== 'available') throw new Error('只有空桌可以临客开台')
-      if (input.partySize > table.capacity) throw new Error(`到店人数超过桌台容量：${input.partySize}/${table.capacity}`)
-      const occurredAt = new Date().toISOString()
-      if (readiness.reassignedFrom) {
-        state.auditEntries.push({
-          id: `audit_${randomUUID()}`,
-          actorId: actor.actorId,
-          action: 'table.primary_auto_reassigned.v1',
-          objectType: 'table',
-          objectId: table.id,
-          occurredAt,
-          details: { fromEmployeeId: readiness.reassignedFrom, toEmployeeId: readiness.reassignedTo, reason: 'walk_in_open_primary_unavailable' },
-        })
-      }
-      const reservationId = `walk-in:${randomUUID()}`
-      const customerReference = input.customerReference ?? reservationId
-      const reservation = mutateReservationState(state, (domain) => {
-        createReservation(domain, {
-          reservationId,
-          customerReference,
-          customerName: input.customerName,
-          contactReference: customerReference,
-          sourceCode: 'walk_in',
-          partySize: input.partySize,
-          areaPreferenceCode: table.areaId,
-          scheduledAt: occurredAt,
-          depositRequiredAmount: 0,
-          depositCurrency: 'CNY',
-          actorId: actor.actorId,
-          occurredAt,
-          idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'create'),
-        })
-        confirmReservation(domain, {
-          reservationId, actorId: actor.actorId, occurredAt,
-          idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'confirm'),
-        })
-        markReservationArrived(domain, {
-          reservationId, actorId: actor.actorId, occurredAt,
-          idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'arrive'),
-        })
-        const session = openTableSession(state, table, occurredAt, { source: 'walk_in', sourceId: reservationId })
-        return seatReservation(domain, {
-          reservationId, actorId: actor.actorId, occurredAt, tableId: table.id, tableCode: table.code,
-          tableSessionId: session.id, idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'seat'),
-        })
-      })
-      const session = currentOpenTableSession(state, table.id)
-      table.status = 'occupied'
-      table.guestCount = input.partySize
-      table.openedAt = occurredAt
-      recordSalesAttribution(state, {
-        subjectType: 'reservation', subjectId: reservation.id, salesEmployeeId: input.salesEmployeeId,
-        actorId: actor.actorId, reason: '临客开台指定销售', occurredAt,
-        idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'reservation-sales'),
-      })
-      recordSalesAttribution(state, {
-        subjectType: 'walk_in', subjectId: reservation.id, salesEmployeeId: input.salesEmployeeId,
-        actorId: actor.actorId, reason: '临客开台指定销售', occurredAt,
-        idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'walkin-sales'),
-      })
-      recordSalesAttribution(state, {
-        subjectType: 'table_session', subjectId: session.id, salesEmployeeId: input.salesEmployeeId,
-        actorId: actor.actorId, reason: '临客开台继承销售归属', occurredAt,
-        idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'session-sales'),
-      })
-      if (state.config.proactiveOrderCare.enabled) {
-        startAwaitingOrder(state, table.id, actor.actorId, `walk-in-open:${reservation.id}`, new Date(occurredAt))
-      }
-      state.auditEntries.push({
-        id: `audit_${randomUUID()}`,
-        actorId: actor.actorId,
-        action: 'table.walk_in_opened.v1',
-        objectType: 'table',
-        objectId: table.id,
-        occurredAt,
-        details: {
-          reservationId: reservation.id,
-          tableSessionId: session.id,
-          guestCount: input.partySize,
-          salesEmployeeId: input.salesEmployeeId,
-          idempotencyKey: input.idempotencyKey,
-        },
-      })
-      state.revision += 1
-      return { table, reservation, summary: tableSessionSummary(state, session) }
+      return openWalkInTableSession(state, request.params.tableId, input, actor.actorId)
     })
     return reply.status(201).send(result)
   })

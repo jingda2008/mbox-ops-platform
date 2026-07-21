@@ -104,6 +104,7 @@ describe('assistant API', () => {
     expect(captured?.context.actor).toMatchObject({ displayName: 'Tom', dataScope: 'assigned_areas' })
     expect(captured?.context.actor.permissions).not.toContain('finance.view')
     expect(captured?.context.page.capabilities).toHaveLength(1)
+    expect(captured?.context.tools.map((tool) => tool.id)).toContain('table.open')
     expect(captured?.context.store.currentTime).toBe('2026-07-18T20:00:00+08:00')
     expect(captured?.context.live.operationalHealth).toHaveProperty('health')
     expect(Array.isArray(captured?.context.live.operationalRisks)).toBe(true)
@@ -328,6 +329,62 @@ describe('assistant API', () => {
     expect(responses.slice(0, 15).every((response) => response.statusCode === 200)).toBe(true)
     expect(responses[15]?.statusCode).toBe(429)
     expect(responses[15]?.json()).toMatchObject({ code: 'ASSISTANT_RATE_LIMITED' })
+    await app.close()
+  })
+
+  it('executes supported AI tools on the server and returns real state evidence', async () => {
+    const { app, repository: runtimeRepository } = await testApp(undefined, { actorId: 'emp-lin', roleId: 'server' })
+    const opened = await app.inject({
+      method: 'POST', url: '/api/assistant/tool-executions', payload: {
+        executionId: '00000000-0000-4000-8000-000000000301',
+        toolCall: { toolId: 'table.open', arguments: { tableCode: 'L04', partySize: 4 } },
+      },
+    })
+    expect(opened.statusCode).toBe(200)
+    expect(opened.json()).toMatchObject({ status: 'completed', objectId: 'table-l04', replayed: false })
+    expect(runtimeRepository.snapshot().tables.find((table) => table.id === 'table-l04')).toMatchObject({
+      status: 'occupied', guestCount: 4,
+    })
+
+    const created = await app.inject({
+      method: 'POST', url: '/api/assistant/tool-executions', payload: {
+        executionId: '00000000-0000-4000-8000-000000000302',
+        toolCall: { toolId: 'service.task.create', arguments: { tableCode: 'L04', serviceTypeId: 'water', note: '补两杯水' } },
+      },
+    })
+    expect(created.statusCode).toBe(200)
+    const taskId = created.json().objectId as string
+    for (const [index, toolId] of ['service.task.accept', 'service.task.arrive', 'service.task.complete'].entries()) {
+      const response = await app.inject({
+        method: 'POST', url: '/api/assistant/tool-executions', payload: {
+          executionId: `00000000-0000-4000-8000-${String(303 + index).padStart(12, '0')}`,
+          toolCall: { toolId, arguments: { taskId, note: toolId.endsWith('complete') ? '已经补水' : '' } },
+        },
+      })
+      expect(response.statusCode, response.body).toBe(200)
+    }
+    expect(runtimeRepository.snapshot().tasks.find((task) => task.id === taskId)).toMatchObject({
+      status: 'confirmed', resolution: '已经补水',
+    })
+    expect(runtimeRepository.snapshot().auditEntries.filter((entry) => entry.action === 'assistant.tool.executed.v1')).toHaveLength(5)
+    await app.close()
+  })
+
+  it('replays an AI execution idempotently and rejects a changed request', async () => {
+    const { app } = await testApp(undefined, { actorId: 'emp-lin', roleId: 'server' })
+    const payload = {
+      executionId: '00000000-0000-4000-8000-000000000310',
+      toolCall: { toolId: 'service.task.create', arguments: { tableCode: 'L01', serviceTypeId: 'water' } },
+    }
+    expect((await app.inject({ method: 'POST', url: '/api/assistant/tool-executions', payload })).json()).toMatchObject({ replayed: false })
+    expect((await app.inject({ method: 'POST', url: '/api/assistant/tool-executions', payload })).json()).toMatchObject({ replayed: true })
+    const conflict = await app.inject({
+      method: 'POST', url: '/api/assistant/tool-executions', payload: {
+        ...payload, toolCall: { ...payload.toolCall, arguments: { tableCode: 'L02', serviceTypeId: 'water' } },
+      },
+    })
+    expect(conflict.statusCode).toBe(409)
+    expect(conflict.json()).toMatchObject({ code: 'ASSISTANT_TOOL_REJECTED' })
     await app.close()
   })
 })

@@ -174,6 +174,27 @@ describe('DeterministicVoiceCommandPlanner.plan', () => {
       '打开现场桌台', '点击开台桌台L04', '点击确认转桌',
     ])
   })
+
+  it('assigns one stable execution id to every server tool step', () => {
+    const plan = createModelVoiceCommandPlan('L04四人开台', [{
+      label: 'L04四人开台',
+      command: '为L04四人开台',
+      toolCall: { toolId: 'table.open', arguments: { tableCode: 'L04', partySize: 4 } },
+    }])
+
+    expect(plan.steps[0]).toMatchObject({
+      action: 'execute_server_tool',
+      toolCall: { toolId: 'table.open', arguments: { tableCode: 'L04', partySize: 4 } },
+    })
+    expect(plan.steps[0].executionId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    )
+
+    const running = transitionVoiceCommandStep(plan, 1, 'running')
+    const completed = transitionVoiceCommandStep(running, 1, 'completed')
+    expect(running.steps[0].executionId).toBe(plan.steps[0].executionId)
+    expect(completed.steps[0].executionId).toBe(plan.steps[0].executionId)
+  })
 })
 
 describe('transitionVoiceCommandStep', () => {

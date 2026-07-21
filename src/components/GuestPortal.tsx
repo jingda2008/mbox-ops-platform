@@ -674,6 +674,7 @@ export function GuestPortal() {
           busy={checkoutBusy}
           timeZone={data?.store.timezone}
           orderSafety={data?.orderSafety}
+          compactCart
           onSubmit={placeAndPay}
           onInteraction={(interaction) => recordBehavior(interaction.type, {
             productId: interaction.productId ?? null,

@@ -175,7 +175,7 @@ export interface AssistantRoutesOptions {
 }
 
 export async function registerAssistantRoutes(app: FastifyInstance, options: AssistantRoutesOptions) {
-  const toolBus = options.toolBus ?? new AssistantToolBus(options.repository)
+  const toolBus = options.toolBus ?? new AssistantToolBus(options.repository, options.now ?? Date.now)
 
   app.get('/api/assistant/tools', async (request) => {
     const actor = requireRequestActor(request)

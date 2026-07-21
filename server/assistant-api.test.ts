@@ -5,9 +5,11 @@ import { createSeedState } from './seed.js'
 import { createServiceTask } from './domain.js'
 import { registerAssistantRoutes } from './assistant-api.js'
 import { MemoryAssistantConversationStore } from './assistant-conversation-store.js'
-import type { AssistantPlanner, AssistantPlanningRequest } from './assistant-planner.js'
+import { GeminiAssistantPlanner, type AssistantPlanner, type AssistantPlanningRequest } from './assistant-planner.js'
 import { MemoryRateLimitStore } from './rate-limit.js'
 import type { RuntimeRepository } from './repository.js'
+import { applyScheduledOperations } from './operational-scheduler.js'
+import { projectRuntimeStateForActor } from './bootstrap-projection.js'
 
 function repository(): RuntimeRepository & { snapshot: () => ReturnType<typeof createSeedState> } {
   let state = createSeedState(new Date('2026-07-18T12:00:00.000Z'))
@@ -367,6 +369,144 @@ describe('assistant API', () => {
       status: 'confirmed', resolution: '已经补水',
     })
     expect(runtimeRepository.snapshot().auditEntries.filter((entry) => entry.action === 'assistant.tool.executed.v1')).toHaveLength(5)
+    await app.close()
+  })
+
+  it('lets a manager schedule a named employee task and dispatches it only when due', async () => {
+    const { app, repository: runtimeRepository } = await testApp(undefined, { actorId: 'emp-chen', roleId: 'manager' })
+    const scheduled = await app.inject({
+      method: 'POST', url: '/api/assistant/tool-executions', payload: {
+        executionId: '00000000-0000-4000-8000-000000000320',
+        toolCall: {
+          toolId: 'service.task.schedule',
+          arguments: {
+            tableCode: 'L01', serviceTypeId: '加水', delayMinutes: 5, assigneeEmployeeId: 'Tom',
+          },
+        },
+      },
+    })
+
+    expect(scheduled.statusCode, scheduled.body).toBe(200)
+    expect(scheduled.json()).toMatchObject({
+      status: 'completed',
+      evidence: {
+        verified: true, outcome: 'scheduled', tableCode: 'L01',
+        scheduledAt: '2026-07-18T12:05:00.000Z', assigneeEmployeeId: 'emp-lin', assigneeName: 'Tom',
+      },
+    })
+    const executionId = scheduled.json().objectId as string
+    const scheduledTriggerId = `${executionId}:dispatch_service`
+    expect(runtimeRepository.snapshot().tasks.some((task) => task.triggerId === scheduledTriggerId)).toBe(false)
+
+    await runtimeRepository.mutate((state) => {
+      applyScheduledOperations(state, new Date('2026-07-18T12:04:59.999Z'))
+    })
+    expect(runtimeRepository.snapshot().tasks.some((task) => task.triggerId === scheduledTriggerId)).toBe(false)
+
+    await runtimeRepository.mutate((state) => {
+      applyScheduledOperations(state, new Date('2026-07-18T12:05:00.000Z'))
+    })
+    const task = runtimeRepository.snapshot().tasks.find((candidate) => candidate.triggerId === scheduledTriggerId)
+    expect(task).toMatchObject({
+      tableId: 'table-l01', serviceTypeId: 'water', status: 'pending', ownerId: 'emp-lin',
+      targetEmployeeIdsSnapshot: ['emp-lin'],
+    })
+    expect(task?.notifiedEmployeeIds).toContain('emp-lin')
+    const tomView = projectRuntimeStateForActor(runtimeRepository.snapshot(), {
+      actorId: 'emp-lin', roleId: 'server', storeId: 'mbox-lujiazui', runtimeMode: 'test',
+      authenticatedBy: 'local_header', sessionId: null, sessionExpiresAt: null,
+    })
+    expect(tomView.tasks.find((candidate) => candidate.id === task?.id)).toMatchObject({
+      ownerId: 'emp-lin', status: 'pending', serviceTypeId: 'water',
+    })
+    expect(runtimeRepository.snapshot().auditEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        action: 'assistant.service_task.scheduled.v1', actorId: 'emp-chen', objectId: executionId,
+      }),
+      expect.objectContaining({ action: 'sop.execution.step_triggered.v1', objectId: executionId }),
+    ]))
+    await app.close()
+  })
+
+  it('runs the full manager conversation, authoritative open-table, and delayed Tom assignment flow', async () => {
+    const planner = new GeminiAssistantPlanner({
+      apiKey: 'test-key', model: 'gemini-3.5-flash', timeoutMs: 2_000,
+      fetchImpl: async () => { throw new Error('core operational commands must not call the model') },
+    })
+    const { app, repository: runtimeRepository } = await testApp(planner, { actorId: 'emp-chen', roleId: 'manager' })
+    const openTurn = await app.inject({
+      method: 'POST', url: '/api/assistant/turn', payload: {
+        ...payload,
+        requestId: '00000000-0000-4000-8000-000000000330',
+        message: '给L04开台，实际到了4位客人',
+      },
+    })
+    expect(openTurn.statusCode, openTurn.body).toBe(200)
+    expect(openTurn.json()).toMatchObject({
+      kind: 'plan', model: 'mbox-deterministic-operations-v1',
+      steps: [{ toolCall: { toolId: 'table.open', arguments: { tableCode: 'L04', partySize: 4 } } }],
+    })
+    const openExecution = await app.inject({
+      method: 'POST', url: '/api/assistant/tool-executions', payload: {
+        executionId: '00000000-0000-4000-8000-000000000331',
+        toolCall: openTurn.json().steps[0].toolCall,
+      },
+    })
+    expect(openExecution.statusCode, openExecution.body).toBe(200)
+    expect(openExecution.json()).toMatchObject({
+      evidence: { verified: true, outcome: 'executed', tableCode: 'L04', tableStatus: 'occupied', guestCount: 4 },
+    })
+
+    const scheduleTurn = await app.inject({
+      method: 'POST', url: '/api/assistant/turn', payload: {
+        ...payload,
+        requestId: '00000000-0000-4000-8000-000000000332',
+        message: '5分钟后让Tom给L04加水',
+      },
+    })
+    expect(scheduleTurn.statusCode, scheduleTurn.body).toBe(200)
+    expect(scheduleTurn.json()).toMatchObject({
+      kind: 'plan', model: 'mbox-deterministic-operations-v1',
+      steps: [{ toolCall: {
+        toolId: 'service.task.schedule',
+        arguments: { tableCode: 'L04', serviceTypeId: '加水', delayMinutes: 5, assigneeEmployeeId: 'Tom' },
+      } }],
+    })
+    const scheduleExecution = await app.inject({
+      method: 'POST', url: '/api/assistant/tool-executions', payload: {
+        executionId: '00000000-0000-4000-8000-000000000333',
+        toolCall: scheduleTurn.json().steps[0].toolCall,
+      },
+    })
+    expect(scheduleExecution.statusCode, scheduleExecution.body).toBe(200)
+    await runtimeRepository.mutate((state) => {
+      applyScheduledOperations(state, new Date('2026-07-18T12:05:00.000Z'))
+    })
+    const scheduledTask = runtimeRepository.snapshot().tasks.find((task) => (
+      task.triggerId === `${scheduleExecution.json().objectId}:dispatch_service`
+    ))
+    expect(scheduledTask).toMatchObject({ tableId: 'table-l04', ownerId: 'emp-lin', status: 'pending' })
+    await app.close()
+  })
+
+  it('blocks frontline staff from assigning another employee through the AI tool bus', async () => {
+    const { app, repository: runtimeRepository } = await testApp(undefined, { actorId: 'emp-lin', roleId: 'server' })
+    const response = await app.inject({
+      method: 'POST', url: '/api/assistant/tool-executions', payload: {
+        executionId: '00000000-0000-4000-8000-000000000321',
+        toolCall: {
+          toolId: 'service.task.schedule',
+          arguments: {
+            tableCode: 'I01', serviceTypeId: '加水', delayMinutes: 5, assigneeEmployeeId: 'Jerry',
+          },
+        },
+      },
+    })
+
+    expect(response.statusCode).toBe(409)
+    expect(response.json()).toMatchObject({ code: 'ASSISTANT_TOOL_REJECTED' })
+    expect(response.json().message).toContain('只有值班管理岗位可以指派其他员工')
+    expect(runtimeRepository.snapshot().sopExecutions).toHaveLength(0)
     await app.close()
   })
 

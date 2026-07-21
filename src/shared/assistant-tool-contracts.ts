@@ -3,6 +3,7 @@ import { z } from 'zod'
 export const assistantServerToolIds = [
   'table.open',
   'service.task.create',
+  'service.task.schedule',
   'service.task.accept',
   'service.task.arrive',
   'service.task.complete',
@@ -44,4 +45,15 @@ export interface AssistantToolExecutionResponse {
   objectId: string
   replayed: boolean
   stateRevision: number
+  evidence: {
+    verified: true
+    outcome: 'executed' | 'scheduled'
+    tableCode?: string
+    tableStatus?: string
+    guestCount?: number
+    taskStatus?: string
+    scheduledAt?: string
+    assigneeEmployeeId?: string
+    assigneeName?: string
+  }
 }

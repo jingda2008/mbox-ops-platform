@@ -1,15 +1,38 @@
 import { describe, expect, it } from 'vitest'
-import { AssistantPlannerError, GeminiAssistantPlanner } from './assistant-planner.js'
+import type { AssistantToolDescriptor } from '../src/shared/assistant-tool-contracts.js'
+import { AssistantPlannerError, GeminiAssistantPlanner, type AssistantPlanningRequest } from './assistant-planner.js'
 
-function planningInput() {
+function tool(id: AssistantToolDescriptor['id']): AssistantToolDescriptor {
   return {
-    message: 'L04来了四位客人，帮我开台',
+    id,
+    name: id,
+    description: id,
+    risk: 'normal',
+    requiredPermission: id === 'table.open' ? 'table.open' : 'service.execute',
+    argumentGuide: {},
+  }
+}
+
+function planningInput(message = '今晚有什么安排'): AssistantPlanningRequest {
+  return {
+    message,
     history: [],
     context: {
-      actor: { id: 'emp-lin', displayName: 'Tom', roles: ['主服务员'], permissions: ['table.open'], dataScope: 'assigned_areas' },
+      actor: {
+        id: 'emp-lin', displayName: 'Tom', roles: ['主服务员'],
+        permissions: ['table.open', 'service.execute'], dataScope: 'assigned_areas',
+      },
       store: { name: 'M-BOX', businessDate: '2026-07-18', timezone: 'Asia/Shanghai', currentTime: '2026-07-18T12:00:00.000Z' },
       page: { heading: '全店现场', capabilities: [] },
-      live: { tables: [], serviceTasks: [], kdsTasks: [], performances: [] },
+      tools: [tool('table.open'), tool('service.task.schedule')],
+      live: {
+        tables: [], serviceTasks: [], kdsTasks: [], performances: [], operationalRisks: [], operationalHealth: {},
+        dutyHandover: {
+          generatedAt: '2026-07-18T12:00:00.000Z', businessDate: '2026-07-18', summary: '无待交接风险',
+          detected: 0, active: 0, acknowledged: 0, deferred: 0, dismissed: 0, resolved: 0,
+          averageAcknowledgeMinutes: null, oldestActiveMinutes: null,
+        },
+      },
     },
   }
 }
@@ -27,7 +50,7 @@ describe('Gemini assistant planner', () => {
       },
     })
 
-    const result = await planner.plan({ ...planningInput(), message: 'L01开台' })
+    const result = await planner.plan(planningInput('L01开台'))
 
     expect(modelCalled).toBe(false)
     expect(result).toMatchObject({
@@ -41,6 +64,91 @@ describe('Gemini assistant planner', () => {
         choices: ['1位', '2位', '3位', '4位', '其他人数'],
       },
     })
+  })
+
+  it('creates an authoritative server tool plan for open-table commands with a party size', async () => {
+    let modelCalled = false
+    const planner = new GeminiAssistantPlanner({
+      apiKey: 'test-key',
+      model: 'gemini-3.5-flash',
+      timeoutMs: 2_000,
+      fetchImpl: async () => {
+        modelCalled = true
+        throw new Error('model must not be called')
+      },
+    })
+
+    const result = await planner.plan(planningInput('给l01开台，实际到了4位客人'))
+
+    expect(modelCalled).toBe(false)
+    expect(result).toMatchObject({
+      model: 'mbox-deterministic-operations-v1',
+      output: {
+        kind: 'plan',
+        steps: [{ toolCall: { toolId: 'table.open', arguments: { tableCode: 'L01', partySize: 4 } } }],
+      },
+    })
+  })
+
+  it('uses the previous open-table question when the employee supplies only the party size', async () => {
+    const planner = new GeminiAssistantPlanner({
+      apiKey: 'test-key', model: 'gemini-3.5-flash', timeoutMs: 2_000,
+      fetchImpl: async () => { throw new Error('model must not be called') },
+    })
+    const input = planningInput('4位')
+    input.history = [{ userMessage: 'L01开台', assistantReply: 'L01准备开台，请告诉我实际到店人数。' }]
+
+    await expect(planner.plan(input)).resolves.toMatchObject({
+      output: {
+        kind: 'plan',
+        steps: [{ toolCall: { toolId: 'table.open', arguments: { tableCode: 'L01', partySize: 4 } } }],
+      },
+    })
+  })
+
+  it('creates a delayed named-employee service assignment without calling the model', async () => {
+    let modelCalled = false
+    const planner = new GeminiAssistantPlanner({
+      apiKey: 'test-key', model: 'gemini-3.5-flash', timeoutMs: 2_000,
+      fetchImpl: async () => {
+        modelCalled = true
+        throw new Error('model must not be called')
+      },
+    })
+
+    const result = await planner.plan(planningInput('5分钟后让Tom给K2加水'))
+
+    expect(modelCalled).toBe(false)
+    expect(result).toMatchObject({
+      model: 'mbox-deterministic-operations-v1',
+      output: {
+        kind: 'plan',
+        steps: [{
+          toolCall: {
+            toolId: 'service.task.schedule',
+            arguments: { tableCode: 'K2', serviceTypeId: '加水', delayMinutes: 5, assigneeEmployeeId: 'Tom' },
+          },
+        }],
+      },
+    })
+  })
+
+  it('keeps open-table and delayed service commands in the employee spoken order', async () => {
+    const planner = new GeminiAssistantPlanner({
+      apiKey: 'test-key', model: 'gemini-3.5-flash', timeoutMs: 2_000,
+      fetchImpl: async () => { throw new Error('model must not be called') },
+    })
+
+    const result = await planner.plan(planningInput('给L04开台，到了4位客人，然后5分钟后让Tom给L04桌加水'))
+
+    expect(result.output.steps).toHaveLength(2)
+    expect(result.output.steps.map((step) => step.toolCall)).toEqual([
+      { toolId: 'table.open', arguments: { tableCode: 'L04', partySize: 4 } },
+      {
+        toolId: 'service.task.schedule',
+        arguments: { tableCode: 'L04', serviceTypeId: '加水', delayMinutes: 5, assigneeEmployeeId: 'Tom' },
+      },
+    ])
   })
 
   it('requests non-retained structured Interactions output and validates the plan', async () => {

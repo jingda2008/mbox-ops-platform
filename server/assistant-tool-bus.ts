@@ -9,12 +9,13 @@ import type {
 } from '../src/shared/assistant-tool-contracts.js'
 import type { RuntimeState } from '../src/shared/contracts.js'
 import type { StaffPermissionId } from '../src/shared/contracts.js'
-import { effectivePermissionIdsForEmployee } from '../src/shared/staff-access.js'
+import { effectivePermissionIdsForEmployee, effectiveRoleIdsForEmployee } from '../src/shared/staff-access.js'
 import { requireRequestActor } from './auth-context.js'
 import { requireConfiguredOperation, requireTableDataScope } from './authorization.js'
 import { applyTaskAction, canEmployeeClaimTask, createServiceTask } from './domain.js'
 import { syncKdsFromFulfillmentServiceTaskAction } from './fulfillment-service.js'
 import type { RuntimeRepository } from './repository.js'
+import { scheduleAdHocServiceTask } from './sop-engine.js'
 import { openWalkInTableSession } from './table-session-api.js'
 
 const tableOpenArguments = z.object({
@@ -30,6 +31,14 @@ const taskCreateArguments = z.object({
   note: z.string().trim().max(300).optional(),
 }).strict()
 
+const taskScheduleArguments = z.object({
+  tableCode: z.string().trim().min(1).max(32),
+  serviceTypeId: z.string().trim().min(1).max(64),
+  delayMinutes: z.number().int().min(0).max(24 * 60),
+  assigneeEmployeeId: z.string().trim().min(1).max(128),
+  note: z.string().trim().max(300).optional(),
+}).strict()
+
 const taskActionArguments = z.object({
   taskId: z.string().trim().min(1).max(160),
   note: z.string().trim().max(300).optional(),
@@ -42,6 +51,10 @@ const descriptors: Record<AssistantServerToolId, Omit<AssistantToolDescriptor, '
   },
   'service.task.create': {
     id: 'service.task.create', name: '创建服务任务', description: '为指定桌台创建一条可派发、升级和追踪的服务任务',
+    risk: 'normal', requiredPermission: 'service.execute',
+  },
+  'service.task.schedule': {
+    id: 'service.task.schedule', name: '定时指派服务', description: '按指定时间、桌台、服务内容和员工创建一次性服务安排',
     risk: 'normal', requiredPermission: 'service.execute',
   },
   'service.task.accept': {
@@ -83,6 +96,14 @@ export function availableAssistantTools(state: RuntimeState, actorId: string): A
               serviceTypeId: `必填，${serviceTypeGuide(state)}`,
               note: '选填，现场需求补充说明',
             }
+          : descriptor.id === 'service.task.schedule'
+            ? {
+                tableCode: '必填，已开台的现场桌号',
+                serviceTypeId: `必填，${serviceTypeGuide(state)}`,
+                delayMinutes: '必填，0表示立即派发，最长1440分钟',
+                assigneeEmployeeId: '必填，员工ID或唯一姓名',
+                note: '选填，执行要求',
+              }
           : { taskId: '必填，实时任务列表中的任务ID', note: '选填，处理结果或说明' }
       return { ...descriptor, argumentGuide }
     })
@@ -112,6 +133,19 @@ function resolveServiceTypeId(state: RuntimeState, value: string) {
   return matches[0]!.id
 }
 
+function tableCodeKey(value: string) {
+  const normalized = value.trim().toLocaleUpperCase('zh-CN')
+  const match = normalized.match(/^([A-Z]+)0*(\d+)$/)
+  return match ? `${match[1]}${Number(match[2])}` : normalized
+}
+
+function resolveTable(state: RuntimeState, value: string) {
+  const key = tableCodeKey(value)
+  const matches = state.tables.filter((table) => tableCodeKey(table.code) === key)
+  if (matches.length !== 1) throw new Error(matches.length === 0 ? '桌台不存在' : '桌号匹配到多个桌台')
+  return matches[0]!
+}
+
 function requestHash(call: AssistantToolCall) {
   return createHash('sha256').update(JSON.stringify(call)).digest('hex')
 }
@@ -122,6 +156,7 @@ function previousExecution(state: RuntimeState, executionId: string, call: Assis
   ))
   if (!audit) return null
   if (audit.details.requestHash !== requestHash(call)) throw new Error('同一个AI执行编号不能用于不同操作')
+  const evidence = audit.details.evidence as AssistantToolExecutionResponse['evidence'] | undefined
   return {
     executionId,
     toolId: call.toolId,
@@ -131,6 +166,7 @@ function previousExecution(state: RuntimeState, executionId: string, call: Assis
     objectId: audit.objectId,
     replayed: true,
     stateRevision: state.revision,
+    evidence: evidence ?? { verified: true as const, outcome: 'executed' as const },
   }
 }
 
@@ -171,7 +207,10 @@ function executeTaskAction(
 }
 
 export class AssistantToolBus {
-  constructor(private readonly repository: RuntimeRepository) {}
+  constructor(
+    private readonly repository: RuntimeRepository,
+    private readonly now: () => number = Date.now,
+  ) {}
 
   async execute(
     request: FastifyRequest,
@@ -185,12 +224,16 @@ export class AssistantToolBus {
       const available = new Set(availableAssistantTools(state, actor.actorId).map((tool) => tool.id))
       if (!available.has(call.toolId)) throw new Error('当前岗位没有执行这个AI工具的权限')
       const previousRevision = state.revision
-      let result: { objectType: string; objectId: string; message: string }
+      let result: {
+        objectType: string
+        objectId: string
+        message: string
+        evidence: AssistantToolExecutionResponse['evidence']
+      }
 
       if (call.toolId === 'table.open') {
         const input = tableOpenArguments.parse(call.arguments)
-        const table = state.tables.find((candidate) => candidate.code.toLocaleLowerCase('zh-CN') === input.tableCode.toLocaleLowerCase('zh-CN'))
-        if (!table) throw new Error('桌台不存在')
+        const table = resolveTable(state, input.tableCode)
         requireConfiguredOperation(request, state, 'table.open')
         requireTableDataScope(request, state, table.id, 'table.open')
         const opened = openWalkInTableSession(state, table.id, {
@@ -199,15 +242,21 @@ export class AssistantToolBus {
           customerReference: undefined,
           salesEmployeeId: resolveEmployeeId(state, input.salesEmployeeId, actor.actorId),
           idempotencyKey: `assistant-open:${executionId}`,
-        }, actor.actorId)
+        }, actor.actorId, new Date(this.now()).toISOString())
         result = {
           objectType: 'table', objectId: opened.table.id,
           message: `${opened.table.code}已开台，实际到店${input.partySize}人。`,
+          evidence: {
+            verified: true,
+            outcome: 'executed',
+            tableCode: opened.table.code,
+            tableStatus: opened.table.status,
+            guestCount: opened.table.guestCount,
+          },
         }
       } else if (call.toolId === 'service.task.create') {
         const input = taskCreateArguments.parse(call.arguments)
-        const table = state.tables.find((candidate) => candidate.code.toLocaleLowerCase('zh-CN') === input.tableCode.toLocaleLowerCase('zh-CN'))
-        if (!table) throw new Error('桌台不存在')
+        const table = resolveTable(state, input.tableCode)
         requireConfiguredOperation(request, state, 'service.task.create')
         requireTableDataScope(request, state, table.id, 'service.task.create')
         const task = createServiceTask(state, {
@@ -218,11 +267,76 @@ export class AssistantToolBus {
           idempotencyKey: `assistant-task:${executionId}`,
           requestedBy: actor.actorId,
         })
-        result = { objectType: 'service_task', objectId: task.id, message: `${table.code}服务任务已创建并进入派单。` }
+        result = {
+          objectType: 'service_task', objectId: task.id, message: `${table.code}服务任务已创建并进入派单。`,
+          evidence: {
+            verified: true,
+            outcome: 'executed',
+            tableCode: table.code,
+            taskStatus: task.status,
+            assigneeEmployeeId: task.ownerId ?? undefined,
+            assigneeName: task.ownerId ? state.employees.find((employee) => employee.id === task.ownerId)?.displayName : undefined,
+          },
+        }
+      } else if (call.toolId === 'service.task.schedule') {
+        const input = taskScheduleArguments.parse(call.arguments)
+        const table = resolveTable(state, input.tableCode)
+        const serviceTypeId = resolveServiceTypeId(state, input.serviceTypeId)
+        const serviceType = state.config.serviceTypes.find((candidate) => candidate.id === serviceTypeId)!
+        const assigneeEmployeeId = resolveEmployeeId(state, input.assigneeEmployeeId, actor.actorId)
+        const assignee = state.employees.find((employee) => employee.id === assigneeEmployeeId)!
+        if (assigneeEmployeeId !== actor.actorId && !effectivePermissionIdsForEmployee(state, actor.actorId).includes('shift.manage')) {
+          throw new Error('只有值班管理岗位可以指派其他员工')
+        }
+        if (!effectivePermissionIdsForEmployee(state, assignee.id).includes('service.execute')) {
+          throw new Error(`${assignee.displayName}没有现场服务执行权限`)
+        }
+        if (!effectiveRoleIdsForEmployee(state, assignee.id).some((roleId) => serviceType.dispatchRoleIds.includes(roleId))) {
+          throw new Error(`${assignee.displayName}的岗位不能执行${serviceType.name}`)
+        }
+        requireConfiguredOperation(request, state, 'service.task.action')
+        requireTableDataScope(request, state, table.id, 'service.task.action')
+        const scheduled = scheduleAdHocServiceTask(state, {
+          executionId,
+          actorId: actor.actorId,
+          tableId: table.id,
+          serviceTypeId,
+          assigneeEmployeeId,
+          delaySeconds: input.delayMinutes * 60,
+          note: input.note ?? `AI指派：为${table.code}执行${serviceType.name}`,
+          now: new Date(this.now()),
+        })
+        result = {
+          objectType: 'sop_execution',
+          objectId: scheduled.execution.id,
+          message: input.delayMinutes === 0
+            ? `已安排立即向${assignee.displayName}派发${table.code}${serviceType.name}任务。`
+            : `已安排${input.delayMinutes}分钟后向${assignee.displayName}派发${table.code}${serviceType.name}任务。`,
+          evidence: {
+            verified: true,
+            outcome: 'scheduled',
+            tableCode: table.code,
+            scheduledAt: scheduled.scheduledAt,
+            assigneeEmployeeId: assignee.id,
+            assigneeName: assignee.displayName,
+          },
+        }
       } else {
         const action = call.toolId === 'service.task.accept' ? 'accept'
           : call.toolId === 'service.task.arrive' ? 'arrive' : 'complete'
-        result = executeTaskAction(request, state, call, executionId, action)
+        const taskResult = executeTaskAction(request, state, call, executionId, action)
+        const task = state.tasks.find((candidate) => candidate.id === taskResult.objectId)!
+        result = {
+          ...taskResult,
+          evidence: {
+            verified: true,
+            outcome: 'executed',
+            tableCode: state.tables.find((table) => table.id === task.tableId)?.code,
+            taskStatus: task.status,
+            assigneeEmployeeId: task.ownerId ?? undefined,
+            assigneeName: task.ownerId ? state.employees.find((employee) => employee.id === task.ownerId)?.displayName : undefined,
+          },
+        }
       }
 
       state.auditEntries.push({
@@ -231,12 +345,13 @@ export class AssistantToolBus {
         action: 'assistant.tool.executed.v1',
         objectType: result.objectType,
         objectId: result.objectId,
-        occurredAt: new Date().toISOString(),
+        occurredAt: new Date(this.now()).toISOString(),
         details: {
           executionId,
           toolId: call.toolId,
           requestHash: requestHash(call),
           message: result.message,
+          evidence: result.evidence,
           executionMode: 'server_tool_bus',
         },
       })
@@ -250,6 +365,7 @@ export class AssistantToolBus {
         objectId: result.objectId,
         replayed: false,
         stateRevision: state.revision,
+        evidence: result.evidence,
       }
     })
   }

@@ -115,6 +115,37 @@ export interface DutyManagerRisk {
   handledByName: string | null
 }
 
+export type DutyManagerPerformanceTrend = 'improving' | 'steady' | 'declining' | 'insufficient_data'
+
+export interface DutyManagerEffectiveness {
+  service: {
+    sampleSize: number
+    responseSampleSize: number
+    completedTasks: number
+    completionRate: number | null
+    responseWithinSlaRate: number | null
+    medianFirstResponseSeconds: number | null
+    medianCompletionMinutes: number | null
+    escalationRate: number | null
+    automaticAssignmentRate: number | null
+  }
+  sop: {
+    sampleSize: number
+    completedExecutions: number
+    blockedExecutions: number
+    completionRate: number | null
+  }
+  comparison: {
+    previousBusinessDate: string
+    previousSampleSize: number
+    previousResponseSampleSize: number
+    responseWithinSlaDeltaPoints: number | null
+    medianFirstResponseDeltaSeconds: number | null
+  }
+  trend: DutyManagerPerformanceTrend
+  summary: string
+}
+
 export interface DutyManagerBriefing {
   generatedAt: string
   businessDate: string
@@ -137,6 +168,7 @@ export interface DutyManagerBriefing {
     canAcknowledge: boolean
     canManage: boolean
   }
+  effectiveness: DutyManagerEffectiveness
   risks: DutyManagerRisk[]
 }
 

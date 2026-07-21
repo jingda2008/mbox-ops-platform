@@ -70,6 +70,7 @@ test.describe.serial('跨客户端经营流转', () => {
   })
 
   test('李艳可从巡场预约警报直接进入本营业日预约并完成确认', async ({ page }) => {
+    await page.setViewportSize({ width: 430, height: 932 })
     const customerName = `巡场预约${Date.now().toString().slice(-6)}`
     const actorHeaders = {
       'x-mbox-actor-id': 'emp-chen',
@@ -98,6 +99,11 @@ test.describe.serial('跨客户端经营流转', () => {
     await useStaffIdentity(page, 'emp-chen', '李艳')
     await page.goto('/')
     await page.getByRole('button', { name: 'AI值班经理' }).click()
+    const effectiveness = page.getByRole('region', { name: '今日服务成效' })
+    await expect(effectiveness).toBeVisible()
+    await expect(effectiveness).toContainText('按时响应')
+    await expect(effectiveness).toContainText('SOP闭环')
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
     const resolveRiskButton = page.getByRole('button', { name: `接管并处理：${customerName}的今日预约待确认` })
     await expect(resolveRiskButton).toBeVisible()
     await expect(page.getByText('AI建议').first()).toBeVisible()

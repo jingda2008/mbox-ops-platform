@@ -48,6 +48,39 @@ describe('service task domain', () => {
     expect(second.ownerId).toBe('emp-jie')
   })
 
+  it('uses current workload before table preference and records the assignment basis', () => {
+    const state = createSeedState()
+
+    const first = createServiceTask(state, taskInput({ idempotencyKey: 'load-aware-first' }))
+    const second = createServiceTask(state, taskInput({ idempotencyKey: 'load-aware-second' }))
+
+    expect(first.ownerId).toBe('emp-lin')
+    expect(second.ownerId).toBe('emp-jie')
+    expect(state.taskEvents.find((event) => event.taskId === second.id && event.type === 'task.created.v1')).toMatchObject({
+      payload: {
+        ownerId: 'emp-jie',
+        strategy: 'load_aware',
+        candidateSource: 'backup',
+        loadBefore: 0,
+        capacity: 3,
+      },
+    })
+  })
+
+  it('honors an explicitly targeted eligible employee ahead of automatic balancing', () => {
+    const state = createSeedState()
+    createServiceTask(state, taskInput({ idempotencyKey: 'targeted-load-first' }))
+
+    const task = createServiceTask(state, {
+      ...taskInput({ idempotencyKey: 'targeted-load-second' }),
+      dispatchEmployeeIds: ['emp-lin'],
+    })
+
+    expect(task.ownerId).toBe('emp-lin')
+    expect(state.taskEvents.find((event) => event.taskId === task.id && event.type === 'task.created.v1')?.payload)
+      .toMatchObject({ strategy: 'load_aware', candidateSource: 'targeted', loadBefore: 1 })
+  })
+
   it('dispatches to an employee serving a compatible secondary shift role', () => {
     const state = createSeedState()
     const table = state.tables.find((item) => item.code === 'L01')!

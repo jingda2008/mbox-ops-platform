@@ -97,6 +97,20 @@
 .duty-risk-actions .duty-risk-primary:hover { background: #245c3a; }
 .duty-risk-dismiss-confirm { min-height: 38px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 5px; padding: 5px 7px; border-top: 1px solid #e7b7ba; background: #fff4f4; color: #8a3136; font-size: 8px; }
 .duty-risk-dismiss-confirm button { min-height: 28px; padding: 3px 7px; font-size: 8px; }
+.duty-effectiveness { display: grid; gap: 6px; padding: 8px; border: 1px solid #d6dbd4; border-radius: 5px; background: #f8faf7; }
+.duty-effectiveness > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.duty-effectiveness > header strong { font-size: 10px; }
+.duty-effectiveness > header span { padding: 2px 5px; border: 1px solid #cdd2cc; border-radius: 4px; color: var(--ink-soft); font-size: 8px; font-weight: 800; }
+.duty-effectiveness > header span.is-improving { border-color: #a6c9ae; background: #eef8f0; color: #2f6842; }
+.duty-effectiveness > header span.is-declining { border-color: #e1b0b3; background: #fff2f2; color: #9b3439; }
+.duty-effectiveness > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid #dde1dc; border-radius: 4px; background: #fff; overflow: hidden; }
+.duty-effectiveness > div > span { min-height: 42px; display: grid; align-content: center; gap: 1px; padding: 5px 7px; }
+.duty-effectiveness > div > span:not(:nth-child(3n + 1)) { border-left: 1px solid #e2e5e1; }
+.duty-effectiveness > div > span:nth-child(n + 4) { border-top: 1px solid #e2e5e1; }
+.duty-effectiveness small { color: var(--ink-soft); font-size: 8px; }
+.duty-effectiveness b { color: var(--ink); font-size: 11px; }
+.duty-effectiveness > p { display: flex; align-items: flex-start; gap: 5px; color: #5f532f; font-size: 8px; line-height: 1.45; }
+.duty-effectiveness > p svg { flex: 0 0 auto; margin-top: 1px; color: #9a7618; }
 .duty-handover-strip { min-height: 31px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: center; border-top: 1px solid #d9ded8; color: var(--ink-soft); font-size: 8px; text-align: center; }
 .duty-handover-strip span + span { border-left: 1px solid #d9ded8; }
 .duty-handover-strip b { color: var(--ink); font-size: 9px; }

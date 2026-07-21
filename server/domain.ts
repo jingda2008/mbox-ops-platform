@@ -74,6 +74,60 @@ function canReceiveAutomaticTableDispatch(state: RuntimeState, employee: Employe
   return table.primaryEmployeeId === employee.id || table.backupEmployeeIds.includes(employee.id)
 }
 
+type DispatchSource = 'targeted' | 'primary' | 'backup' | 'role' | 'manager'
+
+interface DispatchDecision {
+  employee: Employee
+  source: DispatchSource
+  loadBefore: number
+  capacity: number
+  utilization: number
+}
+
+function assignmentMetadata(decision: DispatchDecision | null) {
+  return decision ? {
+    strategy: 'load_aware',
+    candidateSource: decision.source,
+    loadBefore: decision.loadBefore,
+    capacity: decision.capacity,
+    utilization: Math.round(decision.utilization * 100) / 100,
+  } : {
+    strategy: 'load_aware',
+    candidateSource: null,
+    loadBefore: null,
+    capacity: null,
+    utilization: null,
+  }
+}
+
+function rankDispatchCandidates(
+  state: RuntimeState,
+  candidates: Array<{ employee: Employee; source: DispatchSource; sourceRank: number }>,
+) {
+  return candidates
+    .map(({ employee, source, sourceRank }) => {
+      const role = roleLimit(state, employee)
+      const loadBefore = employeeLoad(state, employee.id)
+      const capacity = role?.maxConcurrentTasks ?? 0
+      return {
+        employee,
+        source,
+        sourceRank,
+        loadBefore,
+        capacity,
+        utilization: capacity > 0 ? loadBefore / capacity : Number.POSITIVE_INFINITY,
+      }
+    })
+    .filter((candidate) => candidate.capacity > 0 && candidate.loadBefore < candidate.capacity)
+    .toSorted((left, right) => (
+      left.loadBefore - right.loadBefore
+      || left.sourceRank - right.sourceRank
+      || left.utilization - right.utilization
+      || left.employee.displayName.localeCompare(right.employee.displayName, 'zh-CN')
+      || left.employee.id.localeCompare(right.employee.id)
+    ))
+}
+
 function chooseAssignee(
   state: RuntimeState,
   tableId: string,
@@ -85,38 +139,49 @@ function chooseAssignee(
   if (!table) return null
 
   const candidates = [
-    ...preferredEmployeeIds.map((employeeId) => ({ employeeId, source: 'targeted' as const })),
-    { employeeId: table.primaryEmployeeId, source: 'table' as const },
-    ...table.backupEmployeeIds.map((employeeId) => ({ employeeId, source: 'table' as const })),
+    ...preferredEmployeeIds.map((employeeId, index) => ({ employeeId, source: 'targeted' as const, sourceRank: index })),
+    { employeeId: table.primaryEmployeeId, source: 'primary' as const, sourceRank: 0 },
+    ...table.backupEmployeeIds.map((employeeId, index) => ({ employeeId, source: 'backup' as const, sourceRank: index + 1 })),
     ...serviceType.dispatchRoleIds.flatMap((roleId) =>
       state.employees
         .filter((employee) => effectiveRoleIdsForEmployee(state, employee.id).includes(roleId))
-        .map((employee) => ({ employeeId: employee.id, source: 'role' as const })),
+        .map((employee, index) => ({ employeeId: employee.id, source: 'role' as const, sourceRank: index + 20 })),
     ),
   ]
 
   const seen = new Set<string>()
-  for (const { employeeId, source } of candidates) {
+  const eligible: Array<{ employee: Employee; source: DispatchSource; sourceRank: number }> = []
+  for (const { employeeId, source, sourceRank } of candidates) {
     if (seen.has(employeeId) || excludedEmployeeIds.includes(employeeId)) continue
     seen.add(employeeId)
     const employee = state.employees.find((item) => item.id === employeeId)
     if (!employee || employee.status !== 'active' || !employee.online || employee.paused) continue
     if (!effectiveRoleIdsForEmployee(state, employee.id).some((roleId) => serviceType.dispatchRoleIds.includes(roleId))) continue
     if (source === 'role' && !canReceiveAutomaticTableDispatch(state, employee, table.id)) continue
-    const role = roleLimit(state, employee)
-    if (!role?.canReceiveTasks || employeeLoad(state, employee.id) >= role.maxConcurrentTasks) continue
-    return employee
+    eligible.push({ employee, source, sourceRank })
   }
 
-  return (
-    state.employees.find(
+  const targeted = rankDispatchCandidates(state, eligible.filter((candidate) => candidate.source === 'targeted'))[0]
+  if (targeted) return targeted
+
+  const tableTeam = rankDispatchCandidates(state, eligible.filter((candidate) => (
+    candidate.source === 'primary' || candidate.source === 'backup'
+  )))[0]
+  if (tableTeam) return tableTeam
+
+  const roleCoverage = rankDispatchCandidates(state, eligible.filter((candidate) => candidate.source === 'role'))[0]
+  if (roleCoverage) return roleCoverage
+
+  return rankDispatchCandidates(state, state.employees
+    .filter(
       (employee) =>
         effectiveRoleIdsForEmployee(state, employee.id).includes('manager') &&
         employee.status === 'active' &&
         employee.online &&
-        !employee.paused,
-    ) ?? null
-  )
+        !employee.paused &&
+        !excludedEmployeeIds.includes(employee.id),
+    )
+    .map((employee, index) => ({ employee, source: 'manager' as const, sourceRank: index })))[0] ?? null
 }
 
 function employeeHasTableResponsibility(state: RuntimeState, employee: Employee, task: ServiceTask) {
@@ -152,8 +217,9 @@ export function redispatchUnownedTasks(state: RuntimeState, now = new Date()) {
     const serviceType = task.dispatchRoleIdsSnapshot?.length
       ? { ...configuredServiceType, dispatchRoleIds: task.dispatchRoleIdsSnapshot }
       : configuredServiceType
-    const assignee = chooseAssignee(state, task.tableId, serviceType, [], task.targetEmployeeIdsSnapshot ?? [])
-    if (!assignee) continue
+    const assignment = chooseAssignee(state, task.tableId, serviceType, [], task.targetEmployeeIdsSnapshot ?? [])
+    if (!assignment) continue
+    const assignee = assignment.employee
     task.ownerId = assignee.id
     task.updatedAt = now.toISOString()
     task.customerReply = serviceType.customerReply.replace('{employee}', assignee.displayName)
@@ -161,6 +227,7 @@ export function redispatchUnownedTasks(state: RuntimeState, now = new Date()) {
     appendTaskEvent(state, task.id, 'task.assigned.v1', 'system', {
       ownerId: assignee.id,
       reason: 'employee_online',
+      ...assignmentMetadata(assignment),
     })
     changed = true
   }
@@ -196,7 +263,8 @@ export function createServiceTask(state: RuntimeState, input: CreateTaskInput & 
 
   const now = new Date()
   const taskSla = input.slaOverride ?? serviceType.sla
-  const assignee = chooseAssignee(state, table.id, dispatchServiceType, [], input.dispatchEmployeeIds)
+  const assignment = chooseAssignee(state, table.id, dispatchServiceType, [], input.dispatchEmployeeIds)
+  const assignee = assignment?.employee ?? null
   const customerReply = serviceType.customerReply.replace('{employee}', assignee?.displayName ?? '服务团队')
   const task: ServiceTask = {
     id: `task_${randomUUID()}`,
@@ -255,6 +323,7 @@ export function createServiceTask(state: RuntimeState, input: CreateTaskInput & 
     tableId: table.id,
     tableSessionId: tableSession.id,
     configVersion: task.configVersion,
+    ...assignmentMetadata(assignment),
   })
   state.revision += 1
   return task
@@ -368,13 +437,14 @@ export function applyTaskAction(state: RuntimeState, taskId: string, input: Task
       const serviceType = task.dispatchRoleIdsSnapshot?.length
         ? { ...configuredServiceType, dispatchRoleIds: task.dispatchRoleIdsSnapshot }
         : configuredServiceType
-      const nextOwner = chooseAssignee(
+      const nextAssignment = chooseAssignee(
         state,
         task.tableId,
         serviceType,
         previousOwnerId ? [previousOwnerId] : [],
         task.targetEmployeeIdsSnapshot ?? [],
       )
+      const nextOwner = nextAssignment?.employee ?? null
       task.status = 'reopened'
       task.priority = task.priority === 'urgent' ? 'urgent' : 'high'
       task.ownerId = nextOwner?.id ?? previousOwnerId
@@ -394,6 +464,7 @@ export function applyTaskAction(state: RuntimeState, taskId: string, input: Task
         previousOwnerId,
         ownerId: task.ownerId,
         reason: input.note || '客户反馈仍未解决',
+        ...assignmentMetadata(nextAssignment),
       })
       break
     }
@@ -424,18 +495,19 @@ export function escalateDueTasks(state: RuntimeState, now = new Date()) {
     if (!shouldManagerEscalate && !shouldFirstEscalate) continue
 
     const previousOwnerId = task.ownerId
-    let nextOwner: Employee | null = null
+    let nextAssignment: DispatchDecision | null = null
     let level = 1
     if (shouldManagerEscalate) {
       const managerRoleIds = task.managerRoleIdsSnapshot?.length ? task.managerRoleIdsSnapshot : ['manager']
-      nextOwner = state.employees.find(
+      const managerCandidates = state.employees.filter(
         (employee) =>
           effectiveRoleIdsForEmployee(state, employee.id).some((roleId) => managerRoleIds.includes(roleId))
           && employee.status === 'active' && employee.online && !employee.paused,
-      ) ?? null
+      ).map((employee, index) => ({ employee, source: 'manager' as const, sourceRank: index }))
+      nextAssignment = rankDispatchCandidates(state, managerCandidates)[0] ?? null
       level = 2
     } else {
-      nextOwner = chooseAssignee(
+      nextAssignment = chooseAssignee(
         state,
         task.tableId,
         serviceType,
@@ -443,6 +515,7 @@ export function escalateDueTasks(state: RuntimeState, now = new Date()) {
         task.targetEmployeeIdsSnapshot ?? [],
       )
     }
+    const nextOwner = nextAssignment?.employee ?? null
 
     if (nextOwner?.id === previousOwnerId && task.escalationLevel >= level) continue
     task.ownerId = nextOwner?.id ?? previousOwnerId
@@ -457,6 +530,7 @@ export function escalateDueTasks(state: RuntimeState, now = new Date()) {
       previousOwnerId,
       ownerId: task.ownerId,
       reason: shouldManagerEscalate ? 'manager_sla_exceeded' : 'response_sla_exceeded',
+      ...assignmentMetadata(nextAssignment),
     })
     changed = true
   }
@@ -474,13 +548,14 @@ export function releaseTasksForOfflineEmployee(state: RuntimeState, employeeId: 
     const serviceType = task.dispatchRoleIdsSnapshot?.length
       ? { ...configuredServiceType, dispatchRoleIds: task.dispatchRoleIdsSnapshot }
       : configuredServiceType
-    const nextOwner = chooseAssignee(
+    const nextAssignment = chooseAssignee(
       state,
       task.tableId,
       serviceType,
       [employeeId],
       task.targetEmployeeIdsSnapshot ?? [],
     )
+    const nextOwner = nextAssignment?.employee ?? null
     task.status = 'reopened'
     task.ownerId = nextOwner?.id ?? null
     task.priority = task.priority === 'urgent' ? 'urgent' : 'high'
@@ -499,6 +574,7 @@ export function releaseTasksForOfflineEmployee(state: RuntimeState, employeeId: 
       previousOwnerId: employeeId,
       ownerId: task.ownerId,
       reason: 'owner_offline',
+      ...assignmentMetadata(nextAssignment),
     })
     changed = true
   }

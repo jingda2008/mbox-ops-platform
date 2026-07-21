@@ -405,7 +405,7 @@ describe('真实营业夜间全链路仿真', () => {
     expect(state.songState.tableSessions.find((session) => session.id === secondSessionId)?.status).toBe('open')
   })
 
-  it('未点单提醒、客人呼叫、主责满载候补接管、投诉和生日服务都形成可确认闭环', async () => {
+  it('未点单提醒、客人呼叫、主候补按实时负荷分工、投诉和生日服务都形成可确认闭环', async () => {
     const { app, repository } = await buildFixture()
     apps.push(app)
     const guestSession = await app.inject({ method: 'GET', url: '/api/guest/session?table=L01' })
@@ -443,8 +443,8 @@ describe('真实营业夜间全链路仿真', () => {
     let state = await repository.read()
     const reminder = state.tasks.find((task) => task.triggerId === awaiting.json().id)
     expect(reminder).toMatchObject({ serviceTypeId: 'order-help', source: 'system', ownerId: 'emp-lin' })
-    expect(state.tasks.find((task) => task.id === waterTaskId)?.ownerId).toBe('emp-lin')
-    expect(state.tasks.find((task) => task.id === backupTaskId)?.ownerId).toBe('emp-jie')
+    expect(state.tasks.find((task) => task.id === waterTaskId)?.ownerId).toBe('emp-jie')
+    expect(state.tasks.find((task) => task.id === backupTaskId)?.ownerId).toBe('emp-lin')
 
     await completeServiceTask(repository, backupTaskId, '冰块和柠檬已补齐')
     const backupConfirmed = await app.inject({

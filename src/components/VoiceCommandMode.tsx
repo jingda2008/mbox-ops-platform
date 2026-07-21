@@ -1166,6 +1166,26 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
                   </div>}
                 </article>})}
               </div>}
+              <section className="duty-effectiveness" aria-label="今日服务成效">
+                <header>
+                  <strong>今日服务成效</strong>
+                  <span className={`is-${dutyBriefing.effectiveness.trend}`}>{{
+                    improving: '较昨日改善',
+                    steady: '与昨日持平',
+                    declining: '较昨日下降',
+                    insufficient_data: '样本积累中',
+                  }[dutyBriefing.effectiveness.trend]}</span>
+                </header>
+                <div>
+                  <span><small>首响中位</small><b>{dutyBriefing.effectiveness.service.medianFirstResponseSeconds === null ? '--' : `${dutyBriefing.effectiveness.service.medianFirstResponseSeconds}秒`}</b></span>
+                  <span><small>按时响应</small><b>{dutyBriefing.effectiveness.service.responseWithinSlaRate === null ? '--' : `${dutyBriefing.effectiveness.service.responseWithinSlaRate}%`}</b></span>
+                  <span><small>服务闭环</small><b>{dutyBriefing.effectiveness.service.completionRate === null ? '--' : `${dutyBriefing.effectiveness.service.completionRate}%`}</b></span>
+                  <span><small>自动派单</small><b>{dutyBriefing.effectiveness.service.automaticAssignmentRate === null ? '--' : `${dutyBriefing.effectiveness.service.automaticAssignmentRate}%`}</b></span>
+                  <span><small>SOP闭环</small><b>{dutyBriefing.effectiveness.sop.completionRate === null ? '--' : `${dutyBriefing.effectiveness.sop.completionRate}%`}</b></span>
+                  <span><small>升级率</small><b>{dutyBriefing.effectiveness.service.escalationRate === null ? '--' : `${dutyBriefing.effectiveness.service.escalationRate}%`}</b></span>
+                </div>
+                <p><Sparkles size={11} />{dutyBriefing.effectiveness.summary}</p>
+              </section>
               {dutyHandover && <footer className="duty-handover-strip">
                 <span>今日闭环 <b>{dutyHandover.resolved + dutyHandover.dismissed}</b></span>
                 <span>待交班 <b>{dutyHandover.active}</b></span>

@@ -122,7 +122,9 @@ describe('staff presence domain', () => {
         taskId: task.id,
         type: 'task.assigned.v1',
         actorId: 'system',
-        payload: { ownerId: 'emp-lin', reason: 'employee_online' },
+        payload: expect.objectContaining({
+          ownerId: 'emp-lin', reason: 'employee_online', strategy: 'load_aware',
+        }),
       }))
     }
   })

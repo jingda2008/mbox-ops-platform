@@ -422,6 +422,111 @@ function handledByName(state: RuntimeState, incident: DutyManagerIncident | null
   return actorId ? employeeName(state, actorId) : null
 }
 
+function previousBusinessDate(businessDate: string) {
+  return new Date(Date.parse(`${businessDate}T00:00:00.000Z`) - 86_400_000).toISOString().slice(0, 10)
+}
+
+function median(values: number[]) {
+  if (values.length === 0) return null
+  const sorted = values.toSorted((left, right) => left - right)
+  const middle = Math.floor(sorted.length / 2)
+  const value = sorted.length % 2 === 0 ? (sorted[middle - 1]! + sorted[middle]!) / 2 : sorted[middle]!
+  return Math.round(value * 10) / 10
+}
+
+function rate(numerator: number, denominator: number) {
+  return denominator > 0 ? Math.round(numerator / denominator * 1_000) / 10 : null
+}
+
+function servicePerformance(state: RuntimeState, businessDate: string, now: number) {
+  const tasks = state.tasks.filter((task) => configuredBusinessDate(state, task.createdAt) === businessDate)
+  const completed = tasks.filter((task) => Boolean(task.completedAt) || ['completed', 'confirmed'].includes(task.status))
+  const firstResponseSeconds = tasks.flatMap((task) => task.acceptedAt
+    ? [Math.max(0, (Date.parse(task.acceptedAt) - Date.parse(task.createdAt)) / 1_000)]
+    : [])
+  const completionMinutes = completed.flatMap((task) => task.completedAt
+    ? [Math.max(0, (Date.parse(task.completedAt) - Date.parse(task.createdAt)) / 60_000)]
+    : [])
+  const responseSample = tasks.filter((task) => Boolean(task.acceptedAt) || Date.parse(task.warningAt) <= now)
+  const respondedWithinSla = responseSample.filter((task) => {
+    if (!task.acceptedAt) return false
+    const responseSeconds = (Date.parse(task.acceptedAt) - Date.parse(task.createdAt)) / 1_000
+    const warningSeconds = task.slaSnapshot?.warningSeconds
+      ?? Math.max(0, (Date.parse(task.warningAt) - Date.parse(task.createdAt)) / 1_000)
+    return responseSeconds <= warningSeconds
+  }).length
+  const automaticallyAssigned = tasks.filter((task) => state.taskEvents.some((event) => (
+    event.taskId === task.id
+    && event.type === 'task.created.v1'
+    && typeof event.payload.ownerId === 'string'
+  ))).length
+  return {
+    sampleSize: tasks.length,
+    responseSampleSize: responseSample.length,
+    completedTasks: completed.length,
+    completionRate: rate(completed.length, tasks.length),
+    responseWithinSlaRate: rate(respondedWithinSla, responseSample.length),
+    medianFirstResponseSeconds: median(firstResponseSeconds),
+    medianCompletionMinutes: median(completionMinutes),
+    escalationRate: rate(tasks.filter((task) => task.escalationLevel > 0).length, tasks.length),
+    automaticAssignmentRate: rate(automaticallyAssigned, tasks.length),
+  }
+}
+
+export function calculateDutyManagerEffectiveness(
+  state: RuntimeState,
+  now = Date.now(),
+): DutyManagerBriefing['effectiveness'] {
+  const businessDate = configuredBusinessDate(state, now)
+  const previousDate = previousBusinessDate(businessDate)
+  const service = servicePerformance(state, businessDate, now)
+  const previous = servicePerformance(state, previousDate, now)
+  const sopExecutions = (state.sopExecutions ?? []).filter((execution) => (
+    configuredBusinessDate(state, execution.anchorAt) === businessDate
+  ))
+  const completedSop = sopExecutions.filter((execution) => execution.status === 'completed').length
+  const blockedSop = sopExecutions.filter((execution) => execution.status === 'blocked').length
+  const responseDelta = service.responseWithinSlaRate !== null && previous.responseWithinSlaRate !== null
+    ? Math.round((service.responseWithinSlaRate - previous.responseWithinSlaRate) * 10) / 10
+    : null
+  const medianResponseDelta = service.medianFirstResponseSeconds !== null && previous.medianFirstResponseSeconds !== null
+    ? Math.round((service.medianFirstResponseSeconds - previous.medianFirstResponseSeconds) * 10) / 10
+    : null
+  let trend: DutyManagerBriefing['effectiveness']['trend'] = 'insufficient_data'
+  if (service.responseSampleSize >= 3 && previous.responseSampleSize >= 3) {
+    if ((responseDelta ?? 0) >= 5 || (medianResponseDelta ?? 0) <= -15) trend = 'improving'
+    else if ((responseDelta ?? 0) <= -5 || (medianResponseDelta ?? 0) >= 15) trend = 'declining'
+    else trend = 'steady'
+  }
+  const summary = service.responseSampleSize < 3
+    ? `今日已有${service.responseSampleSize}次服务形成首响结果，累计到3次后开始判断服务趋势。`
+    : (service.responseWithinSlaRate ?? 0) < 90
+      ? `按时响应率${service.responseWithinSlaRate ?? 0}%，建议先补足忙桌候补并检查首响SLA。`
+      : (service.escalationRate ?? 0) > 20
+        ? `升级率${service.escalationRate ?? 0}%，建议检查岗位负荷和候补覆盖。`
+        : blockedSop > 0
+          ? `${blockedSop}条SOP执行阻塞，建议先处理阻塞步骤再调整规则。`
+          : '当前响应与闭环节奏稳定，继续保持并观察跨营业日趋势。'
+  return {
+    service,
+    sop: {
+      sampleSize: sopExecutions.length,
+      completedExecutions: completedSop,
+      blockedExecutions: blockedSop,
+      completionRate: rate(completedSop, sopExecutions.length),
+    },
+    comparison: {
+      previousBusinessDate: previousDate,
+      previousSampleSize: previous.sampleSize,
+      previousResponseSampleSize: previous.responseSampleSize,
+      responseWithinSlaDeltaPoints: responseDelta,
+      medianFirstResponseDeltaSeconds: medianResponseDelta,
+    },
+    trend,
+    summary,
+  }
+}
+
 export function buildDutyManagerBriefing(
   state: RuntimeState,
   now = Date.now(),
@@ -490,6 +595,7 @@ export function buildDutyManagerBriefing(
     headline,
     counts,
     actions,
+    effectiveness: calculateDutyManagerEffectiveness(state, now),
     risks: aggregateRisks(decorated).slice(0, 30),
   }
 }

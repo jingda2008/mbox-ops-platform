@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { createServiceTask } from './domain.js'
-import { buildDutyManagerBriefing, buildDutyManagerHandover, reconcileDutyManagerIncidents } from './duty-manager.js'
+import {
+  buildDutyManagerBriefing,
+  buildDutyManagerHandover,
+  calculateDutyManagerEffectiveness,
+  reconcileDutyManagerIncidents,
+} from './duty-manager.js'
 import { createSeedState } from './seed.js'
 
 describe('AI duty manager briefing', () => {
@@ -91,6 +96,74 @@ describe('AI duty manager briefing', () => {
     const briefing = buildDutyManagerBriefing(state, Date.parse('2026-07-20T12:00:00.000Z'))
 
     expect(briefing).toMatchObject({ health: 'stable', risks: [], headline: '当前没有未接管的风险，现场运行平稳。' })
+  })
+
+  it('measures response, closure, automatic assignment and cross-day improvement', () => {
+    const now = Date.parse('2026-07-20T13:00:00.000Z')
+    const state = createSeedState(new Date(now))
+    state.tasks = []
+    state.taskEvents = []
+    state.auditEntries = []
+    state.sopExecutions = []
+
+    for (let index = 0; index < 6; index += 1) {
+      const currentDay = index < 3
+      const day = currentDay ? '20' : '19'
+      const createdAt = `2026-07-${day}T12:0${index % 3}:00.000Z`
+      const responseSeconds = currentDay ? 10 : 45
+      const task = createServiceTask(state, {
+        tableCode: 'L01', serviceTypeId: 'water', source: 'guest', note: '加水',
+        idempotencyKey: `effectiveness-${index}`,
+      })
+      task.createdAt = createdAt
+      task.acceptedAt = new Date(Date.parse(createdAt) + responseSeconds * 1_000).toISOString()
+      task.completedAt = new Date(Date.parse(createdAt) + 90_000).toISOString()
+      task.status = 'confirmed'
+      task.escalationLevel = currentDay ? 0 : 1
+    }
+
+    const effectiveness = calculateDutyManagerEffectiveness(state, now)
+
+    expect(effectiveness.service).toMatchObject({
+      sampleSize: 3,
+      responseSampleSize: 3,
+      completedTasks: 3,
+      completionRate: 100,
+      responseWithinSlaRate: 100,
+      medianFirstResponseSeconds: 10,
+      automaticAssignmentRate: 100,
+      escalationRate: 0,
+    })
+    expect(effectiveness.comparison).toMatchObject({
+      previousBusinessDate: '2026-07-19',
+      previousSampleSize: 3,
+      previousResponseSampleSize: 3,
+      responseWithinSlaDeltaPoints: 100,
+      medianFirstResponseDeltaSeconds: -35,
+    })
+    expect(effectiveness.trend).toBe('improving')
+    expect(buildDutyManagerBriefing(state, now).effectiveness).toEqual(effectiveness)
+  })
+
+  it('does not count a new task as a missed response before its SLA deadline', () => {
+    const now = Date.parse('2026-07-20T13:00:00.000Z')
+    const state = createSeedState(new Date(now))
+    state.tasks = []
+    state.taskEvents = []
+    state.auditEntries = []
+    const task = createServiceTask(state, {
+      tableCode: 'L01', serviceTypeId: 'water', source: 'guest', note: '刚刚提交',
+      idempotencyKey: 'response-window-not-due',
+    })
+    task.createdAt = new Date(now).toISOString()
+    task.warningAt = new Date(now + 30_000).toISOString()
+    task.acceptedAt = null
+
+    expect(calculateDutyManagerEffectiveness(state, now)).toMatchObject({
+      service: { sampleSize: 1, responseSampleSize: 0, responseWithinSlaRate: null },
+      trend: 'insufficient_data',
+      summary: '今日已有0次服务形成首响结果，累计到3次后开始判断服务趋势。',
+    })
   })
 
   it('uses Beijing business time and raises a critical risk when the persisted business day is stale', () => {

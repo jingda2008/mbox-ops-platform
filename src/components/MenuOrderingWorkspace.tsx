@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, Clock3, Minus, Plus, ShoppingCart, Trash2, X } from 'lucide-react'
+import { AlertTriangle, Check, ChevronRight, Clock3, Minus, Plus, ShoppingCart, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ApiError } from '../api'
 import type { OrderSafetyConfig } from '../shared/commercial-ops-contracts'
@@ -16,6 +16,10 @@ export interface MenuInteraction {
   productId?: string
   categoryId?: string
   quantity?: number
+}
+
+function formatMenuAmount(amount: number) {
+  return (amount / 100).toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1')
 }
 
 interface MenuOrderingWorkspaceProps {
@@ -257,7 +261,7 @@ export function MenuOrderingWorkspace({
               <div className="menu-cart-heading"><ShoppingCart size={20} /><strong>已选商品</strong><span>{itemCount} 件</span><button className="icon-button" title="关闭购物车" onClick={() => setCartOpen(false)}><X size={18} /></button></div>
               <div className="menu-cart-lines">{cartLines}</div>
               <footer className="menu-cart-drawer-footer">
-                <div><span>合计</span><strong>¥{(total / 100).toFixed(2)}</strong></div>
+                <div><span>合计</span><strong>¥{formatMenuAmount(total)}</strong></div>
                 <button className="menu-submit-button" disabled={cartProducts.length === 0 || busy} onClick={() => void submit()}>
                   <Check size={18} />{busy ? '正在提交' : submitLabel}
                 </button>
@@ -270,14 +274,17 @@ export function MenuOrderingWorkspace({
               type="button"
               disabled={itemCount === 0}
               aria-expanded={cartOpen}
-              aria-label={`查看购物车，${itemCount}件商品，合计${(total / 100).toFixed(2)}元`}
+              aria-label={`查看购物车，已选${itemCount}件，合计${formatMenuAmount(total)}元`}
               onClick={() => setCartOpen((open) => !open)}
             >
-              <span><ShoppingCart size={20} /><b>{itemCount}</b><small>件</small><em>购物车</em></span>
-              <strong>¥{(total / 100).toFixed(2)}</strong>
+              <span className="menu-cart-summary-icon"><ShoppingCart size={20} /><b>{itemCount}</b></span>
+              <span className="menu-cart-summary-copy">
+                <strong>{itemCount > 0 ? `已选 ${itemCount} 件` : '还未选择商品'}</strong>
+                <small>{itemCount > 0 ? `查看明细 · 合计 ¥${formatMenuAmount(total)}` : '点击商品加入订单'}</small>
+              </span>
             </button>
-            <button className="menu-submit-button" disabled={cartProducts.length === 0 || busy} onClick={() => void submit()}>
-              <Check size={19} />{busy ? '正在提交' : submitLabel}
+            <button className="menu-submit-button" disabled={cartProducts.length === 0 || busy} onClick={() => setCartOpen(true)}>
+              核对订单<ChevronRight size={18} />
             </button>
           </aside>
         </> : (

@@ -4,6 +4,7 @@ import {
   hydrateRuntimeStateFromOperationalTables,
   OperationalReadRevisionError,
   PostgresOperationalReadStore,
+  resolveOperationalRuntimeState,
   type OperationalReadSnapshot,
 } from './operational-read-store.js'
 import type { PostgresPool, PostgresPoolClient, PostgresQueryResult } from './postgres-repository.js'
@@ -119,5 +120,51 @@ describe('normalized operational read store', () => {
     expect(hydrated.tasks).toEqual(snapshot.serviceTasks)
     expect(hydrated.config).toEqual(aggregate.config)
     expect(aggregate.tables.find((table) => table.id === 'table-l01')?.guestCount).not.toBe(9)
+  })
+
+  it('recovers when a concurrent heartbeat advances the operational revision', async () => {
+    const initial = createSeedState(new Date('2026-07-21T12:00:00.000Z'))
+    const fresh = structuredClone(initial)
+    fresh.revision += 1
+    const readSnapshot = async (revision: number) => {
+      if (revision === initial.revision) {
+        throw new OperationalReadRevisionError(initial.revision, fresh.revision)
+      }
+      return snapshotForState(fresh)
+    }
+
+    const result = await resolveOperationalRuntimeState({
+      initialState: initial,
+      readFresh: async () => structuredClone(fresh),
+      readSnapshot,
+    })
+
+    expect(result.source).toBe('normalized_tables')
+    expect(result.state.revision).toBe(fresh.revision)
+    expect(result.revisionMismatches).toBe(1)
+  })
+
+  it('serves the freshest aggregate instead of returning 503 during sustained revision churn', async () => {
+    const initial = createSeedState(new Date('2026-07-21T12:00:00.000Z'))
+    let latest = structuredClone(initial)
+    let snapshotCalls = 0
+
+    const result = await resolveOperationalRuntimeState({
+      initialState: initial,
+      readFresh: async () => {
+        latest = { ...structuredClone(latest), revision: latest.revision + 1 }
+        return latest
+      },
+      readSnapshot: async (revision) => {
+        snapshotCalls += 1
+        throw new OperationalReadRevisionError(revision, revision + 1)
+      },
+      maxAttempts: 3,
+    })
+
+    expect(snapshotCalls).toBe(3)
+    expect(result.source).toBe('aggregate_compatibility')
+    expect(result.state.revision).toBe(initial.revision + 3)
+    expect(result.revisionMismatches).toBe(3)
   })
 })

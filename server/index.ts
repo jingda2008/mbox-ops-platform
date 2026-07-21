@@ -494,6 +494,9 @@ app.get('/api/bootstrap', async (request, reply) => {
     ...view.projected,
     serverNow: new Date().toISOString(),
     metrics: view.metrics,
+    runtimeCapabilities: {
+      voiceTranscription: runtimeConfig.voiceTranscriptionProvider,
+    },
     viewer: { actorId: actor.actorId, permissionIds: view.permissionIds },
   }
 })

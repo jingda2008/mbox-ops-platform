@@ -74,6 +74,7 @@ import type {
   TableSessionSummary,
   TaskActionInput,
 } from '../shared/contracts'
+import { assistantHumanWorkflowIds, type AssistantCapabilityId } from '../shared/assistant-tool-contracts'
 import { effectiveDataScopeForEmployee, effectiveRoleIdsForEmployee } from '../shared/staff-access'
 import { formatChinaDateTime, formatChinaTime } from '../shared/china-time'
 import { TaskQueue } from './TaskQueue'
@@ -154,6 +155,28 @@ const viewTitles: Record<View, string> = {
 }
 
 const weekdayLabels = ['日', '一', '二', '三', '四', '五', '六']
+
+const assistantCapabilityNames: Record<AssistantCapabilityId, string> = {
+  'table.open': '开台',
+  'service.task.create': '创建服务任务',
+  'service.task.schedule': '定时指派服务',
+  'service.task.accept': '接单',
+  'service.task.arrive': '确认到桌',
+  'service.task.complete': '完成服务',
+  'payment.refund.request': '人工申请退款',
+  'payment.refund.approve': '人工审批并执行退款',
+  'payment.pos.report': '人工报送POS收款',
+  'payment.cash.confirm': '人工确认现金实收',
+  'business_day.close': '人工营业日关账',
+  'config.publish': '人工发布配置',
+  'inventory.approve': '人工审批库存差异',
+  'benefit.approve': '人工审批超额权益',
+  'commerce.authorization.approve': '人工审批折扣赠送',
+  'table.close': '人工结台',
+  'table.transfer': '人工转桌',
+}
+
+const assistantHumanWorkflowIdSet = new Set<AssistantCapabilityId>(assistantHumanWorkflowIds)
 
 function cloneConfig(config: StoreConfig) {
   return structuredClone(config)
@@ -692,6 +715,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
       proactiveOrderCare: { ...draft.proactiveOrderCare },
       guestServiceLimits: { ...draft.guestServiceLimits },
       communityBrand: structuredClone(draft.communityBrand),
+      assistantCapabilities: structuredClone(draft.assistantCapabilities ?? []),
       sopRules: structuredClone(draft.sopRules ?? []),
     }
   }
@@ -1111,6 +1135,28 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
                   ))}
                 </div>
                 {data.draftConfig && <p className="config-history-warning">存在未发布草稿，发布后才能回滚。</p>}
+              </div>
+
+              <div className="config-section assistant-capability-center">
+                <div className="config-section-title"><Cpu size={19} /><div><strong>AI可执行能力中心</strong><span>自然语言别名可配置；人工风控能力不能改成AI自动执行</span></div></div>
+                <div className="config-table-wrap">
+                  <table className="config-table">
+                    <thead><tr><th>能力</th><th>启用</th><th>执行方式</th><th>自然语言别名</th></tr></thead>
+                    <tbody>
+                      {(draft.assistantCapabilities ?? []).map((capability, index) => {
+                        const isHumanWorkflow = assistantHumanWorkflowIdSet.has(capability.id)
+                        return (
+                          <tr key={capability.id}>
+                            <td><strong>{assistantCapabilityNames[capability.id]}</strong><small>{capability.id}</small></td>
+                            <td><label className="switch"><input type="checkbox" checked={capability.enabled} onChange={(event) => { const next = cloneConfig(draft); next.assistantCapabilities![index]!.enabled = event.target.checked; setDraft(next); setConfigDirty(true) }} /><span /></label></td>
+                            <td><b className={isHumanWorkflow ? 'assistant-mode-human' : 'assistant-mode-server'}>{isHumanWorkflow ? '人工操作·全程审计' : '确认后服务端执行'}</b></td>
+                            <td><input aria-label={`${assistantCapabilityNames[capability.id]}自然语言别名`} value={capability.aliases.join('、')} onChange={(event) => { const next = cloneConfig(draft); next.assistantCapabilities![index]!.aliases = event.target.value.split(/[、,，]/u).map((item) => item.trim()).filter(Boolean).slice(0, 20); setDraft(next); setConfigDirty(true) }} /></td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
 
               <SopRulesEditor

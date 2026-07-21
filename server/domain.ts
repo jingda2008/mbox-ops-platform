@@ -642,6 +642,7 @@ export function saveConfigDraft(state: RuntimeState, input: ConfigDraftInput, ac
   draft.proactiveOrderCare = { ...input.proactiveOrderCare }
   draft.guestServiceLimits = { ...input.guestServiceLimits }
   draft.communityBrand = structuredClone(input.communityBrand ?? draft.communityBrand)
+  draft.assistantCapabilities = structuredClone(input.assistantCapabilities ?? draft.assistantCapabilities ?? [])
   draft.sopRules = structuredClone(input.sopRules ?? draft.sopRules ?? [])
   const sopRuleIds = new Set(draft.sopRules.map((rule) => rule.id))
   const serviceTypeIds = new Set(draft.serviceTypes.filter((serviceType) => serviceType.enabled).map((serviceType) => serviceType.id))

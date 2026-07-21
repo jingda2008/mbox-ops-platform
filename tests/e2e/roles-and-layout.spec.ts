@@ -97,6 +97,33 @@ test.describe('视觉与移动端适配', () => {
     await expectNoHorizontalOverflow(page)
   })
 
+  test('AI能力中心清楚区分服务端执行与人工审计且移动端不溢出', async ({ page }) => {
+    await page.setViewportSize({ width: 430, height: 932 })
+    await useStaffIdentity(page, 'emp-owner', '陈方宇')
+    await page.goto('/')
+
+    await page.getByTitle('打开导航').click()
+    await page.locator('.sidebar nav').getByRole('button', { name: '配置' }).click()
+    await expect(page.getByRole('heading', { name: '服务与调度' })).toBeVisible()
+    await expect(page.getByText('AI可执行能力中心')).toBeVisible()
+    await expect(page.getByText('人工操作·全程审计').first()).toBeVisible()
+    await expect(page.getByText('确认后服务端执行').first()).toBeVisible()
+    await expect(page.getByLabel('人工申请退款自然语言别名')).toBeVisible()
+    await expectNoHorizontalOverflow(page)
+  })
+
+  test('移动端语音模式加载门店动态热词且保持单屏宽度', async ({ page }) => {
+    await page.setViewportSize({ width: 430, height: 932 })
+    await useStaffIdentity(page, 'emp-lin', 'Tom')
+    await page.goto('/')
+
+    await page.getByRole('button', { name: 'AI值班经理' }).click()
+    await expect(page.getByRole('heading', { name: '还想处理别的事？' })).toBeVisible()
+    await page.getByText('语音偏好与识别状态').click()
+    await expect(page.getByText(/个控件 · \d+ 个热词/)).toBeVisible()
+    await expectNoHorizontalOverflow(page)
+  })
+
   test('情绪选择不等待网络即可立即高亮，送达失败前不误报完成', async ({ page }) => {
     await page.setViewportSize({ width: 430, height: 932 })
     let releaseRequest = () => undefined

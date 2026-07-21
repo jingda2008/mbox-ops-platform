@@ -3,6 +3,7 @@ import type { BootstrapResponse, StoreConfig } from '../shared/contracts'
 import type { VoicePageControl } from './voice-page-controls'
 
 export type VoiceCommandCategory =
+  | 'command'
   | 'employee'
   | 'role'
   | 'table'
@@ -60,6 +61,7 @@ interface ReplacementMatch extends Replacement {
 }
 
 const categoryOrder: readonly VoiceCommandCategory[] = [
+  'command',
   'control',
   'option',
   'table',
@@ -74,6 +76,7 @@ const categoryOrder: readonly VoiceCommandCategory[] = [
 ]
 
 const categoryBoost: Record<VoiceCommandCategory, number> = {
+  command: 10,
   control: 10,
   option: 9,
   table: 9,
@@ -142,6 +145,19 @@ const radioDigits: Record<string, string> = {
   '7': '拐',
   '9': '勾',
 }
+
+const operationalVoicePhrases = [
+  '开台', '翻台', '转桌', '换桌', '并台', '加桌', '结台', '关台',
+  '点单', '加单', '退单', '取消订单', '确认下单', '确认支付',
+  '接单', '开始制作', '完成制作', '取货', '送达', '取消出品',
+  '加水', '送水', '加冰', '冰块', '柠檬', '杯具', '清洁桌面', '呼叫服务', '处理投诉',
+  '新建预约', '修改预约', '取消预约', '预约到店', '临时到店', '排台', '候补',
+  '点歌', '预约点歌', '确认点歌', '歌手排班', '开始演出', '结束演出',
+  '入库', '出库', '盘点', '损耗', '赠送', '折扣', '团购核销',
+  '收款', '现金收款', '付款码收款', '退款申请', '退款审批',
+  '指派任务', '转派任务', '提醒', '候补支援', '店长接管',
+  '五分钟后', '十分钟后', '十五分钟后', '二十分钟后', '半小时后', '一小时后',
+] as const
 
 function cleanPhrase(value: string | null | undefined) {
   const phrase = String(value ?? '').normalize('NFKC').replace(/\s+/g, ' ').trim()
@@ -254,7 +270,8 @@ function tableAliases(codeValue: string, displayName: string) {
     `${letterReading}${cardinalReading}`,
   ])
   for (const base of bases) {
-    aliases.push(base, `${base}桌`, `${base}号桌`, `${base}桌台`)
+    if (!/^[\u3400-\u9fff]+$/u.test(base)) aliases.push(base)
+    aliases.push(`${base}桌`, `${base}号桌`, `${base}桌台`)
   }
   return uniquePhrases(aliases, displayName)
 }
@@ -295,6 +312,8 @@ export function buildVoiceCommandDictionary(
     })
   }
 
+  for (const phrase of operationalVoicePhrases) add('command', phrase)
+
   for (const employee of data.employees) {
     add('employee', employee.displayName, englishReadingAliases(employee.displayName))
   }
@@ -304,9 +323,12 @@ export function buildVoiceCommandDictionary(
     add('table', canonical, [table.displayName, ...tableAliases(table.code, table.displayName)])
   }
   for (const product of data.products) {
+    if (product.categoryName) add('product', product.categoryName)
     add('product', product.name, [
       product.sku,
       product.specification ? `${product.name}${product.specification}` : '',
+      product.categoryName ? `${product.categoryName}${product.name}` : '',
+      ...(product.tags ?? []).map((tag) => `${product.name}${tag}`),
     ])
   }
   for (const singer of data.songState.singers) {
@@ -322,6 +344,10 @@ export function buildVoiceCommandDictionary(
     for (const role of config.roles) add('role', role.name)
     for (const serviceType of config.serviceTypes) add('service', serviceType.name, [serviceType.code])
     for (const workstation of config.workstations) add('workstation', workstation.name)
+    for (const capability of config.assistantCapabilities ?? []) {
+      if (!capability.enabled) continue
+      for (const alias of capability.aliases) add('command', alias)
+    }
   }
   for (const control of controls) {
     const canonical = cleanPhrase(control.displayName) || cleanPhrase(control.label)
@@ -366,9 +392,10 @@ function directReplacements(dictionary: readonly VoiceCommandDictionaryEntry[]) 
     for (const alias of entry.aliases) add(alias, entry, 3)
     for (const phrase of [entry.canonical, ...entry.aliases]) {
       const fullPinyin = phrasePinyin(phrase)
-      if (fullPinyin.length >= 2) add(fullPinyin, entry, 2)
+      if (entry.category !== 'command' && fullPinyin.length >= 2) add(fullPinyin, entry, 2)
       const initials = phraseInitials(phrase)
-      if (initials.length >= 2) add(initials, entry, 1)
+      if (['employee', 'table', 'singer', 'song', 'product', 'workstation', 'role', 'area'].includes(entry.category)
+        && initials.length >= 2) add(initials, entry, 1)
     }
   }
   return [...replacements.values()].sort((left, right) => (
@@ -517,10 +544,18 @@ function dictionarySupportScore(
   dictionary: readonly VoiceCommandDictionaryEntry[],
 ) {
   const normalized = comparable(transcript)
+  const normalizedCanonicalized = comparable(canonicalized)
   const transcriptPinyin = comparable(phrasePinyin(transcript))
   const asciiParts = new Set(transcript.toLocaleLowerCase('zh-CN').match(/[a-z][a-z0-9]*/g) ?? [])
   let best = comparable(transcript) === comparable(canonicalized) ? 0 : 22
+  const matchedBusinessEntities = new Set<string>()
   for (const entry of dictionary) {
+    const canonicalKey = comparable(entry.canonical)
+    if (['table', 'employee', 'product', 'service', 'singer', 'song', 'workstation'].includes(entry.category)
+      && canonicalKey.length >= 2
+      && normalizedCanonicalized.includes(canonicalKey)) {
+      matchedBusinessEntities.add(`${entry.category}:${canonicalKey}`)
+    }
     const forms = uniquePhrases([entry.canonical, ...entry.aliases])
     for (const form of forms) {
       const normalizedForm = comparable(form)
@@ -537,7 +572,7 @@ function dictionarySupportScore(
       if (initials.length >= 2 && asciiParts.has(initials)) best = Math.max(best, 28 + entry.boost * 1.5)
     }
   }
-  return best
+  return best + Math.min(48, matchedBusinessEntities.size * 12)
 }
 
 function normalizedConfidence(confidence: number | undefined) {
@@ -549,6 +584,15 @@ export function chooseBestVoiceTranscriptSelection(
   transcripts: readonly VoiceTranscript[] | ArrayLike<VoiceTranscript>,
   dictionary: readonly VoiceCommandDictionaryEntry[],
 ): VoiceTranscriptSelection | null {
+  return rankVoiceTranscriptSelections(transcripts, dictionary, 1)[0] ?? null
+}
+
+export function rankVoiceTranscriptSelections(
+  transcripts: readonly VoiceTranscript[] | ArrayLike<VoiceTranscript>,
+  dictionary: readonly VoiceCommandDictionaryEntry[],
+  maximum = 5,
+): VoiceTranscriptSelection[] {
+  if (maximum <= 0) return []
   const candidates = Array.from(transcripts).flatMap((candidate, index) => {
     const transcript = cleanPhrase(typeof candidate === 'string' ? candidate : candidate.transcript)
     if (!transcript) return []
@@ -572,16 +616,20 @@ export function chooseBestVoiceTranscriptSelection(
     || right.confidence - left.confidence
     || left.index - right.index
   ))
-  const best = candidates[0]
-  if (!best) return null
-  return {
-    transcript: best.transcript,
-    canonicalized: best.canonicalized,
-    confidence: best.confidence,
-    dictionarySupport: best.dictionarySupport,
-    score: best.score,
-    safeToPlan: best.safeToPlan,
-  }
+  const seen = new Set<string>()
+  return candidates.flatMap((candidate) => {
+    const key = comparable(candidate.canonicalized)
+    if (!key || seen.has(key)) return []
+    seen.add(key)
+    return [{
+      transcript: candidate.transcript,
+      canonicalized: candidate.canonicalized,
+      confidence: candidate.confidence,
+      dictionarySupport: candidate.dictionarySupport,
+      score: candidate.score,
+      safeToPlan: candidate.safeToPlan,
+    }]
+  }).slice(0, maximum)
 }
 
 export function chooseBestVoiceTranscript(
@@ -594,18 +642,54 @@ export function chooseBestVoiceTranscript(
 export function dictionaryBiasPhrases(
   dictionary: readonly VoiceCommandDictionaryEntry[],
   maximum = 256,
+  maximumEncodedBytes = 100_000,
 ) {
-  if (maximum <= 0) return []
+  if (maximum <= 0 || maximumEncodedBytes < 2) return []
   const phrases: string[] = []
   const seen = new Set<string>()
-  const entries = [...dictionary].sort((left, right) => right.boost - left.boost)
+  const encoder = new TextEncoder()
+  let encodedBytes = 2
+  const recognitionPriority: Record<VoiceCommandCategory, number> = {
+    table: 100,
+    employee: 95,
+    command: 92,
+    service: 90,
+    product: 85,
+    singer: 80,
+    song: 78,
+    workstation: 75,
+    area: 72,
+    role: 70,
+    option: 60,
+    control: 50,
+  }
+  const entries = [...dictionary].sort((left, right) => (
+    recognitionPriority[right.category] - recognitionPriority[left.category]
+    || right.boost - left.boost
+  ))
   for (const entry of entries) {
-    for (const phrase of [entry.canonical, ...entry.aliases, entry.pinyin, entry.initials]) {
+    const fullySpokenAlias = entry.aliases.find((phrase) => (
+      /^[\u3400-\u9fff]+$/u.test(phrase)
+      && (entry.category !== 'table' || /桌/u.test(phrase))
+    ))
+    const radioTableAlias = entry.category === 'table'
+      ? entry.aliases.find((phrase) => /^[\u3400-\u9fff]+$/u.test(phrase) && /[洞幺拐勾]/u.test(phrase) && /桌/u.test(phrase))
+      : undefined
+    const entryPhrases = uniquePhrases([
+      entry.canonical,
+      fullySpokenAlias ?? '',
+      radioTableAlias ?? '',
+      ...entry.aliases,
+    ]).slice(0, 6)
+    for (const phrase of entryPhrases) {
       const clean = cleanPhrase(phrase)
       const key = comparable(clean)
       if (!clean || !key || seen.has(key)) continue
+      const phraseBytes = encoder.encode(JSON.stringify(clean)).byteLength + (phrases.length > 0 ? 1 : 0)
+      if (encodedBytes + phraseBytes > maximumEncodedBytes) continue
       seen.add(key)
       phrases.push(clean)
+      encodedBytes += phraseBytes
       if (phrases.length >= maximum) return phrases
     }
   }

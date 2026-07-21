@@ -3,13 +3,33 @@ import type { AssistantToolDescriptor } from '../src/shared/assistant-tool-contr
 import { AssistantPlannerError, GeminiAssistantPlanner, type AssistantPlanningRequest } from './assistant-planner.js'
 
 function tool(id: AssistantToolDescriptor['id']): AssistantToolDescriptor {
+  const humanWorkflow = [
+    'payment.refund.request',
+    'payment.refund.approve',
+    'benefit.approve',
+    'commerce.authorization.approve',
+  ].includes(id)
+  const domain = id.startsWith('payment.') ? 'payment'
+    : id.startsWith('benefit.') ? 'benefit'
+      : id.startsWith('commerce.') ? 'commerce'
+        : id === 'table.open' ? 'table' : 'service'
+  const navigationId = domain === 'benefit' ? 'benefits'
+    : domain === 'commerce' ? 'commerce' : 'payments'
   return {
     id,
     name: id,
     description: id,
-    risk: 'normal',
-    requiredPermission: id === 'table.open' ? 'table.open' : 'service.execute',
+    domain,
+    executionMode: humanWorkflow ? 'human_workflow' : 'server_execute',
+    risk: humanWorkflow ? 'high' : 'normal',
+    requiredPermission: humanWorkflow ? id
+      : id === 'table.open' ? 'table.open' : 'service.execute',
     argumentGuide: {},
+    aliases: humanWorkflow ? ['申请退款', '审批退款'] : [],
+    humanWorkflow: humanWorkflow ? {
+      navigationId, instruction: '人工处理', resultGuard: 'AI不得代替人工审批',
+      requiredAuditEvents: ['refund.requested.v1'], separationOfDuties: true,
+    } : undefined,
   }
 }
 
@@ -197,6 +217,70 @@ describe('Gemini assistant planner', () => {
     })
     expect(requestHeaders?.get('x-goog-api-key')).toBe('secret-gemini-key')
     expect(JSON.stringify(requestBody)).not.toContain('secret-gemini-key')
+  })
+
+  it('rewrites a model-suggested refund click into navigation-only human handling', async () => {
+    const planner = new GeminiAssistantPlanner({
+      apiKey: 'secret-gemini-key', model: 'gemini-3.5-flash', timeoutMs: 5_000,
+      fetchImpl: async () => new Response(JSON.stringify({
+        steps: [{ type: 'model_output', content: [{ type: 'text', text: JSON.stringify({
+          kind: 'plan', reply: '准备执行退款。',
+          steps: [{ label: '批准退款', command: '点击批准并完成退款' }], choices: [],
+        }) }] }],
+      }), { status: 200 }),
+    })
+    const input = planningInput('把这杯酒退了')
+    input.context.tools.push(tool('payment.refund.request'), tool('payment.refund.approve'))
+
+    const result = await planner.plan(input)
+
+    expect(result.output).toMatchObject({
+      kind: 'plan',
+      reply: expect.stringContaining('必须由人工核对并操作'),
+      steps: [{ command: '打开收银/支付' }],
+    })
+    expect(result.output.steps[0]).not.toHaveProperty('toolCall')
+  })
+
+  it('routes discount approval to commerce authorization instead of member benefits', async () => {
+    let modelCalled = false
+    const planner = new GeminiAssistantPlanner({
+      apiKey: 'test-key', model: 'gemini-3.5-flash', timeoutMs: 2_000,
+      fetchImpl: async () => {
+        modelCalled = true
+        throw new Error('model must not be called')
+      },
+    })
+    const input = planningInput('审批L01这桌的八折折扣')
+    input.context.actor.permissions.push('benefit.approve', 'commerce.authorization.approve')
+    input.context.tools.push(tool('benefit.approve'), tool('commerce.authorization.approve'))
+
+    const result = await planner.plan(input)
+
+    expect(modelCalled).toBe(false)
+    expect(result.output).toMatchObject({
+      kind: 'plan',
+      steps: [{ command: '打开订单/KDS' }],
+    })
+  })
+
+  it('clarifies whether an ambiguous cancellation is unpaid cancellation or paid refund', async () => {
+    let modelCalled = false
+    const planner = new GeminiAssistantPlanner({
+      apiKey: 'test-key', model: 'gemini-3.5-flash', timeoutMs: 2_000,
+      fetchImpl: async () => {
+        modelCalled = true
+        throw new Error('model must not be called')
+      },
+    })
+
+    const result = await planner.plan(planningInput('L01这单退单'))
+
+    expect(modelCalled).toBe(false)
+    expect(result.output).toMatchObject({
+      kind: 'clarification',
+      choices: ['取消未付款订单', '申请已付款退款'],
+    })
   })
 
   it('fails closed when the model returns schema-valid JSON with an unsafe shape', async () => {

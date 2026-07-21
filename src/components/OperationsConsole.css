@@ -226,6 +226,98 @@
   .turnover-review-dialog > footer button { width: 100%; }
 }
 
+.assistant-capability-center .config-table td:first-child {
+  min-width: 180px;
+}
+
+.assistant-capability-center .config-table td:first-child small {
+  display: block;
+  margin-top: 3px;
+  color: var(--ink-soft);
+  font-size: 10px;
+}
+
+.assistant-capability-center .config-table input:not([type='checkbox']) {
+  width: min(520px, 100%);
+}
+
+.assistant-mode-human,
+.assistant-mode-server {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.assistant-mode-human {
+  border-color: #d9a5a5;
+  background: #fff4f4;
+  color: #9e3138;
+}
+
+.assistant-mode-server {
+  border-color: #a8c5b5;
+  background: #f0f8f3;
+  color: #25603f;
+}
+
+@media (max-width: 620px) {
+  .assistant-capability-center .config-table-wrap {
+    overflow: visible;
+    border: 0;
+  }
+
+  .assistant-capability-center .config-table {
+    display: block;
+    min-width: 0;
+  }
+
+  .assistant-capability-center .config-table thead {
+    display: none;
+  }
+
+  .assistant-capability-center .config-table tbody {
+    display: grid;
+    gap: 8px;
+  }
+
+  .assistant-capability-center .config-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 10px;
+    padding: 11px;
+    border: 1px solid var(--line);
+    background: #fff;
+  }
+
+  .assistant-capability-center .config-table td {
+    display: block;
+    height: auto;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .assistant-capability-center .config-table td:nth-child(2) {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+  }
+
+  .assistant-capability-center .config-table td:nth-child(3),
+  .assistant-capability-center .config-table td:nth-child(4) {
+    grid-column: 1 / -1;
+  }
+
+  .assistant-capability-center .config-table input:not([type='checkbox']) {
+    width: 100%;
+  }
+}
+
 .sop-verification-inbox { margin: 10px 16px; border: 1px solid var(--line-strong); border-left: 4px solid #b78b22; background: #fff; }
 .sop-verification-inbox > header { min-height: 50px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: #fffaf0; }
 .sop-verification-inbox > header > div { display: grid; gap: 2px; }

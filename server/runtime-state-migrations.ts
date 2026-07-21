@@ -235,6 +235,7 @@ function configWithOperationalDefaults(
     proactiveOrderCare: config.proactiveOrderCare ?? structuredClone(defaults.proactiveOrderCare),
     guestServiceLimits: config.guestServiceLimits ?? structuredClone(defaults.guestServiceLimits),
     communityBrand,
+    assistantCapabilities: structuredClone(config.assistantCapabilities ?? defaults.assistantCapabilities ?? []),
     sopRules: structuredClone(config.sopRules ?? defaults.sopRules ?? []),
   }
   return migrateWorkstationDeliveryServices(enriched)

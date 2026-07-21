@@ -7,6 +7,7 @@ import {
   chooseBestVoiceTranscript,
   chooseBestVoiceTranscriptSelection,
   dictionaryBiasPhrases,
+  rankVoiceTranscriptSelections,
   type VoiceCommandDictionaryEntry,
 } from './voice-command-dictionary'
 
@@ -24,6 +25,8 @@ function bootstrapFixture() {
     ],
     tables: [
       { id: 'table-private-id', code: 'A-01', displayName: 'A01桌' },
+      { id: 'table-k2', code: 'K2', displayName: '互动02' },
+      { id: 'table-l01', code: 'L01', displayName: '休闲01' },
     ],
     products: [
       {
@@ -31,6 +34,8 @@ function bootstrapFixture() {
         sku: 'DRINK-001',
         name: '青柠苏打',
         specification: '330毫升',
+        categoryName: '酒水',
+        tags: ['无酒精'],
         description: '供应商底价属于敏感备注',
       },
     ],
@@ -54,6 +59,9 @@ function bootstrapFixture() {
       ],
       workstations: [
         { id: 'station-private-id', name: '水吧工作站' },
+      ],
+      assistantCapabilities: [
+        { id: 'table.open', enabled: true, aliases: ['安排客人入座'] },
       ],
     },
     draftConfig: {
@@ -134,6 +142,7 @@ describe('buildVoiceCommandDictionary', () => {
     const entries = dictionary()
 
     expect(new Set(entries.map((entry) => entry.category))).toEqual(new Set([
+      'command',
       'employee',
       'role',
       'table',
@@ -155,11 +164,16 @@ describe('buildVoiceCommandDictionary', () => {
     expect(findEntry(entries, 'product', '青柠苏打').aliases).toEqual(expect.arrayContaining([
       'DRINK-001',
       '青柠苏打330毫升',
+      '酒水青柠苏打',
+      '青柠苏打无酒精',
     ]))
+    expect(findEntry(entries, 'product', '酒水')).toBeDefined()
     expect(findEntry(entries, 'service', '送水').aliases).toContain('water')
     expect(findEntry(entries, 'workstation', '水吧工作站')).toBeDefined()
     expect(findEntry(entries, 'control', '服务任务 · 选择负责人').aliases).toContain('选择负责人')
     expect(findEntry(entries, 'option', '张三').aliases).toContain('选择负责人张三')
+    expect(findEntry(entries, 'command', '开台')).toBeDefined()
+    expect(findEntry(entries, 'command', '安排客人入座')).toBeDefined()
   })
 
   it('adds pinyin, initials, English-name readings, and table speech variants', () => {
@@ -294,16 +308,76 @@ describe('chooseBestVoiceTranscript', () => {
       safeToPlan: true,
     })
   })
+
+  it('returns distinct ranked candidates so noisy table codes can be selected instead of guessed', () => {
+    const candidates = rankVoiceTranscriptSelections([
+      { transcript: 'A01开台', confidence: 0.72 },
+      { transcript: 'AO1开台', confidence: 0.69 },
+      { transcript: 'A1开台', confidence: 0.67 },
+      { transcript: '打开陌生页面', confidence: 0.9 },
+    ], dictionary())
+
+    expect(candidates.map((candidate) => candidate.canonicalized)).toEqual([
+      'A01开台',
+      '打开陌生页面',
+    ])
+  })
+
+  it('reranks real noisy-bar hypotheses toward configured tables, employees, and service language', () => {
+    expect(chooseBestVoiceTranscript([
+      {
+        transcript: '五分钟后让汤姆给开二中加水再给艾勒零一桌开台四个人',
+        confidence: 0.93794143,
+      },
+      {
+        transcript: '五分钟后让汤姆给开儿桌加水再给艾勒零一桌开台四个人',
+        confidence: 0.9300453,
+      },
+      {
+        transcript: '五分钟后让汤姆给开儿捉加水再给艾勒零一桌开台四个人',
+        confidence: 0.9213101,
+      },
+    ], dictionary())).toBe('五分钟后让Tom给K2加水再给L01开台四个人')
+  })
 })
 
 describe('dictionaryBiasPhrases', () => {
-  it('returns unique canonical, alias, pinyin, and initial phrases in boost order', () => {
+  it('prioritizes spoken store entities and omits technical pinyin/initial tokens', () => {
     const phrases = dictionaryBiasPhrases(dictionary())
 
-    expect(phrases).toEqual(expect.arrayContaining(['张三', 'zhang san', 'zs', '汤姆', '诶洞幺号桌']))
+    expect(phrases).toEqual(expect.arrayContaining(['张三', '汤姆']))
+    expect(phrases.some((phrase) => /诶.*[洞幺].*桌/u.test(phrase))).toBe(true)
+    expect(phrases).not.toEqual(expect.arrayContaining(['zhang san', 'zs']))
+    expect(phrases.indexOf('A01')).toBeLessThan(phrases.indexOf('青柠苏打'))
     expect(new Set(phrases.map((phrase) => phrase.toLocaleLowerCase('zh-CN'))).size).toBe(phrases.length)
     expect(phrases).not.toContain('PIN-8899')
     expect(dictionaryBiasPhrases(dictionary(), 5)).toHaveLength(5)
     expect(dictionaryBiasPhrases(dictionary(), 0)).toEqual([])
+  })
+
+  it('includes configured menu metadata and common operating language in the model hints', () => {
+    const phrases = dictionaryBiasPhrases(dictionary(), 5_000)
+
+    expect(phrases).toEqual(expect.arrayContaining([
+      'A01',
+      'Tom',
+      '送水',
+      '青柠苏打',
+      'DRINK-001',
+      '青柠苏打330毫升',
+      '酒水',
+      '海阔天空',
+      '开台',
+      '退款申请',
+      '五分钟后',
+      '安排客人入座',
+    ]))
+  })
+
+  it('keeps the encoded hint list within the request payload budget', () => {
+    const phrases = dictionaryBiasPhrases(dictionary(), 5_000, 120)
+
+    expect(new TextEncoder().encode(JSON.stringify(phrases)).byteLength).toBeLessThanOrEqual(120)
+    expect(phrases.length).toBeGreaterThan(0)
   })
 })

@@ -3,6 +3,7 @@
 .agents
 .claude
 .github
+.understand-anything
 .runtime
 .env
 .env.*

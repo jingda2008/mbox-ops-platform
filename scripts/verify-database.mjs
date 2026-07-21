@@ -38,6 +38,30 @@ try {
     throw new Error(`以下业务表未同时启用并强制RLS：${rlsGaps.rows.map((row) => row.relname).join(', ')}`)
   }
 
+  const operationalRelations = [
+    'operational_projection_checkpoints',
+    'operational_tables',
+    'operational_table_sessions',
+    'operational_service_tasks',
+    'operational_orders',
+    'operational_order_items',
+    'operational_kds_tasks',
+    'operational_payment_intents',
+    'operational_inventory_balances',
+  ]
+  const operationalPrivilegeGaps = await client.query(`
+    SELECT relation_name, privilege
+    FROM unnest($1::text[]) AS relation_name
+    CROSS JOIN unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE']::text[]) AS privilege
+    WHERE NOT has_table_privilege('mbox_app', format('mbox.%I', relation_name), privilege)
+    ORDER BY relation_name, privilege
+  `, [operationalRelations])
+  if (operationalPrivilegeGaps.rowCount) {
+    throw new Error(`mbox_app缺少规范化经营表权限：${operationalPrivilegeGaps.rows
+      .map((row) => `${row.relation_name}:${row.privilege}`)
+      .join(', ')}`)
+  }
+
   const tableCount = await client.query(`
     SELECT count(*)::integer AS count
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace

@@ -3,10 +3,12 @@ import { asPostgresPool, PostgresRepository, type PostgresPool } from './postgre
 import { JsonRepository, type RuntimeRepository } from './repository.js'
 import type { RuntimeConfig } from './runtime-config.js'
 import { PostgresOperationalProjector } from './operational-projection.js'
+import { PostgresOperationalReadStore } from './operational-read-store.js'
 
 export interface RuntimeDependencies {
   repository: RuntimeRepository
   postgresPool?: PostgresPool
+  operationalReadStore?: PostgresOperationalReadStore
 }
 
 export function createRuntimeDependencies(config: RuntimeConfig): RuntimeDependencies {
@@ -30,7 +32,10 @@ export function createRuntimeDependencies(config: RuntimeConfig): RuntimeDepende
     seedState: null,
     readCacheValidationTtlMs: config.stateReadCacheMs,
     projector: new PostgresOperationalProjector(),
-  }), postgresPool }
+  }), postgresPool, operationalReadStore: new PostgresOperationalReadStore(postgresPool, {
+    tenantId: config.tenantId!,
+    storeId: config.storeUuid!,
+  }) }
 }
 
 export function createRuntimeRepository(config: RuntimeConfig): RuntimeRepository {

@@ -18,6 +18,7 @@ export interface RuntimeRepositoryHealth {
 export interface RuntimeRepository {
   init(): Promise<void>
   read(): Promise<RuntimeState>
+  readFresh?(): Promise<RuntimeState>
   mutate<T>(mutation: (state: RuntimeState) => T | Promise<T>, options?: unknown): Promise<T>
   reset(): Promise<RuntimeState>
   healthCheck(): Promise<RuntimeRepositoryHealth>
@@ -117,6 +118,10 @@ export class JsonRepository {
   async read() {
     await this.queue
     return structuredClone(this.state)
+  }
+
+  async readFresh() {
+    return this.read()
   }
 
   async mutate<T>(mutation: (state: RuntimeState) => T | Promise<T>): Promise<T> {

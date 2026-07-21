@@ -54,5 +54,9 @@ jobs:
         run: npm run db:verify
         env:
           DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
+      - name: Verify normalized operational read path
+        run: npm run db:verify:operational
+        env:
+          DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
       - name: Build production container
         run: docker build -t mbox-ops:${{ github.sha }} .

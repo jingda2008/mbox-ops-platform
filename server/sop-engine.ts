@@ -556,6 +556,99 @@ function createExecution(state: RuntimeState, rule: SopRule, occurrence: Trigger
   return execution
 }
 
+export function scheduleAdHocServiceTask(
+  state: RuntimeState,
+  input: {
+    executionId: string
+    actorId: string
+    tableId: string
+    serviceTypeId: string
+    assigneeEmployeeId: string
+    delaySeconds: number
+    note: string
+    now: Date
+  },
+) {
+  const table = state.tables.find((candidate) => candidate.id === input.tableId)
+  if (!table || table.status !== 'occupied') throw new Error('只能为已开台桌台安排定时服务')
+  const session = state.songState.tableSessions.find((candidate) => (
+    candidate.tableId === table.id && candidate.status === 'open'
+  ))
+  if (!session) throw new Error('桌台没有有效桌次')
+  const serviceType = state.config.serviceTypes.find((candidate) => (
+    candidate.id === input.serviceTypeId && candidate.enabled
+  ))
+  if (!serviceType) throw new Error('服务类型不存在或未启用')
+  if (!Number.isInteger(input.delaySeconds) || input.delaySeconds < 0 || input.delaySeconds > 24 * 60 * 60) {
+    throw new Error('定时服务只能安排在24小时内')
+  }
+
+  const ruleId = `assistant_one_off_${input.executionId}`
+  const occurrenceId = `assistant_schedule_${input.executionId}`
+  const existingId = deterministicExecutionId(ruleId, occurrenceId)
+  const existing = state.sopExecutions?.find((candidate) => candidate.id === existingId)
+  if (existing) {
+    return { execution: existing, scheduledAt: existing.steps[0]?.scheduledAt ?? input.now.toISOString(), replayed: true }
+  }
+
+  const rule: SopRule = {
+    id: ruleId,
+    name: `AI定时指派·${table.code}·${serviceType.name}`,
+    description: '由授权员工通过AI值班经理创建的一次性定时服务',
+    enabled: true,
+    trigger: { event: 'service_requested', serviceTypeIds: [], productCategoryIds: [] },
+    scope: { areaIds: [], tableIds: [table.id] },
+    conditions: [],
+    stopConditions: ['table_closed'],
+    steps: [{
+      id: 'dispatch_service',
+      name: `派发${serviceType.name}`,
+      timing: 'after_trigger',
+      delaySeconds: input.delaySeconds,
+      action: {
+        type: 'create_service_task',
+        serviceTypeId: serviceType.id,
+        dispatchRoleIds: [...serviceType.dispatchRoleIds],
+        dispatchEmployeeIds: [input.assigneeEmployeeId],
+        notificationChannels: ['in_app'],
+        noteTemplate: input.note,
+        verification: { type: 'staff_completed', roleIds: [] },
+      },
+    }],
+  }
+  const occurrence: TriggerOccurrence = {
+    id: occurrenceId,
+    event: 'service_requested',
+    occurredAt: input.now.toISOString(),
+    tableSessionId: session.id,
+    tableId: table.id,
+    context: emptyContext(),
+  }
+  state.sopExecutions ??= []
+  const execution = createExecution(state, rule, occurrence, input.now)
+  const scheduledAt = execution.steps[0]?.scheduledAt ?? new Date(input.now.getTime() + input.delaySeconds * 1000).toISOString()
+  state.auditEntries.push({
+    id: `audit_${randomUUID()}`,
+    actorId: input.actorId,
+    action: 'assistant.service_task.scheduled.v1',
+    objectType: 'sop_execution',
+    objectId: execution.id,
+    occurredAt: input.now.toISOString(),
+    details: {
+      executionId: input.executionId,
+      tableId: table.id,
+      tableCode: table.code,
+      tableSessionId: session.id,
+      serviceTypeId: serviceType.id,
+      assigneeEmployeeId: input.assigneeEmployeeId,
+      delaySeconds: input.delaySeconds,
+      scheduledAt,
+    },
+  })
+  state.revision += 1
+  return { execution, scheduledAt, replayed: false }
+}
+
 function advanceExecution(state: RuntimeState, execution: SopExecution, now: Date) {
   let changed = refreshStepOutcomes(state, execution)
   if (handleStepFailures(state, execution, now)) return true

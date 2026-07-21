@@ -169,9 +169,13 @@ function resolvedCommandReady(resolved: ResolvedCommand | null) {
 }
 
 function agentStepStatusLabel(step: VoiceCommandPlan['steps'][number]) {
-  if (step.status === 'completed') return step.risk === 'high' ? '已完成 · 已单独确认' : '已完成'
-  if (step.status === 'running') return '正在处理'
+  if (step.status === 'completed') {
+    if (step.action === 'execute_server_tool') return '已由服务端确认'
+    return step.risk === 'high' ? '已完成 · 已单独确认' : '已完成'
+  }
+  if (step.status === 'running') return step.action === 'execute_server_tool' ? '服务端正在校验并执行' : '正在处理'
   if (step.status === 'blocked') return step.blockedReason || '未执行'
+  if (step.action === 'execute_server_tool') return '等待确认后执行'
   return step.risk === 'high' ? '待执行 · 需要单独确认' : '待执行'
 }
 
@@ -636,9 +640,14 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
       applyAssistantResponse(message, response)
     } catch (error) {
       const fallbackMessage = error instanceof Error ? error.message : '智能理解暂时不可用'
-      addAssistantMessage('assistant', `${fallbackMessage}。我已切换到快速命令。`)
-      setVoiceMessage('智能理解暂时不可用，已切换到快速命令。')
-      prepareCommand(message)
+      const safeMessage = `${fallbackMessage}。本次没有执行任何操作，请重试或返回岗位页面手动处理。`
+      addAssistantMessage('assistant', safeMessage)
+      setVoiceMessage('智能理解失败，本次没有执行任何操作。')
+      setResolved(null)
+      setAwaitingHighRiskConfirmation(false)
+      pausedAgentStepIdRef.current = null
+      updateAgentPlan(null)
+      announce(safeMessage, 'error')
     } finally {
       setAssistantBusy(false)
     }
@@ -1291,7 +1300,11 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
           {agentPlan && (
             <section className={`voice-agent-plan is-${agentPlan.status}`} aria-label="连续命令执行计划">
               <header>
-                <span><Sparkles size={16} />{agentPlan.modelUsed ? 'AI执行计划' : '连续命令计划'}</span>
+                <span><Sparkles size={16} />{
+                  agentPlan.steps.every((step) => step.action === 'execute_server_tool')
+                    ? 'AI业务执行计划'
+                    : agentPlan.modelUsed ? 'AI执行计划' : '连续命令计划'
+                }</span>
                 <strong>{agentPlan.steps.filter((step) => step.status === 'completed').length}/{agentPlan.steps.length}</strong>
               </header>
               <div className="voice-agent-steps">
@@ -1304,7 +1317,9 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
               </div>
               {agentPlan.status === 'pending' && (
                 <div className="voice-agent-actions">
-                  <p>系统将逐步操作；已经完成的步骤不会因后续失败而自动撤回。</p>
+                  <p>{agentPlan.steps.every((step) => step.action === 'execute_server_tool')
+                    ? '确认后由服务端按顺序执行，每一步都会重新核对岗位权限和门店最新状态。'
+                    : '系统将逐步操作；已经完成的步骤不会因后续失败而自动撤回。'}</p>
                   <button className="secondary-button" onClick={cancelCurrentCommand}><X size={15} />取消</button>
                   <button className="primary-button" onClick={() => void runAgentPlan(agentPlan)}><Check size={15} />确认并执行计划</button>
                 </div>

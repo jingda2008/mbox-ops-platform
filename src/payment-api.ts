@@ -1,4 +1,5 @@
 import { ApiError, getCurrentActorId } from './api'
+import { shouldTrackMutation, withInteractionAction } from './interaction-feedback'
 import type {
   PaymentAllocationInput,
   ReviewCashierHandoverInput,
@@ -24,24 +25,27 @@ function idempotencyKey(prefix: string) {
 }
 
 async function paymentRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  if (typeof navigator !== 'undefined' && !navigator.onLine && (init?.method ?? 'GET') !== 'GET') {
-    throw new Error('当前处于离线状态，支付、退款与关账操作已禁止提交')
-  }
-  const headers = new Headers(init?.headers)
-  if (init?.body) headers.set('Content-Type', 'application/json')
-  const sessionToken = window.localStorage.getItem('mbox.auth.token')
-  if (sessionToken) {
-    headers.set('Authorization', `Bearer ${sessionToken}`)
-  } else {
-    const actorId = getCurrentActorId()
-    if (actorId) headers.set('x-mbox-actor-id', actorId)
-    headers.set('x-mbox-store-id', 'mbox-lujiazui')
-  }
-  const response = await fetch(path, { ...init, headers })
-  const body = await response.json().catch(() => null) as (T & { message?: string }) | null
-  if (!response.ok) throw new ApiError(body?.message ?? '支付系统请求失败', response.status)
-  if (!body) throw new ApiError('支付系统返回了无法识别的响应', response.status)
-  return body
+  const method = init?.method ?? 'GET'
+  return withInteractionAction(async () => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine && method !== 'GET') {
+      throw new Error('当前处于离线状态，支付、退款与关账操作已禁止提交')
+    }
+    const headers = new Headers(init?.headers)
+    if (init?.body) headers.set('Content-Type', 'application/json')
+    const sessionToken = window.localStorage.getItem('mbox.auth.token')
+    if (sessionToken) {
+      headers.set('Authorization', `Bearer ${sessionToken}`)
+    } else {
+      const actorId = getCurrentActorId()
+      if (actorId) headers.set('x-mbox-actor-id', actorId)
+      headers.set('x-mbox-store-id', 'mbox-lujiazui')
+    }
+    const response = await fetch(path, { ...init, headers })
+    const body = await response.json().catch(() => null) as (T & { message?: string }) | null
+    if (!response.ok) throw new ApiError(body?.message ?? '支付系统请求失败', response.status)
+    if (!body) throw new ApiError('支付系统返回了无法识别的响应', response.status)
+    return body
+  }, { enabled: shouldTrackMutation(path, method) })
 }
 
 export function createTablePaymentIntent(

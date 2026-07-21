@@ -95,6 +95,7 @@ import {
   reportNetworkUnavailable,
   type QueuedTaskAction,
 } from './offline'
+import { shouldTrackMutation, withInteractionAction } from './interaction-feedback'
 
 export class ApiError extends Error {
   readonly status: number
@@ -216,28 +217,30 @@ function actorIdFromSessionToken(token: string) {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const method = init?.method ?? 'GET'
-  const highRiskWrite = isHighRiskOfflineWrite(path, method)
-  if (highRiskWrite && !browserIsOnline()) throw new OfflineWriteBlockedError()
+  return withInteractionAction(async () => {
+    const highRiskWrite = isHighRiskOfflineWrite(path, method)
+    if (highRiskWrite && !browserIsOnline()) throw new OfflineWriteBlockedError()
 
-  const headers = authenticatedHeaders(init)
-  let response: Response
-  try {
-    response = await fetch(path, { ...init, headers })
-  } catch (error) {
-    reportNetworkUnavailable()
-    if (highRiskWrite) throw new OfflineWriteBlockedError()
-    throw error
-  }
-  reportNetworkAvailable()
+    const headers = authenticatedHeaders(init)
+    let response: Response
+    try {
+      response = await fetch(path, { ...init, headers })
+    } catch (error) {
+      reportNetworkUnavailable()
+      if (highRiskWrite) throw new OfflineWriteBlockedError()
+      throw error
+    }
+    reportNetworkAvailable()
 
-  let body: T & { message?: string; code?: string; details?: Record<string, unknown> }
-  try {
-    body = (await response.json()) as T & { message?: string }
-  } catch {
-    throw new ApiError('系统返回了无法识别的响应', response.status)
-  }
-  if (!response.ok) throw new ApiError(body.message ?? '系统请求失败', response.status, body.code, body.details ?? null)
-  return body
+    let body: T & { message?: string; code?: string; details?: Record<string, unknown> }
+    try {
+      body = (await response.json()) as T & { message?: string; code?: string; details?: Record<string, unknown> }
+    } catch {
+      throw new ApiError('系统返回了无法识别的响应', response.status)
+    }
+    if (!response.ok) throw new ApiError(body.message ?? '系统请求失败', response.status, body.code, body.details ?? null)
+    return body
+  }, { enabled: shouldTrackMutation(path, method) })
 }
 
 function authenticatedHeaders(init?: RequestInit) {
@@ -283,32 +286,35 @@ async function requestBootstrap(revision?: number): Promise<BootstrapResponse | 
 }
 
 async function guestRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers)
-  if (init?.body) headers.set('Content-Type', 'application/json')
-  const anonymousGuestId = window.localStorage.getItem('mbox.guest.anonymous-id.v1')?.trim()
-  if (anonymousGuestId) headers.set('x-mbox-guest-id', anonymousGuestId)
-  headers.set('x-mbox-guest-source', 'guest_web')
-  let response: Response
-  try {
-    response = await fetch(path, { ...init, headers })
-  } catch (error) {
-    reportNetworkUnavailable()
-    throw error
-  }
-  reportNetworkAvailable()
+  const method = init?.method ?? 'GET'
+  return withInteractionAction(async () => {
+    const headers = new Headers(init?.headers)
+    if (init?.body) headers.set('Content-Type', 'application/json')
+    const anonymousGuestId = window.localStorage.getItem('mbox.guest.anonymous-id.v1')?.trim()
+    if (anonymousGuestId) headers.set('x-mbox-guest-id', anonymousGuestId)
+    headers.set('x-mbox-guest-source', 'guest_web')
+    let response: Response
+    try {
+      response = await fetch(path, { ...init, headers })
+    } catch (error) {
+      reportNetworkUnavailable()
+      throw error
+    }
+    reportNetworkAvailable()
 
-  let body: T & { message?: string; code?: string; details?: Record<string, unknown> }
-  try {
-    body = (await response.json()) as T & { message?: string; code?: string; details?: Record<string, unknown> }
-  } catch {
-    throw new ApiError('系统返回了无法识别的响应', response.status)
-  }
-  if (!response.ok) throw new ApiError(body.message ?? '系统请求失败', response.status, body.code, body.details ?? null)
-  const identity = (body as { guestIdentity?: { anonymousId?: unknown } }).guestIdentity
-  if (typeof identity?.anonymousId === 'string') {
-    window.localStorage.setItem('mbox.guest.anonymous-id.v1', identity.anonymousId)
-  }
-  return body
+    let body: T & { message?: string; code?: string; details?: Record<string, unknown> }
+    try {
+      body = (await response.json()) as T & { message?: string; code?: string; details?: Record<string, unknown> }
+    } catch {
+      throw new ApiError('系统返回了无法识别的响应', response.status)
+    }
+    if (!response.ok) throw new ApiError(body.message ?? '系统请求失败', response.status, body.code, body.details ?? null)
+    const identity = (body as { guestIdentity?: { anonymousId?: unknown } }).guestIdentity
+    if (typeof identity?.anonymousId === 'string') {
+      window.localStorage.setItem('mbox.guest.anonymous-id.v1', identity.anonymousId)
+    }
+    return body
+  }, { enabled: shouldTrackMutation(path, method) })
 }
 
 export function getGuestSession(tableToken: string, localTableCode = '') {

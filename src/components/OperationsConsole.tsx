@@ -84,6 +84,8 @@ import { salesAttributionEmployees } from './sales-attribution'
 import { useRevealPanelScroll } from './use-reveal-panel-scroll'
 import { SopVerificationInbox } from './SopVerificationInbox'
 import { BeijingClock } from './live-time'
+import { runOptimisticAction } from '../optimistic-action'
+import { projectServiceTask } from '../optimistic-projections'
 import './OperationsConsole.css'
 
 const MasterDataView = lazy(() => import('./MasterDataView').then((module) => ({ default: module.MasterDataView })))
@@ -113,6 +115,7 @@ type View = OperationsConsoleView
 interface OperationsConsoleProps {
   data: BootstrapResponse
   onRefresh: () => Promise<void>
+  onOptimisticUpdate: (update: (current: BootstrapResponse) => BootstrapResponse) => void
   navigationRequest?: OperationsConsoleNavigationRequest | null
 }
 
@@ -168,7 +171,7 @@ function tableOperationsConfig(config?: TableOperationsConfig): TableOperationsC
   }) as TableOperationsConfig
 }
 
-export function OperationsConsole({ data, onRefresh, navigationRequest = null }: OperationsConsoleProps) {
+export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigationRequest = null }: OperationsConsoleProps) {
   const fulfillmentAccess = getFulfillmentAccess(data, getCurrentActorId())
   const roleHomeModel = buildRoleHomeModel(data, fulfillmentAccess.employee?.id ?? '')
   const roleHomeAccess = roleHomeModel.access
@@ -203,6 +206,7 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
   const [configDirty, setConfigDirty] = useState(false)
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
+  const [busyTaskIds, setBusyTaskIds] = useState<ReadonlySet<string>>(() => new Set())
   const [transferTargetId, setTransferTargetId] = useState('')
   const [transferKind, setTransferKind] = useState<'relocate' | 'temporary_to_final'>('relocate')
   const [sessionSummary, setSessionSummary] = useState<TableSessionSummary | null>(null)
@@ -377,14 +381,30 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
       setNotice('该任务当前不由您负责，请联系领班重新派单')
       return
     }
-    setBusy(true)
+    const optimisticTask = projectServiceTask(task, action, actorId, new Date().toISOString())
+    const replaceTask = (replacement: ServiceTask) => onOptimisticUpdate((current) => ({
+      ...current,
+      tasks: current.tasks.map((item) => item.id === task.id ? replacement : item),
+    }))
+    setBusyTaskIds((current) => new Set(current).add(task.id))
     try {
-      await actOnTask(task.id, { action, actorId, note: action === 'complete' ? '现场服务完成' : '' })
-      await onRefresh()
+      const result = await runOptimisticAction({
+        key: `service-task:${task.id}`,
+        apply: () => { replaceTask(optimisticTask); return task },
+        commit: () => actOnTask(task.id, { action, actorId, note: action === 'complete' ? '现场服务完成' : '' }),
+        reconcile: (authoritativeTask) => { if (authoritativeTask) replaceTask(authoritativeTask) },
+        rollback: (snapshot) => replaceTask(snapshot),
+      })
+      setNotice(result ? '服务状态已同步' : '服务状态已记录，网络恢复后自动同步')
+      void onRefresh()
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : '任务操作失败')
+      setNotice(`${error instanceof Error ? error.message : '任务操作失败'}；页面已恢复，可以重试`)
     } finally {
-      setBusy(false)
+      setBusyTaskIds((current) => {
+        const next = new Set(current)
+        next.delete(task.id)
+        return next
+      })
     }
   }
 
@@ -999,6 +1019,7 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
                   selectedTableId={selectedTableId}
                   onClearTable={() => setSelectedTableId(null)}
                   onAction={handleTaskAction}
+                  busyTaskIds={busyTaskIds}
                   currentEmployeeId={fulfillmentAccess.employee?.id ?? ''}
                   claimableTaskIds={claimableTaskIds}
                 />
@@ -1017,6 +1038,7 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
                 selectedTableId={selectedTableId}
                 onClearTable={() => setSelectedTableId(null)}
                 onAction={handleTaskAction}
+                busyTaskIds={busyTaskIds}
                 currentEmployeeId={fulfillmentAccess.employee?.id ?? ''}
                 claimableTaskIds={claimableTaskIds}
               />
@@ -1024,7 +1046,7 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
           )}
 
           {view === 'commerce' && (
-            <CommerceView data={data} onRefresh={onRefresh} onNotice={setNotice} focusRequest={navigationRequest?.target === 'commerce' ? navigationRequest : null} />
+            <CommerceView data={data} onRefresh={onRefresh} onOptimisticUpdate={onOptimisticUpdate} onNotice={setNotice} focusRequest={navigationRequest?.target === 'commerce' ? navigationRequest : null} />
           )}
 
           {view === 'reservations' && <ReservationView data={data} focusRequest={navigationRequest?.target === 'reservations' ? navigationRequest : null} />}

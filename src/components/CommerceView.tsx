@@ -18,11 +18,14 @@ import { MenuOrderingWorkspace, type MenuCartItem } from './MenuOrderingWorkspac
 import { CustomerPaymentCodeScanner } from './CustomerPaymentCodeScanner'
 import type { OperationsConsoleNavigationRequest } from './OperationsConsole'
 import * as paymentApi from '../payment-api'
+import { runOptimisticAction } from '../optimistic-action'
+import { projectKdsTask } from '../optimistic-projections'
 import './CommerceView.css'
 
 interface CommerceViewProps {
   data: BootstrapResponse
   onRefresh: () => Promise<void>
+  onOptimisticUpdate: (update: (current: BootstrapResponse) => BootstrapResponse) => void
   onNotice: (message: string) => void
   focusRequest?: OperationsConsoleNavigationRequest | null
 }
@@ -38,7 +41,7 @@ interface PaymentSheet extends AssistedPaymentLink {
   paymentItems: Array<{ orderId: string; orderItemId: string; quantity: number }>
 }
 
-export function CommerceView({ data, onRefresh, onNotice, focusRequest = null }: CommerceViewProps) {
+export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, focusRequest = null }: CommerceViewProps) {
   const currentActorId = getCurrentActorId()
   const access = getFulfillmentAccess(data, currentActorId)
   const currentEmployee = access.employee
@@ -48,6 +51,7 @@ export function CommerceView({ data, onRefresh, onNotice, focusRequest = null }:
   const [tableId, setTableId] = useState(occupiedTables[0]?.id ?? '')
   const [workspaceMode, setWorkspaceMode] = useState<'order' | 'fulfillment'>(access.canOrder ? 'order' : 'fulfillment')
   const [busy, setBusy] = useState(false)
+  const [busyKdsIds, setBusyKdsIds] = useState<ReadonlySet<string>>(() => new Set())
   const [paymentSheet, setPaymentSheet] = useState<PaymentSheet | null>(null)
   const [paymentCodeScannerOpen, setPaymentCodeScannerOpen] = useState(false)
   const [cancelTarget, setCancelTarget] = useState<KdsTask | null>(null)
@@ -160,15 +164,33 @@ export function CommerceView({ data, onRefresh, onNotice, focusRequest = null }:
       onNotice('当前员工身份无效，请重新登录后操作KDS')
       return
     }
-    setBusy(true)
+    const optimisticTask = projectKdsTask(task, action, currentEmployee.id, new Date().toISOString())
+    const replaceTask = (replacement: KdsTask) => onOptimisticUpdate((current) => ({
+      ...current,
+      orderDomain: {
+        ...current.orderDomain,
+        kdsTasks: current.orderDomain.kdsTasks.map((item) => item.id === task.id ? replacement : item),
+      },
+    }))
+    setBusyKdsIds((current) => new Set(current).add(task.id))
     try {
-      await actOnKdsTask(task.id, { action, actorId: currentEmployee.id, idempotencyKey: `kds-${action}-${crypto.randomUUID()}` })
+      await runOptimisticAction({
+        key: `kds-task:${task.id}`,
+        apply: () => { replaceTask(optimisticTask); return task },
+        commit: () => actOnKdsTask(task.id, { action, actorId: currentEmployee.id, idempotencyKey: `kds-${action}-${crypto.randomUUID()}` }),
+        reconcile: replaceTask,
+        rollback: (snapshot) => replaceTask(snapshot),
+      })
       onNotice(`${task.itemName}已更新为${nextLabel(action)}`)
-      await onRefresh()
+      void onRefresh()
     } catch (error) {
-      onNotice(error instanceof Error ? error.message : 'KDS操作失败')
+      onNotice(`${error instanceof Error ? error.message : 'KDS操作失败'}；状态已恢复，可以重试`)
     } finally {
-      setBusy(false)
+      setBusyKdsIds((current) => {
+        const next = new Set(current)
+        next.delete(task.id)
+        return next
+      })
     }
   }
 
@@ -357,6 +379,7 @@ export function CommerceView({ data, onRefresh, onNotice, focusRequest = null }:
                   id={`kds-task-${task.id}`}
                   className={`kds-row kds-${task.status} ${timing.overdue ? 'is-overdue' : ''} ${exception ? 'has-exception' : ''} ${focusedTableCode && (task.tableCode ?? table?.code) === focusedTableCode ? 'is-ai-focus' : ''}`}
                   key={task.id}
+                  aria-busy={busyKdsIds.has(task.id)}
                 >
                   <div className="kds-table"><span>{table?.code ?? task.tableCode ?? '未知桌号'}</span><small>{table?.displayName ?? (task.tableCode ? '按桌号出品' : '桌台未匹配')}</small></div>
                   <div className="kds-product">
@@ -378,7 +401,7 @@ export function CommerceView({ data, onRefresh, onNotice, focusRequest = null }:
                     </>}
                   </div>
                   <div className="kds-actions">
-                    {!exception && action && canAct && <button className="secondary-button" disabled={busy || !currentEmployee} title={currentEmployee ? `由${currentEmployee.displayName}执行` : '请重新登录'} onClick={() => void advance(task, action)}>{actionIcon(action)}{nextLabel(action)}</button>}
+                    {!exception && action && canAct && <button className="secondary-button" disabled={busy || busyKdsIds.has(task.id) || !currentEmployee} title={currentEmployee ? `由${currentEmployee.displayName}执行` : '请重新登录'} onClick={() => void advance(task, action)}>{actionIcon(action)}{nextLabel(action)}</button>}
                     {!exception && action && !canAct && <span className="kds-readonly-note">仅查看进度</span>}
                     {canReportProductionException && <button className="secondary-button kds-exception-button" disabled={busy || !currentEmployee} title="按商品缺货报告，等待领班或经理处置" onClick={() => void reportException(task, 'shortage', 'product_out_of_stock')}><PackageX size={16} />报告缺货</button>}
                     {canReportProductionException && task.status === 'preparing' && <button className="icon-button kds-reject-button" disabled={busy || !currentEmployee} title="质量不合格，拒绝本次出品" onClick={() => void reportException(task, 'production_rejection', 'quality_rejected')}><CircleAlert size={16} /></button>}

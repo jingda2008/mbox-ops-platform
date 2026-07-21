@@ -53,6 +53,8 @@ import './ReservationView.css'
 import { WaitlistPanel } from './WaitlistPanel'
 import { useRevealPanelScroll } from './use-reveal-panel-scroll'
 import type { OperationsConsoleNavigationRequest } from './OperationsConsole'
+import { runOptimisticAction } from '../optimistic-action'
+import { projectReservation } from '../optimistic-projections'
 
 type DateRange = 'today' | 'upcoming' | 'all'
 type Notice = { tone: 'success' | 'error'; message: string }
@@ -258,7 +260,7 @@ export function ReservationView({ data, focusRequest = null }: { data: Bootstrap
     approveRefund: permissions.has('payment.refund.approve'),
   }
 
-  const load = useCallback(async (withSpinner = true, refreshAfterActiveRequest = false) => {
+  const load = useCallback(async (withSpinner = true, refreshAfterActiveRequest = false, preserveNotice = false) => {
     if (loadInFlight.current) {
       await loadInFlight.current
       if (!refreshAfterActiveRequest) return
@@ -268,7 +270,7 @@ export function ReservationView({ data, focusRequest = null }: { data: Bootstrap
     const request = (async () => {
       try {
         setResponse(await listReservations())
-        setNotice(null)
+        if (!preserveNotice) setNotice(null)
       } catch (error) {
         setNotice({ tone: 'error', message: errorMessage(error, '预约数据加载失败') })
       } finally {
@@ -357,9 +359,9 @@ export function ReservationView({ data, focusRequest = null }: { data: Bootstrap
     setNotice(null)
     try {
       await action()
-      await load(false, true)
       setNotice({ tone: 'success', message: successMessage })
       closeOperation()
+      void load(false, true, true)
     } catch (error) {
       setNotice({ tone: 'error', message: errorMessage(error, '预约操作失败，请重试') })
     } finally {
@@ -440,10 +442,26 @@ export function ReservationView({ data, focusRequest = null }: { data: Bootstrap
 
   function quickAction(reservation: Reservation, action: 'confirm' | 'arrive') {
     const label = action === 'confirm' ? '预约已确认' : '已记录客人到店'
-    void execute(`${action}:${reservation.id}`, label, () => actOnReservation(reservation.id, {
-      action,
-      idempotencyKey: idempotencyKey(action),
+    const actionKey = `${action}:${reservation.id}`
+    const optimisticReservation = projectReservation(reservation, action, new Date().toISOString())
+    const replaceReservation = (replacement: Reservation) => setResponse((current) => ({
+      ...current,
+      reservations: current.reservations.map((item) => item.id === reservation.id ? replacement : item),
     }))
+    setBusyAction(actionKey)
+    setNotice(null)
+    void runOptimisticAction({
+      key: `reservation:${reservation.id}`,
+      apply: () => { replaceReservation(optimisticReservation); return reservation },
+      commit: () => actOnReservation(reservation.id, { action, idempotencyKey: idempotencyKey(action) }),
+      reconcile: replaceReservation,
+      rollback: (snapshot) => replaceReservation(snapshot),
+    }).then(() => {
+      setNotice({ tone: 'success', message: label })
+      void load(false, true, true)
+    }).catch((error) => {
+      setNotice({ tone: 'error', message: `${errorMessage(error, '预约操作失败，请重试')}；状态已恢复` })
+    }).finally(() => setBusyAction(''))
   }
 
   function openOperation(type: OperationType, reservation: Reservation) {
@@ -924,7 +942,7 @@ function ReservationRow({ reservation, focused, salesName, access, busyAction, o
     <div className="reservation-customer"><div><strong>{reservation.customerName}</strong><span>{reservation.partySize}人 · {source}</span></div><small>{displayCustomerReference(reservation.contactReference)}</small>{reservation.occasionNote && <p>{reservation.occasionNote}</p>}</div>
     <div className="reservation-placement"><span><MapPin size={13} />{reservation.tableCode ?? reservation.areaPreferenceCode ?? '区域待定'}</span><small><UserPlus size={12} />{salesName}</small>{reservation.occasionCode && <b>{occasionLabel(reservation.occasionCode)}</b>}</div>
     <div className="reservation-state"><span className={`reservation-status is-${reservation.status}`}>{statusLabels[reservation.status]}</span><small className={`deposit-status is-${reservation.deposit.status}`}>{depositLabels[reservation.deposit.status]}{reservation.deposit.requiredAmount > 0 ? ` · ${money(reservation.deposit.requiredAmount)}` : ''}</small></div>
-    <fieldset className="reservation-actions" disabled={Boolean(busyAction)}>
+    <fieldset className="reservation-actions" disabled={busyAction.endsWith(`:${reservation.id}`)}>
       <ActionButton icon={ImageDown} label="保存预约卡" onClick={() => onSaveCard(reservation)} />
       {access.manage && ['requested', 'confirmed', 'arrived'].includes(reservation.status) && <ActionButton icon={RefreshCw} label="修改人数/时间" onClick={() => onOpenOperation('edit', reservation)} />}
       {access.manage && ['requested', 'confirmed', 'arrived', 'seated'].includes(reservation.status) && <ActionButton icon={UserPlus} label="变更销售" onClick={() => onOpenOperation('sales', reservation)} />}

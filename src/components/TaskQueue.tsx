@@ -35,6 +35,7 @@ interface TaskQueueProps {
   selectedTableId: string | null
   onClearTable: () => void
   onAction: (task: ServiceTask, action: TaskActionInput['action']) => Promise<void>
+  busyTaskIds: ReadonlySet<string>
   currentEmployeeId: string
   claimableTaskIds: ReadonlySet<string>
   compact?: boolean
@@ -48,6 +49,7 @@ export function TaskQueue({
   selectedTableId,
   onClearTable,
   onAction,
+  busyTaskIds,
   currentEmployeeId,
   claimableTaskIds,
   compact = false,
@@ -97,7 +99,7 @@ export function TaskQueue({
           const acceptMode = taskAcceptMode(task, currentEmployeeId, claimableTaskIds.has(task.id))
 
           return (
-            <article className={`task-item priority-${task.priority} ${atRisk ? 'is-at-risk' : ''}`} key={task.id}>
+            <article className={`task-item priority-${task.priority} ${atRisk ? 'is-at-risk' : ''}`} key={task.id} aria-busy={busyTaskIds.has(task.id)}>
               <div className="task-item__top">
                 <span className="service-symbol">
                   <ServiceIcon icon={serviceType.icon} size={18} />
@@ -125,17 +127,17 @@ export function TaskQueue({
 
               <div className="task-actions">
                 {acceptMode && (
-                  <button className="primary-button" onClick={() => void onAction(task, 'accept')}>
+                  <button className="primary-button" disabled={busyTaskIds.has(task.id)} onClick={() => void onAction(task, 'accept')}>
                     <Check size={17} />{acceptMode === 'claim' ? '认领并接单' : fulfillmentDelivery ? '接取送任务' : '接单'}
                   </button>
                 )}
                 {task.status === 'accepted' && (
-                  <button className="primary-button" onClick={() => void onAction(task, 'arrive')}>
+                  <button className="primary-button" disabled={busyTaskIds.has(task.id)} onClick={() => void onAction(task, 'arrive')}>
                     <Navigation size={17} />{fulfillmentDelivery ? '确认取货' : '已到桌'}
                   </button>
                 )}
                 {task.status === 'arrived' && (
-                  <button className="primary-button" onClick={() => void onAction(task, 'complete')}>
+                  <button className="primary-button" disabled={busyTaskIds.has(task.id)} onClick={() => void onAction(task, 'complete')}>
                     <CheckCheck size={17} />{fulfillmentDelivery ? '确认送达' : '完成服务'}
                   </button>
                 )}

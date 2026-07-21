@@ -6,6 +6,7 @@ import type {
   PublicReservationUpdateInput,
   PublicReservationView,
 } from './shared/public-reservation-contracts'
+import { shouldTrackMutation, withInteractionAction } from './interaction-feedback'
 
 const SESSION_KEY = 'mbox.public-reservation.token'
 
@@ -31,16 +32,19 @@ async function sessionToken(forceNew = false) {
 }
 
 async function request<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
-  const token = await sessionToken(retried)
-  const headers = new Headers(init?.headers)
-  headers.set('Authorization', `Bearer ${token}`)
-  if (init?.body) headers.set('Content-Type', 'application/json')
-  const response = await fetch(path, { ...init, headers })
-  if (response.status === 401 && !retried) {
-    window.localStorage.removeItem(SESSION_KEY)
-    return request<T>(path, init, true)
-  }
-  return parse<T>(response)
+  const method = init?.method ?? 'GET'
+  return withInteractionAction(async () => {
+    const token = await sessionToken(retried)
+    const headers = new Headers(init?.headers)
+    headers.set('Authorization', `Bearer ${token}`)
+    if (init?.body) headers.set('Content-Type', 'application/json')
+    const response = await fetch(path, { ...init, headers })
+    if (response.status === 401 && !retried) {
+      window.localStorage.removeItem(SESSION_KEY)
+      return request<T>(path, init, true)
+    }
+    return parse<T>(response)
+  }, { enabled: shouldTrackMutation(path, method) })
 }
 
 export function listPublicReservations() {

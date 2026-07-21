@@ -4,6 +4,7 @@ import {
   reportNetworkAvailable,
   reportNetworkUnavailable,
 } from './offline'
+import { shouldTrackMutation, withInteractionAction } from './interaction-feedback'
 import type {
   Reservation,
   ReservationConfig,
@@ -84,35 +85,37 @@ interface DepositRefundFailureInput {
 
 async function reservationRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const method = init?.method ?? 'GET'
-  if (method !== 'GET' && !getOfflineStatus().online) throw new OfflineWriteBlockedError()
+  return withInteractionAction(async () => {
+    if (method !== 'GET' && !getOfflineStatus().online) throw new OfflineWriteBlockedError()
 
-  const headers = new Headers(init?.headers)
-  if (init?.body) headers.set('Content-Type', 'application/json')
-  const sessionToken = window.localStorage.getItem('mbox.auth.token')
-  if (sessionToken) {
-    headers.set('Authorization', `Bearer ${sessionToken}`)
-  } else {
-    headers.set('x-mbox-actor-id', window.localStorage.getItem('mbox.actor.id') ?? 'emp-chen')
-    headers.set('x-mbox-store-id', 'mbox-lujiazui')
-  }
+    const headers = new Headers(init?.headers)
+    if (init?.body) headers.set('Content-Type', 'application/json')
+    const sessionToken = window.localStorage.getItem('mbox.auth.token')
+    if (sessionToken) {
+      headers.set('Authorization', `Bearer ${sessionToken}`)
+    } else {
+      headers.set('x-mbox-actor-id', window.localStorage.getItem('mbox.actor.id') ?? 'emp-chen')
+      headers.set('x-mbox-store-id', 'mbox-lujiazui')
+    }
 
-  let response: Response
-  try {
-    response = await fetch(path, { ...init, headers })
-  } catch (error) {
-    reportNetworkUnavailable()
-    throw error
-  }
-  reportNetworkAvailable()
+    let response: Response
+    try {
+      response = await fetch(path, { ...init, headers })
+    } catch (error) {
+      reportNetworkUnavailable()
+      throw error
+    }
+    reportNetworkAvailable()
 
-  let body: T & { message?: string }
-  try {
-    body = (await response.json()) as T & { message?: string }
-  } catch {
-    throw new ApiError('系统返回了无法识别的响应', response.status)
-  }
-  if (!response.ok) throw new ApiError(body.message ?? '预约操作失败', response.status)
-  return body
+    let body: T & { message?: string }
+    try {
+      body = (await response.json()) as T & { message?: string }
+    } catch {
+      throw new ApiError('系统返回了无法识别的响应', response.status)
+    }
+    if (!response.ok) throw new ApiError(body.message ?? '预约操作失败', response.status)
+    return body
+  }, { enabled: shouldTrackMutation(path, method) })
 }
 
 export function listReservations(status?: ReservationStatus) {

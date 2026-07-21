@@ -179,6 +179,82 @@ describe('assistant API', () => {
     await bartender.app.close()
   })
 
+  it('publishes one permission-scoped capability registry with locked human workflows', async () => {
+    const { app, repository: runtimeRepository } = await testApp(undefined, { actorId: 'emp-chen', roleId: 'manager' })
+    await runtimeRepository.mutate((state) => {
+      const refund = state.config.assistantCapabilities?.find((item) => item.id === 'payment.refund.request')
+      const openTable = state.config.assistantCapabilities?.find((item) => item.id === 'table.open')
+      if (!refund || !openTable) throw new Error('测试能力配置缺失')
+      refund.aliases = ['给客人退一下']
+      openTable.enabled = false
+    })
+
+    const response = await app.inject({ method: 'GET', url: '/api/assistant/tools' })
+    expect(response.statusCode, response.body).toBe(200)
+    expect(response.json().tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'payment.refund.request', executionMode: 'human_workflow', risk: 'high',
+        aliases: expect.arrayContaining(['给客人退一下']),
+        humanWorkflow: expect.objectContaining({
+          navigationId: 'payments', separationOfDuties: true,
+          resultGuard: expect.stringContaining('AI不得提交'),
+        }),
+      }),
+      expect.objectContaining({ id: 'service.task.create', executionMode: 'server_execute' }),
+    ]))
+    expect(response.json().tools.some((item: { id: string }) => item.id === 'table.open')).toBe(false)
+    const blocked = await app.inject({ method: 'POST', url: '/api/assistant/tool-executions', payload: {
+      executionId: '00000000-0000-4000-8000-000000000209',
+      toolCall: { toolId: 'table.open', arguments: { tableCode: 'L04', partySize: 2 } },
+    } })
+    expect(blocked.statusCode).toBe(409)
+    expect(blocked.json()).toMatchObject({ code: 'ASSISTANT_TOOL_REJECTED' })
+    expect(runtimeRepository.snapshot().tables.find((table) => table.id === 'table-l04')?.status).toBe('available')
+    await app.close()
+  })
+
+  it('turns refund language into a human handoff without creating or executing a refund', async () => {
+    const planner = new GeminiAssistantPlanner({
+      apiKey: 'test-key', model: 'gemini-3.5-flash', timeoutMs: 2_000,
+      fetchImpl: async () => { throw new Error('protected workflows must not call the model') },
+    })
+    const { app, repository: runtimeRepository } = await testApp(planner, { actorId: 'emp-chen', roleId: 'manager' })
+    const before = runtimeRepository.snapshot().paymentDomain.refunds.length
+    const response = await app.inject({ method: 'POST', url: '/api/assistant/turn', payload: {
+      ...payload,
+      requestId: '00000000-0000-4000-8000-000000000210',
+      message: '帮客人申请退款',
+    } })
+
+    expect(response.statusCode, response.body).toBe(200)
+    expect(response.json()).toMatchObject({
+      kind: 'plan', model: 'mbox-deterministic-operations-v1',
+      reply: expect.stringContaining('人工核对'),
+      steps: [{ command: '打开收银/支付' }],
+    })
+    expect(response.json().steps[0]).not.toHaveProperty('toolCall')
+    expect(runtimeRepository.snapshot().paymentDomain.refunds).toHaveLength(before)
+    expect(runtimeRepository.snapshot().auditEntries.filter((entry) => entry.action === 'assistant.tool.executed.v1')).toHaveLength(0)
+    await app.close()
+  })
+
+  it('does not downgrade a refund approval command to a refund request permission', async () => {
+    const planner = new GeminiAssistantPlanner({
+      apiKey: 'test-key', model: 'gemini-3.5-flash', timeoutMs: 2_000,
+      fetchImpl: async () => { throw new Error('protected workflows must not call the model') },
+    })
+    const { app } = await testApp(planner, { actorId: 'emp-cashier', roleId: 'cashier' })
+    const response = await app.inject({ method: 'POST', url: '/api/assistant/turn', payload: {
+      ...payload,
+      requestId: '00000000-0000-4000-8000-000000000211',
+      message: '批准这笔退款并执行',
+    } })
+
+    expect(response.statusCode, response.body).toBe(200)
+    expect(response.json()).toMatchObject({ kind: 'answer', steps: [], reply: expect.stringContaining('没有对应权限') })
+    await app.close()
+  })
+
   it('redacts labelled credentials before model planning and audit', async () => {
     let capturedMessage = ''
     const planner: AssistantPlanner = {

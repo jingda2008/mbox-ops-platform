@@ -59,6 +59,9 @@ import {
   canonicalizeVoiceCommand,
   chooseBestVoiceTranscriptSelection,
   dictionaryBiasPhrases,
+  rankVoiceTranscriptSelections,
+  type VoiceTranscriptCandidate,
+  type VoiceTranscriptSelection,
 } from './voice-command-dictionary'
 import { naturalizeSpokenFeedback, rankChineseVoices, selectPreferredChineseVoice } from './voice-speech'
 import { selectVoiceRecognitionMode, shouldFallbackToCloudRecognition } from './voice-recording'
@@ -66,6 +69,7 @@ import { assistantPageCapabilities } from './assistant-page-capabilities'
 import './VoiceCommandMode.css'
 
 interface SpeechRecognitionEventLike {
+  resultIndex?: number
   results: ArrayLike<ArrayLike<{ transcript: string; confidence?: number }> & { isFinal: boolean }>
 }
 
@@ -189,6 +193,8 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
   const listeningRef = useRef(false)
   const stopRequestedRef = useRef(false)
   const pendingTranscriptRef = useRef('')
+  const nativeCommittedTranscriptRef = useRef('')
+  const nativeFinalSegmentsRef = useRef<Map<number, string>>(new Map())
   const recordingModeRef = useRef<RecordingMode>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const mediaStreamRef = useRef<MediaStream | null>(null)
@@ -206,11 +212,13 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
   const [listening, setListening] = useState(false)
   const [startingListening, setStartingListening] = useState(false)
   const [forceCloudRecognition, setForceCloudRecognition] = useState(false)
+  const [forceNativeRecognition, setForceNativeRecognition] = useState(false)
   const [inputFocused, setInputFocused] = useState(false)
   const [voiceViewportHeight, setVoiceViewportHeight] = useState(() => window.visualViewport?.height ?? window.innerHeight)
   const [voiceViewportTop, setVoiceViewportTop] = useState(() => window.visualViewport?.offsetTop ?? 0)
   const [keyboardOpen, setKeyboardOpen] = useState(false)
   const [voiceMessage, setVoiceMessage] = useState('')
+  const [recognitionCandidates, setRecognitionCandidates] = useState<VoiceTranscriptSelection[]>([])
   const [executionMessage, setExecutionMessage] = useState('')
   const [executionTone, setExecutionTone] = useState<ExecutionTone>('success')
   const [speechEnabled, setSpeechEnabled] = useState(true)
@@ -240,9 +248,11 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
     userAgent: navigator.userAgent,
     nativeSupported: nativeRecognitionSupported,
     cloudSupported: cloudRecordingSupported,
-    forceCloud: forceCloudRecognition,
+    forceCloud: forceCloudRecognition || data.runtimeCapabilities?.voiceTranscription === 'google_v1',
+    forceNative: forceNativeRecognition,
   })
   const voiceDictionary = useMemo(() => buildVoiceCommandDictionary(data, controls), [controls, data])
+  const voiceBiasPhrases = useMemo(() => dictionaryBiasPhrases(voiceDictionary, 5_000), [voiceDictionary])
 
   const refreshControls = useCallback(() => {
     const scope = getVoiceScope()
@@ -689,19 +699,34 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
     }
   }
 
-  function acceptRecognizedTranscript(transcript: string, confidence?: number) {
-    const selection = chooseBestVoiceTranscriptSelection([{ transcript, confidence }], voiceDictionary)
+  function acceptRecognizedTranscripts(transcripts: readonly VoiceTranscriptCandidate[]) {
+    const selections = rankVoiceTranscriptSelections(transcripts, voiceDictionary, 3)
+    const selection = selections[0]
     if (!selection) {
+      setRecognitionCandidates([])
       setVoiceMessage('这次没有听清，请靠近麦克风再说一次。')
       return
     }
     setCommand(selection.canonicalized)
+    const runnerUp = selections[1]
+    const ambiguous = Boolean(
+      runnerUp
+      && runnerUp.canonicalized !== selection.canonicalized
+      && selection.score - runnerUp.score < 12,
+    )
+    if (ambiguous || !selection.safeToPlan) {
+      setRecognitionCandidates(selections)
+      setVoiceMessage(ambiguous
+        ? '现场声音有点大，请点一下您刚才说的内容。'
+        : `我听到“${selection.canonicalized}”，但不太确定。请核对后发送。`)
+      return
+    }
+    setRecognitionCandidates([])
     if (selection.safeToPlan) {
       void submitAssistantMessage(selection.canonicalized)
       setVoiceMessage('识别好了，正在理解您的意思。')
       return
     }
-    setVoiceMessage(`我听到“${selection.canonicalized}”，但不太确定。请核对文字后点击“发送”。`)
   }
 
   async function transcribeCloudRecording(blob: Blob, mimeType: NonNullable<ReturnType<typeof cloudRecordingMimeType>>) {
@@ -710,11 +735,23 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
       const result = await transcribeVoiceAudio({
         audioBase64: await blobToBase64(blob),
         mimeType,
-        phrases: dictionaryBiasPhrases(voiceDictionary, 180),
+        phrases: voiceBiasPhrases,
       })
-      acceptRecognizedTranscript(result.transcript, result.confidence ?? undefined)
+      const alternatives = result.alternatives?.length
+        ? result.alternatives.map((alternative) => ({
+            transcript: alternative.transcript,
+            confidence: alternative.confidence ?? undefined,
+          }))
+        : [{ transcript: result.transcript, confidence: result.confidence ?? undefined }]
+      acceptRecognizedTranscripts(alternatives)
     } catch (error) {
-      setVoiceMessage(error instanceof Error ? error.message : '语音识别暂时繁忙，可以重试或直接输入命令。')
+      if (nativeRecognitionSupported) {
+        setForceCloudRecognition(false)
+        setForceNativeRecognition(true)
+        setVoiceMessage('云端识别暂时繁忙，下次点击将自动改用本机识别。')
+      } else {
+        setVoiceMessage(error instanceof Error ? error.message : '语音识别暂时繁忙，可以重试或直接输入命令。')
+      }
     }
   }
 
@@ -789,25 +826,40 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
     recognition.maxAlternatives = 5
     stopRequestedRef.current = false
     pendingTranscriptRef.current = ''
+    nativeCommittedTranscriptRef.current = ''
+    nativeFinalSegmentsRef.current.clear()
+    setRecognitionCandidates([])
     recordingModeRef.current = 'native'
     const Phrase = (window as VoiceWindow).SpeechRecognitionPhrase
     if (Phrase) {
       try {
-        recognition.phrases = dictionaryBiasPhrases(voiceDictionary, 180).map((phrase) => new Phrase(phrase, 5))
+        recognition.phrases = voiceBiasPhrases.slice(0, 500).map((phrase) => new Phrase(phrase, 5))
       } catch {
         // Contextual phrase bias is experimental; local dictionary matching remains active.
       }
     }
     recognition.onresult = (event) => {
-      const latest = event.results[event.results.length - 1]
-      const alternatives = latest ? Array.from(latest).map((candidate) => ({
-        transcript: candidate.transcript,
-        confidence: candidate.confidence,
-      })) : []
-      const selection = latest?.isFinal
-        ? chooseBestVoiceTranscriptSelection(alternatives, voiceDictionary)
-        : null
-      const transcript = selection?.canonicalized ?? latest?.[0]?.transcript?.trim() ?? ''
+      let interimTranscript = ''
+      const resultIndex = Math.max(0, event.resultIndex ?? 0)
+      for (let index = resultIndex; index < event.results.length; index += 1) {
+        const result = event.results[index]
+        if (!result) continue
+        const alternatives = Array.from(result).map((candidate) => ({
+          transcript: candidate.transcript,
+          confidence: candidate.confidence,
+        }))
+        const selection = chooseBestVoiceTranscriptSelection(alternatives, voiceDictionary)
+        if (result.isFinal) {
+          if (selection?.canonicalized) nativeFinalSegmentsRef.current.set(index, selection.canonicalized)
+        } else {
+          interimTranscript = selection?.canonicalized ?? alternatives[0]?.transcript?.trim() ?? ''
+        }
+      }
+      const finalized = [...nativeFinalSegmentsRef.current.entries()]
+        .toSorted(([left], [right]) => left - right)
+        .map(([, transcript]) => transcript)
+        .join('，')
+      const transcript = [nativeCommittedTranscriptRef.current, finalized, interimTranscript].filter(Boolean).join('，')
       if (!transcript) return
       pendingTranscriptRef.current = transcript
       setCommand(transcript)
@@ -833,6 +885,7 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
       recognitionRef.current = null
       setListeningState(false)
       if (fallbackToCloud) {
+        setForceNativeRecognition(false)
         setForceCloudRecognition(true)
         if (recognitionFallbackTimeoutRef.current !== null) window.clearTimeout(recognitionFallbackTimeoutRef.current)
         recognitionFallbackTimeoutRef.current = window.setTimeout(() => {
@@ -847,11 +900,17 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
         recordingModeRef.current = null
         recognitionRef.current = null
         setListeningState(false)
-        if (transcript) acceptRecognizedTranscript(transcript)
+        if (transcript) acceptRecognizedTranscripts([{ transcript }])
         else setVoiceMessage('没有听清，请重新点击开始。')
         return
       }
       if (!listeningRef.current) return
+      const finalized = [...nativeFinalSegmentsRef.current.entries()]
+        .toSorted(([left], [right]) => left - right)
+        .map(([, transcript]) => transcript)
+        .join('，')
+      nativeCommittedTranscriptRef.current = [nativeCommittedTranscriptRef.current, finalized].filter(Boolean).join('，')
+      nativeFinalSegmentsRef.current.clear()
       window.setTimeout(() => {
         if (!listeningRef.current || stopRequestedRef.current) return
         try {
@@ -1267,6 +1326,28 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
             </div>
           </div>
 
+          {recognitionCandidates.length > 1 && (
+            <div className="voice-transcript-candidates" role="group" aria-label="请选择识别到的语音">
+              <strong>您刚才说的是：</strong>
+              <div>
+                {recognitionCandidates.map((candidate) => (
+                  <button
+                    type="button"
+                    key={candidate.canonicalized}
+                    onClick={() => {
+                      setRecognitionCandidates([])
+                      setCommand(candidate.canonicalized)
+                      setVoiceMessage('好的，正在理解您的意思。')
+                      void submitAssistantMessage(candidate.canonicalized)
+                    }}
+                  >
+                    <Check size={14} />{candidate.canonicalized}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <form className="voice-command-input" onSubmit={(event) => { event.preventDefault(); void submitAssistantMessage(command); event.currentTarget.querySelector('input')?.blur() }}>
             <Keyboard size={18} />
             <input
@@ -1279,6 +1360,7 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
               onBlur={() => window.setTimeout(() => setInputFocused(false), 180)}
               onChange={(event) => {
                 setCommand(event.target.value)
+                setRecognitionCandidates([])
                 setResolved(null)
                 setAwaitingHighRiskConfirmation(false)
                 setExecutionMessage('')
@@ -1392,7 +1474,7 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
             <div>
               <div className="voice-page-status">
                 <span><ShieldCheck size={15} />{pageHeading}</span>
-                <strong>{controls.length} 个控件 · {voiceDictionary.length} 个热词{generatedLabelCount > 0 ? ` · ${generatedLabelCount} 个待命名` : ''}</strong>
+                <strong>{controls.length} 个控件 · {voiceBiasPhrases.length} 个热词{generatedLabelCount > 0 ? ` · ${generatedLabelCount} 个待命名` : ''}</strong>
               </div>
               {voiceOptions.length > 0 && (
                 <label className="voice-tts-control">

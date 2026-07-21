@@ -5,12 +5,29 @@ import { requireRequestActor } from './auth-context.js'
 import type { RateLimitStore } from './rate-limit.js'
 
 const MAX_AUDIO_BYTES = 600_000
-const MAX_BIAS_PHRASES = 180
+const MAX_BIAS_PHRASES = 5_000
+const MAX_BIAS_JSON_BYTES = 100_000
 const voiceTranscriptionSchema = z.object({
   audioBase64: z.string().trim().min(8).max(820_000),
   mimeType: z.enum(['audio/webm', 'audio/webm;codecs=opus', 'audio/ogg', 'audio/ogg;codecs=opus']),
   phrases: z.array(z.string().trim().min(1).max(80)).max(MAX_BIAS_PHRASES).default([]),
 })
+
+function boundedBiasPhrases(phrases: readonly string[]) {
+  const result: string[] = []
+  const seen = new Set<string>()
+  let jsonBytes = 2
+  for (const phrase of phrases) {
+    const key = phrase.toLocaleLowerCase('zh-CN')
+    if (seen.has(key)) continue
+    const encodedBytes = Buffer.byteLength(JSON.stringify(phrase), 'utf8') + (result.length > 0 ? 1 : 0)
+    if (jsonBytes + encodedBytes > MAX_BIAS_JSON_BYTES) break
+    seen.add(key)
+    result.push(phrase)
+    jsonBytes += encodedBytes
+  }
+  return result
+}
 
 export interface VoiceTranscriptionInput {
   audio: Buffer
@@ -19,6 +36,12 @@ export interface VoiceTranscriptionInput {
 }
 
 export interface VoiceTranscriptionResult {
+  transcript: string
+  confidence: number | null
+  alternatives: VoiceTranscriptionAlternative[]
+}
+
+export interface VoiceTranscriptionAlternative {
   transcript: string
   confidence: number | null
 }
@@ -31,6 +54,57 @@ interface GoogleSpeechResponse {
   results?: Array<{
     alternatives?: Array<{ transcript?: string; confidence?: number }>
   }>
+}
+
+function appendTranscript(prefix: string, segment: string) {
+  if (!prefix) return segment
+  if (!segment) return prefix
+  return /[a-z0-9]$/i.test(prefix) && /^[a-z0-9]/i.test(segment)
+    ? `${prefix} ${segment}`
+    : `${prefix}${segment}`
+}
+
+export function combineGoogleSpeechAlternatives(
+  results: NonNullable<GoogleSpeechResponse['results']>,
+  maximum = 8,
+): VoiceTranscriptionAlternative[] {
+  let beams: Array<{ transcript: string; confidenceTotal: number; confidenceCount: number }> = [{
+    transcript: '',
+    confidenceTotal: 0,
+    confidenceCount: 0,
+  }]
+  for (const result of results) {
+    const alternatives = (result.alternatives ?? [])
+      .flatMap((alternative) => {
+        const transcript = alternative.transcript?.trim() ?? ''
+        if (!transcript) return []
+        return [{ transcript, confidence: typeof alternative.confidence === 'number' ? alternative.confidence : 0.5 }]
+      })
+      .slice(0, maximum)
+    if (alternatives.length === 0) continue
+    beams = beams
+      .flatMap((beam) => alternatives.map((alternative) => ({
+        transcript: appendTranscript(beam.transcript, alternative.transcript),
+        confidenceTotal: beam.confidenceTotal + alternative.confidence,
+        confidenceCount: beam.confidenceCount + 1,
+      })))
+      .toSorted((left, right) => (
+        right.confidenceTotal / Math.max(1, right.confidenceCount)
+        - left.confidenceTotal / Math.max(1, left.confidenceCount)
+      ))
+      .slice(0, maximum)
+  }
+  const seen = new Set<string>()
+  return beams.flatMap((beam) => {
+    const transcript = beam.transcript.trim()
+    const key = transcript.toLocaleLowerCase('zh-CN').replace(/\s+/g, '')
+    if (!key || seen.has(key)) return []
+    seen.add(key)
+    return [{
+      transcript,
+      confidence: beam.confidenceCount > 0 ? beam.confidenceTotal / beam.confidenceCount : null,
+    }]
+  })
 }
 
 export class GoogleCloudVoiceTranscriber implements VoiceTranscriber {
@@ -46,8 +120,11 @@ export class GoogleCloudVoiceTranscriber implements VoiceTranscriber {
         config: {
           encoding,
           sampleRateHertz: 48_000,
-          languageCode: 'zh-CN',
+          languageCode: 'cmn-Hans-CN',
           alternativeLanguageCodes: ['en-US'],
+          model: 'command_and_search',
+          useEnhanced: true,
+          maxAlternatives: 8,
           enableAutomaticPunctuation: false,
           speechContexts: input.phrases.length > 0 ? [{ phrases: input.phrases, boost: 15 }] : undefined,
         },
@@ -55,13 +132,12 @@ export class GoogleCloudVoiceTranscriber implements VoiceTranscriber {
       },
       timeout: 15_000,
     })
-    const alternatives = response.data.results?.flatMap((result) => result.alternatives ?? []) ?? []
-    const best = alternatives
-      .filter((alternative) => alternative.transcript?.trim())
-      .toSorted((left, right) => (right.confidence ?? 0) - (left.confidence ?? 0))[0]
+    const alternatives = combineGoogleSpeechAlternatives(response.data.results ?? [])
+    const best = alternatives[0]
     return {
-      transcript: best?.transcript?.trim() ?? '',
-      confidence: typeof best?.confidence === 'number' ? best.confidence : null,
+      transcript: best?.transcript ?? '',
+      confidence: best?.confidence ?? null,
+      alternatives,
     }
   }
 }
@@ -104,7 +180,7 @@ export async function registerVoiceTranscriptionRoutes(
       const result = await options.transcriber.transcribe({
         audio,
         mimeType: body.mimeType,
-        phrases: [...new Set(body.phrases)].slice(0, MAX_BIAS_PHRASES),
+        phrases: boundedBiasPhrases(body.phrases),
       })
       if (!result.transcript) {
         return reply.code(422).send({ code: 'VOICE_NOT_RECOGNIZED', message: '这次没有听清，请靠近麦克风再说一次' })

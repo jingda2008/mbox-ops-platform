@@ -74,6 +74,7 @@ import type {
   TableSessionSummary,
   TaskActionInput,
 } from '../shared/contracts'
+import { assistantHumanWorkflowIds, type AssistantCapabilityId } from '../shared/assistant-tool-contracts'
 import { effectiveDataScopeForEmployee, effectiveRoleIdsForEmployee } from '../shared/staff-access'
 import { formatChinaDateTime, formatChinaTime } from '../shared/china-time'
 import { TaskQueue } from './TaskQueue'
@@ -155,6 +156,28 @@ const viewTitles: Record<View, string> = {
 
 const weekdayLabels = ['日', '一', '二', '三', '四', '五', '六']
 
+const assistantCapabilityNames: Record<AssistantCapabilityId, string> = {
+  'table.open': '开台',
+  'service.task.create': '创建服务任务',
+  'service.task.schedule': '定时指派服务',
+  'service.task.accept': '接单',
+  'service.task.arrive': '确认到桌',
+  'service.task.complete': '完成服务',
+  'payment.refund.request': '人工申请退款',
+  'payment.refund.approve': '人工审批并执行退款',
+  'payment.pos.report': '人工报送POS收款',
+  'payment.cash.confirm': '人工确认现金实收',
+  'business_day.close': '人工营业日关账',
+  'config.publish': '人工发布配置',
+  'inventory.approve': '人工审批库存差异',
+  'benefit.approve': '人工审批超额权益',
+  'commerce.authorization.approve': '人工审批折扣赠送',
+  'table.close': '人工结台',
+  'table.transfer': '人工转桌',
+}
+
+const assistantHumanWorkflowIdSet = new Set<AssistantCapabilityId>(assistantHumanWorkflowIds)
+
 function cloneConfig(config: StoreConfig) {
   return structuredClone(config)
 }
@@ -230,15 +253,37 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
   const [giftReason, setGiftReason] = useState('未上菜服务补偿')
   const allowedNavigationKey = roleHomeAccess.allowedNavigationIds.join(',')
   const handledNavigationRequestId = useRef<number | null>(null)
+  const internalNavigationRequestId = useRef(0)
+  const [activeNavigationRequest, setActiveNavigationRequest] = useState<OperationsConsoleNavigationRequest | null>(null)
   const tablePanelRef = useRevealPanelScroll<HTMLDivElement>(view === 'live' ? selectedTableId : '')
+
+  function navigateTo(target: View, focus?: OperationsConsoleFocus) {
+    setView(target)
+    setMobileNavOpen(false)
+    if (target === 'live' || target === 'tasks') {
+      const targetTable = focus?.tableCode
+        ? data.tables.find((table) => table.code.toLocaleLowerCase('zh-CN') === focus.tableCode?.toLocaleLowerCase('zh-CN'))
+        : null
+      setSelectedTableId(targetTable?.id ?? null)
+    }
+    if (focus) {
+      internalNavigationRequestId.current -= 1
+      setActiveNavigationRequest({ id: internalNavigationRequestId.current, target, focus })
+    } else {
+      setActiveNavigationRequest(null)
+    }
+  }
 
   useEffect(() => {
     if (!navigationRequest || handledNavigationRequestId.current === navigationRequest.id) return
     handledNavigationRequestId.current = navigationRequest.id
     if (navigationRequest.target !== 'home' && !allowedNavigationKey.split(',').includes(navigationRequest.target)) return
     setView(navigationRequest.target)
-    if (['live', 'tasks'].includes(navigationRequest.target) && navigationRequest.focus?.tableCode) {
-      const targetTable = data.tables.find((table) => table.code.toLocaleLowerCase('zh-CN') === navigationRequest.focus?.tableCode?.toLocaleLowerCase('zh-CN'))
+    setActiveNavigationRequest(navigationRequest)
+    if (['live', 'tasks'].includes(navigationRequest.target)) {
+      const targetTable = navigationRequest.focus?.tableCode
+        ? data.tables.find((table) => table.code.toLocaleLowerCase('zh-CN') === navigationRequest.focus?.tableCode?.toLocaleLowerCase('zh-CN'))
+        : null
       setSelectedTableId(targetTable?.id ?? null)
     }
     setMobileNavOpen(false)
@@ -692,6 +737,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
       proactiveOrderCare: { ...draft.proactiveOrderCare },
       guestServiceLimits: { ...draft.guestServiceLimits },
       communityBrand: structuredClone(draft.communityBrand),
+      assistantCapabilities: structuredClone(draft.assistantCapabilities ?? []),
       sopRules: structuredClone(draft.sopRules ?? []),
     }
   }
@@ -767,7 +813,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
               <button
                 key={item.id}
                 className={view === item.id ? 'nav-item is-active' : 'nav-item'}
-                onClick={() => { setView(item.id); setMobileNavOpen(false) }}
+                onClick={() => navigateTo(item.id)}
               >
                 <Icon size={19} /><span>{item.label}</span>
                 {item.id === 'tasks' && openTasks.length > 0 && <b>{openTasks.length}</b>}
@@ -854,7 +900,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
               )}
               <footer>
                 <button className="secondary-button" onClick={() => { setTurnoverReviewOpen(false); setNotice('账务保持原状，取消记录已留存，可稍后由店长或收银处理') }}>否，暂不处理</button>
-                {roleHomeAccess.allowedNavigationIds.includes('payments') && <button className="secondary-button" onClick={() => { setTurnoverReviewOpen(false); setView('payments'); setNotice('已进入收银工作台，请根据现场情况决定是否退款或调整应收') }}><Banknote size={16} />是，去收银处理</button>}
+                {roleHomeAccess.allowedNavigationIds.includes('payments') && <button className="secondary-button" onClick={() => { setTurnoverReviewOpen(false); navigateTo('payments'); setNotice('已进入收银工作台，请根据现场情况决定是否退款或调整应收') }}><Banknote size={16} />是，去收银处理</button>}
                 {selectedOpenKds.length === 0 && <button className="primary-button" disabled={busy} onClick={() => { setTurnoverReviewOpen(false); void handleCloseTable() }}><CircleCheckBig size={16} />重新检查并结台</button>}
               </footer>
             </section>
@@ -867,16 +913,16 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
             <RoleHomeView
               data={data}
               employeeId={fulfillmentAccess.employee?.id ?? ''}
-              onNavigate={(nextView) => setView(nextView)}
+              onNavigate={(nextView, focusQuery) => navigateTo(nextView, focusQuery ? { objectId: focusQuery, query: focusQuery } : undefined)}
             />
           )}
           {view === 'live' && (
             <>
               <section className="metrics-grid">
                 <Metric icon={CircleDot} label="营业桌台" value={data.metrics.occupiedTables} tone="neutral" />
-                <Metric icon={BellRing} label="待处理任务" value={data.metrics.openTasks} tone="blue" />
-                <Metric icon={CircleAlert} label="SLA风险" value={data.metrics.atRiskTasks} tone="yellow" />
-                <Metric icon={ShieldCheck} label="投诉接管" value={data.metrics.complaints} tone="red" />
+                <Metric icon={BellRing} label="待处理任务" value={data.metrics.openTasks} tone="blue" onClick={() => navigateTo('tasks', { objectId: 'service-open', query: 'service-open' })} />
+                <Metric icon={CircleAlert} label="SLA风险" value={data.metrics.atRiskTasks} tone="yellow" onClick={() => navigateTo('tasks', { objectId: 'service-sla-risk', query: 'service-sla-risk' })} />
+                <Metric icon={ShieldCheck} label="投诉接管" value={data.metrics.complaints} tone="red" onClick={() => navigateTo('tasks', { objectId: 'service-complaints', query: 'service-complaints' })} />
               </section>
 
               <div className="live-grid">
@@ -998,8 +1044,8 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
                                 <span className="table-code">{table.code}</span>
                                 <strong>{table.displayName}</strong>
                                 <small>{awaitingOrder
-                                  ? `待点单 ${elapsedMinutes(awaitingOrder.startedAt)}分钟 · ${owner?.displayName}`
-                                  : table.status === 'occupied' ? `${table.guestCount}位 · ${owner?.displayName}` : table.status === 'reserved' ? '待到店' : '可开台'}</small>
+                                  ? `营业中 · 待点单 ${elapsedMinutes(awaitingOrder.startedAt)}分钟 · ${owner?.displayName}`
+                                  : table.status === 'occupied' ? `营业中 · ${table.guestCount}位 · ${owner?.displayName}` : table.status === 'reserved' ? '已预留 · 待到店' : '未开台 · 点击开台'}</small>
                                 {taskCount > 0 && <b className="table-task-count">{taskCount}</b>}
                               </button>
                             )
@@ -1022,6 +1068,10 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
                   busyTaskIds={busyTaskIds}
                   currentEmployeeId={fulfillmentAccess.employee?.id ?? ''}
                   claimableTaskIds={claimableTaskIds}
+                  focusTaskId={activeNavigationRequest?.target === 'tasks' ? activeNavigationRequest.focus?.objectId : null}
+                  focusQuery={activeNavigationRequest?.target === 'tasks' ? activeNavigationRequest.focus?.query : null}
+                  focusRequestId={activeNavigationRequest?.target === 'tasks' ? activeNavigationRequest.id : null}
+                  onClearFocus={() => setActiveNavigationRequest(null)}
                 />
               </div>
             </>
@@ -1041,15 +1091,19 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
                 busyTaskIds={busyTaskIds}
                 currentEmployeeId={fulfillmentAccess.employee?.id ?? ''}
                 claimableTaskIds={claimableTaskIds}
+                focusTaskId={activeNavigationRequest?.target === 'tasks' ? activeNavigationRequest.focus?.objectId : null}
+                focusQuery={activeNavigationRequest?.target === 'tasks' ? activeNavigationRequest.focus?.query : null}
+                focusRequestId={activeNavigationRequest?.target === 'tasks' ? activeNavigationRequest.id : null}
+                onClearFocus={() => setActiveNavigationRequest(null)}
               />
             </>
           )}
 
           {view === 'commerce' && (
-            <CommerceView data={data} onRefresh={onRefresh} onOptimisticUpdate={onOptimisticUpdate} onNotice={setNotice} focusRequest={navigationRequest?.target === 'commerce' ? navigationRequest : null} />
+            <CommerceView data={data} onRefresh={onRefresh} onOptimisticUpdate={onOptimisticUpdate} onNotice={setNotice} focusRequest={activeNavigationRequest?.target === 'commerce' ? activeNavigationRequest : null} />
           )}
 
-          {view === 'reservations' && <ReservationView data={data} focusRequest={navigationRequest?.target === 'reservations' ? navigationRequest : null} />}
+          {view === 'reservations' && <ReservationView data={data} focusRequest={activeNavigationRequest?.target === 'reservations' ? activeNavigationRequest : null} />}
 
           {view === 'inventory' && <InventoryView />}
 
@@ -1111,6 +1165,28 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
                   ))}
                 </div>
                 {data.draftConfig && <p className="config-history-warning">存在未发布草稿，发布后才能回滚。</p>}
+              </div>
+
+              <div className="config-section assistant-capability-center">
+                <div className="config-section-title"><Cpu size={19} /><div><strong>AI可执行能力中心</strong><span>自然语言别名可配置；人工风控能力不能改成AI自动执行</span></div></div>
+                <div className="config-table-wrap">
+                  <table className="config-table">
+                    <thead><tr><th>能力</th><th>启用</th><th>执行方式</th><th>自然语言别名</th></tr></thead>
+                    <tbody>
+                      {(draft.assistantCapabilities ?? []).map((capability, index) => {
+                        const isHumanWorkflow = assistantHumanWorkflowIdSet.has(capability.id)
+                        return (
+                          <tr key={capability.id}>
+                            <td><strong>{assistantCapabilityNames[capability.id]}</strong><small>{capability.id}</small></td>
+                            <td><label className="switch"><input type="checkbox" checked={capability.enabled} onChange={(event) => { const next = cloneConfig(draft); next.assistantCapabilities![index]!.enabled = event.target.checked; setDraft(next); setConfigDirty(true) }} /><span /></label></td>
+                            <td><b className={isHumanWorkflow ? 'assistant-mode-human' : 'assistant-mode-server'}>{isHumanWorkflow ? '人工操作·全程审计' : '确认后服务端执行'}</b></td>
+                            <td><input aria-label={`${assistantCapabilityNames[capability.id]}自然语言别名`} value={capability.aliases.join('、')} onChange={(event) => { const next = cloneConfig(draft); next.assistantCapabilities![index]!.aliases = event.target.value.split(/[、,，]/u).map((item) => item.trim()).filter(Boolean).slice(0, 20); setDraft(next); setConfigDirty(true) }} /></td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
 
               <SopRulesEditor
@@ -1268,13 +1344,14 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
   )
 }
 
-function Metric({ icon: Icon, label, value, tone }: { icon: typeof LayoutDashboard; label: string; value: number; tone: string }) {
-  return (
-    <div className={`metric metric-${tone}`}>
+function Metric({ icon: Icon, label, value, tone, onClick }: { icon: typeof LayoutDashboard; label: string; value: number; tone: string; onClick?: () => void }) {
+  const content = <>
       <span className="metric-icon"><Icon size={19} /></span>
       <div><strong>{value}</strong><span>{label}</span></div>
-    </div>
-  )
+    </>
+  return onClick
+    ? <button type="button" className={`metric metric-${tone} is-actionable`} onClick={onClick} aria-label={`查看${label}${value}项`}>{content}</button>
+    : <div className={`metric metric-${tone}`}>{content}</div>
 }
 
 function elapsedMinutes(startedAt: string) {

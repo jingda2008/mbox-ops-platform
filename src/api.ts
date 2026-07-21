@@ -160,6 +160,10 @@ export function getCurrentActorId() {
 export interface VoiceTranscriptionResponse {
   transcript: string
   confidence: number | null
+  alternatives?: Array<{
+    transcript: string
+    confidence: number | null
+  }>
 }
 
 export function transcribeVoiceAudio(input: {

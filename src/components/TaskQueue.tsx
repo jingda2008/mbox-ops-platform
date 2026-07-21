@@ -1,7 +1,7 @@
 import { Check, CheckCheck, Clock3, MapPin, Navigation, RotateCcw, UserRound } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ServiceIcon } from './ServiceIcon'
-import { taskAcceptMode, taskQueueIsOpen } from './task-queue'
+import { taskAcceptMode, taskMatchesQueueFilter, taskQueueFilterForQuery, taskQueueIsOpen } from './task-queue'
 import type {
   Employee,
   ServiceTask,
@@ -39,6 +39,10 @@ interface TaskQueueProps {
   currentEmployeeId: string
   claimableTaskIds: ReadonlySet<string>
   compact?: boolean
+  focusTaskId?: string | null
+  focusQuery?: string | null
+  focusRequestId?: number | null
+  onClearFocus?: () => void
 }
 
 export function TaskQueue({
@@ -53,17 +57,44 @@ export function TaskQueue({
   currentEmployeeId,
   claimableTaskIds,
   compact = false,
+  focusTaskId = null,
+  focusQuery = null,
+  focusRequestId = null,
+  onClearFocus,
 }: TaskQueueProps) {
   const [visibleCount, setVisibleCount] = useState(12)
+  const filter = taskQueueFilterForQuery(focusQuery)
+  const complaintServiceTypeIds = new Set(serviceTypes
+    .filter((serviceType) => serviceType.code === 'COMPLAINT' || serviceType.icon === 'complaint')
+    .map((serviceType) => serviceType.id))
   const visibleTasks = tasks
     .filter((task) => !task.archivedAt)
     .filter(taskQueueIsOpen)
     .filter((task) => !selectedTableId || task.tableId === selectedTableId)
+    .filter((task) => taskMatchesQueueFilter(task, filter, complaintServiceTypeIds))
     .sort((a, b) => {
+      if (focusTaskId && a.id === focusTaskId) return -1
+      if (focusTaskId && b.id === focusTaskId) return 1
       const priority = { urgent: 4, high: 3, normal: 2, low: 1 }
       return priority[b.priority] - priority[a.priority] || +new Date(a.createdAt) - +new Date(b.createdAt)
     })
   const displayedTasks = visibleTasks.slice(0, visibleCount)
+  const filterLabel = filter === 'sla-risk'
+    ? '仅看 SLA 风险'
+    : filter === 'escalated'
+      ? '仅看升级任务'
+      : filter === 'complaint'
+        ? '仅看投诉接管'
+        : ''
+
+  useEffect(() => {
+    if (focusRequestId === null) return
+    setVisibleCount(12)
+    if (!focusTaskId || !tasks.some((task) => task.id === focusTaskId)) return
+    window.requestAnimationFrame(() => {
+      document.getElementById(`service-task-${focusTaskId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+  }, [focusRequestId, focusTaskId, tasks])
 
   return (
     <section className={`task-queue ${compact ? 'task-queue--compact' : ''}`}>
@@ -82,11 +113,18 @@ export function TaskQueue({
         </div>
       </div>
 
+      {filterLabel && (
+        <div className="task-queue__focus" role="status">
+          <span>{filterLabel} · {visibleTasks.length}项</span>
+          {onClearFocus && <button type="button" onClick={onClearFocus}>查看全部</button>}
+        </div>
+      )}
+
       <div className="task-list" aria-live="polite">
         {visibleTasks.length === 0 && (
           <div className="empty-state">
             <CheckCheck size={24} aria-hidden="true" />
-            <strong>当前没有待处理任务</strong>
+            <strong>{filterLabel ? `${filterLabel.replace('仅看 ', '')}已处理完成或状态已更新` : '当前没有待处理任务'}</strong>
           </div>
         )}
         {displayedTasks.map((task) => {
@@ -99,7 +137,12 @@ export function TaskQueue({
           const acceptMode = taskAcceptMode(task, currentEmployeeId, claimableTaskIds.has(task.id))
 
           return (
-            <article className={`task-item priority-${task.priority} ${atRisk ? 'is-at-risk' : ''}`} key={task.id} aria-busy={busyTaskIds.has(task.id)}>
+            <article
+              id={`service-task-${task.id}`}
+              className={`task-item priority-${task.priority} ${atRisk ? 'is-at-risk' : ''} ${focusTaskId === task.id ? 'is-navigation-focus' : ''}`}
+              key={task.id}
+              aria-busy={busyTaskIds.has(task.id)}
+            >
               <div className="task-item__top">
                 <span className="service-symbol">
                   <ServiceIcon icon={serviceType.icon} size={18} />

@@ -25,7 +25,8 @@ import {
 } from './duty-manager.js'
 import { isKdsTaskActiveForBusinessDate } from './operational-closure.js'
 import { tableOperationsConfig } from './table-sessions.js'
-import { AssistantToolBus, availableAssistantTools } from './assistant-tool-bus.js'
+import { AssistantToolBus } from './assistant-tool-bus.js'
+import { availableAssistantCapabilities } from './assistant-capability-registry.js'
 
 const ASSISTANT_RATE_LIMIT = { scope: 'staff_assistant_turn', limit: 15, windowMs: 60_000 }
 
@@ -99,7 +100,7 @@ function buildPlanningContext(
       heading: page.heading,
       capabilities: page.capabilities.filter((capability) => !capability.disabled),
     },
-    tools: availableAssistantTools(state, actor.actorId),
+    tools: availableAssistantCapabilities(state, actor.actorId),
     live: {
       tables: projected.tables.slice(0, 80).map((table) => ({
         code: table.code,
@@ -180,7 +181,7 @@ export async function registerAssistantRoutes(app: FastifyInstance, options: Ass
   app.get('/api/assistant/tools', async (request) => {
     const actor = requireRequestActor(request)
     const state = await options.repository.read()
-    return { tools: availableAssistantTools(state, actor.actorId) }
+    return { tools: availableAssistantCapabilities(state, actor.actorId) }
   })
 
   app.post('/api/assistant/tool-executions', async (request, reply) => {

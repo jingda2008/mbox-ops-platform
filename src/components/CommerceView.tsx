@@ -41,6 +41,8 @@ interface PaymentSheet extends AssistedPaymentLink {
   paymentItems: Array<{ orderId: string; orderItemId: string; quantity: number }>
 }
 
+type KdsFocusFilter = 'all' | 'overdue' | 'production' | 'pickup' | 'delivery'
+
 export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, focusRequest = null }: CommerceViewProps) {
   const currentActorId = getCurrentActorId()
   const access = getFulfillmentAccess(data, currentActorId)
@@ -59,6 +61,8 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
   const [cancelReasonNote, setCancelReasonNote] = useState('')
   const [now, setNow] = useState(() => Date.now())
   const [focusedTableCode, setFocusedTableCode] = useState('')
+  const [focusedTaskId, setFocusedTaskId] = useState('')
+  const [kdsFilter, setKdsFilter] = useState<KdsFocusFilter>('all')
   const handledFocusRequestId = useRef<number | null>(null)
   const ledgerTotal = data.orderDomain.tableLedgerEntries.reduce((sum, entry) => sum + entry.amount, 0)
   const activeKds = data.orderDomain.kdsTasks.filter(kdsTaskOperationallyActive)
@@ -68,6 +72,13 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
       if (aTiming.overdue !== bTiming.overdue) return aTiming.overdue ? -1 : 1
       return taskSortValue(a) - taskSortValue(b)
     }), [activeKds, data, now])
+  const filteredKds = visibleKds.filter((task) => {
+    if (kdsFilter === 'overdue') return taskTiming(task, data, now).overdue
+    if (kdsFilter === 'production') return ['queued', 'preparing'].includes(task.status)
+    if (kdsFilter === 'pickup') return task.status === 'completed'
+    if (kdsFilter === 'delivery') return task.status === 'picked_up'
+    return true
+  })
   const actionableKdsCount = visibleKds.filter((task) => (
     nextAction(task.status) && actionAllowedForAccess(task, access, data.config.workstations)
   )).length
@@ -82,11 +93,16 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
     if (!focusRequest || handledFocusRequestId.current === focusRequest.id) return
     handledFocusRequestId.current = focusRequest.id
     setWorkspaceMode('fulfillment')
-    setFocusedTableCode(focusRequest.focus?.tableCode ?? '')
-    const matchingTask = visibleKds.find((task) => {
+    const requestedFilter = kdsFilterForQuery(focusRequest.focus?.query)
+    setKdsFilter(requestedFilter)
+    const exactTask = visibleKds.find((task) => task.id === focusRequest.focus?.objectId)
+    const tableTask = visibleKds.find((task) => {
       const code = task.tableCode ?? tableFromSession(data, task.tableSessionId)?.code ?? ''
-      return code === focusRequest.focus?.tableCode
+      return code.toLocaleLowerCase('zh-CN') === (focusRequest.focus?.tableCode ?? '').toLocaleLowerCase('zh-CN')
     })
+    const matchingTask = exactTask ?? tableTask
+    setFocusedTaskId(exactTask?.id ?? '')
+    setFocusedTableCode(exactTask ? '' : (focusRequest.focus?.tableCode ?? ''))
     if (matchingTask) {
       window.requestAnimationFrame(() => document.getElementById(`kds-task-${matchingTask.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
     }
@@ -362,9 +378,10 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
       <div className={access.canViewLedger ? 'commerce-grid' : 'commerce-grid is-task-only'}>
         <section className="kds-section">
           <div className="commerce-section-title"><ChefHat size={18} /><strong>出品履约进度</strong><span>岗位与工作站匹配者可操作，其他人员只读</span></div>
+          {kdsFilter !== 'all' && <div className="kds-focus-filter" role="status"><span>{kdsFilterLabel(kdsFilter)} · {filteredKds.length}项</span><button type="button" onClick={() => { setKdsFilter('all'); setFocusedTaskId(''); setFocusedTableCode('') }}>查看全部</button></div>}
           <div className="kds-list">
-            {visibleKds.length === 0 && <div className="commerce-empty"><CheckCheck size={22} />当前岗位没有待处理商品</div>}
-            {visibleKds.map((task) => {
+            {filteredKds.length === 0 && <div className="commerce-empty"><CheckCheck size={22} />{kdsFilter === 'all' ? '当前岗位没有待处理商品' : `${kdsFilterLabel(kdsFilter)}已处理完成或状态已更新`}</div>}
+            {filteredKds.map((task) => {
               const table = tableFromSession(data, task.tableSessionId)
               const action = nextAction(task.status)
               const timing = taskTiming(task, data, now)
@@ -377,7 +394,7 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
               return (
                 <article
                   id={`kds-task-${task.id}`}
-                  className={`kds-row kds-${task.status} ${timing.overdue ? 'is-overdue' : ''} ${exception ? 'has-exception' : ''} ${focusedTableCode && (task.tableCode ?? table?.code) === focusedTableCode ? 'is-ai-focus' : ''}`}
+                  className={`kds-row kds-${task.status} ${timing.overdue ? 'is-overdue' : ''} ${exception ? 'has-exception' : ''} ${(focusedTaskId === task.id || (focusedTableCode && (task.tableCode ?? table?.code) === focusedTableCode)) ? 'is-ai-focus' : ''}`}
                   key={task.id}
                   aria-busy={busyKdsIds.has(task.id)}
                 >
@@ -437,6 +454,21 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
 function tableFromSession(data: BootstrapResponse, sessionId: string) {
   const session = data.songState.tableSessions.find((item) => item.id === sessionId)
   return data.tables.find((table) => table.id === session?.tableId)
+}
+
+function kdsFilterForQuery(query?: string | null): KdsFocusFilter {
+  if (query === 'kds-overdue') return 'overdue'
+  if (query === 'kds-production') return 'production'
+  if (query === 'kds-pickup') return 'pickup'
+  if (query === 'kds-delivery') return 'delivery'
+  return 'all'
+}
+
+function kdsFilterLabel(filter: Exclude<KdsFocusFilter, 'all'>) {
+  if (filter === 'overdue') return '仅看 SLA 超时'
+  if (filter === 'production') return '仅看待制作'
+  if (filter === 'pickup') return '仅看待取货'
+  return '仅看配送中'
 }
 
 function nextAction(status: KdsTask['status']): KdsActionInput['action'] | null {

@@ -26,6 +26,25 @@ describe('voice recognition routing', () => {
     })).toBe('native')
   })
 
+  it('uses the configured cloud recognizer on desktop so the full store dictionary is applied', () => {
+    expect(selectVoiceRecognitionMode({
+      userAgent: 'Mozilla/5.0 (Macintosh) Chrome/122 Safari/537.36',
+      nativeSupported: true,
+      cloudSupported: true,
+      forceCloud: true,
+    })).toBe('cloud')
+  })
+
+  it('temporarily falls back to native recognition when the configured cloud recognizer fails', () => {
+    expect(selectVoiceRecognitionMode({
+      userAgent: 'Mozilla/5.0 (Macintosh) Chrome/122 Safari/537.36',
+      nativeSupported: true,
+      cloudSupported: true,
+      forceCloud: true,
+      forceNative: true,
+    })).toBe('native')
+  })
+
   it('automatically falls back after a native service failure but not after a user stop', () => {
     expect(shouldFallbackToCloudRecognition('network', true, false)).toBe(true)
     expect(shouldFallbackToCloudRecognition('service-not-allowed', true, false)).toBe(true)

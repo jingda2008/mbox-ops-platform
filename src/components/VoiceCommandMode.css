@@ -173,6 +173,11 @@
 .voice-mic-button:disabled { cursor: not-allowed; opacity: .58; transform: none; animation: none; }
 
 .voice-inline-message { min-height: 18px; color: var(--ink-soft); font-size: 11px; text-align: left; }
+.voice-transcript-candidates { display: grid; gap: 6px; padding: 8px 9px; border: 1px solid #d7c47f; border-left: 4px solid var(--brand-yellow); border-radius: 6px; background: #fffaf0; }
+.voice-transcript-candidates > strong { color: var(--ink); font-size: 11px; }
+.voice-transcript-candidates > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.voice-transcript-candidates button { min-height: 36px; max-width: 100%; display: inline-flex; align-items: center; gap: 5px; padding: 6px 9px; border-color: #bca65e !important; background: #fff; color: var(--ink); font-size: 11px; text-align: left; overflow-wrap: anywhere; }
+.voice-transcript-candidates button:active { background: #fff2c5; }
 .voice-command-input { min-height: 52px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 5px 6px 5px 10px; border: 1px solid var(--line-strong); border-radius: 7px; background: #fff; box-shadow: 0 5px 16px rgba(28, 32, 27, .07); }
 .voice-command-input > svg { color: var(--ink-soft); }
 .voice-command-input input { min-width: 0; height: 38px; border: 0 !important; outline: 0; background: transparent; color: var(--ink); font-size: 14px; box-shadow: none !important; }

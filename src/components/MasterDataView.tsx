@@ -759,6 +759,7 @@ function configDraftPayload(
     proactiveOrderCare: { ...source.proactiveOrderCare },
     guestServiceLimits: { ...source.guestServiceLimits },
     communityBrand: structuredClone(source.communityBrand),
+    assistantCapabilities: structuredClone(source.assistantCapabilities ?? []),
   }
 }
 

@@ -17,6 +17,7 @@ import type { SongState } from './song-contracts.js'
 import type { ReservationState } from './reservation-contracts.js'
 import type { CommercialOpsState } from './commercial-ops-contracts.js'
 import type { DutyManagerIncident } from './assistant-contracts.js'
+import { assistantCapabilityIds, type AssistantCapabilityId } from './assistant-tool-contracts.js'
 import type { HardwareState } from './hardware-contracts.js'
 import { sopRuleSchema, type SopActionRecord, type SopExecution, type SopRule } from './sop-contracts.js'
 
@@ -370,6 +371,12 @@ export interface CommunityBrandConfig {
   memberPortalVisible: boolean
 }
 
+export interface AssistantCapabilityPolicyConfig {
+  id: AssistantCapabilityId
+  enabled: boolean
+  aliases: string[]
+}
+
 export type CommunityBrandPresentation = Pick<
   CommunityBrandConfig,
   'name' | 'eyebrow' | 'tagline' | 'markUrl' | 'highlights'
@@ -386,6 +393,8 @@ export interface StoreConfig {
   proactiveOrderCare: ProactiveOrderCareConfig
   guestServiceLimits: GuestServiceLimitsConfig
   communityBrand: CommunityBrandConfig
+  /** Configurable language aliases and enablement. Execution and risk policy remain code-enforced. */
+  assistantCapabilities?: AssistantCapabilityPolicyConfig[]
   /** Versioned automation definitions. Missing on legacy snapshots and normalized during load. */
   sopRules?: SopRule[]
 }
@@ -564,6 +573,9 @@ export interface OperationsMetrics {
 export interface BootstrapResponse extends RuntimeState {
   serverNow: string
   metrics: OperationsMetrics
+  runtimeCapabilities?: {
+    voiceTranscription: 'disabled' | 'google_v1'
+  }
   viewer?: {
     actorId: string
     permissionIds: StaffPermissionId[]
@@ -674,6 +686,17 @@ export const configDraftSchema = z.object({
     highlights: z.array(z.string().trim().min(1).max(20)).min(1).max(6),
     guestOrderVisible: z.boolean(),
     memberPortalVisible: z.boolean(),
+  }).optional(),
+  assistantCapabilities: z.array(z.object({
+    id: z.enum(assistantCapabilityIds),
+    enabled: z.boolean(),
+    aliases: z.array(z.string().trim().min(1).max(60)).max(20),
+  }).strict()).max(assistantCapabilityIds.length).superRefine((items, context) => {
+    const seen = new Set<string>()
+    for (const [index, item] of items.entries()) {
+      if (seen.has(item.id)) context.addIssue({ code: 'custom', path: [index, 'id'], message: 'AI能力配置不能重复' })
+      seen.add(item.id)
+    }
   }).optional(),
   sopRules: z.array(sopRuleSchema).max(200).optional(),
 })

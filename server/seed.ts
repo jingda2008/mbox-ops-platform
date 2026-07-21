@@ -8,6 +8,7 @@ import { withDefaultRolePolicy } from '../src/shared/role-policy.js'
 import { createCommercialOpsState } from './commercial-ops.js'
 import { createHardwareState } from './hardware-domain.js'
 import { chinaBusinessDateKey, shiftDateKey } from '../src/shared/china-time.js'
+import { defaultAssistantCapabilityPolicies } from './assistant-capability-registry.js'
 
 const now = new Date()
 
@@ -91,6 +92,7 @@ export function createSeedConfig(): StoreConfig {
       guestOrderVisible: true,
       memberPortalVisible: true,
     },
+    assistantCapabilities: defaultAssistantCapabilityPolicies(),
     sopRules: [],
     serviceTypes: [
       {

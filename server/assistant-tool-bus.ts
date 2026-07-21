@@ -2,14 +2,12 @@ import { createHash } from 'node:crypto'
 import type { FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import type {
-  AssistantServerToolId,
   AssistantToolCall,
-  AssistantToolDescriptor,
   AssistantToolExecutionResponse,
 } from '../src/shared/assistant-tool-contracts.js'
 import type { RuntimeState } from '../src/shared/contracts.js'
-import type { StaffPermissionId } from '../src/shared/contracts.js'
 import { effectivePermissionIdsForEmployee, effectiveRoleIdsForEmployee } from '../src/shared/staff-access.js'
+import { availableAssistantExecutableTools } from './assistant-capability-registry.js'
 import { requireRequestActor } from './auth-context.js'
 import { requireConfiguredOperation, requireTableDataScope } from './authorization.js'
 import { applyTaskAction, canEmployeeClaimTask, createServiceTask } from './domain.js'
@@ -43,71 +41,6 @@ const taskActionArguments = z.object({
   taskId: z.string().trim().min(1).max(160),
   note: z.string().trim().max(300).optional(),
 }).strict()
-
-const descriptors: Record<AssistantServerToolId, Omit<AssistantToolDescriptor, 'argumentGuide'>> = {
-  'table.open': {
-    id: 'table.open', name: '开台', description: '按桌号和实际到店人数开台并建立临客桌次',
-    risk: 'normal', requiredPermission: 'table.open',
-  },
-  'service.task.create': {
-    id: 'service.task.create', name: '创建服务任务', description: '为指定桌台创建一条可派发、升级和追踪的服务任务',
-    risk: 'normal', requiredPermission: 'service.execute',
-  },
-  'service.task.schedule': {
-    id: 'service.task.schedule', name: '定时指派服务', description: '按指定时间、桌台、服务内容和员工创建一次性服务安排',
-    risk: 'normal', requiredPermission: 'service.execute',
-  },
-  'service.task.accept': {
-    id: 'service.task.accept', name: '接单', description: '接管一条当前员工有权处理的服务任务',
-    risk: 'normal', requiredPermission: 'service.execute',
-  },
-  'service.task.arrive': {
-    id: 'service.task.arrive', name: '确认到桌', description: '把本人已接单的服务任务更新为已经到桌',
-    risk: 'normal', requiredPermission: 'service.execute',
-  },
-  'service.task.complete': {
-    id: 'service.task.complete', name: '完成服务', description: '把本人已到桌的服务任务闭环并记录结果',
-    risk: 'normal', requiredPermission: 'service.execute',
-  },
-}
-
-function serviceTypeGuide(state: RuntimeState) {
-  return state.config.serviceTypes
-    .filter((type) => type.enabled)
-    .map((type) => `${type.name}=${type.id}`)
-    .join('、')
-}
-
-export function availableAssistantTools(state: RuntimeState, actorId: string): AssistantToolDescriptor[] {
-  const permissions = new Set(effectivePermissionIdsForEmployee(state, actorId))
-  return Object.values(descriptors)
-    .filter((descriptor) => permissions.has(descriptor.requiredPermission as StaffPermissionId))
-    .map((descriptor) => {
-      const argumentGuide: Record<string, string> = descriptor.id === 'table.open'
-        ? {
-            tableCode: '必填，现场桌号，例如L01',
-            partySize: '必填，实际到店人数；不得猜测',
-            customerName: '选填，未提供时使用现场客人',
-            salesEmployeeId: '选填，员工ID或姓名；未提供时归属当前操作员工',
-          }
-        : descriptor.id === 'service.task.create'
-          ? {
-              tableCode: '必填，现场桌号',
-              serviceTypeId: `必填，${serviceTypeGuide(state)}`,
-              note: '选填，现场需求补充说明',
-            }
-          : descriptor.id === 'service.task.schedule'
-            ? {
-                tableCode: '必填，已开台的现场桌号',
-                serviceTypeId: `必填，${serviceTypeGuide(state)}`,
-                delayMinutes: '必填，0表示立即派发，最长1440分钟',
-                assigneeEmployeeId: '必填，员工ID或唯一姓名',
-                note: '选填，执行要求',
-              }
-          : { taskId: '必填，实时任务列表中的任务ID', note: '选填，处理结果或说明' }
-      return { ...descriptor, argumentGuide }
-    })
-}
 
 function resolveEmployeeId(state: RuntimeState, value: string | undefined, fallbackActorId: string) {
   if (!value) return fallbackActorId
@@ -221,7 +154,7 @@ export class AssistantToolBus {
     return this.repository.mutate((state) => {
       const replay = previousExecution(state, executionId, call)
       if (replay) return replay
-      const available = new Set(availableAssistantTools(state, actor.actorId).map((tool) => tool.id))
+      const available = new Set(availableAssistantExecutableTools(state, actor.actorId).map((tool) => tool.id))
       if (!available.has(call.toolId)) throw new Error('当前岗位没有执行这个AI工具的权限')
       const previousRevision = state.revision
       let result: {

@@ -32,6 +32,7 @@
 .kds-picked_up { border-left-color: var(--success); }
 .kds-row.is-overdue { border-left-color: var(--danger); background: #fffafa; }
 .kds-row.has-exception { border-left-color: var(--danger); background: #fff7f4; }
+.kds-row.is-ai-focus { outline: 3px solid #d3ad38; outline-offset: -3px; background: #fffbea; }
 .kds-table, .kds-product, .kds-meta { min-width: 0; display: grid; gap: 4px; }
 .kds-table span { font-size: 20px; font-weight: 850; }
 .kds-table small, .kds-product span { color: var(--ink-soft); font-size: 11px; }

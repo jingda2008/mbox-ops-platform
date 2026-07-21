@@ -52,6 +52,7 @@ import { CHINA_TIME_ZONE, chinaBusinessDateKey, chinaDateTimeLocalValue, chinaLo
 import './ReservationView.css'
 import { WaitlistPanel } from './WaitlistPanel'
 import { useRevealPanelScroll } from './use-reveal-panel-scroll'
+import type { OperationsConsoleNavigationRequest } from './OperationsConsole'
 
 type DateRange = 'today' | 'upcoming' | 'all'
 type Notice = { tone: 'success' | 'error'; message: string }
@@ -212,7 +213,7 @@ interface ReservationAccess {
   approveRefund: boolean
 }
 
-export function ReservationView({ data }: { data: BootstrapResponse }) {
+export function ReservationView({ data, focusRequest = null }: { data: BootstrapResponse; focusRequest?: OperationsConsoleNavigationRequest | null }) {
   const [response, setResponse] = useState<ReservationListResponse>(emptyResponse)
   const [loading, setLoading] = useState(true)
   const [busyAction, setBusyAction] = useState('')
@@ -234,10 +235,12 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
   const [editPartySize, setEditPartySize] = useState(1)
   const [editScheduledAt, setEditScheduledAt] = useState('')
   const [editAreaCode, setEditAreaCode] = useState('')
+  const [focusedReservationId, setFocusedReservationId] = useState('')
   const configPanelRef = useRevealPanelScroll<HTMLDivElement>(showConfig && configDraft ? 'config' : '')
   const createPanelRef = useRevealPanelScroll<HTMLFormElement>(showCreate ? 'create' : '')
   const operationPanelRef = useRevealPanelScroll<HTMLDivElement>(operation ? `${operation.type}:${operation.reservation.id}` : '')
   const loadInFlight = useRef<Promise<void> | null>(null)
+  const handledFocusRequestId = useRef<number | null>(null)
   const actorId = getCurrentActorId()
   const employee = data.employees.find((item) => item.id === actorId)
   const activeShift = data.shiftAssignments.find((shift) =>
@@ -282,6 +285,15 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
 
   useEffect(() => startReservationPolling(() => load(false)), [load])
 
+  useEffect(() => {
+    if (!focusRequest || handledFocusRequestId.current === focusRequest.id) return
+    handledFocusRequestId.current = focusRequest.id
+    setDateRange('today')
+    setStatusFilter('all')
+    setQuery(focusRequest.focus?.query ?? '')
+    setFocusedReservationId(focusRequest.focus?.objectId ?? '')
+  }, [focusRequest])
+
   const tables = data.tables
   const config = response.config
   const enabledSources = config?.sources.filter((item) => item.enabled).toSorted((a, b) => a.sortOrder - b.sortOrder) ?? []
@@ -318,6 +330,11 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
       ].some((value) => value.toLocaleLowerCase('zh-CN').includes(normalizedQuery)))
       .toSorted((left, right) => Date.parse(left.scheduledAt) - Date.parse(right.scheduledAt))
   }, [businessDayRolloverHour, data.store.businessDate, dateRange, query, response.reservations, statusFilter])
+
+  useEffect(() => {
+    if (!focusedReservationId || loading || !reservations.some((reservation) => reservation.id === focusedReservationId)) return
+    window.requestAnimationFrame(() => document.getElementById(`reservation-${focusedReservationId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
+  }, [focusedReservationId, loading, reservations])
   const salesByReservation = new Map<string, string>()
   for (const record of data.salesAttributionRecords ?? []) {
     if (record.subjectType === 'reservation') salesByReservation.set(record.subjectId, record.salesEmployeeId)
@@ -683,6 +700,7 @@ export function ReservationView({ data }: { data: BootstrapResponse }) {
           {!loading && reservations.map((reservation) => <ReservationRow
             key={reservation.id}
             reservation={reservation}
+            focused={reservation.id === focusedReservationId}
             salesName={data.employees.find((employee) => employee.id === salesByReservation.get(reservation.id))?.displayName ?? '未指定销售'}
             access={access}
             busyAction={busyAction}
@@ -888,8 +906,9 @@ function ReservationConfigPanel({ currentVersion, draft, reason, busy, onChange,
   </form>
 }
 
-function ReservationRow({ reservation, salesName, access, busyAction, onQuickAction, onOpenOperation, onSaveCard }: {
+function ReservationRow({ reservation, focused, salesName, access, busyAction, onQuickAction, onOpenOperation, onSaveCard }: {
   reservation: Reservation
+  focused: boolean
   salesName: string
   access: ReservationAccess
   busyAction: string
@@ -900,7 +919,7 @@ function ReservationRow({ reservation, salesName, access, busyAction, onQuickAct
   const canConfirm = reservation.status === 'requested' && ['not_required', 'payment_confirmed'].includes(reservation.deposit.status)
   const canNoShow = reservation.status === 'confirmed' && Date.parse(reservation.scheduledAt) <= Date.now()
   const source = reservation.sourceCode === 'phone' ? '电话' : reservation.sourceCode === 'wechat' ? '微信' : reservation.sourceCode === 'walk_in' ? '现场' : reservation.sourceCode
-  return <article className={`reservation-row status-${reservation.status}`}>
+  return <article id={`reservation-${reservation.id}`} className={`reservation-row status-${reservation.status}${focused ? ' is-ai-focus' : ''}`}>
     <div className="reservation-time"><strong>{formatDay(reservation.scheduledAt)}</strong><b>{formatTime(reservation.scheduledAt)}</b><span>{relativeTime(reservation.scheduledAt)}</span></div>
     <div className="reservation-customer"><div><strong>{reservation.customerName}</strong><span>{reservation.partySize}人 · {source}</span></div><small>{displayCustomerReference(reservation.contactReference)}</small>{reservation.occasionNote && <p>{reservation.occasionNote}</p>}</div>
     <div className="reservation-placement"><span><MapPin size={13} />{reservation.tableCode ?? reservation.areaPreferenceCode ?? '区域待定'}</span><small><UserPlus size={12} />{salesName}</small>{reservation.occasionCode && <b>{occasionLabel(reservation.occasionCode)}</b>}</div>

@@ -45,7 +45,7 @@ import {
 } from './offline'
 import type { BootstrapResponse, TaskActionInput } from './shared/contracts'
 import type { PilotEmployeeOption } from './shared/auth-contracts'
-import type { OperationsConsoleView } from './components/OperationsConsole'
+import type { OperationsConsoleFocus, OperationsConsoleNavigationRequest, OperationsConsoleView } from './components/OperationsConsole'
 import { formatChinaDateTime, formatChinaTime } from './shared/china-time'
 import { applyStaffViewport } from './staff-viewport'
 import { runSingleFlight } from './single-flight'
@@ -184,7 +184,7 @@ export default function App() {
   const [requiresLogin, setRequiresLogin] = useState(false)
   const [switchingEmployee, setSwitchingEmployee] = useState(false)
   const [staffMode, setStaffMode] = useState<'workspace' | 'voice'>('workspace')
-  const [navigationRequest, setNavigationRequest] = useState<{ id: number; target: OperationsConsoleView } | null>(null)
+  const [navigationRequest, setNavigationRequest] = useState<OperationsConsoleNavigationRequest | null>(null)
   const [offlineStatus, setOfflineStatus] = useState<OfflineStatus>(() => getOfflineStatus())
   const previousPendingCount = useRef(offlineStatus.pendingCount)
   const latestRevision = useRef<number | null>(null)
@@ -421,9 +421,9 @@ export default function App() {
             data={data}
             employeeId={currentActorId}
             onReturn={() => setStaffMode('workspace')}
-            onNavigate={(target) => {
+            onNavigate={(target: OperationsConsoleView, focus?: OperationsConsoleFocus) => {
               nextNavigationRequestId.current += 1
-              setNavigationRequest({ id: nextNavigationRequestId.current, target })
+              setNavigationRequest({ id: nextNavigationRequestId.current, target, focus })
             }}
           />
         )}

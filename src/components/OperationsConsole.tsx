@@ -98,12 +98,22 @@ const HardwareCenterView = lazy(() => import('./HardwareCenterView').then((modul
 const SopRulesEditor = lazy(() => import('./SopRulesEditor').then((module) => ({ default: module.SopRulesEditor })))
 
 export type OperationsConsoleView = 'home' | RoleHomeNavigationId
+export interface OperationsConsoleFocus {
+  objectId: string
+  query?: string | null
+  tableCode?: string | null
+}
+export interface OperationsConsoleNavigationRequest {
+  id: number
+  target: OperationsConsoleView
+  focus?: OperationsConsoleFocus
+}
 type View = OperationsConsoleView
 
 interface OperationsConsoleProps {
   data: BootstrapResponse
   onRefresh: () => Promise<void>
-  navigationRequest?: { id: number; target: OperationsConsoleView } | null
+  navigationRequest?: OperationsConsoleNavigationRequest | null
 }
 
 const navigation: Array<{ id: View; label: string; icon: typeof LayoutDashboard }> = [
@@ -223,8 +233,12 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
     handledNavigationRequestId.current = navigationRequest.id
     if (navigationRequest.target !== 'home' && !allowedNavigationKey.split(',').includes(navigationRequest.target)) return
     setView(navigationRequest.target)
+    if (['live', 'tasks'].includes(navigationRequest.target) && navigationRequest.focus?.tableCode) {
+      const targetTable = data.tables.find((table) => table.code.toLocaleLowerCase('zh-CN') === navigationRequest.focus?.tableCode?.toLocaleLowerCase('zh-CN'))
+      setSelectedTableId(targetTable?.id ?? null)
+    }
     setMobileNavOpen(false)
-  }, [allowedNavigationKey, navigationRequest])
+  }, [allowedNavigationKey, data.tables, navigationRequest])
 
   useEffect(() => {
     if (!configDirty) setDraft(cloneConfig(data.draftConfig ?? data.config))
@@ -1010,10 +1024,10 @@ export function OperationsConsole({ data, onRefresh, navigationRequest = null }:
           )}
 
           {view === 'commerce' && (
-            <CommerceView data={data} onRefresh={onRefresh} onNotice={setNotice} />
+            <CommerceView data={data} onRefresh={onRefresh} onNotice={setNotice} focusRequest={navigationRequest?.target === 'commerce' ? navigationRequest : null} />
           )}
 
-          {view === 'reservations' && <ReservationView data={data} />}
+          {view === 'reservations' && <ReservationView data={data} focusRequest={navigationRequest?.target === 'reservations' ? navigationRequest : null} />}
 
           {view === 'inventory' && <InventoryView />}
 

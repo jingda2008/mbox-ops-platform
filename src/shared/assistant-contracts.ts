@@ -103,6 +103,9 @@ export interface DutyManagerRisk {
   detail: string
   tableCode: string | null
   ownerName: string | null
+  targetObjectId: string
+  targetQuery: string | null
+  recommendation: string
   recommendedCommand: string
   detectedAt: string
   occurrences: number

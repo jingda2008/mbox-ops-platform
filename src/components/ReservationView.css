@@ -127,6 +127,7 @@
 .reservation-row.status-arrived { border-left-color: var(--success); }
 .reservation-row.status-cancelled, .reservation-row.status-no_show { border-left-color: #bb565b; background: #fcfaf9; }
 .reservation-row.status-seated { border-left-color: #6c756b; background: #fafbf8; }
+.reservation-row.is-ai-focus { outline: 3px solid #d3ad38; outline-offset: -3px; background: #fffbea; }
 .reservation-time { display: grid; grid-template-columns: 1fr auto; gap: 2px 7px; }
 .reservation-time strong { color: var(--ink-soft); font-size: 10px; }
 .reservation-time b { grid-column: 1; font-size: 20px; }

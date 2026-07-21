@@ -34,7 +34,7 @@ import type {
   DutyManagerRisk,
 } from '../shared/assistant-contracts'
 import type { BootstrapResponse } from '../shared/contracts'
-import type { OperationsConsoleView } from './OperationsConsole'
+import type { OperationsConsoleFocus, OperationsConsoleView } from './OperationsConsole'
 import { buildRoleHomeModel } from './role-access'
 import {
   canConfirmVoicePageStateChange,
@@ -126,7 +126,7 @@ interface VoiceCommandModeProps {
   data: BootstrapResponse
   employeeId: string
   onReturn: () => void
-  onNavigate: (target: OperationsConsoleView) => void
+  onNavigate: (target: OperationsConsoleView, focus?: OperationsConsoleFocus) => void
 }
 
 function getVoiceScope() {
@@ -426,9 +426,27 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
     }
   }
 
-  function openDutyRisk(risk: DutyManagerRisk) {
-    onNavigate(dutyRiskNavigationTarget(risk.category))
-    onReturn()
+  async function openDutyRisk(risk: DutyManagerRisk) {
+    if (dutyActionBusy) return
+    setDutyActionBusy(risk.id)
+    try {
+      if (risk.incidentStatus === 'open' && dutyBriefing?.actions.canAcknowledge) {
+        await updateDutyManagerRisks({
+          idempotencyKey: crypto.randomUUID(),
+          action: 'acknowledge',
+          riskIds: risk.sourceRiskIds,
+        })
+      }
+      onNavigate(dutyRiskNavigationTarget(risk.category), {
+        objectId: risk.targetObjectId,
+        query: risk.targetQuery,
+        tableCode: risk.tableCode,
+      })
+      onReturn()
+    } catch (error) {
+      announce(error instanceof Error ? error.message : '暂时无法接管，请刷新后重试。', 'error')
+      setDutyActionBusy(null)
+    }
   }
 
   function announce(message: string, tone: ExecutionTone = 'success') {
@@ -1116,67 +1134,37 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
         </header>
 
         <section className="voice-command-stage">
-          <div className="voice-page-status">
-            <span><ShieldCheck size={15} />{pageHeading}</span>
-            <strong>{controls.length} 个控件 · {voiceDictionary.length} 个热词{generatedLabelCount > 0 ? ` · ${generatedLabelCount} 个待命名` : ''}</strong>
-          </div>
-          {voiceOptions.length > 0 && (
-            <label className="voice-tts-control">
-              <Volume2 size={14} />
-              <span>播报声线</span>
-              <select
-                aria-label="选择语音播报声线"
-                value={selectedVoiceURI || selectPreferredChineseVoice(voiceOptions)?.voiceURI || ''}
-                onChange={(event) => {
-                  const voiceURI = event.target.value
-                  setSelectedVoiceURI(voiceURI)
-                  window.localStorage.setItem('mbox.voice.tts.voice-uri', voiceURI)
-                  window.setTimeout(() => announce('好的，接下来由这个声音为您播报。'), 0)
-                }}
-              >
-                {voiceOptions.map((voice) => <option key={voice.voiceURI} value={voice.voiceURI}>{voice.name}</option>)}
-              </select>
-            </label>
-          )}
-          {generatedLabelCount > 0 && (
-            <div className="voice-command-warning" role="alert">
-              当前页有 {generatedLabelCount} 个控件缺少明确名称，暂用页面位置命名；管理员应补齐名称后再作为正式口令使用。
-            </div>
-          )}
-          <div className="voice-command-heading">
-            <h1><Bot size={21} />直接说，我来协助值班</h1>
-            <p>可以问现场风险，也可以一次交代多步工作；执行前仍会让您核对。</p>
-          </div>
-
           {dutyBriefing && (
             <section className={`duty-briefing is-${dutyBriefing.health}`} aria-label="AI值班经理巡场简报">
               <header>
-                <span><TriangleAlert size={16} /><strong>巡场简报</strong></span>
+                <span><TriangleAlert size={16} /><strong>现在要处理</strong></span>
                 <small>{dutyBriefing.counts.critical}紧急 · {dutyBriefing.counts.high}高风险 · {dutyBriefing.counts.medium}关注</small>
               </header>
               <p>{dutyBriefing.headline}</p>
               {dutyBriefing.risks.length > 0 && <div className="duty-risk-list">
-                {dutyBriefing.risks.slice(0, 5).map((risk) => <article className={`duty-risk-item is-${risk.incidentStatus}`} key={risk.id}>
-                  <button className="duty-risk-main" aria-label={`去处理：${risk.title}`} onClick={() => openDutyRisk(risk)}>
+                {dutyBriefing.risks.slice(0, 5).map((risk, index) => {
+                  const primaryAction = risk.incidentStatus === 'open' && dutyBriefing.actions.canAcknowledge ? '接管并处理' : '继续处理'
+                  return <article className={`duty-risk-item is-${risk.incidentStatus}`} key={risk.id}>
+                  <div className="duty-risk-main">
                     <i className={`is-${risk.severity}`} />
                     <span>
                       <strong>{risk.title}</strong>
                       <small>{risk.incidentStatus === 'acknowledged' ? `${risk.handledByName ?? '现场伙伴'}已接管 · ` : ''}{risk.detail}</small>
                     </span>
-                    <em>去处理</em>
-                    <ChevronRight size={15} />
-                  </button>
-                  {(dutyBriefing.actions.canAcknowledge || dutyBriefing.actions.canManage) && <div className="duty-risk-actions">
-                    {risk.incidentStatus === 'open' && dutyBriefing.actions.canAcknowledge && <button disabled={dutyActionBusy === risk.id} onClick={() => void handleDutyAction(risk, 'acknowledge')}><Check size={12} />我接管</button>}
+                    <em>{index === 0 ? '优先处理' : risk.incidentStatus === 'acknowledged' ? '跟进中' : '待接管'}</em>
+                  </div>
+                  <p className="duty-risk-recommendation"><Sparkles size={12} /><span><b>AI建议</b>{risk.recommendation}</span></p>
+                  <div className="duty-risk-actions">
+                    <button className="duty-risk-primary" aria-label={`${primaryAction}：${risk.title}`} disabled={dutyActionBusy === risk.id} onClick={() => void openDutyRisk(risk)}><Check size={13} />{dutyActionBusy === risk.id ? '正在接管' : primaryAction}<ChevronRight size={13} /></button>
                     {dutyBriefing.actions.canManage && <button disabled={dutyActionBusy === risk.id} onClick={() => void handleDutyAction(risk, 'defer')}><Clock3 size={12} />稍后10分钟</button>}
                     {dutyBriefing.actions.canManage && <button disabled={dutyActionBusy === risk.id} onClick={() => setPendingDutyDismissId(risk.id)}><CircleSlash2 size={12} />误报</button>}
-                  </div>}
+                  </div>
                   {pendingDutyDismissId === risk.id && <div className="duty-risk-dismiss-confirm" role="alert">
                     <span>确认现场已复核，这条是误报？</span>
                     <button disabled={dutyActionBusy === risk.id} onClick={() => void handleDutyAction(risk, 'dismiss_false_positive')}>确认</button>
                     <button onClick={() => setPendingDutyDismissId(null)}>取消</button>
                   </div>}
-                </article>)}
+                </article>})}
               </div>}
               {dutyHandover && <footer className="duty-handover-strip">
                 <span>今日闭环 <b>{dutyHandover.resolved + dutyHandover.dismissed}</b></span>
@@ -1185,6 +1173,11 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
               </footer>}
             </section>
           )}
+
+          <div className="voice-command-heading">
+            <h1><Bot size={21} />还想处理别的事？</h1>
+            <p>直接说或输入，AI会先让您确认，再按当前岗位权限执行。</p>
+          </div>
 
           {assistantMessages.length > 0 && (
             <section className="assistant-conversation" aria-label="AI值班经理对话">
@@ -1331,6 +1324,35 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
               {pageSuggestions.length === 0 && navigationSuggestions.slice(0, 4).map((item) => <button key={item.command} onClick={() => prepareCommand(item.command)}>{item.command}</button>)}
             </div>
           </div>
+
+          <details className="voice-advanced-settings">
+            <summary>语音偏好与识别状态 <ChevronRight size={15} /></summary>
+            <div>
+              <div className="voice-page-status">
+                <span><ShieldCheck size={15} />{pageHeading}</span>
+                <strong>{controls.length} 个控件 · {voiceDictionary.length} 个热词{generatedLabelCount > 0 ? ` · ${generatedLabelCount} 个待命名` : ''}</strong>
+              </div>
+              {voiceOptions.length > 0 && (
+                <label className="voice-tts-control">
+                  <Volume2 size={14} />
+                  <span>播报声线</span>
+                  <select
+                    aria-label="选择语音播报声线"
+                    value={selectedVoiceURI || selectPreferredChineseVoice(voiceOptions)?.voiceURI || ''}
+                    onChange={(event) => {
+                      const voiceURI = event.target.value
+                      setSelectedVoiceURI(voiceURI)
+                      window.localStorage.setItem('mbox.voice.tts.voice-uri', voiceURI)
+                      window.setTimeout(() => announce('好的，接下来由这个声音为您播报。'), 0)
+                    }}
+                  >
+                    {voiceOptions.map((voice) => <option key={voice.voiceURI} value={voice.voiceURI}>{voice.name}</option>)}
+                  </select>
+                </label>
+              )}
+              {generatedLabelCount > 0 && <p>当前页有 {generatedLabelCount} 个控件暂用页面位置命名，管理员可继续补齐正式名称。</p>}
+            </div>
+          </details>
 
           <details className="voice-command-catalog">
             <summary>查看本页全部快捷命令 <ChevronRight size={15} /></summary>

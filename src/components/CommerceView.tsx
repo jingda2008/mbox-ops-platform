@@ -1,5 +1,5 @@
 import { Ban, CheckCheck, ChefHat, CircleAlert, CircleDollarSign, Clock3, Copy, PackageCheck, PackageX, Play, QrCode, RotateCcw, ScanLine, ShoppingCart, Smartphone, UserRound, X } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { actOnKdsTask, createAssistedPaymentLink, createCartOrder, decideKdsException, getCurrentActorId, managerCancelKdsTask, reportKdsException } from '../api'
 import type { BootstrapResponse } from '../shared/contracts'
 import type { AssistedPaymentLink, KdsActionInput, KdsExceptionDecisionInput, KdsExceptionReportInput, ManagerKdsCancellationInput } from '../shared/commerce-api'
@@ -16,6 +16,7 @@ import {
 } from './commerce-workspace'
 import { MenuOrderingWorkspace, type MenuCartItem } from './MenuOrderingWorkspace'
 import { CustomerPaymentCodeScanner } from './CustomerPaymentCodeScanner'
+import type { OperationsConsoleNavigationRequest } from './OperationsConsole'
 import * as paymentApi from '../payment-api'
 import './CommerceView.css'
 
@@ -23,6 +24,7 @@ interface CommerceViewProps {
   data: BootstrapResponse
   onRefresh: () => Promise<void>
   onNotice: (message: string) => void
+  focusRequest?: OperationsConsoleNavigationRequest | null
 }
 
 const kdsLabels: Record<KdsTask['status'], string> = {
@@ -36,7 +38,7 @@ interface PaymentSheet extends AssistedPaymentLink {
   paymentItems: Array<{ orderId: string; orderItemId: string; quantity: number }>
 }
 
-export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
+export function CommerceView({ data, onRefresh, onNotice, focusRequest = null }: CommerceViewProps) {
   const currentActorId = getCurrentActorId()
   const access = getFulfillmentAccess(data, currentActorId)
   const currentEmployee = access.employee
@@ -52,6 +54,8 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
   const [cancelReasonCode, setCancelReasonCode] = useState<ManagerKdsCancellationInput['reasonCode']>('manager_cancelled')
   const [cancelReasonNote, setCancelReasonNote] = useState('')
   const [now, setNow] = useState(() => Date.now())
+  const [focusedTableCode, setFocusedTableCode] = useState('')
+  const handledFocusRequestId = useRef<number | null>(null)
   const ledgerTotal = data.orderDomain.tableLedgerEntries.reduce((sum, entry) => sum + entry.amount, 0)
   const activeKds = data.orderDomain.kdsTasks.filter(kdsTaskOperationallyActive)
   const visibleKds = useMemo(() => activeKds.toSorted((a, b) => {
@@ -69,6 +73,20 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
     const timer = window.setInterval(() => setNow(Date.now()), 30_000)
     return () => window.clearInterval(timer)
   }, [])
+
+  useEffect(() => {
+    if (!focusRequest || handledFocusRequestId.current === focusRequest.id) return
+    handledFocusRequestId.current = focusRequest.id
+    setWorkspaceMode('fulfillment')
+    setFocusedTableCode(focusRequest.focus?.tableCode ?? '')
+    const matchingTask = visibleKds.find((task) => {
+      const code = task.tableCode ?? tableFromSession(data, task.tableSessionId)?.code ?? ''
+      return code === focusRequest.focus?.tableCode
+    })
+    if (matchingTask) {
+      window.requestAnimationFrame(() => document.getElementById(`kds-task-${matchingTask.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
+    }
+  }, [data, focusRequest, visibleKds])
 
   const sheetPayment = paymentSheet
     ? data.paymentDomain.paymentIntents
@@ -335,7 +353,11 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
               const canReportProductionException = !exception && ['queued', 'preparing'].includes(task.status) && canAct
               const canReportWrongItem = !exception && ['completed', 'picked_up'].includes(task.status) && canAct
               return (
-                <article className={`kds-row kds-${task.status} ${timing.overdue ? 'is-overdue' : ''} ${exception ? 'has-exception' : ''}`} key={task.id}>
+                <article
+                  id={`kds-task-${task.id}`}
+                  className={`kds-row kds-${task.status} ${timing.overdue ? 'is-overdue' : ''} ${exception ? 'has-exception' : ''} ${focusedTableCode && (task.tableCode ?? table?.code) === focusedTableCode ? 'is-ai-focus' : ''}`}
+                  key={task.id}
+                >
                   <div className="kds-table"><span>{table?.code ?? task.tableCode ?? '未知桌号'}</span><small>{table?.displayName ?? (task.tableCode ? '按桌号出品' : '桌台未匹配')}</small></div>
                   <div className="kds-product">
                     <strong>{task.itemName} × {task.quantity}</strong>

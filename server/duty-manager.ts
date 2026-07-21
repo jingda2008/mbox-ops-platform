@@ -15,6 +15,17 @@ import { tableOperationsConfig } from './table-sessions.js'
 const openServiceStatuses = new Set(['pending', 'accepted', 'arrived', 'reopened', 'escalated'])
 const severityOrder: Record<DutyManagerRiskSeverity, number> = { critical: 0, high: 1, medium: 2, info: 3 }
 
+const riskRecommendations: Record<DutyManagerRisk['category'], string> = {
+  system: '先检查营业日与服务状态；无法恢复时立即启用人工备用流程。',
+  service: '先到桌回应客人，再按任务步骤处理并完成留痕。',
+  fulfillment: '先确认制作或取送卡点，再安排对应岗位接手。',
+  staffing: '先安排可工作的主服务或候补，避免桌台无人负责。',
+  sop: '核对阻塞步骤与现场证据，解除后继续执行。',
+  approval: '核对失败原因和证据，由有权岗位完成复核。',
+  reservation: '先核对联系方式与到店信息，再确认预约或记录后续安排。',
+  hardware: '检查设备连接与心跳；未恢复时切换备用设备或人工流程。',
+}
+
 function configuredBusinessDate(state: RuntimeState, value: Date | number | string) {
   return chinaBusinessDateKey(value, tableOperationsConfig(state).businessDayRolloverHour ?? 6)
 }
@@ -38,8 +49,8 @@ function tableCode(state: RuntimeState, tableId: string) {
 
 type RiskInput = Omit<
   DutyManagerRisk,
-  'id' | 'detectedAt' | 'occurrences' | 'sourceRiskIds' | 'incidentIds' | 'incidentStatus' | 'handledByName'
-> & { objectId: string; reason: string }
+  'id' | 'targetObjectId' | 'targetQuery' | 'recommendation' | 'detectedAt' | 'occurrences' | 'sourceRiskIds' | 'incidentIds' | 'incidentStatus' | 'handledByName'
+> & { objectId: string; reason: string; targetQuery?: string | null; recommendation?: string }
 
 function addRisk(risks: DutyManagerRisk[], now: number, risk: RiskInput) {
   const id = riskId(risk.category, risk.objectId, risk.reason)
@@ -51,6 +62,9 @@ function addRisk(risks: DutyManagerRisk[], now: number, risk: RiskInput) {
     detail: risk.detail,
     tableCode: risk.tableCode,
     ownerName: risk.ownerName,
+    targetObjectId: risk.objectId,
+    targetQuery: risk.targetQuery ?? risk.tableCode,
+    recommendation: risk.recommendation ?? riskRecommendations[risk.category],
     recommendedCommand: risk.recommendedCommand,
     detectedAt: new Date(now).toISOString(),
     occurrences: 1,
@@ -245,6 +259,7 @@ export function collectDutyManagerRisks(state: RuntimeState, now = Date.now()): 
       detail: `${reservation.partySize}位，计划${formatChinaTime(reservation.scheduledAt)}到店。`,
       tableCode: reservation.tableCode,
       ownerName: null,
+      targetQuery: reservation.customerName,
       recommendedCommand: '打开预约',
     })
   }

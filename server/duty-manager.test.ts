@@ -15,6 +15,7 @@ describe('AI duty manager briefing', () => {
     const serviceTask = createServiceTask(state, {
       tableCode: 'L01', serviceTypeId: 'water', source: 'guest', note: '请加水',
     })
+    serviceTask.createdAt = '2026-07-20T11:56:00.000Z'
     serviceTask.warningAt = '2026-07-20T12:00:00.000Z'
     serviceTask.escalateAt = '2026-07-20T12:01:00.000Z'
     serviceTask.managerAt = '2026-07-20T12:02:00.000Z'
@@ -125,7 +126,11 @@ describe('AI duty manager briefing', () => {
     }]
 
     expect(buildDutyManagerBriefing(state, now).risks).toContainEqual(expect.objectContaining({
-      category: 'reservation', detail: expect.stringContaining('计划12:30到店'),
+      category: 'reservation',
+      detail: expect.stringContaining('计划12:30到店'),
+      targetObjectId: 'reservation-beijing-time',
+      targetQuery: '北京时间客人',
+      recommendation: expect.stringContaining('核对联系方式'),
     }))
   })
 
@@ -159,6 +164,7 @@ describe('AI duty manager briefing', () => {
     state.reservationState!.reservations = []
     state.hardwareState!.devices.forEach((device) => { device.enabled = false })
     const task = createServiceTask(state, { tableCode: 'L01', serviceTypeId: 'water', source: 'guest', note: '加水' })
+    task.createdAt = new Date(now - 180_000).toISOString()
     state.tables = state.tables.map((table) => ({ ...table, status: 'available', primaryEmployeeId: null }))
     task.warningAt = new Date(now - 120_000).toISOString()
     task.escalateAt = new Date(now - 60_000).toISOString()
@@ -186,6 +192,7 @@ describe('AI duty manager briefing', () => {
     state.sopActionRecords = []
     state.reservationState!.reservations = []
     const task = createServiceTask(state, { tableCode: 'L01', serviceTypeId: 'water', source: 'guest', note: '加水' })
+    task.createdAt = new Date(now - 180_000).toISOString()
     task.warningAt = new Date(now - 120_000).toISOString()
     task.escalateAt = new Date(now - 60_000).toISOString()
     task.managerAt = new Date(now - 30_000).toISOString()

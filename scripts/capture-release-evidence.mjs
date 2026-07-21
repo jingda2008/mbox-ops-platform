@@ -91,7 +91,10 @@ const [commit, branch, status, packageJson] = await Promise.all([
   command('git', ['status', '--porcelain']),
   import('../package.json', { with: { type: 'json' } }),
 ])
-const check = process.env.MBOX_EVIDENCE_SKIP_CHECK === '1'
+const checkSkipped = process.env.MBOX_EVIDENCE_SKIP_CHECK === '1'
+const verificationSource = process.env.MBOX_EVIDENCE_VERIFICATION_SOURCE?.trim()
+  || (checkSkipped ? 'external-gate-not-specified' : 'local-full-check')
+const check = checkSkipped
   ? { ok: true, stdout: 'skipped by MBOX_EVIDENCE_SKIP_CHECK=1', stderr: '' }
   : await command('npm', ['run', 'check'], true)
 const audit = await command('npm', ['audit', '--omit=dev', '--json'], true)
@@ -107,6 +110,8 @@ const evidence = {
   },
   application: { version: packageJson.default.version },
   verification: {
+    source: verificationSource,
+    checkExecuted: !checkSkipped,
     checkPassed: check.ok,
     testFilesPassed: matchNumber(combinedCheckOutput, /Test Files\s+(\d+) passed/),
     testsPassed: matchNumber(combinedCheckOutput, /Tests\s+(\d+) passed/),

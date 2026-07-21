@@ -44,6 +44,7 @@ android/validation-twa/signing.env
 !.vscode/extensions.json
 .idea
 .DS_Store
+gha-creds-*.json
 *.suo
 *.ntvs*
 *.njsproj

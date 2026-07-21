@@ -144,6 +144,20 @@ describe('role home access', () => {
     expect(model.metrics.find((item) => item.id === 'kds')?.value).toBe(1)
     expect(model.todos.find((item) => item.id === 'kds')?.count).toBe(1)
   })
+
+  it('gives the manager home concrete task and KDS drill-down queries', () => {
+    const data = bootstrapForRole('manager', '店长')
+    data.metrics.atRiskTasks = 2
+    data.metrics.escalatedTasks = 1
+
+    const model = buildRoleHomeModel(data, 'employee-current')
+
+    expect(model.metrics.find((item) => item.id === 'tasks')?.focusQuery).toBe('service-open')
+    expect(model.metrics.find((item) => item.id === 'risk')?.focusQuery).toBe('service-sla-risk')
+    expect(model.metrics.find((item) => item.id === 'kds')?.focusQuery).toBe('kds-active')
+    expect(model.todos.find((item) => item.id === 'risk')?.focusQuery).toBe('service-sla-risk')
+    expect(model.todos.find((item) => item.id === 'escalated')?.focusQuery).toBe('service-escalated')
+  })
 })
 
 function bootstrapForRole(roleId: string, roleName: string) {

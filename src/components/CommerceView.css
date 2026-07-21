@@ -24,6 +24,8 @@
 .commerce-grid.is-task-only .kds-section { border-right: 0; }
 .kds-section { border-right: 1px solid var(--line); }
 .commerce-section-title { min-height: 54px; display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+.kds-focus-filter { min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 16px; border-bottom: 1px solid #e2cc8b; background: #fff9e9; color: #72540d; font-size: 12px; font-weight: 800; }
+.kds-focus-filter button { min-height: 30px; padding: 0 10px; border: 1px solid #c9aa50; border-radius: 4px; background: #fff; color: #72540d; font-weight: 800; }
 .kds-list, .ledger-list { display: grid; }
 .kds-row { min-height: 92px; display: grid; grid-template-columns: 92px minmax(180px, 1fr) minmax(185px, .75fr) auto; align-items: center; gap: 14px; padding: 12px 16px; border-bottom: 1px solid var(--line); border-left: 4px solid #aeb4aa; }
 .kds-row:last-child, .ledger-row:last-child { border-bottom: 0; }

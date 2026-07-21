@@ -70,6 +70,31 @@ describe('business day operational closure', () => {
     })
   })
 
+  it('does not let an unresolved payment from a previous business day block the current day', () => {
+    const state = createSeedState()
+    const session = state.songState.tableSessions.find((candidate) => candidate.status === 'open')!
+    const previousBusinessDate = state.store.businessDate
+    state.paymentDomain.paymentIntents.push({
+      id: 'previous-day-pending-payment', tableSessionId: session.id,
+      orderIds: ['previous-day-order'],
+      lineAllocations: [{
+        orderId: 'previous-day-order', orderItemId: 'previous-day-line', quantity: 1,
+        unitPaidAmount: 6_800, paidAmount: 6_800,
+      }],
+      amount: 6_800, currency: 'CNY', channel: 'wechat_jsapi', merchantId: 'merchant-test',
+      status: 'pending', channelTransactionId: null, createdBy: 'emp-cashier', deviceId: 'cashier-test',
+      createdAt: `${previousBusinessDate}T20:00:00+08:00`, expiresAt: `${nextDate(previousBusinessDate)}T03:00:00+08:00`,
+      paidAt: null, failedAt: null, closedAt: null, failureReason: null,
+      businessDate: previousBusinessDate,
+    })
+    state.store.businessDate = nextDate(previousBusinessDate)
+    state.songState.businessDate = state.store.businessDate
+
+    expect(collectBlockers(state, 'emp-chen')).not.toContainEqual(expect.objectContaining({
+      kind: 'unresolved_payment', id: 'previous-day-pending-payment',
+    }))
+  })
+
   it('accepts completed ordinary and authorized urgent service without guest confirmation', () => {
     const state = createSeedState()
     const ordinary = createServiceTask(state, {

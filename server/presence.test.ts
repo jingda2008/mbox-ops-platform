@@ -8,6 +8,7 @@ import {
   establishPresenceLease,
   reconcilePresence,
   registerPresenceRoutes,
+  resumePresenceLease,
 } from './presence.js'
 import type { RuntimeRepository, RuntimeRepositoryHealth } from './repository.js'
 import { createSeedState } from './seed.js'
@@ -121,7 +122,9 @@ describe('staff presence domain', () => {
         taskId: task.id,
         type: 'task.assigned.v1',
         actorId: 'system',
-        payload: { ownerId: 'emp-lin', reason: 'employee_online' },
+        payload: expect.objectContaining({
+          ownerId: 'emp-lin', reason: 'employee_online', strategy: 'load_aware',
+        }),
       }))
     }
   })
@@ -134,6 +137,9 @@ describe('staff presence routes', () => {
     let now = Date.now()
     await registerAuthContext(app, {
       runtimeMode: 'production', sessionSecret: secret, readState: () => repository.read(),
+      resumeStaffSession: (input) => repository.mutate((state) => Boolean(resumePresenceLease(state, {
+        ...input, businessDate: state.store.businessDate, leaseTtlMs: 10_000,
+      }))),
     })
     await registerPresenceRoutes(app, repository, { leaseTtlMs: 10_000, sweepIntervalMs: 0, now: () => now })
     const sessionExpiresAt = now + 60_000
@@ -157,6 +163,11 @@ describe('staff presence routes', () => {
       method: 'POST', url: '/api/auth/logout', headers: { authorization: `Bearer ${token('device-a')}` },
     })
     expect(firstLogout.json()).toMatchObject({ sessionId: 'device-a', online: true })
+    const revokedHeartbeat = await app.inject({
+      method: 'POST', url: '/api/auth/presence/heartbeat', headers: { authorization: `Bearer ${token('device-a')}` },
+    })
+    expect(revokedHeartbeat.statusCode).toBe(401)
+    expect(revokedHeartbeat.json().code).toBe('STAFF_SESSION_REVOKED')
     const secondLogout = await app.inject({
       method: 'POST', url: '/api/auth/logout', headers: { authorization: `Bearer ${token('device-b')}` },
     })
@@ -165,12 +176,15 @@ describe('staff presence routes', () => {
     await app.close()
   })
 
-  it('returns a re-login response after the lease expires', async () => {
+  it('automatically restores online presence while the six-hour staff session remains valid', async () => {
     const repository = new MemoryRepository()
     const app = Fastify()
     let now = Date.now()
     await registerAuthContext(app, {
       runtimeMode: 'production', sessionSecret: secret, readState: () => repository.read(),
+      resumeStaffSession: (input) => repository.mutate((state) => Boolean(resumePresenceLease(state, {
+        ...input, businessDate: state.store.businessDate, leaseTtlMs: 1_000,
+      }))),
     })
     await registerPresenceRoutes(app, repository, { leaseTtlMs: 1_000, sweepIntervalMs: 0, now: () => now })
     const sessionExpiresAt = now + 60_000
@@ -180,13 +194,14 @@ describe('staff presence routes', () => {
     }, secret)
 
     now += 1_001
+    await repository.mutate((state) => reconcilePresence(state, now))
     const response = await app.inject({
       method: 'POST', url: '/api/auth/presence/heartbeat', headers: { authorization: `Bearer ${token}` },
     })
 
-    expect(response.statusCode).toBe(401)
-    expect(response.json().code).toBe('PRESENCE_LEASE_EXPIRED')
-    expect((await repository.read()).employees.find((employee) => employee.id === 'emp-chen')?.online).toBe(false)
+    expect(response.statusCode, response.body).toBe(200)
+    expect(response.json()).toMatchObject({ sessionId: 'expired-device', actorId: 'emp-chen', online: true })
+    expect((await repository.read()).employees.find((employee) => employee.id === 'emp-chen')?.online).toBe(true)
     await app.close()
   })
 })

@@ -32,6 +32,7 @@ import {
 import type { RuntimeRepository } from './repository.js'
 import { consumeManagedInventoryForRemadeOrderItem } from './inventory-order-integration.js'
 import { requireRequestActor } from './auth-context.js'
+import { commercialOpsFor } from './commercial-ops.js'
 import {
   beginDualApprovalDecision,
   completeDualApprovalDecision,
@@ -387,9 +388,21 @@ export function registerInventoryRoutes(app: FastifyInstance, repository: Runtim
       const actor = requireConfiguredInventoryActor(state, request, 'inventory.manage')
       const domain = inventory(state)
       requirePolicyRole(actor, domain.policy.stockCountRoleIds, 'inventory.manage', '提交盘点')
+      const product = state.products.find((item) => item.id === input.productId)
+      const cocktailProductIds = new Set(state.products.filter((item) => (
+        item.name.includes('鸡尾酒') || item.sku.toUpperCase().startsWith('COCKTAIL') || (item.tags ?? []).includes('现调')
+      )).map((item) => item.id))
+      const isCocktailInventory = Boolean(product && cocktailProductIds.has(product.id)) || domain.recipeVersions.some((recipe) => (
+        recipe.status === 'active'
+        && cocktailProductIds.has(recipe.productId)
+        && recipe.lines.some((line) => line.ingredientSkuId === input.productId)
+      ))
+      const acceptedLossBps = isCocktailInventory ? commercialOpsFor(state).config.inventoryControl.cocktailAllowedLossBps : 0
       return mutateInventory(state, (value) => submitStockCount(value, {
         ...input,
         countId: deterministicId('stock_count', input.idempotencyKey),
+        acceptedLossBps,
+        automaticAdjustmentMovementId: deterministicId('stock_count_loss', input.idempotencyKey),
         countedBy: actor.id,
         businessDate: state.store.businessDate,
       }))

@@ -127,6 +127,7 @@
 .reservation-row.status-arrived { border-left-color: var(--success); }
 .reservation-row.status-cancelled, .reservation-row.status-no_show { border-left-color: #bb565b; background: #fcfaf9; }
 .reservation-row.status-seated { border-left-color: #6c756b; background: #fafbf8; }
+.reservation-row.is-ai-focus { outline: 3px solid #d3ad38; outline-offset: -3px; background: #fffbea; }
 .reservation-time { display: grid; grid-template-columns: 1fr auto; gap: 2px 7px; }
 .reservation-time strong { color: var(--ink-soft); font-size: 10px; }
 .reservation-time b { grid-column: 1; font-size: 20px; }
@@ -253,3 +254,11 @@
   .reservation-actions { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { .reservation-spin { animation: none; } }
+.reservation-deposit-preview { min-height: 44px; display: flex; align-items: center; gap: 9px; grid-column: 1 / -1; padding: 10px 12px; border: 1px solid #dfcf94; border-radius: 5px; background: #fff9e4; color: #5d4b13; font-size: 12px; }
+.reservation-deposit-rule-list { display: grid; gap: 8px; margin-top: 12px; }
+.reservation-deposit-rule { display: grid; grid-template-columns: minmax(120px, 1fr) repeat(3, minmax(120px, 1fr)); align-items: end; gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: #f7f8f4; }
+.reservation-deposit-rule > strong { align-self: center; }
+@media (max-width: 760px) {
+  .reservation-deposit-rule { grid-template-columns: 1fr 1fr; }
+  .reservation-deposit-rule > strong { grid-column: 1 / -1; }
+}

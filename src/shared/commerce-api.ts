@@ -90,6 +90,41 @@ export const kdsExceptionDecisionSchema = z.object({
   }
 })
 
+export const managerKdsCancellationSchema = z.object({
+  reasonCode: z.enum(['unavailable_confirmed', 'guest_cancelled', 'manager_cancelled', 'other']),
+  reasonNote: z.string().trim().min(2).max(200),
+  idempotencyKey: z.string().min(8).max(128),
+})
+
+export const complimentaryOrderSchema = z.object({
+  tableId: z.string().min(1),
+  items: z.array(z.object({
+    productId: z.string().min(1),
+    quantity: z.number().int().min(1).max(50),
+  })).min(1).max(20),
+  reason: z.string().trim().min(2).max(200),
+  sourceKdsTaskId: z.string().min(1).nullable().default(null),
+  idempotencyKey: z.string().min(8).max(128),
+})
+
+export interface ManagerKdsCancellationResult {
+  cancellationEventId: string
+  taskId: string
+  orderId: string
+  orderItemId: string
+  itemName: string
+  quantity: number
+  accounting: {
+    policy: 'manual_confirmation_required'
+    mutationApplied: false
+    recommendation: 'review_refund' | 'review_receivable' | 'no_financial_action'
+    payableAmount: number
+    paidAmount: number
+    refundedAmount: number
+    suggestedAmount: number
+  }
+}
+
 export const authorizationRequestSchema = z.object({
   orderId: z.string().min(1),
   kind: z.enum(['discount', 'gift']),
@@ -121,4 +156,6 @@ export type AssistedPaymentLinkInput = z.infer<typeof assistedPaymentLinkSchema>
 export type KdsActionInput = z.infer<typeof kdsActionSchema>
 export type KdsExceptionReportInput = z.infer<typeof kdsExceptionReportSchema>
 export type KdsExceptionDecisionInput = z.infer<typeof kdsExceptionDecisionSchema>
+export type ManagerKdsCancellationInput = z.infer<typeof managerKdsCancellationSchema>
+export type ComplimentaryOrderInput = z.infer<typeof complimentaryOrderSchema>
 export type AuthorityWriteInput = z.infer<typeof authorityWriteSchema>

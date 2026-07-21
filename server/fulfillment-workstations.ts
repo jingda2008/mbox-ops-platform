@@ -9,8 +9,6 @@ const FALLBACK_PRODUCTION_ROLE_IDS = ['specialist']
 const FALLBACK_DELIVERY_ROLE_IDS = ['server', 'backup', 'specialist']
 export const defaultDeliveryServiceTypeId = 'fulfillment-delivery'
 
-export const fulfillmentFallbackRoleIds = ['supervisor', 'manager'] as const
-
 export const defaultFulfillmentWorkstations: readonly FulfillmentWorkstationConfig[] = [
   {
     id: 'bar-main',
@@ -208,13 +206,14 @@ export function resolveKdsWorkstation(state: OrderDomainState, task: KdsTask) {
 }
 
 export function allowedFulfillmentRoleIds(
-  state: OrderDomainState,
+  state: RuntimeState,
   task: KdsTask,
   action: 'start' | 'complete' | 'pickUp' | 'deliver',
 ) {
-  const workstation = resolveKdsWorkstation(state, task)
+  const workstation = state.config.workstations.find((item) => item.id === task.stationId)
+    ?? resolveKdsWorkstation(state.orderDomain, task)
   const configuredRoleIds = ['start', 'complete'].includes(action)
     ? workstation.productionRoleIds
     : workstation.deliveryRoleIds
-  return [...new Set([...configuredRoleIds, ...fulfillmentFallbackRoleIds])]
+  return [...new Set(configuredRoleIds)]
 }

@@ -1,28 +1,21 @@
 import cors from '@fastify/cors'
+import compress from '@fastify/compress'
 import fastifyStatic from '@fastify/static'
 import Fastify from 'fastify'
 import { createHash, randomUUID } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { ZodError } from 'zod'
 import {
   areaWriteSchema,
   configDraftSchema,
-  createTaskSchema,
   employeeWriteSchema,
   productWriteSchema,
   shiftWriteSchema,
   tableWriteSchema,
-  taskActionSchema,
 } from '../src/shared/contracts.js'
 import { authorityWriteSchema } from '../src/shared/commerce-api.js'
-import {
-  applyTaskAction,
-  calculateMetrics,
-  canEmployeeClaimTask,
-  createServiceTask,
-  escalateDueTasks,
-  saveConfigDraft,
-} from './domain.js'
+import { calculateMetrics, saveConfigDraft } from './domain.js'
 import { createRuntimeDependencies } from './repository-factory.js'
 import { CommerceRequestError, registerCommerceRoutes } from './commerce-api.js'
 import { registerPaymentRoutes } from './payment-api.js'
@@ -31,7 +24,10 @@ import {
   PaymentProviderUnavailableError,
   validateEnvironmentPaymentRuntime,
 } from './payment-provider.js'
-import { processAwaitingOrderReminders, registerProactiveServiceRoutes } from './proactive-service.js'
+import { registerProactiveServiceRoutes } from './proactive-service.js'
+import { dispatchDueSopActions } from './sop-action-dispatch.js'
+import { createSopActionAdapters } from './sop-action-runtime.js'
+import { registerSopActionRoutes, SopActionBusinessError } from './sop-action-api.js'
 import { registerBenefitRoutes } from './benefit-domain.js'
 import { buildMemberPortal, registerMemberPortalRoutes } from './member-portal.js'
 import { registerNotificationRoutes } from './notification-api.js'
@@ -62,6 +58,7 @@ import { TableAccessError } from './table-access.js'
 import { registerStoreImportRoutes } from './store-import-api.js'
 import { registerTableSessionRoutes } from './table-session-api.js'
 import { registerBusinessDayRoutes } from './business-day-api.js'
+import { reconcileAutomaticBusinessDay } from './business-day-rollover.js'
 import { StoreImportValidationError } from './store-import.js'
 import {
   PostgresRepositoryError,
@@ -80,17 +77,28 @@ import { registerReservationRoutes } from './reservation-api.js'
 import { registerWaitlistRoutes } from './waitlist-api.js'
 import { registerWechatReservationRoutes } from './wechat-reservation-api.js'
 import { registerPilotAuthRoutes } from './pilot-auth.js'
-import { AuthorizationError, requireApprovalAmount, requireConfiguredOperation, requireTableDataScope } from './authorization.js'
+import { AuthorizationError, requireApprovalAmount, requireConfiguredOperation } from './authorization.js'
 import { createCustomerNotificationAdapters } from './notification-runtime.js'
-import { syncKdsFromFulfillmentServiceTaskAction } from './fulfillment-service.js'
-import { processOverdueProductionTasks } from './kds-production-alerts.js'
+import { applyScheduledOperations, scheduledOperationsWouldChange } from './operational-scheduler.js'
 import { projectRuntimeStateForActor } from './bootstrap-projection.js'
+import { buildBootstrapViewEtag } from './bootstrap-etag.js'
+import { RevisionScopedCache } from './revision-scoped-cache.js'
 import { effectivePermissionIdsForEmployee } from '../src/shared/staff-access.js'
 import { preserveProtectedProductCost, productCostView } from './product-cost-policy.js'
 import { MemoryRateLimitStore, PostgresRateLimitStore } from './rate-limit.js'
-import { registerPresenceRoutes } from './presence.js'
+import { DEFAULT_PRESENCE_LEASE_TTL_MS, registerPresenceRoutes, resumePresenceLease } from './presence.js'
 import { MemoryGuestInsightsStore, PostgresGuestInsightsStore } from './guest-insights.js'
 import { GoogleCloudVoiceTranscriber, registerVoiceTranscriptionRoutes } from './voice-transcription.js'
+import { registerAssistantRoutes } from './assistant-api.js'
+import { registerCommercialOpsRoutes } from './commercial-ops-api.js'
+import { registerHardwareRoutes } from './hardware-api.js'
+import { registerTaskRoutes } from './task-api.js'
+import { effectiveHardwareDeviceStatus, HardwareBusinessError } from './hardware-domain.js'
+import { GeminiAssistantPlanner } from './assistant-planner.js'
+import {
+  MemoryAssistantConversationStore,
+  PostgresAssistantConversationStore,
+} from './assistant-conversation-store.js'
 
 const runtimeConfig = loadRuntimeConfig()
 
@@ -101,6 +109,12 @@ const app = Fastify({
 })
 const runtimeDependencies = createRuntimeDependencies(runtimeConfig)
 const repository = runtimeDependencies.repository
+const bootstrapViewCache = new RevisionScopedCache<{
+  projected: ReturnType<typeof projectRuntimeStateForActor>
+  etag: string
+  permissionIds: ReturnType<typeof effectivePermissionIdsForEmployee>
+  metrics: ReturnType<typeof calculateMetrics>
+}>(64)
 const guestInsights = runtimeDependencies.postgresPool
   ? new PostgresGuestInsightsStore({
       pool: runtimeDependencies.postgresPool,
@@ -121,9 +135,25 @@ const rateLimitStore = runtimeDependencies.postgresPool
       storeId: '00000000-0000-4000-8000-000000000002',
       hashSecret: runtimeConfig.qrSecret,
     })
+const assistantConversationStore = runtimeDependencies.postgresPool
+  ? new PostgresAssistantConversationStore({
+      pool: runtimeDependencies.postgresPool,
+      tenantId: runtimeConfig.tenantId!,
+      storeId: runtimeConfig.storeUuid!,
+    })
+  : new MemoryAssistantConversationStore()
 
 await repository.init()
+const startupBusinessDayRollover = await repository.mutate((state) => reconcileAutomaticBusinessDay(state))
+if (startupBusinessDayRollover.status === 'rolled_over') {
+  app.log.info({
+    previousBusinessDate: startupBusinessDayRollover.steps[0]?.businessDate,
+    businessDate: startupBusinessDayRollover.businessDate,
+    rolledBusinessDayCount: startupBusinessDayRollover.steps.length,
+  }, 'business day automatically rolled over during startup')
+}
 await guestInsights.init()
+await assistantConversationStore.init()
 const paymentProviderResolver = createEnvironmentPaymentProviderResolver()
 const paymentRuntime = validateEnvironmentPaymentRuntime((await repository.read()).paymentDomain)
 await app.register(cors, {
@@ -131,26 +161,77 @@ await app.register(cors, {
   credentials: true,
   methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 })
+await app.register(compress, {
+  global: true,
+  threshold: 1_024,
+})
 if (runtimeConfig.runtimeMode === 'staging' || runtimeConfig.runtimeMode === 'production') {
+  const staticRoot = resolve(process.cwd(), 'dist')
+  app.get('/install/ios', async (_request, reply) => reply.redirect('/install/ios.html'))
+  app.get('/install/android', async (_request, reply) => reply.redirect('/install/android.html'))
+  app.get('/downloads/MBOX-Ops-Validation-latest.apk', async (_request, reply) => reply
+    .redirect('/downloads/MBOX-Ops-Validation-1.0.0-rc.14-validation.1.apk'))
   await app.register(fastifyStatic, {
-    root: resolve(process.cwd(), 'dist'),
+    root: staticRoot,
     prefix: '/',
     wildcard: false,
+    setHeaders: (reply, path) => {
+      if (path.endsWith('.mobileconfig')) {
+        reply
+          .header('Content-Type', 'application/x-apple-aspen-config')
+          .header('Content-Disposition', 'attachment; filename="MBOX-Ops-Validation.mobileconfig"')
+          .header('Cache-Control', 'public, max-age=300')
+      }
+      if (path.endsWith('.apk')) {
+        reply
+          .header('Content-Type', 'application/vnd.android.package-archive')
+          .header('Content-Disposition', 'attachment; filename="MBOX-Ops-Validation.apk"')
+          .header('Cache-Control', 'public, max-age=300')
+      }
+    },
   })
+  const assetLinks = JSON.parse(
+    await readFile(resolve(staticRoot, '.well-known/assetlinks.json'), 'utf8'),
+  ) as unknown
+  app.get('/.well-known/assetlinks.json', async (_request, reply) => reply
+    .header('Cache-Control', 'public, max-age=300')
+    .type('application/json; charset=utf-8')
+    .send(assetLinks))
 }
 await registerObservability(app, {
   runtimeMode: runtimeConfig.runtimeMode,
   metricsToken: runtimeConfig.metricsToken,
   readiness: async () => {
     const status = await repository.healthCheck()
+    const state = status.ready ? await repository.read() : null
+    const enabledDevices = state?.hardwareState?.devices.filter((device) => device.enabled) ?? []
+    const realDevices = enabledDevices.filter((device) => device.adapter !== 'simulator')
+    const realDevicesOnline = state?.hardwareState
+      ? realDevices.filter((device) => effectiveHardwareDeviceStatus(device, state.hardwareState!.config) === 'online').length
+      : 0
+    const simulatedDevicesEnabled = enabledDevices.filter((device) => device.adapter === 'simulator').length
+    const hardwareMode = realDevices.length > 0
+      ? realDevicesOnline === realDevices.length ? 'real_ready' : 'real_degraded'
+      : simulatedDevicesEnabled > 0 ? 'simulation_only' : 'unconfigured'
     return {
       ready: status.ready,
       details: {
         repository: status.repository,
         revision: status.revision ?? -1,
+        projectionReady: status.projectionReady ?? status.repository !== 'postgres',
+        projectionRevision: status.projectionRevision ?? -1,
+        projectionCountsMatch: status.projectionCountsMatch ?? status.repository !== 'postgres',
         paymentMode: runtimeConfig.pilotPaymentSimulationEnabled ? 'simulation' : paymentRuntime.mode,
         commercialOnlinePaymentReady: paymentRuntime.onlinePaymentReady && !runtimeConfig.pilotPaymentSimulationEnabled,
         voiceTranscription: runtimeConfig.voiceTranscriptionProvider,
+        assistant: runtimeConfig.assistantProvider,
+        assistantModel: runtimeConfig.assistantProvider === 'gemini_interactions' ? runtimeConfig.geminiModel : 'disabled',
+        releaseSha: runtimeConfig.releaseSha,
+        releaseImageDigest: runtimeConfig.releaseImageDigest,
+        hardwareMode,
+        realHardwareDevices: realDevices.length,
+        realHardwareDevicesOnline: realDevicesOnline,
+        simulatedDevicesEnabled,
       },
     }
   },
@@ -160,11 +241,28 @@ await registerAuthContext(app, {
   runtimeMode: runtimeConfig.runtimeMode as RuntimeMode,
   sessionSecret: runtimeConfig.sessionSecret,
   readState: () => repository.read(),
+  resumeStaffSession: async (input) => repository.mutate((state) => Boolean(resumePresenceLease(state, {
+    ...input,
+    businessDate: state.store.businessDate,
+    leaseTtlMs: DEFAULT_PRESENCE_LEASE_TTL_MS,
+  }))),
 })
 await registerVoiceTranscriptionRoutes(app, {
   rateLimitStore,
   transcriber: runtimeConfig.voiceTranscriptionProvider === 'google_v1'
     ? new GoogleCloudVoiceTranscriber()
+    : undefined,
+})
+await registerAssistantRoutes(app, {
+  repository,
+  conversationStore: assistantConversationStore,
+  rateLimitStore,
+  planner: runtimeConfig.assistantProvider === 'gemini_interactions'
+    ? new GeminiAssistantPlanner({
+        apiKey: runtimeConfig.geminiApiKey!,
+        model: runtimeConfig.geminiModel,
+        timeoutMs: runtimeConfig.assistantHttpTimeoutMs,
+      })
     : undefined,
 })
 if (runtimeConfig.runtimeMode === 'staging' || runtimeConfig.runtimeMode === 'production') {
@@ -267,6 +365,7 @@ const customerNotificationAdapters = createCustomerNotificationAdapters({
     missing: diagnostic.missing,
   }, diagnostic.message),
 })
+const sopActionAdapters = createSopActionAdapters(runtimeConfig)
 
 function isPersistenceFailure(error: unknown) {
   if (error instanceof PostgresRepositoryError) return true
@@ -282,6 +381,12 @@ app.setErrorHandler((error, _request, reply) => {
   if (error instanceof BenefitRedemptionBusinessError) {
     return reply.status(error.statusCode).send({ code: error.code, message: error.message })
   }
+  if (error instanceof SopActionBusinessError) {
+    return reply.status(error.statusCode).send({ code: error.code, message: error.message })
+  }
+  if (error instanceof HardwareBusinessError) {
+    return reply.status(error.statusCode).send({ code: error.code, message: error.message })
+  }
   if (error instanceof AuthenticationError) {
     return reply.status(error.statusCode).send({ code: error.code, message: error.message })
   }
@@ -295,7 +400,7 @@ app.setErrorHandler((error, _request, reply) => {
     return reply.status(error.statusCode).send({ code: error.code, message: error.message, currentVersion: error.currentVersion })
   }
   if (error instanceof TableAccessError) {
-    return reply.status(error.statusCode).send({ code: error.code, message: error.message })
+    return reply.status(error.statusCode).send({ code: error.code, message: error.message, details: error.details })
   }
   if (error instanceof PaymentProviderUnavailableError) {
     return reply.status(503).send({ code: 'PAYMENT_PROVIDER_UNAVAILABLE', message: error.message })
@@ -329,49 +434,29 @@ app.get('/api/health', async () => ({ status: 'ok', time: new Date().toISOString
 app.get('/api/bootstrap', async (request, reply) => {
   const state = request.mboxAuthState ?? await repository.read()
   const actor = requireRequestActor(request)
-  const etag = `"${state.revision}"`
-  reply.header('etag', etag).header('cache-control', 'private, no-cache')
-  if (request.headers['if-none-match'] === etag) return reply.status(304).send()
-  const permissionIds = effectivePermissionIdsForEmployee(state, actor.actorId)
-  const projected = projectRuntimeStateForActor(state, actor)
-  return { ...projected, serverNow: new Date().toISOString(), metrics: calculateMetrics(projected), viewer: { actorId: actor.actorId, permissionIds } }
+  const view = bootstrapViewCache.getOrCreate(`${actor.storeId}:${actor.actorId}`, state.revision, () => {
+    const projected = projectRuntimeStateForActor(state, actor)
+    return {
+      projected,
+      etag: buildBootstrapViewEtag(projected),
+      permissionIds: effectivePermissionIdsForEmployee(state, actor.actorId),
+      metrics: calculateMetrics(projected),
+    }
+  })
+  const legacyRevisionEtag = `"${state.revision}"`
+  reply.header('etag', view.etag).header('cache-control', 'private, no-cache')
+  if ([view.etag, legacyRevisionEtag].includes(request.headers['if-none-match'] ?? '')) {
+    return reply.status(304).send()
+  }
+  return {
+    ...view.projected,
+    serverNow: new Date().toISOString(),
+    metrics: view.metrics,
+    viewer: { actorId: actor.actorId, permissionIds: view.permissionIds },
+  }
 })
 
-app.post('/api/tasks', async (request, reply) => {
-  const input = createTaskSchema.parse(request.body)
-  const task = await repository.mutate((state) => {
-    const actor = requireConfiguredOperation(request, state, 'service.task.create')
-    const table = state.tables.find((item) => item.code === input.tableCode)
-    if (!table) throw new Error('桌台不存在')
-    requireTableDataScope(request, state, table.id, 'service.task.create')
-    return createServiceTask(state, { ...input, source: 'employee', requestedBy: actor.actorId })
-  })
-  return reply.status(201).send(task)
-})
-
-app.post<{ Params: { taskId: string } }>('/api/tasks/:taskId/actions', async (request) => {
-  const input = taskActionSchema.parse(request.body)
-  const actor = requireRequestActor(request)
-  if (['confirm', 'unresolved'].includes(input.action)) {
-    throw new AuthorizationError('客户确认必须由客人端提交', 'service.task.action')
-  }
-  if (input.actorId !== actor.actorId) {
-    throw new AuthorizationError('任务操作人必须与当前登录员工一致', 'service.task.action')
-  }
-  return repository.mutate((state) => {
-    requireConfiguredOperation(request, state, 'service.task.action')
-    const currentTask = state.tasks.find((item) => item.id === request.params.taskId)
-    if (!currentTask) throw new Error('任务不存在')
-    const eligibleNotifiedClaim = input.action === 'accept'
-      && currentTask.ownerId === null
-      && canEmployeeClaimTask(state, currentTask, actor.actorId)
-    if (!eligibleNotifiedClaim) requireTableDataScope(request, state, currentTask.tableId, 'service.task.action')
-    const action = { ...input, actorId: actor.actorId }
-    const task = applyTaskAction(state, request.params.taskId, action)
-    syncKdsFromFulfillmentServiceTaskAction(state, task, action)
-    return task
-  })
-})
+registerTaskRoutes(app, repository)
 
 app.put('/api/config/draft', async (request) => {
   const input = configDraftSchema.parse(request.body)
@@ -528,6 +613,7 @@ registerBenefitRedemptionRoutes(app, repository)
 registerSongRoutes(app, repository)
 registerGuestRoutes(app, repository, {
   secret: runtimeConfig.qrSecret,
+  previousSecret: runtimeConfig.qrPreviousSecret,
   runtimeMode: runtimeConfig.runtimeMode,
   allowPaymentSimulation: runtimeConfig.pilotPaymentSimulationEnabled,
   providerResolver: paymentProviderResolver,
@@ -537,7 +623,13 @@ registerPublicReservationRoutes(app, repository, { secret: runtimeConfig.qrSecre
 registerStoreImportRoutes(app, repository)
 registerInventoryRoutes(app, repository)
 registerReservationRoutes(app, repository)
+registerCommercialOpsRoutes(app, repository)
+registerHardwareRoutes(app, repository)
 registerWaitlistRoutes(app, repository)
+registerSopActionRoutes(app, repository, {
+  qrSecret: runtimeConfig.qrSecret,
+  qrPreviousSecret: runtimeConfig.qrPreviousSecret,
+})
 
 if (runtimeConfig.runtimeMode === 'staging' || runtimeConfig.runtimeMode === 'production') {
   app.setNotFoundHandler(async (request, reply) => {
@@ -552,17 +644,33 @@ if (runtimeConfig.runtimeMode === 'staging' || runtimeConfig.runtimeMode === 'pr
 
 let schedulerRunning = false
 const notificationWorkerId = `notification-worker:${process.pid}:${randomUUID()}`
+const sopActionWorkerId = `sop-action-worker:${process.pid}:${randomUUID()}`
 const scheduler = setInterval(() => {
   if (schedulerRunning) return
   schedulerRunning = true
-  void repository.mutate((state) => {
-    processAwaitingOrderReminders(state)
-    processOverdueProductionTasks(state)
-    escalateDueTasks(state)
-  }).then(() => dispatchDueNotifications(repository, customerNotificationAdapters, notificationWorkerId))
+  const now = new Date()
+  void repository.read()
+    .then(async (snapshot) => {
+      const scheduledWorkDue = scheduledOperationsWouldChange(snapshot, now)
+      const businessDayRollover = scheduledWorkDue
+        ? await repository.mutate((state) => applyScheduledOperations(state, now))
+        : null
+      const dispatchSnapshot = scheduledWorkDue ? await repository.read() : snapshot
+      if (businessDayRollover?.status === 'rolled_over') {
+        app.log.info({
+          previousBusinessDate: businessDayRollover.steps[0]?.businessDate,
+          businessDate: businessDayRollover.businessDate,
+          rolledBusinessDayCount: businessDayRollover.steps.length,
+        }, 'business day automatically rolled over')
+      }
+      await Promise.all([
+        dispatchDueNotifications(repository, customerNotificationAdapters, notificationWorkerId, now, {}, dispatchSnapshot),
+        dispatchDueSopActions(repository, sopActionAdapters, sopActionWorkerId, now, dispatchSnapshot),
+      ])
+    })
     .catch((error) => app.log.error(error))
     .finally(() => { schedulerRunning = false })
-}, 1000)
+}, 2_000)
 scheduler.unref()
 
 const wechatCleanupScheduler = runtimeConfig.wechatEnabled

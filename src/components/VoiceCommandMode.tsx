@@ -1,21 +1,41 @@
 import {
   ArrowLeft,
+  Bot,
   Check,
   ChevronRight,
+  CircleSlash2,
+  Clock3,
   Keyboard,
   Mic,
   MicOff,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
+  Send,
+  RefreshCw,
+  TriangleAlert,
   Volume2,
   VolumeX,
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { transcribeVoiceAudio } from '../api'
+import {
+  getDutyManagerBriefing,
+  getDutyManagerHandover,
+  executeAssistantTool,
+  sendAssistantTurn,
+  transcribeVoiceAudio,
+  updateDutyManagerRisks,
+} from '../api'
+import type {
+  AssistantConversationMessage,
+  AssistantTurnResponse,
+  DutyManagerBriefing,
+  DutyManagerHandover,
+  DutyManagerRisk,
+} from '../shared/assistant-contracts'
 import type { BootstrapResponse } from '../shared/contracts'
-import type { OperationsConsoleView } from './OperationsConsole'
+import type { OperationsConsoleFocus, OperationsConsoleView } from './OperationsConsole'
 import { buildRoleHomeModel } from './role-access'
 import {
   canConfirmVoicePageStateChange,
@@ -27,9 +47,10 @@ import {
   type VoicePagePlan,
   type VoicePageStateSnapshot,
 } from './voice-page-controls'
-import { resolveVoiceCommand, voiceSuggestionsForNavigation, type VoiceCommandResolution } from './voice-command'
+import { dutyRiskNavigationTarget, resolveVoiceCommand, voiceSuggestionsForNavigation, type VoiceCommandResolution } from './voice-command'
 import {
   DeterministicVoiceCommandPlanner,
+  createModelVoiceCommandPlan,
   transitionVoiceCommandStep,
   type VoiceCommandPlan,
 } from './voice-command-agent'
@@ -40,6 +61,8 @@ import {
   dictionaryBiasPhrases,
 } from './voice-command-dictionary'
 import { naturalizeSpokenFeedback, rankChineseVoices, selectPreferredChineseVoice } from './voice-speech'
+import { selectVoiceRecognitionMode, shouldFallbackToCloudRecognition } from './voice-recording'
+import { assistantPageCapabilities } from './assistant-page-capabilities'
 import './VoiceCommandMode.css'
 
 interface SpeechRecognitionEventLike {
@@ -104,7 +127,8 @@ interface VoiceCommandModeProps {
   data: BootstrapResponse
   employeeId: string
   onReturn: () => void
-  onNavigate: (target: OperationsConsoleView) => void
+  onNavigate: (target: OperationsConsoleView, focus?: OperationsConsoleFocus) => void
+  onRefresh: () => void | Promise<void>
 }
 
 function getVoiceScope() {
@@ -151,10 +175,9 @@ function agentStepStatusLabel(step: VoiceCommandPlan['steps'][number]) {
   return step.risk === 'high' ? '待执行 · 需要单独确认' : '待执行'
 }
 
-export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: VoiceCommandModeProps) {
+export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRefresh }: VoiceCommandModeProps) {
   const model = useMemo(() => buildRoleHomeModel(data, employeeId), [data, employeeId])
   const deterministicPlanner = useMemo(() => new DeterministicVoiceCommandPlanner({
-    defaultOpenTablePartySize: 2,
     defaultOpenTableSalesOwner: model.employee?.displayName,
   }), [model.employee?.displayName])
   const navigationSuggestions = voiceSuggestionsForNavigation(model.access.allowedNavigationIds)
@@ -166,6 +189,8 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const mediaStreamRef = useRef<MediaStream | null>(null)
   const recordingTimeoutRef = useRef<number | null>(null)
+  const recognitionFallbackTimeoutRef = useRef<number | null>(null)
+  const startingListeningRef = useRef(false)
   const controlsSignatureRef = useRef('')
   const executionSequence = useRef(0)
   const agentPlanRef = useRef<VoiceCommandPlan | null>(null)
@@ -189,6 +214,15 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
   const [selectedVoiceURI, setSelectedVoiceURI] = useState(() => window.localStorage.getItem('mbox.voice.tts.voice-uri') ?? '')
   const [agentPlan, setAgentPlan] = useState<VoiceCommandPlan | null>(null)
   const [awaitingHighRiskConfirmation, setAwaitingHighRiskConfirmation] = useState(false)
+  const [assistantSessionId, setAssistantSessionId] = useState<string | null>(null)
+  const [assistantMessages, setAssistantMessages] = useState<AssistantConversationMessage[]>([])
+  const [assistantChoices, setAssistantChoices] = useState<string[]>([])
+  const [assistantBusy, setAssistantBusy] = useState(false)
+  const [dutyBriefing, setDutyBriefing] = useState<DutyManagerBriefing | null>(null)
+  const [dutyHandover, setDutyHandover] = useState<DutyManagerHandover | null>(null)
+  const [briefingBusy, setBriefingBusy] = useState(false)
+  const [dutyActionBusy, setDutyActionBusy] = useState<string | null>(null)
+  const [pendingDutyDismissId, setPendingDutyDismissId] = useState<string | null>(null)
   const nativeRecognitionSupported = Boolean(
     (window as VoiceWindow).SpeechRecognition || (window as VoiceWindow).webkitSpeechRecognition,
   )
@@ -198,6 +232,12 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
     && typeof navigator.mediaDevices?.getUserMedia === 'function',
   )
   const recognitionSupported = nativeRecognitionSupported || cloudRecordingSupported
+  const recognitionMode = selectVoiceRecognitionMode({
+    userAgent: navigator.userAgent,
+    nativeSupported: nativeRecognitionSupported,
+    cloudSupported: cloudRecordingSupported,
+    forceCloud: forceCloudRecognition,
+  })
   const voiceDictionary = useMemo(() => buildVoiceCommandDictionary(data, controls), [controls, data])
 
   const refreshControls = useCallback(() => {
@@ -254,8 +294,15 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
     }
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop())
     if (recordingTimeoutRef.current !== null) window.clearTimeout(recordingTimeoutRef.current)
+    if (recognitionFallbackTimeoutRef.current !== null) window.clearTimeout(recognitionFallbackTimeoutRef.current)
     window.speechSynthesis?.cancel()
   }, [])
+
+  useEffect(() => {
+    if (!voiceMessage || listening || startingListening || /^正在/.test(voiceMessage)) return undefined
+    const timer = window.setTimeout(() => setVoiceMessage(''), 8_000)
+    return () => window.clearTimeout(timer)
+  }, [listening, startingListening, voiceMessage])
 
   useEffect(() => {
     if (!executionMessage || executionTone === 'working') return undefined
@@ -263,6 +310,16 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
     const timer = window.setTimeout(() => setExecutionMessage(''), duration)
     return () => window.clearTimeout(timer)
   }, [executionMessage, executionTone])
+
+  useEffect(() => {
+    if (agentPlan?.status !== 'completed') return undefined
+    const timer = window.setTimeout(() => {
+      if (agentPlanRef.current?.status !== 'completed') return
+      agentPlanRef.current = null
+      setAgentPlan(null)
+    }, 5_000)
+    return () => window.clearTimeout(timer)
+  }, [agentPlan?.status])
 
   useEffect(() => {
     const viewport = window.visualViewport
@@ -282,6 +339,24 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
   }, [inputFocused])
 
   useEffect(() => {
+    let active = true
+    setBriefingBusy(true)
+    void Promise.all([getDutyManagerBriefing(), getDutyManagerHandover()])
+      .then(([briefing, handover]) => {
+        if (!active) return
+        setDutyBriefing(briefing)
+        setDutyHandover(handover)
+      })
+      .catch(() => {
+        if (!active) return
+        setDutyBriefing(null)
+        setDutyHandover(null)
+      })
+      .finally(() => { if (active) setBriefingBusy(false) })
+    return () => { active = false }
+  }, [])
+
+  useEffect(() => {
     if (!('speechSynthesis' in window)) return undefined
     const refreshVoices = () => setAvailableVoices(window.speechSynthesis.getVoices())
     refreshVoices()
@@ -292,6 +367,88 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
   function updateAgentPlan(nextPlan: VoiceCommandPlan | null) {
     agentPlanRef.current = nextPlan
     setAgentPlan(nextPlan)
+  }
+
+  function addAssistantMessage(role: AssistantConversationMessage['role'], content: string) {
+    setAssistantMessages((messages) => [...messages, {
+      id: crypto.randomUUID(),
+      role,
+      content,
+      createdAt: new Date().toISOString(),
+    }].slice(-10))
+  }
+
+  function resetAssistantConversation() {
+    setAssistantSessionId(null)
+    setAssistantMessages([])
+    setAssistantChoices([])
+    setCommand('')
+    setResolved(null)
+    setAwaitingHighRiskConfirmation(false)
+    pausedAgentStepIdRef.current = null
+    updateAgentPlan(null)
+    setExecutionMessage('')
+    setVoiceMessage('新对话已经准备好。')
+  }
+
+  async function refreshDutyBriefing(announceResult = true) {
+    if (briefingBusy) return
+    setBriefingBusy(true)
+    try {
+      const [briefing, handover] = await Promise.all([getDutyManagerBriefing(), getDutyManagerHandover()])
+      setDutyBriefing(briefing)
+      setDutyHandover(handover)
+      if (announceResult) announce(briefing.headline, briefing.health === 'critical' ? 'warning' : 'info')
+    } catch (error) {
+      if (announceResult) announce(error instanceof Error ? error.message : '巡场简报暂时无法更新。', 'error')
+    } finally {
+      setBriefingBusy(false)
+    }
+  }
+
+  async function handleDutyAction(risk: DutyManagerRisk, action: 'acknowledge' | 'defer' | 'dismiss_false_positive') {
+    if (dutyActionBusy) return
+    setDutyActionBusy(risk.id)
+    try {
+      const result = await updateDutyManagerRisks({
+        idempotencyKey: crypto.randomUUID(),
+        action,
+        riskIds: risk.sourceRiskIds,
+        ...(action === 'defer' ? { deferMinutes: 10 } : {}),
+        ...(action === 'dismiss_false_positive' ? { note: '值班管理人员现场复核后判断为误报' } : {}),
+      })
+      setDutyBriefing(result.briefing)
+      setDutyHandover(await getDutyManagerHandover())
+      setPendingDutyDismissId(null)
+      announce(result.message, 'success')
+    } catch (error) {
+      announce(error instanceof Error ? error.message : '值班事件更新失败，请刷新后重试。', 'error')
+    } finally {
+      setDutyActionBusy(null)
+    }
+  }
+
+  async function openDutyRisk(risk: DutyManagerRisk) {
+    if (dutyActionBusy) return
+    setDutyActionBusy(risk.id)
+    try {
+      if (risk.incidentStatus === 'open' && dutyBriefing?.actions.canAcknowledge) {
+        await updateDutyManagerRisks({
+          idempotencyKey: crypto.randomUUID(),
+          action: 'acknowledge',
+          riskIds: risk.sourceRiskIds,
+        })
+      }
+      onNavigate(dutyRiskNavigationTarget(risk.category), {
+        objectId: risk.targetObjectId,
+        query: risk.targetQuery,
+        tableCode: risk.tableCode,
+      })
+      onReturn()
+    } catch (error) {
+      announce(error instanceof Error ? error.message : '暂时无法接管，请刷新后重试。', 'error')
+      setDutyActionBusy(null)
+    }
   }
 
   function announce(message: string, tone: ExecutionTone = 'success') {
@@ -421,6 +578,72 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
     if (nextResolved.resolution.kind === 'unknown') announce('这句话还不能安全匹配到当前页面操作，请说出完整按钮或字段名称。', 'error')
   }
 
+  function assistantCapabilities() {
+    const pageCapabilities = assistantPageCapabilities(controls)
+    const navigationCapabilities = navigationSuggestions.map((suggestion) => ({
+      id: `navigation:${suggestion.target}`,
+      label: suggestion.command,
+      command: suggestion.command,
+      description: '打开当前岗位有权访问的工作页面',
+      risk: 'normal' as const,
+      disabled: false,
+    }))
+    return [...pageCapabilities, ...navigationCapabilities].slice(0, 120)
+  }
+
+  function applyAssistantResponse(message: string, response: AssistantTurnResponse) {
+    setAssistantSessionId(response.sessionId)
+    addAssistantMessage('assistant', response.reply)
+    setAssistantChoices(response.choices)
+    setResolved(null)
+    setAwaitingHighRiskConfirmation(false)
+    pausedAgentStepIdRef.current = null
+    if (response.kind === 'plan') {
+      const deterministicWorkflow = deterministicPlanner.plan(message)
+      const plan = response.steps.some((step) => step.toolCall)
+        ? createModelVoiceCommandPlan(message, response.steps)
+        : deterministicWorkflow.steps.some((step) => step.action !== 'execute_command')
+        ? { ...deterministicWorkflow, modelUsed: true }
+        : createModelVoiceCommandPlan(message, response.steps)
+      updateAgentPlan(plan)
+      announce(`${response.reply} 请核对计划后再执行。`, 'info')
+      return
+    }
+    updateAgentPlan(null)
+    if (response.kind === 'clarification') announce(response.reply, 'info')
+    else announce(response.reply, 'success')
+  }
+
+  async function submitAssistantMessage(nextCommand: string) {
+    const message = nextCommand.trim()
+    if (!message || assistantBusy) return
+    addAssistantMessage('user', message)
+    setCommand('')
+    setVoiceMessage('')
+    setExecutionMessage('')
+    setAssistantChoices([])
+    setAssistantBusy(true)
+    try {
+      const response = await sendAssistantTurn({
+        requestId: crypto.randomUUID(),
+        sessionId: assistantSessionId ?? undefined,
+        message,
+        page: {
+          heading: pageHeading,
+          capabilities: assistantCapabilities(),
+        },
+      })
+      applyAssistantResponse(message, response)
+    } catch (error) {
+      const fallbackMessage = error instanceof Error ? error.message : '智能理解暂时不可用'
+      addAssistantMessage('assistant', `${fallbackMessage}。我已切换到快速命令。`)
+      setVoiceMessage('智能理解暂时不可用，已切换到快速命令。')
+      prepareCommand(message)
+    } finally {
+      setAssistantBusy(false)
+    }
+  }
+
   function selectAmbiguousCandidate(candidateCommand: string) {
     setCommand(candidateCommand)
     const nextResolved = resolveCommand(candidateCommand)
@@ -465,11 +688,11 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
     }
     setCommand(selection.canonicalized)
     if (selection.safeToPlan) {
-      prepareCommand(selection.canonicalized)
-      setVoiceMessage('识别好了，请核对后确认。')
+      void submitAssistantMessage(selection.canonicalized)
+      setVoiceMessage('识别好了，正在理解您的意思。')
       return
     }
-    setVoiceMessage(`我听到“${selection.canonicalized}”，但不太确定。请核对文字后点击“理解”。`)
+    setVoiceMessage(`我听到“${selection.canonicalized}”，但不太确定。请核对文字后点击“发送”。`)
   }
 
   async function transcribeCloudRecording(blob: Blob, mimeType: NonNullable<ReturnType<typeof cloudRecordingMimeType>>) {
@@ -487,10 +710,12 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
   }
 
   async function startCloudListening() {
+    if (startingListeningRef.current || listeningRef.current) return
     if (!recorderMimeType) {
       setVoiceMessage('当前浏览器不支持网页录音，可以直接输入命令。')
       return
     }
+    startingListeningRef.current = true
     setStartingListening(true)
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -537,6 +762,7 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
       const denied = error instanceof DOMException && ['NotAllowedError', 'SecurityError'].includes(error.name)
       setVoiceMessage(denied ? '麦克风没有授权，请在浏览器地址栏中允许麦克风。' : '麦克风暂时无法启动，可以直接输入命令。')
     } finally {
+      startingListeningRef.current = false
       setStartingListening(false)
     }
   }
@@ -578,22 +804,39 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
       setCommand(transcript)
     }
     recognition.onerror = (event) => {
+      const fallbackToCloud = shouldFallbackToCloudRecognition(
+        event.error,
+        cloudRecordingSupported,
+        stopRequestedRef.current,
+      )
       const messages: Record<string, string> = {
         'not-allowed': '麦克风没有授权，请在浏览器地址栏中允许麦克风。',
         'no-speech': '没有听清，请重新点击开始。',
-        network: cloudRecordingSupported
-          ? '浏览器识别连接失败，下次点击将改用云端识别。'
+        network: fallbackToCloud
+          ? '浏览器识别不可用，正在自动切换云端识别。'
           : '语音识别暂时无法连接，请直接输入命令。',
+        'service-not-allowed': fallbackToCloud
+          ? '浏览器识别受限，正在自动切换云端识别。'
+          : '当前浏览器不允许语音识别，请直接输入命令。',
       }
-      if (event.error === 'network' && cloudRecordingSupported) setForceCloudRecognition(true)
       setVoiceMessage(messages[event.error] ?? '这次没有听清，请再说一次。')
       recordingModeRef.current = null
+      recognitionRef.current = null
       setListeningState(false)
+      if (fallbackToCloud) {
+        setForceCloudRecognition(true)
+        if (recognitionFallbackTimeoutRef.current !== null) window.clearTimeout(recognitionFallbackTimeoutRef.current)
+        recognitionFallbackTimeoutRef.current = window.setTimeout(() => {
+          recognitionFallbackTimeoutRef.current = null
+          void startCloudListening()
+        }, 180)
+      }
     }
     recognition.onend = () => {
       if (stopRequestedRef.current) {
         const transcript = pendingTranscriptRef.current
         recordingModeRef.current = null
+        recognitionRef.current = null
         setListeningState(false)
         if (transcript) acceptRecognizedTranscript(transcript)
         else setVoiceMessage('没有听清，请重新点击开始。')
@@ -606,6 +849,7 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
           recognition.start()
         } catch {
           recordingModeRef.current = null
+          recognitionRef.current = null
           setListeningState(false)
           setVoiceMessage('语音识别已中断，请重新点击开始。')
         }
@@ -624,7 +868,7 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
   }
 
   function toggleListening() {
-    if (startingListening) return
+    if (startingListeningRef.current || startingListening) return
     if (listeningRef.current) {
       stopRequestedRef.current = true
       setVoiceMessage('正在停止并识别。')
@@ -636,8 +880,9 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
       }
       return
     }
-    if (forceCloudRecognition || !nativeRecognitionSupported) void startCloudListening()
-    else startNativeListening()
+    if (recognitionMode === 'cloud') void startCloudListening()
+    else if (recognitionMode === 'native') startNativeListening()
+    else setVoiceMessage('当前浏览器无法使用语音，可以直接输入命令。')
   }
 
   async function waitForPageFeedback(
@@ -762,6 +1007,29 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
       announce(`正在执行第${index + 1}步：${pendingStep.label}。`, 'working')
       await new Promise((resolve) => window.setTimeout(resolve, 80))
 
+      if (pendingStep.action === 'execute_server_tool' && pendingStep.toolCall) {
+        try {
+          if (!pendingStep.executionId) throw new Error('AI执行编号缺失，请重新生成计划')
+          const result = await executeAssistantTool({ executionId: pendingStep.executionId, toolCall: pendingStep.toolCall })
+          currentPlan = transitionVoiceCommandStep(currentPlan, pendingStep.id, 'completed')
+          updateAgentPlan(currentPlan)
+          announce(result.message, 'success')
+          try {
+            await onRefresh()
+          } catch {
+            announce(`${result.message} 页面暂未刷新，请点刷新查看最新状态。`, 'success')
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, 120))
+          continue
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : '服务端没有确认执行结果'
+          currentPlan = transitionVoiceCommandStep(currentPlan, pendingStep.id, 'blocked', reason)
+          updateAgentPlan(currentPlan)
+          announce(`计划停在第${index + 1}步：${reason}`, 'error')
+          return
+        }
+      }
+
       const stepCommand = canonicalizeVoiceCommand(pendingStep.command, voiceDictionary)
       const stepResolution = resolveCommand(stepCommand)
       const pagePlan = stepResolution.source === 'page' ? stepResolution.plan : null
@@ -877,72 +1145,127 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
         data-voice-ignore
         role="dialog"
         aria-modal="true"
-        aria-label="语音命令模式"
+        aria-label="AI值班经理模式"
       >
         <header className="voice-mode-header">
-          <div className="voice-mode-brand"><span>M</span><div><strong>M-BOX 语音命令</strong><small>{model.employee?.displayName ?? '当前员工'} · {model.access.roleLabel}</small></div></div>
+          <div className="voice-mode-brand"><span>M</span><div><strong>M-BOX AI 值班经理</strong><small>{model.employee?.displayName ?? '当前员工'} · {model.access.roleLabel}</small></div></div>
           <div className="voice-mode-header-actions">
             <button className="icon-button" title={speechEnabled ? '关闭语音播报' : '打开语音播报'} onClick={() => {
               window.speechSynthesis?.cancel()
               setSpeechEnabled((enabled) => !enabled)
             }}>{speechEnabled ? <Volume2 size={17} /> : <VolumeX size={17} />}</button>
+            <button className="icon-button" title="开始新对话" onClick={resetAssistantConversation}><Sparkles size={17} /></button>
+            <button className="icon-button" title="刷新巡场简报" disabled={briefingBusy} onClick={() => void refreshDutyBriefing()}><RefreshCw className={briefingBusy ? 'is-spinning' : ''} size={17} /></button>
             <button className="secondary-button" onClick={onReturn}><ArrowLeft size={17} />岗位页面</button>
           </div>
         </header>
 
         <section className="voice-command-stage">
-          <div className="voice-page-status">
-            <span><ShieldCheck size={15} />{pageHeading}</span>
-            <strong>{controls.length} 个控件 · {voiceDictionary.length} 个热词{generatedLabelCount > 0 ? ` · ${generatedLabelCount} 个待命名` : ''}</strong>
-          </div>
-          {voiceOptions.length > 0 && (
-            <label className="voice-tts-control">
-              <Volume2 size={14} />
-              <span>播报声线</span>
-              <select
-                aria-label="选择语音播报声线"
-                value={selectedVoiceURI || selectPreferredChineseVoice(voiceOptions)?.voiceURI || ''}
-                onChange={(event) => {
-                  const voiceURI = event.target.value
-                  setSelectedVoiceURI(voiceURI)
-                  window.localStorage.setItem('mbox.voice.tts.voice-uri', voiceURI)
-                  window.setTimeout(() => announce('好的，接下来由这个声音为您播报。'), 0)
-                }}
-              >
-                {voiceOptions.map((voice) => <option key={voice.voiceURI} value={voice.voiceURI}>{voice.name}</option>)}
-              </select>
-            </label>
+          {dutyBriefing && (
+            <section className={`duty-briefing is-${dutyBriefing.health}`} aria-label="AI值班经理巡场简报">
+              <header>
+                <span><TriangleAlert size={16} /><strong>现在要处理</strong></span>
+                <small>{dutyBriefing.counts.critical}紧急 · {dutyBriefing.counts.high}高风险 · {dutyBriefing.counts.medium}关注</small>
+              </header>
+              <p>{dutyBriefing.headline}</p>
+              {dutyBriefing.risks.length > 0 && <div className="duty-risk-list">
+                {dutyBriefing.risks.slice(0, 5).map((risk, index) => {
+                  const primaryAction = risk.incidentStatus === 'open' && dutyBriefing.actions.canAcknowledge ? '接管并处理' : '继续处理'
+                  return <article className={`duty-risk-item is-${risk.incidentStatus}`} key={risk.id}>
+                  <div className="duty-risk-main">
+                    <i className={`is-${risk.severity}`} />
+                    <span>
+                      <strong>{risk.title}</strong>
+                      <small>{risk.incidentStatus === 'acknowledged' ? `${risk.handledByName ?? '现场伙伴'}已接管 · ` : ''}{risk.detail}</small>
+                    </span>
+                    <em>{index === 0 ? '优先处理' : risk.incidentStatus === 'acknowledged' ? '跟进中' : '待接管'}</em>
+                  </div>
+                  <p className="duty-risk-recommendation"><Sparkles size={12} /><span><b>AI建议</b>{risk.recommendation}</span></p>
+                  <div className="duty-risk-actions">
+                    <button className="duty-risk-primary" aria-label={`${primaryAction}：${risk.title}`} disabled={dutyActionBusy === risk.id} onClick={() => void openDutyRisk(risk)}><Check size={13} />{dutyActionBusy === risk.id ? '正在接管' : primaryAction}<ChevronRight size={13} /></button>
+                    {dutyBriefing.actions.canManage && <button disabled={dutyActionBusy === risk.id} onClick={() => void handleDutyAction(risk, 'defer')}><Clock3 size={12} />稍后10分钟</button>}
+                    {dutyBriefing.actions.canManage && <button disabled={dutyActionBusy === risk.id} onClick={() => setPendingDutyDismissId(risk.id)}><CircleSlash2 size={12} />误报</button>}
+                  </div>
+                  {pendingDutyDismissId === risk.id && <div className="duty-risk-dismiss-confirm" role="alert">
+                    <span>确认现场已复核，这条是误报？</span>
+                    <button disabled={dutyActionBusy === risk.id} onClick={() => void handleDutyAction(risk, 'dismiss_false_positive')}>确认</button>
+                    <button onClick={() => setPendingDutyDismissId(null)}>取消</button>
+                  </div>}
+                </article>})}
+              </div>}
+              <section className="duty-effectiveness" aria-label="今日经营成效">
+                <header>
+                  <strong>今日五维经营成效</strong>
+                  <span className={`is-${dutyBriefing.effectiveness.trend}`}>{{
+                    improving: '较昨日改善',
+                    steady: '与昨日持平',
+                    declining: '较昨日下降',
+                    insufficient_data: '样本积累中',
+                  }[dutyBriefing.effectiveness.trend]}</span>
+                </header>
+                <div className="duty-effectiveness-grid">
+                  <span><small>服务 · 按时响应</small><b>{dutyBriefing.effectiveness.service.responseWithinSlaRate === null ? '--' : `${dutyBriefing.effectiveness.service.responseWithinSlaRate}%`}</b></span>
+                  <span><small>收入 · 净实收</small><b>¥{(dutyBriefing.effectiveness.business.netRevenueAmount / 100).toFixed(2)}</b></span>
+                  <span><small>体验 · 投诉闭环</small><b>{dutyBriefing.effectiveness.experience.serviceRecoveryRate === null ? '--' : `${dutyBriefing.effectiveness.experience.serviceRecoveryRate}%`}</b></span>
+                  <span><small>人员 · 负荷率</small><b>{dutyBriefing.effectiveness.workforce.utilizationRate === null ? '--' : `${dutyBriefing.effectiveness.workforce.utilizationRate}%`}</b></span>
+                  <span><small>防损 · 异常项</small><b>{dutyBriefing.effectiveness.lossPrevention.exceptionCount}</b></span>
+                  <span><small>防损 · 待对账</small><b>¥{(dutyBriefing.effectiveness.lossPrevention.pendingReconciliationAmount / 100).toFixed(2)}</b></span>
+                </div>
+                <p><Sparkles size={11} />{dutyBriefing.effectiveness.summary}</p>
+              </section>
+              {dutyHandover && <footer className="duty-handover-strip">
+                <span>今日闭环 <b>{dutyHandover.resolved + dutyHandover.dismissed}</b></span>
+                <span>待交班 <b>{dutyHandover.active}</b></span>
+                <span>平均接管 <b>{dutyHandover.averageAcknowledgeMinutes === null ? '--' : `${dutyHandover.averageAcknowledgeMinutes}分`}</b></span>
+              </footer>}
+            </section>
           )}
-          {generatedLabelCount > 0 && (
-            <div className="voice-command-warning" role="alert">
-              当前页有 {generatedLabelCount} 个控件缺少明确名称，暂用页面位置命名；管理员应补齐名称后再作为正式口令使用。
-            </div>
-          )}
+
           <div className="voice-command-heading">
-            <h1>说出按钮或要完成的操作</h1>
-            <p>例如“点击立即开台”“人数输入4”“收费方式选择现金”。</p>
+            <h1><Bot size={21} />还想处理别的事？</h1>
+            <p>直接说或输入，AI会先让您确认，再按当前岗位权限执行。</p>
           </div>
 
-          <button
-            className={listening ? 'voice-mic-button is-listening' : 'voice-mic-button'}
-            aria-pressed={listening}
-            aria-label={listening ? '停止语音识别' : '开始语音识别'}
-            disabled={!recognitionSupported || startingListening}
-            onClick={toggleListening}
-          >
-            {listening ? <MicOff size={29} /> : <Mic size={29} />}
-            <span>{startingListening ? '正在启动' : listening ? '点击停止' : recognitionSupported ? '点击开始' : '语音不可用'}</span>
-          </button>
-          {voiceMessage && <div className="voice-inline-message" role="status">{voiceMessage}</div>}
+          {assistantMessages.length > 0 && (
+            <section className="assistant-conversation" aria-label="AI值班经理对话">
+              {assistantMessages.map((message) => (
+                <div className={`assistant-message is-${message.role}`} key={message.id}>
+                  <small>{message.role === 'user' ? '我' : 'AI值班经理'}</small>
+                  <p>{message.content}</p>
+                </div>
+              ))}
+              {assistantBusy && <div className="assistant-thinking"><Sparkles size={14} />正在结合当前岗位和现场状态理解...</div>}
+            </section>
+          )}
 
-          <form className="voice-command-input" onSubmit={(event) => { event.preventDefault(); prepareCommand(command); event.currentTarget.querySelector('input')?.blur() }}>
+          <div className={listening ? 'voice-record-control is-listening' : 'voice-record-control'}>
+            <button
+              type="button"
+              className={listening ? 'voice-mic-button is-listening' : 'voice-mic-button'}
+              aria-pressed={listening}
+              aria-label={listening ? '停止语音识别' : '开始语音识别'}
+              disabled={!recognitionSupported || startingListening}
+              onClick={toggleListening}
+            >
+              {listening ? <MicOff size={25} /> : <Mic size={25} />}
+              <span>{startingListening ? '启动中' : listening ? '停止' : recognitionSupported ? '开始' : '不可用'}</span>
+            </button>
+            <div className="voice-record-copy">
+              <strong>{startingListening ? '正在打开麦克风' : listening ? '正在录音' : '点一下开始，不用按住'}</strong>
+              <span className="voice-inline-message" role="status">
+                {voiceMessage || (recognitionSupported ? '说完后再点一下停止，我会识别并执行。' : '当前浏览器不支持语音，请使用文字输入。')}
+              </span>
+            </div>
+          </div>
+
+          <form className="voice-command-input" onSubmit={(event) => { event.preventDefault(); void submitAssistantMessage(command); event.currentTarget.querySelector('input')?.blur() }}>
             <Keyboard size={18} />
             <input
               aria-label="输入自然语言命令"
               value={command}
               maxLength={160}
               enterKeyHint="done"
-              placeholder="输入按钮、字段或操作名称"
+              placeholder="直接描述问题或要完成的工作"
               onFocus={() => setInputFocused(true)}
               onBlur={() => window.setTimeout(() => setInputFocused(false), 180)}
               onChange={(event) => {
@@ -954,13 +1277,21 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
                 updateAgentPlan(null)
               }}
             />
-            <button className="primary-button" disabled={!command.trim()}><Sparkles size={16} />理解</button>
+            <button className="primary-button" disabled={!command.trim() || assistantBusy}><Send size={16} />发送</button>
           </form>
+
+          {assistantChoices.length > 0 && (
+            <div className="assistant-choice-list" role="group" aria-label="请选择一个答案">
+              {assistantChoices.map((choice) => (
+                <button key={choice} disabled={assistantBusy} onClick={() => void submitAssistantMessage(choice)}>{choice}</button>
+              ))}
+            </div>
+          )}
 
           {agentPlan && (
             <section className={`voice-agent-plan is-${agentPlan.status}`} aria-label="连续命令执行计划">
               <header>
-                <span><Sparkles size={16} />连续命令计划</span>
+                <span><Sparkles size={16} />{agentPlan.modelUsed ? 'AI执行计划' : '连续命令计划'}</span>
                 <strong>{agentPlan.steps.filter((step) => step.status === 'completed').length}/{agentPlan.steps.length}</strong>
               </header>
               <div className="voice-agent-steps">
@@ -1036,13 +1367,42 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate }: Voi
           <div className="voice-suggestions">
             <span>当前页常用</span>
             <div>
-              {pageSuggestions.map((control) => <button key={control.id} onClick={() => prepareCommand(commandForControl(control))}>{commandForControl(control)}</button>)}
+              {pageSuggestions.map((control) => <button key={control.id} onClick={() => prepareCommand(commandForControl(control))}>{control.label}</button>)}
               {pageSuggestions.length === 0 && navigationSuggestions.slice(0, 4).map((item) => <button key={item.command} onClick={() => prepareCommand(item.command)}>{item.command}</button>)}
             </div>
           </div>
 
+          <details className="voice-advanced-settings">
+            <summary>语音偏好与识别状态 <ChevronRight size={15} /></summary>
+            <div>
+              <div className="voice-page-status">
+                <span><ShieldCheck size={15} />{pageHeading}</span>
+                <strong>{controls.length} 个控件 · {voiceDictionary.length} 个热词{generatedLabelCount > 0 ? ` · ${generatedLabelCount} 个待命名` : ''}</strong>
+              </div>
+              {voiceOptions.length > 0 && (
+                <label className="voice-tts-control">
+                  <Volume2 size={14} />
+                  <span>播报声线</span>
+                  <select
+                    aria-label="选择语音播报声线"
+                    value={selectedVoiceURI || selectPreferredChineseVoice(voiceOptions)?.voiceURI || ''}
+                    onChange={(event) => {
+                      const voiceURI = event.target.value
+                      setSelectedVoiceURI(voiceURI)
+                      window.localStorage.setItem('mbox.voice.tts.voice-uri', voiceURI)
+                      window.setTimeout(() => announce('好的，接下来由这个声音为您播报。'), 0)
+                    }}
+                  >
+                    {voiceOptions.map((voice) => <option key={voice.voiceURI} value={voice.voiceURI}>{voice.name}</option>)}
+                  </select>
+                </label>
+              )}
+              {generatedLabelCount > 0 && <p>当前页有 {generatedLabelCount} 个控件暂用页面位置命名，管理员可继续补齐正式名称。</p>}
+            </div>
+          </details>
+
           <details className="voice-command-catalog">
-            <summary>查看本页全部语音命令 <ChevronRight size={15} /></summary>
+            <summary>查看本页全部快捷命令 <ChevronRight size={15} /></summary>
             <div>{controls.map((control) => (
               <button key={control.id} disabled={control.disabled} onClick={() => prepareCommand(commandForControl(control))}>
                 <span>{commandForControl(control)}</span><small>{control.disabled ? '当前不可用' : control.risk === 'high' ? '需要二次确认' : control.kind}</small>

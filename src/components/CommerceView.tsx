@@ -1,21 +1,22 @@
 import { Ban, CheckCheck, ChefHat, CircleAlert, CircleDollarSign, Clock3, Copy, PackageCheck, PackageX, Play, QrCode, RotateCcw, ScanLine, ShoppingCart, Smartphone, UserRound, X } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
-import { actOnKdsTask, createAssistedPaymentLink, createCartOrder, decideKdsException, getCurrentActorId, reportKdsException } from '../api'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { actOnKdsTask, createAssistedPaymentLink, createCartOrder, decideKdsException, getCurrentActorId, managerCancelKdsTask, reportKdsException } from '../api'
 import type { BootstrapResponse } from '../shared/contracts'
-import type { AssistedPaymentLink, KdsActionInput, KdsExceptionDecisionInput, KdsExceptionReportInput } from '../shared/commerce-api'
+import type { AssistedPaymentLink, KdsActionInput, KdsExceptionDecisionInput, KdsExceptionReportInput, ManagerKdsCancellationInput } from '../shared/commerce-api'
 import type { KdsExceptionEvent, KdsTask } from '../shared/order-contracts'
 import { formatChinaTime } from '../shared/china-time'
 import {
   actionAllowedForAccess,
+  canManagerCancelKds,
   canResolveKdsException,
   getFulfillmentAccess,
   kdsTaskOperationallyActive,
   openKdsException,
   stationLabel,
-  taskVisibleToAccess,
 } from './commerce-workspace'
 import { MenuOrderingWorkspace, type MenuCartItem } from './MenuOrderingWorkspace'
 import { CustomerPaymentCodeScanner } from './CustomerPaymentCodeScanner'
+import type { OperationsConsoleNavigationRequest } from './OperationsConsole'
 import * as paymentApi from '../payment-api'
 import './CommerceView.css'
 
@@ -23,6 +24,7 @@ interface CommerceViewProps {
   data: BootstrapResponse
   onRefresh: () => Promise<void>
   onNotice: (message: string) => void
+  focusRequest?: OperationsConsoleNavigationRequest | null
 }
 
 const kdsLabels: Record<KdsTask['status'], string> = {
@@ -36,34 +38,55 @@ interface PaymentSheet extends AssistedPaymentLink {
   paymentItems: Array<{ orderId: string; orderItemId: string; quantity: number }>
 }
 
-export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
+export function CommerceView({ data, onRefresh, onNotice, focusRequest = null }: CommerceViewProps) {
   const currentActorId = getCurrentActorId()
   const access = getFulfillmentAccess(data, currentActorId)
   const currentEmployee = access.employee
   const canResolveExceptions = canResolveKdsException(access)
+  const canCancelFulfillment = canManagerCancelKds(access, data.viewer?.permissionIds ?? [])
   const occupiedTables = data.tables.filter((table) => table.status === 'occupied')
   const [tableId, setTableId] = useState(occupiedTables[0]?.id ?? '')
   const [workspaceMode, setWorkspaceMode] = useState<'order' | 'fulfillment'>(access.canOrder ? 'order' : 'fulfillment')
   const [busy, setBusy] = useState(false)
   const [paymentSheet, setPaymentSheet] = useState<PaymentSheet | null>(null)
   const [paymentCodeScannerOpen, setPaymentCodeScannerOpen] = useState(false)
+  const [cancelTarget, setCancelTarget] = useState<KdsTask | null>(null)
+  const [cancelReasonCode, setCancelReasonCode] = useState<ManagerKdsCancellationInput['reasonCode']>('manager_cancelled')
+  const [cancelReasonNote, setCancelReasonNote] = useState('')
   const [now, setNow] = useState(() => Date.now())
+  const [focusedTableCode, setFocusedTableCode] = useState('')
+  const handledFocusRequestId = useRef<number | null>(null)
   const ledgerTotal = data.orderDomain.tableLedgerEntries.reduce((sum, entry) => sum + entry.amount, 0)
   const activeKds = data.orderDomain.kdsTasks.filter(kdsTaskOperationallyActive)
-  const visibleKds = useMemo(() => activeKds
-    .filter((task) => taskVisibleToAccess(task, access))
-    .toSorted((a, b) => {
+  const visibleKds = useMemo(() => activeKds.toSorted((a, b) => {
       const aTiming = taskTiming(a, data, now)
       const bTiming = taskTiming(b, data, now)
       if (aTiming.overdue !== bTiming.overdue) return aTiming.overdue ? -1 : 1
       return taskSortValue(a) - taskSortValue(b)
-    }), [activeKds, access, data, now])
+    }), [activeKds, data, now])
+  const actionableKdsCount = visibleKds.filter((task) => (
+    nextAction(task.status) && actionAllowedForAccess(task, access, data.config.workstations)
+  )).length
   const overdueCount = visibleKds.filter((task) => taskTiming(task, data, now).overdue).length
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30_000)
     return () => window.clearInterval(timer)
   }, [])
+
+  useEffect(() => {
+    if (!focusRequest || handledFocusRequestId.current === focusRequest.id) return
+    handledFocusRequestId.current = focusRequest.id
+    setWorkspaceMode('fulfillment')
+    setFocusedTableCode(focusRequest.focus?.tableCode ?? '')
+    const matchingTask = visibleKds.find((task) => {
+      const code = task.tableCode ?? tableFromSession(data, task.tableSessionId)?.code ?? ''
+      return code === focusRequest.focus?.tableCode
+    })
+    if (matchingTask) {
+      window.requestAnimationFrame(() => document.getElementById(`kds-task-${matchingTask.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
+    }
+  }, [data, focusRequest, visibleKds])
 
   const sheetPayment = paymentSheet
     ? data.paymentDomain.paymentIntents
@@ -199,6 +222,31 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
     }
   }
 
+  async function cancelFulfillmentTask() {
+    if (!cancelTarget || !currentEmployee || cancelReasonNote.trim().length < 2) return
+    setBusy(true)
+    try {
+      const result = await managerCancelKdsTask(cancelTarget.id, {
+        reasonCode: cancelReasonCode,
+        reasonNote: cancelReasonNote.trim(),
+        idempotencyKey: `kds-manager-cancel-${crypto.randomUUID()}`,
+      })
+      const accountingHint = result.accounting.recommendation === 'review_refund'
+        ? '该项已有收款，请到收银工作台确认退款'
+        : result.accounting.recommendation === 'review_receivable'
+          ? '该项仍在桌账中，请到收银工作台核对处理'
+          : '当前无需额外财务处理'
+      setCancelTarget(null)
+      setCancelReasonNote('')
+      onNotice(`${result.itemName}已停止出品；${accountingHint}`)
+      await onRefresh()
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : '取消出品失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const accountRows = useMemo(() => {
     const grouped = new Map<string, number>()
     for (const entry of data.orderDomain.tableLedgerEntries) {
@@ -216,7 +264,7 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
     <section className="commerce-view">
       <div className="section-heading">
         <div><span className="eyebrow">{access.roleLabel} · {access.scopeLabel}</span><h2>岗位履约工作台</h2></div>
-        <span className="count-chip">{visibleKds.length}项当前职责</span>
+        <span className="count-chip">{visibleKds.length}项履约进度</span>
       </div>
       {latestPaidSignal && <div className="paid-signal" role="status"><CheckCheck size={20} /><div><strong>{paidTable?.code ?? '桌台'} 已收款 {money(latestPaidSignal.amount)}</strong><span>{latestPaidSignal.channel === 'physical_pos' ? '物理POS待对账' : '支付成功，服务与收银已同步'}</span></div></div>}
       {paymentSheet && <div className="assisted-payment-backdrop" role="presentation">
@@ -249,6 +297,21 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
           onConfirm={collectCustomerPaymentCode}
         />
       )}
+      {cancelTarget && <div className="manager-cancel-backdrop" role="presentation">
+        <section className="manager-cancel-dialog" role="dialog" aria-modal="true" aria-label={`取消${cancelTarget.itemName}出品`}>
+          <header>
+            <div><span>店长取消出品</span><strong>{cancelTarget.tableCode ?? tableFromSession(data, cancelTarget.tableSessionId)?.code ?? '当前桌台'} · {cancelTarget.itemName} × {cancelTarget.quantity}</strong></div>
+            <button className="icon-button" title="关闭取消窗口" disabled={busy} onClick={() => setCancelTarget(null)}><X size={20} /></button>
+          </header>
+          <div className="manager-cancel-boundary"><CircleAlert size={18} /><span>取消后停止本次制作或送达，原订单、桌账和支付不会自动修改。</span></div>
+          <label><span>取消原因</span><select value={cancelReasonCode} onChange={(event) => setCancelReasonCode(event.target.value as ManagerKdsCancellationInput['reasonCode'])}><option value="manager_cancelled">店长现场取消</option><option value="guest_cancelled">客人确认取消</option><option value="unavailable_confirmed">确认无法出品</option><option value="other">其他原因</option></select></label>
+          <label><span>情况说明</span><input autoFocus maxLength={200} value={cancelReasonNote} onChange={(event) => setCancelReasonNote(event.target.value)} placeholder="例如：客人确认不再需要这杯酒" /></label>
+          <footer>
+            <button className="secondary-button" disabled={busy} onClick={() => setCancelTarget(null)}>暂不取消</button>
+            <button className="danger-button" disabled={busy || cancelReasonNote.trim().length < 2} onClick={() => void cancelFulfillmentTask()}><Ban size={16} />确认取消出品</button>
+          </footer>
+        </section>
+      </div>}
       {access.canOrder && <div className="commerce-mode-tabs">
         <button className={workspaceMode === 'order' ? 'is-active' : ''} onClick={() => setWorkspaceMode('order')}>全屏点单</button>
         <button className={workspaceMode === 'fulfillment' ? 'is-active' : ''} onClick={() => setWorkspaceMode('fulfillment')}>出品履约 <span>{visibleKds.length}</span></button>
@@ -263,11 +326,12 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
           submitHint="提交后自动分发到对应吧台或厨房；完成制作后自动通知取送人员。"
           busy={busy}
           timeZone={data.store.timezone}
+          orderSafety={data.commercialOps?.config.orderSafety}
           onSubmit={submit}
         />
       ) : <>
       <div className="commerce-metrics">
-        <div><ChefHat size={19} /><strong>{visibleKds.length}</strong><span>{access.mode === 'production' ? '待制作' : access.mode === 'delivery' ? '待取送' : '全部待履约'}</span></div>
+        <div><ChefHat size={19} /><strong>{actionableKdsCount}</strong><span>我可处理</span></div>
         <div className={overdueCount > 0 ? 'is-risk' : ''}><CircleAlert size={19} /><strong>{overdueCount}</strong><span>SLA超时</span></div>
         {access.canViewLedger
           ? <div><CircleDollarSign size={19} /><strong>{money(ledgerTotal)}</strong><span>桌账应收</span></div>
@@ -275,7 +339,7 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
       </div>
       <div className={access.canViewLedger ? 'commerce-grid' : 'commerce-grid is-task-only'}>
         <section className="kds-section">
-          <div className="commerce-section-title"><ChefHat size={18} /><strong>{access.mode === 'production' ? '可制作任务' : access.mode === 'delivery' ? '待取送任务' : 'KDS全流程'}</strong><span>当前操作：{currentEmployee?.displayName ?? '身份失效，请重新登录'}</span></div>
+          <div className="commerce-section-title"><ChefHat size={18} /><strong>出品履约进度</strong><span>岗位与工作站匹配者可操作，其他人员只读</span></div>
           <div className="kds-list">
             {visibleKds.length === 0 && <div className="commerce-empty"><CheckCheck size={22} />当前岗位没有待处理商品</div>}
             {visibleKds.map((task) => {
@@ -285,10 +349,15 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
               const responsibleRole = taskResponsibleRole(task, data)
               const exception = openKdsException(task)
               const exceptionActor = exception ? data.employees.find((employee) => employee.id === exception.actorId) : undefined
-              const canReportProductionException = !exception && ['queued', 'preparing'].includes(task.status) && access.canPrepare
-              const canReportWrongItem = !exception && ['completed', 'picked_up'].includes(task.status) && access.canDeliver
+              const canAct = Boolean(action && actionAllowedForAccess(task, access, data.config.workstations))
+              const canReportProductionException = !exception && ['queued', 'preparing'].includes(task.status) && canAct
+              const canReportWrongItem = !exception && ['completed', 'picked_up'].includes(task.status) && canAct
               return (
-                <article className={`kds-row kds-${task.status} ${timing.overdue ? 'is-overdue' : ''} ${exception ? 'has-exception' : ''}`} key={task.id}>
+                <article
+                  id={`kds-task-${task.id}`}
+                  className={`kds-row kds-${task.status} ${timing.overdue ? 'is-overdue' : ''} ${exception ? 'has-exception' : ''} ${focusedTableCode && (task.tableCode ?? table?.code) === focusedTableCode ? 'is-ai-focus' : ''}`}
+                  key={task.id}
+                >
                   <div className="kds-table"><span>{table?.code ?? task.tableCode ?? '未知桌号'}</span><small>{table?.displayName ?? (task.tableCode ? '按桌号出品' : '桌台未匹配')}</small></div>
                   <div className="kds-product">
                     <strong>{task.itemName} × {task.quantity}</strong>
@@ -309,10 +378,12 @@ export function CommerceView({ data, onRefresh, onNotice }: CommerceViewProps) {
                     </>}
                   </div>
                   <div className="kds-actions">
-                    {!exception && action && actionAllowedForAccess(task.status, access) && <button className="secondary-button" disabled={busy || !currentEmployee} title={currentEmployee ? `由${currentEmployee.displayName}执行` : '请重新登录'} onClick={() => void advance(task, action)}>{actionIcon(action)}{nextLabel(action)}</button>}
+                    {!exception && action && canAct && <button className="secondary-button" disabled={busy || !currentEmployee} title={currentEmployee ? `由${currentEmployee.displayName}执行` : '请重新登录'} onClick={() => void advance(task, action)}>{actionIcon(action)}{nextLabel(action)}</button>}
+                    {!exception && action && !canAct && <span className="kds-readonly-note">仅查看进度</span>}
                     {canReportProductionException && <button className="secondary-button kds-exception-button" disabled={busy || !currentEmployee} title="按商品缺货报告，等待领班或经理处置" onClick={() => void reportException(task, 'shortage', 'product_out_of_stock')}><PackageX size={16} />报告缺货</button>}
                     {canReportProductionException && task.status === 'preparing' && <button className="icon-button kds-reject-button" disabled={busy || !currentEmployee} title="质量不合格，拒绝本次出品" onClick={() => void reportException(task, 'production_rejection', 'quality_rejected')}><CircleAlert size={16} /></button>}
                     {canReportWrongItem && <button className="secondary-button kds-exception-button" disabled={busy || !currentEmployee} title="报告错品并等待经理安排补做" onClick={() => void reportException(task, 'wrong_item', 'wrong_product')}><PackageX size={16} />报告错品</button>}
+                    {!exception && canCancelFulfillment && <button className="secondary-button kds-cancel-button" disabled={busy || !currentEmployee} title="停止本次出品，订单和收款保持不变" onClick={() => { setCancelReasonCode('manager_cancelled'); setCancelReasonNote(''); setCancelTarget(task) }}><Ban size={16} />取消出品</button>}
                     {exception && canResolveExceptions && <>
                       <button className="secondary-button kds-cancel-button" disabled={busy || !currentEmployee} title="保留原订单和原KDS记录，仅关闭本次出品" onClick={() => void resolveException(exception, 'cancelled')}><Ban size={16} />取消该项</button>
                       <button className="primary-button" disabled={busy || !currentEmployee} title="创建关联原订单明细和原KDS任务的补做任务" onClick={() => void resolveException(exception, 'remake')}><RotateCcw size={16} />安排补做</button>
@@ -472,9 +543,10 @@ function taskResponsibleRole(task: KdsTask, data: BootstrapResponse) {
   const owner = ownerId ? data.employees.find((employee) => employee.id === ownerId) : undefined
   const ownerRole = owner ? data.config.roles.find((role) => role.id === owner.roleId)?.name : undefined
   if (ownerRole) return ownerRole
+  const workstation = data.config.workstations.find((item) => item.id === task.stationId) ?? task.workstation
   const roleIds = ['queued', 'preparing'].includes(task.status)
-    ? task.workstation?.productionRoleIds
-    : task.workstation?.deliveryRoleIds
+    ? workstation?.productionRoleIds
+    : workstation?.deliveryRoleIds
   const roleNames = roleIds
     ?.filter((roleId) => !['supervisor', 'manager'].includes(roleId))
     .map((roleId) => data.config.roles.find((role) => role.id === roleId)?.name ?? roleId)

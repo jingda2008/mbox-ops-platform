@@ -21,6 +21,81 @@
 }
 .table-close-toolbar button { min-width: 118px; white-space: nowrap; }
 
+.turnover-review-backdrop {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgb(10 12 10 / 68%);
+}
+
+.turnover-review-dialog {
+  width: min(760px, 100%);
+  max-height: min(860px, calc(100dvh - 40px));
+  overflow: auto;
+  border: 1px solid #9c8a56;
+  border-radius: 6px;
+  background: #fbfcf9;
+  box-shadow: 0 24px 80px rgb(0 0 0 / 35%);
+  color: var(--ink);
+}
+
+.turnover-review-dialog > header {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  background: #151815;
+  color: #fff;
+}
+
+.turnover-review-dialog > header > div { display: grid; gap: 2px; }
+.turnover-review-dialog > header span { color: #d9bd68; font-size: 10px; font-weight: 800; }
+.turnover-review-dialog > header strong { font-size: 17px; }
+.turnover-review-dialog > header .icon-button { border-color: #626862; background: transparent; color: #fff; }
+.turnover-accounting-boundary { display: flex; align-items: center; gap: 9px; padding: 11px 16px; border-bottom: 1px solid #e6d9aa; background: #fff9e9; color: #654e16; font-size: 12px; }
+.turnover-accounting-boundary svg { flex: 0 0 auto; }
+.turnover-kds-list { display: grid; border-bottom: 1px solid var(--line); }
+.turnover-kds-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.turnover-kds-row:last-child { border-bottom: 0; }
+.turnover-kds-row > div { min-width: 0; display: grid; gap: 3px; }
+.turnover-kds-row strong { font-size: 14px; }
+.turnover-kds-row span { color: var(--ink-soft); font-size: 11px; }
+.turnover-kds-row button { min-height: 36px; white-space: nowrap; }
+.turnover-permission-note { color: #a33138 !important; font-weight: 750; }
+.turnover-clear-state { display: flex; align-items: center; gap: 8px; padding: 16px; border-bottom: 1px solid var(--line); color: #2f6842; font-weight: 750; }
+.turnover-reason-fields { display: grid; grid-template-columns: minmax(160px, .45fr) minmax(240px, 1fr); gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); background: #f3f5f1; }
+.turnover-reason-fields label,
+.turnover-gift-form label { min-width: 0; display: grid; gap: 5px; }
+.turnover-reason-fields label > span,
+.turnover-gift-form label > span { color: var(--ink-soft); font-size: 10px; font-weight: 750; }
+.turnover-reason-fields input,
+.turnover-reason-fields select,
+.turnover-gift-form input,
+.turnover-gift-form select { width: 100%; min-width: 0; height: 38px; border: 1px solid var(--line-strong); background: #fff; color: var(--ink); padding: 0 9px; }
+.turnover-accounting-review { display: grid; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.turnover-accounting-title { display: flex; align-items: center; gap: 9px; }
+.turnover-accounting-title > div { min-width: 0; display: grid; gap: 2px; }
+.turnover-accounting-title strong { font-size: 13px; }
+.turnover-accounting-title span { color: var(--ink-soft); font-size: 11px; overflow-wrap: anywhere; }
+.turnover-accounting-review dl { display: grid; grid-template-columns: repeat(3, 1fr); margin: 0; border: 1px solid var(--line); background: #fff; }
+.turnover-accounting-review dl > div { display: grid; gap: 2px; padding: 9px 10px; border-right: 1px solid var(--line); }
+.turnover-accounting-review dl > div:last-child { border-right: 0; }
+.turnover-accounting-review dt { color: var(--ink-soft); font-size: 9px; }
+.turnover-accounting-review dd { margin: 0; font-size: 13px; font-weight: 800; }
+.turnover-gift-form { display: grid; grid-template-columns: minmax(170px, 1fr) 82px minmax(180px, 1fr) auto; align-items: end; gap: 9px; padding-top: 12px; border-top: 1px solid var(--line); }
+.turnover-gift-form > .turnover-accounting-title,
+.turnover-gift-form > small { grid-column: 1 / -1; }
+.turnover-gift-form > small { color: var(--ink-soft); font-size: 10px; }
+.turnover-review-dialog > footer { position: sticky; bottom: 0; display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); background: #fff; }
+
 .legacy-handover-toolbar {
   min-width: 0;
   display: grid;
@@ -140,6 +215,41 @@
   .minimum-rule-row > .weekday-control { grid-column: 1 / -1; }
   .weekday-control > div { height: auto; min-height: 34px; flex-wrap: wrap; }
   .minimum-rule-row > .icon-button { justify-self: end; }
+  .turnover-review-backdrop { place-items: end center; padding: 0; }
+  .turnover-review-dialog { max-height: 92dvh; border-radius: 6px 6px 0 0; }
+  .turnover-reason-fields,
+  .turnover-gift-form { grid-template-columns: 1fr; }
+  .turnover-accounting-review dl { grid-template-columns: 1fr; }
+  .turnover-accounting-review dl > div { border-right: 0; border-bottom: 1px solid var(--line); }
+  .turnover-accounting-review dl > div:last-child { border-bottom: 0; }
+  .turnover-review-dialog > footer { display: grid; grid-template-columns: 1fr; }
+  .turnover-review-dialog > footer button { width: 100%; }
+}
+
+.sop-verification-inbox { margin: 10px 16px; border: 1px solid var(--line-strong); border-left: 4px solid #b78b22; background: #fff; }
+.sop-verification-inbox > header { min-height: 50px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: #fffaf0; }
+.sop-verification-inbox > header > div { display: grid; gap: 2px; }
+.sop-verification-inbox > header strong { font-size: 13px; }
+.sop-verification-inbox > header span { color: var(--ink-soft); font-size: 10px; }
+.sop-verification-inbox > header > b { min-width: 24px; height: 24px; display: grid; place-items: center; background: #b78b22; color: #fff; font-size: 11px; }
+.sop-verification-inbox article { display: grid; grid-template-columns: 34px minmax(180px, 1fr) minmax(220px, .8fr) auto; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.sop-verification-inbox article:last-child { border-bottom: 0; }
+.sop-verification-icon { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid #dfc57e; background: #fff8e4; color: #856516; }
+.sop-verification-copy { min-width: 0; display: grid; gap: 3px; }
+.sop-verification-copy strong { font-size: 12px; }
+.sop-verification-copy span { overflow: hidden; color: var(--ink-soft); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.sop-verification-copy em { color: var(--danger); font-size: 10px; font-style: normal; }
+.sop-verification-inbox article > input { width: 100%; min-width: 0; height: 36px; border: 1px solid var(--line-strong); background: #fff; padding: 0 9px; }
+.sop-verification-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
+.sop-verification-actions button { min-height: 34px; white-space: nowrap; }
+.sop-verification-actions > b { max-width: 170px; color: var(--danger); font-size: 10px; text-align: right; }
+
+@media (max-width: 760px) {
+  .sop-verification-inbox { margin-inline: 8px; }
+  .sop-verification-inbox article { grid-template-columns: 32px minmax(0, 1fr); }
+  .sop-verification-inbox article > input, .sop-verification-actions { grid-column: 1 / -1; }
+  .sop-verification-actions button { flex: 1; }
+  .sop-verification-copy span { white-space: normal; }
 }
 
 /* Topbar identity belongs to the console, not to a lazy-loaded workspace. */

@@ -6,6 +6,7 @@ const runtimeModeSchema = z.enum(['local', 'test', 'staging', 'production'])
 const repositoryModeSchema = z.enum(['json', 'postgres'])
 const logLevelSchema = z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
 const voiceTranscriptionProviderSchema = z.enum(['disabled', 'google_v1'])
+const assistantProviderSchema = z.enum(['disabled', 'gemini_interactions'])
 
 export interface RuntimeConfig {
   runtimeMode: RuntimeMode
@@ -16,6 +17,7 @@ export interface RuntimeConfig {
   shutdownGraceMs: number
   sessionSecret?: string
   qrSecret: string
+  qrPreviousSecret?: string
   corsOrigins: string[]
   repositoryMode: z.infer<typeof repositoryModeSchema>
   jsonStatePath: string
@@ -23,6 +25,7 @@ export interface RuntimeConfig {
   tenantId?: string
   storeUuid?: string
   databasePoolMax: number
+  stateReadCacheMs: number
   metricsToken?: string
   publicBaseUrl?: string
   pilotAccessCode?: string
@@ -44,7 +47,18 @@ export interface RuntimeConfig {
   wecomCorpId?: string
   wecomCorpSecret?: string
   wecomAgentId?: string
+  sopWecomEmployeeUserIds?: Record<string, string>
+  sopHeadsetWebhookUrl?: string
+  sopHeadsetWebhookToken?: string
+  sopCameraWebhookUrl?: string
+  sopCameraWebhookToken?: string
   voiceTranscriptionProvider: z.infer<typeof voiceTranscriptionProviderSchema>
+  assistantProvider: z.infer<typeof assistantProviderSchema>
+  geminiApiKey?: string
+  geminiModel: string
+  assistantHttpTimeoutMs: number
+  releaseSha: string
+  releaseImageDigest: string
 }
 
 function parseInteger(value: string | undefined, fallback: number, name: string, minimum: number, maximum: number) {
@@ -119,6 +133,17 @@ function parsePilotEmployeePins(value: string | undefined) {
   return pins
 }
 
+function parseStringMap(value: string | undefined, name: string) {
+  if (!value?.trim()) return undefined
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value)
+  } catch {
+    throw new Error(`${name}必须是有效JSON`)
+  }
+  return z.record(z.string().trim().min(1).max(128), z.string().trim().min(1).max(256)).parse(parsed)
+}
+
 export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig {
   const runtimeMode = runtimeModeSchema.parse(env.MBOX_RUNTIME_MODE ?? 'local')
   const repositoryMode = repositoryModeSchema.parse(
@@ -134,6 +159,7 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
     shutdownGraceMs: parseInteger(env.MBOX_SHUTDOWN_GRACE_MS, 10_000, 'MBOX_SHUTDOWN_GRACE_MS', 1_000, 60_000),
     sessionSecret: env.MBOX_SESSION_SECRET?.trim() || undefined,
     qrSecret: env.MBOX_QR_SECRET?.trim() || 'local-development-qr-secret-change-me',
+    qrPreviousSecret: env.MBOX_QR_PREVIOUS_SECRET?.trim() || undefined,
     corsOrigins,
     repositoryMode,
     jsonStatePath: resolve(env.MBOX_JSON_STATE_PATH?.trim() || '.runtime/state.json'),
@@ -141,11 +167,12 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
     tenantId: env.MBOX_TENANT_ID?.trim() || undefined,
     storeUuid: env.MBOX_STORE_UUID?.trim() || undefined,
     databasePoolMax: parseInteger(env.MBOX_DATABASE_POOL_MAX, 10, 'MBOX_DATABASE_POOL_MAX', 1, 100),
+    stateReadCacheMs: parseInteger(env.MBOX_STATE_READ_CACHE_MS, 3_000, 'MBOX_STATE_READ_CACHE_MS', 500, 10_000),
     metricsToken: env.MBOX_METRICS_TOKEN?.trim() || undefined,
     publicBaseUrl: env.MBOX_PUBLIC_BASE_URL?.trim() || undefined,
     pilotAccessCode: env.MBOX_PILOT_ACCESS_CODE?.trim() || undefined,
     pilotEmployeePins: parsePilotEmployeePins(env.MBOX_PILOT_EMPLOYEE_PINS_JSON),
-    pilotSessionHours: parseInteger(env.MBOX_PILOT_SESSION_HOURS, 12, 'MBOX_PILOT_SESSION_HOURS', 1, 24),
+    pilotSessionHours: parseInteger(env.MBOX_PILOT_SESSION_HOURS, 6, 'MBOX_PILOT_SESSION_HOURS', 1, 24),
     pilotPaymentSimulationEnabled: parseBoolean(env.MBOX_PILOT_PAYMENT_SIMULATION_ENABLED),
     wechatEnabled: parseBoolean(env.MBOX_WECHAT_ENABLED),
     wechatAppId: env.MBOX_WECHAT_APP_ID?.trim() || undefined,
@@ -176,13 +203,32 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
     wecomCorpId: env.MBOX_WECOM_CORP_ID?.trim() || undefined,
     wecomCorpSecret: env.MBOX_WECOM_CORP_SECRET?.trim() || undefined,
     wecomAgentId: env.MBOX_WECOM_AGENT_ID?.trim() || undefined,
+    sopWecomEmployeeUserIds: parseStringMap(env.MBOX_SOP_WECOM_EMPLOYEE_USER_IDS_JSON, 'MBOX_SOP_WECOM_EMPLOYEE_USER_IDS_JSON'),
+    sopHeadsetWebhookUrl: env.MBOX_SOP_HEADSET_WEBHOOK_URL?.trim() || undefined,
+    sopHeadsetWebhookToken: env.MBOX_SOP_HEADSET_WEBHOOK_TOKEN?.trim() || undefined,
+    sopCameraWebhookUrl: env.MBOX_SOP_CAMERA_WEBHOOK_URL?.trim() || undefined,
+    sopCameraWebhookToken: env.MBOX_SOP_CAMERA_WEBHOOK_TOKEN?.trim() || undefined,
     voiceTranscriptionProvider: voiceTranscriptionProviderSchema.parse(
       env.MBOX_VOICE_TRANSCRIPTION_PROVIDER ?? 'disabled',
     ),
+    assistantProvider: assistantProviderSchema.parse(env.MBOX_ASSISTANT_PROVIDER ?? 'disabled'),
+    geminiApiKey: env.MBOX_GEMINI_API_KEY?.trim() || undefined,
+    geminiModel: env.MBOX_GEMINI_MODEL?.trim() || 'gemini-3.5-flash',
+    assistantHttpTimeoutMs: parseInteger(
+      env.MBOX_ASSISTANT_HTTP_TIMEOUT_MS,
+      20_000,
+      'MBOX_ASSISTANT_HTTP_TIMEOUT_MS',
+      2_000,
+      60_000,
+    ),
+    releaseSha: env.MBOX_RELEASE_SHA?.trim() || 'development',
+    releaseImageDigest: env.MBOX_RELEASE_IMAGE_DIGEST?.trim() || 'unavailable',
   }
 
   for (const origin of corsOrigins) assertUrl(origin, 'MBOX_CORS_ORIGINS', ['http:', 'https:'])
   if (config.publicBaseUrl) assertUrl(config.publicBaseUrl, 'MBOX_PUBLIC_BASE_URL', ['http:', 'https:'])
+  if (config.sopHeadsetWebhookUrl) assertUrl(config.sopHeadsetWebhookUrl, 'MBOX_SOP_HEADSET_WEBHOOK_URL', ['https:'])
+  if (config.sopCameraWebhookUrl) assertUrl(config.sopCameraWebhookUrl, 'MBOX_SOP_CAMERA_WEBHOOK_URL', ['https:'])
   if ((runtimeMode === 'staging' || runtimeMode === 'production') && repositoryMode !== 'postgres') {
     throw new Error('预发布和生产环境必须使用PostgreSQL仓储')
   }
@@ -216,9 +262,23 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
   if (config.wecomNotificationsEnabled && (!config.wecomCorpId || !config.wecomCorpSecret || !config.wecomAgentId)) {
     throw new Error('启用企业微信通知必须配置CorpID、CorpSecret和AgentID')
   }
+  if (config.sopHeadsetWebhookUrl && (!config.sopHeadsetWebhookToken || config.sopHeadsetWebhookToken.length < 20)) {
+    throw new Error('启用SOP耳机通道必须配置至少20字符的MBOX_SOP_HEADSET_WEBHOOK_TOKEN')
+  }
+  if (config.sopCameraWebhookUrl && (!config.sopCameraWebhookToken || config.sopCameraWebhookToken.length < 20)) {
+    throw new Error('启用SOP摄像头通道必须配置至少20字符的MBOX_SOP_CAMERA_WEBHOOK_TOKEN')
+  }
   if (config.serviceAccountNotificationsEnabled || config.wecomNotificationsEnabled) {
     if (repositoryMode !== 'postgres') throw new Error('启用客户通知必须使用PostgreSQL仓储')
     if (!config.wechatEncryptionKey) throw new Error('启用客户通知必须配置32字节微信身份加密密钥')
+  }
+  if (config.assistantProvider === 'gemini_interactions') {
+    if (!config.geminiApiKey || config.geminiApiKey.length < 20) {
+      throw new Error('Gemini智能对话启用时必须配置有效的MBOX_GEMINI_API_KEY')
+    }
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{1,99}$/.test(config.geminiModel)) {
+      throw new Error('MBOX_GEMINI_MODEL格式无效')
+    }
   }
 
   if (config.pilotAccessCode) {
@@ -237,6 +297,12 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
       throw new Error('预发布和生产环境必须配置至少32字符的MBOX_SESSION_SECRET')
     }
     if (config.qrSecret.length < 32) throw new Error('预发布和生产环境必须配置至少32字符的MBOX_QR_SECRET')
+    if (config.qrPreviousSecret && config.qrPreviousSecret.length < 32) {
+      throw new Error('MBOX_QR_PREVIOUS_SECRET至少需要32个字符')
+    }
+    if (config.qrPreviousSecret === config.qrSecret) {
+      throw new Error('MBOX_QR_PREVIOUS_SECRET不能与MBOX_QR_SECRET相同')
+    }
     if (!config.metricsToken || config.metricsToken.length < 32) {
       throw new Error('预发布和生产环境必须配置至少32字符的MBOX_METRICS_TOKEN')
     }

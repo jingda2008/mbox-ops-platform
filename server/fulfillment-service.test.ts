@@ -10,6 +10,7 @@ import { JsonRepository } from './repository.js'
 import { syncOrderFulfillmentWorkstations } from './fulfillment-workstations.js'
 import { applyTaskAction } from './domain.js'
 import { syncKdsFromFulfillmentServiceTaskAction } from './fulfillment-service.js'
+import { migrateRuntimeState } from './runtime-state-migrations.js'
 
 function registerTestActor(app: ReturnType<typeof Fastify>) {
   app.decorateRequest('mboxActor', null)
@@ -74,10 +75,10 @@ describe('automatic fulfillment delivery service task', () => {
     app.setErrorHandler((error, _request, reply) => reply.status(error.statusCode ?? 400).send({ message: error.message }))
     registerCommerceRoutes(app, repository)
 
-    expect((await action(app, 'start', 'fulfillment-start-0001', 'specialist', 'emp-qing')).statusCode).toBe(200)
-    const completed = await action(app, 'complete', 'fulfillment-complete-0001', 'specialist', 'emp-qing')
+    expect((await action(app, 'start', 'fulfillment-start-0001', 'bartender', 'emp-qing')).statusCode).toBe(200)
+    const completed = await action(app, 'complete', 'fulfillment-complete-0001', 'bartender', 'emp-qing')
     expect(completed.statusCode).toBe(200)
-    const replayed = await action(app, 'complete', 'fulfillment-complete-0001', 'specialist', 'emp-qing')
+    const replayed = await action(app, 'complete', 'fulfillment-complete-0001', 'bartender', 'emp-qing')
     expect(replayed.statusCode).toBe(200)
 
     let state = await repository.read()
@@ -115,8 +116,8 @@ describe('automatic fulfillment delivery service task', () => {
     app.setErrorHandler((error, _request, reply) => reply.status(error.statusCode ?? 400).send({ message: error.message }))
     registerCommerceRoutes(app, repository)
 
-    expect((await action(app, 'start', 'fulfillment-fallback-start', 'specialist', 'emp-qing')).statusCode).toBe(200)
-    expect((await action(app, 'complete', 'fulfillment-fallback-complete', 'specialist', 'emp-qing')).statusCode).toBe(200)
+    expect((await action(app, 'start', 'fulfillment-fallback-start', 'bartender', 'emp-qing')).statusCode).toBe(200)
+    expect((await action(app, 'complete', 'fulfillment-fallback-complete', 'bartender', 'emp-qing')).statusCode).toBe(200)
 
     const state = await repository.read()
     expect(state.tasks.find((task) => task.triggerId?.startsWith('fulfillment-delivery:'))).toMatchObject({
@@ -127,7 +128,46 @@ describe('automatic fulfillment delivery service task', () => {
     await repository.close()
   })
 
-  it('uses workstation roles for production and allows supervisor fallback', async () => {
+  it('migrates legacy oversized delivery task ids without breaking KDS, event or audit links', async () => {
+    const repository = new JsonRepository(`/tmp/mbox-fulfillment-migration-${crypto.randomUUID()}.json`)
+    await repository.init()
+    await createSubmittedOrder(repository)
+    const app = Fastify()
+    registerTestActor(app)
+    app.setErrorHandler((error, _request, reply) => reply.status(error.statusCode ?? 400).send({ message: error.message }))
+    registerCommerceRoutes(app, repository)
+    expect((await action(app, 'start', 'fulfillment-migration-start', 'bartender', 'emp-qing')).statusCode).toBe(200)
+    expect((await action(app, 'complete', 'fulfillment-migration-complete', 'bartender', 'emp-qing')).statusCode).toBe(200)
+
+    const legacy = await repository.read()
+    const kdsTask = legacy.orderDomain.kdsTasks[0]!
+    const serviceTask = legacy.tasks.find((task) => task.id === kdsTask.deliveryServiceTask?.id)!
+    const compactId = serviceTask.id
+    const legacyId = `task:fulfillment:${kdsTask.id}:${'x'.repeat(100)}`
+    serviceTask.id = legacyId
+    kdsTask.deliveryServiceTask!.id = legacyId
+    for (const event of legacy.taskEvents) {
+      if (event.taskId === compactId) event.taskId = legacyId
+    }
+    const audit = legacy.auditEntries.find((entry) => entry.objectId === compactId)
+    if (audit) audit.objectId = legacyId
+
+    const migrated = migrateRuntimeState(legacy)
+    const migratedKdsTask = migrated.orderDomain.kdsTasks.find((task) => task.id === kdsTask.id)!
+    const migratedServiceTask = migrated.tasks.find((task) => task.id === migratedKdsTask.deliveryServiceTask?.id)!
+    expect(migratedServiceTask.id).toBe(compactId)
+    expect(migratedServiceTask.id.length).toBeLessThanOrEqual(100)
+    expect(migrated.taskEvents.filter((event) => event.taskId === compactId).length).toBeGreaterThan(0)
+    expect(migrated.auditEntries).toContainEqual(expect.objectContaining({
+      action: 'runtime.fulfillment_task_ids_v1_migrated.v1',
+      details: expect.objectContaining({ migratedCount: 1 }),
+    }))
+
+    await app.close()
+    await repository.close()
+  })
+
+  it('requires the configured workstation role and accepts an administrator-assigned secondary role', async () => {
     const repository = new JsonRepository(`/tmp/mbox-fulfillment-auth-${crypto.randomUUID()}.json`)
     await repository.init()
     await repository.mutate((state) => {
@@ -141,7 +181,17 @@ describe('automatic fulfillment delivery service task', () => {
     registerCommerceRoutes(app, repository)
 
     expect((await action(app, 'start', 'fulfillment-denied-0001', 'specialist', 'emp-qing')).statusCode).toBe(403)
-    expect((await action(app, 'start', 'fulfillment-supervisor-0001', 'supervisor', 'emp-mia')).statusCode).toBe(200)
+    expect((await action(app, 'start', 'fulfillment-supervisor-denied-0001', 'supervisor', 'emp-mia')).statusCode).toBe(403)
+    await repository.mutate((state) => {
+      const employee = state.employees.find((item) => item.id === 'emp-mia')!
+      const shift = state.shiftAssignments.find((item) => item.employeeId === employee.id)!
+      employee.roleIds = ['bartender']
+      employee.skillIds = ['skill-bar']
+      shift.roleIds = ['bartender']
+      shift.stationIds = ['bar-main']
+      state.revision += 1
+    })
+    expect((await action(app, 'start', 'fulfillment-secondary-role-0001', 'specialist', 'emp-mia')).statusCode).toBe(200)
 
     await app.close()
     await repository.close()
@@ -179,8 +229,8 @@ describe('automatic fulfillment delivery service task', () => {
     const app = Fastify()
     registerTestActor(app)
     registerCommerceRoutes(app, repository)
-    expect((await action(app, 'start', 'fulfillment-bridge-start', 'specialist', 'emp-qing')).statusCode).toBe(200)
-    expect((await action(app, 'complete', 'fulfillment-bridge-complete', 'specialist', 'emp-qing')).statusCode).toBe(200)
+    expect((await action(app, 'start', 'fulfillment-bridge-start', 'bartender', 'emp-qing')).statusCode).toBe(200)
+    expect((await action(app, 'complete', 'fulfillment-bridge-complete', 'bartender', 'emp-qing')).statusCode).toBe(200)
 
     await repository.mutate((state) => {
       const serviceTask = state.tasks.find((task) => task.triggerId?.startsWith('fulfillment-delivery:'))!

@@ -135,6 +135,25 @@ export function heartbeatPresenceLease(
   return lease
 }
 
+export function resumePresenceLease(state: RuntimeState, input: EstablishPresenceInput) {
+  const explicitlyEnded = state.auditEntries.some((entry) => (
+    entry.action === 'staff_presence.ended.v1'
+    && entry.objectType === 'staffSession'
+    && entry.objectId === input.sessionId
+  ))
+  if (explicitlyEnded) return null
+
+  const existing = state.presenceLeases?.find((lease) => (
+    lease.sessionId === input.sessionId
+    && lease.actorId === input.actorId
+    && lease.storeId === input.storeId
+    && lease.businessDate === input.businessDate
+    && lease.expiresAt > input.now
+    && lease.sessionExpiresAt > input.now
+  ))
+  return existing ?? establishPresenceLease(state, input)
+}
+
 export function endPresenceLease(state: RuntimeState, sessionId: string, actorId: string, now: number) {
   const changedByReconciliation = synchronizeOnlineProjection(state, now)
   const before = state.presenceLeases!.length
@@ -193,7 +212,17 @@ export async function registerPresenceRoutes(
       return reply.status(401).send({ code: 'SIGNED_SESSION_REQUIRED', message: '心跳需要签名员工会话' })
     }
     const result = await repository.mutate((state) => {
-      const lease = heartbeatPresenceLease(state, actor.sessionId!, actor.actorId, now(), leaseTtlMs)
+      const heartbeatAt = now()
+      const lease = heartbeatPresenceLease(state, actor.sessionId!, actor.actorId, heartbeatAt, leaseTtlMs)
+        ?? resumePresenceLease(state, {
+          sessionId: actor.sessionId!,
+          actorId: actor.actorId,
+          storeId: actor.storeId,
+          businessDate: state.store.businessDate,
+          now: heartbeatAt,
+          leaseTtlMs,
+          sessionExpiresAt: actor.sessionExpiresAt!,
+        })
       return responseFor(state, actor.actorId, actor.sessionId!, lease, leaseTtlMs)
     })
     if (!result.leaseExpiresAt) {
@@ -215,7 +244,14 @@ export async function registerPresenceRoutes(
 
   if (sweepIntervalMs > 0) {
     const timer = setInterval(() => {
-      void repository.mutate((state) => reconcilePresence(state, now())).catch((error: unknown) => {
+      const sweepAt = now()
+      void repository.read().then((snapshot) => {
+        const probe = structuredClone(snapshot)
+        const previousRevision = probe.revision
+        reconcilePresence(probe, sweepAt)
+        if (probe.revision === previousRevision) return undefined
+        return repository.mutate((state) => reconcilePresence(state, sweepAt))
+      }).catch((error: unknown) => {
         app.log.error({ error }, 'presence lease sweep failed')
       })
     }, sweepIntervalMs)

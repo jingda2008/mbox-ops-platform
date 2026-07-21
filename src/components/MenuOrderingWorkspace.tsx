@@ -1,5 +1,7 @@
-import { Check, Clock3, Minus, Plus, ShoppingCart, Trash2 } from 'lucide-react'
+import { AlertTriangle, Check, Clock3, Minus, Plus, ShoppingCart, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { ApiError } from '../api'
+import type { OrderSafetyConfig } from '../shared/commercial-ops-contracts'
 import type { MenuProduct } from '../shared/contracts'
 import { productAvailability } from '../shared/product-availability'
 import './MenuOrderingWorkspace.css'
@@ -24,7 +26,8 @@ interface MenuOrderingWorkspaceProps {
   submitHint: string
   busy?: boolean
   timeZone?: string
-  onSubmit: (items: MenuCartItem[]) => Promise<void>
+  orderSafety?: OrderSafetyConfig
+  onSubmit: (items: MenuCartItem[], options: { confirmedDuplicateOrderId?: string }) => Promise<void>
   onInteraction?: (interaction: MenuInteraction) => void
 }
 
@@ -38,10 +41,16 @@ export function MenuOrderingWorkspace({
   timeZone = 'Asia/Shanghai',
   onSubmit,
   onInteraction,
+  orderSafety,
 }: MenuOrderingWorkspaceProps) {
   const [cart, setCart] = useState<Record<string, number>>({})
   const [categoryId, setCategoryId] = useState('all')
   const [clock, setClock] = useState(() => Date.now())
+  const [confirmation, setConfirmation] = useState<'submit' | 'duplicate' | 'continue' | null>(null)
+  const [confirmationError, setConfirmationError] = useState('')
+  const [confirmedDuplicateOrderId, setConfirmedDuplicateOrderId] = useState('')
+  const [pendingProductId, setPendingProductId] = useState('')
+  const [lastSubmittedAt, setLastSubmittedAt] = useState(0)
   useEffect(() => {
     const interval = window.setInterval(() => setClock(Date.now()), 30_000)
     return () => window.clearInterval(interval)
@@ -81,6 +90,22 @@ export function MenuOrderingWorkspace({
   }, [clock, products, timeZone])
 
   function changeQuantity(productId: string, delta: number) {
+    const continuationSeconds = orderSafety?.requireContinuationConfirmationSeconds ?? 120
+    if (
+      delta > 0
+      && itemCount === 0
+      && lastSubmittedAt > 0
+      && Date.now() - lastSubmittedAt < continuationSeconds * 1000
+    ) {
+      setPendingProductId(productId)
+      setConfirmationError('')
+      setConfirmation('continue')
+      return
+    }
+    applyQuantityChange(productId, delta)
+  }
+
+  function applyQuantityChange(productId: string, delta: number) {
     const nextQuantity = Math.max(0, Math.min(50, (cart[productId] ?? 0) + delta))
     setCart((current) => {
       if (nextQuantity === 0) {
@@ -108,9 +133,45 @@ export function MenuOrderingWorkspace({
 
   async function submit() {
     if (cartProducts.length === 0 || busy) return
-    await onSubmit(cartProducts.map((product) => ({ productId: product.id, quantity: cart[product.id]! })))
-    setCart({})
-    onInteraction?.({ type: 'cart_cleared' })
+    if (orderSafety?.requireSubmitConfirmation !== false) {
+      setConfirmationError('')
+      setConfirmation('submit')
+      return
+    }
+    await executeSubmit()
+  }
+
+  async function executeSubmit(duplicateOrderId?: string) {
+    if (cartProducts.length === 0 || busy) return
+    try {
+      await onSubmit(
+        cartProducts.map((product) => ({ productId: product.id, quantity: cart[product.id]! })),
+        { confirmedDuplicateOrderId: duplicateOrderId },
+      )
+      setCart({})
+      setLastSubmittedAt(Date.now())
+      setConfirmation(null)
+      setConfirmationError('')
+      setConfirmedDuplicateOrderId('')
+      onInteraction?.({ type: 'cart_cleared' })
+    } catch (error) {
+      if (error instanceof ApiError && error.code === 'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED') {
+        const conflictingOrderId = error.details?.conflictingOrderId
+        setConfirmedDuplicateOrderId(typeof conflictingOrderId === 'string' ? conflictingOrderId : '')
+        setConfirmationError(error.message)
+        setConfirmation('duplicate')
+        return
+      }
+      setConfirmationError(error instanceof Error ? error.message : '订单没有提交，请核对后再试一次')
+      setConfirmation('submit')
+    }
+  }
+
+  function confirmContinuation() {
+    if (pendingProductId) applyQuantityChange(pendingProductId, 1)
+    setPendingProductId('')
+    setConfirmation(null)
+    setConfirmationError('')
   }
 
   return (
@@ -139,7 +200,7 @@ export function MenuOrderingWorkspace({
               return (
                 <article className={`menu-product${status.orderable ? '' : ' is-unavailable'}`} key={product.id}>
                   <div className="menu-product-image">
-                    {product.imageUrl ? <img src={product.imageUrl} alt={product.name} /> : <div>{product.name.slice(0, 1)}</div>}
+                    {product.imageUrl ? <img src={product.imageUrl} alt={product.name} loading="lazy" decoding="async" /> : <div>{product.name.slice(0, 1)}</div>}
                     {status.orderable
                       ? (product.tags ?? []).slice(0, 1).map((tag) => <span key={tag}>{tag}</span>)
                       : <span className={`menu-product-status is-${status.state}`}>{status.label}</span>}
@@ -191,6 +252,29 @@ export function MenuOrderingWorkspace({
           <p className="menu-submit-hint">{submitHint}</p>
         </aside>
       </div>
+
+      {confirmation && <div className="menu-confirm-backdrop" role="presentation" onClick={() => setConfirmation(null)}>
+        <section className="menu-confirm-dialog" role="dialog" aria-modal="true" aria-label={confirmation === 'continue' ? '确认继续加单' : '确认上单'} onClick={(event) => event.stopPropagation()}>
+          <header>
+            <span className={confirmation === 'duplicate' ? 'is-warning' : ''}>{confirmation === 'duplicate' ? <AlertTriangle size={22} /> : <ShoppingCart size={22} />}</span>
+            <div><small>{confirmation === 'continue' ? 'CONTINUE ORDER' : 'ORDER CHECK'}</small><h2>{confirmation === 'duplicate' ? '刚刚下过一笔相同订单' : confirmation === 'continue' ? '还要继续加单吗？' : '请确认这次上单'}</h2></div>
+            <button className="icon-button" title="关闭" onClick={() => setConfirmation(null)}><X size={19} /></button>
+          </header>
+          {confirmation === 'continue' ? <p>您刚完成一次下单。确认是新一轮加单后再继续，避免手滑重复上单。</p> : <>
+            <div className="menu-confirm-lines">{cartProducts.map((product) => <div key={product.id}><span>{product.name} × {cart[product.id]}</span><strong>¥{((product.listPriceAmount * cart[product.id]!) / 100).toFixed(2)}</strong></div>)}</div>
+            <div className="menu-confirm-total"><span>共 {itemCount} 件</span><strong>¥{(total / 100).toFixed(2)}</strong></div>
+            <p>{confirmation === 'duplicate' ? '请先查看订单记录。只有确定需要再上一份相同商品时，才继续加单。' : '确认后订单会送到吧台或厨房，请勿连续点击或重复提交。'}</p>
+          </>}
+          {confirmationError && <div className="menu-confirm-error" role="alert">{confirmationError}</div>}
+          <footer>
+            <button className="secondary-button" disabled={busy} onClick={() => setConfirmation(null)}>再看看</button>
+            <button className="primary-button" disabled={busy || (confirmation === 'duplicate' && !confirmedDuplicateOrderId)} onClick={() => {
+              if (confirmation === 'continue') confirmContinuation()
+              else void executeSubmit(confirmation === 'duplicate' ? confirmedDuplicateOrderId : undefined)
+            }}><Check size={17} />{busy ? '正在提交' : confirmation === 'duplicate' ? '确认继续加单' : confirmation === 'continue' ? '继续选商品' : '确认上单'}</button>
+          </footer>
+        </section>
+      </div>}
     </section>
   )
 }

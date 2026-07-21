@@ -52,6 +52,16 @@ export interface RepertoireWriteInput {
   enabled: boolean
 }
 
+export interface RepertoireImportInput {
+  rows: RepertoireWriteInput[]
+}
+
+export interface RepertoireImportResult {
+  total: number
+  created: number
+  updated: number
+}
+
 export type PerformanceSessionWriteInput = Omit<PerformanceSession, 'id' | 'configVersion'> & { expectedVersion?: number }
 
 export interface SongCatalogItem {

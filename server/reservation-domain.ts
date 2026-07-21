@@ -59,9 +59,20 @@ export const DEFAULT_RESERVATION_CONFIG: ReservationConfig = {
     acceptedContactMethods: ['phone', 'wechat'],
     createRateLimit: { limit: 5, windowMinutes: 10 },
   },
+  depositPolicy: {
+    enabled: false,
+    currency: 'CNY',
+    defaultDepositAmount: 0,
+    defaultMinimumSpendAmount: 0,
+    defaultDeductibleRateBps: 10_000,
+    customerNotice: '定金在到店消费时按规则抵扣，具体以预约位置和确认单为准。',
+    areaRules: [],
+  },
 }
 
-export function normalizeReservationConfig(config: ReservationConfig): ReservationConfig {
+type ReservationConfigInput = ReservationConfig | Omit<ReservationConfig, 'depositPolicy'>
+
+export function normalizeReservationConfig(config: ReservationConfigInput): ReservationConfig {
   const candidate = config as Partial<ReservationConfig>
   return {
     ...DEFAULT_RESERVATION_CONFIG,
@@ -88,12 +99,32 @@ export function normalizeReservationConfig(config: ReservationConfig): Reservati
         ...(candidate.publicRules?.createRateLimit ?? {}),
       },
     },
+    depositPolicy: {
+      ...DEFAULT_RESERVATION_CONFIG.depositPolicy,
+      ...(candidate.depositPolicy ?? {}),
+      areaRules: (candidate.depositPolicy?.areaRules ?? DEFAULT_RESERVATION_CONFIG.depositPolicy.areaRules).map((rule) => ({ ...rule })),
+    },
+  }
+}
+
+export function reservationDepositRule(config: ReservationConfig, areaPreferenceCode?: string | null) {
+  const policy = normalizeReservationConfig(config).depositPolicy
+  const areaRule = areaPreferenceCode
+    ? policy.areaRules.find((rule) => rule.areaPreferenceCode === areaPreferenceCode)
+    : undefined
+  return {
+    enabled: policy.enabled,
+    currency: policy.currency,
+    depositAmount: policy.enabled ? areaRule?.depositAmount ?? policy.defaultDepositAmount : 0,
+    minimumSpendAmount: areaRule?.minimumSpendAmount ?? policy.defaultMinimumSpendAmount,
+    deductibleRateBps: areaRule?.deductibleRateBps ?? policy.defaultDeductibleRateBps,
+    customerNotice: areaRule?.customerNotice || policy.customerNotice,
   }
 }
 
 export function createReservationState(
   scope: ReservationScope,
-  config: ReservationConfig = DEFAULT_RESERVATION_CONFIG,
+  config: ReservationConfigInput = DEFAULT_RESERVATION_CONFIG,
 ): ReservationState {
   assertNonEmpty(scope.tenantId, '租户ID')
   assertNonEmpty(scope.storeId, '门店ID')
@@ -206,6 +237,20 @@ function validateConfig(config: ReservationConfig) {
   }
   if (!Number.isSafeInteger(config.publicRules.createRateLimit.windowMinutes) || config.publicRules.createRateLimit.windowMinutes < 1 || config.publicRules.createRateLimit.windowMinutes > 1_440) {
     throw new Error('公开预约限流窗口必须在1至1440分钟之间')
+  }
+  assertCurrency(config.depositPolicy.currency)
+  assertMoney(config.depositPolicy.defaultDepositAmount, '默认预约定金', true)
+  assertMoney(config.depositPolicy.defaultMinimumSpendAmount, '默认预约低消', true)
+  if (!Number.isSafeInteger(config.depositPolicy.defaultDeductibleRateBps) || config.depositPolicy.defaultDeductibleRateBps < 0 || config.depositPolicy.defaultDeductibleRateBps > 10_000) {
+    throw new Error('默认定金抵扣比例必须在0%至100%之间')
+  }
+  const depositAreaCodes = config.depositPolicy.areaRules.map((rule) => rule.areaPreferenceCode)
+  if (new Set(depositAreaCodes).size !== depositAreaCodes.length) throw new Error('同一预约区域只能配置一条定金规则')
+  for (const rule of config.depositPolicy.areaRules) {
+    if (!config.areaPreferences.some((area) => area.code === rule.areaPreferenceCode)) throw new Error('定金规则引用了不存在的预约区域')
+    assertMoney(rule.depositAmount, '区域预约定金', true)
+    assertMoney(rule.minimumSpendAmount, '区域预约低消', true)
+    if (!Number.isSafeInteger(rule.deductibleRateBps) || rule.deductibleRateBps < 0 || rule.deductibleRateBps > 10_000) throw new Error('区域定金抵扣比例必须在0%至100%之间')
   }
   for (const collection of [config.sources, config.areaPreferences, config.occasions]) {
     const codes = collection.map((item) => item.code)

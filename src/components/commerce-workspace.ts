@@ -1,4 +1,4 @@
-import type { BootstrapResponse, Employee, RoleConfig } from '../shared/contracts'
+import type { BootstrapResponse, Employee, RoleConfig, WorkstationConfig } from '../shared/contracts'
 import type { KdsExceptionEvent, KdsTask, KdsTaskStatus } from '../shared/order-contracts'
 
 export type FulfillmentMode = 'production' | 'delivery' | 'oversight'
@@ -11,8 +11,10 @@ export interface FulfillmentAccess {
   canDeliver: boolean
   canOrder: boolean
   canViewLedger: boolean
+  roleIds: string[]
   stationIds: string[]
   stationScoped: boolean
+  hasActiveShift: boolean
   roleLabel: string
   scopeLabel: string
 }
@@ -44,6 +46,11 @@ export function getFulfillmentAccess(data: BootstrapResponse, actorId: string): 
     .map((item) => item.toLowerCase())
   const explicitMode = readMode(employee) ?? readMode(role)
   const configuredWorkstations = readRecordArray((data.config as unknown as Record<string, unknown>).workstations)
+  const hasActiveShift = data.shiftAssignments.some((shift) => (
+    shift.employeeId === employee?.id
+    && shift.businessDate === data.store.businessDate
+    && shift.status === 'active'
+  ))
   const configuredForProduction = configuredWorkstations.some((item) => item.enabled !== false && readStringArray(item, ['productionRoleIds']).some((id) => roleIds.includes(id)))
   const configuredForDelivery = configuredWorkstations.some((item) => item.enabled !== false && readStringArray(item, ['deliveryRoleIds']).some((id) => roleIds.includes(id)))
   const mode = explicitMode
@@ -73,8 +80,10 @@ export function getFulfillmentAccess(data: BootstrapResponse, actorId: string): 
     canDeliver,
     canOrder: configuredPermissions?.includes('order.create') ?? mode !== 'production',
     canViewLedger: configuredPermissions?.includes('order.view') ?? mode !== 'production',
+    roleIds,
     stationIds,
     stationScoped,
+    hasActiveShift,
     roleLabel: roles.map((item) => item.name).join(' / ') || employee?.roleId || '身份未识别',
     scopeLabel: mode === 'oversight'
       ? '全流程监管'
@@ -85,7 +94,7 @@ export function getFulfillmentAccess(data: BootstrapResponse, actorId: string): 
 }
 
 export function taskVisibleToAccess(task: KdsTask, access: FulfillmentAccess) {
-  const employeeRoleIds = [access.employee?.roleId, ...(access.employee?.roleIds ?? [])].filter(Boolean)
+  const employeeRoleIds = access.roleIds
   if (task.status === 'delivered') return false
   if (access.mode === 'production') {
     const configuredRoles = readStringArray(task.workstation, ['productionRoleIds'])
@@ -104,8 +113,30 @@ export function taskVisibleToAccess(task: KdsTask, access: FulfillmentAccess) {
   return true
 }
 
-export function actionAllowedForAccess(status: KdsTaskStatus, access: FulfillmentAccess) {
-  return productionStatuses.has(status) ? access.canPrepare : deliveryStatuses.has(status) ? access.canDeliver : false
+export function actionAllowedForAccess(
+  task: KdsTask,
+  access: FulfillmentAccess,
+  workstations: readonly WorkstationConfig[],
+) {
+  const production = productionStatuses.has(task.status)
+  const delivery = deliveryStatuses.has(task.status)
+  if ((!production && !delivery) || !access.employee || !access.hasActiveShift) return false
+  if (!access.employee.online || access.employee.paused) return false
+
+  const workstation = workstations.find((item) => item.id === task.stationId) ?? task.workstation
+  const allowedRoleIds = production ? workstation?.productionRoleIds : workstation?.deliveryRoleIds
+  if (!allowedRoleIds?.some((roleId) => access.roleIds.includes(roleId))) return false
+  if (access.stationIds.length > 0 && !access.stationIds.includes(task.stationId)) return false
+  if (production) {
+    if (!access.canPrepare) return false
+    const employeeSkills = access.employee.skillIds ?? []
+    if (workstation?.requiredSkillIds.some((skillId) => !employeeSkills.includes(skillId))) return false
+  } else {
+    if (!access.canDeliver) return false
+    const assignedOwnerId = task.deliveryServiceTask?.ownerId
+    if (assignedOwnerId && assignedOwnerId !== access.employee.id) return false
+  }
+  return true
 }
 
 export function openKdsException(task: KdsTask): KdsExceptionEvent | undefined {
@@ -129,9 +160,13 @@ export function kdsTaskOperationallyActive(task: KdsTask) {
 }
 
 export function canResolveKdsException(access: FulfillmentAccess) {
-  const roleIds = [access.employee?.roleId, ...(access.employee?.roleIds ?? [])]
-    .filter((roleId): roleId is string => typeof roleId === 'string')
-  return access.mode === 'oversight' && roleIds.some((roleId) => ['supervisor', 'manager'].includes(roleId))
+  return access.mode === 'oversight' && access.roleIds.some((roleId) => (
+    ['supervisor', 'manager', 'operations_director', 'owner'].includes(roleId)
+  ))
+}
+
+export function canManagerCancelKds(access: FulfillmentAccess, permissionIds: readonly string[]) {
+  return canResolveKdsException(access) && permissionIds.includes('table.close')
 }
 
 export function stationLabel(stationId: string) {

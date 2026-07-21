@@ -393,6 +393,132 @@ body {
   background: rgba(5, 7, 6, .72);
 }
 
+.guest-stage-sheet {
+  width: min(100%, 520px);
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  border-top: 3px solid #d8b45a;
+  border-radius: 7px 7px 0 0;
+  background: #fff;
+  box-shadow: 0 -16px 40px rgba(0, 0, 0, .28);
+}
+
+.guest-stage-sheet > header {
+  min-height: 116px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 16px 16px;
+  background: #0b0e0c;
+  color: #fff;
+}
+
+.guest-stage-sheet > header > div { min-width: 0; }
+
+.guest-stage-sheet > header small {
+  color: #d8b45a;
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.guest-stage-sheet > header h2 {
+  margin: 3px 0 5px;
+  color: #fff;
+  font-size: 22px;
+}
+
+.guest-stage-sheet > header p {
+  margin: 0;
+  color: #adb4af;
+  font-size: 10px;
+}
+
+.guest-stage-sheet > header > button {
+  flex: 0 0 auto;
+  border-color: rgba(255, 255, 255, .28) !important;
+  background: rgba(255, 255, 255, .06) !important;
+  color: #fff;
+}
+
+.guest-stage-lineup {
+  padding: 4px 16px 0;
+}
+
+.guest-stage-lineup > button {
+  width: 100%;
+  min-height: 68px;
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr) auto 15px;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 0;
+  border: 0;
+  border-bottom: 1px solid #e1e4df;
+  background: transparent;
+  color: #1c211e;
+  text-align: left;
+}
+
+.guest-stage-lineup time {
+  color: #806827;
+  font-size: 10px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.guest-stage-lineup span {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 17px minmax(0, 1fr);
+  align-items: center;
+  gap: 2px 5px;
+}
+
+.guest-stage-lineup span svg {
+  grid-row: 1 / span 2;
+  color: #d8b45a;
+}
+
+.guest-stage-lineup span strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.guest-stage-lineup span small {
+  overflow: hidden;
+  color: #788079;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.guest-stage-lineup > button > b {
+  padding: 3px 5px;
+  border: 1px solid #ddd4bd;
+  border-radius: 4px;
+  color: #756a50;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.guest-stage-lineup > button > b.is-live {
+  border-color: #e5b5b7;
+  background: #fff1f1;
+  color: #bd3339;
+}
+
+.guest-stage-lineup > button > svg { color: #8a918c; }
+
+.guest-stage-sheet > footer {
+  padding: 13px 16px 22px;
+  color: #7a827c;
+  font-size: 9px;
+  line-height: 1.55;
+}
+
 .guest-singer-sheet {
   width: min(100%, 520px);
   max-height: calc(100vh - 24px);
@@ -587,6 +713,16 @@ body {
 }
 
 .guest-singer-songs > button:disabled > b { color: #8a918c; }
+
+.guest-singer-songs > button.guest-singer-show-all {
+  margin-top: 7px;
+  border: 1px solid #b7953c;
+  border-radius: 5px;
+  background: #111713;
+  color: #f5d671;
+}
+
+.guest-singer-songs > button.guest-singer-show-all > b { color: #f5d671; }
 
 .guest-singer-songs > p {
   margin: 0;
@@ -849,6 +985,38 @@ body {
   box-shadow: 0 1px 4px rgb(24 31 27 / 10%);
 }
 
+.guest-song-search {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 9px;
+  padding: 0 10px;
+  border: 1px solid #aeb7b1;
+  border-radius: 5px;
+  background: #fff;
+  color: #68706c;
+}
+
+.guest-song-search input {
+  min-width: 0;
+  flex: 1;
+  height: 40px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #17201d;
+  font: inherit;
+  font-size: 14px;
+}
+
+.guest-song-search > span {
+  flex: 0 0 auto;
+  color: #7a827c;
+  font-size: 10px;
+  font-weight: 800;
+}
+
 .guest-song-list {
   display: grid;
   gap: 7px;
@@ -902,6 +1070,23 @@ body {
   font-weight: 800;
 }
 
+.guest-song-empty {
+  min-height: 72px;
+  display: grid;
+  place-content: center;
+  padding: 12px;
+  border: 1px dashed #cbd1cd;
+  color: #68706c;
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.guest-song-picker > p.guest-song-limit {
+  color: #8a6819;
+  font-weight: 700;
+}
+
 .guest-song-picker > p {
   margin: 9px 0 0;
   color: #747b75;
@@ -912,7 +1097,7 @@ body {
 .guest-song-singer-filter {
   display: flex;
   gap: 7px;
-  margin: 9px 0 10px;
+  margin: 9px 0 0;
   overflow-x: auto;
   padding-bottom: 2px;
   scrollbar-width: none;

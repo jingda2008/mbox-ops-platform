@@ -1,6 +1,6 @@
 import {
   CalendarDays, Check, CheckCircle2, LoaderCircle, MapPin, MessageCircle,
-  Pencil, Phone, RefreshCw, RotateCcw, UsersRound, X, XCircle,
+  Banknote, Pencil, Phone, RefreshCw, RotateCcw, UsersRound, X, XCircle,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
@@ -140,6 +140,13 @@ export function PublicReservationPortal() {
   const closedWeekday = data ? data.config.businessHours.closedWeekdays.includes(new Date(`${date}T12:00:00.000Z`).getUTCDay()) : false
   const dateClosed = closedWeekday || selectedDateOverride?.enabled === false
   const acceptedContacts = new Set(data?.config.publicRules.acceptedContactMethods ?? ['phone', 'wechat'])
+  const selectedDepositRule = data?.config.depositPolicy.areaRules.find((rule) => rule.areaPreferenceCode === areaPreferenceCode)
+  const depositPreview = data?.config.depositPolicy.enabled ? {
+    amount: selectedDepositRule?.depositAmount ?? data.config.depositPolicy.defaultDepositAmount,
+    minimumSpend: selectedDepositRule?.minimumSpendAmount ?? data.config.depositPolicy.defaultMinimumSpendAmount,
+    deductibleRateBps: selectedDepositRule?.deductibleRateBps ?? data.config.depositPolicy.defaultDeductibleRateBps,
+    notice: selectedDepositRule?.customerNotice || data.config.depositPolicy.customerNotice,
+  } : null
 
   function resetForm() {
     const config = data?.config
@@ -268,6 +275,7 @@ export function PublicReservationPortal() {
       {dateClosed && <p className="public-reservation-inline-error">这一天暂停预约，换一天看看吧。</p>}
       <label><span>这次有什么特别的</span><select value={occasionCode} onChange={(event) => setOccasionCode(event.target.value as '' | ReservationOccasionCode)}><option value="">轻松来坐坐</option>{data?.config.occasions.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
       <label><span>悄悄告诉我们</span><input maxLength={500} placeholder="例如：生日，希望21:30安排生日歌" value={occasionNote} onChange={(event) => setOccasionNote(event.target.value)} /></label>
+      {depositPreview && <div className="public-reservation-deposit"><Banknote size={18} /><div><strong>预约定金 ¥{(depositPreview.amount / 100).toFixed(2)}</strong><span>可抵消费 {(depositPreview.deductibleRateBps / 100).toFixed(0)}% · 此位置低消 ¥{(depositPreview.minimumSpend / 100).toFixed(2)}</span><small>{depositPreview.notice}</small></div></div>}
       <button className="public-reservation-submit" type="submit" disabled={submitting || loading || dateClosed}>{submitting ? <LoaderCircle className="spin" size={18} /> : editingId ? <Check size={18} /> : <CalendarDays size={18} />}{editingId ? '保存修改' : '提交预约'}</button>
     </form>
 

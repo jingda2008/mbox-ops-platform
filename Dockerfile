@@ -6,6 +6,8 @@ COPY . .
 RUN npm run build
 
 FROM node:24-alpine AS runtime
+ARG MBOX_RELEASE_SHA=development
+LABEL org.opencontainers.image.revision=$MBOX_RELEASE_SHA
 ENV NODE_ENV=production
 WORKDIR /app
 RUN addgroup -S mbox && adduser -S -G mbox mbox && mkdir /data && chown mbox:mbox /data

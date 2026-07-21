@@ -37,7 +37,7 @@ function rateLimitStore(now: () => number = Date.now) {
 
 function authOptions(store: RateLimitStore = rateLimitStore()) {
   return {
-    accessCode: 'store-pilot-code', employeePins, sessionSecret: 's'.repeat(32), sessionHours: 12, rateLimitStore: store,
+    accessCode: 'store-pilot-code', employeePins, sessionSecret: 's'.repeat(32), sessionHours: 6, rateLimitStore: store,
   }
 }
 
@@ -98,7 +98,8 @@ describe('pilot employee auth', () => {
     expect(loggedIn.statusCode).toBe(200)
     const body = loggedIn.json() as { token: string; sessionId: string; employee: { id: string }; expiresAt: number; presenceExpiresAt: number }
     expect(verifyStaffSession(body.token, secret)).toMatchObject({ sessionId: body.sessionId, actorId: body.employee.id, storeId: 'mbox-lujiazui' })
-    expect(body.expiresAt).toBeGreaterThan(Date.now())
+    expect(body.expiresAt - Date.now()).toBeGreaterThan(6 * 60 * 60_000 - 5_000)
+    expect(body.expiresAt - Date.now()).toBeLessThanOrEqual(6 * 60 * 60_000)
     expect(body.presenceExpiresAt).toBeLessThanOrEqual(body.expiresAt)
     await app.close()
   })

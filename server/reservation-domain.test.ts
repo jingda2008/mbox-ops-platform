@@ -15,6 +15,7 @@ import {
   updateReservationDetails,
   decideLateReservationHold,
   DEFAULT_RESERVATION_CONFIG,
+  reservationDepositRule,
 } from './reservation-domain.js'
 
 const T0 = '2026-07-14T10:00:00.000Z'
@@ -76,6 +77,28 @@ function payDeposit(domain: ReturnType<typeof state>) {
 }
 
 describe('reservation configuration and lifecycle', () => {
+  it('selects different deposits and deductible rates by reserved area', () => {
+    const config = {
+      ...structuredClone(DEFAULT_RESERVATION_CONFIG),
+      depositPolicy: {
+        enabled: true,
+        currency: 'CNY' as const,
+        defaultDepositAmount: 20_000,
+        defaultMinimumSpendAmount: 100_000,
+        defaultDeductibleRateBps: 10_000,
+        customerNotice: '定金到店抵扣消费。',
+        areaRules: [
+          { areaPreferenceCode: 'booth', depositAmount: 50_000, minimumSpendAmount: 300_000, deductibleRateBps: 10_000, customerNotice: '卡座定金全额抵扣。' },
+          { areaPreferenceCode: 'walkin', depositAmount: 10_000, minimumSpendAmount: 0, deductibleRateBps: 5000, customerNotice: '散座定金抵扣一半。' },
+        ],
+      },
+    }
+
+    expect(reservationDepositRule(config, 'booth')).toMatchObject({ depositAmount: 50_000, minimumSpendAmount: 300_000, deductibleRateBps: 10_000 })
+    expect(reservationDepositRule(config, 'walkin')).toMatchObject({ depositAmount: 10_000, minimumSpendAmount: 0, deductibleRateBps: 5000 })
+    expect(reservationDepositRule(config, 'lounge')).toMatchObject({ depositAmount: 20_000, minimumSpendAmount: 100_000 })
+  })
+
   it('rejects reservation configuration outside China standard time', () => {
     expect(() => createReservationState(
       { tenantId: 'tenant-mbox', storeId: 'store-lujiazui' },

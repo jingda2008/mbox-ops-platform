@@ -3,14 +3,14 @@ import type { BootstrapResponse } from '../shared/contracts'
 import { buildRoleHomeModel, getRoleHomeAccess, resolveRoleHomeKind } from './role-access'
 
 const expectedKinds = [
-  ['owner', 'owner', ['live', 'tasks', 'reservations', 'commerce', 'inventory', 'payments', 'benefits', 'songs', 'layout', 'master', 'config']],
-  ['operations_director', 'operations_director', ['live', 'tasks', 'reservations', 'commerce', 'inventory', 'payments', 'benefits', 'songs', 'layout', 'master', 'config']],
-  ['admin', 'admin', ['live', 'tasks', 'reservations', 'commerce', 'inventory', 'payments', 'benefits', 'songs', 'layout', 'master', 'config']],
-  ['manager', 'manager', ['live', 'tasks', 'reservations', 'commerce', 'inventory', 'payments', 'benefits', 'songs', 'layout']],
+  ['owner', 'owner', ['live', 'tasks', 'reservations', 'commerce', 'inventory', 'payments', 'benefits', 'operations', 'devices', 'songs', 'layout', 'master', 'config']],
+  ['operations_director', 'operations_director', ['live', 'tasks', 'reservations', 'commerce', 'inventory', 'payments', 'benefits', 'operations', 'devices', 'songs', 'layout', 'master', 'config']],
+  ['admin', 'admin', ['live', 'tasks', 'reservations', 'commerce', 'inventory', 'payments', 'benefits', 'operations', 'devices', 'songs', 'layout', 'master', 'config']],
+  ['manager', 'manager', ['live', 'tasks', 'reservations', 'commerce', 'inventory', 'payments', 'benefits', 'operations', 'devices', 'songs', 'layout']],
   ['server', 'server', ['live', 'tasks', 'commerce', 'benefits', 'songs']],
-  ['bartender', 'bartender', ['tasks', 'commerce', 'inventory']],
-  ['kitchen', 'kitchen', ['tasks', 'commerce', 'inventory']],
-  ['cashier', 'cashier', ['reservations', 'tasks', 'payments', 'inventory']],
+  ['bartender', 'bartender', ['tasks', 'commerce', 'inventory', 'operations']],
+  ['kitchen', 'kitchen', ['tasks', 'commerce', 'inventory', 'operations']],
+  ['cashier', 'cashier', ['reservations', 'tasks', 'payments', 'inventory', 'operations']],
   ['host', 'host', ['live', 'tasks', 'reservations', 'benefits']],
   ['runner', 'runner', ['live', 'tasks', 'commerce']],
 ] as const
@@ -48,8 +48,8 @@ describe('role home access', () => {
 
   it('uses configured permissions instead of the built-in role navigation profile', () => {
     const data = bootstrapForRole('admin', '系统管理员')
-    data.config.roles[0]!.permissionIds = ['dashboard.view', 'config.manage', 'master_data.manage']
-    expect(getRoleHomeAccess(data, 'admin').allowedNavigationIds).toEqual(['live', 'master', 'config'])
+    data.config.roles[0]!.permissionIds = ['dashboard.view', 'config.manage', 'master_data.manage', 'hardware.view']
+    expect(getRoleHomeAccess(data, 'admin').allowedNavigationIds).toEqual(['live', 'operations', 'devices', 'master', 'config'])
 
     data.config.roles[0] = {
       ...data.config.roles[0]!,
@@ -57,7 +57,7 @@ describe('role home access', () => {
       name: '夜班结算',
       permissionIds: ['finance.view', 'payment.collect'],
     }
-    expect(getRoleHomeAccess(data, 'custom-cash-desk').allowedNavigationIds).toEqual(['payments'])
+    expect(getRoleHomeAccess(data, 'custom-cash-desk').allowedNavigationIds).toEqual(['payments', 'operations'])
   })
 
   it('builds a fallback home from only assigned service and workstation tasks', () => {

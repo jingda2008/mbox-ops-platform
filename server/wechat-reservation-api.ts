@@ -7,7 +7,7 @@ import type {
   ReservationConfig,
   ReservationState,
 } from '../src/shared/reservation-contracts.js'
-import { createReservation } from './reservation-domain.js'
+import { createReservation, reservationDepositRule } from './reservation-domain.js'
 import { mutateReservationState, reservationsFor } from './reservation-api.js'
 import type { RuntimeRepository } from './repository.js'
 import type { WechatApiIdentityRepository, WechatApiSessionRecord } from './wechat-api.js'
@@ -192,8 +192,8 @@ export function registerWechatReservationRoutes(
           customerReference,
           contactReference: identity.principalReference,
           sourceCode: 'wechat',
-          depositRequiredAmount: 0,
-          depositCurrency: 'CNY',
+          depositRequiredAmount: reservationDepositRule(domain.config, input.areaPreferenceCode).depositAmount,
+          depositCurrency: reservationDepositRule(domain.config, input.areaPreferenceCode).currency,
           actorId,
           occurredAt: new Date((options.now ?? Date.now)()).toISOString(),
         })

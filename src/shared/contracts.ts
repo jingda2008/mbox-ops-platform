@@ -15,6 +15,10 @@ import type { BenefitRedemption } from './benefit-redemption-contracts.js'
 import type { ConfigVersionRecord } from './config-versioning-contracts.js'
 import type { SongState } from './song-contracts.js'
 import type { ReservationState } from './reservation-contracts.js'
+import type { CommercialOpsState } from './commercial-ops-contracts.js'
+import type { DutyManagerIncident } from './assistant-contracts.js'
+import type { HardwareState } from './hardware-contracts.js'
+import { sopRuleSchema, type SopActionRecord, type SopExecution, type SopRule } from './sop-contracts.js'
 
 export const taskStatuses = [
   'pending',
@@ -159,6 +163,9 @@ export const staffPermissionIds = [
   'benefit.manage',
   'song.view',
   'song.manage',
+  'hardware.view',
+  'hardware.operate',
+  'hardware.manage',
   'store_import.apply',
 ] as const
 
@@ -259,6 +266,10 @@ export interface MinimumSpendReminderConfig {
 export interface TableOperationsConfig {
   version: number
   updatedAt: string
+  /** Automatically advances the operational business date in the store timezone. */
+  automaticBusinessDayRollover?: boolean
+  /** Whole Beijing-time hour when the prior overnight business day ends. */
+  businessDayRolloverHour?: number
   /** Safety cutoff for forgotten handovers; normal M-Box sessions span less than one night. */
   maximumOpenHours?: number
   reminder: MinimumSpendReminderConfig
@@ -375,6 +386,8 @@ export interface StoreConfig {
   proactiveOrderCare: ProactiveOrderCareConfig
   guestServiceLimits: GuestServiceLimitsConfig
   communityBrand: CommunityBrandConfig
+  /** Versioned automation definitions. Missing on legacy snapshots and normalized during load. */
+  sopRules?: SopRule[]
 }
 
 export interface AwaitingOrderIntent {
@@ -454,6 +467,11 @@ export interface ServiceTask {
   priority: TaskPriority
   ownerId: string | null
   notifiedEmployeeIds: string[]
+  /** Immutable SOP routing snapshots. Older tasks may not contain these fields. */
+  dispatchRoleIdsSnapshot?: string[]
+  targetEmployeeIdsSnapshot?: string[]
+  managerRoleIdsSnapshot?: string[]
+  slaSnapshot?: SlaConfig
   createdAt: string
   updatedAt: string
   acceptedAt: string | null
@@ -506,6 +524,11 @@ export interface RuntimeState {
   paymentDomain: PaymentDomainState
   inventoryDomain?: InventoryDomainState
   reservationState?: ReservationState
+  commercialOps?: CommercialOpsState
+  sopExecutions?: SopExecution[]
+  sopActionRecords?: SopActionRecord[]
+  dutyManagerIncidents?: DutyManagerIncident[]
+  hardwareState?: HardwareState
   awaitingOrderIntents: AwaitingOrderIntent[]
   tableTransfers: TableTransferRecord[]
   tableOperationsConfig?: TableOperationsConfig
@@ -652,6 +675,7 @@ export const configDraftSchema = z.object({
     guestOrderVisible: z.boolean(),
     memberPortalVisible: z.boolean(),
   }).optional(),
+  sopRules: z.array(sopRuleSchema).max(200).optional(),
 })
 
 export type ConfigDraftInput = z.infer<typeof configDraftSchema>
@@ -700,6 +724,8 @@ export const minimumSpendRuleSchema = z.object({
 }).strict()
 
 export const tableOperationsConfigInputSchema = z.object({
+  automaticBusinessDayRollover: z.boolean().default(true),
+  businessDayRolloverHour: z.number().int().min(0).max(23).default(6),
   maximumOpenHours: z.number().int().min(6).max(48).default(12),
   reminder: z.object({
     enabled: z.boolean(),

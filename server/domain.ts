@@ -7,6 +7,7 @@ import type {
   RuntimeState,
   ServiceTask,
   ServiceTypeConfig,
+  SlaConfig,
   TaskActionInput,
   TaskEvent,
 } from '../src/shared/contracts.js'
@@ -54,44 +55,133 @@ function roleLimit(state: RuntimeState, employee: Employee) {
     .toSorted((left, right) => (right?.maxConcurrentTasks ?? 0) - (left?.maxConcurrentTasks ?? 0))[0]
 }
 
+function canReceiveAutomaticTableDispatch(state: RuntimeState, employee: Employee, tableId: string) {
+  const table = state.tables.find((item) => item.id === tableId)
+  if (!table) return false
+  const scope = effectiveDataScopeForEmployee(state, employee.id)
+  if (scope === 'all_stores' || scope === 'store') return true
+  if (scope === 'assigned_areas') {
+    const activeShifts = state.shiftAssignments.filter((shift) => (
+      shift.employeeId === employee.id
+      && shift.businessDate === state.store.businessDate
+      && shift.status === 'active'
+    ))
+    const areaIds = activeShifts.length > 0
+      ? activeShifts.flatMap((shift) => shift.areaIds)
+      : employee.areaIds
+    return areaIds.includes(table.areaId)
+  }
+  return table.primaryEmployeeId === employee.id || table.backupEmployeeIds.includes(employee.id)
+}
+
+type DispatchSource = 'targeted' | 'primary' | 'backup' | 'role' | 'manager'
+
+interface DispatchDecision {
+  employee: Employee
+  source: DispatchSource
+  loadBefore: number
+  capacity: number
+  utilization: number
+}
+
+function assignmentMetadata(decision: DispatchDecision | null) {
+  return decision ? {
+    strategy: 'load_aware',
+    candidateSource: decision.source,
+    loadBefore: decision.loadBefore,
+    capacity: decision.capacity,
+    utilization: Math.round(decision.utilization * 100) / 100,
+  } : {
+    strategy: 'load_aware',
+    candidateSource: null,
+    loadBefore: null,
+    capacity: null,
+    utilization: null,
+  }
+}
+
+function rankDispatchCandidates(
+  state: RuntimeState,
+  candidates: Array<{ employee: Employee; source: DispatchSource; sourceRank: number }>,
+) {
+  return candidates
+    .map(({ employee, source, sourceRank }) => {
+      const role = roleLimit(state, employee)
+      const loadBefore = employeeLoad(state, employee.id)
+      const capacity = role?.maxConcurrentTasks ?? 0
+      return {
+        employee,
+        source,
+        sourceRank,
+        loadBefore,
+        capacity,
+        utilization: capacity > 0 ? loadBefore / capacity : Number.POSITIVE_INFINITY,
+      }
+    })
+    .filter((candidate) => candidate.capacity > 0 && candidate.loadBefore < candidate.capacity)
+    .toSorted((left, right) => (
+      left.loadBefore - right.loadBefore
+      || left.sourceRank - right.sourceRank
+      || left.utilization - right.utilization
+      || left.employee.displayName.localeCompare(right.employee.displayName, 'zh-CN')
+      || left.employee.id.localeCompare(right.employee.id)
+    ))
+}
+
 function chooseAssignee(
   state: RuntimeState,
   tableId: string,
   serviceType: ServiceTypeConfig,
   excludedEmployeeIds: string[] = [],
+  preferredEmployeeIds: string[] = [],
 ) {
   const table = state.tables.find((item) => item.id === tableId)
   if (!table) return null
 
-  const candidateIds = [
-    table.primaryEmployeeId,
-    ...table.backupEmployeeIds,
+  const candidates = [
+    ...preferredEmployeeIds.map((employeeId, index) => ({ employeeId, source: 'targeted' as const, sourceRank: index })),
+    { employeeId: table.primaryEmployeeId, source: 'primary' as const, sourceRank: 0 },
+    ...table.backupEmployeeIds.map((employeeId, index) => ({ employeeId, source: 'backup' as const, sourceRank: index + 1 })),
     ...serviceType.dispatchRoleIds.flatMap((roleId) =>
-      state.employees.filter((employee) => effectiveRoleIdsForEmployee(state, employee.id).includes(roleId)).map((employee) => employee.id),
+      state.employees
+        .filter((employee) => effectiveRoleIdsForEmployee(state, employee.id).includes(roleId))
+        .map((employee, index) => ({ employeeId: employee.id, source: 'role' as const, sourceRank: index + 20 })),
     ),
   ]
 
   const seen = new Set<string>()
-  for (const employeeId of candidateIds) {
+  const eligible: Array<{ employee: Employee; source: DispatchSource; sourceRank: number }> = []
+  for (const { employeeId, source, sourceRank } of candidates) {
     if (seen.has(employeeId) || excludedEmployeeIds.includes(employeeId)) continue
     seen.add(employeeId)
     const employee = state.employees.find((item) => item.id === employeeId)
     if (!employee || employee.status !== 'active' || !employee.online || employee.paused) continue
     if (!effectiveRoleIdsForEmployee(state, employee.id).some((roleId) => serviceType.dispatchRoleIds.includes(roleId))) continue
-    const role = roleLimit(state, employee)
-    if (!role?.canReceiveTasks || employeeLoad(state, employee.id) >= role.maxConcurrentTasks) continue
-    return employee
+    if (source === 'role' && !canReceiveAutomaticTableDispatch(state, employee, table.id)) continue
+    eligible.push({ employee, source, sourceRank })
   }
 
-  return (
-    state.employees.find(
+  const targeted = rankDispatchCandidates(state, eligible.filter((candidate) => candidate.source === 'targeted'))[0]
+  if (targeted) return targeted
+
+  const tableTeam = rankDispatchCandidates(state, eligible.filter((candidate) => (
+    candidate.source === 'primary' || candidate.source === 'backup'
+  )))[0]
+  if (tableTeam) return tableTeam
+
+  const roleCoverage = rankDispatchCandidates(state, eligible.filter((candidate) => candidate.source === 'role'))[0]
+  if (roleCoverage) return roleCoverage
+
+  return rankDispatchCandidates(state, state.employees
+    .filter(
       (employee) =>
         effectiveRoleIdsForEmployee(state, employee.id).includes('manager') &&
         employee.status === 'active' &&
         employee.online &&
-        !employee.paused,
-    ) ?? null
-  )
+        !employee.paused &&
+        !excludedEmployeeIds.includes(employee.id),
+    )
+    .map((employee, index) => ({ employee, source: 'manager' as const, sourceRank: index })))[0] ?? null
 }
 
 function employeeHasTableResponsibility(state: RuntimeState, employee: Employee, task: ServiceTask) {
@@ -112,7 +202,8 @@ export function canEmployeeClaimTask(state: RuntimeState, task: ServiceTask, emp
   const serviceType = state.config.serviceTypes.find((item) => item.id === task.serviceTypeId && item.enabled)
   if (!serviceType) return false
   const roleIds = effectiveRoleIdsForEmployee(state, employee.id)
-  if (!roleIds.some((roleId) => serviceType.dispatchRoleIds.includes(roleId))) return false
+  const dispatchRoleIds = task.dispatchRoleIdsSnapshot?.length ? task.dispatchRoleIdsSnapshot : serviceType.dispatchRoleIds
+  if (!roleIds.some((roleId) => dispatchRoleIds.includes(roleId))) return false
   return employeeHasTableResponsibility(state, employee, task)
 }
 
@@ -121,10 +212,14 @@ export function redispatchUnownedTasks(state: RuntimeState, now = new Date()) {
   let changed = false
   for (const task of state.tasks) {
     if (task.ownerId !== null || !claimableStatuses.has(task.status)) continue
-    const serviceType = state.config.serviceTypes.find((item) => item.id === task.serviceTypeId && item.enabled)
-    if (!serviceType) continue
-    const assignee = chooseAssignee(state, task.tableId, serviceType)
-    if (!assignee) continue
+    const configuredServiceType = state.config.serviceTypes.find((item) => item.id === task.serviceTypeId && item.enabled)
+    if (!configuredServiceType) continue
+    const serviceType = task.dispatchRoleIdsSnapshot?.length
+      ? { ...configuredServiceType, dispatchRoleIds: task.dispatchRoleIdsSnapshot }
+      : configuredServiceType
+    const assignment = chooseAssignee(state, task.tableId, serviceType, [], task.targetEmployeeIdsSnapshot ?? [])
+    if (!assignment) continue
+    const assignee = assignment.employee
     task.ownerId = assignee.id
     task.updatedAt = now.toISOString()
     task.customerReply = serviceType.customerReply.replace('{employee}', assignee.displayName)
@@ -132,13 +227,21 @@ export function redispatchUnownedTasks(state: RuntimeState, now = new Date()) {
     appendTaskEvent(state, task.id, 'task.assigned.v1', 'system', {
       ownerId: assignee.id,
       reason: 'employee_online',
+      ...assignmentMetadata(assignment),
     })
     changed = true
   }
   return changed
 }
 
-export function createServiceTask(state: RuntimeState, input: CreateTaskInput & { triggerId?: string; requestedBy?: string; dispatchRoleIds?: string[] }) {
+export function createServiceTask(state: RuntimeState, input: CreateTaskInput & {
+  triggerId?: string
+  requestedBy?: string
+  dispatchRoleIds?: string[]
+  dispatchEmployeeIds?: string[]
+  managerRoleIds?: string[]
+  slaOverride?: SlaConfig
+}) {
   const existing = state.auditEntries.find(
     (entry) => entry.action === 'service.requested.v1' && entry.details.idempotencyKey === input.idempotencyKey,
   )
@@ -159,7 +262,9 @@ export function createServiceTask(state: RuntimeState, input: CreateTaskInput & 
     : serviceType
 
   const now = new Date()
-  const assignee = chooseAssignee(state, table.id, dispatchServiceType)
+  const taskSla = input.slaOverride ?? serviceType.sla
+  const assignment = chooseAssignee(state, table.id, dispatchServiceType, [], input.dispatchEmployeeIds)
+  const assignee = assignment?.employee ?? null
   const customerReply = serviceType.customerReply.replace('{employee}', assignee?.displayName ?? '服务团队')
   const task: ServiceTask = {
     id: `task_${randomUUID()}`,
@@ -171,15 +276,23 @@ export function createServiceTask(state: RuntimeState, input: CreateTaskInput & 
     status: 'pending',
     priority: serviceType.priority,
     ownerId: assignee?.id ?? null,
-    notifiedEmployeeIds: [assignee?.id, table.primaryEmployeeId].filter((value): value is string => Boolean(value)),
+    notifiedEmployeeIds: [...new Set([
+      assignee?.id,
+      table.primaryEmployeeId,
+      ...(input.dispatchEmployeeIds ?? []),
+    ].filter((value): value is string => Boolean(value)))],
+    dispatchRoleIdsSnapshot: [...dispatchServiceType.dispatchRoleIds],
+    targetEmployeeIdsSnapshot: [...new Set(input.dispatchEmployeeIds ?? [])],
+    managerRoleIdsSnapshot: [...new Set(input.managerRoleIds ?? ['manager'])],
+    slaSnapshot: { ...taskSla },
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
     acceptedAt: null,
     arrivedAt: null,
     completedAt: null,
-    warningAt: isoAt(now, serviceType.sla.warningSeconds),
-    escalateAt: isoAt(now, serviceType.sla.escalateSeconds),
-    managerAt: isoAt(now, serviceType.sla.managerSeconds),
+    warningAt: isoAt(now, taskSla.warningSeconds),
+    escalateAt: isoAt(now, taskSla.escalateSeconds),
+    managerAt: isoAt(now, taskSla.managerSeconds),
     escalationLevel: 0,
     configVersion: state.config.version,
     customerReply,
@@ -210,6 +323,7 @@ export function createServiceTask(state: RuntimeState, input: CreateTaskInput & 
     tableId: table.id,
     tableSessionId: tableSession.id,
     configVersion: task.configVersion,
+    ...assignmentMetadata(assignment),
   })
   state.revision += 1
   return task
@@ -318,17 +432,28 @@ export function applyTaskAction(state: RuntimeState, taskId: string, input: Task
       if (!input.actorId.startsWith('guest-')) throw new Error('仅客人可以反馈服务仍未解决')
       if (!['completed', 'confirmed'].includes(task.status)) throw new Error('任务尚未完成')
       const previousOwnerId = task.ownerId
-      const serviceType = state.config.serviceTypes.find((item) => item.id === task.serviceTypeId)
-      if (!serviceType) throw new Error('服务类型配置不存在')
-      const nextOwner = chooseAssignee(state, task.tableId, serviceType, previousOwnerId ? [previousOwnerId] : [])
+      const configuredServiceType = state.config.serviceTypes.find((item) => item.id === task.serviceTypeId)
+      if (!configuredServiceType) throw new Error('服务类型配置不存在')
+      const serviceType = task.dispatchRoleIdsSnapshot?.length
+        ? { ...configuredServiceType, dispatchRoleIds: task.dispatchRoleIdsSnapshot }
+        : configuredServiceType
+      const nextAssignment = chooseAssignee(
+        state,
+        task.tableId,
+        serviceType,
+        previousOwnerId ? [previousOwnerId] : [],
+        task.targetEmployeeIdsSnapshot ?? [],
+      )
+      const nextOwner = nextAssignment?.employee ?? null
       task.status = 'reopened'
       task.priority = task.priority === 'urgent' ? 'urgent' : 'high'
       task.ownerId = nextOwner?.id ?? previousOwnerId
       task.escalationLevel = Math.max(task.escalationLevel, 1)
       const reopenedAt = new Date(now)
-      task.warningAt = isoAt(reopenedAt, serviceType.sla.warningSeconds)
-      task.escalateAt = isoAt(reopenedAt, serviceType.sla.escalateSeconds)
-      task.managerAt = isoAt(reopenedAt, serviceType.sla.managerSeconds)
+      const taskSla = task.slaSnapshot ?? serviceType.sla
+      task.warningAt = isoAt(reopenedAt, taskSla.warningSeconds)
+      task.escalateAt = isoAt(reopenedAt, taskSla.escalateSeconds)
+      task.managerAt = isoAt(reopenedAt, taskSla.managerSeconds)
       task.acceptedAt = null
       task.arrivedAt = null
       task.completedAt = null
@@ -339,6 +464,7 @@ export function applyTaskAction(state: RuntimeState, taskId: string, input: Task
         previousOwnerId,
         ownerId: task.ownerId,
         reason: input.note || '客户反馈仍未解决',
+        ...assignmentMetadata(nextAssignment),
       })
       break
     }
@@ -358,7 +484,10 @@ export function escalateDueTasks(state: RuntimeState, now = new Date()) {
   let changed = false
   for (const task of state.tasks) {
     if (!['pending', 'accepted', 'escalated', 'reopened'].includes(task.status)) continue
-    const serviceType = state.config.serviceTypes.find((item) => item.id === task.serviceTypeId)
+    const configuredServiceType = state.config.serviceTypes.find((item) => item.id === task.serviceTypeId)
+    const serviceType = configuredServiceType && task.dispatchRoleIdsSnapshot?.length
+      ? { ...configuredServiceType, dispatchRoleIds: task.dispatchRoleIdsSnapshot }
+      : configuredServiceType
     if (!serviceType) continue
 
     const shouldManagerEscalate = task.escalationLevel < 2 && now >= new Date(task.managerAt)
@@ -366,17 +495,27 @@ export function escalateDueTasks(state: RuntimeState, now = new Date()) {
     if (!shouldManagerEscalate && !shouldFirstEscalate) continue
 
     const previousOwnerId = task.ownerId
-    let nextOwner: Employee | null = null
+    let nextAssignment: DispatchDecision | null = null
     let level = 1
     if (shouldManagerEscalate) {
-      nextOwner = state.employees.find(
+      const managerRoleIds = task.managerRoleIdsSnapshot?.length ? task.managerRoleIdsSnapshot : ['manager']
+      const managerCandidates = state.employees.filter(
         (employee) =>
-          effectiveRoleIdsForEmployee(state, employee.id).includes('manager') && employee.status === 'active' && employee.online,
-      ) ?? null
+          effectiveRoleIdsForEmployee(state, employee.id).some((roleId) => managerRoleIds.includes(roleId))
+          && employee.status === 'active' && employee.online && !employee.paused,
+      ).map((employee, index) => ({ employee, source: 'manager' as const, sourceRank: index }))
+      nextAssignment = rankDispatchCandidates(state, managerCandidates)[0] ?? null
       level = 2
     } else {
-      nextOwner = chooseAssignee(state, task.tableId, serviceType, previousOwnerId ? [previousOwnerId] : [])
+      nextAssignment = chooseAssignee(
+        state,
+        task.tableId,
+        serviceType,
+        previousOwnerId ? [previousOwnerId] : [],
+        task.targetEmployeeIdsSnapshot ?? [],
+      )
     }
+    const nextOwner = nextAssignment?.employee ?? null
 
     if (nextOwner?.id === previousOwnerId && task.escalationLevel >= level) continue
     task.ownerId = nextOwner?.id ?? previousOwnerId
@@ -391,6 +530,7 @@ export function escalateDueTasks(state: RuntimeState, now = new Date()) {
       previousOwnerId,
       ownerId: task.ownerId,
       reason: shouldManagerEscalate ? 'manager_sla_exceeded' : 'response_sla_exceeded',
+      ...assignmentMetadata(nextAssignment),
     })
     changed = true
   }
@@ -403,9 +543,19 @@ export function releaseTasksForOfflineEmployee(state: RuntimeState, employeeId: 
   let changed = false
   for (const task of state.tasks) {
     if (task.ownerId !== employeeId || !['accepted', 'arrived'].includes(task.status)) continue
-    const serviceType = state.config.serviceTypes.find((item) => item.id === task.serviceTypeId)
-    if (!serviceType) continue
-    const nextOwner = chooseAssignee(state, task.tableId, serviceType, [employeeId])
+    const configuredServiceType = state.config.serviceTypes.find((item) => item.id === task.serviceTypeId)
+    if (!configuredServiceType) continue
+    const serviceType = task.dispatchRoleIdsSnapshot?.length
+      ? { ...configuredServiceType, dispatchRoleIds: task.dispatchRoleIdsSnapshot }
+      : configuredServiceType
+    const nextAssignment = chooseAssignee(
+      state,
+      task.tableId,
+      serviceType,
+      [employeeId],
+      task.targetEmployeeIdsSnapshot ?? [],
+    )
+    const nextOwner = nextAssignment?.employee ?? null
     task.status = 'reopened'
     task.ownerId = nextOwner?.id ?? null
     task.priority = task.priority === 'urgent' ? 'urgent' : 'high'
@@ -414,15 +564,17 @@ export function releaseTasksForOfflineEmployee(state: RuntimeState, employeeId: 
     task.arrivedAt = null
     task.completedAt = null
     task.resolution = null
-    task.warningAt = isoAt(now, serviceType.sla.warningSeconds)
-    task.escalateAt = isoAt(now, serviceType.sla.escalateSeconds)
-    task.managerAt = isoAt(now, serviceType.sla.managerSeconds)
+    const taskSla = task.slaSnapshot ?? serviceType.sla
+    task.warningAt = isoAt(now, taskSla.warningSeconds)
+    task.escalateAt = isoAt(now, taskSla.escalateSeconds)
+    task.managerAt = isoAt(now, taskSla.managerSeconds)
     task.updatedAt = now.toISOString()
     if (task.ownerId && !task.notifiedEmployeeIds.includes(task.ownerId)) task.notifiedEmployeeIds.push(task.ownerId)
     appendTaskEvent(state, task.id, 'task.reopened.v1', 'system', {
       previousOwnerId: employeeId,
       ownerId: task.ownerId,
       reason: 'owner_offline',
+      ...assignmentMetadata(nextAssignment),
     })
     changed = true
   }
@@ -490,6 +642,31 @@ export function saveConfigDraft(state: RuntimeState, input: ConfigDraftInput, ac
   draft.proactiveOrderCare = { ...input.proactiveOrderCare }
   draft.guestServiceLimits = { ...input.guestServiceLimits }
   draft.communityBrand = structuredClone(input.communityBrand ?? draft.communityBrand)
+  draft.sopRules = structuredClone(input.sopRules ?? draft.sopRules ?? [])
+  const sopRuleIds = new Set(draft.sopRules.map((rule) => rule.id))
+  const serviceTypeIds = new Set(draft.serviceTypes.filter((serviceType) => serviceType.enabled).map((serviceType) => serviceType.id))
+  const areaIds = new Set(state.areas.map((area) => area.id))
+  const tableIds = new Set(state.tables.map((table) => table.id))
+  const employeeIds = new Set(state.employees.filter((employee) => employee.status === 'active').map((employee) => employee.id))
+  const productCategoryIds = new Set(state.products.map((product) => product.categoryId))
+  if (sopRuleIds.size !== draft.sopRules.length) throw new Error('复杂SOP规则编号不能重复')
+  for (const rule of draft.sopRules) {
+    if (rule.scope.areaIds.some((areaId) => !areaIds.has(areaId))) throw new Error(`${rule.name}引用了不存在的区域`)
+    if (rule.scope.tableIds.some((tableId) => !tableIds.has(tableId))) throw new Error(`${rule.name}引用了不存在的桌台`)
+    if (rule.trigger.serviceTypeIds.some((serviceTypeId) => !serviceTypeIds.has(serviceTypeId))) throw new Error(`${rule.name}触发器引用了未启用的服务类型`)
+    if (rule.trigger.productCategoryIds.some((categoryId) => !productCategoryIds.has(categoryId))) throw new Error(`${rule.name}触发器引用了不存在的商品品类`)
+    if ((rule.trigger.workstationIds ?? []).some((workstationId) => !workstationIds.has(workstationId))) throw new Error(`${rule.name}触发器引用了不存在的工作站`)
+    for (const step of rule.steps) {
+      if (!serviceTypeIds.has(step.action.serviceTypeId)) throw new Error(`${rule.name}的步骤“${step.name}”引用了未启用的服务类型`)
+      if (step.action.dispatchRoleIds.some((roleId) => !roleIds.has(roleId))) throw new Error(`${rule.name}的步骤“${step.name}”引用了不存在的岗位`)
+      if ((step.action.dispatchEmployeeIds ?? []).some((employeeId) => !employeeIds.has(employeeId))) throw new Error(`${rule.name}的步骤“${step.name}”引用了不存在或停用的员工`)
+      if ((step.action.dispatchEmployeeIds ?? []).some((employeeId) => (
+        !effectiveRoleIdsForEmployee(state, employeeId).some((roleId) => step.action.dispatchRoleIds.includes(roleId))
+      ))) throw new Error(`${rule.name}的步骤“${step.name}”指定员工不具备所选执行岗位`)
+      if ((step.action.escalation?.managerRoleIds ?? []).some((roleId) => !roleIds.has(roleId))) throw new Error(`${rule.name}的步骤“${step.name}”经理接管岗位不存在`)
+      if ((step.action.verification?.roleIds ?? []).some((roleId) => !roleIds.has(roleId))) throw new Error(`${rule.name}的步骤“${step.name}”验证岗位不存在`)
+    }
+  }
   state.draftConfig = draft
   state.auditEntries.push({
     id: `audit_${randomUUID()}`,

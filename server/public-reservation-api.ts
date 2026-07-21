@@ -8,6 +8,7 @@ import {
   cancelReservation,
   createReservation,
   normalizeReservationConfig,
+  reservationDepositRule,
   updateReservationDetails,
 } from './reservation-domain.js'
 import { mutateReservationState, reservationsFor } from './reservation-api.js'
@@ -132,6 +133,7 @@ function publicConfig(state: ReservationState) {
       maximumAdvanceDays: config.publicRules.maximumAdvanceDays,
       acceptedContactMethods: [...config.publicRules.acceptedContactMethods],
     },
+    depositPolicy: structuredClone(config.depositPolicy),
   }
 }
 
@@ -330,8 +332,8 @@ export function registerPublicReservationRoutes(
         customerReference: reference,
         contactReference: contact,
         sourceCode,
-        depositRequiredAmount: 0,
-        depositCurrency: 'CNY',
+        depositRequiredAmount: reservationDepositRule(domain.config, input.areaPreferenceCode).depositAmount,
+        depositCurrency: reservationDepositRule(domain.config, input.areaPreferenceCode).currency,
         actorId: reference,
         occurredAt: new Date(current).toISOString(),
       })

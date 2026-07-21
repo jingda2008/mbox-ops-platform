@@ -44,6 +44,7 @@ import {
 import { PostgresOptimisticConcurrencyError } from './postgres-repository.js'
 import { submitOrder } from './order-domain.js'
 import { consumeManagedInventoryForSubmittedOrder } from './inventory-order-integration.js'
+import { queuePrintJobsForOrder } from './commercial-ops.js'
 import { completeAwaitingOrderOnOrder } from './proactive-service.js'
 
 const ACTIVE_ALLOCATION_STATUSES = new Set<PaymentIntentStatus>([
@@ -256,6 +257,7 @@ function submitOrdersAfterVerifiedPayment(
       businessDate: state.store.businessDate,
       occurredAt: intent.paidAt,
     })
+    queuePrintJobsForOrder(state, submitted, intent.paidAt)
     if (tableSession) {
       completeAwaitingOrderOnOrder(state, tableSession.tableId, order.id, intent.createdBy, new Date(intent.paidAt))
     }

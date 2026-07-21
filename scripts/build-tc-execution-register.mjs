@@ -85,6 +85,7 @@ const exactEvidence = {
   'PER-026': 'presence.test.ts：主责离线后任务重新打开并进入责任链，恢复登录不会自动夺回任务',
   'GST-024': 'proactive-service.test.ts：员工显式标记后按配置时间生成一次主动关怀任务，下单后自动关闭',
   'GST-025': 'proactive-service.test.ts：延后15/30/60分钟期间不生成任务，到期只恢复一次提醒并留审计',
+  'SVC-018': 'sop-engine.test.ts：事件触发、多步骤计时、前一步完成依赖、停止条件、品类筛选、岗位派单、转桌跟随及幂等回归',
   'SVC-015': 'notification-runtime/dispatch测试：通知失败不删除核心任务，指数退避、失败监控和人工重试均留审计',
   'ORD-017': 'order-domain及kds-exception-api测试：错品关联原KDS生成唯一补做任务，原记录不删除',
   'ORD-018': 'order-domain及inventory-order-integration测试：质量退回后重做关联原品项并单独记录库存耗用',

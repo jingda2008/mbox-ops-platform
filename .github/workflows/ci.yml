@@ -11,7 +11,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16-alpine
@@ -36,6 +36,17 @@ jobs:
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
       - run: npm run check
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run browser commercial flows
+        run: npm run test:e2e
+      - name: Provision database runtime role
+        env:
+          PGPASSWORD: mbox_test
+        run: >-
+          psql postgresql://mbox@127.0.0.1:5432/mbox_test
+          --set ON_ERROR_STOP=1
+          --command "CREATE ROLE mbox_app NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS"
       - run: npm run db:migrate
         env:
           DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test

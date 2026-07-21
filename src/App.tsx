@@ -45,13 +45,16 @@ import {
 } from './offline'
 import type { BootstrapResponse, TaskActionInput } from './shared/contracts'
 import type { PilotEmployeeOption } from './shared/auth-contracts'
-import type { OperationsConsoleView } from './components/OperationsConsole'
+import type { OperationsConsoleFocus, OperationsConsoleNavigationRequest, OperationsConsoleView } from './components/OperationsConsole'
 import { formatChinaDateTime, formatChinaTime } from './shared/china-time'
+import { applyStaffViewport } from './staff-viewport'
+import { runSingleFlight } from './single-flight'
 import './system-ui.css'
 import './premium-theme.css'
 
-const RESTRICTED_OFFLINE_VIEWS = '.payment-view, .config-view, .benefit-view, .song-view, .master-view, .commerce-view, .reservation-view, .inventory-view'
-const BOOTSTRAP_POLL_INTERVAL_MS = 2000
+const RESTRICTED_OFFLINE_VIEWS = '.payment-view, .config-view, .benefit-view, .song-view, .master-view, .commerce-view, .reservation-view, .inventory-view, .hardware-view'
+const BOOTSTRAP_POLL_DELAYS_MS = [5_000, 8_000, 13_000, 20_000] as const
+const BOOTSTRAP_OFFLINE_RETRY_MS = 15_000
 const GuestPortal = lazy(() => import('./components/GuestPortal').then((module) => ({ default: module.GuestPortal })))
 const MemberBenefitsPortal = lazy(() => import('./components/MemberBenefitsPortal').then((module) => ({ default: module.MemberBenefitsPortal })))
 const OperationsConsole = lazy(() => import('./components/OperationsConsole').then((module) => ({ default: module.OperationsConsole })))
@@ -66,25 +69,106 @@ function LazyWorkspace({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<WorkspaceLoading />}>{children}</Suspense>
 }
 
+interface BootstrapPollingOptions {
+  isOnline?: () => boolean
+  isVisible?: () => boolean
+  schedule?: (callback: () => void, delay: number) => number
+  cancel?: (timer: number) => void
+  visibilityTarget?: Pick<Document, 'addEventListener' | 'removeEventListener'>
+  pageShowTarget?: Pick<Window, 'addEventListener' | 'removeEventListener'>
+}
+
 // oxlint-disable-next-line react/only-export-components -- exported for deterministic lifecycle tests
 export function startBootstrapPolling(
   enabled: boolean,
-  refresh: () => void | Promise<void>,
-  isOnline: () => boolean = () => getOfflineStatus().online,
-  schedule: (callback: () => void, delay: number) => number = window.setInterval,
-  cancel: (timer: number) => void = window.clearInterval,
+  refresh: () => boolean | void | Promise<boolean | void>,
+  options: BootstrapPollingOptions = {},
 ) {
   if (!enabled) return () => undefined
 
-  void refresh()
-  const timer = schedule(() => {
-    if (isOnline()) void refresh()
-  }, BOOTSTRAP_POLL_INTERVAL_MS)
-  return () => cancel(timer)
+  const isOnline = options.isOnline ?? (() => getOfflineStatus().online)
+  const isVisible = options.isVisible ?? (() => document.visibilityState === 'visible')
+  const schedule = options.schedule ?? ((callback, delay) => window.setTimeout(callback, delay))
+  const cancel = options.cancel ?? ((timer) => window.clearTimeout(timer))
+  const visibilityTarget = options.visibilityTarget ?? document
+  const pageShowTarget = options.pageShowTarget ?? window
+  let stopped = false
+  let timer: number | undefined
+  let running = false
+  let refreshAfterCurrent = false
+  let unchangedPolls = 0
+
+  const clearTimer = () => {
+    if (timer === undefined) return
+    cancel(timer)
+    timer = undefined
+  }
+  const scheduleNext = (delay: number) => {
+    clearTimer()
+    if (stopped || !isVisible()) return
+    timer = schedule(() => {
+      timer = undefined
+      void poll()
+    }, delay)
+  }
+  const poll = async () => {
+    if (stopped || running || !isVisible()) return
+    if (!isOnline()) {
+      scheduleNext(BOOTSTRAP_OFFLINE_RETRY_MS)
+      return
+    }
+
+    running = true
+    let changed = false
+    try {
+      changed = (await refresh()) === true
+    } catch {
+      // The refresh path owns user-facing error state; polling only controls cadence.
+    } finally {
+      running = false
+    }
+    if (stopped || !isVisible()) return
+    if (refreshAfterCurrent) {
+      refreshAfterCurrent = false
+      void poll()
+      return
+    }
+    unchangedPolls = changed ? 0 : Math.min(unchangedPolls + 1, BOOTSTRAP_POLL_DELAYS_MS.length - 1)
+    scheduleNext(BOOTSTRAP_POLL_DELAYS_MS[unchangedPolls])
+  }
+  const refreshNow = () => {
+    clearTimer()
+    unchangedPolls = 0
+    if (!isVisible()) return
+    if (running) {
+      refreshAfterCurrent = true
+      return
+    }
+    void poll()
+  }
+  const handleVisibilityChange = () => {
+    if (isVisible()) refreshNow()
+    else {
+      refreshAfterCurrent = false
+      clearTimer()
+    }
+  }
+
+  visibilityTarget.addEventListener('visibilitychange', handleVisibilityChange)
+  pageShowTarget.addEventListener('pageshow', refreshNow)
+  refreshNow()
+  return () => {
+    stopped = true
+    refreshAfterCurrent = false
+    clearTimer()
+    visibilityTarget.removeEventListener('visibilitychange', handleVisibilityChange)
+    pageShowTarget.removeEventListener('pageshow', refreshNow)
+  }
 }
 
 function clearStoredStaffSession() {
   window.localStorage.removeItem('mbox.auth.token')
+  window.localStorage.removeItem('mbox.auth.expires-at')
   window.localStorage.removeItem('mbox.actor.id')
   window.localStorage.removeItem('mbox.actor.name')
 }
@@ -100,43 +184,56 @@ export default function App() {
   const [requiresLogin, setRequiresLogin] = useState(false)
   const [switchingEmployee, setSwitchingEmployee] = useState(false)
   const [staffMode, setStaffMode] = useState<'workspace' | 'voice'>('workspace')
-  const [navigationRequest, setNavigationRequest] = useState<{ id: number; target: OperationsConsoleView } | null>(null)
+  const [navigationRequest, setNavigationRequest] = useState<OperationsConsoleNavigationRequest | null>(null)
   const [offlineStatus, setOfflineStatus] = useState<OfflineStatus>(() => getOfflineStatus())
   const previousPendingCount = useRef(offlineStatus.pendingCount)
   const latestRevision = useRef<number | null>(null)
+  const refreshInFlight = useRef<Promise<boolean> | null>(null)
   const nextNavigationRequestId = useRef(0)
 
-  const refresh = useCallback(async () => {
-    try {
-      const liveData = latestRevision.current === null
-        ? await getBootstrap()
-        : await getBootstrap(latestRevision.current)
-      if (!liveData) {
-        setError('')
-        return
-      }
-      latestRevision.current = liveData.revision
-      const safeSnapshot = sanitizeBootstrapSnapshot(liveData)
-      setData(liveData)
-      setSnapshot(safeSnapshot)
-      setError('')
-      setRequiresLogin(false)
+  const refresh = useCallback(() => {
+    return runSingleFlight(refreshInFlight, async () => {
       try {
-        await saveOfflineSnapshot(safeSnapshot)
-      } catch {
-        setGuardNotice('现场快照未能写入本机，断网重载时将不可用')
+        const liveData = latestRevision.current === null
+          ? await getBootstrap()
+          : await getBootstrap(latestRevision.current)
+        if (!liveData) {
+          setError('')
+          return false
+        }
+        latestRevision.current = liveData.revision
+        const safeSnapshot = sanitizeBootstrapSnapshot(liveData)
+        setData(liveData)
+        setSnapshot(safeSnapshot)
+        setError('')
+        setRequiresLogin(false)
+        try {
+          await saveOfflineSnapshot(safeSnapshot)
+        } catch {
+          setGuardNotice('现场快照未能写入本机，断网重载时将不可用')
+        }
+        return true
+      } catch (requestError) {
+        if (requestError instanceof ApiError && requestError.status === 401) {
+          clearStoredStaffSession()
+          latestRevision.current = null
+          setRequiresLogin(true)
+        }
+        setError(requestError instanceof Error ? requestError.message : '无法连接运营服务')
+        return false
       }
-    } catch (requestError) {
-      if (requestError instanceof ApiError && requestError.status === 401) {
-        clearStoredStaffSession()
-        latestRevision.current = null
-        setRequiresLogin(true)
-      }
-      setError(requestError instanceof Error ? requestError.message : '无法连接运营服务')
-    }
+    })
   }, [])
+  const refreshWorkspace = useCallback(async () => {
+    await refresh()
+  }, [refresh])
 
   useEffect(() => subscribeOfflineStatus(setOfflineStatus), [])
+
+  useEffect(() => {
+    if (isGuest || isMember || isPublicReservation) return
+    return applyStaffViewport()
+  }, [isGuest, isMember, isPublicReservation])
 
   useEffect(() => {
     if (isGuest || isMember || isPublicReservation) return
@@ -157,10 +254,14 @@ export default function App() {
     if (isGuest || isMember || isPublicReservation || requiresLogin || !window.localStorage.getItem('mbox.auth.token')) return
     let stopped = false
     let timer: number | undefined
+    let heartbeatInFlight = false
     const schedule = (delay: number) => {
+      if (timer !== undefined) window.clearTimeout(timer)
       timer = window.setTimeout(() => void heartbeat(), Math.max(5_000, delay))
     }
     const heartbeat = async () => {
+      if (stopped || heartbeatInFlight) return
+      heartbeatInFlight = true
       try {
         const presence = await heartbeatStaffPresence()
         if (!stopped) schedule(presence.heartbeatAfterMs)
@@ -174,11 +275,20 @@ export default function App() {
           return
         }
         if (!stopped) schedule(15_000)
+      } finally {
+        heartbeatInFlight = false
       }
     }
+    const resumeHeartbeat = () => {
+      if (document.visibilityState === 'visible') void heartbeat()
+    }
+    document.addEventListener('visibilitychange', resumeHeartbeat)
+    window.addEventListener('pageshow', resumeHeartbeat)
     void heartbeat()
     return () => {
       stopped = true
+      document.removeEventListener('visibilitychange', resumeHeartbeat)
+      window.removeEventListener('pageshow', resumeHeartbeat)
       if (timer !== undefined) window.clearTimeout(timer)
     }
   }, [isGuest, isMember, isPublicReservation, requiresLogin])
@@ -234,7 +344,7 @@ export default function App() {
   if (snapshot && !offlineStatus.online) {
     return (
       <>
-        <ConnectivityBanner status={offlineStatus} onRetry={refresh} />
+        <ConnectivityBanner status={offlineStatus} onRetry={refreshWorkspace} />
         <OfflineSnapshotView snapshot={snapshot} onSnapshotChange={setSnapshot} />
       </>
     )
@@ -280,7 +390,7 @@ export default function App() {
       data-voice-scope="staff"
       onClickCapture={blockRestrictedOfflineAction}
     >
-      <ConnectivityBanner status={offlineStatus} onRetry={refresh} />
+      <ConnectivityBanner status={offlineStatus} onRetry={refreshWorkspace} />
       {hasStaffIdentity && (
         <div className="pilot-session-bar">
           <span>当前员工：<strong>{currentActorName}</strong></span>
@@ -289,7 +399,7 @@ export default function App() {
               <LayoutDashboard size={15} />岗位页面
             </button>
             <button className={staffMode === 'voice' ? 'is-active' : ''} aria-pressed={staffMode === 'voice'} onClick={() => setStaffMode('voice')}>
-              <Mic size={15} />语音命令
+              <Mic size={15} />AI值班经理
             </button>
           </div>
           <button disabled={switchingEmployee} onClick={() => void switchEmployee()}>
@@ -305,15 +415,16 @@ export default function App() {
         </div>
       )}
       <LazyWorkspace>
-        <OperationsConsole data={data} onRefresh={refresh} navigationRequest={navigationRequest} />
+        <OperationsConsole data={data} onRefresh={refreshWorkspace} navigationRequest={navigationRequest} />
         {staffMode === 'voice' && (
           <VoiceCommandMode
             data={data}
             employeeId={currentActorId}
             onReturn={() => setStaffMode('workspace')}
-            onNavigate={(target) => {
+            onRefresh={refreshWorkspace}
+            onNavigate={(target: OperationsConsoleView, focus?: OperationsConsoleFocus) => {
               nextNavigationRequestId.current += 1
-              setNavigationRequest({ id: nextNavigationRequestId.current, target })
+              setNavigationRequest({ id: nextNavigationRequestId.current, target, focus })
             }}
           />
         )}
@@ -396,6 +507,7 @@ function PilotLogin({ onAuthenticated }: { onAuthenticated: () => void }) {
       rememberStoreAccess(response)
       await prepareOfflineDataForEmployee(response.employee.id)
       window.localStorage.setItem('mbox.auth.token', response.token)
+      if (response.expiresAt) window.localStorage.setItem('mbox.auth.expires-at', String(response.expiresAt))
       window.localStorage.setItem('mbox.actor.id', response.employee.id)
       window.localStorage.setItem('mbox.actor.name', response.employee.displayName)
       onAuthenticated()

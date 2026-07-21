@@ -8,6 +8,8 @@ describe('runtime config', () => {
     expect(config.repositoryMode).toBe('json')
     expect(config.corsOrigins).toContain('http://localhost:5173')
     expect(config.voiceTranscriptionProvider).toBe('disabled')
+    expect(config.assistantProvider).toBe('disabled')
+    expect(config.stateReadCacheMs).toBe(3_000)
   })
 
   it('accepts only supported voice transcription providers', () => {
@@ -15,6 +17,39 @@ describe('runtime config', () => {
       .toBe('google_v1')
     expect(() => loadRuntimeConfig({ MBOX_VOICE_TRANSCRIPTION_PROVIDER: 'unknown' }))
       .toThrow()
+  })
+
+  it('loads bounded SOP adapter configuration and rejects unsafe webhook credentials', () => {
+    expect(loadRuntimeConfig({
+      MBOX_SOP_WECOM_EMPLOYEE_USER_IDS_JSON: JSON.stringify({ 'emp-lin': 'tom.wecom' }),
+      MBOX_SOP_HEADSET_WEBHOOK_URL: 'https://headset.example.com/mbox/events',
+      MBOX_SOP_HEADSET_WEBHOOK_TOKEN: 'h'.repeat(20),
+    })).toMatchObject({
+      sopWecomEmployeeUserIds: { 'emp-lin': 'tom.wecom' },
+      sopHeadsetWebhookUrl: 'https://headset.example.com/mbox/events',
+    })
+    expect(() => loadRuntimeConfig({
+      MBOX_SOP_CAMERA_WEBHOOK_URL: 'http://camera.example.com/frames',
+      MBOX_SOP_CAMERA_WEBHOOK_TOKEN: 'c'.repeat(20),
+    })).toThrow('https:')
+    expect(() => loadRuntimeConfig({
+      MBOX_SOP_HEADSET_WEBHOOK_URL: 'https://headset.example.com/events',
+      MBOX_SOP_HEADSET_WEBHOOK_TOKEN: 'short',
+    })).toThrow('至少20字符')
+  })
+
+  it('requires a server-side Gemini key when conversational assistance is enabled', () => {
+    expect(() => loadRuntimeConfig({ MBOX_ASSISTANT_PROVIDER: 'gemini_interactions' }))
+      .toThrow('MBOX_GEMINI_API_KEY')
+    expect(loadRuntimeConfig({
+      MBOX_ASSISTANT_PROVIDER: 'gemini_interactions',
+      MBOX_GEMINI_API_KEY: 'server-side-gemini-key-at-least-20-characters',
+      MBOX_GEMINI_MODEL: 'gemini-3.5-flash',
+    })).toMatchObject({
+      assistantProvider: 'gemini_interactions',
+      geminiModel: 'gemini-3.5-flash',
+      assistantHttpTimeoutMs: 20_000,
+    })
   })
 
   it('rejects production with unsafe defaults', () => {
@@ -41,15 +76,21 @@ describe('runtime config', () => {
       MBOX_STORE_UUID: '22222222-2222-4222-8222-222222222222',
       MBOX_SESSION_SECRET: 's'.repeat(32),
       MBOX_QR_SECRET: 'q'.repeat(32),
+      MBOX_QR_PREVIOUS_SECRET: 'p'.repeat(32),
       MBOX_METRICS_TOKEN: 'm'.repeat(32),
       MBOX_CORS_ORIGINS: 'https://ops.example.com,https://staff.example.com',
       MBOX_PUBLIC_BASE_URL: 'https://api.example.com',
     }
     const config = loadRuntimeConfig(production)
     expect(config.repositoryMode).toBe('postgres')
+    expect(config.qrPreviousSecret).toBe('p'.repeat(32))
     expect(config.corsOrigins).toHaveLength(2)
     expect(() => loadRuntimeConfig({ ...production, MBOX_PILOT_PAYMENT_SIMULATION_ENABLED: 'true' }))
       .toThrow('只能在staging')
+    expect(() => loadRuntimeConfig({ ...production, MBOX_QR_PREVIOUS_SECRET: 'short' }))
+      .toThrow('MBOX_QR_PREVIOUS_SECRET至少需要32个字符')
+    expect(() => loadRuntimeConfig({ ...production, MBOX_QR_PREVIOUS_SECRET: production.MBOX_QR_SECRET }))
+      .toThrow('MBOX_QR_PREVIOUS_SECRET不能与MBOX_QR_SECRET相同')
   })
 
   it('rejects wildcard or insecure production origins', () => {
@@ -71,6 +112,8 @@ describe('runtime config', () => {
   it('rejects invalid integer settings', () => {
     expect(() => loadRuntimeConfig({ API_PORT: '8787.5' })).toThrow('API_PORT')
     expect(() => loadRuntimeConfig({ MBOX_BODY_LIMIT_BYTES: '10' })).toThrow('MBOX_BODY_LIMIT_BYTES')
+    expect(() => loadRuntimeConfig({ MBOX_STATE_READ_CACHE_MS: '499' })).toThrow('MBOX_STATE_READ_CACHE_MS')
+    expect(() => loadRuntimeConfig({ MBOX_STATE_READ_CACHE_MS: '10001' })).toThrow('MBOX_STATE_READ_CACHE_MS')
   })
 
   it('uses the platform PORT when API_PORT is not configured', () => {
@@ -93,7 +136,7 @@ describe('runtime config', () => {
     }
     expect(loadRuntimeConfig({ ...staging, MBOX_PILOT_ACCESS_CODE: 'pilot-code-strong' })).toMatchObject({
       pilotAccessCode: 'pilot-code-strong',
-      pilotSessionHours: 12,
+      pilotSessionHours: 6,
       pilotPaymentSimulationEnabled: false,
     })
     expect(loadRuntimeConfig({ ...staging, MBOX_PILOT_PAYMENT_SIMULATION_ENABLED: 'true' }))

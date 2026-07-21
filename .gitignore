@@ -17,6 +17,9 @@ dist-server
 !.env.example
 .runtime/*
 !.runtime/.gitkeep
+artifacts/
+playwright-report/
+test-results/
 private/
 backups/
 
@@ -24,6 +27,17 @@ backups/
 deliverables/
 output/
 tmp/
+
+# Android validation build products and private signing material.
+android/validation-twa/.gradle/
+android/validation-twa/app/build/
+android/validation-twa/build/
+android/validation-twa/*.apk
+android/validation-twa/*.aab
+android/validation-twa/*.idsig
+android/validation-twa/*.jks
+android/validation-twa/*.keystore
+android/validation-twa/signing.env
 
 # Editor directories and files
 .vscode/*

@@ -2,39 +2,163 @@ import { describe, expect, it, vi } from 'vitest'
 import { startBootstrapPolling } from './App'
 
 describe('bootstrap polling', () => {
-  it('stops for an expired session and resumes with exactly one timer after login', () => {
+  it('does not attach lifecycle work while polling is disabled', () => {
     const refresh = vi.fn()
+    const lifecycle = createLifecycleTarget()
+    const stop = startBootstrapPolling(false, refresh, {
+      visibilityTarget: lifecycle,
+      pageShowTarget: lifecycle,
+    })
+
+    expect(refresh).not.toHaveBeenCalled()
+    expect(lifecycle.listenerCount()).toBe(0)
+    stop()
+  })
+
+  it('self-schedules after completion and backs off while data is unchanged', async () => {
+    const refresh = vi.fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
     const callbacks = new Map<number, () => void>()
     let nextTimer = 1
-    const schedule = vi.fn((callback: () => void, delay: number) => {
-      expect(delay).toBe(2000)
+    const schedule = vi.fn((callback: () => void, _delay: number) => {
       const timer = nextTimer++
       callbacks.set(timer, callback)
       return timer
     })
     const cancel = vi.fn((timer: number) => callbacks.delete(timer))
-    const tick = () => [...callbacks.values()].forEach((callback) => callback())
+    const lifecycle = createLifecycleTarget()
 
-    const stopInitialPolling = startBootstrapPolling(true, refresh, () => true, schedule, cancel)
+    const stop = startBootstrapPolling(true, refresh, {
+      isOnline: () => true,
+      isVisible: () => true,
+      schedule,
+      cancel,
+      visibilityTarget: lifecycle,
+      pageShowTarget: lifecycle,
+    })
     expect(refresh).toHaveBeenCalledTimes(1)
+    await flushPromises()
     expect(callbacks.size).toBe(1)
+    expect(schedule).toHaveBeenLastCalledWith(expect.any(Function), 5_000)
 
-    stopInitialPolling()
-    const stopWhileLoggedOut = startBootstrapPolling(false, refresh, () => true, schedule, cancel)
-    tick()
-    expect(refresh).toHaveBeenCalledTimes(1)
-    expect(callbacks.size).toBe(0)
-
-    const stopAuthenticatedPolling = startBootstrapPolling(true, refresh, () => true, schedule, cancel)
+    const callback = [...callbacks.values()][0]!
+    callbacks.clear()
+    callback()
+    await flushPromises()
     expect(refresh).toHaveBeenCalledTimes(2)
-    expect(callbacks.size).toBe(1)
-    tick()
-    expect(refresh).toHaveBeenCalledTimes(3)
+    expect(schedule).toHaveBeenLastCalledWith(expect.any(Function), 8_000)
 
-    stopWhileLoggedOut()
-    stopAuthenticatedPolling()
+    stop()
     expect(callbacks.size).toBe(0)
-    expect(schedule).toHaveBeenCalledTimes(2)
-    expect(cancel).toHaveBeenCalledTimes(2)
+  })
+
+  it('pauses while hidden and refreshes immediately when the app returns', async () => {
+    let visible = false
+    const refresh = vi.fn().mockResolvedValue(true)
+    const callbacks = new Map<number, () => void>()
+    const schedule = vi.fn((callback: () => void) => {
+      callbacks.set(1, callback)
+      return 1
+    })
+    const cancel = vi.fn((timer: number) => callbacks.delete(timer))
+    const lifecycle = createLifecycleTarget()
+
+    const stop = startBootstrapPolling(true, refresh, {
+      isOnline: () => true,
+      isVisible: () => visible,
+      schedule,
+      cancel,
+      visibilityTarget: lifecycle,
+      pageShowTarget: lifecycle,
+    })
+    expect(refresh).not.toHaveBeenCalled()
+    expect(callbacks.size).toBe(0)
+
+    visible = true
+    lifecycle.dispatch('visibilitychange')
+    expect(refresh).toHaveBeenCalledTimes(1)
+    await flushPromises()
+    expect(callbacks.size).toBe(1)
+
+    visible = false
+    lifecycle.dispatch('visibilitychange')
+    expect(callbacks.size).toBe(0)
+    visible = true
+    lifecycle.dispatch('pageshow')
+    expect(refresh).toHaveBeenCalledTimes(2)
+    await flushPromises()
+
+    stop()
+    expect(lifecycle.listenerCount()).toBe(0)
+  })
+
+  it('keeps one refresh in flight when foreground signals repeat', async () => {
+    let resolveRefresh!: (changed: boolean) => void
+    const refresh = vi.fn(() => new Promise<boolean>((resolve) => { resolveRefresh = resolve }))
+    const lifecycle = createLifecycleTarget()
+    const schedule = vi.fn(() => 1)
+
+    const stop = startBootstrapPolling(true, refresh, {
+      isOnline: () => true,
+      isVisible: () => true,
+      schedule,
+      cancel: vi.fn(),
+      visibilityTarget: lifecycle,
+      pageShowTarget: lifecycle,
+    })
+    lifecycle.dispatch('pageshow')
+    lifecycle.dispatch('visibilitychange')
+    expect(refresh).toHaveBeenCalledTimes(1)
+
+    resolveRefresh(true)
+    await flushPromises()
+    expect(refresh).toHaveBeenCalledTimes(2)
+    stop()
+  })
+
+  it('avoids network requests while offline and retries at a relaxed cadence', () => {
+    const refresh = vi.fn()
+    const lifecycle = createLifecycleTarget()
+    const schedule = vi.fn(() => 1)
+
+    const stop = startBootstrapPolling(true, refresh, {
+      isOnline: () => false,
+      isVisible: () => true,
+      schedule,
+      cancel: vi.fn(),
+      visibilityTarget: lifecycle,
+      pageShowTarget: lifecycle,
+    })
+
+    expect(refresh).not.toHaveBeenCalled()
+    expect(schedule).toHaveBeenCalledWith(expect.any(Function), 15_000)
+    stop()
   })
 })
+
+function createLifecycleTarget() {
+  const listeners = new Map<string, Set<() => void>>()
+  return {
+    addEventListener(type: string, listener: EventListenerOrEventListenerObject) {
+      const callback = listener as () => void
+      const current = listeners.get(type) ?? new Set<() => void>()
+      current.add(callback)
+      listeners.set(type, current)
+    },
+    removeEventListener(type: string, listener: EventListenerOrEventListenerObject) {
+      listeners.get(type)?.delete(listener as () => void)
+    },
+    dispatch(type: string) {
+      for (const listener of listeners.get(type) ?? []) listener()
+    },
+    listenerCount() {
+      return [...listeners.values()].reduce((total, current) => total + current.size, 0)
+    },
+  }
+}
+
+async function flushPromises() {
+  await Promise.resolve()
+  await Promise.resolve()
+}

@@ -321,6 +321,34 @@ describe('PostgresRepository', () => {
     expect(pool.queries.some(({ sql }) => sql === 'ROLLBACK')).toBe(true)
   })
 
+  it('serves the committed state from memory without an immediate database reread', async () => {
+    const { pool, repository } = createRepository()
+    await repository.init()
+    await repository.read()
+
+    await repository.mutate((state) => {
+      state.store.name = 'Committed cache state'
+      state.revision += 1
+    })
+    const fullReadsAfterCommit = pool.queries.filter(({ sql }) => (
+      sql.startsWith('SELECT revision, state, state_sha256 FROM mbox.runtime_states')
+    )).length
+    const revisionReadsAfterCommit = pool.queries.filter(({ sql }) => (
+      sql.startsWith('SELECT revision FROM mbox.runtime_states')
+    )).length
+
+    const state = await repository.read()
+
+    expect(state.store.name).toBe('Committed cache state')
+    expect(state.revision).toBe(2)
+    expect(pool.queries.filter(({ sql }) => (
+      sql.startsWith('SELECT revision, state, state_sha256 FROM mbox.runtime_states')
+    ))).toHaveLength(fullReadsAfterCommit)
+    expect(pool.queries.filter(({ sql }) => (
+      sql.startsWith('SELECT revision FROM mbox.runtime_states')
+    ))).toHaveLength(revisionReadsAfterCommit)
+  })
+
   it('accepts multi-event revision advances and rejects non-advancing revisions', async () => {
     const { repository } = createRepository()
     await repository.init()

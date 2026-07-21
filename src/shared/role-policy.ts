@@ -30,6 +30,7 @@ export const defaultRolePolicies: Record<string, RolePolicy> = {
       'commerce.authorization.approve', 'inventory.view', 'inventory.manage',
       'inventory.approve', 'benefit.view', 'benefit.grant', 'benefit.approve', 'benefit.manage',
       'song.view', 'song.manage', 'store_import.apply',
+      'hardware.view', 'hardware.operate', 'hardware.manage',
     ],
     'all_stores',
     {
@@ -50,6 +51,7 @@ export const defaultRolePolicies: Record<string, RolePolicy> = {
       'commerce.authorization.request', 'commerce.authorization.approve', 'inventory.view',
       'inventory.manage', 'inventory.approve', 'benefit.view', 'benefit.grant',
       'benefit.approve', 'benefit.manage', 'song.view', 'song.manage', 'store_import.apply',
+      'hardware.view', 'hardware.operate', 'hardware.manage',
     ],
     'store',
     {
@@ -61,7 +63,7 @@ export const defaultRolePolicies: Record<string, RolePolicy> = {
     },
   ),
   admin: policy(
-    ['dashboard.view', 'audit.view', 'config.manage', 'identity.manage', 'master_data.manage', 'shift.manage', 'table.manage', 'store_import.apply'],
+    ['dashboard.view', 'audit.view', 'config.manage', 'identity.manage', 'master_data.manage', 'shift.manage', 'table.manage', 'hardware.view', 'hardware.operate', 'hardware.manage', 'store_import.apply'],
     'store',
   ),
   manager: policy(
@@ -73,6 +75,7 @@ export const defaultRolePolicies: Record<string, RolePolicy> = {
       'commerce.authorization.request', 'commerce.authorization.approve', 'inventory.view',
       'inventory.manage', 'inventory.approve', 'benefit.view', 'benefit.grant',
       'benefit.approve', 'benefit.manage', 'song.view', 'song.manage', 'store_import.apply',
+      'hardware.view', 'hardware.operate',
     ],
     'store',
     {

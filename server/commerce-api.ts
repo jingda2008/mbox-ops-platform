@@ -5,11 +5,14 @@ import {
   authorizationDecisionSchema,
   authorizationRequestSchema,
   cartOrderSchema,
+  complimentaryOrderSchema,
   kdsActionSchema,
   kdsExceptionDecisionSchema,
   kdsExceptionReportSchema,
+  managerKdsCancellationSchema,
   quickOrderSchema,
 } from '../src/shared/commerce-api.js'
+import type { ManagerKdsCancellationResult } from '../src/shared/commerce-api.js'
 import type { RuntimeState } from '../src/shared/contracts.js'
 import type { KdsTask } from '../src/shared/order-contracts.js'
 import { productAvailability } from '../src/shared/product-availability.js'
@@ -31,6 +34,7 @@ import { completeAwaitingOrderOnOrder } from './proactive-service.js'
 import { consumeManagedInventoryForSubmittedOrder } from './inventory-order-integration.js'
 import {
   AuthorizationError,
+  requireApprovalAmount,
   requireAnyRole,
   requireCommerceDecisionAuthority,
   requireConfiguredOperation,
@@ -49,6 +53,7 @@ import {
 import { currentOpenTableSession, tableSessionBusinessDate } from './table-sessions.js'
 import { signGuestSessionToken } from './table-access.js'
 import { anonymousVisitId, type GuestInsightsStore } from './guest-insights.js'
+import { queuePrintJobsForOrder } from './commercial-ops.js'
 
 interface CommerceApiOptions {
   guestTokenSecret: string
@@ -72,6 +77,36 @@ function deterministicId(prefix: string, key: string) {
   return `${prefix}_${createHash('sha256').update(key).digest('hex').slice(0, 32)}`
 }
 
+function cancellationAccountingSnapshot(state: RuntimeState, task: KdsTask): ManagerKdsCancellationResult['accounting'] {
+  const order = state.orderDomain.orders.find((candidate) => candidate.id === task.orderId)
+  const item = order?.items.find((candidate) => candidate.id === task.orderItemId)
+  if (!order || !item) throw new Error('KDS任务缺少对应订单明细')
+  const paidAmount = state.paymentDomain.paymentIntents
+    .filter((intent) => ['succeeded', 'reported_pending_reconciliation'].includes(intent.status))
+    .flatMap((intent) => intent.lineAllocations)
+    .filter((allocation) => allocation.orderId === order.id && allocation.orderItemId === item.id)
+    .reduce((sum, allocation) => sum + allocation.paidAmount, 0)
+  const refundedAmount = state.paymentDomain.refunds
+    .filter((refund) => refund.status === 'succeeded')
+    .flatMap((refund) => refund.items)
+    .filter((refundItem) => refundItem.orderId === order.id && refundItem.orderItemId === item.id)
+    .reduce((sum, refundItem) => sum + refundItem.amount, 0)
+  const payableAmount = item.unitSalePriceAmount * item.quantity
+  const netPaidAmount = Math.max(0, paidAmount - refundedAmount)
+  const recommendation = payableAmount === 0
+    ? 'no_financial_action'
+    : netPaidAmount > 0 ? 'review_refund' : 'review_receivable'
+  return {
+    policy: 'manual_confirmation_required',
+    mutationApplied: false,
+    recommendation,
+    payableAmount,
+    paidAmount,
+    refundedAmount,
+    suggestedAmount: recommendation === 'review_refund' ? Math.min(netPaidAmount, payableAmount) : payableAmount,
+  }
+}
+
 function requireKdsTaskActor(
   request: FastifyRequest,
   state: RuntimeState,
@@ -84,11 +119,10 @@ function requireKdsTaskActor(
   const actor = requireAnyRole(
     request,
     state,
-    allowedFulfillmentRoleIds(state.orderDomain, task, phase === 'production' ? 'start' : 'deliver'),
+    allowedFulfillmentRoleIds(state, task, phase === 'production' ? 'start' : 'deliver'),
     operation,
     actionName,
   )
-  if (['supervisor', 'manager'].includes(actor.roleId)) return actor
 
   const employee = state.employees.find((item) => item.id === actor.actorId)
   if (!employee || employee.status !== 'active' || !employee.online || employee.paused) {
@@ -104,7 +138,8 @@ function requireKdsTaskActor(
     throw new AuthorizationError('当前工作站不在本班次责任范围内', operation)
   }
   if (phase === 'production') {
-    const requiredSkillIds = task.workstation?.requiredSkillIds ?? []
+    const workstation = state.config.workstations.find((item) => item.id === task.stationId) ?? task.workstation
+    const requiredSkillIds = workstation?.requiredSkillIds ?? []
     if (requiredSkillIds.some((skillId) => !employee.skillIds?.includes(skillId))) {
       throw new AuthorizationError('当前员工缺少该工作站要求的出品技能', operation)
     }
@@ -199,6 +234,7 @@ export function registerCommerceRoutes(
         occurredAt: now,
       })
       completeAwaitingOrderOnOrder(state, table.id, orderId, actor.actorId, new Date(now))
+      queuePrintJobsForOrder(state, submitted, now)
       state.auditEntries.push({
         id: `audit_${randomUUID()}`,
         actorId: actor.actorId,
@@ -298,6 +334,126 @@ export function registerCommerceRoutes(
     return reply.status(201).send(result)
   })
 
+  app.post('/api/commerce/complimentary-orders', async (request, reply) => {
+    const input = complimentaryOrderSchema.parse(request.body)
+    const order = await repository.mutate((state) => {
+      const actor = requireOrderCreationRole(request, state)
+      requireConfiguredOperation(request, state, 'commerce.authorization.request')
+      requireTableDataScope(request, state, input.tableId, 'commerce.complimentary_order.create')
+      const previous = state.auditEntries.find((entry) => (
+        entry.action === 'commerce.complimentary_order.v1'
+        && entry.details.idempotencyKey === input.idempotencyKey
+      ))
+      if (previous) {
+        if (previous.details.tableId !== input.tableId) throw new Error('幂等键已用于其他桌台的赠送订单')
+        const existing = state.orderDomain.orders.find((candidate) => candidate.id === previous.objectId)
+        if (!existing) throw new Error('赠送订单幂等记录异常')
+        return existing
+      }
+      if (new Set(input.items.map((item) => item.productId)).size !== input.items.length) {
+        throw new Error('赠送商品不能重复，请合并数量')
+      }
+      const table = state.tables.find((candidate) => candidate.id === input.tableId)
+      if (!table || table.status !== 'occupied') throw new Error('只能向已开台桌台赠送商品')
+      const products = input.items.map((item) => {
+        const product = state.products.find((candidate) => candidate.id === item.productId && candidate.enabled)
+        if (!product) throw new Error('赠送清单包含不存在或已停用商品')
+        const availability = productAvailability(product, new Date(), state.store.timezone)
+        if (!availability.orderable) throw new Error(`${product.name}当前不可赠送：${availability.label}`)
+        return { product, quantity: item.quantity }
+      })
+      const giftAmount = products.reduce((total, { product, quantity }) => {
+        const amount = product.listPriceAmount * quantity
+        if (!Number.isSafeInteger(amount) || !Number.isSafeInteger(total + amount)) throw new Error('赠送金额超出安全范围')
+        return total + amount
+      }, 0)
+      requireApprovalAmount(request, state, 'gift', giftAmount, 'commerce.complimentary_order.create')
+      syncOrderFulfillmentWorkstations(state)
+      const now = new Date().toISOString()
+      const orderId = deterministicId('gift_order', input.idempotencyKey)
+      const tableSession = currentOpenTableSession(state, table.id)
+      createOrderDraft(state.orderDomain, {
+        orderId,
+        tableSessionId: tableSession.id,
+        createdBy: actor.actorId,
+        occurredAt: now,
+        idempotencyKey: `${input.idempotencyKey}:draft`,
+      })
+      const lineIds = products.map(({ product, quantity }, index) => {
+        const workstation = routeProductToEnabledWorkstation(state, product.stationId)
+        const lineId = deterministicId('gift_line', `${input.idempotencyKey}:item:${index}`)
+        addOrderItem(state.orderDomain, {
+          orderId,
+          item: {
+            id: lineId,
+            skuId: product.id,
+            name: product.name,
+            specification: product.specification,
+            quantity,
+            unitListPriceAmount: product.listPriceAmount,
+            unitSalePriceAmount: 0,
+            unitCostAmount: product.costAmount,
+            stationId: workstation.id,
+            configVersion: product.configVersion,
+          },
+          actorId: actor.actorId,
+          occurredAt: now,
+          idempotencyKey: `${input.idempotencyKey}:item:${index}`,
+        })
+        return lineId
+      })
+      const authorization = requestOrderAuthorization(state.orderDomain, {
+        authorizationId: deterministicId('gift_authorization', input.idempotencyKey),
+        orderId,
+        kind: 'gift',
+        lineIds,
+        requestedBy: actor.actorId,
+        occurredAt: now,
+        idempotencyKey: `${input.idempotencyKey}:authorization`,
+      })
+      decideOrderAuthorization(state.orderDomain, {
+        authorizationId: authorization.id,
+        decision: 'granted',
+        decidedBy: actor.actorId,
+        reason: input.reason,
+        occurredAt: now,
+        idempotencyKey: `${input.idempotencyKey}:authorization-decision`,
+      })
+      const submitted = submitOrder(state.orderDomain, {
+        orderId,
+        submittedBy: actor.actorId,
+        occurredAt: now,
+        idempotencyKey: `${input.idempotencyKey}:submit`,
+      })
+      consumeManagedInventoryForSubmittedOrder(state.inventoryDomain, submitted, {
+        actorId: actor.actorId,
+        businessDate: state.store.businessDate,
+        occurredAt: now,
+      })
+      queuePrintJobsForOrder(state, submitted, now)
+      state.auditEntries.push({
+        id: deterministicId('audit_gift_order', input.idempotencyKey),
+        actorId: actor.actorId,
+        action: 'commerce.complimentary_order.v1',
+        objectType: 'order',
+        objectId: orderId,
+        occurredAt: now,
+        details: {
+          tableId: table.id,
+          tableSessionId: tableSession.id,
+          items: input.items,
+          giftAmount,
+          reason: input.reason,
+          sourceKdsTaskId: input.sourceKdsTaskId,
+          idempotencyKey: input.idempotencyKey,
+        },
+      })
+      state.revision += 1
+      return submitted
+    })
+    return reply.status(201).send(order)
+  })
+
   app.post('/api/commerce/quick-orders', async (request, reply) => {
     const input = quickOrderSchema.parse(request.body)
     const order = await repository.mutate((state) => {
@@ -365,6 +521,7 @@ export function registerCommerceRoutes(
         occurredAt: now,
       })
       completeAwaitingOrderOnOrder(state, table.id, orderId, actor.actorId, new Date(now))
+      queuePrintJobsForOrder(state, submitted, now)
       state.auditEntries.push({
         id: `audit_${randomUUID()}`,
         actorId: actor.actorId,
@@ -439,6 +596,94 @@ export function registerCommerceRoutes(
     })
   })
 
+  app.post<{ Params: { taskId: string } }>('/api/commerce/kds/:taskId/manager-cancel', async (request) => {
+    const input = managerKdsCancellationSchema.parse(request.body)
+    return repository.mutate((state): ManagerKdsCancellationResult => {
+      const replay = state.auditEntries.find((entry) => (
+        entry.action === 'kds.manager_cancelled.v1'
+        && entry.details.idempotencyKey === input.idempotencyKey
+      ))
+      if (replay) {
+        if (replay.objectId !== request.params.taskId) throw new Error('幂等键已用于其他KDS任务')
+        return replay.details.result as unknown as ManagerKdsCancellationResult
+      }
+      const task = state.orderDomain.kdsTasks.find((candidate) => candidate.id === request.params.taskId)
+      if (!task) throw new Error('KDS任务不存在')
+      if (task.status === 'delivered') throw new Error('已经送达的商品不能取消制作，请走退菜或退款流程')
+      const tableSession = state.songState.tableSessions.find((candidate) => candidate.id === task.tableSessionId)
+      if (!tableSession || tableSession.status !== 'open') throw new Error('KDS任务所属桌次已经结束')
+      requireConfiguredOperation(request, state, 'table.close')
+      requireTableDataScope(request, state, tableSession.tableId, 'commerce.kds.manager_cancel')
+      const actor = requireAnyRole(
+        request,
+        state,
+        ['supervisor', 'manager', 'operations_director', 'owner'],
+        'commerce.kds.manager_cancel',
+        '取消未送达商品',
+      )
+      const existingDisposition = task.exceptionEvents?.find((event) => event.type === 'manager_disposition')
+      if (existingDisposition) throw new Error('该KDS任务已经完成异常处置')
+      const existingReport = task.exceptionEvents?.find((event) => event.type === 'reported')
+      const now = new Date().toISOString()
+      const report = existingReport ?? reportKdsException(state.orderDomain, {
+        exceptionId: deterministicId('manager_cancel_exception', input.idempotencyKey),
+        eventId: deterministicId('manager_cancel_report', input.idempotencyKey),
+        taskId: task.id,
+        exceptionKind: ['queued', 'preparing'].includes(task.status) ? 'production_rejection' : 'wrong_item',
+        reasonCode: 'other',
+        reasonNote: input.reasonNote,
+        actorId: actor.actorId,
+        actorRoleId: actor.roleId,
+        occurredAt: now,
+        idempotencyKey: `${input.idempotencyKey}:report`,
+      })
+      const disposition = decideKdsException(state.orderDomain, {
+        eventId: deterministicId('manager_cancel_decision', input.idempotencyKey),
+        exceptionId: report.exceptionId,
+        disposition: 'cancelled',
+        reasonCode: input.reasonCode,
+        reasonNote: input.reasonNote,
+        remakeTaskId: null,
+        actorId: actor.actorId,
+        actorRoleId: actor.roleId,
+        occurredAt: now,
+        idempotencyKey: `${input.idempotencyKey}:decision`,
+      })
+      const order = state.orderDomain.orders.find((candidate) => candidate.id === task.orderId)
+      const item = order?.items.find((candidate) => candidate.id === task.orderItemId)
+      if (!order || !item) throw new Error('KDS任务缺少对应订单明细')
+      const result: ManagerKdsCancellationResult = {
+        cancellationEventId: disposition.id,
+        taskId: task.id,
+        orderId: task.orderId,
+        orderItemId: task.orderItemId,
+        itemName: task.itemName,
+        quantity: task.quantity,
+        accounting: cancellationAccountingSnapshot(state, task),
+      }
+      state.auditEntries.push({
+        id: deterministicId('audit_manager_cancel', input.idempotencyKey),
+        actorId: actor.actorId,
+        action: 'kds.manager_cancelled.v1',
+        objectType: 'kdsTask',
+        objectId: task.id,
+        occurredAt: now,
+        details: {
+          tableId: tableSession.tableId,
+          tableSessionId: tableSession.id,
+          reasonCode: input.reasonCode,
+          reasonNote: input.reasonNote,
+          accountingPolicy: 'manual_confirmation_required',
+          accountingMutationApplied: false,
+          result,
+          idempotencyKey: input.idempotencyKey,
+        },
+      })
+      state.revision += 1
+      return result
+    })
+  })
+
   app.post<{ Params: { taskId: string } }>('/api/commerce/kds/:taskId/exceptions', async (request, reply) => {
     const input = kdsExceptionReportSchema.parse(request.body)
     const event = await repository.mutate((state) => {
@@ -500,7 +745,7 @@ export function registerCommerceRoutes(
       const actor = requireAnyRole(
         request,
         state,
-        ['supervisor', 'manager'],
+        ['supervisor', 'manager', 'operations_director', 'owner'],
         'commerce.kds.prepare',
         '处置KDS异常',
       )

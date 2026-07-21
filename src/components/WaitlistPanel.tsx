@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import { actOnWaitlistEntry, createWaitlistEntry, listWaitlist, type WaitlistListResponse } from '../reservation-api'
 import type { Area, Employee, Table } from '../shared/contracts'
 import { formatChinaTime } from '../shared/china-time'
+import { useRevealPanelScroll } from './use-reveal-panel-scroll'
 
 interface Props {
   areas: Area[]
@@ -25,6 +26,7 @@ export function WaitlistPanel({ areas, tables, employees, canManage }: Props) {
   const [areaCode, setAreaCode] = useState('')
   const [maximumWaitMinutes, setMaximumWaitMinutes] = useState(90)
   const [salesEmployeeId, setSalesEmployeeId] = useState(employees[0]?.id ?? '')
+  const createPanelRef = useRevealPanelScroll<HTMLFormElement>(showCreate ? 'waitlist-create' : '')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -101,7 +103,7 @@ export function WaitlistPanel({ areas, tables, employees, canManage }: Props) {
       {canManage && <button className="primary-button" type="button" onClick={() => setShowCreate((current) => !current)}>{showCreate ? <X size={16} /> : <Plus size={16} />}{showCreate ? '关闭' : '登记候补'}</button>}
     </header>
     {notice && <div className="waitlist-notice">{notice}<button title="关闭" onClick={() => setNotice('')}><X size={14} /></button></div>}
-    {showCreate && <form className="waitlist-create" onSubmit={submit}>
+    {showCreate && <form className="waitlist-create reveal-panel-target" ref={createPanelRef} onSubmit={submit}>
       <label><span>客人称呼</span><input autoFocus required maxLength={100} value={name} onChange={(event) => setName(event.target.value)} /></label>
       <label><span>CRM/企微编号</span><input required maxLength={128} value={contact} onChange={(event) => setContact(event.target.value)} /></label>
       <label><span>人数</span><input required type="number" min={1} max={100} value={partySize} onChange={(event) => setPartySize(Number(event.target.value))} /></label>

@@ -86,6 +86,24 @@ export interface ReservationPublicRulesConfig {
   }
 }
 
+export interface ReservationDepositAreaRule {
+  areaPreferenceCode: string
+  depositAmount: ReservationMoneyAmount
+  minimumSpendAmount: ReservationMoneyAmount
+  deductibleRateBps: number
+  customerNotice: string
+}
+
+export interface ReservationDepositPolicyConfig {
+  enabled: boolean
+  currency: string
+  defaultDepositAmount: ReservationMoneyAmount
+  defaultMinimumSpendAmount: ReservationMoneyAmount
+  defaultDeductibleRateBps: number
+  customerNotice: string
+  areaRules: ReservationDepositAreaRule[]
+}
+
 export interface ReservationConfig {
   version: number
   minimumPartySize: number
@@ -98,6 +116,7 @@ export interface ReservationConfig {
   businessHours: ReservationBusinessHoursConfig
   capacity: ReservationCapacityConfig
   publicRules: ReservationPublicRulesConfig
+  depositPolicy: ReservationDepositPolicyConfig
 }
 
 export interface ReservationDeposit {

@@ -25,6 +25,7 @@ import {
   updateReservationDetails,
   decideLateReservationHold,
   DEFAULT_RESERVATION_CONFIG,
+  reservationDepositRule,
 } from './reservation-domain.js'
 import type { RuntimeRepository } from './repository.js'
 
@@ -40,18 +41,24 @@ function childIdempotencyKey(key: string, suffix: string) {
 const createSchema = z.object({
   customerReference: z.string().trim().min(1).max(128),
   customerName: z.string().trim().min(1).max(100),
-  contactReference: z.string().trim().min(1).max(256),
+  contactReference: z.string().trim().max(256).optional(),
+  phone: z.string().trim().regex(/^1\d{10}$/, '手机号需为11位中国大陆号码').optional(),
+  wechatId: z.string().trim().min(2).max(80).optional(),
   sourceCode: z.string().trim().min(1).max(64),
   partySize: z.number().int().positive(),
   areaPreferenceCode: z.string().trim().min(1).max(64).optional(),
   occasionCode: z.enum(['birthday', 'anniversary', 'business', 'other']).optional(),
   occasionNote: z.string().trim().max(500).optional(),
   scheduledAt: timestampSchema,
-  depositRequiredAmount: z.number().int().nonnegative(),
-  depositCurrency: z.string().regex(/^[A-Z]{3}$/),
+  depositRequiredAmount: z.number().int().nonnegative().optional(),
+  depositCurrency: z.string().regex(/^[A-Z]{3}$/).optional(),
   salesEmployeeId: z.string().trim().min(1).max(128).optional(),
   idempotencyKey: idempotencyKeySchema,
-}).strict()
+}).strict().superRefine((value, context) => {
+  if (!value.contactReference && !value.phone && !value.wechatId) {
+    context.addIssue({ code: 'custom', path: ['phone'], message: '手机号或微信号至少填写一项' })
+  }
+})
 
 const confirmActionSchema = z.object({
   action: z.literal('confirm'),
@@ -194,6 +201,21 @@ const reservationConfigSchema = z.object({
       windowMinutes: z.number().int().min(1).max(1_440),
     }).strict(),
   }).strict().optional(),
+  depositPolicy: z.object({
+    enabled: z.boolean(),
+    currency: z.string().regex(/^[A-Z]{3}$/),
+    defaultDepositAmount: z.number().int().nonnegative().max(100_000_000),
+    defaultMinimumSpendAmount: z.number().int().nonnegative().max(100_000_000),
+    defaultDeductibleRateBps: z.number().int().min(0).max(10_000),
+    customerNotice: z.string().trim().min(2).max(300),
+    areaRules: z.array(z.object({
+      areaPreferenceCode: z.string().trim().min(1).max(64),
+      depositAmount: z.number().int().nonnegative().max(100_000_000),
+      minimumSpendAmount: z.number().int().nonnegative().max(100_000_000),
+      deductibleRateBps: z.number().int().min(0).max(10_000),
+      customerNotice: z.string().trim().max(300),
+    }).strict()).max(100),
+  }).strict().optional(),
 }).strict()
 
 const configUpdateSchema = z.object({
@@ -245,6 +267,13 @@ export function mutateReservationState<T>(state: RuntimeStateWithReservations, o
   const result = operation(domain)
   if (domain.idempotencyRecords.length !== before) state.revision += 1
   return result
+}
+
+function staffContactReference(input: { contactReference?: string; phone?: string; wechatId?: string }) {
+  if (input.phone || input.wechatId) {
+    return [input.phone ? `phone:${input.phone}` : '', input.wechatId ? `wechat:${input.wechatId}` : ''].filter(Boolean).join('|')
+  }
+  return input.contactReference!.trim()
 }
 
 function requireSeparateRefundApprover(
@@ -330,12 +359,16 @@ export function registerReservationRoutes(app: FastifyInstance, repository: Runt
     const result = await repository.mutate((runtime) => {
       const state = runtime as RuntimeStateWithReservations
       const actor = requireConfiguredOperation(request, state, 'reservation.manage')
-      const { salesEmployeeId, ...reservationInput } = input
+      const { salesEmployeeId, phone, wechatId, contactReference, depositRequiredAmount, depositCurrency, ...reservationInput } = input
       const reservation = mutateReservationState(state, (domain) => {
         const existing = domain.idempotencyRecords.find((record) => record.key === input.idempotencyKey)
         const reservationId = existing?.operation === 'reservation.create' ? existing.reservationId : randomUUID()
+        const depositRule = reservationDepositRule(domain.config, input.areaPreferenceCode)
         return createReservation(domain, {
           ...reservationInput,
+          contactReference: staffContactReference({ contactReference, phone, wechatId }),
+          depositRequiredAmount: depositRule.enabled ? depositRule.depositAmount : depositRequiredAmount ?? 0,
+          depositCurrency: depositRule.currency || depositCurrency || 'CNY',
           reservationId,
           actorId: actor.actorId,
           occurredAt: new Date().toISOString(),

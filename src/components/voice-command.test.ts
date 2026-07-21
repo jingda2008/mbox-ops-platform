@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { RoleHomeNavigationId } from './role-access'
-import { resolveVoiceCommand, voiceSuggestionsForNavigation } from './voice-command'
+import { dutyRiskNavigationTarget, resolveVoiceCommand, voiceSuggestionsForNavigation } from './voice-command'
 
 const serverNavigation: RoleHomeNavigationId[] = ['live', 'tasks', 'commerce', 'benefits', 'songs']
 
@@ -54,5 +54,14 @@ describe('voiceSuggestionsForNavigation', () => {
   it('only exposes suggestions that the current employee may open', () => {
     const suggestions = voiceSuggestionsForNavigation(['tasks', 'commerce'])
     expect(suggestions.map((item) => item.target)).toEqual(['tasks', 'commerce'])
+  })
+})
+
+describe('dutyRiskNavigationTarget', () => {
+  it('routes operational alerts to a deterministic handling workspace', () => {
+    expect(dutyRiskNavigationTarget('reservation')).toBe('reservations')
+    expect(dutyRiskNavigationTarget('service')).toBe('tasks')
+    expect(dutyRiskNavigationTarget('fulfillment')).toBe('commerce')
+    expect(dutyRiskNavigationTarget('hardware')).toBe('devices')
   })
 })

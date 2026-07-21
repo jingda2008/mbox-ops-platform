@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   DeterministicVoiceCommandPlanner,
+  createModelVoiceCommandPlan,
   MAX_VOICE_COMMAND_STEPS,
   classifyVoiceCommandRisk,
   transitionVoiceCommandStep,
@@ -74,32 +75,38 @@ describe('DeterministicVoiceCommandPlanner.plan', () => {
     expect(plan.steps[3].entities).toEqual({ salesOwner: 'Alice' })
   })
 
-  it('expands a short open-table command with visible employee defaults', () => {
+  it('does not invent a party size for a short open-table command', () => {
     const planner = new DeterministicVoiceCommandPlanner({
-      defaultOpenTablePartySize: 2,
       defaultOpenTableSalesOwner: 'Tom',
     })
     const plan = planner.plan('L01开台')
 
-    expect(plan.steps.map((step) => step.action)).toEqual([
-      'open_live',
-      'select_table',
-      'set_party_size',
-      'assign_sales',
-      'open_table_now',
-    ])
-    expect(plan.steps[2].entities).toEqual({ partySize: 2 })
-    expect(plan.steps[3].entities).toEqual({ salesOwner: 'Tom' })
+    expect(plan.steps).toHaveLength(1)
+    expect(plan.steps[0]).toMatchObject({ action: 'execute_command', command: 'L01开台' })
+    expect(plan.steps[0]?.entities).toEqual({})
   })
 
   it('uses the spoken party size while defaulting sales to the current employee', () => {
     const plan = new DeterministicVoiceCommandPlanner({
-      defaultOpenTablePartySize: 2,
       defaultOpenTableSalesOwner: 'Tom',
     }).plan('L01四位客人开台')
 
     expect(plan.steps[2].entities).toEqual({ partySize: 4 })
     expect(plan.steps[3].entities).toEqual({ salesOwner: 'Tom' })
+  })
+
+  it('normalizes a natural arrival sentence into the verified five-step open-table workflow', () => {
+    const plan = new DeterministicVoiceCommandPlanner({
+      defaultOpenTableSalesOwner: 'Tom',
+    }).plan('L04来了四位客人，帮我开台并归属Tom')
+
+    expect(plan.steps.map((step) => step.command)).toEqual([
+      '打开现场桌台',
+      '点击开台桌台L04',
+      '客人人数输入4',
+      '销售归属选择 Tom',
+      '点击立即开台',
+    ])
   })
 
   it('caps general plans, reports omitted steps, and remains deterministic', () => {
@@ -148,6 +155,45 @@ describe('DeterministicVoiceCommandPlanner.plan', () => {
     expect(() => new DeterministicVoiceCommandPlanner({ modelEnabled: true })).toThrow(
       'DeterministicVoiceCommandPlanner does not permit model calls',
     )
+  })
+
+  it('converts bounded model suggestions into an untrusted sequential plan', () => {
+    const plan = createModelVoiceCommandPlan('帮我处理L04', [
+      { label: '打开现场', command: '打开现场桌台' },
+      { label: '选择L04', command: '点击开台桌台L04' },
+      { label: '确认转桌', command: '点击确认转桌' },
+    ])
+
+    expect(plan).toMatchObject({
+      modelUsed: true,
+      executionMode: 'sequential-ui',
+      serverTransactionAtomic: false,
+      risk: 'high',
+    })
+    expect(plan.steps.map((step) => step.command)).toEqual([
+      '打开现场桌台', '点击开台桌台L04', '点击确认转桌',
+    ])
+  })
+
+  it('assigns one stable execution id to every server tool step', () => {
+    const plan = createModelVoiceCommandPlan('L04四人开台', [{
+      label: 'L04四人开台',
+      command: '为L04四人开台',
+      toolCall: { toolId: 'table.open', arguments: { tableCode: 'L04', partySize: 4 } },
+    }])
+
+    expect(plan.steps[0]).toMatchObject({
+      action: 'execute_server_tool',
+      toolCall: { toolId: 'table.open', arguments: { tableCode: 'L04', partySize: 4 } },
+    })
+    expect(plan.steps[0].executionId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    )
+
+    const running = transitionVoiceCommandStep(plan, 1, 'running')
+    const completed = transitionVoiceCommandStep(running, 1, 'completed')
+    expect(running.steps[0].executionId).toBe(plan.steps[0].executionId)
+    expect(completed.steps[0].executionId).toBe(plan.steps[0].executionId)
   })
 })
 

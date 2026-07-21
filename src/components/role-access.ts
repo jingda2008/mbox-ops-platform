@@ -9,6 +9,8 @@ export const roleHomeNavigation = [
   { id: 'inventory', label: '库存/存酒' },
   { id: 'payments', label: '收银/支付' },
   { id: 'benefits', label: '会员权益' },
+  { id: 'operations', label: '经营工具' },
+  { id: 'devices', label: '设备中心' },
   { id: 'songs', label: '演出/点歌' },
   { id: 'layout', label: '布局' },
   { id: 'master', label: '主数据' },
@@ -70,7 +72,7 @@ const roleProfiles: Record<RoleHomeKind, RoleProfile> = {
   manager: {
     title: '店长工作台',
     focusLabel: '现场调度与异常接管',
-    navigation: ['live', 'tasks', 'reservations', 'commerce', 'inventory', 'payments', 'benefits', 'songs', 'layout'],
+    navigation: ['live', 'tasks', 'reservations', 'commerce', 'inventory', 'payments', 'benefits', 'operations', 'devices', 'songs', 'layout'],
   },
   server: {
     title: '服务员工作台',
@@ -80,17 +82,17 @@ const roleProfiles: Record<RoleHomeKind, RoleProfile> = {
   bartender: {
     title: '调酒师工作台',
     focusLabel: '吧台制作与交付',
-    navigation: ['tasks', 'commerce', 'inventory'],
+    navigation: ['tasks', 'commerce', 'inventory', 'operations'],
   },
   kitchen: {
     title: '厨房工作台',
     focusLabel: '厨房出品与交付',
-    navigation: ['tasks', 'commerce', 'inventory'],
+    navigation: ['tasks', 'commerce', 'inventory', 'operations'],
   },
   cashier: {
     title: '收银员工作台',
     focusLabel: '收款、对账与退款',
-    navigation: ['reservations', 'tasks', 'payments', 'inventory'],
+    navigation: ['reservations', 'tasks', 'payments', 'inventory', 'operations'],
   },
   host: {
     title: '门迎工作台',
@@ -110,10 +112,10 @@ const roleProfiles: Record<RoleHomeKind, RoleProfile> = {
 }
 
 const roleNavigationLabels: Partial<Record<RoleHomeKind, Partial<Record<RoleHomeNavigationId, string>>>> = {
-  owner: { live: '全店现场', commerce: '订单与出品', payments: '收银与账务', master: '人员与岗位' },
-  operations_director: { live: '全店现场', commerce: '订单与出品', master: '人员与岗位', config: '运营规则' },
-  admin: { live: '运行状态', master: '人员与权限', config: '系统配置' },
-  manager: { live: '现场调度', commerce: '订单与出品', payments: '收银与退款', songs: '演出与点歌' },
+  owner: { live: '全店现场', commerce: '订单与出品', payments: '收银与账务', devices: '设备与边缘', master: '人员与岗位' },
+  operations_director: { live: '全店现场', commerce: '订单与出品', devices: '设备与边缘', master: '人员与岗位', config: '运营规则' },
+  admin: { live: '运行状态', devices: '设备与边缘', master: '人员与权限', config: '系统配置' },
+  manager: { live: '现场调度', commerce: '订单与出品', payments: '收银与退款', devices: '设备状态', songs: '演出与点歌' },
   server: { live: '我的桌台', tasks: '服务提醒', commerce: '点单与送餐', benefits: '赠送权益', songs: '协助点歌' },
   bartender: { tasks: '服务提醒', commerce: '酒水制作', inventory: '吧台库存' },
   kitchen: { tasks: '服务提醒', commerce: '餐品制作', inventory: '后厨库存' },
@@ -164,6 +166,8 @@ const navigationPermissions: Record<RoleHomeNavigationId, readonly StaffPermissi
   inventory: ['inventory.view', 'inventory.manage', 'inventory.approve'],
   payments: ['finance.view', 'payment.collect', 'payment.pos_report', 'payment.refund.request', 'payment.refund.approve'],
   benefits: ['benefit.view', 'benefit.grant', 'benefit.approve', 'benefit.manage'],
+  operations: ['config.manage', 'inventory.manage', 'inventory.approve', 'payment.collect', 'finance.view', 'benefit.manage'],
+  devices: ['hardware.view', 'hardware.operate', 'hardware.manage'],
   songs: ['song.view', 'song.manage'],
   layout: ['table.manage'],
   master: ['identity.manage', 'master_data.manage', 'shift.manage'],

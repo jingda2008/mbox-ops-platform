@@ -21,6 +21,13 @@ interface AuthContextOptions {
   runtimeMode: RuntimeMode
   sessionSecret?: string
   readState: () => Promise<RuntimeState>
+  resumeStaffSession?: (input: {
+    sessionId: string
+    actorId: string
+    storeId: string
+    sessionExpiresAt: number
+    now: number
+  }) => Promise<boolean>
 }
 
 const PUBLIC_PATHS = new Set(['/api/health', '/api/live', '/api/ready', '/api/metrics', '/api/auth/pilot-login'])
@@ -180,7 +187,12 @@ export async function registerAuthContext(app: FastifyInstance, options: AuthCon
         && candidate.expiresAt > now
         && candidate.sessionExpiresAt > now
       ))
-      if (!lease) throw new AuthenticationError('员工会话已退出或在线租约已过期', 401, 'STAFF_SESSION_REVOKED')
+      if (!lease) {
+        const resumed = sessionId && sessionExpiresAt && options.resumeStaffSession
+          ? await options.resumeStaffSession({ sessionId, actorId, storeId, sessionExpiresAt, now })
+          : false
+        if (!resumed) throw new AuthenticationError('员工会话已退出或已过期', 401, 'STAFF_SESSION_REVOKED')
+      }
     }
     assertActorBinding(request, actorId, options.runtimeMode)
     request.mboxAuthState = state

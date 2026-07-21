@@ -28,15 +28,17 @@ export interface UpdateReservationConfigInput {
 export interface CreateReservationInput {
   customerReference: string
   customerName: string
-  contactReference: string
+  contactReference?: string
+  phone?: string
+  wechatId?: string
   sourceCode: string
   partySize: number
   areaPreferenceCode?: string
   occasionCode?: ReservationOccasionCode
   occasionNote?: string
   scheduledAt: string
-  depositRequiredAmount: number
-  depositCurrency: string
+  depositRequiredAmount?: number
+  depositCurrency?: string
   salesEmployeeId?: string
   idempotencyKey: string
 }

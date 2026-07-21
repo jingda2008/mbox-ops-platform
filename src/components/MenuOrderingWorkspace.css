@@ -46,6 +46,21 @@
 .menu-submit-button { min-height: 48px; display: flex; align-items: center; justify-content: center; gap: 8px; border: 0; border-radius: 6px; background: var(--wechat-green); color: #fff; font-size: 15px; font-weight: 800; }
 .menu-submit-button:disabled { opacity: .42; }
 .menu-submit-hint { padding-top: 8px; color: var(--ink-soft); font-size: 10px; line-height: 1.5; text-align: center; }
+.menu-confirm-backdrop { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 18px; background: rgba(8, 10, 8, .72); }
+.menu-confirm-dialog { width: min(460px, 100%); max-height: min(720px, calc(100vh - 36px)); overflow: auto; border: 1px solid #d0d4cc; border-top: 4px solid var(--brand-yellow); border-radius: 7px; background: #fff; box-shadow: 0 24px 70px rgba(0, 0, 0, .34); }
+.menu-confirm-dialog > header { min-height: 82px; display: grid; grid-template-columns: 44px minmax(0, 1fr) 38px; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.menu-confirm-dialog > header > span { width: 40px; height: 40px; display: grid; place-items: center; border: 1px solid #d8c98f; border-radius: 50%; background: #fff8df; color: #6f5711; }
+.menu-confirm-dialog > header > span.is-warning { border-color: #e4a4a7; background: #fff0f0; color: var(--brand-red); }
+.menu-confirm-dialog > header small { color: var(--ink-soft); font-size: 9px; font-weight: 800; }
+.menu-confirm-dialog > header h2 { margin: 2px 0 0; font-size: 19px; }
+.menu-confirm-dialog > p { margin: 0; padding: 16px; color: var(--ink-soft); font-size: 13px; line-height: 1.7; }
+.menu-confirm-lines { max-height: 260px; overflow: auto; padding: 6px 16px; }
+.menu-confirm-lines > div { min-height: 46px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.menu-confirm-total { min-height: 58px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; background: #f1f2ed; }
+.menu-confirm-total strong { font-size: 22px; }
+.menu-confirm-error { margin: 0 16px 12px; padding: 10px 12px; border-left: 4px solid var(--brand-red); background: #fff0f0; color: #8e262c; font-size: 12px; line-height: 1.55; }
+.menu-confirm-dialog > footer { display: grid; grid-template-columns: 1fr 1.4fr; gap: 10px; padding: 14px 16px 16px; border-top: 1px solid var(--line); }
+.menu-confirm-dialog > footer button { min-height: 46px; justify-content: center; }
 @media (min-width: 761px) and (max-width: 1050px) {
   .menu-workspace-body { display: block; }
   .menu-catalog { grid-template-columns: 92px minmax(0, 1fr); }

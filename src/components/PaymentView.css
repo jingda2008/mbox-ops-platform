@@ -106,11 +106,14 @@
 .settlement-issue-fields input, .settlement-issue-fields select { width: 100%; height: 36px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 4px; background: #fff; }
 .settlement-form > .primary-button { width: fit-content; min-width: 180px; }
 .settlement-role-note { color: var(--ink-soft); font-size: 11px; }
+.settlement-date-selector { display: flex; align-items: end; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--line); background: #f8f8f5; }
+.settlement-date-selector label { width: min(220px, 100%); }
+.settlement-date-selector span { padding-bottom: 9px; color: var(--ink-soft); font-size: 11px; }
 .handover-review-panel { display: grid; grid-template-columns: minmax(220px, .7fr) minmax(260px, 1fr) auto; align-items: end; gap: 14px; padding: 14px 16px; border-top: 1px solid var(--line); background: #f1f7fa; }
 .handover-review-panel > div:first-child { display: grid; gap: 3px; }
 .handover-review-panel span { color: var(--ink-soft); font-size: 10px; }
 .handover-review-actions { display: flex; gap: 8px; }
-.business-day-close-form { display: grid; grid-template-columns: minmax(260px, 1fr) 180px auto; align-items: end; gap: 14px; padding: 14px 16px; border-top: 1px solid #bad8c5; background: #eef7f1; }
+.business-day-close-form { display: grid; grid-template-columns: 1fr; align-items: end; gap: 14px; padding: 14px 16px; border-top: 1px solid #bad8c5; background: #eef7f1; }
 .business-day-close-form > div:first-child { display: flex; align-items: flex-start; gap: 8px; color: #285d3d; font-size: 11px; line-height: 1.5; }
 .cash-confirmation-action { border-color: #bad8c5; background: #eef7f1; }
 .cash-confirmation-action > div { color: #285d3d; }
@@ -153,6 +156,8 @@
   .refund-request-form .icon-button { grid-column: 1; grid-row: 2; }
 }
 @media (max-width: 680px) {
+  .settlement-date-selector { align-items: stretch; flex-direction: column; }
+  .settlement-date-selector span { padding-bottom: 0; }
   .payment-view { gap: 12px; }
   .payment-workspace-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .payment-heading { align-items: flex-start; flex-direction: column; }

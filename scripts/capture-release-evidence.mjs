@@ -34,11 +34,26 @@ async function cloudEvidence() {
   ], true)
   if (!described.ok) return { configured: true, error: described.stderr || described.stdout }
   const document = JSON.parse(described.stdout)
-  const container = document.spec?.template?.spec?.containers?.[0] ?? {}
+  const servingTraffic = (document.status?.traffic ?? []).find((item) => item.percent === 100)
+  const servingRevision = servingTraffic?.revisionName ?? null
+  const revisionDescription = servingRevision
+    ? await command('gcloud', [
+        'run', 'revisions', 'describe', servingRevision,
+        '--project', project, '--region', region, '--format=json',
+      ], true)
+    : { ok: false, stdout: '', stderr: '100% serving revision was not found' }
+  const revisionDocument = revisionDescription.ok ? JSON.parse(revisionDescription.stdout) : null
+  const container = revisionDocument?.spec?.containers?.[0] ?? {}
+  const visibleEnvironment = new Set([
+    'MBOX_RUNTIME_MODE', 'MBOX_REPOSITORY', 'MBOX_ASSISTANT_PROVIDER', 'MBOX_GEMINI_MODEL',
+    'MBOX_VOICE_TRANSCRIPTION_PROVIDER', 'MBOX_RELEASE_SHA', 'MBOX_RELEASE_IMAGE_DIGEST',
+  ])
   const environment = Object.fromEntries(
     (container.env ?? []).map((item) => [
       item.name,
-      item.value ?? (item.valueFrom?.secretKeyRef ? `secret:${item.valueFrom.secretKeyRef.name}` : 'configured'),
+      item.valueFrom?.secretKeyRef
+        ? `secret:${item.valueFrom.secretKeyRef.name}`
+        : visibleEnvironment.has(item.name) ? item.value ?? 'configured' : 'configured',
     ]),
   )
   const publicUrl = document.status?.url
@@ -56,12 +71,13 @@ async function cloudEvidence() {
     project,
     service,
     region,
-    revision: document.status?.latestReadyRevisionName ?? null,
+    revision: servingRevision,
+    latestReadyRevision: document.status?.latestReadyRevisionName ?? null,
     image: container.image ?? null,
     publicUrl: publicUrl ?? null,
-    serviceAccount: document.spec?.template?.spec?.serviceAccountName ?? null,
-    cloudSqlInstances: document.spec?.template?.metadata?.annotations?.['run.googleapis.com/cloudsql-instances'] ?? null,
-    maxScale: document.spec?.template?.metadata?.annotations?.['autoscaling.knative.dev/maxScale'] ?? null,
+    serviceAccount: revisionDocument?.spec?.serviceAccountName ?? null,
+    cloudSqlInstances: revisionDocument?.metadata?.annotations?.['run.googleapis.com/cloudsql-instances'] ?? null,
+    maxScale: revisionDocument?.metadata?.annotations?.['autoscaling.knative.dev/maxScale'] ?? null,
     traffic: document.status?.traffic ?? [],
     environment,
     readiness,
@@ -81,7 +97,7 @@ const check = process.env.MBOX_EVIDENCE_SKIP_CHECK === '1'
 const audit = await command('npm', ['audit', '--omit=dev', '--json'], true)
 const combinedCheckOutput = `${check.stdout}\n${check.stderr}`
 const evidence = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   generatedAt,
   git: {
     commit: commit.stdout,
@@ -104,6 +120,21 @@ const evidence = {
   cloud: await cloudEvidence(),
 }
 
+evidence.provenance = {
+  claimedCommit: evidence.cloud.environment?.MBOX_RELEASE_SHA ?? null,
+  claimedImageDigest: evidence.cloud.environment?.MBOX_RELEASE_IMAGE_DIGEST ?? null,
+  commitMatches: evidence.cloud.configured
+    ? evidence.cloud.environment?.MBOX_RELEASE_SHA === evidence.git.commit
+    : null,
+  imagePinnedByDigest: evidence.cloud.configured
+    ? /@sha256:[0-9a-f]{64}$/.test(evidence.cloud.image ?? '')
+    : null,
+  readinessMatchesClaim: evidence.cloud.configured
+    ? evidence.cloud.readiness?.body?.releaseSha === evidence.cloud.environment?.MBOX_RELEASE_SHA
+      && evidence.cloud.readiness?.body?.releaseImageDigest === evidence.cloud.environment?.MBOX_RELEASE_IMAGE_DIGEST
+    : null,
+}
+
 await mkdir('.runtime', { recursive: true })
 await writeFile('.runtime/release-evidence.json', `${JSON.stringify(evidence, null, 2)}\n`)
 const cloud = evidence.cloud.configured
@@ -121,6 +152,9 @@ const markdown = `# M-Box 自动发布证据
 - 测试：${evidence.verification.testFilesPassed ?? 'unknown'}个文件，${evidence.verification.testsPassed ?? 'unknown'}项
 - 依赖审计：${evidence.dependencyAudit.commandSucceeded ? `${evidence.dependencyAudit.result?.metadata?.vulnerabilities?.total ?? 'unknown'}项漏洞` : `未取得结果：${evidence.dependencyAudit.error}`}
 - 云端：${cloud}
+${evidence.cloud.configured ? `- 发布来源一致：${evidence.provenance.commitMatches ? '是' : '否'}
+- 镜像摘要固定：${evidence.provenance.imagePinnedByDigest ? '是' : '否'}
+- 就绪信息与发布声明一致：${evidence.provenance.readinessMatchesClaim ? '是' : '否'}` : ''}
 ${evidence.cloud.configured ? `- 云端就绪：HTTP ${evidence.cloud.readiness?.status ?? 'unknown'}，应用状态版本 ${evidence.cloud.readiness?.body?.revision ?? 'unknown'}
 - 运行账号：\`${evidence.cloud.serviceAccount ?? 'unknown'}\`
 - Cloud SQL：\`${evidence.cloud.cloudSqlInstances ?? 'unknown'}\`

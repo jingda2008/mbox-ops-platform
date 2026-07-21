@@ -171,6 +171,7 @@
   border-top: 1px solid var(--line);
   background: var(--surface);
 }
+.routing-validation { color: var(--danger); font-weight: 750; }
 
 @media (max-width: 1180px) {
   .inline-create.shift-create { grid-template-columns: repeat(3, minmax(150px, 1fr)); }

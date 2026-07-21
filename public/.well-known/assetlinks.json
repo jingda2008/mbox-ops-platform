@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.superhigh.mbox.ops",
+      "sha256_cert_fingerprints": [
+        "36:AF:57:C1:00:9D:E0:A1:ED:19:AB:DF:6A:62:86:B3:A9:BA:47:58:63:EF:90:FB:92:41:B0:F4:8F:5C:C7:A3"
+      ]
+    }
+  }
+]

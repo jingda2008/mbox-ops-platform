@@ -15,6 +15,29 @@ interface MetricState {
   durationMsTotal: number
 }
 
+const HASHED_ASSET_PATH = /^\/assets\/.*-(?=[A-Za-z0-9_-]{8,}\.[^.]+$)(?=[A-Za-z0-9_-]*[A-Z0-9_])[A-Za-z0-9_-]{8,}\.[^.]+$/
+const UPDATEABLE_MEDIA_PATH = /^\/(?:menu|brand|icons)(?:\/|$)/
+
+function defaultCacheControl(request: FastifyRequest) {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return 'no-store'
+
+  const pathname = request.url.split('?', 1)[0] ?? '/'
+  if (/^\/api(?:\/|$)/.test(pathname)) return 'no-store'
+  if (pathname === '/' || pathname.endsWith('.html') || pathname === '/sw.js') {
+    return 'no-cache'
+  }
+  if (HASHED_ASSET_PATH.test(pathname)) {
+    return 'public, max-age=31536000, immutable'
+  }
+  if (UPDATEABLE_MEDIA_PATH.test(pathname) || pathname.startsWith('/assets/')) {
+    return 'public, max-age=3600, stale-while-revalidate=86400'
+  }
+  if (pathname === '/manifest.webmanifest' || pathname === '/favicon.svg') {
+    return 'public, max-age=300, stale-while-revalidate=3600'
+  }
+  return 'no-store'
+}
+
 function authenticateMetrics(request: FastifyRequest, reply: FastifyReply, options: ObservabilityOptions) {
   if (options.runtimeMode === 'local' || options.runtimeMode === 'test') return true
   const supplied = request.headers.authorization
@@ -48,9 +71,11 @@ function renderPrometheus(metrics: MetricState) {
 export async function registerObservability(app: FastifyInstance, options: ObservabilityOptions) {
   const metrics: MetricState = { startedAt: Date.now(), requests: 0, errors: 0, inFlight: 0, durationMsTotal: 0 }
 
-  app.addHook('onRequest', async (request) => {
+  app.addHook('onRequest', async (request, reply) => {
     metrics.inFlight += 1
     request.startTime = performance.now()
+    request.defaultCacheControl = defaultCacheControl(request)
+    void reply.header('cache-control', request.defaultCacheControl)
   })
   app.addHook('onResponse', async (request, reply) => {
     metrics.inFlight = Math.max(0, metrics.inFlight - 1)
@@ -71,7 +96,14 @@ export async function registerObservability(app: FastifyInstance, options: Obser
     if (options.runtimeMode === 'production') {
       void reply.header('strict-transport-security', 'max-age=31536000; includeSubDomains')
     }
-    void reply.header('cache-control', 'no-store')
+    const currentCacheControl = reply.getHeader('cache-control')
+    // fastify-static emits this framework default after onRequest; normalize only that value.
+    // Every route-specific policy (for example private bootstrap revalidation) remains authoritative.
+    if (!reply.hasHeader('cache-control') || currentCacheControl === 'public, max-age=0') {
+      void reply.header('cache-control', _request.defaultCacheControl)
+    } else if (reply.statusCode >= 400 && currentCacheControl === _request.defaultCacheControl) {
+      void reply.header('cache-control', 'no-store')
+    }
     return payload
   })
 
@@ -93,5 +125,6 @@ export async function registerObservability(app: FastifyInstance, options: Obser
 declare module 'fastify' {
   interface FastifyRequest {
     startTime: number
+    defaultCacheControl: string
   }
 }

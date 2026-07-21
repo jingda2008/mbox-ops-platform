@@ -9,6 +9,10 @@ export interface RuntimeRepositoryHealth {
   ready: boolean
   repository: string
   revision: number | null
+  projectionReady?: boolean
+  projectionRevision?: number | null
+  projectionCountsMatch?: boolean
+  projectionError?: string
 }
 
 export interface RuntimeRepository {
@@ -66,6 +70,8 @@ export class JsonRepository {
         orderDomain: loaded.orderDomain ?? seed.orderDomain,
         paymentDomain: loaded.paymentDomain ?? seed.paymentDomain,
         awaitingOrderIntents: loaded.awaitingOrderIntents ?? seed.awaitingOrderIntents,
+        sopExecutions: loaded.sopExecutions ?? seed.sopExecutions,
+        sopActionRecords: loaded.sopActionRecords ?? seed.sopActionRecords,
         members: loaded.members ?? seed.members,
         benefitTemplates: loaded.benefitTemplates ?? seed.benefitTemplates,
         benefitGrantPolicies: loaded.benefitGrantPolicies ?? seed.benefitGrantPolicies,
@@ -88,6 +94,7 @@ export class JsonRepository {
           proactiveOrderCare: loaded.config?.proactiveOrderCare ?? seed.config.proactiveOrderCare,
           guestServiceLimits: loaded.config?.guestServiceLimits ?? seed.config.guestServiceLimits,
           communityBrand: loaded.config?.communityBrand ?? seed.config.communityBrand,
+          sopRules: loaded.config?.sopRules ?? seed.config.sopRules,
         },
         configVersions: migrateConfigVersions(loaded, seed),
         draftConfig: loaded.draftConfig
@@ -96,6 +103,7 @@ export class JsonRepository {
               proactiveOrderCare: loaded.draftConfig.proactiveOrderCare ?? seed.config.proactiveOrderCare,
               guestServiceLimits: loaded.draftConfig.guestServiceLimits ?? seed.config.guestServiceLimits,
               communityBrand: loaded.draftConfig.communityBrand ?? seed.config.communityBrand,
+              sopRules: loaded.draftConfig.sopRules ?? seed.config.sopRules,
             }
           : null,
       })

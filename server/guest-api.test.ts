@@ -5,7 +5,13 @@ import type { RuntimeMode } from '../src/shared/auth-contracts.js'
 import type { GuestSessionResponse } from '../src/shared/guest-contracts.js'
 import { registerGuestRoutes } from './guest-api.js'
 import { JsonRepository } from './repository.js'
-import { requireGuestSession, signStaticTableQrToken, verifyTableAccessToken } from './table-access.js'
+import {
+  requireGuestSession,
+  signGuestSessionToken,
+  signStaticTableQrToken,
+  TableAccessError,
+  verifyTableAccessToken,
+} from './table-access.js'
 import { transferOpenTableSession } from './table-session-api.js'
 import { createPaymentIntent } from './payment-domain.js'
 import { applyTaskAction, createServiceTask } from './domain.js'
@@ -14,7 +20,12 @@ import { MemoryGuestInsightsStore } from './guest-insights.js'
 const secret = 'q'.repeat(32)
 const sessionTtlMs = 5 * 60_000
 
-async function fixture(runtimeMode: RuntimeMode = 'test', allowPaymentSimulation = false, ttlMs: number | null = sessionTtlMs) {
+async function fixture(
+  runtimeMode: RuntimeMode = 'test',
+  allowPaymentSimulation = false,
+  ttlMs: number | null = sessionTtlMs,
+  previousSecret?: string,
+) {
   let now = Date.now()
   const repository = new JsonRepository(`/tmp/mbox-guest-${crypto.randomUUID()}.json`)
   await repository.init()
@@ -23,17 +34,24 @@ async function fixture(runtimeMode: RuntimeMode = 'test', allowPaymentSimulation
   await guestInsights.init()
   registerGuestRoutes(app, repository, {
     secret,
+    previousSecret,
     runtimeMode,
     allowPaymentSimulation,
     ...(ttlMs === null ? {} : { guestSessionTtlMs: ttlMs }),
     now: () => now,
     guestInsights,
   })
+  app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof TableAccessError) {
+      return reply.status(error.statusCode).send({ code: error.code, message: error.message, details: error.details })
+    }
+    return reply.status(500).send({ message: error.message })
+  })
   return { app, repository, guestInsights, now: () => now, setNow: (value: number) => { now = value } }
 }
 
-function staticQr(now: number, storeId = 'mbox-lujiazui', tableCode = 'L01', tokenVersion = 1) {
-  return signStaticTableQrToken({ storeId, tableCode, tokenVersion, issuedAt: now }, secret)
+function staticQr(now: number, storeId = 'mbox-lujiazui', tableCode = 'L01', tokenVersion = 1, signingSecret = secret) {
+  return signStaticTableQrToken({ storeId, tableCode, tokenVersion, issuedAt: now }, signingSecret)
 }
 
 function nextDate(date: string) {
@@ -110,6 +128,25 @@ describe('guest table API', () => {
     await closeFixture(app, repository)
   })
 
+  it('uses the current Beijing business date for the guest lineup even when the admin day is stale', async () => {
+    const { app, repository } = await fixture()
+    const initial = (await app.inject({ method: 'GET', url: '/api/guest/session?table=L01' })).json() as GuestSessionResponse
+    const todayBusinessDate = initial.store.businessDate
+    await repository.mutate((state) => {
+      state.store.businessDate = nextDate(todayBusinessDate)
+      state.songState.businessDate = state.store.businessDate
+      state.revision += 1
+    })
+
+    const response = await app.inject({ method: 'GET', url: '/api/guest/session?table=L01' })
+    const body = response.json() as GuestSessionResponse
+
+    expect(response.statusCode).toBe(200)
+    expect(body.store.businessDate).toBe(todayBusinessDate)
+    expect(body.stageSchedule.map((appearance) => appearance.appearanceId)).toEqual(initial.stageSchedule.map((appearance) => appearance.appearanceId))
+    await closeFixture(app, repository)
+  })
+
   it('only exposes singers and song offers from the current business-date schedule', async () => {
     const { app, repository } = await fixture()
     await repository.mutate((state) => {
@@ -163,20 +200,34 @@ describe('guest table API', () => {
 
   it('keeps the singer repertoire visible while accurately marking the reservation window', async () => {
     const { app, repository, setNow } = await fixture()
-    const state = await repository.read()
-    const performance = state.songState.performanceSessions.find((item) => item.businessDate === state.store.businessDate)!
-    const appearance = performance.appearances[0]!
-    const beforeOpenTime = Date.parse(appearance.requestOpensAt) - 60_000
+    let appearanceId = ''
+    let requestOpensAt = ''
+    await repository.mutate((state) => {
+      const performance = state.songState.performanceSessions.find((item) => item.businessDate === state.store.businessDate)!
+      const appearance = performance.appearances[0]!
+      performance.startsAt = new Date(`${state.store.businessDate}T12:00:00+08:00`).toISOString()
+      performance.endsAt = new Date(`${state.store.businessDate}T21:15:00+08:00`).toISOString()
+      performance.status = 'scheduled'
+      appearance.startsAt = new Date(`${state.store.businessDate}T20:30:00+08:00`).toISOString()
+      appearance.endsAt = new Date(`${state.store.businessDate}T21:15:00+08:00`).toISOString()
+      appearance.requestOpensAt = new Date(`${state.store.businessDate}T12:00:00+08:00`).toISOString()
+      appearance.requestClosesAt = appearance.endsAt
+      appearance.advanceBookingEnabled = true
+      appearanceId = appearance.id
+      requestOpensAt = appearance.requestOpensAt
+      state.revision += 1
+    })
+    const beforeOpenTime = Date.parse(requestOpensAt) - 60_000
     setNow(beforeOpenTime)
 
     const beforeOpen = (await app.inject({ method: 'GET', url: '/api/guest/session?table=L01' })).json() as GuestSessionResponse
-    expect(beforeOpen.stageSchedule.map((item) => item.appearanceId)).toContain(appearance.id)
-    expect(beforeOpen.songOffers.find((item) => item.appearanceId === appearance.id)).toMatchObject({ requestAvailable: false, requestMode: null })
+    expect(beforeOpen.stageSchedule.map((item) => item.appearanceId)).toContain(appearanceId)
+    expect(beforeOpen.songOffers.find((item) => item.appearanceId === appearanceId)).toMatchObject({ requestAvailable: false, requestMode: null })
     expect(beforeOpen.serverNow).toBe(new Date(beforeOpenTime).toISOString())
 
-    setNow(Date.parse(appearance.requestOpensAt))
+    setNow(Date.parse(requestOpensAt))
     const opened = (await app.inject({ method: 'GET', url: '/api/guest/session?table=L01' })).json() as GuestSessionResponse
-    expect(opened.songOffers.find((item) => item.appearanceId === appearance.id)).toMatchObject({ requestAvailable: true })
+    expect(opened.songOffers.find((item) => item.appearanceId === appearanceId)).toMatchObject({ requestAvailable: true })
     await closeFixture(app, repository)
   })
 
@@ -290,6 +341,36 @@ describe('guest table API', () => {
     await closeFixture(app, repository)
   })
 
+  it('accepts a previous static QR key only for migration and rotates the guest session to the current key', async () => {
+    const previousSecret = 'p'.repeat(32)
+    const { app, repository, now } = await fixture('test', false, sessionTtlMs, previousSecret)
+    const { response, body } = await exchange(app, staticQr(now(), 'mbox-lujiazui', 'L01', 1, previousSecret))
+
+    expect(response.statusCode).toBe(200)
+    expect(requireGuestSession(verifyTableAccessToken(body.tableToken, secret, now()))).toMatchObject({
+      tableCode: 'L01',
+      tableSessionId: body.account.tableSessionId,
+    })
+    expect(() => verifyTableAccessToken(body.tableToken, previousSecret, now())).toThrow()
+
+    const previousGuestSession = signGuestSessionToken({
+      storeId: 'mbox-lujiazui',
+      tableCode: 'L01',
+      tableSessionId: body.account.tableSessionId,
+      tokenVersion: 1,
+      issuedAt: now(),
+      expiresAt: now() + sessionTtlMs,
+    }, previousSecret)
+    const rejected = await app.inject({
+      method: 'GET',
+      url: `/api/guest/session?token=${encodeURIComponent(previousGuestSession)}`,
+    })
+    expect(rejected.statusCode).toBe(401)
+    expect(rejected.json()).toMatchObject({ code: 'TABLE_QR_REQUIRED' })
+
+    await closeFixture(app, repository)
+  })
+
   it('keeps one anonymous guest identity across the visit and records meaningful behavior idempotently', async () => {
     const { app, repository, guestInsights, now } = await fixture()
     const first = await exchange(app, staticQr(now()))
@@ -349,7 +430,6 @@ describe('guest table API', () => {
     expect(guestInsights.events.filter((event) => event.eventType === 'session_started')).toHaveLength(1)
     await closeFixture(app, repository)
   })
-
   it('freezes a previous-business-day table visit without exposing or accepting payment for its orders', async () => {
     const { app, repository, now } = await fixture()
     const current = (await exchange(app, staticQr(now()))).body
@@ -802,6 +882,8 @@ describe('guest table API', () => {
     })
     const state = await repository.read()
     expect(state.orderDomain.kdsTasks).toHaveLength(2)
+    expect(state.commercialOps?.printJobs).toHaveLength(2)
+    expect(state.commercialOps?.printJobs.map((job) => job.routeId).toSorted()).toEqual(['route-bar', 'route-kitchen'])
     expect(state.paymentDomain.paymentIntents[0]).toMatchObject({ status: 'succeeded', orderIds: [orderResponse.json().id] })
     await closeFixture(app, repository)
   })
@@ -822,6 +904,40 @@ describe('guest table API', () => {
     expect(conflict.statusCode).toBe(409)
     expect(conflict.json().code).toBe('GUEST_ORDER_IDEMPOTENCY_CONFLICT')
     expect((await repository.read()).orderDomain.orders).toHaveLength(1)
+    await closeFixture(app, repository)
+  })
+
+  it('requires an explicit second confirmation for a repeated cart inside the safety window', async () => {
+    const { app, repository, now } = await fixture()
+    const session = (await exchange(app, staticQr(now()))).body
+    const first = await app.inject({
+      method: 'POST', url: '/api/guest/orders',
+      payload: {
+        tableToken: session.tableToken,
+        items: [{ productId: 'product-beer', quantity: 1 }],
+        idempotencyKey: 'guest-duplicate-first-0001',
+      },
+    })
+    expect(first.statusCode).toBe(201)
+
+    const blockedPayload = {
+      tableToken: session.tableToken,
+      items: [{ productId: 'product-beer', quantity: 1 }],
+      idempotencyKey: 'guest-duplicate-second-0001',
+    }
+    const blocked = await app.inject({ method: 'POST', url: '/api/guest/orders', payload: blockedPayload })
+    expect(blocked.statusCode).toBe(409)
+    expect(blocked.json()).toMatchObject({
+      code: 'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED',
+      details: { conflictingOrderId: first.json().id },
+    })
+
+    const confirmed = await app.inject({
+      method: 'POST', url: '/api/guest/orders',
+      payload: { ...blockedPayload, confirmedDuplicateOrderId: first.json().id },
+    })
+    expect(confirmed.statusCode, confirmed.body).toBe(201)
+    expect((await repository.read()).orderDomain.orders).toHaveLength(2)
     await closeFixture(app, repository)
   })
 

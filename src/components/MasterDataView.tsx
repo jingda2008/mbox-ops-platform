@@ -70,6 +70,7 @@ const permissionLabels: Record<StaffPermissionId, string> = {
   'benefit.grant': '发放权益', 'benefit.approve': '审批权益', 'song.view': '查看演出',
   'benefit.manage': '管理权益规则',
   'song.manage': '管理点歌',
+  'hardware.view': '查看设备', 'hardware.operate': '执行设备测试', 'hardware.manage': '管理设备配置',
   'store_import.apply': '应用整店导入',
 }
 
@@ -298,14 +299,13 @@ function RoutingSection({ data, run }: SectionProps) {
     const id = stationId.trim()
     const name = stationName.trim()
     if (!id || !name || workstations.some((station) => station.id === id)) return
-    const productionRoleIds = roles.filter((role) => ['specialist', 'supervisor', 'manager'].includes(role.id)).map((role) => role.id)
     const deliveryRoleIds = roles.filter((role) => ['server', 'backup', 'supervisor', 'manager'].includes(role.id)).map((role) => role.id)
     setWorkstations([...workstations, {
       id,
       name,
       kind: 'hybrid',
       enabled: true,
-      productionRoleIds: productionRoleIds.length > 0 ? productionRoleIds : roles.slice(0, 1).map((role) => role.id),
+      productionRoleIds: [],
       deliveryRoleIds,
       requiredSkillIds: [],
       productionSlaSeconds: 300,
@@ -328,6 +328,10 @@ function RoutingSection({ data, run }: SectionProps) {
   function updateWorkstation(id: string, update: Partial<WorkstationConfig>) {
     setWorkstations(workstations.map((station) => station.id === id ? { ...station, ...update } : station))
   }
+
+  const incompleteWorkstations = workstations.filter((station) => (
+    station.enabled && (station.productionRoleIds.length === 0 || station.deliveryRoleIds.length === 0)
+  ))
 
   return (
     <div className="master-section routing-section">
@@ -412,8 +416,12 @@ function RoutingSection({ data, run }: SectionProps) {
         </div>
       </div>
       <div className="routing-savebar">
-        <span>{data.draftConfig ? '当前编辑未发布配置草稿' : `基于已发布配置 V${data.config.version}`}</span>
-        <button className="primary-button" onClick={() => void run(() => saveConfigDraft(configDraftPayload(source, roles, skills, workstations)), '岗位、工作站与技能已保存到配置草稿')}><Save size={17} />保存配置草稿</button>
+        <span className={incompleteWorkstations.length > 0 ? 'routing-validation' : undefined}>
+          {incompleteWorkstations.length > 0
+            ? `${incompleteWorkstations.map((station) => station.name).join('、')}需要明确选择出品岗位和取送岗位`
+            : data.draftConfig ? '当前编辑未发布配置草稿' : `基于已发布配置 V${data.config.version}`}
+        </span>
+        <button className="primary-button" disabled={incompleteWorkstations.length > 0} onClick={() => void run(() => saveConfigDraft(configDraftPayload(source, roles, skills, workstations)), '岗位、工作站与技能已保存到配置草稿')}><Save size={17} />保存配置草稿</button>
       </div>
     </div>
   )

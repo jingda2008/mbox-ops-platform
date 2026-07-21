@@ -14,6 +14,7 @@ import {
 } from '../src/shared/guest-contracts.js'
 import { guestBehaviorEventSchema, type GuestBehaviorEventType, type GuestBehaviorValue } from '../src/shared/guest-insight-contracts.js'
 import type { RuntimeState, ServiceTask, Table } from '../src/shared/contracts.js'
+import { chinaBusinessDateKey } from '../src/shared/china-time.js'
 import type { PaymentIntent } from '../src/shared/payment-contracts.js'
 import type { Order } from '../src/shared/order-contracts.js'
 import { productAvailability } from '../src/shared/product-availability.js'
@@ -22,6 +23,7 @@ import { applyTaskAction, createServiceTask } from './domain.js'
 import type { RuntimeRepository } from './repository.js'
 import {
   requireGuestSession,
+  requireStaticTableQr,
   signGuestSessionToken,
   TableAccessError,
   verifyTableAccessToken,
@@ -40,6 +42,12 @@ import {
 } from './payment-provider.js'
 import { tableSessionBusinessDate, tableSessionRequiresHandover } from './table-sessions.js'
 import { MemoryGuestInsightsStore, type GuestInsightsStore } from './guest-insights.js'
+import {
+  commercialOpsFor,
+  queuePrintJobsForOrder,
+  recentGuestOrderCount,
+  recentMatchingGuestOrder,
+} from './commercial-ops.js'
 
 const DEFAULT_GUEST_SESSION_TTL_MS = 60 * 60_000
 
@@ -70,12 +78,29 @@ function publicCheckoutResult(input: {
 
 interface GuestApiOptions {
   secret: string
+  previousSecret?: string
   runtimeMode: RuntimeMode
   allowPaymentSimulation?: boolean
   guestSessionTtlMs?: number
   now?: () => number
   providerResolver?: PaymentProviderResolver
   guestInsights?: GuestInsightsStore
+}
+
+function verifyGuestEntryToken(token: string, options: GuestApiOptions, now: number) {
+  try {
+    return verifyTableAccessToken(token, options.secret, now)
+  } catch (currentSecretError) {
+    if (!options.previousSecret) throw currentSecretError
+    try {
+      return requireStaticTableQr(verifyTableAccessToken(token, options.previousSecret, now))
+    } catch (previousSecretError) {
+      if (previousSecretError instanceof TableAccessError && previousSecretError.code === 'TABLE_QR_REQUIRED') {
+        throw previousSecretError
+      }
+      throw currentSecretError
+    }
+  }
 }
 
 const guestIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -253,6 +278,7 @@ function sessionView(
 ): GuestSessionResponse {
   const primary = state.employees.find((employee) => employee.id === table.primaryEmployeeId)
   const sessionBusinessDate = tableSessionBusinessDate(state, tableSession)
+  const scheduleBusinessDate = chinaBusinessDateKey(nowMs)
   const frozen = tableSessionRequiresHandover(state, tableSession, nowMs, enforceMaximumOpenHours)
   const orders = frozen ? [] : state.orderDomain.orders.filter((order) => order.tableSessionId === tableSession.id)
   const ledgerEntries = frozen ? [] : state.orderDomain.tableLedgerEntries.filter((entry) => entry.tableSessionId === tableSession.id)
@@ -260,7 +286,7 @@ function sessionView(
     .filter((order) => order.status !== 'draft')
     .reduce((sum, order) => sum + order.amounts.payableAmount, 0)
   const todaysPerformances = state.songState.performanceSessions
-    .filter((performance) => performance.businessDate === state.store.businessDate)
+    .filter((performance) => performance.businessDate === scheduleBusinessDate)
     .filter((performance) => performance.status === 'scheduled' || performance.status === 'live')
   const occurredAt = new Date(nowMs).toISOString()
   const songOffers = todaysPerformances
@@ -326,7 +352,7 @@ function sessionView(
     }))
     .sort((left, right) => Date.parse(left.startsAt) - Date.parse(right.startsAt))
   return {
-    store: { id: state.store.id, name: state.store.name, businessDate: state.store.businessDate, timezone: state.store.timezone },
+    store: { id: state.store.id, name: state.store.name, businessDate: scheduleBusinessDate, timezone: state.store.timezone },
     communityBrand: state.config.communityBrand.enabled && state.config.communityBrand.guestOrderVisible
       ? {
           name: state.config.communityBrand.name,
@@ -343,6 +369,7 @@ function sessionView(
       occupied: table.status === 'occupied',
     },
     primaryServiceName: primary?.displayName ?? null,
+    orderSafety: structuredClone(commercialOpsFor(state).config.orderSafety),
     serviceTypes: state.config.serviceTypes
       .filter((serviceType) => serviceType.enabled && serviceType.guestVisible !== false)
       .map(({ id, code, name, icon, priority }) => ({ id, code, name, icon, priority })),
@@ -424,7 +451,7 @@ function exchangeAccessFromRequest(
 ) {
   const now = options.now?.() ?? Date.now()
   if (token) {
-    const claims = verifyTableAccessToken(token, options.secret, now)
+    const claims = verifyGuestEntryToken(token, options, now)
     const table = resolveTable(state, claims)
     const tableSession = claims.tokenType === 'guest_session'
       ? resolveGuestSession(state, claims).tableSession
@@ -604,6 +631,20 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
       if (new Set(input.items.map((item) => item.productId)).size !== input.items.length) {
         throw new TableAccessError('购物车里同一款出现了两次，我们没敢替您重复下单；合并数量后再试一次就好。', 'GUEST_CART_DUPLICATE_PRODUCT', 400)
       }
+      const safety = commercialOpsFor(state).config.orderSafety
+      const requestTime = options.now?.() ?? Date.now()
+      if (safety.enabled && recentGuestOrderCount(state, tableSession.id, requestTime) >= safety.maxOrdersPerMinute) {
+        throw new TableAccessError('这一桌刚刚下单有点快，我们先停一下核对，避免重复上单。请查看订单记录，或呼叫服务伙伴帮您确认。', 'GUEST_ORDER_RATE_LIMITED', 429)
+      }
+      const matchingOrder = recentMatchingGuestOrder(state, tableSession.id, input.items, requestTime)
+      if (matchingOrder && input.confirmedDuplicateOrderId !== matchingOrder.id) {
+        throw new TableAccessError(
+          '刚刚已经有一笔相同订单。请先看看订单记录；确实要加同样商品时，再点“确认继续加单”。',
+          'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED',
+          409,
+          { conflictingOrderId: matchingOrder.id, createdAt: matchingOrder.createdAt },
+        )
+      }
       const products = input.items.map((item) => {
         const product = state.products.find((candidate) => candidate.id === item.productId && candidate.enabled)
         if (!product) throw new TableAccessError('购物车里有一款刚刚下架了，抱歉让您空欢喜；换一个试试，我们也可以帮您推荐。', 'PRODUCT_NOT_AVAILABLE', 409)
@@ -775,6 +816,7 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
             occurredAt: now,
           })
           completeAwaitingOrderOnOrder(state, table.id, order.id, `guest-${table.code}`, new Date(now))
+          queuePrintJobsForOrder(state, submittedOrder, now)
         }
       }
       state.auditEntries.push({
@@ -846,7 +888,7 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
         action: 'guest.provider_payment_order_created.v1',
         objectType: 'paymentIntent',
         objectId: result.id,
-        occurredAt: new Date().toISOString(),
+        occurredAt: new Date(options.now?.() ?? Date.now()).toISOString(),
         details: { channel: result.channel, presentation: 'qr' },
       })
       state.revision += 1
@@ -907,7 +949,7 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
         songId: input.songId,
         requestedBy: `guest-${table.code}`,
         customerNote: input.customerNote,
-        occurredAt: new Date().toISOString(),
+        occurredAt: new Date(options.now?.() ?? Date.now()).toISOString(),
         idempotencyKey: input.idempotencyKey,
       })
       if (state.songState.idempotencyRecords.length !== idempotencyCount) state.revision += 1

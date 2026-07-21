@@ -196,6 +196,50 @@ describe('stock count variance approval', () => {
     expect(domain.stockCounts).toHaveLength(0)
   })
 
+  it('applies a configured small operating loss without second-person approval but keeps an audit trail', () => {
+    const domain = state()
+    receiveInventory(domain, receipt({ quantity: 100 }))
+    const count = submitStockCount(domain, {
+      countId: 'count-cocktail-loss',
+      productId: 'product-whisky',
+      unitCode: 'bottle',
+      countedQuantity: 94,
+      countedBy: 'counter-1',
+      acceptedLossBps: 800,
+      automaticAdjustmentMovementId: 'movement-cocktail-loss',
+      businessDate: BUSINESS_DATE,
+      occurredAt: T1,
+      idempotencyKey: 'stock-count-cocktail-loss-0001',
+    })
+
+    expect(count).toMatchObject({
+      status: 'applied', differenceQuantity: -6, approvalId: null,
+      confirmedBy: 'counter-1', adjustmentMovementId: 'movement-cocktail-loss',
+    })
+    expect(getInventoryBalance(domain, 'product-whisky')).toBe(94)
+    expect(domain.auditEvents.at(-1)).toMatchObject({
+      action: 'inventory.stock_count.operating_loss_applied.v1',
+      reason: 'accepted_operating_loss',
+    })
+  })
+
+  it('still requires second-person approval when operating loss exceeds tolerance', () => {
+    const domain = state()
+    receiveInventory(domain, receipt({ quantity: 100 }))
+    expect(() => submitStockCount(domain, {
+      countId: 'count-cocktail-loss-too-large',
+      productId: 'product-whisky',
+      unitCode: 'bottle',
+      countedQuantity: 90,
+      countedBy: 'counter-1',
+      acceptedLossBps: 800,
+      automaticAdjustmentMovementId: 'movement-cocktail-loss-too-large',
+      businessDate: BUSINESS_DATE,
+      occurredAt: T1,
+      idempotencyKey: 'stock-count-cocktail-loss-too-large-0001',
+    })).toThrow('盘点差异必须关联审批')
+  })
+
   it('applies a variance only after confirmation by a different operator', () => {
     const domain = state()
     receiveInventory(domain, receipt())

@@ -1,3 +1,5 @@
+import type { AssistantToolCall } from '../shared/assistant-tool-contracts'
+
 export const MAX_VOICE_COMMAND_STEPS = 5
 
 export type VoiceCommandStepStatus = 'pending' | 'running' | 'completed' | 'blocked'
@@ -10,6 +12,7 @@ export type VoiceCommandStepAction =
   | 'set_party_size'
   | 'assign_sales'
   | 'open_table_now'
+  | 'execute_server_tool'
   | 'execute_command'
 
 export type VoiceCommandEntityValue = string | number | boolean
@@ -25,6 +28,8 @@ export interface VoiceCommandPlanStep {
   risk: VoiceCommandRisk
   riskTerms: readonly string[]
   blockedReason?: string
+  toolCall?: AssistantToolCall
+  executionId?: string
 }
 
 /**
@@ -40,7 +45,7 @@ export interface VoiceCommandPlan {
   omittedStepCount: number
   executionMode: 'sequential-ui'
   serverTransactionAtomic: false
-  modelUsed: false
+  modelUsed: boolean
 }
 
 export interface VoiceCommandModelPlanningRequest {
@@ -51,6 +56,7 @@ export interface VoiceCommandModelPlanningRequest {
 export interface VoiceCommandModelSuggestedStep {
   label: string
   command: string
+  toolCall?: AssistantToolCall
   action?: string
   entities?: Readonly<Record<string, VoiceCommandEntityValue>>
 }
@@ -66,15 +72,13 @@ export interface VoiceCommandModelAdapter {
 export interface DeterministicVoiceCommandPlannerOptions {
   modelEnabled?: boolean
   modelAdapter?: VoiceCommandModelAdapter
-  defaultOpenTablePartySize?: number
   defaultOpenTableSalesOwner?: string
 }
 
 const splitPattern = /[，,；;。！？!?\n]+|\s*(?:然后|接着|并且|同时|再(?!次))\s*/u
 const terminalPunctuationPattern = /[，,；;。！？!?]+$/u
-const compactOpenTablePattern = /^(?:请(?:帮我)?|帮我)?\s*([a-z]\d{1,4})\s*([0-9]{1,3}|[零〇一二两三四五六七八九十百]{1,6})\s*(?:位|人)(?:客人)?\s*(?:立即)?开台\s*(?:并(?:且)?|然后|接着|再|同时)\s*(?:销售)?归属(?:给|选择)?\s*([a-z][a-z0-9._'-]*(?:\s+[a-z][a-z0-9._'-]*)*|[\u3400-\u9fff·]{1,20})$/iu
-const compactOpenTableWithoutSalesPattern = /^(?:请(?:帮我)?|帮我)?\s*([a-z]\d{1,4})\s*([0-9]{1,3}|[零〇一二两三四五六七八九十百]{1,6})\s*(?:位|人)(?:客人)?\s*(?:立即)?开台$/iu
-const compactOpenTableWithDefaultsPattern = /^(?:请(?:帮我)?|帮我)?\s*([a-z]\d{1,4})\s*(?:立即)?开台$/iu
+const compactOpenTablePattern = /^(?:请(?:帮我)?|帮我)?\s*([a-z]\d{1,4})\s*(?:来了|到店|入座)?\s*([0-9]{1,3}|[零〇一二两三四五六七八九十百]{1,6})\s*(?:位|人)(?:客人)?\s*[，,]?\s*(?:请(?:帮我)?|帮我)?\s*(?:立即)?开台\s*(?:并(?:且)?|然后|接着|再|同时)\s*(?:销售)?归属(?:给|选择)?\s*([a-z][a-z0-9._'-]*(?:\s+[a-z][a-z0-9._'-]*)*|[\u3400-\u9fff·]{1,20})$/iu
+const compactOpenTableWithoutSalesPattern = /^(?:请(?:帮我)?|帮我)?\s*([a-z]\d{1,4})\s*(?:来了|到店|入座)?\s*([0-9]{1,3}|[零〇一二两三四五六七八九十百]{1,6})\s*(?:位|人)(?:客人)?\s*[，,]?\s*(?:请(?:帮我)?|帮我)?\s*(?:立即)?开台$/iu
 
 const highRiskTerms = [
   '支付',
@@ -133,7 +137,6 @@ interface CompactOpenTableCommand {
 }
 
 interface OpenTableDefaults {
-  partySize?: number
   salesOwner?: string
 }
 
@@ -197,23 +200,6 @@ function parseCompactOpenTableCommand(
     }
   }
 
-  const withDefaultsMatch = normalized.match(compactOpenTableWithDefaultsPattern)
-  const defaultPartySize = defaults.partySize
-  if (
-    withDefaultsMatch
-    && Number.isInteger(defaultPartySize)
-    && defaultPartySize !== undefined
-    && defaultPartySize >= 1
-    && defaultPartySize <= 999
-    && defaults.salesOwner?.trim()
-  ) {
-    return {
-      tableCode: withDefaultsMatch[1].toUpperCase(),
-      partySize: defaultPartySize,
-      salesOwner: defaults.salesOwner.trim(),
-    }
-  }
-
   return null
 }
 
@@ -232,6 +218,7 @@ function createStep(
   label: string,
   command: string,
   entities: Readonly<Record<string, VoiceCommandEntityValue>> = {},
+  toolCall?: AssistantToolCall,
 ): VoiceCommandPlanStep {
   const riskTerms = matchingHighRiskTerms(command)
   return {
@@ -244,6 +231,8 @@ function createStep(
     status: 'pending',
     risk: riskTerms.length > 0 ? 'high' : 'normal',
     riskTerms,
+    toolCall,
+    executionId: toolCall ? globalThis.crypto.randomUUID() : undefined,
   }
 }
 
@@ -283,6 +272,28 @@ function createPlan(
   }
 }
 
+export function createModelVoiceCommandPlan(
+  source: string,
+  suggestions: readonly VoiceCommandModelSuggestedStep[],
+): VoiceCommandPlan {
+  const planned = suggestions.slice(0, MAX_VOICE_COMMAND_STEPS)
+  return {
+    ...createPlan(
+      source,
+      planned.map((suggestion, index) => createStep(
+        index + 1,
+        suggestion.toolCall ? 'execute_server_tool' : 'execute_command',
+        suggestion.label,
+        suggestion.command,
+        suggestion.entities ?? {},
+        suggestion.toolCall,
+      )),
+      Math.max(0, suggestions.length - planned.length),
+    ),
+    modelUsed: true,
+  }
+}
+
 /**
  * Verification-stage planner. It is deliberately synchronous, deterministic,
  * and model-free even when an adapter is supplied with modelEnabled=false.
@@ -296,7 +307,6 @@ export class DeterministicVoiceCommandPlanner {
       throw new Error('DeterministicVoiceCommandPlanner does not permit model calls')
     }
     this.openTableDefaults = {
-      partySize: options.defaultOpenTablePartySize,
       salesOwner: options.defaultOpenTableSalesOwner?.trim(),
     }
   }

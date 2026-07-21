@@ -10,6 +10,143 @@ import {
   effectivePermissionIdsForEmployee,
   effectiveRoleIdsForEmployee,
 } from '../src/shared/staff-access.js'
+import { chinaBusinessDateKey } from '../src/shared/china-time.js'
+import { tableSessionBusinessDate } from './table-sessions.js'
+
+function retainCurrentOperationalData(
+  projected: RuntimeState,
+  currentSessionIds: ReadonlySet<string>,
+  currentActorId: string,
+) {
+  const businessDate = projected.store.businessDate
+  const rolloverHour = projected.tableOperationsConfig?.businessDayRolloverHour ?? 6
+  const isCurrentTimestamp = (timestamp: string | null | undefined) => {
+    if (!timestamp) return false
+    try {
+      return chinaBusinessDateKey(timestamp, rolloverHour) === businessDate
+    } catch {
+      return false
+    }
+  }
+  const currentSessions = projected.songState.tableSessions.filter((session) => currentSessionIds.has(session.id))
+
+  projected.presenceLeases = (projected.presenceLeases ?? []).filter((lease) => lease.businessDate === businessDate)
+  projected.shiftAssignments = projected.shiftAssignments.filter((shift) => (
+    shift.businessDate >= businessDate || shift.employeeId === currentActorId
+  ))
+  projected.tasks = projected.tasks.filter((task) => (
+    task.archivedAt === null
+    && (task.tableSessionId ? currentSessionIds.has(task.tableSessionId) : isCurrentTimestamp(task.createdAt))
+  ))
+  const retainedTaskIds = new Set(projected.tasks.map((task) => task.id))
+  projected.taskEvents = projected.taskEvents.filter((event) => retainedTaskIds.has(event.taskId))
+  projected.auditEntries = projected.auditEntries.filter((entry) => isCurrentTimestamp(entry.occurredAt))
+  projected.awaitingOrderIntents = projected.awaitingOrderIntents.filter((intent) => (
+    isCurrentTimestamp(intent.startedAt)
+  ))
+  projected.tableTransfers = projected.tableTransfers.filter((record) => (
+    currentSessionIds.has(record.tableSessionId) || isCurrentTimestamp(record.occurredAt)
+  ))
+  projected.tableSessionOperations = (projected.tableSessionOperations ?? []).filter((record) => (
+    currentSessionIds.has(record.tableSessionId)
+  ))
+  projected.salesAttributionRecords = (projected.salesAttributionRecords ?? []).filter((record) => (
+    isCurrentTimestamp(record.occurredAt)
+  ))
+  projected.tableCombinationRecords = (projected.tableCombinationRecords ?? []).filter((record) => (
+    currentSessionIds.has(record.primaryTableSessionId) || currentSessionIds.has(record.relatedTableSessionId)
+  ))
+  projected.waitlistEntries = projected.waitlistEntries.filter((entry) => isCurrentTimestamp(entry.joinedAt))
+
+  projected.sopExecutions = (projected.sopExecutions ?? []).filter((execution) => (
+    currentSessionIds.has(execution.tableSessionId) || isCurrentTimestamp(execution.startedAt)
+  ))
+  const retainedSopExecutionIds = new Set(projected.sopExecutions.map((execution) => execution.id))
+  projected.sopActionRecords = (projected.sopActionRecords ?? []).filter((record) => (
+    retainedSopExecutionIds.has(record.executionId)
+  ))
+  projected.dutyManagerIncidents = (projected.dutyManagerIncidents ?? []).filter((incident) => (
+    incident.businessDate === businessDate
+  ))
+
+  projected.orderDomain.orders = projected.orderDomain.orders.filter((order) => currentSessionIds.has(order.tableSessionId))
+  const currentOrderIds = new Set(projected.orderDomain.orders.map((order) => order.id))
+  projected.orderDomain.kdsTasks = projected.orderDomain.kdsTasks.filter((task) => currentSessionIds.has(task.tableSessionId))
+  projected.orderDomain.authorizations = projected.orderDomain.authorizations.filter((authorization) => (
+    currentOrderIds.has(authorization.orderId)
+  ))
+  projected.orderDomain.tableLedgerEntries = projected.orderDomain.tableLedgerEntries.filter((entry) => (
+    currentSessionIds.has(entry.tableSessionId)
+  ))
+
+  projected.paymentDomain.paymentIntents = projected.paymentDomain.paymentIntents.filter((intent) => (
+    currentSessionIds.has(intent.tableSessionId) || intent.businessDate === businessDate
+  ))
+  const currentPaymentIntentIds = new Set(projected.paymentDomain.paymentIntents.map((intent) => intent.id))
+  projected.paymentDomain.physicalPosReports = projected.paymentDomain.physicalPosReports.filter((report) => (
+    currentSessionIds.has(report.tableSessionId)
+  ))
+  projected.paymentDomain.cashPaymentConfirmations = (projected.paymentDomain.cashPaymentConfirmations ?? []).filter((confirmation) => (
+    currentSessionIds.has(confirmation.tableSessionId)
+  ))
+  projected.paymentDomain.refunds = projected.paymentDomain.refunds.filter((refund) => (
+    currentPaymentIntentIds.has(refund.paymentIntentId)
+  ))
+  projected.paymentDomain.cashierHandovers = (projected.paymentDomain.cashierHandovers ?? []).filter((handover) => (
+    handover.businessDate === businessDate
+  ))
+
+  if (projected.inventoryDomain) {
+    projected.inventoryDomain.movements = projected.inventoryDomain.movements.filter((record) => record.businessDate === businessDate)
+    projected.inventoryDomain.stockCounts = projected.inventoryDomain.stockCounts.filter((record) => record.businessDate === businessDate)
+    projected.inventoryDomain.bottleEvents = projected.inventoryDomain.bottleEvents.filter((record) => record.businessDate === businessDate)
+    projected.inventoryDomain.auditEvents = projected.inventoryDomain.auditEvents.filter((record) => isCurrentTimestamp(record.occurredAt))
+    projected.inventoryDomain.approvalRequests = projected.inventoryDomain.approvalRequests.filter((record) => (
+      record.status === 'pending' || isCurrentTimestamp(record.requestedAt)
+    ))
+  }
+
+  if (projected.reservationState) {
+    projected.reservationState.reservations = projected.reservationState.reservations.filter((reservation) => (
+      chinaBusinessDateKey(reservation.scheduledAt, rolloverHour) >= businessDate
+    ))
+    const reservationIds = new Set(projected.reservationState.reservations.map((reservation) => reservation.id))
+    projected.reservationState.auditEvents = projected.reservationState.auditEvents.filter((event) => reservationIds.has(event.reservationId))
+  }
+
+  projected.songState.tableSessions = currentSessions
+  projected.songState.performanceSessions = projected.songState.performanceSessions.filter((performance) => (
+    performance.businessDate >= businessDate
+  ))
+  projected.songState.requests = projected.songState.requests.filter((request) => currentSessionIds.has(request.tableSessionId))
+  const currentSongRequestIds = new Set(projected.songState.requests.map((request) => request.id))
+  projected.songState.auditEvents = projected.songState.auditEvents.filter((event) => currentSongRequestIds.has(event.requestId))
+
+  projected.benefitGrantRequests = projected.benefitGrantRequests.filter((request) => (
+    request.status === 'pending' || isCurrentTimestamp(request.requestedAt)
+  ))
+  projected.benefitRedemptions = projected.benefitRedemptions.filter((redemption) => (
+    currentSessionIds.has(redemption.tableSessionId)
+  ))
+  projected.benefitCampaigns = projected.benefitCampaigns.filter((campaign) => isCurrentTimestamp(campaign.launchedAt))
+  projected.customerNotifications = projected.customerNotifications.filter((notification) => (
+    notification.status === 'queued' || isCurrentTimestamp(notification.queuedAt)
+  ))
+
+  if (projected.commercialOps) {
+    projected.commercialOps.printJobs = projected.commercialOps.printJobs.filter((job) => currentOrderIds.has(job.orderId))
+    projected.commercialOps.procurementBatches = projected.commercialOps.procurementBatches.filter((batch) => isCurrentTimestamp(batch.receivedAt))
+    projected.commercialOps.voucherRedemptions = projected.commercialOps.voucherRedemptions.filter((record) => (
+      (record.tableSessionId ? currentSessionIds.has(record.tableSessionId) : false) || isCurrentTimestamp(record.redeemedAt)
+    ))
+    projected.commercialOps.tipRecords = projected.commercialOps.tipRecords.filter((record) => currentSessionIds.has(record.tableSessionId))
+    projected.commercialOps.auditEvents = projected.commercialOps.auditEvents.filter((event) => isCurrentTimestamp(event.occurredAt))
+  }
+
+  if (projected.hardwareState) {
+    projected.hardwareState.commands = projected.hardwareState.commands.filter((command) => isCurrentTimestamp(command.requestedAt))
+  }
+}
 
 function legacyTableIdFromSession(tableSessionId: string) {
   if (!tableSessionId.startsWith('session:')) return null
@@ -26,6 +163,9 @@ export function projectRuntimeStateForActor(state: RuntimeState, actor: RequestA
   const canAccessProjectedStore = scope === 'all_stores' || actor.storeId === state.store.id
   const visibleAreaIds = new Set(canAccessProjectedStore ? assignedAreaIdsForActor(state, actor.actorId) : [])
   const storeWide = scope === 'all_stores' || (scope === 'store' && actor.storeId === state.store.id)
+  const currentSessionIds = new Set(state.songState.tableSessions
+    .filter((session) => tableSessionBusinessDate(state, session) === state.store.businessDate)
+    .map((session) => session.id))
 
   const visibleTables = state.tables.filter((table) => canActorAccessTableDataScope(state, actor, table.id))
   const visibleTableIds = new Set(visibleTables.map((table) => table.id))
@@ -50,6 +190,19 @@ export function projectRuntimeStateForActor(state: RuntimeState, actor: RequestA
   projected.taskEvents = projected.taskEvents.filter((event) => visibleTaskIds.has(event.taskId))
   projected.awaitingOrderIntents = projected.awaitingOrderIntents.filter((intent) => (
     canAccessProjectedStore && visibleTableIds.has(intent.tableId)
+  ))
+  projected.sopExecutions = (projected.sopExecutions ?? []).filter((execution) => (
+    canAccessProjectedStore && (storeWide || visibleTableIds.has(execution.tableId))
+  ))
+  const visibleSopExecutionIds = new Set(projected.sopExecutions.map((execution) => execution.id))
+  projected.sopActionRecords = (projected.sopActionRecords ?? []).filter((record) => (
+    visibleSopExecutionIds.has(record.executionId)
+    && (storeWide || record.recipientEmployeeIds.includes(actor.actorId) || visibleTableIds.has(record.tableId))
+  ))
+  const visibleTableCodes = new Set(visibleTables.map((table) => table.code))
+  projected.dutyManagerIncidents = (projected.dutyManagerIncidents ?? []).filter((incident) => (
+    canAccessProjectedStore
+    && (storeWide || incident.tableCode === null || visibleTableCodes.has(incident.tableCode) || incident.acknowledgedBy === actor.actorId)
   ))
   projected.tableTransfers = (projected.tableTransfers ?? []).filter((record) => (
     canAccessProjectedStore && (storeWide || visibleTableIds.has(record.sourceTableId) || visibleTableIds.has(record.targetTableId))
@@ -128,6 +281,43 @@ export function projectRuntimeStateForActor(state: RuntimeState, actor: RequestA
   if (!canUseInventory || !canAccessProjectedStore) projected.inventoryDomain = undefined
   else if (projected.inventoryDomain) projected.inventoryDomain.idempotencyRecords = []
 
+  if (projected.commercialOps) {
+    projected.commercialOps.idempotencyRecords = []
+    const canConfigureCommercialOps = permissions.has('config.manage')
+    const canUseCommercialInventory = ['inventory.view', 'inventory.manage', 'inventory.approve']
+      .some((permission) => permissions.has(permission as StaffPermissionId))
+    const canUseCommercialFinance = permissions.has('finance.view') || permissions.has('payment.collect')
+    if (!canConfigureCommercialOps) {
+      projected.commercialOps.config.printers = projected.commercialOps.config.printers.map((printer) => ({
+        ...printer,
+        endpointReference: '',
+      }))
+      projected.commercialOps.auditEvents = []
+    }
+    if (!canUseCommercialInventory) {
+      projected.commercialOps.scanCodeBindings = []
+      projected.commercialOps.procurementBatches = []
+    }
+    if (!canUseCommercialFinance) {
+      projected.commercialOps.voucherRedemptions = []
+      projected.commercialOps.tipRecords = []
+    }
+    if (!canAccessProjectedStore) projected.commercialOps = undefined
+  }
+
+  if (projected.hardwareState) {
+    if (!permissions.has('hardware.view') || !canAccessProjectedStore) projected.hardwareState = undefined
+    else {
+      projected.hardwareState.idempotencyRecords = []
+      if (!permissions.has('hardware.manage')) {
+        projected.hardwareState.devices = projected.hardwareState.devices.map((device) => ({
+          ...device,
+          connectionReference: '',
+        }))
+      }
+    }
+  }
+
   const canUseReservations = ['reservation.view', 'reservation.manage', 'reservation.config.manage']
     .some((permission) => permissions.has(permission as StaffPermissionId))
   if (!canUseReservations || !canAccessProjectedStore) projected.reservationState = undefined
@@ -152,6 +342,10 @@ export function projectRuntimeStateForActor(state: RuntimeState, actor: RequestA
     projected.configVersions = []
   }
 
+  projected.songState.tableSessions = projected.songState.tableSessions.filter((session) => (
+    storeWide || visibleTableIds.has(session.tableId)
+  ))
+
   const referencedEmployeeIds = new Set([
     actor.actorId,
     ...projected.tables.flatMap((table) => [table.primaryEmployeeId, ...table.backupEmployeeIds]),
@@ -164,6 +358,8 @@ export function projectRuntimeStateForActor(state: RuntimeState, actor: RequestA
     projected.employees = projected.employees.filter((item) => referencedEmployeeIds.has(item.id))
     projected.shiftAssignments = projected.shiftAssignments.filter((shift) => shift.employeeId === actor.actorId)
   }
+
+  retainCurrentOperationalData(projected, currentSessionIds, actor.actorId)
 
   return projected
 }

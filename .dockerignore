@@ -1,6 +1,15 @@
 .git
 .github
 .runtime
+android
+ios
+output
+artifacts
+deliverables
+docs
+miniprogram
+tests
+assets
 dist
 dist-server
 node_modules

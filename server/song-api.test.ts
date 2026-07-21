@@ -111,6 +111,50 @@ describe('song API employee authorization', () => {
     await repository.close()
   })
 
+  it('imports a singer repertoire atomically and updates matching songs on a repeat import', async () => {
+    const { app, repository } = await fixture()
+    const singerResponse = await app.inject({
+      method: 'POST', url: '/api/songs/singers', headers: { 'x-test-role': 'manager' },
+      payload: { displayName: '批量导入歌手', photoUrl: '', headline: '', bio: '', styleTags: [], active: true },
+    })
+    const singerId = singerResponse.json().id as string
+    const first = await app.inject({
+      method: 'POST', url: `/api/songs/singers/${singerId}/repertoire/import`, headers: { 'x-test-role': 'manager' },
+      payload: { rows: [
+        { title: '后来', artist: '刘若英', durationSeconds: 240, priceAmount: 9800, currency: 'CNY', enabled: true },
+        { title: '海阔天空', artist: 'Beyond', durationSeconds: 300, priceAmount: 12800, currency: 'CNY', enabled: true },
+      ] },
+    })
+    expect(first.statusCode, first.body).toBe(200)
+    expect(first.json()).toEqual({ total: 2, created: 2, updated: 0 })
+
+    const repeat = await app.inject({
+      method: 'POST', url: `/api/songs/singers/${singerId}/repertoire/import`, headers: { 'x-test-role': 'manager' },
+      payload: { rows: [
+        { title: ' 后来 ', artist: '刘若英', durationSeconds: 260, priceAmount: 10800, currency: 'CNY', enabled: false },
+      ] },
+    })
+    expect(repeat.statusCode, repeat.body).toBe(200)
+    expect(repeat.json()).toEqual({ total: 1, created: 0, updated: 1 })
+
+    const state = await repository.read()
+    const offers = state.songState.repertoire.filter((item) => item.singerId === singerId)
+    expect(offers).toHaveLength(2)
+    const updatedOffer = offers.find((offer) => state.songState.songs.find((song) => song.id === offer.songId)?.title === '后来')
+    expect(updatedOffer).toMatchObject({ priceAmount: 10800, enabled: false, configVersion: 2 })
+    expect(state.auditEntries.filter((entry) => entry.action === 'song.repertoire_imported.v1')).toHaveLength(2)
+
+    const denied = await app.inject({
+      method: 'POST', url: `/api/songs/singers/${singerId}/repertoire/import`, headers: { 'x-test-role': 'server' },
+      payload: { rows: [{ title: '越权歌曲', artist: '测试', durationSeconds: 240, priceAmount: 9800, currency: 'CNY', enabled: true }] },
+    })
+    expect(denied.statusCode).toBe(403)
+    expect(denied.json()).toEqual({ code: 'AUTHORIZATION_DENIED', operation: 'song.manage' })
+    expect((await repository.read()).songState.repertoire.filter((item) => item.singerId === singerId)).toHaveLength(2)
+    await app.close()
+    await repository.close()
+  })
+
   it('keeps performance configuration behind song management permission', async () => {
     const { app, repository } = await fixture()
     const denied = await app.inject({

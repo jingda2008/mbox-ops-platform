@@ -48,6 +48,39 @@ describe('service task domain', () => {
     expect(second.ownerId).toBe('emp-jie')
   })
 
+  it('uses current workload before table preference and records the assignment basis', () => {
+    const state = createSeedState()
+
+    const first = createServiceTask(state, taskInput({ idempotencyKey: 'load-aware-first' }))
+    const second = createServiceTask(state, taskInput({ idempotencyKey: 'load-aware-second' }))
+
+    expect(first.ownerId).toBe('emp-lin')
+    expect(second.ownerId).toBe('emp-jie')
+    expect(state.taskEvents.find((event) => event.taskId === second.id && event.type === 'task.created.v1')).toMatchObject({
+      payload: {
+        ownerId: 'emp-jie',
+        strategy: 'load_aware',
+        candidateSource: 'backup',
+        loadBefore: 0,
+        capacity: 3,
+      },
+    })
+  })
+
+  it('honors an explicitly targeted eligible employee ahead of automatic balancing', () => {
+    const state = createSeedState()
+    createServiceTask(state, taskInput({ idempotencyKey: 'targeted-load-first' }))
+
+    const task = createServiceTask(state, {
+      ...taskInput({ idempotencyKey: 'targeted-load-second' }),
+      dispatchEmployeeIds: ['emp-lin'],
+    })
+
+    expect(task.ownerId).toBe('emp-lin')
+    expect(state.taskEvents.find((event) => event.taskId === task.id && event.type === 'task.created.v1')?.payload)
+      .toMatchObject({ strategy: 'load_aware', candidateSource: 'targeted', loadBefore: 1 })
+  })
+
   it('dispatches to an employee serving a compatible secondary shift role', () => {
     const state = createSeedState()
     const table = state.tables.find((item) => item.code === 'L01')!
@@ -348,5 +381,84 @@ describe('versioned store configuration', () => {
       proactiveOrderCare: state.config.proactiveOrderCare,
       guestServiceLimits: state.config.guestServiceLimits,
     }, 'emp-chen')).toThrow('必须绑定已启用的专用取送任务类型')
+  })
+
+  it('versions complex SOP rules and rejects broken dispatch references', () => {
+    const state = createSeedState()
+    const sopRule = {
+      id: 'sop-table-care',
+      name: '开台连续关怀',
+      description: '未点单时按步骤提醒桌边服务',
+      enabled: true,
+      trigger: { event: 'table_opened' as const, serviceTypeIds: [], productCategoryIds: [] },
+      scope: { areaIds: ['lounge'], tableIds: ['table-l01'] },
+      conditions: [{ type: 'no_order' as const, value: null }],
+      stopConditions: ['table_closed' as const, 'order_submitted' as const],
+      steps: [{
+        id: 'sop-table-care-step-1',
+        name: '首次关怀',
+        timing: 'after_trigger' as const,
+        delaySeconds: 15 * 60,
+        action: {
+          type: 'create_service_task' as const,
+          serviceTypeId: 'order-help',
+          dispatchRoleIds: ['server', 'backup'],
+          noteTemplate: '{table}开台已{minutes}分钟，请主动到桌了解需要。',
+        },
+      }],
+    }
+    const input = {
+      serviceTypes: state.config.serviceTypes,
+      roles: state.config.roles,
+      proactiveOrderCare: state.config.proactiveOrderCare,
+      guestServiceLimits: state.config.guestServiceLimits,
+      sopRules: [sopRule],
+    }
+
+    saveConfigDraft(state, input, 'emp-chen')
+    expect(state.config.sopRules).toEqual([])
+    expect(state.draftConfig?.sopRules).toEqual([sopRule])
+    const published = publishConfig(state, 'emp-chen')
+    expect(published.version).toBe(2)
+    expect(published.sopRules?.[0]?.steps[0]?.delaySeconds).toBe(15 * 60)
+
+    expect(() => saveConfigDraft(state, {
+      ...input,
+      sopRules: [{
+        ...sopRule,
+        steps: [{
+          ...sopRule.steps[0],
+          action: { ...sopRule.steps[0].action, dispatchRoleIds: ['missing-role'] },
+        }],
+      }],
+    }, 'emp-chen')).toThrow('引用了不存在的岗位')
+
+    expect(() => saveConfigDraft(state, {
+      ...input,
+      sopRules: [{
+        ...sopRule,
+        steps: [{
+          ...sopRule.steps[0],
+          action: {
+            ...sopRule.steps[0].action,
+            dispatchRoleIds: ['server'],
+            dispatchEmployeeIds: ['emp-han'],
+          },
+        }],
+      }],
+    }, 'emp-chen')).toThrow('指定员工不具备所选执行岗位')
+
+    expect(() => saveConfigDraft(state, {
+      ...input,
+      sopRules: [{
+        ...sopRule,
+        trigger: {
+          event: 'fulfillment_completed' as const,
+          serviceTypeIds: [],
+          productCategoryIds: [],
+          workstationIds: ['missing-station'],
+        },
+      }],
+    }, 'emp-chen')).toThrow('引用了不存在的工作站')
   })
 })

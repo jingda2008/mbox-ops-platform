@@ -227,6 +227,9 @@ export default function App() {
   const refreshWorkspace = useCallback(async () => {
     await refresh()
   }, [refresh])
+  const updateWorkspace = useCallback((update: (current: BootstrapResponse) => BootstrapResponse) => {
+    setData((current) => current ? update(current) : current)
+  }, [])
 
   useEffect(() => subscribeOfflineStatus(setOfflineStatus), [])
 
@@ -415,7 +418,7 @@ export default function App() {
         </div>
       )}
       <LazyWorkspace>
-        <OperationsConsole data={data} onRefresh={refreshWorkspace} navigationRequest={navigationRequest} />
+        <OperationsConsole data={data} onRefresh={refreshWorkspace} onOptimisticUpdate={updateWorkspace} navigationRequest={navigationRequest} />
         {staffMode === 'voice' && (
           <VoiceCommandMode
             data={data}

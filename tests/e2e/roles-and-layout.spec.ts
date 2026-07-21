@@ -67,10 +67,31 @@ test.describe('视觉与移动端适配', () => {
     const mood = page.getByRole('button', { name: '微醺' })
     await mood.click()
     await expect(mood).toHaveAttribute('aria-pressed', 'true', { timeout: 300 })
+    await expect(mood).toHaveAttribute('data-action-state', 'pending', { timeout: 300 })
+    await expect(mood).toHaveAttribute('aria-busy', 'true')
     await expect(page.locator('.guest-reply')).toHaveCount(0)
 
     releaseRequest()
     await expect(mood).toBeEnabled({ timeout: 8_000 })
+    await expect(mood).not.toHaveAttribute('data-action-state', 'pending')
+  })
+
+  test('异步提交失败时恢复情绪选择并给出明确失败反馈', async ({ page }) => {
+    await page.setViewportSize({ width: 430, height: 932 })
+    await page.route('**/api/guest/tasks', async (route) => {
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ message: '测试网络暂时不可用' }),
+      })
+    })
+    await page.goto('/guest?table=L01')
+
+    const mood = page.getByRole('button', { name: '微醺' })
+    await mood.click()
+    await expect(mood).toHaveAttribute('aria-pressed', 'false')
+    await expect(mood).toHaveAttribute('data-action-state', 'failed')
+    await expect(page.getByRole('alert')).toContainText('测试网络暂时不可用')
   })
 
   test('关键响应包含点击劫持与内容嗅探保护', async ({ page }) => {

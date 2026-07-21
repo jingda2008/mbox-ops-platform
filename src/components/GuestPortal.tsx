@@ -339,7 +339,7 @@ export function GuestPortal() {
         tasks: [task, ...current.tasks.filter((item) => item.id !== task.id)],
       } : current)
       setNote('')
-      if (options.refreshAfter !== false) await refresh()
+      if (options.refreshAfter !== false) void refresh()
       return task
     } catch (requestError) {
       setError({
@@ -406,8 +406,21 @@ export function GuestPortal() {
         : offer.requestMode === 'extension_negotiation' ? '延长演出的小请求已经递给'
           : '已经替您递给'
       setReply(guestSongReplyNotice(`《${offer.songTitle}》${action}${offer.singerName}啦～服务伙伴会先确认歌手和时间，可以安排再到桌收款。`, request))
+      setData((current) => current ? {
+        ...current,
+        songRequests: [{
+          id: request.id,
+          status: request.status,
+          songTitle: request.priceSnapshot.songTitle,
+          singerName: request.priceSnapshot.singerName,
+          priceAmount: request.priceSnapshot.priceAmount,
+          currency: request.priceSnapshot.currency,
+          createdAt: request.createdAt,
+          requestMode: request.requestMode,
+        }, ...current.songRequests.filter((item) => item.id !== request.id)],
+      } : current)
       setSongPickerOpen(false)
-      await refresh()
+      void refresh()
     } catch (requestError) {
       setError({ message: guestErrorMessage(requestError, '这首歌刚才没递出去，再点一次试试，或者让服务伙伴来帮您。'), source: 'action' })
     } finally {

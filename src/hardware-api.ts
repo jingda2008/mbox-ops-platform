@@ -1,5 +1,6 @@
 import { ApiError, getCurrentActorId, OfflineWriteBlockedError } from './api'
 import { getOfflineStatus, reportNetworkAvailable, reportNetworkUnavailable } from './offline'
+import { shouldTrackMutation, withInteractionAction } from './interaction-feedback'
 import type {
   HardwareCommand,
   HardwareCommandRequestInput,
@@ -11,26 +12,28 @@ import type {
 
 async function hardwareRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const method = init?.method ?? 'GET'
-  if (method !== 'GET' && !getOfflineStatus().online) throw new OfflineWriteBlockedError()
-  const headers = new Headers(init?.headers)
-  if (init?.body) headers.set('Content-Type', 'application/json')
-  const token = window.localStorage.getItem('mbox.auth.token')
-  if (token) headers.set('Authorization', `Bearer ${token}`)
-  else {
-    headers.set('x-mbox-actor-id', getCurrentActorId() || 'emp-chen')
-    headers.set('x-mbox-store-id', 'mbox-lujiazui')
-  }
-  let response: Response
-  try {
-    response = await fetch(path, { ...init, headers })
-  } catch (error) {
-    reportNetworkUnavailable()
-    throw error
-  }
-  reportNetworkAvailable()
-  const body = await response.json() as T & { message?: string; code?: string }
-  if (!response.ok) throw new ApiError(body.message ?? '设备操作失败', response.status, body.code)
-  return body
+  return withInteractionAction(async () => {
+    if (method !== 'GET' && !getOfflineStatus().online) throw new OfflineWriteBlockedError()
+    const headers = new Headers(init?.headers)
+    if (init?.body) headers.set('Content-Type', 'application/json')
+    const token = window.localStorage.getItem('mbox.auth.token')
+    if (token) headers.set('Authorization', `Bearer ${token}`)
+    else {
+      headers.set('x-mbox-actor-id', getCurrentActorId() || 'emp-chen')
+      headers.set('x-mbox-store-id', 'mbox-lujiazui')
+    }
+    let response: Response
+    try {
+      response = await fetch(path, { ...init, headers })
+    } catch (error) {
+      reportNetworkUnavailable()
+      throw error
+    }
+    reportNetworkAvailable()
+    const body = await response.json() as T & { message?: string; code?: string }
+    if (!response.ok) throw new ApiError(body.message ?? '设备操作失败', response.status, body.code)
+    return body
+  }, { enabled: shouldTrackMutation(path, method) })
 }
 
 export function getHardwareWorkspace() {

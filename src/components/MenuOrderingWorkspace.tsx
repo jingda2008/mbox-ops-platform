@@ -32,6 +32,8 @@ interface MenuOrderingWorkspaceProps {
   timeZone?: string
   orderSafety?: OrderSafetyConfig
   compactCart?: boolean
+  deemphasizeCollapsedTotal?: boolean
+  submitDisabled?: boolean
   onSubmit: (items: MenuCartItem[], options: { confirmedDuplicateOrderId?: string }) => Promise<void>
   onInteraction?: (interaction: MenuInteraction) => void
 }
@@ -48,6 +50,8 @@ export function MenuOrderingWorkspace({
   onInteraction,
   orderSafety,
   compactCart = false,
+  deemphasizeCollapsedTotal = false,
+  submitDisabled = false,
 }: MenuOrderingWorkspaceProps) {
   const [cart, setCart] = useState<Record<string, number>>({})
   const [categoryId, setCategoryId] = useState('all')
@@ -143,7 +147,7 @@ export function MenuOrderingWorkspace({
   }
 
   async function submit() {
-    if (cartProducts.length === 0 || busy) return
+    if (cartProducts.length === 0 || busy || submitDisabled) return
     if (orderSafety?.requireSubmitConfirmation !== false) {
       setConfirmationError('')
       setConfirmation('submit')
@@ -153,7 +157,7 @@ export function MenuOrderingWorkspace({
   }
 
   async function executeSubmit(duplicateOrderId?: string) {
-    if (cartProducts.length === 0 || busy) return
+    if (cartProducts.length === 0 || busy || submitDisabled) return
     try {
       await onSubmit(
         cartProducts.map((product) => ({ productId: product.id, quantity: cart[product.id]! })),
@@ -200,7 +204,7 @@ export function MenuOrderingWorkspace({
   ))
 
   return (
-    <section className={`menu-ordering-workspace${compactCart ? ' has-compact-cart' : ''}`}>
+    <section className={`menu-ordering-workspace${compactCart ? ' has-compact-cart' : ''}${deemphasizeCollapsedTotal ? ' has-gentle-cart-summary' : ''}`}>
       <header className="menu-workspace-header">
         <div>
           <span>当前桌台</span>
@@ -261,8 +265,8 @@ export function MenuOrderingWorkspace({
               <div className="menu-cart-heading"><ShoppingCart size={20} /><strong>已选商品</strong><span>{itemCount} 件</span><button className="icon-button" title="关闭购物车" onClick={() => setCartOpen(false)}><X size={18} /></button></div>
               <div className="menu-cart-lines">{cartLines}</div>
               <footer className="menu-cart-drawer-footer">
-                <div><span>合计</span><strong>¥{formatMenuAmount(total)}</strong></div>
-                <button className="menu-submit-button" disabled={cartProducts.length === 0 || busy} onClick={() => void submit()}>
+                <div><span>{deemphasizeCollapsedTotal ? '核对后收款' : '合计'}</span><strong>¥{formatMenuAmount(total)}</strong></div>
+                <button className="menu-submit-button" disabled={cartProducts.length === 0 || busy || submitDisabled} onClick={() => void submit()}>
                   <Check size={18} />{busy ? '正在提交' : submitLabel}
                 </button>
               </footer>
@@ -280,11 +284,11 @@ export function MenuOrderingWorkspace({
               <span className="menu-cart-summary-icon"><ShoppingCart size={20} /><b>{itemCount}</b></span>
               <span className="menu-cart-summary-copy">
                 <strong>{itemCount > 0 ? `已选 ${itemCount} 件` : '还未选择商品'}</strong>
-                <small>{itemCount > 0 ? `查看明细 · 合计 ¥${formatMenuAmount(total)}` : '点击商品加入订单'}</small>
+                <small>{itemCount > 0 ? (deemphasizeCollapsedTotal ? '需要时打开核对' : `查看明细 · 合计 ¥${formatMenuAmount(total)}`) : '点击商品加入订单'}</small>
               </span>
             </button>
-            <button className="menu-submit-button" disabled={cartProducts.length === 0 || busy} onClick={() => setCartOpen(true)}>
-              核对订单<ChevronRight size={18} />
+            <button className="menu-submit-button" disabled={cartProducts.length === 0 || busy || submitDisabled} onClick={() => setCartOpen(true)}>
+              {submitDisabled ? submitLabel : '核对订单'}<ChevronRight size={18} />
             </button>
           </aside>
         </> : (
@@ -292,7 +296,7 @@ export function MenuOrderingWorkspace({
             <div className="menu-cart-heading"><ShoppingCart size={20} /><strong>已选商品</strong><span>{itemCount} 件</span></div>
             <div className="menu-cart-lines">{cartLines}</div>
             <div className="menu-cart-total"><span><ShoppingCart size={16} /><b>{itemCount}</b>件 · 合计</span><strong>¥{(total / 100).toFixed(2)}</strong></div>
-            <button className="menu-submit-button" disabled={cartProducts.length === 0 || busy} onClick={() => void submit()}>
+            <button className="menu-submit-button" disabled={cartProducts.length === 0 || busy || submitDisabled} onClick={() => void submit()}>
               <Check size={19} />{busy ? '正在提交' : submitLabel}
             </button>
             <p className="menu-submit-hint">{submitHint}</p>
@@ -315,7 +319,7 @@ export function MenuOrderingWorkspace({
           {confirmationError && <div className="menu-confirm-error" role="alert">{confirmationError}</div>}
           <footer>
             <button className="secondary-button" disabled={busy} onClick={() => setConfirmation(null)}>再看看</button>
-            <button className="primary-button" disabled={busy || (confirmation === 'duplicate' && !confirmedDuplicateOrderId)} onClick={() => {
+            <button className="primary-button" disabled={busy || submitDisabled || (confirmation === 'duplicate' && !confirmedDuplicateOrderId)} onClick={() => {
               if (confirmation === 'continue') confirmContinuation()
               else void executeSubmit(confirmation === 'duplicate' ? confirmedDuplicateOrderId : undefined)
             }}><Check size={17} />{busy ? '正在提交' : confirmation === 'duplicate' ? '确认继续加单' : confirmation === 'continue' ? '继续选商品' : '确认上单'}</button>

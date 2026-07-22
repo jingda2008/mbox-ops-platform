@@ -24,6 +24,40 @@ function registerTestActor(app: ReturnType<typeof Fastify>) {
 }
 
 describe('assisted ordering payment flow', () => {
+  it('returns an actionable reason when staff orders for a table that is not open', async () => {
+    const repository = new JsonRepository(`/tmp/mbox-assisted-table-state-${crypto.randomUUID()}.json`)
+    await repository.init()
+    const app = Fastify()
+    registerTestActor(app)
+    registerCommerceRoutes(app, repository, { guestTokenSecret: secret, now: () => now })
+    app.setErrorHandler((error, _request, reply) => {
+      const candidate = error as Error & { statusCode?: number; code?: string }
+      return reply.status(candidate.statusCode ?? 400).send({ code: candidate.code, message: candidate.message })
+    })
+    const state = await repository.read()
+    const table = state.tables.find((candidate) => candidate.status === 'available')!
+    const product = state.products.find((candidate) => candidate.enabled)!
+
+    const rejected = await app.inject({
+      method: 'POST',
+      url: '/api/commerce/orders',
+      payload: {
+        tableId: table.id,
+        items: [{ productId: product.id, quantity: 1 }],
+        actorId: 'emp-lin',
+        idempotencyKey: 'staff-cart-table-not-open-0001',
+      },
+    })
+
+    expect(rejected.statusCode).toBe(409)
+    expect(rejected.json()).toMatchObject({
+      code: 'COMMERCE_TABLE_NOT_OPEN',
+      message: '桌台尚未开台或已经翻台，请先开台后再下单',
+    })
+    await app.close()
+    await repository.close()
+  })
+
   it('rejects reuse of a staff cart key for different contents', async () => {
     const repository = new JsonRepository(`/tmp/mbox-assisted-idempotency-${crypto.randomUUID()}.json`)
     await repository.init()

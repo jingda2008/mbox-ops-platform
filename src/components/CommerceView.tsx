@@ -49,8 +49,8 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
   const currentEmployee = access.employee
   const canResolveExceptions = canResolveKdsException(access)
   const canCancelFulfillment = canManagerCancelKds(access, data.viewer?.permissionIds ?? [])
-  const occupiedTables = data.tables.filter((table) => table.status === 'occupied')
-  const [tableId, setTableId] = useState(occupiedTables[0]?.id ?? '')
+  const occupiedTables = useMemo(() => data.tables.filter((table) => table.status === 'occupied'), [data.tables])
+  const [tableId, setTableId] = useState(() => occupiedTables.length === 1 ? occupiedTables[0]!.id : '')
   const [workspaceMode, setWorkspaceMode] = useState<'order' | 'fulfillment'>(access.canOrder ? 'order' : 'fulfillment')
   const [busy, setBusy] = useState(false)
   const [busyKdsIds, setBusyKdsIds] = useState<ReadonlySet<string>>(() => new Set())
@@ -90,6 +90,11 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
   }, [])
 
   useEffect(() => {
+    if (occupiedTables.some((table) => table.id === tableId)) return
+    setTableId(occupiedTables.length === 1 ? occupiedTables[0]!.id : '')
+  }, [occupiedTables, tableId])
+
+  useEffect(() => {
     if (!focusRequest || handledFocusRequestId.current === focusRequest.id) return
     handledFocusRequestId.current = focusRequest.id
     setWorkspaceMode('fulfillment')
@@ -125,12 +130,21 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
 
   async function submit(items: MenuCartItem[]) {
     if (!currentEmployee) {
-      onNotice('当前员工身份无效，请重新登录后下单')
-      return
+      const reason = '当前员工身份无效，请重新登录后再试'
+      onNotice(`下单未完成：${reason}`)
+      throw new Error(reason)
+    }
+    const orderTable = occupiedTables.find((table) => table.id === tableId)
+    if (!orderTable) {
+      const reason = occupiedTables.length === 0
+        ? '当前没有已开台桌台，请先到“现场调度”开台'
+        : '请先选择客人所在桌台，再确认下单'
+      onNotice(`下单未完成：${reason}`)
+      throw new Error(reason)
     }
     setBusy(true)
     try {
-      const order = await createCartOrder({ tableId, items, actorId: currentEmployee.id, idempotencyKey: `cart-${crypto.randomUUID()}` })
+      const order = await createCartOrder({ tableId: orderTable.id, items, actorId: currentEmployee.id, idempotencyKey: `cart-${crypto.randomUUID()}` })
       const link = await createAssistedPaymentLink(order.id, { idempotencyKey: `pay-link-${crypto.randomUUID()}` })
       const paymentUrl = assistedPaymentUrl(link)
       const QRCode = await import('qrcode')
@@ -150,7 +164,9 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
       onNotice('订单已确认，请客人扫码支付；客人手机订单页也已同步')
       await onRefresh()
     } catch (error) {
-      onNotice(error instanceof Error ? error.message : '下单失败')
+      const failure = error instanceof Error ? error : new Error('系统暂时无法提交，请稍后重试')
+      onNotice(`下单未完成：${failure.message}`)
+      throw failure
     } finally {
       setBusy(false)
     }
@@ -297,6 +313,11 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
     .toSorted((left, right) => Date.parse(right.paidAt ?? right.createdAt) - Date.parse(left.paidAt ?? left.createdAt))[0]
   const paidTable = latestPaidSignal ? tableFromSession(data, latestPaidSignal.tableSessionId) : undefined
   const selectedTable = occupiedTables.find((table) => table.id === tableId)
+  const tableSelectionMessage = selectedTable
+    ? ''
+    : occupiedTables.length === 0
+      ? '当前没有已开台桌台，请先到“现场调度”开台'
+      : '请先选择客人所在桌台，再开始核对订单'
 
   return (
     <section className="commerce-view">
@@ -358,10 +379,13 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
       {workspaceMode === 'order' && access.canOrder ? (
         <MenuOrderingWorkspace
           products={data.products}
-          tableLabel={selectedTable ? `${selectedTable.code} · ${selectedTable.displayName}` : '请选择桌台'}
-          tableControl={<select aria-label="选择桌台" value={tableId} onChange={(event) => setTableId(event.target.value)}>{occupiedTables.map((table) => <option key={table.id} value={table.id}>{table.code} · {table.displayName} · {table.guestCount}人</option>)}</select>}
-          submitLabel="核对无误，确认下单"
-          submitHint="提交后自动分发到对应吧台或厨房；完成制作后自动通知取送人员。"
+          tableLabel={selectedTable ? `${selectedTable.code} · ${selectedTable.displayName}` : '尚未选择桌台'}
+          tableControl={<div className="menu-table-control"><select aria-label="选择桌台" value={tableId} disabled={occupiedTables.length === 0} onChange={(event) => setTableId(event.target.value)}><option value="">{occupiedTables.length === 0 ? '当前没有已开台桌台' : '请选择客人所在桌台'}</option>{occupiedTables.map((table) => <option key={table.id} value={table.id}>{table.code} · {table.displayName} · {table.guestCount}人</option>)}</select>{tableSelectionMessage && <span className="menu-table-guidance" role="alert">{tableSelectionMessage}</span>}</div>}
+          submitLabel={selectedTable ? '核对无误，确认下单' : '请先选择桌台'}
+          submitHint={selectedTable ? '提交后自动分发到对应吧台或厨房；完成制作后自动通知取送人员。' : occupiedTables.length === 0 ? '请先到现场调度开台，再回到这里提交订单。' : '请选择客人所在桌台，确认后才会创建订单和支付二维码。'}
+          submitDisabled={!selectedTable}
+          compactCart
+          deemphasizeCollapsedTotal
           busy={busy}
           timeZone={data.store.timezone}
           orderSafety={data.commercialOps?.config.orderSafety}

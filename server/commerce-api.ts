@@ -178,15 +178,19 @@ export function registerCommerceRoutes(
         return existingOrder
       }
       if (new Set(input.items.map((item) => item.productId)).size !== input.items.length) {
-        throw new Error('购物车商品不能重复，请合并数量')
+        throw new CommerceRequestError('购物车中有重复商品，请返回购物车核对数量', 'COMMERCE_CART_DUPLICATE_PRODUCT', 400)
       }
       const table = state.tables.find((item) => item.id === input.tableId)
-      if (!table || table.status !== 'occupied') throw new Error('只能向已开台桌台下单')
+      if (!table || table.status !== 'occupied') {
+        throw new CommerceRequestError('桌台尚未开台或已经翻台，请先开台后再下单', 'COMMERCE_TABLE_NOT_OPEN')
+      }
       const products = input.items.map((item) => {
         const product = state.products.find((candidate) => candidate.id === item.productId && candidate.enabled)
-        if (!product) throw new Error('购物车包含不存在或已停用商品')
+        if (!product) throw new CommerceRequestError('购物车中有商品已下架，请移除后重新提交', 'COMMERCE_PRODUCT_UNAVAILABLE')
         const availability = productAvailability(product, new Date(), state.store.timezone)
-        if (!availability.orderable) throw new Error(`${product.name}当前不可下单：${availability.label}`)
+        if (!availability.orderable) {
+          throw new CommerceRequestError(`${product.name}当前不可下单：${availability.label}`, 'COMMERCE_PRODUCT_NOT_ORDERABLE')
+        }
         return { product, quantity: item.quantity }
       })
       syncOrderFulfillmentWorkstations(state)

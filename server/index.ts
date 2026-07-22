@@ -93,6 +93,7 @@ import { MemoryRateLimitStore, PostgresRateLimitStore } from './rate-limit.js'
 import { DEFAULT_PRESENCE_LEASE_TTL_MS, registerPresenceRoutes, resumePresenceLease } from './presence.js'
 import { MemoryGuestInsightsStore, PostgresGuestInsightsStore } from './guest-insights.js'
 import { GoogleCloudVoiceTranscriber, registerVoiceTranscriptionRoutes } from './voice-transcription.js'
+import { clientValidationError } from './validation-error.js'
 import { registerAssistantRoutes } from './assistant-api.js'
 import { registerCommercialOpsRoutes } from './commercial-ops-api.js'
 import { registerHardwareRoutes } from './hardware-api.js'
@@ -387,7 +388,7 @@ function isPersistenceFailure(error: unknown) {
 
 app.setErrorHandler((error, _request, reply) => {
   if (error instanceof ZodError) {
-    return reply.status(400).send({ code: 'VALIDATION_ERROR', message: error.issues[0]?.message ?? '输入无效' })
+    return reply.status(400).send(clientValidationError(error))
   }
   if (error instanceof BenefitRedemptionBusinessError) {
     return reply.status(error.statusCode).send({ code: error.code, message: error.message })

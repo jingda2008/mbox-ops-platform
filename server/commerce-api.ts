@@ -628,6 +628,13 @@ export function registerCommerceRoutes(
       const existingDisposition = task.exceptionEvents?.find((event) => event.type === 'manager_disposition')
       if (existingDisposition) throw new Error('该KDS任务已经完成异常处置')
       const existingReport = task.exceptionEvents?.find((event) => event.type === 'reported')
+      const reasonLabel = {
+        unavailable_confirmed: '确认无法出品',
+        guest_cancelled: '客人确认取消',
+        manager_cancelled: '店长现场取消',
+        other: '其他取消原因',
+      }[input.reasonCode]
+      const effectiveReasonNote = input.reasonNote || `系统记录：${reasonLabel}，未补充情况说明`
       const now = new Date().toISOString()
       const report = existingReport ?? reportKdsException(state.orderDomain, {
         exceptionId: deterministicId('manager_cancel_exception', input.idempotencyKey),
@@ -635,7 +642,7 @@ export function registerCommerceRoutes(
         taskId: task.id,
         exceptionKind: ['queued', 'preparing'].includes(task.status) ? 'production_rejection' : 'wrong_item',
         reasonCode: 'other',
-        reasonNote: input.reasonNote,
+        reasonNote: effectiveReasonNote,
         actorId: actor.actorId,
         actorRoleId: actor.roleId,
         occurredAt: now,
@@ -646,7 +653,7 @@ export function registerCommerceRoutes(
         exceptionId: report.exceptionId,
         disposition: 'cancelled',
         reasonCode: input.reasonCode,
-        reasonNote: input.reasonNote,
+        reasonNote: effectiveReasonNote,
         remakeTaskId: null,
         actorId: actor.actorId,
         actorRoleId: actor.roleId,
@@ -676,7 +683,8 @@ export function registerCommerceRoutes(
           tableId: tableSession.tableId,
           tableSessionId: tableSession.id,
           reasonCode: input.reasonCode,
-          reasonNote: input.reasonNote,
+          reasonNote: input.reasonNote || null,
+          reasonNoteProvided: Boolean(input.reasonNote),
           accountingPolicy: 'manual_confirmation_required',
           accountingMutationApplied: false,
           result,

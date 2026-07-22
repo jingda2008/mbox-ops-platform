@@ -92,7 +92,7 @@ export const kdsExceptionDecisionSchema = z.object({
 
 export const managerKdsCancellationSchema = z.object({
   reasonCode: z.enum(['unavailable_confirmed', 'guest_cancelled', 'manager_cancelled', 'other']),
-  reasonNote: z.string().trim().min(2).max(200),
+  reasonNote: z.string().trim().max(200).default(''),
   idempotencyKey: z.string().min(8).max(128),
 })
 

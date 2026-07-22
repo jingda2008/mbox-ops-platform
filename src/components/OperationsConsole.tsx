@@ -615,7 +615,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
   }
 
   async function handleManagerCancelKds(taskId: string) {
-    if (!canCancelTurnoverItem || turnoverReasonNote.trim().length < 2) return
+    if (!canCancelTurnoverItem) return
     setBusy(true)
     try {
       const sourceTask = data.orderDomain.kdsTasks.find((task) => task.id === taskId)
@@ -870,7 +870,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
                     <div className="turnover-kds-row" key={task.id}>
                       <div><strong>{task.itemName} × {task.quantity}</strong><span>{task.specification} · {turnoverKdsStatus(task.status)}</span></div>
                       {canCancelTurnoverItem
-                        ? <button className="danger-button" disabled={busy || turnoverReasonNote.trim().length < 2} onClick={() => void handleManagerCancelKds(task.id)}>取消制作</button>
+                        ? <button className="danger-button" disabled={busy} onClick={() => void handleManagerCancelKds(task.id)}>取消制作</button>
                         : <span className="turnover-permission-note">请店长或授权主管处理</span>}
                     </div>
                   ))}
@@ -879,7 +879,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
               {selectedOpenKds.length > 0 && canCancelTurnoverItem && (
                 <div className="turnover-reason-fields">
                   <label><span>取消原因</span><select value={turnoverReasonCode} onChange={(event) => setTurnoverReasonCode(event.target.value as ManagerKdsCancellationInput['reasonCode'])}><option value="manager_cancelled">店长现场取消</option><option value="guest_cancelled">客人取消</option><option value="unavailable_confirmed">确认无法制作</option><option value="other">其他</option></select></label>
-                  <label><span>情况说明</span><input maxLength={200} value={turnoverReasonNote} onChange={(event) => setTurnoverReasonNote(event.target.value)} /></label>
+                  <label><span>情况说明（选填）</span><input maxLength={200} value={turnoverReasonNote} onChange={(event) => setTurnoverReasonNote(event.target.value)} placeholder="可补充现场情况" /></label>
                 </div>
               )}
               {turnoverAccounting && (

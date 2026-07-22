@@ -277,7 +277,7 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
   }
 
   async function cancelFulfillmentTask() {
-    if (!cancelTarget || !currentEmployee || cancelReasonNote.trim().length < 2) return
+    if (!cancelTarget || !currentEmployee) return
     setBusy(true)
     try {
       const result = await managerCancelKdsTask(cancelTarget.id, {
@@ -364,10 +364,10 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
           </header>
           <div className="manager-cancel-boundary"><CircleAlert size={18} /><span>取消后停止本次制作或送达，原订单、桌账和支付不会自动修改。</span></div>
           <label><span>取消原因</span><select value={cancelReasonCode} onChange={(event) => setCancelReasonCode(event.target.value as ManagerKdsCancellationInput['reasonCode'])}><option value="manager_cancelled">店长现场取消</option><option value="guest_cancelled">客人确认取消</option><option value="unavailable_confirmed">确认无法出品</option><option value="other">其他原因</option></select></label>
-          <label><span>情况说明</span><input autoFocus maxLength={200} value={cancelReasonNote} onChange={(event) => setCancelReasonNote(event.target.value)} placeholder="例如：客人确认不再需要这杯酒" /></label>
+          <label><span>情况说明（选填）</span><input autoFocus maxLength={200} value={cancelReasonNote} onChange={(event) => setCancelReasonNote(event.target.value)} placeholder="可补充现场情况" /></label>
           <footer>
             <button className="secondary-button" disabled={busy} onClick={() => setCancelTarget(null)}>暂不取消</button>
-            <button className="danger-button" disabled={busy || cancelReasonNote.trim().length < 2} onClick={() => void cancelFulfillmentTask()}><Ban size={16} />确认取消出品</button>
+            <button className="danger-button" disabled={busy} onClick={() => void cancelFulfillmentTask()}><Ban size={16} />确认取消出品</button>
           </footer>
         </section>
       </div>}

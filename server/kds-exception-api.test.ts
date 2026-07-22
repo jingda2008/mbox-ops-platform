@@ -203,7 +203,7 @@ describe('KDS exception API', () => {
     registerCommerceRoutes(app, repository)
     const payload = {
       reasonCode: 'manager_cancelled',
-      reasonNote: '翻台检查发现商品尚未送达',
+      reasonNote: '',
       idempotencyKey: 'manager-turnover-cancel-0001',
     }
 
@@ -243,8 +243,16 @@ describe('KDS exception API', () => {
       grossAmount: 6800, discountAmount: 0, giftAmount: 0, payableAmount: 6800,
     })
     expect(state.paymentDomain.refunds).toHaveLength(0)
-    expect(state.orderDomain.kdsTasks.find((task) => task.id === taskId)?.exceptionEvents).toHaveLength(2)
-    expect(state.auditEntries.filter((entry) => entry.action === 'kds.manager_cancelled.v1')).toHaveLength(1)
+    const cancellationEvents = state.orderDomain.kdsTasks.find((task) => task.id === taskId)?.exceptionEvents ?? []
+    expect(cancellationEvents).toHaveLength(2)
+    expect(cancellationEvents.every((event) => event.reasonNote?.includes('未补充情况说明'))).toBe(true)
+    const cancellationAudit = state.auditEntries.filter((entry) => entry.action === 'kds.manager_cancelled.v1')
+    expect(cancellationAudit).toHaveLength(1)
+    expect(cancellationAudit[0]?.details).toMatchObject({
+      reasonCode: 'manager_cancelled',
+      reasonNote: null,
+      reasonNoteProvided: false,
+    })
 
     await app.close()
     await repository.close()

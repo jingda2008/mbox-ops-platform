@@ -160,6 +160,13 @@ test.describe('视觉与移动端适配', () => {
     await expect(page.getByRole('navigation', { name: '桌台功能' })).toBeVisible()
     await expectNoHorizontalOverflow(page)
 
+    await page.getByTitle('加入招牌鸡尾酒').click()
+    const mobileDock = page.getByRole('complementary', { name: '订单结算' })
+    const mobileSummary = mobileDock.getByRole('button', { name: /查看购物车，已选1件/ })
+    expect((await mobileDock.boundingBox())?.height ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(64)
+    expect((await mobileSummary.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44)
+    await expectNoHorizontalOverflow(page)
+
     const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze()
     expect(results.violations.filter((item) => ['serious', 'critical'].includes(item.impact ?? ''))).toEqual([])
   })
@@ -253,6 +260,9 @@ test.describe('视觉与移动端适配', () => {
     await expect(page.locator('.menu-cart-panel')).toHaveCount(0)
     const dock = page.getByRole('complementary', { name: '订单结算' })
     const summary = dock.getByRole('button', { name: /查看购物车，已选1件/ })
+    const dockBox = await dock.boundingBox()
+    expect(dockBox?.height ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(64)
+    expect((await summary.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44)
     await expect(summary).toContainText('已选 1 件')
     await expect(summary).toContainText('需要时打开核对')
     await expect(summary).not.toContainText('¥88')

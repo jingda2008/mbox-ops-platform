@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { useStaffIdentity } from './helpers'
 
-test('李艳可在出品履约中直接取消未送达酒水并留下原因', async ({ page }) => {
+test('李艳取消未送达酒水时情况说明为选填', async ({ page }) => {
   await useStaffIdentity(page, 'emp-chen', '李艳')
   await page.goto('/')
   await page.getByTitle('打开导航').click()
@@ -24,8 +24,10 @@ test('李艳可在出品履约中直接取消未送达酒水并留下原因', as
 
   const dialog = page.getByRole('dialog', { name: /取消精酿啤酒出品/ })
   await expect(dialog).toContainText('原订单、桌账和支付不会自动修改')
-  await dialog.getByLabel('情况说明').fill('客人确认不再需要这杯酒')
-  await dialog.getByRole('button', { name: '确认取消出品' }).click()
+  await expect(dialog.getByLabel('情况说明（选填）')).toHaveValue('')
+  const confirmCancellation = dialog.getByRole('button', { name: '确认取消出品' })
+  await expect(confirmCancellation).toBeEnabled()
+  await confirmCancellation.click()
 
   await expect(page.getByRole('status')).toContainText('精酿啤酒已停止出品')
   await expect(task).toHaveCount(0)

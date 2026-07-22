@@ -78,4 +78,51 @@ describe('commercial operations API', () => {
     await app.close()
     await repository.close()
   })
+
+  it('lets an authorized operator inspect failed work and requeue it without inflating attempts', async () => {
+    const { app, repository } = await fixture()
+    const occurredAt = new Date().toISOString()
+    await repository.mutate((state) => {
+      const tableSessionId = state.songState.tableSessions[0]!.id
+      state.orderDomain.orders.push({
+        id: 'order-print-retry-001', tableSessionId, status: 'submitted', items: [],
+        amounts: { grossAmount: 0, discountAmount: 0, giftAmount: 0, payableAmount: 0 }, revision: 1,
+        createdBy: 'emp-chen', createdAt: occurredAt, submittedBy: 'emp-chen', submittedAt: occurredAt, fulfilledAt: null,
+      })
+      state.commercialOps!.printJobs.push({
+        id: 'print-job-retry-001', orderId: 'order-print-retry-001', orderItemIds: ['item-print-retry-001'],
+        printerId: 'printer-bar', routeId: 'route-bar', status: 'failed', attempts: 1,
+        queuedAt: occurredAt, updatedAt: occurredAt, lastError: '打印机离线',
+      })
+      state.revision += 1
+    })
+
+    const unauthorized = await app.inject({
+      method: 'POST', url: '/api/commercial-ops/print-jobs/print-job-retry-001/result', headers: headers('emp-cashier'),
+      payload: { status: 'queued', error: '尝试越权重打', occurredAt, idempotencyKey: 'print-retry-unauthorized-001' },
+    })
+    expect(unauthorized.statusCode).toBe(403)
+
+    const payload = {
+      status: 'queued', error: '故障排除后重新排队', occurredAt,
+      idempotencyKey: 'print-retry-authorized-001',
+    }
+    const first = await app.inject({
+      method: 'POST', url: '/api/commercial-ops/print-jobs/print-job-retry-001/result', headers: headers('emp-chen'), payload,
+    })
+    const replay = await app.inject({
+      method: 'POST', url: '/api/commercial-ops/print-jobs/print-job-retry-001/result', headers: headers('emp-chen'), payload,
+    })
+
+    expect(first.statusCode, first.body).toBe(200)
+    expect(first.json()).toMatchObject({ status: 'queued', attempts: 1, lastError: null })
+    expect(replay.json()).toMatchObject({ status: 'queued', attempts: 1, lastError: null })
+    const state = await repository.read()
+    expect(state.commercialOps?.auditEvents.at(-1)).toMatchObject({
+      action: 'commercial.print_job.queued.v1', objectId: 'print-job-retry-001',
+      details: { previousStatus: 'failed', status: 'queued', attempts: 1 },
+    })
+    await app.close()
+    await repository.close()
+  })
 })

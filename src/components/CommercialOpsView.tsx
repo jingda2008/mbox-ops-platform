@@ -1,16 +1,18 @@
 import {
-  BadgeCheck, Banknote, BarChart3, CircleAlert, Download, Gift, LoaderCircle,
-  PackagePlus, Printer, QrCode, RefreshCw, Save, ScanLine, Settings2, Tags,
+  BadgeCheck, Banknote, BarChart3, ChevronDown, ChevronRight, CircleAlert, Download, Gift, LoaderCircle,
+  PackagePlus, Printer, QrCode, RefreshCw, RotateCcw, Save, ScanLine, Settings2, Tags,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import QRCode from 'qrcode'
 import * as commercialApi from '../commercial-ops-api'
 import type { BootstrapResponse } from '../shared/contracts'
-import type { CommercialOpsConfig, CommercialOpsWorkspace, ScanCodeBinding } from '../shared/commercial-ops-contracts'
+import type { CommercialOpsConfig, CommercialOpsWorkspace, PrintJob, ScanCodeBinding } from '../shared/commercial-ops-contracts'
 import { formatChinaDateTime } from '../shared/china-time'
+import { useRevealPanelScroll } from './use-reveal-panel-scroll'
 import './CommercialOpsView.css'
 
-type Tab = 'overview' | 'stock' | 'printing' | 'vouchers' | 'customers' | 'sales' | 'rules'
+type Tab = 'overview' | 'stock' | 'print-jobs' | 'printing' | 'vouchers' | 'customers' | 'sales' | 'rules'
+type PrintJobFilter = 'all' | 'queued' | 'failed' | 'printed'
 type Notice = { tone: 'success' | 'error'; message: string }
 
 export function CommercialOpsView({ data, onRefresh }: { data: BootstrapResponse; onRefresh: () => Promise<void> }) {
@@ -19,6 +21,9 @@ export function CommercialOpsView({ data, onRefresh }: { data: BootstrapResponse
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState('')
   const [notice, setNotice] = useState<Notice | null>(null)
+  const [printJobFilter, setPrintJobFilter] = useState<PrintJobFilter>('all')
+  const [panelRevealTick, setPanelRevealTick] = useState(0)
+  const contentRef = useRevealPanelScroll<HTMLDivElement>(panelRevealTick)
   const permissions = new Set(data.viewer?.permissionIds ?? [])
 
   const load = useCallback(async () => {
@@ -53,17 +58,29 @@ export function CommercialOpsView({ data, onRefresh }: { data: BootstrapResponse
   const state = workspace.state
   const canInventory = permissions.has('inventory.manage') || permissions.has('inventory.approve')
   const canConfig = permissions.has('config.manage')
+  const canOperatePrintJobs = permissions.has('kds.prepare') || canConfig
   const canVoucher = permissions.has('payment.collect')
   const canTags = permissions.has('benefit.manage')
   const tabs: Array<{ id: Tab; label: string; visible: boolean }> = [
     { id: 'overview', label: '经营概览', visible: true },
     { id: 'stock', label: '扫码进货', visible: canInventory },
+    { id: 'print-jobs', label: '打印任务', visible: true },
     { id: 'printing', label: '打印分流', visible: canConfig },
     { id: 'vouchers', label: '团购核销', visible: canVoucher },
     { id: 'customers', label: '客户标签', visible: canTags },
     { id: 'sales', label: '员工业绩', visible: workspace.salesByEmployeeCategory.length > 0 || permissions.has('order.view') },
     { id: 'rules', label: '经营规则', visible: canConfig },
   ]
+
+  function revealTab(nextTab: Tab) {
+    setTab(nextTab)
+    setPanelRevealTick((current) => current + 1)
+  }
+
+  function revealPrintJobs(filter: PrintJobFilter) {
+    setPrintJobFilter(filter)
+    revealTab('print-jobs')
+  }
 
   return <section className="commercial-ops-view">
     <header className="commercial-heading">
@@ -72,17 +89,20 @@ export function CommercialOpsView({ data, onRefresh }: { data: BootstrapResponse
     </header>
     {notice && <div className={`commercial-notice is-${notice.tone}`} role="status">{notice.tone === 'success' ? <BadgeCheck size={17} /> : <CircleAlert size={17} />}{notice.message}</div>}
     <nav className="commercial-tabs">{tabs.filter((item) => item.visible).map((item) => <button key={item.id} className={tab === item.id ? 'is-active' : ''} onClick={() => setTab(item.id)}>{item.label}</button>)}</nav>
-    {tab === 'overview' && <CommercialOverview workspace={workspace} />}
-    {tab === 'stock' && canInventory && <StockTools data={data} workspace={workspace} busy={busy} execute={execute} />}
-    {tab === 'printing' && canConfig && <PrintingTools data={data} config={state.config} busy={busy} execute={execute} />}
-    {tab === 'vouchers' && canVoucher && <VoucherTools data={data} workspace={workspace} busy={busy} execute={execute} />}
-    {tab === 'customers' && canTags && <CustomerTools data={data} workspace={workspace} busy={busy} execute={execute} />}
-    {tab === 'sales' && <SalesTools workspace={workspace} />}
-    {tab === 'rules' && canConfig && <RuleTools config={state.config} busy={busy} execute={execute} />}
+    <div ref={contentRef} className="commercial-tab-panel">
+      {tab === 'overview' && <CommercialOverview workspace={workspace} onRevealPrintJobs={revealPrintJobs} />}
+      {tab === 'stock' && canInventory && <StockTools data={data} workspace={workspace} busy={busy} execute={execute} />}
+      {tab === 'print-jobs' && <PrintJobTools data={data} workspace={workspace} filter={printJobFilter} onFilterChange={setPrintJobFilter} canOperate={canOperatePrintJobs} canConfig={canConfig} busy={busy} execute={execute} onOpenConfig={() => revealTab('printing')} />}
+      {tab === 'printing' && canConfig && <PrintingTools data={data} config={state.config} busy={busy} execute={execute} />}
+      {tab === 'vouchers' && canVoucher && <VoucherTools data={data} workspace={workspace} busy={busy} execute={execute} />}
+      {tab === 'customers' && canTags && <CustomerTools data={data} workspace={workspace} busy={busy} execute={execute} />}
+      {tab === 'sales' && <SalesTools workspace={workspace} />}
+      {tab === 'rules' && canConfig && <RuleTools config={state.config} busy={busy} execute={execute} />}
+    </div>
   </section>
 }
 
-function CommercialOverview({ workspace }: { workspace: CommercialOpsWorkspace }) {
+function CommercialOverview({ workspace, onRevealPrintJobs }: { workspace: CommercialOpsWorkspace; onRevealPrintJobs: (filter: PrintJobFilter) => void }) {
   const queued = workspace.state.printJobs.filter((job) => job.status === 'queued').length
   const failed = workspace.state.printJobs.filter((job) => job.status === 'failed').length
   const procurementCost = workspace.state.procurementBatches.reduce((sum, item) => sum + item.totalCostAmount, 0)
@@ -90,8 +110,8 @@ function CommercialOverview({ workspace }: { workspace: CommercialOpsWorkspace }
   return <div className="commercial-content">
     <div className="commercial-metrics">
       <Metric icon={<QrCode size={19} />} value={workspace.state.scanCodeBindings.filter((item) => item.enabled).length} label="已绑定货品码" />
-      <Metric icon={<Printer size={19} />} value={queued} label="待打印任务" warning={queued > 0} />
-      <Metric icon={<CircleAlert size={19} />} value={failed} label="打印失败" warning={failed > 0} />
+      <Metric icon={<Printer size={19} />} value={queued} label="待打印任务" warning={queued > 0} onClick={() => onRevealPrintJobs('queued')} />
+      <Metric icon={<CircleAlert size={19} />} value={failed} label="打印失败" warning={failed > 0} onClick={() => onRevealPrintJobs('failed')} />
       <Metric icon={<PackagePlus size={19} />} value={money(procurementCost)} label="采购批次成本" />
       <Metric icon={<Gift size={19} />} value={money(voucherSettlement)} label="团购结算额" />
     </div>
@@ -175,6 +195,92 @@ function StockTools({ data, workspace, busy, execute }: ToolProps) {
   </div>
 }
 
+function PrintJobTools({
+  data, workspace, filter, onFilterChange, canOperate, canConfig, busy, execute, onOpenConfig,
+}: {
+  data: BootstrapResponse
+  workspace: CommercialOpsWorkspace
+  filter: PrintJobFilter
+  onFilterChange: (filter: PrintJobFilter) => void
+  canOperate: boolean
+  canConfig: boolean
+  busy: string
+  execute: Execute
+  onOpenConfig: () => void
+}) {
+  const [expandedJobId, setExpandedJobId] = useState('')
+  const [failureReasons, setFailureReasons] = useState<Record<string, string>>({})
+  const jobs = workspace.state.printJobs.toSorted((left, right) => Date.parse(right.queuedAt) - Date.parse(left.queuedAt))
+  const visibleJobs = filter === 'all' ? jobs : jobs.filter((job) => job.status === filter)
+  const counts = {
+    all: jobs.length,
+    queued: jobs.filter((job) => job.status === 'queued').length,
+    failed: jobs.filter((job) => job.status === 'failed').length,
+    printed: jobs.filter((job) => job.status === 'printed').length,
+  }
+
+  function updateJob(job: PrintJob, status: 'queued' | 'printed' | 'failed', note: string, success: string) {
+    void execute(`print-job:${job.id}:${status}`, success, () => commercialApi.reportPrintJobResult(job.id, { status, error: note }))
+  }
+
+  return <div className="commercial-content print-job-workspace">
+    <section className="commercial-section">
+      <header className="print-job-heading">
+        <SectionTitle icon={<Printer size={18} />} title="打印任务处理" />
+        {canConfig && <button type="button" className="secondary-button" onClick={onOpenConfig}><Settings2 size={16} />打印设置</button>}
+      </header>
+      <div className="print-job-filters" aria-label="打印任务筛选">
+        {([
+          ['all', '全部'], ['queued', '待打印'], ['failed', '失败'], ['printed', '已打印'],
+        ] as const).map(([id, label]) => <button type="button" key={id} className={filter === id ? 'is-active' : ''} onClick={() => onFilterChange(id)}>{label}<b>{counts[id]}</b></button>)}
+      </div>
+      {visibleJobs.length === 0
+        ? <div className="print-job-empty"><BadgeCheck size={22} /><strong>{filter === 'queued' ? '当前没有待打印任务' : filter === 'failed' ? '当前没有打印失败任务' : '当前筛选下没有任务'}</strong><span>切换上方状态可查看其他打印记录</span></div>
+        : <div className="print-job-list">{visibleJobs.map((job) => {
+          const order = data.orderDomain.orders.find((candidate) => candidate.id === job.orderId)
+          const session = data.songState.tableSessions.find((candidate) => candidate.id === order?.tableSessionId)
+          const route = workspace.state.config.printerRoutes.find((candidate) => candidate.id === job.routeId)
+          const printer = workspace.state.config.printers.find((candidate) => candidate.id === job.printerId)
+          const items = order?.items.filter((item) => job.orderItemIds.includes(item.id)) ?? []
+          const expanded = expandedJobId === job.id
+          const failureReason = failureReasons[job.id] ?? '打印机无响应'
+          return <article key={job.id} className={`print-job-card is-${job.status}`}>
+            <button type="button" className="print-job-summary" aria-expanded={expanded} aria-controls={`print-job-detail-${job.id}`} onClick={() => setExpandedJobId(expanded ? '' : job.id)}>
+              <span className={`print-job-status is-${job.status}`}>{printJobStatus(job.status)}</span>
+              <span className="print-job-primary"><strong>{session?.tableCode ?? '桌台待核对'} · {route?.name ?? '打印单'}</strong><small>{items.length > 0 ? items.map((item) => `${item.name} ×${item.quantity}`).join('、') : `订单 ${shortId(job.orderId)}`}</small></span>
+              <span className="print-job-device"><strong>{printer?.name ?? '打印机未配置'}</strong><small>{formatChinaDateTime(job.queuedAt, { second: undefined })}</small></span>
+              <ChevronDown size={18} />
+            </button>
+            {expanded && <div id={`print-job-detail-${job.id}`} className="print-job-detail">
+              <dl>
+                <div><dt>桌台</dt><dd>{session?.tableCode ?? '未关联当前桌台'}</dd></div>
+                <div><dt>订单</dt><dd>{shortId(job.orderId)}</dd></div>
+                <div><dt>打印路由</dt><dd>{route?.name ?? job.routeId}{route && !route.enabled ? '（已停用）' : ''}</dd></div>
+                <div><dt>目标设备</dt><dd>{printer?.name ?? job.printerId}{printer && !printer.enabled ? '（已停用）' : ''}</dd></div>
+                <div><dt>连接方式</dt><dd>{printerConnectionLabel(printer?.connectionMode)}{canConfig && printer?.endpointReference ? ` · ${printer.endpointReference}` : ''}</dd></div>
+                <div><dt>尝试次数</dt><dd>{job.attempts}次</dd></div>
+              </dl>
+              <div className="print-job-items"><strong>本次打印内容</strong>{items.length > 0 ? items.map((item) => <div key={item.id}><span>{item.name}<small>{item.specification}</small></span><b>×{item.quantity}</b></div>) : <p>订单明细已归档，请凭订单号追溯。</p>}</div>
+              {job.lastError && <div className="print-job-error"><CircleAlert size={17} /><span><strong>上次失败原因</strong>{job.lastError}</span></div>}
+              {canOperate ? <div className="print-job-actions">
+                {job.status === 'queued' && <>
+                  <button type="button" className="primary-button" disabled={Boolean(busy)} onClick={() => updateJob(job, 'printed', '员工确认打印单已正常输出', `${session?.tableCode ?? '该桌'}打印任务已完成`)}><BadgeCheck size={16} />确认已打印</button>
+                  <label><span>故障原因</span><select value={failureReason} onChange={(event) => setFailureReasons((current) => ({ ...current, [job.id]: event.target.value }))}><option>打印机无响应</option><option>打印机离线</option><option>打印机缺纸</option><option>打印机卡纸</option><option>打印内容不完整</option></select></label>
+                  <button type="button" className="danger-secondary-button" disabled={Boolean(busy)} onClick={() => updateJob(job, 'failed', failureReason, `${session?.tableCode ?? '该桌'}打印故障已登记`)}><CircleAlert size={16} />登记故障</button>
+                </>}
+                {job.status === 'failed' && <>
+                  <button type="button" className="primary-button" disabled={Boolean(busy)} onClick={() => updateJob(job, 'queued', '故障处理后由员工重新加入打印队列', `${session?.tableCode ?? '该桌'}任务已重新加入打印队列`)}><RotateCcw size={16} />重新加入队列</button>
+                  <button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => updateJob(job, 'printed', '员工确认故障后已人工补打', `${session?.tableCode ?? '该桌'}补打已确认完成`)}><BadgeCheck size={16} />确认已补打</button>
+                </>}
+                {job.status === 'printed' && <span className="print-job-complete"><BadgeCheck size={16} />任务已完成，无需继续操作</span>}
+              </div> : <div className="print-job-readonly">当前岗位可查看详情；打印回执由吧台、厨房或管理人员处理。</div>}
+            </div>}
+          </article>
+        })}</div>}
+    </section>
+  </div>
+}
+
 function PrintingTools({ data, config, busy, execute }: { data: BootstrapResponse; config: CommercialOpsConfig; busy: string; execute: Execute }) {
   const [draft, setDraft] = useState(() => structuredClone(config))
   const [reason, setReason] = useState('配置酒水与小吃双打印机分流')
@@ -232,12 +338,20 @@ function RuleTools({ config, busy, execute }: { config: CommercialOpsConfig; bus
 interface ToolProps { data: BootstrapResponse; workspace: CommercialOpsWorkspace; busy: string; execute: Execute }
 type Execute = (key: string, success: string, action: () => Promise<unknown>) => void
 
-function Metric({ icon, value, label, warning = false }: { icon: ReactNode; value: number | string; label: string; warning?: boolean }) { return <div className={warning ? 'is-warning' : ''}>{icon}<strong>{value}</strong><span>{label}</span></div> }
+function Metric({ icon, value, label, warning = false, onClick }: { icon: ReactNode; value: number | string; label: string; warning?: boolean; onClick?: () => void }) {
+  const content = <>{icon}<strong>{value}</strong><span>{label}</span>{onClick && <ChevronRight className="metric-chevron" size={17} />}</>
+  return onClick
+    ? <button type="button" className={warning ? 'is-warning is-actionable' : 'is-actionable'} aria-label={`${label}${value}，查看详情`} onClick={onClick}>{content}</button>
+    : <div className={warning ? 'is-warning' : ''}>{content}</div>
+}
 function Capability({ title, value }: { title: string; value: string }) { return <div><span>{title}</span><strong>{value}</strong></div> }
 function SectionTitle({ icon, title }: { icon: ReactNode; title: string }) { return <header className="commercial-section-title">{icon}<strong>{title}</strong></header> }
 function Field({ label, children }: { label: string; children: ReactNode }) { return <label className="commercial-field"><span>{label}</span>{children}</label> }
 function money(amount: number) { return `¥${(amount / 100).toFixed(2)}` }
 function errorMessage(error: unknown) { return error instanceof Error ? error.message : '经营工具操作失败' }
+function shortId(id: string) { return id.length > 12 ? id.slice(-12) : id }
+function printJobStatus(status: PrintJob['status']) { return status === 'queued' ? '待打印' : status === 'failed' ? '打印失败' : '已打印' }
+function printerConnectionLabel(mode?: CommercialOpsConfig['printers'][number]['connectionMode']) { return mode === 'network' ? '网络打印机' : mode === 'android_bridge' ? '安卓打印桥' : mode === 'browser' ? '浏览器打印' : '连接方式未配置' }
 function targetName(data: BootstrapResponse, item: { targetType: 'product' | 'ingredient'; targetId: string }) { return item.targetType === 'product' ? data.products.find((product) => product.id === item.targetId)?.name ?? item.targetId : data.inventoryDomain?.ingredientSkus.find((ingredient) => ingredient.id === item.targetId)?.name ?? item.targetId }
 function configPayload(config: CommercialOpsConfig) { const { version: _version, updatedAt: _updatedAt, updatedBy: _updatedBy, ...payload } = config; return payload }
 

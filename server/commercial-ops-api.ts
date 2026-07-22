@@ -127,7 +127,7 @@ const memberTagsSchema = z.object({
 }).strict()
 
 const printDecisionSchema = z.object({
-  status: z.enum(['printed', 'failed']),
+  status: z.enum(['queued', 'printed', 'failed']),
   error: z.string().trim().max(300).default(''),
   occurredAt,
   idempotencyKey,
@@ -163,7 +163,7 @@ export function registerCommercialOpsRoutes(app: FastifyInstance, repository: Ru
     const state = await repository.read()
     const actor = requireAnyPermission(request, state, [
       'config.manage', 'inventory.view', 'inventory.manage', 'inventory.approve',
-      'payment.collect', 'finance.view', 'benefit.view', 'benefit.manage', 'order.view',
+      'payment.collect', 'finance.view', 'benefit.view', 'benefit.manage', 'order.view', 'kds.prepare',
     ])
     const permissions = new Set(effectivePermissionIdsForEmployee(state, actor.actorId))
     const domain = structuredClone(commercialOpsFor(state))
@@ -409,15 +409,20 @@ export function registerCommercialOpsRoutes(app: FastifyInstance, repository: Ru
         const inputFingerprint = fingerprint({ jobId: job.id, ...input })
         const replay = idempotentResult(domain, input.idempotencyKey, 'commercial.print_job.result', inputFingerprint)
         if (replay) return job
+        const previousStatus = job.status
+        if (previousStatus === 'printed') throw new Error('打印任务已经完成，无需重复操作')
+        if (input.status === previousStatus) throw new Error(input.status === 'queued' ? '打印任务已经在队列中' : '打印任务状态没有变化')
+        if (input.status === 'queued' && previousStatus !== 'failed') throw new Error('只有打印失败的任务可以重新加入队列')
+        if (input.status === 'failed' && previousStatus !== 'queued') throw new Error('只有待打印任务可以登记故障')
         job.status = input.status
-        job.attempts += 1
+        if (input.status !== 'queued') job.attempts += 1
         job.updatedAt = input.occurredAt
         job.lastError = input.status === 'failed' ? input.error || '打印桥接端未返回原因' : null
         recordCommercialMutation(domain, {
           key: input.idempotencyKey, operation: 'commercial.print_job.result', inputFingerprint,
           resultId: job.id, actorId: actor.actorId, action: `commercial.print_job.${input.status}.v1`,
           objectType: 'print_job', reason: input.error || '打印桥接端回执', occurredAt: input.occurredAt,
-          details: { status: job.status, attempts: job.attempts },
+          details: { previousStatus, status: job.status, attempts: job.attempts },
         })
         return job
       })

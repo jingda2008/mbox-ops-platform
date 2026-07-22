@@ -5,6 +5,7 @@ import type {
   CommercialOpsConfig,
   CommercialOpsWorkspace,
   GroupVoucherRedemption,
+  PrintJob,
   ProcurementBatch,
   ScanCodeBinding,
 } from './shared/commercial-ops-contracts'
@@ -91,5 +92,11 @@ export function redeemGroupVoucher(input: {
 export function updateMemberTags(memberId: string, tags: string[], reason: string) {
   return commercialRequest<MemberProfile>(`/api/commercial-ops/members/${encodeURIComponent(memberId)}/tags`, {
     method: 'PUT', body: JSON.stringify(envelope({ tags, reason }, 'member-tags')),
+  })
+}
+
+export function reportPrintJobResult(jobId: string, input: { status: 'queued' | 'printed' | 'failed'; error?: string }) {
+  return commercialRequest<PrintJob>(`/api/commercial-ops/print-jobs/${encodeURIComponent(jobId)}/result`, {
+    method: 'POST', body: JSON.stringify(envelope({ status: input.status, error: input.error ?? '' }, 'print-job-result')),
   })
 }

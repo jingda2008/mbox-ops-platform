@@ -211,6 +211,78 @@ test.describe('视觉与移动端适配', () => {
     await expectNoHorizontalOverflow(page)
   })
 
+  test('员工没有已开桌台时不能提交空桌号订单', async ({ page }) => {
+    await useStaffIdentity(page, 'emp-chen', '李艳')
+    let orderRequests = 0
+    await page.route('**/api/bootstrap**', async (route) => {
+      const headers = { ...route.request().headers() }
+      delete headers['if-none-match']
+      const response = await route.fetch({ headers })
+      const data = await response.json()
+      data.tables = data.tables.map((table: { status: string }) => ({ ...table, status: 'available' }))
+      await route.fulfill({ response, json: data })
+    })
+    await page.route('**/api/commerce/orders', async (route) => {
+      orderRequests += 1
+      await route.continue()
+    })
+    await page.goto('/')
+    await page.getByTitle('打开导航').click()
+    await page.locator('.sidebar nav').getByRole('button', { name: '订单与出品' }).click()
+
+    await expect(page.getByText('尚未选择桌台')).toBeVisible()
+    await expect(page.getByLabel('选择桌台')).toBeDisabled()
+    await page.getByTitle('加入招牌鸡尾酒').click()
+    await expect(page.getByText('当前没有已开台桌台，请先到“现场调度”开台')).toBeVisible()
+    await page.getByRole('button', { name: /查看购物车/ }).click()
+    await expect(page.getByRole('dialog', { name: '购物车明细' }).getByRole('button', { name: '请先选择桌台' })).toBeDisabled()
+    expect(orderRequests).toBe(0)
+  })
+
+  test('员工协助点单默认收起金额，选桌后才可核对并进入支付', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await useStaffIdentity(page, 'emp-chen', '李艳')
+    await page.goto('/')
+    await page.locator('.sidebar nav').getByRole('button', { name: '订单与出品' }).click()
+
+    const tableSelect = page.getByLabel('选择桌台')
+    await expect(tableSelect).toHaveValue('')
+    await expect(page.getByText('请先选择客人所在桌台，再开始核对订单')).toBeVisible()
+    await page.getByTitle('加入招牌鸡尾酒').click()
+
+    await expect(page.locator('.menu-cart-panel')).toHaveCount(0)
+    const dock = page.getByRole('complementary', { name: '订单结算' })
+    const summary = dock.getByRole('button', { name: /查看购物车，已选1件/ })
+    await expect(summary).toContainText('已选 1 件')
+    await expect(summary).toContainText('需要时打开核对')
+    await expect(summary).not.toContainText('¥88')
+    await expect(dock.getByRole('button', { name: '请先选择桌台' })).toBeDisabled()
+
+    await tableSelect.selectOption('table-l01')
+    await dock.getByRole('button', { name: '核对订单' }).click()
+    const drawer = page.getByRole('dialog', { name: '购物车明细' })
+    await expect(drawer.getByText('招牌鸡尾酒', { exact: true })).toBeVisible()
+    await expect(drawer.getByText('¥88', { exact: true })).toBeVisible()
+    await expect(drawer.getByRole('button', { name: '核对无误，确认下单' })).toBeEnabled()
+
+    await page.route('**/api/commerce/orders', async (route) => {
+      await route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          code: 'COMMERCE_TABLE_NOT_OPEN',
+          message: '桌台尚未开台或已经翻台，请先开台后再下单',
+        }),
+      })
+    })
+    await drawer.getByRole('button', { name: '核对无误，确认下单' }).click()
+    await page.getByRole('dialog', { name: '确认上单' }).getByRole('button', { name: '确认上单' }).click()
+    await expect(page.locator('.notice-bar.is-error')).toContainText('下单未完成：桌台尚未开台或已经翻台，请先开台后再下单')
+    await expect(page.getByRole('dialog', { name: '确认上单' })).toContainText('桌台尚未开台或已经翻台，请先开台后再下单')
+    await expect(page.getByRole('dialog', { name: '购物车明细' })).toContainText('招牌鸡尾酒')
+    await expectNoHorizontalOverflow(page)
+  })
+
   test('AI能力中心清楚区分服务端执行与人工审计且移动端不溢出', async ({ page }) => {
     await page.setViewportSize({ width: 430, height: 932 })
     await useStaffIdentity(page, 'emp-owner', '陈方宇')

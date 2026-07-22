@@ -854,7 +854,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
           </div>
         </header>
 
-        {notice && <div className={`notice-bar ${/失败|错误|无效|不能|不可|拒绝|未保存/.test(notice) ? 'is-error' : 'is-success'}`} role="status" aria-live="polite">{notice}<button title="关闭提示" onClick={() => setNotice('')}><X size={16} /></button></div>}
+        {notice && <div className={`notice-bar ${/失败|错误|无效|不能|不可|拒绝|未保存|未完成|尚未|请先/.test(notice) ? 'is-error' : 'is-success'}`} role="status" aria-live="polite">{notice}<button title="关闭提示" onClick={() => setNotice('')}><X size={16} /></button></div>}
 
         {turnoverReviewOpen && selectedTable && (
           <div className="turnover-review-backdrop" role="presentation">

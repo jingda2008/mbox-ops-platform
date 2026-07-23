@@ -56,6 +56,7 @@ export interface RuntimeConfig {
   assistantProvider: z.infer<typeof assistantProviderSchema>
   geminiApiKey?: string
   geminiModel: string
+  geminiEndpoint?: string
   assistantHttpTimeoutMs: number
   releaseSha: string
   releaseImageDigest: string
@@ -214,6 +215,7 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
     assistantProvider: assistantProviderSchema.parse(env.MBOX_ASSISTANT_PROVIDER ?? 'disabled'),
     geminiApiKey: env.MBOX_GEMINI_API_KEY?.trim() || undefined,
     geminiModel: env.MBOX_GEMINI_MODEL?.trim() || 'gemini-3.5-flash',
+    geminiEndpoint: env.MBOX_GEMINI_ENDPOINT?.trim() || undefined,
     assistantHttpTimeoutMs: parseInteger(
       env.MBOX_ASSISTANT_HTTP_TIMEOUT_MS,
       20_000,
@@ -278,6 +280,13 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
     }
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{1,99}$/.test(config.geminiModel)) {
       throw new Error('MBOX_GEMINI_MODEL格式无效')
+    }
+    if (config.geminiEndpoint) {
+      assertUrl(
+        config.geminiEndpoint,
+        'MBOX_GEMINI_ENDPOINT',
+        runtimeMode === 'staging' || runtimeMode === 'production' ? ['https:'] : ['http:', 'https:'],
+      )
     }
   }
 

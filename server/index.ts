@@ -274,6 +274,7 @@ await registerAssistantRoutes(app, {
         apiKey: runtimeConfig.geminiApiKey!,
         model: runtimeConfig.geminiModel,
         timeoutMs: runtimeConfig.assistantHttpTimeoutMs,
+        endpoint: runtimeConfig.geminiEndpoint,
       })
     : undefined,
 })

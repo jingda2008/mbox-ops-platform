@@ -571,6 +571,7 @@ function ProductSection({ data, run }: SectionProps) {
     await run(() => createProductRequest({
       sku, name, specification: '1份', categoryId, categoryName: categories.find(([id]) => id === categoryId)?.[1] ?? '推荐', description: '', imageUrl: '', tags: [], sortOrder: data.products.length + 1, listPriceAmount: yuanToFen(price), costAmount: 0,
       stationId, enabled: true, soldOut: false, soldOutReason: '', availableFrom: null, availableUntil: null,
+      guestVisible: true, requiresFulfillment: true, maxOrderQuantity: 50,
     }), `${name}已建立`)
     setSku('')
     setName('')
@@ -669,7 +670,10 @@ function ProductEditor({ product, workstations, canManageCosts, run, onClose }: 
             <label><span>分类名称</span><input required value={draft.categoryName ?? ''} onChange={(event) => setDraft({ ...draft, categoryName: event.target.value })} /></label>
             <label><span>标价（元）</span><input type="number" min={0} step="0.01" required value={fenToYuan(draft.listPriceAmount)} onChange={(event) => setDraft({ ...draft, listPriceAmount: yuanToFen(Number(event.target.value)) })} /></label>
             {canManageCosts ? <label><span>成本（元）</span><input type="number" min={0} step="0.01" required value={fenToYuan(draft.costAmount)} onChange={(event) => setDraft({ ...draft, costAmount: yuanToFen(Number(event.target.value)) })} /></label> : <label><span>成本（财务权限）</span><input value="已保护，不会修改" disabled /></label>}
-            <label><span>出品口</span><select value={draft.stationId} onChange={(event) => setDraft({ ...draft, stationId: event.target.value })}>{!workstations.some((station) => station.id === draft.stationId) && <option value={draft.stationId}>{draft.stationId}（旧配置）</option>}{workstations.map((station) => <option key={station.id} value={station.id}>{station.name}{station.enabled ? '' : '（停用）'}</option>)}</select></label>
+            <label><span>出品方式</span><select value={draft.requiresFulfillment === false ? 'none' : 'workstation'} onChange={(event) => setDraft({ ...draft, requiresFulfillment: event.target.value !== 'none', stationId: event.target.value === 'none' ? 'non-fulfillment' : (workstations.find((station) => station.enabled)?.id ?? draft.stationId) })}><option value="workstation">进入吧台/厨房出品</option><option value="none">无需出品（仅计入订单）</option></select></label>
+            {draft.requiresFulfillment !== false && <label><span>出品口</span><select value={draft.stationId} onChange={(event) => setDraft({ ...draft, stationId: event.target.value })}>{!workstations.some((station) => station.id === draft.stationId) && <option value={draft.stationId}>{draft.stationId}（旧配置）</option>}{workstations.map((station) => <option key={station.id} value={station.id}>{station.name}{station.enabled ? '' : '（停用）'}</option>)}</select></label>}
+            <label><span>客人自助菜单</span><select value={draft.guestVisible === false ? 'hidden' : 'visible'} onChange={(event) => setDraft({ ...draft, guestVisible: event.target.value === 'visible' })}><option value="visible">客人可见</option><option value="hidden">仅员工可见</option></select></label>
+            <label><span>单笔最大数量</span><input type="number" min={1} max={9999} required value={draft.maxOrderQuantity ?? 50} onChange={(event) => setDraft({ ...draft, maxOrderQuantity: Math.max(1, Math.min(9999, Number(event.target.value))) })} /></label>
             <label><span>菜单排序</span><input type="number" min={0} max={9999} value={draft.sortOrder ?? 999} onChange={(event) => setDraft({ ...draft, sortOrder: Number(event.target.value) })} /></label>
             <label><span>供应开始</span><input type="time" value={draft.availableFrom ?? ''} onChange={(event) => setDraft({ ...draft, availableFrom: event.target.value || null })} /></label>
             <label><span>供应结束</span><input type="time" value={draft.availableUntil ?? ''} onChange={(event) => setDraft({ ...draft, availableUntil: event.target.value || null })} /></label>
@@ -700,6 +704,9 @@ function toProductDraft(product: MenuProduct): ProductWriteInput {
     soldOutReason: product.soldOutReason ?? '',
     availableFrom: product.availableFrom ?? null,
     availableUntil: product.availableUntil ?? null,
+    guestVisible: product.guestVisible ?? true,
+    requiresFulfillment: product.requiresFulfillment ?? true,
+    maxOrderQuantity: product.maxOrderQuantity ?? 50,
     listPriceAmount: product.listPriceAmount,
     costAmount: product.costAmount,
     stationId: product.stationId,

@@ -301,6 +301,7 @@ export function confirmBenefitRedemption(state: RuntimeState, redemptionId: stri
         unitSalePriceAmount: 0,
         unitCostAmount: product.costAmount,
         stationId: product.stationId,
+        requiresFulfillment: product.requiresFulfillment !== false,
         configVersion: product.configVersion,
       },
       actorId: actor.id,

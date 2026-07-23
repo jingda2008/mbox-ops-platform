@@ -208,6 +208,9 @@ function normalizeProductInput(input: ProductWriteInput): ProductWriteInput {
     soldOutReason: soldOut ? input.soldOutReason?.trim() || '暂时售罄' : '',
     availableFrom: input.availableFrom || null,
     availableUntil: input.availableUntil || null,
+    guestVisible: input.guestVisible ?? true,
+    requiresFulfillment: input.requiresFulfillment ?? true,
+    maxOrderQuantity: input.maxOrderQuantity ?? 50,
   }
 }
 

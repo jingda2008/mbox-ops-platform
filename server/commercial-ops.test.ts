@@ -69,6 +69,21 @@ describe('commercial operations domain', () => {
     expect(jobs.find((job) => job.routeId === 'route-kitchen')?.orderItemIds).toEqual(['order-print-food'])
   })
 
+  it('does not send non-fulfillment adjustment lines to production printers', () => {
+    const state = createSeedState()
+    const submitted = order('order-adjustment')
+    submitted.items.push({
+      id: 'order-adjustment-balance', skuId: 'product-balance-adjustment', name: '补差额', specification: '1元', quantity: 88,
+      unitListPriceAmount: 100, unitSalePriceAmount: 100, unitCostAmount: 0,
+      stationId: 'non-fulfillment', requiresFulfillment: false, configVersion: 1,
+      fulfillmentStatus: 'delivered', kdsTaskId: null, addedBy: 'emp-cashier', addedAt: NOW,
+    })
+
+    const jobs = queuePrintJobsForOrder(state, submitted, NOW)
+
+    expect(jobs.flatMap((job) => job.orderItemIds)).not.toContain('order-adjustment-balance')
+  })
+
   it('aggregates employee sales by product category with gross profit', () => {
     const state = createSeedState()
     const submitted = order('order-sales')

@@ -3,7 +3,7 @@ import { z } from 'zod'
 export const quickOrderSchema = z.object({
   tableId: z.string().min(1),
   productId: z.string().min(1),
-  quantity: z.number().int().min(1).max(50),
+  quantity: z.number().int().min(1).max(9999),
   actorId: z.string().min(1),
   idempotencyKey: z.string().min(8).max(128),
 })
@@ -12,7 +12,7 @@ export const cartOrderSchema = z.object({
   tableId: z.string().min(1),
   items: z.array(z.object({
     productId: z.string().min(1),
-    quantity: z.number().int().min(1).max(50),
+    quantity: z.number().int().min(1).max(9999),
   })).min(1).max(50),
   actorId: z.string().min(1),
   idempotencyKey: z.string().min(8).max(128),
@@ -100,7 +100,7 @@ export const complimentaryOrderSchema = z.object({
   tableId: z.string().min(1),
   items: z.array(z.object({
     productId: z.string().min(1),
-    quantity: z.number().int().min(1).max(50),
+    quantity: z.number().int().min(1).max(9999),
   })).min(1).max(20),
   reason: z.string().trim().min(2).max(200),
   sourceKdsTaskId: z.string().min(1).nullable().default(null),

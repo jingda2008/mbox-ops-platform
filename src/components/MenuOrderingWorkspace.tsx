@@ -121,7 +121,12 @@ export function MenuOrderingWorkspace({
   }
 
   function applyQuantityChange(productId: string, delta: number) {
-    const nextQuantity = Math.max(0, Math.min(50, (cart[productId] ?? 0) + delta))
+    setProductQuantity(productId, (cart[productId] ?? 0) + delta, delta > 0 ? 'product_added' : 'product_removed')
+  }
+
+  function setProductQuantity(productId: string, requestedQuantity: number, interactionType: 'product_added' | 'product_removed' = 'product_added') {
+    const product = products.find((item) => item.id === productId)
+    const nextQuantity = Math.max(0, Math.min(product?.maxOrderQuantity ?? 50, Math.round(requestedQuantity)))
     setCart((current) => {
       if (nextQuantity === 0) {
         const next = { ...current }
@@ -131,7 +136,7 @@ export function MenuOrderingWorkspace({
       return { ...current, [productId]: nextQuantity }
     })
     onInteraction?.({
-      type: delta > 0 ? 'product_added' : 'product_removed',
+      type: interactionType,
       productId,
       quantity: nextQuantity,
     })
@@ -195,9 +200,11 @@ export function MenuOrderingWorkspace({
   ) : cartProducts.map((product) => (
     <div className="menu-cart-line" key={product.id}>
       <div><strong>{product.name}</strong><span>¥{(product.listPriceAmount / 100).toFixed(0)} × {cart[product.id]}</span></div>
-      <div className="menu-stepper">
+      <div className={`menu-stepper${(product.maxOrderQuantity ?? 50) > 50 ? ' has-direct-input' : ''}`}>
         <button title={`移除${product.name}`} onClick={() => removeProduct(product.id)}><Trash2 size={15} /></button>
-        <strong>{cart[product.id]}</strong>
+        {(product.maxOrderQuantity ?? 50) > 50
+          ? <input aria-label={`${product.name}数量`} type="number" inputMode="numeric" min={1} max={product.maxOrderQuantity} value={cart[product.id]} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setProductQuantity(product.id, Number(event.target.value))} />
+          : <strong>{cart[product.id]}</strong>}
         <button title={`增加${product.name}`} onClick={() => changeQuantity(product.id, 1)}><Plus size={15} /></button>
       </div>
     </div>
@@ -244,9 +251,11 @@ export function MenuOrderingWorkspace({
                       ) : quantity === 0 ? (
                         <button className="menu-add-button" title={`加入${product.name}`} onClick={() => changeQuantity(product.id, 1)}><Plus size={20} /></button>
                       ) : (
-                        <div className="menu-stepper">
+                        <div className={`menu-stepper${(product.maxOrderQuantity ?? 50) > 50 ? ' has-direct-input' : ''}`}>
                           <button title={`减少${product.name}`} onClick={() => changeQuantity(product.id, -1)}><Minus size={17} /></button>
-                          <strong>{quantity}</strong>
+                          {(product.maxOrderQuantity ?? 50) > 50
+                            ? <input aria-label={`${product.name}数量`} type="number" inputMode="numeric" min={1} max={product.maxOrderQuantity} value={quantity} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setProductQuantity(product.id, Number(event.target.value))} />
+                            : <strong>{quantity}</strong>}
                           <button title={`增加${product.name}`} onClick={() => changeQuantity(product.id, 1)}><Plus size={17} /></button>
                         </div>
                       )}

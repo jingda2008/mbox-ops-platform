@@ -32,6 +32,8 @@
 .menu-stepper { height: 34px; display: grid; grid-template-columns: 34px 30px 34px; align-items: center; border: 1px solid var(--line-strong); border-radius: 5px; background: #fff; }
 .menu-stepper button { height: 32px; display: grid; place-items: center; border: 0; background: transparent; color: var(--ink); }
 .menu-stepper strong { text-align: center; font-size: 13px; }
+.menu-stepper.has-direct-input { grid-template-columns: 34px minmax(52px, 72px) 34px; }
+.menu-stepper input { width: 100%; min-width: 0; height: 30px; padding: 0 4px; border: 0; border-inline: 1px solid var(--line); border-radius: 0; background: #fff; color: var(--ink); font: inherit; font-size: 13px; font-weight: 700; text-align: center; }
 .menu-cart-panel { min-width: 0; display: grid; grid-template-rows: auto minmax(120px, 1fr) auto auto auto; padding: 16px; border-left: 1px solid var(--line); background: #fff; }
 .menu-cart-heading { min-height: 43px; display: grid; grid-template-columns: 25px 1fr auto; align-items: center; border-bottom: 1px solid var(--line); }
 .menu-cart-heading span { font-size: 11px; }

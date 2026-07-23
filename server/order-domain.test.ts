@@ -383,6 +383,29 @@ describe('order authorization and submission', () => {
       entries: [{ type: 'order_gross_charge', amount: 2_500, balanceAfter: 2_500, sequence: 1 }],
     })
   })
+
+  it('records non-fulfillment adjustment items without creating KDS work', () => {
+    const state = createOrderDomainState()
+    const order = draft(state)
+    addItem(state, order.id, itemInput({
+      skuId: 'product-balance-adjustment',
+      name: '补差额',
+      specification: '1元',
+      quantity: 188,
+      unitListPriceAmount: 100,
+      unitSalePriceAmount: 100,
+      unitCostAmount: 0,
+      stationId: 'non-fulfillment',
+      requiresFulfillment: false,
+    }))
+
+    const submitted = submit(state)
+
+    expect(submitted).toMatchObject({ status: 'fulfilled', fulfilledAt: T2 })
+    expect(submitted.items[0]).toMatchObject({ fulfillmentStatus: 'delivered', kdsTaskId: null })
+    expect(state.kdsTasks).toHaveLength(0)
+    expect(getTableBalance(state, order.tableSessionId)).toBe(18_800)
+  })
 })
 
 describe('KDS item fulfillment', () => {

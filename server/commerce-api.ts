@@ -187,6 +187,9 @@ export function registerCommerceRoutes(
       const products = input.items.map((item) => {
         const product = state.products.find((candidate) => candidate.id === item.productId && candidate.enabled)
         if (!product) throw new CommerceRequestError('购物车中有商品已下架，请移除后重新提交', 'COMMERCE_PRODUCT_UNAVAILABLE')
+        if (item.quantity > (product.maxOrderQuantity ?? 50)) {
+          throw new CommerceRequestError(`${product.name}单笔最多可下单${product.maxOrderQuantity ?? 50}${product.specification}`, 'COMMERCE_PRODUCT_QUANTITY_EXCEEDED', 400)
+        }
         const availability = productAvailability(product, new Date(), state.store.timezone)
         if (!availability.orderable) {
           throw new CommerceRequestError(`${product.name}当前不可下单：${availability.label}`, 'COMMERCE_PRODUCT_NOT_ORDERABLE')
@@ -206,7 +209,10 @@ export function registerCommerceRoutes(
         idempotencyKey: `${input.idempotencyKey}:draft`,
       })
       products.forEach(({ product, quantity }, index) => {
-        const workstation = routeProductToEnabledWorkstation(state, product.stationId)
+        const requiresFulfillment = product.requiresFulfillment !== false
+        const stationId = requiresFulfillment
+          ? routeProductToEnabledWorkstation(state, product.stationId).id
+          : product.stationId
         addOrderItem(state.orderDomain, {
           orderId,
           item: {
@@ -218,7 +224,8 @@ export function registerCommerceRoutes(
             unitListPriceAmount: product.listPriceAmount,
             unitSalePriceAmount: product.listPriceAmount,
             unitCostAmount: product.costAmount,
-            stationId: workstation.id,
+            stationId,
+            requiresFulfillment,
             configVersion: product.configVersion,
           },
           actorId: actor.actorId,
@@ -362,6 +369,7 @@ export function registerCommerceRoutes(
       const products = input.items.map((item) => {
         const product = state.products.find((candidate) => candidate.id === item.productId && candidate.enabled)
         if (!product) throw new Error('赠送清单包含不存在或已停用商品')
+        if (item.quantity > (product.maxOrderQuantity ?? 50)) throw new Error(`${product.name}单笔最多可操作${product.maxOrderQuantity ?? 50}${product.specification}`)
         const availability = productAvailability(product, new Date(), state.store.timezone)
         if (!availability.orderable) throw new Error(`${product.name}当前不可赠送：${availability.label}`)
         return { product, quantity: item.quantity }
@@ -384,7 +392,10 @@ export function registerCommerceRoutes(
         idempotencyKey: `${input.idempotencyKey}:draft`,
       })
       const lineIds = products.map(({ product, quantity }, index) => {
-        const workstation = routeProductToEnabledWorkstation(state, product.stationId)
+        const requiresFulfillment = product.requiresFulfillment !== false
+        const stationId = requiresFulfillment
+          ? routeProductToEnabledWorkstation(state, product.stationId).id
+          : product.stationId
         const lineId = deterministicId('gift_line', `${input.idempotencyKey}:item:${index}`)
         addOrderItem(state.orderDomain, {
           orderId,
@@ -397,7 +408,8 @@ export function registerCommerceRoutes(
             unitListPriceAmount: product.listPriceAmount,
             unitSalePriceAmount: 0,
             unitCostAmount: product.costAmount,
-            stationId: workstation.id,
+            stationId,
+            requiresFulfillment,
             configVersion: product.configVersion,
           },
           actorId: actor.actorId,
@@ -482,10 +494,14 @@ export function registerCommerceRoutes(
       if (!table || table.status !== 'occupied') throw new Error('只能向已开台桌台下单')
       const product = state.products.find((item) => item.id === input.productId && item.enabled)
       if (!product) throw new Error('商品不存在或已停用')
+      if (input.quantity > (product.maxOrderQuantity ?? 50)) throw new Error(`${product.name}单笔最多可下单${product.maxOrderQuantity ?? 50}${product.specification}`)
       const availability = productAvailability(product, new Date(), state.store.timezone)
       if (!availability.orderable) throw new Error(`${product.name}当前不可下单：${availability.label}`)
       syncOrderFulfillmentWorkstations(state)
-      const workstation = routeProductToEnabledWorkstation(state, product.stationId)
+      const requiresFulfillment = product.requiresFulfillment !== false
+      const stationId = requiresFulfillment
+        ? routeProductToEnabledWorkstation(state, product.stationId).id
+        : product.stationId
       const now = new Date().toISOString()
       const orderId = deterministicId('order', input.idempotencyKey)
       createOrderDraft(state.orderDomain, {
@@ -506,7 +522,8 @@ export function registerCommerceRoutes(
           unitListPriceAmount: product.listPriceAmount,
           unitSalePriceAmount: product.listPriceAmount,
           unitCostAmount: product.costAmount,
-          stationId: workstation.id,
+          stationId,
+          requiresFulfillment,
           configVersion: product.configVersion,
         },
         actorId: actor.actorId,

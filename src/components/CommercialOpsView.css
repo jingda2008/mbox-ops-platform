@@ -102,15 +102,84 @@
 .commercial-table-wrap th, .commercial-table-wrap td { padding: 10px; border-bottom: 1px solid var(--line); text-align: left; font-size: 12px; }
 .commercial-table-wrap th { background: #eff1eb; color: var(--ink-soft); font-size: 10px; }
 .rule-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding-top: 12px; }
+.profit-toolbar { display: flex; align-items: center; gap: 10px; padding: 9px 11px; }
+.profit-periods, .profit-panes { display: flex; align-items: center; gap: 4px; }
+.profit-periods { padding: 3px; border: 1px solid var(--line); border-radius: 5px; background: #f0f2ed; }
+.profit-periods button { width: 42px; min-height: 34px; border: 1px solid transparent; border-radius: 3px; background: transparent; color: var(--ink-soft); font-weight: 800; }
+.profit-periods button.is-active { border-color: var(--line-strong); background: #fff; color: var(--ink); box-shadow: 0 2px 6px rgba(20, 25, 20, .08); }
+.profit-date-control { display: flex; align-items: center; gap: 4px; }
+.profit-date-control input { min-height: 38px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 4px; background: #fff; color: var(--ink); }
+.profit-range { min-width: 0; display: inline-flex; align-items: center; gap: 6px; margin-left: auto; color: var(--ink-soft); font-size: 11px; white-space: nowrap; }
+.profit-panes { padding: 4px; border-bottom: 1px solid var(--line); }
+.profit-panes button { min-height: 38px; display: inline-flex; align-items: center; gap: 7px; padding: 0 13px; border: 1px solid transparent; border-radius: 4px 4px 0 0; background: transparent; color: var(--ink-soft); font-weight: 750; }
+.profit-panes button.is-active { border-color: var(--line); border-bottom-color: var(--brand-yellow); background: #fff; color: var(--ink); box-shadow: inset 0 -2px 0 var(--brand-yellow); }
+.profit-metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.profit-metrics > div { min-height: 92px; display: grid; align-content: center; gap: 3px; padding: 11px 12px; border: 1px solid var(--line); border-top: 3px solid #9da39d; border-radius: 5px; background: #fff; }
+.profit-metrics > div.is-profit { border-top-color: #3b8469; background: #f4faf7; }
+.profit-metrics > div.is-negative { border-top-color: #c24d53; background: #fff6f6; }
+.profit-metrics > div.is-estimated { border-top-color: #c99c32; background: #fffbef; }
+.profit-metrics span { color: var(--ink-soft); font-size: 10px; }
+.profit-metrics strong { font-size: 21px; line-height: 1.2; }
+.profit-metrics small { color: #777d77; font-size: 9px; }
+.profit-quality { min-height: 42px; display: flex; align-items: center; gap: 8px; padding: 9px 11px; border: 1px solid #dfc27f; border-left: 4px solid #c99c32; border-radius: 5px; background: #fff9e9; color: #72571c; font-size: 11px; }
+.profit-analysis-grid, .profit-entry-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr); gap: 12px; align-items: start; }
+.profit-entry-grid { grid-template-columns: minmax(340px, .8fr) minmax(0, 1.2fr); }
+.profit-trend { display: grid; gap: 7px; padding-top: 12px; }
+.profit-trend > div { display: grid; grid-template-columns: 62px minmax(100px, 1fr) 88px; align-items: center; gap: 8px; font-size: 10px; }
+.profit-trend > div > span { color: var(--ink-soft); }
+.profit-trend > div > b { text-align: right; }
+.profit-trend > div > b.is-negative { color: #a9343a; }
+.profit-bars { display: grid; gap: 3px; }
+.profit-bars i { height: 6px; display: block; min-width: 2px; border-radius: 1px; }
+.profit-bars i.is-revenue, .profit-legend i.is-revenue { background: #3f876d; }
+.profit-bars i.is-cost, .profit-legend i.is-cost { background: #d2a13c; }
+.profit-legend { display: flex; align-items: center; gap: 12px; padding-top: 11px; color: var(--ink-soft); font-size: 9px; }
+.profit-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.profit-legend i { width: 14px; height: 5px; display: inline-block; }
+.profit-legend small { margin-left: auto; }
+.profit-category-list { display: grid; padding-top: 8px; }
+.profit-category-list > div { min-height: 50px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--line); }
+.profit-category-list > div span { min-width: 0; display: grid; gap: 2px; }
+.profit-category-list > div small { color: var(--ink-soft); font-size: 9px; }
+.profit-category-list > div b { white-space: nowrap; }
+.profit-category-list > p, .profit-entry-list > p, .profit-template-list > p { margin: 14px 0 0; color: var(--ink-soft); font-size: 11px; }
+.profit-entry-list, .profit-template-list { display: grid; gap: 7px; padding-top: 12px; }
+.profit-entry-list article, .profit-template-list article { min-width: 0; display: grid; grid-template-columns: minmax(160px, 1fr) auto 58px auto auto; align-items: center; gap: 8px; padding: 9px; border: 1px solid var(--line); border-left: 3px solid #c99c32; border-radius: 5px; background: #fff; }
+.profit-entry-list article.is-actual, .profit-template-list article { border-left-color: #42866d; }
+.profit-entry-list article.is-voided, .profit-template-list article.is-disabled { border-left-color: #afb3ad; background: #f3f4f1; opacity: .72; }
+.profit-entry-list article > div, .profit-template-list article > div { min-width: 0; display: grid; gap: 2px; }
+.profit-entry-list article span, .profit-template-list article span,
+.profit-entry-list article small, .profit-template-list article small { overflow: hidden; color: var(--ink-soft); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.profit-entry-list article em, .profit-template-list article em { padding: 4px 6px; border-radius: 3px; background: #eef0eb; color: var(--ink-soft); font-size: 9px; font-style: normal; font-weight: 800; text-align: center; }
+.profit-entry-list article.is-actual em { background: #e4f2ec; color: #2b6c54; }
+.profit-entry-list article.is-estimated em { background: #fff2cf; color: #7a5a13; }
+.profit-entry-list article > .secondary-button, .profit-template-list article > .secondary-button { min-height: 34px; padding: 0 9px; font-size: 10px; white-space: nowrap; }
+.profit-entry-list article > .icon-button, .profit-template-list article > .icon-button { width: 34px; height: 34px; min-height: 34px; }
 .commercial-empty { min-height: 220px; display: grid; place-items: center; align-content: center; gap: 8px; color: var(--ink-soft); }
 @media (max-width: 980px) {
   .commercial-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .profit-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .profit-analysis-grid, .profit-entry-grid { grid-template-columns: 1fr; }
   .commercial-capability-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .commercial-two-column { grid-template-columns: 1fr; }
   .customer-tag-list article { grid-template-columns: 1fr 1fr; }
 }
 @media (max-width: 620px) {
   .commercial-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .profit-toolbar { align-items: stretch; flex-wrap: wrap; }
+  .profit-periods { flex: 1; }
+  .profit-periods button { flex: 1; width: auto; }
+  .profit-date-control { flex: 1 0 100%; }
+  .profit-date-control input { flex: 1; min-width: 0; }
+  .profit-range { width: auto; flex: 1; margin-left: 0; }
+  .profit-panes { overflow-x: auto; }
+  .profit-panes button { flex: 0 0 auto; }
+  .profit-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .profit-metrics > div:last-child { grid-column: 1 / -1; }
+  .profit-trend > div { grid-template-columns: 48px minmax(80px, 1fr) 72px; gap: 5px; }
+  .profit-entry-list article, .profit-template-list article { grid-template-columns: minmax(0, 1fr) auto 50px; }
+  .profit-entry-list article > .secondary-button, .profit-template-list article > .secondary-button { grid-column: span 1; }
+  .profit-entry-list article > .icon-button, .profit-template-list article > .icon-button { justify-self: end; }
   .print-job-heading { align-items: stretch; flex-direction: column; padding-bottom: 10px; }
   .print-job-summary { grid-template-columns: 68px minmax(0, 1fr) 20px; gap: 8px; }
   .print-job-device { grid-column: 2; text-align: left; }

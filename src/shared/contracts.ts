@@ -131,6 +131,7 @@ export interface MenuProduct {
 export const staffPermissionIds = [
   'dashboard.view',
   'finance.view',
+  'finance.manage',
   'audit.view',
   'config.manage',
   'identity.manage',

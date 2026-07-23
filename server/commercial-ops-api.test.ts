@@ -52,6 +52,8 @@ describe('commercial operations API', () => {
     const state = await repository.read()
     expect(state.commercialOps?.procurementBatches).toHaveLength(1)
     expect(state.inventoryDomain?.movements.filter((item) => item.productId === 'product-beer')).toHaveLength(1)
+    expect(state.products.find((product) => product.id === 'product-beer')?.costAmount).toBe(1650)
+    expect(state.auditEntries.some((entry) => entry.action === 'product.weighted_cost_updated.v1')).toBe(true)
     await app.close()
     await repository.close()
   })
@@ -122,6 +124,161 @@ describe('commercial operations API', () => {
       action: 'commercial.print_job.queued.v1', objectId: 'print-job-retry-001',
       details: { previousStatus: 'failed', status: 'queued', attempts: 1 },
     })
+    await app.close()
+    await repository.close()
+  })
+
+  it('separates finance viewing from cost management and recalculates a replaced estimate', async () => {
+    const { app, repository } = await fixture()
+    const occurredAt = '2026-08-10T10:00:00+08:00'
+    const estimatePayload = {
+      name: '7月房租预估',
+      categoryId: 'rent',
+      amount: 30_000,
+      status: 'estimated',
+      recognitionMode: 'spread_daily',
+      recognitionStartDate: '2026-07-01',
+      recognitionEndDate: '2026-07-31',
+      counterparty: '场地方',
+      reference: '',
+      note: '营业前预估',
+      reason: '建立7月经营预测',
+      occurredAt,
+      idempotencyKey: 'cost-estimate-rent-202607',
+    }
+    const cashierWrite = await app.inject({
+      method: 'POST',
+      url: '/api/commercial-ops/cost-entries',
+      headers: headers('emp-cashier'),
+      payload: estimatePayload,
+    })
+    expect(cashierWrite.statusCode).toBe(403)
+
+    const estimate = await app.inject({
+      method: 'POST',
+      url: '/api/commercial-ops/cost-entries',
+      headers: headers('emp-chen'),
+      payload: estimatePayload,
+    })
+    expect(estimate.statusCode, estimate.body).toBe(201)
+    const actual = await app.inject({
+      method: 'POST',
+      url: '/api/commercial-ops/cost-entries',
+      headers: headers('emp-chen'),
+      payload: {
+        ...estimatePayload,
+        name: '7月房租实际账单',
+        amount: 36_000,
+        status: 'actual',
+        replacesEntryId: estimate.json().id,
+        reference: 'RENT-202607',
+        reason: '收到实际账单后替代预估',
+        idempotencyKey: 'cost-actual-rent-202607',
+      },
+    })
+    expect(actual.statusCode, actual.body).toBe(201)
+
+    const cashierView = await app.inject({
+      method: 'GET',
+      url: '/api/commercial-ops/profit-center?period=month&anchor=2026-07-15',
+      headers: headers('emp-cashier'),
+    })
+    expect(cashierView.statusCode, cashierView.body).toBe(200)
+    expect(cashierView.json().report.costs).toMatchObject({
+      actualOperatingExpenseAmount: 36_000,
+      estimatedOperatingExpenseAmount: 0,
+    })
+    expect(cashierView.json().costEntries).toHaveLength(2)
+
+    const nonFinanceWorkspace = await app.inject({
+      method: 'GET',
+      url: '/api/commercial-ops',
+      headers: headers('emp-qing'),
+    })
+    expect(nonFinanceWorkspace.statusCode, nonFinanceWorkspace.body).toBe(200)
+    expect(nonFinanceWorkspace.json().state.costEntries).toEqual([])
+    await app.close()
+    await repository.close()
+  })
+
+  it('creates auditable recurring cost templates and prevents duplicate actual periods', async () => {
+    const { app, repository } = await fixture()
+    const template = await app.inject({
+      method: 'POST',
+      url: '/api/commercial-ops/cost-templates',
+      headers: headers('emp-chen'),
+      payload: {
+        name: '驻场乐队月费',
+        categoryId: 'band',
+        amount: 80_000,
+        frequency: 'monthly',
+        recognitionMode: 'spread_daily',
+        startDate: '2026-07-01',
+        endDate: null,
+        counterparty: '驻场乐队',
+        note: '',
+        enabled: true,
+        reason: '建立驻场合同成本',
+        occurredAt: '2026-07-01T10:00:00+08:00',
+        idempotencyKey: 'cost-template-band-monthly',
+      },
+    })
+    expect(template.statusCode, template.body).toBe(201)
+    const actualPayload = {
+      name: '7月驻场乐队结算',
+      categoryId: 'band',
+      amount: 82_000,
+      status: 'actual',
+      recognitionMode: 'spread_daily',
+      recognitionStartDate: '2026-07-01',
+      recognitionEndDate: '2026-07-31',
+      counterparty: '驻场乐队',
+      reference: 'BAND-202607',
+      note: '',
+      sourceTemplateId: template.json().id,
+      sourceOccurrenceDate: '2026-07-01',
+      reason: '确认7月驻场费用',
+      occurredAt: '2026-08-01T10:00:00+08:00',
+      idempotencyKey: 'cost-band-actual-202607',
+    }
+    const actual = await app.inject({
+      method: 'POST', url: '/api/commercial-ops/cost-entries', headers: headers('emp-chen'), payload: actualPayload,
+    })
+    const duplicate = await app.inject({
+      method: 'POST',
+      url: '/api/commercial-ops/cost-entries',
+      headers: headers('emp-chen'),
+      payload: { ...actualPayload, idempotencyKey: 'cost-band-actual-202607-duplicate' },
+    })
+    const invalidOccurrence = await app.inject({
+      method: 'POST',
+      url: '/api/commercial-ops/cost-entries',
+      headers: headers('emp-chen'),
+      payload: {
+        ...actualPayload,
+        sourceOccurrenceDate: '2026-07-02',
+        recognitionStartDate: '2026-07-02',
+        recognitionEndDate: '2026-08-01',
+        idempotencyKey: 'cost-band-invalid-occurrence',
+      },
+    })
+    expect(actual.statusCode, actual.body).toBe(201)
+    expect(duplicate.statusCode).toBe(400)
+    expect(duplicate.json().message).toContain('已经录入实际账单')
+    expect(invalidOccurrence.statusCode).toBe(400)
+    expect(invalidOccurrence.json().message).toContain('不是这个周期费用的有效账期')
+    const report = await app.inject({
+      method: 'GET',
+      url: '/api/commercial-ops/profit-center?period=month&anchor=2026-07-15',
+      headers: headers('emp-chen'),
+    })
+    expect(report.json().report.categoryRows.find((row: { categoryId: string }) => row.categoryId === 'band')).toMatchObject({
+      actualAmount: 82_000,
+      estimatedAmount: 0,
+    })
+    expect((await repository.read()).commercialOps?.auditEvents.some((event) => (
+      event.action === 'commercial.cost_template.created.v1'
+    ))).toBe(true)
     await app.close()
     await repository.close()
   })

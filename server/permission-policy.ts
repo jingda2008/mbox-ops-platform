@@ -17,6 +17,7 @@ export type StaffOperation =
   | 'table.write'
   | 'table.close'
   | 'business-day.close'
+  | 'finance.cost.manage'
   | 'commerce-authority.write'
   | 'commerce.order.create'
   | 'commerce.kds.prepare'
@@ -111,6 +112,7 @@ export const STAFF_OPERATION_PERMISSION_IDS: Record<StaffOperation, StaffPermiss
   'table.write': 'table.manage',
   'table.close': 'table.close',
   'business-day.close': 'business_day.close',
+  'finance.cost.manage': 'finance.manage',
   'commerce-authority.write': 'commerce.authorization.approve',
   'commerce.order.create': 'order.create',
   'commerce.kds.prepare': 'kds.prepare',
@@ -155,6 +157,7 @@ const defaultOperations: Record<StaffOperation, OperationPermissionPolicy> = {
   'table.write': { name: '管理桌台', permissionId: 'table.manage', risk: 'high' },
   'table.close': { name: '结台清台', permissionId: 'table.close', risk: 'high' },
   'business-day.close': { name: '关闭营业日', permissionId: 'business_day.close', risk: 'high' },
+  'finance.cost.manage': { name: '管理经营成本', permissionId: 'finance.manage', risk: 'high' },
   'commerce-authority.write': { name: '修改经营授权', permissionId: 'commerce.authorization.approve', risk: 'high' },
   'commerce.order.create': { name: '创建订单', permissionId: 'order.create', risk: 'standard' },
   'commerce.kds.prepare': { name: '执行出品操作', permissionId: 'kds.prepare', risk: 'standard' },

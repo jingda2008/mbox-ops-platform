@@ -47,6 +47,7 @@ const frontlineTableOperationsMigrationAction = 'runtime.frontline_table_operati
 const chinaTimezoneMigrationAction = 'runtime.china_timezone_normalized.v1'
 const workstationProductionRoleMigrationAction = 'runtime.workstation_production_roles_v1_migrated.v1'
 const hardwarePermissionMigrationAction = 'runtime.hardware_permissions_v1_migrated.v1'
+const financeCostPermissionMigrationAction = 'runtime.finance_cost_permissions_v1_migrated.v1'
 const fulfillmentTaskIdMigrationAction = 'runtime.fulfillment_task_ids_v1_migrated.v1'
 
 const hardwareRoleUpgrades: Record<string, BuiltInRoleUpgrade> = {
@@ -69,6 +70,21 @@ const hardwareRoleUpgrades: Record<string, BuiltInRoleUpgrade> = {
   technical: {
     requiredPermissionIds: ['dashboard.view', 'song.view'],
     addedPermissionIds: ['hardware.view', 'hardware.operate'],
+  },
+}
+
+const financeCostRoleUpgrades: Record<string, BuiltInRoleUpgrade> = {
+  owner: {
+    requiredPermissionIds: ['finance.view', 'config.manage', 'payment.refund.approve'],
+    addedPermissionIds: ['finance.manage'],
+  },
+  operations_director: {
+    requiredPermissionIds: ['finance.view', 'config.manage', 'payment.refund.approve'],
+    addedPermissionIds: ['finance.manage'],
+  },
+  manager: {
+    requiredPermissionIds: ['finance.view', 'shift.manage', 'payment.refund.approve'],
+    addedPermissionIds: ['finance.manage'],
   },
 }
 
@@ -155,6 +171,19 @@ function withHardwarePermissionUpgrade(role: RoleConfig): RoleConfig {
 
 function migrateHardwarePermissions(config: StoreConfig): StoreConfig {
   return { ...config, roles: config.roles.map(withHardwarePermissionUpgrade) }
+}
+
+function withFinanceCostPermissionUpgrade(role: RoleConfig): RoleConfig {
+  const upgrade = financeCostRoleUpgrades[role.id]
+  if (!upgrade || !role.permissionIds) return role
+  const permissions = new Set(role.permissionIds)
+  if (!upgrade.requiredPermissionIds.every((permissionId) => permissions.has(permissionId))) return role
+  for (const permissionId of upgrade.addedPermissionIds) permissions.add(permissionId)
+  return { ...role, permissionIds: [...permissions] }
+}
+
+function migrateFinanceCostPermissions(config: StoreConfig): StoreConfig {
+  return { ...config, roles: config.roles.map(withFinanceCostPermissionUpgrade) }
 }
 
 function migrateWorkstationDeliveryServices(config: StoreConfig): StoreConfig {
@@ -407,9 +436,13 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
   const upgradeHardwarePermissions = !migrated.auditEntries.some(
     (entry) => entry.action === hardwarePermissionMigrationAction,
   )
+  const upgradeFinanceCostPermissions = !migrated.auditEntries.some(
+    (entry) => entry.action === financeCostPermissionMigrationAction,
+  )
 
   migrated.config = configWithOperationalDefaults(migrated.config, defaults, upgradeBuiltInRoles, upgradeFrontlineTableOperations)
   if (upgradeHardwarePermissions) migrated.config = migrateHardwarePermissions(migrated.config)
+  if (upgradeFinanceCostPermissions) migrated.config = migrateFinanceCostPermissions(migrated.config)
   if (upgradeWorkstationProductionRoles) migrated.config = migrateLegacyWorkstationProductionRoles(migrated.config)
   migrated.draftConfig = migrated.draftConfig
     ? configWithOperationalDefaults(migrated.draftConfig, defaults, upgradeBuiltInRoles, upgradeFrontlineTableOperations)
@@ -418,12 +451,18 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
     migrated.draftConfig = migrateLegacyWorkstationProductionRoles(migrated.draftConfig)
   }
   if (upgradeHardwarePermissions && migrated.draftConfig) migrated.draftConfig = migrateHardwarePermissions(migrated.draftConfig)
-  migrated.configVersions = (migrated.configVersions ?? []).map((record) => ({
-    ...record,
-    snapshot: upgradeHardwarePermissions
-      ? migrateHardwarePermissions(configWithOperationalDefaults(record.snapshot, defaults, upgradeBuiltInRoles, upgradeFrontlineTableOperations))
-      : configWithOperationalDefaults(record.snapshot, defaults, upgradeBuiltInRoles, upgradeFrontlineTableOperations),
-  }))
+  if (upgradeFinanceCostPermissions && migrated.draftConfig) migrated.draftConfig = migrateFinanceCostPermissions(migrated.draftConfig)
+  migrated.configVersions = (migrated.configVersions ?? []).map((record) => {
+    let snapshot = configWithOperationalDefaults(
+      record.snapshot,
+      defaults,
+      upgradeBuiltInRoles,
+      upgradeFrontlineTableOperations,
+    )
+    if (upgradeHardwarePermissions) snapshot = migrateHardwarePermissions(snapshot)
+    if (upgradeFinanceCostPermissions) snapshot = migrateFinanceCostPermissions(snapshot)
+    return { ...record, snapshot }
+  })
   migrated.employees = migrated.employees.map((employee) => ({
     ...employee,
     roleIds: [...new Set(employee.roleIds ?? [])].filter((roleId) => roleId !== employee.roleId),
@@ -523,6 +562,20 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
       details: {
         strategy: 'built-in-service-role-capability-fingerprint',
         permissions: ['table.open', 'table.manage', 'table.close'],
+      },
+    })
+  }
+  if (upgradeFinanceCostPermissions) {
+    migrated.auditEntries.push({
+      id: 'runtime-migration-finance-cost-permissions-v1',
+      actorId: 'system',
+      action: financeCostPermissionMigrationAction,
+      objectType: 'store',
+      objectId: migrated.store.id,
+      occurredAt: `${migrated.store.businessDate}T00:00:00+08:00`,
+      details: {
+        strategy: 'built-in-finance-role-capability-fingerprint',
+        permission: 'finance.manage',
       },
     })
   }

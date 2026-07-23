@@ -56,7 +56,7 @@ const sections: Array<{ id: MasterView; label: string; icon: typeof UserRoundCog
 ]
 
 const permissionLabels: Record<StaffPermissionId, string> = {
-  'dashboard.view': '现场看板', 'finance.view': '财务数据', 'audit.view': '审计记录',
+  'dashboard.view': '现场看板', 'finance.view': '财务数据', 'finance.manage': '经营成本管理', 'audit.view': '审计记录',
   'config.manage': '系统配置', 'identity.manage': '账号权限', 'master_data.manage': '主数据',
   'shift.manage': '排班调度', 'table.open': '开台接客', 'table.manage': '桌台管理', 'table.close': '结台清台', 'business_day.close': '营业日关账', 'reservation.view': '查看预约',
   'reservation.manage': '预约接待', 'reservation.config.manage': '预约规则',
@@ -527,7 +527,7 @@ function AuthorityRow({ authority, data, run }: { authority: OrderAuthorizationA
 
 function ProductSection({ data, run }: SectionProps) {
   const workstations = effectiveConfig(data).workstations
-  const canManageCosts = data.viewer?.permissionIds.includes('finance.view') ?? false
+  const canManageCosts = data.viewer?.permissionIds.includes('finance.manage') ?? false
   const categories = useMemo(() => Array.from(new Map(data.products.map((product) => [product.categoryId ?? 'featured', product.categoryName ?? '推荐'])).entries()), [data.products])
   const [sku, setSku] = useState('')
   const [name, setName] = useState('')

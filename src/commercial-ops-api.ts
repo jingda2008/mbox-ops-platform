@@ -5,8 +5,12 @@ import type {
   CommercialOpsConfig,
   CommercialOpsWorkspace,
   GroupVoucherRedemption,
+  OperatingCostEntry,
   PrintJob,
+  ProfitCenterWorkspace,
+  ProfitReportPeriod,
   ProcurementBatch,
+  RecurringCostTemplate,
   ScanCodeBinding,
 } from './shared/commercial-ops-contracts'
 import type { MemberProfile } from './shared/benefit-contracts'
@@ -71,6 +75,52 @@ export function receiveProcurement(input: {
 }) {
   return commercialRequest<ProcurementBatch>('/api/commercial-ops/procurement-batches', {
     method: 'POST', body: JSON.stringify(envelope(input, 'procurement')),
+  })
+}
+
+export function getProfitCenterWorkspace(period: ProfitReportPeriod, anchor: string) {
+  const search = new URLSearchParams({ period, anchor })
+  return commercialRequest<ProfitCenterWorkspace>(`/api/commercial-ops/profit-center?${search}`)
+}
+
+export function createOperatingCostEntry(input: Omit<
+  OperatingCostEntry,
+  'id' | 'currency' | 'status' | 'replacesEntryId' | 'sourceTemplateId' | 'sourceOccurrenceDate'
+  | 'createdAt' | 'createdBy' | 'voidedAt' | 'voidedBy' | 'voidReason' | 'idempotencyKey'
+> & {
+  status: 'estimated' | 'actual'
+  replacesEntryId?: string
+  sourceTemplateId?: string
+  sourceOccurrenceDate?: string
+  reason: string
+}) {
+  return commercialRequest<OperatingCostEntry>('/api/commercial-ops/cost-entries', {
+    method: 'POST',
+    body: JSON.stringify(envelope(input, 'cost-entry')),
+  })
+}
+
+export function voidOperatingCostEntry(entryId: string, reason: string) {
+  return commercialRequest<OperatingCostEntry>(`/api/commercial-ops/cost-entries/${encodeURIComponent(entryId)}/void`, {
+    method: 'POST',
+    body: JSON.stringify(envelope({ reason }, 'cost-entry-void')),
+  })
+}
+
+export function upsertRecurringCostTemplate(input: Omit<
+  RecurringCostTemplate,
+  'id' | 'currency' | 'revision' | 'createdAt' | 'createdBy' | 'updatedAt' | 'updatedBy'
+> & { templateId?: string; reason: string }) {
+  return commercialRequest<RecurringCostTemplate>('/api/commercial-ops/cost-templates', {
+    method: 'POST',
+    body: JSON.stringify(envelope(input, 'cost-template')),
+  })
+}
+
+export function updateRecurringCostTemplateStatus(templateId: string, enabled: boolean, reason: string) {
+  return commercialRequest<RecurringCostTemplate>(`/api/commercial-ops/cost-templates/${encodeURIComponent(templateId)}/status`, {
+    method: 'POST',
+    body: JSON.stringify(envelope({ enabled, reason }, 'cost-template-status')),
   })
 }
 

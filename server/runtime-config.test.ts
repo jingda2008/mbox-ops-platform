@@ -71,6 +71,26 @@ describe('runtime config', () => {
     })).toThrow('MBOX_GEMINI_ENDPOINT必须使用https:')
   })
 
+  it('loads Qwen OpenAI-compatible settings and requires both key and endpoint', () => {
+    expect(() => loadRuntimeConfig({ MBOX_ASSISTANT_PROVIDER: 'qwen_openai' }))
+      .toThrow('MBOX_QWEN_API_KEY')
+    expect(() => loadRuntimeConfig({
+      MBOX_ASSISTANT_PROVIDER: 'qwen_openai',
+      MBOX_QWEN_API_KEY: 'sk-server-side-qwen-key-at-least-20-characters',
+    })).toThrow('MBOX_QWEN_ENDPOINT')
+    expect(loadRuntimeConfig({
+      MBOX_ASSISTANT_PROVIDER: 'qwen_openai',
+      MBOX_QWEN_API_KEY: 'sk-server-side-qwen-key-at-least-20-characters',
+      MBOX_QWEN_MODEL: 'qwen3.7-plus',
+      MBOX_QWEN_ENDPOINT: 'https://ws-example.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions',
+    })).toMatchObject({
+      assistantProvider: 'qwen_openai',
+      qwenModel: 'qwen3.7-plus',
+      qwenEndpoint: 'https://ws-example.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions',
+      assistantHttpTimeoutMs: 20_000,
+    })
+  })
+
   it('rejects production with unsafe defaults', () => {
     expect(() => loadRuntimeConfig({ MBOX_RUNTIME_MODE: 'production' })).toThrow('DATABASE_URL')
   })

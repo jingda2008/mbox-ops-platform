@@ -75,6 +75,20 @@ interface GeminiInteractionResponse {
   error?: { message?: string }
 }
 
+interface QwenChatCompletionResponse {
+  id?: string
+  choices?: Array<{
+    message?: {
+      content?: string
+    }
+  }>
+  usage?: {
+    prompt_tokens?: number
+    completion_tokens?: number
+  }
+  error?: { message?: string }
+}
+
 const responseFormat = {
   type: 'text',
   mime_type: 'application/json',
@@ -347,6 +361,60 @@ export interface GeminiAssistantPlannerOptions {
   fetchImpl?: typeof fetch
 }
 
+interface StructuredModelReply {
+  text: string
+  requestId: string | null
+  inputTokens: number | null
+  outputTokens: number | null
+}
+
+async function planWithStructuredModel(
+  model: string,
+  input: AssistantPlanningRequest,
+  requestModel: (prompt: string) => Promise<StructuredModelReply>,
+): Promise<AssistantPlanningResult> {
+  const canOpenTable = input.context.tools.some((tool) => tool.id === 'table.open')
+  const deterministic = protectedHumanWorkflowPlan(input)
+    ?? deterministicOperationalPlan(input)
+    ?? (canOpenTable ? missingOpenTablePartySize(input.message) : null)
+  if (deterministic) {
+    return {
+      output: deterministic,
+      model: 'mbox-deterministic-operations-v1',
+      providerRequestId: null,
+      inputTokens: null,
+      outputTokens: null,
+    }
+  }
+  const prompt = JSON.stringify({
+    conversation: input.history,
+    currentEmployeeMessage: input.message,
+    operationalContext: input.context,
+  })
+  let lastStructureError: unknown = null
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const reply = await requestModel(attempt === 0
+      ? prompt
+      : `${prompt}\n\n上一次响应没有通过结构检查。请重新判断，并且只返回符合要求的JSON。`)
+    try {
+      const parsed = removeRepeatedGreeting(parseModelOutput(reply.text), input.context.actor.displayName)
+      return {
+        output: enforceHumanWorkflowBoundary(input, parsed),
+        model,
+        providerRequestId: reply.requestId,
+        inputTokens: reply.inputTokens,
+        outputTokens: reply.outputTokens,
+      }
+    } catch (error) {
+      lastStructureError = error
+    }
+  }
+  if (lastStructureError instanceof z.ZodError || lastStructureError instanceof SyntaxError) {
+    throw new AssistantPlannerError('这次没有理解稳妥，请再说具体一点', 502)
+  }
+  throw lastStructureError
+}
+
 export class GeminiAssistantPlanner implements AssistantPlanner {
   readonly model: string
   private readonly endpoint: string
@@ -359,46 +427,7 @@ export class GeminiAssistantPlanner implements AssistantPlanner {
   }
 
   async plan(input: AssistantPlanningRequest): Promise<AssistantPlanningResult> {
-    const canOpenTable = input.context.tools.some((tool) => tool.id === 'table.open')
-    const deterministic = protectedHumanWorkflowPlan(input)
-      ?? deterministicOperationalPlan(input)
-      ?? (canOpenTable ? missingOpenTablePartySize(input.message) : null)
-    if (deterministic) {
-      return {
-        output: deterministic,
-        model: 'mbox-deterministic-operations-v1',
-        providerRequestId: null,
-        inputTokens: null,
-        outputTokens: null,
-      }
-    }
-    const prompt = JSON.stringify({
-      conversation: input.history,
-      currentEmployeeMessage: input.message,
-      operationalContext: input.context,
-    })
-    let lastStructureError: unknown = null
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const interaction = await this.requestInteraction(attempt === 0
-        ? prompt
-        : `${prompt}\n\n上一次响应没有通过结构检查。请重新判断，并且只返回符合response_format的JSON。`)
-      try {
-        const parsed = removeRepeatedGreeting(parseModelOutput(interaction.text), input.context.actor.displayName)
-        return {
-          output: enforceHumanWorkflowBoundary(input, parsed),
-          model: this.model,
-          providerRequestId: interaction.body.id ?? null,
-          inputTokens: interaction.body.usage?.input_tokens ?? null,
-          outputTokens: interaction.body.usage?.output_tokens ?? null,
-        }
-      } catch (error) {
-        lastStructureError = error
-      }
-    }
-    if (lastStructureError instanceof z.ZodError || lastStructureError instanceof SyntaxError) {
-      throw new AssistantPlannerError('这次没有理解稳妥，请再说具体一点', 502)
-    }
-    throw lastStructureError
+    return planWithStructuredModel(this.model, input, (prompt) => this.requestInteraction(prompt))
   }
 
   private async requestInteraction(input: string) {
@@ -438,7 +467,72 @@ export class GeminiAssistantPlanner implements AssistantPlanner {
       .join('\n')
       .trim()
     if (!text) throw new AssistantPlannerError('智能理解暂时没有给出可用答复', 502)
-    return { body, text }
+    return {
+      text,
+      requestId: body.id ?? null,
+      inputTokens: body.usage?.input_tokens ?? null,
+      outputTokens: body.usage?.output_tokens ?? null,
+    }
+  }
+}
+
+export interface QwenAssistantPlannerOptions {
+  apiKey: string
+  model: string
+  timeoutMs: number
+  endpoint: string
+  fetchImpl?: typeof fetch
+}
+
+export class QwenAssistantPlanner implements AssistantPlanner {
+  readonly model: string
+  private readonly fetchImpl: typeof fetch
+
+  constructor(private readonly options: QwenAssistantPlannerOptions) {
+    this.model = options.model
+    this.fetchImpl = options.fetchImpl ?? fetch
+  }
+
+  async plan(input: AssistantPlanningRequest): Promise<AssistantPlanningResult> {
+    return planWithStructuredModel(this.model, input, (prompt) => this.requestCompletion(prompt))
+  }
+
+  private async requestCompletion(input: string): Promise<StructuredModelReply> {
+    const response = await this.fetchImpl(this.options.endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.options.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: this.model,
+        messages: [
+          { role: 'system', content: systemInstruction },
+          { role: 'user', content: input },
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0.1,
+        enable_thinking: false,
+      }),
+      signal: AbortSignal.timeout(this.options.timeoutMs),
+    })
+    let body: QwenChatCompletionResponse
+    try {
+      body = await response.json() as QwenChatCompletionResponse
+    } catch {
+      throw new AssistantPlannerError('智能理解暂时没有回应，请稍后重试', 502)
+    }
+    if (!response.ok) {
+      throw new AssistantPlannerError('智能理解暂时不可用，请重试或使用快速命令', response.status >= 500 ? 502 : 503)
+    }
+    const text = body.choices?.[0]?.message?.content?.trim()
+    if (!text) throw new AssistantPlannerError('智能理解暂时没有给出可用答复', 502)
+    return {
+      text,
+      requestId: body.id ?? null,
+      inputTokens: body.usage?.prompt_tokens ?? null,
+      outputTokens: body.usage?.completion_tokens ?? null,
+    }
   }
 }
 

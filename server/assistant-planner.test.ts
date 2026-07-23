@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { AssistantToolDescriptor } from '../src/shared/assistant-tool-contracts.js'
-import { AssistantPlannerError, GeminiAssistantPlanner, type AssistantPlanningRequest } from './assistant-planner.js'
+import {
+  AssistantPlannerError,
+  GeminiAssistantPlanner,
+  QwenAssistantPlanner,
+  type AssistantPlanningRequest,
+} from './assistant-planner.js'
 
 function tool(id: AssistantToolDescriptor['id']): AssistantToolDescriptor {
   const humanWorkflow = [
@@ -320,6 +325,85 @@ ${JSON.stringify({ kind: 'clarification', reply: '请选一桌。', steps: [], c
 
     await expect(planner.plan(planningInput())).resolves.toMatchObject({
       output: { kind: 'clarification', choices: ['L01', 'L02'] },
+    })
+  })
+})
+
+describe('Qwen assistant planner', () => {
+  it('uses the OpenAI-compatible JSON endpoint without exposing the API key in the body', async () => {
+    let requestBody: Record<string, unknown> | null = null
+    let requestHeaders: Headers | null = null
+    let requestUrl = ''
+    const planner = new QwenAssistantPlanner({
+      apiKey: 'sk-test-qwen-key-kept-server-side',
+      model: 'qwen3.7-plus',
+      timeoutMs: 5_000,
+      endpoint: 'https://ws-example.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions',
+      fetchImpl: async (input, init) => {
+        requestUrl = String(input)
+        requestBody = JSON.parse(String(init?.body))
+        requestHeaders = new Headers(init?.headers)
+        return new Response(JSON.stringify({
+          id: 'chatcmpl-qwen-safe-001',
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                kind: 'answer',
+                reply: '今晚演出安排已同步，可查看当前歌手和下一场时间。',
+                steps: [],
+                choices: [],
+              }),
+            },
+          }],
+          usage: { prompt_tokens: 88, completion_tokens: 31 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      },
+    })
+
+    const result = await planner.plan(planningInput())
+
+    expect(result).toMatchObject({
+      model: 'qwen3.7-plus',
+      providerRequestId: 'chatcmpl-qwen-safe-001',
+      inputTokens: 88,
+      outputTokens: 31,
+      output: { kind: 'answer', steps: [], choices: [] },
+    })
+    expect(requestUrl).toContain('/compatible-mode/v1/chat/completions')
+    expect(requestHeaders?.get('Authorization')).toBe('Bearer sk-test-qwen-key-kept-server-side')
+    expect(requestBody).toMatchObject({
+      model: 'qwen3.7-plus',
+      response_format: { type: 'json_object' },
+      enable_thinking: false,
+      temperature: 0.1,
+    })
+    expect(JSON.stringify(requestBody)).toContain('严格只返回符合指定结构的JSON')
+    expect(JSON.stringify(requestBody)).not.toContain('sk-test-qwen-key-kept-server-side')
+    expect(requestBody).not.toHaveProperty('max_tokens')
+  })
+
+  it('keeps deterministic permission-safe commands independent from model availability', async () => {
+    let modelCalled = false
+    const planner = new QwenAssistantPlanner({
+      apiKey: 'sk-test-qwen-key-kept-server-side',
+      model: 'qwen3.7-plus',
+      timeoutMs: 2_000,
+      endpoint: 'https://ws-example.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions',
+      fetchImpl: async () => {
+        modelCalled = true
+        throw new Error('model must not be called')
+      },
+    })
+
+    const result = await planner.plan(planningInput('给L01开台，实际到了4位客人'))
+
+    expect(modelCalled).toBe(false)
+    expect(result).toMatchObject({
+      model: 'mbox-deterministic-operations-v1',
+      output: {
+        kind: 'plan',
+        steps: [{ toolCall: { toolId: 'table.open', arguments: { tableCode: 'L01', partySize: 4 } } }],
+      },
     })
   })
 })

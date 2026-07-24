@@ -38,6 +38,7 @@ const ERROR_DISMISS_MS = 8_000
 interface GuestStageBandProps {
   schedule: GuestSessionResponse['stageSchedule']
   serverOffsetMs: number
+  tableCode: string
   tableDisplayName: string
   primaryServiceName: string
   timeZone: string
@@ -47,6 +48,7 @@ interface GuestStageBandProps {
 const GuestStageBand = memo(function GuestStageBand({
   schedule,
   serverOffsetMs,
+  tableCode,
   tableDisplayName,
   primaryServiceName,
   timeZone,
@@ -72,7 +74,7 @@ const GuestStageBand = memo(function GuestStageBand({
               ? `TODAY LIVE · ${formatGuestTime(stage.next.startsAt, timeZone)} 开始`
               : `NEXT · ${formatGuestTime(stage.next.startsAt, timeZone)}`
             : stage.mode === 'finished' ? 'TONIGHT · 演出已结束' : 'LIVE SERVICE · 服务在线'}</small>
-        <h1>{tableDisplayName}</h1>
+        <h1><b>{tableCode}</b><span>{tableDisplayName}</span></h1>
         <p><MapPin size={13} />服务专员 · {primaryServiceName}</p>
       </div>
       <div className="guest-stage-status">
@@ -568,6 +570,7 @@ export function GuestPortal() {
       <GuestStageBand
         schedule={data?.stageSchedule ?? []}
         serverOffsetMs={serverOffset}
+        tableCode={data?.table.code ?? tableCode}
         tableDisplayName={data?.table.displayName ?? tableCode}
         primaryServiceName={data?.primaryServiceName ?? '正在安排'}
         timeZone={data?.store.timezone ?? 'Asia/Shanghai'}
@@ -668,7 +671,7 @@ export function GuestPortal() {
 
         <MenuOrderingWorkspace
           products={data?.products ?? []}
-          tableLabel={data?.table.displayName ?? tableCode}
+          tableLabel={data ? `${data.table.code} · ${data.table.displayName}` : tableCode}
           submitLabel="确认订单并微信支付"
           submitHint="付款成功后，订单会直接送到吧台和厨房，不用再招呼我们确认。"
           busy={checkoutBusy}

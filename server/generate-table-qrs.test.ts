@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { PNG } from 'pngjs'
 import { createSeedState } from './seed.js'
-import { buildTableQrEntries } from './generate-table-qrs.js'
+import { buildTableQrEntries, generateTableQrFiles } from './generate-table-qrs.js'
 import { requireStaticTableQr, verifyTableAccessToken } from './table-access.js'
 
 describe('table QR manifest', () => {
@@ -16,5 +20,28 @@ describe('table QR manifest', () => {
       tokenVersion: entries[0]!.tokenVersion,
     })
     expect(entries[0]!.tokenSha256).not.toContain(token)
+  })
+
+  it('renders a print-safe QR card with a visible table label and auditable format', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'mbox-table-qr-'))
+    try {
+      const entry = buildTableQrEntries(
+        createSeedState(),
+        'https://guest.example.com/guest',
+        'q'.repeat(32),
+        1_752_499_200_000,
+      ).find((candidate) => candidate.tableCode === 'L01')!
+
+      await generateTableQrFiles([entry], directory)
+
+      const card = PNG.sync.read(await readFile(join(directory, 'L01.png')))
+      expect(card).toMatchObject({ width: 1024, height: 1240 })
+      expect(await readFile(join(directory, 'audit.csv'), 'utf8')).toContain(
+        '"L01","休闲01","L01","1",',
+      )
+      expect(await readFile(join(directory, 'audit.csv'), 'utf8')).toContain('"labeled_png_v2"')
+    } finally {
+      await rm(directory, { recursive: true })
+    }
   })
 })

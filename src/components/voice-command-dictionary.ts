@@ -1,5 +1,6 @@
 import { pinyin } from 'pinyin-pro'
 import type { BootstrapResponse, StoreConfig } from '../shared/contracts'
+import { englishReadingAliases } from '../shared/voice-entity-aliases'
 import type { VoicePageControl } from './voice-page-controls'
 
 export type VoiceCommandCategory =
@@ -88,12 +89,6 @@ const categoryBoost: Record<VoiceCommandCategory, number> = {
   workstation: 8,
   role: 7,
   area: 7,
-}
-
-const englishNameReadings: Record<string, readonly string[]> = {
-  tom: ['汤姆', '托姆'],
-  jerry: ['杰瑞', '杰里', '吉瑞'],
-  tyke: ['泰克', '太克', '泰科'],
 }
 
 const spokenLetters: Record<string, string> = {
@@ -209,16 +204,6 @@ function uniquePhrases(values: readonly string[], canonical = '') {
     seen.add(key)
     return [phrase]
   })
-}
-
-function englishReadingAliases(name: string) {
-  const aliases: string[] = []
-  for (const [englishName, readings] of Object.entries(englishNameReadings)) {
-    const pattern = new RegExp(`\\b${englishName}\\b`, 'gi')
-    if (!pattern.test(name)) continue
-    for (const reading of readings) aliases.push(name.replace(pattern, reading))
-  }
-  return aliases
 }
 
 function chineseInteger(value: number) {

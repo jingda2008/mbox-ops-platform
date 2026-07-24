@@ -524,8 +524,8 @@ describe('assistant API', () => {
       steps: [{ toolCall: {
         toolId: 'service.task.schedule',
         arguments: {
-          tableCode: 'B01', serviceTypeId: '加水', delayMinutes: 1,
-          assigneeEmployeeId: 'tom', note: '两杯柠檬冰水',
+          tableCode: 'B01', serviceTypeId: 'water', delayMinutes: 1,
+          assigneeEmployeeId: 'emp-lin', note: '两杯柠檬冰水',
         },
       } }],
     })
@@ -604,7 +604,7 @@ describe('assistant API', () => {
       kind: 'plan', model: 'mbox-deterministic-operations-v1',
       steps: [{ toolCall: {
         toolId: 'service.task.schedule',
-        arguments: { tableCode: 'L04', serviceTypeId: '加水', delayMinutes: 5, assigneeEmployeeId: 'Tom' },
+        arguments: { tableCode: 'L04', serviceTypeId: 'water', delayMinutes: 5, assigneeEmployeeId: 'emp-lin' },
       } }],
     })
     const scheduleExecution = await app.inject({

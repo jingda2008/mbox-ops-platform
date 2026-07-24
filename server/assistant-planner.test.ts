@@ -51,7 +51,7 @@ function planningInput(message = '今晚有什么安排'): AssistantPlanningRequ
       page: { heading: '全店现场', capabilities: [] },
       tools: [tool('table.open'), tool('service.task.schedule')],
       live: {
-        tables: [], serviceTasks: [], kdsTasks: [], performances: [], operationalRisks: [], operationalHealth: {},
+        employees: [], tables: [], serviceTasks: [], kdsTasks: [], performances: [], operationalRisks: [], operationalHealth: {},
         dutyHandover: {
           generatedAt: '2026-07-18T12:00:00.000Z', businessDate: '2026-07-18', summary: '无待交接风险',
           detected: 0, active: 0, acknowledged: 0, deferred: 0, dismissed: 0, resolved: 0,
@@ -151,7 +151,7 @@ describe('Gemini assistant planner', () => {
         steps: [{
           toolCall: {
             toolId: 'service.task.schedule',
-            arguments: { tableCode: 'K2', serviceTypeId: '加水', delayMinutes: 5, assigneeEmployeeId: 'Tom' },
+            arguments: { tableCode: 'K2', serviceTypeId: 'water', delayMinutes: 5, assigneeEmployeeId: 'Tom' },
           },
         }],
       },
@@ -168,6 +168,9 @@ describe('Gemini assistant planner', () => {
       },
     })
     const input = planningInput('1分钟后让tom给卡座a上两杯柠檬冰水')
+    input.context.live.employees = [{
+      id: 'emp-lin', name: 'Tom', aliases: ['汤姆', '托姆'], online: true, paused: false,
+    }]
     input.context.live.tables = [{ code: 'B01', name: '卡座A', status: 'occupied', guests: 8 }]
     input.context.tools.find((candidate) => candidate.id === 'service.task.schedule')!.argumentGuide = {
       serviceTypeId: '必填，加水=water、冰块/柠檬=ice、个性化需求=custom-request',
@@ -181,14 +184,14 @@ describe('Gemini assistant planner', () => {
       output: {
         kind: 'plan',
         steps: [{
-          label: '1分钟后指派tom为B01（卡座A）送两杯柠檬冰水',
+          label: '1分钟后指派Tom为B01（卡座A）送两杯柠檬冰水',
           toolCall: {
             toolId: 'service.task.schedule',
             arguments: {
               tableCode: 'B01',
-              serviceTypeId: '加水',
+              serviceTypeId: 'water',
               delayMinutes: 1,
-              assigneeEmployeeId: 'tom',
+              assigneeEmployeeId: 'emp-lin',
               note: '两杯柠檬冰水',
             },
           },
@@ -210,7 +213,7 @@ describe('Gemini assistant planner', () => {
       { toolId: 'table.open', arguments: { tableCode: 'L04', partySize: 4 } },
       {
         toolId: 'service.task.schedule',
-        arguments: { tableCode: 'L04', serviceTypeId: '加水', delayMinutes: 5, assigneeEmployeeId: 'Tom' },
+        arguments: { tableCode: 'L04', serviceTypeId: 'water', delayMinutes: 5, assigneeEmployeeId: 'Tom' },
       },
     ])
   })
@@ -347,6 +350,63 @@ describe('Gemini assistant planner', () => {
       name: 'AssistantPlannerError',
       statusCode: 502,
     }))
+    expect(calls).toBe(2)
+  })
+
+  it('fails closed when the model claims an unsupported operation already completed', async () => {
+    let calls = 0
+    const planner = new GeminiAssistantPlanner({
+      apiKey: 'secret-gemini-key',
+      model: 'gemini-3.5-flash',
+      timeoutMs: 5_000,
+      fetchImpl: async () => {
+        calls += 1
+        return new Response(JSON.stringify({
+          steps: [{ type: 'model_output', content: [{ type: 'text', text: JSON.stringify({
+            kind: 'answer', reply: '歌手排班已经完成。', steps: [], choices: [],
+          }) }] }],
+        }), { status: 200 })
+      },
+    })
+
+    await expect(planner.plan(planningInput('给今晚歌手安排排班'))).rejects.toEqual(
+      expect.objectContaining<Partial<AssistantPlannerError>>({
+        name: 'AssistantPlannerError',
+        statusCode: 502,
+      }),
+    )
+    expect(calls).toBe(2)
+  })
+
+  it('fails closed when the model proposes a tool outside the current employee capability list', async () => {
+    let calls = 0
+    const planner = new GeminiAssistantPlanner({
+      apiKey: 'secret-gemini-key',
+      model: 'gemini-3.5-flash',
+      timeoutMs: 5_000,
+      fetchImpl: async () => {
+        calls += 1
+        return new Response(JSON.stringify({
+          steps: [{ type: 'model_output', content: [{ type: 'text', text: JSON.stringify({
+            kind: 'plan',
+            reply: '请核对后确认。',
+            steps: [{
+              label: '完成任务',
+              command: '完成服务任务',
+              toolCall: { toolId: 'service.task.complete', arguments: { taskId: 'task-hidden' } },
+            }],
+            choices: [],
+          }) }] }],
+        }), { status: 200 })
+      },
+    })
+
+    await expect(planner.plan(planningInput('完成这个任务'))).rejects.toEqual(
+      expect.objectContaining<Partial<AssistantPlannerError>>({
+        name: 'AssistantPlannerError',
+        statusCode: 502,
+      }),
+    )
     expect(calls).toBe(2)
   })
 

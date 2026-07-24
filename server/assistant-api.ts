@@ -27,6 +27,7 @@ import { isKdsTaskActiveForBusinessDate } from './operational-closure.js'
 import { tableOperationsConfig } from './table-sessions.js'
 import { AssistantToolBus } from './assistant-tool-bus.js'
 import { availableAssistantCapabilities } from './assistant-capability-registry.js'
+import { englishReadingAliases } from '../src/shared/voice-entity-aliases.js'
 
 const ASSISTANT_RATE_LIMIT = { scope: 'staff_assistant_turn', limit: 15, windowMs: 60_000 }
 
@@ -102,6 +103,18 @@ function buildPlanningContext(
     },
     tools: availableAssistantCapabilities(state, actor.actorId),
     live: {
+      employees: projected.employees
+        .filter((item) => item.status === 'active')
+        .map((item) => ({
+          id: item.id,
+          name: item.displayName,
+          aliases: englishReadingAliases(item.displayName),
+          roles: effectiveRoleIdsForEmployee(state, item.id).map((roleId) => (
+            state.config.roles.find((role) => role.id === roleId)?.name ?? roleId
+          )),
+          online: item.online,
+          paused: item.paused,
+        })),
       tables: projected.tables.slice(0, 80).map((table) => ({
         code: table.code,
         name: table.displayName,

@@ -27,6 +27,7 @@ export interface AssistantPlanningContext {
   }
   tools: AssistantToolDescriptor[]
   live: {
+    employees: Array<Record<string, unknown>>
     tables: Array<Record<string, unknown>>
     serviceTasks: Array<Record<string, unknown>>
     kdsTasks: Array<Record<string, unknown>>
@@ -163,15 +164,14 @@ const systemInstruction = `你是上海 M-BOX 陆家嘴店的AI值班经理，�
 11. 已接管、延后、误报和交班数据是人工运营事实；不要把已延后的风险说成无人处理，也不要把误报当成真实事故继续升级。
 12. 严格只返回符合指定结构的JSON，不要添加Markdown代码块、说明文字或前后缀。`
 
-const openTableWithTableCodePattern = /(?:([a-z]\d{1,4})[\s\S]{0,24}开台|开台[\s\S]{0,24}([a-z]\d{1,4}))/iu
-const explicitPartySizePattern = /(?:[0-9]{1,3}|[零〇一二两三四五六七八九十百]{1,6})\s*(?:位|人|名|个(?:人|客人|顾客))/u
+const explicitPartySizePattern = /(?:[0-9]{1,3}|[零〇一二两三四五六七八九十百千]{1,8})\s*(?:位|人|名|个(?:人|客人|顾客))/u
 
 const chineseDigits: Readonly<Record<string, number>> = {
   '零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4,
   '五': 5, '六': 6, '七': 7, '八': 8, '九': 9,
 }
 
-const chineseUnits: Readonly<Record<string, number>> = { '十': 10, '百': 100 }
+const chineseUnits: Readonly<Record<string, number>> = { '十': 10, '百': 100, '千': 1000 }
 
 function parseNaturalNumber(value: string) {
   if (/^\d+$/.test(value)) return Number(value)
@@ -191,16 +191,16 @@ function parseNaturalNumber(value: string) {
 }
 
 function numberBeforeUnit(message: string, unit: RegExp) {
-  const match = message.match(new RegExp(`([0-9]{1,4}|[零〇一二两三四五六七八九十百]{1,8})\\s*(?:${unit.source})`, 'u'))
+  const match = message.match(new RegExp(`([0-9]{1,4}|[零〇一二两三四五六七八九十百千]{1,10})\\s*(?:${unit.source})`, 'u'))
   if (!match) return null
   const value = parseNaturalNumber(match[1]!)
   return value !== null && value >= 0 ? value : null
 }
 
 function operationalMessage(input: AssistantPlanningRequest) {
-  if (openTableWithTableCodePattern.test(input.message)) return input.message
+  if (openTableMention(input, input.message)) return input.message
   if (!explicitPartySizePattern.test(input.message)) return input.message
-  const prior = input.history.findLast((turn) => openTableWithTableCodePattern.test(turn.userMessage))
+  const prior = input.history.findLast((turn) => Boolean(openTableMention(input, turn.userMessage)))
   return prior ? `${prior.userMessage}，${input.message}` : input.message
 }
 
@@ -210,11 +210,11 @@ const protectedWorkflowRules = [
   { ids: ['payment.cash.confirm'], pattern: /(?:确认|登记).{0,8}现金|现金.{0,8}(?:到账|收款|确认)/u },
   { ids: ['business_day.close'], pattern: /关账|关闭营业日|日结/u },
   { ids: ['config.publish'], pattern: /发布配置|上线规则|配置生效/u },
-  { ids: ['inventory.approve'], pattern: /审批库存|批准报损|确认盘亏/u },
+  { ids: ['inventory.approve'], pattern: /(?:审批|批准|确认).{0,8}(?:库存|报损|盘亏)/u },
   { ids: ['benefit.approve'], pattern: /(?:审批|批准).{0,8}(?:会员)?权益/u },
   { ids: ['commerce.authorization.approve'], pattern: /(?:审批|批准).{0,8}(?:赠送|折扣)/u },
   { ids: ['table.close'], pattern: /结台|闭桌/u },
-  { ids: ['table.transfer'], pattern: /转桌|换桌|换位置/u },
+  { ids: ['table.transfer'], pattern: /转桌|转到|换桌|换到|换位置/u },
 ] as const
 
 const workflowNavigationCommands: Record<string, string> = {
@@ -235,7 +235,7 @@ function protectedHumanWorkflowPlan(input: AssistantPlanningRequest): AssistantM
       choices: ['取消未付款订单', '申请已付款退款'],
     }
   }
-  const explicitOperation = /申请|办理|处理|发起|批准|审批|确认|完成|执行|操作|帮我|给.{0,20}(?:退|转|换)|直接/u.test(input.message)
+  const explicitOperation = /申请|办理|处理|发起|批准|审批|确认|完成|执行|操作|登记|录入|日结|关账|帮我|给.{0,20}(?:退|转|换|结台|闭桌)|把.{0,20}(?:退|转|换|结台|闭桌)|直接/u.test(input.message)
   if (!explicitOperation) return null
   const matchedRule = protectedWorkflowRules.find((rule) => rule.pattern.test(input.message))
   const aliasMatchedCapability = input.context.tools.find((tool) => (
@@ -282,16 +282,42 @@ function enforceHumanWorkflowBoundary(input: AssistantPlanningRequest, output: A
   return protectedHumanWorkflowPlan({ ...input, message: reviewedMessage }) ?? output
 }
 
+function enforceModelPlanSafety(input: AssistantPlanningRequest, output: AssistantModelOutput) {
+  const tools = new Map(input.context.tools.map((tool) => [tool.id, tool]))
+  for (const step of output.steps) {
+    if (!step.toolCall) continue
+    const tool = tools.get(step.toolCall.toolId)
+    if (!tool || tool.executionMode !== 'server_execute') {
+      throw new SyntaxError('模型提出了当前岗位不可执行的工具')
+    }
+  }
+  const requestsAction = !/[?？]|(?:吗|么|没有|是否|谁|什么|为何|为什么|进度|状态)\s*$/u.test(input.message)
+    && /打开|填写|修改|创建|处理|执行|安排|指派|开台|接单|到桌|完成|退款|关账|转桌|换桌|审批|确认/u.test(input.message)
+  const claimsCompletion = /(?:已经|已)(?:成功)?(?:完成|执行|开台|接单|到桌|安排|指派|退款|关账|转桌|换桌)|操作成功/u.test(output.reply)
+  if (requestsAction && claimsCompletion) {
+    throw new SyntaxError('模型在服务端执行前声称操作已经完成')
+  }
+  return enforceHumanWorkflowBoundary(input, output)
+}
+
 interface TableMention {
   code: string
   name: string
   alias: string
   index: number
+  configured: boolean
 }
 
 interface ServiceTypeCandidate {
   id: string
   name: string
+}
+
+interface EmployeeMention {
+  id: string
+  name: string
+  online: boolean
+  paused: boolean
 }
 
 function findTableMention(input: AssistantPlanningRequest, segment: string): TableMention | null {
@@ -302,7 +328,7 @@ function findTableMention(input: AssistantPlanningRequest, segment: string): Tab
     if (!code) return []
     return [...new Set([code, name].filter(Boolean))].flatMap((alias) => {
       const index = normalized.indexOf(alias.toLocaleLowerCase('zh-CN'))
-      return index < 0 ? [] : [{ code: code.toUpperCase(), name: name || code, alias, index }]
+      return index < 0 ? [] : [{ code: code.toUpperCase(), name: name || code, alias, index, configured: true }]
     })
   }).sort((left, right) => left.index - right.index || right.alias.length - left.alias.length)
   if (configured[0]) return configured[0]
@@ -314,7 +340,33 @@ function findTableMention(input: AssistantPlanningRequest, segment: string): Tab
     name: codeMatch[0].toUpperCase(),
     alias: codeMatch[0],
     index: codeMatch.index,
+    configured: false,
   }
+}
+
+function findEmployeeMention(input: AssistantPlanningRequest, value: string): EmployeeMention[] {
+  const normalized = value.trim().toLocaleLowerCase('zh-CN')
+  return input.context.live.employees.flatMap((employee) => {
+    const id = typeof employee.id === 'string' ? employee.id.trim() : ''
+    const name = typeof employee.name === 'string' ? employee.name.trim() : ''
+    const aliases = Array.isArray(employee.aliases)
+      ? employee.aliases.filter((alias): alias is string => typeof alias === 'string')
+      : []
+    if (!id || !name || ![id, name, ...aliases].some((candidate) => (
+      candidate.trim().toLocaleLowerCase('zh-CN') === normalized
+    ))) return []
+    return [{
+      id,
+      name,
+      online: employee.online !== false,
+      paused: employee.paused === true,
+    }]
+  })
+}
+
+function openTableMention(input: AssistantPlanningRequest, message: string) {
+  if (!/开台/u.test(message)) return null
+  return findTableMention(input, message)
 }
 
 function serviceTypeCandidates(input: AssistantPlanningRequest) {
@@ -364,9 +416,76 @@ function resolveServiceRequest(input: AssistantPlanningRequest, rawRequest: stri
   const isCanonical = normalized === matched.name.toLocaleLowerCase('zh-CN')
     || normalized === matched.id.toLocaleLowerCase('zh-CN')
   return {
-    serviceTypeId: matched.name,
+    serviceTypeId: matched.id,
     note: isCanonical ? undefined : note,
     serviceLabel: note,
+  }
+}
+
+function scheduledDelayMinutes(prefix: string) {
+  if (/半\s*小时\s*后/u.test(prefix)) return 30
+  const hours = numberBeforeUnit(prefix, /小时\s*后/u)
+  if (hours !== null) return hours * 60
+  const minutes = numberBeforeUnit(prefix, /分钟\s*后/u)
+  if (minutes !== null) return minutes
+  return 0
+}
+
+function deterministicTaskActionPlan(input: AssistantPlanningRequest): AssistantModelOutput | null {
+  const action = /(?:接单|我来处理|接下.{0,30}任务)/u.test(input.message) ? 'accept'
+    : /(?:已经到桌|到桌了|开始服务)/u.test(input.message) ? 'arrive'
+      : /(?:完成服务|任务完成|已经处理好|处理完成|服务完成)/u.test(input.message) ? 'complete'
+        : null
+  if (!action) return null
+  const toolId = action === 'accept' ? 'service.task.accept'
+    : action === 'arrive' ? 'service.task.arrive' : 'service.task.complete'
+  if (!input.context.tools.some((tool) => tool.id === toolId)) return null
+
+  const table = findTableMention(input, input.message)
+  const directTaskId = input.context.live.serviceTasks.find((task) => (
+    typeof task.id === 'string' && input.message.includes(task.id)
+  ))
+  const candidates = directTaskId ? [directTaskId] : input.context.live.serviceTasks.filter((task) => {
+    if (table && String(task.table ?? '').toLocaleUpperCase('zh-CN') !== table.code) return false
+    const type = typeof task.type === 'string' ? task.type : ''
+    return !type || input.message.includes(type) || Boolean(table)
+  })
+  if (candidates.length === 0) {
+    const choices = input.context.live.serviceTasks.slice(0, 6).map((task) => (
+      `${String(task.table ?? '')} ${String(task.type ?? '')} ${String(task.id ?? '')}`.trim()
+    ))
+    return {
+      kind: 'clarification',
+      reply: '没有找到对应的未完成服务任务，请先确认桌号或从当前任务中选择。',
+      steps: [],
+      choices: choices.length > 0 ? choices : ['打开当前任务', '说出桌号和服务内容'],
+    }
+  }
+  if (candidates.length > 1) {
+    return {
+      kind: 'clarification',
+      reply: '这桌有多条未完成任务，请选择要处理的那一条。',
+      steps: [],
+      choices: candidates.slice(0, 6).map((task) => (
+        `${String(task.table ?? '')} ${String(task.type ?? '')} ${String(task.id ?? '')}`.trim()
+      )),
+    }
+  }
+
+  const task = candidates[0]!
+  const taskId = String(task.id ?? '').trim()
+  if (!taskId) return null
+  const actionLabel = action === 'accept' ? '接单' : action === 'arrive' ? '确认到桌' : '完成服务'
+  const targetLabel = `${String(task.table ?? '')}${String(task.type ?? '')}`
+  return {
+    kind: 'plan',
+    reply: `我已找到${targetLabel}任务，请核对后确认${actionLabel}。`,
+    steps: [{
+      label: `${actionLabel}：${targetLabel}`,
+      command: `${actionLabel}${targetLabel}`,
+      toolCall: { toolId, arguments: { taskId } },
+    }],
+    choices: [],
   }
 }
 
@@ -375,9 +494,17 @@ function deterministicOperationalPlan(input: AssistantPlanningRequest): Assistan
   const availableTools = new Set(input.context.tools.map((tool) => tool.id))
   const steps: AssistantModelOutput['steps'] = []
 
-  const openMatch = message.match(openTableWithTableCodePattern)
-  if (openMatch && availableTools.has('table.open')) {
-    const tableCode = (openMatch[1] ?? openMatch[2])!.toUpperCase()
+  const openTable = openTableMention(input, message)
+  if (openTable && availableTools.has('table.open')) {
+    const tableCode = openTable.code
+    if (!openTable.configured && input.context.live.tables.length > 0) {
+      return {
+        kind: 'clarification',
+        reply: `没有找到${tableCode}桌，请从当前桌台中选择。`,
+        steps: [],
+        choices: input.context.live.tables.slice(0, 6).map((item) => String(item.name ?? item.code ?? '')),
+      }
+    }
     const partySize = numberBeforeUnit(message, /位|人|名|个(?:人|客人|顾客)/u)
     if (!partySize || partySize > 100) {
       return {
@@ -394,21 +521,56 @@ function deterministicOperationalPlan(input: AssistantPlanningRequest): Assistan
     })
   }
 
-  const scheduleMatch = message.match(/(?:([0-9]{1,4}|[零〇一二两三四五六七八九十百]{1,8})\s*分钟后\s*)?(?:请)?(?:让|叫|安排|通知|派)\s*([A-Za-z][A-Za-z0-9._'-]{0,31}|[㐀-鿿·]{1,20})\s*(?:去\s*)?(?:给|为)\s*([^，,。；;]+?)(?:[，,。；;]|$)/iu)
+  const scheduleMatch = message.match(/(?:请)?(?:让|叫|安排|通知|派)\s*([A-Za-z][A-Za-z0-9._'-]{0,31}|[㐀-鿿·]{1,20})\s*(?:去\s*)?(?:给|为)\s*([^，,。；;]+?)(?:[，,。；;]|$)/iu)
   if (scheduleMatch && availableTools.has('service.task.schedule')) {
-    const delayMinutes = scheduleMatch[1] ? parseNaturalNumber(scheduleMatch[1]) : 0
-    if (delayMinutes === null || delayMinutes < 0 || delayMinutes > 24 * 60) {
+    const delayMinutes = scheduledDelayMinutes(message.slice(0, scheduleMatch.index ?? 0))
+    if (delayMinutes < 0 || delayMinutes > 24 * 60) {
       return {
         kind: 'clarification', reply: '请告诉我多少分钟后派发，最长24小时。', steps: [],
         choices: ['立即', '5分钟后', '10分钟后', '30分钟后'],
       }
     }
-    const assignee = scheduleMatch[2]!.trim()
-    const targetAndService = scheduleMatch[3]!.trim()
+    const assigneeValue = scheduleMatch[1]!.trim()
+    const employeeMatches = findEmployeeMention(input, assigneeValue)
+    if (input.context.live.employees.length > 0 && employeeMatches.length === 0) {
+      return {
+        kind: 'clarification',
+        reply: `没有找到“${assigneeValue}”这位在职员工，请从当班人员中选择。`,
+        steps: [],
+        choices: input.context.live.employees.slice(0, 6).map((employee) => String(employee.name ?? employee.id ?? '')),
+      }
+    }
+    if (employeeMatches.length > 1) {
+      return {
+        kind: 'clarification',
+        reply: `“${assigneeValue}”匹配到多位员工，请选择具体人员。`,
+        steps: [],
+        choices: employeeMatches.slice(0, 6).map((employee) => `${employee.name}（${employee.id}）`),
+      }
+    }
+    const employee = employeeMatches[0]
+    if (employee && (!employee.online || employee.paused)) {
+      return {
+        kind: 'clarification',
+        reply: `${employee.name}当前不在可接单状态，请选择其他当班人员。`,
+        steps: [],
+        choices: input.context.live.employees.filter((item) => item.online !== false && item.paused !== true)
+          .slice(0, 6).map((item) => String(item.name ?? item.id ?? '')),
+      }
+    }
+    const assigneeName = employee?.name ?? assigneeValue
+    const assigneeEmployeeId = employee?.id ?? assigneeValue
+    const targetAndService = scheduleMatch[2]!.trim()
     const table = findTableMention(input, targetAndService)
     if (!table) {
       return {
         kind: 'clarification', reply: '我听清了时间和人员，但没有找到对应桌台。请说桌号或桌台名称。',
+        steps: [], choices: input.context.live.tables.slice(0, 6).map((item) => String(item.name ?? item.code ?? '')),
+      }
+    }
+    if (!table.configured && input.context.live.tables.length > 0) {
+      return {
+        kind: 'clarification', reply: `没有找到${table.code}桌，请说当前门店已有的桌号或桌台名称。`,
         steps: [], choices: input.context.live.tables.slice(0, 6).map((item) => String(item.name ?? item.code ?? '')),
       }
     }
@@ -426,22 +588,46 @@ function deterministicOperationalPlan(input: AssistantPlanningRequest): Assistan
     const serviceAction = service.note ? `送${service.serviceLabel}` : service.serviceLabel
     steps.push({
       label: delayMinutes === 0
-        ? `立即指派${assignee}为${tableLabel}${serviceAction}`
-        : `${delayMinutes}分钟后指派${assignee}为${tableLabel}${serviceAction}`,
+        ? `立即指派${assigneeName}为${tableLabel}${serviceAction}`
+        : `${delayMinutes}分钟后指派${assigneeName}为${tableLabel}${serviceAction}`,
       command: delayMinutes === 0
-        ? `立即向${assignee}派发${tableLabel}${serviceAction}任务`
-        : `${delayMinutes}分钟后向${assignee}派发${tableLabel}${serviceAction}任务`,
+        ? `立即向${assigneeName}派发${tableLabel}${serviceAction}任务`
+        : `${delayMinutes}分钟后向${assigneeName}派发${tableLabel}${serviceAction}任务`,
       toolCall: {
         toolId: 'service.task.schedule',
         arguments: {
           tableCode: table.code,
           serviceTypeId: service.serviceTypeId,
           delayMinutes,
-          assigneeEmployeeId: assignee,
+          assigneeEmployeeId,
           ...(service.note ? { note: service.note } : {}),
         },
       },
     })
+  }
+
+  const isQuestion = /[?？]|(?:吗|么|没有|是否|谁|什么|为何|为什么|进度|状态)\s*$/u.test(message)
+  const hasDirectServiceIntent = /(?:安排服务|加水|送水|冰块|柠檬|点单|点菜|点酒|买单|结账|投诉|生日|需要|要|请|帮|送|上|拿|准备|提供)/u.test(message)
+  if (!scheduleMatch && !isQuestion && hasDirectServiceIntent && availableTools.has('service.task.create')) {
+    const table = findTableMention(input, message)
+    if (table?.configured || table && input.context.live.tables.length === 0) {
+      const service = resolveServiceRequest(input, message.slice(table.index + table.alias.length))
+      if (service) {
+        const tableLabel = table.name === table.code ? table.code : `${table.code}（${table.name}）`
+        steps.push({
+          label: `为${tableLabel}创建${service.serviceLabel}任务`,
+          command: `创建${tableLabel}${service.serviceLabel}任务`,
+          toolCall: {
+            toolId: 'service.task.create',
+            arguments: {
+              tableCode: table.code,
+              serviceTypeId: service.serviceTypeId,
+              ...(service.note ? { note: service.note } : {}),
+            },
+          },
+        })
+      }
+    }
   }
 
   if (steps.length === 0) return null
@@ -453,10 +639,10 @@ function deterministicOperationalPlan(input: AssistantPlanningRequest): Assistan
   }
 }
 
-function missingOpenTablePartySize(message: string): AssistantModelOutput | null {
-  const match = message.match(openTableWithTableCodePattern)
-  if (!match || explicitPartySizePattern.test(message)) return null
-  const tableCode = (match[1] ?? match[2])!.toUpperCase()
+function missingOpenTablePartySize(input: AssistantPlanningRequest): AssistantModelOutput | null {
+  const table = openTableMention(input, input.message)
+  if (!table || explicitPartySizePattern.test(input.message)) return null
+  const tableCode = table.code
   return {
     kind: 'clarification',
     reply: `${tableCode}准备开台，请告诉我实际到店人数。`,
@@ -487,8 +673,9 @@ async function planWithStructuredModel(
 ): Promise<AssistantPlanningResult> {
   const canOpenTable = input.context.tools.some((tool) => tool.id === 'table.open')
   const deterministic = protectedHumanWorkflowPlan(input)
+    ?? deterministicTaskActionPlan(input)
     ?? deterministicOperationalPlan(input)
-    ?? (canOpenTable ? missingOpenTablePartySize(input.message) : null)
+    ?? (canOpenTable ? missingOpenTablePartySize(input) : null)
   if (deterministic) {
     return {
       output: deterministic,
@@ -509,9 +696,12 @@ async function planWithStructuredModel(
       ? prompt
       : `${prompt}\n\n上一次响应没有通过结构检查。请重新判断，并且只返回符合要求的JSON。`)
     try {
-      const parsed = removeRepeatedGreeting(parseModelOutput(reply.text), input.context.actor.displayName)
+      const parsed = enforceModelPlanSafety(
+        input,
+        removeRepeatedGreeting(parseModelOutput(reply.text), input.context.actor.displayName),
+      )
       return {
-        output: enforceHumanWorkflowBoundary(input, parsed),
+        output: parsed,
         model,
         providerRequestId: reply.requestId,
         inputTokens: reply.inputTokens,

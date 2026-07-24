@@ -1,10 +1,11 @@
-import { AlertTriangle, Check, ChevronRight, Clock3, Minus, Plus, ShoppingCart, Trash2, X } from 'lucide-react'
+import { AlertTriangle, Check, ChevronRight, Clock3, Minus, Plus, Search, ShoppingCart, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ApiError } from '../api'
 import type { OrderSafetyConfig } from '../shared/commercial-ops-contracts'
 import type { MenuProduct } from '../shared/contracts'
 import { productAvailability } from '../shared/product-availability'
 import './MenuOrderingWorkspace.css'
+import { filterMenuProducts } from './menu-search'
 
 export interface MenuCartItem {
   productId: string
@@ -55,6 +56,7 @@ export function MenuOrderingWorkspace({
 }: MenuOrderingWorkspaceProps) {
   const [cart, setCart] = useState<Record<string, number>>({})
   const [categoryId, setCategoryId] = useState('all')
+  const [searchQuery, setSearchQuery] = useState('')
   const [clock, setClock] = useState(() => Date.now())
   const [confirmation, setConfirmation] = useState<'submit' | 'duplicate' | 'continue' | null>(null)
   const [confirmationError, setConfirmationError] = useState('')
@@ -77,9 +79,10 @@ export function MenuOrderingWorkspace({
       product.categoryName ?? '推荐',
     ])).entries()).map(([id, name]) => ({ id, name })),
   ], [orderedProducts])
-  const visibleProducts = categoryId === 'all'
-    ? orderedProducts
-    : orderedProducts.filter((product) => (product.categoryId ?? 'featured') === categoryId)
+  const visibleProducts = useMemo(
+    () => filterMenuProducts(orderedProducts, categoryId, searchQuery),
+    [categoryId, orderedProducts, searchQuery],
+  )
   const availability = useMemo(() => new Map(orderedProducts.map((product) => [
     product.id,
     productAvailability(product, new Date(clock), timeZone),
@@ -229,7 +232,44 @@ export function MenuOrderingWorkspace({
               </button>
             ))}
           </nav>
+          <div className="menu-search-toolbar">
+            <label className="menu-search-control">
+              <Search size={18} aria-hidden="true" />
+              <input
+                aria-label="搜索菜单商品"
+                autoComplete="off"
+                enterKeyHint="search"
+                inputMode="search"
+                placeholder="搜索酒水、菜品或规格"
+                type="search"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') {
+                    setSearchQuery('')
+                    event.currentTarget.blur()
+                  }
+                }}
+              />
+              {searchQuery && (
+                <button type="button" title="清除搜索" aria-label="清除搜索" onClick={() => setSearchQuery('')}>
+                  <X size={16} />
+                </button>
+              )}
+            </label>
+            <span className="menu-search-count" aria-live="polite">
+              {searchQuery ? `找到 ${visibleProducts.length} 项` : `共 ${visibleProducts.length} 项`}
+            </span>
+          </div>
           <div className="menu-product-grid">
+            {visibleProducts.length === 0 && (
+              <div className="menu-product-empty">
+                <Search size={26} aria-hidden="true" />
+                <strong>没有找到相关商品</strong>
+                <span>换个商品名、分类或规格试试</span>
+                {searchQuery && <button type="button" onClick={() => setSearchQuery('')}>清除搜索</button>}
+              </div>
+            )}
             {visibleProducts.map((product) => {
               const quantity = cart[product.id] ?? 0
               const status = availability.get(product.id)!

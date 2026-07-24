@@ -374,7 +374,7 @@ function sessionView(
       .filter((serviceType) => serviceType.enabled && serviceType.guestVisible !== false)
       .map(({ id, code, name, icon, priority }) => ({ id, code, name, icon, priority })),
     products: state.products
-      .filter((product) => product.enabled)
+      .filter((product) => product.enabled && product.guestVisible !== false)
       .sort((left, right) => (left.sortOrder ?? 999) - (right.sortOrder ?? 999))
       .map((product) => ({ ...product, costAmount: 0 })),
     tasks: (frozen ? [] : state.tasks)
@@ -646,8 +646,11 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
         )
       }
       const products = input.items.map((item) => {
-        const product = state.products.find((candidate) => candidate.id === item.productId && candidate.enabled)
+        const product = state.products.find((candidate) => candidate.id === item.productId && candidate.enabled && candidate.guestVisible !== false)
         if (!product) throw new TableAccessError('购物车里有一款刚刚下架了，抱歉让您空欢喜；换一个试试，我们也可以帮您推荐。', 'PRODUCT_NOT_AVAILABLE', 409)
+        if (item.quantity > (product.maxOrderQuantity ?? 50)) {
+          throw new TableAccessError(`${product.name}这次最多可选${product.maxOrderQuantity ?? 50}${product.specification}，需要更多可以呼叫服务伙伴。`, 'PRODUCT_QUANTITY_EXCEEDED', 400)
+        }
         const availability = productAvailability(product, new Date(options.now?.() ?? Date.now()), state.store.timezone)
         if (!availability.orderable) {
           const code = availability.state === 'sold_out' ? 'PRODUCT_SOLD_OUT' : 'PRODUCT_OUTSIDE_SERVICE_TIME'
@@ -670,7 +673,10 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
         idempotencyKey: `${input.idempotencyKey}:draft`,
       })
       products.forEach(({ product, quantity }, index) => {
-        const workstation = routeProductToEnabledWorkstation(state, product.stationId)
+        const requiresFulfillment = product.requiresFulfillment !== false
+        const stationId = requiresFulfillment
+          ? routeProductToEnabledWorkstation(state, product.stationId).id
+          : product.stationId
         addOrderItem(state.orderDomain, {
           orderId,
           item: {
@@ -682,7 +688,8 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
             unitListPriceAmount: product.listPriceAmount,
             unitSalePriceAmount: product.listPriceAmount,
             unitCostAmount: product.costAmount,
-            stationId: workstation.id,
+            stationId,
+            requiresFulfillment,
             configVersion: product.configVersion,
           },
           actorId,

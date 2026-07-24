@@ -99,7 +99,7 @@ import { registerCommercialOpsRoutes } from './commercial-ops-api.js'
 import { registerHardwareRoutes } from './hardware-api.js'
 import { registerTaskRoutes } from './task-api.js'
 import { effectiveHardwareDeviceStatus, HardwareBusinessError } from './hardware-domain.js'
-import { GeminiAssistantPlanner } from './assistant-planner.js'
+import { GeminiAssistantPlanner, QwenAssistantPlanner } from './assistant-planner.js'
 import {
   MemoryAssistantConversationStore,
   PostgresAssistantConversationStore,
@@ -237,7 +237,11 @@ await registerObservability(app, {
         commercialOnlinePaymentReady: paymentRuntime.onlinePaymentReady && !runtimeConfig.pilotPaymentSimulationEnabled,
         voiceTranscription: runtimeConfig.voiceTranscriptionProvider,
         assistant: runtimeConfig.assistantProvider,
-        assistantModel: runtimeConfig.assistantProvider === 'gemini_interactions' ? runtimeConfig.geminiModel : 'disabled',
+        assistantModel: runtimeConfig.assistantProvider === 'gemini_interactions'
+          ? runtimeConfig.geminiModel
+          : runtimeConfig.assistantProvider === 'qwen_openai'
+            ? runtimeConfig.qwenModel
+            : 'disabled',
         releaseSha: runtimeConfig.releaseSha,
         releaseImageDigest: runtimeConfig.releaseImageDigest,
         hardwareMode,
@@ -274,7 +278,15 @@ await registerAssistantRoutes(app, {
         apiKey: runtimeConfig.geminiApiKey!,
         model: runtimeConfig.geminiModel,
         timeoutMs: runtimeConfig.assistantHttpTimeoutMs,
+        endpoint: runtimeConfig.geminiEndpoint,
       })
+    : runtimeConfig.assistantProvider === 'qwen_openai'
+      ? new QwenAssistantPlanner({
+          apiKey: runtimeConfig.qwenApiKey!,
+          model: runtimeConfig.qwenModel,
+          timeoutMs: runtimeConfig.assistantHttpTimeoutMs,
+          endpoint: runtimeConfig.qwenEndpoint!,
+        })
     : undefined,
 })
 if (runtimeConfig.runtimeMode === 'staging' || runtimeConfig.runtimeMode === 'production') {

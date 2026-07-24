@@ -21,7 +21,7 @@ function policy(
 export const defaultRolePolicies: Record<string, RolePolicy> = {
   owner: policy(
     [
-      'dashboard.view', 'finance.view', 'audit.view', 'config.manage', 'identity.manage',
+      'dashboard.view', 'finance.view', 'finance.manage', 'audit.view', 'config.manage', 'identity.manage',
       'master_data.manage', 'shift.manage', 'table.open', 'table.manage', 'table.close', 'business_day.close', 'reservation.view', 'reservation.manage',
       'reservation.config.manage',
       'service.execute', 'complaint.handle', 'order.create', 'order.view', 'kds.prepare',
@@ -43,7 +43,7 @@ export const defaultRolePolicies: Record<string, RolePolicy> = {
   ),
   operations_director: policy(
     [
-      'dashboard.view', 'finance.view', 'audit.view', 'config.manage', 'master_data.manage',
+      'dashboard.view', 'finance.view', 'finance.manage', 'audit.view', 'config.manage', 'master_data.manage',
       'shift.manage', 'table.open', 'table.manage', 'table.close', 'business_day.close', 'reservation.view',
       'reservation.manage', 'reservation.config.manage', 'service.execute', 'complaint.handle',
       'order.create', 'order.view', 'kds.prepare', 'kds.deliver', 'payment.collect',
@@ -68,7 +68,7 @@ export const defaultRolePolicies: Record<string, RolePolicy> = {
   ),
   manager: policy(
     [
-      'dashboard.view', 'finance.view', 'audit.view', 'master_data.manage', 'shift.manage',
+      'dashboard.view', 'finance.view', 'finance.manage', 'audit.view', 'master_data.manage', 'shift.manage',
       'table.open', 'table.manage', 'table.close', 'business_day.close', 'reservation.view', 'reservation.manage', 'reservation.config.manage', 'service.execute', 'complaint.handle',
       'order.create', 'order.view', 'kds.prepare', 'kds.deliver', 'payment.collect',
       'payment.pos_report', 'payment.refund.request', 'payment.refund.approve',

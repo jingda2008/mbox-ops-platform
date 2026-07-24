@@ -1,17 +1,28 @@
 import {
-  BadgeCheck, Banknote, BarChart3, ChevronDown, ChevronRight, CircleAlert, Download, Gift, LoaderCircle,
-  PackagePlus, Printer, QrCode, RefreshCw, RotateCcw, Save, ScanLine, Settings2, Tags,
+  BadgeCheck, Banknote, BarChart3, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, CircleAlert,
+  CircleDollarSign, Download, Gift, LoaderCircle, PackagePlus, Plus, Printer, QrCode, ReceiptText,
+  RefreshCw, RotateCcw, Save, ScanLine, Settings2, Tags, TrendingUp, XCircle,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react'
 import QRCode from 'qrcode'
 import * as commercialApi from '../commercial-ops-api'
 import type { BootstrapResponse } from '../shared/contracts'
-import type { CommercialOpsConfig, CommercialOpsWorkspace, PrintJob, ScanCodeBinding } from '../shared/commercial-ops-contracts'
+import type {
+  CommercialOpsConfig,
+  CommercialOpsWorkspace,
+  OperatingCostCategoryId,
+  OperatingCostEntry,
+  PrintJob,
+  ProfitCenterWorkspace,
+  ProfitReportPeriod,
+  RecurringCostTemplate,
+  ScanCodeBinding,
+} from '../shared/commercial-ops-contracts'
 import { formatChinaDateTime } from '../shared/china-time'
 import { useRevealPanelScroll } from './use-reveal-panel-scroll'
 import './CommercialOpsView.css'
 
-type Tab = 'overview' | 'stock' | 'print-jobs' | 'printing' | 'vouchers' | 'customers' | 'sales' | 'rules'
+type Tab = 'overview' | 'profit' | 'stock' | 'print-jobs' | 'printing' | 'vouchers' | 'customers' | 'sales' | 'rules'
 type PrintJobFilter = 'all' | 'queued' | 'failed' | 'printed'
 type Notice = { tone: 'success' | 'error'; message: string }
 
@@ -38,6 +49,11 @@ export function CommercialOpsView({ data, onRefresh }: { data: BootstrapResponse
   }, [])
 
   useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    if (!notice) return
+    const timer = window.setTimeout(() => setNotice(null), notice.tone === 'success' ? 3_000 : 6_000)
+    return () => window.clearTimeout(timer)
+  }, [notice])
 
   async function execute(key: string, success: string, action: () => Promise<unknown>) {
     setBusy(key)
@@ -46,8 +62,10 @@ export function CommercialOpsView({ data, onRefresh }: { data: BootstrapResponse
       await action()
       await Promise.all([load(), onRefresh()])
       setNotice({ tone: 'success', message: success })
+      return true
     } catch (error) {
       setNotice({ tone: 'error', message: errorMessage(error) })
+      return false
     } finally {
       setBusy('')
     }
@@ -61,8 +79,11 @@ export function CommercialOpsView({ data, onRefresh }: { data: BootstrapResponse
   const canOperatePrintJobs = permissions.has('kds.prepare') || canConfig
   const canVoucher = permissions.has('payment.collect')
   const canTags = permissions.has('benefit.manage')
+  const canFinance = permissions.has('finance.view')
+  const canManageFinance = permissions.has('finance.manage')
   const tabs: Array<{ id: Tab; label: string; visible: boolean }> = [
     { id: 'overview', label: '经营概览', visible: true },
+    { id: 'profit', label: '经营损益', visible: canFinance },
     { id: 'stock', label: '扫码进货', visible: canInventory },
     { id: 'print-jobs', label: '打印任务', visible: true },
     { id: 'printing', label: '打印分流', visible: canConfig },
@@ -91,6 +112,7 @@ export function CommercialOpsView({ data, onRefresh }: { data: BootstrapResponse
     <nav className="commercial-tabs">{tabs.filter((item) => item.visible).map((item) => <button key={item.id} className={tab === item.id ? 'is-active' : ''} onClick={() => setTab(item.id)}>{item.label}</button>)}</nav>
     <div ref={contentRef} className="commercial-tab-panel">
       {tab === 'overview' && <CommercialOverview workspace={workspace} onRevealPrintJobs={revealPrintJobs} />}
+      {tab === 'profit' && canFinance && <ProfitCenterTools data={data} canManage={canManageFinance} busy={busy} execute={execute} />}
       {tab === 'stock' && canInventory && <StockTools data={data} workspace={workspace} busy={busy} execute={execute} />}
       {tab === 'print-jobs' && <PrintJobTools data={data} workspace={workspace} filter={printJobFilter} onFilterChange={setPrintJobFilter} canOperate={canOperatePrintJobs} canConfig={canConfig} busy={busy} execute={execute} onOpenConfig={() => revealTab('printing')} />}
       {tab === 'printing' && canConfig && <PrintingTools data={data} config={state.config} busy={busy} execute={execute} />}
@@ -123,6 +145,384 @@ function CommercialOverview({ workspace, onRevealPrintJobs }: { workspace: Comme
         <Capability title="线上打赏" value={workspace.state.config.tipping.enabled ? '已开启' : '未开启'} />
       </div>
     </section>
+  </div>
+}
+
+type ProfitPane = 'summary' | 'entries' | 'templates'
+
+const costCategoryLabels: Record<OperatingCostCategoryId | 'goods_cogs' | 'inventory_loss', string> = {
+  goods_cogs: '酒水与餐食销售成本',
+  inventory_loss: '损耗与盘亏',
+  staff: '员工薪酬',
+  performer: '演出人员',
+  band: '乐队费用',
+  rent: '房租与物业',
+  utilities: '水电煤',
+  goods_adjustment: '货品成本调整',
+  marketing: '市场活动',
+  payment_fee: '支付与平台费',
+  maintenance: '设备维修',
+  tax: '税费',
+  other: '其他杂项',
+}
+
+const editableCostCategories = Object.entries(costCategoryLabels)
+  .filter(([id]) => !['goods_cogs', 'inventory_loss'].includes(id)) as Array<[OperatingCostCategoryId, string]>
+
+function ProfitCenterTools({
+  data, canManage, busy, execute,
+}: {
+  data: BootstrapResponse
+  canManage: boolean
+  busy: string
+  execute: Execute
+}) {
+  const [workspace, setWorkspace] = useState<ProfitCenterWorkspace | null>(null)
+  const [period, setPeriod] = useState<ProfitReportPeriod>('month')
+  const [anchor, setAnchor] = useState(data.store.businessDate)
+  const [pane, setPane] = useState<ProfitPane>('summary')
+  const [loading, setLoading] = useState(true)
+  const [localError, setLocalError] = useState('')
+
+  const [entryName, setEntryName] = useState('')
+  const [entryCategory, setEntryCategory] = useState<OperatingCostCategoryId>('staff')
+  const [entryAmountYuan, setEntryAmountYuan] = useState('')
+  const [entryStatus, setEntryStatus] = useState<'estimated' | 'actual'>('estimated')
+  const [entryMode, setEntryMode] = useState<'on_start' | 'spread_daily'>('spread_daily')
+  const [entryStartDate, setEntryStartDate] = useState(data.store.businessDate)
+  const [entryEndDate, setEntryEndDate] = useState(data.store.businessDate)
+  const [entryCounterparty, setEntryCounterparty] = useState('')
+  const [entryReference, setEntryReference] = useState('')
+  const [entryNote, setEntryNote] = useState('')
+  const [replacesEntryId, setReplacesEntryId] = useState('')
+  const [sourceTemplateId, setSourceTemplateId] = useState('')
+  const [sourceOccurrenceDate, setSourceOccurrenceDate] = useState(data.store.businessDate)
+
+  const [templateId, setTemplateId] = useState('')
+  const [templateName, setTemplateName] = useState('')
+  const [templateCategory, setTemplateCategory] = useState<OperatingCostCategoryId>('rent')
+  const [templateAmountYuan, setTemplateAmountYuan] = useState('')
+  const [templateFrequency, setTemplateFrequency] = useState<RecurringCostTemplate['frequency']>('monthly')
+  const [templateMode, setTemplateMode] = useState<RecurringCostTemplate['recognitionMode']>('spread_daily')
+  const [templateStartDate, setTemplateStartDate] = useState(data.store.businessDate.slice(0, 8) + '01')
+  const [templateEndDate, setTemplateEndDate] = useState('')
+  const [templateCounterparty, setTemplateCounterparty] = useState('')
+  const [templateNote, setTemplateNote] = useState('')
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setLocalError('')
+    try {
+      setWorkspace(await commercialApi.getProfitCenterWorkspace(period, anchor))
+    } catch (error) {
+      setLocalError(errorMessage(error))
+    } finally {
+      setLoading(false)
+    }
+  }, [anchor, period])
+
+  useEffect(() => { void load() }, [load])
+
+  async function run(key: string, success: string, action: () => Promise<unknown>) {
+    if (await execute(key, success, action)) await load()
+  }
+
+  function moveAnchor(direction: -1 | 1) {
+    const date = new Date(`${anchor}T12:00:00.000Z`)
+    if (period === 'day') date.setUTCDate(date.getUTCDate() + direction)
+    else if (period === 'week') date.setUTCDate(date.getUTCDate() + direction * 7)
+    else if (period === 'month') date.setUTCMonth(date.getUTCMonth() + direction)
+    else if (period === 'quarter') date.setUTCMonth(date.getUTCMonth() + direction * 3)
+    else date.setUTCFullYear(date.getUTCFullYear() + direction)
+    setAnchor(date.toISOString().slice(0, 10))
+  }
+
+  function prepareActual(entry: OperatingCostEntry) {
+    setPane('entries')
+    setEntryName(entry.name.replace(/预估/g, '实际'))
+    setEntryCategory(entry.categoryId)
+    setEntryAmountYuan((entry.amount / 100).toFixed(2))
+    setEntryStatus('actual')
+    setEntryMode(entry.recognitionMode)
+    setEntryStartDate(entry.recognitionStartDate)
+    setEntryEndDate(entry.recognitionEndDate)
+    setEntryCounterparty(entry.counterparty)
+    setEntryReference('')
+    setEntryNote(`替代预估：${entry.name}`)
+    setReplacesEntryId(entry.id)
+    setSourceTemplateId('')
+  }
+
+  function prepareTemplateActual(template: RecurringCostTemplate) {
+    const occurrenceDate = templateOccurrenceFor(template, data.store.businessDate)
+    const cycleEnd = templateCycleEnd(template, occurrenceDate)
+    setPane('entries')
+    setEntryName(`${template.name}实际账单`)
+    setEntryCategory(template.categoryId)
+    setEntryAmountYuan((template.amount / 100).toFixed(2))
+    setEntryStatus('actual')
+    setEntryMode(template.recognitionMode)
+    setEntryStartDate(occurrenceDate)
+    setEntryEndDate(template.recognitionMode === 'spread_daily' ? cycleEnd : occurrenceDate)
+    setEntryCounterparty(template.counterparty)
+    setEntryReference('')
+    setEntryNote(`核销周期费用：${template.name}`)
+    setReplacesEntryId('')
+    setSourceTemplateId(template.id)
+    setSourceOccurrenceDate(occurrenceDate)
+  }
+
+  function submitEntry(event: FormEvent) {
+    event.preventDefault()
+    const amount = Math.round(Number(entryAmountYuan) * 100)
+    if (!entryName.trim() || amount <= 0) return
+    const endDate = entryMode === 'on_start' ? entryStartDate : entryEndDate
+    void run('profit-cost-entry', entryStatus === 'actual' ? '实际成本已入账，相关历史报表已重算' : '预估成本已计入经营预测', async () => {
+      await commercialApi.createOperatingCostEntry({
+        name: entryName.trim(),
+        categoryId: entryCategory,
+        amount,
+        status: entryStatus,
+        recognitionMode: entryMode,
+        recognitionStartDate: entryStartDate,
+        recognitionEndDate: endDate,
+        counterparty: entryCounterparty.trim(),
+        reference: entryReference.trim(),
+        note: entryNote.trim(),
+        ...(replacesEntryId ? { replacesEntryId } : {}),
+        ...(sourceTemplateId ? { sourceTemplateId, sourceOccurrenceDate } : {}),
+        reason: entryStatus === 'actual' ? '录入已确认经营成本' : '录入营业前已知或待确认成本',
+      })
+      setEntryName('')
+      setEntryAmountYuan('')
+      setEntryReference('')
+      setEntryNote('')
+      setReplacesEntryId('')
+      setSourceTemplateId('')
+    })
+  }
+
+  function submitTemplate(event: FormEvent) {
+    event.preventDefault()
+    const amount = Math.round(Number(templateAmountYuan) * 100)
+    if (!templateName.trim() || amount <= 0) return
+    void run('profit-cost-template', templateId ? '周期成本配置已更新' : '周期成本已启用并自动进入后续预测', async () => {
+      await commercialApi.upsertRecurringCostTemplate({
+        ...(templateId ? { templateId } : {}),
+        name: templateName.trim(),
+        categoryId: templateCategory,
+        amount,
+        frequency: templateFrequency,
+        recognitionMode: templateMode,
+        startDate: templateStartDate,
+        endDate: templateEndDate || null,
+        counterparty: templateCounterparty.trim(),
+        note: templateNote.trim(),
+        enabled: true,
+        reason: templateId ? '更新周期经营成本配置' : '建立周期经营成本配置',
+      })
+      setTemplateId('')
+      setTemplateName('')
+      setTemplateAmountYuan('')
+      setTemplateCounterparty('')
+      setTemplateNote('')
+    })
+  }
+
+  function editTemplate(template: RecurringCostTemplate) {
+    setTemplateId(template.id)
+    setTemplateName(template.name)
+    setTemplateCategory(template.categoryId)
+    setTemplateAmountYuan((template.amount / 100).toFixed(2))
+    setTemplateFrequency(template.frequency)
+    setTemplateMode(template.recognitionMode)
+    setTemplateStartDate(template.startDate)
+    setTemplateEndDate(template.endDate ?? '')
+    setTemplateCounterparty(template.counterparty)
+    setTemplateNote(template.note)
+  }
+
+  if (!workspace) {
+    return <div className="commercial-content"><div className="commercial-empty">{loading ? <LoaderCircle className="spin" size={22} /> : <CircleAlert size={22} />}{loading ? '正在计算经营损益' : localError || '经营损益暂不可用'}</div></div>
+  }
+
+  const report = workspace.report
+  const confirmedCost = report.costs.goodsCostAmount + report.costs.inventoryLossAmount + report.costs.actualOperatingExpenseAmount
+  const estimatedCost = report.costs.estimatedGoodsCostAmount + report.costs.estimatedOperatingExpenseAmount
+  const maximumTrend = Math.max(1, ...report.trendRows.flatMap((row) => [Math.abs(row.revenueAmount), Math.abs(row.costAmount)]))
+  const activeEstimates = workspace.costEntries.filter((entry) => entry.status === 'estimated'
+    && !workspace.costEntries.some((candidate) => candidate.status === 'actual' && candidate.replacesEntryId === entry.id))
+
+  return <div className="commercial-content profit-center">
+    <section className="commercial-section profit-toolbar">
+      <div className="profit-periods" aria-label="损益周期">
+        {([['day', '日'], ['week', '周'], ['month', '月'], ['quarter', '季'], ['year', '年']] as const).map(([id, label]) => (
+          <button type="button" key={id} className={period === id ? 'is-active' : ''} onClick={() => setPeriod(id)}>{label}</button>
+        ))}
+      </div>
+      <div className="profit-date-control">
+        <button type="button" className="icon-button" title="上一周期" onClick={() => moveAnchor(-1)}><ChevronLeft size={17} /></button>
+        <input type="date" value={anchor} onChange={(event) => setAnchor(event.target.value)} />
+        <button type="button" className="icon-button" title="下一周期" onClick={() => moveAnchor(1)}><ChevronRight size={17} /></button>
+      </div>
+      <span className="profit-range"><CalendarRange size={15} />{report.startDate} 至 {report.endDate}</span>
+      <button type="button" className="icon-button" title="刷新损益" disabled={loading} onClick={() => void load()}><RefreshCw className={loading ? 'spin' : ''} size={17} /></button>
+    </section>
+    <nav className="profit-panes">
+      <button type="button" className={pane === 'summary' ? 'is-active' : ''} onClick={() => setPane('summary')}><TrendingUp size={16} />损益看板</button>
+      <button type="button" className={pane === 'entries' ? 'is-active' : ''} onClick={() => setPane('entries')}><ReceiptText size={16} />费用记录</button>
+      <button type="button" className={pane === 'templates' ? 'is-active' : ''} onClick={() => setPane('templates')}><CalendarRange size={16} />周期成本</button>
+    </nav>
+
+    {pane === 'summary' && <>
+      <div className="profit-metrics">
+        <div><span>净营收</span><strong>{money(report.revenue.netAmount)}</strong><small>收款 + 团购结算 - 退款</small></div>
+        <div><span>已确认成本</span><strong>{money(confirmedCost)}</strong><small>出库、实际费用与损耗</small></div>
+        <div className={estimatedCost > 0 ? 'is-estimated' : ''}><span>待确认成本</span><strong>{money(estimatedCost)}</strong><small>预估费用与未追踪货品</small></div>
+        <div className={report.profit.projectedOperatingProfitAmount < 0 ? 'is-negative' : 'is-profit'}><span>预计经营利润</span><strong>{money(report.profit.projectedOperatingProfitAmount)}</strong><small>按本周期全部收入与成本</small></div>
+        <div><span>预计利润率</span><strong>{(report.profit.projectedMarginBps / 100).toFixed(1)}%</strong><small>经营利润 ÷ 净营收</small></div>
+      </div>
+      {(report.revenue.pendingPosAmount > 0 || estimatedCost > 0) && <div className="profit-quality">
+        <CircleAlert size={17} />
+        <span>
+          {report.revenue.pendingPosAmount > 0 && `物理POS待对账 ${money(report.revenue.pendingPosAmount)}；`}
+          {estimatedCost > 0 && `仍有 ${report.quality.estimatedEntryCount} 笔费用和 ${report.quality.estimatedGoodsOrderItemCount} 个商品成本待确认。`}
+        </span>
+      </div>}
+      <div className="profit-analysis-grid">
+        <section className="commercial-section">
+          <SectionTitle icon={<BarChart3 size={18} />} title="收入、成本与利润走势" />
+          <div className="profit-trend">{report.trendRows.map((row) => <div key={row.key}>
+            <span>{row.label}</span>
+            <div className="profit-bars">
+              <i className="is-revenue" style={{ width: `${Math.max(2, Math.abs(row.revenueAmount) / maximumTrend * 100)}%` } as CSSProperties} />
+              <i className="is-cost" style={{ width: `${Math.max(2, Math.abs(row.costAmount) / maximumTrend * 100)}%` } as CSSProperties} />
+            </div>
+            <b className={row.profitAmount < 0 ? 'is-negative' : ''}>{money(row.profitAmount)}</b>
+          </div>)}</div>
+          <div className="profit-legend"><span><i className="is-revenue" />营收</span><span><i className="is-cost" />成本</span><small>右侧为当期利润</small></div>
+        </section>
+        <section className="commercial-section">
+          <SectionTitle icon={<CircleDollarSign size={18} />} title="成本结构" />
+          <div className="profit-category-list">{report.categoryRows.length === 0
+            ? <p>当前周期还没有成本记录</p>
+            : report.categoryRows.map((row) => <div key={row.categoryId}>
+              <span><strong>{costCategoryLabels[row.categoryId]}</strong><small>{row.estimatedAmount > 0 ? `含预估 ${money(row.estimatedAmount)}` : '已确认'}</small></span>
+              <b>{money(row.totalAmount)}</b>
+            </div>)}
+          </div>
+        </section>
+      </div>
+    </>}
+
+    {pane === 'entries' && <div className="profit-entry-grid">
+      {canManage && <section className="commercial-section">
+        <SectionTitle icon={<Plus size={18} />} title={replacesEntryId ? '把预估更新为实际账单' : '录入经营费用'} />
+        <form className="commercial-form profit-entry-form" onSubmit={submitEntry}>
+          <div className="commercial-field-pair">
+            <Field label="费用名称"><input required value={entryName} onChange={(event) => setEntryName(event.target.value)} placeholder="例如：7月员工工资" /></Field>
+            <Field label="成本分类"><select value={entryCategory} onChange={(event) => setEntryCategory(event.target.value as OperatingCostCategoryId)}>{editableCostCategories.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></Field>
+          </div>
+          <div className="commercial-field-pair">
+            <Field label="金额（元）"><input required type="number" min="0.01" step="0.01" value={entryAmountYuan} onChange={(event) => setEntryAmountYuan(event.target.value)} /></Field>
+            <Field label="金额状态"><select value={entryStatus} onChange={(event) => { setEntryStatus(event.target.value as 'estimated' | 'actual'); if (event.target.value === 'estimated') { setReplacesEntryId(''); setSourceTemplateId('') } }}><option value="estimated">预估/待账单</option><option value="actual">实际/已确认</option></select></Field>
+          </div>
+          <div className="commercial-field-pair">
+            <Field label="费用确认方式"><select value={entryMode} onChange={(event) => { const mode = event.target.value as typeof entryMode; setEntryMode(mode); if (mode === 'on_start') setEntryEndDate(entryStartDate) }}><option value="spread_daily">按日期均摊</option><option value="on_start">一次计入</option></select></Field>
+            <Field label="费用开始日"><input type="date" value={entryStartDate} onChange={(event) => { setEntryStartDate(event.target.value); if (entryMode === 'on_start') setEntryEndDate(event.target.value) }} /></Field>
+          </div>
+          {entryMode === 'spread_daily' && <Field label="费用结束日"><input type="date" min={entryStartDate} value={entryEndDate} onChange={(event) => setEntryEndDate(event.target.value)} /></Field>}
+          {entryStatus === 'actual' && <>
+            <Field label="替代已有预估"><select value={replacesEntryId} disabled={Boolean(sourceTemplateId)} onChange={(event) => setReplacesEntryId(event.target.value)}><option value="">不替代</option>{activeEstimates.map((entry) => <option key={entry.id} value={entry.id}>{entry.name} · {money(entry.amount)}</option>)}</select></Field>
+            <div className="commercial-field-pair">
+              <Field label="关联周期成本"><select value={sourceTemplateId} disabled={Boolean(replacesEntryId)} onChange={(event) => {
+                const nextId = event.target.value
+                setSourceTemplateId(nextId)
+                const template = workspace.recurringCostTemplates.find((item) => item.id === nextId)
+                if (!template) return
+                const occurrenceDate = templateOccurrenceFor(template, data.store.businessDate)
+                setSourceOccurrenceDate(occurrenceDate)
+                setEntryStartDate(occurrenceDate)
+                setEntryEndDate(template.recognitionMode === 'spread_daily' ? templateCycleEnd(template, occurrenceDate) : occurrenceDate)
+                setEntryMode(template.recognitionMode)
+              }}><option value="">不关联</option>{workspace.recurringCostTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></Field>
+              {sourceTemplateId && <Field label="对应账期"><input type="date" value={sourceOccurrenceDate} onChange={(event) => {
+                const occurrenceDate = event.target.value
+                setSourceOccurrenceDate(occurrenceDate)
+                setEntryStartDate(occurrenceDate)
+                const template = workspace.recurringCostTemplates.find((item) => item.id === sourceTemplateId)
+                if (template) setEntryEndDate(template.recognitionMode === 'spread_daily' ? templateCycleEnd(template, occurrenceDate) : occurrenceDate)
+              }} /></Field>}
+            </div>
+          </>}
+          <div className="commercial-field-pair">
+            <Field label="收款方/人员"><input value={entryCounterparty} onChange={(event) => setEntryCounterparty(event.target.value)} /></Field>
+            <Field label="账单/合同编号"><input value={entryReference} onChange={(event) => setEntryReference(event.target.value)} /></Field>
+          </div>
+          <Field label="备注"><input value={entryNote} onChange={(event) => setEntryNote(event.target.value)} /></Field>
+          <button className="primary-button" disabled={!entryName.trim() || Number(entryAmountYuan) <= 0 || Boolean(busy)}><Save size={16} />确认录入</button>
+        </form>
+      </section>}
+      <section className="commercial-section">
+        <SectionTitle icon={<ReceiptText size={18} />} title="费用记录与追溯" />
+        <div className="profit-entry-list">{workspace.costEntries.length === 0
+          ? <p>还没有录入人工费用</p>
+          : workspace.costEntries.map((entry) => <article key={entry.id} className={`is-${entry.status}`}>
+            <div>
+              <strong>{entry.name}</strong>
+              <span>{costCategoryLabels[entry.categoryId]} · {entry.recognitionStartDate}{entry.recognitionEndDate !== entry.recognitionStartDate ? ` 至 ${entry.recognitionEndDate}` : ''}</span>
+              <small>{entry.counterparty || '未填写收款方'}{entry.reference ? ` · ${entry.reference}` : ''}</small>
+            </div>
+            <b>{money(entry.amount)}</b>
+            <em>{entry.status === 'actual' ? '实际' : entry.status === 'estimated' ? '预估' : '已作废'}</em>
+            {canManage && entry.status === 'estimated' && <button type="button" className="secondary-button" onClick={() => prepareActual(entry)}>录入实际</button>}
+            {canManage && entry.status !== 'voided' && <button type="button" className="icon-button" title="作废费用记录" disabled={Boolean(busy)} onClick={() => {
+              if (window.confirm(`确认作废“${entry.name}”？历史审计记录仍会保留。`)) void run(`profit-cost-void:${entry.id}`, '费用记录已作废，损益已重新计算', () => commercialApi.voidOperatingCostEntry(entry.id, '录入错误，作废后重新登记'))
+            }}><XCircle size={16} /></button>}
+          </article>)}
+        </div>
+      </section>
+    </div>}
+
+    {pane === 'templates' && <div className="profit-entry-grid">
+      {canManage && <section className="commercial-section">
+        <SectionTitle icon={<CalendarRange size={18} />} title={templateId ? '编辑周期成本' : '新增周期成本'} />
+        <form className="commercial-form" onSubmit={submitTemplate}>
+          <div className="commercial-field-pair">
+            <Field label="费用名称"><input required value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="例如：门店房租" /></Field>
+            <Field label="成本分类"><select value={templateCategory} onChange={(event) => setTemplateCategory(event.target.value as OperatingCostCategoryId)}>{editableCostCategories.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></Field>
+          </div>
+          <div className="commercial-field-pair">
+            <Field label="每期金额（元）"><input required type="number" min="0.01" step="0.01" value={templateAmountYuan} onChange={(event) => setTemplateAmountYuan(event.target.value)} /></Field>
+            <Field label="发生频率"><select value={templateFrequency} onChange={(event) => setTemplateFrequency(event.target.value as RecurringCostTemplate['frequency'])}><option value="weekly">每周</option><option value="monthly">每月</option><option value="quarterly">每季度</option><option value="yearly">每年</option></select></Field>
+          </div>
+          <div className="commercial-field-pair">
+            <Field label="确认方式"><select value={templateMode} onChange={(event) => setTemplateMode(event.target.value as RecurringCostTemplate['recognitionMode'])}><option value="spread_daily">按周期均摊</option><option value="on_start">周期首日计入</option></select></Field>
+            <Field label="首期日期"><input type="date" value={templateStartDate} onChange={(event) => setTemplateStartDate(event.target.value)} /></Field>
+          </div>
+          <Field label="合同结束日（可空）"><input type="date" min={templateStartDate} value={templateEndDate} onChange={(event) => setTemplateEndDate(event.target.value)} /></Field>
+          <div className="commercial-field-pair">
+            <Field label="收款方"><input value={templateCounterparty} onChange={(event) => setTemplateCounterparty(event.target.value)} /></Field>
+            <Field label="说明"><input value={templateNote} onChange={(event) => setTemplateNote(event.target.value)} /></Field>
+          </div>
+          <button className="primary-button" disabled={!templateName.trim() || Number(templateAmountYuan) <= 0 || Boolean(busy)}><Save size={16} />{templateId ? '保存修改' : '启用周期成本'}</button>
+        </form>
+      </section>}
+      <section className="commercial-section">
+        <SectionTitle icon={<CalendarRange size={18} />} title="周期成本配置" />
+        <div className="profit-template-list">{workspace.recurringCostTemplates.length === 0
+          ? <p>还没有周期成本，房租、工资、驻场费可在这里自动进入预测。</p>
+          : workspace.recurringCostTemplates.map((template) => <article key={template.id} className={template.enabled ? '' : 'is-disabled'}>
+            <div><strong>{template.name}</strong><span>{costCategoryLabels[template.categoryId]} · {frequencyLabel(template.frequency)} · {template.recognitionMode === 'spread_daily' ? '周期均摊' : '首日计入'}</span><small>{template.startDate}起{template.endDate ? ` · ${template.endDate}止` : ''}</small></div>
+            <b>{money(template.amount)}</b>
+            <em>{template.enabled ? '预测中' : '已停用'}</em>
+            {canManage && <button type="button" className="secondary-button" onClick={() => editTemplate(template)}>编辑</button>}
+            {canManage && template.enabled && <button type="button" className="secondary-button" onClick={() => prepareTemplateActual(template)}>录入本期实际</button>}
+            {canManage && <button type="button" className="icon-button" title={template.enabled ? '停用周期成本' : '启用周期成本'} disabled={Boolean(busy)} onClick={() => void run(`profit-template-status:${template.id}`, template.enabled ? '周期成本已停用' : '周期成本已恢复', () => commercialApi.updateRecurringCostTemplateStatus(template.id, !template.enabled, template.enabled ? '合同结束或暂停计提' : '恢复周期成本预测'))}>{template.enabled ? <XCircle size={16} /> : <RotateCcw size={16} />}</button>}
+          </article>)}
+        </div>
+      </section>
+    </div>}
   </div>
 }
 
@@ -336,7 +736,7 @@ function RuleTools({ config, busy, execute }: { config: CommercialOpsConfig; bus
 }
 
 interface ToolProps { data: BootstrapResponse; workspace: CommercialOpsWorkspace; busy: string; execute: Execute }
-type Execute = (key: string, success: string, action: () => Promise<unknown>) => void
+type Execute = (key: string, success: string, action: () => Promise<unknown>) => Promise<boolean>
 
 function Metric({ icon, value, label, warning = false, onClick }: { icon: ReactNode; value: number | string; label: string; warning?: boolean; onClick?: () => void }) {
   const content = <>{icon}<strong>{value}</strong><span>{label}</span>{onClick && <ChevronRight className="metric-chevron" size={17} />}</>
@@ -352,8 +752,43 @@ function errorMessage(error: unknown) { return error instanceof Error ? error.me
 function shortId(id: string) { return id.length > 12 ? id.slice(-12) : id }
 function printJobStatus(status: PrintJob['status']) { return status === 'queued' ? '待打印' : status === 'failed' ? '打印失败' : '已打印' }
 function printerConnectionLabel(mode?: CommercialOpsConfig['printers'][number]['connectionMode']) { return mode === 'network' ? '网络打印机' : mode === 'android_bridge' ? '安卓打印桥' : mode === 'browser' ? '浏览器打印' : '连接方式未配置' }
+function frequencyLabel(frequency: RecurringCostTemplate['frequency']) { return frequency === 'weekly' ? '每周' : frequency === 'monthly' ? '每月' : frequency === 'quarterly' ? '每季度' : '每年' }
 function targetName(data: BootstrapResponse, item: { targetType: 'product' | 'ingredient'; targetId: string }) { return item.targetType === 'product' ? data.products.find((product) => product.id === item.targetId)?.name ?? item.targetId : data.inventoryDomain?.ingredientSkus.find((ingredient) => ingredient.id === item.targetId)?.name ?? item.targetId }
 function configPayload(config: CommercialOpsConfig) { const { version: _version, updatedAt: _updatedAt, updatedBy: _updatedBy, ...payload } = config; return payload }
+
+function recurringDateFromAnchor(startDate: string, frequency: RecurringCostTemplate['frequency'], index: number) {
+  if (frequency === 'weekly') {
+    const date = new Date(`${startDate}T12:00:00.000Z`)
+    date.setUTCDate(date.getUTCDate() + index * 7)
+    return date.toISOString().slice(0, 10)
+  }
+  const multiplier = frequency === 'monthly' ? 1 : frequency === 'quarterly' ? 3 : 12
+  const start = new Date(`${startDate}T12:00:00.000Z`)
+  const target = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + index * multiplier, 1, 12))
+  const lastDay = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0, 12)).getUTCDate()
+  target.setUTCDate(Math.min(start.getUTCDate(), lastDay))
+  return target.toISOString().slice(0, 10)
+}
+
+function templateOccurrenceFor(template: RecurringCostTemplate, dateKey: string) {
+  let latest = template.startDate
+  for (let index = 1; index < 2_000; index += 1) {
+    const next = recurringDateFromAnchor(template.startDate, template.frequency, index)
+    if (next > dateKey) break
+    latest = next
+  }
+  return latest
+}
+
+function templateCycleEnd(template: RecurringCostTemplate, occurrenceDate: string) {
+  let index = 0
+  while (recurringDateFromAnchor(template.startDate, template.frequency, index) < occurrenceDate && index < 2_000) index += 1
+  const nextDate = recurringDateFromAnchor(template.startDate, template.frequency, index + 1)
+  const end = new Date(`${nextDate}T12:00:00.000Z`)
+  end.setUTCDate(end.getUTCDate() - 1)
+  const cycleEnd = end.toISOString().slice(0, 10)
+  return template.endDate && template.endDate < cycleEnd ? template.endDate : cycleEnd
+}
 
 async function downloadBindingQr(binding: ScanCodeBinding, name: string) {
   const dataUrl = await QRCode.toDataURL(binding.code, { width: 900, margin: 2, errorCorrectionLevel: 'H' })

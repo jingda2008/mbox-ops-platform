@@ -928,7 +928,9 @@ html.staff-phone-device .app-shell > .nav-backdrop { display: block; }
 .guest-table-context i { width: 7px; height: 7px; border-radius: 50%; background: var(--brand-red); box-shadow: 0 0 0 3px rgba(217, 47, 58, .18); }
 .guest-table-context .superhigh-heart-mark { margin-left: 2px; color: #ef6677; fill: rgba(239, 102, 119, .18); }
 .guest-table-band > div:last-child { text-align: right; }
-.guest-table-band h1 { font-size: 27px; letter-spacing: 0; }
+.guest-table-band h1 { display: flex; align-items: baseline; gap: 8px; font-size: 27px; letter-spacing: 0; }
+.guest-table-band h1 b { color: #fff; }
+.guest-table-band h1 span { color: #d2d6cf; font-size: 14px; font-weight: 700; }
 .guest-table-band p { margin-top: 5px; color: #d2d6cf; font-size: 13px; }
 .guest-reply {
   min-height: 60px;

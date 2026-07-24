@@ -1,7 +1,7 @@
 {
   "name": "@mbox/ops-platform",
   "private": true,
-  "version": "1.0.0-rc.41",
+  "version": "1.0.0-rc.43",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n API,WEB -c yellow,cyan \"npm:dev:api\" \"npm:dev:web\"",
@@ -52,6 +52,7 @@
     "papaparse": "^5.5.4",
     "pg": "^8.22.0",
     "pinyin-pro": "^3.28.1",
+    "pngjs": "^5.0.0",
     "qrcode": "^1.5.4",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
@@ -66,6 +67,7 @@
     "@types/node": "^24.13.3",
     "@types/papaparse": "^5.5.2",
     "@types/pg": "^8.20.0",
+    "@types/pngjs": "^6.0.5",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",

@@ -20,4 +20,20 @@ describe('seed business date', () => {
       endAt: '2026-07-20T19:00:00.000Z',
     })
   })
+
+  it('includes a guest-visible one-yuan balance adjustment product', () => {
+    const product = createSeedState().products.find((item) => item.id === 'product-balance-adjustment')
+
+    expect(product).toMatchObject({
+      sku: 'OTHER-001',
+      name: '补差额',
+      categoryId: 'other',
+      categoryName: '其他',
+      specification: '1元/份',
+      listPriceAmount: 100,
+      guestVisible: true,
+      requiresFulfillment: false,
+      maxOrderQuantity: 9999,
+    })
+  })
 })

@@ -46,6 +46,8 @@ export function createCommercialOpsState(): CommercialOpsState {
     config: structuredClone(DEFAULT_COMMERCIAL_OPS_CONFIG),
     scanCodeBindings: [],
     procurementBatches: [],
+    costEntries: [],
+    recurringCostTemplates: [],
     printJobs: [],
     voucherRedemptions: [],
     tipRecords: [],
@@ -76,6 +78,8 @@ export function normalizeCommercialOpsState(value?: CommercialOpsState): Commerc
     },
     scanCodeBindings: value.scanCodeBindings ?? [],
     procurementBatches: value.procurementBatches ?? [],
+    costEntries: value.costEntries ?? [],
+    recurringCostTemplates: value.recurringCostTemplates ?? [],
     printJobs: value.printJobs ?? [],
     voucherRedemptions: value.voucherRedemptions ?? [],
     tipRecords: value.tipRecords ?? [],
@@ -221,6 +225,7 @@ export function queuePrintJobsForOrder(state: RuntimeState, order: Order, occurr
   const created: PrintJob[] = []
   for (const route of commercial.config.printerRoutes.filter((candidate) => candidate.enabled && enabledPrinterIds.has(candidate.printerId))) {
     const itemIds = order.items.filter((item) => {
+      if (item.requiresFulfillment === false) return false
       const product = state.products.find((candidate) => candidate.id === item.skuId)
       return route.stationIds.includes(item.stationId) || Boolean(product?.categoryId && route.categoryIds.includes(product.categoryId))
     }).map((item) => item.id)

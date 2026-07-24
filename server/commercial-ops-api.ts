@@ -4,9 +4,12 @@ import { z } from 'zod'
 import type {
   CommercialOpsConfig,
   CommercialOpsState,
+  OperatingCostEntry,
   ProcurementBatch,
+  RecurringCostTemplate,
   ScanCodeBinding,
 } from '../src/shared/commercial-ops-contracts.js'
+import { operatingCostCategoryIds } from '../src/shared/commercial-ops-contracts.js'
 import type { RuntimeState, StaffPermissionId } from '../src/shared/contracts.js'
 import { effectivePermissionIdsForEmployee } from '../src/shared/staff-access.js'
 import { requireRequestActor } from './auth-context.js'
@@ -20,6 +23,7 @@ import {
 } from './commercial-ops.js'
 import { convertIngredientQuantityToBase, receiveInventory } from './inventory-domain.js'
 import { ensureInventoryDomainState } from './inventory-api.js'
+import { buildProfitCenterReport, recurringOccurrenceRange } from './profit-center.js'
 import type { RuntimeRepository } from './repository.js'
 
 const identifier = z.string().trim().min(1).max(128)
@@ -28,7 +32,9 @@ const occurredAt = z.string().datetime({ offset: true })
 const idempotencyKey = z.string().trim().min(8).max(128)
 const money = z.number().int().nonnegative().max(1_000_000_000)
 const positiveQuantity = z.number().positive().max(1_000_000_000)
+const positiveMoney = z.number().int().positive().max(1_000_000_000)
 const unitCode = z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/)
+const dateKey = z.iso.date()
 
 const printerSchema = z.object({
   id: identifier,
@@ -133,6 +139,77 @@ const printDecisionSchema = z.object({
   idempotencyKey,
 }).strict()
 
+const costEntrySchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  categoryId: z.enum(operatingCostCategoryIds),
+  amount: positiveMoney,
+  status: z.enum(['estimated', 'actual']),
+  recognitionMode: z.enum(['on_start', 'spread_daily']),
+  recognitionStartDate: dateKey,
+  recognitionEndDate: dateKey,
+  counterparty: z.string().trim().max(120).default(''),
+  reference: z.string().trim().max(120).default(''),
+  note: z.string().trim().max(500).default(''),
+  replacesEntryId: identifier.optional(),
+  sourceTemplateId: identifier.optional(),
+  sourceOccurrenceDate: dateKey.optional(),
+  reason,
+  occurredAt,
+  idempotencyKey,
+}).strict().superRefine((value, context) => {
+  if (value.recognitionEndDate < value.recognitionStartDate) {
+    context.addIssue({ code: 'custom', path: ['recognitionEndDate'], message: '费用结束日期不能早于开始日期' })
+  }
+  if (value.recognitionMode === 'on_start' && value.recognitionEndDate !== value.recognitionStartDate) {
+    context.addIssue({ code: 'custom', path: ['recognitionEndDate'], message: '一次确认费用的开始和结束日期应相同' })
+  }
+  if (value.replacesEntryId && value.status !== 'actual') {
+    context.addIssue({ code: 'custom', path: ['replacesEntryId'], message: '只有实际账单可以替代预估费用' })
+  }
+  if (Boolean(value.sourceTemplateId) !== Boolean(value.sourceOccurrenceDate)) {
+    context.addIssue({ code: 'custom', path: ['sourceTemplateId'], message: '关联周期费用时必须同时指定账期' })
+  }
+})
+
+const costVoidSchema = z.object({
+  reason,
+  occurredAt,
+  idempotencyKey,
+}).strict()
+
+const recurringCostTemplateSchema = z.object({
+  templateId: identifier.optional(),
+  name: z.string().trim().min(1).max(120),
+  categoryId: z.enum(operatingCostCategoryIds),
+  amount: positiveMoney,
+  frequency: z.enum(['weekly', 'monthly', 'quarterly', 'yearly']),
+  recognitionMode: z.enum(['on_start', 'spread_daily']),
+  startDate: dateKey,
+  endDate: dateKey.nullable().default(null),
+  counterparty: z.string().trim().max(120).default(''),
+  note: z.string().trim().max(500).default(''),
+  enabled: z.boolean(),
+  reason,
+  occurredAt,
+  idempotencyKey,
+}).strict().superRefine((value, context) => {
+  if (value.endDate && value.endDate < value.startDate) {
+    context.addIssue({ code: 'custom', path: ['endDate'], message: '周期费用结束日期不能早于开始日期' })
+  }
+})
+
+const recurringCostStatusSchema = z.object({
+  enabled: z.boolean(),
+  reason,
+  occurredAt,
+  idempotencyKey,
+}).strict()
+
+const profitQuerySchema = z.object({
+  period: z.enum(['day', 'week', 'month', 'quarter', 'year']).default('month'),
+  anchor: dateKey,
+}).strict()
+
 function deterministicId(prefix: string, key: string) {
   return `${prefix}_${createHash('sha256').update(key).digest('hex').slice(0, 32)}`
 }
@@ -158,6 +235,85 @@ function maskedVoucher(code: string) {
   return code.length <= 8 ? `${code.slice(0, 2)}****${code.slice(-2)}` : `${code.slice(0, 4)}******${code.slice(-4)}`
 }
 
+function applyProcurementWeightedAverage(
+  state: RuntimeState,
+  input: {
+    targetType: 'product' | 'ingredient'
+    targetId: string
+    quantity: number
+    unitCostAmount: number
+    occurredAt: string
+    actorId: string
+    reason: string
+    idempotencyKey: string
+  },
+  converted: ReturnType<typeof convertIngredientQuantityToBase> | null,
+) {
+  const inventory = ensureInventoryDomainState(state)
+  const incomingCost = Math.round(input.quantity * input.unitCostAmount)
+  const balanceBeforeReceipt = inventory.balances.find((balance) => balance.productId === input.targetId)?.onHandQuantity ?? 0
+  const previousQuantity = Math.max(0, balanceBeforeReceipt)
+  if (input.targetType === 'ingredient' && converted) {
+    const ingredient = inventory.ingredientSkus.find((item) => item.id === input.targetId)
+    if (!ingredient || converted.baseQuantity <= 0) return null
+    const previousCost = ingredient.costAmountPerBaseUnit
+    const nextCost = Math.round(
+      (previousQuantity * previousCost + incomingCost) / (previousQuantity + converted.baseQuantity),
+    )
+    ingredient.costAmountPerBaseUnit = nextCost
+    ingredient.revision += 1
+    ingredient.updatedAt = input.occurredAt
+    ingredient.updatedBy = input.actorId
+    inventory.auditEvents.push({
+      tenantId: inventory.tenantId,
+      storeId: inventory.storeId,
+      id: deterministicId('inventory_cost_audit', input.idempotencyKey),
+      action: 'inventory.ingredient.weighted_cost_updated.v1',
+      objectType: 'ingredient_sku',
+      objectId: ingredient.id,
+      actorId: input.actorId,
+      approvalId: null,
+      tableSessionId: null,
+      orderId: null,
+      reason: input.reason,
+      occurredAt: input.occurredAt,
+      details: {
+        previousCostAmountPerBaseUnit: previousCost,
+        nextCostAmountPerBaseUnit: nextCost,
+        previousQuantity,
+        incomingBaseQuantity: converted.baseQuantity,
+        incomingCost,
+      },
+    })
+    return { previousUnitCostAmount: previousCost, nextUnitCostAmount: nextCost }
+  }
+  const product = state.products.find((item) => item.id === input.targetId)
+  if (!product || input.quantity <= 0) return null
+  const previousCost = product.costAmount
+  const nextCost = Math.round(
+    (previousQuantity * previousCost + incomingCost) / (previousQuantity + input.quantity),
+  )
+  product.costAmount = nextCost
+  product.configVersion += 1
+  state.auditEntries.push({
+    id: deterministicId('product_cost_audit', input.idempotencyKey),
+    actorId: input.actorId,
+    action: 'product.weighted_cost_updated.v1',
+    objectType: 'product',
+    objectId: product.id,
+    occurredAt: input.occurredAt,
+    details: {
+      reason: input.reason,
+      previousCostAmount: previousCost,
+      nextCostAmount: nextCost,
+      previousQuantity,
+      incomingQuantity: input.quantity,
+      incomingCost,
+    },
+  })
+  return { previousUnitCostAmount: previousCost, nextUnitCostAmount: nextCost }
+}
+
 export function registerCommercialOpsRoutes(app: FastifyInstance, repository: RuntimeRepository) {
   app.get('/api/commercial-ops', async (request) => {
     const state = await repository.read()
@@ -168,6 +324,10 @@ export function registerCommercialOpsRoutes(app: FastifyInstance, repository: Ru
     const permissions = new Set(effectivePermissionIdsForEmployee(state, actor.actorId))
     const domain = structuredClone(commercialOpsFor(state))
     domain.idempotencyRecords = []
+    if (!permissions.has('finance.view')) {
+      domain.costEntries = []
+      domain.recurringCostTemplates = []
+    }
     if (!permissions.has('config.manage')) {
       domain.config.printers = domain.config.printers.map((printer) => ({ ...printer, endpointReference: '' }))
       domain.auditEvents = []
@@ -185,6 +345,18 @@ export function registerCommercialOpsRoutes(app: FastifyInstance, repository: Ru
       salesByEmployeeCategory: permissions.has('order.view') || permissions.has('finance.view')
         ? salesByEmployeeCategory(state)
         : [],
+    }
+  })
+
+  app.get('/api/commercial-ops/profit-center', async (request) => {
+    const state = await repository.read()
+    requireAnyPermission(request, state, ['finance.view'])
+    const query = profitQuerySchema.parse(request.query)
+    const domain = commercialOpsFor(state)
+    return {
+      report: buildProfitCenterReport(state, query.period, query.anchor),
+      costEntries: structuredClone(domain.costEntries).toSorted((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt)),
+      recurringCostTemplates: structuredClone(domain.recurringCostTemplates).toSorted((left, right) => left.name.localeCompare(right.name, 'zh-CN')),
     }
   })
 
@@ -288,6 +460,16 @@ export function registerCommercialOpsRoutes(app: FastifyInstance, repository: Ru
       const converted = ingredient
         ? convertIngredientQuantityToBase(inventory, input.targetId, input.unitCode, input.quantity)
         : null
+      const weightedCost = applyProcurementWeightedAverage(state, {
+        targetType: input.targetType,
+        targetId: input.targetId,
+        quantity: input.quantity,
+        unitCostAmount: input.unitCostAmount,
+        occurredAt: input.occurredAt,
+        actorId: actor.actorId,
+        reason: input.reason,
+        idempotencyKey: input.idempotencyKey,
+      }, converted)
       receiveInventory(inventory, {
         movementId: deterministicId('inventory_movement', input.idempotencyKey),
         productId: input.targetId,
@@ -324,12 +506,238 @@ export function registerCommercialOpsRoutes(app: FastifyInstance, repository: Ru
         key: input.idempotencyKey, operation: 'commercial.procurement.receive', inputFingerprint,
         resultId: batch.id, actorId: actor.actorId, action: 'commercial.procurement.received.v1',
         objectType: 'procurement_batch', reason: input.reason, occurredAt: input.occurredAt,
-        details: { targetId: input.targetId, supplierName: input.supplierName, totalCostAmount: batch.totalCostAmount },
+        details: {
+          targetId: input.targetId,
+          supplierName: input.supplierName,
+          totalCostAmount: batch.totalCostAmount,
+          weightedCost,
+        },
       })
       state.revision += 1
       return batch
     })
     return reply.status(201).send(result)
+  })
+
+  app.post('/api/commercial-ops/cost-entries', async (request, reply) => {
+    const input = costEntrySchema.parse(request.body)
+    const result = await repository.mutate((state) => {
+      const actor = requireConfiguredOperation(request, state, 'finance.cost.manage')
+      return mutateCommercial(state, (domain) => {
+        const inputFingerprint = fingerprint(input)
+        const replay = idempotentResult(domain, input.idempotencyKey, 'commercial.cost_entry.create', inputFingerprint)
+        if (replay) return domain.costEntries.find((entry) => entry.id === replay)!
+        const replaced = input.replacesEntryId
+          ? domain.costEntries.find((entry) => entry.id === input.replacesEntryId)
+          : null
+        if (input.replacesEntryId && (!replaced || replaced.status !== 'estimated')) {
+          throw new Error('要替代的预估费用不存在或已不是预估状态')
+        }
+        if (replaced && domain.costEntries.some((entry) => entry.status === 'actual' && entry.replacesEntryId === replaced.id)) {
+          throw new Error('这笔预估费用已经录入实际账单')
+        }
+        const template = input.sourceTemplateId
+          ? domain.recurringCostTemplates.find((item) => item.id === input.sourceTemplateId)
+          : null
+        if (input.sourceTemplateId && !template) throw new Error('关联的周期费用不存在')
+        if (input.sourceTemplateId && input.status !== 'actual') throw new Error('周期费用账期只需要录入实际账单')
+        if (template && input.sourceOccurrenceDate) {
+          const occurrenceRange = recurringOccurrenceRange(template, input.sourceOccurrenceDate)
+          if (!occurrenceRange) throw new Error('所选日期不是这个周期费用的有效账期')
+          if (input.recognitionMode !== template.recognitionMode
+            || input.recognitionStartDate !== occurrenceRange.startDate
+            || input.recognitionEndDate !== occurrenceRange.endDate) {
+            throw new Error(`周期费用应归属 ${occurrenceRange.startDate} 至 ${occurrenceRange.endDate}`)
+          }
+        }
+        if (input.sourceTemplateId && domain.costEntries.some((entry) => (
+          entry.status === 'actual'
+          && entry.sourceTemplateId === input.sourceTemplateId
+          && entry.sourceOccurrenceDate === input.sourceOccurrenceDate
+        ))) throw new Error('这个周期费用账期已经录入实际账单')
+        const entry: OperatingCostEntry = {
+          id: deterministicId('cost_entry', input.idempotencyKey),
+          name: input.name,
+          categoryId: input.categoryId,
+          amount: input.amount,
+          currency: 'CNY',
+          status: input.status,
+          recognitionMode: input.recognitionMode,
+          recognitionStartDate: input.recognitionStartDate,
+          recognitionEndDate: input.recognitionEndDate,
+          counterparty: input.counterparty,
+          reference: input.reference,
+          note: input.note,
+          replacesEntryId: input.replacesEntryId ?? null,
+          sourceTemplateId: input.sourceTemplateId ?? null,
+          sourceOccurrenceDate: input.sourceOccurrenceDate ?? null,
+          createdAt: input.occurredAt,
+          createdBy: actor.actorId,
+          voidedAt: null,
+          voidedBy: null,
+          voidReason: null,
+          idempotencyKey: input.idempotencyKey,
+        }
+        domain.costEntries.push(entry)
+        recordCommercialMutation(domain, {
+          key: input.idempotencyKey,
+          operation: 'commercial.cost_entry.create',
+          inputFingerprint,
+          resultId: entry.id,
+          actorId: actor.actorId,
+          action: input.status === 'actual' ? 'commercial.cost_entry.actual_recorded.v1' : 'commercial.cost_entry.estimated_recorded.v1',
+          objectType: 'operating_cost_entry',
+          reason: input.reason,
+          occurredAt: input.occurredAt,
+          details: {
+            categoryId: entry.categoryId,
+            amount: entry.amount,
+            recognitionStartDate: entry.recognitionStartDate,
+            recognitionEndDate: entry.recognitionEndDate,
+            replacesEntryId: entry.replacesEntryId,
+            sourceTemplateId: entry.sourceTemplateId,
+            sourceOccurrenceDate: entry.sourceOccurrenceDate,
+          },
+        })
+        return entry
+      })
+    })
+    return reply.status(201).send(result)
+  })
+
+  app.post<{ Params: { entryId: string } }>('/api/commercial-ops/cost-entries/:entryId/void', async (request) => {
+    const input = costVoidSchema.parse(request.body)
+    return repository.mutate((state) => {
+      const actor = requireConfiguredOperation(request, state, 'finance.cost.manage')
+      return mutateCommercial(state, (domain) => {
+        const entry = domain.costEntries.find((candidate) => candidate.id === request.params.entryId)
+        if (!entry) throw new Error('费用记录不存在')
+        const inputFingerprint = fingerprint({ entryId: entry.id, ...input })
+        const replay = idempotentResult(domain, input.idempotencyKey, 'commercial.cost_entry.void', inputFingerprint)
+        if (replay) return entry
+        if (entry.status === 'voided') throw new Error('费用记录已经作废')
+        const previousStatus = entry.status
+        entry.status = 'voided'
+        entry.voidedAt = input.occurredAt
+        entry.voidedBy = actor.actorId
+        entry.voidReason = input.reason
+        recordCommercialMutation(domain, {
+          key: input.idempotencyKey,
+          operation: 'commercial.cost_entry.void',
+          inputFingerprint,
+          resultId: entry.id,
+          actorId: actor.actorId,
+          action: 'commercial.cost_entry.voided.v1',
+          objectType: 'operating_cost_entry',
+          reason: input.reason,
+          occurredAt: input.occurredAt,
+          details: { previousStatus, amount: entry.amount, categoryId: entry.categoryId },
+        })
+        return entry
+      })
+    })
+  })
+
+  app.post('/api/commercial-ops/cost-templates', async (request, reply) => {
+    const input = recurringCostTemplateSchema.parse(request.body)
+    const result = await repository.mutate((state) => {
+      const actor = requireConfiguredOperation(request, state, 'finance.cost.manage')
+      return mutateCommercial(state, (domain) => {
+        const inputFingerprint = fingerprint(input)
+        const replay = idempotentResult(domain, input.idempotencyKey, 'commercial.cost_template.upsert', inputFingerprint)
+        if (replay) return domain.recurringCostTemplates.find((template) => template.id === replay)!
+        const existing = input.templateId
+          ? domain.recurringCostTemplates.find((template) => template.id === input.templateId)
+          : null
+        if (input.templateId && !existing) throw new Error('周期费用模板不存在')
+        const template: RecurringCostTemplate = existing ?? {
+          id: deterministicId('cost_template', input.idempotencyKey),
+          name: input.name,
+          categoryId: input.categoryId,
+          amount: input.amount,
+          currency: 'CNY',
+          frequency: input.frequency,
+          recognitionMode: input.recognitionMode,
+          startDate: input.startDate,
+          endDate: input.endDate,
+          counterparty: input.counterparty,
+          note: input.note,
+          enabled: input.enabled,
+          revision: 0,
+          createdAt: input.occurredAt,
+          createdBy: actor.actorId,
+          updatedAt: input.occurredAt,
+          updatedBy: actor.actorId,
+        }
+        Object.assign(template, {
+          name: input.name,
+          categoryId: input.categoryId,
+          amount: input.amount,
+          frequency: input.frequency,
+          recognitionMode: input.recognitionMode,
+          startDate: input.startDate,
+          endDate: input.endDate,
+          counterparty: input.counterparty,
+          note: input.note,
+          enabled: input.enabled,
+          revision: template.revision + 1,
+          updatedAt: input.occurredAt,
+          updatedBy: actor.actorId,
+        })
+        if (!existing) domain.recurringCostTemplates.push(template)
+        recordCommercialMutation(domain, {
+          key: input.idempotencyKey,
+          operation: 'commercial.cost_template.upsert',
+          inputFingerprint,
+          resultId: template.id,
+          actorId: actor.actorId,
+          action: existing ? 'commercial.cost_template.updated.v1' : 'commercial.cost_template.created.v1',
+          objectType: 'recurring_cost_template',
+          reason: input.reason,
+          occurredAt: input.occurredAt,
+          details: {
+            revision: template.revision,
+            categoryId: template.categoryId,
+            amount: template.amount,
+            frequency: template.frequency,
+          },
+        })
+        return template
+      })
+    })
+    return reply.status(input.templateId ? 200 : 201).send(result)
+  })
+
+  app.post<{ Params: { templateId: string } }>('/api/commercial-ops/cost-templates/:templateId/status', async (request) => {
+    const input = recurringCostStatusSchema.parse(request.body)
+    return repository.mutate((state) => {
+      const actor = requireConfiguredOperation(request, state, 'finance.cost.manage')
+      return mutateCommercial(state, (domain) => {
+        const template = domain.recurringCostTemplates.find((candidate) => candidate.id === request.params.templateId)
+        if (!template) throw new Error('周期费用模板不存在')
+        const inputFingerprint = fingerprint({ templateId: template.id, ...input })
+        const replay = idempotentResult(domain, input.idempotencyKey, 'commercial.cost_template.status', inputFingerprint)
+        if (replay) return template
+        if (template.enabled === input.enabled) throw new Error(input.enabled ? '周期费用已经启用' : '周期费用已经停用')
+        template.enabled = input.enabled
+        template.revision += 1
+        template.updatedAt = input.occurredAt
+        template.updatedBy = actor.actorId
+        recordCommercialMutation(domain, {
+          key: input.idempotencyKey,
+          operation: 'commercial.cost_template.status',
+          inputFingerprint,
+          resultId: template.id,
+          actorId: actor.actorId,
+          action: input.enabled ? 'commercial.cost_template.enabled.v1' : 'commercial.cost_template.disabled.v1',
+          objectType: 'recurring_cost_template',
+          reason: input.reason,
+          occurredAt: input.occurredAt,
+          details: { enabled: template.enabled, revision: template.revision },
+        })
+        return template
+      })
+    })
   })
 
   app.post('/api/commercial-ops/vouchers/redeem', async (request, reply) => {

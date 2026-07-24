@@ -66,6 +66,12 @@ function resolveServiceTypeId(state: RuntimeState, value: string) {
   return matches[0]!.id
 }
 
+function parseArguments<T>(schema: z.ZodType<T>, value: unknown, message: string) {
+  const parsed = schema.safeParse(value)
+  if (!parsed.success) throw new Error(message)
+  return parsed.data
+}
+
 function tableCodeKey(value: string) {
   const normalized = value.trim().toLocaleUpperCase('zh-CN')
   const match = normalized.match(/^([A-Z]+)0*(\d+)$/)
@@ -111,7 +117,7 @@ function executeTaskAction(
   action: 'accept' | 'arrive' | 'complete',
 ) {
   const actor = requireRequestActor(request)
-  const input = taskActionArguments.parse(call.arguments)
+  const input = parseArguments(taskActionArguments, call.arguments, '任务信息不完整，请重新选择要处理的任务')
   requireConfiguredOperation(request, state, 'service.task.action')
   const currentTask = state.tasks.find((item) => item.id === input.taskId)
   if (!currentTask) throw new Error('任务不存在')
@@ -165,7 +171,7 @@ export class AssistantToolBus {
       }
 
       if (call.toolId === 'table.open') {
-        const input = tableOpenArguments.parse(call.arguments)
+        const input = parseArguments(tableOpenArguments, call.arguments, '开台信息不完整，请确认桌号和实际到店人数')
         const table = resolveTable(state, input.tableCode)
         requireConfiguredOperation(request, state, 'table.open')
         requireTableDataScope(request, state, table.id, 'table.open')
@@ -188,7 +194,7 @@ export class AssistantToolBus {
           },
         }
       } else if (call.toolId === 'service.task.create') {
-        const input = taskCreateArguments.parse(call.arguments)
+        const input = parseArguments(taskCreateArguments, call.arguments, '服务任务信息不完整，请确认桌号和服务内容')
         const table = resolveTable(state, input.tableCode)
         requireConfiguredOperation(request, state, 'service.task.create')
         requireTableDataScope(request, state, table.id, 'service.task.create')
@@ -212,12 +218,15 @@ export class AssistantToolBus {
           },
         }
       } else if (call.toolId === 'service.task.schedule') {
-        const input = taskScheduleArguments.parse(call.arguments)
+        const input = parseArguments(taskScheduleArguments, call.arguments, '定时任务信息不完整，请确认时间、桌号、员工和服务内容')
         const table = resolveTable(state, input.tableCode)
         const serviceTypeId = resolveServiceTypeId(state, input.serviceTypeId)
         const serviceType = state.config.serviceTypes.find((candidate) => candidate.id === serviceTypeId)!
         const assigneeEmployeeId = resolveEmployeeId(state, input.assigneeEmployeeId, actor.actorId)
         const assignee = state.employees.find((employee) => employee.id === assigneeEmployeeId)!
+        if (!assignee.online || assignee.paused) {
+          throw new Error(`${assignee.displayName}当前不在可接单状态，请改派其他当班人员`)
+        }
         if (assigneeEmployeeId !== actor.actorId && !effectivePermissionIdsForEmployee(state, actor.actorId).includes('shift.manage')) {
           throw new Error('只有值班管理岗位可以指派其他员工')
         }
@@ -243,8 +252,8 @@ export class AssistantToolBus {
           objectType: 'sop_execution',
           objectId: scheduled.execution.id,
           message: input.delayMinutes === 0
-            ? `已安排立即向${assignee.displayName}派发${table.code}${serviceType.name}任务。`
-            : `已安排${input.delayMinutes}分钟后向${assignee.displayName}派发${table.code}${serviceType.name}任务。`,
+            ? `已安排立即向${assignee.displayName}派发${table.code}${serviceType.name}任务${input.note ? `：${input.note}` : ''}。`
+            : `已安排${input.delayMinutes}分钟后向${assignee.displayName}派发${table.code}${serviceType.name}任务${input.note ? `：${input.note}` : ''}。`,
           evidence: {
             verified: true,
             outcome: 'scheduled',

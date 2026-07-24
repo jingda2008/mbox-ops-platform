@@ -293,7 +293,9 @@ export function addOrderItem(state: OrderDomainState, command: AddOrderItemComma
   if (command.item.unitSalePriceAmount > command.item.unitListPriceAmount) {
     throw new Error('商品成交价不能高于原价')
   }
-  resolveFulfillmentWorkstation(state, command.item.stationId)
+  if (command.item.requiresFulfillment !== false) {
+    resolveFulfillmentWorkstation(state, command.item.stationId)
+  }
 
   return executeIdempotent(
     state,
@@ -541,7 +543,8 @@ export function submitOrder(state: OrderDomainState, command: SubmitOrderCommand
         throw new Error(hasPending ? '订单授权尚未完成' : '订单缺少折扣或赠送授权')
       }
 
-      const tasks = order.items.map((item): KdsTask => {
+      const fulfillmentItems = order.items.filter((item) => item.requiresFulfillment !== false)
+      const tasks = fulfillmentItems.map((item): KdsTask => {
         const workstation = resolveFulfillmentWorkstation(state, item.stationId)
         return {
           id: kdsTaskId(order.id, item.id),
@@ -583,12 +586,18 @@ export function submitOrder(state: OrderDomainState, command: SubmitOrderCommand
       }
 
       for (const item of order.items) {
-        item.fulfillmentStatus = 'queued'
-        item.kdsTaskId = kdsTaskId(order.id, item.id)
+        if (item.requiresFulfillment === false) {
+          item.fulfillmentStatus = 'delivered'
+          item.kdsTaskId = null
+        } else {
+          item.fulfillmentStatus = 'queued'
+          item.kdsTaskId = kdsTaskId(order.id, item.id)
+        }
       }
-      order.status = 'submitted'
+      order.status = tasks.length === 0 ? 'fulfilled' : 'submitted'
       order.submittedBy = command.submittedBy
       order.submittedAt = command.occurredAt
+      order.fulfilledAt = tasks.length === 0 ? command.occurredAt : null
       state.kdsTasks.push(...tasks)
       state.tableLedgerEntries.push(...ledgerEntries)
       return order
@@ -619,7 +628,9 @@ function effectiveKdsOutcome(state: OrderDomainState, item: OrderItem) {
 }
 
 function syncOrderFulfillment(state: OrderDomainState, order: Order, occurredAt: string) {
-  const outcomes = order.items.map((item) => effectiveKdsOutcome(state, item))
+  const outcomes = order.items
+    .filter((item) => item.requiresFulfillment !== false)
+    .map((item) => effectiveKdsOutcome(state, item))
   const allClosed = outcomes.every((outcome) => (
     outcome.cancelled || (!outcome.pendingException && outcome.task?.status === 'delivered')
   ))

@@ -6,7 +6,7 @@ const runtimeModeSchema = z.enum(['local', 'test', 'staging', 'production'])
 const repositoryModeSchema = z.enum(['json', 'postgres'])
 const logLevelSchema = z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
 const voiceTranscriptionProviderSchema = z.enum(['disabled', 'google_v1'])
-const assistantProviderSchema = z.enum(['disabled', 'gemini_interactions'])
+const assistantProviderSchema = z.enum(['disabled', 'gemini_interactions', 'qwen_openai'])
 
 export interface RuntimeConfig {
   runtimeMode: RuntimeMode
@@ -56,6 +56,10 @@ export interface RuntimeConfig {
   assistantProvider: z.infer<typeof assistantProviderSchema>
   geminiApiKey?: string
   geminiModel: string
+  geminiEndpoint?: string
+  qwenApiKey?: string
+  qwenModel: string
+  qwenEndpoint?: string
   assistantHttpTimeoutMs: number
   releaseSha: string
   releaseImageDigest: string
@@ -214,6 +218,10 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
     assistantProvider: assistantProviderSchema.parse(env.MBOX_ASSISTANT_PROVIDER ?? 'disabled'),
     geminiApiKey: env.MBOX_GEMINI_API_KEY?.trim() || undefined,
     geminiModel: env.MBOX_GEMINI_MODEL?.trim() || 'gemini-3.5-flash',
+    geminiEndpoint: env.MBOX_GEMINI_ENDPOINT?.trim() || undefined,
+    qwenApiKey: env.MBOX_QWEN_API_KEY?.trim() || undefined,
+    qwenModel: env.MBOX_QWEN_MODEL?.trim() || 'qwen3.7-plus',
+    qwenEndpoint: env.MBOX_QWEN_ENDPOINT?.trim() || undefined,
     assistantHttpTimeoutMs: parseInteger(
       env.MBOX_ASSISTANT_HTTP_TIMEOUT_MS,
       20_000,
@@ -279,6 +287,27 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{1,99}$/.test(config.geminiModel)) {
       throw new Error('MBOX_GEMINI_MODEL格式无效')
     }
+    if (config.geminiEndpoint) {
+      assertUrl(
+        config.geminiEndpoint,
+        'MBOX_GEMINI_ENDPOINT',
+        runtimeMode === 'staging' || runtimeMode === 'production' ? ['https:'] : ['http:', 'https:'],
+      )
+    }
+  }
+  if (config.assistantProvider === 'qwen_openai') {
+    if (!config.qwenApiKey || config.qwenApiKey.length < 20) {
+      throw new Error('Qwen智能对话启用时必须配置有效的MBOX_QWEN_API_KEY')
+    }
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{1,99}$/.test(config.qwenModel)) {
+      throw new Error('MBOX_QWEN_MODEL格式无效')
+    }
+    if (!config.qwenEndpoint) throw new Error('Qwen智能对话启用时必须配置MBOX_QWEN_ENDPOINT')
+    assertUrl(
+      config.qwenEndpoint,
+      'MBOX_QWEN_ENDPOINT',
+      runtimeMode === 'staging' || runtimeMode === 'production' ? ['https:'] : ['http:', 'https:'],
+    )
   }
 
   if (config.pilotAccessCode) {

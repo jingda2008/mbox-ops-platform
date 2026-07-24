@@ -78,6 +78,135 @@ export interface ProcurementBatch {
   idempotencyKey: string
 }
 
+export const operatingCostCategoryIds = [
+  'staff',
+  'performer',
+  'band',
+  'rent',
+  'utilities',
+  'goods_adjustment',
+  'marketing',
+  'payment_fee',
+  'maintenance',
+  'tax',
+  'other',
+] as const
+
+export type OperatingCostCategoryId = typeof operatingCostCategoryIds[number]
+export type OperatingCostStatus = 'estimated' | 'actual' | 'voided'
+export type CostRecognitionMode = 'on_start' | 'spread_daily'
+export type RecurringCostFrequency = 'weekly' | 'monthly' | 'quarterly' | 'yearly'
+
+/**
+ * Expense records are never deleted. A late actual bill replaces an estimate
+ * by reference; corrections use an audited logical void and a new record.
+ */
+export interface OperatingCostEntry {
+  id: string
+  name: string
+  categoryId: OperatingCostCategoryId
+  amount: number
+  currency: string
+  status: OperatingCostStatus
+  recognitionMode: CostRecognitionMode
+  recognitionStartDate: string
+  recognitionEndDate: string
+  counterparty: string
+  reference: string
+  note: string
+  replacesEntryId: string | null
+  sourceTemplateId: string | null
+  sourceOccurrenceDate: string | null
+  createdAt: string
+  createdBy: string
+  voidedAt: string | null
+  voidedBy: string | null
+  voidReason: string | null
+  idempotencyKey: string
+}
+
+export interface RecurringCostTemplate {
+  id: string
+  name: string
+  categoryId: OperatingCostCategoryId
+  amount: number
+  currency: string
+  frequency: RecurringCostFrequency
+  recognitionMode: CostRecognitionMode
+  startDate: string
+  endDate: string | null
+  counterparty: string
+  note: string
+  enabled: boolean
+  revision: number
+  createdAt: string
+  createdBy: string
+  updatedAt: string
+  updatedBy: string
+}
+
+export type ProfitReportPeriod = 'day' | 'week' | 'month' | 'quarter' | 'year'
+
+export interface ProfitCategoryRow {
+  categoryId: OperatingCostCategoryId | 'goods_cogs' | 'inventory_loss'
+  actualAmount: number
+  estimatedAmount: number
+  totalAmount: number
+  source: 'automatic' | 'manual' | 'mixed'
+}
+
+export interface ProfitTrendRow {
+  key: string
+  label: string
+  revenueAmount: number
+  costAmount: number
+  profitAmount: number
+}
+
+export interface ProfitCenterReport {
+  period: ProfitReportPeriod
+  anchorDate: string
+  startDate: string
+  endDate: string
+  generatedAt: string
+  revenue: {
+    paymentAmount: number
+    voucherSettlementAmount: number
+    refundAmount: number
+    netAmount: number
+    pendingPosAmount: number
+  }
+  costs: {
+    goodsCostAmount: number
+    estimatedGoodsCostAmount: number
+    inventoryLossAmount: number
+    actualOperatingExpenseAmount: number
+    estimatedOperatingExpenseAmount: number
+    totalAmount: number
+  }
+  profit: {
+    grossProfitAmount: number
+    confirmedOperatingProfitAmount: number
+    projectedOperatingProfitAmount: number
+    projectedMarginBps: number
+  }
+  categoryRows: ProfitCategoryRow[]
+  trendRows: ProfitTrendRow[]
+  quality: {
+    pendingPosCount: number
+    estimatedEntryCount: number
+    actualEntryCount: number
+    estimatedGoodsOrderItemCount: number
+    excludedDuplicateVoucherCount: number
+  }
+}
+
+export interface ProfitCenterWorkspace {
+  report: ProfitCenterReport
+  costEntries: OperatingCostEntry[]
+  recurringCostTemplates: RecurringCostTemplate[]
+}
+
 export interface GroupVoucherRedemption {
   id: string
   platform: string
@@ -157,6 +286,8 @@ export interface CommercialOpsState {
   config: CommercialOpsConfig
   scanCodeBindings: ScanCodeBinding[]
   procurementBatches: ProcurementBatch[]
+  costEntries: OperatingCostEntry[]
+  recurringCostTemplates: RecurringCostTemplate[]
   printJobs: PrintJob[]
   voucherRedemptions: GroupVoucherRedemption[]
   tipRecords: TipRecord[]

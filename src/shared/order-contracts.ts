@@ -84,6 +84,8 @@ export interface OrderItem {
   unitSalePriceAmount: MoneyAmount
   unitCostAmount: MoneyAmount
   stationId: string
+  /** Optional for compatibility with orders persisted before non-fulfillment products. */
+  requiresFulfillment?: boolean
   configVersion: number
   fulfillmentStatus: ItemFulfillmentStatus
   kdsTaskId: string | null
@@ -241,6 +243,7 @@ export interface OrderItemDraftInput {
   unitSalePriceAmount: MoneyAmount
   unitCostAmount: MoneyAmount
   stationId: string
+  requiresFulfillment?: boolean
   configVersion: number
 }
 

@@ -45,9 +45,48 @@ describe('runtime config', () => {
       MBOX_ASSISTANT_PROVIDER: 'gemini_interactions',
       MBOX_GEMINI_API_KEY: 'server-side-gemini-key-at-least-20-characters',
       MBOX_GEMINI_MODEL: 'gemini-3.5-flash',
+      MBOX_GEMINI_ENDPOINT: 'https://relay.example.com/v1beta/interactions',
     })).toMatchObject({
       assistantProvider: 'gemini_interactions',
       geminiModel: 'gemini-3.5-flash',
+      geminiEndpoint: 'https://relay.example.com/v1beta/interactions',
+      assistantHttpTimeoutMs: 20_000,
+    })
+  })
+
+  it('requires HTTPS for a staging Gemini relay', () => {
+    expect(() => loadRuntimeConfig({
+      MBOX_RUNTIME_MODE: 'staging',
+      MBOX_REPOSITORY: 'postgres',
+      DATABASE_URL: 'postgresql://mbox:secret@db/mbox',
+      MBOX_TENANT_ID: '11111111-1111-4111-8111-111111111111',
+      MBOX_STORE_UUID: '22222222-2222-4222-8222-222222222222',
+      MBOX_SESSION_SECRET: 's'.repeat(32),
+      MBOX_QR_SECRET: 'q'.repeat(32),
+      MBOX_METRICS_TOKEN: 'm'.repeat(32),
+      MBOX_CORS_ORIGINS: 'https://pilot.example.com',
+      MBOX_ASSISTANT_PROVIDER: 'gemini_interactions',
+      MBOX_GEMINI_API_KEY: 'server-side-relay-token-at-least-20-characters',
+      MBOX_GEMINI_ENDPOINT: 'http://relay.example.com/v1beta/interactions',
+    })).toThrow('MBOX_GEMINI_ENDPOINT必须使用https:')
+  })
+
+  it('loads Qwen OpenAI-compatible settings and requires both key and endpoint', () => {
+    expect(() => loadRuntimeConfig({ MBOX_ASSISTANT_PROVIDER: 'qwen_openai' }))
+      .toThrow('MBOX_QWEN_API_KEY')
+    expect(() => loadRuntimeConfig({
+      MBOX_ASSISTANT_PROVIDER: 'qwen_openai',
+      MBOX_QWEN_API_KEY: 'sk-server-side-qwen-key-at-least-20-characters',
+    })).toThrow('MBOX_QWEN_ENDPOINT')
+    expect(loadRuntimeConfig({
+      MBOX_ASSISTANT_PROVIDER: 'qwen_openai',
+      MBOX_QWEN_API_KEY: 'sk-server-side-qwen-key-at-least-20-characters',
+      MBOX_QWEN_MODEL: 'qwen3.7-plus',
+      MBOX_QWEN_ENDPOINT: 'https://ws-example.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions',
+    })).toMatchObject({
+      assistantProvider: 'qwen_openai',
+      qwenModel: 'qwen3.7-plus',
+      qwenEndpoint: 'https://ws-example.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions',
       assistantHttpTimeoutMs: 20_000,
     })
   })

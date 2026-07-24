@@ -39,12 +39,12 @@ interface StaffAccessExpectation {
 const staffAccessMatrix: StaffAccessExpectation[] = [
   {
     employeeId: 'emp-owner', displayName: '陈方宇', roleId: 'owner', dataScope: 'all_stores',
-    allowed: ['config.manage', 'business_day.close', 'payment.refund.approve', 'benefit.manage'],
+    allowed: ['config.manage', 'finance.manage', 'business_day.close', 'payment.refund.approve', 'benefit.manage'],
     forbidden: [],
   },
   {
     employeeId: 'emp-operations-director', displayName: '护古', roleId: 'operations_director', dataScope: 'store',
-    allowed: ['config.manage', 'business_day.close', 'payment.refund.approve', 'inventory.approve', 'benefit.manage'],
+    allowed: ['config.manage', 'finance.manage', 'business_day.close', 'payment.refund.approve', 'inventory.approve', 'benefit.manage'],
     forbidden: ['identity.manage'],
   },
   {
@@ -89,13 +89,13 @@ const staffAccessMatrix: StaffAccessExpectation[] = [
   },
   {
     employeeId: 'emp-chen', displayName: '李艳', roleId: 'manager', dataScope: 'store',
-    allowed: ['business_day.close', 'reservation.config.manage', 'complaint.handle', 'payment.refund.approve', 'inventory.approve'],
+    allowed: ['finance.manage', 'business_day.close', 'reservation.config.manage', 'complaint.handle', 'payment.refund.approve', 'inventory.approve'],
     forbidden: ['config.manage', 'identity.manage'],
   },
   {
     employeeId: 'emp-cashier', displayName: '三沐', roleId: 'cashier', dataScope: 'store',
     allowed: ['finance.view', 'reservation.view', 'table.close', 'payment.collect', 'payment.pos_report', 'payment.refund.request'],
-    forbidden: ['reservation.manage', 'order.create', 'payment.refund.approve', 'business_day.close'],
+    forbidden: ['finance.manage', 'reservation.manage', 'order.create', 'payment.refund.approve', 'business_day.close'],
   },
   {
     employeeId: 'emp-host', displayName: '挞挞', roleId: 'market_design', dataScope: 'store',

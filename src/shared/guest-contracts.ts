@@ -167,7 +167,7 @@ export const guestCartOrderSchema = z.object({
   tableToken: z.string().trim().min(20).max(2048),
   items: z.array(z.object({
     productId: z.string().trim().min(1).max(128),
-    quantity: z.number().int().min(1).max(50),
+    quantity: z.number().int().min(1).max(9999),
   })).min(1).max(50),
   confirmedDuplicateOrderId: z.string().trim().min(1).max(128).optional(),
   idempotencyKey: z.string().trim().min(8).max(128),

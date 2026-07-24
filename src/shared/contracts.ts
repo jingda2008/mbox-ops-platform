@@ -121,6 +121,12 @@ export interface MenuProduct {
   soldOutReason?: string
   availableFrom?: string | null
   availableUntil?: string | null
+  /** False keeps internal or adjustment products out of the guest self-order menu. */
+  guestVisible?: boolean
+  /** False records the sale without creating bar, kitchen, print or delivery work. */
+  requiresFulfillment?: boolean
+  /** Per-order quantity limit; adjustment products can use a higher configured limit. */
+  maxOrderQuantity?: number
   listPriceAmount: number
   costAmount: number
   stationId: string
@@ -131,6 +137,7 @@ export interface MenuProduct {
 export const staffPermissionIds = [
   'dashboard.view',
   'finance.view',
+  'finance.manage',
   'audit.view',
   'config.manage',
   'identity.manage',
@@ -863,6 +870,9 @@ export const productWriteSchema = z.object({
   soldOutReason: z.string().trim().max(80).optional(),
   availableFrom: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
   availableUntil: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
+  guestVisible: z.boolean().optional(),
+  requiresFulfillment: z.boolean().optional(),
+  maxOrderQuantity: z.number().int().min(1).max(9999).optional(),
   listPriceAmount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   costAmount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   stationId: z.string().trim().min(1).max(64),

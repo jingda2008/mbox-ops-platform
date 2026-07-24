@@ -477,6 +477,9 @@ describe('Qwen assistant planner', () => {
       temperature: 0.1,
     })
     expect(JSON.stringify(requestBody)).toContain('严格只返回符合指定结构的JSON')
+    const systemMessage = (requestBody as { messages: Array<{ role: string; content: string }> }).messages[0]?.content
+    expect(systemMessage).toContain('"kind":"answer"')
+    expect(systemMessage).toContain('禁止使用type、content、message、action等字段')
     expect(JSON.stringify(requestBody)).not.toContain('sk-test-qwen-key-kept-server-side')
     expect(requestBody).not.toHaveProperty('max_tokens')
   })

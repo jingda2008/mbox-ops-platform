@@ -116,6 +116,11 @@ describe('guest table API', () => {
     expect(body.table.code).toBe('L01')
     expect(body.communityBrand).toMatchObject({ name: '超嗨部落', markUrl: '/brand/superhigh-mark.png' })
     expect(body.serviceTypes.map((type) => type.code)).not.toContain('FULFILLMENT_DELIVERY')
+    expect(body.products.find((product) => product.id === 'product-balance-adjustment')).toMatchObject({
+      name: '补差额',
+      specification: '1元/份',
+      listPriceAmount: 100,
+    })
     expect(body.stageSchedule.length).toBeGreaterThan(0)
     expect(body.stageSchedule[0]).toMatchObject({
       singerName: expect.any(String),

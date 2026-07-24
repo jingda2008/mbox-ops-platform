@@ -158,6 +158,45 @@ describe('Gemini assistant planner', () => {
     })
   })
 
+  it('resolves a configured table name and preserves a specific free-form service request', async () => {
+    let modelCalled = false
+    const planner = new GeminiAssistantPlanner({
+      apiKey: 'test-key', model: 'gemini-3.5-flash', timeoutMs: 2_000,
+      fetchImpl: async () => {
+        modelCalled = true
+        throw new Error('model must not be called')
+      },
+    })
+    const input = planningInput('1分钟后让tom给卡座a上两杯柠檬冰水')
+    input.context.live.tables = [{ code: 'B01', name: '卡座A', status: 'occupied', guests: 8 }]
+    input.context.tools.find((candidate) => candidate.id === 'service.task.schedule')!.argumentGuide = {
+      serviceTypeId: '必填，加水=water、冰块/柠檬=ice、个性化需求=custom-request',
+    }
+
+    const result = await planner.plan(input)
+
+    expect(modelCalled).toBe(false)
+    expect(result).toMatchObject({
+      model: 'mbox-deterministic-operations-v1',
+      output: {
+        kind: 'plan',
+        steps: [{
+          label: '1分钟后指派tom为B01（卡座A）送两杯柠檬冰水',
+          toolCall: {
+            toolId: 'service.task.schedule',
+            arguments: {
+              tableCode: 'B01',
+              serviceTypeId: '加水',
+              delayMinutes: 1,
+              assigneeEmployeeId: 'tom',
+              note: '两杯柠檬冰水',
+            },
+          },
+        }],
+      },
+    })
+  })
+
   it('keeps open-table and delayed service commands in the employee spoken order', async () => {
     const planner = new GeminiAssistantPlanner({
       apiKey: 'test-key', model: 'gemini-3.5-flash', timeoutMs: 2_000,

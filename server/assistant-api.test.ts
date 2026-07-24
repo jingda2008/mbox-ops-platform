@@ -504,6 +504,65 @@ describe('assistant API', () => {
     await app.close()
   })
 
+  it('turns a table display name and detailed service wording into a due task visible to Tom', async () => {
+    const planner = new GeminiAssistantPlanner({
+      apiKey: 'test-key', model: 'gemini-3.5-flash', timeoutMs: 2_000,
+      fetchImpl: async () => { throw new Error('core operational commands must not call the model') },
+    })
+    const { app, repository: runtimeRepository } = await testApp(planner, { actorId: 'emp-chen', roleId: 'manager' })
+    const turn = await app.inject({
+      method: 'POST', url: '/api/assistant/turn', payload: {
+        ...payload,
+        requestId: '00000000-0000-4000-8000-000000000325',
+        message: '1分钟后让tom给卡座a上两杯柠檬冰水',
+      },
+    })
+
+    expect(turn.statusCode, turn.body).toBe(200)
+    expect(turn.json()).toMatchObject({
+      kind: 'plan', model: 'mbox-deterministic-operations-v1',
+      steps: [{ toolCall: {
+        toolId: 'service.task.schedule',
+        arguments: {
+          tableCode: 'B01', serviceTypeId: '加水', delayMinutes: 1,
+          assigneeEmployeeId: 'tom', note: '两杯柠檬冰水',
+        },
+      } }],
+    })
+    const execution = await app.inject({
+      method: 'POST', url: '/api/assistant/tool-executions', payload: {
+        executionId: '00000000-0000-4000-8000-000000000326',
+        toolCall: turn.json().steps[0].toolCall,
+      },
+    })
+    expect(execution.statusCode, execution.body).toBe(200)
+    expect(execution.json()).toMatchObject({
+      evidence: {
+        verified: true, outcome: 'scheduled', tableCode: 'B01',
+        scheduledAt: '2026-07-18T12:01:00.000Z', assigneeEmployeeId: 'emp-lin', assigneeName: 'Tom',
+      },
+    })
+
+    await runtimeRepository.mutate((state) => {
+      applyScheduledOperations(state, new Date('2026-07-18T12:01:00.000Z'))
+    })
+    const scheduledTask = runtimeRepository.snapshot().tasks.find((task) => (
+      task.triggerId === `${execution.json().objectId}:dispatch_service`
+    ))
+    expect(scheduledTask).toMatchObject({
+      tableId: 'table-b01', ownerId: 'emp-lin', serviceTypeId: 'water',
+      status: 'pending', note: '两杯柠檬冰水',
+    })
+    const tomView = projectRuntimeStateForActor(runtimeRepository.snapshot(), {
+      actorId: 'emp-lin', roleId: 'server', storeId: 'mbox-lujiazui', runtimeMode: 'test',
+      authenticatedBy: 'local_header', sessionId: null, sessionExpiresAt: null,
+    })
+    expect(tomView.tasks.find((task) => task.id === scheduledTask?.id)).toMatchObject({
+      ownerId: 'emp-lin', status: 'pending', note: '两杯柠檬冰水',
+    })
+    await app.close()
+  })
+
   it('runs the full manager conversation, authoritative open-table, and delayed Tom assignment flow', async () => {
     const planner = new GeminiAssistantPlanner({
       apiKey: 'test-key', model: 'gemini-3.5-flash', timeoutMs: 2_000,

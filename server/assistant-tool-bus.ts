@@ -243,8 +243,8 @@ export class AssistantToolBus {
           objectType: 'sop_execution',
           objectId: scheduled.execution.id,
           message: input.delayMinutes === 0
-            ? `已安排立即向${assignee.displayName}派发${table.code}${serviceType.name}任务。`
-            : `已安排${input.delayMinutes}分钟后向${assignee.displayName}派发${table.code}${serviceType.name}任务。`,
+            ? `已安排立即向${assignee.displayName}派发${table.code}${serviceType.name}任务${input.note ? `：${input.note}` : ''}。`
+            : `已安排${input.delayMinutes}分钟后向${assignee.displayName}派发${table.code}${serviceType.name}任务${input.note ? `：${input.note}` : ''}。`,
           evidence: {
             verified: true,
             outcome: 'scheduled',

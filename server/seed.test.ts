@@ -21,7 +21,7 @@ describe('seed business date', () => {
     })
   })
 
-  it('includes an internal one-yuan balance adjustment product', () => {
+  it('includes a guest-visible one-yuan balance adjustment product', () => {
     const product = createSeedState().products.find((item) => item.id === 'product-balance-adjustment')
 
     expect(product).toMatchObject({
@@ -29,9 +29,9 @@ describe('seed business date', () => {
       name: '补差额',
       categoryId: 'other',
       categoryName: '其他',
-      specification: '1元',
+      specification: '1元/份',
       listPriceAmount: 100,
-      guestVisible: false,
+      guestVisible: true,
       requiresFulfillment: false,
       maxOrderQuantity: 9999,
     })

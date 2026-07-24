@@ -282,6 +282,94 @@ function enforceHumanWorkflowBoundary(input: AssistantPlanningRequest, output: A
   return protectedHumanWorkflowPlan({ ...input, message: reviewedMessage }) ?? output
 }
 
+interface TableMention {
+  code: string
+  name: string
+  alias: string
+  index: number
+}
+
+interface ServiceTypeCandidate {
+  id: string
+  name: string
+}
+
+function findTableMention(input: AssistantPlanningRequest, segment: string): TableMention | null {
+  const normalized = segment.toLocaleLowerCase('zh-CN')
+  const configured = input.context.live.tables.flatMap((table) => {
+    const code = typeof table.code === 'string' ? table.code.trim() : ''
+    const name = typeof table.name === 'string' ? table.name.trim() : ''
+    if (!code) return []
+    return [...new Set([code, name].filter(Boolean))].flatMap((alias) => {
+      const index = normalized.indexOf(alias.toLocaleLowerCase('zh-CN'))
+      return index < 0 ? [] : [{ code: code.toUpperCase(), name: name || code, alias, index }]
+    })
+  }).sort((left, right) => left.index - right.index || right.alias.length - left.alias.length)
+  if (configured[0]) return configured[0]
+
+  const codeMatch = segment.match(/[A-Za-z]\d{1,4}/u)
+  if (!codeMatch || codeMatch.index === undefined) return null
+  return {
+    code: codeMatch[0].toUpperCase(),
+    name: codeMatch[0].toUpperCase(),
+    alias: codeMatch[0],
+    index: codeMatch.index,
+  }
+}
+
+function serviceTypeCandidates(input: AssistantPlanningRequest) {
+  const guide = input.context.tools.find((tool) => tool.id === 'service.task.schedule')
+    ?.argumentGuide.serviceTypeId ?? ''
+  const values = guide.replace(/^.*?，/u, '').split('、')
+  return values.flatMap((value): ServiceTypeCandidate[] => {
+    const separator = value.lastIndexOf('=')
+    if (separator <= 0) return []
+    const name = value.slice(0, separator).trim()
+    const id = value.slice(separator + 1).trim()
+    return name && id ? [{ id, name }] : []
+  })
+}
+
+function resolveServiceRequest(input: AssistantPlanningRequest, rawRequest: string) {
+  const request = rawRequest
+    .replace(/^\s*桌\s*/u, '')
+    .replace(/\s*任务\s*$/u, '')
+    .trim()
+  const note = request.replace(/^(?:上|送|拿|准备|提供|安排)\s*/u, '').trim()
+  const normalized = note.toLocaleLowerCase('zh-CN')
+  const candidates = serviceTypeCandidates(input)
+  const direct = candidates
+    .toSorted((left, right) => right.name.length - left.name.length)
+    .find((candidate) => (
+      normalized.includes(candidate.name.toLocaleLowerCase('zh-CN'))
+      || normalized.includes(candidate.id.toLocaleLowerCase('zh-CN'))
+    ))
+
+  const semanticRules = [
+    { pattern: /水|茶水/u, ids: ['water'], names: ['加水'] },
+    { pattern: /冰块|柠檬/u, ids: ['ice'], names: ['冰块/柠檬'] },
+    { pattern: /点单|点菜|点酒/u, ids: ['order-help'], names: ['协助点单'] },
+    { pattern: /买单|结账/u, ids: ['bill'], names: ['买单'] },
+    { pattern: /投诉|不满意/u, ids: ['complaint'], names: ['投诉/不满意'] },
+    { pattern: /生日/u, ids: ['birthday'], names: ['生日服务'] },
+  ] as const
+  const semantic = semanticRules.find((rule) => rule.pattern.test(note))
+  const matched = direct ?? (semantic
+    ? candidates.find((candidate) => (
+      semantic.ids.some((id) => id === candidate.id) || semantic.names.some((name) => name === candidate.name)
+    )) ?? { id: semantic.ids[0], name: semantic.names[0] }
+    : candidates.find((candidate) => candidate.id === 'custom-request' || candidate.name === '个性化需求'))
+
+  if (!matched || !note) return null
+  const isCanonical = normalized === matched.name.toLocaleLowerCase('zh-CN')
+    || normalized === matched.id.toLocaleLowerCase('zh-CN')
+  return {
+    serviceTypeId: matched.name,
+    note: isCanonical ? undefined : note,
+    serviceLabel: note,
+  }
+}
+
 function deterministicOperationalPlan(input: AssistantPlanningRequest): AssistantModelOutput | null {
   const message = operationalMessage(input)
   const availableTools = new Set(input.context.tools.map((tool) => tool.id))
@@ -306,7 +394,7 @@ function deterministicOperationalPlan(input: AssistantPlanningRequest): Assistan
     })
   }
 
-  const scheduleMatch = message.match(/(?:([0-9]{1,4}|[零〇一二两三四五六七八九十百]{1,8})\s*分钟后\s*)?(?:请)?(?:让|叫|安排|通知|派)\s*([A-Za-z][A-Za-z0-9._'-]{0,31}|[㐀-鿿·]{1,20})\s*(?:去\s*)?(?:给|为)\s*([A-Za-z]\d{1,4})\s*(?:桌)?\s*([㐀-鿿A-Za-z0-9/]{1,20}?)(?:任务)?(?:[，,。；;]|$)/iu)
+  const scheduleMatch = message.match(/(?:([0-9]{1,4}|[零〇一二两三四五六七八九十百]{1,8})\s*分钟后\s*)?(?:请)?(?:让|叫|安排|通知|派)\s*([A-Za-z][A-Za-z0-9._'-]{0,31}|[㐀-鿿·]{1,20})\s*(?:去\s*)?(?:给|为)\s*([^，,。；;]+?)(?:[，,。；;]|$)/iu)
   if (scheduleMatch && availableTools.has('service.task.schedule')) {
     const delayMinutes = scheduleMatch[1] ? parseNaturalNumber(scheduleMatch[1]) : 0
     if (delayMinutes === null || delayMinutes < 0 || delayMinutes > 24 * 60) {
@@ -316,18 +404,42 @@ function deterministicOperationalPlan(input: AssistantPlanningRequest): Assistan
       }
     }
     const assignee = scheduleMatch[2]!.trim()
-    const tableCode = scheduleMatch[3]!.toUpperCase()
-    const serviceTypeId = scheduleMatch[4]!.trim()
+    const targetAndService = scheduleMatch[3]!.trim()
+    const table = findTableMention(input, targetAndService)
+    if (!table) {
+      return {
+        kind: 'clarification', reply: '我听清了时间和人员，但没有找到对应桌台。请说桌号或桌台名称。',
+        steps: [], choices: input.context.live.tables.slice(0, 6).map((item) => String(item.name ?? item.code ?? '')),
+      }
+    }
+    const service = resolveServiceRequest(
+      input,
+      targetAndService.slice(table.index + table.alias.length),
+    )
+    if (!service) {
+      return {
+        kind: 'clarification', reply: `${table.code}需要安排什么服务？请说明数量和具体要求。`, steps: [],
+        choices: ['加水', '冰块/柠檬', '协助点单', '个性化需求'],
+      }
+    }
+    const tableLabel = table.name === table.code ? table.code : `${table.code}（${table.name}）`
+    const serviceAction = service.note ? `送${service.serviceLabel}` : service.serviceLabel
     steps.push({
       label: delayMinutes === 0
-        ? `立即指派${assignee}为${tableCode}${serviceTypeId}`
-        : `${delayMinutes}分钟后指派${assignee}为${tableCode}${serviceTypeId}`,
+        ? `立即指派${assignee}为${tableLabel}${serviceAction}`
+        : `${delayMinutes}分钟后指派${assignee}为${tableLabel}${serviceAction}`,
       command: delayMinutes === 0
-        ? `立即向${assignee}派发${tableCode}${serviceTypeId}任务`
-        : `${delayMinutes}分钟后向${assignee}派发${tableCode}${serviceTypeId}任务`,
+        ? `立即向${assignee}派发${tableLabel}${serviceAction}任务`
+        : `${delayMinutes}分钟后向${assignee}派发${tableLabel}${serviceAction}任务`,
       toolCall: {
         toolId: 'service.task.schedule',
-        arguments: { tableCode, serviceTypeId, delayMinutes, assigneeEmployeeId: assignee },
+        arguments: {
+          tableCode: table.code,
+          serviceTypeId: service.serviceTypeId,
+          delayMinutes,
+          assigneeEmployeeId: assignee,
+          ...(service.note ? { note: service.note } : {}),
+        },
       },
     })
   }

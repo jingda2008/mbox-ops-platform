@@ -205,6 +205,7 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
   const executionSequence = useRef(0)
   const agentPlanRef = useRef<VoiceCommandPlan | null>(null)
   const pausedAgentStepIdRef = useRef<string | null>(null)
+  const assistantConversationRef = useRef<HTMLElement | null>(null)
   const [controls, setControls] = useState<VoicePageControl[]>([])
   const [pageHeading, setPageHeading] = useState('岗位工作台')
   const [command, setCommand] = useState('')
@@ -326,6 +327,12 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
   }, [executionMessage, executionTone])
 
   useEffect(() => {
+    const conversation = assistantConversationRef.current
+    if (!conversation) return
+    conversation.scrollTop = conversation.scrollHeight
+  }, [assistantBusy, assistantMessages])
+
+  useEffect(() => {
     if (agentPlan?.status !== 'completed') return undefined
     const timer = window.setTimeout(() => {
       if (agentPlanRef.current?.status !== 'completed') return
@@ -383,12 +390,17 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
     setAgentPlan(nextPlan)
   }
 
-  function addAssistantMessage(role: AssistantConversationMessage['role'], content: string) {
+  function addAssistantMessage(
+    role: AssistantConversationMessage['role'],
+    content: string,
+    analytics?: AssistantConversationMessage['analytics'],
+  ) {
     setAssistantMessages((messages) => [...messages, {
       id: crypto.randomUUID(),
       role,
       content,
       createdAt: new Date().toISOString(),
+      analytics,
     }].slice(-10))
   }
 
@@ -607,7 +619,7 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
 
   function applyAssistantResponse(message: string, response: AssistantTurnResponse) {
     setAssistantSessionId(response.sessionId)
-    addAssistantMessage('assistant', response.reply)
+    addAssistantMessage('assistant', response.reply, response.analytics)
     setAssistantChoices(response.choices)
     setResolved(null)
     setAwaitingHighRiskConfirmation(false)
@@ -1291,15 +1303,48 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
 
           <div className="voice-command-heading">
             <h1><Bot size={21} />还想处理别的事？</h1>
-            <p>直接说或输入，AI会先让您确认，再按当前岗位权限执行。</p>
+            <p>直接说或输入；查数据立即返回，业务操作核对后执行。</p>
           </div>
 
           {assistantMessages.length > 0 && (
-            <section className="assistant-conversation" aria-label="AI值班经理对话">
+            <section ref={assistantConversationRef} className="assistant-conversation" aria-label="AI值班经理对话">
               {assistantMessages.map((message) => (
                 <div className={`assistant-message is-${message.role}`} key={message.id}>
                   <small>{message.role === 'user' ? '我' : 'AI值班经理'}</small>
                   <p>{message.content}</p>
+                  {message.analytics && (
+                    <section className="assistant-analytics-card" aria-label={`${message.analytics.metricLabel}统计结果`}>
+                      <header>
+                        <span>{message.analytics.periodLabel} · {message.analytics.scopeLabel}</span>
+                        <strong>{message.analytics.formattedTotal}</strong>
+                      </header>
+                      {message.analytics.query.dimension !== 'none' && message.analytics.rows.length > 0 && (
+                        <div className="assistant-analytics-rows">
+                          {message.analytics.rows.slice(0, 6).map((row) => (
+                            <div key={row.key}>
+                              <span>{row.label}</span>
+                              <b>{row.formattedValue}</b>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <footer>
+                        <span>{message.analytics.metricLabel} · {message.analytics.dimensionLabel}</span>
+                        <span>{new Date(message.analytics.dataAsOf).toLocaleTimeString('zh-CN', {
+                          timeZone: 'Asia/Shanghai',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })} 更新</span>
+                      </footer>
+                      <details>
+                        <summary>查看统计口径</summary>
+                        <p>{message.analytics.definition}</p>
+                        {message.analytics.completeness === 'partial' && (
+                          <p>有{message.analytics.missingPartySizeSessions}个历史桌次未保存人数，涉及人数的结果为部分统计。</p>
+                        )}
+                      </details>
+                    </section>
+                  )}
                 </div>
               ))}
               {assistantBusy && <div className="assistant-thinking"><Sparkles size={14} />正在结合当前岗位和现场状态理解...</div>}

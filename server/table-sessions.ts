@@ -32,6 +32,7 @@ export const DEFAULT_TABLE_OPERATIONS_CONFIG: TableOperationsConfig = {
 interface OpenTableSessionOptions {
   source?: TableSessionOpenSource
   sourceId?: string | null
+  guestCount?: number
 }
 
 function minuteOfDay(value: string) {
@@ -185,6 +186,7 @@ export function tableSessionOperation(
     openedTableCode: table.code,
     source,
     sourceId,
+    guestCount: session.status === 'open' ? table.guestCount : undefined,
     minimumSpendSnapshot: minimumSpendSnapshot(state, table, session.openedAt),
     createdAt: session.openedAt,
   }
@@ -208,7 +210,8 @@ export function openTableSession(
     closedAt: null,
   }
   state.songState.tableSessions.push(session)
-  tableSessionOperation(state, session, options.source ?? 'legacy', options.sourceId ?? null)
+  const operation = tableSessionOperation(state, session, options.source ?? 'legacy', options.sourceId ?? null)
+  if (options.guestCount !== undefined) operation.guestCount = options.guestCount
   return session
 }
 

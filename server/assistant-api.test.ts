@@ -70,6 +70,89 @@ const payload = {
 }
 
 describe('assistant API', () => {
+  it('automatically executes a read-only analytics plan and persists verified evidence', async () => {
+    let calls = 0
+    const planner: AssistantPlanner = {
+      model: 'qwen-plus',
+      plan: async () => {
+        calls += 1
+        return {
+          output: {
+            kind: 'plan',
+            reply: '正在按本营业日统计到店人数。',
+            steps: [{
+              label: '查询本营业日到店人数',
+              command: '查询本营业日到店人数',
+              toolCall: {
+                toolId: 'analytics.query',
+                arguments: {
+                  metric: 'guest_count',
+                  dimension: 'none',
+                  period: 'current_business_day',
+                },
+              },
+            }],
+            choices: [],
+          },
+          model: 'qwen-plus',
+          providerRequestId: 'qwen-analytics-1',
+          inputTokens: 120,
+          outputTokens: 35,
+        }
+      },
+    }
+    const { app, repository: runtimeRepository } = await testApp(planner, {
+      actorId: 'emp-chen',
+      roleId: 'manager',
+    })
+    const request = {
+      ...payload,
+      requestId: '00000000-0000-4000-8000-000000000501',
+      message: '今天一共来了多少客人',
+    }
+    const first = await app.inject({ method: 'POST', url: '/api/assistant/turn', payload: request })
+    const replay = await app.inject({
+      method: 'POST',
+      url: '/api/assistant/turn',
+      payload: { ...request, sessionId: first.json().sessionId },
+    })
+
+    expect(first.statusCode, first.body).toBe(200)
+    expect(first.json()).toMatchObject({
+      kind: 'answer',
+      reply: expect.stringContaining('到店人数'),
+      analytics: {
+        metricLabel: '到店人数',
+        total: 38,
+        completeness: 'complete',
+      },
+    })
+    expect(first.json().steps).toEqual([])
+    expect(replay.json()).toMatchObject({
+      kind: 'answer',
+      replayed: true,
+      analytics: { total: 38 },
+    })
+    expect(calls).toBe(1)
+    expect(runtimeRepository.snapshot().auditEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        action: 'assistant.tool.executed.v1',
+        details: expect.objectContaining({
+          toolId: 'analytics.query',
+          evidence: expect.objectContaining({ outcome: 'queried' }),
+        }),
+      }),
+      expect.objectContaining({
+        action: 'assistant.turn.proposed.v1',
+        details: expect.objectContaining({
+          executed: true,
+          automaticExecutionId: request.requestId,
+        }),
+      }),
+    ]))
+    await app.close()
+  })
+
   it('builds role-scoped context, persists a bounded turn, and replays without another model call', async () => {
     let calls = 0
     let captured: AssistantPlanningRequest | null = null

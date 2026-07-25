@@ -54,6 +54,24 @@ function announce(message: string) {
   window.setTimeout(() => { region.textContent = message }, 0)
 }
 
+function haptic(pattern: number | number[]) {
+  if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+  try {
+    navigator.vibrate(pattern)
+  } catch {
+    // Some embedded browsers expose vibrate but reject calls at runtime.
+  }
+}
+
+export function hapticEnabledForContext(insideGuestPortal: boolean, mode?: string | null) {
+  return !insideGuestPortal || mode === 'action'
+}
+
+function shouldUseHaptic(target: Element) {
+  return hapticEnabledForContext(Boolean(target.closest('.guest-shell')), target.getAttribute('data-haptic'))
+}
+
 function clearOutcome(target: Element) {
   const timer = actionTimers.get(target)
   if (timer) window.clearTimeout(timer)
@@ -86,6 +104,7 @@ function finishAction(target: Element, outcome: 'succeeded' | 'failed') {
   if (state.previousAriaBusy === null) target.removeAttribute('aria-busy')
   else target.setAttribute('aria-busy', state.previousAriaBusy)
   target.classList.add(outcome === 'succeeded' ? 'is-action-succeeded' : 'is-action-failed')
+  if (shouldUseHaptic(target)) haptic(outcome === 'succeeded' ? 12 : [18, 35, 18])
   actionTimers.set(target, window.setTimeout(() => {
     target.classList.remove('is-action-succeeded', 'is-action-failed')
     if (target.getAttribute('data-action-state') === outcome) target.removeAttribute('data-action-state')
@@ -132,6 +151,7 @@ export function installInteractionFeedback(root: Document = document) {
     captureActionTarget(target)
     pressedTargets.set(event.pointerId, target)
     target.classList.add('is-interaction-pressed')
+    if (event.pointerType === 'touch' && event.isPrimary && shouldUseHaptic(target)) haptic(7)
   }
   const onPointerRelease = (event: PointerEvent) => {
     release(pressedTargets.get(event.pointerId) ?? null)

@@ -139,7 +139,9 @@ export function openWalkInTableSession(
       reservationId, actorId, occurredAt,
       idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'arrive'),
     })
-    const session = openTableSession(state, table, occurredAt, { source: 'walk_in', sourceId: reservationId })
+    const session = openTableSession(state, table, occurredAt, {
+      source: 'walk_in', sourceId: reservationId, guestCount: input.partySize,
+    })
     return seatReservation(domain, {
       reservationId, actorId, occurredAt, tableId: table.id, tableCode: table.code,
       tableSessionId: session.id, idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'seat'),
@@ -667,7 +669,9 @@ export function registerTableSessionRoutes(app: FastifyInstance, repository: Run
         } else {
           assertTablePrimaryReady(state, relatedTable.id, actor.actorId)
           if (relatedTable.status !== 'available') throw new Error('加桌目标必须是空桌')
-          relatedSession = openTableSession(state, relatedTable, occurredAt, { source: 'added_table', sourceId: primarySession.id })
+          relatedSession = openTableSession(state, relatedTable, occurredAt, {
+            source: 'added_table', sourceId: primarySession.id, guestCount: 0,
+          })
           relatedTable.status = 'occupied'
           relatedTable.guestCount = 0
           relatedTable.openedAt = occurredAt

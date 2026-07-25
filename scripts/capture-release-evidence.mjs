@@ -6,6 +6,10 @@ const exec = promisify(execFile)
 const project = process.env.MBOX_EVIDENCE_GCP_PROJECT
 const service = process.env.MBOX_EVIDENCE_CLOUD_RUN_SERVICE
 const region = process.env.MBOX_EVIDENCE_GCP_REGION
+const deploymentUrl = process.env.MBOX_EVIDENCE_DEPLOYMENT_URL?.replace(/\/$/, '')
+const deploymentSha = process.env.MBOX_EVIDENCE_EXPECTED_SHA
+const deploymentDigest = process.env.MBOX_EVIDENCE_EXPECTED_DIGEST
+const deploymentPlatform = process.env.MBOX_EVIDENCE_PLATFORM?.trim() || 'external'
 
 async function command(file, args, allowFailure = false) {
   try {
@@ -27,6 +31,30 @@ function matchNumber(text, expression) {
 }
 
 async function cloudEvidence() {
+  if (deploymentUrl) {
+    let readiness
+    try {
+      const response = await fetch(`${deploymentUrl}/api/ready`, {
+        headers: { 'user-agent': 'mbox-release-evidence/1.0' },
+        signal: AbortSignal.timeout(10_000),
+      })
+      readiness = { status: response.status, body: await response.json() }
+    } catch (error) {
+      readiness = { error: error instanceof Error ? error.message : String(error) }
+    }
+    return {
+      configured: true,
+      provider: deploymentPlatform,
+      publicUrl: deploymentUrl,
+      image: deploymentDigest ? `deployment@${deploymentDigest}` : null,
+      environment: {
+        MBOX_RELEASE_SHA: deploymentSha ?? readiness.body?.releaseSha ?? null,
+        MBOX_RELEASE_IMAGE_DIGEST: deploymentDigest ?? readiness.body?.releaseImageDigest ?? null,
+        MBOX_REPOSITORY: readiness.body?.repository ?? null,
+      },
+      readiness,
+    }
+  }
   if (!project || !service || !region) return { configured: false }
   const described = await command('gcloud', [
     'run', 'services', 'describe', service,
@@ -143,7 +171,9 @@ evidence.provenance = {
 await mkdir('.runtime', { recursive: true })
 await writeFile('.runtime/release-evidence.json', `${JSON.stringify(evidence, null, 2)}\n`)
 const cloud = evidence.cloud.configured
-  ? `${evidence.cloud.project}/${evidence.cloud.region}/${evidence.cloud.service}，revision ${evidence.cloud.revision ?? 'unknown'}，镜像 ${evidence.cloud.image ?? 'unknown'}，仓储 ${evidence.cloud.environment?.MBOX_REPOSITORY ?? 'unknown'}`
+  ? evidence.cloud.provider
+    ? `${evidence.cloud.provider}，${evidence.cloud.publicUrl}，镜像 ${evidence.cloud.image ?? 'unknown'}，仓储 ${evidence.cloud.environment?.MBOX_REPOSITORY ?? 'unknown'}`
+    : `${evidence.cloud.project}/${evidence.cloud.region}/${evidence.cloud.service}，revision ${evidence.cloud.revision ?? 'unknown'}，镜像 ${evidence.cloud.image ?? 'unknown'}，仓储 ${evidence.cloud.environment?.MBOX_REPOSITORY ?? 'unknown'}`
   : '未提供云环境变量，本次未采集'
 const markdown = `# M-Box 自动发布证据
 
@@ -167,5 +197,5 @@ ${evidence.cloud.configured ? `- 云端就绪：HTTP ${evidence.cloud.readiness?
 
 机器可读证据：\`.runtime/release-evidence.json\`。
 `
-await writeFile('docs/release-evidence.generated.md', markdown)
+await writeFile('.runtime/release-evidence.generated.md', markdown)
 process.stdout.write(`${JSON.stringify(evidence, null, 2)}\n`)

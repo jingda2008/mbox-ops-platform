@@ -122,6 +122,17 @@
 .assistant-message.is-assistant { justify-self: start; border-left: 4px solid #d6ae38; background: #f8faf7; }
 .assistant-message small { color: var(--ink-soft); font-size: 8px; font-weight: 800; }
 .assistant-message p { overflow-wrap: anywhere; font-size: 11px; line-height: 1.45; }
+.assistant-analytics-card { min-width: min(330px, 76vw); display: grid; gap: 7px; margin-top: 4px; padding: 9px; border: 1px solid #d7c27f; border-radius: 5px; background: #fff; }
+.assistant-analytics-card header, .assistant-analytics-card footer, .assistant-analytics-rows > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.assistant-analytics-card header span { color: var(--ink-soft); font-size: 9px; font-weight: 750; }
+.assistant-analytics-card header strong { color: #7c5b08; font-size: 17px; }
+.assistant-analytics-rows { display: grid; gap: 4px; padding-block: 5px; border-block: 1px solid #ece9df; }
+.assistant-analytics-rows > div span, .assistant-analytics-rows > div b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.assistant-analytics-rows > div b { flex: 0 0 auto; }
+.assistant-analytics-card footer { color: var(--ink-soft); font-size: 8px; }
+.assistant-analytics-card details { border-top: 1px solid #ece9df; padding-top: 5px; }
+.assistant-analytics-card summary { color: var(--ink-soft); cursor: pointer; font-size: 9px; font-weight: 750; }
+.assistant-analytics-card details p { margin-top: 4px; color: var(--ink-soft); font-size: 9px; }
 .assistant-thinking { min-height: 30px; display: flex; align-items: center; gap: 6px; color: #6d5b29; font-size: 10px; }
 .assistant-thinking svg { animation: voice-pulse 1.4s ease-in-out infinite; }
 .assistant-choice-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }

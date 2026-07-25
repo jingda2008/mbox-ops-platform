@@ -265,10 +265,16 @@ describe('KDS exception API', () => {
     const table = initial.tables.find((candidate) => candidate.status === 'occupied')!
     const product = initial.products.find((candidate) => candidate.id === 'product-fruit')!
     await repository.mutate((state) => {
+      const occurredAt = new Date()
+      const managerAuthority = state.orderDomain.authorizationAuthorities.find(
+        (authority) => authority.actorId === 'emp-chen' && authority.kinds.includes('gift'),
+      )!
+      managerAuthority.validFrom = new Date(occurredAt.getTime() - 60_000).toISOString()
+      managerAuthority.validUntil = new Date(occurredAt.getTime() + 60_000).toISOString()
       receiveInventory(state.inventoryDomain!, {
         movementId: 'gift-order-receipt', productId: product.id, unitCode: 'portion', quantity: 5,
         actorId: 'emp-chen', reason: '赠送订单测试入库', businessDate: state.store.businessDate,
-        occurredAt: new Date().toISOString(), idempotencyKey: 'gift-order-receipt-0001',
+        occurredAt: occurredAt.toISOString(), idempotencyKey: 'gift-order-receipt-0001',
       })
       state.revision += 1
     })

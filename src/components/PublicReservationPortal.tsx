@@ -2,10 +2,11 @@ import {
   CalendarDays, Check, CheckCircle2, LoaderCircle, MapPin, MessageCircle,
   Banknote, Pencil, Phone, RefreshCw, RotateCcw, UsersRound, X, XCircle,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import {
   cancelPublicReservation, createPublicReservation, listPublicReservations, updatePublicReservation,
 } from '../public-reservation-api'
+import { PendingActionRegistry } from '../pending-action-registry'
 import type {
   PublicReservationConfigView, PublicReservationListResponse, PublicReservationView,
 } from '../shared/public-reservation-contracts'
@@ -110,20 +111,25 @@ export function PublicReservationPortal() {
   const [confirmingCancelId, setConfirmingCancelId] = useState('')
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
-  const [busyReservationId, setBusyReservationId] = useState('')
+  const [busyReservationIds, setBusyReservationIds] = useState<ReadonlySet<string>>(() => new Set())
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
+  const busyReservationIdsRef = useRef(new PendingActionRegistry())
+  const loadSequenceRef = useRef(0)
 
   const load = useCallback(async () => {
+    const sequence = ++loadSequenceRef.current
     setLoading(true)
     try {
       const response = await listPublicReservations()
-      setData(response)
-      setError('')
+      if (sequence === loadSequenceRef.current) {
+        setData(response)
+        setError('')
+      }
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : '预约数据加载失败')
+      if (sequence === loadSequenceRef.current) setError(loadError instanceof Error ? loadError.message : '预约数据加载失败')
     } finally {
-      setLoading(false)
+      if (sequence === loadSequenceRef.current) setLoading(false)
     }
   }, [])
 
@@ -223,7 +229,8 @@ export function PublicReservationPortal() {
       setConfirmingCancelId(reservation.id)
       return
     }
-    setBusyReservationId(reservation.id)
+    if (!busyReservationIdsRef.current.begin(reservation.id)) return
+    setBusyReservationIds(busyReservationIdsRef.current.snapshot())
     setError('')
     try {
       await cancelPublicReservation(reservation.id, {
@@ -236,7 +243,8 @@ export function PublicReservationPortal() {
     } catch (cancelError) {
       setError(cancelError instanceof Error ? cancelError.message : '取消没有成功，请稍后再试')
     } finally {
-      setBusyReservationId('')
+      busyReservationIdsRef.current.finish(reservation.id)
+      setBusyReservationIds(busyReservationIdsRef.current.snapshot())
     }
   }
 
@@ -289,10 +297,10 @@ export function PublicReservationPortal() {
           <p><UsersRound size={15} />{reservation.partySize}人 <MapPin size={15} />{reservation.tableCode ?? areaNames.get(reservation.areaPreferenceCode ?? '') ?? '区域待定'}</p>
           {reservation.occasionNote && <small>{reservation.occasionNote}</small>}
           {canChange && <div className="public-reservation-card-actions">
-            <button type="button" disabled={Boolean(busyReservationId)} onClick={() => editReservation(reservation)}><Pencil size={14} />修改</button>
+            <button type="button" disabled={busyReservationIds.has(reservation.id)} onClick={() => editReservation(reservation)}><Pencil size={14} />修改</button>
             {confirmingCancelId === reservation.id
-              ? <><button className="is-danger" type="button" disabled={busyReservationId === reservation.id} onClick={() => void cancelReservation(reservation)}>{busyReservationId === reservation.id ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}确认取消</button><button type="button" onClick={() => setConfirmingCancelId('')}><X size={14} />保留预约</button></>
-              : <button type="button" disabled={Boolean(busyReservationId)} onClick={() => void cancelReservation(reservation)}><X size={14} />取消</button>}
+              ? <><button className="is-danger" type="button" disabled={busyReservationIds.has(reservation.id)} onClick={() => void cancelReservation(reservation)}>{busyReservationIds.has(reservation.id) ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}确认取消</button><button type="button" onClick={() => setConfirmingCancelId('')}><X size={14} />保留预约</button></>
+              : <button type="button" disabled={busyReservationIds.has(reservation.id)} onClick={() => void cancelReservation(reservation)}><X size={14} />取消</button>}
           </div>}
         </article>
       })}

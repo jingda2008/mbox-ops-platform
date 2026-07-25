@@ -177,7 +177,9 @@ export function registerWaitlistRoutes(app: FastifyInstance, repository: Runtime
         if (entry.responseExpiresAt && Date.parse(entry.responseExpiresAt) < Date.parse(occurredAt)) throw new Error('候补响应时间已过，请先标记过期')
         const table = assertTargetPrimaryReady(state, entry.heldTableId)
         if (table.status !== 'reserved') throw new Error('候补锁定桌台状态已变化')
-        const session = openTableSession(state, table, occurredAt, { source: 'waitlist', sourceId: entry.id })
+        const session = openTableSession(state, table, occurredAt, {
+          source: 'waitlist', sourceId: entry.id, guestCount: entry.partySize,
+        })
         table.status = 'occupied'
         table.guestCount = entry.partySize
         table.openedAt = occurredAt

@@ -1,6 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
-import { assistantTurnRequestSchema, dutyManagerActionSchema, type DutyManagerIncident } from '../src/shared/assistant-contracts.js'
+import {
+  assistantTurnRequestSchema,
+  dutyManagerActionSchema,
+  type AssistantConversationOutput,
+  type DutyManagerIncident,
+} from '../src/shared/assistant-contracts.js'
 import { assistantToolExecutionRequestSchema } from '../src/shared/assistant-tool-contracts.js'
 import {
   effectiveDataScopeForEmployee,
@@ -377,12 +382,35 @@ export async function registerAssistantRoutes(app: FastifyInstance, options: Ass
           })),
         }, now),
       })
+      let finalOutput: AssistantConversationOutput = planning.output
+      let automaticExecutionId: string | null = null
+      const analyticsStep = planning.output.kind === 'plan' && planning.output.steps.length === 1
+        ? planning.output.steps[0]
+        : undefined
+      if (analyticsStep?.toolCall?.toolId === 'analytics.query') {
+        automaticExecutionId = body.requestId
+        try {
+          const execution = await toolBus.execute(request, automaticExecutionId, analyticsStep.toolCall)
+          finalOutput = {
+            kind: 'answer',
+            reply: execution.message,
+            steps: [],
+            choices: [],
+            analytics: execution.evidence.analytics,
+          }
+        } catch (error) {
+          throw new AssistantPlannerError(
+            error instanceof Error ? error.message : '经营分析没有完成，请换一种问法',
+            409,
+          )
+        }
+      }
       const persisted = await options.conversationStore.record({
         sessionId: session.id,
         actorId: actor.actorId,
         requestId: body.requestId,
         userMessage: message,
-        output: planning.output,
+        output: finalOutput,
         model: planning.model,
         occurredAt: new Date(now).toISOString(),
       })
@@ -406,7 +434,8 @@ export async function registerAssistantRoutes(app: FastifyInstance, options: Ass
             providerRequestId: planning.providerRequestId,
             inputTokens: planning.inputTokens,
             outputTokens: planning.outputTokens,
-            executed: false,
+            executed: automaticExecutionId !== null,
+            automaticExecutionId,
           },
         })
         working.revision += 1

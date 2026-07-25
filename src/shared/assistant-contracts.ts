@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { AnalyticsResult } from './analytics-contracts.js'
 import { assistantToolCallSchema } from './assistant-tool-contracts.js'
 
 export const assistantCapabilitySchema = z.object({
@@ -51,11 +52,16 @@ export const assistantModelOutputSchema = z.object({
 
 export type AssistantModelOutput = z.infer<typeof assistantModelOutputSchema>
 
-export interface AssistantTurnResponse extends AssistantModelOutput {
+export type AssistantConversationOutput = AssistantModelOutput & {
+  analytics?: AnalyticsResult
+}
+
+export interface AssistantTurnResponse extends AssistantConversationOutput {
   sessionId: string
   model: string
   modelUsed: boolean
   replayed: boolean
+  analytics?: AnalyticsResult
 }
 
 export interface AssistantConversationMessage {
@@ -63,6 +69,7 @@ export interface AssistantConversationMessage {
   role: 'user' | 'assistant'
   content: string
   createdAt: string
+  analytics?: AnalyticsResult
 }
 
 export type DutyManagerRiskSeverity = 'critical' | 'high' | 'medium' | 'info'

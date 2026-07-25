@@ -429,6 +429,65 @@ ${JSON.stringify({ kind: 'clarification', reply: '请选一桌。', steps: [], c
 })
 
 describe('Qwen assistant planner', () => {
+  it('maps a natural-language经营 question to the controlled analytics tool', async () => {
+    const planner = new QwenAssistantPlanner({
+      apiKey: 'sk-test-qwen-key-kept-server-side',
+      model: 'qwen3.7-plus',
+      timeoutMs: 5_000,
+      endpoint: 'https://ws-example.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions',
+      fetchImpl: async () => new Response(JSON.stringify({
+        id: 'chatcmpl-qwen-analytics-001',
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              kind: 'plan',
+              reply: '正在统计本月商品销量。',
+              steps: [{
+                label: '查询本月商品销量排行',
+                command: '查询本月商品销量排行',
+                toolCall: {
+                  toolId: 'analytics.query',
+                  arguments: {
+                    metric: 'sales_quantity',
+                    dimension: 'product',
+                    period: 'this_month',
+                    limit: 10,
+                    sort: 'desc',
+                  },
+                },
+              }],
+              choices: [],
+            }),
+          },
+        }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    })
+    const input = planningInput('本月哪款酒卖得最好')
+    input.context.tools.push({
+      ...tool('service.task.schedule'),
+      id: 'analytics.query',
+      name: '查询经营数据',
+      domain: 'analytics',
+      requiredPermission: 'dashboard.view',
+    })
+
+    await expect(planner.plan(input)).resolves.toMatchObject({
+      output: {
+        kind: 'plan',
+        steps: [{
+          toolCall: {
+            toolId: 'analytics.query',
+            arguments: {
+              metric: 'sales_quantity',
+              dimension: 'product',
+              period: 'this_month',
+            },
+          },
+        }],
+      },
+    })
+  })
+
   it('uses the OpenAI-compatible JSON endpoint without exposing the API key in the body', async () => {
     let requestBody: Record<string, unknown> | null = null
     let requestHeaders: Headers | null = null

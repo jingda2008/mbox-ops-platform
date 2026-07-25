@@ -15,14 +15,26 @@ npm run evidence:capture
 
 命令会先执行完整`npm run check`和`npm audit --omit=dev`，再读取当前Git commit、工作树状态、实际承接100%流量的Cloud Run revision、不可变镜像摘要、专用服务账号、仓储方式、流量和`/api/ready`结果，并核对云端声明的commit与镜像摘要。
 
-- 可审阅结果：`docs/release-evidence.generated.md`
+阿里云验证环境使用：
+
+```bash
+MBOX_EVIDENCE_PLATFORM=aliyun-ecs \
+MBOX_EVIDENCE_DEPLOYMENT_URL=https://139.224.254.60 \
+MBOX_EVIDENCE_EXPECTED_SHA=<完整Commit> \
+MBOX_EVIDENCE_EXPECTED_DIGEST=sha256:<镜像摘要> \
+npm run evidence:capture
+```
+
+该模式直接读取阿里云`/api/ready`并核对Commit、镜像摘要、PostgreSQL读取路径和应用就绪状态，不再依赖Google Cloud。
+
+- 可审阅结果：`.runtime/release-evidence.generated.md`
 - 机器可读结果：`.runtime/release-evidence.json`（本地生成，不提交密钥）
 - 经营整改复核：`docs/operational-system-audit-2026-07-15.md`
 - 商业完成矩阵：`docs/commercial-readiness.md`
 
 ## 当前工程证据
 
-具体测试数量、提交、镜像摘要、承接流量的revision和线上就绪状态只以`docs/release-evidence.generated.md`与同次工作流上传的JSON为准，本文不再复制会过期的数字。Postar工程主链路已完成，但没有真实商户/KYC参数时必须保持禁用；物理POS和现金可用于影子运行，不得把人工报送伪装为渠道成功。
+具体测试数量、提交、镜像摘要、承接流量的revision和线上就绪状态只以对应GitHub Release、服务器发布清单和同次采集生成的`.runtime/release-evidence.generated.md`、`.runtime/release-evidence.json`为准，本文不再复制会过期的数字。Postar工程主链路已完成，但没有真实商户/KYC参数时必须保持禁用；物理POS和现金可用于影子运行，不得把人工报送伪装为渠道成功。
 
 ## 正式上线阻断
 

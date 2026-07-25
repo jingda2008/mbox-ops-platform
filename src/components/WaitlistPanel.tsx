@@ -1,6 +1,7 @@
 import { BellRing, Check, Clock3, DoorOpen, LoaderCircle, Plus, UserRoundX, UsersRound, X } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { actOnWaitlistEntry, createWaitlistEntry, listWaitlist, type WaitlistListResponse } from '../reservation-api'
+import { PendingActionRegistry } from '../pending-action-registry'
 import type { Area, Employee, Table } from '../shared/contracts'
 import { formatChinaTime } from '../shared/china-time'
 import { useRevealPanelScroll } from './use-reveal-panel-scroll'
@@ -17,7 +18,7 @@ const emptyResponse: WaitlistListResponse = { entries: [], positions: {}, respon
 export function WaitlistPanel({ areas, tables, employees, canManage }: Props) {
   const [data, setData] = useState(emptyResponse)
   const [loading, setLoading] = useState(true)
-  const [busy, setBusy] = useState('')
+  const [busyKeys, setBusyKeys] = useState<ReadonlySet<string>>(() => new Set())
   const [notice, setNotice] = useState('')
   const [showCreate, setShowCreate] = useState(false)
   const [name, setName] = useState('')
@@ -26,16 +27,20 @@ export function WaitlistPanel({ areas, tables, employees, canManage }: Props) {
   const [areaCode, setAreaCode] = useState('')
   const [maximumWaitMinutes, setMaximumWaitMinutes] = useState(90)
   const [salesEmployeeId, setSalesEmployeeId] = useState(employees[0]?.id ?? '')
+  const busyKeysRef = useRef(new PendingActionRegistry())
+  const loadSequenceRef = useRef(0)
   const createPanelRef = useRevealPanelScroll<HTMLFormElement>(showCreate ? 'waitlist-create' : '')
 
   const load = useCallback(async () => {
+    const sequence = ++loadSequenceRef.current
     setLoading(true)
     try {
-      setData(await listWaitlist())
+      const next = await listWaitlist()
+      if (sequence === loadSequenceRef.current) setData(next)
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : '候补队列加载失败')
+      if (sequence === loadSequenceRef.current) setNotice(error instanceof Error ? error.message : '候补队列加载失败')
     } finally {
-      setLoading(false)
+      if (sequence === loadSequenceRef.current) setLoading(false)
     }
   }, [])
 
@@ -47,8 +52,19 @@ export function WaitlistPanel({ areas, tables, employees, canManage }: Props) {
   const activeEntries = useMemo(() => data.entries.filter((entry) => ['waiting', 'notified'].includes(entry.status)), [data.entries])
   const recentClosed = useMemo(() => data.entries.filter((entry) => !['waiting', 'notified'].includes(entry.status)).slice(-3).reverse(), [data.entries])
 
+  function begin(key: string) {
+    if (!busyKeysRef.current.begin(key)) return false
+    setBusyKeys(busyKeysRef.current.snapshot())
+    return true
+  }
+
+  function finish(key: string) {
+    busyKeysRef.current.finish(key)
+    setBusyKeys(busyKeysRef.current.snapshot())
+  }
+
   async function run(key: string, action: () => Promise<unknown>, message: string) {
-    setBusy(key)
+    if (!begin(key)) return false
     setNotice('')
     try {
       await action()
@@ -59,7 +75,7 @@ export function WaitlistPanel({ areas, tables, employees, canManage }: Props) {
       setNotice(error instanceof Error ? error.message : '候补操作失败')
       return false
     } finally {
-      setBusy('')
+      finish(key)
     }
   }
 
@@ -110,22 +126,23 @@ export function WaitlistPanel({ areas, tables, employees, canManage }: Props) {
       <label><span>最长等待</span><input required type="number" min={1} max={480} value={maximumWaitMinutes} onChange={(event) => setMaximumWaitMinutes(Number(event.target.value))} /></label>
       <label><span>销售归属</span><select required value={salesEmployeeId} onChange={(event) => setSalesEmployeeId(event.target.value)}><option value="">请选择销售</option>{employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName}</option>)}</select></label>
       <div className="waitlist-area-picks"><span>区域偏好</span><button type="button" className={!areaCode ? 'is-active' : ''} onClick={() => setAreaCode('')}>不限</button>{areas.map((area) => <button type="button" key={area.id} className={areaCode === area.id ? 'is-active' : ''} onClick={() => setAreaCode(area.id)}>{area.shortName}</button>)}</div>
-      <button className="primary-button" disabled={busy === 'create'}>{busy === 'create' ? <LoaderCircle className="reservation-spin" size={16} /> : <Check size={16} />}确认登记</button>
+      <button className="primary-button" disabled={busyKeys.has('create')}>{busyKeys.has('create') ? <LoaderCircle className="reservation-spin" size={16} /> : <Check size={16} />}确认登记</button>
     </form>}
     <div className="waitlist-list" aria-busy={loading}>
       {loading && <div className="waitlist-empty"><LoaderCircle className="reservation-spin" size={18} />正在加载</div>}
       {!loading && activeEntries.length === 0 && <div className="waitlist-empty"><Check size={18} />当前没有候补客人</div>}
       {activeEntries.map((entry) => {
         const target = entry.status === 'waiting' ? recommendedTable(entry.id) : tables.find((table) => table.id === entry.heldTableId)
+        const entryBusy = [...busyKeys].some((key) => key.endsWith(`:${entry.id}`))
         return <article className={`waitlist-row is-${entry.status}`} key={entry.id}>
           <b>{data.positions[entry.id] ?? '-'}号</b>
           <div><strong>{entry.customerName}</strong><span>{entry.partySize}人 · {entry.areaPreferenceCode ? areas.find((area) => area.id === entry.areaPreferenceCode)?.shortName : '区域不限'}</span></div>
           <span><Clock3 size={13} />{entry.status === 'notified' ? `等待回复至 ${time(entry.responseExpiresAt)}` : `最晚等到 ${time(entry.maximumWaitUntil)}`}</span>
           <div className="waitlist-actions">
-            {canManage && entry.status === 'waiting' && target && <button className="primary-button" disabled={Boolean(busy)} onClick={() => void run(`notify:${entry.id}`, () => actOnWaitlistEntry(entry.id, { action: 'notify', tableId: target.id, reason: '按队列与容量自动匹配', idempotencyKey: key('notify') }), `已通知${entry.customerName}并锁定${target.code}`)}><BellRing size={14} />通知并锁 {target.code}</button>}
-            {canManage && entry.status === 'notified' && <button className="primary-button" disabled={Boolean(busy)} onClick={() => void run(`seat:${entry.id}`, () => actOnWaitlistEntry(entry.id, { action: 'seat', reason: '客人已到入口确认入座', idempotencyKey: key('seat') }), `${entry.customerName}已安排入座`)}><DoorOpen size={14} />入座 {target?.code}</button>}
-            {canManage && entry.status === 'notified' && <button className="secondary-button" disabled={Boolean(busy)} onClick={() => void run(`skip:${entry.id}`, () => actOnWaitlistEntry(entry.id, { action: 'skip', reason: '两次联系未响应，按规则顺延', idempotencyKey: key('skip') }), '已释放桌台并顺延候补')}><UserRoundX size={14} />跳过</button>}
-            {canManage && <button className="secondary-button" disabled={Boolean(busy)} onClick={() => void run(`cancel:${entry.id}`, () => actOnWaitlistEntry(entry.id, { action: 'cancel', reason: '客人确认离队', idempotencyKey: key('cancel') }), '候补已取消')}><X size={14} />离队</button>}
+            {canManage && entry.status === 'waiting' && target && <button className="primary-button" disabled={entryBusy} onClick={() => void run(`notify:${entry.id}`, () => actOnWaitlistEntry(entry.id, { action: 'notify', tableId: target.id, reason: '按队列与容量自动匹配', idempotencyKey: key('notify') }), `已通知${entry.customerName}并锁定${target.code}`)}><BellRing size={14} />通知并锁 {target.code}</button>}
+            {canManage && entry.status === 'notified' && <button className="primary-button" disabled={entryBusy} onClick={() => void run(`seat:${entry.id}`, () => actOnWaitlistEntry(entry.id, { action: 'seat', reason: '客人已到入口确认入座', idempotencyKey: key('seat') }), `${entry.customerName}已安排入座`)}><DoorOpen size={14} />入座 {target?.code}</button>}
+            {canManage && entry.status === 'notified' && <button className="secondary-button" disabled={entryBusy} onClick={() => void run(`skip:${entry.id}`, () => actOnWaitlistEntry(entry.id, { action: 'skip', reason: '两次联系未响应，按规则顺延', idempotencyKey: key('skip') }), '已释放桌台并顺延候补')}><UserRoundX size={14} />跳过</button>}
+            {canManage && <button className="secondary-button" disabled={entryBusy} onClick={() => void run(`cancel:${entry.id}`, () => actOnWaitlistEntry(entry.id, { action: 'cancel', reason: '客人确认离队', idempotencyKey: key('cancel') }), '候补已取消')}><X size={14} />离队</button>}
           </div>
         </article>
       })}

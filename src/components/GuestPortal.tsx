@@ -1,6 +1,7 @@
 import { Bell, CakeSlice, CheckCircle2, ChevronRight, Clock3, CreditCard, GlassWater, ListChecks, MapPin, MessageCircleMore, Mic2, Music2, Search, Send, ShieldCheck, ShoppingBag, X } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { checkoutGuestOrder, createGuestOrder, createGuestSongRequest, createGuestTask, getGuestSession, trackGuestBehavior } from '../api'
+import { PendingActionRegistry } from '../pending-action-registry'
 import type { GuestSessionResponse, GuestTaskView, WechatJsapiParameters } from '../shared/guest-contracts'
 import type { GuestBehaviorEventType, GuestBehaviorValue } from '../shared/guest-insight-contracts'
 import { GUEST_SONG_TERMINAL_DISPLAY_MS, formatGuestCompactCountdown, guestCustomSongServiceNote, guestErrorMessage, guestMoodServiceNote, guestReplyNotice, guestSessionHistoryUrl, guestSongReplyNotice, guestSongStatusLabel, guestStageIsBeforeFirstSet, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks, type GuestReplyNotice } from './guest-portal-utils'
@@ -165,7 +166,7 @@ export function GuestPortal() {
   const [data, setData] = useState<GuestSessionResponse | null>(null)
   const [note, setNote] = useState('')
   const [reply, setReply] = useState<GuestReplyNotice | null>(null)
-  const [pendingType, setPendingType] = useState<string | null>(null)
+  const [pendingActions, setPendingActions] = useState<ReadonlySet<string>>(() => new Set())
   const [error, setError] = useState<GuestErrorNotice | null>(null)
   const [activeTab, setActiveTab] = useState<'menu' | 'service' | 'orders'>(requestedPaymentOrderId ? 'orders' : 'menu')
   const [checkoutBusy, setCheckoutBusy] = useState(false)
@@ -176,7 +177,6 @@ export function GuestPortal() {
   })
   const [songPickerOpen, setSongPickerOpen] = useState(false)
   const [songPickerMode, setSongPickerMode] = useState<'repertoire' | 'custom'>('repertoire')
-  const [songBusyId, setSongBusyId] = useState('')
   const [songSingerId, setSongSingerId] = useState('')
   const [songSearch, setSongSearch] = useState('')
   const [customSongTitle, setCustomSongTitle] = useState('')
@@ -184,15 +184,26 @@ export function GuestPortal() {
   const [customSongSingerId, setCustomSongSingerId] = useState('')
   const [customSongNote, setCustomSongNote] = useState('')
   const [customSongBusy, setCustomSongBusy] = useState(false)
-  const [quickPendingKey, setQuickPendingKey] = useState('')
   const [singerProfileAppearanceId, setSingerProfileAppearanceId] = useState('')
   const [terminalSongSeenAt, setTerminalSongSeenAt] = useState<Record<string, number>>({})
   const latestTableToken = useRef(initialToken)
   const refreshSequence = useRef(0)
   const fastPollUntil = useRef(0)
+  const pendingActionsRef = useRef(new PendingActionRegistry())
 
   function accelerateRefresh() {
     fastPollUntil.current = Date.now() + 45_000
+  }
+
+  function beginPendingAction(key: string) {
+    if (!pendingActionsRef.current.begin(key)) return false
+    setPendingActions(pendingActionsRef.current.snapshot())
+    return true
+  }
+
+  function endPendingAction(key: string) {
+    pendingActionsRef.current.finish(key)
+    setPendingActions(pendingActionsRef.current.snapshot())
   }
 
   function recordBehavior(eventType: GuestBehaviorEventType, metadata: Record<string, GuestBehaviorValue> = {}) {
@@ -323,10 +334,11 @@ export function GuestPortal() {
   async function requestService(
     serviceTypeId: string,
     requestNote = '',
-    options: { showReply?: boolean; refreshAfter?: boolean } = {},
+    options: { showReply?: boolean; refreshAfter?: boolean; pendingKey?: string } = {},
   ) {
+    const pendingKey = options.pendingKey ?? `service:${serviceTypeId}`
+    if (!beginPendingAction(pendingKey)) return null
     accelerateRefresh()
-    setPendingType(serviceTypeId)
     setError(null)
     try {
       const task = await createGuestTask({
@@ -350,12 +362,12 @@ export function GuestPortal() {
       })
       return null
     } finally {
-      setPendingType(null)
+      endPendingAction(pendingKey)
     }
   }
 
   async function recordMood(mood: typeof guestMoods[number]) {
-    if (selectedMood === mood.id || pendingType) return
+    if (selectedMood === mood.id || pendingActionsRef.current.has('mood')) return
     if (!customRequestType) {
       setError({ message: '今晚状态小卡暂时开小差了，您仍可以直接呼叫我们。', source: 'action' })
       return
@@ -368,7 +380,7 @@ export function GuestPortal() {
     const succeeded = await requestService(
       customRequestType.id,
       guestMoodServiceNote(mood.label, mood.care, previousLabel),
-      { showReply: false, refreshAfter: false },
+      { showReply: false, refreshAfter: false, pendingKey: 'mood' },
     )
     if (!succeeded) {
       setSelectedMood(previousMoodId)
@@ -385,15 +397,13 @@ export function GuestPortal() {
       setError({ message: '这个快捷服务今晚暂时没开，去“服务”里告诉我们也一样好使。', source: 'action' })
       return
     }
-    setQuickPendingKey(key)
-    await requestService(serviceType.id, requestNote)
-    setQuickPendingKey('')
+    await requestService(serviceType.id, requestNote, { pendingKey: `quick:${key}` })
   }
 
   async function chooseSong(offer: GuestSessionResponse['songOffers'][number]) {
-    if (!data || songBusyId || !offer.requestAvailable) return
+    const pendingKey = `song:${offer.id}`
+    if (!data || pendingActions.has(pendingKey) || !offer.requestAvailable || !beginPendingAction(pendingKey)) return
     accelerateRefresh()
-    setSongBusyId(offer.id)
     setError(null)
     try {
       const request = await createGuestSongRequest({
@@ -426,7 +436,7 @@ export function GuestPortal() {
     } catch (requestError) {
       setError({ message: guestErrorMessage(requestError, '这首歌刚才没递出去，再点一次试试，或者让服务伙伴来帮您。'), source: 'action' })
     } finally {
-      setSongBusyId('')
+      endPendingAction(pendingKey)
     }
   }
 
@@ -468,7 +478,7 @@ export function GuestPortal() {
       artist: customSongArtist,
       singerName,
       customerNote: customSongNote,
-    }))
+    }), { pendingKey: 'custom-song-request' })
     if (task) {
       setReply(guestTaskReplyNotice('收到这首私藏啦～服务伙伴这就去问歌手，能不能唱、多少钱、什么时候安排，都会先回来和您确认。', task))
       setCustomSongTitle('')
@@ -488,7 +498,7 @@ export function GuestPortal() {
       setError({ message: '悄悄告诉我们您想要什么吧～写几个字就能送到服务伙伴手里。', source: 'action' })
       return
     }
-    await requestService(customRequestType.id, note.trim())
+    await requestService(customRequestType.id, note.trim(), { pendingKey: 'custom-request' })
   }
 
   async function payOrder(orderId: string, idempotencyKey = `guest-pay-${crypto.randomUUID()}`) {
@@ -599,7 +609,7 @@ export function GuestPortal() {
             <div className="guest-singer-schedule"><Clock3 size={17} /><div><span>今晚演出</span><strong>{formatGuestTimeRange(profileAppearance.startsAt, profileAppearance.endsAt, data?.store.timezone)}</strong></div></div>
             <div className="guest-singer-songs">
               <header><span>今晚歌单</span><b>排班V{profileAppearance.scheduleVersion} · {profileSongOffers.length}首</b></header>
-              {profileSongOffers.length > 0 ? profileSongOffers.slice(0, 8).map((offer) => <button key={offer.id} disabled={!offer.requestAvailable || Boolean(songBusyId)} onClick={() => { setSingerProfileAppearanceId(''); void chooseSong(offer) }}><span>{offer.songTitle}<small>{offer.songArtist} · {songRequestModeLabel(offer.requestMode, offer.requestUnavailableReason ?? undefined)}</small></span><b>{offer.requestAvailable ? songRequestActionLabel(offer.requestMode) : '暂未开放'}</b><ChevronRight size={15} /></button>) : <p>今晚的歌单还在确认，想听什么可以让我们替您问问。</p>}
+              {profileSongOffers.length > 0 ? profileSongOffers.slice(0, 8).map((offer) => <button key={offer.id} disabled={!offer.requestAvailable || pendingActions.has(`song:${offer.id}`)} onClick={() => { setSingerProfileAppearanceId(''); void chooseSong(offer) }}><span>{offer.songTitle}<small>{offer.songArtist} · {songRequestModeLabel(offer.requestMode, offer.requestUnavailableReason ?? undefined)}</small></span><b>{pendingActions.has(`song:${offer.id}`) ? '正在递歌' : offer.requestAvailable ? songRequestActionLabel(offer.requestMode) : '暂未开放'}</b><ChevronRight size={15} /></button>) : <p>今晚的歌单还在确认，想听什么可以让我们替您问问。</p>}
               {profileSongOffers.length > 8 && <button className="guest-singer-show-all" onClick={() => { setSingerProfileAppearanceId(''); setSongSingerId(profileAppearance.singerId); setCustomSongSingerId(profileAppearance.singerId); setSongSearch(''); setSongPickerMode('repertoire'); setSongPickerOpen(true) }}><span>搜索全部{profileSongOffers.length}首</span><b>打开歌单</b><ChevronRight size={15} /></button>}
             </div>
           </div>
@@ -629,17 +639,17 @@ export function GuestPortal() {
               key={mood.id}
               className={selectedMood === mood.id ? 'is-selected' : ''}
               aria-pressed={selectedMood === mood.id}
-              disabled={pendingType !== null}
+              disabled={pendingActions.has('mood')}
               onClick={() => void recordMood(mood)}
             ><img src={`/brand/moods-v2/${mood.id}.webp`} alt="" width="256" height="256" decoding="async" /><span>{mood.label}</span></button>)}
           </div>
         </section>
 
         <section className="guest-quick-service" aria-label="快捷服务">
-          <button disabled={pendingType !== null} onClick={() => void requestQuickService('water', 'ADD_WATER')}><GlassWater size={19} /><span>{quickPendingKey === 'water' ? '正在送达' : '加水'}</span></button>
-          <button disabled={pendingType !== null} onClick={() => void openSongService()}><Music2 size={19} /><span>{quickPendingKey === 'song' ? '正在帮您问' : '点歌'}</span></button>
-          <button disabled={pendingType !== null} onClick={() => void requestQuickService('birthday', 'BIRTHDAY_CARE')}><CakeSlice size={19} /><span>{quickPendingKey === 'birthday' ? '正在安排' : '生日'}</span></button>
-          <button disabled={pendingType !== null} onClick={() => void requestQuickService('call', 'ORDER_HELP', '客人呼叫服务员到桌，请尽快响应。')}><Bell size={19} /><span>{quickPendingKey === 'call' ? '正在叫人' : '呼叫'}</span></button>
+          <button disabled={pendingActions.has('quick:water')} onClick={() => void requestQuickService('water', 'ADD_WATER')}><GlassWater size={19} /><span>{pendingActions.has('quick:water') ? '正在送达' : '加水'}</span></button>
+          <button disabled={pendingActions.has('quick:song')} onClick={() => void openSongService()}><Music2 size={19} /><span>{pendingActions.has('quick:song') ? '正在帮您问' : '点歌'}</span></button>
+          <button disabled={pendingActions.has('quick:birthday')} onClick={() => void requestQuickService('birthday', 'BIRTHDAY_CARE')}><CakeSlice size={19} /><span>{pendingActions.has('quick:birthday') ? '正在安排' : '生日'}</span></button>
+          <button disabled={pendingActions.has('quick:call')} onClick={() => void requestQuickService('call', 'ORDER_HELP', '客人呼叫服务员到桌，请尽快响应。')}><Bell size={19} /><span>{pendingActions.has('quick:call') ? '正在叫人' : '呼叫'}</span></button>
         </section>
 
         {songPickerOpen && <section className="guest-song-picker" aria-label="当晚可点歌曲">
@@ -653,7 +663,7 @@ export function GuestPortal() {
             <label className="guest-song-search"><Search size={17} aria-hidden="true" /><input type="search" value={songSearch} placeholder="搜索歌名、原唱或歌手" aria-label="搜索可点歌曲" onChange={(event) => setSongSearch(event.target.value)} /><span>{filteredSongChoices.length}首</span></label>
             <div className="guest-song-list">{visibleSongChoices.length === 0 ? <div className="guest-song-empty">没搜到这首？切到“歌单外点歌”，我们替您问问。</div> : visibleSongChoices.map((offer) => <article key={offer.id}>
               <div><strong>{offer.songTitle}</strong><span>{offer.songArtist} · {offer.singerName}</span></div>
-              <button disabled={Boolean(songBusyId)} onClick={() => void chooseSong(offer)}>{songBusyId === offer.id ? '正在递歌' : `¥${(offer.priceAmount / 100).toFixed(2)} ${songRequestActionLabel(offer.requestMode)}`}</button>
+              <button disabled={pendingActions.has(`song:${offer.id}`)} onClick={() => void chooseSong(offer)}>{pendingActions.has(`song:${offer.id}`) ? '正在递歌' : `¥${(offer.priceAmount / 100).toFixed(2)} ${songRequestActionLabel(offer.requestMode)}`}</button>
             </article>)}</div>
             {filteredSongChoices.length > visibleSongChoices.length && <p className="guest-song-limit">结果较多，当前显示前100首，继续输入歌名或原唱会更快。</p>}
             <p>预约和延长演出都要先问歌手；确认时间与费用后，服务伙伴才会到桌收款。</p>
@@ -665,7 +675,7 @@ export function GuestPortal() {
               <label><span>希望歌手</span><select value={customSongSingerId} onChange={(event) => setCustomSongSingerId(event.target.value)}><option value="">不限歌手</option>{songSingers.map((singer) => <option key={singer.singerId} value={singer.singerId}>{singer.singerName}</option>)}</select></label>
               <label><span>补充信息</span><input value={customSongNote} maxLength={80} placeholder="祝福语或演唱偏好" onChange={(event) => setCustomSongNote(event.target.value)} /></label>
             </div>
-            <button disabled={customSongBusy || pendingType !== null || !customSongTitle.trim()} onClick={() => void submitCustomSong()}><Send size={16} />{customSongBusy ? '正在帮您问' : '帮我问问'}</button>
+            <button disabled={customSongBusy || !customSongTitle.trim()} onClick={() => void submitCustomSong()}><Send size={16} />{customSongBusy ? '正在帮您问' : '帮我问问'}</button>
           </div>}
         </section>}
 
@@ -698,11 +708,11 @@ export function GuestPortal() {
               key={serviceType.id}
               className={serviceType.id === 'complaint' ? 'service-button service-button--complaint' : 'service-button'}
               data-service-code={serviceType.code.toLowerCase()}
-              disabled={pendingType !== null}
+              disabled={pendingActions.has(`service:${serviceType.id}`)}
               onClick={() => void requestService(serviceType.id)}
             >
               <ServiceIcon icon={serviceType.icon} size={23} />
-              <span>{pendingType === serviceType.id ? '正在送达' : serviceType.name}</span>
+              <span>{pendingActions.has(`service:${serviceType.id}`) ? '正在送达' : serviceType.name}</span>
               <ChevronRight size={17} aria-hidden="true" />
             </button>
           ))}
@@ -714,12 +724,12 @@ export function GuestPortal() {
               value={note}
               onChange={(event) => setNote(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === 'Enter' && note.trim() && pendingType === null) void submitCustomRequest()
+                if (event.key === 'Enter' && note.trim() && !pendingActions.has('custom-request')) void submitCustomRequest()
               }}
               maxLength={300}
               placeholder="悄悄告诉我们：例如需要两杯温水"
             />
-            <button disabled={!note.trim() || pendingType !== null || !customRequestType} onClick={() => void submitCustomRequest()}><Send size={17} />{pendingType === customRequestType?.id ? '正在送达' : '告诉我们'}</button>
+            <button disabled={!note.trim() || pendingActions.has('custom-request') || !customRequestType} onClick={() => void submitCustomRequest()}><Send size={17} />{pendingActions.has('custom-request') ? '正在送达' : '告诉我们'}</button>
           </div>
         </div>
       </section>

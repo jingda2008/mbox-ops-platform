@@ -1,7 +1,7 @@
 {
   "name": "@mbox/ops-platform",
   "private": true,
-  "version": "1.0.0-rc.44",
+  "version": "1.0.0-rc.45",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n API,WEB -c yellow,cyan \"npm:dev:api\" \"npm:dev:web\"",
@@ -16,7 +16,7 @@
     "demo:performance": "tsx server/load-demo-performance.ts",
     "qr:generate": "tsx server/generate-table-qrs.ts",
     "pilot:access": "node scripts/print-pilot-access.mjs",
-    "check": "npm run lint && npm run check:miniprogram && npm run tc:verify && npm test && npm run build",
+    "check": "npm run release:metadata && npm run lint && npm run check:miniprogram && npm run tc:verify && npm test && npm run build",
     "check:miniprogram": "node scripts/check-miniprogram.mjs",
     "lint": "oxlint src server",
     "test": "vitest run",
@@ -29,6 +29,7 @@
     "tc:register": "node scripts/build-tc-execution-register.mjs",
     "tc:verify": "node scripts/build-tc-execution-register.mjs --check",
     "evidence:capture": "node scripts/capture-release-evidence.mjs",
+    "release:metadata": "node scripts/verify-release-metadata.mjs",
     "release:verify": "node scripts/verify-release-smoke.mjs",
     "android:build:validation": "bash scripts/build-android-validation.sh",
     "ios:assets": "capacitor-assets generate --ios --iconBackgroundColor '#111310' --iconBackgroundColorDark '#111310' --splashBackgroundColor '#111310' --splashBackgroundColorDark '#111310'",

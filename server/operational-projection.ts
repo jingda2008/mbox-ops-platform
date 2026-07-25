@@ -51,13 +51,14 @@ function tableRows(state: RuntimeState): ProjectionRow[] {
 function tableSessionRows(state: RuntimeState): ProjectionRow[] {
   return state.songState.tableSessions.map((session) => {
     const table = state.tables.find((candidate) => candidate.id === session.tableId)
+    const operation = state.tableSessionOperations?.find((candidate) => candidate.tableSessionId === session.id)
     return {
       source_id: session.id,
       table_id: session.tableId,
       table_code: session.tableCode,
       business_date: tableSessionBusinessDate(state, session),
       status: session.status,
-      guest_count: session.status === 'open' ? table?.guestCount ?? 0 : 0,
+      guest_count: operation?.guestCount ?? (session.status === 'open' ? table?.guestCount ?? 0 : 0),
       opened_at: session.openedAt,
       closed_at: session.closedAt,
       payload: JSON.stringify(session),
@@ -97,6 +98,9 @@ function orderRows(state: RuntimeState): ProjectionRow[] {
     gift_amount_minor: order.amounts.giftAmount,
     payable_amount_minor: order.amounts.payableAmount,
     cost_amount_minor: order.items.reduce((total, item) => total + item.unitCostAmount * item.quantity, 0),
+    sales_employee_id: (state.salesAttributionRecords ?? [])
+      .findLast((record) => record.subjectType === 'table_session' && record.subjectId === order.tableSessionId)
+      ?.salesEmployeeId ?? null,
     created_by: order.createdBy,
     created_at: order.createdAt,
     submitted_at: order.submittedAt,

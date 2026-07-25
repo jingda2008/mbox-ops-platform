@@ -18,6 +18,25 @@ type CapabilityDefinition = Omit<AssistantToolDescriptor, 'argumentGuide' | 'ali
 const humanRefundGuard = 'AI不得提交、审批或调用退款渠道；只有人工操作和渠道回执可以改变退款状态。'
 
 const definitions: Record<AssistantCapabilityId, CapabilityDefinition> = {
+  'analytics.query': {
+    id: 'analytics.query',
+    name: '查询经营数据',
+    description: '按受控指标、维度和营业日范围查询本人有权查看的经营数据',
+    domain: 'analytics',
+    executionMode: 'server_execute',
+    risk: 'normal',
+    requiredPermission: 'dashboard.view',
+    aliases: ['经营分析', '数据统计', '销售排行', '服务分析', '帮我查数据'],
+    argumentGuide: {
+      metric: '必填：sales_amount销售额、sales_quantity销量、estimated_gross_profit预估毛利、order_count订单数、average_check桌均消费、guest_count到店人数、service_request_count服务需求数、service_completion_rate服务完成率、median_service_response_seconds响应中位数、complaint_count投诉数',
+      dimension: '必填：none总计、product商品、category品类、table桌台、employee员工、party_size人数结构、business_date营业日、hour时段、service_type服务类型',
+      period: '必填：current_business_day本营业日、previous_business_day上一营业日、last_7_business_days最近7日、this_month本月、last_month上月、custom自定义',
+      limit: '选填，返回1至20项，默认10',
+      sort: '选填，desc从高到低，asc从低到高',
+      dateFrom: '仅period=custom时必填，YYYY-MM-DD营业日',
+      dateTo: '仅period=custom时必填，YYYY-MM-DD营业日',
+    },
+  },
   'table.open': {
     id: 'table.open', name: '开台', description: '按桌号和实际到店人数开台并建立临客桌次',
     domain: 'table', executionMode: 'server_execute', risk: 'normal', requiredPermission: 'table.open',

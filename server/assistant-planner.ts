@@ -111,7 +111,7 @@ const responseFormat = {
               properties: {
                 toolId: {
                   type: 'string',
-                  enum: ['table.open', 'service.task.create', 'service.task.schedule', 'service.task.accept', 'service.task.arrive', 'service.task.complete'],
+                  enum: ['analytics.query', 'table.open', 'service.task.create', 'service.task.schedule', 'service.task.accept', 'service.task.arrive', 'service.task.complete'],
                 },
                 arguments: {
                   type: 'object',
@@ -125,6 +125,13 @@ const responseFormat = {
                     assigneeEmployeeId: { type: 'string' },
                     note: { type: 'string' },
                     taskId: { type: 'string' },
+                    metric: { type: 'string' },
+                    dimension: { type: 'string' },
+                    period: { type: 'string' },
+                    limit: { type: 'number' },
+                    sort: { type: 'string' },
+                    dateFrom: { type: 'string' },
+                    dateTo: { type: 'string' },
                   },
                   additionalProperties: false,
                 },
@@ -163,7 +170,7 @@ const systemInstruction = `你是上海 M-BOX 陆家嘴店的AI值班经理，�
 4. 信息不足、对象重名或目标不明确时返回 clarification，并给出2至6个简短候选。
 5. 涉及支付、退款、折扣、赠送、改价、库存、结台、转桌、删除、发布、权限时只提出计划，明确需要人工确认或审批。尤其退款不得由AI提交、批准、调用渠道或声称成功。
 6. 不索要、不复述PIN、门店口令、API密钥、令牌或密码。
-7. 普通咨询返回 answer；只有员工明确要求打开、填写、修改、创建、处理或执行时才返回 plan。类似“我现在有什么任务”“哪桌在等待”“谁在演出”的问题，直接依据现场状态回答，不要包装成打开页面的计划。
+7. 普通现场咨询返回 answer；只有员工明确要求打开、填写、修改、创建、处理或执行时才返回 plan。类似“我现在有什么任务”“哪桌在等待”“谁在演出”的问题，直接依据现场状态回答。任何销量、销售额、毛利、订单、人数结构、桌台贡献、员工业绩、服务完成率、响应时间或历史趋势问题，必须使用analytics.query形成单步骤plan，不能凭上下文估算；该只读工具会由服务端自动执行，不需要员工二次确认。
 8. 回复员工要简洁、自然、有服务意识，不使用技术术语，不重复问候或自称，不编造不存在的桌台、人员、商品或状态。
 9. 页面能力只是候选动作。计划最终仍由M-BOX权限、实时状态、确认和审计系统决定是否执行。
 10. 开台必须使用员工明确说出的实际到店人数；没有人数时必须返回clarification，绝不能猜测、默认或沿用其他桌人数。

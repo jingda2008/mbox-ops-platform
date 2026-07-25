@@ -15,6 +15,7 @@ import { syncKdsFromFulfillmentServiceTaskAction } from './fulfillment-service.j
 import type { RuntimeRepository } from './repository.js'
 import { scheduleAdHocServiceTask } from './sop-engine.js'
 import { openWalkInTableSession } from './table-session-api.js'
+import { executeAnalyticsQuery } from './analytics-engine.js'
 
 const tableOpenArguments = z.object({
   tableCode: z.string().trim().min(1).max(32),
@@ -170,7 +171,19 @@ export class AssistantToolBus {
         evidence: AssistantToolExecutionResponse['evidence']
       }
 
-      if (call.toolId === 'table.open') {
+      if (call.toolId === 'analytics.query') {
+        const analytics = executeAnalyticsQuery(state, actor, call.arguments, this.now())
+        result = {
+          objectType: 'analytics_query',
+          objectId: analytics.id,
+          message: analytics.message,
+          evidence: {
+            verified: true,
+            outcome: 'queried',
+            analytics: analytics.result,
+          },
+        }
+      } else if (call.toolId === 'table.open') {
         const input = parseArguments(tableOpenArguments, call.arguments, '开台信息不完整，请确认桌号和实际到店人数')
         const table = resolveTable(state, input.tableCode)
         requireConfiguredOperation(request, state, 'table.open')

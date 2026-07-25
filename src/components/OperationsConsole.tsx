@@ -157,6 +157,7 @@ const viewTitles: Record<View, string> = {
 const weekdayLabels = ['日', '一', '二', '三', '四', '五', '六']
 
 const assistantCapabilityNames: Record<AssistantCapabilityId, string> = {
+  'analytics.query': '查询经营数据',
   'table.open': '开台',
   'service.task.create': '创建服务任务',
   'service.task.schedule': '定时指派服务',

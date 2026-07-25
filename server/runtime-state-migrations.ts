@@ -390,6 +390,26 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
     || (migrated.reservationState?.config.businessHours?.timeZone !== undefined
       && migrated.reservationState.config.businessHours.timeZone !== CHINA_TIME_ZONE)
   migrated.store.timezone = CHINA_TIME_ZONE
+  migrated.tableSessionOperations = (migrated.tableSessionOperations ?? []).map((operation) => {
+    if (operation.guestCount !== undefined) return operation
+    const session = migrated.songState.tableSessions.find((item) => item.id === operation.tableSessionId)
+    const audit = migrated.auditEntries.findLast((entry) => (
+      entry.details.tableSessionId === operation.tableSessionId
+      && typeof entry.details.guestCount === 'number'
+    ))
+    const sourcePartySize = operation.source === 'reservation' || operation.source === 'walk_in'
+      ? migrated.reservationState?.reservations.find((item) => item.id === operation.sourceId)?.partySize
+      : operation.source === 'waitlist'
+        ? migrated.waitlistEntries.find((item) => item.id === operation.sourceId)?.partySize
+        : operation.source === 'added_table' ? 0 : undefined
+    const openTablePartySize = session?.status === 'open'
+      ? migrated.tables.find((item) => item.id === session.tableId)?.guestCount
+      : undefined
+    const guestCount = sourcePartySize
+      ?? (typeof audit?.details.guestCount === 'number' ? audit.details.guestCount : undefined)
+      ?? openTablePartySize
+    return guestCount === undefined ? operation : { ...operation, guestCount }
+  })
   migrated.commercialOps = normalizeCommercialOpsState(migrated.commercialOps)
   migrated.hardwareState = normalizeHardwareState(migrated.hardwareState)
   migrated.sopExecutions ??= []

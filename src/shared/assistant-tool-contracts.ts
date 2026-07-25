@@ -1,6 +1,8 @@
 import { z } from 'zod'
+import type { AnalyticsResult } from './analytics-contracts.js'
 
 export const assistantServerToolIds = [
+  'analytics.query',
   'table.open',
   'service.task.create',
   'service.task.schedule',
@@ -55,7 +57,7 @@ export interface AssistantToolDescriptor {
   id: AssistantCapabilityId
   name: string
   description: string
-  domain: 'table' | 'service' | 'payment' | 'business_day' | 'config' | 'inventory' | 'benefit' | 'commerce'
+  domain: 'analytics' | 'table' | 'service' | 'payment' | 'business_day' | 'config' | 'inventory' | 'benefit' | 'commerce'
   executionMode: AssistantCapabilityExecutionMode
   risk: 'normal' | 'high'
   requiredPermission: string
@@ -81,7 +83,7 @@ export interface AssistantToolExecutionResponse {
   stateRevision: number
   evidence: {
     verified: true
-    outcome: 'executed' | 'scheduled'
+    outcome: 'executed' | 'scheduled' | 'queried'
     tableCode?: string
     tableStatus?: string
     guestCount?: number
@@ -89,5 +91,6 @@ export interface AssistantToolExecutionResponse {
     scheduledAt?: string
     assigneeEmployeeId?: string
     assigneeName?: string
+    analytics?: AnalyticsResult
   }
 }

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { AssistantModelOutput } from '../src/shared/assistant-contracts.js'
+import type { AssistantConversationOutput } from '../src/shared/assistant-contracts.js'
 import type { PostgresPool, PostgresPoolClient } from './postgres-repository.js'
 
 const SESSION_RETENTION_MS = 7 * 24 * 60 * 60_000
@@ -8,7 +8,7 @@ const MAX_HISTORY_TURNS = 8
 export interface AssistantStoredTurn {
   requestId: string
   userMessage: string
-  output: AssistantModelOutput
+  output: AssistantConversationOutput
   model: string
   createdAt: string
 }
@@ -33,7 +33,7 @@ export interface AssistantConversationStore {
     actorId: string
     requestId: string
     userMessage: string
-    output: AssistantModelOutput
+    output: AssistantConversationOutput
     model: string
     occurredAt: string
   }): Promise<AssistantStoredTurn>
@@ -76,7 +76,7 @@ export class MemoryAssistantConversationStore implements AssistantConversationSt
     actorId: string
     requestId: string
     userMessage: string
-    output: AssistantModelOutput
+    output: AssistantConversationOutput
     model: string
     occurredAt: string
   }) {
@@ -145,7 +145,7 @@ export class PostgresAssistantConversationStore implements AssistantConversation
       const turns = await client.query<{
         request_id: string
         user_message: string
-        output: AssistantModelOutput
+        output: AssistantConversationOutput
         model: string
         created_at: Date | string
       }>(`
@@ -174,7 +174,7 @@ export class PostgresAssistantConversationStore implements AssistantConversation
     actorId: string
     requestId: string
     userMessage: string
-    output: AssistantModelOutput
+    output: AssistantConversationOutput
     model: string
     occurredAt: string
   }) {
@@ -182,7 +182,7 @@ export class PostgresAssistantConversationStore implements AssistantConversation
       const inserted = await client.query<{
         request_id: string
         user_message: string
-        output: AssistantModelOutput
+        output: AssistantConversationOutput
         model: string
         created_at: Date | string
       }>(`

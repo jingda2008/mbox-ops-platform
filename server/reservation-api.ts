@@ -447,7 +447,7 @@ export function registerReservationRoutes(app: FastifyInstance, repository: Runt
               throw new Error('桌台主服务员当前不可接待，请先完成员工调度')
             }
             tableSessionId = openTableSession(state, table, command.occurredAt, {
-              source: 'reservation', sourceId: reservation.id,
+              source: 'reservation', sourceId: reservation.id, guestCount: reservation.partySize,
             }).id
           }
           if (!table || !tableSessionId) throw new Error('预约入座桌次不完整')

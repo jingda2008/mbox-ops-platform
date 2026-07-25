@@ -307,6 +307,8 @@ export interface TableSessionOperation {
   openedTableCode: string
   source: TableSessionOpenSource
   sourceId: string | null
+  /** Immutable party-size snapshot. Older persisted sessions may not contain it. */
+  guestCount?: number
   minimumSpendSnapshot: MinimumSpendSnapshot
   createdAt: string
 }

@@ -368,7 +368,7 @@ export function MenuOrderingWorkspace({
           {confirmationError && <div className="menu-confirm-error" role="alert">{confirmationError}</div>}
           <footer>
             <button className="secondary-button" disabled={busy} onClick={() => setConfirmation(null)}>再看看</button>
-            <button className="primary-button" disabled={busy || submitDisabled || (confirmation === 'duplicate' && !confirmedDuplicateOrderId)} onClick={() => {
+            <button className="primary-button" data-haptic="action" disabled={busy || submitDisabled || (confirmation === 'duplicate' && !confirmedDuplicateOrderId)} onClick={() => {
               if (confirmation === 'continue') confirmContinuation()
               else void executeSubmit(confirmation === 'duplicate' ? confirmedDuplicateOrderId : undefined)
             }}><Check size={17} />{busy ? '正在提交' : confirmation === 'duplicate' ? '确认继续加单' : confirmation === 'continue' ? '继续选商品' : '确认上单'}</button>

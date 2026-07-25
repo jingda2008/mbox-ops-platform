@@ -609,7 +609,7 @@ export function GuestPortal() {
             <div className="guest-singer-schedule"><Clock3 size={17} /><div><span>今晚演出</span><strong>{formatGuestTimeRange(profileAppearance.startsAt, profileAppearance.endsAt, data?.store.timezone)}</strong></div></div>
             <div className="guest-singer-songs">
               <header><span>今晚歌单</span><b>排班V{profileAppearance.scheduleVersion} · {profileSongOffers.length}首</b></header>
-              {profileSongOffers.length > 0 ? profileSongOffers.slice(0, 8).map((offer) => <button key={offer.id} disabled={!offer.requestAvailable || pendingActions.has(`song:${offer.id}`)} onClick={() => { setSingerProfileAppearanceId(''); void chooseSong(offer) }}><span>{offer.songTitle}<small>{offer.songArtist} · {songRequestModeLabel(offer.requestMode, offer.requestUnavailableReason ?? undefined)}</small></span><b>{pendingActions.has(`song:${offer.id}`) ? '正在递歌' : offer.requestAvailable ? songRequestActionLabel(offer.requestMode) : '暂未开放'}</b><ChevronRight size={15} /></button>) : <p>今晚的歌单还在确认，想听什么可以让我们替您问问。</p>}
+              {profileSongOffers.length > 0 ? profileSongOffers.slice(0, 8).map((offer) => <button key={offer.id} data-haptic="action" disabled={!offer.requestAvailable || pendingActions.has(`song:${offer.id}`)} onClick={() => { setSingerProfileAppearanceId(''); void chooseSong(offer) }}><span>{offer.songTitle}<small>{offer.songArtist} · {songRequestModeLabel(offer.requestMode, offer.requestUnavailableReason ?? undefined)}</small></span><b>{pendingActions.has(`song:${offer.id}`) ? '正在递歌' : offer.requestAvailable ? songRequestActionLabel(offer.requestMode) : '暂未开放'}</b><ChevronRight size={15} /></button>) : <p>今晚的歌单还在确认，想听什么可以让我们替您问问。</p>}
               {profileSongOffers.length > 8 && <button className="guest-singer-show-all" onClick={() => { setSingerProfileAppearanceId(''); setSongSingerId(profileAppearance.singerId); setCustomSongSingerId(profileAppearance.singerId); setSongSearch(''); setSongPickerMode('repertoire'); setSongPickerOpen(true) }}><span>搜索全部{profileSongOffers.length}首</span><b>打开歌单</b><ChevronRight size={15} /></button>}
             </div>
           </div>
@@ -646,10 +646,10 @@ export function GuestPortal() {
         </section>
 
         <section className="guest-quick-service" aria-label="快捷服务">
-          <button disabled={pendingActions.has('quick:water')} onClick={() => void requestQuickService('water', 'ADD_WATER')}><GlassWater size={19} /><span>{pendingActions.has('quick:water') ? '正在送达' : '加水'}</span></button>
+          <button data-haptic="action" disabled={pendingActions.has('quick:water')} onClick={() => void requestQuickService('water', 'ADD_WATER')}><GlassWater size={19} /><span>{pendingActions.has('quick:water') ? '正在送达' : '加水'}</span></button>
           <button disabled={pendingActions.has('quick:song')} onClick={() => void openSongService()}><Music2 size={19} /><span>{pendingActions.has('quick:song') ? '正在帮您问' : '点歌'}</span></button>
-          <button disabled={pendingActions.has('quick:birthday')} onClick={() => void requestQuickService('birthday', 'BIRTHDAY_CARE')}><CakeSlice size={19} /><span>{pendingActions.has('quick:birthday') ? '正在安排' : '生日'}</span></button>
-          <button disabled={pendingActions.has('quick:call')} onClick={() => void requestQuickService('call', 'ORDER_HELP', '客人呼叫服务员到桌，请尽快响应。')}><Bell size={19} /><span>{pendingActions.has('quick:call') ? '正在叫人' : '呼叫'}</span></button>
+          <button data-haptic="action" disabled={pendingActions.has('quick:birthday')} onClick={() => void requestQuickService('birthday', 'BIRTHDAY_CARE')}><CakeSlice size={19} /><span>{pendingActions.has('quick:birthday') ? '正在安排' : '生日'}</span></button>
+          <button data-haptic="action" disabled={pendingActions.has('quick:call')} onClick={() => void requestQuickService('call', 'ORDER_HELP', '客人呼叫服务员到桌，请尽快响应。')}><Bell size={19} /><span>{pendingActions.has('quick:call') ? '正在叫人' : '呼叫'}</span></button>
         </section>
 
         {songPickerOpen && <section className="guest-song-picker" aria-label="当晚可点歌曲">
@@ -663,7 +663,7 @@ export function GuestPortal() {
             <label className="guest-song-search"><Search size={17} aria-hidden="true" /><input type="search" value={songSearch} placeholder="搜索歌名、原唱或歌手" aria-label="搜索可点歌曲" onChange={(event) => setSongSearch(event.target.value)} /><span>{filteredSongChoices.length}首</span></label>
             <div className="guest-song-list">{visibleSongChoices.length === 0 ? <div className="guest-song-empty">没搜到这首？切到“歌单外点歌”，我们替您问问。</div> : visibleSongChoices.map((offer) => <article key={offer.id}>
               <div><strong>{offer.songTitle}</strong><span>{offer.songArtist} · {offer.singerName}</span></div>
-              <button disabled={pendingActions.has(`song:${offer.id}`)} onClick={() => void chooseSong(offer)}>{pendingActions.has(`song:${offer.id}`) ? '正在递歌' : `¥${(offer.priceAmount / 100).toFixed(2)} ${songRequestActionLabel(offer.requestMode)}`}</button>
+              <button data-haptic="action" disabled={pendingActions.has(`song:${offer.id}`)} onClick={() => void chooseSong(offer)}>{pendingActions.has(`song:${offer.id}`) ? '正在递歌' : `¥${(offer.priceAmount / 100).toFixed(2)} ${songRequestActionLabel(offer.requestMode)}`}</button>
             </article>)}</div>
             {filteredSongChoices.length > visibleSongChoices.length && <p className="guest-song-limit">结果较多，当前显示前100首，继续输入歌名或原唱会更快。</p>}
             <p>预约和延长演出都要先问歌手；确认时间与费用后，服务伙伴才会到桌收款。</p>
@@ -675,7 +675,7 @@ export function GuestPortal() {
               <label><span>希望歌手</span><select value={customSongSingerId} onChange={(event) => setCustomSongSingerId(event.target.value)}><option value="">不限歌手</option>{songSingers.map((singer) => <option key={singer.singerId} value={singer.singerId}>{singer.singerName}</option>)}</select></label>
               <label><span>补充信息</span><input value={customSongNote} maxLength={80} placeholder="祝福语或演唱偏好" onChange={(event) => setCustomSongNote(event.target.value)} /></label>
             </div>
-            <button disabled={customSongBusy || !customSongTitle.trim()} onClick={() => void submitCustomSong()}><Send size={16} />{customSongBusy ? '正在帮您问' : '帮我问问'}</button>
+            <button data-haptic="action" disabled={customSongBusy || !customSongTitle.trim()} onClick={() => void submitCustomSong()}><Send size={16} />{customSongBusy ? '正在帮您问' : '帮我问问'}</button>
           </div>}
         </section>}
 
@@ -708,6 +708,7 @@ export function GuestPortal() {
               key={serviceType.id}
               className={serviceType.id === 'complaint' ? 'service-button service-button--complaint' : 'service-button'}
               data-service-code={serviceType.code.toLowerCase()}
+              data-haptic="action"
               disabled={pendingActions.has(`service:${serviceType.id}`)}
               onClick={() => void requestService(serviceType.id)}
             >
@@ -729,7 +730,7 @@ export function GuestPortal() {
               maxLength={300}
               placeholder="悄悄告诉我们：例如需要两杯温水"
             />
-            <button disabled={!note.trim() || pendingActions.has('custom-request') || !customRequestType} onClick={() => void submitCustomRequest()}><Send size={17} />{pendingActions.has('custom-request') ? '正在送达' : '告诉我们'}</button>
+            <button data-haptic="action" disabled={!note.trim() || pendingActions.has('custom-request') || !customRequestType} onClick={() => void submitCustomRequest()}><Send size={17} />{pendingActions.has('custom-request') ? '正在送达' : '告诉我们'}</button>
           </div>
         </div>
       </section>
@@ -766,7 +767,7 @@ export function GuestPortal() {
             return <article className={`guest-order ${order.id === requestedPaymentOrderId ? 'is-payment-target' : ''}`} key={order.id}>
               <header><div><strong>¥{(order.payableAmount / 100).toFixed(2)}</strong><span>{orderTimeLabel(order.createdAt)}</span></div><b className={payment?.status === 'succeeded' ? 'is-paid' : ''}>{payment?.status === 'succeeded' ? '已支付' : order.status === 'draft' ? '待支付' : '已下单'}</b></header>
               <div>{order.items.map((item) => <div className="guest-order-line" key={item.id}><span>{item.name} × {item.quantity}</span><strong>{fulfillmentLabel(item.fulfillmentStatus)}</strong></div>)}</div>
-              {!paid && order.payableAmount > 0 && <button className="guest-pay-button" disabled={Boolean(payingOrderId)} onClick={() => void payOrder(order.id)}><CreditCard size={18} />{payingOrderId === order.id ? '正在拉起微信支付' : `微信支付 ¥${(order.payableAmount / 100).toFixed(2)}`}</button>}
+              {!paid && order.payableAmount > 0 && <button className="guest-pay-button" data-haptic="action" disabled={Boolean(payingOrderId)} onClick={() => void payOrder(order.id)}><CreditCard size={18} />{payingOrderId === order.id ? '正在拉起微信支付' : `微信支付 ¥${(order.payableAmount / 100).toFixed(2)}`}</button>}
               {!paid && order.payableAmount <= 0 && <div className="guest-no-payment"><CheckCircle2 size={16} />这单已使用赠送或折扣，不用在线付款；服务伙伴会来陪您核对。</div>}
             </article>
           })}</div>

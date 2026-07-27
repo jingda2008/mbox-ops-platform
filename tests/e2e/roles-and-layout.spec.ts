@@ -137,6 +137,21 @@ test.describe('岗位权限隔离', () => {
 })
 
 test.describe('视觉与移动端适配', () => {
+  test('真实座位图展示61个正式桌位且手机端不溢出', async ({ page }) => {
+    await page.setViewportSize({ width: 430, height: 932 })
+    await useStaffIdentity(page, 'emp-owner', '陈方宇')
+    await page.goto('/')
+
+    await page.getByTitle('打开导航').click()
+    await page.locator('.sidebar nav').getByRole('button', { name: '布局', exact: true }).click()
+    await expect(page.getByRole('heading', { name: '陆家嘴店桌台布局' })).toBeVisible()
+    await expect(page.locator('.count-chip')).toHaveText('61个正式桌位')
+    const floorPlan = page.getByRole('img', { name: 'M-Box陆家嘴店2026真实座位图' })
+    await expect(floorPlan).toBeVisible()
+    expect(await floorPlan.evaluate((image: HTMLImageElement) => image.naturalWidth > 0 && image.naturalHeight > 0)).toBe(true)
+    await expectNoHorizontalOverflow(page)
+  })
+
   test('iPhone 14 Pro Max 员工页面使用抽屉导航且没有横向溢出', async ({ page }) => {
     await page.setViewportSize({ width: 430, height: 932 })
     await useStaffIdentity(page, 'emp-lin', 'Tom')

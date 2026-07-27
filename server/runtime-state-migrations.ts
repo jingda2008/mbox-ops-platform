@@ -9,6 +9,7 @@ import { normalizeHardwareState } from './hardware-domain.js'
 import { fulfillmentServiceTaskId } from './fulfillment-service.js'
 import { normalizeMenuProductConfiguration } from '../src/shared/menu-recommendation.js'
 import { applyMenuCatalogMigration } from './menu-catalog-migration.js'
+import { applyMboxVenueLayout } from './venue-layout.js'
 
 interface BuiltInRoleUpgrade {
   requiredPermissionIds: StaffPermissionId[]
@@ -388,6 +389,7 @@ function migrateFulfillmentTaskIds(state: RuntimeState) {
 export function migrateRuntimeState(state: RuntimeState): RuntimeState {
   const defaults = createSeedConfig()
   const migrated = structuredClone(state)
+  applyMboxVenueLayout(migrated)
   const normalizeChinaTimezone = migrated.store.timezone !== CHINA_TIME_ZONE
     || (migrated.reservationState?.config.businessHours?.timeZone !== undefined
       && migrated.reservationState.config.businessHours.timeZone !== CHINA_TIME_ZONE)

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.50 - 2026-07-28
+
+- Added the venue-owned 2026 floor plan and a configurable 61-table catalogue covering VIP, L, A, B, C, S, special and outdoor areas.
+- Corrected the duplicated W5 and W10 labels in the supplied visual source to unique W06 and W11 table codes.
+- Added a non-destructive layout migration that preserves occupied and reserved tables, retains legacy I tables until idle and expands staff area assignments.
+- Integrated the previously unshipped configurable employee gift-policy controls and protected fullscreen staff-assisted ordering.
+- Updated the service worker media policy and responsive layout presentation for the new floor-plan asset.
+
 ## 1.0.0-rc.49 - 2026-07-28
 
 - Fixed configuration draft saves when legacy service types omit the optional guest-visibility field.

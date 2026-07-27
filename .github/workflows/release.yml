@@ -1,0 +1,77 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish-pre-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Validate tag and release metadata
+        run: |
+          node scripts/verify-release-metadata.mjs
+          version=$(node -p "require('./package.json').version")
+          test "${GITHUB_REF_NAME}" = "v${version}"
+      - id: verified-run
+        name: Reuse the successful main CI image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id=
+          for _ in $(seq 1 60); do
+            run_id=$(gh run list \
+              --workflow ci.yml \
+              --commit "${GITHUB_SHA}" \
+              --event push \
+              --json databaseId,status,conclusion,headSha \
+              --jq 'map(select(.status == "completed" and .conclusion == "success")) | .[0].databaseId // empty')
+            [ -n "${run_id}" ] && break
+            sleep 10
+          done
+          test -n "${run_id}"
+          printf 'run_id=%s\n' "${run_id}" >> "${GITHUB_OUTPUT}"
+          gh run download "${run_id}" \
+            --name "mbox-image-${GITHUB_SHA}" \
+            --dir release-artifact
+      - name: Verify downloaded immutable bundle
+        run: |
+          version=$(node -p "require('./package.json').version")
+          node -e "
+            const fs = require('node:fs');
+            const manifest = JSON.parse(fs.readFileSync('release-artifact/release-manifest.json', 'utf8'));
+            if (manifest.releaseSha !== process.env.GITHUB_SHA) throw new Error('release SHA mismatch');
+            if (manifest.releaseVersion !== '${version}') throw new Error('release version mismatch');
+            if (!/^sha256:[0-9a-f]{64}$/.test(manifest.imageDigest)) throw new Error('image digest is not immutable');
+          "
+          (
+            cd release-artifact
+            sha256sum --check ./*.tar.gz.sha256
+          )
+      - name: Publish verified GitHub pre-release and deployment bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          assets=(release-artifact/*)
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" "${assets[@]}" \
+              --verify-tag \
+              --prerelease \
+              --title "M-BOX Ops Platform ${version}" \
+              --notes-file "docs/release-${version}.md"
+          fi

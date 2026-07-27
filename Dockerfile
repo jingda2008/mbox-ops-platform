@@ -1,7 +1,8 @@
+# syntax=docker/dockerfile:1.7
 FROM node:24-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 COPY . .
 RUN npm run build
 
@@ -14,7 +15,7 @@ ENV NODE_ENV=production
 WORKDIR /app
 RUN addgroup -S mbox && adduser -S -G mbox mbox && mkdir /data && chown mbox:mbox /data
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/dist-server ./dist-server
 COPY --from=build /app/database ./database

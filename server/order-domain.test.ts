@@ -384,6 +384,40 @@ describe('order authorization and submission', () => {
     })
   })
 
+  it('normalizes one fulfillment note and snapshots it to every KDS task', () => {
+    const state = createOrderDomainState()
+    const order = createOrderDraft(state, {
+      orderId: 'order-with-note',
+      tableSessionId: 'table-session-1',
+      createdBy: 'employee-server',
+      fulfillmentNote: '  两杯少冰\n小食一起上  ',
+      occurredAt: T0,
+      idempotencyKey: 'create-order-with-note',
+    })
+    addItem(state, order.id, itemInput({ id: 'note-line-1' }))
+    addItem(state, order.id, itemInput({ id: 'note-line-2', skuId: 'sku-2' }))
+
+    const submitted = submit(state, order.id, 'submit-order-with-note')
+
+    expect(submitted.fulfillmentNote).toBe('两杯少冰 小食一起上')
+    expect(state.kdsTasks.map((task) => task.fulfillmentNote)).toEqual([
+      '两杯少冰 小食一起上',
+      '两杯少冰 小食一起上',
+    ])
+  })
+
+  it('rejects fulfillment notes longer than 300 characters', () => {
+    const state = createOrderDomainState()
+    expect(() => createOrderDraft(state, {
+      orderId: 'order-note-too-long',
+      tableSessionId: 'table-session-1',
+      createdBy: 'employee-server',
+      fulfillmentNote: '长'.repeat(301),
+      occurredAt: T0,
+      idempotencyKey: 'create-order-note-too-long',
+    })).toThrow('订单备注不能超过300字')
+  })
+
   it('records non-fulfillment adjustment items without creating KDS work', () => {
     const state = createOrderDomainState()
     const order = draft(state)

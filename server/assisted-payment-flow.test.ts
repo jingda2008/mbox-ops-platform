@@ -126,12 +126,21 @@ describe('assisted ordering payment flow', () => {
       payload: {
         tableId: table.id,
         items: [{ productId: product.id, quantity: 1 }],
+        fulfillmentNote: '先给客人一只冰杯，酒稍后送',
         actorId: 'emp-lin',
         idempotencyKey: 'assisted-cart-order-0001',
       },
     })
     expect(orderResponse.statusCode).toBe(201)
-    expect(orderResponse.json()).toMatchObject({ status: 'submitted', amounts: { payableAmount: product.listPriceAmount } })
+    expect(orderResponse.json()).toMatchObject({
+      status: 'submitted',
+      fulfillmentNote: '先给客人一只冰杯，酒稍后送',
+      amounts: { payableAmount: product.listPriceAmount },
+    })
+    expect((await repository.read()).orderDomain.kdsTasks).toContainEqual(expect.objectContaining({
+      orderId: orderResponse.json().id,
+      fulfillmentNote: '先给客人一只冰杯，酒稍后送',
+    }))
     const kdsCountBeforePayment = (await repository.read()).orderDomain.kdsTasks.length
     const saleCountBeforePayment = (await repository.read()).inventoryDomain.movements.filter((item) => item.type === 'sale').length
 
@@ -158,7 +167,11 @@ describe('assisted ordering payment flow', () => {
     })
     expect(sessionResponse.statusCode).toBe(200)
     const session = sessionResponse.json() as GuestSessionResponse
-    expect(session.account.orders).toContainEqual(expect.objectContaining({ id: orderResponse.json().id, status: 'submitted' }))
+    expect(session.account.orders).toContainEqual(expect.objectContaining({
+      id: orderResponse.json().id,
+      status: 'submitted',
+      fulfillmentNote: '先给客人一只冰杯，酒稍后送',
+    }))
 
     const checkoutResponse = await app.inject({
       method: 'POST',

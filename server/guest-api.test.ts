@@ -953,11 +953,16 @@ describe('guest table API', () => {
           { productId: 'product-cocktail', quantity: 2 },
           { productId: 'product-fruit', quantity: 1 },
         ],
+        fulfillmentNote: '鸡尾酒少冰，小食一起上',
         idempotencyKey: 'guest-cart-payment-0001',
       },
     })
     expect(orderResponse.statusCode).toBe(201)
-    expect(orderResponse.json()).toMatchObject({ status: 'draft', amounts: { payableAmount: 30_400 } })
+    expect(orderResponse.json()).toMatchObject({
+      status: 'draft',
+      fulfillmentNote: '鸡尾酒少冰，小食一起上',
+      amounts: { payableAmount: 30_400 },
+    })
     expect((await repository.read()).orderDomain.kdsTasks).toHaveLength(0)
 
     const checkout = await app.inject({
@@ -977,7 +982,9 @@ describe('guest table API', () => {
     })
     const state = await repository.read()
     expect(state.orderDomain.kdsTasks).toHaveLength(2)
+    expect(state.orderDomain.kdsTasks.every((task) => task.fulfillmentNote === '鸡尾酒少冰，小食一起上')).toBe(true)
     expect(state.commercialOps?.printJobs).toHaveLength(2)
+    expect(state.commercialOps?.printJobs.every((job) => job.fulfillmentNote === '鸡尾酒少冰，小食一起上')).toBe(true)
     expect(state.commercialOps?.printJobs.map((job) => job.routeId).toSorted()).toEqual(['route-bar', 'route-kitchen'])
     expect(state.paymentDomain.paymentIntents[0]).toMatchObject({ status: 'succeeded', orderIds: [orderResponse.json().id] })
     await closeFixture(app, repository)

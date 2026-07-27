@@ -83,6 +83,12 @@ function assertNonEmpty(value: string, label: string) {
   if (value.trim().length === 0) throw new Error(`${label}不能为空`)
 }
 
+function normalizeFulfillmentNote(value = '') {
+  const normalized = value.trim().replace(/\s+/g, ' ')
+  if (normalized.length > 300) throw new Error('订单备注不能超过300字')
+  return normalized
+}
+
 function assertTimestamp(value: string) {
   if (Number.isNaN(Date.parse(value))) throw new Error('时间必须是有效的ISO时间')
 }
@@ -249,6 +255,7 @@ export function createOrderDraft(state: OrderDomainState, command: CreateOrderDr
   assertNonEmpty(command.tableSessionId, '桌台会话ID')
   assertNonEmpty(command.createdBy, '创建人')
   assertTimestamp(command.occurredAt)
+  const fulfillmentNote = normalizeFulfillmentNote(command.fulfillmentNote)
 
   return executeIdempotent(
     state,
@@ -264,6 +271,7 @@ export function createOrderDraft(state: OrderDomainState, command: CreateOrderDr
         tableSessionId: command.tableSessionId,
         status: 'draft',
         items: [],
+        fulfillmentNote,
         amounts: { grossAmount: 0, discountAmount: 0, giftAmount: 0, payableAmount: 0 },
         revision: 1,
         createdBy: command.createdBy,
@@ -557,6 +565,7 @@ export function submitOrder(state: OrderDomainState, command: SubmitOrderCommand
           itemName: item.name,
           specification: item.specification,
           quantity: item.quantity,
+          fulfillmentNote: order.fulfillmentNote ?? '',
           status: 'queued',
           workstation,
           productionSla: {

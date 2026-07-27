@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, CheckCircle2, ChevronRight, Clock3, Minus, Plus, Search, ShoppingCart, Sparkles, ThumbsUp, Trash2, X } from 'lucide-react'
+import { AlertTriangle, Check, CheckCircle2, ChevronRight, Clock3, MessageSquareWarning, Minus, Plus, Search, ShoppingCart, Sparkles, ThumbsUp, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ApiError } from '../api'
 import type { OrderSafetyConfig } from '../shared/commercial-ops-contracts'
@@ -29,6 +29,11 @@ export interface MenuInteraction {
   categoryId?: string
   quantity?: number
   metadata?: Record<string, string | number | boolean | null>
+}
+
+export interface MenuSubmitOptions {
+  confirmedDuplicateOrderId?: string
+  fulfillmentNote: string
 }
 
 function formatMenuAmount(amount: number) {
@@ -105,7 +110,7 @@ interface MenuOrderingWorkspaceProps {
   submitDisabled?: boolean
   guestSalesMode?: boolean
   partySize?: number
-  onSubmit: (items: MenuCartItem[], options: { confirmedDuplicateOrderId?: string }) => Promise<void>
+  onSubmit: (items: MenuCartItem[], options: MenuSubmitOptions) => Promise<void>
   onInteraction?: (interaction: MenuInteraction) => void
 }
 
@@ -136,6 +141,7 @@ export function MenuOrderingWorkspace({
   const [pendingProductId, setPendingProductId] = useState('')
   const [lastSubmittedAt, setLastSubmittedAt] = useState(0)
   const [cartOpen, setCartOpen] = useState(false)
+  const [fulfillmentNote, setFulfillmentNote] = useState('')
   const [guestMenuView, setGuestMenuView] = useState<'recommend' | 'bundles' | 'drinks' | 'food' | 'search'>('recommend')
   const [beverageFamily, setBeverageFamily] = useState('all')
   const [recommendationContext, setRecommendationContext] = useState<GuestRecommendationContext>({})
@@ -459,9 +465,10 @@ export function MenuOrderingWorkspace({
     try {
       await onSubmit(
         cartProducts.map((product) => ({ productId: product.id, quantity: cart[product.id]! })),
-        { confirmedDuplicateOrderId: duplicateOrderId },
+        { confirmedDuplicateOrderId: duplicateOrderId, fulfillmentNote: fulfillmentNote.trim() },
       )
       setCart({})
+      setFulfillmentNote('')
       setCartOpen(false)
       setLastSubmittedAt(Date.now())
       setConfirmation(null)
@@ -517,6 +524,19 @@ export function MenuOrderingWorkspace({
       </div>
     </div>
   ))
+  const fulfillmentNoteField = (
+    <label className="menu-order-note">
+      <span><MessageSquareWarning size={16} />订单备注 <small>选填 · 相关岗位会重点看到</small></span>
+      <textarea
+        value={fulfillmentNote}
+        maxLength={300}
+        rows={2}
+        placeholder="如：少冰、不要香菜、酒水和小食一起上"
+        onChange={(event) => setFulfillmentNote(event.target.value)}
+      />
+      <b>{fulfillmentNote.length}/300</b>
+    </label>
+  )
   const detailProduct = orderedProducts.find((product) => product.id === detailProductId) ?? null
   const detailComponents = detailProduct?.bundleComponents?.map((component) => ({
     ...component,
@@ -744,6 +764,7 @@ export function MenuOrderingWorkspace({
             <aside className="menu-cart-drawer" role="dialog" aria-modal="true" aria-label="购物车明细">
               <div className="menu-cart-heading"><ShoppingCart size={20} /><strong>已选商品</strong><span>{itemCount} 件</span><button className="icon-button" title="关闭购物车" onClick={() => setCartOpen(false)}><X size={18} /></button></div>
               <div className="menu-cart-lines">{cartLines}</div>
+              {fulfillmentNoteField}
               <footer className="menu-cart-drawer-footer">
                 <div><span>{deemphasizeCollapsedTotal ? '核对后收款' : '合计'}</span><strong>¥{formatMenuAmount(total)}</strong></div>
                 <button className="menu-submit-button" disabled={cartProducts.length === 0 || busy || submitDisabled} onClick={() => void submit()}>
@@ -775,6 +796,7 @@ export function MenuOrderingWorkspace({
           <aside className="menu-cart-panel">
             <div className="menu-cart-heading"><ShoppingCart size={20} /><strong>已选商品</strong><span>{itemCount} 件</span></div>
             <div className="menu-cart-lines">{cartLines}</div>
+            {fulfillmentNoteField}
             <div className="menu-cart-total"><span><ShoppingCart size={16} /><b>{itemCount}</b>件 · 合计</span><strong>¥{(total / 100).toFixed(2)}</strong></div>
             <button className="menu-submit-button" disabled={cartProducts.length === 0 || busy || submitDisabled} onClick={() => void submit()}>
               <Check size={19} />{busy ? '正在提交' : submitLabel}
@@ -860,6 +882,7 @@ export function MenuOrderingWorkspace({
           {confirmation === 'continue' ? <p>您刚完成一次下单。确认是新一轮加单后再继续，避免手滑重复上单。</p> : <>
             <div className="menu-confirm-lines">{cartProducts.map((product) => <div key={product.id}><span>{product.name} × {cart[product.id]}</span><strong>¥{((product.listPriceAmount * cart[product.id]!) / 100).toFixed(2)}</strong></div>)}</div>
             <div className="menu-confirm-total"><span>共 {itemCount} 件</span><strong>¥{(total / 100).toFixed(2)}</strong></div>
+            {fulfillmentNoteField}
             <p>{confirmation === 'duplicate' ? '请先查看订单记录。只有确定需要再上一份相同商品时，才继续加单。' : '确认后订单会送到吧台或厨房，请勿连续点击或重复提交。'}</p>
           </>}
           {confirmationError && <div className="menu-confirm-error" role="alert">{confirmationError}</div>}

@@ -147,13 +147,17 @@ export function ensureDeliveryServiceTask(
   kdsTask.pickupSla = { targetSeconds: pickupSeconds, dueAt: pickupDueAt }
   const warningSeconds = Math.max(1, Math.floor(pickupSeconds / 2))
   const owner = ownerId ? state.employees.find((employee) => employee.id === ownerId) : null
+  const fulfillmentNote = kdsTask.fulfillmentNote?.trim()
   const serviceTask: ServiceTask = {
     id: expectedId,
     tableId,
     tableSessionId: kdsTask.tableSessionId,
     serviceTypeId: deliveryServiceTypeId,
     source: 'system',
-    note: `${workstation.name}取送：${kdsTask.itemName} x ${kdsTask.quantity}`,
+    note: [
+      `${workstation.name}取送：${kdsTask.itemName} x ${kdsTask.quantity}`,
+      fulfillmentNote ? `【订单重点备注】${fulfillmentNote}` : '',
+    ].filter(Boolean).join('；'),
     status: 'pending',
     priority: serviceType.priority,
     ownerId,

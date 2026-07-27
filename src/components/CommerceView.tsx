@@ -1,4 +1,4 @@
-import { Ban, CheckCheck, ChefHat, CircleAlert, CircleDollarSign, Clock3, Copy, PackageCheck, PackageX, Play, QrCode, RotateCcw, ScanLine, ShoppingCart, Smartphone, UserRound, X } from 'lucide-react'
+import { Ban, CheckCheck, ChefHat, CircleAlert, CircleDollarSign, Clock3, Copy, MessageSquareWarning, PackageCheck, PackageX, Play, QrCode, RotateCcw, ScanLine, ShoppingCart, Smartphone, UserRound, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { actOnKdsTask, createAssistedPaymentLink, createCartOrder, decideKdsException, getCurrentActorId, managerCancelKdsTask, reportKdsException } from '../api'
 import type { BootstrapResponse } from '../shared/contracts'
@@ -14,7 +14,7 @@ import {
   openKdsException,
   stationLabel,
 } from './commerce-workspace'
-import { MenuOrderingWorkspace, type MenuCartItem } from './MenuOrderingWorkspace'
+import { MenuOrderingWorkspace, type MenuCartItem, type MenuSubmitOptions } from './MenuOrderingWorkspace'
 import { CustomerPaymentCodeScanner } from './CustomerPaymentCodeScanner'
 import type { OperationsConsoleNavigationRequest } from './OperationsConsole'
 import * as paymentApi from '../payment-api'
@@ -39,6 +39,7 @@ interface PaymentSheet extends AssistedPaymentLink {
   qrDataUrl: string
   tableSessionId: string
   paymentItems: Array<{ orderId: string; orderItemId: string; quantity: number }>
+  fulfillmentNote: string
 }
 
 type KdsFocusFilter = 'all' | 'overdue' | 'production' | 'pickup' | 'delivery'
@@ -128,7 +129,7 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
     return () => window.clearInterval(timer)
   }, [onRefresh, paymentSheet, sheetPaid])
 
-  async function submit(items: MenuCartItem[]) {
+  async function submit(items: MenuCartItem[], options: MenuSubmitOptions) {
     if (!currentEmployee) {
       const reason = '当前员工身份无效，请重新登录后再试'
       onNotice(`下单未完成：${reason}`)
@@ -144,7 +145,13 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
     }
     setBusy(true)
     try {
-      const order = await createCartOrder({ tableId: orderTable.id, items, actorId: currentEmployee.id, idempotencyKey: `cart-${crypto.randomUUID()}` })
+      const order = await createCartOrder({
+        tableId: orderTable.id,
+        items,
+        fulfillmentNote: options.fulfillmentNote,
+        actorId: currentEmployee.id,
+        idempotencyKey: `cart-${crypto.randomUUID()}`,
+      })
       const link = await createAssistedPaymentLink(order.id, { idempotencyKey: `pay-link-${crypto.randomUUID()}` })
       const paymentUrl = assistedPaymentUrl(link)
       const QRCode = await import('qrcode')
@@ -160,6 +167,7 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
         qrDataUrl,
         tableSessionId: order.tableSessionId,
         paymentItems: order.items.map((item) => ({ orderId: order.id, orderItemId: item.id, quantity: item.quantity })),
+        fulfillmentNote: order.fulfillmentNote ?? '',
       })
       onNotice('订单已确认，请客人扫码支付；客人手机订单页也已同步')
       await onRefresh()
@@ -332,6 +340,7 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
             <div><span>{sheetPaid ? '支付已确认' : '请客人扫码支付'}</span><strong>{paymentSheet.tableCode} · {money(paymentSheet.amount)}</strong></div>
             <button className="icon-button" title="关闭支付窗口" onClick={() => { setPaymentCodeScannerOpen(false); setPaymentSheet(null) }}><X size={20} /></button>
           </header>
+          {paymentSheet.fulfillmentNote && <div className="assisted-payment-note"><MessageSquareWarning size={18} /><span><strong>订单重点备注</strong>{paymentSheet.fulfillmentNote}</span></div>}
           {sheetPaid ? <div className="assisted-payment-success"><CheckCheck size={54} /><strong>支付成功</strong><span>服务员、收银与出品岗位已同步到账状态</span></div> : sheetBarcodeProcessing ? <div className="assisted-payment-processing"><Clock3 className="spin" size={48} /><strong>正在确认付款</strong><span>请勿重复扫码，到账后本页自动更新</span></div> : <>
             <div className="assisted-payment-methods">
               <button className="is-active" type="button"><QrCode size={17} />客人扫码支付</button>
@@ -426,6 +435,7 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
                   <div className="kds-product">
                     <strong>{task.itemName} × {task.quantity}</strong>
                     <span>{task.specification} · {task.workstation?.name ?? stationLabel(task.stationId)}</span>
+                    {task.fulfillmentNote && <span className="kds-fulfillment-note"><MessageSquareWarning size={14} />重点：{task.fulfillmentNote}</span>}
                     {task.remakeOf && <span className="kds-remake-badge">第 {task.remakeOf.attempt} 次补做 · 关联原订单明细</span>}
                   </div>
                   <div className="kds-meta">

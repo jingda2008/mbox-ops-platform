@@ -52,6 +52,8 @@ export interface PrintJob {
   id: string
   orderId: string
   orderItemIds: string[]
+  /** Order-note snapshot printed with this routed production ticket. */
+  fulfillmentNote?: string
   printerId: string
   routeId: string
   status: PrinterJobStatus

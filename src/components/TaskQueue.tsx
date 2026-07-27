@@ -160,7 +160,7 @@ export function TaskQueue({
                 </div>
               </div>
 
-              {task.note && <p className="task-note">{task.note}</p>}
+              {task.note && <p className={`task-note${task.note.includes('【订单重点备注】') ? ' is-important' : ''}`}>{task.note}</p>}
               <div className="ai-directive">
                 <span>AI指令</span>
                 <ol>

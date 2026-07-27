@@ -506,10 +506,11 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
               {isExpanded && <div className="table-account-details reveal-panel-target" id={detailsId} ref={accountPanelRef}>
                 <div className="table-account-orders">
                   {account.orders.map((order) => (
-                    <div className="order-summary" key={order.id}>
+                    <div className={`order-summary${order.fulfillmentNote ? ' has-fulfillment-note' : ''}`} key={order.id}>
                       <span>订单 {shortId(order.id)}</span>
                       <strong>{order.items.map((item) => `${item.name}×${item.quantity}`).join('、')}</strong>
                       <b>{money(order.amounts.payableAmount)}</b>
+                      {order.fulfillmentNote && <em>重点备注：{order.fulfillmentNote}</em>}
                     </div>
                   ))}
                 </div>

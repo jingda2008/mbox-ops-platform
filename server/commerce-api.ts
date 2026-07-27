@@ -171,8 +171,12 @@ export function registerCommerceRoutes(
               .toSorted()
           : []
         const requestedItems = input.items.map((item) => `${item.productId}:${item.quantity}`).toSorted()
-        if (previousTableId !== input.tableId || JSON.stringify(previousItems) !== JSON.stringify(requestedItems)) {
-          throw new CommerceRequestError('同一个提交标识不能用于不同桌台或不同购物车内容', 'COMMERCE_ORDER_IDEMPOTENCY_CONFLICT')
+        if (
+          previousTableId !== input.tableId
+          || JSON.stringify(previousItems) !== JSON.stringify(requestedItems)
+          || (existingOrder.fulfillmentNote ?? '') !== input.fulfillmentNote
+        ) {
+          throw new CommerceRequestError('同一个提交标识不能用于不同桌台、购物车或订单备注', 'COMMERCE_ORDER_IDEMPOTENCY_CONFLICT')
         }
         return existingOrder
       }
@@ -204,6 +208,7 @@ export function registerCommerceRoutes(
         orderId,
         tableSessionId: tableSession.id,
         createdBy: actor.actorId,
+        fulfillmentNote: input.fulfillmentNote,
         occurredAt: now,
         idempotencyKey: `${input.idempotencyKey}:draft`,
       })
@@ -238,7 +243,12 @@ export function registerCommerceRoutes(
         objectType: 'order',
         objectId: orderId,
         occurredAt: now,
-        details: { tableId: table.id, items: input.items, idempotencyKey: input.idempotencyKey },
+        details: {
+          tableId: table.id,
+          items: input.items,
+          hasFulfillmentNote: Boolean(input.fulfillmentNote),
+          idempotencyKey: input.idempotencyKey,
+        },
       })
       state.revision += 1
       return submitted

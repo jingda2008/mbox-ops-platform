@@ -661,6 +661,7 @@ function PrintJobTools({
                 <div><dt>尝试次数</dt><dd>{job.attempts}次</dd></div>
               </dl>
               <div className="print-job-items"><strong>本次打印内容</strong>{items.length > 0 ? items.map((item) => <div key={item.id}><span>{item.name}<small>{item.specification}</small></span><b>×{item.quantity}</b></div>) : <p>订单明细已归档，请凭订单号追溯。</p>}</div>
+              {(job.fulfillmentNote ?? order?.fulfillmentNote) && <div className="print-job-note"><CircleAlert size={17} /><span><strong>订单重点备注</strong>{job.fulfillmentNote ?? order?.fulfillmentNote}</span></div>}
               {job.lastError && <div className="print-job-error"><CircleAlert size={17} /><span><strong>上次失败原因</strong>{job.lastError}</span></div>}
               {canOperate ? <div className="print-job-actions">
                 {job.status === 'queued' && <>

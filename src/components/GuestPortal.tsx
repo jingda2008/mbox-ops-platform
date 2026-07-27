@@ -1,4 +1,4 @@
-import { Bell, CakeSlice, CheckCircle2, ChevronRight, CircleAlert, Clock3, CreditCard, ListChecks, MapPin, MessageCircleMore, Mic2, Music2, Search, Send, ShieldCheck, ShoppingBag, X } from 'lucide-react'
+import { Bell, CakeSlice, CheckCircle2, ChevronRight, CircleAlert, Clock3, CreditCard, ListChecks, MapPin, MessageCircleMore, MessageSquareWarning, Mic2, Music2, Search, Send, ShieldCheck, ShoppingBag, X } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { checkoutGuestOrder, createGuestOrder, createGuestSongRequest, createGuestTask, getGuestSession, trackGuestBehavior } from '../api'
 import { PendingActionRegistry } from '../pending-action-registry'
@@ -6,7 +6,7 @@ import type { GuestSessionResponse, GuestTaskView, WechatJsapiParameters } from 
 import type { GuestBehaviorEventType, GuestBehaviorValue } from '../shared/guest-insight-contracts'
 import { GUEST_SONG_TERMINAL_DISPLAY_MS, formatGuestCompactCountdown, guestCustomSongServiceNote, guestErrorMessage, guestMoodServiceNote, guestReplyNotice, guestSessionHistoryUrl, guestSongReplyNotice, guestSongStatusLabel, guestStageIsBeforeFirstSet, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks, type GuestReplyNotice } from './guest-portal-utils'
 import { serverClockOffset, useSecondClock } from './use-second-clock'
-import { MenuOrderingWorkspace, type MenuCartItem } from './MenuOrderingWorkspace'
+import { MenuOrderingWorkspace, type MenuCartItem, type MenuSubmitOptions } from './MenuOrderingWorkspace'
 import { SuperHighCommunityBand } from './SuperHighCommunityBand'
 
 const guestStatus: Record<GuestTaskView['status'], string> = {
@@ -537,7 +537,7 @@ export function GuestPortal() {
     }
   }
 
-  async function placeAndPay(items: MenuCartItem[], options: { confirmedDuplicateOrderId?: string } = {}) {
+  async function placeAndPay(items: MenuCartItem[], options: MenuSubmitOptions) {
     if (!data) return
     setCheckoutBusy(true)
     setError(null)
@@ -550,6 +550,7 @@ export function GuestPortal() {
       const order = await createGuestOrder({
         tableToken: latestTableToken.current,
         items,
+        fulfillmentNote: options.fulfillmentNote,
         idempotencyKey,
         confirmedDuplicateOrderId: options.confirmedDuplicateOrderId,
       })
@@ -749,6 +750,7 @@ export function GuestPortal() {
             return <article className={`guest-order ${order.id === requestedPaymentOrderId ? 'is-payment-target' : ''}`} key={order.id}>
               <header><div><strong>¥{(order.payableAmount / 100).toFixed(2)}</strong><span>{orderTimeLabel(order.createdAt)}</span></div><b className={payment?.status === 'succeeded' ? 'is-paid' : ''}>{payment?.status === 'succeeded' ? '已支付' : order.status === 'draft' ? '待支付' : '已下单'}</b></header>
               <div>{order.items.map((item) => <div className="guest-order-line" key={item.id}><span>{item.name} × {item.quantity}</span><strong>{fulfillmentLabel(item.fulfillmentStatus)}</strong></div>)}</div>
+              {order.fulfillmentNote && <div className="guest-order-note"><MessageSquareWarning size={16} /><span><strong>您的备注已同步给相关伙伴</strong>{order.fulfillmentNote}</span></div>}
               {!paid && order.payableAmount > 0 && <button className="guest-pay-button" data-haptic="action" disabled={Boolean(payingOrderId)} onClick={() => void payOrder(order.id)}><CreditCard size={18} />{payingOrderId === order.id ? '正在拉起微信支付' : `微信支付 ¥${(order.payableAmount / 100).toFixed(2)}`}</button>}
               {!paid && order.payableAmount <= 0 && <div className="guest-no-payment"><CheckCircle2 size={16} />这单已使用赠送或折扣，不用在线付款；服务伙伴会来陪您核对。</div>}
             </article>

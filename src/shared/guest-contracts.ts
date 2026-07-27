@@ -62,6 +62,7 @@ export interface GuestSessionResponse {
       status: OrderStatus
       createdAt: string
       payableAmount: number
+      fulfillmentNote: string
       items: Array<{
         id: string
         name: string
@@ -169,6 +170,7 @@ export const guestCartOrderSchema = z.object({
     productId: z.string().trim().min(1).max(128),
     quantity: z.number().int().min(1).max(9999),
   })).min(1).max(50),
+  fulfillmentNote: z.string().trim().max(300).default(''),
   confirmedDuplicateOrderId: z.string().trim().min(1).max(128).optional(),
   idempotencyKey: z.string().trim().min(8).max(128),
 })

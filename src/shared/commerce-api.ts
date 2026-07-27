@@ -14,6 +14,7 @@ export const cartOrderSchema = z.object({
     productId: z.string().min(1),
     quantity: z.number().int().min(1).max(9999),
   })).min(1).max(50),
+  fulfillmentNote: z.string().trim().max(300).default(''),
   actorId: z.string().min(1),
   idempotencyKey: z.string().min(8).max(128),
 })

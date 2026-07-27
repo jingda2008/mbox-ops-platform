@@ -420,6 +420,7 @@ function sessionView(
         status: order.status,
         createdAt: order.createdAt,
         payableAmount: order.amounts.payableAmount,
+        fulfillmentNote: order.fulfillmentNote ?? '',
         items: order.items.filter((item) => item.commercialLine !== false).map((item) => ({
           id: item.id,
           name: item.name,
@@ -645,9 +646,13 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
         const existingItems = existing.items
           .map((item) => `${item.skuId}:${item.quantity}`)
           .toSorted()
-        if (existing.tableSessionId !== tableSession.id || JSON.stringify(requestedItems) !== JSON.stringify(existingItems)) {
+        if (
+          existing.tableSessionId !== tableSession.id
+          || JSON.stringify(requestedItems) !== JSON.stringify(existingItems)
+          || (existing.fulfillmentNote ?? '') !== input.fulfillmentNote
+        ) {
           throw new TableAccessError(
-            '这次购物车和刚才那次不一样，我们没有重复提交。请重新确认后再下单。',
+            '这次购物车或备注和刚才那次不一样，我们没有重复提交。请重新确认后再下单。',
             'GUEST_ORDER_IDEMPOTENCY_CONFLICT',
             409,
           )
@@ -695,6 +700,7 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
         orderId,
         tableSessionId: tableSession.id,
         createdBy: actorId,
+        fulfillmentNote: input.fulfillmentNote,
         occurredAt: now,
         idempotencyKey: `${input.idempotencyKey}:draft`,
       })
@@ -716,7 +722,12 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
         objectType: 'order',
         objectId: orderId,
         occurredAt: now,
-        details: { tableId: table.id, items: input.items, idempotencyKey: input.idempotencyKey },
+        details: {
+          tableId: table.id,
+          items: input.items,
+          hasFulfillmentNote: Boolean(input.fulfillmentNote),
+          idempotencyKey: input.idempotencyKey,
+        },
       })
       state.revision += 1
       return state.orderDomain.orders.find((candidate) => candidate.id === orderId)!

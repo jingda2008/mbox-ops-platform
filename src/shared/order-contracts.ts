@@ -104,6 +104,8 @@ export interface Order {
   tableSessionId: string
   status: OrderStatus
   items: OrderItem[]
+  /** Order-level guest fulfillment request. Optional only for orders persisted before this field existed. */
+  fulfillmentNote?: string
   amounts: OrderAmounts
   revision: number
   createdBy: string
@@ -177,6 +179,8 @@ export interface KdsTask {
   itemName: string
   specification: string
   quantity: number
+  /** Immutable order-note snapshot shared with production and delivery roles. */
+  fulfillmentNote?: string
   status: KdsTaskStatus
   /** Snapshot of routing, roles and SLA so an in-flight task is not changed by later configuration. */
   workstation?: FulfillmentWorkstationConfig
@@ -235,6 +239,7 @@ export interface CreateOrderDraftCommand {
   orderId: string
   tableSessionId: string
   createdBy: string
+  fulfillmentNote?: string
   occurredAt: string
   idempotencyKey: string
 }

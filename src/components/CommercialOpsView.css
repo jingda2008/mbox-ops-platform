@@ -73,6 +73,8 @@
 .print-job-items small { color: var(--ink-soft); font-size: 9px; }
 .print-job-items p { margin: 0; color: var(--ink-soft); font-size: 11px; }
 .print-job-error { display: flex; align-items: flex-start; gap: 8px; padding: 9px 10px; border: 1px solid #e4afb2; border-radius: 5px; background: #fff2f2; color: #8f2d33; font-size: 11px; }
+.print-job-note { display: flex; align-items: flex-start; gap: 8px; padding: 9px 10px; border: 1px solid #e3c269; border-left: 4px solid #c9474e; border-radius: 5px; background: #fff7dc; color: #7b2b30; font-size: 11px; }
+.print-job-note span { display: grid; gap: 2px; }
 .print-job-error span { display: grid; gap: 2px; }
 .print-job-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; padding-top: 3px; }
 .print-job-actions > button { min-height: 40px; }

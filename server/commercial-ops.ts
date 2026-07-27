@@ -241,6 +241,7 @@ export function queuePrintJobsForOrder(state: RuntimeState, order: Order, occurr
       id: `print_job_${randomUUID()}`,
       orderId: order.id,
       orderItemIds: itemIds,
+      fulfillmentNote: order.fulfillmentNote ?? '',
       printerId: route.printerId,
       routeId: route.id,
       status: 'queued',

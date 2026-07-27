@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0-rc.47 - 2026-07-27
+
+- Added an optional order-level fulfillment note to guest and staff-assisted ordering, with a 300-character server-side limit and idempotency conflict protection.
+- Propagated one immutable note snapshot through the order, KDS tasks, delivery task, print jobs, cashier table account and guest order history.
+- Highlighted important notes at every responsible handoff so bar, kitchen, runner, cashier and manager can see the same instruction without relying on verbal relay.
+- Added integration coverage for guest ordering, staff-assisted ordering, KDS creation, print jobs and delivery task propagation.
+
 ## 1.0.0-rc.46 - 2026-07-27
 
 - Added the customer menu sales path with three comparable tonight recommendations, optional quick selection, restrained shake discovery, normal category browsing, search and product details.

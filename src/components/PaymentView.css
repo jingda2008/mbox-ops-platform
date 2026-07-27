@@ -45,6 +45,8 @@
 .order-summary { min-width: 0; display: grid; grid-template-columns: 90px minmax(0, 1fr) auto; gap: 8px; color: var(--ink-soft); font-size: 10px; }
 .order-summary strong { overflow: hidden; color: var(--ink); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .order-summary b { color: var(--ink); font-size: 11px; }
+.order-summary.has-fulfillment-note { padding: 6px 8px; border-left: 4px solid #c9474e; background: #fff7dc; }
+.order-summary em { grid-column: 1 / -1; color: #7b2b30; font-size: 10px; font-style: normal; font-weight: 800; line-height: 1.45; }
 .table-account-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 7px; }
 .table-account-actions button { min-height: 44px; font-size: 11px; }
 .collection-composer { display: grid; gap: 10px; padding: 11px 12px; border: 1px solid #d9ddd5; background: #f8faf7; }

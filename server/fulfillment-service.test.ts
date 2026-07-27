@@ -31,7 +31,8 @@ async function createSubmittedOrder(repository: JsonRepository) {
     const occurredAt = '2020-01-01T00:00:00.000Z'
     createOrderDraft(state.orderDomain, {
       orderId: 'order-fulfillment', tableSessionId: `session:table-l01:${state.store.businessDate}`,
-      createdBy: 'emp-lin', occurredAt, idempotencyKey: 'fulfillment-create-order',
+      createdBy: 'emp-lin', fulfillmentNote: '送达前先提醒客人，杯口不要放柠檬',
+      occurredAt, idempotencyKey: 'fulfillment-create-order',
     })
     addOrderItem(state.orderDomain, {
       orderId: 'order-fulfillment', actorId: 'emp-lin', occurredAt,
@@ -89,6 +90,7 @@ describe('automatic fulfillment delivery service task', () => {
     expect(deliveryTask).toMatchObject({
       serviceTypeId: 'fulfillment-delivery', source: 'system', ownerId: 'emp-lin', status: 'pending',
     })
+    expect(deliveryTask.note).toContain('【订单重点备注】送达前先提醒客人，杯口不要放柠檬')
     expect(deliveryTask.serviceTypeId).not.toBe('order-help')
 
     expect((await action(app, 'pickUp', 'fulfillment-pickup-0001', 'server', 'emp-lin')).statusCode).toBe(200)

@@ -158,6 +158,7 @@ export function salesByEmployeeCategory(state: RuntimeState): StaffCategorySales
     const employeeId = latestSalesOwner(state, order.tableSessionId) ?? 'unassigned'
     const employeeName = state.employees.find((employee) => employee.id === employeeId)?.displayName ?? '未分配'
     for (const item of order.items) {
+      if (item.commercialLine === false) continue
       const product = state.products.find((candidate) => candidate.id === item.skuId)
       const categoryId = product?.categoryId ?? 'uncategorized'
       const categoryName = product?.categoryName ?? '未分类'
@@ -187,8 +188,9 @@ export function salesByEmployeeCategory(state: RuntimeState): StaffCategorySales
     .toSorted((left, right) => right.salesAmount - left.salesAmount)
 }
 
-export function orderFingerprint(items: Array<{ skuId?: string; productId?: string; quantity: number }>) {
+export function orderFingerprint(items: Array<{ skuId?: string; productId?: string; quantity: number; commercialLine?: boolean }>) {
   return items
+    .filter((item) => item.commercialLine !== false)
     .map((item) => `${item.skuId ?? item.productId}:${item.quantity}`)
     .toSorted()
     .join('|')

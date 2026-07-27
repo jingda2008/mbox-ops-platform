@@ -9,21 +9,21 @@
   --focus-ring: rgba(32, 115, 148, .2);
 }
 
-/* Every command must read as an actionable control, including previously flat tabs. */
-button:not(.nav-backdrop) {
-  border: 1px solid var(--control-line) !important;
+/* Keep a clear default boundary without overriding purpose-built compound controls. */
+:where(button:not(.nav-backdrop)) {
+  border: 1px solid var(--control-line);
   border-radius: 6px;
   box-shadow: var(--control-shadow);
 }
 
-button:not(:disabled):not(.nav-backdrop):active,
-button:not(:disabled):not(.nav-backdrop).is-interaction-pressed {
-  box-shadow: var(--control-shadow-pressed) !important;
+:where(button:not(:disabled):not(.nav-backdrop):active),
+:where(button:not(:disabled):not(.nav-backdrop).is-interaction-pressed) {
+  box-shadow: var(--control-shadow-pressed);
 }
 
-button:disabled {
-  border-color: #d4d8d1 !important;
-  box-shadow: none !important;
+:where(button:disabled) {
+  border-color: #d4d8d1;
+  box-shadow: none;
   filter: saturate(.55);
 }
 
@@ -123,9 +123,45 @@ button[aria-pressed="true"] {
 
 .menu-stepper button {
   min-width: 32px;
-  border-color: #cbd0c7 !important;
-  border-radius: 4px;
+  border: 0;
+  border-radius: 0;
   box-shadow: none;
+}
+
+.menu-stepper button:first-child { border-right: 1px solid #cbd0c7; }
+.menu-stepper button:last-child { border-left: 1px solid #cbd0c7; }
+
+:is(
+  .menu-stepper,
+  .menu-recommendation-selected,
+  .quantity-stepper,
+  .party-stepper,
+  .product-ops-summary,
+  .product-editor-status,
+  .collection-mode,
+  .awaiting-order-snooze,
+  .transfer-kind-control
+) > button {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+:is(
+  .menu-stepper,
+  .menu-recommendation-selected,
+  .quantity-stepper,
+  .party-stepper,
+  .product-editor-status,
+  .collection-mode,
+  .awaiting-order-snooze,
+  .transfer-kind-control
+) > button.is-interaction-pressed {
+  transform: none;
+  filter: brightness(.9);
+}
+
+.product-ops-summary > button.is-active {
+  box-shadow: inset 0 -3px 0 #bd1f2d;
 }
 
 .menu-add-button {
@@ -342,7 +378,7 @@ textarea:hover { border-color: #8e978a !important; }
 .connectivity-banner { min-height: 42px; }
 
 @media (max-width: 900px) {
-  button:not(.nav-backdrop) { min-height: 40px; }
+  :where(button:not(.nav-backdrop)) { min-height: 40px; }
   .main-content { padding: 10px; }
   .topbar { min-height: 60px; padding: 8px 10px; }
   .role-home__work-grid, .live-grid { gap: 10px; }

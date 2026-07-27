@@ -1,4 +1,4 @@
-import { BadgeDollarSign, CalendarClock, CheckCircle2, CircleOff, Clock3, EyeOff, GlassWater, MapPinned, Pencil, Plus, RotateCcw, Route, Save, Search, TableProperties, UserRoundCog, X } from 'lucide-react'
+import { BadgeDollarSign, CalendarClock, CheckCircle2, CircleOff, Clock3, EyeOff, GlassWater, MapPinned, Minus, Pencil, Plus, RotateCcw, Route, Save, Search, TableProperties, UserRoundCog, X } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
   createCommerceAuthority,
@@ -30,7 +30,14 @@ import type {
   Table,
   WorkstationConfig,
 } from '../shared/contracts'
-import { staffPermissionIds } from '../shared/contracts'
+import {
+  menuBeverageFamilies,
+  menuRecommendationDwells,
+  menuRecommendationIntents,
+  menuRecommendationScenes,
+  menuRecommendationTastes,
+  staffPermissionIds,
+} from '../shared/contracts'
 import type { AuthorityWriteInput } from '../shared/commerce-api'
 import type { OrderAuthorizationAuthority } from '../shared/order-contracts'
 import { productAvailability } from '../shared/product-availability'
@@ -76,6 +83,69 @@ const permissionLabels: Record<StaffPermissionId, string> = {
 
 const scopeLabels: Record<RoleDataScope, string> = {
   own: '本人任务', assigned_areas: '负责区域', store: '本门店', all_stores: '全部门店',
+}
+
+type RecommendationDraft = NonNullable<ProductWriteInput['recommendation']>
+type RecommendationArrayField = 'sceneTags' | 'intentTags' | 'tasteTags' | 'dwellTags'
+
+const beverageFamilyLabels = {
+  none: '非酒水 / 未分类',
+  cocktail: '鸡尾酒',
+  beer: '啤酒',
+  wine: '葡萄酒',
+  sparkling: '起泡酒 / 香槟',
+  spirits: '洋酒 / 烈酒',
+  non_alcoholic: '无酒精',
+} satisfies Record<(typeof menuBeverageFamilies)[number], string>
+
+const recommendationSceneLabels = {
+  unsure: '还不确定',
+  date: '约会',
+  brothers: '兄弟',
+  besties: '闺蜜',
+  friends: '朋友',
+  business: '商务',
+  celebration: '庆祝',
+} satisfies Record<(typeof menuRecommendationScenes)[number], string>
+
+const recommendationIntentLabels = {
+  relaxed: '轻松一点',
+  energetic: '今晚要嗨',
+  ritual: '来点仪式感',
+  unsure: '还没想好',
+} satisfies Record<(typeof menuRecommendationIntents)[number], string>
+
+const recommendationTasteLabels = {
+  refreshing: '清爽',
+  layered: '有层次',
+  strong: '酒感明显',
+  any: '都可以',
+} satisfies Record<(typeof menuRecommendationTastes)[number], string>
+
+const recommendationDwellLabels = {
+  one_set: '一轮结束',
+  stay_longer: '多坐一会',
+  no_rush: '不赶时间',
+} satisfies Record<(typeof menuRecommendationDwells)[number], string>
+
+function defaultRecommendation(): RecommendationDraft {
+  return {
+    enabled: false,
+    priority: 100,
+    badge: '',
+    headline: '',
+    reason: '',
+    minimumPartySize: 1,
+    maximumPartySize: 6,
+    sceneTags: [],
+    intentTags: [],
+    tasteTags: [],
+    dwellTags: [],
+    singleWaveEligible: true,
+    expectedPrepMinutes: 8,
+    holdMinutes: 10,
+    upgradeProductId: null,
+  }
 }
 
 export function MasterDataView({ data, onRefresh, onNotice }: MasterDataViewProps) {
@@ -572,6 +642,8 @@ function ProductSection({ data, run }: SectionProps) {
       sku, name, specification: '1份', categoryId, categoryName: categories.find(([id]) => id === categoryId)?.[1] ?? '推荐', description: '', imageUrl: '', tags: [], sortOrder: data.products.length + 1, listPriceAmount: yuanToFen(price), costAmount: 0,
       stationId, enabled: true, soldOut: false, soldOutReason: '', availableFrom: null, availableUntil: null,
       guestVisible: true, requiresFulfillment: true, maxOrderQuantity: 50,
+      productKind: 'single', beverageFamily: 'none', bundleComponents: [], substitutionProductIds: [],
+      recommendation: defaultRecommendation(),
     }), `${name}已建立`)
     setSku('')
     setName('')
@@ -603,7 +675,7 @@ function ProductSection({ data, run }: SectionProps) {
       </div>
 
       {visibleProducts.length > 0 ? <div className="product-control-grid">{visibleProducts.map((product) => <ProductControlCard key={product.id} product={product} availability={productStates.get(product.id)} workstations={workstations} run={run} onEdit={() => setEditingProductId(product.id)} />)}</div> : <div className="product-empty">没有符合当前条件的商品</div>}
-      {editingProductId && <ProductEditor product={data.products.find((product) => product.id === editingProductId)!} workstations={workstations} canManageCosts={canManageCosts} run={run} onClose={() => setEditingProductId(null)} />}
+      {editingProductId && <ProductEditor product={data.products.find((product) => product.id === editingProductId)!} products={data.products} workstations={workstations} canManageCosts={canManageCosts} run={run} onClose={() => setEditingProductId(null)} />}
     </div>
   )
 }
@@ -622,7 +694,7 @@ function ProductControlCard({ product, availability, workstations, run, onEdit }
         <div className="product-card-heading"><strong>{product.name}</strong><span className="product-state-badge">{availability?.label ?? '可下单'}</span></div>
         <span className="product-card-code">{product.sku} · {product.categoryName ?? '推荐'} · 版本 {product.configVersion}</span>
         <div className="product-card-facts"><strong>¥{fenToYuan(product.listPriceAmount).toFixed(2)}</strong><span>{stationName}</span>{product.availableFrom && product.availableUntil ? <span><Clock3 size={13} />{product.availableFrom}-{product.availableUntil}</span> : <span>全时段</span>}</div>
-        {(product.tags?.length ?? 0) > 0 && <div className="product-card-tags">{product.tags?.map((tag) => <span key={tag}>{tag}</span>)}</div>}
+        {(product.tags ?? []).some((tag) => !/^V\d+\s*组合$/i.test(tag.trim())) && <div className="product-card-tags">{product.tags?.filter((tag) => !/^V\d+\s*组合$/i.test(tag.trim())).map((tag) => <span key={tag}>{tag}</span>)}</div>}
       </div>
       <div className="product-card-actions">
         {availability?.state === 'available' || availability?.state === 'scheduled' ? <button type="button" className="icon-button danger-action" title="临时售罄" onClick={() => void markSoldOut()}><CircleOff size={17} /></button> : <button type="button" className="icon-button restore-action" title="恢复供应" onClick={() => void restore()}><RotateCcw size={17} /></button>}
@@ -633,14 +705,58 @@ function ProductControlCard({ product, availability, workstations, run, onEdit }
   )
 }
 
-function ProductEditor({ product, workstations, canManageCosts, run, onClose }: { product: MenuProduct; workstations: WorkstationConfig[]; canManageCosts: boolean; run: RunAction; onClose: () => void }) {
+function ProductEditor({
+  product,
+  products,
+  workstations,
+  canManageCosts,
+  run,
+  onClose,
+}: {
+  product: MenuProduct
+  products: MenuProduct[]
+  workstations: WorkstationConfig[]
+  canManageCosts: boolean
+  run: RunAction
+  onClose: () => void
+}) {
   const [draft, setDraft] = useState<ProductWriteInput>(() => toProductDraft(product))
   const [tagsText, setTagsText] = useState(() => (product.tags ?? []).join('、'))
+  const recommendation = { ...defaultRecommendation(), ...(draft.recommendation ?? {}) }
+  const componentCandidates = useMemo(
+    () => products.filter((candidate) => candidate.id !== product.id && (candidate.productKind ?? 'single') !== 'bundle'),
+    [product.id, products],
+  )
+  const relationshipCandidates = useMemo(
+    () => products.filter((candidate) => candidate.id !== product.id),
+    [product.id, products],
+  )
+  const bundleComponentTotal = useMemo(() => {
+    const byId = new Map(products.map((candidate) => [candidate.id, candidate]))
+    return (draft.bundleComponents ?? []).reduce((total, component) => (
+      total + (byId.get(component.productId)?.listPriceAmount ?? 0) * component.quantity
+    ), 0)
+  }, [draft.bundleComponents, products])
+  const bundleDifference = bundleComponentTotal - draft.listPriceAmount
 
   async function save(event: FormEvent) {
     event.preventDefault()
     const tags = tagsText.split(/[、,，]/).map((tag) => tag.trim()).filter(Boolean)
-    const saved = await run(() => updateProductRequest(product.id, { ...draft, tags: [...new Set(tags)].slice(0, 8) }), `${draft.name}已保存`)
+    const saved = await run(() => updateProductRequest(product.id, {
+      ...draft,
+      productKind: draft.productKind ?? 'single',
+      beverageFamily: draft.beverageFamily ?? 'none',
+      bundleComponents: draft.productKind === 'bundle' ? [...(draft.bundleComponents ?? [])] : [],
+      substitutionProductIds: [...new Set(draft.substitutionProductIds ?? [])],
+      recommendation: {
+        ...recommendation,
+        sceneTags: [...new Set(recommendation.sceneTags)],
+        intentTags: [...new Set(recommendation.intentTags)],
+        tasteTags: [...new Set(recommendation.tasteTags)],
+        dwellTags: [...new Set(recommendation.dwellTags)],
+      },
+      tags: [...new Set(tags)].slice(0, 8),
+    }), `${draft.name}已保存`)
     if (saved) onClose()
   }
 
@@ -648,6 +764,61 @@ function ProductEditor({ product, workstations, canManageCosts, run, onClose }: 
     if (status === 'available') setDraft({ ...draft, enabled: true, soldOut: false, soldOutReason: '' })
     if (status === 'sold_out') setDraft({ ...draft, enabled: true, soldOut: true, soldOutReason: draft.soldOutReason || '暂时售罄' })
     if (status === 'hidden') setDraft({ ...draft, enabled: false })
+  }
+
+  function setBundleComponent(productId: string, selected: boolean) {
+    setDraft((current) => {
+      const components = current.bundleComponents ?? []
+      return {
+        ...current,
+        bundleComponents: selected
+          ? [...components.filter((component) => component.productId !== productId), { productId, quantity: 1 }]
+          : components.filter((component) => component.productId !== productId),
+      }
+    })
+  }
+
+  function setBundleComponentQuantity(productId: string, quantity: number) {
+    const normalized = Math.max(1, Math.min(9999, Math.round(quantity || 1)))
+    setDraft((current) => ({
+      ...current,
+      bundleComponents: (current.bundleComponents ?? []).map((component) => (
+        component.productId === productId ? { ...component, quantity: normalized } : component
+      )),
+    }))
+  }
+
+  function setSubstitution(productId: string, selected: boolean) {
+    setDraft((current) => {
+      const substitutions = current.substitutionProductIds ?? []
+      return {
+        ...current,
+        substitutionProductIds: selected
+          ? [...new Set([...substitutions, productId])]
+          : substitutions.filter((candidateId) => candidateId !== productId),
+      }
+    })
+  }
+
+  function updateRecommendation(patch: Partial<RecommendationDraft>) {
+    setDraft((current) => ({
+      ...current,
+      recommendation: { ...defaultRecommendation(), ...(current.recommendation ?? {}), ...patch },
+    }))
+  }
+
+  function toggleRecommendationValue(field: RecommendationArrayField, value: string, selected: boolean) {
+    setDraft((current) => {
+      const currentRecommendation = { ...defaultRecommendation(), ...(current.recommendation ?? {}) }
+      const values = currentRecommendation[field] as string[]
+      return {
+        ...current,
+        recommendation: {
+          ...currentRecommendation,
+          [field]: selected ? [...new Set([...values, value])] : values.filter((candidate) => candidate !== value),
+        } as RecommendationDraft,
+      }
+    })
   }
 
   const status = !draft.enabled ? 'hidden' : draft.soldOut ? 'sold_out' : 'available'
@@ -662,31 +833,116 @@ function ProductEditor({ product, workstations, canManageCosts, run, onClose }: 
         </div>
         <div className="product-editor-body">
           <aside className="product-image-preview">{draft.imageUrl ? <img src={draft.imageUrl} alt={`${draft.name}预览`} /> : <span>{Array.from(draft.name || '商')[0]}</span>}<small>客人菜单图片预览</small></aside>
-          <div className="product-editor-fields">
-            <label><span>SKU</span><input required value={draft.sku} onChange={(event) => setDraft({ ...draft, sku: event.target.value })} /></label>
-            <label><span>商品名称</span><input required value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
-            <label><span>规格</span><input required value={draft.specification} onChange={(event) => setDraft({ ...draft, specification: event.target.value })} /></label>
-            <label><span>分类编码</span><input required value={draft.categoryId ?? ''} onChange={(event) => setDraft({ ...draft, categoryId: event.target.value })} /></label>
-            <label><span>分类名称</span><input required value={draft.categoryName ?? ''} onChange={(event) => setDraft({ ...draft, categoryName: event.target.value })} /></label>
-            <label><span>标价（元）</span><input type="number" min={0} step="0.01" required value={fenToYuan(draft.listPriceAmount)} onChange={(event) => setDraft({ ...draft, listPriceAmount: yuanToFen(Number(event.target.value)) })} /></label>
-            {canManageCosts ? <label><span>成本（元）</span><input type="number" min={0} step="0.01" required value={fenToYuan(draft.costAmount)} onChange={(event) => setDraft({ ...draft, costAmount: yuanToFen(Number(event.target.value)) })} /></label> : <label><span>成本（财务权限）</span><input value="已保护，不会修改" disabled /></label>}
-            <label><span>出品方式</span><select value={draft.requiresFulfillment === false ? 'none' : 'workstation'} onChange={(event) => setDraft({ ...draft, requiresFulfillment: event.target.value !== 'none', stationId: event.target.value === 'none' ? 'non-fulfillment' : (workstations.find((station) => station.enabled)?.id ?? draft.stationId) })}><option value="workstation">进入吧台/厨房出品</option><option value="none">无需出品（仅计入订单）</option></select></label>
-            {draft.requiresFulfillment !== false && <label><span>出品口</span><select value={draft.stationId} onChange={(event) => setDraft({ ...draft, stationId: event.target.value })}>{!workstations.some((station) => station.id === draft.stationId) && <option value={draft.stationId}>{draft.stationId}（旧配置）</option>}{workstations.map((station) => <option key={station.id} value={station.id}>{station.name}{station.enabled ? '' : '（停用）'}</option>)}</select></label>}
-            <label><span>客人自助菜单</span><select value={draft.guestVisible === false ? 'hidden' : 'visible'} onChange={(event) => setDraft({ ...draft, guestVisible: event.target.value === 'visible' })}><option value="visible">客人可见</option><option value="hidden">仅员工可见</option></select></label>
-            <label><span>单笔最大数量</span><input type="number" min={1} max={9999} required value={draft.maxOrderQuantity ?? 50} onChange={(event) => setDraft({ ...draft, maxOrderQuantity: Math.max(1, Math.min(9999, Number(event.target.value))) })} /></label>
-            <label><span>菜单排序</span><input type="number" min={0} max={9999} value={draft.sortOrder ?? 999} onChange={(event) => setDraft({ ...draft, sortOrder: Number(event.target.value) })} /></label>
-            <label><span>供应开始</span><input type="time" value={draft.availableFrom ?? ''} onChange={(event) => setDraft({ ...draft, availableFrom: event.target.value || null })} /></label>
-            <label><span>供应结束</span><input type="time" value={draft.availableUntil ?? ''} onChange={(event) => setDraft({ ...draft, availableUntil: event.target.value || null })} /></label>
-            <label className="wide-field"><span>图片地址</span><input value={draft.imageUrl ?? ''} onChange={(event) => setDraft({ ...draft, imageUrl: event.target.value })} placeholder="/menu/product.jpg 或 HTTPS 地址" /></label>
-            <label className="wide-field"><span>标签（顿号或逗号分隔，最多8个）</span><input value={tagsText} onChange={(event) => setTagsText(event.target.value)} placeholder="招牌、低度、适合分享" /></label>
-            <label className="wide-field"><span>菜单描述</span><textarea maxLength={240} value={draft.description ?? ''} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
-            {status === 'sold_out' && <label className="wide-field"><span>售罄原因（客人可见）</span><input maxLength={80} value={draft.soldOutReason ?? ''} onChange={(event) => setDraft({ ...draft, soldOutReason: event.target.value })} placeholder="例如：今晚原料已售完" /></label>}
+          <div className="product-editor-sections">
+            <section className="product-editor-section">
+              <div className="product-editor-section-heading"><span>01</span><div><h4>基础与销售</h4><p>客人看到什么，以及订单如何进入现场。</p></div></div>
+              <div className="product-editor-fields">
+                <label><span>商品类型</span><select value={draft.productKind ?? 'single'} onChange={(event) => setDraft({ ...draft, productKind: event.target.value as 'single' | 'bundle', bundleComponents: event.target.value === 'bundle' ? (draft.bundleComponents ?? []) : [] })}><option value="single">单品</option><option value="bundle">组合商品</option></select></label>
+                <label><span>酒水类型</span><select value={draft.beverageFamily ?? 'none'} onChange={(event) => setDraft({ ...draft, beverageFamily: event.target.value as ProductWriteInput['beverageFamily'] })}>{menuBeverageFamilies.map((family) => <option key={family} value={family}>{beverageFamilyLabels[family]}</option>)}</select></label>
+                <label><span>SKU</span><input required value={draft.sku} onChange={(event) => setDraft({ ...draft, sku: event.target.value })} /></label>
+                <label><span>商品名称</span><input required value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
+                <label><span>规格</span><input required value={draft.specification} onChange={(event) => setDraft({ ...draft, specification: event.target.value })} /></label>
+                <label><span>标价（元）</span><input type="number" min={0} step="0.01" required value={fenToYuan(draft.listPriceAmount)} onChange={(event) => setDraft({ ...draft, listPriceAmount: yuanToFen(Number(event.target.value)) })} /></label>
+                {canManageCosts ? <label><span>成本（元）</span><input type="number" min={0} step="0.01" required value={fenToYuan(draft.costAmount)} onChange={(event) => setDraft({ ...draft, costAmount: yuanToFen(Number(event.target.value)) })} /></label> : <label><span>成本（财务权限）</span><input value="已保护，不会修改" disabled /></label>}
+                <label><span>分类编码</span><input required value={draft.categoryId ?? ''} onChange={(event) => setDraft({ ...draft, categoryId: event.target.value })} /></label>
+                <label><span>分类名称</span><input required value={draft.categoryName ?? ''} onChange={(event) => setDraft({ ...draft, categoryName: event.target.value })} /></label>
+                <label><span>出品方式</span><select value={draft.requiresFulfillment === false ? 'none' : 'workstation'} disabled={draft.productKind === 'bundle'} onChange={(event) => setDraft({ ...draft, requiresFulfillment: event.target.value !== 'none', stationId: event.target.value === 'none' ? 'non-fulfillment' : (workstations.find((station) => station.enabled)?.id ?? draft.stationId) })}><option value="workstation">进入吧台/厨房出品</option><option value="none">无需出品（仅计入订单）</option></select></label>
+                {draft.productKind !== 'bundle' && draft.requiresFulfillment !== false && <label><span>出品口</span><select value={draft.stationId} onChange={(event) => setDraft({ ...draft, stationId: event.target.value })}>{!workstations.some((station) => station.id === draft.stationId) && <option value={draft.stationId}>{draft.stationId}（旧配置）</option>}{workstations.map((station) => <option key={station.id} value={station.id}>{station.name}{station.enabled ? '' : '（停用）'}</option>)}</select></label>}
+                {draft.productKind === 'bundle' && <div className="product-inline-note">组合本身不直接出品，系统按组成商品分别发送到对应吧台或厨房。</div>}
+                <label><span>客人自助菜单</span><select value={draft.guestVisible === false ? 'hidden' : 'visible'} onChange={(event) => setDraft({ ...draft, guestVisible: event.target.value === 'visible' })}><option value="visible">客人可见</option><option value="hidden">仅员工可见</option></select></label>
+                <label><span>单笔最大数量</span><input type="number" min={1} max={9999} required value={draft.maxOrderQuantity ?? 50} onChange={(event) => setDraft({ ...draft, maxOrderQuantity: Math.max(1, Math.min(9999, Number(event.target.value))) })} /></label>
+                <label><span>菜单排序</span><input type="number" min={0} max={9999} value={draft.sortOrder ?? 999} onChange={(event) => setDraft({ ...draft, sortOrder: Number(event.target.value) })} /></label>
+                <label><span>供应开始</span><input type="time" value={draft.availableFrom ?? ''} onChange={(event) => setDraft({ ...draft, availableFrom: event.target.value || null })} /></label>
+                <label><span>供应结束</span><input type="time" value={draft.availableUntil ?? ''} onChange={(event) => setDraft({ ...draft, availableUntil: event.target.value || null })} /></label>
+                <label className="wide-field"><span>图片地址</span><input value={draft.imageUrl ?? ''} onChange={(event) => setDraft({ ...draft, imageUrl: event.target.value })} placeholder="/menu/product.jpg 或 HTTPS 地址" /></label>
+                <label className="wide-field"><span>标签（顿号或逗号分隔，最多8个）</span><input value={tagsText} onChange={(event) => setTagsText(event.target.value)} placeholder="招牌、低度、适合分享" /></label>
+                <label className="wide-field"><span>菜单描述</span><textarea maxLength={240} value={draft.description ?? ''} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
+                {status === 'sold_out' && <label className="wide-field"><span>售罄原因（客人可见）</span><input maxLength={80} value={draft.soldOutReason ?? ''} onChange={(event) => setDraft({ ...draft, soldOutReason: event.target.value })} placeholder="例如：今晚原料已售完" /></label>}
+              </div>
+            </section>
+
+            {draft.productKind === 'bundle' && <section className="product-editor-section">
+              <div className="product-editor-section-heading"><span>02</span><div><h4>组合内容</h4><p>只可选择普通单品；每个组成商品会独立扣库存、出品和打印。</p></div></div>
+              <div className="bundle-product-list">
+                {componentCandidates.length === 0 && <p className="product-selection-empty">暂无可加入的普通单品。</p>}
+                {componentCandidates.map((candidate) => {
+                  const component = (draft.bundleComponents ?? []).find((item) => item.productId === candidate.id)
+                  return <div className={component ? 'bundle-product-row is-selected' : 'bundle-product-row'} key={candidate.id}>
+                    <label><input type="checkbox" checked={Boolean(component)} onChange={(event) => setBundleComponent(candidate.id, event.target.checked)} /><span><strong>{candidate.name}</strong><small>{candidate.specification} · ¥{fenToYuan(candidate.listPriceAmount).toFixed(2)}</small></span></label>
+                    <div className="quantity-stepper" aria-label={`${candidate.name}数量`}>
+                      <button type="button" title={`减少${candidate.name}`} disabled={!component || component.quantity <= 1} onClick={() => setBundleComponentQuantity(candidate.id, (component?.quantity ?? 1) - 1)}><Minus size={15} /></button>
+                      <input aria-label={`${candidate.name}组成数量`} type="number" min={1} max={9999} disabled={!component} value={component?.quantity ?? 1} onChange={(event) => setBundleComponentQuantity(candidate.id, Number(event.target.value))} />
+                      <button type="button" title={`增加${candidate.name}`} disabled={!component} onClick={() => setBundleComponentQuantity(candidate.id, (component?.quantity ?? 1) + 1)}><Plus size={15} /></button>
+                    </div>
+                  </div>
+                })}
+              </div>
+              <div className="bundle-price-comparison" aria-live="polite">
+                <span><small>组成商品单点合计</small><strong>¥{fenToYuan(bundleComponentTotal).toFixed(2)}</strong></span>
+                <span><small>当前组合价</small><strong>¥{fenToYuan(draft.listPriceAmount).toFixed(2)}</strong></span>
+                <span className={bundleDifference > 0 ? 'has-real-difference' : ''}><small>真实差额</small><strong>{bundleDifference > 0 ? `比单点少 ¥${fenToYuan(bundleDifference).toFixed(2)}` : bundleDifference === 0 ? '与单点同价' : `比单点高 ¥${fenToYuan(Math.abs(bundleDifference)).toFixed(2)}`}</strong></span>
+              </div>
+              {(draft.bundleComponents?.length ?? 0) === 0 && <p className="product-validation-note">保存前至少选择一个组成商品。</p>}
+              {bundleDifference <= 0 && (draft.bundleComponents?.length ?? 0) > 0 && <p className="product-neutral-note">当前没有真实价格优势，客人端不应显示价格优势文案。</p>}
+            </section>}
+
+            <section className="product-editor-section">
+              <div className="product-editor-section-heading"><span>{draft.productKind === 'bundle' ? '03' : '02'}</span><div><h4>替换与升级</h4><p>替换项供现场协商；升级商品用于推荐更完整的选择。</p></div></div>
+              <div className="product-relation-grid">
+                <fieldset className="product-choice-field">
+                  <legend>可替换商品</legend>
+                  <div className="product-choice-list">
+                    {relationshipCandidates.map((candidate) => <label key={candidate.id}><input type="checkbox" checked={(draft.substitutionProductIds ?? []).includes(candidate.id)} onChange={(event) => setSubstitution(candidate.id, event.target.checked)} /><span>{candidate.name}<small>{candidate.productKind === 'bundle' ? '组合' : candidate.specification}</small></span></label>)}
+                  </div>
+                </fieldset>
+                <label className="product-upgrade-field"><span>升级商品</span><select value={recommendation.upgradeProductId ?? ''} onChange={(event) => updateRecommendation({ upgradeProductId: event.target.value || null })}><option value="">不设置升级</option>{relationshipCandidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name} · ¥{fenToYuan(candidate.listPriceAmount).toFixed(2)}</option>)}</select><small>必须是真实存在、可销售的更高方案。</small></label>
+              </div>
+            </section>
+
+            <section className="product-editor-section">
+              <div className="product-editor-section-heading"><span>{draft.productKind === 'bundle' ? '04' : '03'}</span><div><h4>推荐策略</h4><p>这里只配置候选条件；库存、时段和现场履约仍由系统实时校验。</p></div></div>
+              <label className="product-recommendation-switch"><input type="checkbox" checked={recommendation.enabled} onChange={(event) => updateRecommendation({ enabled: event.target.checked })} /><span><strong>参与智能推荐</strong><small>{recommendation.enabled ? '当前可进入推荐排序' : '当前不会主动推荐，但仍可在菜单中销售'}</small></span></label>
+              <div className="product-editor-fields recommendation-fields">
+                <label><span>优先级</span><input type="number" min={0} max={10000} value={recommendation.priority} onChange={(event) => updateRecommendation({ priority: Math.max(0, Math.min(10000, Number(event.target.value))) })} /></label>
+                <label><span>推荐徽标</span><input maxLength={24} value={recommendation.badge} onChange={(event) => updateRecommendation({ badge: event.target.value })} placeholder="今夜特别推荐" /></label>
+                <label><span>推荐标题</span><input maxLength={80} value={recommendation.headline} onChange={(event) => updateRecommendation({ headline: event.target.value })} placeholder="两个人，刚刚好" /></label>
+                <label className="wide-field"><span>推荐理由</span><input maxLength={160} value={recommendation.reason} onChange={(event) => updateRecommendation({ reason: event.target.value })} placeholder="说明为什么适合，不使用虚假价值表达" /></label>
+                <label><span>最少人数</span><input type="number" min={1} max={100} value={recommendation.minimumPartySize} onChange={(event) => updateRecommendation({ minimumPartySize: Math.max(1, Math.min(100, Number(event.target.value))) })} /></label>
+                <label><span>最多人数</span><input type="number" min={1} max={100} value={recommendation.maximumPartySize} onChange={(event) => updateRecommendation({ maximumPartySize: Math.max(1, Math.min(100, Number(event.target.value))) })} /></label>
+                <label><span>预计制作（分钟）</span><input type="number" min={0} max={240} value={recommendation.expectedPrepMinutes} onChange={(event) => updateRecommendation({ expectedPrepMinutes: Math.max(0, Math.min(240, Number(event.target.value))) })} /></label>
+                <label><span>最佳持有（分钟）</span><input type="number" min={0} max={240} value={recommendation.holdMinutes} onChange={(event) => updateRecommendation({ holdMinutes: Math.max(0, Math.min(240, Number(event.target.value))) })} /></label>
+                <label className="product-checkbox-field"><input type="checkbox" checked={recommendation.singleWaveEligible} onChange={(event) => updateRecommendation({ singleWaveEligible: event.target.checked })} /><span><strong>适合一次上齐</strong><small>适合三分钟内完成主要销售</small></span></label>
+              </div>
+              <div className="recommendation-choice-groups">
+                <RecommendationChoiceField label="同行场景" values={menuRecommendationScenes} labels={recommendationSceneLabels} selected={recommendation.sceneTags} onToggle={(value, selected) => toggleRecommendationValue('sceneTags', value, selected)} />
+                <RecommendationChoiceField label="今晚想要" values={menuRecommendationIntents} labels={recommendationIntentLabels} selected={recommendation.intentTags} onToggle={(value, selected) => toggleRecommendationValue('intentTags', value, selected)} />
+                <RecommendationChoiceField label="口味偏好" values={menuRecommendationTastes} labels={recommendationTasteLabels} selected={recommendation.tasteTags} onToggle={(value, selected) => toggleRecommendationValue('tasteTags', value, selected)} />
+                <RecommendationChoiceField label="停留时长" values={menuRecommendationDwells} labels={recommendationDwellLabels} selected={recommendation.dwellTags} onToggle={(value, selected) => toggleRecommendationValue('dwellTags', value, selected)} />
+              </div>
+              {recommendation.minimumPartySize > recommendation.maximumPartySize && <p className="product-validation-note">推荐最少人数不能大于最多人数。</p>}
+            </section>
           </div>
         </div>
-        <footer><span>{draft.availableFrom && draft.availableUntil ? `每日 ${draft.availableFrom}-${draft.availableUntil} 供应，支持跨午夜` : canManageCosts ? '未设置时段，营业期间均可供应' : '未设置时段，营业期间均可供应；成本受财务权限保护'}</span><div><button type="button" className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" type="submit"><Save size={17} />保存商品</button></div></footer>
+        <footer><span>{draft.productKind === 'bundle' ? `已选 ${draft.bundleComponents?.length ?? 0} 项组成商品` : draft.availableFrom && draft.availableUntil ? `每日 ${draft.availableFrom}-${draft.availableUntil} 供应，支持跨午夜` : canManageCosts ? '未设置时段，营业期间均可供应' : '成本受财务权限保护'}</span><div><button type="button" className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" type="submit"><Save size={17} />保存商品</button></div></footer>
       </form>
     </div>
   )
+}
+
+function RecommendationChoiceField<T extends string>({
+  label,
+  values,
+  labels,
+  selected,
+  onToggle,
+}: {
+  label: string
+  values: readonly T[]
+  labels: Record<T, string>
+  selected: readonly T[]
+  onToggle: (value: T, selected: boolean) => void
+}) {
+  return <fieldset className="recommendation-choice-field"><legend>{label}</legend><div>{values.map((value) => <label key={value}><input type="checkbox" checked={selected.includes(value)} onChange={(event) => onToggle(value, event.target.checked)} /><span>{labels[value]}</span></label>)}</div></fieldset>
 }
 
 function toProductDraft(product: MenuProduct): ProductWriteInput {
@@ -694,6 +950,18 @@ function toProductDraft(product: MenuProduct): ProductWriteInput {
     sku: product.sku,
     name: product.name,
     specification: product.specification,
+    productKind: product.productKind ?? 'single',
+    beverageFamily: product.beverageFamily ?? 'none',
+    bundleComponents: (product.bundleComponents ?? []).map((component) => ({ ...component })),
+    substitutionProductIds: [...(product.substitutionProductIds ?? [])],
+    recommendation: {
+      ...defaultRecommendation(),
+      ...(product.recommendation ?? {}),
+      sceneTags: [...(product.recommendation?.sceneTags ?? [])],
+      intentTags: [...(product.recommendation?.intentTags ?? [])],
+      tasteTags: [...(product.recommendation?.tasteTags ?? [])],
+      dwellTags: [...(product.recommendation?.dwellTags ?? [])],
+    },
     categoryId: product.categoryId ?? 'featured',
     categoryName: product.categoryName ?? '推荐',
     description: product.description ?? '',

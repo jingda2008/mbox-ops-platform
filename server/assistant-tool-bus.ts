@@ -194,7 +194,9 @@ export class AssistantToolBus {
           customerReference: undefined,
           salesEmployeeId: resolveEmployeeId(state, input.salesEmployeeId, actor.actorId),
           idempotencyKey: `assistant-open:${executionId}`,
-        }, actor.actorId, new Date(this.now()).toISOString())
+        }, actor.actorId, new Date(this.now()).toISOString(), {
+          allowOfflineLocalActor: actor.runtimeMode === 'local',
+        })
         result = {
           objectType: 'table', objectId: opened.table.id,
           message: `${opened.table.code}已开台，实际到店${input.partySize}人。`,

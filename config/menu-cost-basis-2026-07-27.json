@@ -1,0 +1,94 @@
+{
+  "version": "2026-07-27",
+  "currency": "CNY",
+  "amountUnit": "fen",
+  "sources": {
+    "workbook": {
+      "label": "MBOX定价与成本_完整版.xlsx",
+      "basis": "工作簿采购价或配方总成本"
+    },
+    "menu_cap": {
+      "label": "M-BOX酒水与冷食菜单V3.0_经营试点版.md",
+      "basis": "经营试点核准的保守成本上限"
+    },
+    "derived": {
+      "label": "成本基线推导",
+      "basis": "由工作簿单位成本或核准组件成本推导"
+    }
+  },
+  "products": {
+    "V2-COCKTAIL-LONG-ISLAND": { "costAmount": 1050, "source": "workbook", "note": "长岛冰茶配方总成本" },
+    "V2-COCKTAIL-SUNRISE": { "costAmount": 961, "source": "workbook", "note": "龙舌兰日出配方总成本" },
+    "V2-COCKTAIL-WHISKEY-SOUR": { "costAmount": 912, "source": "workbook", "note": "威士忌酸工作簿展示总成本" },
+    "V2-COCKTAIL-MOJITO": { "costAmount": 1003, "source": "workbook", "note": "莫吉托配方总成本" },
+    "V2-COCKTAIL-GIN-TONIC": { "costAmount": 917, "source": "workbook", "note": "金汤力配方总成本" },
+    "V2-COCKTAIL-PINA-COLADA": { "costAmount": 1071, "source": "workbook", "note": "椰林飘香配方总成本" },
+    "V2-MBOX-SIGNATURE": { "costAmount": 822, "source": "workbook", "note": "莓你不行配方总成本" },
+
+    "V2-MOCKTAIL-CINDERELLA": { "costAmount": 1200, "source": "menu_cap", "note": "无酒精特调保守成本上限，待配方卡复核" },
+    "V2-MOCKTAIL-ISLAND": { "costAmount": 1200, "source": "menu_cap", "note": "无酒精特调保守成本上限，待配方卡复核" },
+    "V2-MOCKTAIL-TEA-CITRUS": { "costAmount": 1200, "source": "menu_cap", "note": "无酒精特调保守成本上限，待配方卡复核" },
+
+    "V2-BEER-CORONA": { "costAmount": 1800, "source": "menu_cap", "note": "指定啤酒保守成本上限，待供应商进货单复核" },
+    "V2-BEER-HOEGAARDEN": { "costAmount": 1800, "source": "menu_cap", "note": "指定啤酒保守成本上限，待供应商进货单复核" },
+    "V2-BEER-STELLA": { "costAmount": 1800, "source": "menu_cap", "note": "指定啤酒保守成本上限，待供应商进货单复核" },
+    "V2-BEER-GUINNESS": { "costAmount": 1800, "source": "menu_cap", "note": "指定啤酒保守成本上限，待供应商进货单复核" },
+
+    "V2-SPIRIT-ENTRY-1": { "costAmount": 15000, "source": "workbook", "note": "芝华士12整瓶采购价" },
+    "V2-SPIRIT-ENTRY-2": { "costAmount": 15000, "source": "workbook", "note": "黑方整瓶采购价" },
+    "V2-SPIRIT-ENTRY-3": { "costAmount": 24500, "source": "workbook", "note": "格兰菲迪12整瓶采购价" },
+    "V2-SPIRIT-ENTRY-4": { "costAmount": 22000, "source": "workbook", "note": "泰斯卡10整瓶采购价" },
+    "V2-SPIRIT-MACALLAN-BLUE": { "costAmount": 58000, "source": "workbook", "note": "麦卡伦12蓝钻双桶整瓶采购价" },
+    "V2-SPIRIT-MACALLAN-SHERRY": { "costAmount": 78000, "source": "workbook", "note": "麦卡伦12雪莉桶整瓶采购价" },
+
+    "V2-WINE-CAESAR-RED": { "costAmount": 6000, "source": "workbook", "note": "凯撒干红整瓶采购价" },
+    "V2-WINE-CAESAR-WHITE": { "costAmount": 6000, "source": "workbook", "note": "凯撒干白整瓶采购价" },
+    "V2-WINE-RIESLING-DRY": { "costAmount": 7800, "source": "workbook", "note": "雷司令干白整瓶采购价" },
+    "V2-WINE-RIESLING-SEMI": { "costAmount": 7800, "source": "workbook", "note": "雷司令半甜白整瓶采购价" },
+    "V2-WINE-OYSTER-BAY": { "costAmount": 12500, "source": "workbook", "note": "蚝湾长相思整瓶采购价" },
+    "V2-WINE-PENFOLDS-28": { "costAmount": 25500, "source": "workbook", "note": "奔富28整瓶采购价" },
+    "V2-WINE-PENFOLDS-128": { "costAmount": 36500, "source": "workbook", "note": "奔富128整瓶采购价" },
+
+    "V2-SPARKLING-PROSECCO": { "costAmount": 8500, "source": "workbook", "note": "仙山露普赛寇采购价，作为当期指定普罗塞克" },
+    "V2-CHAMPAGNE-MOET": { "costAmount": 39500, "source": "workbook", "note": "酩悦整瓶采购价" },
+    "V2-CHAMPAGNE-PERRIER": { "costAmount": 47500, "source": "workbook", "note": "巴黎之花经典整瓶采购价" },
+
+    "V2-FOOD-RIVER-FRUIT": { "costAmount": 3800, "source": "menu_cap", "note": "江畔鲜果盘保守成本上限" },
+    "V2-FOOD-FRIEND-FRUIT": { "costAmount": 6800, "source": "menu_cap", "note": "好友鲜果花园保守成本上限" },
+    "V2-FOOD-BOOTH-FRUIT": { "costAmount": 11500, "source": "menu_cap", "note": "卡座鲜果盛典保守成本上限" },
+    "V2-FOOD-SALTY": { "costAmount": 2800, "source": "menu_cap", "note": "咸脆分享盘保守成本上限" },
+    "V2-FOOD-DESSERT": { "costAmount": 3800, "source": "menu_cap", "note": "甜点三重奏保守成本上限" },
+    "V2-FOOD-COLD-PLATTER": { "costAmount": 5600, "source": "menu_cap", "note": "聆听冷拼保守成本上限" },
+    "V2-COMPONENT-SHOW-SIP": { "costAmount": 1000, "source": "menu_cap", "note": "音乐配饮每杯保守成本上限" },
+    "V2-COMPONENT-SOFT-DRINK": { "costAmount": 200, "source": "derived", "note": "按工作簿软饮单位成本与330ml份量计算后向上取整" },
+
+    "V3-SIGNATURE-URBAN-OASIS": { "costAmount": 636, "source": "workbook", "note": "都市绿洲配方总成本" },
+    "V3-SIGNATURE-GARDEN-WALK": { "costAmount": 1205, "source": "workbook", "note": "漫步花园配方总成本" },
+    "V3-SIGNATURE-MELON-GIN-TONIC": { "costAmount": 985, "source": "workbook", "note": "蜜瓜金汤力配方总成本" },
+    "V3-SIGNATURE-FOREST-WHISPER": { "costAmount": 973, "source": "workbook", "note": "森林之语配方总成本" },
+    "V3-SIGNATURE-GRAPEFRUIT-SOUR": { "costAmount": 890, "source": "workbook", "note": "西柚酸配方总成本" },
+    "V3-VISUAL-GRAPE-FIZZ": { "costAmount": 1570, "source": "workbook", "note": "葡萄菲士配方总成本" },
+    "V3-VISUAL-SUNSET-DUSK": { "costAmount": 1403, "source": "workbook", "note": "落日黄昏配方总成本" },
+    "V3-LIMITED-RUINS": { "costAmount": 2215, "source": "workbook", "note": "废墟配方总成本" },
+
+    "V3-SPIRIT-JACK-DANIELS": { "costAmount": 13000, "source": "workbook", "note": "杰克丹尼整瓶采购价" },
+    "V3-SPIRIT-BUFFALO-TRACE": { "costAmount": 12500, "source": "workbook", "note": "水牛足迹整瓶采购价" },
+    "V3-SPIRIT-GLENLIVET-12": { "costAmount": 22500, "source": "workbook", "note": "格兰威特12整瓶采购价" },
+    "V3-SPIRIT-CHIVAS-18": { "costAmount": 44000, "source": "workbook", "note": "芝华士18整瓶采购价" },
+    "V3-COGNAC-HENNESSY-VSOP": { "costAmount": 60500, "source": "workbook", "note": "轩尼诗VSOP整瓶采购价" },
+    "V3-COGNAC-MARTELL-CORDON-BLEU": { "costAmount": 128000, "source": "workbook", "note": "马爹利蓝带整瓶采购价" },
+    "V3-SPARKLING-ROSE": { "costAmount": 11500, "source": "workbook", "note": "杰卡斯桃红整瓶采购价，作为当期指定桃红起泡酒" },
+
+    "V3-FOOD-FRUIT-REFILL": { "costAmount": 3000, "source": "menu_cap", "note": "水果补给盘保守成本上限" },
+    "V3-COMPONENT-COMPLETE-DRINK": { "costAmount": 2100, "source": "menu_cap", "note": "完整饮品保守成本上限" },
+    "V3-COMPONENT-SPECIFIED-BEER": { "costAmount": 1800, "source": "menu_cap", "note": "指定啤酒每杯保守成本上限" },
+    "V3-COMPONENT-SPECIFIED-WINE": { "costAmount": 12500, "source": "menu_cap", "note": "指定葡萄酒保守采购成本上限" },
+    "V3-COMPONENT-SPECIFIED-SPARKLING": { "costAmount": 11500, "source": "menu_cap", "note": "指定起泡酒保守采购成本上限" },
+    "V3-COMPONENT-SPECIFIED-SPIRIT": { "costAmount": 24500, "source": "menu_cap", "note": "指定烈酒保守采购成本上限" },
+    "V3-COMPONENT-NONALC-OPENING": { "costAmount": 1200, "source": "menu_cap", "note": "无酒精开场饮保守成本上限" },
+    "V3-COMPONENT-VISUAL-DRINK": { "costAmount": 1800, "source": "derived", "note": "按庆祝主场核准总成本反推每杯视觉特调成本上限" },
+    "V3-COMPONENT-MIXER-4": { "costAmount": 3200, "source": "derived", "note": "4份调饮搭配，每份8元" },
+    "V3-COMPONENT-MIXER-6": { "costAmount": 4800, "source": "derived", "note": "6份调饮搭配，每份8元" },
+    "V3-COMPONENT-MIXER-8": { "costAmount": 6400, "source": "derived", "note": "8份调饮搭配，每份8元" }
+  }
+}

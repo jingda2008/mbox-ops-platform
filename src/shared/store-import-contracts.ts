@@ -1,5 +1,13 @@
 import { z } from 'zod'
-import { staffPermissionIds } from './contracts.js'
+import {
+  menuBeverageFamilies,
+  menuProductKinds,
+  menuRecommendationDwells,
+  menuRecommendationIntents,
+  menuRecommendationScenes,
+  menuRecommendationTastes,
+  staffPermissionIds,
+} from './contracts.js'
 
 const identifierSchema = z.string().trim().min(1).max(128)
 const shortIdentifierSchema = z.string().trim().min(1).max(64)
@@ -63,6 +71,30 @@ const productSchema = z.object({
   sku: z.string().trim().min(1).max(40),
   name: z.string().trim().min(1).max(80),
   specification: z.string().trim().min(1).max(80),
+  productKind: z.enum(menuProductKinds).optional(),
+  beverageFamily: z.enum(menuBeverageFamilies).optional(),
+  bundleComponents: z.array(z.object({
+    productId: identifierSchema,
+    quantity: z.number().int().min(1).max(9999),
+  }).strict()).max(50).optional(),
+  substitutionProductIds: z.array(identifierSchema).max(50).optional(),
+  recommendation: z.object({
+    enabled: z.boolean(),
+    priority: z.number().int().min(0).max(10_000),
+    badge: z.string().trim().max(24),
+    headline: z.string().trim().max(80),
+    reason: z.string().trim().max(160),
+    minimumPartySize: z.number().int().min(1).max(100),
+    maximumPartySize: z.number().int().min(1).max(100),
+    sceneTags: z.array(z.enum(menuRecommendationScenes)).max(menuRecommendationScenes.length),
+    intentTags: z.array(z.enum(menuRecommendationIntents)).max(menuRecommendationIntents.length),
+    tasteTags: z.array(z.enum(menuRecommendationTastes)).max(menuRecommendationTastes.length),
+    dwellTags: z.array(z.enum(menuRecommendationDwells)).max(menuRecommendationDwells.length),
+    singleWaveEligible: z.boolean(),
+    expectedPrepMinutes: z.number().int().min(0).max(240),
+    holdMinutes: z.number().int().min(0).max(240),
+    upgradeProductId: identifierSchema.nullable(),
+  }).strict().optional(),
   categoryId: shortIdentifierSchema.optional(),
   categoryName: z.string().trim().min(1).max(40).optional(),
   description: z.string().trim().max(240).optional(),
@@ -73,6 +105,9 @@ const productSchema = z.object({
   soldOutReason: z.string().trim().max(80).optional(),
   availableFrom: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
   availableUntil: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
+  guestVisible: z.boolean().optional(),
+  requiresFulfillment: z.boolean().optional(),
+  maxOrderQuantity: z.number().int().min(1).max(9999).optional(),
   listPriceAmount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   costAmount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   stationId: shortIdentifierSchema,

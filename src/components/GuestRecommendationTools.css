@@ -1,0 +1,415 @@
+.guest-recommendation-tools {
+  width: 100%;
+  color: #171b18;
+}
+
+.guest-recommendation-entries {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 8px;
+  padding: 9px 11px;
+  border-bottom: 1px solid #d9ddd7;
+  background: #f4f5f2;
+}
+
+.guest-recommendation-entry {
+  min-width: 0;
+  min-height: 52px;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border: 1px solid #cfd4cd;
+  border-radius: 6px;
+  background: #fff;
+  color: inherit;
+  text-align: left;
+  touch-action: manipulation;
+  transition: border-color 120ms ease, background-color 120ms ease, transform 80ms ease;
+}
+
+.guest-recommendation-entry.is-shake {
+  grid-template-columns: 32px minmax(0, 1fr);
+}
+
+.guest-recommendation-entry:hover,
+.guest-recommendation-entry:focus-visible {
+  border-color: #9c8b58;
+  background: #fffdf7;
+}
+
+.guest-recommendation-entry:focus-visible,
+.guest-recommendation-icon-button:focus-visible,
+.guest-recommendation-options button:focus-visible,
+.guest-recommendation-actions button:focus-visible {
+  outline: 2px solid #8c7840;
+  outline-offset: 2px;
+}
+
+.guest-recommendation-entry:active,
+.guest-recommendation-options button:active,
+.guest-recommendation-actions button:active:not(:disabled),
+.guest-recommendation-icon-button:active {
+  transform: scale(.98);
+}
+
+.guest-recommendation-entry-icon {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #d8c88f;
+  border-radius: 50%;
+  background: #fbf7e9;
+  color: #705d22;
+}
+
+.guest-recommendation-entry > span:nth-child(2) {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.guest-recommendation-entry strong,
+.guest-recommendation-entry small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.guest-recommendation-entry strong {
+  font-size: 13px;
+}
+
+.guest-recommendation-entry small {
+  color: #6f766f;
+  font-size: 9px;
+}
+
+.guest-recommendation-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  border: 0;
+  background: rgba(9, 12, 10, .48);
+  backdrop-filter: blur(2px);
+}
+
+.guest-recommendation-sheet {
+  width: min(560px, 100%);
+  max-height: min(78vh, 680px);
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 71;
+  margin: auto;
+  overflow: auto;
+  border: 1px solid #ccd1ca;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: #fff;
+  box-shadow: 0 -18px 54px rgba(8, 11, 9, .22);
+  color: #171b18;
+  overscroll-behavior: contain;
+}
+
+.guest-recommendation-sheet-header {
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px 8px;
+}
+
+.guest-recommendation-sheet-header > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.guest-recommendation-sheet-header small,
+.guest-recommendation-product > div:last-child > small {
+  color: #7a6a3c;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.guest-recommendation-sheet-header h2 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: 0;
+}
+
+.guest-recommendation-icon-button {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #d6dad4;
+  border-radius: 50%;
+  background: #fff;
+  color: #323833;
+  touch-action: manipulation;
+}
+
+.guest-recommendation-header-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.guest-recommendation-sheet-header > .guest-recommendation-header-actions {
+  width: auto;
+  display: flex;
+  grid-template-columns: none;
+}
+
+.guest-recommendation-icon-button[aria-pressed="true"] {
+  border-color: #d1b4b4;
+  background: #f8eeee;
+  color: #7a3838;
+}
+
+.guest-recommendation-progress {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+  padding: 0 14px 12px;
+}
+
+.guest-recommendation-progress i {
+  height: 3px;
+  border-radius: 2px;
+  background: #e1e4df;
+}
+
+.guest-recommendation-progress i.is-active {
+  background: #b3933e;
+}
+
+.guest-recommendation-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 2px 14px 12px;
+}
+
+.guest-recommendation-options button {
+  min-width: 0;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid #d4d8d2;
+  border-radius: 6px;
+  background: #fafbf9;
+  color: #252b26;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: left;
+  touch-action: manipulation;
+  transition: border-color 120ms ease, background-color 120ms ease, transform 80ms ease;
+}
+
+.guest-recommendation-options button:hover,
+.guest-recommendation-options button[aria-pressed="true"] {
+  border-color: #b49a50;
+  background: #fffaf0;
+}
+
+.guest-recommendation-sheet-note {
+  padding: 2px 14px calc(14px + env(safe-area-inset-bottom));
+  color: #747b75;
+  font-size: 10px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.guest-recommendation-product {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  gap: 14px;
+  margin: 2px 14px 14px;
+  padding: 10px;
+  border: 1px solid #d5d9d3;
+  border-radius: 7px;
+  background: #fafbf9;
+}
+
+.guest-recommendation-product-image {
+  min-height: 122px;
+  position: relative;
+  overflow: hidden;
+  border-radius: 5px;
+  background: #e7eae5;
+}
+
+.guest-recommendation-product-image img {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  inset: 0;
+  object-fit: cover;
+}
+
+.guest-recommendation-product-image span {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: #626963;
+  font-size: 30px;
+  font-weight: 900;
+}
+
+.guest-recommendation-product > div:last-child {
+  min-width: 0;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+}
+
+.guest-recommendation-product h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.guest-recommendation-product p {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: #686f69;
+  font-size: 11px;
+  line-height: 1.5;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.guest-recommendation-product strong {
+  margin-top: 3px;
+  font-size: 19px;
+}
+
+.guest-recommendation-product-empty {
+  min-height: 148px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 5px;
+  margin: 2px 14px 14px;
+  border: 1px dashed #cbd0c9;
+  border-radius: 7px;
+  background: #f7f8f5;
+  color: #747b75;
+}
+
+.guest-recommendation-product-empty strong {
+  color: #303630;
+  font-size: 14px;
+}
+
+.guest-recommendation-product-empty span {
+  font-size: 10px;
+}
+
+.guest-recommendation-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid #d9ddd7;
+  background: #f5f6f3;
+}
+
+.guest-recommendation-actions button {
+  min-width: 0;
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 800;
+  touch-action: manipulation;
+  transition: opacity 120ms ease, transform 80ms ease;
+}
+
+.guest-recommendation-actions button.is-secondary {
+  border: 1px solid #cbd0ca;
+  background: #fff;
+  color: #303630;
+}
+
+.guest-recommendation-actions button.is-primary {
+  grid-column: 1 / -1;
+  border: 1px solid #1c4f39;
+  background: #205c42;
+  color: #fff;
+}
+
+.guest-recommendation-actions button:disabled {
+  cursor: not-allowed;
+  opacity: .42;
+}
+
+@media (max-width: 430px) {
+  .guest-recommendation-entries {
+    gap: 6px;
+    padding: 6px 9px;
+  }
+
+  .guest-recommendation-entry {
+    min-height: 44px;
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 6px;
+    padding: 4px 7px;
+  }
+
+  .guest-recommendation-entry > svg {
+    display: none;
+  }
+
+  .guest-recommendation-entry-icon {
+    width: 28px;
+    height: 28px;
+  }
+
+  .guest-recommendation-entry strong {
+    font-size: 12px;
+  }
+
+  .guest-recommendation-entry small {
+    font-size: 8px;
+  }
+
+  .guest-recommendation-options {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .guest-recommendation-entry,
+  .guest-recommendation-icon-button,
+  .guest-recommendation-options button,
+  .guest-recommendation-actions button {
+    transition: none;
+  }
+
+  .guest-recommendation-entry:active,
+  .guest-recommendation-options button:active,
+  .guest-recommendation-actions button:active:not(:disabled),
+  .guest-recommendation-icon-button:active {
+    transform: none;
+  }
+}

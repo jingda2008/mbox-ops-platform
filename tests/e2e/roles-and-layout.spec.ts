@@ -160,6 +160,7 @@ test.describe('视觉与移动端适配', () => {
     await expect(page.getByRole('navigation', { name: '桌台功能' })).toBeVisible()
     await expectNoHorizontalOverflow(page)
 
+    await page.getByTestId('guest-menu-view-search').click()
     const fullMenuCount = await page.locator('.menu-product').count()
     const menuSearch = page.getByLabel('搜索菜单商品')
     await menuSearch.fill('啤酒')
@@ -177,6 +178,25 @@ test.describe('视觉与移动端适配', () => {
     const mobileSummary = mobileDock.getByRole('button', { name: /查看购物车，已选1件/ })
     expect((await mobileDock.boundingBox())?.height ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(64)
     expect((await mobileSummary.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44)
+    const compactStepper = page.locator('.menu-stepper')
+    await expect(compactStepper).toHaveCount(1)
+    const compactStepperStyle = await compactStepper.evaluate((element) => ({
+      outerHeight: element.getBoundingClientRect().height,
+      buttons: Array.from(element.querySelectorAll('button')).map((button) => {
+        const style = getComputedStyle(button)
+        return {
+          height: button.getBoundingClientRect().height,
+          borderWidth: style.borderTopWidth,
+          borderRadius: style.borderRadius,
+          boxShadow: style.boxShadow,
+        }
+      }),
+    }))
+    expect(compactStepperStyle.buttons).toHaveLength(2)
+    expect(compactStepperStyle.buttons.every((button) => button.height <= compactStepperStyle.outerHeight)).toBe(true)
+    expect(compactStepperStyle.buttons.every((button) => button.borderWidth === '0px')).toBe(true)
+    expect(compactStepperStyle.buttons.every((button) => button.borderRadius === '0px')).toBe(true)
+    expect(compactStepperStyle.buttons.every((button) => button.boxShadow === 'none')).toBe(true)
     await expectNoHorizontalOverflow(page)
 
     const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze()
@@ -187,6 +207,7 @@ test.describe('视觉与移动端适配', () => {
     await page.setViewportSize({ width: 1440, height: 900 })
     await page.goto('/guest?table=L01')
 
+    await page.getByTestId('guest-menu-view-drinks').click()
     await page.getByTitle('加入招牌鸡尾酒').click()
     await expect(page.locator('.menu-cart-panel')).toHaveCount(0)
     const dock = page.getByRole('complementary', { name: '订单结算' })
@@ -216,6 +237,7 @@ test.describe('视觉与移动端适配', () => {
     await page.setViewportSize({ width: 1024, height: 768 })
     await page.goto('/guest?table=L01')
 
+    await page.getByTestId('guest-menu-view-drinks').click()
     await page.getByTitle('加入招牌鸡尾酒').click()
     const dock = page.getByRole('complementary', { name: '订单结算' })
     await expect(dock).toBeVisible()
@@ -269,7 +291,7 @@ test.describe('视觉与移动端适配', () => {
     await expect(page.getByText('请先选择客人所在桌台，再开始核对订单')).toBeVisible()
     const fullMenuCount = await page.locator('.menu-product').count()
     const menuSearch = page.getByLabel('搜索菜单商品')
-    await menuSearch.fill('鸡尾酒')
+    await menuSearch.fill('COCKTAIL-001')
     await expect(page.locator('.menu-product')).toHaveCount(1)
     await expect(page.locator('.menu-product')).toContainText('招牌鸡尾酒')
     await page.getByRole('button', { name: '清除搜索' }).click()
@@ -348,6 +370,7 @@ test.describe('视觉与移动端适配', () => {
       await route.continue()
     })
     await page.goto('/guest?table=L01')
+    await page.getByRole('navigation', { name: '桌台功能' }).getByRole('button', { name: '服务' }).click()
 
     const mood = page.getByRole('button', { name: '微醺' })
     await mood.click()
@@ -371,6 +394,7 @@ test.describe('视觉与移动端适配', () => {
       })
     })
     await page.goto('/guest?table=L01')
+    await page.getByRole('navigation', { name: '桌台功能' }).getByRole('button', { name: '服务' }).click()
 
     const mood = page.getByRole('button', { name: '微醺' })
     await mood.click()

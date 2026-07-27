@@ -17,7 +17,6 @@ import type { RuntimeState } from '../src/shared/contracts.js'
 import type { KdsTask } from '../src/shared/order-contracts.js'
 import { productAvailability } from '../src/shared/product-availability.js'
 import {
-  addOrderItem,
   completeKdsTask,
   createOrderDraft,
   decideKdsException,
@@ -43,7 +42,6 @@ import {
 } from './authorization.js'
 import {
   allowedFulfillmentRoleIds,
-  routeProductToEnabledWorkstation,
   syncOrderFulfillmentWorkstations,
 } from './fulfillment-workstations.js'
 import {
@@ -54,6 +52,7 @@ import { currentOpenTableSession, tableSessionBusinessDate } from './table-sessi
 import { signGuestSessionToken } from './table-access.js'
 import { anonymousVisitId, type GuestInsightsStore } from './guest-insights.js'
 import { queuePrintJobsForOrder } from './commercial-ops.js'
+import { addConfiguredProductToOrder } from './product-order-expansion.js'
 
 interface CommerceApiOptions {
   guestTokenSecret: string
@@ -209,28 +208,14 @@ export function registerCommerceRoutes(
         idempotencyKey: `${input.idempotencyKey}:draft`,
       })
       products.forEach(({ product, quantity }, index) => {
-        const requiresFulfillment = product.requiresFulfillment !== false
-        const stationId = requiresFulfillment
-          ? routeProductToEnabledWorkstation(state, product.stationId).id
-          : product.stationId
-        addOrderItem(state.orderDomain, {
+        addConfiguredProductToOrder(state, {
           orderId,
-          item: {
-            id: deterministicId('line', `${input.idempotencyKey}:item:${index}`),
-            skuId: product.id,
-            name: product.name,
-            specification: product.specification,
-            quantity,
-            unitListPriceAmount: product.listPriceAmount,
-            unitSalePriceAmount: product.listPriceAmount,
-            unitCostAmount: product.costAmount,
-            stationId,
-            requiresFulfillment,
-            configVersion: product.configVersion,
-          },
           actorId: actor.actorId,
           occurredAt: now,
+          product,
+          quantity,
           idempotencyKey: `${input.idempotencyKey}:item:${index}`,
+          linePrefix: 'line',
         })
       })
       const submitted = submitOrder(state.orderDomain, {
@@ -392,31 +377,16 @@ export function registerCommerceRoutes(
         idempotencyKey: `${input.idempotencyKey}:draft`,
       })
       const lineIds = products.map(({ product, quantity }, index) => {
-        const requiresFulfillment = product.requiresFulfillment !== false
-        const stationId = requiresFulfillment
-          ? routeProductToEnabledWorkstation(state, product.stationId).id
-          : product.stationId
-        const lineId = deterministicId('gift_line', `${input.idempotencyKey}:item:${index}`)
-        addOrderItem(state.orderDomain, {
+        return addConfiguredProductToOrder(state, {
           orderId,
-          item: {
-            id: lineId,
-            skuId: product.id,
-            name: product.name,
-            specification: product.specification,
-            quantity,
-            unitListPriceAmount: product.listPriceAmount,
-            unitSalePriceAmount: 0,
-            unitCostAmount: product.costAmount,
-            stationId,
-            requiresFulfillment,
-            configVersion: product.configVersion,
-          },
           actorId: actor.actorId,
           occurredAt: now,
+          product,
+          quantity,
+          saleMode: 'gift',
           idempotencyKey: `${input.idempotencyKey}:item:${index}`,
-        })
-        return lineId
+          linePrefix: 'gift_line',
+        }).parentLineId
       })
       const authorization = requestOrderAuthorization(state.orderDomain, {
         authorizationId: deterministicId('gift_authorization', input.idempotencyKey),
@@ -498,10 +468,6 @@ export function registerCommerceRoutes(
       const availability = productAvailability(product, new Date(), state.store.timezone)
       if (!availability.orderable) throw new Error(`${product.name}当前不可下单：${availability.label}`)
       syncOrderFulfillmentWorkstations(state)
-      const requiresFulfillment = product.requiresFulfillment !== false
-      const stationId = requiresFulfillment
-        ? routeProductToEnabledWorkstation(state, product.stationId).id
-        : product.stationId
       const now = new Date().toISOString()
       const orderId = deterministicId('order', input.idempotencyKey)
       createOrderDraft(state.orderDomain, {
@@ -511,24 +477,14 @@ export function registerCommerceRoutes(
         occurredAt: now,
         idempotencyKey: `${input.idempotencyKey}:draft`,
       })
-      addOrderItem(state.orderDomain, {
+      addConfiguredProductToOrder(state, {
         orderId,
-        item: {
-          id: deterministicId('line', `${input.idempotencyKey}:item:0`),
-          skuId: product.id,
-          name: product.name,
-          specification: product.specification,
-          quantity: input.quantity,
-          unitListPriceAmount: product.listPriceAmount,
-          unitSalePriceAmount: product.listPriceAmount,
-          unitCostAmount: product.costAmount,
-          stationId,
-          requiresFulfillment,
-          configVersion: product.configVersion,
-        },
         actorId: actor.actorId,
         occurredAt: now,
+        product,
+        quantity: input.quantity,
         idempotencyKey: `${input.idempotencyKey}:item`,
+        linePrefix: 'line',
       })
       const submitted = submitOrder(state.orderDomain, {
         orderId,

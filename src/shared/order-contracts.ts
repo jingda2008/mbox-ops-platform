@@ -84,6 +84,12 @@ export interface OrderItem {
   unitSalePriceAmount: MoneyAmount
   unitCostAmount: MoneyAmount
   stationId: string
+  /** False marks an operational component of a paid bundle; it never changes the guest bill. */
+  commercialLine?: boolean
+  /** Bundle component lines point to the paid parent line for audit, refund and analytics. */
+  parentOrderItemId?: string | null
+  /** False keeps a paid bundle shell from consuming stock; its component lines consume stock instead. */
+  inventoryTracked?: boolean
   /** Optional for compatibility with orders persisted before non-fulfillment products. */
   requiresFulfillment?: boolean
   configVersion: number
@@ -243,6 +249,9 @@ export interface OrderItemDraftInput {
   unitSalePriceAmount: MoneyAmount
   unitCostAmount: MoneyAmount
   stationId: string
+  commercialLine?: boolean
+  parentOrderItemId?: string | null
+  inventoryTracked?: boolean
   requiresFulfillment?: boolean
   configVersion: number
 }

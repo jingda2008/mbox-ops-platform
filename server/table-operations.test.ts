@@ -12,7 +12,7 @@ async function fixture() {
   const repository = new JsonRepository(`/tmp/mbox-table-operations-${crypto.randomUUID()}.json`)
   await repository.init()
   const app = Fastify()
-  let actor: { actorId: string; roleId: string; runtimeMode: 'test' | 'staging' | 'production' } = {
+  let actor: { actorId: string; roleId: string; runtimeMode: 'local' | 'test' | 'staging' | 'production' } = {
     actorId: 'emp-owner', roleId: 'owner', runtimeMode: 'test',
   }
   app.addHook('preHandler', async (request) => {
@@ -28,7 +28,7 @@ async function fixture() {
   return {
     app,
     repository,
-    useActor(actorId: string, roleId: string, runtimeMode: 'test' | 'staging' | 'production' = 'test') { actor = { actorId, roleId, runtimeMode } },
+    useActor(actorId: string, roleId: string, runtimeMode: 'local' | 'test' | 'staging' | 'production' = 'test') { actor = { actorId, roleId, runtimeMode } },
   }
 }
 
@@ -370,6 +370,30 @@ describe('table operating line', () => {
       actorId: 'emp-chen',
       objectId: 'table-l04',
       details: { toEmployeeId: 'emp-chen', reason: 'walk_in_open_primary_unavailable' },
+    })
+  })
+
+  it('lets the active local operator take the table when local mode has no presence leases', async () => {
+    const { app, repository, useActor } = await fixture()
+    await repository.mutate((state) => {
+      for (const employee of state.employees) employee.online = false
+      state.revision += 1
+    })
+    useActor('emp-chen', 'manager', 'local')
+
+    const opened = await app.inject({
+      method: 'POST',
+      url: '/api/tables/table-l04/walk-in-open',
+      payload: {
+        partySize: 2,
+        salesEmployeeId: 'emp-chen',
+        idempotencyKey: 'local-offline-presence-open-0001',
+      },
+    })
+
+    expect(opened.statusCode, opened.body).toBe(201)
+    expect(opened.json()).toMatchObject({
+      table: { id: 'table-l04', status: 'occupied', guestCount: 2, primaryEmployeeId: 'emp-chen' },
     })
   })
 

@@ -48,7 +48,12 @@ function childIdempotencyKey(key: string, suffix: string) {
   return `${key.slice(0, Math.max(8, 118 - suffix.length))}:${suffix}`
 }
 
-function assertTablePrimaryReady(state: RuntimeState, tableId: string, actorId: string) {
+function assertTablePrimaryReady(
+  state: RuntimeState,
+  tableId: string,
+  actorId: string,
+  allowOfflineLocalActor = false,
+) {
   const table = state.tables.find((candidate) => candidate.id === tableId)
   if (!table) throw new Error('桌台不存在')
   const canTakeTable = (employeeId: string) => {
@@ -67,7 +72,10 @@ function assertTablePrimaryReady(state: RuntimeState, tableId: string, actorId: 
     .map((employee) => employee.id)]
   const scheduledFallback = [...new Set(scheduledFallbackIds)].map(canTakeTable).find(Boolean)
   const actorFallback = state.employees.find((employee) => (
-    employee.id === actorId && employee.status === 'active' && employee.online && !employee.paused
+    employee.id === actorId
+    && employee.status === 'active'
+    && !employee.paused
+    && (employee.online || allowOfflineLocalActor)
   )) ?? null
   const fallback = scheduledFallback ?? actorFallback
   if (!fallback) {
@@ -86,6 +94,7 @@ export function openWalkInTableSession(
   input: ReturnType<typeof walkInOpenSchema.parse>,
   actorId: string,
   occurredAt = new Date().toISOString(),
+  options: { allowOfflineLocalActor?: boolean } = {},
 ) {
   const replay = state.auditEntries.find((entry) =>
     entry.action === 'table.walk_in_opened.v1' && entry.details.idempotencyKey === input.idempotencyKey,
@@ -98,7 +107,7 @@ export function openWalkInTableSession(
     if (!table || !session || !reservation) throw new Error('临客开台幂等记录不完整')
     return { table, reservation, summary: tableSessionSummary(state, session), replayed: true }
   }
-  const readiness = assertTablePrimaryReady(state, tableId, actorId)
+  const readiness = assertTablePrimaryReady(state, tableId, actorId, options.allowOfflineLocalActor)
   const table = readiness.table
   if (table.status !== 'available') throw new Error('只有空桌可以临客开台')
   if (input.partySize > table.capacity) throw new Error(`到店人数超过桌台容量：${input.partySize}/${table.capacity}`)
@@ -491,7 +500,14 @@ export function registerTableSessionRoutes(app: FastifyInstance, repository: Run
     const result = await repository.mutate((state) => {
       const actor = requireConfiguredOperation(request, state, 'table.open')
       requireTableDataScope(request, state, request.params.tableId, 'table.open')
-      return openWalkInTableSession(state, request.params.tableId, input, actor.actorId)
+      return openWalkInTableSession(
+        state,
+        request.params.tableId,
+        input,
+        actor.actorId,
+        new Date().toISOString(),
+        { allowOfflineLocalActor: actor.runtimeMode === 'local' },
+      )
     })
     return reply.status(201).send(result)
   })

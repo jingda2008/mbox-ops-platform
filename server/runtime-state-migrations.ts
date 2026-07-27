@@ -7,6 +7,8 @@ import { normalizeCommercialOpsState } from './commercial-ops.js'
 import { normalizeReservationConfig } from './reservation-domain.js'
 import { normalizeHardwareState } from './hardware-domain.js'
 import { fulfillmentServiceTaskId } from './fulfillment-service.js'
+import { normalizeMenuProductConfiguration } from '../src/shared/menu-recommendation.js'
+import { applyMenuCatalogMigration } from './menu-catalog-migration.js'
 
 interface BuiltInRoleUpgrade {
   requiredPermissionIds: StaffPermissionId[]
@@ -521,7 +523,8 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
     ['product-fruit', { categoryId: 'food', categoryName: '餐食', description: '当日鲜切水果，适合多人分享。', imageUrl: '/menu/fruit.jpg', tags: ['鲜切'], sortOrder: 3 }],
     ['product-snack', { categoryId: 'food', categoryName: '餐食', description: '热制下酒小食组合，出品约八分钟。', imageUrl: '/menu/snack.jpg', tags: ['热食'], sortOrder: 4 }],
   ])
-  migrated.products = migrated.products.map((product) => ({
+  applyMenuCatalogMigration(migrated)
+  migrated.products = migrated.products.map((product) => normalizeMenuProductConfiguration({
     soldOut: false,
     soldOutReason: '',
     availableFrom: null,

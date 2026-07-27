@@ -18,6 +18,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/dist-server ./dist-server
 COPY --from=build /app/database ./database
+COPY --from=build /app/config ./dist-server/config
 USER mbox
 ENV MBOX_JSON_STATE_PATH=/data/state.json
 VOLUME ["/data"]

@@ -949,7 +949,7 @@ html.staff-phone-device .app-shell > .nav-backdrop { display: block; }
 }
 .guest-reply > svg { flex: 0 0 auto; color: var(--danger); stroke-width: 2.7; }
 .error-banner { min-height: 44px; margin: 14px 16px 0; padding: 10px 12px; border: 1px solid #efc7c9; border-radius: 6px; background: #fff0f0; color: #9f2f34; }
-.guest-services, .guest-progress { padding: 19px 16px 21px; border-bottom: 8px solid #e9ebe6; background: #fff; }
+.guest-services, .guest-custom-request, .guest-progress { padding: 19px 16px 21px; border-bottom: 8px solid #e9ebe6; background: #fff; }
 .guest-orders { padding: 19px 16px 40px; background: #f3f4f0; }
 .guest-payment-sync { min-height: 48px; display: flex; align-items: center; gap: 9px; margin-bottom: 10px; padding: 9px 12px; border: 1px solid #e4ca78; background: #fff8dd; color: #70530e; font-size: 12px; line-height: 1.45; }
 .guest-account-frozen { display: flex; align-items: flex-start; gap: 10px; margin: 10px 12px; padding: 12px 14px; border: 1px solid #d8ae3f; border-left: 4px solid #c99a22; background: #fff9e7; color: #5c4611; }
@@ -999,6 +999,8 @@ html.staff-phone-device .app-shell > .nav-backdrop { display: block; }
 .service-button[data-service-code="birthday"] svg:first-child { color: #ad7714; }
 .service-button[data-service-code="bill"] svg:first-child { color: var(--wechat-green); }
 .guest-note { display: grid; gap: 7px; margin-top: 13px; }
+.guest-custom-request .guest-note { margin-top: 0; }
+.guest-custom-request .guest-note > span { color: var(--ink); font-size: 14px; font-weight: 800; }
 .guest-note span { color: var(--ink-soft); font-size: 12px; font-weight: 700; }
 .guest-note input { width: 100%; height: 44px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--ink); background: #fff; }
 .guest-note-row { display: grid; grid-template-columns: minmax(0, 1fr) 108px; gap: 8px; }

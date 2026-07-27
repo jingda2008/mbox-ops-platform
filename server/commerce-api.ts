@@ -53,6 +53,7 @@ import { signGuestSessionToken } from './table-access.js'
 import { anonymousVisitId, type GuestInsightsStore } from './guest-insights.js'
 import { queuePrintJobsForOrder } from './commercial-ops.js'
 import { addConfiguredProductToOrder } from './product-order-expansion.js'
+import { requireGiftPolicy } from './gift-policy.js'
 
 interface CommerceApiOptions {
   guestTokenSecret: string
@@ -375,14 +376,22 @@ export function registerCommerceRoutes(
         return total + amount
       }, 0)
       requireApprovalAmount(request, state, 'gift', giftAmount, 'commerce.complimentary_order.create')
-      syncOrderFulfillmentWorkstations(state)
       const now = new Date().toISOString()
-      const orderId = deterministicId('gift_order', input.idempotencyKey)
       const tableSession = currentOpenTableSession(state, table.id)
+      const giftPolicy = requireGiftPolicy(state, {
+        actorId: actor.actorId,
+        tableSessionId: tableSession.id,
+        items: products.map(({ product, quantity }) => ({ productId: product.id, quantity })),
+        amount: giftAmount,
+        occurredAt: now,
+      })
+      syncOrderFulfillmentWorkstations(state)
+      const orderId = deterministicId('gift_order', input.idempotencyKey)
       createOrderDraft(state.orderDomain, {
         orderId,
         tableSessionId: tableSession.id,
         createdBy: actor.actorId,
+        fulfillmentNote: input.fulfillmentNote,
         occurredAt: now,
         idempotencyKey: `${input.idempotencyKey}:draft`,
       })
@@ -440,6 +449,10 @@ export function registerCommerceRoutes(
           items: input.items,
           giftAmount,
           reason: input.reason,
+          hasFulfillmentNote: Boolean(input.fulfillmentNote),
+          giftAuthorityId: giftPolicy.authorityId,
+          giftUsageBefore: giftPolicy.usageBefore,
+          giftUsageAfter: giftPolicy.usageAfter,
           sourceKdsTaskId: input.sourceKdsTaskId,
           idempotencyKey: input.idempotencyKey,
         },
@@ -809,7 +822,7 @@ export function registerCommerceRoutes(
     const input = authorizationDecisionSchema.parse(request.body)
     return repository.mutate((state) => {
       const now = new Date()
-      const actor = requireCommerceDecisionAuthority(request, state, request.params.authorizationId, now)
+      const actor = requireCommerceDecisionAuthority(request, state, request.params.authorizationId, now, input.decision)
       const idempotencyCount = state.orderDomain.idempotencyRecords.length
       const result = decideOrderAuthorization(state.orderDomain, {
         authorizationId: request.params.authorizationId,

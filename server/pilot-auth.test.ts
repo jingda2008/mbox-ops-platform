@@ -150,6 +150,46 @@ describe('pilot employee auth', () => {
     await app.close()
   })
 
+  it('verifies only the current employee PIN without issuing a new session', async () => {
+    const app = Fastify()
+    app.decorateRequest('mboxActor', null)
+    app.addHook('preHandler', async (request) => {
+      if (request.url === '/api/auth/verify-pin') {
+        request.mboxActor = {
+          actorId: 'emp-chen',
+          storeId: 'mbox-lujiazui',
+          roleId: 'manager',
+          runtimeMode: 'test',
+          authenticatedBy: 'local_header',
+          sessionId: null,
+          sessionExpiresAt: null,
+        }
+      }
+    })
+    await registerPilotAuthRoutes(app, repository(), authOptions())
+
+    const denied = await app.inject({
+      method: 'POST',
+      url: '/api/auth/verify-pin',
+      payload: { employeePin: employeePins['emp-lin'] },
+    })
+    expect(denied.statusCode).toBe(401)
+    expect(denied.json()).toMatchObject({
+      code: 'PILOT_EMPLOYEE_PIN_DENIED',
+      message: '员工PIN错误，请输入当前登录员工的PIN',
+    })
+
+    const verified = await app.inject({
+      method: 'POST',
+      url: '/api/auth/verify-pin',
+      payload: { employeePin: employeePins['emp-chen'] },
+    })
+    expect(verified.statusCode).toBe(200)
+    expect(verified.json()).toEqual({ verified: true, actorId: 'emp-chen' })
+    expect(verified.json()).not.toHaveProperty('token')
+    await app.close()
+  })
+
   it('allows five failures, blocks the sixth, expires the window, and clears failures after success', async () => {
     let limiterNow = Date.parse('2030-07-14T10:00:00.000Z')
     const app = Fastify()

@@ -56,6 +56,21 @@ export function createOrderDomainState(
     if (Date.parse(authority.validUntil) < Date.parse(authority.validFrom)) throw new Error('授权有效期不合法')
     authority.tableSessionIds?.forEach((tableSessionId) => assertNonEmpty(tableSessionId, '授权桌台会话ID'))
     authority.allowedSkuIds?.forEach((skuId) => assertNonEmpty(skuId, '授权商品ID'))
+    authority.allowedCategoryIds?.forEach((categoryId) => assertNonEmpty(categoryId, '授权商品分类ID'))
+    for (const [value, label] of [
+      [authority.maxPerTableAmount, '单桌累计赠送额度'],
+      [authority.maxPerShiftAmount, '班次累计赠送额度'],
+      [authority.maxPerBusinessDayAmount, '营业日累计赠送额度'],
+      [authority.maxPerMonthAmount, '月度累计赠送额度'],
+    ] as const) {
+      if (value != null) assertNonNegativeMoney(value, label)
+    }
+    if (authority.maxPerBusinessDayCount != null && (!Number.isSafeInteger(authority.maxPerBusinessDayCount) || authority.maxPerBusinessDayCount < 1)) {
+      throw new Error('营业日赠送次数必须为正整数')
+    }
+    if (authority.maxQuantityPerOrder != null && (!Number.isSafeInteger(authority.maxQuantityPerOrder) || authority.maxQuantityPerOrder < 1)) {
+      throw new Error('单次赠送数量必须为正整数')
+    }
   }
   validateFulfillmentWorkstations(fulfillmentWorkstations)
   return {
@@ -65,6 +80,7 @@ export function createOrderDomainState(
       ...authority,
       kinds: [...authority.kinds],
       allowedSkuIds: authority.allowedSkuIds ? [...authority.allowedSkuIds] : null,
+      allowedCategoryIds: authority.allowedCategoryIds ? [...authority.allowedCategoryIds] : null,
       tableSessionIds: authority.tableSessionIds ? [...authority.tableSessionIds] : null,
     })),
     fulfillmentWorkstations: fulfillmentWorkstations.map((workstation) => ({
@@ -435,7 +451,11 @@ export function decideOrderAuthorization(
           candidate.actorId === command.decidedBy &&
           candidate.kinds.includes(authorization.kind) &&
           candidate.maxAmount >= authorization.requestedAmount &&
-          (candidate.allowedSkuIds == null || authorizationItems.every((item) => candidate.allowedSkuIds?.includes(item.skuId))) &&
+          (
+            candidate.allowedCategoryIds != null
+            || candidate.allowedSkuIds == null
+            || authorizationItems.every((item) => candidate.allowedSkuIds?.includes(item.skuId))
+          ) &&
           (candidate.tableSessionIds === null || candidate.tableSessionIds.includes(order.tableSessionId)) &&
           occurredAt >= Date.parse(candidate.validFrom) &&
           occurredAt <= Date.parse(candidate.validUntil),

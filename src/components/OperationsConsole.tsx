@@ -647,6 +647,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
         tableId: selectedTable.id,
         items: [{ productId: giftProductId, quantity: giftQuantity }],
         reason: giftReason.trim(),
+        fulfillmentNote: '',
         sourceKdsTaskId: turnoverAccounting.taskId,
         idempotencyKey: `turnover-gift-${crypto.randomUUID()}`,
       })
@@ -1029,7 +1030,10 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
                       <div className="area-row" key={area.id}>
                         <div className="area-label" style={{ borderColor: area.color }}><strong>{area.shortName}</strong><span>{area.name}</span></div>
                         <div className="table-grid">
-                          {data.tables.filter((table) => table.areaId === area.id).map((table) => {
+                          {data.tables
+                            .filter((table) => table.areaId === area.id)
+                            .toSorted((left, right) => left.code.localeCompare(right.code, 'zh-CN', { numeric: true }))
+                            .map((table) => {
                             const owner = data.employees.find((employee) => employee.id === table.primaryEmployeeId)
                             const taskCount = openTasks.filter((task) => task.tableId === table.id).length
                             const awaitingOrder = data.awaitingOrderIntents.find(
@@ -1046,7 +1050,11 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
                                 <strong>{table.displayName}</strong>
                                 <small>{awaitingOrder
                                   ? `营业中 · 待点单 ${elapsedMinutes(awaitingOrder.startedAt)}分钟 · ${owner?.displayName}`
-                                  : table.status === 'occupied' ? `营业中 · ${table.guestCount}位 · ${owner?.displayName}` : table.status === 'reserved' ? '已预留 · 待到店' : '未开台 · 点击开台'}</small>
+                                  : table.status === 'occupied'
+                                    ? `营业中 · ${table.guestCount}位 · ${owner?.displayName}`
+                                    : table.status === 'reserved'
+                                      ? '已预留 · 待到店'
+                                      : table.status === 'paused' ? '暂停使用' : '未开台 · 点击开台'}</small>
                                 {taskCount > 0 && <b className="table-task-count">{taskCount}</b>}
                               </button>
                             )
@@ -1121,16 +1129,16 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
           {view === 'layout' && (
             <section className="layout-view">
               <div className="section-heading">
-                <div><span className="eyebrow">输入资料 · 2026-07-13</span><h2>门店分区参考</h2></div>
-                <span className="count-chip">{data.tables.length}桌已配置</span>
+                <div><span className="eyebrow">正式座位图 · 2026-07-28</span><h2>陆家嘴店桌台布局</h2></div>
+                <span className="count-chip">{data.tables.filter((table) => table.areaId !== 'interactive').length}个正式桌位</span>
               </div>
               <div className="layout-content">
-                <figure><img src="/assets/mbox-floorplan.png" alt="M-Box陆家嘴店座位功能分区图" /></figure>
+                <figure><img src="/assets/mbox-floorplan-2026.webp" alt="M-Box陆家嘴店2026真实座位图" /></figure>
                 <div className="layout-area-list">
-                  {data.areas.map((area) => (
+                  {data.areas.toSorted((left, right) => left.sortOrder - right.sortOrder).map((area) => (
                     <div className="layout-area" key={area.id}>
                       <i style={{ background: area.color }} />
-                      <div><strong>{area.name}</strong><span>{data.tables.filter((table) => table.areaId === area.id).length}桌</span></div>
+                      <div><strong>{area.name}</strong><span>{data.tables.filter((table) => table.areaId === area.id && table.status !== 'paused').length}桌</span></div>
                     </div>
                   ))}
                 </div>

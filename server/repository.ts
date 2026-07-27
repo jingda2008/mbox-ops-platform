@@ -4,6 +4,7 @@ import type { RuntimeState } from '../src/shared/contracts.js'
 import type { ConfigVersionRecord } from '../src/shared/config-versioning-contracts.js'
 import { createSeedState } from './seed.js'
 import { migrateRuntimeState } from './runtime-state-migrations.js'
+import { applyMboxVenueLayout } from './venue-layout.js'
 
 export interface RuntimeRepositoryHealth {
   ready: boolean
@@ -111,6 +112,7 @@ export class JsonRepository {
       await this.persist(this.state)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      applyMboxVenueLayout(this.state)
       await this.persist(this.state)
     }
   }
@@ -146,6 +148,7 @@ export class JsonRepository {
     return this.mutate((state) => {
       const nextRevision = state.revision + 1
       const next = createSeedState()
+      applyMboxVenueLayout(next)
       next.revision = nextRevision
       Object.assign(state, next)
       return state

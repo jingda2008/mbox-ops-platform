@@ -132,6 +132,13 @@ export function createPilotSession(storeAccessToken: string, actorId: string, em
   })
 }
 
+export function verifyCurrentEmployeePin(employeePin: string) {
+  return request<{ verified: true; actorId: string }>('/api/auth/verify-pin', {
+    method: 'POST',
+    body: JSON.stringify({ employeePin }),
+  })
+}
+
 export function heartbeatStaffPresence() {
   return request<StaffPresenceResponse>('/api/auth/presence/heartbeat', { method: 'POST' })
 }

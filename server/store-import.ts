@@ -716,6 +716,16 @@ function semanticIssues(state: RuntimeState, input: StoreImportPackage, candidat
         if (!products.has(productId)) add('error', 'PRODUCT_REFERENCE_MISSING', `权限 ${authority.id} 引用了不存在的商品ID ${productId}`, 'authorizationAuthorities', row, 'allowedSkuIds')
       }
     }
+    if (authority.allowedCategoryIds) {
+      if (new Set(authority.allowedCategoryIds).size !== authority.allowedCategoryIds.length) add('error', 'AUTHORITY_CATEGORY_DUPLICATE', `权限 ${authority.id} 的商品分类白名单重复`, 'authorizationAuthorities', row, 'allowedCategoryIds')
+      const categoryIds = new Set(candidate.products.map((product) => product.categoryId ?? 'featured'))
+      for (const categoryId of authority.allowedCategoryIds) {
+        if (!categoryIds.has(categoryId)) add('error', 'CATEGORY_REFERENCE_MISSING', `权限 ${authority.id} 引用了不存在的商品分类 ${categoryId}`, 'authorizationAuthorities', row, 'allowedCategoryIds')
+      }
+    }
+    if (authority.allowedSkuIds?.length === 0 && authority.allowedCategoryIds?.length === 0) {
+      add('error', 'AUTHORITY_PRODUCT_SCOPE_EMPTY', `权限 ${authority.id} 没有可赠送的商品或分类`, 'authorizationAuthorities', row, 'allowedSkuIds')
+    }
     if (authority.tableSessionIds) {
       if (new Set(authority.tableSessionIds).size !== authority.tableSessionIds.length) add('error', 'AUTHORITY_SESSION_DUPLICATE', `权限 ${authority.id} 的桌台会话重复`, 'authorizationAuthorities', row, 'tableSessionIds')
       for (const sessionId of authority.tableSessionIds) {

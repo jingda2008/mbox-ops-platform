@@ -81,7 +81,12 @@
 .table-config-row { grid-template-columns: 80px minmax(110px, .8fr) 90px 70px 100px 100px 42px; }
 .area-config-row { grid-template-columns: 70px minmax(180px, 1fr) 120px 80px 42px; }
 .product-row { grid-template-columns: 90px minmax(120px, 1fr) 80px minmax(100px, .7fr) minmax(150px, 1fr) minmax(160px, 1.2fr) 85px 85px 100px 55px 42px; }
-.authority-row { grid-template-columns: minmax(120px, .8fr) minmax(130px, 1fr) minmax(120px, .7fr) minmax(260px, 2fr) minmax(180px, 1fr) 42px; }
+.authority-row { display: grid; gap: 12px; }
+.authority-row-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.authority-policy-grid { display: grid; grid-template-columns: repeat(5, minmax(130px, 1fr)); gap: 10px; }
+.authority-policy-grid label { min-width: 0; display: grid; gap: 5px; }
+.authority-policy-grid label > span { color: var(--ink-soft); font-size: 11px; font-weight: 700; }
+.authority-scope-grid { display: grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 10px; }
 .authority-note { color: var(--ink-soft); font-size: 12px; padding: 0 2px 10px; }
 .product-authority > div { max-height: 76px; overflow: auto; }
 .row-identity { min-width: 0; display: grid; gap: 3px; }
@@ -175,9 +180,11 @@
 
 @media (max-width: 1180px) {
   .inline-create.shift-create { grid-template-columns: repeat(3, minmax(150px, 1fr)); }
-  .employee-row, .shift-row, .table-config-row, .area-config-row, .product-row, .authority-row {
+  .employee-row, .shift-row, .table-config-row, .area-config-row, .product-row {
     grid-template-columns: repeat(3, minmax(150px, 1fr));
   }
+  .authority-policy-grid { grid-template-columns: repeat(3, minmax(130px, 1fr)); }
+  .authority-scope-grid { grid-template-columns: 1fr; }
   .routing-toolbar { grid-template-columns: 1fr; }
   .workstation-routing-grid { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
   .role-policy-summary, .role-limit-grid { grid-template-columns: repeat(3, minmax(140px, 1fr)); }
@@ -185,9 +192,10 @@
 }
 
 @media (max-width: 700px) {
-  .inline-create, .inline-create.shift-create, .employee-row, .shift-row, .table-config-row, .area-config-row, .product-row, .authority-row {
+  .inline-create, .inline-create.shift-create, .employee-row, .shift-row, .table-config-row, .area-config-row, .product-row {
     grid-template-columns: 1fr;
   }
+  .authority-policy-grid, .authority-scope-grid { grid-template-columns: 1fr; }
   .routing-create, .skill-row, .workstation-summary, .workstation-routing-grid, .role-policy-summary, .role-limit-grid { grid-template-columns: 1fr; }
   .routing-savebar { align-items: stretch; flex-direction: column; }
   .routing-savebar .primary-button { width: 100%; }

@@ -442,7 +442,7 @@ describe('staff role authorization', () => {
     serverRole.approvalLimits!.giftAmount = configuredAuthority.maxAmount + 100
     state.orderDomain.authorizations[0]!.requestedAmount = configuredAuthority.maxAmount + 1
     expect(() => requireCommerceDecisionAuthority(request, state, 'authorization-test', duringAuthority))
-      .toThrowError('当前员工没有有效的经营审批授权')
+      .toThrowError('单次赠送额度不足')
 
     configuredAuthority.maxAmount = 10_000
     serverRole.approvalLimits!.giftAmount = 500

@@ -5,7 +5,7 @@ const ACTIVE_CACHES = new Set([STATIC_CACHE, MEDIA_CACHE])
 const APP_SHELL_URL = '/'
 const SENSITIVE_PATH = /^\/api(?:\/|$)|\/(?:member|members|payment|payments|refund|refunds)(?:\/|$)/i
 const HASHED_ASSET_PATH = /^\/assets\/.*-(?=[A-Za-z0-9_-]{8,}\.[^.]+$)(?=[A-Za-z0-9_-]*[A-Z0-9_])[A-Za-z0-9_-]{8,}\.[^.]+$/
-const UPDATEABLE_MEDIA_PATH = /^\/(?:menu|brand|icons)(?:\/|$)|^\/assets\/mbox-floorplan\.png$/
+const UPDATEABLE_MEDIA_PATH = /^\/(?:menu|brand|icons)(?:\/|$)|^\/assets\/mbox-floorplan(?:-2026)?\.(?:png|jpg|webp)$/
 
 function canStore(response) {
   return response.ok && response.type === 'basic' && !/\bno-store\b/i.test(response.headers.get('cache-control') ?? '')

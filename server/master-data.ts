@@ -275,6 +275,14 @@ function validateAuthority(state: RuntimeState, input: AuthorityWriteInput) {
       throw new Error('授权商品不存在')
     }
   }
+  if (input.allowedCategoryIds) {
+    if (new Set(input.allowedCategoryIds).size !== input.allowedCategoryIds.length) throw new Error('授权商品分类不能重复')
+    const categories = new Set(state.products.map((product) => product.categoryId ?? 'featured'))
+    if (input.allowedCategoryIds.some((id) => !categories.has(id))) throw new Error('授权商品分类不存在')
+  }
+  if (input.allowedSkuIds?.length === 0 && input.allowedCategoryIds?.length === 0) {
+    throw new Error('授权商品和商品分类不能同时为空')
+  }
 }
 
 export function createAuthority(state: RuntimeState, input: AuthorityWriteInput, actorId: string) {

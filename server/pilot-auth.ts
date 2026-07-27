@@ -17,6 +17,10 @@ const pilotLoginSchema = z.object({
   message: '需要门店验证口令或当日凭证',
 })
 
+const pilotPinVerificationSchema = z.object({
+  employeePin: z.string().regex(/^\d{4}$/),
+}).strict()
+
 interface PilotAuthOptions {
   accessCode: string
   employeePins: Record<string, string>
@@ -28,6 +32,7 @@ interface PilotAuthOptions {
 }
 
 const PILOT_LOGIN_RATE_LIMIT = { scope: 'pilot.login', limit: 5, windowMs: 15 * 60_000 } as const
+const PILOT_PIN_VERIFICATION_RATE_LIMIT = { scope: 'pilot.pin-verification', limit: 5, windowMs: 15 * 60_000 } as const
 
 function sameSecret(left: string, right: string) {
   const leftHash = createHash('sha256').update(left).digest()
@@ -131,5 +136,22 @@ export async function registerPilotAuthRoutes(
       storeAccessToken,
       storeAccessExpiresAt,
     }
+  })
+
+  app.post('/api/auth/verify-pin', async (request, reply) => {
+    const actor = request.mboxActor
+    if (!actor) return reply.status(401).send({ code: 'AUTHENTICATION_REQUIRED', message: '请先登录员工账号' })
+    const input = pilotPinVerificationSchema.parse(request.body)
+    const key = `${request.ip}:${actor.actorId}`
+    const expectedPin = options.employeePins[actor.actorId]
+    if (!expectedPin || !sameSecret(input.employeePin, expectedPin)) {
+      const decision = await rateLimitStore.consume({ ...PILOT_PIN_VERIFICATION_RATE_LIMIT, key })
+      if (!decision.allowed) {
+        return reply.status(429).send({ code: 'PILOT_PIN_VERIFICATION_RATE_LIMITED', message: 'PIN错误次数过多，请15分钟后再试' })
+      }
+      return reply.status(401).send({ code: 'PILOT_EMPLOYEE_PIN_DENIED', message: '员工PIN错误，请输入当前登录员工的PIN' })
+    }
+    await rateLimitStore.clear({ scope: PILOT_PIN_VERIFICATION_RATE_LIMIT.scope, key })
+    return { verified: true, actorId: actor.actorId }
   })
 }

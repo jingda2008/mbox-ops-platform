@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, CheckCircle2, ChevronRight, Clock3, MessageSquareWarning, Minus, Plus, Search, ShoppingCart, Sparkles, ThumbsUp, Trash2, X } from 'lucide-react'
+import { AlertTriangle, Check, CheckCircle2, ChevronRight, Clock3, Gift, MessageSquareWarning, Minus, Plus, Search, ShoppingCart, Sparkles, ThumbsUp, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ApiError } from '../api'
 import type { OrderSafetyConfig } from '../shared/commercial-ops-contracts'
@@ -109,10 +109,12 @@ interface MenuOrderingWorkspaceProps {
   compactCart?: boolean
   deemphasizeCollapsedTotal?: boolean
   submitDisabled?: boolean
+  complimentaryMode?: boolean
   guestSalesMode?: boolean
   partySize?: number
   onSubmit: (items: MenuCartItem[], options: MenuSubmitOptions) => Promise<void>
   onInteraction?: (interaction: MenuInteraction) => void
+  onCartCountChange?: (itemCount: number) => void
 }
 
 export function MenuOrderingWorkspace({
@@ -129,8 +131,10 @@ export function MenuOrderingWorkspace({
   compactCart = false,
   deemphasizeCollapsedTotal = false,
   submitDisabled = false,
+  complimentaryMode = false,
   guestSalesMode = false,
   partySize = 1,
+  onCartCountChange,
 }: MenuOrderingWorkspaceProps) {
   const [cart, setCart] = useState<Record<string, number>>({})
   const [categoryId, setCategoryId] = useState('all')
@@ -272,6 +276,10 @@ export function MenuOrderingWorkspace({
   useEffect(() => {
     if (itemCount === 0) setCartOpen(false)
   }, [itemCount])
+
+  useEffect(() => {
+    onCartCountChange?.(itemCount)
+  }, [itemCount, onCartCountChange])
 
   useEffect(() => {
     if (!guestSalesMode) return
@@ -873,17 +881,17 @@ export function MenuOrderingWorkspace({
       </div>}
 
       {confirmation && <div className="menu-confirm-backdrop" role="presentation" onClick={() => setConfirmation(null)}>
-        <section className="menu-confirm-dialog" role="dialog" aria-modal="true" aria-label={confirmation === 'continue' ? '确认继续加单' : '确认上单'} onClick={(event) => event.stopPropagation()}>
+        <section className="menu-confirm-dialog" role="dialog" aria-modal="true" aria-label={confirmation === 'continue' ? '确认继续加单' : complimentaryMode ? '确认赠送' : '确认上单'} onClick={(event) => event.stopPropagation()}>
           <header>
-            <span className={confirmation === 'duplicate' ? 'is-warning' : ''}>{confirmation === 'duplicate' ? <AlertTriangle size={22} /> : <ShoppingCart size={22} />}</span>
-            <div><small>{confirmation === 'continue' ? 'CONTINUE ORDER' : 'ORDER CHECK'}</small><h2>{confirmation === 'duplicate' ? '刚刚下过一笔相同订单' : confirmation === 'continue' ? '还要继续加单吗？' : '请确认这次上单'}</h2></div>
+            <span className={confirmation === 'duplicate' ? 'is-warning' : ''}>{confirmation === 'duplicate' ? <AlertTriangle size={22} /> : complimentaryMode ? <Gift size={22} /> : <ShoppingCart size={22} />}</span>
+            <div><small>{confirmation === 'continue' ? 'CONTINUE ORDER' : complimentaryMode ? 'GIFT CHECK' : 'ORDER CHECK'}</small><h2>{confirmation === 'duplicate' ? '刚刚下过一笔相同订单' : confirmation === 'continue' ? '还要继续加单吗？' : complimentaryMode ? '请确认这次赠送' : '请确认这次上单'}</h2></div>
             <button className="icon-button" title="关闭" onClick={() => setConfirmation(null)}><X size={19} /></button>
           </header>
           {confirmation === 'continue' ? <p>您刚完成一次下单。确认是新一轮加单后再继续，避免手滑重复上单。</p> : <>
             <div className="menu-confirm-lines">{cartProducts.map((product) => <div key={product.id}><span>{product.name} × {cart[product.id]}</span><strong>¥{((product.listPriceAmount * cart[product.id]!) / 100).toFixed(2)}</strong></div>)}</div>
-            <div className="menu-confirm-total"><span>共 {itemCount} 件</span><strong>¥{(total / 100).toFixed(2)}</strong></div>
+            <div className="menu-confirm-total"><span>{complimentaryMode ? `赠送价值 · 共 ${itemCount} 件` : `共 ${itemCount} 件`}</span><strong>{complimentaryMode ? '客人零应付' : `¥${(total / 100).toFixed(2)}`}</strong></div>
             {fulfillmentNoteField}
-            <p>{confirmation === 'duplicate' ? '请先查看订单记录。只有确定需要再上一份相同商品时，才继续加单。' : '确认后订单会送到吧台或厨房，请勿连续点击或重复提交。'}</p>
+            <p>{confirmation === 'duplicate' ? '请先查看订单记录。只有确定需要再上一份相同商品时，才继续加单。' : complimentaryMode ? '确认后按当前登录员工本人的赠送权限校验，零应付并直接送往吧台或厨房。' : '确认后订单会送到吧台或厨房，请勿连续点击或重复提交。'}</p>
           </>}
           {confirmationError && <div className="menu-confirm-error" role="alert">{confirmationError}</div>}
           <footer>
@@ -891,7 +899,7 @@ export function MenuOrderingWorkspace({
             <button className="primary-button" data-haptic="action" disabled={busy || submitDisabled || (confirmation === 'duplicate' && !confirmedDuplicateOrderId)} onClick={() => {
               if (confirmation === 'continue') confirmContinuation()
               else void executeSubmit(confirmation === 'duplicate' ? confirmedDuplicateOrderId : undefined)
-            }}><Check size={17} />{busy ? '正在提交' : confirmation === 'duplicate' ? '确认继续加单' : confirmation === 'continue' ? '继续选商品' : '确认上单'}</button>
+            }}><Check size={17} />{busy ? '正在提交' : confirmation === 'duplicate' ? '确认继续加单' : confirmation === 'continue' ? '继续选商品' : complimentaryMode ? '确认赠送' : '确认上单'}</button>
           </footer>
         </section>
       </div>}

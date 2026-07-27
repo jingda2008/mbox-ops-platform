@@ -24,6 +24,7 @@ import {
 } from './order-domain.js'
 import type { RuntimeRepository } from './repository.js'
 import { consumeManagedInventoryForSubmittedOrder } from './inventory-order-integration.js'
+import { requireGiftPolicy } from './gift-policy.js'
 
 const benefitRedemptionLockHttpSchema = benefitRedemptionLockSchema.omit({ actorId: true })
 const benefitRedemptionConfirmHttpSchema = benefitRedemptionConfirmSchema.omit({
@@ -273,6 +274,21 @@ export function confirmBenefitRedemption(state: RuntimeState, redemptionId: stri
   if (!availability.orderable) businessError('BENEFIT_PRODUCT_UNAVAILABLE', `权益关联商品当前不可出品：${availability.label}`)
   if (product.listPriceAmount !== template.valueAmount || product.costAmount !== template.costAmount) {
     businessError('BENEFIT_PRODUCT_SNAPSHOT_MISMATCH', '权益面值或成本与关联商品不一致，请取消后重新处理')
+  }
+  try {
+    requireGiftPolicy(state, {
+      actorId: command.authorizedBy,
+      tableSessionId: redemption.tableSessionId,
+      items: [{ productId: product.id, quantity: redemption.quantity }],
+      amount: product.listPriceAmount * redemption.quantity,
+      occurredAt: command.occurredAt,
+    })
+  } catch (error) {
+    businessError(
+      'ORDER_GIFT_AUTHORIZATION_FAILED',
+      error instanceof Error ? error.message : '赠送授权校验失败',
+      403,
+    )
   }
 
   const orderId = `benefit-redemption:${redemption.id}:order`

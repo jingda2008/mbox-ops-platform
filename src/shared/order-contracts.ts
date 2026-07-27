@@ -134,10 +134,20 @@ export interface OrderAuthorizationAuthority {
   id: string
   actorId: string
   kinds: AuthorizationKind[]
+  /** Maximum value of one authorization decision. */
   maxAmount: MoneyAmount
   /** Null/omitted means all products; otherwise approvals are limited to these product IDs. */
   allowedSkuIds?: string[] | null
+  /** Product categories extend the explicit product allow-list. Null/omitted means no category restriction. */
+  allowedCategoryIds?: string[] | null
   tableSessionIds: string[] | null
+  /** Optional cumulative controls. Null/omitted means no additional cap for that dimension. */
+  maxPerTableAmount?: MoneyAmount | null
+  maxPerShiftAmount?: MoneyAmount | null
+  maxPerBusinessDayAmount?: MoneyAmount | null
+  maxPerMonthAmount?: MoneyAmount | null
+  maxPerBusinessDayCount?: number | null
+  maxQuantityPerOrder?: number | null
   validFrom: string
   validUntil: string
 }

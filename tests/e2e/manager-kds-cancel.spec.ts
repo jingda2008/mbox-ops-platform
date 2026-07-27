@@ -3,11 +3,18 @@ import { useStaffIdentity } from './helpers'
 
 test('李艳取消未送达酒水时情况说明为选填', async ({ page }) => {
   await useStaffIdentity(page, 'emp-chen', '李艳')
+  await page.route('**/api/auth/verify-pin', async (route) => {
+    const input = route.request().postDataJSON() as { employeePin?: string }
+    await route.fulfill(input.employeePin === '1010'
+      ? { status: 200, contentType: 'application/json', body: JSON.stringify({ verified: true, actorId: 'emp-chen' }) }
+      : { status: 401, contentType: 'application/json', body: JSON.stringify({ code: 'PILOT_EMPLOYEE_PIN_DENIED', message: '员工PIN错误，请输入当前登录员工的PIN' }) })
+  })
   await page.goto('/')
   await page.getByTitle('打开导航').click()
   await page.locator('.sidebar nav').getByRole('button', { name: '订单与出品' }).click()
   await expect(page.getByRole('heading', { name: '岗位履约工作台' })).toBeVisible()
 
+  await page.getByRole('button', { name: '全屏点单' }).click()
   await page.getByLabel('选择桌台').selectOption('table-l01')
   const product = page.locator('.menu-product').filter({ hasText: '精酿啤酒' }).first()
   await product.getByTitle('加入精酿啤酒').click()
@@ -17,7 +24,11 @@ test('李艳取消未送达酒水时情况说明为选填', async ({ page }) => 
   await expect(page.getByRole('dialog', { name: /订单支付/ })).toBeVisible()
   await page.getByTitle('关闭支付窗口').click()
 
-  await page.getByRole('button', { name: /出品履约/ }).click()
+  await page.getByRole('button', { name: '员工退出' }).click()
+  const exitDialog = page.getByRole('dialog', { name: '退出客用点单' })
+  await exitDialog.getByLabel('当前员工PIN').fill('1010')
+  await exitDialog.getByRole('button', { name: '验证并退出' }).click()
+  await expect(page.getByRole('button', { name: /出品履约/ })).toHaveClass(/is-active/)
   const task = page.locator('.kds-row').filter({ hasText: '精酿啤酒' }).last()
   await expect(task.getByRole('button', { name: '取消出品' })).toBeVisible()
   await task.getByRole('button', { name: '取消出品' }).click()

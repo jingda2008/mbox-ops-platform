@@ -150,7 +150,9 @@ jobs:
         env:
           DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
       - name: Compile database integration helpers
-        run: npx tsc -p tsconfig.server.json
+        run: |
+          npx tsc -p tsconfig.server.json
+          node scripts/copy-runtime-assets.mjs
       - name: Verify normalized operational read path
         run: npm run db:verify:operational
         env:

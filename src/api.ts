@@ -360,10 +360,11 @@ export function checkoutGuestOrder(input: GuestCheckoutInput) {
   })
 }
 
-export function trackGuestBehavior(input: GuestBehaviorEventInput) {
+export function trackGuestBehavior(input: GuestBehaviorEventInput, options: { keepalive?: boolean } = {}) {
   return guestRequest<GuestBehaviorAccepted>('/api/guest/events', {
     method: 'POST',
     body: JSON.stringify(input),
+    keepalive: options.keepalive,
   })
 }
 

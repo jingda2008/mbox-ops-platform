@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-rc.46 - 2026-07-27
+
+- Added the customer menu sales path with three comparable tonight recommendations, optional quick selection, restrained shake discovery, normal category browsing, search and product details.
+- Added a versioned 81-product V2/V3 menu catalog, real cocktail and bottle costs, conservative food/component cost caps and automatic bundle cost rollups.
+- Added one-time catalog migration with SKU upsert, valid bundle references, audit evidence and protection for later administrator changes.
+- Expanded bundle orders into auditable fulfillment component lines without double-counting customer revenue, discounts or performance attribution.
+- Added guest recommendation behavior events for impressions, answers, reranking, product details, acceptance and cart abandonment.
+- Improved menu and product administration, mobile quantity controls, combination presentation and customer/staff ordering layouts.
+
 ## 1.0.0-rc.45 - 2026-07-26
 
 - Added permission-scoped conversational operations analytics for natural-language management queries without exposing unrestricted SQL.

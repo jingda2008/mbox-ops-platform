@@ -29,11 +29,11 @@ import {
   verifyTableAccessToken,
 } from './table-access.js'
 import { resolveSongRequestMode, submitSongRequest } from './song-domain.js'
-import { addOrderItem, createOrderDraft, submitOrder } from './order-domain.js'
+import { createOrderDraft, submitOrder } from './order-domain.js'
 import { createPaymentIntent, expirePaymentIntents, handlePaymentNotification } from './payment-domain.js'
 import { consumeManagedInventoryForSubmittedOrder } from './inventory-order-integration.js'
 import { completeAwaitingOrderOnOrder } from './proactive-service.js'
-import { routeProductToEnabledWorkstation, syncOrderFulfillmentWorkstations } from './fulfillment-workstations.js'
+import { syncOrderFulfillmentWorkstations } from './fulfillment-workstations.js'
 import {
   applyProviderPaymentCreation,
   createEnvironmentPaymentProviderResolver,
@@ -48,6 +48,7 @@ import {
   recentGuestOrderCount,
   recentMatchingGuestOrder,
 } from './commercial-ops.js'
+import { addConfiguredProductToOrder } from './product-order-expansion.js'
 
 const DEFAULT_GUEST_SESSION_TTL_MS = 60 * 60_000
 
@@ -110,9 +111,22 @@ const clientGuestEventMetadata = {
   tab_viewed: new Set(['tab']),
   mood_selected: new Set(['moodId', 'previousMoodId']),
   category_viewed: new Set(['categoryId']),
+  recommendation_viewed: new Set(['productId', 'partySize', 'intent', 'taste', 'dwell']),
+  quick_select_started: new Set<string>(),
+  quick_select_exited: new Set(['reason']),
+  quick_select_answered: new Set(['field', 'value', 'step']),
+  quick_select_completed: new Set(['intent', 'taste', 'dwell']),
+  recommendation_reranked: new Set(['categoryId', 'partySize', 'intent', 'taste', 'dwell']),
+  recommendation_result_updated: new Set(['source', 'primaryProductId', 'comparisonProductIds', 'changed']),
+  shake_requested: new Set(['productId', 'attempt', 'score']),
+  shake_result_viewed: new Set(['productId', 'attempt']),
+  product_detail_viewed: new Set(['productId']),
+  recommendation_accepted: new Set(['productId']),
+  upgrade_accepted: new Set(['productId', 'fromProductId']),
   product_added: new Set(['productId', 'quantity']),
   product_removed: new Set(['productId', 'quantity']),
   cart_cleared: new Set<string>(),
+  cart_abandoned: new Set(['itemCount', 'distinctProductCount', 'totalAmount', 'lastView']),
   cart_submitted: new Set(['itemCount', 'distinctProductCount']),
   singer_profile_viewed: new Set(['appearanceId', 'singerId']),
 } as const
@@ -351,6 +365,14 @@ function sessionView(
       }]
     }))
     .sort((left, right) => Date.parse(left.startsAt) - Date.parse(right.startsAt))
+  const visibleProducts = state.products.filter((product) => product.enabled && product.guestVisible !== false)
+  const bundleComponentIds = new Set(
+    visibleProducts.flatMap((product) => (
+      product.productKind === 'bundle'
+        ? (product.bundleComponents ?? []).map((component) => component.productId)
+        : []
+    )),
+  )
   return {
     store: { id: state.store.id, name: state.store.name, businessDate: scheduleBusinessDate, timezone: state.store.timezone },
     communityBrand: state.config.communityBrand.enabled && state.config.communityBrand.guestOrderVisible
@@ -367,6 +389,7 @@ function sessionView(
       displayName: table.displayName,
       status: table.status,
       occupied: table.status === 'occupied',
+      guestCount: table.guestCount,
     },
     primaryServiceName: primary?.displayName ?? null,
     orderSafety: structuredClone(commercialOpsFor(state).config.orderSafety),
@@ -374,7 +397,10 @@ function sessionView(
       .filter((serviceType) => serviceType.enabled && serviceType.guestVisible !== false)
       .map(({ id, code, name, icon, priority }) => ({ id, code, name, icon, priority })),
     products: state.products
-      .filter((product) => product.enabled && product.guestVisible !== false)
+      .filter((product) => (
+        product.enabled
+        && (product.guestVisible !== false || bundleComponentIds.has(product.id))
+      ))
       .sort((left, right) => (left.sortOrder ?? 999) - (right.sortOrder ?? 999))
       .map((product) => ({ ...product, costAmount: 0 })),
     tasks: (frozen ? [] : state.tasks)
@@ -394,7 +420,7 @@ function sessionView(
         status: order.status,
         createdAt: order.createdAt,
         payableAmount: order.amounts.payableAmount,
-        items: order.items.map((item) => ({
+        items: order.items.filter((item) => item.commercialLine !== false).map((item) => ({
           id: item.id,
           name: item.name,
           specification: item.specification,
@@ -673,28 +699,14 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
         idempotencyKey: `${input.idempotencyKey}:draft`,
       })
       products.forEach(({ product, quantity }, index) => {
-        const requiresFulfillment = product.requiresFulfillment !== false
-        const stationId = requiresFulfillment
-          ? routeProductToEnabledWorkstation(state, product.stationId).id
-          : product.stationId
-        addOrderItem(state.orderDomain, {
+        addConfiguredProductToOrder(state, {
           orderId,
-          item: {
-            id: deterministicId('guest_line', `${input.idempotencyKey}:${index}`),
-            skuId: product.id,
-            name: product.name,
-            specification: product.specification,
-            quantity,
-            unitListPriceAmount: product.listPriceAmount,
-            unitSalePriceAmount: product.listPriceAmount,
-            unitCostAmount: product.costAmount,
-            stationId,
-            requiresFulfillment,
-            configVersion: product.configVersion,
-          },
           actorId,
           occurredAt: now,
+          product,
+          quantity,
           idempotencyKey: `${input.idempotencyKey}:item:${index}`,
+          linePrefix: 'guest_line',
         })
       })
       state.auditEntries.push({
@@ -779,7 +791,7 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
           ? deterministicId('guest_payment', attemptKey)
           : `Payment${createHash('sha256').update(attemptKey).digest('hex').slice(0, 32)}`,
         tableSessionId: tableSession.id,
-        lineAllocations: order.items.map((item) => ({
+        lineAllocations: order.items.filter((item) => item.commercialLine !== false).map((item) => ({
           orderId: order.id,
           orderItemId: item.id,
           quantity: item.quantity,

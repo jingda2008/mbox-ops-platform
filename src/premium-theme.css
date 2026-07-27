@@ -942,6 +942,12 @@ body {
 .guest-quick-service button:nth-child(2) svg { color: #df5aa6; }
 .guest-quick-service button:nth-child(3) svg { color: #e76064; }
 .guest-quick-service button:nth-child(4) svg { color: #7ca329; }
+.guest-quick-service button.guest-quick-service-complaint {
+  border-color: #dfb5b7 !important;
+  background: #fff9f9 !important;
+  color: #8e2f35;
+}
+.guest-quick-service button.guest-quick-service-complaint svg { color: #c43f47; }
 .guest-quick-service button span { font-size: 10px; font-weight: 800; }
 .guest-quick-service button:disabled { opacity: .58; }
 
@@ -1227,6 +1233,7 @@ body {
 }
 
 .guest-services,
+.guest-custom-request,
 .guest-progress {
   border-bottom-color: #e3e5e0;
 }
@@ -1501,12 +1508,50 @@ body {
 }
 
 @media (max-width: 760px) {
+  .guest-header {
+    min-height: 54px;
+    padding: 6px 10px;
+  }
+
+  .guest-brand-lockup > img {
+    width: 94px;
+    height: 24px;
+  }
+
+  .guest-brand-lockup > i {
+    height: 27px;
+  }
+
   .guest-table-band {
-    min-height: 112px;
+    min-height: 98px;
+    gap: 12px;
+    padding: 12px 14px;
   }
 
   .guest-table-band::after {
     left: 42%;
+  }
+
+  .guest-table-band h1 {
+    font-size: 24px;
+  }
+
+  .guest-table-band h1 span {
+    font-size: 12px;
+  }
+
+  .guest-table-copy p {
+    margin-top: 2px;
+    font-size: 11px;
+  }
+
+  .guest-stage-status {
+    width: 140px;
+    min-height: 72px;
+  }
+
+  .guest-stage-primary {
+    padding-block: 6px;
   }
 
   .guest-shell .menu-cart-total,

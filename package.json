@@ -1,13 +1,13 @@
 {
   "name": "@mbox/ops-platform",
   "private": true,
-  "version": "1.0.0-rc.45",
+  "version": "1.0.0-rc.46",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n API,WEB -c yellow,cyan \"npm:dev:api\" \"npm:dev:web\"",
     "dev:api": "tsx watch server/index.ts",
     "dev:web": "vite --host 0.0.0.0",
-    "build": "tsc -b && vite build && tsc -p tsconfig.server.json",
+    "build": "tsc -b && vite build && tsc -p tsconfig.server.json && node scripts/copy-runtime-assets.mjs",
     "start": "node dist-server/server/index.js",
     "db:migrate": "tsx server/migrate.ts",
     "db:verify": "node scripts/verify-database.mjs",

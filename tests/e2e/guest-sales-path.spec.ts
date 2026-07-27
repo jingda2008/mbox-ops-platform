@@ -1,0 +1,108 @@
+import { expect, test } from '@playwright/test'
+import { expectNoHorizontalOverflow } from './helpers'
+
+test.describe('客人推荐销售路径', () => {
+  test('双人桌可忽略推荐工具直接浏览、搜索和查看组合详情', async ({ page }) => {
+    await page.setViewportSize({ width: 430, height: 932 })
+    await page.goto('/guest?table=W01')
+
+    await expect(page.getByTestId('guest-recommendation-tools')).toBeVisible()
+    await expect(page.getByText('今夜特别推荐')).toBeVisible()
+    const comparison = page.getByRole('region', { name: '今夜推荐方案对比' })
+    await expect(comparison.locator('.menu-recommendation-option')).toHaveCount(3)
+    await expect(comparison.locator('.menu-recommendation-option.is-primary').getByText('人气优选')).toBeVisible()
+    await expect(comparison).toContainText('轻松开始')
+    await expect(comparison).toContainText('人气优选')
+    await expect(comparison).toContainText('更完整')
+    await expect(page.getByTestId('menu-product-product-pair-cocktail-night')).toContainText('双人微醺小聚')
+    await expect(page.getByTestId('menu-product-product-pair-cocktail-night')).toContainText('¥248')
+    await expect(page.getByTestId('menu-product-product-pair-cocktail-night')).toContainText('组合已配齐')
+    await expect(page.getByTestId('menu-product-product-pair-beer-night')).toContainText('冰镇碰杯时刻')
+    await expect(page.getByTestId('menu-product-product-pair-beer-night')).toContainText('¥208')
+    await expect(page.getByTestId('menu-product-product-pair-beer-night')).toContainText('少付 ¥26')
+    await expect(page.getByTestId('menu-product-product-pair-complete-night')).toContainText('双人完整夜场')
+    await expect(page.getByTestId('menu-product-product-pair-complete-night')).toContainText('¥348')
+    await expect(page.getByTestId('menu-product-product-pair-complete-night')).toContainText('少付 ¥54')
+    await expect(page.getByTestId('menu-product-product-pair-ritual-night')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: '看酒水' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '看小食' })).toBeVisible()
+    await expect(page.getByLabel('搜索菜单商品')).toHaveCount(0)
+
+    await page.getByTestId('guest-menu-view-bundles').click()
+    await expect(page.getByText('V3组合')).toHaveCount(0)
+    await expect(page.getByTestId('menu-product-product-pair-ritual-night')).toContainText('今晚有点仪式感')
+    await page.getByTestId('guest-menu-view-search').click()
+    await page.getByLabel('搜索菜单商品').fill('COCKTAIL-001')
+    await expect(page.getByTestId('menu-product-product-cocktail')).toBeVisible()
+    await expect(page.locator('.menu-product')).toHaveCount(1)
+
+    await page.getByTestId('guest-menu-view-recommend').click()
+    await page.getByRole('button', { name: '查看双人微醺小聚详情' }).click()
+    const detail = page.getByRole('dialog', { name: '双人微醺小聚商品详情' })
+    await expect(detail).toContainText('招牌鸡尾酒 × 2')
+    await expect(detail).toContainText('小食拼盘 × 1')
+    await expect(detail).toContainText('按一轮集中准备')
+    await expectNoHorizontalOverflow(page)
+  })
+
+  test('服务页只保留四个高频入口和个性化需求，不再展示六项服务网格', async ({ page }) => {
+    await page.setViewportSize({ width: 430, height: 932 })
+    await page.goto('/guest?table=W01')
+    await page.getByRole('navigation', { name: '桌台功能' }).getByRole('button', { name: '服务' }).click()
+
+    const quickServices = page.getByRole('region', { name: '常用服务' })
+    await expect(quickServices.getByRole('button')).toHaveCount(4)
+    await expect(quickServices.getByRole('button', { name: '点歌' })).toBeVisible()
+    await expect(quickServices.getByRole('button', { name: '生日安排' })).toBeVisible()
+    await expect(quickServices.getByRole('button', { name: '呼叫服务员' })).toBeVisible()
+    await expect(quickServices.getByRole('button', { name: '投诉/不满意' })).toBeVisible()
+    await expect(page.getByText('呼叫服务', { exact: true })).toHaveCount(0)
+    await expect(page.locator('.service-grid')).toHaveCount(0)
+    await expect(page.getByText('还有其他需要？')).toBeVisible()
+    await expect(page.getByPlaceholder(/两杯温水/)).toBeVisible()
+    await expectNoHorizontalOverflow(page)
+  })
+
+  test('快速选择重排原菜单，摇一摇只从同一候选池给出最多三次灵感', async ({ page }) => {
+    const behaviorEventStatuses: number[] = []
+    page.on('response', (response) => {
+      if (response.request().method() === 'POST' && response.url().includes('/api/guest/events')) {
+        behaviorEventStatuses.push(response.status())
+      }
+    })
+    await page.setViewportSize({ width: 430, height: 932 })
+    await page.goto('/guest?table=W01')
+
+    await page.getByTestId('guest-quick-select').click()
+    await page.getByRole('button', { name: '轻松一点' }).click()
+    await page.getByRole('button', { name: '清爽好入口' }).click()
+    await page.getByRole('button', { name: '听完这一场' }).click()
+    await expect(page.getByRole('dialog', { name: '今晚准备待多久？' })).toHaveCount(0)
+    await expect(page.getByText('已按 2 位筛选')).toBeVisible()
+    await expect(page.getByTestId('menu-product-product-pair-cocktail-night')).toBeVisible()
+    await expect(page.getByTestId('recommendation-updated-feedback')).toContainText('已按你的选择')
+    await expect(page.getByTestId('menu-product-product-pair-cocktail-night')).toHaveClass(/is-primary/)
+
+    await page.getByTestId('guest-quick-select').click()
+    await page.getByRole('button', { name: '来点仪式感' }).click()
+    await page.getByRole('button', { name: '慢慢喝有层次' }).click()
+    await page.getByRole('button', { name: '今晚不赶时间' }).click()
+    await expect(page.getByTestId('recommendation-updated-feedback')).toContainText('今晚有点仪式感')
+    await expect(page.getByTestId('menu-product-product-pair-ritual-night')).toHaveClass(/is-primary/)
+    await expect(page.getByTestId('recommendation-updated-feedback')).toHaveCount(0, { timeout: 5_000 })
+
+    await page.getByTestId('guest-shake-pick').click()
+    const shakeDialog = page.getByRole('dialog', { name: '根据今晚的选择替你挑一款' })
+    await expect(shakeDialog).toBeVisible()
+    await expect(shakeDialog).toContainText('1/3')
+    await shakeDialog.getByRole('button', { name: '再摇一次' }).click()
+    await expect(shakeDialog).toContainText('2/3')
+    await shakeDialog.getByRole('button', { name: '再摇一次' }).click()
+    await expect(shakeDialog).toContainText('3/3')
+    await expect(shakeDialog.getByRole('button', { name: '再摇一次' })).toBeDisabled()
+    await expect.poll(() => behaviorEventStatuses.length).toBeGreaterThanOrEqual(8)
+    expect(behaviorEventStatuses).toEqual(expect.arrayContaining([202]))
+    expect(behaviorEventStatuses.every((status) => status === 202)).toBe(true)
+    await expectNoHorizontalOverflow(page)
+  })
+})

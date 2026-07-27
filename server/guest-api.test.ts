@@ -133,6 +133,26 @@ describe('guest table API', () => {
     await closeFixture(app, repository)
   })
 
+  it('includes hidden bundle components for comparison without exposing unrelated hidden products', async () => {
+    const { app, repository } = await fixture()
+    await repository.mutate((state) => {
+      state.products.find((product) => product.id === 'product-cocktail')!.guestVisible = false
+      state.products.find((product) => product.id === 'product-balance-adjustment')!.guestVisible = false
+      state.revision += 1
+    })
+
+    const response = await app.inject({ method: 'GET', url: '/api/guest/session?table=L01' })
+    const body = response.json() as GuestSessionResponse
+
+    expect(response.statusCode).toBe(200)
+    expect(body.products.find((product) => product.id === 'product-cocktail')).toMatchObject({
+      guestVisible: false,
+      costAmount: 0,
+    })
+    expect(body.products.some((product) => product.id === 'product-balance-adjustment')).toBe(false)
+    await closeFixture(app, repository)
+  })
+
   it('uses the current Beijing business date for the guest lineup even when the admin day is stale', async () => {
     const { app, repository } = await fixture()
     const initial = (await app.inject({ method: 'GET', url: '/api/guest/session?table=L01' })).json() as GuestSessionResponse
@@ -402,6 +422,76 @@ describe('guest table API', () => {
       },
     })
     expect(mood.statusCode).toBe(202)
+
+    const recommendation = await app.inject({
+      method: 'POST',
+      url: '/api/guest/events',
+      headers: { 'x-mbox-guest-id': anonymousId },
+      payload: {
+        tableToken: first.body.tableToken,
+        eventType: 'recommendation_viewed',
+        metadata: {
+          productId: 'product-pair-cocktail-night',
+          partySize: 2,
+          intent: 'relaxed',
+          taste: 'refreshing',
+          dwell: 'one_set',
+          paymentStatus: 'forged',
+        },
+        idempotencyKey: 'recommendation-event-0001',
+      },
+    })
+    expect(recommendation.statusCode).toBe(202)
+    expect(guestInsights.events.find((event) => event.eventType === 'recommendation_viewed')?.metadata).toEqual({
+      productId: 'product-pair-cocktail-night',
+      partySize: 2,
+      intent: 'relaxed',
+      taste: 'refreshing',
+      dwell: 'one_set',
+    })
+
+    const updatedRecommendation = await app.inject({
+      method: 'POST',
+      url: '/api/guest/events',
+      headers: { 'x-mbox-guest-id': anonymousId },
+      payload: {
+        tableToken: first.body.tableToken,
+        eventType: 'recommendation_result_updated',
+        metadata: {
+          source: 'rules',
+          primaryProductId: 'product-pair-cocktail-night',
+          comparisonProductIds: 'product-pair-beer-night,product-pair-cocktail-night,product-pair-complete-night',
+          changed: true,
+          forgedPrice: 1,
+        },
+        idempotencyKey: 'recommendation-updated-event-0001',
+      },
+    })
+    expect(updatedRecommendation.statusCode).toBe(202)
+    expect(guestInsights.events.find((event) => event.eventType === 'recommendation_result_updated')?.metadata).toEqual({
+      source: 'rules',
+      primaryProductId: 'product-pair-cocktail-night',
+      comparisonProductIds: 'product-pair-beer-night,product-pair-cocktail-night,product-pair-complete-night',
+      changed: true,
+    })
+
+    const abandonedCart = await app.inject({
+      method: 'POST',
+      url: '/api/guest/events',
+      headers: { 'x-mbox-guest-id': anonymousId },
+      payload: {
+        tableToken: first.body.tableToken,
+        eventType: 'cart_abandoned',
+        metadata: {
+          itemCount: 2,
+          distinctProductCount: 1,
+          totalAmount: 24_800,
+          lastView: 'recommend',
+        },
+        idempotencyKey: 'cart-abandoned-event-0001',
+      },
+    })
+    expect(abandonedCart.statusCode).toBe(202)
 
     const forgedPayment = await app.inject({
       method: 'POST',

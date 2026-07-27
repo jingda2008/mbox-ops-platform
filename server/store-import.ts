@@ -677,6 +677,26 @@ function semanticIssues(state: RuntimeState, input: StoreImportPackage, candidat
     if (!input.policy.allowZeroListPrice && product.listPriceAmount === 0) add('error', 'ZERO_PRICE_FORBIDDEN', `商品 ${product.sku} 标价为0，但导入策略不允许零价`, 'products', row, 'listPriceAmount')
     if (product.configVersion > candidate.config.version) add('error', 'PRODUCT_VERSION_AHEAD_OF_CONFIG', `商品 ${product.sku} 的配置版本不能高于门店配置版本`, 'products', row, 'configVersion')
     if (!workstations.has(product.stationId)) add('error', 'WORKSTATION_REFERENCE_MISSING', `商品 ${product.sku} 的工作站不存在`, 'products', row, 'stationId')
+    const componentIds = product.bundleComponents?.map((component) => component.productId) ?? []
+    if (product.productKind === 'bundle' && componentIds.length === 0) {
+      add('error', 'BUNDLE_COMPONENT_REQUIRED', `组合商品 ${product.sku} 至少需要一个组成商品`, 'products', row, 'bundleComponents')
+    }
+    if (new Set(componentIds).size !== componentIds.length) {
+      add('error', 'BUNDLE_COMPONENT_DUPLICATE', `组合商品 ${product.sku} 的组成商品重复`, 'products', row, 'bundleComponents')
+    }
+    for (const componentId of componentIds) {
+      const component = products.get(componentId)
+      if (!component) add('error', 'PRODUCT_REFERENCE_MISSING', `组合商品 ${product.sku} 引用了不存在的商品 ${componentId}`, 'products', row, 'bundleComponents')
+      else if (component.id === product.id) add('error', 'BUNDLE_SELF_REFERENCE', `组合商品 ${product.sku} 不能包含自己`, 'products', row, 'bundleComponents')
+      else if (component.productKind === 'bundle') add('error', 'BUNDLE_NESTING_FORBIDDEN', `组合商品 ${product.sku} 不能嵌套组合商品 ${component.sku}`, 'products', row, 'bundleComponents')
+    }
+    for (const replacementId of product.substitutionProductIds ?? []) {
+      if (!products.has(replacementId)) add('error', 'PRODUCT_REFERENCE_MISSING', `商品 ${product.sku} 的替换商品 ${replacementId} 不存在`, 'products', row, 'substitutionProductIds')
+    }
+    const upgradeProductId = product.recommendation?.upgradeProductId
+    if (upgradeProductId && !products.has(upgradeProductId)) {
+      add('error', 'PRODUCT_REFERENCE_MISSING', `商品 ${product.sku} 的升级商品 ${upgradeProductId} 不存在`, 'products', row, 'recommendation.upgradeProductId')
+    }
     const currentProduct = state.products.find((item) => item.id === product.id)
     if (currentProduct && !sameValue(currentProduct, product) && product.configVersion <= currentProduct.configVersion) {
       add('error', 'PRODUCT_VERSION_NOT_MONOTONIC', `已变更商品 ${product.sku} 的配置版本必须大于当前版本 ${currentProduct.configVersion}`, 'products', row, 'configVersion')

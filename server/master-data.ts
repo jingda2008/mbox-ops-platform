@@ -9,6 +9,7 @@ import type {
   TableWriteInput,
 } from '../src/shared/contracts.js'
 import type { AuthorityWriteInput } from '../src/shared/commerce-api.js'
+import { defaultMenuRecommendation } from '../src/shared/menu-recommendation.js'
 
 function audit(
   state: RuntimeState,
@@ -170,7 +171,7 @@ export function updateArea(state: RuntimeState, areaId: string, input: AreaWrite
 export function createProduct(state: RuntimeState, input: ProductWriteInput, actorId: string) {
   if (state.products.some((product) => product.sku === input.sku)) throw new Error('商品SKU已存在')
   const normalized = normalizeProductInput(input)
-  validateProductInput(normalized)
+  validateProductInput(state, normalized)
   const product = { id: `product_${randomUUID()}`, ...normalized, configVersion: 1 }
   state.products.push(product)
   audit(state, actorId, 'product.created.v1', 'product', product.id, { after: product })
@@ -187,7 +188,7 @@ export function updateProduct(
   if (!product) throw new Error('商品不存在')
   if (state.products.some((item) => item.id !== productId && item.sku === input.sku)) throw new Error('商品SKU已存在')
   const normalized = normalizeProductInput(input)
-  validateProductInput(normalized)
+  validateProductInput(state, normalized, productId)
   const before = structuredClone(product)
   Object.assign(product, normalized, { configVersion: product.configVersion + 1 })
   audit(state, actorId, 'product.updated.v1', 'product', product.id, { before, after: product })
@@ -198,6 +199,18 @@ function normalizeProductInput(input: ProductWriteInput): ProductWriteInput {
   const soldOut = input.soldOut ?? false
   return {
     ...input,
+    productKind: input.productKind ?? 'single',
+    beverageFamily: input.beverageFamily ?? 'none',
+    bundleComponents: input.productKind === 'bundle' ? [...(input.bundleComponents ?? [])] : [],
+    substitutionProductIds: [...new Set(input.substitutionProductIds ?? [])],
+    recommendation: {
+      ...defaultMenuRecommendation,
+      ...(input.recommendation ?? {}),
+      sceneTags: [...new Set(input.recommendation?.sceneTags ?? [])],
+      intentTags: [...new Set(input.recommendation?.intentTags ?? [])],
+      tasteTags: [...new Set(input.recommendation?.tasteTags ?? [])],
+      dwellTags: [...new Set(input.recommendation?.dwellTags ?? [])],
+    },
     categoryId: input.categoryId ?? 'featured',
     categoryName: input.categoryName ?? '推荐',
     description: input.description ?? '',
@@ -214,10 +227,32 @@ function normalizeProductInput(input: ProductWriteInput): ProductWriteInput {
   }
 }
 
-function validateProductInput(input: ProductWriteInput) {
+function validateProductInput(state: RuntimeState, input: ProductWriteInput, productId?: string) {
   if (input.costAmount > input.listPriceAmount) throw new Error('商品成本不能高于标价')
   if (Boolean(input.availableFrom) !== Boolean(input.availableUntil)) throw new Error('供应开始和结束时间必须同时填写')
   if (input.availableFrom && input.availableFrom === input.availableUntil) throw new Error('供应开始和结束时间不能相同')
+  if (input.recommendation && input.recommendation.minimumPartySize > input.recommendation.maximumPartySize) {
+    throw new Error('推荐最少人数不能大于最多人数')
+  }
+  const componentIds = input.bundleComponents?.map((item) => item.productId) ?? []
+  if (new Set(componentIds).size !== componentIds.length) throw new Error('组合商品的组成商品不能重复')
+  if (productId && componentIds.includes(productId)) throw new Error('组合商品不能包含自己')
+  if (componentIds.some((id) => !state.products.some((product) => product.id === id && product.id !== productId))) {
+    throw new Error('组合商品包含不存在的商品')
+  }
+  if (componentIds.some((id) => state.products.some((product) => product.id === id && product.productKind === 'bundle'))) {
+    throw new Error('组合商品不能嵌套另一个组合商品')
+  }
+  const substitutionIds = input.substitutionProductIds ?? []
+  if (productId && substitutionIds.includes(productId)) throw new Error('替换商品不能包含自己')
+  if (substitutionIds.some((id) => !state.products.some((product) => product.id === id && product.id !== productId))) {
+    throw new Error('替换商品不存在')
+  }
+  const upgradeProductId = input.recommendation?.upgradeProductId
+  if (upgradeProductId === productId) throw new Error('升级商品不能指向自己')
+  if (upgradeProductId && !state.products.some((product) => product.id === upgradeProductId)) {
+    throw new Error('升级商品不存在')
+  }
 }
 
 function validateAuthority(state: RuntimeState, input: AuthorityWriteInput) {

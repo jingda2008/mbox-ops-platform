@@ -106,11 +106,73 @@ export interface ShiftAssignment {
   status: 'scheduled' | 'active' | 'completed' | 'cancelled'
 }
 
+export const menuProductKinds = ['single', 'bundle'] as const
+export type MenuProductKind = (typeof menuProductKinds)[number]
+
+export const menuBeverageFamilies = [
+  'none',
+  'cocktail',
+  'beer',
+  'wine',
+  'sparkling',
+  'spirits',
+  'non_alcoholic',
+] as const
+export type MenuBeverageFamily = (typeof menuBeverageFamilies)[number]
+
+export const menuRecommendationScenes = [
+  'unsure',
+  'date',
+  'brothers',
+  'besties',
+  'friends',
+  'business',
+  'celebration',
+] as const
+export type MenuRecommendationScene = (typeof menuRecommendationScenes)[number]
+
+export const menuRecommendationIntents = ['relaxed', 'energetic', 'ritual', 'unsure'] as const
+export type MenuRecommendationIntent = (typeof menuRecommendationIntents)[number]
+
+export const menuRecommendationTastes = ['refreshing', 'layered', 'strong', 'any'] as const
+export type MenuRecommendationTaste = (typeof menuRecommendationTastes)[number]
+
+export const menuRecommendationDwells = ['one_set', 'stay_longer', 'no_rush'] as const
+export type MenuRecommendationDwell = (typeof menuRecommendationDwells)[number]
+
+export interface MenuBundleComponent {
+  productId: string
+  quantity: number
+}
+
+export interface MenuRecommendationConfig {
+  enabled: boolean
+  priority: number
+  badge: string
+  headline: string
+  reason: string
+  minimumPartySize: number
+  maximumPartySize: number
+  sceneTags: MenuRecommendationScene[]
+  intentTags: MenuRecommendationIntent[]
+  tasteTags: MenuRecommendationTaste[]
+  dwellTags: MenuRecommendationDwell[]
+  singleWaveEligible: boolean
+  expectedPrepMinutes: number
+  holdMinutes: number
+  upgradeProductId: string | null
+}
+
 export interface MenuProduct {
   id: string
   sku: string
   name: string
   specification: string
+  productKind?: MenuProductKind
+  beverageFamily?: MenuBeverageFamily
+  bundleComponents?: MenuBundleComponent[]
+  substitutionProductIds?: string[]
+  recommendation?: MenuRecommendationConfig
   categoryId?: string
   categoryName?: string
   description?: string
@@ -862,6 +924,30 @@ export const productWriteSchema = z.object({
   sku: z.string().trim().min(1).max(40),
   name: z.string().trim().min(1).max(80),
   specification: z.string().trim().min(1).max(80),
+  productKind: z.enum(menuProductKinds).optional(),
+  beverageFamily: z.enum(menuBeverageFamilies).optional(),
+  bundleComponents: z.array(z.object({
+    productId: z.string().trim().min(1).max(128),
+    quantity: z.number().int().min(1).max(9999),
+  })).max(50).optional(),
+  substitutionProductIds: z.array(z.string().trim().min(1).max(128)).max(50).optional(),
+  recommendation: z.object({
+    enabled: z.boolean(),
+    priority: z.number().int().min(0).max(10_000),
+    badge: z.string().trim().max(24),
+    headline: z.string().trim().max(80),
+    reason: z.string().trim().max(160),
+    minimumPartySize: z.number().int().min(1).max(100),
+    maximumPartySize: z.number().int().min(1).max(100),
+    sceneTags: z.array(z.enum(menuRecommendationScenes)).max(menuRecommendationScenes.length),
+    intentTags: z.array(z.enum(menuRecommendationIntents)).max(menuRecommendationIntents.length),
+    tasteTags: z.array(z.enum(menuRecommendationTastes)).max(menuRecommendationTastes.length),
+    dwellTags: z.array(z.enum(menuRecommendationDwells)).max(menuRecommendationDwells.length),
+    singleWaveEligible: z.boolean(),
+    expectedPrepMinutes: z.number().int().min(0).max(240),
+    holdMinutes: z.number().int().min(0).max(240),
+    upgradeProductId: z.string().trim().min(1).max(128).nullable(),
+  }).optional(),
   categoryId: z.string().trim().min(1).max(64).optional(),
   categoryName: z.string().trim().min(1).max(40).optional(),
   description: z.string().trim().max(240).optional(),
@@ -887,6 +973,18 @@ export const productWriteSchema = z.object({
   }
   if (hasStart && product.availableFrom === product.availableUntil) {
     context.addIssue({ code: 'custom', message: '供应开始和结束时间不能相同', path: ['availableUntil'] })
+  }
+  if (product.productKind === 'bundle' && (product.bundleComponents?.length ?? 0) === 0) {
+    context.addIssue({ code: 'custom', message: '组合商品至少需要一个组成商品', path: ['bundleComponents'] })
+  }
+  if (product.productKind !== 'bundle' && (product.bundleComponents?.length ?? 0) > 0) {
+    context.addIssue({ code: 'custom', message: '只有组合商品可以配置组成商品', path: ['bundleComponents'] })
+  }
+  if (
+    product.recommendation
+    && product.recommendation.minimumPartySize > product.recommendation.maximumPartySize
+  ) {
+    context.addIssue({ code: 'custom', message: '推荐最少人数不能大于最多人数', path: ['recommendation', 'minimumPartySize'] })
   }
 })
 

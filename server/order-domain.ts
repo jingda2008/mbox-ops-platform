@@ -215,6 +215,7 @@ function calculateOrderAmounts(items: OrderItem[]): OrderAmounts {
   let payableAmount = 0
 
   for (const item of items) {
+    if (item.commercialLine === false) continue
     const gross = safeMultiply(item.unitListPriceAmount, item.quantity, '商品原价金额')
     const payable = safeMultiply(item.unitSalePriceAmount, item.quantity, '商品成交金额')
     const adjustment = gross - payable
@@ -234,6 +235,7 @@ function calculateOrderAmounts(items: OrderItem[]): OrderAmounts {
 }
 
 function requiredAuthorizationKind(item: OrderItem): AuthorizationKind | null {
+  if (item.commercialLine === false) return null
   if (item.unitSalePriceAmount === item.unitListPriceAmount) return null
   return item.unitSalePriceAmount === 0 ? 'gift' : 'discount'
 }
@@ -474,7 +476,7 @@ function buildLedgerEntries(state: OrderDomainState, order: Order, actorId: stri
     {
       type: 'order_gross_charge',
       amount: order.amounts.grossAmount,
-      lineIds: order.items.map((item) => item.id),
+      lineIds: order.items.filter((item) => item.commercialLine !== false).map((item) => item.id),
     },
   ]
   const discountedLineIds = order.items

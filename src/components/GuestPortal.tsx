@@ -1,4 +1,4 @@
-import { Bell, CakeSlice, CheckCircle2, ChevronRight, Clock3, CreditCard, GlassWater, ListChecks, MapPin, MessageCircleMore, Mic2, Music2, Search, Send, ShieldCheck, ShoppingBag, X } from 'lucide-react'
+import { Bell, CakeSlice, CheckCircle2, ChevronRight, CircleAlert, Clock3, CreditCard, ListChecks, MapPin, MessageCircleMore, Mic2, Music2, Search, Send, ShieldCheck, ShoppingBag, X } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { checkoutGuestOrder, createGuestOrder, createGuestSongRequest, createGuestTask, getGuestSession, trackGuestBehavior } from '../api'
 import { PendingActionRegistry } from '../pending-action-registry'
@@ -6,7 +6,6 @@ import type { GuestSessionResponse, GuestTaskView, WechatJsapiParameters } from 
 import type { GuestBehaviorEventType, GuestBehaviorValue } from '../shared/guest-insight-contracts'
 import { GUEST_SONG_TERMINAL_DISPLAY_MS, formatGuestCompactCountdown, guestCustomSongServiceNote, guestErrorMessage, guestMoodServiceNote, guestReplyNotice, guestSessionHistoryUrl, guestSongReplyNotice, guestSongStatusLabel, guestStageIsBeforeFirstSet, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks, type GuestReplyNotice } from './guest-portal-utils'
 import { serverClockOffset, useSecondClock } from './use-second-clock'
-import { ServiceIcon } from './ServiceIcon'
 import { MenuOrderingWorkspace, type MenuCartItem } from './MenuOrderingWorkspace'
 import { SuperHighCommunityBand } from './SuperHighCommunityBand'
 
@@ -213,7 +212,7 @@ export function GuestPortal() {
       eventType,
       metadata,
       idempotencyKey: `guest-behavior-${crypto.randomUUID()}`,
-    }).catch(() => undefined)
+    }, { keepalive: eventType === 'cart_abandoned' }).catch(() => undefined)
   }
 
   function selectTab(tab: 'menu' | 'service' | 'orders') {
@@ -285,7 +284,6 @@ export function GuestPortal() {
 
   const tableTasks = useMemo(() => visibleGuestTasks(data?.tasks ?? []), [data?.tasks])
   const customRequestType = data?.serviceTypes.find((serviceType) => serviceType.code === 'CUSTOM_REQUEST')
-  const quickServiceTypes = data?.serviceTypes.filter((serviceType) => serviceType.code !== 'CUSTOM_REQUEST') ?? []
   const serviceTypeByCode = useMemo(() => new Map(data?.serviceTypes.map((serviceType) => [serviceType.code, serviceType]) ?? []), [data?.serviceTypes])
   const serverOffset = useMemo(() => data?.serverNow ? serverClockOffset(data.serverNow) : 0, [data?.serverNow])
   const profileAppearance = data?.stageSchedule.find((appearance) => appearance.appearanceId === singerProfileAppearanceId) ?? null
@@ -632,26 +630,6 @@ export function GuestPortal() {
       </nav>
 
       {activeTab === 'menu' && !accountFrozen && <>
-        <section className={`guest-mood-section${selectedMood ? ' has-selection' : ''}`}>
-          <header><div><small>YOUR MOOD</small><strong>今晚想怎么嗨？</strong></div><span>{selectedMood ? '已记录 · 可重选' : '可选'}</span></header>
-          <div className="guest-mood-row">
-            {guestMoods.map((mood) => <button
-              key={mood.id}
-              className={selectedMood === mood.id ? 'is-selected' : ''}
-              aria-pressed={selectedMood === mood.id}
-              disabled={pendingActions.has('mood')}
-              onClick={() => void recordMood(mood)}
-            ><img src={`/brand/moods-v2/${mood.id}.webp`} alt="" width="256" height="256" decoding="async" /><span>{mood.label}</span></button>)}
-          </div>
-        </section>
-
-        <section className="guest-quick-service" aria-label="快捷服务">
-          <button data-haptic="action" disabled={pendingActions.has('quick:water')} onClick={() => void requestQuickService('water', 'ADD_WATER')}><GlassWater size={19} /><span>{pendingActions.has('quick:water') ? '正在送达' : '加水'}</span></button>
-          <button disabled={pendingActions.has('quick:song')} onClick={() => void openSongService()}><Music2 size={19} /><span>{pendingActions.has('quick:song') ? '正在帮您问' : '点歌'}</span></button>
-          <button data-haptic="action" disabled={pendingActions.has('quick:birthday')} onClick={() => void requestQuickService('birthday', 'BIRTHDAY_CARE')}><CakeSlice size={19} /><span>{pendingActions.has('quick:birthday') ? '正在安排' : '生日'}</span></button>
-          <button data-haptic="action" disabled={pendingActions.has('quick:call')} onClick={() => void requestQuickService('call', 'ORDER_HELP', '客人呼叫服务员到桌，请尽快响应。')}><Bell size={19} /><span>{pendingActions.has('quick:call') ? '正在叫人' : '呼叫'}</span></button>
-        </section>
-
         {songPickerOpen && <section className="guest-song-picker" aria-label="当晚可点歌曲">
           <header><div><small>LIVE SONGS</small><strong>选择歌曲</strong></div><button className="icon-button" title="关闭点歌" onClick={() => setSongPickerOpen(false)}><X size={18} /></button></header>
           <div className="guest-song-mode" role="tablist" aria-label="点歌方式">
@@ -688,38 +666,42 @@ export function GuestPortal() {
           timeZone={data?.store.timezone}
           orderSafety={data?.orderSafety}
           compactCart
+          guestSalesMode
+          partySize={data?.table.guestCount || 1}
           onSubmit={placeAndPay}
           onInteraction={(interaction) => recordBehavior(interaction.type, {
             productId: interaction.productId ?? null,
             categoryId: interaction.categoryId ?? null,
             quantity: interaction.quantity ?? null,
+            ...(interaction.metadata ?? {}),
           })}
         />
       </>}
 
-      {activeTab === 'service' && !accountFrozen && <><section className="guest-services">
-        <div className="guest-section-title">
-          <span>呼叫服务</span>
-          <MessageCircleMore size={20} aria-hidden="true" />
+      {activeTab === 'service' && !accountFrozen && <>
+      <section className={`guest-mood-section${selectedMood ? ' has-selection' : ''}`}>
+        <header><div><small>YOUR MOOD</small><strong>今晚想怎么嗨？</strong></div><span>{selectedMood ? '已记录 · 可重选' : '可选'}</span></header>
+        <div className="guest-mood-row">
+          {guestMoods.map((mood) => <button
+            key={mood.id}
+            className={selectedMood === mood.id ? 'is-selected' : ''}
+            aria-pressed={selectedMood === mood.id}
+            disabled={pendingActions.has('mood')}
+            onClick={() => void recordMood(mood)}
+          ><img src={`/brand/moods-v2/${mood.id}.webp`} alt="" width="256" height="256" decoding="async" /><span>{mood.label}</span></button>)}
         </div>
-        <div className="service-grid">
-          {quickServiceTypes.map((serviceType) => (
-            <button
-              key={serviceType.id}
-              className={serviceType.id === 'complaint' ? 'service-button service-button--complaint' : 'service-button'}
-              data-service-code={serviceType.code.toLowerCase()}
-              data-haptic="action"
-              disabled={pendingActions.has(`service:${serviceType.id}`)}
-              onClick={() => void requestService(serviceType.id)}
-            >
-              <ServiceIcon icon={serviceType.icon} size={23} />
-              <span>{pendingActions.has(`service:${serviceType.id}`) ? '正在送达' : serviceType.name}</span>
-              <ChevronRight size={17} aria-hidden="true" />
-            </button>
-          ))}
-        </div>
+      </section>
+
+      <section className="guest-quick-service guest-quick-service--compact" aria-label="常用服务">
+        <button disabled={pendingActions.has('quick:song')} onClick={() => void openSongService()}><Music2 size={19} /><span>{pendingActions.has('quick:song') ? '正在帮您问' : '点歌'}</span></button>
+        <button data-haptic="action" disabled={pendingActions.has('quick:birthday')} onClick={() => void requestQuickService('birthday', 'BIRTHDAY_CARE')}><CakeSlice size={19} /><span>{pendingActions.has('quick:birthday') ? '正在安排' : '生日安排'}</span></button>
+        <button data-haptic="action" disabled={pendingActions.has('quick:call')} onClick={() => void requestQuickService('call', 'ORDER_HELP', '客人呼叫服务员到桌，请尽快响应。')}><Bell size={19} /><span>{pendingActions.has('quick:call') ? '正在叫人' : '呼叫服务员'}</span></button>
+        <button className="guest-quick-service-complaint" data-haptic="action" disabled={pendingActions.has('quick:complaint')} onClick={() => void requestQuickService('complaint', 'COMPLAINT', '客人表示不满意，请值班领班尽快到桌了解并当场处理。')}><CircleAlert size={19} /><span>{pendingActions.has('quick:complaint') ? '领班正在来' : '投诉/不满意'}</span></button>
+      </section>
+
+      <section className="guest-custom-request" aria-labelledby="guest-custom-request-title">
         <div className="guest-note">
-          <span>个性化需求</span>
+          <span id="guest-custom-request-title">还有其他需要？</span>
           <div className="guest-note-row">
             <input
               value={note}
@@ -728,7 +710,7 @@ export function GuestPortal() {
                 if (event.key === 'Enter' && note.trim() && !pendingActions.has('custom-request')) void submitCustomRequest()
               }}
               maxLength={300}
-              placeholder="悄悄告诉我们：例如需要两杯温水"
+              placeholder="例如：两杯温水、少冰或需要安静一点"
             />
             <button data-haptic="action" disabled={!note.trim() || pendingActions.has('custom-request') || !customRequestType} onClick={() => void submitCustomRequest()}><Send size={17} />{pendingActions.has('custom-request') ? '正在送达' : '告诉我们'}</button>
           </div>

@@ -44,7 +44,7 @@ export interface GuestTaskView extends Pick<
 export interface GuestSessionResponse {
   store: { id: string; name: string; businessDate: string; timezone: string }
   communityBrand: CommunityBrandPresentation | null
-  table: { code: string; displayName: string; status: string; occupied: boolean }
+  table: { code: string; displayName: string; status: string; occupied: boolean; guestCount: number }
   primaryServiceName: string | null
   orderSafety: OrderSafetyConfig
   serviceTypes: GuestServiceType[]

@@ -145,8 +145,11 @@ export function consumeManagedInventoryForSubmittedOrder(
   if (!inventory) return []
   normalizeInventoryDomainState(inventory)
   const workingInventory = structuredClone(inventory)
-  const movements = order.items.flatMap((item) => {
-    const type = item.unitSalePriceAmount === 0 ? 'gift' : 'sale'
+  const movements = order.items.filter((item) => item.inventoryTracked !== false).flatMap((item) => {
+    const parentItem = item.parentOrderItemId
+      ? order.items.find((candidate) => candidate.id === item.parentOrderItemId)
+      : null
+    const type = (parentItem ?? item).unitSalePriceAmount > 0 ? 'sale' : 'gift'
     const existing = workingInventory.movements.filter(
       (movement) => movement.orderId === order.id && movement.orderItemId === item.id && movement.type === type,
     )

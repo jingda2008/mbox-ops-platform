@@ -129,7 +129,7 @@
 .table-walkin-toolbar > label > span { color: var(--ink-soft); font-size: 10px; font-weight: 750; }
 .table-walkin-toolbar select { width: 100%; height: 36px; border: 1px solid var(--line-strong); background: #fff; color: var(--ink); padding: 0 8px; }
 .party-stepper { height: 36px; display: grid; grid-template-columns: 36px 1fr 36px; border: 1px solid var(--line-strong); background: #fff; }
-.party-stepper button { display: grid; place-items: center; border: 0; background: transparent; color: var(--ink); }
+.party-stepper button { min-height: 0; display: grid; place-items: center; border: 0; background: transparent; color: var(--ink); }
 .party-stepper button:first-child { border-right: 1px solid var(--line); }
 .party-stepper button:last-child { border-left: 1px solid var(--line); }
 .party-stepper input { width: 100%; min-width: 0; border: 0; background: #fff; color: var(--ink); font-size: 13px; font-weight: 800; text-align: center; appearance: textfield; }

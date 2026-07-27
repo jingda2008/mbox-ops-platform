@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.48 - 2026-07-28
+
+- Fixed the guest all-drinks view so category-compatible products remain visible even when legacy or imported records are missing a beverage-family value.
+- Added deterministic beverage-family inference plus server-side validation that prevents new guest-visible drink products from being published without a specific drink type.
+- Replaced the misleading empty menu shown for expired or revoked table sessions with a dedicated full-width rescan state.
+- Constrained the guest ordering shell and menu workspace to the mobile viewport, with WeChat Android browser coverage for category changes and horizontal overflow.
+- Made Playwright API and web ports configurable so concurrent worktrees can run isolated browser verification.
+
 ## 1.0.0-rc.47 - 2026-07-27
 
 - Added an optional order-level fulfillment note to guest and staff-assisted ordering, with a 300-character server-side limit and idempotency conflict protection.

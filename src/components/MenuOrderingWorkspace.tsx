@@ -13,6 +13,7 @@ import {
   selectMenuRecommendationSlots,
   type MenuRecommendationContext,
 } from '../shared/menu-recommendation'
+import { guestDrinkMatchesFamily } from '../shared/menu-product-classification'
 import { productAvailability } from '../shared/product-availability'
 import { GuestRecommendationTools, type GuestRecommendationContext } from './GuestRecommendationTools'
 import './MenuOrderingWorkspace.css'
@@ -210,8 +211,7 @@ export function MenuOrderingWorkspace({
       product.guestVisible !== false
       &&
       product.productKind !== 'bundle'
-      && product.beverageFamily && product.beverageFamily !== 'none'
-      && (beverageFamily === 'all' || product.beverageFamily === beverageFamily)
+      && guestDrinkMatchesFamily(product, beverageFamily)
     ))
     if (guestMenuView === 'food') return orderedProducts.filter((product) => (
       product.guestVisible !== false

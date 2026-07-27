@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
-const apiPort = 18_787
-const webPort = 15_173
+const apiPort = Number(process.env.MBOX_E2E_API_PORT ?? 18_787)
+const webPort = Number(process.env.MBOX_E2E_WEB_PORT ?? 15_173)
 
 export default defineConfig({
   testDir: './tests/e2e',

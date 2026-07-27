@@ -10,6 +10,7 @@ import type {
 } from '../src/shared/contracts.js'
 import type { AuthorityWriteInput } from '../src/shared/commerce-api.js'
 import { defaultMenuRecommendation } from '../src/shared/menu-recommendation.js'
+import { resolveMenuBeverageFamily } from '../src/shared/menu-product-classification.js'
 
 function audit(
   state: RuntimeState,
@@ -197,10 +198,11 @@ export function updateProduct(
 
 function normalizeProductInput(input: ProductWriteInput): ProductWriteInput {
   const soldOut = input.soldOut ?? false
+  const beverageFamily = resolveMenuBeverageFamily(input)
   return {
     ...input,
     productKind: input.productKind ?? 'single',
-    beverageFamily: input.beverageFamily ?? 'none',
+    beverageFamily,
     bundleComponents: input.productKind === 'bundle' ? [...(input.bundleComponents ?? [])] : [],
     substitutionProductIds: [...new Set(input.substitutionProductIds ?? [])],
     recommendation: {
@@ -229,6 +231,13 @@ function normalizeProductInput(input: ProductWriteInput): ProductWriteInput {
 
 function validateProductInput(state: RuntimeState, input: ProductWriteInput, productId?: string) {
   if (input.costAmount > input.listPriceAmount) throw new Error('商品成本不能高于标价')
+  if (
+    ['drink', 'drinks', 'beverage', 'beverages'].includes(input.categoryId?.trim().toLowerCase() ?? '')
+    && input.guestVisible !== false
+    && input.beverageFamily === 'none'
+  ) {
+    throw new Error('客人可见的酒水商品必须选择酒水类型')
+  }
   if (Boolean(input.availableFrom) !== Boolean(input.availableUntil)) throw new Error('供应开始和结束时间必须同时填写')
   if (input.availableFrom && input.availableFrom === input.availableUntil) throw new Error('供应开始和结束时间不能相同')
   if (input.recommendation && input.recommendation.minimumPartySize > input.recommendation.maximumPartySize) {

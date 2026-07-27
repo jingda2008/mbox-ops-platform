@@ -5,19 +5,114 @@ on:
   pull_request:
   push:
     branches: [main]
-    tags: ['v*']
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  verify:
+  classify:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    outputs:
+      scope: ${{ steps.scope.outputs.scope }}
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+      full: ${{ steps.scope.outputs.full }}
+      migration_changed: ${{ steps.scope.outputs.migration_changed }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: scope
+        name: Classify change risk
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: >-
+          node scripts/classify-ci-scope.mjs
+          --base "${BASE_SHA}"
+          --head "${GITHUB_SHA}"
+          --event "${GITHUB_EVENT_NAME}"
+          --ref "${GITHUB_REF}"
+          --github-output "${GITHUB_OUTPUT}"
+
+  docs:
+    if: needs.classify.outputs.scope == 'docs'
+    needs: classify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Verify documentation diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -n "${BASE_SHA}" ] && ! printf '%s' "${BASE_SHA}" | grep -Eq '^0+$'; then
+            git diff --check "${BASE_SHA}" "${GITHUB_SHA}"
+          else
+            git diff --check "${GITHUB_SHA}^" "${GITHUB_SHA}"
+          fi
+      - name: Verify release metadata
+        run: node scripts/verify-release-metadata.mjs
+      - name: Verify CI change classifier
+        run: node --test scripts/ci-change-scope.test.mjs
+
+  quality:
+    if: needs.classify.outputs.scope == 'full'
+    needs: classify
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+      - name: Run code, unit, metadata and production-build checks
+        run: npm run check
+
+  browser:
+    if: needs.classify.outputs.scope == 'full'
+    needs: classify
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+      - name: Install Playwright system dependencies
+        run: npx playwright install-deps chromium
+      - if: steps.playwright-cache.outputs.cache-hit != 'true'
+        name: Install Playwright Chromium
+        run: npx playwright install chromium
+      - name: Run browser commercial flows
+        run: npm run test:e2e
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-failure-${{ github.sha }}
+          path: artifacts/playwright
+          retention-days: 7
+
+  database:
+    if: needs.classify.outputs.scope == 'full'
+    needs: classify
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
     services:
       postgres:
         image: postgres:16-alpine
@@ -39,13 +134,6 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=high
-      - run: npm run check
-      - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
-      - name: Run browser commercial flows
-        run: npm run test:e2e
       - name: Provision database runtime role
         env:
           PGPASSWORD: mbox_test
@@ -53,38 +141,113 @@ jobs:
           psql postgresql://mbox@127.0.0.1:5432/mbox_test
           --set ON_ERROR_STOP=1
           --command "CREATE ROLE mbox_app NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS"
-      - run: npm run db:migrate
+      - name: Apply migrations
+        run: npm run db:migrate
         env:
           DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
       - name: Verify migration checksums and forced RLS
         run: npm run db:verify
         env:
           DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
+      - name: Compile database integration helpers
+        run: |
+          npx tsc -p tsconfig.server.json
+          node scripts/copy-runtime-assets.mjs
       - name: Verify normalized operational read path
         run: npm run db:verify:operational
         env:
           DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
-      - name: Build production container
-        run: >-
-          docker build
-          --build-arg MBOX_RELEASE_SHA=${{ github.sha }}
-          --build-arg MBOX_RELEASE_VERSION=$(node -p "require('./package.json').version")
-          -t mbox-ops:${{ github.sha }} .
 
-  publish-pre-release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: verify
+  image:
+    if: needs.classify.outputs.scope == 'full'
+    needs: classify
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
-      contents: write
+      contents: read
+      actions: write
     steps:
       - uses: actions/checkout@v6
-      - name: Publish verified GitHub pre-release
+      - uses: docker/setup-buildx-action@v3
+      - id: metadata
+        name: Resolve immutable image metadata
+        run: |
+          version=$(node -p "require('./package.json').version")
+          short_sha=${GITHUB_SHA:0:7}
+          image_tag="mbox-ops:${version}-${short_sha}"
+          printf 'version=%s\nshort_sha=%s\nimage_tag=%s\n' "${version}" "${short_sha}" "${image_tag}" >> "${GITHUB_OUTPUT}"
+      - name: Build production image once
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          platforms: linux/amd64
+          tags: ${{ steps.metadata.outputs.image_tag }}
+          build-args: |
+            MBOX_RELEASE_SHA=${{ github.sha }}
+            MBOX_RELEASE_VERSION=${{ steps.metadata.outputs.version }}
+          cache-from: type=gha,scope=mbox-runtime
+          cache-to: type=gha,mode=max,scope=mbox-runtime
+      - if: github.event_name != 'pull_request'
+        name: Package immutable deployment bundle
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release create "${GITHUB_REF_NAME}"
-          --verify-tag
-          --prerelease
-          --title "M-BOX Ops Platform ${GITHUB_REF_NAME#v}"
-          --notes-file "docs/release-${GITHUB_REF_NAME#v}.md"
+          IMAGE_TAG: ${{ steps.metadata.outputs.image_tag }}
+          VERSION: ${{ steps.metadata.outputs.version }}
+          SHORT_SHA: ${{ steps.metadata.outputs.short_sha }}
+        run: |
+          mkdir -p release-artifact
+          archive="release-artifact/mbox-ops-${VERSION}-${SHORT_SHA}.tar.gz"
+          docker save "${IMAGE_TAG}" | gzip -1 > "${archive}"
+          image_digest=$(docker image inspect "${IMAGE_TAG}" --format '{{.Id}}')
+          node scripts/generate-migration-manifest.mjs \
+            --output release-artifact/migration-manifest.json >/dev/null
+          MBOX_BUNDLE_ARCHIVE="${archive}" \
+          MBOX_BUNDLE_SHA="${GITHUB_SHA}" \
+          MBOX_BUNDLE_VERSION="${VERSION}" \
+          MBOX_BUNDLE_IMAGE_TAG="${IMAGE_TAG}" \
+          MBOX_BUNDLE_IMAGE_DIGEST="${image_digest}" \
+          MBOX_MIGRATION_MANIFEST=release-artifact/migration-manifest.json \
+          MBOX_BUNDLE_MANIFEST=release-artifact/release-manifest.json \
+            node scripts/write-release-bundle-manifest.mjs >/dev/null
+          (
+            cd release-artifact
+            sha256sum "$(basename "${archive}")" > "$(basename "${archive}").sha256"
+          )
+      - if: github.event_name != 'pull_request'
+        name: Upload the exact image used by validation and deployment
+        uses: actions/upload-artifact@v4
+        with:
+          name: mbox-image-${{ github.sha }}
+          path: release-artifact
+          compression-level: 0
+          retention-days: 7
+
+  verify:
+    if: always()
+    needs: [classify, docs, quality, browser, database, image]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce the selected release gate
+        env:
+          SCOPE: ${{ needs.classify.outputs.scope }}
+          CLASSIFY_RESULT: ${{ needs.classify.result }}
+          DOCS_RESULT: ${{ needs.docs.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          BROWSER_RESULT: ${{ needs.browser.result }}
+          DATABASE_RESULT: ${{ needs.database.result }}
+          IMAGE_RESULT: ${{ needs.image.result }}
+        run: |
+          test "${CLASSIFY_RESULT}" = success
+          if [ "${SCOPE}" = docs ]; then
+            test "${DOCS_RESULT}" = success
+            test "${QUALITY_RESULT}" = skipped
+            test "${BROWSER_RESULT}" = skipped
+            test "${DATABASE_RESULT}" = skipped
+            test "${IMAGE_RESULT}" = skipped
+          else
+            test "${SCOPE}" = full
+            test "${QUALITY_RESULT}" = success
+            test "${BROWSER_RESULT}" = success
+            test "${DATABASE_RESULT}" = success
+            test "${IMAGE_RESULT}" = success
+          fi

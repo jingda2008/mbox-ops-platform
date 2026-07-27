@@ -587,11 +587,13 @@ export function saveConfigDraft(state: RuntimeState, input: ConfigDraftInput, ac
   draft.publishedAt = null
   draft.serviceTypes = draft.serviceTypes.map((serviceType) => {
     const update = input.serviceTypes.find((item) => item.id === serviceType.id)
+    const { guestVisible: currentGuestVisible, ...serviceTypeWithoutGuestVisibility } = serviceType
+    const guestVisible = update?.guestVisible ?? currentGuestVisible
     return update
       ? {
-          ...serviceType,
+          ...serviceTypeWithoutGuestVisibility,
+          ...(guestVisible === undefined ? {} : { guestVisible }),
           enabled: update.enabled,
-          guestVisible: update.guestVisible ?? serviceType.guestVisible,
           priority: update.priority,
           dispatchRoleIds: [...update.dispatchRoleIds],
           customerReply: update.customerReply,

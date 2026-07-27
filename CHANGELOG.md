@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0-rc.49 - 2026-07-28
+
+- Fixed configuration draft saves when legacy service types omit the optional guest-visibility field.
+- Preserved the distinction between an omitted visibility setting and an explicit true or false value without introducing non-serializable runtime fields.
+- Added a regression test that saves the same configuration shape used by live operations and verifies the complete runtime state remains PostgreSQL-serializable.
+
 ## 1.0.0-rc.48 - 2026-07-28
 
 - Fixed the guest all-drinks view so category-compatible products remain visible even when legacy or imported records are missing a beverage-family value.

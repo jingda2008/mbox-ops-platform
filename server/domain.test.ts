@@ -9,6 +9,7 @@ import {
   saveConfigDraft,
 } from './domain.js'
 import { createSeedState } from './seed.js'
+import { serializeRuntimeState } from './postgres-repository.js'
 import { JsonRepository } from './repository.js'
 
 function taskInput(overrides: Partial<CreateTaskInput> = {}): CreateTaskInput {
@@ -381,6 +382,33 @@ describe('versioned store configuration', () => {
       proactiveOrderCare: state.config.proactiveOrderCare,
       guestServiceLimits: state.config.guestServiceLimits,
     }, 'emp-chen')).toThrow('必须绑定已启用的专用取送任务类型')
+  })
+
+  it('keeps config drafts serializable when optional guest visibility is unset', () => {
+    const state = createSeedState()
+    const serviceTypes = state.config.serviceTypes.map((type) => ({
+      id: type.id,
+      enabled: type.enabled,
+      priority: type.priority,
+      dispatchRoleIds: type.dispatchRoleIds,
+      customerReply: type.customerReply,
+      actionScript: type.actionScript,
+      sla: type.sla,
+    }))
+
+    saveConfigDraft(state, {
+      serviceTypes,
+      roles: state.config.roles,
+      skills: state.config.skills,
+      workstations: state.config.workstations,
+      proactiveOrderCare: state.config.proactiveOrderCare,
+      guestServiceLimits: state.config.guestServiceLimits,
+    }, 'emp-chen')
+
+    const birthday = state.draftConfig?.serviceTypes.find((type) => type.id === 'birthday')
+    expect(birthday?.guestVisible).toBeUndefined()
+    expect(birthday && Object.hasOwn(birthday, 'guestVisible')).toBe(false)
+    expect(() => serializeRuntimeState(state)).not.toThrow()
   })
 
   it('versions complex SOP rules and rejects broken dispatch references', () => {

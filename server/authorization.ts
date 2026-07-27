@@ -1,6 +1,7 @@
 import type { FastifyRequest } from 'fastify'
 import type { RequestActorContext } from '../src/shared/auth-contracts.js'
 import type { RuntimeState } from '../src/shared/contracts.js'
+import { requireGiftPolicy } from './gift-policy.js'
 import { requireRequestActor } from './auth-context.js'
 import {
   canRoleAccessDataScope,
@@ -376,6 +377,7 @@ export function requireCommerceDecisionAuthority(
   state: RuntimeState,
   authorizationId: string,
   now = new Date(),
+  decision: 'granted' | 'rejected' = 'granted',
 ) {
   const requestActor = requireRequestActor(request)
   const authorization = state.orderDomain.authorizations.find((item) => item.id === authorizationId)
@@ -390,12 +392,38 @@ export function requireCommerceDecisionAuthority(
     'commerce.authorization.decide',
   )
   const authorizationItems = order.items.filter((item) => authorization.lineIds.includes(item.id))
+  if (authorization.kind === 'gift' && decision === 'granted') {
+    try {
+      requireGiftPolicy(state, {
+        actorId: actor.actorId,
+        tableSessionId: order.tableSessionId,
+        items: authorizationItems.map((item) => ({ productId: item.skuId, quantity: item.quantity })),
+        amount: authorization.requestedAmount,
+        occurredAt: now.toISOString(),
+      })
+    } catch (error) {
+      throw new AuthorizationError(
+        error instanceof Error ? error.message : '当前员工没有可用的赠送授权',
+        'commerce.authorization.decide',
+      )
+    }
+    return actor
+  }
   const occurredAt = now.getTime()
   const hasConfiguredAuthority = state.orderDomain.authorizationAuthorities.some((authority) => (
     authority.actorId === actor.actorId &&
     authority.kinds.includes(authorization.kind) &&
     authority.maxAmount >= authorization.requestedAmount &&
-    (authority.allowedSkuIds == null || authorizationItems.every((item) => authority.allowedSkuIds?.includes(item.skuId))) &&
+    (
+      (authority.allowedSkuIds == null && authority.allowedCategoryIds == null)
+      || authorizationItems.every((item) => {
+        const product = state.products.find((candidate) => candidate.id === item.skuId)
+        return Boolean(
+          authority.allowedSkuIds?.includes(item.skuId)
+          || authority.allowedCategoryIds?.includes(product?.categoryId ?? 'featured')
+        )
+      })
+    ) &&
     (authority.tableSessionIds === null || authority.tableSessionIds.includes(order.tableSessionId)) &&
     occurredAt >= Date.parse(authority.validFrom) &&
     occurredAt <= Date.parse(authority.validUntil)

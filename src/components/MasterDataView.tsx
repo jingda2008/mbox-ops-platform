@@ -539,7 +539,14 @@ function AuthoritySection({ data, run }: SectionProps) {
       kinds: [kind],
       maxAmount: yuanToFen(maxYuan),
       allowedSkuIds: null,
+      allowedCategoryIds: null,
       tableSessionIds: null,
+      maxPerTableAmount: null,
+      maxPerShiftAmount: null,
+      maxPerBusinessDayAmount: null,
+      maxPerMonthAmount: null,
+      maxPerBusinessDayCount: null,
+      maxQuantityPerOrder: null,
       validFrom: start.toISOString(),
       validUntil: end.toISOString(),
     }), '经营授权已建立')
@@ -553,7 +560,7 @@ function AuthoritySection({ data, run }: SectionProps) {
         <label><span>单次上限（元）</span><input type="number" min={0} value={maxYuan} onChange={(event) => setMaxYuan(Number(event.target.value))} /></label>
         <button className="primary-button" type="submit" disabled={!actorId}><Plus size={17} />新增授权</button>
       </form>
-      <div className="authority-note">权限按员工、类型、金额、商品、桌次和有效时间共同判断；所有修改进入审计。</div>
+      <div className="authority-note">权限按员工、类型、金额、商品、桌次和有效时间共同判断；累计额度与次数用于赠送，所有修改进入审计。</div>
       <div className="master-rows">
         {data.orderDomain.authorizationAuthorities.map((authority) => <AuthorityRow key={authority.id} authority={authority} data={data} run={run} />)}
       </div>
@@ -567,13 +574,27 @@ function AuthorityRow({ authority, data, run }: { authority: OrderAuthorizationA
     kinds: value.kinds,
     maxAmount: value.maxAmount,
     allowedSkuIds: value.allowedSkuIds ?? null,
+    allowedCategoryIds: value.allowedCategoryIds ?? null,
     tableSessionIds: value.tableSessionIds,
+    maxPerTableAmount: value.maxPerTableAmount ?? null,
+    maxPerShiftAmount: value.maxPerShiftAmount ?? null,
+    maxPerBusinessDayAmount: value.maxPerBusinessDayAmount ?? null,
+    maxPerMonthAmount: value.maxPerMonthAmount ?? null,
+    maxPerBusinessDayCount: value.maxPerBusinessDayCount ?? null,
+    maxQuantityPerOrder: value.maxQuantityPerOrder ?? null,
     validFrom: value.validFrom,
     validUntil: value.validUntil,
   })
   const [draft, setDraft] = useState<AuthorityWriteInput>(() => toDraft(authority))
   useEffect(() => setDraft(toDraft(authority)), [authority])
   const employee = data.employees.find((item) => item.id === draft.actorId)
+  const categories = Array.from(new Map(data.products.map((product) => [
+    product.categoryId ?? 'featured',
+    product.categoryName ?? '推荐',
+  ])).entries()).map(([id, name]) => ({ id, name }))
+  const openSessions = data.songState.tableSessions.filter((session) => session.status === 'open')
+  const unrestrictedProducts = draft.allowedSkuIds === null && draft.allowedCategoryIds === null
+  const unrestrictedTables = draft.tableSessionIds === null
 
   function toggleKind(kind: 'gift' | 'discount', checked: boolean) {
     setDraft({ ...draft, kinds: checked ? Array.from(new Set([...draft.kinds, kind])) : draft.kinds.filter((item) => item !== kind) })
@@ -584,16 +605,52 @@ function AuthorityRow({ authority, data, run }: { authority: OrderAuthorizationA
     setDraft({ ...draft, allowedSkuIds: checked ? Array.from(new Set([...current, productId])) : current.filter((id) => id !== productId) })
   }
 
+  function toggleCategory(categoryId: string, checked: boolean) {
+    const current = draft.allowedCategoryIds ?? []
+    setDraft({ ...draft, allowedCategoryIds: checked ? Array.from(new Set([...current, categoryId])) : current.filter((id) => id !== categoryId) })
+  }
+
+  function toggleTableSession(tableSessionId: string, checked: boolean) {
+    const current = draft.tableSessionIds ?? []
+    setDraft({ ...draft, tableSessionIds: checked ? Array.from(new Set([...current, tableSessionId])) : current.filter((id) => id !== tableSessionId) })
+  }
+
+  const productScopeEmpty = draft.allowedSkuIds?.length === 0 && draft.allowedCategoryIds?.length === 0
+  const tableScopeEmpty = draft.tableSessionIds?.length === 0
+
   return (
     <div className="master-row authority-row">
-      <div className="row-identity"><strong>{employee?.displayName ?? '未知员工'}</strong><span>{authority.id}</span></div>
-      <div className="area-selector"><span>可审批</span><div><label><input type="checkbox" checked={draft.kinds.includes('gift')} onChange={(event) => toggleKind('gift', event.target.checked)} />赠送</label><label><input type="checkbox" checked={draft.kinds.includes('discount')} onChange={(event) => toggleKind('discount', event.target.checked)} />折扣</label></div></div>
-      <label><span>单次上限（元）</span><input type="number" min={0} value={fenToYuan(draft.maxAmount)} onChange={(event) => setDraft({ ...draft, maxAmount: yuanToFen(Number(event.target.value)) })} /></label>
-      <div className="area-selector product-authority"><span>允许商品</span><div><label><input type="checkbox" checked={draft.allowedSkuIds === null} onChange={(event) => setDraft({ ...draft, allowedSkuIds: event.target.checked ? null : [] })} />全部</label>{data.products.map((product) => <label key={product.id}><input type="checkbox" disabled={draft.allowedSkuIds === null} checked={draft.allowedSkuIds?.includes(product.id) ?? false} onChange={(event) => toggleProduct(product.id, event.target.checked)} />{product.name}</label>)}</div></div>
-      <label><span>有效至（北京时间）</span><input type="datetime-local" value={toLocalInput(draft.validUntil)} onChange={(event) => setDraft({ ...draft, validUntil: chinaLocalDateTimeToIso(event.target.value) })} /></label>
-      <button className="icon-button" title={`保存${employee?.displayName ?? ''}经营权限`} disabled={draft.kinds.length === 0 || draft.allowedSkuIds?.length === 0} onClick={() => void run(() => updateCommerceAuthority(authority.id, draft), '经营权限已保存')}><Save size={17} /></button>
+      <div className="authority-row-heading">
+        <div className="row-identity"><strong>{employee?.displayName ?? '未知员工'}</strong><span>{authority.id}</span></div>
+        <button className="icon-button" title={`保存${employee?.displayName ?? ''}经营权限`} disabled={draft.kinds.length === 0 || productScopeEmpty || tableScopeEmpty} onClick={() => void run(() => updateCommerceAuthority(authority.id, draft), '经营权限已保存')}><Save size={17} /></button>
+      </div>
+      <div className="authority-policy-grid">
+        <div className="area-selector"><span>可操作</span><div><label><input type="checkbox" checked={draft.kinds.includes('gift')} onChange={(event) => toggleKind('gift', event.target.checked)} />赠送</label><label><input type="checkbox" checked={draft.kinds.includes('discount')} onChange={(event) => toggleKind('discount', event.target.checked)} />折扣</label></div></div>
+        <MoneyLimit label="单次金额上限" value={draft.maxAmount} onChange={(value) => setDraft({ ...draft, maxAmount: value })} />
+        <OptionalMoneyLimit label="单桌累计" value={draft.maxPerTableAmount} onChange={(value) => setDraft({ ...draft, maxPerTableAmount: value })} />
+        <OptionalMoneyLimit label="班次累计" value={draft.maxPerShiftAmount} onChange={(value) => setDraft({ ...draft, maxPerShiftAmount: value })} />
+        <OptionalMoneyLimit label="营业日累计" value={draft.maxPerBusinessDayAmount} onChange={(value) => setDraft({ ...draft, maxPerBusinessDayAmount: value })} />
+        <OptionalMoneyLimit label="月度累计" value={draft.maxPerMonthAmount} onChange={(value) => setDraft({ ...draft, maxPerMonthAmount: value })} />
+        <OptionalIntegerLimit label="每日次数" value={draft.maxPerBusinessDayCount} onChange={(value) => setDraft({ ...draft, maxPerBusinessDayCount: value })} />
+        <OptionalIntegerLimit label="单次数量" value={draft.maxQuantityPerOrder} onChange={(value) => setDraft({ ...draft, maxQuantityPerOrder: value })} />
+        <label><span>生效时间（北京时间）</span><input type="datetime-local" value={toLocalInput(draft.validFrom)} onChange={(event) => setDraft({ ...draft, validFrom: chinaLocalDateTimeToIso(event.target.value) })} /></label>
+        <label><span>失效时间（北京时间）</span><input type="datetime-local" value={toLocalInput(draft.validUntil)} onChange={(event) => setDraft({ ...draft, validUntil: chinaLocalDateTimeToIso(event.target.value) })} /></label>
+      </div>
+      <div className="authority-scope-grid">
+        <div className="area-selector product-authority"><span>允许商品分类</span><div><label><input type="checkbox" checked={unrestrictedProducts} onChange={(event) => setDraft({ ...draft, allowedSkuIds: event.target.checked ? null : [], allowedCategoryIds: event.target.checked ? null : [] })} />全部商品</label>{categories.map((category) => <label key={category.id}><input type="checkbox" disabled={unrestrictedProducts} checked={draft.allowedCategoryIds?.includes(category.id) ?? false} onChange={(event) => toggleCategory(category.id, event.target.checked)} />{category.name}</label>)}</div></div>
+        <div className="area-selector product-authority"><span>指定商品</span><div>{data.products.map((product) => <label key={product.id}><input type="checkbox" disabled={unrestrictedProducts} checked={draft.allowedSkuIds?.includes(product.id) ?? false} onChange={(event) => toggleProduct(product.id, event.target.checked)} />{product.name}</label>)}</div></div>
+        <div className="area-selector product-authority"><span>适用桌次</span><div><label><input type="checkbox" checked={unrestrictedTables} onChange={(event) => setDraft({ ...draft, tableSessionIds: event.target.checked ? null : [] })} />全部桌次</label>{openSessions.map((session) => <label key={session.id}><input type="checkbox" disabled={unrestrictedTables} checked={draft.tableSessionIds?.includes(session.id) ?? false} onChange={(event) => toggleTableSession(session.id, event.target.checked)} />{session.tableCode}</label>)}</div></div>
+      </div>
     </div>
   )
+}
+
+function OptionalMoneyLimit({ label, value, onChange }: { label: string; value: number | null; onChange: (value: number | null) => void }) {
+  return <label><span>{label}（元）</span><input type="number" min={0} placeholder="不限制" value={value == null ? '' : fenToYuan(value)} onChange={(event) => onChange(event.target.value === '' ? null : yuanToFen(Number(event.target.value)))} /></label>
+}
+
+function OptionalIntegerLimit({ label, value, onChange }: { label: string; value: number | null; onChange: (value: number | null) => void }) {
+  return <label><span>{label}</span><input type="number" min={1} step={1} placeholder="不限制" value={value ?? ''} onChange={(event) => onChange(event.target.value === '' ? null : Math.max(1, Number(event.target.value)))} /></label>
 }
 
 function ProductSection({ data, run }: SectionProps) {

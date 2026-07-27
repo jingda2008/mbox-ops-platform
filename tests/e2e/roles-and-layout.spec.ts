@@ -349,6 +349,72 @@ test.describe('视觉与移动端适配', () => {
     await expectNoHorizontalOverflow(page)
   })
 
+  test('老板可在手机端配置赠送商品范围和累计额度且页面不溢出', async ({ page }) => {
+    await page.setViewportSize({ width: 430, height: 932 })
+    await useStaffIdentity(page, 'emp-owner', '陈方宇')
+    await page.goto('/')
+
+    await page.getByTitle('打开导航').click()
+    await page.locator('.sidebar nav').getByRole('button', { name: '人员与岗位' }).click()
+    await page.getByRole('tab', { name: '经营权限' }).click()
+    await expect(page.getByText('权限按员工、类型、金额、商品、桌次和有效时间共同判断')).toBeVisible()
+    await expect(page.getByText('允许商品分类').first()).toBeVisible()
+    await expect(page.getByText('单桌累计').first()).toBeVisible()
+    await expect(page.getByText('营业日累计').first()).toBeVisible()
+    await expect(page.getByText('月度累计').first()).toBeVisible()
+    await expect(page.getByText('每日次数').first()).toBeVisible()
+    await expectNoHorizontalOverflow(page)
+  })
+
+  test('有权限员工使用本人账号赠送下单且不进入支付流程', async ({ page }) => {
+    await page.setViewportSize({ width: 430, height: 932 })
+    await useStaffIdentity(page, 'emp-lin', 'Tom')
+    let giftRequest: Record<string, unknown> | null = null
+    let paymentLinkRequests = 0
+    await page.route('**/api/commerce/complimentary-orders', async (route) => {
+      giftRequest = route.request().postDataJSON() as Record<string, unknown>
+      await route.fulfill({ status: 201, contentType: 'application/json', body: '{}' })
+    })
+    await page.route('**/api/commerce/orders/*/payment-link', async (route) => {
+      paymentLinkRequests += 1
+      await route.continue()
+    })
+    await page.goto('/')
+
+    await page.getByTitle('打开导航').click()
+    await page.locator('.sidebar nav').getByRole('button', { name: '点单与送餐' }).click()
+    await expect(page.getByRole('heading', { name: '订单与出品' })).toBeVisible()
+    await page.getByLabel('选择桌台').selectOption('table-l01')
+    await page.getByRole('button', { name: '权限赠送' }).click()
+    await page.getByLabel('赠送原因').fill('生日关怀')
+    await expectNoHorizontalOverflow(page)
+    await page.getByTitle('加入精酿啤酒').click()
+    await page.getByRole('complementary', { name: '订单结算' }).getByRole('button', { name: /查看购物车/ }).click()
+    await page.getByRole('dialog', { name: '购物车明细' }).getByRole('button', { name: '确认赠送并出品' }).click()
+
+    const confirmation = page.getByRole('dialog', { name: '确认赠送' })
+    await expect(confirmation).toContainText('客人零应付')
+    await confirmation.getByRole('button', { name: '确认赠送' }).click()
+    await expect(page.getByText(/赠送订单已按Tom本人权限提交/)).toBeVisible()
+    expect(giftRequest).toMatchObject({
+      tableId: 'table-l01',
+      reason: '生日关怀',
+      items: [{ productId: 'product-beer', quantity: 1 }],
+    })
+    expect(giftRequest).not.toHaveProperty('actorId')
+    expect(paymentLinkRequests).toBe(0)
+    await expect(page.getByRole('dialog', { name: /订单支付/ })).toHaveCount(0)
+  })
+
+  test('没有本人赠送授权的服务员不显示赠送下单入口', async ({ page }) => {
+    await useStaffIdentity(page, 'emp-wu', 'Jerry')
+    await page.goto('/')
+
+    await page.getByTitle('打开导航').click()
+    await page.locator('.sidebar nav').getByRole('button', { name: '点单与送餐' }).click()
+    await expect(page.getByRole('button', { name: '权限赠送' })).toHaveCount(0)
+  })
+
   test('移动端语音模式加载门店动态热词且保持单屏宽度', async ({ page }) => {
     await page.setViewportSize({ width: 430, height: 932 })
     await useStaffIdentity(page, 'emp-lin', 'Tom')

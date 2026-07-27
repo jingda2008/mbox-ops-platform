@@ -1,6 +1,6 @@
-import { Ban, CheckCheck, ChefHat, CircleAlert, CircleDollarSign, Clock3, Copy, MessageSquareWarning, PackageCheck, PackageX, Play, QrCode, RotateCcw, ScanLine, ShoppingCart, Smartphone, UserRound, X } from 'lucide-react'
+import { Ban, CheckCheck, ChefHat, CircleAlert, CircleDollarSign, Clock3, Copy, Gift, MessageSquareWarning, PackageCheck, PackageX, Play, QrCode, RotateCcw, ScanLine, ShoppingCart, Smartphone, UserRound, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { actOnKdsTask, createAssistedPaymentLink, createCartOrder, decideKdsException, getCurrentActorId, managerCancelKdsTask, reportKdsException } from '../api'
+import { actOnKdsTask, createAssistedPaymentLink, createCartOrder, createComplimentaryOrder, decideKdsException, getCurrentActorId, managerCancelKdsTask, reportKdsException } from '../api'
 import type { BootstrapResponse } from '../shared/contracts'
 import type { AssistedPaymentLink, KdsActionInput, KdsExceptionDecisionInput, KdsExceptionReportInput, ManagerKdsCancellationInput } from '../shared/commerce-api'
 import type { KdsExceptionEvent, KdsTask } from '../shared/order-contracts'
@@ -52,6 +52,8 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
   const canCancelFulfillment = canManagerCancelKds(access, data.viewer?.permissionIds ?? [])
   const occupiedTables = useMemo(() => data.tables.filter((table) => table.status === 'occupied'), [data.tables])
   const [tableId, setTableId] = useState(() => occupiedTables.length === 1 ? occupiedTables[0]!.id : '')
+  const [orderMode, setOrderMode] = useState<'paid' | 'gift'>('paid')
+  const [giftReason, setGiftReason] = useState('')
   const [workspaceMode, setWorkspaceMode] = useState<'order' | 'fulfillment'>(access.canOrder ? 'order' : 'fulfillment')
   const [busy, setBusy] = useState(false)
   const [busyKdsIds, setBusyKdsIds] = useState<ReadonlySet<string>>(() => new Set())
@@ -84,6 +86,25 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
     nextAction(task.status) && actionAllowedForAccess(task, access, data.config.workstations)
   )).length
   const overdueCount = visibleKds.filter((task) => taskTiming(task, data, now).overdue).length
+  const activeGiftAuthority = currentEmployee
+    ? data.orderDomain.authorizationAuthorities.find((authority) => (
+        authority.actorId === currentEmployee.id
+        && authority.kinds.includes('gift')
+        && authority.maxAmount > 0
+        && Date.parse(authority.validFrom) <= now
+        && Date.parse(authority.validUntil) >= now
+      ))
+    : undefined
+  const giftApprovalLimit = Math.max(0, ...access.roleIds.map((roleId) => (
+    data.config.roles.find((role) => role.id === roleId)?.approvalLimits?.giftAmount ?? 0
+  )))
+  const canGift = Boolean(
+    currentEmployee
+    && access.canOrder
+    && activeGiftAuthority
+    && giftApprovalLimit > 0
+    && (data.viewer?.permissionIds ?? []).includes('commerce.authorization.request'),
+  )
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30_000)
@@ -94,6 +115,12 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
     if (occupiedTables.some((table) => table.id === tableId)) return
     setTableId(occupiedTables.length === 1 ? occupiedTables[0]!.id : '')
   }, [occupiedTables, tableId])
+
+  useEffect(() => {
+    if (canGift || orderMode === 'paid') return
+    setOrderMode('paid')
+    setGiftReason('')
+  }, [canGift, orderMode])
 
   useEffect(() => {
     if (!focusRequest || handledFocusRequestId.current === focusRequest.id) return
@@ -145,6 +172,22 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
     }
     setBusy(true)
     try {
+      if (orderMode === 'gift') {
+        if (!canGift) throw new Error('当前账号没有有效赠送权限，请由有权限的员工登录本人账号操作')
+        if (giftReason.trim().length < 2) throw new Error('请填写至少2个字的赠送原因')
+        await createComplimentaryOrder({
+          tableId: orderTable.id,
+          items,
+          reason: giftReason.trim(),
+          fulfillmentNote: options.fulfillmentNote,
+          sourceKdsTaskId: null,
+          idempotencyKey: `gift-cart-${crypto.randomUUID()}`,
+        })
+        setGiftReason('')
+        onNotice(`${orderTable.code}赠送订单已按${currentEmployee.displayName}本人权限提交，零应付并已进入出品`)
+        await onRefresh()
+        return
+      }
       const order = await createCartOrder({
         tableId: orderTable.id,
         items,
@@ -326,6 +369,7 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
     : occupiedTables.length === 0
       ? '当前没有已开台桌台，请先到“现场调度”开台'
       : '请先选择客人所在桌台，再开始核对订单'
+  const giftReasonMissing = orderMode === 'gift' && giftReason.trim().length < 2
 
   return (
     <section className="commerce-view">
@@ -389,10 +433,22 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
         <MenuOrderingWorkspace
           products={data.products}
           tableLabel={selectedTable ? `${selectedTable.code} · ${selectedTable.displayName}` : '尚未选择桌台'}
-          tableControl={<div className="menu-table-control"><select aria-label="选择桌台" value={tableId} disabled={occupiedTables.length === 0} onChange={(event) => setTableId(event.target.value)}><option value="">{occupiedTables.length === 0 ? '当前没有已开台桌台' : '请选择客人所在桌台'}</option>{occupiedTables.map((table) => <option key={table.id} value={table.id}>{table.code} · {table.displayName} · {table.guestCount}人</option>)}</select>{tableSelectionMessage && <span className="menu-table-guidance" role="alert">{tableSelectionMessage}</span>}</div>}
-          submitLabel={selectedTable ? '核对无误，确认下单' : '请先选择桌台'}
-          submitHint={selectedTable ? '提交后自动分发到对应吧台或厨房；完成制作后自动通知取送人员。' : occupiedTables.length === 0 ? '请先到现场调度开台，再回到这里提交订单。' : '请选择客人所在桌台，确认后才会创建订单和支付二维码。'}
-          submitDisabled={!selectedTable}
+          tableControl={<div className="employee-order-controls">
+            <div className="menu-table-control"><select aria-label="选择桌台" value={tableId} disabled={occupiedTables.length === 0} onChange={(event) => setTableId(event.target.value)}><option value="">{occupiedTables.length === 0 ? '当前没有已开台桌台' : '请选择客人所在桌台'}</option>{occupiedTables.map((table) => <option key={table.id} value={table.id}>{table.code} · {table.displayName} · {table.guestCount}人</option>)}</select>{tableSelectionMessage && <span className="menu-table-guidance" role="alert">{tableSelectionMessage}</span>}</div>
+            {canGift && <div className="employee-order-mode" role="group" aria-label="订单类型">
+              <button type="button" className={orderMode === 'paid' ? 'is-active' : ''} onClick={() => setOrderMode('paid')}><ShoppingCart size={15} />正常下单</button>
+              <button type="button" className={orderMode === 'gift' ? 'is-active is-gift' : ''} onClick={() => setOrderMode('gift')}><Gift size={15} />权限赠送</button>
+            </div>}
+            {orderMode === 'gift' && <label className="employee-gift-reason"><span>赠送原因（必填）</span><input aria-label="赠送原因" maxLength={200} value={giftReason} onChange={(event) => setGiftReason(event.target.value)} placeholder="例如：生日关怀、服务补偿" /></label>}
+          </div>}
+          submitLabel={!selectedTable ? '请先选择桌台' : giftReasonMissing ? '请填写赠送原因' : orderMode === 'gift' ? '确认赠送并出品' : '核对无误，确认下单'}
+          submitHint={!selectedTable
+            ? occupiedTables.length === 0 ? '请先到现场调度开台，再回到这里提交订单。' : '请选择客人所在桌台，确认后才会创建订单。'
+            : orderMode === 'gift'
+              ? `按${currentEmployee?.displayName ?? '当前员工'}本人账号权限校验，客人零应付；商品、库存、成本及赠送原因全部留痕。`
+              : '提交后自动分发到对应吧台或厨房；完成制作后自动通知取送人员。'}
+          submitDisabled={!selectedTable || giftReasonMissing}
+          complimentaryMode={orderMode === 'gift'}
           compactCart
           deemphasizeCollapsedTotal
           busy={busy}

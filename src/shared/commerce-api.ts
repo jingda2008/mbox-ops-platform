@@ -104,6 +104,7 @@ export const complimentaryOrderSchema = z.object({
     quantity: z.number().int().min(1).max(9999),
   })).min(1).max(20),
   reason: z.string().trim().min(2).max(200),
+  fulfillmentNote: z.string().trim().max(500).default(''),
   sourceKdsTaskId: z.string().min(1).nullable().default(null),
   idempotencyKey: z.string().min(8).max(128),
 })
@@ -146,7 +147,14 @@ export const authorityWriteSchema = z.object({
   kinds: z.array(z.enum(['discount', 'gift'])).min(1).max(2),
   maxAmount: z.number().int().min(0).max(10_000_000),
   allowedSkuIds: z.array(z.string().trim().min(1)).nullable(),
+  allowedCategoryIds: z.array(z.string().trim().min(1)).nullable().default(null),
   tableSessionIds: z.array(z.string().trim().min(1)).nullable(),
+  maxPerTableAmount: z.number().int().min(0).max(100_000_000).nullable().default(null),
+  maxPerShiftAmount: z.number().int().min(0).max(100_000_000).nullable().default(null),
+  maxPerBusinessDayAmount: z.number().int().min(0).max(100_000_000).nullable().default(null),
+  maxPerMonthAmount: z.number().int().min(0).max(1_000_000_000).nullable().default(null),
+  maxPerBusinessDayCount: z.number().int().min(1).max(10_000).nullable().default(null),
+  maxQuantityPerOrder: z.number().int().min(1).max(10_000).nullable().default(null),
   validFrom: z.string().datetime(),
   validUntil: z.string().datetime(),
 })

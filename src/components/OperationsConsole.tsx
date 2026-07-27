@@ -647,6 +647,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
         tableId: selectedTable.id,
         items: [{ productId: giftProductId, quantity: giftQuantity }],
         reason: giftReason.trim(),
+        fulfillmentNote: '',
         sourceKdsTaskId: turnoverAccounting.taskId,
         idempotencyKey: `turnover-gift-${crypto.randomUUID()}`,
       })

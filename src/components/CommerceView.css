@@ -7,6 +7,16 @@
 .commerce-mode-tabs button { min-height: 42px; padding: 0 16px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--ink-soft); font-weight: 750; }
 .commerce-mode-tabs button.is-active { border-bottom-color: var(--brand-yellow); color: var(--ink); }
 .commerce-mode-tabs button span { min-width: 20px; height: 20px; display: inline-grid; place-items: center; margin-left: 4px; border-radius: 50%; background: #eef0eb; font-size: 10px; }
+.employee-order-controls { min-width: 0; display: flex; align-items: end; gap: 10px; }
+.employee-order-mode { height: 42px; display: grid; grid-template-columns: 1fr 1fr; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 5px; background: #f2f3ef; }
+.employee-order-mode button { min-width: 104px; height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 10px; border: 0; border-right: 1px solid var(--line); background: transparent; color: var(--ink-soft); font-size: 11px; font-weight: 800; }
+.employee-order-mode button:last-child { border-right: 0; }
+.employee-order-mode button.is-active { background: #fff; color: var(--ink); box-shadow: inset 0 -3px 0 #244f62; }
+.employee-order-mode button.is-active.is-gift { color: #7c3037; box-shadow: inset 0 -3px 0 #a83f49; }
+.employee-gift-reason { min-width: 210px; display: grid; gap: 4px; }
+.employee-gift-reason > span { color: #7c3037 !important; font-size: 10px !important; font-weight: 800; }
+.employee-gift-reason input { width: min(300px, 30vw); height: 42px; padding: 0 10px; border: 1px solid #b97b80; border-radius: 5px; background: #fffafa; color: var(--ink); }
+.employee-gift-reason input:focus { outline: 3px solid rgba(168, 63, 73, .12); border-color: #a83f49; }
 .commerce-metrics { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--line); }
 .commerce-metrics > div { min-height: 74px; display: grid; grid-template-columns: 30px auto; grid-template-rows: auto auto; align-content: center; padding: 10px 17px; border-right: 1px solid var(--line); }
 .commerce-metrics > div:last-child { border-right: 0; }
@@ -107,4 +117,4 @@
 .manager-cancel-dialog > footer button { min-height: 44px; justify-content: center; }
 @media (max-width: 1000px) { .commerce-grid { grid-template-columns: 1fr; } .kds-section { border-right: 0; border-bottom: 1px solid var(--line); } .workstation-badge { display: none; } }
 @media (max-width: 1180px) { .kds-row { grid-template-columns: 82px minmax(160px, 1fr) minmax(170px, .8fr); } .kds-actions { grid-column: 2 / 4; justify-self: end; } }
-@media (max-width: 700px) { .commerce-metrics { grid-template-columns: repeat(3, 1fr); } .commerce-metrics > div { min-height: 68px; padding: 8px; grid-template-columns: 24px minmax(0, 1fr); } .commerce-metrics strong { font-size: 16px; } .quick-order-band { grid-template-columns: 1fr; } .kds-row { grid-template-columns: 72px minmax(0, 1fr); gap: 10px; } .kds-meta { grid-column: 1 / 3; } .kds-actions { width: 100%; grid-column: 1 / 3; justify-content: stretch; } .kds-actions .primary-button, .kds-actions .secondary-button { flex: 1 1 130px; justify-content: center; } }
+@media (max-width: 700px) { .commerce-metrics { grid-template-columns: repeat(3, 1fr); } .commerce-metrics > div { min-height: 68px; padding: 8px; grid-template-columns: 24px minmax(0, 1fr); } .commerce-metrics strong { font-size: 16px; } .quick-order-band { grid-template-columns: 1fr; } .employee-order-controls { width: 100%; flex-wrap: wrap; } .employee-order-controls .menu-table-control { width: 100%; } .employee-order-controls select { width: 100%; } .employee-order-mode { flex: 1 1 220px; } .employee-order-mode button { min-width: 0; } .employee-gift-reason { flex: 1 1 100%; } .employee-gift-reason input { width: 100%; } .kds-row { grid-template-columns: 72px minmax(0, 1fr); gap: 10px; } .kds-meta { grid-column: 1 / 3; } .kds-actions { width: 100%; grid-column: 1 / 3; justify-content: stretch; } .kds-actions .primary-button, .kds-actions .secondary-button { flex: 1 1 130px; justify-content: center; } }

@@ -271,6 +271,9 @@ describe('KDS exception API', () => {
       )!
       managerAuthority.validFrom = new Date(occurredAt.getTime() - 60_000).toISOString()
       managerAuthority.validUntil = new Date(occurredAt.getTime() + 60_000).toISOString()
+      managerAuthority.allowedSkuIds = ['product-beer']
+      managerAuthority.allowedCategoryIds = null
+      managerAuthority.maxPerBusinessDayAmount = product.listPriceAmount
       receiveInventory(state.inventoryDomain!, {
         movementId: 'gift-order-receipt', productId: product.id, unitCode: 'portion', quantity: 5,
         actorId: 'emp-chen', reason: '赠送订单测试入库', businessDate: state.store.businessDate,
@@ -296,10 +299,37 @@ describe('KDS exception API', () => {
     })
     expect(denied.statusCode).toBe(403)
 
-    const created = await app.inject({
+    const productDenied = await app.inject({
       method: 'POST', url: '/api/commerce/complimentary-orders',
       headers: headers('emp-chen', 'manager'), payload,
     })
+    expect(productDenied.statusCode).toBe(403)
+    expect(productDenied.json().message).toContain('未授权赠送的商品')
+    await repository.mutate((state) => {
+      const managerAuthority = state.orderDomain.authorizationAuthorities.find(
+        (authority) => authority.actorId === 'emp-chen' && authority.kinds.includes('gift'),
+      )!
+      managerAuthority.allowedSkuIds = []
+      managerAuthority.allowedCategoryIds = ['food']
+      state.revision += 1
+    })
+
+    const concurrentPayload = { ...payload, idempotencyKey: 'manager-gift-order-0002' }
+    const concurrentResults = await Promise.all([
+      app.inject({
+        method: 'POST', url: '/api/commerce/complimentary-orders',
+        headers: headers('emp-chen', 'manager'), payload,
+      }),
+      app.inject({
+        method: 'POST', url: '/api/commerce/complimentary-orders',
+        headers: headers('emp-chen', 'manager'), payload: concurrentPayload,
+      }),
+    ])
+    expect(concurrentResults.map((response) => response.statusCode).sort()).toEqual([201, 403])
+    const createdIndex = concurrentResults.findIndex((response) => response.statusCode === 201)
+    const created = concurrentResults[createdIndex]!
+    const cumulativeDenied = concurrentResults.find((response) => response.statusCode === 403)!
+    expect(cumulativeDenied.json().message).toContain('营业日累计赠送额度不足')
     expect(created.statusCode, created.body).toBe(201)
     expect(created.json()).toMatchObject({
       status: 'submitted',
@@ -308,7 +338,8 @@ describe('KDS exception API', () => {
     })
     const replayed = await app.inject({
       method: 'POST', url: '/api/commerce/complimentary-orders',
-      headers: headers('emp-chen', 'manager'), payload,
+      headers: headers('emp-chen', 'manager'),
+      payload: createdIndex === 0 ? payload : concurrentPayload,
     })
     expect(replayed.statusCode, replayed.body).toBe(201)
     expect(replayed.json().id).toBe(created.json().id)

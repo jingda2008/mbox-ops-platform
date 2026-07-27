@@ -45,6 +45,76 @@ test.describe('客人推荐销售路径', () => {
     await expectNoHorizontalOverflow(page)
   })
 
+  test('手机点击酒水后显示可售商品且页面宽度不发生变化', async ({ page }) => {
+    await page.setViewportSize({ width: 430, height: 932 })
+    await page.goto('/guest?table=W01')
+
+    const widthBefore = await page.evaluate(() => ({
+      client: document.documentElement.clientWidth,
+      scroll: document.documentElement.scrollWidth,
+    }))
+    await page.getByTestId('guest-menu-view-drinks').click()
+    await expect(page.getByText('没有找到相关商品')).toHaveCount(0)
+    await expect(page.locator('.menu-product')).not.toHaveCount(0)
+    await expect(page.getByRole('navigation', { name: '酒水分类' })).toBeVisible()
+    await expect(page.getByTestId('menu-product-product-cocktail')).toBeVisible()
+    const widthAfter = await page.evaluate(() => ({
+      client: document.documentElement.clientWidth,
+      scroll: document.documentElement.scrollWidth,
+    }))
+    expect(widthAfter).toEqual(widthBefore)
+    await expectNoHorizontalOverflow(page)
+  })
+
+  test('过期桌次不再显示可点击的空菜单', async ({ page }) => {
+    await page.route('**/api/guest/session?*', async (route) => {
+      await route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          code: 'GUEST_SESSION_EXPIRED',
+          message: '这次桌边服务已过期～重新扫一下桌面二维码，我们马上继续照顾您。',
+        }),
+      })
+    })
+    await page.setViewportSize({ width: 430, height: 932 })
+    await page.goto('/guest?token=expired-session')
+
+    await expect(page.getByRole('alert')).toContainText('请重新扫描桌面二维码')
+    await expect(page.getByTestId('guest-menu-view-drinks')).toHaveCount(0)
+    await expect(page.getByRole('navigation', { name: '桌台功能' })).toHaveCount(0)
+    await expectNoHorizontalOverflow(page)
+  })
+
+  test('已打开的菜单在桌次失效后立即收起旧商品', async ({ page }) => {
+    let expireSession = false
+    await page.route('**/api/guest/session?*', async (route) => {
+      if (!expireSession) {
+        await route.continue()
+        return
+      }
+      await route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          code: 'GUEST_SESSION_EXPIRED',
+          message: '这次桌边服务已过期～重新扫一下桌面二维码，我们马上继续照顾您。',
+        }),
+      })
+    })
+    await page.setViewportSize({ width: 430, height: 932 })
+    await page.goto('/guest?table=W01')
+    await expect(page.getByTestId('guest-menu-view-drinks')).toBeVisible()
+
+    expireSession = true
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
+
+    await expect(page.getByRole('alert')).toContainText('请重新扫描桌面二维码')
+    await expect(page.getByTestId('guest-menu-view-drinks')).toHaveCount(0)
+    await expect(page.locator('.menu-product')).toHaveCount(0)
+    await expectNoHorizontalOverflow(page)
+  })
+
   test('服务页只保留四个高频入口和个性化需求，不再展示六项服务网格', async ({ page }) => {
     await page.setViewportSize({ width: 430, height: 932 })
     await page.goto('/guest?table=W01')

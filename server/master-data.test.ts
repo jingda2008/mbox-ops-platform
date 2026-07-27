@@ -94,4 +94,20 @@ describe('master data management', () => {
       listPriceAmount: 500, costAmount: 600, stationId: product.stationId, enabled: true,
     }, 'manager-demo')).toThrow('商品成本不能高于标价')
   })
+
+  it('classifies clear drink names and rejects unclassified guest drinks', () => {
+    const state = createSeedState()
+    const beer = createProduct(state, {
+      sku: 'TEST-BEER-001', name: '测试精酿啤酒', specification: '330ml',
+      categoryId: 'drinks', categoryName: '酒水', beverageFamily: 'none',
+      listPriceAmount: 6800, costAmount: 1800, stationId: 'bar-main', enabled: true,
+    }, 'manager-demo')
+    expect(beer.beverageFamily).toBe('beer')
+
+    expect(() => createProduct(state, {
+      sku: 'TEST-DRINK-UNKNOWN', name: '当日限定饮品', specification: '1杯',
+      categoryId: 'drinks', categoryName: '酒水', beverageFamily: 'none',
+      listPriceAmount: 6800, costAmount: 1800, stationId: 'bar-main', enabled: true,
+    }, 'manager-demo')).toThrow('客人可见的酒水商品必须选择酒水类型')
+  })
 })

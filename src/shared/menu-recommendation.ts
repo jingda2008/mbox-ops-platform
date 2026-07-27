@@ -7,6 +7,7 @@ import type {
   MenuRecommendationScene,
   MenuRecommendationTaste,
 } from './contracts.js'
+import { resolveMenuBeverageFamily } from './menu-product-classification.js'
 
 export interface MenuRecommendationContext {
   partySize: number
@@ -81,7 +82,7 @@ export function normalizeMenuProductConfiguration(product: MenuProduct): MenuPro
   return {
     ...product,
     productKind,
-    beverageFamily: product.beverageFamily ?? inferBeverageFamily(product),
+    beverageFamily: resolveMenuBeverageFamily(product),
     bundleComponents: productKind === 'bundle' ? [...(product.bundleComponents ?? [])] : [],
     substitutionProductIds: [...(product.substitutionProductIds ?? [])],
     recommendation: recommendationConfig(product),
@@ -337,23 +338,6 @@ function scoreProduct(product: MenuProduct, products: MenuProduct[], context: Me
 function tagScore<T extends string>(selected: T | undefined, tags: readonly T[], weight: number) {
   if (!selected || tags.length === 0) return 0
   return tags.includes(selected) ? weight : 0
-}
-
-function inferBeverageFamily(product: MenuProduct): MenuBeverageFamily {
-  const haystack = [
-    product.categoryId,
-    product.categoryName,
-    product.name,
-    product.description,
-    ...(product.tags ?? []),
-  ].filter(Boolean).join(' ').toLowerCase()
-  if (/鸡尾酒|cocktail/.test(haystack)) return 'cocktail'
-  if (/啤酒|beer|精酿/.test(haystack)) return 'beer'
-  if (/起泡|香槟|sparkling|champagne/.test(haystack)) return 'sparkling'
-  if (/葡萄酒|红酒|白葡萄酒|wine/.test(haystack)) return 'wine'
-  if (/洋酒|威士忌|白兰地|伏特加|朗姆|金酒|烈酒|spirit|whisky|whiskey|vodka|rum|gin/.test(haystack)) return 'spirits'
-  if (/无酒精|咖啡|茶|果汁|汽水|mocktail/.test(haystack)) return 'non_alcoholic'
-  return 'none'
 }
 
 function defaultReason(family: MenuBeverageFamily) {

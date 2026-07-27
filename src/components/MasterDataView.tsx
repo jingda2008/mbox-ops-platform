@@ -19,6 +19,7 @@ import type {
   ConfigDraftInput,
   Employee,
   EmployeeWriteInput,
+  MenuBeverageFamily,
   MenuProduct,
   ProductWriteInput,
   RoleConfig,
@@ -603,6 +604,7 @@ function ProductSection({ data, run }: SectionProps) {
   const [name, setName] = useState('')
   const [price, setPrice] = useState(68)
   const [categoryId, setCategoryId] = useState(categories[0]?.[0] ?? 'featured')
+  const [beverageFamily, setBeverageFamily] = useState<MenuBeverageFamily>('none')
   const [stationId, setStationId] = useState(workstations.find((station) => station.enabled)?.id ?? '')
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'available' | 'sold_out' | 'hidden' | 'timed'>('all')
@@ -642,7 +644,7 @@ function ProductSection({ data, run }: SectionProps) {
       sku, name, specification: '1份', categoryId, categoryName: categories.find(([id]) => id === categoryId)?.[1] ?? '推荐', description: '', imageUrl: '', tags: [], sortOrder: data.products.length + 1, listPriceAmount: yuanToFen(price), costAmount: 0,
       stationId, enabled: true, soldOut: false, soldOutReason: '', availableFrom: null, availableUntil: null,
       guestVisible: true, requiresFulfillment: true, maxOrderQuantity: 50,
-      productKind: 'single', beverageFamily: 'none', bundleComponents: [], substitutionProductIds: [],
+      productKind: 'single', beverageFamily, bundleComponents: [], substitutionProductIds: [],
       recommendation: defaultRecommendation(),
     }), `${name}已建立`)
     setSku('')
@@ -662,9 +664,13 @@ function ProductSection({ data, run }: SectionProps) {
         <label><span>SKU</span><input value={sku} onChange={(event) => setSku(event.target.value)} /></label>
         <label><span>商品名称</span><input value={name} onChange={(event) => setName(event.target.value)} /></label>
         <label><span>标价（元）</span><input type="number" min={0} value={price} onChange={(event) => setPrice(Number(event.target.value))} /></label>
-        <label><span>菜单分类</span><select value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>{categories.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
+        <label><span>菜单分类</span><select value={categoryId} onChange={(event) => {
+          setCategoryId(event.target.value)
+          if (event.target.value !== 'drinks') setBeverageFamily('none')
+        }}>{categories.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
+        {categoryId === 'drinks' && <label><span>酒水类型</span><select value={beverageFamily} onChange={(event) => setBeverageFamily(event.target.value as MenuBeverageFamily)}><option value="none">请选择</option>{menuBeverageFamilies.filter((family) => family !== 'none').map((family) => <option key={family} value={family}>{beverageFamilyLabels[family]}</option>)}</select></label>}
         <label><span>出品口</span><select value={stationId} onChange={(event) => setStationId(event.target.value)}>{workstations.filter((station) => station.enabled).map((station) => <option key={station.id} value={station.id}>{station.name}</option>)}</select></label>
-        <button className="primary-button" type="submit" disabled={!sku.trim() || !name.trim() || !stationId}><Plus size={17} />新增商品</button>
+        <button className="primary-button" type="submit" disabled={!sku.trim() || !name.trim() || !stationId || (categoryId === 'drinks' && beverageFamily === 'none')}><Plus size={17} />新增商品</button>
       </form>
 
       <div className="product-toolbar">

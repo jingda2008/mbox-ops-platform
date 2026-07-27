@@ -1,6 +1,6 @@
 import { Bell, CakeSlice, CheckCircle2, ChevronRight, CircleAlert, Clock3, CreditCard, ListChecks, MapPin, MessageCircleMore, MessageSquareWarning, Mic2, Music2, Search, Send, ShieldCheck, ShoppingBag, X } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { checkoutGuestOrder, createGuestOrder, createGuestSongRequest, createGuestTask, getGuestSession, trackGuestBehavior } from '../api'
+import { ApiError, checkoutGuestOrder, createGuestOrder, createGuestSongRequest, createGuestTask, getGuestSession, trackGuestBehavior } from '../api'
 import { PendingActionRegistry } from '../pending-action-registry'
 import type { GuestSessionResponse, GuestTaskView, WechatJsapiParameters } from '../shared/guest-contracts'
 import type { GuestBehaviorEventType, GuestBehaviorValue } from '../shared/guest-insight-contracts'
@@ -163,6 +163,7 @@ export function GuestPortal() {
   const initialToken = params.get('token') ?? ''
   const requestedPaymentOrderId = params.get('payOrder') ?? ''
   const [data, setData] = useState<GuestSessionResponse | null>(null)
+  const [sessionAccessError, setSessionAccessError] = useState('')
   const [note, setNote] = useState('')
   const [reply, setReply] = useState<GuestReplyNotice | null>(null)
   const [pendingActions, setPendingActions] = useState<ReadonlySet<string>>(() => new Set())
@@ -233,11 +234,26 @@ export function GuestPortal() {
       latestTableToken.current = nextData.tableToken
       window.history.replaceState(window.history.state, '', guestSessionHistoryUrl(window.location.href, nextData.tableToken))
       setData(nextData)
+      setSessionAccessError('')
       setReply((current) => reconcileGuestReply(current, nextData.tasks, nextData.songRequests))
       setTerminalSongSeenAt((current) => trackGuestSongTerminalStates(current, nextData.songRequests, Date.now()))
       setError((current) => current?.source === 'refresh' ? null : current)
     } catch (requestError) {
       if (sequence !== refreshSequence.current) return
+      const terminalAccessFailure = requestError instanceof ApiError && [
+        'GUEST_SESSION_EXPIRED',
+        'GUEST_SESSION_REVOKED',
+        'TABLE_SESSION_NOT_OPEN',
+        'TABLE_SESSION_HANDOVER_REQUIRED',
+        'TABLE_NOT_FOUND',
+        'TABLE_ACCESS_INVALID',
+        'GUEST_SESSION_REQUIRED',
+        'TABLE_QR_REQUIRED',
+      ].includes(requestError.code)
+      if (terminalAccessFailure) {
+        setSessionAccessError(guestErrorMessage(requestError, '这次桌边服务已经结束，请重新扫描桌面二维码。'))
+        setData(null)
+      }
       setError({
         message: guestErrorMessage(requestError, '现场有点忙，我们正在重新连接服务，稍等一下就好。'),
         source: 'refresh',
@@ -563,6 +579,28 @@ export function GuestPortal() {
     } finally {
       setCheckoutBusy(false)
     }
+  }
+
+  if (!data) {
+    const accessMessage = sessionAccessError || error?.message
+    return <main className="guest-shell guest-shell--access-state">
+      <header className="guest-header">
+        <div className="guest-brand-lockup">
+          <img src="/brand/superhigh-horizontal.png" alt="SUPERHIGH" />
+          <i aria-hidden="true" />
+          <div><strong>M-BOX</strong><small>LIVEHOUSE · LUJIAZUI</small></div>
+        </div>
+        <span className="secure-label" title="安全桌码"><ShieldCheck size={16} /><span>安全桌码</span></span>
+      </header>
+      <section className={`guest-access-state${sessionAccessError ? ' is-blocked' : ''}`} role={sessionAccessError ? 'alert' : 'status'}>
+        {sessionAccessError ? <ShieldCheck size={28} aria-hidden="true" /> : <Clock3 size={28} aria-hidden="true" />}
+        <div>
+          <strong>{sessionAccessError ? '请重新扫描桌面二维码' : accessMessage ? '正在重新连接' : '正在连接本桌服务'}</strong>
+          <p>{accessMessage || '正在读取本桌菜单、演出和服务信息，请稍候。'}</p>
+          {sessionAccessError && <span>关闭这个页面后，重新扫一下桌面上的固定二维码即可继续。</span>}
+        </div>
+      </section>
+    </main>
   }
 
   return (

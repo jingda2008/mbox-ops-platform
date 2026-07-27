@@ -270,6 +270,7 @@ test.describe('视觉与移动端适配', () => {
     await page.goto('/')
     await page.getByTitle('打开导航').click()
     await page.locator('.sidebar nav').getByRole('button', { name: '订单与出品' }).click()
+    await page.getByRole('button', { name: '全屏点单' }).click()
 
     await expect(page.getByText('尚未选择桌台')).toBeVisible()
     await expect(page.getByLabel('选择桌台')).toBeDisabled()
@@ -285,6 +286,7 @@ test.describe('视觉与移动端适配', () => {
     await useStaffIdentity(page, 'emp-chen', '李艳')
     await page.goto('/')
     await page.locator('.sidebar nav').getByRole('button', { name: '订单与出品' }).click()
+    await page.getByRole('button', { name: '全屏点单' }).click()
 
     const tableSelect = page.getByLabel('选择桌台')
     await expect(tableSelect).toHaveValue('')
@@ -384,8 +386,9 @@ test.describe('视觉与移动端适配', () => {
     await page.getByTitle('打开导航').click()
     await page.locator('.sidebar nav').getByRole('button', { name: '点单与送餐' }).click()
     await expect(page.getByRole('heading', { name: '订单与出品' })).toBeVisible()
-    await page.getByLabel('选择桌台').selectOption('table-l01')
     await page.getByRole('button', { name: '权限赠送' }).click()
+    await page.getByRole('button', { name: '全屏点单' }).click()
+    await page.getByLabel('选择桌台').selectOption('table-l01')
     await page.getByLabel('赠送原因').fill('生日关怀')
     await expectNoHorizontalOverflow(page)
     await page.getByTitle('加入精酿啤酒').click()
@@ -404,6 +407,48 @@ test.describe('视觉与移动端适配', () => {
     expect(giftRequest).not.toHaveProperty('actorId')
     expect(paymentLinkRequests).toBe(0)
     await expect(page.getByRole('dialog', { name: /订单支付/ })).toHaveCount(0)
+  })
+
+  test('全屏点单隔离员工操作并用本人PIN保护退出和未提交购物车', async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 })
+    await useStaffIdentity(page, 'emp-lin', 'Tom')
+    await page.route('**/api/auth/verify-pin', async (route) => {
+      const input = route.request().postDataJSON() as { employeePin?: string }
+      if (input.employeePin === '1003') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ verified: true, actorId: 'emp-lin' }) })
+        return
+      }
+      await route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ code: 'PILOT_EMPLOYEE_PIN_DENIED', message: '员工PIN错误，请输入当前登录员工的PIN' }) })
+    })
+    await page.goto('/')
+
+    await page.locator('.sidebar nav').getByRole('button', { name: '点单与送餐' }).click()
+    await expect(page.getByRole('button', { name: '权限赠送' })).toBeVisible()
+    await page.getByRole('button', { name: '全屏点单' }).click()
+
+    await expect(page.locator('.commerce-view')).toHaveClass(/is-ordering-focus/)
+    await expect(page.getByRole('button', { name: '员工退出' })).toBeVisible()
+    await expect(page.getByRole('button', { name: /出品履约/ })).toHaveCount(0)
+    await page.getByLabel('选择桌台').selectOption('table-l01')
+    await page.getByTitle('加入精酿啤酒').click()
+
+    await page.getByRole('button', { name: '员工退出' }).click()
+    const exitDialog = page.getByRole('dialog', { name: '退出客用点单' })
+    await expect(exitDialog).toContainText('当前购物车还有 1 件未提交商品，退出后会清空')
+    await exitDialog.getByLabel('当前员工PIN').fill('9999')
+    await exitDialog.getByRole('button', { name: '验证并退出' }).click()
+    await expect(exitDialog.getByRole('alert')).toHaveText('员工PIN错误，请输入当前登录员工的PIN')
+    await expect(page.locator('.commerce-view')).toHaveClass(/is-ordering-focus/)
+
+    await exitDialog.getByLabel('当前员工PIN').fill('1003')
+    await exitDialog.getByRole('button', { name: '验证并退出' }).click()
+    await expect(exitDialog).toHaveCount(0)
+    await expect(page.locator('.commerce-view')).not.toHaveClass(/is-ordering-focus/)
+    await expect(page.getByRole('button', { name: /出品履约/ })).toHaveClass(/is-active/)
+
+    await page.getByRole('button', { name: '全屏点单' }).click()
+    await expect(page.getByRole('complementary', { name: '订单结算' })).toContainText('还未选择商品')
+    await expectNoHorizontalOverflow(page)
   })
 
   test('没有本人赠送授权的服务员不显示赠送下单入口', async ({ page }) => {

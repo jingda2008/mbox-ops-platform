@@ -1,6 +1,6 @@
-import { Ban, CheckCheck, ChefHat, CircleAlert, CircleDollarSign, Clock3, Copy, Gift, MessageSquareWarning, PackageCheck, PackageX, Play, QrCode, RotateCcw, ScanLine, ShoppingCart, Smartphone, UserRound, X } from 'lucide-react'
+import { Ban, CheckCheck, ChefHat, CircleAlert, CircleDollarSign, Clock3, Copy, Gift, LockKeyhole, LogOut, MessageSquareWarning, PackageCheck, PackageX, Play, QrCode, RotateCcw, ScanLine, ShoppingCart, Smartphone, UserRound, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { actOnKdsTask, createAssistedPaymentLink, createCartOrder, createComplimentaryOrder, decideKdsException, getCurrentActorId, managerCancelKdsTask, reportKdsException } from '../api'
+import { actOnKdsTask, createAssistedPaymentLink, createCartOrder, createComplimentaryOrder, decideKdsException, getCurrentActorId, managerCancelKdsTask, reportKdsException, verifyCurrentEmployeePin } from '../api'
 import type { BootstrapResponse } from '../shared/contracts'
 import type { AssistedPaymentLink, KdsActionInput, KdsExceptionDecisionInput, KdsExceptionReportInput, ManagerKdsCancellationInput } from '../shared/commerce-api'
 import type { KdsExceptionEvent, KdsTask } from '../shared/order-contracts'
@@ -54,7 +54,13 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
   const [tableId, setTableId] = useState(() => occupiedTables.length === 1 ? occupiedTables[0]!.id : '')
   const [orderMode, setOrderMode] = useState<'paid' | 'gift'>('paid')
   const [giftReason, setGiftReason] = useState('')
-  const [workspaceMode, setWorkspaceMode] = useState<'order' | 'fulfillment'>(access.canOrder ? 'order' : 'fulfillment')
+  const [workspaceMode, setWorkspaceMode] = useState<'order' | 'fulfillment'>('fulfillment')
+  const [orderingFocusMode, setOrderingFocusMode] = useState(false)
+  const [orderingCartCount, setOrderingCartCount] = useState(0)
+  const [exitPinOpen, setExitPinOpen] = useState(false)
+  const [exitPin, setExitPin] = useState('')
+  const [exitPinError, setExitPinError] = useState('')
+  const [verifyingExit, setVerifyingExit] = useState(false)
   const [busy, setBusy] = useState(false)
   const [busyKdsIds, setBusyKdsIds] = useState<ReadonlySet<string>>(() => new Set())
   const [paymentSheet, setPaymentSheet] = useState<PaymentSheet | null>(null)
@@ -123,8 +129,15 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
   }, [canGift, orderMode])
 
   useEffect(() => {
+    document.documentElement.classList.toggle('employee-ordering-focus', orderingFocusMode)
+    return () => document.documentElement.classList.remove('employee-ordering-focus')
+  }, [orderingFocusMode])
+
+  useEffect(() => {
     if (!focusRequest || handledFocusRequestId.current === focusRequest.id) return
     handledFocusRequestId.current = focusRequest.id
+    setOrderingFocusMode(false)
+    setExitPinOpen(false)
     setWorkspaceMode('fulfillment')
     const requestedFilter = kdsFilterForQuery(focusRequest.focus?.query)
     setKdsFilter(requestedFilter)
@@ -352,6 +365,39 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
     }
   }
 
+  function enterOrderingFocus() {
+    setWorkspaceMode('order')
+    setOrderingFocusMode(true)
+    setExitPinOpen(false)
+    setExitPin('')
+    setExitPinError('')
+  }
+
+  function requestOrderingExit() {
+    setExitPinOpen(true)
+    setExitPin('')
+    setExitPinError('')
+  }
+
+  async function verifyOrderingExit() {
+    if (exitPin.length !== 4 || verifyingExit) return
+    setVerifyingExit(true)
+    setExitPinError('')
+    try {
+      await verifyCurrentEmployeePin(exitPin)
+      setExitPinOpen(false)
+      setOrderingFocusMode(false)
+      setWorkspaceMode('fulfillment')
+      setOrderingCartCount(0)
+      setExitPin('')
+      onNotice(orderingCartCount > 0 ? '已退出客用点单，未提交的购物车已清空' : '已退出客用点单')
+    } catch (error) {
+      setExitPinError(error instanceof Error ? error.message : 'PIN验证失败，请重试')
+    } finally {
+      setVerifyingExit(false)
+    }
+  }
+
   const accountRows = useMemo(() => {
     const grouped = new Map<string, number>()
     for (const entry of data.orderDomain.tableLedgerEntries) {
@@ -372,12 +418,12 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
   const giftReasonMissing = orderMode === 'gift' && giftReason.trim().length < 2
 
   return (
-    <section className="commerce-view">
-      <div className="section-heading">
+    <section className={`commerce-view${orderingFocusMode ? ' is-ordering-focus' : ''}`}>
+      {!orderingFocusMode && <div className="section-heading">
         <div><span className="eyebrow">{access.roleLabel} · {access.scopeLabel}</span><h2>岗位履约工作台</h2></div>
         <span className="count-chip">{visibleKds.length}项履约进度</span>
-      </div>
-      {latestPaidSignal && <div className="paid-signal" role="status"><CheckCheck size={20} /><div><strong>{paidTable?.code ?? '桌台'} 已收款 {money(latestPaidSignal.amount)}</strong><span>{latestPaidSignal.channel === 'physical_pos' ? '物理POS待对账' : '支付成功，服务与收银已同步'}</span></div></div>}
+      </div>}
+      {!orderingFocusMode && latestPaidSignal && <div className="paid-signal" role="status"><CheckCheck size={20} /><div><strong>{paidTable?.code ?? '桌台'} 已收款 {money(latestPaidSignal.amount)}</strong><span>{latestPaidSignal.channel === 'physical_pos' ? '物理POS待对账' : '支付成功，服务与收银已同步'}</span></div></div>}
       {paymentSheet && <div className="assisted-payment-backdrop" role="presentation">
         <section className={`assisted-payment-dialog ${sheetPaid ? 'is-paid' : ''}`} role="dialog" aria-modal="true" aria-label={`${paymentSheet.tableCode}订单支付`}>
           <header>
@@ -424,38 +470,46 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
           </footer>
         </section>
       </div>}
-      {access.canOrder && <div className="commerce-mode-tabs">
-        <button className={workspaceMode === 'order' ? 'is-active' : ''} onClick={() => setWorkspaceMode('order')}>全屏点单</button>
+      {!orderingFocusMode && access.canOrder && <div className="commerce-mode-tabs">
+        <button onClick={enterOrderingFocus}>全屏点单</button>
         <button className={workspaceMode === 'fulfillment' ? 'is-active' : ''} onClick={() => setWorkspaceMode('fulfillment')}>出品履约 <span>{visibleKds.length}</span></button>
+        <div className="employee-order-type">
+          <small>订单类型</small>
+          <div className={`employee-order-mode${canGift ? '' : ' is-single'}`} role="group" aria-label="订单类型">
+            <button type="button" className={orderMode === 'paid' ? 'is-active' : ''} onClick={() => setOrderMode('paid')}><ShoppingCart size={15} />正常下单</button>
+            {canGift && <button type="button" className={orderMode === 'gift' ? 'is-active is-gift' : ''} onClick={() => setOrderMode('gift')}><Gift size={15} />权限赠送</button>}
+          </div>
+        </div>
       </div>}
 
       {workspaceMode === 'order' && access.canOrder ? (
-        <MenuOrderingWorkspace
-          products={data.products}
-          tableLabel={selectedTable ? `${selectedTable.code} · ${selectedTable.displayName}` : '尚未选择桌台'}
-          tableControl={<div className="employee-order-controls">
-            <div className="menu-table-control"><select aria-label="选择桌台" value={tableId} disabled={occupiedTables.length === 0} onChange={(event) => setTableId(event.target.value)}><option value="">{occupiedTables.length === 0 ? '当前没有已开台桌台' : '请选择客人所在桌台'}</option>{occupiedTables.map((table) => <option key={table.id} value={table.id}>{table.code} · {table.displayName} · {table.guestCount}人</option>)}</select>{tableSelectionMessage && <span className="menu-table-guidance" role="alert">{tableSelectionMessage}</span>}</div>
-            {canGift && <div className="employee-order-mode" role="group" aria-label="订单类型">
-              <button type="button" className={orderMode === 'paid' ? 'is-active' : ''} onClick={() => setOrderMode('paid')}><ShoppingCart size={15} />正常下单</button>
-              <button type="button" className={orderMode === 'gift' ? 'is-active is-gift' : ''} onClick={() => setOrderMode('gift')}><Gift size={15} />权限赠送</button>
+        <>
+          {orderingFocusMode && <button className="employee-ordering-exit" type="button" onClick={requestOrderingExit}><LogOut size={17} />员工退出</button>}
+          <MenuOrderingWorkspace
+            products={data.products}
+            tableLabel={selectedTable ? `${selectedTable.code} · ${selectedTable.displayName}` : '尚未选择桌台'}
+            tableControl={<div className="employee-order-controls">
+              <div className="menu-table-control"><select aria-label="选择桌台" value={tableId} disabled={occupiedTables.length === 0} onChange={(event) => setTableId(event.target.value)}><option value="">{occupiedTables.length === 0 ? '当前没有已开台桌台' : '请选择客人所在桌台'}</option>{occupiedTables.map((table) => <option key={table.id} value={table.id}>{table.code} · {table.displayName} · {table.guestCount}人</option>)}</select>{tableSelectionMessage && <span className="menu-table-guidance" role="alert">{tableSelectionMessage}</span>}</div>
+              <span className={`employee-order-badge${orderMode === 'gift' ? ' is-gift' : ''}`}>{orderMode === 'gift' ? <Gift size={14} /> : <ShoppingCart size={14} />}{orderMode === 'gift' ? '权限赠送' : '正常下单'}</span>
+              {orderMode === 'gift' && <label className="employee-gift-reason"><span>赠送原因（必填）</span><input aria-label="赠送原因" maxLength={200} value={giftReason} onChange={(event) => setGiftReason(event.target.value)} placeholder="例如：生日关怀、服务补偿" /></label>}
             </div>}
-            {orderMode === 'gift' && <label className="employee-gift-reason"><span>赠送原因（必填）</span><input aria-label="赠送原因" maxLength={200} value={giftReason} onChange={(event) => setGiftReason(event.target.value)} placeholder="例如：生日关怀、服务补偿" /></label>}
-          </div>}
-          submitLabel={!selectedTable ? '请先选择桌台' : giftReasonMissing ? '请填写赠送原因' : orderMode === 'gift' ? '确认赠送并出品' : '核对无误，确认下单'}
-          submitHint={!selectedTable
-            ? occupiedTables.length === 0 ? '请先到现场调度开台，再回到这里提交订单。' : '请选择客人所在桌台，确认后才会创建订单。'
-            : orderMode === 'gift'
-              ? `按${currentEmployee?.displayName ?? '当前员工'}本人账号权限校验，客人零应付；商品、库存、成本及赠送原因全部留痕。`
-              : '提交后自动分发到对应吧台或厨房；完成制作后自动通知取送人员。'}
-          submitDisabled={!selectedTable || giftReasonMissing}
-          complimentaryMode={orderMode === 'gift'}
-          compactCart
-          deemphasizeCollapsedTotal
-          busy={busy}
-          timeZone={data.store.timezone}
-          orderSafety={data.commercialOps?.config.orderSafety}
-          onSubmit={submit}
-        />
+            submitLabel={!selectedTable ? '请先选择桌台' : giftReasonMissing ? '请填写赠送原因' : orderMode === 'gift' ? '确认赠送并出品' : '核对无误，确认下单'}
+            submitHint={!selectedTable
+              ? occupiedTables.length === 0 ? '请先到现场调度开台，再回到这里提交订单。' : '请选择客人所在桌台，确认后才会创建订单。'
+              : orderMode === 'gift'
+                ? `按${currentEmployee?.displayName ?? '当前员工'}本人账号权限校验，客人零应付；商品、库存、成本及赠送原因全部留痕。`
+                : '提交后自动分发到对应吧台或厨房；完成制作后自动通知取送人员。'}
+            submitDisabled={!selectedTable || giftReasonMissing}
+            complimentaryMode={orderMode === 'gift'}
+            compactCart
+            deemphasizeCollapsedTotal
+            busy={busy}
+            timeZone={data.store.timezone}
+            orderSafety={data.commercialOps?.config.orderSafety}
+            onSubmit={submit}
+            onCartCountChange={setOrderingCartCount}
+          />
+        </>
       ) : <>
       <div className="commerce-metrics">
         <div><ChefHat size={19} /><strong>{actionableKdsCount}</strong><span>我可处理</span></div>
@@ -537,6 +591,18 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
         </section>}
       </div>
       </>}
+      {exitPinOpen && <div className="ordering-exit-backdrop" role="presentation">
+        <section className="ordering-exit-dialog" role="dialog" aria-modal="true" aria-label="退出客用点单">
+          <header><span><LockKeyhole size={20} /></span><div><small>员工验证</small><h2>退出客用点单</h2></div></header>
+          <p>{orderingCartCount > 0 ? `当前购物车还有 ${orderingCartCount} 件未提交商品，退出后会清空。` : '验证当前员工PIN后返回出品履约页面。'}</p>
+          <label><span>当前员工PIN</span><input autoFocus aria-label="当前员工PIN" type="password" inputMode="numeric" autoComplete="current-password" minLength={4} maxLength={4} value={exitPin} onChange={(event) => { setExitPin(event.target.value.replace(/\D/g, '').slice(0, 4)); setExitPinError('') }} onKeyDown={(event) => { if (event.key === 'Enter' && exitPin.length === 4) void verifyOrderingExit() }} /></label>
+          {exitPinError && <div className="ordering-exit-error" role="alert">{exitPinError}</div>}
+          <footer>
+            <button className="secondary-button" type="button" disabled={verifyingExit} onClick={() => { setExitPinOpen(false); setExitPin(''); setExitPinError('') }}>继续点单</button>
+            <button className="primary-button" type="button" disabled={exitPin.length !== 4 || verifyingExit} onClick={() => void verifyOrderingExit()}>{verifyingExit ? '正在验证' : '验证并退出'}</button>
+          </footer>
+        </section>
+      </div>}
     </section>
   )
 }

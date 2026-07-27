@@ -7,8 +7,11 @@
 .commerce-mode-tabs button { min-height: 42px; padding: 0 16px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--ink-soft); font-weight: 750; }
 .commerce-mode-tabs button.is-active { border-bottom-color: var(--brand-yellow); color: var(--ink); }
 .commerce-mode-tabs button span { min-width: 20px; height: 20px; display: inline-grid; place-items: center; margin-left: 4px; border-radius: 50%; background: #eef0eb; font-size: 10px; }
+.employee-order-type { min-height: 42px; display: flex; align-items: center; gap: 8px; margin-left: 10px; padding-left: 14px; border-left: 1px solid var(--line); }
+.employee-order-type > small { color: var(--ink-soft); font-size: 10px; font-weight: 800; white-space: nowrap; }
 .employee-order-controls { min-width: 0; display: flex; align-items: end; gap: 10px; }
 .employee-order-mode { height: 42px; display: grid; grid-template-columns: 1fr 1fr; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 5px; background: #f2f3ef; }
+.employee-order-mode.is-single { grid-template-columns: 1fr; }
 .employee-order-mode button { min-width: 104px; height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 10px; border: 0; border-right: 1px solid var(--line); background: transparent; color: var(--ink-soft); font-size: 11px; font-weight: 800; }
 .employee-order-mode button:last-child { border-right: 0; }
 .employee-order-mode button.is-active { background: #fff; color: var(--ink); box-shadow: inset 0 -3px 0 #244f62; }
@@ -17,6 +20,27 @@
 .employee-gift-reason > span { color: #7c3037 !important; font-size: 10px !important; font-weight: 800; }
 .employee-gift-reason input { width: min(300px, 30vw); height: 42px; padding: 0 10px; border: 1px solid #b97b80; border-radius: 5px; background: #fffafa; color: var(--ink); }
 .employee-gift-reason input:focus { outline: 3px solid rgba(168, 63, 73, .12); border-color: #a83f49; }
+.employee-order-badge { min-height: 32px; display: inline-flex; align-items: center; gap: 5px; padding: 0 9px; border: 1px solid #bac8cf; border-radius: 5px; background: #edf4f7; color: #244f62; font-size: 10px; font-weight: 850; white-space: nowrap; }
+.employee-order-badge.is-gift { border-color: #d6a5aa; background: #fff4f5; color: #8e323a; }
+.commerce-view.is-ordering-focus { position: fixed; inset: 0; z-index: 120; overflow: hidden; border: 0; border-radius: 0; background: #f3f4f0; }
+.commerce-view.is-ordering-focus .menu-ordering-workspace { height: 100dvh; min-height: 100dvh; }
+.employee-ordering-focus, .employee-ordering-focus body { overflow: hidden; overscroll-behavior: none; }
+.employee-ordering-exit { min-height: 38px; position: fixed; top: max(12px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); z-index: 132; display: inline-flex; align-items: center; gap: 6px; padding: 0 11px; border: 1px solid #8e9890; border-radius: 6px; background: rgba(14, 18, 15, .92); box-shadow: 0 6px 18px rgba(5, 8, 6, .18); color: #fff; font-size: 11px; font-weight: 800; backdrop-filter: blur(8px); }
+.employee-ordering-exit:active { transform: translateY(1px); }
+.commerce-view.is-ordering-focus .menu-workspace-header { padding-right: 112px; }
+.ordering-exit-backdrop { position: fixed; inset: 0; z-index: 150; display: grid; place-items: center; padding: 18px; background: rgba(8, 10, 8, .74); }
+.ordering-exit-dialog { width: min(420px, 100%); display: grid; gap: 14px; padding: 18px; border: 1px solid #cdd2cb; border-top: 4px solid var(--brand-yellow); border-radius: 8px; background: #fff; box-shadow: 0 24px 70px rgba(0, 0, 0, .34); }
+.ordering-exit-dialog > header { display: grid; grid-template-columns: 42px minmax(0, 1fr); align-items: center; gap: 10px; }
+.ordering-exit-dialog > header > span { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 50%; background: #eef1eb; color: #3b493f; }
+.ordering-exit-dialog > header small, .ordering-exit-dialog label span { color: var(--ink-soft); font-size: 10px; font-weight: 800; }
+.ordering-exit-dialog > header h2 { margin: 2px 0 0; font-size: 20px; }
+.ordering-exit-dialog > p { margin: 0; padding: 10px 11px; border-left: 4px solid #c49b2c; background: #fff9e9; color: #65511e; font-size: 12px; line-height: 1.55; }
+.ordering-exit-dialog label { display: grid; gap: 5px; }
+.ordering-exit-dialog input { width: 100%; height: 46px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 5px; background: #fff; color: var(--ink); font-size: 18px; letter-spacing: 0; }
+.ordering-exit-dialog input:focus { outline: 3px solid rgba(198, 165, 71, .17); border-color: #9d8338; }
+.ordering-exit-error { padding: 9px 10px; border-left: 4px solid var(--danger); background: #fff0f0; color: #8f2e34; font-size: 12px; }
+.ordering-exit-dialog > footer { display: grid; grid-template-columns: 1fr 1.25fr; gap: 8px; }
+.ordering-exit-dialog > footer button { min-height: 44px; justify-content: center; }
 .commerce-metrics { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--line); }
 .commerce-metrics > div { min-height: 74px; display: grid; grid-template-columns: 30px auto; grid-template-rows: auto auto; align-content: center; padding: 10px 17px; border-right: 1px solid var(--line); }
 .commerce-metrics > div:last-child { border-right: 0; }
@@ -117,4 +141,4 @@
 .manager-cancel-dialog > footer button { min-height: 44px; justify-content: center; }
 @media (max-width: 1000px) { .commerce-grid { grid-template-columns: 1fr; } .kds-section { border-right: 0; border-bottom: 1px solid var(--line); } .workstation-badge { display: none; } }
 @media (max-width: 1180px) { .kds-row { grid-template-columns: 82px minmax(160px, 1fr) minmax(170px, .8fr); } .kds-actions { grid-column: 2 / 4; justify-self: end; } }
-@media (max-width: 700px) { .commerce-metrics { grid-template-columns: repeat(3, 1fr); } .commerce-metrics > div { min-height: 68px; padding: 8px; grid-template-columns: 24px minmax(0, 1fr); } .commerce-metrics strong { font-size: 16px; } .quick-order-band { grid-template-columns: 1fr; } .employee-order-controls { width: 100%; flex-wrap: wrap; } .employee-order-controls .menu-table-control { width: 100%; } .employee-order-controls select { width: 100%; } .employee-order-mode { flex: 1 1 220px; } .employee-order-mode button { min-width: 0; } .employee-gift-reason { flex: 1 1 100%; } .employee-gift-reason input { width: 100%; } .kds-row { grid-template-columns: 72px minmax(0, 1fr); gap: 10px; } .kds-meta { grid-column: 1 / 3; } .kds-actions { width: 100%; grid-column: 1 / 3; justify-content: stretch; } .kds-actions .primary-button, .kds-actions .secondary-button { flex: 1 1 130px; justify-content: center; } }
+@media (max-width: 700px) { .commerce-metrics { grid-template-columns: repeat(3, 1fr); } .commerce-metrics > div { min-height: 68px; padding: 8px; grid-template-columns: 24px minmax(0, 1fr); } .commerce-metrics strong { font-size: 16px; } .quick-order-band { grid-template-columns: 1fr; } .commerce-mode-tabs { align-items: center; flex-wrap: wrap; padding: 7px 10px; } .commerce-mode-tabs > button { flex: 1; } .employee-order-type { width: 100%; margin-left: 0; padding: 7px 0 0; border-top: 1px solid var(--line); border-left: 0; } .employee-order-type .employee-order-mode { flex: 1; } .employee-order-controls { width: 100%; flex-wrap: wrap; } .employee-order-controls .menu-table-control { width: 100%; } .employee-order-controls select { width: 100%; } .employee-order-mode { flex: 1 1 220px; } .employee-order-mode button { min-width: 0; } .employee-gift-reason { flex: 1 1 100%; } .employee-gift-reason input { width: 100%; } .commerce-view.is-ordering-focus { overflow-y: auto; } .commerce-view.is-ordering-focus .menu-ordering-workspace { height: auto; } .commerce-view.is-ordering-focus .menu-workspace-header { padding-right: 100px; } .employee-ordering-exit { min-height: 34px; top: max(10px, env(safe-area-inset-top)); right: max(8px, env(safe-area-inset-right)); padding: 0 9px; } .kds-row { grid-template-columns: 72px minmax(0, 1fr); gap: 10px; } .kds-meta { grid-column: 1 / 3; } .kds-actions { width: 100%; grid-column: 1 / 3; justify-content: stretch; } .kds-actions .primary-button, .kds-actions .secondary-button { flex: 1 1 130px; justify-content: center; } }

@@ -114,6 +114,7 @@ interface MenuOrderingWorkspaceProps {
   partySize?: number
   onSubmit: (items: MenuCartItem[], options: MenuSubmitOptions) => Promise<void>
   onInteraction?: (interaction: MenuInteraction) => void
+  onCartCountChange?: (itemCount: number) => void
 }
 
 export function MenuOrderingWorkspace({
@@ -133,6 +134,7 @@ export function MenuOrderingWorkspace({
   complimentaryMode = false,
   guestSalesMode = false,
   partySize = 1,
+  onCartCountChange,
 }: MenuOrderingWorkspaceProps) {
   const [cart, setCart] = useState<Record<string, number>>({})
   const [categoryId, setCategoryId] = useState('all')
@@ -274,6 +276,10 @@ export function MenuOrderingWorkspace({
   useEffect(() => {
     if (itemCount === 0) setCartOpen(false)
   }, [itemCount])
+
+  useEffect(() => {
+    onCartCountChange?.(itemCount)
+  }, [itemCount, onCartCountChange])
 
   useEffect(() => {
     if (!guestSalesMode) return

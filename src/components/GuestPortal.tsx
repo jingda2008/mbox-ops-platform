@@ -301,6 +301,7 @@ export function GuestPortal() {
   const tableTasks = useMemo(() => visibleGuestTasks(data?.tasks ?? []), [data?.tasks])
   const customRequestType = data?.serviceTypes.find((serviceType) => serviceType.code === 'CUSTOM_REQUEST')
   const serviceTypeByCode = useMemo(() => new Map(data?.serviceTypes.map((serviceType) => [serviceType.code, serviceType]) ?? []), [data?.serviceTypes])
+  const moodInfoType = serviceTypeByCode.get('GUEST_MOOD_INFO')
   const serverOffset = useMemo(() => data?.serverNow ? serverClockOffset(data.serverNow) : 0, [data?.serverNow])
   const profileAppearance = data?.stageSchedule.find((appearance) => appearance.appearanceId === singerProfileAppearanceId) ?? null
   const profileSongOffers = data?.songOffers.filter((offer) => offer.appearanceId === singerProfileAppearanceId) ?? []
@@ -382,7 +383,7 @@ export function GuestPortal() {
 
   async function recordMood(mood: typeof guestMoods[number]) {
     if (selectedMood === mood.id || pendingActionsRef.current.has('mood')) return
-    if (!customRequestType) {
+    if (!moodInfoType) {
       setError({ message: '今晚状态小卡暂时开小差了，您仍可以直接呼叫我们。', source: 'action' })
       return
     }
@@ -392,7 +393,7 @@ export function GuestPortal() {
     setSelectedMood(mood.id)
     window.sessionStorage.setItem(storageKey, mood.id)
     const succeeded = await requestService(
-      customRequestType.id,
+      moodInfoType.id,
       guestMoodServiceNote(mood.label, mood.care, previousLabel),
       { showReply: false, refreshAfter: false, pendingKey: 'mood' },
     )

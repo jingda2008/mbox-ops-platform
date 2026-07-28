@@ -1,4 +1,5 @@
-import { BadgeDollarSign, CalendarClock, CheckCircle2, CircleOff, Clock3, EyeOff, GlassWater, MapPinned, Minus, Pencil, Plus, RotateCcw, Route, Save, Search, TableProperties, UserRoundCog, X } from 'lucide-react'
+/* oxlint-disable react/only-export-components -- scoped workflow helpers stay colocated for direct view tests. */
+import { BadgeDollarSign, CalendarClock, CheckCircle2, CircleOff, Clock3, EyeOff, GlassWater, ListChecks, MapPinned, Minus, Pencil, Plus, RotateCcw, Route, Save, Search, ShieldAlert, TableProperties, UserRoundCog, X } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
   createCommerceAuthority,
@@ -24,6 +25,8 @@ import type {
   ProductWriteInput,
   RoleConfig,
   RoleDataScope,
+  ServiceWorkflowLevel,
+  ServiceTypeConfig,
   StaffPermissionId,
   ShiftAssignment,
   ShiftWriteInput,
@@ -45,7 +48,7 @@ import { productAvailability } from '../shared/product-availability'
 import { chinaDateTimeLocalValue, chinaLocalDateTimeToIso, shiftDateKey } from '../shared/china-time'
 import './MasterDataView.css'
 
-type MasterView = 'employees' | 'shifts' | 'tables' | 'products' | 'routing' | 'authorities' | 'areas'
+type MasterView = 'employees' | 'shifts' | 'tables' | 'products' | 'services' | 'routing' | 'authorities' | 'areas'
 
 interface MasterDataViewProps {
   data: BootstrapResponse
@@ -58,6 +61,7 @@ const sections: Array<{ id: MasterView; label: string; icon: typeof UserRoundCog
   { id: 'shifts', label: '班次', icon: CalendarClock },
   { id: 'tables', label: '桌台责任', icon: TableProperties },
   { id: 'products', label: '商品', icon: GlassWater },
+  { id: 'services', label: '服务配置', icon: ListChecks },
   { id: 'routing', label: '工作站/技能', icon: Route },
   { id: 'authorities', label: '经营权限', icon: BadgeDollarSign },
   { id: 'areas', label: '区域', icon: MapPinned },
@@ -84,6 +88,85 @@ const permissionLabels: Record<StaffPermissionId, string> = {
 
 const scopeLabels: Record<RoleDataScope, string> = {
   own: '本人任务', assigned_areas: '负责区域', store: '本门店', all_stores: '全部门店',
+}
+
+export interface WorkflowServiceTypeConfig extends ServiceTypeConfig {
+  workflowLevel: ServiceWorkflowLevel
+  allowBackupDirectComplete: boolean
+  allowCrossAreaComplete: boolean
+  requiresCompletionNote: boolean
+  duplicateSeconds: number
+}
+
+const workflowLevelMeta: Record<ServiceWorkflowLevel, { name: string; summary: string }> = {
+  L0: { name: '信息提示', summary: '只展示客情，无需员工操作' },
+  L1: { name: '快速服务', summary: '处理后一次点击完成' },
+  L2: { name: '责任任务', summary: '接管后完成，保留责任人' },
+  L3: { name: '受控事务', summary: '高风险处理，保留说明与审计' },
+}
+
+const workflowLevels = Object.keys(workflowLevelMeta) as ServiceWorkflowLevel[]
+const lockedHighRiskServiceCodes = new Set(['COMPLAINT', 'REQUEST_BILL'])
+
+export function normalizeWorkflowServiceType(type: ServiceTypeConfig): WorkflowServiceTypeConfig {
+  const candidate = type
+  const fallbackLevel: ServiceWorkflowLevel = lockedHighRiskServiceCodes.has(type.code)
+    ? 'L3'
+    : ['ADD_WATER', 'ADD_ICE_LEMON', 'FULFILLMENT_DELIVERY'].includes(type.code) ? 'L1' : 'L2'
+  const workflowLevel = workflowLevels.includes(candidate.workflowLevel as ServiceWorkflowLevel)
+    ? candidate.workflowLevel as ServiceWorkflowLevel
+    : fallbackLevel
+  const lockedLevel = lockedHighRiskServiceCodes.has(type.code) ? 'L3' : workflowLevel
+
+  return {
+    ...type,
+    workflowLevel: lockedLevel,
+    allowBackupDirectComplete: lockedLevel === 'L3' || lockedLevel === 'L0'
+      ? false
+      : candidate.allowBackupDirectComplete ?? lockedLevel === 'L1',
+    allowCrossAreaComplete: lockedLevel === 'L3' || lockedLevel === 'L0'
+      ? false
+      : candidate.allowCrossAreaComplete ?? lockedLevel === 'L1',
+    requiresCompletionNote: lockedLevel === 'L3'
+      ? true
+      : lockedLevel === 'L0' ? false : candidate.requiresCompletionNote ?? false,
+    duplicateSeconds: Math.max(0, Math.min(3600, Math.round(candidate.duplicateSeconds ?? 30))),
+  }
+}
+
+export function isWorkflowLevelOptionDisabled(
+  type: WorkflowServiceTypeConfig,
+  level: ServiceWorkflowLevel,
+  lockedHighRisk = lockedHighRiskServiceCodes.has(type.code),
+) {
+  return lockedHighRisk && level !== 'L3'
+}
+
+export function changeWorkflowLevel(
+  type: WorkflowServiceTypeConfig,
+  level: ServiceWorkflowLevel,
+  lockedHighRisk = lockedHighRiskServiceCodes.has(type.code),
+) {
+  if (isWorkflowLevelOptionDisabled(type, level, lockedHighRisk)) return type
+  return normalizeWorkflowServiceType({ ...type, workflowLevel: level })
+}
+
+export function serviceTypeDraftInput(type: WorkflowServiceTypeConfig) {
+  return {
+    id: type.id,
+    enabled: type.enabled,
+    guestVisible: type.guestVisible,
+    priority: type.priority,
+    dispatchRoleIds: [...type.dispatchRoleIds],
+    customerReply: type.customerReply,
+    actionScript: [...type.actionScript],
+    sla: { ...type.sla },
+    workflowLevel: type.workflowLevel,
+    allowBackupDirectComplete: type.allowBackupDirectComplete,
+    allowCrossAreaComplete: type.allowCrossAreaComplete,
+    requiresCompletionNote: type.requiresCompletionNote,
+    duplicateSeconds: type.duplicateSeconds,
+  }
 }
 
 type RecommendationDraft = NonNullable<ProductWriteInput['recommendation']>
@@ -185,6 +268,7 @@ export function MasterDataView({ data, onRefresh, onNotice }: MasterDataViewProp
       {view === 'shifts' && <ShiftSection data={data} run={run} />}
       {view === 'tables' && <TableSection data={data} run={run} />}
       {view === 'products' && <ProductSection data={data} run={run} />}
+      {view === 'services' && <ServiceConfigSection data={data} run={run} />}
       {view === 'routing' && <RoutingSection data={data} run={run} />}
       {view === 'authorities' && <AuthoritySection data={data} run={run} />}
       {view === 'areas' && <AreaSection data={data} run={run} />}
@@ -322,6 +406,166 @@ function TableRow({ table, data, run }: { table: Table; data: BootstrapResponse;
       <label><span>主责</span><select value={draft.primaryEmployeeId} onChange={(event) => setDraft({ ...draft, primaryEmployeeId: event.target.value, backupEmployeeIds: draft.backupEmployeeIds.filter((id) => id !== event.target.value) })}>{activeEmployees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName}</option>)}</select></label>
       <label><span>第一候补</span><select value={draft.backupEmployeeIds[0] ?? ''} onChange={(event) => setDraft({ ...draft, backupEmployeeIds: event.target.value ? [event.target.value] : [] })}><option value="">无</option>{activeEmployees.filter((employee) => employee.id !== draft.primaryEmployeeId).map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName}</option>)}</select></label>
       <button className="icon-button" title={`保存${table.code}`} onClick={() => void run(() => updateTableRequest(table.id, draft), `${table.code}责任关系已保存`)}><Save size={17} /></button>
+    </div>
+  )
+}
+
+function ServiceConfigSection({ data, run }: SectionProps) {
+  const source = effectiveConfig(data)
+  const lockedHighRiskServiceIds = useMemo(() => new Set(
+    source.serviceTypes
+      .filter((type) => (
+        lockedHighRiskServiceCodes.has(type.code)
+        || type.workflowLevel === 'L3'
+      ))
+      .map((type) => type.id),
+  ), [source.serviceTypes])
+  const [serviceTypes, setServiceTypes] = useState<WorkflowServiceTypeConfig[]>(
+    () => source.serviceTypes.map(normalizeWorkflowServiceType),
+  )
+
+  useEffect(() => {
+    setServiceTypes(source.serviceTypes.map(normalizeWorkflowServiceType))
+  }, [source.serviceTypes])
+
+  function updateServiceType(id: string, update: Partial<WorkflowServiceTypeConfig>) {
+    setServiceTypes((current) => current.map((type) => (
+      type.id === id ? normalizeWorkflowServiceType({ ...type, ...update }) : type
+    )))
+  }
+
+  async function saveServiceConfig() {
+    await run(
+      () => saveConfigDraft(configDraftPayload(
+        source,
+        source.roles,
+        source.skills,
+        source.workstations,
+        serviceTypes,
+      )),
+      '服务流程分级已保存到配置草稿',
+    )
+  }
+
+  return (
+    <div className="master-section service-config-section">
+      <header className="service-config-intro">
+        <div>
+          <span className="eyebrow">运营规则 / 服务配置</span>
+          <h3>现场服务流程分级</h3>
+          <p>按服务风险决定员工点击步骤。快速服务减少操作，高风险事务保留责任与审计。</p>
+        </div>
+        <span className="count-chip">{serviceTypes.length} 项服务</span>
+      </header>
+
+      <div className="workflow-level-guide" aria-label="四级服务流程说明">
+        {workflowLevels.map((level) => (
+          <div key={level} data-level={level}>
+            <strong>{level} · {workflowLevelMeta[level].name}</strong>
+            <span>{workflowLevelMeta[level].summary}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="service-config-list">
+        {serviceTypes.map((type) => {
+          const lockedHighRisk = lockedHighRiskServiceIds.has(type.id)
+          const actionControlsDisabled = type.workflowLevel === 'L0' || type.workflowLevel === 'L3'
+          return (
+            <article className={`service-config-card workflow-${type.workflowLevel.toLowerCase()}`} key={type.id}>
+              <div className="service-config-identity">
+                <span className="workflow-level-badge">{type.workflowLevel}</span>
+                <div>
+                  <strong>{type.name}</strong>
+                  <span>{type.code}</span>
+                </div>
+                {lockedHighRisk && <span className="service-risk-lock"><ShieldAlert size={14} />高风险锁定</span>}
+              </div>
+
+              <div className="service-config-controls">
+                <label className="service-level-field">
+                  <span>流程等级</span>
+                  <select
+                    aria-label={`${type.name}流程等级`}
+                    value={type.workflowLevel}
+                    onChange={(event) => {
+                      const level = event.target.value as ServiceWorkflowLevel
+                      setServiceTypes((current) => current.map((item) => (
+                        item.id === type.id ? changeWorkflowLevel(item, level, lockedHighRisk) : item
+                      )))
+                    }}
+                  >
+                    {workflowLevels.map((level) => (
+                      <option
+                        key={level}
+                        value={level}
+                        disabled={isWorkflowLevelOptionDisabled(type, level, lockedHighRisk)}
+                      >
+                        {level} · {workflowLevelMeta[level].name}
+                      </option>
+                    ))}
+                  </select>
+                  {lockedHighRisk && <small>投诉、买单等受控事务不能降级，避免丢失处理记录。</small>}
+                </label>
+
+                <label className="service-number-field">
+                  <span>同类合并</span>
+                  <span className="number-with-unit">
+                    <input
+                      aria-label={`${type.name}同类合并秒数`}
+                      type="number"
+                      min={0}
+                      max={3600}
+                      step={5}
+                      value={type.duplicateSeconds}
+                      onChange={(event) => updateServiceType(type.id, { duplicateSeconds: Number(event.target.value) })}
+                    />
+                    <em>秒</em>
+                  </span>
+                  <small>0 表示不合并</small>
+                </label>
+
+                <div className="service-switches">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={type.allowBackupDirectComplete}
+                      disabled={actionControlsDisabled}
+                      onChange={(event) => updateServiceType(type.id, { allowBackupDirectComplete: event.target.checked })}
+                    />
+                    <span><strong>候补直接完成</strong><small>无需先认领</small></span>
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={type.allowCrossAreaComplete}
+                      disabled={actionControlsDisabled}
+                      onChange={(event) => updateServiceType(type.id, { allowCrossAreaComplete: event.target.checked })}
+                    />
+                    <span><strong>允许跨区处理</strong><small>其他区域可补位</small></span>
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={type.requiresCompletionNote}
+                      disabled={type.workflowLevel === 'L0' || type.workflowLevel === 'L3'}
+                      onChange={(event) => updateServiceType(type.id, { requiresCompletionNote: event.target.checked })}
+                    />
+                    <span><strong>完成需要说明</strong><small>{type.workflowLevel === 'L3' ? '高风险强制留痕' : '完成时填写结果'}</small></span>
+                  </label>
+                </div>
+              </div>
+            </article>
+          )
+        })}
+      </div>
+
+      <div className="routing-savebar service-config-savebar">
+        <span>{data.draftConfig ? '当前修改将更新未发布配置草稿' : `基于已发布配置 V${data.config.version}`}</span>
+        <button className="primary-button" onClick={() => void saveServiceConfig()}>
+          <Save size={17} />保存配置草稿
+        </button>
+      </div>
     </div>
   )
 }
@@ -700,7 +944,7 @@ function ProductSection({ data, run }: SectionProps) {
     await run(() => createProductRequest({
       sku, name, specification: '1份', categoryId, categoryName: categories.find(([id]) => id === categoryId)?.[1] ?? '推荐', description: '', imageUrl: '', tags: [], sortOrder: data.products.length + 1, listPriceAmount: yuanToFen(price), costAmount: 0,
       stationId, enabled: true, soldOut: false, soldOutReason: '', availableFrom: null, availableUntil: null,
-      guestVisible: true, requiresFulfillment: true, maxOrderQuantity: 50,
+      guestVisible: true, requiresFulfillment: true, fulfillmentType: 'made_to_order', maxOrderQuantity: 50,
       productKind: 'single', beverageFamily, bundleComponents: [], substitutionProductIds: [],
       recommendation: defaultRecommendation(),
     }), `${name}已建立`)
@@ -909,7 +1153,28 @@ function ProductEditor({
                 {canManageCosts ? <label><span>成本（元）</span><input type="number" min={0} step="0.01" required value={fenToYuan(draft.costAmount)} onChange={(event) => setDraft({ ...draft, costAmount: yuanToFen(Number(event.target.value)) })} /></label> : <label><span>成本（财务权限）</span><input value="已保护，不会修改" disabled /></label>}
                 <label><span>分类编码</span><input required value={draft.categoryId ?? ''} onChange={(event) => setDraft({ ...draft, categoryId: event.target.value })} /></label>
                 <label><span>分类名称</span><input required value={draft.categoryName ?? ''} onChange={(event) => setDraft({ ...draft, categoryName: event.target.value })} /></label>
-                <label><span>出品方式</span><select value={draft.requiresFulfillment === false ? 'none' : 'workstation'} disabled={draft.productKind === 'bundle'} onChange={(event) => setDraft({ ...draft, requiresFulfillment: event.target.value !== 'none', stationId: event.target.value === 'none' ? 'non-fulfillment' : (workstations.find((station) => station.enabled)?.id ?? draft.stationId) })}><option value="workstation">进入吧台/厨房出品</option><option value="none">无需出品（仅计入订单）</option></select></label>
+                <label><span>出品方式</span><select
+                  value={draft.fulfillmentType ?? (draft.requiresFulfillment === false ? 'no_fulfillment' : 'made_to_order')}
+                  disabled={draft.productKind === 'bundle'}
+                  onChange={(event) => {
+                    const fulfillmentType = event.target.value as NonNullable<ProductWriteInput['fulfillmentType']>
+                    setDraft({
+                      ...draft,
+                      fulfillmentType,
+                      requiresFulfillment: fulfillmentType !== 'no_fulfillment',
+                      stationId: fulfillmentType === 'no_fulfillment'
+                        ? 'non-fulfillment'
+                        : (workstations.some((station) => station.id === draft.stationId && station.enabled)
+                            ? draft.stationId
+                            : workstations.find((station) => station.enabled)?.id ?? draft.stationId),
+                    })
+                  }}
+                >
+                  <option value="made_to_order">现场制作后取货</option>
+                  <option value="ready_to_serve">现货直接取货</option>
+                  <option value="service_only">无需制作，直接服务</option>
+                  <option value="no_fulfillment">仅记账，不产生出品</option>
+                </select></label>
                 {draft.productKind !== 'bundle' && draft.requiresFulfillment !== false && <label><span>出品口</span><select value={draft.stationId} onChange={(event) => setDraft({ ...draft, stationId: event.target.value })}>{!workstations.some((station) => station.id === draft.stationId) && <option value={draft.stationId}>{draft.stationId}（旧配置）</option>}{workstations.map((station) => <option key={station.id} value={station.id}>{station.name}{station.enabled ? '' : '（停用）'}</option>)}</select></label>}
                 {draft.productKind === 'bundle' && <div className="product-inline-note">组合本身不直接出品，系统按组成商品分别发送到对应吧台或厨房。</div>}
                 <label><span>客人自助菜单</span><select value={draft.guestVisible === false ? 'hidden' : 'visible'} onChange={(event) => setDraft({ ...draft, guestVisible: event.target.value === 'visible' })}><option value="visible">客人可见</option><option value="hidden">仅员工可见</option></select></label>
@@ -1037,6 +1302,8 @@ function toProductDraft(product: MenuProduct): ProductWriteInput {
     availableUntil: product.availableUntil ?? null,
     guestVisible: product.guestVisible ?? true,
     requiresFulfillment: product.requiresFulfillment ?? true,
+    fulfillmentType: product.fulfillmentType
+      ?? (product.requiresFulfillment === false ? 'no_fulfillment' : 'made_to_order'),
     maxOrderQuantity: product.maxOrderQuantity ?? 50,
     listPriceAmount: product.listPriceAmount,
     costAmount: product.costAmount,
@@ -1071,18 +1338,10 @@ function configDraftPayload(
   roles: RoleConfig[],
   skills: SkillConfig[],
   workstations: WorkstationConfig[],
+  serviceTypes: WorkflowServiceTypeConfig[] = source.serviceTypes.map(normalizeWorkflowServiceType),
 ): ConfigDraftInput {
   return {
-    serviceTypes: source.serviceTypes.map((type) => ({
-      id: type.id,
-      enabled: type.enabled,
-      guestVisible: type.guestVisible,
-      priority: type.priority,
-      dispatchRoleIds: [...type.dispatchRoleIds],
-      customerReply: type.customerReply,
-      actionScript: [...type.actionScript],
-      sla: { ...type.sla },
-    })),
+    serviceTypes: serviceTypes.map(serviceTypeDraftInput),
     roles: roles.map((role) => ({
       id: role.id,
       name: role.name,

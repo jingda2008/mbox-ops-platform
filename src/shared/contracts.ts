@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { OrderDomainState } from './order-contracts.js'
+import type { OrderDomainState, ProductFulfillmentType } from './order-contracts.js'
 import type { PaymentDomainState } from './payment-contracts.js'
 import type { InventoryDomainState } from './inventory-contracts.js'
 import type {
@@ -34,6 +34,7 @@ export const taskStatuses = [
 
 export type TaskStatus = (typeof taskStatuses)[number]
 export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent'
+export type ServiceWorkflowLevel = 'L0' | 'L1' | 'L2' | 'L3'
 export type TableStatus = 'available' | 'occupied' | 'reserved' | 'paused'
 
 export interface StoreSummary {
@@ -187,6 +188,8 @@ export interface MenuProduct {
   guestVisible?: boolean
   /** False records the sale without creating bar, kitchen, print or delivery work. */
   requiresFulfillment?: boolean
+  /** Controls whether an item is made, picked directly, delivered as a service, or excluded from fulfillment. */
+  fulfillmentType?: ProductFulfillmentType
   /** Per-order quantity limit; adjustment products can use a higher configured limit. */
   maxOrderQuantity?: number
   listPriceAmount: number
@@ -300,6 +303,12 @@ export interface ServiceTypeConfig {
   sla: SlaConfig
   customerReply: string
   actionScript: string[]
+  /** Optional while older config clients are still in circulation; runtime migration fills defaults. */
+  workflowLevel?: ServiceWorkflowLevel
+  allowBackupDirectComplete?: boolean
+  allowCrossAreaComplete?: boolean
+  requiresCompletionNote?: boolean
+  duplicateSeconds?: number
 }
 
 export interface ProactiveOrderCareConfig {
@@ -565,6 +574,13 @@ export interface ServiceTask {
   customerReply: string
   actionScript: string[]
   resolution: string | null
+  /** Immutable workflow snapshot. Optional only for persisted tasks created before V1 migration. */
+  workflowLevel?: ServiceWorkflowLevel
+  requestCount?: number
+  firstRequestedAt?: string
+  lastRequestedAt?: string
+  viewedEmployeeIds?: string[]
+  completedBy?: string | null
   triggerId: string | null
   archivedAt: string | null
   archiveOutcome: 'resolved' | 'unconfirmed' | 'unresolved' | null
@@ -664,7 +680,7 @@ export const createTaskSchema = z.object({
 export type CreateTaskInput = z.infer<typeof createTaskSchema>
 
 export const taskActionSchema = z.object({
-  action: z.enum(['accept', 'arrive', 'complete', 'confirm', 'unresolved', 'cancel']),
+  action: z.enum(['accept', 'arrive', 'complete', 'quick_complete', 'confirm', 'unresolved', 'cancel']),
   actorId: z.string().trim().min(1),
   note: z.string().trim().max(300).default(''),
   idempotencyKey: z.string().trim().min(8).max(128),
@@ -715,6 +731,11 @@ export const configDraftSchema = z.object({
       customerReply: z.string().trim().min(1).max(200),
       actionScript: z.array(z.string().trim().min(1).max(120)).min(1).max(10),
       sla: slaSchema,
+      workflowLevel: z.enum(['L0', 'L1', 'L2', 'L3']).optional(),
+      allowBackupDirectComplete: z.boolean().optional(),
+      allowCrossAreaComplete: z.boolean().optional(),
+      requiresCompletionNote: z.boolean().optional(),
+      duplicateSeconds: z.number().int().min(0).max(3600).optional(),
     }),
   ),
   roles: z.array(
@@ -960,6 +981,7 @@ export const productWriteSchema = z.object({
   availableUntil: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
   guestVisible: z.boolean().optional(),
   requiresFulfillment: z.boolean().optional(),
+  fulfillmentType: z.enum(['ready_to_serve', 'made_to_order', 'service_only', 'no_fulfillment']).optional(),
   maxOrderQuantity: z.number().int().min(1).max(9999).optional(),
   listPriceAmount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   costAmount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),

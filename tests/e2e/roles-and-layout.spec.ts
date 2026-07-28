@@ -68,7 +68,7 @@ test.describe('岗位权限隔离', () => {
       data.tasks = [
         ...data.tasks,
         riskTask('e2e-risk-l01', 'table-l01', 'L01需要加水'),
-        riskTask('e2e-risk-i01', 'table-i01', 'I01需要柠檬'),
+        riskTask('e2e-risk-l02', 'table-l02', 'L02需要柠檬'),
       ]
       data.metrics = { ...data.metrics, openTasks: data.metrics.openTasks + 2, atRiskTasks: 2 }
       const station = data.config.workstations[0]

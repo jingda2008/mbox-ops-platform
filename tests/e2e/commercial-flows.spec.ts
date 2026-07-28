@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 import { useStaffIdentity } from './helpers'
 
 test.describe.serial('跨客户端经营流转', () => {
-  test('客人个性化需求由责任服务员接单、到桌并完成', async ({ browser }) => {
+  test('客人个性化需求由责任服务员两步处理并完成', async ({ browser }) => {
     const requestNote = `E2E两杯温水-${Date.now()}`
     const guestContext = await browser.newContext({ locale: 'zh-CN', timezoneId: 'Asia/Shanghai' })
     const guestPage = await guestContext.newPage()
@@ -23,11 +23,9 @@ test.describe.serial('跨客户端经营流转', () => {
     const task = staffPage.locator('.task-item').filter({ hasText: requestNote })
     await expect(task).toBeVisible()
     await expect(task).toContainText('休闲01')
-    await task.getByRole('button', { name: '接单' }).click()
-    await expect(task.getByRole('button', { name: '已到桌' })).toBeVisible()
-    await task.getByRole('button', { name: '已到桌' }).click()
-    await expect(task.getByRole('button', { name: '完成服务' })).toBeVisible()
-    await task.getByRole('button', { name: '完成服务' }).click()
+    await task.getByRole('button', { name: '开始处理' }).click()
+    await expect(task.getByRole('button', { name: '完成', exact: true })).toBeVisible()
+    await task.getByRole('button', { name: '完成', exact: true }).click()
     await expect(task).toHaveCount(0)
 
     await expect(guestPage.locator('.guest-progress .guest-task').filter({ hasText: '个性化需求' })).toHaveCount(0, { timeout: 15_000 })

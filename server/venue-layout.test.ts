@@ -15,21 +15,23 @@ describe('M-Box venue layout migration', () => {
     expect(realTables.map((table) => table.code)).toEqual(expect.arrayContaining(['W05', 'W06', 'W10', 'W11']))
   })
 
-  it('preserves live table state and retires only idle legacy tables', () => {
+  it('preserves real live table state and removes all legacy simulation tables from operations', () => {
     const state = createSeedState(new Date('2026-07-28T12:00:00+08:00'))
     const liveL01 = state.tables.find((table) => table.code === 'L01')!
-    const liveI01 = state.tables.find((table) => table.code === 'I01')!
-    const idleI03 = state.tables.find((table) => table.code === 'I03')!
     const originalCapacity = liveL01.capacity
 
     applyMboxVenueLayout(state)
 
     expect(liveL01.status).toBe('occupied')
     expect(liveL01.capacity).toBe(originalCapacity)
-    expect(liveI01.status).toBe('occupied')
-    expect(liveI01.areaId).toBe('interactive')
-    expect(idleI03.status).toBe('paused')
-    expect(state.employees.find((employee) => employee.id === 'emp-wu')?.areaIds).toContain('interactive')
+    expect(state.tables.some((table) => ['I01', 'I02', 'I03'].includes(table.code))).toBe(false)
+    expect(state.areas.some((area) => area.id === 'interactive')).toBe(false)
+    expect(state.employees.some((employee) => employee.areaIds.includes('interactive'))).toBe(false)
+    expect(state.shiftAssignments.some((shift) => shift.areaIds.includes('interactive'))).toBe(false)
+    expect(state.songState.tableSessions
+      .filter((session) => ['I01', 'I02', 'I03'].includes(session.tableCode))
+      .every((session) => session.status === 'closed' && session.closedAt)).toBe(true)
+    expect(state.auditEntries.some((entry) => entry.action === 'runtime.legacy_simulation_tables_retired.v1')).toBe(true)
   })
 
   it('is idempotent and never overwrites an existing table capacity', () => {

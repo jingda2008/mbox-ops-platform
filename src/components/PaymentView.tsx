@@ -19,7 +19,7 @@ import {
   Smartphone,
   WalletCards,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import * as coreApi from '../api'
 import * as paymentApi from '../payment-api'
 import type { PaymentAllocationInput } from '../shared/payment-api'
@@ -40,11 +40,13 @@ import {
 import type { Order, OrderItem } from '../shared/order-contracts'
 import { useRevealPanelScroll } from './use-reveal-panel-scroll'
 import { CustomerPaymentCodeScanner } from './CustomerPaymentCodeScanner'
+import type { OperationsConsoleNavigationRequest } from './OperationsConsole'
 import './PaymentView.css'
 
 interface PaymentViewProps {
   data: BootstrapResponse
   onRefresh: () => Promise<void>
+  focusRequest?: OperationsConsoleNavigationRequest | null
 }
 
 type BootstrapWithPayments = BootstrapResponse & { paymentDomain?: PaymentDomainState }
@@ -97,7 +99,7 @@ const refundStatusLabels: Record<RefundStatus, string> = {
   failed: '退款失败',
 }
 
-export function PaymentView({ data, onRefresh }: PaymentViewProps) {
+export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentViewProps) {
   const paymentDomain = (data as BootstrapWithPayments).paymentDomain ?? emptyPaymentDomain
   const currentActorId = coreApi.getCurrentActorId()
   const currentEmployee = data.employees.find((employee) => employee.id === currentActorId && employee.status === 'active')
@@ -138,6 +140,7 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
   const visibleTableAccounts = showAllAccounts ? tableAccounts : actionableAccounts
   const [expandedAccountId, setExpandedAccountId] = useState(preferredExpandedAccountId)
   const [accountRevealTick, setAccountRevealTick] = useState(0)
+  const handledFocusRequestId = useRef<number | null>(null)
   const accountPanelRef = useRevealPanelScroll<HTMLDivElement>(accountRevealTick)
   const refundDraftRef = useRevealPanelScroll<HTMLFormElement>(refundDraft?.paymentIntentId ?? '')
   const refundCompletionRef = useRevealPanelScroll<HTMLFormElement>(refundCompletion.refundId)
@@ -177,6 +180,23 @@ export function PaymentView({ data, onRefresh }: PaymentViewProps) {
         : preferredExpandedAccountId
     ))
   }, [preferredExpandedAccountId, tableAccounts])
+
+  useEffect(() => {
+    if (!focusRequest || handledFocusRequestId.current === focusRequest.id) return
+    handledFocusRequestId.current = focusRequest.id
+    if (focusRequest.focus?.query !== 'table-account' || !focusRequest.focus.tableCode) return
+    const account = tableAccounts.find((candidate) => (
+      candidate.tableCode.toLocaleLowerCase('zh-CN') === focusRequest.focus?.tableCode?.toLocaleLowerCase('zh-CN')
+    ))
+    if (!account) {
+      setNotice({ tone: 'error', message: `${focusRequest.focus.tableCode}当前没有可查看的开放桌账` })
+      return
+    }
+    setActiveWorkspace('collection')
+    setShowAllAccounts(true)
+    setExpandedAccountId(account.tableSessionId)
+    setAccountRevealTick((value) => value + 1)
+  }, [focusRequest, tableAccounts])
 
   const loadSettlement = useCallback(async () => {
     const result = await paymentApi.getPaymentSettlement(settlementBusinessDate)

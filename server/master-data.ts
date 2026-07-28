@@ -199,6 +199,8 @@ export function updateProduct(
 function normalizeProductInput(input: ProductWriteInput): ProductWriteInput {
   const soldOut = input.soldOut ?? false
   const beverageFamily = resolveMenuBeverageFamily(input)
+  const fulfillmentType = input.fulfillmentType
+    ?? (input.requiresFulfillment === false ? 'no_fulfillment' : 'made_to_order')
   return {
     ...input,
     productKind: input.productKind ?? 'single',
@@ -224,7 +226,8 @@ function normalizeProductInput(input: ProductWriteInput): ProductWriteInput {
     availableFrom: input.availableFrom || null,
     availableUntil: input.availableUntil || null,
     guestVisible: input.guestVisible ?? true,
-    requiresFulfillment: input.requiresFulfillment ?? true,
+    requiresFulfillment: fulfillmentType !== 'no_fulfillment',
+    fulfillmentType,
     maxOrderQuantity: input.maxOrderQuantity ?? 50,
   }
 }

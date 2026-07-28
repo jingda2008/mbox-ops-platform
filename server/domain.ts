@@ -40,6 +40,45 @@ function appendTaskEvent(
   state.taskEvents.push(event)
 }
 
+function taskWorkflowLevel(task: ServiceTask) {
+  return task.workflowLevel ?? 'L3'
+}
+
+function markTaskViewed(task: ServiceTask, employeeId: string) {
+  task.viewedEmployeeIds = [...new Set([...(task.viewedEmployeeIds ?? []), employeeId])]
+}
+
+function completionNoteRequired(state: RuntimeState, task: ServiceTask) {
+  return state.config.serviceTypes.find((item) => item.id === task.serviceTypeId)?.requiresCompletionNote ?? false
+}
+
+function assertCompletionNote(state: RuntimeState, task: ServiceTask, note: string) {
+  if (completionNoteRequired(state, task) && !note.trim()) throw new Error('请填写处理结果')
+}
+
+function closeTaskByStaff(
+  state: RuntimeState,
+  task: ServiceTask,
+  actorId: string,
+  now: string,
+  eventPayload: Record<string, unknown>,
+  eventType = 'task.completed.v1',
+) {
+  task.status = 'confirmed'
+  task.completedAt = now
+  task.completedBy = actorId
+  task.resolution = typeof eventPayload.note === 'string' && eventPayload.note.trim()
+    ? eventPayload.note.trim()
+    : '员工确认完成'
+  markTaskViewed(task, actorId)
+  appendTaskEvent(state, task.id, eventType, actorId, { ...eventPayload, resolution: task.resolution })
+  appendTaskEvent(state, task.id, 'service.closed_by_staff.v1', actorId, {
+    ...eventPayload,
+    resolution: task.resolution,
+    customerConfirmationRequired: false,
+  })
+}
+
 export function isOpenTask(task: ServiceTask) {
   return !closedStatuses.has(task.status)
 }
@@ -263,7 +302,11 @@ export function createServiceTask(state: RuntimeState, input: CreateTaskInput & 
 
   const now = new Date()
   const taskSla = input.slaOverride ?? serviceType.sla
-  const assignment = chooseAssignee(state, table.id, dispatchServiceType, [], input.dispatchEmployeeIds)
+  const workflowLevel = serviceType.workflowLevel ?? 'L3'
+  const informationOnly = workflowLevel === 'L0'
+  const assignment = informationOnly
+    ? null
+    : chooseAssignee(state, table.id, dispatchServiceType, [], input.dispatchEmployeeIds)
   const assignee = assignment?.employee ?? null
   const customerReply = serviceType.customerReply.replace('{employee}', assignee?.displayName ?? '服务团队')
   const task: ServiceTask = {
@@ -273,7 +316,7 @@ export function createServiceTask(state: RuntimeState, input: CreateTaskInput & 
     serviceTypeId: serviceType.id,
     source: input.source,
     note: input.note,
-    status: 'pending',
+    status: informationOnly ? 'confirmed' : 'pending',
     priority: serviceType.priority,
     ownerId: assignee?.id ?? null,
     notifiedEmployeeIds: [...new Set([
@@ -289,7 +332,7 @@ export function createServiceTask(state: RuntimeState, input: CreateTaskInput & 
     updatedAt: now.toISOString(),
     acceptedAt: null,
     arrivedAt: null,
-    completedAt: null,
+    completedAt: informationOnly ? now.toISOString() : null,
     warningAt: isoAt(now, taskSla.warningSeconds),
     escalateAt: isoAt(now, taskSla.escalateSeconds),
     managerAt: isoAt(now, taskSla.managerSeconds),
@@ -297,7 +340,13 @@ export function createServiceTask(state: RuntimeState, input: CreateTaskInput & 
     configVersion: state.config.version,
     customerReply,
     actionScript: [...serviceType.actionScript],
-    resolution: null,
+    resolution: informationOnly ? '客情信息已记录' : null,
+    workflowLevel,
+    requestCount: 1,
+    firstRequestedAt: now.toISOString(),
+    lastRequestedAt: now.toISOString(),
+    viewedEmployeeIds: [],
+    completedBy: informationOnly ? 'system' : null,
     triggerId: 'triggerId' in input && typeof input.triggerId === 'string' ? input.triggerId : null,
     archivedAt: null,
     archiveOutcome: null,
@@ -316,6 +365,8 @@ export function createServiceTask(state: RuntimeState, input: CreateTaskInput & 
       tableCode: table.code,
       tableSessionId: tableSession.id,
       configVersion: state.config.version,
+      source: input.source,
+      merged: false,
     },
   })
   appendTaskEvent(state, task.id, 'task.created.v1', 'system', {
@@ -324,6 +375,70 @@ export function createServiceTask(state: RuntimeState, input: CreateTaskInput & 
     tableSessionId: tableSession.id,
     configVersion: task.configVersion,
     ...assignmentMetadata(assignment),
+  })
+  if (informationOnly) {
+    appendTaskEvent(state, task.id, 'service.info_recorded.v1', input.requestedBy ?? input.source, {
+      tableId: table.id,
+      tableSessionId: tableSession.id,
+      note: task.note,
+    })
+  }
+  state.revision += 1
+  return task
+}
+
+export function mergeServiceTaskRequest(
+  state: RuntimeState,
+  taskId: string,
+  input: {
+    note: string
+    idempotencyKey: string
+    requestedBy?: string
+    source: ServiceTask['source']
+  },
+) {
+  const replay = state.auditEntries.find(
+    (entry) => entry.action === 'service.requested.v1' && entry.details.idempotencyKey === input.idempotencyKey,
+  )
+  if (replay) {
+    const replayTask = state.tasks.find((task) => task.id === replay.objectId)
+    if (!replayTask) throw new Error('重复请求对应的任务不存在')
+    if (replayTask.id !== taskId) throw new Error('同一幂等键不能用于不同服务请求')
+    return replayTask
+  }
+
+  const task = state.tasks.find((item) => item.id === taskId)
+  if (!task) throw new Error('任务不存在')
+  if (!isOpenTask(task) || task.archivedAt) throw new Error('已关闭的任务不能合并新请求')
+  const now = new Date().toISOString()
+  const previousNote = task.note
+  const latestNote = input.note.trim()
+  task.requestCount = (task.requestCount ?? 1) + 1
+  task.firstRequestedAt ??= task.createdAt
+  task.lastRequestedAt = now
+  task.updatedAt = now
+  if (latestNote) task.note = latestNote
+  state.auditEntries.push({
+    id: `audit_${randomUUID()}`,
+    actorId: input.requestedBy ?? input.source,
+    action: 'service.requested.v1',
+    objectType: 'serviceTask',
+    objectId: task.id,
+    occurredAt: now,
+    details: {
+      idempotencyKey: input.idempotencyKey,
+      tableSessionId: task.tableSessionId,
+      source: input.source,
+      merged: true,
+      requestCount: task.requestCount,
+    },
+  })
+  appendTaskEvent(state, task.id, 'task.request_merged.v1', input.requestedBy ?? input.source, {
+    idempotencyKey: input.idempotencyKey,
+    requestCount: task.requestCount,
+    previousNote,
+    requestedNote: latestNote,
+    latestNote: task.note,
   })
   state.revision += 1
   return task
@@ -397,6 +512,7 @@ export function applyTaskAction(state: RuntimeState, taskId: string, input: Task
       }
       task.status = 'accepted'
       task.acceptedAt = now
+      markTaskViewed(task, input.actorId)
       appendTaskEvent(state, task.id, 'task.accepted.v1', input.actorId, {
         ...eventPayload,
         ownerId: task.ownerId,
@@ -407,21 +523,45 @@ export function applyTaskAction(state: RuntimeState, taskId: string, input: Task
       if (task.status !== 'accepted') throw new Error('必须先接单')
       task.status = 'arrived'
       task.arrivedAt = now
+      markTaskViewed(task, input.actorId)
       appendTaskEvent(state, task.id, 'task.arrived.v1', input.actorId, eventPayload)
       break
     case 'complete':
       assertActor(task, input.actorId)
-      if (task.status !== 'arrived') throw new Error('必须先确认到桌')
-      task.status = 'confirmed'
-      task.completedAt = now
-      task.resolution = input.note || '员工确认完成'
-      appendTaskEvent(state, task.id, 'task.completed.v1', input.actorId, { ...eventPayload, resolution: task.resolution })
-      appendTaskEvent(state, task.id, 'service.closed_by_staff.v1', input.actorId, {
-        ...eventPayload,
-        resolution: task.resolution,
-        customerConfirmationRequired: false,
-      })
+      assertCompletionNote(state, task, input.note)
+      if (taskWorkflowLevel(task) === 'L3' && task.status !== 'arrived') throw new Error('必须先确认到桌')
+      if (taskWorkflowLevel(task) === 'L2' && !['accepted', 'arrived'].includes(task.status)) throw new Error('必须先接单')
+      if (taskWorkflowLevel(task) === 'L1' && !['accepted', 'arrived'].includes(task.status)) {
+        throw new Error('快速服务请直接使用一键完成')
+      }
+      if (taskWorkflowLevel(task) === 'L0') throw new Error('信息提示无需完成操作')
+      closeTaskByStaff(state, task, input.actorId, now, eventPayload)
       break
+    case 'quick_complete': {
+      if (taskWorkflowLevel(task) !== 'L1') throw new Error('只有快速服务可以一键完成')
+      if (!claimableStatuses.has(task.status)) throw new Error('当前状态不能一键完成')
+      assertCompletionNote(state, task, input.note)
+      const employee = state.employees.find((item) => item.id === input.actorId)
+      if (!employee || employee.status !== 'active') throw new Error('员工账号不可用')
+      const serviceType = state.config.serviceTypes.find((item) => item.id === task.serviceTypeId)
+      if (!serviceType) throw new Error('服务类型配置不存在')
+      const dispatchRoleIds = task.dispatchRoleIdsSnapshot?.length
+        ? task.dispatchRoleIdsSnapshot
+        : serviceType.dispatchRoleIds
+      const roleEligible = effectiveRoleIdsForEmployee(state, employee.id)
+        .some((roleId) => dispatchRoleIds.includes(roleId))
+      const table = state.tables.find((item) => item.id === task.tableId)
+      const directlyNotified = task.ownerId === employee.id || task.notifiedEmployeeIds.includes(employee.id)
+      const backupEligible = Boolean(
+        serviceType.allowBackupDirectComplete && table?.backupEmployeeIds.includes(employee.id),
+      )
+      const crossAreaEligible = Boolean(serviceType.allowCrossAreaComplete && roleEligible)
+      if (!roleEligible || (!directlyNotified && !backupEligible && !crossAreaEligible)) {
+        throw new Error('您当前不在该快速服务的通知、候补或岗位范围内')
+      }
+      closeTaskByStaff(state, task, input.actorId, now, eventPayload, 'task.quick_completed.v1')
+      break
+    }
     case 'confirm':
       if (!input.actorId.startsWith('guest-')) throw new Error('仅客人可以确认服务已经解决')
       if (!['completed', 'confirmed'].includes(task.status)) throw new Error('任务尚未完成')
@@ -457,6 +597,7 @@ export function applyTaskAction(state: RuntimeState, taskId: string, input: Task
       task.acceptedAt = null
       task.arrivedAt = null
       task.completedAt = null
+      task.completedBy = null
       task.resolution = null
       if (task.ownerId && !task.notifiedEmployeeIds.includes(task.ownerId)) task.notifiedEmployeeIds.push(task.ownerId)
       appendTaskEvent(state, task.id, 'task.reopened.v1', input.actorId, {
@@ -599,6 +740,17 @@ export function saveConfigDraft(state: RuntimeState, input: ConfigDraftInput, ac
           customerReply: update.customerReply,
           actionScript: [...update.actionScript],
           sla: { ...update.sla },
+          workflowLevel: update.workflowLevel ?? serviceType.workflowLevel ?? 'L3',
+          allowBackupDirectComplete: update.allowBackupDirectComplete
+            ?? serviceType.allowBackupDirectComplete
+            ?? false,
+          allowCrossAreaComplete: update.allowCrossAreaComplete
+            ?? serviceType.allowCrossAreaComplete
+            ?? false,
+          requiresCompletionNote: update.requiresCompletionNote
+            ?? serviceType.requiresCompletionNote
+            ?? false,
+          duplicateSeconds: update.duplicateSeconds ?? serviceType.duplicateSeconds ?? 60,
         }
       : serviceType
   })

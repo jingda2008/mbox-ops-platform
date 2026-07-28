@@ -501,15 +501,15 @@ describe('真实营业夜间全链路仿真', () => {
     expect(barTask).toBeDefined()
     expect(kitchenTask).toBeDefined()
 
-    for (const [taskId, actorId, roleId] of [
-      [barTask.id, 'emp-qing', 'bartender'],
-      [kitchenTask.id, 'emp-han', 'kitchen'],
-    ] as const) {
-      await kdsAction(app, taskId, 'start', actorId, roleId)
-      await kdsAction(app, taskId, 'complete', actorId, roleId)
-      await kdsAction(app, taskId, 'pickUp', 'emp-lin', 'server')
-      await kdsAction(app, taskId, 'deliver', 'emp-lin', 'server')
-    }
+    expect(barTask).toMatchObject({ fulfillmentType: 'ready_to_serve', status: 'completed' })
+    await kdsAction(app, barTask.id, 'pickUp', 'emp-lin', 'server')
+    await kdsAction(app, barTask.id, 'deliver', 'emp-lin', 'server')
+
+    expect(kitchenTask).toMatchObject({ fulfillmentType: 'made_to_order', status: 'queued' })
+    await kdsAction(app, kitchenTask.id, 'start', 'emp-han', 'kitchen')
+    await kdsAction(app, kitchenTask.id, 'complete', 'emp-han', 'kitchen')
+    await kdsAction(app, kitchenTask.id, 'pickUp', 'emp-lin', 'server')
+    await kdsAction(app, kitchenTask.id, 'deliver', 'emp-lin', 'server')
 
     state = await repository.read()
     expect(state.orderDomain.kdsTasks).toHaveLength(2)

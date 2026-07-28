@@ -21,7 +21,6 @@ export const mboxVenueAreas: Area[] = [
   { id: 'social', name: '舞台侧S区', shortName: 'S区', color: '#a85d58', sortOrder: 6 },
   { id: 'special', name: '多人桌区', shortName: '多人桌', color: '#9a7d3f', sortOrder: 7 },
   { id: 'walkin', name: '室外W区', shortName: '室外', color: '#4f7961', sortOrder: 8 },
-  { id: MBOX_LEGACY_AREA_ID, name: '旧互动桌（过渡）', shortName: '过渡', color: '#8b8f89', sortOrder: 99 },
 ]
 
 function numberedTables(

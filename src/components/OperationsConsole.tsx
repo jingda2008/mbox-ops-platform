@@ -17,6 +17,7 @@ import {
   Save,
   Settings2,
   ShieldCheck,
+  ShoppingCart,
   Sparkles,
   Timer,
   Upload,
@@ -201,15 +202,35 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
   const roleHomeAccess = roleHomeModel.access
   const roleNavigationLabels = new Map(roleHomeModel.navigation.map((item) => [item.id, item.label]))
   const currentEmployee = fulfillmentAccess.employee
+  const operationalTableScope = currentEmployee
+    ? effectiveDataScopeForEmployee(data, currentEmployee.id)
+    : 'own'
+  const visibleOperationalTables = data.tables.filter((table) => {
+    if (!currentEmployee) return false
+    if (operationalTableScope === 'all_stores' || operationalTableScope === 'store') return true
+    if (operationalTableScope === 'assigned_areas') return currentEmployee.areaIds.includes(table.areaId)
+    return table.primaryEmployeeId === currentEmployee.id || table.backupEmployeeIds.includes(currentEmployee.id)
+  })
+  const visibleOperationalTableIds = new Set(visibleOperationalTables.map((table) => table.id))
   const claimableTaskIds = new Set(data.tasks.filter((task) => {
     if (!currentEmployee || currentEmployee.status !== 'active' || !currentEmployee.online || currentEmployee.paused) return false
-    if (task.ownerId !== null || !['pending', 'escalated', 'reopened'].includes(task.status)) return false
+    if (!['pending', 'escalated', 'reopened'].includes(task.status)) return false
     if (!data.viewer?.permissionIds.includes('service.execute')) return false
     const serviceType = data.config.serviceTypes.find((item) => item.id === task.serviceTypeId && item.enabled)
-    if (!serviceType || !effectiveRoleIdsForEmployee(data, currentEmployee.id).some((roleId) => serviceType.dispatchRoleIds.includes(roleId))) return false
-    if (task.notifiedEmployeeIds.includes(currentEmployee.id)) return true
+    const roleEligible = serviceType && effectiveRoleIdsForEmployee(data, currentEmployee.id)
+      .some((roleId) => serviceType.dispatchRoleIds.includes(roleId))
+    if (!serviceType || !roleEligible) return false
+    if (task.ownerId === currentEmployee.id || task.notifiedEmployeeIds.includes(currentEmployee.id)) return true
     const table = data.tables.find((item) => item.id === task.tableId)
     if (!table) return false
+    if (
+      (task.workflowLevel ?? serviceType.workflowLevel ?? 'L3') === 'L1'
+      && (
+        (serviceType.allowBackupDirectComplete && table.backupEmployeeIds.includes(currentEmployee.id))
+        || serviceType.allowCrossAreaComplete
+      )
+    ) return true
+    if (task.ownerId !== null) return false
     const scope = effectiveDataScopeForEmployee(data, currentEmployee.id)
     if (scope === 'all_stores' || scope === 'store') return true
     if (scope === 'assigned_areas') return currentEmployee.areaIds.includes(table.areaId)
@@ -257,6 +278,13 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
   const internalNavigationRequestId = useRef(0)
   const [activeNavigationRequest, setActiveNavigationRequest] = useState<OperationsConsoleNavigationRequest | null>(null)
   const tablePanelRef = useRevealPanelScroll<HTMLDivElement>(view === 'live' ? selectedTableId : '')
+
+  useEffect(() => {
+    if (!notice) return
+    const isError = /失败|错误|无效|不能|不可|拒绝|未保存|未完成|尚未|请先/.test(notice)
+    const timer = window.setTimeout(() => setNotice(''), isError ? 7_000 : 3_500)
+    return () => window.clearTimeout(timer)
+  }, [notice])
 
   function navigateTo(target: View, focus?: OperationsConsoleFocus) {
     setView(target)
@@ -308,6 +336,11 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
     kdsTaskOperationallyActive(task) && taskVisibleToAccess(task, fulfillmentAccess)
   )).length
   const selectedTable = data.tables.find((table) => table.id === selectedTableId) ?? null
+  const selectedTableInformation = selectedTable
+    ? data.tasks
+        .filter((task) => task.tableId === selectedTable.id && task.workflowLevel === 'L0' && !task.archivedAt)
+        .toSorted((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0] ?? null
+    : null
   const selectedAwaitingOrder = data.awaitingOrderIntents.find(
     (intent) => intent.tableId === selectedTableId && intent.status === 'active',
   ) ?? null
@@ -423,7 +456,8 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
 
   async function handleTaskAction(task: ServiceTask, action: TaskActionInput['action']) {
     const actorId = fulfillmentAccess.employee?.id
-    if (!actorId || (task.ownerId !== null && task.ownerId !== actorId)) {
+    const canActAsCandidate = action === 'quick_complete' && claimableTaskIds.has(task.id)
+    if (!actorId || (task.ownerId !== null && task.ownerId !== actorId && !canActAsCandidate)) {
       setNotice('该任务当前不由您负责，请联系领班重新派单')
       return
     }
@@ -437,7 +471,11 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
       const result = await runOptimisticAction({
         key: `service-task:${task.id}`,
         apply: () => { replaceTask(optimisticTask); return task },
-        commit: () => actOnTask(task.id, { action, actorId, note: action === 'complete' ? '现场服务完成' : '' }),
+        commit: () => actOnTask(task.id, {
+          action,
+          actorId,
+          note: action === 'complete' || action === 'quick_complete' ? '现场服务完成' : '',
+        }),
         reconcile: (authoritativeTask) => { if (authoritativeTask) replaceTask(authoritativeTask) },
         rollback: (snapshot) => replaceTask(snapshot),
       })
@@ -445,6 +483,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
       void onRefresh()
     } catch (error) {
       setNotice(`${error instanceof Error ? error.message : '任务操作失败'}；页面已恢复，可以重试`)
+      await onRefresh().catch(() => undefined)
     } finally {
       setBusyTaskIds((current) => {
         const next = new Set(current)
@@ -511,6 +550,11 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
       setSalesEmployeeId(result.summary.salesEmployeeId ?? '')
       setNotice(`${selectedTable.code}临客已开台，低消V${result.summary.configVersion}与销售归属已固化`)
       await onRefresh()
+      navigateTo('commerce', {
+        objectId: selectedTable.id,
+        tableCode: selectedTable.code,
+        query: 'employee-order-paid',
+      })
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '临客开台失败')
     } finally {
@@ -726,6 +770,11 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
         customerReply: type.customerReply,
         actionScript: type.actionScript,
         sla: type.sla,
+        workflowLevel: type.workflowLevel,
+        allowBackupDirectComplete: type.allowBackupDirectComplete,
+        allowCrossAreaComplete: type.allowCrossAreaComplete,
+        requiresCompletionNote: type.requiresCompletionNote,
+        duplicateSeconds: type.duplicateSeconds,
       })),
       roles: draft.roles.map((role) => ({
         id: role.id,
@@ -950,7 +999,40 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
                         {selectedAwaitingOrder
                           ? <small>等待点单 {elapsedMinutes(selectedAwaitingOrder.startedAt)}分钟 · 已提醒{selectedAwaitingOrder.reminderCount}次</small>
                           : <small>{selectedTableHasOrder ? '当前桌次已产生订单' : '服务员可标记客人暂未点单'}</small>}
+                        {selectedTableInformation?.note && <small className="table-guest-context">客情：{selectedTableInformation.note}</small>}
                       </div>
+                      {!selectedSessionNeedsHandover && (
+                        <div className="table-order-shortcuts" aria-label={`${selectedTable.code}点单操作`}>
+                          <button
+                            className="primary-button"
+                            onClick={() => navigateTo('commerce', { objectId: selectedTable.id, tableCode: selectedTable.code, query: 'employee-order-paid' })}
+                          >
+                            <ShoppingCart size={17} />正常点单
+                          </button>
+                          <button
+                            className="secondary-button"
+                            aria-disabled={!canGiftAtTable}
+                            title={canGiftAtTable ? '按当前员工本人权限赠送商品' : '当前岗位赠送额度为0，请由店长或管理员配置'}
+                            onClick={() => {
+                              if (!canGiftAtTable) {
+                                setNotice('暂不能赠送：当前岗位赠送额度为0，请由店长或管理员配置')
+                                return
+                              }
+                              navigateTo('commerce', { objectId: selectedTable.id, tableCode: selectedTable.code, query: 'employee-order-gift' })
+                            }}
+                          >
+                            <Gift size={17} />赠送商品
+                          </button>
+                          {roleHomeAccess.allowedNavigationIds.includes('payments') && (
+                            <button
+                              className="secondary-button"
+                              onClick={() => navigateTo('payments', { objectId: selectedTable.id, tableCode: selectedTable.code, query: 'table-account' })}
+                            >
+                              <Banknote size={17} />查看桌账
+                            </button>
+                          )}
+                        </div>
+                      )}
                       {selectedSessionNeedsHandover ? <strong className="stale-table-label">已冻结，等待经理交接</strong> : selectedAwaitingOrder ? (
                         <>
                           <div className="next-care"><Timer size={17} /><span>下次检查</span><strong>{formatNextReminder(selectedAwaitingOrder.nextReminderAt)}</strong></div>
@@ -1026,12 +1108,14 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
                     </div>
                   )}
                   <div className="area-list">
-                    {data.areas.toSorted((a, b) => a.sortOrder - b.sortOrder).map((area) => (
+                    {data.areas
+                      .filter((area) => visibleOperationalTables.some((table) => table.areaId === area.id))
+                      .toSorted((a, b) => a.sortOrder - b.sortOrder).map((area) => (
                       <div className="area-row" key={area.id}>
                         <div className="area-label" style={{ borderColor: area.color }}><strong>{area.shortName}</strong><span>{area.name}</span></div>
                         <div className="table-grid">
                           {data.tables
-                            .filter((table) => table.areaId === area.id)
+                            .filter((table) => table.areaId === area.id && visibleOperationalTableIds.has(table.id))
                             .toSorted((left, right) => left.code.localeCompare(right.code, 'zh-CN', { numeric: true }))
                             .map((table) => {
                             const owner = data.employees.find((employee) => employee.id === table.primaryEmployeeId)
@@ -1116,7 +1200,13 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
 
           {view === 'inventory' && <InventoryView />}
 
-          {view === 'payments' && <PaymentView data={data} onRefresh={onRefresh} />}
+          {view === 'payments' && (
+            <PaymentView
+              data={data}
+              onRefresh={onRefresh}
+              focusRequest={activeNavigationRequest?.target === 'payments' ? activeNavigationRequest : null}
+            />
+          )}
 
           {view === 'benefits' && <BenefitCenterView data={data} onRefresh={onRefresh} onNotice={setNotice} />}
 
@@ -1130,7 +1220,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
             <section className="layout-view">
               <div className="section-heading">
                 <div><span className="eyebrow">正式座位图 · 2026-07-28</span><h2>陆家嘴店桌台布局</h2></div>
-                <span className="count-chip">{data.tables.filter((table) => table.areaId !== 'interactive').length}个正式桌位</span>
+                <span className="count-chip">{data.tables.length}个正式桌位</span>
               </div>
               <div className="layout-content">
                 <figure><img src="/assets/mbox-floorplan-2026.webp" alt="M-Box陆家嘴店2026真实座位图" /></figure>

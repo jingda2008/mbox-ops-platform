@@ -5,6 +5,7 @@ import type { RuntimeState } from '../src/shared/contracts.js'
 import type { GuestSessionResponse } from '../src/shared/guest-contracts.js'
 import { effectiveRoleIdsForEmployee } from '../src/shared/staff-access.js'
 import { visibleGuestTasks } from '../src/components/guest-portal-utils.js'
+import { taskQueueIsVisible } from '../src/components/task-queue.js'
 import { AuthorizationError } from './authorization.js'
 import { projectRuntimeStateForActor } from './bootstrap-projection.js'
 import { registerCommerceRoutes } from './commerce-api.js'
@@ -126,18 +127,18 @@ const apps: FastifyInstance[] = []
 afterEach(async () => Promise.all(apps.splice(0).map((app) => app.close())))
 
 describe('客户端指令到责任岗位完整流转', () => {
-  it('把客户心情转为关怀任务交给责任人，同时保留匿名行为数据并在完成后清除提示', async () => {
+  it('把客户心情记录为客情信息而不打扰员工队列，同时保留匿名行为数据', async () => {
     const { app, repository, guestInsights } = await buildFixture()
     apps.push(app)
     const session = await guestSession(app, 'L01')
-    const customRequest = session.serviceTypes.find((item) => item.code === 'CUSTOM_REQUEST')!
+    const moodInfo = session.serviceTypes.find((item) => item.code === 'GUEST_MOOD_INFO')!
     const guestHeaders = { 'x-mbox-guest-id': session.guestIdentity.anonymousId }
     const note = '客人心情更新为「微醺」。服务建议：请主动补水，关注饮酒节奏和身体状态。'
     const created = await app.inject({
       method: 'POST', url: '/api/guest/tasks', headers: guestHeaders,
       payload: {
         tableToken: session.tableToken,
-        serviceTypeId: customRequest.id,
+        serviceTypeId: moodInfo.id,
         note,
         idempotencyKey: 'client-flow-mood-task-0001',
       },
@@ -154,10 +155,16 @@ describe('客户端指令到责任岗位完整流转', () => {
     })
     expect(behavior.statusCode, behavior.body).toBe(202)
     const task = repository.state.tasks.find((candidate) => candidate.id === created.json().id)!
-    expect(task.note).toBe(note)
-    expect(task.ownerId).toBeTruthy()
-    expect(projectRuntimeStateForActor(repository.state, actorContext(repository.state, task.ownerId!)).tasks)
-      .toContainEqual(expect.objectContaining({ id: task.id, note }))
+    expect(task).toMatchObject({
+      note,
+      workflowLevel: 'L0',
+      status: 'confirmed',
+      resolution: '客情信息已记录',
+    })
+    expect(task.ownerId).toBeFalsy()
+    const employeeProjection = projectRuntimeStateForActor(repository.state, actorContext(repository.state, 'emp-lin'))
+    expect(employeeProjection.tasks.filter(taskQueueIsVisible))
+      .not.toContainEqual(expect.objectContaining({ id: task.id }))
     expect(guestInsights.events).toContainEqual(expect.objectContaining({
       anonymousId: session.guestIdentity.anonymousId,
       tableSessionId: session.account.tableSessionId,
@@ -165,9 +172,6 @@ describe('客户端指令到责任岗位完整流转', () => {
       metadata: { moodId: 'tipsy', previousMoodId: null },
     }))
 
-    await taskAction(app, task.id, task.ownerId!, 'accept', 'mood')
-    await taskAction(app, task.id, task.ownerId!, 'arrive', 'mood')
-    await taskAction(app, task.id, task.ownerId!, 'complete', 'mood')
     const refreshed = await guestSession(app, 'L01', session.tableToken)
     expect(refreshed.tasks.some((candidate) => candidate.id === task.id)).toBe(false)
   })
@@ -178,15 +182,18 @@ describe('客户端指令到责任岗位完整流转', () => {
     const cases = [
       { tableCode: 'L01', serviceCode: 'ADD_WATER' },
       { tableCode: 'L02', serviceCode: 'ADD_ICE_LEMON' },
-      { tableCode: 'I01', serviceCode: 'ORDER_HELP' },
-      { tableCode: 'I02', serviceCode: 'REQUEST_BILL' },
+      { tableCode: 'L01', serviceCode: 'ORDER_HELP' },
+      { tableCode: 'L02', serviceCode: 'REQUEST_BILL' },
       { tableCode: 'S01', serviceCode: 'COMPLAINT' },
       { tableCode: 'W01', serviceCode: 'BIRTHDAY_CARE' },
       { tableCode: 'B01', serviceCode: 'CUSTOM_REQUEST' },
     ]
 
     const firstSession = await guestSession(app, 'L01')
-    expect(firstSession.serviceTypes.map((item) => item.code).toSorted()).toEqual(cases.map((item) => item.serviceCode).toSorted())
+    expect(firstSession.serviceTypes.map((item) => item.code)).toEqual(expect.arrayContaining([
+      'GUEST_MOOD_INFO',
+      ...cases.map((item) => item.serviceCode),
+    ]))
 
     for (const [index, item] of cases.entries()) {
       const session = index === 0 ? firstSession : await guestSession(app, item.tableCode)

@@ -23,7 +23,10 @@ export function addConfiguredProductToOrder(state: RuntimeState, options: AddCon
   const { product, quantity } = options
   const isBundle = product.productKind === 'bundle'
   const parentLineId = deterministicId(options.linePrefix, `${options.idempotencyKey}:parent`)
-  const parentRequiresFulfillment = !isBundle && product.requiresFulfillment !== false
+  const parentFulfillmentType = isBundle
+    ? 'no_fulfillment'
+    : product.fulfillmentType ?? (product.requiresFulfillment === false ? 'no_fulfillment' : 'made_to_order')
+  const parentRequiresFulfillment = parentFulfillmentType !== 'no_fulfillment'
   const parentStationId = parentRequiresFulfillment
     ? routeProductToEnabledWorkstation(state, product.stationId).id
     : product.stationId
@@ -44,6 +47,7 @@ export function addConfiguredProductToOrder(state: RuntimeState, options: AddCon
       parentOrderItemId: null,
       inventoryTracked: !isBundle,
       requiresFulfillment: parentRequiresFulfillment,
+      fulfillmentType: parentFulfillmentType,
       configVersion: product.configVersion,
     },
     actorId: options.actorId,
@@ -62,7 +66,9 @@ export function addConfiguredProductToOrder(state: RuntimeState, options: AddCon
     if (!availability.orderable) throw new Error(`${product.name}暂时不能完整出品：${componentProduct.name}${availability.label}`)
     const componentQuantity = component.quantity * quantity
     if (!Number.isSafeInteger(componentQuantity) || componentQuantity <= 0) throw new Error(`${product.name}组成商品数量无效`)
-    const requiresFulfillment = componentProduct.requiresFulfillment !== false
+    const fulfillmentType = componentProduct.fulfillmentType
+      ?? (componentProduct.requiresFulfillment === false ? 'no_fulfillment' : 'made_to_order')
+    const requiresFulfillment = fulfillmentType !== 'no_fulfillment'
     const stationId = requiresFulfillment
       ? routeProductToEnabledWorkstation(state, componentProduct.stationId).id
       : componentProduct.stationId
@@ -83,6 +89,7 @@ export function addConfiguredProductToOrder(state: RuntimeState, options: AddCon
         parentOrderItemId: parentLineId,
         inventoryTracked: true,
         requiresFulfillment,
+        fulfillmentType,
         configVersion: componentProduct.configVersion,
       },
       actorId: options.actorId,

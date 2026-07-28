@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ServiceTask } from '../shared/contracts'
-import { taskMatchesQueueFilter, taskQueueFilterForQuery } from './task-queue'
+import { taskMatchesQueueFilter, taskQueueFilterForQuery, taskRepeatSummary } from './task-queue'
 
 const now = Date.parse('2026-07-21T12:00:00.000Z')
 
@@ -51,5 +51,19 @@ describe('task queue navigation filters', () => {
     expect(taskMatchesQueueFilter(task({ status: 'arrived' }), 'sla-risk', complaints, now)).toBe(false)
     expect(taskMatchesQueueFilter(task({ escalationLevel: 1 }), 'escalated', complaints, now)).toBe(true)
     expect(taskMatchesQueueFilter(task({ serviceTypeId: 'complaint' }), 'complaint', complaints, now)).toBe(true)
+  })
+})
+
+describe('task repeat request summary', () => {
+  it('shows the merged request count and most recent request time', () => {
+    const repeated = task({
+      requestCount: 4,
+      lastRequestedAt: '2026-07-21T11:59:42.000Z',
+    })
+    expect(taskRepeatSummary(repeated, now)).toBe('重复呼叫 4次 · 最近18秒前')
+  })
+
+  it('does not add repeat noise for a single request', () => {
+    expect(taskRepeatSummary(task(), now)).toBeNull()
   })
 })

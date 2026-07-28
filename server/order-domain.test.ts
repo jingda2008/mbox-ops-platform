@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { OrderDomainState, OrderItemDraftInput } from '../src/shared/order-contracts.js'
 import {
   addOrderItem,
+  completeAndDeliverKdsTask,
   completeKdsTask,
   createOrderDomainState,
   createOrderDraft,
@@ -430,15 +431,163 @@ describe('order authorization and submission', () => {
       unitSalePriceAmount: 100,
       unitCostAmount: 0,
       stationId: 'non-fulfillment',
-      requiresFulfillment: false,
+      fulfillmentType: 'no_fulfillment',
     }))
 
     const submitted = submit(state)
 
     expect(submitted).toMatchObject({ status: 'fulfilled', fulfilledAt: T2 })
-    expect(submitted.items[0]).toMatchObject({ fulfillmentStatus: 'delivered', kdsTaskId: null })
+    expect(submitted.items[0]).toMatchObject({
+      fulfillmentType: 'no_fulfillment',
+      fulfillmentStatus: 'delivered',
+      kdsTaskId: null,
+    })
     expect(state.kdsTasks).toHaveLength(0)
     expect(getTableBalance(state, order.tableSessionId)).toBe(18_800)
+  })
+
+  it('keeps the legacy false switch compatible with no-fulfillment products', () => {
+    const state = createOrderDomainState()
+    const order = draft(state)
+    addItem(state, order.id, itemInput({
+      skuId: 'legacy-adjustment',
+      stationId: 'legacy-non-fulfillment',
+      requiresFulfillment: false,
+    }))
+
+    const submitted = submit(state)
+
+    expect(submitted.items[0]).toMatchObject({
+      fulfillmentType: 'no_fulfillment',
+      requiresFulfillment: false,
+      fulfillmentStatus: 'delivered',
+      kdsTaskId: null,
+    })
+    expect(state.kdsTasks).toHaveLength(0)
+  })
+
+  it('keeps legacy products on the made-to-order KDS path by default', () => {
+    const state = createOrderDomainState()
+    const order = draft(state)
+    const item = addItem(state, order.id, itemInput())
+
+    submit(state)
+
+    expect(item).toMatchObject({
+      fulfillmentType: 'made_to_order',
+      requiresFulfillment: true,
+      fulfillmentStatus: 'queued',
+    })
+    expect(state.kdsTasks[0]).toMatchObject({
+      fulfillmentType: 'made_to_order',
+      status: 'queued',
+      startedAt: null,
+      completedAt: null,
+    })
+  })
+
+  it('routes ready products directly to pickup without requiring production', () => {
+    const state = createOrderDomainState()
+    const order = draft(state)
+    addItem(state, order.id, itemInput({
+      skuId: 'bottled-beer',
+      name: '瓶装啤酒',
+      fulfillmentType: 'ready_to_serve',
+    }))
+
+    const submitted = submit(state)
+    const task = state.kdsTasks[0]!
+
+    expect(submitted.status).toBe('in_fulfillment')
+    expect(task).toMatchObject({
+      fulfillmentType: 'ready_to_serve',
+      status: 'completed',
+      startedAt: null,
+      completedAt: T2,
+      completedBy: 'employee-server',
+      pickedUpAt: null,
+    })
+    expect(task.productionSla).toBeUndefined()
+    expect(() => startKdsTask(state, {
+      taskId: task.id,
+      actorId: 'bartender-1',
+      occurredAt: T3,
+      idempotencyKey: 'ready-product-start',
+    })).toThrow('KDS任务不能从completed跳转到preparing')
+
+    pickUpKdsTask(state, {
+      taskId: task.id,
+      actorId: 'runner-1',
+      occurredAt: T3,
+      idempotencyKey: 'ready-product-pickup',
+    })
+    deliverKdsTask(state, {
+      taskId: task.id,
+      actorId: 'server-1',
+      occurredAt: T4,
+      idempotencyKey: 'ready-product-deliver',
+    })
+    expect(submitted).toMatchObject({ status: 'fulfilled', fulfilledAt: T4 })
+  })
+
+  it('routes service-only lines directly to service completion', () => {
+    const state = createOrderDomainState()
+    const order = draft(state)
+    addItem(state, order.id, itemInput({
+      skuId: 'birthday-service',
+      name: '生日服务',
+      fulfillmentType: 'service_only',
+    }))
+
+    const submitted = submit(state)
+    const task = state.kdsTasks[0]!
+
+    expect(task).toMatchObject({
+      fulfillmentType: 'service_only',
+      status: 'picked_up',
+      completedAt: T2,
+      pickedUpAt: T2,
+    })
+    deliverKdsTask(state, {
+      taskId: task.id,
+      actorId: 'server-1',
+      occurredAt: T3,
+      idempotencyKey: 'service-only-deliver',
+    })
+    expect(submitted.status).toBe('fulfilled')
+  })
+
+  it('does not let a no-fulfillment line hide an undelivered physical item', () => {
+    const state = createOrderDomainState()
+    const order = draft(state)
+    addItem(state, order.id, itemInput({
+      id: 'adjustment-line',
+      skuId: 'adjustment',
+      stationId: 'non-fulfillment',
+      fulfillmentType: 'no_fulfillment',
+    }))
+    addItem(state, order.id, itemInput({
+      id: 'ready-line',
+      skuId: 'bottled-beer',
+      fulfillmentType: 'ready_to_serve',
+    }))
+
+    const submitted = submit(state)
+
+    expect(submitted.status).toBe('in_fulfillment')
+    expect(submitted.items.map((item) => item.fulfillmentStatus)).toEqual(['delivered', 'completed'])
+    expect(state.kdsTasks).toHaveLength(1)
+  })
+
+  it('rejects conflicting legacy and typed fulfillment configuration', () => {
+    const state = createOrderDomainState()
+    const order = draft(state)
+
+    expect(() => addItem(state, order.id, itemInput({
+      requiresFulfillment: false,
+      fulfillmentType: 'ready_to_serve',
+    }))).toThrow('商品履约类型与旧版履约开关冲突')
+    expect(order.items).toHaveLength(0)
   })
 })
 
@@ -516,9 +665,128 @@ describe('KDS item fulfillment', () => {
       '幂等键已用于不同请求',
     )
   })
+
+  it('atomically completes, picks up and delivers a made-to-order item', () => {
+    const state = createOrderDomainState()
+    const order = draft(state)
+    addItem(state, order.id, itemInput({ name: '现调鸡尾酒' }))
+    submit(state)
+    const task = state.kdsTasks[0]!
+    startKdsTask(state, {
+      taskId: task.id,
+      actorId: 'bartender-1',
+      occurredAt: T3,
+      idempotencyKey: 'combined-start',
+    })
+    const command = {
+      taskId: task.id,
+      actorId: 'bartender-1',
+      occurredAt: T4,
+      idempotencyKey: 'combined-complete-deliver',
+    }
+
+    const completed = completeAndDeliverKdsTask(state, command)
+    const retried = completeAndDeliverKdsTask(state, command)
+
+    expect(retried).toBe(completed)
+    expect(completed).toMatchObject({
+      status: 'delivered',
+      completedAt: T4,
+      completedBy: 'bartender-1',
+      pickedUpAt: T4,
+      pickedUpBy: 'bartender-1',
+      deliveredAt: T4,
+      deliveredBy: 'bartender-1',
+    })
+    expect(order).toMatchObject({ status: 'fulfilled', fulfilledAt: T4 })
+    expect(state.idempotencyRecords.filter(
+      (record) => record.operation === 'kds.complete_and_deliver.v1',
+    )).toHaveLength(1)
+  })
+
+  it('does not let combined completion bypass a pending KDS exception', () => {
+    const state = createOrderDomainState()
+    const order = draft(state)
+    addItem(state, order.id, itemInput({ name: '现调鸡尾酒' }))
+    submit(state)
+    const task = state.kdsTasks[0]!
+    startKdsTask(state, {
+      taskId: task.id,
+      actorId: 'bartender-1',
+      occurredAt: T3,
+      idempotencyKey: 'blocked-combined-start',
+    })
+    reportKdsException(state, {
+      exceptionId: 'blocked-combined-shortage',
+      eventId: 'blocked-combined-report',
+      taskId: task.id,
+      exceptionKind: 'shortage',
+      reasonCode: 'ingredient_out_of_stock',
+      reasonNote: '',
+      actorId: 'bartender-1',
+      actorRoleId: 'bartender',
+      occurredAt: T4,
+      idempotencyKey: 'blocked-combined-report-key',
+    })
+
+    expect(() => completeAndDeliverKdsTask(state, {
+      taskId: task.id,
+      actorId: 'bartender-1',
+      occurredAt: T5,
+      idempotencyKey: 'blocked-combined-deliver',
+    })).toThrow('KDS异常待领班或经理处置')
+    expect(task.status).toBe('preparing')
+    expect(order.status).toBe('in_fulfillment')
+  })
 })
 
 describe('KDS exception closure', () => {
+  it('keeps shortage handling available for ready-to-serve stock before pickup', () => {
+    const state = createOrderDomainState()
+    const order = draft(state)
+    addItem(state, order.id, itemInput({
+      skuId: 'bottled-beer',
+      name: '瓶装啤酒',
+      fulfillmentType: 'ready_to_serve',
+    }))
+    submit(state)
+    const task = state.kdsTasks[0]!
+
+    reportKdsException(state, {
+      exceptionId: 'ready-shortage',
+      eventId: 'ready-shortage-report',
+      taskId: task.id,
+      exceptionKind: 'shortage',
+      reasonCode: 'product_out_of_stock',
+      reasonNote: '',
+      actorId: 'runner-1',
+      actorRoleId: 'runner',
+      occurredAt: T3,
+      idempotencyKey: 'ready-shortage-report-key',
+    })
+    expect(order.status).toBe('in_fulfillment')
+    expect(() => pickUpKdsTask(state, {
+      taskId: task.id,
+      actorId: 'runner-1',
+      occurredAt: T4,
+      idempotencyKey: 'ready-shortage-pickup',
+    })).toThrow('KDS异常待领班或经理处置')
+
+    decideKdsException(state, {
+      eventId: 'ready-shortage-decision',
+      exceptionId: 'ready-shortage',
+      disposition: 'cancelled',
+      reasonCode: 'unavailable_confirmed',
+      reasonNote: '',
+      remakeTaskId: null,
+      actorId: 'manager-1',
+      actorRoleId: 'manager',
+      occurredAt: T4,
+      idempotencyKey: 'ready-shortage-decision-key',
+    })
+    expect(order.status).toBe('fulfilled')
+  })
+
   it('keeps the original task and commercial order facts while a shortage is remade', () => {
     const state = createOrderDomainState()
     const order = draft(state)

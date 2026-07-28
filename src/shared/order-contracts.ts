@@ -12,6 +12,11 @@ export type AuthorizationKind = 'discount' | 'gift'
 export type AuthorizationStatus = 'pending' | 'granted' | 'rejected'
 export type KdsTaskStatus = 'queued' | 'preparing' | 'completed' | 'picked_up' | 'delivered'
 export type ItemFulfillmentStatus = 'draft' | KdsTaskStatus
+export type ProductFulfillmentType =
+  | 'ready_to_serve'
+  | 'made_to_order'
+  | 'service_only'
+  | 'no_fulfillment'
 export type KdsExceptionKind = 'shortage' | 'production_rejection' | 'wrong_item'
 export type KdsExceptionReasonCode =
   | 'product_out_of_stock'
@@ -92,6 +97,8 @@ export interface OrderItem {
   inventoryTracked?: boolean
   /** Optional for compatibility with orders persisted before non-fulfillment products. */
   requiresFulfillment?: boolean
+  /** Immutable product fulfillment snapshot. Legacy lines default to made_to_order unless fulfillment is disabled. */
+  fulfillmentType?: ProductFulfillmentType
   configVersion: number
   fulfillmentStatus: ItemFulfillmentStatus
   kdsTaskId: string | null
@@ -189,6 +196,8 @@ export interface KdsTask {
   itemName: string
   specification: string
   quantity: number
+  /** Optional only for KDS tasks persisted before fulfillment routing was introduced. */
+  fulfillmentType?: ProductFulfillmentType
   /** Immutable order-note snapshot shared with production and delivery roles. */
   fulfillmentNote?: string
   status: KdsTaskStatus
@@ -268,6 +277,7 @@ export interface OrderItemDraftInput {
   parentOrderItemId?: string | null
   inventoryTracked?: boolean
   requiresFulfillment?: boolean
+  fulfillmentType?: ProductFulfillmentType
   configVersion: number
 }
 

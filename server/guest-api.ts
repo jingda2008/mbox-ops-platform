@@ -19,7 +19,7 @@ import type { PaymentIntent } from '../src/shared/payment-contracts.js'
 import type { Order } from '../src/shared/order-contracts.js'
 import { productAvailability } from '../src/shared/product-availability.js'
 import type { SongTableSession } from '../src/shared/song-contracts.js'
-import { applyTaskAction, createServiceTask } from './domain.js'
+import { applyTaskAction, createServiceTask, mergeServiceTaskRequest } from './domain.js'
 import type { RuntimeRepository } from './repository.js'
 import {
   requireGuestSession,
@@ -278,6 +278,11 @@ function taskView(state: RuntimeState, task: ServiceTask): GuestTaskView {
     customerReply: task.customerReply,
     ownerName: state.employees.find((employee) => employee.id === task.ownerId)?.displayName ?? null,
   }
+}
+
+function bypassesGuestServiceRateLimit(serviceType: RuntimeState['config']['serviceTypes'][number]) {
+  return /(COMPLAINT|SAFETY|SECURITY|EMERGENCY)/i.test(`${serviceType.code} ${serviceType.id}`)
+    || /(投诉|安全|冲突|醉酒|紧急)/.test(serviceType.name)
 }
 
 function sessionView(
@@ -585,30 +590,46 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
       }
       const limits = state.config.guestServiceLimits
       const now = options.now?.() ?? Date.now()
-      const duplicateCutoff = now - limits.duplicateSeconds * 1000
-      const duplicate = state.tasks.find((candidate) => (
-        candidate.tableSessionId === tableSession.id
-        && !candidate.archivedAt
-        && candidate.source === 'guest'
-        && candidate.serviceTypeId === input.serviceTypeId
-        && candidate.note.trim().replace(/\s+/g, ' ').toLowerCase() === normalizedNote
-        && !['completed', 'confirmed', 'cancelled'].includes(candidate.status)
-        && Date.parse(candidate.createdAt) >= duplicateCutoff
+      const replayAudit = state.auditEntries.find((entry) => (
+        entry.action === 'service.requested.v1'
+        && entry.details.idempotencyKey === input.idempotencyKey
       ))
-      if (duplicate) return taskView(state, duplicate)
-      const windowCutoff = now - limits.windowSeconds * 1000
-      const recentCount = state.tasks.filter((candidate) => (
+      const replayTask = replayAudit
+        ? state.tasks.find((candidate) => candidate.id === replayAudit.objectId)
+        : null
+      if (replayTask) {
+        if (replayTask.tableSessionId !== tableSession.id || replayTask.serviceTypeId !== input.serviceTypeId) {
+          throw new TableAccessError('这次提交标识已经用于其他服务，请重新提交。', 'GUEST_SERVICE_IDEMPOTENCY_CONFLICT', 409)
+        }
+        return taskView(state, replayTask)
+      }
+
+      const mergeTarget = state.tasks.find((candidate) => (
         candidate.tableSessionId === tableSession.id
         && !candidate.archivedAt
-        && candidate.source === 'guest'
-        && Date.parse(candidate.createdAt) >= windowCutoff
+        && candidate.serviceTypeId === input.serviceTypeId
+        && !['completed', 'confirmed', 'cancelled'].includes(candidate.status)
+      ))
+      const windowCutoff = now - limits.windowSeconds * 1000
+      const recentCount = state.auditEntries.filter((entry) => (
+        entry.action === 'service.requested.v1'
+        && entry.actorId === 'guest'
+        && entry.details.tableSessionId === tableSession.id
+        && Date.parse(entry.occurredAt) >= windowCutoff
       )).length
-      if (recentCount >= limits.maxRequests) {
+      if (recentCount >= limits.maxRequests && !bypassesGuestServiceRateLimit(serviceType)) {
         throw new TableAccessError(
           '收到啦～你的召唤已经闪到我们这边，小伙伴正在赶来，再给我们一点点时间哦。',
           'GUEST_SERVICE_RATE_LIMITED',
           429,
         )
+      }
+      if (mergeTarget) {
+        return taskView(state, mergeServiceTaskRequest(state, mergeTarget.id, {
+          note: input.note,
+          idempotencyKey: input.idempotencyKey,
+          source: 'guest',
+        }))
       }
       const task = createServiceTask(state, {
         tableCode: table.code,

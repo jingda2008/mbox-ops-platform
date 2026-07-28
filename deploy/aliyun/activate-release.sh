@@ -46,11 +46,14 @@ archive=${release_dir}/${archive_name}
 test -f "${archive}"
 test "$(sha256sum "${archive}" | awk '{print $1}')" = "${expected_archive_sha}"
 
+expected_config_digest=${expected_digest#sha256:}
+archive_config=$(tar -xOf "${archive}" manifest.json | jq -er '.[0].Config')
+test "${archive_config}" = "blobs/sha256/${expected_config_digest}"
+test "$(tar -xOf "${archive}" "${archive_config}" | sha256sum | awk '{print $1}')" = "${expected_config_digest}"
+
 docker load --input "${archive}" >/dev/null
-actual_digest=$(docker image inspect "${image_tag}" --format '{{.Id}}')
 actual_sha=$(docker image inspect "${image_tag}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
 actual_version=$(docker image inspect "${image_tag}" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')
-test "${actual_digest}" = "${expected_digest}"
 test "${actual_sha}" = "${release_sha}"
 test "${actual_version}" = "${release_version}"
 

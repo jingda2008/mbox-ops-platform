@@ -52,6 +52,7 @@ export type AuthorizationFailureReason =
   | 'role_not_allowed'
   | 'role_not_configured'
   | 'scope_not_allowed'
+  | 'area_responsibility_required'
   | 'approval_limit_exceeded'
   | 'high_risk_approval_required'
 
@@ -163,6 +164,20 @@ export function canActorAccessTableDataScope(
     || table.backupEmployeeIds.includes(effectiveActor.actorId)
 }
 
+export function canActorOperateTableResponsibility(
+  state: RuntimeState,
+  actor: RequestActorContext,
+  tableId: string,
+) {
+  const effectiveActor = effectiveActorForState(actor, state)
+  const employee = state.employees.find((item) => (
+    item.id === effectiveActor.actorId && item.status === 'active'
+  ))
+  const table = state.tables.find((item) => item.id === tableId)
+  if (!employee || !table || effectiveActor.storeId !== state.store.id) return false
+  return employee.areaIds.includes(table.areaId)
+}
+
 export function requireTableDataScope(
   request: FastifyRequest,
   state: RuntimeState,
@@ -187,6 +202,32 @@ export function requireTableDataScope(
       tableId,
       areaId: table?.areaId,
     })
+  }
+  return actor
+}
+
+export function requireTableResponsibility(
+  request: FastifyRequest,
+  state: RuntimeState,
+  tableId: string,
+  operation = 'table.operate',
+) {
+  const actor = effectiveRequestActor(request, state)
+  if (!canActorOperateTableResponsibility(state, actor, tableId)) {
+    const table = state.tables.find((item) => item.id === tableId)
+    const area = state.areas.find((item) => item.id === table?.areaId)
+    const areaName = area?.shortName ?? area?.name ?? table?.areaId ?? '该区域'
+    const responsibilityLabel = areaName.endsWith('区') ? areaName : `${areaName}区域`
+    throw new AuthorizationError(
+      `当前未负责${responsibilityLabel}，不能操作桌台 ${table?.code ?? tableId}`,
+      operation,
+      {
+        reason: 'area_responsibility_required',
+        roleId: actor.roleId,
+        tableId,
+        areaId: table?.areaId,
+      },
+    )
   }
   return actor
 }

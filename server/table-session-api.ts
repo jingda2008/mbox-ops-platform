@@ -12,7 +12,7 @@ import {
   type TableCombinationRecord,
   type TableTransferRecord,
 } from '../src/shared/contracts.js'
-import { requireConfiguredOperation, requireTableDataScope } from './authorization.js'
+import { requireConfiguredOperation, requireTableDataScope, requireTableResponsibility } from './authorization.js'
 import type { RuntimeRepository } from './repository.js'
 import {
   activeTableCombinationLinks,
@@ -506,6 +506,7 @@ export function registerTableSessionRoutes(app: FastifyInstance, repository: Run
     const result = await repository.mutate((state) => {
       const actor = requireConfiguredOperation(request, state, 'table.open')
       requireTableDataScope(request, state, request.params.tableId, 'table.open')
+      requireTableResponsibility(request, state, request.params.tableId, 'table.open')
       return openWalkInTableSession(
         state,
         request.params.tableId,

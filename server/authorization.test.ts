@@ -4,6 +4,7 @@ import type { RequestActorContext } from '../src/shared/auth-contracts.js'
 import {
   AuthorizationError,
   canAccessDataScope,
+  canActorOperateTableResponsibility,
   canApproveAmount,
   canApproveHighRiskOperation,
   canPerformOperation,
@@ -19,6 +20,7 @@ import {
   requireOperation,
   requireOrderCreationRole,
   requireTableDataScope,
+  requireTableResponsibility,
   STAFF_OPERATION_PERMISSION_IDS,
 } from './authorization.js'
 import { createSeedState } from './seed.js'
@@ -285,6 +287,19 @@ describe('staff role authorization', () => {
     shift.status = 'completed'
     expect(requireTableDataScope(request, state, 'table-l01').actorId).toBe('emp-lin')
     expect(() => requireTableDataScope(request, state, 'table-i01')).toThrowError(AuthorizationError)
+  })
+
+  it('separates store-wide oversight from configured table operating responsibility', () => {
+    const state = createSeedState()
+    const manager = state.employees.find((item) => item.id === 'emp-chen')!
+    manager.areaIds = manager.areaIds.filter((areaId) => areaId !== 'walkin')
+    const request = { mboxActor: actor('manager', manager.id) } as unknown as FastifyRequest
+
+    expect(requireTableDataScope(request, state, 'table-w01').actorId).toBe(manager.id)
+    expect(canActorOperateTableResponsibility(state, request.mboxActor!, 'table-w01')).toBe(false)
+    expect(() => requireTableResponsibility(request, state, 'table-w01', 'table.open'))
+      .toThrowError(/当前未负责.+，不能操作桌台 W01/)
+    expect(requireTableResponsibility(request, state, 'table-l04', 'table.open').actorId).toBe(manager.id)
   })
 
   it('returns a structured 403 for a table outside the actor data scope', async () => {

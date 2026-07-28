@@ -9,7 +9,7 @@ import type { RuntimeState } from '../src/shared/contracts.js'
 import { effectivePermissionIdsForEmployee, effectiveRoleIdsForEmployee } from '../src/shared/staff-access.js'
 import { availableAssistantExecutableTools } from './assistant-capability-registry.js'
 import { requireRequestActor } from './auth-context.js'
-import { requireConfiguredOperation, requireTableDataScope } from './authorization.js'
+import { requireConfiguredOperation, requireTableDataScope, requireTableResponsibility } from './authorization.js'
 import { applyTaskAction, canEmployeeClaimTask, createServiceTask } from './domain.js'
 import { syncKdsFromFulfillmentServiceTaskAction } from './fulfillment-service.js'
 import type { RuntimeRepository } from './repository.js'
@@ -188,6 +188,7 @@ export class AssistantToolBus {
         const table = resolveTable(state, input.tableCode)
         requireConfiguredOperation(request, state, 'table.open')
         requireTableDataScope(request, state, table.id, 'table.open')
+        requireTableResponsibility(request, state, table.id, 'table.open')
         const opened = openWalkInTableSession(state, table.id, {
           partySize: input.partySize,
           customerName: input.customerName ?? '现场客人',

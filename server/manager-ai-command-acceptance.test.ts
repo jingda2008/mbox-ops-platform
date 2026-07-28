@@ -399,6 +399,33 @@ describe('店长AI命令真实执行验收', () => {
     await app.close()
   })
 
+  it('AI开台不能绕过店长配置的责任区域', async () => {
+    const { app, repository: runtimeRepository } = await testApp()
+    await runtimeRepository.mutate((state) => {
+      const manager = state.employees.find((employee) => employee.id === 'emp-chen')!
+      manager.areaIds = manager.areaIds.filter((areaId) => areaId !== 'lounge')
+      state.revision += 1
+    })
+
+    const execution = await app.inject({
+      method: 'POST',
+      url: '/api/assistant/tool-executions',
+      payload: {
+        executionId: '00000000-0000-4000-8000-000000000711',
+        toolCall: { toolId: 'table.open', arguments: { tableCode: 'L04', partySize: 4 } },
+      },
+    })
+
+    expect(execution.statusCode, execution.body).toBe(409)
+    expect(execution.json()).toMatchObject({
+      code: 'ASSISTANT_TOOL_REJECTED',
+      message: expect.stringContaining('不能操作桌台 L04'),
+    })
+    expect(runtimeRepository.snapshot().tables.find((table) => table.id === 'table-l04'))
+      .toMatchObject({ status: 'available', guestCount: 0 })
+    await app.close()
+  })
+
   it('人数缺失时不能改变桌台状态', async () => {
     const { app, repository: runtimeRepository } = await testApp()
     const before = runtimeRepository.snapshot().tables.find((table) => table.id === 'table-l04')

@@ -1,4 +1,3 @@
-.table-walkin-toolbar,
 .table-business-toolbar,
 .legacy-handover-toolbar,
 .table-combination-toolbar,
@@ -113,21 +112,40 @@
 .stale-table-label { color: #a52f36; font-size: 12px; }
 .handover-permission-note { color: #a52f36; font-size: 11px; font-weight: 750; }
 
-.table-walkin-toolbar {
-  display: grid;
-  grid-template-columns: minmax(190px, 1fr) 120px minmax(180px, .8fr) auto;
-  align-items: end;
-  gap: 12px;
-  padding: 11px 12px;
-}
-
 .table-business-heading { display: flex; align-items: center; gap: 8px; }
 .table-business-heading > div { min-width: 0; display: grid; gap: 2px; }
 .table-business-heading strong { font-size: 13px; }
 .table-business-heading span { color: var(--ink-soft); font-size: 10px; overflow-wrap: anywhere; }
-.table-walkin-toolbar > label { min-width: 0; display: grid; gap: 5px; }
-.table-walkin-toolbar > label > span { color: var(--ink-soft); font-size: 10px; font-weight: 750; }
-.table-walkin-toolbar select { width: 100%; height: 36px; border: 1px solid var(--line-strong); background: #fff; color: var(--ink); padding: 0 8px; }
+.table-tile-shell { min-width: 0; display: contents; }
+.table-inline-open {
+  min-width: 0;
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(150px, .7fr) minmax(170px, 1fr) auto;
+  align-items: end;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid #9db5c2;
+  border-left: 4px solid #176d96;
+  border-radius: 5px;
+  background: #f5f8fa;
+  box-shadow: 0 5px 16px rgb(30 45 54 / 10%);
+}
+.table-inline-open__heading {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.table-inline-open__heading > span { min-width: 0; display: flex; align-items: center; gap: 7px; }
+.table-inline-open__heading strong { font-size: 13px; }
+.table-inline-open__heading .icon-button { width: 32px; height: 32px; min-height: 32px; padding: 0; }
+.table-inline-open > label { min-width: 0; display: grid; gap: 5px; }
+.table-inline-open > label > span { color: var(--ink-soft); font-size: 10px; font-weight: 750; }
+.table-inline-open select { width: 100%; min-width: 0; height: 36px; border: 1px solid var(--line-strong); background: #fff; color: var(--ink); padding: 0 8px; }
+.table-inline-open > .primary-button { min-width: 118px; white-space: nowrap; }
 .party-stepper { height: 36px; display: grid; grid-template-columns: 36px 1fr 36px; border: 1px solid var(--line-strong); background: #fff; }
 .party-stepper button { min-height: 0; display: grid; place-items: center; border: 0; background: transparent; color: var(--ink); }
 .party-stepper button:first-child { border-right: 1px solid var(--line); }
@@ -191,10 +209,10 @@
 .table-ops-save { display: grid; grid-template-columns: minmax(240px, 1fr) auto; align-items: end; gap: 10px; padding: 12px; border: 1px solid var(--line); border-top: 0; background: #f5f7f3; }
 
 @media (max-width: 900px) {
-  .table-walkin-toolbar,
   .table-business-toolbar,
   .legacy-handover-toolbar,
   .table-combination-toolbar { grid-template-columns: 1fr; }
+  .table-inline-open { grid-template-columns: minmax(130px, .7fr) minmax(150px, 1fr) auto; }
   .table-close-toolbar { align-items: stretch; flex-direction: column; }
   .minimum-spend-progress { grid-column: 1; }
   .active-table-links { grid-column: 1; }
@@ -206,7 +224,6 @@
   .minimum-spend-waiver,
   .minimum-reminder-config,
   .table-ops-save { grid-template-columns: 1fr; }
-  .table-walkin-toolbar > button,
   .minimum-spend-waiver button,
   .table-ops-save button { width: 100%; }
   .minimum-rule-list { overflow-x: visible; }
@@ -380,10 +397,6 @@
 }
 
 @media (min-width: 768px) and (max-width: 1023px) {
-  .table-walkin-toolbar {
-    grid-template-columns: minmax(220px, 1fr) minmax(110px, .45fr);
-  }
-
   .table-business-toolbar {
     grid-template-columns: minmax(240px, .8fr) minmax(250px, 1fr);
   }
@@ -411,7 +424,6 @@
 }
 
 @media (max-width: 620px) {
-  .table-walkin-toolbar,
   .table-business-toolbar,
   .legacy-handover-toolbar,
   .table-combination-toolbar,
@@ -423,4 +435,10 @@
     width: 100%;
     min-width: 0;
   }
+
+  .table-inline-open {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 8px;
+  }
+  .table-inline-open > .primary-button { grid-column: 1 / -1; width: 100%; }
 }

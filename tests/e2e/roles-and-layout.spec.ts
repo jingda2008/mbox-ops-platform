@@ -383,6 +383,16 @@ test.describe('视觉与移动端适配', () => {
     await expectNoHorizontalOverflow(page)
   })
 
+  test('系统管理员可进入经营权限配置但不获得本人赠送执行权', async ({ page }) => {
+    await useStaffIdentity(page, 'emp-admin', '乌鸦')
+    await page.goto('/')
+
+    await page.getByTitle('打开导航').click()
+    await page.locator('.sidebar nav').getByRole('button', { name: '人员与权限' }).click()
+    await page.getByRole('tab', { name: '经营权限' }).click()
+    await expect(page.getByText('权限按员工、类型、金额、商品、桌次和有效时间共同判断')).toBeVisible()
+  })
+
   test('有权限员工使用本人账号赠送下单且不进入支付流程', async ({ page }) => {
     await page.setViewportSize({ width: 430, height: 932 })
     await useStaffIdentity(page, 'emp-lin', 'Tom')
@@ -466,13 +476,31 @@ test.describe('视觉与移动端适配', () => {
     await expectNoHorizontalOverflow(page)
   })
 
-  test('没有本人赠送授权的服务员不显示赠送下单入口', async ({ page }) => {
+  test('没有本人赠送授权的服务员可见入口和具体原因但不能提交', async ({ page }) => {
     await useStaffIdentity(page, 'emp-wu', 'Jerry')
     await page.goto('/')
 
     await page.getByTitle('打开导航').click()
     await page.locator('.sidebar nav').getByRole('button', { name: '点单与送餐' }).click()
-    await expect(page.getByRole('button', { name: '权限赠送' })).toHaveCount(0)
+    const giftButton = page.getByRole('button', { name: '权限赠送' })
+    await expect(giftButton).toBeVisible()
+    await giftButton.click()
+    await expect(page.getByText('当前账号尚未配置赠送授权，请由店长或管理员授权', { exact: true })).toBeVisible()
+    await expect(page.getByLabel('赠送原因')).toHaveCount(0)
+  })
+
+  test('店长李艳可见正常下单和权限赠送并可进入赠送点单', async ({ page }) => {
+    await useStaffIdentity(page, 'emp-chen', '李艳')
+    await page.goto('/')
+
+    await page.getByTitle('打开导航').click()
+    await page.locator('.sidebar nav').getByRole('button', { name: '订单与出品' }).click()
+    await expect(page.getByRole('button', { name: '正常下单' })).toBeVisible()
+    await page.getByRole('button', { name: '权限赠送' }).click()
+    await page.getByRole('button', { name: '全屏点单' }).click()
+    await expect(page.getByLabel('赠送原因')).toBeVisible()
+    await page.getByLabel('选择桌台').selectOption('table-l01')
+    await expect(page.getByText('权限赠送', { exact: true })).toBeVisible()
   })
 
   test('移动端语音模式加载门店动态热词且保持单屏宽度', async ({ page }) => {

@@ -52,6 +52,48 @@ const workstationProductionRoleMigrationAction = 'runtime.workstation_production
 const hardwarePermissionMigrationAction = 'runtime.hardware_permissions_v1_migrated.v1'
 const financeCostPermissionMigrationAction = 'runtime.finance_cost_permissions_v1_migrated.v1'
 const fulfillmentTaskIdMigrationAction = 'runtime.fulfillment_task_ids_v1_migrated.v1'
+const standingCommerceAuthorityMigrationAction = 'runtime.standing_commerce_authorities_v1_migrated.v1'
+const standingCommerceAuthorityIds = new Set([
+  'server-gift-authority',
+  'supervisor-commerce-authority',
+  'manager-commerce-authority',
+  'operations-director-commerce-authority',
+  'owner-commerce-authority',
+])
+const standingCommerceAuthorityWindow = {
+  validFrom: '2026-01-01T00:00:00+08:00',
+  validUntil: '2099-12-31T23:59:59+08:00',
+}
+
+function withAdminCommerceAuthorityUpgrade(role: RoleConfig): RoleConfig {
+  const permissionIds = role.permissionIds ?? []
+  const approvalLimits = {
+    giftAmount: 0,
+    discountAmount: 0,
+    refundRequestAmount: 0,
+    refundApproveAmount: 0,
+    inventoryAdjustmentAmount: 0,
+    ...role.approvalLimits,
+  }
+  if (
+    role.id !== 'admin'
+    || !permissionIds.includes('config.manage')
+    || !permissionIds.includes('master_data.manage')
+  ) return role
+  return {
+    ...role,
+    permissionIds: [...new Set([...permissionIds, 'commerce.authorization.approve' as const])],
+    approvalLimits: {
+      ...approvalLimits,
+      giftAmount: Math.max(approvalLimits.giftAmount, 500_000),
+      discountAmount: Math.max(approvalLimits.discountAmount, 500_000),
+    },
+  }
+}
+
+function migrateAdminCommerceAuthorityPermissions(config: StoreConfig): StoreConfig {
+  return { ...config, roles: config.roles.map(withAdminCommerceAuthorityUpgrade) }
+}
 
 const hardwareRoleUpgrades: Record<string, BuiltInRoleUpgrade> = {
   owner: {
@@ -463,14 +505,29 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
   const upgradeFinanceCostPermissions = !migrated.auditEntries.some(
     (entry) => entry.action === financeCostPermissionMigrationAction,
   )
+  const upgradeStandingCommerceAuthorities = !migrated.auditEntries.some(
+    (entry) => entry.action === standingCommerceAuthorityMigrationAction,
+  )
+
+  if (upgradeStandingCommerceAuthorities) {
+    migrated.orderDomain.authorizationAuthorities = migrated.orderDomain.authorizationAuthorities.map((authority) => (
+      standingCommerceAuthorityIds.has(authority.id)
+        ? { ...authority, ...standingCommerceAuthorityWindow }
+        : authority
+    ))
+  }
 
   migrated.config = configWithOperationalDefaults(migrated.config, defaults, upgradeBuiltInRoles, upgradeFrontlineTableOperations)
+  if (upgradeStandingCommerceAuthorities) migrated.config = migrateAdminCommerceAuthorityPermissions(migrated.config)
   if (upgradeHardwarePermissions) migrated.config = migrateHardwarePermissions(migrated.config)
   if (upgradeFinanceCostPermissions) migrated.config = migrateFinanceCostPermissions(migrated.config)
   if (upgradeWorkstationProductionRoles) migrated.config = migrateLegacyWorkstationProductionRoles(migrated.config)
   migrated.draftConfig = migrated.draftConfig
     ? configWithOperationalDefaults(migrated.draftConfig, defaults, upgradeBuiltInRoles, upgradeFrontlineTableOperations)
     : null
+  if (upgradeStandingCommerceAuthorities && migrated.draftConfig) {
+    migrated.draftConfig = migrateAdminCommerceAuthorityPermissions(migrated.draftConfig)
+  }
   if (upgradeWorkstationProductionRoles && migrated.draftConfig) {
     migrated.draftConfig = migrateLegacyWorkstationProductionRoles(migrated.draftConfig)
   }
@@ -485,6 +542,7 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
     )
     if (upgradeHardwarePermissions) snapshot = migrateHardwarePermissions(snapshot)
     if (upgradeFinanceCostPermissions) snapshot = migrateFinanceCostPermissions(snapshot)
+    if (upgradeStandingCommerceAuthorities) snapshot = migrateAdminCommerceAuthorityPermissions(snapshot)
     return { ...record, snapshot }
   })
   migrated.employees = migrated.employees.map((employee) => ({
@@ -601,6 +659,22 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
       details: {
         strategy: 'built-in-finance-role-capability-fingerprint',
         permission: 'finance.manage',
+      },
+    })
+  }
+  if (upgradeStandingCommerceAuthorities) {
+    migrated.auditEntries.push({
+      id: 'runtime-migration-standing-commerce-authorities-v1',
+      actorId: 'system',
+      action: standingCommerceAuthorityMigrationAction,
+      objectType: 'store',
+      objectId: migrated.store.id,
+      occurredAt: new Date().toISOString(),
+      details: {
+        strategy: 'extend-known-built-in-authorities-once',
+        authorityIds: [...standingCommerceAuthorityIds],
+        adminCommerceAuthorityLimit: 500_000,
+        ...standingCommerceAuthorityWindow,
       },
     })
   }

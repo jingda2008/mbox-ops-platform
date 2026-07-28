@@ -485,4 +485,58 @@ describe('runtime state operational migrations', () => {
     expect(migratedAgain.presenceLeases).toEqual([])
     expect(migratedAgain.employees.every((employee) => !employee.online)).toBe(true)
   })
+
+  it('extends built-in commerce authorities once without overwriting later configuration', () => {
+    const legacy = structuredClone(createSeedState())
+    legacy.auditEntries = legacy.auditEntries.filter(
+      (entry) => entry.action !== 'runtime.standing_commerce_authorities_v1_migrated.v1',
+    )
+    const managerAuthority = legacy.orderDomain.authorizationAuthorities.find(
+      (authority) => authority.id === 'manager-commerce-authority',
+    )!
+    managerAuthority.validFrom = '2026-07-01T00:00:00+08:00'
+    managerAuthority.validUntil = '2026-07-02T03:00:00+08:00'
+
+    const migrated = migrateRuntimeState(legacy)
+    expect(migrated.orderDomain.authorizationAuthorities.find(
+      (authority) => authority.id === 'manager-commerce-authority',
+    )).toMatchObject({
+      validFrom: '2026-01-01T00:00:00+08:00',
+      validUntil: '2099-12-31T23:59:59+08:00',
+    })
+    expect(migrated.auditEntries.filter(
+      (entry) => entry.action === 'runtime.standing_commerce_authorities_v1_migrated.v1',
+    )).toHaveLength(1)
+    expect(migrated.config.roles.find((role) => role.id === 'admin')).toMatchObject({
+      approvalLimits: { giftAmount: 500_000, discountAmount: 500_000 },
+    })
+    expect(migrated.config.roles.find((role) => role.id === 'admin')?.permissionIds)
+      .toContain('commerce.authorization.approve')
+
+    const customized = structuredClone(migrated)
+    const customizedAuthority = customized.orderDomain.authorizationAuthorities.find(
+      (authority) => authority.id === 'manager-commerce-authority',
+    )!
+    customizedAuthority.validFrom = '2027-01-01T00:00:00+08:00'
+    customizedAuthority.validUntil = '2027-12-31T23:59:59+08:00'
+    const customizedAdmin = customized.config.roles.find((role) => role.id === 'admin')!
+    customizedAdmin.permissionIds = customizedAdmin.permissionIds.filter(
+      (permissionId) => permissionId !== 'commerce.authorization.approve',
+    )
+    customizedAdmin.approvalLimits.giftAmount = 0
+
+    const migratedAgain = migrateRuntimeState(customized)
+    expect(migratedAgain.orderDomain.authorizationAuthorities.find(
+      (authority) => authority.id === 'manager-commerce-authority',
+    )).toMatchObject({
+      validFrom: '2027-01-01T00:00:00+08:00',
+      validUntil: '2027-12-31T23:59:59+08:00',
+    })
+    expect(migratedAgain.auditEntries.filter(
+      (entry) => entry.action === 'runtime.standing_commerce_authorities_v1_migrated.v1',
+    )).toHaveLength(1)
+    expect(migratedAgain.config.roles.find((role) => role.id === 'admin')?.permissionIds)
+      .not.toContain('commerce.authorization.approve')
+    expect(migratedAgain.config.roles.find((role) => role.id === 'admin')?.approvalLimits.giftAmount).toBe(0)
+  })
 })

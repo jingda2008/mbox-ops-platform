@@ -339,9 +339,11 @@ describe('staff role authorization', () => {
     expect(requireHighRiskApproval(cashierRequest, 'commerce.order.create').roleId).toBe('cashier')
   })
 
-  it('keeps administrators on configuration and master data without financial authority', async () => {
+  it('lets administrators configure audited commerce authorities without granting payment authority', async () => {
     expect((await authorizationResponse('admin', 'config.write')).statusCode).toBe(200)
     expect((await authorizationResponse('admin', 'master-data.write')).statusCode).toBe(200)
+    expect((await authorizationResponse('admin', 'commerce-authority.write')).statusCode).toBe(200)
+    expect((await authorizationResponse('admin', 'commerce.order.create')).statusCode).toBe(403)
     expect((await authorizationResponse('admin', 'payment.intent.create')).statusCode).toBe(403)
     expect((await authorizationResponse('admin', 'payment.refund.approve')).statusCode).toBe(403)
     expect((await authorizationResponse('supervisor', 'master-data.write')).statusCode).toBe(403)

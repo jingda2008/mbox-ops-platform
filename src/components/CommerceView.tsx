@@ -104,13 +104,32 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
   const giftApprovalLimit = Math.max(0, ...access.roleIds.map((roleId) => (
     data.config.roles.find((role) => role.id === roleId)?.approvalLimits?.giftAmount ?? 0
   )))
+  const giftPermissionGranted = (data.viewer?.permissionIds ?? []).includes('commerce.authorization.request')
+  const giftAuthorities = currentEmployee
+    ? data.orderDomain.authorizationAuthorities.filter((authority) => (
+        authority.actorId === currentEmployee.id && authority.kinds.includes('gift')
+      ))
+    : []
   const canGift = Boolean(
     currentEmployee
     && access.canOrder
     && activeGiftAuthority
     && giftApprovalLimit > 0
-    && (data.viewer?.permissionIds ?? []).includes('commerce.authorization.request'),
+    && giftPermissionGranted,
   )
+  const giftUnavailableReason = !currentEmployee
+    ? '当前员工身份无效，请重新登录'
+    : !access.canOrder
+      ? '当前岗位没有点单权限'
+      : !giftPermissionGranted
+        ? '当前岗位没有赠送申请权限'
+        : giftApprovalLimit <= 0
+          ? '当前岗位的赠送额度为0，请由管理员配置'
+          : giftAuthorities.length === 0
+            ? '当前账号尚未配置赠送授权，请由店长或管理员授权'
+            : !activeGiftAuthority
+              ? '当前账号的赠送授权已过期，请由店长或管理员更新有效期'
+              : ''
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30_000)
@@ -475,10 +494,21 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
         <button className={workspaceMode === 'fulfillment' ? 'is-active' : ''} onClick={() => setWorkspaceMode('fulfillment')}>出品履约 <span>{visibleKds.length}</span></button>
         <div className="employee-order-type">
           <small>订单类型</small>
-          <div className={`employee-order-mode${canGift ? '' : ' is-single'}`} role="group" aria-label="订单类型">
+          <div className="employee-order-mode" role="group" aria-label="订单类型">
             <button type="button" className={orderMode === 'paid' ? 'is-active' : ''} onClick={() => setOrderMode('paid')}><ShoppingCart size={15} />正常下单</button>
-            {canGift && <button type="button" className={orderMode === 'gift' ? 'is-active is-gift' : ''} onClick={() => setOrderMode('gift')}><Gift size={15} />权限赠送</button>}
+            <button
+              type="button"
+              className={`${orderMode === 'gift' ? 'is-active is-gift' : ''}${canGift ? '' : ' is-unavailable'}`}
+              aria-describedby={canGift ? undefined : 'gift-availability-note'}
+              onClick={() => {
+                setOrderMode('gift')
+                if (!canGift) onNotice(`暂不能赠送：${giftUnavailableReason}`)
+              }}
+            >
+              <Gift size={15} />权限赠送
+            </button>
           </div>
+          {!canGift && <span className="employee-gift-availability" id="gift-availability-note">{giftUnavailableReason}</span>}
         </div>
       </div>}
 
@@ -493,13 +523,21 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
               <span className={`employee-order-badge${orderMode === 'gift' ? ' is-gift' : ''}`}>{orderMode === 'gift' ? <Gift size={14} /> : <ShoppingCart size={14} />}{orderMode === 'gift' ? '权限赠送' : '正常下单'}</span>
               {orderMode === 'gift' && <label className="employee-gift-reason"><span>赠送原因（必填）</span><input aria-label="赠送原因" maxLength={200} value={giftReason} onChange={(event) => setGiftReason(event.target.value)} placeholder="例如：生日关怀、服务补偿" /></label>}
             </div>}
-            submitLabel={!selectedTable ? '请先选择桌台' : giftReasonMissing ? '请填写赠送原因' : orderMode === 'gift' ? '确认赠送并出品' : '核对无误，确认下单'}
+            submitLabel={!selectedTable
+              ? '请先选择桌台'
+              : orderMode === 'gift' && !canGift
+                ? '当前账号暂不能赠送'
+                : giftReasonMissing
+                  ? '请填写赠送原因'
+                  : orderMode === 'gift' ? '确认赠送并出品' : '核对无误，确认下单'}
             submitHint={!selectedTable
               ? occupiedTables.length === 0 ? '请先到现场调度开台，再回到这里提交订单。' : '请选择客人所在桌台，确认后才会创建订单。'
               : orderMode === 'gift'
-                ? `按${currentEmployee?.displayName ?? '当前员工'}本人账号权限校验，客人零应付；商品、库存、成本及赠送原因全部留痕。`
+                ? canGift
+                  ? `按${currentEmployee?.displayName ?? '当前员工'}本人账号权限校验，客人零应付；商品、库存、成本及赠送原因全部留痕。`
+                  : `暂不能赠送：${giftUnavailableReason}`
                 : '提交后自动分发到对应吧台或厨房；完成制作后自动通知取送人员。'}
-            submitDisabled={!selectedTable || giftReasonMissing}
+            submitDisabled={!selectedTable || giftReasonMissing || (orderMode === 'gift' && !canGift)}
             complimentaryMode={orderMode === 'gift'}
             compactCart
             deemphasizeCollapsedTotal

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-rc.51 - 2026-07-28
+
+- Restored the normal-order and complimentary-order controls as a consistent pair in staff-assisted ordering.
+- Added explicit configuration guidance when an employee can see the complimentary-order control but lacks a valid personal authority.
+- Extended known built-in M-BOX commerce authorities once so manager, supervisor and owner permissions no longer expire with the original seed shift.
+- Preserved administrator-configured limits, product scopes, cumulative controls and later validity changes after the one-time migration.
+- Allowed the system administrator to configure audited commerce authorities without granting payment or complimentary-order execution rights.
+- Added browser coverage for 李艳, an authorized server and an unauthorized server, including the zero-payment complimentary workflow.
+
 ## 1.0.0-rc.50 - 2026-07-28
 
 - Added the venue-owned 2026 floor plan and a configurable 61-table catalogue covering VIP, L, A, B, C, S, special and outdoor areas.

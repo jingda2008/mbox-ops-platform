@@ -63,8 +63,9 @@ export const defaultRolePolicies: Record<string, RolePolicy> = {
     },
   ),
   admin: policy(
-    ['dashboard.view', 'audit.view', 'config.manage', 'identity.manage', 'master_data.manage', 'shift.manage', 'table.manage', 'hardware.view', 'hardware.operate', 'hardware.manage', 'store_import.apply'],
+    ['dashboard.view', 'audit.view', 'config.manage', 'identity.manage', 'master_data.manage', 'shift.manage', 'table.manage', 'commerce.authorization.approve', 'hardware.view', 'hardware.operate', 'hardware.manage', 'store_import.apply'],
     'store',
+    { giftAmount: 500_000, discountAmount: 500_000 },
   ),
   manager: policy(
     [

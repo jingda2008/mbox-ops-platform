@@ -338,6 +338,45 @@ describe('table operating line', () => {
     expect(state.auditEntries.some((entry) => entry.action === 'table.walk_in_opened.v1')).toBe(true)
   })
 
+  it('opens a venue table even when its area is not offered as a reservation preference', async () => {
+    const { app, repository, useActor } = await fixture()
+    await repository.mutate((state) => {
+      if (!state.reservationState) throw new Error('reservation state missing')
+      state.reservationState.config.areaPreferences = state.reservationState.config.areaPreferences
+        .filter((preference) => preference.code !== 'special')
+      state.revision += 1
+    })
+    useActor('emp-chen', 'manager')
+
+    const opened = await app.inject({
+      method: 'POST',
+      url: '/api/tables/table-666/walk-in-open',
+      payload: {
+        partySize: 8,
+        salesEmployeeId: 'emp-chen',
+        customerName: '现场多人桌客人',
+        idempotencyKey: 'walk-in-open-666-area-decoupled-0001',
+      },
+    })
+
+    expect(opened.statusCode, opened.body).toBe(201)
+    const state = await repository.read()
+    const reservation = state.reservationState?.reservations.find((item) => item.id === opened.json().reservation.id)
+    expect(reservation).toMatchObject({
+      sourceCode: 'walk_in',
+      status: 'seated',
+      tableId: 'table-666',
+      tableCode: '666',
+      areaPreferenceCode: null,
+    })
+    expect(state.tables.find((table) => table.id === 'table-666')).toMatchObject({
+      status: 'occupied',
+      guestCount: 8,
+    })
+    expect(state.auditEntries.find((entry) => entry.action === 'table.walk_in_opened.v1' && entry.objectId === 'table-666'))
+      .toMatchObject({ details: { guestCount: 8, tableCapacity: 6, extraSeatCount: 2 } })
+  })
+
   it('lets the logged-in manager open a table when its configured primary server is offline', async () => {
     const { app, repository, useActor } = await fixture()
     await repository.mutate((state) => {

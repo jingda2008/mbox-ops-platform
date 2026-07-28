@@ -185,6 +185,43 @@ describe('reservation employee API', () => {
     await repository.close()
   })
 
+  it('allows a reservation party to take a smaller table with recorded extra seating', async () => {
+    const { app, repository } = await fixture(true, 'manager')
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/reservations',
+      payload: {
+        ...reservationPayload,
+        partySize: 8,
+        depositRequiredAmount: 0,
+        idempotencyKey: 'reservation-api-create-extra-seats',
+      },
+    })
+    const reservationId = created.json().id as string
+    for (const [action, key] of [
+      ['confirm', 'reservation-extra-confirm'],
+      ['arrive', 'reservation-extra-arrive'],
+    ] as const) {
+      expect((await app.inject({
+        method: 'POST',
+        url: `/api/reservations/${reservationId}/actions`,
+        payload: { action, idempotencyKey: key },
+      })).statusCode).toBe(200)
+    }
+    const seated = await app.inject({
+      method: 'POST',
+      url: `/api/reservations/${reservationId}/actions`,
+      payload: { action: 'seat', tableId: 'table-l04', idempotencyKey: 'reservation-extra-seat' },
+    })
+    expect(seated.statusCode, seated.body).toBe(200)
+    const state = await repository.read()
+    expect(state.tables.find((table) => table.id === 'table-l04')).toMatchObject({ status: 'occupied', guestCount: 8 })
+    expect(state.auditEntries.find((entry) => entry.action === 'table.opened_from_reservation.v1')?.details)
+      .toMatchObject({ guestCount: 8, tableCapacity: 6, extraSeatCount: 2 })
+    await app.close()
+    await repository.close()
+  })
+
   it('does not turn a cancellation into a simulated refund', async () => {
     const { app, repository } = await fixture()
     const created = await app.inject({

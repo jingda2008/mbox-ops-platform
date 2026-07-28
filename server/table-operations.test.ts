@@ -103,6 +103,35 @@ describe('table operating line', () => {
     ]))
   })
 
+  it('blocks a store manager from opening a table outside their configured responsibility areas', async () => {
+    const { app, repository, useActor } = await fixture()
+    await repository.mutate((state) => {
+      const manager = state.employees.find((employee) => employee.id === 'emp-chen')!
+      manager.areaIds = manager.areaIds.filter((areaId) => areaId !== 'lounge')
+      state.revision += 1
+    })
+    useActor('emp-chen', 'manager')
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/tables/table-l04/walk-in-open',
+      payload: {
+        partySize: 2,
+        salesEmployeeId: 'emp-chen',
+        customerName: '现场客人',
+        idempotencyKey: 'manager-outside-responsibility-0001',
+      },
+    })
+
+    expect(response.statusCode, response.body).toBe(403)
+    expect(response.json()).toMatchObject({
+      code: 'AUTHORIZATION_DENIED',
+      message: '当前未负责L区，不能操作桌台 L04',
+    })
+    expect((await repository.read()).tables.find((table) => table.id === 'table-l04'))
+      .toMatchObject({ status: 'available', guestCount: 0 })
+  })
+
   it('lets a manager audit and release a stale table visit without mutating its old orders', async () => {
     const { app, repository, useActor } = await fixture()
     let sessionId = ''

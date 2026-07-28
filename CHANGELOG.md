@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.54 - 2026-07-28
+
+- Moved walk-in opening controls into the selected table area so employees choose party size and sales ownership without leaving the floor context.
+- Kept employees on the live floor after a successful opening and automatically collapsed the completed selection.
+- Separated store-wide management visibility from configured table-operating responsibility.
+- Hid unassigned areas from the employee floor and enforced the same responsibility boundary for direct API and AI-assisted table openings.
+- Updated shared menu-search browser acceptance to allow multiple relevant products while preserving exact specification search.
+
 ## 1.0.0-rc.53 - 2026-07-28
 
 - Decoupled walk-in seating from public reservation-area preferences so formal venue tables can open even when their physical area is not a customer-selectable reservation option.

@@ -134,6 +134,67 @@ test.describe('岗位权限隔离', () => {
     await expect(page.locator('.task-queue__focus')).toContainText('仅看 SLA 风险 · 2项')
     await expect(page.getByRole('heading', { name: '待处理队列' })).toBeVisible()
   })
+
+  test('现场桌台按责任区显示，空台在原区域就地展开开台选择', async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 })
+    await useStaffIdentity(page, 'emp-chen', '李艳')
+    await page.route('**/api/bootstrap**', async (route) => {
+      const response = await route.fetch()
+      const raw = await response.text()
+      if (!raw) {
+        await route.fulfill({ response, body: raw })
+        return
+      }
+      const data = JSON.parse(raw)
+      const manager = data.employees.find((employee: { id: string }) => employee.id === 'emp-chen')
+      manager.areaIds = manager.areaIds.filter((areaId: string) => areaId !== 'walkin')
+      await route.fulfill({ response, json: data })
+    })
+    await page.route('**/api/tables/table-l04/walk-in-open', async (route) => {
+      await route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        json: {
+          table: { id: 'table-l04', code: 'L04', status: 'occupied', guestCount: 2 },
+          reservation: { id: 'reservation-e2e-inline-open' },
+          summary: {
+            tableId: 'table-l04',
+            tableCode: 'L04',
+            tableSessionId: 'session-e2e-inline-open',
+            minimumSpendAmount: 0,
+            spendAmount: 0,
+            differenceAmount: 0,
+            progressPercent: 100,
+            currency: 'CNY',
+            configVersion: 1,
+            ruleName: '无低消',
+            reminderRequired: false,
+            nextReminderAt: null,
+            salesEmployeeId: 'emp-chen',
+          },
+        },
+      })
+    })
+    await page.goto('/')
+
+    const navigationMenu = page.getByTitle('打开导航')
+    if (await navigationMenu.isVisible()) await navigationMenu.click()
+    await page.locator('.sidebar nav').getByRole('button', { name: '现场调度' }).click()
+    await expect(page.locator('.table-tile').filter({ hasText: 'W01' })).toHaveCount(0)
+    await page.getByRole('button', { name: '开台桌台 L04' }).click()
+
+    const inlineOpen = page.getByRole('dialog', { name: 'L04开台设置' })
+    await expect(inlineOpen).toBeVisible()
+    await expect(inlineOpen.getByLabel('客人人数')).toHaveValue('2')
+    await expect(inlineOpen.getByRole('button', { name: '确认开台' })).toBeVisible()
+    await expect(inlineOpen.locator('xpath=ancestor::div[contains(@class,\"table-grid\")]')).toHaveCount(1)
+    await expectNoHorizontalOverflow(page)
+
+    await inlineOpen.getByRole('button', { name: '确认开台' }).click()
+    await expect(inlineOpen).toHaveCount(0)
+    await expect(page.getByRole('heading', { name: '全店现场' })).toBeVisible()
+    await expect(page).not.toHaveURL(/commerce/)
+  })
 })
 
 test.describe('视觉与移动端适配', () => {
@@ -179,8 +240,9 @@ test.describe('视觉与移动端适配', () => {
     const fullMenuCount = await page.locator('.menu-product').count()
     const menuSearch = page.getByLabel('搜索菜单商品')
     await menuSearch.fill('啤酒')
-    await expect(page.locator('.menu-product')).toHaveCount(1)
-    await expect(page.locator('.menu-product')).toContainText('精酿啤酒')
+    await expect.poll(() => page.locator('.menu-product').count()).toBeLessThan(fullMenuCount)
+    expect(await page.locator('.menu-product').count()).toBeGreaterThan(0)
+    await expect(page.locator('.menu-product').filter({ hasText: '精酿啤酒' }).first()).toBeVisible()
     await menuSearch.fill('330ml')
     await expect(page.locator('.menu-product')).toHaveCount(1)
     await expect(page.locator('.menu-product')).toContainText('精酿啤酒')

@@ -417,4 +417,63 @@ describe('客户端指令到责任岗位完整流转', () => {
       status: 'seated', tableCode: 'L04',
     })
   })
+
+  it('让店长监督他人任务并安全转派给合适的第三人', async () => {
+    const { app, repository } = await buildFixture()
+    apps.push(app)
+    const session = await guestSession(app, 'L01')
+    const water = session.serviceTypes.find((item) => item.code === 'ADD_WATER')!
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/guest/tasks',
+      payload: {
+        tableToken: session.tableToken,
+        serviceTypeId: water.id,
+        note: '请加两杯水',
+        idempotencyKey: 'manager-transfer-flow-source',
+      },
+    })
+    expect(created.statusCode, created.body).toBe(201)
+    const taskId = created.json().id as string
+    expect(repository.state.tasks.find((task) => task.id === taskId)?.ownerId).toBe('emp-lin')
+
+    const denied = await app.inject({
+      method: 'POST',
+      url: `/api/tasks/${taskId}/manager-actions`,
+      headers: employeeHeaders('emp-wu'),
+      payload: {
+        action: 'takeover',
+        actorId: 'emp-wu',
+        targetEmployeeId: null,
+        note: '',
+        idempotencyKey: 'manager-transfer-flow-denied',
+      },
+    })
+    expect(denied.statusCode).toBe(403)
+
+    const candidates = await app.inject({
+      method: 'GET',
+      url: `/api/tasks/${taskId}/transfer-candidates`,
+      headers: employeeHeaders('emp-chen'),
+    })
+    expect(candidates.statusCode, candidates.body).toBe(200)
+    expect(candidates.json()).toContainEqual(expect.objectContaining({ employeeId: 'emp-jie' }))
+
+    const transferred = await app.inject({
+      method: 'POST',
+      url: `/api/tasks/${taskId}/manager-actions`,
+      headers: employeeHeaders('emp-chen'),
+      payload: {
+        action: 'transfer',
+        actorId: 'emp-chen',
+        targetEmployeeId: 'emp-jie',
+        note: '',
+        idempotencyKey: 'manager-transfer-flow-action',
+      },
+    })
+    expect(transferred.statusCode, transferred.body).toBe(200)
+    expect(transferred.json()).toMatchObject({ id: taskId, ownerId: 'emp-jie', status: 'pending' })
+    expect(repository.state.taskEvents.find((event) => event.taskId === taskId && event.type === 'task.manager_transferred.v1')?.payload)
+      .toMatchObject({ previousOwnerId: 'emp-lin', ownerId: 'emp-jie' })
+  })
 })

@@ -44,11 +44,13 @@ import {
 } from 'lucide-react'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import {
+  actOnTaskAsManager,
   actOnTask,
   assignTableSessionSales,
   closeTableSession,
   createComplimentaryOrder,
   getCurrentActorId,
+  getTaskTransferCandidates,
   getTableSessionSummary,
   handoverLegacyTableSession,
   managerCancelKdsTask,
@@ -68,12 +70,14 @@ import type { ManagerKdsCancellationInput, ManagerKdsCancellationResult } from '
 import type {
   BootstrapResponse,
   ConfigDraftInput,
+  ManagerTaskActionInput,
   MinimumSpendRule,
   ServiceTask,
   StoreConfig,
   TableOperationsConfig,
   TableSessionSummary,
   TaskActionInput,
+  TaskTransferCandidate,
 } from '../shared/contracts'
 import { assistantHumanWorkflowIds, type AssistantCapabilityId } from '../shared/assistant-tool-contracts'
 import { effectiveDataScopeForEmployee, effectiveRoleIdsForEmployee } from '../shared/staff-access'
@@ -353,6 +357,8 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
   const effectiveRoleIds = fulfillmentAccess.employee
     ? effectiveRoleIdsForEmployee(data, fulfillmentAccess.employee.id)
     : []
+  const canManageServiceTasks = fulfillmentAccess.mode === 'oversight'
+    && effectivePermissions.has('service.execute')
   const canTransferTable = effectivePermissions.has('table.manage')
   const canOpenWalkIn = effectivePermissions.has('table.open')
   const canCloseTable = effectivePermissions.has('table.close')
@@ -490,6 +496,85 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
         next.delete(task.id)
         return next
       })
+    }
+  }
+
+  async function handleManagerTaskAction(
+    task: ServiceTask,
+    action: ManagerTaskActionInput['action'],
+    targetEmployeeId?: string,
+  ) {
+    const actorId = fulfillmentAccess.employee?.id
+    if (!actorId) {
+      setNotice('当前员工身份已失效，请重新登录')
+      throw new Error('当前员工身份已失效')
+    }
+    const now = new Date().toISOString()
+    const optimisticTask: ServiceTask = action === 'assist_complete'
+      ? {
+          ...task,
+          status: 'confirmed',
+          completedAt: now,
+          completedBy: actorId,
+          resolution: '店长协助完成',
+          updatedAt: now,
+        }
+      : action === 'takeover'
+        ? {
+            ...task,
+            ownerId: actorId,
+            status: task.status === 'arrived' ? 'arrived' : 'accepted',
+            acceptedAt: task.acceptedAt ?? now,
+            updatedAt: now,
+          }
+        : {
+            ...task,
+            ownerId: targetEmployeeId ?? task.ownerId,
+            status: 'pending',
+            acceptedAt: null,
+            arrivedAt: null,
+            updatedAt: now,
+          }
+    const replaceTask = (replacement: ServiceTask) => onOptimisticUpdate((current) => ({
+      ...current,
+      tasks: current.tasks.map((item) => item.id === task.id ? replacement : item),
+    }))
+    setBusyTaskIds((current) => new Set(current).add(task.id))
+    try {
+      const authoritativeTask = await runOptimisticAction({
+        key: `manager-service-task:${task.id}`,
+        apply: () => { replaceTask(optimisticTask); return task },
+        commit: () => actOnTaskAsManager(task.id, {
+          action,
+          actorId,
+          targetEmployeeId: targetEmployeeId ?? null,
+          note: action === 'assist_complete' ? '店长协助完成' : '',
+        }),
+        reconcile: replaceTask,
+        rollback: replaceTask,
+      })
+      replaceTask(authoritativeTask)
+      setNotice(action === 'assist_complete' ? '已协助完成' : action === 'takeover' ? '任务已由您接管' : '任务已转派')
+      void onRefresh()
+    } catch (error) {
+      setNotice(`${error instanceof Error ? error.message : '店长处理失败'}；页面已恢复，可以重试`)
+      await onRefresh().catch(() => undefined)
+      throw error
+    } finally {
+      setBusyTaskIds((current) => {
+        const next = new Set(current)
+        next.delete(task.id)
+        return next
+      })
+    }
+  }
+
+  async function loadTaskTransferCandidates(task: ServiceTask): Promise<TaskTransferCandidate[]> {
+    try {
+      return await getTaskTransferCandidates(task.id)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '暂时无法读取可转派人员')
+      return []
     }
   }
 
@@ -1176,9 +1261,12 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
                   selectedTableId={selectedTableId}
                   onClearTable={() => setSelectedTableId(null)}
                   onAction={handleTaskAction}
+                  onManagerAction={handleManagerTaskAction}
+                  onLoadTransferCandidates={loadTaskTransferCandidates}
                   busyTaskIds={busyTaskIds}
                   currentEmployeeId={fulfillmentAccess.employee?.id ?? ''}
                   claimableTaskIds={claimableTaskIds}
+                  canManageTasks={canManageServiceTasks}
                   focusTaskId={activeNavigationRequest?.target === 'tasks' ? activeNavigationRequest.focus?.objectId : null}
                   focusQuery={activeNavigationRequest?.target === 'tasks' ? activeNavigationRequest.focus?.query : null}
                   focusRequestId={activeNavigationRequest?.target === 'tasks' ? activeNavigationRequest.id : null}
@@ -1199,9 +1287,12 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
                 selectedTableId={selectedTableId}
                 onClearTable={() => setSelectedTableId(null)}
                 onAction={handleTaskAction}
+                onManagerAction={handleManagerTaskAction}
+                onLoadTransferCandidates={loadTaskTransferCandidates}
                 busyTaskIds={busyTaskIds}
                 currentEmployeeId={fulfillmentAccess.employee?.id ?? ''}
                 claimableTaskIds={claimableTaskIds}
+                canManageTasks={canManageServiceTasks}
                 focusTaskId={activeNavigationRequest?.target === 'tasks' ? activeNavigationRequest.focus?.objectId : null}
                 focusQuery={activeNavigationRequest?.target === 'tasks' ? activeNavigationRequest.focus?.query : null}
                 focusRequestId={activeNavigationRequest?.target === 'tasks' ? activeNavigationRequest.id : null}

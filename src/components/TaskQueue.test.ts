@@ -71,19 +71,29 @@ function queueTask(patch: Partial<ServiceTask> = {}) {
   } as ServiceTask
 }
 
-function renderQueue(tasks: ServiceTask[], serviceTypes: ServiceTypeConfig[]) {
+function renderQueue(
+  tasks: ServiceTask[],
+  serviceTypes: ServiceTypeConfig[],
+  options: { currentEmployeeId?: string; canManageTasks?: boolean } = {},
+) {
   return renderToStaticMarkup(
     createElement(TaskQueue, {
       tasks,
       tables: [{ id: 'table-l01', displayName: 'L01' } as Table],
-      employees: [{ id: 'emp-tom', displayName: 'Tom' } as Employee],
+      employees: [
+        { id: 'emp-tom', displayName: 'Tom' } as Employee,
+        { id: 'emp-manager', displayName: '李艳' } as Employee,
+      ],
       serviceTypes,
       selectedTableId: null,
       onClearTable: () => undefined,
       onAction: async () => undefined,
+      onManagerAction: async () => undefined,
+      onLoadTransferCandidates: async () => [],
       busyTaskIds: new Set<string>(),
-      currentEmployeeId: 'emp-tom',
+      currentEmployeeId: options.currentEmployeeId ?? 'emp-tom',
       claimableTaskIds: new Set(['task-backup']),
+      canManageTasks: options.canManageTasks ?? false,
     }),
   )
 }
@@ -131,6 +141,8 @@ describe('task workflow simplification', () => {
     expect(taskQueueActionMode(task('emp-tom', 'arrived'), levelTwo, 'emp-tom', false)).toBe('complete')
     expect(taskQueueActionMode(task('emp-tom', 'accepted'), levelThree, 'emp-tom', false)).toBe('arrive')
     expect(taskQueueActionMode(task('emp-tom', 'arrived'), levelThree, 'emp-tom', false)).toBe('complete')
+    expect(taskQueueActionMode(task('emp-jerry', 'accepted'), levelTwo, 'emp-tom', false)).toBeNull()
+    expect(taskQueueActionMode(task('emp-jerry', 'arrived'), levelThree, 'emp-tom', false)).toBeNull()
   })
 
   it('renders no L0 card and keeps an L1 card to one concise action', () => {
@@ -159,5 +171,17 @@ describe('task workflow simplification', () => {
     )
     expect(markup).toContain('完成')
     expect(markup).not.toContain('已到桌')
+  })
+
+  it('labels another employee task for manager oversight without rendering a false completion action', () => {
+    const markup = renderQueue(
+      [queueTask({ status: 'accepted', actionScript: [] })],
+      [serviceType('L2')],
+      { currentEmployeeId: 'emp-manager', canManageTasks: true },
+    )
+    expect(markup).toContain('他人任务 · Tom负责')
+    expect(markup).toContain('处理')
+    expect(markup).not.toContain('>完成<')
+    expect(markup).not.toContain('提醒负责人')
   })
 })

@@ -1,8 +1,15 @@
 import type { FastifyInstance } from 'fastify'
-import { createTaskSchema, taskActionSchema } from '../src/shared/contracts.js'
+import { createTaskSchema, managerTaskActionSchema, taskActionSchema } from '../src/shared/contracts.js'
 import { AuthorizationError, requireConfiguredOperation, requireTableDataScope } from './authorization.js'
 import { requireRequestActor } from './auth-context.js'
-import { applyTaskAction, canEmployeeClaimTask, createServiceTask } from './domain.js'
+import {
+  applyManagerTaskAction,
+  applyTaskAction,
+  canEmployeeClaimTask,
+  canManagerSuperviseTask,
+  createServiceTask,
+  managerTaskTransferCandidates,
+} from './domain.js'
 import { syncKdsFromFulfillmentServiceTaskAction } from './fulfillment-service.js'
 import type { RuntimeRepository } from './repository.js'
 
@@ -43,6 +50,47 @@ export function registerTaskRoutes(app: FastifyInstance, repository: RuntimeRepo
       const action = { ...input, actorId: actor.actorId }
       const task = applyTaskAction(state, request.params.taskId, action)
       syncKdsFromFulfillmentServiceTaskAction(state, task, action)
+      return task
+    })
+  })
+
+  app.get<{ Params: { taskId: string } }>('/api/tasks/:taskId/transfer-candidates', async (request) => {
+    const actor = requireRequestActor(request)
+    const state = await repository.read()
+    requireConfiguredOperation(request, state, 'service.task.action')
+    const task = state.tasks.find((item) => item.id === request.params.taskId)
+    if (!task) throw new Error('任务不存在')
+    requireTableDataScope(request, state, task.tableId, 'service.task.action')
+    if (!canManagerSuperviseTask(state, task, actor.actorId)) {
+      throw new AuthorizationError('当前账号没有该任务的管理权限', 'service.task.action')
+    }
+    return managerTaskTransferCandidates(state, task, actor.actorId)
+  })
+
+  app.post<{ Params: { taskId: string } }>('/api/tasks/:taskId/manager-actions', async (request) => {
+    const input = managerTaskActionSchema.parse(request.body)
+    const actor = requireRequestActor(request)
+    if (input.actorId !== actor.actorId) {
+      throw new AuthorizationError('经理操作人必须与当前登录员工一致', 'service.task.action')
+    }
+    return repository.mutate((state) => {
+      requireConfiguredOperation(request, state, 'service.task.action')
+      const currentTask = state.tasks.find((item) => item.id === request.params.taskId)
+      if (!currentTask) throw new Error('任务不存在')
+      requireTableDataScope(request, state, currentTask.tableId, 'service.task.action')
+      if (!canManagerSuperviseTask(state, currentTask, actor.actorId)) {
+        throw new AuthorizationError('当前账号没有该任务的管理权限', 'service.task.action')
+      }
+      const action = { ...input, actorId: actor.actorId }
+      const task = applyManagerTaskAction(state, request.params.taskId, action)
+      if (action.action === 'assist_complete') {
+        syncKdsFromFulfillmentServiceTaskAction(state, task, {
+          action: task.workflowLevel === 'L1' ? 'quick_complete' : 'complete',
+          actorId: actor.actorId,
+          note: action.note || '店长协助完成',
+          idempotencyKey: action.idempotencyKey,
+        })
+      }
       return task
     })
   })

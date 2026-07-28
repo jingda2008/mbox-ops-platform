@@ -3,6 +3,7 @@ import type {
   ConfigDraftInput,
   CreateTaskInput,
   Employee,
+  ManagerTaskActionInput,
   OperationsMetrics,
   RuntimeState,
   ServiceTask,
@@ -10,6 +11,7 @@ import type {
   SlaConfig,
   TaskActionInput,
   TaskEvent,
+  TaskTransferCandidate,
 } from '../src/shared/contracts.js'
 import { withDefaultRolePolicy } from '../src/shared/role-policy.js'
 import { effectiveDataScopeForEmployee, effectiveRoleIdsForEmployee } from '../src/shared/staff-access.js'
@@ -244,6 +246,57 @@ export function canEmployeeClaimTask(state: RuntimeState, task: ServiceTask, emp
   const dispatchRoleIds = task.dispatchRoleIdsSnapshot?.length ? task.dispatchRoleIdsSnapshot : serviceType.dispatchRoleIds
   if (!roleIds.some((roleId) => dispatchRoleIds.includes(roleId))) return false
   return employeeHasTableResponsibility(state, employee, task)
+}
+
+export function canManagerSuperviseTask(state: RuntimeState, task: ServiceTask, employeeId: string) {
+  const employee = state.employees.find((item) => item.id === employeeId)
+  if (!employee || employee.status !== 'active') return false
+  const managerRoleIds = task.managerRoleIdsSnapshot?.length ? task.managerRoleIdsSnapshot : ['manager']
+  return effectiveRoleIdsForEmployee(state, employeeId).some((roleId) => managerRoleIds.includes(roleId))
+}
+
+export function managerTaskTransferCandidates(
+  state: RuntimeState,
+  task: ServiceTask,
+  managerId: string,
+): TaskTransferCandidate[] {
+  const serviceType = state.config.serviceTypes.find((item) => item.id === task.serviceTypeId && item.enabled)
+  const table = state.tables.find((item) => item.id === task.tableId)
+  if (!serviceType || !table) return []
+  const dispatchRoleIds = task.dispatchRoleIdsSnapshot?.length
+    ? task.dispatchRoleIdsSnapshot
+    : serviceType.dispatchRoleIds
+  const activeShifts = state.shiftAssignments.filter((shift) => (
+    shift.businessDate === state.store.businessDate && shift.status === 'active'
+  ))
+  const requireActiveShift = activeShifts.length > 0
+
+  return state.employees
+    .filter((employee) => employee.id !== managerId && employee.id !== task.ownerId)
+    .filter((employee) => employee.status === 'active' && employee.online && !employee.paused)
+    .filter((employee) => !requireActiveShift || activeShifts.some((shift) => shift.employeeId === employee.id))
+    .filter((employee) => effectiveRoleIdsForEmployee(state, employee.id).some((roleId) => dispatchRoleIds.includes(roleId)))
+    .filter((employee) => canReceiveAutomaticTableDispatch(state, employee, task.tableId))
+    .map((employee) => {
+      const role = roleLimit(state, employee)
+      if (!role) return null
+      const load = employeeLoad(state, employee.id)
+      const capacity = role.maxConcurrentTasks
+      if (load >= capacity) return null
+      return {
+        employeeId: employee.id,
+        displayName: employee.displayName,
+        load,
+        capacity,
+        areaMatched: employee.areaIds.includes(table.areaId),
+      }
+    })
+    .filter((candidate): candidate is TaskTransferCandidate => candidate !== null)
+    .toSorted((left, right) => (
+      Number(right.areaMatched) - Number(left.areaMatched)
+      || left.load / left.capacity - right.load / right.capacity
+      || left.displayName.localeCompare(right.displayName, 'zh-CN')
+    ))
 }
 
 /** Assigns waiting work when staff return online. The caller owns the aggregate revision update. */
@@ -617,6 +670,120 @@ export function applyTaskAction(state: RuntimeState, taskId: string, input: Task
   }
 
   task.updatedAt = now
+  state.revision += 1
+  return task
+}
+
+export function applyManagerTaskAction(
+  state: RuntimeState,
+  taskId: string,
+  input: ManagerTaskActionInput,
+) {
+  const task = state.tasks.find((item) => item.id === taskId)
+  if (!task) throw new Error('任务不存在')
+  const replay = state.taskEvents.find((event) => (
+    event.taskId === taskId && event.payload.idempotencyKey === input.idempotencyKey
+  ))
+  if (replay) {
+    if (
+      replay.actorId !== input.actorId
+      || replay.payload.action !== input.action
+      || replay.payload.targetEmployeeId !== input.targetEmployeeId
+      || replay.payload.note !== input.note
+    ) {
+      throw new Error('同一幂等键不能用于不同经理动作')
+    }
+    return task
+  }
+  if (!canManagerSuperviseTask(state, task, input.actorId)) throw new Error('当前账号没有该任务的管理权限')
+  if (!isOpenTask(task) || task.archivedAt) throw new Error('任务已经结束，不能继续处理')
+  if (taskWorkflowLevel(task) === 'L0') throw new Error('信息提示不需要处理')
+
+  const now = new Date()
+  const occurredAt = now.toISOString()
+  const previousOwnerId = task.ownerId
+  const eventPayload = {
+    idempotencyKey: input.idempotencyKey,
+    action: input.action,
+    targetEmployeeId: input.targetEmployeeId,
+    note: input.note,
+    previousOwnerId,
+  }
+
+  if (input.action === 'assist_complete') {
+    const note = input.note.trim() || '店长协助完成'
+    assertCompletionNote(state, task, note)
+    closeTaskByStaff(
+      state,
+      task,
+      input.actorId,
+      occurredAt,
+      { ...eventPayload, note, ownerId: previousOwnerId },
+      'task.manager_assist_completed.v1',
+    )
+  } else if (input.action === 'takeover') {
+    if (task.ownerId === input.actorId) throw new Error('该任务已经由您负责')
+    task.ownerId = input.actorId
+    task.status = task.status === 'arrived' ? 'arrived' : 'accepted'
+    task.acceptedAt ??= occurredAt
+    if (!task.notifiedEmployeeIds.includes(input.actorId)) task.notifiedEmployeeIds.push(input.actorId)
+    markTaskViewed(task, input.actorId)
+    const employee = state.employees.find((item) => item.id === input.actorId)
+    const serviceType = state.config.serviceTypes.find((item) => item.id === task.serviceTypeId)
+    if (employee && serviceType) task.customerReply = serviceType.customerReply.replace('{employee}', employee.displayName)
+    appendTaskEvent(state, task.id, 'task.manager_taken_over.v1', input.actorId, {
+      ...eventPayload,
+      ownerId: input.actorId,
+    })
+  } else {
+    if (!input.targetEmployeeId) throw new Error('请选择转派员工')
+    const candidate = managerTaskTransferCandidates(state, task, input.actorId)
+      .find((item) => item.employeeId === input.targetEmployeeId)
+    if (!candidate) throw new Error('该员工当前不适合接收此任务，请选择其他员工')
+    const target = state.employees.find((item) => item.id === candidate.employeeId)!
+    const taskSla = task.slaSnapshot
+      ?? state.config.serviceTypes.find((item) => item.id === task.serviceTypeId)?.sla
+    task.ownerId = target.id
+    task.status = 'pending'
+    task.acceptedAt = null
+    task.arrivedAt = null
+    task.completedAt = null
+    task.completedBy = null
+    task.resolution = null
+    task.escalationLevel = Math.min(task.escalationLevel, 1)
+    if (taskSla) {
+      task.escalateAt = isoAt(now, taskSla.escalateSeconds)
+      task.managerAt = isoAt(now, taskSla.managerSeconds)
+    }
+    if (!task.notifiedEmployeeIds.includes(target.id)) task.notifiedEmployeeIds.push(target.id)
+    markTaskViewed(task, input.actorId)
+    const serviceType = state.config.serviceTypes.find((item) => item.id === task.serviceTypeId)
+    if (serviceType) task.customerReply = serviceType.customerReply.replace('{employee}', target.displayName)
+    appendTaskEvent(state, task.id, 'task.manager_transferred.v1', input.actorId, {
+      ...eventPayload,
+      ownerId: target.id,
+      candidateLoad: candidate.load,
+      candidateCapacity: candidate.capacity,
+      areaMatched: candidate.areaMatched,
+    })
+  }
+
+  task.updatedAt = occurredAt
+  state.auditEntries.push({
+    id: `audit_${randomUUID()}`,
+    actorId: input.actorId,
+    action: `service.${input.action}.v1`,
+    objectType: 'serviceTask',
+    objectId: task.id,
+    occurredAt,
+    details: {
+      idempotencyKey: input.idempotencyKey,
+      previousOwnerId,
+      ownerId: task.ownerId,
+      targetEmployeeId: input.targetEmployeeId,
+      note: input.note,
+    },
+  })
   state.revision += 1
   return task
 }

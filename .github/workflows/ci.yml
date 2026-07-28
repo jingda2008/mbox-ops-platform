@@ -81,7 +81,7 @@ jobs:
     if: needs.classify.outputs.scope == 'full'
     needs: classify
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6

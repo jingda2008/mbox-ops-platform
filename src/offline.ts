@@ -1,5 +1,6 @@
 import type {
   BootstrapResponse,
+  ServiceTask,
   ServiceTypeConfig,
   TableStatus,
   TaskActionInput,
@@ -42,7 +43,7 @@ export interface OfflineSnapshot {
     status: TableStatus
     guestCount: number
   }>
-  serviceTypes: Array<Pick<ServiceTypeConfig, 'id' | 'name' | 'icon' | 'actionScript'>>
+  serviceTypes: Array<Pick<ServiceTypeConfig, 'id' | 'name' | 'icon' | 'actionScript' | 'workflowLevel'>>
   tasks: Array<{
     id: string
     tableId: string
@@ -53,6 +54,7 @@ export interface OfflineSnapshot {
     createdAt: string
     warningAt: string
     actionScript: string[]
+    workflowLevel?: ServiceTask['workflowLevel']
   }>
 }
 
@@ -142,15 +144,16 @@ export function sanitizeBootstrapSnapshot(data: BootstrapResponse): OfflineSnaps
       status,
       guestCount,
     })),
-    serviceTypes: data.config.serviceTypes.map(({ id, name, icon, actionScript }) => ({
+    serviceTypes: data.config.serviceTypes.map(({ id, name, icon, actionScript, workflowLevel }) => ({
       id,
       name,
       icon,
       actionScript: [...actionScript],
+      workflowLevel,
     })),
     tasks: data.tasks
       .filter((task) => !['completed', 'confirmed', 'cancelled'].includes(task.status))
-      .map(({ id, tableId, serviceTypeId, status, priority, ownerId, createdAt, warningAt, actionScript }) => ({
+      .map(({ id, tableId, serviceTypeId, status, priority, ownerId, createdAt, warningAt, actionScript, workflowLevel }) => ({
         id,
         tableId,
         serviceTypeId,
@@ -160,6 +163,7 @@ export function sanitizeBootstrapSnapshot(data: BootstrapResponse): OfflineSnaps
         createdAt,
         warningAt,
         actionScript: [...actionScript],
+        workflowLevel,
       })),
   }
 }

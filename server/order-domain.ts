@@ -18,6 +18,7 @@ import type {
   OrderAuthorizationAuthority,
   OrderDomainState,
   OrderItem,
+  ProductFulfillmentType,
   ReportKdsExceptionCommand,
   RequestOrderAuthorizationCommand,
   SubmitOrderCommand,
@@ -115,6 +116,27 @@ function assertNonNegativeMoney(value: number, label: string) {
 
 function assertPositiveInteger(value: number, label: string) {
   if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${label}必须是正安全整数`)
+}
+
+const fulfillmentTypes = new Set<ProductFulfillmentType>([
+  'ready_to_serve',
+  'made_to_order',
+  'service_only',
+  'no_fulfillment',
+])
+
+function fulfillmentTypeOf(item: {
+  fulfillmentType?: ProductFulfillmentType
+  requiresFulfillment?: boolean
+}): ProductFulfillmentType {
+  return item.fulfillmentType ?? (item.requiresFulfillment === false ? 'no_fulfillment' : 'made_to_order')
+}
+
+function requiresKdsTask(item: {
+  fulfillmentType?: ProductFulfillmentType
+  requiresFulfillment?: boolean
+}) {
+  return fulfillmentTypeOf(item) !== 'no_fulfillment'
 }
 
 function safeAdd(left: number, right: number, label: string) {
@@ -319,7 +341,17 @@ export function addOrderItem(state: OrderDomainState, command: AddOrderItemComma
   if (command.item.unitSalePriceAmount > command.item.unitListPriceAmount) {
     throw new Error('商品成交价不能高于原价')
   }
-  if (command.item.requiresFulfillment !== false) {
+  if (command.item.fulfillmentType !== undefined && !fulfillmentTypes.has(command.item.fulfillmentType)) {
+    throw new Error('商品履约类型不受支持')
+  }
+  const fulfillmentType = fulfillmentTypeOf(command.item)
+  if (
+    command.item.requiresFulfillment !== undefined
+    && command.item.requiresFulfillment !== (fulfillmentType !== 'no_fulfillment')
+  ) {
+    throw new Error('商品履约类型与旧版履约开关冲突')
+  }
+  if (fulfillmentType !== 'no_fulfillment') {
     resolveFulfillmentWorkstation(state, command.item.stationId)
   }
 
@@ -337,6 +369,8 @@ export function addOrderItem(state: OrderDomainState, command: AddOrderItemComma
 
       const item: OrderItem = {
         ...command.item,
+        requiresFulfillment: fulfillmentType !== 'no_fulfillment',
+        fulfillmentType,
         fulfillmentStatus: 'draft',
         kdsTaskId: null,
         addedBy: command.actorId,
@@ -499,6 +533,76 @@ function isoAfter(value: string, seconds: number) {
   return new Date(Date.parse(value) + seconds * 1000).toISOString()
 }
 
+function initialKdsProgress(
+  fulfillmentType: ProductFulfillmentType,
+  workstation: FulfillmentWorkstationConfig,
+  occurredAt: string,
+  actorId: string,
+): Pick<
+  KdsTask,
+  | 'status'
+  | 'productionSla'
+  | 'pickupSla'
+  | 'startedAt'
+  | 'startedBy'
+  | 'completedAt'
+  | 'completedBy'
+  | 'pickedUpAt'
+  | 'pickedUpBy'
+  | 'deliveredAt'
+  | 'deliveredBy'
+> {
+  const untouched = {
+    startedAt: null,
+    startedBy: null,
+    deliveredAt: null,
+    deliveredBy: null,
+  }
+  if (fulfillmentType === 'ready_to_serve') {
+    return {
+      ...untouched,
+      status: 'completed',
+      productionSla: undefined,
+      pickupSla: {
+        targetSeconds: workstation.pickupSlaSeconds,
+        dueAt: isoAfter(occurredAt, workstation.pickupSlaSeconds),
+      },
+      completedAt: occurredAt,
+      completedBy: actorId,
+      pickedUpAt: null,
+      pickedUpBy: null,
+    }
+  }
+  if (fulfillmentType === 'service_only') {
+    return {
+      ...untouched,
+      status: 'picked_up',
+      productionSla: undefined,
+      pickupSla: {
+        targetSeconds: workstation.pickupSlaSeconds,
+        dueAt: isoAfter(occurredAt, workstation.pickupSlaSeconds),
+      },
+      completedAt: occurredAt,
+      completedBy: actorId,
+      pickedUpAt: occurredAt,
+      pickedUpBy: actorId,
+    }
+  }
+  return {
+    ...untouched,
+    status: 'queued',
+    productionSla: {
+      targetSeconds: workstation.productionSlaSeconds,
+      dueAt: isoAfter(occurredAt, workstation.productionSlaSeconds),
+    },
+    pickupSla: { targetSeconds: workstation.pickupSlaSeconds, dueAt: null },
+    completedAt: null,
+    completedBy: null,
+    pickedUpAt: null,
+    pickedUpBy: null,
+  }
+}
+
 function buildLedgerEntries(state: OrderDomainState, order: Order, actorId: string, occurredAt: string) {
   const drafts: Array<{ type: TableLedgerEntryType; amount: number; lineIds: string[] }> = [
     {
@@ -573,9 +677,10 @@ export function submitOrder(state: OrderDomainState, command: SubmitOrderCommand
         throw new Error(hasPending ? '订单授权尚未完成' : '订单缺少折扣或赠送授权')
       }
 
-      const fulfillmentItems = order.items.filter((item) => item.requiresFulfillment !== false)
+      const fulfillmentItems = order.items.filter(requiresKdsTask)
       const tasks = fulfillmentItems.map((item): KdsTask => {
         const workstation = resolveFulfillmentWorkstation(state, item.stationId)
+        const fulfillmentType = fulfillmentTypeOf(item)
         return {
           id: kdsTaskId(order.id, item.id),
           orderId: order.id,
@@ -585,26 +690,14 @@ export function submitOrder(state: OrderDomainState, command: SubmitOrderCommand
           itemName: item.name,
           specification: item.specification,
           quantity: item.quantity,
+          fulfillmentType,
           fulfillmentNote: order.fulfillmentNote ?? '',
-          status: 'queued',
           workstation,
-          productionSla: {
-            targetSeconds: workstation.productionSlaSeconds,
-            dueAt: isoAfter(command.occurredAt, workstation.productionSlaSeconds),
-          },
-          pickupSla: { targetSeconds: workstation.pickupSlaSeconds, dueAt: null },
           deliveryServiceTask: null,
           remakeOf: null,
           exceptionEvents: [],
           queuedAt: command.occurredAt,
-          startedAt: null,
-          startedBy: null,
-          completedAt: null,
-          completedBy: null,
-          pickedUpAt: null,
-          pickedUpBy: null,
-          deliveredAt: null,
-          deliveredBy: null,
+          ...initialKdsProgress(fulfillmentType, workstation, command.occurredAt, command.submittedBy),
         }
       })
       if (tasks.some((task) => state.kdsTasks.some((existing) => existing.id === task.id))) {
@@ -617,15 +710,19 @@ export function submitOrder(state: OrderDomainState, command: SubmitOrderCommand
       }
 
       for (const item of order.items) {
-        if (item.requiresFulfillment === false) {
+        if (!requiresKdsTask(item)) {
           item.fulfillmentStatus = 'delivered'
           item.kdsTaskId = null
         } else {
-          item.fulfillmentStatus = 'queued'
-          item.kdsTaskId = kdsTaskId(order.id, item.id)
+          const task = tasks.find((candidate) => candidate.orderItemId === item.id)
+          if (!task) throw new Error('订单明细缺少KDS任务')
+          item.fulfillmentStatus = task.status
+          item.kdsTaskId = task.id
         }
       }
-      order.status = tasks.length === 0 ? 'fulfilled' : 'submitted'
+      order.status = tasks.length === 0
+        ? 'fulfilled'
+        : tasks.some((task) => task.status !== 'queued') ? 'in_fulfillment' : 'submitted'
       order.submittedBy = command.submittedBy
       order.submittedAt = command.occurredAt
       order.fulfilledAt = tasks.length === 0 ? command.occurredAt : null
@@ -660,7 +757,7 @@ function effectiveKdsOutcome(state: OrderDomainState, item: OrderItem) {
 
 function syncOrderFulfillment(state: OrderDomainState, order: Order, occurredAt: string) {
   const outcomes = order.items
-    .filter((item) => item.requiresFulfillment !== false)
+    .filter(requiresKdsTask)
     .map((item) => effectiveKdsOutcome(state, item))
   const allClosed = outcomes.every((outcome) => (
     outcome.cancelled || (!outcome.pendingException && outcome.task?.status === 'delivered')
@@ -696,7 +793,12 @@ function assertExceptionCanBeReported(task: KdsTask, exceptionKind: KdsException
     }
     return
   }
-  if (!['queued', 'preparing'].includes(task.status)) throw new Error('当前KDS状态不能拒绝出品')
+  const canReportReadyShortage = task.fulfillmentType === 'ready_to_serve'
+    && exceptionKind === 'shortage'
+    && task.status === 'completed'
+  if (!canReportReadyShortage && !['queued', 'preparing'].includes(task.status)) {
+    throw new Error('当前KDS状态不能拒绝出品')
+  }
 }
 
 export function reportKdsException(state: OrderDomainState, command: ReportKdsExceptionCommand) {
@@ -813,6 +915,7 @@ export function decideKdsException(state: OrderDomainState, command: DecideKdsEx
         const attempt = state.kdsTasks.filter((candidate) => (
           candidate.remakeOf?.kdsTaskId === report.originalKdsTaskId
         )).length + 1
+        const fulfillmentType = task.fulfillmentType ?? fulfillmentTypeOf(item)
         remakeTask = {
           id: command.remakeTaskId!,
           orderId: task.orderId,
@@ -823,13 +926,8 @@ export function decideKdsException(state: OrderDomainState, command: DecideKdsEx
           itemName: task.itemName,
           specification: task.specification,
           quantity: task.quantity,
-          status: 'queued',
+          fulfillmentType,
           workstation,
-          productionSla: {
-            targetSeconds: workstation.productionSlaSeconds,
-            dueAt: isoAfter(command.occurredAt, workstation.productionSlaSeconds),
-          },
-          pickupSla: { targetSeconds: workstation.pickupSlaSeconds, dueAt: null },
           deliveryServiceTask: null,
           remakeOf: {
             orderItemId: report.originalOrderItemId,
@@ -839,14 +937,7 @@ export function decideKdsException(state: OrderDomainState, command: DecideKdsEx
           },
           exceptionEvents: [],
           queuedAt: command.occurredAt,
-          startedAt: null,
-          startedBy: null,
-          completedAt: null,
-          completedBy: null,
-          pickedUpAt: null,
-          pickedUpBy: null,
-          deliveredAt: null,
-          deliveredBy: null,
+          ...initialKdsProgress(fulfillmentType, workstation, command.occurredAt, command.actorId),
         }
       }
 
@@ -872,7 +963,7 @@ export function decideKdsException(state: OrderDomainState, command: DecideKdsEx
       task.exceptionEvents.push(dispositionEvent)
       if (remakeTask) {
         state.kdsTasks.push(remakeTask)
-        item.fulfillmentStatus = 'queued'
+        item.fulfillmentStatus = remakeTask.status
       }
       syncOrderFulfillment(state, order, command.occurredAt)
       return dispositionEvent
@@ -966,6 +1057,63 @@ export function completeKdsTask(state: OrderDomainState, command: KdsTaskActionC
         }
       }
     },
+  )
+}
+
+export function completeAndDeliverKdsTask(state: OrderDomainState, command: KdsTaskActionCommand) {
+  assertNonEmpty(command.taskId, 'KDS任务ID')
+  assertNonEmpty(command.actorId, '操作人')
+  assertTimestamp(command.occurredAt)
+
+  return executeIdempotent(
+    state,
+    command.idempotencyKey,
+    'kds.complete_and_deliver.v1',
+    command,
+    'kds_task',
+    (id) => state.kdsTasks.find((task) => task.id === id),
+    () => {
+      const task = state.kdsTasks.find((candidate) => candidate.id === command.taskId)
+      if (!task) throw new Error('KDS任务不存在')
+      const blockingException = taskBlockingException(task)
+      if (blockingException) {
+        const disposition = exceptionDisposition(task, blockingException.exceptionId)
+        throw new Error(disposition ? '原KDS任务已由异常处置关闭' : 'KDS异常待领班或经理处置')
+      }
+      if ((task.fulfillmentType ?? 'made_to_order') !== 'made_to_order') {
+        throw new Error('只有现制商品可以完成并送达')
+      }
+      if (task.status !== 'preparing') throw new Error(`KDS任务不能从${task.status}完成并送达`)
+      if (!task.startedAt) throw new Error('KDS任务缺少开始制作时间')
+      if (Date.parse(command.occurredAt) < Date.parse(task.startedAt)) throw new Error('KDS操作时间早于前序操作')
+
+      const order = findOrder(state, task.orderId)
+      const item = order.items.find((candidate) => candidate.id === task.orderItemId)
+      const linkedToOriginal = item?.kdsTaskId === task.id
+      const linkedAsRemake = item != null
+        && task.remakeOf?.orderItemId === item.id
+        && task.remakeOf.kdsTaskId === item.kdsTaskId
+      if (!item || (!linkedToOriginal && !linkedAsRemake)) throw new Error('KDS任务与订单明细不一致')
+
+      task.status = 'delivered'
+      task.completedAt = command.occurredAt
+      task.completedBy = command.actorId
+      task.pickedUpAt = command.occurredAt
+      task.pickedUpBy = command.actorId
+      task.deliveredAt = command.occurredAt
+      task.deliveredBy = command.actorId
+      task.pickupSla = {
+        targetSeconds: task.pickupSla?.targetSeconds ?? task.workstation?.pickupSlaSeconds ?? 0,
+        dueAt: isoAfter(
+          command.occurredAt,
+          task.pickupSla?.targetSeconds ?? task.workstation?.pickupSlaSeconds ?? 0,
+        ),
+      }
+      item.fulfillmentStatus = 'delivered'
+      syncOrderFulfillment(state, order, command.occurredAt)
+      return task
+    },
+    (task) => task.id,
   )
 }
 

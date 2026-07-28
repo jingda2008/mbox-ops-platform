@@ -155,9 +155,23 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
   useEffect(() => {
     if (!focusRequest || handledFocusRequestId.current === focusRequest.id) return
     handledFocusRequestId.current = focusRequest.id
-    setOrderingFocusMode(false)
+    const orderShortcut = focusRequest.focus?.query === 'employee-order-paid'
+      || focusRequest.focus?.query === 'employee-order-gift'
+    const requestedTable = focusRequest.focus?.tableCode
+      ? occupiedTables.find((table) => (
+          table.code.toLocaleLowerCase('zh-CN') === focusRequest.focus?.tableCode?.toLocaleLowerCase('zh-CN')
+        ))
+      : undefined
+    if (orderShortcut) {
+      if (requestedTable) setTableId(requestedTable.id)
+      setWorkspaceMode('order')
+      setOrderingFocusMode(true)
+      setOrderMode(focusRequest.focus?.query === 'employee-order-gift' && canGift ? 'gift' : 'paid')
+    } else {
+      setOrderingFocusMode(false)
+      setWorkspaceMode('fulfillment')
+    }
     setExitPinOpen(false)
-    setWorkspaceMode('fulfillment')
     const requestedFilter = kdsFilterForQuery(focusRequest.focus?.query)
     setKdsFilter(requestedFilter)
     const exactTask = visibleKds.find((task) => task.id === focusRequest.focus?.objectId)
@@ -171,7 +185,7 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
     if (matchingTask) {
       window.requestAnimationFrame(() => document.getElementById(`kds-task-${matchingTask.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
     }
-  }, [data, focusRequest, visibleKds])
+  }, [canGift, data, focusRequest, occupiedTables, visibleKds])
 
   const sheetPayment = paymentSheet
     ? data.paymentDomain.paymentIntents
@@ -570,6 +584,10 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
               const exception = openKdsException(task)
               const exceptionActor = exception ? data.employees.find((employee) => employee.id === exception.actorId) : undefined
               const canAct = Boolean(action && actionAllowedForAccess(task, access, data.config.workstations))
+              const canCompleteAndDeliver = task.status === 'preparing'
+                && (task.fulfillmentType ?? 'made_to_order') === 'made_to_order'
+                && canAct
+                && actionAllowedForAccess({ ...task, status: 'completed' }, access, data.config.workstations)
               const canReportProductionException = !exception && ['queued', 'preparing'].includes(task.status) && canAct
               const canReportWrongItem = !exception && ['completed', 'picked_up'].includes(task.status) && canAct
               return (
@@ -601,6 +619,7 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
                   </div>
                   <div className="kds-actions">
                     {!exception && action && canAct && <button className="secondary-button" disabled={busy || busyKdsIds.has(task.id) || !currentEmployee} title={currentEmployee ? `由${currentEmployee.displayName}执行` : '请重新登录'} onClick={() => void advance(task, action)}>{actionIcon(action)}{nextLabel(action)}</button>}
+                    {!exception && canCompleteAndDeliver && <button className="primary-button" disabled={busy || busyKdsIds.has(task.id) || !currentEmployee} title="制作人与取送岗位相同时，一次记录完成、取货和送达" onClick={() => void advance(task, 'completeAndDeliver')}><CheckCheck size={16} />完成并送达</button>}
                     {!exception && action && !canAct && <span className="kds-readonly-note">仅查看进度</span>}
                     {canReportProductionException && <button className="secondary-button kds-exception-button" disabled={busy || !currentEmployee} title="按商品缺货报告，等待领班或经理处置" onClick={() => void reportException(task, 'shortage', 'product_out_of_stock')}><PackageX size={16} />报告缺货</button>}
                     {canReportProductionException && task.status === 'preparing' && <button className="icon-button kds-reject-button" disabled={busy || !currentEmployee} title="质量不合格，拒绝本次出品" onClick={() => void reportException(task, 'production_rejection', 'quality_rejected')}><CircleAlert size={16} /></button>}
@@ -670,11 +689,11 @@ function nextAction(status: KdsTask['status']): KdsActionInput['action'] | null 
 }
 
 function nextLabel(action: KdsActionInput['action']) {
-  return action === 'start' ? '接单制作' : action === 'complete' ? '完成制作' : action === 'pickUp' ? '确认取货' : '确认送达'
+  return action === 'start' ? '接单制作' : action === 'complete' ? '完成制作' : action === 'completeAndDeliver' ? '完成并送达' : action === 'pickUp' ? '确认取货' : '确认送达'
 }
 
 function actionIcon(action: KdsActionInput['action']) {
-  return action === 'start' ? <Play size={16} /> : action === 'complete' ? <PackageCheck size={16} /> : action === 'pickUp' ? <ShoppingCart size={16} /> : <CheckCheck size={16} />
+  return action === 'start' ? <Play size={16} /> : action === 'complete' ? <PackageCheck size={16} /> : action === 'completeAndDeliver' ? <CheckCheck size={16} /> : action === 'pickUp' ? <ShoppingCart size={16} /> : <CheckCheck size={16} />
 }
 
 function exceptionKindLabel(event: KdsExceptionEvent) {

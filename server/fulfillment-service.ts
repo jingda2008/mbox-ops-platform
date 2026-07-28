@@ -125,6 +125,10 @@ export function ensureDeliveryServiceTask(
     priority: 'high' as const,
     customerReply: '{employee}正在取送您的商品。',
     actionScript: ['到工作站核对商品与数量', '确认桌号后取货', '送达桌台并确认摆放完成'],
+    workflowLevel: 'L1' as const,
+    allowBackupDirectComplete: true,
+    allowCrossAreaComplete: true,
+    requiresCompletionNote: false,
   }
 
   const expectedTriggerId = triggerId(kdsTask.id)
@@ -177,6 +181,12 @@ export function ensureDeliveryServiceTask(
       : serviceType.customerReply,
     actionScript: [...serviceType.actionScript],
     resolution: null,
+    workflowLevel: serviceType.workflowLevel ?? 'L1',
+    requestCount: 1,
+    firstRequestedAt: occurredAt,
+    lastRequestedAt: occurredAt,
+    viewedEmployeeIds: [],
+    completedBy: null,
     triggerId: expectedTriggerId,
     archivedAt: null,
     archiveOutcome: null,
@@ -244,6 +254,8 @@ export function syncDeliveryServiceTaskForKdsAction(
     serviceTask.acceptedAt ??= occurredAt
     serviceTask.arrivedAt ??= occurredAt
     serviceTask.completedAt = occurredAt
+    serviceTask.completedBy = actorId
+    serviceTask.viewedEmployeeIds = [...new Set([...(serviceTask.viewedEmployeeIds ?? []), actorId])]
     serviceTask.status = 'completed'
     serviceTask.resolution = '商品已送达桌台，待确认'
   }
@@ -271,7 +283,7 @@ export function syncKdsFromFulfillmentServiceTaskAction(
   input: TaskActionInput,
 ): KdsTask | null {
   const prefix = 'fulfillment-delivery:'
-  if (!serviceTask.triggerId?.startsWith(prefix) || !['arrive', 'complete'].includes(input.action)) return null
+  if (!serviceTask.triggerId?.startsWith(prefix) || !['arrive', 'complete', 'quick_complete'].includes(input.action)) return null
 
   normalizeOrderFulfillmentState(state.orderDomain)
   const kdsTaskId = serviceTask.triggerId.slice(prefix.length)
@@ -295,6 +307,26 @@ export function syncKdsFromFulfillmentServiceTaskAction(
       })
     } else if (!['picked_up', 'delivered'].includes(kdsTask.status)) {
       throw new Error(`取送任务确认取货前KDS必须完成制作，当前状态：${kdsTask.status}`)
+    }
+  } else if (input.action === 'quick_complete') {
+    if (!serviceTask.completedAt) throw new Error('取送服务任务缺少完成时间')
+    if (kdsTask.status === 'completed') {
+      pickUpKdsTask(state.orderDomain, {
+        taskId: kdsTask.id,
+        actorId: input.actorId,
+        occurredAt: serviceTask.completedAt,
+        idempotencyKey: `fulfillment-service:${serviceTask.id}:${input.idempotencyKey}:quick-pick-up`,
+      })
+    }
+    if (kdsTask.status === 'picked_up') {
+      deliverKdsTask(state.orderDomain, {
+        taskId: kdsTask.id,
+        actorId: input.actorId,
+        occurredAt: serviceTask.completedAt,
+        idempotencyKey: `fulfillment-service:${serviceTask.id}:${input.idempotencyKey}:quick-deliver`,
+      })
+    } else if (kdsTask.status !== 'delivered') {
+      throw new Error(`快速送达前KDS必须已完成出品，当前状态：${kdsTask.status}`)
     }
   } else if (kdsTask.status === 'picked_up') {
     if (!serviceTask.completedAt) throw new Error('取送服务任务缺少完成时间')

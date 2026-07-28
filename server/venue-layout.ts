@@ -8,6 +8,7 @@ import {
 } from '../src/shared/venue-layout.js'
 
 const migrationAction = 'runtime.mbox_venue_layout_v1_migrated.v1'
+const legacyRetirementAction = 'runtime.legacy_simulation_tables_retired.v1'
 const legacyTableCodes = new Set(['I01', 'I02', 'I03'])
 const realAreaIds = mboxVenueAreas
   .filter((area) => area.id !== MBOX_LEGACY_AREA_ID)
@@ -117,13 +118,82 @@ function reconcileEmployeeAreas(state: RuntimeState) {
   }
 }
 
+function retireLegacySimulationTables(state: RuntimeState, occurredAt: string) {
+  const legacyTables = state.tables.filter((table) => legacyTableCodes.has(table.code))
+  if (legacyTables.length === 0 && !state.areas.some((area) => area.id === MBOX_LEGACY_AREA_ID)) return
+
+  const legacyTableIds = new Set(legacyTables.map((table) => table.id))
+  for (const session of state.songState.tableSessions) {
+    if (!legacyTableIds.has(session.tableId) || session.status !== 'open') continue
+    session.status = 'closed'
+    session.closedAt = occurredAt
+  }
+  for (const intent of state.awaitingOrderIntents) {
+    if (!legacyTableIds.has(intent.tableId) || intent.status !== 'active') continue
+    intent.status = 'cancelled'
+    intent.stoppedAt = occurredAt
+    intent.stoppedBy = 'system'
+    intent.stopReason = '旧模拟桌台已退役'
+    intent.nextReminderAt = null
+  }
+  for (const task of state.tasks) {
+    if (!legacyTableIds.has(task.tableId) || task.archivedAt) continue
+    const previousStatus = task.status
+    task.archivedAt = occurredAt
+    task.archiveOutcome = ['completed', 'confirmed', 'cancelled'].includes(previousStatus) ? 'resolved' : 'unresolved'
+    task.archivedFromStatus = previousStatus
+    task.updatedAt = occurredAt
+    if (!['completed', 'confirmed', 'cancelled'].includes(previousStatus)) task.status = 'cancelled'
+    if (task.archiveOutcome === 'unresolved' && !task.resolution) task.resolution = '旧模拟桌台退役时需求未完成'
+    state.taskEvents.push({
+      id: `task-event-legacy-retirement-${task.id}`,
+      taskId: task.id,
+      type: 'task.archived_with_table_visit.v1',
+      actorId: 'system',
+      occurredAt,
+      payload: {
+        previousStatus,
+        archiveOutcome: task.archiveOutcome,
+        reason: 'legacy_simulation_table_retired',
+      },
+    })
+  }
+
+  state.tables = state.tables.filter((table) => !legacyTableIds.has(table.id))
+  state.areas = state.areas.filter((area) => area.id !== MBOX_LEGACY_AREA_ID)
+  for (const employee of state.employees) {
+    employee.areaIds = employee.areaIds.filter((areaId) => areaId !== MBOX_LEGACY_AREA_ID)
+  }
+  for (const shift of state.shiftAssignments) {
+    shift.areaIds = shift.areaIds.filter((areaId) => areaId !== MBOX_LEGACY_AREA_ID)
+  }
+
+  if (!state.auditEntries.some((entry) => entry.action === legacyRetirementAction)) {
+    state.auditEntries.push({
+      id: 'runtime-migration-legacy-simulation-tables-retired-v1',
+      actorId: 'system',
+      action: legacyRetirementAction,
+      objectType: 'store',
+      objectId: state.store.id,
+      occurredAt,
+      details: {
+        removedTableCodes: legacyTables.map((table) => table.code),
+        historicalSessionsRetained: true,
+      },
+    })
+  }
+}
+
 /**
- * Reconciles the venue-owned table catalogue without deleting operational data.
+ * Reconciles the venue-owned table catalogue and retires the obsolete simulated
+ * table catalogue. Historical sessions remain available for audit, while the
+ * retired tables and area no longer appear in live operations.
  * Existing tables keep their configured capacity and live state; only missing
  * venue tables are created from the floor-plan catalogue.
  */
 export function applyMboxVenueLayout(state: RuntimeState) {
   if (state.store.id !== 'mbox-lujiazui') return
+  const occurredAt = new Date().toISOString()
 
   for (const definition of mboxVenueAreas) {
     const existing = state.areas.find((area) => area.id === definition.id)
@@ -132,12 +202,7 @@ export function applyMboxVenueLayout(state: RuntimeState) {
   }
   for (const definition of mboxVenueTables) reconcileTable(state, definition)
 
-  for (const table of state.tables) {
-    if (!legacyTableCodes.has(table.code)) continue
-    table.areaId = MBOX_LEGACY_AREA_ID
-    table.displayName = `${table.code}旧互动桌`
-    if (table.status === 'available') table.status = 'paused'
-  }
+  retireLegacySimulationTables(state, occurredAt)
   reconcileEmployeeAreas(state)
 
   if (!state.auditEntries.some((entry) => entry.action === migrationAction)) {
@@ -147,12 +212,12 @@ export function applyMboxVenueLayout(state: RuntimeState) {
       action: migrationAction,
       objectType: 'store',
       objectId: state.store.id,
-      occurredAt: new Date().toISOString(),
+      occurredAt,
       details: {
         layoutVersion: MBOX_VENUE_LAYOUT_VERSION,
         realTableCount: mboxVenueTables.length,
         duplicateLabelsCorrected: { secondW5: 'W06', secondW10: 'W11' },
-        legacyTablesRetainedUntilIdle: [...legacyTableCodes],
+        legacyTablesRetired: [...legacyTableCodes],
       },
     })
   }

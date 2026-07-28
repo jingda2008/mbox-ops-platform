@@ -1,7 +1,7 @@
 const baseUrl = (process.env.MBOX_LOAD_BASE_URL ?? 'http://127.0.0.1:8790').replace(/\/$/, '')
 const storeId = process.env.MBOX_LOAD_STORE_ID ?? 'mbox-lujiazui'
 const concurrency = Number(process.env.MBOX_LOAD_CONCURRENCY ?? 40)
-const tableCodes = (process.env.MBOX_LOAD_TABLE_CODES ?? 'L01,L02,I01,I02,S01,W01,B01').split(',')
+const tableCodes = (process.env.MBOX_LOAD_TABLE_CODES ?? 'L01,L02,A01,B01,S01,W01,VIP1').split(',')
 const actorIds = (process.env.MBOX_LOAD_ACTORS ?? 'emp-owner,emp-operations-director,emp-admin,emp-host,emp-mia,emp-chen,emp-qing,emp-cashier,emp-lin,emp-wu,emp-jie,emp-han,emp-tao').split(',')
 
 const observations = []

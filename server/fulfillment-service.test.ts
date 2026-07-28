@@ -53,7 +53,7 @@ async function createSubmittedOrder(repository: JsonRepository) {
 
 async function action(
   app: ReturnType<typeof Fastify>,
-  name: 'start' | 'complete' | 'pickUp' | 'deliver',
+  name: 'start' | 'complete' | 'completeAndDeliver' | 'pickUp' | 'deliver',
   idempotencyKey: string,
   roleId: string,
   actorId: string,
@@ -126,6 +126,36 @@ describe('automatic fulfillment delivery service task', () => {
       ownerId: 'emp-lin',
       status: 'pending',
     })
+    await app.close()
+    await repository.close()
+  })
+
+  it('allows a dual-role employee to complete production and delivery in one audited action', async () => {
+    const repository = new JsonRepository(`/tmp/mbox-fulfillment-combined-${crypto.randomUUID()}.json`)
+    await repository.init()
+    await createSubmittedOrder(repository)
+    const app = Fastify()
+    registerTestActor(app)
+    app.setErrorHandler((error, _request, reply) => reply.status(error.statusCode ?? 400).send({ message: error.message }))
+    registerCommerceRoutes(app, repository)
+
+    expect((await action(app, 'start', 'fulfillment-combined-start', 'bartender', 'emp-qing')).statusCode).toBe(200)
+    const completed = await action(app, 'completeAndDeliver', 'fulfillment-combined-finish', 'bartender', 'emp-qing')
+    expect(completed.statusCode, completed.body).toBe(200)
+
+    const state = await repository.read()
+    expect(state.orderDomain.kdsTasks[0]).toMatchObject({
+      status: 'delivered',
+      completedBy: 'emp-qing',
+      pickedUpBy: 'emp-qing',
+      deliveredBy: 'emp-qing',
+    })
+    expect(state.tasks.find((task) => task.triggerId?.startsWith('fulfillment-delivery:'))).toMatchObject({
+      status: 'completed',
+      completedBy: 'emp-qing',
+    })
+    expect(state.orderDomain.idempotencyRecords.some((record) => record.operation === 'kds.complete_and_deliver.v1')).toBe(true)
+
     await app.close()
     await repository.close()
   })
@@ -224,7 +254,7 @@ describe('automatic fulfillment delivery service task', () => {
     await repository.close()
   })
 
-  it('writes generic ServiceTask arrive and complete actions back to KDS in order', async () => {
+  it('lets an eligible delivery employee close the linked L1 task and KDS in one action', async () => {
     const repository = new JsonRepository(`/tmp/mbox-fulfillment-bridge-${crypto.randomUUID()}.json`)
     await repository.init()
     await createSubmittedOrder(repository)
@@ -236,15 +266,8 @@ describe('automatic fulfillment delivery service task', () => {
 
     await repository.mutate((state) => {
       const serviceTask = state.tasks.find((task) => task.triggerId?.startsWith('fulfillment-delivery:'))!
-      const acceptInput = { action: 'accept' as const, actorId: serviceTask.ownerId!, note: '', idempotencyKey: 'bridge-accept-0001' }
-      applyTaskAction(state, serviceTask.id, acceptInput)
-      expect(syncKdsFromFulfillmentServiceTaskAction(state, serviceTask, acceptInput)).toBeNull()
-
-      const arriveInput = { action: 'arrive' as const, actorId: serviceTask.ownerId!, note: '', idempotencyKey: 'bridge-arrive-0001' }
-      applyTaskAction(state, serviceTask.id, arriveInput)
-      expect(syncKdsFromFulfillmentServiceTaskAction(state, serviceTask, arriveInput)?.status).toBe('picked_up')
-
-      const completeInput = { action: 'complete' as const, actorId: serviceTask.ownerId!, note: '已送达', idempotencyKey: 'bridge-complete-0001' }
+      expect(serviceTask.workflowLevel).toBe('L1')
+      const completeInput = { action: 'quick_complete' as const, actorId: serviceTask.ownerId!, note: '已送达', idempotencyKey: 'bridge-quick-complete-0001' }
       applyTaskAction(state, serviceTask.id, completeInput)
       expect(syncKdsFromFulfillmentServiceTaskAction(state, serviceTask, completeInput)?.status).toBe('delivered')
       expect(syncKdsFromFulfillmentServiceTaskAction(state, serviceTask, completeInput)?.status).toBe('delivered')

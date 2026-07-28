@@ -35,6 +35,13 @@ describe('runtime state operational migrations', () => {
     legacy.config.serviceTypes = legacy.config.serviceTypes.filter(
       (type) => !['FULFILLMENT_DELIVERY', 'CUSTOM_REQUEST'].includes(type.code),
     )
+    for (const serviceType of legacy.config.serviceTypes) {
+      delete serviceType.workflowLevel
+      delete serviceType.allowBackupDirectComplete
+      delete serviceType.allowCrossAreaComplete
+      delete serviceType.requiresCompletionNote
+      delete serviceType.duplicateSeconds
+    }
     legacy.employees = legacy.employees.map(({ skillIds: _skillIds, ...employee }) => employee)
     legacy.shiftAssignments = legacy.shiftAssignments.map(({ stationIds: _stationIds, ...shift }) => shift)
     for (const product of legacy.products) {
@@ -60,6 +67,14 @@ describe('runtime state operational migrations', () => {
       id: 'custom-request',
       name: '个性化需求',
       dispatchRoleIds: expect.arrayContaining(['server', 'supervisor', 'manager']),
+      workflowLevel: 'L2',
+      requiresCompletionNote: true,
+    })
+    expect(migrated.config.serviceTypes.find((type) => type.code === 'ADD_WATER')).toMatchObject({
+      workflowLevel: 'L1',
+      allowBackupDirectComplete: true,
+      allowCrossAreaComplete: true,
+      duplicateSeconds: 60,
     })
     expect(migrated.config.guestServiceLimits).toEqual({
       windowSeconds: 60,
@@ -393,9 +408,21 @@ describe('runtime state operational migrations', () => {
     delete (task as Partial<typeof task>).archivedAt
     delete (task as Partial<typeof task>).archiveOutcome
     delete (task as Partial<typeof task>).archivedFromStatus
+    delete (task as Partial<typeof task>).workflowLevel
+    delete (task as Partial<typeof task>).requestCount
+    delete (task as Partial<typeof task>).firstRequestedAt
+    delete (task as Partial<typeof task>).lastRequestedAt
+    delete (task as Partial<typeof task>).viewedEmployeeIds
+    delete (task as Partial<typeof task>).completedBy
 
     const migrated = migrateRuntimeState(legacy)
     expect(migrated.tasks.find((candidate) => candidate.id === task.id)).toMatchObject({
+      workflowLevel: 'L3',
+      requestCount: 1,
+      firstRequestedAt: task.createdAt,
+      lastRequestedAt: task.createdAt,
+      viewedEmployeeIds: [],
+      completedBy: null,
       tableSessionId: session.id,
       status: 'cancelled',
       archiveOutcome: 'unresolved',
@@ -484,6 +511,19 @@ describe('runtime state operational migrations', () => {
     const migratedAgain = migrateRuntimeState(migrated)
     expect(migratedAgain.presenceLeases).toEqual([])
     expect(migratedAgain.employees.every((employee) => !employee.online)).toBe(true)
+  })
+
+  it('adds conservative fulfillment defaults to legacy products', () => {
+    const legacy = structuredClone(createSeedState())
+    const beer = legacy.products.find((product) => product.id === 'product-beer')!
+    const adjustment = legacy.products.find((product) => product.id === 'product-balance-adjustment')!
+    delete beer.fulfillmentType
+    delete adjustment.fulfillmentType
+
+    const migrated = migrateRuntimeState(legacy)
+
+    expect(migrated.products.find((product) => product.id === beer.id)?.fulfillmentType).toBe('made_to_order')
+    expect(migrated.products.find((product) => product.id === adjustment.id)?.fulfillmentType).toBe('no_fulfillment')
   })
 
   it('extends built-in commerce authorities once without overwriting later configuration', () => {

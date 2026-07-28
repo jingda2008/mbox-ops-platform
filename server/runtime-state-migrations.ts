@@ -282,19 +282,39 @@ function configWithOperationalDefaults(
     communityBrand.tagline = defaults.communityBrand.tagline
   }
   const requiredServiceTypes = defaults.serviceTypes.filter(
-    (type) => ['FULFILLMENT_DELIVERY', 'CUSTOM_REQUEST', 'KDS_PRODUCTION_DELAY'].includes(type.code) && !serviceTypeIds.has(type.id),
+    (type) => ['GUEST_MOOD_INFO', 'FULFILLMENT_DELIVERY', 'CUSTOM_REQUEST', 'KDS_PRODUCTION_DELAY'].includes(type.code)
+      && !serviceTypeIds.has(type.id),
   )
   const defaultServiceTypes = new Map(defaults.serviceTypes.map((serviceType) => [serviceType.code, serviceType]))
+  const normalizeServiceWorkflow = (serviceType: StoreConfig['serviceTypes'][number]) => {
+    const defaultServiceType = defaultServiceTypes.get(serviceType.code)
+    return {
+      ...serviceType,
+      workflowLevel: serviceType.workflowLevel ?? defaultServiceType?.workflowLevel ?? 'L3' as const,
+      allowBackupDirectComplete: serviceType.allowBackupDirectComplete
+        ?? defaultServiceType?.allowBackupDirectComplete
+        ?? false,
+      allowCrossAreaComplete: serviceType.allowCrossAreaComplete
+        ?? defaultServiceType?.allowCrossAreaComplete
+        ?? false,
+      requiresCompletionNote: serviceType.requiresCompletionNote
+        ?? defaultServiceType?.requiresCompletionNote
+        ?? false,
+      duplicateSeconds: serviceType.duplicateSeconds ?? defaultServiceType?.duplicateSeconds ?? 60,
+    }
+  }
   const enriched = {
     ...config,
     serviceTypes: [
       ...config.serviceTypes.map((serviceType) => {
         const legacyReply = legacyGuestRepliesByCode.get(serviceType.code)
         const defaultServiceType = defaultServiceTypes.get(serviceType.code)
-        if (!legacyReply || !defaultServiceType || serviceType.customerReply !== legacyReply) return serviceType
-        return { ...serviceType, customerReply: defaultServiceType.customerReply }
+        if (!legacyReply || !defaultServiceType || serviceType.customerReply !== legacyReply) {
+          return normalizeServiceWorkflow(serviceType)
+        }
+        return normalizeServiceWorkflow({ ...serviceType, customerReply: defaultServiceType.customerReply })
       }),
-      ...structuredClone(requiredServiceTypes),
+      ...structuredClone(requiredServiceTypes).map(normalizeServiceWorkflow),
     ],
     roles: [
       ...config.roles.map(withDefaultRolePolicy).map((role) => (
@@ -365,6 +385,13 @@ function migrateServiceTaskVisits(state: RuntimeState) {
       : null)
     return {
       ...task,
+      workflowLevel: task.workflowLevel ?? 'L3',
+      requestCount: task.requestCount ?? 1,
+      firstRequestedAt: task.firstRequestedAt ?? task.createdAt,
+      lastRequestedAt: task.lastRequestedAt ?? task.createdAt,
+      viewedEmployeeIds: task.viewedEmployeeIds ?? [],
+      completedBy: task.completedBy
+        ?? (['completed', 'confirmed'].includes(task.status) ? task.ownerId : null),
       tableSessionId: task.tableSessionId ?? session?.id ?? null,
       archivedAt: task.archivedAt ?? (shouldArchive ? session?.closedAt ?? task.updatedAt : null),
       archiveOutcome,
@@ -373,6 +400,14 @@ function migrateServiceTaskVisits(state: RuntimeState) {
       resolution: task.resolution ?? (archiveOutcome === 'unresolved' ? '桌次结束时需求仍未完成' : null),
     }
   })
+}
+
+function migrateProductFulfillmentTypes(state: RuntimeState) {
+  state.products = state.products.map((product) => ({
+    ...product,
+    fulfillmentType: product.fulfillmentType
+      ?? (product.requiresFulfillment === false ? 'no_fulfillment' : 'made_to_order'),
+  }))
 }
 
 function migrateFulfillmentTaskIds(state: RuntimeState) {
@@ -432,6 +467,7 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
   const defaults = createSeedConfig()
   const migrated = structuredClone(state)
   applyMboxVenueLayout(migrated)
+  migrateProductFulfillmentTypes(migrated)
   const normalizeChinaTimezone = migrated.store.timezone !== CHINA_TIME_ZONE
     || (migrated.reservationState?.config.businessHours?.timeZone !== undefined
       && migrated.reservationState.config.businessHours.timeZone !== CHINA_TIME_ZONE)

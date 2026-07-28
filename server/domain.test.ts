@@ -30,6 +30,14 @@ describe('service task domain', () => {
 
     expect(task.ownerId).toBe('emp-lin')
     expect(task.configVersion).toBe(1)
+    expect(task).toMatchObject({
+      workflowLevel: 'L1',
+      requestCount: 1,
+      firstRequestedAt: task.createdAt,
+      lastRequestedAt: task.createdAt,
+      viewedEmployeeIds: [],
+      completedBy: null,
+    })
     expect(task.customerReply).toContain('Tom')
     expect(state.taskEvents.at(-1)?.type).toBe('task.created.v1')
   })
@@ -226,26 +234,92 @@ describe('service task domain', () => {
       .toThrow('仅客人可以确认服务已经解决')
   })
 
-  it('closes the task as soon as the responsible employee completes service', () => {
+  it('lets an eligible backup complete L1 service in one action', () => {
     const state = createSeedState()
     const task = createServiceTask(state, taskInput())
 
-    expect(() =>
-      applyTaskAction(state, task.id, { action: 'complete', actorId: 'emp-lin', note: '', idempotencyKey: 'complete-too-early' }),
-    ).toThrow('必须先确认到桌')
-
-    applyTaskAction(state, task.id, { action: 'accept', actorId: 'emp-lin', note: '', idempotencyKey: 'task-accept-0001' })
-    applyTaskAction(state, task.id, { action: 'arrive', actorId: 'emp-lin', note: '', idempotencyKey: 'task-arrive-0001' })
-    const confirmed = applyTaskAction(state, task.id, { action: 'complete', actorId: 'emp-lin', note: '已补水', idempotencyKey: 'task-complete-0001' })
+    const confirmed = applyTaskAction(state, task.id, {
+      action: 'quick_complete',
+      actorId: 'emp-jie',
+      note: '候补已补水',
+      idempotencyKey: 'task-quick-complete-0001',
+    })
 
     expect(confirmed.status).toBe('confirmed')
+    expect(confirmed.completedBy).toBe('emp-jie')
+    expect(confirmed.viewedEmployeeIds).toContain('emp-jie')
     expect(state.taskEvents.map((event) => event.type)).toEqual([
       'task.created.v1',
-      'task.accepted.v1',
-      'task.arrived.v1',
-      'task.completed.v1',
+      'task.quick_completed.v1',
       'service.closed_by_staff.v1',
     ])
+  })
+
+  it('records L0 guest context without creating an open employee task', () => {
+    const state = createSeedState()
+    const task = createServiceTask(state, taskInput({
+      serviceTypeId: 'guest-mood-info',
+      note: '客户心情反馈：安静。',
+    }))
+
+    expect(task).toMatchObject({
+      workflowLevel: 'L0',
+      status: 'confirmed',
+      ownerId: null,
+      completedBy: 'system',
+      resolution: '客情信息已记录',
+    })
+    expect(state.taskEvents.map((event) => event.type)).toContain('service.info_recorded.v1')
+  })
+
+  it('rejects quick completion outside the L1 notification, backup and role scope', () => {
+    const state = createSeedState()
+    const task = createServiceTask(state, taskInput())
+
+    expect(() => applyTaskAction(state, task.id, {
+      action: 'quick_complete',
+      actorId: 'emp-cashier',
+      note: '',
+      idempotencyKey: 'task-quick-complete-ineligible-0001',
+    })).toThrow('通知、候补或岗位范围')
+    expect(task.status).toBe('pending')
+  })
+
+  it('lets the responsible employee complete L2 directly after accepting', () => {
+    const state = createSeedState()
+    const task = createServiceTask(state, taskInput({ serviceTypeId: 'order-help' }))
+
+    applyTaskAction(state, task.id, {
+      action: 'accept', actorId: task.ownerId!, note: '', idempotencyKey: 'l2-accept-0001',
+    })
+    const completed = applyTaskAction(state, task.id, {
+      action: 'complete', actorId: task.ownerId!, note: '', idempotencyKey: 'l2-complete-0001',
+    })
+
+    expect(completed).toMatchObject({ status: 'confirmed', workflowLevel: 'L2', completedBy: task.ownerId })
+    expect(state.taskEvents.some((event) => event.type === 'task.arrived.v1')).toBe(false)
+  })
+
+  it('keeps L3 arrival and completion-note controls intact', () => {
+    const state = createSeedState()
+    const task = createServiceTask(state, taskInput({ serviceTypeId: 'complaint' }))
+    const actorId = task.ownerId!
+
+    applyTaskAction(state, task.id, {
+      action: 'accept', actorId, note: '', idempotencyKey: 'l3-accept-0001',
+    })
+    expect(() => applyTaskAction(state, task.id, {
+      action: 'complete', actorId, note: '已沟通', idempotencyKey: 'l3-too-early-0001',
+    })).toThrow('必须先确认到桌')
+    applyTaskAction(state, task.id, {
+      action: 'arrive', actorId, note: '', idempotencyKey: 'l3-arrive-0001',
+    })
+    expect(() => applyTaskAction(state, task.id, {
+      action: 'complete', actorId, note: '', idempotencyKey: 'l3-note-required-0001',
+    })).toThrow('请填写处理结果')
+    expect(applyTaskAction(state, task.id, {
+      action: 'complete', actorId, note: '已现场解决', idempotencyKey: 'l3-complete-0001',
+    })).toMatchObject({ status: 'confirmed', completedBy: actorId })
   })
 
   it('restarts SLA and notifies the replacement when the guest says service is unresolved', () => {

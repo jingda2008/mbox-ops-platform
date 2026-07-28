@@ -35,8 +35,9 @@ export function registerTaskRoutes(app: FastifyInstance, repository: RuntimeRepo
       const eligibleNotifiedClaim = input.action === 'accept'
         && currentTask.ownerId === null
         && canEmployeeClaimTask(state, currentTask, actor.actorId)
+      const domainValidatedQuickComplete = input.action === 'quick_complete'
       const assignedOwner = currentTask.ownerId === actor.actorId
-      if (!assignedOwner && !eligibleNotifiedClaim) {
+      if (!assignedOwner && !eligibleNotifiedClaim && !domainValidatedQuickComplete) {
         requireTableDataScope(request, state, currentTask.tableId, 'service.task.action')
       }
       const action = { ...input, actorId: actor.actorId }

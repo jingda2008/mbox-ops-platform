@@ -1,7 +1,15 @@
-import { Check, CheckCheck, Clock3, MapPin, Navigation, RotateCcw, UserRound } from 'lucide-react'
+import { Check, CheckCheck, Clock3, Focus, MapPin, Navigation, RotateCcw, UserRound } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { ServiceIcon } from './ServiceIcon'
-import { taskAcceptMode, taskMatchesQueueFilter, taskQueueFilterForQuery, taskQueueIsOpen } from './task-queue'
+import {
+  taskAcceptMode,
+  taskMatchesQueueFilter,
+  taskQueueActionMode,
+  taskQueueFilterForQuery,
+  taskQueueIsVisible,
+  taskRepeatSummary,
+  taskWorkflowLevel,
+} from './task-queue'
 import type {
   Employee,
   ServiceTask,
@@ -63,15 +71,29 @@ export function TaskQueue({
   onClearFocus,
 }: TaskQueueProps) {
   const [visibleCount, setVisibleCount] = useState(12)
+  const [pendingTaskIds, setPendingTaskIds] = useState<Set<string>>(() => new Set())
+  const [busyMode, setBusyMode] = useState(() => (
+    typeof window !== 'undefined' && window.localStorage.getItem('mbox-staff-busy-mode') === '1'
+  ))
   const filter = taskQueueFilterForQuery(focusQuery)
+  const serviceTypeById = new Map(serviceTypes.map((serviceType) => [serviceType.id, serviceType]))
   const complaintServiceTypeIds = new Set(serviceTypes
     .filter((serviceType) => serviceType.code === 'COMPLAINT' || serviceType.icon === 'complaint')
     .map((serviceType) => serviceType.id))
   const visibleTasks = tasks
     .filter((task) => !task.archivedAt)
-    .filter(taskQueueIsOpen)
+    .filter((task) => taskQueueIsVisible(task, serviceTypeById.get(task.serviceTypeId)))
     .filter((task) => !selectedTableId || task.tableId === selectedTableId)
     .filter((task) => taskMatchesQueueFilter(task, filter, complaintServiceTypeIds))
+    .filter((task) => {
+      if (!busyMode || selectedTableId || filter !== 'all') return true
+      const serviceType = serviceTypeById.get(task.serviceTypeId)
+      const atRisk = Date.now() >= new Date(task.warningAt).getTime()
+      return task.priority === 'urgent'
+        || atRisk
+        || task.ownerId === currentEmployeeId
+        || serviceType?.code === 'FULFILLMENT_DELIVERY'
+    })
     .sort((a, b) => {
       if (focusTaskId && a.id === focusTaskId) return -1
       if (focusTaskId && b.id === focusTaskId) return 1
@@ -96,6 +118,19 @@ export function TaskQueue({
     })
   }, [focusRequestId, focusTaskId, tasks])
 
+  async function runAction(task: ServiceTask, action: TaskActionInput['action']) {
+    setPendingTaskIds((current) => new Set(current).add(task.id))
+    try {
+      await onAction(task, action)
+    } finally {
+      setPendingTaskIds((current) => {
+        const next = new Set(current)
+        next.delete(task.id)
+        return next
+      })
+    }
+  }
+
   return (
     <section className={`task-queue ${compact ? 'task-queue--compact' : ''}`}>
       <div className="section-heading">
@@ -104,6 +139,21 @@ export function TaskQueue({
           <h2>{selectedTableId ? '桌台任务' : '待处理队列'}</h2>
         </div>
         <div className="heading-actions">
+          {!selectedTableId && (
+            <button
+              className={`task-busy-mode${busyMode ? ' is-active' : ''}`}
+              type="button"
+              aria-pressed={busyMode}
+              title="只看紧急、即将超时、待送达和本人责任任务"
+              onClick={() => {
+                const next = !busyMode
+                setBusyMode(next)
+                window.localStorage.setItem('mbox-staff-busy-mode', next ? '1' : '0')
+              }}
+            >
+              <Focus size={16} />{busyMode ? '忙时聚焦中' : '忙时聚焦'}
+            </button>
+          )}
           {selectedTableId && (
             <button className="icon-button" title="清除桌台筛选" onClick={onClearTable}>
               <RotateCcw size={18} aria-hidden="true" />
@@ -135,13 +185,17 @@ export function TaskQueue({
           const fulfillmentDelivery = serviceType.code === 'FULFILLMENT_DELIVERY'
           const atRisk = Date.now() >= new Date(task.warningAt).getTime() && !['arrived', 'completed'].includes(task.status)
           const acceptMode = taskAcceptMode(task, currentEmployeeId, claimableTaskIds.has(task.id))
+          const workflowLevel = taskWorkflowLevel(serviceType, task)
+          const actionMode = taskQueueActionMode(task, serviceType, currentEmployeeId, claimableTaskIds.has(task.id))
+          const repeatSummary = taskRepeatSummary(task)
+          const actionBusy = busyTaskIds.has(task.id) || pendingTaskIds.has(task.id)
 
           return (
             <article
               id={`service-task-${task.id}`}
-              className={`task-item priority-${task.priority} ${atRisk ? 'is-at-risk' : ''} ${focusTaskId === task.id ? 'is-navigation-focus' : ''}`}
+              className={`task-item task-item--${workflowLevel.toLowerCase()} priority-${task.priority} ${atRisk ? 'is-at-risk' : ''} ${focusTaskId === task.id ? 'is-navigation-focus' : ''}`}
               key={task.id}
-              aria-busy={busyTaskIds.has(task.id)}
+              aria-busy={actionBusy}
             >
               <div className="task-item__top">
                 <span className="service-symbol">
@@ -150,41 +204,65 @@ export function TaskQueue({
                 <div className="task-item__identity">
                   <div className="task-title-row">
                     <strong>{serviceType.name}</strong>
-                    <span className={`status-tag status-${task.status}`}>{fulfillmentDelivery && task.status === 'arrived' ? '配送中' : statusLabels[task.status]}</span>
+                    {workflowLevel !== 'L1' && (
+                      <span className={`status-tag status-${task.status}`}>{fulfillmentDelivery && task.status === 'arrived' ? '配送中' : statusLabels[task.status]}</span>
+                    )}
                   </div>
                   <div className="task-meta">
                     <span><MapPin size={14} />{table.displayName}</span>
                     <span><Clock3 size={14} />{elapsedLabel(task.createdAt)}</span>
-                    <span><UserRound size={14} />{owner?.displayName ?? '领班调度池'}</span>
+                    {workflowLevel !== 'L1' && <span><UserRound size={14} />{owner?.displayName ?? '领班调度池'}</span>}
                   </div>
                 </div>
               </div>
 
               {task.note && <p className={`task-note${task.note.includes('【订单重点备注】') ? ' is-important' : ''}`}>{task.note}</p>}
-              <div className="ai-directive">
-                <span>AI指令</span>
-                <ol>
-                  {task.actionScript.map((step) => <li key={step}>{step}</li>)}
-                </ol>
-              </div>
+              {repeatSummary && <p className="task-repeat" role="status">{repeatSummary}</p>}
+              {workflowLevel !== 'L1' && task.actionScript.length > 0 && (
+                <div className="ai-directive">
+                  <span>AI指令</span>
+                  <ol>
+                    {task.actionScript.map((step) => <li key={step}>{step}</li>)}
+                  </ol>
+                </div>
+              )}
 
               <div className="task-actions">
-                {acceptMode && (
-                  <button className="primary-button" disabled={busyTaskIds.has(task.id)} onClick={() => void onAction(task, 'accept')}>
-                    <Check size={17} />{acceptMode === 'claim' ? '认领并接单' : fulfillmentDelivery ? '接取送任务' : '接单'}
+                {actionMode === 'quick-complete' && (
+                  <button
+                    className="primary-button task-action-button"
+                    disabled={actionBusy}
+                    onClick={() => void runAction(task, 'quick_complete')}
+                  >
+                    <CheckCheck size={17} />{actionBusy ? '正在提交…' : fulfillmentDelivery ? '已送达' : '已处理'}
                   </button>
                 )}
-                {task.status === 'accepted' && (
-                  <button className="primary-button" disabled={busyTaskIds.has(task.id)} onClick={() => void onAction(task, 'arrive')}>
-                    <Navigation size={17} />{fulfillmentDelivery ? '确认取货' : '已到桌'}
+                {workflowLevel === 'L2' && actionMode === 'accept' && (
+                  <button className="primary-button task-action-button" disabled={actionBusy} onClick={() => void runAction(task, 'accept')}>
+                    <Check size={17} />{actionBusy ? '正在提交…' : acceptMode === 'claim' ? '我来处理' : '开始处理'}
                   </button>
                 )}
-                {task.status === 'arrived' && (
-                  <button className="primary-button" disabled={busyTaskIds.has(task.id)} onClick={() => void onAction(task, 'complete')}>
-                    <CheckCheck size={17} />{fulfillmentDelivery ? '确认送达' : '完成服务'}
+                {workflowLevel === 'L2' && actionMode === 'complete' && (
+                  <button className="primary-button task-action-button" disabled={actionBusy} onClick={() => void runAction(task, 'complete')}>
+                    <CheckCheck size={17} />{actionBusy ? '正在提交…' : '完成'}
                   </button>
                 )}
-                <span className="task-source">{task.source === 'guest' ? '顾客呼叫' : task.source === 'system' ? '系统触发' : '员工创建'}</span>
+                {workflowLevel === 'L3' && actionMode === 'accept' && (
+                  <button className="primary-button task-action-button" disabled={actionBusy} onClick={() => void runAction(task, 'accept')}>
+                    <Check size={17} />{actionBusy ? '正在提交…' : acceptMode === 'claim' ? '认领并接单' : fulfillmentDelivery ? '接取送任务' : '接单'}
+                  </button>
+                )}
+                {workflowLevel === 'L3' && actionMode === 'arrive' && (
+                  <button className="primary-button task-action-button" disabled={actionBusy} onClick={() => void runAction(task, 'arrive')}>
+                    <Navigation size={17} />{actionBusy ? '正在提交…' : fulfillmentDelivery ? '确认取货' : '已到桌'}
+                  </button>
+                )}
+                {workflowLevel === 'L3' && actionMode === 'complete' && (
+                  <button className="primary-button task-action-button" disabled={actionBusy} onClick={() => void runAction(task, 'complete')}>
+                    <CheckCheck size={17} />{actionBusy ? '正在提交…' : fulfillmentDelivery ? '确认送达' : '完成服务'}
+                  </button>
+                )}
+                {workflowLevel !== 'L1' && <span className="task-source">{task.source === 'guest' ? '顾客呼叫' : task.source === 'system' ? '系统触发' : '员工创建'}</span>}
               </div>
             </article>
           )

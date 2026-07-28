@@ -17,6 +17,7 @@ import type { RuntimeState } from '../src/shared/contracts.js'
 import type { KdsTask } from '../src/shared/order-contracts.js'
 import { productAvailability } from '../src/shared/product-availability.js'
 import {
+  completeAndDeliverKdsTask,
   completeKdsTask,
   createOrderDraft,
   decideKdsException,
@@ -543,12 +544,16 @@ export function registerCommerceRoutes(
       syncOrderFulfillmentWorkstations(state)
       const currentTask = state.orderDomain.kdsTasks.find((item) => item.id === request.params.taskId)
       if (!currentTask) throw new Error('KDS任务不存在')
+      const productionAction = ['start', 'complete', 'completeAndDeliver'].includes(input.action)
       const actor = requireKdsTaskActor(
         request,
         state,
         currentTask,
-        ['start', 'complete'].includes(input.action) ? 'production' : 'delivery',
+        productionAction ? 'production' : 'delivery',
       )
+      if (input.action === 'completeAndDeliver') {
+        requireKdsTaskActor(request, state, currentTask, 'delivery')
+      }
       const idempotencyCount = state.orderDomain.idempotencyRecords.length
       const serviceTaskCount = state.tasks.length
       const taskEventCount = state.taskEvents.length
@@ -562,11 +567,23 @@ export function registerCommerceRoutes(
         ? startKdsTask(state.orderDomain, command)
         : input.action === 'complete'
           ? completeKdsTask(state.orderDomain, command)
+          : input.action === 'completeAndDeliver'
+            ? completeAndDeliverKdsTask(state.orderDomain, command)
           : input.action === 'pickUp'
             ? pickUpKdsTask(state.orderDomain, command)
             : deliverKdsTask(state.orderDomain, command)
       if (input.action === 'complete') {
         ensureDeliveryServiceTask(state, task, command.occurredAt)
+      } else if (input.action === 'completeAndDeliver') {
+        ensureDeliveryServiceTask(state, task, command.occurredAt)
+        syncDeliveryServiceTaskForKdsAction(
+          state,
+          task,
+          'deliver',
+          actor.actorId,
+          command.occurredAt,
+          input.idempotencyKey,
+        )
       } else if (input.action === 'pickUp' || input.action === 'deliver') {
         ensureDeliveryServiceTask(state, task, task.completedAt ?? command.occurredAt)
         syncDeliveryServiceTaskForKdsAction(

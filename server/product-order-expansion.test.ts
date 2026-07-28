@@ -123,6 +123,29 @@ describe('configured bundle order expansion', () => {
     )
   })
 
+  it('preserves the configured ready-to-serve route from product to KDS', () => {
+    const state = createSeedState(new Date(ORDERED_AT))
+    const order = createDraft(state, 'order-ready-to-serve')
+    const beer = configuredProduct(state, 'product-beer')
+
+    const expanded = addProduct(state, order.id, beer)
+    submitOrder(state.orderDomain, {
+      orderId: order.id,
+      submittedBy: 'emp-lin',
+      occurredAt: SUBMITTED_AT,
+      idempotencyKey: `submit-${order.id}`,
+    })
+
+    expect(order.items.find((item) => item.id === expanded.parentLineId)).toMatchObject({
+      fulfillmentType: 'ready_to_serve',
+      fulfillmentStatus: 'completed',
+    })
+    expect(state.orderDomain.kdsTasks.find((task) => task.orderItemId === expanded.parentLineId)).toMatchObject({
+      fulfillmentType: 'ready_to_serve',
+      status: 'completed',
+    })
+  })
+
   it('rejects a bundle whose component is missing or disabled', () => {
     const state = createSeedState(new Date(ORDERED_AT))
     const order = createDraft(state, 'order-invalid-component')

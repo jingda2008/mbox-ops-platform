@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-rc.52 - 2026-07-28
+
+- Added configurable L0-L3 service workflows for zero-action guest context, one-tap quick service, two-step accountable tasks and controlled high-risk transactions.
+- Added duplicate request merging, actual-completer evidence and safe backup or cross-area completion for configured low-risk services.
+- Simplified table-context ordering, complimentary ordering, account access and busy-shift task presentation.
+- Split fulfillment into ready-to-serve, made-to-order, service-only and no-fulfillment paths with combined completion and delivery for multi-role staff.
+- Added normalized service and fulfillment projection fields plus migration 020.
+- Retired I01-I03 and the legacy interactive area from runtime operations while retaining archived history for analysis.
+
 ## 1.0.0-rc.51 - 2026-07-28
 
 - Restored the normal-order and complimentary-order controls as a consistent pair in staff-assisted ordering.

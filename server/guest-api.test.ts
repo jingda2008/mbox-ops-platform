@@ -116,6 +116,7 @@ describe('guest table API', () => {
     expect(body.table.code).toBe('L01')
     expect(body.communityBrand).toMatchObject({ name: '超嗨部落', markUrl: '/brand/superhigh-mark.png' })
     expect(body.serviceTypes.map((type) => type.code)).not.toContain('FULFILLMENT_DELIVERY')
+    expect(body.serviceTypes.map((type) => type.code)).toContain('GUEST_MOOD_INFO')
     expect(body.products.find((product) => product.id === 'product-balance-adjustment')).toMatchObject({
       name: '补差额',
       specification: '1元/份',
@@ -696,6 +697,35 @@ describe('guest table API', () => {
     await closeFixture(app, repository)
   })
 
+  it('records guest mood as L0 table context without creating an employee to-do', async () => {
+    const { app, repository, now } = await fixture()
+    const session = (await exchange(app, staticQr(now()))).body
+    const moodType = session.serviceTypes.find((serviceType) => serviceType.code === 'GUEST_MOOD_INFO')
+    expect(moodType).toBeDefined()
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/guest/tasks',
+      payload: {
+        tableToken: session.tableToken,
+        serviceTypeId: moodType!.id,
+        note: '今晚状态：开心',
+        idempotencyKey: 'guest-mood-l0-0001',
+      },
+    })
+
+    expect(response.statusCode).toBe(201)
+    expect(response.json()).toMatchObject({ status: 'confirmed' })
+    const storedTask = (await repository.read()).tasks.find((task) => task.id === response.json().id)
+    expect(storedTask).toMatchObject({
+      workflowLevel: 'L0',
+      status: 'confirmed',
+      resolution: '客情信息已记录',
+    })
+    expect(storedTask?.ownerEmployeeId).toBeFalsy()
+    await closeFixture(app, repository)
+  })
+
   it('submits standalone custom requests, merges duplicates and limits each table to five requests per minute', async () => {
     const { app, repository, now, setNow } = await fixture()
     const session = (await exchange(app, staticQr(now()))).body
@@ -732,20 +762,93 @@ describe('guest table API', () => {
     expect(duplicate.statusCode).toBe(201)
     expect(duplicate.json().id).toBe(first.json().id)
 
-    for (const [index, note] of ['需要婴儿椅', '需要纸巾', '空调温度调高', '稍后安排生日歌'].entries()) {
+    for (const [index, note] of ['需要婴儿椅', '需要纸巾', '空调温度调高'].entries()) {
       expect((await submit(note, `000${index + 3}`)).statusCode).toBe(201)
     }
-    const limited = await submit('再拿一个杯子', '0007')
+    const limited = await submit('稍后安排生日歌', '0006')
     expect(limited.statusCode).toBe(429)
     expect(limited.json()).toMatchObject({
       code: 'GUEST_SERVICE_RATE_LIMITED',
       message: '收到啦～你的召唤已经闪到我们这边，小伙伴正在赶来，再给我们一点点时间哦。',
     })
     expect(limited.json().message).not.toMatch(/60|5次|最多/)
-    expect((await repository.read()).tasks.filter((task) => task.serviceTypeId === customType!.id)).toHaveLength(5)
+    const mergedTask = (await repository.read()).tasks.find((task) => task.serviceTypeId === customType!.id)!
+    expect(mergedTask).toMatchObject({
+      id: first.json().id,
+      requestCount: 5,
+      note: '空调温度调高',
+    })
+    expect((await repository.read()).taskEvents.filter((event) => (
+      event.taskId === mergedTask.id && event.type === 'task.request_merged.v1'
+    ))).toHaveLength(4)
 
     setNow(now() + 61_000)
-    expect((await submit('一分钟后再拿一个杯子', '0008')).statusCode).toBe(201)
+    expect((await submit('一分钟后再拿一个杯子', '0007')).statusCode).toBe(201)
+    expect((await repository.read()).tasks.find((task) => task.id === mergedTask.id)).toMatchObject({
+      requestCount: 6,
+      note: '一分钟后再拿一个杯子',
+    })
+    await closeFixture(app, repository)
+  })
+
+  it('never drops complaint requests behind the ordinary guest rate limit', async () => {
+    const { app, repository, now } = await fixture()
+    const session = (await exchange(app, staticQr(now()))).body
+    const submit = (serviceTypeId: string, suffix: string) => app.inject({
+      method: 'POST',
+      url: '/api/guest/tasks',
+      payload: {
+        tableToken: session.tableToken,
+        serviceTypeId,
+        note: `请求-${suffix}`,
+        idempotencyKey: `protected-request-${suffix}`,
+      },
+    })
+    for (const [index, serviceTypeId] of ['water', 'ice', 'order-help', 'birthday', 'custom-request'].entries()) {
+      expect((await submit(serviceTypeId, `ordinary-000${index + 1}`)).statusCode).toBe(201)
+    }
+
+    const complaint = await submit('complaint', 'complaint-0001')
+    const repeated = await submit('complaint', 'complaint-0002')
+    expect(complaint.statusCode).toBe(201)
+    expect(repeated.statusCode).toBe(201)
+    expect(repeated.json().id).toBe(complaint.json().id)
+    expect((await repository.read()).tasks.find((task) => task.id === complaint.json().id)).toMatchObject({
+      requestCount: 2,
+      note: '请求-complaint-0002',
+    })
+    await closeFixture(app, repository)
+  })
+
+  it('merges a guest request into an existing open system task of the same table and type', async () => {
+    const { app, repository, now } = await fixture()
+    const session = (await exchange(app, staticQr(now()))).body
+    const systemTaskId = await repository.mutate((state) => createServiceTask(state, {
+      tableCode: 'L01',
+      serviceTypeId: 'water',
+      source: 'system',
+      note: '巡桌补水提醒',
+      idempotencyKey: 'system-water-reminder-0001',
+    }).id)
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/guest/tasks',
+      payload: {
+        tableToken: session.tableToken,
+        serviceTypeId: 'water',
+        note: '需要两杯温水',
+        idempotencyKey: 'guest-water-merge-system-0001',
+      },
+    })
+
+    expect(response.statusCode).toBe(201)
+    expect(response.json().id).toBe(systemTaskId)
+    expect((await repository.read()).tasks.find((task) => task.id === systemTaskId)).toMatchObject({
+      source: 'system',
+      requestCount: 2,
+      note: '需要两杯温水',
+    })
     await closeFixture(app, repository)
   })
 
@@ -1108,7 +1211,7 @@ describe('guest table API', () => {
     expect(checkout.json()).toMatchObject({
       providerRequired: false,
       paymentIntent: { status: 'succeeded', channel: 'wechat_mock' },
-      order: { status: 'submitted' },
+      order: { status: 'in_fulfillment' },
     })
     await closeFixture(app, repository)
   })

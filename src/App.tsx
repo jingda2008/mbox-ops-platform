@@ -603,16 +603,21 @@ function OfflineSnapshotView({
   const openTasks = snapshot.tasks.filter((task) => !['completed', 'confirmed', 'cancelled'].includes(task.status))
 
   async function handleAction(task: OfflineSnapshot['tasks'][number], action: TaskActionInput['action']) {
+    const actorId = getCurrentActorId()
     if (!task.ownerId) {
       setNotice('该任务尚无责任人，需联网后由领班调度')
+      return
+    }
+    if (!actorId || task.ownerId !== actorId) {
+      setNotice('这项任务由其他员工负责，联网后可查看最新调度')
       return
     }
     setBusyTaskId(task.id)
     try {
       await actOnTask(task.id, {
         action,
-        actorId: task.ownerId,
-        note: action === 'complete' ? '现场服务完成' : '',
+        actorId,
+        note: action === 'complete' || action === 'quick_complete' ? '现场服务完成' : '',
       })
       const now = new Date().toISOString()
       const next: OfflineSnapshot = {
@@ -663,7 +668,7 @@ function OfflineSnapshotView({
             .map((task) => {
               const table = snapshot.tables.find((item) => item.id === task.tableId)
               const serviceType = snapshot.serviceTypes.find((item) => item.id === task.serviceTypeId)
-              const action = availableTaskAction(task.status)
+              const action = availableTaskAction(task)
               return (
                 <article className={`offline-task-card priority-${task.priority}`} key={task.id}>
                   <div className="offline-task-title">
@@ -679,7 +684,7 @@ function OfflineSnapshotView({
                     {action && (
                       <button className="primary-button" disabled={busyTaskId === task.id} onClick={() => void handleAction(task, action)}>
                         {action === 'accept' ? <Check size={17} /> : action === 'arrive' ? <Navigation size={17} /> : <CheckCheck size={17} />}
-                        {action === 'accept' ? '接单' : action === 'arrive' ? '已到桌' : '完成服务'}
+                        {action === 'accept' ? '我来处理' : action === 'arrive' ? '已到桌' : action === 'quick_complete' ? '已处理' : '完成服务'}
                       </button>
                     )}
                     {!task.ownerId && <span>等待领班分配</span>}
@@ -693,17 +698,21 @@ function OfflineSnapshotView({
   )
 }
 
-function availableTaskAction(status: OfflineSnapshot['tasks'][number]['status']): TaskActionInput['action'] | null {
-  if (['pending', 'escalated', 'reopened'].includes(status)) return 'accept'
-  if (status === 'accepted') return 'arrive'
-  if (status === 'arrived') return 'complete'
+function availableTaskAction(task: OfflineSnapshot['tasks'][number]): TaskActionInput['action'] | null {
+  const level = task.workflowLevel ?? 'L3'
+  if (level === 'L0') return null
+  if (level === 'L1' && ['pending', 'escalated', 'reopened'].includes(task.status)) return 'quick_complete'
+  if (['pending', 'escalated', 'reopened'].includes(task.status)) return 'accept'
+  if (level === 'L2' && ['accepted', 'arrived'].includes(task.status)) return 'complete'
+  if (task.status === 'accepted') return 'arrive'
+  if (task.status === 'arrived') return 'complete'
   return null
 }
 
 function nextTaskStatus(action: TaskActionInput['action']): OfflineSnapshot['tasks'][number]['status'] {
   if (action === 'accept') return 'accepted'
   if (action === 'arrive') return 'arrived'
-  if (action === 'complete') return 'confirmed'
+  if (action === 'complete' || action === 'quick_complete') return 'confirmed'
   return 'pending'
 }
 

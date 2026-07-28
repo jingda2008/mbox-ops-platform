@@ -178,6 +178,133 @@
 }
 .routing-validation { color: var(--danger); font-weight: 750; }
 
+.service-config-section { display: grid; gap: 14px; }
+.service-config-intro {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.service-config-intro h3 { margin: 3px 0 4px; font-size: 18px; }
+.service-config-intro p { max-width: 720px; margin: 0; color: var(--ink-soft); font-size: 12px; line-height: 1.5; }
+.workflow-level-guide {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.workflow-level-guide > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border-right: 1px solid var(--line);
+  background: #fafbf8;
+}
+.workflow-level-guide > div:last-child { border-right: 0; }
+.workflow-level-guide strong { font-size: 11px; }
+.workflow-level-guide span { color: var(--ink-soft); font-size: 10px; line-height: 1.35; }
+.workflow-level-guide [data-level="L0"] { border-top: 3px solid #7a8079; }
+.workflow-level-guide [data-level="L1"] { border-top: 3px solid #32805a; }
+.workflow-level-guide [data-level="L2"] { border-top: 3px solid #2d6d8b; }
+.workflow-level-guide [data-level="L3"] { border-top: 3px solid #a12732; }
+
+.service-config-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.service-config-card {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(150px, .52fr) minmax(0, 1.48fr);
+  gap: 12px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-left: 4px solid #7a8079;
+  border-radius: 6px;
+  background: #fff;
+}
+.service-config-card.workflow-l1 { border-left-color: #32805a; }
+.service-config-card.workflow-l2 { border-left-color: #2d6d8b; }
+.service-config-card.workflow-l3 { border-left-color: #a12732; background: #fffafa; }
+.service-config-identity { min-width: 0; display: grid; grid-template-columns: 34px minmax(0, 1fr); align-content: start; align-items: center; gap: 7px; }
+.service-config-identity > div { min-width: 0; display: grid; gap: 2px; }
+.service-config-identity > div strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.service-config-identity > div span { overflow: hidden; color: var(--ink-soft); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-level-badge {
+  width: 34px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: #f3f4f1;
+  font-size: 11px;
+  font-weight: 850;
+}
+.workflow-l1 .workflow-level-badge { border-color: #9dc9af; background: #edf7f1; color: #216844; }
+.workflow-l2 .workflow-level-badge { border-color: #a3c4d5; background: #eef6fa; color: #245d78; }
+.workflow-l3 .workflow-level-badge { border-color: #dfabb0; background: #fff0f1; color: #8d1f2a; }
+.service-risk-lock {
+  grid-column: 1 / -1;
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  border: 1px solid #e1b7bb;
+  border-radius: 4px;
+  background: #fff2f3;
+  color: #8d1f2a;
+  font-size: 9px;
+  font-weight: 800;
+}
+.service-config-controls {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(145px, .75fr) 94px minmax(260px, 1.25fr);
+  align-items: start;
+  gap: 9px;
+}
+.service-level-field, .service-number-field { min-width: 0; display: grid; gap: 4px; }
+.service-level-field > span, .service-number-field > span:first-child { color: var(--ink-soft); font-size: 10px; font-weight: 750; }
+.service-level-field select, .service-number-field input {
+  width: 100%;
+  height: 34px;
+  min-width: 0;
+  padding: 0 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 11px;
+}
+.service-level-field small, .service-number-field small { color: var(--ink-soft); font-size: 9px; line-height: 1.35; }
+.service-level-field small { color: #8d1f2a; }
+.number-with-unit { position: relative; display: block; }
+.number-with-unit input { padding-right: 28px; }
+.number-with-unit em { position: absolute; top: 9px; right: 8px; color: var(--ink-soft); font-size: 10px; font-style: normal; pointer-events: none; }
+.service-switches { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.service-switches > label {
+  min-width: 0;
+  min-height: 52px;
+  display: flex;
+  align-items: start;
+  gap: 6px;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #f8f9f6;
+  cursor: pointer;
+}
+.service-switches input { width: 16px; height: 16px; flex: none; margin: 1px 0 0; accent-color: #246948; }
+.service-switches input:disabled { cursor: not-allowed; opacity: .5; }
+.service-switches label:has(input:disabled) { color: #878c86; cursor: not-allowed; }
+.service-switches span { min-width: 0; display: grid; gap: 2px; }
+.service-switches strong { overflow-wrap: anywhere; font-size: 10px; line-height: 1.25; }
+.service-switches small { color: var(--ink-soft); font-size: 9px; line-height: 1.25; }
+.service-config-savebar { z-index: 2; }
+
 @media (max-width: 1180px) {
   .inline-create.shift-create { grid-template-columns: repeat(3, minmax(150px, 1fr)); }
   .employee-row, .shift-row, .table-config-row, .area-config-row, .product-row {
@@ -188,6 +315,7 @@
   .routing-toolbar { grid-template-columns: 1fr; }
   .workstation-routing-grid { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
   .role-policy-summary, .role-limit-grid { grid-template-columns: repeat(3, minmax(140px, 1fr)); }
+  .service-config-list { grid-template-columns: 1fr; }
   .master-row .icon-button { align-self: end; }
 }
 
@@ -199,9 +327,27 @@
   .routing-create, .skill-row, .workstation-summary, .workstation-routing-grid, .role-policy-summary, .role-limit-grid { grid-template-columns: 1fr; }
   .routing-savebar { align-items: stretch; flex-direction: column; }
   .routing-savebar .primary-button { width: 100%; }
+  .service-config-intro { align-items: start; flex-direction: column; gap: 8px; }
+  .workflow-level-guide { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .workflow-level-guide > div:nth-child(2) { border-right: 0; }
+  .workflow-level-guide > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+  .service-config-card { grid-template-columns: 1fr; gap: 9px; padding: 10px; }
+  .service-config-identity { grid-template-columns: 34px minmax(0, 1fr) auto; }
+  .service-risk-lock { grid-column: auto; justify-self: end; }
+  .service-config-controls { grid-template-columns: minmax(0, 1fr) 88px; }
+  .service-switches { grid-column: 1 / -1; }
+  .service-config-savebar { align-items: stretch; flex-direction: column; }
+  .service-config-savebar .primary-button { width: 100%; }
   .inline-create .primary-button { width: 100%; }
   .binary-field { justify-items: start; }
   .master-row .icon-button { width: 100%; }
+}
+
+@media (max-width: 430px) {
+  .service-config-controls { grid-template-columns: 1fr; }
+  .service-switches { grid-column: 1; grid-template-columns: 1fr; }
+  .service-switches > label { min-height: 44px; }
+  .service-risk-lock { grid-column: 1 / -1; justify-self: start; }
 }
 .employee-access-details { min-width: 0; align-self: stretch; border: 1px solid var(--line); border-radius: 6px; background: #f7f8f5; }
 .employee-access-details summary { min-height: 42px; display: grid; align-content: center; gap: 2px; padding: 5px 11px; cursor: pointer; font-size: 12px; font-weight: 750; white-space: nowrap; }

@@ -1,3 +1,5 @@
+BEGIN;
+
 ALTER TABLE mbox.reservations
   ADD COLUMN assignment_mode text NOT NULL DEFAULT 'direct'
     CHECK (assignment_mode IN ('direct', 'self_select')),
@@ -29,3 +31,5 @@ CREATE INDEX reservations_requested_table_schedule_idx
   )
   WHERE requested_table_id IS NOT NULL
     AND status NOT IN ('cancelled', 'no_show');
+
+COMMIT;

@@ -12,10 +12,12 @@ import {
 } from './task-queue'
 import type {
   Employee,
+  ManagerTaskActionInput,
   ServiceTask,
   ServiceTypeConfig,
   Table,
   TaskActionInput,
+  TaskTransferCandidate,
 } from '../shared/contracts'
 
 const statusLabels: Record<ServiceTask['status'], string> = {
@@ -43,9 +45,16 @@ interface TaskQueueProps {
   selectedTableId: string | null
   onClearTable: () => void
   onAction: (task: ServiceTask, action: TaskActionInput['action']) => Promise<void>
+  onManagerAction: (
+    task: ServiceTask,
+    action: ManagerTaskActionInput['action'],
+    targetEmployeeId?: string,
+  ) => Promise<void>
+  onLoadTransferCandidates: (task: ServiceTask) => Promise<TaskTransferCandidate[]>
   busyTaskIds: ReadonlySet<string>
   currentEmployeeId: string
   claimableTaskIds: ReadonlySet<string>
+  canManageTasks: boolean
   compact?: boolean
   focusTaskId?: string | null
   focusQuery?: string | null
@@ -61,9 +70,12 @@ export function TaskQueue({
   selectedTableId,
   onClearTable,
   onAction,
+  onManagerAction,
+  onLoadTransferCandidates,
   busyTaskIds,
   currentEmployeeId,
   claimableTaskIds,
+  canManageTasks,
   compact = false,
   focusTaskId = null,
   focusQuery = null,
@@ -72,6 +84,10 @@ export function TaskQueue({
 }: TaskQueueProps) {
   const [visibleCount, setVisibleCount] = useState(12)
   const [pendingTaskIds, setPendingTaskIds] = useState<Set<string>>(() => new Set())
+  const [managerTaskId, setManagerTaskId] = useState<string | null>(null)
+  const [transferTaskId, setTransferTaskId] = useState<string | null>(null)
+  const [transferCandidates, setTransferCandidates] = useState<TaskTransferCandidate[]>([])
+  const [selectedTransferEmployeeId, setSelectedTransferEmployeeId] = useState('')
   const [busyMode, setBusyMode] = useState(() => (
     typeof window !== 'undefined' && window.localStorage.getItem('mbox-staff-busy-mode') === '1'
   ))
@@ -122,6 +138,45 @@ export function TaskQueue({
     setPendingTaskIds((current) => new Set(current).add(task.id))
     try {
       await onAction(task, action)
+    } finally {
+      setPendingTaskIds((current) => {
+        const next = new Set(current)
+        next.delete(task.id)
+        return next
+      })
+    }
+  }
+
+  async function runManagerAction(
+    task: ServiceTask,
+    action: ManagerTaskActionInput['action'],
+    targetEmployeeId?: string,
+  ) {
+    setPendingTaskIds((current) => new Set(current).add(task.id))
+    try {
+      await onManagerAction(task, action, targetEmployeeId)
+      setManagerTaskId(null)
+      setTransferTaskId(null)
+      setTransferCandidates([])
+      setSelectedTransferEmployeeId('')
+    } finally {
+      setPendingTaskIds((current) => {
+        const next = new Set(current)
+        next.delete(task.id)
+        return next
+      })
+    }
+  }
+
+  async function openTransfer(task: ServiceTask) {
+    setTransferTaskId(task.id)
+    setTransferCandidates([])
+    setSelectedTransferEmployeeId('')
+    setPendingTaskIds((current) => new Set(current).add(task.id))
+    try {
+      const candidates = await onLoadTransferCandidates(task)
+      setTransferCandidates(candidates)
+      setSelectedTransferEmployeeId(candidates[0]?.employeeId ?? '')
     } finally {
       setPendingTaskIds((current) => {
         const next = new Set(current)
@@ -189,6 +244,14 @@ export function TaskQueue({
           const actionMode = taskQueueActionMode(task, serviceType, currentEmployeeId, claimableTaskIds.has(task.id))
           const repeatSummary = taskRepeatSummary(task)
           const actionBusy = busyTaskIds.has(task.id) || pendingTaskIds.has(task.id)
+          const isOwnTask = task.ownerId === currentEmployeeId
+          const canSuperviseTask = canManageTasks && !isOwnTask
+          const visibleActionMode = canSuperviseTask ? null : actionMode
+          const responsibilityLabel = isOwnTask
+            ? '我的任务'
+            : task.ownerId
+              ? `他人任务 · ${owner?.displayName ?? '待确认'}负责`
+              : '待接管'
 
           return (
             <article
@@ -204,9 +267,12 @@ export function TaskQueue({
                 <div className="task-item__identity">
                   <div className="task-title-row">
                     <strong>{serviceType.name}</strong>
-                    {workflowLevel !== 'L1' && (
-                      <span className={`status-tag status-${task.status}`}>{fulfillmentDelivery && task.status === 'arrived' ? '配送中' : statusLabels[task.status]}</span>
-                    )}
+                    <div className="task-title-tags">
+                      {canManageTasks && <span className={`responsibility-tag ${isOwnTask ? 'is-own' : task.ownerId ? 'is-others' : 'is-unowned'}`}>{responsibilityLabel}</span>}
+                      {workflowLevel !== 'L1' && (
+                        <span className={`status-tag status-${task.status}`}>{fulfillmentDelivery && task.status === 'arrived' ? '配送中' : statusLabels[task.status]}</span>
+                      )}
+                    </div>
                   </div>
                   <div className="task-meta">
                     <span><MapPin size={14} />{table.displayName}</span>
@@ -228,7 +294,7 @@ export function TaskQueue({
               )}
 
               <div className="task-actions">
-                {actionMode === 'quick-complete' && (
+                {visibleActionMode === 'quick-complete' && (
                   <button
                     className="primary-button task-action-button"
                     disabled={actionBusy}
@@ -237,33 +303,97 @@ export function TaskQueue({
                     <CheckCheck size={17} />{actionBusy ? '正在提交…' : fulfillmentDelivery ? '已送达' : '已处理'}
                   </button>
                 )}
-                {workflowLevel === 'L2' && actionMode === 'accept' && (
+                {workflowLevel === 'L2' && visibleActionMode === 'accept' && (
                   <button className="primary-button task-action-button" disabled={actionBusy} onClick={() => void runAction(task, 'accept')}>
                     <Check size={17} />{actionBusy ? '正在提交…' : acceptMode === 'claim' ? '我来处理' : '开始处理'}
                   </button>
                 )}
-                {workflowLevel === 'L2' && actionMode === 'complete' && (
+                {workflowLevel === 'L2' && visibleActionMode === 'complete' && (
                   <button className="primary-button task-action-button" disabled={actionBusy} onClick={() => void runAction(task, 'complete')}>
                     <CheckCheck size={17} />{actionBusy ? '正在提交…' : '完成'}
                   </button>
                 )}
-                {workflowLevel === 'L3' && actionMode === 'accept' && (
+                {workflowLevel === 'L3' && visibleActionMode === 'accept' && (
                   <button className="primary-button task-action-button" disabled={actionBusy} onClick={() => void runAction(task, 'accept')}>
                     <Check size={17} />{actionBusy ? '正在提交…' : acceptMode === 'claim' ? '认领并接单' : fulfillmentDelivery ? '接取送任务' : '接单'}
                   </button>
                 )}
-                {workflowLevel === 'L3' && actionMode === 'arrive' && (
+                {workflowLevel === 'L3' && visibleActionMode === 'arrive' && (
                   <button className="primary-button task-action-button" disabled={actionBusy} onClick={() => void runAction(task, 'arrive')}>
                     <Navigation size={17} />{actionBusy ? '正在提交…' : fulfillmentDelivery ? '确认取货' : '已到桌'}
                   </button>
                 )}
-                {workflowLevel === 'L3' && actionMode === 'complete' && (
+                {workflowLevel === 'L3' && visibleActionMode === 'complete' && (
                   <button className="primary-button task-action-button" disabled={actionBusy} onClick={() => void runAction(task, 'complete')}>
                     <CheckCheck size={17} />{actionBusy ? '正在提交…' : fulfillmentDelivery ? '确认送达' : '完成服务'}
                   </button>
                 )}
+                {canSuperviseTask && (
+                  <button
+                    className="secondary-button task-action-button"
+                    disabled={actionBusy}
+                    type="button"
+                    aria-expanded={managerTaskId === task.id}
+                    onClick={() => {
+                      const nextTaskId = managerTaskId === task.id ? null : task.id
+                      setManagerTaskId(nextTaskId)
+                      setTransferTaskId(null)
+                      setTransferCandidates([])
+                      setSelectedTransferEmployeeId('')
+                    }}
+                  >
+                    <Focus size={17} />处理
+                  </button>
+                )}
                 {workflowLevel !== 'L1' && <span className="task-source">{task.source === 'guest' ? '顾客呼叫' : task.source === 'system' ? '系统触发' : '员工创建'}</span>}
               </div>
+              {canSuperviseTask && managerTaskId === task.id && (
+                <div className="manager-task-actions">
+                  <strong>店长处理</strong>
+                  <div className="manager-task-actions__buttons">
+                    <button type="button" disabled={actionBusy} onClick={() => void runManagerAction(task, 'assist_complete')}>
+                      <CheckCheck size={16} />协助完成
+                    </button>
+                    <button type="button" disabled={actionBusy} onClick={() => void runManagerAction(task, 'takeover')}>
+                      <UserRound size={16} />店长接管
+                    </button>
+                    <button type="button" disabled={actionBusy} onClick={() => void openTransfer(task)}>
+                      <RotateCcw size={16} />转派他人
+                    </button>
+                  </div>
+                  {transferTaskId === task.id && (
+                    <div className="manager-task-transfer">
+                      {transferCandidates.length > 0 ? (
+                        <>
+                          <label>
+                            <span>转派给</span>
+                            <select
+                              value={selectedTransferEmployeeId}
+                              onChange={(event) => setSelectedTransferEmployeeId(event.target.value)}
+                            >
+                              {transferCandidates.map((candidate) => (
+                                <option key={candidate.employeeId} value={candidate.employeeId}>
+                                  {candidate.displayName} · 当前{candidate.load}/{candidate.capacity}项
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <button
+                            className="primary-button"
+                            type="button"
+                            disabled={actionBusy || !selectedTransferEmployeeId}
+                            onClick={() => void runManagerAction(task, 'transfer', selectedTransferEmployeeId)}
+                          >
+                            确认转派
+                          </button>
+                        </>
+                      ) : (
+                        <span>{actionBusy ? '正在查找合适人员…' : '当前没有可接收此任务的第三人'}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </article>
           )
         })}

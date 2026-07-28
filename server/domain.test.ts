@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { CreateTaskInput } from '../src/shared/contracts.js'
 import {
+  applyManagerTaskAction,
   applyTaskAction,
   canEmployeeClaimTask,
   createServiceTask,
   escalateDueTasks,
+  managerTaskTransferCandidates,
   publishConfig,
   saveConfigDraft,
 } from './domain.js'
@@ -74,6 +76,70 @@ describe('service task domain', () => {
         capacity: 3,
       },
     })
+  })
+
+  it('lets a manager assist another owner without rewriting responsibility history', () => {
+    const state = createSeedState()
+    const task = createServiceTask(state, taskInput({ idempotencyKey: 'manager-assist-source' }))
+    const originalOwnerId = task.ownerId
+
+    const completed = applyManagerTaskAction(state, task.id, {
+      action: 'assist_complete',
+      actorId: 'emp-chen',
+      targetEmployeeId: null,
+      note: '',
+      idempotencyKey: 'manager-assist-action',
+    })
+
+    expect(completed.ownerId).toBe(originalOwnerId)
+    expect(completed.status).toBe('confirmed')
+    expect(completed.completedBy).toBe('emp-chen')
+    expect(completed.resolution).toBe('店长协助完成')
+    expect(state.taskEvents.some((event) => event.taskId === task.id && event.type === 'task.manager_assist_completed.v1')).toBe(true)
+  })
+
+  it('lets a manager take over the same task without creating a replacement', () => {
+    const state = createSeedState()
+    const task = createServiceTask(state, taskInput({ idempotencyKey: 'manager-takeover-source' }))
+
+    const takenOver = applyManagerTaskAction(state, task.id, {
+      action: 'takeover',
+      actorId: 'emp-chen',
+      targetEmployeeId: null,
+      note: '',
+      idempotencyKey: 'manager-takeover-action',
+    })
+
+    expect(takenOver.id).toBe(task.id)
+    expect(takenOver.ownerId).toBe('emp-chen')
+    expect(takenOver.status).toBe('accepted')
+    expect(state.taskEvents.find((event) => event.taskId === task.id && event.type === 'task.manager_taken_over.v1')?.payload)
+      .toMatchObject({ previousOwnerId: 'emp-lin', ownerId: 'emp-chen' })
+  })
+
+  it('transfers to a suitable third employee and preserves the task identity and request record', () => {
+    const state = createSeedState()
+    const task = createServiceTask(state, taskInput({ idempotencyKey: 'manager-transfer-source' }))
+    const originalWarningAt = task.warningAt
+    const candidate = managerTaskTransferCandidates(state, task, 'emp-chen')
+      .find((item) => item.employeeId === 'emp-jie')
+    expect(candidate).toBeDefined()
+
+    const transferred = applyManagerTaskAction(state, task.id, {
+      action: 'transfer',
+      actorId: 'emp-chen',
+      targetEmployeeId: 'emp-jie',
+      note: '',
+      idempotencyKey: 'manager-transfer-action',
+    })
+
+    expect(transferred.id).toBe(task.id)
+    expect(transferred.ownerId).toBe('emp-jie')
+    expect(transferred.status).toBe('pending')
+    expect(transferred.requestCount).toBe(1)
+    expect(transferred.warningAt).toBe(originalWarningAt)
+    expect(state.taskEvents.find((event) => event.taskId === task.id && event.type === 'task.manager_transferred.v1')?.payload)
+      .toMatchObject({ previousOwnerId: 'emp-lin', ownerId: 'emp-jie' })
   })
 
   it('honors an explicitly targeted eligible employee ahead of automatic balancing', () => {

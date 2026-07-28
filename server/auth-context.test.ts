@@ -32,6 +32,7 @@ describe('request authentication boundary', () => {
     app.get('/api/protected', async (request) => request.mboxActor)
     app.post('/api/guest/tasks', async () => ({ accepted: true }))
     app.get('/api/public/reservations', async () => ({ accepted: true }))
+    app.get('/api/public/reservation-availability', async () => ({ accepted: true }))
     app.put('/api/public/reservations/reservation-1', async () => ({ accepted: true }))
     app.delete('/api/public/reservations/reservation-1', async () => ({ accepted: true }))
 
@@ -42,6 +43,7 @@ describe('request authentication boundary', () => {
     } })).json()).toMatchObject({ actorId: 'emp-chen', authenticatedBy: 'local_header', sessionId: null })
     expect((await app.inject({ method: 'POST', url: '/api/guest/tasks', payload: {} })).statusCode).toBe(200)
     expect((await app.inject({ method: 'GET', url: '/api/public/reservations' })).statusCode).toBe(200)
+    expect((await app.inject({ method: 'GET', url: '/api/public/reservation-availability?scheduledAt=2030-07-15T20%3A30%3A00%2B08%3A00&partySize=2' })).statusCode).toBe(200)
     expect((await app.inject({ method: 'PUT', url: '/api/public/reservations/reservation-1' })).statusCode).toBe(200)
     expect((await app.inject({ method: 'DELETE', url: '/api/public/reservations/reservation-1' })).statusCode).toBe(200)
     await app.close()

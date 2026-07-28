@@ -688,6 +688,24 @@ export const taskActionSchema = z.object({
 
 export type TaskActionInput = z.infer<typeof taskActionSchema>
 
+export const managerTaskActionSchema = z.object({
+  action: z.enum(['assist_complete', 'takeover', 'transfer']),
+  actorId: z.string().trim().min(1),
+  targetEmployeeId: z.string().trim().min(1).nullable().default(null),
+  note: z.string().trim().max(300).default(''),
+  idempotencyKey: z.string().trim().min(8).max(128),
+})
+
+export type ManagerTaskActionInput = z.infer<typeof managerTaskActionSchema>
+
+export interface TaskTransferCandidate {
+  employeeId: string
+  displayName: string
+  load: number
+  capacity: number
+  areaMatched: boolean
+}
+
 const slaSchema = z
   .object({
     warningSeconds: z.number().int().min(5).max(900),

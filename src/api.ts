@@ -7,6 +7,7 @@ import type {
   CreateTaskInput,
   Employee,
   EmployeeWriteInput,
+  ManagerTaskActionInput,
   MenuProduct,
   ProductWriteInput,
   ServiceTask,
@@ -23,6 +24,7 @@ import type {
   TransferTableSessionInput,
   TableWriteInput,
   TaskActionInput,
+  TaskTransferCandidate,
   SalesAttributionInput,
   SalesAttributionRecord,
   WalkInOpenInput,
@@ -409,6 +411,24 @@ export async function actOnTask(
     await queueTaskAction(taskId, actionInput)
     return null
   }
+}
+
+export function getTaskTransferCandidates(taskId: string) {
+  return request<TaskTransferCandidate[]>(`/api/tasks/${taskId}/transfer-candidates`)
+}
+
+export function actOnTaskAsManager(
+  taskId: string,
+  input: Omit<ManagerTaskActionInput, 'idempotencyKey'> & { idempotencyKey?: string },
+) {
+  const actionInput: ManagerTaskActionInput = {
+    ...input,
+    idempotencyKey: input.idempotencyKey ?? `manager-task-action-${crypto.randomUUID()}`,
+  }
+  return request<ServiceTask>(`/api/tasks/${taskId}/manager-actions`, {
+    method: 'POST',
+    body: JSON.stringify(actionInput),
+  })
 }
 
 export function replayQueuedTaskAction(item: QueuedTaskAction) {

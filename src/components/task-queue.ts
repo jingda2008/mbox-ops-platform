@@ -75,6 +75,7 @@ export function taskQueueActionMode(
   if (['pending', 'escalated', 'reopened'].includes(task.status)) {
     return taskAcceptMode(task, currentEmployeeId, isClaimable) ? 'accept' : null
   }
+  if (task.ownerId !== currentEmployeeId) return null
   if (workflowLevel === 'L2') return ['accepted', 'arrived'].includes(task.status) ? 'complete' : null
   if (task.status === 'accepted') return 'arrive'
   if (task.status === 'arrived') return 'complete'

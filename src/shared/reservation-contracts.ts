@@ -15,6 +15,7 @@ export type ReservationStatus =
   | 'no_show'
 
 export type ReservationOccasionCode = 'birthday' | 'anniversary' | 'business' | 'other'
+export type ReservationAssignmentMode = 'direct' | 'self_select'
 
 export type ReservationDepositStatus =
   | 'not_required'
@@ -141,6 +142,9 @@ export interface Reservation extends ReservationScope {
   contactReference: string
   sourceCode: string
   partySize: number
+  assignmentMode: ReservationAssignmentMode
+  requestedTableId: string | null
+  requestedTableCode: string | null
   areaPreferenceCode: string | null
   occasionCode: ReservationOccasionCode | null
   occasionNote: string
@@ -221,6 +225,9 @@ export interface CreateReservationCommand {
   contactReference: string
   sourceCode: string
   partySize: number
+  assignmentMode?: ReservationAssignmentMode
+  requestedTableId?: string
+  requestedTableCode?: string
   areaPreferenceCode?: string
   occasionCode?: ReservationOccasionCode
   occasionNote?: string
@@ -243,6 +250,9 @@ export interface UpdateReservationCommand extends ReservationActionCommand {
   customerName?: string
   contactReference?: string
   partySize: number
+  assignmentMode?: ReservationAssignmentMode
+  requestedTableId?: string
+  requestedTableCode?: string
   scheduledAt: string
   areaPreferenceCode?: string
   occasionCode?: ReservationOccasionCode | null

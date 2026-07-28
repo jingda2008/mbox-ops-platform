@@ -45,10 +45,13 @@ test.describe.serial('跨客户端经营流转', () => {
     const reservationPage = await guestContext.newPage()
     await reservationPage.goto('/reserve')
     await expect(reservationPage.getByRole('heading', { name: '今晚，给你留个好位置' })).toBeVisible()
+    expect(await reservationPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    await reservationPage.getByRole('button', { name: '直接预约' }).click()
+    await expect(reservationPage.getByRole('heading', { name: '确认预约安排' })).toBeVisible()
     await reservationPage.getByLabel('怎么称呼你').fill(customerName)
     await reservationPage.getByLabel('手机号').fill('13800138000')
     await reservationPage.getByRole('button', { name: '提交预约' }).click()
-    await expect(reservationPage.getByRole('status')).toContainText('收到啦')
+    await expect(reservationPage.getByRole('status')).toContainText('预约申请已收到')
     await expect(reservationPage.locator('.public-reservation-history article')).toHaveCount(1)
     await expect(reservationPage.locator('.public-reservation-history article')).toContainText('等门店确认')
 
@@ -62,6 +65,47 @@ test.describe.serial('跨客户端经营流转', () => {
     await staffPage.getByRole('button', { name: '未来7个营业日' }).click()
     await staffPage.getByLabel('搜索预约').fill(customerName)
     await expect(staffPage.getByText(customerName)).toBeVisible()
+
+    await staffContext.close()
+    await guestContext.close()
+  })
+
+  test('客人自选座位后后台显示桌号且同一时段不能重复预约', async ({ browser }) => {
+    const customerName = `自选桌客人${Date.now().toString().slice(-6)}`
+    const guestContext = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      locale: 'zh-CN',
+      timezoneId: 'Asia/Shanghai',
+    })
+    const reservationPage = await guestContext.newPage()
+    await reservationPage.goto('/reserve')
+    await reservationPage.getByRole('button', { name: '座位自选' }).click()
+    await expect(reservationPage.getByRole('heading', { name: '选择喜欢的位置' })).toBeVisible()
+    expect(await reservationPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    await reservationPage.getByRole('tab', { name: '室内中区' }).click()
+    await expect(reservationPage.getByRole('button', { name: 'W01 可以预约' })).toBeVisible()
+    await expect(reservationPage.getByRole('button', { name: 'VIP1 可以预约' })).toHaveCount(0)
+    await reservationPage.getByRole('tab', { name: '舞台前' }).click()
+    const vip1 = reservationPage.getByRole('button', { name: 'VIP1 可以预约' })
+    await vip1.click()
+    await reservationPage.getByRole('button', { name: '选择VIP1，下一步' }).click()
+    await reservationPage.getByLabel('怎么称呼你').fill(customerName)
+    await reservationPage.getByLabel('手机号').fill('13900139000')
+    await reservationPage.getByRole('button', { name: '提交预约' }).click()
+    await expect(reservationPage.getByRole('status')).toContainText('VIP1预约申请')
+    await expect(reservationPage.locator('.public-reservation-history article')).toContainText('VIP1')
+
+    const staffContext = await browser.newContext({ locale: 'zh-CN', timezoneId: 'Asia/Shanghai' })
+    const staffPage = await staffContext.newPage()
+    await useStaffIdentity(staffPage, 'emp-chen', '李艳')
+    await staffPage.goto('/')
+    await staffPage.getByTitle('打开导航').click()
+    await staffPage.locator('.sidebar nav').getByRole('button', { name: '预约' }).click()
+    await staffPage.getByRole('button', { name: '未来7个营业日' }).click()
+    await staffPage.getByLabel('搜索预约').fill(customerName)
+    const reservation = staffPage.locator('.reservation-row').filter({ hasText: customerName })
+    await expect(reservation).toContainText('VIP1')
+    await expect(reservation).toContainText('客人自选')
 
     await staffContext.close()
     await guestContext.close()

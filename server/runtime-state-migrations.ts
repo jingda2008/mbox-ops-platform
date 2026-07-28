@@ -647,6 +647,9 @@ export function migrateRuntimeState(state: RuntimeState): RuntimeState {
     }
     migrated.reservationState.reservations = migrated.reservationState.reservations.map((reservation) => ({
       ...reservation,
+      assignmentMode: reservation.assignmentMode ?? 'direct',
+      requestedTableId: reservation.requestedTableId ?? null,
+      requestedTableCode: reservation.requestedTableCode ?? null,
       expectedArrivalAt: reservation.expectedArrivalAt ?? null,
       lateContactReference: reservation.lateContactReference ?? null,
       holdStatus: reservation.holdStatus ?? 'none',

@@ -5,6 +5,7 @@ import type { RuntimeRepository, RuntimeRepositoryHealth } from './repository.js
 import { createSeedState } from './seed.js'
 import { registerPublicReservationRoutes, signPublicReservationSession } from './public-reservation-api.js'
 import { MemoryRateLimitStore, type RateLimitStore } from './rate-limit.js'
+import { applyMboxVenueLayout } from './venue-layout.js'
 
 const NOW = Date.parse('2030-07-14T10:00:00.000Z')
 const SECRET = 'r'.repeat(32)
@@ -91,6 +92,104 @@ describe('public reservation commercial API', () => {
     expect(own.json().reservations).toHaveLength(1)
     expect(other.json().reservations).toEqual([])
     expect(wrongStore.statusCode).toBe(403)
+  })
+
+  it('publishes live venue availability and prevents two guests from reserving the same table period', async () => {
+    const { app, repository } = await fixture()
+    apps.push(app)
+    applyMboxVenueLayout(repository.state)
+    const scheduledAt = '2030-07-15T12:30:00.000Z'
+    const availability = await app.inject({
+      method: 'GET',
+      url: `/api/public/reservation-availability?scheduledAt=${encodeURIComponent(scheduledAt)}&partySize=4`,
+      headers: headers('seat-browser-a'),
+    })
+    expect(availability.statusCode).toBe(200)
+    expect(availability.json().tables).toHaveLength(61)
+    expect(availability.json().tables.find((table: { code: string }) => table.code === 'VIP1')).toMatchObject({
+      status: 'available',
+      areaPreferenceCode: 'booth',
+    })
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/public/reservations',
+      headers: headers('seat-browser-a'),
+      payload: createInput({
+        assignmentMode: 'self_select',
+        requestedTableCode: 'VIP1',
+        idempotencyKey: 'public-reservation-seat-vip1-a',
+      }),
+    })
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/public/reservations',
+      headers: headers('seat-browser-b'),
+      payload: createInput({
+        customerName: 'Beth',
+        phone: '13900139000',
+        assignmentMode: 'self_select',
+        requestedTableCode: 'VIP1',
+        idempotencyKey: 'public-reservation-seat-vip1-b',
+      }),
+    })
+
+    expect(first.statusCode).toBe(201)
+    expect(first.json()).toMatchObject({
+      assignmentMode: 'self_select',
+      requestedTableCode: 'VIP1',
+      tableCode: null,
+    })
+    expect(repository.state.reservationState?.reservations[0]).toMatchObject({
+      assignmentMode: 'self_select',
+      requestedTableId: 'table-vip1',
+      requestedTableCode: 'VIP1',
+      tableId: null,
+    })
+    expect(second.statusCode).toBe(400)
+    expect(second.json().message).toContain('VIP1该时段已有预约')
+  })
+
+  it('releases a self-selected table after cancellation while direct reservations remain unbound', async () => {
+    const { app } = await fixture()
+    apps.push(app)
+    const direct = await app.inject({
+      method: 'POST',
+      url: '/api/public/reservations',
+      headers: headers('direct-browser'),
+      payload: createInput({
+        assignmentMode: 'direct',
+        areaPreferenceCode: undefined,
+        idempotencyKey: 'public-reservation-direct-mode',
+      }),
+    })
+    expect(direct.statusCode).toBe(201)
+    expect(direct.json()).toMatchObject({ assignmentMode: 'direct', requestedTableCode: null })
+
+    const selected = await app.inject({
+      method: 'POST',
+      url: '/api/public/reservations',
+      headers: headers('release-browser'),
+      payload: createInput({
+        phone: '13900139000',
+        assignmentMode: 'self_select',
+        requestedTableCode: 'L01',
+        idempotencyKey: 'public-reservation-release-l01',
+      }),
+    })
+    expect(selected.statusCode).toBe(201)
+    await app.inject({
+      method: 'DELETE',
+      url: `/api/public/reservations/${selected.json().id}`,
+      headers: headers('release-browser'),
+      payload: { reason: '行程变化', idempotencyKey: 'public-reservation-release-cancel' },
+    })
+    const availability = await app.inject({
+      method: 'GET',
+      url: `/api/public/reservation-availability?scheduledAt=${encodeURIComponent('2030-07-15T12:30:00.000Z')}&partySize=2`,
+      headers: headers('release-browser'),
+    })
+    expect(availability.json().tables.find((table: { code: string }) => table.code === 'L01')).toMatchObject({ status: 'available' })
   })
 
   it('accepts explicit international E.164 phone numbers without treating them as mainland numbers', async () => {

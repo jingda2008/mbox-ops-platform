@@ -1,6 +1,7 @@
 import type {
   PublicReservationCreateInput,
   PublicReservationCancelInput,
+  PublicReservationAvailabilityResponse,
   PublicReservationListResponse,
   PublicReservationSessionResponse,
   PublicReservationUpdateInput,
@@ -49,6 +50,11 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
 
 export function listPublicReservations() {
   return request<PublicReservationListResponse>('/api/public/reservations')
+}
+
+export function getPublicReservationAvailability(scheduledAt: string, partySize: number) {
+  const query = new URLSearchParams({ scheduledAt, partySize: String(partySize) })
+  return request<PublicReservationAvailabilityResponse>(`/api/public/reservation-availability?${query}`)
 }
 
 export function createPublicReservation(input: PublicReservationCreateInput) {

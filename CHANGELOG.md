@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.55 - 2026-07-29
+
+- Replaced the public reservation form with a mobile-first three-step flow for date and party size, direct store assignment or self-selected seating, and final contact confirmation.
+- Connected self-selected reservations to the official 61-table venue directory with live availability, occupied-table status, server-side collision protection and table release after cancellation.
+- Added focused stage, indoor and outdoor map views, visible deposit and minimum-spend information, and fixed bottom actions without horizontal mobile overflow.
+- Added manager task supervision actions for assisted completion, takeover and safe reassignment while preserving the original task, responsibility history and immutable audit events.
+- Added database migration 021 for reservation assignment mode and requested-table projections, plus public-access, cross-client and manager-workflow regression coverage.
+
 ## 1.0.0-rc.54 - 2026-07-28
 
 - Moved walk-in opening controls into the selected table area so employees choose party size and sales ownership without leaving the floor context.

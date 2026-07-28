@@ -118,7 +118,8 @@ function isDevelopmentPath(path: string) {
 function isAnonymousGuestRequest(request: FastifyRequest) {
   return request.url === '/api/guest' || request.url.startsWith('/api/guest/') || request.url.startsWith('/api/guest?') ||
     request.url === '/api/wechat' || request.url.startsWith('/api/wechat/') || request.url.startsWith('/api/wechat?') ||
-    request.url === '/api/public/reservation-session' || request.url === '/api/public/reservations' ||
+    request.url === '/api/public/reservation-session' || request.url === '/api/public/reservation-availability' ||
+    request.url.startsWith('/api/public/reservation-availability?') || request.url === '/api/public/reservations' ||
     request.url.startsWith('/api/public/reservations?') || request.url.startsWith('/api/public/reservations/')
 }
 

@@ -11,6 +11,10 @@ import {
   reservationDepositRule,
   updateReservationDetails,
 } from './reservation-domain.js'
+import {
+  assertPublicRequestedTableAvailable,
+  publicTableAvailability,
+} from './public-reservation-availability.js'
 import { mutateReservationState, reservationsFor } from './reservation-api.js'
 import type { RuntimeRepository } from './repository.js'
 import type { RateLimitStore } from './rate-limit.js'
@@ -29,10 +33,16 @@ const contactFields = {
   wechatId: z.string().trim().min(4).max(128).optional(),
 }
 
+const assignmentFields = {
+  assignmentMode: z.enum(['direct', 'self_select']).optional(),
+  requestedTableCode: z.string().trim().min(1).max(32).optional(),
+}
+
 const createSchema = z.object({
   customerName: z.string().trim().min(1).max(100),
   ...contactFields,
   partySize: z.number().int().positive(),
+  ...assignmentFields,
   areaPreferenceCode: z.string().trim().min(1).max(64).optional(),
   occasionCode: z.enum(['birthday', 'anniversary', 'business', 'other']).optional(),
   occasionNote: z.string().trim().max(500).optional(),
@@ -44,6 +54,7 @@ const updateSchema = z.object({
   customerName: z.string().trim().min(1).max(100),
   ...contactFields,
   partySize: z.number().int().positive(),
+  ...assignmentFields,
   areaPreferenceCode: z.string().trim().min(1).max(64).optional(),
   occasionCode: z.enum(['birthday', 'anniversary', 'business', 'other']).nullable().optional(),
   occasionNote: z.string().trim().max(500).optional(),
@@ -57,6 +68,10 @@ const cancelSchema = z.object({
 }).strict()
 
 const reservationParamsSchema = z.object({ reservationId: z.string().uuid() }).strict()
+const availabilityQuerySchema = z.object({
+  scheduledAt: z.string().datetime({ offset: true }),
+  partySize: z.coerce.number().int().positive().max(100),
+}).strict()
 
 interface PublicReservationClaims {
   version: 1
@@ -151,6 +166,8 @@ function publicReservation(reservation: Reservation) {
     id: reservation.id,
     customerName: reservation.customerName,
     partySize: reservation.partySize,
+    assignmentMode: reservation.assignmentMode,
+    requestedTableCode: reservation.requestedTableCode,
     areaPreferenceCode: reservation.areaPreferenceCode,
     occasionCode: reservation.occasionCode,
     occasionNote: reservation.occasionNote,
@@ -279,6 +296,31 @@ export function registerPublicReservationRoutes(
     }
   })
 
+  app.get('/api/public/reservation-availability', async (request, reply) => {
+    const identity = await authenticate(request, reply)
+    if (!identity) return
+    const parsed = availabilityQuerySchema.safeParse(request.query)
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 'PUBLIC_RESERVATION_AVAILABILITY_INPUT_INVALID', message: '请选择有效的日期、时间和人数' })
+    }
+    const runtime = await repository.read() as RuntimeStateWithReservations
+    const domain = reservationsFor(runtime)
+    try {
+      assertPublicReservationAvailability(domain, {
+        scheduledAt: parsed.data.scheduledAt,
+        occurredAt: new Date(now()).toISOString(),
+        contactReference: `availability:${identity.customerId}`,
+      })
+      return {
+        scheduledAt: parsed.data.scheduledAt,
+        partySize: parsed.data.partySize,
+        tables: publicTableAvailability(runtime, domain, parsed.data.scheduledAt),
+      }
+    } catch (error) {
+      return publicMutationError(reply, error)
+    }
+  })
+
   app.post('/api/public/reservations', async (request, reply) => {
     const identity = await authenticate(request, reply)
     if (!identity) return
@@ -326,14 +368,20 @@ export function registerPublicReservationRoutes(
           contactReference: contact,
         })
       }
+      const requestedTable = input.assignmentMode === 'self_select'
+        ? assertPublicRequestedTableAvailable(runtime, domain, input.scheduledAt, input.requestedTableCode ?? '')
+        : null
       const reservation = createReservation(domain, {
         ...input,
         reservationId,
         customerReference: reference,
         contactReference: contact,
         sourceCode,
-        depositRequiredAmount: reservationDepositRule(domain.config, input.areaPreferenceCode).depositAmount,
-        depositCurrency: reservationDepositRule(domain.config, input.areaPreferenceCode).currency,
+        requestedTableId: requestedTable?.id,
+        requestedTableCode: requestedTable?.code,
+        areaPreferenceCode: requestedTable?.areaPreferenceCode ?? input.areaPreferenceCode,
+        depositRequiredAmount: reservationDepositRule(domain.config, requestedTable?.areaPreferenceCode ?? input.areaPreferenceCode).depositAmount,
+        depositCurrency: reservationDepositRule(domain.config, requestedTable?.areaPreferenceCode ?? input.areaPreferenceCode).currency,
         actorId: reference,
         occurredAt: new Date(current).toISOString(),
       })
@@ -372,6 +420,9 @@ export function registerPublicReservationRoutes(
           excludeReservationId: existing.id,
         })
       }
+      const requestedTable = parsed.data.assignmentMode === 'self_select'
+        ? assertPublicRequestedTableAvailable(runtime, domain, parsed.data.scheduledAt, parsed.data.requestedTableCode ?? '', existing.id)
+        : null
       return updateReservationDetails(domain, {
         reservationId: existing.id,
         actorId: actorReference,
@@ -380,8 +431,11 @@ export function registerPublicReservationRoutes(
         customerName: parsed.data.customerName,
         contactReference: contact,
         partySize: parsed.data.partySize,
+        assignmentMode: parsed.data.assignmentMode,
+        requestedTableId: requestedTable?.id,
+        requestedTableCode: requestedTable?.code,
         scheduledAt: parsed.data.scheduledAt,
-        areaPreferenceCode: parsed.data.areaPreferenceCode,
+        areaPreferenceCode: requestedTable?.areaPreferenceCode ?? parsed.data.areaPreferenceCode,
         occasionCode: parsed.data.occasionCode,
         occasionNote: parsed.data.occasionNote,
         reason: '客人在线修改预约',

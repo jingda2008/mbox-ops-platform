@@ -301,7 +301,7 @@ function weekday(date: string) {
   return new Date(`${date}T12:00:00.000Z`).getUTCDay()
 }
 
-function businessSlot(config: ReservationConfig, scheduledAt: string) {
+export function reservationBusinessSlot(config: ReservationConfig, scheduledAt: string) {
   assertTimestamp(scheduledAt, '预约时间')
   const local = zonedParts(scheduledAt, config.businessHours.timeZone)
   const opening = parseClock(config.businessHours.openingTime, '营业开始时间')
@@ -341,7 +341,7 @@ export function assertPublicReservationAvailability(state: ReservationState, inp
   if (scheduledAt < minimum || scheduledAt > maximum) {
     throw new Error(`请至少提前${config.publicRules.minimumLeadMinutes}分钟预约，最远可预约未来${config.publicRules.maximumAdvanceDays}天`)
   }
-  const target = businessSlot(config, input.scheduledAt)
+  const target = reservationBusinessSlot(config, input.scheduledAt)
   const dateOverride = config.capacity.dateOverrides.find((item) => item.date === target.businessDate)
   if (dateOverride && !dateOverride.enabled) throw new Error('所选日期暂停接受预约，换一天再来吧')
   const active = state.reservations.filter((reservation) =>
@@ -356,7 +356,7 @@ export function assertPublicReservationAvailability(state: ReservationState, inp
   if (duplicate) throw new Error('这个联系方式在相近时间已经有预约啦，可以在“我的预约”里修改')
 
   const placed = active.flatMap((reservation) => {
-    try { return [{ reservation, slot: businessSlot(config, reservation.scheduledAt) }] } catch { return [] }
+    try { return [{ reservation, slot: reservationBusinessSlot(config, reservation.scheduledAt) }] } catch { return [] }
   })
   const dailyCount = placed.filter((item) => item.slot.businessDate === target.businessDate).length
   const dailyCapacity = dateOverride?.totalCapacity ?? config.capacity.defaultDailyCapacity
@@ -481,6 +481,13 @@ export function createReservation(state: ReservationState, command: CreateReserv
   if (command.occasionCode && !state.config.occasions.some((item) => item.code === command.occasionCode && item.enabled)) {
     throw new Error('特殊场景未配置或已停用')
   }
+  const assignmentMode = command.assignmentMode ?? 'direct'
+  if (assignmentMode === 'self_select' && (!command.requestedTableId?.trim() || !command.requestedTableCode?.trim())) {
+    throw new Error('座位自选必须指定桌位')
+  }
+  if (assignmentMode === 'direct' && (command.requestedTableId || command.requestedTableCode)) {
+    throw new Error('直接预约不能预先绑定桌位')
+  }
   assertMoney(command.depositRequiredAmount, '订金金额', true)
   assertCurrency(command.depositCurrency)
 
@@ -495,6 +502,9 @@ export function createReservation(state: ReservationState, command: CreateReserv
       contactReference: command.contactReference,
       sourceCode: command.sourceCode,
       partySize: command.partySize,
+      assignmentMode,
+      requestedTableId: command.requestedTableId?.trim() || null,
+      requestedTableCode: command.requestedTableCode?.trim() || null,
       areaPreferenceCode: command.areaPreferenceCode?.trim() || null,
       occasionCode: command.occasionCode ?? null,
       occasionNote: command.occasionNote?.trim() ?? '',
@@ -540,6 +550,8 @@ export function createReservation(state: ReservationState, command: CreateReserv
     audit(state, reservation, 'reservation.requested.v1', command.actorId, command.occurredAt, null, null, null, {
       sourceCode: command.sourceCode,
       partySize: command.partySize,
+      assignmentMode,
+      requestedTableCode: command.requestedTableCode?.trim() || null,
       birthday: command.occasionCode === 'birthday',
     })
     return reservation
@@ -563,6 +575,15 @@ export function updateReservationDetails(state: ReservationState, command: Updat
   }
   return executeIdempotent(state, command.idempotencyKey, 'reservation.update_details', command, command.reservationId, () => {
     const reservation = findReservation(state, command.reservationId)
+    const assignmentMode = command.assignmentMode ?? reservation.assignmentMode
+    const requestedTableId = assignmentMode === 'self_select' ? command.requestedTableId ?? reservation.requestedTableId : null
+    const requestedTableCode = assignmentMode === 'self_select' ? command.requestedTableCode ?? reservation.requestedTableCode : null
+    if (assignmentMode === 'self_select' && (!requestedTableId?.trim() || !requestedTableCode?.trim())) {
+      throw new Error('座位自选必须指定桌位')
+    }
+    if (assignmentMode === 'direct' && (command.requestedTableId || command.requestedTableCode)) {
+      throw new Error('直接预约不能预先绑定桌位')
+    }
     if (!['requested', 'confirmed', 'arrived'].includes(reservation.status)) throw new Error('已入座或已结束预约不能修改人数和时间')
     const before = {
       customerName: reservation.customerName,
@@ -576,6 +597,9 @@ export function updateReservationDetails(state: ReservationState, command: Updat
     if (command.customerName !== undefined) reservation.customerName = command.customerName.trim()
     if (command.contactReference !== undefined) reservation.contactReference = command.contactReference.trim()
     reservation.partySize = command.partySize
+    reservation.assignmentMode = assignmentMode
+    reservation.requestedTableId = requestedTableId?.trim() || null
+    reservation.requestedTableCode = requestedTableCode?.trim() || null
     reservation.scheduledAt = command.scheduledAt
     reservation.areaPreferenceCode = command.areaPreferenceCode?.trim() || null
     if (command.occasionCode !== undefined) reservation.occasionCode = command.occasionCode
@@ -590,6 +614,8 @@ export function updateReservationDetails(state: ReservationState, command: Updat
       afterScheduledAt: reservation.scheduledAt,
       beforeAreaPreferenceCode: before.areaPreferenceCode,
       afterAreaPreferenceCode: reservation.areaPreferenceCode,
+      assignmentMode,
+      requestedTableCode: reservation.requestedTableCode,
       beforeOccasionCode: before.occasionCode,
       afterOccasionCode: reservation.occasionCode,
       occasionNoteChanged: before.occasionNote !== reservation.occasionNote,

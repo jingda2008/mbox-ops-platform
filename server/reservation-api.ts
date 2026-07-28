@@ -437,7 +437,6 @@ export function registerReservationRoutes(app: FastifyInstance, repository: Runt
               && (!entry.responseExpiresAt || Date.parse(entry.responseExpiresAt) >= Date.parse(command.occurredAt))
             ))
             if (activeWaitlistHold) throw new Error(`该桌已锁给候补客人${activeWaitlistHold.customerName}，请先释放候补锁桌`)
-            if (reservation.partySize > table.capacity) throw new Error(`到店人数超过桌台容量：${reservation.partySize}/${table.capacity}`)
             const primary = state.employees.find((employee) => employee.id === table.primaryEmployeeId && employee.status === 'active')
             if (!primary) throw new Error('桌台没有有效主服务员，不能安排入座')
             const activeShift = state.shiftAssignments.find((shift) =>
@@ -461,7 +460,13 @@ export function registerReservationRoutes(app: FastifyInstance, repository: Runt
             state.auditEntries.push({
               id: randomUUID(), actorId: actor.actorId, action: 'table.opened_from_reservation.v1',
               objectType: 'table', objectId: table.id, occurredAt: command.occurredAt,
-              details: { reservationId: reservation.id, tableSessionId, guestCount: reservation.partySize },
+              details: {
+                reservationId: reservation.id,
+                tableSessionId,
+                guestCount: reservation.partySize,
+                tableCapacity: table.capacity,
+                extraSeatCount: Math.max(0, reservation.partySize - table.capacity),
+              },
             })
             state.revision += 1
             const salesEmployeeId = currentSalesEmployeeId(state, 'reservation', reservation.id)

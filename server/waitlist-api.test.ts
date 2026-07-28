@@ -118,4 +118,27 @@ describe('waitlist API', () => {
     await app.close()
     await repository.close()
   })
+
+  it('allows an oversized waitlist party to be seated with extra chairs', async () => {
+    const { app, repository } = await fixture()
+    const joined = await app.inject({
+      method: 'POST', url: '/api/waitlist', payload: guest('加座组', 8, 'waitlist-extra-join-001'),
+    })
+    const notified = await app.inject({
+      method: 'POST', url: `/api/waitlist/${joined.json().id}/actions`,
+      payload: { action: 'notify', tableId: 'table-l04', reason: '现场确认可以加座', idempotencyKey: 'waitlist-extra-notify-001' },
+    })
+    expect(notified.statusCode, notified.body).toBe(200)
+    const seated = await app.inject({
+      method: 'POST', url: `/api/waitlist/${joined.json().id}/actions`,
+      payload: { action: 'seat', reason: '已完成加座', idempotencyKey: 'waitlist-extra-seat-001' },
+    })
+    expect(seated.statusCode, seated.body).toBe(200)
+    const state = await repository.read()
+    expect(state.tables.find((table) => table.id === 'table-l04')).toMatchObject({ status: 'occupied', guestCount: 8 })
+    expect(state.auditEntries.find((entry) => entry.action === 'waitlist.seat.v1')?.details)
+      .toMatchObject({ tableCapacity: 6, extraSeatCount: 2 })
+    await app.close()
+    await repository.close()
+  })
 })

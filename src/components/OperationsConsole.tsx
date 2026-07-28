@@ -336,6 +336,10 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
     kdsTaskOperationallyActive(task) && taskVisibleToAccess(task, fulfillmentAccess)
   )).length
   const selectedTable = data.tables.find((table) => table.id === selectedTableId) ?? null
+  const walkInMaximumPartySize = 100
+  const walkInExtraSeatCount = selectedTable
+    ? Math.max(0, walkInPartySize - selectedTable.capacity)
+    : 0
   const selectedTableInformation = selectedTable
     ? data.tasks
         .filter((task) => task.tableId === selectedTable.id && task.workflowLevel === 'L0' && !task.archivedAt)
@@ -405,6 +409,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
     : []
 
   useEffect(() => {
+    setWalkInPartySize(Math.max(1, Math.min(2, selectedTable?.capacity ?? 2)))
     setTransferTargetId('')
     setTransferKind('relocate')
     setCombinationTargetId('')
@@ -417,7 +422,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
     setGiftQuantity(1)
     setGiftReason('未上菜服务补偿')
     setSessionSummary(null)
-  }, [selectedTableId])
+  }, [selectedTableId, selectedTable?.capacity])
 
   async function handleLegacyHandover() {
     if (!selectedSession || legacyHandoverReason.trim().length < 5) return
@@ -548,7 +553,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
       })
       setSessionSummary(result.summary)
       setSalesEmployeeId(result.summary.salesEmployeeId ?? '')
-      setNotice(`${selectedTable.code}临客已开台，低消V${result.summary.configVersion}与销售归属已固化`)
+      setNotice(`${selectedTable.code}临客已开台${walkInExtraSeatCount > 0 ? `，已记录加座${walkInExtraSeatCount}位` : ''}；低消V${result.summary.configVersion}与销售归属已固化`)
       await onRefresh()
       navigateTo('commerce', {
         objectId: selectedTable.id,
@@ -986,7 +991,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
                   {selectedTable && selectedTable.status === 'available' && canOpenWalkIn && (
                     <div className="table-walkin-toolbar">
                       <div className="table-business-heading"><DoorOpen size={19} /><div><strong>{selectedTable.code} 临客开台</strong><span>员工选择人数与销售后直接开台，客户无需确认</span></div></div>
-                      <label><span>人数</span><div className="party-stepper"><button title="减少人数" disabled={walkInPartySize <= 1} onClick={() => setWalkInPartySize((value) => Math.max(1, value - 1))}><Minus size={15} /></button><input aria-label="客人人数" type="number" inputMode="numeric" min={1} max={selectedTable.capacity} value={walkInPartySize} onChange={(event) => setWalkInPartySize(Math.min(selectedTable.capacity, Math.max(1, Number(event.target.value) || 1)))} /><button title="增加人数" disabled={walkInPartySize >= selectedTable.capacity} onClick={() => setWalkInPartySize((value) => Math.min(selectedTable.capacity, value + 1))}><Plus size={15} /></button></div></label>
+                      <label><span>人数{walkInExtraSeatCount > 0 ? ` · 加座${walkInExtraSeatCount}位` : ` · 建议${selectedTable.capacity}位`}</span><div className={`party-stepper${walkInExtraSeatCount > 0 ? ' is-extra-seating' : ''}`}><button title="减少人数" disabled={walkInPartySize <= 1} onClick={() => setWalkInPartySize((value) => Math.max(1, value - 1))}><Minus size={15} /></button><input aria-label="客人人数" type="number" inputMode="numeric" min={1} max={walkInMaximumPartySize} value={walkInPartySize} onChange={(event) => setWalkInPartySize(Math.min(walkInMaximumPartySize, Math.max(1, Number(event.target.value) || 1)))} /><button title="增加人数" disabled={walkInPartySize >= walkInMaximumPartySize} onClick={() => setWalkInPartySize((value) => Math.min(walkInMaximumPartySize, value + 1))}><Plus size={15} /></button></div></label>
                       <label><span>销售归属</span><select value={walkInSalesEmployeeId} onChange={(event) => setWalkInSalesEmployeeId(event.target.value)}><option value="">请选择销售</option>{salesEmployees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName}</option>)}</select></label>
                       <button className="primary-button" disabled={busy || !walkInSalesEmployeeId} onClick={() => void handleWalkInOpen()}><DoorOpen size={17} />立即开台</button>
                     </div>

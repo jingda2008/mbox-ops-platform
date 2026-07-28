@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0-rc.53 - 2026-07-28
+
+- Decoupled walk-in seating from public reservation-area preferences so formal venue tables can open even when their physical area is not a customer-selectable reservation option.
+- Changed table capacity from a hard seating limit to an operational recommendation for walk-ins, reservations and waitlist guests.
+- Added visible extra-seat feedback and immutable capacity, actual-party-size and extra-seat evidence to table-opening audits.
+- Reset the suggested party size when employees switch tables to prevent the previous table's headcount from carrying into the next operation.
+
 ## 1.0.0-rc.52 - 2026-07-28
 
 - Added configurable L0-L3 service workflows for zero-action guest context, one-tap quick service, two-step accountable tasks and controlled high-risk transactions.

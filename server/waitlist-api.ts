@@ -159,7 +159,6 @@ export function registerWaitlistRoutes(app: FastifyInstance, repository: Runtime
         if (Date.parse(entry.maximumWaitUntil) <= Date.parse(occurredAt)) throw new Error('候补最长等待时间已到，请先标记过期')
         const table = assertTargetPrimaryReady(state, input.tableId)
         if (table.status !== 'available') throw new Error('目标桌当前不可锁定')
-        if (entry.partySize > table.capacity) throw new Error(`候补人数超过桌台容量：${entry.partySize}/${table.capacity}`)
         const earlier = state.waitlistEntries
           .filter((item) => item.status === 'waiting' && item.joinedSequence < entry.joinedSequence && item.partySize <= table.capacity)
           .filter((item) => !item.areaPreferenceCode || item.areaPreferenceCode === table.areaId)
@@ -219,6 +218,12 @@ export function registerWaitlistRoutes(app: FastifyInstance, repository: Runtime
         tableId: entry.heldTableId,
         responseExpiresAt: entry.responseExpiresAt,
         tableSessionId: entry.tableSessionId,
+        tableCapacity: entry.heldTableId
+          ? state.tables.find((table) => table.id === entry.heldTableId)?.capacity ?? null
+          : null,
+        extraSeatCount: entry.heldTableId
+          ? Math.max(0, entry.partySize - (state.tables.find((table) => table.id === entry.heldTableId)?.capacity ?? entry.partySize))
+          : 0,
       })
       state.revision += 1
       return entry

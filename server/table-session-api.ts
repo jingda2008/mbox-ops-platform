@@ -110,7 +110,7 @@ export function openWalkInTableSession(
   const readiness = assertTablePrimaryReady(state, tableId, actorId, options.allowOfflineLocalActor)
   const table = readiness.table
   if (table.status !== 'available') throw new Error('只有空桌可以临客开台')
-  if (input.partySize > table.capacity) throw new Error(`到店人数超过桌台容量：${input.partySize}/${table.capacity}`)
+  const extraSeatCount = Math.max(0, input.partySize - table.capacity)
   if (readiness.reassignedFrom) {
     state.auditEntries.push({
       id: `audit_${randomUUID()}`,
@@ -124,6 +124,8 @@ export function openWalkInTableSession(
   }
   const reservationId = `walk-in:${randomUUID()}`
   const customerReference = input.customerReference ?? reservationId
+  const walkInAreaPreferenceCode = reservationsFor(state).config.areaPreferences
+    .find((preference) => preference.code === table.areaId && preference.enabled)?.code
   const reservation = mutateReservationState(state, (domain) => {
     createReservation(domain, {
       reservationId,
@@ -132,7 +134,9 @@ export function openWalkInTableSession(
       contactReference: customerReference,
       sourceCode: 'walk_in',
       partySize: input.partySize,
-      areaPreferenceCode: table.areaId,
+      // The physical table area is recorded when the guest is seated. A walk-in
+      // must not be blocked merely because that area is hidden from reservations.
+      areaPreferenceCode: walkInAreaPreferenceCode,
       scheduledAt: occurredAt,
       depositRequiredAmount: 0,
       depositCurrency: 'CNY',
@@ -189,6 +193,8 @@ export function openWalkInTableSession(
       reservationId: reservation.id,
       tableSessionId: session.id,
       guestCount: input.partySize,
+      tableCapacity: table.capacity,
+      extraSeatCount,
       salesEmployeeId: input.salesEmployeeId,
       idempotencyKey: input.idempotencyKey,
     },

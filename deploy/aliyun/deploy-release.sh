@@ -88,7 +88,11 @@ if [ "${dry_run}" = 1 ]; then
 fi
 
 ssh "${ssh_options[@]}" "${ssh_target}" "install -d -m 0700 '${remote_release_dir}'"
-rsync -a --partial --append-verify \
+rsync_resume_option=--append
+if rsync --help 2>&1 | grep -q -- '--append-verify'; then
+  rsync_resume_option=--append-verify
+fi
+rsync -a --partial "${rsync_resume_option}" \
   -e "ssh -i '${ssh_key}' -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p '${ssh_port}'" \
   "${bundle_dir}/" "${ssh_target}:${remote_release_dir}/"
 

@@ -26,14 +26,16 @@ The optimized release path uses the exact image built by GitHub CI:
 2. runtime changes run quality, browser, database and image jobs in parallel;
 3. the image job uses GitHub Actions layer cache and exports one immutable bundle;
 4. a version tag reuses that successful bundle instead of rebuilding it;
-5. `deploy-release.sh` downloads the GitHub release asset, verifies its checksum,
-   resumes the SSH upload, starts a zero-traffic candidate and switches Caddy
-   only after readiness succeeds;
+5. `deploy-release.sh` downloads the GitHub release asset, verifies its archive
+   checksum and OCI config digest, resumes the SSH upload, starts a zero-traffic
+   candidate and switches Caddy only after readiness succeeds;
 6. any failed candidate or cutover restores the previous container.
 
 The client machine must hold the deployment private key. The current default is
 `~/.ssh/mbox_aliyun_ed25519`; passwords are not accepted by the deployment
-script.
+script. Resumable upload uses `--append-verify` when the installed rsync supports
+it and falls back to `--append` on the macOS system rsync; the archive checksum
+is verified again on the server before loading.
 
 Dry-run bundle validation:
 

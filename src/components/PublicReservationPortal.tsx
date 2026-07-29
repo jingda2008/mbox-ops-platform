@@ -39,20 +39,79 @@ const seatPositions: Record<string, [number, number]> = {
   L07: [32, 24.5], L06: [40.3, 25.8], L03: [29.8, 28.5], L02: [33.9, 29.4], L01: [41.8, 30.5], L05: [57.9, 26.9], L04: [66.2, 27],
   A08: [28.2, 37.1], A07: [32.8, 37.1], A06: [37.9, 37.1], A05: [42.6, 37.1], A04: [47.2, 37.1], A03: [51.6, 37.1], A02: [57, 37.1], A01: [61.2, 37.1],
   B08: [28.2, 41.6], B07: [32.8, 41.6], B06: [37.9, 41.6], B05: [42.6, 41.6], B04: [47.2, 41.6], B03: [51.6, 41.6], B02: [57, 41.6], B01: [61.2, 41.6],
-  S4: [67.8, 36.8], S1: [73.2, 38.9], S5: [67.8, 40.9], S2: [73.3, 42.9], S6: [67.8, 45], S3: [73.3, 47], S7: [67.8, 49.3],
+  S04: [67.8, 36.8], S01: [73.2, 38.9], S05: [67.8, 40.9], S02: [73.3, 42.9], S06: [67.8, 45], S03: [73.3, 47], S07: [67.8, 49.3],
   C07: [28.9, 49.6], C06: [32.9, 49.6], C05: [39.2, 49.6], C04: [43.3, 49.6], C03: [47.4, 49.6], C02: [57.5, 49.6], C01: [61.5, 49.6],
   W01: [29.2, 57.1], W02: [39.7, 57.1], W03: [45.6, 57.1], W04: [52.3, 57.1], W05: [58.3, 57.1], W06: [64.1, 57.1],
   W07: [53.9, 67.5], W08: [79.6, 59.3], W09: [65.8, 66], W10: [41.6, 72.8], W11: [51.9, 72.8],
   W12: [52.6, 81.2], W13: [41.7, 81.2], W14: [31, 81.2], W15: [52.6, 85.2], W16: [41.7, 85.2], W17: [31.1, 85.2],
 }
 
-type MapZone = 'stage' | 'indoor' | 'outdoor'
+type MapZone = 'indoor' | 'stage' | 'outdoor'
 
-const mapZones: Array<{ code: MapZone; name: string; matches: (tableCode: string) => boolean }> = [
-  { code: 'stage', name: '舞台前', matches: (code) => !code.startsWith('W') },
-  { code: 'indoor', name: '室内中区', matches: (code) => /^W0[1-9]$/.test(code) },
-  { code: 'outdoor', name: '室外区域', matches: (code) => /^W(?:1[0-7])$/.test(code) },
+interface MapFrame {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+interface MapZoneDefinition {
+  code: MapZone
+  name: string
+  description: string
+  frame: MapFrame
+  matches: (tableCode: string) => boolean
+}
+
+const FLOOR_PLAN_WIDTH = 941
+const FLOOR_PLAN_HEIGHT = 1672
+
+const mapZones: MapZoneDefinition[] = [
+  {
+    code: 'indoor',
+    name: '室内全景',
+    description: 'VIP、L区、大厅与舞台侧',
+    frame: { x: 6, y: 11, width: 88, height: 43 },
+    matches: (code) => !code.startsWith('W'),
+  },
+  {
+    code: 'stage',
+    name: '舞台侧',
+    description: '靠近舞台的互动位置',
+    frame: { x: 42, y: 28, width: 53, height: 25 },
+    matches: (code) => /^S0[1-7]$/.test(code)
+      || /^(?:VIP[12]|L0[1-5]|[ABC]0[1-2])$/.test(code),
+  },
+  {
+    code: 'outdoor',
+    name: '室外区域',
+    description: 'W01-W17露台位置',
+    frame: { x: 6, y: 52, width: 88, height: 40 },
+    matches: (code) => /^W(?:0[1-9]|1[0-7])$/.test(code),
+  },
 ]
+
+function mapFrameStyle(frame: MapFrame) {
+  return {
+    aspectRatio: `${(frame.width * FLOOR_PLAN_WIDTH) / (frame.height * FLOOR_PLAN_HEIGHT)}`,
+  }
+}
+
+function mapImageStyle(frame: MapFrame) {
+  return {
+    left: `${(-frame.x / frame.width) * 100}%`,
+    top: `${(-frame.y / frame.height) * 100}%`,
+    width: `${100 / frame.width * 100}%`,
+    height: `${100 / frame.height * 100}%`,
+  }
+}
+
+function mapSeatStyle(position: [number, number], frame: MapFrame) {
+  return {
+    left: `${((position[0] - frame.x) / frame.width) * 100}%`,
+    top: `${((position[1] - frame.y) / frame.height) * 100}%`,
+  }
+}
 
 function clockMinutes(value: string) {
   const [hour = 0, minute = 0] = value.split(':').map(Number)
@@ -140,7 +199,7 @@ export function PublicReservationPortal() {
   const [step, setStep] = useState<1 | 2 | 3>(1)
   const [assignmentMode, setAssignmentMode] = useState<ReservationAssignmentMode>('direct')
   const [availability, setAvailability] = useState<PublicReservationTableView[]>([])
-  const [mapZone, setMapZone] = useState<MapZone>('stage')
+  const [mapZone, setMapZone] = useState<MapZone>('indoor')
   const [selectedTableCode, setSelectedTableCode] = useState('')
   const [inspectedTableCode, setInspectedTableCode] = useState('')
   const [customerName, setCustomerName] = useState('')
@@ -161,6 +220,7 @@ export function PublicReservationPortal() {
   const [error, setError] = useState('')
   const busyReservationIdsRef = useRef(new PendingActionRegistry())
   const loadSequenceRef = useRef(0)
+  const seatDetailRef = useRef<HTMLElement | null>(null)
 
   const load = useCallback(async () => {
     const sequence = ++loadSequenceRef.current
@@ -223,7 +283,7 @@ export function PublicReservationPortal() {
       const response = await getPublicReservationAvailability(scheduledIso(date, time, data.config), partySize)
       setAvailability(response.tables)
       setSelectedTableCode('')
-      setMapZone('stage')
+      setMapZone('indoor')
       setInspectedTableCode(response.tables.find((table) => mapZones[0]!.matches(table.code) && table.status === 'available')?.code ?? '')
       setStep(2)
     } catch (availabilityError) {
@@ -235,8 +295,10 @@ export function PublicReservationPortal() {
 
   function chooseTable(table: PublicReservationTableView) {
     setInspectedTableCode(table.code)
-    if (table.status !== 'available') return
-    setSelectedTableCode(table.code)
+    if (table.status === 'available') setSelectedTableCode(table.code)
+    requestAnimationFrame(() => {
+      seatDetailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
   }
 
   function chooseMapZone(zone: MapZone) {
@@ -338,7 +400,7 @@ export function PublicReservationPortal() {
     }
   }
 
-  return <main className="public-reservation-shell">
+  return <main className={`public-reservation-shell is-step-${step}`}>
     <header className="public-reservation-header">
       <div className="public-reservation-brand"><span>M</span><div><strong>M-BOX LIVEHOUSE</strong><small>LUJIAZUI · SHANGHAI</small></div></div>
       <span className="public-reservation-channel">公众号预约</span>
@@ -376,10 +438,10 @@ export function PublicReservationPortal() {
       </section>
     </section>}
 
-    {step === 2 && <section className="public-reservation-stage">
+    {step === 2 && <section className="public-reservation-stage is-seat-selection">
       <div className="public-reservation-intro">
-        <span>AVAILABLE TABLES</span><h1>选择喜欢的位置</h1>
-        <p>点击桌号查看实时状态、建议人数、定金和最低消费。</p>
+        <span>AVAILABLE TABLES</span><h1>选个喜欢的位置</h1>
+        <p>点桌号，即可查看预约状态、定金和最低消费。</p>
       </div>
       <div className="public-reservation-map-zones" role="tablist" aria-label="座位区域">
         {mapZones.map((zone) => <button
@@ -389,12 +451,19 @@ export function PublicReservationPortal() {
           aria-selected={mapZone === zone.code}
           className={mapZone === zone.code ? 'is-active' : ''}
           onClick={() => chooseMapZone(zone.code)}
-        >{zone.name}</button>)}
+        ><strong>{zone.name}</strong><small>{zone.description}</small></button>)}
       </div>
       <div className="public-reservation-map-legend"><span><i />可预约</span><span className="is-reserved"><i />已预订</span><span className="is-locked"><i />临时锁定</span></div>
-      <div className={`public-reservation-map-viewport is-${mapZone}`}>
+      <div
+        className={`public-reservation-map-viewport is-${mapZone}`}
+        style={mapFrameStyle(mapZones.find((zone) => zone.code === mapZone)!.frame)}
+      >
         <div className="public-reservation-map-world">
-          <img src="/assets/mbox-floorplan-2026.webp" alt="M-BOX可预约座位图" />
+          <img
+            src="/assets/mbox-floorplan-2026.webp"
+            alt="M-BOX可预约座位图"
+            style={mapImageStyle(mapZones.find((zone) => zone.code === mapZone)!.frame)}
+          />
           {availability.filter((table) => mapZones.find((zone) => zone.code === mapZone)?.matches(table.code)).map((table) => {
             const position = seatPositions[table.code]
             if (!position) return null
@@ -403,13 +472,13 @@ export function PublicReservationPortal() {
               type="button"
               aria-label={`${table.code} ${table.statusReason}`}
               className={`public-reservation-map-seat is-${table.status}${selectedTableCode === table.code ? ' is-selected' : ''}`}
-              style={{ left: `${position[0]}%`, top: `${position[1]}%` }}
+              style={mapSeatStyle(position, mapZones.find((zone) => zone.code === mapZone)!.frame)}
               onClick={() => chooseTable(table)}
             >{table.code}</button>
           })}
         </div>
       </div>
-      {inspectedTable && <section className="public-reservation-seat-detail">
+      {inspectedTable && <section ref={seatDetailRef} className="public-reservation-seat-detail">
         <div><strong>{inspectedTable.displayName}</strong><span>{inspectedTable.capacity}位建议人数 · {inspectedTable.statusReason}</span><small>{inspectedTable.depositAmount ? `${money(inspectedTable.depositAmount)}定金可抵消费` : '免定金'} · {inspectedTable.minimumSpendAmount ? `最低消费${money(inspectedTable.minimumSpendAmount)}` : '无最低消费'}</small></div>
         <b className={`is-${inspectedTable.status}`}>{inspectedTable.status === 'available' ? '可预约' : inspectedTable.status === 'reserved' ? '已预订' : '暂不可选'}</b>
       </section>}

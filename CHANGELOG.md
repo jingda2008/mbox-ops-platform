@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.56 - 2026-07-29
+
+- Rebuilt public reservation seating around proportional zone frames so floor-plan crops and table overlays remain aligned on mobile without horizontal scrolling.
+- Corrected S01-S07 overlay identifiers and separated the indoor floor from the W01-W17 outdoor area.
+- Added an indoor overview, a focused stage-side view and an outdoor view with compact density-aware status markers.
+- Reduced reservation header and instruction height, kept table details and primary actions in the mobile viewport, and automatically revealed the selected table's availability, deposit and minimum-spend details.
+- Extended 390x844 browser coverage for S-table visibility, indoor/outdoor isolation, map bounds and selected-table detail visibility.
+
 ## 1.0.0-rc.55 - 2026-07-29
 
 - Replaced the public reservation form with a mobile-first three-step flow for date and party size, direct store assignment or self-selected seating, and final contact confirmation.

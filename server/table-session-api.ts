@@ -153,7 +153,10 @@ export function openWalkInTableSession(
       idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'arrive'),
     })
     const session = openTableSession(state, table, occurredAt, {
-      source: 'walk_in', sourceId: reservationId, guestCount: input.partySize,
+      source: 'walk_in',
+      sourceId: reservationId,
+      guestCount: input.partySize,
+      recommendationScene: input.recommendationScene,
     })
     return seatReservation(domain, {
       reservationId, actorId, occurredAt, tableId: table.id, tableCode: table.code,
@@ -196,6 +199,7 @@ export function openWalkInTableSession(
       tableCapacity: table.capacity,
       extraSeatCount,
       salesEmployeeId: input.salesEmployeeId,
+      recommendationScene: input.recommendationScene ?? null,
       idempotencyKey: input.idempotencyKey,
     },
   })

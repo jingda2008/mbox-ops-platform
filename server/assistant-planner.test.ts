@@ -116,6 +116,27 @@ describe('Gemini assistant planner', () => {
     })
   })
 
+  it('keeps an explicitly stated companion scene in the deterministic open-table plan', async () => {
+    const planner = new GeminiAssistantPlanner({
+      apiKey: 'test-key',
+      model: 'gemini-3.5-flash',
+      timeoutMs: 2_000,
+      fetchImpl: async () => { throw new Error('model must not be called') },
+    })
+
+    await expect(planner.plan(planningInput('给L01开台，2位客人约会'))).resolves.toMatchObject({
+      output: {
+        kind: 'plan',
+        steps: [{
+          toolCall: {
+            toolId: 'table.open',
+            arguments: { tableCode: 'L01', partySize: 2, recommendationScene: 'date' },
+          },
+        }],
+      },
+    })
+  })
+
   it('uses the previous open-table question when the employee supplies only the party size', async () => {
     const planner = new GeminiAssistantPlanner({
       apiKey: 'test-key', model: 'gemini-3.5-flash', timeoutMs: 2_000,

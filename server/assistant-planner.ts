@@ -120,6 +120,10 @@ const responseFormat = {
                     partySize: { type: 'number' },
                     customerName: { type: 'string' },
                     salesEmployeeId: { type: 'string' },
+                    recommendationScene: {
+                      type: 'string',
+                      enum: ['date', 'friends', 'brothers', 'besties', 'business', 'celebration'],
+                    },
                     serviceTypeId: { type: 'string' },
                     delayMinutes: { type: 'number' },
                     assigneeEmployeeId: { type: 'string' },
@@ -502,6 +506,18 @@ function deterministicTaskActionPlan(input: AssistantPlanningRequest): Assistant
   }
 }
 
+function recommendationSceneFromMessage(message: string) {
+  const scenes = [
+    { value: 'celebration', label: '庆祝', pattern: /庆祝|生日|纪念日/u },
+    { value: 'business', label: '商务', pattern: /商务|客户|接待/u },
+    { value: 'brothers', label: '兄弟', pattern: /兄弟|哥们|哥几个/u },
+    { value: 'besties', label: '闺蜜', pattern: /闺蜜|姐妹/u },
+    { value: 'date', label: '约会', pattern: /约会|情侣|对象/u },
+    { value: 'friends', label: '朋友', pattern: /朋友|同学|同事/u },
+  ] as const
+  return scenes.find((scene) => scene.pattern.test(message))
+}
+
 function deterministicOperationalPlan(input: AssistantPlanningRequest): AssistantModelOutput | null {
   const message = operationalMessage(input)
   const availableTools = new Set(input.context.tools.map((tool) => tool.id))
@@ -527,10 +543,19 @@ function deterministicOperationalPlan(input: AssistantPlanningRequest): Assistan
         choices: ['1位', '2位', '3位', '4位', '其他人数'],
       }
     }
+    const scene = recommendationSceneFromMessage(message)
+    const sceneLabel = scene?.label ? ` · ${scene.label}` : ''
     steps.push({
-      label: `为${tableCode}开台（${partySize}人）`,
-      command: `执行${tableCode}${partySize}人开台`,
-      toolCall: { toolId: 'table.open', arguments: { tableCode, partySize } },
+      label: `为${tableCode}开台（${partySize}人${sceneLabel}）`,
+      command: `执行${tableCode}${partySize}人开台${scene ? `，同行场景${scene.label}` : ''}`,
+      toolCall: {
+        toolId: 'table.open',
+        arguments: {
+          tableCode,
+          partySize,
+          ...(scene ? { recommendationScene: scene.value } : {}),
+        },
+      },
     })
   }
 

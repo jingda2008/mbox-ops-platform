@@ -40,7 +40,11 @@ import {
   requestPaymentThroughProvider,
   type PaymentProviderResolver,
 } from './payment-provider.js'
-import { tableSessionBusinessDate, tableSessionRequiresHandover } from './table-sessions.js'
+import {
+  tableSessionBusinessDate,
+  tableSessionOperation,
+  tableSessionRequiresHandover,
+} from './table-sessions.js'
 import { MemoryGuestInsightsStore, type GuestInsightsStore } from './guest-insights.js'
 import {
   commercialOpsFor,
@@ -297,6 +301,7 @@ function sessionView(
 ): GuestSessionResponse {
   const primary = state.employees.find((employee) => employee.id === table.primaryEmployeeId)
   const sessionBusinessDate = tableSessionBusinessDate(state, tableSession)
+  const sessionOperation = tableSessionOperation(state, tableSession)
   const scheduleBusinessDate = chinaBusinessDateKey(nowMs)
   const frozen = tableSessionRequiresHandover(state, tableSession, nowMs, enforceMaximumOpenHours)
   const orders = frozen ? [] : state.orderDomain.orders.filter((order) => order.tableSessionId === tableSession.id)
@@ -395,6 +400,7 @@ function sessionView(
       status: table.status,
       occupied: table.status === 'occupied',
       guestCount: table.guestCount,
+      recommendationScene: sessionOperation.recommendationScene,
     },
     primaryServiceName: primary?.displayName ?? null,
     orderSafety: structuredClone(commercialOpsFor(state).config.orderSafety),

@@ -708,6 +708,7 @@ export function GuestPortal() {
           compactCart
           guestSalesMode
           partySize={data?.table.guestCount || 1}
+          recommendationScene={data?.table.recommendationScene}
           onSubmit={placeAndPay}
           onInteraction={(interaction) => recordBehavior(interaction.type, {
             productId: interaction.productId ?? null,

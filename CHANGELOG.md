@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-rc.59 - 2026-07-30
+
+- Made menu search immediately available on every guest ordering view, with a visually distinct search shortcut and global matching across product names, SKUs, categories, specifications, descriptions and tags.
+- Added an optional one-tap opening scene for walk-in tables covering date, friends, brothers, besties, business and celebration.
+- Persisted the selected scene as an immutable visit-scoped table-operation snapshot, exposed it to the guest session and used it together with party size in deterministic menu recommendation ranking.
+- Extended the server-side AI `table.open` tool so natural commands such as “L01两位约会开台” preserve the same scene instead of bypassing recommendation context.
+- Kept opening fully functional when staff skip the scene, retained the scene across table transfer through the table session and prevented previous-visit context from leaking into a reopened table.
+- Replaced brittle browser assertions tied to retired product names with behavior-based recommendation, search and product-detail acceptance.
+
 ## 1.0.0-rc.58 - 2026-07-30
 
 - Hid refund approval actions unless the current employee is not the requester, has approval permission and has a sufficient configured refund limit.

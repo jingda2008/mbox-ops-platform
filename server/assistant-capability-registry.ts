@@ -44,6 +44,7 @@ const definitions: Record<AssistantCapabilityId, CapabilityDefinition> = {
     argumentGuide: {
       tableCode: '必填，现场桌号，例如L01', partySize: '必填，实际到店人数；不得猜测',
       customerName: '选填，未提供时使用现场客人', salesEmployeeId: '选填，员工ID或姓名；未提供时归属当前操作员工',
+      recommendationScene: '选填，同行场景：date约会、friends朋友、brothers兄弟、besties闺蜜、business商务、celebration庆祝',
     },
   },
   'service.task.create': {

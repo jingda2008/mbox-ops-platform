@@ -16,6 +16,7 @@ import { transferOpenTableSession } from './table-session-api.js'
 import { createPaymentIntent } from './payment-domain.js'
 import { applyTaskAction, createServiceTask } from './domain.js'
 import { MemoryGuestInsightsStore } from './guest-insights.js'
+import { tableSessionOperation } from './table-sessions.js'
 
 const secret = 'q'.repeat(32)
 const sessionTtlMs = 5 * 60_000
@@ -131,6 +132,24 @@ describe('guest table API', () => {
     })
     expect(requireGuestSession(verifyTableAccessToken(body.tableToken, secret, now())).tableSessionId)
       .toBe(body.account.tableSessionId)
+    await closeFixture(app, repository)
+  })
+
+  it('exposes the visit-scoped scene so guest menu recommendations can use the opening context', async () => {
+    const { app, repository } = await fixture()
+    await repository.mutate((state) => {
+      const session = state.songState.tableSessions.find((candidate) => (
+        candidate.tableCode === 'L01' && candidate.status === 'open'
+      ))!
+      tableSessionOperation(state, session).recommendationScene = 'date'
+      state.revision += 1
+    })
+
+    const response = await app.inject({ method: 'GET', url: '/api/guest/session?table=L01' })
+    const body = response.json() as GuestSessionResponse
+
+    expect(response.statusCode).toBe(200)
+    expect(body.table).toMatchObject({ code: 'L01', recommendationScene: 'date' })
     await closeFixture(app, repository)
   })
 

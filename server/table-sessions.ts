@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type {
   MinimumSpendRule,
   MinimumSpendSnapshot,
+  MenuRecommendationScene,
   RuntimeState,
   SalesAttributionRecord,
   SalesAttributionSubjectType,
@@ -33,6 +34,7 @@ interface OpenTableSessionOptions {
   source?: TableSessionOpenSource
   sourceId?: string | null
   guestCount?: number
+  recommendationScene?: MenuRecommendationScene
 }
 
 function minuteOfDay(value: string) {
@@ -212,6 +214,7 @@ export function openTableSession(
   state.songState.tableSessions.push(session)
   const operation = tableSessionOperation(state, session, options.source ?? 'legacy', options.sourceId ?? null)
   if (options.guestCount !== undefined) operation.guestCount = options.guestCount
+  if (options.recommendationScene !== undefined) operation.recommendationScene = options.recommendationScene
   return session
 }
 
@@ -318,5 +321,6 @@ export function tableSessionSummary(
     reminderRequired,
     nextReminderAt,
     salesEmployeeId: currentSalesEmployeeId(state, 'table_session', session.id),
+    recommendationScene: operation.recommendationScene,
   }
 }

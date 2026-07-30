@@ -77,12 +77,19 @@ describe('table operating line', () => {
         partySize: 3,
         salesEmployeeId: 'emp-lin',
         customerName: '现场客人',
+        recommendationScene: 'friends',
         idempotencyKey: 'server-open-l04-0001',
       },
     })
 
     expect(opened.statusCode, opened.body).toBe(201)
-    expect(opened.json()).toMatchObject({ table: { id: 'table-l04', status: 'occupied', guestCount: 3 } })
+    expect(opened.json()).toMatchObject({
+      table: { id: 'table-l04', status: 'occupied', guestCount: 3 },
+      summary: { recommendationScene: 'friends' },
+    })
+    expect((await repository.read()).tableSessionOperations?.find((operation) => (
+      operation.tableSessionId === opened.json().summary.tableSessionId
+    ))).toMatchObject({ guestCount: 3, recommendationScene: 'friends' })
 
     const closed = await app.inject({
       method: 'POST',
@@ -98,7 +105,12 @@ describe('table operating line', () => {
     const state = await repository.read()
     expect(state.songState.tableSessions.find((session) => session.tableId === 'table-l04')).toMatchObject({ status: 'closed' })
     expect(state.auditEntries).toEqual(expect.arrayContaining([
-      expect.objectContaining({ actorId: 'emp-lin', action: 'table.walk_in_opened.v1', objectId: 'table-l04' }),
+      expect.objectContaining({
+        actorId: 'emp-lin',
+        action: 'table.walk_in_opened.v1',
+        objectId: 'table-l04',
+        details: expect.objectContaining({ recommendationScene: 'friends' }),
+      }),
       expect.objectContaining({ actorId: 'emp-lin', action: 'table.closed.v1', objectId: 'table-l04' }),
     ]))
   })

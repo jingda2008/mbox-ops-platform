@@ -151,6 +151,8 @@ test.describe('岗位权限隔离', () => {
       await route.fulfill({ response, json: data })
     })
     await page.route('**/api/tables/table-l04/walk-in-open', async (route) => {
+      const requestBody = route.request().postDataJSON()
+      expect(requestBody).toMatchObject({ partySize: 2, recommendationScene: 'date' })
       await route.fulfill({
         status: 201,
         contentType: 'application/json',
@@ -171,6 +173,7 @@ test.describe('岗位权限隔离', () => {
             reminderRequired: false,
             nextReminderAt: null,
             salesEmployeeId: 'emp-chen',
+            recommendationScene: 'date',
           },
         },
       })
@@ -186,6 +189,8 @@ test.describe('岗位权限隔离', () => {
     const inlineOpen = page.getByRole('dialog', { name: 'L04开台设置' })
     await expect(inlineOpen).toBeVisible()
     await expect(inlineOpen.getByLabel('客人人数')).toHaveValue('2')
+    await inlineOpen.getByRole('button', { name: '约会' }).click()
+    await expect(inlineOpen.getByRole('button', { name: '约会' })).toHaveAttribute('aria-pressed', 'true')
     await expect(inlineOpen.getByRole('button', { name: '确认开台' })).toBeVisible()
     await expect(inlineOpen.locator('xpath=ancestor::div[contains(@class,\"table-grid\")]')).toHaveCount(1)
     await expectNoHorizontalOverflow(page)

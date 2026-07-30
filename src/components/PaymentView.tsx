@@ -1236,6 +1236,7 @@ export function tableFromSession(data: BootstrapResponse, tableSessionId: string
 }
 
 // A failed or expired replacement payment must not prevent the cashier from trying again.
+// oxlint-disable-next-line react/only-export-components
 export function activeRecollectionIntent(intents: PaymentIntent[], refundId: string) {
   return intents.toReversed().find((intent) => (
     intent.sourceRefundId === refundId && !['failed', 'closed'].includes(intent.status)

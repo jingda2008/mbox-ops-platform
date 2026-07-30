@@ -367,12 +367,16 @@ describe('店长AI命令识别验收', () => {
 })
 
 describe('店长AI命令真实执行验收', () => {
-  it('桌台名称开台后必须返回真实桌台状态证据', async () => {
+  it('桌台名称和同行场景开台后必须返回真实桌台状态证据', async () => {
     const { app, repository: runtimeRepository } = await testApp()
     const turn = await app.inject({
       method: 'POST',
       url: '/api/assistant/turn',
-      payload: turnPayload('休闲04开台4人', 701),
+      payload: turnPayload('休闲04开台4人，朋友聚会', 701),
+    })
+    expect(turn.json().steps[0].toolCall).toMatchObject({
+      toolId: 'table.open',
+      arguments: { tableCode: 'L04', partySize: 4, recommendationScene: 'friends' },
     })
     const execution = await app.inject({
       method: 'POST',
@@ -396,6 +400,9 @@ describe('店长AI命令真实执行验收', () => {
       status: 'occupied',
       guestCount: 4,
     })
+    expect(runtimeRepository.snapshot().tableSessionOperations?.find((operation) => (
+      operation.openedTableId === 'table-l04'
+    ))).toMatchObject({ recommendationScene: 'friends' })
     await app.close()
   })
 

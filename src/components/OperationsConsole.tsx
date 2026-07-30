@@ -71,6 +71,7 @@ import type {
   BootstrapResponse,
   ConfigDraftInput,
   ManagerTaskActionInput,
+  MenuRecommendationScene,
   MinimumSpendRule,
   ServiceTask,
   StoreConfig,
@@ -117,6 +118,15 @@ export interface OperationsConsoleNavigationRequest {
   focus?: OperationsConsoleFocus
 }
 type View = OperationsConsoleView
+
+const walkInRecommendationScenes: ReadonlyArray<{ value: MenuRecommendationScene; label: string }> = [
+  { value: 'date', label: '约会' },
+  { value: 'friends', label: '朋友' },
+  { value: 'brothers', label: '兄弟' },
+  { value: 'besties', label: '闺蜜' },
+  { value: 'business', label: '商务' },
+  { value: 'celebration', label: '庆祝' },
+]
 
 interface OperationsConsoleProps {
   data: BootstrapResponse
@@ -256,6 +266,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
   const [sessionSummary, setSessionSummary] = useState<TableSessionSummary | null>(null)
   const [walkInPartySize, setWalkInPartySize] = useState(2)
   const [walkInSalesEmployeeId, setWalkInSalesEmployeeId] = useState('')
+  const [walkInRecommendationScene, setWalkInRecommendationScene] = useState<MenuRecommendationScene | undefined>()
   const [salesEmployeeId, setSalesEmployeeId] = useState('')
   const [salesChangeReason, setSalesChangeReason] = useState('现场确认销售归属')
   const [combinationAction, setCombinationAction] = useState<'merge' | 'add_table'>('add_table')
@@ -411,6 +422,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
 
   useEffect(() => {
     setWalkInPartySize(Math.max(1, Math.min(2, selectedTable?.capacity ?? 2)))
+    setWalkInRecommendationScene(undefined)
     setTransferTargetId('')
     setTransferKind('relocate')
     setCombinationTargetId('')
@@ -630,10 +642,12 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
         partySize: walkInPartySize,
         salesEmployeeId: walkInSalesEmployeeId,
         customerName: '现场客人',
+        recommendationScene: walkInRecommendationScene,
       })
       setSessionSummary(result.summary)
       setSalesEmployeeId(result.summary.salesEmployeeId ?? '')
-      setNotice(`${selectedTable.code}临客已开台${walkInExtraSeatCount > 0 ? `，已记录加座${walkInExtraSeatCount}位` : ''}；低消V${result.summary.configVersion}与销售归属已固化`)
+      const sceneLabel = walkInRecommendationScenes.find((item) => item.value === result.summary.recommendationScene)?.label
+      setNotice(`${selectedTable.code}临客已开台${walkInExtraSeatCount > 0 ? `，已记录加座${walkInExtraSeatCount}位` : ''}${sceneLabel ? `；点单将优先参考${sceneLabel}场景` : ''}；低消V${result.summary.configVersion}与销售归属已固化`)
       await onRefresh()
       setSelectedTableId(null)
     } catch (error) {
@@ -1240,6 +1254,18 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
                                         {salesEmployees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName}</option>)}
                                       </select>
                                     </label>
+                                    <fieldset className="table-inline-open__scene">
+                                      <legend>同行场景 <small>选填 · 用于本桌推荐</small></legend>
+                                      <div>
+                                        {walkInRecommendationScenes.map((scene) => <button
+                                          type="button"
+                                          key={scene.value}
+                                          aria-pressed={walkInRecommendationScene === scene.value}
+                                          className={walkInRecommendationScene === scene.value ? 'is-selected' : ''}
+                                          onClick={() => setWalkInRecommendationScene((current) => current === scene.value ? undefined : scene.value)}
+                                        >{scene.label}</button>)}
+                                      </div>
+                                    </fieldset>
                                     <button className="primary-button" disabled={busy || !walkInSalesEmployeeId} onClick={() => void handleWalkInOpen()}><DoorOpen size={17} />确认开台</button>
                                   </div>
                                 )}

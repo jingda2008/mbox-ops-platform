@@ -2,7 +2,7 @@ import { AlertTriangle, Check, CheckCircle2, ChevronRight, Clock3, Gift, Message
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ApiError } from '../api'
 import type { OrderSafetyConfig } from '../shared/commercial-ops-contracts'
-import type { MenuProduct } from '../shared/contracts'
+import type { MenuProduct, MenuRecommendationScene } from '../shared/contracts'
 import type { GuestBehaviorEventType } from '../shared/guest-insight-contracts'
 import {
   bundleComparisonAmount,
@@ -97,6 +97,15 @@ const comparisonFamilyLabels: Record<string, string> = {
   non_alcoholic: '轻松无酒精',
 }
 
+const recommendationSceneLabels: Partial<Record<MenuRecommendationScene, string>> = {
+  date: '约会',
+  brothers: '兄弟',
+  besties: '闺蜜',
+  friends: '朋友',
+  business: '商务',
+  celebration: '庆祝',
+}
+
 interface MenuOrderingWorkspaceProps {
   products: MenuProduct[]
   tableLabel: string
@@ -112,6 +121,7 @@ interface MenuOrderingWorkspaceProps {
   complimentaryMode?: boolean
   guestSalesMode?: boolean
   partySize?: number
+  recommendationScene?: MenuRecommendationScene
   onSubmit: (items: MenuCartItem[], options: MenuSubmitOptions) => Promise<void>
   onInteraction?: (interaction: MenuInteraction) => void
   onCartCountChange?: (itemCount: number) => void
@@ -134,6 +144,7 @@ export function MenuOrderingWorkspace({
   complimentaryMode = false,
   guestSalesMode = false,
   partySize = 1,
+  recommendationScene,
   onCartCountChange,
 }: MenuOrderingWorkspaceProps) {
   const [cart, setCart] = useState<Record<string, number>>({})
@@ -185,6 +196,7 @@ export function MenuOrderingWorkspace({
     orderedProducts,
     {
       partySize,
+      scene: recommendationScene,
       ...recommendationContext,
     } as MenuRecommendationContext,
     (product) => (
@@ -195,7 +207,7 @@ export function MenuOrderingWorkspace({
         availability.get(component.productId)?.orderable === true
       )))
     ),
-  ), [availability, orderedProducts, partySize, recommendationContext])
+  ), [availability, orderedProducts, partySize, recommendationContext, recommendationScene])
   const recommendationSlots = useMemo(
     () => selectMenuRecommendationSlots(rankedRecommendations),
     [rankedRecommendations],
@@ -205,6 +217,13 @@ export function MenuOrderingWorkspace({
     [rankedRecommendations, recommendationSlots],
   )
   const guestVisibleProducts = useMemo(() => {
+    if (searchQuery.trim()) {
+      return filterMenuProducts(
+        orderedProducts.filter((product) => product.guestVisible !== false),
+        'all',
+        searchQuery,
+      )
+    }
     if (guestMenuView === 'recommend') {
       return []
     }
@@ -235,6 +254,9 @@ export function MenuOrderingWorkspace({
   const visibleProducts = guestSalesMode
     ? guestVisibleProducts
     : filterMenuProducts(orderedProducts, categoryId, searchQuery)
+  const guestSearchableProductCount = guestSalesMode
+    ? orderedProducts.filter((product) => product.guestVisible !== false).length
+    : visibleProducts.length
   const cartProducts = orderedProducts.filter((product) => (
     (cart[product.id] ?? 0) > 0 && availability.get(product.id)?.orderable
   ))
@@ -308,6 +330,7 @@ export function MenuOrderingWorkspace({
     const impressionKey = [
       productId,
       partySize,
+      recommendationScene ?? '',
       recommendationContext.intent ?? '',
       recommendationContext.taste ?? '',
       recommendationContext.dwell ?? '',
@@ -319,6 +342,7 @@ export function MenuOrderingWorkspace({
       productId,
       metadata: {
         partySize,
+        scene: recommendationScene ?? null,
         intent: recommendationContext.intent ?? null,
         taste: recommendationContext.taste ?? null,
         dwell: recommendationContext.dwell ?? null,
@@ -329,6 +353,7 @@ export function MenuOrderingWorkspace({
     guestSalesMode,
     onInteraction,
     partySize,
+    recommendationScene,
     recommendationContext.dwell,
     recommendationContext.intent,
     recommendationContext.taste,
@@ -586,7 +611,10 @@ export function MenuOrderingWorkspace({
               <button
                 key={category.id}
                 data-testid={guestSalesMode ? `guest-menu-view-${category.id}` : undefined}
-                className={(guestSalesMode ? guestMenuView === category.id : categoryId === category.id) ? 'is-active' : ''}
+                className={[
+                  (guestSalesMode ? guestMenuView === category.id : categoryId === category.id) ? 'is-active' : '',
+                  guestSalesMode && category.id === 'search' ? 'is-search-shortcut' : '',
+                ].filter(Boolean).join(' ')}
                 onClick={() => {
                 if (guestSalesMode) changeGuestMenuView(category.id as typeof guestMenuViews[number]['id'])
                 else {
@@ -609,15 +637,15 @@ export function MenuOrderingWorkspace({
               }}
             >{family.name}</button>)}
           </nav>}
-          {guestSalesMode && guestMenuView === 'recommend' && <header className="menu-recommendation-heading">
+          {guestSalesMode && guestMenuView === 'recommend' && !searchQuery.trim() && <header className="menu-recommendation-heading">
             <div><small>FOR TONIGHT</small><strong>今夜特别推荐</strong></div>
-            <span>已按 {Math.max(1, partySize)} 位筛选 · 直接比较</span>
+            <span>已按 {Math.max(1, partySize)} 位{recommendationScene && recommendationScene !== 'unsure' ? ` · ${recommendationSceneLabels[recommendationScene] ?? '同行'}` : ''}筛选 · 直接比较</span>
           </header>}
-          {guestSalesMode && guestMenuView === 'recommend' && recommendationFeedback && <div className="menu-recommendation-feedback" role="status" aria-live="polite" data-testid="recommendation-updated-feedback">
+          {guestSalesMode && guestMenuView === 'recommend' && !searchQuery.trim() && recommendationFeedback && <div className="menu-recommendation-feedback" role="status" aria-live="polite" data-testid="recommendation-updated-feedback">
             <CheckCircle2 size={15} aria-hidden="true" />
             <span>{recommendationFeedback}</span>
           </div>}
-          {guestSalesMode && guestMenuView === 'recommend' && comparisonOptions.length > 0 && <section className="menu-recommendation-compare" aria-label="今夜推荐方案对比">
+          {guestSalesMode && guestMenuView === 'recommend' && !searchQuery.trim() && comparisonOptions.length > 0 && <section className="menu-recommendation-compare" aria-label="今夜推荐方案对比">
             <header>
               <strong>{comparisonOptions.length >= 3 ? '三款都适合今晚' : '今晚适合您的选择'}</strong>
               <span>不同酒型与预算，价格和内容一眼比较</span>
@@ -674,12 +702,12 @@ export function MenuOrderingWorkspace({
               })}
             </div>
           </section>}
-          {guestSalesMode && guestMenuView === 'recommend' && <section className="menu-recommendation-browse" aria-label="继续浏览菜单">
+          {guestSalesMode && guestMenuView === 'recommend' && !searchQuery.trim() && <section className="menu-recommendation-browse" aria-label="继续浏览菜单">
             <div><strong>继续逛逛</strong><span>单点酒水和小食也可以慢慢选</span></div>
             <button type="button" onClick={() => changeGuestMenuView('drinks')}>看酒水<ChevronRight size={15} /></button>
             <button type="button" onClick={() => changeGuestMenuView('food')}>看小食<ChevronRight size={15} /></button>
           </section>}
-          {(!guestSalesMode || guestMenuView === 'search') && <div className="menu-search-toolbar">
+          <div className="menu-search-toolbar">
             <label className="menu-search-control">
               <Search size={18} aria-hidden="true" />
               <input
@@ -687,7 +715,7 @@ export function MenuOrderingWorkspace({
                 autoComplete="off"
                 enterKeyHint="search"
                 inputMode="search"
-                placeholder="搜索酒水、菜品或规格"
+                placeholder="搜索酒水、小食、组合或规格"
                 type="search"
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
@@ -705,10 +733,12 @@ export function MenuOrderingWorkspace({
               )}
             </label>
             <span className="menu-search-count" aria-live="polite">
-              {searchQuery ? `找到 ${visibleProducts.length} 项` : `共 ${visibleProducts.length} 项`}
+              {searchQuery
+                ? `找到 ${visibleProducts.length} 项`
+                : guestSalesMode ? `可搜 ${guestSearchableProductCount} 项` : `共 ${visibleProducts.length} 项`}
             </span>
-          </div>}
-          {(!guestSalesMode || guestMenuView !== 'recommend' || visibleProducts.length > 0) && <div className="menu-product-grid">
+          </div>
+          {(!guestSalesMode || guestMenuView !== 'recommend' || searchQuery.trim() || visibleProducts.length > 0) && <div className="menu-product-grid">
             {visibleProducts.length === 0 && (
               <div className="menu-product-empty">
                 {guestSalesMode && guestMenuView === 'recommend' ? <Sparkles size={26} aria-hidden="true" /> : <Search size={26} aria-hidden="true" />}

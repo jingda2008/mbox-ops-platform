@@ -145,6 +145,34 @@
 .table-inline-open > label { min-width: 0; display: grid; gap: 5px; }
 .table-inline-open > label > span { color: var(--ink-soft); font-size: 10px; font-weight: 750; }
 .table-inline-open select { width: 100%; min-width: 0; height: 36px; border: 1px solid var(--line-strong); background: #fff; color: var(--ink); padding: 0 8px; }
+.table-inline-open__scene {
+  min-width: 0;
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.table-inline-open__scene legend { color: var(--ink-soft); font-size: 10px; font-weight: 800; }
+.table-inline-open__scene legend small { font-size: 9px; font-weight: 600; }
+.table-inline-open__scene > div { display: grid; grid-template-columns: repeat(6, minmax(58px, 1fr)); gap: 5px; }
+.table-inline-open__scene button {
+  min-height: 34px;
+  padding: 0 8px;
+  border: 1px solid #bfc8c1;
+  border-radius: 4px;
+  background: #fff;
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 750;
+}
+.table-inline-open__scene button.is-selected {
+  border-color: #997516;
+  background: #fff5d6;
+  color: #5f4708;
+  box-shadow: inset 0 0 0 1px rgb(153 117 22 / 18%);
+}
 .table-inline-open > .primary-button { min-width: 118px; white-space: nowrap; }
 .party-stepper { height: 36px; display: grid; grid-template-columns: 36px 1fr 36px; border: 1px solid var(--line-strong); background: #fff; }
 .party-stepper button { min-height: 0; display: grid; place-items: center; border: 0; background: transparent; color: var(--ink); }
@@ -440,5 +468,6 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
     padding: 8px;
   }
+  .table-inline-open__scene > div { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .table-inline-open > .primary-button { grid-column: 1 / -1; width: 100%; }
 }

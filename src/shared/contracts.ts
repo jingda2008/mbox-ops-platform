@@ -380,6 +380,8 @@ export interface TableSessionOperation {
   sourceId: string | null
   /** Immutable party-size snapshot. Older persisted sessions may not contain it. */
   guestCount?: number
+  /** Optional, visit-scoped context used to rank menu recommendations. */
+  recommendationScene?: MenuRecommendationScene
   minimumSpendSnapshot: MinimumSpendSnapshot
   createdAt: string
 }
@@ -432,6 +434,7 @@ export interface TableSessionSummary {
   reminderRequired: boolean
   nextReminderAt: string | null
   salesEmployeeId: string | null
+  recommendationScene?: MenuRecommendationScene
 }
 
 export interface GuestServiceLimitsConfig {
@@ -879,6 +882,7 @@ export const walkInOpenSchema = z.object({
   salesEmployeeId: z.string().trim().min(1).max(128),
   customerName: z.string().trim().min(1).max(100).default('现场客人'),
   customerReference: z.string().trim().min(1).max(128).optional(),
+  recommendationScene: z.enum(menuRecommendationScenes).optional(),
   idempotencyKey: z.string().trim().min(8).max(128),
 }).strict()
 

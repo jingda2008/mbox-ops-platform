@@ -5,7 +5,7 @@ import type {
   AssistantToolCall,
   AssistantToolExecutionResponse,
 } from '../src/shared/assistant-tool-contracts.js'
-import type { RuntimeState } from '../src/shared/contracts.js'
+import { menuRecommendationScenes, type RuntimeState } from '../src/shared/contracts.js'
 import { effectivePermissionIdsForEmployee, effectiveRoleIdsForEmployee } from '../src/shared/staff-access.js'
 import { availableAssistantExecutableTools } from './assistant-capability-registry.js'
 import { requireRequestActor } from './auth-context.js'
@@ -22,6 +22,7 @@ const tableOpenArguments = z.object({
   partySize: z.number().int().min(1).max(100),
   customerName: z.string().trim().min(1).max(80).optional(),
   salesEmployeeId: z.string().trim().min(1).max(128).optional(),
+  recommendationScene: z.enum(menuRecommendationScenes).optional(),
 }).strict()
 
 const taskCreateArguments = z.object({
@@ -194,13 +195,14 @@ export class AssistantToolBus {
           customerName: input.customerName ?? '现场客人',
           customerReference: undefined,
           salesEmployeeId: resolveEmployeeId(state, input.salesEmployeeId, actor.actorId),
+          recommendationScene: input.recommendationScene,
           idempotencyKey: `assistant-open:${executionId}`,
         }, actor.actorId, new Date(this.now()).toISOString(), {
           allowOfflineLocalActor: actor.runtimeMode === 'local',
         })
         result = {
           objectType: 'table', objectId: opened.table.id,
-          message: `${opened.table.code}已开台，实际到店${input.partySize}人。`,
+          message: `${opened.table.code}已开台，实际到店${input.partySize}人${input.recommendationScene ? '，同行场景已用于点单推荐' : ''}。`,
           evidence: {
             verified: true,
             outcome: 'executed',

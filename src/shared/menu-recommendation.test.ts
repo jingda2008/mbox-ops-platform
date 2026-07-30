@@ -250,7 +250,7 @@ describe('menu recommendation ranking', () => {
     expect(new Set(options.map((item) => item.product.id)).size).toBe(3)
   })
 
-  it('uses real low, middle and high prices while keeping the best-scored middle option as the main choice', () => {
+  it('keeps the best-matched product as the main choice instead of replacing it with a fixed price midpoint', () => {
     const ranked = rankMenuRecommendations([
       product({ id: 'entry', listPriceAmount: 49_800, recommendation: { ...product({}).recommendation!, priority: 280 } }),
       product({ id: 'cheap-top-score', listPriceAmount: 58_800, recommendation: { ...product({}).recommendation!, priority: 400 } }),
@@ -261,8 +261,70 @@ describe('menu recommendation ranking', () => {
 
     const options = selectMenuComparisonOptions(ranked)
 
-    expect(options.map((item) => item.product.id)).toEqual(['entry', 'middle-wine', 'complete'])
-    expect(options.map((item) => item.role)).toEqual(['lighter', 'primary', 'complete'])
+    expect(options.map((item) => item.product.id)).toEqual(['entry', 'cheap-top-score', 'middle-wine'])
+    expect(options.map((item) => item.role)).toEqual(['lighter', 'primary', 'alternative'])
+  })
+
+  it('changes the visible primary and comparison set for materially different two-person answers', () => {
+    const recommendation = (overrides: Partial<NonNullable<MenuProduct['recommendation']>>) => ({
+      ...product({}).recommendation!,
+      minimumPartySize: 2,
+      maximumPartySize: 2,
+      ...overrides,
+    })
+    const products = [
+      product({
+        id: 'cocktail-night', name: '双人鸡尾酒完整夜', productKind: 'bundle',
+        listPriceAmount: 62_800, beverageFamily: 'cocktail',
+        recommendation: recommendation({
+          priority: 10, intentTags: ['relaxed', 'energetic', 'ritual'],
+          tasteTags: ['refreshing', 'layered'], dwellTags: ['one_set', 'stay_longer'],
+        }),
+      }),
+      product({
+        id: 'beer-night', name: '双人啤酒现场', productKind: 'bundle',
+        listPriceAmount: 68_800, beverageFamily: 'beer',
+        recommendation: recommendation({
+          priority: 13, intentTags: ['relaxed', 'energetic'],
+          tasteTags: ['refreshing'], dwellTags: ['one_set', 'stay_longer'],
+        }),
+      }),
+      product({
+        id: 'wine-night', name: '双人葡萄酒共叙', productKind: 'bundle',
+        listPriceAmount: 98_800, beverageFamily: 'wine',
+        recommendation: recommendation({
+          priority: 16, intentTags: ['relaxed', 'ritual'],
+          tasteTags: ['layered'], dwellTags: ['one_set', 'stay_longer'],
+        }),
+      }),
+      product({
+        id: 'sparkling-night', name: '双人起泡夜', productKind: 'bundle',
+        listPriceAmount: 88_800, beverageFamily: 'sparkling',
+        recommendation: recommendation({
+          priority: 19, intentTags: ['ritual', 'energetic'],
+          tasteTags: ['refreshing'], dwellTags: ['one_set', 'stay_longer'],
+        }),
+      }),
+      product({
+        id: 'spirits-night', name: '双人开瓶主场', productKind: 'bundle',
+        listPriceAmount: 148_800, beverageFamily: 'spirits',
+        recommendation: recommendation({
+          priority: 22, intentTags: ['energetic', 'ritual'],
+          tasteTags: ['strong', 'layered'], dwellTags: ['one_set', 'stay_longer'],
+        }),
+      }),
+    ]
+
+    const relaxed = selectMenuComparisonOptions(rankMenuRecommendations(products, {
+      partySize: 2, intent: 'relaxed', taste: 'refreshing', dwell: 'one_set',
+    }))
+    const ritual = selectMenuComparisonOptions(rankMenuRecommendations(products, {
+      partySize: 2, intent: 'ritual', taste: 'layered', dwell: 'no_rush',
+    }))
+
+    expect(relaxed.find((item) => item.role === 'primary')?.product.id).toBe('beer-night')
+    expect(ritual.find((item) => item.role === 'primary')?.product.id).toBe('spirits-night')
+    expect(relaxed.map((item) => item.product.id)).not.toEqual(ritual.map((item) => item.product.id))
   })
 
   it('keeps the three-way comparison focused on bundles when enough bundle choices are available', () => {

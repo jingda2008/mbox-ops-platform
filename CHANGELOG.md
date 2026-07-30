@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.60 - 2026-07-30
+
+- Fixed quick-selection answers being scored correctly but then hidden by a price-midpoint comparison layout that kept the same product in the primary position.
+- Made the highest rule-ranked eligible bundle the visible primary recommendation while retaining a lower-priced comparison when available.
+- Limited the “more complete” role to an explicitly configured upgrade and labelled other higher-priced choices as alternatives instead of inventing an upgrade.
+- Added production-like two-person recommendation coverage proving relaxed/refreshing and ritual/layered answers produce different primary products and comparison sets.
+- Strengthened the guest browser flow to assert the rendered recommendation names change after materially different quick-selection answers.
+
 ## 1.0.0-rc.59 - 2026-07-30
 
 - Made menu search immediately available on every guest ordering view, with a visually distinct search shortcut and global matching across product names, SKUs, categories, specifications, descriptions and tags.

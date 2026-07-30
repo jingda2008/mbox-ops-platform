@@ -716,32 +716,35 @@ describe('guest table API', () => {
     await closeFixture(app, repository)
   })
 
-  it('records guest mood as L0 table context without creating an employee to-do', async () => {
-    const { app, repository, now } = await fixture()
+  it('records guest mood directly on the current table visit without creating any service task', async () => {
+    const { app, repository, guestInsights, now } = await fixture()
     const session = (await exchange(app, staticQr(now()))).body
-    const moodType = session.serviceTypes.find((serviceType) => serviceType.code === 'GUEST_MOOD_INFO')
-    expect(moodType).toBeDefined()
+    const taskCountBefore = (await repository.read()).tasks.length
 
     const response = await app.inject({
       method: 'POST',
-      url: '/api/guest/tasks',
+      url: '/api/guest/events',
+      headers: { 'x-mbox-guest-id': session.guestIdentity.anonymousId },
       payload: {
         tableToken: session.tableToken,
-        serviceTypeId: moodType!.id,
-        note: '今晚状态：开心',
-        idempotencyKey: 'guest-mood-l0-0001',
+        eventType: 'mood_selected',
+        metadata: { moodId: 'happy', previousMoodId: null },
+        idempotencyKey: 'guest-mood-event-0001',
       },
     })
 
-    expect(response.statusCode).toBe(201)
-    expect(response.json()).toMatchObject({ status: 'confirmed' })
-    const storedTask = (await repository.read()).tasks.find((task) => task.id === response.json().id)
-    expect(storedTask).toMatchObject({
-      workflowLevel: 'L0',
-      status: 'confirmed',
-      resolution: '客情信息已记录',
+    expect(response.statusCode).toBe(202)
+    const state = await repository.read()
+    expect(state.tasks).toHaveLength(taskCountBefore)
+    expect(state.tables.find((table) => table.code === 'L01')?.guestMood).toMatchObject({
+      moodId: 'happy',
+      tableSessionId: session.account.tableSessionId,
+      updatedAt: expect.any(String),
     })
-    expect(storedTask?.ownerEmployeeId).toBeFalsy()
+    expect(guestInsights.events).toContainEqual(expect.objectContaining({
+      eventType: 'mood_selected',
+      metadata: { moodId: 'happy', previousMoodId: null },
+    }))
     await closeFixture(app, repository)
   })
 

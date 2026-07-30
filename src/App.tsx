@@ -48,6 +48,10 @@ import type { PilotEmployeeOption } from './shared/auth-contracts'
 import type { OperationsConsoleFocus, OperationsConsoleNavigationRequest, OperationsConsoleView } from './components/OperationsConsole'
 import { formatChinaDateTime, formatChinaTime } from './shared/china-time'
 import { applyStaffViewport } from './staff-viewport'
+import {
+  STAFF_COLLABORATION_EVENT,
+  type StaffCollaborationGuidance,
+} from './staff-action-guidance'
 import { runSingleFlight } from './single-flight'
 import './system-ui.css'
 import './premium-theme.css'
@@ -181,6 +185,7 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<OfflineSnapshot | null>(null)
   const [error, setError] = useState('')
   const [guardNotice, setGuardNotice] = useState('')
+  const [collaborationGuidance, setCollaborationGuidance] = useState<StaffCollaborationGuidance | null>(null)
   const [requiresLogin, setRequiresLogin] = useState(false)
   const [switchingEmployee, setSwitchingEmployee] = useState(false)
   const [staffMode, setStaffMode] = useState<'workspace' | 'voice'>('workspace')
@@ -190,6 +195,29 @@ export default function App() {
   const latestRevision = useRef<number | null>(null)
   const refreshInFlight = useRef<Promise<boolean> | null>(null)
   const nextNavigationRequestId = useRef(0)
+  const collaborationGuidanceRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handleGuidance = (event: Event) => {
+      const detail = (event as CustomEvent<StaffCollaborationGuidance>).detail
+      if (!detail?.message || !detail.instruction) return
+      setCollaborationGuidance(detail)
+    }
+    window.addEventListener(STAFF_COLLABORATION_EVENT, handleGuidance)
+    return () => window.removeEventListener(STAFF_COLLABORATION_EVENT, handleGuidance)
+  }, [])
+
+  useEffect(() => {
+    if (!collaborationGuidance) return
+    const frame = window.requestAnimationFrame(() => {
+      const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+      collaborationGuidanceRef.current?.scrollIntoView({
+        behavior: reducedMotion ? 'auto' : 'smooth',
+        block: 'start',
+      })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [collaborationGuidance])
 
   const refresh = useCallback(() => {
     return runSingleFlight(refreshInFlight, async () => {
@@ -415,6 +443,17 @@ export default function App() {
         <div className="offline-guard-notice" role="alert">
           <ShieldAlert size={17} />{guardNotice}
           <button title="关闭提示" onClick={() => setGuardNotice('')}>关闭</button>
+        </div>
+      )}
+      {collaborationGuidance && (
+        <div ref={collaborationGuidanceRef} className="staff-collaboration-guidance" role="alert" aria-live="assertive">
+          <ShieldAlert size={19} />
+          <div>
+            <strong>需要上级或同事配合</strong>
+            <span>{collaborationGuidance.message}</span>
+            <b>下一步：{collaborationGuidance.instruction}</b>
+          </div>
+          <button title="关闭协作提示" onClick={() => setCollaborationGuidance(null)}>关闭</button>
         </div>
       )}
       <LazyWorkspace>

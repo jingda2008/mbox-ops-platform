@@ -560,6 +560,13 @@ test.describe('视觉与移动端适配', () => {
     await expect(giftButton).toBeVisible()
     await giftButton.click()
     await expect(page.getByText('当前账号尚未配置赠送授权，请由店长或管理员授权', { exact: true })).toBeVisible()
+    const guidance = page.locator('.staff-collaboration-guidance')
+    await expect(guidance).toContainText('需要上级或同事配合')
+    await expect(guidance).toContainText('下一步：请联系店长或管理员')
+    await expect.poll(() => guidance.evaluate((element) => {
+      const bounds = element.getBoundingClientRect()
+      return bounds.top >= 0 && bounds.bottom <= window.innerHeight
+    })).toBe(true)
     await expect(page.getByLabel('赠送原因')).toHaveCount(0)
   })
 
@@ -607,8 +614,12 @@ test.describe('视觉与移动端适配', () => {
   test('情绪选择不等待网络即可立即高亮，送达失败前不误报完成', async ({ page }) => {
     await page.setViewportSize({ width: 430, height: 932 })
     let releaseRequest = () => undefined
+    let serviceTaskRequests = 0
     const requestGate = new Promise<void>((resolve) => { releaseRequest = resolve })
-    await page.route('**/api/guest/tasks', async (route) => {
+    page.on('request', (request) => {
+      if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/guest/tasks') serviceTaskRequests += 1
+    })
+    await page.route('**/api/guest/events', async (route) => {
       await requestGate
       await route.continue()
     })
@@ -625,11 +636,12 @@ test.describe('视觉与移动端适配', () => {
     releaseRequest()
     await expect(mood).toBeEnabled({ timeout: 8_000 })
     await expect(mood).not.toHaveAttribute('data-action-state', 'pending')
+    expect(serviceTaskRequests).toBe(0)
   })
 
   test('异步提交失败时恢复情绪选择并给出明确失败反馈', async ({ page }) => {
     await page.setViewportSize({ width: 430, height: 932 })
-    await page.route('**/api/guest/tasks', async (route) => {
+    await page.route('**/api/guest/events', async (route) => {
       await route.fulfill({
         status: 503,
         contentType: 'application/json',

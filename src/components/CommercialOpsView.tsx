@@ -20,6 +20,7 @@ import type {
 } from '../shared/commercial-ops-contracts'
 import { formatChinaDateTime } from '../shared/china-time'
 import { useRevealPanelScroll } from './use-reveal-panel-scroll'
+import { publishStaffCollaborationGuidance } from '../staff-action-guidance'
 import './CommercialOpsView.css'
 
 type Tab = 'overview' | 'profit' | 'stock' | 'print-jobs' | 'printing' | 'vouchers' | 'customers' | 'sales' | 'rules'
@@ -49,6 +50,9 @@ export function CommercialOpsView({ data, onRefresh }: { data: BootstrapResponse
   }, [])
 
   useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    if (notice) publishStaffCollaborationGuidance(notice.message)
+  }, [notice])
   useEffect(() => {
     if (!notice) return
     const timer = window.setTimeout(() => setNotice(null), notice.tone === 'success' ? 3_000 : 6_000)

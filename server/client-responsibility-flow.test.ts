@@ -131,19 +131,8 @@ describe('客户端指令到责任岗位完整流转', () => {
     const { app, repository, guestInsights } = await buildFixture()
     apps.push(app)
     const session = await guestSession(app, 'L01')
-    const moodInfo = session.serviceTypes.find((item) => item.code === 'GUEST_MOOD_INFO')!
     const guestHeaders = { 'x-mbox-guest-id': session.guestIdentity.anonymousId }
-    const note = '客人心情更新为「微醺」。服务建议：请主动补水，关注饮酒节奏和身体状态。'
-    const created = await app.inject({
-      method: 'POST', url: '/api/guest/tasks', headers: guestHeaders,
-      payload: {
-        tableToken: session.tableToken,
-        serviceTypeId: moodInfo.id,
-        note,
-        idempotencyKey: 'client-flow-mood-task-0001',
-      },
-    })
-    expect(created.statusCode, created.body).toBe(201)
+    const taskCountBefore = repository.state.tasks.length
     const behavior = await app.inject({
       method: 'POST', url: '/api/guest/events', headers: guestHeaders,
       payload: {
@@ -154,17 +143,15 @@ describe('客户端指令到责任岗位完整流转', () => {
       },
     })
     expect(behavior.statusCode, behavior.body).toBe(202)
-    const task = repository.state.tasks.find((candidate) => candidate.id === created.json().id)!
-    expect(task).toMatchObject({
-      note,
-      workflowLevel: 'L0',
-      status: 'confirmed',
-      resolution: '客情信息已记录',
+    expect(repository.state.tasks).toHaveLength(taskCountBefore)
+    expect(repository.state.tables.find((table) => table.code === 'L01')?.guestMood).toMatchObject({
+      moodId: 'tipsy',
+      tableSessionId: session.account.tableSessionId,
     })
-    expect(task.ownerId).toBeFalsy()
     const employeeProjection = projectRuntimeStateForActor(repository.state, actorContext(repository.state, 'emp-lin'))
-    expect(employeeProjection.tasks.filter(taskQueueIsVisible))
-      .not.toContainEqual(expect.objectContaining({ id: task.id }))
+    expect(employeeProjection.tasks.filter(taskQueueIsVisible)).toHaveLength(
+      repository.state.tasks.filter(taskQueueIsVisible).length,
+    )
     expect(guestInsights.events).toContainEqual(expect.objectContaining({
       anonymousId: session.guestIdentity.anonymousId,
       tableSessionId: session.account.tableSessionId,
@@ -173,7 +160,7 @@ describe('客户端指令到责任岗位完整流转', () => {
     }))
 
     const refreshed = await guestSession(app, 'L01', session.tableToken)
-    expect(refreshed.tasks.some((candidate) => candidate.id === task.id)).toBe(false)
+    expect(refreshed.tasks).not.toContainEqual(expect.objectContaining({ serviceTypeCode: 'GUEST_MOOD_INFO' }))
   })
 
   it('让全部顾客服务类型进入正确责任人队列，并由责任人闭环后从客户端待办消失', async () => {

@@ -304,7 +304,11 @@ async function requestBootstrap(revision?: number): Promise<BootstrapResponse | 
   return body
 }
 
-async function guestRequest<T>(path: string, init?: RequestInit): Promise<T> {
+async function guestRequest<T>(
+  path: string,
+  init?: RequestInit,
+  options: { interactionFeedback?: boolean } = {},
+): Promise<T> {
   const method = init?.method ?? 'GET'
   return withInteractionAction(async () => {
     const headers = new Headers(init?.headers)
@@ -333,7 +337,7 @@ async function guestRequest<T>(path: string, init?: RequestInit): Promise<T> {
       window.localStorage.setItem('mbox.guest.anonymous-id.v1', identity.anonymousId)
     }
     return body
-  }, { enabled: shouldTrackMutation(path, method) })
+  }, { enabled: options.interactionFeedback ?? shouldTrackMutation(path, method) })
 }
 
 export function getGuestSession(tableToken: string, localTableCode = '') {
@@ -375,12 +379,15 @@ export function checkoutGuestOrder(input: GuestCheckoutInput) {
   })
 }
 
-export function trackGuestBehavior(input: GuestBehaviorEventInput, options: { keepalive?: boolean } = {}) {
+export function trackGuestBehavior(
+  input: GuestBehaviorEventInput,
+  options: { keepalive?: boolean; interactionFeedback?: boolean } = {},
+) {
   return guestRequest<GuestBehaviorAccepted>('/api/guest/events', {
     method: 'POST',
     body: JSON.stringify(input),
     keepalive: options.keepalive,
-  })
+  }, { interactionFeedback: options.interactionFeedback })
 }
 
 export function getBootstrap(): Promise<BootstrapResponse>

@@ -38,6 +38,7 @@ import type {
   StockCount,
 } from '../shared/inventory-contracts'
 import { useRevealPanelScroll } from './use-reveal-panel-scroll'
+import { publishStaffCollaborationGuidance } from '../staff-action-guidance'
 import './InventoryView.css'
 
 type InventoryTab = 'overview' | 'receipt' | 'count' | 'recipes' | 'remake' | 'bottles' | 'approvals' | 'policy'
@@ -92,6 +93,10 @@ export function InventoryView() {
   const [busyAction, setBusyAction] = useState('')
   const [notice, setNotice] = useState<Notice | null>(null)
   const [tab, setTab] = useState<InventoryTab>('overview')
+
+  useEffect(() => {
+    if (notice) publishStaffCollaborationGuidance(notice.message)
+  }, [notice])
 
   const load = useCallback(async () => {
     setLoading(true)

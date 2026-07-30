@@ -112,13 +112,6 @@ export function formatGuestCompactCountdown(durationMs: number) {
   return formatted.startsWith('00:') ? formatted.slice(3) : formatted.replace(/^0/, '')
 }
 
-export function guestMoodServiceNote(label: string, care: string, previousLabel = '') {
-  const state = previousLabel && previousLabel !== label
-    ? `客户心情更新：${previousLabel} → ${label}，请以最新状态为准。`
-    : `客户心情反馈：${label}。`
-  return `${state}关怀建议：${care} 请服务专员选择合适时机到桌关注。`
-}
-
 export function guestCustomSongServiceNote(input: { title: string; artist: string; singerName: string; customerNote: string }) {
   const parts = [`自定义点歌申请：${input.title.trim()}`]
   if (input.artist.trim()) parts.push(`原唱：${input.artist.trim()}`)

@@ -48,6 +48,7 @@ import {
 } from '../shared/payment-contracts'
 import type { Order, OrderItem } from '../shared/order-contracts'
 import { useRevealPanelScroll } from './use-reveal-panel-scroll'
+import { publishStaffCollaborationGuidance } from '../staff-action-guidance'
 import { CustomerPaymentCodeScanner } from './CustomerPaymentCodeScanner'
 import type { OperationsConsoleNavigationRequest } from './OperationsConsole'
 import './PaymentView.css'
@@ -155,6 +156,10 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
     alipay: { reason: '', nextDayOwnerId: '' },
     unionpay: { reason: '', nextDayOwnerId: '' },
   })
+
+  useEffect(() => {
+    if (notice) publishStaffCollaborationGuidance(notice.message)
+  }, [notice])
   const [handoverNote, setHandoverNote] = useState('')
   const [reviewNote, setReviewNote] = useState('')
 

@@ -55,6 +55,7 @@ import { useRevealPanelScroll } from './use-reveal-panel-scroll'
 import type { OperationsConsoleNavigationRequest } from './OperationsConsole'
 import { runOptimisticAction } from '../optimistic-action'
 import { projectReservation } from '../optimistic-projections'
+import { publishStaffCollaborationGuidance } from '../staff-action-guidance'
 
 type DateRange = 'today' | 'upcoming' | 'all'
 type Notice = { tone: 'success' | 'error'; message: string }
@@ -233,6 +234,10 @@ export function ReservationView({ data, focusRequest = null }: { data: Bootstrap
   const [secondaryReference, setSecondaryReference] = useState('')
   const [reason, setReason] = useState('')
   const [selectedTableId, setSelectedTableId] = useState('')
+
+  useEffect(() => {
+    if (notice) publishStaffCollaborationGuidance(notice.message)
+  }, [notice])
   const [selectedSalesEmployeeId, setSelectedSalesEmployeeId] = useState('')
   const [editPartySize, setEditPartySize] = useState(1)
   const [editScheduledAt, setEditScheduledAt] = useState('')

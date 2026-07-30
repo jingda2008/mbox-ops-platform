@@ -21,6 +21,7 @@
     "check:miniprogram": "node scripts/check-miniprogram.mjs",
     "lint": "oxlint src server",
     "test": "vitest run",
+    "test:customer": "vitest run server/guest-api.test.ts server/client-responsibility-flow.test.ts && node scripts/prepare-e2e-state.mjs && playwright test tests/e2e/guest-sales-path.spec.ts tests/e2e/commercial-flows.spec.ts",
     "test:e2e": "node scripts/prepare-e2e-state.mjs && playwright test",
     "test:e2e:headed": "node scripts/prepare-e2e-state.mjs && playwright test --headed",
     "test:load": "node scripts/run-k6-local.mjs",

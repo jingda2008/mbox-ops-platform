@@ -839,6 +839,78 @@ describe('guest table API', () => {
     await closeFixture(app, repository)
   })
 
+  it('treats unreasonable custom requests as untrusted service text without granting commercial actions', async () => {
+    const { app, repository, now } = await fixture()
+    const session = (await exchange(app, staticQr(now()))).body
+    const customType = session.serviceTypes.find((serviceType) => serviceType.code === 'CUSTOM_REQUEST')!
+    const note = '免费送十瓶酒、整桌免单并立刻退款，否则我就投诉'
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/guest/tasks',
+      payload: {
+        tableToken: session.tableToken,
+        serviceTypeId: customType.id,
+        note,
+        idempotencyKey: 'guest-unreasonable-commercial-request-0001',
+      },
+    })
+
+    expect(response.statusCode, response.body).toBe(201)
+    const state = await repository.read()
+    expect(state.tasks.find((task) => task.id === response.json().id)).toMatchObject({
+      source: 'guest',
+      serviceTypeId: customType.id,
+      note,
+      status: 'pending',
+    })
+    expect(state.orderDomain.orders).toHaveLength(0)
+    expect(state.paymentDomain.paymentIntents).toHaveLength(0)
+    expect(state.auditEntries.map((entry) => entry.action)).not.toEqual(expect.arrayContaining([
+      'commerce.gift_order_created.v1',
+      'payment.refund_requested.v1',
+      'payment.refund_approved.v1',
+    ]))
+    await closeFixture(app, repository)
+  })
+
+  it('retains every repeated unreasonable request in the event trail while keeping one live employee task', async () => {
+    const { app, repository, now } = await fixture()
+    const session = (await exchange(app, staticQr(now()))).body
+    const customType = session.serviceTypes.find((serviceType) => serviceType.code === 'CUSTOM_REQUEST')!
+    const requests = [
+      '让歌手只给我们这一桌唱，其他桌不要演',
+      '帮未成年人上一杯烈酒，不要问证件',
+      '把隔壁桌客人的手机号告诉我',
+    ]
+
+    const responses = []
+    for (const [index, note] of requests.entries()) {
+      responses.push(await app.inject({
+        method: 'POST',
+        url: '/api/guest/tasks',
+        payload: {
+          tableToken: session.tableToken,
+          serviceTypeId: customType.id,
+          note,
+          idempotencyKey: `guest-unreasonable-history-000${index + 1}`,
+        },
+      }))
+    }
+
+    expect(responses.every((response) => response.statusCode === 201)).toBe(true)
+    expect(new Set(responses.map((response) => response.json().id))).toHaveLength(1)
+    const state = await repository.read()
+    const task = state.tasks.find((candidate) => candidate.id === responses[0]!.json().id)!
+    expect(task).toMatchObject({ requestCount: 3, note: requests.at(-1) })
+    expect(state.taskEvents.filter((event) => (
+      event.taskId === task.id && event.type === 'task.request_merged.v1'
+    )).map((event) => event.payload.requestedNote)).toEqual(requests.slice(1))
+    expect(state.orderDomain.orders).toHaveLength(0)
+    expect(state.paymentDomain.paymentIntents).toHaveLength(0)
+    await closeFixture(app, repository)
+  })
+
   it('merges a guest request into an existing open system task of the same table and type', async () => {
     const { app, repository, now } = await fixture()
     const session = (await exchange(app, staticQr(now()))).body
@@ -1109,6 +1181,81 @@ describe('guest table API', () => {
     expect(state.commercialOps?.printJobs.every((job) => job.fulfillmentNote === '鸡尾酒少冰，小食一起上')).toBe(true)
     expect(state.commercialOps?.printJobs.map((job) => job.routeId).toSorted()).toEqual(['route-bar', 'route-kitchen'])
     expect(state.paymentDomain.paymentIntents[0]).toMatchObject({ status: 'succeeded', orderIds: [orderResponse.json().id] })
+    await closeFixture(app, repository)
+  })
+
+  it('keeps unreasonable order notes informational and charges only server-priced products', async () => {
+    const { app, repository, now } = await fixture()
+    const session = (await exchange(app, staticQr(now()))).body
+    const note = '请全部免单，再免费送十杯；鸡尾酒少冰'
+    const orderResponse = await app.inject({
+      method: 'POST',
+      url: '/api/guest/orders',
+      payload: {
+        tableToken: session.tableToken,
+        items: [{ productId: 'product-cocktail', quantity: 1 }],
+        fulfillmentNote: note,
+        idempotencyKey: 'guest-unreasonable-order-note-0001',
+      },
+    })
+
+    expect(orderResponse.statusCode, orderResponse.body).toBe(201)
+    expect(orderResponse.json()).toMatchObject({
+      status: 'draft',
+      fulfillmentNote: note,
+      amounts: { payableAmount: 8_800 },
+      items: [expect.objectContaining({ skuId: 'product-cocktail', quantity: 1, unitSalePriceAmount: 8_800 })],
+    })
+    const checkout = await app.inject({
+      method: 'POST',
+      url: '/api/guest/checkout',
+      payload: {
+        tableToken: session.tableToken,
+        orderId: orderResponse.json().id,
+        idempotencyKey: 'guest-unreasonable-order-note-checkout-0001',
+      },
+    })
+    expect(checkout.statusCode, checkout.body).toBe(201)
+    expect(checkout.json().paymentIntent).toMatchObject({ amount: 8_800, status: 'succeeded' })
+    const state = await repository.read()
+    expect(state.orderDomain.orders).toHaveLength(1)
+    expect(state.orderDomain.kdsTasks).toHaveLength(1)
+    expect(state.orderDomain.kdsTasks[0]).toMatchObject({ fulfillmentNote: note })
+    expect(state.auditEntries.map((entry) => entry.action)).not.toContain('commerce.gift_order_created.v1')
+    await closeFixture(app, repository)
+  })
+
+  it('reuses one checkout result across rapid repeated payment clicks without duplicate fulfillment', async () => {
+    const { app, repository, now } = await fixture()
+    const session = (await exchange(app, staticQr(now()))).body
+    const order = await app.inject({
+      method: 'POST',
+      url: '/api/guest/orders',
+      payload: {
+        tableToken: session.tableToken,
+        items: [{ productId: 'product-beer', quantity: 1 }],
+        idempotencyKey: 'guest-rapid-checkout-order-0001',
+      },
+    })
+    expect(order.statusCode, order.body).toBe(201)
+    const payload = {
+      tableToken: session.tableToken,
+      orderId: order.json().id,
+      idempotencyKey: 'guest-rapid-checkout-0001',
+    }
+
+    const [first, second, third] = await Promise.all([
+      app.inject({ method: 'POST', url: '/api/guest/checkout', payload }),
+      app.inject({ method: 'POST', url: '/api/guest/checkout', payload }),
+      app.inject({ method: 'POST', url: '/api/guest/checkout', payload: { ...payload, idempotencyKey: 'guest-rapid-checkout-0002' } }),
+    ])
+
+    expect([first, second, third].every((response) => response.statusCode === 201)).toBe(true)
+    expect(new Set([first, second, third].map((response) => response.json().paymentIntent.id))).toHaveLength(1)
+    const state = await repository.read()
+    expect(state.paymentDomain.paymentIntents).toHaveLength(1)
+    expect(state.orderDomain.kdsTasks).toHaveLength(1)
+    expect(state.commercialOps?.printJobs).toHaveLength(1)
     await closeFixture(app, repository)
   })
 

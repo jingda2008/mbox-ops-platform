@@ -33,6 +33,81 @@
 .employee-ordering-focus, .employee-ordering-focus body { overflow: hidden; overscroll-behavior: none; }
 .employee-ordering-exit { min-height: 38px; position: fixed; top: max(12px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); z-index: 132; display: inline-flex; align-items: center; gap: 6px; padding: 0 11px; border: 1px solid #8e9890; border-radius: 6px; background: rgba(14, 18, 15, .92); box-shadow: 0 6px 18px rgba(5, 8, 6, .18); color: #fff; font-size: 11px; font-weight: 800; backdrop-filter: blur(8px); }
 .employee-ordering-exit:active { transform: translateY(1px); }
+
+.ordering-entry-backdrop {
+  position: fixed;
+  z-index: 150;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgb(12 15 13 / 62%);
+  backdrop-filter: blur(2px);
+}
+
+.ordering-entry-dialog {
+  width: min(440px, 100%);
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid #b9bfb7;
+  border-top: 4px solid var(--brand-yellow);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 22px 60px rgb(4 8 5 / 32%);
+}
+
+.ordering-entry-dialog header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.ordering-entry-dialog header > span {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: #f7d75c;
+}
+
+.ordering-entry-dialog header div,
+.ordering-entry-dialog label {
+  display: grid;
+  gap: 4px;
+}
+
+.ordering-entry-dialog header small,
+.ordering-entry-dialog p,
+.ordering-entry-dialog label > span {
+  color: var(--ink-soft);
+}
+
+.ordering-entry-dialog p { line-height: 1.55; }
+.ordering-entry-dialog select { width: 100%; min-height: 46px; }
+.ordering-entry-dialog footer { display: flex; justify-content: flex-end; gap: 8px; }
+.ordering-entry-guidance { padding: 9px 11px; border-left: 3px solid var(--warning); background: #fff8e7; color: #76510c; }
+
+.employee-order-table-lock {
+  min-width: 250px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #c9cec6;
+  border-left: 3px solid #2c7250;
+  background: #f5f9f6;
+}
+
+.employee-order-table-lock span { display: grid; gap: 1px; }
+.employee-order-table-lock small { color: var(--ink-soft); font-size: 10px; }
+.employee-order-table-lock strong { font-size: 14px; }
+.employee-order-table-lock b { color: #4f6a59; font-size: 10px; }
+.employee-order-table-lock.is-invalid { border-left-color: var(--danger); background: #fff3f3; }
+.employee-order-table-lock.is-invalid b { color: var(--danger); }
 .commerce-view.is-ordering-focus .menu-workspace-header { padding-right: 112px; }
 .ordering-exit-backdrop { position: fixed; inset: 0; z-index: 150; display: grid; place-items: center; padding: 18px; background: rgba(8, 10, 8, .74); }
 .ordering-exit-dialog { width: min(420px, 100%); display: grid; gap: 14px; padding: 18px; border: 1px solid #cdd2cb; border-top: 4px solid var(--brand-yellow); border-radius: 8px; background: #fff; box-shadow: 0 24px 70px rgba(0, 0, 0, .34); }
@@ -147,4 +222,4 @@
 .manager-cancel-dialog > footer button { min-height: 44px; justify-content: center; }
 @media (max-width: 1000px) { .commerce-grid { grid-template-columns: 1fr; } .kds-section { border-right: 0; border-bottom: 1px solid var(--line); } .workstation-badge { display: none; } }
 @media (max-width: 1180px) { .kds-row { grid-template-columns: 82px minmax(160px, 1fr) minmax(170px, .8fr); } .kds-actions { grid-column: 2 / 4; justify-self: end; } }
-@media (max-width: 700px) { .commerce-metrics { grid-template-columns: repeat(3, 1fr); } .commerce-metrics > div { min-height: 68px; padding: 8px; grid-template-columns: 24px minmax(0, 1fr); } .commerce-metrics strong { font-size: 16px; } .quick-order-band { grid-template-columns: 1fr; } .commerce-mode-tabs { align-items: center; flex-wrap: wrap; padding: 7px 10px; } .commerce-mode-tabs > button { flex: 1; } .employee-order-type { width: 100%; margin-left: 0; padding: 7px 0 0; border-top: 1px solid var(--line); border-left: 0; flex-wrap: wrap; } .employee-order-type .employee-order-mode { flex: 1; } .employee-gift-availability { width: 100%; max-width: none; } .employee-order-controls { width: 100%; flex-wrap: wrap; } .employee-order-controls .menu-table-control { width: 100%; } .employee-order-controls select { width: 100%; } .employee-order-mode, .employee-settlement-mode { flex: 1 1 220px; width: 100%; } .employee-order-mode button, .employee-settlement-mode button { min-width: 0; } .employee-gift-reason { flex: 1 1 100%; } .employee-gift-reason input { width: 100%; } .commerce-view.is-ordering-focus { overflow-y: auto; } .commerce-view.is-ordering-focus .menu-ordering-workspace { height: auto; } .commerce-view.is-ordering-focus .menu-workspace-header { padding-right: 100px; } .employee-ordering-exit { min-height: 34px; top: max(10px, env(safe-area-inset-top)); right: max(8px, env(safe-area-inset-right)); padding: 0 9px; } .kds-row { grid-template-columns: 72px minmax(0, 1fr); gap: 10px; } .kds-meta { grid-column: 1 / 3; } .kds-actions { width: 100%; grid-column: 1 / 3; justify-content: stretch; } .kds-actions .primary-button, .kds-actions .secondary-button { flex: 1 1 130px; justify-content: center; } }
+@media (max-width: 700px) { .commerce-metrics { grid-template-columns: repeat(3, 1fr); } .commerce-metrics > div { min-height: 68px; padding: 8px; grid-template-columns: 24px minmax(0, 1fr); } .commerce-metrics strong { font-size: 16px; } .quick-order-band { grid-template-columns: 1fr; } .commerce-mode-tabs { align-items: center; flex-wrap: wrap; padding: 7px 10px; } .commerce-mode-tabs > button { flex: 1; } .employee-order-type { width: 100%; margin-left: 0; padding: 7px 0 0; border-top: 1px solid var(--line); border-left: 0; flex-wrap: wrap; } .employee-order-type .employee-order-mode { flex: 1; } .employee-gift-availability { width: 100%; max-width: none; } .employee-order-controls { width: 100%; flex-wrap: wrap; } .employee-order-table-lock { width: 100%; min-width: 0; } .employee-order-mode, .employee-settlement-mode { flex: 1 1 220px; width: 100%; } .employee-order-mode button, .employee-settlement-mode button { min-width: 0; } .employee-gift-reason { flex: 1 1 100%; } .employee-gift-reason input { width: 100%; } .commerce-view.is-ordering-focus { overflow-y: auto; } .commerce-view.is-ordering-focus .menu-ordering-workspace { height: auto; } .commerce-view.is-ordering-focus .menu-workspace-header { padding-right: 100px; } .employee-ordering-exit { min-height: 34px; top: max(10px, env(safe-area-inset-top)); right: max(8px, env(safe-area-inset-right)); padding: 0 9px; } .ordering-entry-dialog { padding: 14px; } .ordering-entry-dialog footer > button { flex: 1; } .kds-row { grid-template-columns: 72px minmax(0, 1fr); gap: 10px; } .kds-meta { grid-column: 1 / 3; } .kds-actions { width: 100%; grid-column: 1 / 3; justify-content: stretch; } .kds-actions .primary-button, .kds-actions .secondary-button { flex: 1 1 130px; justify-content: center; } }

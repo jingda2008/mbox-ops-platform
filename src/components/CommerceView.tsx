@@ -57,6 +57,7 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
   const [giftReason, setGiftReason] = useState('')
   const [workspaceMode, setWorkspaceMode] = useState<'order' | 'fulfillment'>('fulfillment')
   const [orderingFocusMode, setOrderingFocusMode] = useState(false)
+  const [orderingEntryOpen, setOrderingEntryOpen] = useState(false)
   const [orderingCartCount, setOrderingCartCount] = useState(0)
   const [exitPinOpen, setExitPinOpen] = useState(false)
   const [exitPin, setExitPin] = useState('')
@@ -138,9 +139,11 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
   }, [])
 
   useEffect(() => {
+    if (!tableId) return
     if (occupiedTables.some((table) => table.id === tableId)) return
-    setTableId(occupiedTables.length === 1 ? occupiedTables[0]!.id : '')
-  }, [occupiedTables, tableId])
+    if (orderingFocusMode) return
+    setTableId('')
+  }, [occupiedTables, orderingFocusMode, tableId])
 
   useEffect(() => {
     if (canGift || orderMode === 'paid') return
@@ -165,10 +168,12 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
       : undefined
     if (orderShortcut) {
       if (requestedTable) setTableId(requestedTable.id)
-      setWorkspaceMode('order')
-      setOrderingFocusMode(true)
+      setWorkspaceMode('fulfillment')
+      setOrderingFocusMode(false)
+      setOrderingEntryOpen(true)
       setOrderMode(focusRequest.focus?.query === 'employee-order-gift' && canGift ? 'gift' : 'paid')
     } else {
+      setOrderingEntryOpen(false)
       setOrderingFocusMode(false)
       setWorkspaceMode('fulfillment')
     }
@@ -405,7 +410,22 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
     }
   }
 
+  function requestOrderingFocus() {
+    setTableId('')
+    setOrderingEntryOpen(true)
+    setExitPinOpen(false)
+    setExitPin('')
+    setExitPinError('')
+  }
+
   function enterOrderingFocus() {
+    if (!occupiedTables.some((table) => table.id === tableId)) {
+      onNotice(occupiedTables.length === 0
+        ? '当前没有已开台桌台，请先到“现场调度”开台'
+        : '请先选择客人所在桌台，再进入全屏点单')
+      return
+    }
+    setOrderingEntryOpen(false)
     setWorkspaceMode('order')
     setOrderingFocusMode(true)
     setExitPinOpen(false)
@@ -427,8 +447,10 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
       await verifyCurrentEmployeePin(exitPin)
       setExitPinOpen(false)
       setOrderingFocusMode(false)
+      setOrderingEntryOpen(false)
       setWorkspaceMode('fulfillment')
       setOrderingCartCount(0)
+      setTableId('')
       setExitPin('')
       onNotice(orderingCartCount > 0 ? '已退出客用点单，未提交的购物车已清空' : '已退出客用点单')
     } catch (error) {
@@ -450,6 +472,7 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
     .toSorted((left, right) => Date.parse(right.paidAt ?? right.createdAt) - Date.parse(left.paidAt ?? left.createdAt))[0]
   const paidTable = latestPaidSignal ? tableFromSession(data, latestPaidSignal.tableSessionId) : undefined
   const selectedTable = occupiedTables.find((table) => table.id === tableId)
+  const lockedTable = data.tables.find((table) => table.id === tableId)
   const tableSelectionMessage = selectedTable
     ? ''
     : occupiedTables.length === 0
@@ -511,7 +534,7 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
         </section>
       </div>}
       {!orderingFocusMode && access.canOrder && <div className="commerce-mode-tabs">
-        <button onClick={enterOrderingFocus}>全屏点单</button>
+        <button onClick={requestOrderingFocus}>全屏点单</button>
         <button className={workspaceMode === 'fulfillment' ? 'is-active' : ''} onClick={() => setWorkspaceMode('fulfillment')}>出品履约 <span>{visibleKds.length}</span></button>
         <div className="employee-order-type">
           <small>订单类型</small>
@@ -533,14 +556,52 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
         </div>
       </div>}
 
+      {orderingEntryOpen && !orderingFocusMode && (
+        <div className="ordering-entry-backdrop" role="presentation">
+          <section className="ordering-entry-dialog" role="dialog" aria-modal="true" aria-label="进入全屏点单前选择桌台">
+            <header>
+              <span><ShoppingCart size={20} /></span>
+              <div><small>员工协助点单</small><h2>先确认客人桌台</h2></div>
+              <button className="icon-button" type="button" title="关闭桌台选择" onClick={() => setOrderingEntryOpen(false)}><X size={18} /></button>
+            </header>
+            <p>进入后桌号会锁定，避免点单过程中误换桌。需要更换时，必须验证当前员工PIN退出后重新选择。</p>
+            <label>
+              <span>本次点单桌台</span>
+              <select
+                autoFocus
+                aria-label="进入点单前选择桌台"
+                value={tableId}
+                disabled={occupiedTables.length === 0}
+                onChange={(event) => setTableId(event.target.value)}
+              >
+                <option value="">{occupiedTables.length === 0 ? '当前没有已开台桌台' : '请选择客人所在桌台'}</option>
+                {occupiedTables.map((table) => <option key={table.id} value={table.id}>{table.code} · {table.displayName} · {table.guestCount}人</option>)}
+              </select>
+            </label>
+            {tableSelectionMessage && <div className="ordering-entry-guidance" role="alert">{tableSelectionMessage}</div>}
+            <footer>
+              <button className="secondary-button" type="button" onClick={() => setOrderingEntryOpen(false)}>暂不点单</button>
+              <button className="primary-button" type="button" disabled={!selectedTable} onClick={enterOrderingFocus}>
+                <LockKeyhole size={16} />确认桌台并进入
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
+
       {workspaceMode === 'order' && access.canOrder ? (
         <>
           {orderingFocusMode && <button className="employee-ordering-exit" type="button" onClick={requestOrderingExit}><LogOut size={17} />员工退出</button>}
           <MenuOrderingWorkspace
             products={data.products}
-            tableLabel={selectedTable ? `${selectedTable.code} · ${selectedTable.displayName}` : '尚未选择桌台'}
+            tableLabel={lockedTable ? `${lockedTable.code} · ${lockedTable.displayName}` : '桌台状态已变化'}
             tableControl={<div className="employee-order-controls">
-              <div className="menu-table-control"><select aria-label="选择桌台" value={tableId} disabled={occupiedTables.length === 0} onChange={(event) => setTableId(event.target.value)}><option value="">{occupiedTables.length === 0 ? '当前没有已开台桌台' : '请选择客人所在桌台'}</option>{occupiedTables.map((table) => <option key={table.id} value={table.id}>{table.code} · {table.displayName} · {table.guestCount}人</option>)}</select>{tableSelectionMessage && <span className="menu-table-guidance" role="alert">{tableSelectionMessage}</span>}</div>
+              <div className={`employee-order-table-lock${selectedTable ? '' : ' is-invalid'}`} role="status">
+                <LockKeyhole size={17} />
+                <span><small>本次点单桌台已锁定</small><strong>{lockedTable ? `${lockedTable.code} · ${lockedTable.displayName}` : '桌台状态已变化'}</strong></span>
+                <b>{selectedTable ? '更换需PIN退出' : '请PIN退出后重新选择'}</b>
+              </div>
+              {!selectedTable && <span className="menu-table-guidance" role="alert">该桌已结台或暂停，系统不会自动切换桌号，请验证PIN退出后重新选择。</span>}
               <span className={`employee-order-badge${orderMode === 'gift' ? ' is-gift' : ''}`}>{orderMode === 'gift' ? <Gift size={14} /> : <ShoppingCart size={14} />}{orderMode === 'gift' ? '权限赠送' : '正常下单'}</span>
               {orderMode === 'paid' && <div className="employee-settlement-mode" role="group" aria-label="结算方式">
                 <button type="button" className={settlementMode === 'immediate_payment' ? 'is-active' : ''} onClick={() => setSettlementMode('immediate_payment')}><QrCode size={14} />立即付款</button>

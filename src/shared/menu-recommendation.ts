@@ -152,82 +152,41 @@ export function selectMenuComparisonOptions(
   ))
   if (uniqueRanked.length === 0 || limit <= 0) return []
 
-  const byPrice = uniqueRanked.toSorted((left, right) => (
-    left.product.listPriceAmount - right.product.listPriceAmount
-    || right.score - left.score
-  ))
-  const distinctPrices = new Set(byPrice.map((item) => item.product.listPriceAmount))
-  if (distinctPrices.size >= 3 && limit >= 3) {
-    const lighter = byPrice[0]!
-    const lowerMedianPrice = byPrice[Math.floor((byPrice.length - 1) / 2)]!.product.listPriceAmount
-    const upperMedianPrice = byPrice[Math.ceil((byPrice.length - 1) / 2)]!.product.listPriceAmount
-    const interior = byPrice.filter((item) => (
-      item.product.id !== lighter.product.id
-      && item.product.id !== byPrice.at(-1)!.product.id
-    ))
-    const primary = interior.toSorted((left, right) => (
-      Number(!(left.product.listPriceAmount >= lowerMedianPrice && left.product.listPriceAmount <= upperMedianPrice))
-      - Number(!(right.product.listPriceAmount >= lowerMedianPrice && right.product.listPriceAmount <= upperMedianPrice))
-      || right.score - left.score
-    ))[0] ?? slots.primary ?? lighter
-    const configuredUpgradeId = recommendationConfig(primary.product).upgradeProductId
-    const configuredComplete = configuredUpgradeId
-      ? uniqueRanked.find((item) => (
-          item.product.id === configuredUpgradeId
-          && item.product.listPriceAmount > primary.product.listPriceAmount
-        )) ?? null
-      : null
-    const complete = configuredComplete
-      ?? byPrice.toReversed().find((item) => (
-        item.product.id !== primary.product.id
-        && item.product.id !== lighter.product.id
-      ))
-      ?? null
-
-    const tiered = [
-      { ...lighter, role: 'lighter' as const },
-      { ...primary, role: 'primary' as const },
-      ...(complete ? [{ ...complete, role: 'complete' as const }] : []),
-    ]
-    return tiered.slice(0, limit)
-  }
-
-  if (distinctPrices.size >= 2 && uniqueRanked.length >= 3 && limit >= 3) {
-    const lighter = byPrice[0]!
-    const higherPriced = uniqueRanked.filter((item) => (
-      item.product.id !== lighter.product.id
-      && item.product.listPriceAmount > lighter.product.listPriceAmount
-    ))
-    const primary = higherPriced.toSorted((left, right) => right.score - left.score)[0]!
-    const alternative = uniqueRanked
-      .filter((item) => item.product.id !== lighter.product.id && item.product.id !== primary.product.id)
-      .toSorted((left, right) => (
-        Number(right.product.listPriceAmount === primary.product.listPriceAmount)
-        - Number(left.product.listPriceAmount === primary.product.listPriceAmount)
-        || Number(right.product.beverageFamily !== primary.product.beverageFamily)
-        - Number(left.product.beverageFamily !== primary.product.beverageFamily)
-        || right.score - left.score
-      ))[0]!
-
-    return [
-      { ...lighter, role: 'lighter' },
-      { ...primary, role: 'primary' },
-      { ...alternative, role: 'alternative' },
-    ]
-  }
-
   const selected: MenuComparisonOption[] = []
   const seen = new Set<string>()
+  const primary = uniqueRanked.find((item) => item.product.id === slots.primary?.product.id)
+    ?? uniqueRanked[0]!
   const add = (item: RankedMenuProduct | null, role: MenuComparisonRole) => {
     if (!item || seen.has(item.product.id) || selected.length >= limit) return
     seen.add(item.product.id)
     selected.push({ ...item, role })
   }
 
-  add(slots.lighter, 'lighter')
-  add(slots.primary, 'primary')
-  add(slots.complete, 'complete')
-  for (const item of uniqueRanked) add(item, 'alternative')
+  const lowerPriced = uniqueRanked.filter((item) => (
+    item.product.id !== primary.product.id
+    && item.product.listPriceAmount < primary.product.listPriceAmount
+  ))
+  const lighter = lowerPriced.find((item) => (
+    item.product.beverageFamily !== primary.product.beverageFamily
+  )) ?? lowerPriced[0] ?? null
+  const configuredUpgradeId = recommendationConfig(primary.product).upgradeProductId
+  const configuredComplete = configuredUpgradeId
+    ? uniqueRanked.find((item) => (
+        item.product.id === configuredUpgradeId
+        && item.product.listPriceAmount > primary.product.listPriceAmount
+      )) ?? null
+    : null
+
+  add(lighter, 'lighter')
+  add(primary, 'primary')
+  add(configuredComplete, 'complete')
+
+  const selectedFamilies = new Set(selected.map((item) => item.product.beverageFamily))
+  const remaining = uniqueRanked.filter((item) => !seen.has(item.product.id))
+  for (const item of remaining.filter((candidate) => !selectedFamilies.has(candidate.product.beverageFamily))) {
+    add(item, 'alternative')
+  }
+  for (const item of remaining) add(item, 'alternative')
   return selected
 }
 

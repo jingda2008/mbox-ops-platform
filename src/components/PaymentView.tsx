@@ -24,7 +24,10 @@ import * as coreApi from '../api'
 import * as paymentApi from '../payment-api'
 import type { PaymentAllocationInput } from '../shared/payment-api'
 import type { BootstrapResponse } from '../shared/contracts'
-import { effectivePermissionIdsForEmployee, effectiveRoleIdsForEmployee } from '../shared/staff-access'
+import {
+  canEmployeeApproveRefund,
+  refundApprovalLimitForEmployee,
+} from '../shared/staff-access'
 import { formatChinaDateTime } from '../shared/china-time'
 import {
   CASH_PAYMENT_CHANNEL,
@@ -1168,23 +1171,6 @@ function eligibleRefundApproverNames(data: BootstrapResponse, requesterId: strin
     .map((employee) => employee.displayName)
     .slice(0, 4)
     .join('、')
-}
-
-function refundApprovalLimitForEmployee(data: BootstrapResponse, employeeId: string) {
-  return Math.max(0, ...effectiveRoleIdsForEmployee(data, employeeId).map((roleId) => (
-    data.config.roles.find((role) => role.id === roleId)?.approvalLimits?.refundApproveAmount ?? 0
-  )))
-}
-
-export function canEmployeeApproveRefund(
-  data: BootstrapResponse,
-  employeeId: string,
-  requesterId: string,
-  amount: number,
-) {
-  return employeeId !== requesterId
-    && effectivePermissionIdsForEmployee(data, employeeId).includes('payment.refund.approve')
-    && refundApprovalLimitForEmployee(data, employeeId) >= amount
 }
 
 function money(amount: number) {

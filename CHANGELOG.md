@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0-rc.58 - 2026-07-30
+
+- Hid refund approval actions unless the current employee is not the requester, has approval permission and has a sufficient configured refund limit.
+- Added explicit current-limit and eligible-approver guidance for refunds that exceed the signed-in employee's authority.
+- Added regression coverage for requester separation, zero-limit administrators and sufficient-limit owners.
+- Replaced a TypeScript parameter-property declaration in the hardware business error with equivalent explicit fields so strict TypeScript 6 production builds remain reproducible.
+
 ## 1.0.0-rc.57 - 2026-07-30
 
 - Restored actionable refund review in the staging payment simulator while preserving requester/approver separation, approval limits and explicit human confirmation.

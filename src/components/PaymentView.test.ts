@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import type { BootstrapResponse } from '../shared/contracts'
+import { canEmployeeApproveRefund } from '../shared/staff-access'
 import { createSeedState } from '../../server/seed'
-import { canEmployeeApproveRefund, preferredTableAccountId, tableFromSession } from './PaymentView'
+import { preferredTableAccountId, tableFromSession } from './PaymentView'
 
 const paymentStyles = readFileSync(new URL('./PaymentView.css', import.meta.url), 'utf8')
 

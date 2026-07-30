@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-rc.57 - 2026-07-30
+
+- Restored actionable refund review in the staging payment simulator while preserving requester/approver separation, approval limits and explicit human confirmation.
+- Added clear pending-refund and eligible-approver guidance instead of generic quantity validation errors or silent unavailable actions.
+- Prevented administrators without finance permissions from seeing or executing cash-collection actions in payment pages and AI plans.
+- Classified cash collection slips as protected human finance workflows, including natural-language requests to create or generate them.
+- Removed acknowledged reservation incidents from the active AI duty-manager warning and planning context while retaining them in handover records.
+- Added browser and API regression coverage for administrator cash-command rejection, refund duplication, reservation resolution and role-aware payment controls.
+
 ## 1.0.0-rc.56 - 2026-07-29
 
 - Rebuilt public reservation seating around proportional zone frames so floor-plan crops and table overlays remain aligned on mobile without horizontal scrolling.

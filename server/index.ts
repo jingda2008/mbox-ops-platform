@@ -510,6 +510,8 @@ app.get('/api/bootstrap', async (request, reply) => {
     metrics: view.metrics,
     runtimeCapabilities: {
       voiceTranscription: runtimeConfig.voiceTranscriptionProvider,
+      paymentSimulation: runtimeConfig.pilotPaymentSimulationEnabled
+        && runtimeConfig.runtimeMode === 'staging',
     },
     viewer: { actorId: actor.actorId, permissionIds: view.permissionIds },
   }

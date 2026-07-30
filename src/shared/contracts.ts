@@ -662,6 +662,7 @@ export interface BootstrapResponse extends RuntimeState {
   metrics: OperationsMetrics
   runtimeCapabilities?: {
     voiceTranscription: 'disabled' | 'google_v1'
+    paymentSimulation: boolean
   }
   viewer?: {
     actorId: string

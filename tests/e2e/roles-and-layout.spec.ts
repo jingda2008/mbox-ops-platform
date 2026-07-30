@@ -577,6 +577,21 @@ test.describe('视觉与移动端适配', () => {
     await expectNoHorizontalOverflow(page)
   })
 
+  test('乌鸦要求生成现金收款单时明确拒绝且不生成伪执行计划', async ({ page }) => {
+    await useStaffIdentity(page, 'emp-admin', '乌鸦')
+    await page.goto('/')
+
+    await page.getByRole('button', { name: 'AI值班经理' }).click()
+    await page.getByLabel('输入自然语言命令').fill('生成现金收款单')
+    await page.getByRole('button', { name: '发送' }).click()
+
+    const conversation = page.getByRole('region', { name: 'AI值班经理对话' })
+    await expect(conversation).toContainText('当前岗位没有对应权限')
+    await expect(conversation).toContainText('当班收银')
+    await expect(page.getByRole('region', { name: '连续命令执行计划' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: '确认并执行计划' })).toHaveCount(0)
+  })
+
   test('情绪选择不等待网络即可立即高亮，送达失败前不误报完成', async ({ page }) => {
     await page.setViewportSize({ width: 430, height: 932 })
     let releaseRequest = () => undefined

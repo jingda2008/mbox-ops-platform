@@ -74,6 +74,7 @@
 .duty-briefing > header span { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; }
 .duty-briefing > header small { color: var(--ink-soft); font-size: 9px; white-space: nowrap; }
 .duty-briefing > p { color: var(--ink); font-size: 11px; font-weight: 750; line-height: 1.4; }
+.duty-briefing .duty-followup-summary { display: flex; align-items: center; gap: 5px; color: var(--ink-soft); font-size: 10px; font-weight: 650; }
 .duty-risk-list { display: grid; gap: 4px; }
 .duty-risk-item { display: grid; border: 1px solid #d7dcd6; border-radius: 5px; background: #fff; overflow: hidden; }
 .duty-risk-item.is-acknowledged { border-color: #a9c8b1; background: #f8fcf8; }

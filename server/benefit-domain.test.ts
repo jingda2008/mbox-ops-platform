@@ -95,7 +95,7 @@ describe('member benefit grants', () => {
   })
 
   it('launches a deduplicated dormant-member campaign and keeps unsendable messages explicit', () => {
-    const state = createSeedState()
+    const state = createSeedState(now)
     const input = {
       actorId: 'emp-chen',
       name: '老朋友回店礼',
@@ -116,7 +116,7 @@ describe('member benefit grants', () => {
   })
 
   it('previews authoritative campaign reach and cost before launch', () => {
-    const state = createSeedState()
+    const state = createSeedState(now)
     const preview = previewBenefitCampaign(state, {
       actorId: 'emp-chen',
       name: '老朋友回店礼',

@@ -236,6 +236,7 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
   const [briefingBusy, setBriefingBusy] = useState(false)
   const [dutyActionBusy, setDutyActionBusy] = useState<string | null>(null)
   const [pendingDutyDismissId, setPendingDutyDismissId] = useState<string | null>(null)
+  const openDutyRisks = dutyBriefing?.risks.filter((risk) => risk.incidentStatus === 'open') ?? []
   const nativeRecognitionSupported = Boolean(
     (window as VoiceWindow).SpeechRecognition || (window as VoiceWindow).webkitSpeechRecognition,
   )
@@ -1248,17 +1249,17 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
                 <small>{dutyBriefing.counts.critical}紧急 · {dutyBriefing.counts.high}高风险 · {dutyBriefing.counts.medium}关注</small>
               </header>
               <p>{dutyBriefing.headline}</p>
-              {dutyBriefing.risks.length > 0 && <div className="duty-risk-list">
-                {dutyBriefing.risks.slice(0, 5).map((risk, index) => {
-                  const primaryAction = risk.incidentStatus === 'open' && dutyBriefing.actions.canAcknowledge ? '接管并处理' : '继续处理'
+              {openDutyRisks.length > 0 && <div className="duty-risk-list">
+                {openDutyRisks.slice(0, 5).map((risk, index) => {
+                  const primaryAction = dutyBriefing.actions.canAcknowledge ? '接管并处理' : '查看详情'
                   return <article className={`duty-risk-item is-${risk.incidentStatus}`} key={risk.id}>
                   <div className="duty-risk-main">
                     <i className={`is-${risk.severity}`} />
                     <span>
                       <strong>{risk.title}</strong>
-                      <small>{risk.incidentStatus === 'acknowledged' ? `${risk.handledByName ?? '现场伙伴'}已接管 · ` : ''}{risk.detail}</small>
+                      <small>{risk.detail}</small>
                     </span>
-                    <em>{index === 0 ? '优先处理' : risk.incidentStatus === 'acknowledged' ? '跟进中' : '待接管'}</em>
+                    <em>{index === 0 ? '优先处理' : '待接管'}</em>
                   </div>
                   <p className="duty-risk-recommendation"><Sparkles size={12} /><span><b>AI建议</b>{risk.recommendation}</span></p>
                   <div className="duty-risk-actions">
@@ -1273,6 +1274,11 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
                   </div>}
                 </article>})}
               </div>}
+              {dutyBriefing.counts.acknowledgedIncidents > 0 && (
+                <p className="duty-followup-summary">
+                  <Check size={12} />{dutyBriefing.counts.acknowledgedIncidents}项已由现场人员接管，保留在交班记录中，不再重复占用警报列表。
+                </p>
+              )}
               <section className="duty-effectiveness" aria-label="今日经营成效">
                 <header>
                   <strong>今日五维经营成效</strong>

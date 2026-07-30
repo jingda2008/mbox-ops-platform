@@ -590,34 +590,52 @@ export function registerPaymentRoutes(
     '/api/payments/:paymentIntentId/refunds',
     async (request, reply) => {
       const input = itemRefundRequestSchema.parse(request.body)
-      const refund = await repository.mutate((state) => {
-        const actor = requireConfiguredOperation(request, state, 'payment.refund.request')
-        const intent = state.paymentDomain.paymentIntents.find((item) => item.id === request.params.paymentIntentId)
-        if (!intent) throw new Error('支付意图不存在')
-        requireTableSessionDataScope(request, state, intent.tableSessionId, 'payment.refund.request')
-        const idempotencyCount = state.paymentDomain.idempotencyRecords.length
-        const result = requestRefund(state.paymentDomain, {
-          refundId: intent.channel === 'postar'
-            ? deterministicProviderId('Refund', input.idempotencyKey)
-            : deterministicId('refund', input.idempotencyKey),
-          paymentIntentId: request.params.paymentIntentId,
-          items: [{ orderId: input.orderId, orderItemId: input.orderItemId, quantity: input.quantity }],
-          reason: input.reason,
-          requestedBy: actor.actorId,
-          occurredAt: new Date().toISOString(),
-          idempotencyKey: input.idempotencyKey,
-        })
-        requireApprovalAmount(request, state, 'refundRequest', result.amount, 'payment.refund.request')
-        if (state.paymentDomain.idempotencyRecords.length !== idempotencyCount) {
-          audit(state, actor.actorId, 'refund.requested.v1', 'refund', result.id, {
+      try {
+        const refund = await repository.mutate((state) => {
+          const actor = requireConfiguredOperation(request, state, 'payment.refund.request')
+          const intent = state.paymentDomain.paymentIntents.find((item) => item.id === request.params.paymentIntentId)
+          if (!intent) throw new Error('支付意图不存在')
+          requireTableSessionDataScope(request, state, intent.tableSessionId, 'payment.refund.request')
+          const existingActiveRefund = state.paymentDomain.refunds.find((candidate) => (
+            candidate.paymentIntentId === intent.id
+            && ['requested', 'approved', 'processing'].includes(candidate.status)
+            && candidate.items.some((item) => item.orderId === input.orderId && item.orderItemId === input.orderItemId)
+          ))
+          if (existingActiveRefund) {
+            const requester = state.employees.find((employee) => employee.id === existingActiveRefund.requestedBy)?.displayName
+              ?? existingActiveRefund.requestedBy
+            throw new Error(`该商品已有待处理退款，由${requester}申请；请由另一名有退款审批权限且额度足够的员工审批`)
+          }
+          const idempotencyCount = state.paymentDomain.idempotencyRecords.length
+          const result = requestRefund(state.paymentDomain, {
+            refundId: intent.channel === 'postar'
+              ? deterministicProviderId('Refund', input.idempotencyKey)
+              : deterministicId('refund', input.idempotencyKey),
             paymentIntentId: request.params.paymentIntentId,
-            amount: result.amount,
-            items: result.items,
+            items: [{ orderId: input.orderId, orderItemId: input.orderItemId, quantity: input.quantity }],
+            reason: input.reason,
+            requestedBy: actor.actorId,
+            occurredAt: new Date().toISOString(),
+            idempotencyKey: input.idempotencyKey,
           })
+          requireApprovalAmount(request, state, 'refundRequest', result.amount, 'payment.refund.request')
+          if (state.paymentDomain.idempotencyRecords.length !== idempotencyCount) {
+            audit(state, actor.actorId, 'refund.requested.v1', 'refund', result.id, {
+              paymentIntentId: request.params.paymentIntentId,
+              amount: result.amount,
+              items: result.items,
+            })
+          }
+          return result
+        })
+        return reply.status(201).send(refund)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : ''
+        if (message.startsWith('该商品已有待处理退款')) {
+          return reply.status(409).send({ code: 'REFUND_ALREADY_PENDING', message })
         }
-        return result
-      })
-      return reply.status(201).send(refund)
+        throw error
+      }
     },
   )
 

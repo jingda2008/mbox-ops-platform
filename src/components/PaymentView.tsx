@@ -24,6 +24,7 @@ import * as coreApi from '../api'
 import * as paymentApi from '../payment-api'
 import type { PaymentAllocationInput } from '../shared/payment-api'
 import type { BootstrapResponse } from '../shared/contracts'
+import { effectivePermissionIdsForEmployee, effectiveRoleIdsForEmployee } from '../shared/staff-access'
 import { formatChinaDateTime } from '../shared/china-time'
 import {
   CASH_PAYMENT_CHANNEL,
@@ -61,7 +62,6 @@ type IssueDraft = { reason: string; nextDayOwnerId: string }
 type TableAccount = ReturnType<typeof buildTableAccounts>[number]
 
 const ONLINE_SIMULATION_CHANNEL = 'wechat_mock'
-const DEVELOPMENT_PAYMENT_SIMULATOR = import.meta.env.DEV
 const emptyPaymentDomain: PaymentDomainState = {
   paymentIntents: [],
   paymentNotifications: [],
@@ -103,6 +103,15 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
   const paymentDomain = (data as BootstrapWithPayments).paymentDomain ?? emptyPaymentDomain
   const currentActorId = coreApi.getCurrentActorId()
   const currentEmployee = data.employees.find((employee) => employee.id === currentActorId && employee.status === 'active')
+  const permissionIds = new Set(data.viewer?.permissionIds ?? [])
+  const canLoadSettlement = permissionIds.has('finance.view')
+    || permissionIds.has('finance.manage')
+    || permissionIds.has('payment.collect')
+  const canCollectPayments = permissionIds.has('payment.collect')
+  const canReportPayments = permissionIds.has('payment.pos_report')
+  const canRequestRefund = permissionIds.has('payment.refund.request')
+  const canApproveRefund = permissionIds.has('payment.refund.approve')
+  const paymentSimulationEnabled = data.runtimeCapabilities?.paymentSimulation === true || import.meta.env.DEV
   const [busyAction, setBusyAction] = useState('')
   const [notice, setNotice] = useState<Notice | null>(null)
   const [posIntentId, setPosIntentId] = useState('')
@@ -222,10 +231,14 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
   }, [data.store.businessDate])
 
   useEffect(() => {
+    if (!canLoadSettlement) {
+      setSettlement(null)
+      return
+    }
     void loadSettlement().catch((error) => {
       setNotice({ tone: 'error', message: error instanceof Error ? error.message : '营业日结算数据加载失败' })
     })
-  }, [data.revision, loadSettlement])
+  }, [canLoadSettlement, data.revision, loadSettlement])
 
   async function execute(actionKey: string, successMessage: string, operation: () => Promise<unknown>, reloadSettlement = true) {
     if (!currentEmployee) {
@@ -237,7 +250,7 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
     try {
       await operation()
       await onRefresh()
-      if (reloadSettlement) await loadSettlement()
+      if (reloadSettlement && canLoadSettlement) await loadSettlement()
       setNotice({ tone: 'success', message: successMessage })
     } catch (error) {
       setNotice({ tone: 'error', message: error instanceof Error ? error.message : '收银操作失败，请重试' })
@@ -543,6 +556,10 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
                   onQuantity={(key, quantity) => updateLineQuantity(account.tableSessionId, key, quantity)}
                 />
                 <div className="table-account-actions">
+                {!canCollectPayments && (
+                  <span className="payment-permission-note">当前账号可查看桌账，但不能创建收款单；请交给当班收银或店长处理。</span>
+                )}
+                {canCollectPayments && (
                 <button
                   className="primary-button"
                   type="button"
@@ -551,7 +568,8 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
                 >
                   <Banknote size={16} />生成现金收款单
                 </button>
-                {DEVELOPMENT_PAYMENT_SIMULATOR && (
+                )}
+                {canCollectPayments && paymentSimulationEnabled && (
                   <button
                     className="primary-button"
                     type="button"
@@ -562,7 +580,7 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
                     生成线上联调单
                   </button>
                 )}
-                <button
+                {canCollectPayments && <button
                   className="primary-button"
                   type="button"
                   disabled={account.collectableAmount <= 0 || Boolean(busyAction)}
@@ -570,23 +588,23 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
                 >
                   {busyAction === `create:${account.tableSessionId}:postar` ? <LoaderCircle className="spin" size={16} /> : <Smartphone size={16} />}
                   生成客扫支付码
-                </button>
-                <button
+                </button>}
+                {canCollectPayments && <button
                   className="primary-button"
                   type="button"
                   disabled={account.collectableAmount <= 0 || Boolean(busyAction)}
                   onClick={() => setScannerAccount(account)}
                 >
                   <ScanLine size={16} />扫客户付款码
-                </button>
-                <button
+                </button>}
+                {canCollectPayments && <button
                   className="secondary-button"
                   type="button"
                   disabled={account.collectableAmount <= 0 || Boolean(busyAction)}
                   onClick={() => createFromDraft(account, PHYSICAL_POS_CHANNEL)}
                 >
                   <CreditCard size={16} />生成POS收款单
-                </button>
+                </button>}
                 {account.canClose && account.tableId && (
                   <button className="primary-button" type="button" disabled={Boolean(busyAction)} onClick={() => closeTable(account.tableId!, account.tableCode)}>
                     {busyAction === `close:${account.tableId}` ? <LoaderCircle className="spin" size={16} /> : <CheckCircle2 size={16} />}结台
@@ -609,6 +627,10 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
                 key={intent.id}
                 data={data}
                 intent={intent}
+                refunds={paymentDomain.refunds}
+                paymentSimulationEnabled={paymentSimulationEnabled}
+                canReportPayments={canReportPayments}
+                canRequestRefund={canRequestRefund}
                 busyAction={busyAction}
                 onSimulate={simulateSuccess}
                 onConfirmCash={confirmCash}
@@ -762,8 +784,14 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
         <div className="refund-list">
           {paymentDomain.refunds.length === 0 && !refundDraft && <EmptyState icon={ShieldCheck} text="暂无退款申请；请从已确认到账的商品明细发起" />}
           {paymentDomain.refunds.toReversed().map((refund) => {
-            const isPhysicalPosRefund = paymentDomain.paymentIntents
-              .some((intent) => intent.id === refund.paymentIntentId && intent.channel === PHYSICAL_POS_CHANNEL)
+            const refundIntent = paymentDomain.paymentIntents.find((intent) => intent.id === refund.paymentIntentId)
+            const isPhysicalPosRefund = refundIntent?.channel === PHYSICAL_POS_CHANNEL
+            const isSimulationRefund = refundIntent?.channel === ONLINE_SIMULATION_CHANNEL
+            const isProviderRefund = refundIntent?.channel === 'postar'
+            const requesterName = employeeName(data, refund.requestedBy)
+            const isRequester = refund.requestedBy === currentActorId
+            const canCurrentActorApprove = canApproveRefund && !isRequester
+            const approverNames = eligibleRefundApproverNames(data, refund.requestedBy, refund.amount)
             return <article className="refund-row" key={refund.id}>
               <div className="refund-status">
                 <span className={`payment-status status-${refund.status}`}>{refundStatusLabels[refund.status]}</span>
@@ -771,16 +799,16 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
               </div>
               <div className="refund-details">
                 <strong>{refund.items.map((item) => `${refundItemLabel(data, item.orderId, item.orderItemId)}×${item.quantity}`).join('、')}</strong>
-                <span>{refund.reason} · 申请人 {refund.requestedBy}</span>
+                <span>{refund.reason} · 申请人 {requesterName}</span>
               </div>
               <b>{money(refund.amount)}</b>
-              {refund.status === 'requested' && DEVELOPMENT_PAYMENT_SIMULATOR && (
+              {refund.status === 'requested' && isSimulationRefund && paymentSimulationEnabled && canCurrentActorApprove && (
                 <button className="primary-button" type="button" disabled={Boolean(busyAction)} onClick={() => approveRefund(refund)}>
                   {busyAction === `refund-approve:${refund.id}` ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />}
                   审批并完成
                 </button>
               )}
-              {refund.status === 'requested' && isPhysicalPosRefund && !DEVELOPMENT_PAYMENT_SIMULATOR && refundCompletion.refundId !== refund.id && (
+              {refund.status === 'requested' && isPhysicalPosRefund && canCurrentActorApprove && refundCompletion.refundId !== refund.id && (
                 <button
                   className="secondary-button"
                   type="button"
@@ -790,13 +818,30 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
                   <ShieldCheck size={16} />登记POS退款
                 </button>
               )}
-              {refund.status === 'requested' && isPhysicalPosRefund && !DEVELOPMENT_PAYMENT_SIMULATOR && refundCompletion.refundId === refund.id && (
+              {refund.status === 'requested' && isPhysicalPosRefund && canCurrentActorApprove && refundCompletion.refundId === refund.id && (
                 <form className="refund-request-form reveal-panel-target" ref={refundCompletionRef} onSubmit={(event) => completePhysicalRefund(event, refund)}>
                   <label><span>POS退款流水号</span><input required value={refundCompletion.terminalRefundTransactionId} onChange={(event) => setRefundCompletion({ ...refundCompletion, terminalRefundTransactionId: event.target.value })} /></label>
                   <label><span>审批说明</span><input required value={refundCompletion.reason} onChange={(event) => setRefundCompletion({ ...refundCompletion, reason: event.target.value })} /></label>
                   <button className="primary-button" type="submit" disabled={Boolean(busyAction)}><FileCheck2 size={16} />确认退款完成</button>
                   <button className="icon-button" title="取消登记" type="button" onClick={() => setRefundCompletion({ refundId: '', terminalRefundTransactionId: '', reason: '' })}>×</button>
                 </form>
+              )}
+              {refund.status === 'requested' && isProviderRefund && canCurrentActorApprove && (
+                <button className="primary-button" type="button" disabled={Boolean(busyAction)} onClick={() => {
+                  void execute(`refund-provider:${refund.id}`, '退款已审批并提交原支付渠道', () =>
+                    paymentApi.submitProviderRefund(refund.id, '审批通过，按原支付渠道退款'),
+                  )
+                }}>
+                  {busyAction === `refund-provider:${refund.id}` ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />}
+                  审批并原路退回
+                </button>
+              )}
+              {refund.status === 'requested' && !canCurrentActorApprove && (
+                <span className="refund-approval-note">
+                  {isRequester
+                    ? `你是申请人，不能审批自己的退款。请由另一名授权人员处理${approverNames ? `：${approverNames}` : ''}。`
+                    : `当前账号没有退款审批权限。请由授权人员处理${approverNames ? `：${approverNames}` : ''}。`}
+                </span>
               )}
             </article>
           })}
@@ -865,9 +910,13 @@ function CollectionControls({ account, draft, disabled, onMode, onAmount, onQuan
   )
 }
 
-function PaymentIntentRow({ data, intent, busyAction, onSimulate, onConfirmCash, onQueryProvider, onRefund }: {
+function PaymentIntentRow({ data, intent, refunds, paymentSimulationEnabled, canReportPayments, canRequestRefund, busyAction, onSimulate, onConfirmCash, onQueryProvider, onRefund }: {
   data: BootstrapResponse
   intent: PaymentIntent
+  refunds: Refund[]
+  paymentSimulationEnabled: boolean
+  canReportPayments: boolean
+  canRequestRefund: boolean
   busyAction: string
   onSimulate: (intent: PaymentIntent) => void
   onConfirmCash: (intent: PaymentIntent) => void
@@ -887,21 +936,30 @@ function PaymentIntentRow({ data, intent, busyAction, onSimulate, onConfirmCash,
       <div className="intent-lines">
         {intent.lineAllocations.map((line) => {
           const item = findOrderItem(data, line.orderId, line.orderItemId)
+          const usedRefundQuantity = refunds
+            .filter((refund) => (
+              refund.paymentIntentId === intent.id
+              && !['rejected', 'failed'].includes(refund.status)
+            ))
+            .flatMap((refund) => refund.items)
+            .filter((refundItem) => refundItem.orderId === line.orderId && refundItem.orderItemId === line.orderItemId)
+            .reduce((sum, refundItem) => sum + refundItem.quantity, 0)
+          const refundableQuantity = Math.max(0, line.quantity - usedRefundQuantity)
           return (
             <div className="intent-line" key={`${intent.id}:${line.orderItemId}`}>
               <span><strong>{item?.name ?? line.orderItemId}</strong><small>{item?.specification || `订单 ${shortId(line.orderId)}`}</small></span>
               <span>{line.quantity}份 × {money(line.unitPaidAmount)}</span>
               <b>{money(line.paidAmount)}</b>
-              {canRefund && (
-                <button className="secondary-button" type="button" onClick={() => onRefund({ paymentIntentId: intent.id, orderId: line.orderId, orderItemId: line.orderItemId, quantity: 1, reason: '' })}>
-                  <RotateCcw size={14} />按商品退款
+              {canRefund && canRequestRefund && (
+                <button className="secondary-button" type="button" disabled={refundableQuantity === 0} onClick={() => onRefund({ paymentIntentId: intent.id, orderId: line.orderId, orderItemId: line.orderItemId, quantity: 1, reason: '' })}>
+                  <RotateCcw size={14} />{refundableQuantity === 0 ? '退款处理中' : '按商品退款'}
                 </button>
               )}
             </div>
           )
         })}
       </div>
-      {DEVELOPMENT_PAYMENT_SIMULATOR && isSimulation && intent.status === 'pending' && (
+      {paymentSimulationEnabled && canReportPayments && isSimulation && intent.status === 'pending' && (
         <div className="simulation-action">
           <div><CircleAlert size={16} /><span><strong>仅供接口联调</strong>此操作生成模拟成功回调，不发生真实扣款或资金结算。</span></div>
           <button className="secondary-button" type="button" disabled={Boolean(busyAction)} onClick={() => onSimulate(intent)}>
@@ -910,7 +968,7 @@ function PaymentIntentRow({ data, intent, busyAction, onSimulate, onConfirmCash,
           </button>
         </div>
       )}
-      {intent.channel === CASH_PAYMENT_CHANNEL && intent.status === 'pending' && (
+      {canReportPayments && intent.channel === CASH_PAYMENT_CHANNEL && intent.status === 'pending' && (
         <div className="simulation-action cash-confirmation-action">
           <div><Banknote size={16} /><span><strong>现金人工确认</strong>仅在现金已经清点并收妥后确认实收。</span></div>
           <button className="primary-button" type="button" disabled={Boolean(busyAction)} onClick={() => onConfirmCash(intent)}>
@@ -919,7 +977,7 @@ function PaymentIntentRow({ data, intent, busyAction, onSimulate, onConfirmCash,
           </button>
         </div>
       )}
-      {intent.channel === 'postar' && ['pending', 'processing'].includes(intent.status) && (
+      {canReportPayments && intent.channel === 'postar' && ['pending', 'processing'].includes(intent.status) && (
         <div className="simulation-action provider-query-action">
           {paymentQrCodeUrl(intent) && <ProviderQrCode value={paymentQrCodeUrl(intent)!} amount={intent.amount} />}
           <div><ShieldCheck size={16} /><span><strong>正式渠道订单</strong>让客人使用微信、支付宝或云闪付扫码；仅验签回调或主动查单可以确认到账。</span></div>
@@ -1091,6 +1149,21 @@ function handoverStatusLabel(status: NonNullable<PaymentSettlementView['latestHa
 
 function employeeName(data: BootstrapResponse, employeeId: string) {
   return data.employees.find((employee) => employee.id === employeeId)?.displayName ?? employeeId
+}
+
+function eligibleRefundApproverNames(data: BootstrapResponse, requesterId: string, amount: number) {
+  return data.employees
+    .filter((employee) => (
+      employee.status === 'active'
+      && employee.id !== requesterId
+      && effectivePermissionIdsForEmployee(data, employee.id).includes('payment.refund.approve')
+      && Math.max(0, ...effectiveRoleIdsForEmployee(data, employee.id).map((roleId) => (
+        data.config.roles.find((role) => role.id === roleId)?.approvalLimits?.refundApproveAmount ?? 0
+      ))) >= amount
+    ))
+    .map((employee) => employee.displayName)
+    .slice(0, 4)
+    .join('、')
 }
 
 function money(amount: number) {

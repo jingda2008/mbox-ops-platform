@@ -198,6 +198,19 @@ describe('payment API security boundary', () => {
     expect(refundResponse.statusCode).toBe(201)
     const refund = refundResponse.json()
 
+    const duplicateRefundResponse = await app.inject({
+      method: 'POST',
+      url: `/api/payments/${intent.id}/refunds`,
+      payload: {
+        orderId: order.id, orderItemId: order.items[0]!.id, quantity: 1, reason: '重复点击',
+        idempotencyKey: 'physical-refund-request-duplicate-0001',
+      },
+    })
+    expect(duplicateRefundResponse.statusCode).toBe(409)
+    expect(duplicateRefundResponse.json().code).toBe('REFUND_ALREADY_PENDING')
+    expect(duplicateRefundResponse.json().message).toContain('已有待处理退款')
+    expect(duplicateRefundResponse.json().message).toContain('另一名有退款审批权限')
+
     expect((await app.inject({
       method: 'POST',
       url: `/api/payments/refunds/${refund.id}/physical-pos-complete`,

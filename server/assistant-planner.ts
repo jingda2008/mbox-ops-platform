@@ -220,7 +220,7 @@ function operationalMessage(input: AssistantPlanningRequest) {
 const protectedWorkflowRules = [
   { ids: ['payment.refund.approve', 'payment.refund.request'], pattern: /退款|退钱/u },
   { ids: ['payment.pos.report'], pattern: /(?:报送|登记|录入).{0,8}(?:POS|刷卡)|(?:POS|刷卡).{0,8}(?:报送|登记|录入)/iu },
-  { ids: ['payment.cash.confirm'], pattern: /(?:确认|登记).{0,8}现金|现金.{0,8}(?:到账|收款|确认)/u },
+  { ids: ['payment.cash.confirm'], pattern: /(?:生成|创建|确认|登记).{0,8}现金|现金.{0,8}(?:收款单|到账|收款|确认)/u },
   { ids: ['business_day.close'], pattern: /关账|关闭营业日|日结/u },
   { ids: ['config.publish'], pattern: /发布配置|上线规则|配置生效/u },
   { ids: ['inventory.approve'], pattern: /(?:审批|批准|确认).{0,8}(?:库存|报损|盘亏)/u },
@@ -248,7 +248,7 @@ function protectedHumanWorkflowPlan(input: AssistantPlanningRequest): AssistantM
       choices: ['取消未付款订单', '申请已付款退款'],
     }
   }
-  const explicitOperation = /申请|办理|处理|发起|批准|审批|确认|完成|执行|操作|登记|录入|日结|关账|帮我|给.{0,20}(?:退|转|换|结台|闭桌)|把.{0,20}(?:退|转|换|结台|闭桌)|直接/u.test(input.message)
+  const explicitOperation = /申请|办理|处理|发起|生成|创建|批准|审批|确认|完成|执行|操作|登记|录入|日结|关账|帮我|给.{0,20}(?:退|转|换|结台|闭桌)|把.{0,20}(?:退|转|换|结台|闭桌)|直接/u.test(input.message)
   if (!explicitOperation) return null
   const matchedRule = protectedWorkflowRules.find((rule) => rule.pattern.test(input.message))
   const aliasMatchedCapability = input.context.tools.find((tool) => (
@@ -272,7 +272,7 @@ function protectedHumanWorkflowPlan(input: AssistantPlanningRequest): AssistantM
   if (available.length === 0 || (requestedCapabilityId && !requestedCapability)) {
     return {
       kind: 'answer',
-      reply: '这项操作需要人工复核，但您当前岗位没有对应权限。请联系当班收银、店长或有审批权限的负责人处理。',
+      reply: '这项操作需要人工复核，但您当前岗位没有对应权限。请交给当班收银、店长、运营负责人或老板处理，系统不会显示一个必然失败的执行按钮。',
       steps: [],
       choices: [],
     }

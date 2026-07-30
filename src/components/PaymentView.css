@@ -138,6 +138,9 @@
 .refund-details strong { font-size: 12px; }
 .refund-row > b { text-align: right; font-size: 14px; }
 .refund-row .primary-button { min-height: 34px; font-size: 10px; }
+.refund-approval-note,
+.payment-permission-note { display: inline-flex; align-items: center; min-height: 34px; padding: 7px 9px; border: 1px solid #dccb9c; border-radius: 5px; background: #fffaf0; color: #6c571c; font-size: 10px; font-weight: 700; line-height: 1.45; }
+.payment-permission-note { width: 100%; }
 .payment-empty { min-height: 130px; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 20px; color: #767d74; font-size: 12px; text-align: center; }
 .spin { animation: payment-spin .8s linear infinite; }
 @keyframes payment-spin { to { transform: rotate(360deg); } }

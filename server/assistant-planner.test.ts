@@ -11,6 +11,7 @@ function tool(id: AssistantToolDescriptor['id']): AssistantToolDescriptor {
   const humanWorkflow = [
     'payment.refund.request',
     'payment.refund.approve',
+    'payment.cash.confirm',
     'benefit.approve',
     'commerce.authorization.approve',
   ].includes(id)
@@ -327,6 +328,27 @@ describe('Gemini assistant planner', () => {
     expect(result.output).toMatchObject({
       kind: 'clarification',
       choices: ['取消未付款订单', '申请已付款退款'],
+    })
+  })
+
+  it('refuses to generate a cash collection action when the current actor lacks payment permission', async () => {
+    let modelCalled = false
+    const planner = new GeminiAssistantPlanner({
+      apiKey: 'test-key', model: 'gemini-3.5-flash', timeoutMs: 2_000,
+      fetchImpl: async () => {
+        modelCalled = true
+        throw new Error('model must not be called')
+      },
+    })
+
+    const result = await planner.plan(planningInput('生成现金收款单'))
+
+    expect(modelCalled).toBe(false)
+    expect(result.output).toEqual({
+      kind: 'answer',
+      reply: expect.stringContaining('当前岗位没有对应权限'),
+      steps: [],
+      choices: [],
     })
   })
 

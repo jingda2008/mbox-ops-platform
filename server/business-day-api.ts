@@ -17,7 +17,10 @@ import {
 } from './payment-domain.js'
 import type { RuntimeRepository } from './repository.js'
 import { clearPresenceLeases } from './presence.js'
-import type { ShiftAssignment } from '../src/shared/contracts.js'
+import type { ShiftAssignment, StaffPermissionId } from '../src/shared/contracts.js'
+import { effectivePermissionIdsForEmployee } from '../src/shared/staff-access.js'
+import { requireRequestActor } from './auth-context.js'
+import { AuthorizationError } from './authorization.js'
 import {
   isKdsTaskOperationallyClosed,
   isServiceTaskOperationallyClosed,
@@ -517,7 +520,15 @@ function audit(
 export function registerBusinessDayRoutes(app: FastifyInstance, repository: RuntimeRepository) {
   app.get<{ Params: { businessDate: string } }>('/api/business-days/:businessDate/payment-settlement', async (request) => {
     const state = await repository.read()
-    requireConfiguredOperation(request, state, 'payment.intent.create')
+    const actor = requireRequestActor(request)
+    const permissions = effectivePermissionIdsForEmployee(state, actor.actorId)
+    const settlementPermissions: StaffPermissionId[] = ['finance.view', 'finance.manage', 'payment.collect']
+    if (!settlementPermissions.some((permission) => permissions.includes(permission))) {
+      throw new AuthorizationError(
+        '当前账号没有收银结算查看权限；系统管理员权限不等于财务权限',
+        'payment.settlement.view',
+      )
+    }
     if (request.params.businessDate > state.store.businessDate) throw new Error('不能查看未来营业日收银结算')
     return settlementView(state, request.params.businessDate)
   })

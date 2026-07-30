@@ -173,7 +173,7 @@ function buildPlanningContext(
             endsAt: appearance.endsAt,
           })),
         })),
-      operationalRisks: dutyBriefing.risks,
+      operationalRisks: dutyBriefing.risks.filter((risk) => risk.incidentStatus === 'open'),
       operationalHealth: {
         health: dutyBriefing.health,
         headline: dutyBriefing.headline,

@@ -605,7 +605,9 @@ export function reportPhysicalPosPayment(
 }
 
 function refundableRefundStatuses(status: Refund['status']) {
-  return !['rejected', 'failed'].includes(status)
+  // A failed channel attempt remains retryable, so it must keep the original
+  // item quantity reserved. Only an explicitly rejected request releases it.
+  return status !== 'rejected'
 }
 
 function usedRefundQuantityAndAmount(

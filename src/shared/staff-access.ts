@@ -35,6 +35,23 @@ export function effectivePermissionIdsForEmployee(state: RuntimeState, employeeI
   return [...permissions]
 }
 
+export function refundApprovalLimitForEmployee(state: RuntimeState, employeeId: string) {
+  return Math.max(0, ...effectiveRoleIdsForEmployee(state, employeeId).map((roleId) => (
+    state.config.roles.find((role) => role.id === roleId)?.approvalLimits?.refundApproveAmount ?? 0
+  )))
+}
+
+export function canEmployeeApproveRefund(
+  state: RuntimeState,
+  employeeId: string,
+  requesterId: string,
+  amount: number,
+) {
+  return employeeId !== requesterId
+    && effectivePermissionIdsForEmployee(state, employeeId).includes('payment.refund.approve')
+    && refundApprovalLimitForEmployee(state, employeeId) >= amount
+}
+
 const scopeRank: Record<RoleDataScope, number> = {
   own: 0,
   assigned_areas: 1,

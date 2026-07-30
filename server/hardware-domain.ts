@@ -15,8 +15,13 @@ import type {
 } from '../src/shared/hardware-contracts.js'
 
 export class HardwareBusinessError extends Error {
-  constructor(message: string, readonly code: string, readonly statusCode: number) {
+  readonly code: string
+  readonly statusCode: number
+
+  constructor(message: string, code: string, statusCode: number) {
     super(message)
+    this.code = code
+    this.statusCode = statusCode
   }
 }
 

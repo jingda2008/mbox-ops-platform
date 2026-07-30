@@ -24,7 +24,10 @@ import * as coreApi from '../api'
 import * as paymentApi from '../payment-api'
 import type { PaymentAllocationInput } from '../shared/payment-api'
 import type { BootstrapResponse } from '../shared/contracts'
-import { effectivePermissionIdsForEmployee, effectiveRoleIdsForEmployee } from '../shared/staff-access'
+import {
+  canEmployeeApproveRefund,
+  refundApprovalLimitForEmployee,
+} from '../shared/staff-access'
 import { formatChinaDateTime } from '../shared/china-time'
 import {
   CASH_PAYMENT_CHANNEL,
@@ -111,6 +114,7 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
   const canReportPayments = permissionIds.has('payment.pos_report')
   const canRequestRefund = permissionIds.has('payment.refund.request')
   const canApproveRefund = permissionIds.has('payment.refund.approve')
+  const currentActorRefundApprovalLimit = refundApprovalLimitForEmployee(data, currentActorId)
   const paymentSimulationEnabled = data.runtimeCapabilities?.paymentSimulation === true || import.meta.env.DEV
   const [busyAction, setBusyAction] = useState('')
   const [notice, setNotice] = useState<Notice | null>(null)
@@ -790,7 +794,12 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
             const isProviderRefund = refundIntent?.channel === 'postar'
             const requesterName = employeeName(data, refund.requestedBy)
             const isRequester = refund.requestedBy === currentActorId
-            const canCurrentActorApprove = canApproveRefund && !isRequester
+            const canCurrentActorApprove = canEmployeeApproveRefund(
+              data,
+              currentActorId,
+              refund.requestedBy,
+              refund.amount,
+            )
             const approverNames = eligibleRefundApproverNames(data, refund.requestedBy, refund.amount)
             return <article className="refund-row" key={refund.id}>
               <div className="refund-status">
@@ -840,7 +849,9 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
                 <span className="refund-approval-note">
                   {isRequester
                     ? `你是申请人，不能审批自己的退款。请由另一名授权人员处理${approverNames ? `：${approverNames}` : ''}。`
-                    : `当前账号没有退款审批权限。请由授权人员处理${approverNames ? `：${approverNames}` : ''}。`}
+                    : canApproveRefund
+                      ? `当前账号审批额度不足：本笔${money(refund.amount)}，额度${money(currentActorRefundApprovalLimit)}。请由额度足够的授权人员处理${approverNames ? `：${approverNames}` : ''}。`
+                      : `当前账号没有退款审批权限。请由授权人员处理${approverNames ? `：${approverNames}` : ''}。`}
                 </span>
               )}
             </article>
@@ -1155,11 +1166,7 @@ function eligibleRefundApproverNames(data: BootstrapResponse, requesterId: strin
   return data.employees
     .filter((employee) => (
       employee.status === 'active'
-      && employee.id !== requesterId
-      && effectivePermissionIdsForEmployee(data, employee.id).includes('payment.refund.approve')
-      && Math.max(0, ...effectiveRoleIdsForEmployee(data, employee.id).map((roleId) => (
-        data.config.roles.find((role) => role.id === roleId)?.approvalLimits?.refundApproveAmount ?? 0
-      ))) >= amount
+      && canEmployeeApproveRefund(data, employee.id, requesterId, amount)
     ))
     .map((employee) => employee.displayName)
     .slice(0, 4)

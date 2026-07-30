@@ -37,6 +37,7 @@ export const createTablePaymentIntentSchema = z.object({
     }).strict(),
   ]).optional(),
   deviceId: z.string().trim().min(1).default('cashier-web'),
+  sourceRefundId: z.string().trim().min(1).max(128).optional(),
   idempotencyKey: z.string().trim().min(8).max(128),
 }).superRefine((input, context) => {
   if (input.channel === 'postar' && !input.providerPayment) {
@@ -73,7 +74,17 @@ export const itemRefundRequestSchema = z.object({
   orderItemId: z.string().trim().min(1),
   quantity: z.number().int().min(1).max(99),
   reason: z.string().trim().min(2).max(200),
+  orderDisposition: z.enum(['cancel_items', 'retain_order']).default('cancel_items'),
+  receivableDisposition: z.enum(['reduce_receivable', 'reopen_receivable']).default('reduce_receivable'),
   idempotencyKey: z.string().trim().min(8).max(128),
+}).superRefine((input, context) => {
+  if (input.orderDisposition === 'cancel_items' && input.receivableDisposition === 'reopen_receivable') {
+    context.addIssue({
+      code: 'custom',
+      path: ['receivableDisposition'],
+      message: '退掉商品后不能恢复同一笔应收；如需重新收款，请选择保留订单',
+    })
+  }
 })
 
 export const completeRefundSchema = z.object({

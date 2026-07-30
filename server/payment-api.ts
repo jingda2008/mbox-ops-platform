@@ -13,7 +13,11 @@ import {
   simulatePaymentSuccessSchema,
   type PaymentAllocationInput,
 } from '../src/shared/payment-api.js'
-import type { PaymentIntentStatus, PaymentLineAllocationInput } from '../src/shared/payment-contracts.js'
+import {
+  refundReopensReceivable,
+  type PaymentIntentStatus,
+  type PaymentLineAllocationInput,
+} from '../src/shared/payment-contracts.js'
 import type { RuntimeMode } from '../src/shared/auth-contracts.js'
 import {
   approveRefund,
@@ -61,6 +65,7 @@ function deterministicId(prefix: string, key: string) {
 function paymentSelectionFingerprint(
   allocation: PaymentAllocationInput,
   providerPayment: ReturnType<typeof createTablePaymentIntentSchema.parse>['providerPayment'],
+  sourceRefundId?: string,
 ) {
   const safeProviderPayment = providerPayment?.presentation === 'barcode'
     ? {
@@ -68,7 +73,7 @@ function paymentSelectionFingerprint(
         customerAuthCodeSha256: createHash('sha256').update(providerPayment.customerAuthCode).digest('hex'),
       }
     : providerPayment ?? null
-  return JSON.stringify({ allocation, providerPayment: safeProviderPayment })
+  return JSON.stringify({ allocation, providerPayment: safeProviderPayment, sourceRefundId: sourceRefundId ?? null })
 }
 
 function deterministicProviderId(prefix: string, key: string) {
@@ -146,6 +151,17 @@ function remainingAllocationLines(
       )
     }
   }
+  for (const refund of state.paymentDomain.refunds) {
+    if (
+      refund.tableSessionId !== tableSessionId
+      || refund.status !== 'succeeded'
+      || !refundReopensReceivable(refund)
+    ) continue
+    for (const item of refund.items) {
+      const key = `${item.orderId}\u0000${item.orderItemId}`
+      allocatedAmounts.set(key, Math.max(0, (allocatedAmounts.get(key) ?? 0) - item.amount))
+    }
+  }
 
   return state.orderDomain.orders
     .filter((order) => order.tableSessionId === tableSessionId && !['draft', 'authorization_pending'].includes(order.status))
@@ -164,6 +180,53 @@ function remainingAllocationLines(
       }
     })
     .filter((line) => line.remainingAmount > 0)
+}
+
+function assertRecollectionSourceAvailable(
+  state: Awaited<ReturnType<RuntimeRepository['read']>>,
+  sourceRefundId: string,
+  tableSessionId: string,
+) {
+  const refund = state.paymentDomain.refunds.find((item) => item.id === sourceRefundId)
+  if (!refund) throw new Error('重新收款来源退款不存在')
+  if (refund.tableSessionId !== tableSessionId) throw new Error('重新收款来源退款不属于当前桌次')
+  if (refund.status !== 'succeeded') throw new Error('原退款尚未成功，不能重新发起收款')
+  if (!refundReopensReceivable(refund)) throw new Error('该退款没有选择恢复待收，不能重新发起收款')
+  const activeRecollection = state.paymentDomain.paymentIntents.find((intent) => (
+    intent.sourceRefundId === sourceRefundId && ACTIVE_ALLOCATION_STATUSES.has(intent.status)
+  ))
+  if (activeRecollection) throw new Error('该退款已经生成重新收款单，请勿重复创建')
+  const remainingByLine = new Map(remainingAllocationLines(state, tableSessionId).map((line) => [
+    `${line.orderId}\u0000${line.orderItemId}`,
+    line.remainingAmount,
+  ]))
+  for (const item of refund.items) {
+    if ((remainingByLine.get(`${item.orderId}\u0000${item.orderItemId}`) ?? 0) < item.amount) {
+      throw new Error('该退款恢复的待收已经被其他收款单占用，请先核对支付追踪')
+    }
+  }
+  return refund
+}
+
+function buildRecollectionAllocations(
+  state: Awaited<ReturnType<RuntimeRepository['read']>>,
+  sourceRefundId: string,
+  tableSessionId: string,
+) {
+  const refund = assertRecollectionSourceAvailable(state, sourceRefundId, tableSessionId)
+  return {
+    amount: refund.amount,
+    allocations: refund.items.map((item): PaymentLineAllocationInput => ({
+      orderId: item.orderId,
+      orderItemId: item.orderItemId,
+      quantity: item.quantity,
+      unitPaidAmount: item.unitPaidAmount,
+      sourceUnitPriceAmount: state.orderDomain.orders
+        .find((order) => order.id === item.orderId)?.items
+        .find((orderItem) => orderItem.id === item.orderItemId)?.unitSalePriceAmount,
+      allocationMode: 'items',
+    })),
+  }
 }
 
 function buildRequestedAllocations(
@@ -289,7 +352,7 @@ export function registerPaymentRoutes(
         requireTableSessionDataScope(request, state, input.tableSessionId, 'payment.intent.create')
         const occurredAt = new Date()
         expirePaymentIntents(state.paymentDomain, occurredAt.toISOString(), input.tableSessionId)
-        const selectionFingerprint = paymentSelectionFingerprint(input.allocation, input.providerPayment)
+        const selectionFingerprint = paymentSelectionFingerprint(input.allocation, input.providerPayment, input.sourceRefundId)
         const existingRecord = state.paymentDomain.idempotencyRecords.find((record) => record.key === input.idempotencyKey)
         let result
         if (existingRecord) {
@@ -303,13 +366,16 @@ export function registerPaymentRoutes(
             result.channel !== input.channel ||
             result.createdBy !== actor.actorId ||
             result.deviceId !== input.deviceId ||
-            result.requestSelectionFingerprint !== selectionFingerprint
+            result.requestSelectionFingerprint !== selectionFingerprint ||
+            (result.sourceRefundId ?? undefined) !== input.sourceRefundId
           ) {
             throw new Error('幂等键已用于不同请求')
           }
         } else {
           const idempotencyCount = state.paymentDomain.idempotencyRecords.length
-          const { allocations, amount } = buildRequestedAllocations(state, input.tableSessionId, input.allocation)
+          const { allocations, amount } = input.sourceRefundId
+            ? buildRecollectionAllocations(state, input.sourceRefundId, input.tableSessionId)
+            : buildRequestedAllocations(state, input.tableSessionId, input.allocation)
           const providerRuntime = input.channel === 'postar' ? resolveProvider(state.paymentDomain, input.channel) : null
           result = createPaymentIntent(state.paymentDomain, {
             paymentIntentId: input.channel === 'postar'
@@ -332,6 +398,7 @@ export function registerPaymentRoutes(
             businessDate: state.store.businessDate,
             allocationMode: input.allocation.mode,
             requestSelectionFingerprint: selectionFingerprint,
+            sourceRefundId: input.sourceRefundId,
           })
           if (state.paymentDomain.idempotencyRecords.length !== idempotencyCount) {
             audit(state, actor.actorId, 'payment.intent.created.v1', 'paymentIntent', result.id, {
@@ -340,6 +407,7 @@ export function registerPaymentRoutes(
               amount,
               orderIds: result.orderIds,
               allocation: input.allocation,
+              sourceRefundId: input.sourceRefundId ?? null,
             })
           }
         }
@@ -395,6 +463,10 @@ export function registerPaymentRoutes(
     } catch (error) {
       const unavailable = providerUnavailable(reply, error)
       if (unavailable) return unavailable
+      const message = error instanceof Error ? error.message : ''
+      if (message === '该退款已经生成重新收款单，请勿重复创建') {
+        return reply.status(409).send({ code: 'RECOLLECTION_ALREADY_CREATED', message })
+      }
       throw error
     }
     return reply.status(201).send(intent)
@@ -614,6 +686,8 @@ export function registerPaymentRoutes(
             paymentIntentId: request.params.paymentIntentId,
             items: [{ orderId: input.orderId, orderItemId: input.orderItemId, quantity: input.quantity }],
             reason: input.reason,
+            orderDisposition: input.orderDisposition,
+            receivableDisposition: input.receivableDisposition,
             requestedBy: actor.actorId,
             occurredAt: new Date().toISOString(),
             idempotencyKey: input.idempotencyKey,
@@ -624,6 +698,8 @@ export function registerPaymentRoutes(
               paymentIntentId: request.params.paymentIntentId,
               amount: result.amount,
               items: result.items,
+              orderDisposition: result.orderDisposition,
+              receivableDisposition: result.receivableDisposition,
             })
           }
           return result

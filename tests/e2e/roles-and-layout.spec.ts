@@ -394,11 +394,18 @@ test.describe('视觉与移动端适配', () => {
     await expect(dock.getByRole('button', { name: '请先选择桌台' })).toBeDisabled()
 
     await tableSelect.selectOption('table-l01')
+    const settlementMode = page.getByRole('group', { name: '结算方式' })
+    await expect(settlementMode.getByRole('button', { name: '立即付款' })).toHaveAttribute('class', /is-active/)
+    await settlementMode.getByRole('button', { name: '挂单消费' }).click()
+    await dock.getByRole('button', { name: '核对订单' }).click()
+    await expect(page.getByRole('dialog', { name: '购物车明细' }).getByRole('button', { name: '确认挂单并出品' })).toBeEnabled()
+    await page.getByTitle('关闭购物车').click()
+    await settlementMode.getByRole('button', { name: '立即付款' }).click()
     await dock.getByRole('button', { name: '核对订单' }).click()
     const drawer = page.getByRole('dialog', { name: '购物车明细' })
     await expect(drawer.getByText('招牌鸡尾酒', { exact: true })).toBeVisible()
     await expect(drawer.getByText('¥88', { exact: true })).toBeVisible()
-    await expect(drawer.getByRole('button', { name: '核对无误，确认下单' })).toBeEnabled()
+    await expect(drawer.getByRole('button', { name: '确认订单并收款' })).toBeEnabled()
 
     await page.route('**/api/commerce/orders', async (route) => {
       await route.fulfill({
@@ -410,7 +417,7 @@ test.describe('视觉与移动端适配', () => {
         }),
       })
     })
-    await drawer.getByRole('button', { name: '核对无误，确认下单' }).click()
+    await drawer.getByRole('button', { name: '确认订单并收款' }).click()
     await page.getByRole('dialog', { name: '确认上单' }).getByRole('button', { name: '确认上单' }).click()
     await expect(page.locator('.notice-bar.is-error')).toContainText('下单未完成：桌台尚未开台或已经翻台，请先开台后再下单')
     await expect(page.getByRole('dialog', { name: '确认上单' })).toContainText('桌台尚未开台或已经翻台，请先开台后再下单')

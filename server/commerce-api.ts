@@ -173,12 +173,19 @@ export function registerCommerceRoutes(
               .toSorted()
           : []
         const requestedItems = input.items.map((item) => `${item.productId}:${item.quantity}`).toSorted()
+        const previousSettlementMode = previous.details.settlementMode === 'table_tab'
+          ? 'table_tab'
+          : 'immediate_payment'
         if (
           previousTableId !== input.tableId
           || JSON.stringify(previousItems) !== JSON.stringify(requestedItems)
           || (existingOrder.fulfillmentNote ?? '') !== input.fulfillmentNote
+          || previousSettlementMode !== input.settlementMode
         ) {
-          throw new CommerceRequestError('同一个提交标识不能用于不同桌台、购物车或订单备注', 'COMMERCE_ORDER_IDEMPOTENCY_CONFLICT')
+          throw new CommerceRequestError(
+            '同一个提交标识不能用于不同桌台、购物车、订单备注或结算方式',
+            'COMMERCE_ORDER_IDEMPOTENCY_CONFLICT',
+          )
         }
         return existingOrder
       }
@@ -248,6 +255,7 @@ export function registerCommerceRoutes(
         details: {
           tableId: table.id,
           items: input.items,
+          settlementMode: input.settlementMode,
           hasFulfillmentNote: Boolean(input.fulfillmentNote),
           idempotencyKey: input.idempotencyKey,
         },

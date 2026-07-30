@@ -33,11 +33,16 @@ import {
   CASH_PAYMENT_CHANNEL,
   PHYSICAL_POS_CHANNEL,
   SETTLEMENT_CHANNELS,
+  refundOrderDisposition,
+  refundReceivableDisposition,
+  refundReopensReceivable,
   type PaymentDomainState,
   type PaymentIntent,
   type PaymentIntentStatus,
   type PaymentSettlementView,
   type Refund,
+  type RefundOrderDisposition,
+  type RefundReceivableDisposition,
   type RefundStatus,
   type SettlementChannel,
 } from '../shared/payment-contracts'
@@ -55,7 +60,15 @@ interface PaymentViewProps {
 
 type BootstrapWithPayments = BootstrapResponse & { paymentDomain?: PaymentDomainState }
 type Notice = { tone: 'success' | 'error'; message: string }
-type RefundDraft = { paymentIntentId: string; orderId: string; orderItemId: string; quantity: number; reason: string }
+type RefundDraft = {
+  paymentIntentId: string
+  orderId: string
+  orderItemId: string
+  quantity: number
+  reason: string
+  orderDisposition: RefundOrderDisposition
+  receivableDisposition: RefundReceivableDisposition
+}
 type CollectionDraft = {
   mode: PaymentAllocationInput['mode']
   amountYuan: string
@@ -126,6 +139,7 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
   const [refundDraft, setRefundDraft] = useState<RefundDraft | null>(null)
   const [refundCompletion, setRefundCompletion] = useState({ refundId: '', terminalRefundTransactionId: '', reason: '' })
   const [collectionDrafts, setCollectionDrafts] = useState<Record<string, CollectionDraft>>({})
+  const [recollectionRefundIds, setRecollectionRefundIds] = useState<Record<string, string>>({})
   const [scannerAccount, setScannerAccount] = useState<TableAccount | null>(null)
   const [activeWorkspace, setActiveWorkspace] = useState<'collection' | 'tracking' | 'refunds' | 'handover'>('collection')
   const [showAllAccounts, setShowAllAccounts] = useState(false)
@@ -268,13 +282,21 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
     channel: paymentApi.PaymentCollectionChannel,
     allocation: PaymentAllocationInput,
     providerPayment?: paymentApi.ProviderPaymentMethod,
+    sourceRefundId?: string,
   ) {
     const channelLabel = channel === PHYSICAL_POS_CHANNEL
       ? '物理POS收款单'
       : channel === CASH_PAYMENT_CHANNEL ? '现金收款单' : channel === 'postar' ? '星驿支付码' : '线上联调支付意图'
-    void execute(`create:${tableSessionId}:${channel}`, `${channelLabel}已创建`, () =>
-      paymentApi.createTablePaymentIntent(tableSessionId, channel, allocation, providerPayment),
-    )
+    void execute(`create:${tableSessionId}:${channel}`, `${channelLabel}已创建`, async () => {
+      await paymentApi.createTablePaymentIntent(tableSessionId, channel, allocation, providerPayment, sourceRefundId)
+      if (sourceRefundId) {
+        setRecollectionRefundIds((current) => {
+          const next = { ...current }
+          delete next[tableSessionId]
+          return next
+        })
+      }
+    })
   }
 
   function simulateSuccess(intent: PaymentIntent) {
@@ -324,6 +346,8 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
         draft.orderItemId,
         draft.quantity,
         draft.reason.trim(),
+        draft.orderDisposition,
+        draft.receivableDisposition,
       )
       setRefundDraft(null)
     })
@@ -358,6 +382,32 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
     })
   }
 
+  function prepareRecollection(refund: Refund) {
+    if (refund.status !== 'succeeded' || !refundReopensReceivable(refund)) {
+      setNotice({ tone: 'error', message: '只有退款成功且选择恢复待收的记录可以重新收款' })
+      return
+    }
+    const account = tableAccounts.find((candidate) => candidate.tableSessionId === refund.tableSessionId)
+    if (!account) {
+      setNotice({ tone: 'error', message: '原桌次已经结束，不能在当前收银台重新发起收款' })
+      return
+    }
+    setCollectionDrafts((current) => ({
+      ...current,
+      [refund.tableSessionId]: {
+        mode: 'amount',
+        amountYuan: (refund.amount / 100).toFixed(2),
+        quantities: {},
+      },
+    }))
+    setRecollectionRefundIds((current) => ({ ...current, [refund.tableSessionId]: refund.id }))
+    setActiveWorkspace('collection')
+    setShowAllAccounts(true)
+    setExpandedAccountId(refund.tableSessionId)
+    setAccountRevealTick((value) => value + 1)
+    setNotice({ tone: 'success', message: `已恢复${money(refund.amount)}待收，请选择新的收款方式` })
+  }
+
   function createFromDraft(
     account: TableAccount,
     channel: paymentApi.PaymentCollectionChannel,
@@ -390,6 +440,7 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
       channel,
       allocation,
       channel === 'postar' ? (providerPayment ?? { presentation: 'qr' }) : undefined,
+      recollectionRefundIds[account.tableSessionId],
     )
     return true
   }
@@ -780,7 +831,44 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
               <small>原支付 {shortId(refundDraft.paymentIntentId)}</small>
             </div>
             <label><span>数量</span><input type="number" min={1} value={refundDraft.quantity} onChange={(event) => setRefundDraft({ ...refundDraft, quantity: Math.max(1, Number(event.target.value)) })} /></label>
+            <label>
+              <span>订单处理</span>
+              <select
+                value={refundDraft.orderDisposition}
+                onChange={(event) => {
+                  const orderDisposition = event.target.value as RefundOrderDisposition
+                  setRefundDraft({
+                    ...refundDraft,
+                    orderDisposition,
+                    receivableDisposition: orderDisposition === 'cancel_items'
+                      ? 'reduce_receivable'
+                      : refundDraft.receivableDisposition,
+                  })
+                }}
+              >
+                <option value="cancel_items">桌账退掉所选商品</option>
+                <option value="retain_order">保留订单与出品</option>
+              </select>
+            </label>
+            <label>
+              <span>退款后</span>
+              <select
+                value={refundDraft.receivableDisposition}
+                disabled={refundDraft.orderDisposition === 'cancel_items'}
+                onChange={(event) => setRefundDraft({
+                  ...refundDraft,
+                  receivableDisposition: event.target.value as RefundReceivableDisposition,
+                })}
+              >
+                <option value="reduce_receivable">不再向客人收取</option>
+                <option value="reopen_receivable">恢复待收并重新付款</option>
+              </select>
+            </label>
             <label><span>退款原因</span><input required value={refundDraft.reason} onChange={(event) => setRefundDraft({ ...refundDraft, reason: event.target.value })} placeholder="必填，进入审计记录" /></label>
+            <div className="refund-outcome-preview">
+              <strong>执行结果</strong>
+              <span>{refundOutcomeLabel(refundDraft.orderDisposition, refundDraft.receivableDisposition)}</span>
+            </div>
             <button className="primary-button" type="submit" disabled={Boolean(busyAction)}><RotateCcw size={16} />提交审批</button>
             <button className="icon-button" title="取消退款申请" type="button" onClick={() => setRefundDraft(null)}>×</button>
           </form>
@@ -794,6 +882,7 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
             const isProviderRefund = refundIntent?.channel === 'postar'
             const requesterName = employeeName(data, refund.requestedBy)
             const isRequester = refund.requestedBy === currentActorId
+            const recollectionIntent = activeRecollectionIntent(paymentDomain.paymentIntents, refund.id)
             const canCurrentActorApprove = canEmployeeApproveRefund(
               data,
               currentActorId,
@@ -809,6 +898,7 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
               <div className="refund-details">
                 <strong>{refund.items.map((item) => `${refundItemLabel(data, item.orderId, item.orderItemId)}×${item.quantity}`).join('、')}</strong>
                 <span>{refund.reason} · 申请人 {requesterName}</span>
+                <span>{refundOutcomeLabel(refundOrderDisposition(refund), refundReceivableDisposition(refund))}</span>
               </div>
               <b>{money(refund.amount)}</b>
               {refund.status === 'requested' && isSimulationRefund && paymentSimulationEnabled && canCurrentActorApprove && (
@@ -852,6 +942,18 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
                     : canApproveRefund
                       ? `当前账号审批额度不足：本笔${money(refund.amount)}，额度${money(currentActorRefundApprovalLimit)}。请由额度足够的授权人员处理${approverNames ? `：${approverNames}` : ''}。`
                       : `当前账号没有退款审批权限。请由授权人员处理${approverNames ? `：${approverNames}` : ''}。`}
+                  </span>
+              )}
+              {refund.status === 'succeeded' && refundReopensReceivable(refund) && !recollectionIntent && (
+                <button className="primary-button" type="button" disabled={Boolean(busyAction)} onClick={() => prepareRecollection(refund)}>
+                  <WalletCards size={16} />重新收款
+                </button>
+              )}
+              {refund.status === 'succeeded' && refundReopensReceivable(refund) && recollectionIntent && (
+                <span className="refund-approval-note">
+                  {recollectionIntent.status === 'succeeded'
+                    ? `已重新收款 ${money(recollectionIntent.amount)}`
+                    : `重收单${intentStatusLabels[recollectionIntent.status]}，请到支付追踪处理`}
                 </span>
               )}
             </article>
@@ -962,8 +1064,16 @@ function PaymentIntentRow({ data, intent, refunds, paymentSimulationEnabled, can
               <span>{line.quantity}份 × {money(line.unitPaidAmount)}</span>
               <b>{money(line.paidAmount)}</b>
               {canRefund && canRequestRefund && (
-                <button className="secondary-button" type="button" disabled={refundableQuantity === 0} onClick={() => onRefund({ paymentIntentId: intent.id, orderId: line.orderId, orderItemId: line.orderItemId, quantity: 1, reason: '' })}>
-                  <RotateCcw size={14} />{refundableQuantity === 0 ? '退款处理中' : '按商品退款'}
+                <button className="secondary-button" type="button" disabled={refundableQuantity === 0} onClick={() => onRefund({
+                  paymentIntentId: intent.id,
+                  orderId: line.orderId,
+                  orderItemId: line.orderItemId,
+                  quantity: 1,
+                  reason: '',
+                  orderDisposition: 'cancel_items',
+                  receivableDisposition: 'reduce_receivable',
+                })}>
+                  <RotateCcw size={14} />{refundableQuantity === 0 ? '退款处理中' : '售后处理'}
                 </button>
               )}
             </div>
@@ -1060,21 +1170,37 @@ function buildTableAccounts(data: BootstrapResponse, intents: PaymentIntent[], r
       allocatedByLine.set(key, (allocatedByLine.get(key) ?? 0) + line.paidAmount)
     }
   }
+  const succeededRecollections = refunds.filter((refund) => (
+    refund.status === 'succeeded' && refundReopensReceivable(refund)
+  ))
+  for (const refund of succeededRecollections) {
+    for (const item of refund.items) {
+      const key = lineKey(item.orderId, item.orderItemId)
+      allocatedByLine.set(key, Math.max(0, (allocatedByLine.get(key) ?? 0) - item.amount))
+    }
+  }
   return Array.from(ordersBySession, ([tableSessionId, orders]) => {
     const table = tableFromSession(data, tableSessionId)
-    const completedRefundAmount = refunds
-      .filter((refund) => refund.tableSessionId === tableSessionId && refund.status === 'succeeded')
+    const completedBillCreditAmount = refunds
+      .filter((refund) => (
+        refund.tableSessionId === tableSessionId
+        && refund.status === 'succeeded'
+        && !refundReopensReceivable(refund)
+      ))
       .reduce((sum, refund) => sum + refund.amount, 0)
-    const totalAmount = Math.max(0, orders.reduce((sum, order) => sum + order.amounts.payableAmount, 0) - completedRefundAmount)
-    const allocatedAmount = activeIntents
+    const reopenedAmount = succeededRecollections
+      .filter((refund) => refund.tableSessionId === tableSessionId)
+      .reduce((sum, refund) => sum + refund.amount, 0)
+    const totalAmount = Math.max(0, orders.reduce((sum, order) => sum + order.amounts.payableAmount, 0) - completedBillCreditAmount)
+    const allocatedAmount = Math.max(0, activeIntents
       .filter((intent) => intent.tableSessionId === tableSessionId)
-      .reduce((sum, intent) => sum + intent.amount, 0)
+      .reduce((sum, intent) => sum + intent.amount, 0) - reopenedAmount)
     const reservedAmount = activeIntents
       .filter((intent) => intent.tableSessionId === tableSessionId && intent.status !== 'succeeded')
       .reduce((sum, intent) => sum + intent.amount, 0)
-    const confirmedAllocatedAmount = activeIntents
+    const confirmedAllocatedAmount = Math.max(0, activeIntents
       .filter((intent) => ['succeeded', 'reported_pending_reconciliation'].includes(intent.status))
-      .reduce((sum, intent) => sum + intent.amount, 0)
+      .reduce((sum, intent) => sum + intent.amount, 0) - reopenedAmount)
     const remainingLines = orders.flatMap((order) => order.items.flatMap((item) => {
       const remainingAmount = Math.max(0, item.quantity * item.unitSalePriceAmount - (allocatedByLine.get(lineKey(order.id, item.id)) ?? 0))
       if (remainingAmount === 0) return []
@@ -1109,6 +1235,13 @@ export function tableFromSession(data: BootstrapResponse, tableSessionId: string
   return data.tables.find((table) => table.id === currentTableId)
 }
 
+// A failed or expired replacement payment must not prevent the cashier from trying again.
+export function activeRecollectionIntent(intents: PaymentIntent[], refundId: string) {
+  return intents.toReversed().find((intent) => (
+    intent.sourceRefundId === refundId && !['failed', 'closed'].includes(intent.status)
+  ))
+}
+
 // oxlint-disable-next-line react/only-export-components
 export function preferredTableAccountId(accounts: Array<{ tableSessionId: string; collectableAmount: number }>) {
   return accounts.find((account) => account.collectableAmount > 0)?.tableSessionId ?? ''
@@ -1120,6 +1253,17 @@ function findOrderItem(data: BootstrapResponse, orderId: string, orderItemId: st
 
 function refundItemLabel(data: BootstrapResponse, orderId: string, orderItemId: string) {
   return findOrderItem(data, orderId, orderItemId)?.name ?? `商品 ${shortId(orderItemId)}`
+}
+
+function refundOutcomeLabel(
+  orderDisposition: RefundOrderDisposition,
+  receivableDisposition: RefundReceivableDisposition,
+) {
+  if (orderDisposition === 'cancel_items') {
+    return '从桌账退掉所选商品，退款成功后不再收取；如仍在制作，请另行取消出品'
+  }
+  if (receivableDisposition === 'reopen_receivable') return '保留订单与出品；退款成功后恢复同金额待收'
+  return '保留订单与出品；本次作为服务补偿，不再收款'
 }
 
 function emptyCollectionDraft(): CollectionDraft {

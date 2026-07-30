@@ -12,6 +12,8 @@ import type {
   PaymentSettlementView,
   PhysicalPosReport,
   Refund,
+  RefundOrderDisposition,
+  RefundReceivableDisposition,
 } from './shared/payment-contracts'
 
 export type PaymentCollectionChannel = 'cash' | 'wechat_mock' | 'physical_pos' | 'postar'
@@ -53,6 +55,7 @@ export function createTablePaymentIntent(
   channel: PaymentCollectionChannel,
   allocation: PaymentAllocationInput,
   providerPayment?: ProviderPaymentMethod,
+  sourceRefundId?: string,
 ) {
   return paymentRequest<PaymentIntent>('/api/payments/table-intents', {
     method: 'POST',
@@ -61,6 +64,7 @@ export function createTablePaymentIntent(
       channel,
       allocation,
       providerPayment,
+      sourceRefundId,
       deviceId: 'cashier-web',
       idempotencyKey: idempotencyKey('payment-intent'),
     }),
@@ -114,10 +118,20 @@ export function requestItemRefund(
   orderItemId: string,
   quantity: number,
   reason: string,
+  orderDisposition: RefundOrderDisposition = 'cancel_items',
+  receivableDisposition: RefundReceivableDisposition = 'reduce_receivable',
 ) {
   return paymentRequest<Refund>(`/api/payments/${paymentIntentId}/refunds`, {
     method: 'POST',
-    body: JSON.stringify({ orderId, orderItemId, quantity, reason, idempotencyKey: idempotencyKey('refund-request') }),
+    body: JSON.stringify({
+      orderId,
+      orderItemId,
+      quantity,
+      reason,
+      orderDisposition,
+      receivableDisposition,
+      idempotencyKey: idempotencyKey('refund-request'),
+    }),
   })
 }
 

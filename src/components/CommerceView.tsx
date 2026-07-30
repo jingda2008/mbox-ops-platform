@@ -53,6 +53,7 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
   const occupiedTables = useMemo(() => data.tables.filter((table) => table.status === 'occupied'), [data.tables])
   const [tableId, setTableId] = useState(() => occupiedTables.length === 1 ? occupiedTables[0]!.id : '')
   const [orderMode, setOrderMode] = useState<'paid' | 'gift'>('paid')
+  const [settlementMode, setSettlementMode] = useState<'immediate_payment' | 'table_tab'>('immediate_payment')
   const [giftReason, setGiftReason] = useState('')
   const [workspaceMode, setWorkspaceMode] = useState<'order' | 'fulfillment'>('fulfillment')
   const [orderingFocusMode, setOrderingFocusMode] = useState(false)
@@ -238,9 +239,15 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
         tableId: orderTable.id,
         items,
         fulfillmentNote: options.fulfillmentNote,
+        settlementMode,
         actorId: currentEmployee.id,
         idempotencyKey: `cart-${crypto.randomUUID()}`,
       })
+      if (settlementMode === 'table_tab') {
+        onNotice(`${orderTable.code}已挂单并进入出品，结台前必须完成收款`)
+        await onRefresh()
+        return
+      }
       const link = await createAssistedPaymentLink(order.id, { idempotencyKey: `pay-link-${crypto.randomUUID()}` })
       const paymentUrl = assistedPaymentUrl(link)
       const QRCode = await import('qrcode')
@@ -535,6 +542,10 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
             tableControl={<div className="employee-order-controls">
               <div className="menu-table-control"><select aria-label="选择桌台" value={tableId} disabled={occupiedTables.length === 0} onChange={(event) => setTableId(event.target.value)}><option value="">{occupiedTables.length === 0 ? '当前没有已开台桌台' : '请选择客人所在桌台'}</option>{occupiedTables.map((table) => <option key={table.id} value={table.id}>{table.code} · {table.displayName} · {table.guestCount}人</option>)}</select>{tableSelectionMessage && <span className="menu-table-guidance" role="alert">{tableSelectionMessage}</span>}</div>
               <span className={`employee-order-badge${orderMode === 'gift' ? ' is-gift' : ''}`}>{orderMode === 'gift' ? <Gift size={14} /> : <ShoppingCart size={14} />}{orderMode === 'gift' ? '权限赠送' : '正常下单'}</span>
+              {orderMode === 'paid' && <div className="employee-settlement-mode" role="group" aria-label="结算方式">
+                <button type="button" className={settlementMode === 'immediate_payment' ? 'is-active' : ''} onClick={() => setSettlementMode('immediate_payment')}><QrCode size={14} />立即付款</button>
+                <button type="button" className={settlementMode === 'table_tab' ? 'is-active' : ''} onClick={() => setSettlementMode('table_tab')}><Clock3 size={14} />挂单消费</button>
+              </div>}
               {orderMode === 'gift' && <label className="employee-gift-reason"><span>赠送原因（必填）</span><input aria-label="赠送原因" maxLength={200} value={giftReason} onChange={(event) => setGiftReason(event.target.value)} placeholder="例如：生日关怀、服务补偿" /></label>}
             </div>}
             submitLabel={!selectedTable
@@ -543,14 +554,18 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
                 ? '当前账号暂不能赠送'
                 : giftReasonMissing
                   ? '请填写赠送原因'
-                  : orderMode === 'gift' ? '确认赠送并出品' : '核对无误，确认下单'}
+                  : orderMode === 'gift'
+                    ? '确认赠送并出品'
+                    : settlementMode === 'table_tab' ? '确认挂单并出品' : '确认订单并收款'}
             submitHint={!selectedTable
               ? occupiedTables.length === 0 ? '请先到现场调度开台，再回到这里提交订单。' : '请选择客人所在桌台，确认后才会创建订单。'
               : orderMode === 'gift'
                 ? canGift
                   ? `按${currentEmployee?.displayName ?? '当前员工'}本人账号权限校验，客人零应付；商品、库存、成本及赠送原因全部留痕。`
                   : `暂不能赠送：${giftUnavailableReason}`
-                : '提交后自动分发到对应吧台或厨房；完成制作后自动通知取送人员。'}
+                : settlementMode === 'table_tab'
+                  ? '订单立即进入出品并计入桌账；结台前必须完成收款。'
+                  : '订单进入出品，同时打开客扫二维码或付款码收款。'}
             submitDisabled={!selectedTable || giftReasonMissing || (orderMode === 'gift' && !canGift)}
             complimentaryMode={orderMode === 'gift'}
             compactCart

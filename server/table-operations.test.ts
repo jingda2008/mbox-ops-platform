@@ -3,7 +3,14 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { JsonRepository } from './repository.js'
 import { registerTableSessionRoutes } from './table-session-api.js'
 import { addOrderItem, createOrderDraft, submitOrder } from './order-domain.js'
-import { createPaymentIntent, handlePaymentNotification } from './payment-domain.js'
+import {
+  approveRefund,
+  createPaymentIntent,
+  handlePaymentNotification,
+  markRefundSucceeded,
+  requestRefund,
+  startRefund,
+} from './payment-domain.js'
 import { createServiceTask } from './domain.js'
 
 const resources: Array<{ app: ReturnType<typeof Fastify>; repository: JsonRepository }> = []
@@ -342,6 +349,117 @@ describe('table operating line', () => {
     const closed = await app.inject({
       method: 'POST', url: '/api/tables/table-l01/close',
       payload: { reason: '金额核对完成', idempotencyKey: 'table-close-amount-success-0001' },
+    })
+    expect(closed.statusCode, closed.body).toBe(200)
+  })
+
+  it('blocks table close after refunding retained items until the reopened receivable is collected again', async () => {
+    const { app, repository } = await fixture()
+    await repository.mutate((state) => {
+      const session = state.songState.tableSessions.find((candidate) => candidate.tableId === 'table-l01' && candidate.status === 'open')!
+      createOrderDraft(state.orderDomain, {
+        orderId: 'table-close-recollection-order', tableSessionId: session.id, createdBy: 'emp-owner',
+        occurredAt: '2026-07-15T12:00:00.000Z', idempotencyKey: 'table-close-recollection-order-create',
+      })
+      addOrderItem(state.orderDomain, {
+        orderId: 'table-close-recollection-order', actorId: 'emp-owner', occurredAt: '2026-07-15T12:00:01.000Z',
+        idempotencyKey: 'table-close-recollection-order-item',
+        item: {
+          id: 'table-close-recollection-line', skuId: 'product-beer', name: '精酿啤酒', specification: '330ml',
+          quantity: 1, unitListPriceAmount: 6800, unitSalePriceAmount: 6800, unitCostAmount: 1800,
+          stationId: 'bar-main', configVersion: 1,
+        },
+      })
+      submitOrder(state.orderDomain, {
+        orderId: 'table-close-recollection-order', submittedBy: 'emp-owner',
+        occurredAt: '2026-07-15T12:00:02.000Z', idempotencyKey: 'table-close-recollection-order-submit',
+      })
+      const kds = state.orderDomain.kdsTasks.find((candidate) => candidate.orderId === 'table-close-recollection-order')!
+      kds.status = 'delivered'
+      kds.deliveredAt = '2026-07-15T12:01:00.000Z'
+      const original = createPaymentIntent(state.paymentDomain, {
+        paymentIntentId: 'table-close-recollection-original', tableSessionId: session.id,
+        lineAllocations: [{
+          orderId: 'table-close-recollection-order',
+          orderItemId: 'table-close-recollection-line',
+          quantity: 1,
+          unitPaidAmount: 6800,
+        }],
+        amount: 6800, currency: 'CNY', channel: 'wechat_mock', merchantId: state.store.id,
+        createdBy: 'emp-owner', deviceId: 'test', occurredAt: '2026-07-15T12:01:01.000Z',
+        expiresAt: '2026-07-15T12:16:01.000Z', idempotencyKey: 'table-close-recollection-original-create',
+      })
+      handlePaymentNotification(state.paymentDomain, {
+        channel: original.channel, notificationId: 'table-close-recollection-original-notification',
+        paymentIntentId: original.id, channelTransactionId: 'table-close-recollection-original-transaction',
+        status: 'succeeded', amount: original.amount, currency: original.currency, merchantId: original.merchantId,
+        signatureVerified: true, channelOccurredAt: '2026-07-15T12:01:02.000Z',
+        receivedAt: '2026-07-15T12:01:02.000Z',
+      })
+      requestRefund(state.paymentDomain, {
+        refundId: 'table-close-recollection-refund', paymentIntentId: original.id,
+        items: [{
+          orderId: 'table-close-recollection-order',
+          orderItemId: 'table-close-recollection-line',
+          quantity: 1,
+        }],
+        reason: '原款退回后更换付款方式', orderDisposition: 'retain_order',
+        receivableDisposition: 'reopen_receivable', requestedBy: 'emp-owner',
+        occurredAt: '2026-07-15T12:02:00.000Z', idempotencyKey: 'table-close-recollection-refund-request',
+      })
+      approveRefund(state.paymentDomain, {
+        refundId: 'table-close-recollection-refund', approvedBy: 'emp-owner', reason: '同意更换付款方式',
+        occurredAt: '2026-07-15T12:02:01.000Z', idempotencyKey: 'table-close-recollection-refund-approve',
+      })
+      startRefund(state.paymentDomain, {
+        refundId: 'table-close-recollection-refund', channelRefundId: 'table-close-recollection-channel-refund',
+        actorId: 'emp-owner', occurredAt: '2026-07-15T12:02:02.000Z',
+        idempotencyKey: 'table-close-recollection-refund-start',
+      })
+      markRefundSucceeded(state.paymentDomain, {
+        refundId: 'table-close-recollection-refund',
+        channelRefundTransactionId: 'table-close-recollection-refund-transaction',
+        refundedAmount: 6800, currency: 'CNY', occurredAt: '2026-07-15T12:02:03.000Z',
+        idempotencyKey: 'table-close-recollection-refund-success',
+      })
+      state.revision += 1
+    })
+
+    const blocked = await app.inject({
+      method: 'POST', url: '/api/tables/table-l01/close',
+      payload: { reason: '退款后尚未重新收款', idempotencyKey: 'table-close-recollection-blocked-0001' },
+    })
+    expect(blocked.statusCode).toBe(500)
+    expect(blocked.json().message).toContain('实付0分，应付6800分')
+
+    await repository.mutate((state) => {
+      const session = state.songState.tableSessions.find((candidate) => candidate.tableId === 'table-l01' && candidate.status === 'open')!
+      const replacement = createPaymentIntent(state.paymentDomain, {
+        paymentIntentId: 'table-close-recollection-replacement', tableSessionId: session.id,
+        lineAllocations: [{
+          orderId: 'table-close-recollection-order',
+          orderItemId: 'table-close-recollection-line',
+          quantity: 1,
+          unitPaidAmount: 6800,
+        }],
+        sourceRefundId: 'table-close-recollection-refund',
+        amount: 6800, currency: 'CNY', channel: 'cash', merchantId: state.store.id,
+        createdBy: 'emp-owner', deviceId: 'test', occurredAt: '2026-07-15T12:03:00.000Z',
+        expiresAt: '2026-07-15T12:18:00.000Z', idempotencyKey: 'table-close-recollection-replacement-create',
+      })
+      handlePaymentNotification(state.paymentDomain, {
+        channel: replacement.channel, notificationId: 'table-close-recollection-replacement-notification',
+        paymentIntentId: replacement.id, channelTransactionId: 'table-close-recollection-replacement-transaction',
+        status: 'succeeded', amount: replacement.amount, currency: replacement.currency, merchantId: replacement.merchantId,
+        signatureVerified: true, channelOccurredAt: '2026-07-15T12:03:01.000Z',
+        receivedAt: '2026-07-15T12:03:01.000Z',
+      })
+      state.revision += 1
+    })
+
+    const closed = await app.inject({
+      method: 'POST', url: '/api/tables/table-l01/close',
+      payload: { reason: '重新收款完成', idempotencyKey: 'table-close-recollection-success-0001' },
     })
     expect(closed.statusCode, closed.body).toBe(200)
   })

@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import type { BootstrapResponse } from '../shared/contracts'
-import { preferredTableAccountId, tableFromSession } from './PaymentView'
+import { createSeedState } from '../../server/seed'
+import { canEmployeeApproveRefund, preferredTableAccountId, tableFromSession } from './PaymentView'
 
 const paymentStyles = readFileSync(new URL('./PaymentView.css', import.meta.url), 'utf8')
 
@@ -41,5 +42,15 @@ describe('cashier table account presentation', () => {
     expect(paymentStyles).toContain('.table-account-summary')
     expect(paymentStyles).toContain('.table-account-details')
     expect(paymentStyles).toContain('.table-account-toggle:focus-visible')
+  })
+
+  it('requires a different approver with both permission and sufficient amount limit', () => {
+    const data = createSeedState(new Date('2026-07-30T12:00:00.000Z')) as BootstrapResponse
+    const administrator = data.employees.find((employee) => employee.id === 'emp-admin')!
+    administrator.permissionIds = [...(administrator.permissionIds ?? []), 'payment.refund.approve']
+
+    expect(canEmployeeApproveRefund(data, 'emp-admin', 'emp-chen', 62_800)).toBe(false)
+    expect(canEmployeeApproveRefund(data, 'emp-owner', 'emp-chen', 62_800)).toBe(true)
+    expect(canEmployeeApproveRefund(data, 'emp-owner', 'emp-owner', 62_800)).toBe(false)
   })
 })

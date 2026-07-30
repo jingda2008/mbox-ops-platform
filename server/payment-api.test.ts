@@ -239,6 +239,109 @@ describe('payment API security boundary', () => {
     await repository.close()
   })
 
+  it('reopens the exact refunded items for one linked replacement payment', async () => {
+    const { app, repository, setActor } = fixture('test', 'emp-lin', 'server')
+    const state = await repository.read()
+    const order = state.orderDomain.orders.find((candidate) => candidate.status !== 'draft')!
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/payments/table-intents',
+      payload: {
+        tableSessionId: order.tableSessionId,
+        channel: 'physical_pos',
+        deviceId: 'cashier-test',
+        idempotencyKey: 'recollect-original-payment-0001',
+      },
+    })
+    expect(created.statusCode).toBe(201)
+    const intent = created.json()
+
+    setActor('emp-cashier', 'cashier')
+    expect((await app.inject({
+      method: 'POST',
+      url: `/api/payments/${intent.id}/physical-pos-reports`,
+      payload: {
+        terminalId: 'POS-01',
+        terminalTransactionId: 'POS-RECOLLECT-SALE-0001',
+        paymentMethod: '银行卡',
+        deviceId: 'cashier-test',
+        idempotencyKey: 'recollect-original-report-0001',
+      },
+    })).statusCode).toBe(201)
+
+    setActor('emp-lin', 'server')
+    const requested = await app.inject({
+      method: 'POST',
+      url: `/api/payments/${intent.id}/refunds`,
+      payload: {
+        orderId: order.id,
+        orderItemId: order.items[0]!.id,
+        quantity: 1,
+        reason: '客人更换付款账户',
+        orderDisposition: 'retain_order',
+        receivableDisposition: 'reopen_receivable',
+        idempotencyKey: 'recollect-refund-request-0001',
+      },
+    })
+    expect(requested.statusCode).toBe(201)
+    const refund = requested.json()
+
+    setActor('emp-chen', 'manager')
+    expect((await app.inject({
+      method: 'POST',
+      url: `/api/payments/refunds/${refund.id}/physical-pos-complete`,
+      payload: {
+        terminalRefundTransactionId: 'POS-RECOLLECT-REFUND-0001',
+        reason: '确认原路退款后重新收款',
+        idempotencyKey: 'recollect-refund-complete-0001',
+      },
+    })).statusCode).toBe(200)
+
+    setActor('emp-cashier', 'cashier')
+    const replacement = await app.inject({
+      method: 'POST',
+      url: '/api/payments/table-intents',
+      payload: {
+        tableSessionId: order.tableSessionId,
+        channel: 'cash',
+        allocation: {
+          mode: 'items',
+          items: [{ orderId: order.id, orderItemId: order.items[0]!.id, quantity: 1 }],
+        },
+        sourceRefundId: refund.id,
+        deviceId: 'cashier-test',
+        idempotencyKey: 'recollect-replacement-payment-0001',
+      },
+    })
+    expect(replacement.statusCode).toBe(201)
+    expect(replacement.json()).toMatchObject({
+      amount: refund.amount,
+      sourceRefundId: refund.id,
+      status: 'pending',
+    })
+
+    const duplicate = await app.inject({
+      method: 'POST',
+      url: '/api/payments/table-intents',
+      payload: {
+        tableSessionId: order.tableSessionId,
+        channel: 'cash',
+        allocation: {
+          mode: 'items',
+          items: [{ orderId: order.id, orderItemId: order.items[0]!.id, quantity: 1 }],
+        },
+        sourceRefundId: refund.id,
+        deviceId: 'cashier-test',
+        idempotencyKey: 'recollect-replacement-payment-duplicate-0001',
+      },
+    })
+    expect(duplicate.statusCode).toBe(409)
+    expect(duplicate.json().code).toBe('RECOLLECTION_ALREADY_CREATED')
+    expect(duplicate.json().message).toContain('已经生成重新收款单')
+    await app.close()
+    await repository.close()
+  })
+
   it('splits one item by specified amounts without assigning more than the remaining receivable', async () => {
     const { app, repository } = fixture('test', 'emp-cashier', 'cashier')
     const state = await repository.read()

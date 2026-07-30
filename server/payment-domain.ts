@@ -192,6 +192,7 @@ export function createPaymentIntent(state: PaymentDomainState, command: CreatePa
   assertPositiveInteger(command.amount, '支付金额')
   assertCurrency(command.currency)
   if (command.businessDate) assertBusinessDate(command.businessDate)
+  if (command.sourceRefundId) assertNonEmpty(command.sourceRefundId, '重收来源退款ID')
   if (Date.parse(command.expiresAt) <= Date.parse(command.occurredAt)) throw new Error('失效时间必须晚于创建时间')
   if (command.lineAllocations.length === 0) throw new Error('支付意图必须明确关联订单商品')
 
@@ -251,6 +252,7 @@ export function createPaymentIntent(state: PaymentDomainState, command: CreatePa
         ...(command.requestSelectionFingerprint
           ? { requestSelectionFingerprint: command.requestSelectionFingerprint }
           : {}),
+        ...(command.sourceRefundId ? { sourceRefundId: command.sourceRefundId } : {}),
       }
       state.paymentIntents.push(intent)
       return intent
@@ -631,6 +633,11 @@ export function requestRefund(state: PaymentDomainState, command: RequestRefundC
   assertNonEmpty(command.requestedBy, '退款申请人')
   assertTimestamp(command.occurredAt, '退款申请时间')
   if (command.items.length === 0) throw new Error('退款必须选择原订单商品')
+  const orderDisposition = command.orderDisposition ?? 'cancel_items'
+  const receivableDisposition = command.receivableDisposition ?? 'reduce_receivable'
+  if (orderDisposition === 'cancel_items' && receivableDisposition === 'reopen_receivable') {
+    throw new Error('退掉商品后不能恢复同一笔应收；如需重新收款，请选择保留订单')
+  }
 
   return executeIdempotent(
     state,
@@ -694,6 +701,8 @@ export function requestRefund(state: PaymentDomainState, command: RequestRefundC
         amount,
         currency: intent.currency,
         reason: command.reason.trim(),
+        orderDisposition,
+        receivableDisposition,
         status: 'requested',
         requestedBy: command.requestedBy,
         requestedAt: command.occurredAt,

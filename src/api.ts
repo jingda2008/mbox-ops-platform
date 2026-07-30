@@ -46,7 +46,13 @@ import type {
 import type { AuthorityWriteInput } from './shared/commerce-api'
 import type { KdsExceptionEvent, KdsTask, Order } from './shared/order-contracts'
 import type { OrderAuthorizationAuthority } from './shared/order-contracts'
-import type { PaymentIntent, PhysicalPosReport, Refund } from './shared/payment-contracts'
+import type {
+  PaymentIntent,
+  PhysicalPosReport,
+  Refund,
+  RefundOrderDisposition,
+  RefundReceivableDisposition,
+} from './shared/payment-contracts'
 import type {
   BenefitCampaign,
   BenefitCampaignInput,
@@ -853,6 +859,8 @@ export function requestItemRefund(
   orderItemId: string,
   quantity: number,
   reason: string,
+  orderDisposition: RefundOrderDisposition = 'cancel_items',
+  receivableDisposition: RefundReceivableDisposition = 'reduce_receivable',
 ) {
   return request<Refund>(`/api/payments/${paymentIntentId}/refunds`, {
     method: 'POST',
@@ -861,6 +869,8 @@ export function requestItemRefund(
       orderItemId,
       quantity,
       reason,
+      orderDisposition,
+      receivableDisposition,
       idempotencyKey: idempotencyKey('refund-request'),
     }),
   })

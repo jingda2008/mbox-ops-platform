@@ -2,8 +2,9 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import type { BootstrapResponse } from '../shared/contracts'
 import { canEmployeeApproveRefund } from '../shared/staff-access'
+import type { PaymentIntent } from '../shared/payment-contracts'
 import { createSeedState } from '../../server/seed'
-import { preferredTableAccountId, tableFromSession } from './PaymentView'
+import { activeRecollectionIntent, preferredTableAccountId, tableFromSession } from './PaymentView'
 
 const paymentStyles = readFileSync(new URL('./PaymentView.css', import.meta.url), 'utf8')
 
@@ -53,5 +54,22 @@ describe('cashier table account presentation', () => {
     expect(canEmployeeApproveRefund(data, 'emp-admin', 'emp-chen', 62_800)).toBe(false)
     expect(canEmployeeApproveRefund(data, 'emp-owner', 'emp-chen', 62_800)).toBe(true)
     expect(canEmployeeApproveRefund(data, 'emp-owner', 'emp-owner', 62_800)).toBe(false)
+  })
+
+  it('allows a new recollection after a failed attempt and prefers the latest active attempt', () => {
+    const intent = (id: string, status: PaymentIntent['status']): PaymentIntent => ({
+      id,
+      sourceRefundId: 'refund-1',
+      status,
+    } as PaymentIntent)
+
+    expect(activeRecollectionIntent([
+      intent('closed-first', 'closed'),
+      intent('failed-second', 'failed'),
+    ], 'refund-1')).toBeUndefined()
+    expect(activeRecollectionIntent([
+      intent('closed-first', 'closed'),
+      intent('pending-second', 'pending'),
+    ], 'refund-1')?.id).toBe('pending-second')
   })
 })

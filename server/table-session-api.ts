@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
+import { refundReopensReceivable } from '../src/shared/payment-contracts.js'
 import {
   closeTableSessionSchema,
   salesAttributionSchema,
@@ -427,9 +428,14 @@ function assertSessionCanClose(state: RuntimeState, tableSessionId: string) {
       const refundedAmount = completedRefunds.flatMap((refund) => refund.items)
         .filter((refundItem) => refundItem.orderId === order.id && refundItem.orderItemId === item.id)
         .reduce((sum, refundItem) => sum + refundItem.amount, 0)
+      const payableCreditAmount = completedRefunds
+        .filter((refund) => !refundReopensReceivable(refund))
+        .flatMap((refund) => refund.items)
+        .filter((refundItem) => refundItem.orderId === order.id && refundItem.orderItemId === item.id)
+        .reduce((sum, refundItem) => sum + refundItem.amount, 0)
       const payableAmount = item.quantity * item.unitSalePriceAmount
       const netPaidAmount = paidAmount - refundedAmount
-      const netPayableAmount = payableAmount - refundedAmount
+      const netPayableAmount = payableAmount - payableCreditAmount
       if (
         !Number.isSafeInteger(payableAmount) || !Number.isSafeInteger(netPaidAmount) ||
         netPaidAmount !== netPayableAmount

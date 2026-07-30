@@ -19,6 +19,8 @@ export type ChannelPaymentStatus = 'pending' | 'processing' | 'succeeded' | 'fai
 export type PaymentQueryStatus = 'requested' | 'completed'
 export type PhysicalPosReportStatus = 'reported_pending_reconciliation'
 export type RefundStatus = 'requested' | 'approved' | 'rejected' | 'processing' | 'succeeded' | 'failed'
+export type RefundOrderDisposition = 'cancel_items' | 'retain_order'
+export type RefundReceivableDisposition = 'reduce_receivable' | 'reopen_receivable'
 
 export interface PaymentLineAllocation {
   orderId: string
@@ -53,6 +55,8 @@ export interface PaymentIntent {
   businessDate?: string
   allocationMode?: PaymentAllocationMode
   requestSelectionFingerprint?: string
+  /** Links a replacement collection to the refund that reopened the receivable. */
+  sourceRefundId?: string | null
   providerPaymentPayload?: Readonly<Record<string, unknown>>
   providerOrderCreatedAt?: string
 }
@@ -128,6 +132,10 @@ export interface Refund {
   amount: MoneyAmount
   currency: string
   reason: string
+  /** Missing on historical records; legacy refunds are treated as item cancellation. */
+  orderDisposition?: RefundOrderDisposition
+  /** Missing on historical records; legacy refunds reduce the amount owed. */
+  receivableDisposition?: RefundReceivableDisposition
   status: RefundStatus
   requestedBy: string
   requestedAt: string
@@ -236,6 +244,7 @@ export interface CreatePaymentIntentCommand {
   businessDate?: string
   allocationMode?: PaymentAllocationMode
   requestSelectionFingerprint?: string
+  sourceRefundId?: string | null
 }
 
 export interface ConfirmCashPaymentCommand {
@@ -338,9 +347,25 @@ export interface RequestRefundCommand {
   paymentIntentId: string
   items: RefundItemInput[]
   reason: string
+  orderDisposition?: RefundOrderDisposition
+  receivableDisposition?: RefundReceivableDisposition
   requestedBy: string
   occurredAt: string
   idempotencyKey: string
+}
+
+export function refundOrderDisposition(refund: Pick<Refund, 'orderDisposition'>): RefundOrderDisposition {
+  return refund.orderDisposition ?? 'cancel_items'
+}
+
+export function refundReceivableDisposition(
+  refund: Pick<Refund, 'receivableDisposition'>,
+): RefundReceivableDisposition {
+  return refund.receivableDisposition ?? 'reduce_receivable'
+}
+
+export function refundReopensReceivable(refund: Pick<Refund, 'receivableDisposition'>) {
+  return refundReceivableDisposition(refund) === 'reopen_receivable'
 }
 
 export interface ApproveRefundCommand {

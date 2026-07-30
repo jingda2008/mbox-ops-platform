@@ -284,6 +284,41 @@ describe('cash payment confirmation', () => {
 })
 
 describe('item-level refund state machine', () => {
+  it('records whether the order is retained and whether the refund reopens the receivable', () => {
+    const state = createPaymentDomainState()
+    const intent = createPaymentIntent(state, intentCommand())
+    handlePaymentNotification(state, successNotification())
+
+    const refund = requestRefund(state, {
+      refundId: 'refund-recollect',
+      paymentIntentId: intent.id,
+      items: [{ orderId: 'order-A', orderItemId: 'line-A1', quantity: 1 }],
+      reason: '更换付款账户',
+      orderDisposition: 'retain_order',
+      receivableDisposition: 'reopen_receivable',
+      requestedBy: 'cashier-1',
+      occurredAt: '2026-07-14T12:04:00.000Z',
+      idempotencyKey: 'refund-recollect-request',
+    })
+
+    expect(refund).toMatchObject({
+      orderDisposition: 'retain_order',
+      receivableDisposition: 'reopen_receivable',
+      amount: 1200,
+    })
+    expect(() => requestRefund(state, {
+      refundId: 'refund-invalid',
+      paymentIntentId: intent.id,
+      items: [{ orderId: 'order-A', orderItemId: 'line-A2', quantity: 1 }],
+      reason: '错误组合',
+      orderDisposition: 'cancel_items',
+      receivableDisposition: 'reopen_receivable',
+      requestedBy: 'cashier-1',
+      occurredAt: '2026-07-14T12:05:00.000Z',
+      idempotencyKey: 'refund-invalid-request',
+    })).toThrow('退掉商品后不能恢复同一笔应收')
+  })
+
   it('derives the amount from original items and requires request, approval, processing and success', () => {
     const state = createPaymentDomainState()
     const intent = createPaymentIntent(state, intentCommand())

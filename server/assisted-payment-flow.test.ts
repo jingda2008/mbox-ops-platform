@@ -24,6 +24,55 @@ function registerTestActor(app: ReturnType<typeof Fastify>) {
 }
 
 describe('assisted ordering payment flow', () => {
+  it('records a table-tab choice while sending the order to fulfillment without creating payment', async () => {
+    const repository = new JsonRepository(`/tmp/mbox-assisted-tab-${crypto.randomUUID()}.json`)
+    await repository.init()
+    const app = Fastify()
+    registerTestActor(app)
+    registerCommerceRoutes(app, repository, { guestTokenSecret: secret, now: () => now })
+    const initial = await repository.read()
+    const table = initial.tables.find((candidate) => candidate.status === 'occupied')!
+    const product = initial.products.find((candidate) => candidate.enabled)!
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/commerce/orders',
+      payload: {
+        tableId: table.id,
+        items: [{ productId: product.id, quantity: 1 }],
+        settlementMode: 'table_tab',
+        actorId: 'emp-lin',
+        idempotencyKey: 'staff-cart-table-tab-0001',
+      },
+    })
+
+    expect(response.statusCode).toBe(201)
+    const persisted = await repository.read()
+    expect(persisted.paymentDomain.paymentIntents).toHaveLength(0)
+    expect(persisted.orderDomain.kdsTasks).toContainEqual(expect.objectContaining({ orderId: response.json().id }))
+    expect(persisted.auditEntries).toContainEqual(expect.objectContaining({
+      action: 'commerce.cart_order.v1',
+      objectId: response.json().id,
+      details: expect.objectContaining({ settlementMode: 'table_tab' }),
+    }))
+
+    const conflictingRetry = await app.inject({
+      method: 'POST',
+      url: '/api/commerce/orders',
+      payload: {
+        tableId: table.id,
+        items: [{ productId: product.id, quantity: 1 }],
+        settlementMode: 'immediate_payment',
+        actorId: 'emp-lin',
+        idempotencyKey: 'staff-cart-table-tab-0001',
+      },
+    })
+    expect(conflictingRetry.statusCode).toBe(409)
+    expect(conflictingRetry.json().message).toContain('结算方式')
+    await app.close()
+    await repository.close()
+  })
+
   it('returns an actionable reason when staff orders for a table that is not open', async () => {
     const repository = new JsonRepository(`/tmp/mbox-assisted-table-state-${crypto.randomUUID()}.json`)
     await repository.init()

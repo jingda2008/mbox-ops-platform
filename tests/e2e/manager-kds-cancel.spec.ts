@@ -19,7 +19,7 @@ test('李艳取消未送达酒水时情况说明为选填', async ({ page }) => 
   const product = page.locator('.menu-product').filter({ hasText: '精酿啤酒' }).first()
   await product.getByTitle('加入精酿啤酒').click()
   await page.getByRole('button', { name: /查看购物车/ }).click()
-  await page.getByRole('dialog', { name: '购物车明细' }).getByRole('button', { name: '核对无误，确认下单' }).click()
+  await page.getByRole('dialog', { name: '购物车明细' }).getByRole('button', { name: '确认订单并收款' }).click()
   await page.getByRole('button', { name: '确认上单' }).click()
   await expect(page.getByRole('dialog', { name: /订单支付/ })).toBeVisible()
   await page.getByTitle('关闭支付窗口').click()

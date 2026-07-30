@@ -2,6 +2,10 @@
 
 ## 1.0.0-rc.60 - 2026-07-30
 
+- Added explicit “immediate payment” and “table tab” choices to staff-assisted ordering; table-tab orders enter fulfillment without creating a payment intent and remain collectible before table close.
+- Added auditable refund outcomes for cancelling billed items, retaining fulfilled items as service recovery, or reopening the exact refunded receivable for a replacement payment.
+- Linked replacement payments to their source refund, blocked duplicate active recollection, blocked table close until recollection succeeds and allowed a safe retry after a failed or expired recollection attempt.
+- Preserved human refund approval, requester/approver separation, configured approval limits and provider or physical-POS confirmation requirements.
 - Fixed quick-selection answers being scored correctly but then hidden by a price-midpoint comparison layout that kept the same product in the primary position.
 - Made the highest rule-ranked eligible bundle the visible primary recommendation while retaining a lower-priced comparison when available.
 - Limited the “more complete” role to an explicitly configured upgrade and labelled other higher-priced choices as alternatives instead of inventing an upgrade.

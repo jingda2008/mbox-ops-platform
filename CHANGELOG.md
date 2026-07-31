@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-rc.63 - 2026-07-31
+
+- Applied role-focused navigation to the desktop sidebar instead of limiting the simplification to the home page and mobile bottom bar.
+- Kept home and each role's two to four primary modules visible while moving all other authorized modules into an explicit expandable section.
+- Preserved full authorization and direct metric, task, voice and programmatic navigation to secondary modules.
+- Automatically expanded secondary navigation when a low-frequency module became active and collapsed it again after returning to primary work.
+- Hardened mobile drawer navigation so complete authorized modules remain reachable without repeated menu clicks or off-screen controls.
+- Added desktop manager navigation regression coverage and shared browser helpers for primary and secondary role navigation.
+
 ## 1.0.0-rc.62 - 2026-07-31
 
 - Separated each role's primary mobile navigation from its complete authorized module set so frequent work stays within two to four visible entries without removing legitimate access.

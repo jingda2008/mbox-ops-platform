@@ -167,6 +167,12 @@ html.staff-phone-device .app-shell > .nav-backdrop { display: block; }
 .brand-lockup small { color: #aeb4aa; font-size: 12px; }
 .brand-lockup em { color: #7f8980; font-size: 8px; font-style: normal; font-weight: 750; }
 .sidebar nav { flex: 0 0 auto; display: grid; gap: 5px; }
+.sidebar-secondary-nav {
+  display: grid;
+  gap: 3px;
+  padding: 4px 0 0 12px;
+  border-left: 1px solid #3b4039;
+}
 .nav-item {
   width: 100%;
   height: 46px;
@@ -184,6 +190,25 @@ html.staff-phone-device .app-shell > .nav-backdrop { display: block; }
 }
 .nav-item:hover { background: #292c28; color: #fff; }
 .nav-item.is-active { background: var(--brand-yellow); color: #1d1f1c; }
+.nav-item-more {
+  margin-top: 3px;
+  border: 1px solid #3b4039;
+  color: #aeb5ac;
+}
+.nav-item-more.is-expanded { background: #242722; color: #fff; }
+.nav-item-more small {
+  min-width: 20px;
+  color: #8f988e;
+  font-size: 11px;
+  text-align: center;
+}
+.sidebar-secondary-nav .nav-item {
+  height: 39px;
+  padding-inline: 9px;
+  color: #aeb5ac;
+  font-size: 13px;
+}
+.sidebar-secondary-nav .nav-item.is-active { color: #1d1f1c; }
 .nav-item b {
   min-width: 22px;
   height: 22px;

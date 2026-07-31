@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { useStaffIdentity } from './helpers'
+import { openStaffNavigation, useStaffIdentity } from './helpers'
 
 test.describe.serial('跨客户端经营流转', () => {
   test('客人个性化需求由责任服务员两步处理并完成', async ({ browser }) => {
@@ -59,8 +59,7 @@ test.describe.serial('跨客户端经营流转', () => {
     const staffPage = await staffContext.newPage()
     await useStaffIdentity(staffPage, 'emp-chen', '李艳')
     await staffPage.goto('/')
-    await staffPage.getByTitle('打开导航').click()
-    await staffPage.locator('.sidebar nav').getByRole('button', { name: '预约' }).click()
+    await openStaffNavigation(staffPage, '预约')
     await expect(staffPage.getByRole('heading', { name: '预约接待台' })).toBeVisible()
     await staffPage.getByRole('button', { name: '未来7个营业日' }).click()
     await staffPage.getByLabel('搜索预约').fill(customerName)
@@ -107,8 +106,7 @@ test.describe.serial('跨客户端经营流转', () => {
     const staffPage = await staffContext.newPage()
     await useStaffIdentity(staffPage, 'emp-chen', '李艳')
     await staffPage.goto('/')
-    await staffPage.getByTitle('打开导航').click()
-    await staffPage.locator('.sidebar nav').getByRole('button', { name: '预约' }).click()
+    await openStaffNavigation(staffPage, '预约')
     await staffPage.getByRole('button', { name: '未来7个营业日' }).click()
     await staffPage.getByLabel('搜索预约').fill(customerName)
     const reservation = staffPage.locator('.reservation-row').filter({ hasText: customerName })

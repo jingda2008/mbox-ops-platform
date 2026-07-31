@@ -1,4 +1,8 @@
-import type { BootstrapResponse, Employee, StaffPermissionId } from '../shared/contracts'
+import type { BootstrapResponse, Employee } from '../shared/contracts'
+import {
+  navigationForStaffPermissions,
+  type StaffNavigationId,
+} from '../shared/staff-navigation'
 import { kdsTaskOperationallyActive } from './commerce-workspace'
 
 export const roleHomeNavigation = [
@@ -17,7 +21,7 @@ export const roleHomeNavigation = [
   { id: 'config', label: '配置' },
 ] as const
 
-export type RoleHomeNavigationId = (typeof roleHomeNavigation)[number]['id']
+export type RoleHomeNavigationId = StaffNavigationId
 export type RoleHomeKind = 'owner' | 'operations_director' | 'admin' | 'manager' | 'server' | 'bartender' | 'kitchen' | 'cashier' | 'host' | 'runner' | 'stage' | 'technical' | 'marketing' | 'custom'
 export type RoleHomeIndicator = 'tables' | 'tasks' | 'risk' | 'kds' | 'people' | 'config' | 'payments' | 'reservations' | 'music' | 'devices' | 'benefits'
 export type RoleHomeTone = 'neutral' | 'info' | 'warning' | 'danger' | 'success'
@@ -191,38 +195,19 @@ export function getRoleHomeAccess(data: BootstrapResponse, roleId: string): Role
     ? navigationForPermissions(configuredRole.permissionIds)
     : null
   const allowedNavigationIds = configuredNavigation ?? defaultAllowedNavigation[kind]
+  const preferredNavigation = configuredRole?.primaryNavigationIds ?? profile.navigation
   return {
     kind,
     title: profile.title,
     focusLabel: profile.focusLabel,
     roleLabel: configuredRole?.name ?? (roleId || '身份未识别'),
     allowedNavigationIds,
-    primaryNavigationIds: primaryNavigationFor(profile.navigation, allowedNavigationIds),
+    primaryNavigationIds: primaryNavigationFor(preferredNavigation, allowedNavigationIds),
     isFallback: kind === 'custom',
   }
 }
 
-const navigationPermissions: Record<RoleHomeNavigationId, readonly StaffPermissionId[]> = {
-  live: ['dashboard.view'],
-  tasks: ['service.execute', 'complaint.handle'],
-  reservations: ['reservation.view', 'reservation.manage', 'reservation.config.manage'],
-  commerce: ['order.create', 'order.view', 'kds.prepare', 'kds.deliver', 'commerce.authorization.request', 'commerce.authorization.approve'],
-  inventory: ['inventory.view', 'inventory.manage', 'inventory.approve'],
-  payments: ['finance.view', 'payment.collect', 'payment.pos_report', 'payment.refund.request', 'payment.refund.approve'],
-  benefits: ['benefit.view', 'benefit.grant', 'benefit.approve', 'benefit.manage'],
-  operations: ['config.manage', 'inventory.manage', 'inventory.approve', 'payment.collect', 'finance.view', 'benefit.manage'],
-  devices: ['hardware.view', 'hardware.operate', 'hardware.manage'],
-  songs: ['song.view', 'song.manage'],
-  layout: ['table.manage'],
-  master: ['identity.manage', 'master_data.manage', 'shift.manage'],
-  config: ['config.manage'],
-}
-
-function navigationForPermissions(permissionIds: readonly StaffPermissionId[]) {
-  return roleHomeNavigation
-    .filter((item) => navigationPermissions[item.id].some((permissionId) => permissionIds.includes(permissionId)))
-    .map((item) => item.id)
-}
+const navigationForPermissions = navigationForStaffPermissions
 
 export function resolveRoleHomeKind(roleId: string, roleName?: string): RoleHomeKind {
   const normalizedRoleId = normalizeRoleToken(roleId)
@@ -260,12 +245,20 @@ export function buildRoleHomeModel(data: BootstrapResponse, employeeId: string):
     ...data.config.roles.filter((role) => roleIds.includes(role.id)).flatMap((role) => role.permissionIds ?? []),
   ])]
   const configuredNavigation = navigationForPermissions(permissionIds)
+  const configuredRolePrimaryNavigation = roleIds.flatMap((roleId) => (
+    data.config.roles.find((role) => role.id === roleId)?.primaryNavigationIds ?? []
+  ))
+  const preferredPrimaryNavigation = employee?.primaryNavigationIds?.length
+    ? employee.primaryNavigationIds
+    : configuredRolePrimaryNavigation.length > 0
+      ? [...new Set(configuredRolePrimaryNavigation)]
+      : roleProfiles[baseAccess.kind].navigation
   const access = {
     ...baseAccess,
     roleLabel: data.config.roles.filter((role) => roleIds.includes(role.id)).map((role) => role.name).join(' / ') || baseAccess.roleLabel,
     allowedNavigationIds: configuredNavigation.length > 0 ? configuredNavigation : baseAccess.allowedNavigationIds,
     primaryNavigationIds: primaryNavigationFor(
-      roleProfiles[baseAccess.kind].navigation,
+      preferredPrimaryNavigation,
       configuredNavigation.length > 0 ? configuredNavigation : baseAccess.allowedNavigationIds,
     ),
   }
@@ -281,8 +274,9 @@ export function buildRoleHomeModel(data: BootstrapResponse, employeeId: string):
     access,
     metrics,
     todos,
-    navigation: roleHomeNavigation
-      .filter((item) => access.primaryNavigationIds.includes(item.id))
+    navigation: access.primaryNavigationIds
+      .map((navigationId) => roleHomeNavigation.find((item) => item.id === navigationId))
+      .filter((item): item is (typeof roleHomeNavigation)[number] => Boolean(item))
       .map((item) => ({ ...item, label: roleNavigationLabels[access.kind]?.[item.id] ?? item.label })),
     availableNavigation: roleHomeNavigation
       .filter((item) => access.allowedNavigationIds.includes(item.id))

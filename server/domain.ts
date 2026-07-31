@@ -922,15 +922,21 @@ export function saveConfigDraft(state: RuntimeState, input: ConfigDraftInput, ac
       : serviceType
   })
   const currentRoles = new Map(draft.roles.map((role) => [role.id, role]))
-  draft.roles = input.roles.map((role) => withDefaultRolePolicy({
-    id: role.id,
-    name: role.name ?? currentRoles.get(role.id)?.name ?? role.id,
-    maxConcurrentTasks: role.maxConcurrentTasks,
-    canReceiveTasks: role.canReceiveTasks,
-    permissionIds: role.permissionIds ?? currentRoles.get(role.id)?.permissionIds,
-    dataScope: role.dataScope ?? currentRoles.get(role.id)?.dataScope,
-    approvalLimits: role.approvalLimits ?? currentRoles.get(role.id)?.approvalLimits,
-  }))
+  draft.roles = input.roles.map((role) => {
+    const primaryNavigationIds = role.primaryNavigationIds === null
+      ? undefined
+      : role.primaryNavigationIds ?? currentRoles.get(role.id)?.primaryNavigationIds
+    return withDefaultRolePolicy({
+      id: role.id,
+      name: role.name ?? currentRoles.get(role.id)?.name ?? role.id,
+      maxConcurrentTasks: role.maxConcurrentTasks,
+      canReceiveTasks: role.canReceiveTasks,
+      permissionIds: role.permissionIds ?? currentRoles.get(role.id)?.permissionIds,
+      ...(primaryNavigationIds ? { primaryNavigationIds } : {}),
+      dataScope: role.dataScope ?? currentRoles.get(role.id)?.dataScope,
+      approvalLimits: role.approvalLimits ?? currentRoles.get(role.id)?.approvalLimits,
+    })
+  })
   draft.skills = structuredClone(input.skills ?? draft.skills)
   draft.workstations = structuredClone(input.workstations ?? draft.workstations)
   const roleIds = new Set(draft.roles.map((role) => role.id))

@@ -11,6 +11,7 @@ import type {
 import type { AuthorityWriteInput } from '../src/shared/commerce-api.js'
 import { defaultMenuRecommendation } from '../src/shared/menu-recommendation.js'
 import { resolveMenuBeverageFamily } from '../src/shared/menu-product-classification.js'
+import { navigationForStaffPermissions } from '../src/shared/staff-navigation.js'
 
 function audit(
   state: RuntimeState,
@@ -52,13 +53,50 @@ function assertAreas(state: RuntimeState, areaIds: string[]) {
   if (areaIds.some((areaId) => !state.areas.some((area) => area.id === areaId))) throw new Error('责任区不存在')
 }
 
+function normalizedPrimaryNavigationIds(
+  state: RuntimeState,
+  roleId: string,
+  roleIds: string[] | undefined,
+  permissionIds: EmployeeWriteInput['permissionIds'],
+  primaryNavigationIds: EmployeeWriteInput['primaryNavigationIds'],
+) {
+  if (!primaryNavigationIds) return undefined
+  const unique = [...new Set(primaryNavigationIds)]
+  if (unique.length !== primaryNavigationIds.length) throw new Error('高频入口不能重复')
+  const effectiveRoleIds = [roleId, ...normalizedRoleIds(roleId, roleIds)]
+  const effectivePermissions = [...new Set([
+    ...(permissionIds ?? []),
+    ...state.config.roles
+      .filter((role) => effectiveRoleIds.includes(role.id))
+      .flatMap((role) => role.permissionIds ?? []),
+  ])]
+  const allowed = navigationForStaffPermissions(effectivePermissions)
+  if (unique.some((navigationId) => !allowed.includes(navigationId))) {
+    throw new Error('高频入口超出该员工当前权限')
+  }
+  return unique
+}
+
 export function createEmployee(state: RuntimeState, input: EmployeeWriteInput, actorId: string) {
   const roleIds = assertRoles(state, input.roleId, input.roleIds)
   assertAreas(state, input.areaIds)
+  const primaryNavigationIds = normalizedPrimaryNavigationIds(
+    state,
+    input.roleId,
+    roleIds,
+    input.permissionIds,
+    input.primaryNavigationIds,
+  )
   if (state.employees.some((employee) => employee.displayName === input.displayName && employee.status === 'active')) {
     throw new Error('已有同名在职员工')
   }
-  const employee = { id: `emp_${randomUUID()}`, ...input, roleIds, permissionIds: [...new Set(input.permissionIds ?? [])] }
+  const employee = {
+    id: `emp_${randomUUID()}`,
+    ...input,
+    roleIds,
+    permissionIds: [...new Set(input.permissionIds ?? [])],
+    ...(primaryNavigationIds ? { primaryNavigationIds } : {}),
+  }
   state.employees.push(employee)
   audit(state, actorId, 'employee.created.v1', 'employee', employee.id, { after: employee })
   return employee
@@ -74,6 +112,13 @@ export function updateEmployee(
   if (!employee) throw new Error('员工不存在')
   const roleIds = assertRoles(state, input.roleId, input.roleIds)
   assertAreas(state, input.areaIds)
+  const primaryNavigationIds = normalizedPrimaryNavigationIds(
+    state,
+    input.roleId,
+    roleIds,
+    input.permissionIds,
+    input.primaryNavigationIds,
+  )
   if (
     input.status === 'inactive' &&
     state.tasks.some((task) => task.ownerId === employeeId && !['completed', 'confirmed', 'cancelled'].includes(task.status))
@@ -81,7 +126,12 @@ export function updateEmployee(
     throw new Error('员工仍有未关闭任务，不能停用')
   }
   const before = structuredClone(employee)
-  Object.assign(employee, input, { roleIds, permissionIds: [...new Set(input.permissionIds ?? [])] })
+  Object.assign(employee, input, {
+    roleIds,
+    permissionIds: [...new Set(input.permissionIds ?? [])],
+  })
+  if (primaryNavigationIds) employee.primaryNavigationIds = primaryNavigationIds
+  else delete employee.primaryNavigationIds
   if (employee.status === 'inactive') {
     employee.online = false
     employee.paused = true

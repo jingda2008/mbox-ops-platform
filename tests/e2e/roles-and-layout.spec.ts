@@ -33,6 +33,24 @@ test.describe('岗位权限隔离', () => {
     await expect(navigation.getByRole('button', { name: '人员与岗位' })).toHaveCount(0)
   })
 
+  test('管理员可以配置岗位默认入口并为员工设置个人覆盖', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await useStaffIdentity(page, 'emp-admin', '乌鸦')
+    await page.goto('/')
+
+    await openStaffNavigation(page, '人员与权限')
+    await page.getByRole('tab', { name: '岗位/高频入口' }).click()
+    const managerRole = page.locator('.role-policy-row').filter({ hasText: 'manager' })
+    await expect(managerRole.getByText('岗位高频入口', { exact: true })).toBeVisible()
+    await expect(managerRole.getByText(/未覆盖，自动跟随岗位|已选\d[/]4/)).toBeVisible()
+
+    await page.getByRole('tab', { name: '人员' }).click()
+    const managerEmployee = page.locator('.employee-row').filter({ has: page.locator('input[value="李艳"]') })
+    await managerEmployee.locator('summary').click()
+    await expect(managerEmployee.getByText('个人高频入口', { exact: true })).toBeVisible()
+    await expect(managerEmployee.getByText(/未覆盖，自动跟随岗位|已选\d[/]4/)).toBeVisible()
+  })
+
   for (const role of roleCases) {
     test(`${role.actorName}只看到岗位所需入口`, async ({ page }) => {
       await useStaffIdentity(page, role.actorId, role.actorName)

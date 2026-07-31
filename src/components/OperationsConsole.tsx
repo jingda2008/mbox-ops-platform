@@ -262,16 +262,20 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
   const availableNavigation = navigation
     .filter((item) => item.id === 'home' || roleHomeAccess.allowedNavigationIds.includes(item.id))
     .map((item) => item.id === 'home' ? item : { ...item, label: roleNavigationLabels.get(item.id) ?? item.label })
-  const primarySidebarNavigation = availableNavigation.filter((item) => (
-    item.id === 'home' || roleHomeAccess.primaryNavigationIds.includes(item.id)
-  ))
+  const primarySidebarNavigation = [
+    ...availableNavigation.filter((item) => item.id === 'home'),
+    ...roleHomeAccess.primaryNavigationIds
+      .map((navigationId) => availableNavigation.find((item) => item.id === navigationId))
+      .filter((item): item is (typeof availableNavigation)[number] => Boolean(item)),
+  ]
   const secondarySidebarNavigation = availableNavigation.filter((item) => (
     item.id !== 'home' && !roleHomeAccess.primaryNavigationIds.includes(item.id)
   ))
   const secondaryNavigationKey = secondarySidebarNavigation.map((item) => item.id).join(',')
-  const primaryMobileNavigation = availableNavigation.filter((item) => (
-    item.id !== 'home' && roleHomeAccess.primaryNavigationIds.includes(item.id)
-  )).slice(0, 4)
+  const primaryMobileNavigation = roleHomeAccess.primaryNavigationIds
+    .map((navigationId) => availableNavigation.find((item) => item.id === navigationId))
+    .filter((item): item is (typeof availableNavigation)[number] => Boolean(item))
+    .slice(0, 4)
   const [view, setView] = useState<View>('home')
   const [selectedTableId, setSelectedTableId] = useState<string | null>(null)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)

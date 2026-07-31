@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { expectNoHorizontalOverflow, useStaffIdentity } from './helpers'
+import { expectNoHorizontalOverflow, openStaffNavigation, useStaffIdentity } from './helpers'
 
 test.describe('经营损益中心', () => {
   test('店长录入预估费用后立即重算预计利润', async ({ page }) => {
@@ -7,7 +7,7 @@ test.describe('经营损益中心', () => {
     await useStaffIdentity(page, 'emp-chen', '李艳')
     await page.goto('/')
 
-    await page.locator('.sidebar nav').getByRole('button', { name: '经营工具' }).click()
+    await openStaffNavigation(page, '经营工具')
     await page.getByRole('button', { name: '经营损益', exact: true }).click()
     await expect(page.getByText('预计经营利润', { exact: true })).toBeVisible()
     const pendingMetric = page.locator('.profit-metrics > div').filter({ hasText: '待确认成本' })
@@ -30,8 +30,7 @@ test.describe('经营损益中心', () => {
     await useStaffIdentity(page, 'emp-cashier', '三沐')
     await page.goto('/')
 
-    await page.getByTitle('打开导航').click()
-    await page.locator('.sidebar nav').getByRole('button', { name: '经营工具' }).click()
+    await openStaffNavigation(page, '经营工具')
     await page.getByRole('button', { name: '经营损益', exact: true }).click()
     await page.getByRole('button', { name: '费用记录' }).click()
 

@@ -262,12 +262,20 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
   const availableNavigation = navigation
     .filter((item) => item.id === 'home' || roleHomeAccess.allowedNavigationIds.includes(item.id))
     .map((item) => item.id === 'home' ? item : { ...item, label: roleNavigationLabels.get(item.id) ?? item.label })
+  const primarySidebarNavigation = availableNavigation.filter((item) => (
+    item.id === 'home' || roleHomeAccess.primaryNavigationIds.includes(item.id)
+  ))
+  const secondarySidebarNavigation = availableNavigation.filter((item) => (
+    item.id !== 'home' && !roleHomeAccess.primaryNavigationIds.includes(item.id)
+  ))
+  const secondaryNavigationKey = secondarySidebarNavigation.map((item) => item.id).join(',')
   const primaryMobileNavigation = availableNavigation.filter((item) => (
     item.id !== 'home' && roleHomeAccess.primaryNavigationIds.includes(item.id)
   )).slice(0, 4)
   const [view, setView] = useState<View>('home')
   const [selectedTableId, setSelectedTableId] = useState<string | null>(null)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [secondaryNavigationOpen, setSecondaryNavigationOpen] = useState(false)
   const [showAvailableTables, setShowAvailableTables] = useState(false)
   const [showOtherOperationalTables, setShowOtherOperationalTables] = useState(false)
   const [draft, setDraft] = useState(() => cloneConfig(data.draftConfig ?? data.config))
@@ -311,9 +319,23 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
     return () => window.clearTimeout(timer)
   }, [notice])
 
+  useEffect(() => {
+    if (secondaryNavigationKey.split(',').includes(view)) {
+      setSecondaryNavigationOpen(true)
+    }
+  }, [secondaryNavigationKey, view])
+
+  function openCompleteNavigation() {
+    setSecondaryNavigationOpen(true)
+    setMobileNavOpen(true)
+  }
+
   function navigateTo(target: View, focus?: OperationsConsoleFocus) {
     setView(target)
     setMobileNavOpen(false)
+    if (target === 'home' || roleHomeAccess.primaryNavigationIds.includes(target)) {
+      setSecondaryNavigationOpen(false)
+    }
     if (target === 'live' || target === 'tasks') {
       const targetTable = focus?.tableCode
         ? data.tables.find((table) => table.code.toLocaleLowerCase('zh-CN') === focus.tableCode?.toLocaleLowerCase('zh-CN'))
@@ -992,8 +1014,8 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
       <aside className={mobileNavOpen ? 'sidebar is-open' : 'sidebar'}>
         <div className="brand-lockup"><span>M</span><div><strong>M-BOX</strong><small>现场运营</small>{data.config.communityBrand.enabled && <em>{data.config.communityBrand.name}旗下空间</em>}</div></div>
         <button className="sidebar-close" title="关闭导航" onClick={() => setMobileNavOpen(false)}><X size={20} /></button>
-        <nav>
-          {availableNavigation.map((item) => {
+        <nav aria-label="岗位导航">
+          {primarySidebarNavigation.map((item) => {
             const Icon = item.icon
             return (
               <button
@@ -1007,6 +1029,37 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
               </button>
             )
           })}
+          {secondarySidebarNavigation.length > 0 && (
+            <>
+              <button
+                type="button"
+                className={secondaryNavigationOpen ? 'nav-item nav-item-more is-expanded' : 'nav-item nav-item-more'}
+                aria-expanded={secondaryNavigationOpen}
+                onClick={() => setSecondaryNavigationOpen((open) => !open)}
+              >
+                <Menu size={19} /><span>{secondaryNavigationOpen ? '收起功能' : '更多功能'}</span>
+                <small>{secondarySidebarNavigation.length}</small>
+              </button>
+              {secondaryNavigationOpen && (
+                <div className="sidebar-secondary-nav" aria-label="更多功能">
+                  {secondarySidebarNavigation.map((item) => {
+                    const Icon = item.icon
+                    return (
+                      <button
+                        key={item.id}
+                        className={view === item.id ? 'nav-item is-active' : 'nav-item'}
+                        onClick={() => navigateTo(item.id)}
+                      >
+                        <Icon size={19} /><span>{item.label}</span>
+                        {item.id === 'tasks' && openTasks.length > 0 && <b>{openTasks.length}</b>}
+                        {item.id === 'commerce' && roleKdsCount > 0 && <b>{roleKdsCount}</b>}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </>
+          )}
         </nav>
         <div className="sidebar-status">
           <span><Wifi size={16} />系统在线</span>
@@ -1019,7 +1072,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
 
       <div className="workspace">
         <header className="topbar">
-          <button className="menu-button" title="打开导航" onClick={() => setMobileNavOpen(true)}><Menu size={21} /></button>
+          <button className="menu-button" title="打开导航" onClick={openCompleteNavigation}><Menu size={21} /></button>
           <div>
             <span className="eyebrow">营业日 {data.store.businessDate} · 营业中 · {fulfillmentAccess.roleLabel}</span>
             <h1>{viewTitles[view]}</h1>
@@ -1656,7 +1709,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
           type="button"
           className={mobileNavOpen ? 'is-active' : ''}
           aria-expanded={mobileNavOpen}
-          onClick={() => setMobileNavOpen(true)}
+          onClick={openCompleteNavigation}
         >
           <span><Menu size={20} /></span>
           <small>更多</small>

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { useStaffIdentity } from './helpers'
+import { openStaffNavigation, useStaffIdentity } from './helpers'
 
 test('李艳取消未送达酒水时情况说明为选填', async ({ page }) => {
   await useStaffIdentity(page, 'emp-chen', '李艳')
@@ -10,8 +10,7 @@ test('李艳取消未送达酒水时情况说明为选填', async ({ page }) => 
       : { status: 401, contentType: 'application/json', body: JSON.stringify({ code: 'PILOT_EMPLOYEE_PIN_DENIED', message: '员工PIN错误，请输入当前登录员工的PIN' }) })
   })
   await page.goto('/')
-  await page.getByTitle('打开导航').click()
-  await page.locator('.sidebar nav').getByRole('button', { name: '订单与出品' }).click()
+  await openStaffNavigation(page, '订单与出品')
   await expect(page.getByRole('heading', { name: '岗位履约工作台' })).toBeVisible()
 
   await page.getByRole('button', { name: '全屏点单' }).click()

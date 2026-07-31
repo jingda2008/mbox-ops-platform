@@ -1,6 +1,6 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test } from '@playwright/test'
-import { expectNoHorizontalOverflow, expectSecurityHeaders, useStaffIdentity } from './helpers'
+import { expectNoHorizontalOverflow, expectSecurityHeaders, openStaffNavigation, revealStaffNavigation, useStaffIdentity } from './helpers'
 
 const roleCases = [
   { actorId: 'emp-owner', actorName: '陈方宇', title: '老板工作台', allowed: '人员与岗位', denied: '' },
@@ -12,15 +12,37 @@ const roleCases = [
 ] as const
 
 test.describe('岗位权限隔离', () => {
+  test('李艳桌面侧栏默认只显示岗位常用入口，低频功能按需展开', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await useStaffIdentity(page, 'emp-chen', '李艳')
+    await page.goto('/')
+
+    const navigation = page.getByRole('navigation', { name: '岗位导航' })
+    await expect(navigation.getByRole('button', { name: '首页' })).toBeVisible()
+    await expect(navigation.getByRole('button', { name: '现场调度' })).toBeVisible()
+    await expect(navigation.getByRole('button', { name: '任务' })).toBeVisible()
+    await expect(navigation.getByRole('button', { name: '预约' })).toBeVisible()
+    await expect(navigation.getByRole('button', { name: '收银与退款' })).toBeVisible()
+    await expect(navigation.getByRole('button', { name: '库存/存酒' })).toHaveCount(0)
+    await expect(navigation.getByRole('button', { name: '会员权益' })).toHaveCount(0)
+    await expect(navigation.locator(':scope > .nav-item')).toHaveCount(6)
+
+    await navigation.getByRole('button', { name: /更多功能/ }).click()
+    await expect(navigation.getByRole('button', { name: '库存/存酒' })).toBeVisible()
+    await expect(navigation.getByRole('button', { name: '会员权益' })).toBeVisible()
+    await expect(navigation.getByRole('button', { name: '人员与岗位' })).toHaveCount(0)
+  })
+
   for (const role of roleCases) {
     test(`${role.actorName}只看到岗位所需入口`, async ({ page }) => {
       await useStaffIdentity(page, role.actorId, role.actorName)
       await page.goto('/')
 
       await expect(page.getByRole('heading', { name: role.title })).toBeVisible()
-      await expect(page.locator('.sidebar nav').getByRole('button', { name: role.allowed })).toBeVisible()
+      const navigation = await revealStaffNavigation(page, role.allowed)
+      await expect(navigation.getByRole('button', { name: role.allowed })).toBeVisible()
       if (role.denied) {
-        await expect(page.locator('.sidebar nav').getByRole('button', { name: role.denied })).toHaveCount(0)
+        await expect(navigation.getByRole('button', { name: role.denied })).toHaveCount(0)
       }
     })
   }
@@ -109,15 +131,13 @@ test.describe('岗位权限隔离', () => {
     await expect(page.locator('.task-queue__focus')).toContainText('仅看 SLA 风险 · 2项')
     await expect(page.locator('.task-item')).toHaveCount(2)
 
-    await page.getByTitle('打开导航').click()
-    await page.locator('.sidebar nav').getByRole('button', { name: '首页' }).click()
+    await openStaffNavigation(page, '首页')
     await page.getByTitle('打开KDS 待办').click()
     await expect(page.getByRole('heading', { name: '订单与出品' })).toBeVisible()
     await expect(page.getByRole('button', { name: /出品履约/ })).toHaveClass(/is-active/)
     await expect(page.locator('#kds-task-e2e-kds-l01')).toBeVisible()
 
-    await page.getByTitle('打开导航').click()
-    await page.locator('.sidebar nav').getByRole('button', { name: '现场调度' }).click()
+    await openStaffNavigation(page, '现场调度')
     const occupied = page.locator('.table-tile.status-occupied').filter({ hasText: 'L01' }).first()
     await expect(page.locator('.table-tile.status-available')).toHaveCount(0)
     await page.getByRole('button', { name: /显示空桌/ }).click()
@@ -182,9 +202,7 @@ test.describe('岗位权限隔离', () => {
     })
     await page.goto('/')
 
-    const navigationMenu = page.getByTitle('打开导航')
-    if (await navigationMenu.isVisible()) await navigationMenu.click()
-    await page.locator('.sidebar nav').getByRole('button', { name: '现场调度' }).click()
+    await openStaffNavigation(page, '现场调度')
     await expect(page.locator('.table-tile').filter({ hasText: 'W01' })).toHaveCount(0)
     await expect(page.locator('.table-tile.status-available')).toHaveCount(0)
     await page.getByRole('button', { name: /显示空桌/ }).click()
@@ -209,13 +227,11 @@ test.describe('岗位权限隔离', () => {
     await useStaffIdentity(page, 'emp-lin', 'Tom')
     await page.goto('/')
 
-    await page.getByTitle('打开导航').click()
-    await page.locator('.sidebar nav').getByRole('button', { name: '库存/存酒' }).click()
+    await openStaffNavigation(page, '库存/存酒')
     await expect(page.getByRole('navigation', { name: '库存功能' }).getByRole('button')).toHaveCount(1)
     await expect(page.getByRole('button', { name: '库存总览' })).toBeVisible()
 
-    await page.getByTitle('打开导航').click()
-    await page.locator('.sidebar nav').getByRole('button', { name: '收银/支付' }).click()
+    await openStaffNavigation(page, '收银/支付')
     const paymentTabs = page.getByRole('navigation', { name: '收银工作分类' })
     await expect(paymentTabs.getByRole('button', { name: /收款/ })).toBeVisible()
     await expect(paymentTabs.getByRole('button', { name: /退款/ })).toBeVisible()
@@ -227,8 +243,7 @@ test.describe('岗位权限隔离', () => {
     await page.goto('/')
 
     await expect(page.getByRole('heading', { name: '市场工作台' })).toBeVisible()
-    await page.getByTitle('打开导航').click()
-    await page.locator('.sidebar nav').getByRole('button', { name: '会员权益' }).click()
+    await openStaffNavigation(page, '会员权益')
     await expect(page.getByRole('heading', { name: '权益发放中心' })).toBeVisible()
     await expect(page.getByText('当前岗位为权益只读视图')).toBeVisible()
     await expect(page.getByText('单客权益发放')).toHaveCount(0)
@@ -243,8 +258,7 @@ test.describe('视觉与移动端适配', () => {
     await useStaffIdentity(page, 'emp-owner', '陈方宇')
     await page.goto('/')
 
-    await page.getByTitle('打开导航').click()
-    await page.locator('.sidebar nav').getByRole('button', { name: '布局', exact: true }).click()
+    await openStaffNavigation(page, /^布局$/)
     await expect(page.getByRole('heading', { name: '陆家嘴店桌台布局' })).toBeVisible()
     await expect(page.locator('.count-chip')).toHaveText('61个正式桌位')
     const floorPlan = page.getByRole('img', { name: 'M-Box陆家嘴店2026真实座位图' })
@@ -268,7 +282,7 @@ test.describe('视觉与移动端适配', () => {
 
     await commonNavigation.getByRole('button', { name: /更多/ }).click()
     await expect(page.locator('.sidebar')).toHaveClass(/is-open/)
-    await page.locator('.sidebar nav').getByRole('button', { name: '我的桌台' }).click()
+    await openStaffNavigation(page, '我的桌台')
     await expect(page.getByRole('heading', { name: '全店现场' })).toBeVisible()
     await expectNoHorizontalOverflow(page)
   })
@@ -389,8 +403,7 @@ test.describe('视觉与移动端适配', () => {
       await route.continue()
     })
     await page.goto('/')
-    await page.getByTitle('打开导航').click()
-    await page.locator('.sidebar nav').getByRole('button', { name: '订单与出品' }).click()
+    await openStaffNavigation(page, '订单与出品')
     await page.getByRole('button', { name: '全屏点单' }).click()
 
     const entry = page.getByRole('dialog', { name: '进入全屏点单前选择桌台' })
@@ -407,7 +420,7 @@ test.describe('视觉与移动端适配', () => {
     await page.setViewportSize({ width: 1440, height: 900 })
     await useStaffIdentity(page, 'emp-chen', '李艳')
     await page.goto('/')
-    await page.locator('.sidebar nav').getByRole('button', { name: '订单与出品' }).click()
+    await openStaffNavigation(page, '订单与出品')
     await page.getByRole('button', { name: '全屏点单' }).click()
 
     const entry = page.getByRole('dialog', { name: '进入全屏点单前选择桌台' })
@@ -475,8 +488,7 @@ test.describe('视觉与移动端适配', () => {
     await useStaffIdentity(page, 'emp-owner', '陈方宇')
     await page.goto('/')
 
-    await page.getByTitle('打开导航').click()
-    await page.locator('.sidebar nav').getByRole('button', { name: '配置' }).click()
+    await openStaffNavigation(page, '配置')
     await expect(page.getByRole('heading', { name: '服务与调度' })).toBeVisible()
     await expect(page.getByText('AI可执行能力中心')).toBeVisible()
     await expect(page.getByText('人工操作·全程审计').first()).toBeVisible()
@@ -490,8 +502,7 @@ test.describe('视觉与移动端适配', () => {
     await useStaffIdentity(page, 'emp-owner', '陈方宇')
     await page.goto('/')
 
-    await page.getByTitle('打开导航').click()
-    await page.locator('.sidebar nav').getByRole('button', { name: '人员与岗位' }).click()
+    await openStaffNavigation(page, '人员与岗位')
     await page.getByRole('tab', { name: '经营权限' }).click()
     await expect(page.getByText('权限按员工、类型、金额、商品、桌次和有效时间共同判断')).toBeVisible()
     await expect(page.getByText('允许商品分类').first()).toBeVisible()
@@ -506,8 +517,7 @@ test.describe('视觉与移动端适配', () => {
     await useStaffIdentity(page, 'emp-admin', '乌鸦')
     await page.goto('/')
 
-    await page.getByTitle('打开导航').click()
-    await page.locator('.sidebar nav').getByRole('button', { name: '人员与权限' }).click()
+    await openStaffNavigation(page, '人员与权限')
     await page.getByRole('tab', { name: '经营权限' }).click()
     await expect(page.getByText('权限按员工、类型、金额、商品、桌次和有效时间共同判断')).toBeVisible()
   })
@@ -527,8 +537,7 @@ test.describe('视觉与移动端适配', () => {
     })
     await page.goto('/')
 
-    await page.getByTitle('打开导航').click()
-    await page.locator('.sidebar nav').getByRole('button', { name: '点单与送餐' }).click()
+    await openStaffNavigation(page, '点单与送餐')
     await expect(page.getByRole('heading', { name: '订单与出品' })).toBeVisible()
     await page.getByRole('button', { name: '权限赠送' }).click()
     await page.getByRole('button', { name: '全屏点单' }).click()
@@ -568,7 +577,7 @@ test.describe('视觉与移动端适配', () => {
     })
     await page.goto('/')
 
-    await page.locator('.sidebar nav').getByRole('button', { name: '点单与送餐' }).click()
+    await openStaffNavigation(page, '点单与送餐')
     await expect(page.getByRole('button', { name: '权限赠送' })).toBeVisible()
     await page.getByRole('button', { name: '全屏点单' }).click()
 
@@ -608,8 +617,7 @@ test.describe('视觉与移动端适配', () => {
     await useStaffIdentity(page, 'emp-wu', 'Jerry')
     await page.goto('/')
 
-    await page.getByTitle('打开导航').click()
-    await page.locator('.sidebar nav').getByRole('button', { name: '点单与送餐' }).click()
+    await openStaffNavigation(page, '点单与送餐')
     const giftButton = page.getByRole('button', { name: '权限赠送' })
     await expect(giftButton).toBeVisible()
     await giftButton.click()
@@ -628,8 +636,7 @@ test.describe('视觉与移动端适配', () => {
     await useStaffIdentity(page, 'emp-chen', '李艳')
     await page.goto('/')
 
-    await page.getByTitle('打开导航').click()
-    await page.locator('.sidebar nav').getByRole('button', { name: '订单与出品' }).click()
+    await openStaffNavigation(page, '订单与出品')
     await expect(page.getByRole('button', { name: '正常下单' })).toBeVisible()
     await page.getByRole('button', { name: '权限赠送' }).click()
     await page.getByRole('button', { name: '全屏点单' }).click()

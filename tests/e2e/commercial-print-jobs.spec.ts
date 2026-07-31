@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { expectNoHorizontalOverflow, useStaffIdentity } from './helpers'
+import { expectNoHorizontalOverflow, openStaffNavigation, useStaffIdentity } from './helpers'
 
 async function installPrintJobFixture(page: Page, initialStatus: 'queued' | 'failed' = 'queued') {
   let status: 'queued' | 'printed' | 'failed' = initialStatus
@@ -63,7 +63,7 @@ test.describe('打印任务经营入口', () => {
     await installPrintJobFixture(page)
     await page.goto('/')
 
-    await page.locator('.sidebar nav').getByRole('button', { name: '经营工具' }).click()
+    await openStaffNavigation(page, '经营工具')
     await expect(page.getByRole('heading', { name: '经营工具' })).toBeVisible()
     await page.getByRole('button', { name: /待打印任务1，查看详情/ }).click()
 
@@ -85,8 +85,7 @@ test.describe('打印任务经营入口', () => {
     await installPrintJobFixture(page, 'failed')
     await page.goto('/')
 
-    await page.getByTitle('打开导航').click()
-    await page.locator('.sidebar nav').getByRole('button', { name: '经营工具' }).click()
+    await openStaffNavigation(page, '经营工具')
     await page.getByRole('button', { name: /打印失败1，查看详情/ }).click()
     const job = page.locator('.print-job-card')
     await job.getByRole('button', { name: /L01 · 酒水单/ }).click()

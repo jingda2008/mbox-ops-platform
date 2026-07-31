@@ -66,6 +66,10 @@ import {
 import { naturalizeSpokenFeedback, rankChineseVoices, selectPreferredChineseVoice } from './voice-speech'
 import { selectVoiceRecognitionMode, shouldFallbackToCloudRecognition } from './voice-recording'
 import { assistantPageCapabilities } from './assistant-page-capabilities'
+import {
+  publishStaffCollaborationGuidance,
+  staffCollaborationGuidance,
+} from '../staff-action-guidance'
 import './VoiceCommandMode.css'
 
 interface SpeechRecognitionEventLike {
@@ -222,6 +226,7 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
   const [recognitionCandidates, setRecognitionCandidates] = useState<VoiceTranscriptSelection[]>([])
   const [executionMessage, setExecutionMessage] = useState('')
   const [executionTone, setExecutionTone] = useState<ExecutionTone>('success')
+  const executionResultRef = useRef<HTMLDivElement>(null)
   const [speechEnabled, setSpeechEnabled] = useState(true)
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([])
   const [selectedVoiceURI, setSelectedVoiceURI] = useState(() => window.localStorage.getItem('mbox.voice.tts.voice-uri') ?? '')
@@ -326,6 +331,18 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
     const timer = window.setTimeout(() => setExecutionMessage(''), duration)
     return () => window.clearTimeout(timer)
   }, [executionMessage, executionTone])
+
+  useEffect(() => {
+    if (!staffCollaborationGuidance(executionMessage)) return
+    const frame = window.requestAnimationFrame(() => {
+      const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+      executionResultRef.current?.scrollIntoView({
+        behavior: reducedMotion ? 'auto' : 'smooth',
+        block: 'center',
+      })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [executionMessage])
 
   useEffect(() => {
     const conversation = assistantConversationRef.current
@@ -479,8 +496,10 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
   }
 
   function announce(message: string, tone: ExecutionTone = 'success') {
-    setExecutionMessage(message)
+    const guidance = staffCollaborationGuidance(message)
+    setExecutionMessage(guidance ? `${message} 下一步：${guidance.instruction}` : message)
     setExecutionTone(tone)
+    publishStaffCollaborationGuidance(message)
     if (!speechEnabled || !('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') return
     const spokenMessage = naturalizeSpokenFeedback(message)
     if (!spokenMessage) return
@@ -1506,7 +1525,7 @@ export function VoiceCommandMode({ data, employeeId, onReturn, onNavigate, onRef
           {navigationResolution?.kind === 'unknown' && <div className="voice-command-warning" role="alert">没有匹配到当前页面控件，请说完整按钮或字段名称。</div>}
 
           {executionMessage && (
-            <div className={`voice-execution-result is-${executionTone}`} role="status" aria-live="polite">
+            <div ref={executionResultRef} className={`voice-execution-result is-${executionTone}`} role="status" aria-live="polite">
               {executionTone === 'error' || executionTone === 'warning' ? <ShieldAlert size={18} /> : <Check size={18} />}
               <span><small>{executionTone === 'working' ? '执行中' : executionTone === 'info' ? '待确认' : executionTone === 'warning' ? '请注意' : executionTone === 'error' ? '未执行/执行失败' : '执行反馈'}</small><strong>{executionMessage}</strong></span>
             </div>

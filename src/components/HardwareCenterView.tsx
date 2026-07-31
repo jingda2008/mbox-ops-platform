@@ -20,6 +20,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import * as hardwareApi from '../hardware-api'
 import { formatChinaDateTime } from '../shared/china-time'
 import type { BootstrapResponse } from '../shared/contracts'
+import { publishStaffCollaborationGuidance } from '../staff-action-guidance'
 import {
   hardwareAdapterKinds,
   hardwareDeviceKinds,
@@ -147,6 +148,10 @@ export function HardwareCenterView({ data, onRefresh }: HardwareCenterViewProps)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState('')
   const [notice, setNotice] = useState<{ tone: 'success' | 'error'; message: string } | null>(null)
+
+  useEffect(() => {
+    if (notice) publishStaffCollaborationGuidance(notice.message)
+  }, [notice])
   const [editing, setEditing] = useState(false)
   const [reason, setReason] = useState('更新门店设备、区域绑定与降级规则')
 

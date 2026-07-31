@@ -568,6 +568,7 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
       request,
       () => deterministicGuestId(`legacy-table-session:${tableSession.id}`),
     )
+    const occurredAt = new Date(options.now?.() ?? Date.now()).toISOString()
     await recordGuestInsight(request, guestInsights, {
       anonymousId,
       tableSessionId: tableSession.id,
@@ -576,8 +577,27 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
       eventType: input.eventType,
       metadata: clientBehaviorMetadata(input.eventType, input.metadata),
       idempotencyKey: `client:${anonymousId}:${input.idempotencyKey}`,
-      occurredAt: new Date(options.now?.() ?? Date.now()).toISOString(),
+      occurredAt,
     })
+    if (input.eventType === 'mood_selected') {
+      await repository.mutate((current) => {
+        const currentTable = current.tables.find((candidate) => candidate.id === table.id)
+        const currentSession = current.songState.tableSessions.find((candidate) => (
+          candidate.id === tableSession.id
+          && candidate.tableId === table.id
+          && candidate.status === 'open'
+        ))
+        const moodId = input.metadata.moodId
+        if (currentTable && currentSession && typeof moodId === 'string' && moodId.trim()) {
+          currentTable.guestMood = {
+            moodId: moodId.trim(),
+            tableSessionId: tableSession.id,
+            updatedAt: occurredAt,
+          }
+          current.revision += 1
+        }
+      })
+    }
     return reply.status(202).send({ accepted: true, anonymousId })
   })
 

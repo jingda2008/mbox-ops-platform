@@ -85,8 +85,10 @@ function paymentObservation(
   }
 }
 
-function verifiedCallbackObservation(): VerifiedProviderPaymentCallback {
-  return { ...paymentObservation(), providerEventId: 'event-1' }
+function verifiedCallbackObservation(
+  overrides: Partial<VerifiedProviderPaymentCallback> = {},
+): VerifiedProviderPaymentCallback {
+  return { ...paymentObservation(), providerEventId: 'event-1', ...overrides }
 }
 
 function fakeAdapter(overrides: Partial<PaymentProviderAdapter> = {}): PaymentProviderAdapter {
@@ -207,6 +209,47 @@ describe('payment provider callback boundary', () => {
     expect(state.paymentIntents[0]?.status).toBe('pending')
   })
 
+  it.each([
+    {
+      field: 'amount',
+      observation: { amount: 2999 },
+      expectedError: '渠道支付金额与支付意图不一致',
+    },
+    {
+      field: 'currency',
+      observation: { currency: 'USD' },
+      expectedError: '渠道币种与支付意图不一致',
+    },
+    {
+      field: 'merchant',
+      observation: { merchantId: 'merchant-other' },
+      expectedError: '渠道商户与支付意图不一致',
+    },
+    {
+      field: 'order',
+      observation: { paymentIntentId: 'pay-other' },
+      expectedError: '支付意图不存在',
+    },
+  ])('rejects a verified callback with mismatched $field without mutating state', async ({
+    observation,
+    expectedError,
+  }) => {
+    const state = stateWithIntent()
+    const adapter = fakeAdapter({
+      verifyPaymentCallback: vi.fn(async () => verifiedCallbackObservation(observation)),
+    })
+
+    await expect(
+      processPaymentProviderCallback({ state, adapter, secrets, callback: callback() }),
+    ).rejects.toThrow(expectedError)
+    expect(state.paymentNotifications).toHaveLength(0)
+    expect(state.paymentIntents[0]).toMatchObject({
+      status: 'pending',
+      channelTransactionId: null,
+      paidAt: null,
+    })
+  })
+
   it('records a verified duplicate callback exactly once', async () => {
     const state = stateWithIntent()
     const adapter = fakeAdapter()
@@ -219,6 +262,49 @@ describe('payment provider callback boundary', () => {
     expect(state.paymentNotifications).toHaveLength(1)
     expect(state.paymentIntents[0]?.status).toBe('succeeded')
   })
+
+  it('records concurrent duplicate success callbacks exactly once', async () => {
+    const state = stateWithIntent()
+    const adapter = fakeAdapter()
+    const input = { state, adapter, secrets, callback: callback() }
+
+    const notifications = await Promise.all(
+      Array.from({ length: 20 }, () => processPaymentProviderCallback(input)),
+    )
+
+    expect(new Set(notifications.map((item) => item.id))).toEqual(
+      new Set(['notification:provider-a:event-1']),
+    )
+    expect(state.paymentNotifications).toHaveLength(1)
+    expect(state.paymentIntents[0]).toMatchObject({
+      status: 'succeeded',
+      channelTransactionId: 'provider-tx-1',
+    })
+  })
+
+  it.each(['processing', 'failed'] as const)(
+    'does not roll a succeeded payment back when a later %s callback arrives',
+    async (status) => {
+      const state = stateWithIntent()
+      await markIntentPaid(state)
+      const adapter = fakeAdapter({
+        verifyPaymentCallback: vi.fn(async () => verifiedCallbackObservation({
+          providerEventId: `event-${status}`,
+          status,
+          occurredAt: '2026-07-14T12:02:00.000Z',
+        })),
+      })
+
+      await expect(
+        processPaymentProviderCallback({ state, adapter, secrets, callback: callback() }),
+      ).rejects.toThrow('已成功支付不能回退状态')
+      expect(state.paymentNotifications).toHaveLength(1)
+      expect(state.paymentIntents[0]).toMatchObject({
+        status: 'succeeded',
+        channelTransactionId: 'provider-tx-1',
+      })
+    },
+  )
 
   it('keeps a verified success when the callback wins the race with order creation persistence', async () => {
     const state = stateWithIntent()

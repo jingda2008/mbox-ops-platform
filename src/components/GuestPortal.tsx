@@ -4,7 +4,7 @@ import { ApiError, checkoutGuestOrder, createGuestOrder, createGuestSongRequest,
 import { PendingActionRegistry } from '../pending-action-registry'
 import type { GuestSessionResponse, GuestTaskView, WechatJsapiParameters } from '../shared/guest-contracts'
 import type { GuestBehaviorEventType, GuestBehaviorValue } from '../shared/guest-insight-contracts'
-import { GUEST_SONG_TERMINAL_DISPLAY_MS, formatGuestCompactCountdown, guestCustomSongServiceNote, guestErrorMessage, guestMoodServiceNote, guestReplyNotice, guestSessionHistoryUrl, guestSongReplyNotice, guestSongStatusLabel, guestStageIsBeforeFirstSet, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks, type GuestReplyNotice } from './guest-portal-utils'
+import { GUEST_SONG_TERMINAL_DISPLAY_MS, formatGuestCompactCountdown, guestCustomSongServiceNote, guestErrorMessage, guestReplyNotice, guestSessionHistoryUrl, guestSongReplyNotice, guestSongStatusLabel, guestStageIsBeforeFirstSet, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks, type GuestReplyNotice } from './guest-portal-utils'
 import { serverClockOffset, useSecondClock } from './use-second-clock'
 import { MenuOrderingWorkspace, type MenuCartItem, type MenuSubmitOptions } from './MenuOrderingWorkspace'
 import { SuperHighCommunityBand } from './SuperHighCommunityBand'
@@ -21,12 +21,12 @@ const guestStatus: Record<GuestTaskView['status'], string> = {
 }
 
 const guestMoods = [
-  { id: 'happy', label: '开心', care: '客人心情开心，适合主动问候并推荐互动或点歌。' },
-  { id: 'listen', label: '听歌', care: '客人想专心听歌，可简短介绍当晚演出和点歌，避免高频打断。' },
-  { id: 'tipsy', label: '微醺', care: '请主动补水，关注饮酒节奏和身体状态，避免继续强推酒水。' },
-  { id: 'interactive', label: '互动', care: '客人互动意愿较强，适合用当晚演出、点歌或同桌话题自然破冰。' },
-  { id: 'celebrate', label: '庆祝', care: '请询问庆祝主题和称呼，确认是否需要生日歌、小礼物或合影。' },
-  { id: 'quiet', label: '安静', care: '客人希望安静放松，请降低打扰频率，仅在补水、安全或结账等必要节点轻声询问。' },
+  { id: 'happy', label: '开心' },
+  { id: 'listen', label: '听歌' },
+  { id: 'tipsy', label: '微醺' },
+  { id: 'interactive', label: '互动' },
+  { id: 'celebrate', label: '庆祝' },
+  { id: 'quiet', label: '安静' },
 ] as const
 
 type GuestMoodId = typeof guestMoods[number]['id']
@@ -301,7 +301,6 @@ export function GuestPortal() {
   const tableTasks = useMemo(() => visibleGuestTasks(data?.tasks ?? []), [data?.tasks])
   const customRequestType = data?.serviceTypes.find((serviceType) => serviceType.code === 'CUSTOM_REQUEST')
   const serviceTypeByCode = useMemo(() => new Map(data?.serviceTypes.map((serviceType) => [serviceType.code, serviceType]) ?? []), [data?.serviceTypes])
-  const moodInfoType = serviceTypeByCode.get('GUEST_MOOD_INFO')
   const serverOffset = useMemo(() => data?.serverNow ? serverClockOffset(data.serverNow) : 0, [data?.serverNow])
   const profileAppearance = data?.stageSchedule.find((appearance) => appearance.appearanceId === singerProfileAppearanceId) ?? null
   const profileSongOffers = data?.songOffers.filter((offer) => offer.appearanceId === singerProfileAppearanceId) ?? []
@@ -383,27 +382,30 @@ export function GuestPortal() {
 
   async function recordMood(mood: typeof guestMoods[number]) {
     if (selectedMood === mood.id || pendingActionsRef.current.has('mood')) return
-    if (!moodInfoType) {
-      setError({ message: '今晚状态小卡暂时开小差了，您仍可以直接呼叫我们。', source: 'action' })
-      return
-    }
+    if (!beginPendingAction('mood')) return
     const previousMoodId = selectedMood
-    const previousLabel = guestMoods.find((item) => item.id === previousMoodId)?.label ?? ''
     const storageKey = `mbox-guest-mood-${tableCode}`
     setSelectedMood(mood.id)
     window.sessionStorage.setItem(storageKey, mood.id)
-    const succeeded = await requestService(
-      moodInfoType.id,
-      guestMoodServiceNote(mood.label, mood.care, previousLabel),
-      { showReply: false, refreshAfter: false, pendingKey: 'mood' },
-    )
-    if (!succeeded) {
+    setError(null)
+    try {
+      await trackGuestBehavior({
+        tableToken: latestTableToken.current,
+        eventType: 'mood_selected',
+        metadata: { moodId: mood.id, previousMoodId },
+        idempotencyKey: `guest-mood-${tableCode}-${crypto.randomUUID()}`,
+      }, { interactionFeedback: true })
+    } catch (requestError) {
       setSelectedMood(previousMoodId)
       if (previousMoodId) window.sessionStorage.setItem(storageKey, previousMoodId)
       else window.sessionStorage.removeItem(storageKey)
-      return
+      setError({
+        message: guestErrorMessage(requestError, '刚才的心情没有记上，再轻点一次就好。'),
+        source: 'action',
+      })
+    } finally {
+      endPendingAction('mood')
     }
-    recordBehavior('mood_selected', { moodId: mood.id, previousMoodId })
   }
 
   async function requestQuickService(key: string, serviceCode: string, requestNote = '') {

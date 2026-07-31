@@ -1292,3 +1292,46 @@ html.staff-phone-device .app-shell > .nav-backdrop { display: block; }
 .member-empty strong { font-size: 13px; }
 .member-message-status { min-height: 53px; display: flex; align-items: center; gap: 8px; margin-top: 8px; padding: 0 17px; background: #fff; color: var(--ink-soft); font-size: 11px; }
 .member-system-state { min-height: 100vh; display: grid; place-items: center; align-content: center; gap: 9px; color: var(--ink-soft); }
+.staff-collaboration-guidance {
+  position: relative;
+  z-index: 40;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  margin: 8px 12px;
+  padding: 12px 14px;
+  border: 1px solid #c8992e;
+  border-left-width: 4px;
+  background: #fff9e8;
+  color: #29251d;
+  box-shadow: 0 5px 16px rgb(61 45 12 / 12%);
+}
+
+.staff-collaboration-guidance > div {
+  display: grid;
+  gap: 3px;
+}
+
+.staff-collaboration-guidance span,
+.staff-collaboration-guidance b {
+  line-height: 1.45;
+}
+
+.staff-collaboration-guidance b {
+  color: #7c5510;
+}
+
+.staff-collaboration-guidance button {
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid #a88c51;
+  background: #fff;
+}
+
+@media (max-width: 720px) {
+  .staff-collaboration-guidance {
+    margin: 6px 8px;
+    padding: 10px 11px;
+  }
+}

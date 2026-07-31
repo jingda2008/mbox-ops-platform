@@ -92,6 +92,7 @@ import { useRevealPanelScroll } from './use-reveal-panel-scroll'
 import { SopVerificationInbox } from './SopVerificationInbox'
 import { BeijingClock } from './live-time'
 import { runOptimisticAction } from '../optimistic-action'
+import { publishStaffCollaborationGuidance } from '../staff-action-guidance'
 import { projectServiceTask } from '../optimistic-projections'
 import './OperationsConsole.css'
 
@@ -127,6 +128,15 @@ const walkInRecommendationScenes: ReadonlyArray<{ value: MenuRecommendationScene
   { value: 'business', label: '商务' },
   { value: 'celebration', label: '庆祝' },
 ]
+
+const guestMoodLabels: Record<string, string> = {
+  happy: '开心',
+  listen: '听歌',
+  tipsy: '微醺',
+  interactive: '互动',
+  celebrate: '庆祝',
+  quiet: '安静',
+}
 
 interface OperationsConsoleProps {
   data: BootstrapResponse
@@ -291,6 +301,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
 
   useEffect(() => {
     if (!notice) return
+    publishStaffCollaborationGuidance(notice)
     const isError = /失败|错误|无效|不能|不可|拒绝|未保存|未完成|尚未|请先/.test(notice)
     const timer = window.setTimeout(() => setNotice(''), isError ? 7_000 : 3_500)
     return () => window.clearTimeout(timer)
@@ -1210,6 +1221,14 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
                             const awaitingOrder = data.awaitingOrderIntents.find(
                               (intent) => intent.tableId === table.id && intent.status === 'active',
                             )
+                            const openTableSession = data.songState.tableSessions.find((session) => (
+                              session.tableId === table.id && session.status === 'open'
+                            ))
+                            const tableMood = table.guestMood
+                            const moodId = tableMood && openTableSession && tableMood.tableSessionId === openTableSession.id
+                              ? tableMood.moodId
+                              : ''
+                            const moodLabel = guestMoodLabels[moodId] ?? ''
                             const showInlineOpen = (
                               selectedTableId === table.id
                               && table.status === 'available'
@@ -1232,6 +1251,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
                                         ? '已预留 · 待到店'
                                         : table.status === 'paused' ? '暂停使用' : '未开台 · 点击开台'}</small>
                                   {taskCount > 0 && <b className="table-task-count">{taskCount}</b>}
+                                  {moodLabel && <span className="table-mood-marker" title="客人主动选择的当前心情">心情 · {moodLabel}</span>}
                                 </button>
                                 {showInlineOpen && (
                                   <div className="table-inline-open" role="dialog" aria-label={`${table.code}开台设置`}>

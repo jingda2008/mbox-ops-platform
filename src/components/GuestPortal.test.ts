@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { GuestTaskView } from '../shared/guest-contracts'
-import { formatGuestCompactCountdown, formatGuestCountdown, guestCustomSongServiceNote, guestErrorMessage, guestMoodServiceNote, guestReplyNotice, guestSessionHistoryUrl, guestSongReplyNotice, guestSongStatusLabel, guestStageIsBeforeFirstSet, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks } from './guest-portal-utils'
+import { formatGuestCompactCountdown, formatGuestCountdown, guestCustomSongServiceNote, guestErrorMessage, guestReplyNotice, guestSessionHistoryUrl, guestSongReplyNotice, guestSongStatusLabel, guestStageIsBeforeFirstSet, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks } from './guest-portal-utils'
 
 function guestTask(status: GuestTaskView['status'], id = `task-${status}`): GuestTaskView {
   return {
@@ -114,25 +114,6 @@ describe('guest song request progress', () => {
     expect(initial).toEqual({})
     expect(completed).toEqual({ 'song-1': 5_000 })
     expect(refreshed).toEqual({ 'song-1': 5_000 })
-  })
-})
-
-describe('guest mood service note', () => {
-  it('turns a guest mood into an actionable note within the API limit', () => {
-    const note = guestMoodServiceNote('微醺', '请主动补水，关注饮酒节奏和身体状态，避免继续强推酒水。')
-
-    expect(note).toContain('客户心情反馈：微醺')
-    expect(note).toContain('请主动补水')
-    expect(note).toContain('服务专员')
-    expect(note.length).toBeLessThanOrEqual(300)
-  })
-
-  it('marks a changed mood as the latest service signal', () => {
-    const note = guestMoodServiceNote('安静', '请降低打扰频率。', '互动')
-
-    expect(note).toContain('互动 → 安静')
-    expect(note).toContain('以最新状态为准')
-    expect(note.length).toBeLessThanOrEqual(300)
   })
 })
 

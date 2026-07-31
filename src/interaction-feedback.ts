@@ -1,3 +1,5 @@
+import { publishStaffCollaborationGuidance } from './staff-action-guidance'
+
 const INTERACTIVE_SELECTOR = [
   'button:not(:disabled)',
   'a[href]',
@@ -135,6 +137,7 @@ export async function withInteractionAction<T>(operation: () => Promise<T>, opti
   } catch (error) {
     finishAction(target, 'failed')
     announce('操作未完成，页面已恢复，请重试')
+    if (error instanceof Error) publishStaffCollaborationGuidance(error.message)
     throw error
   }
 }

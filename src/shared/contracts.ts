@@ -63,6 +63,12 @@ export interface Table {
   backupEmployeeIds: string[]
   guestCount: number
   openedAt: string | null
+  /** Latest guest-selected mood for the current table visit. It is context, never a service task. */
+  guestMood?: {
+    moodId: string
+    tableSessionId: string
+    updatedAt: string
+  } | null
 }
 
 export interface Employee {

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0-rc.61 - 2026-07-31
+
+- Required staff to select and confirm an open table before entering full-screen assisted ordering.
+- Locked the confirmed table throughout ordering, blocked silent table switching and required the signed-in employee's PIN to exit before selecting another table.
+- Cleared the unsubmitted cart and table selection after a verified exit, while allowing table-specific shortcuts to prefill but not bypass confirmation.
+- Changed guest mood selections from service tasks into visit-scoped table context so staff can see the signal without receiving duplicate work.
+- Added structured collaboration guidance and automatic reveal behavior when an employee action requires a manager or another role.
+- Expanded customer behavior, unreasonable-request, simulated-payment and complex-refund regression evidence without allowing those requests to bypass price, gift, refund or authorization controls.
+- Added browser coverage for table locking, PIN-protected reselection, complimentary ordering, payment handoff, responsive layouts and cross-role fulfillment.
+
 ## 1.0.0-rc.60 - 2026-07-30
 
 - Added explicit “immediate payment” and “table tab” choices to staff-assisted ordering; table-tab orders enter fulfillment without creating a payment intent and remain collectible before table close.

@@ -1,7 +1,7 @@
 {
   "name": "@mbox/ops-platform",
   "private": true,
-  "version": "1.0.0-rc.60",
+  "version": "1.0.0-rc.61",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n API,WEB -c yellow,cyan \"npm:dev:api\" \"npm:dev:web\"",
@@ -21,6 +21,8 @@
     "check:miniprogram": "node scripts/check-miniprogram.mjs",
     "lint": "oxlint src server",
     "test": "vitest run",
+    "test:customer": "vitest run server/guest-api.test.ts server/client-responsibility-flow.test.ts && node scripts/prepare-e2e-state.mjs && playwright test tests/e2e/guest-sales-path.spec.ts tests/e2e/commercial-flows.spec.ts",
+    "test:payment-simulation": "vitest run server/payment-domain.test.ts server/payment-api.test.ts server/payment-provider.test.ts server/payment-provider-api.integration.test.ts server/guest-postar-payment.integration.test.ts server/assisted-payment-flow.test.ts server/payment-reconciliation.test.ts server/table-operations.test.ts server/night-operations-simulation.test.ts server/business-day-api.test.ts server/authorization.test.ts server/commercial-idempotency.test.ts server/gift-policy.test.ts server/order-domain.test.ts server/complex-refund-operations.test.ts",
     "test:e2e": "node scripts/prepare-e2e-state.mjs && playwright test",
     "test:e2e:headed": "node scripts/prepare-e2e-state.mjs && playwright test --headed",
     "test:load": "node scripts/run-k6-local.mjs",

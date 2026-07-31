@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ConfigVersionRecord } from '../src/shared/config-versioning-contracts.js'
+import { configDraftSchema } from '../src/shared/contracts.js'
 import { saveConfigDraft } from './domain.js'
 import { createSeedState } from './seed.js'
 import {
@@ -7,6 +8,7 @@ import {
   publishConfigVersion,
   rollbackConfigVersion,
 } from './config-versioning.js'
+import { serializeRuntimeState } from './postgres-repository.js'
 
 const publishedAt = '2026-07-14T12:00:00.000Z'
 
@@ -48,6 +50,32 @@ function publishVersionTwo() {
 }
 
 describe('config version publication', () => {
+  it('stores and explicitly resets versioned role high-frequency entries', () => {
+    const state = createSeedState()
+    const configuredInput = configDraftSchema.parse({
+      ...state.config,
+      roles: state.config.roles.map((role) => role.id === 'manager'
+        ? { ...role, primaryNavigationIds: ['reservations', 'live', 'tasks'] }
+        : role),
+    })
+
+    saveConfigDraft(state, configuredInput, 'emp-chen')
+    expect(state.draftConfig?.roles.find((role) => role.id === 'manager')?.primaryNavigationIds)
+      .toEqual(['reservations', 'live', 'tasks'])
+
+    state.config.roles.find((role) => role.id === 'manager')!.primaryNavigationIds = ['live', 'tasks']
+    state.draftConfig = null
+    const resetInput = configDraftSchema.parse({
+      ...state.config,
+      roles: state.config.roles.map((role) => role.id === 'manager'
+        ? { ...role, primaryNavigationIds: null }
+        : role),
+    })
+    saveConfigDraft(state, resetInput, 'emp-chen')
+    expect(state.draftConfig?.roles.find((role) => role.id === 'manager')?.primaryNavigationIds).toBeUndefined()
+    expect(() => serializeRuntimeState(state)).not.toThrow()
+  })
+
   it('publishes the draft and records both the original baseline and new snapshot', () => {
     const source = draftWithWaterWarning()
     const sourceConfig = structuredClone(source.config)

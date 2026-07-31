@@ -107,6 +107,45 @@ describe('role home access', () => {
     expect(model.availableNavigation.map((item) => item.id)).toContain('payments')
   })
 
+  it('uses the published role high-frequency entries without removing other authorized modules', () => {
+    const data = bootstrapForRole('manager', '店长')
+    data.config.roles[0]!.permissionIds = [
+      'dashboard.view', 'service.execute', 'reservation.view', 'order.view',
+      'finance.view', 'inventory.view', 'song.view',
+    ]
+    data.config.roles[0]!.primaryNavigationIds = ['reservations', 'live', 'commerce']
+
+    const model = buildRoleHomeModel(data, 'employee-current')
+
+    expect(model.navigation.map((item) => item.id)).toEqual(['reservations', 'live', 'commerce'])
+    expect(model.availableNavigation.map((item) => item.id)).toEqual([
+      'live', 'tasks', 'reservations', 'commerce', 'inventory', 'payments', 'operations', 'songs',
+    ])
+  })
+
+  it('gives a personal high-frequency override priority over multiple role defaults', () => {
+    const data = bootstrapForRole('server', '服务员')
+    data.config.roles[0]!.permissionIds = [
+      'dashboard.view', 'service.execute', 'order.create', 'payment.collect',
+    ]
+    data.config.roles[0]!.primaryNavigationIds = ['live', 'tasks', 'commerce']
+    data.config.roles.push({
+      id: 'cashier',
+      name: '收银员',
+      maxConcurrentTasks: 2,
+      canReceiveTasks: false,
+      permissionIds: ['payment.collect', 'reservation.view'],
+      primaryNavigationIds: ['payments', 'reservations'],
+    })
+    data.employees[0]!.roleIds = ['cashier']
+    data.employees[0]!.primaryNavigationIds = ['payments', 'live']
+
+    const model = buildRoleHomeModel(data, 'employee-current')
+
+    expect(model.navigation.map((item) => item.id)).toEqual(['payments', 'live'])
+    expect(model.availableNavigation.map((item) => item.id)).toContain('reservations')
+  })
+
   it('drops completed service from the employee home task count', () => {
     const data = bootstrapForRole('server', '服务员')
     data.tasks.find((task) => task.id === 'task-own')!.status = 'confirmed'

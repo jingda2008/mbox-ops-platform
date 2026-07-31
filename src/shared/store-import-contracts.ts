@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { staffNavigationIds } from './staff-navigation.js'
 import {
   menuBeverageFamilies,
   menuProductKinds,
@@ -147,6 +148,7 @@ const roleSchema = z.object({
   maxConcurrentTasks: z.number().int().min(1).max(20),
   canReceiveTasks: z.boolean(),
   permissionIds: z.array(z.enum(staffPermissionIds)).max(staffPermissionIds.length).optional(),
+  primaryNavigationIds: z.array(z.enum(staffNavigationIds)).min(1).max(4).optional(),
   dataScope: z.enum(['own', 'assigned_areas', 'store', 'all_stores']).optional(),
   approvalLimits: z.object({
     giftAmount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),

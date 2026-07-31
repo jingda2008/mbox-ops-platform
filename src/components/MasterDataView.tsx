@@ -1,5 +1,5 @@
 /* oxlint-disable react/only-export-components -- scoped workflow helpers stay colocated for direct view tests. */
-import { BadgeDollarSign, CalendarClock, CheckCircle2, CircleOff, Clock3, EyeOff, GlassWater, ListChecks, MapPinned, Minus, Pencil, Plus, RotateCcw, Route, Save, Search, ShieldAlert, TableProperties, UserRoundCog, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, BadgeDollarSign, CalendarClock, CheckCircle2, CircleOff, Clock3, EyeOff, GlassWater, ListChecks, MapPinned, Minus, Pencil, Plus, RotateCcw, Route, Save, Search, ShieldAlert, TableProperties, UserRoundCog, X } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
   createCommerceAuthority,
@@ -34,6 +34,7 @@ import type {
   Table,
   WorkstationConfig,
 } from '../shared/contracts'
+import type { StaffNavigationId } from '../shared/staff-navigation'
 import {
   menuBeverageFamilies,
   menuRecommendationDwells,
@@ -42,6 +43,7 @@ import {
   menuRecommendationTastes,
   staffPermissionIds,
 } from '../shared/contracts'
+import { navigationForStaffPermissions } from '../shared/staff-navigation'
 import type { AuthorityWriteInput } from '../shared/commerce-api'
 import type { OrderAuthorizationAuthority } from '../shared/order-contracts'
 import { productAvailability } from '../shared/product-availability'
@@ -62,7 +64,7 @@ const sections: Array<{ id: MasterView; label: string; icon: typeof UserRoundCog
   { id: 'tables', label: '桌台责任', icon: TableProperties },
   { id: 'products', label: '商品', icon: GlassWater },
   { id: 'services', label: '服务配置', icon: ListChecks },
-  { id: 'routing', label: '工作站/技能', icon: Route },
+  { id: 'routing', label: '岗位/高频入口', icon: Route },
   { id: 'authorities', label: '经营权限', icon: BadgeDollarSign },
   { id: 'areas', label: '区域', icon: MapPinned },
 ]
@@ -88,6 +90,22 @@ const permissionLabels: Record<StaffPermissionId, string> = {
 
 const scopeLabels: Record<RoleDataScope, string> = {
   own: '本人任务', assigned_areas: '负责区域', store: '本门店', all_stores: '全部门店',
+}
+
+const staffNavigationLabels: Record<StaffNavigationId, string> = {
+  live: '现场调度',
+  tasks: '任务',
+  reservations: '预约',
+  commerce: '订单与出品',
+  inventory: '库存/存酒',
+  payments: '收银与退款',
+  benefits: '会员权益',
+  operations: '经营工具',
+  devices: '设备状态',
+  songs: '演出与点歌',
+  layout: '布局',
+  master: '主数据',
+  config: '运营配置',
 }
 
 export interface WorkflowServiceTypeConfig extends ServiceTypeConfig {
@@ -311,15 +329,32 @@ function EmployeeSection({ data, run }: SectionProps) {
 function EmployeeRow({ employee, data, run }: { employee: Employee; data: BootstrapResponse; run: RunAction }) {
   const [draft, setDraft] = useState<EmployeeWriteInput>(() => employee)
   useEffect(() => setDraft(employee), [employee])
+  const availableNavigationIds = employeeNavigationIds(data, draft)
+
+  function updateAccess(update: Partial<EmployeeWriteInput>) {
+    const next = { ...draft, ...update }
+    const allowed = employeeNavigationIds(data, next)
+    const primaryNavigationIds = next.primaryNavigationIds?.filter((id) => allowed.includes(id))
+    setDraft({
+      ...next,
+      primaryNavigationIds: primaryNavigationIds?.length ? primaryNavigationIds : undefined,
+    })
+  }
 
   return (
     <div className="master-row employee-row">
       <label><span>姓名</span><input value={draft.displayName} onChange={(event) => setDraft({ ...draft, displayName: event.target.value })} /></label>
-      <label><span>岗位</span><select value={draft.roleId} onChange={(event) => setDraft({ ...draft, roleId: event.target.value })}>{data.config.roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}</select></label>
+      <label><span>岗位</span><select value={draft.roleId} onChange={(event) => updateAccess({ roleId: event.target.value })}>{data.config.roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}</select></label>
       <details className="employee-access-details">
-        <summary>岗位与权限 <span>{draft.roleIds?.length ?? 0}个兼任 · {draft.permissionIds?.length ?? 0}项个人授权</span></summary>
-        <div className="area-selector"><span>兼任岗位</span><div>{data.config.roles.map((role) => <label key={role.id}><input type="checkbox" checked={[draft.roleId, ...(draft.roleIds ?? [])].includes(role.id)} disabled={role.id === draft.roleId} onChange={(event) => setDraft({ ...draft, roleIds: toggleValue(draft.roleIds ?? [], role.id, event.target.checked) })} />{role.name}</label>)}</div></div>
-        <div className="area-selector"><span>个人权限</span><div>{staffPermissionIds.map((permissionId) => <label key={permissionId}><input type="checkbox" checked={draft.permissionIds?.includes(permissionId) ?? false} onChange={(event) => setDraft({ ...draft, permissionIds: toggleValue(draft.permissionIds ?? [], permissionId, event.target.checked) as StaffPermissionId[] })} />{permissionLabels[permissionId]}</label>)}</div></div>
+        <summary>岗位、权限与入口 <span>{draft.roleIds?.length ?? 0}个兼任 · {draft.primaryNavigationIds?.length ? `${draft.primaryNavigationIds.length}个个人入口` : '跟随岗位'}</span></summary>
+        <div className="area-selector"><span>兼任岗位</span><div>{data.config.roles.map((role) => <label key={role.id}><input type="checkbox" checked={[draft.roleId, ...(draft.roleIds ?? [])].includes(role.id)} disabled={role.id === draft.roleId} onChange={(event) => updateAccess({ roleIds: toggleValue(draft.roleIds ?? [], role.id, event.target.checked) })} />{role.name}</label>)}</div></div>
+        <div className="area-selector"><span>个人权限</span><div>{staffPermissionIds.map((permissionId) => <label key={permissionId}><input type="checkbox" checked={draft.permissionIds?.includes(permissionId) ?? false} onChange={(event) => updateAccess({ permissionIds: toggleValue(draft.permissionIds ?? [], permissionId, event.target.checked) as StaffPermissionId[] })} />{permissionLabels[permissionId]}</label>)}</div></div>
+        <PrimaryNavigationField
+          label="个人高频入口"
+          availableIds={availableNavigationIds}
+          selected={draft.primaryNavigationIds}
+          onChange={(primaryNavigationIds) => setDraft({ ...draft, primaryNavigationIds })}
+        />
       </details>
       <div className="area-selector"><span>责任区</span><div>{data.areas.map((area) => <label key={area.id}><input type="checkbox" checked={draft.areaIds.includes(area.id)} onChange={(event) => setDraft({ ...draft, areaIds: event.target.checked ? [...draft.areaIds, area.id] : draft.areaIds.filter((id) => id !== area.id) })} />{area.shortName}</label>)}</div></div>
       <div className="area-selector"><span>技能</span><div>{effectiveConfig(data).skills.filter((skill) => skill.enabled || draft.skillIds?.includes(skill.id)).map((skill) => <label key={skill.id}><input type="checkbox" checked={draft.skillIds?.includes(skill.id) ?? false} onChange={(event) => setDraft({ ...draft, skillIds: toggleValue(draft.skillIds ?? [], skill.id, event.target.checked) })} />{skill.name}</label>)}</div></div>
@@ -633,7 +668,14 @@ function RoutingSection({ data, run }: SectionProps) {
   }
 
   function updateRole(id: string, update: Partial<RoleConfig>) {
-    setRoles(roles.map((role) => role.id === id ? { ...role, ...update } : role))
+    setRoles(roles.map((role) => {
+      if (role.id !== id) return role
+      const next = { ...role, ...update }
+      if (!update.permissionIds) return next
+      const allowed = navigationForStaffPermissions(update.permissionIds)
+      const primaryNavigationIds = next.primaryNavigationIds?.filter((navigationId) => allowed.includes(navigationId))
+      return { ...next, primaryNavigationIds: primaryNavigationIds?.length ? primaryNavigationIds : undefined }
+    }))
   }
 
   function updateSkill(id: string, update: Partial<SkillConfig>) {
@@ -681,6 +723,12 @@ function RoutingSection({ data, run }: SectionProps) {
                 <label className="binary-field"><span>允许接单</span><input type="checkbox" checked={role.canReceiveTasks} onChange={(event) => updateRole(role.id, { canReceiveTasks: event.target.checked })} /></label>
               </div>
               <ChoiceField label="功能权限" items={staffPermissionIds.map((id) => ({ id, name: permissionLabels[id] }))} selected={role.permissionIds ?? []} onChange={(ids) => updateRole(role.id, { permissionIds: ids as StaffPermissionId[] })} />
+              <PrimaryNavigationField
+                label="岗位高频入口"
+                availableIds={navigationForStaffPermissions(role.permissionIds ?? [])}
+                selected={role.primaryNavigationIds}
+                onChange={(primaryNavigationIds) => updateRole(role.id, { primaryNavigationIds })}
+              />
               <div className="role-limit-grid">
                 <MoneyLimit label="赠送上限" value={role.approvalLimits?.giftAmount ?? 0} onChange={(value) => updateRoleLimit(role, updateRole, 'giftAmount', value)} />
                 <MoneyLimit label="折扣上限" value={role.approvalLimits?.discountAmount ?? 0} onChange={(value) => updateRoleLimit(role, updateRole, 'discountAmount', value)} />
@@ -744,6 +792,75 @@ function RoutingSection({ data, run }: SectionProps) {
 
 function ChoiceField({ label, items, selected, onChange }: { label: string; items: Array<{ id: string; name: string }>; selected: string[]; onChange: (ids: string[]) => void }) {
   return <div className="area-selector"><span>{label}</span><div>{items.map((item) => <label key={item.id}><input type="checkbox" checked={selected.includes(item.id)} onChange={(event) => onChange(toggleValue(selected, item.id, event.target.checked))} />{item.name}</label>)}</div></div>
+}
+
+function PrimaryNavigationField({
+  label,
+  availableIds,
+  selected,
+  onChange,
+}: {
+  label: string
+  availableIds: StaffNavigationId[]
+  selected: StaffNavigationId[] | undefined
+  onChange: (ids: StaffNavigationId[] | undefined) => void
+}) {
+  const selectedIds = selected ?? []
+  return (
+    <div className="primary-navigation-field">
+      <div className="primary-navigation-field__heading">
+        <span>{label}</span>
+        <small>{selected ? `已选${selected.length}/4` : '未覆盖，自动跟随岗位'}</small>
+        {selected && <button type="button" onClick={() => onChange(undefined)}><RotateCcw size={13} />恢复默认</button>}
+      </div>
+      <div>
+        {availableIds.map((navigationId) => {
+          const checked = selectedIds.includes(navigationId)
+          return (
+            <label key={navigationId}>
+              <input
+                type="checkbox"
+                checked={checked}
+                disabled={!checked && selectedIds.length >= 4}
+                onChange={(event) => {
+                  const next = toggleValue(selectedIds, navigationId, event.target.checked) as StaffNavigationId[]
+                  onChange(next.length > 0 ? next : undefined)
+                }}
+              />
+              {staffNavigationLabels[navigationId]}
+            </label>
+          )
+        })}
+        {availableIds.length === 0 && <span className="primary-navigation-field__empty">请先配置该岗位的功能权限</span>}
+      </div>
+      {selected && (
+        <ol className="primary-navigation-order" aria-label={`${label}显示顺序`}>
+          {selected.map((navigationId, index) => (
+            <li key={navigationId}>
+              <b>{index + 1}</b>
+              <span>{staffNavigationLabels[navigationId]}</span>
+              <button
+                type="button"
+                title={`${staffNavigationLabels[navigationId]}前移`}
+                disabled={index === 0}
+                onClick={() => onChange(moveItem(selected, index, index - 1))}
+              >
+                <ArrowUp size={14} />
+              </button>
+              <button
+                type="button"
+                title={`${staffNavigationLabels[navigationId]}后移`}
+                disabled={index === selected.length - 1}
+                onClick={() => onChange(moveItem(selected, index, index + 1))}
+              >
+                <ArrowDown size={14} />
+              </button>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  )
 }
 
 function MoneyLimit({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
@@ -1350,6 +1467,7 @@ function configDraftPayload(
       permissionIds: role.permissionIds,
       dataScope: role.dataScope,
       approvalLimits: role.approvalLimits,
+      primaryNavigationIds: role.primaryNavigationIds ?? null,
     })),
     skills: structuredClone(skills),
     workstations: structuredClone(workstations),
@@ -1360,8 +1478,25 @@ function configDraftPayload(
   }
 }
 
+function employeeNavigationIds(data: BootstrapResponse, employee: Pick<EmployeeWriteInput, 'roleId' | 'roleIds' | 'permissionIds'>) {
+  const roleIds = [...new Set([employee.roleId, ...(employee.roleIds ?? [])])]
+  const permissionIds = [...new Set([
+    ...(employee.permissionIds ?? []),
+    ...data.config.roles.filter((role) => roleIds.includes(role.id)).flatMap((role) => role.permissionIds ?? []),
+  ])]
+  return navigationForStaffPermissions(permissionIds)
+}
+
 function toggleValue(values: string[], value: string, checked: boolean) {
   return checked ? [...new Set([...values, value])] : values.filter((item) => item !== value)
+}
+
+function moveItem<T>(values: T[], from: number, to: number) {
+  if (to < 0 || to >= values.length || from === to) return values
+  const next = [...values]
+  const [item] = next.splice(from, 1)
+  next.splice(to, 0, item!)
+  return next
 }
 
 function toLocalInput(iso: string) {

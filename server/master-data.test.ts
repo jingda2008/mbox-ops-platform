@@ -8,6 +8,7 @@ import {
   updateProduct,
   updateTable,
 } from './master-data.js'
+import { serializeRuntimeState } from './postgres-repository.js'
 import { createSeedState } from './seed.js'
 
 describe('master data management', () => {
@@ -41,6 +42,48 @@ describe('master data management', () => {
 
     expect(() => updateEmployee(state, employee.id, { ...employee, status: 'inactive' }, 'manager-demo'))
       .toThrow('员工仍有未关闭任务')
+  })
+
+  it('saves an auditable personal high-frequency entry override within effective permissions', () => {
+    const state = createSeedState()
+    const employee = state.employees.find((item) => item.id === 'emp-lin')!
+
+    const updated = updateEmployee(state, employee.id, {
+      ...employee,
+      primaryNavigationIds: ['commerce', 'tasks'],
+    }, 'emp-wu')
+
+    expect(updated.primaryNavigationIds).toEqual(['commerce', 'tasks'])
+    expect(state.auditEntries.at(-1)).toMatchObject({
+      actorId: 'emp-wu',
+      action: 'employee.updated.v1',
+      objectId: employee.id,
+      details: { after: { primaryNavigationIds: ['commerce', 'tasks'] } },
+    })
+  })
+
+  it('rejects personal high-frequency entries outside effective permissions', () => {
+    const state = createSeedState()
+    const employee = state.employees.find((item) => item.id === 'emp-lin')!
+
+    expect(() => updateEmployee(state, employee.id, {
+      ...employee,
+      primaryNavigationIds: ['config'],
+    }, 'emp-wu')).toThrow('高频入口超出该员工当前权限')
+  })
+
+  it('removes a personal override cleanly and keeps runtime state JSON serializable', () => {
+    const state = createSeedState()
+    const employee = state.employees.find((item) => item.id === 'emp-lin')!
+    employee.primaryNavigationIds = ['commerce', 'tasks']
+
+    const updated = updateEmployee(state, employee.id, {
+      ...employee,
+      primaryNavigationIds: undefined,
+    }, 'emp-wu')
+
+    expect(Object.hasOwn(updated, 'primaryNavigationIds')).toBe(false)
+    expect(() => serializeRuntimeState(state)).not.toThrow()
   })
 
   it('validates primary and backup table responsibility', () => {

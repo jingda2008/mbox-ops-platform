@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0-rc.64 - 2026-07-31
+
+- Added configurable high-frequency navigation defaults for every role while preserving the complete permission-derived module set.
+- Added optional employee-level navigation overrides for multi-role and exceptional assignments, with the employee override taking precedence over role defaults.
+- Added explicit entry ordering, move-up, move-down and restore-default controls in the administrator master-data workspace.
+- Kept role defaults inside the versioned configuration draft and publication flow while recording personal overrides through existing employee audit events.
+- Rejected role and employee entry selections outside their effective permissions, removed stale selections when permissions change and limited visible high-frequency entries to four.
+- Applied configured order consistently to desktop sidebars, mobile bottom navigation and role home shortcuts.
+- Added contract, configuration-version, authorization, employee-audit, role-model and browser coverage for configurable navigation.
+
 ## 1.0.0-rc.63 - 2026-07-31
 
 - Applied role-focused navigation to the desktop sidebar instead of limiting the simplification to the home page and mobile bottom bar.

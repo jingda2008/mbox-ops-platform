@@ -1,4 +1,9 @@
 import { z } from 'zod'
+import {
+  isNavigationAllowedForStaffPermissions,
+  staffNavigationIds,
+  type StaffNavigationId,
+} from './staff-navigation.js'
 import type { OrderDomainState, ProductFulfillmentType } from './order-contracts.js'
 import type { PaymentDomainState } from './payment-contracts.js'
 import type { InventoryDomainState } from './inventory-contracts.js'
@@ -81,6 +86,8 @@ export interface Employee {
   roleIds?: string[]
   /** Optional personal grants are merged with all configured role permissions. */
   permissionIds?: StaffPermissionId[]
+  /** Optional personal high-frequency entry override. Missing means follow the assigned role defaults. */
+  primaryNavigationIds?: StaffNavigationId[]
   online: boolean
   paused: boolean
   areaIds: string[]
@@ -265,6 +272,8 @@ export interface RoleConfig {
   maxConcurrentTasks: number
   canReceiveTasks: boolean
   permissionIds?: StaffPermissionId[]
+  /** Versioned high-frequency entries. Missing means use the built-in role profile. */
+  primaryNavigationIds?: StaffNavigationId[]
   dataScope?: RoleDataScope
   approvalLimits?: RoleApprovalLimits
 }
@@ -773,6 +782,7 @@ export const configDraftSchema = z.object({
       maxConcurrentTasks: z.number().int().min(1).max(20),
       canReceiveTasks: z.boolean(),
       permissionIds: z.array(z.enum(staffPermissionIds)).max(staffPermissionIds.length).optional(),
+      primaryNavigationIds: z.array(z.enum(staffNavigationIds)).min(1).max(4).nullable().optional(),
       dataScope: z.enum(['own', 'assigned_areas', 'store', 'all_stores']).optional(),
       approvalLimits: z.object({
         giftAmount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
@@ -819,6 +829,19 @@ export const configDraftSchema = z.object({
     }
   }).optional(),
   sopRules: z.array(sopRuleSchema).max(200).optional(),
+}).superRefine((draft, context) => {
+  draft.roles.forEach((role, roleIndex) => {
+    const permissionIds = role.permissionIds ?? []
+    role.primaryNavigationIds?.forEach((navigationId, navigationIndex) => {
+      if (!isNavigationAllowedForStaffPermissions(navigationId, permissionIds)) {
+        context.addIssue({
+          code: 'custom',
+          path: ['roles', roleIndex, 'primaryNavigationIds', navigationIndex],
+          message: '高频入口必须属于该岗位已有权限',
+        })
+      }
+    })
+  })
 })
 
 export type ConfigDraftInput = z.infer<typeof configDraftSchema>
@@ -926,6 +949,7 @@ export const employeeWriteSchema = z.object({
   roleId: z.string().trim().min(1).max(64),
   roleIds: z.array(z.string().trim().min(1).max(64)).max(12).optional(),
   permissionIds: z.array(z.enum(staffPermissionIds)).max(staffPermissionIds.length).optional(),
+  primaryNavigationIds: z.array(z.enum(staffNavigationIds)).min(1).max(4).optional(),
   // Kept in the transport contract for old clients; presence leases are authoritative.
   online: z.boolean().transform(() => false),
   paused: z.boolean(),

@@ -224,13 +224,12 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
   const fulfillmentAccess = getFulfillmentAccess(data, getCurrentActorId())
   const roleHomeModel = buildRoleHomeModel(data, fulfillmentAccess.employee?.id ?? '')
   const roleHomeAccess = roleHomeModel.access
-  const roleNavigationLabels = new Map(roleHomeModel.navigation.map((item) => [item.id, item.label]))
+  const roleNavigationLabels = new Map(roleHomeModel.availableNavigation.map((item) => [item.id, item.label]))
   const currentEmployee = fulfillmentAccess.employee
   const visibleOperationalTables = data.tables.filter((table) => {
     if (!currentEmployee) return false
     return currentEmployee.areaIds.includes(table.areaId)
   })
-  const visibleOperationalTableIds = new Set(visibleOperationalTables.map((table) => table.id))
   const claimableTaskIds = new Set(data.tasks.filter((task) => {
     if (!currentEmployee || currentEmployee.status !== 'active' || !currentEmployee.online || currentEmployee.paused) return false
     if (!['pending', 'escalated', 'reopened'].includes(task.status)) return false
@@ -263,9 +262,14 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
   const availableNavigation = navigation
     .filter((item) => item.id === 'home' || roleHomeAccess.allowedNavigationIds.includes(item.id))
     .map((item) => item.id === 'home' ? item : { ...item, label: roleNavigationLabels.get(item.id) ?? item.label })
+  const primaryMobileNavigation = availableNavigation.filter((item) => (
+    item.id !== 'home' && roleHomeAccess.primaryNavigationIds.includes(item.id)
+  )).slice(0, 4)
   const [view, setView] = useState<View>('home')
   const [selectedTableId, setSelectedTableId] = useState<string | null>(null)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [showAvailableTables, setShowAvailableTables] = useState(false)
+  const [showOtherOperationalTables, setShowOtherOperationalTables] = useState(false)
   const [draft, setDraft] = useState(() => cloneConfig(data.draftConfig ?? data.config))
   const [configDirty, setConfigDirty] = useState(false)
   const [notice, setNotice] = useState('')
@@ -350,6 +354,31 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
   const openTasks = fulfillmentAccess.mode === 'oversight'
     ? data.tasks.filter((task) => !task.archivedAt && !['completed', 'confirmed', 'cancelled'].includes(task.status))
     : ownOpenTasks
+  const attentionTableIds = new Set(openTasks.map((task) => task.tableId))
+  const activeOperationalTables = visibleOperationalTables.filter((table) => (
+    table.status !== 'available'
+    || table.id === selectedTableId
+    || attentionTableIds.has(table.id)
+    || data.awaitingOrderIntents.some((intent) => intent.tableId === table.id && intent.status === 'active')
+  ))
+  const ownOperationalTable = (table: BootstrapResponse['tables'][number]) => (
+    table.primaryEmployeeId === currentEmployee?.id
+    || table.backupEmployeeIds.includes(currentEmployee?.id ?? '')
+    || attentionTableIds.has(table.id)
+  )
+  const operationalAttentionTables = fulfillmentAccess.mode === 'oversight' || showOtherOperationalTables
+    ? activeOperationalTables
+    : activeOperationalTables.filter(ownOperationalTable)
+  const displayedOperationalTables = visibleOperationalTables.filter((table) => (
+    table.status === 'available'
+      ? showAvailableTables
+      : operationalAttentionTables.some((candidate) => candidate.id === table.id)
+  ))
+  const displayedOperationalTableIds = new Set(displayedOperationalTables.map((table) => table.id))
+  const hiddenAvailableTableCount = visibleOperationalTables.filter((table) => table.status === 'available').length
+  const hiddenOtherOperationalTableCount = fulfillmentAccess.mode === 'oversight'
+    ? 0
+    : activeOperationalTables.filter((table) => !ownOperationalTable(table)).length
   const visibleServiceTasks = fulfillmentAccess.mode === 'oversight'
     ? data.tasks
     : data.tasks.filter((task) => task.ownerId === currentEmployee?.id || claimableTaskIds.has(task.id))
@@ -1086,7 +1115,19 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
                 <section className="floor-operations">
                   <div className="section-heading">
                     <div><span className="eyebrow">桌台责任区</span><h2>现场桌台</h2></div>
-                    <div className="legend"><span><i className="dot occupied" />营业</span><span><i className="dot reserved" />预订</span><span><i className="dot available" />空台</span></div>
+                    <div className="table-visibility-actions">
+                      <span className="legend"><span><i className="dot occupied" />营业</span><span><i className="dot reserved" />预订</span><span><i className="dot available" />空台</span></span>
+                      {hiddenAvailableTableCount > 0 && (
+                        <button className="secondary-button" type="button" onClick={() => setShowAvailableTables((value) => !value)}>
+                          {showAvailableTables ? '收起空桌' : `显示空桌 ${hiddenAvailableTableCount}`}
+                        </button>
+                      )}
+                      {hiddenOtherOperationalTableCount > 0 && (
+                        <button className="secondary-button" type="button" onClick={() => setShowOtherOperationalTables((value) => !value)}>
+                          {showOtherOperationalTables ? '只看我的桌' : `其他营业桌 ${hiddenOtherOperationalTableCount}`}
+                        </button>
+                      )}
+                    </div>
                   </div>
                   {selectedTable?.status === 'occupied' && <div className="reveal-panel-target" ref={tablePanelRef} aria-hidden="true" />}
                   {selectedTable && selectedTable.status === 'occupied' && (
@@ -1207,13 +1248,13 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
                   )}
                   <div className="area-list">
                     {data.areas
-                      .filter((area) => visibleOperationalTables.some((table) => table.areaId === area.id))
+                      .filter((area) => displayedOperationalTables.some((table) => table.areaId === area.id))
                       .toSorted((a, b) => a.sortOrder - b.sortOrder).map((area) => (
                       <div className="area-row" key={area.id}>
                         <div className="area-label" style={{ borderColor: area.color }}><strong>{area.shortName}</strong><span>{area.name}</span></div>
                         <div className="table-grid">
                           {data.tables
-                            .filter((table) => table.areaId === area.id && visibleOperationalTableIds.has(table.id))
+                            .filter((table) => table.areaId === area.id && displayedOperationalTableIds.has(table.id))
                             .toSorted((left, right) => left.code.localeCompare(right.code, 'zh-CN', { numeric: true }))
                             .map((table) => {
                             const owner = data.employees.find((employee) => employee.id === table.primaryEmployeeId)
@@ -1594,6 +1635,33 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
           </Suspense>
         </main>
       </div>
+      <nav className="staff-mobile-bottom-nav" aria-label="岗位常用入口">
+        {primaryMobileNavigation.map((item) => {
+          const Icon = item.icon
+          const badge = item.id === 'tasks' ? openTasks.length : item.id === 'commerce' ? roleKdsCount : 0
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className={view === item.id ? 'is-active' : ''}
+              aria-current={view === item.id ? 'page' : undefined}
+              onClick={() => navigateTo(item.id)}
+            >
+              <span><Icon size={19} />{badge > 0 && <b>{badge}</b>}</span>
+              <small>{item.label}</small>
+            </button>
+          )
+        })}
+        <button
+          type="button"
+          className={mobileNavOpen ? 'is-active' : ''}
+          aria-expanded={mobileNavOpen}
+          onClick={() => setMobileNavOpen(true)}
+        >
+          <span><Menu size={20} /></span>
+          <small>更多</small>
+        </button>
+      </nav>
     </div>
   )
 }

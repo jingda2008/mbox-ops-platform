@@ -119,6 +119,8 @@ test.describe('岗位权限隔离', () => {
     await page.getByTitle('打开导航').click()
     await page.locator('.sidebar nav').getByRole('button', { name: '现场调度' }).click()
     const occupied = page.locator('.table-tile.status-occupied').filter({ hasText: 'L01' }).first()
+    await expect(page.locator('.table-tile.status-available')).toHaveCount(0)
+    await page.getByRole('button', { name: /显示空桌/ }).click()
     const available = page.locator('.table-tile.status-available').filter({ hasText: 'L04' }).first()
     await expect(occupied).toContainText('营业中')
     await expect(available).toContainText('未开台')
@@ -184,6 +186,8 @@ test.describe('岗位权限隔离', () => {
     if (await navigationMenu.isVisible()) await navigationMenu.click()
     await page.locator('.sidebar nav').getByRole('button', { name: '现场调度' }).click()
     await expect(page.locator('.table-tile').filter({ hasText: 'W01' })).toHaveCount(0)
+    await expect(page.locator('.table-tile.status-available')).toHaveCount(0)
+    await page.getByRole('button', { name: /显示空桌/ }).click()
     await page.getByRole('button', { name: '开台桌台 L04' }).click()
 
     const inlineOpen = page.getByRole('dialog', { name: 'L04开台设置' })
@@ -199,6 +203,37 @@ test.describe('岗位权限隔离', () => {
     await expect(inlineOpen).toHaveCount(0)
     await expect(page.getByRole('heading', { name: '全店现场' })).toBeVisible()
     await expect(page).not.toHaveURL(/commerce/)
+  })
+
+  test('次要后台按本人权限裁剪操作入口', async ({ page }) => {
+    await useStaffIdentity(page, 'emp-lin', 'Tom')
+    await page.goto('/')
+
+    await page.getByTitle('打开导航').click()
+    await page.locator('.sidebar nav').getByRole('button', { name: '库存/存酒' }).click()
+    await expect(page.getByRole('navigation', { name: '库存功能' }).getByRole('button')).toHaveCount(1)
+    await expect(page.getByRole('button', { name: '库存总览' })).toBeVisible()
+
+    await page.getByTitle('打开导航').click()
+    await page.locator('.sidebar nav').getByRole('button', { name: '收银/支付' }).click()
+    const paymentTabs = page.getByRole('navigation', { name: '收银工作分类' })
+    await expect(paymentTabs.getByRole('button', { name: /收款/ })).toBeVisible()
+    await expect(paymentTabs.getByRole('button', { name: /退款/ })).toBeVisible()
+    await expect(paymentTabs.getByRole('button', { name: /交班关账/ })).toHaveCount(0)
+  })
+
+  test('市场设计只读会员数据，不出现发放审批和活动配置', async ({ page }) => {
+    await useStaffIdentity(page, 'emp-host', '挞挞')
+    await page.goto('/')
+
+    await expect(page.getByRole('heading', { name: '市场工作台' })).toBeVisible()
+    await page.getByTitle('打开导航').click()
+    await page.locator('.sidebar nav').getByRole('button', { name: '会员权益' }).click()
+    await expect(page.getByRole('heading', { name: '权益发放中心' })).toBeVisible()
+    await expect(page.getByText('当前岗位为权益只读视图')).toBeVisible()
+    await expect(page.getByText('单客权益发放')).toHaveCount(0)
+    await expect(page.getByText('老客召回活动')).toHaveCount(0)
+    await expect(page.getByText('权益与岗位授权配置')).toHaveCount(0)
   })
 })
 
@@ -225,9 +260,13 @@ test.describe('视觉与移动端适配', () => {
 
     await expect(page.getByRole('heading', { name: '服务员工作台' })).toBeVisible()
     await expect(page.locator('html')).toHaveClass(/staff-phone-device/)
+    const commonNavigation = page.getByRole('navigation', { name: '岗位常用入口' })
+    await expect(commonNavigation).toBeVisible()
+    await expect(commonNavigation.getByRole('button')).toHaveCount(4)
+    await expect(commonNavigation.getByRole('button', { name: /我的桌台/ })).toBeVisible()
     await expectNoHorizontalOverflow(page)
 
-    await page.getByTitle('打开导航').click()
+    await commonNavigation.getByRole('button', { name: /更多/ }).click()
     await expect(page.locator('.sidebar')).toHaveClass(/is-open/)
     await page.locator('.sidebar nav').getByRole('button', { name: '我的桌台' }).click()
     await expect(page.getByRole('heading', { name: '全店现场' })).toBeVisible()

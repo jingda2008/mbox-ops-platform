@@ -28,6 +28,10 @@ const channelLabels = {
 export function BenefitCenterView({ data, onRefresh, onNotice }: BenefitCenterViewProps) {
   const actorId = getCurrentActorId()
   const currentEmployee = data.employees.find((employee) => employee.id === actorId && employee.status === 'active')
+  const permissionIds = new Set(data.viewer?.permissionIds ?? [])
+  const canGrantBenefits = permissionIds.has('benefit.grant')
+  const canApproveBenefits = permissionIds.has('benefit.approve')
+  const canManageBenefits = permissionIds.has('benefit.manage')
   const [memberId, setMemberId] = useState(data.members[0]?.id ?? '')
   const [templateId, setTemplateId] = useState(data.benefitTemplates.find((item) => item.enabled)?.id ?? '')
   const [quantity, setQuantity] = useState(1)
@@ -233,8 +237,12 @@ export function BenefitCenterView({ data, onRefresh, onNotice }: BenefitCenterVi
         <BenefitMetric icon={MessageSquareText} label="待通道发送" value={queuedNotifications} />
       </div>
 
-      <div className="benefit-action-grid">
-        <form className="benefit-form" onSubmit={(event) => void submitGrant(event)}>
+      {!canGrantBenefits && !canApproveBenefits && !canManageBenefits && (
+        <div className="policy-hint"><ShieldCheck size={16} /><span>当前岗位为权益只读视图；发放、审批和活动配置由授权岗位处理。</span></div>
+      )}
+
+      {(canGrantBenefits || canManageBenefits) && <div className="benefit-action-grid">
+        {canGrantBenefits && <form className="benefit-form" onSubmit={(event) => void submitGrant(event)}>
           <div className="form-heading"><Gift size={19} /><div><strong>单客权益发放</strong><span>权限内直接到账，超权限自动审批</span></div></div>
           <div className="form-grid">
             <label><span>发放人员</span><input value={currentEmployee ? employeeLabel(data, currentEmployee.id) : '身份失效，请重新登录'} disabled /></label>
@@ -246,9 +254,9 @@ export function BenefitCenterView({ data, onRefresh, onNotice }: BenefitCenterVi
           </div>
           <div className="policy-hint"><BadgeCheck size={16} /><span>{policySummary(data, actorId, policiesByRole)}</span></div>
           <button className="primary-button" type="submit" disabled={busy || !currentEmployee || !memberId || !templateId}><Gift size={17} />确认发放</button>
-        </form>
+        </form>}
 
-        <form className="benefit-form" onSubmit={(event) => void launchCampaign(event)}>
+        {canManageBenefits && <form className="benefit-form" onSubmit={(event) => void launchCampaign(event)}>
           <div className="form-heading"><Megaphone size={19} /><div><strong>老客召回活动</strong><span>按客群批量到账，并生成微信通知Outbox</span></div></div>
           <div className="form-grid">
             <label className="wide-field"><span>活动名称</span><input value={campaignName} onChange={(event) => setCampaignName(event.target.value)} /></label>
@@ -261,11 +269,11 @@ export function BenefitCenterView({ data, onRefresh, onNotice }: BenefitCenterVi
             ? `符合${campaignPreview.eligibleCount}人，可到账${campaignPreview.issuableCount}人，可微信触达${campaignPreview.reachableCount}人，预计成本${money(campaignPreview.estimatedCostAmount)}${campaignPreview.withinDailyBudget ? '' : '，已超每日额度'}`
             : '先预估人数、可触达范围和成本，再确认批量发放。'}</span></div>
           <div className="campaign-actions"><button className="secondary-button" type="button" disabled={busy || !currentEmployee} onClick={() => void previewCampaign()}><CalendarClock size={17} />预估范围</button><button className="primary-button" type="submit" disabled={busy || !currentEmployee || !campaignPreview?.withinDailyBudget}><Megaphone size={17} />确认发放</button></div>
-        </form>
-      </div>
+        </form>}
+      </div>}
 
-      <div className="benefit-detail-grid">
-        <div className="benefit-panel">
+      {(canGrantBenefits || canApproveBenefits || canManageBenefits) && <div className="benefit-detail-grid">
+        {canGrantBenefits && <div className="benefit-panel">
           <div className="panel-heading"><div><strong>会员账户</strong><span>权益直接到账，不依赖消息是否发送成功</span></div></div>
           <div className="member-list">
             {data.members.map((member) => {
@@ -296,9 +304,9 @@ export function BenefitCenterView({ data, onRefresh, onNotice }: BenefitCenterVi
                   : <b>待接{template?.kind === 'amount_coupon' ? '支付账务' : '履约模块'}</b>}</span></div>
             })}
           </div>
-        </div>
+        </div>}
 
-        <div className="benefit-panel">
+        {(canApproveBenefits || canManageBenefits) && <div className="benefit-panel">
           <div className="panel-heading"><div><strong>审批与通知</strong><span>经营授权和外部送达分别追踪</span></div></div>
           <div className="approval-list">
             {pendingRequests.length === 0 ? <div className="compact-empty">没有待审批申请</div> : pendingRequests.map((request) => {
@@ -308,16 +316,16 @@ export function BenefitCenterView({ data, onRefresh, onNotice }: BenefitCenterVi
               return <div className="approval-row" key={request.id}><div><strong>{member?.displayName} · {template?.name}</strong><span>{employee?.displayName}申请 · {request.reason}</span></div><div><button className="secondary-button" disabled={busy || !currentEmployee} onClick={() => void decide(request.id, 'rejected')}>拒绝</button><button className="primary-button" disabled={busy || !currentEmployee} onClick={() => void decide(request.id, 'granted')}>批准发放</button></div></div>
             })}
           </div>
-          <div className="notification-list">
+          {canManageBenefits && <div className="notification-list">
             {data.customerNotifications.slice(0, 8).map((notification) => {
               const member = data.members.find((item) => item.id === notification.memberId)
               return <div key={notification.id}><MessageSquareText size={16} /><span><strong>{member?.displayName} · {channelLabels[notification.channel]}</strong><small>{notificationDetail(notification)}</small></span>{notification.status === 'failed' ? <button className="notification-retry" disabled={busy || !currentEmployee} onClick={() => void retryNotification(notification.id)}>重试</button> : <b className={`notification-${notification.status}`}>{notificationStatus(notification.status)}</b>}</div>
             })}
             {data.customerNotifications.length === 0 && <div className="compact-empty">暂无通知记录</div>}
-          </div>
-        </div>
-      </div>
-      <BenefitConfiguration data={data} onRefresh={onRefresh} onNotice={onNotice} />
+          </div>}
+        </div>}
+      </div>}
+      {canManageBenefits && <BenefitConfiguration data={data} onRefresh={onRefresh} onNotice={onNotice} />}
     </section>
   )
 }

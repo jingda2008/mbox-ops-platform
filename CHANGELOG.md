@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.0-rc.62 - 2026-07-31
+
+- Separated each role's primary mobile navigation from its complete authorized module set so frequent work stays within two to four visible entries without removing legitimate access.
+- Added a fixed role-aware mobile navigation bar with a compact overflow entry for infrequent authorized modules.
+- Focused execution roles on their own occupied, reserved or attention-required tables while keeping other active and empty tables available through explicit expansion controls.
+- Reduced mobile header, metric, action and empty-state height so the current task, responsible tables and support actions remain visible with less scrolling.
+- Added dedicated stage, technical and marketing role profiles, navigation priorities and operational metrics.
+- Hid inventory, payment and member-benefit controls that the signed-in employee cannot execute while retaining server-side permission enforcement.
+- Corrected server responsibility metrics so assigned empty tables no longer inflate the active-table count.
+- Added unit and browser regression coverage for role entry limits, mobile overflow, table focus and permission-specific control visibility.
+
 ## 1.0.0-rc.61 - 2026-07-31
 
 - Required staff to select and confirm an open table before entering full-screen assisted ordering.

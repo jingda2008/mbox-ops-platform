@@ -31,6 +31,28 @@ describe('role home access', () => {
     expect(resolveRoleHomeKind('specialist', '服务专员')).toBe('server')
   })
 
+  it('gives stage, technical and marketing staff a focused role home', () => {
+    expect(resolveRoleHomeKind('specialist', '新媒体舞台运营')).toBe('stage')
+    expect(resolveRoleHomeKind('technical', '调音灯光')).toBe('technical')
+    expect(resolveRoleHomeKind('market_design', '市场设计')).toBe('marketing')
+
+    expect(getRoleHomeAccess(bootstrapForRole('specialist', '新媒体舞台运营'), 'specialist').primaryNavigationIds)
+      .toEqual(['songs', 'tasks', 'reservations'])
+    expect(getRoleHomeAccess(bootstrapForRole('technical', '调音灯光'), 'technical').primaryNavigationIds)
+      .toEqual(['devices', 'songs'])
+    expect(getRoleHomeAccess(bootstrapForRole('market_design', '市场设计'), 'market_design').primaryNavigationIds)
+      .toEqual(['reservations', 'benefits'])
+  })
+
+  it('keeps full permissions available while limiting common role entries', () => {
+    const data = bootstrapForRole('manager', '店长')
+    const access = getRoleHomeAccess(data, 'manager')
+
+    expect(access.allowedNavigationIds).toContain('inventory')
+    expect(access.allowedNavigationIds).toContain('songs')
+    expect(access.primaryNavigationIds).toEqual(['live', 'tasks', 'reservations', 'payments'])
+  })
+
   it('does not elevate custom role IDs through substring matching', () => {
     expect(resolveRoleHomeKind('night-owner-assistant')).toBe('custom')
     expect(resolveRoleHomeKind('cashier-temp-custom')).toBe('custom')
@@ -69,6 +91,20 @@ describe('role home access', () => {
       { id: 'tasks', value: 1, navigationId: 'tasks' },
       { id: 'kds', value: 1, navigationId: 'commerce' },
     ])
+  })
+
+  it('does not let additional permissions flood the role home', () => {
+    const data = bootstrapForRole('server', '服务员')
+    data.config.roles[0]!.permissionIds = [
+      'dashboard.view', 'service.execute', 'order.create', 'order.view',
+      'payment.collect', 'benefit.grant', 'song.view',
+    ]
+
+    const model = buildRoleHomeModel(data, 'employee-current')
+
+    expect(model.access.allowedNavigationIds).toEqual(['live', 'tasks', 'commerce', 'payments', 'benefits', 'operations', 'songs'])
+    expect(model.navigation.map((item) => item.id)).toEqual(['live', 'tasks', 'commerce'])
+    expect(model.availableNavigation.map((item) => item.id)).toContain('payments')
   })
 
   it('drops completed service from the employee home task count', () => {

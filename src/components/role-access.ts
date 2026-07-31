@@ -18,8 +18,8 @@ export const roleHomeNavigation = [
 ] as const
 
 export type RoleHomeNavigationId = (typeof roleHomeNavigation)[number]['id']
-export type RoleHomeKind = 'owner' | 'operations_director' | 'admin' | 'manager' | 'server' | 'bartender' | 'kitchen' | 'cashier' | 'host' | 'runner' | 'custom'
-export type RoleHomeIndicator = 'tables' | 'tasks' | 'risk' | 'kds' | 'people' | 'config' | 'payments' | 'reservations'
+export type RoleHomeKind = 'owner' | 'operations_director' | 'admin' | 'manager' | 'server' | 'bartender' | 'kitchen' | 'cashier' | 'host' | 'runner' | 'stage' | 'technical' | 'marketing' | 'custom'
+export type RoleHomeIndicator = 'tables' | 'tasks' | 'risk' | 'kds' | 'people' | 'config' | 'payments' | 'reservations' | 'music' | 'devices' | 'benefits'
 export type RoleHomeTone = 'neutral' | 'info' | 'warning' | 'danger' | 'success'
 
 export interface RoleHomeAccess {
@@ -28,6 +28,7 @@ export interface RoleHomeAccess {
   focusLabel: string
   roleLabel: string
   allowedNavigationIds: readonly RoleHomeNavigationId[]
+  primaryNavigationIds: readonly RoleHomeNavigationId[]
   isFallback: boolean
 }
 
@@ -57,6 +58,7 @@ export interface RoleHomeModel {
   metrics: RoleHomeMetric[]
   todos: RoleHomeTodo[]
   navigation: Array<{ id: RoleHomeNavigationId; label: string }>
+  availableNavigation: Array<{ id: RoleHomeNavigationId; label: string }>
 }
 
 interface RoleProfile {
@@ -67,44 +69,76 @@ interface RoleProfile {
 
 const allNavigation = roleHomeNavigation.map((item) => item.id)
 
+const defaultAllowedNavigation: Record<RoleHomeKind, readonly RoleHomeNavigationId[]> = {
+  owner: allNavigation,
+  operations_director: allNavigation,
+  admin: allNavigation,
+  manager: ['live', 'tasks', 'reservations', 'commerce', 'inventory', 'payments', 'benefits', 'operations', 'devices', 'songs', 'layout'],
+  server: ['live', 'tasks', 'commerce', 'benefits', 'songs'],
+  bartender: ['tasks', 'commerce', 'inventory', 'operations'],
+  kitchen: ['tasks', 'commerce', 'inventory', 'operations'],
+  cashier: ['reservations', 'tasks', 'payments', 'inventory', 'operations'],
+  host: ['live', 'tasks', 'reservations', 'benefits'],
+  runner: ['live', 'tasks', 'commerce'],
+  stage: ['tasks', 'reservations', 'benefits', 'songs'],
+  technical: ['tasks', 'devices', 'songs'],
+  marketing: ['tasks', 'reservations', 'benefits'],
+  custom: ['tasks', 'commerce'],
+}
+
 const roleProfiles: Record<RoleHomeKind, RoleProfile> = {
-  owner: { title: '老板工作台', focusLabel: '全店经营与风险', navigation: allNavigation },
-  operations_director: { title: '运营负责人工作台', focusLabel: '经营执行与风险闭环', navigation: allNavigation },
-  admin: { title: '管理员工作台', focusLabel: '系统运行与配置', navigation: allNavigation },
+  owner: { title: '老板工作台', focusLabel: '全店经营与风险', navigation: ['live', 'tasks', 'payments', 'operations'] },
+  operations_director: { title: '运营负责人工作台', focusLabel: '经营执行与风险闭环', navigation: ['live', 'tasks', 'operations', 'reservations'] },
+  admin: { title: '管理员工作台', focusLabel: '系统运行与配置', navigation: ['devices', 'master', 'config', 'operations'] },
   manager: {
     title: '店长工作台',
     focusLabel: '现场调度与异常接管',
-    navigation: ['live', 'tasks', 'reservations', 'commerce', 'inventory', 'payments', 'benefits', 'operations', 'devices', 'songs', 'layout'],
+    navigation: ['live', 'tasks', 'reservations', 'payments'],
   },
   server: {
     title: '服务员工作台',
     focusLabel: '责任桌台与服务响应',
-    navigation: ['live', 'tasks', 'commerce', 'benefits', 'songs'],
+    navigation: ['live', 'tasks', 'commerce'],
   },
   bartender: {
     title: '调酒师工作台',
     focusLabel: '吧台制作与交付',
-    navigation: ['tasks', 'commerce', 'inventory', 'operations'],
+    navigation: ['commerce', 'tasks', 'inventory'],
   },
   kitchen: {
     title: '厨房工作台',
     focusLabel: '厨房出品与交付',
-    navigation: ['tasks', 'commerce', 'inventory', 'operations'],
+    navigation: ['commerce', 'tasks', 'inventory'],
   },
   cashier: {
     title: '收银员工作台',
     focusLabel: '收款、对账与退款',
-    navigation: ['reservations', 'tasks', 'payments', 'inventory', 'operations'],
+    navigation: ['payments', 'reservations'],
   },
   host: {
     title: '门迎工作台',
     focusLabel: '预约到店与迎宾',
-    navigation: ['live', 'tasks', 'reservations', 'benefits'],
+    navigation: ['reservations', 'live', 'tasks'],
   },
   runner: {
     title: '传菜员工作台',
     focusLabel: '取货、配送与送达',
     navigation: ['live', 'tasks', 'commerce'],
+  },
+  stage: {
+    title: '舞台运营工作台',
+    focusLabel: '演出排班、点歌与现场互动',
+    navigation: ['songs', 'tasks', 'reservations'],
+  },
+  technical: {
+    title: '调音灯光工作台',
+    focusLabel: '设备状态与演出保障',
+    navigation: ['devices', 'songs'],
+  },
+  marketing: {
+    title: '市场工作台',
+    focusLabel: '预约内容与客户权益',
+    navigation: ['reservations', 'benefits'],
   },
   custom: {
     title: '岗位工作台',
@@ -124,6 +158,9 @@ const roleNavigationLabels: Partial<Record<RoleHomeKind, Partial<Record<RoleHome
   cashier: { reservations: '预约订金', tasks: '收银提醒', payments: '收银与退款', inventory: '盘点交接' },
   host: { live: '桌台状态', tasks: '接待提醒', reservations: '预约与入座', benefits: '客户权益' },
   runner: { live: '桌台位置', tasks: '配送提醒', commerce: '取货与送达' },
+  stage: { songs: '演出与点歌', tasks: '舞台提醒', reservations: '当日预约' },
+  technical: { devices: '设备状态', songs: '演出安排' },
+  marketing: { reservations: '预约与客户', benefits: '会员权益' },
   custom: { tasks: '我的任务', commerce: '我的出品' },
 }
 
@@ -132,12 +169,15 @@ const roleAliases: Record<Exclude<RoleHomeKind, 'custom'>, readonly string[]> = 
   operations_director: ['operations-director', '运营负责人'],
   admin: ['admin', 'administrator', 'system-admin', 'super-admin', '管理员', '系统管理员'],
   manager: ['manager', 'store-manager', 'shift-manager', 'general-manager', 'supervisor', '店长', '值班经理', '领班'],
-  server: ['server', 'backup', 'specialist', 'waiter', 'waitstaff', 'service', '服务员', '主服务员', '区域候补', '服务专员'],
+  server: ['server', 'backup', 'waiter', 'waitstaff', 'service', '服务员', '主服务员', '区域候补', '服务专员'],
   bartender: ['bartender', 'bar', 'bar-staff', '调酒师', '鸡尾酒调酒师', '吧台'],
   kitchen: ['kitchen', 'cook', 'chef', 'kitchen-staff', '厨房', '厨师', '厨房出品'],
   cashier: ['cashier', 'checkout', '收银', '收银员'],
   host: ['host', 'reception', 'receptionist', 'greeter', '门迎', '迎宾'],
   runner: ['runner', 'food-runner', '传菜员', '传菜', '传菜取送'],
+  stage: ['stage', 'stage-operations', 'new-media-stage', '舞台运营', '新媒体舞台运营'],
+  technical: ['technical', 'sound-lighting', 'audio-lighting', '技术', '调音灯光'],
+  marketing: ['marketing', 'market-design', '市场设计', '市场运营'],
 }
 
 const openServiceStatuses = new Set(['pending', 'accepted', 'arrived', 'reopened', 'escalated'])
@@ -150,12 +190,14 @@ export function getRoleHomeAccess(data: BootstrapResponse, roleId: string): Role
   const configuredNavigation = configuredRole?.permissionIds
     ? navigationForPermissions(configuredRole.permissionIds)
     : null
+  const allowedNavigationIds = configuredNavigation ?? defaultAllowedNavigation[kind]
   return {
     kind,
     title: profile.title,
     focusLabel: profile.focusLabel,
     roleLabel: configuredRole?.name ?? (roleId || '身份未识别'),
-    allowedNavigationIds: configuredNavigation ?? profile.navigation,
+    allowedNavigationIds,
+    primaryNavigationIds: primaryNavigationFor(profile.navigation, allowedNavigationIds),
     isFallback: kind === 'custom',
   }
 }
@@ -184,6 +226,12 @@ function navigationForPermissions(permissionIds: readonly StaffPermissionId[]) {
 
 export function resolveRoleHomeKind(roleId: string, roleName?: string): RoleHomeKind {
   const normalizedRoleId = normalizeRoleToken(roleId)
+  const normalizedRoleName = normalizeRoleToken(roleName ?? '')
+  if (normalizedRoleId === 'specialist') {
+    return /新媒体|舞台/.test(roleName ?? '') || ['stage', 'stage-operations', 'new-media-stage'].includes(normalizedRoleName)
+      ? 'stage'
+      : 'server'
+  }
   const candidates = normalizedRoleId ? [normalizedRoleId] : [normalizeRoleToken(roleName ?? '')].filter(Boolean)
   for (const [kind, aliases] of Object.entries(roleAliases) as Array<[Exclude<RoleHomeKind, 'custom'>, readonly string[]]>) {
     if (candidates.some((candidate) => aliases.includes(candidate))) return kind
@@ -216,6 +264,10 @@ export function buildRoleHomeModel(data: BootstrapResponse, employeeId: string):
     ...baseAccess,
     roleLabel: data.config.roles.filter((role) => roleIds.includes(role.id)).map((role) => role.name).join(' / ') || baseAccess.roleLabel,
     allowedNavigationIds: configuredNavigation.length > 0 ? configuredNavigation : baseAccess.allowedNavigationIds,
+    primaryNavigationIds: primaryNavigationFor(
+      roleProfiles[baseAccess.kind].navigation,
+      configuredNavigation.length > 0 ? configuredNavigation : baseAccess.allowedNavigationIds,
+    ),
   }
   const hasFullKdsAccess = roleIds.some((roleId) => {
     const role = data.config.roles.find((item) => item.id === roleId)
@@ -230,6 +282,9 @@ export function buildRoleHomeModel(data: BootstrapResponse, employeeId: string):
     metrics,
     todos,
     navigation: roleHomeNavigation
+      .filter((item) => access.primaryNavigationIds.includes(item.id))
+      .map((item) => ({ ...item, label: roleNavigationLabels[access.kind]?.[item.id] ?? item.label })),
+    availableNavigation: roleHomeNavigation
       .filter((item) => access.allowedNavigationIds.includes(item.id))
       .map((item) => ({ ...item, label: roleNavigationLabels[access.kind]?.[item.id] ?? item.label })),
   }
@@ -258,6 +313,11 @@ interface RoleCounts {
   requestedReservations: number
   arrivals: number
   configVersion: number
+  todayPerformances: number
+  openSongRequests: number
+  enabledDevices: number
+  abnormalDevices: number
+  availableBenefits: number
 }
 
 function buildCounts(
@@ -294,7 +354,10 @@ function buildCounts(
     ownTasks: ownTasks.length,
     atRiskTasks: data.metrics.atRiskTasks,
     escalatedTasks: data.metrics.escalatedTasks,
-    assignedTables: data.tables.filter((table) => table.primaryEmployeeId === employee?.id || table.backupEmployeeIds.includes(employee?.id ?? '')).length,
+    assignedTables: data.tables.filter((table) => (
+      table.status === 'occupied'
+      && (table.primaryEmployeeId === employee?.id || table.backupEmployeeIds.includes(employee?.id ?? ''))
+    )).length,
     awaitingOrders: data.awaitingOrderIntents.filter((intent) => intent.status === 'active' && data.tables.some((table) => table.id === intent.tableId && table.primaryEmployeeId === employee?.id)).length,
     visibleKds: visibleKdsTasks.length,
     productionKds: productionKds.length,
@@ -311,6 +374,19 @@ function buildCounts(
     requestedReservations: reservations.filter((item) => item.status === 'requested').length,
     arrivals: reservations.filter((item) => ['confirmed', 'arrived'].includes(item.status)).length,
     configVersion: data.config.version,
+    todayPerformances: (data.songState?.performanceSessions ?? [])
+      .filter((session) => session.businessDate === data.store.businessDate && session.status !== 'cancelled')
+      .reduce((sum, session) => sum + session.appearances.length, 0),
+    openSongRequests: (data.songState?.requests ?? []).filter((request) => (
+      !['completed', 'rejected', 'cancelled', 'refunded'].includes(request.status)
+    )).length,
+    enabledDevices: data.hardwareState?.devices.filter((device) => device.enabled).length ?? 0,
+    abnormalDevices: data.hardwareState?.devices.filter((device) => (
+      device.enabled && !['online', 'simulated'].includes(device.status)
+    )).length ?? 0,
+    availableBenefits: (data.memberBenefits ?? [])
+      .filter((benefit) => benefit.status === 'available')
+      .reduce((sum, benefit) => sum + benefit.remainingQuantity, 0),
   }
 }
 
@@ -452,6 +528,48 @@ function buildRoleContent(kind: RoleHomeKind, counts: RoleCounts): Pick<RoleHome
       ],
     }
   }
+  if (kind === 'stage') {
+    return {
+      metrics: [
+        metric('performances', '今日演出', counts.todayPerformances, 'music', 'neutral', 'songs'),
+        metric('song-requests', '点歌待处理', counts.openSongRequests, 'music', counts.openSongRequests ? 'warning' : 'success', 'songs'),
+        metric('stage-tasks', '舞台任务', counts.ownTasks, 'tasks', counts.ownTasks ? 'info' : 'success', 'tasks', 'service-open'),
+        metric('reservations', '今日待到店', counts.reservations, 'reservations', 'neutral', 'reservations'),
+      ],
+      todos: [
+        todo('song-requests', '确认点歌需求', '核对歌手、曲目和现场安排', counts.openSongRequests, 'warning', 'songs'),
+        todo('stage-tasks', '处理舞台任务', '按演出顺序完成现场事项', counts.ownTasks, 'info', 'tasks', 'service-open'),
+      ],
+    }
+  }
+  if (kind === 'technical') {
+    return {
+      metrics: [
+        metric('devices', '启用设备', counts.enabledDevices, 'devices', 'neutral', 'devices'),
+        metric('device-risk', '设备异常', counts.abnormalDevices, 'risk', counts.abnormalDevices ? 'danger' : 'success', 'devices'),
+        metric('performances', '今日演出', counts.todayPerformances, 'music', 'neutral', 'songs'),
+        metric('tech-tasks', '保障任务', counts.ownTasks, 'tasks', counts.ownTasks ? 'info' : 'success', 'tasks', 'service-open'),
+      ],
+      todos: [
+        todo('device-risk', '处理设备异常', '检查离线、降级和未配置设备', counts.abnormalDevices, 'danger', 'devices'),
+        todo('tech-tasks', '完成演出保障', '按当前舞台任务继续处理', counts.ownTasks, 'info', 'tasks', 'service-open'),
+      ],
+    }
+  }
+  if (kind === 'marketing') {
+    return {
+      metrics: [
+        metric('reservations', '今日待到店', counts.reservations, 'reservations', 'neutral', 'reservations'),
+        metric('requested', '待确认预约', counts.requestedReservations, 'reservations', counts.requestedReservations ? 'warning' : 'success', 'reservations'),
+        metric('benefits', '可用权益', counts.availableBenefits, 'benefits', 'neutral', 'benefits'),
+        metric('marketing-tasks', '市场任务', counts.ownTasks, 'tasks', counts.ownTasks ? 'info' : 'success', 'tasks', 'service-open'),
+      ],
+      todos: [
+        todo('requested', '跟进待确认预约', '核对客户信息和到店安排', counts.requestedReservations, 'warning', 'reservations'),
+        todo('marketing-tasks', '处理市场任务', '跟进当前分配事项', counts.ownTasks, 'info', 'tasks', 'service-open'),
+      ],
+    }
+  }
   return {
     metrics: [
       metric('tasks', '我的任务', counts.ownTasks, 'tasks', counts.ownTasks ? 'info' : 'success', 'tasks', 'service-open'),
@@ -506,4 +624,12 @@ function todo(id: string, label: string, detail: string, count: number, tone: Ro
 
 function normalizeRoleToken(value: string) {
   return value.trim().toLowerCase().replace(/[\s_]+/g, '-')
+}
+
+function primaryNavigationFor(
+  preferred: readonly RoleHomeNavigationId[],
+  allowed: readonly RoleHomeNavigationId[],
+) {
+  const primary = preferred.filter((id) => allowed.includes(id)).slice(0, 4)
+  return primary.length > 0 ? primary : allowed.slice(0, 4)
 }

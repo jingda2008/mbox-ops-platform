@@ -198,6 +198,10 @@
   gap: 18px;
 }
 
+.role-home__work-grid.has-navigation-only {
+  grid-template-columns: minmax(0, 520px);
+}
+
 @media (max-width: 700px) {
   .role-home__next-action { grid-template-columns: 38px minmax(0, 1fr); }
   .role-home__next-number { width: 38px; height: 38px; }
@@ -383,27 +387,50 @@
 }
 
 @media (max-width: 680px) {
-  .role-home { gap: 12px; }
+  .role-home { gap: 9px; }
   .role-home__header {
     grid-template-columns: minmax(0, 1fr) auto;
-    gap: 12px;
-    padding: 13px 14px;
+    min-height: 66px;
+    gap: 8px;
+    padding: 9px 12px;
   }
-  .role-home__identity { grid-column: 1 / 3; }
+  .role-home__identity { grid-column: 1; }
+  .role-home__store,
+  .role-home__actor small { display: none; }
+  .role-home__identity h2 { margin: 0; font-size: 18px; }
+  .role-home__identity p { font-size: 11px; }
   .role-home__actor {
-    justify-items: start;
+    justify-items: end;
     padding: 0;
     border-left: 0;
   }
+  .role-home__actor span { font-size: 11px; }
+  .role-home__actor strong { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+  .role-home__next-action {
+    min-height: 64px;
+    grid-template-columns: 34px minmax(0, 1fr) auto;
+    gap: 9px;
+    padding: 8px 10px;
+  }
+  .role-home__next-number { width: 34px; height: 34px; font-size: 15px; }
+  .role-home__next-action > button { grid-column: auto; width: auto; min-height: 38px; padding-inline: 10px; font-size: 11px; }
+  .role-home__next-copy strong { font-size: 14px; }
   .role-home__metrics--4,
   .role-home__metrics--3,
   .role-home__metrics--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .role-home__metric,
   .role-home__metrics--4 .role-home__metric:nth-child(2) {
-    min-height: 70px;
+    min-height: 62px;
+    grid-template-columns: 31px minmax(0, 1fr) 14px;
+    gap: 7px;
+    padding: 8px 10px;
     border-right: 1px solid var(--line, #dde0d8);
     border-bottom: 1px solid var(--line, #dde0d8);
   }
+  .role-home__metric-icon { width: 31px; height: 31px; }
+  .role-home__metric-copy strong { font-size: 19px; }
+  .role-home__section-heading { min-height: 48px; padding: 7px 12px; }
+  .role-home__navigation button { min-height: 52px; }
   .role-home__metric:nth-child(2n) { border-right: 0; }
   .role-home__metric:nth-last-child(-n + 2) { border-bottom: 0; }
   .role-home__navigation { grid-template-columns: repeat(2, minmax(0, 1fr)); }

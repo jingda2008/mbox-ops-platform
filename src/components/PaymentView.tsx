@@ -128,6 +128,9 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
   const canReportPayments = permissionIds.has('payment.pos_report')
   const canRequestRefund = permissionIds.has('payment.refund.request')
   const canApproveRefund = permissionIds.has('payment.refund.approve')
+  const canHandoverSettlement = permissionIds.has('finance.view')
+    || permissionIds.has('finance.manage')
+    || permissionIds.has('payment.pos_report')
   const currentActorRefundApprovalLimit = refundApprovalLimitForEmployee(data, currentActorId)
   const paymentSimulationEnabled = data.runtimeCapabilities?.paymentSimulation === true || import.meta.env.DEV
   const [busyAction, setBusyAction] = useState('')
@@ -183,6 +186,17 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
     ? posIntentId
     : (physicalPosIntents[0]?.id ?? '')
   const pendingRefunds = paymentDomain.refunds.filter((refund) => refund.status === 'requested')
+  const paymentWorkspaces = ([
+    ...(canCollectPayments ? [['collection', '收款', tableAccounts.filter((account) => account.collectableAmount > 0).length] as const] : []),
+    ...(canCollectPayments || canReportPayments || canRequestRefund || canApproveRefund
+      ? [['tracking', '支付追踪', paymentDomain.paymentIntents.length] as const]
+      : []),
+    ...(canRequestRefund || canApproveRefund ? [['refunds', '退款', pendingRefunds.length] as const] : []),
+    ...(canHandoverSettlement ? [['handover', '交班关账', settlement?.latestHandover ? 1 : 0] as const] : []),
+  ])
+  const effectiveActiveWorkspace = paymentWorkspaces.some(([id]) => id === activeWorkspace)
+    ? activeWorkspace
+    : (paymentWorkspaces[0]?.[0] ?? 'tracking')
   const confirmedGross = paymentDomain.paymentIntents
     .filter((intent) => intent.status === 'succeeded')
     .reduce((sum, intent) => sum + intent.amount, 0)
@@ -541,19 +555,14 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
       </section>
 
       <nav className="payment-workspace-tabs" aria-label="收银工作分类">
-        {([
-          ['collection', '收款', tableAccounts.filter((account) => account.collectableAmount > 0).length],
-          ['tracking', '支付追踪', paymentDomain.paymentIntents.length],
-          ['refunds', '退款', pendingRefunds.length],
-          ['handover', '交班关账', settlement?.latestHandover ? 1 : 0],
-        ] as const).map(([id, label, count]) => (
-          <button key={id} type="button" className={activeWorkspace === id ? 'is-active' : ''} aria-pressed={activeWorkspace === id} onClick={() => setActiveWorkspace(id)}>
+        {paymentWorkspaces.map(([id, label, count]) => (
+          <button key={id} type="button" className={effectiveActiveWorkspace === id ? 'is-active' : ''} aria-pressed={effectiveActiveWorkspace === id} onClick={() => setActiveWorkspace(id)}>
             {label}<span>{count}</span>
           </button>
         ))}
       </nav>
 
-      {activeWorkspace === 'collection' && <section className="cashier-section table-account-section">
+      {effectiveActiveWorkspace === 'collection' && <section className="cashier-section table-account-section">
         <SectionTitle icon={ReceiptText} eyebrow="按桌次归集" title="待收桌账与结台" meta={`${actionableAccounts.length}个待处理`} />
         <div className="table-account-filter">
           <span>{showAllAccounts ? `显示全部 ${tableAccounts.length} 个营业桌次` : '仅显示有订单、待收款或支付中的桌次'}</span>
@@ -677,8 +686,8 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
         </div>
       </section>}
 
-      {(activeWorkspace === 'collection' || activeWorkspace === 'tracking') && <div className="payment-work-grid is-single">
-        {activeWorkspace === 'tracking' && <section className="cashier-section intent-section">
+      {(effectiveActiveWorkspace === 'collection' || effectiveActiveWorkspace === 'tracking') && <div className="payment-work-grid is-single">
+        {effectiveActiveWorkspace === 'tracking' && <section className="cashier-section intent-section">
           <SectionTitle icon={Landmark} eyebrow="逐笔追踪商品分摊" title="支付意图" meta={`${paymentDomain.paymentIntents.length}笔`} />
           <div className="payment-intent-list">
             {paymentDomain.paymentIntents.length === 0 && <EmptyState icon={ReceiptText} text="尚未创建支付意图" />}
@@ -704,7 +713,7 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
           </div>
         </section>}
 
-        {activeWorkspace === 'collection' && <section className="cashier-section pos-section">
+        {effectiveActiveWorkspace === 'collection' && <section className="cashier-section pos-section">
           <SectionTitle icon={CreditCard} eyebrow="外部终端收款" title="物理POS人工报送" meta={`${physicalPosIntents.length}笔待报送`} />
           <div className="pos-guidance">
             <CircleAlert size={17} />
@@ -735,7 +744,7 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
         </section>}
       </div>}
 
-      {activeWorkspace === 'handover' && <section className="cashier-section settlement-section">
+      {effectiveActiveWorkspace === 'handover' && <section className="cashier-section settlement-section">
         <SectionTitle
           icon={CalendarCheck}
           eyebrow="收银提交 · 经理独立复核"
@@ -826,7 +835,7 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
         )}
       </section>}
 
-      {activeWorkspace === 'refunds' && <section className="cashier-section refund-section">
+      {effectiveActiveWorkspace === 'refunds' && <section className="cashier-section refund-section">
         <SectionTitle icon={RefreshCcw} eyebrow="按原支付商品追溯" title="商品退款与审批" meta={`${pendingRefunds.length}笔待审批`} />
         {refundDraft && (
           <form className="refund-request-form reveal-panel-target" ref={refundDraftRef} onSubmit={submitRefund}>

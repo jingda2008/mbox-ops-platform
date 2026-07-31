@@ -194,6 +194,15 @@ export function InventoryView() {
   const pendingCounts = inventory.stockCounts.filter((item) => item.status === 'pending_confirmation')
   const activeBottles = inventory.bottleBatches.filter((item) => ['stored', 'partially_used'].includes(item.status))
   const pendingApprovals = inventory.approvalRequests.filter((item) => item.status === 'pending')
+  const permissions = new Set(context.viewer?.permissionIds ?? [])
+  const canManageInventory = permissions.has('inventory.manage')
+  const canApproveInventory = permissions.has('inventory.approve')
+  const allowedTabs: InventoryTab[] = [
+    'overview',
+    ...(canManageInventory ? ['receipt', 'count', 'remake', 'bottles'] as InventoryTab[] : []),
+    ...(canApproveInventory ? ['recipes', 'approvals', 'policy'] as InventoryTab[] : []),
+  ]
+  const effectiveTab = allowedTabs.includes(tab) ? tab : 'overview'
 
   return (
     <section className="inventory-view">
@@ -221,22 +230,22 @@ export function InventoryView() {
       </div>
 
       <nav className="inventory-tabs" aria-label="库存功能">
-        <TabButton active={tab === 'overview'} icon={<Boxes size={16} />} label="库存总览" onClick={() => setTab('overview')} />
-        <TabButton active={tab === 'receipt'} icon={<PackageOpen size={16} />} label="入库" onClick={() => setTab('receipt')} />
-        <TabButton active={tab === 'count'} icon={<ClipboardList size={16} />} label="盘点" badge={pendingCounts.length} onClick={() => setTab('count')} />
-        <TabButton active={tab === 'recipes'} icon={<FlaskConical size={16} />} label="原料配方" onClick={() => setTab('recipes')} />
-        <TabButton active={tab === 'remake'} icon={<RotateCcw size={16} />} label="补做耗用" onClick={() => setTab('remake')} />
-        <TabButton active={tab === 'bottles'} icon={<Wine size={16} />} label="客存酒" onClick={() => setTab('bottles')} />
-        <TabButton active={tab === 'approvals'} icon={<ShieldAlert size={16} />} label="待审批" badge={pendingApprovals.length} onClick={() => setTab('approvals')} />
-        <TabButton active={tab === 'policy'} icon={<Settings2 size={16} />} label="库存配置" onClick={() => setTab('policy')} />
+        <TabButton active={effectiveTab === 'overview'} icon={<Boxes size={16} />} label="库存总览" onClick={() => setTab('overview')} />
+        {canManageInventory && <TabButton active={effectiveTab === 'receipt'} icon={<PackageOpen size={16} />} label="入库" onClick={() => setTab('receipt')} />}
+        {canManageInventory && <TabButton active={effectiveTab === 'count'} icon={<ClipboardList size={16} />} label="盘点" badge={pendingCounts.length} onClick={() => setTab('count')} />}
+        {canApproveInventory && <TabButton active={effectiveTab === 'recipes'} icon={<FlaskConical size={16} />} label="原料配方" onClick={() => setTab('recipes')} />}
+        {canManageInventory && <TabButton active={effectiveTab === 'remake'} icon={<RotateCcw size={16} />} label="补做耗用" onClick={() => setTab('remake')} />}
+        {canManageInventory && <TabButton active={effectiveTab === 'bottles'} icon={<Wine size={16} />} label="客存酒" onClick={() => setTab('bottles')} />}
+        {canApproveInventory && <TabButton active={effectiveTab === 'approvals'} icon={<ShieldAlert size={16} />} label="待审批" badge={pendingApprovals.length} onClick={() => setTab('approvals')} />}
+        {canApproveInventory && <TabButton active={effectiveTab === 'policy'} icon={<Settings2 size={16} />} label="库存配置" onClick={() => setTab('policy')} />}
       </nav>
 
-      {tab === 'overview' && <InventoryOverview inventory={inventory} products={products} rows={balanceRows} />}
-      {tab === 'receipt' && <ReceiptPanel inventory={inventory} items={inventoryItems} busy={busyAction} execute={execute} />}
-      {tab === 'count' && <StockCountPanel inventory={inventory} items={inventoryItems} employees={context.employees} busy={busyAction} execute={execute} />}
-      {tab === 'recipes' && <RecipePanel inventory={inventory} products={products} busy={busyAction} execute={execute} />}
-      {tab === 'remake' && <RemakePanel orders={context.orderDomain.orders} busy={busyAction} execute={execute} />}
-      {tab === 'bottles' && (
+      {effectiveTab === 'overview' && <InventoryOverview inventory={inventory} products={products} rows={balanceRows} />}
+      {effectiveTab === 'receipt' && <ReceiptPanel inventory={inventory} items={inventoryItems} busy={busyAction} execute={execute} />}
+      {effectiveTab === 'count' && <StockCountPanel inventory={inventory} items={inventoryItems} employees={context.employees} busy={busyAction} execute={execute} />}
+      {effectiveTab === 'recipes' && <RecipePanel inventory={inventory} products={products} busy={busyAction} execute={execute} />}
+      {effectiveTab === 'remake' && <RemakePanel orders={context.orderDomain.orders} busy={busyAction} execute={execute} />}
+      {effectiveTab === 'bottles' && (
         <BottlePanel
           inventory={inventory}
           products={products}
@@ -248,8 +257,8 @@ export function InventoryView() {
           execute={execute}
         />
       )}
-      {tab === 'approvals' && <ApprovalPanel approvals={inventory.approvalRequests} currentActorId={context.viewer?.actorId ?? currentActor()} busy={busyAction} execute={execute} />}
-      {tab === 'policy' && <PolicyPanel inventory={inventory} roles={context.config.roles} employees={context.employees} rows={balanceRows} busy={busyAction} execute={execute} />}
+      {effectiveTab === 'approvals' && <ApprovalPanel approvals={inventory.approvalRequests} currentActorId={context.viewer?.actorId ?? currentActor()} busy={busyAction} execute={execute} />}
+      {effectiveTab === 'policy' && <PolicyPanel inventory={inventory} roles={context.config.roles} employees={context.employees} rows={balanceRows} busy={busyAction} execute={execute} />}
     </section>
   )
 }

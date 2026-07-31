@@ -2,7 +2,6 @@ import {
   ArrowRight,
   Banknote,
   CalendarDays,
-  CheckCheck,
   CircleAlert,
   ChartNoAxesCombined,
   ContactRound,
@@ -44,6 +43,9 @@ const indicatorIcons: Record<RoleHomeIndicator, LucideIcon> = {
   config: Settings2,
   payments: Banknote,
   reservations: CalendarDays,
+  music: Music2,
+  devices: Cpu,
+  benefits: Gift,
 }
 
 const navigationIcons: Record<RoleHomeNavigationId, LucideIcon> = {
@@ -125,38 +127,31 @@ export function RoleHomeView({ data, employeeId, onNavigate }: RoleHomeViewProps
         })}
       </div>
 
-      <div className="role-home__work-grid">
-        <section className="role-home__section" aria-labelledby="role-home-todos">
+      <div className={`role-home__work-grid${remainingTodos.length === 0 ? ' has-navigation-only' : ''}`}>
+        {remainingTodos.length > 0 && <section className="role-home__section" aria-labelledby="role-home-todos">
           <div className="role-home__section-heading">
             <div><span>完成第一项后再看这里</span><h3 id="role-home-todos">接下来</h3></div>
             <b>{remainingTodos.reduce((sum, item) => sum + item.count, 0)}</b>
           </div>
-          {remainingTodos.length === 0 ? (
-            <div className="role-home__empty">
-              <CheckCheck size={23} aria-hidden="true" />
-              <strong>{primaryTodo ? '没有其他待办，先完成上面的事项' : '当前没有待处理事项'}</strong>
-            </div>
-          ) : (
-            <div className="role-home__todo-list">
-              {remainingTodos.map((item) => (
-                <button
-                  className={`role-home__todo is-${item.tone}`}
-                  key={item.id}
-                  type="button"
-                  onClick={() => onNavigate(item.navigationId, item.focusQuery)}
-                >
-                  <span className="role-home__todo-count">{item.count}</span>
-                  <span className="role-home__todo-copy"><strong>{item.label}</strong><small>{item.detail}</small></span>
-                  <ArrowRight size={17} aria-hidden="true" />
-                </button>
-              ))}
-            </div>
-          )}
-        </section>
+          <div className="role-home__todo-list">
+            {remainingTodos.map((item) => (
+              <button
+                className={`role-home__todo is-${item.tone}`}
+                key={item.id}
+                type="button"
+                onClick={() => onNavigate(item.navigationId, item.focusQuery)}
+              >
+                <span className="role-home__todo-count">{item.count}</span>
+                <span className="role-home__todo-copy"><strong>{item.label}</strong><small>{item.detail}</small></span>
+                <ArrowRight size={17} aria-hidden="true" />
+              </button>
+            ))}
+          </div>
+        </section>}
 
         <nav className="role-home__section" aria-labelledby="role-home-navigation">
           <div className="role-home__section-heading">
-            <div><span>{model.access.roleLabel}</span><h3 id="role-home-navigation">工作入口</h3></div>
+            <div><span>{model.access.roleLabel}</span><h3 id="role-home-navigation">常用入口</h3></div>
             <b>{model.navigation.length}</b>
           </div>
           <div className="role-home__navigation">

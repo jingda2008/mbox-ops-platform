@@ -214,7 +214,7 @@ function resolveTable(state: RuntimeState, claims: TableAccessClaims) {
 
 function resolveOpenTableSession(state: RuntimeState, table: Table) {
   if (table.status !== 'occupied') {
-    throw new TableAccessError('欢迎到店～这张桌子还没完成入座登记，请招呼迎宾伙伴帮您开台。', 'TABLE_SESSION_NOT_OPEN', 409)
+    throw new TableAccessError('欢迎来到 M-BOX～这张桌子暂未开台，请告诉身边的服务伙伴。', 'TABLE_SESSION_NOT_OPEN', 409)
   }
   const sessions = state.songState.tableSessions.filter(
     (candidate) => candidate.tableId === table.id && candidate.status === 'open',

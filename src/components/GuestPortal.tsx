@@ -4,7 +4,7 @@ import { ApiError, checkoutGuestOrder, createGuestOrder, createGuestSongRequest,
 import { PendingActionRegistry } from '../pending-action-registry'
 import type { GuestSessionResponse, GuestTaskView, WechatJsapiParameters } from '../shared/guest-contracts'
 import type { GuestBehaviorEventType, GuestBehaviorValue } from '../shared/guest-insight-contracts'
-import { GUEST_SONG_TERMINAL_DISPLAY_MS, formatGuestCompactCountdown, guestCustomSongServiceNote, guestErrorMessage, guestReplyNotice, guestSessionHistoryUrl, guestSongReplyNotice, guestSongStatusLabel, guestStageIsBeforeFirstSet, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks, type GuestReplyNotice } from './guest-portal-utils'
+import { GUEST_SONG_TERMINAL_DISPLAY_MS, formatGuestCompactCountdown, guestAccessPresentation, guestCustomSongServiceNote, guestErrorMessage, guestReplyNotice, guestSessionHistoryUrl, guestSongReplyNotice, guestSongStatusLabel, guestStageIsBeforeFirstSet, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks, type GuestReplyNotice } from './guest-portal-utils'
 import { serverClockOffset, useSecondClock } from './use-second-clock'
 import { MenuOrderingWorkspace, type MenuCartItem, type MenuSubmitOptions } from './MenuOrderingWorkspace'
 import { SuperHighCommunityBand } from './SuperHighCommunityBand'
@@ -164,6 +164,7 @@ export function GuestPortal() {
   const requestedPaymentOrderId = params.get('payOrder') ?? ''
   const [data, setData] = useState<GuestSessionResponse | null>(null)
   const [sessionAccessError, setSessionAccessError] = useState('')
+  const [sessionAccessCode, setSessionAccessCode] = useState('')
   const [note, setNote] = useState('')
   const [reply, setReply] = useState<GuestReplyNotice | null>(null)
   const [pendingActions, setPendingActions] = useState<ReadonlySet<string>>(() => new Set())
@@ -235,6 +236,7 @@ export function GuestPortal() {
       window.history.replaceState(window.history.state, '', guestSessionHistoryUrl(window.location.href, nextData.tableToken))
       setData(nextData)
       setSessionAccessError('')
+      setSessionAccessCode('')
       setReply((current) => reconcileGuestReply(current, nextData.tasks, nextData.songRequests))
       setTerminalSongSeenAt((current) => trackGuestSongTerminalStates(current, nextData.songRequests, Date.now()))
       setError((current) => current?.source === 'refresh' ? null : current)
@@ -252,6 +254,7 @@ export function GuestPortal() {
       ].includes(requestError.code)
       if (terminalAccessFailure) {
         setSessionAccessError(guestErrorMessage(requestError, '这次桌边服务已经结束，请重新扫描桌面二维码。'))
+        setSessionAccessCode(requestError instanceof ApiError ? requestError.code : '')
         setData(null)
       }
       setError({
@@ -585,7 +588,7 @@ export function GuestPortal() {
   }
 
   if (!data) {
-    const accessMessage = sessionAccessError || error?.message
+    const accessState = guestAccessPresentation(sessionAccessCode, sessionAccessError, error?.message ?? '')
     return <main className="guest-shell guest-shell--access-state">
       <header className="guest-header">
         <div className="guest-brand-lockup">
@@ -595,12 +598,12 @@ export function GuestPortal() {
         </div>
         <span className="secure-label" title="安全桌码"><ShieldCheck size={16} /><span>安全桌码</span></span>
       </header>
-      <section className={`guest-access-state${sessionAccessError ? ' is-blocked' : ''}`} role={sessionAccessError ? 'alert' : 'status'}>
-        {sessionAccessError ? <ShieldCheck size={28} aria-hidden="true" /> : <Clock3 size={28} aria-hidden="true" />}
+      <section className={`guest-access-state${accessState.blocked ? ' is-blocked' : ''}${accessState.waitingForTable ? ' is-waiting' : ''}`} role={accessState.blocked ? 'alert' : 'status'}>
+        {accessState.blocked ? <ShieldCheck size={28} aria-hidden="true" /> : <Clock3 size={28} aria-hidden="true" />}
         <div>
-          <strong>{sessionAccessError ? '请重新扫描桌面二维码' : accessMessage ? '正在重新连接' : '正在连接本桌服务'}</strong>
-          <p>{accessMessage || '正在读取本桌菜单、演出和服务信息，请稍候。'}</p>
-          {sessionAccessError && <span>关闭这个页面后，重新扫一下桌面上的固定二维码即可继续。</span>}
+          <strong>{accessState.title}</strong>
+          <p>{accessState.message}</p>
+          {accessState.note && <span>{accessState.note}</span>}
         </div>
       </section>
     </main>

@@ -5,6 +5,55 @@ export interface GuestReplyNotice {
   related?: { kind: 'task' | 'song'; id: string; status: string; updatedAt?: string }
 }
 
+export interface GuestAccessPresentation {
+  title: string
+  message: string
+  note: string
+  blocked: boolean
+  waitingForTable: boolean
+}
+
+export function guestAccessPresentation(
+  accessCode: string,
+  accessMessage: string,
+  transientMessage: string,
+): GuestAccessPresentation {
+  if (accessCode === 'TABLE_SESSION_NOT_OPEN') {
+    return {
+      title: '座位正在为您准备',
+      message: accessMessage || '欢迎来到 M-BOX～这张桌子暂未开台，请告诉身边的服务伙伴。',
+      note: '无需重新扫码，开台完成后会自动进入菜单。',
+      blocked: false,
+      waitingForTable: true,
+    }
+  }
+  if (accessMessage) {
+    return {
+      title: '请重新扫描桌面二维码',
+      message: accessMessage,
+      note: '关闭这个页面后，重新扫一下桌面上的固定二维码即可继续。',
+      blocked: true,
+      waitingForTable: false,
+    }
+  }
+  if (transientMessage) {
+    return {
+      title: '正在重新连接',
+      message: transientMessage,
+      note: '',
+      blocked: false,
+      waitingForTable: false,
+    }
+  }
+  return {
+    title: '正在连接本桌服务',
+    message: '正在读取本桌菜单、演出和服务信息，请稍候。',
+    note: '',
+    blocked: false,
+    waitingForTable: false,
+  }
+}
+
 export function guestReplyNotice(message: string): GuestReplyNotice {
   return { message }
 }

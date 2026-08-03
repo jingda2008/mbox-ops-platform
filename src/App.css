@@ -1011,6 +1011,9 @@ html.staff-phone-device .app-shell > .nav-backdrop { display: block; }
 .guest-access-state strong { color: var(--ink); font-size: 18px; }
 .guest-access-state p { color: #596158; font-size: 13px; line-height: 1.55; }
 .guest-access-state span { color: #8a3338; font-size: 12px; font-weight: 750; line-height: 1.55; }
+.guest-access-state.is-waiting { border-color: #e3d5a5; border-left: 4px solid var(--brand-yellow); background: #fffdf6; }
+.guest-access-state.is-waiting > svg { color: #8a6b18; }
+.guest-access-state.is-waiting span { color: #6f5b1b; }
 .guest-access-state.is-blocked { border-color: #e6c2c5; border-left: 5px solid var(--brand-red); background: #fffafa; }
 .guest-access-state.is-blocked > svg { color: var(--brand-red); }
 .guest-tabs { min-height: 56px; position: sticky; top: 0; z-index: 14; display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--line); background: rgba(255, 255, 255, .97); box-shadow: 0 3px 10px rgba(24, 28, 22, .07); }

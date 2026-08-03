@@ -31,16 +31,21 @@ if (base) {
 }
 
 const result = classifyChangedPaths(paths, { forceFull })
+const releaseArtifactRequired = ref.startsWith('refs/tags/v') || event === 'workflow_dispatch'
 const githubOutput = option('github-output') ?? process.env.GITHUB_OUTPUT
 if (githubOutput) {
   await appendFile(githubOutput, [
     `scope=${result.scope}`,
     `docs_only=${String(result.docsOnly)}`,
+    `ui_only=${String(result.uiOnly)}`,
+    `frontend_only=${String(result.frontendOnly)}`,
+    `fast=${String(result.fast)}`,
     `full=${String(result.full)}`,
     `migration_changed=${String(result.migrationChanged)}`,
+    `release_artifact_required=${String(releaseArtifactRequired)}`,
     `reason=${result.reason}`,
     '',
   ].join('\n'))
 }
 
-process.stdout.write(`${JSON.stringify({ base: base ?? null, head, event, ref, ...result }, null, 2)}\n`)
+process.stdout.write(`${JSON.stringify({ base: base ?? null, head, event, ref, releaseArtifactRequired, ...result }, null, 2)}\n`)

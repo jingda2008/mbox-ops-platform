@@ -5,6 +5,7 @@ on:
   pull_request:
   push:
     branches: [main]
+    tags: ['v*']
 
 permissions:
   contents: read
@@ -20,8 +21,12 @@ jobs:
     outputs:
       scope: ${{ steps.scope.outputs.scope }}
       docs_only: ${{ steps.scope.outputs.docs_only }}
+      ui_only: ${{ steps.scope.outputs.ui_only }}
+      frontend_only: ${{ steps.scope.outputs.frontend_only }}
+      fast: ${{ steps.scope.outputs.fast }}
       full: ${{ steps.scope.outputs.full }}
       migration_changed: ${{ steps.scope.outputs.migration_changed }}
+      release_artifact_required: ${{ steps.scope.outputs.release_artifact_required }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -77,8 +82,56 @@ jobs:
       - name: Run code, unit, metadata and production-build checks
         run: npm run check
 
+  fast_quality:
+    if: needs.classify.outputs.fast == 'true'
+    needs: classify
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+      - name: Run deterministic frontend checks and production build
+        run: npm run check
+
+  ui_browser:
+    if: needs.classify.outputs.ui_only == 'true'
+    needs: classify
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+      - name: Install Playwright system dependencies
+        run: npx playwright install-deps chromium
+      - if: steps.playwright-cache.outputs.cache-hit != 'true'
+        name: Install Playwright Chromium
+        run: npx playwright install chromium
+      - name: Run targeted mobile UI smoke
+        run: npm run test:e2e:smoke
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-ui-smoke-failure-${{ github.sha }}
+          path: artifacts/playwright
+          retention-days: 7
+
   browser:
-    if: needs.classify.outputs.scope == 'full'
+    if: needs.classify.outputs.scope == 'full' || needs.classify.outputs.frontend_only == 'true'
     needs: classify
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -159,7 +212,7 @@ jobs:
           DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
 
   image:
-    if: needs.classify.outputs.scope == 'full'
+    if: needs.classify.outputs.full == 'true' && needs.classify.outputs.release_artifact_required == 'true'
     needs: classify
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -188,8 +241,7 @@ jobs:
             MBOX_RELEASE_VERSION=${{ steps.metadata.outputs.version }}
           cache-from: type=gha,scope=mbox-runtime
           cache-to: type=gha,mode=max,scope=mbox-runtime
-      - if: github.event_name != 'pull_request'
-        name: Package immutable deployment bundle
+      - name: Package immutable deployment bundle
         env:
           IMAGE_TAG: ${{ steps.metadata.outputs.image_tag }}
           VERSION: ${{ steps.metadata.outputs.version }}
@@ -213,8 +265,7 @@ jobs:
             cd release-artifact
             sha256sum "$(basename "${archive}")" > "$(basename "${archive}").sha256"
           )
-      - if: github.event_name != 'pull_request'
-        name: Upload the exact image used by validation and deployment
+      - name: Upload the exact image used by validation and deployment
         uses: actions/upload-artifact@v4
         with:
           name: mbox-image-${{ github.sha }}
@@ -224,7 +275,7 @@ jobs:
 
   verify:
     if: always()
-    needs: [classify, docs, quality, browser, database, image]
+    needs: [classify, docs, quality, fast_quality, ui_browser, browser, database, image]
     runs-on: ubuntu-latest
     steps:
       - name: Enforce the selected release gate
@@ -233,21 +284,49 @@ jobs:
           CLASSIFY_RESULT: ${{ needs.classify.result }}
           DOCS_RESULT: ${{ needs.docs.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
+          FAST_QUALITY_RESULT: ${{ needs.fast_quality.result }}
+          UI_BROWSER_RESULT: ${{ needs.ui_browser.result }}
           BROWSER_RESULT: ${{ needs.browser.result }}
           DATABASE_RESULT: ${{ needs.database.result }}
           IMAGE_RESULT: ${{ needs.image.result }}
+          RELEASE_ARTIFACT_REQUIRED: ${{ needs.classify.outputs.release_artifact_required }}
         run: |
           test "${CLASSIFY_RESULT}" = success
           if [ "${SCOPE}" = docs ]; then
             test "${DOCS_RESULT}" = success
             test "${QUALITY_RESULT}" = skipped
+            test "${FAST_QUALITY_RESULT}" = skipped
+            test "${UI_BROWSER_RESULT}" = skipped
             test "${BROWSER_RESULT}" = skipped
+            test "${DATABASE_RESULT}" = skipped
+            test "${IMAGE_RESULT}" = skipped
+          elif [ "${SCOPE}" = ui ]; then
+            test "${DOCS_RESULT}" = skipped
+            test "${QUALITY_RESULT}" = skipped
+            test "${FAST_QUALITY_RESULT}" = success
+            test "${UI_BROWSER_RESULT}" = success
+            test "${BROWSER_RESULT}" = skipped
+            test "${DATABASE_RESULT}" = skipped
+            test "${IMAGE_RESULT}" = skipped
+          elif [ "${SCOPE}" = frontend ]; then
+            test "${DOCS_RESULT}" = skipped
+            test "${QUALITY_RESULT}" = skipped
+            test "${FAST_QUALITY_RESULT}" = success
+            test "${UI_BROWSER_RESULT}" = skipped
+            test "${BROWSER_RESULT}" = success
             test "${DATABASE_RESULT}" = skipped
             test "${IMAGE_RESULT}" = skipped
           else
             test "${SCOPE}" = full
+            test "${DOCS_RESULT}" = skipped
             test "${QUALITY_RESULT}" = success
+            test "${FAST_QUALITY_RESULT}" = skipped
+            test "${UI_BROWSER_RESULT}" = skipped
             test "${BROWSER_RESULT}" = success
             test "${DATABASE_RESULT}" = success
-            test "${IMAGE_RESULT}" = success
+            if [ "${RELEASE_ARTIFACT_REQUIRED}" = true ]; then
+              test "${IMAGE_RESULT}" = success
+            else
+              test "${IMAGE_RESULT}" = skipped
+            fi
           fi

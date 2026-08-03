@@ -15,7 +15,7 @@ concurrency:
 jobs:
   publish-pre-release:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
         with:
@@ -26,14 +26,15 @@ jobs:
           version=$(node -p "require('./package.json').version")
           test "${GITHUB_REF_NAME}" = "v${version}"
       - id: verified-run
-        name: Reuse the successful main CI image
+        name: Reuse the successful tag CI image
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           run_id=
-          for _ in $(seq 1 60); do
+          for _ in $(seq 1 90); do
             run_id=$(gh run list \
               --workflow ci.yml \
+              --branch "${GITHUB_REF_NAME}" \
               --commit "${GITHUB_SHA}" \
               --event push \
               --json databaseId,status,conclusion,headSha \

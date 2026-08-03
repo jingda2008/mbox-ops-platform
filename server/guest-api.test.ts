@@ -713,6 +713,8 @@ describe('guest table API', () => {
     const response = (await exchange(app, staticQr(now(), 'mbox-lujiazui', 'L04'))).response
     expect(response.statusCode).toBe(409)
     expect(response.json().code).toBe('TABLE_SESSION_NOT_OPEN')
+    expect(response.json().message).toContain('暂未开台')
+    expect(response.json().message).not.toContain('重新扫')
     await closeFixture(app, repository)
   })
 

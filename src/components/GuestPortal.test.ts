@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { GuestTaskView } from '../shared/guest-contracts'
-import { formatGuestCompactCountdown, formatGuestCountdown, guestCustomSongServiceNote, guestErrorMessage, guestReplyNotice, guestSessionHistoryUrl, guestSongReplyNotice, guestSongStatusLabel, guestStageIsBeforeFirstSet, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks } from './guest-portal-utils'
+import { formatGuestCompactCountdown, formatGuestCountdown, guestAccessPresentation, guestCustomSongServiceNote, guestErrorMessage, guestReplyNotice, guestSessionHistoryUrl, guestSongReplyNotice, guestSongStatusLabel, guestStageIsBeforeFirstSet, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks } from './guest-portal-utils'
 
 function guestTask(status: GuestTaskView['status'], id = `task-${status}`): GuestTaskView {
   return {
@@ -173,5 +173,37 @@ describe('guest-facing error copy', () => {
 
   it('preserves an already humanized server message', () => {
     expect(guestErrorMessage(new Error('这张桌子的服务还没接上，请招呼身边伙伴。'), '稍后再试')).toBe('这张桌子的服务还没接上，请招呼身边伙伴。')
+  })
+})
+
+describe('guest table access state', () => {
+  it('treats an unopened table as a waiting state without asking the guest to rescan', () => {
+    const presentation = guestAccessPresentation(
+      'TABLE_SESSION_NOT_OPEN',
+      '欢迎来到 M-BOX～这张桌子暂未开台，请告诉身边的服务伙伴。',
+      '',
+    )
+
+    expect(presentation).toMatchObject({
+      title: '座位正在为您准备',
+      blocked: false,
+      waitingForTable: true,
+    })
+    expect(`${presentation.title}${presentation.message}${presentation.note}`).not.toContain('重新扫描')
+    expect(presentation.note).toContain('自动进入菜单')
+  })
+
+  it('keeps expired or invalid table access visibly blocked and asks for a fresh scan', () => {
+    const presentation = guestAccessPresentation(
+      'GUEST_SESSION_EXPIRED',
+      '这次桌边服务已经结束。',
+      '',
+    )
+
+    expect(presentation).toMatchObject({
+      title: '请重新扫描桌面二维码',
+      blocked: true,
+      waitingForTable: false,
+    })
   })
 })

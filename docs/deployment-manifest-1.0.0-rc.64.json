@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "deployedAt": "2026-08-03T07:48:28Z",
+  "tier": "validation",
+  "platform": "aliyun-ecs",
+  "publicUrl": "https://139.224.254.60",
+  "releaseVersion": "1.0.0-rc.64",
+  "releaseTag": "v1.0.0-rc.64",
+  "releaseSha": "b6f3c69e6e5852cd60f0152be109922ebda7a554",
+  "releaseImage": "mbox-ops:1.0.0-rc.64-b6f3c69",
+  "releaseImageDigest": "sha256:4779325a55e434926d21cc023ff9f3bf3d2d8adb9800279712565af17d4b2854",
+  "serverLoadedImageId": "sha256:7e955c2d60ef6599f667a8ae01860201bbacec22baeb3855f0ddef89e9fb9bee",
+  "archiveSha256": "88069153eac286df2061253150948c6872312d7e489bfdf2501e4e8614e45ebd",
+  "migrationDigest": "sha256:7288e6396bedf26d1382efd33c425ae3d21844b0582a7e2e04dc4d8265503896",
+  "migrationChanged": false,
+  "databaseBackup": "/opt/mbox/backups/mbox-20260803-154540.dump",
+  "rollbackContainer": "mbox-app-rollback-b6f3c69-20260803-154828",
+  "ciRun": 30794312794,
+  "releaseRun": 30794313079
+}

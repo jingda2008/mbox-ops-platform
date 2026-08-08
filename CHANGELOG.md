@@ -8,6 +8,7 @@
 - Made repeated service completion and KDS completion from another device converge on the existing terminal state without duplicate events or fulfillment.
 - Aligned the guest behavior database constraint with every application event type, including quick-select, recommendation-update and cart-abandonment events.
 - Removed guest credentials from new QR query strings, exchanged sessions through POST bodies and added application plus Caddy access-log redaction.
+- Refreshed the production dependency lock for patched `brace-expansion` and `fast-uri` releases identified by the GitHub Actions security gate.
 - Added PostgreSQL queue, error classification, redaction, QR contract, event contract, semantic idempotency, browser and load regression coverage.
 
 ## 1.0.0-rc.64 - 2026-07-31

@@ -21,17 +21,19 @@ export function projectServiceTask(task: ServiceTask, action: TaskActionInput['a
 
 export function projectKdsTask(task: KdsTask, action: KdsActionInput['action'], actorId: string, now: string): KdsTask {
   const completeAndDeliver = action === 'completeAndDeliver'
+  const pickupAndDeliver = action === 'pickupAndDeliver'
+  const completed = action === 'complete' || completeAndDeliver
   return {
     ...task,
     status: action === 'start' ? 'preparing' : action === 'complete' ? 'completed' : action === 'pickUp' ? 'picked_up' : 'delivered',
     startedAt: action === 'start' ? now : task.startedAt,
     startedBy: action === 'start' ? actorId : task.startedBy,
-    completedAt: action === 'complete' || completeAndDeliver ? now : task.completedAt,
-    completedBy: action === 'complete' || completeAndDeliver ? actorId : task.completedBy,
-    pickedUpAt: action === 'pickUp' || completeAndDeliver ? now : task.pickedUpAt,
-    pickedUpBy: action === 'pickUp' || completeAndDeliver ? actorId : task.pickedUpBy,
-    deliveredAt: action === 'deliver' || completeAndDeliver ? now : task.deliveredAt,
-    deliveredBy: action === 'deliver' || completeAndDeliver ? actorId : task.deliveredBy,
+    completedAt: completed ? now : task.completedAt,
+    completedBy: completed ? actorId : task.completedBy,
+    pickedUpAt: action === 'pickUp' || completeAndDeliver || pickupAndDeliver ? now : task.pickedUpAt,
+    pickedUpBy: action === 'pickUp' || completeAndDeliver || pickupAndDeliver ? actorId : task.pickedUpBy,
+    deliveredAt: action === 'deliver' || completeAndDeliver || pickupAndDeliver ? now : task.deliveredAt,
+    deliveredBy: action === 'deliver' || completeAndDeliver || pickupAndDeliver ? actorId : task.deliveredBy,
   }
 }
 

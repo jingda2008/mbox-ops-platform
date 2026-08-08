@@ -59,7 +59,7 @@ test.describe('客人推荐销售路径', () => {
   })
 
   test('过期桌次不再显示可点击的空菜单', async ({ page }) => {
-    await page.route('**/api/guest/session?*', async (route) => {
+    await page.route('**/api/guest/session*', async (route) => {
       await route.fulfill({
         status: 401,
         contentType: 'application/json',
@@ -70,7 +70,7 @@ test.describe('客人推荐销售路径', () => {
       })
     })
     await page.setViewportSize({ width: 430, height: 932 })
-    await page.goto('/guest?token=expired-session')
+    await page.goto('/guest#token=expired-session')
 
     await expect(page.getByRole('alert')).toContainText('请重新扫描桌面二维码')
     await expect(page.getByTestId('guest-menu-view-drinks')).toHaveCount(0)
@@ -80,7 +80,7 @@ test.describe('客人推荐销售路径', () => {
 
   test('已打开的菜单在桌次失效后立即收起旧商品', async ({ page }) => {
     let expireSession = false
-    await page.route('**/api/guest/session?*', async (route) => {
+    await page.route('**/api/guest/session*', async (route) => {
       if (!expireSession) {
         await route.continue()
         return

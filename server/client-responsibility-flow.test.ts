@@ -101,8 +101,9 @@ async function buildFixture() {
 }
 
 async function guestSession(app: FastifyInstance, tableCode: string, token = '') {
-  const query = token ? `token=${encodeURIComponent(token)}` : `table=${encodeURIComponent(tableCode)}`
-  const response = await app.inject({ method: 'GET', url: `/api/guest/session?${query}` })
+  const response = token
+    ? await app.inject({ method: 'POST', url: '/api/guest/session', payload: { token } })
+    : await app.inject({ method: 'GET', url: `/api/guest/session?table=${encodeURIComponent(tableCode)}` })
   expect(response.statusCode, response.body).toBe(200)
   return response.json() as GuestSessionResponse
 }

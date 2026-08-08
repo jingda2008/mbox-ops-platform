@@ -15,6 +15,7 @@ import {
 } from '../src/shared/contracts.js'
 import { requireConfiguredOperation, requireTableDataScope, requireTableResponsibility } from './authorization.js'
 import type { RuntimeRepository } from './repository.js'
+import { BusinessRuleError } from './business-rule-error.js'
 import {
   activeTableCombinationLinks,
   currentOpenTableSession,
@@ -27,8 +28,6 @@ import {
   tableSessionSummary,
 } from './table-sessions.js'
 import { startAwaitingOrder, stopAwaitingOrder } from './proactive-service.js'
-import { mutateReservationState, reservationsFor } from './reservation-api.js'
-import { confirmReservation, createReservation, markReservationArrived, seatReservation } from './reservation-domain.js'
 import {
   isKdsTaskOperationallyClosed,
   isSongRequestOperationallyClosed,
@@ -104,13 +103,12 @@ export function openWalkInTableSession(
     if (replay.objectId !== tableId) throw new Error('幂等键已用于其他桌台')
     const table = state.tables.find((candidate) => candidate.id === tableId)
     const session = state.songState.tableSessions.find((candidate) => candidate.id === replay.details.tableSessionId)
-    const reservation = reservationsFor(state).reservations.find((candidate) => candidate.id === replay.details.reservationId)
-    if (!table || !session || !reservation) throw new Error('临客开台幂等记录不完整')
-    return { table, reservation, summary: tableSessionSummary(state, session), replayed: true }
+    if (!table || !session) throw new Error('临客开台幂等记录不完整')
+    return { table, walkInId: replay.details.walkInId, summary: tableSessionSummary(state, session), replayed: true }
   }
   const readiness = assertTablePrimaryReady(state, tableId, actorId, options.allowOfflineLocalActor)
   const table = readiness.table
-  if (table.status !== 'available') throw new Error('只有空桌可以临客开台')
+  if (table.status !== 'available') throw new BusinessRuleError('只有空桌可以临客开台', 'TABLE_ALREADY_OPEN')
   const extraSeatCount = Math.max(0, input.partySize - table.capacity)
   if (readiness.reassignedFrom) {
     state.auditEntries.push({
@@ -123,58 +121,19 @@ export function openWalkInTableSession(
       details: { fromEmployeeId: readiness.reassignedFrom, toEmployeeId: readiness.reassignedTo, reason: 'walk_in_open_primary_unavailable' },
     })
   }
-  const reservationId = `walk-in:${randomUUID()}`
-  const customerReference = input.customerReference ?? reservationId
-  const walkInAreaPreferenceCode = reservationsFor(state).config.areaPreferences
-    .find((preference) => preference.code === table.areaId && preference.enabled)?.code
-  const reservation = mutateReservationState(state, (domain) => {
-    createReservation(domain, {
-      reservationId,
-      customerReference,
-      customerName: input.customerName,
-      contactReference: customerReference,
-      sourceCode: 'walk_in',
-      partySize: input.partySize,
-      // The physical table area is recorded when the guest is seated. A walk-in
-      // must not be blocked merely because that area is hidden from reservations.
-      areaPreferenceCode: walkInAreaPreferenceCode,
-      scheduledAt: occurredAt,
-      depositRequiredAmount: 0,
-      depositCurrency: 'CNY',
-      actorId,
-      occurredAt,
-      idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'create'),
-    })
-    confirmReservation(domain, {
-      reservationId, actorId, occurredAt,
-      idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'confirm'),
-    })
-    markReservationArrived(domain, {
-      reservationId, actorId, occurredAt,
-      idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'arrive'),
-    })
-    const session = openTableSession(state, table, occurredAt, {
-      source: 'walk_in',
-      sourceId: reservationId,
-      guestCount: input.partySize,
-      recommendationScene: input.recommendationScene,
-    })
-    return seatReservation(domain, {
-      reservationId, actorId, occurredAt, tableId: table.id, tableCode: table.code,
-      tableSessionId: session.id, idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'seat'),
-    })
+  const walkInId = `walk-in:${randomUUID()}`
+  const customerReference = input.customerReference ?? walkInId
+  const session = openTableSession(state, table, occurredAt, {
+    source: 'walk_in',
+    sourceId: walkInId,
+    guestCount: input.partySize,
+    recommendationScene: input.recommendationScene,
   })
-  const session = currentOpenTableSession(state, table.id)
   table.status = 'occupied'
   table.guestCount = input.partySize
   table.openedAt = occurredAt
   recordSalesAttribution(state, {
-    subjectType: 'reservation', subjectId: reservation.id, salesEmployeeId: input.salesEmployeeId,
-    actorId, reason: '临客开台指定销售', occurredAt,
-    idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'reservation-sales'),
-  })
-  recordSalesAttribution(state, {
-    subjectType: 'walk_in', subjectId: reservation.id, salesEmployeeId: input.salesEmployeeId,
+    subjectType: 'walk_in', subjectId: walkInId, salesEmployeeId: input.salesEmployeeId,
     actorId, reason: '临客开台指定销售', occurredAt,
     idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'walkin-sales'),
   })
@@ -184,7 +143,7 @@ export function openWalkInTableSession(
     idempotencyKey: childIdempotencyKey(input.idempotencyKey, 'session-sales'),
   })
   if (state.config.proactiveOrderCare.enabled) {
-    startAwaitingOrder(state, table.id, actorId, `walk-in-open:${reservation.id}`, new Date(occurredAt))
+    startAwaitingOrder(state, table.id, actorId, `walk-in-open:${walkInId}`, new Date(occurredAt))
   }
   state.auditEntries.push({
     id: `audit_${randomUUID()}`,
@@ -194,8 +153,10 @@ export function openWalkInTableSession(
     objectId: table.id,
     occurredAt,
     details: {
-      reservationId: reservation.id,
+      walkInId,
       tableSessionId: session.id,
+      customerReference,
+      customerName: input.customerName,
       guestCount: input.partySize,
       tableCapacity: table.capacity,
       extraSeatCount,
@@ -205,7 +166,7 @@ export function openWalkInTableSession(
     },
   })
   state.revision += 1
-  return { table, reservation, summary: tableSessionSummary(state, session), replayed: false }
+  return { table, walkInId, summary: tableSessionSummary(state, session), replayed: false }
 }
 
 function validateTableOperationsConfig(state: RuntimeState, rules: ReturnType<typeof tableOperationsConfigInputSchema.parse>['minimumSpendRules']) {
@@ -393,26 +354,26 @@ function assertSessionCanClose(state: RuntimeState, tableSessionId: string) {
   const openKds = state.orderDomain.kdsTasks.filter((task) =>
     task.tableSessionId === tableSessionId && !isKdsTaskOperationallyClosed(state.orderDomain, task),
   )
-  if (openKds.length > 0) throw new Error(`仍有${openKds.length}项商品未送达，不能结台`)
+  if (openKds.length > 0) throw new BusinessRuleError(`仍有${openKds.length}项商品未送达，不能结台`, 'TABLE_KDS_OPEN')
 
   const lockedBenefits = state.benefitRedemptions.filter((item) =>
     item.tableSessionId === tableSessionId && item.status === 'locked',
   )
-  if (lockedBenefits.length > 0) throw new Error(`仍有${lockedBenefits.length}项权益锁定未处理，不能结台`)
+  if (lockedBenefits.length > 0) throw new BusinessRuleError(`仍有${lockedBenefits.length}项权益锁定未处理，不能结台`, 'TABLE_BENEFITS_LOCKED')
 
   const pendingRefunds = state.paymentDomain.refunds.filter((refund) =>
     refund.tableSessionId === tableSessionId && pendingRefundStatuses.has(refund.status),
   )
-  if (pendingRefunds.length > 0) throw new Error(`仍有${pendingRefunds.length}笔退款处理中，不能结台`)
+  if (pendingRefunds.length > 0) throw new BusinessRuleError(`仍有${pendingRefunds.length}笔退款处理中，不能结台`, 'TABLE_REFUND_PENDING')
 
   const activeSongs = state.songState.requests.filter((request) => (
     request.tableSessionId === tableSessionId && !isSongRequestOperationallyClosed(request)
   ))
-  if (activeSongs.length > 0) throw new Error(`仍有${activeSongs.length}首点歌未完成或退款未结，不能结台`)
+  if (activeSongs.length > 0) throw new BusinessRuleError(`仍有${activeSongs.length}首点歌未完成或退款未结，不能结台`, 'TABLE_SONG_OPEN')
 
   const orders = state.orderDomain.orders.filter((order) => order.tableSessionId === tableSessionId)
   if (orders.some((order) => ['draft', 'authorization_pending'].includes(order.status))) {
-    throw new Error('桌次仍有草稿或待授权订单，不能结台')
+    throw new BusinessRuleError('桌次仍有草稿或待授权订单，不能结台', 'TABLE_ORDER_OPEN')
   }
   const confirmedIntents = state.paymentDomain.paymentIntents.filter((intent) =>
     intent.tableSessionId === tableSessionId && confirmedPaymentStatuses.has(intent.status),
@@ -440,7 +401,10 @@ function assertSessionCanClose(state: RuntimeState, tableSessionId: string) {
         !Number.isSafeInteger(payableAmount) || !Number.isSafeInteger(netPaidAmount) ||
         netPaidAmount !== netPayableAmount
       ) {
-        throw new Error(`商品“${item.name}”尚未完成收款：实付${netPaidAmount}分，应付${netPayableAmount}分，不能结台`)
+        throw new BusinessRuleError(
+          `商品“${item.name}”尚未完成收款：实付${netPaidAmount}分，应付${netPayableAmount}分，不能结台`,
+          'TABLE_UNPAID_ITEMS',
+        )
       }
     }
   }
@@ -769,19 +733,19 @@ export function registerTableSessionRoutes(app: FastifyInstance, repository: Run
         entry.action === 'table.closed.v1' && entry.details.idempotencyKey === input.idempotencyKey,
       )
       if (replay) {
-        if (replay.objectId !== request.params.tableId) throw new Error('幂等键已用于其他桌台')
+        if (replay.objectId !== request.params.tableId) throw new BusinessRuleError('幂等键已用于其他桌台', 'TABLE_IDEMPOTENCY_CONFLICT')
         return state.tables.find((table) => table.id === request.params.tableId)
       }
       const table = state.tables.find((item) => item.id === request.params.tableId)
-      if (!table || table.status !== 'occupied') throw new Error('只有营业中的桌台可以结台')
+      if (!table || table.status !== 'occupied') throw new BusinessRuleError('只有营业中的桌台可以结台', 'TABLE_NOT_OCCUPIED')
       const session = currentOpenTableSession(state, table.id)
       const combinations = currentCombinationForTable(state, table.id)
-      if (combinations.length > 0) throw new Error('桌台仍在合台/加桌关系中，请先拆回再结台')
+      if (combinations.length > 0) throw new BusinessRuleError('桌台仍在合台/加桌关系中，请先拆回再结台', 'TABLE_COMBINATION_OPEN')
       assertSessionCanClose(state, session.id)
       const summary = tableSessionSummary(state, session)
       if (summary.differenceAmount > 0) {
         if (!input.minimumSpendWaiver) {
-          throw new Error(`当前消费${summary.spendAmount}分，距低消还差${summary.differenceAmount}分；需要经理填写原因后豁免`)
+          throw new BusinessRuleError(`当前消费${summary.spendAmount}分，距低消还差${summary.differenceAmount}分；需要经理填写原因后豁免`, 'TABLE_MINIMUM_SPEND_NOT_MET')
         }
         if (!['manager', 'operations_director', 'owner'].includes(actor.roleId)) throw new Error('只有店长、运营负责人或老板可以豁免低消差额')
         state.auditEntries.push({

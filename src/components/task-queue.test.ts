@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { ServiceTask } from '../shared/contracts'
-import { taskMatchesQueueFilter, taskQueueFilterForQuery, taskRepeatSummary } from './task-queue'
+import { compareTaskQueueItems, taskMatchesQueueFilter, taskQueueFilterForQuery, taskRepeatSummary } from './task-queue'
+import type { ServiceTypeConfig } from '../shared/contracts'
+import { stabilizeOperationalOrder } from './stable-operational-order'
 
 const now = Date.parse('2026-07-21T12:00:00.000Z')
 
@@ -65,5 +67,44 @@ describe('task repeat request summary', () => {
 
   it('does not add repeat noise for a single request', () => {
     expect(taskRepeatSummary(task(), now)).toBeNull()
+  })
+})
+
+describe('task queue operating priority', () => {
+  const serviceTypes = new Map<string, ServiceTypeConfig>([
+    ['delivery', { id: 'delivery', code: 'FULFILLMENT_DELIVERY' } as ServiceTypeConfig],
+    ['water', { id: 'water', code: 'WATER' } as ServiceTypeConfig],
+  ])
+
+  it('puts risks first, then own and backup delivery work', () => {
+    const ownDelivery = task({ id: 'own-delivery', serviceTypeId: 'delivery', ownerId: 'employee-tom', warningAt: '2026-07-21T12:05:00.000Z' })
+    const backupDelivery = task({ id: 'backup-delivery', serviceTypeId: 'delivery', warningAt: '2026-07-21T12:04:00.000Z' })
+    const ownService = task({ id: 'own-service', ownerId: 'employee-tom', warningAt: '2026-07-21T12:03:00.000Z' })
+    const risk = task({ id: 'risk', priority: 'urgent', warningAt: '2026-07-21T12:10:00.000Z' })
+    const claimable = new Set(['backup-delivery'])
+    const sorted = [ownService, backupDelivery, ownDelivery, risk].toSorted((left, right) => (
+      compareTaskQueueItems(left, right, serviceTypes, 'employee-tom', claimable, now)
+    ))
+    expect(sorted.map((item) => item.id)).toEqual(['risk', 'own-delivery', 'backup-delivery', 'own-service'])
+  })
+
+  it('keeps the earliest deadline first inside the same group', () => {
+    const later = task({ id: 'later', serviceTypeId: 'delivery', ownerId: 'employee-tom', warningAt: '2026-07-21T12:09:00.000Z' })
+    const earlier = task({ id: 'earlier', serviceTypeId: 'delivery', ownerId: 'employee-tom', warningAt: '2026-07-21T12:03:00.000Z' })
+    const sorted = [later, earlier].toSorted((left, right) => (
+      compareTaskQueueItems(left, right, serviceTypes, 'employee-tom', new Set(), Date.parse('2026-07-21T11:50:00.000Z'))
+    ))
+    expect(sorted.map((item) => item.id)).toEqual(['earlier', 'later'])
+  })
+
+  it('does not move an operating task when another task crosses its SLA deadline', () => {
+    const operating = task({ id: 'operating', warningAt: '2026-07-21T12:10:00.000Z' })
+    const crossing = task({ id: 'crossing', warningAt: '2026-07-21T12:00:30.000Z' })
+    const before = [operating, crossing]
+    const afterClockTick = [crossing, operating]
+    expect(stabilizeOperationalOrder(afterClockTick, before.map((item) => item.id), new Set(['operating']))
+      .map((item) => item.id)).toEqual(['operating', 'crossing'])
+    expect(stabilizeOperationalOrder(afterClockTick, before.map((item) => item.id), new Set())
+      .map((item) => item.id)).toEqual(['crossing', 'operating'])
   })
 })

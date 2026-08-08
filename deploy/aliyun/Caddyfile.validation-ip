@@ -1,26 +1,39 @@
 {
-  default_sni 139.224.254.60
+	default_sni 139.224.254.60
 }
 
 https://139.224.254.60 {
-  tls {
-    issuer acme {
-      dir https://acme-v02.api.letsencrypt.org/directory
-      profile shortlived
-    }
-  }
+	tls {
+		issuer acme {
+			dir https://acme-v02.api.letsencrypt.org/directory
+			profile shortlived
+		}
+	}
 
-  encode zstd gzip
-  reverse_proxy mbox-app:8787
+	encode zstd gzip
+	reverse_proxy mbox-app:8787
 
-  header {
-    Strict-Transport-Security "max-age=31536000"
-    X-Content-Type-Options "nosniff"
-    Referrer-Policy "strict-origin-when-cross-origin"
-  }
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
 
-  log {
-    output stdout
-    format json
-  }
+	log {
+		output stdout
+		format filter {
+			request>uri query {
+				replace token REDACTED
+				replace tableToken REDACTED
+				replace sessionToken REDACTED
+				replace access_token REDACTED
+				replace refresh_token REDACTED
+				replace code REDACTED
+				replace state REDACTED
+				replace js_code REDACTED
+				replace customerAuthCode REDACTED
+			}
+			wrap json
+		}
+	}
 }

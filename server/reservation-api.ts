@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { salesAttributionSchema, type RuntimeState } from '../src/shared/contracts.js'
 import type { ReservationState, ReservationStatus } from '../src/shared/reservation-contracts.js'
 import { AuthorizationError, requireApprovalAmount, requireConfiguredOperation, requireTableDataScope } from './authorization.js'
+import { BusinessRuleError } from './business-rule-error.js'
 import { startAwaitingOrder } from './proactive-service.js'
 import { createServiceTask } from './domain.js'
 import { currentSalesEmployeeId, openTableSession, recordSalesAttribution } from './table-sessions.js'
@@ -305,7 +306,7 @@ export function registerReservationRoutes(app: FastifyInstance, repository: Runt
     const state = await repository.read() as RuntimeStateWithReservations
     requireConfiguredOperation(request, state, 'reservation.view')
     const domain = reservationsFor(state)
-    const reservations = domain.reservations
+    const reservations = domain.reservations.filter((item) => item.sourceCode !== 'walk_in')
     return {
       config: domain.config,
       reservations: query.status ? reservations.filter((item) => item.status === query.status) : reservations,
@@ -356,6 +357,9 @@ export function registerReservationRoutes(app: FastifyInstance, repository: Runt
 
   app.post('/api/reservations', async (request, reply) => {
     const input = createSchema.parse(request.body)
+    if (input.sourceCode === 'walk_in') {
+      throw new BusinessRuleError('现场到店请直接开台，不创建预约', 'WALK_IN_USES_TABLE_OPEN')
+    }
     const result = await repository.mutate((runtime) => {
       const state = runtime as RuntimeStateWithReservations
       const actor = requireConfiguredOperation(request, state, 'reservation.manage')

@@ -13,6 +13,7 @@ import type {
   TaskEvent,
   TaskTransferCandidate,
 } from '../src/shared/contracts.js'
+import { BusinessRuleError } from './business-rule-error.js'
 import { withDefaultRolePolicy } from '../src/shared/role-policy.js'
 import { effectiveDataScopeForEmployee, effectiveRoleIdsForEmployee } from '../src/shared/staff-access.js'
 import { currentOpenTableSession } from './table-sessions.js'
@@ -531,7 +532,7 @@ export function archiveServiceTasksForTableSession(
 }
 
 function assertActor(task: ServiceTask, actorId: string) {
-  if (task.ownerId !== actorId) throw new Error('只有当前责任人可以执行此操作')
+  if (task.ownerId !== actorId) throw new BusinessRuleError('只有当前责任人可以执行此操作', 'TASK_OWNER_MISMATCH', 403)
 }
 
 export function applyTaskAction(state: RuntimeState, taskId: string, input: TaskActionInput) {
@@ -549,9 +550,10 @@ export function applyTaskAction(state: RuntimeState, taskId: string, input: Task
 
   switch (input.action) {
     case 'accept':
+      if (task.status === 'accepted' && task.ownerId === input.actorId) return task
       if (!claimableStatuses.has(task.status)) {
-        if (task.status === 'accepted' && task.ownerId !== input.actorId) throw new Error('任务已由其他员工接单')
-        throw new Error('当前状态不能接单')
+        if (task.status === 'accepted' && task.ownerId !== input.actorId) throw new BusinessRuleError('任务已由其他员工接单', 'TASK_ALREADY_CLAIMED')
+        throw new BusinessRuleError('当前状态不能接单', 'TASK_ACCEPT_STATE_CONFLICT')
       }
       if (task.ownerId === null) {
         if (!canEmployeeClaimTask(state, task, input.actorId)) throw new Error('您当前不在该任务的通知或责任范围内')
@@ -573,7 +575,8 @@ export function applyTaskAction(state: RuntimeState, taskId: string, input: Task
       break
     case 'arrive':
       assertActor(task, input.actorId)
-      if (task.status !== 'accepted') throw new Error('必须先接单')
+      if (task.status === 'arrived') return task
+      if (task.status !== 'accepted') throw new BusinessRuleError('必须先接单', 'TASK_ACCEPT_REQUIRED')
       task.status = 'arrived'
       task.arrivedAt = now
       markTaskViewed(task, input.actorId)
@@ -581,6 +584,7 @@ export function applyTaskAction(state: RuntimeState, taskId: string, input: Task
       break
     case 'complete':
       assertActor(task, input.actorId)
+      if (['completed', 'confirmed'].includes(task.status)) return task
       assertCompletionNote(state, task, input.note)
       if (taskWorkflowLevel(task) === 'L3' && task.status !== 'arrived') throw new Error('必须先确认到桌')
       if (taskWorkflowLevel(task) === 'L2' && !['accepted', 'arrived'].includes(task.status)) throw new Error('必须先接单')
@@ -591,8 +595,9 @@ export function applyTaskAction(state: RuntimeState, taskId: string, input: Task
       closeTaskByStaff(state, task, input.actorId, now, eventPayload)
       break
     case 'quick_complete': {
+      if (task.completedBy === input.actorId && ['completed', 'confirmed'].includes(task.status)) return task
       if (taskWorkflowLevel(task) !== 'L1') throw new Error('只有快速服务可以一键完成')
-      if (!claimableStatuses.has(task.status)) throw new Error('当前状态不能一键完成')
+      if (!claimableStatuses.has(task.status)) throw new BusinessRuleError('当前状态不能一键完成', 'TASK_QUICK_COMPLETE_STATE_CONFLICT')
       assertCompletionNote(state, task, input.note)
       const employee = state.employees.find((item) => item.id === input.actorId)
       if (!employee || employee.status !== 'active') throw new Error('员工账号不可用')
@@ -696,7 +701,7 @@ export function applyManagerTaskAction(
     return task
   }
   if (!canManagerSuperviseTask(state, task, input.actorId)) throw new Error('当前账号没有该任务的管理权限')
-  if (!isOpenTask(task) || task.archivedAt) throw new Error('任务已经结束，不能继续处理')
+  if (!isOpenTask(task) || task.archivedAt) throw new BusinessRuleError('任务已经结束，不能继续处理', 'TASK_ALREADY_CLOSED')
   if (taskWorkflowLevel(task) === 'L0') throw new Error('信息提示不需要处理')
 
   const now = new Date()

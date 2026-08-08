@@ -29,7 +29,6 @@ import type {
   SalesAttributionRecord,
   WalkInOpenInput,
 } from './shared/contracts'
-import type { Reservation } from './shared/reservation-contracts'
 import type { StaffPresenceResponse } from './shared/auth-contracts'
 import type {
   AssistedPaymentLink,
@@ -341,10 +340,13 @@ async function guestRequest<T>(
 }
 
 export function getGuestSession(tableToken: string, localTableCode = '') {
-  const query = tableToken
-    ? `token=${encodeURIComponent(tableToken)}`
-    : `table=${encodeURIComponent(localTableCode)}`
-  return guestRequest<GuestSessionResponse>(`/api/guest/session?${query}`)
+  if (tableToken) {
+    return guestRequest<GuestSessionResponse>('/api/guest/session', {
+      method: 'POST',
+      body: JSON.stringify({ token: tableToken }),
+    }, { interactionFeedback: false })
+  }
+  return guestRequest<GuestSessionResponse>(`/api/guest/session?table=${encodeURIComponent(localTableCode)}`)
 }
 
 export function createGuestTask(input: GuestTaskCreateInput) {
@@ -503,7 +505,7 @@ export function updateTableOperationsConfig(input: Omit<TableOperationsConfigInp
 }
 
 export function openWalkInTable(tableId: string, input: Omit<WalkInOpenInput, 'idempotencyKey'>) {
-  return request<{ table: Table; reservation: Reservation; summary: TableSessionSummary }>(
+  return request<{ table: Table; walkInId: string; summary: TableSessionSummary }>(
     `/api/tables/${encodeURIComponent(tableId)}/walk-in-open`,
     {
       method: 'POST',

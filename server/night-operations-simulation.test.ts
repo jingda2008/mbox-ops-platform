@@ -300,92 +300,51 @@ describe('真实营业夜间全链路仿真', () => {
     expect(birthdayTask?.triggerId).toBe(reservationId)
   })
 
-  it('临时到店可以登记、确认到店并入座，且保留现场来源', async () => {
-    const { app, repository, now } = await buildFixture()
+  it('临时到店直接开台并入座，不混入待预约流程', async () => {
+    const { app, repository } = await buildFixture()
     apps.push(app)
-    const created = await app.inject({
+    const opened = await app.inject({
       method: 'POST',
-      url: '/api/reservations',
+      url: '/api/tables/table-l04/walk-in-open',
       headers: employeeHeaders('emp-lin', 'server'),
       payload: {
         customerReference: 'walk-in-night-sim-guest',
         customerName: '临时到店客人',
-        contactReference: 'front-desk-opaque-contact',
-        sourceCode: 'walk_in',
         partySize: 3,
-        areaPreferenceCode: 'lounge',
-        scheduledAt: new Date(now).toISOString(),
-        depositRequiredAmount: 0,
-        depositCurrency: 'CNY',
-        idempotencyKey: 'night-sim-walk-in-create-0001',
+        salesEmployeeId: 'emp-lin',
+        idempotencyKey: 'night-sim-walk-in-open-0001',
       },
     })
-    expect(created.statusCode).toBe(201)
-    const reservationId = created.json().id as string
-
-    for (const [action, payload] of [
-      ['confirm', { idempotencyKey: 'night-sim-walk-in-confirm-0001' }],
-      ['arrive', { idempotencyKey: 'night-sim-walk-in-arrive-0001' }],
-      ['seat', {
-        tableId: 'table-l04',
-        idempotencyKey: 'night-sim-walk-in-seat-0001',
-      }],
-    ] as const) {
-      const response = await app.inject({
-        method: 'POST',
-        url: `/api/reservations/${reservationId}/actions`,
-        headers: employeeHeaders('emp-lin', 'server'),
-        payload: { action, ...payload },
-      })
-      expect(response.statusCode, response.body).toBe(200)
-    }
+    expect(opened.statusCode, opened.body).toBe(201)
+    const walkInId = opened.json().walkInId as string
 
     const state = await repository.read()
-    expect(state.reservationState.reservations.find((candidate) => candidate.id === reservationId)).toMatchObject({
-      sourceCode: 'walk_in',
-      status: 'seated',
-      tableCode: 'L04',
-      deposit: { status: 'not_required' },
-    })
+    expect(state.reservationState.reservations.some((candidate) => candidate.sourceCode === 'walk_in')).toBe(false)
+    expect(state.salesAttributionRecords?.find((record) => record.subjectType === 'walk_in' && record.subjectId === walkInId))
+      .toMatchObject({ salesEmployeeId: 'emp-lin' })
+    expect(state.auditEntries.find((entry) => entry.action === 'table.walk_in_opened.v1' && entry.objectId === 'table-l04'))
+      .toMatchObject({ details: { walkInId, tableSessionId: opened.json().summary.tableSessionId } })
   })
 
   it('同一桌结台后再次接待应生成全新桌次，避免翻台串账', async () => {
-    const { app, repository, now } = await buildFixture()
+    const { app, repository } = await buildFixture()
     apps.push(app)
 
     const seatWalkIn = async (suffix: string) => {
-      const created = await app.inject({
+      const opened = await app.inject({
         method: 'POST',
-        url: '/api/reservations',
+        url: '/api/tables/table-l04/walk-in-open',
         headers: employeeHeaders('emp-lin', 'server'),
         payload: {
           customerReference: `walk-in-turnover-${suffix}`,
           customerName: `翻台客人${suffix}`,
-          contactReference: `front-desk-${suffix}`,
-          sourceCode: 'walk_in',
           partySize: 2,
-          areaPreferenceCode: 'lounge',
-          scheduledAt: new Date(now).toISOString(),
-          depositRequiredAmount: 0,
-          depositCurrency: 'CNY',
-          idempotencyKey: `night-sim-turnover-create-${suffix}`,
+          salesEmployeeId: 'emp-lin',
+          idempotencyKey: `night-sim-turnover-open-${suffix}`,
         },
       })
-      expect(created.statusCode).toBe(201)
-      for (const action of ['confirm', 'arrive', 'seat'] as const) {
-        const response = await app.inject({
-          method: 'POST',
-          url: `/api/reservations/${created.json().id}/actions`,
-          headers: employeeHeaders('emp-lin', 'server'),
-          payload: action === 'seat'
-            ? { action, tableId: 'table-l04', idempotencyKey: `night-sim-turnover-${action}-${suffix}` }
-            : { action, idempotencyKey: `night-sim-turnover-${action}-${suffix}` },
-        })
-        expect(response.statusCode, response.body).toBe(200)
-      }
-      const reservation = (await repository.read()).reservationState.reservations
-        .find((candidate) => candidate.id === created.json().id)!
-      return reservation.tableSessionId!
+      expect(opened.statusCode, opened.body).toBe(201)
+      return opened.json().summary.tableSessionId as string
     }
 
     const firstSessionId = await seatWalkIn('0001')

@@ -17,7 +17,6 @@ import type { RuntimeState } from '../src/shared/contracts.js'
 import type { KdsTask } from '../src/shared/order-contracts.js'
 import { productAvailability } from '../src/shared/product-availability.js'
 import {
-  completeAndDeliverKdsTask,
   completeKdsTask,
   createOrderDraft,
   decideKdsException,
@@ -30,6 +29,7 @@ import {
   submitOrder,
 } from './order-domain.js'
 import type { RuntimeRepository } from './repository.js'
+import { BusinessRuleError } from './business-rule-error.js'
 import { completeAwaitingOrderOnOrder } from './proactive-service.js'
 import { consumeManagedInventoryForSubmittedOrder } from './inventory-order-integration.js'
 import {
@@ -552,46 +552,120 @@ export function registerCommerceRoutes(
       syncOrderFulfillmentWorkstations(state)
       const currentTask = state.orderDomain.kdsTasks.find((item) => item.id === request.params.taskId)
       if (!currentTask) throw new Error('KDS任务不存在')
-      const productionAction = ['start', 'complete', 'completeAndDeliver'].includes(input.action)
+      if (input.action === 'completeAndDeliver') {
+        throw new BusinessRuleError(
+          '制作完成、取货和送达必须按实际岗位分别记录',
+          'KDS_COMBINED_ACTION_DISABLED',
+        )
+      }
+      const productionAction = ['start', 'complete'].includes(input.action)
       const actor = requireKdsTaskActor(
         request,
         state,
         currentTask,
         productionAction ? 'production' : 'delivery',
       )
-      if (input.action === 'completeAndDeliver') {
-        requireKdsTaskActor(request, state, currentTask, 'delivery')
-      }
       const idempotencyCount = state.orderDomain.idempotencyRecords.length
       const serviceTaskCount = state.tasks.length
       const taskEventCount = state.taskEvents.length
+      const auditCount = state.auditEntries.length
+      const previousStatus = currentTask.status
       const command = {
         taskId: request.params.taskId,
         actorId: actor.actorId,
         occurredAt: new Date().toISOString(),
         idempotencyKey: input.idempotencyKey,
       }
-      const task = input.action === 'start'
-        ? startKdsTask(state.orderDomain, command)
-        : input.action === 'complete'
-          ? completeKdsTask(state.orderDomain, command)
-          : input.action === 'completeAndDeliver'
-            ? completeAndDeliverKdsTask(state.orderDomain, command)
-          : input.action === 'pickUp'
-            ? pickUpKdsTask(state.orderDomain, command)
-            : deliverKdsTask(state.orderDomain, command)
+      let task: KdsTask
+      if (input.action === 'pickupAndDeliver') {
+        ensureDeliveryServiceTask(state, currentTask, currentTask.completedAt ?? command.occurredAt)
+        if (currentTask.status === 'completed') {
+          task = pickUpKdsTask(state.orderDomain, {
+            ...command,
+            idempotencyKey: `${input.idempotencyKey}:pick-up`,
+          })
+          syncDeliveryServiceTaskForKdsAction(
+            state,
+            task,
+            'pickUp',
+            actor.actorId,
+            command.occurredAt,
+            `${input.idempotencyKey}:pick-up`,
+          )
+        } else {
+          task = currentTask
+        }
+        if (task.status === 'picked_up') {
+          task = deliverKdsTask(state.orderDomain, {
+            ...command,
+            idempotencyKey: `${input.idempotencyKey}:deliver`,
+          })
+          syncDeliveryServiceTaskForKdsAction(
+            state,
+            task,
+            'deliver',
+            actor.actorId,
+            command.occurredAt,
+            `${input.idempotencyKey}:deliver`,
+          )
+        } else if (task.status !== 'delivered') {
+          throw new BusinessRuleError('一键送达前必须已完成制作', 'KDS_NOT_READY_FOR_DELIVERY')
+        }
+        const semanticDeliveryKey = `${task.id}:pickup_and_delivery`
+        const atomicEventId = deterministicId('task_event_atomic_delivery', semanticDeliveryKey)
+        if (!state.taskEvents.some((event) => event.id === atomicEventId)) {
+          const serviceTask = state.tasks.find((candidate) => candidate.id === task.deliveryServiceTask?.id)
+          if (!serviceTask) throw new Error('KDS任务缺少关联取送服务任务')
+          state.taskEvents.push({
+            id: atomicEventId,
+            taskId: serviceTask.id,
+            type: 'fulfillment.atomic_pickup_delivery.v1',
+            actorId: actor.actorId,
+            occurredAt: command.occurredAt,
+            payload: {
+              idempotencyKey: input.idempotencyKey,
+              kdsTaskId: task.id,
+              transition: 'pickup_and_delivery',
+              pickupEvidence: 'system_inferred_from_one_tap_delivery',
+              deliveryEvidence: 'employee_confirmed',
+            },
+          })
+          state.auditEntries.push({
+            id: deterministicId('audit_atomic_delivery', semanticDeliveryKey),
+            actorId: actor.actorId,
+            action: 'fulfillment.atomic_pickup_delivery.v1',
+            objectType: 'kdsTask',
+            objectId: task.id,
+            occurredAt: command.occurredAt,
+            details: {
+              serviceTaskId: serviceTask.id,
+              orderId: task.orderId,
+              orderItemId: task.orderItemId,
+              tableSessionId: task.tableSessionId,
+              stationId: task.stationId,
+              workstationName: task.workstation?.name ?? task.stationId,
+              workstationConfigVersion: task.workstation?.configVersion ?? null,
+              transition: 'pickup_and_delivery',
+              actionStage: 'delivery',
+              effectiveRoleId: actor.roleId,
+              requestId: request.id,
+              pickupEvidence: 'system_inferred_from_one_tap_delivery',
+              deliveryEvidence: 'employee_confirmed',
+              idempotencyKey: input.idempotencyKey,
+            },
+          })
+        }
+      } else {
+        task = input.action === 'start'
+          ? startKdsTask(state.orderDomain, command)
+          : input.action === 'complete'
+            ? completeKdsTask(state.orderDomain, command)
+            : input.action === 'pickUp'
+              ? pickUpKdsTask(state.orderDomain, command)
+              : deliverKdsTask(state.orderDomain, command)
+      }
       if (input.action === 'complete') {
         ensureDeliveryServiceTask(state, task, command.occurredAt)
-      } else if (input.action === 'completeAndDeliver') {
-        ensureDeliveryServiceTask(state, task, command.occurredAt)
-        syncDeliveryServiceTaskForKdsAction(
-          state,
-          task,
-          'deliver',
-          actor.actorId,
-          command.occurredAt,
-          input.idempotencyKey,
-        )
       } else if (input.action === 'pickUp' || input.action === 'deliver') {
         ensureDeliveryServiceTask(state, task, task.completedAt ?? command.occurredAt)
         syncDeliveryServiceTaskForKdsAction(
@@ -604,7 +678,8 @@ export function registerCommerceRoutes(
         )
       }
       const changed = state.orderDomain.idempotencyRecords.length !== idempotencyCount ||
-        state.tasks.length !== serviceTaskCount || state.taskEvents.length !== taskEventCount
+        state.tasks.length !== serviceTaskCount || state.taskEvents.length !== taskEventCount ||
+        state.auditEntries.length !== auditCount
       if (state.orderDomain.idempotencyRecords.length !== idempotencyCount) {
         state.auditEntries.push({
           id: deterministicId('audit_kds', input.idempotencyKey),
@@ -613,7 +688,22 @@ export function registerCommerceRoutes(
           objectType: 'kdsTask',
           objectId: task.id,
           occurredAt: command.occurredAt,
-          details: { orderId: task.orderId, tableSessionId: task.tableSessionId, status: task.status },
+          details: {
+            orderId: task.orderId,
+            orderItemId: task.orderItemId,
+            tableSessionId: task.tableSessionId,
+            stationId: task.stationId,
+            workstationName: task.workstation?.name ?? task.stationId,
+            workstationConfigVersion: task.workstation?.configVersion ?? null,
+            actionStage: productionAction ? 'production' : 'delivery',
+            effectiveRoleId: actor.roleId,
+            idempotencyKey: input.idempotencyKey,
+            requestId: request.id,
+            previousStatus,
+            status: task.status,
+            autoReceived: input.action === 'complete' && previousStatus === 'queued',
+            productionStartedAtRecorded: task.startedAt !== null,
+          },
         })
       }
       if (changed) state.revision += 1
@@ -634,7 +724,9 @@ export function registerCommerceRoutes(
       }
       const task = state.orderDomain.kdsTasks.find((candidate) => candidate.id === request.params.taskId)
       if (!task) throw new Error('KDS任务不存在')
-      if (task.status === 'delivered') throw new Error('已经送达的商品不能取消制作，请走退菜或退款流程')
+      if (task.status === 'delivered') {
+        throw new BusinessRuleError('已经送达的商品不能取消制作，请走退菜或退款流程', 'KDS_ALREADY_DELIVERED')
+      }
       const tableSession = state.songState.tableSessions.find((candidate) => candidate.id === task.tableSessionId)
       if (!tableSession || tableSession.status !== 'open') throw new Error('KDS任务所属桌次已经结束')
       requireConfiguredOperation(request, state, 'table.close')

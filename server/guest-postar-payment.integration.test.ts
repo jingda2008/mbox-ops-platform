@@ -70,8 +70,9 @@ describe('guest and assisted Postar payment link', () => {
       issuedAt: Date.now(),
     }, secret)
     const sessionResponse = await app.inject({
-      method: 'GET',
-      url: `/api/guest/session?token=${encodeURIComponent(tableToken)}`,
+      method: 'POST',
+      url: '/api/guest/session',
+      payload: { token: tableToken },
     })
     const session = sessionResponse.json() as GuestSessionResponse
     const orderResponse = await app.inject({

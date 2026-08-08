@@ -319,6 +319,14 @@ describe('service task domain', () => {
       'task.quick_completed.v1',
       'service.closed_by_staff.v1',
     ])
+    const eventCount = state.taskEvents.length
+    expect(applyTaskAction(state, task.id, {
+      action: 'quick_complete',
+      actorId: 'emp-jie',
+      note: '候补再次确认已补水',
+      idempotencyKey: 'task-quick-complete-semantic-retry-0002',
+    })).toBe(confirmed)
+    expect(state.taskEvents).toHaveLength(eventCount)
   })
 
   it('records L0 guest context without creating an open employee task', () => {

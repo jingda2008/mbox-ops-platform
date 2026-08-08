@@ -26,6 +26,7 @@ import type {
   TableLedgerEntry,
   TableLedgerEntryType,
 } from '../src/shared/order-contracts.js'
+import { BusinessRuleError } from './business-rule-error.js'
 import {
   defaultFulfillmentWorkstations,
   normalizeOrderFulfillmentState,
@@ -171,6 +172,32 @@ function canonicalize(value: unknown): string {
   }
 }
 
+function idempotencyFingerprint(payload: unknown) {
+  const fingerprintPayload = typeof payload === 'object' && payload !== null
+    ? Object.fromEntries(Object.entries(payload).filter(([field]) => field !== 'occurredAt'))
+    : payload
+  return canonicalize(fingerprintPayload)
+}
+
+function resolveIdempotencyReplay<T>(
+  state: OrderDomainState,
+  key: string,
+  operation: string,
+  payload: unknown,
+  resolve: (resultId: string) => T | undefined,
+): { replayed: false; fingerprint: string } | { replayed: true; result: T } {
+  assertNonEmpty(key, '幂等键')
+  const fingerprint = idempotencyFingerprint(payload)
+  const existing = state.idempotencyRecords.find((record) => record.key === key)
+  if (!existing) return { replayed: false, fingerprint }
+  if (existing.operation !== operation || existing.fingerprint !== fingerprint) {
+    throw new Error('幂等键已用于不同请求')
+  }
+  const result = resolve(existing.resultId)
+  if (!result) throw new Error('幂等记录指向的领域对象不存在')
+  return { replayed: true, result }
+}
+
 function executeIdempotent<T>(
   state: OrderDomainState,
   key: string,
@@ -182,26 +209,14 @@ function executeIdempotent<T>(
   resultId: (result: T) => string,
 ) {
   normalizeOrderFulfillmentState(state)
-  assertNonEmpty(key, '幂等键')
-  const fingerprintPayload = typeof payload === 'object' && payload !== null
-    ? Object.fromEntries(Object.entries(payload).filter(([field]) => field !== 'occurredAt'))
-    : payload
-  const fingerprint = canonicalize(fingerprintPayload)
-  const existing = state.idempotencyRecords.find((record) => record.key === key)
-  if (existing) {
-    if (existing.operation !== operation || existing.fingerprint !== fingerprint) {
-      throw new Error('幂等键已用于不同请求')
-    }
-    const result = resolve(existing.resultId)
-    if (!result) throw new Error('幂等记录指向的领域对象不存在')
-    return result
-  }
+  const replay = resolveIdempotencyReplay(state, key, operation, payload, resolve)
+  if (replay.replayed) return replay.result
 
   const result = execute()
   state.idempotencyRecords.push({
     key,
     operation,
-    fingerprint,
+    fingerprint: replay.fingerprint,
     resultType,
     resultId: resultId(result),
   })
@@ -976,7 +991,7 @@ function applyKdsTransition(
   state: OrderDomainState,
   command: KdsTaskActionCommand,
   operation: string,
-  expectedStatus: KdsTaskStatus,
+  expectedStatus: KdsTaskStatus | readonly KdsTaskStatus[],
   nextStatus: KdsTaskStatus,
   previousAt: (task: KdsTask) => string | null,
   update: (task: KdsTask) => void,
@@ -995,12 +1010,23 @@ function applyKdsTransition(
     () => {
       const task = state.kdsTasks.find((item) => item.id === command.taskId)
       if (!task) throw new Error('KDS任务不存在')
+      const rank: Partial<Record<KdsTaskStatus, number>> = {
+        queued: 0,
+        preparing: 1,
+        completed: 2,
+        picked_up: 3,
+        delivered: 4,
+      }
+      if ((rank[task.status] ?? -1) >= (rank[nextStatus] ?? Number.MAX_SAFE_INTEGER)) return task
       const blockingException = taskBlockingException(task)
       if (blockingException) {
         const disposition = exceptionDisposition(task, blockingException.exceptionId)
         throw new Error(disposition ? '原KDS任务已由异常处置关闭' : 'KDS异常待领班或经理处置')
       }
-      if (task.status !== expectedStatus) throw new Error(`KDS任务不能从${task.status}跳转到${nextStatus}`)
+      const expectedStatuses = Array.isArray(expectedStatus) ? expectedStatus : [expectedStatus]
+      if (!expectedStatuses.includes(task.status)) {
+        throw new BusinessRuleError(`KDS任务不能从${task.status}跳转到${nextStatus}`, 'KDS_STATE_CONFLICT')
+      }
       const priorTimestamp = previousAt(task)
       if (!priorTimestamp) throw new Error('KDS任务缺少前序时间')
       if (Date.parse(command.occurredAt) < Date.parse(priorTimestamp)) throw new Error('KDS操作时间早于前序操作')
@@ -1043,9 +1069,9 @@ export function completeKdsTask(state: OrderDomainState, command: KdsTaskActionC
     state,
     command,
     'kds.complete.v1',
-    'preparing',
+    ['queued', 'preparing'],
     'completed',
-    (task) => task.startedAt,
+    (task) => task.startedAt ?? task.queuedAt,
     (task) => {
       task.completedAt = command.occurredAt
       task.completedBy = command.actorId
@@ -1064,6 +1090,18 @@ export function completeAndDeliverKdsTask(state: OrderDomainState, command: KdsT
   assertNonEmpty(command.taskId, 'KDS任务ID')
   assertNonEmpty(command.actorId, '操作人')
   assertTimestamp(command.occurredAt)
+  normalizeOrderFulfillmentState(state)
+  const replay = resolveIdempotencyReplay(
+    state,
+    command.idempotencyKey,
+    'kds.complete_and_deliver.v1',
+    command,
+    (id) => state.kdsTasks.find((task) => task.id === id),
+  )
+  if (replay.replayed) return replay.result
+  const currentTask = state.kdsTasks.find((candidate) => candidate.id === command.taskId)
+  if (!currentTask) throw new Error('KDS任务不存在')
+  if (currentTask.status === 'delivered') return currentTask
 
   return executeIdempotent(
     state,
@@ -1083,7 +1121,9 @@ export function completeAndDeliverKdsTask(state: OrderDomainState, command: KdsT
       if ((task.fulfillmentType ?? 'made_to_order') !== 'made_to_order') {
         throw new Error('只有现制商品可以完成并送达')
       }
-      if (task.status !== 'preparing') throw new Error(`KDS任务不能从${task.status}完成并送达`)
+      if (task.status !== 'preparing') {
+        throw new BusinessRuleError(`KDS任务不能从${task.status}完成并送达`, 'KDS_STATE_CONFLICT')
+      }
       if (!task.startedAt) throw new Error('KDS任务缺少开始制作时间')
       if (Date.parse(command.occurredAt) < Date.parse(task.startedAt)) throw new Error('KDS操作时间早于前序操作')
 

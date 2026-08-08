@@ -223,6 +223,7 @@ export function ReservationView({ data, focusRequest = null }: { data: Bootstrap
   const [notice, setNotice] = useState<Notice | null>(null)
   const [dateRange, setDateRange] = useState<DateRange>('today')
   const [statusFilter, setStatusFilter] = useState<'all' | ReservationStatus>('all')
+  const [flowFilter, setFlowFilter] = useState<'upcoming' | 'arrived' | 'history'>('upcoming')
   const [query, setQuery] = useState('')
   const [showCreate, setShowCreate] = useState(false)
   const [showConfig, setShowConfig] = useState(false)
@@ -297,16 +298,22 @@ export function ReservationView({ data, focusRequest = null }: { data: Bootstrap
     handledFocusRequestId.current = focusRequest.id
     setDateRange('today')
     setStatusFilter('all')
+    const focused = response.reservations.find((reservation) => reservation.id === focusRequest.focus?.objectId)
+    setFlowFilter(focused?.status === 'arrived' ? 'arrived' : focused && ['seated', 'cancelled', 'no_show'].includes(focused.status) ? 'history' : 'upcoming')
     setQuery(focusRequest.focus?.query ?? '')
     setFocusedReservationId(focusRequest.focus?.objectId ?? '')
-  }, [focusRequest])
+  }, [focusRequest, response.reservations])
 
   const tables = data.tables
   const config = response.config
-  const enabledSources = config?.sources.filter((item) => item.enabled).toSorted((a, b) => a.sortOrder - b.sortOrder) ?? []
+  const enabledSources = config?.sources.filter((item) => item.enabled && item.code !== 'walk_in').toSorted((a, b) => a.sortOrder - b.sortOrder) ?? []
   const enabledAreas = config?.areaPreferences.filter((item) => item.enabled).toSorted((a, b) => a.sortOrder - b.sortOrder) ?? []
   const enabledOccasions = config?.occasions.filter((item) => item.enabled) ?? []
   const defaultSourceCode = enabledSources[0]?.code ?? ''
+  const operationalReservations = useMemo(
+    () => response.reservations.filter((reservation) => reservation.sourceCode !== 'walk_in'),
+    [response.reservations],
+  )
 
   useEffect(() => {
     if (!draft.sourceCode && defaultSourceCode) {
@@ -322,12 +329,19 @@ export function ReservationView({ data, focusRequest = null }: { data: Bootstrap
 
   const reservations = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase('zh-CN')
-    return response.reservations
+    return operationalReservations
       .filter((reservation) => reservationInBusinessDateRange(
         reservation.scheduledAt,
         dateRange,
         data.store.businessDate,
         businessDayRolloverHour,
+      ))
+      .filter((reservation) => (
+        flowFilter === 'upcoming'
+          ? ['requested', 'confirmed'].includes(reservation.status)
+          : flowFilter === 'arrived'
+            ? reservation.status === 'arrived'
+            : ['seated', 'cancelled', 'no_show'].includes(reservation.status)
       ))
       .filter((reservation) => statusFilter === 'all' || reservation.status === statusFilter)
       .filter((reservation) => !normalizedQuery || [
@@ -336,7 +350,7 @@ export function ReservationView({ data, focusRequest = null }: { data: Bootstrap
         reservation.tableCode ?? '',
       ].some((value) => value.toLocaleLowerCase('zh-CN').includes(normalizedQuery)))
       .toSorted((left, right) => Date.parse(left.scheduledAt) - Date.parse(right.scheduledAt))
-  }, [businessDayRolloverHour, data.store.businessDate, dateRange, query, response.reservations, statusFilter])
+  }, [businessDayRolloverHour, data.store.businessDate, dateRange, flowFilter, operationalReservations, query, statusFilter])
 
   useEffect(() => {
     if (!focusedReservationId || loading || !reservations.some((reservation) => reservation.id === focusedReservationId)) return
@@ -348,16 +362,16 @@ export function ReservationView({ data, focusRequest = null }: { data: Bootstrap
   }
 
   const metrics = useMemo(() => ({
-    today: response.reservations.filter((item) => reservationInBusinessDateRange(
+    today: operationalReservations.filter((item) => reservationInBusinessDateRange(
       item.scheduledAt,
       'today',
       data.store.businessDate,
       businessDayRolloverHour,
     )).length,
-    requested: response.reservations.filter((item) => item.status === 'requested').length,
-    arriving: response.reservations.filter((item) => item.status === 'confirmed' && Date.parse(item.scheduledAt) <= Date.now() + 2 * 60 * 60 * 1000).length,
-    refunds: response.reservations.filter((item) => ['refund_required', 'refund_processing', 'refund_failed'].includes(item.deposit.status)).length,
-  }), [businessDayRolloverHour, data.store.businessDate, response.reservations])
+    requested: operationalReservations.filter((item) => item.status === 'requested').length,
+    arriving: operationalReservations.filter((item) => item.status === 'confirmed' && Date.parse(item.scheduledAt) <= Date.now() + 2 * 60 * 60 * 1000).length,
+    refunds: operationalReservations.filter((item) => ['refund_required', 'refund_processing', 'refund_failed'].includes(item.deposit.status)).length,
+  }), [businessDayRolloverHour, data.store.businessDate, operationalReservations])
 
   async function execute(actionKey: string, successMessage: string, action: () => Promise<unknown>) {
     setBusyAction(actionKey)
@@ -708,6 +722,9 @@ export function ReservationView({ data, focusRequest = null }: { data: Bootstrap
 
       <section className="reservation-list-section">
         <div className="reservation-toolbar">
+          <div className="reservation-tabs" aria-label="预约现场阶段">
+            {([['upcoming', '待到店'], ['arrived', '已到店待安排'], ['history', '已入座/历史']] as const).map(([id, label]) => <button key={id} className={flowFilter === id ? 'is-active' : ''} type="button" onClick={() => { setFlowFilter(id); setStatusFilter('all') }}>{label}</button>)}
+          </div>
           <div className="reservation-tabs" aria-label="预约日期范围">
             {([['today', '本营业日'], ['upcoming', '未来7个营业日'], ['all', '全部']] as const).map(([id, label]) => <button key={id} className={dateRange === id ? 'is-active' : ''} type="button" onClick={() => setDateRange(id)}>{label}</button>)}
           </div>

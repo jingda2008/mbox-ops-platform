@@ -156,6 +156,8 @@
 .kds-product strong { font-size: 14px; }
 .kds-product .kds-fulfillment-note { width: fit-content; max-width: 100%; display: flex; align-items: flex-start; gap: 5px; padding: 5px 7px; border: 1px solid #e3c269; border-left: 4px solid #c9474e; border-radius: 4px; background: #fff7dc; color: #7b2b30; font-size: 11px; font-weight: 850; line-height: 1.45; white-space: normal; }
 .kds-fulfillment-note svg { flex: 0 0 auto; margin-top: 1px; }
+.kds-print-alert { width: fit-content; max-width: 100%; display: inline-flex !important; align-items: center; gap: 5px; color: #72540d !important; font-weight: 800; }
+.kds-print-alert.is-failed { color: var(--danger) !important; }
 .kds-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); color: var(--ink-soft); font-size: 11px; }
 .kds-meta > span { min-height: 21px; display: flex; align-items: center; gap: 4px; }
 .kds-state { width: fit-content; padding: 2px 6px; border-radius: 4px; background: #eef0eb; color: var(--ink); font-weight: 800; }

@@ -120,7 +120,7 @@ function executeTaskAction(
 ) {
   const actor = requireRequestActor(request)
   const input = parseArguments(taskActionArguments, call.arguments, '任务信息不完整，请重新选择要处理的任务')
-  requireConfiguredOperation(request, state, 'service.task.action')
+  const effectiveActor = requireConfiguredOperation(request, state, 'service.task.action')
   const currentTask = state.tasks.find((item) => item.id === input.taskId)
   if (!currentTask) throw new Error('任务不存在')
   const eligibleNotifiedClaim = action === 'accept'
@@ -137,7 +137,10 @@ function executeTaskAction(
     idempotencyKey: `assistant-tool:${executionId}`,
   } as const
   const task = applyTaskAction(state, currentTask.id, toolAction)
-  syncKdsFromFulfillmentServiceTaskAction(state, task, toolAction)
+  syncKdsFromFulfillmentServiceTaskAction(state, task, toolAction, {
+    requestId: request.id,
+    effectiveRoleId: effectiveActor.roleId,
+  })
   return {
     objectType: 'service_task',
     objectId: task.id,

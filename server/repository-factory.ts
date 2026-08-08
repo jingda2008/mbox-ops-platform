@@ -31,6 +31,8 @@ export function createRuntimeDependencies(config: RuntimeConfig): RuntimeDepende
     storeId: config.storeUuid!,
     seedState: null,
     readCacheValidationTtlMs: config.stateReadCacheMs,
+    maxPendingMutations: config.databaseMutationQueueMax,
+    mutationQueueTimeoutMs: config.databaseMutationQueueWaitMs,
     projector: new PostgresOperationalProjector(),
   }), postgresPool, operationalReadStore: new PostgresOperationalReadStore(postgresPool, {
     tenantId: config.tenantId!,

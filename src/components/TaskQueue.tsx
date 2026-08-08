@@ -1,7 +1,8 @@
 import { Check, CheckCheck, Clock3, Focus, MapPin, Navigation, RotateCcw, UserRound } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ServiceIcon } from './ServiceIcon'
 import {
+  compareTaskQueueItems,
   taskAcceptMode,
   taskMatchesQueueFilter,
   taskQueueActionMode,
@@ -10,6 +11,7 @@ import {
   taskRepeatSummary,
   taskWorkflowLevel,
 } from './task-queue'
+import { stabilizeOperationalOrder } from './stable-operational-order'
 import type {
   Employee,
   ManagerTaskActionInput,
@@ -91,12 +93,14 @@ export function TaskQueue({
   const [busyMode, setBusyMode] = useState(() => (
     typeof window !== 'undefined' && window.localStorage.getItem('mbox-staff-busy-mode') === '1'
   ))
+  const taskOrderIds = useRef<string[]>([])
+  const previousFocusTaskId = useRef<string | null>(null)
   const filter = taskQueueFilterForQuery(focusQuery)
   const serviceTypeById = new Map(serviceTypes.map((serviceType) => [serviceType.id, serviceType]))
   const complaintServiceTypeIds = new Set(serviceTypes
     .filter((serviceType) => serviceType.code === 'COMPLAINT' || serviceType.icon === 'complaint')
     .map((serviceType) => serviceType.id))
-  const visibleTasks = tasks
+  const rankedVisibleTasks = tasks
     .filter((task) => !task.archivedAt)
     .filter((task) => taskQueueIsVisible(task, serviceTypeById.get(task.serviceTypeId)))
     .filter((task) => !selectedTableId || task.tableId === selectedTableId)
@@ -113,9 +117,19 @@ export function TaskQueue({
     .sort((a, b) => {
       if (focusTaskId && a.id === focusTaskId) return -1
       if (focusTaskId && b.id === focusTaskId) return 1
-      const priority = { urgent: 4, high: 3, normal: 2, low: 1 }
-      return priority[b.priority] - priority[a.priority] || +new Date(a.createdAt) - +new Date(b.createdAt)
+      return compareTaskQueueItems(a, b, serviceTypeById, currentEmployeeId, claimableTaskIds)
     })
+  if (previousFocusTaskId.current !== focusTaskId) {
+    previousFocusTaskId.current = focusTaskId
+    taskOrderIds.current = []
+  }
+  const interactionTaskIds = new Set([
+    ...busyTaskIds,
+    ...pendingTaskIds,
+    ...(focusTaskId ? [focusTaskId] : []),
+  ])
+  const visibleTasks = stabilizeOperationalOrder(rankedVisibleTasks, taskOrderIds.current, interactionTaskIds)
+  taskOrderIds.current = visibleTasks.map((task) => task.id)
   const displayedTasks = visibleTasks.slice(0, visibleCount)
   const filterLabel = filter === 'sla-risk'
     ? '仅看 SLA 风险'

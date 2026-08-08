@@ -158,9 +158,58 @@ describe('role scoped bootstrap projection', () => {
     expect(projected.tables.some((table) => table.id === 'table-b01')).toBe(false)
     expect(projected.orderDomain.orders.some((order) => order.id === 'order-booth')).toBe(false)
 
+    state.orderDomain.kdsTasks.push({
+      ...structuredClone(state.orderDomain.kdsTasks.at(-1)!),
+      id: 'kds-booth-ready',
+      orderItemId: 'line-booth-ready',
+      status: 'completed',
+      completedAt: new Date().toISOString(),
+      completedBy: 'emp-qing',
+    })
+    const productionOnly = projectRuntimeStateForActor(state, actor('emp-qing', 'bartender'))
+    expect(productionOnly.orderDomain.kdsTasks.map((task) => task.id)).not.toContain('kds-booth-ready')
+
     shift.stationIds = ['kitchen-cold']
     const wrongStation = projectRuntimeStateForActor(state, actor('emp-qing', 'bartender'))
     expect(wrongStation.orderDomain.kdsTasks.map((task) => task.id)).not.toContain('kds-booth-cocktail')
+  })
+
+  it('keeps the real bartender configuration server-side scoped to bar production despite a secondary supervisor duty', () => {
+    const state = createSeedState(new Date('2026-08-08T12:00:00.000Z'))
+    const bartender = state.employees.find((employee) => employee.id === 'emp-qing')!
+    const shift = state.shiftAssignments.find((assignment) => assignment.employeeId === bartender.id)!
+    expect(bartender).toMatchObject({ roleId: 'bartender', roleIds: ['supervisor'] })
+    expect(shift).toMatchObject({ roleId: 'bartender', roleIds: ['supervisor'], stationIds: ['bar-main'] })
+    const workstation = (stationId: string) => state.config.workstations.find((item) => item.id === stationId)!
+    const kdsTask = (id: string, stationId: string, status: 'queued' | 'completed') => ({
+      id,
+      orderId: `order-${id}`,
+      orderItemId: `line-${id}`,
+      tableSessionId: `session:table-l01:${state.store.businessDate}`,
+      stationId,
+      itemName: id,
+      specification: '1份',
+      quantity: 1,
+      status,
+      workstation: structuredClone(workstation(stationId)),
+      queuedAt: '2026-08-08T12:00:00.000Z',
+      startedAt: null,
+      startedBy: null,
+      completedAt: status === 'completed' ? '2026-08-08T12:01:00.000Z' : null,
+      completedBy: status === 'completed' ? 'emp-qing' : null,
+      pickedUpAt: null,
+      pickedUpBy: null,
+      deliveredAt: null,
+      deliveredBy: null,
+    })
+    state.orderDomain.kdsTasks.push(
+      kdsTask('bar-production', 'bar-main', 'queued'),
+      kdsTask('bar-delivery', 'bar-main', 'completed'),
+      kdsTask('cold-kitchen-production', 'kitchen-cold', 'queued'),
+    )
+
+    const projected = projectRuntimeStateForActor(state, actor('emp-qing', 'bartender'))
+    expect(projected.orderDomain.kdsTasks.map((task) => task.id)).toEqual(['bar-production'])
   })
 
   it('does not project store data to a store-scoped actor authenticated for another store', () => {

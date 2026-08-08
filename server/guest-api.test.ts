@@ -63,8 +63,9 @@ function nextDate(date: string) {
 
 async function exchange(app: FastifyInstance, token: string) {
   const response = await app.inject({
-    method: 'GET',
-    url: `/api/guest/session?token=${encodeURIComponent(token)}`,
+    method: 'POST',
+    url: '/api/guest/session',
+    payload: { token },
   })
   return { response, body: response.json() as GuestSessionResponse }
 }
@@ -333,8 +334,13 @@ describe('guest table API', () => {
     const { app, repository, now } = await fixture()
     const qrToken = staticQr(now())
     const { response, body } = await exchange(app, qrToken)
+    const unsafeQueryExchange = await app.inject({
+      method: 'GET',
+      url: `/api/guest/session?token=${encodeURIComponent(qrToken)}`,
+    })
 
     expect(response.statusCode).toBe(200)
+    expect(unsafeQueryExchange.statusCode).toBe(401)
     expect(body).not.toHaveProperty('employees')
     expect(body.table.code).toBe('L01')
     expect(body.tableToken).not.toBe(qrToken)
@@ -378,8 +384,9 @@ describe('guest table API', () => {
       }
     })
     const refreshed = await app.inject({
-      method: 'GET',
-      url: `/api/guest/session?token=${encodeURIComponent(body.tableToken)}`,
+      method: 'POST',
+      url: '/api/guest/session',
+      payload: { token: body.tableToken },
     })
     expect((await repository.read()).tasks.find((candidate) => candidate.id === first.json().id)?.status).toBe('confirmed')
     expect(refreshed.json().tasks).not.toContainEqual(expect.objectContaining({ id: first.json().id }))
@@ -407,8 +414,9 @@ describe('guest table API', () => {
       expiresAt: now() + sessionTtlMs,
     }, previousSecret)
     const rejected = await app.inject({
-      method: 'GET',
-      url: `/api/guest/session?token=${encodeURIComponent(previousGuestSession)}`,
+      method: 'POST',
+      url: '/api/guest/session',
+      payload: { token: previousGuestSession },
     })
     expect(rejected.statusCode).toBe(401)
     expect(rejected.json()).toMatchObject({ code: 'TABLE_QR_REQUIRED' })
@@ -423,8 +431,9 @@ describe('guest table API', () => {
     expect(anonymousId).toMatch(/^[0-9a-f-]{36}$/)
 
     const refreshed = await app.inject({
-      method: 'GET',
-      url: `/api/guest/session?token=${encodeURIComponent(first.body.tableToken)}`,
+      method: 'POST',
+      url: '/api/guest/session',
+      payload: { token: first.body.tableToken },
       headers: { 'x-mbox-guest-id': anonymousId },
     })
     expect(refreshed.statusCode).toBe(200)
@@ -566,8 +575,9 @@ describe('guest table API', () => {
     })
 
     const frozenResponse = await app.inject({
-      method: 'GET',
-      url: `/api/guest/session?token=${encodeURIComponent(current.tableToken)}`,
+      method: 'POST',
+      url: '/api/guest/session',
+      payload: { token: current.tableToken },
     })
     expect(frozenResponse.statusCode, frozenResponse.body).toBe(200)
     expect(frozenResponse.json().account).toMatchObject({

@@ -23,7 +23,7 @@ export const staffNavigationPermissions: Record<StaffNavigationId, readonly Staf
   tasks: ['service.execute', 'complaint.handle'],
   reservations: ['reservation.view', 'reservation.manage', 'reservation.config.manage'],
   commerce: ['order.create', 'order.view', 'kds.prepare', 'kds.deliver', 'commerce.authorization.request', 'commerce.authorization.approve'],
-  inventory: ['inventory.view', 'inventory.manage', 'inventory.approve'],
+  inventory: ['inventory.view', 'inventory.manage', 'inventory.receive', 'inventory.count', 'inventory.remake', 'inventory.bottle', 'inventory.approve'],
   payments: ['finance.view', 'payment.collect', 'payment.pos_report', 'payment.refund.request', 'payment.refund.approve'],
   benefits: ['benefit.view', 'benefit.grant', 'benefit.approve', 'benefit.manage'],
   operations: ['config.manage', 'inventory.manage', 'inventory.approve', 'payment.collect', 'finance.view', 'benefit.manage'],

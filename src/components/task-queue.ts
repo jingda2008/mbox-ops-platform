@@ -82,6 +82,43 @@ export function taskQueueActionMode(
   return null
 }
 
+function queueRank(
+  task: ServiceTask,
+  serviceType: ServiceTypeConfig | undefined,
+  currentEmployeeId: string,
+  claimableTaskIds: ReadonlySet<string>,
+  now: number,
+) {
+  const atRisk = task.status === 'escalated'
+    || task.escalationLevel > 0
+    || task.priority === 'urgent'
+    || now >= new Date(task.warningAt).getTime()
+  if (atRisk) return 0
+  const delivery = serviceType?.code === 'FULFILLMENT_DELIVERY'
+  if (delivery && task.ownerId === currentEmployeeId) return 1
+  if (delivery && claimableTaskIds.has(task.id)) return 2
+  if (task.ownerId === currentEmployeeId) return 3
+  return 4
+}
+
+export function compareTaskQueueItems(
+  left: ServiceTask,
+  right: ServiceTask,
+  serviceTypeById: ReadonlyMap<string, ServiceTypeConfig>,
+  currentEmployeeId: string,
+  claimableTaskIds: ReadonlySet<string>,
+  now = Date.now(),
+) {
+  const rank = queueRank(left, serviceTypeById.get(left.serviceTypeId), currentEmployeeId, claimableTaskIds, now)
+    - queueRank(right, serviceTypeById.get(right.serviceTypeId), currentEmployeeId, claimableTaskIds, now)
+  if (rank !== 0) return rank
+  const due = new Date(left.warningAt).getTime() - new Date(right.warningAt).getTime()
+  if (due !== 0) return due
+  const created = new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+  if (created !== 0) return created
+  return left.id.localeCompare(right.id)
+}
+
 function recentRequestLabel(timestamp: string, now: number) {
   const requestedAt = new Date(timestamp).getTime()
   if (!Number.isFinite(requestedAt)) return '刚刚'

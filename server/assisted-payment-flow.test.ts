@@ -211,8 +211,9 @@ describe('assisted ordering payment flow', () => {
     expect(claims).toMatchObject({ tableSessionId: orderResponse.json().tableSessionId, expiresAt: now + 15 * 60_000 })
 
     const sessionResponse = await app.inject({
-      method: 'GET',
-      url: `/api/guest/session?token=${encodeURIComponent(linkResponse.json().tableToken)}`,
+      method: 'POST',
+      url: '/api/guest/session',
+      payload: { token: linkResponse.json().tableToken },
     })
     expect(sessionResponse.statusCode).toBe(200)
     const session = sessionResponse.json() as GuestSessionResponse

@@ -508,12 +508,12 @@ describe('order authorization and submission', () => {
       pickedUpAt: null,
     })
     expect(task.productionSla).toBeUndefined()
-    expect(() => startKdsTask(state, {
+    expect(startKdsTask(state, {
       taskId: task.id,
       actorId: 'bartender-1',
       occurredAt: T3,
       idempotencyKey: 'ready-product-start',
-    })).toThrow('KDS任务不能从completed跳转到preparing')
+    })).toBe(task)
 
     pickUpKdsTask(state, {
       taskId: task.id,
@@ -592,7 +592,7 @@ describe('order authorization and submission', () => {
 })
 
 describe('KDS item fulfillment', () => {
-  it('blocks illegal jumps and fulfills the order only after every item is delivered', () => {
+  it('lets a maker finish in one action while preserving receipt evidence and requiring physical delivery', () => {
     const state = createOrderDomainState()
     const order = draft(state)
     addItem(state, order.id, itemInput())
@@ -601,21 +601,18 @@ describe('KDS item fulfillment', () => {
     const firstTaskId = 'kds:order-1:line-1'
     const secondTaskId = 'kds:order-1:line-2'
 
-    expect(() =>
-      completeKdsTask(state, {
-        taskId: firstTaskId,
-        actorId: 'bartender-1',
-        occurredAt: T3,
-        idempotencyKey: 'illegal-complete',
-      }),
-    ).toThrow('KDS任务不能从queued跳转到completed')
-
-    startKdsTask(state, { taskId: firstTaskId, actorId: 'bartender-1', occurredAt: T2, idempotencyKey: 'first-start' })
-    completeKdsTask(state, {
+    const completed = completeKdsTask(state, {
       taskId: firstTaskId,
       actorId: 'bartender-1',
       occurredAt: T3,
       idempotencyKey: 'first-complete',
+    })
+    expect(completed).toMatchObject({
+      status: 'completed',
+      startedAt: null,
+      startedBy: null,
+      completedAt: T3,
+      completedBy: 'bartender-1',
     })
     expect(() =>
       deliverKdsTask(state, {
@@ -687,8 +684,17 @@ describe('KDS item fulfillment', () => {
 
     const completed = completeAndDeliverKdsTask(state, command)
     const retried = completeAndDeliverKdsTask(state, command)
+    const semanticallyRetried = completeAndDeliverKdsTask(state, {
+      ...command,
+      idempotencyKey: 'combined-complete-deliver-second-device',
+    })
 
     expect(retried).toBe(completed)
+    expect(semanticallyRetried).toBe(completed)
+    expect(() => completeAndDeliverKdsTask(state, {
+      ...command,
+      actorId: 'bartender-2',
+    })).toThrow('幂等键已用于不同请求')
     expect(completed).toMatchObject({
       status: 'delivered',
       completedAt: T4,

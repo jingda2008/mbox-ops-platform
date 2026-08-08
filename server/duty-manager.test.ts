@@ -288,6 +288,27 @@ describe('AI duty manager briefing', () => {
     }))
   })
 
+  it('raises a manager risk while keeping the electronic KDS valid after print failure', () => {
+    const now = Date.parse('2026-07-20T12:06:00.000Z')
+    const state = createSeedState(new Date(now))
+    state.tasks = []
+    state.orderDomain.kdsTasks = []
+    state.sopExecutions = []
+    state.sopActionRecords = []
+    state.reservationState!.reservations = []
+    state.hardwareState!.devices.forEach((device) => { device.enabled = false })
+    state.commercialOps!.printJobs.push({
+      id: 'print-failed-1', orderId: 'order-missing', orderItemIds: ['line-1'], printerId: 'bar-printer', routeId: 'bar',
+      status: 'failed', attempts: 3, queuedAt: '2026-07-20T12:00:00.000Z', updatedAt: '2026-07-20T12:01:00.000Z',
+      lastError: 'printer offline',
+    })
+
+    expect(buildDutyManagerBriefing(state, now).risks).toContainEqual(expect.objectContaining({
+      category: 'hardware', severity: 'high', title: expect.stringContaining('电子单兜底'),
+      targetObjectId: 'print-failed-1', recommendedCommand: '打开经营工具',
+    }))
+  })
+
   it('persists a risk incident and automatically closes it after the source clears', () => {
     const now = Date.parse('2026-07-20T12:06:00.000Z')
     const state = createSeedState(new Date(now))

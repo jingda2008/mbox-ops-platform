@@ -33,7 +33,7 @@ export interface AssistedPaymentLink {
 }
 
 export const kdsActionSchema = z.object({
-  action: z.enum(['start', 'complete', 'completeAndDeliver', 'pickUp', 'deliver']),
+  action: z.enum(['start', 'complete', 'completeAndDeliver', 'pickUp', 'pickupAndDeliver', 'deliver']),
   actorId: z.string().min(1),
   idempotencyKey: z.string().min(8).max(128),
 })

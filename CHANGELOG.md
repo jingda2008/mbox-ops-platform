@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.0.0-rc.66 - 2026-08-09
+
+- Reduced production fulfillment to one maker action while preserving an explicit system auto-receipt marker instead of fabricating a manual start event.
+- Reduced delivery to one employee “已送达” action that atomically records inferred pickup, confirmed delivery, linked service completion and immutable audit evidence.
+- Isolated production and delivery queues by the employee's home role, active shift, workstation, skill and assignment; secondary management duties no longer turn a bartender into a store-wide delivery workbench.
+- Prioritized exception and overdue work, the current employee's deliveries, eligible backup deliveries and production work using deadline-first ordering.
+- Kept electronic KDS active when printing is queued or failed and added a duty-manager print-failure risk without claiming physical printer acceptance.
+- Added separate personal permissions for receiving, counting, remakes and bottle storage in both the API and interface; a direct grant no longer expands into unrestricted inventory management.
+- Separated formal reservations, arrived guests and seated history from walk-ins; staff-created walk-ins now use the table-opening flow instead of a synthetic reservation.
+- Added an independent quality supervision gate, focused fulfillment acceptance cases, mobile role checks and explicit deployment, hardware and payment evidence boundaries; the candidate passed only after two rejected review rounds and a final request-trace correction.
+
+## 1.0.0-rc.65 - 2026-08-08
+
+- Added bounded in-process PostgreSQL mutation serialization so aggregate writes no longer exhaust the five-connection application pool during bursts.
+- Reused a revision-matched verified aggregate state during serialized writes, avoiding a repeated full-state database read and parse on every mutation.
+- Classified database backpressure as a temporary 503 response, typed high-frequency business rejections as explicit 4xx responses and client disconnects as warnings rather than system failures; unclassified defects remain error-level signals.
+- Made repeated service completion and KDS completion from another device converge on the existing terminal state without duplicate events or fulfillment.
+- Aligned the guest behavior database constraint with every application event type, including quick-select, recommendation-update and cart-abandonment events.
+- Removed guest credentials from new QR query strings, exchanged sessions through POST bodies and added application plus Caddy access-log redaction.
+- Refreshed the production dependency lock for patched `brace-expansion` and `fast-uri` releases identified by the GitHub Actions security gate.
+- Added PostgreSQL queue, error classification, redaction, QR contract, event contract, semantic idempotency, browser and load regression coverage.
+
 ## 1.0.0-rc.64 - 2026-07-31
 
 - Added configurable high-frequency navigation defaults for every role while preserving the complete permission-derived module set.

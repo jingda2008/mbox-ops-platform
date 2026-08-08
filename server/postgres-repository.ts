@@ -54,6 +54,8 @@ export interface PostgresRepositoryOptions extends PostgresTenantContext {
   defaultIdempotencyLockMs?: number
   healthCheckTimeoutMs?: number
   readCacheValidationTtlMs?: number
+  maxPendingMutations?: number
+  mutationQueueTimeoutMs?: number
   projector?: RuntimeStateProjector
 }
 
@@ -67,6 +69,11 @@ export interface PostgresRepositoryHealth {
     total: number | null
     idle: number | null
     waiting: number | null
+  }
+  mutationQueue: {
+    pending: number
+    active: boolean
+    maxPending: number
   }
   error?: string
   projectionReady?: boolean
@@ -126,6 +133,18 @@ export class PostgresIdempotencyConflictError extends PostgresRepositoryError {
 export class PostgresIdempotencyInProgressError extends PostgresRepositoryError {
   constructor(readonly operationScope: string, readonly idempotencyKey: string) {
     super(`Idempotent operation ${operationScope}/${idempotencyKey} is already in progress`)
+  }
+}
+
+export class PostgresMutationQueueFullError extends PostgresRepositoryError {
+  constructor(readonly maxPending: number) {
+    super(`PostgreSQL mutation queue is full (${maxPending})`)
+  }
+}
+
+export class PostgresMutationQueueTimeoutError extends PostgresRepositoryError {
+  constructor(readonly waitedMs: number) {
+    super(`PostgreSQL mutation queue wait exceeded ${waitedMs}ms`)
   }
 }
 
@@ -221,6 +240,12 @@ const SQL = {
     WHERE tenant_id = $1::uuid AND store_id = $2::uuid
     FOR UPDATE
   `,
+  selectRevisionForUpdate: `
+    SELECT revision
+    FROM mbox.runtime_states
+    WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+    FOR UPDATE
+  `,
   selectRevision: `
     SELECT revision
     FROM mbox.runtime_states
@@ -286,6 +311,8 @@ export class PostgresRepository {
   private readonly defaultIdempotencyLockMs: number
   private readonly healthCheckTimeoutMs: number
   private readonly readCacheValidationTtlMs: number
+  private readonly maxPendingMutations: number
+  private readonly mutationQueueTimeoutMs: number
   private readonly projector: RuntimeStateProjector | null
   private lifecycle: Lifecycle = 'new'
   private initPromise: Promise<void> | null = null
@@ -295,6 +322,9 @@ export class PostgresRepository {
   private cacheRefreshPromise: Promise<RuntimeState> | null = null
   private readPromise: Promise<RuntimeState> | null = null
   private cacheValidatedAt = 0
+  private mutationTail: Promise<void> = Promise.resolve()
+  private pendingMutations = 0
+  private activeMutations = 0
 
   constructor(options: PostgresRepositoryOptions) {
     assertUuid('tenantId', options.tenantId)
@@ -320,6 +350,8 @@ export class PostgresRepository {
       'readCacheValidationTtlMs',
       options.readCacheValidationTtlMs ?? DEFAULT_READ_CACHE_VALIDATION_TTL_MS,
     )
+    this.maxPendingMutations = positiveInteger('maxPendingMutations', options.maxPendingMutations ?? 100)
+    this.mutationQueueTimeoutMs = positiveInteger('mutationQueueTimeoutMs', options.mutationQueueTimeoutMs ?? 15_000)
     this.projector = options.projector ?? null
   }
 
@@ -373,53 +405,62 @@ export class PostgresRepository {
     mutation: (state: RuntimeState) => T | Promise<T>,
     options: PostgresMutationOptions = {},
   ): Promise<T> {
-    let stateChanged = false
-    let committedState: RuntimeState | null = null
-    const result = await this.track(() => this.withTransaction(false, async (client) => {
-      const replay = options.idempotency
-        ? await this.claimIdempotency<T>(client, options.idempotency)
-        : null
-      if (replay?.replayed) return replay.value as T
+    return this.track(() => this.enqueueMutation(async () => {
+      let stateChanged = false
+      let committedState: RuntimeState | null = null
+      const result = await this.withTransaction(false, async (client) => {
+        const replay = options.idempotency
+          ? await this.claimIdempotency<T>(client, options.idempotency)
+          : null
+        if (replay?.replayed) return replay.value as T
 
-      // RuntimeState is currently one aggregate document. Lock its row so
-      // concurrent Cloud Run instances queue writes instead of surfacing CAS
-      // conflicts to staff during the service peak.
-      const current = await this.loadState(client, true)
-      const expectedRevision = current.revision
-      const workingCopy = structuredClone(current)
-      const result = await mutation(workingCopy)
-
-      if (workingCopy.revision !== expectedRevision) {
-        if (!Number.isSafeInteger(workingCopy.revision) || workingCopy.revision <= expectedRevision) {
-          throw new PostgresInvalidRevisionError(expectedRevision, workingCopy.revision)
-        }
-        const serialized = serializeJson(workingCopy, 'runtime state')
-        const update = await client.query<{ revision: number | string }>(SQL.compareAndSwapState, [
+        // Lock only the lightweight revision first. If this process already has
+        // the same verified revision, avoid fetching and parsing the 1MB+ state
+        // document again before every serialized write.
+        const locked = await client.query<{ revision: number | string }>(SQL.selectRevisionForUpdate, [
           this.tenantId,
           this.storeId,
-          workingCopy.revision,
-          serialized,
-          sha256(serialized),
-          expectedRevision,
         ])
-        if (update.rowCount !== 1) throw new PostgresOptimisticConcurrencyError(expectedRevision)
-        if (this.projector) {
-          await this.projector.project(client, this.tenantContext(), current, workingCopy)
-        }
-        stateChanged = true
-        committedState = structuredClone(workingCopy)
-      }
+        if (locked.rowCount !== 1 || !locked.rows[0]) throw new PostgresRuntimeStateNotInitializedError()
+        const expectedRevision = parseRevision(locked.rows[0].revision)
+        const current = this.cachedState?.revision === expectedRevision
+          ? structuredClone(this.cachedState)
+          : await this.loadState(client)
+        const workingCopy = structuredClone(current)
+        const result = await mutation(workingCopy)
 
-      if (options.idempotency) {
-        await this.completeIdempotency(client, options.idempotency, result)
+        if (workingCopy.revision !== expectedRevision) {
+          if (!Number.isSafeInteger(workingCopy.revision) || workingCopy.revision <= expectedRevision) {
+            throw new PostgresInvalidRevisionError(expectedRevision, workingCopy.revision)
+          }
+          const serialized = serializeJson(workingCopy, 'runtime state')
+          const update = await client.query<{ revision: number | string }>(SQL.compareAndSwapState, [
+            this.tenantId,
+            this.storeId,
+            workingCopy.revision,
+            serialized,
+            sha256(serialized),
+            expectedRevision,
+          ])
+          if (update.rowCount !== 1) throw new PostgresOptimisticConcurrencyError(expectedRevision)
+          if (this.projector) {
+            await this.projector.project(client, this.tenantContext(), current, workingCopy)
+          }
+          stateChanged = true
+          committedState = structuredClone(workingCopy)
+        }
+
+        if (options.idempotency) {
+          await this.completeIdempotency(client, options.idempotency, result)
+        }
+        return result
+      })
+      if (stateChanged && committedState) {
+        this.cachedState = committedState
+        this.cacheValidatedAt = Date.now()
       }
       return result
     }))
-    if (stateChanged && committedState) {
-      this.cachedState = committedState
-      this.cacheValidatedAt = Date.now()
-    }
-    return result
   }
 
   async reset(): Promise<RuntimeState> {
@@ -459,6 +500,7 @@ export class PostgresRepository {
         latencyMs: performance.now() - startedAt,
         revision: health.revision,
         pool,
+        mutationQueue: this.mutationQueueHealth(),
         projectionReady: health.projection?.ready,
         projectionRevision: health.projection?.projectedRevision,
         projectionCountsMatch: health.projection?.countsMatch,
@@ -472,6 +514,7 @@ export class PostgresRepository {
         latencyMs: performance.now() - startedAt,
         revision: null,
         pool,
+        mutationQueue: this.mutationQueueHealth(),
         error: error instanceof Error ? error.message : String(error),
       }
     }
@@ -711,6 +754,40 @@ export class PostgresRepository {
     }
   }
 
+  private async enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.pendingMutations >= this.maxPendingMutations) {
+      throw new PostgresMutationQueueFullError(this.maxPendingMutations)
+    }
+    this.pendingMutations += 1
+    const queuedAt = performance.now()
+    const previous = this.mutationTail.catch(() => undefined)
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    this.mutationTail = previous.then(() => gate)
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    let acquired = false
+    try {
+      await Promise.race([
+        previous,
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => {
+            reject(new PostgresMutationQueueTimeoutError(Math.round(performance.now() - queuedAt)))
+          }, this.mutationQueueTimeoutMs)
+        }),
+      ])
+      if (timeout) clearTimeout(timeout)
+      timeout = undefined
+      acquired = true
+      this.activeMutations += 1
+      return await operation()
+    } finally {
+      if (timeout) clearTimeout(timeout)
+      if (acquired) this.activeMutations -= 1
+      this.pendingMutations -= 1
+      release()
+    }
+  }
+
   private track<T>(operation: () => Promise<T>): Promise<T> {
     if (this.lifecycle === 'closing' || this.lifecycle === 'closed') {
       return Promise.reject(new PostgresRepositoryClosedError())
@@ -729,6 +806,15 @@ export class PostgresRepository {
       total: this.pool.totalCount ?? null,
       idle: this.pool.idleCount ?? null,
       waiting: this.pool.waitingCount ?? null,
+    }
+  }
+
+
+  private mutationQueueHealth() {
+    return {
+      pending: this.pendingMutations,
+      active: this.activeMutations > 0,
+      maxPending: this.maxPendingMutations,
     }
   }
 }

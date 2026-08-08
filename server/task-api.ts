@@ -36,7 +36,7 @@ export function registerTaskRoutes(app: FastifyInstance, repository: RuntimeRepo
       throw new AuthorizationError('任务操作人必须与当前登录员工一致', 'service.task.action')
     }
     return repository.mutate((state) => {
-      requireConfiguredOperation(request, state, 'service.task.action')
+      const effectiveActor = requireConfiguredOperation(request, state, 'service.task.action')
       const currentTask = state.tasks.find((item) => item.id === request.params.taskId)
       if (!currentTask) throw new Error('任务不存在')
       const eligibleNotifiedClaim = input.action === 'accept'
@@ -49,7 +49,10 @@ export function registerTaskRoutes(app: FastifyInstance, repository: RuntimeRepo
       }
       const action = { ...input, actorId: actor.actorId }
       const task = applyTaskAction(state, request.params.taskId, action)
-      syncKdsFromFulfillmentServiceTaskAction(state, task, action)
+      syncKdsFromFulfillmentServiceTaskAction(state, task, action, {
+        requestId: request.id,
+        effectiveRoleId: effectiveActor.roleId,
+      })
       return task
     })
   })
@@ -74,7 +77,7 @@ export function registerTaskRoutes(app: FastifyInstance, repository: RuntimeRepo
       throw new AuthorizationError('经理操作人必须与当前登录员工一致', 'service.task.action')
     }
     return repository.mutate((state) => {
-      requireConfiguredOperation(request, state, 'service.task.action')
+      const effectiveActor = requireConfiguredOperation(request, state, 'service.task.action')
       const currentTask = state.tasks.find((item) => item.id === request.params.taskId)
       if (!currentTask) throw new Error('任务不存在')
       requireTableDataScope(request, state, currentTask.tableId, 'service.task.action')
@@ -89,6 +92,9 @@ export function registerTaskRoutes(app: FastifyInstance, repository: RuntimeRepo
           actorId: actor.actorId,
           note: action.note || '店长协助完成',
           idempotencyKey: action.idempotencyKey,
+        }, {
+          requestId: request.id,
+          effectiveRoleId: effectiveActor.roleId,
         })
       }
       return task

@@ -4,7 +4,7 @@ import { ApiError, checkoutGuestOrder, createGuestOrder, createGuestSongRequest,
 import { PendingActionRegistry } from '../pending-action-registry'
 import type { GuestSessionResponse, GuestTaskView, WechatJsapiParameters } from '../shared/guest-contracts'
 import type { GuestBehaviorEventType, GuestBehaviorValue } from '../shared/guest-insight-contracts'
-import { GUEST_SONG_TERMINAL_DISPLAY_MS, formatGuestCompactCountdown, guestAccessPresentation, guestCustomSongServiceNote, guestErrorMessage, guestReplyNotice, guestSessionHistoryUrl, guestSongReplyNotice, guestSongStatusLabel, guestStageIsBeforeFirstSet, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks, type GuestReplyNotice } from './guest-portal-utils'
+import { GUEST_SONG_TERMINAL_DISPLAY_MS, formatGuestCompactCountdown, guestAccessPresentation, guestCustomSongServiceNote, guestEntryToken, guestErrorMessage, guestReplyNotice, guestSessionHistoryUrl, guestSongReplyNotice, guestSongStatusLabel, guestStageIsBeforeFirstSet, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks, type GuestReplyNotice } from './guest-portal-utils'
 import { serverClockOffset, useSecondClock } from './use-second-clock'
 import { MenuOrderingWorkspace, type MenuCartItem, type MenuSubmitOptions } from './MenuOrderingWorkspace'
 import { SuperHighCommunityBand } from './SuperHighCommunityBand'
@@ -160,7 +160,7 @@ const GuestSongProgress = memo(function GuestSongProgress({ requests, terminalSe
 export function GuestPortal() {
   const params = new URLSearchParams(window.location.search)
   const tableCode = params.get('table') ?? 'L01'
-  const initialToken = params.get('token') ?? ''
+  const initialToken = guestEntryToken(window.location.href)
   const requestedPaymentOrderId = params.get('payOrder') ?? ''
   const [data, setData] = useState<GuestSessionResponse | null>(null)
   const [sessionAccessError, setSessionAccessError] = useState('')

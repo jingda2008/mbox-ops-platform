@@ -278,7 +278,7 @@ describe('table operating line', () => {
       method: 'POST', url: '/api/tables/table-l01/close',
       payload: { reason: '错误尝试结台', idempotencyKey: 'table-close-active-song-blocked-0001' },
     })
-    expect(blocked.statusCode).toBe(500)
+    expect(blocked.statusCode).toBe(409)
     expect(blocked.json().message).toContain('点歌未完成或退款未结')
   })
 
@@ -326,7 +326,7 @@ describe('table operating line', () => {
       method: 'POST', url: '/api/tables/table-l01/close',
       payload: { reason: '错误尝试结台', idempotencyKey: 'table-close-partial-blocked-0001' },
     })
-    expect(blocked.statusCode).toBe(500)
+    expect(blocked.statusCode).toBe(409)
     expect(blocked.json().message).toContain('实付1分，应付6800分')
 
     await repository.mutate((state) => {
@@ -429,7 +429,7 @@ describe('table operating line', () => {
       method: 'POST', url: '/api/tables/table-l01/close',
       payload: { reason: '退款后尚未重新收款', idempotencyKey: 'table-close-recollection-blocked-0001' },
     })
-    expect(blocked.statusCode).toBe(500)
+    expect(blocked.statusCode).toBe(409)
     expect(blocked.json().message).toContain('实付0分，应付6800分')
 
     await repository.mutate((state) => {
@@ -659,7 +659,7 @@ describe('table operating line', () => {
       method: 'POST', url: '/api/tables/table-l04/close',
       payload: { reason: '客人已经离店', idempotencyKey: 'table-close-l04-blocked-0002' },
     })
-    expect(blocked.statusCode).toBe(500)
+    expect(blocked.statusCode).toBe(409)
     expect(blocked.json().message).toContain('需要经理填写原因后豁免')
 
     const closed = await app.inject({

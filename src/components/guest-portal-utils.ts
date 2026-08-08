@@ -58,9 +58,20 @@ export function guestReplyNotice(message: string): GuestReplyNotice {
   return { message }
 }
 
+export function guestEntryToken(currentHref: string) {
+  const url = new URL(currentHref)
+  return new URLSearchParams(url.hash.slice(1)).get('token') ?? ''
+}
+
 export function guestSessionHistoryUrl(currentHref: string, tableToken: string) {
   const url = new URL(currentHref)
-  url.searchParams.set('token', tableToken)
+  url.searchParams.delete('token')
+  const existingHash = url.hash.slice(1)
+  const fragment = new URLSearchParams(existingHash && !existingHash.includes('=')
+    ? { view: existingHash }
+    : existingHash)
+  fragment.set('token', tableToken)
+  url.hash = fragment.toString()
   return `${url.pathname}${url.search}${url.hash}`
 }
 

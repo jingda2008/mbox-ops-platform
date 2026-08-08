@@ -809,8 +809,9 @@ function money(amount: number) {
 function assistedPaymentUrl(link: AssistedPaymentLink) {
   const configuredBase = String(import.meta.env.VITE_MBOX_GUEST_BASE_URL ?? '').trim()
   const url = new URL(configuredBase || '/guest', window.location.origin)
-  url.searchParams.set('token', link.tableToken)
+  url.searchParams.set('table', link.tableCode)
   url.searchParams.set('payOrder', link.orderId)
+  url.hash = new URLSearchParams({ token: link.tableToken }).toString()
   return url.toString()
 }
 

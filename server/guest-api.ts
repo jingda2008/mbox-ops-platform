@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import { z } from 'zod'
 import type { RuntimeMode } from '../src/shared/auth-contracts.js'
 import {
   guestTaskCreateSchema,
@@ -534,9 +535,10 @@ function writeAccessFromToken(state: RuntimeState, token: string, options: Guest
 export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRepository, options: GuestApiOptions) {
   const resolveProvider = options.providerResolver ?? createEnvironmentPaymentProviderResolver()
   const guestInsights = options.guestInsights ?? new MemoryGuestInsightsStore()
-  app.get<{ Querystring: { token?: string; table?: string } }>('/api/guest/session', async (request) => {
+  const sessionExchangeSchema = z.object({ token: z.string().trim().min(20).max(2_048) }).strict()
+  const exchangeSession = async (request: FastifyRequest, token?: string, legacyTable?: string) => {
     const state = await repository.read()
-    const access = exchangeAccessFromRequest(state, request.query.token, request.query.table, options)
+    const access = exchangeAccessFromRequest(state, token, legacyTable, options)
     const anonymousId = guestIdentityFromRequest(request, randomUUID)
     await recordGuestInsight(request, guestInsights, {
       anonymousId,
@@ -544,7 +546,7 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
       tableCode: access.table.code,
       businessDate: tableSessionBusinessDate(state, access.tableSession),
       eventType: 'session_started',
-      metadata: { entry: request.query.token ? 'table_qr_or_session' : 'local_table_sample' },
+      metadata: { entry: token ? 'table_qr_or_session' : 'local_table_sample' },
       idempotencyKey: `guest-session-started:${anonymousId}:${access.tableSession.id}`,
       occurredAt: new Date(options.now?.() ?? Date.now()).toISOString(),
     })
@@ -558,6 +560,15 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
       options.runtimeMode === 'staging' || options.runtimeMode === 'production',
       anonymousId,
     )
+  }
+
+  app.get<{ Querystring: { table?: string } }>('/api/guest/session', async (request) => {
+    return exchangeSession(request, undefined, request.query.table)
+  })
+
+  app.post<{ Body: { token: string } }>('/api/guest/session', async (request) => {
+    const input = sessionExchangeSchema.parse(request.body)
+    return exchangeSession(request, input.token)
   })
 
   app.post('/api/guest/events', async (request, reply) => {

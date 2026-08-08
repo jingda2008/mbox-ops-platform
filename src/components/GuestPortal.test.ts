@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { GuestTaskView } from '../shared/guest-contracts'
-import { formatGuestCompactCountdown, formatGuestCountdown, guestAccessPresentation, guestCustomSongServiceNote, guestErrorMessage, guestReplyNotice, guestSessionHistoryUrl, guestSongReplyNotice, guestSongStatusLabel, guestStageIsBeforeFirstSet, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks } from './guest-portal-utils'
+import { formatGuestCompactCountdown, formatGuestCountdown, guestAccessPresentation, guestCustomSongServiceNote, guestEntryToken, guestErrorMessage, guestReplyNotice, guestSessionHistoryUrl, guestSongReplyNotice, guestSongStatusLabel, guestStageIsBeforeFirstSet, guestTaskReplyNotice, reconcileGuestReply, resolveGuestStage, trackGuestSongTerminalStates, visibleGuestSongRequests, visibleGuestTasks } from './guest-portal-utils'
 
 function guestTask(status: GuestTaskView['status'], id = `task-${status}`): GuestTaskView {
   return {
@@ -45,7 +45,9 @@ describe('guest session renewal URL', () => {
     expect(guestSessionHistoryUrl(
       'https://mbox.example/guest?token=old-token&payOrder=order-1#orders',
       'new token/+',
-    )).toBe('/guest?token=new+token%2F%2B&payOrder=order-1#orders')
+    )).toBe('/guest?payOrder=order-1#view=orders&token=new+token%2F%2B')
+    expect(guestEntryToken('https://mbox.example/guest?token=legacy')).toBe('')
+    expect(guestEntryToken('https://mbox.example/guest?table=L01#token=current')).toBe('current')
   })
 })
 

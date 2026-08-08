@@ -25,6 +25,8 @@ export interface RuntimeConfig {
   tenantId?: string
   storeUuid?: string
   databasePoolMax: number
+  databaseMutationQueueMax: number
+  databaseMutationQueueWaitMs: number
   stateReadCacheMs: number
   metricsToken?: string
   publicBaseUrl?: string
@@ -171,6 +173,8 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
     tenantId: env.MBOX_TENANT_ID?.trim() || undefined,
     storeUuid: env.MBOX_STORE_UUID?.trim() || undefined,
     databasePoolMax: parseInteger(env.MBOX_DATABASE_POOL_MAX, 10, 'MBOX_DATABASE_POOL_MAX', 1, 100),
+    databaseMutationQueueMax: parseInteger(env.MBOX_DATABASE_MUTATION_QUEUE_MAX, 100, 'MBOX_DATABASE_MUTATION_QUEUE_MAX', 1, 1_000),
+    databaseMutationQueueWaitMs: parseInteger(env.MBOX_DATABASE_MUTATION_QUEUE_WAIT_MS, 15_000, 'MBOX_DATABASE_MUTATION_QUEUE_WAIT_MS', 1_000, 60_000),
     stateReadCacheMs: parseInteger(env.MBOX_STATE_READ_CACHE_MS, 3_000, 'MBOX_STATE_READ_CACHE_MS', 500, 10_000),
     metricsToken: env.MBOX_METRICS_TOKEN?.trim() || undefined,
     publicBaseUrl: env.MBOX_PUBLIC_BASE_URL?.trim() || undefined,

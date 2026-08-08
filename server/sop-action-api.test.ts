@@ -33,7 +33,7 @@ describe('SOP evidence resolution', () => {
     }, [secret])).toThrow('L01')
 
     const resolved = resolveSopAction(state, 'sop-action-qr-1', 'emp-lin', {
-      decision: 'approve', note: '已经到桌并扫码', tableQrToken: `https://mbox.example.com/guest?token=${encodeURIComponent(correct)}`, idempotencyKey: 'qr-correct-table-1',
+      decision: 'approve', note: '已经到桌并扫码', tableQrToken: `https://mbox.example.com/guest?table=L01#token=${encodeURIComponent(correct)}`, idempotencyKey: 'qr-correct-table-1',
     }, [secret])
     expect(resolved).toMatchObject({ status: 'completed', completedBy: 'emp-lin' })
     expect(resolved.evidenceReference).toMatch(/^table-qr-sha256:/)

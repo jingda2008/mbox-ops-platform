@@ -61,7 +61,6 @@ import { registerBusinessDayRoutes } from './business-day-api.js'
 import { reconcileAutomaticBusinessDay } from './business-day-rollover.js'
 import { StoreImportValidationError } from './store-import.js'
 import {
-  PostgresRepositoryError,
   PostgresIdempotencyConflictError,
   PostgresIdempotencyInProgressError,
   PostgresOptimisticConcurrencyError,
@@ -83,10 +82,7 @@ import { applyScheduledOperations, scheduledOperationsWouldChange } from './oper
 import { projectRuntimeStateForActor } from './bootstrap-projection.js'
 import { buildBootstrapViewEtag } from './bootstrap-etag.js'
 import { RevisionScopedCache } from './revision-scoped-cache.js'
-import {
-  OperationalReadStoreError,
-  resolveOperationalRuntimeState,
-} from './operational-read-store.js'
+import { resolveOperationalRuntimeState } from './operational-read-store.js'
 import { effectivePermissionIdsForEmployee } from '../src/shared/staff-access.js'
 import { preserveProtectedProductCost, productCostView } from './product-cost-policy.js'
 import { MemoryRateLimitStore, PostgresRateLimitStore } from './rate-limit.js'
@@ -104,11 +100,21 @@ import {
   MemoryAssistantConversationStore,
   PostgresAssistantConversationStore,
 } from './assistant-conversation-store.js'
+import { BusinessRuleError } from './business-rule-error.js'
+import { isClientDisconnect, isPersistenceFailure } from './error-classification.js'
+import { requestLogSerializer } from './log-redaction.js'
 
 const runtimeConfig = loadRuntimeConfig()
 
 const app = Fastify({
-  logger: { level: runtimeConfig.logLevel },
+  logger: {
+    level: runtimeConfig.logLevel,
+    redact: {
+      paths: ['req.headers.authorization', 'req.headers.cookie', 'req.headers.x-api-key'],
+      censor: 'REDACTED',
+    },
+    serializers: { req: requestLogSerializer },
+  },
   bodyLimit: runtimeConfig.bodyLimitBytes,
   trustProxy: runtimeConfig.runtimeMode === 'staging' || runtimeConfig.runtimeMode === 'production',
 })
@@ -391,14 +397,7 @@ const customerNotificationAdapters = createCustomerNotificationAdapters({
 })
 const sopActionAdapters = createSopActionAdapters(runtimeConfig)
 
-function isPersistenceFailure(error: unknown) {
-  if (error instanceof PostgresRepositoryError || error instanceof OperationalReadStoreError) return true
-  if (!error || typeof error !== 'object' || !('code' in error)) return false
-  const code = String((error as { code?: unknown }).code ?? '')
-  return /^[0-9A-Z]{5}$/.test(code) || ['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EPIPE'].includes(code)
-}
-
-app.setErrorHandler((error, _request, reply) => {
+app.setErrorHandler((error, request, reply) => {
   if (error instanceof ZodError) {
     return reply.status(400).send(clientValidationError(error))
   }
@@ -418,6 +417,10 @@ app.setErrorHandler((error, _request, reply) => {
     return reply.status(error.statusCode).send({ code: error.code, message: error.message, operation: error.operation })
   }
   if (error instanceof CommerceRequestError) {
+    return reply.status(error.statusCode).send({ code: error.code, message: error.message })
+  }
+  if (error instanceof BusinessRuleError) {
+    request.log.info({ code: error.code, statusCode: error.statusCode }, 'business rule rejected')
     return reply.status(error.statusCode).send({ code: error.code, message: error.message })
   }
   if (error instanceof SongConfigVersionConflictError) {
@@ -440,15 +443,22 @@ app.setErrorHandler((error, _request, reply) => {
     return reply.status(409).send({ code: 'CONCURRENT_WRITE_CONFLICT', message: '数据已发生变化，请刷新后重试' })
   }
   if (isPersistenceFailure(error)) {
-    app.log.error(error)
+    request.log.error({ err: error }, 'persistence unavailable')
     return reply.status(503).send({
       code: 'PERSISTENCE_UNAVAILABLE',
-      message: '经营数据服务暂时不可用，请稍后重试',
+      message: '现场数据正在同步，请稍候重试；已完成的操作会自动核对状态',
     })
   }
-  app.log.error(error)
+  if (isClientDisconnect(error)) {
+    request.log.warn({ code: 'CLIENT_DISCONNECTED' }, 'client disconnected before response completed')
+    return reply.status(499).send({ code: 'CLIENT_DISCONNECTED', message: '客户端已断开连接' })
+  }
+  // Keep unknown failures visible at error level until their business semantics
+  // have been explicitly classified. This prevents real defects being hidden by
+  // the user-facing 400 compatibility response.
+  request.log.error({ err: error }, 'unclassified application error')
   return reply.status(400).send({
-    code: 'BUSINESS_ERROR',
+    code: 'BUSINESS_RULE_REJECTED',
     message: error instanceof Error ? error.message : '未知业务错误',
   })
 })

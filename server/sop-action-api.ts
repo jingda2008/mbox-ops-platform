@@ -25,7 +25,8 @@ function tableTokenValue(scannedValue: string) {
   if (!/^https?:\/\//i.test(scannedValue)) return scannedValue
   let token: string | null
   try {
-    token = new URL(scannedValue).searchParams.get('token')
+    const url = new URL(scannedValue)
+    token = new URLSearchParams(url.hash.slice(1)).get('token')
   } catch {
     throw new SopActionBusinessError('二维码链接格式不正确，请重新扫描', 'SOP_QR_URL_INVALID', 400)
   }

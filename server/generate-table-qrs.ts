@@ -114,7 +114,8 @@ export function buildTableQrEntries(state: RuntimeState, baseUrl: string, secret
       issuedAt,
     }, secret)
     const url = new URL(parsedUrl)
-    url.searchParams.set('token', token)
+    url.searchParams.set('table', table.code)
+    url.hash = new URLSearchParams({ token }).toString()
     return {
       tableCode: table.code,
       displayName: table.displayName,

@@ -508,12 +508,12 @@ describe('order authorization and submission', () => {
       pickedUpAt: null,
     })
     expect(task.productionSla).toBeUndefined()
-    expect(() => startKdsTask(state, {
+    expect(startKdsTask(state, {
       taskId: task.id,
       actorId: 'bartender-1',
       occurredAt: T3,
       idempotencyKey: 'ready-product-start',
-    })).toThrow('KDS任务不能从completed跳转到preparing')
+    })).toBe(task)
 
     pickUpKdsTask(state, {
       taskId: task.id,
@@ -687,8 +687,17 @@ describe('KDS item fulfillment', () => {
 
     const completed = completeAndDeliverKdsTask(state, command)
     const retried = completeAndDeliverKdsTask(state, command)
+    const semanticallyRetried = completeAndDeliverKdsTask(state, {
+      ...command,
+      idempotencyKey: 'combined-complete-deliver-second-device',
+    })
 
     expect(retried).toBe(completed)
+    expect(semanticallyRetried).toBe(completed)
+    expect(() => completeAndDeliverKdsTask(state, {
+      ...command,
+      actorId: 'bartender-2',
+    })).toThrow('幂等键已用于不同请求')
     expect(completed).toMatchObject({
       status: 'delivered',
       completedAt: T4,

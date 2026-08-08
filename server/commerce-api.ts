@@ -30,6 +30,7 @@ import {
   submitOrder,
 } from './order-domain.js'
 import type { RuntimeRepository } from './repository.js'
+import { BusinessRuleError } from './business-rule-error.js'
 import { completeAwaitingOrderOnOrder } from './proactive-service.js'
 import { consumeManagedInventoryForSubmittedOrder } from './inventory-order-integration.js'
 import {
@@ -634,7 +635,9 @@ export function registerCommerceRoutes(
       }
       const task = state.orderDomain.kdsTasks.find((candidate) => candidate.id === request.params.taskId)
       if (!task) throw new Error('KDS任务不存在')
-      if (task.status === 'delivered') throw new Error('已经送达的商品不能取消制作，请走退菜或退款流程')
+      if (task.status === 'delivered') {
+        throw new BusinessRuleError('已经送达的商品不能取消制作，请走退菜或退款流程', 'KDS_ALREADY_DELIVERED')
+      }
       const tableSession = state.songState.tableSessions.find((candidate) => candidate.id === task.tableSessionId)
       if (!tableSession || tableSession.status !== 'open') throw new Error('KDS任务所属桌次已经结束')
       requireConfiguredOperation(request, state, 'table.close')

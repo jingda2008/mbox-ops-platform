@@ -4,6 +4,8 @@ import {
   POSTGRES_RUNTIME_STATE_MIGRATION_SQL,
   PostgresIdempotencyConflictError,
   PostgresInvalidRevisionError,
+  PostgresMutationQueueFullError,
+  PostgresMutationQueueTimeoutError,
   PostgresOptimisticConcurrencyError,
   PostgresRepository,
   PostgresRepositoryClosedError,
@@ -229,7 +231,7 @@ function idempotencyMapKey(values: unknown[]): string {
   return `${String(values[0])}:${String(values[1])}:${String(values[2])}:${String(values[3])}`
 }
 
-function createRepository(pool = new FakePool()) {
+function createRepository(pool = new FakePool(), options: { maxPendingMutations?: number; mutationQueueTimeoutMs?: number } = {}) {
   return {
     pool,
     repository: new PostgresRepository({
@@ -238,6 +240,7 @@ function createRepository(pool = new FakePool()) {
       storeId,
       clock: () => new Date(now),
       seedState: createSeedState,
+      ...options,
     }),
   }
 }
@@ -308,8 +311,7 @@ describe('PostgresRepository', () => {
     expect(result).toBe(2)
     expect((await repository.read()).store.name).toBe('Production store')
     expect(pool.queries.some(({ sql }) => (
-      sql.startsWith('SELECT revision, state, state_sha256 FROM mbox.runtime_states')
-      && sql.endsWith('FOR UPDATE')
+      sql.startsWith('SELECT revision FROM mbox.runtime_states') && sql.endsWith('FOR UPDATE')
     ))).toBe(true)
 
     pool.failNextCompareAndSwap = true
@@ -347,6 +349,82 @@ describe('PostgresRepository', () => {
     expect(pool.queries.filter(({ sql }) => (
       sql.startsWith('SELECT revision FROM mbox.runtime_states')
     ))).toHaveLength(revisionReadsAfterCommit)
+  })
+
+  it('serializes concurrent mutations and keeps aggregate state reads out of the hot write path', async () => {
+    const { pool, repository } = createRepository()
+    await repository.init()
+    await repository.read()
+    const fullReadsBefore = pool.queries.filter(({ sql }) => (
+      sql.startsWith('SELECT revision, state, state_sha256 FROM mbox.runtime_states')
+    )).length
+    let active = 0
+    let maximumActive = 0
+    let releaseFirst!: () => void
+    let firstEntered!: () => void
+    const firstBlocked = new Promise<void>((resolve) => { releaseFirst = resolve })
+    const entered = new Promise<void>((resolve) => { firstEntered = resolve })
+    const mutation = async (state: ReturnType<typeof createSeedState>, block = false) => {
+      active += 1
+      maximumActive = Math.max(maximumActive, active)
+      if (block) {
+        firstEntered()
+        await firstBlocked
+      }
+      state.revision += 1
+      active -= 1
+      return state.revision
+    }
+
+    const first = repository.mutate((state) => mutation(state, true))
+    await entered
+    const second = repository.mutate((state) => mutation(state))
+    expect((await repository.healthCheck()).mutationQueue).toMatchObject({ pending: 2, active: true })
+    releaseFirst()
+
+    await expect(Promise.all([first, second])).resolves.toEqual([2, 3])
+    expect(maximumActive).toBe(1)
+    expect(pool.queries.filter(({ sql }) => (
+      sql.startsWith('SELECT revision, state, state_sha256 FROM mbox.runtime_states')
+    ))).toHaveLength(fullReadsBefore)
+  })
+
+  it('rejects excess or stale queued mutations before they consume database connections', async () => {
+    const full = createRepository(new FakePool(), { maxPendingMutations: 2 })
+    await full.repository.init()
+    let release!: () => void
+    let entered!: () => void
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    const first = full.repository.mutate(async (state) => {
+      entered()
+      await blocked
+      state.revision += 1
+    })
+    await started
+    const second = full.repository.mutate((state) => { state.revision += 1 })
+    await expect(full.repository.mutate((state) => { state.revision += 1 }))
+      .rejects.toBeInstanceOf(PostgresMutationQueueFullError)
+    release()
+    await Promise.all([first, second])
+
+    const timed = createRepository(new FakePool(), { mutationQueueTimeoutMs: 1 })
+    await timed.repository.init()
+    let releaseTimed!: () => void
+    let enteredTimed!: () => void
+    const timedBlock = new Promise<void>((resolve) => { releaseTimed = resolve })
+    const timedStarted = new Promise<void>((resolve) => { enteredTimed = resolve })
+    const timedFirst = timed.repository.mutate(async (state) => {
+      enteredTimed()
+      await timedBlock
+      state.revision += 1
+    })
+    await timedStarted
+    const timedSecond = timed.repository.mutate((state) => { state.revision += 1 })
+    await expect(timedSecond).rejects.toBeInstanceOf(PostgresMutationQueueTimeoutError)
+    expect((await timed.repository.healthCheck()).mutationQueue).toMatchObject({ pending: 1, active: true })
+    releaseTimed()
+    await timedFirst
   })
 
   it('accepts multi-event revision advances and rejects non-advancing revisions', async () => {

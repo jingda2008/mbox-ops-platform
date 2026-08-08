@@ -15,6 +15,7 @@ import {
 } from '../src/shared/contracts.js'
 import { requireConfiguredOperation, requireTableDataScope, requireTableResponsibility } from './authorization.js'
 import type { RuntimeRepository } from './repository.js'
+import { BusinessRuleError } from './business-rule-error.js'
 import {
   activeTableCombinationLinks,
   currentOpenTableSession,
@@ -110,7 +111,7 @@ export function openWalkInTableSession(
   }
   const readiness = assertTablePrimaryReady(state, tableId, actorId, options.allowOfflineLocalActor)
   const table = readiness.table
-  if (table.status !== 'available') throw new Error('只有空桌可以临客开台')
+  if (table.status !== 'available') throw new BusinessRuleError('只有空桌可以临客开台', 'TABLE_ALREADY_OPEN')
   const extraSeatCount = Math.max(0, input.partySize - table.capacity)
   if (readiness.reassignedFrom) {
     state.auditEntries.push({
@@ -393,26 +394,26 @@ function assertSessionCanClose(state: RuntimeState, tableSessionId: string) {
   const openKds = state.orderDomain.kdsTasks.filter((task) =>
     task.tableSessionId === tableSessionId && !isKdsTaskOperationallyClosed(state.orderDomain, task),
   )
-  if (openKds.length > 0) throw new Error(`仍有${openKds.length}项商品未送达，不能结台`)
+  if (openKds.length > 0) throw new BusinessRuleError(`仍有${openKds.length}项商品未送达，不能结台`, 'TABLE_KDS_OPEN')
 
   const lockedBenefits = state.benefitRedemptions.filter((item) =>
     item.tableSessionId === tableSessionId && item.status === 'locked',
   )
-  if (lockedBenefits.length > 0) throw new Error(`仍有${lockedBenefits.length}项权益锁定未处理，不能结台`)
+  if (lockedBenefits.length > 0) throw new BusinessRuleError(`仍有${lockedBenefits.length}项权益锁定未处理，不能结台`, 'TABLE_BENEFITS_LOCKED')
 
   const pendingRefunds = state.paymentDomain.refunds.filter((refund) =>
     refund.tableSessionId === tableSessionId && pendingRefundStatuses.has(refund.status),
   )
-  if (pendingRefunds.length > 0) throw new Error(`仍有${pendingRefunds.length}笔退款处理中，不能结台`)
+  if (pendingRefunds.length > 0) throw new BusinessRuleError(`仍有${pendingRefunds.length}笔退款处理中，不能结台`, 'TABLE_REFUND_PENDING')
 
   const activeSongs = state.songState.requests.filter((request) => (
     request.tableSessionId === tableSessionId && !isSongRequestOperationallyClosed(request)
   ))
-  if (activeSongs.length > 0) throw new Error(`仍有${activeSongs.length}首点歌未完成或退款未结，不能结台`)
+  if (activeSongs.length > 0) throw new BusinessRuleError(`仍有${activeSongs.length}首点歌未完成或退款未结，不能结台`, 'TABLE_SONG_OPEN')
 
   const orders = state.orderDomain.orders.filter((order) => order.tableSessionId === tableSessionId)
   if (orders.some((order) => ['draft', 'authorization_pending'].includes(order.status))) {
-    throw new Error('桌次仍有草稿或待授权订单，不能结台')
+    throw new BusinessRuleError('桌次仍有草稿或待授权订单，不能结台', 'TABLE_ORDER_OPEN')
   }
   const confirmedIntents = state.paymentDomain.paymentIntents.filter((intent) =>
     intent.tableSessionId === tableSessionId && confirmedPaymentStatuses.has(intent.status),
@@ -440,7 +441,10 @@ function assertSessionCanClose(state: RuntimeState, tableSessionId: string) {
         !Number.isSafeInteger(payableAmount) || !Number.isSafeInteger(netPaidAmount) ||
         netPaidAmount !== netPayableAmount
       ) {
-        throw new Error(`商品“${item.name}”尚未完成收款：实付${netPaidAmount}分，应付${netPayableAmount}分，不能结台`)
+        throw new BusinessRuleError(
+          `商品“${item.name}”尚未完成收款：实付${netPaidAmount}分，应付${netPayableAmount}分，不能结台`,
+          'TABLE_UNPAID_ITEMS',
+        )
       }
     }
   }
@@ -769,19 +773,19 @@ export function registerTableSessionRoutes(app: FastifyInstance, repository: Run
         entry.action === 'table.closed.v1' && entry.details.idempotencyKey === input.idempotencyKey,
       )
       if (replay) {
-        if (replay.objectId !== request.params.tableId) throw new Error('幂等键已用于其他桌台')
+        if (replay.objectId !== request.params.tableId) throw new BusinessRuleError('幂等键已用于其他桌台', 'TABLE_IDEMPOTENCY_CONFLICT')
         return state.tables.find((table) => table.id === request.params.tableId)
       }
       const table = state.tables.find((item) => item.id === request.params.tableId)
-      if (!table || table.status !== 'occupied') throw new Error('只有营业中的桌台可以结台')
+      if (!table || table.status !== 'occupied') throw new BusinessRuleError('只有营业中的桌台可以结台', 'TABLE_NOT_OCCUPIED')
       const session = currentOpenTableSession(state, table.id)
       const combinations = currentCombinationForTable(state, table.id)
-      if (combinations.length > 0) throw new Error('桌台仍在合台/加桌关系中，请先拆回再结台')
+      if (combinations.length > 0) throw new BusinessRuleError('桌台仍在合台/加桌关系中，请先拆回再结台', 'TABLE_COMBINATION_OPEN')
       assertSessionCanClose(state, session.id)
       const summary = tableSessionSummary(state, session)
       if (summary.differenceAmount > 0) {
         if (!input.minimumSpendWaiver) {
-          throw new Error(`当前消费${summary.spendAmount}分，距低消还差${summary.differenceAmount}分；需要经理填写原因后豁免`)
+          throw new BusinessRuleError(`当前消费${summary.spendAmount}分，距低消还差${summary.differenceAmount}分；需要经理填写原因后豁免`, 'TABLE_MINIMUM_SPEND_NOT_MET')
         }
         if (!['manager', 'operations_director', 'owner'].includes(actor.roleId)) throw new Error('只有店长、运营负责人或老板可以豁免低消差额')
         state.auditEntries.push({

@@ -13,7 +13,10 @@ describe('table QR manifest', () => {
     const entries = buildTableQrEntries(createSeedState(), 'https://guest.example.com/guest', secret, 1_752_499_200_000)
     expect(entries).toHaveLength(createSeedState().tables.length)
     expect(new Set(entries.map((entry) => entry.url)).size).toBe(entries.length)
-    const token = new URL(entries[0]!.url).searchParams.get('token')!
+    const entryUrl = new URL(entries[0]!.url)
+    const token = new URLSearchParams(entryUrl.hash.slice(1)).get('token')!
+    expect(entryUrl.searchParams.get('table')).toBe(entries[0]!.tableCode)
+    expect(entryUrl.searchParams.has('token')).toBe(false)
     expect(requireStaticTableQr(verifyTableAccessToken(token, secret))).toMatchObject({
       tokenType: 'table_qr',
       tableCode: entries[0]!.tableCode,

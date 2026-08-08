@@ -341,10 +341,13 @@ async function guestRequest<T>(
 }
 
 export function getGuestSession(tableToken: string, localTableCode = '') {
-  const query = tableToken
-    ? `token=${encodeURIComponent(tableToken)}`
-    : `table=${encodeURIComponent(localTableCode)}`
-  return guestRequest<GuestSessionResponse>(`/api/guest/session?${query}`)
+  if (tableToken) {
+    return guestRequest<GuestSessionResponse>('/api/guest/session', {
+      method: 'POST',
+      body: JSON.stringify({ token: tableToken }),
+    }, { interactionFeedback: false })
+  }
+  return guestRequest<GuestSessionResponse>(`/api/guest/session?table=${encodeURIComponent(localTableCode)}`)
 }
 
 export function createGuestTask(input: GuestTaskCreateInput) {

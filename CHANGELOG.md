@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0-rc.65 - 2026-08-08
+
+- Added bounded in-process PostgreSQL mutation serialization so aggregate writes no longer exhaust the five-connection application pool during bursts.
+- Reused a revision-matched verified aggregate state during serialized writes, avoiding a repeated full-state database read and parse on every mutation.
+- Classified database backpressure as a temporary 503 response, typed high-frequency business rejections as explicit 4xx responses and client disconnects as warnings rather than system failures; unclassified defects remain error-level signals.
+- Made repeated service completion and KDS completion from another device converge on the existing terminal state without duplicate events or fulfillment.
+- Aligned the guest behavior database constraint with every application event type, including quick-select, recommendation-update and cart-abandonment events.
+- Removed guest credentials from new QR query strings, exchanged sessions through POST bodies and added application plus Caddy access-log redaction.
+- Added PostgreSQL queue, error classification, redaction, QR contract, event contract, semantic idempotency, browser and load regression coverage.
+
 ## 1.0.0-rc.64 - 2026-07-31
 
 - Added configurable high-frequency navigation defaults for every role while preserving the complete permission-derived module set.

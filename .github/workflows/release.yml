@@ -26,7 +26,7 @@ jobs:
           version=$(node -p "require('./package.json').version")
           test "${GITHUB_REF_NAME}" = "v${version}"
       - id: verified-run
-        name: Reuse the successful tag CI image
+        name: Wait for the successful tag CI image
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -44,9 +44,14 @@ jobs:
           done
           test -n "${run_id}"
           printf 'run_id=%s\n' "${run_id}" >> "${GITHUB_OUTPUT}"
-          gh run download "${run_id}" \
-            --name "mbox-image-${GITHUB_SHA}" \
-            --dir release-artifact
+      - name: Download the CI-staged immutable bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p release-artifact
+          gh release download "${GITHUB_REF_NAME}" \
+            --dir release-artifact \
+            --clobber
       - name: Verify downloaded immutable bundle
         run: |
           version=$(node -p "require('./package.json').version")
@@ -61,18 +66,14 @@ jobs:
             cd release-artifact
             sha256sum --check ./*.tar.gz.sha256
           )
-      - name: Publish verified GitHub pre-release and deployment bundle
+      - name: Publish the verified GitHub pre-release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version=${GITHUB_REF_NAME#v}
-          assets=(release-artifact/*)
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" --clobber
-          else
-            gh release create "${GITHUB_REF_NAME}" "${assets[@]}" \
-              --verify-tag \
-              --prerelease \
-              --title "M-BOX Ops Platform ${version}" \
-              --notes-file "docs/release-${version}.md"
-          fi
+          gh release edit "${GITHUB_REF_NAME}" \
+            --verify-tag \
+            --draft=false \
+            --prerelease \
+            --title "M-BOX Ops Platform ${version}" \
+            --notes-file "docs/release-${version}.md"

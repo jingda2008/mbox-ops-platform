@@ -281,6 +281,7 @@ export function syncKdsFromFulfillmentServiceTaskAction(
   state: RuntimeState,
   serviceTask: ServiceTask,
   input: TaskActionInput,
+  auditContext: { requestId?: string; effectiveRoleId?: string } = {},
 ): KdsTask | null {
   const prefix = 'fulfillment-delivery:'
   if (!serviceTask.triggerId?.startsWith(prefix) || !['arrive', 'complete', 'quick_complete'].includes(input.action)) return null
@@ -327,6 +328,50 @@ export function syncKdsFromFulfillmentServiceTaskAction(
       })
     } else if (kdsTask.status !== 'delivered') {
       throw new Error(`快速送达前KDS必须已完成出品，当前状态：${kdsTask.status}`)
+    }
+    const semanticDeliveryKey = `${kdsTask.id}:pickup_and_delivery`
+    const atomicEventId = `task_event_atomic_delivery_${createHash('sha256').update(semanticDeliveryKey).digest('hex').slice(0, 24)}`
+    if (!state.taskEvents.some((event) => event.id === atomicEventId)) {
+      state.taskEvents.push({
+        id: atomicEventId,
+        taskId: serviceTask.id,
+        type: 'fulfillment.atomic_pickup_delivery.v1',
+        actorId: input.actorId,
+        occurredAt: serviceTask.completedAt,
+        payload: {
+          idempotencyKey: input.idempotencyKey,
+          kdsTaskId: kdsTask.id,
+          transition: 'pickup_and_delivery',
+          pickupEvidence: 'system_inferred_from_one_tap_delivery',
+          deliveryEvidence: 'employee_confirmed',
+        },
+      })
+      state.auditEntries.push({
+        id: `audit_atomic_delivery_${createHash('sha256').update(semanticDeliveryKey).digest('hex').slice(0, 24)}`,
+        actorId: input.actorId,
+        action: 'fulfillment.atomic_pickup_delivery.v1',
+        objectType: 'kdsTask',
+        objectId: kdsTask.id,
+        occurredAt: serviceTask.completedAt,
+        details: {
+          serviceTaskId: serviceTask.id,
+          orderId: kdsTask.orderId,
+          orderItemId: kdsTask.orderItemId,
+          tableSessionId: kdsTask.tableSessionId,
+          stationId: kdsTask.stationId,
+          workstationName: kdsTask.workstation?.name ?? kdsTask.stationId,
+          workstationConfigVersion: kdsTask.workstation?.configVersion ?? null,
+          transition: 'pickup_and_delivery',
+          actionStage: 'delivery',
+          effectiveRoleId: auditContext.effectiveRoleId
+            ?? state.employees.find((employee) => employee.id === input.actorId)?.roleId
+            ?? null,
+          requestId: auditContext.requestId ?? null,
+          pickupEvidence: 'system_inferred_from_one_tap_delivery',
+          deliveryEvidence: 'employee_confirmed',
+          idempotencyKey: input.idempotencyKey,
+        },
+      })
     }
   } else if (kdsTask.status === 'picked_up') {
     if (!serviceTask.completedAt) throw new Error('取送服务任务缺少完成时间')

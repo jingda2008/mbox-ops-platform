@@ -21,6 +21,20 @@ describe('optimistic projections', () => {
     })
   })
 
+  it('projects one-tap pickup and delivery immediately', () => {
+    const task = { status: 'completed', pickedUpAt: null, pickedUpBy: null, deliveredAt: null, deliveredBy: null } as KdsTask
+    expect(projectKdsTask(task, 'pickupAndDeliver', 'emp-tom', now)).toMatchObject({
+      status: 'delivered', pickedUpAt: now, pickedUpBy: 'emp-tom', deliveredAt: now, deliveredBy: 'emp-tom',
+    })
+  })
+
+  it('does not invent a production start time when queued work is completed directly', () => {
+    const task = { status: 'queued', queuedAt: '2026-07-21T11:55:00.000Z', startedAt: null, startedBy: null } as KdsTask
+    expect(projectKdsTask(task, 'complete', 'emp-bar', now)).toMatchObject({
+      status: 'completed', startedAt: null, startedBy: null, completedAt: now, completedBy: 'emp-bar',
+    })
+  })
+
   it('projects arrival while preserving the confirmed timestamp', () => {
     const reservation = { status: 'confirmed', confirmedAt: 'earlier', arrivedAt: null } as Reservation
     expect(projectReservation(reservation, 'arrive', now)).toMatchObject({

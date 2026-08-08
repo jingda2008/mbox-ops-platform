@@ -1,4 +1,4 @@
-import { Ban, CheckCheck, ChefHat, CircleAlert, CircleDollarSign, Clock3, Copy, Gift, LockKeyhole, LogOut, MessageSquareWarning, PackageCheck, PackageX, Play, QrCode, RotateCcw, ScanLine, ShoppingCart, Smartphone, UserRound, X } from 'lucide-react'
+import { Ban, CheckCheck, ChefHat, CircleAlert, CircleDollarSign, Clock3, Copy, Gift, LockKeyhole, LogOut, MessageSquareWarning, PackageCheck, PackageX, QrCode, RotateCcw, ScanLine, ShoppingCart, Smartphone, UserRound, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { actOnKdsTask, createAssistedPaymentLink, createCartOrder, createComplimentaryOrder, decideKdsException, getCurrentActorId, managerCancelKdsTask, reportKdsException, verifyCurrentEmployeePin } from '../api'
 import type { BootstrapResponse } from '../shared/contracts'
@@ -9,10 +9,13 @@ import {
   actionAllowedForAccess,
   canManagerCancelKds,
   canResolveKdsException,
+  compareKdsTasksForAccess,
   getFulfillmentAccess,
+  kdsPrintState,
   kdsTaskOperationallyActive,
   openKdsException,
   stationLabel,
+  taskVisibleToAccess,
 } from './commerce-workspace'
 import { MenuOrderingWorkspace, type MenuCartItem, type MenuSubmitOptions } from './MenuOrderingWorkspace'
 import { CustomerPaymentCodeScanner } from './CustomerPaymentCodeScanner'
@@ -20,6 +23,7 @@ import type { OperationsConsoleNavigationRequest } from './OperationsConsole'
 import * as paymentApi from '../payment-api'
 import { runOptimisticAction } from '../optimistic-action'
 import { projectKdsTask } from '../optimistic-projections'
+import { stabilizeOperationalOrder } from './stable-operational-order'
 import './CommerceView.css'
 
 interface CommerceViewProps {
@@ -75,14 +79,20 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
   const [focusedTaskId, setFocusedTaskId] = useState('')
   const [kdsFilter, setKdsFilter] = useState<KdsFocusFilter>('all')
   const handledFocusRequestId = useRef<number | null>(null)
+  const kdsOrderIds = useRef<string[]>([])
+  const previousFocusedTaskId = useRef('')
   const ledgerTotal = data.orderDomain.tableLedgerEntries.reduce((sum, entry) => sum + entry.amount, 0)
-  const activeKds = data.orderDomain.kdsTasks.filter(kdsTaskOperationallyActive)
-  const visibleKds = useMemo(() => activeKds.toSorted((a, b) => {
-      const aTiming = taskTiming(a, data, now)
-      const bTiming = taskTiming(b, data, now)
-      if (aTiming.overdue !== bTiming.overdue) return aTiming.overdue ? -1 : 1
-      return taskSortValue(a) - taskSortValue(b)
-    }), [activeKds, data, now])
+  const rankedVisibleKds = useMemo(() => data.orderDomain.kdsTasks
+    .filter(kdsTaskOperationallyActive)
+    .filter((task) => taskVisibleToAccess(task, access, now))
+    .toSorted((a, b) => compareKdsTasksForAccess(a, b, access, now)), [access, data.orderDomain.kdsTasks, now])
+  if (previousFocusedTaskId.current !== focusedTaskId) {
+    previousFocusedTaskId.current = focusedTaskId
+    kdsOrderIds.current = []
+  }
+  const interactionIds = new Set([...busyKdsIds, ...(focusedTaskId ? [focusedTaskId] : [])])
+  const visibleKds = stabilizeOperationalOrder(rankedVisibleKds, kdsOrderIds.current, interactionIds)
+  kdsOrderIds.current = visibleKds.map((task) => task.id)
   const filteredKds = visibleKds.filter((task) => {
     if (kdsFilter === 'overdue') return taskTiming(task, data, now).overdue
     if (kdsFilter === 'production') return ['queued', 'preparing'].includes(task.status)
@@ -659,11 +669,8 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
               const responsibleRole = taskResponsibleRole(task, data)
               const exception = openKdsException(task)
               const exceptionActor = exception ? data.employees.find((employee) => employee.id === exception.actorId) : undefined
+              const printState = kdsPrintState(task, data.commercialOps?.printJobs ?? [])
               const canAct = Boolean(action && actionAllowedForAccess(task, access, data.config.workstations))
-              const canCompleteAndDeliver = task.status === 'preparing'
-                && (task.fulfillmentType ?? 'made_to_order') === 'made_to_order'
-                && canAct
-                && actionAllowedForAccess({ ...task, status: 'completed' }, access, data.config.workstations)
               const canReportProductionException = !exception && ['queued', 'preparing'].includes(task.status) && canAct
               const canReportWrongItem = !exception && ['completed', 'picked_up'].includes(task.status) && canAct
               return (
@@ -678,6 +685,8 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
                     <strong>{task.itemName} × {task.quantity}</strong>
                     <span>{task.specification} · {task.workstation?.name ?? stationLabel(task.stationId)}</span>
                     {task.fulfillmentNote && <span className="kds-fulfillment-note"><MessageSquareWarning size={14} />重点：{task.fulfillmentNote}</span>}
+                    {printState === 'failed' && <span className="kds-print-alert is-failed"><CircleAlert size={14} />打印失败 · 电子出品单继续有效</span>}
+                    {printState === 'queued' && <span className="kds-print-alert"><Clock3 size={14} />待打印 · 电子出品单已生效</span>}
                     {task.remakeOf && <span className="kds-remake-badge">第 {task.remakeOf.attempt} 次补做 · 关联原订单明细</span>}
                   </div>
                   <div className="kds-meta">
@@ -694,8 +703,7 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
                     </>}
                   </div>
                   <div className="kds-actions">
-                    {!exception && action && canAct && <button className="secondary-button" disabled={busy || busyKdsIds.has(task.id) || !currentEmployee} title={currentEmployee ? `由${currentEmployee.displayName}执行` : '请重新登录'} onClick={() => void advance(task, action)}>{actionIcon(action)}{nextLabel(action)}</button>}
-                    {!exception && canCompleteAndDeliver && <button className="primary-button" disabled={busy || busyKdsIds.has(task.id) || !currentEmployee} title="制作人与取送岗位相同时，一次记录完成、取货和送达" onClick={() => void advance(task, 'completeAndDeliver')}><CheckCheck size={16} />完成并送达</button>}
+                    {!exception && action && canAct && <button className={action === 'complete' ? 'primary-button' : 'secondary-button'} disabled={busy || busyKdsIds.has(task.id) || !currentEmployee} title={currentEmployee ? `由${currentEmployee.displayName}执行` : '请重新登录'} onClick={() => void advance(task, action)}>{actionIcon(action)}{nextLabel(action)}</button>}
                     {!exception && action && !canAct && <span className="kds-readonly-note">仅查看进度</span>}
                     {canReportProductionException && <button className="secondary-button kds-exception-button" disabled={busy || !currentEmployee} title="按商品缺货报告，等待领班或经理处置" onClick={() => void reportException(task, 'shortage', 'product_out_of_stock')}><PackageX size={16} />报告缺货</button>}
                     {canReportProductionException && task.status === 'preparing' && <button className="icon-button kds-reject-button" disabled={busy || !currentEmployee} title="质量不合格，拒绝本次出品" onClick={() => void reportException(task, 'production_rejection', 'quality_rejected')}><CircleAlert size={16} /></button>}
@@ -761,15 +769,15 @@ function kdsFilterLabel(filter: Exclude<KdsFocusFilter, 'all'>) {
 }
 
 function nextAction(status: KdsTask['status']): KdsActionInput['action'] | null {
-  return status === 'queued' ? 'start' : status === 'preparing' ? 'complete' : status === 'completed' ? 'pickUp' : status === 'picked_up' ? 'deliver' : null
+  return status === 'queued' || status === 'preparing' ? 'complete' : status === 'completed' ? 'pickupAndDeliver' : status === 'picked_up' ? 'deliver' : null
 }
 
 function nextLabel(action: KdsActionInput['action']) {
-  return action === 'start' ? '接单制作' : action === 'complete' ? '完成制作' : action === 'completeAndDeliver' ? '完成并送达' : action === 'pickUp' ? '确认取货' : '确认送达'
+  return action === 'start' ? '开始制作' : action === 'complete' ? '制作完成' : action === 'completeAndDeliver' ? '完成并送达' : action === 'pickUp' ? '确认取货' : '已送达'
 }
 
 function actionIcon(action: KdsActionInput['action']) {
-  return action === 'start' ? <Play size={16} /> : action === 'complete' ? <PackageCheck size={16} /> : action === 'completeAndDeliver' ? <CheckCheck size={16} /> : action === 'pickUp' ? <ShoppingCart size={16} /> : <CheckCheck size={16} />
+  return action === 'start' || action === 'complete' ? <PackageCheck size={16} /> : action === 'completeAndDeliver' || action === 'pickupAndDeliver' ? <CheckCheck size={16} /> : action === 'pickUp' ? <ShoppingCart size={16} /> : <CheckCheck size={16} />
 }
 
 function exceptionKindLabel(event: KdsExceptionEvent) {
@@ -840,11 +848,6 @@ function taskTiming(task: KdsTask, data: BootstrapResponse, now: number) {
     overSeconds: Math.max(0, -deltaSeconds),
     remainingSeconds: Math.max(0, deltaSeconds),
   }
-}
-
-function taskSortValue(task: KdsTask) {
-  const queuedAt = Date.parse(task.queuedAt)
-  return Number.isFinite(queuedAt) ? queuedAt : 0
 }
 
 function readStationSlaSeconds(data: BootstrapResponse, stationId: string, status: KdsTask['status']) {

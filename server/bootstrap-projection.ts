@@ -8,7 +8,6 @@ import {
 import {
   effectiveDataScopeForEmployee,
   effectivePermissionIdsForEmployee,
-  effectiveRoleIdsForEmployee,
 } from '../src/shared/staff-access.js'
 import { chinaBusinessDateKey } from '../src/shared/china-time.js'
 import { tableSessionBusinessDate } from './table-sessions.js'
@@ -108,7 +107,8 @@ function retainCurrentOperationalData(
 
   if (projected.reservationState) {
     projected.reservationState.reservations = projected.reservationState.reservations.filter((reservation) => (
-      chinaBusinessDateKey(reservation.scheduledAt, rolloverHour) >= businessDate
+      reservation.sourceCode !== 'walk_in'
+      && chinaBusinessDateKey(reservation.scheduledAt, rolloverHour) >= businessDate
     ))
     const reservationIds = new Set(projected.reservationState.reservations.map((reservation) => reservation.id))
     projected.reservationState.auditEvents = projected.reservationState.auditEvents.filter((event) => reservationIds.has(event.reservationId))
@@ -157,12 +157,22 @@ function legacyTableIdFromSession(tableSessionId: string) {
 export function projectRuntimeStateForActor(state: RuntimeState, actor: RequestActorContext): RuntimeState {
   const projected = structuredClone(state)
   const effectiveActor = effectiveActorForState(actor, state)
-  const roleIds = effectiveRoleIdsForEmployee(state, effectiveActor.actorId)
   const permissions = new Set<StaffPermissionId>(effectivePermissionIdsForEmployee(state, effectiveActor.actorId))
   const scope = effectiveDataScopeForEmployee(state, effectiveActor.actorId)
   const canAccessProjectedStore = scope === 'all_stores' || actor.storeId === state.store.id
   const visibleAreaIds = new Set(canAccessProjectedStore ? assignedAreaIdsForActor(state, actor.actorId) : [])
   const storeWide = scope === 'all_stores' || (scope === 'store' && actor.storeId === state.store.id)
+  const employee = state.employees.find((item) => item.id === effectiveActor.actorId && item.status === 'active')
+  const activeShifts = state.shiftAssignments.filter((shift) => (
+    shift.employeeId === effectiveActor.actorId
+    && shift.businessDate === state.store.businessDate
+    && shift.status === 'active'
+  ))
+  const primaryShift = activeShifts.find((shift) => shift.isPrimary) ?? activeShifts[0]
+  const primaryRoleId = primaryShift?.roleId ?? employee?.roleId ?? effectiveActor.roleId
+  const executionRoleIds = new Set([primaryRoleId])
+  const operationalOversight = storeWide
+    && ['owner', 'operations_director', 'manager', 'supervisor'].includes(primaryRoleId)
   const currentSessionIds = new Set(state.songState.tableSessions
     .filter((session) => tableSessionBusinessDate(state, session) === state.store.businessDate)
     .map((session) => session.id))
@@ -183,9 +193,17 @@ export function projectRuntimeStateForActor(state: RuntimeState, actor: RequestA
   projected.areas = projected.areas.filter((area) => canAccessProjectedStore && (
     storeWide || visibleAreaIds.has(area.id) || visibleTables.some((table) => table.areaId === area.id)
   ))
-  projected.tasks = projected.tasks.filter((task) => canAccessProjectedStore && (
-    storeWide || task.ownerId === actor.actorId || visibleTableIds.has(task.tableId)
-  ))
+  projected.tasks = projected.tasks.filter((task) => {
+    if (!canAccessProjectedStore) return false
+    if (operationalOversight || task.ownerId === actor.actorId || task.notifiedEmployeeIds.includes(actor.actorId)) return true
+    if (task.targetEmployeeIdsSnapshot?.includes(actor.actorId)) return true
+    if (!visibleTableIds.has(task.tableId)) return false
+    const serviceType = state.config.serviceTypes.find((item) => item.id === task.serviceTypeId)
+    const dispatchRoleIds = task.dispatchRoleIdsSnapshot?.length
+      ? task.dispatchRoleIdsSnapshot
+      : serviceType?.dispatchRoleIds ?? []
+    return dispatchRoleIds.some((roleId) => executionRoleIds.has(roleId))
+  })
   const visibleTaskIds = new Set(projected.tasks.map((task) => task.id))
   projected.taskEvents = projected.taskEvents.filter((event) => visibleTaskIds.has(event.taskId))
   projected.awaitingOrderIntents = projected.awaitingOrderIntents.filter((intent) => (
@@ -214,12 +232,7 @@ export function projectRuntimeStateForActor(state: RuntimeState, actor: RequestA
 
   const canViewOrders = permissions.has('order.view')
   const canUseKds = permissions.has('kds.prepare') || permissions.has('kds.deliver')
-  const activeShiftStationIds = new Set(state.shiftAssignments
-    .filter((shift) => (
-      shift.employeeId === actor.actorId
-      && shift.businessDate === state.store.businessDate
-      && shift.status === 'active'
-    ))
+  const activeShiftStationIds = new Set(activeShifts
     .flatMap((shift) => shift.stationIds ?? []))
   const workstationTaskVisible = (task: RuntimeState['orderDomain']['kdsTasks'][number]) => {
     if (!canAccessProjectedStore) return false
@@ -228,23 +241,28 @@ export function projectRuntimeStateForActor(state: RuntimeState, actor: RequestA
       ?? state.orderDomain.fulfillmentWorkstations?.find((item) => item.id === task.stationId)
       ?? state.config.workstations.find((item) => item.id === task.stationId)
     if (!workstation) return false
-    return (permissions.has('kds.prepare') && roleIds.some((roleId) => workstation.productionRoleIds.includes(roleId)))
-      || (permissions.has('kds.deliver') && roleIds.some((roleId) => workstation.deliveryRoleIds.includes(roleId)))
+    const productionVisible = ['queued', 'preparing'].includes(task.status)
+      && permissions.has('kds.prepare')
+      && [...executionRoleIds].some((roleId) => workstation.productionRoleIds.includes(roleId))
+    const deliveryVisible = ['completed', 'picked_up'].includes(task.status)
+      && permissions.has('kds.deliver')
+      && [...executionRoleIds].some((roleId) => workstation.deliveryRoleIds.includes(roleId))
+    return productionVisible || deliveryVisible
   }
   projected.orderDomain.orders = canViewOrders
-    ? projected.orderDomain.orders.filter((order) => storeWide || sessionVisible(order.tableSessionId))
+    ? projected.orderDomain.orders.filter((order) => operationalOversight || sessionVisible(order.tableSessionId))
     : []
   const visibleOrderIds = new Set(projected.orderDomain.orders.map((order) => order.id))
-  projected.orderDomain.kdsTasks = canUseKds || canViewOrders
+  projected.orderDomain.kdsTasks = canUseKds || (canViewOrders && operationalOversight)
     ? projected.orderDomain.kdsTasks.filter((task) => (
-      storeWide || sessionVisible(task.tableSessionId) || workstationTaskVisible(task)
+      operationalOversight || workstationTaskVisible(task)
     )).map((task) => ({ ...task, tableCode: tableCodesBySession.get(task.tableSessionId) ?? task.tableCode }))
     : []
   projected.orderDomain.authorizations = canViewOrders
     ? projected.orderDomain.authorizations.filter((authorization) => visibleOrderIds.has(authorization.orderId))
     : []
   projected.orderDomain.tableLedgerEntries = canViewOrders
-    ? projected.orderDomain.tableLedgerEntries.filter((entry) => storeWide || sessionVisible(entry.tableSessionId))
+    ? projected.orderDomain.tableLedgerEntries.filter((entry) => operationalOversight || sessionVisible(entry.tableSessionId))
     : []
   projected.orderDomain.authorizationAuthorities = permissions.has('commerce.authorization.approve')
     ? projected.orderDomain.authorizationAuthorities
@@ -276,7 +294,7 @@ export function projectRuntimeStateForActor(state: RuntimeState, actor: RequestA
     projected.paymentDomain.idempotencyRecords = []
   }
 
-  const canUseInventory = ['inventory.view', 'inventory.manage', 'inventory.approve']
+  const canUseInventory = ['inventory.view', 'inventory.manage', 'inventory.receive', 'inventory.count', 'inventory.remake', 'inventory.bottle', 'inventory.approve']
     .some((permission) => permissions.has(permission as StaffPermissionId))
   if (!canUseInventory || !canAccessProjectedStore) projected.inventoryDomain = undefined
   else if (projected.inventoryDomain) projected.inventoryDomain.idempotencyRecords = []
@@ -284,7 +302,7 @@ export function projectRuntimeStateForActor(state: RuntimeState, actor: RequestA
   if (projected.commercialOps) {
     projected.commercialOps.idempotencyRecords = []
     const canConfigureCommercialOps = permissions.has('config.manage')
-    const canUseCommercialInventory = ['inventory.view', 'inventory.manage', 'inventory.approve']
+    const canUseCommercialInventory = ['inventory.view', 'inventory.manage', 'inventory.receive', 'inventory.count', 'inventory.remake', 'inventory.bottle', 'inventory.approve']
       .some((permission) => permissions.has(permission as StaffPermissionId))
     const canUseCommercialFinance = permissions.has('finance.view') || permissions.has('payment.collect')
     if (!canConfigureCommercialOps) {

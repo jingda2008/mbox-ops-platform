@@ -147,6 +147,7 @@ export function registerWechatReservationRoutes(
     return {
       config: publicConfig(domain.config),
       reservations: domain.reservations
+        .filter((reservation) => reservation.sourceCode !== 'walk_in')
         .filter((reservation) => ownsReservation(reservation, identity))
         .toSorted((left, right) => right.scheduledAt.localeCompare(left.scheduledAt))
         .map(publicReservation),

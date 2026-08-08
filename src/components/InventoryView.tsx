@@ -195,12 +195,44 @@ export function InventoryView() {
   const activeBottles = inventory.bottleBatches.filter((item) => ['stored', 'partially_used'].includes(item.status))
   const pendingApprovals = inventory.approvalRequests.filter((item) => item.status === 'pending')
   const permissions = new Set(context.viewer?.permissionIds ?? [])
+  const currentEmployee = context.employees.find((item) => item.id === context.viewer?.actorId)
+  const activeShift = context.shiftAssignments.find((item) => (
+    item.employeeId === currentEmployee?.id && item.businessDate === context.store.businessDate && item.status === 'active'
+  ))
+  const effectiveRoleIds = new Set([
+    currentEmployee?.roleId,
+    ...(currentEmployee?.roleIds ?? []),
+    activeShift?.roleId,
+    ...(activeShift?.roleIds ?? []),
+  ].filter((value): value is string => Boolean(value)))
+  const directReceiveGrant = currentEmployee?.permissionIds?.includes('inventory.receive') ?? false
+  const directCountGrant = currentEmployee?.permissionIds?.includes('inventory.count') ?? false
+  const directRemakeGrant = currentEmployee?.permissionIds?.includes('inventory.remake') ?? false
+  const directBottleGrant = currentEmployee?.permissionIds?.includes('inventory.bottle') ?? false
+  const directApproveGrant = currentEmployee?.permissionIds?.includes('inventory.approve') ?? false
   const canManageInventory = permissions.has('inventory.manage')
   const canApproveInventory = permissions.has('inventory.approve')
+  const roleAllowed = (roleIds: readonly string[]) => canManageInventory && roleIds.some((roleId) => effectiveRoleIds.has(roleId))
+  const canReceive = directReceiveGrant || roleAllowed(inventory.policy.receiptRoleIds)
+  const canCount = directCountGrant || roleAllowed(inventory.policy.stockCountRoleIds)
+  const canRemake = directRemakeGrant || roleAllowed(inventory.policy.bottleUseRoleIds)
+  const canUseBottles = directBottleGrant || roleAllowed([
+    ...inventory.policy.bottleDepositRoleIds,
+    ...inventory.policy.bottleUseRoleIds,
+  ])
+  const canConfigure = canApproveInventory && (directApproveGrant || inventory.policy.policyAdminRoleIds.some((roleId) => effectiveRoleIds.has(roleId)))
+  const canReview = canApproveInventory && (directApproveGrant || [
+    ...inventory.policy.stockCountApprovalRoleIds,
+    ...inventory.policy.bottleApprovalRoleIds,
+  ].some((roleId) => effectiveRoleIds.has(roleId)))
   const allowedTabs: InventoryTab[] = [
     'overview',
-    ...(canManageInventory ? ['receipt', 'count', 'remake', 'bottles'] as InventoryTab[] : []),
-    ...(canApproveInventory ? ['recipes', 'approvals', 'policy'] as InventoryTab[] : []),
+    ...(canReceive ? ['receipt'] as InventoryTab[] : []),
+    ...(canCount ? ['count'] as InventoryTab[] : []),
+    ...(canRemake ? ['remake'] as InventoryTab[] : []),
+    ...(canUseBottles ? ['bottles'] as InventoryTab[] : []),
+    ...(canConfigure ? ['recipes', 'policy'] as InventoryTab[] : []),
+    ...(canReview ? ['approvals'] as InventoryTab[] : []),
   ]
   const effectiveTab = allowedTabs.includes(tab) ? tab : 'overview'
 
@@ -231,13 +263,13 @@ export function InventoryView() {
 
       <nav className="inventory-tabs" aria-label="库存功能">
         <TabButton active={effectiveTab === 'overview'} icon={<Boxes size={16} />} label="库存总览" onClick={() => setTab('overview')} />
-        {canManageInventory && <TabButton active={effectiveTab === 'receipt'} icon={<PackageOpen size={16} />} label="入库" onClick={() => setTab('receipt')} />}
-        {canManageInventory && <TabButton active={effectiveTab === 'count'} icon={<ClipboardList size={16} />} label="盘点" badge={pendingCounts.length} onClick={() => setTab('count')} />}
-        {canApproveInventory && <TabButton active={effectiveTab === 'recipes'} icon={<FlaskConical size={16} />} label="原料配方" onClick={() => setTab('recipes')} />}
-        {canManageInventory && <TabButton active={effectiveTab === 'remake'} icon={<RotateCcw size={16} />} label="补做耗用" onClick={() => setTab('remake')} />}
-        {canManageInventory && <TabButton active={effectiveTab === 'bottles'} icon={<Wine size={16} />} label="客存酒" onClick={() => setTab('bottles')} />}
-        {canApproveInventory && <TabButton active={effectiveTab === 'approvals'} icon={<ShieldAlert size={16} />} label="待审批" badge={pendingApprovals.length} onClick={() => setTab('approvals')} />}
-        {canApproveInventory && <TabButton active={effectiveTab === 'policy'} icon={<Settings2 size={16} />} label="库存配置" onClick={() => setTab('policy')} />}
+        {canReceive && <TabButton active={effectiveTab === 'receipt'} icon={<PackageOpen size={16} />} label="入库" onClick={() => setTab('receipt')} />}
+        {canCount && <TabButton active={effectiveTab === 'count'} icon={<ClipboardList size={16} />} label="盘点" badge={pendingCounts.length} onClick={() => setTab('count')} />}
+        {canConfigure && <TabButton active={effectiveTab === 'recipes'} icon={<FlaskConical size={16} />} label="原料配方" onClick={() => setTab('recipes')} />}
+        {canRemake && <TabButton active={effectiveTab === 'remake'} icon={<RotateCcw size={16} />} label="补做耗用" onClick={() => setTab('remake')} />}
+        {canUseBottles && <TabButton active={effectiveTab === 'bottles'} icon={<Wine size={16} />} label="客存酒" onClick={() => setTab('bottles')} />}
+        {canReview && <TabButton active={effectiveTab === 'approvals'} icon={<ShieldAlert size={16} />} label="待审批" badge={pendingApprovals.length} onClick={() => setTab('approvals')} />}
+        {canConfigure && <TabButton active={effectiveTab === 'policy'} icon={<Settings2 size={16} />} label="库存配置" onClick={() => setTab('policy')} />}
       </nav>
 
       {effectiveTab === 'overview' && <InventoryOverview inventory={inventory} products={products} rows={balanceRows} />}

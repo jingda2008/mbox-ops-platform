@@ -113,7 +113,7 @@
 .operation-actions button { min-height: 38px; font-size: 11px; }
 .reservation-danger-button { min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 12px; border: 1px solid #d7a7aa; border-radius: 6px; background: #fff; color: #a13036; font-weight: 750; white-space: nowrap; }
 .reservation-danger-button:hover { background: #fff1f1; }
-.reservation-toolbar { min-height: 62px; display: grid; grid-template-columns: auto minmax(200px, 1fr) 150px; align-items: center; gap: 12px; padding: 11px 16px; border-bottom: 1px solid var(--line); background: #f8f9f6; }
+.reservation-toolbar { min-height: 62px; display: grid; grid-template-columns: auto auto minmax(200px, 1fr) 150px; align-items: center; gap: 12px; padding: 11px 16px; border-bottom: 1px solid var(--line); background: #f8f9f6; }
 .reservation-tabs { display: grid; grid-template-columns: repeat(3, auto); padding: 3px; border: 1px solid var(--line-strong); border-radius: 6px; background: #fff; }
 .reservation-tabs button { min-height: 32px; padding: 0 13px; border: 0; border-radius: 4px; background: transparent; color: var(--ink-soft); font-size: 11px; font-weight: 750; white-space: nowrap; }
 .reservation-tabs button.is-active { background: var(--ink); color: #fff; }

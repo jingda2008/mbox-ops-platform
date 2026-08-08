@@ -112,6 +112,22 @@ export function collectDutyManagerRisks(state: RuntimeState, now = Date.now()): 
       recommendedCommand: '打开运行状态',
     })
   }
+  for (const job of state.commercialOps?.printJobs ?? []) {
+    if (job.status !== 'failed' || configuredBusinessDate(state, job.queuedAt) !== currentBusinessDate) continue
+    const order = state.orderDomain.orders.find((item) => item.id === job.orderId)
+    const session = order ? state.songState.tableSessions.find((item) => item.id === order.tableSessionId) : undefined
+    addRisk(risks, now, {
+      objectId: job.id,
+      reason: `print_failed:${job.printerId}`,
+      severity: 'high',
+      category: 'hardware',
+      title: '出品单打印失败，已启用电子单兜底',
+      detail: `${session?.tableCode ?? '桌台待核对'}打印任务失败：${job.lastError ?? '打印机未返回成功状态'}。电子KDS仍有效，请检查设备并避免重复出品。`,
+      tableCode: session?.tableCode ?? null,
+      ownerName: null,
+      recommendedCommand: '打开经营工具',
+    })
+  }
   const openTasks = state.tasks.filter((task) => (
     !task.archivedAt
     && openServiceStatuses.has(task.status)

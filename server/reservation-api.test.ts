@@ -38,6 +38,41 @@ const reservationPayload = {
 }
 
 describe('reservation employee API', () => {
+  it('rejects creating a fake reservation for a walk-in guest', async () => {
+    const { app, repository } = await fixture(true, 'manager')
+    const response = await app.inject({
+      method: 'POST', url: '/api/reservations',
+      payload: { ...reservationPayload, sourceCode: 'walk_in', idempotencyKey: 'reservation-walk-in-rejected-0001' },
+    })
+    expect(response.statusCode).toBe(409)
+    expect(response.json()).toMatchObject({ code: 'WALK_IN_USES_TABLE_OPEN' })
+    expect(response.json().message).toContain('直接开台')
+    expect((await repository.read()).reservationState?.reservations).toHaveLength(0)
+    await app.close()
+    await repository.close()
+  })
+
+  it('excludes legacy walk-in rows from the raw reservation API', async () => {
+    const { app, repository } = await fixture(true, 'manager')
+    const created = await app.inject({ method: 'POST', url: '/api/reservations', payload: reservationPayload })
+    expect(created.statusCode, created.body).toBe(201)
+    await repository.mutate((state) => {
+      const reservation = state.reservationState!.reservations[0]!
+      state.reservationState!.reservations.push({
+        ...structuredClone(reservation),
+        id: 'legacy-walk-in-row',
+        sourceCode: 'walk_in',
+      })
+      state.revision += 1
+    })
+
+    const response = await app.inject({ method: 'GET', url: '/api/reservations' })
+    expect(response.statusCode, response.body).toBe(200)
+    expect(response.json().reservations.map((item: { id: string }) => item.id)).toEqual([created.json().id])
+    await app.close()
+    await repository.close()
+  })
+
   it('requires a request actor for every route', async () => {
     const { app, repository } = await fixture(false)
     const response = await app.inject({ method: 'GET', url: '/api/reservations' })

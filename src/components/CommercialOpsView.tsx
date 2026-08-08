@@ -6,7 +6,7 @@ import {
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react'
 import QRCode from 'qrcode'
 import * as commercialApi from '../commercial-ops-api'
-import type { BootstrapResponse } from '../shared/contracts'
+import type { BootstrapResponse, StaffPermissionId } from '../shared/contracts'
 import type {
   CommercialOpsConfig,
   CommercialOpsWorkspace,
@@ -78,7 +78,8 @@ export function CommercialOpsView({ data, onRefresh }: { data: BootstrapResponse
   if (!workspace) return <section className="commercial-ops-view"><div className="commercial-empty">{loading ? <LoaderCircle className="spin" size={22} /> : <CircleAlert size={22} />}{loading ? '正在载入经营工具' : notice?.message ?? '经营工具暂不可用'}</div></section>
 
   const state = workspace.state
-  const canInventory = permissions.has('inventory.manage') || permissions.has('inventory.approve')
+  const canInventory = ['inventory.manage', 'inventory.receive', 'inventory.count', 'inventory.remake', 'inventory.bottle', 'inventory.approve']
+    .some((permission) => permissions.has(permission as StaffPermissionId))
   const canConfig = permissions.has('config.manage')
   const canOperatePrintJobs = permissions.has('kds.prepare') || canConfig
   const canVoucher = permissions.has('payment.collect')

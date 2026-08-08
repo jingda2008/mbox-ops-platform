@@ -466,6 +466,7 @@ describe('table operating line', () => {
 
   it('opens a walk-in in one transaction and freezes minimum-spend and sales snapshots', async () => {
     const { app, repository, useActor } = await fixture()
+    const reservationCountBefore = (await repository.read()).reservationState?.reservations.length ?? 0
     const configured = await app.inject({
       method: 'PUT', url: '/api/table-operations/config', payload: minimumConfig(100_000, 'table-config-v2-0001'),
     })
@@ -490,10 +491,10 @@ describe('table operating line', () => {
     })
 
     const state = await repository.read()
-    const reservation = state.reservationState?.reservations.find((item) => item.id === opened.json().reservation.id)
-    expect(reservation).toMatchObject({ sourceCode: 'walk_in', status: 'seated', tableId: 'table-l04' })
+    expect(state.reservationState?.reservations).toHaveLength(reservationCountBefore)
     expect(state.tableSessionOperations).toHaveLength(1)
-    expect(state.salesAttributionRecords?.filter((record) => record.subjectId === reservation?.id)).toHaveLength(2)
+    expect(state.salesAttributionRecords?.filter((record) => record.subjectId === opened.json().walkInId)).toHaveLength(1)
+    expect(state.salesAttributionRecords?.filter((record) => record.subjectId === opened.json().summary.tableSessionId)).toHaveLength(1)
     expect(state.auditEntries.some((entry) => entry.action === 'table.walk_in_opened.v1')).toBe(true)
   })
 
@@ -520,14 +521,7 @@ describe('table operating line', () => {
 
     expect(opened.statusCode, opened.body).toBe(201)
     const state = await repository.read()
-    const reservation = state.reservationState?.reservations.find((item) => item.id === opened.json().reservation.id)
-    expect(reservation).toMatchObject({
-      sourceCode: 'walk_in',
-      status: 'seated',
-      tableId: 'table-666',
-      tableCode: '666',
-      areaPreferenceCode: null,
-    })
+    expect(state.reservationState?.reservations.some((item) => item.sourceCode === 'walk_in')).toBe(false)
     expect(state.tables.find((table) => table.id === 'table-666')).toMatchObject({
       status: 'occupied',
       guestCount: 8,

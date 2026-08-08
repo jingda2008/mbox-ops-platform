@@ -991,7 +991,7 @@ function applyKdsTransition(
   state: OrderDomainState,
   command: KdsTaskActionCommand,
   operation: string,
-  expectedStatus: KdsTaskStatus,
+  expectedStatus: KdsTaskStatus | readonly KdsTaskStatus[],
   nextStatus: KdsTaskStatus,
   previousAt: (task: KdsTask) => string | null,
   update: (task: KdsTask) => void,
@@ -1023,7 +1023,8 @@ function applyKdsTransition(
         const disposition = exceptionDisposition(task, blockingException.exceptionId)
         throw new Error(disposition ? '原KDS任务已由异常处置关闭' : 'KDS异常待领班或经理处置')
       }
-      if (task.status !== expectedStatus) {
+      const expectedStatuses = Array.isArray(expectedStatus) ? expectedStatus : [expectedStatus]
+      if (!expectedStatuses.includes(task.status)) {
         throw new BusinessRuleError(`KDS任务不能从${task.status}跳转到${nextStatus}`, 'KDS_STATE_CONFLICT')
       }
       const priorTimestamp = previousAt(task)
@@ -1068,9 +1069,9 @@ export function completeKdsTask(state: OrderDomainState, command: KdsTaskActionC
     state,
     command,
     'kds.complete.v1',
-    'preparing',
+    ['queued', 'preparing'],
     'completed',
-    (task) => task.startedAt,
+    (task) => task.startedAt ?? task.queuedAt,
     (task) => {
       task.completedAt = command.occurredAt
       task.completedBy = command.actorId

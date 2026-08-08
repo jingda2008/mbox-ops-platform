@@ -42,6 +42,7 @@ function reservationOccupiesPeriod(
   businessDate: string,
   period: string,
 ) {
+  if (reservation.sourceCode === 'walk_in') return false
   if (['cancelled', 'no_show'].includes(reservation.status) || !reservation.requestedTableCode) return false
   try {
     const slot = reservationBusinessSlot(domain.config, reservation.scheduledAt)

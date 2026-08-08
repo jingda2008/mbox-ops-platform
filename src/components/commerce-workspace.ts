@@ -1,5 +1,6 @@
 import type { BootstrapResponse, Employee, RoleConfig, WorkstationConfig } from '../shared/contracts'
 import type { KdsExceptionEvent, KdsTask, KdsTaskStatus } from '../shared/order-contracts'
+import type { PrintJob } from '../shared/commercial-ops-contracts'
 
 export type FulfillmentMode = 'production' | 'delivery' | 'oversight'
 
@@ -31,6 +32,7 @@ export function getFulfillmentAccess(data: BootstrapResponse, actorId: string): 
   const roleIds = effectiveEmployeeRoleIds(data, employee)
   const roles = data.config.roles.filter((item) => roleIds.includes(item.id))
   const roleKey = roles.flatMap((item) => [item.id, item.name]).join(' ').toLowerCase()
+  const homeRoleKey = [role?.id, role?.name].filter(Boolean).join(' ').toLowerCase()
   const configuredPermissions = [...new Set([
     ...(employee?.permissionIds ?? []),
     ...roles.flatMap((item) => item.permissionIds ?? []),
@@ -54,10 +56,12 @@ export function getFulfillmentAccess(data: BootstrapResponse, actorId: string): 
   const configuredForProduction = configuredWorkstations.some((item) => item.enabled !== false && readStringArray(item, ['productionRoleIds']).some((id) => roleIds.includes(id)))
   const configuredForDelivery = configuredWorkstations.some((item) => item.enabled !== false && readStringArray(item, ['deliveryRoleIds']).some((id) => roleIds.includes(id)))
   const mode = explicitMode
-    ?? (configuredOversight ? 'oversight'
+    ?? (matchesAny(homeRoleKey, managerTerms) ? 'oversight'
+      : matchesAny(homeRoleKey, productionTerms) ? 'production'
+      : matchesAny(homeRoleKey, deliveryTerms) ? 'delivery'
       : configuredPermissions && configuredCanPrepare && !configuredCanDeliver ? 'production'
         : configuredPermissions && configuredCanDeliver && !configuredCanPrepare ? 'delivery'
-      : matchesAny(roleKey, managerTerms) ? 'oversight'
+      : configuredOversight ? 'oversight'
       : configuredForProduction && !configuredForDelivery ? 'production'
         : configuredForDelivery && !configuredForProduction ? 'delivery'
           : matchesAny(roleKey, productionTerms) ? 'production'
@@ -93,7 +97,7 @@ export function getFulfillmentAccess(data: BootstrapResponse, actorId: string): 
   }
 }
 
-export function taskVisibleToAccess(task: KdsTask, access: FulfillmentAccess) {
+export function taskVisibleToAccess(task: KdsTask, access: FulfillmentAccess, now = Date.now()) {
   const employeeRoleIds = access.roleIds
   if (task.status === 'delivered') return false
   if (access.mode === 'production') {
@@ -105,18 +109,42 @@ export function taskVisibleToAccess(task: KdsTask, access: FulfillmentAccess) {
   if (access.mode === 'delivery') {
     const configuredRoles = readStringArray(task.workstation, ['deliveryRoleIds'])
     const assignedOwnerId = task.deliveryServiceTask?.ownerId
+    const assignedToCurrentEmployee = !assignedOwnerId || assignedOwnerId === access.employee?.id
+    const pickupDueAt = task.pickupSla?.dueAt ? Date.parse(task.pickupSla.dueAt) : Number.POSITIVE_INFINITY
+    const availableForBackup = Number.isFinite(pickupDueAt) && pickupDueAt <= now
     return deliveryStatuses.has(task.status)
       && (configuredRoles.length === 0 || configuredRoles.some((roleId) => employeeRoleIds.includes(roleId)))
-      && (!assignedOwnerId || assignedOwnerId === access.employee?.id)
+      && (assignedToCurrentEmployee || availableForBackup)
       && (access.stationScoped ? access.stationIds.includes(task.stationId) : access.stationIds.length === 0 || access.stationIds.includes(task.stationId))
   }
   return true
+}
+
+export function compareKdsTasksForAccess(left: KdsTask, right: KdsTask, access: FulfillmentAccess, now = Date.now()) {
+  const leftRank = kdsPriorityRank(left, access, now)
+  const rightRank = kdsPriorityRank(right, access, now)
+  if (leftRank !== rightRank) return leftRank - rightRank
+  const leftDueAt = kdsDueAt(left)
+  const rightDueAt = kdsDueAt(right)
+  if (leftDueAt !== rightDueAt) return leftDueAt - rightDueAt
+  return Date.parse(left.queuedAt) - Date.parse(right.queuedAt)
+}
+
+export type KdsPrintState = 'untracked' | 'queued' | 'printed' | 'failed'
+
+export function kdsPrintState(task: KdsTask, printJobs: readonly PrintJob[]): KdsPrintState {
+  const jobs = printJobs.filter((job) => job.orderId === task.orderId && job.orderItemIds.includes(task.orderItemId))
+  if (jobs.some((job) => job.status === 'failed')) return 'failed'
+  if (jobs.some((job) => job.status === 'queued')) return 'queued'
+  if (jobs.some((job) => job.status === 'printed')) return 'printed'
+  return 'untracked'
 }
 
 export function actionAllowedForAccess(
   task: KdsTask,
   access: FulfillmentAccess,
   workstations: readonly WorkstationConfig[],
+  now = Date.now(),
 ) {
   const production = productionStatuses.has(task.status)
   const delivery = deliveryStatuses.has(task.status)
@@ -134,9 +162,28 @@ export function actionAllowedForAccess(
   } else {
     if (!access.canDeliver) return false
     const assignedOwnerId = task.deliveryServiceTask?.ownerId
-    if (assignedOwnerId && assignedOwnerId !== access.employee.id) return false
+    const pickupDueAt = task.pickupSla?.dueAt ? Date.parse(task.pickupSla.dueAt) : Number.POSITIVE_INFINITY
+    if (assignedOwnerId && assignedOwnerId !== access.employee.id && pickupDueAt > now) return false
   }
   return true
+}
+
+function kdsPriorityRank(task: KdsTask, access: FulfillmentAccess, now: number) {
+  if (openKdsException(task)) return 0
+  const dueAt = kdsDueAt(task)
+  if (Number.isFinite(dueAt) && dueAt <= now) return 0
+  const assignedOwnerId = task.deliveryServiceTask?.ownerId
+  if (deliveryStatuses.has(task.status) && assignedOwnerId === access.employee?.id) return 1
+  if (deliveryStatuses.has(task.status)) return 2
+  if (productionStatuses.has(task.status)) return 3
+  return 4
+}
+
+function kdsDueAt(task: KdsTask) {
+  const value = productionStatuses.has(task.status) ? task.productionSla?.dueAt : task.pickupSla?.dueAt
+  if (!value) return Number.POSITIVE_INFINITY
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) ? timestamp : Number.POSITIVE_INFINITY
 }
 
 export function openKdsException(task: KdsTask): KdsExceptionEvent | undefined {

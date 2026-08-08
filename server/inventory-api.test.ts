@@ -117,6 +117,85 @@ describe('inventory API', () => {
     await repository.close()
   })
 
+  it('limits a direct employee receipt grant to receiving and revokes it immediately', async () => {
+    const { app, repository } = await fixture()
+    await repository.mutate((state) => {
+      const server = state.employees.find((employee) => employee.id === 'emp-lin')!
+      server.permissionIds = [...new Set([...(server.permissionIds ?? []), 'inventory.manage'])]
+      state.revision += 1
+    })
+    const legacyBroadGrant = await app.inject({
+      method: 'POST', url: '/api/inventory/receipts', headers: headers('emp-lin'), payload: {
+        productId: 'product-beer', unitCode: 'bottle', quantity: 1,
+        reason: '旧版宽授权不应绕过岗位', occurredAt: new Date().toISOString(),
+        idempotencyKey: 'receipt-legacy-broad-grant-denied-0001',
+      },
+    })
+    expect(legacyBroadGrant.statusCode).toBe(403)
+    await repository.mutate((state) => {
+      const server = state.employees.find((employee) => employee.id === 'emp-lin')!
+      server.permissionIds = [
+        ...(server.permissionIds ?? []).filter((permission) => permission !== 'inventory.manage'),
+        'inventory.receive',
+      ]
+      state.revision += 1
+    })
+    const response = await app.inject({
+      method: 'POST', url: '/api/inventory/receipts', headers: headers('emp-lin'), payload: {
+        productId: 'product-beer', unitCode: 'bottle', quantity: 1,
+        reason: '员工直接授权入库测试', occurredAt: new Date().toISOString(),
+        idempotencyKey: 'receipt-direct-employee-grant-0001',
+      },
+    })
+    expect(response.statusCode, response.body).toBe(201)
+    expect(response.json()).toMatchObject({ productId: 'product-beer', quantity: 1 })
+    const visible = await app.inject({ method: 'GET', url: '/api/inventory', headers: headers('emp-lin') })
+    expect(visible.statusCode, visible.body).toBe(200)
+
+    const countDenied = await app.inject({
+      method: 'POST', url: '/api/inventory/stock-counts', headers: headers('emp-lin'), payload: {
+        productId: 'product-beer', unitCode: 'bottle', countedQuantity: 1,
+        occurredAt: new Date().toISOString(), idempotencyKey: 'receipt-only-count-denied-0001',
+      },
+    })
+    expect(countDenied.statusCode).toBe(403)
+    const remakeDenied = await app.inject({
+      method: 'POST', url: '/api/inventory/remakes', headers: headers('emp-lin'), payload: {
+        orderId: 'order-denied', orderItemId: 'line-denied', quantity: 1,
+        reason: '不应获得补做权限', occurredAt: new Date().toISOString(),
+        idempotencyKey: 'receipt-only-remake-denied-0001',
+      },
+    })
+    expect(remakeDenied.statusCode).toBe(403)
+    const bottleDenied = await app.inject({
+      method: 'POST', url: '/api/inventory/bottles', headers: headers('emp-lin'), payload: {
+        productId: 'product-beer', skuSnapshot: 'BEER-001', productNameSnapshot: '测试啤酒',
+        owner: { kind: 'anonymous', customerRef: 'guest-receipt-only', displayNameSnapshot: '测试客人' },
+        capacityQuantity: 1, unitCode: 'bottle', expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+        tableSessionId: 'session-denied', orderId: 'order-denied', orderItemId: 'line-denied',
+        reason: '不应获得存酒权限', occurredAt: new Date().toISOString(),
+        idempotencyKey: 'receipt-only-bottle-denied-0001',
+      },
+    })
+    expect(bottleDenied.statusCode).toBe(403)
+
+    await repository.mutate((state) => {
+      const server = state.employees.find((employee) => employee.id === 'emp-lin')!
+      server.permissionIds = server.permissionIds?.filter((permission) => permission !== 'inventory.receive')
+      state.revision += 1
+    })
+    const revoked = await app.inject({
+      method: 'POST', url: '/api/inventory/receipts', headers: headers('emp-lin'), payload: {
+        productId: 'product-beer', unitCode: 'bottle', quantity: 1,
+        reason: '撤销后应立即失效', occurredAt: new Date().toISOString(),
+        idempotencyKey: 'receipt-direct-revoked-0001',
+      },
+    })
+    expect(revoked.statusCode).toBe(403)
+    await app.close()
+    await repository.close()
+  })
+
   it('configures ingredient units and recipe versions, then converts receipts to the base unit', async () => {
     const { app, repository } = await fixture()
     const occurredAt = new Date().toISOString()

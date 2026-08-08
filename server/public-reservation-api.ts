@@ -290,6 +290,7 @@ export function registerPublicReservationRoutes(
     return {
       config: publicConfig(domain),
       reservations: domain.reservations
+        .filter((item) => item.sourceCode !== 'walk_in')
         .filter((item) => ownsReservation(item, reference))
         .toSorted((left, right) => right.scheduledAt.localeCompare(left.scheduledAt))
         .map(publicReservation),

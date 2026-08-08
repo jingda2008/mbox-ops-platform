@@ -11,6 +11,7 @@ import { syncOrderFulfillmentWorkstations } from './fulfillment-workstations.js'
 import { applyTaskAction } from './domain.js'
 import { syncKdsFromFulfillmentServiceTaskAction } from './fulfillment-service.js'
 import { migrateRuntimeState } from './runtime-state-migrations.js'
+import { registerTaskRoutes } from './task-api.js'
 
 function registerTestActor(app: ReturnType<typeof Fastify>) {
   app.decorateRequest('mboxActor', null)
@@ -53,7 +54,7 @@ async function createSubmittedOrder(repository: JsonRepository) {
 
 async function action(
   app: ReturnType<typeof Fastify>,
-  name: 'start' | 'complete' | 'completeAndDeliver' | 'pickUp' | 'deliver',
+  name: 'start' | 'complete' | 'completeAndDeliver' | 'pickUp' | 'pickupAndDeliver' | 'deliver',
   idempotencyKey: string,
   roleId: string,
   actorId: string,
@@ -84,6 +85,16 @@ describe('automatic fulfillment delivery service task', () => {
 
     let state = await repository.read()
     const kdsTask = state.orderDomain.kdsTasks[0]!
+    expect(kdsTask).toMatchObject({ status: 'completed', startedAt: expect.any(String), startedBy: 'emp-qing' })
+    expect(state.auditEntries.find((entry) => entry.action === 'kds.complete.v1')).toMatchObject({
+      details: {
+        orderItemId: 'line-fulfillment', stationId: 'bar-main', workstationName: '主吧台',
+        workstationConfigVersion: expect.any(Number), actionStage: 'production', effectiveRoleId: 'bartender',
+        idempotencyKey: 'fulfillment-complete-0001', requestId: expect.any(String),
+        previousStatus: 'preparing', status: 'completed', autoReceived: false,
+        productionStartedAtRecorded: true,
+      },
+    })
     expect(state.tasks.filter((task) => task.triggerId === `fulfillment-delivery:${kdsTask.id}`)).toHaveLength(1)
     expect(kdsTask.deliveryServiceTask).toMatchObject({ status: 'pending', ownerId: 'emp-lin' })
     const deliveryTask = state.tasks.find((task) => task.id === kdsTask.deliveryServiceTask?.id)!
@@ -130,7 +141,7 @@ describe('automatic fulfillment delivery service task', () => {
     await repository.close()
   })
 
-  it('allows a dual-role employee to complete production and delivery in one audited action', async () => {
+  it('rejects a combined production and delivery action even for a dual-role employee', async () => {
     const repository = new JsonRepository(`/tmp/mbox-fulfillment-combined-${crypto.randomUUID()}.json`)
     await repository.init()
     await createSubmittedOrder(repository)
@@ -141,20 +152,18 @@ describe('automatic fulfillment delivery service task', () => {
 
     expect((await action(app, 'start', 'fulfillment-combined-start', 'bartender', 'emp-qing')).statusCode).toBe(200)
     const completed = await action(app, 'completeAndDeliver', 'fulfillment-combined-finish', 'bartender', 'emp-qing')
-    expect(completed.statusCode, completed.body).toBe(200)
+    expect(completed.statusCode, completed.body).toBe(409)
+    expect(completed.json().message).toContain('必须按实际岗位分别记录')
 
     const state = await repository.read()
     expect(state.orderDomain.kdsTasks[0]).toMatchObject({
-      status: 'delivered',
-      completedBy: 'emp-qing',
-      pickedUpBy: 'emp-qing',
-      deliveredBy: 'emp-qing',
+      status: 'preparing',
+      completedBy: null,
+      pickedUpBy: null,
+      deliveredBy: null,
     })
-    expect(state.tasks.find((task) => task.triggerId?.startsWith('fulfillment-delivery:'))).toMatchObject({
-      status: 'completed',
-      completedBy: 'emp-qing',
-    })
-    expect(state.orderDomain.idempotencyRecords.some((record) => record.operation === 'kds.complete_and_deliver.v1')).toBe(true)
+    expect(state.tasks.find((task) => task.triggerId?.startsWith('fulfillment-delivery:'))).toBeUndefined()
+    expect(state.orderDomain.idempotencyRecords.some((record) => record.operation === 'kds.complete_and_deliver.v1')).toBe(false)
 
     await app.close()
     await repository.close()
@@ -271,12 +280,118 @@ describe('automatic fulfillment delivery service task', () => {
       applyTaskAction(state, serviceTask.id, completeInput)
       expect(syncKdsFromFulfillmentServiceTaskAction(state, serviceTask, completeInput)?.status).toBe('delivered')
       expect(syncKdsFromFulfillmentServiceTaskAction(state, serviceTask, completeInput)?.status).toBe('delivered')
+      expect(syncKdsFromFulfillmentServiceTaskAction(state, serviceTask, {
+        ...completeInput,
+        idempotencyKey: 'bridge-quick-complete-different-key-0002',
+      })?.status).toBe('delivered')
     })
 
     const state = await repository.read()
     expect(state.orderDomain.orders[0]?.status).toBe('fulfilled')
     expect(state.orderDomain.idempotencyRecords.filter((record) => record.operation === 'kds.pick_up.v1')).toHaveLength(1)
     expect(state.orderDomain.idempotencyRecords.filter((record) => record.operation === 'kds.deliver.v1')).toHaveLength(1)
+    expect(state.taskEvents.filter((event) => event.type === 'fulfillment.atomic_pickup_delivery.v1')).toHaveLength(1)
+    expect(state.auditEntries).toContainEqual(expect.objectContaining({
+      action: 'fulfillment.atomic_pickup_delivery.v1',
+      details: expect.objectContaining({
+        transition: 'pickup_and_delivery',
+        pickupEvidence: 'system_inferred_from_one_tap_delivery',
+        deliveryEvidence: 'employee_confirmed',
+        stationId: 'bar-main',
+        workstationName: '主吧台',
+        workstationConfigVersion: expect.any(Number),
+        actionStage: 'delivery',
+      }),
+    }))
+    await app.close()
+    await repository.close()
+  })
+
+  it('lets the delivery workbench confirm pickup and delivery atomically in one tap', async () => {
+    const repository = new JsonRepository(`/tmp/mbox-fulfillment-one-tap-${crypto.randomUUID()}.json`)
+    await repository.init()
+    await createSubmittedOrder(repository)
+    const app = Fastify()
+    registerTestActor(app)
+    registerCommerceRoutes(app, repository)
+    expect((await action(app, 'complete', 'one-tap-production-complete', 'bartender', 'emp-qing')).statusCode).toBe(200)
+
+    const delivered = await action(app, 'pickupAndDeliver', 'one-tap-delivery-0001', 'server', 'emp-lin')
+    expect(delivered.statusCode, delivered.body).toBe(200)
+    expect(delivered.json()).toMatchObject({ status: 'delivered', pickedUpBy: 'emp-lin', deliveredBy: 'emp-lin' })
+
+    const replay = await action(app, 'pickupAndDeliver', 'one-tap-delivery-0001', 'server', 'emp-lin')
+    expect(replay.statusCode, replay.body).toBe(200)
+    const differentKeyReplay = await action(app, 'pickupAndDeliver', 'one-tap-delivery-0002', 'backup', 'emp-jie')
+    expect(differentKeyReplay.statusCode, differentKeyReplay.body).toBe(200)
+    const state = await repository.read()
+    expect(state.orderDomain.kdsTasks[0]).toMatchObject({ startedAt: null, startedBy: null })
+    expect(state.auditEntries.find((entry) => entry.action === 'kds.complete.v1')).toMatchObject({
+      details: { previousStatus: 'queued', autoReceived: true, productionStartedAtRecorded: false },
+    })
+    expect(state.orderDomain.idempotencyRecords.filter((record) => record.operation === 'kds.pick_up.v1')).toHaveLength(1)
+    expect(state.orderDomain.idempotencyRecords.filter((record) => record.operation === 'kds.deliver.v1')).toHaveLength(1)
+    expect(state.taskEvents.filter((event) => event.type === 'fulfillment.atomic_pickup_delivery.v1')).toHaveLength(1)
+    expect(state.auditEntries.filter((entry) => entry.action === 'fulfillment.atomic_pickup_delivery.v1')).toHaveLength(1)
+
+    await app.close()
+    await repository.close()
+  })
+
+  it('records one semantic delivery when concurrent retries use different keys', async () => {
+    const repository = new JsonRepository(`/tmp/mbox-fulfillment-concurrent-${crypto.randomUUID()}.json`)
+    await repository.init()
+    await createSubmittedOrder(repository)
+    const app = Fastify()
+    registerTestActor(app)
+    registerCommerceRoutes(app, repository)
+    expect((await action(app, 'complete', 'concurrent-production-complete', 'bartender', 'emp-qing')).statusCode).toBe(200)
+
+    const results = await Promise.all([
+      action(app, 'pickupAndDeliver', 'concurrent-delivery-a', 'server', 'emp-lin'),
+      action(app, 'pickupAndDeliver', 'concurrent-delivery-b', 'server', 'emp-lin'),
+    ])
+    expect(results.map((result) => result.statusCode)).toEqual([200, 200])
+    const state = await repository.read()
+    expect(state.taskEvents.filter((event) => event.type === 'fulfillment.atomic_pickup_delivery.v1')).toHaveLength(1)
+    expect(state.auditEntries.filter((entry) => entry.action === 'fulfillment.atomic_pickup_delivery.v1')).toHaveLength(1)
+
+    await app.close()
+    await repository.close()
+  })
+
+  it('records the HTTP request and effective role for one-tap delivery from the task API', async () => {
+    const repository = new JsonRepository(`/tmp/mbox-fulfillment-task-api-${crypto.randomUUID()}.json`)
+    await repository.init()
+    await createSubmittedOrder(repository)
+    const app = Fastify({ genReqId: () => 'task-api-quick-delivery-request' })
+    registerTestActor(app)
+    registerCommerceRoutes(app, repository)
+    registerTaskRoutes(app, repository)
+    expect((await action(app, 'complete', 'task-api-production-complete', 'bartender', 'emp-qing')).statusCode).toBe(200)
+    const ready = await repository.read()
+    const serviceTask = ready.tasks.find((task) => task.triggerId?.startsWith('fulfillment-delivery:'))!
+
+    const delivered = await app.inject({
+      method: 'POST',
+      url: `/api/tasks/${serviceTask.id}/actions`,
+      headers: { 'x-test-role-id': 'server', 'x-test-actor-id': 'emp-lin' },
+      payload: {
+        action: 'quick_complete', actorId: 'emp-lin', note: '已送达客人桌面',
+        idempotencyKey: 'task-api-quick-delivery-0001',
+      },
+    })
+    expect(delivered.statusCode, delivered.body).toBe(200)
+    const state = await repository.read()
+    expect(state.auditEntries.find((entry) => entry.action === 'fulfillment.atomic_pickup_delivery.v1')).toMatchObject({
+      details: {
+        requestId: 'task-api-quick-delivery-request',
+        effectiveRoleId: 'server',
+        stationId: 'bar-main',
+        actionStage: 'delivery',
+      },
+    })
+
     await app.close()
     await repository.close()
   })

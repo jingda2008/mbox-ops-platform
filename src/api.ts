@@ -29,7 +29,6 @@ import type {
   SalesAttributionRecord,
   WalkInOpenInput,
 } from './shared/contracts'
-import type { Reservation } from './shared/reservation-contracts'
 import type { StaffPresenceResponse } from './shared/auth-contracts'
 import type {
   AssistedPaymentLink,
@@ -506,7 +505,7 @@ export function updateTableOperationsConfig(input: Omit<TableOperationsConfigInp
 }
 
 export function openWalkInTable(tableId: string, input: Omit<WalkInOpenInput, 'idempotencyKey'>) {
-  return request<{ table: Table; reservation: Reservation; summary: TableSessionSummary }>(
+  return request<{ table: Table; walkInId: string; summary: TableSessionSummary }>(
     `/api/tables/${encodeURIComponent(tableId)}/walk-in-open`,
     {
       method: 'POST',

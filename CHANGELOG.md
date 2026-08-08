@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0-rc.67 - 2026-08-09
+
+- Preserved the independently approved `rc.66` fulfillment, role-isolation, inventory-permission and reservation behavior without additional business changes.
+- Bypassed exhausted GitHub Actions temporary artifact storage for release tags by staging the immutable CI image bundle in a draft GitHub pre-release.
+- Kept the release closed until the complete tag CI succeeds, then verified the SHA, image digest and archive checksum before publishing the pre-release.
+- Retained Actions artifact uploads for non-tag workflows and preserved the existing Alibaba Cloud checksum, candidate health, cutover and rollback gates.
+
 ## 1.0.0-rc.66 - 2026-08-09
 
 - Reduced production fulfillment to one maker action while preserving an explicit system auto-receipt marker instead of fabricating a manual start event.

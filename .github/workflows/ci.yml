@@ -217,7 +217,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: read
+      contents: write
       actions: write
     steps:
       - uses: actions/checkout@v6
@@ -266,12 +266,30 @@ jobs:
             sha256sum "$(basename "${archive}")" > "$(basename "${archive}").sha256"
           )
       - name: Upload the exact image used by validation and deployment
+        if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v4
         with:
           name: mbox-image-${{ github.sha }}
           path: release-artifact
           compression-level: 0
           retention-days: 7
+      - name: Stage the immutable tag bundle in a draft pre-release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          test "${GITHUB_REF_NAME}" = "v${{ steps.metadata.outputs.version }}"
+          assets=(release-artifact/*)
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" "${assets[@]}" \
+              --verify-tag \
+              --draft \
+              --title "M-BOX Ops Platform ${version}" \
+              --notes-file "docs/release-${version}.md"
+          fi
 
   verify:
     if: always()

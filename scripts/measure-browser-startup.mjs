@@ -9,6 +9,7 @@ const mode = process.env.MBOX_BROWSER_STARTUP_MODE?.trim() || 'staff'
 const samples = Number(process.env.MBOX_BROWSER_STARTUP_SAMPLES ?? 30)
 const output = resolve(process.env.MBOX_BROWSER_STARTUP_REPORT_PATH ?? 'artifacts/browser-startup.json')
 const targetP95Ms = Number(process.env.MBOX_BROWSER_STARTUP_P95_LIMIT_MS ?? 500)
+const diagnosticSettleMs = Number(process.env.MBOX_BROWSER_DIAGNOSTIC_SETTLE_MS ?? 250)
 const cpuProfileOutput = process.env.MBOX_BROWSER_CPU_PROFILE_PATH
   ? resolve(process.env.MBOX_BROWSER_CPU_PROFILE_PATH)
   : ''
@@ -22,6 +23,9 @@ const staffPins = JSON.parse(process.env.MBOX_LOAD_STAFF_PINS_JSON ?? JSON.strin
 
 if (!['staff', 'guest'].includes(mode)) throw new Error('MBOX_BROWSER_STARTUP_MODE must be staff or guest')
 if (!Number.isSafeInteger(samples) || samples < 30) throw new Error('browser startup requires at least 30 samples')
+if (!Number.isSafeInteger(diagnosticSettleMs) || diagnosticSettleMs < 0 || diagnosticSettleMs > 2_000) {
+  throw new Error('MBOX_BROWSER_DIAGNOSTIC_SETTLE_MS must be an integer from 0 to 2000')
+}
 if (baseUrls.length < 2) throw new Error('browser startup requires at least two API instances')
 await mkdir(dirname(output), { recursive: true })
 if (cpuProfileOutput) await mkdir(dirname(cpuProfileOutput), { recursive: true })
@@ -131,6 +135,10 @@ try {
       if (requiredApiError) throw requiredApiError
       await page.locator('button:enabled:visible, a[href]:visible').first().waitFor({ state: 'visible', timeout: 10_000 })
       await page.waitForFunction(() => Number(window.__mboxPaintedAt ?? 0) > 0, null, { timeout: 10_000 })
+      // Keep the measured value at two-frame paint, then observe a short
+      // diagnostic window so lazy chunks and immediate follow-up APIs cannot
+      // fail just after the test has already declared success.
+      if (diagnosticSettleMs > 0) await page.waitForTimeout(diagnosticSettleMs)
       if (responseFailures.length) throw new Error(`API failures: ${responseFailures.slice(0, 3).join(', ')}`)
       if (requestFailures.length) throw new Error(`request failures: ${requestFailures.slice(0, 3).join(', ')}`)
       if (pageErrors.length) throw new Error(`page errors: ${pageErrors.slice(0, 3).join(', ')}`)
@@ -185,6 +193,7 @@ const report = {
   schemaVersion: 1,
   mode,
   measurementClass: 'fresh_browser_context_page_readiness',
+  diagnosticSettleMs,
   testStage: 'measured',
   testPhase: mode === 'staff' ? 'browser_staff' : 'browser_guest',
   measurement: mode === 'staff'

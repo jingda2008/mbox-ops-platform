@@ -28,6 +28,7 @@ function digest(value) {
 
 function environmentIdentity(manifest) {
   return JSON.stringify({
+    runId: manifest?.runId,
     source: manifest?.source,
     runtime: {
       nodeVersion: manifest?.runtime?.nodeVersion,
@@ -39,12 +40,16 @@ function environmentIdentity(manifest) {
       totalMemoryBytes: manifest?.runtime?.totalMemoryBytes,
       instances: manifest?.runtime?.instances,
       databasePoolMax: manifest?.runtime?.databasePoolMax,
+      mutationQueueMax: manifest?.runtime?.mutationQueueMax,
+      mutationQueueWaitMs: manifest?.runtime?.mutationQueueWaitMs,
+      stateReadCacheMs: manifest?.runtime?.stateReadCacheMs,
       postgresImage: manifest?.runtime?.postgresImage,
       postgresImageId: manifest?.runtime?.postgresImageId,
       playwrightVersion: manifest?.runtime?.playwrightVersion,
       chromiumVersion: manifest?.runtime?.chromiumVersion,
     },
     inputs: manifest?.inputs,
+    workload: manifest?.workload,
   })
 }
 
@@ -92,10 +97,18 @@ export function mergeLoadReports(reports, phaseEvidence, options = {}) {
     )
     const sourceCommitSha = evidence.environment?.source?.commitSha ?? ''
     const expectedCommitPassed = !options.expectedCommitSha || sourceCommitSha === options.expectedCommitSha
+    const runIdPassed = typeof evidence.environment?.runId === 'string'
+      && evidence.environment.runId.length >= 8
+      && report.model?.runId === evidence.environment.runId
+    const workloadPassed = report.model?.samplesPerReadOrAction === evidence.environment?.workload?.samplesPerReadOrAction
+      && report.model?.arrivalRatesPerSecond?.read === evidence.environment?.workload?.readRps
+      && report.model?.arrivalRatesPerSecond?.write === evidence.environment?.workload?.writeRps
     const environmentPassed = evidence.environment?.phase === phase
       && evidence.environment?.source?.dirty === false
       && /^[0-9a-f]{40}$/.test(sourceCommitSha)
       && expectedCommitPassed
+      && runIdPassed
+      && workloadPassed
     phaseGates[phase] = {
       clientPassed: report.passed === true,
       runtimePassed,
@@ -104,6 +117,8 @@ export function mergeLoadReports(reports, phaseEvidence, options = {}) {
       browserPassed,
       environmentPassed,
       expectedCommitPassed,
+      runIdPassed,
+      workloadPassed,
       clientDigest: digest(report),
       runtimeDigest: digest(evidence.runtimeMetrics),
       logDigest: digest(evidence.logAnalysis),
@@ -141,6 +156,7 @@ export function mergeLoadReports(reports, phaseEvidence, options = {}) {
       independentBaselinePerPhase: true,
       environmentConsistent,
       sourceCommitSha: evidenceByPhase.get(requiredRoutePhases[0]).environment?.source?.commitSha ?? null,
+      runId: evidenceByPhase.get(requiredRoutePhases[0]).environment?.runId ?? null,
       arrivalMetrics,
       workloadInterpretation: '提交级独立路由回归；每个阶段使用全新数据库基线，不代表正式容量上限',
     },

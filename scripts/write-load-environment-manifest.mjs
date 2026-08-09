@@ -5,6 +5,8 @@ import { cpus, freemem, hostname, release, totalmem } from 'node:os'
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { chromium } from '@playwright/test'
+import { buildSourceFingerprint } from './build-source-fingerprint.mjs'
+import { describeKdsWriteProfile, describeVenueWorkload } from './load-workload-model.mjs'
 
 async function digestFiles(paths) {
   const hash = createHash('sha256')
@@ -38,11 +40,20 @@ function commandOutput(command, args) {
 }
 
 export async function createLoadEnvironmentManifest(options = {}) {
+  const venueWorkload = describeVenueWorkload({
+    testWindowSeconds: Number(process.env.MBOX_LOAD_WINDOW_SECONDS ?? 300),
+  })
+  const kdsWriteProfile = describeKdsWriteProfile({
+    guests: venueWorkload.guests,
+    operatingHours: venueWorkload.operatingHours,
+  })
   const migrationFiles = (await readdir(resolve(options.migrationDirectory ?? 'database/migrations')))
     .filter((name) => name.endsWith('.sql'))
     .map((name) => `${options.migrationDirectory ?? 'database/migrations'}/${name}`)
   const commitSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
-  const dirty = Boolean(execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim())
+  const worktreeStatus = execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim()
+  const dirty = Boolean(worktreeStatus)
+  const diff = dirty ? execFileSync('git', ['diff', '--binary', 'HEAD'], { encoding: 'utf8' }) : ''
   const postgresImage = options.postgresImage ?? 'postgres:16-alpine'
   const chromiumPath = chromium.executablePath()
   const playwrightPackage = JSON.parse(await readFile(resolve('node_modules/@playwright/test/package.json'), 'utf8'))
@@ -52,16 +63,31 @@ export async function createLoadEnvironmentManifest(options = {}) {
   ]
   const testFiles = [
     'scripts/rc68-mixed-load.mjs',
+    'scripts/build-source-fingerprint.mjs',
+    'scripts/load-workload-model.mjs',
     'scripts/measure-browser-startup.mjs',
     'scripts/analyze-runtime-logs.mjs',
     'scripts/verify-runtime-metrics.mjs',
     'scripts/run-local-rc68-load.sh',
+    'scripts/run-local-rc68-route-suite.sh',
+    'scripts/prepare-rc68-load-state.mjs',
+    'scripts/write-load-environment-manifest.mjs',
+    'scripts/merge-rc68-load-reports.mjs',
   ]
+  const buildSource = await buildSourceFingerprint()
   return {
     schemaVersion: 1,
+    runId: process.env.MBOX_LOAD_RUN_ID?.trim() || null,
     generatedAt: new Date().toISOString(),
     phase: options.phase,
-    source: { commitSha, dirty },
+    source: {
+      commitSha,
+      dirty,
+      changedPaths: worktreeStatus ? worktreeStatus.split('\n').map((line) => line.slice(3)).toSorted() : [],
+      diffSha256: dirty ? createHash('sha256').update(diff).digest('hex') : null,
+      buildInputSha256: buildSource.digest,
+      buildInputFiles: buildSource.files,
+    },
     runtime: {
       nodeVersion: process.version,
       platform: process.platform,
@@ -74,8 +100,14 @@ export async function createLoadEnvironmentManifest(options = {}) {
       freeMemoryBytesAtCapture: freemem(),
       instances: Number(options.instances ?? 2),
       databasePoolMax: Number(options.databasePoolMax ?? 10),
+      mutationQueueMax: Number(process.env.MBOX_DATABASE_MUTATION_QUEUE_MAX ?? 100),
+      mutationQueueWaitMs: Number(process.env.MBOX_DATABASE_MUTATION_QUEUE_WAIT_MS ?? 15_000),
+      stateReadCacheMs: Number(process.env.MBOX_STATE_READ_CACHE_MS ?? 3_000),
       postgresImage,
       postgresImageId: commandOutput('docker', ['image', 'inspect', '--format={{.Id}}', postgresImage]),
+      postgresPort: Number(process.env.MBOX_LOAD_POSTGRES_PORT ?? 0) || null,
+      apiPorts: [process.env.MBOX_LOAD_API_PORT_1, process.env.MBOX_LOAD_API_PORT_2]
+        .map((value) => Number(value)).filter(Number.isSafeInteger),
       playwrightVersion: playwrightPackage.version,
       chromiumPath,
       chromiumVersion: commandOutput(chromiumPath, ['--version']),
@@ -92,6 +124,10 @@ export async function createLoadEnvironmentManifest(options = {}) {
       profile: process.env.MBOX_LOAD_PROFILE ?? 'route-regression',
       samplesPerReadOrAction: Number(process.env.MBOX_LOAD_SAMPLES ?? 300),
       browserSamples: Number(process.env.MBOX_BROWSER_STARTUP_SAMPLES ?? 30),
+      readRps: Number(process.env.MBOX_LOAD_READ_RPS ?? 1),
+      writeRps: Number(process.env.MBOX_LOAD_WRITE_RPS ?? kdsWriteProfile.representativeRegressionRps),
+      venueAssumptions: venueWorkload,
+      kdsWriteAssumptions: kdsWriteProfile,
     },
   }
 }

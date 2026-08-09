@@ -20,7 +20,8 @@ function report(phase, passed = true) {
   }]))
   return {
     model: {
-      phase, evidenceEligible: true, instances: 2, samplesPerReadOrAction: 300,
+      phase, runId: 'run-12345678', evidenceEligible: true, instances: 2, samplesPerReadOrAction: 300,
+      arrivalRatesPerSecond: { read: 1, write: 2 },
       arrivalMetrics: Object.fromEntries(labels[phase].map((label) => [label, { targetRps: 5 }])),
     },
     totals: { measured: 300, failures: passed ? 0 : 1, workflowFailures: 0 },
@@ -35,9 +36,14 @@ function evidence(phase, passed = true) {
     logAnalysis: { selection: { testStage: 'measured', testPhase: phase }, gate: { passed } },
     environment: {
       phase,
+      runId: 'run-12345678',
       source: { commitSha: 'a'.repeat(40), dirty: false },
-      runtime: { nodeVersion: 'v24.0.0', instances: 2, databasePoolMax: 10 },
+      runtime: {
+        nodeVersion: 'v24.0.0', instances: 2, databasePoolMax: 10,
+        mutationQueueMax: 100, mutationQueueWaitMs: 15000, stateReadCacheMs: 3000,
+      },
       inputs: { packageLockSha256: 'lock', migrationSetSha256: 'migration', seedStateSha256: 'seed' },
+      workload: { samplesPerReadOrAction: 300, browserSamples: 30, readRps: 1, writeRps: 2 },
     },
     browserStartup: ['staff_start', 'reads'].includes(phase) ? {
       passed,
@@ -109,4 +115,14 @@ test('denies mismatched log selection, browser mode, or expected commit', () => 
   assert.equal(mergeLoadReports(
     requiredRoutePhases.map((phase) => report(phase)), commit, { expectedCommitSha: 'b'.repeat(40) },
   ).passed, false)
+})
+
+test('denies mixed run identities or workload parameters', () => {
+  const mixedRun = requiredRoutePhases.map((phase) => evidence(phase))
+  mixedRun.at(-1).environment.runId = 'run-87654321'
+  assert.equal(mergeLoadReports(requiredRoutePhases.map((phase) => report(phase)), mixedRun).passed, false)
+
+  const mixedWorkload = requiredRoutePhases.map((phase) => evidence(phase))
+  mixedWorkload[2].environment.workload.writeRps = 1
+  assert.equal(mergeLoadReports(requiredRoutePhases.map((phase) => report(phase)), mixedWorkload).passed, false)
 })

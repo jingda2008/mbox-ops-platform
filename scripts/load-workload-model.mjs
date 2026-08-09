@@ -116,6 +116,40 @@ export function describeVenueWorkload(options = {}) {
   }
 }
 
+export function describeKdsWriteProfile(options = {}) {
+  const guests = options.guests ?? 300
+  const operatingHours = options.operatingHours ?? 5.5
+  const estimatedItemsPerGuest = options.estimatedItemsPerGuest ?? 3
+  const transitionsPerItem = options.transitionsPerItem ?? 4
+  const representativeRegressionRps = options.representativeRegressionRps ?? 2
+  const capacityProbeRps = options.capacityProbeRps ?? 5
+  for (const [name, value] of Object.entries({
+    guests,
+    operatingHours,
+    estimatedItemsPerGuest,
+    transitionsPerItem,
+    representativeRegressionRps,
+    capacityProbeRps,
+  })) {
+    if (!Number.isFinite(value) || value <= 0) throw new Error(`${name}必须是正数`)
+  }
+  const estimatedFullNightTransitions = guests * estimatedItemsPerGuest * transitionsPerItem
+  const estimatedFullNightAverageRps = estimatedFullNightTransitions / (operatingHours * 60 * 60)
+  return {
+    modelType: 'explicit_assumption_not_production_observation',
+    guests,
+    operatingHours,
+    estimatedItemsPerGuest,
+    transitionsPerItem,
+    estimatedFullNightTransitions,
+    estimatedFullNightAverageRps,
+    representativeRegressionRps,
+    capacityProbeRps,
+    representativeMultiplier: representativeRegressionRps / estimatedFullNightAverageRps,
+    capacityProbeMultiplier: capacityProbeRps / estimatedFullNightAverageRps,
+  }
+}
+
 export function selectAuthorizedOccupiedTables(tablesByActorId, staffSessionByActorId) {
   if (!(tablesByActorId instanceof Map)) throw new Error('员工可见桌台目录必须是Map')
   if (!(staffSessionByActorId instanceof Map)) throw new Error('员工会话目录必须是Map')

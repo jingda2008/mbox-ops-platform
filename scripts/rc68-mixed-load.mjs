@@ -3,6 +3,7 @@ import { writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import {
   describeVenueWorkload,
+  describeKdsWriteProfile,
   evaluateArrivalSchedule,
   runArrivalPool,
   selectAuthorizedOccupiedTables,
@@ -17,14 +18,19 @@ const staffColdStarts = Number(process.env.MBOX_LOAD_STAFF_COLD_STARTS ?? 12)
 const staffStartRounds = Number(process.env.MBOX_LOAD_STAFF_START_ROUNDS ?? 10)
 const testWindowSeconds = Number(process.env.MBOX_LOAD_WINDOW_SECONDS ?? 300)
 const venueModel = describeVenueWorkload({ testWindowSeconds })
+const kdsWriteProfile = describeKdsWriteProfile({
+  guests: venueModel.guests,
+  operatingHours: venueModel.operatingHours,
+})
 const readRps = Number(process.env.MBOX_LOAD_READ_RPS ?? 1)
 const guestSessionRps = Number(process.env.MBOX_LOAD_GUEST_SESSION_RPS ?? venueModel.testGuestSessionArrivalPerSecond)
 const heartbeatRps = Number(process.env.MBOX_LOAD_HEARTBEAT_RPS ?? 1)
 const setupWriteRps = Number(process.env.MBOX_LOAD_SETUP_WRITE_RPS ?? 5)
-const writeRps = Number(process.env.MBOX_LOAD_WRITE_RPS ?? 5)
+const writeRps = Number(process.env.MBOX_LOAD_WRITE_RPS ?? kdsWriteProfile.representativeRegressionRps)
 const staffStartRps = Number(process.env.MBOX_LOAD_STAFF_START_RPS ?? 2)
 const schedulingDelayP95LimitMs = Number(process.env.MBOX_LOAD_SCHEDULING_DELAY_P95_LIMIT_MS ?? 250)
 const phase = process.env.MBOX_LOAD_PHASE?.trim() || 'all'
+const runId = process.env.MBOX_LOAD_RUN_ID?.trim() || null
 const phases = ['all', 'staff_start', 'reads', 'create_task_live', 'create_quick_order_live', 'task_action', 'kds_start', 'kds_complete']
 if (!phases.includes(phase)) throw new Error(`MBOX_LOAD_PHASE必须是${phases.join('、')}之一`)
 const accessCode = process.env.MBOX_LOAD_ACCESS_CODE ?? 'MBOX521'
@@ -522,6 +528,7 @@ const byLabel = Object.fromEntries(Object.entries(activeTargets).map(([label, ta
 const schedule = evaluateArrivalSchedule(measuredArrivalMetrics, schedulingDelayP95LimitMs)
 const report = {
   model: {
+    runId,
     instances: baseUrls.length, samplesPerReadOrAction: samples, kdsActionSamples: samples * 2,
     readConcurrency: concurrency, staffColdStarts, bootstrapLiveSamples: samples, bootstrapCachedSamples: samples,
     staffIdentityCount: staffSessions.length,
@@ -538,6 +545,7 @@ const report = {
       heartbeat: round(heartbeatRps / venueModel.employeeHeartbeatsPerSecond),
     },
     venue: venueModel,
+    kdsWriteProfile,
     arrivalMetrics: measuredArrivalMetrics,
     setupArrivalMetrics,
     schedulingDelayP95LimitMs,

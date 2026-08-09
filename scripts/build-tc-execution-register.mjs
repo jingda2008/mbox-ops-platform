@@ -42,11 +42,19 @@ if (testCases.length !== 213) throw new Error(`Expected 213 operating TCs, found
 const qualitySupplement = readFileSync(qualitySupplementPath, 'utf8')
 const qualitySupplementCases = [...qualitySupplement.matchAll(/^\| ((?:TME|CAP|RPF)-\d{3}) \| (P[0-3]) \| ([^|]+) \| ([^|]+) \| (通过|失败|未执行|待执行|阻塞|未通过) \|/gm)]
   .map((match) => ({ id: match[1], priority: match[2], scenario: match[3].trim(), expected: match[4].trim(), status: match[5] }))
-if (qualitySupplementCases.length !== 44) {
-  throw new Error(`Expected 44 time/capacity/performance TCs, found ${qualitySupplementCases.length}`)
+if (qualitySupplementCases.length !== 47) {
+  throw new Error(`Expected 47 time/capacity/performance TCs, found ${qualitySupplementCases.length}`)
 }
 if (new Set(qualitySupplementCases.map((item) => item.id)).size !== qualitySupplementCases.length) {
   throw new Error('Time/capacity/performance TC ids must be unique')
+}
+const expectedQualitySupplementIds = [
+  ...Array.from({ length: 12 }, (_, index) => `TME-${String(index + 1).padStart(3, '0')}`),
+  ...Array.from({ length: 18 }, (_, index) => `CAP-${String(index + 1).padStart(3, '0')}`),
+  ...Array.from({ length: 17 }, (_, index) => `RPF-${String(index + 1).padStart(3, '0')}`),
+]
+if (qualitySupplementCases.map((item) => item.id).toSorted().join(',') !== expectedQualitySupplementIds.toSorted().join(',')) {
+  throw new Error('Time/capacity/performance TC baseline was replaced or has a gap')
 }
 
 function ids(prefix, ranges) {
@@ -235,6 +243,9 @@ const counts = rows.reduce((summary, row) => {
   return summary
 }, {})
 const releaseBlocking = rows.filter((row) => row.result !== '通过' && (row.priority === 'P0' || row.priority === 'P1'))
+const supplementalReleaseBlocking = qualitySupplementCases.filter((item) => (
+  item.status !== '通过' && (item.priority === 'P0' || item.priority === 'P1')
+))
 const p0p1Breakdown = releaseBlocking.reduce((summary, row) => {
   const key = `${row.priority}-${row.result}`
   summary[key] = (summary[key] ?? 0) + 1
@@ -260,16 +271,16 @@ const csv = csvDocument(
 
 const blockersCsv = csvDocument(
   ['TC编号', '优先级', '状态', '工程覆盖度', '责任人', '执行场景', '通过条件', '必须提交的证据'],
-  releaseBlocking.map((row) => [
-    row.id,
-    row.priority,
-    row.result,
-    row.engineeringCoverage,
-    row.owners,
-    row.scenario,
-    row.expected,
-    row.evidence,
-  ]),
+  [
+    ...releaseBlocking.map((row) => [
+      row.id, row.priority, row.result, row.engineeringCoverage, row.owners,
+      row.scenario, row.expected, row.evidence,
+    ]),
+    ...supplementalReleaseBlocking.map((row) => [
+      row.id, row.priority, row.status, '专项门禁', '质量负责人/对应业务负责人',
+      row.scenario, row.expected, `见 ${qualitySupplementPath}`,
+    ]),
+  ],
 )
 
 const report = `# M-BOX 213条经营TC执行报告
@@ -295,7 +306,7 @@ const report = `# M-BOX 213条经营TC执行报告
 | 阻塞 | ${counts['阻塞'] ?? 0} | 缺真实支付参数、外部流水或第三方生产通道 |
 | 失败 | ${counts['失败'] ?? 0} | 已执行但结果不符合预期；本轮为0 |
 
-**商业生产发布结论：不通过发布门禁。** 当前仍有 **${releaseBlocking.length}条 P0/P1** 未达到“通过”：${p0p1Breakdown['P0-阻塞'] ?? 0}条P0阻塞、${p0p1Breakdown['P0-未执行'] ?? 0}条P0未执行、${p0p1Breakdown['P1-阻塞'] ?? 0}条P1阻塞、${p0p1Breakdown['P1-未执行'] ?? 0}条P1未执行。
+**商业生产发布结论：不通过发布门禁。** 213条经营基线仍有 **${releaseBlocking.length}条 P0/P1** 未达到“通过”：${p0p1Breakdown['P0-阻塞'] ?? 0}条P0阻塞、${p0p1Breakdown['P0-未执行'] ?? 0}条P0未执行、${p0p1Breakdown['P1-阻塞'] ?? 0}条P1阻塞、${p0p1Breakdown['P1-未执行'] ?? 0}条P1未执行。另有 **${supplementalReleaseBlocking.length}条专项P0/P1** 未完成，已一并写入发布阻断CSV。
 
 工程覆盖度与验收状态是两套口径：代码存在不等于现场验收通过。未通过项中，外部依赖${externalDependency.size}条、代码支持但待现场验证${codeSupportedFieldPending.size}条、明确能力缺口${capabilityGap.size}条、部分实现${partialGap.size}条；其余属于现场执行或云端复测项。
 
@@ -338,10 +349,8 @@ writeOrVerify(csvPath, csv)
 writeOrVerify(blockersPath, blockersCsv)
 writeOrVerify(reportPath, report)
 
-if (requireReleasePass && (releaseBlocking.length > 0 || qualitySupplementCases.some((item) => (
-  ['P0', 'P1'].includes(item.priority) && item.status !== '通过'
-)))) {
-  throw new Error(`Commercial release denied: ${releaseBlocking.length} operating P0/P1 TCs and ${qualitySupplementCases.filter((item) => ['P0', 'P1'].includes(item.priority) && item.status !== '通过').length} supplemental P0/P1 TCs are unfinished`)
+if (requireReleasePass && (releaseBlocking.length > 0 || supplementalReleaseBlocking.length > 0)) {
+  throw new Error(`Commercial release denied: ${releaseBlocking.length} operating P0/P1 TCs and ${supplementalReleaseBlocking.length} supplemental P0/P1 TCs are unfinished`)
 }
 
 console.log(JSON.stringify({
@@ -350,7 +359,9 @@ console.log(JSON.stringify({
   total: rows.length,
   qualitySupplementTotal: qualitySupplementCases.length,
   counts,
-  releaseBlocking: releaseBlocking.length,
+  operatingReleaseBlocking: releaseBlocking.length,
+  supplementalReleaseBlocking: supplementalReleaseBlocking.length,
+  releaseBlocking: releaseBlocking.length + supplementalReleaseBlocking.length,
   reportPath,
   csvPath,
   blockersPath,

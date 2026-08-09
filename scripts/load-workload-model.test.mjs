@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   describeVenueWorkload,
+  describeKdsWriteProfile,
   evaluateArrivalSchedule,
   runArrivalPool,
   selectAuthorizedOccupiedTables,
@@ -20,6 +21,16 @@ test('venue model exposes the assumptions behind 300-guest performance tests', (
   assert.ok(model.guestArrivalsPerSecond < 0.02)
   assert.ok(model.tenTimesGuestArrivalBurstPerSecond < 0.2)
   assert.ok(model.employeeHeartbeatsPerSecond < 0.3)
+})
+
+test('KDS regression and capacity rates remain separate and expose every assumption', () => {
+  const profile = describeKdsWriteProfile()
+  assert.equal(profile.modelType, 'explicit_assumption_not_production_observation')
+  assert.equal(profile.estimatedFullNightTransitions, 3_600)
+  assert.ok(Math.abs(profile.estimatedFullNightAverageRps - 0.1818) < 0.001)
+  assert.ok(Math.abs(profile.representativeMultiplier - 11) < 0.01)
+  assert.ok(Math.abs(profile.capacityProbeMultiplier - 27.5) < 0.01)
+  assert.ok(profile.capacityProbeRps > profile.representativeRegressionRps)
 })
 
 test('arrival pool paces work and never exceeds its concurrency ceiling', async () => {

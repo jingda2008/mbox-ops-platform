@@ -1,5 +1,9 @@
 import pg from 'pg'
-import { asPostgresPool, PostgresRepository } from '../dist-server/server/postgres-repository.js'
+import {
+  asPostgresPool,
+  PostgresMutationNotIdleError,
+  PostgresRepository,
+} from '../dist-server/server/postgres-repository.js'
 import { PostgresOperationalProjector } from '../dist-server/server/operational-projection.js'
 import {
   hydrateRuntimeStateFromOperationalTables,
@@ -35,9 +39,18 @@ const repository = new PostgresRepository({
   seedState: null,
   projector: new PostgresOperationalProjector(),
 })
+const siblingPool = asPostgresPool(new pg.Pool({ connectionString: databaseUrl, max: 2 }))
+const siblingRepository = new PostgresRepository({
+  pool: siblingPool,
+  tenantId,
+  storeId,
+  seedState: null,
+  projector: new PostgresOperationalProjector(),
+})
 
 try {
   await repository.init()
+  await siblingRepository.init()
   const before = await repository.readFresh()
   const operationalStore = new PostgresOperationalReadStore(pool, { tenantId, storeId })
   const firstSnapshot = await operationalStore.read(before.revision, before.store.businessDate)
@@ -61,17 +74,48 @@ try {
     throw new Error('单行变更未同步到规范化读取结果')
   }
 
+  let releaseForeground
+  let markForegroundEntered
+  const foregroundEntered = new Promise((resolve) => { markForegroundEntered = resolve })
+  const foregroundRelease = new Promise((resolve) => { releaseForeground = resolve })
+  const foregroundMutation = siblingRepository.mutate(async (working) => {
+    markForegroundEntered()
+    await foregroundRelease
+    working.revision += 1
+  })
+  await foregroundEntered
+  const schedulerAttemptStartedAt = performance.now()
+  let rejectedAsBusy = false
+  try {
+    await repository.mutate((working) => {
+      working.revision += 1
+    }, { metricLabel: 'scheduler', minimumGlobalIdleMs: 750 })
+  } catch (error) {
+    if (!(error instanceof PostgresMutationNotIdleError)) throw error
+    rejectedAsBusy = true
+  } finally {
+    releaseForeground()
+  }
+  await foregroundMutation
+  if (!rejectedAsBusy) throw new Error('另一实例持有前台写事务时，后台调度写没有被拒绝')
+  if (performance.now() - schedulerAttemptStartedAt > 500) {
+    throw new Error('后台调度写没有快速避让前台事务')
+  }
+
+  const afterContention = await repository.readFresh()
   const health = await repository.healthCheck()
-  if (!health.ready || !health.projectionReady || !health.projectionCountsMatch || health.projectionRevision !== after.revision) {
+  if (!health.ready || !health.projectionReady || !health.projectionCountsMatch || health.projectionRevision !== afterContention.revision) {
     throw new Error(`规范化投影健康检查失败：${JSON.stringify(health)}`)
   }
   console.log(JSON.stringify({
     verified: true,
-    revision: after.revision,
+    revision: afterContention.revision,
     tables: secondSnapshot.tables.length,
     projectionRevision: health.projectionRevision,
     countsMatch: health.projectionCountsMatch,
+    crossInstanceMutationGate: 'verified',
   }))
 } finally {
+  await siblingRepository.close()
   await repository.close()
 }

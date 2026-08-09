@@ -35,7 +35,7 @@ interface SopActionClaim {
 
 const dispatchableTypes = new Set<SopActionRecordType>(['headset_notification', 'wecom_notification', 'camera_snapshot'])
 
-function hasDueActions(state: RuntimeState, now: Date) {
+export function sopActionsWouldDispatch(state: RuntimeState, now: Date) {
   const dueAt = now.toISOString()
   return (state.sopActionRecords ?? []).some((record) => (
     record.status === 'queued'
@@ -160,12 +160,13 @@ export async function dispatchDueSopActions(
   workerId: string,
   now = new Date(),
   snapshot?: RuntimeState,
+  minimumGlobalIdleMs?: number,
 ) {
   const emptySummary = { claimed: 0, completed: 0, rejected: 0, failed: 0, retried: 0 }
-  if (!hasDueActions(snapshot ?? await repository.read(), now)) return emptySummary
+  if (!sopActionsWouldDispatch(snapshot ?? await repository.read(), now)) return emptySummary
   const claims = await repository.mutate(
     (state) => claimDueActions(state, adapters, workerId, now),
-    { metricLabel: 'scheduler' },
+    { metricLabel: 'scheduler', minimumGlobalIdleMs },
   )
   const summary = { claimed: claims.length, completed: 0, rejected: 0, failed: 0, retried: 0 }
   for (const claim of claims) {

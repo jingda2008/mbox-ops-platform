@@ -100,6 +100,7 @@ export interface PostgresMutationOptions<T = unknown> {
   projectionTables?: OperationalProjectionTable[]
   projectionEntityIds?: (result: T) => OperationalProjectionEntityIds
   metricLabel?: 'kds' | 'scheduler' | 'other'
+  minimumGlobalIdleMs?: number
 }
 
 export interface PostgresRepositoryOptions extends PostgresTenantContext {
@@ -174,6 +175,12 @@ export interface PostgresRepositoryHealth {
 }
 
 export class PostgresRepositoryError extends Error {}
+
+export class PostgresMutationNotIdleError extends PostgresRepositoryError {
+  constructor() {
+    super('A foreground mutation is active or the global quiet window has not elapsed')
+  }
+}
 
 export class PostgresRepositoryClosedError extends PostgresRepositoryError {
   constructor() {
@@ -349,8 +356,21 @@ const SQL = {
     WHERE tenant_id = $1::uuid AND store_id = $2::uuid
     FOR UPDATE
   `,
+  selectRevisionAndIdleForUpdate: `
+    SELECT
+      revision,
+      EXTRACT(EPOCH FROM (clock_timestamp() - updated_at)) * 1000 AS idle_ms
+    FROM mbox.runtime_states
+    WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+    FOR UPDATE
+  `,
   selectRevision: `
     SELECT revision
+    FROM mbox.runtime_states
+    WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+  `,
+  selectMutationIdle: `
+    SELECT EXTRACT(EPOCH FROM (clock_timestamp() - updated_at)) * 1000 AS idle_ms
     FROM mbox.runtime_states
     WHERE tenant_id = $1::uuid AND store_id = $2::uuid
   `,
@@ -593,17 +613,38 @@ export class PostgresRepository {
           : null
         if (replay?.replayed) return replay.value as T
 
+        const mutationGateName = `mbox:${this.tenantId}:${this.storeId}:foreground-mutation-gate`
+        const requiredIdleMs = options.minimumGlobalIdleMs === undefined
+          ? null
+          : Math.max(0, options.minimumGlobalIdleMs)
+        if (requiredIdleMs === null) {
+          await client.query('SELECT pg_advisory_xact_lock_shared(hashtextextended($1, 0))', [mutationGateName])
+        } else {
+          const gate = await client.query<{ acquired: boolean }>(
+            'SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0)) AS acquired',
+            [mutationGateName],
+          )
+          if (gate.rows[0]?.acquired !== true) throw new PostgresMutationNotIdleError()
+        }
+
         // Lock only the lightweight revision first. If this process already has
         // the same verified revision, avoid fetching and parsing the 1MB+ state
         // document again before every serialized write.
         const revisionLockStartedAt = performance.now()
-        const locked = await client.query<{ revision: number | string }>(SQL.selectRevisionForUpdate, [
-          this.tenantId,
-          this.storeId,
-        ])
+        const locked = requiredIdleMs === null
+          ? await client.query<{ revision: number | string }>(SQL.selectRevisionForUpdate, [this.tenantId, this.storeId])
+          : await client.query<{ revision: number | string; idle_ms: number | string }>(
+            SQL.selectRevisionAndIdleForUpdate,
+            [this.tenantId, this.storeId],
+          )
         this.recordMutationMetric(this.mutationRevisionLockDurations, performance.now() - revisionLockStartedAt)
         if (locked.rowCount !== 1 || !locked.rows[0]) throw new PostgresRuntimeStateNotInitializedError()
-        const expectedRevision = parseRevision(locked.rows[0].revision)
+        const lockedRow = locked.rows[0] as { revision: number | string; idle_ms?: number | string }
+        if (requiredIdleMs !== null) {
+          const idleMs = Number(lockedRow.idle_ms)
+          if (!Number.isFinite(idleMs) || idleMs < requiredIdleMs) throw new PostgresMutationNotIdleError()
+        }
+        const expectedRevision = parseRevision(lockedRow.revision)
         // cachedState is never exposed directly. The mutation receives its own
         // clone below, so cloning the verified cache once more only adds CPU
         // and event-loop pressure on every hot write.
@@ -613,6 +654,9 @@ export class PostgresRepository {
         const cloneStartedAt = performance.now()
         const workingCopy = parseState(current)
         this.recordMutationMetric(this.mutationCloneDurations, performance.now() - cloneStartedAt)
+        // End the clone turn before canonical serialization. Otherwise both
+        // CPU stages can combine into one long event-loop stall.
+        await yieldToEventLoop()
         const domainStartedAt = performance.now()
         const result = await mutation(workingCopy)
         this.recordMutationMetric(this.mutationDomainDurations, performance.now() - domainStartedAt)
@@ -676,13 +720,29 @@ export class PostgresRepository {
     while (true) {
       const now = performance.now()
       if (this.pendingMutations === 0 && this.activeMutations === 0 && now - this.lastMutationCompletedAt >= normalizedIdleMs) {
-        return true
+        break
       }
       if (now >= deadline) return false
       const remainingIdle = Math.max(1, normalizedIdleMs - (now - this.lastMutationCompletedAt))
       const remainingDeadline = Math.max(1, deadline - now)
       await new Promise((resolve) => setTimeout(resolve, Math.min(25, remainingIdle, remainingDeadline)))
     }
+    if (normalizedIdleMs === 0) return true
+
+    // Local queue state is insufficient with more than one API instance. A
+    // sibling can still hold or have just released the aggregate row lock.
+    // The row timestamp is the shared source of truth for the last committed
+    // mutation across the store.
+    return this.track(() => this.withTransaction(true, async (client) => {
+      const result = await client.query<{ idle_ms: number | string }>(SQL.selectMutationIdle, [
+        this.tenantId,
+        this.storeId,
+      ])
+      const value = result.rows[0]?.idle_ms
+      if (result.rowCount !== 1 || value === undefined) throw new PostgresRuntimeStateNotInitializedError()
+      const globalIdleMs = typeof value === 'number' ? value : Number(value)
+      return Number.isFinite(globalIdleMs) && globalIdleMs >= normalizedIdleMs
+    }))
   }
 
   async runWithDistributedLease<T>(name: string, operation: () => Promise<T>) {
@@ -1225,6 +1285,10 @@ function parseState(value: RuntimeState | string): RuntimeState {
   }
   assertRuntimeState(parsed)
   return parsed
+}
+
+function yieldToEventLoop() {
+  return new Promise<void>((resolve) => setImmediate(resolve))
 }
 
 export function serializeRuntimeState(value: RuntimeState) {

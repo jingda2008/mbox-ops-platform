@@ -25,13 +25,13 @@ import {
   validateEnvironmentPaymentRuntime,
 } from './payment-provider.js'
 import { registerProactiveServiceRoutes } from './proactive-service.js'
-import { dispatchDueSopActions } from './sop-action-dispatch.js'
+import { dispatchDueSopActions, sopActionsWouldDispatch } from './sop-action-dispatch.js'
 import { createSopActionAdapters } from './sop-action-runtime.js'
 import { registerSopActionRoutes, SopActionBusinessError } from './sop-action-api.js'
 import { registerBenefitRoutes } from './benefit-domain.js'
 import { buildMemberPortal, registerMemberPortalRoutes } from './member-portal.js'
 import { registerNotificationRoutes } from './notification-api.js'
-import { dispatchDueNotifications } from './notification-dispatch.js'
+import { dispatchDueNotifications, notificationsWouldDispatch } from './notification-dispatch.js'
 import { BenefitRedemptionBusinessError, registerBenefitRedemptionRoutes } from './benefit-redemption.js'
 import { AuthenticationError, registerAuthContext, requireRequestActor } from './auth-context.js'
 import type { RuntimeMode } from '../src/shared/auth-contracts.js'
@@ -63,6 +63,7 @@ import { StoreImportValidationError } from './store-import.js'
 import {
   PostgresIdempotencyConflictError,
   PostgresIdempotencyInProgressError,
+  PostgresMutationNotIdleError,
   PostgresOptimisticConcurrencyError,
   type PostgresRepositoryHealth,
 } from './postgres-repository.js'
@@ -831,14 +832,14 @@ if (runtimeConfig.runtimeMode === 'staging' || runtimeConfig.runtimeMode === 'pr
 
 let schedulerRunning = false
 let schedulerDeferredSince = 0
-// The aggregate write currently takes about 200ms in the two-instance
-// regression environment. Requiring 300ms of prior silence places scheduler
-// work at the end of the 500ms foreground gap and makes the next KDS action
-// queue behind it. Start near the beginning of a proven idle gap instead, and
-// give up this tick quickly when foreground writes keep arriving.
-const schedulerIdleMs = 25
+// Scheduler mutations are aggregate compatibility writes and can take longer
+// than one foreground arrival interval on a slower instance. Require a quiet
+// window shared by every instance; during sustained traffic the bounded
+// deferral below preserves timer correctness without letting every two-second
+// tick delay KDS work.
+const schedulerIdleMs = 750
 const schedulerIdleWaitMs = 250
-const schedulerMaximumDeferralMs = 10_000
+const schedulerMaximumDeferralMs = 15_000
 const notificationWorkerId = `notification-worker:${process.pid}:${randomUUID()}`
 const sopActionWorkerId = `sop-action-worker:${process.pid}:${randomUUID()}`
 const scheduler = setInterval(() => {
@@ -848,8 +849,13 @@ const scheduler = setInterval(() => {
     const snapshot = await repository.read()
     const probeNow = new Date()
     const scheduledWorkDue = scheduledOperationsWouldChange(snapshot, probeNow)
-    if (scheduledWorkDue) {
-      const forceRun = schedulerDeferredSince > 0 && Date.now() - schedulerDeferredSince >= schedulerMaximumDeferralMs
+    const notificationWorkDue = notificationsWouldDispatch(snapshot, customerNotificationAdapters, probeNow)
+    const sopActionWorkDue = sopActionsWouldDispatch(snapshot, probeNow)
+    const backgroundWorkDue = scheduledWorkDue || notificationWorkDue || sopActionWorkDue
+    const forceRun = backgroundWorkDue
+      && schedulerDeferredSince > 0
+      && Date.now() - schedulerDeferredSince >= schedulerMaximumDeferralMs
+    if (backgroundWorkDue) {
       const idle = forceRun || !repository.waitForMutationIdle
         ? true
         : await repository.waitForMutationIdle(schedulerIdleMs, schedulerIdleWaitMs)
@@ -858,14 +864,14 @@ const scheduler = setInterval(() => {
         return
       }
     }
-    schedulerDeferredSince = 0
     const executionNow = new Date()
-    const currentSnapshot = scheduledWorkDue ? await repository.read() : snapshot
+    const currentSnapshot = backgroundWorkDue ? await repository.read() : snapshot
     const workStillDue = scheduledWorkDue && scheduledOperationsWouldChange(currentSnapshot, executionNow)
+    const minimumGlobalIdleMs = forceRun ? undefined : schedulerIdleMs
     const businessDayRollover = workStillDue
       ? await repository.mutate(
         (state) => applyScheduledOperations(state, executionNow),
-        { metricLabel: 'scheduler' },
+        { metricLabel: 'scheduler', minimumGlobalIdleMs },
       )
       : null
     const dispatchSnapshot = workStillDue ? await repository.read() : currentSnapshot
@@ -877,15 +883,36 @@ const scheduler = setInterval(() => {
       }, 'business day automatically rolled over')
     }
     await Promise.all([
-      dispatchDueNotifications(repository, customerNotificationAdapters, notificationWorkerId, executionNow, {}, dispatchSnapshot),
-      dispatchDueSopActions(repository, sopActionAdapters, sopActionWorkerId, executionNow, dispatchSnapshot),
+      dispatchDueNotifications(
+        repository,
+        customerNotificationAdapters,
+        notificationWorkerId,
+        executionNow,
+        { minimumGlobalIdleMs },
+        dispatchSnapshot,
+      ),
+      dispatchDueSopActions(
+        repository,
+        sopActionAdapters,
+        sopActionWorkerId,
+        executionNow,
+        dispatchSnapshot,
+        minimumGlobalIdleMs,
+      ),
     ])
+    schedulerDeferredSince = 0
   }
   const leasedRun = repository.runWithDistributedLease
     ? repository.runWithDistributedLease('operational-scheduler', runScheduler)
     : runScheduler()
   void leasedRun
-    .catch((error) => app.log.error(error))
+    .catch((error) => {
+      if (error instanceof PostgresMutationNotIdleError) {
+        if (schedulerDeferredSince === 0) schedulerDeferredSince = Date.now()
+        return
+      }
+      app.log.error(error)
+    })
     .finally(() => { schedulerRunning = false })
 }, 2_000)
 scheduler.unref()

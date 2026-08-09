@@ -4,6 +4,7 @@ import {
   POSTGRES_RUNTIME_STATE_MIGRATION_SQL,
   PostgresIdempotencyConflictError,
   PostgresInvalidRevisionError,
+  PostgresMutationNotIdleError,
   PostgresMutationQueueFullError,
   PostgresMutationQueueTimeoutError,
   PostgresOptimisticConcurrencyError,
@@ -25,6 +26,7 @@ interface FakeRuntimeRow {
   revision: number
   state: string
   state_sha256: string
+  updated_at?: string
 }
 
 interface FakeIdempotencyRow {
@@ -49,6 +51,7 @@ class FakePool implements PostgresPool {
   databaseNow = new Date(now)
   advisoryLeaseHeld = false
   failNextAdvisoryUnlock = false
+  foregroundMutationGateHeld = false
   readonly releaseErrors: Array<Error | boolean | undefined> = []
 
   async connect(): Promise<PostgresPoolClient> {
@@ -84,6 +87,14 @@ class FakeClient implements PostgresPoolClient {
       if (this.pool.advisoryLeaseHeld) return result([{ acquired: false }])
       this.pool.advisoryLeaseHeld = true
       return result([{ acquired: true }])
+    }
+    if (sql.startsWith('SELECT pg_advisory_xact_lock_shared')) {
+      this.requireContext()
+      return result([{ pg_advisory_xact_lock_shared: null }])
+    }
+    if (sql.startsWith('SELECT pg_try_advisory_xact_lock')) {
+      this.requireContext()
+      return result([{ acquired: !this.pool.foregroundMutationGateHeld }])
     }
     if (sql.startsWith('SELECT pg_advisory_unlock')) {
       if (this.pool.failNextAdvisoryUnlock) {
@@ -152,6 +163,27 @@ class FakeClient implements PostgresPoolClient {
       const transaction = this.requireContext()
       return transaction.runtime ? result([{ revision: transaction.runtime.revision }]) : result([])
     }
+    if (sql.startsWith('SELECT revision, EXTRACT(EPOCH FROM (clock_timestamp() - updated_at))')) {
+      const transaction = this.requireContext()
+      if (!transaction.runtime) return result([])
+      const updatedAt = Date.parse(
+        transaction.runtime.updated_at
+          ?? new Date(this.pool.databaseNow.getTime() - 1_000).toISOString(),
+      )
+      return result([{
+        revision: transaction.runtime.revision,
+        idle_ms: this.pool.databaseNow.getTime() - updatedAt,
+      }])
+    }
+    if (sql.startsWith('SELECT EXTRACT(EPOCH FROM (clock_timestamp() - updated_at))')) {
+      const transaction = this.requireContext()
+      if (!transaction.runtime) return result([])
+      const updatedAt = Date.parse(
+        transaction.runtime.updated_at
+          ?? new Date(this.pool.databaseNow.getTime() - 1_000).toISOString(),
+      )
+      return result([{ idle_ms: this.pool.databaseNow.getTime() - updatedAt }])
+    }
     if (sql.startsWith('UPDATE mbox.runtime_states SET revision')) {
       const transaction = this.requireWritableContext()
       if (this.pool.failNextCompareAndSwap) {
@@ -163,6 +195,7 @@ class FakeClient implements PostgresPoolClient {
         revision: Number(values[2]),
         state: String(values[3]),
         state_sha256: String(values[4]),
+        updated_at: this.pool.databaseNow.toISOString(),
       }
       transaction.runtimeDirty = true
       return result([{ revision: transaction.runtime.revision }], 1)
@@ -525,7 +558,7 @@ describe('PostgresRepository', () => {
   })
 
   it('lets background work wait for a quiet mutation window without blocking forever', async () => {
-    const { repository } = createRepository()
+    const { repository, pool } = createRepository()
     await repository.init()
     let release!: () => void
     let entered!: () => void
@@ -541,7 +574,49 @@ describe('PostgresRepository', () => {
     await expect(repository.waitForMutationIdle(1, 5)).resolves.toBe(false)
     release()
     await mutation
+    pool.databaseNow = new Date(pool.databaseNow.getTime() + 2)
     await expect(repository.waitForMutationIdle(1, 100)).resolves.toBe(true)
+  })
+
+  it('does not report a global idle window when another instance just committed', async () => {
+    const pool = new FakePool()
+    const { repository } = createRepository(pool)
+    await repository.init()
+    pool.runtime = { ...pool.runtime!, updated_at: pool.databaseNow.toISOString() }
+
+    await expect(repository.waitForMutationIdle(1, 0)).resolves.toBe(false)
+    await new Promise((resolve) => setTimeout(resolve, 2))
+    pool.databaseNow = new Date(pool.databaseNow.getTime() + 2)
+    await expect(repository.waitForMutationIdle(1, 0)).resolves.toBe(true)
+  })
+
+  it('skips a background mutation when a foreground instance holds the mutation gate', async () => {
+    const { pool, repository } = createRepository()
+    await repository.init()
+    pool.foregroundMutationGateHeld = true
+
+    await expect(repository.mutate((state) => {
+      state.revision += 1
+    }, { metricLabel: 'scheduler', minimumGlobalIdleMs: 750 }))
+      .rejects.toBeInstanceOf(PostgresMutationNotIdleError)
+    expect((await repository.read()).revision).toBe(1)
+  })
+
+  it('checks the committed quiet window while holding the exclusive mutation gate', async () => {
+    const { pool, repository } = createRepository()
+    await repository.init()
+    pool.runtime = { ...pool.runtime!, updated_at: pool.databaseNow.toISOString() }
+
+    await expect(repository.mutate((state) => {
+      state.revision += 1
+    }, { metricLabel: 'scheduler', minimumGlobalIdleMs: 750 }))
+      .rejects.toBeInstanceOf(PostgresMutationNotIdleError)
+
+    pool.databaseNow = new Date(pool.databaseNow.getTime() + 751)
+    await expect(repository.mutate((state) => {
+      state.revision += 1
+    }, { metricLabel: 'scheduler', minimumGlobalIdleMs: 750 })).resolves.toBeUndefined()
+    expect((await repository.read()).revision).toBe(2)
   })
 
   it('rejects excess or stale queued mutations before they consume database connections', async () => {

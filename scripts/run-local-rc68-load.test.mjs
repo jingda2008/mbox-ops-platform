@@ -113,9 +113,22 @@ test('KDS completion opens the measured metrics window after preparation', async
   assert.match(source, /if \(phase !== 'kds_complete'\) await resetMeasuredMetricsWindow\(\)/)
 })
 
-test('the scheduler seeks an early idle gap instead of colliding with the next foreground write', async () => {
+test('the scheduler uses a cross-instance quiet window with bounded deferral', async () => {
   const source = await readFile(new URL('../server/index.ts', import.meta.url), 'utf8')
-  assert.match(source, /const schedulerIdleMs = 25/)
+  const repositorySource = await readFile(new URL('../server/postgres-repository.ts', import.meta.url), 'utf8')
+  assert.match(source, /const schedulerIdleMs = 750/)
   assert.match(source, /const schedulerIdleWaitMs = 250/)
-  assert.match(source, /const schedulerMaximumDeferralMs = 10_000/)
+  assert.match(source, /const schedulerMaximumDeferralMs = 15_000/)
+  assert.match(source, /repository\.waitForMutationIdle\(schedulerIdleMs, schedulerIdleWaitMs\)/)
+  assert.match(source, /notificationsWouldDispatch/)
+  assert.match(source, /sopActionsWouldDispatch/)
+  assert.match(source, /minimumGlobalIdleMs/)
+  assert.match(repositorySource, /pg_advisory_xact_lock_shared/)
+  assert.match(repositorySource, /pg_try_advisory_xact_lock/)
+})
+
+test('dirty source paths preserve porcelain leading status columns', async () => {
+  const source = await readFile(new URL('./write-load-environment-manifest.mjs', import.meta.url), 'utf8')
+  assert.match(source, /status', '--porcelain'\], \{ encoding: 'utf8' \}\)\.trimEnd\(\)/)
+  assert.doesNotMatch(source, /--porcelain'\], \{ encoding: 'utf8' \}\)\.trim\(\)/)
 })

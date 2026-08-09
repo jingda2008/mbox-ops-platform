@@ -114,6 +114,7 @@ interface MenuOrderingWorkspaceProps {
   submitHint: string
   busy?: boolean
   timeZone?: string
+  clockOffsetMs?: number
   orderSafety?: OrderSafetyConfig
   compactCart?: boolean
   deemphasizeCollapsedTotal?: boolean
@@ -135,6 +136,7 @@ export function MenuOrderingWorkspace({
   submitHint,
   busy = false,
   timeZone = 'Asia/Shanghai',
+  clockOffsetMs = 0,
   onSubmit,
   onInteraction,
   orderSafety,
@@ -150,7 +152,7 @@ export function MenuOrderingWorkspace({
   const [cart, setCart] = useState<Record<string, number>>({})
   const [categoryId, setCategoryId] = useState('all')
   const [searchQuery, setSearchQuery] = useState('')
-  const [clock, setClock] = useState(() => Date.now())
+  const [clock, setClock] = useState(() => Date.now() + clockOffsetMs)
   const [confirmation, setConfirmation] = useState<'submit' | 'duplicate' | 'continue' | null>(null)
   const [confirmationError, setConfirmationError] = useState('')
   const [confirmedDuplicateOrderId, setConfirmedDuplicateOrderId] = useState('')
@@ -174,9 +176,11 @@ export function MenuOrderingWorkspace({
   const cartAbandonmentRef = useRef('')
   const suggestedUpgradeSourceIdsRef = useRef(new Set<string>())
   useEffect(() => {
-    const interval = window.setInterval(() => setClock(Date.now()), 30_000)
+    const updateClock = () => setClock(Date.now() + clockOffsetMs)
+    updateClock()
+    const interval = window.setInterval(updateClock, 30_000)
     return () => window.clearInterval(interval)
-  }, [])
+  }, [clockOffsetMs])
   const orderedProducts = useMemo(
     () => products.filter((item) => item.enabled).sort((left, right) => (left.sortOrder ?? 999) - (right.sortOrder ?? 999)),
     [products],

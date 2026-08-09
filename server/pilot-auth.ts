@@ -4,8 +4,9 @@ import { z } from 'zod'
 import type { PilotEmployeeOption } from '../src/shared/auth-contracts.js'
 import type { RuntimeRepository } from './repository.js'
 import { signStaffSession, signStoreAccessPass, verifyStoreAccessPass } from './auth-context.js'
-import { DEFAULT_PRESENCE_LEASE_TTL_MS, establishPresenceLease } from './presence.js'
+import { DEFAULT_PRESENCE_LEASE_TTL_MS, endPresenceLease, establishPresenceLease } from './presence.js'
 import type { RateLimitStore } from './rate-limit.js'
+import type { PresenceLeaseStore } from './presence-store.js'
 import { chinaDateKey, chinaStartOfDay, shiftDateKey } from '../src/shared/china-time.js'
 
 const pilotLoginSchema = z.object({
@@ -28,6 +29,7 @@ interface PilotAuthOptions {
   sessionHours: number
   presenceLeaseTtlMs?: number
   rateLimitStore?: RateLimitStore
+  presenceLeaseStore?: PresenceLeaseStore
   now?: () => number
 }
 
@@ -124,14 +126,31 @@ export async function registerPilotAuthRoutes(
         leaseTtlMs,
         sessionExpiresAt: expiresAt,
       })
-      return { employee: currentEmployee, storeId: working.store.id, presenceExpiresAt: lease.expiresAt }
+      return { employee: currentEmployee, storeId: working.store.id, lease }
     })
+    if (options.presenceLeaseStore) {
+      try {
+        await options.presenceLeaseStore.upsert(loggedIn.lease)
+      } catch (error) {
+        const compensated = await repository.mutate((working) => {
+          endPresenceLease(working, sessionId, loggedIn.employee.id, now)
+          return true
+        }).catch((compensationError: unknown) => {
+          app.log.error({ error: compensationError, sessionId, actorId: loggedIn.employee.id }, 'failed to compensate partial presence login')
+          return false
+        })
+        if (!compensated) {
+          throw new AggregateError([error], '在线租约写入失败，登录未生效且补偿需要后台核查')
+        }
+        throw error
+      }
+    }
     await rateLimitStore.clear({ scope: PILOT_LOGIN_RATE_LIMIT.scope, key })
     return {
       token: signStaffSession({ sessionId, actorId: loggedIn.employee.id, storeId: loggedIn.storeId, issuedAt: now, expiresAt }, options.sessionSecret),
       expiresAt,
       sessionId,
-      presenceExpiresAt: loggedIn.presenceExpiresAt,
+      presenceExpiresAt: loggedIn.lease.expiresAt,
       employee: loggedIn.employee,
       storeAccessToken,
       storeAccessExpiresAt,

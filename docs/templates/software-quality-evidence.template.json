@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "project": "replace-with-project-name",
+  "version": "0.0.0",
+  "generatedAt": "2026-08-09T00:00:00.000Z",
+  "decision": "DENY",
+  "source": {
+    "commitSha": "replace-with-full-40-character-commit-sha",
+    "dirty": true
+  },
+  "environment": {
+    "name": "validation",
+    "scope": "full"
+  },
+  "ci": {
+    "provider": "replace-with-ci-provider",
+    "runId": "replace-with-run-id"
+  },
+  "testRuns": [
+    {
+      "id": "functional",
+      "kind": "functional",
+      "required": true,
+      "status": "not_run",
+      "total": 1,
+      "passed": 0,
+      "failed": 0,
+      "blocked": 0,
+      "notRun": 1,
+      "evidence": ["replace-with-report-or-artifact-reference"]
+    }
+  ],
+  "performance": [
+    {
+      "id": "critical-api",
+      "required": true,
+      "status": "not_run",
+      "samples": 0,
+      "failures": 0,
+      "p95Ms": 0,
+      "p99Ms": 0,
+      "limits": {
+        "minSamples": 300,
+        "p95Ms": 500,
+        "p99Ms": 800
+      },
+      "evidence": ["replace-with-load-report-reference"]
+    }
+  ],
+  "deployment": {
+    "imageDigest": "replace-with-sha256-image-digest",
+    "deployedCommitSha": "replace-with-full-40-character-commit-sha",
+    "rollbackVerified": false
+  }
+}

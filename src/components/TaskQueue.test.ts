@@ -78,6 +78,7 @@ function renderQueue(
 ) {
   return renderToStaticMarkup(
     createElement(TaskQueue, {
+      serverNow: '2026-08-09T12:00:00.000Z',
       tasks,
       tables: [{ id: 'table-l01', displayName: 'L01' } as Table],
       employees: [

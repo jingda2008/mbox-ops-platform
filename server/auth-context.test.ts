@@ -26,6 +26,67 @@ describe('staff session', () => {
 })
 
 describe('request authentication boundary', () => {
+  it('authenticates presence traffic without loading the full venue aggregate', async () => {
+    const app = Fastify()
+    const issuedAt = Date.now()
+    const expiresAt = issuedAt + 60_000
+    const token = signStaffSession({
+      sessionId: 'lightweight-presence', actorId: 'emp-chen', storeId: 'mbox-lujiazui', issuedAt, expiresAt,
+    }, secret)
+    let aggregateReads = 0
+    let touchRequested = false
+    await registerAuthContext(app, {
+      runtimeMode: 'production', sessionSecret: secret,
+      readState: async () => { aggregateReads += 1; return createSeedState() },
+      resolvePresenceSession: async (input) => {
+        touchRequested = input.touch
+        return { roleId: 'manager', businessDate: '2026-08-09', expiresAt }
+      },
+    })
+    app.post('/api/auth/presence/heartbeat', async (request) => request.mboxActor)
+
+    const response = await app.inject({
+      method: 'POST', url: '/api/auth/presence/heartbeat', headers: { authorization: `Bearer ${token}` },
+    })
+
+    expect(response.statusCode, response.body).toBe(200)
+    expect(response.json()).toMatchObject({
+      actorId: 'emp-chen', roleId: 'manager', businessDate: '2026-08-09', authenticatedBy: 'signed_session',
+    })
+    expect(aggregateReads).toBe(0)
+    expect(touchRequested).toBe(true)
+    await app.close()
+  })
+
+  it('carries normalized presence proof into ordinary protected business routes', async () => {
+    const app = Fastify()
+    const state = createSeedState()
+    const issuedAt = Date.now()
+    const expiresAt = issuedAt + 60_000
+    state.employees.find((employee) => employee.id === 'emp-qing')!.online = false
+    const token = signStaffSession({
+      sessionId: 'normalized-business-route', actorId: 'emp-qing', storeId: state.store.id, issuedAt, expiresAt,
+    }, secret)
+    await registerAuthContext(app, {
+      runtimeMode: 'production', sessionSecret: secret, readState: async () => state,
+      resolvePresenceSession: async () => ({
+        roleId: 'bartender', businessDate: state.store.businessDate, expiresAt,
+      }),
+    })
+    app.get('/api/protected-business-route', async (request) => request.mboxActor)
+
+    const response = await app.inject({
+      method: 'GET', url: '/api/protected-business-route', headers: { authorization: `Bearer ${token}` },
+    })
+
+    expect(response.statusCode, response.body).toBe(200)
+    expect(response.json()).toMatchObject({
+      actorId: 'emp-qing', authenticatedBy: 'signed_session',
+      businessDate: state.store.businessDate, presenceExpiresAt: expiresAt,
+    })
+    await app.close()
+  })
+
   it('requires local employee context for protected APIs but permits guest requests', async () => {
     const app = Fastify()
     await registerAuthContext(app, { runtimeMode: 'local', readState: async () => createSeedState() })
@@ -93,6 +154,34 @@ describe('request authentication boundary', () => {
     const response = await app.inject({ method: 'GET', url: '/api/protected', headers: { authorization: `Bearer ${token}` } })
     expect(response.statusCode).toBe(401)
     expect(response.json().code).toBe('STAFF_SESSION_REVOKED')
+    await app.close()
+  })
+
+  it('does not let a stale aggregate lease bypass a durable normalized revocation on ordinary APIs', async () => {
+    const app = Fastify()
+    const state = createSeedState()
+    const issuedAt = Date.now()
+    const expiresAt = issuedAt + 60_000
+    state.presenceLeases = [{
+      sessionId: 'stale-aggregate-session', actorId: 'emp-chen', storeId: state.store.id,
+      businessDate: state.store.businessDate, establishedAt: issuedAt, lastSeenAt: issuedAt,
+      expiresAt, sessionExpiresAt: expiresAt,
+    }]
+    let aggregateReads = 0
+    await registerAuthContext(app, {
+      runtimeMode: 'production', sessionSecret: secret,
+      readState: async () => { aggregateReads += 1; return state },
+      resolvePresenceSession: async () => null,
+    })
+    app.get('/api/tasks', async () => ({ unsafe: true }))
+    const token = signStaffSession({
+      sessionId: 'stale-aggregate-session', actorId: 'emp-chen', storeId: state.store.id, issuedAt, expiresAt,
+    }, secret)
+
+    const response = await app.inject({ method: 'GET', url: '/api/tasks', headers: { authorization: `Bearer ${token}` } })
+    expect(response.statusCode).toBe(401)
+    expect(response.json().code).toBe('STAFF_SESSION_REVOKED')
+    expect(aggregateReads).toBe(0)
     await app.close()
   })
 })

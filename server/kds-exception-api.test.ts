@@ -10,12 +10,21 @@ import { JsonRepository } from './repository.js'
 function registerTestActor(app: ReturnType<typeof Fastify>) {
   app.decorateRequest('mboxActor', null)
   app.addHook('preHandler', async (request) => {
+    const authenticatedBy = request.headers['x-test-authenticated-by'] === 'signed_session'
+      ? 'signed_session'
+      : 'local_header'
     request.mboxActor = {
       actorId: String(request.headers['x-test-actor-id'] ?? 'emp-qing'),
       roleId: String(request.headers['x-test-role-id'] ?? 'bartender'),
       storeId: 'mbox-lujiazui',
       runtimeMode: 'test',
-      authenticatedBy: 'local_header',
+      authenticatedBy,
+      sessionId: authenticatedBy === 'signed_session' ? 'normalized-kds-session' : null,
+      sessionExpiresAt: authenticatedBy === 'signed_session' ? Date.now() + 60_000 : null,
+      businessDate: authenticatedBy === 'signed_session'
+        ? String(request.headers['x-test-business-date'] ?? '')
+        : undefined,
+      presenceExpiresAt: authenticatedBy === 'signed_session' ? Date.now() + 60_000 : undefined,
     }
   })
 }
@@ -64,6 +73,37 @@ function headers(actorId: string, roleId: string) {
 }
 
 describe('KDS exception API', () => {
+  it('accepts a server-verified normalized presence lease when the aggregate online projection is stale', async () => {
+    const repository = new JsonRepository(`/tmp/mbox-kds-normalized-presence-${crypto.randomUUID()}.json`)
+    await repository.init()
+    await createSubmittedOrder(repository)
+    await repository.mutate((state) => {
+      state.employees.find((employee) => employee.id === 'emp-qing')!.online = false
+      state.revision += 1
+    })
+    const app = Fastify()
+    registerTestActor(app)
+    app.setErrorHandler((error, _request, reply) => reply.status(error.statusCode ?? 400).send({ message: error.message }))
+    registerCommerceRoutes(app, repository)
+    const businessDate = (await repository.read()).store.businessDate
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/commerce/kds/kds:order-kds-exception:line-kds-exception/actions',
+      headers: {
+        ...headers('emp-qing', 'bartender'),
+        'x-test-authenticated-by': 'signed_session',
+        'x-test-business-date': businessDate,
+      },
+      payload: { action: 'start', actorId: 'emp-qing', idempotencyKey: 'normalized-kds-presence-0001' },
+    })
+
+    expect(response.statusCode, response.body).toBe(200)
+    expect(response.json()).toMatchObject({ status: 'preparing', startedBy: 'emp-qing' })
+    await app.close()
+    await repository.close()
+  })
+
   it('lets the KDS role report shortage and only a lead or manager create one linked remake', async () => {
     const repository = new JsonRepository(`/tmp/mbox-kds-exception-${crypto.randomUUID()}.json`)
     await repository.init()

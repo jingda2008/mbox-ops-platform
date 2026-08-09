@@ -21,7 +21,7 @@ import {
 import { AssistantPlannerError, type AssistantPlanner, type AssistantPlanningContext } from './assistant-planner.js'
 import type { RateLimitStore } from './rate-limit.js'
 import type { RuntimeRepository } from './repository.js'
-import { CHINA_UTC_OFFSET, chinaBusinessDateKey, chinaDateTimeLocalValue } from '../src/shared/china-time.js'
+import { venueBusinessDateKey, venueDateTimeOffsetValue } from '../src/shared/venue-time.js'
 import {
   buildDutyManagerBriefing,
   buildDutyManagerHandover,
@@ -100,7 +100,7 @@ function buildPlanningContext(
       name: state.store.name,
       businessDate: dutyBriefing.businessDate,
       timezone: state.store.timezone,
-      currentTime: `${chinaDateTimeLocalValue(now)}:00${CHINA_UTC_OFFSET}`,
+      currentTime: venueDateTimeOffsetValue(now, state.store.timezone),
     },
     page: {
       heading: page.heading,
@@ -131,7 +131,7 @@ function buildPlanningContext(
         .filter((task) => (
           !task.archivedAt
           && !['completed', 'confirmed', 'cancelled'].includes(task.status)
-          && chinaBusinessDateKey(task.createdAt, rolloverHour) === dutyBriefing.businessDate
+          && venueBusinessDateKey(task.createdAt, state.store.timezone, rolloverHour) === dutyBriefing.businessDate
         ))
         .slice(0, 40)
         .map((task) => ({
@@ -148,6 +148,7 @@ function buildPlanningContext(
           task,
           dutyBriefing.businessDate,
           rolloverHour,
+          projected.store.timezone,
         ))
         .slice(0, 40)
         .map((task) => ({

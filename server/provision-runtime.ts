@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { Client } from 'pg'
 import type { RuntimeState } from '../src/shared/contracts.js'
 import { runtimeStateChecksum, serializeRuntimeState } from './postgres-repository.js'
+import { tableOperationsConfig } from './table-sessions.js'
 
 const REQUIRED_ARRAYS: Array<keyof RuntimeState> = [
   'areas',
@@ -75,6 +76,8 @@ export function assertProvisionIdentity(
 
 export async function provisionRuntime(options: ProvisionOptions) {
   const serialized = serializeRuntimeState(options.state)
+  const rolloverHour = tableOperationsConfig(options.state).businessDayRolloverHour ?? 6
+  const businessDayCutoff = `${String(rolloverHour).padStart(2, '0')}:00:00`
   const client = new Client({ connectionString: options.databaseUrl, application_name: 'mbox-provisioner' })
   await client.connect()
   try {
@@ -89,10 +92,10 @@ export async function provisionRuntime(options: ProvisionOptions) {
       [options.tenantId, options.tenantCode, options.tenantName],
     )
     await client.query(
-      `INSERT INTO mbox.stores(id, tenant_id, code, name, timezone)
-       VALUES ($1::uuid, $2::uuid, $3, $4, $5)
+      `INSERT INTO mbox.stores(id, tenant_id, code, name, timezone, business_day_cutoff)
+       VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6::time)
        ON CONFLICT (id) DO NOTHING`,
-      [options.storeUuid, options.tenantId, options.storeCode, options.state.store.name, options.state.store.timezone],
+      [options.storeUuid, options.tenantId, options.storeCode, options.state.store.name, options.state.store.timezone, businessDayCutoff],
     )
     const tenant = await client.query(
       `SELECT id::text, code, name FROM mbox.tenants WHERE id = $1::uuid`,
@@ -104,7 +107,7 @@ export async function provisionRuntime(options: ProvisionOptions) {
       name: options.tenantName,
     })
     const store = await client.query(
-      `SELECT id::text, tenant_id::text, code, name, timezone FROM mbox.stores WHERE id = $1::uuid`,
+      `SELECT id::text, tenant_id::text, code, name, timezone, business_day_cutoff::text FROM mbox.stores WHERE id = $1::uuid`,
       [options.storeUuid],
     )
     assertProvisionIdentity('门店', store.rows[0] as Record<string, unknown> | undefined, {
@@ -113,6 +116,7 @@ export async function provisionRuntime(options: ProvisionOptions) {
       code: options.storeCode,
       name: options.state.store.name,
       timezone: options.state.store.timezone,
+      business_day_cutoff: businessDayCutoff,
     })
     const result = await client.query(
       `INSERT INTO mbox.runtime_states(tenant_id, store_id, revision, state, state_sha256)

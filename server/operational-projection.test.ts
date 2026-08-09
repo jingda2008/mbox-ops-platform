@@ -46,6 +46,29 @@ describe('normalized operational projection', () => {
     expect(calls.at(-1)?.values?.[2]).toBe(state.revision)
   })
 
+  it('updates only requested high-frequency projections while retaining full checkpoint counts', async () => {
+    const before = createSeedState(new Date('2026-07-20T12:00:00.000Z'))
+    const after = structuredClone(before)
+    after.tasks[0] = { ...after.tasks[0]!, status: 'completed' }
+    after.revision += 1
+    const { client, calls } = fakeClient()
+
+    await new PostgresOperationalProjector().project(client, {
+      tenantId: '00000000-0000-4000-8000-000000000001',
+      storeId: '00000000-0000-4000-8000-000000000002',
+    }, before, after, ['operational_service_tasks'])
+
+    expect(calls.some((call) => call.text.includes('INSERT INTO mbox.operational_service_tasks'))).toBe(true)
+    expect(calls.some((call) => call.text.includes('INSERT INTO mbox.operational_orders'))).toBe(false)
+    const checkpoint = calls.at(-1)
+    expect(checkpoint?.text).toContain('operational_projection_checkpoints')
+    expect(JSON.parse(String(checkpoint?.values?.[4]))).toMatchObject({
+      operational_tables: after.tables.length,
+      operational_service_tasks: after.tasks.length,
+      operational_orders: after.orderDomain.orders.length,
+    })
+  })
+
   it('accepts equivalent checkpoint counts independent of JSON key order', async () => {
     const expected = {
       operational_tables: 7,

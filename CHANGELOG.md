@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.0-rc.68 - 2026-08-09
+
+- Moved production staff presence heartbeats to normalized PostgreSQL leases so routine heartbeats and lightweight authentication no longer read, clone or rewrite the whole-store aggregate.
+- Added one-pass presence hydration, bounded staff-directory caching and revision-preserving heartbeat coverage while keeping aggregate audit events for login, logout and real online-state transitions.
+- Reused a single China-time formatter in hot projections, delayed noncritical initial heartbeat work and removed an extra aggregate read from reservation access.
+- Coalesced repeated guest-session insight writes per anonymous visit while retaining database idempotency as the authoritative fallback.
+- Added bounded normalized route latency metrics, database-pool and mutation-queue readiness details, reusable historical-log analysis and explicit runtime SLOs.
+- Added a mandatory two-instance PostgreSQL performance job to CI, including route latency, event-loop, pool, queue and projection gates with retained raw evidence.
+- Added a reusable function/performance testing method, TC/evidence templates and a machine-verified CI quality ledger bound to the exact commit and run id.
+- Removed the unused iOS asset-regeneration dependency after its transitive toolchain retained unfixed advisories; the application dependency audit now reports zero vulnerabilities.
+- Increased high-frequency mobile controls to a reliable touch size without expanding unrelated desktop information density.
+- Split TC acceptance status from engineering coverage so external dependencies, field-validation work, partial implementations and known capability gaps cannot be presented as completed.
+- Kept the release closed until full automated checks, independent quality review, immutable-image deployment and post-cutover metric evidence succeed; real payment, printing, weak-network and three-shift acceptance remain external gates.
+
 ## 1.0.0-rc.67 - 2026-08-09
 
 - Preserved the independently approved `rc.66` fulfillment, role-isolation, inventory-permission and reservation behavior without additional business changes.

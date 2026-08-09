@@ -5,6 +5,7 @@ import { registerPilotAuthRoutes } from './pilot-auth.js'
 import { verifyStaffSession } from './auth-context.js'
 import type { RuntimeRepository } from './repository.js'
 import { MemoryRateLimitStore, type RateLimitStore } from './rate-limit.js'
+import { MemoryPresenceLeaseStore } from './presence-store.js'
 
 function repository(): RuntimeRepository {
   let state = createSeedState()
@@ -123,6 +124,27 @@ describe('pilot employee auth', () => {
     expect(state.presenceLeases?.filter((lease) => lease.actorId === 'emp-chen').map((lease) => lease.sessionId))
       .toEqual(expect.arrayContaining([first.sessionId, second.sessionId]))
     expect(state.employees.find((employee) => employee.id === 'emp-chen')?.online).toBe(true)
+    await app.close()
+  })
+
+  it('does not issue a token and compensates the aggregate when normalized lease persistence fails', async () => {
+    const app = Fastify({ logger: false })
+    const runtimeRepository = repository()
+    const presenceLeaseStore = new MemoryPresenceLeaseStore()
+    presenceLeaseStore.upsert = async () => { throw new Error('simulated normalized lease failure') }
+    await registerPilotAuthRoutes(app, runtimeRepository, { ...authOptions(), presenceLeaseStore })
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/auth/pilot-login',
+      payload: { accessCode: 'store-pilot-code', actorId: 'emp-chen', employeePin: employeePins['emp-chen'] },
+    })
+
+    expect(response.statusCode).toBe(500)
+    expect(response.json()).not.toHaveProperty('token')
+    const state = await runtimeRepository.read()
+    expect(state.presenceLeases?.filter((lease) => lease.actorId === 'emp-chen')).toEqual([])
+    expect(state.auditEntries.some((entry) => entry.action === 'staff_presence.ended.v1')).toBe(true)
     await app.close()
   })
 

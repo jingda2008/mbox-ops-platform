@@ -16,6 +16,7 @@ import { transferOpenTableSession } from './table-session-api.js'
 import { createPaymentIntent } from './payment-domain.js'
 import { applyTaskAction, createServiceTask } from './domain.js'
 import { MemoryGuestInsightsStore } from './guest-insights.js'
+import type { GuestInsightsStore } from './guest-insights.js'
 import { tableSessionOperation } from './table-sessions.js'
 
 const secret = 'q'.repeat(32)
@@ -26,12 +27,13 @@ async function fixture(
   allowPaymentSimulation = false,
   ttlMs: number | null = sessionTtlMs,
   previousSecret?: string,
+  insightStore?: GuestInsightsStore,
 ) {
   let now = Date.now()
   const repository = new JsonRepository(`/tmp/mbox-guest-${crypto.randomUUID()}.json`)
   await repository.init()
   const app = Fastify()
-  const guestInsights = new MemoryGuestInsightsStore()
+  const guestInsights = insightStore ?? new MemoryGuestInsightsStore()
   await guestInsights.init()
   registerGuestRoutes(app, repository, {
     secret,
@@ -99,6 +101,74 @@ async function replaceOpenSession(repository: JsonRepository, tableCode: string,
 }
 
 describe('guest table API', () => {
+  it('coalesces repeated and concurrent session polling into one insight-store write', async () => {
+    const store = new MemoryGuestInsightsStore()
+    let recordAttempts = 0
+    const countingStore: GuestInsightsStore = {
+      init: () => store.init(),
+      linkIdentity: (...args) => store.linkIdentity(...args),
+      touchProfile: (...args) => store.touchProfile(...args),
+      recordEvent: async (input) => {
+        recordAttempts += 1
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        return store.recordEvent(input)
+      },
+    }
+    const { app, repository, now } = await fixture('test', false, sessionTtlMs, undefined, countingStore)
+    const token = staticQr(now())
+    const anonymousId = crypto.randomUUID()
+    const requests = Array.from({ length: 8 }, () => app.inject({
+      method: 'POST',
+      url: '/api/guest/session',
+      headers: { 'x-mbox-guest-id': anonymousId },
+      payload: { token },
+    }))
+    const responses = await Promise.all(requests)
+
+    expect(responses.every((response) => response.statusCode === 200)).toBe(true)
+    expect(recordAttempts).toBe(1)
+    expect(store.events.filter((event) => event.eventType === 'session_started')).toHaveLength(1)
+    await closeFixture(app, repository)
+  })
+
+  it('records one visit while refreshing guest activity at most once per five minutes', async () => {
+    const store = new MemoryGuestInsightsStore()
+    let touchAttempts = 0
+    const countingStore: GuestInsightsStore = {
+      init: () => store.init(),
+      linkIdentity: (...args) => store.linkIdentity(...args),
+      recordEvent: (input) => store.recordEvent(input),
+      touchProfile: async (...args) => {
+        touchAttempts += 1
+        return store.touchProfile(...args)
+      },
+    }
+    const { app, repository, now, setNow } = await fixture('test', false, null, undefined, countingStore)
+    const anonymousId = crypto.randomUUID()
+    const first = await app.inject({
+      method: 'POST', url: '/api/guest/session', headers: { 'x-mbox-guest-id': anonymousId }, payload: { token: staticQr(now()) },
+    })
+    const firstBody = first.json() as GuestSessionResponse
+    setNow(now() + 4 * 60_000)
+    await app.inject({
+      method: 'POST', url: '/api/guest/session', headers: { 'x-mbox-guest-id': anonymousId }, payload: { token: firstBody.tableToken },
+    })
+    expect(touchAttempts).toBe(0)
+
+    setNow(now() + 2 * 60_000)
+    await app.inject({
+      method: 'POST', url: '/api/guest/session', headers: { 'x-mbox-guest-id': anonymousId }, payload: { token: firstBody.tableToken },
+    })
+
+    expect(touchAttempts).toBe(1)
+    expect(store.events.filter((event) => event.eventType === 'session_started')).toHaveLength(1)
+    expect(store.profiles.get(anonymousId)).toMatchObject({
+      visitCount: 1,
+      lastSeenAt: new Date(now()).toISOString(),
+    })
+    await closeFixture(app, repository)
+  })
+
   it('issues a 60-minute rolling session by default', async () => {
     const { app, repository, now } = await fixture('test', false, null)
     const response = await app.inject({ method: 'GET', url: '/api/guest/session?table=L01' })
@@ -1289,7 +1359,11 @@ describe('guest table API', () => {
     })
     expect(conflict.statusCode).toBe(409)
     expect(conflict.json().code).toBe('GUEST_ORDER_IDEMPOTENCY_CONFLICT')
-    expect((await repository.read()).orderDomain.orders).toHaveLength(1)
+    const state = await repository.read()
+    expect(state.orderDomain.orders).toHaveLength(1)
+    expect(state.orderDomain.idempotencyRecords.some((record) => (
+      record.key.startsWith(`${base.idempotencyKey}:`)
+    ))).toBe(false)
     await closeFixture(app, repository)
   })
 

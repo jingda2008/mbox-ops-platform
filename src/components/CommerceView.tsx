@@ -24,6 +24,7 @@ import * as paymentApi from '../payment-api'
 import { runOptimisticAction } from '../optimistic-action'
 import { projectKdsTask } from '../optimistic-projections'
 import { stabilizeOperationalOrder } from './stable-operational-order'
+import { serverClockOffset, useSecondClock } from './use-second-clock'
 import './CommerceView.css'
 
 interface CommerceViewProps {
@@ -74,7 +75,8 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
   const [cancelTarget, setCancelTarget] = useState<KdsTask | null>(null)
   const [cancelReasonCode, setCancelReasonCode] = useState<ManagerKdsCancellationInput['reasonCode']>('manager_cancelled')
   const [cancelReasonNote, setCancelReasonNote] = useState('')
-  const [now, setNow] = useState(() => Date.now())
+  const serverOffset = useMemo(() => serverClockOffset(data.serverNow), [data.serverNow])
+  const now = useSecondClock(serverOffset)
   const [focusedTableCode, setFocusedTableCode] = useState('')
   const [focusedTaskId, setFocusedTaskId] = useState('')
   const [kdsFilter, setKdsFilter] = useState<KdsFocusFilter>('all')
@@ -142,11 +144,6 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
             : !activeGiftAuthority
               ? '当前账号的赠送授权已过期，请由店长或管理员更新有效期'
               : ''
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 30_000)
-    return () => window.clearInterval(timer)
-  }, [])
 
   useEffect(() => {
     if (!tableId) return
@@ -643,6 +640,7 @@ export function CommerceView({ data, onRefresh, onOptimisticUpdate, onNotice, fo
             deemphasizeCollapsedTotal
             busy={busy}
             timeZone={data.store.timezone}
+            clockOffsetMs={serverOffset}
             orderSafety={data.commercialOps?.config.orderSafety}
             onSubmit={submit}
             onCartCountChange={setOrderingCartCount}

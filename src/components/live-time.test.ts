@@ -14,8 +14,11 @@ describe('live time isolation', () => {
   it('keeps the server clock aligned with the server timestamp', () => {
     const clientNow = Date.parse('2026-07-20T10:00:00.000+08:00')
     const serverNow = '2026-07-20T10:00:03.250+08:00'
+    const serverEpoch = Date.parse(serverNow)
 
     expect(serverClockOffset(serverNow, clientNow)).toBe(3_250)
+    expect(clientNow - 12 * 60 * 60_000 + serverClockOffset(serverNow, clientNow - 12 * 60 * 60_000)).toBe(serverEpoch)
+    expect(clientNow + 12 * 60 * 60_000 + serverClockOffset(serverNow, clientNow + 12 * 60 * 60_000)).toBe(serverEpoch)
     expect(serverClockOffset('invalid', clientNow)).toBe(0)
   })
 

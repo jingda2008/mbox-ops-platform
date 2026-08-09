@@ -1,0 +1,106 @@
+import { writeFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
+
+const baseUrls = (process.env.MBOX_METRICS_BASE_URLS ?? '')
+  .split(',').map((value) => value.trim().replace(/\/$/, '')).filter(Boolean)
+const token = process.env.MBOX_METRICS_TOKEN?.trim()
+const output = process.env.MBOX_METRICS_REPORT_PATH?.trim()
+const eventLoopP95TargetMs = Number(process.env.MBOX_EVENT_LOOP_P95_TARGET_MS ?? 50)
+const eventLoopP95LimitMs = Number(process.env.MBOX_EVENT_LOOP_P95_LIMIT_MS ?? 75)
+const eventLoopP99LimitMs = Number(process.env.MBOX_EVENT_LOOP_P99_LIMIT_MS ?? 100)
+const poolAcquireP95LimitMs = Number(process.env.MBOX_POOL_ACQUIRE_P95_LIMIT_MS ?? 50)
+const mutationQueueDepthLimit = Number(process.env.MBOX_MUTATION_QUEUE_DEPTH_LIMIT ?? 100)
+
+if (baseUrls.length < 2) throw new Error('运行指标门禁至少需要两个API实例')
+if (!token) throw new Error('运行指标门禁缺少MBOX_METRICS_TOKEN')
+for (const [name, value] of [
+  ['MBOX_EVENT_LOOP_P95_TARGET_MS', eventLoopP95TargetMs],
+  ['MBOX_EVENT_LOOP_P95_LIMIT_MS', eventLoopP95LimitMs],
+  ['MBOX_EVENT_LOOP_P99_LIMIT_MS', eventLoopP99LimitMs],
+]) {
+  if (!Number.isFinite(value) || value <= 0) throw new Error(`${name}必须是正数`)
+}
+if (eventLoopP95TargetMs > eventLoopP95LimitMs) {
+  throw new Error('事件循环P95理想目标不得高于发布硬上限')
+}
+if (!Number.isFinite(poolAcquireP95LimitMs) || poolAcquireP95LimitMs <= 0) {
+  throw new Error('MBOX_POOL_ACQUIRE_P95_LIMIT_MS必须是正数')
+}
+if (!Number.isSafeInteger(mutationQueueDepthLimit) || mutationQueueDepthLimit <= 0) {
+  throw new Error('MBOX_MUTATION_QUEUE_DEPTH_LIMIT必须是正整数')
+}
+
+function metricValue(text, name, labels = '') {
+  const prefix = labels ? `${name}{${labels}}` : name
+  const line = text.split('\n').find((candidate) => candidate.startsWith(`${prefix} `))
+  if (!line) throw new Error(`缺少运行指标 ${prefix}`)
+  const value = Number(line.slice(prefix.length + 1))
+  if (!Number.isFinite(value)) throw new Error(`运行指标 ${prefix} 不是有效数字`)
+  return value
+}
+
+const instances = await Promise.all(baseUrls.map(async (baseUrl) => {
+  const response = await fetch(`${baseUrl}/api/metrics`, {
+    headers: { authorization: `Bearer ${token}` },
+  })
+  if (!response.ok) throw new Error(`${baseUrl}运行指标请求失败：${response.status}`)
+  const text = await response.text()
+  const values = {
+    eventLoopP95Ms: metricValue(text, 'mbox_node_event_loop_delay_ms', 'quantile="0.95"'),
+    eventLoopP99Ms: metricValue(text, 'mbox_node_event_loop_delay_ms', 'quantile="0.99"'),
+    apiErrors: metricValue(text, 'mbox_api_errors_total'),
+    poolWaiting: metricValue(text, 'mbox_database_pool_connections', 'state="waiting"'),
+    poolAcquireP95Ms: metricValue(text, 'mbox_database_pool_acquisition_wait_ms', 'quantile="0.95"'),
+    poolAcquireFailures: metricValue(text, 'mbox_database_pool_acquisitions_total', 'outcome="failed"'),
+    mutationQueuePending: metricValue(text, 'mbox_mutation_queue_pending'),
+    mutationQueueHighWatermark: metricValue(text, 'mbox_mutation_queue_high_watermark'),
+    mutationQueueCapacity: metricValue(text, 'mbox_mutation_queue_capacity'),
+    mutationQueueRejected: metricValue(text, 'mbox_mutation_queue_failures_total', 'reason="rejected"'),
+    mutationQueueTimeouts: metricValue(text, 'mbox_mutation_queue_failures_total', 'reason="timeout"'),
+    projectionReady: metricValue(text, 'mbox_projection_ready'),
+  }
+  const failures = [
+    values.eventLoopP95Ms > eventLoopP95LimitMs ? `事件循环P95 ${values.eventLoopP95Ms}ms > ${eventLoopP95LimitMs}ms` : null,
+    values.eventLoopP99Ms > eventLoopP99LimitMs ? `事件循环P99 ${values.eventLoopP99Ms}ms > ${eventLoopP99LimitMs}ms` : null,
+    values.apiErrors !== 0 ? `5xx累计 ${values.apiErrors}` : null,
+    values.poolWaiting !== 0 ? `连接池等待 ${values.poolWaiting}` : null,
+    values.poolAcquireP95Ms > poolAcquireP95LimitMs
+      ? `连接池获取P95 ${values.poolAcquireP95Ms}ms > ${poolAcquireP95LimitMs}ms`
+      : null,
+    values.poolAcquireFailures !== 0 ? `连接池获取失败 ${values.poolAcquireFailures}` : null,
+    values.mutationQueuePending > mutationQueueDepthLimit
+      ? `当前写队列深度 ${values.mutationQueuePending} > ${mutationQueueDepthLimit}`
+      : null,
+    values.mutationQueueHighWatermark > mutationQueueDepthLimit
+      ? `写队列高水位 ${values.mutationQueueHighWatermark} > ${mutationQueueDepthLimit}`
+      : null,
+    values.mutationQueueCapacity > mutationQueueDepthLimit
+      ? `写队列容量 ${values.mutationQueueCapacity} > ${mutationQueueDepthLimit}`
+      : null,
+    values.mutationQueueRejected !== 0 ? `写队列拒绝 ${values.mutationQueueRejected}` : null,
+    values.mutationQueueTimeouts !== 0 ? `写队列超时 ${values.mutationQueueTimeouts}` : null,
+    values.projectionReady !== 1 ? '规范化投影未就绪' : null,
+  ].filter(Boolean)
+  const warnings = [
+    values.eventLoopP95Ms > eventLoopP95TargetMs
+      ? `事件循环P95 ${values.eventLoopP95Ms}ms未达到${eventLoopP95TargetMs}ms理想目标`
+      : null,
+  ].filter(Boolean)
+  return { baseUrl, values, warnings, failures, passed: failures.length === 0 }
+}))
+
+const report = {
+  thresholds: {
+    eventLoopP95TargetMs,
+    eventLoopP95LimitMs,
+    eventLoopP99LimitMs,
+    poolAcquireP95LimitMs,
+    mutationQueueDepthLimit,
+  },
+  instances,
+  passed: instances.every((instance) => instance.passed),
+}
+const serialized = `${JSON.stringify(report, null, 2)}\n`
+if (output) await writeFile(resolve(output), serialized, 'utf8')
+process.stdout.write(serialized)
+if (!report.passed) process.exitCode = 1

@@ -5,6 +5,7 @@ import type { PresenceLease, RuntimeState } from '../src/shared/contracts.js'
 import { requireRequestActor } from './auth-context.js'
 import type { RuntimeRepository } from './repository.js'
 import { redispatchUnownedTasks, releaseTasksForOfflineEmployee } from './domain.js'
+import { MemoryPresenceLeaseStore, type PresenceLeaseStore } from './presence-store.js'
 
 export const DEFAULT_PRESENCE_LEASE_TTL_MS = 90_000
 export const DEFAULT_PRESENCE_SWEEP_INTERVAL_MS = 15_000
@@ -23,6 +24,7 @@ export interface PresenceRoutesOptions {
   leaseTtlMs?: number
   sweepIntervalMs?: number
   now?: () => number
+  leaseStore?: PresenceLeaseStore
 }
 
 function appendAudit(
@@ -187,7 +189,7 @@ function responseFor(
   return {
     sessionId,
     actorId,
-    online: state.employees.find((employee) => employee.id === actorId)?.online ?? false,
+    online: Boolean(lease) || (state.employees.find((employee) => employee.id === actorId)?.online ?? false),
     leaseExpiresAt: lease?.expiresAt ?? null,
     heartbeatAfterMs: Math.max(1_000, Math.floor(leaseTtlMs / 2)),
   }
@@ -201,30 +203,80 @@ export async function registerPresenceRoutes(
   const leaseTtlMs = options.leaseTtlMs ?? DEFAULT_PRESENCE_LEASE_TTL_MS
   const sweepIntervalMs = options.sweepIntervalMs ?? DEFAULT_PRESENCE_SWEEP_INTERVAL_MS
   const now = options.now ?? Date.now
+  const normalizedLeaseStore = options.leaseStore
+  const leaseStore = options.leaseStore ?? new MemoryPresenceLeaseStore()
   if (!Number.isSafeInteger(leaseTtlMs) || leaseTtlMs <= 0) throw new Error('presence leaseTtlMs必须为正整数')
   if (!Number.isSafeInteger(sweepIntervalMs) || sweepIntervalMs < 0) throw new Error('presence sweepIntervalMs不能为负数')
 
-  await repository.mutate((state) => reconcilePresence(state, now()))
+  if (normalizedLeaseStore) {
+    const initialState = await repository.read()
+    reconcilePresence(initialState, now(), false)
+    await leaseStore.upsertMany(initialState.presenceLeases ?? [])
+  } else {
+    await repository.mutate((state) => reconcilePresence(state, now()))
+  }
 
   app.post('/api/auth/presence/heartbeat', async (request, reply) => {
     const actor = requireRequestActor(request)
     if (!actor.sessionId || !actor.sessionExpiresAt) {
       return reply.status(401).send({ code: 'SIGNED_SESSION_REQUIRED', message: '心跳需要签名员工会话' })
     }
-    const result = await repository.mutate((state) => {
-      const heartbeatAt = now()
-      const lease = heartbeatPresenceLease(state, actor.sessionId!, actor.actorId, heartbeatAt, leaseTtlMs)
-        ?? resumePresenceLease(state, {
-          sessionId: actor.sessionId!,
-          actorId: actor.actorId,
-          storeId: actor.storeId,
-          businessDate: state.store.businessDate,
-          now: heartbeatAt,
-          leaseTtlMs,
-          sessionExpiresAt: actor.sessionExpiresAt!,
-        })
-      return responseFor(state, actor.actorId, actor.sessionId!, lease, leaseTtlMs)
+    if (!normalizedLeaseStore) {
+      const result = await repository.mutate((state) => {
+        const heartbeatAt = now()
+        const lease = heartbeatPresenceLease(state, actor.sessionId!, actor.actorId, heartbeatAt, leaseTtlMs)
+          ?? resumePresenceLease(state, {
+            sessionId: actor.sessionId!, actorId: actor.actorId, storeId: actor.storeId,
+            businessDate: state.store.businessDate, now: heartbeatAt, leaseTtlMs,
+            sessionExpiresAt: actor.sessionExpiresAt!,
+          })
+        return responseFor(state, actor.actorId, actor.sessionId!, lease, leaseTtlMs)
+      })
+      if (!result.leaseExpiresAt) {
+        return reply.status(401).send({ code: 'PRESENCE_LEASE_EXPIRED', message: '在线会话已过期，请重新登录' })
+      }
+      return result
+    }
+
+    const heartbeatAt = now()
+    if (actor.presenceExpiresAt && actor.businessDate) {
+      return {
+        sessionId: actor.sessionId,
+        actorId: actor.actorId,
+        online: true,
+        leaseExpiresAt: actor.presenceExpiresAt,
+        heartbeatAfterMs: Math.max(1_000, Math.floor(leaseTtlMs / 2)),
+      } satisfies StaffPresenceResponse
+    }
+    const authState = request.mboxAuthState
+    const businessDate = actor.businessDate ?? authState?.store.businessDate
+    if (!businessDate) throw new Error('在线会话缺少营业日上下文')
+    let lease = await leaseStore.heartbeat({
+      sessionId: actor.sessionId,
+      actorId: actor.actorId,
+      businessDate,
+      now: heartbeatAt,
+      leaseTtlMs,
     })
+    if (!lease) {
+      lease = await repository.mutate((state) => resumePresenceLease(state, {
+        sessionId: actor.sessionId!,
+        actorId: actor.actorId,
+        storeId: actor.storeId,
+        businessDate: state.store.businessDate,
+        now: heartbeatAt,
+        leaseTtlMs,
+        sessionExpiresAt: actor.sessionExpiresAt!,
+      }))
+      if (lease) await leaseStore.upsert(lease)
+    }
+    const result: StaffPresenceResponse = {
+      sessionId: actor.sessionId,
+      actorId: actor.actorId,
+      online: Boolean(lease),
+      leaseExpiresAt: lease?.expiresAt ?? null,
+      heartbeatAfterMs: Math.max(1_000, Math.floor(leaseTtlMs / 2)),
+    }
     if (!result.leaseExpiresAt) {
       return reply.status(401).send({ code: 'PRESENCE_LEASE_EXPIRED', message: '在线会话已过期，请重新登录' })
     }
@@ -236,21 +288,58 @@ export async function registerPresenceRoutes(
     if (!actor.sessionId) {
       return reply.status(401).send({ code: 'SIGNED_SESSION_REQUIRED', message: '退出需要签名员工会话' })
     }
-    return repository.mutate((state) => {
-      endPresenceLease(state, actor.sessionId!, actor.actorId, now())
-      return responseFor(state, actor.actorId, actor.sessionId!, null, leaseTtlMs)
-    })
+    if (!normalizedLeaseStore) {
+      return repository.mutate((state) => {
+        endPresenceLease(state, actor.sessionId!, actor.actorId, now())
+        return responseFor(state, actor.actorId, actor.sessionId!, null, leaseTtlMs)
+      })
+    }
+    const logoutAt = now()
+    await leaseStore.revoke({ sessionId: actor.sessionId, actorId: actor.actorId, now: logoutAt })
+    const businessDate = actor.businessDate ?? request.mboxAuthState?.store.businessDate
+    if (!businessDate) throw new Error('在线会话缺少营业日上下文')
+    const activeLeases = await leaseStore.listActive(businessDate, logoutAt)
+    try {
+      return await repository.mutate((state) => {
+        endPresenceLease(state, actor.sessionId!, actor.actorId, logoutAt)
+        state.presenceLeases = activeLeases
+        reconcilePresence(state, logoutAt)
+        return responseFor(state, actor.actorId, actor.sessionId!, null, leaseTtlMs)
+      })
+    } catch (error) {
+      app.log.error({ error, sessionId: actor.sessionId, actorId: actor.actorId }, 'presence projection failed after durable logout revocation')
+      return {
+        sessionId: actor.sessionId,
+        actorId: actor.actorId,
+        online: activeLeases.some((lease) => lease.actorId === actor.actorId),
+        leaseExpiresAt: null,
+        heartbeatAfterMs: Math.max(1_000, Math.floor(leaseTtlMs / 2)),
+      } satisfies StaffPresenceResponse
+    }
   })
 
   if (sweepIntervalMs > 0) {
     const timer = setInterval(() => {
       const sweepAt = now()
-      void repository.read().then((snapshot) => {
-        const probe = structuredClone(snapshot)
-        const previousRevision = probe.revision
-        reconcilePresence(probe, sweepAt)
-        if (probe.revision === previousRevision) return undefined
-        return repository.mutate((state) => reconcilePresence(state, sweepAt))
+      void repository.read().then(async (snapshot) => {
+        if (!normalizedLeaseStore) {
+          const probe = structuredClone(snapshot)
+          const previousRevision = probe.revision
+          reconcilePresence(probe, sweepAt)
+          if (probe.revision === previousRevision) return undefined
+          return repository.mutate((state) => reconcilePresence(state, sweepAt))
+        }
+        await leaseStore.removeExpired(snapshot.store.businessDate, sweepAt)
+        const activeLeases = await leaseStore.listActive(snapshot.store.businessDate, sweepAt)
+        const activeEmployeeIds = new Set(activeLeases.map((lease) => lease.actorId))
+        const projectionChanged = snapshot.employees.some((employee) => (
+          employee.online !== (employee.status === 'active' && activeEmployeeIds.has(employee.id))
+        ))
+        if (!projectionChanged) return undefined
+        return repository.mutate((state) => {
+          state.presenceLeases = activeLeases
+          return reconcilePresence(state, sweepAt)
+        })
       }).catch((error: unknown) => {
         app.log.error({ error }, 'presence lease sweep failed')
       })

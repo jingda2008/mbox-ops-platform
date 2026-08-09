@@ -14,7 +14,7 @@ import {
   effectiveDataScopeForEmployee,
   effectivePermissionIdsForEmployee,
 } from '../src/shared/staff-access.js'
-import { chinaBusinessDateKey } from '../src/shared/china-time.js'
+import { venueBusinessDateKey } from '../src/shared/venue-time.js'
 import { tableSessionBusinessDate } from './table-sessions.js'
 
 interface AnalyticsActor {
@@ -248,7 +248,7 @@ function orderFacts(state: RuntimeState, bounds: PeriodBounds): OrderFact[] {
 function serviceFacts(state: RuntimeState, bounds: PeriodBounds): ServiceFact[] {
   const rolloverHour = state.tableOperationsConfig?.businessDayRolloverHour ?? 6
   return state.tasks.flatMap((task) => {
-    const businessDate = chinaBusinessDateKey(task.createdAt, rolloverHour)
+    const businessDate = venueBusinessDateKey(task.createdAt, state.store.timezone, rolloverHour)
     if (!inPeriod(businessDate, bounds)) return []
     const table = state.tables.find((item) => item.id === task.tableId)
     const serviceType = state.config.serviceTypes.find((item) => item.id === task.serviceTypeId)

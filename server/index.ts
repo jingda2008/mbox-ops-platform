@@ -64,6 +64,7 @@ import {
   PostgresIdempotencyConflictError,
   PostgresIdempotencyInProgressError,
   PostgresOptimisticConcurrencyError,
+  type PostgresRepositoryHealth,
 } from './postgres-repository.js'
 import { wechatApiPlugin } from './wechat-api.js'
 import {
@@ -86,7 +87,8 @@ import { resolveOperationalRuntimeState } from './operational-read-store.js'
 import { effectivePermissionIdsForEmployee } from '../src/shared/staff-access.js'
 import { preserveProtectedProductCost, productCostView } from './product-cost-policy.js'
 import { MemoryRateLimitStore, PostgresRateLimitStore } from './rate-limit.js'
-import { DEFAULT_PRESENCE_LEASE_TTL_MS, registerPresenceRoutes, resumePresenceLease } from './presence.js'
+import { DEFAULT_PRESENCE_LEASE_TTL_MS, endPresenceLease, registerPresenceRoutes, resumePresenceLease } from './presence.js'
+import { MemoryPresenceLeaseStore, PostgresPresenceLeaseStore } from './presence-store.js'
 import { MemoryGuestInsightsStore, PostgresGuestInsightsStore } from './guest-insights.js'
 import { GoogleCloudVoiceTranscriber, registerVoiceTranscriptionRoutes } from './voice-transcription.js'
 import { clientValidationError } from './validation-error.js'
@@ -94,7 +96,7 @@ import { registerAssistantRoutes } from './assistant-api.js'
 import { registerCommercialOpsRoutes } from './commercial-ops-api.js'
 import { registerHardwareRoutes } from './hardware-api.js'
 import { registerTaskRoutes } from './task-api.js'
-import { effectiveHardwareDeviceStatus, HardwareBusinessError } from './hardware-domain.js'
+import { HardwareBusinessError } from './hardware-domain.js'
 import { GeminiAssistantPlanner, QwenAssistantPlanner } from './assistant-planner.js'
 import {
   MemoryAssistantConversationStore,
@@ -103,6 +105,9 @@ import {
 import { BusinessRuleError } from './business-rule-error.js'
 import { isClientDisconnect, isPersistenceFailure } from './error-classification.js'
 import { requestLogSerializer } from './log-redaction.js'
+import { createStaffPresenceDirectoryResolver } from './staff-presence-directory.js'
+import { createHardwareReadinessResolver } from './hardware-readiness-cache.js'
+import { KeyedSingleFlight } from './keyed-single-flight.js'
 
 const runtimeConfig = loadRuntimeConfig()
 
@@ -158,6 +163,14 @@ const assistantConversationStore = runtimeDependencies.postgresPool
       storeId: runtimeConfig.storeUuid!,
     })
   : new MemoryAssistantConversationStore()
+const presenceLeaseStore = runtimeDependencies.postgresPool
+  ? new PostgresPresenceLeaseStore({
+      pool: runtimeDependencies.postgresPool,
+      tenantId: runtimeConfig.tenantId!,
+      storeId: runtimeConfig.storeUuid!,
+    })
+  : new MemoryPresenceLeaseStore()
+const pendingPresenceChecks = new KeyedSingleFlight<Awaited<ReturnType<typeof presenceLeaseStore.findActive>>>()
 
 await repository.init()
 const startupBusinessDayRollover = await repository.mutate((state) => reconcileAutomaticBusinessDay(state))
@@ -171,7 +184,33 @@ if (startupBusinessDayRollover.status === 'rolled_over') {
 await guestInsights.init()
 await assistantConversationStore.init()
 const paymentProviderResolver = createEnvironmentPaymentProviderResolver()
-const paymentRuntime = validateEnvironmentPaymentRuntime((await repository.read()).paymentDomain)
+const initialRuntimeState = await repository.read()
+const paymentRuntime = validateEnvironmentPaymentRuntime(initialRuntimeState.paymentDomain)
+const resolveStaffPresenceDirectory = createStaffPresenceDirectoryResolver(repository, initialRuntimeState)
+const resolveHardwareReadiness = createHardwareReadinessResolver(() => repository.read(), initialRuntimeState)
+const resumeNormalizedPresence = async (input: {
+  sessionId: string
+  actorId: string
+  storeId: string
+  sessionExpiresAt: number
+  now: number
+}) => {
+  if (await presenceLeaseStore.isRevoked({ sessionId: input.sessionId, actorId: input.actorId })) return null
+  const lease = await repository.mutate((state) => resumePresenceLease(state, {
+    ...input,
+    businessDate: state.store.businessDate,
+    leaseTtlMs: DEFAULT_PRESENCE_LEASE_TTL_MS,
+  }))
+  if (lease) {
+    try {
+      await presenceLeaseStore.upsert(lease)
+    } catch (error) {
+      await repository.mutate((state) => endPresenceLease(state, input.sessionId, input.actorId, input.now)).catch(() => undefined)
+      throw error
+    }
+  }
+  return lease
+}
 await app.register(cors, {
   origin: runtimeConfig.corsOrigins,
   credentials: true,
@@ -219,16 +258,8 @@ await registerObservability(app, {
   metricsToken: runtimeConfig.metricsToken,
   readiness: async () => {
     const status = await repository.healthCheck()
-    const state = status.ready ? await repository.read() : null
-    const enabledDevices = state?.hardwareState?.devices.filter((device) => device.enabled) ?? []
-    const realDevices = enabledDevices.filter((device) => device.adapter !== 'simulator')
-    const realDevicesOnline = state?.hardwareState
-      ? realDevices.filter((device) => effectiveHardwareDeviceStatus(device, state.hardwareState!.config) === 'online').length
-      : 0
-    const simulatedDevicesEnabled = enabledDevices.filter((device) => device.adapter === 'simulator').length
-    const hardwareMode = realDevices.length > 0
-      ? realDevicesOnline === realDevices.length ? 'real_ready' : 'real_degraded'
-      : simulatedDevicesEnabled > 0 ? 'simulation_only' : 'unconfigured'
+    const postgresStatus = status.repository === 'postgres' ? status as PostgresRepositoryHealth : null
+    const hardware = await resolveHardwareReadiness()
     return {
       ready: status.ready,
       details: {
@@ -237,6 +268,22 @@ await registerObservability(app, {
         projectionReady: status.projectionReady ?? status.repository !== 'postgres',
         projectionRevision: status.projectionRevision ?? -1,
         projectionCountsMatch: status.projectionCountsMatch ?? status.repository !== 'postgres',
+        databaseLatencyMs: postgresStatus?.latencyMs ?? 0,
+        databaseClockSkewMs: postgresStatus?.databaseClockSkewMs ?? 0,
+        databasePoolTotal: postgresStatus?.pool.total ?? 0,
+        databasePoolIdle: postgresStatus?.pool.idle ?? 0,
+        databasePoolWaiting: postgresStatus?.pool.waiting ?? 0,
+        databasePoolAcquireCount: postgresStatus?.pool.acquisitionCount ?? 0,
+        databasePoolAcquireFailedTotal: postgresStatus?.pool.acquisitionFailedTotal ?? 0,
+        databasePoolAcquireP50Ms: postgresStatus?.pool.acquisitionWaitP50Ms ?? 0,
+        databasePoolAcquireP95Ms: postgresStatus?.pool.acquisitionWaitP95Ms ?? 0,
+        databasePoolAcquireP99Ms: postgresStatus?.pool.acquisitionWaitP99Ms ?? 0,
+        mutationQueuePending: postgresStatus?.mutationQueue.pending ?? 0,
+        mutationQueueHighWatermark: postgresStatus?.mutationQueue.highWatermark ?? 0,
+        mutationQueueActive: postgresStatus?.mutationQueue.active ?? false,
+        mutationQueueCapacity: postgresStatus?.mutationQueue.maxPending ?? 0,
+        mutationQueueRejectedTotal: postgresStatus?.mutationQueue.rejectedTotal ?? 0,
+        mutationQueueTimeoutTotal: postgresStatus?.mutationQueue.timeoutTotal ?? 0,
         operationalReadPath: runtimeDependencies.operationalReadStore ? 'normalized_tables' : 'aggregate_compatibility',
         operationalReadEntityTypes: runtimeDependencies.operationalReadStore ? 8 : 0,
         paymentMode: runtimeConfig.pilotPaymentSimulationEnabled ? 'simulation' : paymentRuntime.mode,
@@ -250,10 +297,7 @@ await registerObservability(app, {
             : 'disabled',
         releaseSha: runtimeConfig.releaseSha,
         releaseImageDigest: runtimeConfig.releaseImageDigest,
-        hardwareMode,
-        realHardwareDevices: realDevices.length,
-        realHardwareDevicesOnline: realDevicesOnline,
-        simulatedDevicesEnabled,
+        ...hardware,
       },
     }
   },
@@ -263,11 +307,39 @@ await registerAuthContext(app, {
   runtimeMode: runtimeConfig.runtimeMode as RuntimeMode,
   sessionSecret: runtimeConfig.sessionSecret,
   readState: () => repository.read(),
-  resumeStaffSession: async (input) => repository.mutate((state) => Boolean(resumePresenceLease(state, {
-    ...input,
-    businessDate: state.store.businessDate,
-    leaseTtlMs: DEFAULT_PRESENCE_LEASE_TTL_MS,
-  }))),
+  isStaffSessionActive: async (input) => Boolean(await presenceLeaseStore.findActive(input)),
+  resumeStaffSession: async (input) => Boolean(await resumeNormalizedPresence(input)),
+  resolvePresenceSession: async (input) => {
+    const directory = await resolveStaffPresenceDirectory()
+    const roleId = directory.storeId === input.storeId ? directory.employees.get(input.actorId) : undefined
+    if (!roleId) return null
+    if (await presenceLeaseStore.isRevoked({ sessionId: input.sessionId, actorId: input.actorId })) return null
+    const findActive = () => presenceLeaseStore.findActive({
+      sessionId: input.sessionId,
+      actorId: input.actorId,
+      businessDate: directory.businessDate,
+      now: input.now,
+    })
+    let active: Awaited<ReturnType<typeof presenceLeaseStore.findActive>>
+    if (input.touch) {
+      active = await presenceLeaseStore.heartbeat({
+          sessionId: input.sessionId,
+          actorId: input.actorId,
+          businessDate: directory.businessDate,
+          now: input.now,
+          leaseTtlMs: DEFAULT_PRESENCE_LEASE_TTL_MS,
+        })
+    } else if (input.invalidate) {
+      pendingPresenceChecks.invalidate(`${input.sessionId}:${input.actorId}:${directory.businessDate}`)
+      active = await findActive()
+    } else {
+      const key = `${input.sessionId}:${input.actorId}:${directory.businessDate}`
+      active = await pendingPresenceChecks.run(key, findActive)
+    }
+    active ??= await resumeNormalizedPresence(input)
+    if (!active) return null
+    return { roleId, businessDate: active.businessDate, expiresAt: active.expiresAt }
+  },
 })
 await registerVoiceTranscriptionRoutes(app, {
   rateLimitStore,
@@ -296,7 +368,7 @@ await registerAssistantRoutes(app, {
     : undefined,
 })
 if (runtimeConfig.runtimeMode === 'staging' || runtimeConfig.runtimeMode === 'production') {
-  await registerPresenceRoutes(app, repository)
+  await registerPresenceRoutes(app, repository, { leaseStore: presenceLeaseStore })
 }
 
 if (runtimeConfig.pilotAccessCode) {
@@ -306,6 +378,7 @@ if (runtimeConfig.pilotAccessCode) {
     sessionSecret: runtimeConfig.sessionSecret!,
     sessionHours: runtimeConfig.pilotSessionHours,
     rateLimitStore,
+    presenceLeaseStore,
   })
 }
 
@@ -466,8 +539,22 @@ app.setErrorHandler((error, request, reply) => {
 app.get('/api/health', async () => ({ status: 'ok', time: new Date().toISOString() }))
 
 app.get('/api/bootstrap', async (request, reply) => {
-  const aggregateState = request.mboxAuthState ?? await repository.read()
   const actor = requireRequestActor(request)
+  const scope = `${actor.storeId}:${actor.actorId}`
+  const requestedEtag = request.headers['if-none-match'] ?? ''
+  if (requestedEtag && repository.readRevision) {
+    const currentRevision = await repository.readRevision()
+    const cachedView = bootstrapViewCache.get(scope, currentRevision)
+    if (cachedView && [cachedView.etag, `"${currentRevision}"`].includes(requestedEtag)) {
+      return reply
+        .header('etag', cachedView.etag)
+        .header('cache-control', 'private, no-cache')
+        .header('x-mbox-operational-source', cachedView.source)
+        .status(304)
+        .send()
+    }
+  }
+  const aggregateState = request.mboxAuthState ?? await repository.read()
   const authoritativePromise = operationalStateCache.getOrCreate(actor.storeId, aggregateState.revision, async () => {
     if (!runtimeDependencies.operationalReadStore) {
       return { state: aggregateState, source: 'aggregate_compatibility' as const }
@@ -496,7 +583,7 @@ app.get('/api/bootstrap', async (request, reply) => {
     throw error
   }
   const state = authoritative.state
-  const view = bootstrapViewCache.getOrCreate(`${actor.storeId}:${actor.actorId}`, state.revision, () => {
+  const view = bootstrapViewCache.getOrCreate(scope, state.revision, () => {
     const projected = projectRuntimeStateForActor(state, actor)
     return {
       projected,
@@ -511,7 +598,7 @@ app.get('/api/bootstrap', async (request, reply) => {
     .header('etag', view.etag)
     .header('cache-control', 'private, no-cache')
     .header('x-mbox-operational-source', view.source)
-  if ([view.etag, legacyRevisionEtag].includes(request.headers['if-none-match'] ?? '')) {
+  if ([view.etag, legacyRevisionEtag].includes(requestedEtag)) {
     return reply.status(304).send()
   }
   return {

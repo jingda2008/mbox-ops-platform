@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { RuntimeState } from '../src/shared/contracts.js'
-import { chinaBusinessDateKey, shiftDateKey } from '../src/shared/china-time.js'
+import { shiftDateKey, venueBusinessDateKey } from '../src/shared/venue-time.js'
 import {
   archiveBusinessDayOperations,
   prepareNextBusinessDayShifts,
@@ -33,7 +33,7 @@ export type AutomaticBusinessDayRolloverResult =
   | { status: 'rolled_over'; businessDate: string; expectedBusinessDate: string; steps: AutomaticBusinessDayStep[] }
 
 /**
- * Advances the store's operational day at the configured Beijing-time cutoff.
+ * Advances the store's operational day at the configured venue-time cutoff.
  * Financial records remain attached to their original business date; an approved,
  * unchanged handover closes automatically, otherwise the audit trail marks it for review.
  */
@@ -43,7 +43,7 @@ export function reconcileAutomaticBusinessDay(
 ): AutomaticBusinessDayRolloverResult {
   const config = tableOperationsConfig(state)
   const rolloverHour = config.businessDayRolloverHour ?? 6
-  const expectedBusinessDate = chinaBusinessDateKey(now, rolloverHour)
+  const expectedBusinessDate = venueBusinessDateKey(now, state.store.timezone, rolloverHour)
   const businessDate = state.store.businessDate
   if (!(config.automaticBusinessDayRollover ?? true)) {
     return { status: 'disabled', businessDate, expectedBusinessDate, steps: [] }
@@ -79,7 +79,10 @@ export function reconcileAutomaticBusinessDay(
 
     const handover = latestCashierHandover(state.paymentDomain, closedBusinessDate)
     const handoverCanClose = handover?.status === 'approved'
-      && handoverSnapshotMatches(state.paymentDomain, handover)
+      && handoverSnapshotMatches(state.paymentDomain, handover, {
+        timeZone: state.store.timezone,
+        rolloverHour,
+      })
     if (handoverCanClose) closeCashierHandover(handover, occurredAt)
     const financialCloseStatus = handover?.status === 'closed' ? 'closed' : 'pending_review'
 

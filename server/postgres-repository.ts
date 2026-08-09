@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import type { Pool as PgPool } from 'pg'
 import type { RuntimeState } from '../src/shared/contracts.js'
 import { migrateRuntimeState } from './runtime-state-migrations.js'
-import type { RuntimeStateProjector } from './operational-projection.js'
+import type { OperationalProjectionTable, RuntimeStateProjector } from './operational-projection.js'
 
 export interface PostgresQueryResult<Row extends Record<string, unknown> = Record<string, unknown>> {
   rows: Row[]
@@ -23,10 +23,52 @@ export interface PostgresPool {
   totalCount?: number
   idleCount?: number
   waitingCount?: number
+  metricsSnapshot?(): PostgresPoolMetrics
+}
+
+export interface PostgresPoolMetrics {
+  acquisitionCount: number
+  acquisitionFailedTotal: number
+  acquisitionWaitP50Ms: number
+  acquisitionWaitP95Ms: number
+  acquisitionWaitP99Ms: number
 }
 
 export function asPostgresPool(pool: PgPool): PostgresPool {
-  return pool
+  const waits: number[] = []
+  let acquisitionCount = 0
+  let acquisitionFailedTotal = 0
+  const percentile = (fraction: number) => {
+    if (waits.length === 0) return 0
+    const ordered = waits.toSorted((left, right) => left - right)
+    return ordered[Math.min(ordered.length - 1, Math.ceil(ordered.length * fraction) - 1)] ?? 0
+  }
+  return {
+    connect: async () => {
+      const startedAt = performance.now()
+      try {
+        const client = await pool.connect()
+        acquisitionCount += 1
+        waits.push(Math.max(0, performance.now() - startedAt))
+        if (waits.length > 2_048) waits.splice(0, waits.length - 2_048)
+        return client
+      } catch (error) {
+        acquisitionFailedTotal += 1
+        throw error
+      }
+    },
+    end: () => pool.end(),
+    get totalCount() { return pool.totalCount },
+    get idleCount() { return pool.idleCount },
+    get waitingCount() { return pool.waitingCount },
+    metricsSnapshot: () => ({
+      acquisitionCount,
+      acquisitionFailedTotal,
+      acquisitionWaitP50Ms: percentile(0.5),
+      acquisitionWaitP95Ms: percentile(0.95),
+      acquisitionWaitP99Ms: percentile(0.99),
+    }),
+  }
 }
 
 export interface PostgresTenantContext {
@@ -44,6 +86,7 @@ export interface PostgresMutationIdempotency {
 
 export interface PostgresMutationOptions {
   idempotency?: PostgresMutationIdempotency
+  projectionTables?: OperationalProjectionTable[]
 }
 
 export interface PostgresRepositoryOptions extends PostgresTenantContext {
@@ -53,6 +96,7 @@ export interface PostgresRepositoryOptions extends PostgresTenantContext {
   defaultIdempotencyTtlMs?: number
   defaultIdempotencyLockMs?: number
   healthCheckTimeoutMs?: number
+  maxDatabaseClockSkewMs?: number
   readCacheValidationTtlMs?: number
   maxPendingMutations?: number
   mutationQueueTimeoutMs?: number
@@ -69,17 +113,26 @@ export interface PostgresRepositoryHealth {
     total: number | null
     idle: number | null
     waiting: number | null
+    acquisitionCount: number
+    acquisitionFailedTotal: number
+    acquisitionWaitP50Ms: number
+    acquisitionWaitP95Ms: number
+    acquisitionWaitP99Ms: number
   }
   mutationQueue: {
     pending: number
+    highWatermark: number
     active: boolean
     maxPending: number
+    rejectedTotal: number
+    timeoutTotal: number
   }
   error?: string
   projectionReady?: boolean
   projectionRevision?: number | null
   projectionCountsMatch?: boolean
   projectionError?: string
+  databaseClockSkewMs: number
 }
 
 export class PostgresRepositoryError extends Error {}
@@ -204,10 +257,15 @@ const OPERATION_SCOPE_PATTERN = /^[a-z][a-z0-9_.-]{2,127}$/
 const DEFAULT_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000
 const DEFAULT_IDEMPOTENCY_LOCK_MS = 30 * 1000
 const DEFAULT_HEALTH_CHECK_TIMEOUT_MS = 2_000
+const DEFAULT_MAX_DATABASE_CLOCK_SKEW_MS = 5_000
 const DEFAULT_READ_CACHE_VALIDATION_TTL_MS = 3_000
 
 const SQL = {
-  beginRead: 'BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY',
+  // Repository reads often compare the aggregate revision with a normalized
+  // projection in a later statement. A repeatable snapshot prevents a
+  // concurrent writer from making those two statements observe different
+  // commits and incorrectly reporting the service as not ready.
+  beginRead: 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY',
   beginWrite: 'BEGIN ISOLATION LEVEL READ COMMITTED',
   commit: 'COMMIT',
   rollback: 'ROLLBACK',
@@ -248,6 +306,11 @@ const SQL = {
   `,
   selectRevision: `
     SELECT revision
+    FROM mbox.runtime_states
+    WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+  `,
+  selectHealth: `
+    SELECT revision, clock_timestamp() AS database_now
     FROM mbox.runtime_states
     WHERE tenant_id = $1::uuid AND store_id = $2::uuid
   `,
@@ -310,6 +373,7 @@ export class PostgresRepository {
   private readonly defaultIdempotencyTtlMs: number
   private readonly defaultIdempotencyLockMs: number
   private readonly healthCheckTimeoutMs: number
+  private readonly maxDatabaseClockSkewMs: number
   private readonly readCacheValidationTtlMs: number
   private readonly maxPendingMutations: number
   private readonly mutationQueueTimeoutMs: number
@@ -324,7 +388,10 @@ export class PostgresRepository {
   private cacheValidatedAt = 0
   private mutationTail: Promise<void> = Promise.resolve()
   private pendingMutations = 0
+  private mutationQueueHighWatermark = 0
   private activeMutations = 0
+  private mutationQueueRejectedTotal = 0
+  private mutationQueueTimeoutTotal = 0
 
   constructor(options: PostgresRepositoryOptions) {
     assertUuid('tenantId', options.tenantId)
@@ -345,6 +412,10 @@ export class PostgresRepository {
     this.healthCheckTimeoutMs = positiveInteger(
       'healthCheckTimeoutMs',
       options.healthCheckTimeoutMs ?? DEFAULT_HEALTH_CHECK_TIMEOUT_MS,
+    )
+    this.maxDatabaseClockSkewMs = positiveInteger(
+      'maxDatabaseClockSkewMs',
+      options.maxDatabaseClockSkewMs ?? DEFAULT_MAX_DATABASE_CLOCK_SKEW_MS,
     )
     this.readCacheValidationTtlMs = positiveInteger(
       'readCacheValidationTtlMs',
@@ -401,6 +472,14 @@ export class PostgresRepository {
     return structuredClone(this.cachedState)
   }
 
+  async readRevision(): Promise<number> {
+    return this.track(() => this.withTransaction(true, async (client) => {
+      const result = await client.query<{ revision: number | string }>(SQL.selectRevision, [this.tenantId, this.storeId])
+      if (result.rowCount !== 1 || !result.rows[0]) throw new PostgresRuntimeStateNotInitializedError()
+      return parseRevision(result.rows[0].revision)
+    }))
+  }
+
   async mutate<T>(
     mutation: (state: RuntimeState) => T | Promise<T>,
     options: PostgresMutationOptions = {},
@@ -423,10 +502,13 @@ export class PostgresRepository {
         ])
         if (locked.rowCount !== 1 || !locked.rows[0]) throw new PostgresRuntimeStateNotInitializedError()
         const expectedRevision = parseRevision(locked.rows[0].revision)
+        // cachedState is never exposed directly. The mutation receives its own
+        // clone below, so cloning the verified cache once more only adds CPU
+        // and event-loop pressure on every hot write.
         const current = this.cachedState?.revision === expectedRevision
-          ? structuredClone(this.cachedState)
+          ? this.cachedState
           : await this.loadState(client)
-        const workingCopy = structuredClone(current)
+        const workingCopy = parseState(JSON.stringify(current))
         const result = await mutation(workingCopy)
 
         if (workingCopy.revision !== expectedRevision) {
@@ -434,20 +516,31 @@ export class PostgresRepository {
             throw new PostgresInvalidRevisionError(expectedRevision, workingCopy.revision)
           }
           const serialized = serializeJson(workingCopy, 'runtime state')
+          const stateSha256 = sha256(serialized)
           const update = await client.query<{ revision: number | string }>(SQL.compareAndSwapState, [
             this.tenantId,
             this.storeId,
             workingCopy.revision,
             serialized,
-            sha256(serialized),
+            stateSha256,
             expectedRevision,
           ])
           if (update.rowCount !== 1) throw new PostgresOptimisticConcurrencyError(expectedRevision)
           if (this.projector) {
-            await this.projector.project(client, this.tenantContext(), current, workingCopy)
+            await this.projector.project(
+              client,
+              this.tenantContext(),
+              current,
+              workingCopy,
+              options.projectionTables,
+              stateSha256,
+            )
           }
           stateChanged = true
-          committedState = structuredClone(workingCopy)
+          // The mutation already runs against a detached JSON clone. Reuse it
+          // as the private cache and clone only the usually-small return value
+          // below, rather than cloning the whole venue aggregate a second time.
+          committedState = workingCopy
         }
 
         if (options.idempotency) {
@@ -459,7 +552,7 @@ export class PostgresRepository {
         this.cachedState = committedState
         this.cacheValidatedAt = Date.now()
       }
-      return result
+      return stateChanged ? structuredClone(result) : result
     }))
   }
 
@@ -480,25 +573,33 @@ export class PostgresRepository {
     try {
       const health = await this.track(() => this.withTransaction(true, async (client) => {
         await client.query(SQL.setStatementTimeout, [`${this.healthCheckTimeoutMs}ms`])
-        const result = await client.query<{ revision: number | string }>(SQL.selectRevision, [
+        const appClockBefore = this.clock().getTime()
+        const result = await client.query<{ revision: number | string; database_now: string | Date }>(SQL.selectHealth, [
           this.tenantId,
           this.storeId,
         ])
+        const appClockAfter = this.clock().getTime()
         if (result.rowCount !== 1 || !result.rows[0]) {
           throw new PostgresRuntimeStateNotInitializedError()
         }
         const revision = parseRevision(result.rows[0].revision)
+        const databaseNow = new Date(result.rows[0].database_now).getTime()
+        if (!Number.isFinite(databaseNow)) throw new Error('PostgreSQL未返回有效数据库时间')
+        const databaseClockSkewMs = Math.abs(databaseNow - ((appClockBefore + appClockAfter) / 2))
         const projection = this.projector
           ? await this.projector.healthCheck(client, this.tenantContext(), revision)
           : null
-        return { revision, projection }
+        return { revision, projection, databaseClockSkewMs }
       }))
+      const clocksSynchronized = health.databaseClockSkewMs <= this.maxDatabaseClockSkewMs
+      const projectionReady = health.projection?.ready ?? true
       return {
-        ready: health.projection?.ready ?? true,
+        ready: projectionReady && clocksSynchronized,
         repository: 'postgres',
-        healthy: health.projection?.ready ?? true,
+        healthy: projectionReady && clocksSynchronized,
         latencyMs: performance.now() - startedAt,
         revision: health.revision,
+        databaseClockSkewMs: health.databaseClockSkewMs,
         pool,
         mutationQueue: this.mutationQueueHealth(),
         projectionReady: health.projection?.ready,
@@ -513,6 +614,7 @@ export class PostgresRepository {
         healthy: false,
         latencyMs: performance.now() - startedAt,
         revision: null,
+        databaseClockSkewMs: -1,
         pool,
         mutationQueue: this.mutationQueueHealth(),
         error: error instanceof Error ? error.message : String(error),
@@ -756,9 +858,11 @@ export class PostgresRepository {
 
   private async enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
     if (this.pendingMutations >= this.maxPendingMutations) {
+      this.mutationQueueRejectedTotal += 1
       throw new PostgresMutationQueueFullError(this.maxPendingMutations)
     }
     this.pendingMutations += 1
+    this.mutationQueueHighWatermark = Math.max(this.mutationQueueHighWatermark, this.pendingMutations)
     const queuedAt = performance.now()
     const previous = this.mutationTail.catch(() => undefined)
     let release!: () => void
@@ -780,6 +884,9 @@ export class PostgresRepository {
       acquired = true
       this.activeMutations += 1
       return await operation()
+    } catch (error) {
+      if (error instanceof PostgresMutationQueueTimeoutError) this.mutationQueueTimeoutTotal += 1
+      throw error
     } finally {
       if (timeout) clearTimeout(timeout)
       if (acquired) this.activeMutations -= 1
@@ -802,10 +909,18 @@ export class PostgresRepository {
   }
 
   private poolHealth() {
+    const acquisition = this.pool.metricsSnapshot?.() ?? {
+      acquisitionCount: 0,
+      acquisitionFailedTotal: 0,
+      acquisitionWaitP50Ms: 0,
+      acquisitionWaitP95Ms: 0,
+      acquisitionWaitP99Ms: 0,
+    }
     return {
       total: this.pool.totalCount ?? null,
       idle: this.pool.idleCount ?? null,
       waiting: this.pool.waitingCount ?? null,
+      ...acquisition,
     }
   }
 
@@ -813,8 +928,11 @@ export class PostgresRepository {
   private mutationQueueHealth() {
     return {
       pending: this.pendingMutations,
+      highWatermark: this.mutationQueueHighWatermark,
       active: this.activeMutations > 0,
       maxPending: this.maxPendingMutations,
+      rejectedTotal: this.mutationQueueRejectedTotal,
+      timeoutTotal: this.mutationQueueTimeoutTotal,
     }
   }
 }
@@ -872,21 +990,31 @@ function serializeJson(value: unknown, label: string): string {
   }
 }
 
-function sortJson(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sortJson)
-  if (value === null || typeof value !== 'object') {
+function sortJson(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (value === null) return value
+  if (typeof value !== 'object') {
     if (typeof value === 'number' && !Number.isFinite(value)) throw new TypeError('Non-finite numbers are not valid JSON')
     if (['bigint', 'function', 'symbol', 'undefined'].includes(typeof value)) {
       throw new TypeError(`${typeof value} is not valid JSON`)
     }
     return value
   }
-  if (value instanceof Date) return value.toJSON()
-  const sorted: Record<string, unknown> = Object.create(null) as Record<string, unknown>
-  for (const key of Object.keys(value).sort()) {
-    const child = (value as Record<string, unknown>)[key]
-    sorted[key] = sortJson(child)
+  if (value instanceof Date) {
+    return value.toJSON()
   }
+  if (seen.has(value)) throw new TypeError('Circular references are not valid JSON')
+  seen.add(value)
+  let sorted: unknown
+  if (Array.isArray(value)) {
+    sorted = value.map((child) => sortJson(child, seen))
+  } else {
+    const object: Record<string, unknown> = Object.create(null) as Record<string, unknown>
+    for (const key of Object.keys(value).sort()) {
+      object[key] = sortJson((value as Record<string, unknown>)[key], seen)
+    }
+    sorted = object
+  }
+  seen.delete(value)
   return sorted
 }
 

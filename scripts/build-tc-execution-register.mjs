@@ -1,8 +1,10 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { execFileSync } from 'node:child_process'
 
 const root = resolve(import.meta.dirname, '..')
 const baselinePath = resolve(root, 'docs/comprehensive-operating-test-cases.md')
+const qualitySupplementPath = resolve(root, 'docs/tc-time-capacity-performance-1.0.0-rc.68.md')
 const packageDocument = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'))
 const version = packageDocument.version
 const versionSlug = version.replaceAll('/', '-')
@@ -16,6 +18,12 @@ const existingExecutionDate = existsSync(reportPath)
 const executionDate = process.env.MBOX_TC_EXECUTION_DATE?.trim()
   || existingExecutionDate
   || new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(new Date())
+const evidenceCommitSha = process.env.MBOX_EVIDENCE_SHA?.trim()
+  || execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim()
+const evidenceRunId = process.env.MBOX_EVIDENCE_RUN_ID?.trim() || 'local-unpublished'
+const evidenceImageDigest = process.env.MBOX_EVIDENCE_IMAGE_DIGEST?.trim() || 'not-built'
+const worktreeDirty = execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).trim().length > 0
+const immutableEvidence = !worktreeDirty && evidenceRunId !== 'local-unpublished' && evidenceImageDigest !== 'not-built'
 
 const baseline = readFileSync(baselinePath, 'utf8')
 const testCases = [...baseline.matchAll(/^\| ((?:PER|GST|SVC|ORD|PAY|MBR|SNG|INV|INC|SEC|PKC)-\d{3}) \| (P[0-3]) \| ([^|]+) \| ([^|]+) \|$/gm)]
@@ -27,6 +35,16 @@ const testCases = [...baseline.matchAll(/^\| ((?:PER|GST|SVC|ORD|PAY|MBR|SNG|INV
   }))
 
 if (testCases.length !== 213) throw new Error(`Expected 213 operating TCs, found ${testCases.length}`)
+
+const qualitySupplement = readFileSync(qualitySupplementPath, 'utf8')
+const qualitySupplementCases = [...qualitySupplement.matchAll(/^\| ((?:TME|CAP|RPF)-\d{3}) \| (P[0-3]) \| ([^|]+) \| ([^|]+) \| (通过|失败|未执行|待执行|阻塞|未通过) \|/gm)]
+  .map((match) => ({ id: match[1], priority: match[2], scenario: match[3].trim(), expected: match[4].trim(), status: match[5] }))
+if (qualitySupplementCases.length !== 27) {
+  throw new Error(`Expected 27 time/capacity/performance TCs, found ${qualitySupplementCases.length}`)
+}
+if (new Set(qualitySupplementCases.map((item) => item.id)).size !== qualitySupplementCases.length) {
+  throw new Error('Time/capacity/performance TC ids must be unique')
+}
 
 function ids(prefix, ranges) {
   return ranges.flatMap(([start, end = start]) =>
@@ -43,7 +61,7 @@ const passed = new Set([
   ...ids('MBR', [[1, 12]]),
   ...ids('SNG', [[1, 7], [10, 11], [13, 14]]),
   ...ids('INV', [[1, 12]]),
-  ...ids('SEC', [[1, 15]]),
+  ...ids('SEC', [[1, 13], [15]]),
   ...ids('PKC', [[1, 3], [5, 6], [8]]),
 ])
 
@@ -51,7 +69,49 @@ const blocked = new Set([
   ...ids('PAY', [[1, 4], [7, 12], [16, 18], [20]]),
   'INC-015',
   'PKC-004',
+  'SEC-014',
 ])
+
+const externalDependency = new Set([
+  ...ids('PAY', [[1, 4], [7, 12], [16, 18], [20]]),
+  'INC-015',
+  'PKC-004',
+  'SEC-014',
+])
+
+const codeSupportedFieldPending = new Set([
+  'PER-005',
+  ...ids('PER', [[7, 19], [22, 23]]),
+  'SVC-019',
+  ...ids('PAY', [[5, 6]]),
+  ...ids('SNG', [[8, 9]]),
+  'PKC-007',
+  'PKC-009',
+])
+
+const capabilityGap = new Set([
+  ...ids('GST', [[18, 21]]),
+  'SNG-012',
+  ...ids('INC', [[1, 7], [10, 12], [14], [18]]),
+])
+
+const partialGap = new Set([
+  ...ids('GST', [[22, 23]]),
+  ...ids('INC', [[8, 9], [13], [16, 17], [19, 20]]),
+])
+
+function assertCoverageSets() {
+  const seen = new Map()
+  for (const [name, values] of Object.entries({ externalDependency, codeSupportedFieldPending, capabilityGap, partialGap })) {
+    for (const id of values) {
+      const previous = seen.get(id)
+      if (previous) throw new Error(`TC ${id} appears in both ${previous} and ${name}`)
+      seen.set(id, name)
+    }
+  }
+}
+
+assertCoverageSets()
 
 const ownersByDomain = {
   PER: '李艳、乌鸦',
@@ -100,7 +160,6 @@ const exactEvidence = {
   'INV-010': 'inventory-api、inventory-domain及dual-approval测试：作废/过期保留原批次、原因和独立审批',
   'SEC-007': 'table-access及guest-api测试：固定桌码只交换绑定桌台当前桌次，无有效桌次或伪造桌号均拒绝',
   'SEC-012': 'notification-runtime/dispatch测试：通道失败时核心任务保留在员工/管理端队列并进入重试和人工接管',
-  'SEC-014': 'Cloud SQL隔离PITR恢复演练：14个迁移、73张强制RLS表、状态校验和及版本日志一致，详见tc-restore-drill-1.0.0-rc.13.md',
   'PKC-008': 'business-day-api测试：开放桌、支付未知、退款失败、投诉和进行中点歌均阻止闭店并返回交接项',
 }
 
@@ -111,9 +170,20 @@ function resultFor(testCase) {
 }
 
 function executionMode(result) {
-  if (result === '通过') return '自动化/云端证据'
+  if (result === '通过') return '历史验收/工程回归'
   if (result === '阻塞') return '外部生产联调'
   return '门店现场执行'
+}
+
+function engineeringCoverage(testCase, result) {
+  if (result === '通过' && exactEvidence[testCase.id]) return '直接自动化证据'
+  if (result === '通过') return '历史通过/待本版逐条追溯'
+  if (externalDependency.has(testCase.id)) return '外部依赖'
+  if (capabilityGap.has(testCase.id)) return '能力缺口'
+  if (partialGap.has(testCase.id)) return '部分实现'
+  if (codeSupportedFieldPending.has(testCase.id)) return '代码支持/待现场验证'
+  if (testCase.id === 'PKC-010') return '云端数据库待复测'
+  return '现场验证项'
 }
 
 function pendingReason(testCase, result) {
@@ -121,6 +191,7 @@ function pendingReason(testCase, result) {
   if (result === '阻塞') {
     if (testCase.id === 'INC-015') return '需真实微信、星驿和物理POS同时不可用的门店降级演练记录'
     if (testCase.id === 'PKC-004') return '需星驿/微信生产商户参数、真实小额流水及高峰回调/查单/退款记录'
+    if (testCase.id === 'SEC-014') return '旧Cloud SQL恢复证据不适用于当前阿里云RDS；需从阿里云备份恢复到隔离实例并核对审计、版本和关联完整性'
     return '需星驿/微信生产商户参数、KYC、真实小额支付/退款及渠道流水号'
   }
   if (testCase.id.startsWith('INC-')) return '必须由门店按应急预案现场演练，上传脱敏照片、时间线、负责人和复盘记录'
@@ -133,9 +204,14 @@ const rows = testCases.map((testCase) => {
   return {
     ...testCase,
     result,
+    engineeringCoverage: engineeringCoverage(testCase, result),
     executionMode: executionMode(result),
     owners: ownersByDomain[domain],
     evidence: pendingReason(testCase, result),
+    evidenceLevel: exactEvidence[testCase.id]
+      ? '直接测试映射'
+      : result === '通过' ? '领域级历史证据' : '待执行',
+    testReference: exactEvidence[testCase.id]?.split('：', 1)[0] ?? '',
   }
 })
 
@@ -159,16 +235,21 @@ function csvDocument(headings, bodyRows) {
 }
 
 const csv = csvDocument(
-  ['TC编号', '优先级', '情况与关键步骤', '预期结果', '执行状态', '执行版本', '执行方式', '责任人', '证据/待办'],
-  rows.map((row) => [row.id, row.priority, row.scenario, row.expected, row.result, version, row.executionMode, row.owners, row.evidence]),
+  ['TC编号', '优先级', '情况与关键步骤', '预期结果', '执行状态', '工程覆盖度', '执行版本', '执行方式', '责任人', '证据级别', '测试文件/引用', '证据提交SHA', '运行ID', '镜像摘要', '证据/待办'],
+  rows.map((row) => [
+    row.id, row.priority, row.scenario, row.expected, row.result, row.engineeringCoverage, version,
+    row.executionMode, row.owners, row.evidenceLevel, row.testReference, evidenceCommitSha,
+    evidenceRunId, evidenceImageDigest, row.evidence,
+  ]),
 )
 
 const blockersCsv = csvDocument(
-  ['TC编号', '优先级', '状态', '责任人', '执行场景', '通过条件', '必须提交的证据'],
+  ['TC编号', '优先级', '状态', '工程覆盖度', '责任人', '执行场景', '通过条件', '必须提交的证据'],
   releaseBlocking.map((row) => [
     row.id,
     row.priority,
     row.result,
+    row.engineeringCoverage,
     row.owners,
     row.scenario,
     row.expected,
@@ -182,30 +263,37 @@ const report = `# M-BOX 213条经营TC执行报告
 执行版本：\`${version}\`
 时区：\`Asia/Shanghai\`
 原始基线：[comprehensive-operating-test-cases.md](comprehensive-operating-test-cases.md)
+时间/容量/性能专项：[tc-time-capacity-performance-1.0.0-rc.68.md](tc-time-capacity-performance-1.0.0-rc.68.md)
 逐条登记：[${`tc-execution-register-${versionSlug}.csv`}](${`tc-execution-register-${versionSlug}.csv`})
 发布阻断：[${`tc-release-blockers-${versionSlug}.csv`}](${`tc-release-blockers-${versionSlug}.csv`})
 
 ## 结论
 
-本轮基线共 **213条**，没有删除或放宽原始预期。\`${version}\`重新核对结果：
+本轮基线共 **213条**，没有删除或放宽原始预期。下表保留既有经营验收状态，但**不把历史通过自动等同于\`${version}\`当前候选已经重新执行**：
+
+另有 **${qualitySupplementCases.length}条** \`TME/CAP/RPF\` 增量专项TC；其失败、未通过、未执行、待执行或阻塞项同样阻止商业生产发布，状态以专项文件和不可变运行证据为准。
 
 | 状态 | 数量 | 判定口径 |
 |---|---:|---|
-| 通过 | ${counts['通过'] ?? 0} | 有直接自动化、云端闭环、浏览器检查或压力测试证据 |
+| 通过 | ${counts['通过'] ?? 0} | 既有基线判定；其中只有标记“直接测试映射”的项目具备逐条代码引用 |
 | 未执行 | ${counts['未执行'] ?? 0} | 必须由真实岗位、真实设备或门店现场完成，不能用单元测试冒充 |
 | 阻塞 | ${counts['阻塞'] ?? 0} | 缺真实支付参数、外部流水或第三方生产通道 |
 | 失败 | ${counts['失败'] ?? 0} | 已执行但结果不符合预期；本轮为0 |
 
 **商业生产发布结论：不通过发布门禁。** 当前仍有 **${releaseBlocking.length}条 P0/P1** 未达到“通过”：${p0p1Breakdown['P0-阻塞'] ?? 0}条P0阻塞、${p0p1Breakdown['P0-未执行'] ?? 0}条P0未执行、${p0p1Breakdown['P1-阻塞'] ?? 0}条P1阻塞、${p0p1Breakdown['P1-未执行'] ?? 0}条P1未执行。
 
-## rc.13重新验收
+工程覆盖度与验收状态是两套口径：代码存在不等于现场验收通过。未通过项中，外部依赖${externalDependency.size}条、代码支持但待现场验证${codeSupportedFieldPending.size}条、明确能力缺口${capabilityGap.size}条、部分实现${partialGap.size}条；其余属于现场执行或云端复测项。
 
-- TC版本和产物文件名由\`package.json\`自动生成，不再固定写死为rc.11。
-- 每条记录增加执行版本、执行方式和责任人；发布阻断另生成独立CSV。
+本报告证据提交：\`${evidenceCommitSha}\`；运行ID：\`${evidenceRunId}\`；镜像摘要：\`${evidenceImageDigest}\`；不可变证据状态：**${immutableEvidence ? '完整' : '不完整'}**。工作区未提交、没有CI运行ID或没有镜像摘要时，只能作为开发检查，不能作为发布证据。
+
+## 工程证据口径
+
+- TC版本和产物文件名由\`package.json\`自动生成；每条记录同时包含验收状态、工程覆盖度、执行方式和责任人。
+- 既有通过项分为“直接测试映射”和“领域级历史证据”；后者必须在不可变提交的CI中补齐精确测试名/运行ID后，才能证明当前候选仍然通过。
 - 服务员开台、转桌、合台/加桌、结台翻台已纳入桌台权限和接口回归。
 - 客人暂不点单新增15/30/60分钟延后提醒；延后期间不重复打扰，到期只恢复一次提醒。
 - 错品/退回补做、权益同意与通知失败、收货盘点、存酒全链路、固定桌码安全、通知降级和闭店阻断改用现有直接证据重新判定。
-- Cloud SQL已完成隔离时间点恢复演练并删除临时实例；恢复数据的迁移、RLS、校验和、版本日志和rc.13权限一致。
+- 历史Cloud SQL恢复演练只作为旧版本证据；当前阿里云RDS的迁移、备份、恢复和并发路径必须按本候选重新验证。
 - 全量测试数量、提交、镜像、云端修订版和依赖审计以[自动发布证据](release-evidence.generated.md)为准，TC报告不再复制易过期的数字。
 
 ## 尚未完成的责任
@@ -237,6 +325,7 @@ console.log(JSON.stringify({
   mode: checkMode ? 'check' : 'write',
   version,
   total: rows.length,
+  qualitySupplementTotal: qualitySupplementCases.length,
   counts,
   releaseBlocking: releaseBlocking.length,
   reportPath,

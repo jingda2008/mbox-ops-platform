@@ -442,6 +442,9 @@ export function registerTableSessionRoutes(app: FastifyInstance, repository: Run
       validateTableOperationsConfig(state, input.minimumSpendRules)
       const occurredAt = new Date().toISOString()
       const previous = tableOperationsConfig(state)
+      if (input.businessDayRolloverHour !== previous.businessDayRolloverHour) {
+        throw new BusinessRuleError('营业日切换时间属于门店数据库级设置，不能在营业页面即时修改；请通过维护发布同时更新门店元数据和运行配置')
+      }
       state.tableOperationsConfig = {
         version: previous.version + 1,
         updatedAt: occurredAt,

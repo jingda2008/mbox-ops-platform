@@ -13,13 +13,21 @@ import {
 import type { RuntimeRepository, RuntimeRepositoryHealth } from './repository.js'
 import { createSeedState } from './seed.js'
 import { createServiceTask } from './domain.js'
+import { MemoryPresenceLeaseStore } from './presence-store.js'
 
 class MemoryRepository implements RuntimeRepository {
   state = createSeedState()
+  mutationCalls = 0
+  failNextMutation = false
 
   async init() {}
   async read() { return structuredClone(this.state) }
   async mutate<T>(mutation: (state: RuntimeState) => T | Promise<T>) {
+    this.mutationCalls += 1
+    if (this.failNextMutation) {
+      this.failNextMutation = false
+      throw new Error('simulated aggregate persistence failure')
+    }
     const working = structuredClone(this.state)
     const result = await mutation(working)
     this.state = working
@@ -131,6 +139,49 @@ describe('staff presence domain', () => {
 })
 
 describe('staff presence routes', () => {
+  it('keeps normalized heartbeats off the aggregate mutation queue', async () => {
+    const repository = new MemoryRepository()
+    const leaseStore = new MemoryPresenceLeaseStore()
+    const app = Fastify()
+    const now = Date.now()
+    const sessionExpiresAt = now + 60_000
+    let leaseTouches = 0
+    await repository.mutate((state) => establish(state, 'normalized-device', now, 10_000, sessionExpiresAt))
+    const businessDate = repository.state.store.businessDate
+    repository.mutationCalls = 0
+    await registerAuthContext(app, {
+      runtimeMode: 'production', sessionSecret: secret, readState: () => repository.read(),
+      resolvePresenceSession: async (input) => {
+        leaseTouches += 1
+        const active = await leaseStore.heartbeat({
+          sessionId: input.sessionId,
+          actorId: input.actorId,
+          businessDate,
+          now: input.now,
+          leaseTtlMs: 10_000,
+        })
+        return active ? { roleId: 'manager', businessDate: active.businessDate, expiresAt: active.expiresAt } : null
+      },
+    })
+    await registerPresenceRoutes(app, repository, {
+      leaseTtlMs: 10_000, sweepIntervalMs: 0, now: () => now + 1_000, leaseStore,
+    })
+    const token = signStaffSession({
+      sessionId: 'normalized-device', actorId: 'emp-chen', storeId: 'mbox-lujiazui',
+      issuedAt: now, expiresAt: sessionExpiresAt,
+    }, secret)
+
+    const response = await app.inject({
+      method: 'POST', url: '/api/auth/presence/heartbeat', headers: { authorization: `Bearer ${token}` },
+    })
+
+    expect(response.statusCode, response.body).toBe(200)
+    expect(repository.mutationCalls).toBe(0)
+    expect(leaseTouches).toBe(1)
+    expect(repository.state.revision).toBeGreaterThan(0)
+    await app.close()
+  })
+
   it('heartbeats and logs out only the current signed device session', async () => {
     const repository = new MemoryRepository()
     const app = Fastify()
@@ -202,6 +253,43 @@ describe('staff presence routes', () => {
     expect(response.statusCode, response.body).toBe(200)
     expect(response.json()).toMatchObject({ sessionId: 'expired-device', actorId: 'emp-chen', online: true })
     expect((await repository.read()).employees.find((employee) => employee.id === 'emp-chen')?.online).toBe(true)
+    await app.close()
+  })
+
+  it('keeps logout revoked when the aggregate projection write fails', async () => {
+    const repository = new MemoryRepository()
+    const leaseStore = new MemoryPresenceLeaseStore()
+    const app = Fastify({ logger: false })
+    const now = Date.now()
+    const sessionExpiresAt = now + 60_000
+    await repository.mutate((state) => establish(state, 'durable-logout', now, 10_000, sessionExpiresAt))
+    const businessDate = repository.state.store.businessDate
+    await registerAuthContext(app, {
+      runtimeMode: 'production', sessionSecret: secret, readState: () => repository.read(),
+      resolvePresenceSession: async (input) => {
+        if (await leaseStore.isRevoked(input)) return null
+        const active = await leaseStore.heartbeat({ ...input, businessDate, leaseTtlMs: 10_000 })
+        return active ? { roleId: 'manager', businessDate, expiresAt: active.expiresAt } : null
+      },
+    })
+    await registerPresenceRoutes(app, repository, {
+      leaseTtlMs: 10_000, sweepIntervalMs: 0, now: () => now + 1_000, leaseStore,
+    })
+    const token = signStaffSession({
+      sessionId: 'durable-logout', actorId: 'emp-chen', storeId: 'mbox-lujiazui', issuedAt: now, expiresAt: sessionExpiresAt,
+    }, secret)
+
+    repository.failNextMutation = true
+    const logout = await app.inject({
+      method: 'POST', url: '/api/auth/logout', headers: { authorization: `Bearer ${token}` },
+    })
+    expect(logout.statusCode, logout.body).toBe(200)
+    expect(await leaseStore.isRevoked({ sessionId: 'durable-logout', actorId: 'emp-chen' })).toBe(true)
+    const retry = await app.inject({
+      method: 'POST', url: '/api/auth/presence/heartbeat', headers: { authorization: `Bearer ${token}` },
+    })
+    expect(retry.statusCode).toBe(401)
+    expect(retry.json().code).toBe('STAFF_SESSION_REVOKED')
     await app.close()
   })
 })

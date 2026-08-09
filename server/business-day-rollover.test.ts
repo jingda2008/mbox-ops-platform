@@ -86,4 +86,13 @@ describe('automatic business day rollover', () => {
     expect(result.status).toBe('disabled')
     expect(state.store.businessDate).toBe('2026-07-19')
   })
+
+  it('uses the configured venue timezone instead of the server timezone', () => {
+    const state = stateFor('2026-07-19')
+    state.store.timezone = 'America/New_York'
+
+    expect(reconcileAutomaticBusinessDay(state, new Date('2026-07-20T09:59:59.999Z')).status).toBe('current')
+    expect(reconcileAutomaticBusinessDay(state, new Date('2026-07-20T10:00:00.000Z')).status).toBe('rolled_over')
+    expect(state.store.businessDate).toBe('2026-07-20')
+  })
 })

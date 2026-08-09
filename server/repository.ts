@@ -14,12 +14,14 @@ export interface RuntimeRepositoryHealth {
   projectionRevision?: number | null
   projectionCountsMatch?: boolean
   projectionError?: string
+  databaseClockSkewMs?: number
 }
 
 export interface RuntimeRepository {
   init(): Promise<void>
   read(): Promise<RuntimeState>
   readFresh?(): Promise<RuntimeState>
+  readRevision?(): Promise<number>
   mutate<T>(mutation: (state: RuntimeState) => T | Promise<T>, options?: unknown): Promise<T>
   reset(): Promise<RuntimeState>
   healthCheck(): Promise<RuntimeRepositoryHealth>
@@ -124,6 +126,11 @@ export class JsonRepository {
 
   async readFresh() {
     return this.read()
+  }
+
+  async readRevision() {
+    await this.queue
+    return this.state.revision
   }
 
   async mutate<T>(mutation: (state: RuntimeState) => T | Promise<T>): Promise<T> {

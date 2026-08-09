@@ -214,6 +214,10 @@ function deterministicId(prefix: string, key: string) {
   return `${prefix}_${createHash('sha256').update(key).digest('hex').slice(0, 32)}`
 }
 
+function withAuthoritativeTimestamp<T extends { occurredAt: string }>(submitted: T): T {
+  return { ...submitted, occurredAt: new Date().toISOString() }
+}
+
 function requireAnyPermission(request: FastifyRequest, state: RuntimeState, allowed: StaffPermissionId[]) {
   const actor = requireRequestActor(request)
   const permissions = effectivePermissionIdsForEmployee(state, actor.actorId)
@@ -392,7 +396,8 @@ export function registerCommercialOpsRoutes(app: FastifyInstance, repository: Ru
   })
 
   app.post('/api/commercial-ops/scan-bindings', async (request, reply) => {
-    const input = scanBindingSchema.parse(request.body)
+    const submitted = scanBindingSchema.parse(request.body)
+    const input = withAuthoritativeTimestamp(submitted)
     const result = await repository.mutate((state) => {
       const actor = requireConfiguredOperation(request, state, 'inventory.approve')
       const inventory = ensureInventoryDomainState(state)
@@ -401,7 +406,7 @@ export function registerCommercialOpsRoutes(app: FastifyInstance, repository: Ru
         : inventory.ingredientSkus.some((ingredient) => ingredient.id === input.targetId)
       if (!targetExists) throw new Error('商品码关联的货品或原料不存在')
       return mutateCommercial(state, (domain) => {
-        const inputFingerprint = fingerprint(input)
+        const inputFingerprint = fingerprint(submitted)
         const replay = idempotentResult(domain, input.idempotencyKey, 'commercial.scan_binding.upsert', inputFingerprint)
         if (replay) return domain.scanCodeBindings.find((binding) => binding.id === replay)!
         const duplicate = domain.scanCodeBindings.find((binding) => binding.code === input.code && binding.id !== input.bindingId)
@@ -437,7 +442,8 @@ export function registerCommercialOpsRoutes(app: FastifyInstance, repository: Ru
   })
 
   app.post('/api/commercial-ops/procurement-batches', async (request, reply) => {
-    const input = procurementSchema.parse(request.body)
+    const submitted = procurementSchema.parse(request.body)
+    const input = withAuthoritativeTimestamp(submitted)
     const result = await repository.mutate((state) => {
       const actor = requireConfiguredOperation(request, state, 'inventory.manage')
       const inventory = ensureInventoryDomainState(state)
@@ -445,7 +451,7 @@ export function registerCommercialOpsRoutes(app: FastifyInstance, repository: Ru
       if (input.targetType === 'ingredient' && !ingredient) throw new Error('采购原料不存在')
       if (input.targetType === 'product' && !state.products.some((product) => product.id === input.targetId)) throw new Error('采购商品不存在')
       const commercial = commercialOpsFor(state)
-      const inputFingerprint = fingerprint(input)
+      const inputFingerprint = fingerprint(submitted)
       const replay = idempotentResult(commercial, input.idempotencyKey, 'commercial.procurement.receive', inputFingerprint)
       if (replay) return commercial.procurementBatches.find((batch) => batch.id === replay)!
       if (input.scanCode) {
@@ -520,11 +526,12 @@ export function registerCommercialOpsRoutes(app: FastifyInstance, repository: Ru
   })
 
   app.post('/api/commercial-ops/cost-entries', async (request, reply) => {
-    const input = costEntrySchema.parse(request.body)
+    const submitted = costEntrySchema.parse(request.body)
+    const input = withAuthoritativeTimestamp(submitted)
     const result = await repository.mutate((state) => {
       const actor = requireConfiguredOperation(request, state, 'finance.cost.manage')
       return mutateCommercial(state, (domain) => {
-        const inputFingerprint = fingerprint(input)
+        const inputFingerprint = fingerprint(submitted)
         const replay = idempotentResult(domain, input.idempotencyKey, 'commercial.cost_entry.create', inputFingerprint)
         if (replay) return domain.costEntries.find((entry) => entry.id === replay)!
         const replaced = input.replacesEntryId
@@ -606,13 +613,14 @@ export function registerCommercialOpsRoutes(app: FastifyInstance, repository: Ru
   })
 
   app.post<{ Params: { entryId: string } }>('/api/commercial-ops/cost-entries/:entryId/void', async (request) => {
-    const input = costVoidSchema.parse(request.body)
+    const submitted = costVoidSchema.parse(request.body)
+    const input = withAuthoritativeTimestamp(submitted)
     return repository.mutate((state) => {
       const actor = requireConfiguredOperation(request, state, 'finance.cost.manage')
       return mutateCommercial(state, (domain) => {
         const entry = domain.costEntries.find((candidate) => candidate.id === request.params.entryId)
         if (!entry) throw new Error('费用记录不存在')
-        const inputFingerprint = fingerprint({ entryId: entry.id, ...input })
+        const inputFingerprint = fingerprint({ entryId: entry.id, ...submitted })
         const replay = idempotentResult(domain, input.idempotencyKey, 'commercial.cost_entry.void', inputFingerprint)
         if (replay) return entry
         if (entry.status === 'voided') throw new Error('费用记录已经作废')
@@ -639,11 +647,12 @@ export function registerCommercialOpsRoutes(app: FastifyInstance, repository: Ru
   })
 
   app.post('/api/commercial-ops/cost-templates', async (request, reply) => {
-    const input = recurringCostTemplateSchema.parse(request.body)
+    const submitted = recurringCostTemplateSchema.parse(request.body)
+    const input = withAuthoritativeTimestamp(submitted)
     const result = await repository.mutate((state) => {
       const actor = requireConfiguredOperation(request, state, 'finance.cost.manage')
       return mutateCommercial(state, (domain) => {
-        const inputFingerprint = fingerprint(input)
+        const inputFingerprint = fingerprint(submitted)
         const replay = idempotentResult(domain, input.idempotencyKey, 'commercial.cost_template.upsert', inputFingerprint)
         if (replay) return domain.recurringCostTemplates.find((template) => template.id === replay)!
         const existing = input.templateId
@@ -709,13 +718,14 @@ export function registerCommercialOpsRoutes(app: FastifyInstance, repository: Ru
   })
 
   app.post<{ Params: { templateId: string } }>('/api/commercial-ops/cost-templates/:templateId/status', async (request) => {
-    const input = recurringCostStatusSchema.parse(request.body)
+    const submitted = recurringCostStatusSchema.parse(request.body)
+    const input = withAuthoritativeTimestamp(submitted)
     return repository.mutate((state) => {
       const actor = requireConfiguredOperation(request, state, 'finance.cost.manage')
       return mutateCommercial(state, (domain) => {
         const template = domain.recurringCostTemplates.find((candidate) => candidate.id === request.params.templateId)
         if (!template) throw new Error('周期费用模板不存在')
-        const inputFingerprint = fingerprint({ templateId: template.id, ...input })
+        const inputFingerprint = fingerprint({ templateId: template.id, ...submitted })
         const replay = idempotentResult(domain, input.idempotencyKey, 'commercial.cost_template.status', inputFingerprint)
         if (replay) return template
         if (template.enabled === input.enabled) throw new Error(input.enabled ? '周期费用已经启用' : '周期费用已经停用')
@@ -741,7 +751,8 @@ export function registerCommercialOpsRoutes(app: FastifyInstance, repository: Ru
   })
 
   app.post('/api/commercial-ops/vouchers/redeem', async (request, reply) => {
-    const input = voucherSchema.parse(request.body)
+    const submitted = voucherSchema.parse(request.body)
+    const input = withAuthoritativeTimestamp(submitted)
     const result = await repository.mutate((state) => {
       const actor = requireConfiguredOperation(request, state, 'payment.intent.create')
       return mutateCommercial(state, (domain) => {
@@ -750,7 +761,7 @@ export function registerCommercialOpsRoutes(app: FastifyInstance, repository: Ru
         if (used) throw new Error(`这张团购券已于${new Date(used.redeemedAt).toLocaleString('zh-CN', { timeZone: state.store.timezone })}核销`)
         if (input.tableSessionId && !state.songState.tableSessions.some((session) => session.id === input.tableSessionId)) throw new Error('关联桌次不存在')
         if (input.orderId && !state.orderDomain.orders.some((order) => order.id === input.orderId)) throw new Error('关联订单不存在')
-        const inputFingerprint = fingerprint({ ...input, voucherCode: codeHash })
+        const inputFingerprint = fingerprint({ ...submitted, voucherCode: codeHash })
         const replay = idempotentResult(domain, input.idempotencyKey, 'commercial.voucher.redeem', inputFingerprint)
         if (replay) return domain.voucherRedemptions.find((item) => item.id === replay)!
         const redemption = {
@@ -785,7 +796,8 @@ export function registerCommercialOpsRoutes(app: FastifyInstance, repository: Ru
   })
 
   app.put<{ Params: { memberId: string } }>('/api/commercial-ops/members/:memberId/tags', async (request) => {
-    const input = memberTagsSchema.parse(request.body)
+    const submitted = memberTagsSchema.parse(request.body)
+    const input = withAuthoritativeTimestamp(submitted)
     return repository.mutate((state) => {
       const actor = requireConfiguredOperation(request, state, 'benefit.manage')
       const member = state.members.find((candidate) => candidate.id === request.params.memberId)
@@ -808,13 +820,14 @@ export function registerCommercialOpsRoutes(app: FastifyInstance, repository: Ru
   })
 
   app.post<{ Params: { jobId: string } }>('/api/commercial-ops/print-jobs/:jobId/result', async (request) => {
-    const input = printDecisionSchema.parse(request.body)
+    const submitted = printDecisionSchema.parse(request.body)
+    const input = withAuthoritativeTimestamp(submitted)
     return repository.mutate((state) => {
       const actor = requireAnyPermission(request, state, ['kds.prepare', 'config.manage'])
       return mutateCommercial(state, (domain) => {
         const job = domain.printJobs.find((candidate) => candidate.id === request.params.jobId)
         if (!job) throw new Error('打印任务不存在')
-        const inputFingerprint = fingerprint({ jobId: job.id, ...input })
+        const inputFingerprint = fingerprint({ jobId: job.id, ...submitted })
         const replay = idempotentResult(domain, input.idempotencyKey, 'commercial.print_job.result', inputFingerprint)
         if (replay) return job
         const previousStatus = job.status

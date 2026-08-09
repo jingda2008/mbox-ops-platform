@@ -1,0 +1,149 @@
+{
+  "model": {
+    "instances": 2,
+    "samplesPerReadOrAction": 300,
+    "kdsActionSamples": 600,
+    "readConcurrency": 60,
+    "staffColdStarts": 12,
+    "bootstrapCachedSamples": 300,
+    "setupConcurrency": 10,
+    "taskWriteConcurrency": 6,
+    "kdsConcurrency": 3
+  },
+  "totals": {
+    "measured": 2712,
+    "failures": 0,
+    "workflowFailures": 0
+  },
+  "byLabel": {
+    "create_task": {
+      "samples": 300,
+      "successful": 300,
+      "failures": 0,
+      "p50Ms": 239.5,
+      "p95Ms": 333.4,
+      "p99Ms": 342.4,
+      "maxMs": 348,
+      "target": {
+        "p95": 800,
+        "p99": 1500
+      },
+      "passed": true
+    },
+    "create_quick_order": {
+      "samples": 300,
+      "successful": 300,
+      "failures": 0,
+      "p50Ms": 638,
+      "p95Ms": 905,
+      "p99Ms": 922.6,
+      "maxMs": 941.4,
+      "target": {
+        "p95": 1500,
+        "p99": 2500
+      },
+      "passed": true
+    },
+    "heartbeat": {
+      "samples": 300,
+      "successful": 300,
+      "failures": 0,
+      "p50Ms": 42.5,
+      "p95Ms": 124.2,
+      "p99Ms": 162.4,
+      "maxMs": 184.3,
+      "target": {
+        "p95": 150,
+        "p99": 300
+      },
+      "passed": true
+    },
+    "bootstrap_cold": {
+      "samples": 12,
+      "successful": 12,
+      "failures": 0,
+      "p50Ms": 152.4,
+      "p95Ms": 169.9,
+      "p99Ms": 169.9,
+      "maxMs": 169.9,
+      "target": {
+        "p95": 500,
+        "p99": 800,
+        "minSamples": 12
+      },
+      "passed": true
+    },
+    "bootstrap_cached": {
+      "samples": 300,
+      "successful": 300,
+      "failures": 0,
+      "p50Ms": 16.7,
+      "p95Ms": 41.3,
+      "p99Ms": 43.4,
+      "maxMs": 47.3,
+      "target": {
+        "p95": 150,
+        "p99": 300
+      },
+      "passed": true
+    },
+    "reservations": {
+      "samples": 300,
+      "successful": 300,
+      "failures": 0,
+      "p50Ms": 163.4,
+      "p95Ms": 224.1,
+      "p99Ms": 262.6,
+      "maxMs": 263.1,
+      "target": {
+        "p95": 500,
+        "p99": 800
+      },
+      "passed": true
+    },
+    "guest_session": {
+      "samples": 300,
+      "successful": 300,
+      "failures": 0,
+      "p50Ms": 212.2,
+      "p95Ms": 350.3,
+      "p99Ms": 360,
+      "maxMs": 361.3,
+      "target": {
+        "p95": 500,
+        "p99": 800
+      },
+      "passed": true
+    },
+    "task_action": {
+      "samples": 300,
+      "successful": 300,
+      "failures": 0,
+      "p50Ms": 493.6,
+      "p95Ms": 512.6,
+      "p99Ms": 519.4,
+      "maxMs": 522.8,
+      "target": {
+        "p95": 800,
+        "p99": 1500
+      },
+      "passed": true
+    },
+    "kds_action": {
+      "samples": 600,
+      "successful": 600,
+      "failures": 0,
+      "p50Ms": 355.1,
+      "p95Ms": 539,
+      "p99Ms": 614.1,
+      "maxMs": 751.2,
+      "target": {
+        "p95": 800,
+        "p99": 1500
+      },
+      "passed": true
+    }
+  },
+  "failureSamples": [],
+  "passed": true
+}

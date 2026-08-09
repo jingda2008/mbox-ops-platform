@@ -20,6 +20,8 @@ export interface RuntimeStateProjector {
     context: PostgresTenantContext,
     previous: RuntimeState | null,
     current: RuntimeState,
+    tables?: OperationalProjectionTable[],
+    currentStateSha256?: string,
   ): Promise<void>
   healthCheck(
     client: PostgresPoolClient,
@@ -27,6 +29,16 @@ export interface RuntimeStateProjector {
     runtimeRevision: number,
   ): Promise<OperationalProjectionHealth>
 }
+
+export type OperationalProjectionTable =
+  | 'operational_tables'
+  | 'operational_table_sessions'
+  | 'operational_service_tasks'
+  | 'operational_orders'
+  | 'operational_order_items'
+  | 'operational_kds_tasks'
+  | 'operational_payment_intents'
+  | 'operational_inventory_balances'
 
 interface ProjectionSet {
   table: string
@@ -183,17 +195,35 @@ function inventoryRows(state: RuntimeState): ProjectionRow[] {
   }))
 }
 
-export function buildOperationalProjection(state: RuntimeState): ProjectionSet[] {
-  return [
-    { table: 'operational_tables', keyColumns: ['source_id'], rows: tableRows(state) },
-    { table: 'operational_table_sessions', keyColumns: ['source_id'], rows: tableSessionRows(state) },
-    { table: 'operational_service_tasks', keyColumns: ['source_id'], rows: serviceTaskRows(state) },
-    { table: 'operational_orders', keyColumns: ['source_id'], rows: orderRows(state) },
-    { table: 'operational_order_items', keyColumns: ['source_id'], rows: orderItemRows(state) },
-    { table: 'operational_kds_tasks', keyColumns: ['source_id'], rows: kdsTaskRows(state) },
-    { table: 'operational_payment_intents', keyColumns: ['source_id'], rows: paymentRows(state) },
-    { table: 'operational_inventory_balances', keyColumns: ['product_id', 'unit_code'], rows: inventoryRows(state) },
-  ]
+export function buildOperationalProjection(
+  state: RuntimeState,
+  requestedTables?: OperationalProjectionTable[],
+): ProjectionSet[] {
+  const selected = requestedTables ? new Set(requestedTables) : null
+  const include = (table: OperationalProjectionTable) => !selected || selected.has(table)
+  const projection: ProjectionSet[] = []
+  if (include('operational_tables')) projection.push({ table: 'operational_tables', keyColumns: ['source_id'], rows: tableRows(state) })
+  if (include('operational_table_sessions')) projection.push({ table: 'operational_table_sessions', keyColumns: ['source_id'], rows: tableSessionRows(state) })
+  if (include('operational_service_tasks')) projection.push({ table: 'operational_service_tasks', keyColumns: ['source_id'], rows: serviceTaskRows(state) })
+  if (include('operational_orders')) projection.push({ table: 'operational_orders', keyColumns: ['source_id'], rows: orderRows(state) })
+  if (include('operational_order_items')) projection.push({ table: 'operational_order_items', keyColumns: ['source_id'], rows: orderItemRows(state) })
+  if (include('operational_kds_tasks')) projection.push({ table: 'operational_kds_tasks', keyColumns: ['source_id'], rows: kdsTaskRows(state) })
+  if (include('operational_payment_intents')) projection.push({ table: 'operational_payment_intents', keyColumns: ['source_id'], rows: paymentRows(state) })
+  if (include('operational_inventory_balances')) projection.push({ table: 'operational_inventory_balances', keyColumns: ['product_id', 'unit_code'], rows: inventoryRows(state) })
+  return projection
+}
+
+function projectionCountsForState(state: RuntimeState) {
+  return {
+    operational_tables: state.tables.length,
+    operational_table_sessions: state.songState.tableSessions.length,
+    operational_service_tasks: state.tasks.length,
+    operational_orders: state.orderDomain.orders.length,
+    operational_order_items: state.orderDomain.orders.reduce((total, order) => total + order.items.length, 0),
+    operational_kds_tasks: state.orderDomain.kdsTasks.length,
+    operational_payment_intents: state.paymentDomain.paymentIntents.length,
+    operational_inventory_balances: state.inventoryDomain?.balances.length ?? 0,
+  }
 }
 
 function keyFor(row: ProjectionRow, keyColumns: string[]) {
@@ -257,10 +287,6 @@ async function synchronizeSet(
   }
 }
 
-function counts(projection: ProjectionSet[]) {
-  return Object.fromEntries(projection.map((set) => [set.table, set.rows.length]))
-}
-
 function projectionCountsMatch(
   expected: Record<string, number>,
   actual: Record<string, number>,
@@ -288,9 +314,12 @@ export class PostgresOperationalProjector implements RuntimeStateProjector {
     context: PostgresTenantContext,
     previous: RuntimeState | null,
     current: RuntimeState,
+    tables?: OperationalProjectionTable[],
+    currentStateSha256?: string,
   ) {
-    const before = previous ? buildOperationalProjection(previous) : []
-    const after = buildOperationalProjection(current)
+    const scopedTables = previous ? tables : undefined
+    const before = previous ? buildOperationalProjection(previous, scopedTables) : []
+    const after = buildOperationalProjection(current, scopedTables)
     // Startup backfill is a deterministic rebuild. Clearing the scoped read
     // model also removes stale rows left by an interrupted older projector.
     if (!previous) await clearProjection(client, context, after)
@@ -310,8 +339,8 @@ export class PostgresOperationalProjector implements RuntimeStateProjector {
         context.tenantId,
         context.storeId,
         current.revision,
-        runtimeStateChecksum(serializeRuntimeState(current)),
-        JSON.stringify(counts(after)),
+        currentStateSha256 ?? runtimeStateChecksum(serializeRuntimeState(current)),
+        JSON.stringify(projectionCountsForState(current)),
       ],
     )
   }

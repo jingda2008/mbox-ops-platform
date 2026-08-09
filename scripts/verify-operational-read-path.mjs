@@ -14,12 +14,14 @@ if (!databaseUrl) throw new Error('规范化读取集成验证必须配置DATABA
 const tenantId = '11111111-1111-4111-8111-111111111111'
 const storeId = '22222222-2222-4222-8222-222222222222'
 const state = createSeedState(new Date('2026-07-21T12:00:00.000Z'))
+const tenantCode = process.env.MBOX_VERIFY_TENANT_CODE?.trim() || 'ci-tenant'
+const tenantName = process.env.MBOX_VERIFY_TENANT_NAME?.trim() || 'CI Tenant'
 
 await provisionRuntime({
   databaseUrl,
   tenantId,
-  tenantCode: 'ci-tenant',
-  tenantName: 'CI Tenant',
+  tenantCode,
+  tenantName,
   storeUuid: storeId,
   storeCode: state.store.id,
   state,

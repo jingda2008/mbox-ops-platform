@@ -7,7 +7,7 @@ import type {
   DutyManagerRiskSeverity,
 } from '../src/shared/assistant-contracts.js'
 import type { RuntimeState } from '../src/shared/contracts.js'
-import { chinaBusinessDateKey, formatChinaTime } from '../src/shared/china-time.js'
+import { formatVenueTime, venueBusinessDateKey } from '../src/shared/venue-time.js'
 import { effectiveHardwareDeviceStatus } from './hardware-domain.js'
 import { isKdsTaskActiveForBusinessDate } from './operational-closure.js'
 import { tableOperationsConfig } from './table-sessions.js'
@@ -27,7 +27,7 @@ const riskRecommendations: Record<DutyManagerRisk['category'], string> = {
 }
 
 function configuredBusinessDate(state: RuntimeState, value: Date | number | string) {
-  return chinaBusinessDateKey(value, tableOperationsConfig(state).businessDayRolloverHour ?? 6)
+  return venueBusinessDateKey(value, state.store.timezone, tableOperationsConfig(state).businessDayRolloverHour ?? 6)
 }
 
 function riskId(category: DutyManagerRisk['category'], objectId: string, reason: string) {
@@ -167,6 +167,7 @@ export function collectDutyManagerRisks(state: RuntimeState, now = Date.now()): 
       candidate,
       currentBusinessDate,
       rolloverHour,
+      state.store.timezone,
     )
   ))) {
     const productionDueAt = ['queued', 'preparing'].includes(task.status) ? task.productionSla?.dueAt : null
@@ -272,7 +273,7 @@ export function collectDutyManagerRisks(state: RuntimeState, now = Date.now()): 
       severity: 'medium',
       category: 'reservation',
       title: `${reservation.customerName}的今日预约待确认`,
-      detail: `${reservation.partySize}位，计划${formatChinaTime(reservation.scheduledAt)}到店。`,
+      detail: `${reservation.partySize}位，计划${formatVenueTime(reservation.scheduledAt, state.store.timezone)}到店。`,
       tableCode: reservation.tableCode,
       ownerName: null,
       targetQuery: reservation.customerName,
@@ -740,7 +741,7 @@ export function buildDutyManagerBriefing(
     && configuredBusinessDate(state, task.createdAt) === currentBusinessDate
   ))
   const overdueFulfillmentTasks = state.orderDomain.kdsTasks.filter((task) => {
-    if (!isKdsTaskActiveForBusinessDate(state.orderDomain, task, currentBusinessDate, rolloverHour)) return false
+    if (!isKdsTaskActiveForBusinessDate(state.orderDomain, task, currentBusinessDate, rolloverHour, state.store.timezone)) return false
     const dueAt = ['queued', 'preparing'].includes(task.status) ? task.productionSla?.dueAt
       : ['completed', 'picked_up'].includes(task.status) ? task.pickupSla?.dueAt : null
     return Boolean(dueAt && Date.parse(dueAt) <= now)

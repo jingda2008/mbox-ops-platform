@@ -1,5 +1,27 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Locator } from '@playwright/test'
 import { openStaffNavigation, useStaffIdentity } from './helpers'
+
+async function expectVisibleTouchTargetsAtLeast44(
+  locator: Locator,
+) {
+  const undersized = await locator.evaluateAll(async (elements) => {
+    await new Promise((resolve) => window.setTimeout(resolve, 220))
+    return elements
+      .filter((element) => {
+        const style = window.getComputedStyle(element)
+        const rect = element.getBoundingClientRect()
+        return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0 && rect.height < 44
+      })
+      .map((element) => {
+        const rect = element.getBoundingClientRect()
+        return {
+          label: element.getAttribute('aria-label') || element.getAttribute('title') || element.textContent?.trim() || element.tagName,
+          height: Math.round(rect.height * 100) / 100,
+        }
+      })
+  })
+  expect(undersized).toEqual([])
+}
 
 test.describe.serial('跨客户端经营流转', () => {
   test('客人个性化需求由责任服务员两步处理并完成', async ({ browser }) => {
@@ -173,5 +195,93 @@ test.describe.serial('跨客户端经营流转', () => {
     const briefing = await page.request.get('/api/assistant/briefing', { headers: actorHeaders })
     expect(briefing.ok()).toBeTruthy()
     expect(JSON.stringify((await briefing.json()).risks)).not.toContain(customerName)
+  })
+
+  test('移动预约高频控件可触达且延迟失败会即时反馈并恢复状态', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    const customerName = `移动反馈${Date.now().toString().slice(-6)}`
+    const actorHeaders = {
+      'x-mbox-actor-id': 'emp-chen',
+      'x-mbox-store-id': 'mbox-lujiazui',
+    }
+    const bootstrap = await page.request.get('/api/bootstrap', { headers: actorHeaders })
+    expect(bootstrap.ok()).toBeTruthy()
+    const businessDate = String((await bootstrap.json()).store.businessDate)
+    const created = await page.request.post('/api/reservations', {
+      headers: actorHeaders,
+      data: {
+        customerReference: customerName,
+        customerName,
+        phone: '13800138000',
+        sourceCode: 'phone',
+        partySize: 2,
+        scheduledAt: `${businessDate}T21:00:00+08:00`,
+        depositRequiredAmount: 0,
+        depositCurrency: 'CNY',
+        salesEmployeeId: 'emp-chen',
+        idempotencyKey: `e2e-mobile-reservation-${crypto.randomUUID()}`,
+      },
+    })
+    expect(created.status()).toBe(201)
+    const reservationId = String((await created.json()).id)
+
+    await page.route(`**/api/reservations/${reservationId}/actions`, async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 2_000))
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        json: { message: '预约服务暂时不可用，请重试' },
+      })
+    })
+
+    await useStaffIdentity(page, 'emp-chen', '李艳')
+    await page.goto('/')
+    await openStaffNavigation(page, '预约')
+    await expect(page.getByRole('heading', { name: '预约接待台' })).toBeVisible()
+    await page.getByRole('button', { name: '未来7个营业日' }).click()
+    await page.getByLabel('搜索预约').fill(customerName)
+    const reservation = page.locator('.reservation-row').filter({ hasText: customerName })
+    await expect(reservation).toBeVisible()
+
+    await expectVisibleTouchTargetsAtLeast44(page.locator([
+      '.reservation-heading-actions button',
+      '.waitlist-heading > button',
+      '.reservation-toolbar button',
+      '.reservation-search input',
+      '.reservation-status-filter',
+      '.reservation-actions button',
+    ].join(',')))
+
+    await page.getByRole('button', { name: '登记候补' }).click()
+    await expectVisibleTouchTargetsAtLeast44(page.locator([
+      '.waitlist-create input',
+      '.waitlist-create select',
+      '.waitlist-area-picks button',
+      '.waitlist-create > button',
+    ].join(',')))
+    await page.getByRole('button', { name: '关闭', exact: true }).click()
+
+    await page.getByRole('button', { name: '新建预约' }).click()
+    await expectVisibleTouchTargetsAtLeast44(page.locator([
+      '.reservation-form-grid input',
+      '.reservation-form-grid select',
+      '.reservation-form-grid > button',
+    ].join(',')))
+    await page.getByRole('button', { name: '关闭创建' }).click()
+
+    await reservation.getByRole('button', { name: '修改人数/时间' }).click()
+    await expectVisibleTouchTargetsAtLeast44(page.locator([
+      '.reservation-operation input',
+      '.reservation-operation select',
+      '.operation-area-picks button',
+      '.operation-actions button',
+    ].join(',')))
+    await page.locator('.reservation-operation').getByRole('button', { name: '返回' }).click()
+
+    await reservation.getByRole('button', { name: '确认预约' }).click()
+    await expect(reservation.getByText('已确认', { exact: true })).toBeVisible({ timeout: 500 })
+    await expect(page.getByRole('status')).toContainText('预约服务暂时不可用，请重试；状态已恢复', { timeout: 4_000 })
+    await expect(reservation.getByText('待确认', { exact: true })).toBeVisible()
+    await expect(reservation.getByRole('button', { name: '确认预约' })).toBeEnabled()
   })
 })

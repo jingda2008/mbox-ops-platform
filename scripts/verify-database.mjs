@@ -48,6 +48,7 @@ try {
     'operational_kds_tasks',
     'operational_payment_intents',
     'operational_inventory_balances',
+    'staff_presence_leases',
   ]
   const operationalPrivilegeGaps = await client.query(`
     SELECT relation_name, privilege
@@ -60,6 +61,12 @@ try {
     throw new Error(`mbox_app缺少规范化经营表权限：${operationalPrivilegeGaps.rows
       .map((row) => `${row.relation_name}:${row.privilege}`)
       .join(', ')}`)
+  }
+  const schemaUsage = await client.query(`
+    SELECT has_schema_privilege('mbox_app', 'mbox', 'USAGE') AS allowed
+  `)
+  if (!schemaUsage.rows[0]?.allowed) {
+    throw new Error('mbox_app缺少mbox schema的USAGE权限')
   }
 
   const tableCount = await client.query(`

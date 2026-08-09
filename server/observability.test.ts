@@ -20,16 +20,42 @@ describe('observability', () => {
 
   it('protects metrics outside local and test', async () => {
     const app = Fastify()
+    let readinessCalls = 0
     await registerObservability(app, {
       runtimeMode: 'production',
       metricsToken: 'm'.repeat(32),
-      readiness: async () => ({ ready: false }),
+      readiness: async () => { readinessCalls += 1; return { ready: false } },
     })
     expect((await app.inject({ method: 'GET', url: '/api/metrics' })).statusCode).toBe(401)
     const response = await app.inject({ method: 'GET', url: '/api/metrics', headers: { authorization: `Bearer ${'m'.repeat(32)}` } })
     expect(response.statusCode).toBe(200)
     expect(response.body).toContain('mbox_api_requests_total')
     expect((await app.inject({ method: 'GET', url: '/api/ready' })).statusCode).toBe(503)
+    expect(readinessCalls).toBe(1)
+    await app.close()
+  })
+
+  it('reports bounded route histograms without leaking path identifiers', async () => {
+    const app = Fastify()
+    await registerObservability(app, { runtimeMode: 'test', readiness: async () => ({ ready: true }) })
+    app.get<{ Params: { reservationId: string } }>('/api/reservations/:reservationId', async (request) => ({ id: request.params.reservationId }))
+    await app.inject({ method: 'GET', url: '/api/reservations/reservation-secret-a' })
+    await app.inject({ method: 'GET', url: '/api/reservations/reservation-secret-b' })
+    await app.inject({ method: 'GET', url: '/api/not-a-route' })
+
+    const response = await app.inject({ method: 'GET', url: '/api/metrics' })
+    expect(response.body).toContain('mbox_api_route_requests_total{method="GET",route="/api/reservations/:reservationId",status_class="2xx"} 2')
+    expect(response.body).toContain('mbox_api_route_request_duration_ms_bucket{method="GET",route="/api/reservations/:reservationId",status_class="2xx",le="+Inf"} 2')
+    expect(response.body).toContain('route="/api/unmatched",status_class="4xx"')
+    expect(response.body).not.toContain('reservation-secret-a')
+    expect(response.body).not.toContain('reservation-secret-b')
+    expect(response.body).toContain('mbox_node_event_loop_delay_ms{quantile="0.95"}')
+    expect(response.body).toContain('mbox_database_pool_connections{state="waiting"} 0')
+    expect(response.body).toContain('mbox_database_clock_skew_ms 0')
+    expect(response.body).toContain('mbox_database_pool_acquisition_wait_ms{quantile="0.95"} 0')
+    expect(response.body).toContain('mbox_database_pool_acquisitions_total{outcome="failed"} 0')
+    expect(response.body).toContain('mbox_mutation_queue_capacity 0')
+    expect(response.body).toContain('mbox_mutation_queue_failures_total{reason="timeout"} 0')
     await app.close()
   })
 

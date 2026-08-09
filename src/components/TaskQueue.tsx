@@ -12,6 +12,7 @@ import {
   taskWorkflowLevel,
 } from './task-queue'
 import { stabilizeOperationalOrder } from './stable-operational-order'
+import { serverClockOffset, useSecondClock } from './use-second-clock'
 import type {
   Employee,
   ManagerTaskActionInput,
@@ -33,8 +34,8 @@ const statusLabels: Record<ServiceTask['status'], string> = {
   cancelled: '已取消',
 }
 
-function elapsedLabel(createdAt: string) {
-  const seconds = Math.max(0, Math.floor((Date.now() - new Date(createdAt).getTime()) / 1000))
+function elapsedLabel(createdAt: string, nowMs: number) {
+  const seconds = Math.max(0, Math.floor((nowMs - new Date(createdAt).getTime()) / 1000))
   if (seconds < 60) return `${seconds}秒`
   return `${Math.floor(seconds / 60)}分${seconds % 60}秒`
 }
@@ -62,6 +63,7 @@ interface TaskQueueProps {
   focusQuery?: string | null
   focusRequestId?: number | null
   onClearFocus?: () => void
+  serverNow: string
 }
 
 export function TaskQueue({
@@ -83,7 +85,10 @@ export function TaskQueue({
   focusQuery = null,
   focusRequestId = null,
   onClearFocus,
+  serverNow,
 }: TaskQueueProps) {
+  const clockOffset = serverClockOffset(serverNow)
+  const nowMs = useSecondClock(clockOffset)
   const [visibleCount, setVisibleCount] = useState(12)
   const [pendingTaskIds, setPendingTaskIds] = useState<Set<string>>(() => new Set())
   const [managerTaskId, setManagerTaskId] = useState<string | null>(null)
@@ -108,7 +113,7 @@ export function TaskQueue({
     .filter((task) => {
       if (!busyMode || selectedTableId || filter !== 'all') return true
       const serviceType = serviceTypeById.get(task.serviceTypeId)
-      const atRisk = Date.now() >= new Date(task.warningAt).getTime()
+      const atRisk = nowMs >= new Date(task.warningAt).getTime()
       return task.priority === 'urgent'
         || atRisk
         || task.ownerId === currentEmployeeId
@@ -252,7 +257,7 @@ export function TaskQueue({
           const serviceType = serviceTypes.find((item) => item.id === task.serviceTypeId)
           if (!table || !serviceType) return null
           const fulfillmentDelivery = serviceType.code === 'FULFILLMENT_DELIVERY'
-          const atRisk = Date.now() >= new Date(task.warningAt).getTime() && !['arrived', 'completed'].includes(task.status)
+          const atRisk = nowMs >= new Date(task.warningAt).getTime() && !['arrived', 'completed'].includes(task.status)
           const acceptMode = taskAcceptMode(task, currentEmployeeId, claimableTaskIds.has(task.id))
           const workflowLevel = taskWorkflowLevel(serviceType, task)
           const actionMode = taskQueueActionMode(task, serviceType, currentEmployeeId, claimableTaskIds.has(task.id))
@@ -290,7 +295,7 @@ export function TaskQueue({
                   </div>
                   <div className="task-meta">
                     <span><MapPin size={14} />{table.displayName}</span>
-                    <span><Clock3 size={14} />{elapsedLabel(task.createdAt)}</span>
+                    <span><Clock3 size={14} />{elapsedLabel(task.createdAt, nowMs)}</span>
                     {workflowLevel !== 'L1' && <span><UserRound size={14} />{owner?.displayName ?? '领班调度池'}</span>}
                   </div>
                 </div>

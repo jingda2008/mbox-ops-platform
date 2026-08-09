@@ -27,7 +27,7 @@ async function fixture() {
 describe('commercial operations API', () => {
   it('binds a goods code and records the actual procurement batch cost once', async () => {
     const { app, repository } = await fixture()
-    const occurredAt = new Date().toISOString()
+    const occurredAt = '2020-01-01T00:00:00.000Z'
     const binding = await app.inject({
       method: 'POST', url: '/api/commercial-ops/scan-bindings', headers: headers('emp-chen'),
       payload: {
@@ -48,10 +48,13 @@ describe('commercial operations API', () => {
 
     expect(first.statusCode, first.body).toBe(201)
     expect(first.json()).toMatchObject({ quantity: 24, unitCostAmount: 1650, totalCostAmount: 39_600 })
+    expect(first.json().receivedAt).not.toBe(occurredAt)
+    expect(Math.abs(Date.parse(first.json().receivedAt) - Date.now())).toBeLessThan(5_000)
     expect(replay.json().id).toBe(first.json().id)
     const state = await repository.read()
     expect(state.commercialOps?.procurementBatches).toHaveLength(1)
     expect(state.inventoryDomain?.movements.filter((item) => item.productId === 'product-beer')).toHaveLength(1)
+    expect(state.inventoryDomain?.movements.find((item) => item.productId === 'product-beer')?.occurredAt).not.toBe(occurredAt)
     expect(state.products.find((product) => product.id === 'product-beer')?.costAmount).toBe(1650)
     expect(state.auditEntries.some((entry) => entry.action === 'product.weighted_cost_updated.v1')).toBe(true)
     await app.close()

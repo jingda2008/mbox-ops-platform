@@ -46,6 +46,7 @@ class FakePool implements PostgresPool {
   totalCount = 4
   idleCount = 3
   waitingCount = 0
+  databaseNow = new Date(now)
 
   async connect(): Promise<PostgresPoolClient> {
     if (this.ended) throw new Error('pool ended')
@@ -114,6 +115,10 @@ class FakeClient implements PostgresPoolClient {
     if (sql.startsWith('SELECT revision, state, state_sha256 FROM mbox.runtime_states')) {
       const transaction = this.requireContext()
       return transaction.runtime ? result([structuredClone(transaction.runtime)]) : result([])
+    }
+    if (sql.startsWith('SELECT revision, clock_timestamp() AS database_now')) {
+      const transaction = this.requireContext()
+      return transaction.runtime ? result([{ revision: transaction.runtime.revision, database_now: this.pool.databaseNow.toISOString() }]) : result([])
     }
     if (sql.startsWith('SELECT revision FROM mbox.runtime_states')) {
       const transaction = this.requireContext()
@@ -405,6 +410,7 @@ describe('PostgresRepository', () => {
     const second = full.repository.mutate((state) => { state.revision += 1 })
     await expect(full.repository.mutate((state) => { state.revision += 1 }))
       .rejects.toBeInstanceOf(PostgresMutationQueueFullError)
+    expect((await full.repository.healthCheck()).mutationQueue).toMatchObject({ rejectedTotal: 1, timeoutTotal: 0, maxPending: 2 })
     release()
     await Promise.all([first, second])
 
@@ -422,7 +428,7 @@ describe('PostgresRepository', () => {
     await timedStarted
     const timedSecond = timed.repository.mutate((state) => { state.revision += 1 })
     await expect(timedSecond).rejects.toBeInstanceOf(PostgresMutationQueueTimeoutError)
-    expect((await timed.repository.healthCheck()).mutationQueue).toMatchObject({ pending: 1, active: true })
+    expect((await timed.repository.healthCheck()).mutationQueue).toMatchObject({ pending: 1, active: true, rejectedTotal: 0, timeoutTotal: 1 })
     releaseTimed()
     await timedFirst
   })
@@ -506,7 +512,20 @@ describe('PostgresRepository', () => {
       repository: 'postgres',
       healthy: true,
       revision: 1,
+      databaseClockSkewMs: expect.any(Number),
       pool: { total: 4, idle: 3, waiting: 0 },
+    })
+  })
+
+  it('fails readiness when the application and PostgreSQL clocks drift beyond the safety threshold', async () => {
+    const { pool, repository } = createRepository()
+    pool.databaseNow = new Date(now.getTime() + 6_000)
+    await repository.init()
+
+    await expect(repository.healthCheck()).resolves.toMatchObject({
+      ready: false,
+      healthy: false,
+      databaseClockSkewMs: 6_000,
     })
   })
 

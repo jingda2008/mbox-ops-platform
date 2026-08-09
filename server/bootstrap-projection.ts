@@ -9,7 +9,7 @@ import {
   effectiveDataScopeForEmployee,
   effectivePermissionIdsForEmployee,
 } from '../src/shared/staff-access.js'
-import { chinaBusinessDateKey } from '../src/shared/china-time.js'
+import { venueBusinessDateKey } from '../src/shared/venue-time.js'
 import { tableSessionBusinessDate } from './table-sessions.js'
 
 function retainCurrentOperationalData(
@@ -22,7 +22,7 @@ function retainCurrentOperationalData(
   const isCurrentTimestamp = (timestamp: string | null | undefined) => {
     if (!timestamp) return false
     try {
-      return chinaBusinessDateKey(timestamp, rolloverHour) === businessDate
+      return venueBusinessDateKey(timestamp, projected.store.timezone, rolloverHour) === businessDate
     } catch {
       return false
     }
@@ -108,7 +108,7 @@ function retainCurrentOperationalData(
   if (projected.reservationState) {
     projected.reservationState.reservations = projected.reservationState.reservations.filter((reservation) => (
       reservation.sourceCode !== 'walk_in'
-      && chinaBusinessDateKey(reservation.scheduledAt, rolloverHour) >= businessDate
+      && venueBusinessDateKey(reservation.scheduledAt, projected.store.timezone, rolloverHour) >= businessDate
     ))
     const reservationIds = new Set(projected.reservationState.reservations.map((reservation) => reservation.id))
     projected.reservationState.auditEvents = projected.reservationState.auditEvents.filter((event) => reservationIds.has(event.reservationId))

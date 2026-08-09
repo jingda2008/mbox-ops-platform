@@ -327,6 +327,24 @@ describe('service task domain', () => {
       idempotencyKey: 'task-quick-complete-semantic-retry-0002',
     })).toBe(confirmed)
     expect(state.taskEvents).toHaveLength(eventCount)
+    const notifiedColleague = task.notifiedEmployeeIds.find((employeeId) => employeeId !== 'emp-jie')
+    expect(notifiedColleague).toBeTruthy()
+    expect(applyTaskAction(state, task.id, {
+      action: 'quick_complete',
+      actorId: notifiedColleague!,
+      note: '旧页面重复提交',
+      idempotencyKey: 'task-quick-complete-stale-colleague-0003',
+    })).toBe(confirmed)
+    const unrelatedEmployee = state.employees.find((employee) => (
+      employee.id !== task.completedBy && !task.notifiedEmployeeIds.includes(employee.id)
+    ))
+    expect(unrelatedEmployee).toBeTruthy()
+    expect(() => applyTaskAction(state, task.id, {
+      action: 'quick_complete',
+      actorId: unrelatedEmployee!.id,
+      note: '',
+      idempotencyKey: 'task-quick-complete-unrelated-0004',
+    })).toThrow('任务已由其他员工完成')
   })
 
   it('records L0 guest context without creating an open employee task', () => {

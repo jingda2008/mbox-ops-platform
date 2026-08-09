@@ -19,6 +19,8 @@ RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/dist-server ./dist-server
 COPY --from=build /app/database ./database
+COPY --from=build /app/scripts/verify-database.mjs ./scripts/verify-database.mjs
+COPY --from=build /app/scripts/verify-operational-read-path.mjs ./scripts/verify-operational-read-path.mjs
 USER mbox
 ENV MBOX_JSON_STATE_PATH=/data/state.json
 VOLUME ["/data"]

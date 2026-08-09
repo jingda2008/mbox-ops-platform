@@ -55,6 +55,7 @@ import { anonymousVisitId, type GuestInsightsStore } from './guest-insights.js'
 import { queuePrintJobsForOrder } from './commercial-ops.js'
 import { addConfiguredProductToOrder } from './product-order-expansion.js'
 import { requireGiftPolicy } from './gift-policy.js'
+import { requireRequestActor } from './auth-context.js'
 
 interface CommerceApiOptions {
   guestTokenSecret: string
@@ -126,8 +127,28 @@ function requireKdsTaskActor(
   )
 
   const employee = state.employees.find((item) => item.id === actor.actorId)
-  if (!employee || employee.status !== 'active' || !employee.online || employee.paused) {
-    throw new AuthorizationError('当前员工不在可执行任务状态', operation)
+  const requestActor = requireRequestActor(request)
+  const hasVerifiedPresence = requestActor.authenticatedBy === 'signed_session'
+    && requestActor.businessDate === state.store.businessDate
+    && Number.isSafeInteger(requestActor.presenceExpiresAt)
+    && requestActor.presenceExpiresAt! > Date.now()
+  const actorIsOnline = hasVerifiedPresence || (
+    requestActor.authenticatedBy === 'local_header' && employee?.online === true
+  )
+  if (!employee || employee.status !== 'active') throw new AuthorizationError('当前员工账号已停用，不能执行出品', operation)
+  if (employee.paused) throw new AuthorizationError('当前员工已暂停接单，请先恢复接单状态', operation)
+  if (!actorIsOnline) {
+    request.log.warn({
+      actorId: requestActor.actorId,
+      authenticatedBy: requestActor.authenticatedBy,
+      actorBusinessDate: requestActor.businessDate ?? null,
+      storeBusinessDate: state.store.businessDate,
+      presenceExpiresAt: requestActor.presenceExpiresAt ?? null,
+      presenceStillValid: Number.isSafeInteger(requestActor.presenceExpiresAt)
+        && requestActor.presenceExpiresAt! > Date.now(),
+      aggregateOnline: employee.online,
+    }, 'kds actor presence rejected')
+    throw new AuthorizationError('当前设备在线会话已失效，请重新登录后继续', operation)
   }
   const activeShift = state.shiftAssignments.find((shift) => (
     shift.employeeId === actor.actorId &&
@@ -153,6 +174,20 @@ export function registerCommerceRoutes(
   repository: RuntimeRepository,
   options: CommerceApiOptions = DEFAULT_COMMERCE_API_OPTIONS,
 ) {
+  const orderCreationProjectionTables = [
+    'operational_orders',
+    'operational_order_items',
+    'operational_kds_tasks',
+    'operational_inventory_balances',
+  ] as const
+
+  const discardTransactionLocalOrderIdempotency = (state: RuntimeState, requestKey: string) => {
+    const prefix = `${requestKey}:`
+    state.orderDomain.idempotencyRecords = state.orderDomain.idempotencyRecords.filter(
+      (record) => !record.key.startsWith(prefix),
+    )
+  }
+
   app.post('/api/commerce/orders', async (request, reply) => {
     const input = cartOrderSchema.parse(request.body)
     let insightContext: { tableSessionId: string; tableCode: string; businessDate: string } | null = null
@@ -260,8 +295,19 @@ export function registerCommerceRoutes(
           idempotencyKey: input.idempotencyKey,
         },
       })
+      // The request-level audit entry and repository idempotency record are the
+      // durable replay boundary. Draft/item/submit keys are transaction-local
+      // implementation details and otherwise grow the hot aggregate per item.
+      discardTransactionLocalOrderIdempotency(state, input.idempotencyKey)
       state.revision += 1
       return submitted
+    }, {
+      idempotency: {
+        operationScope: 'commerce.cart_order.create.v1',
+        idempotencyKey: input.idempotencyKey,
+        requestFingerprint: JSON.stringify(input),
+      },
+      projectionTables: [...orderCreationProjectionTables],
     })
     if (options.guestInsights && insightContext) {
       const context = insightContext as { tableSessionId: string; tableCode: string; businessDate: string }
@@ -540,8 +586,16 @@ export function registerCommerceRoutes(
         occurredAt: now,
         details: { tableId: table.id, productId: product.id, quantity: input.quantity, idempotencyKey: input.idempotencyKey },
       })
+      discardTransactionLocalOrderIdempotency(state, input.idempotencyKey)
       state.revision += 1
       return submitted
+    }, {
+      idempotency: {
+        operationScope: 'commerce.quick_order.create.v1',
+        idempotencyKey: input.idempotencyKey,
+        requestFingerprint: JSON.stringify(input),
+      },
+      projectionTables: [...orderCreationProjectionTables],
     })
     return reply.status(201).send(order)
   })
@@ -708,7 +762,12 @@ export function registerCommerceRoutes(
       }
       if (changed) state.revision += 1
       return task
-    })
+    }, { projectionTables: [
+      'operational_service_tasks',
+      'operational_orders',
+      'operational_order_items',
+      'operational_kds_tasks',
+    ] })
   })
 
   app.post<{ Params: { taskId: string } }>('/api/commerce/kds/:taskId/manager-cancel', async (request) => {

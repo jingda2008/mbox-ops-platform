@@ -26,10 +26,10 @@ import {
   isServiceTaskOperationallyClosed,
   isSongRequestOperationallyClosed,
 } from './operational-closure.js'
-import { isCurrentBusinessDateTableSession, tableSessionBusinessDate } from './table-sessions.js'
+import { isCurrentBusinessDateTableSession, tableOperationsConfig, tableSessionBusinessDate } from './table-sessions.js'
 import { archiveServiceTasksForTableSession } from './domain.js'
 import { cancelSongRequest } from './song-domain.js'
-import { chinaBusinessDateKey } from '../src/shared/china-time.js'
+import { venueBusinessDateKey } from '../src/shared/venue-time.js'
 
 const closeSchema = z.object({
   nextBusinessDate: z.iso.date(),
@@ -182,7 +182,7 @@ export function collectBlockers(state: RuntimeState, closingActorId: string) {
     if (handover.reviewedBy !== closingActorId) {
       blockers.push({ kind: 'manager_review_session_mismatch', id: handover.id, detail: '必须由完成复核的经理会话切日' })
     }
-    if (!handoverSnapshotMatches(state.paymentDomain, handover)) {
+    if (!handoverSnapshotMatches(state.paymentDomain, handover, settlementBusinessTime(state))) {
       blockers.push({ kind: 'cashier_handover_stale', id: handover.id, detail: '复核后账务数据已变化' })
     }
   }
@@ -294,7 +294,11 @@ export function archiveBusinessDayOperations(
       summary.stockCounts += 1
     }
     for (const approval of state.inventoryDomain.approvalRequests.filter((item) => (
-      item.status === 'pending' && chinaBusinessDateKey(item.requestedAt, state.tableOperationsConfig?.businessDayRolloverHour ?? 6) === closedBusinessDate
+      item.status === 'pending' && venueBusinessDateKey(
+        item.requestedAt,
+        state.store.timezone,
+        state.tableOperationsConfig?.businessDayRolloverHour ?? 6,
+      ) === closedBusinessDate
     ))) {
       approval.status = 'rejected'
       approval.decision = 'reject'
@@ -313,7 +317,11 @@ export function archiveBusinessDayOperations(
 
   for (const command of (state.hardwareState?.commands ?? []).filter((item) => (
     item.status === 'queued'
-    && chinaBusinessDateKey(item.requestedAt, state.tableOperationsConfig?.businessDayRolloverHour ?? 6) === closedBusinessDate
+    && venueBusinessDateKey(
+      item.requestedAt,
+      state.store.timezone,
+      state.tableOperationsConfig?.businessDayRolloverHour ?? 6,
+    ) === closedBusinessDate
   ))) {
     command.status = 'failed'
     command.completedAt = occurredAt
@@ -489,11 +497,16 @@ function settlementView(state: RuntimeState, businessDate: string): PaymentSettl
     : undefined
   return {
     businessDate,
-    channels: buildSettlementChannelSummaries(state.paymentDomain, businessDate, actualAmounts),
+    channels: buildSettlementChannelSummaries(
+      state.paymentDomain,
+      businessDate,
+      actualAmounts,
+      settlementBusinessTime(state),
+    ),
     latestHandover,
     canClose: Boolean(
       latestHandover?.status === 'approved'
-      && handoverSnapshotMatches(state.paymentDomain, latestHandover),
+      && handoverSnapshotMatches(state.paymentDomain, latestHandover, settlementBusinessTime(state)),
     ),
   }
 }
@@ -554,6 +567,7 @@ export function registerBusinessDayRoutes(app: FastifyInstance, repository: Runt
         state.paymentDomain,
         request.params.businessDate,
         input.confirmedActualAmounts,
+        settlementBusinessTime(state),
       )
       const before = state.paymentDomain.idempotencyRecords.length
       const occurredAt = new Date().toISOString()
@@ -591,7 +605,11 @@ export function registerBusinessDayRoutes(app: FastifyInstance, repository: Runt
         if (request.params.businessDate > state.store.businessDate) throw new Error('不能复核未来营业日交班')
         const handover = latestCashierHandover(state.paymentDomain, request.params.businessDate)
         if (!handover || handover.id !== request.params.handoverId) throw new Error('当前待复核交班不存在')
-        if (input.decision === 'approve' && !handoverSnapshotMatches(state.paymentDomain, handover)) {
+        if (input.decision === 'approve' && !handoverSnapshotMatches(
+          state.paymentDomain,
+          handover,
+          settlementBusinessTime(state),
+        )) {
           throw new Error('交班后账务数据已变化，请收银重新提交')
         }
         const before = state.paymentDomain.idempotencyRecords.length
@@ -703,4 +721,10 @@ export function registerBusinessDayRoutes(app: FastifyInstance, repository: Runt
     const { kind: _kind, ...response } = result
     return response
   })
+}
+function settlementBusinessTime(state: RuntimeState) {
+  return {
+    timeZone: state.store.timezone,
+    rolloverHour: tableOperationsConfig(state).businessDayRolloverHour ?? 6,
+  }
 }

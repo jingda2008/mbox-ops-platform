@@ -315,7 +315,9 @@ export default function App() {
     }
     document.addEventListener('visibilitychange', resumeHeartbeat)
     window.addEventListener('pageshow', resumeHeartbeat)
-    void heartbeat()
+    // Login already establishes a 90-second lease. Let the first workspace payload
+    // render before background presence traffic competes for the mobile connection.
+    schedule(10_000)
     return () => {
       stopped = true
       document.removeEventListener('visibilitychange', resumeHeartbeat)

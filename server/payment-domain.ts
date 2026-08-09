@@ -26,6 +26,7 @@ import type {
   StartRefundCommand,
   SubmitCashierHandoverCommand,
 } from '../src/shared/payment-contracts.js'
+import { venueBusinessDateKey } from '../src/shared/venue-time.js'
 import {
   CASH_PAYMENT_CHANNEL,
   PHYSICAL_POS_CHANNEL,
@@ -879,15 +880,13 @@ export function markRefundFailed(state: PaymentDomainState, command: MarkRefundF
   )
 }
 
-function shanghaiBusinessDate(value: string) {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(new Date(value))
-  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? ''
-  return `${part('year')}-${part('month')}-${part('day')}`
+export interface SettlementBusinessTime {
+  timeZone?: string
+  rolloverHour?: number
+}
+
+function settlementBusinessDate(value: string, time: SettlementBusinessTime = {}) {
+  return venueBusinessDateKey(value, time.timeZone ?? 'Asia/Shanghai', time.rolloverHour ?? 6)
 }
 
 function settlementChannelForIntent(intent: PaymentIntent): SettlementChannel | null {
@@ -900,14 +899,15 @@ function settlementChannelForIntent(intent: PaymentIntent): SettlementChannel | 
   return null
 }
 
-function intentBusinessDate(intent: PaymentIntent) {
-  return intent.businessDate ?? shanghaiBusinessDate(intent.paidAt ?? intent.createdAt)
+function intentBusinessDate(intent: PaymentIntent, time: SettlementBusinessTime) {
+  return intent.businessDate ?? settlementBusinessDate(intent.paidAt ?? intent.createdAt, time)
 }
 
 export function buildSettlementChannelSummaries(
   state: PaymentDomainState,
   businessDate: string,
   confirmedActualAmounts: Partial<Record<SettlementChannel, number>> = {},
+  time: SettlementBusinessTime = {},
 ) {
   assertBusinessDate(businessDate)
   const totals = new Map<SettlementChannel, { system: number; pending: number }>(
@@ -916,7 +916,7 @@ export function buildSettlementChannelSummaries(
 
   for (const intent of state.paymentIntents) {
     const channel = settlementChannelForIntent(intent)
-    if (!channel || intentBusinessDate(intent) !== businessDate) continue
+    if (!channel || intentBusinessDate(intent, time) !== businessDate) continue
     if (['succeeded', 'reported_pending_reconciliation'].includes(intent.status)) {
       const total = totals.get(channel)!
       total.system = safeAdd(total.system, intent.amount, '渠道系统应收')
@@ -924,7 +924,7 @@ export function buildSettlementChannelSummaries(
   }
 
   for (const refund of state.refunds) {
-    if (refund.status !== 'succeeded' || !refund.succeededAt || shanghaiBusinessDate(refund.succeededAt) !== businessDate) continue
+    if (refund.status !== 'succeeded' || !refund.succeededAt || settlementBusinessDate(refund.succeededAt, time) !== businessDate) continue
     const intent = state.paymentIntents.find((item) => item.id === refund.paymentIntentId)
     const channel = intent && settlementChannelForIntent(intent)
     if (!channel) continue
@@ -934,7 +934,7 @@ export function buildSettlementChannelSummaries(
 
   for (const report of state.physicalPosReports) {
     const intent = state.paymentIntents.find((item) => item.id === report.paymentIntentId)
-    const reportBusinessDate = intent?.businessDate ?? shanghaiBusinessDate(report.paidAt)
+    const reportBusinessDate = intent?.businessDate ?? settlementBusinessDate(report.paidAt, time)
     if (report.status !== 'reported_pending_reconciliation' || reportBusinessDate !== businessDate) continue
     const total = totals.get('physical_pos')!
     total.pending = safeAdd(total.pending, report.amount, '物理POS待对账金额')
@@ -965,8 +965,9 @@ export function latestCashierHandover(state: PaymentDomainState, businessDate: s
 export function handoverSnapshotMatches(
   state: PaymentDomainState,
   handover: CashierHandover,
+  time: SettlementBusinessTime = {},
 ) {
-  const current = buildSettlementChannelSummaries(state, handover.businessDate)
+  const current = buildSettlementChannelSummaries(state, handover.businessDate, {}, time)
   return SETTLEMENT_CHANNELS.every((channel) => {
     const submitted = handover.channels.find((item) => item.channel === channel)
     const live = current.find((item) => item.channel === channel)!

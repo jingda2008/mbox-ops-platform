@@ -202,6 +202,10 @@ jobs:
         run: npm run db:verify
         env:
           DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
+      - name: Verify UTC instants and 06:00 venue business-day boundary
+        run: npm run db:verify:time
+        env:
+          DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
       - name: Compile database integration helpers
         run: |
           npx tsc -p tsconfig.server.json
@@ -210,6 +214,150 @@ jobs:
         run: npm run db:verify:operational
         env:
           DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
+      - name: Verify cross-instance staff presence leases
+        run: npm run db:verify:presence
+        env:
+          DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
+
+  performance:
+    if: needs.classify.outputs.scope == 'full'
+    needs: classify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mbox
+          POSTGRES_PASSWORD: mbox_test
+          POSTGRES_DB: mbox_load
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mbox -d mbox_load"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_load
+      MBOX_RUNTIME_MODE: staging
+      MBOX_REPOSITORY: postgres
+      MBOX_TENANT_ID: 11111111-1111-4111-8111-111111111111
+      MBOX_STORE_UUID: 22222222-2222-4222-8222-222222222222
+      MBOX_SESSION_SECRET: rc68-ci-session-secret-0123456789abcdef
+      MBOX_QR_SECRET: rc68-qr-secret-0123456789abcdef0123456789abcdef
+      MBOX_METRICS_TOKEN: rc68-ci-metrics-token-0123456789abcdef
+      MBOX_CORS_ORIGINS: http://127.0.0.1:5173
+      MBOX_PILOT_ACCESS_CODE: MBOX521
+      MBOX_PILOT_EMPLOYEE_PINS_JSON: '{"emp-chen":"5215","emp-qing":"5216"}'
+      MBOX_DATABASE_POOL_MAX: 10
+      MBOX_DATABASE_MUTATION_QUEUE_MAX: 100
+      MBOX_DATABASE_MUTATION_QUEUE_WAIT_MS: 15000
+      MBOX_STATE_READ_CACHE_MS: 3000
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Provision database runtime role
+        env:
+          PGPASSWORD: mbox_test
+        run: >-
+          psql postgresql://mbox@127.0.0.1:5432/mbox_load
+          --set ON_ERROR_STOP=1
+          --command "CREATE ROLE mbox_app LOGIN PASSWORD 'mbox_app_test' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS"
+      - name: Build the exact performance candidate
+        run: npm run build
+      - name: Provision isolated load database
+        run: |
+          npm run db:migrate
+          psql "${DATABASE_URL}" --set ON_ERROR_STOP=1 <<'SQL'
+          GRANT USAGE ON SCHEMA mbox TO mbox_app;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA mbox TO mbox_app;
+          GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA mbox TO mbox_app;
+          SQL
+          node scripts/prepare-rc68-load-state.mjs
+          MBOX_CONFIRM_PROVISION=PROVISION \
+          MBOX_INITIAL_STATE_PATH=.runtime/rc68-load-state.json \
+          MBOX_TENANT_CODE=ci-load \
+          MBOX_TENANT_NAME='CI Load' \
+          MBOX_STORE_CODE=mbox-lujiazui \
+            node dist-server/server/provision-runtime.js
+      - name: Start two API instances
+        run: |
+          mkdir -p artifacts/runtime-quality
+          DATABASE_URL=postgresql://mbox_app:mbox_app_test@127.0.0.1:5432/mbox_load \
+            API_PORT=18791 node dist-server/server/index.js > artifacts/runtime-quality/instance-1.log 2>&1 &
+          echo $! > artifacts/runtime-quality/instance-1.pid
+          DATABASE_URL=postgresql://mbox_app:mbox_app_test@127.0.0.1:5432/mbox_load \
+            API_PORT=18792 node dist-server/server/index.js > artifacts/runtime-quality/instance-2.log 2>&1 &
+          echo $! > artifacts/runtime-quality/instance-2.pid
+          for port in 18791 18792; do
+            for attempt in $(seq 1 120); do
+              if curl --fail --silent "http://127.0.0.1:${port}/api/ready" >/dev/null; then break; fi
+              if [ "${attempt}" = 120 ]; then
+                echo "API ${port}未在60秒内就绪" >&2
+                exit 1
+              fi
+              sleep 0.5
+            done
+          done
+      - name: Run cross-instance commercial load gate
+        env:
+          MBOX_LOAD_BASE_URLS: http://127.0.0.1:18791,http://127.0.0.1:18792
+          MBOX_LOAD_REPORT_PATH: artifacts/runtime-quality/client-observed-load.json
+        run: |
+          npm run --silent test:load:rc68
+          node -e "JSON.parse(require('fs').readFileSync('artifacts/runtime-quality/client-observed-load.json', 'utf8'))"
+      - name: Verify event loop, pool, queue and projection metrics
+        if: always()
+        env:
+          MBOX_METRICS_BASE_URLS: http://127.0.0.1:18791,http://127.0.0.1:18792
+          MBOX_METRICS_REPORT_PATH: artifacts/runtime-quality/runtime-metrics.json
+        run: npm run metrics:verify
+      - name: Stop load instances
+        if: always()
+        run: |
+          for pid_file in artifacts/runtime-quality/instance-1.pid artifacts/runtime-quality/instance-2.pid; do
+            if [ ! -f "${pid_file}" ]; then continue; fi
+            pid=$(cat "${pid_file}")
+            kill -TERM "${pid}" 2>/dev/null || true
+            for attempt in $(seq 1 100); do
+              if ! kill -0 "${pid}" 2>/dev/null; then break; fi
+              sleep 0.1
+            done
+            if kill -0 "${pid}" 2>/dev/null; then
+              echo "API进程 ${pid} 未在10秒内退出" >&2
+              kill -KILL "${pid}" 2>/dev/null || true
+              exit 1
+            fi
+          done
+      - name: Verify server-observed route SLOs from final logs
+        if: always()
+        run: >-
+          node scripts/analyze-runtime-logs.mjs
+          --input artifacts/runtime-quality/instance-1.log
+          --input artifacts/runtime-quality/instance-2.log
+          --fail-on-slo
+          > artifacts/runtime-quality/server-observed-log-analysis.json
+      - name: Seal and verify runtime evidence
+        if: always()
+        run: |
+          node -e "for (const file of ['client-observed-load.json','runtime-metrics.json','server-observed-log-analysis.json']) JSON.parse(require('fs').readFileSync('artifacts/runtime-quality/' + file, 'utf8'))"
+          (
+            cd artifacts/runtime-quality
+            sha256sum client-observed-load.json runtime-metrics.json server-observed-log-analysis.json instance-1.log instance-2.log > SHA256SUMS
+            sha256sum --check SHA256SUMS
+          )
+      - name: Upload reproducible runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-quality-${{ github.sha }}
+          path: artifacts/runtime-quality
+          retention-days: 14
 
   image:
     if: needs.classify.outputs.full == 'true' && needs.classify.outputs.release_artifact_required == 'true'
@@ -293,10 +441,49 @@ jobs:
 
   verify:
     if: always()
-    needs: [classify, docs, quality, fast_quality, ui_browser, browser, database, image]
+    needs: [classify, docs, quality, fast_quality, ui_browser, browser, database, performance, image]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v6
+      - name: Download full-scope runtime evidence
+        if: needs.classify.outputs.scope == 'full' && needs.performance.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: runtime-quality-${{ github.sha }}
+          path: artifacts/runtime-quality
+      - name: Verify downloaded runtime evidence checksums
+        if: needs.classify.outputs.scope == 'full' && needs.performance.result == 'success'
+        run: |
+          cd artifacts/runtime-quality
+          sha256sum --check SHA256SUMS
+      - name: Write commit-scoped CI quality ledger
+        env:
+          MBOX_CI_SCOPE: ${{ needs.classify.outputs.scope }}
+          MBOX_CI_RELEASE_ARTIFACT_REQUIRED: ${{ needs.classify.outputs.release_artifact_required }}
+          MBOX_CI_RESULTS_JSON: >-
+            {"docs":"${{ needs.docs.result }}","quality":"${{ needs.quality.result }}","fast_quality":"${{ needs.fast_quality.result }}","ui_browser":"${{ needs.ui_browser.result }}","browser":"${{ needs.browser.result }}","database":"${{ needs.database.result }}","performance":"${{ needs.performance.result }}","image":"${{ needs.image.result }}"}
+        run: node scripts/write-ci-quality-evidence.mjs
+      - name: Verify immutable CI quality ledger
+        run: >-
+          node scripts/verify-quality-evidence.mjs
+          --input artifacts/quality-evidence/ci-quality-evidence.json
+          --output artifacts/quality-evidence/verification-report.json
+          --require-immutable
+          --require-release-pass
+      - name: Seal CI quality ledger
+        run: |
+          cd artifacts/quality-evidence
+          sha256sum ci-quality-evidence.json verification-report.json > SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - name: Upload commit-scoped CI quality ledger
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-evidence-${{ github.sha }}
+          path: artifacts/quality-evidence
+          retention-days: 30
       - name: Enforce the selected release gate
+        if: always()
         env:
           SCOPE: ${{ needs.classify.outputs.scope }}
           CLASSIFY_RESULT: ${{ needs.classify.result }}
@@ -306,6 +493,7 @@ jobs:
           UI_BROWSER_RESULT: ${{ needs.ui_browser.result }}
           BROWSER_RESULT: ${{ needs.browser.result }}
           DATABASE_RESULT: ${{ needs.database.result }}
+          PERFORMANCE_RESULT: ${{ needs.performance.result }}
           IMAGE_RESULT: ${{ needs.image.result }}
           RELEASE_ARTIFACT_REQUIRED: ${{ needs.classify.outputs.release_artifact_required }}
         run: |
@@ -317,6 +505,7 @@ jobs:
             test "${UI_BROWSER_RESULT}" = skipped
             test "${BROWSER_RESULT}" = skipped
             test "${DATABASE_RESULT}" = skipped
+            test "${PERFORMANCE_RESULT}" = skipped
             test "${IMAGE_RESULT}" = skipped
           elif [ "${SCOPE}" = ui ]; then
             test "${DOCS_RESULT}" = skipped
@@ -325,6 +514,7 @@ jobs:
             test "${UI_BROWSER_RESULT}" = success
             test "${BROWSER_RESULT}" = skipped
             test "${DATABASE_RESULT}" = skipped
+            test "${PERFORMANCE_RESULT}" = skipped
             test "${IMAGE_RESULT}" = skipped
           elif [ "${SCOPE}" = frontend ]; then
             test "${DOCS_RESULT}" = skipped
@@ -333,6 +523,7 @@ jobs:
             test "${UI_BROWSER_RESULT}" = skipped
             test "${BROWSER_RESULT}" = success
             test "${DATABASE_RESULT}" = skipped
+            test "${PERFORMANCE_RESULT}" = skipped
             test "${IMAGE_RESULT}" = skipped
           else
             test "${SCOPE}" = full
@@ -342,6 +533,7 @@ jobs:
             test "${UI_BROWSER_RESULT}" = skipped
             test "${BROWSER_RESULT}" = success
             test "${DATABASE_RESULT}" = success
+            test "${PERFORMANCE_RESULT}" = success
             if [ "${RELEASE_ARTIFACT_REQUIRED}" = true ]; then
               test "${IMAGE_RESULT}" = success
             else

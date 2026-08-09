@@ -14,6 +14,13 @@ import { syncKdsFromFulfillmentServiceTaskAction } from './fulfillment-service.j
 import type { RuntimeRepository } from './repository.js'
 
 export function registerTaskRoutes(app: FastifyInstance, repository: RuntimeRepository) {
+  const taskProjectionTables = ['operational_service_tasks'] as const
+  const taskActionProjectionTables = [
+    'operational_service_tasks',
+    'operational_orders',
+    'operational_order_items',
+    'operational_kds_tasks',
+  ] as const
   app.post('/api/tasks', async (request, reply) => {
     const input = createTaskSchema.parse(request.body)
     const task = await repository.mutate((state) => {
@@ -22,7 +29,7 @@ export function registerTaskRoutes(app: FastifyInstance, repository: RuntimeRepo
       if (!table) throw new Error('桌台不存在')
       requireTableDataScope(request, state, table.id, 'service.task.create')
       return createServiceTask(state, { ...input, source: 'employee', requestedBy: actor.actorId })
-    })
+    }, { projectionTables: [...taskProjectionTables] })
     return reply.status(201).send(task)
   })
 
@@ -54,7 +61,7 @@ export function registerTaskRoutes(app: FastifyInstance, repository: RuntimeRepo
         effectiveRoleId: effectiveActor.roleId,
       })
       return task
-    })
+    }, { projectionTables: [...taskActionProjectionTables] })
   })
 
   app.get<{ Params: { taskId: string } }>('/api/tasks/:taskId/transfer-candidates', async (request) => {
@@ -98,6 +105,6 @@ export function registerTaskRoutes(app: FastifyInstance, repository: RuntimeRepo
         })
       }
       return task
-    })
+    }, { projectionTables: [...taskActionProjectionTables] })
   })
 }

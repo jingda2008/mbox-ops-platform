@@ -123,6 +123,8 @@ export async function createLoadEnvironmentManifest(options = {}) {
     workload: {
       phase: options.phase,
       profile: process.env.MBOX_LOAD_PROFILE ?? 'route-regression',
+      referenceTime: process.env.MBOX_LOAD_REFERENCE_TIME ?? null,
+      operationalTime: process.env.MBOX_LOAD_OPERATIONAL_TIME ?? null,
       samplesPerReadOrAction: Number(process.env.MBOX_LOAD_SAMPLES ?? 300),
       browserSamples: Number(process.env.MBOX_BROWSER_STARTUP_SAMPLES ?? 30),
       readRps: Number(process.env.MBOX_LOAD_READ_RPS ?? 1),

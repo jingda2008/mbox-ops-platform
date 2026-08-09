@@ -93,6 +93,8 @@ test('environment fingerprint covers the scripts that define and merge the workl
   assert.match(source, /diffSha256/)
   assert.match(source, /buildInputSha256/)
   assert.match(source, /changedPaths/)
+  assert.match(source, /referenceTime: process\.env\.MBOX_LOAD_REFERENCE_TIME/)
+  assert.match(source, /operationalTime: process\.env\.MBOX_LOAD_OPERATIONAL_TIME/)
 })
 
 test('all isolated phases share one Shanghai business-date load reference', async () => {
@@ -102,6 +104,29 @@ test('all isolated phases share one Shanghai business-date load reference', asyn
   assert.match(harness, /MBOX_LOAD_REFERENCE_TIME="\$load_reference_time"/)
   assert.match(suite, /suite_reference_time="\$\{MBOX_LOAD_REFERENCE_TIME:-\$\(node scripts\/load-reference-time\.mjs\)\}"/)
   assert.match(suite, /MBOX_LOAD_REFERENCE_TIME="\$suite_reference_time"/)
+})
+
+test('all isolated phases share one real execution anchor for active table visits', async () => {
+  const harness = await readFile(new URL('./run-local-rc68-load.sh', import.meta.url), 'utf8')
+  const suite = await readFile(new URL('./run-local-rc68-route-suite.sh', import.meta.url), 'utf8')
+  const preparation = await readFile(new URL('./prepare-rc68-load-state.mjs', import.meta.url), 'utf8')
+  assert.match(harness, /load_operational_time="\$\{MBOX_LOAD_OPERATIONAL_TIME:-/)
+  assert.match(harness, /MBOX_LOAD_OPERATIONAL_TIME="\$load_operational_time"/)
+  assert.match(suite, /suite_operational_time="\$\{MBOX_LOAD_OPERATIONAL_TIME:-/)
+  assert.match(suite, /MBOX_LOAD_OPERATIONAL_TIME="\$suite_operational_time"/)
+  assert.match(preparation, /operationalBusinessDate !== state\.store\.businessDate/)
+  assert.match(preparation, /operationalTime\.getTime\(\) - 42 \* 60_000/)
+})
+
+test('browser readiness failures preserve diagnostics without logging the table token', async () => {
+  const source = await readFile(new URL('./measure-browser-startup.mjs', import.meta.url), 'utf8')
+  assert.match(source, /pageState=\$\{JSON\.stringify\(pageState\)\}/)
+  assert.match(source, /window\.location\.pathname/)
+  assert.match(source, /menuCategoryCount/)
+  assert.match(source, /frozenAccountCount/)
+  assert.match(source, /guest fixture entered the frozen-account protection state/)
+  assert.match(source, /pageErrors=/)
+  assert.doesNotMatch(source, /pageState[\s\S]{0,500}window\.location\.href/)
 })
 
 test('tracked TC artifacts use repository-relative references', async () => {

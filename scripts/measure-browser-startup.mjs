@@ -129,7 +129,36 @@ try {
       await page.goto(`${baseUrl}${path}`, { waitUntil: 'domcontentloaded' })
       const domReadyAt = performance.now()
       const ready = mode === 'staff' ? page.locator('.role-home') : page.getByRole('navigation', { name: '菜单分类' })
-      await ready.waitFor({ state: 'visible', timeout: 10_000 })
+      try {
+        if (mode === 'guest') {
+          await page.waitForFunction(() => (
+            Boolean(document.querySelector('nav[aria-label="菜单分类"]'))
+            || Boolean(document.querySelector('.guest-account-frozen'))
+          ), null, { timeout: 10_000 })
+          if (await page.locator('.guest-account-frozen').count()) {
+            throw new Error('guest fixture entered the frozen-account protection state before menu readiness')
+          }
+        } else {
+          await ready.waitFor({ state: 'visible', timeout: 10_000 })
+        }
+      } catch (error) {
+        const pageState = await page.evaluate(() => ({
+          location: `${window.location.pathname}${window.location.search}`,
+          title: document.title,
+          bodyText: document.body?.innerText.replace(/\s+/g, ' ').trim().slice(0, 800) ?? '',
+          menuCategoryCount: document.querySelectorAll('nav[aria-label="菜单分类"]').length,
+          accessStateCount: document.querySelectorAll('.guest-access-state').length,
+          frozenAccountCount: document.querySelectorAll('.guest-account-frozen').length,
+        })).catch(() => null)
+        const reason = error instanceof Error ? error.message : String(error)
+        throw new Error([
+          reason,
+          `pageState=${JSON.stringify(pageState)}`,
+          `apiFailures=${JSON.stringify(responseFailures.slice(0, 3))}`,
+          `requestFailures=${JSON.stringify(requestFailures.slice(0, 3))}`,
+          `pageErrors=${JSON.stringify(pageErrors.slice(0, 3))}`,
+        ].join('; '))
+      }
       const uiReadyAt = performance.now()
       const requiredApiError = await requiredApiResponse
       if (requiredApiError) throw requiredApiError

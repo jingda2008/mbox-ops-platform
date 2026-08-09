@@ -14,6 +14,7 @@ fi
 trap 'rmdir "$load_lock" 2>/dev/null || true' EXIT
 suite_run_id="$(node -e 'process.stdout.write(require("node:crypto").randomUUID())')"
 suite_reference_time="${MBOX_LOAD_REFERENCE_TIME:-$(node scripts/load-reference-time.mjs)}"
+suite_operational_time="${MBOX_LOAD_OPERATIONAL_TIME:-$(node -e 'process.stdout.write(new Date().toISOString())')}"
 
 # The first phase builds and records an input fingerprint. Later phases reuse
 # that output only while the source fingerprint remains identical.
@@ -29,6 +30,7 @@ for index in "${!phases[@]}"; do
   MBOX_LOAD_PHASE="$phase" \
   MBOX_LOAD_RUN_ID="$suite_run_id" \
   MBOX_LOAD_REFERENCE_TIME="$suite_reference_time" \
+  MBOX_LOAD_OPERATIONAL_TIME="$suite_operational_time" \
   MBOX_LOAD_LOCK_HELD=1 \
   MBOX_LOCAL_LOAD_SKIP_BUILD="$skip_build" \
   MBOX_LOCAL_LOAD_ARTIFACT_DIR="$phase_dir" \

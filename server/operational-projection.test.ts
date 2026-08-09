@@ -62,7 +62,7 @@ describe('normalized operational projection', () => {
     expect(calls.some((call) => call.text.includes('INSERT INTO mbox.operational_orders'))).toBe(false)
     const checkpoint = calls.at(-1)
     expect(checkpoint?.text).toContain('operational_projection_checkpoints')
-    expect(JSON.parse(String(checkpoint?.values?.[4]))).toMatchObject({
+    expect(JSON.parse(String(checkpoint?.values?.[5]))).toMatchObject({
       operational_tables: after.tables.length,
       operational_service_tasks: after.tasks.length,
       operational_orders: after.orderDomain.orders.length,
@@ -133,13 +133,41 @@ describe('normalized operational projection', () => {
     }
     const actual = Object.fromEntries(Object.entries(expected).reverse())
     const { client } = fakeClient(() => ({
-      rows: [{ runtime_revision: 91, entity_counts: expected, actual_counts: actual }], rowCount: 1,
+      rows: [{ runtime_revision: 91, checksum_match: true, entity_counts: expected, actual_counts: actual }], rowCount: 1,
     }))
     const health = await new PostgresOperationalProjector().healthCheck(client, {
       tenantId: '00000000-0000-4000-8000-000000000001',
       storeId: '00000000-0000-4000-8000-000000000002',
     }, 91)
 
-    expect(health).toEqual({ ready: true, runtimeRevision: 91, projectedRevision: 91, countsMatch: true })
+    expect(health).toEqual({
+      ready: true,
+      runtimeRevision: 91,
+      projectedRevision: 91,
+      countsMatch: true,
+      checksumMatch: true,
+    })
+  })
+
+  it('fails readiness when the projection checksum differs from the runtime state', async () => {
+    const counts = {
+      operational_tables: 0,
+      operational_table_sessions: 0,
+      operational_service_tasks: 0,
+      operational_orders: 0,
+      operational_order_items: 0,
+      operational_kds_tasks: 0,
+      operational_payment_intents: 0,
+      operational_inventory_balances: 0,
+    }
+    const { client } = fakeClient(() => ({
+      rows: [{ runtime_revision: 91, checksum_match: false, entity_counts: counts, actual_counts: counts }],
+      rowCount: 1,
+    }))
+
+    await expect(new PostgresOperationalProjector().healthCheck(client, {
+      tenantId: '00000000-0000-4000-8000-000000000001',
+      storeId: '00000000-0000-4000-8000-000000000002',
+    }, 91)).resolves.toMatchObject({ ready: false, checksumMatch: false, countsMatch: true })
   })
 })

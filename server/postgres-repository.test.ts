@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createSeedState } from './seed.js'
 import {
   POSTGRES_RUNTIME_STATE_MIGRATION_SQL,
+  POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM,
   PostgresIdempotencyConflictError,
   PostgresInvalidRevisionError,
   PostgresMutationNotIdleError,
@@ -29,6 +30,7 @@ interface FakeRuntimeRow {
   revision: number
   state: string
   state_sha256: string
+  state_checksum_algorithm: string
   updated_at?: string
 }
 
@@ -109,7 +111,9 @@ class FakeClient implements PostgresPoolClient {
     }
 
     if (sql.startsWith("SELECT n.nspname || '.' || c.relname AS table_name")) {
-      return this.pool.schemaExists ? result([{ table_name: 'mbox.runtime_states' }]) : result([])
+      return this.pool.schemaExists
+        ? result([{ table_name: 'mbox.runtime_states', checksum_algorithm_ready: true }])
+        : result([])
     }
     if (sql.startsWith('BEGIN ISOLATION LEVEL')) {
       this.transaction = {
@@ -139,13 +143,17 @@ class FakeClient implements PostgresPoolClient {
         revision: Number(values[2]),
         state: String(values[3]),
         state_sha256: runtimeStateValueChecksum(JSON.parse(String(values[3]))),
+        state_checksum_algorithm: POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM,
       }
       transaction.runtimeDirty = true
       return result([], 1)
     }
     if (sql.startsWith('SELECT revision, state, state_sha256,')) {
       const transaction = this.requireContext()
-      return transaction.runtime ? result([structuredClone(transaction.runtime)]) : result([])
+      return transaction.runtime ? result([{
+        ...structuredClone(transaction.runtime),
+        checksum_valid: transaction.runtime.state_checksum_algorithm === POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM,
+      }]) : result([])
     }
     if (sql.startsWith('SELECT revision, clock_timestamp() AS database_now')) {
       const transaction = this.requireContext()
@@ -199,12 +207,14 @@ class FakeClient implements PostgresPoolClient {
         revision: Number(values[2]),
         state,
         state_sha256: runtimeStateValueChecksum(JSON.parse(state)),
+        state_checksum_algorithm: POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM,
         updated_at: this.pool.databaseNow.toISOString(),
       }
       transaction.runtimeDirty = true
       return result([{
         revision: transaction.runtime.revision,
         state_sha256: transaction.runtime.state_sha256,
+        state_checksum_algorithm: transaction.runtime.state_checksum_algorithm,
       }], 1)
     }
     if (sql.startsWith('INSERT INTO mbox.idempotency_records')) {

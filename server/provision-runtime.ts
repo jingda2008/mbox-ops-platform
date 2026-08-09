@@ -119,10 +119,13 @@ export async function provisionRuntime(options: ProvisionOptions) {
       business_day_cutoff: businessDayCutoff,
     })
     const result = await client.query(
-      `INSERT INTO mbox.runtime_states(tenant_id, store_id, revision, state, state_sha256)
+      `INSERT INTO mbox.runtime_states(
+         tenant_id, store_id, revision, state, state_sha256, state_checksum_algorithm
+       )
        VALUES (
          $1::uuid, $2::uuid, $3::bigint, $4::jsonb,
-         encode(sha256(convert_to(($4::jsonb)::text, 'UTF8')), 'hex')
+         encode(sha256(convert_to(($4::jsonb)::text, 'UTF8')), 'hex'),
+         'pg-jsonb-text-sha256-v1'
        )
        ON CONFLICT (tenant_id, store_id) DO NOTHING`,
       [options.tenantId, options.storeUuid, options.state.revision, serialized],

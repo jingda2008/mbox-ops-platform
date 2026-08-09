@@ -1,9 +1,11 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
 
 const root = resolve(import.meta.dirname, '..')
 const baselinePath = resolve(root, 'docs/comprehensive-operating-test-cases.md')
 const qualitySupplementPath = resolve(root, 'docs/tc-time-capacity-performance-1.0.0-rc.68.md')
+const reviewedBaselinePath = resolve(root, 'docs/quality/mbox-required-tc-baseline-v1.txt')
 const packageDocument = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'))
 const version = packageDocument.version
 const versionSlug = version.replaceAll('/', '-')
@@ -13,6 +15,7 @@ const blockersPath = resolve(root, `docs/tc-release-blockers-${versionSlug}.csv`
 const qualitySupplementReference = 'docs/tc-time-capacity-performance-1.0.0-rc.68.md'
 const checkMode = process.argv.includes('--check')
 const requireReleasePass = process.argv.includes('--require-release-pass')
+const printReviewedBaseline = process.argv.includes('--print-reviewed-baseline')
 const existingExecutionDate = existsSync(reportPath)
   ? readFileSync(reportPath, 'utf8').match(/^执行日期：`(\d{4}-\d{2}-\d{2})`$/m)?.[1]
   : undefined
@@ -41,21 +44,64 @@ const testCases = [...baseline.matchAll(/^\| ((?:PER|GST|SVC|ORD|PAY|MBR|SNG|INV
 if (testCases.length !== 213) throw new Error(`Expected 213 operating TCs, found ${testCases.length}`)
 
 const qualitySupplement = readFileSync(qualitySupplementPath, 'utf8')
-const qualitySupplementCases = [...qualitySupplement.matchAll(/^\| ((?:TME|CAP|RPF)-\d{3}) \| (P[0-3]) \| ([^|]+) \| ([^|]+) \| (通过|失败|未执行|待执行|阻塞|未通过) \|/gm)]
+const qualitySupplementCases = [...qualitySupplement.matchAll(/^\| ((?:TME|CAP|RPF|DAT)-\d{3}) \| (P[0-3]) \| ([^|]+) \| ([^|]+) \| (通过|失败|未执行|待执行|阻塞|未通过) \|/gm)]
   .map((match) => ({ id: match[1], priority: match[2], scenario: match[3].trim(), expected: match[4].trim(), status: match[5] }))
-if (qualitySupplementCases.length !== 49) {
-  throw new Error(`Expected 49 time/capacity/performance TCs, found ${qualitySupplementCases.length}`)
+if (qualitySupplementCases.length !== 57) {
+  throw new Error(`Expected 57 time/capacity/performance/data-integrity TCs, found ${qualitySupplementCases.length}`)
 }
 if (new Set(qualitySupplementCases.map((item) => item.id)).size !== qualitySupplementCases.length) {
   throw new Error('Time/capacity/performance TC ids must be unique')
 }
 const expectedQualitySupplementIds = [
-  ...Array.from({ length: 12 }, (_, index) => `TME-${String(index + 1).padStart(3, '0')}`),
-  ...Array.from({ length: 20 }, (_, index) => `CAP-${String(index + 1).padStart(3, '0')}`),
+  ...Array.from({ length: 13 }, (_, index) => `TME-${String(index + 1).padStart(3, '0')}`),
+  ...Array.from({ length: 21 }, (_, index) => `CAP-${String(index + 1).padStart(3, '0')}`),
   ...Array.from({ length: 17 }, (_, index) => `RPF-${String(index + 1).padStart(3, '0')}`),
+  ...Array.from({ length: 6 }, (_, index) => `DAT-${String(index + 1).padStart(3, '0')}`),
 ]
 if (qualitySupplementCases.map((item) => item.id).toSorted().join(',') !== expectedQualitySupplementIds.toSorted().join(',')) {
   throw new Error('Time/capacity/performance TC baseline was replaced or has a gap')
+}
+
+function reviewedDefinitionDigest(testCase) {
+  return createHash('sha256').update(JSON.stringify([
+    testCase.id, testCase.priority, testCase.scenario, testCase.expected,
+  ])).digest('hex')
+}
+
+function reviewedBaselineDocument(cases) {
+  return `${cases
+    .filter((testCase) => ['P0', 'P1'].includes(testCase.priority))
+    .map((testCase) => `${testCase.id}|${testCase.priority}|${reviewedDefinitionDigest(testCase)}`)
+    .join('\n')}\n`
+}
+
+const allBaselineCases = [...testCases, ...qualitySupplementCases]
+if (printReviewedBaseline) {
+  process.stdout.write(reviewedBaselineDocument(allBaselineCases))
+  process.exit(0)
+}
+if (!existsSync(reviewedBaselinePath)) throw new Error(`Reviewed TC baseline is missing: ${reviewedBaselinePath}`)
+const reviewedEntries = readFileSync(reviewedBaselinePath, 'utf8').split(/\r?\n/)
+  .map((line) => line.trim())
+  .filter((line) => line && !line.startsWith('#'))
+  .map((line) => {
+    const [id, priority, digest, ...extra] = line.split('|')
+    if (!id || !['P0', 'P1'].includes(priority) || !/^[0-9a-f]{64}$/.test(digest ?? '') || extra.length) {
+      throw new Error(`Invalid reviewed TC baseline entry: ${line}`)
+    }
+    return { id, priority, digest }
+  })
+const reviewedById = new Map(reviewedEntries.map((entry) => [entry.id, entry]))
+if (reviewedById.size !== reviewedEntries.length) throw new Error('Reviewed TC baseline contains duplicate IDs')
+const currentCriticalCases = allBaselineCases.filter((testCase) => ['P0', 'P1'].includes(testCase.priority))
+if (reviewedEntries.length !== currentCriticalCases.length) {
+  throw new Error(`Reviewed TC baseline count changed (${reviewedEntries.length} != ${currentCriticalCases.length})`)
+}
+for (const testCase of currentCriticalCases) {
+  const reviewed = reviewedById.get(testCase.id)
+  if (!reviewed) throw new Error(`Required reviewed TC ${testCase.id} is missing`)
+  if (reviewed.priority !== testCase.priority) throw new Error(`Required reviewed TC ${testCase.id} priority changed`)
+  if (reviewed.digest !== reviewedDefinitionDigest(testCase)) throw new Error(`Required reviewed TC ${testCase.id} definition changed`)
 }
 
 function ids(prefix, ranges) {
@@ -299,7 +345,7 @@ const report = `# M-BOX 213条经营TC执行报告
 
 本轮基线共 **213条**，没有删除或放宽原始预期。下表保留既有经营验收状态，但**不把历史通过自动等同于\`${version}\`当前候选已经重新执行**：
 
-另有 **${qualitySupplementCases.length}条** \`TME/CAP/RPF\` 增量专项TC；其失败、未通过、未执行、待执行或阻塞项同样阻止商业生产发布，状态以专项文件和不可变运行证据为准。
+另有 **${qualitySupplementCases.length}条** \`TME/CAP/RPF/DAT\` 增量专项TC；其失败、未通过、未执行、待执行或阻塞项同样阻止商业生产发布，状态以专项文件和不可变运行证据为准。
 
 | 状态 | 数量 | 判定口径 |
 |---|---:|---|

@@ -1,6 +1,8 @@
 import type { RuntimeState } from '../src/shared/contracts.js'
 import { migrateRuntimeState } from './runtime-state-migrations.js'
 import {
+  APP_CANONICAL_STATE_CHECKSUM_ALGORITHM,
+  POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM,
   runtimeStateValueChecksum,
   type PostgresPool,
   type PostgresPoolClient,
@@ -28,6 +30,9 @@ interface OperationalReadRow extends Record<string, unknown> {
   runtime_revision: number | string
   aggregate_state: RuntimeState | string
   state_sha256: string
+  state_checksum_algorithm: string
+  checkpoint_state_sha256: string
+  checkpoint_checksum_algorithm: string
   checksum_valid?: boolean
   tables: unknown
   table_sessions: unknown
@@ -100,6 +105,33 @@ function snapshotFromRow(row: OperationalReadRow, expectedRevision: number): Ope
   }
 }
 
+function parseVerifiedAggregateState(row: OperationalReadRow, revision: number): RuntimeState {
+  let parsed: RuntimeState
+  try {
+    parsed = typeof row.aggregate_state === 'string'
+      ? JSON.parse(row.aggregate_state) as RuntimeState
+      : structuredClone(row.aggregate_state)
+  } catch (error) {
+    throw new OperationalReadStoreError(`Aggregate state JSON is invalid: ${String(error)}`)
+  }
+  if (!parsed || typeof parsed !== 'object' || parsed.revision !== revision) {
+    throw new OperationalReadStoreError('Aggregate state does not match the operational snapshot revision')
+  }
+  const checksumAlgorithm = row.state_checksum_algorithm
+  const checksumValid = checksumAlgorithm === POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM
+    ? row.checksum_valid === true
+    : checksumAlgorithm === APP_CANONICAL_STATE_CHECKSUM_ALGORITHM
+      && runtimeStateValueChecksum(parsed) === row.state_sha256.trim()
+  if (!checksumValid) {
+    throw new OperationalReadStoreError('Aggregate state checksum does not match the operational snapshot')
+  }
+  if (row.checkpoint_state_sha256.trim() !== row.state_sha256.trim()
+    || row.checkpoint_checksum_algorithm !== checksumAlgorithm) {
+    throw new OperationalReadStoreError('Projection checkpoint checksum does not match the runtime state')
+  }
+  return parsed
+}
+
 export function hydrateRuntimeStateFromOperationalTables(
   aggregate: RuntimeState,
   snapshot: OperationalReadSnapshot,
@@ -163,7 +195,11 @@ export async function resolveOperationalRuntimeState(options: {
 
 const READ_OPERATIONAL_SNAPSHOT_SQL = `
   SELECT checkpoint.runtime_revision, runtime.state AS aggregate_state, runtime.state_sha256,
-    runtime.state_sha256 = encode(sha256(convert_to(runtime.state::text, 'UTF8')), 'hex') AS checksum_valid,
+    runtime.state_checksum_algorithm,
+    checkpoint.state_sha256 AS checkpoint_state_sha256,
+    checkpoint.state_checksum_algorithm AS checkpoint_checksum_algorithm,
+    runtime.state_checksum_algorithm = 'pg-jsonb-text-sha256-v1'
+      AND runtime.state_sha256 = encode(sha256(convert_to(runtime.state::text, 'UTF8')), 'hex') AS checksum_valid,
     COALESCE((
       SELECT jsonb_agg(payload ORDER BY table_code)
       FROM mbox.operational_tables
@@ -233,7 +269,9 @@ export class PostgresOperationalReadStore {
   async read(expectedRevision: number, businessDate: string): Promise<OperationalReadSnapshot> {
     return this.withReadTransaction(async (client) => {
       const row = await this.readRow(client, businessDate)
-      return snapshotFromRow(row, expectedRevision)
+      const snapshot = snapshotFromRow(row, expectedRevision)
+      parseVerifiedAggregateState(row, expectedRevision)
+      return snapshot
     })
   }
 
@@ -242,20 +280,7 @@ export class PostgresOperationalReadStore {
       const row = await this.readRow(client, null)
       const revision = parseRevision(row.runtime_revision)
       const snapshot = snapshotFromRow(row, revision)
-      let parsed: RuntimeState
-      try {
-        parsed = typeof row.aggregate_state === 'string'
-          ? JSON.parse(row.aggregate_state) as RuntimeState
-          : structuredClone(row.aggregate_state)
-      } catch (error) {
-        throw new OperationalReadStoreError(`Aggregate state JSON is invalid: ${String(error)}`)
-      }
-      if (!parsed || typeof parsed !== 'object' || parsed.revision !== revision) {
-        throw new OperationalReadStoreError('Aggregate state does not match the operational snapshot revision')
-      }
-      if (row.checksum_valid !== true && runtimeStateValueChecksum(parsed) !== row.state_sha256.trim()) {
-        throw new OperationalReadStoreError('Aggregate state checksum does not match the operational snapshot')
-      }
+      const parsed = parseVerifiedAggregateState(row, revision)
       const state = migrateRuntimeState(parsed)
       return {
         state: hydratePrivateRuntimeState(state, snapshot),

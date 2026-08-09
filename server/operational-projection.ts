@@ -1,6 +1,11 @@
 import type { RuntimeState } from '../src/shared/contracts.js'
-import type { PostgresPoolClient, PostgresTenantContext } from './postgres-repository.js'
-import { runtimeStateValueChecksum } from './postgres-repository.js'
+import {
+  APP_CANONICAL_STATE_CHECKSUM_ALGORITHM,
+  runtimeStateValueChecksum,
+  type PostgresPoolClient,
+  type PostgresTenantContext,
+  type RuntimeStateChecksumAlgorithm,
+} from './postgres-repository.js'
 import { tableSessionBusinessDate } from './table-sessions.js'
 
 type ProjectionValue = string | number | null
@@ -11,6 +16,7 @@ export interface OperationalProjectionHealth {
   runtimeRevision: number | null
   projectedRevision: number | null
   countsMatch: boolean
+  checksumMatch: boolean
   error?: string
 }
 
@@ -22,6 +28,7 @@ export interface RuntimeStateProjector {
     current: RuntimeState,
     tables?: OperationalProjectionTable[],
     currentStateSha256?: string,
+    currentStateChecksumAlgorithm?: RuntimeStateChecksumAlgorithm,
     entityIds?: OperationalProjectionEntityIds,
   ): Promise<void>
   healthCheck(
@@ -334,6 +341,7 @@ export class PostgresOperationalProjector implements RuntimeStateProjector {
     current: RuntimeState,
     tables?: OperationalProjectionTable[],
     currentStateSha256?: string,
+    currentStateChecksumAlgorithm?: RuntimeStateChecksumAlgorithm,
     entityIds?: OperationalProjectionEntityIds,
   ) {
     const scopedTables = previous ? tables : undefined
@@ -348,11 +356,12 @@ export class PostgresOperationalProjector implements RuntimeStateProjector {
     }
     await client.query(
       `INSERT INTO mbox.operational_projection_checkpoints (
-         tenant_id, store_id, runtime_revision, state_sha256, entity_counts, projected_at
-       ) VALUES ($1::uuid, $2::uuid, $3::bigint, $4, $5::jsonb, clock_timestamp())
+         tenant_id, store_id, runtime_revision, state_sha256, state_checksum_algorithm, entity_counts, projected_at
+       ) VALUES ($1::uuid, $2::uuid, $3::bigint, $4, $5, $6::jsonb, clock_timestamp())
        ON CONFLICT (tenant_id, store_id) DO UPDATE SET
          runtime_revision = EXCLUDED.runtime_revision,
          state_sha256 = EXCLUDED.state_sha256,
+         state_checksum_algorithm = EXCLUDED.state_checksum_algorithm,
          entity_counts = EXCLUDED.entity_counts,
          projected_at = clock_timestamp()`,
       [
@@ -360,6 +369,7 @@ export class PostgresOperationalProjector implements RuntimeStateProjector {
         context.storeId,
         current.revision,
         currentStateSha256 ?? runtimeStateValueChecksum(current),
+        currentStateChecksumAlgorithm ?? APP_CANONICAL_STATE_CHECKSUM_ALGORITHM,
         JSON.stringify(projectionCountsForState(current)),
       ],
     )
@@ -373,10 +383,14 @@ export class PostgresOperationalProjector implements RuntimeStateProjector {
     try {
       const result = await client.query<{
         runtime_revision: number | string
+        checksum_match: boolean
         entity_counts: Record<string, number> | string
         actual_counts: Record<string, number> | string
       }>(`
-        SELECT checkpoint.runtime_revision, checkpoint.entity_counts,
+        SELECT checkpoint.runtime_revision,
+          checkpoint.state_sha256 = runtime.state_sha256
+            AND checkpoint.state_checksum_algorithm = runtime.state_checksum_algorithm AS checksum_match,
+          checkpoint.entity_counts,
           jsonb_build_object(
             'operational_tables', (SELECT count(*) FROM mbox.operational_tables WHERE tenant_id = $1::uuid AND store_id = $2::uuid),
             'operational_table_sessions', (SELECT count(*) FROM mbox.operational_table_sessions WHERE tenant_id = $1::uuid AND store_id = $2::uuid),
@@ -388,19 +402,32 @@ export class PostgresOperationalProjector implements RuntimeStateProjector {
             'operational_inventory_balances', (SELECT count(*) FROM mbox.operational_inventory_balances WHERE tenant_id = $1::uuid AND store_id = $2::uuid)
           ) AS actual_counts
         FROM mbox.operational_projection_checkpoints checkpoint
+        JOIN mbox.runtime_states runtime
+          ON runtime.tenant_id = checkpoint.tenant_id
+         AND runtime.store_id = checkpoint.store_id
+         AND runtime.revision = checkpoint.runtime_revision
         WHERE checkpoint.tenant_id = $1::uuid AND checkpoint.store_id = $2::uuid
       `, [context.tenantId, context.storeId])
       const row = result.rows[0]
-      if (!row) return { ready: false, runtimeRevision, projectedRevision: null, countsMatch: false, error: 'projection checkpoint missing' }
+      if (!row) return {
+        ready: false,
+        runtimeRevision,
+        projectedRevision: null,
+        countsMatch: false,
+        checksumMatch: false,
+        error: 'projection checkpoint missing',
+      }
       const projectedRevision = Number(row.runtime_revision)
       const expected = typeof row.entity_counts === 'string' ? JSON.parse(row.entity_counts) : row.entity_counts
       const actual = typeof row.actual_counts === 'string' ? JSON.parse(row.actual_counts) : row.actual_counts
       const countsMatch = projectionCountsMatch(expected, actual)
+      const checksumMatch = row.checksum_match === true
       return {
-        ready: projectedRevision === runtimeRevision && countsMatch,
+        ready: projectedRevision === runtimeRevision && countsMatch && checksumMatch,
         runtimeRevision,
         projectedRevision,
         countsMatch,
+        checksumMatch,
       }
     } catch (error) {
       return {
@@ -408,6 +435,7 @@ export class PostgresOperationalProjector implements RuntimeStateProjector {
         runtimeRevision,
         projectedRevision: null,
         countsMatch: false,
+        checksumMatch: false,
         error: error instanceof Error ? error.message : String(error),
       }
     }

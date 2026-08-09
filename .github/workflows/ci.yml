@@ -202,6 +202,10 @@ jobs:
         run: npm run db:verify
         env:
           DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
+      - name: Verify checksum migration from revision 023 with a non-superuser owner
+        run: npm run db:verify:checksum-upgrade
+        env:
+          DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
       - name: Verify UTC instants and 06:00 venue business-day boundary
         run: npm run db:verify:time
         env:

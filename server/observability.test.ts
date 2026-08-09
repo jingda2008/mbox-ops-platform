@@ -35,6 +35,24 @@ describe('observability', () => {
     await app.close()
   })
 
+  it('does not reuse a readiness cache for mutable runtime metrics', async () => {
+    const app = Fastify()
+    let readinessCalls = 0
+    await registerObservability(app, {
+      runtimeMode: 'test',
+      readiness: async () => ({
+        ready: true,
+        details: { mutationServiceSamples: ++readinessCalls },
+      }),
+    })
+
+    expect((await app.inject('/api/ready')).json()).toMatchObject({ mutationServiceSamples: 1 })
+    const metrics = await app.inject('/api/metrics')
+    expect(metrics.body).toContain('mbox_mutation_service_samples 2')
+    expect(readinessCalls).toBe(2)
+    await app.close()
+  })
+
   it('resets an isolated measurement window outside production only', async () => {
     const app = Fastify()
     let runtimeResets = 0

@@ -16,11 +16,15 @@ function validEvidence() {
     requiredGateIds: ['functional', 'api-read'],
     testRuns: [{
       id: 'functional', kind: 'functional', required: true, status: 'pass',
+      artifactStatus: 'available',
+      validityStatus: 'valid',
       total: 10, passed: 10, failed: 0, blocked: 0, notRun: 0,
       evidence: ['artifact:functional-123'],
     }],
     performance: [{
       id: 'api-read', required: true, conclusionLevel: 'regression', status: 'pass', samples: 300, successful: 300, failures: 0,
+      artifactStatus: 'available',
+      validityStatus: 'valid',
       p50Ms: 80, p95Ms: 120, p99Ms: 180, maxMs: 220,
       limits: { minSamples: 300, p95Ms: 200, p99Ms: 300 },
       environmentRef: 'github-actions:123',
@@ -129,6 +133,8 @@ test('rejects a green performance gate without workload details', () => {
   const evidence = validEvidence()
   evidence.testRuns.push({
     id: 'performance', kind: 'performance-gate', required: true, status: 'pass',
+    artifactStatus: 'available',
+    validityStatus: 'valid',
     total: 1, passed: 1, failed: 0, blocked: 0, notRun: 0,
     evidence: ['github-job:performance:123'],
   })
@@ -210,6 +216,26 @@ test('accepts a separately identified representative peak conclusion', () => {
   const document = validEvidence()
   document.performance[0].conclusionLevel = 'representative_peak'
   assert.equal(validateQualityEvidence(document).passed, true)
+})
+
+test('release rejects missing or unverified artifacts independently from execution status', () => {
+  const policy = validPolicy()
+  const evidence = bindPolicy(validEvidence(), policy)
+  evidence.testRuns[0].artifactStatus = 'missing'
+  const report = validateQualityEvidence(evidence, { requireReleasePass: true, policy })
+  assert.equal(report.passed, false)
+  assert.match(report.failures.join('\n'), /available evidence artifacts/)
+})
+
+test('invalid observability or source drift is machine-readable and cannot release', () => {
+  const policy = validPolicy()
+  const evidence = bindPolicy(validEvidence(), policy)
+  evidence.performance[0].status = 'blocked'
+  evidence.performance[0].validityStatus = 'invalid'
+  evidence.performance[0].invalidReason = 'source_changed_during_measurement'
+  const report = validateQualityEvidence(evidence, { requireReleasePass: true, policy })
+  assert.equal(report.passed, false)
+  assert.match(report.failures.join('\n'), /valid execution evidence/)
 })
 
 test('binds release evidence to the exact policy identity and digest', () => {

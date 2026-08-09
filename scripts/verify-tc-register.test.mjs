@@ -46,6 +46,31 @@ test('release mode cannot omit baseline, candidate commit or evidence age', () =
   assert.match(report.failures.join('\n'), /requires maximumEvidenceAgeDays/)
 })
 
+test('release mode rejects ID-only and priority-only baselines', () => {
+  for (const baseline of [[{ tcId: 'TC-001' }], [{ tcId: 'TC-001', priority: 'P1' }]]) {
+    const report = validateTcRegister([row()], headers, {
+      requireReleasePass: true,
+      requiredTcBaseline: baseline,
+      expectedCommitSha: 'a'.repeat(40),
+      maximumEvidenceAgeDays: 7,
+    })
+    assert.equal(report.passed, false)
+    assert.match(report.failures.join('\n'), /original priority and definition SHA256/)
+  }
+})
+
+test('release mode rejects a baseline that downgrades required entries to P2/P3', () => {
+  const candidate = row({ priority: 'P2', status: 'not_run', artifact_status: 'not_applicable' })
+  const report = validateTcRegister([candidate], headers, {
+    requireReleasePass: true,
+    requiredTcBaseline: [{ tcId: 'TC-001', priority: 'P2', definitionSha256: tcDefinitionDigest(candidate) }],
+    expectedCommitSha: 'a'.repeat(40),
+    maximumEvidenceAgeDays: 7,
+  })
+  assert.equal(report.passed, false)
+  assert.match(report.failures.join('\n'), /only P0\/P1 entries/)
+})
+
 test('rejects formula injection, unassigned execution and loose timestamps', () => {
   const report = validateTcRegister([
     row({ tc_id: 'TC-FORMULA', steps: '=HYPERLINK("https://example.invalid")' }),
@@ -110,6 +135,16 @@ test('required baseline prevents priority downgrades and definition drift', () =
   })
   assert.equal(redefined.passed, false)
   assert.match(redefined.failures.join('\n'), /definition does not match/)
+})
+
+test('required baseline prevents changing an automated TC into a manual TC', () => {
+  const original = row({ automation_level: 'automated' })
+  const baseline = [{ tcId: 'TC-001', priority: 'P1', definitionSha256: tcDefinitionDigest(original) }]
+  const report = validateTcRegister([row({ automation_level: 'manual', ci_run_id: '' })], headers, {
+    requiredTcBaseline: baseline,
+  })
+  assert.equal(report.passed, false)
+  assert.match(report.failures.join('\n'), /definition does not match/)
 })
 
 test('rejects untraceable failures, future execution and automated passes without a CI run', () => {

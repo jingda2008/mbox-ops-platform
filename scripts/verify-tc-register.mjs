@@ -33,7 +33,10 @@ export function parseRequiredTcBaseline(input) {
 }
 
 export function tcDefinitionDigest(row) {
-  const fields = ['requirement_id', 'priority', 'risk_area', 'role', 'preconditions', 'steps', 'expected_result']
+  const fields = [
+    'requirement_id', 'priority', 'risk_area', 'role', 'preconditions', 'steps',
+    'expected_result', 'automation_level',
+  ]
   const canonical = fields.map((field) => [field, String(row[field] ?? '').trim()])
   return createHash('sha256').update(JSON.stringify(canonical)).digest('hex')
 }
@@ -50,6 +53,12 @@ export function validateTcRegister(rows, headers = [], options = {}) {
   const maximumEvidenceAgeDays = options.maximumEvidenceAgeDays
   const nowMs = options.nowMs ?? Date.now()
   if (options.requireReleasePass && requiredTcIds.size === 0) failures.push('release mode requires a non-empty required TC baseline')
+  if (options.requireReleasePass && requiredTcBaseline.some((entry) => !entry.priority || !entry.definitionSha256)) {
+    failures.push('release mode requires every baseline entry to include original priority and definition SHA256')
+  }
+  if (options.requireReleasePass && requiredTcBaseline.some((entry) => !['P0', 'P1'].includes(entry.priority))) {
+    failures.push('release mode required TC baseline may contain only P0/P1 entries')
+  }
   if (options.requireReleasePass && !expectedCommitSha) failures.push('release mode requires expectedCommitSha')
   if (options.requireReleasePass && !Number.isFinite(maximumEvidenceAgeDays)) failures.push('release mode requires maximumEvidenceAgeDays')
   if (!Number.isSafeInteger(minimumTcCount) || minimumTcCount < 1) failures.push('minimumTcCount must be a positive integer')

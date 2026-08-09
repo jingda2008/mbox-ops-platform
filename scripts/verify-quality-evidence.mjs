@@ -36,12 +36,38 @@ function validateEvidenceReferences(references, path, failures) {
   })
 }
 
+function validateArtifactStatus(record, path, failures) {
+  if (!['available', 'missing', 'unverified', 'not_applicable'].includes(record?.artifactStatus)) {
+    failures.push(`${path}.artifactStatus is invalid`)
+    return
+  }
+  if (record.status === 'not_run' && record.artifactStatus !== 'not_applicable') {
+    failures.push(`${path} not_run evidence must use artifactStatus=not_applicable`)
+  }
+  if (record.status !== 'not_run' && record.artifactStatus === 'not_applicable') {
+    failures.push(`${path} executed evidence cannot use artifactStatus=not_applicable`)
+  }
+}
+
+function validateValidity(record, path, failures) {
+  if (!['valid', 'invalid'].includes(record?.validityStatus)) {
+    failures.push(`${path}.validityStatus is invalid`)
+    return
+  }
+  if (record.validityStatus === 'invalid') {
+    if (!String(record.invalidReason ?? '').trim()) failures.push(`${path}.invalidReason is required when validityStatus=invalid`)
+    if (record.status === 'pass') failures.push(`${path} invalid evidence cannot pass`)
+  } else if (String(record.invalidReason ?? '').trim()) {
+    failures.push(`${path}.invalidReason must be empty when validityStatus=valid`)
+  }
+}
+
 function validateTestRun(run, index, failures) {
   const path = `testRuns[${index}]`
   requireText(failures, run?.id, `${path}.id`)
   requireText(failures, run?.kind, `${path}.kind`)
   if (typeof run?.required !== 'boolean') failures.push(`${path}.required must be boolean`)
-  if (!['pass', 'fail', 'blocked', 'not_run', 'skipped'].includes(run?.status)) {
+  if (!['pass', 'fail', 'blocked', 'not_run'].includes(run?.status)) {
     failures.push(`${path}.status is invalid`)
   }
   for (const field of ['total', 'passed', 'failed', 'blocked', 'notRun']) {
@@ -59,6 +85,8 @@ function validateTestRun(run, index, failures) {
   if (run?.status === 'blocked' && run.blocked === 0) failures.push(`${path} claims blocked but blocked count is zero`)
   if (run?.status === 'not_run' && run.notRun === 0) failures.push(`${path} claims not_run but notRun count is zero`)
   validateEvidenceReferences(run?.evidence, `${path}.evidence`, failures)
+  validateArtifactStatus(run, path, failures)
+  validateValidity(run, path, failures)
 }
 
 function validatePerformance(metric, index, failures) {
@@ -92,7 +120,7 @@ function validatePerformance(metric, index, failures) {
   for (const field of ['p95Ms', 'p99Ms']) {
     if (!Number.isFinite(limits?.[field]) || limits[field] <= 0) failures.push(`${path}.limits.${field} must be positive`)
   }
-  if (!['pass', 'fail', 'blocked', 'not_run', 'skipped'].includes(metric?.status)) {
+  if (!['pass', 'fail', 'blocked', 'not_run'].includes(metric?.status)) {
     failures.push(`${path}.status is invalid`)
   }
   if (metric?.status === 'pass') {
@@ -130,6 +158,8 @@ function validatePerformance(metric, index, failures) {
     }
   }
   validateEvidenceReferences(metric?.evidence, `${path}.evidence`, failures)
+  validateArtifactStatus(metric, path, failures)
+  validateValidity(metric, path, failures)
 }
 
 function validatePolicy(document, policy, failures) {
@@ -257,6 +287,12 @@ export function validateQualityEvidence(document, options = {}) {
   }
   if (options.requireReleasePass && document?.decision !== 'ALLOW') failures.push('release-pass verification requires decision ALLOW')
   if (options.requireReleasePass && requiredGateFailure) failures.push('release-pass verification requires every required gate to pass')
+  if (options.requireReleasePass && gateRecords.some((gate) => gate.required && gate.artifactStatus !== 'available')) {
+    failures.push('release-pass verification requires available evidence artifacts for every required gate')
+  }
+  if (options.requireReleasePass && gateRecords.some((gate) => gate.required && gate.validityStatus !== 'valid')) {
+    failures.push('release-pass verification requires valid execution evidence for every required gate')
+  }
   if (options.requireReleasePass || options.requireDeployment) validatePolicy(document, options.policy, failures)
 
   if (options.requireDeployment) {

@@ -119,6 +119,14 @@ KDS阶段的聚合状态由约80KB增长到约3.29MB，倍率约41倍，但约91
 
 下一候选保持JSONB数据与SHA-256完整性语义不变，把规范化校验改由PostgreSQL内置`sha256`对JSONB规范文本计算；应用只做一次写入序列化，旧应用规范化校验继续兼容到首次成功写入。真实PostgreSQL 16、双API实例的定向复测中，KDS完成300/300成功，客户端P95/P99为232.1/243.6ms，序列化P95由上一轮本地41.9/45.3ms降至9.5/9.3ms，事件循环P99为78.9/74.6ms，队列P95约0.02ms，连接获取P95最高0.13ms。员工API启动旅程120/120、P95 101.7ms，员工新浏览器上下文首屏绘制P95 93.9ms；客户读取1812次无失败，客户会话P95 24.5ms，客户首屏绘制P95 60.2ms。以上绑定当前源码指纹但仍是未提交本地证据，必须由新提交CI复现后才能关闭`CAP-001/CAP-002`。
 
+随后一次提交级运行只记录到13个mutation样本和1个KDS来源样本。复查原始脚本后确认，这不是产品吞吐结论：压测造数固定在`2026-08-09T12:00Z`，实际运行已跨过下一个北京时间06:00营业日边界，应用启动时正确执行自动切日并清空测试桌次；KDS阶段因“权威桌台目录只有0张可执行负载的营业桌台”在正式测量前中止。13/1只是准备和启动动作，不能当成300次KDS性能样本。候选测试工具现按当前M-BOX营业日动态生成20:00参考时间，并让七个阶段共享同一值；同时增加目标发起、客户端成功、路由、mutation、数据库修订、审计和副作用的样本守恒门禁。该轮应归类为测试夹具日期漂移，而不是产品性能失败；修复后仍必须按原负载完整重跑，不能直接转绿。
+
+修复营业日夹具后的首轮本地诊断已实际完成300/300次KDS完成动作，0个HTTP/流程失败，客户端P95/P99为231.6/243.6ms，服务端路由P95/P99为229.6/241.8ms，实际发起率2次/秒、漏发0、调度P95为2.6ms。由于运行中继续修改了文档和测试脚本，源码指纹从`ee1c4e...`变为`761a41...`，门禁正确标记`source_changed_during_measurement`并跳过运行指标裁决；这轮只能证明日期修复后测量阶段能够执行，不能作为当前工作树或发布性能证据。
+
+独立复审随后发现校验算法迁移本身仍有两个发布风险：强制RLS可能让非超级迁移账号的全表分类静默影响0行，以及迁移期间旧蓝绿实例/回滚版本不知道新算法列。迁移候选现临时取消三张目标表的`FORCE RLS`完成分类后立即恢复，并保留一轮兼容触发器，按实际摘要自动识别旧应用算法或PostgreSQL算法；无法根据历史摘要可靠反推的日志明确标记`unknown-legacy-sha256-v0`，不制造虚假审计分类。新的023到024升级测试使用非超级、无`BYPASSRLS`的表所有者，覆盖旧应用摘要、混合历史日志、旧实例继续写、checkpoint同步和新版本写入后的旧版本回滚，本地已通过。真实投影回滚测试也改为先完成规范化表及checkpoint写入再注入异常，随后核对运行态、journal、checkpoint和规范化revision全部回滚。
+
+质量门禁同时增加了受`CODEOWNERS`保护的M-BOX P0/P1定义基线，锁定263条关键经营及专项TC的原始优先级和定义摘要；`release:quality-gate`继续通过现有构建器强制核对该基线。通用账本新增`validityStatus`，将源码漂移、观测不守恒与窗口污染机器化表达为`invalid`。标签发布流程还必须从指定成功CI运行下载质量账本和运行性能制品、校验SHA256、提交SHA及run id，离线字符串引用不再单独构成发布真实性证据。以上仍须新提交CI和GitHub制品下载链路实际执行后才能关闭发布阻断。
+
 ## 证据
 
 - 原始日志：部署服务器Docker历史日志，分别保存为`/tmp/mbox-rc64-history.log`和`/tmp/mbox-rc67-server-audit.log`。
@@ -127,6 +135,7 @@ KDS阶段的聚合状态由约80KB增长到约3.29MB，倍率约41倍，但约91
 - 指标门禁：`docs/runtime-quality-standards.md`。
 - 当前本地分阶段证据：`artifacts/runtime-quality-current/`，不纳入Git且不替代CI制品。
 - JSONB数据库校验候选本地证据：`artifacts/runtime-quality-db-checksum-kds-complete/`、`artifacts/runtime-quality-db-checksum-staff-start/`和`artifacts/runtime-quality-db-checksum-reads/`，不纳入Git且不替代CI制品。
+- 营业日夹具修复后的KDS诊断：`artifacts/runtime-quality-next-kds-complete-current-day/`，300/300成功但运行中源码漂移，明确为无效发布证据。
 - 调度隔离与单次拷贝本地候选证据：`artifacts/runtime-quality-kds-complete-scheduler-lease/`及`artifacts/runtime-quality-kds-complete-single-clone/`，不纳入Git且不替代CI制品。
 - 路由级首屏拆分本地候选证据：`artifacts/runtime-quality-staff-route-split/`及`artifacts/runtime-quality-guest-route-split/`，不纳入Git且不替代CI制品。
 - 岗位首页即时壳层本地候选证据：`artifacts/runtime-quality-staff-fallback/`，30个新浏览器上下文双帧P95为92.1ms；只作诊断。

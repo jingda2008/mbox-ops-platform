@@ -2,9 +2,10 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { createSeedState } from '../dist-server/server/seed.js'
 import { receiveInventory } from '../dist-server/server/inventory-domain.js'
+import { loadReferenceTime } from './load-reference-time.mjs'
 
 const output = resolve(process.env.MBOX_LOAD_STATE_PATH?.trim() || '.runtime/rc68-load-state.json')
-const referenceTime = new Date(process.env.MBOX_LOAD_REFERENCE_TIME ?? '2026-08-09T12:00:00.000Z')
+const referenceTime = new Date(process.env.MBOX_LOAD_REFERENCE_TIME ?? loadReferenceTime())
 if (!Number.isFinite(referenceTime.getTime())) throw new Error('MBOX_LOAD_REFERENCE_TIME must be a valid ISO timestamp')
 const state = createSeedState(referenceTime)
 if (!state.inventoryDomain) throw new Error('RC68 load fixture requires an inventory domain')

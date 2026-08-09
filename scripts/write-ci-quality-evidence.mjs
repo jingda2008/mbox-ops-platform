@@ -34,6 +34,12 @@ function normalizedRunStatus(result) {
   return 'not_run'
 }
 
+function normalizedArtifactStatus(result) {
+  if (result === 'skipped') return 'not_applicable'
+  if (['success', 'failure', 'cancelled'].includes(result)) return 'available'
+  return 'missing'
+}
+
 const testRuns = selected.map((id) => {
   const status = normalizedRunStatus(results[id])
   return {
@@ -41,6 +47,8 @@ const testRuns = selected.map((id) => {
     kind: id === 'performance' ? 'performance-gate' : id,
     required: true,
     status,
+    artifactStatus: normalizedArtifactStatus(results[id]),
+    validityStatus: 'valid',
     total: 1,
     passed: status === 'pass' ? 1 : 0,
     failed: status === 'fail' ? 1 : 0,
@@ -71,6 +79,8 @@ if (scope === 'full' && (results.performance === 'success' || encodedLoad)) {
       required: true,
       conclusionLevel: 'regression',
       status: metric.passed ? 'pass' : 'fail',
+      artifactStatus: 'available',
+      validityStatus: 'valid',
       samples: metric.samples,
       successful: metric.successful,
       failures: metric.failures,

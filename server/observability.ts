@@ -252,9 +252,14 @@ export async function registerObservability(app: FastifyInstance, options: Obser
   }
   let readinessCache: { expiresAt: number; value: Awaited<ReturnType<ObservabilityOptions['readiness']>> } | null = null
   let readinessPending: Promise<Awaited<ReturnType<ObservabilityOptions['readiness']>>> | null = null
-  const readiness = async () => {
+  const readiness = async (forceFresh = false) => {
     const now = Date.now()
-    if (readinessCache && readinessCache.expiresAt > now) return readinessCache.value
+    if (!forceFresh && readinessCache && readinessCache.expiresAt > now) return readinessCache.value
+    if (forceFresh) {
+      const value = await options.readiness()
+      readinessCache = { expiresAt: Date.now() + READINESS_CACHE_TTL_MS, value }
+      return value
+    }
     if (!readinessPending) {
       readinessPending = options.readiness()
         .then((value) => {
@@ -316,7 +321,10 @@ export async function registerObservability(app: FastifyInstance, options: Obser
   })
   app.get('/api/metrics', async (request, reply) => {
     if (!authenticateMetrics(request, reply, options)) return reply
-    const status = await readiness()
+    // Runtime gates inspect counters that can change on every request. A cached
+    // readiness snapshot can under-count a just-finished load window and create
+    // a false release failure, so metrics always use a fresh repository sample.
+    const status = await readiness(true)
     return reply.type('text/plain; version=0.0.4; charset=utf-8').send(renderPrometheus(metrics, status.details))
   })
   app.post('/api/metrics/reset', async (request, reply) => {

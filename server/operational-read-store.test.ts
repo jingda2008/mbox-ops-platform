@@ -8,8 +8,8 @@ import {
   type OperationalReadSnapshot,
 } from './operational-read-store.js'
 import {
-  runtimeStateChecksum,
-  serializeRuntimeState,
+  APP_CANONICAL_STATE_CHECKSUM_ALGORITHM,
+  runtimeStateValueChecksum,
   type PostgresPool,
   type PostgresPoolClient,
   type PostgresQueryResult,
@@ -54,10 +54,15 @@ class OperationalReadPool implements PostgresPool {
         if (sql.startsWith('SELECT checkpoint.runtime_revision')) {
           expect(values.slice(0, 2)).toEqual([tenantId, storeId])
           expect(['2026-07-21', null]).toContain(values[2])
+          const aggregateState = stateForSnapshot(this.snapshot)
+          const checksum = runtimeStateValueChecksum(aggregateState)
           return result([{
             runtime_revision: this.snapshot.revision,
-            aggregate_state: stateForSnapshot(this.snapshot),
-            state_sha256: runtimeStateChecksum(serializeRuntimeState(stateForSnapshot(this.snapshot))),
+            aggregate_state: aggregateState,
+            state_sha256: checksum,
+            state_checksum_algorithm: APP_CANONICAL_STATE_CHECKSUM_ALGORITHM,
+            checkpoint_state_sha256: checksum,
+            checkpoint_checksum_algorithm: APP_CANONICAL_STATE_CHECKSUM_ALGORITHM,
             tables: this.snapshot.tables,
             table_sessions: this.snapshot.tableSessions,
             service_tasks: this.snapshot.serviceTasks,

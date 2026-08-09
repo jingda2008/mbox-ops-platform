@@ -87,11 +87,21 @@ test('environment fingerprint covers the scripts that define and merge the workl
     'scripts/build-source-fingerprint.mjs',
     'scripts/run-local-rc68-route-suite.sh',
     'scripts/prepare-rc68-load-state.mjs',
+    'scripts/load-reference-time.mjs',
     'scripts/merge-rc68-load-reports.mjs',
   ]) assert.match(source, new RegExp(path.replaceAll('.', '\\.')))
   assert.match(source, /diffSha256/)
   assert.match(source, /buildInputSha256/)
   assert.match(source, /changedPaths/)
+})
+
+test('all isolated phases share one Shanghai business-date load reference', async () => {
+  const harness = await readFile(new URL('./run-local-rc68-load.sh', import.meta.url), 'utf8')
+  const suite = await readFile(new URL('./run-local-rc68-route-suite.sh', import.meta.url), 'utf8')
+  assert.match(harness, /load_reference_time="\$\{MBOX_LOAD_REFERENCE_TIME:-\$\(node scripts\/load-reference-time\.mjs\)\}"/)
+  assert.match(harness, /MBOX_LOAD_REFERENCE_TIME="\$load_reference_time"/)
+  assert.match(suite, /suite_reference_time="\$\{MBOX_LOAD_REFERENCE_TIME:-\$\(node scripts\/load-reference-time\.mjs\)\}"/)
+  assert.match(suite, /MBOX_LOAD_REFERENCE_TIME="\$suite_reference_time"/)
 })
 
 test('tracked TC artifacts use repository-relative references', async () => {

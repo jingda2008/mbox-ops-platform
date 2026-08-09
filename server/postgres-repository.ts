@@ -170,6 +170,7 @@ export interface PostgresRepositoryHealth {
   projectionReady?: boolean
   projectionRevision?: number | null
   projectionCountsMatch?: boolean
+  projectionChecksumMatch?: boolean
   projectionError?: string
   databaseClockSkewMs: number
 }
@@ -283,7 +284,20 @@ interface RuntimeStateRow extends Record<string, unknown> {
   revision: number | string
   state: RuntimeState | string
   state_sha256: string
+  state_checksum_algorithm: string
   checksum_valid?: boolean
+}
+
+export const APP_CANONICAL_STATE_CHECKSUM_ALGORITHM = 'app-canonical-json-sha256-v1' as const
+export const POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM = 'pg-jsonb-text-sha256-v1' as const
+export type RuntimeStateChecksumAlgorithm =
+  | typeof APP_CANONICAL_STATE_CHECKSUM_ALGORITHM
+  | typeof POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM
+
+interface LoadedRuntimeState {
+  state: RuntimeState
+  checksum: string
+  checksumAlgorithm: RuntimeStateChecksumAlgorithm
 }
 
 interface IdempotencyRow extends Record<string, unknown> {
@@ -329,29 +343,38 @@ const SQL = {
   `,
   setStatementTimeout: `SELECT set_config('statement_timeout', $1, true) AS statement_timeout`,
   schemaCheck: `
-    SELECT n.nspname || '.' || c.relname AS table_name
+    SELECT n.nspname || '.' || c.relname AS table_name,
+      EXISTS (
+        SELECT 1 FROM information_schema.columns column_info
+        WHERE column_info.table_schema = 'mbox'
+          AND column_info.table_name = 'runtime_states'
+          AND column_info.column_name = 'state_checksum_algorithm'
+      ) AS checksum_algorithm_ready
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'mbox' AND c.relname = 'runtime_states' AND c.relkind = 'r'
   `,
   seedState: `
     INSERT INTO mbox.runtime_states (
-      tenant_id, store_id, revision, state, state_sha256
+      tenant_id, store_id, revision, state, state_sha256, state_checksum_algorithm
     ) VALUES (
       $1::uuid, $2::uuid, $3::bigint, $4::jsonb,
-      encode(sha256(convert_to(($4::jsonb)::text, 'UTF8')), 'hex')
+      encode(sha256(convert_to(($4::jsonb)::text, 'UTF8')), 'hex'),
+      'pg-jsonb-text-sha256-v1'
     )
     ON CONFLICT (tenant_id, store_id) DO NOTHING
   `,
   selectState: `
-    SELECT revision, state, state_sha256,
-      state_sha256 = encode(sha256(convert_to(state::text, 'UTF8')), 'hex') AS checksum_valid
+    SELECT revision, state, state_sha256, state_checksum_algorithm,
+      state_checksum_algorithm = 'pg-jsonb-text-sha256-v1'
+        AND state_sha256 = encode(sha256(convert_to(state::text, 'UTF8')), 'hex') AS checksum_valid
     FROM mbox.runtime_states
     WHERE tenant_id = $1::uuid AND store_id = $2::uuid
   `,
   selectStateForUpdate: `
-    SELECT revision, state, state_sha256,
-      state_sha256 = encode(sha256(convert_to(state::text, 'UTF8')), 'hex') AS checksum_valid
+    SELECT revision, state, state_sha256, state_checksum_algorithm,
+      state_checksum_algorithm = 'pg-jsonb-text-sha256-v1'
+        AND state_sha256 = encode(sha256(convert_to(state::text, 'UTF8')), 'hex') AS checksum_valid
     FROM mbox.runtime_states
     WHERE tenant_id = $1::uuid AND store_id = $2::uuid
     FOR UPDATE
@@ -399,11 +422,12 @@ const SQL = {
     SET revision = $3::bigint,
         state = $4::jsonb,
         state_sha256 = encode(sha256(convert_to(($4::jsonb)::text, 'UTF8')), 'hex'),
+        state_checksum_algorithm = 'pg-jsonb-text-sha256-v1',
         updated_at = clock_timestamp()
     WHERE tenant_id = $1::uuid
       AND store_id = $2::uuid
       AND revision = $5::bigint
-    RETURNING revision, state_sha256
+    RETURNING revision, state_sha256, state_checksum_algorithm
   `,
   insertIdempotency: `
     INSERT INTO mbox.idempotency_records (
@@ -676,7 +700,11 @@ export class PostgresRepository {
           this.recordSerializedStateSize(Buffer.byteLength(serialized))
           this.recordMutationMetric(this.mutationSerializationDurations, performance.now() - serializationStartedAt)
           const stateWriteStartedAt = performance.now()
-          const update = await client.query<{ revision: number | string; state_sha256: string }>(SQL.compareAndSwapState, [
+          const update = await client.query<{
+            revision: number | string
+            state_sha256: string
+            state_checksum_algorithm: RuntimeStateChecksumAlgorithm
+          }>(SQL.compareAndSwapState, [
             this.tenantId,
             this.storeId,
             workingCopy.revision,
@@ -687,6 +715,7 @@ export class PostgresRepository {
           if (update.rowCount !== 1) throw new PostgresOptimisticConcurrencyError(expectedRevision)
           const stateSha256 = update.rows[0]?.state_sha256?.trim()
           if (!stateSha256) throw new PostgresStateCorruptionError('PostgreSQL did not return the runtime state checksum')
+          const stateChecksumAlgorithm = parseStateChecksumAlgorithm(update.rows[0]?.state_checksum_algorithm)
           if (this.projector) {
             const projectionStartedAt = performance.now()
             await this.projector.project(
@@ -696,6 +725,7 @@ export class PostgresRepository {
               workingCopy,
               options.projectionTables,
               stateSha256,
+              stateChecksumAlgorithm,
               options.projectionEntityIds?.(result),
             )
             this.recordMutationMetric(this.mutationProjectionDurations, performance.now() - projectionStartedAt)
@@ -843,6 +873,7 @@ export class PostgresRepository {
         projectionReady: health.projection?.ready,
         projectionRevision: health.projection?.projectedRevision,
         projectionCountsMatch: health.projection?.countsMatch,
+        projectionChecksumMatch: health.projection?.checksumMatch,
         projectionError: health.projection?.error,
       }
     } catch (error) {
@@ -878,10 +909,10 @@ export class PostgresRepository {
   private async initialize(): Promise<void> {
     const client = await this.pool.connect()
     try {
-      const schema = await client.query<{ table_name: string | null }>(SQL.schemaCheck)
-      if (schema.rows[0]?.table_name !== 'mbox.runtime_states') {
+      const schema = await client.query<{ table_name: string | null; checksum_algorithm_ready: boolean }>(SQL.schemaCheck)
+      if (schema.rows[0]?.table_name !== 'mbox.runtime_states' || schema.rows[0]?.checksum_algorithm_ready !== true) {
         throw new PostgresSchemaError(
-          'mbox.runtime_states is missing; apply POSTGRES_RUNTIME_STATE_MIGRATION_SQL as the next database migration',
+          'mbox.runtime_states checksum schema is missing; apply all database migrations before starting the service',
         )
       }
     } finally {
@@ -903,9 +934,17 @@ export class PostgresRepository {
       // Serialize startup rebuilds with live writers. Without this row lock a
       // newly starting revision could project an older snapshot after a live
       // instance had already committed a newer one.
-      const state = await this.loadState(transactionClient, true)
+      const loaded = await this.loadStateRecord(transactionClient, true)
       if (this.projector) {
-        await this.projector.project(transactionClient, this.tenantContext(), null, state)
+        await this.projector.project(
+          transactionClient,
+          this.tenantContext(),
+          null,
+          loaded.state,
+          undefined,
+          loaded.checksum,
+          loaded.checksumAlgorithm,
+        )
       }
     })
   }
@@ -944,6 +983,10 @@ export class PostgresRepository {
   }
 
   private async loadState(client: PostgresPoolClient, forUpdate = false): Promise<RuntimeState> {
+    return (await this.loadStateRecord(client, forUpdate)).state
+  }
+
+  private async loadStateRecord(client: PostgresPoolClient, forUpdate = false): Promise<LoadedRuntimeState> {
     const result = await client.query<RuntimeStateRow>(forUpdate ? SQL.selectStateForUpdate : SQL.selectState, [
       this.tenantId,
       this.storeId,
@@ -962,13 +1005,15 @@ export class PostgresRepository {
     }
     const serialized = serializeRuntimeStatePayload(state)
     this.recordSerializedStateSize(Buffer.byteLength(serialized))
-    // New rows use PostgreSQL's canonical JSONB checksum. Older rows used the
-    // application's whitespace-free canonical JSON checksum; accept that
-    // legacy form until the first successful write upgrades the row.
-    if (row.checksum_valid !== true && runtimeStateValueChecksum(state) !== row.state_sha256.trim()) {
+    const checksum = row.state_sha256.trim()
+    const checksumAlgorithm = parseStateChecksumAlgorithm(row.state_checksum_algorithm)
+    const checksumValid = checksumAlgorithm === POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM
+      ? row.checksum_valid === true
+      : runtimeStateValueChecksum(state) === checksum
+    if (!checksumValid) {
       throw new PostgresStateCorruptionError('Runtime state checksum mismatch')
     }
-    return migrateRuntimeState(state)
+    return { state: migrateRuntimeState(state), checksum, checksumAlgorithm }
   }
 
   private async loadStateCached(client: PostgresPoolClient): Promise<RuntimeState> {
@@ -1282,6 +1327,13 @@ function parseRevision(value: number | string): number {
     throw new PostgresStateCorruptionError(`Invalid runtime state revision: ${String(value)}`)
   }
   return revision
+}
+
+function parseStateChecksumAlgorithm(value: unknown): RuntimeStateChecksumAlgorithm {
+  if (value === APP_CANONICAL_STATE_CHECKSUM_ALGORITHM || value === POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM) {
+    return value
+  }
+  throw new PostgresStateCorruptionError(`Unsupported runtime state checksum algorithm: ${String(value)}`)
 }
 
 function parseState(value: RuntimeState | string): RuntimeState {

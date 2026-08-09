@@ -51,6 +51,41 @@ jobs:
           done
           test -n "${run_id}"
           printf 'run_id=%s\n' "${run_id}" >> "${GITHUB_OUTPUT}"
+      - name: Download and verify the exact CI evidence artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFIED_RUN_ID: ${{ steps.verified-run.outputs.run_id }}
+        run: |
+          mkdir -p verified-ci-evidence/quality verified-ci-evidence/runtime
+          gh run download "${VERIFIED_RUN_ID}" \
+            --name "quality-evidence-${GITHUB_SHA}" \
+            --dir verified-ci-evidence/quality
+          gh run download "${VERIFIED_RUN_ID}" \
+            --name "runtime-quality-${GITHUB_SHA}" \
+            --dir verified-ci-evidence/runtime
+          (
+            cd verified-ci-evidence/quality
+            sha256sum --check SHA256SUMS
+          )
+          (
+            cd verified-ci-evidence/runtime
+            sha256sum --check SHA256SUMS
+          )
+          node scripts/verify-quality-evidence.mjs \
+            --input verified-ci-evidence/quality/ci-quality-evidence.json \
+            --policy docs/quality-policy-mbox-v1.json \
+            --require-immutable \
+            --require-release-pass
+          node - <<'NODE'
+          const fs = require('node:fs')
+          const ledger = JSON.parse(fs.readFileSync('verified-ci-evidence/quality/ci-quality-evidence.json', 'utf8'))
+          if (ledger.source?.commitSha !== process.env.GITHUB_SHA) throw new Error('quality ledger commit mismatch')
+          if (String(ledger.ci?.runId) !== process.env.VERIFIED_RUN_ID) throw new Error('quality ledger CI run mismatch')
+          if ([...(ledger.testRuns ?? []), ...(ledger.performance ?? [])]
+            .some((gate) => gate.required && (gate.artifactStatus !== 'available' || gate.validityStatus !== 'valid'))) {
+            throw new Error('quality ledger contains unavailable or invalid required evidence')
+          }
+          NODE
       - name: Download the CI-staged immutable bundle
         env:
           GH_TOKEN: ${{ github.token }}

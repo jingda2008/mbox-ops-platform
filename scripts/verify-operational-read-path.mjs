@@ -1,8 +1,11 @@
 import pg from 'pg'
 import {
+  APP_CANONICAL_STATE_CHECKSUM_ALGORITHM,
   asPostgresPool,
+  POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM,
   PostgresMutationNotIdleError,
   PostgresRepository,
+  runtimeStateValueChecksum,
 } from '../dist-server/server/postgres-repository.js'
 import { PostgresOperationalProjector } from '../dist-server/server/operational-projection.js'
 import {
@@ -63,9 +66,37 @@ const adminPool = new pg.Pool({
   application_name: 'mbox-verify-admin',
 })
 
+async function withoutRuntimeJournal(operation) {
+  await adminPool.query('ALTER TABLE mbox.runtime_states DISABLE TRIGGER runtime_states_journal_version')
+  try {
+    return await operation()
+  } finally {
+    await adminPool.query('ALTER TABLE mbox.runtime_states ENABLE TRIGGER runtime_states_journal_version')
+  }
+}
+
 try {
+  const legacyChecksum = runtimeStateValueChecksum(state)
+  await withoutRuntimeJournal(() => adminPool.query(`
+      UPDATE mbox.runtime_states
+      SET state_sha256 = $3,
+          state_checksum_algorithm = $4
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+    `, [tenantId, storeId, legacyChecksum, APP_CANONICAL_STATE_CHECKSUM_ALGORITHM]))
+
   await repository.init()
-  await siblingRepository.init()
+  const legacyCheckpoint = await adminPool.query(`
+    SELECT state_sha256, state_checksum_algorithm
+    FROM mbox.operational_projection_checkpoints
+    WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+  `, [tenantId, storeId])
+  if (
+    legacyCheckpoint.rows[0]?.state_sha256 !== legacyChecksum
+    || legacyCheckpoint.rows[0]?.state_checksum_algorithm !== APP_CANONICAL_STATE_CHECKSUM_ALGORITHM
+  ) {
+    throw new Error('旧版应用校验和没有被启动投影原样保留')
+  }
+
   const before = await repository.readFresh()
   const operationalStore = new PostgresOperationalReadStore(pool, { tenantId, storeId })
   const firstSnapshot = await operationalStore.read(before.revision, before.store.businessDate)
@@ -80,6 +111,42 @@ try {
   })
 
   const after = await repository.readFresh()
+  const upgradedChecksum = await adminPool.query(`
+    SELECT runtime.state_sha256,
+      runtime.state_checksum_algorithm,
+      checkpoint.state_sha256 AS checkpoint_sha256,
+      checkpoint.state_checksum_algorithm AS checkpoint_algorithm,
+      runtime.state_sha256 = encode(sha256(convert_to(runtime.state::text, 'UTF8')), 'hex') AS checksum_valid
+    FROM mbox.runtime_states runtime
+    JOIN mbox.operational_projection_checkpoints checkpoint
+      ON checkpoint.tenant_id = runtime.tenant_id AND checkpoint.store_id = runtime.store_id
+    WHERE runtime.tenant_id = $1::uuid AND runtime.store_id = $2::uuid
+  `, [tenantId, storeId])
+  const upgraded = upgradedChecksum.rows[0]
+  if (
+    upgraded?.state_checksum_algorithm !== POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM
+    || upgraded?.checkpoint_algorithm !== POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM
+    || upgraded?.state_sha256 !== upgraded?.checkpoint_sha256
+    || upgraded?.checksum_valid !== true
+  ) {
+    throw new Error(`首次写入没有把校验和原子升级到PostgreSQL算法：${JSON.stringify(upgraded)}`)
+  }
+  const upgradeJournal = await adminPool.query(`
+    SELECT previous_state_checksum_algorithm, state_checksum_algorithm
+    FROM mbox.runtime_state_versions
+    WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+      AND previous_state_checksum_algorithm = $3
+      AND state_checksum_algorithm = $4
+    ORDER BY revision DESC
+    LIMIT 1
+  `, [tenantId, storeId, APP_CANONICAL_STATE_CHECKSUM_ALGORITHM, POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM])
+  if (upgradeJournal.rowCount !== 1) throw new Error('运行状态日志没有记录校验算法升级链')
+
+  await siblingRepository.init()
+  const siblingHealthAfterRestart = await siblingRepository.healthCheck()
+  if (!siblingHealthAfterRestart.ready || siblingHealthAfterRestart.projectionChecksumMatch !== true) {
+    throw new Error(`第二实例重启后校验和投影不一致：${JSON.stringify(siblingHealthAfterRestart)}`)
+  }
   const secondSnapshot = await operationalStore.read(after.revision, after.store.businessDate)
   const hydrated = hydrateRuntimeStateFromOperationalTables(after, secondSnapshot)
   if (secondSnapshot.tables.length !== after.tables.length) {
@@ -88,6 +155,24 @@ try {
   if (hydrated.tables.find((table) => table.id === target.id)?.guestCount !== target.guestCount + 1) {
     throw new Error('单行变更未同步到规范化读取结果')
   }
+
+  await adminPool.query(`
+    UPDATE mbox.operational_projection_checkpoints
+    SET state_sha256 = repeat('0', 64)
+    WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+  `, [tenantId, storeId])
+  let checkpointTamperRejected = false
+  try {
+    await operationalStore.read(after.revision, after.store.businessDate)
+  } catch {
+    checkpointTamperRejected = true
+  }
+  if (!checkpointTamperRejected) throw new Error('规范化读取没有拒绝被篡改的投影校验和')
+  await adminPool.query(`
+    UPDATE mbox.operational_projection_checkpoints
+    SET state_sha256 = $3, state_checksum_algorithm = $4
+    WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+  `, [tenantId, storeId, upgraded.state_sha256, POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM])
 
   let releaseForeground
   let markForegroundEntered
@@ -175,8 +260,118 @@ try {
   if (takeoverMs > 1_000) throw new Error(`调度故障接管过慢：${takeoverMs.toFixed(1)}ms`)
 
   const afterContention = await repository.readFresh()
+  const rollbackBaseline = await adminPool.query(`
+    SELECT
+      (SELECT count(*)::integer FROM mbox.runtime_state_versions
+       WHERE tenant_id = $1::uuid AND store_id = $2::uuid) AS journal_count,
+      checkpoint.runtime_revision,
+      checkpoint.state_sha256,
+      checkpoint.state_checksum_algorithm
+    FROM mbox.operational_projection_checkpoints checkpoint
+    WHERE checkpoint.tenant_id = $1::uuid AND checkpoint.store_id = $2::uuid
+  `, [tenantId, storeId])
+
+  let projectorCalls = 0
+  const delegateProjector = new PostgresOperationalProjector()
+  const failingProjector = {
+    async project(...args) {
+      projectorCalls += 1
+      const result = await delegateProjector.project(...args)
+      if (projectorCalls > 1) throw new Error('intentional projection failure')
+      return result
+    },
+    healthCheck(...args) {
+      return delegateProjector.healthCheck(...args)
+    },
+  }
+  const rollbackNativePool = new pg.Pool({
+    connectionString: databaseUrl,
+    max: 2,
+    application_name: 'mbox-verify-rollback',
+  })
+  const rollbackRepository = new PostgresRepository({
+    pool: asPostgresPool(rollbackNativePool),
+    tenantId,
+    storeId,
+    seedState: null,
+    projector: failingProjector,
+  })
+  try {
+    await rollbackRepository.init()
+    let mutationRejected = false
+    try {
+      await rollbackRepository.mutate((working) => {
+        working.tables[0] = { ...working.tables[0], guestCount: working.tables[0].guestCount + 10 }
+        working.revision += 1
+      })
+    } catch (error) {
+      mutationRejected = error instanceof Error && error.message === 'intentional projection failure'
+    }
+    if (!mutationRejected) throw new Error('投影失败没有拒绝运行状态写入')
+    const afterRollback = await repository.readFresh()
+    if (afterRollback.revision !== afterContention.revision || afterRollback.tables[0].guestCount !== afterContention.tables[0].guestCount) {
+      throw new Error('投影失败后运行状态或修订号没有回滚')
+    }
+    const rollbackEvidence = await adminPool.query(`
+      SELECT
+        (SELECT count(*)::integer FROM mbox.runtime_state_versions
+         WHERE tenant_id = $1::uuid AND store_id = $2::uuid) AS journal_count,
+        checkpoint.runtime_revision,
+        checkpoint.state_sha256,
+        checkpoint.state_checksum_algorithm,
+        (SELECT bool_and(snapshot_revision = checkpoint.runtime_revision)
+         FROM mbox.operational_tables
+         WHERE tenant_id = $1::uuid AND store_id = $2::uuid) AS tables_revision_match
+      FROM mbox.operational_projection_checkpoints checkpoint
+      WHERE checkpoint.tenant_id = $1::uuid AND checkpoint.store_id = $2::uuid
+    `, [tenantId, storeId])
+    if (JSON.stringify(rollbackEvidence.rows[0]) !== JSON.stringify({
+      ...rollbackBaseline.rows[0],
+      tables_revision_match: true,
+    })) {
+      throw new Error(`投影部分写入失败后checkpoint、journal或规范化行没有完整回滚：${JSON.stringify(rollbackEvidence.rows[0])}`)
+    }
+  } finally {
+    await rollbackRepository.close()
+  }
+
+  const authoritativeBeforeTamper = await adminPool.query(`
+    SELECT state_sha256, state_checksum_algorithm
+    FROM mbox.runtime_states
+    WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+  `, [tenantId, storeId])
+  await withoutRuntimeJournal(() => adminPool.query(`
+      UPDATE mbox.runtime_states
+      SET state_sha256 = repeat('f', 64)
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+    `, [tenantId, storeId]))
+  const tamperNativePool = new pg.Pool({ connectionString: databaseUrl, max: 1, application_name: 'mbox-verify-tamper' })
+  const tamperRepository = new PostgresRepository({
+    pool: asPostgresPool(tamperNativePool), tenantId, storeId, seedState: null,
+    projector: new PostgresOperationalProjector(),
+  })
+  let aggregateTamperRejected = false
+  try {
+    await tamperRepository.init()
+  } catch {
+    aggregateTamperRejected = true
+  } finally {
+    await tamperRepository.close()
+  }
+  if (!aggregateTamperRejected) throw new Error('仓库启动没有拒绝被篡改的运行状态校验和')
+  await withoutRuntimeJournal(() => adminPool.query(`
+      UPDATE mbox.runtime_states
+      SET state_sha256 = $3, state_checksum_algorithm = $4
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+    `, [
+      tenantId,
+      storeId,
+      authoritativeBeforeTamper.rows[0].state_sha256,
+      authoritativeBeforeTamper.rows[0].state_checksum_algorithm,
+    ]))
+
   const health = await repository.healthCheck()
-  if (!health.ready || !health.projectionReady || !health.projectionCountsMatch || health.projectionRevision !== afterContention.revision) {
+  if (!health.ready || !health.projectionReady || !health.projectionCountsMatch || !health.projectionChecksumMatch || health.projectionRevision !== afterContention.revision) {
     throw new Error(`规范化投影健康检查失败：${JSON.stringify(health)}`)
   }
   console.log(JSON.stringify({
@@ -188,6 +383,9 @@ try {
     crossInstanceMutationGate: 'verified',
     distributedLeaseFailover: 'verified',
     distributedLeaseTakeoverMs: Math.round(takeoverMs * 10) / 10,
+    checksumAlgorithmUpgrade: 'verified',
+    checksumTamperDetection: 'verified',
+    projectionRollback: 'verified',
   }))
 } finally {
   await adminPool.end()

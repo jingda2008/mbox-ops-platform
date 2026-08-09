@@ -71,6 +71,7 @@ export async function createLoadEnvironmentManifest(options = {}) {
     'scripts/run-local-rc68-load.sh',
     'scripts/run-local-rc68-route-suite.sh',
     'scripts/prepare-rc68-load-state.mjs',
+    'scripts/load-reference-time.mjs',
     'scripts/write-load-environment-manifest.mjs',
     'scripts/merge-rc68-load-reports.mjs',
   ]

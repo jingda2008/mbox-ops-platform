@@ -12,6 +12,7 @@ postgres_image="${MBOX_LOAD_POSTGRES_IMAGE:-postgres:16-alpine}"
 load_lock=".runtime/rc68-load.lock"
 owns_load_lock=0
 load_run_id="${MBOX_LOAD_RUN_ID:-standalone-$$}"
+load_reference_time="${MBOX_LOAD_REFERENCE_TIME:-$(node scripts/load-reference-time.mjs)}"
 
 cleanup() {
   if [ -n "$api1" ]; then kill -TERM "$api1" 2>/dev/null || true; fi
@@ -80,7 +81,7 @@ npm run db:migrate >/tmp/mbox-rc68-mixed-migrate.log
 docker exec "$container" psql -U mbox -d mbox_load -v ON_ERROR_STOP=1 -c \
   "GRANT USAGE ON SCHEMA mbox TO mbox_app; GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA mbox TO mbox_app; GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA mbox TO mbox_app;"
 
-MBOX_LOAD_REFERENCE_TIME="${MBOX_LOAD_REFERENCE_TIME:-2026-08-09T12:00:00.000Z}" \
+MBOX_LOAD_REFERENCE_TIME="$load_reference_time" \
   node scripts/prepare-rc68-load-state.mjs >/tmp/mbox-rc68-mixed-prepare.log
 MBOX_CONFIRM_PROVISION=PROVISION \
 MBOX_INITIAL_STATE_PATH=.runtime/rc68-load-state.json \

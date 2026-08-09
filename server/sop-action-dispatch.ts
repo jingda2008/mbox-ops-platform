@@ -163,7 +163,10 @@ export async function dispatchDueSopActions(
 ) {
   const emptySummary = { claimed: 0, completed: 0, rejected: 0, failed: 0, retried: 0 }
   if (!hasDueActions(snapshot ?? await repository.read(), now)) return emptySummary
-  const claims = await repository.mutate((state) => claimDueActions(state, adapters, workerId, now))
+  const claims = await repository.mutate(
+    (state) => claimDueActions(state, adapters, workerId, now),
+    { metricLabel: 'scheduler' },
+  )
   const summary = { claimed: claims.length, completed: 0, rejected: 0, failed: 0, retried: 0 }
   for (const claim of claims) {
     const adapter = adapters.find((candidate) => candidate.type === claim.request.type)!
@@ -175,7 +178,10 @@ export async function dispatchDueSopActions(
     }
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
-        await repository.mutate((state) => applyResult(state, claim, result, new Date()))
+        await repository.mutate(
+          (state) => applyResult(state, claim, result, new Date()),
+          { metricLabel: 'scheduler' },
+        )
         break
       } catch (error) {
         if (!(error instanceof PostgresOptimisticConcurrencyError) || attempt === 3) throw error

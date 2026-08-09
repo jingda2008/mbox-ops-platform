@@ -182,17 +182,30 @@ case "$phase" in
       node scripts/measure-browser-startup.mjs >"$artifact_dir/browser-startup-console.log" 2>&1 || browser_status=$?
     cat "$artifact_dir/browser-startup-console.log" ;;
 esac
+source_drift_status=0
+final_build_fingerprint="$(node scripts/build-source-fingerprint.mjs)"
+if [ "$final_build_fingerprint" != "$current_build_fingerprint" ]; then
+  source_drift_status=1
+  printf '{"status":"invalid","reason":"source_changed_during_measurement","startedWith":"%s","endedWith":"%s"}\n' \
+    "$current_build_fingerprint" "$final_build_fingerprint" > "$artifact_dir/source-drift.json"
+  echo "测试期间源码发生变化；本轮性能结果只可诊断，不得作为发布证据" >&2
+fi
 case "$phase" in
   reads) mutation_minimum_samples=0 ;;
   staff_start) mutation_minimum_samples=50 ;;
   *) mutation_minimum_samples=100 ;;
 esac
-env "${common_env[@]}" \
-  MBOX_MUTATION_MINIMUM_SAMPLES="${MBOX_MUTATION_MINIMUM_SAMPLES:-$mutation_minimum_samples}" \
-  MBOX_METRICS_BASE_URLS="http://127.0.0.1:$api_port_1,http://127.0.0.1:$api_port_2" \
-  MBOX_METRICS_REPORT_PATH="$artifact_dir/runtime-metrics.json" \
-  npm run metrics:verify
-metrics_status=$?
+metrics_status=0
+if [ "$source_drift_status" -eq 0 ]; then
+  env "${common_env[@]}" \
+    MBOX_MUTATION_MINIMUM_SAMPLES="${MBOX_MUTATION_MINIMUM_SAMPLES:-$mutation_minimum_samples}" \
+    MBOX_METRICS_BASE_URLS="http://127.0.0.1:$api_port_1,http://127.0.0.1:$api_port_2" \
+    MBOX_METRICS_REPORT_PATH="$artifact_dir/runtime-metrics.json" \
+    npm run metrics:verify
+  metrics_status=$?
+else
+  metrics_status=1
+fi
 
 kill -TERM "$api1" "$api2"
 wait "$api1" "$api2" || true
@@ -225,7 +238,7 @@ if [ -f "$artifact_dir/client-observed-load.json" ]; then
     "$artifact_dir/client-observed-load.json"
 fi
 
-if [ "$load_status" -ne 0 ] || [ "$browser_status" -ne 0 ] || [ "$metrics_status" -ne 0 ] || [ "$logs_status" -ne 0 ]; then
-  echo "RC68本地性能门禁失败：load=$load_status browser=$browser_status metrics=$metrics_status logs=$logs_status" >&2
+if [ "$load_status" -ne 0 ] || [ "$browser_status" -ne 0 ] || [ "$metrics_status" -ne 0 ] || [ "$logs_status" -ne 0 ] || [ "$source_drift_status" -ne 0 ]; then
+  echo "RC68本地性能门禁失败：load=$load_status browser=$browser_status metrics=$metrics_status logs=$logs_status source_drift=$source_drift_status" >&2
   exit 1
 fi

@@ -1434,6 +1434,19 @@ html.staff-phone-device .app-shell > .nav-backdrop { display: block; }
   background: #fff;
 }
 
+.staff-startup-workspace {
+  min-height: calc(100vh - 54px);
+  padding: 16px;
+  background: var(--background, #f1f2ee);
+}
+
+@media (max-width: 720px) {
+  .staff-startup-workspace {
+    min-height: calc(100vh - 52px);
+    padding: 10px 9px calc(76px + env(safe-area-inset-bottom));
+  }
+}
+
 @media (max-width: 720px) {
   .staff-collaboration-guidance {
     margin: 6px 8px;

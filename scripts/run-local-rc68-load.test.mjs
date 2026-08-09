@@ -72,6 +72,14 @@ test('a reused build must match the current build-input fingerprint', async () =
   assert.doesNotMatch(suite, /npm run build/)
 })
 
+test('a load run is invalidated when source changes during measurement', async () => {
+  const harness = await readFile(new URL('./run-local-rc68-load.sh', import.meta.url), 'utf8')
+  assert.match(harness, /final_build_fingerprint="\$\(node scripts\/build-source-fingerprint\.mjs\)"/)
+  assert.match(harness, /source_changed_during_measurement/)
+  assert.match(harness, /source_drift_status/)
+  assert.match(harness, /不得作为发布证据/)
+})
+
 test('environment fingerprint covers the scripts that define and merge the workload', async () => {
   const source = await readFile(new URL('./write-load-environment-manifest.mjs', import.meta.url), 'utf8')
   for (const path of [
@@ -103,4 +111,11 @@ test('KDS completion opens the measured metrics window after preparation', async
   assert.ok(reset > preparation)
   assert.ok(measured > reset)
   assert.match(source, /if \(phase !== 'kds_complete'\) await resetMeasuredMetricsWindow\(\)/)
+})
+
+test('the scheduler seeks an early idle gap instead of colliding with the next foreground write', async () => {
+  const source = await readFile(new URL('../server/index.ts', import.meta.url), 'utf8')
+  assert.match(source, /const schedulerIdleMs = 25/)
+  assert.match(source, /const schedulerIdleWaitMs = 250/)
+  assert.match(source, /const schedulerMaximumDeferralMs = 10_000/)
 })

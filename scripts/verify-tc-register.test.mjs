@@ -5,7 +5,7 @@ import { parseRequiredTcBaseline, validateTcRegister, verifyTcRegisterFile } fro
 const headers = [
   'tc_id', 'requirement_id', 'priority', 'risk_area', 'role', 'preconditions', 'steps',
   'expected_result', 'status', 'automation_level', 'evidence', 'owner', 'environment',
-  'commit_sha', 'ci_run_id', 'defect_id', 'last_executed_at',
+  'commit_sha', 'ci_run_id', 'defect_id', 'last_executed_at', 'artifact_status',
 ]
 
 function row(overrides = {}) {
@@ -14,6 +14,7 @@ function row(overrides = {}) {
     preconditions: 'table open', steps: 'submit once', expected_result: 'one order', status: 'pass',
     automation_level: 'automated', evidence: 'artifact:test', owner: 'qa', environment: 'candidate',
     commit_sha: 'a'.repeat(40), ci_run_id: '123', defect_id: '', last_executed_at: new Date().toISOString(),
+    artifact_status: 'available',
     ...overrides,
   }
 }
@@ -101,6 +102,26 @@ test('rejects untraceable failures, future execution and automated passes withou
   assert.match(report.failures.join('\n'), /failed TC requires defect_id/)
   assert.match(report.failures.join('\n'), /cannot be in the future/)
   assert.match(report.failures.join('\n'), /requires ci_run_id/)
+})
+
+test('keeps execution outcome separate from artifact availability', () => {
+  const diagnostic = validateTcRegister([row({ artifact_status: 'missing' })], headers)
+  assert.equal(diagnostic.passed, true)
+  assert.match(diagnostic.warnings.join('\n'), /execution result exists but evidence artifact is missing/)
+
+  const release = validateTcRegister([row({ artifact_status: 'missing' })], headers, {
+    requireReleasePass: true,
+    requiredTcIds: ['TC-001'],
+    expectedCommitSha: 'a'.repeat(40),
+    maximumEvidenceAgeDays: 7,
+  })
+  assert.equal(release.passed, false)
+  assert.match(release.failures.join('\n'), /evidence artifact is missing/)
+
+  const notRun = validateTcRegister([row({
+    status: 'not_run', evidence: '', commit_sha: '', ci_run_id: '', last_executed_at: '', artifact_status: 'available',
+  })], headers)
+  assert.match(notRun.failures.join('\n'), /must use artifact_status=not_applicable/)
 })
 
 test('the reusable CSV template is structurally valid', async () => {

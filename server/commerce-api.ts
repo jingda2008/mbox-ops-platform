@@ -763,6 +763,7 @@ export function registerCommerceRoutes(
       if (changed) state.revision += 1
       return task
     }, {
+      metricLabel: 'kds',
       projectionTables: [
         'operational_service_tasks',
         'operational_orders',

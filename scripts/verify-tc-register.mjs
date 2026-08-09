@@ -6,7 +6,7 @@ import Papa from 'papaparse'
 const requiredHeaders = [
   'tc_id', 'requirement_id', 'priority', 'risk_area', 'role', 'preconditions', 'steps',
   'expected_result', 'status', 'automation_level', 'evidence', 'owner', 'environment',
-  'commit_sha', 'ci_run_id', 'defect_id', 'last_executed_at',
+  'commit_sha', 'ci_run_id', 'defect_id', 'last_executed_at', 'artifact_status',
 ]
 
 const strictIsoTimestamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/
@@ -54,6 +54,9 @@ export function validateTcRegister(rows, headers = [], options = {}) {
     if (!['manual', 'automated', 'hybrid'].includes(String(row.automation_level ?? ''))) {
       failures.push(`${path} automation_level is invalid`)
     }
+    if (!['available', 'missing', 'unverified', 'not_applicable'].includes(String(row.artifact_status ?? ''))) {
+      failures.push(`${path} artifact_status is invalid`)
+    }
     for (const [field, value] of Object.entries(row)) {
       if (spreadsheetFormula.test(String(value ?? '').trimStart())) failures.push(`${path} ${field} cannot start with a spreadsheet formula character`)
     }
@@ -67,6 +70,15 @@ export function validateTcRegister(rows, headers = [], options = {}) {
       if (!sha) failures.push(`${path} executed TC requires commit_sha`)
       if (!String(row.last_executed_at ?? '').trim()) failures.push(`${path} executed TC requires last_executed_at`)
       if (String(row.owner ?? '').trim().toLowerCase() === 'unassigned') failures.push(`${path} executed TC requires an assigned owner`)
+      if (row.artifact_status === 'not_applicable') failures.push(`${path} executed TC cannot use artifact_status=not_applicable`)
+      if (row.artifact_status !== 'available') {
+        const message = `${id || path} execution result exists but evidence artifact is ${row.artifact_status}`
+        if (options.requireReleasePass) failures.push(message)
+        else warnings.push(message)
+      }
+    }
+    if (['not_run', 'skipped'].includes(row.status) && row.artifact_status !== 'not_applicable') {
+      failures.push(`${path} unexecuted TC must use artifact_status=not_applicable`)
     }
     if (row.status === 'fail' && !String(row.defect_id ?? '').trim()) failures.push(`${path} failed TC requires defect_id`)
     if (row.status === 'pass' && ['automated', 'hybrid'].includes(row.automation_level)

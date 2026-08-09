@@ -29,6 +29,7 @@ import {
 } from './api'
 import './App.css'
 import { ServiceIcon } from './components/ServiceIcon'
+import { RoleHomeView } from './components/RoleHomeView'
 import {
   clearOfflineDataForEmployeeChange,
   discardConflictedTaskAction,
@@ -79,6 +80,29 @@ function WorkspaceLoading() {
 
 function LazyWorkspace({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<WorkspaceLoading />}>{children}</Suspense>
+}
+
+function StaffWorkspaceFallback({
+  data,
+  employeeId,
+  onNavigate,
+}: {
+  data: BootstrapResponse
+  employeeId: string
+  onNavigate: (target: OperationsConsoleView, focus?: OperationsConsoleFocus) => void
+}) {
+  return (
+    <main className="staff-startup-workspace" aria-label="岗位首页">
+      <RoleHomeView
+        data={data}
+        employeeId={employeeId}
+        onNavigate={(target, focusQuery) => onNavigate(
+          target,
+          focusQuery ? { objectId: focusQuery, query: focusQuery } : undefined,
+        )}
+      />
+    </main>
+  )
 }
 
 interface BootstrapPollingOptions {
@@ -472,7 +496,16 @@ export default function App() {
           <button title="关闭协作提示" onClick={() => setCollaborationGuidance(null)}>关闭</button>
         </div>
       )}
-      <LazyWorkspace>
+      <Suspense fallback={(
+        <StaffWorkspaceFallback
+          data={data}
+          employeeId={currentActorId}
+          onNavigate={(target, focus) => {
+            nextNavigationRequestId.current += 1
+            setNavigationRequest({ id: nextNavigationRequestId.current, target, focus })
+          }}
+        />
+      )}>
         <OperationsConsole data={data} onRefresh={refreshWorkspace} onOptimisticUpdate={updateWorkspace} navigationRequest={navigationRequest} />
         {staffMode === 'voice' && (
           <VoiceCommandMode
@@ -486,7 +519,7 @@ export default function App() {
             }}
           />
         )}
-      </LazyWorkspace>
+      </Suspense>
     </div>
   )
 }

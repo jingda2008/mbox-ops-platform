@@ -292,6 +292,24 @@ await registerObservability(app, {
         mutationServiceP95Ms: postgresStatus?.mutationQueue.serviceP95Ms ?? 0,
         mutationServiceP99Ms: postgresStatus?.mutationQueue.serviceP99Ms ?? 0,
         mutationServiceMaxMs: postgresStatus?.mutationQueue.serviceMaxMs ?? 0,
+        mutationRevisionLockP95Ms: postgresStatus?.mutationQueue.revisionLockP95Ms ?? 0,
+        mutationRevisionLockMaxMs: postgresStatus?.mutationQueue.revisionLockMaxMs ?? 0,
+        mutationCloneP95Ms: postgresStatus?.mutationQueue.cloneP95Ms ?? 0,
+        mutationCloneMaxMs: postgresStatus?.mutationQueue.cloneMaxMs ?? 0,
+        mutationDomainP95Ms: postgresStatus?.mutationQueue.domainP95Ms ?? 0,
+        mutationDomainMaxMs: postgresStatus?.mutationQueue.domainMaxMs ?? 0,
+        mutationSerializationP95Ms: postgresStatus?.mutationQueue.serializationP95Ms ?? 0,
+        mutationSerializationMaxMs: postgresStatus?.mutationQueue.serializationMaxMs ?? 0,
+        mutationStateWriteP95Ms: postgresStatus?.mutationQueue.stateWriteP95Ms ?? 0,
+        mutationStateWriteMaxMs: postgresStatus?.mutationQueue.stateWriteMaxMs ?? 0,
+        mutationProjectionP95Ms: postgresStatus?.mutationQueue.projectionP95Ms ?? 0,
+        mutationProjectionMaxMs: postgresStatus?.mutationQueue.projectionMaxMs ?? 0,
+        mutationKdsSamples: postgresStatus?.mutationQueue.sourceSamples.kds ?? 0,
+        mutationKdsServiceP95Ms: postgresStatus?.mutationQueue.sourceServiceP95Ms.kds ?? 0,
+        mutationSchedulerSamples: postgresStatus?.mutationQueue.sourceSamples.scheduler ?? 0,
+        mutationSchedulerServiceP95Ms: postgresStatus?.mutationQueue.sourceServiceP95Ms.scheduler ?? 0,
+        mutationOtherSamples: postgresStatus?.mutationQueue.sourceSamples.other ?? 0,
+        mutationOtherServiceP95Ms: postgresStatus?.mutationQueue.sourceServiceP95Ms.other ?? 0,
         initialSerializedStateBytes: postgresStatus?.mutationQueue.initialSerializedStateBytes ?? 0,
         serializedStateBytes: postgresStatus?.mutationQueue.serializedStateBytes ?? 0,
         maxSerializedStateBytes: postgresStatus?.mutationQueue.maxSerializedStateBytes ?? 0,
@@ -813,8 +831,13 @@ if (runtimeConfig.runtimeMode === 'staging' || runtimeConfig.runtimeMode === 'pr
 
 let schedulerRunning = false
 let schedulerDeferredSince = 0
-const schedulerIdleMs = 300
-const schedulerIdleWaitMs = 1_500
+// The aggregate write currently takes about 200ms in the two-instance
+// regression environment. Requiring 300ms of prior silence places scheduler
+// work at the end of the 500ms foreground gap and makes the next KDS action
+// queue behind it. Start near the beginning of a proven idle gap instead, and
+// give up this tick quickly when foreground writes keep arriving.
+const schedulerIdleMs = 25
+const schedulerIdleWaitMs = 250
 const schedulerMaximumDeferralMs = 10_000
 const notificationWorkerId = `notification-worker:${process.pid}:${randomUUID()}`
 const sopActionWorkerId = `sop-action-worker:${process.pid}:${randomUUID()}`
@@ -840,7 +863,10 @@ const scheduler = setInterval(() => {
     const currentSnapshot = scheduledWorkDue ? await repository.read() : snapshot
     const workStillDue = scheduledWorkDue && scheduledOperationsWouldChange(currentSnapshot, executionNow)
     const businessDayRollover = workStillDue
-      ? await repository.mutate((state) => applyScheduledOperations(state, executionNow))
+      ? await repository.mutate(
+        (state) => applyScheduledOperations(state, executionNow),
+        { metricLabel: 'scheduler' },
+      )
       : null
     const dispatchSnapshot = workStillDue ? await repository.read() : currentSnapshot
     if (businessDayRollover?.status === 'rolled_over') {

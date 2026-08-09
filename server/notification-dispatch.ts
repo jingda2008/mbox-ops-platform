@@ -272,14 +272,17 @@ export async function dispatchDueNotifications(
     adapters.map((adapter) => adapter.channel),
     now,
     options,
-  ))
+  ), { metricLabel: 'scheduler' })
   const summary = { claimed: claims.length, sent: 0, retryScheduled: 0, failed: 0 }
   for (const claim of claims) {
     const result = await callProvider(claim, adapters)
     let outcome: ReturnType<typeof applyNotificationDispatchResult> | null = null
     for (let attempt = 1; attempt <= 3 && outcome === null; attempt += 1) {
       try {
-        outcome = await repository.mutate((state) => applyNotificationDispatchResult(state, claim, result, new Date(), options))
+        outcome = await repository.mutate(
+          (state) => applyNotificationDispatchResult(state, claim, result, new Date(), options),
+          { metricLabel: 'scheduler' },
+        )
       } catch (error) {
         if (!(error instanceof PostgresOptimisticConcurrencyError) || attempt === 3) throw error
       }

@@ -1,2 +1,2 @@
-tc_id,requirement_id,priority,risk_area,role,preconditions,steps,expected_result,status,automation_level,evidence,owner,environment,commit_sha,ci_run_id,defect_id,last_executed_at
-EXAMPLE-001,REQ-001,P0,order-payment,customer,"table is open","1. add product; 2. submit order; 3. complete payment","one paid order is created and fulfillment receives it",not_run,manual,"",unassigned,validation,"","","",""
+tc_id,requirement_id,priority,risk_area,role,preconditions,steps,expected_result,status,automation_level,evidence,owner,environment,commit_sha,ci_run_id,defect_id,last_executed_at,artifact_status
+EXAMPLE-001,REQ-001,P0,order-payment,customer,"table is open","1. add product; 2. submit order; 3. complete payment","one paid order is created and fulfillment receives it",not_run,manual,"",unassigned,validation,"","","","",not_applicable

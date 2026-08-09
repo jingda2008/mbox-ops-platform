@@ -99,6 +99,7 @@ export interface PostgresMutationOptions<T = unknown> {
   idempotency?: PostgresMutationIdempotency
   projectionTables?: OperationalProjectionTable[]
   projectionEntityIds?: (result: T) => OperationalProjectionEntityIds
+  metricLabel?: 'kds' | 'scheduler' | 'other'
 }
 
 export interface PostgresRepositoryOptions extends PostgresTenantContext {
@@ -146,6 +147,20 @@ export interface PostgresRepositoryHealth {
     serviceP95Ms: number
     serviceP99Ms: number
     serviceMaxMs: number
+    revisionLockP95Ms: number
+    revisionLockMaxMs: number
+    cloneP95Ms: number
+    cloneMaxMs: number
+    domainP95Ms: number
+    domainMaxMs: number
+    serializationP95Ms: number
+    serializationMaxMs: number
+    stateWriteP95Ms: number
+    stateWriteMaxMs: number
+    projectionP95Ms: number
+    projectionMaxMs: number
+    sourceSamples: Record<'kds' | 'scheduler' | 'other', number>
+    sourceServiceP95Ms: Record<'kds' | 'scheduler' | 'other', number>
     initialSerializedStateBytes: number
     serializedStateBytes: number
     maxSerializedStateBytes: number
@@ -434,6 +449,17 @@ export class PostgresRepository {
   private mutationQueueTimeoutTotal = 0
   private readonly mutationQueueWaits: number[] = []
   private readonly mutationServiceDurations: number[] = []
+  private readonly mutationRevisionLockDurations: number[] = []
+  private readonly mutationCloneDurations: number[] = []
+  private readonly mutationDomainDurations: number[] = []
+  private readonly mutationSerializationDurations: number[] = []
+  private readonly mutationStateWriteDurations: number[] = []
+  private readonly mutationProjectionDurations: number[] = []
+  private readonly mutationServiceBySource = new Map<'kds' | 'scheduler' | 'other', number[]>([
+    ['kds', []],
+    ['scheduler', []],
+    ['other', []],
+  ])
   private initialSerializedStateBytes: number | null = null
   private serializedStateBytes = 0
   private maxSerializedStateBytes = 0
@@ -570,10 +596,12 @@ export class PostgresRepository {
         // Lock only the lightweight revision first. If this process already has
         // the same verified revision, avoid fetching and parsing the 1MB+ state
         // document again before every serialized write.
+        const revisionLockStartedAt = performance.now()
         const locked = await client.query<{ revision: number | string }>(SQL.selectRevisionForUpdate, [
           this.tenantId,
           this.storeId,
         ])
+        this.recordMutationMetric(this.mutationRevisionLockDurations, performance.now() - revisionLockStartedAt)
         if (locked.rowCount !== 1 || !locked.rows[0]) throw new PostgresRuntimeStateNotInitializedError()
         const expectedRevision = parseRevision(locked.rows[0].revision)
         // cachedState is never exposed directly. The mutation receives its own
@@ -582,16 +610,23 @@ export class PostgresRepository {
         const current = this.cachedState?.revision === expectedRevision
           ? this.cachedState
           : await this.loadState(client)
+        const cloneStartedAt = performance.now()
         const workingCopy = parseState(current)
+        this.recordMutationMetric(this.mutationCloneDurations, performance.now() - cloneStartedAt)
+        const domainStartedAt = performance.now()
         const result = await mutation(workingCopy)
+        this.recordMutationMetric(this.mutationDomainDurations, performance.now() - domainStartedAt)
 
         if (workingCopy.revision !== expectedRevision) {
           if (!Number.isSafeInteger(workingCopy.revision) || workingCopy.revision <= expectedRevision) {
             throw new PostgresInvalidRevisionError(expectedRevision, workingCopy.revision)
           }
+          const serializationStartedAt = performance.now()
           const serialized = serializeJson(workingCopy, 'runtime state')
           this.recordSerializedStateSize(Buffer.byteLength(serialized))
           const stateSha256 = sha256(serialized)
+          this.recordMutationMetric(this.mutationSerializationDurations, performance.now() - serializationStartedAt)
+          const stateWriteStartedAt = performance.now()
           const update = await client.query<{ revision: number | string }>(SQL.compareAndSwapState, [
             this.tenantId,
             this.storeId,
@@ -600,8 +635,10 @@ export class PostgresRepository {
             stateSha256,
             expectedRevision,
           ])
+          this.recordMutationMetric(this.mutationStateWriteDurations, performance.now() - stateWriteStartedAt)
           if (update.rowCount !== 1) throw new PostgresOptimisticConcurrencyError(expectedRevision)
           if (this.projector) {
+            const projectionStartedAt = performance.now()
             await this.projector.project(
               client,
               this.tenantContext(),
@@ -611,6 +648,7 @@ export class PostgresRepository {
               stateSha256,
               options.projectionEntityIds?.(result),
             )
+            this.recordMutationMetric(this.mutationProjectionDurations, performance.now() - projectionStartedAt)
           }
           stateChanged = true
           // The mutation already runs against a detached JSON clone. Reuse it
@@ -629,7 +667,7 @@ export class PostgresRepository {
         this.cacheValidatedAt = Date.now()
       }
       return stateChanged ? structuredClone(result) : result
-    }))
+    }, options.metricLabel ?? 'other'))
   }
 
   async waitForMutationIdle(idleMs: number, maxWaitMs: number) {
@@ -991,7 +1029,10 @@ export class PostgresRepository {
     }
   }
 
-  private async enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
+  private async enqueueMutation<T>(
+    operation: () => Promise<T>,
+    metricLabel: 'kds' | 'scheduler' | 'other',
+  ): Promise<T> {
     if (this.pendingMutations >= this.maxPendingMutations) {
       this.mutationQueueRejectedTotal += 1
       throw new PostgresMutationQueueFullError(this.maxPendingMutations)
@@ -1023,7 +1064,9 @@ export class PostgresRepository {
       try {
         return await operation()
       } finally {
-        this.recordMutationMetric(this.mutationServiceDurations, performance.now() - operationStartedAt)
+        const duration = performance.now() - operationStartedAt
+        this.recordMutationMetric(this.mutationServiceDurations, duration)
+        this.recordMutationMetric(this.mutationServiceBySource.get(metricLabel)!, duration)
       }
     } catch (error) {
       if (error instanceof PostgresMutationQueueTimeoutError) this.mutationQueueTimeoutTotal += 1
@@ -1083,6 +1126,28 @@ export class PostgresRepository {
       serviceP95Ms: this.mutationPercentile(this.mutationServiceDurations, 0.95),
       serviceP99Ms: this.mutationPercentile(this.mutationServiceDurations, 0.99),
       serviceMaxMs: Math.max(0, ...this.mutationServiceDurations),
+      revisionLockP95Ms: this.mutationPercentile(this.mutationRevisionLockDurations, 0.95),
+      revisionLockMaxMs: Math.max(0, ...this.mutationRevisionLockDurations),
+      cloneP95Ms: this.mutationPercentile(this.mutationCloneDurations, 0.95),
+      cloneMaxMs: Math.max(0, ...this.mutationCloneDurations),
+      domainP95Ms: this.mutationPercentile(this.mutationDomainDurations, 0.95),
+      domainMaxMs: Math.max(0, ...this.mutationDomainDurations),
+      serializationP95Ms: this.mutationPercentile(this.mutationSerializationDurations, 0.95),
+      serializationMaxMs: Math.max(0, ...this.mutationSerializationDurations),
+      stateWriteP95Ms: this.mutationPercentile(this.mutationStateWriteDurations, 0.95),
+      stateWriteMaxMs: Math.max(0, ...this.mutationStateWriteDurations),
+      projectionP95Ms: this.mutationPercentile(this.mutationProjectionDurations, 0.95),
+      projectionMaxMs: Math.max(0, ...this.mutationProjectionDurations),
+      sourceSamples: {
+        kds: this.mutationServiceBySource.get('kds')!.length,
+        scheduler: this.mutationServiceBySource.get('scheduler')!.length,
+        other: this.mutationServiceBySource.get('other')!.length,
+      },
+      sourceServiceP95Ms: {
+        kds: this.mutationPercentile(this.mutationServiceBySource.get('kds')!, 0.95),
+        scheduler: this.mutationPercentile(this.mutationServiceBySource.get('scheduler')!, 0.95),
+        other: this.mutationPercentile(this.mutationServiceBySource.get('other')!, 0.95),
+      },
       initialSerializedStateBytes: this.initialSerializedStateBytes ?? 0,
       serializedStateBytes: this.serializedStateBytes,
       maxSerializedStateBytes: this.maxSerializedStateBytes,
@@ -1104,6 +1169,13 @@ export class PostgresRepository {
     this.mutationQueueTimeoutTotal = 0
     this.mutationQueueWaits.length = 0
     this.mutationServiceDurations.length = 0
+    this.mutationRevisionLockDurations.length = 0
+    this.mutationCloneDurations.length = 0
+    this.mutationDomainDurations.length = 0
+    this.mutationSerializationDurations.length = 0
+    this.mutationStateWriteDurations.length = 0
+    this.mutationProjectionDurations.length = 0
+    for (const samples of this.mutationServiceBySource.values()) samples.length = 0
     this.serializedStateBytes = currentBytes
     this.initialSerializedStateBytes = currentBytes
     this.maxSerializedStateBytes = currentBytes

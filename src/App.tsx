@@ -157,16 +157,22 @@ export function startBootstrapPolling(
       clearTimer()
     }
   }
+  const handlePageShow = (event: Event) => {
+    // A normal navigation emits pageshow after the initial refresh has already
+    // started. Only BFCache restoration needs an extra refresh.
+    if ('persisted' in event && !(event as PageTransitionEvent).persisted) return
+    refreshNow()
+  }
 
   visibilityTarget.addEventListener('visibilitychange', handleVisibilityChange)
-  pageShowTarget.addEventListener('pageshow', refreshNow)
+  pageShowTarget.addEventListener('pageshow', handlePageShow)
   refreshNow()
   return () => {
     stopped = true
     refreshAfterCurrent = false
     clearTimer()
     visibilityTarget.removeEventListener('visibilitychange', handleVisibilityChange)
-    pageShowTarget.removeEventListener('pageshow', refreshNow)
+    pageShowTarget.removeEventListener('pageshow', handlePageShow)
   }
 }
 

@@ -28,7 +28,9 @@ docker run -d --name "$container" \
   -e POSTGRES_USER=mbox -e POSTGRES_PASSWORD=mbox_test -e POSTGRES_DB=mbox_load \
   -p "$postgres_port:5432" "$postgres_image" >/dev/null
 for attempt in $(seq 1 60); do
-  if docker exec "$container" pg_isready -U mbox -d mbox_load >/dev/null 2>&1; then break; fi
+  # pg_isready can succeed while the image entrypoint is still creating the
+  # requested database. Prove the exact database is queryable before migrating.
+  if docker exec "$container" psql -U mbox -d mbox_load -Atqc "SELECT 1" >/dev/null 2>&1; then break; fi
   if [ "$attempt" = 60 ]; then echo "postgres not ready" >&2; exit 1; fi
   sleep 0.5
 done

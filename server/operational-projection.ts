@@ -22,6 +22,7 @@ export interface RuntimeStateProjector {
     current: RuntimeState,
     tables?: OperationalProjectionTable[],
     currentStateSha256?: string,
+    entityIds?: OperationalProjectionEntityIds,
   ): Promise<void>
   healthCheck(
     client: PostgresPoolClient,
@@ -40,14 +41,26 @@ export type OperationalProjectionTable =
   | 'operational_payment_intents'
   | 'operational_inventory_balances'
 
+export type OperationalProjectionEntityIds = Partial<
+  Record<OperationalProjectionTable, readonly string[]>
+>
+
 interface ProjectionSet {
   table: string
   keyColumns: string[]
   rows: ProjectionRow[]
 }
 
-function tableRows(state: RuntimeState): ProjectionRow[] {
-  return state.tables.map((table) => ({
+function selectedEntityIds(
+  entityIds: OperationalProjectionEntityIds | undefined,
+  table: OperationalProjectionTable,
+) {
+  const ids = entityIds?.[table]
+  return ids ? new Set(ids) : undefined
+}
+
+function tableRows(state: RuntimeState, ids?: ReadonlySet<string>): ProjectionRow[] {
+  return state.tables.filter((table) => !ids || ids.has(table.id)).map((table) => ({
     source_id: table.id,
     table_code: table.code,
     area_id: table.areaId,
@@ -60,8 +73,8 @@ function tableRows(state: RuntimeState): ProjectionRow[] {
   }))
 }
 
-function tableSessionRows(state: RuntimeState): ProjectionRow[] {
-  return state.songState.tableSessions.map((session) => {
+function tableSessionRows(state: RuntimeState, ids?: ReadonlySet<string>): ProjectionRow[] {
+  return state.songState.tableSessions.filter((session) => !ids || ids.has(session.id)).map((session) => {
     const table = state.tables.find((candidate) => candidate.id === session.tableId)
     const operation = state.tableSessionOperations?.find((candidate) => candidate.tableSessionId === session.id)
     return {
@@ -79,8 +92,8 @@ function tableSessionRows(state: RuntimeState): ProjectionRow[] {
   })
 }
 
-function serviceTaskRows(state: RuntimeState): ProjectionRow[] {
-  return state.tasks.map((task) => ({
+function serviceTaskRows(state: RuntimeState, ids?: ReadonlySet<string>): ProjectionRow[] {
+  return state.tasks.filter((task) => !ids || ids.has(task.id)).map((task) => ({
     source_id: task.id,
     table_id: task.tableId,
     table_session_id: task.tableSessionId,
@@ -104,8 +117,8 @@ function serviceTaskRows(state: RuntimeState): ProjectionRow[] {
   }))
 }
 
-function orderRows(state: RuntimeState): ProjectionRow[] {
-  return state.orderDomain.orders.map((order) => ({
+function orderRows(state: RuntimeState, ids?: ReadonlySet<string>): ProjectionRow[] {
+  return state.orderDomain.orders.filter((order) => !ids || ids.has(order.id)).map((order) => ({
     source_id: order.id,
     table_session_id: order.tableSessionId,
     status: order.status,
@@ -126,8 +139,10 @@ function orderRows(state: RuntimeState): ProjectionRow[] {
   }))
 }
 
-function orderItemRows(state: RuntimeState): ProjectionRow[] {
-  return state.orderDomain.orders.flatMap((order) => order.items.map((item) => ({
+function orderItemRows(state: RuntimeState, ids?: ReadonlySet<string>): ProjectionRow[] {
+  return state.orderDomain.orders.flatMap((order) => order.items
+    .filter((item) => !ids || ids.has(item.id))
+    .map((item) => ({
     source_id: item.id,
     order_id: order.id,
     product_id: item.skuId,
@@ -144,11 +159,11 @@ function orderItemRows(state: RuntimeState): ProjectionRow[] {
     added_at: item.addedAt,
     payload: JSON.stringify(item),
     snapshot_revision: state.revision,
-  })))
+    })))
 }
 
-function kdsTaskRows(state: RuntimeState): ProjectionRow[] {
-  return state.orderDomain.kdsTasks.map((task) => ({
+function kdsTaskRows(state: RuntimeState, ids?: ReadonlySet<string>): ProjectionRow[] {
+  return state.orderDomain.kdsTasks.filter((task) => !ids || ids.has(task.id)).map((task) => ({
     source_id: task.id,
     order_id: task.orderId,
     order_item_id: task.orderItemId,
@@ -166,8 +181,8 @@ function kdsTaskRows(state: RuntimeState): ProjectionRow[] {
   }))
 }
 
-function paymentRows(state: RuntimeState): ProjectionRow[] {
-  return state.paymentDomain.paymentIntents.map((intent) => ({
+function paymentRows(state: RuntimeState, ids?: ReadonlySet<string>): ProjectionRow[] {
+  return state.paymentDomain.paymentIntents.filter((intent) => !ids || ids.has(intent.id)).map((intent) => ({
     source_id: intent.id,
     table_session_id: intent.tableSessionId,
     status: intent.status,
@@ -183,8 +198,10 @@ function paymentRows(state: RuntimeState): ProjectionRow[] {
   }))
 }
 
-function inventoryRows(state: RuntimeState): ProjectionRow[] {
-  return (state.inventoryDomain?.balances ?? []).map((balance) => ({
+function inventoryRows(state: RuntimeState, ids?: ReadonlySet<string>): ProjectionRow[] {
+  return (state.inventoryDomain?.balances ?? [])
+    .filter((balance) => !ids || ids.has(balance.productId))
+    .map((balance) => ({
     product_id: balance.productId,
     unit_code: balance.unitCode,
     on_hand_quantity: balance.onHandQuantity,
@@ -198,18 +215,19 @@ function inventoryRows(state: RuntimeState): ProjectionRow[] {
 export function buildOperationalProjection(
   state: RuntimeState,
   requestedTables?: OperationalProjectionTable[],
+  entityIds?: OperationalProjectionEntityIds,
 ): ProjectionSet[] {
   const selected = requestedTables ? new Set(requestedTables) : null
   const include = (table: OperationalProjectionTable) => !selected || selected.has(table)
   const projection: ProjectionSet[] = []
-  if (include('operational_tables')) projection.push({ table: 'operational_tables', keyColumns: ['source_id'], rows: tableRows(state) })
-  if (include('operational_table_sessions')) projection.push({ table: 'operational_table_sessions', keyColumns: ['source_id'], rows: tableSessionRows(state) })
-  if (include('operational_service_tasks')) projection.push({ table: 'operational_service_tasks', keyColumns: ['source_id'], rows: serviceTaskRows(state) })
-  if (include('operational_orders')) projection.push({ table: 'operational_orders', keyColumns: ['source_id'], rows: orderRows(state) })
-  if (include('operational_order_items')) projection.push({ table: 'operational_order_items', keyColumns: ['source_id'], rows: orderItemRows(state) })
-  if (include('operational_kds_tasks')) projection.push({ table: 'operational_kds_tasks', keyColumns: ['source_id'], rows: kdsTaskRows(state) })
-  if (include('operational_payment_intents')) projection.push({ table: 'operational_payment_intents', keyColumns: ['source_id'], rows: paymentRows(state) })
-  if (include('operational_inventory_balances')) projection.push({ table: 'operational_inventory_balances', keyColumns: ['product_id', 'unit_code'], rows: inventoryRows(state) })
+  if (include('operational_tables')) projection.push({ table: 'operational_tables', keyColumns: ['source_id'], rows: tableRows(state, selectedEntityIds(entityIds, 'operational_tables')) })
+  if (include('operational_table_sessions')) projection.push({ table: 'operational_table_sessions', keyColumns: ['source_id'], rows: tableSessionRows(state, selectedEntityIds(entityIds, 'operational_table_sessions')) })
+  if (include('operational_service_tasks')) projection.push({ table: 'operational_service_tasks', keyColumns: ['source_id'], rows: serviceTaskRows(state, selectedEntityIds(entityIds, 'operational_service_tasks')) })
+  if (include('operational_orders')) projection.push({ table: 'operational_orders', keyColumns: ['source_id'], rows: orderRows(state, selectedEntityIds(entityIds, 'operational_orders')) })
+  if (include('operational_order_items')) projection.push({ table: 'operational_order_items', keyColumns: ['source_id'], rows: orderItemRows(state, selectedEntityIds(entityIds, 'operational_order_items')) })
+  if (include('operational_kds_tasks')) projection.push({ table: 'operational_kds_tasks', keyColumns: ['source_id'], rows: kdsTaskRows(state, selectedEntityIds(entityIds, 'operational_kds_tasks')) })
+  if (include('operational_payment_intents')) projection.push({ table: 'operational_payment_intents', keyColumns: ['source_id'], rows: paymentRows(state, selectedEntityIds(entityIds, 'operational_payment_intents')) })
+  if (include('operational_inventory_balances')) projection.push({ table: 'operational_inventory_balances', keyColumns: ['product_id', 'unit_code'], rows: inventoryRows(state, selectedEntityIds(entityIds, 'operational_inventory_balances')) })
   return projection
 }
 
@@ -316,10 +334,12 @@ export class PostgresOperationalProjector implements RuntimeStateProjector {
     current: RuntimeState,
     tables?: OperationalProjectionTable[],
     currentStateSha256?: string,
+    entityIds?: OperationalProjectionEntityIds,
   ) {
     const scopedTables = previous ? tables : undefined
-    const before = previous ? buildOperationalProjection(previous, scopedTables) : []
-    const after = buildOperationalProjection(current, scopedTables)
+    const scopedEntityIds = previous ? entityIds : undefined
+    const before = previous ? buildOperationalProjection(previous, scopedTables, scopedEntityIds) : []
+    const after = buildOperationalProjection(current, scopedTables, scopedEntityIds)
     // Startup backfill is a deterministic rebuild. Clearing the scoped read
     // model also removes stale rows left by an interrupted older projector.
     if (!previous) await clearProjection(client, context, after)

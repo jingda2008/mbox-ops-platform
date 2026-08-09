@@ -3,7 +3,11 @@ import type { Pool as PgPool } from 'pg'
 import type { RuntimeState } from '../src/shared/contracts.js'
 import type { RuntimeStaffDirectorySnapshot } from './repository.js'
 import { migrateRuntimeState } from './runtime-state-migrations.js'
-import type { OperationalProjectionTable, RuntimeStateProjector } from './operational-projection.js'
+import type {
+  OperationalProjectionEntityIds,
+  OperationalProjectionTable,
+  RuntimeStateProjector,
+} from './operational-projection.js'
 
 export interface PostgresQueryResult<Row extends Record<string, unknown> = Record<string, unknown>> {
   rows: Row[]
@@ -25,6 +29,7 @@ export interface PostgresPool {
   idleCount?: number
   waitingCount?: number
   metricsSnapshot?(): PostgresPoolMetrics
+  resetMetrics?(): void
 }
 
 export interface PostgresPoolMetrics {
@@ -69,6 +74,11 @@ export function asPostgresPool(pool: PgPool): PostgresPool {
       acquisitionWaitP95Ms: percentile(0.95),
       acquisitionWaitP99Ms: percentile(0.99),
     }),
+    resetMetrics: () => {
+      waits.length = 0
+      acquisitionCount = 0
+      acquisitionFailedTotal = 0
+    },
   }
 }
 
@@ -85,9 +95,10 @@ export interface PostgresMutationIdempotency {
   lockMs?: number
 }
 
-export interface PostgresMutationOptions {
+export interface PostgresMutationOptions<T = unknown> {
   idempotency?: PostgresMutationIdempotency
   projectionTables?: OperationalProjectionTable[]
+  projectionEntityIds?: (result: T) => OperationalProjectionEntityIds
 }
 
 export interface PostgresRepositoryOptions extends PostgresTenantContext {
@@ -418,6 +429,7 @@ export class PostgresRepository {
   private pendingMutations = 0
   private mutationQueueHighWatermark = 0
   private activeMutations = 0
+  private lastMutationCompletedAt = 0
   private mutationQueueRejectedTotal = 0
   private mutationQueueTimeoutTotal = 0
   private readonly mutationQueueWaits: number[] = []
@@ -544,7 +556,7 @@ export class PostgresRepository {
 
   async mutate<T>(
     mutation: (state: RuntimeState) => T | Promise<T>,
-    options: PostgresMutationOptions = {},
+    options: PostgresMutationOptions<T> = {},
   ): Promise<T> {
     return this.track(() => this.enqueueMutation(async () => {
       let stateChanged = false
@@ -570,7 +582,7 @@ export class PostgresRepository {
         const current = this.cachedState?.revision === expectedRevision
           ? this.cachedState
           : await this.loadState(client)
-        const workingCopy = parseState(JSON.stringify(current))
+        const workingCopy = parseState(current)
         const result = await mutation(workingCopy)
 
         if (workingCopy.revision !== expectedRevision) {
@@ -597,6 +609,7 @@ export class PostgresRepository {
               workingCopy,
               options.projectionTables,
               stateSha256,
+              options.projectionEntityIds?.(result),
             )
           }
           stateChanged = true
@@ -617,6 +630,64 @@ export class PostgresRepository {
       }
       return stateChanged ? structuredClone(result) : result
     }))
+  }
+
+  async waitForMutationIdle(idleMs: number, maxWaitMs: number) {
+    const normalizedIdleMs = Math.max(0, idleMs)
+    const deadline = performance.now() + Math.max(0, maxWaitMs)
+    while (true) {
+      const now = performance.now()
+      if (this.pendingMutations === 0 && this.activeMutations === 0 && now - this.lastMutationCompletedAt >= normalizedIdleMs) {
+        return true
+      }
+      if (now >= deadline) return false
+      const remainingIdle = Math.max(1, normalizedIdleMs - (now - this.lastMutationCompletedAt))
+      const remainingDeadline = Math.max(1, deadline - now)
+      await new Promise((resolve) => setTimeout(resolve, Math.min(25, remainingIdle, remainingDeadline)))
+    }
+  }
+
+  async runWithDistributedLease<T>(name: string, operation: () => Promise<T>) {
+    return this.track(async () => {
+      const client = await this.pool.connect()
+      const leaseName = `mbox:${this.tenantId}:${this.storeId}:${name}`
+      let acquired: boolean
+      try {
+        const result = await client.query<{ acquired: boolean }>(
+          'SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS acquired',
+          [leaseName],
+        )
+        acquired = result.rows[0]?.acquired === true
+      } catch (error) {
+        client.release(error instanceof Error ? error : true)
+        throw error
+      }
+      if (!acquired) {
+        client.release()
+        return { acquired: false }
+      }
+
+      let value: T | undefined
+      let operationError: unknown
+      try {
+        value = await operation()
+      } catch (error) {
+        operationError = error
+      }
+
+      let unlockError: unknown
+      try {
+        await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [leaseName])
+      } catch (error) {
+        unlockError = error
+      }
+      // A session advisory lock survives until this connection closes. Never
+      // return a client with an uncertain lock state to the shared pool.
+      client.release(unlockError instanceof Error ? unlockError : unlockError ? true : undefined)
+      if (operationError !== undefined) throw operationError
+      if (unlockError !== undefined) throw unlockError
+      return { acquired: true, value: value as T }
+    })
   }
 
   async reset(): Promise<RuntimeState> {
@@ -960,6 +1031,7 @@ export class PostgresRepository {
     } finally {
       if (timeout) clearTimeout(timeout)
       if (acquired) this.activeMutations -= 1
+      if (acquired) this.lastMutationCompletedAt = performance.now()
       this.pendingMutations -= 1
       release()
     }
@@ -1015,6 +1087,26 @@ export class PostgresRepository {
       serializedStateBytes: this.serializedStateBytes,
       maxSerializedStateBytes: this.maxSerializedStateBytes,
     }
+  }
+
+  async resetPerformanceMetrics() {
+    if (this.pendingMutations !== 0 || this.activeMutations !== 0) {
+      throw new Error('cannot reset performance metrics while mutations are active')
+    }
+    const current = await this.readFresh()
+    if (this.pendingMutations !== 0 || this.activeMutations !== 0) {
+      throw new Error('cannot reset performance metrics while mutations are active')
+    }
+    const currentBytes = Buffer.byteLength(serializeRuntimeState(current))
+    this.pool.resetMetrics?.()
+    this.mutationQueueHighWatermark = 0
+    this.mutationQueueRejectedTotal = 0
+    this.mutationQueueTimeoutTotal = 0
+    this.mutationQueueWaits.length = 0
+    this.mutationServiceDurations.length = 0
+    this.serializedStateBytes = currentBytes
+    this.initialSerializedStateBytes = currentBytes
+    this.maxSerializedStateBytes = currentBytes
   }
 
   private recordMutationMetric(samples: number[], value: number) {

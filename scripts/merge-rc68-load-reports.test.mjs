@@ -43,7 +43,7 @@ function evidence(phase, passed = true) {
         mutationQueueMax: 100, mutationQueueWaitMs: 15000, stateReadCacheMs: 3000,
       },
       inputs: { packageLockSha256: 'lock', migrationSetSha256: 'migration', seedStateSha256: 'seed' },
-      workload: { samplesPerReadOrAction: 300, browserSamples: 30, readRps: 1, writeRps: 2 },
+      workload: { phase, samplesPerReadOrAction: 300, browserSamples: 30, readRps: 1, writeRps: 2 },
     },
     browserStartup: ['staff_start', 'reads'].includes(phase) ? {
       passed,

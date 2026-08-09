@@ -762,12 +762,20 @@ export function registerCommerceRoutes(
       }
       if (changed) state.revision += 1
       return task
-    }, { projectionTables: [
-      'operational_service_tasks',
-      'operational_orders',
-      'operational_order_items',
-      'operational_kds_tasks',
-    ] })
+    }, {
+      projectionTables: [
+        'operational_service_tasks',
+        'operational_orders',
+        'operational_order_items',
+        'operational_kds_tasks',
+      ],
+      projectionEntityIds: (task: KdsTask) => ({
+        operational_service_tasks: task.deliveryServiceTask?.id ? [task.deliveryServiceTask.id] : [],
+        operational_orders: [task.orderId],
+        operational_order_items: [task.orderItemId],
+        operational_kds_tasks: [task.id],
+      }),
+    })
   })
 
   app.post<{ Params: { taskId: string } }>('/api/commerce/kds/:taskId/manager-cancel', async (request) => {

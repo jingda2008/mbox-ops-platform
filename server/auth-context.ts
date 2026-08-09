@@ -46,7 +46,14 @@ interface AuthContextOptions {
   }) => Promise<{ roleId: string; businessDate: string; expiresAt: number } | null>
 }
 
-const PUBLIC_PATHS = new Set(['/api/health', '/api/live', '/api/ready', '/api/metrics', '/api/auth/pilot-login'])
+const PUBLIC_PATHS = new Set([
+  '/api/health',
+  '/api/live',
+  '/api/ready',
+  '/api/metrics',
+  '/api/metrics/reset',
+  '/api/auth/pilot-login',
+])
 
 function isPaymentProviderCallback(path: string) {
   return /^\/api\/payments\/providers\/[^/]+\/callback$/.test(path)

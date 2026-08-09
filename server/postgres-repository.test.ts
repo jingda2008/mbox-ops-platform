@@ -47,6 +47,9 @@ class FakePool implements PostgresPool {
   idleCount = 3
   waitingCount = 0
   databaseNow = new Date(now)
+  advisoryLeaseHeld = false
+  failNextAdvisoryUnlock = false
+  readonly releaseErrors: Array<Error | boolean | undefined> = []
 
   async connect(): Promise<PostgresPoolClient> {
     if (this.ended) throw new Error('pool ended')
@@ -76,6 +79,20 @@ class FakeClient implements PostgresPoolClient {
   ): Promise<PostgresQueryResult<Row>> {
     const sql = normalizeSql(text)
     this.pool.queries.push({ sql, values: structuredClone(values) })
+
+    if (sql.startsWith('SELECT pg_try_advisory_lock')) {
+      if (this.pool.advisoryLeaseHeld) return result([{ acquired: false }])
+      this.pool.advisoryLeaseHeld = true
+      return result([{ acquired: true }])
+    }
+    if (sql.startsWith('SELECT pg_advisory_unlock')) {
+      if (this.pool.failNextAdvisoryUnlock) {
+        this.pool.failNextAdvisoryUnlock = false
+        throw new Error('advisory unlock failed')
+      }
+      this.pool.advisoryLeaseHeld = false
+      return result([{ pg_advisory_unlock: true }])
+    }
 
     if (sql.startsWith("SELECT n.nspname || '.' || c.relname AS table_name")) {
       return this.pool.schemaExists ? result([{ table_name: 'mbox.runtime_states' }]) : result([])
@@ -209,8 +226,9 @@ class FakeClient implements PostgresPoolClient {
     throw new Error(`Unexpected SQL: ${sql}`)
   }
 
-  release(): void {
+  release(error?: Error | boolean): void {
     this.pool.releases += 1
+    this.pool.releaseErrors.push(error)
   }
 
   private requireTransaction() {
@@ -436,6 +454,94 @@ describe('PostgresRepository', () => {
     expect(pool.queries.filter(({ sql }) => (
       sql.startsWith('SELECT revision, state, state_sha256 FROM mbox.runtime_states')
     ))).toHaveLength(fullReadsBefore)
+  })
+
+  it('starts a fresh performance window from the current authoritative state', async () => {
+    const { repository } = createRepository()
+    await repository.init()
+    await repository.mutate((state) => {
+      state.store.name = 'Measured baseline'
+      state.revision += 1
+    })
+    expect((await repository.healthCheck()).mutationQueue.serviceSamples).toBeGreaterThan(0)
+
+    await repository.resetPerformanceMetrics()
+
+    const reset = (await repository.healthCheck()).mutationQueue
+    expect(reset).toMatchObject({
+      highWatermark: 0,
+      rejectedTotal: 0,
+      timeoutTotal: 0,
+      waitSamples: 0,
+      serviceSamples: 0,
+    })
+    expect(reset.initialSerializedStateBytes).toBeGreaterThan(0)
+    expect(reset.serializedStateBytes).toBe(reset.initialSerializedStateBytes)
+    expect(reset.maxSerializedStateBytes).toBe(reset.initialSerializedStateBytes)
+  })
+
+  it('runs singleton background work under a session advisory lease', async () => {
+    const { pool, repository } = createRepository()
+    await repository.init()
+    let release!: () => void
+    let entered!: () => void
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    const started = new Promise<void>((resolve) => { entered = resolve })
+
+    const first = repository.runWithDistributedLease('operational-scheduler', async () => {
+      entered()
+      await blocked
+      return 7
+    })
+    await started
+    await expect(repository.runWithDistributedLease('operational-scheduler', async () => 8))
+      .resolves.toEqual({ acquired: false })
+    release()
+    await expect(first).resolves.toEqual({ acquired: true, value: 7 })
+    expect(pool.advisoryLeaseHeld).toBe(false)
+    expect(pool.queries.filter(({ sql }) => sql.startsWith('SELECT pg_try_advisory_lock'))).toHaveLength(2)
+    expect(pool.queries.filter(({ sql }) => sql.startsWith('SELECT pg_advisory_unlock'))).toHaveLength(1)
+  })
+
+  it('destroys a leased connection when advisory unlock fails', async () => {
+    const { pool, repository } = createRepository()
+    await repository.init()
+    pool.failNextAdvisoryUnlock = true
+
+    await expect(repository.runWithDistributedLease('operational-scheduler', async () => 7))
+      .rejects.toThrow('advisory unlock failed')
+    expect(pool.releaseErrors.at(-1)).toBeInstanceOf(Error)
+  })
+
+  it('preserves the business failure when both the operation and advisory unlock fail', async () => {
+    const { pool, repository } = createRepository()
+    await repository.init()
+    pool.failNextAdvisoryUnlock = true
+
+    await expect(repository.runWithDistributedLease('operational-scheduler', async () => {
+      throw new Error('scheduled operation failed')
+    })).rejects.toThrow('scheduled operation failed')
+    expect(pool.releaseErrors.at(-1)).toMatchObject({ message: 'advisory unlock failed' })
+  })
+
+  it('lets background work wait for a quiet mutation window without blocking forever', async () => {
+    const { repository } = createRepository()
+    await repository.init()
+    let release!: () => void
+    let entered!: () => void
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    const mutation = repository.mutate(async (state) => {
+      entered()
+      await blocked
+      state.revision += 1
+    })
+    await started
+
+    await expect(repository.waitForMutationIdle(1, 5)).resolves.toBe(false)
+    release()
+    await mutation
+    await expect(repository.waitForMutationIdle(1, 100)).resolves.toBe(true)
   })
 
   it('rejects excess or stale queued mutations before they consume database connections', async () => {

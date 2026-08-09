@@ -255,6 +255,7 @@ if (runtimeConfig.runtimeMode === 'staging' || runtimeConfig.runtimeMode === 'pr
 await registerObservability(app, {
   runtimeMode: runtimeConfig.runtimeMode,
   metricsToken: runtimeConfig.metricsToken,
+  resetRuntimeMetrics: () => repository.resetPerformanceMetrics?.(),
   readiness: async () => {
     const status = await repository.healthCheck()
     const postgresStatus = status.repository === 'postgres' ? status as PostgresRepositoryHealth : null
@@ -811,31 +812,53 @@ if (runtimeConfig.runtimeMode === 'staging' || runtimeConfig.runtimeMode === 'pr
 }
 
 let schedulerRunning = false
+let schedulerDeferredSince = 0
+const schedulerIdleMs = 300
+const schedulerIdleWaitMs = 1_500
+const schedulerMaximumDeferralMs = 10_000
 const notificationWorkerId = `notification-worker:${process.pid}:${randomUUID()}`
 const sopActionWorkerId = `sop-action-worker:${process.pid}:${randomUUID()}`
 const scheduler = setInterval(() => {
   if (schedulerRunning) return
   schedulerRunning = true
-  const now = new Date()
-  void repository.read()
-    .then(async (snapshot) => {
-      const scheduledWorkDue = scheduledOperationsWouldChange(snapshot, now)
-      const businessDayRollover = scheduledWorkDue
-        ? await repository.mutate((state) => applyScheduledOperations(state, now))
-        : null
-      const dispatchSnapshot = scheduledWorkDue ? await repository.read() : snapshot
-      if (businessDayRollover?.status === 'rolled_over') {
-        app.log.info({
-          previousBusinessDate: businessDayRollover.steps[0]?.businessDate,
-          businessDate: businessDayRollover.businessDate,
-          rolledBusinessDayCount: businessDayRollover.steps.length,
-        }, 'business day automatically rolled over')
+  const runScheduler = async () => {
+    const snapshot = await repository.read()
+    const probeNow = new Date()
+    const scheduledWorkDue = scheduledOperationsWouldChange(snapshot, probeNow)
+    if (scheduledWorkDue) {
+      const forceRun = schedulerDeferredSince > 0 && Date.now() - schedulerDeferredSince >= schedulerMaximumDeferralMs
+      const idle = forceRun || !repository.waitForMutationIdle
+        ? true
+        : await repository.waitForMutationIdle(schedulerIdleMs, schedulerIdleWaitMs)
+      if (!idle) {
+        if (schedulerDeferredSince === 0) schedulerDeferredSince = Date.now()
+        return
       }
-      await Promise.all([
-        dispatchDueNotifications(repository, customerNotificationAdapters, notificationWorkerId, now, {}, dispatchSnapshot),
-        dispatchDueSopActions(repository, sopActionAdapters, sopActionWorkerId, now, dispatchSnapshot),
-      ])
-    })
+    }
+    schedulerDeferredSince = 0
+    const executionNow = new Date()
+    const currentSnapshot = scheduledWorkDue ? await repository.read() : snapshot
+    const workStillDue = scheduledWorkDue && scheduledOperationsWouldChange(currentSnapshot, executionNow)
+    const businessDayRollover = workStillDue
+      ? await repository.mutate((state) => applyScheduledOperations(state, executionNow))
+      : null
+    const dispatchSnapshot = workStillDue ? await repository.read() : currentSnapshot
+    if (businessDayRollover?.status === 'rolled_over') {
+      app.log.info({
+        previousBusinessDate: businessDayRollover.steps[0]?.businessDate,
+        businessDate: businessDayRollover.businessDate,
+        rolledBusinessDayCount: businessDayRollover.steps.length,
+      }, 'business day automatically rolled over')
+    }
+    await Promise.all([
+      dispatchDueNotifications(repository, customerNotificationAdapters, notificationWorkerId, executionNow, {}, dispatchSnapshot),
+      dispatchDueSopActions(repository, sopActionAdapters, sopActionWorkerId, executionNow, dispatchSnapshot),
+    ])
+  }
+  const leasedRun = repository.runWithDistributedLease
+    ? repository.runWithDistributedLease('operational-scheduler', runScheduler)
+    : runScheduler()
+  void leasedRun
     .catch((error) => app.log.error(error))
     .finally(() => { schedulerRunning = false })
 }, 2_000)

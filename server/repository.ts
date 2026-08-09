@@ -32,6 +32,9 @@ export interface RuntimeRepository {
   readStaffDirectory?(): Promise<RuntimeStaffDirectorySnapshot>
   mutate<T>(mutation: (state: RuntimeState) => T | Promise<T>, options?: unknown): Promise<T>
   reset(): Promise<RuntimeState>
+  resetPerformanceMetrics?(): void | Promise<void>
+  waitForMutationIdle?(idleMs: number, maxWaitMs: number): Promise<boolean>
+  runWithDistributedLease?<T>(name: string, operation: () => Promise<T>): Promise<{ acquired: boolean; value?: T }>
   healthCheck(): Promise<RuntimeRepositoryHealth>
   close(): Promise<void>
 }
@@ -149,6 +152,15 @@ export class JsonRepository {
       revision: this.state.revision,
       employees: this.state.employees.map(({ id, roleId, status }) => ({ id, roleId, status })),
     }
+  }
+
+  async waitForMutationIdle() {
+    await this.queue
+    return true
+  }
+
+  async runWithDistributedLease<T>(_name: string, operation: () => Promise<T>) {
+    return { acquired: true, value: await operation() }
   }
 
   async mutate<T>(mutation: (state: RuntimeState) => T | Promise<T>): Promise<T> {

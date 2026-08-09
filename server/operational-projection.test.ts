@@ -69,6 +69,57 @@ describe('normalized operational projection', () => {
     })
   })
 
+  it('builds only requested entity rows while retaining the requested table boundary', () => {
+    const state = createSeedState(new Date('2026-07-20T12:00:00.000Z'))
+    const occurredAt = '2026-07-20T12:01:00.000Z'
+    const order = (id: string, itemId: string) => ({
+      id,
+      tableSessionId: 'session:table-l01:test',
+      status: 'draft' as const,
+      items: [{
+        id: itemId,
+        skuId: 'product-beer',
+        name: '精酿啤酒',
+        specification: '1杯',
+        quantity: 1,
+        unitListPriceAmount: 6800,
+        unitSalePriceAmount: 6800,
+        unitCostAmount: 1800,
+        stationId: 'bar-main',
+        configVersion: 1,
+        fulfillmentStatus: 'draft' as const,
+        kdsTaskId: null,
+        addedBy: 'emp-lin',
+        addedAt: occurredAt,
+      }],
+      amounts: { grossAmount: 6800, discountAmount: 0, giftAmount: 0, payableAmount: 6800 },
+      revision: 1,
+      createdBy: 'emp-lin',
+      createdAt: occurredAt,
+      submittedBy: null,
+      submittedAt: null,
+      fulfilledAt: null,
+    })
+    state.orderDomain.orders.push(order('order-selected', 'item-selected'), order('order-other', 'item-other'))
+    const selectedOrder = state.orderDomain.orders[0]
+    const selectedItem = selectedOrder!.items[0]
+
+    const projection = new Map(buildOperationalProjection(
+      state,
+      ['operational_orders', 'operational_order_items'],
+      {
+        operational_orders: [selectedOrder!.id],
+        operational_order_items: [selectedItem!.id],
+      },
+    ).map((set) => [set.table, set.rows]))
+
+    expect([...projection.keys()]).toEqual(['operational_orders', 'operational_order_items'])
+    expect(projection.get('operational_orders')).toHaveLength(1)
+    expect(projection.get('operational_orders')?.[0]?.source_id).toBe(selectedOrder!.id)
+    expect(projection.get('operational_order_items')).toHaveLength(1)
+    expect(projection.get('operational_order_items')?.[0]?.source_id).toBe(selectedItem!.id)
+  })
+
   it('accepts equivalent checkpoint counts independent of JSON key order', async () => {
     const expected = {
       operational_tables: 7,

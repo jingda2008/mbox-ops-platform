@@ -35,6 +35,47 @@ describe('observability', () => {
     await app.close()
   })
 
+  it('resets an isolated measurement window outside production only', async () => {
+    const app = Fastify()
+    let runtimeResets = 0
+    await registerObservability(app, {
+      runtimeMode: 'staging',
+      metricsToken: 'm'.repeat(32),
+      readiness: async () => ({ ready: true }),
+      resetRuntimeMetrics: () => { runtimeResets += 1 },
+    })
+    app.get('/api/measured', async () => ({ ok: true }))
+    await app.inject('/api/measured')
+    const reset = await app.inject({
+      method: 'POST',
+      url: '/api/metrics/reset',
+      headers: { authorization: `Bearer ${'m'.repeat(32)}` },
+    })
+    expect(reset.statusCode).toBe(200)
+    expect(reset.json()).toMatchObject({ status: 'reset' })
+    expect(runtimeResets).toBe(1)
+    const metrics = await app.inject({
+      method: 'GET',
+      url: '/api/metrics',
+      headers: { authorization: `Bearer ${'m'.repeat(32)}` },
+    })
+    expect(metrics.body).not.toContain('route="/api/measured"')
+    await app.close()
+
+    const production = Fastify()
+    await registerObservability(production, {
+      runtimeMode: 'production',
+      metricsToken: 'm'.repeat(32),
+      readiness: async () => ({ ready: true }),
+    })
+    expect((await production.inject({
+      method: 'POST',
+      url: '/api/metrics/reset',
+      headers: { authorization: `Bearer ${'m'.repeat(32)}` },
+    })).statusCode).toBe(403)
+    await production.close()
+  })
+
   it('reports bounded route histograms without leaking path identifiers', async () => {
     const app = Fastify()
     await registerObservability(app, { runtimeMode: 'test', readiness: async () => ({ ready: true }) })

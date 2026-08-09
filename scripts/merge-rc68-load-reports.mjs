@@ -27,6 +27,7 @@ function digest(value) {
 }
 
 function environmentIdentity(manifest) {
+  const { phase: _phase, ...sharedWorkload } = manifest?.workload ?? {}
   return JSON.stringify({
     runId: manifest?.runId,
     source: manifest?.source,
@@ -49,7 +50,7 @@ function environmentIdentity(manifest) {
       chromiumVersion: manifest?.runtime?.chromiumVersion,
     },
     inputs: manifest?.inputs,
-    workload: manifest?.workload,
+    workload: sharedWorkload,
   })
 }
 

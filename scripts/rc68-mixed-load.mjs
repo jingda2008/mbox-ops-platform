@@ -227,6 +227,20 @@ const [taskSetupFailures, orderSetupFailures] = await Promise.all([
 setupFailures.push(...taskSetupFailures, ...orderSetupFailures)
 if (setupFailures.length) throw new Error(`负载数据准备失败：${JSON.stringify(setupFailures.slice(0, 5))}`)
 
+async function resetMeasuredMetricsWindow() {
+  for (let index = 0; index < baseUrls.length; index += 1) {
+    await jsonRequest('setup_reset_metrics', index, '/api/metrics/reset', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${process.env.MBOX_METRICS_TOKEN ?? ''}` },
+    }, false)
+  }
+}
+
+// Fixture creation is intentionally faster than the representative route
+// regression. KDS completion has one additional setup transition below, so it
+// opens the clean metrics window only after every item has entered preparing.
+if (phase !== 'kds_complete') await resetMeasuredMetricsWindow()
+
 const failures = []
 const coldStartIndices = Array.from({ length: staffColdStarts }, (_, index) => index)
 const staffStartJourneys = Array.from({ length: staffActorIds.length * staffStartRounds }, (_, index) => ({
@@ -335,6 +349,7 @@ if (phase === 'kds_complete') {
     }, bartenderToken), false)
   }, { requestsPerSecond: setupWriteRps, maxConcurrency: setupConcurrency }, 'setup')
   if (preparationFailures.length) throw new Error(`KDS完成阶段准备失败：${JSON.stringify(preparationFailures.slice(0, 5))}`)
+  await resetMeasuredMetricsWindow()
 }
 if (measures('kds_complete')) failures.push(...await runArrival('kds_complete', kdsTaskIds, async (taskId, index) => {
     await jsonRequest('kds_complete', index, `/api/commerce/kds/${encodeURIComponent(taskId)}/actions`, body({
@@ -372,10 +387,33 @@ async function verifyWritePhaseInvariants() {
     const snapshots = await authoritativeSnapshots()
     const expected = new Set(liveTaskIds)
     const matching = snapshots.map((snapshot) => snapshot.tasks.filter((task) => expected.has(task.id)))
-    for (const tasks of matching) {
+    for (let snapshotIndex = 0; snapshotIndex < matching.length; snapshotIndex += 1) {
+      const tasks = matching[snapshotIndex]
       if (tasks.length !== samples) throw new Error(`任务落库数量 ${tasks.length}/${samples}`)
-      if (tasks.some((task) => task.status !== 'pending' || !task.note.startsWith('rc68-live-'))) {
-        throw new Error('任务落库状态或标识不正确')
+      const invalid = tasks.filter((task) => (
+        !['pending', 'escalated'].includes(task.status)
+        || !task.note.startsWith('rc68-live-')
+        || task.archivedAt !== null
+      ))
+      if (invalid.length > 0) {
+        const evidence = invalid.slice(0, 5).map((task) => ({
+          id: task.id,
+          status: task.status,
+          serviceTypeId: task.serviceTypeId,
+          workflowLevel: task.workflowLevel,
+          note: task.note,
+        }))
+        throw new Error(`任务落库状态或标识不正确：${JSON.stringify(evidence)}`)
+      }
+      const escalated = tasks.filter((task) => task.status === 'escalated')
+      const escalationEvents = snapshots[snapshotIndex].taskEvents.filter((event) => (
+        event.type === 'task.escalated.v1' && expected.has(event.taskId)
+      ))
+      if (
+        escalated.some((task) => task.escalationLevel < 1)
+        || escalationEvents.length < escalated.length
+      ) {
+        throw new Error(`任务SLA升级缺少级别或事件证据：升级任务${escalated.length}，升级事件${escalationEvents.length}`)
       }
     }
     assertSameIds(matching[0].map((task) => task.id), matching[1].map((task) => task.id), '任务')

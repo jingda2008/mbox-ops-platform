@@ -6,6 +6,7 @@ interface ObservabilityOptions {
   runtimeMode: RuntimeMode
   metricsToken?: string
   readiness: () => Promise<{ ready: boolean; details?: Record<string, string | number | boolean> }>
+  resetRuntimeMetrics?: () => void | Promise<void>
 }
 
 interface MetricState {
@@ -293,6 +294,30 @@ export async function registerObservability(app: FastifyInstance, options: Obser
     if (!authenticateMetrics(request, reply, options)) return reply
     const status = await readiness()
     return reply.type('text/plain; version=0.0.4; charset=utf-8').send(renderPrometheus(metrics, status.details))
+  })
+  app.post('/api/metrics/reset', async (request, reply) => {
+    if (!authenticateMetrics(request, reply, options)) return reply
+    if (options.runtimeMode === 'production') {
+      return reply.status(403).send({
+        code: 'METRICS_RESET_DISABLED',
+        message: '生产环境禁止重置性能指标窗口',
+      })
+    }
+    if (metrics.inFlight > 1) {
+      return reply.status(409).send({
+        code: 'METRICS_RESET_BUSY',
+        message: '仍有其他请求执行中，不能重置性能指标窗口',
+      })
+    }
+    await options.resetRuntimeMetrics?.()
+    metrics.startedAt = Date.now()
+    metrics.requests = 0
+    metrics.errors = 0
+    metrics.durationMsTotal = 0
+    metrics.routes.clear()
+    metrics.eventLoopDelay.reset()
+    readinessCache = null
+    return { status: 'reset', resetAt: new Date().toISOString() }
   })
 }
 

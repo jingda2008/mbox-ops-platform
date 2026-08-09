@@ -92,3 +92,15 @@ test('tracked TC artifacts use repository-relative references', async () => {
   assert.doesNotMatch(generator, /`见 \$\{qualitySupplementPath\}`/)
   assert.match(generator, /must not contain checkout-specific absolute paths/)
 })
+
+test('KDS completion opens the measured metrics window after preparation', async () => {
+  const source = await readFile(new URL('./rc68-mixed-load.mjs', import.meta.url), 'utf8')
+  const preparation = source.indexOf("if (phase === 'kds_complete')")
+  const reset = source.indexOf('await resetMeasuredMetricsWindow()', preparation)
+  const measured = source.indexOf("if (measures('kds_complete'))", preparation)
+
+  assert.ok(preparation >= 0)
+  assert.ok(reset > preparation)
+  assert.ok(measured > reset)
+  assert.match(source, /if \(phase !== 'kds_complete'\) await resetMeasuredMetricsWindow\(\)/)
+})

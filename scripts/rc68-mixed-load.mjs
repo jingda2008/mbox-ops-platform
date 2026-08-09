@@ -8,6 +8,7 @@ import {
   runArrivalPool,
   selectAuthorizedOccupiedTables,
 } from './load-workload-model.mjs'
+import { resetRuntimeMetricsWindow } from './reset-runtime-metrics-window.mjs'
 
 const baseUrls = (process.env.MBOX_LOAD_BASE_URLS ?? 'http://127.0.0.1:18791,http://127.0.0.1:18792')
   .split(',').map((value) => value.trim().replace(/\/$/, '')).filter(Boolean)
@@ -179,6 +180,7 @@ await Promise.all([
 ])
 const keepaliveRuns = new Set()
 let keepaliveStopped = false
+let keepalivePaused = false
 const renewActiveStaff = async () => {
   const results = await Promise.allSettled(staffSessions.map((session, index) => (
     jsonRequest('keepalive_heartbeat', index, '/api/auth/presence/heartbeat', body({}, session.token), false)
@@ -193,7 +195,7 @@ const renewActiveStaff = async () => {
   })
 }
 const keepaliveTimer = setInterval(() => {
-  if (keepaliveStopped) return
+  if (keepaliveStopped || keepalivePaused) return
   const run = renewActiveStaff()
   keepaliveRuns.add(run)
   void run.finally(() => keepaliveRuns.delete(run))
@@ -228,11 +230,16 @@ setupFailures.push(...taskSetupFailures, ...orderSetupFailures)
 if (setupFailures.length) throw new Error(`负载数据准备失败：${JSON.stringify(setupFailures.slice(0, 5))}`)
 
 async function resetMeasuredMetricsWindow() {
-  for (let index = 0; index < baseUrls.length; index += 1) {
-    await jsonRequest('setup_reset_metrics', index, '/api/metrics/reset', {
-      method: 'POST',
-      headers: { authorization: `Bearer ${process.env.MBOX_METRICS_TOKEN ?? ''}` },
-    }, false)
+  keepalivePaused = true
+  try {
+    await Promise.allSettled([...keepaliveRuns])
+    await resetRuntimeMetricsWindow({
+      baseUrls,
+      token: process.env.MBOX_METRICS_TOKEN ?? '',
+      phase,
+    })
+  } finally {
+    keepalivePaused = false
   }
 }
 

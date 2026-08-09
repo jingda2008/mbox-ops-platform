@@ -38,12 +38,9 @@ async function startApplication() {
     return
   }
 
-  // Load the staff shell and its first workspace in parallel. Public visitors
-  // never evaluate staff auth, offline queues or operations-only dependencies.
-  const [{ default: App }] = await Promise.all([
-    import('./App.tsx'),
-    import('./components/OperationsConsole'),
-  ])
+  // The role home is rendered by App itself. OperationsConsole stays lazy so
+  // the employee first paint does not wait for an operations-only workspace.
+  const { default: App } = await import('./App.tsx')
   render(<App />)
 }
 

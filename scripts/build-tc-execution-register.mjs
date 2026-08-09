@@ -1,6 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { execFileSync } from 'node:child_process'
 
 const root = resolve(import.meta.dirname, '..')
 const baselinePath = resolve(root, 'docs/comprehensive-operating-test-cases.md')
@@ -18,12 +17,15 @@ const existingExecutionDate = existsSync(reportPath)
 const executionDate = process.env.MBOX_TC_EXECUTION_DATE?.trim()
   || existingExecutionDate
   || new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(new Date())
-const evidenceCommitSha = process.env.MBOX_EVIDENCE_SHA?.trim()
-  || execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim()
-const evidenceRunId = process.env.MBOX_EVIDENCE_RUN_ID?.trim() || 'local-unpublished'
-const evidenceImageDigest = process.env.MBOX_EVIDENCE_IMAGE_DIGEST?.trim() || 'not-built'
-const worktreeDirty = execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).trim().length > 0
-const immutableEvidence = !worktreeDirty && evidenceRunId !== 'local-unpublished' && evidenceImageDigest !== 'not-built'
+// Tracked TC artifacts must be deterministic across the local checkout and CI.
+// Exact commit, run and image identities belong in the separately sealed CI or
+// deployment ledger; release tooling may still inject them for an untracked copy.
+const evidenceCommitSha = process.env.MBOX_EVIDENCE_SHA?.trim() || 'see-ci-quality-ledger'
+const evidenceRunId = process.env.MBOX_EVIDENCE_RUN_ID?.trim() || 'see-ci-quality-ledger'
+const evidenceImageDigest = process.env.MBOX_EVIDENCE_IMAGE_DIGEST?.trim() || 'see-release-manifest'
+const immutableEvidence = /^[0-9a-f]{40}$/.test(evidenceCommitSha)
+  && evidenceRunId !== 'see-ci-quality-ledger'
+  && /^sha256:[0-9a-f]{64}$/.test(evidenceImageDigest)
 
 const baseline = readFileSync(baselinePath, 'utf8')
 const testCases = [...baseline.matchAll(/^\| ((?:PER|GST|SVC|ORD|PAY|MBR|SNG|INV|INC|SEC|PKC)-\d{3}) \| (P[0-3]) \| ([^|]+) \| ([^|]+) \|$/gm)]
@@ -284,7 +286,7 @@ const report = `# M-BOX 213条经营TC执行报告
 
 工程覆盖度与验收状态是两套口径：代码存在不等于现场验收通过。未通过项中，外部依赖${externalDependency.size}条、代码支持但待现场验证${codeSupportedFieldPending.size}条、明确能力缺口${capabilityGap.size}条、部分实现${partialGap.size}条；其余属于现场执行或云端复测项。
 
-本报告证据提交：\`${evidenceCommitSha}\`；运行ID：\`${evidenceRunId}\`；镜像摘要：\`${evidenceImageDigest}\`；不可变证据状态：**${immutableEvidence ? '完整' : '不完整'}**。工作区未提交、没有CI运行ID或没有镜像摘要时，只能作为开发检查，不能作为发布证据。
+本报告证据提交：\`${evidenceCommitSha}\`；运行ID：\`${evidenceRunId}\`；镜像摘要：\`${evidenceImageDigest}\`；不可变证据状态：**${immutableEvidence ? '完整' : '请查看独立质量总账'}**。受版本控制的TC报告默认保持确定性；真实提交、CI运行和镜像身份必须从同一运行生成的质量总账与发布清单核对，不能在本文件中伪造绑定。
 
 ## 工程证据口径
 

@@ -7,7 +7,13 @@ import {
   resolveOperationalRuntimeState,
   type OperationalReadSnapshot,
 } from './operational-read-store.js'
-import type { PostgresPool, PostgresPoolClient, PostgresQueryResult } from './postgres-repository.js'
+import {
+  runtimeStateChecksum,
+  serializeRuntimeState,
+  type PostgresPool,
+  type PostgresPoolClient,
+  type PostgresQueryResult,
+} from './postgres-repository.js'
 
 const tenantId = '11111111-1111-4111-8111-111111111111'
 const storeId = '22222222-2222-4222-8222-222222222222'
@@ -46,9 +52,12 @@ class OperationalReadPool implements PostgresPool {
           return result([{ tenant_id: tenantId, store_id: storeId }]) as PostgresQueryResult<Row>
         }
         if (sql.startsWith('SELECT checkpoint.runtime_revision')) {
-          expect(values).toEqual([tenantId, storeId, '2026-07-21'])
+          expect(values.slice(0, 2)).toEqual([tenantId, storeId])
+          expect(['2026-07-21', null]).toContain(values[2])
           return result([{
             runtime_revision: this.snapshot.revision,
+            aggregate_state: stateForSnapshot(this.snapshot),
+            state_sha256: runtimeStateChecksum(serializeRuntimeState(stateForSnapshot(this.snapshot))),
             tables: this.snapshot.tables,
             table_sessions: this.snapshot.tableSessions,
             service_tasks: this.snapshot.serviceTasks,
@@ -68,6 +77,19 @@ class OperationalReadPool implements PostgresPool {
   async end() {}
 }
 
+function stateForSnapshot(snapshot: OperationalReadSnapshot) {
+  const state = createSeedState(new Date('2026-07-21T12:00:00.000Z'))
+  state.revision = snapshot.revision
+  state.tables = structuredClone(snapshot.tables)
+  state.songState.tableSessions = structuredClone(snapshot.tableSessions)
+  state.tasks = structuredClone(snapshot.serviceTasks)
+  state.orderDomain.orders = structuredClone(snapshot.orders)
+  state.orderDomain.kdsTasks = structuredClone(snapshot.kdsTasks)
+  state.paymentDomain.paymentIntents = structuredClone(snapshot.paymentIntents)
+  if (state.inventoryDomain) state.inventoryDomain.balances = structuredClone(snapshot.inventoryBalances)
+  return state
+}
+
 describe('normalized operational read store', () => {
   it('reads all high-frequency entities with one indexed snapshot statement', async () => {
     const state = createSeedState(new Date('2026-07-21T12:00:00.000Z'))
@@ -82,6 +104,20 @@ describe('normalized operational read store', () => {
       'snapshot_revision = checkpoint.runtime_revision',
     )
     expect(pool.releases).toBe(1)
+  })
+
+  it('reads the aggregate and normalized entities from one coherent latest snapshot', async () => {
+    const state = createSeedState(new Date('2026-07-21T12:00:00.000Z'))
+    const pool = new OperationalReadPool(snapshotForState(state))
+    const store = new PostgresOperationalReadStore(pool, { tenantId, storeId })
+
+    const result = await store.readLatestRuntimeState()
+
+    expect(result.source).toBe('normalized_tables')
+    expect(result.revisionMismatches).toBe(0)
+    expect(result.state.revision).toBe(state.revision)
+    expect(result.state.tasks).toEqual(state.tasks)
+    expect(pool.queries.filter((query) => query.startsWith('SELECT checkpoint.runtime_revision'))).toHaveLength(1)
   })
 
   it('keeps unchanged rows visible when another entity advances the checkpoint revision', async () => {

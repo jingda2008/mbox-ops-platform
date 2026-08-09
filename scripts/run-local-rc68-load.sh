@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+container="mbox-pg-rc68-mixed-$$"
+api1=""
+api2=""
+postgres_port="${MBOX_LOCAL_LOAD_POSTGRES_PORT:-55434}"
+api_port_1="${MBOX_LOCAL_LOAD_API_PORT_1:-18791}"
+api_port_2="${MBOX_LOCAL_LOAD_API_PORT_2:-18792}"
+artifact_dir="${MBOX_LOCAL_LOAD_ARTIFACT_DIR:-artifacts/runtime-quality-mixed}"
+postgres_image="${MBOX_LOAD_POSTGRES_IMAGE:-postgres:16-alpine}"
+
+cleanup() {
+  if [ -n "$api1" ]; then kill -TERM "$api1" 2>/dev/null || true; fi
+  if [ -n "$api2" ]; then kill -TERM "$api2" 2>/dev/null || true; fi
+  docker rm -f "$container" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+# Never measure stale dist-server output from a previous source revision. The
+# route-suite wrapper builds once, then gives every isolated phase that exact
+# output instead of rebuilding source between phases.
+if [ "${MBOX_LOCAL_LOAD_SKIP_BUILD:-0}" != "1" ]; then
+  npm run build >/tmp/mbox-rc68-mixed-build.log
+fi
+
+docker run -d --name "$container" \
+  -e POSTGRES_USER=mbox -e POSTGRES_PASSWORD=mbox_test -e POSTGRES_DB=mbox_load \
+  -p "$postgres_port:5432" "$postgres_image" >/dev/null
+for attempt in $(seq 1 60); do
+  if docker exec "$container" pg_isready -U mbox -d mbox_load >/dev/null 2>&1; then break; fi
+  if [ "$attempt" = 60 ]; then echo "postgres not ready" >&2; exit 1; fi
+  sleep 0.5
+done
+
+docker exec "$container" psql -U mbox -d mbox_load -v ON_ERROR_STOP=1 -c \
+  "CREATE ROLE mbox_app LOGIN PASSWORD 'mbox_app_test' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS"
+export DATABASE_URL="postgresql://mbox:mbox_test@127.0.0.1:$postgres_port/mbox_load"
+npm run db:migrate >/tmp/mbox-rc68-mixed-migrate.log
+docker exec "$container" psql -U mbox -d mbox_load -v ON_ERROR_STOP=1 -c \
+  "GRANT USAGE ON SCHEMA mbox TO mbox_app; GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA mbox TO mbox_app; GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA mbox TO mbox_app;"
+
+MBOX_LOAD_REFERENCE_TIME="${MBOX_LOAD_REFERENCE_TIME:-2026-08-09T12:00:00.000Z}" \
+  node scripts/prepare-rc68-load-state.mjs >/tmp/mbox-rc68-mixed-prepare.log
+MBOX_CONFIRM_PROVISION=PROVISION \
+MBOX_INITIAL_STATE_PATH=.runtime/rc68-load-state.json \
+MBOX_TENANT_ID=11111111-1111-4111-8111-111111111111 \
+MBOX_STORE_UUID=22222222-2222-4222-8222-222222222222 \
+MBOX_TENANT_CODE=local-load MBOX_TENANT_NAME='Local Load' MBOX_STORE_CODE=mbox-lujiazui \
+node dist-server/server/provision-runtime.js >/tmp/mbox-rc68-mixed-provision.log
+
+rm -rf "$artifact_dir"
+mkdir -p "$artifact_dir"
+MBOX_LOAD_PHASE="${MBOX_LOAD_PHASE:-all}" \
+MBOX_LOAD_INSTANCES=2 \
+MBOX_LOAD_POSTGRES_IMAGE="$postgres_image" \
+MBOX_LOAD_ENVIRONMENT_MANIFEST_PATH="$artifact_dir/environment-manifest.json" \
+  node scripts/write-load-environment-manifest.mjs >/dev/null
+common_env=(
+  MBOX_RUNTIME_MODE=staging
+  MBOX_REPOSITORY=postgres
+  MBOX_TENANT_ID=11111111-1111-4111-8111-111111111111
+  MBOX_STORE_UUID=22222222-2222-4222-8222-222222222222
+  MBOX_SESSION_SECRET=rc68-ci-session-secret-0123456789abcdef
+  MBOX_QR_SECRET=rc68-qr-secret-0123456789abcdef0123456789abcdef
+  MBOX_METRICS_TOKEN=rc68-ci-metrics-token-0123456789abcdef
+  MBOX_CORS_ORIGINS=http://127.0.0.1:5173
+  MBOX_PILOT_ACCESS_CODE=MBOX521
+  'MBOX_PILOT_EMPLOYEE_PINS_JSON={"emp-operations-director":"7001","emp-admin":"7002","emp-host":"7003","emp-mia":"7004","emp-chen":"7005","emp-qing":"7006","emp-cashier":"7007","emp-lin":"7008","emp-wu":"7009","emp-jie":"7010","emp-han":"7011","emp-tao":"7012"}'
+  'MBOX_LOAD_STAFF_PINS_JSON={"emp-operations-director":"7001","emp-admin":"7002","emp-host":"7003","emp-mia":"7004","emp-chen":"7005","emp-qing":"7006","emp-cashier":"7007","emp-lin":"7008","emp-wu":"7009","emp-jie":"7010","emp-han":"7011","emp-tao":"7012"}'
+  MBOX_DATABASE_POOL_MAX=10
+  MBOX_DATABASE_MUTATION_QUEUE_MAX=100
+  MBOX_DATABASE_MUTATION_QUEUE_WAIT_MS=15000
+  MBOX_STATE_READ_CACHE_MS=3000
+)
+app_database_url="postgresql://mbox_app:mbox_app_test@127.0.0.1:$postgres_port/mbox_load"
+
+env "${common_env[@]}" DATABASE_URL="$app_database_url" API_PORT="$api_port_1" \
+  node dist-server/server/index.js > "$artifact_dir/instance-1.log" 2>&1 &
+api1=$!
+env "${common_env[@]}" DATABASE_URL="$app_database_url" API_PORT="$api_port_2" \
+  node dist-server/server/index.js > "$artifact_dir/instance-2.log" 2>&1 &
+api2=$!
+
+for port in "$api_port_1" "$api_port_2"; do
+  for attempt in $(seq 1 120); do
+    if curl --fail --silent "http://127.0.0.1:$port/api/ready" >/dev/null; then break; fi
+    if [ "$attempt" = 120 ]; then echo "api $port not ready" >&2; exit 1; fi
+    sleep 0.5
+  done
+done
+
+set +e
+env "${common_env[@]}" \
+  MBOX_LOAD_PHASE="${MBOX_LOAD_PHASE:-all}" \
+  MBOX_LOAD_BASE_URLS="http://127.0.0.1:$api_port_1,http://127.0.0.1:$api_port_2" \
+  MBOX_LOAD_REPORT_PATH="$artifact_dir/client-observed-load.json" \
+  npm run --silent test:load:rc68 >"$artifact_dir/client-load-console.log" 2>&1
+load_status=$?
+cat "$artifact_dir/client-load-console.log"
+phase="${MBOX_LOAD_PHASE:-all}"
+browser_status=0
+case "$phase" in
+  staff_start)
+    MBOX_BROWSER_STARTUP_MODE=staff \
+    MBOX_LOAD_BASE_URLS="http://127.0.0.1:$api_port_1,http://127.0.0.1:$api_port_2" \
+    MBOX_BROWSER_STARTUP_REPORT_PATH="$artifact_dir/browser-startup.json" \
+      node scripts/measure-browser-startup.mjs >"$artifact_dir/browser-startup-console.log" 2>&1 || browser_status=$?
+    cat "$artifact_dir/browser-startup-console.log" ;;
+  reads)
+    MBOX_BROWSER_STARTUP_MODE=guest \
+    MBOX_LOAD_BASE_URLS="http://127.0.0.1:$api_port_1,http://127.0.0.1:$api_port_2" \
+    MBOX_BROWSER_STARTUP_REPORT_PATH="$artifact_dir/browser-startup.json" \
+    MBOX_QR_SECRET=rc68-qr-secret-0123456789abcdef0123456789abcdef \
+      node scripts/measure-browser-startup.mjs >"$artifact_dir/browser-startup-console.log" 2>&1 || browser_status=$?
+    cat "$artifact_dir/browser-startup-console.log" ;;
+esac
+case "$phase" in
+  reads) mutation_minimum_samples=0 ;;
+  staff_start) mutation_minimum_samples=50 ;;
+  *) mutation_minimum_samples=100 ;;
+esac
+env "${common_env[@]}" \
+  MBOX_MUTATION_MINIMUM_SAMPLES="${MBOX_MUTATION_MINIMUM_SAMPLES:-$mutation_minimum_samples}" \
+  MBOX_METRICS_BASE_URLS="http://127.0.0.1:$api_port_1,http://127.0.0.1:$api_port_2" \
+  MBOX_METRICS_REPORT_PATH="$artifact_dir/runtime-metrics.json" \
+  npm run metrics:verify
+metrics_status=$?
+
+kill -TERM "$api1" "$api2"
+wait "$api1" "$api2" || true
+api1=""
+api2=""
+log_gate_routes=()
+log_gate_sample_args=()
+case "$phase" in
+  staff_start)
+    log_gate_routes+=(--required-route 'POST /api/auth/pilot-login' --required-route 'GET /api/bootstrap')
+    log_gate_sample_args+=(--minimum-slo-samples 120) ;;
+  reads)
+    log_gate_routes+=(--required-route 'GET /api/bootstrap' --required-route 'GET /api/reservations' \
+      --required-route 'POST /api/auth/presence/heartbeat' --required-route 'POST /api/guest/session') ;;
+  create_task_live) log_gate_routes+=(--required-route 'POST /api/tasks') ;;
+  create_quick_order_live) log_gate_routes+=(--required-route 'POST /api/commerce/quick-orders') ;;
+  task_action) log_gate_routes+=(--required-route 'POST /api/tasks/:taskId/actions') ;;
+  kds_start|kds_complete) log_gate_routes+=(--required-route 'POST /api/commerce/kds/:taskId/actions') ;;
+esac
+node scripts/analyze-runtime-logs.mjs \
+  --input "$artifact_dir/instance-1.log" --input "$artifact_dir/instance-2.log" \
+  "${log_gate_routes[@]}" "${log_gate_sample_args[@]}" \
+  --test-stage measured --test-phase "$phase" --fail-on-slo \
+  > "$artifact_dir/server-observed-log-analysis.json"
+logs_status=$?
+set -e
+
+if [ -f "$artifact_dir/client-observed-load.json" ]; then
+  node -e "const fs=require('fs'); const r=JSON.parse(fs.readFileSync(process.argv[1])); console.log(JSON.stringify({model:r.model,totals:r.totals,passed:r.passed,metrics:Object.fromEntries(Object.entries(r.byLabel).map(([k,v])=>[k,{p95Ms:v.p95Ms,p99Ms:v.p99Ms,passed:v.passed}]))},null,2))" \
+    "$artifact_dir/client-observed-load.json"
+fi
+
+if [ "$load_status" -ne 0 ] || [ "$browser_status" -ne 0 ] || [ "$metrics_status" -ne 0 ] || [ "$logs_status" -ne 0 ]; then
+  echo "RC68本地性能门禁失败：load=$load_status browser=$browser_status metrics=$metrics_status logs=$logs_status" >&2
+  exit 1
+fi

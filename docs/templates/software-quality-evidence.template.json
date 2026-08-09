@@ -1,7 +1,11 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "project": "replace-with-project-name",
   "version": "0.0.0",
+  "qualityProfile": {
+    "id": "commercial-release-v1",
+    "policyRef": "replace-with-policy-id@sha256:replace-with-canonical-policy-sha256"
+  },
   "generatedAt": "2026-08-09T00:00:00.000Z",
   "decision": "DENY",
   "source": {
@@ -9,6 +13,7 @@
     "dirty": true
   },
   "environment": {
+    "id": "replace-with-unique-environment-id",
     "name": "validation",
     "scope": "full"
   },
@@ -16,6 +21,7 @@
     "provider": "replace-with-ci-provider",
     "runId": "replace-with-run-id"
   },
+  "requiredGateIds": ["functional", "critical-api"],
   "testRuns": [
     {
       "id": "functional",
@@ -34,11 +40,24 @@
     {
       "id": "critical-api",
       "required": true,
+      "conclusionLevel": "regression",
       "status": "not_run",
       "samples": 0,
+      "successful": 0,
       "failures": 0,
+      "p50Ms": 0,
       "p95Ms": 0,
       "p99Ms": 0,
+      "maxMs": 0,
+      "environmentRef": "replace-with-fixed-environment-reference",
+      "workload": {
+        "profile": "steady-arrival-v1",
+        "model": "open-arrival-rate",
+        "targetRps": 1,
+        "achievedLaunchRps": 1,
+        "maxConcurrency": 10,
+        "schedulingDelayP95Ms": 10
+      },
       "limits": {
         "minSamples": 300,
         "p95Ms": 500,
@@ -50,6 +69,7 @@
   "deployment": {
     "imageDigest": "replace-with-sha256-image-digest",
     "deployedCommitSha": "replace-with-full-40-character-commit-sha",
-    "rollbackVerified": false
+    "rollbackVerified": false,
+    "evidence": ["replace-with-deployment-health-and-recovery-report"]
   }
 }

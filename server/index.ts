@@ -83,7 +83,6 @@ import { applyScheduledOperations, scheduledOperationsWouldChange } from './oper
 import { projectRuntimeStateForActor } from './bootstrap-projection.js'
 import { buildBootstrapViewEtag } from './bootstrap-etag.js'
 import { RevisionScopedCache } from './revision-scoped-cache.js'
-import { resolveOperationalRuntimeState } from './operational-read-store.js'
 import { effectivePermissionIdsForEmployee } from '../src/shared/staff-access.js'
 import { preserveProtectedProductCost, productCostView } from './product-cost-policy.js'
 import { MemoryRateLimitStore, PostgresRateLimitStore } from './rate-limit.js'
@@ -284,6 +283,17 @@ await registerObservability(app, {
         mutationQueueCapacity: postgresStatus?.mutationQueue.maxPending ?? 0,
         mutationQueueRejectedTotal: postgresStatus?.mutationQueue.rejectedTotal ?? 0,
         mutationQueueTimeoutTotal: postgresStatus?.mutationQueue.timeoutTotal ?? 0,
+        mutationQueueWaitSamples: postgresStatus?.mutationQueue.waitSamples ?? 0,
+        mutationQueueWaitP95Ms: postgresStatus?.mutationQueue.waitP95Ms ?? 0,
+        mutationQueueWaitP99Ms: postgresStatus?.mutationQueue.waitP99Ms ?? 0,
+        mutationQueueWaitMaxMs: postgresStatus?.mutationQueue.waitMaxMs ?? 0,
+        mutationServiceSamples: postgresStatus?.mutationQueue.serviceSamples ?? 0,
+        mutationServiceP95Ms: postgresStatus?.mutationQueue.serviceP95Ms ?? 0,
+        mutationServiceP99Ms: postgresStatus?.mutationQueue.serviceP99Ms ?? 0,
+        mutationServiceMaxMs: postgresStatus?.mutationQueue.serviceMaxMs ?? 0,
+        initialSerializedStateBytes: postgresStatus?.mutationQueue.initialSerializedStateBytes ?? 0,
+        serializedStateBytes: postgresStatus?.mutationQueue.serializedStateBytes ?? 0,
+        maxSerializedStateBytes: postgresStatus?.mutationQueue.maxSerializedStateBytes ?? 0,
         operationalReadPath: runtimeDependencies.operationalReadStore ? 'normalized_tables' : 'aggregate_compatibility',
         operationalReadEntityTypes: runtimeDependencies.operationalReadStore ? 8 : 0,
         paymentMode: runtimeConfig.pilotPaymentSimulationEnabled ? 'simulation' : paymentRuntime.mode,
@@ -542,8 +552,9 @@ app.get('/api/bootstrap', async (request, reply) => {
   const actor = requireRequestActor(request)
   const scope = `${actor.storeId}:${actor.actorId}`
   const requestedEtag = request.headers['if-none-match'] ?? ''
+  let currentRevision: number | null = null
   if (requestedEtag && repository.readRevision) {
-    const currentRevision = await repository.readRevision()
+    currentRevision = await repository.readRevision()
     const cachedView = bootstrapViewCache.get(scope, currentRevision)
     if (cachedView && [cachedView.etag, `"${currentRevision}"`].includes(requestedEtag)) {
       return reply
@@ -554,33 +565,27 @@ app.get('/api/bootstrap', async (request, reply) => {
         .send()
     }
   }
-  const aggregateState = request.mboxAuthState ?? await repository.read()
-  const authoritativePromise = operationalStateCache.getOrCreate(actor.storeId, aggregateState.revision, async () => {
+  const aggregateState = request.mboxAuthState
+  const revision = currentRevision ?? aggregateState?.revision ?? await repository.readRevision?.() ?? (await repository.read()).revision
+  const authoritativePromise = operationalStateCache.getOrCreate(actor.storeId, revision, async () => {
     if (!runtimeDependencies.operationalReadStore) {
-      return { state: aggregateState, source: 'aggregate_compatibility' as const }
+      return { state: aggregateState ?? await repository.read(), source: 'aggregate_compatibility' as const }
     }
     if (!repository.readFresh) {
-      return { state: aggregateState, source: 'aggregate_compatibility' as const }
+      return { state: aggregateState ?? await repository.read(), source: 'aggregate_compatibility' as const }
     }
-    const resolved = await resolveOperationalRuntimeState({
-      initialState: aggregateState,
-      readFresh: () => repository.readFresh!(),
-      readSnapshot: (revision, businessDate) => runtimeDependencies.operationalReadStore!.read(revision, businessDate),
-    })
-    if (resolved.source === 'aggregate_compatibility') {
-      app.log.warn({
-        revision: resolved.state.revision,
-        revisionMismatches: resolved.revisionMismatches,
-      }, 'operational read revision kept advancing; served fresh aggregate fallback')
-    }
-    return { state: resolved.state, source: resolved.source }
+    return runtimeDependencies.operationalReadStore.readLatestRuntimeState()
   })
   let authoritative: Awaited<typeof authoritativePromise>
   try {
     authoritative = await authoritativePromise
   } catch (error) {
-    operationalStateCache.delete(actor.storeId, aggregateState.revision)
+    operationalStateCache.delete(actor.storeId, revision)
     throw error
+  }
+  if (authoritative.state.revision !== revision) {
+    operationalStateCache.delete(actor.storeId, revision)
+    operationalStateCache.getOrCreate(actor.storeId, authoritative.state.revision, () => Promise.resolve(authoritative))
   }
   const state = authoritative.state
   const view = bootstrapViewCache.getOrCreate(scope, state.revision, () => {

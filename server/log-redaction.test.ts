@@ -23,4 +23,19 @@ describe('request log redaction', () => {
       remotePort: 52100,
     })
   })
+
+  it('retains only safe load-test phase markers', () => {
+    expect(requestLogSerializer({
+      method: 'POST',
+      url: '/api/tasks',
+      headers: {
+        host: 'mbox.example',
+        'x-mbox-test-stage': 'measured',
+        'x-mbox-test-phase': 'create_task_live',
+      },
+    })).toMatchObject({ testStage: 'measured', testPhase: 'create_task_live' })
+    expect(requestLogSerializer({
+      headers: { 'x-mbox-test-stage': 'secret value', 'x-mbox-test-phase': '../escape' },
+    })).not.toHaveProperty('testStage')
+  })
 })

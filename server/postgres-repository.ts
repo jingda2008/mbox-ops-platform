@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { Pool as PgPool } from 'pg'
 import type { RuntimeState } from '../src/shared/contracts.js'
+import type { RuntimeStaffDirectorySnapshot } from './repository.js'
 import { migrateRuntimeState } from './runtime-state-migrations.js'
 import type { OperationalProjectionTable, RuntimeStateProjector } from './operational-projection.js'
 
@@ -126,6 +127,17 @@ export interface PostgresRepositoryHealth {
     maxPending: number
     rejectedTotal: number
     timeoutTotal: number
+    waitSamples: number
+    waitP95Ms: number
+    waitP99Ms: number
+    waitMaxMs: number
+    serviceSamples: number
+    serviceP95Ms: number
+    serviceP99Ms: number
+    serviceMaxMs: number
+    initialSerializedStateBytes: number
+    serializedStateBytes: number
+    maxSerializedStateBytes: number
   }
   error?: string
   projectionReady?: boolean
@@ -252,6 +264,13 @@ interface IdempotencyEnvelope<T> {
   value: T | null
 }
 
+interface StaffDirectoryRow extends Record<string, unknown> {
+  revision: number | string
+  store_id: string
+  business_date: string
+  employees: unknown
+}
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const OPERATION_SCOPE_PATTERN = /^[a-z][a-z0-9_.-]{2,127}$/
 const DEFAULT_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000
@@ -306,6 +325,15 @@ const SQL = {
   `,
   selectRevision: `
     SELECT revision
+    FROM mbox.runtime_states
+    WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+  `,
+  selectStaffDirectory: `
+    SELECT
+      revision,
+      state #>> '{store,id}' AS store_id,
+      state #>> '{store,businessDate}' AS business_date,
+      COALESCE(state -> 'employees', '[]'::jsonb) AS employees
     FROM mbox.runtime_states
     WHERE tenant_id = $1::uuid AND store_id = $2::uuid
   `,
@@ -392,6 +420,11 @@ export class PostgresRepository {
   private activeMutations = 0
   private mutationQueueRejectedTotal = 0
   private mutationQueueTimeoutTotal = 0
+  private readonly mutationQueueWaits: number[] = []
+  private readonly mutationServiceDurations: number[] = []
+  private initialSerializedStateBytes: number | null = null
+  private serializedStateBytes = 0
+  private maxSerializedStateBytes = 0
 
   constructor(options: PostgresRepositoryOptions) {
     assertUuid('tenantId', options.tenantId)
@@ -480,6 +513,35 @@ export class PostgresRepository {
     }))
   }
 
+  async readStaffDirectory(): Promise<RuntimeStaffDirectorySnapshot> {
+    return this.track(() => this.withTransaction(true, async (client) => {
+      const result = await client.query<StaffDirectoryRow>(SQL.selectStaffDirectory, [this.tenantId, this.storeId])
+      const row = result.rows[0]
+      if (result.rowCount !== 1 || !row) throw new PostgresRuntimeStateNotInitializedError()
+      const rawEmployees = typeof row.employees === 'string' ? JSON.parse(row.employees) : row.employees
+      if (!Array.isArray(rawEmployees)) throw new PostgresStateCorruptionError('Staff directory employees must be an array')
+      const employees = rawEmployees.map((employee, index) => {
+        if (!employee || typeof employee !== 'object') {
+          throw new PostgresStateCorruptionError(`Staff directory employee ${index} is invalid`)
+        }
+        const candidate = employee as Record<string, unknown>
+        if (typeof candidate.id !== 'string' || typeof candidate.roleId !== 'string' || typeof candidate.status !== 'string') {
+          throw new PostgresStateCorruptionError(`Staff directory employee ${index} is incomplete`)
+        }
+        return { id: candidate.id, roleId: candidate.roleId, status: candidate.status }
+      })
+      if (typeof row.store_id !== 'string' || typeof row.business_date !== 'string') {
+        throw new PostgresStateCorruptionError('Staff directory store identity is incomplete')
+      }
+      return {
+        storeId: row.store_id,
+        businessDate: row.business_date,
+        revision: parseRevision(row.revision),
+        employees,
+      }
+    }))
+  }
+
   async mutate<T>(
     mutation: (state: RuntimeState) => T | Promise<T>,
     options: PostgresMutationOptions = {},
@@ -516,6 +578,7 @@ export class PostgresRepository {
             throw new PostgresInvalidRevisionError(expectedRevision, workingCopy.revision)
           }
           const serialized = serializeJson(workingCopy, 'runtime state')
+          this.recordSerializedStateSize(Buffer.byteLength(serialized))
           const stateSha256 = sha256(serialized)
           const update = await client.query<{ revision: number | string }>(SQL.compareAndSwapState, [
             this.tenantId,
@@ -724,6 +787,7 @@ export class PostgresRepository {
       )
     }
     const serialized = serializeJson(state, 'persisted runtime state')
+    this.recordSerializedStateSize(Buffer.byteLength(serialized))
     if (sha256(serialized) !== row.state_sha256.trim()) {
       throw new PostgresStateCorruptionError('Runtime state checksum mismatch')
     }
@@ -740,22 +804,22 @@ export class PostgresRepository {
       throw new PostgresRuntimeStateNotInitializedError()
     }
     const revision = parseRevision(revisionValue)
-    if (this.cachedState?.revision === revision) return structuredClone(this.cachedState)
+    if (this.cachedState?.revision === revision) return this.cachedState
 
     if (this.cacheRefreshPromise) {
       const shared = await this.cacheRefreshPromise
-      if (shared.revision >= revision) return structuredClone(shared)
+      if (shared.revision >= revision) return shared
     }
 
     const refresh = this.loadState(client).then((loaded) => {
       if (!this.cachedState || loaded.revision >= this.cachedState.revision) {
-        this.cachedState = structuredClone(loaded)
+        this.cachedState = loaded
       }
       return this.cachedState
     })
     this.cacheRefreshPromise = refresh
     try {
-      return structuredClone(await refresh)
+      return await refresh
     } finally {
       if (this.cacheRefreshPromise === refresh) this.cacheRefreshPromise = null
     }
@@ -883,7 +947,13 @@ export class PostgresRepository {
       timeout = undefined
       acquired = true
       this.activeMutations += 1
-      return await operation()
+      this.recordMutationMetric(this.mutationQueueWaits, performance.now() - queuedAt)
+      const operationStartedAt = performance.now()
+      try {
+        return await operation()
+      } finally {
+        this.recordMutationMetric(this.mutationServiceDurations, performance.now() - operationStartedAt)
+      }
     } catch (error) {
       if (error instanceof PostgresMutationQueueTimeoutError) this.mutationQueueTimeoutTotal += 1
       throw error
@@ -933,7 +1003,35 @@ export class PostgresRepository {
       maxPending: this.maxPendingMutations,
       rejectedTotal: this.mutationQueueRejectedTotal,
       timeoutTotal: this.mutationQueueTimeoutTotal,
+      waitSamples: this.mutationQueueWaits.length,
+      waitP95Ms: this.mutationPercentile(this.mutationQueueWaits, 0.95),
+      waitP99Ms: this.mutationPercentile(this.mutationQueueWaits, 0.99),
+      waitMaxMs: Math.max(0, ...this.mutationQueueWaits),
+      serviceSamples: this.mutationServiceDurations.length,
+      serviceP95Ms: this.mutationPercentile(this.mutationServiceDurations, 0.95),
+      serviceP99Ms: this.mutationPercentile(this.mutationServiceDurations, 0.99),
+      serviceMaxMs: Math.max(0, ...this.mutationServiceDurations),
+      initialSerializedStateBytes: this.initialSerializedStateBytes ?? 0,
+      serializedStateBytes: this.serializedStateBytes,
+      maxSerializedStateBytes: this.maxSerializedStateBytes,
     }
+  }
+
+  private recordMutationMetric(samples: number[], value: number) {
+    samples.push(Math.max(0, value))
+    if (samples.length > 2_048) samples.splice(0, samples.length - 2_048)
+  }
+
+  private recordSerializedStateSize(bytes: number) {
+    if (this.initialSerializedStateBytes === null) this.initialSerializedStateBytes = bytes
+    this.serializedStateBytes = bytes
+    this.maxSerializedStateBytes = Math.max(this.maxSerializedStateBytes, bytes)
+  }
+
+  private mutationPercentile(samples: number[], fraction: number) {
+    if (samples.length === 0) return 0
+    const ordered = samples.toSorted((left, right) => left - right)
+    return ordered[Math.min(ordered.length - 1, Math.ceil(ordered.length * fraction) - 1)] ?? 0
   }
 }
 

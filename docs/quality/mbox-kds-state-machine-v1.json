@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "id": "mbox-kds-fulfillment-v1",
+  "entity": "kds_task",
+  "initialState": "queued",
+  "terminalStates": ["delivered"],
+  "states": ["queued", "preparing", "completed", "picked_up", "delivered"],
+  "transitions": [
+    {
+      "id": "start_preparation",
+      "from": ["queued"],
+      "to": "preparing",
+      "roles": ["bartender", "kitchen"],
+      "guard": "authenticated actor is assigned to the task workstation and has kds.prepare",
+      "sideEffects": ["append immutable KDS action event", "persist preparing status and startedAt"],
+      "compensation": "report a structured production exception; never rewrite the prior event",
+      "tcIds": ["ORD-013", "ORD-014"]
+    },
+    {
+      "id": "complete_preparation",
+      "from": ["preparing"],
+      "to": "completed",
+      "roles": ["bartender", "kitchen"],
+      "guard": "task is preparing and no unresolved blocking exception exists",
+      "sideEffects": ["persist completion evidence", "create one delivery service task"],
+      "compensation": "manager records remake or cancellation linked to the original item",
+      "tcIds": ["ORD-013", "ORD-018"]
+    },
+    {
+      "id": "pick_up",
+      "from": ["completed"],
+      "to": "picked_up",
+      "roles": ["server", "backup", "manager"],
+      "guard": "actor has delivery authority and the current table destination is confirmed",
+      "sideEffects": ["record picker and pickup timestamp"],
+      "compensation": "return to workstation through an auditable exception workflow",
+      "tcIds": ["ORD-016", "ORD-019"]
+    },
+    {
+      "id": "deliver",
+      "from": ["picked_up"],
+      "to": "delivered",
+      "roles": ["server", "backup", "manager"],
+      "guard": "current table session and destination table are still valid",
+      "sideEffects": ["record delivery evidence", "complete linked delivery service task"],
+      "compensation": "record wrong-item or wrong-table exception and start linked recovery",
+      "tcIds": ["ORD-017", "ORD-019", "ORD-020"]
+    }
+  ],
+  "forbiddenTransitions": [
+    {
+      "from": "delivered",
+      "to": "preparing",
+      "reason": "delivered is terminal; remake must create a new task linked to the original",
+      "tcIds": ["ORD-018", "SEC-011"]
+    },
+    {
+      "from": "completed",
+      "to": "queued",
+      "reason": "completion cannot be silently erased; use a structured exception",
+      "tcIds": ["ORD-017", "SEC-011"]
+    }
+  ]
+}

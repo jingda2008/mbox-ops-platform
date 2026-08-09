@@ -17,11 +17,19 @@ export interface RuntimeRepositoryHealth {
   databaseClockSkewMs?: number
 }
 
+export interface RuntimeStaffDirectorySnapshot {
+  storeId: string
+  businessDate: string
+  revision: number
+  employees: Array<{ id: string; roleId: string; status: string }>
+}
+
 export interface RuntimeRepository {
   init(): Promise<void>
   read(): Promise<RuntimeState>
   readFresh?(): Promise<RuntimeState>
   readRevision?(): Promise<number>
+  readStaffDirectory?(): Promise<RuntimeStaffDirectorySnapshot>
   mutate<T>(mutation: (state: RuntimeState) => T | Promise<T>, options?: unknown): Promise<T>
   reset(): Promise<RuntimeState>
   healthCheck(): Promise<RuntimeRepositoryHealth>
@@ -131,6 +139,16 @@ export class JsonRepository {
   async readRevision() {
     await this.queue
     return this.state.revision
+  }
+
+  async readStaffDirectory(): Promise<RuntimeStaffDirectorySnapshot> {
+    await this.queue
+    return {
+      storeId: this.state.store.id,
+      businessDate: this.state.store.businessDate,
+      revision: this.state.revision,
+      employees: this.state.employees.map(({ id, roleId, status }) => ({ id, roleId, status })),
+    }
   }
 
   async mutate<T>(mutation: (state: RuntimeState) => T | Promise<T>): Promise<T> {

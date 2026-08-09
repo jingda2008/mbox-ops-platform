@@ -10,8 +10,6 @@ import { createHardwareState } from './hardware-domain.js'
 import { chinaBusinessDateKey, shiftDateKey } from '../src/shared/china-time.js'
 import { defaultAssistantCapabilityPolicies } from './assistant-capability-registry.js'
 
-const now = new Date()
-
 function recommendation(overrides: Partial<MenuRecommendationConfig> = {}): MenuRecommendationConfig {
   return {
     enabled: true,
@@ -33,11 +31,11 @@ function recommendation(overrides: Partial<MenuRecommendationConfig> = {}): Menu
   }
 }
 
-export function createSeedConfig(): StoreConfig {
+export function createSeedConfig(referenceNow = new Date()): StoreConfig {
   return {
     version: 1,
     status: 'published',
-    publishedAt: now.toISOString(),
+    publishedAt: referenceNow.toISOString(),
     roles: ([
       { id: 'owner', name: '老板', maxConcurrentTasks: 20, canReceiveTasks: false },
       { id: 'operations_director', name: '运营负责人', maxConcurrentTasks: 12, canReceiveTasks: false },
@@ -293,13 +291,13 @@ export function createSeedConfig(): StoreConfig {
   }
 }
 
-export function createSeedState(referenceNow = now): RuntimeState {
+export function createSeedState(referenceNow = new Date()): RuntimeState {
   const now = referenceNow
   const businessDate = chinaBusinessDateKey(now)
   const opened = new Date(now.getTime() - 42 * 60 * 1000).toISOString()
   const shiftStart = new Date(`${businessDate}T19:00:00+08:00`)
   const shiftEnd = new Date(`${shiftDateKey(businessDate, 1)}T03:00:00+08:00`)
-  const config = createSeedConfig()
+  const config = createSeedConfig(now)
   return {
     revision: 1,
     store: {

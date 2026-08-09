@@ -11,6 +11,7 @@ const reportPath = resolve(root, `docs/tc-execution-report-${versionSlug}.md`)
 const csvPath = resolve(root, `docs/tc-execution-register-${versionSlug}.csv`)
 const blockersPath = resolve(root, `docs/tc-release-blockers-${versionSlug}.csv`)
 const checkMode = process.argv.includes('--check')
+const requireReleasePass = process.argv.includes('--require-release-pass')
 const existingExecutionDate = existsSync(reportPath)
   ? readFileSync(reportPath, 'utf8').match(/^执行日期：`(\d{4}-\d{2}-\d{2})`$/m)?.[1]
   : undefined
@@ -41,8 +42,8 @@ if (testCases.length !== 213) throw new Error(`Expected 213 operating TCs, found
 const qualitySupplement = readFileSync(qualitySupplementPath, 'utf8')
 const qualitySupplementCases = [...qualitySupplement.matchAll(/^\| ((?:TME|CAP|RPF)-\d{3}) \| (P[0-3]) \| ([^|]+) \| ([^|]+) \| (通过|失败|未执行|待执行|阻塞|未通过) \|/gm)]
   .map((match) => ({ id: match[1], priority: match[2], scenario: match[3].trim(), expected: match[4].trim(), status: match[5] }))
-if (qualitySupplementCases.length !== 27) {
-  throw new Error(`Expected 27 time/capacity/performance TCs, found ${qualitySupplementCases.length}`)
+if (qualitySupplementCases.length !== 44) {
+  throw new Error(`Expected 44 time/capacity/performance TCs, found ${qualitySupplementCases.length}`)
 }
 if (new Set(qualitySupplementCases.map((item) => item.id)).size !== qualitySupplementCases.length) {
   throw new Error('Time/capacity/performance TC ids must be unique')
@@ -54,7 +55,7 @@ function ids(prefix, ranges) {
   )
 }
 
-const passed = new Set([
+const historicalPassed = new Set([
   ...ids('PER', [[1, 4], [6], [20, 21], [24, 30]]),
   ...ids('GST', [[1, 17], [24, 40]]),
   ...ids('SVC', [[1, 18], [20]]),
@@ -165,15 +166,25 @@ const exactEvidence = {
   'PKC-008': 'business-day-api测试：开放桌、支付未知、退款失败、投诉和进行中点歌均阻止闭店并返回交接项',
 }
 
-function resultFor(testCase) {
-  if (passed.has(testCase.id)) return '通过'
+function historicalResultFor(testCase) {
+  if (historicalPassed.has(testCase.id)) return '通过'
   if (blocked.has(testCase.id)) return '阻塞'
   return '未执行'
 }
 
-function executionMode(result) {
+function resultFor(testCase) {
+  // The tracked register is a deterministic planning artifact. It cannot claim
+  // that the current candidate ran until a commit-scoped CI/field ledger binds
+  // the test to an immutable SHA and run ID.
+  if (blocked.has(testCase.id)) return '阻塞'
+  return '未执行'
+}
+
+function executionMode(testCase, result, historicalResult) {
   if (result === '通过') return '历史验收/工程回归'
   if (result === '阻塞') return '外部生产联调'
+  if (exactEvidence[testCase.id]) return '自动化回归/待绑定CI'
+  if (historicalResult === '通过') return '历史证据/待当前回归'
   return '门店现场执行'
 }
 
@@ -202,17 +213,19 @@ function pendingReason(testCase, result) {
 
 const rows = testCases.map((testCase) => {
   const result = resultFor(testCase)
+  const historicalResult = historicalResultFor(testCase)
   const domain = testCase.id.slice(0, 3)
   return {
     ...testCase,
     result,
-    engineeringCoverage: engineeringCoverage(testCase, result),
-    executionMode: executionMode(result),
+    historicalResult,
+    engineeringCoverage: engineeringCoverage(testCase, historicalResult),
+    executionMode: executionMode(testCase, result, historicalResult),
     owners: ownersByDomain[domain],
-    evidence: pendingReason(testCase, result),
+    evidence: pendingReason(testCase, historicalResult),
     evidenceLevel: exactEvidence[testCase.id]
       ? '直接测试映射'
-      : result === '通过' ? '领域级历史证据' : '待执行',
+      : historicalResult === '通过' ? '领域级历史证据' : '待执行',
     testReference: exactEvidence[testCase.id]?.split('：', 1)[0] ?? '',
   }
 })
@@ -237,9 +250,9 @@ function csvDocument(headings, bodyRows) {
 }
 
 const csv = csvDocument(
-  ['TC编号', '优先级', '情况与关键步骤', '预期结果', '执行状态', '工程覆盖度', '执行版本', '执行方式', '责任人', '证据级别', '测试文件/引用', '证据提交SHA', '运行ID', '镜像摘要', '证据/待办'],
+  ['TC编号', '优先级', '情况与关键步骤', '预期结果', '历史状态', '当前候选状态', '工程覆盖度', '执行版本', '执行方式', '责任人', '证据级别', '测试文件/引用', '证据提交SHA', '运行ID', '镜像摘要', '证据/待办'],
   rows.map((row) => [
-    row.id, row.priority, row.scenario, row.expected, row.result, row.engineeringCoverage, version,
+    row.id, row.priority, row.scenario, row.expected, row.historicalResult, row.result, row.engineeringCoverage, version,
     row.executionMode, row.owners, row.evidenceLevel, row.testReference, evidenceCommitSha,
     evidenceRunId, evidenceImageDigest, row.evidence,
   ]),
@@ -277,7 +290,7 @@ const report = `# M-BOX 213条经营TC执行报告
 
 | 状态 | 数量 | 判定口径 |
 |---|---:|---|
-| 通过 | ${counts['通过'] ?? 0} | 既有基线判定；其中只有标记“直接测试映射”的项目具备逐条代码引用 |
+| 通过 | ${counts['通过'] ?? 0} | 只有提交级或现场证据账本可以把当前候选改为通过；受版本控制的计划表不预填通过 |
 | 未执行 | ${counts['未执行'] ?? 0} | 必须由真实岗位、真实设备或门店现场完成，不能用单元测试冒充 |
 | 阻塞 | ${counts['阻塞'] ?? 0} | 缺真实支付参数、外部流水或第三方生产通道 |
 | 失败 | ${counts['失败'] ?? 0} | 已执行但结果不符合预期；本轮为0 |
@@ -285,6 +298,8 @@ const report = `# M-BOX 213条经营TC执行报告
 **商业生产发布结论：不通过发布门禁。** 当前仍有 **${releaseBlocking.length}条 P0/P1** 未达到“通过”：${p0p1Breakdown['P0-阻塞'] ?? 0}条P0阻塞、${p0p1Breakdown['P0-未执行'] ?? 0}条P0未执行、${p0p1Breakdown['P1-阻塞'] ?? 0}条P1阻塞、${p0p1Breakdown['P1-未执行'] ?? 0}条P1未执行。
 
 工程覆盖度与验收状态是两套口径：代码存在不等于现场验收通过。未通过项中，外部依赖${externalDependency.size}条、代码支持但待现场验证${codeSupportedFieldPending.size}条、明确能力缺口${capabilityGap.size}条、部分实现${partialGap.size}条；其余属于现场执行或云端复测项。
+
+历史基线中有 **${historicalPassed.size}条** 曾记录为通过；这些状态保留在CSV的“历史状态”列，仅用于回归范围选择，不能作为本候选发布证据。
 
 本报告证据提交：\`${evidenceCommitSha}\`；运行ID：\`${evidenceRunId}\`；镜像摘要：\`${evidenceImageDigest}\`；不可变证据状态：**${immutableEvidence ? '完整' : '请查看独立质量总账'}**。受版本控制的TC报告默认保持确定性；真实提交、CI运行和镜像身份必须从同一运行生成的质量总账与发布清单核对，不能在本文件中伪造绑定。
 
@@ -322,6 +337,12 @@ function writeOrVerify(path, content) {
 writeOrVerify(csvPath, csv)
 writeOrVerify(blockersPath, blockersCsv)
 writeOrVerify(reportPath, report)
+
+if (requireReleasePass && (releaseBlocking.length > 0 || qualitySupplementCases.some((item) => (
+  ['P0', 'P1'].includes(item.priority) && item.status !== '通过'
+)))) {
+  throw new Error(`Commercial release denied: ${releaseBlocking.length} operating P0/P1 TCs and ${qualitySupplementCases.filter((item) => ['P0', 'P1'].includes(item.priority) && item.status !== '通过').length} supplemental P0/P1 TCs are unfinished`)
+}
 
 console.log(JSON.stringify({
   mode: checkMode ? 'check' : 'write',

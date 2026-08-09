@@ -24,6 +24,23 @@ export function createStaffPresenceDirectoryResolver(repository: RuntimeReposito
   let refresh: Promise<StaffPresenceDirectory> | null = null
 
   return async () => {
+    if (repository.readStaffDirectory) {
+      if (repository.readRevision) {
+        const revision = await repository.readRevision()
+        if (current.revision === revision) return current
+      }
+      const snapshot = await repository.readStaffDirectory()
+      if (current.revision === snapshot.revision) return current
+      current = {
+        storeId: snapshot.storeId,
+        businessDate: snapshot.businessDate,
+        revision: snapshot.revision,
+        employees: new Map(snapshot.employees
+          .filter((employee) => employee.status === 'active')
+          .map((employee) => [employee.id, employee.roleId])),
+      }
+      return current
+    }
     const revision = repository.readRevision
       ? await repository.readRevision()
       : (await repository.healthCheck()).revision

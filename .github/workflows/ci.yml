@@ -223,23 +223,10 @@ jobs:
     if: needs.classify.outputs.scope == 'full'
     needs: classify
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: mbox
-          POSTGRES_PASSWORD: mbox_test
-          POSTGRES_DB: mbox_load
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U mbox -d mbox_load"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+    timeout-minutes: 35
+    outputs:
+      load_report_b64: ${{ steps.runtime-evidence.outputs.load_report_b64 }}
     env:
-      DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_load
       MBOX_RUNTIME_MODE: staging
       MBOX_REPOSITORY: postgres
       MBOX_TENANT_ID: 11111111-1111-4111-8111-111111111111
@@ -249,7 +236,8 @@ jobs:
       MBOX_METRICS_TOKEN: rc68-ci-metrics-token-0123456789abcdef
       MBOX_CORS_ORIGINS: http://127.0.0.1:5173
       MBOX_PILOT_ACCESS_CODE: MBOX521
-      MBOX_PILOT_EMPLOYEE_PINS_JSON: '{"emp-chen":"5215","emp-qing":"5216"}'
+      MBOX_PILOT_EMPLOYEE_PINS_JSON: '{"emp-operations-director":"7001","emp-admin":"7002","emp-host":"7003","emp-mia":"7004","emp-chen":"7005","emp-qing":"7006","emp-cashier":"7007","emp-lin":"7008","emp-wu":"7009","emp-jie":"7010","emp-han":"7011","emp-tao":"7012"}'
+      MBOX_LOAD_STAFF_PINS_JSON: '{"emp-operations-director":"7001","emp-admin":"7002","emp-host":"7003","emp-mia":"7004","emp-chen":"7005","emp-qing":"7006","emp-cashier":"7007","emp-lin":"7008","emp-wu":"7009","emp-jie":"7010","emp-han":"7011","emp-tao":"7012"}'
       MBOX_DATABASE_POOL_MAX: 10
       MBOX_DATABASE_MUTATION_QUEUE_MAX: 100
       MBOX_DATABASE_MUTATION_QUEUE_WAIT_MS: 15000
@@ -261,98 +249,33 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Provision database runtime role
-        env:
-          PGPASSWORD: mbox_test
-        run: >-
-          psql postgresql://mbox@127.0.0.1:5432/mbox_load
-          --set ON_ERROR_STOP=1
-          --command "CREATE ROLE mbox_app LOGIN PASSWORD 'mbox_app_test' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS"
-      - name: Build the exact performance candidate
-        run: npm run build
-      - name: Provision isolated load database
-        run: |
-          npm run db:migrate
-          psql "${DATABASE_URL}" --set ON_ERROR_STOP=1 <<'SQL'
-          GRANT USAGE ON SCHEMA mbox TO mbox_app;
-          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA mbox TO mbox_app;
-          GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA mbox TO mbox_app;
-          SQL
-          node scripts/prepare-rc68-load-state.mjs
-          MBOX_CONFIRM_PROVISION=PROVISION \
-          MBOX_INITIAL_STATE_PATH=.runtime/rc68-load-state.json \
-          MBOX_TENANT_CODE=ci-load \
-          MBOX_TENANT_NAME='CI Load' \
-          MBOX_STORE_CODE=mbox-lujiazui \
-            node dist-server/server/provision-runtime.js
-      - name: Start two API instances
-        run: |
-          mkdir -p artifacts/runtime-quality
-          DATABASE_URL=postgresql://mbox_app:mbox_app_test@127.0.0.1:5432/mbox_load \
-            API_PORT=18791 node dist-server/server/index.js > artifacts/runtime-quality/instance-1.log 2>&1 &
-          echo $! > artifacts/runtime-quality/instance-1.pid
-          DATABASE_URL=postgresql://mbox_app:mbox_app_test@127.0.0.1:5432/mbox_load \
-            API_PORT=18792 node dist-server/server/index.js > artifacts/runtime-quality/instance-2.log 2>&1 &
-          echo $! > artifacts/runtime-quality/instance-2.pid
-          for port in 18791 18792; do
-            for attempt in $(seq 1 120); do
-              if curl --fail --silent "http://127.0.0.1:${port}/api/ready" >/dev/null; then break; fi
-              if [ "${attempt}" = 120 ]; then
-                echo "API ${port}未在60秒内就绪" >&2
-                exit 1
-              fi
-              sleep 0.5
-            done
-          done
-      - name: Run cross-instance commercial load gate
-        env:
-          MBOX_LOAD_BASE_URLS: http://127.0.0.1:18791,http://127.0.0.1:18792
-          MBOX_LOAD_REPORT_PATH: artifacts/runtime-quality/client-observed-load.json
-        run: |
-          npm run --silent test:load:rc68
-          node -e "JSON.parse(require('fs').readFileSync('artifacts/runtime-quality/client-observed-load.json', 'utf8'))"
-      - name: Verify event loop, pool, queue and projection metrics
-        if: always()
-        env:
-          MBOX_METRICS_BASE_URLS: http://127.0.0.1:18791,http://127.0.0.1:18792
-          MBOX_METRICS_REPORT_PATH: artifacts/runtime-quality/runtime-metrics.json
-        run: npm run metrics:verify
-      - name: Stop load instances
-        if: always()
-        run: |
-          for pid_file in artifacts/runtime-quality/instance-1.pid artifacts/runtime-quality/instance-2.pid; do
-            if [ ! -f "${pid_file}" ]; then continue; fi
-            pid=$(cat "${pid_file}")
-            kill -TERM "${pid}" 2>/dev/null || true
-            for attempt in $(seq 1 100); do
-              if ! kill -0 "${pid}" 2>/dev/null; then break; fi
-              sleep 0.1
-            done
-            if kill -0 "${pid}" 2>/dev/null; then
-              echo "API进程 ${pid} 未在10秒内退出" >&2
-              kill -KILL "${pid}" 2>/dev/null || true
-              exit 1
-            fi
-          done
-      - name: Verify server-observed route SLOs from final logs
-        if: always()
-        run: >-
-          node scripts/analyze-runtime-logs.mjs
-          --input artifacts/runtime-quality/instance-1.log
-          --input artifacts/runtime-quality/instance-2.log
-          --fail-on-slo
-          > artifacts/runtime-quality/server-observed-log-analysis.json
+      - id: performance-playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+      - name: Install performance browser system dependencies
+        run: npx playwright install-deps chromium
+      - if: steps.performance-playwright-cache.outputs.cache-hit != 'true'
+        name: Install performance Chromium
+        run: npx playwright install chromium
+      - name: Verify performance Chromium executable
+        run: node -e "const { chromium } = require('@playwright/test'); require('fs').accessSync(chromium.executablePath())"
+      - name: Run every route against an independent database baseline
+        run: npm run test:load:rc68:route-suite
       - name: Seal and verify runtime evidence
         if: always()
+        id: runtime-evidence
         run: |
-          node -e "for (const file of ['client-observed-load.json','runtime-metrics.json','server-observed-log-analysis.json']) JSON.parse(require('fs').readFileSync('artifacts/runtime-quality/' + file, 'utf8'))"
+          node -e "JSON.parse(require('fs').readFileSync('artifacts/runtime-quality/client-observed-load.json', 'utf8'))"
           (
             cd artifacts/runtime-quality
-            sha256sum client-observed-load.json runtime-metrics.json server-observed-log-analysis.json instance-1.log instance-2.log > SHA256SUMS
+            find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
             sha256sum --check SHA256SUMS
           )
+          printf 'load_report_b64=%s\n' "$(base64 -w0 artifacts/runtime-quality/client-observed-load.json)" >> "${GITHUB_OUTPUT}"
       - name: Upload reproducible runtime evidence
-        if: always()
+        if: always() && github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: runtime-quality-${{ github.sha }}
@@ -446,13 +369,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Download full-scope runtime evidence
-        if: needs.classify.outputs.scope == 'full' && needs.performance.result == 'success'
+        if: needs.classify.outputs.scope == 'full' && needs.performance.result == 'success' && github.event_name != 'pull_request'
         uses: actions/download-artifact@v4
         with:
           name: runtime-quality-${{ github.sha }}
           path: artifacts/runtime-quality
       - name: Verify downloaded runtime evidence checksums
-        if: needs.classify.outputs.scope == 'full' && needs.performance.result == 'success'
+        if: needs.classify.outputs.scope == 'full' && needs.performance.result == 'success' && github.event_name != 'pull_request'
         run: |
           cd artifacts/runtime-quality
           sha256sum --check SHA256SUMS
@@ -460,6 +383,8 @@ jobs:
         env:
           MBOX_CI_SCOPE: ${{ needs.classify.outputs.scope }}
           MBOX_CI_RELEASE_ARTIFACT_REQUIRED: ${{ needs.classify.outputs.release_artifact_required }}
+          MBOX_CI_SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          MBOX_CI_LOAD_EVIDENCE_BASE64: ${{ needs.performance.outputs.load_report_b64 }}
           MBOX_CI_RESULTS_JSON: >-
             {"docs":"${{ needs.docs.result }}","quality":"${{ needs.quality.result }}","fast_quality":"${{ needs.fast_quality.result }}","ui_browser":"${{ needs.ui_browser.result }}","browser":"${{ needs.browser.result }}","database":"${{ needs.database.result }}","performance":"${{ needs.performance.result }}","image":"${{ needs.image.result }}"}
         run: node scripts/write-ci-quality-evidence.mjs
@@ -467,6 +392,7 @@ jobs:
         run: >-
           node scripts/verify-quality-evidence.mjs
           --input artifacts/quality-evidence/ci-quality-evidence.json
+          --policy docs/quality-policy-mbox-v1.json
           --output artifacts/quality-evidence/verification-report.json
           --require-immutable
           --require-release-pass
@@ -476,7 +402,7 @@ jobs:
           sha256sum ci-quality-evidence.json verification-report.json > SHA256SUMS
           sha256sum --check SHA256SUMS
       - name: Upload commit-scoped CI quality ledger
-        if: always()
+        if: always() && github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: quality-evidence-${{ github.sha }}

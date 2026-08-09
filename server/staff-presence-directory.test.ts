@@ -7,10 +7,20 @@ import { createStaffPresenceDirectoryResolver } from './staff-presence-directory
 class RevisionRepository implements RuntimeRepository {
   state = createSeedState()
   reads = 0
+  directoryReads = 0
   async init() {}
   async read() { this.reads += 1; return structuredClone(this.state) }
   async readFresh() { this.reads += 1; return structuredClone(this.state) }
   async readRevision() { return this.state.revision }
+  async readStaffDirectory() {
+    this.directoryReads += 1
+    return {
+      storeId: this.state.store.id,
+      businessDate: this.state.store.businessDate,
+      revision: this.state.revision,
+      employees: this.state.employees.map(({ id, roleId, status }) => ({ id, roleId, status })),
+    }
+  }
   async mutate<T>(mutation: (state: RuntimeState) => T | Promise<T>) {
     const working = structuredClone(this.state)
     const result = await mutation(working)
@@ -33,9 +43,11 @@ describe('staff presence directory', () => {
     repository.state.revision += 1
 
     expect((await resolve()).employees.has('emp-chen')).toBe(false)
-    expect(repository.reads).toBe(1)
+    expect(repository.reads).toBe(0)
+    expect(repository.directoryReads).toBe(1)
     await resolve()
-    expect(repository.reads).toBe(1)
+    expect(repository.reads).toBe(0)
+    expect(repository.directoryReads).toBe(1)
   })
 
   it('uses a fresh aggregate after another instance rolls the business day', async () => {
@@ -49,6 +61,7 @@ describe('staff presence directory', () => {
 
     expect(directory.businessDate).toBe('2030-08-10')
     expect(directory.revision).toBe(repository.state.revision)
-    expect(repository.reads).toBe(1)
+    expect(repository.reads).toBe(0)
+    expect(repository.directoryReads).toBe(1)
   })
 })

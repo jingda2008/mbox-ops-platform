@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "id": "mbox-quality-policy-v1",
+  "profiles": {
+    "mbox-docs-release-v1": {
+      "maximumEvidenceAgeHours": 24,
+      "requiredTestRunIds": ["docs"],
+      "performance": {}
+    },
+    "mbox-ui-release-v1": {
+      "maximumEvidenceAgeHours": 24,
+      "requiredTestRunIds": ["fast_quality", "ui_browser"],
+      "performance": {}
+    },
+    "mbox-frontend-release-v1": {
+      "maximumEvidenceAgeHours": 24,
+      "requiredTestRunIds": ["fast_quality", "browser"],
+      "performance": {}
+    },
+    "mbox-full-release-v1": {
+      "maximumEvidenceAgeHours": 24,
+      "requiredTestRunIds": ["quality", "browser", "database", "performance"],
+      "performance": {
+        "create_task_live": { "minSamples": 300, "p95Ms": 800, "p99Ms": 1500 },
+        "create_quick_order_live": { "minSamples": 300, "p95Ms": 1500, "p99Ms": 2500 },
+        "staff_start_api_journey": { "minSamples": 120, "p95Ms": 500, "p99Ms": 800 },
+        "heartbeat": { "minSamples": 300, "p95Ms": 150, "p99Ms": 300 },
+        "bootstrap_role_coverage": { "minSamples": 12, "p95Ms": 500, "p99Ms": 800 },
+        "bootstrap_live": { "minSamples": 300, "p95Ms": 500, "p99Ms": 800 },
+        "bootstrap_cached": { "minSamples": 300, "p95Ms": 150, "p99Ms": 300 },
+        "reservations": { "minSamples": 300, "p95Ms": 500, "p99Ms": 800 },
+        "guest_session": { "minSamples": 300, "p95Ms": 500, "p99Ms": 800 },
+        "guest_session_repeat": { "minSamples": 300, "p95Ms": 300, "p99Ms": 500 },
+        "task_action": { "minSamples": 300, "p95Ms": 800, "p99Ms": 1500 },
+        "kds_start": { "minSamples": 300, "p95Ms": 800, "p99Ms": 1500 },
+        "kds_complete": { "minSamples": 300, "p95Ms": 800, "p99Ms": 1500 }
+      }
+    }
+  }
+}

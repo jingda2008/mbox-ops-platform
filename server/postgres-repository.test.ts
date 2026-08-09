@@ -120,6 +120,17 @@ class FakeClient implements PostgresPoolClient {
       const transaction = this.requireContext()
       return transaction.runtime ? result([{ revision: transaction.runtime.revision, database_now: this.pool.databaseNow.toISOString() }]) : result([])
     }
+    if (sql.startsWith("SELECT revision, state #>> '{store,id}' AS store_id")) {
+      const transaction = this.requireContext()
+      if (!transaction.runtime) return result([])
+      const state = JSON.parse(transaction.runtime.state)
+      return result([{
+        revision: transaction.runtime.revision,
+        store_id: state.store.id,
+        business_date: state.store.businessDate,
+        employees: state.employees,
+      }])
+    }
     if (sql.startsWith('SELECT revision FROM mbox.runtime_states')) {
       const transaction = this.requireContext()
       return transaction.runtime ? result([{ revision: transaction.runtime.revision }]) : result([])
@@ -304,6 +315,20 @@ describe('PostgresRepository', () => {
     expect(pool.queries.filter(({ sql }) => sql.startsWith('SELECT revision FROM mbox.runtime_states'))).toHaveLength(revisionReadsBefore + 1)
   })
 
+  it('reads the staff authorization directory without loading the full aggregate', async () => {
+    const { pool, repository } = createRepository()
+    await repository.init()
+    const fullReadsBefore = pool.queries.filter(({ sql }) => sql.startsWith('SELECT revision, state, state_sha256')).length
+
+    const directory = await repository.readStaffDirectory()
+
+    expect(directory.storeId).toBe('mbox-lujiazui')
+    expect(directory.businessDate).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(directory.employees).toContainEqual({ id: 'emp-chen', roleId: 'manager', status: 'active' })
+    expect(pool.queries.filter(({ sql }) => sql.startsWith('SELECT revision, state, state_sha256'))).toHaveLength(fullReadsBefore)
+    expect(pool.queries.some(({ sql }) => sql.includes("state #>> '{store,id}'"))).toBe(true)
+  })
+
   it('commits one-step revisions and rejects stale compare-and-swap writes without partial state', async () => {
     const { pool, repository } = createRepository()
     await repository.init()
@@ -389,6 +414,25 @@ describe('PostgresRepository', () => {
 
     await expect(Promise.all([first, second])).resolves.toEqual([2, 3])
     expect(maximumActive).toBe(1)
+    const completedQueue = (await repository.healthCheck()).mutationQueue
+    expect(completedQueue).toMatchObject({
+      pending: 0,
+      active: false,
+      serializedStateBytes: expect.any(Number),
+      initialSerializedStateBytes: expect.any(Number),
+      maxSerializedStateBytes: expect.any(Number),
+      waitSamples: expect.any(Number),
+      waitP95Ms: expect.any(Number),
+      waitP99Ms: expect.any(Number),
+      serviceSamples: expect.any(Number),
+      serviceP95Ms: expect.any(Number),
+      serviceP99Ms: expect.any(Number),
+    })
+    expect(completedQueue.serializedStateBytes).toBeGreaterThan(0)
+    expect(completedQueue.maxSerializedStateBytes).toBeGreaterThanOrEqual(completedQueue.serializedStateBytes)
+    expect(completedQueue.waitSamples).toBeGreaterThanOrEqual(2)
+    expect(completedQueue.serviceSamples).toBeGreaterThanOrEqual(2)
+    expect(completedQueue.serviceP95Ms).toBeGreaterThan(0)
     expect(pool.queries.filter(({ sql }) => (
       sql.startsWith('SELECT revision, state, state_sha256 FROM mbox.runtime_states')
     ))).toHaveLength(fullReadsBefore)

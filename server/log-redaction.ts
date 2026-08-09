@@ -25,14 +25,22 @@ export function redactRequestUrl(value: string) {
 export function requestLogSerializer(request: {
   method?: string
   url?: string
-  headers?: { host?: string }
+  headers?: { host?: string; 'x-mbox-test-stage'?: string; 'x-mbox-test-phase'?: string }
   socket?: { remoteAddress?: string; remotePort?: number }
 }) {
+  const testStage = /^[a-z0-9_-]{1,64}$/.test(request.headers?.['x-mbox-test-stage'] ?? '')
+    ? request.headers?.['x-mbox-test-stage']
+    : undefined
+  const testPhase = /^[a-z0-9_-]{1,64}$/.test(request.headers?.['x-mbox-test-phase'] ?? '')
+    ? request.headers?.['x-mbox-test-phase']
+    : undefined
   return {
     method: request.method,
     url: redactRequestUrl(request.url ?? ''),
     host: request.headers?.host,
     remoteAddress: request.socket?.remoteAddress,
     remotePort: request.socket?.remotePort,
+    ...(testStage ? { testStage } : {}),
+    ...(testPhase ? { testPhase } : {}),
   }
 }

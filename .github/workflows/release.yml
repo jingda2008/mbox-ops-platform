@@ -20,6 +20,13 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Deny release when any critical TC or invariant is unfinished
+        run: npm run release:quality-gate
       - name: Validate tag and release metadata
         run: |
           node scripts/verify-release-metadata.mjs

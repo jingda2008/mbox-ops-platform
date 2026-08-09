@@ -85,3 +85,10 @@ test('environment fingerprint covers the scripts that define and merge the workl
   assert.match(source, /buildInputSha256/)
   assert.match(source, /changedPaths/)
 })
+
+test('tracked TC artifacts use repository-relative references', async () => {
+  const generator = await readFile(new URL('./build-tc-execution-register.mjs', import.meta.url), 'utf8')
+  assert.match(generator, /qualitySupplementReference = 'docs\//)
+  assert.doesNotMatch(generator, /`见 \$\{qualitySupplementPath\}`/)
+  assert.match(generator, /must not contain checkout-specific absolute paths/)
+})

@@ -10,6 +10,7 @@ const versionSlug = version.replaceAll('/', '-')
 const reportPath = resolve(root, `docs/tc-execution-report-${versionSlug}.md`)
 const csvPath = resolve(root, `docs/tc-execution-register-${versionSlug}.csv`)
 const blockersPath = resolve(root, `docs/tc-release-blockers-${versionSlug}.csv`)
+const qualitySupplementReference = 'docs/tc-time-capacity-performance-1.0.0-rc.68.md'
 const checkMode = process.argv.includes('--check')
 const requireReleasePass = process.argv.includes('--require-release-pass')
 const existingExecutionDate = existsSync(reportPath)
@@ -278,10 +279,11 @@ const blockersCsv = csvDocument(
     ]),
     ...supplementalReleaseBlocking.map((row) => [
       row.id, row.priority, row.status, '专项门禁', '质量负责人/对应业务负责人',
-      row.scenario, row.expected, `见 ${qualitySupplementPath}`,
+      row.scenario, row.expected, `见 ${qualitySupplementReference}`,
     ]),
   ],
 )
+if (blockersCsv.includes(root)) throw new Error('Tracked TC artifacts must not contain checkout-specific absolute paths')
 
 const report = `# M-BOX 213条经营TC执行报告
 

@@ -27,8 +27,15 @@ const selectedByScope = {
 const selected = [...(selectedByScope[scope] ?? selectedByScope.full)]
 if (releaseArtifactRequired) selected.push('image')
 
+function normalizedRunStatus(result) {
+  if (result === 'success') return 'pass'
+  if (result === 'failure') return 'fail'
+  if (result === 'cancelled') return 'blocked'
+  return 'not_run'
+}
+
 const testRuns = selected.map((id) => {
-  const status = results[id] === 'success' ? 'pass' : results[id] === 'skipped' ? 'skipped' : 'fail'
+  const status = normalizedRunStatus(results[id])
   return {
     id,
     kind: id === 'performance' ? 'performance-gate' : id,
@@ -37,8 +44,8 @@ const testRuns = selected.map((id) => {
     total: 1,
     passed: status === 'pass' ? 1 : 0,
     failed: status === 'fail' ? 1 : 0,
-    blocked: 0,
-    notRun: status === 'skipped' ? 1 : 0,
+    blocked: status === 'blocked' ? 1 : 0,
+    notRun: status === 'not_run' ? 1 : 0,
     evidence: [id === 'performance'
       ? process.env.GITHUB_EVENT_NAME === 'pull_request'
         ? `github-job:performance:${process.env.GITHUB_RUN_ID}`
@@ -48,9 +55,9 @@ const testRuns = selected.map((id) => {
 })
 
 const performance = []
-if (scope === 'full' && results.performance === 'success') {
+const encodedLoad = process.env.MBOX_CI_LOAD_EVIDENCE_BASE64?.trim()
+if (scope === 'full' && (results.performance === 'success' || encodedLoad)) {
   const loadPath = resolve(process.env.MBOX_CI_LOAD_EVIDENCE_PATH ?? 'artifacts/runtime-quality/client-observed-load.json')
-  const encodedLoad = process.env.MBOX_CI_LOAD_EVIDENCE_BASE64?.trim()
   const load = encodedLoad
     ? JSON.parse(Buffer.from(encodedLoad, 'base64').toString('utf8'))
     : JSON.parse(await readFile(loadPath, 'utf8'))

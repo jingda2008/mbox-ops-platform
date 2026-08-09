@@ -275,11 +275,12 @@ jobs:
           )
           printf 'load_report_b64=%s\n' "$(base64 -w0 artifacts/runtime-quality/client-observed-load.json)" >> "${GITHUB_OUTPUT}"
       - name: Upload reproducible runtime evidence
-        if: always() && github.event_name != 'pull_request'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: runtime-quality-${{ github.sha }}
           path: artifacts/runtime-quality
+          if-no-files-found: error
           retention-days: 14
 
   image:
@@ -397,16 +398,18 @@ jobs:
           --require-immutable
           --require-release-pass
       - name: Seal CI quality ledger
+        if: always()
         run: |
           cd artifacts/quality-evidence
-          sha256sum ci-quality-evidence.json verification-report.json > SHA256SUMS
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
           sha256sum --check SHA256SUMS
       - name: Upload commit-scoped CI quality ledger
-        if: always() && github.event_name != 'pull_request'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: quality-evidence-${{ github.sha }}
           path: artifacts/quality-evidence
+          if-no-files-found: error
           retention-days: 30
       - name: Enforce the selected release gate
         if: always()

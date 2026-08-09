@@ -61,9 +61,17 @@ const BOOTSTRAP_POLL_DELAYS_MS = [5_000, 8_000, 13_000, 20_000] as const
 const BOOTSTRAP_OFFLINE_RETRY_MS = 15_000
 const GuestPortal = lazy(() => import('./components/GuestPortal').then((module) => ({ default: module.GuestPortal })))
 const MemberBenefitsPortal = lazy(() => import('./components/MemberBenefitsPortal').then((module) => ({ default: module.MemberBenefitsPortal })))
-const OperationsConsole = lazy(() => import('./components/OperationsConsole').then((module) => ({ default: module.OperationsConsole })))
+const loadOperationsConsole = () => import('./components/OperationsConsole').then((module) => ({ default: module.OperationsConsole }))
+const OperationsConsole = lazy(loadOperationsConsole)
 const VoiceCommandMode = lazy(() => import('./components/VoiceCommandMode').then((module) => ({ default: module.VoiceCommandMode })))
 const PublicReservationPortal = lazy(() => import('./components/PublicReservationPortal').then((module) => ({ default: module.PublicReservationPortal })))
+
+// Staff bootstrap and the workstation chunk are independent. Start both on the
+// first navigation so the role home does not wait for a serial network round
+// trip after bootstrap, while public guest/member/reservation routes stay lean.
+if (typeof window !== 'undefined' && !['/guest', '/member', '/reserve'].some((path) => window.location.pathname.startsWith(path))) {
+  void loadOperationsConsole()
+}
 
 function WorkspaceLoading() {
   return <main className="system-state"><LoaderCircle className="spin" size={28} /><strong>正在载入工作台</strong></main>

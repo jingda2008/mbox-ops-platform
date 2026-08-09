@@ -43,15 +43,15 @@ if (testCases.length !== 213) throw new Error(`Expected 213 operating TCs, found
 const qualitySupplement = readFileSync(qualitySupplementPath, 'utf8')
 const qualitySupplementCases = [...qualitySupplement.matchAll(/^\| ((?:TME|CAP|RPF)-\d{3}) \| (P[0-3]) \| ([^|]+) \| ([^|]+) \| (通过|失败|未执行|待执行|阻塞|未通过) \|/gm)]
   .map((match) => ({ id: match[1], priority: match[2], scenario: match[3].trim(), expected: match[4].trim(), status: match[5] }))
-if (qualitySupplementCases.length !== 48) {
-  throw new Error(`Expected 48 time/capacity/performance TCs, found ${qualitySupplementCases.length}`)
+if (qualitySupplementCases.length !== 49) {
+  throw new Error(`Expected 49 time/capacity/performance TCs, found ${qualitySupplementCases.length}`)
 }
 if (new Set(qualitySupplementCases.map((item) => item.id)).size !== qualitySupplementCases.length) {
   throw new Error('Time/capacity/performance TC ids must be unique')
 }
 const expectedQualitySupplementIds = [
   ...Array.from({ length: 12 }, (_, index) => `TME-${String(index + 1).padStart(3, '0')}`),
-  ...Array.from({ length: 19 }, (_, index) => `CAP-${String(index + 1).padStart(3, '0')}`),
+  ...Array.from({ length: 20 }, (_, index) => `CAP-${String(index + 1).padStart(3, '0')}`),
   ...Array.from({ length: 17 }, (_, index) => `RPF-${String(index + 1).padStart(3, '0')}`),
 ]
 if (qualitySupplementCases.map((item) => item.id).toSorted().join(',') !== expectedQualitySupplementIds.toSorted().join(',')) {

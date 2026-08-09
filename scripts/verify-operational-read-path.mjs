@@ -31,7 +31,12 @@ await provisionRuntime({
   state,
 })
 
-const pool = asPostgresPool(new pg.Pool({ connectionString: databaseUrl, max: 4 }))
+const primaryNativePool = new pg.Pool({
+  connectionString: databaseUrl,
+  max: 4,
+  application_name: 'mbox-verify-primary',
+})
+const pool = asPostgresPool(primaryNativePool)
 const repository = new PostgresRepository({
   pool,
   tenantId,
@@ -39,13 +44,23 @@ const repository = new PostgresRepository({
   seedState: null,
   projector: new PostgresOperationalProjector(),
 })
-const siblingPool = asPostgresPool(new pg.Pool({ connectionString: databaseUrl, max: 2 }))
+const siblingNativePool = new pg.Pool({
+  connectionString: databaseUrl,
+  max: 2,
+  application_name: 'mbox-verify-sibling',
+})
+const siblingPool = asPostgresPool(siblingNativePool)
 const siblingRepository = new PostgresRepository({
   pool: siblingPool,
   tenantId,
   storeId,
   seedState: null,
   projector: new PostgresOperationalProjector(),
+})
+const adminPool = new pg.Pool({
+  connectionString: databaseUrl,
+  max: 1,
+  application_name: 'mbox-verify-admin',
 })
 
 try {
@@ -102,6 +117,63 @@ try {
     throw new Error('后台调度写没有快速避让前台事务')
   }
 
+  let releaseLeaseOperation
+  let markLeaseEntered
+  const leaseEntered = new Promise((resolve) => { markLeaseEntered = resolve })
+  const leaseRelease = new Promise((resolve) => { releaseLeaseOperation = resolve })
+  const failedLeaseRun = siblingRepository.runWithDistributedLease(
+    'operational-scheduler-failover',
+    async () => {
+      markLeaseEntered()
+      await leaseRelease
+      return 'terminated-holder'
+    },
+  )
+  await leaseEntered
+
+  const blockedLeaseRun = await repository.runWithDistributedLease(
+    'operational-scheduler-failover',
+    async () => 'must-not-run',
+  )
+  if (blockedLeaseRun.acquired) throw new Error('分布式调度租约允许两个实例同时执行')
+
+  const holder = await adminPool.query(`
+    SELECT DISTINCT activity.pid
+    FROM pg_stat_activity AS activity
+    JOIN pg_locks AS held_lock ON held_lock.pid = activity.pid
+    WHERE activity.application_name = $1
+      AND held_lock.locktype = 'advisory'
+      AND held_lock.granted
+  `, ['mbox-verify-sibling'])
+  if (holder.rowCount !== 1 || !holder.rows[0]?.pid) {
+    throw new Error(`无法唯一定位调度租约持有连接：${JSON.stringify(holder.rows)}`)
+  }
+  const terminated = await adminPool.query(
+    'SELECT pg_terminate_backend($1) AS terminated',
+    [holder.rows[0].pid],
+  )
+  if (terminated.rows[0]?.terminated !== true) throw new Error('未能终止调度租约持有连接')
+
+  releaseLeaseOperation()
+  let failedHolderRejected = false
+  try {
+    await failedLeaseRun
+  } catch {
+    failedHolderRejected = true
+  }
+  if (!failedHolderRejected) throw new Error('数据库连接中断后旧调度实例仍报告执行成功')
+
+  const takeoverStartedAt = performance.now()
+  const takeover = await repository.runWithDistributedLease(
+    'operational-scheduler-failover',
+    async () => 'replacement-holder',
+  )
+  const takeoverMs = performance.now() - takeoverStartedAt
+  if (!takeover.acquired || takeover.value !== 'replacement-holder') {
+    throw new Error('租约持有连接中断后健康实例未接管调度')
+  }
+  if (takeoverMs > 1_000) throw new Error(`调度故障接管过慢：${takeoverMs.toFixed(1)}ms`)
+
   const afterContention = await repository.readFresh()
   const health = await repository.healthCheck()
   if (!health.ready || !health.projectionReady || !health.projectionCountsMatch || health.projectionRevision !== afterContention.revision) {
@@ -114,8 +186,11 @@ try {
     projectionRevision: health.projectionRevision,
     countsMatch: health.projectionCountsMatch,
     crossInstanceMutationGate: 'verified',
+    distributedLeaseFailover: 'verified',
+    distributedLeaseTakeoverMs: Math.round(takeoverMs * 10) / 10,
   }))
 } finally {
+  await adminPool.end()
   await siblingRepository.close()
   await repository.close()
 }

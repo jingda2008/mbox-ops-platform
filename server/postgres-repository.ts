@@ -283,6 +283,7 @@ interface RuntimeStateRow extends Record<string, unknown> {
   revision: number | string
   state: RuntimeState | string
   state_sha256: string
+  checksum_valid?: boolean
 }
 
 interface IdempotencyRow extends Record<string, unknown> {
@@ -336,16 +337,21 @@ const SQL = {
   seedState: `
     INSERT INTO mbox.runtime_states (
       tenant_id, store_id, revision, state, state_sha256
-    ) VALUES ($1::uuid, $2::uuid, $3::bigint, $4::jsonb, $5)
+    ) VALUES (
+      $1::uuid, $2::uuid, $3::bigint, $4::jsonb,
+      encode(sha256(convert_to(($4::jsonb)::text, 'UTF8')), 'hex')
+    )
     ON CONFLICT (tenant_id, store_id) DO NOTHING
   `,
   selectState: `
-    SELECT revision, state, state_sha256
+    SELECT revision, state, state_sha256,
+      state_sha256 = encode(sha256(convert_to(state::text, 'UTF8')), 'hex') AS checksum_valid
     FROM mbox.runtime_states
     WHERE tenant_id = $1::uuid AND store_id = $2::uuid
   `,
   selectStateForUpdate: `
-    SELECT revision, state, state_sha256
+    SELECT revision, state, state_sha256,
+      state_sha256 = encode(sha256(convert_to(state::text, 'UTF8')), 'hex') AS checksum_valid
     FROM mbox.runtime_states
     WHERE tenant_id = $1::uuid AND store_id = $2::uuid
     FOR UPDATE
@@ -392,12 +398,12 @@ const SQL = {
     UPDATE mbox.runtime_states
     SET revision = $3::bigint,
         state = $4::jsonb,
-        state_sha256 = $5,
+        state_sha256 = encode(sha256(convert_to(($4::jsonb)::text, 'UTF8')), 'hex'),
         updated_at = clock_timestamp()
     WHERE tenant_id = $1::uuid
       AND store_id = $2::uuid
-      AND revision = $6::bigint
-    RETURNING revision
+      AND revision = $5::bigint
+    RETURNING revision, state_sha256
   `,
   insertIdempotency: `
     INSERT INTO mbox.idempotency_records (
@@ -666,21 +672,21 @@ export class PostgresRepository {
             throw new PostgresInvalidRevisionError(expectedRevision, workingCopy.revision)
           }
           const serializationStartedAt = performance.now()
-          const serialized = serializeJson(workingCopy, 'runtime state')
+          const serialized = serializeRuntimeStatePayload(workingCopy)
           this.recordSerializedStateSize(Buffer.byteLength(serialized))
-          const stateSha256 = sha256(serialized)
           this.recordMutationMetric(this.mutationSerializationDurations, performance.now() - serializationStartedAt)
           const stateWriteStartedAt = performance.now()
-          const update = await client.query<{ revision: number | string }>(SQL.compareAndSwapState, [
+          const update = await client.query<{ revision: number | string; state_sha256: string }>(SQL.compareAndSwapState, [
             this.tenantId,
             this.storeId,
             workingCopy.revision,
             serialized,
-            stateSha256,
             expectedRevision,
           ])
           this.recordMutationMetric(this.mutationStateWriteDurations, performance.now() - stateWriteStartedAt)
           if (update.rowCount !== 1) throw new PostgresOptimisticConcurrencyError(expectedRevision)
+          const stateSha256 = update.rows[0]?.state_sha256?.trim()
+          if (!stateSha256) throw new PostgresStateCorruptionError('PostgreSQL did not return the runtime state checksum')
           if (this.projector) {
             const projectionStartedAt = performance.now()
             await this.projector.project(
@@ -886,13 +892,12 @@ export class PostgresRepository {
       if (this.seedState) {
         const seed = this.seedState()
         assertRuntimeState(seed)
-        const serialized = serializeJson(seed, 'seed runtime state')
+        const serialized = serializeRuntimeStatePayload(seed)
         await transactionClient.query(SQL.seedState, [
           this.tenantId,
           this.storeId,
           seed.revision,
           serialized,
-          sha256(serialized),
         ])
       }
       // Serialize startup rebuilds with live writers. Without this row lock a
@@ -955,9 +960,12 @@ export class PostgresRepository {
         `Runtime state document revision ${state.revision} does not match row revision ${revision}`,
       )
     }
-    const serialized = serializeJson(state, 'persisted runtime state')
+    const serialized = serializeRuntimeStatePayload(state)
     this.recordSerializedStateSize(Buffer.byteLength(serialized))
-    if (sha256(serialized) !== row.state_sha256.trim()) {
+    // New rows use PostgreSQL's canonical JSONB checksum. Older rows used the
+    // application's whitespace-free canonical JSON checksum; accept that
+    // legacy form until the first successful write upgrades the row.
+    if (row.checksum_valid !== true && runtimeStateValueChecksum(state) !== row.state_sha256.trim()) {
       throw new PostgresStateCorruptionError('Runtime state checksum mismatch')
     }
     return migrateRuntimeState(state)
@@ -1300,6 +1308,13 @@ export function runtimeStateChecksum(serialized: string) {
   return sha256(serialized)
 }
 
+export function runtimeStateValueChecksum(value: RuntimeState) {
+  assertRuntimeState(value)
+  const hash = createHash('sha256')
+  updateCanonicalJsonHash(hash, value)
+  return hash.digest('hex')
+}
+
 function assertRuntimeState(value: unknown): asserts value is RuntimeState {
   if (!value || typeof value !== 'object') throw new PostgresStateCorruptionError('Runtime state must be an object')
   const revision = (value as { revision?: unknown }).revision
@@ -1314,6 +1329,68 @@ function serializeJson(value: unknown, label: string): string {
   } catch (error) {
     throw new PostgresRepositoryError(`${label} is not JSON serializable: ${String(error)}`)
   }
+}
+
+function serializeRuntimeStatePayload(value: RuntimeState): string {
+  assertRuntimeState(value)
+  try {
+    return JSON.stringify(value, (_key, child: unknown) => {
+      if (typeof child === 'number' && !Number.isFinite(child)) {
+        throw new TypeError('Non-finite numbers are not valid JSON')
+      }
+      if (['bigint', 'function', 'symbol', 'undefined'].includes(typeof child)) {
+        throw new TypeError(`${typeof child} is not valid JSON`)
+      }
+      return child
+    })
+  } catch (error) {
+    throw new PostgresRepositoryError(`runtime state is not JSON serializable: ${String(error)}`)
+  }
+}
+
+function updateCanonicalJsonHash(
+  hash: ReturnType<typeof createHash>,
+  value: unknown,
+  seen = new WeakSet<object>(),
+): void {
+  if (value === null) {
+    hash.update('null')
+    return
+  }
+  if (typeof value !== 'object') {
+    if (typeof value === 'number' && !Number.isFinite(value)) throw new TypeError('Non-finite numbers are not valid JSON')
+    if (['bigint', 'function', 'symbol', 'undefined'].includes(typeof value)) {
+      throw new TypeError(`${typeof value} is not valid JSON`)
+    }
+    hash.update(JSON.stringify(value))
+    return
+  }
+  if (value instanceof Date) {
+    hash.update(JSON.stringify(value.toJSON()))
+    return
+  }
+  if (seen.has(value)) throw new TypeError('Circular references are not valid JSON')
+  seen.add(value)
+  if (Array.isArray(value)) {
+    hash.update('[')
+    for (let index = 0; index < value.length; index += 1) {
+      if (index > 0) hash.update(',')
+      updateCanonicalJsonHash(hash, value[index], seen)
+    }
+    hash.update(']')
+  } else {
+    hash.update('{')
+    const keys = Object.keys(value).sort()
+    for (let index = 0; index < keys.length; index += 1) {
+      if (index > 0) hash.update(',')
+      const key = keys[index]!
+      hash.update(JSON.stringify(key))
+      hash.update(':')
+      updateCanonicalJsonHash(hash, (value as Record<string, unknown>)[key], seen)
+    }
+    hash.update('}')
+  }
+  seen.delete(value)
 }
 
 function sortJson(value: unknown, seen = new WeakSet<object>()): unknown {

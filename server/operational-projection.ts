@@ -1,6 +1,6 @@
 import type { RuntimeState } from '../src/shared/contracts.js'
 import type { PostgresPoolClient, PostgresTenantContext } from './postgres-repository.js'
-import { runtimeStateChecksum, serializeRuntimeState } from './postgres-repository.js'
+import { runtimeStateValueChecksum } from './postgres-repository.js'
 import { tableSessionBusinessDate } from './table-sessions.js'
 
 type ProjectionValue = string | number | null
@@ -359,7 +359,7 @@ export class PostgresOperationalProjector implements RuntimeStateProjector {
         context.tenantId,
         context.storeId,
         current.revision,
-        currentStateSha256 ?? runtimeStateChecksum(serializeRuntimeState(current)),
+        currentStateSha256 ?? runtimeStateValueChecksum(current),
         JSON.stringify(projectionCountsForState(current)),
       ],
     )

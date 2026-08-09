@@ -1,3 +1,6 @@
 # Keep this file independently reviewed from the execution register.
 # Removing a row from the register must not remove the release requirement.
-TC-001
+# Format: TC_ID|ORIGINAL_PRIORITY|OPTIONAL_DEFINITION_SHA256
+# The digest covers requirement_id, priority, risk_area, role, preconditions,
+# steps and expected_result. Keep this file under independent code-owner review.
+TC-001|P0

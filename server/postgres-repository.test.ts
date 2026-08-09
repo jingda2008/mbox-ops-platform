@@ -13,6 +13,9 @@ import {
   PostgresRuntimeStateNotInitializedError,
   PostgresSchemaError,
   PostgresSeedDisabledError,
+  runtimeStateChecksum,
+  runtimeStateValueChecksum,
+  serializeRuntimeState,
   type PostgresPool,
   type PostgresPoolClient,
   type PostgresQueryResult,
@@ -135,12 +138,12 @@ class FakeClient implements PostgresPoolClient {
       transaction.runtime = {
         revision: Number(values[2]),
         state: String(values[3]),
-        state_sha256: String(values[4]),
+        state_sha256: runtimeStateValueChecksum(JSON.parse(String(values[3]))),
       }
       transaction.runtimeDirty = true
       return result([], 1)
     }
-    if (sql.startsWith('SELECT revision, state, state_sha256 FROM mbox.runtime_states')) {
+    if (sql.startsWith('SELECT revision, state, state_sha256,')) {
       const transaction = this.requireContext()
       return transaction.runtime ? result([structuredClone(transaction.runtime)]) : result([])
     }
@@ -190,15 +193,19 @@ class FakeClient implements PostgresPoolClient {
         this.pool.failNextCompareAndSwap = false
         return result([], 0)
       }
-      if (!transaction.runtime || transaction.runtime.revision !== Number(values[5])) return result([], 0)
+      if (!transaction.runtime || transaction.runtime.revision !== Number(values[4])) return result([], 0)
+      const state = String(values[3])
       transaction.runtime = {
         revision: Number(values[2]),
-        state: String(values[3]),
-        state_sha256: String(values[4]),
+        state,
+        state_sha256: runtimeStateValueChecksum(JSON.parse(state)),
         updated_at: this.pool.databaseNow.toISOString(),
       }
       transaction.runtimeDirty = true
-      return result([{ revision: transaction.runtime.revision }], 1)
+      return result([{
+        revision: transaction.runtime.revision,
+        state_sha256: transaction.runtime.state_sha256,
+      }], 1)
     }
     if (sql.startsWith('INSERT INTO mbox.idempotency_records')) {
       const transaction = this.requireWritableContext()
@@ -313,6 +320,14 @@ function createRepository(pool = new FakePool(), options: { maxPendingMutations?
 }
 
 describe('PostgresRepository', () => {
+  it('keeps streaming state checksums identical to canonical serialization regardless of key order', () => {
+    const state = createSeedState(now)
+    const reordered = Object.fromEntries(Object.entries(state).reverse()) as typeof state
+
+    expect(runtimeStateValueChecksum(state)).toBe(runtimeStateChecksum(serializeRuntimeState(state)))
+    expect(runtimeStateValueChecksum(reordered)).toBe(runtimeStateValueChecksum(state))
+  })
+
   it('requires the compatibility table instead of creating production schema at startup', async () => {
     const { pool, repository } = createRepository()
     pool.schemaExists = false
@@ -414,7 +429,7 @@ describe('PostgresRepository', () => {
       state.revision += 1
     })
     const fullReadsAfterCommit = pool.queries.filter(({ sql }) => (
-      sql.startsWith('SELECT revision, state, state_sha256 FROM mbox.runtime_states')
+      sql.startsWith('SELECT revision, state, state_sha256,')
     )).length
     const revisionReadsAfterCommit = pool.queries.filter(({ sql }) => (
       sql.startsWith('SELECT revision FROM mbox.runtime_states')
@@ -425,7 +440,7 @@ describe('PostgresRepository', () => {
     expect(state.store.name).toBe('Committed cache state')
     expect(state.revision).toBe(2)
     expect(pool.queries.filter(({ sql }) => (
-      sql.startsWith('SELECT revision, state, state_sha256 FROM mbox.runtime_states')
+      sql.startsWith('SELECT revision, state, state_sha256,')
     ))).toHaveLength(fullReadsAfterCommit)
     expect(pool.queries.filter(({ sql }) => (
       sql.startsWith('SELECT revision FROM mbox.runtime_states')
@@ -437,7 +452,7 @@ describe('PostgresRepository', () => {
     await repository.init()
     await repository.read()
     const fullReadsBefore = pool.queries.filter(({ sql }) => (
-      sql.startsWith('SELECT revision, state, state_sha256 FROM mbox.runtime_states')
+      sql.startsWith('SELECT revision, state, state_sha256,')
     )).length
     let active = 0
     let maximumActive = 0
@@ -485,7 +500,7 @@ describe('PostgresRepository', () => {
     expect(completedQueue.serviceSamples).toBeGreaterThanOrEqual(2)
     expect(completedQueue.serviceP95Ms).toBeGreaterThan(0)
     expect(pool.queries.filter(({ sql }) => (
-      sql.startsWith('SELECT revision, state, state_sha256 FROM mbox.runtime_states')
+      sql.startsWith('SELECT revision, state, state_sha256,')
     ))).toHaveLength(fullReadsBefore)
   })
 

@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Client } from 'pg'
 import type { RuntimeState } from '../src/shared/contracts.js'
-import { runtimeStateChecksum, serializeRuntimeState } from './postgres-repository.js'
+import { serializeRuntimeState } from './postgres-repository.js'
 import { tableOperationsConfig } from './table-sessions.js'
 
 const REQUIRED_ARRAYS: Array<keyof RuntimeState> = [
@@ -120,9 +120,12 @@ export async function provisionRuntime(options: ProvisionOptions) {
     })
     const result = await client.query(
       `INSERT INTO mbox.runtime_states(tenant_id, store_id, revision, state, state_sha256)
-       VALUES ($1::uuid, $2::uuid, $3::bigint, $4::jsonb, $5)
+       VALUES (
+         $1::uuid, $2::uuid, $3::bigint, $4::jsonb,
+         encode(sha256(convert_to(($4::jsonb)::text, 'UTF8')), 'hex')
+       )
        ON CONFLICT (tenant_id, store_id) DO NOTHING`,
-      [options.tenantId, options.storeUuid, options.state.revision, serialized, runtimeStateChecksum(serialized)],
+      [options.tenantId, options.storeUuid, options.state.revision, serialized],
     )
     if (result.rowCount !== 1) throw new Error('该租户门店已经初始化，拒绝覆盖生产状态')
     await client.query('COMMIT')

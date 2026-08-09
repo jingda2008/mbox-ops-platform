@@ -1,8 +1,7 @@
 import type { RuntimeState } from '../src/shared/contracts.js'
 import { migrateRuntimeState } from './runtime-state-migrations.js'
 import {
-  runtimeStateChecksum,
-  serializeRuntimeState,
+  runtimeStateValueChecksum,
   type PostgresPool,
   type PostgresPoolClient,
   type PostgresTenantContext,
@@ -29,6 +28,7 @@ interface OperationalReadRow extends Record<string, unknown> {
   runtime_revision: number | string
   aggregate_state: RuntimeState | string
   state_sha256: string
+  checksum_valid?: boolean
   tables: unknown
   table_sessions: unknown
   service_tasks: unknown
@@ -163,6 +163,7 @@ export async function resolveOperationalRuntimeState(options: {
 
 const READ_OPERATIONAL_SNAPSHOT_SQL = `
   SELECT checkpoint.runtime_revision, runtime.state AS aggregate_state, runtime.state_sha256,
+    runtime.state_sha256 = encode(sha256(convert_to(runtime.state::text, 'UTF8')), 'hex') AS checksum_valid,
     COALESCE((
       SELECT jsonb_agg(payload ORDER BY table_code)
       FROM mbox.operational_tables
@@ -252,7 +253,7 @@ export class PostgresOperationalReadStore {
       if (!parsed || typeof parsed !== 'object' || parsed.revision !== revision) {
         throw new OperationalReadStoreError('Aggregate state does not match the operational snapshot revision')
       }
-      if (runtimeStateChecksum(serializeRuntimeState(parsed)) !== row.state_sha256.trim()) {
+      if (row.checksum_valid !== true && runtimeStateValueChecksum(parsed) !== row.state_sha256.trim()) {
         throw new OperationalReadStoreError('Aggregate state checksum does not match the operational snapshot')
       }
       const state = migrateRuntimeState(parsed)

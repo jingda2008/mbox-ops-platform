@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { parseRequiredTcBaseline, validateTcRegister, verifyTcRegisterFile } from './verify-tc-register.mjs'
+import { parseRequiredTcBaseline, tcDefinitionDigest, validateTcRegister, verifyTcRegisterFile } from './verify-tc-register.mjs'
 
 const headers = [
   'tc_id', 'requirement_id', 'priority', 'risk_area', 'role', 'preconditions', 'steps',
@@ -88,8 +88,28 @@ test('rejects stale evidence and evidence from another commit', () => {
 })
 
 test('parses a required TC baseline and rejects duplicate baseline IDs', () => {
-  assert.deepEqual(parseRequiredTcBaseline('# required\nTC-001\n\nTC-002\n'), ['TC-001', 'TC-002'])
+  assert.deepEqual(parseRequiredTcBaseline('# required\nTC-001|P0\n\nTC-002\n'), [
+    { tcId: 'TC-001', priority: 'P0', definitionSha256: undefined },
+    { tcId: 'TC-002', priority: undefined, definitionSha256: undefined },
+  ])
   assert.throws(() => parseRequiredTcBaseline('TC-001\nTC-001\n'), /duplicate IDs/)
+  assert.throws(() => parseRequiredTcBaseline('TC-001|critical\n'), /invalid required TC priority/)
+})
+
+test('required baseline prevents priority downgrades and definition drift', () => {
+  const original = row({ priority: 'P0' })
+  const baseline = [{ tcId: 'TC-001', priority: 'P0', definitionSha256: tcDefinitionDigest(original) }]
+  const downgraded = validateTcRegister([row({ priority: 'P2', status: 'not_run', evidence: '', commit_sha: '', ci_run_id: '', last_executed_at: '', artifact_status: 'not_applicable' })], headers, {
+    requiredTcBaseline: baseline,
+  })
+  assert.equal(downgraded.passed, false)
+  assert.match(downgraded.failures.join('\n'), /priority changed from P0 to P2/)
+
+  const redefined = validateTcRegister([row({ priority: 'P0', expected_result: 'any response is accepted' })], headers, {
+    requiredTcBaseline: baseline,
+  })
+  assert.equal(redefined.passed, false)
+  assert.match(redefined.failures.join('\n'), /definition does not match/)
 })
 
 test('rejects untraceable failures, future execution and automated passes without a CI run', () => {

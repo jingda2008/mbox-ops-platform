@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import Papa from 'papaparse'
@@ -13,19 +14,38 @@ const strictIsoTimestamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?
 const spreadsheetFormula = /^[=+\-@]/
 
 export function parseRequiredTcBaseline(input) {
-  const ids = input.split(/\r?\n/)
+  const entries = input.split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line && !line.startsWith('#'))
+    .map((line) => {
+      const [tcId, priority = '', definitionSha256 = '', ...extra] = line.split('|').map((field) => field.trim())
+      if (!tcId || extra.length) throw new Error(`invalid required TC baseline entry: ${line}`)
+      if (priority && !/^P[0-3]$/.test(priority)) throw new Error(`invalid required TC priority for ${tcId}`)
+      if (definitionSha256 && !/^[0-9a-f]{64}$/.test(definitionSha256)) {
+        throw new Error(`invalid required TC definition SHA256 for ${tcId}`)
+      }
+      return { tcId, priority: priority || undefined, definitionSha256: definitionSha256 || undefined }
+    })
+  const ids = entries.map(({ tcId }) => tcId)
   const duplicates = ids.filter((id, index) => ids.indexOf(id) !== index)
   if (duplicates.length) throw new Error(`required TC baseline contains duplicate IDs: ${[...new Set(duplicates)].join(', ')}`)
-  return ids
+  return entries
+}
+
+export function tcDefinitionDigest(row) {
+  const fields = ['requirement_id', 'priority', 'risk_area', 'role', 'preconditions', 'steps', 'expected_result']
+  const canonical = fields.map((field) => [field, String(row[field] ?? '').trim()])
+  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex')
 }
 
 export function validateTcRegister(rows, headers = [], options = {}) {
   const failures = []
   const warnings = []
   const minimumTcCount = options.minimumTcCount ?? 1
-  const requiredTcIds = new Set(options.requiredTcIds ?? [])
+  const requiredTcBaseline = (options.requiredTcBaseline ?? options.requiredTcIds ?? []).map((entry) => (
+    typeof entry === 'string' ? { tcId: entry } : entry
+  ))
+  const requiredTcIds = new Set(requiredTcBaseline.map(({ tcId }) => tcId))
   const expectedCommitSha = String(options.expectedCommitSha ?? '').trim()
   const maximumEvidenceAgeDays = options.maximumEvidenceAgeDays
   const nowMs = options.nowMs ?? Date.now()
@@ -48,7 +68,7 @@ export function validateTcRegister(rows, headers = [], options = {}) {
     else if (ids.has(id)) failures.push(`${path} duplicates tc_id ${id}`)
     else ids.add(id)
     if (!/^P[0-3]$/.test(String(row.priority ?? ''))) failures.push(`${path} priority must be P0-P3`)
-    if (!['pass', 'fail', 'blocked', 'not_run', 'skipped'].includes(String(row.status ?? ''))) {
+    if (!['pass', 'fail', 'blocked', 'not_run'].includes(String(row.status ?? ''))) {
       failures.push(`${path} status is invalid`)
     }
     if (!['manual', 'automated', 'hybrid'].includes(String(row.automation_level ?? ''))) {
@@ -77,7 +97,7 @@ export function validateTcRegister(rows, headers = [], options = {}) {
         else warnings.push(message)
       }
     }
-    if (['not_run', 'skipped'].includes(row.status) && row.artifact_status !== 'not_applicable') {
+    if (row.status === 'not_run' && row.artifact_status !== 'not_applicable') {
       failures.push(`${path} unexecuted TC must use artifact_status=not_applicable`)
     }
     if (row.status === 'fail' && !String(row.defect_id ?? '').trim()) failures.push(`${path} failed TC requires defect_id`)
@@ -99,8 +119,18 @@ export function validateTcRegister(rows, headers = [], options = {}) {
       else warnings.push(message)
     }
   })
-  for (const requiredId of requiredTcIds) {
-    if (!ids.has(requiredId)) failures.push(`required TC ${requiredId} is missing from the register`)
+  for (const required of requiredTcBaseline) {
+    const row = rows.find((candidate) => String(candidate.tc_id ?? '').trim() === required.tcId)
+    if (!row) {
+      failures.push(`required TC ${required.tcId} is missing from the register`)
+      continue
+    }
+    if (required.priority && row.priority !== required.priority) {
+      failures.push(`required TC ${required.tcId} priority changed from ${required.priority} to ${row.priority}`)
+    }
+    if (required.definitionSha256 && tcDefinitionDigest(row) !== required.definitionSha256) {
+      failures.push(`required TC ${required.tcId} definition does not match the independently reviewed baseline`)
+    }
   }
   return { passed: failures.length === 0, failures, warnings, rows: rows.length }
 }
@@ -124,13 +154,32 @@ async function main() {
   const ageIndex = process.argv.indexOf('--max-evidence-age-days')
   const input = inputIndex >= 0 ? process.argv[inputIndex + 1] : 'docs/templates/software-tc-register-template.csv'
   const minimumTcCount = minimumIndex >= 0 ? Number(process.argv[minimumIndex + 1]) : 1
-  const requiredTcIds = baselineIndex >= 0
+  const requiredTcBaseline = baselineIndex >= 0
     ? parseRequiredTcBaseline(await readFile(resolve(process.argv[baselineIndex + 1]), 'utf8'))
     : []
+  if (process.argv.includes('--print-required-baseline')) {
+    const parsed = Papa.parse(await readFile(resolve(input), 'utf8'), {
+      header: true,
+      skipEmptyLines: 'greedy',
+      transformHeader: (header) => header.trim(),
+    })
+    const structural = validateTcRegister(parsed.data, parsed.meta.fields ?? [])
+    if (parsed.errors.length || !structural.passed) {
+      throw new Error(`cannot generate baseline from invalid TC register: ${[
+        ...parsed.errors.map((error) => error.message),
+        ...structural.failures,
+      ].join('; ')}`)
+    }
+    const lines = parsed.data
+      .filter((row) => ['P0', 'P1'].includes(row.priority))
+      .map((row) => `${String(row.tc_id).trim()}|${row.priority}|${tcDefinitionDigest(row)}`)
+    process.stdout.write(`${lines.join('\n')}\n`)
+    return
+  }
   const report = await verifyTcRegisterFile(input, {
     minimumTcCount,
     requireReleasePass: process.argv.includes('--require-release-pass'),
-    requiredTcIds,
+    requiredTcBaseline,
     expectedCommitSha: commitIndex >= 0 ? process.argv[commitIndex + 1] : undefined,
     maximumEvidenceAgeDays: ageIndex >= 0 ? Number(process.argv[ageIndex + 1]) : undefined,
   })

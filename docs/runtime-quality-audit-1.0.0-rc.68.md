@@ -113,6 +113,12 @@ KDS阶段的聚合状态由约80KB增长到约3.29MB，倍率约41倍，但约91
 
 事务门改动后的冻结源码复测中，2次/秒KDS完成300/300成功，客户端P95/P99为231.5/239.0ms；两个实例事件循环P99为96.0/87.5ms，写队列等待P95约0.02/0.02ms，连接池获取P95约0.11/0.07ms，后台调度仍执行5次。5次/秒容量探针同样300/300成功，实际发起和完成吞吐均为5次/秒，客户端P95/P99为171.9/177.4ms；两个实例事件循环P99为83.5/82.7ms，写队列等待P95约0.01ms，连接池获取P95约0.03ms，状态、审计和库存不变量全部通过。5次/秒轮没有到期调度写，因此它只能裁决`CAP-018`容量档位；`CAP-019`仍需真实持锁和故障接管CI。
 
+后续真实PostgreSQL集成故障注入先证明同一调度租约存活时第二实例不会执行，再通过`pg_terminate_backend`强制终止租约持有连接。旧实例没有伪报成功，健康实例在0.8ms内取得同一租约，且规范化投影仍与revision一致。这只证明数据库session租约的释放和接管；不能替代“任务已认领、外部调用中断、完成回写前崩溃”三个业务断点的不丢不重验证，也不能在新CI前改发布结论。
+
+提交`030de88e6eb7e07cf0c72b04fde986fcd5db7280`的不可变CI `31335153815`中，代码质量、数据库和浏览器商业流程通过，KDS开始/完成各300次请求均无HTTP或流程失败，但性能门禁仍正确失败。KDS开始客户端P95为254.9ms，两个实例事件循环P99为102.70/103.35ms；KDS完成客户端P95为355.3ms，事件循环P99为139.99/139.72ms。连接池获取P95仅约0.05/0.06ms，应用队列P95也低于0.04ms；分段指标显示KDS完成序列化P95约45.8至47.9ms、整店状态写入P95约124.5至136.1ms，调度写最高接近993ms。根因是约3.5MB整店JSON在应用线程进行递归排序、序列化和兼容写入，不是数据库连接数不足。运行制品再次因GitHub Actions额度耗尽而标记`artifact_missing`，执行失败和证据缺失分别保留。
+
+下一候选保持JSONB数据与SHA-256完整性语义不变，把规范化校验改由PostgreSQL内置`sha256`对JSONB规范文本计算；应用只做一次写入序列化，旧应用规范化校验继续兼容到首次成功写入。真实PostgreSQL 16、双API实例的定向复测中，KDS完成300/300成功，客户端P95/P99为232.1/243.6ms，序列化P95由上一轮本地41.9/45.3ms降至9.5/9.3ms，事件循环P99为78.9/74.6ms，队列P95约0.02ms，连接获取P95最高0.13ms。员工API启动旅程120/120、P95 101.7ms，员工新浏览器上下文首屏绘制P95 93.9ms；客户读取1812次无失败，客户会话P95 24.5ms，客户首屏绘制P95 60.2ms。以上绑定当前源码指纹但仍是未提交本地证据，必须由新提交CI复现后才能关闭`CAP-001/CAP-002`。
+
 ## 证据
 
 - 原始日志：部署服务器Docker历史日志，分别保存为`/tmp/mbox-rc64-history.log`和`/tmp/mbox-rc67-server-audit.log`。
@@ -120,6 +126,7 @@ KDS阶段的聚合状态由约80KB增长到约3.29MB，倍率约41倍，但约91
 - 解析工具：`scripts/analyze-runtime-logs.mjs`。
 - 指标门禁：`docs/runtime-quality-standards.md`。
 - 当前本地分阶段证据：`artifacts/runtime-quality-current/`，不纳入Git且不替代CI制品。
+- JSONB数据库校验候选本地证据：`artifacts/runtime-quality-db-checksum-kds-complete/`、`artifacts/runtime-quality-db-checksum-staff-start/`和`artifacts/runtime-quality-db-checksum-reads/`，不纳入Git且不替代CI制品。
 - 调度隔离与单次拷贝本地候选证据：`artifacts/runtime-quality-kds-complete-scheduler-lease/`及`artifacts/runtime-quality-kds-complete-single-clone/`，不纳入Git且不替代CI制品。
 - 路由级首屏拆分本地候选证据：`artifacts/runtime-quality-staff-route-split/`及`artifacts/runtime-quality-guest-route-split/`，不纳入Git且不替代CI制品。
 - 岗位首页即时壳层本地候选证据：`artifacts/runtime-quality-staff-fallback/`，30个新浏览器上下文双帧P95为92.1ms；只作诊断。

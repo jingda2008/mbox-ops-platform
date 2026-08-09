@@ -239,6 +239,16 @@ node scripts/verify-quality-model.mjs --state-machine state-machine.json --invar
 
 TC登记必须有独立的必需ID基线或需求基线摘要。验证器不仅检查剩余行是否合法，还要检查是否有人删除了必需P0/P1用例。政策、必需TC基线、状态机、不变量和验证器应由`CODEOWNERS`及主分支保护共同约束；只有仓库内文件而没有平台保护，仍不构成独立信任根。
 
+商业发布基线不能只锁ID，还要锁原始优先级和测试定义摘要。使用`TC_ID|ORIGINAL_PRIORITY|DEFINITION_SHA256`格式，定义摘要覆盖需求、优先级、风险、角色、前置、步骤和预期结果；通过下面的命令从已评审登记生成，再由不同代码所有者保护：
+
+```bash
+node scripts/verify-tc-register.mjs \
+  --input tc-register.csv \
+  --print-required-baseline > required-tc.txt
+```
+
+执行状态只允许`pass/fail/blocked/not_run`，证据状态只允许`available/missing/unverified/not_applicable`。CI平台自身的`skipped`必须在进入质量总账前映射为`not_run`；制品上传失败保留原执行结果，同时把证据状态记为`missing`。
+
 ## 10. 团队执行节奏
 
 - 每项需求进入开发前：补齐需求ID、风险和验收条件。

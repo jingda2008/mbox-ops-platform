@@ -90,6 +90,15 @@ export function evaluateArrivalSchedule(metricsByLabel, p95LimitMs) {
   return { passed: failedLabels.length === 0, failedLabels }
 }
 
+export function evaluatePhaseArrivalSchedules(measuredMetrics, setupMetrics, p95LimitMs) {
+  const measuredSchedule = evaluateArrivalSchedule(measuredMetrics, p95LimitMs)
+  const setupSchedule = evaluateArrivalSchedule(setupMetrics, p95LimitMs)
+  return {
+    measuredSchedule,
+    setupSchedule,
+  }
+}
+
 export function describeVenueWorkload(options = {}) {
   const guests = options.guests ?? 300
   const employees = options.employees ?? 12

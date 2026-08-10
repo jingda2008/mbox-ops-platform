@@ -148,6 +148,14 @@ test('KDS completion opens the measured metrics window after preparation', async
   assert.match(source, /if \(phase !== 'kds_complete'\) await resetMeasuredMetricsWindow\(\)/)
 })
 
+test('setup capacity drift is retained without replacing the measured release schedule', async () => {
+  const source = await readFile(new URL('./rc68-mixed-load.mjs', import.meta.url), 'utf8')
+  assert.match(source, /evaluatePhaseArrivalSchedules\(/)
+  assert.match(source, /schemaVersion: 2/)
+  assert.match(source, /evidenceEligible: phase !== 'all'/)
+  assert.match(source, /schedule: measuredSchedule/)
+})
+
 test('the scheduler uses a cross-instance quiet window with bounded deferral', async () => {
   const source = await readFile(new URL('../server/index.ts', import.meta.url), 'utf8')
   const repositorySource = await readFile(new URL('../server/postgres-repository.ts', import.meta.url), 'utf8')

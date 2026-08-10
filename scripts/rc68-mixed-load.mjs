@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 import {
   describeVenueWorkload,
   describeKdsWriteProfile,
-  evaluateArrivalSchedule,
+  evaluatePhaseArrivalSchedules,
   runArrivalPool,
   selectAuthorizedOccupiedTables,
 } from './load-workload-model.mjs'
@@ -570,9 +570,14 @@ const byLabel = Object.fromEntries(Object.entries(activeTargets).map(([label, ta
     target, passed: rows.length >= (target.minSamples ?? samples) && successful.length === rows.length && p95Ms <= target.p95 && p99Ms <= target.p99,
   }]
 }))
-const schedule = evaluateArrivalSchedule(measuredArrivalMetrics, schedulingDelayP95LimitMs)
+const { measuredSchedule, setupSchedule } = evaluatePhaseArrivalSchedules(
+  measuredArrivalMetrics,
+  setupArrivalMetrics,
+  schedulingDelayP95LimitMs,
+)
 const report = {
   model: {
+    schemaVersion: 2,
     runId,
     instances: baseUrls.length, samplesPerReadOrAction: samples, kdsActionSamples: samples * 2,
     readConcurrency: concurrency, staffColdStarts, bootstrapLiveSamples: samples, bootstrapCachedSamples: samples,
@@ -594,11 +599,13 @@ const report = {
     arrivalMetrics: measuredArrivalMetrics,
     setupArrivalMetrics,
     schedulingDelayP95LimitMs,
-    schedule,
+    measuredSchedule,
+    setupSchedule,
+    schedule: measuredSchedule,
   },
   totals: { measured: observations.length, failures: observations.filter((item) => item.status < 200 || item.status >= 400).length, workflowFailures: failures.length },
   byLabel, failureSamples: failures.slice(0, 10),
-  passed: failures.length === 0 && schedule.passed && Object.values(byLabel).every((entry) => entry.passed),
+  passed: failures.length === 0 && measuredSchedule.passed && Object.values(byLabel).every((entry) => entry.passed),
 }
 const serializedReport = `${JSON.stringify(report, null, 2)}\n`
 const reportPath = process.env.MBOX_LOAD_REPORT_PATH?.trim()

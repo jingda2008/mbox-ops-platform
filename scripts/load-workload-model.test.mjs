@@ -4,6 +4,7 @@ import {
   describeVenueWorkload,
   describeKdsWriteProfile,
   evaluateArrivalSchedule,
+  evaluatePhaseArrivalSchedules,
   runArrivalPool,
   selectAuthorizedOccupiedTables,
   validateArrivalProfile,
@@ -81,6 +82,21 @@ test('arrival schedule fails when the load generator misses its target cadence',
     schedulingDelayP95Ms: 120, schedulingDelayP99Ms: 300, missedArrivalCount: 2,
   } }, 250), {
     passed: false, failedLabels: ['guest'],
+  })
+})
+
+test('setup capacity drift is reported independently from the measured schedule', () => {
+  const healthy = {
+    targetRps: 2, achievedLaunchRps: 2, arrivalIntervalMs: 500,
+    schedulingDelayP95Ms: 10, schedulingDelayP99Ms: 20, missedArrivalCount: 0,
+  }
+  const delayedSetup = {
+    targetRps: 5, achievedLaunchRps: 4.4, arrivalIntervalMs: 200,
+    schedulingDelayP95Ms: 7_000, schedulingDelayP99Ms: 7_600, missedArrivalCount: 182,
+  }
+  assert.deepEqual(evaluatePhaseArrivalSchedules({ kds_complete: healthy }, { setup_kds_start: delayedSetup }, 250), {
+    measuredSchedule: { passed: true, failedLabels: [] },
+    setupSchedule: { passed: false, failedLabels: ['setup_kds_start'] },
   })
 })
 

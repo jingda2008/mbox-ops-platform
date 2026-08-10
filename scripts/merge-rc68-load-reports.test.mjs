@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mergeLoadReports, requiredRoutePhases } from './merge-rc68-load-reports.mjs'
+import { evaluatePhaseArrivalSchedules } from './load-workload-model.mjs'
 
 const labels = {
   staff_start: ['staff_start_api_journey'],
@@ -13,6 +14,12 @@ const labels = {
 }
 
 function report(phase, passed = true) {
+  const arrivalMetrics = Object.fromEntries(labels[phase].map((label) => [label, {
+    targetRps: 5, achievedLaunchRps: 5, arrivalIntervalMs: 200,
+    schedulingDelayP95Ms: 10, schedulingDelayP99Ms: 20, missedArrivalCount: 0,
+  }]))
+  const setupArrivalMetrics = {}
+  const { measuredSchedule, setupSchedule } = evaluatePhaseArrivalSchedules(arrivalMetrics, setupArrivalMetrics, 250)
   const byLabel = Object.fromEntries(labels[phase].map((label) => [label, {
     samples: 300, successful: passed ? 300 : 299, failures: passed ? 0 : 1,
     p50Ms: 10, p95Ms: 20, p99Ms: 30, maxMs: 40,
@@ -20,9 +27,15 @@ function report(phase, passed = true) {
   }]))
   return {
     model: {
+      schemaVersion: 2,
       phase, runId: 'run-12345678', evidenceEligible: true, instances: 2, samplesPerReadOrAction: 300,
       arrivalRatesPerSecond: { read: 1, write: 2 },
-      arrivalMetrics: Object.fromEntries(labels[phase].map((label) => [label, { targetRps: 5 }])),
+      arrivalMetrics,
+      setupArrivalMetrics,
+      schedulingDelayP95LimitMs: 250,
+      measuredSchedule,
+      setupSchedule,
+      schedule: measuredSchedule,
     },
     totals: { measured: 300, failures: passed ? 0 : 1, workflowFailures: 0 },
     byLabel, failureSamples: [], passed,
@@ -64,6 +77,23 @@ test('merges only complete isolated phase reports', () => {
   assert.equal(merged.model.independentBaselinePerPhase, true)
   assert.equal(merged.model.environmentConsistent, true)
   assert.equal(Object.keys(merged.byLabel).length, 13)
+  assert.equal(Object.keys(merged.model.setupCapacityProbeGates).length, requiredRoutePhases.length)
+})
+
+test('rejects legacy or internally inconsistent arrival schedule evidence', () => {
+  const legacy = requiredRoutePhases.map((phase) => report(phase))
+  delete legacy[0].model.schemaVersion
+  assert.throws(
+    () => mergeLoadReports(legacy, requiredRoutePhases.map((phase) => evidence(phase))),
+    /结构版本不受支持/,
+  )
+
+  const inconsistent = requiredRoutePhases.map((phase) => report(phase))
+  inconsistent[0].model.measuredSchedule = { passed: true, failedLabels: ['forged'] }
+  assert.throws(
+    () => mergeLoadReports(inconsistent, requiredRoutePhases.map((phase) => evidence(phase))),
+    /到达调度门禁与原始指标不一致/,
+  )
 })
 
 test('denies dirty or inconsistent environments', () => {

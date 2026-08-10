@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { evaluatePhaseArrivalSchedules } from './load-workload-model.mjs'
 
 export const requiredRoutePhases = [
   'staff_start', 'reads', 'create_task_live', 'create_quick_order_live',
@@ -63,7 +64,18 @@ export function mergeLoadReports(reports, phaseEvidence, options = {}) {
   for (const report of reports) {
     const phase = report?.model?.phase
     if (!requiredRoutePhases.includes(phase)) throw new Error(`不允许合并阶段 ${phase ?? '(missing)'}`)
+    if (report.model.schemaVersion !== 2) throw new Error(`阶段 ${phase} 的性能报告结构版本不受支持`)
     if (report.model.evidenceEligible !== true) throw new Error(`阶段 ${phase} 不具备发布证据资格`)
+    const schedules = evaluatePhaseArrivalSchedules(
+      report.model.arrivalMetrics,
+      report.model.setupArrivalMetrics,
+      report.model.schedulingDelayP95LimitMs,
+    )
+    if (digest(report.model.measuredSchedule) !== digest(schedules.measuredSchedule)
+      || digest(report.model.setupSchedule) !== digest(schedules.setupSchedule)
+      || digest(report.model.schedule) !== digest(schedules.measuredSchedule)) {
+      throw new Error(`阶段 ${phase} 的到达调度门禁与原始指标不一致`)
+    }
     if (byPhase.has(phase)) throw new Error(`阶段 ${phase} 重复`)
     byPhase.set(phase, report)
   }
@@ -74,6 +86,8 @@ export function mergeLoadReports(reports, phaseEvidence, options = {}) {
 
   const byLabel = {}
   const arrivalMetrics = {}
+  const setupArrivalMetrics = {}
+  const setupCapacityProbeGates = {}
   const failures = []
   let measured = 0
   let responseFailures = 0
@@ -120,6 +134,7 @@ export function mergeLoadReports(reports, phaseEvidence, options = {}) {
       expectedCommitPassed,
       runIdPassed,
       workloadPassed,
+      setupCapacityProbePassed: report.model.setupSchedule.passed === true,
       clientDigest: digest(report),
       runtimeDigest: digest(evidence.runtimeMetrics),
       logDigest: digest(evidence.logAnalysis),
@@ -127,6 +142,8 @@ export function mergeLoadReports(reports, phaseEvidence, options = {}) {
       environmentDigest: digest(evidence.environment),
       passed: report.passed === true && runtimePassed && logsPassed && browserPassed && environmentPassed,
     }
+    setupArrivalMetrics[phase] = report.model.setupArrivalMetrics
+    setupCapacityProbeGates[phase] = report.model.setupSchedule
     for (const label of expectedLabelsByPhase[phase]) {
       const metric = report.byLabel?.[label]
       if (!metric) throw new Error(`阶段 ${phase} 缺少指标 ${label}`)
@@ -159,6 +176,8 @@ export function mergeLoadReports(reports, phaseEvidence, options = {}) {
       sourceCommitSha: evidenceByPhase.get(requiredRoutePhases[0]).environment?.source?.commitSha ?? null,
       runId: evidenceByPhase.get(requiredRoutePhases[0]).environment?.runId ?? null,
       arrivalMetrics,
+      setupArrivalMetrics,
+      setupCapacityProbeGates,
       workloadInterpretation: '提交级独立路由回归；每个阶段使用全新数据库基线，不代表正式容量上限',
     },
     phaseGates,

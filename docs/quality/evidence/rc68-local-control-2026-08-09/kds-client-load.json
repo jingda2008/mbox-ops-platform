@@ -1,0 +1,148 @@
+{
+  "model": {
+    "runId": "standalone-40531",
+    "instances": 2,
+    "samplesPerReadOrAction": 300,
+    "kdsActionSamples": 600,
+    "readConcurrency": 60,
+    "staffColdStarts": 12,
+    "bootstrapLiveSamples": 300,
+    "bootstrapCachedSamples": 300,
+    "staffIdentityCount": 12,
+    "staffRoleNames": [
+      "运营负责人",
+      "系统管理员",
+      "市场设计",
+      "新媒体舞台运营",
+      "值班经理",
+      "鸡尾酒调酒师",
+      "收银员",
+      "主服务员",
+      "服务员·全店候补",
+      "厨房出品",
+      "调音灯光"
+    ],
+    "phase": "kds_complete",
+    "setupConcurrency": 10,
+    "routeRegressionConcurrency": 60,
+    "evidenceEligible": true,
+    "arrivalRatesPerSecond": {
+      "read": 1,
+      "guestSession": 1,
+      "heartbeat": 1,
+      "setupWrite": 5,
+      "write": 2,
+      "staffStart": 2
+    },
+    "workloadInterpretation": "提交级单路由性能回归；不是代表性经营峰值，也不是正式容量结论",
+    "rateMultipliersOverFullNightAverage": {
+      "guestSession": 66,
+      "heartbeat": 3.8
+    },
+    "venue": {
+      "modelType": "representative_peak_window",
+      "guests": 300,
+      "employees": 12,
+      "operatingHours": 5.5,
+      "testWindowSeconds": 300,
+      "fullNightCompressionReferenceFactor": 66,
+      "equivalentToCompressedFullNight": false,
+      "guestArrivalsPerSecond": 0.015151515151515152,
+      "tenTimesGuestArrivalBurstPerSecond": 0.15151515151515152,
+      "testGuestSessionArrivalPerSecond": 1,
+      "employeeHeartbeatsPerSecond": 0.26666666666666666
+    },
+    "kdsWriteProfile": {
+      "modelType": "explicit_assumption_not_production_observation",
+      "guests": 300,
+      "operatingHours": 5.5,
+      "estimatedItemsPerGuest": 3,
+      "transitionsPerItem": 4,
+      "estimatedFullNightTransitions": 3600,
+      "estimatedFullNightAverageRps": 0.18181818181818182,
+      "representativeRegressionRps": 2,
+      "capacityProbeRps": 5,
+      "representativeMultiplier": 11,
+      "capacityProbeMultiplier": 27.5
+    },
+    "arrivalMetrics": {
+      "kds_complete": {
+        "requests": 300,
+        "targetRps": 2,
+        "achievedLaunchRps": 2,
+        "completionThroughputRps": 2,
+        "durationMs": 149720.7,
+        "launchDurationMs": 149501.6,
+        "arrivalIntervalMs": 500,
+        "maximumConcurrency": 1,
+        "missedArrivalCount": 0,
+        "schedulingDelayP95Ms": 2.6,
+        "schedulingDelayP99Ms": 2.8,
+        "schedulingDelayMaxMs": 2.9
+      }
+    },
+    "setupArrivalMetrics": {
+      "setup_create_order": {
+        "requests": 300,
+        "targetRps": 5,
+        "achievedLaunchRps": 5,
+        "completionThroughputRps": 5,
+        "durationMs": 59922.5,
+        "launchDurationMs": 59802,
+        "arrivalIntervalMs": 200,
+        "maximumConcurrency": 1,
+        "missedArrivalCount": 0,
+        "schedulingDelayP95Ms": 2.3,
+        "schedulingDelayP99Ms": 2.4,
+        "schedulingDelayMaxMs": 2.5
+      },
+      "setup_kds_start": {
+        "requests": 300,
+        "targetRps": 5,
+        "achievedLaunchRps": 5,
+        "completionThroughputRps": 5,
+        "durationMs": 59935.6,
+        "launchDurationMs": 59799.6,
+        "arrivalIntervalMs": 200,
+        "maximumConcurrency": 2,
+        "missedArrivalCount": 0,
+        "schedulingDelayP95Ms": 2.4,
+        "schedulingDelayP99Ms": 2.5,
+        "schedulingDelayMaxMs": 2.6
+      }
+    },
+    "schedulingDelayP95LimitMs": 250,
+    "schedule": {
+      "passed": true,
+      "failedLabels": []
+    }
+  },
+  "totals": {
+    "measured": 300,
+    "failures": 0,
+    "workflowFailures": 0
+  },
+  "byLabel": {
+    "kds_complete": {
+      "samples": 300,
+      "successful": 300,
+      "failures": 0,
+      "p50Ms": 211.2,
+      "p95Ms": 249.4,
+      "p99Ms": 261,
+      "maxMs": 380,
+      "statusCounts": {
+        "200": 300
+      },
+      "responseBytesP95": 1285,
+      "responseBytesMax": 1286,
+      "target": {
+        "p95": 800,
+        "p99": 1500
+      },
+      "passed": true
+    }
+  },
+  "failureSamples": [],
+  "passed": true
+}

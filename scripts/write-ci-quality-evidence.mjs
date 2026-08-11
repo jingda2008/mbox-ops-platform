@@ -88,8 +88,31 @@ function performanceRecords(load, context) {
     if (load.run?.sourceCommitSha !== context.checkedOutSha) {
       throw new Error(`规范化性能证据提交 ${load.run?.sourceCommitSha ?? '(missing)'} 与检出提交不一致`)
     }
+    if (load.gate?.passed !== true) {
+      throw new Error('规范化性能证据总门禁未通过')
+    }
+    const requiredServerChecks = [
+      'database.pool_acquisition_failures',
+      'database.pool_wait_p95',
+      'database.pool_wait_p99',
+      'database.pool_waiting_at_end',
+      'database.transaction_failures',
+      'database.transaction_p95',
+      'database.transaction_p99',
+      'database.query_failures',
+      'database.query_p95',
+      'database.query_p99',
+    ]
+    const checkById = new Map((load.gate?.checks ?? []).map((check) => [check.id, check]))
+    if (requiredServerChecks.some((id) => checkById.get(id)?.passed !== true)) {
+      throw new Error('规范化性能证据缺少已通过的服务端数据库门禁')
+    }
+    const database = load.serverMetrics?.database
+    if (!database?.pool || !database?.transactions || !database?.queries) {
+      throw new Error('规范化性能证据缺少服务端数据库指标')
+    }
     const thresholds = load.gate?.thresholds ?? {}
-    return Object.entries(load.scenarios ?? {}).map(([name, scenario]) => {
+    const routeRecords = Object.entries(load.scenarios ?? {}).map(([name, scenario]) => {
       const id = `normalized_${name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)}`
       const scenarioChecks = (load.gate?.checks ?? []).filter((check) => check.id?.startsWith(`${name}.`))
       const summary = scenario.summary ?? {}
@@ -128,6 +151,24 @@ function performanceRecords(load, context) {
         evidence: [context.evidenceReference],
       }
     })
+    return [
+      ...routeRecords,
+      serverMetricRecord('normalized_database_pool_acquire', database.pool.acquisitionWaitMs, {
+        failures: database.pool.acquisitionFailures,
+        p95Ms: 50,
+        p99Ms: 100,
+      }, context),
+      serverMetricRecord('normalized_database_transaction', database.transactions.durationMs, {
+        failures: database.transactions.failed,
+        p95Ms: 500,
+        p99Ms: 1_000,
+      }, context),
+      serverMetricRecord('normalized_database_query', database.queries.durationMs, {
+        failures: database.queries.failed,
+        p95Ms: 250,
+        p99Ms: 500,
+      }, context),
+    ]
   }
 
   if (load.model?.evidenceEligible !== true || load.model?.independentBaselinePerPhase !== true) {
@@ -166,6 +207,40 @@ function performanceRecords(load, context) {
       evidence: [context.evidenceReference],
     }
   })
+}
+
+function serverMetricRecord(id, duration, limits, context) {
+  const samples = Number(duration?.samples ?? 0)
+  const failures = Number(limits.failures ?? 0)
+  return {
+    id,
+    required: true,
+    conclusionLevel: 'regression',
+    status: samples > 0 && failures === 0
+      && duration.p95 <= limits.p95Ms && duration.p99 <= limits.p99Ms ? 'pass' : 'fail',
+    artifactStatus: 'available',
+    validityStatus: 'valid',
+    samples,
+    successful: Math.max(0, samples - failures),
+    failures,
+    p50Ms: duration.p50,
+    p95Ms: duration.p95,
+    p99Ms: duration.p99,
+    maxMs: duration.max,
+    limits: { minSamples: 1, p95Ms: limits.p95Ms, p99Ms: limits.p99Ms },
+    environmentRef: context.environmentId,
+    workload: {
+      profile: 'mbox-normalized-core-regression-v1',
+      model: 'server-telemetry',
+      route: id,
+      instances: 1,
+      targetRps: null,
+      achievedLaunchRps: null,
+      maxConcurrency: null,
+      schedulingDelayP95Ms: null,
+    },
+    evidence: [context.evidenceReference],
+  }
 }
 
 const allSelectedPassed = testRuns.every((run) => run.status === 'pass')

@@ -148,6 +148,7 @@ export interface NormalizedAppRuntime {
   pool: PostgresPool
   transactions: ScopedPostgresTransactionRunner
   commandExecutor: NormalizedCommandExecutor
+  databaseTelemetry(): ReturnType<ScopedPostgresTransactionRunner['telemetrySnapshot']>
   services: Readonly<{
     staffAuth: StaffAuthCommandService
     guestSessions: GuestSessionService
@@ -250,6 +251,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     pool,
     transactions,
     commandExecutor,
+    databaseTelemetry: () => transactions.telemetrySnapshot(),
     services: Object.freeze({
       staffAuth,
       guestSessions,

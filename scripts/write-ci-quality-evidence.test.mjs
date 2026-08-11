@@ -100,6 +100,18 @@ test('converts normalized isolated load evidence into release performance record
     { id: `${name}.achieved_rps`, passed: true },
     { id: `${name}.p95`, passed: true },
   ])
+  checks.push(
+    { id: 'database.pool_acquisition_failures', passed: true },
+    { id: 'database.pool_wait_p95', passed: true },
+    { id: 'database.pool_wait_p99', passed: true },
+    { id: 'database.pool_waiting_at_end', passed: true },
+    { id: 'database.transaction_failures', passed: true },
+    { id: 'database.transaction_p95', passed: true },
+    { id: 'database.transaction_p99', passed: true },
+    { id: 'database.query_failures', passed: true },
+    { id: 'database.query_p95', passed: true },
+    { id: 'database.query_p99', passed: true },
+  )
   const document = runWriter({
     results: {
       quality: 'success', browser: 'success', database: 'success', normalized_database: 'success',
@@ -112,7 +124,24 @@ test('converts normalized isolated load evidence into release performance record
       },
       workload: { independentDatabasePerRun: true, requestsPerScenario: 300 },
       scenarios,
+      serverMetrics: {
+        database: {
+          pool: {
+            acquisitionFailures: 0,
+            acquisitionWaitMs: { samples: 1_000, p50: 1, p95: 5, p99: 9, max: 12 },
+          },
+          transactions: {
+            failed: 0,
+            durationMs: { samples: 1_000, p50: 8, p95: 25, p99: 40, max: 80 },
+          },
+          queries: {
+            failed: 0,
+            durationMs: { samples: 5_000, p50: 2, p95: 8, p99: 15, max: 40 },
+          },
+        },
+      },
       gate: {
+        passed: true,
         thresholds: { maximumP95Ms: 500, maximumP99Ms: 1000 },
         checks,
       },
@@ -125,9 +154,29 @@ test('converts normalized isolated load evidence into release performance record
     'normalized_order_submit',
     'normalized_kds_prepare_complete',
     'normalized_service_task_flow',
+    'normalized_database_pool_acquire',
+    'normalized_database_transaction',
+    'normalized_database_query',
   ])
   assert.ok(document.performance.every((metric) => metric.status === 'pass'))
   assert.ok(document.performance.every((metric) => metric.workload.profile === 'mbox-normalized-core-regression-v1'))
+})
+
+test('rejects normalized evidence that omits server database telemetry', () => {
+  const load = {
+    schemaVersion: 'normalized-load-acceptance-v2',
+    run: { mode: 'http_isolated_postgres', evidenceEligible: true, sourceCommitSha: currentSha },
+    workload: { independentDatabasePerRun: true, requestsPerScenario: 300 },
+    scenarios: {},
+    gate: { passed: true, thresholds: {}, checks: [] },
+  }
+  assert.throws(() => runWriter({
+    results: {
+      quality: 'success', browser: 'success', database: 'success', normalized_database: 'success',
+      normalized_browser: 'success', performance: 'success',
+    },
+    load,
+  }), /服务端数据库门禁/)
 })
 
 test('distinguishes cancelled work from work that never ran', () => {

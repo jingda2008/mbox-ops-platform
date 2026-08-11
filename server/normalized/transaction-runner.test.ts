@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  NormalizedDatabaseTelemetry,
   ScopedPostgresTransactionRunner,
   type PostgresPool,
   type PostgresPoolClient,
@@ -58,6 +59,66 @@ describe('ScopedPostgresTransactionRunner conflict retry', () => {
       { retryOnConflict: 4 },
     )).rejects.toThrow('retryOnConflict')
     expect(pool.connect).not.toHaveBeenCalled()
+  })
+
+  it('records bounded pool, transaction and domain-query telemetry without exposing SQL text', async () => {
+    const pool = Object.assign(fakePool([fakeClient()]), {
+      totalCount: 3,
+      idleCount: 2,
+      waitingCount: 0,
+    })
+    const runner = new ScopedPostgresTransactionRunner(pool)
+    await runner.run(scope, (transaction) => transaction.query('SELECT secret FROM private_table'))
+
+    const snapshot = runner.telemetrySnapshot()
+    expect(snapshot.pool).toMatchObject({
+      acquisitions: 1,
+      acquisitionFailures: 0,
+      totalConnections: 3,
+      idleConnections: 2,
+      waitingClients: 0,
+    })
+    expect(snapshot.pool.acquisitionWaitMs.samples).toBe(1)
+    expect(snapshot.transactions).toMatchObject({ completed: 1, failed: 0 })
+    expect(snapshot.queries).toMatchObject({ completed: 1, failed: 0 })
+    expect(JSON.stringify(snapshot)).not.toContain('private_table')
+    expect(JSON.stringify(snapshot)).not.toContain('secret')
+  })
+
+  it('counts failed acquisitions and failed domain queries', async () => {
+    const acquisitionTelemetry = new NormalizedDatabaseTelemetry()
+    const failingPool: PostgresPool = {
+      connect: async () => { throw new Error('database unavailable') },
+      end: async () => undefined,
+    }
+    await expect(new ScopedPostgresTransactionRunner(failingPool, acquisitionTelemetry).run(
+      scope,
+      async () => 'unused',
+    )).rejects.toThrow('database unavailable')
+    expect(acquisitionTelemetry.snapshot().pool).toMatchObject({ acquisitions: 1, acquisitionFailures: 1 })
+
+    const queryClient = fakeClient()
+    queryClient.query.mockImplementation(async (text: string) => {
+      queryClient.queries.push(text)
+      if (text === 'SELECT broken') throw new Error('query failed')
+      return { rows: [], rowCount: 0 }
+    })
+    const runner = new ScopedPostgresTransactionRunner(fakePool([queryClient]))
+    await expect(runner.run(scope, (transaction) => transaction.query('SELECT broken'))).rejects.toThrow('query failed')
+    expect(runner.telemetrySnapshot()).toMatchObject({
+      transactions: { completed: 0, failed: 1 },
+      queries: { completed: 0, failed: 1 },
+    })
+  })
+
+  it('keeps only a fixed telemetry sample window while preserving lifetime counters', () => {
+    const telemetry = new NormalizedDatabaseTelemetry()
+    for (let index = 0; index < 10_001; index += 1) telemetry.recordQuery(index, true)
+
+    const snapshot = telemetry.snapshot()
+    expect(snapshot.queries.completed).toBe(10_001)
+    expect(snapshot.queries.durationMs.samples).toBe(10_000)
+    expect(snapshot.queries.durationMs.max).toBe(10_000)
   })
 })
 

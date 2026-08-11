@@ -24,7 +24,10 @@
         "normalized_table_open": { "minSamples": 300, "p95Ms": 500, "p99Ms": 1000 },
         "normalized_order_submit": { "minSamples": 300, "p95Ms": 500, "p99Ms": 1000 },
         "normalized_kds_prepare_complete": { "minSamples": 300, "p95Ms": 500, "p99Ms": 1000 },
-        "normalized_service_task_flow": { "minSamples": 300, "p95Ms": 500, "p99Ms": 1000 }
+        "normalized_service_task_flow": { "minSamples": 300, "p95Ms": 500, "p99Ms": 1000 },
+        "normalized_database_pool_acquire": { "minSamples": 1, "p95Ms": 50, "p99Ms": 100 },
+        "normalized_database_transaction": { "minSamples": 1, "p95Ms": 500, "p99Ms": 1000 },
+        "normalized_database_query": { "minSamples": 1, "p95Ms": 250, "p99Ms": 500 }
       }
     }
   }

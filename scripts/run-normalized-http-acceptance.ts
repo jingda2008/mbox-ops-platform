@@ -105,10 +105,25 @@ try {
     await keepAlive.stop()
   }
   keepAlive.assertHealthy()
+  const serverMetrics = await collectServerMetrics(runtime, store.tenant.id, store.store.id)
+  const serverMetricChecks = evaluateServerMetrics(serverMetrics)
+  const combinedReport = {
+    ...report,
+    serverMetrics,
+    gate: {
+      ...report.gate,
+      passed: report.gate.passed && serverMetricChecks.every((check) => check.passed),
+      checks: [...report.gate.checks, ...serverMetricChecks],
+      failures: [
+        ...report.gate.failures,
+        ...serverMetricChecks.filter((check) => !check.passed).map((check) => check.id),
+      ],
+    },
+  }
   await mkdir(dirname(outputPath), { recursive: true })
-  await writeFile(outputPath, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 })
-  process.stdout.write(`${JSON.stringify({ outputPath, gate: report.gate, run: report.run }, null, 2)}\n`)
-  if (!report.gate.passed) process.exitCode = 1
+  await writeFile(outputPath, `${JSON.stringify(combinedReport, null, 2)}\n`, { mode: 0o600 })
+  process.stdout.write(`${JSON.stringify({ outputPath, gate: combinedReport.gate, run: report.run }, null, 2)}\n`)
+  if (!combinedReport.gate.passed) process.exitCode = 1
 } finally {
   await runtime?.app.close().catch(() => undefined)
   if (created) {
@@ -120,6 +135,59 @@ try {
     await admin.query(`DROP DATABASE IF EXISTS ${quoteIdentifier(databaseName)}`).catch(() => undefined)
   }
   await admin.end().catch(() => undefined)
+}
+
+async function collectServerMetrics(
+  activeRuntime: NonNullable<typeof runtime>,
+  tenantId: string,
+  storeId: string,
+) {
+  const outbox = await activeRuntime.transactions.run({ tenantId, storeId }, async (transaction) => {
+    const result = await transaction.query<{ pending: string; oldest_age_ms: string | null }>(`
+      SELECT count(*) FILTER (WHERE delivered_at IS NULL)::text AS pending,
+        COALESCE(
+          extract(epoch FROM (clock_timestamp() - min(occurred_at) FILTER (WHERE delivered_at IS NULL))) * 1000,
+          0
+        )::text AS oldest_age_ms
+      FROM mbox.outbox_messages
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+    `, [tenantId, storeId])
+    return {
+      pending: Number(result.rows[0]?.pending ?? 0),
+      oldestAgeMs: Number(result.rows[0]?.oldest_age_ms ?? 0),
+      deliveryEvaluated: false,
+      reason: 'integration_workers_disabled_for_isolated_load',
+    }
+  }, { readOnly: true })
+  return { database: activeRuntime.databaseTelemetry(), outbox }
+}
+
+function evaluateServerMetrics(metrics: Awaited<ReturnType<typeof collectServerMetrics>>) {
+  const checks: Array<{ id: string; passed: boolean; actual: number; expected: string | number }> = []
+  const add = (id: string, passed: boolean, actual: number, expected: string | number) => {
+    checks.push({ id, passed, actual, expected })
+  }
+  add('database.pool_acquisition_failures', metrics.database.pool.acquisitionFailures === 0,
+    metrics.database.pool.acquisitionFailures, 0)
+  add('database.pool_wait_p95', metrics.database.pool.acquisitionWaitMs.p95 <= 50,
+    metrics.database.pool.acquisitionWaitMs.p95, '<= 50ms')
+  add('database.pool_wait_p99', metrics.database.pool.acquisitionWaitMs.p99 <= 100,
+    metrics.database.pool.acquisitionWaitMs.p99, '<= 100ms')
+  add('database.pool_waiting_at_end', (metrics.database.pool.waitingClients ?? 0) === 0,
+    metrics.database.pool.waitingClients ?? 0, 0)
+  add('database.transaction_failures', metrics.database.transactions.failed === 0,
+    metrics.database.transactions.failed, 0)
+  add('database.transaction_p95', metrics.database.transactions.durationMs.p95 <= 500,
+    metrics.database.transactions.durationMs.p95, '<= 500ms')
+  add('database.transaction_p99', metrics.database.transactions.durationMs.p99 <= 1_000,
+    metrics.database.transactions.durationMs.p99, '<= 1000ms')
+  add('database.query_failures', metrics.database.queries.failed === 0,
+    metrics.database.queries.failed, 0)
+  add('database.query_p95', metrics.database.queries.durationMs.p95 <= 250,
+    metrics.database.queries.durationMs.p95, '<= 250ms')
+  add('database.query_p99', metrics.database.queries.durationMs.p99 <= 500,
+    metrics.database.queries.durationMs.p99, '<= 500ms')
+  return checks
 }
 
 async function login(

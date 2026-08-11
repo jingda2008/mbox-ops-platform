@@ -63,6 +63,16 @@ const testRuns = selected.map((id) => {
 })
 
 const performance = []
+const encodedBrowserStartup = process.env.MBOX_CI_BROWSER_STARTUP_EVIDENCE_BASE64?.trim()
+if (scope === 'full' && (results.normalized_browser === 'success' || encodedBrowserStartup)) {
+  if (!encodedBrowserStartup) throw new Error('规范化浏览器任务通过但缺少启动性能证据')
+  const startup = JSON.parse(Buffer.from(encodedBrowserStartup, 'base64').toString('utf8'))
+  performance.push(...browserStartupRecords(startup, {
+    checkedOutSha,
+    environmentId,
+    evidenceReference: `github-job:normalized_browser:${process.env.GITHUB_RUN_ID ?? 'unknown'}`,
+  }))
+}
 const encodedLoad = process.env.MBOX_CI_LOAD_EVIDENCE_BASE64?.trim()
 if (scope === 'full' && (results.performance === 'success' || encodedLoad)) {
   const loadPath = resolve(process.env.MBOX_CI_LOAD_EVIDENCE_PATH ?? 'artifacts/runtime-quality/client-observed-load.json')
@@ -76,6 +86,68 @@ if (scope === 'full' && (results.performance === 'success' || encodedLoad)) {
       ? `github-job:performance:${process.env.GITHUB_RUN_ID}`
       : `artifact:runtime-quality-${process.env.GITHUB_SHA}/client-observed-load.json`,
   }))
+}
+
+function browserStartupRecords(report, context) {
+  if (report.schemaVersion !== 'normalized-browser-startup-v1'
+    || report.run?.mode !== 'real_browser_isolated_postgres'
+    || report.run?.evidenceEligible !== true
+    || report.workload?.freshBrowserContextPerSample !== true
+    || report.workload?.employeeSessionPreparedOutsideMeasurement !== true
+    || report.workload?.guestSessionPreparedOutsideMeasurement !== true
+    || report.workload?.staticTableQrScanCoveredByCommercialFlow !== true) {
+    throw new Error('规范化启动性能证据必须来自独立数据库上的全新真实浏览器上下文')
+  }
+  if (report.run?.sourceCommitSha !== context.checkedOutSha) {
+    throw new Error(`规范化启动性能证据提交 ${report.run?.sourceCommitSha ?? '(missing)'} 与检出提交不一致`)
+  }
+  if (report.gate?.passed !== true) throw new Error('规范化启动性能总门禁未通过')
+  const thresholds = report.gate?.thresholds ?? {}
+  const entries = [
+    ['normalized_employee_startup', report.metrics?.employeeStartup, 'authenticated_employee_workspace', 'browser'],
+    ['normalized_guest_session_startup', report.metrics?.guestSessionStartup, 'established_guest_session_menu', 'browser'],
+    ['normalized_employee_startup_api', report.metrics?.employeeStartup, 'authenticated_employee_workspace_api', 'api'],
+    ['normalized_guest_session_api', report.metrics?.guestSessionStartup, 'established_guest_session_api', 'api'],
+  ]
+  return entries.map(([id, metric, route, measurement]) => {
+    if (!metric || metric.samples < 30 || metric.failures !== 0) throw new Error(`${id} 启动性能证据不完整`)
+    const latency = measurement === 'api'
+      ? {
+          p50Ms: metric.criticalApiPathP50Ms,
+          p95Ms: metric.criticalApiPathP95Ms,
+          p99Ms: metric.criticalApiPathP99Ms,
+          maxMs: metric.criticalApiPathMaxMs,
+        }
+      : { p50Ms: metric.p50Ms, p95Ms: metric.p95Ms, p99Ms: metric.p99Ms, maxMs: metric.maxMs }
+    if (Object.values(latency).some((value) => !Number.isFinite(value) || value < 0)) {
+      throw new Error(`${id} 启动性能时钟不完整`)
+    }
+    return {
+      id,
+      required: true,
+      conclusionLevel: 'regression',
+      status: latency.p95Ms <= thresholds.p95Ms && latency.p99Ms <= thresholds.p99Ms ? 'pass' : 'fail',
+      artifactStatus: 'available',
+      validityStatus: 'valid',
+      samples: metric.samples,
+      successful: metric.successful,
+      failures: metric.failures,
+      ...latency,
+      limits: { minSamples: thresholds.minimumSamples, p95Ms: thresholds.p95Ms, p99Ms: thresholds.p99Ms },
+      environmentRef: context.environmentId,
+      workload: {
+        profile: 'mbox-normalized-browser-startup-v1',
+        model: 'fresh-browser-context',
+        route,
+        instances: 1,
+        targetRps: null,
+        achievedLaunchRps: null,
+        maxConcurrency: 1,
+        schedulingDelayP95Ms: null,
+      },
+      evidence: [context.evidenceReference],
+    }
+  })
 }
 
 function performanceRecords(load, context) {

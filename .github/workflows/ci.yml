@@ -296,6 +296,8 @@ jobs:
     needs: classify
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      startup_report_b64: ${{ steps.normalized-browser-evidence.outputs.startup_report_b64 }}
     services:
       postgres:
         image: postgres:16-alpine
@@ -333,6 +335,11 @@ jobs:
         run: npx playwright install chromium
       - name: Run normalized mobile commercial flows against an isolated database
         run: npm run test:e2e:normalized
+      - name: Seal normalized browser startup evidence
+        id: normalized-browser-evidence
+        run: |
+          node -e "const r=JSON.parse(require('fs').readFileSync('artifacts/normalized-browser/startup.json','utf8')); if(r.gate?.passed!==true) process.exit(1)"
+          printf 'startup_report_b64=%s\n' "$(base64 -w0 artifacts/normalized-browser/startup.json)" >> "${GITHUB_OUTPUT}"
       - name: Upload normalized browser evidence
         if: always()
         continue-on-error: true
@@ -342,6 +349,7 @@ jobs:
           path: |
             artifacts/normalized-browser/report
             artifacts/normalized-browser/results
+            artifacts/normalized-browser/startup.json
           if-no-files-found: warn
           retention-days: ${{ github.event_name == 'pull_request' && 3 || 14 }}
 
@@ -521,6 +529,7 @@ jobs:
           MBOX_CI_RELEASE_ARTIFACT_REQUIRED: ${{ needs.classify.outputs.release_artifact_required }}
           MBOX_CI_SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           MBOX_CI_LOAD_EVIDENCE_BASE64: ${{ needs.performance.outputs.load_report_b64 }}
+          MBOX_CI_BROWSER_STARTUP_EVIDENCE_BASE64: ${{ needs.normalized_browser.outputs.startup_report_b64 }}
           MBOX_CI_RESULTS_JSON: >-
             {"docs":"${{ needs.docs.result }}","quality":"${{ needs.quality.result }}","fast_quality":"${{ needs.fast_quality.result }}","ui_browser":"${{ needs.ui_browser.result }}","browser":"${{ needs.browser.result }}","database":"${{ needs.database.result }}","normalized_database":"${{ needs.normalized_database.result }}","normalized_browser":"${{ needs.normalized_browser.result }}","performance":"${{ needs.performance.result }}","image":"${{ needs.image.result }}"}
         run: node scripts/write-ci-quality-evidence.mjs

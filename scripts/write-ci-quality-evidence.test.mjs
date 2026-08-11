@@ -8,7 +8,7 @@ import test from 'node:test'
 const repoRoot = new URL('..', import.meta.url).pathname
 const currentSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim()
 
-function runWriter({ results, load }) {
+function runWriter({ results, load, browserStartup }) {
   const directory = mkdtempSync(join(tmpdir(), 'mbox-quality-evidence-'))
   const output = join(directory, 'evidence.json')
   try {
@@ -27,11 +27,41 @@ function runWriter({ results, load }) {
         MBOX_CI_LOAD_EVIDENCE_BASE64: load
           ? Buffer.from(JSON.stringify(load), 'utf8').toString('base64')
           : '',
+        MBOX_CI_BROWSER_STARTUP_EVIDENCE_BASE64: browserStartup
+          ? Buffer.from(JSON.stringify(browserStartup), 'utf8').toString('base64')
+          : '',
       },
     })
     return JSON.parse(readFileSync(output, 'utf8'))
   } finally {
     rmSync(directory, { recursive: true, force: true })
+  }
+}
+
+function validBrowserStartup() {
+  const metric = {
+    samples: 30, successful: 30, failures: 0,
+    p50Ms: 120, p95Ms: 240, p99Ms: 310, maxMs: 350,
+    criticalApiPathP50Ms: 40, criticalApiPathP95Ms: 80,
+    criticalApiPathP99Ms: 120, criticalApiPathMaxMs: 150,
+  }
+  return {
+    schemaVersion: 'normalized-browser-startup-v1',
+    run: {
+      mode: 'real_browser_isolated_postgres', evidenceEligible: true, sourceCommitSha: currentSha,
+    },
+    workload: {
+      freshBrowserContextPerSample: true,
+      samplesPerMode: 30,
+      employeeSessionPreparedOutsideMeasurement: true,
+      guestSessionPreparedOutsideMeasurement: true,
+      staticTableQrScanCoveredByCommercialFlow: true,
+    },
+    metrics: { employeeStartup: metric, guestSessionStartup: metric },
+    gate: {
+      passed: true,
+      thresholds: { minimumSamples: 30, p95Ms: 500, p99Ms: 1000 },
+    },
   }
 }
 
@@ -146,10 +176,15 @@ test('converts normalized isolated load evidence into release performance record
         checks,
       },
     },
+    browserStartup: validBrowserStartup(),
   })
 
   assert.equal(document.decision, 'ALLOW')
   assert.deepEqual(document.performance.map((metric) => metric.id), [
+    'normalized_employee_startup',
+    'normalized_guest_session_startup',
+    'normalized_employee_startup_api',
+    'normalized_guest_session_api',
     'normalized_table_open',
     'normalized_order_submit',
     'normalized_kds_prepare_complete',
@@ -159,7 +194,36 @@ test('converts normalized isolated load evidence into release performance record
     'normalized_database_query',
   ])
   assert.ok(document.performance.every((metric) => metric.status === 'pass'))
-  assert.ok(document.performance.every((metric) => metric.workload.profile === 'mbox-normalized-core-regression-v1'))
+  assert.ok(document.performance.slice(0, 4).every((metric) => metric.workload.profile === 'mbox-normalized-browser-startup-v1'))
+  assert.ok(document.performance.slice(4).every((metric) => metric.workload.profile === 'mbox-normalized-core-regression-v1'))
+})
+
+test('rejects normalized browser startup evidence from another commit', () => {
+  const browserStartup = validBrowserStartup()
+  browserStartup.run.sourceCommitSha = '0'.repeat(40)
+  assert.throws(() => runWriter({
+    results: {
+      quality: 'success', browser: 'success', database: 'success', normalized_database: 'success',
+      normalized_browser: 'success', performance: 'success',
+    },
+    browserStartup,
+  }), /启动性能证据提交/)
+})
+
+test('rejects normalized browser startup evidence with too few samples', () => {
+  const browserStartup = validBrowserStartup()
+  browserStartup.metrics.guestSessionStartup = {
+    ...browserStartup.metrics.guestSessionStartup,
+    samples: 29,
+    successful: 29,
+  }
+  assert.throws(() => runWriter({
+    results: {
+      quality: 'success', browser: 'success', database: 'success', normalized_database: 'success',
+      normalized_browser: 'success', performance: 'success',
+    },
+    browserStartup,
+  }), /启动性能证据不完整/)
 })
 
 test('rejects normalized evidence that omits server database telemetry', () => {
@@ -176,6 +240,7 @@ test('rejects normalized evidence that omits server database telemetry', () => {
       normalized_browser: 'success', performance: 'success',
     },
     load,
+    browserStartup: validBrowserStartup(),
   }), /服务端数据库门禁/)
 })
 

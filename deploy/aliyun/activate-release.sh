@@ -1,10 +1,94 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+require_image_id() {
+  [[ "$1" =~ ^sha256:[0-9a-f]{64}$ ]]
+}
+
+archive_config_path() {
+  local archive=$1
+  local image_tag=$2
+  tar -xOf "${archive}" manifest.json | jq -er --arg imageTag "${image_tag}" '
+    map(select((.RepoTags // []) | index($imageTag))) as $matches
+    | if ($matches | length) == 1 then $matches[0].Config
+      else error("archive must contain exactly one matching image tag") end
+  '
+}
+
+verify_archive_image_identity() {
+  local archive=$1
+  local image_tag=$2
+  local expected_image_id=$3
+  local config_path
+  local config_digest
+  require_image_id "${expected_image_id}"
+  config_path=$(archive_config_path "${archive}" "${image_tag}")
+  case "${config_path}" in
+    blobs/sha256/[0-9a-f][0-9a-f]*) config_digest=${config_path#blobs/sha256/} ;;
+    [0-9a-f][0-9a-f]*.json) config_digest=${config_path%.json} ;;
+    *) echo "unsupported or unsafe image config path: ${config_path}" >&2; return 1 ;;
+  esac
+  [[ "${config_digest}" =~ ^[0-9a-f]{64}$ ]]
+  test "sha256:${config_digest}" = "${expected_image_id}"
+  test "$(tar -xOf "${archive}" "${config_path}" | sha256sum | awk '{print $1}')" = "${config_digest}"
+}
+
+verify_loaded_image_identity() {
+  local image_tag=$1
+  local expected_image_id=$2
+  local actual_image_id
+  actual_image_id=$(docker image inspect "${image_tag}" --format '{{.Id}}')
+  require_image_id "${actual_image_id}"
+  test "${actual_image_id}" = "${expected_image_id}"
+}
+
+verify_container_image_identity() {
+  local container=$1
+  local expected_image_id=$2
+  local actual_image_id
+  actual_image_id=$(docker inspect "${container}" --format '{{.Image}}')
+  require_image_id "${actual_image_id}"
+  test "${actual_image_id}" = "${expected_image_id}"
+}
+
+verify_container_release_identity() {
+  local container=$1
+  local expected_image_id=$2
+  local expected_release_sha=$3
+  local actual_release_sha
+  verify_container_image_identity "${container}" "${expected_image_id}"
+  actual_release_sha=$(docker inspect "${container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
+  test "${actual_release_sha}" = "${expected_release_sha}"
+}
+
+verify_ready_identity() {
+  local response=$1
+  local expected_release_sha=$2
+  local expected_image_id=$3
+  printf '%s' "${response}" | jq -e \
+    --arg sha "${expected_release_sha}" \
+    --arg imageId "${expected_image_id}" \
+    '.status == "ready" and .releaseSha == $sha and .releaseImageDigest == $imageId' >/dev/null
+}
+
+verify_rollback_identity() {
+  local container=$1
+  local expected_image_id=$2
+  local expected_release_sha=$3
+  local ready_response=$4
+  verify_container_release_identity "${container}" "${expected_image_id}" "${expected_release_sha}"
+  verify_ready_identity "${ready_response}" "${expected_release_sha}" "${expected_image_id}"
+}
+
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+  return 0
+fi
+
 release_dir=${1:?release directory is required}
 deployment_tier=${2:?deployment tier is required}
 public_url=${3:?public URL is required}
 backup_max_age_minutes=${4:?backup age is required}
+release_intent=${5:?release intent is required}
 
 install_root=/opt/mbox
 network=mbox-net
@@ -27,6 +111,16 @@ case "${deployment_tier}" in
   validation|production) ;;
   *) echo "unsupported deployment tier" >&2; exit 1 ;;
 esac
+case "${release_intent}" in
+  commercial) ;;
+  validation-only)
+    test "${deployment_tier}" = validation || {
+      echo "validation-only release cannot target production" >&2
+      exit 1
+    }
+    ;;
+  *) echo "unsupported release intent" >&2; exit 1 ;;
+esac
 [[ "${backup_max_age_minutes}" =~ ^[0-9]+$ ]]
 test -f "${manifest}"
 test -f "${secrets_env}"
@@ -41,6 +135,7 @@ release_sha=$(jq -er '.releaseSha' "${manifest}")
 release_version=$(jq -er '.releaseVersion' "${manifest}")
 image_tag=$(jq -er '.imageTag' "${manifest}")
 expected_digest=$(jq -er '.imageDigest' "${manifest}")
+manifest_intent=$(jq -r '.releaseIntent // "commercial"' "${manifest}")
 archive_name=$(jq -er '.archive' "${manifest}")
 expected_archive_sha=$(jq -er '.archiveSha256' "${manifest}")
 migration_digest=$(jq -er '.migration.digest' "${manifest}")
@@ -75,21 +170,25 @@ emit_release_audit() {
 
 [[ "${release_sha}" =~ ^[0-9a-f]{40}$ ]]
 [[ "${expected_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+test "${manifest_intent}" = "${release_intent}"
 [[ "${archive_name}" != */* ]]
 test -f "${archive}"
 test "$(sha256sum "${archive}" | awk '{print $1}')" = "${expected_archive_sha}"
 
-expected_config_digest=${expected_digest#sha256:}
-archive_config=$(tar -xOf "${archive}" manifest.json | jq -er '.[0].Config')
-test "${archive_config}" = "blobs/sha256/${expected_config_digest}"
-test "$(tar -xOf "${archive}" "${archive_config}" | sha256sum | awk '{print $1}')" = "${expected_config_digest}"
+verify_archive_image_identity "${archive}" "${image_tag}" "${expected_digest}"
 
 docker load --input "${archive}" >/dev/null
+verify_loaded_image_identity "${image_tag}" "${expected_digest}"
 actual_sha=$(docker image inspect "${image_tag}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
 actual_version=$(docker image inspect "${image_tag}" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')
 test "${actual_sha}" = "${release_sha}"
 test "${actual_version}" = "${release_version}"
 emit_release_audit deployment_started info candidate-preparation
+
+old_image_id=$(docker inspect "${active_container}" --format '{{.Image}}')
+old_release_sha=$(docker inspect "${active_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
+require_image_id "${old_image_id}"
+[[ "${old_release_sha}" =~ ^[0-9a-f]{40}$ ]]
 
 release_env=${release_dir}/app.env
 cp "${secrets_env}" "${release_env}"
@@ -184,7 +283,7 @@ rollback_on_error() {
   docker stop -t 10 "${candidate}" >/dev/null 2>&1
   test "$(docker inspect "${active_container}" --format '{{.State.Running}}' 2>/dev/null)" = true || rollback_ok=0
   rollback_response=$(curl -fsS --max-time 10 "${public_url}/api/ready" 2>/dev/null || true)
-  printf '%s' "${rollback_response}" | jq -e '.status == "ready"' >/dev/null 2>&1 || rollback_ok=0
+  verify_rollback_identity "${active_container}" "${old_image_id}" "${old_release_sha}" "${rollback_response}" >/dev/null 2>&1 || rollback_ok=0
   if [ "${rollback_ok}" = 1 ]; then
     emit_release_audit rollback_succeeded warning previous-release-restored
   else
@@ -207,6 +306,8 @@ docker run -d \
   --network "${network}" \
   --volume "${candidate_volume}:/data" \
   "${image_tag}" >/dev/null
+
+verify_container_image_identity "${candidate}" "${expected_digest}"
 
 for _ in $(seq 1 60); do
   health=$(docker inspect "${candidate}" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')
@@ -276,6 +377,7 @@ old_renamed=1
 docker rename "${candidate}" "${active_container}"
 promoted=1
 docker update --restart=unless-stopped "${active_container}" >/dev/null
+verify_container_release_identity "${active_container}" "${expected_digest}" "${release_sha}"
 docker exec "${caddy_container}" \
   caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
 verify_public_release 15
@@ -285,11 +387,14 @@ deployed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 jq -n \
   --arg deployedAt "${deployed_at}" \
   --arg tier "${deployment_tier}" \
+  --arg releaseIntent "${release_intent}" \
   --arg publicUrl "${public_url}" \
   --arg releaseSha "${release_sha}" \
   --arg releaseVersion "${release_version}" \
   --arg imageTag "${image_tag}" \
   --arg imageDigest "${expected_digest}" \
+  --arg previousImageId "${old_image_id}" \
+  --arg previousReleaseSha "${old_release_sha}" \
   --arg migrationDigest "${migration_digest}" \
   --argjson migrationChanged "${migration_changed}" \
   --arg backupPath "${backup_path}" \
@@ -298,11 +403,21 @@ jq -n \
     schemaVersion: 1,
     deployedAt: $deployedAt,
     tier: $tier,
+    releaseIntent: $releaseIntent,
+    commercialRelease: ($releaseIntent == "commercial"),
     publicUrl: $publicUrl,
     releaseSha: $releaseSha,
     releaseVersion: $releaseVersion,
     imageTag: $imageTag,
     imageDigest: $imageDigest,
+    imageIdentity: {
+      kind: "docker-config-sha256",
+      imageId: $imageDigest
+    },
+    previousRelease: {
+      imageId: $previousImageId,
+      releaseSha: $previousReleaseSha
+    },
     migrationDigest: $migrationDigest,
     migrationChanged: ($migrationChanged == 1),
     backupPath: (if $backupPath == "" then null else $backupPath end),

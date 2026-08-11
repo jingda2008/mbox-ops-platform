@@ -1,6 +1,48 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+enforce_release_intent() {
+  local manifest=$1
+  local validation_only=$2
+  local deployment_tier=$3
+  local manifest_intent
+  manifest_intent=$(node -e "const fs=require('node:fs'); const m=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); process.stdout.write(String(m.releaseIntent ?? 'commercial'));" "${manifest}")
+
+  if [ "${validation_only}" = 1 ]; then
+    test "${deployment_tier}" = validation || {
+      echo "--validation-only requires MBOX_DEPLOYMENT_TIER=validation" >&2
+      return 1
+    }
+    test "${manifest_intent}" = validation-only || {
+      echo "validation-only deployment requires releaseIntent=validation-only in release-manifest.json" >&2
+      return 1
+    }
+    printf 'release_intent=validation-only\ncommercial_release=false\n'
+    return 0
+  fi
+
+  test "${manifest_intent}" != validation-only || {
+    echo "validation-only manifest requires the explicit --validation-only argument" >&2
+    return 1
+  }
+  npm run release:quality-gate
+  printf 'release_intent=commercial\ncommercial_release=true\n'
+}
+
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+  return 0
+fi
+
+validation_only=0
+if [ "${1:-}" = --validation-only ]; then
+  validation_only=1
+  shift
+fi
+if [ "$#" -ne 0 ]; then
+  echo "usage: $0 [--validation-only]" >&2
+  exit 1
+fi
+
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "${repo_root}"
 
@@ -32,6 +74,13 @@ fi
 
 manifest=${bundle_dir}/release-manifest.json
 test -f "${manifest}"
+
+enforce_release_intent "${manifest}" "${validation_only}" "${deployment_tier}"
+if [ "${validation_only}" = 1 ]; then
+  release_intent=validation-only
+else
+  release_intent=commercial
+fi
 
 read_manifest() {
   node -e "const fs=require('node:fs'); const m=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); const value=process.argv[2].split('.').reduce((x,k)=>x?.[k],m); if (value === undefined || value === null) process.exit(2); process.stdout.write(String(value))" \
@@ -146,7 +195,7 @@ ssh "${ssh_options[@]}" "${ssh_target}" \
   "chmod 0700 '${remote_release_dir}'/*.sh && '${remote_release_dir}/stage-release-evidence.sh' '${remote_release_dir}' '${remote_release_dir}/oss-ready-evidence' '${MBOX_RELEASE_TAG}'"
 
 ssh "${ssh_options[@]}" "${ssh_target}" \
-  bash -s -- "${remote_release_dir}" "${deployment_tier}" "${public_url}" "${backup_max_age_minutes}" \
+  bash -s -- "${remote_release_dir}" "${deployment_tier}" "${public_url}" "${backup_max_age_minutes}" "${release_intent}" \
   < deploy/aliyun/activate-release.sh
 
 MBOX_RELEASE_SMOKE_URL="${public_url}" \

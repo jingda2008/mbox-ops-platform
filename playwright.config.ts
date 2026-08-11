@@ -42,7 +42,7 @@ export default defineConfig({
       reuseExistingServer: false,
     },
     {
-      command: `npx vite --host 127.0.0.1 --port ${webPort}`,
+      command: `npx vite --config vite.legacy-e2e.config.ts --host 127.0.0.1 --port ${webPort}`,
       env: {
         ...process.env,
         API_PROXY_TARGET: `http://127.0.0.1:${apiPort}`,

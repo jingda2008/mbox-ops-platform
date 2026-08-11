@@ -8,6 +8,10 @@ export type GuestMood =
   | 'tired'
   | 'uncomfortable'
 
+export function menuRequestDelayMs(initialMenuAlreadyRequested: boolean): number {
+  return initialMenuAlreadyRequested ? 280 : 0
+}
+
 export interface GuestAccess {
   tableCode: string
   tableQrToken: string

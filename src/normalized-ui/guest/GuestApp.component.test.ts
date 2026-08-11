@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { GuestApp } from './GuestApp'
 import { rankRecommendations } from './recommendation-ranking'
-import type { GuestMenuProduct } from './guest-model'
+import { menuRequestDelayMs, type GuestMenuProduct } from './guest-model'
 
 function recommendationProduct(code: string, categoryCode: string): GuestMenuProduct {
   return {
@@ -56,5 +56,10 @@ describe('GuestApp', () => {
     expect(rankRecommendations(products, 'easy')[0]?.code).toBe('COCKTAIL')
     expect(rankRecommendations(products, 'party')[0]?.code).toBe('SPIRITS')
     expect(rankRecommendations(products, 'ritual')[0]?.code).toBe('SPARKLING')
+  })
+
+  it('loads the first menu immediately and only debounces later searches', () => {
+    expect(menuRequestDelayMs(false)).toBe(0)
+    expect(menuRequestDelayMs(true)).toBe(280)
   })
 })

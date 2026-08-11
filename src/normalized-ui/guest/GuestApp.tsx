@@ -27,6 +27,7 @@ import {
   categoryLabel,
   changeCartQuantity,
   formatMoney,
+  menuRequestDelayMs,
   parseGuestAccess,
   parseGuestTableCode,
   safeIdempotencyKey,
@@ -87,6 +88,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const tableCodeRef = useRef<string | null>(null)
   const qrCredentialRef = useRef<string | null>(null)
   const menuRequest = useRef(0)
+  const initialMenuRequested = useRef(false)
   const orderAttemptKey = useRef<string | null>(null)
   const orderSubmittingRef = useRef(false)
   const serviceSubmittingRef = useRef(false)
@@ -145,6 +147,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     const api = apiRef.current
     const expectedTable = tableCodeRef.current
     if (api === null || expectedTable === null) return
+    initialMenuRequested.current = false
     setPhase('booting')
     setGateMessage('正在连接您的桌位…')
     try {
@@ -179,7 +182,13 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
 
   useEffect(() => {
     if (phase !== 'ready') return
-    const timer = window.setTimeout(() => void loadMenu(search), 280)
+    const delay = menuRequestDelayMs(initialMenuRequested.current)
+    initialMenuRequested.current = true
+    if (delay === 0) {
+      void loadMenu(search)
+      return
+    }
+    const timer = window.setTimeout(() => void loadMenu(search), delay)
     return () => window.clearTimeout(timer)
   }, [loadMenu, phase, search])
 

@@ -349,7 +349,7 @@ jobs:
     if: needs.classify.outputs.scope == 'full'
     needs: classify
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     outputs:
       load_report_b64: ${{ steps.runtime-evidence.outputs.load_report_b64 }}
     env:

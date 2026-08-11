@@ -14,6 +14,10 @@ manifest=${release_dir}/release-manifest.json
 secrets_env=${install_root}/secrets/app.env
 current_link=${install_root}/current
 env_link=${install_root}/.env
+uploader=${release_dir}/upload-oss-verified.sh
+audit_sender=${release_dir}/send-sls-events.sh
+audit_queue=${install_root}/observability/pending-release-events.jsonl
+audit_queue_lock=${install_root}/observability/pending-events.lock
 
 case "${release_dir}" in
   /opt/mbox/releases/*) ;;
@@ -26,6 +30,9 @@ esac
 [[ "${backup_max_age_minutes}" =~ ^[0-9]+$ ]]
 test -f "${manifest}"
 test -f "${secrets_env}"
+test -x "${uploader}"
+test -x "${audit_sender}"
+command -v flock >/dev/null
 docker network inspect "${network}" >/dev/null
 docker inspect "${caddy_container}" >/dev/null
 docker inspect "${active_container}" >/dev/null
@@ -39,6 +46,32 @@ expected_archive_sha=$(jq -er '.archiveSha256' "${manifest}")
 migration_digest=$(jq -er '.migration.digest' "${manifest}")
 short_sha=${release_sha:0:7}
 archive=${release_dir}/${archive_name}
+
+emit_release_audit() {
+  local event_type=$1
+  local severity=$2
+  local outcome=$3
+  local event_file
+  event_file=$(mktemp)
+  jq -nc \
+    --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg eventType "${event_type}" \
+    --arg severity "${severity}" \
+    --arg outcome "${outcome}" \
+    --arg releaseSha "${release_sha}" \
+    --arg imageDigest "${expected_digest}" \
+    '{timestamp:$timestamp,eventType:$eventType,severity:$severity,outcome:$outcome,releaseSha:$releaseSha,imageDigest:$imageDigest,logstore:"release-audit"}' \
+    > "${event_file}"
+  if ! "${audit_sender}" "${event_file}" >/dev/null 2>&1; then
+    install -d -m 0700 "$(dirname "${audit_queue}")"
+    (
+      flock -x 9
+      cat "${event_file}" >> "${audit_queue}"
+      chmod 0600 "${audit_queue}"
+    ) 9>"${audit_queue_lock}"
+  fi
+  rm -f "${event_file}"
+}
 
 [[ "${release_sha}" =~ ^[0-9a-f]{40}$ ]]
 [[ "${expected_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
@@ -56,6 +89,7 @@ actual_sha=$(docker image inspect "${image_tag}" --format '{{index .Config.Label
 actual_version=$(docker image inspect "${image_tag}" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')
 test "${actual_sha}" = "${release_sha}"
 test "${actual_version}" = "${release_version}"
+emit_release_audit deployment_started info candidate-preparation
 
 release_env=${release_dir}/app.env
 cp "${secrets_env}" "${release_env}"
@@ -90,6 +124,22 @@ recent_backup=$(find "${install_root}/backups" -type f -name 'mbox-*.dump' \
 if [ "${deployment_tier}" = production ] || [ "${migration_changed}" = 1 ] || [ -z "${recent_backup}" ]; then
   backup_path=$("${install_root}/bin/backup-postgres.sh")
 fi
+selected_backup=${backup_path:-${recent_backup}}
+test -n "${selected_backup}"
+test -f "${selected_backup}"
+backup_stage=${release_dir}/oss-backup
+rm -rf "${backup_stage}"
+install -d -m 0700 "${backup_stage}"
+backup_name=$(basename "${selected_backup}")
+ln "${selected_backup}" "${backup_stage}/${backup_name}" 2>/dev/null \
+  || cp "${selected_backup}" "${backup_stage}/${backup_name}"
+(
+  cd "${backup_stage}"
+  sha256sum "${backup_name}" > SHA256SUMS
+  sha256sum --check SHA256SUMS >/dev/null
+)
+MBOX_OSS_VERIFICATION_REPORT="${release_dir}/oss-backup-verification.json" \
+  "${uploader}" "${backup_stage}" "mbox/backups/$(date -u +%Y-%m-%d)/${release_sha}"
 
 if [ "${migration_changed}" = 1 ]; then
   docker run --rm \
@@ -109,9 +159,13 @@ complete=0
 
 rollback_on_error() {
   local exit_code=$?
+  local rollback_ok=1
+  local rollback_response
   [ "${complete}" = 1 ] && return
   set +e
   echo "deployment failed; restoring previous application" >&2
+  emit_release_audit deployment_failed error automatic-rollback
+  emit_release_audit rollback_started warning previous-release-restore-started
   if [ "${promoted}" = 1 ]; then
     docker update --restart=no "${active_container}" >/dev/null 2>&1
     docker stop -t 20 "${active_container}" >/dev/null 2>&1
@@ -128,6 +182,14 @@ rollback_on_error() {
   fi
   docker update --restart=no "${candidate}" >/dev/null 2>&1
   docker stop -t 10 "${candidate}" >/dev/null 2>&1
+  test "$(docker inspect "${active_container}" --format '{{.State.Running}}' 2>/dev/null)" = true || rollback_ok=0
+  rollback_response=$(curl -fsS --max-time 10 "${public_url}/api/ready" 2>/dev/null || true)
+  printf '%s' "${rollback_response}" | jq -e '.status == "ready"' >/dev/null 2>&1 || rollback_ok=0
+  if [ "${rollback_ok}" = 1 ]; then
+    emit_release_audit rollback_succeeded warning previous-release-restored
+  else
+    emit_release_audit rollback_failed error previous-release-restore-unverified
+  fi
   exit "${exit_code}"
 }
 trap rollback_on_error ERR INT TERM
@@ -217,9 +279,7 @@ docker update --restart=unless-stopped "${active_container}" >/dev/null
 docker exec "${caddy_container}" \
   caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
 verify_public_release 15
-
-ln -sfn "${release_dir}" "${current_link}"
-ln -sfn "${release_env}" "${env_link}"
+emit_release_audit cutover_succeeded info public-readiness-verified
 
 deployed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 jq -n \
@@ -248,6 +308,28 @@ jq -n \
     backupPath: (if $backupPath == "" then null else $backupPath end),
     rollbackContainer: $rollbackContainer
   }' > "${release_dir}/deployment-manifest.json"
+
+deployment_evidence=${release_dir}/oss-deployment
+rm -rf "${deployment_evidence}"
+install -d -m 0700 "${deployment_evidence}"
+cp "${release_dir}/deployment-manifest.json" "${deployment_evidence}/"
+cp "${release_dir}/predeployment-oss-verification.json" "${deployment_evidence}/"
+cp "${release_dir}/oss-backup-verification.json" "${deployment_evidence}/"
+(
+  cd "${deployment_evidence}"
+  find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+  sha256sum --check SHA256SUMS >/dev/null
+)
+MBOX_OSS_VERIFICATION_REPORT="${release_dir}/oss-deployment-verification.json" \
+  "${uploader}" "${deployment_evidence}" "mbox/evidence/rc/v${release_version}/${release_sha}/deployment"
+
+ln -sfn "${release_dir}" "${current_link}"
+ln -sfn "${release_env}" "${env_link}"
+emit_release_audit deployment_succeeded info immutable-release-active
+
+if ! MBOX_OSS_PRUNE_APPLY=1 "${release_dir}/prune-oss-images.sh" >/dev/null; then
+  emit_release_audit critical_audit warning rollback-image-prune-deferred
+fi
 
 complete=1
 trap - ERR INT TERM

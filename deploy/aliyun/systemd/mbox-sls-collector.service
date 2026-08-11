@@ -1,0 +1,18 @@
+[Unit]
+Description=MBOX selective Alibaba SLS collector
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Environment=MBOX_SLS_ENDPOINT=cn-shanghai-internal.log.aliyuncs.com
+Environment=MBOX_SLS_PROJECT=mbox-validation-139224254060
+ExecStart=/opt/mbox/bin/collect-selective-events.sh
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/opt/mbox/observability

@@ -1,0 +1,48 @@
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "oss:GetBucketAcl",
+        "oss:GetBucketInfo",
+        "oss:GetBucketWorm",
+        "oss:PutBucketAcl",
+        "oss:GetBucketEncryption",
+        "oss:PutBucketEncryption",
+        "oss:GetBucketVersioning",
+        "oss:PutBucketVersioning",
+        "oss:GetBucketLifecycle",
+        "oss:PutBucketLifecycle",
+        "oss:GetBucketPublicAccessBlock",
+        "oss:PutBucketPublicAccessBlock"
+      ],
+      "Resource": ["acs:oss:*:*:m-box"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "log:CreateProject",
+        "log:GetProject"
+      ],
+      "Resource": ["acs:log:cn-shanghai:*:project/*"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "log:CreateLogStore",
+        "log:GetLogStore",
+        "log:CreateIndex",
+        "log:GetIndex",
+        "log:UpdateIndex",
+        "log:PostLogStoreLogs",
+        "log:GetLogStoreLogs"
+      ],
+      "Resource": [
+        "acs:log:cn-shanghai:*:project/mbox-validation-139224254060/logstore/runtime-errors",
+        "acs:log:cn-shanghai:*:project/mbox-validation-139224254060/logstore/payment-audit",
+        "acs:log:cn-shanghai:*:project/mbox-validation-139224254060/logstore/release-audit"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LifecycleConfiguration>
+  <Rule>
+    <ID>mbox-temp-evidence-14d</ID>
+    <Prefix>mbox/evidence/temp/</Prefix>
+    <Status>Enabled</Status>
+    <Expiration><Days>14</Days></Expiration>
+    <NoncurrentVersionExpiration><NoncurrentDays>14</NoncurrentDays></NoncurrentVersionExpiration>
+    <AbortMultipartUpload><Days>1</Days></AbortMultipartUpload>
+  </Rule>
+  <Rule>
+    <ID>mbox-main-evidence-14d</ID>
+    <Prefix>mbox/evidence/main/</Prefix>
+    <Status>Enabled</Status>
+    <Expiration><Days>14</Days></Expiration>
+    <NoncurrentVersionExpiration><NoncurrentDays>14</NoncurrentDays></NoncurrentVersionExpiration>
+    <AbortMultipartUpload><Days>1</Days></AbortMultipartUpload>
+  </Rule>
+  <Rule>
+    <ID>mbox-rc-evidence-90d</ID>
+    <Prefix>mbox/evidence/rc/</Prefix>
+    <Status>Enabled</Status>
+    <Expiration><Days>90</Days></Expiration>
+    <NoncurrentVersionExpiration><NoncurrentDays>90</NoncurrentDays></NoncurrentVersionExpiration>
+    <AbortMultipartUpload><Days>1</Days></AbortMultipartUpload>
+  </Rule>
+  <Rule>
+    <ID>mbox-database-backups-90d</ID>
+    <Prefix>mbox/backups/</Prefix>
+    <Status>Enabled</Status>
+    <Expiration><Days>90</Days></Expiration>
+    <NoncurrentVersionExpiration><NoncurrentDays>14</NoncurrentDays></NoncurrentVersionExpiration>
+    <AbortMultipartUpload><Days>1</Days></AbortMultipartUpload>
+  </Rule>
+  <Rule>
+    <ID>mbox-rollback-images-managed</ID>
+    <Prefix>mbox/images/</Prefix>
+    <Status>Enabled</Status>
+    <NoncurrentVersionExpiration><NoncurrentDays>14</NoncurrentDays></NoncurrentVersionExpiration>
+    <AbortMultipartUpload><Days>1</Days></AbortMultipartUpload>
+  </Rule>
+</LifecycleConfiguration>

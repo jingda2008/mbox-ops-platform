@@ -60,3 +60,29 @@ exists. A migration manifest prevents repeated no-op migration runs.
 This pipeline does not alter application features, API contracts, customer
 data, payment behavior or authorization rules. It only changes how a verified
 image reaches the validation server.
+
+## Private OSS evidence and selective SLS logging
+
+The low-cost evidence design and verified resource boundaries are documented in
+`docs/aliyun-low-cost-evidence-observability-v1.md`.
+
+Cloud bootstrap must run on the Shanghai ECS instance after an instance RAM role
+is attached. Long-lived AccessKey environment variables make every script fail
+closed. The formal deployment also fails before candidate activation unless the
+CI evidence and rollback image have been uploaded through the internal OSS
+endpoint and downloaded again with identical byte size and SHA256.
+
+Bootstrap and verification:
+
+```bash
+./deploy/aliyun/bootstrap-evidence-services.sh
+./deploy/aliyun/verify-evidence-services.sh
+./deploy/aliyun/install-selective-observability.sh
+```
+
+The collector is a two-minute systemd timer outside the request path. Stop it
+without affecting the application:
+
+```bash
+systemctl disable --now mbox-sls-collector.timer
+```

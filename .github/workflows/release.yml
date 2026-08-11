@@ -23,7 +23,6 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: npm
       - run: npm ci
       - name: Deny release when any critical TC or invariant is unfinished
         run: npm run release:quality-gate
@@ -108,6 +107,34 @@ jobs:
             cd release-artifact
             sha256sum --check ./*.tar.gz.sha256
           )
+      - name: Build the short-lived OSS transfer bundle
+        run: |
+          version=$(node -p "require('./package.json').version")
+          mkdir -p release-metadata
+          cp release-artifact/release-manifest.json release-metadata/
+          cp release-artifact/migration-manifest.json release-metadata/
+          node scripts/build-aliyun-evidence-bundle.mjs \
+            --output oss-ready-evidence \
+            --channel rc \
+            --version "${version}" \
+            --sha "${GITHUB_SHA}" \
+            --ci-run-id "${{ steps.verified-run.outputs.run_id }}" \
+            --input quality=verified-ci-evidence/quality \
+            --input runtime=verified-ci-evidence/runtime \
+            --input release=release-metadata
+          node scripts/verify-sensitive-artifacts.mjs oss-ready-evidence
+          (
+            cd oss-ready-evidence
+            sha256sum --check SHA256SUMS
+          )
+      - name: Upload short-lived OSS transfer bundle
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: oss-ready-evidence-${{ github.sha }}
+          path: oss-ready-evidence
+          if-no-files-found: error
+          retention-days: 14
       - name: Publish the verified GitHub pre-release
         env:
           GH_TOKEN: ${{ github.token }}

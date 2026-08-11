@@ -6,15 +6,20 @@
 - 现有 RDS 使用上海地域内网地址；本次不改实例规格与网络。
 - 已存在 `m-box` OSS Bucket，匿名访问返回 403；复用现有 Bucket，不创建重名资源。
 - SLS 使用上海地域内网入口 `cn-shanghai-internal.log.aliyuncs.com`。该值只是地域入口，不代表项目或 Logstore 已创建。
-- 实施前 ECS 未绑定实例 RAM 角色，且未安装 `ossutil`、Alibaba Cloud CLI/SLS 插件，因此云端配置与真实上传检索尚不能被认定为完成。
+- 实施前 ECS 未绑定实例 RAM 角色，且未安装 `ossutil`、Alibaba Cloud CLI/SLS 插件；这些缺口已在本次初始化中补齐。
 - GitHub Actions 旧制品约 217 MB，缓存约 3.2 GB；存在标签被错误写成分支缓存的历史记录。
 
 ## 当前实施状态
 
-- ECS 已安装 `ossutil 2.3.0`、Alibaba Cloud CLI `3.4.11` 和 SLS 插件 `0.7.4`；安装期间 `mbox-app` 持续健康，未切流、未停机。
+- ECS 已安装 `ossutil 2.3.0`、Alibaba Cloud CLI `3.4.11`、SLS 插件 `0.7.4` 和 STS 插件 `0.7.0`；安装期间 `mbox-app` 持续健康，未切流、未停机。
 - 用户已确认 SLS 上海内网入口为 `cn-shanghai-internal.log.aliyuncs.com`。
 - GitHub Actions 历史制品已清理为 0；缓存由约 3.38 GB 降至约 1.04 GB，清除了错误标签和已关闭 PR 的缓存，保留当前活动 PR 缓存。
-- ECS 元数据当前仍未返回实例 RAM 角色。因此尚未创建或修改 SLS 项目、Logstore、OSS 生命周期，也尚未生成真实 OSS 回读或 SLS 检索证据。
+- ECS 已绑定实例角色 `MBoxValidationEcsRole`，临时初始化权限和运行期最小权限均已实测可用。
+- OSS Bucket `m-box` 已核验为私有、阻断公共访问、启用 SSE-OSS/AES256 与版本控制，并安装 5 条仅覆盖 `mbox/` 前缀的生命周期规则；未开启 WORM。
+- SLS 项目 `mbox-validation-139224254060` 已创建。`runtime-errors` 保留 7 天，`payment-audit` 与 `release-audit` 保留 90 天；均为 1 分片、关闭自动分片和全文索引，只索引批准字段。
+- 2026-08-11 已完成真实 OSS 上传、回读、字节数与 SHA256 校验，以及脱敏 SLS 测试事件写入和检索。测试不包含真实支付、退款或客户数据。
+- 云端初始化证据位于 `oss://m-box/mbox/evidence/temp/cloud-bootstrap/773e0c6/`，保留 14 天；其中 `SHA256SUMS` 的 SHA256 为 `a6c2b86fa7807541a8be1df44e215452ac3f8a380099729ad5060be215c73902`。
+- 应用采集器尚未安装：当前线上容器不包含本PR的过滤器，混装脚本会破坏提交可追溯性。只有本PR CI和经营验收门禁通过、按同一镜像摘要部署后才能启用定时采集器。
 - 现网仍运行提交 `5d45211a547613c213ab61a848643306626dd607`，健康状态未受本次改造影响。
 
 ## 新增资源
@@ -71,7 +76,7 @@ GitHub 制品只是短期转运：PR 成功证据 3 天、失败诊断 7 天、m
 - 已存在的 Logstore 必须逐一核对保留天数、分片数和自动分裂开关；与期望配置不一致时停止并人工确认，不静默覆盖既有数据策略。
 - 最大风险是错误覆盖现有 Bucket 生命周期。脚本检测到非 M-BOX 生命周期规则会停止，不自动覆盖。
 - SLS 项目名全局唯一，默认候选名必须经真实账户查询确认。
-- 当前代码完成不代表云资源已完成；只有 bootstrap 报告、OSS 回读报告和 SLS 检索报告全部通过后，才能标记为已启用。
+- 云资源和端到端探针已经完成；应用侧采集与正式发布仍受CI、经营验收和同镜像摘要门禁约束，二者不得混为“全部上线”。
 
 ## 回滚
 

@@ -280,6 +280,7 @@ jobs:
           printf 'load_report_b64=%s\n' "$(base64 -w0 artifacts/runtime-quality/client-observed-load.json)" >> "${GITHUB_OUTPUT}"
       - name: Upload reproducible runtime evidence
         if: always()
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
         uses: actions/upload-artifact@v4
         with:
           name: runtime-quality-${{ github.sha }}
@@ -407,8 +408,23 @@ jobs:
           cd artifacts/quality-evidence
           find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
           sha256sum --check SHA256SUMS
+      - name: Publish pull-request quality evidence summary
+        if: always() && github.event_name == 'pull_request'
+        run: |
+          {
+            printf '## Commit-scoped quality evidence\n\n'
+            printf -- '- Commit: `%s`\n' "${GITHUB_SHA}"
+            printf -- '- Workflow run: `%s`\n' "${GITHUB_RUN_ID}"
+            printf -- '- Evidence checksums:\n\n```text\n'
+            cat artifacts/quality-evidence/SHA256SUMS
+            printf '```\n\n'
+            printf '<details><summary>Quality ledger</summary>\n\n```json\n'
+            cat artifacts/quality-evidence/ci-quality-evidence.json
+            printf '\n```\n</details>\n'
+          } >> "${GITHUB_STEP_SUMMARY}"
       - name: Upload commit-scoped CI quality ledger
         if: always()
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
         uses: actions/upload-artifact@v4
         with:
           name: quality-evidence-${{ github.sha }}

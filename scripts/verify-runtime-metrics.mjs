@@ -68,12 +68,42 @@ function metricValue(text, name, labels = '') {
   return value
 }
 
+function mutationSourceOutcomes(text, source) {
+  const value = (outcome) => metricValue(
+    text,
+    'mbox_mutation_source_outcomes_total',
+    `source="${source}",outcome="${outcome}"`,
+  )
+  return {
+    attempted: value('attempted'),
+    acquired: value('acquired'),
+    completed: value('completed'),
+    failedAfterAcquire: value('failed_after_acquire'),
+    rejected: value('rejected'),
+    timeout: value('timeout'),
+  }
+}
+
+function mutationSourceConservationFailures(source, outcomes) {
+  const failures = []
+  if (outcomes.attempted !== outcomes.acquired + outcomes.rejected + outcomes.timeout) {
+    failures.push(`${source}来源写入不守恒：尝试${outcomes.attempted} != 入队${outcomes.acquired} + 拒绝${outcomes.rejected} + 超时${outcomes.timeout}`)
+  }
+  if (outcomes.acquired !== outcomes.completed + outcomes.failedAfterAcquire) {
+    failures.push(`${source}来源执行不守恒：入队${outcomes.acquired} != 完成${outcomes.completed} + 执行失败${outcomes.failedAfterAcquire}`)
+  }
+  return failures
+}
+
 const observedInstances = await Promise.all(baseUrls.map(async (baseUrl) => {
   const response = await fetch(`${baseUrl}/api/metrics`, {
     headers: { authorization: `Bearer ${token}` },
   })
   if (!response.ok) throw new Error(`${baseUrl}运行指标请求失败：${response.status}`)
   const text = await response.text()
+  const mutationSourceOutcomesBySource = Object.fromEntries(
+    ['kds', 'scheduler', 'other'].map((source) => [source, mutationSourceOutcomes(text, source)]),
+  )
   const values = {
     eventLoopP95Ms: metricValue(text, 'mbox_node_event_loop_delay_ms', 'quantile="0.95"'),
     eventLoopP99Ms: metricValue(text, 'mbox_node_event_loop_delay_ms', 'quantile="0.99"'),
@@ -101,13 +131,22 @@ const observedInstances = await Promise.all(baseUrls.map(async (baseUrl) => {
     mutationStateWriteP95Ms: metricValue(text, 'mbox_mutation_stage_duration_ms', 'stage="state_write",quantile="0.95"'),
     mutationProjectionP95Ms: metricValue(text, 'mbox_mutation_stage_duration_ms', 'stage="projection",quantile="0.95"'),
     mutationKdsSamples: metricValue(text, 'mbox_mutation_source_samples', 'source="kds"'),
+    mutationKdsWaitP95Ms: metricValue(text, 'mbox_mutation_source_queue_wait_ms', 'source="kds",quantile="0.95"'),
+    mutationKdsWaitP99Ms: metricValue(text, 'mbox_mutation_source_queue_wait_ms', 'source="kds",quantile="0.99"'),
     mutationKdsServiceP95Ms: metricValue(text, 'mbox_mutation_source_service_duration_ms', 'source="kds",quantile="0.95"'),
     mutationSchedulerSamples: metricValue(text, 'mbox_mutation_source_samples', 'source="scheduler"'),
+    mutationSchedulerWaitP95Ms: metricValue(text, 'mbox_mutation_source_queue_wait_ms', 'source="scheduler",quantile="0.95"'),
+    mutationSchedulerWaitP99Ms: metricValue(text, 'mbox_mutation_source_queue_wait_ms', 'source="scheduler",quantile="0.99"'),
     mutationSchedulerServiceP95Ms: metricValue(text, 'mbox_mutation_source_service_duration_ms', 'source="scheduler",quantile="0.95"'),
+    mutationOtherSamples: metricValue(text, 'mbox_mutation_source_samples', 'source="other"'),
+    mutationOtherWaitP95Ms: metricValue(text, 'mbox_mutation_source_queue_wait_ms', 'source="other",quantile="0.95"'),
+    mutationOtherWaitP99Ms: metricValue(text, 'mbox_mutation_source_queue_wait_ms', 'source="other",quantile="0.99"'),
+    mutationOtherServiceP95Ms: metricValue(text, 'mbox_mutation_source_service_duration_ms', 'source="other",quantile="0.95"'),
     initialSerializedStateBytes: metricValue(text, 'mbox_runtime_state_serialized_bytes', 'point="initial"'),
     serializedStateBytes: metricValue(text, 'mbox_runtime_state_serialized_bytes', 'point="current"'),
     maxSerializedStateBytes: metricValue(text, 'mbox_runtime_state_serialized_bytes', 'point="max"'),
     projectionReady: metricValue(text, 'mbox_projection_ready'),
+    mutationSourceOutcomes: mutationSourceOutcomesBySource,
   }
   return { baseUrl, values }
 }))
@@ -161,6 +200,9 @@ const instances = observedInstances.map(({ baseUrl, values }) => {
       ? `写服务P95 ${values.mutationServiceP95Ms}ms > ${mutationServiceP95LimitMs}ms` : null,
     values.mutationServiceP99Ms > mutationServiceP99LimitMs
       ? `写服务P99 ${values.mutationServiceP99Ms}ms > ${mutationServiceP99LimitMs}ms` : null,
+    ...Object.entries(values.mutationSourceOutcomes).flatMap(([source, outcomes]) => (
+      mutationSourceConservationFailures(source, outcomes)
+    )),
     ...stateGrowth.failures,
     values.projectionReady !== 1 ? '规范化投影未就绪' : null,
   ].filter(Boolean)

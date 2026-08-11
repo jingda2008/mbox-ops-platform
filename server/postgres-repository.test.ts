@@ -503,6 +503,8 @@ describe('PostgresRepository', () => {
       serviceSamples: expect.any(Number),
       serviceP95Ms: expect.any(Number),
       serviceP99Ms: expect.any(Number),
+      sourceWaitP95Ms: expect.objectContaining({ other: expect.any(Number) }),
+      sourceWaitP99Ms: expect.objectContaining({ other: expect.any(Number) }),
     })
     expect(completedQueue.serializedStateBytes).toBeGreaterThan(0)
     expect(completedQueue.maxSerializedStateBytes).toBeGreaterThanOrEqual(completedQueue.serializedStateBytes)
@@ -536,6 +538,27 @@ describe('PostgresRepository', () => {
     expect(reset.initialSerializedStateBytes).toBeGreaterThan(0)
     expect(reset.serializedStateBytes).toBe(reset.initialSerializedStateBytes)
     expect(reset.maxSerializedStateBytes).toBe(reset.initialSerializedStateBytes)
+    expect(reset.serializedStateBytes).toBe(Buffer.byteLength(JSON.stringify(await repository.readFresh())))
+  })
+
+  it('keeps committed cache isolated from objects retained by a mutation callback', async () => {
+    const pool = new FakePool()
+    const first = createRepository(pool).repository
+    const second = createRepository(pool).repository
+    await first.init()
+    await second.init()
+    let retained!: ReturnType<typeof createSeedState>
+
+    await first.mutate((state) => {
+      state.store.name = 'Committed value'
+      state.revision += 1
+      retained = state
+    })
+    retained.store.name = 'Escaped mutation'
+
+    expect((await first.read()).store.name).toBe('Committed value')
+    expect((await first.readFresh()).store.name).toBe('Committed value')
+    expect((await second.readFresh()).store.name).toBe('Committed value')
   })
 
   it('runs singleton background work under a session advisory lease', async () => {
@@ -642,6 +665,11 @@ describe('PostgresRepository', () => {
       state.revision += 1
     }, { metricLabel: 'scheduler', minimumGlobalIdleMs: 750 })).resolves.toBeUndefined()
     expect((await repository.read()).revision).toBe(2)
+    expect((await repository.healthCheck()).mutationQueue).toMatchObject({
+      sourceSamples: { kds: 0, scheduler: 2, other: 0 },
+      sourceWaitP95Ms: { kds: 0, scheduler: expect.any(Number), other: 0 },
+      sourceWaitP99Ms: { kds: 0, scheduler: expect.any(Number), other: 0 },
+    })
   })
 
   it('rejects excess or stale queued mutations before they consume database connections', async () => {
@@ -663,6 +691,14 @@ describe('PostgresRepository', () => {
     expect((await full.repository.healthCheck()).mutationQueue).toMatchObject({ rejectedTotal: 1, timeoutTotal: 0, maxPending: 2 })
     release()
     await Promise.all([first, second])
+    expect((await full.repository.healthCheck()).mutationQueue).toMatchObject({
+      sourceAttempted: { kds: 0, scheduler: 0, other: 3 },
+      sourceAcquired: { kds: 0, scheduler: 0, other: 2 },
+      sourceCompleted: { kds: 0, scheduler: 0, other: 2 },
+      sourceFailedAfterAcquire: { kds: 0, scheduler: 0, other: 0 },
+      sourceRejected: { kds: 0, scheduler: 0, other: 1 },
+      sourceTimeout: { kds: 0, scheduler: 0, other: 0 },
+    })
 
     const timed = createRepository(new FakePool(), { mutationQueueTimeoutMs: 1 })
     await timed.repository.init()
@@ -681,6 +717,46 @@ describe('PostgresRepository', () => {
     expect((await timed.repository.healthCheck()).mutationQueue).toMatchObject({ pending: 1, active: true, rejectedTotal: 0, timeoutTotal: 1 })
     releaseTimed()
     await timedFirst
+    expect((await timed.repository.healthCheck()).mutationQueue).toMatchObject({
+      sourceAttempted: { kds: 0, scheduler: 0, other: 2 },
+      sourceAcquired: { kds: 0, scheduler: 0, other: 1 },
+      sourceCompleted: { kds: 0, scheduler: 0, other: 1 },
+      sourceFailedAfterAcquire: { kds: 0, scheduler: 0, other: 0 },
+      sourceRejected: { kds: 0, scheduler: 0, other: 0 },
+      sourceTimeout: { kds: 0, scheduler: 0, other: 1 },
+    })
+  })
+
+  it('accounts for acquired mutations that fail in the domain callback', async () => {
+    const { repository } = createRepository()
+    await repository.init()
+
+    await expect(repository.mutate(() => {
+      throw new Error('domain failure')
+    }, { metricLabel: 'kds' })).rejects.toThrow('domain failure')
+
+    expect((await repository.healthCheck()).mutationQueue).toMatchObject({
+      sourceAttempted: { kds: 1, scheduler: 0, other: 0 },
+      sourceAcquired: { kds: 1, scheduler: 0, other: 0 },
+      sourceCompleted: { kds: 0, scheduler: 0, other: 0 },
+      sourceFailedAfterAcquire: { kds: 1, scheduler: 0, other: 0 },
+      sourceRejected: { kds: 0, scheduler: 0, other: 0 },
+      sourceTimeout: { kds: 0, scheduler: 0, other: 0 },
+    })
+
+    await expect(repository.mutate(() => {
+      throw new PostgresMutationQueueTimeoutError(10)
+    }, { metricLabel: 'kds' })).rejects.toBeInstanceOf(PostgresMutationQueueTimeoutError)
+
+    expect((await repository.healthCheck()).mutationQueue).toMatchObject({
+      timeoutTotal: 0,
+      sourceAttempted: { kds: 2, scheduler: 0, other: 0 },
+      sourceAcquired: { kds: 2, scheduler: 0, other: 0 },
+      sourceCompleted: { kds: 0, scheduler: 0, other: 0 },
+      sourceFailedAfterAcquire: { kds: 2, scheduler: 0, other: 0 },
+      sourceRejected: { kds: 0, scheduler: 0, other: 0 },
+      sourceTimeout: { kds: 0, scheduler: 0, other: 0 },
+    })
   })
 
   it('accepts multi-event revision advances and rejects non-advancing revisions', async () => {

@@ -24,3 +24,19 @@ test('tag release downloads and verifies exact CI quality and runtime artifacts'
   assert.match(workflow, /sha256sum --check SHA256SUMS/)
   assert.match(workflow, /quality ledger CI run mismatch/)
 })
+
+test('pull requests preserve checksummed evidence while artifact quota cannot mask business results', async () => {
+  const workflow = await readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8')
+  assert.match(
+    workflow,
+    /name: Upload reproducible runtime evidence\n\s+if: always\(\)\n\s+continue-on-error: \$\{\{ github\.event_name == 'pull_request' \}\}/,
+  )
+  assert.match(
+    workflow,
+    /name: Upload commit-scoped CI quality ledger\n\s+if: always\(\)\n\s+continue-on-error: \$\{\{ github\.event_name == 'pull_request' \}\}/,
+  )
+  assert.match(workflow, /name: Publish pull-request quality evidence summary/)
+  assert.match(workflow, /cat artifacts\/quality-evidence\/SHA256SUMS/)
+  assert.match(workflow, /cat artifacts\/quality-evidence\/ci-quality-evidence\.json/)
+  assert.match(workflow, /GITHUB_STEP_SUMMARY/)
+})

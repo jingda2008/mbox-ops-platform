@@ -110,7 +110,7 @@ while IFS= read -r store; do
   fi
   actual_ttl=$(jq -er '.ttl // .TTL // .data.ttl' "${logstore_state}")
   actual_shards=$(jq -er '.shardCount // .ShardCount // .data.shardCount' "${logstore_state}")
-  actual_auto_split=$(jq -er 'if has("autoSplit") then .autoSplit elif has("AutoSplit") then .AutoSplit else .data.autoSplit end' "${logstore_state}")
+  actual_auto_split=$(jq -r 'if has("autoSplit") then .autoSplit elif has("AutoSplit") then .AutoSplit else .data.autoSplit end' "${logstore_state}")
   rm -f "${logstore_state}"
   if [ "${actual_ttl}" != "${ttl}" ] || [ "${actual_shards}" != "${shards}" ] || [ "${actual_auto_split}" != false ]; then
     printf 'SLS Logstore configuration mismatch: %s (ttl=%s/%s shards=%s/%s autoSplit=%s/false)\n' \

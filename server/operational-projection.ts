@@ -17,6 +17,7 @@ export interface OperationalProjectionHealth {
   projectedRevision: number | null
   countsMatch: boolean
   checksumMatch: boolean
+  kdsAuthorityConsistent: boolean
   error?: string
 }
 
@@ -181,8 +182,14 @@ function kdsTaskRows(state: RuntimeState, ids?: ReadonlySet<string>): Projection
     quantity: task.quantity,
     status: task.status,
     queued_at: task.queuedAt,
+    started_at: task.startedAt,
+    started_by: task.startedBy,
     completed_at: task.completedAt,
+    completed_by: task.completedBy,
+    picked_up_at: task.pickedUpAt,
+    picked_up_by: task.pickedUpBy,
     delivered_at: task.deliveredAt,
+    delivered_by: task.deliveredBy,
     payload: JSON.stringify(task),
     snapshot_revision: state.revision,
   }))
@@ -261,6 +268,15 @@ function comparable(row: ProjectionRow) {
   return JSON.stringify(copy)
 }
 
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  return `{${Object.entries(value as Record<string, unknown>)
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
+    .join(',')}}`
+}
+
 async function upsertRow(
   client: PostgresPoolClient,
   context: PostgresTenantContext,
@@ -326,11 +342,49 @@ async function clearProjection(
   projection: ProjectionSet[],
 ) {
   for (const set of projection) {
+    // KDS rows are command authority once migration 025 is active. Startup may
+    // backfill a missing row but must never erase or overwrite existing work.
+    if (set.table === 'operational_kds_tasks') continue
     await client.query(
       `DELETE FROM mbox.${set.table} WHERE tenant_id = $1::uuid AND store_id = $2::uuid`,
       [context.tenantId, context.storeId],
     )
   }
+}
+
+async function reconcileAuthoritativeKdsOnStartup(
+  client: PostgresPoolClient,
+  context: PostgresTenantContext,
+  current: ProjectionSet,
+) {
+  const existing = await client.query<{
+    source_id: string
+    status: string
+    payload: unknown
+    snapshot_revision: number | string
+  }>(`
+    SELECT source_id, status, payload, snapshot_revision
+    FROM mbox.operational_kds_tasks
+    WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+    FOR UPDATE
+  `, [context.tenantId, context.storeId])
+  const expected = new Map(current.rows.map((row) => [String(row.source_id), row]))
+  for (const row of existing.rows) {
+    const aggregate = expected.get(row.source_id)
+    if (!aggregate) {
+      throw new Error(`KDS规范化权威行${row.source_id}在兼容镜像中不存在，拒绝启动`)
+    }
+    const payload = typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload
+    const aggregatePayload = JSON.parse(String(aggregate.payload))
+    if (row.status !== aggregate.status || canonicalJson(payload) !== canonicalJson(aggregatePayload)) {
+      throw new Error(`KDS规范化权威行${row.source_id}与兼容镜像不一致，拒绝启动`)
+    }
+    if (Number(row.snapshot_revision) > Number(aggregate.snapshot_revision)) {
+      throw new Error(`KDS规范化权威行${row.source_id}修订超过兼容镜像，拒绝启动`)
+    }
+    expected.delete(row.source_id)
+  }
+  for (const missing of expected.values()) await upsertRow(client, context, current, missing)
 }
 
 export class PostgresOperationalProjector implements RuntimeStateProjector {
@@ -350,8 +404,13 @@ export class PostgresOperationalProjector implements RuntimeStateProjector {
     const after = buildOperationalProjection(current, scopedTables, scopedEntityIds)
     // Startup backfill is a deterministic rebuild. Clearing the scoped read
     // model also removes stale rows left by an interrupted older projector.
-    if (!previous) await clearProjection(client, context, after)
+    if (!previous) {
+      const authoritativeKds = after.find((set) => set.table === 'operational_kds_tasks')
+      if (authoritativeKds) await reconcileAuthoritativeKdsOnStartup(client, context, authoritativeKds)
+      await clearProjection(client, context, after)
+    }
     for (const currentSet of after) {
+      if (!previous && currentSet.table === 'operational_kds_tasks') continue
       await synchronizeSet(client, context, before.find((set) => set.table === currentSet.table), currentSet)
     }
     await client.query(
@@ -384,12 +443,47 @@ export class PostgresOperationalProjector implements RuntimeStateProjector {
       const result = await client.query<{
         runtime_revision: number | string
         checksum_match: boolean
+        kds_authority_consistent: boolean
         entity_counts: Record<string, number> | string
         actual_counts: Record<string, number> | string
       }>(`
         SELECT checkpoint.runtime_revision,
           checkpoint.state_sha256 = runtime.state_sha256
             AND checkpoint.state_checksum_algorithm = runtime.state_checksum_algorithm AS checksum_match,
+          NOT EXISTS (
+            SELECT 1
+            FROM mbox.operational_kds_tasks task
+            LEFT JOIN LATERAL (
+              SELECT aggregate_task
+              FROM jsonb_array_elements(COALESCE(runtime.state #> '{orderDomain,kdsTasks}', '[]'::jsonb)) aggregate_task
+              WHERE aggregate_task ->> 'id' = task.source_id
+              LIMIT 1
+            ) mirror ON true
+            WHERE task.tenant_id = $1::uuid
+              AND task.store_id = $2::uuid
+              AND (
+                mirror.aggregate_task IS NULL
+                OR task.payload <> mirror.aggregate_task
+                OR task.source_id <> task.payload ->> 'id'
+                OR task.status <> task.payload ->> 'status'
+                OR task.order_id <> task.payload ->> 'orderId'
+                OR task.order_item_id <> task.payload ->> 'orderItemId'
+                OR task.table_session_id <> task.payload ->> 'tableSessionId'
+                OR task.station_id <> task.payload ->> 'stationId'
+              )
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements(COALESCE(runtime.state #> '{orderDomain,kdsTasks}', '[]'::jsonb)) aggregate_task
+            WHERE NOT EXISTS (
+              SELECT 1
+              FROM mbox.operational_kds_tasks task
+              WHERE task.tenant_id = $1::uuid
+                AND task.store_id = $2::uuid
+                AND task.source_id = aggregate_task ->> 'id'
+                AND task.payload = aggregate_task
+            )
+          ) AS kds_authority_consistent,
           checkpoint.entity_counts,
           jsonb_build_object(
             'operational_tables', (SELECT count(*) FROM mbox.operational_tables WHERE tenant_id = $1::uuid AND store_id = $2::uuid),
@@ -415,6 +509,7 @@ export class PostgresOperationalProjector implements RuntimeStateProjector {
         projectedRevision: null,
         countsMatch: false,
         checksumMatch: false,
+        kdsAuthorityConsistent: false,
         error: 'projection checkpoint missing',
       }
       const projectedRevision = Number(row.runtime_revision)
@@ -422,12 +517,14 @@ export class PostgresOperationalProjector implements RuntimeStateProjector {
       const actual = typeof row.actual_counts === 'string' ? JSON.parse(row.actual_counts) : row.actual_counts
       const countsMatch = projectionCountsMatch(expected, actual)
       const checksumMatch = row.checksum_match === true
+      const kdsAuthorityConsistent = row.kds_authority_consistent === true
       return {
-        ready: projectedRevision === runtimeRevision && countsMatch && checksumMatch,
+        ready: projectedRevision === runtimeRevision && countsMatch && checksumMatch && kdsAuthorityConsistent,
         runtimeRevision,
         projectedRevision,
         countsMatch,
         checksumMatch,
+        kdsAuthorityConsistent,
       }
     } catch (error) {
       return {
@@ -436,6 +533,7 @@ export class PostgresOperationalProjector implements RuntimeStateProjector {
         projectedRevision: null,
         countsMatch: false,
         checksumMatch: false,
+        kdsAuthorityConsistent: false,
         error: error instanceof Error ? error.message : String(error),
       }
     }

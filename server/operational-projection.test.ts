@@ -33,7 +33,7 @@ describe('normalized operational projection', () => {
     expect(projection.get('operational_inventory_balances')).toHaveLength(state.inventoryDomain?.balances.length ?? 0)
   })
 
-  it('performs a deterministic scoped rebuild and writes its checkpoint in the same transaction client', async () => {
+  it('rebuilds read models without deleting authoritative KDS rows and writes its checkpoint atomically', async () => {
     const state = createSeedState(new Date('2026-07-20T12:00:00.000Z'))
     const { client, calls } = fakeClient()
     await new PostgresOperationalProjector().project(client, {
@@ -41,7 +41,9 @@ describe('normalized operational projection', () => {
       storeId: '00000000-0000-4000-8000-000000000002',
     }, null, state)
 
-    expect(calls.filter((call) => call.text.startsWith('DELETE FROM mbox.operational_'))).toHaveLength(8)
+    expect(calls.some((call) => call.text.includes('FROM mbox.operational_kds_tasks') && call.text.includes('FOR UPDATE'))).toBe(true)
+    expect(calls.filter((call) => call.text.startsWith('DELETE FROM mbox.operational_'))).toHaveLength(7)
+    expect(calls.some((call) => call.text.startsWith('DELETE FROM mbox.operational_kds_tasks'))).toBe(false)
     expect(calls.at(-1)?.text).toContain('operational_projection_checkpoints')
     expect(calls.at(-1)?.values?.[2]).toBe(state.revision)
   })
@@ -133,7 +135,7 @@ describe('normalized operational projection', () => {
     }
     const actual = Object.fromEntries(Object.entries(expected).reverse())
     const { client } = fakeClient(() => ({
-      rows: [{ runtime_revision: 91, checksum_match: true, entity_counts: expected, actual_counts: actual }], rowCount: 1,
+      rows: [{ runtime_revision: 91, checksum_match: true, kds_authority_consistent: true, entity_counts: expected, actual_counts: actual }], rowCount: 1,
     }))
     const health = await new PostgresOperationalProjector().healthCheck(client, {
       tenantId: '00000000-0000-4000-8000-000000000001',
@@ -146,6 +148,7 @@ describe('normalized operational projection', () => {
       projectedRevision: 91,
       countsMatch: true,
       checksumMatch: true,
+      kdsAuthorityConsistent: true,
     })
   })
 
@@ -161,7 +164,7 @@ describe('normalized operational projection', () => {
       operational_inventory_balances: 0,
     }
     const { client } = fakeClient(() => ({
-      rows: [{ runtime_revision: 91, checksum_match: false, entity_counts: counts, actual_counts: counts }],
+      rows: [{ runtime_revision: 91, checksum_match: false, kds_authority_consistent: true, entity_counts: counts, actual_counts: counts }],
       rowCount: 1,
     }))
 

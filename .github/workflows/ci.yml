@@ -218,6 +218,10 @@ jobs:
         run: npm run db:verify:operational
         env:
           DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
+      - name: Verify authoritative KDS transactions
+        run: npm run db:verify:kds
+        env:
+          DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
       - name: Verify cross-instance staff presence leases
         run: npm run db:verify:presence
         env:

@@ -25,6 +25,7 @@ for (let attempt = 1; attempt <= attempts; attempt += 1) {
       body.repository !== 'postgres' && `repository=${body.repository}`,
       body.projectionReady !== true && `projectionReady=${body.projectionReady}`,
       body.projectionCountsMatch !== true && `projectionCountsMatch=${body.projectionCountsMatch}`,
+      body.kdsAuthorityConsistent !== true && `kdsAuthorityConsistent=${body.kdsAuthorityConsistent}`,
       body.projectionRevision !== body.revision && `projectionRevision=${body.projectionRevision},revision=${body.revision}`,
     ].filter(Boolean)
     if (failures.length === 0) {

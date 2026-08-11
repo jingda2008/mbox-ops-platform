@@ -166,6 +166,7 @@ printf '%s' "${candidate_ready}" | jq -e \
     and .repository == "postgres"
     and .projectionReady == true
     and .projectionCountsMatch == true
+    and .kdsAuthorityConsistent == true
     and .releaseSha == $sha
     and .releaseImageDigest == $digest' >/dev/null
 
@@ -192,6 +193,7 @@ verify_public_release() {
       '.status == "ready"
         and .projectionReady == true
         and .projectionCountsMatch == true
+        and .kdsAuthorityConsistent == true
         and .releaseSha == $sha
         and .releaseImageDigest == $digest' >/dev/null 2>&1; then
       return 0

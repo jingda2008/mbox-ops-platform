@@ -144,7 +144,7 @@ try {
 
   await siblingRepository.init()
   const siblingHealthAfterRestart = await siblingRepository.healthCheck()
-  if (!siblingHealthAfterRestart.ready || siblingHealthAfterRestart.projectionChecksumMatch !== true) {
+  if (!siblingHealthAfterRestart.ready || siblingHealthAfterRestart.projectionChecksumMatch !== true || siblingHealthAfterRestart.kdsAuthorityConsistent !== true) {
     throw new Error(`第二实例重启后校验和投影不一致：${JSON.stringify(siblingHealthAfterRestart)}`)
   }
   const secondSnapshot = await operationalStore.read(after.revision, after.store.businessDate)
@@ -371,7 +371,7 @@ try {
     ]))
 
   const health = await repository.healthCheck()
-  if (!health.ready || !health.projectionReady || !health.projectionCountsMatch || !health.projectionChecksumMatch || health.projectionRevision !== afterContention.revision) {
+  if (!health.ready || !health.projectionReady || !health.projectionCountsMatch || !health.projectionChecksumMatch || health.kdsAuthorityConsistent !== true || health.projectionRevision !== afterContention.revision) {
     throw new Error(`规范化投影健康检查失败：${JSON.stringify(health)}`)
   }
   console.log(JSON.stringify({
@@ -380,6 +380,7 @@ try {
     tables: secondSnapshot.tables.length,
     projectionRevision: health.projectionRevision,
     countsMatch: health.projectionCountsMatch,
+    kdsAuthorityConsistent: health.kdsAuthorityConsistent,
     crossInstanceMutationGate: 'verified',
     distributedLeaseFailover: 'verified',
     distributedLeaseTakeoverMs: Math.round(takeoverMs * 10) / 10,

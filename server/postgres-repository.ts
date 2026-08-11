@@ -8,6 +8,16 @@ import type {
   OperationalProjectionTable,
   RuntimeStateProjector,
 } from './operational-projection.js'
+import {
+  authoritativeKdsTask,
+  inferKdsCommandOccurredAt,
+  installAuthoritativeKdsTask,
+  kdsAuthorityEventId,
+  kdsAuthorityEventPayload,
+  kdsRequestHash,
+  type KdsAuthorityCommand,
+  type NormalizedKdsAuthorityRow,
+} from './kds-authoritative-transaction.js'
 
 export interface PostgresQueryResult<Row extends Record<string, unknown> = Record<string, unknown>> {
   rows: Row[]
@@ -101,6 +111,7 @@ export interface PostgresMutationOptions<T = unknown> {
   projectionEntityIds?: (result: T) => OperationalProjectionEntityIds
   metricLabel?: 'kds' | 'scheduler' | 'other'
   minimumGlobalIdleMs?: number
+  authoritativeKds?: KdsAuthorityCommand
 }
 
 export interface PostgresRepositoryOptions extends PostgresTenantContext {
@@ -179,6 +190,7 @@ export interface PostgresRepositoryHealth {
   projectionRevision?: number | null
   projectionCountsMatch?: boolean
   projectionChecksumMatch?: boolean
+  kdsAuthorityConsistent?: boolean
   projectionError?: string
   databaseClockSkewMs: number
 }
@@ -474,6 +486,45 @@ const SQL = {
       AND operation_scope = $3
       AND idempotency_key = $4
   `,
+  selectAuthoritativeKdsForUpdate: `
+    SELECT source_id, status, payload, snapshot_revision
+    FROM mbox.operational_kds_tasks
+    WHERE tenant_id = $1::uuid
+      AND store_id = $2::uuid
+      AND source_id = $3
+    FOR UPDATE
+  `,
+  insertKdsAuthorityEvent: `
+    WITH inserted AS (
+      INSERT INTO mbox.operational_kds_task_events (
+        tenant_id, store_id, source_event_id, kds_task_id,
+        operation_scope, event_type, from_status, to_status,
+        actor_id, idempotency_key, request_sha256, request_id,
+        occurred_at, business_date, runtime_revision, payload
+      ) VALUES (
+        $1::uuid, $2::uuid, $3, $4,
+        $5, $6, $7, $8,
+        $9, $10, $11, $12,
+        $13::timestamptz, $14::date, $15::bigint, $16::jsonb
+      )
+      ON CONFLICT (tenant_id, store_id, operation_scope, idempotency_key) DO NOTHING
+      RETURNING source_event_id
+    )
+    SELECT source_event_id FROM inserted
+    UNION ALL
+    SELECT source_event_id
+    FROM mbox.operational_kds_task_events
+    WHERE tenant_id = $1::uuid
+      AND store_id = $2::uuid
+      AND operation_scope = $5
+      AND idempotency_key = $10
+      AND source_event_id = $3
+      AND kds_task_id = $4
+      AND event_type = $6
+      AND actor_id = $9
+      AND request_sha256 = $11
+    LIMIT 1
+  `,
 } as const
 
 export class PostgresRepository {
@@ -659,6 +710,9 @@ export class PostgresRepository {
     mutation: (state: RuntimeState) => T | Promise<T>,
     options: PostgresMutationOptions<T> = {},
   ): Promise<T> {
+    if (options.authoritativeKds && !options.idempotency) {
+      throw new TypeError('authoritativeKds requires repository idempotency')
+    }
     return this.track(() => this.enqueueMutation(async () => {
       let stateChanged = false
       let committedState: RuntimeState | null = null
@@ -708,6 +762,26 @@ export class PostgresRepository {
           : await this.loadState(client)
         const cloneStartedAt = performance.now()
         const workingCopy = parseState(current)
+        let authoritativeBefore: ReturnType<typeof authoritativeKdsTask> | null = null
+        if (options.authoritativeKds) {
+          const authorityResult = await client.query<NormalizedKdsAuthorityRow>(
+            SQL.selectAuthoritativeKdsForUpdate,
+            [this.tenantId, this.storeId, options.authoritativeKds.taskId],
+          )
+          const authorityRow = authorityResult.rows[0]
+          if (authorityResult.rowCount !== 1 || !authorityRow) {
+            throw new PostgresStateCorruptionError('KDS规范化权威行不存在')
+          }
+          const authorityRevision = parseRevision(authorityRow.snapshot_revision)
+          if (authorityRevision > expectedRevision) {
+            throw new PostgresStateCorruptionError('KDS规范化权威行修订超过兼容镜像修订')
+          }
+          authoritativeBefore = structuredClone(installAuthoritativeKdsTask(
+            workingCopy,
+            authorityRow,
+            options.authoritativeKds.taskId,
+          ))
+        }
         this.recordMutationMetric(this.mutationCloneDurations, performance.now() - cloneStartedAt)
         // End the clone turn before canonical serialization. Otherwise both
         // CPU stages can combine into one long event-loop stall.
@@ -763,6 +837,35 @@ export class PostgresRepository {
           // callback may retain its working object, so caching that same object
           // would allow post-commit mutations to diverge from PostgreSQL.
           committedState = parseDatabaseState(serialized)
+        }
+
+        if (options.authoritativeKds && authoritativeBefore && options.idempotency) {
+          const after = authoritativeKdsTask(workingCopy, options.authoritativeKds.taskId)
+          const occurredAt = canonicalKdsOccurredAt(authoritativeBefore, after, this.clock)
+          const inserted = await client.query(SQL.insertKdsAuthorityEvent, [
+            this.tenantId,
+            this.storeId,
+            kdsAuthorityEventId(options.idempotency.operationScope, options.idempotency.idempotencyKey),
+            after.id,
+            options.idempotency.operationScope,
+            options.authoritativeKds.eventType,
+            authoritativeBefore.status,
+            after.status,
+            options.authoritativeKds.actorId,
+            options.idempotency.idempotencyKey,
+            kdsRequestHash(options.idempotency.requestFingerprint),
+            options.authoritativeKds.requestId ?? null,
+            occurredAt,
+            workingCopy.store.businessDate,
+            workingCopy.revision,
+            JSON.stringify({
+              ...kdsAuthorityEventPayload(authoritativeBefore, after),
+              stateChanged: workingCopy.revision !== expectedRevision,
+            }),
+          ])
+          if (inserted.rowCount !== 1) {
+            throw new PostgresStateCorruptionError('KDS规范化事件未能唯一写入')
+          }
         }
 
         if (options.idempotency) {
@@ -902,6 +1005,7 @@ export class PostgresRepository {
         projectionRevision: health.projection?.projectedRevision,
         projectionCountsMatch: health.projection?.countsMatch,
         projectionChecksumMatch: health.projection?.checksumMatch,
+        kdsAuthorityConsistent: health.projection?.kdsAuthorityConsistent,
         projectionError: health.projection?.error,
       }
     } catch (error) {
@@ -1440,6 +1544,20 @@ function parseDatabaseState(value: RuntimeState | string): RuntimeState {
 
 function yieldToEventLoop() {
   return new Promise<void>((resolve) => setImmediate(resolve))
+}
+
+function canonicalKdsOccurredAt(
+  before: ReturnType<typeof authoritativeKdsTask>,
+  after: ReturnType<typeof authoritativeKdsTask>,
+  clock: () => Date,
+) {
+  try {
+    return inferKdsCommandOccurredAt(before, after)
+  } catch {
+    // A semantically repeated command with a new idempotency key is recorded as
+    // a no-op attempt at database time without fabricating a business timestamp.
+    return clock().toISOString()
+  }
 }
 
 export function serializeRuntimeState(value: RuntimeState) {

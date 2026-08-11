@@ -13,6 +13,7 @@
     "db:verify": "node scripts/verify-database.mjs",
     "db:verify:time": "node scripts/verify-database-time.mjs",
     "db:verify:operational": "node scripts/verify-operational-read-path.mjs",
+    "db:verify:kds": "node scripts/verify-kds-authoritative-transactions.mjs",
     "db:verify:checksum-upgrade": "tsx scripts/verify-checksum-migration-upgrade.ts",
     "db:verify:presence": "node scripts/verify-presence-leases.mjs",
     "db:provision": "tsx server/provision-runtime.ts",

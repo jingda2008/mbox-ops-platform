@@ -269,6 +269,7 @@ await registerObservability(app, {
         projectionReady: status.projectionReady ?? status.repository !== 'postgres',
         projectionRevision: status.projectionRevision ?? -1,
         projectionCountsMatch: status.projectionCountsMatch ?? status.repository !== 'postgres',
+        kdsAuthorityConsistent: status.kdsAuthorityConsistent ?? status.repository !== 'postgres',
         databaseLatencyMs: postgresStatus?.latencyMs ?? 0,
         databaseClockSkewMs: postgresStatus?.databaseClockSkewMs ?? 0,
         databasePoolTotal: postgresStatus?.pool.total ?? 0,

@@ -13,6 +13,7 @@ export interface RuntimeRepositoryHealth {
   projectionReady?: boolean
   projectionRevision?: number | null
   projectionCountsMatch?: boolean
+  kdsAuthorityConsistent?: boolean
   projectionError?: string
   databaseClockSkewMs?: number
 }

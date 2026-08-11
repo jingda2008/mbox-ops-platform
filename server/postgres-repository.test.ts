@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events'
 import { describe, expect, it } from 'vitest'
 import { createSeedState } from './seed.js'
 import {
@@ -56,6 +57,7 @@ class FakePool implements PostgresPool {
   databaseNow = new Date(now)
   advisoryLeaseHeld = false
   failNextAdvisoryUnlock = false
+  terminateNextAdvisoryUnlock = false
   foregroundMutationGateHeld = false
   readonly releaseErrors: Array<Error | boolean | undefined> = []
 
@@ -69,7 +71,7 @@ class FakePool implements PostgresPool {
   }
 }
 
-class FakeClient implements PostgresPoolClient {
+class FakeClient extends EventEmitter implements PostgresPoolClient {
   private transaction: {
     readOnly: boolean
     runtime: FakeRuntimeRow | null
@@ -79,7 +81,9 @@ class FakeClient implements PostgresPoolClient {
     contextSet: boolean
   } | null = null
 
-  constructor(private readonly pool: FakePool) {}
+  constructor(private readonly pool: FakePool) {
+    super()
+  }
 
   async query<Row extends Record<string, unknown> = Record<string, unknown>>(
     text: string,
@@ -102,6 +106,12 @@ class FakeClient implements PostgresPoolClient {
       return result([{ acquired: !this.pool.foregroundMutationGateHeld }])
     }
     if (sql.startsWith('SELECT pg_advisory_unlock')) {
+      if (this.pool.terminateNextAdvisoryUnlock) {
+        this.pool.terminateNextAdvisoryUnlock = false
+        const error = new Error('terminating connection due to administrator command')
+        this.emit('error', error)
+        throw error
+      }
       if (this.pool.failNextAdvisoryUnlock) {
         this.pool.failNextAdvisoryUnlock = false
         throw new Error('advisory unlock failed')
@@ -592,6 +602,18 @@ describe('PostgresRepository', () => {
     await expect(repository.runWithDistributedLease('operational-scheduler', async () => 7))
       .rejects.toThrow('advisory unlock failed')
     expect(pool.releaseErrors.at(-1)).toBeInstanceOf(Error)
+  })
+
+  it('captures a terminated leased connection without an unhandled client error event', async () => {
+    const { pool, repository } = createRepository()
+    await repository.init()
+    pool.terminateNextAdvisoryUnlock = true
+
+    await expect(repository.runWithDistributedLease('operational-scheduler', async () => 7))
+      .rejects.toThrow('terminating connection due to administrator command')
+    expect(pool.releaseErrors.at(-1)).toMatchObject({
+      message: 'terminating connection due to administrator command',
+    })
   })
 
   it('preserves the business failure when both the operation and advisory unlock fail', async () => {

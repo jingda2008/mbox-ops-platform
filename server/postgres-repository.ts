@@ -29,6 +29,8 @@ export interface PostgresPoolClient {
     text: string,
     values?: unknown[],
   ): Promise<PostgresQueryResult<Row>>
+  on?(event: 'error', listener: (error: Error) => void): PostgresPoolClient
+  removeListener?(event: 'error', listener: (error: Error) => void): PostgresPoolClient
   release(error?: Error | boolean): void
 }
 
@@ -916,6 +918,11 @@ export class PostgresRepository {
     return this.track(async () => {
       const client = await this.pool.connect()
       const leaseName = `mbox:${this.tenantId}:${this.storeId}:${name}`
+      let connectionError: Error | undefined
+      const captureConnectionError = (error: Error) => {
+        connectionError ??= error
+      }
+      client.on?.('error', captureConnectionError)
       let acquired: boolean
       try {
         const result = await client.query<{ acquired: boolean }>(
@@ -928,6 +935,7 @@ export class PostgresRepository {
         throw error
       }
       if (!acquired) {
+        client.removeListener?.('error', captureConnectionError)
         client.release()
         return { acquired: false }
       }
@@ -941,13 +949,18 @@ export class PostgresRepository {
       }
 
       let unlockError: unknown
-      try {
-        await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [leaseName])
-      } catch (error) {
-        unlockError = error
+      if (connectionError !== undefined) {
+        unlockError = connectionError
+      } else {
+        try {
+          await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [leaseName])
+        } catch (error) {
+          unlockError = error
+        }
       }
       // A session advisory lock survives until this connection closes. Never
       // return a client with an uncertain lock state to the shared pool.
+      if (unlockError === undefined) client.removeListener?.('error', captureConnectionError)
       client.release(unlockError instanceof Error ? unlockError : unlockError ? true : undefined)
       if (operationError !== undefined) throw operationError
       if (unlockError !== undefined) throw unlockError

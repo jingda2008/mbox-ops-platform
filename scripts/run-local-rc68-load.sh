@@ -212,6 +212,15 @@ else
   metrics_status=1
 fi
 
+case "$phase" in
+  kds_start|kds_complete)
+    MBOX_TENANT_ID=11111111-1111-4111-8111-111111111111 \
+    MBOX_STORE_UUID=22222222-2222-4222-8222-222222222222 \
+    MBOX_KDS_AUTHORITY_DIAGNOSTICS_PATH="$artifact_dir/kds-authority-diagnostics.json" \
+      node scripts/diagnose-kds-authority.mjs >"$artifact_dir/kds-authority-diagnostics.log"
+    cat "$artifact_dir/kds-authority-diagnostics.log" ;;
+esac
+
 kill -TERM "$api1" "$api2"
 wait "$api1" "$api2" || true
 api1=""

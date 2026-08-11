@@ -78,6 +78,57 @@ describe('operational scheduler lock preflight', () => {
     expect(scheduledOperationsMayBeDue(state, NOW)).toBe(true)
   })
 
+  it('keeps the KDS delivery link authoritative when its service task crosses the SLA boundary', () => {
+    const state = createSeedState(NOW)
+    applyScheduledOperations(state, NOW)
+    const table = state.tables[0]!
+    const tableSessionId = state.songState.tableSessions.find((session) => session.tableId === table.id)?.id
+      ?? `session:${table.id}:scheduler-regression`
+    const deliveryTaskId = 'task:fulfillment:scheduler-regression'
+    const kdsTask = {
+      id: 'kds-scheduler-regression', orderId: 'order-scheduler-regression', orderItemId: 'item-scheduler-regression',
+      tableSessionId, stationId: 'bar-main', status: 'completed' as const, itemName: '测试酒水',
+      specification: '1杯', quantity: 1, createdAt: NOW.toISOString(), queuedAt: NOW.toISOString(),
+      startedAt: NOW.toISOString(), completedAt: NOW.toISOString(), pickedUpAt: null, deliveredAt: null,
+      acceptedBy: 'emp-qing', completedBy: 'emp-qing', deliveredBy: null,
+      productionSla: { targetSeconds: 180, dueAt: NOW.toISOString() },
+      pickupSla: { targetSeconds: 90, dueAt: new Date(NOW.getTime() + 90_000).toISOString() },
+      deliveryServiceTask: {
+        id: deliveryTaskId, status: 'pending' as const, ownerId: null, createdAt: NOW.toISOString(),
+      },
+    }
+    state.orderDomain.kdsTasks.push(kdsTask)
+    state.tasks.push({
+      id: deliveryTaskId, tableId: table.id, tableSessionId,
+      serviceTypeId: 'fulfillment-delivery', source: 'system', note: '测试取送', status: 'pending',
+      priority: 'high', ownerId: null, notifiedEmployeeIds: [], dispatchRoleIdsSnapshot: ['server', 'backup'],
+      targetEmployeeIdsSnapshot: [], managerRoleIdsSnapshot: ['manager'],
+      slaSnapshot: { warningSeconds: 30, escalateSeconds: 60, managerSeconds: 120 },
+      createdAt: NOW.toISOString(), updatedAt: NOW.toISOString(), acceptedAt: null, arrivedAt: null,
+      completedAt: null, warningAt: new Date(NOW.getTime() + 30_000).toISOString(),
+      escalateAt: new Date(NOW.getTime() + 60_000).toISOString(),
+      managerAt: new Date(NOW.getTime() + 120_000).toISOString(), escalationLevel: 0,
+      configVersion: state.config.version, customerReply: '', actionScript: [], resolution: null,
+      workflowLevel: 'L1', requestCount: 1, firstRequestedAt: NOW.toISOString(),
+      lastRequestedAt: NOW.toISOString(), viewedEmployeeIds: [], completedBy: null,
+      triggerId: `fulfillment-delivery:${kdsTask.id}`, archivedAt: null,
+      archiveOutcome: null, archivedFromStatus: null,
+    })
+
+    applyScheduledOperations(state, new Date(NOW.getTime() + 59_999))
+    expect(state.tasks.find((task) => task.id === deliveryTaskId)?.status).toBe('pending')
+    expect(kdsTask.deliveryServiceTask.status).toBe('pending')
+
+    applyScheduledOperations(state, new Date(NOW.getTime() + 60_000))
+    const escalated = state.tasks.find((task) => task.id === deliveryTaskId)!
+    expect(escalated.status).toBe('escalated')
+    expect(kdsTask.deliveryServiceTask).toMatchObject({
+      id: deliveryTaskId,
+      status: 'escalated',
+      ownerId: escalated.ownerId,
+    })
+  })
+
   it('detects a due task before the real mutation runs', () => {
     const state = createSeedState(NOW)
     applyScheduledOperations(state, NOW)

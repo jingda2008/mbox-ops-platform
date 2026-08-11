@@ -845,6 +845,13 @@ export function escalateDueTasks(state: RuntimeState, now = new Date()) {
     task.notifiedEmployeeIds = Array.from(
       new Set([...task.notifiedEmployeeIds, ...(task.ownerId ? [task.ownerId] : [])]),
     )
+    const linkedKdsTask = state.orderDomain.kdsTasks.find((candidate) => (
+      candidate.deliveryServiceTask?.id === task.id
+    ))
+    if (linkedKdsTask?.deliveryServiceTask) {
+      linkedKdsTask.deliveryServiceTask.status = task.status
+      linkedKdsTask.deliveryServiceTask.ownerId = task.ownerId
+    }
     appendTaskEvent(state, task.id, 'task.escalated.v1', 'system', {
       level,
       previousOwnerId,

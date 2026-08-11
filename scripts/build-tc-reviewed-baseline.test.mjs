@@ -25,7 +25,7 @@ test('tag release downloads and verifies exact CI quality and runtime artifacts'
   assert.match(workflow, /quality ledger CI run mismatch/)
 })
 
-test('CI separates successful evidence from failed diagnostics and keeps uploads non-authoritative', async () => {
+test('CI separates diagnostics while release image upload and verification fail closed', async () => {
   const workflow = await readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8')
   assert.match(
     workflow,
@@ -41,7 +41,10 @@ test('CI separates successful evidence from failed diagnostics and keeps uploads
   assert.match(workflow, /cache: \$\{\{ github\.ref_type != 'tag' && 'npm' \|\| '' \}\}/)
   assert.match(workflow, /cache-to: \$\{\{ github\.ref_type != 'tag' && 'type=gha,mode=max,scope=mbox-runtime' \|\| '' \}\}/)
   assert.doesNotMatch(workflow, /github\.ref_type == 'tag' && '' \|\|/)
-  assert.match(workflow, /name: Upload the exact image used by validation and deployment\n\s+if: github\.ref_type != 'tag'\n\s+continue-on-error: true/)
+  assert.match(workflow, /name: Upload the exact image used by validation and deployment\n\s+uses: actions\/upload-artifact@v4/)
+  assert.doesNotMatch(workflow, /name: Upload the exact image used by validation and deployment\n\s+(?:if:[^\n]*\n\s+)?continue-on-error: true/)
+  assert.match(workflow, /name: Download the exact image bundle for independent verification/)
+  assert.match(workflow, /name: Verify downloaded bundle, image identity and source commit/)
   assert.match(workflow, /name: Download full-scope runtime evidence[\s\S]*continue-on-error: true/)
   assert.doesNotMatch(workflow, /refs\/heads\/refs\/tags/)
   assert.match(workflow, /name: Publish pull-request quality evidence summary/)

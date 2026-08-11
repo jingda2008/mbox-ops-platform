@@ -33,9 +33,11 @@ The optimized release path uses the exact image built by GitHub CI:
 
 The client machine must hold the deployment private key. The current default is
 `~/.ssh/mbox_aliyun_ed25519`; passwords are not accepted by the deployment
-script. Resumable upload uses `--append-verify` when the installed rsync supports
-it and falls back to `--append` on the macOS system rsync; the archive checksum
-is verified again on the server before loading.
+script. Commercial activation also requires `MBOX_SSH_USER` to be a non-root,
+constrained deployment account. Direct root SSH deployment is rejected.
+Resumable upload uses `--append-verify` when the installed rsync supports it and
+falls back to `--append` on the macOS system rsync; the archive checksum is
+verified again on the server before loading.
 
 Dry-run bundle validation:
 
@@ -61,20 +63,47 @@ gh run download <run-id> \
 The downloaded `release-manifest.json` must contain
 `"releaseIntent": "validation-only"`. This workflow only builds and uploads
 the validation bundle. It never connects to the ECS instance or activates a
-container. Pull requests, `main` pushes and version tags generate
-`commercial` manifests by default.
-
-Alibaba validation deployment:
+container. Verify it with:
 
 ```bash
-MBOX_RELEASE_TAG=v1.0.0-rc.48 \
-MBOX_DEPLOYMENT_TIER=validation \
-./deploy/aliyun/deploy-release.sh
+MBOX_RELEASE_BUNDLE_DIR=.runtime/validation-bundle \
+MBOX_CI_RUN_ID=<run-id> \
+./deploy/aliyun/deploy-release.sh --validation-only
 ```
 
-Production mode always creates a database backup before migration or cutover.
+The command re-downloads the required CI evidence, verifies its checksums,
+builds the OSS-ready evidence set, prints `deployment=skipped`, and exits before
+SSH. Pull requests, `main` pushes and version tags generate `commercial`
+manifests by default.
+
+## Server-owned environment boundary
+
+Activation reads `/etc/mbox/environment` on the server. It never accepts the
+deployment tier from caller arguments or environment variables. The marker must
+be a regular non-symlink file, owned by root, not group/other writable, and
+contain exactly one of these lines:
+
+```text
+deployment_tier=validation
+deployment_tier=commercial
+```
+
+Activation must run through limited `sudo` from a non-root deployment account;
+direct root activation is rejected. A `validation-only` manifest can only match
+a validation marker. A commercial manifest can only match a commercial marker
+and still requires the complete local release quality gate, matching tag target,
+matching CI commit, and verified image revision.
+
+The current Alibaba host is still accessed as `root`, so it does not satisfy
+this trust boundary. Until a constrained deployment account and sudo rule are
+provisioned and verified, validation remains bundle-only and no server cutover
+is permitted by this script.
+
+Commercial mode always creates a database backup before migration or cutover.
 Validation mode creates a backup when migrations changed or no recent backup
-exists. A migration manifest prevents repeated no-op migration runs.
+exists. Pending migrations must be classified as expand-contract compatible;
+destructive or contract migrations are blocked. Application rollback never
+automatically restores the database.
 
 This pipeline does not alter application features, API contracts, customer
 data, payment behavior or authorization rules. It only changes how a verified

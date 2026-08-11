@@ -4,8 +4,6 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import './deploy-release-safety.test.mjs'
-
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8')
 
 test('OSS lifecycle keeps only bounded MBOX prefixes and never enables WORM', async () => {

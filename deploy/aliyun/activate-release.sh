@@ -80,15 +80,125 @@ verify_rollback_identity() {
   verify_ready_identity "${ready_response}" "${expected_release_sha}" "${expected_image_id}"
 }
 
+verify_expand_contract_migrations() {
+  local current_manifest=$1
+  local candidate_manifest=$2
+  node - "${current_manifest}" "${candidate_manifest}" <<'NODE'
+const fs = require('node:fs')
+const readMigration = (path) => {
+  const document = JSON.parse(fs.readFileSync(path, 'utf8'))
+  return document.migration ?? document
+}
+const current = readMigration(process.argv[2])
+const candidate = readMigration(process.argv[3])
+if (candidate.schemaVersion !== 2 || candidate.compatibilityPolicy !== 'expand-contract-v1') {
+  throw new Error('candidate migration manifest lacks expand-contract-v1 evidence')
+}
+if (!Array.isArray(current.files) || !Array.isArray(candidate.files)) {
+  throw new Error('migration manifest files are missing')
+}
+if (candidate.files.length < current.files.length) {
+  throw new Error('candidate migration history is shorter than the active schema')
+}
+for (let index = 0; index < current.files.length; index += 1) {
+  const before = current.files[index]
+  const after = candidate.files[index]
+  if (before.filename !== after.filename || before.sha256 !== after.sha256) {
+    throw new Error(`migration history changed at ${before.filename ?? index}`)
+  }
+}
+const pending = candidate.files.slice(current.files.length)
+for (const migration of pending) {
+  if (migration.expandContractCompatible !== true || !Array.isArray(migration.blockingOperations) || migration.blockingOperations.length > 0) {
+    throw new Error(`unsupported destructive or contract migration: ${migration.filename}`)
+  }
+}
+process.stdout.write(`pending_expand_migrations=${pending.length}\n`)
+NODE
+}
+
+validate_server_environment_values() {
+  local effective_uid=$1
+  local deploy_uid=$2
+  local owner_uid=$3
+  local mode=$4
+  local content=$5
+  local mode_value
+
+  test "${effective_uid}" = 0 || {
+    echo "activation must run through constrained sudo" >&2
+    return 1
+  }
+  [[ "${deploy_uid}" =~ ^[0-9]+$ ]] && [ "${deploy_uid}" -ne 0 ] || {
+    echo "direct root deployment is forbidden" >&2
+    return 1
+  }
+  test "${owner_uid}" = 0 || {
+    echo "server environment marker must be owned by root" >&2
+    return 1
+  }
+  [[ "${mode}" =~ ^[0-7]{3,4}$ ]] || {
+    echo "invalid server environment marker mode" >&2
+    return 1
+  }
+  mode_value=$((8#${mode}))
+  (( (mode_value & 8#022) == 0 )) || {
+    echo "server environment marker must not be writable by deploy users" >&2
+    return 1
+  }
+  case "${content}" in
+    deployment_tier=validation) printf 'validation\n' ;;
+    deployment_tier=commercial) printf 'commercial\n' ;;
+    *) echo "server environment marker has invalid or additional content" >&2; return 1 ;;
+  esac
+}
+
+read_server_deployment_tier() {
+  local marker=$1
+  local owner_uid
+  local mode
+  local deploy_uid
+  local content
+
+  test -f "${marker}" && test ! -L "${marker}" || {
+    echo "server environment marker must be a regular non-symlink file" >&2
+    return 1
+  }
+  read -r owner_uid mode < <(stat -Lc '%u %a' "${marker}")
+  deploy_uid=${SUDO_UID:-$(id -u)}
+  content=$(cat "${marker}")
+  validate_server_environment_values "$(id -u)" "${deploy_uid}" "${owner_uid}" "${mode}" "${content}"
+}
+
+verify_release_intent_for_tier() {
+  local release_intent=$1
+  local deployment_tier=$2
+  case "${release_intent}:${deployment_tier}" in
+    commercial:commercial|validation-only:validation) return 0 ;;
+    *) echo "release intent does not match the root-owned server deployment tier" >&2; return 1 ;;
+  esac
+}
+
+verify_root_owned_release_tree() {
+  local release_tree=$1
+  test -d "${release_tree}" && test ! -L "${release_tree}"
+  test -z "$(find "${release_tree}" -xdev -type l -print -quit)" || {
+    echo "release directory must not contain symlinks" >&2
+    return 1
+  }
+  test -z "$(find "${release_tree}" -xdev \( ! -user root -o -perm /022 \) -print -quit)" || {
+    echo "release directory must be root-owned, non-symlink and immutable to deploy users" >&2
+    return 1
+  }
+}
+
 if [ "${BASH_SOURCE[0]}" != "$0" ]; then
   return 0
 fi
 
 release_dir=${1:?release directory is required}
-deployment_tier=${2:?deployment tier is required}
-public_url=${3:?public URL is required}
-backup_max_age_minutes=${4:?backup age is required}
-release_intent=${5:?release intent is required}
+public_url=${2:?public URL is required}
+backup_max_age_minutes=${3:?backup age is required}
 
 install_root=/opt/mbox
 network=mbox-net
@@ -102,24 +212,11 @@ uploader=${release_dir}/upload-oss-verified.sh
 audit_sender=${release_dir}/send-sls-events.sh
 audit_queue=${install_root}/observability/pending-release-events.jsonl
 audit_queue_lock=${install_root}/observability/pending-events.lock
+server_environment_marker=${MBOX_SERVER_ENVIRONMENT_MARKER:-/etc/mbox/environment}
 
 case "${release_dir}" in
   /opt/mbox/releases/*) ;;
   *) echo "release directory is outside /opt/mbox/releases" >&2; exit 1 ;;
-esac
-case "${deployment_tier}" in
-  validation|production) ;;
-  *) echo "unsupported deployment tier" >&2; exit 1 ;;
-esac
-case "${release_intent}" in
-  commercial) ;;
-  validation-only)
-    test "${deployment_tier}" = validation || {
-      echo "validation-only release cannot target production" >&2
-      exit 1
-    }
-    ;;
-  *) echo "unsupported release intent" >&2; exit 1 ;;
 esac
 [[ "${backup_max_age_minutes}" =~ ^[0-9]+$ ]]
 test -f "${manifest}"
@@ -141,6 +238,10 @@ expected_archive_sha=$(jq -er '.archiveSha256' "${manifest}")
 migration_digest=$(jq -er '.migration.digest' "${manifest}")
 short_sha=${release_sha:0:7}
 archive=${release_dir}/${archive_name}
+deployment_tier=$(read_server_deployment_tier "${server_environment_marker}")
+verify_root_owned_release_tree "${release_dir}"
+
+verify_release_intent_for_tier "${manifest_intent}" "${deployment_tier}"
 
 emit_release_audit() {
   local event_type=$1
@@ -170,7 +271,6 @@ emit_release_audit() {
 
 [[ "${release_sha}" =~ ^[0-9a-f]{40}$ ]]
 [[ "${expected_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
-test "${manifest_intent}" = "${release_intent}"
 [[ "${archive_name}" != */* ]]
 test -f "${archive}"
 test "$(sha256sum "${archive}" | awk '{print $1}')" = "${expected_archive_sha}"
@@ -189,6 +289,66 @@ old_image_id=$(docker inspect "${active_container}" --format '{{.Image}}')
 old_release_sha=$(docker inspect "${active_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
 require_image_id "${old_image_id}"
 [[ "${old_release_sha}" =~ ^[0-9a-f]{40}$ ]]
+
+test -f "${current_link}/release-manifest.json" || {
+  echo "active release manifest is required to prove schema compatibility" >&2
+  exit 1
+}
+current_release_sha=$(jq -er '.releaseSha' "${current_link}/release-manifest.json")
+test "${current_release_sha}" = "${old_release_sha}" || {
+  echo "active container SHA does not match active schema manifest" >&2
+  exit 1
+}
+verify_expand_contract_migrations "${current_link}/release-manifest.json" "${manifest}"
+
+candidate="mbox-candidate-${short_sha}"
+candidate_volume="mbox-data-${short_sha}-candidate"
+rollback_container=
+traffic_switched=0
+old_renamed=0
+promoted=0
+complete=0
+migration_attempted=0
+
+rollback_on_error() {
+  local exit_code=$?
+  local rollback_ok=1
+  local rollback_response
+  [ "${complete}" = 1 ] && return
+  set +e
+  echo "deployment failed; restoring previous application without restoring the database" >&2
+  emit_release_audit deployment_failed error automatic-application-rollback
+  if [ "${migration_attempted}" = 1 ]; then
+    emit_release_audit schema_retained warning expand-contract-database-not-restored
+  fi
+  emit_release_audit rollback_started warning previous-release-restore-started
+  if [ "${promoted}" = 1 ]; then
+    docker update --restart=no "${active_container}" >/dev/null 2>&1
+    docker stop -t 20 "${active_container}" >/dev/null 2>&1
+    docker rename "${active_container}" "mbox-failed-${short_sha}-$(date +%Y%m%d-%H%M%S)" >/dev/null 2>&1
+    docker rename "${rollback_container}" "${active_container}" >/dev/null 2>&1
+    docker start "${active_container}" >/dev/null 2>&1
+  elif [ "${old_renamed}" = 1 ]; then
+    docker rename "${rollback_container}" "${active_container}" >/dev/null 2>&1
+    docker start "${active_container}" >/dev/null 2>&1
+  fi
+  if [ "${traffic_switched}" = 1 ]; then
+    docker exec "${caddy_container}" \
+      caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1
+  fi
+  docker update --restart=no "${candidate}" >/dev/null 2>&1
+  docker stop -t 10 "${candidate}" >/dev/null 2>&1
+  test "$(docker inspect "${active_container}" --format '{{.State.Running}}' 2>/dev/null)" = true || rollback_ok=0
+  rollback_response=$(curl -fsS --max-time 10 "${public_url}/api/ready" 2>/dev/null || true)
+  verify_rollback_identity "${active_container}" "${old_image_id}" "${old_release_sha}" "${rollback_response}" >/dev/null 2>&1 || rollback_ok=0
+  if [ "${rollback_ok}" = 1 ]; then
+    emit_release_audit rollback_succeeded warning previous-release-restored
+  else
+    emit_release_audit rollback_failed error previous-release-restore-unverified
+  fi
+  exit "${exit_code}"
+}
+trap rollback_on_error ERR INT TERM
 
 release_env=${release_dir}/app.env
 cp "${secrets_env}" "${release_env}"
@@ -220,7 +380,7 @@ fi
 backup_path=
 recent_backup=$(find "${install_root}/backups" -type f -name 'mbox-*.dump' \
   -mmin "-${backup_max_age_minutes}" -print -quit)
-if [ "${deployment_tier}" = production ] || [ "${migration_changed}" = 1 ] || [ -z "${recent_backup}" ]; then
+if [ "${deployment_tier}" = commercial ] || [ "${migration_changed}" = 1 ] || [ -z "${recent_backup}" ]; then
   backup_path=$("${install_root}/bin/backup-postgres.sh")
 fi
 selected_backup=${backup_path:-${recent_backup}}
@@ -241,57 +401,13 @@ MBOX_OSS_VERIFICATION_REPORT="${release_dir}/oss-backup-verification.json" \
   "${uploader}" "${backup_stage}" "mbox/backups/$(date -u +%Y-%m-%d)/${release_sha}"
 
 if [ "${migration_changed}" = 1 ]; then
+  migration_attempted=1
   docker run --rm \
     --env-file "${release_env}" \
     --network "${network}" \
     "${image_tag}" \
     node dist-server/server/migrate.js
 fi
-
-candidate="mbox-candidate-${short_sha}"
-candidate_volume="mbox-data-${short_sha}-candidate"
-rollback_container=
-traffic_switched=0
-old_renamed=0
-promoted=0
-complete=0
-
-rollback_on_error() {
-  local exit_code=$?
-  local rollback_ok=1
-  local rollback_response
-  [ "${complete}" = 1 ] && return
-  set +e
-  echo "deployment failed; restoring previous application" >&2
-  emit_release_audit deployment_failed error automatic-rollback
-  emit_release_audit rollback_started warning previous-release-restore-started
-  if [ "${promoted}" = 1 ]; then
-    docker update --restart=no "${active_container}" >/dev/null 2>&1
-    docker stop -t 20 "${active_container}" >/dev/null 2>&1
-    docker rename "${active_container}" "mbox-failed-${short_sha}-$(date +%Y%m%d-%H%M%S)" >/dev/null 2>&1
-    docker rename "${rollback_container}" "${active_container}" >/dev/null 2>&1
-    docker start "${active_container}" >/dev/null 2>&1
-  elif [ "${old_renamed}" = 1 ]; then
-    docker rename "${rollback_container}" "${active_container}" >/dev/null 2>&1
-    docker start "${active_container}" >/dev/null 2>&1
-  fi
-  if [ "${traffic_switched}" = 1 ]; then
-    docker exec "${caddy_container}" \
-      caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1
-  fi
-  docker update --restart=no "${candidate}" >/dev/null 2>&1
-  docker stop -t 10 "${candidate}" >/dev/null 2>&1
-  test "$(docker inspect "${active_container}" --format '{{.State.Running}}' 2>/dev/null)" = true || rollback_ok=0
-  rollback_response=$(curl -fsS --max-time 10 "${public_url}/api/ready" 2>/dev/null || true)
-  verify_rollback_identity "${active_container}" "${old_image_id}" "${old_release_sha}" "${rollback_response}" >/dev/null 2>&1 || rollback_ok=0
-  if [ "${rollback_ok}" = 1 ]; then
-    emit_release_audit rollback_succeeded warning previous-release-restored
-  else
-    emit_release_audit rollback_failed error previous-release-restore-unverified
-  fi
-  exit "${exit_code}"
-}
-trap rollback_on_error ERR INT TERM
 
 if docker inspect "${candidate}" >/dev/null 2>&1; then
   docker update --restart=no "${candidate}" >/dev/null
@@ -387,7 +503,7 @@ deployed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 jq -n \
   --arg deployedAt "${deployed_at}" \
   --arg tier "${deployment_tier}" \
-  --arg releaseIntent "${release_intent}" \
+  --arg releaseIntent "${manifest_intent}" \
   --arg publicUrl "${public_url}" \
   --arg releaseSha "${release_sha}" \
   --arg releaseVersion "${release_version}" \

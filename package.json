@@ -31,7 +31,7 @@
     "quality:plan:run": "node scripts/run-software-quality-plan.mjs",
     "quality:seed:verify": "node scripts/verify-deterministic-load-seed.mjs",
     "release:quality-gate": "node scripts/build-tc-execution-register.mjs --check --require-release-pass && node scripts/verify-quality-model.mjs --state-machine docs/quality/mbox-kds-state-machine-v1.json --invariants docs/quality/mbox-invariant-register-v1.csv --tc-register docs/tc-execution-register-1.0.0-rc.68.csv --require-release-pass",
-    "runtime:quality:test": "node --test scripts/analyze-runtime-logs.test.mjs scripts/verify-runtime-metrics.test.mjs scripts/run-local-rc68-load.test.mjs scripts/load-reference-time.test.mjs scripts/reset-runtime-metrics-window.test.mjs scripts/verify-sensitive-artifacts.test.mjs scripts/build-aliyun-evidence-bundle.test.mjs scripts/filter-sls-events.test.mjs scripts/aliyun-evidence-pipeline.test.mjs",
+    "runtime:quality:test": "node --test scripts/analyze-runtime-logs.test.mjs scripts/verify-runtime-metrics.test.mjs scripts/run-local-rc68-load.test.mjs scripts/load-reference-time.test.mjs scripts/reset-runtime-metrics-window.test.mjs scripts/verify-sensitive-artifacts.test.mjs scripts/build-aliyun-evidence-bundle.test.mjs scripts/filter-sls-events.test.mjs scripts/aliyun-evidence-pipeline.test.mjs scripts/deploy-release-safety.test.mjs",
     "check:miniprogram": "node scripts/check-miniprogram.mjs",
     "lint": "oxlint src server",
     "test": "vitest run",

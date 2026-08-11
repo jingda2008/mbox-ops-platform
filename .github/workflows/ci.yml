@@ -369,8 +369,6 @@ jobs:
             sha256sum "$(basename "${archive}")" > "$(basename "${archive}").sha256"
           )
       - name: Upload the exact image used by validation and deployment
-        if: github.ref_type != 'tag'
-        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: mbox-image-${{ github.sha }}
@@ -401,6 +399,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Download the exact image bundle for independent verification
+        if: needs.classify.outputs.release_artifact_required == 'true' && needs.image.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: mbox-image-${{ github.sha }}
+          path: artifacts/verified-release-bundle
+      - name: Verify downloaded bundle, image identity and source commit
+        if: needs.classify.outputs.release_artifact_required == 'true' && needs.image.result == 'success'
+        env:
+          RELEASE_INTENT: ${{ github.event_name == 'workflow_dispatch' && inputs.release_intent || 'commercial' }}
+        run: |
+          args=(
+            --directory artifacts/verified-release-bundle
+            --expected-sha "${GITHUB_SHA}"
+            --expected-intent "${RELEASE_INTENT}"
+          )
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            test "$(git rev-list -n 1 "refs/tags/${GITHUB_REF_NAME}")" = "${GITHUB_SHA}"
+            args+=(--expected-tag "${GITHUB_REF_NAME}")
+          fi
+          node scripts/verify-release-bundle.mjs "${args[@]}"
       - name: Download full-scope runtime evidence
         if: needs.classify.outputs.scope == 'full' && needs.performance.result == 'success' && github.event_name != 'pull_request'
         id: runtime-evidence-download

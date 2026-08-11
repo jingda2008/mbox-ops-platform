@@ -4,29 +4,58 @@ set -euo pipefail
 enforce_release_intent() {
   local manifest=$1
   local validation_only=$2
-  local deployment_tier=$3
   local manifest_intent
   manifest_intent=$(node -e "const fs=require('node:fs'); const m=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); process.stdout.write(String(m.releaseIntent ?? 'commercial'));" "${manifest}")
 
   if [ "${validation_only}" = 1 ]; then
-    test "${deployment_tier}" = validation || {
-      echo "--validation-only requires MBOX_DEPLOYMENT_TIER=validation" >&2
-      return 1
-    }
     test "${manifest_intent}" = validation-only || {
-      echo "validation-only deployment requires releaseIntent=validation-only in release-manifest.json" >&2
+      echo "validation-only bundle verification requires releaseIntent=validation-only in release-manifest.json" >&2
       return 1
     }
     printf 'release_intent=validation-only\ncommercial_release=false\n'
     return 0
   fi
 
-  test "${manifest_intent}" != validation-only || {
-    echo "validation-only manifest requires the explicit --validation-only argument" >&2
+  test "${manifest_intent}" = commercial || {
+    echo "commercial deployment requires releaseIntent=commercial" >&2
     return 1
   }
   npm run release:quality-gate
   printf 'release_intent=commercial\ncommercial_release=true\n'
+}
+
+resolve_tag_target_sha() {
+  local tag=$1
+  git fetch --force --no-tags origin "refs/tags/${tag}:refs/tags/${tag}" >/dev/null
+  git rev-list -n 1 "refs/tags/${tag}"
+}
+
+verify_ci_run_identity() {
+  local run_id=$1
+  local release_sha=$2
+  local expected_event=$3
+  local expected_ref=${4:-}
+  local run_json
+  run_json=$(gh run view "${run_id}" --json status,conclusion,headSha,event,headBranch)
+  node -e "
+    const run=JSON.parse(process.argv[1]);
+    if (run.status !== 'completed' || run.conclusion !== 'success') throw new Error('CI run is not successful');
+    if (run.headSha !== process.argv[2]) throw new Error('CI run head SHA mismatch');
+    if (run.event !== process.argv[3]) throw new Error('CI run event mismatch');
+    if (process.argv[4] && run.headBranch !== process.argv[4]) throw new Error('CI run ref mismatch');
+  " "${run_json}" "${release_sha}" "${expected_event}" "${expected_ref}"
+}
+
+download_required_artifact() {
+  local run_id=$1
+  local name=$2
+  local directory=$3
+  rm -rf "${directory}"
+  mkdir -p "${directory}"
+  if ! gh run download "${run_id}" --name "${name}" --dir "${directory}"; then
+    echo "required GitHub artifact is unavailable: ${name}; quota exhaustion is a release failure" >&2
+    return 1
+  fi
 }
 
 if [ "${BASH_SOURCE[0]}" != "$0" ]; then
@@ -46,36 +75,37 @@ fi
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "${repo_root}"
 
-: "${MBOX_RELEASE_TAG:?MBOX_RELEASE_TAG is required, for example v1.0.0-rc.48}"
+release_tag=${MBOX_RELEASE_TAG:-}
 
 ssh_host=${MBOX_SSH_HOST:-139.224.254.60}
 ssh_port=${MBOX_SSH_PORT:-6122}
 ssh_user=${MBOX_SSH_USER:-root}
 ssh_key=${MBOX_SSH_KEY_PATH:-${HOME}/.ssh/mbox_aliyun_ed25519}
-deployment_tier=${MBOX_DEPLOYMENT_TIER:-validation}
 public_url=${MBOX_PUBLIC_URL:-https://139.224.254.60}
 backup_max_age_minutes=${MBOX_BACKUP_MAX_AGE_MINUTES:-720}
-bundle_dir=${MBOX_RELEASE_BUNDLE_DIR:-${repo_root}/.runtime/deploy/${MBOX_RELEASE_TAG}}
+if [ "${validation_only}" = 1 ]; then
+  bundle_dir=${MBOX_RELEASE_BUNDLE_DIR:-${repo_root}/.runtime/validation-bundle}
+else
+  : "${release_tag:?MBOX_RELEASE_TAG is required for commercial deployment}"
+  bundle_dir=${MBOX_RELEASE_BUNDLE_DIR:-${repo_root}/.runtime/deploy/${release_tag}}
+fi
 dry_run=${MBOX_DEPLOY_DRY_RUN:-0}
 
-case "${deployment_tier}" in
-  validation|production) ;;
-  *) echo "MBOX_DEPLOYMENT_TIER must be validation or production" >&2; exit 1 ;;
-esac
 [[ "${backup_max_age_minutes}" =~ ^[0-9]+$ ]]
-test -f "${ssh_key}"
 
 mkdir -p "${bundle_dir}"
 if [ ! -f "${bundle_dir}/release-manifest.json" ]; then
-  gh release download "${MBOX_RELEASE_TAG}" \
-    --dir "${bundle_dir}" \
-    --clobber
+  if [ "${validation_only}" = 1 ]; then
+    echo "validation-only requires a pre-generated CI bundle in MBOX_RELEASE_BUNDLE_DIR" >&2
+    exit 1
+  fi
+  gh release download "${release_tag}" --dir "${bundle_dir}" --clobber
 fi
 
 manifest=${bundle_dir}/release-manifest.json
 test -f "${manifest}"
 
-enforce_release_intent "${manifest}" "${validation_only}" "${deployment_tier}"
+enforce_release_intent "${manifest}" "${validation_only}"
 if [ "${validation_only}" = 1 ]; then
   release_intent=validation-only
 else
@@ -97,33 +127,46 @@ archive_sha=$(read_manifest archiveSha256)
 [[ "${release_sha}" =~ ^[0-9a-f]{40}$ ]]
 [[ "${image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
 [[ "${archive_name}" != */* ]]
-test "${MBOX_RELEASE_TAG}" = "v${release_version}"
 test -f "${bundle_dir}/${archive_name}"
 
-actual_archive_sha=$(shasum -a 256 "${bundle_dir}/${archive_name}" | awk '{print $1}')
-test "${actual_archive_sha}" = "${archive_sha}"
+bundle_verify_args=(
+  --directory "${bundle_dir}"
+  --expected-sha "${release_sha}"
+  --expected-intent "${release_intent}"
+)
+if [ "${validation_only}" = 0 ]; then
+  test "${release_tag}" = "v${release_version}"
+  tag_target_sha=$(resolve_tag_target_sha "${release_tag}")
+  test "${tag_target_sha}" = "${release_sha}" || {
+    echo "release tag target SHA does not match release manifest" >&2
+    exit 1
+  }
+  bundle_verify_args+=(--expected-tag "${release_tag}")
+fi
+node scripts/verify-release-bundle.mjs "${bundle_verify_args[@]}" >/dev/null
 
 if [ -z "${MBOX_CI_RUN_ID:-}" ]; then
-  MBOX_CI_RUN_ID=$(gh run list \
-    --workflow ci.yml \
-    --branch "${MBOX_RELEASE_TAG}" \
-    --commit "${release_sha}" \
-    --event push \
-    --json databaseId,status,conclusion,headSha \
-    --jq 'map(select(.status == "completed" and .conclusion == "success" and .headSha == "'"${release_sha}"'")) | .[0].databaseId // empty')
+  if [ "${validation_only}" = 1 ]; then
+    MBOX_CI_RUN_ID=$(gh run list --workflow ci.yml --commit "${release_sha}" --event workflow_dispatch \
+      --json databaseId,status,conclusion,headSha \
+      --jq 'map(select(.status == "completed" and .conclusion == "success" and .headSha == "'"${release_sha}"'")) | .[0].databaseId // empty')
+  else
+    MBOX_CI_RUN_ID=$(gh run list --workflow ci.yml --branch "${release_tag}" --commit "${release_sha}" --event push \
+      --json databaseId,status,conclusion,headSha \
+      --jq 'map(select(.status == "completed" and .conclusion == "success" and .headSha == "'"${release_sha}"'")) | .[0].databaseId // empty')
+  fi
 fi
 test -n "${MBOX_CI_RUN_ID}"
+if [ "${validation_only}" = 1 ]; then
+  verify_ci_run_identity "${MBOX_CI_RUN_ID}" "${release_sha}" workflow_dispatch
+else
+  verify_ci_run_identity "${MBOX_CI_RUN_ID}" "${release_sha}" push "${release_tag}"
+fi
 
 quality_dir=${bundle_dir}/verified-ci-evidence/quality
 runtime_dir=${bundle_dir}/verified-ci-evidence/runtime
-if [ ! -f "${quality_dir}/SHA256SUMS" ]; then
-  mkdir -p "${quality_dir}"
-  gh run download "${MBOX_CI_RUN_ID}" --name "quality-evidence-${release_sha}" --dir "${quality_dir}"
-fi
-if [ ! -f "${runtime_dir}/SHA256SUMS" ]; then
-  mkdir -p "${runtime_dir}"
-  gh run download "${MBOX_CI_RUN_ID}" --name "runtime-quality-${release_sha}" --dir "${runtime_dir}"
-fi
+download_required_artifact "${MBOX_CI_RUN_ID}" "quality-evidence-${release_sha}" "${quality_dir}"
+download_required_artifact "${MBOX_CI_RUN_ID}" "runtime-quality-${release_sha}" "${runtime_dir}"
 for directory in "${quality_dir}" "${runtime_dir}"; do
   (cd "${directory}" && shasum -a 256 -c SHA256SUMS >/dev/null)
 done
@@ -170,16 +213,29 @@ scp_options=(
   -P "${ssh_port}"
 )
 
-printf 'release=%s\nsha=%s\nimage=%s\nimage_digest=%s\ntier=%s\nbundle=%s\n' \
+printf 'release=%s\nsha=%s\nimage=%s\nimage_digest=%s\nbundle=%s\n' \
   "${release_version}" "${release_sha}" "${image_tag}" "${image_digest}" \
-  "${deployment_tier}" "${bundle_dir}"
+  "${bundle_dir}"
+
+if [ "${validation_only}" = 1 ]; then
+  printf 'validation_only=bundle-verified\ndeployment=skipped\n'
+  exit 0
+fi
 
 if [ "${dry_run}" = 1 ]; then
   printf 'dry_run=verified\n'
   exit 0
 fi
 
-ssh "${ssh_options[@]}" "${ssh_target}" "install -d -m 0700 '${remote_release_dir}'"
+: "${MBOX_SSH_USER:?MBOX_SSH_USER must name a non-root constrained deploy account}"
+test "${ssh_user}" != root || {
+  echo "direct root SSH deployment is forbidden; use a constrained deploy account with limited sudo" >&2
+  exit 1
+}
+test -f "${ssh_key}"
+
+ssh "${ssh_options[@]}" "${ssh_target}" \
+  "uid=\$(id -u); gid=\$(id -g); sudo -n install -d -m 0700 -o \"\${uid}\" -g \"\${gid}\" '${remote_release_dir}'"
 rsync_resume_option=--append
 if rsync --help 2>&1 | grep -q -- '--append-verify'; then
   rsync_resume_option=--append-verify
@@ -193,9 +249,11 @@ for helper in upload-oss-verified.sh stage-release-evidence.sh send-sls-events.s
 done
 ssh "${ssh_options[@]}" "${ssh_target}" \
   "chmod 0700 '${remote_release_dir}'/*.sh && '${remote_release_dir}/stage-release-evidence.sh' '${remote_release_dir}' '${remote_release_dir}/oss-ready-evidence' '${MBOX_RELEASE_TAG}'"
+ssh "${ssh_options[@]}" "${ssh_target}" \
+  "sudo -n chown -R root:root '${remote_release_dir}' && sudo -n chmod -R go-w '${remote_release_dir}'"
 
 ssh "${ssh_options[@]}" "${ssh_target}" \
-  bash -s -- "${remote_release_dir}" "${deployment_tier}" "${public_url}" "${backup_max_age_minutes}" "${release_intent}" \
+  sudo -n bash -s -- "${remote_release_dir}" "${public_url}" "${backup_max_age_minutes}" \
   < deploy/aliyun/activate-release.sh
 
 MBOX_RELEASE_SMOKE_URL="${public_url}" \

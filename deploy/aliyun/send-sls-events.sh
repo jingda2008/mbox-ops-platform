@@ -32,13 +32,17 @@ for logstore in runtime-errors payment-audit release-audit; do
   )
   [ "${#payloads[@]}" -gt 0 ] || continue
   if [ "${dry_run}" != 1 ]; then
+    # aliyun-cli-sls 0.7.4 declares --logs as a list. Its parser expects one
+    # JSON array whose members are JSON-encoded log strings, even though the
+    # generated help shows repeated object arguments.
+    payload_list=$(printf '%s\n' "${payloads[@]}" | jq -cs 'map(tojson)')
     aliyun --profile "${profile}" sls put-json-logs \
       --endpoint "${endpoint}" \
       --project "${project}" \
       --logstore "${logstore}" \
       --topic mbox-selective-audit \
       --source ecs-validation \
-      --logs "${payloads[@]}" >/dev/null
+      --logs "${payload_list}" >/dev/null
   fi
 done
 printf 'sls_send=%s\nevents=%s\nproject=%s\nendpoint=%s\n' "$([ "${dry_run}" = 1 ] && echo dry-run || echo complete)" "${sent}" "${project}" "${endpoint}"

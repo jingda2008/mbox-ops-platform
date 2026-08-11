@@ -51,8 +51,8 @@ existing_lifecycle=$(mktemp)
 trap 'rm -f "${existing_lifecycle}" "${worm_check:-}"' EXIT
 if ossutil api get-bucket-lifecycle --bucket "${bucket}" --output-format json \
   "${oss_options[@]}" >"${existing_lifecycle}" 2>/dev/null; then
-  managed_ids=$(jq '[.LifecycleConfiguration.Rule[]? | select(.ID | startswith("mbox-"))] | length' "${existing_lifecycle}")
-  all_ids=$(jq '[.LifecycleConfiguration.Rule[]?] | length' "${existing_lifecycle}")
+  managed_ids=$(jq '[((.LifecycleConfiguration.Rule // .Rule // []) | if type == "array" then .[] else . end) | select(.ID | startswith("mbox-"))] | length' "${existing_lifecycle}")
+  all_ids=$(jq '[((.LifecycleConfiguration.Rule // .Rule // []) | if type == "array" then .[] else . end)] | length' "${existing_lifecycle}")
   if [ "${managed_ids}" -ne "${all_ids}" ]; then
     echo 'existing OSS lifecycle rules are not exclusively managed by MBOX; refusing to overwrite them' >&2
     exit 1
@@ -110,7 +110,7 @@ while IFS= read -r store; do
   fi
   actual_ttl=$(jq -er '.ttl // .TTL // .data.ttl' "${logstore_state}")
   actual_shards=$(jq -er '.shardCount // .ShardCount // .data.shardCount' "${logstore_state}")
-  actual_auto_split=$(jq -er '.autoSplit // .AutoSplit // .data.autoSplit' "${logstore_state}")
+  actual_auto_split=$(jq -er 'if has("autoSplit") then .autoSplit elif has("AutoSplit") then .AutoSplit else .data.autoSplit end' "${logstore_state}")
   rm -f "${logstore_state}"
   if [ "${actual_ttl}" != "${ttl}" ] || [ "${actual_shards}" != "${shards}" ] || [ "${actual_auto_split}" != false ]; then
     printf 'SLS Logstore configuration mismatch: %s (ttl=%s/%s shards=%s/%s autoSplit=%s/false)\n' \
@@ -147,7 +147,7 @@ jq -n \
   --arg region "${region}" --arg bucket "${bucket}" --arg bucketLocation "${bucket_location}" --arg ossEndpoint "${oss_endpoint}" \
   --arg slsEndpoint "${sls_endpoint}" --arg project "${project}" --arg roleName "${role_name}" \
   --argjson costControls "$(jq '.costControls' "${desired}")" \
-  --argjson lifecycleRuleCount "$(jq '[.LifecycleConfiguration.Rule[]] | length' <<<"${lifecycle_result}")" \
+  --argjson lifecycleRuleCount "$(jq '[((.LifecycleConfiguration.Rule // .Rule // []) | if type == "array" then .[] else . end)] | length' <<<"${lifecycle_result}")" \
   --argjson logstores "$(jq '[.logstores[] | {name,ttlDays,shards,indexedFields:(.indexedFields|keys)}]' "${desired}")" \
   '{schemaVersion:1,generatedAt:$generatedAt,region:$region,roleName:$roleName,oss:{bucket:$bucket,location:$bucketLocation,endpoint:$ossEndpoint,acl:"private",blockPublicAccess:true,encryption:"SSE-OSS/AES256",versioning:"Enabled",lifecycleRuleCount:$lifecycleRuleCount,worm:false},sls:{project:$project,endpoint:$slsEndpoint,logstores:$logstores,costControls:$costControls},verified:true}' \
   > "${report}"

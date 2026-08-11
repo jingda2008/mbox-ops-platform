@@ -67,6 +67,8 @@ test('OSS bootstrap uses ossutil 2.x structured bucket APIs', async () => {
   assert.match(bootstrap, /api put-bucket-versioning/)
   assert.match(bootstrap, /api put-bucket-lifecycle/)
   assert.match(bootstrap, /api get-bucket-lifecycle[\s\S]*?--output-format json/)
+  assert.match(bootstrap, /\.LifecycleConfiguration\.Rule \/\/ \.Rule/)
+  assert.match(bootstrap, /if has\("autoSplit"\) then \.autoSplit/)
   assert.doesNotMatch(bootstrap, /ossutil bucket-encryption|ossutil bucket-versioning|ossutil lifecycle/)
 })
 

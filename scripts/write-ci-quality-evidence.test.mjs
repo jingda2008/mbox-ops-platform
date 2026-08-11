@@ -93,3 +93,31 @@ test('distinguishes cancelled work from work that never ran', () => {
     { status: 'not_run', blocked: 0, notRun: 1 },
   )
 })
+
+test('requires the normalized database gate for a full release decision', () => {
+  const denied = runWriter({
+    results: {
+      quality: 'success', browser: 'success', database: 'success',
+      normalized_database: 'skipped', performance: 'skipped',
+    },
+  })
+
+  const gate = denied.testRuns.find((run) => run.id === 'normalized_database')
+  assert.equal(denied.decision, 'DENY')
+  assert.equal(gate.status, 'not_run')
+  assert.equal(gate.required, true)
+})
+
+test('requires the normalized real-browser gate for a full release decision', () => {
+  const denied = runWriter({
+    results: {
+      quality: 'success', browser: 'success', database: 'success', normalized_database: 'success',
+      normalized_browser: 'skipped', performance: 'skipped',
+    },
+  })
+
+  const gate = denied.testRuns.find((run) => run.id === 'normalized_browser')
+  assert.equal(denied.decision, 'DENY')
+  assert.equal(gate.status, 'not_run')
+  assert.equal(gate.required, true)
+})

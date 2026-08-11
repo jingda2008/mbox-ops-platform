@@ -1,4 +1,10 @@
-# PostgreSQL production persistence baseline
+# PostgreSQL database architecture
+
+> On `refactor/normalized-core-v1`, `database/normalized-migrations` is the only migration source for the rebuilt application. It creates a fresh normalized database and deliberately refuses to run against a legacy database. The migrations in `database/migrations` are frozen rc.68 reference material only; the normalized application must not execute or edit them to simulate compatibility.
+
+Run the new baseline with `npm run db:migrate:normalized`. Its schema flavor, migration checksums, application image and seed-data version form one release unit. See `docs/architecture/normalized-only-rebuild-v1.md`.
+
+## Frozen rc.68 reference
 
 This directory is the production transactional database baseline for the M-Box operations platform. It follows `AI运营系统/11-总体技术架构.md`, `AI运营系统/12-核心数据模型与API契约.md`, and the current TypeScript contracts.
 

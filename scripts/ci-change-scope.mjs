@@ -60,7 +60,10 @@ export function classifyChangedPaths(paths, options = {}) {
   const docsOnly = !forceFull && normalized.length > 0 && runtimePaths.length === 0
   const uiOnly = !forceFull && runtimePaths.length > 0 && runtimePaths.every(isUiOnlyPath)
   const frontendOnly = !forceFull && runtimePaths.length > 0 && runtimePaths.every(isFrontendPath)
-  const migrationChanged = normalized.some((path) => path.startsWith('database/migrations/'))
+  const migrationChanged = normalized.some((path) => (
+    path.startsWith('database/migrations/')
+    || path.startsWith('database/normalized-migrations/')
+  ))
   const scope = docsOnly ? 'docs' : uiOnly ? 'ui' : frontendOnly ? 'frontend' : 'full'
 
   return {

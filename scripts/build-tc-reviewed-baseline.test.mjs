@@ -39,7 +39,7 @@ test('CI separates successful evidence from failed diagnostics and keeps uploads
   assert.match(workflow, /name: Upload failed quality diagnostics[\s\S]*retention-days: 7/)
   assert.match(workflow, /retention-days: \$\{\{ github\.event_name == 'pull_request' && 3 \|\| 14 \}\}/)
   assert.match(workflow, /cache: \$\{\{ github\.ref_type != 'tag' && 'npm' \|\| '' \}\}/)
-  assert.match(workflow, /cache-to: \$\{\{ github\.ref_type != 'tag' && 'type=gha,mode=max,scope=mbox-runtime' \|\| '' \}\}/)
+  assert.match(workflow, /cache-to: \$\{\{ github\.ref_type != 'tag' && 'type=gha,mode=max,scope=mbox-normalized-runtime' \|\| '' \}\}/)
   assert.doesNotMatch(workflow, /github\.ref_type == 'tag' && '' \|\|/)
   assert.match(workflow, /name: Upload the exact image used by validation and deployment\n\s+if: github\.ref_type != 'tag'\n\s+continue-on-error: true/)
   assert.match(workflow, /name: Download full-scope runtime evidence[\s\S]*continue-on-error: true/)

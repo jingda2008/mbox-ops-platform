@@ -1,0 +1,10 @@
+:root { font-family: system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", sans-serif; color: #1b211d; background: #f2f3ef; font-synthesis: none; text-rendering: optimizeLegibility; }
+* { box-sizing: border-box; }
+html { min-width: 320px; min-height: 100%; background: #f2f3ef; }
+body { min-width: 320px; min-height: 100%; margin: 0; }
+button, input, textarea, select { font: inherit; letter-spacing: 0; }
+button { cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 3px solid rgb(35 122 85 / 28%); outline-offset: 2px; }
+.normalized-system-state { min-height: 100dvh; display: grid; place-items: center; align-content: center; gap: 8px; padding: 24px; background: #111713; color: #f7f8f5; text-align: center; }
+.normalized-system-state::before { content: "M"; width: 48px; height: 48px; display: grid; place-items: center; margin-bottom: 8px; background: #d8b34f; color: #111713; font-size: 24px; font-weight: 850; }
+.normalized-system-state span { color: #b5beb7; font-size: 14px; }.normalized-system-error::before { background: #c95359; color: white; }

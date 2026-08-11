@@ -1,49 +1,42 @@
 import { StrictMode, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
-import './index.css'
-import { installInteractionFeedback } from './interaction-feedback.ts'
+import './normalized-base.css'
 
-const manifestLink = document.createElement('link')
-manifestLink.rel = 'manifest'
-manifestLink.href = '/manifest.webmanifest'
-document.head.append(manifestLink)
-installInteractionFeedback()
-
-if (import.meta.env.PROD && 'serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    void navigator.serviceWorker.register('/sw.js')
-  })
-}
-
-const root = createRoot(document.getElementById('root')!)
+const element = document.getElementById('root')
+if (element === null) throw new Error('M-BOX application root is missing')
+const root = createRoot(element)
 const render = (content: ReactNode) => root.render(<StrictMode>{content}</StrictMode>)
-const path = window.location.pathname
 
-render(<main className="system-state"><strong>正在打开 M-BOX</strong></main>)
+render(<main className="normalized-system-state"><strong>正在打开 M-BOX</strong></main>)
 
-async function startApplication() {
+void removeLegacyOfflineRuntime()
+void startNormalizedApplication().catch(() => {
+  render(<main className="normalized-system-state normalized-system-error"><strong>页面暂时没有打开</strong><span>请刷新后再试，仍未恢复请联系值班经理。</span></main>)
+})
+
+async function startNormalizedApplication() {
+  const path = window.location.pathname
   if (/^\/guest(?:\/|$)/.test(path)) {
-    const { GuestPortal } = await import('./components/GuestPortal')
-    render(<GuestPortal />)
-    return
-  }
-  if (/^\/member(?:\/|$)/.test(path)) {
-    const { MemberBenefitsPortal } = await import('./components/MemberBenefitsPortal')
-    render(<MemberBenefitsPortal />)
+    const { GuestApp } = await import('./normalized-ui/guest')
+    render(<GuestApp />)
     return
   }
   if (/^\/reserve(?:\/|$)/.test(path)) {
-    const { PublicReservationPortal } = await import('./components/PublicReservationPortal')
-    render(<PublicReservationPortal />)
+    const { ReservationBooking } = await import('./normalized-ui/reservation')
+    const { getAnonymousReservationIdentity } = await import('./normalized-ui/reservation/reservation-identity')
+    render(<ReservationBooking identity={getAnonymousReservationIdentity()} />)
     return
   }
-
-  // The role home is rendered by App itself. OperationsConsole stays lazy so
-  // the employee first paint does not wait for an operations-only workspace.
-  const { default: App } = await import('./App.tsx')
-  render(<App />)
+  const { NormalizedStaffApp } = await import('./normalized-ui/NormalizedStaffApp')
+  render(<NormalizedStaffApp />)
 }
 
-void startApplication().catch(() => {
-  render(<main className="system-state"><strong>页面暂时没有打开，请刷新重试</strong></main>)
-})
+async function removeLegacyOfflineRuntime() {
+  if (!('serviceWorker' in navigator)) return
+  const registrations = await navigator.serviceWorker.getRegistrations().catch(() => [])
+  await Promise.all(registrations.map((registration) => registration.unregister()))
+  if ('caches' in window) {
+    const keys = await caches.keys().catch(() => [])
+    await Promise.all(keys.filter((key) => key.startsWith('mbox-')).map((key) => caches.delete(key)))
+  }
+}

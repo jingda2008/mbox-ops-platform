@@ -1,0 +1,707 @@
+import { readFile } from 'node:fs/promises'
+import Fastify, { type FastifyInstance } from 'fastify'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type {
+  CommandOutcome,
+  IdempotentCommand,
+} from './command-executor.js'
+import { IdempotencyConflictError } from './command-executor.js'
+import {
+  commerceKdsApiPlugin,
+  type CommerceKdsApiOptions,
+} from './commerce-kds-api.js'
+import type { SubmittedCommerceResult } from './commerce-command-service.js'
+import type { FulfillmentStaffView } from './fulfillment-query-service.js'
+import type { KdsTask } from './kds-repository.js'
+import { OrderProductUnavailableError, type OrderItem } from './order-repository.js'
+import type {
+  PostgresQueryResult,
+  ScopedTransaction,
+} from './transaction-runner.js'
+
+const tenantId = '11111111-1111-4111-8111-111111111111'
+const storeId = '22222222-2222-4222-8222-222222222222'
+const employeeId = '33333333-3333-4333-8333-333333333333'
+const tableId = '44444444-4444-4444-8444-444444444444'
+const tableSessionId = '55555555-5555-4555-8555-555555555555'
+const orderId = '66666666-6666-4666-8666-666666666666'
+const orderItemId = '77777777-7777-4777-8777-777777777777'
+const productId = '88888888-8888-4888-8888-888888888888'
+const taskId = '99999999-9999-4999-8999-999999999999'
+const assistedContextId = '12121212-1212-4121-8121-121212121212'
+const staffSessionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+const deviceAccessLeaseId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+const assistedToken = 'A'.repeat(43)
+
+const submittedOrderItem: OrderItem = {
+  id: orderItemId,
+  orderId,
+  productId,
+  quantity: 2,
+  unitPriceMinor: 6_800,
+  discountAmountMinor: 0,
+  totalAmountMinor: 13_600,
+  currency: 'CNY',
+  fulfillmentStation: 'bar',
+  productSnapshot: { code: 'BEER-001', name: '精酿啤酒' },
+  costSnapshot: {},
+  status: 'submitted',
+  note: '少冰',
+  createdAt: '2026-08-11T12:00:00.000Z',
+}
+
+const baseTask: KdsTask = {
+  id: taskId,
+  orderItemId,
+  stationCode: 'bar',
+  status: 'pending',
+  priority: 100,
+  quantity: 2,
+  assignedEmployeeId: null,
+  dueAt: null,
+  nextActionAt: '2026-08-11T12:00:00.000Z',
+  acceptedAt: null,
+  readyAt: null,
+  cancelledAt: null,
+}
+
+const commerceResult: SubmittedCommerceResult = {
+  order: {
+    id: orderId,
+    tableSessionId,
+    publicId: 'ORDER-VIP1-001',
+    channel: 'staff_assisted',
+    settlementMode: 'immediate_payment',
+    status: 'submitted',
+    paymentStatus: 'unpaid',
+    subtotalAmountMinor: 13_600,
+    discountAmountMinor: 0,
+    totalAmountMinor: 13_600,
+    currency: 'CNY',
+    note: '整单一起上',
+    createdByEmployeeId: employeeId,
+    createdAt: '2026-08-11T12:00:00.000Z',
+    submittedAt: '2026-08-11T12:00:00.000Z',
+    items: [submittedOrderItem],
+  },
+  kdsTasks: [baseTask],
+  inventoryConsumptions: [],
+  paymentNextStep: {
+    status: 'required',
+    action: 'create_payment_intent',
+    orderId,
+    amountMinor: 13_600,
+    currency: 'CNY',
+    paymentStatus: 'unpaid',
+  },
+}
+
+const fulfillmentView: FulfillmentStaffView = {
+  actor: {
+    employeeId,
+    employeeCode: 'LIYAN',
+    displayName: '李艳',
+    roleCodes: ['MANAGER'],
+    permissions: ['order.view'],
+    allowedStations: [],
+    canViewAll: false,
+  },
+  generatedAt: '2026-08-11T12:00:00.000Z',
+  workItems: [],
+}
+
+const apps: FastifyInstance[] = []
+
+afterEach(async () => {
+  await Promise.all(apps.splice(0).map((app) => app.close()))
+})
+
+function fixture(input: {
+  permissions?: string[]
+  kdsStatus?: KdsTask['status']
+  replayed?: boolean
+  commerceError?: Error
+} = {}) {
+  const permissions = input.permissions ?? [
+    'order.create', 'order.view', 'kds.prepare', 'kds.deliver', 'kds.exception.manage',
+  ]
+  const staffQueries: string[] = []
+  const staffTransaction: ScopedTransaction = {
+    scope: { tenantId, storeId },
+    query: async <Row extends Record<string, unknown>>(text: string): Promise<PostgresQueryResult<Row>> => {
+      const sql = text.replace(/\s+/g, ' ').trim()
+      staffQueries.push(sql)
+      if (sql.includes('FROM mbox.employees') && sql.includes('employee_code')) {
+        return rows([{
+          id: employeeId,
+          employee_code: 'LIYAN',
+          display_name: '李艳',
+          status: 'active',
+        }]) as PostgresQueryResult<Row>
+      }
+      if (sql.startsWith('SELECT DISTINCT r.code, r.name')) {
+        return rows([{ code: 'MANAGER', name: '店长' }]) as PostgresQueryResult<Row>
+      }
+      if (sql.includes('role_granted')) {
+        return rows(permissions.map((code) => ({
+          code,
+          role_granted: true,
+          override_granted: false,
+          override_denied: false,
+        }))) as PostgresQueryResult<Row>
+      }
+      if (sql.includes('table_allowed')) {
+        return rows([{ table_allowed: true }]) as PostgresQueryResult<Row>
+      }
+      if (sql.includes('INSERT INTO mbox.assisted_order_contexts')) {
+        return rows([{
+          id: assistedContextId,
+          employee_id: employeeId,
+          staff_session_id: staffSessionId,
+          device_access_lease_id: deviceAccessLeaseId,
+          table_session_id: tableSessionId,
+          table_id: tableId,
+          table_code: 'VIP1',
+          expires_at: '2026-08-11T12:15:00.000Z',
+        }]) as PostgresQueryResult<Row>
+      }
+      if (sql.includes('FROM mbox.role_data_scopes')) {
+        return rows([{
+          scope_key: 'kds.station_codes', effect: 'include', scope_value: ['bar'],
+        }]) as PostgresQueryResult<Row>
+      }
+      return rows([]) as PostgresQueryResult<Row>
+    },
+  }
+  const staffAccessTransactions = {
+    run: async <Result>(
+      _scope: Readonly<{ tenantId: string; storeId: string }>,
+      operation: (transaction: ScopedTransaction) => Promise<Result>,
+    ) => operation(staffTransaction),
+  } as CommerceKdsApiOptions['staffAccessTransactions']
+
+  const currentTask = { ...baseTask, status: input.kdsStatus ?? baseTask.status }
+  const commandQueries: string[] = []
+  const commandTransaction: ScopedTransaction = {
+    scope: { tenantId, storeId },
+    query: async <Row extends Record<string, unknown>>(text: string): Promise<PostgresQueryResult<Row>> => {
+      const sql = text.replace(/\s+/g, ' ').trim()
+      commandQueries.push(sql)
+      if (sql.includes('FROM mbox.kds_tasks AS task')) {
+        return rows([{
+          id: taskId,
+          order_item_id: orderItemId,
+          station_code: 'bar',
+          status: currentTask.status,
+          priority: currentTask.priority,
+          quantity: currentTask.quantity,
+          assigned_employee_id: currentTask.assignedEmployeeId,
+          due_at: currentTask.dueAt,
+          next_action_at: currentTask.nextActionAt,
+          accepted_at: currentTask.acceptedAt,
+          ready_at: currentTask.readyAt,
+          cancelled_at: currentTask.cancelledAt,
+          created_at: '2026-08-11T12:00:00.000Z',
+        }]) as PostgresQueryResult<Row>
+      }
+      if (sql.includes('FROM mbox.order_items AS item')) {
+        return rows([{
+          order_item_id: orderItemId,
+          order_id: orderId,
+          table_session_id: tableSessionId,
+          table_id: tableId,
+          table_code: 'VIP1',
+          product_id: productId,
+          product_name: '精酿啤酒',
+          specification: '330ml',
+          product_snapshot: { name: '精酿啤酒' },
+          fulfillment_note: '整单一起上',
+        }]) as PostgresQueryResult<Row>
+      }
+      if (sql.includes('FROM mbox.employees') && sql.includes('employee_code')) {
+        return rows([{ id: employeeId, employee_code: 'LIYAN', display_name: '李艳', status: 'active' }]) as PostgresQueryResult<Row>
+      }
+      if (sql.startsWith('SELECT DISTINCT r.code, r.name')) {
+        return rows([{ code: 'MANAGER', name: '店长' }]) as PostgresQueryResult<Row>
+      }
+      if (sql.includes('role_granted')) {
+        return rows(permissions.map((code) => ({ code, role_granted: true, override_granted: false, override_denied: false }))) as PostgresQueryResult<Row>
+      }
+      if (sql.includes('FROM mbox.role_data_scopes')) {
+        return rows([{ scope_key: 'kds.station_codes', effect: 'include', scope_value: ['bar'] }]) as PostgresQueryResult<Row>
+      }
+      if (sql.includes('FROM mbox.staff_sessions AS session')) {
+        return rows([{ id: staffSessionId }]) as PostgresQueryResult<Row>
+      }
+      if (sql.includes('FROM mbox.table_assignments AS assignment')) {
+        return rows([{ id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' }]) as PostgresQueryResult<Row>
+      }
+      if (sql.startsWith('INSERT INTO mbox.kds_exceptions')) {
+        return { rows: [] as Row[], rowCount: 1 }
+      }
+      if (sql.includes('FROM mbox.role_approval_limits') || sql.includes('FROM mbox.role_navigation_items')) {
+        return rows([]) as PostgresQueryResult<Row>
+      }
+      throw new Error(`Unexpected command query: ${sql}`)
+    },
+  }
+  const executions: Array<{
+    command: IdempotentCommand<unknown>
+    outcome: CommandOutcome<unknown>
+  }> = []
+  const commandExecutor = {
+    execute: vi.fn(async <Result>(
+      command: Readonly<IdempotentCommand<Result>>,
+      operation: (transaction: ScopedTransaction) => Promise<CommandOutcome<Result>>,
+    ) => {
+      const outcome = await operation(commandTransaction)
+      executions.push({
+        command: command as IdempotentCommand<unknown>,
+        outcome: outcome as CommandOutcome<unknown>,
+      })
+      return { value: outcome.result, replayed: input.replayed ?? false }
+    }),
+  }
+
+  const acceptedTask = { ...currentTask, status: 'accepted' as const, assignedEmployeeId: employeeId }
+  const preparingTask = { ...acceptedTask, status: 'preparing' as const }
+  const readyTask = { ...preparingTask, status: 'ready' as const, readyAt: '2026-08-11T12:01:00.000Z' }
+  const kdsRepository = {
+    accept: vi.fn(async () => acceptedTask),
+    startPreparing: vi.fn(async () => preparingTask),
+    markReady: vi.fn(async () => readyTask),
+    cancel: vi.fn(async () => ({ ...currentTask, status: 'cancelled' as const })),
+    fail: vi.fn(async () => ({ ...currentTask, status: 'failed' as const })),
+  }
+  const deliveredItem = { ...submittedOrderItem, status: 'delivered' as const }
+  const orderRepository = {
+    markDelivered: vi.fn(async () => deliveredItem),
+  }
+  const commerce = {
+    submitOrder: vi.fn(async () => {
+      if (input.commerceError) throw input.commerceError
+      return { value: commerceResult, replayed: input.replayed ?? false }
+    }),
+  }
+  const fulfillmentQuery = {
+    getStaffWorkQueue: vi.fn(async () => fulfillmentView),
+  }
+  const options: CommerceKdsApiOptions = {
+    commerce,
+    fulfillmentQuery,
+    commandExecutor,
+    staffAccessTransactions,
+    resolveContext: () => ({
+      scope: { tenantId, storeId },
+      employeeId,
+      staffSessionId,
+      deviceAccessLeaseId,
+      businessDate: '2026-08-11',
+    }),
+    createKdsRepository: () => kdsRepository,
+    createOrderRepository: () => orderRepository,
+    resolveOpenTableSessionId: async (_scope, requestedTableId) => (
+      requestedTableId === tableId ? tableSessionId : null
+    ),
+  }
+  const app = Fastify()
+  apps.push(app)
+  app.register(commerceKdsApiPlugin, { ...options, prefix: '/api' })
+  return {
+    app,
+    commerce,
+    fulfillmentQuery,
+    commandExecutor,
+    kdsRepository,
+    orderRepository,
+    staffQueries,
+    commandQueries,
+    executions,
+  }
+}
+
+describe('commerceKdsApiPlugin', () => {
+  it('issues a server-bound short-lived assisted-order context for an open assigned table', async () => {
+    const value = fixture()
+    const response = await value.app.inject({
+      method: 'POST',
+      url: '/api/commerce/assisted-order-contexts',
+      payload: { tableId, actorId: employeeId },
+    })
+    expect(response.statusCode).toBe(201)
+    expect(response.json()).toMatchObject({
+      data: {
+        id: assistedContextId,
+        employeeId,
+        staffSessionId,
+        deviceAccessLeaseId,
+        tableSessionId,
+        tableCode: 'VIP1',
+      },
+    })
+    expect(response.json().data.token).toMatch(/^[A-Za-z0-9_-]{32,128}$/)
+    expect(value.staffQueries.some((sql) => sql.includes('table_allowed'))).toBe(true)
+  })
+
+  it('submits a staff-assisted order with live order permission and stable response compatibility', async () => {
+    const value = fixture()
+    const response = await value.app.inject({
+      method: 'POST',
+      url: '/api/commerce/orders',
+      headers: {
+        'idempotency-key': 'order-vip1-0001',
+        'x-assisted-order-context': assistedToken,
+      },
+      payload: {
+        tableSessionId,
+        actorId: employeeId,
+        items: [{ productId, quantity: 2, note: '少冰' }],
+        fulfillmentNote: '整单一起上',
+        settlementMode: 'immediate_payment',
+      },
+    })
+
+    expect(response.statusCode).toBe(201)
+    expect(response.json()).toMatchObject({
+      id: orderId,
+      tableSessionId,
+      status: 'submitted',
+      paymentStatus: 'unpaid',
+      settlementMode: 'immediate_payment',
+      totalAmountMinor: 13_600,
+      fulfillmentNote: '整单一起上',
+      amounts: {
+        grossAmount: 13_600,
+        discountAmount: 0,
+        giftAmount: 0,
+        payableAmount: 13_600,
+      },
+      kdsTasks: [{ id: taskId }],
+      paymentNextStep: {
+        status: 'required', action: 'create_payment_intent', paymentStatus: 'unpaid',
+      },
+      items: [{
+        id: orderItemId,
+        skuId: productId,
+        name: '精酿啤酒',
+        quantity: 2,
+        unitListPriceAmount: 6_800,
+        stationId: 'bar',
+        kdsTaskId: taskId,
+        addedBy: employeeId,
+        addedAt: '2026-08-11T12:00:00.000Z',
+      }],
+      meta: { replayed: false },
+    })
+    expect(value.commerce.submitOrder).toHaveBeenCalledWith(expect.objectContaining({
+      scope: { tenantId, storeId },
+      actor: { type: 'employee', employeeId },
+      createdByEmployeeId: employeeId,
+      tableSessionId,
+      channel: 'staff_assisted',
+      idempotencyKey: 'order-vip1-0001',
+      lines: [{ productId, quantity: 2, note: '少冰' }],
+      settlementMode: 'immediate_payment',
+      assistedOrderContext: {
+        token: assistedToken,
+        employeeId,
+        staffSessionId,
+        deviceAccessLeaseId,
+      },
+    }))
+    expect(value.staffQueries.some((sql) => sql.includes('role_granted'))).toBe(true)
+  })
+
+  it('does not trust an old tableId claim during staff-assisted submit', async () => {
+    const value = fixture({ replayed: true })
+    const response = await value.app.inject({
+      method: 'POST',
+      url: '/api/commerce/orders',
+      headers: { 'x-assisted-order-context': assistedToken },
+      payload: {
+        tableId,
+        actorId: employeeId,
+        idempotencyKey: 'order-table-alias-0001',
+        items: [{ productId, quantity: 1 }],
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({ meta: { replayed: true } })
+    expect(value.commerce.submitOrder).toHaveBeenCalledWith(expect.objectContaining({
+      tableSessionId: undefined,
+      assistedOrderContext: expect.objectContaining({ token: assistedToken }),
+    }))
+  })
+
+  it('rejects actor impersonation and missing live order permission before creating an order', async () => {
+    const impersonated = fixture()
+    const actorResponse = await impersonated.app.inject({
+      method: 'POST',
+      url: '/api/commerce/orders',
+      payload: {
+        tableSessionId,
+        actorId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        idempotencyKey: 'order-actor-denied',
+        items: [{ productId, quantity: 1 }],
+      },
+    })
+    expect(actorResponse.statusCode).toBe(403)
+    expect(actorResponse.json()).toEqual({
+      error: { code: 'ACTOR_BINDING_FORBIDDEN', message: '请求中的员工身份与当前登录员工不一致' },
+    })
+    expect(impersonated.commerce.submitOrder).not.toHaveBeenCalled()
+
+    const denied = fixture({ permissions: ['order.view'] })
+    const deniedResponse = await denied.app.inject({
+      method: 'POST',
+      url: '/api/commerce/orders',
+      headers: {
+        'idempotency-key': 'order-permission-denied',
+        'x-assisted-order-context': assistedToken,
+      },
+      payload: { tableSessionId, items: [{ productId, quantity: 1 }] },
+    })
+    expect(deniedResponse.statusCode).toBe(403)
+    expect(deniedResponse.json()).toEqual({
+      error: { code: 'STAFF_ACCESS_FORBIDDEN', message: '当前员工无权执行此操作' },
+    })
+    expect(denied.commerce.submitOrder).not.toHaveBeenCalled()
+  })
+
+  it('returns the role-filtered fulfillment queue only to employees with a relevant permission', async () => {
+    const value = fixture({ permissions: ['kds.deliver'] })
+    const response = await value.app.inject({ method: 'GET', url: '/api/commerce/fulfillment' })
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toEqual({ data: fulfillmentView })
+    expect(value.fulfillmentQuery.getStaffWorkQueue).toHaveBeenCalledWith(
+      { tenantId, storeId },
+      employeeId,
+    )
+
+    const denied = fixture({ permissions: ['dashboard.view'] })
+    const deniedResponse = await denied.app.inject({ method: 'GET', url: '/api/commerce/fulfillment' })
+    expect(deniedResponse.statusCode).toBe(403)
+    expect(denied.fulfillmentQuery.getStaffWorkQueue).not.toHaveBeenCalled()
+  })
+
+  it('maps old start semantics to accept then start in one idempotent normalized command', async () => {
+    const value = fixture({ permissions: ['kds.prepare'], kdsStatus: 'pending' })
+    const response = await value.app.inject({
+      method: 'POST',
+      url: `/api/commerce/kds/${taskId}/actions`,
+      payload: { action: 'start', actorId: employeeId, idempotencyKey: 'kds-start-0001' },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({
+      id: taskId,
+      status: 'preparing',
+      normalizedStatus: 'preparing',
+      fulfillmentStatus: 'in_progress',
+      meta: { replayed: false },
+    })
+    expect(value.kdsRepository.accept).toHaveBeenCalledOnce()
+    expect(value.kdsRepository.startPreparing).toHaveBeenCalledOnce()
+    expect(value.commandQueries[0]).toContain('task.id = $3::uuid')
+    expect(value.commandQueries[0]).not.toContain('JOIN mbox.order_items')
+    expect(value.commandQueries[1]).toContain('item.id = $3::uuid')
+    expect(value.commandQueries[1]).not.toContain('FOR UPDATE')
+    expect(value.executions[0]?.command).toMatchObject({
+      operationScope: 'commerce.kds.action',
+      idempotencyKey: 'kds-start-0001',
+    })
+    expect(value.executions[0]?.outcome.auditEvents[0]).toMatchObject({
+      actor: { type: 'employee', employeeId },
+      action: 'kds.start',
+      objectId: taskId,
+    })
+    expect(value.executions[0]?.outcome.outboxMessages[0]).toMatchObject({
+      eventType: 'kds.start.v1',
+    })
+  })
+
+  it('completes pending production through required intermediate states', async () => {
+    const value = fixture({ permissions: ['kds.prepare'], kdsStatus: 'pending' })
+    const response = await value.app.inject({
+      method: 'POST',
+      url: `/api/commerce/kds/${taskId}/actions`,
+      headers: { 'idempotency-key': 'kds-complete-0001' },
+      payload: { action: 'complete' },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({
+      status: 'completed',
+      normalizedStatus: 'ready',
+      fulfillmentStatus: 'ready',
+    })
+    expect(value.kdsRepository.accept).toHaveBeenCalledOnce()
+    expect(value.kdsRepository.startPreparing).toHaveBeenCalledOnce()
+    expect(value.kdsRepository.markReady).toHaveBeenCalledOnce()
+  })
+
+  it('delivers only a ready item with kds.deliver permission and keeps financial actions out of scope', async () => {
+    const value = fixture({ permissions: ['kds.deliver'], kdsStatus: 'ready' })
+    const response = await value.app.inject({
+      method: 'POST',
+      url: `/api/commerce/kds/${taskId}/actions`,
+      payload: { action: 'pickupAndDeliver', idempotencyKey: 'kds-deliver-0001' },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({
+      id: taskId,
+      status: 'delivered',
+      normalizedStatus: 'ready',
+      fulfillmentStatus: 'delivered',
+      deliveredOrderItem: { id: orderItemId, status: 'delivered' },
+    })
+    expect(value.orderRepository.markDelivered).toHaveBeenCalledWith(orderItemId, employeeId)
+    expect(value.kdsRepository.markReady).not.toHaveBeenCalled()
+    expect(value.commandQueries[0]).toContain('mbox.kds_tasks')
+    expect(value.commandQueries[0]).not.toContain('mbox.order_items')
+    expect(value.commandQueries[1]).toContain('mbox.order_items')
+  })
+
+  it('removes ordinary cancel and requires failure reasons with actionable audit evidence', async () => {
+    const value = fixture({ permissions: ['kds.prepare'], kdsStatus: 'pending' })
+    const cancelled = await value.app.inject({
+      method: 'POST',
+      url: `/api/commerce/kds/${taskId}/actions`,
+      payload: { action: 'cancel', idempotencyKey: 'ordinary-cancel-0001' },
+    })
+    expect(cancelled.statusCode).toBe(400)
+    expect(cancelled.json()).toMatchObject({ error: { code: 'KDS_ACTION_INVALID' } })
+    expect(value.kdsRepository.cancel).not.toHaveBeenCalled()
+
+    const missingReason = await value.app.inject({
+      method: 'POST',
+      url: `/api/commerce/kds/${taskId}/actions`,
+      payload: { action: 'fail', idempotencyKey: 'kds-fail-missing-reason' },
+    })
+    expect(missingReason.statusCode).toBe(400)
+    expect(value.kdsRepository.fail).not.toHaveBeenCalled()
+
+    const failed = await value.app.inject({
+      method: 'POST',
+      url: `/api/commerce/kds/${taskId}/actions`,
+      payload: {
+        action: 'fail', idempotencyKey: 'kds-fail-with-reason',
+        reasonCode: 'ingredient_out_of_stock', reasonNote: '青柠临时缺货',
+      },
+    })
+    expect(failed.statusCode).toBe(200)
+    expect(failed.json()).toMatchObject({
+      normalizedStatus: 'failed',
+      exceptionEvents: [{
+        type: 'reported',
+        exceptionKind: 'production_rejection',
+        reasonCode: 'ingredient_out_of_stock',
+        orderId,
+        orderItemId,
+        kdsTaskId: taskId,
+        managerDisposition: null,
+        financialTruth: 'unchanged_pending_review',
+        requiredActions: ['manager_review', 'inventory_review', 'remake_or_cancel_decision'],
+      }],
+    })
+    expect(value.commandQueries.some((sql) => sql.startsWith('INSERT INTO mbox.kds_exceptions'))).toBe(true)
+    expect(value.executions.at(-1)?.outcome.outboxMessages[0]?.payload).toMatchObject({
+      exceptionEvidence: { reasonNote: '青柠临时缺货' },
+    })
+  })
+
+  it('uses a separate manager exception route and does not pretend financial truth changed', async () => {
+    const value = fixture({
+      permissions: ['kds.exception.manage'],
+      kdsStatus: 'pending',
+    })
+    const response = await value.app.inject({
+      method: 'POST',
+      url: `/api/commerce/kds/${taskId}/manager-cancel`,
+      payload: {
+        idempotencyKey: 'manager-cancel-0001',
+        reasonCode: 'guest_cancelled',
+        reasonNote: '客人确认不再需要，等待财务和库存复核',
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({
+      normalizedStatus: 'cancelled',
+      exceptionEvents: [{
+        type: 'manager_disposition',
+        managerDisposition: 'cancelled',
+        orderId,
+        orderItemId,
+        kdsTaskId: taskId,
+        financialTruth: 'unchanged_pending_review',
+        inventoryTruth: 'unchanged_pending_review',
+        requiredActions: ['financial_review', 'inventory_review', 'guest_communication'],
+      }],
+    })
+    expect(value.kdsRepository.cancel).toHaveBeenCalledOnce()
+    expect(value.executions[0]?.outcome.auditEvents[0]).toMatchObject({
+      action: 'kds.manager_cancelled',
+      afterData: { exceptionEvidence: { reasonCode: 'guest_cancelled' } },
+    })
+    expect(value.executions[0]?.outcome.outboxMessages[0]).toMatchObject({
+      eventType: 'kds.manager_cancelled.v1',
+    })
+  })
+
+  it('returns stable business errors for combined actions, stale products and idempotency conflicts', async () => {
+    const combined = fixture({ permissions: ['kds.prepare', 'kds.deliver'] })
+    const combinedResponse = await combined.app.inject({
+      method: 'POST',
+      url: `/api/commerce/kds/${taskId}/actions`,
+      payload: { action: 'completeAndDeliver', idempotencyKey: 'kds-combined-0001' },
+    })
+    expect(combinedResponse.statusCode).toBe(409)
+    expect(combinedResponse.json()).toMatchObject({ error: { code: 'KDS_COMBINED_ACTION_DISABLED' } })
+
+    const stale = fixture({ commerceError: new OrderProductUnavailableError(productId) })
+    const staleResponse = await stale.app.inject({
+      method: 'POST',
+      url: '/api/commerce/orders',
+      headers: { 'x-assisted-order-context': assistedToken },
+      payload: {
+        tableSessionId,
+        idempotencyKey: 'order-stale-product',
+        items: [{ productId, quantity: 1 }],
+      },
+    })
+    expect(staleResponse.statusCode).toBe(409)
+    expect(staleResponse.json()).toMatchObject({ error: { code: 'ORDER_PRODUCT_UNAVAILABLE' } })
+
+    const idempotency = fixture({
+      commerceError: new IdempotencyConflictError('commerce.order.submit', 'order-conflict-0001'),
+    })
+    const conflictResponse = await idempotency.app.inject({
+      method: 'POST',
+      url: '/api/commerce/orders',
+      headers: { 'x-assisted-order-context': assistedToken },
+      payload: {
+        tableSessionId,
+        idempotencyKey: 'order-conflict-0001',
+        items: [{ productId, quantity: 1 }],
+      },
+    })
+    expect(conflictResponse.statusCode).toBe(409)
+    expect(conflictResponse.json()).toMatchObject({ error: { code: 'IDEMPOTENCY_CONFLICT' } })
+  })
+
+  it('contains no dependency on retired state or projection paths', async () => {
+    const source = await readFile(new URL('./commerce-kds-api.ts', import.meta.url), 'utf8')
+    const forbidden = [
+      ['Runtime', 'State'].join(''),
+      ['repository', 'mutate'].join('.'),
+      ['operational', '_'].join(''),
+    ]
+    for (const token of forbidden) expect(source).not.toContain(token)
+  })
+})
+
+function rows(values: Record<string, unknown>[]): PostgresQueryResult {
+  return { rows: values, rowCount: values.length }
+}

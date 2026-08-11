@@ -22,7 +22,7 @@ const selectedByScope = {
   docs: ['docs'],
   ui: ['fast_quality', 'ui_browser'],
   frontend: ['fast_quality', 'browser'],
-  full: ['quality', 'browser', 'database', 'performance'],
+  full: ['quality', 'browser', 'database', 'normalized_database', 'normalized_browser', 'performance'],
 }
 const selected = [...(selectedByScope[scope] ?? selectedByScope.full)]
 if (releaseArtifactRequired) selected.push('image')

@@ -68,6 +68,12 @@ test('database migrations are explicitly identified', () => {
   const result = classifyChangedPaths(['database/migrations/020_example.sql'])
   assert.equal(result.scope, 'full')
   assert.equal(result.migrationChanged, true)
+
+  const normalized = classifyChangedPaths([
+    'database/normalized-migrations/011_pricing_authorizations.sql',
+  ])
+  assert.equal(normalized.scope, 'full')
+  assert.equal(normalized.migrationChanged, true)
 })
 
 test('unknown diffs and release tags fail closed to full verification', () => {

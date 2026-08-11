@@ -59,6 +59,8 @@ test('bootstrap and runtime RAM policies keep long-term access narrow', async ()
 
 test('OSS bootstrap uses ossutil 2.x structured bucket APIs', async () => {
   const bootstrap = await read('../deploy/aliyun/bootstrap-evidence-services.sh')
+  assert.doesNotMatch(bootstrap, /ossutil stat/)
+  assert.match(bootstrap, /\.Bucket\.Location/)
   assert.match(bootstrap, /api put-bucket-acl/)
   assert.match(bootstrap, /api put-bucket-encryption/)
   assert.match(bootstrap, /api put-bucket-versioning/)

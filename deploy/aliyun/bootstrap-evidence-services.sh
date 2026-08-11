@@ -33,9 +33,10 @@ aliyun_cli=(aliyun --profile "${profile}")
 "${aliyun_cli[@]}" sts get-caller-identity >/dev/null
 
 # The bucket already exists. Bootstrap never creates a similarly named duplicate.
-ossutil stat "oss://${bucket}" "${oss_options[@]}" >/dev/null
+# get-bucket-info proves ownership, location and management access without
+# requiring the broader GetBucketStat permission.
 bucket_info=$(ossutil api get-bucket-info --bucket "${bucket}" --output-format json "${oss_options[@]}")
-bucket_location=$(jq -r '.BucketInfo.Location // .Location // empty' <<<"${bucket_info}")
+bucket_location=$(jq -r '.Bucket.Location // .BucketInfo.Location // .Location // empty' <<<"${bucket_info}")
 test "${bucket_location#oss-}" = "${region}"
 ossutil api put-bucket-acl --bucket "${bucket}" --acl private "${oss_options[@]}" >/dev/null
 ossutil api put-bucket-public-access-block --bucket "${bucket}" \
@@ -135,10 +136,10 @@ if ossutil api get-bucket-worm --bucket "${bucket}" --output-format json "${oss_
   exit 1
 fi
 grep -Eqi '404|NoSuch.*Worm|not exist' "${worm_check}"
-test "$(jq -r '.AccessControlList.Grant' <<<"${acl}")" = private
+test "$(jq -r '.AccessControlList.Grant // .Bucket.AccessControlList.Grant // empty' <<<"${acl}")" = private
 test "$(jq -r '.VersioningConfiguration.Status // .Status' <<<"${versioning}")" = Enabled
-test "$(jq -r '.ServerSideEncryptionRule.ApplyServerSideEncryptionByDefault.SSEAlgorithm // .ApplyServerSideEncryptionByDefault.SSEAlgorithm' <<<"${encryption}")" = AES256
-test "$(jq -r '.PublicAccessBlockConfiguration.BlockPublicAccess // .BlockPublicAccess' <<<"${public_block}")" = true
+test "$(jq -r '.ServerSideEncryptionRule.ApplyServerSideEncryptionByDefault.SSEAlgorithm // .ServerSideEncryptionRule.SSEAlgorithm // .ApplyServerSideEncryptionByDefault.SSEAlgorithm // .SSEAlgorithm // empty' <<<"${encryption}")" = AES256
+test "$(jq -r '.PublicAccessBlockConfiguration.BlockPublicAccess // .BlockPublicAccess // empty' <<<"${public_block}")" = true
 
 install -d -m 0700 "$(dirname "${report}")"
 jq -n \

@@ -349,25 +349,27 @@ jobs:
     if: needs.classify.outputs.scope == 'full'
     needs: classify
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 15
     outputs:
       load_report_b64: ${{ steps.runtime-evidence.outputs.load_report_b64 }}
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mbox
+          POSTGRES_PASSWORD: mbox_normalized_performance_test
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mbox -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
-      MBOX_RUNTIME_MODE: staging
-      MBOX_REPOSITORY: postgres
-      MBOX_TENANT_ID: 11111111-1111-4111-8111-111111111111
-      MBOX_STORE_UUID: 22222222-2222-4222-8222-222222222222
-      MBOX_SESSION_SECRET: rc68-ci-session-secret-0123456789abcdef
-      MBOX_QR_SECRET: rc68-qr-secret-0123456789abcdef0123456789abcdef
-      MBOX_METRICS_TOKEN: rc68-ci-metrics-token-0123456789abcdef
-      MBOX_CORS_ORIGINS: http://127.0.0.1:5173
-      MBOX_PILOT_ACCESS_CODE: MBOX521
-      MBOX_PILOT_EMPLOYEE_PINS_JSON: '{"emp-operations-director":"7001","emp-admin":"7002","emp-host":"7003","emp-mia":"7004","emp-chen":"7005","emp-qing":"7006","emp-cashier":"7007","emp-lin":"7008","emp-wu":"7009","emp-jie":"7010","emp-han":"7011","emp-tao":"7012"}'
-      MBOX_LOAD_STAFF_PINS_JSON: '{"emp-operations-director":"7001","emp-admin":"7002","emp-host":"7003","emp-mia":"7004","emp-chen":"7005","emp-qing":"7006","emp-cashier":"7007","emp-lin":"7008","emp-wu":"7009","emp-jie":"7010","emp-han":"7011","emp-tao":"7012"}'
-      MBOX_DATABASE_POOL_MAX: 10
-      MBOX_DATABASE_MUTATION_QUEUE_MAX: 100
-      MBOX_DATABASE_MUTATION_QUEUE_WAIT_MS: 15000
-      MBOX_STATE_READ_CACHE_MS: 3000
+      TEST_NORMALIZED_ADMIN_URL: postgresql://mbox:mbox_normalized_performance_test@127.0.0.1:5432/postgres
+      APP_COMMIT_SHA: ${{ github.sha }}
+      MBOX_DATABASE_POOL_MAX: 12
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -375,21 +377,12 @@ jobs:
           node-version: 24
           cache: ${{ github.ref_type != 'tag' && 'npm' || '' }}
       - run: npm ci
-      - id: performance-playwright-cache
-        if: github.ref_type != 'tag'
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
-      - name: Install performance browser system dependencies
-        run: npx playwright install-deps chromium
-      - if: github.ref_type == 'tag' || steps.performance-playwright-cache.outputs.cache-hit != 'true'
-        name: Install performance Chromium
-        run: npx playwright install chromium
-      - name: Verify performance Chromium executable
-        run: node -e "const { chromium } = require('@playwright/test'); require('fs').accessSync(chromium.executablePath())"
-      - name: Run every route against an independent database baseline
-        run: npm run test:load:rc68:route-suite
+      - name: Run normalized core at sustained 5 RPS against a fresh database
+        env:
+          TARGET_RPS: 5
+          DURATION_SECONDS: 60
+          OUTPUT_FILE: artifacts/runtime-quality/client-observed-load.json
+        run: npm run acceptance:normalized:http
       - name: Seal and verify runtime evidence
         if: always()
         id: runtime-evidence

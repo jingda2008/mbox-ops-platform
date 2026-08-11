@@ -59,6 +59,26 @@ test('passes a complete built-in mock run at sustained 5 RPS', async () => {
   assert.equal(report.scenarios.serviceTaskFlow.summary.requests, 12)
   assert.equal(report.scenarios.serviceTaskFlow.backlog.final, 0)
   assert.equal(report.run.baseUrl, null)
+  assert.equal(report.run.evidenceEligible, false)
+  assert.equal(report.workload.independentDatabasePerRun, false)
+})
+
+test('records immutable evidence identity only when the isolated runner opts in', async () => {
+  const sourceCommitSha = 'a'.repeat(40)
+  const report = await runNormalizedLoadAcceptance({
+    mode: 'http_isolated_postgres',
+    sourceCommitSha,
+    evidenceEligible: true,
+    independentDatabasePerRun: true,
+    transport: createMockTransport({ latencyMs: 0 }),
+    requestsPerScenario: 2,
+    durationSeconds: 0.4,
+    targetRps: 5,
+  })
+
+  assert.equal(report.run.sourceCommitSha, sourceCommitSha)
+  assert.equal(report.run.evidenceEligible, true)
+  assert.equal(report.workload.independentDatabasePerRun, true)
 })
 
 test('fails gates for lag, latency, errors, KDS inconsistency, and unknown idempotency conflicts', () => {

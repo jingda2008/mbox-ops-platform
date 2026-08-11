@@ -88,6 +88,9 @@ try {
   try {
     report = await runNormalizedLoadAcceptance({
       mode: 'http_isolated_postgres',
+      sourceCommitSha: commitSha,
+      evidenceEligible: true,
+      independentDatabasePerRun: true,
       baseUrl,
       serviceToken: serviceLogin.token,
       productionToken: productionLogin.token,

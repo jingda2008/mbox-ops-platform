@@ -77,6 +77,59 @@ test('preserves failed route metrics instead of replacing them with missing evid
   assert.equal(document.performance[0].p95Ms, 543.4)
 })
 
+test('converts normalized isolated load evidence into release performance records', () => {
+  const scenario = {
+    summary: {
+      requests: 300, successes: 300, errors: 0, errorRate: 0,
+      latencyMs: { min: 8, average: 18, p50: 15, p95: 42, p99: 70, max: 90 },
+    },
+    arrival: {
+      targetRps: 5, achievedLaunchRps: 5, completionThroughputRps: 5,
+      requests: 300, maximumConcurrency: 2, schedulingDelayP95Ms: 2,
+      schedulingDelayP99Ms: 4, durationMs: 60_000,
+    },
+    backlog: { initial: 1, peak: 2, final: 0, slopePerSecond: 0, drainMs: 42 },
+  }
+  const scenarios = {
+    tableOpen: scenario,
+    orderSubmit: scenario,
+    kdsPrepareComplete: scenario,
+    serviceTaskFlow: scenario,
+  }
+  const checks = Object.keys(scenarios).flatMap((name) => [
+    { id: `${name}.achieved_rps`, passed: true },
+    { id: `${name}.p95`, passed: true },
+  ])
+  const document = runWriter({
+    results: {
+      quality: 'success', browser: 'success', database: 'success', normalized_database: 'success',
+      normalized_browser: 'success', performance: 'success',
+    },
+    load: {
+      schemaVersion: 'normalized-load-acceptance-v2',
+      run: {
+        mode: 'http_isolated_postgres', evidenceEligible: true, sourceCommitSha: currentSha,
+      },
+      workload: { independentDatabasePerRun: true, requestsPerScenario: 300 },
+      scenarios,
+      gate: {
+        thresholds: { maximumP95Ms: 500, maximumP99Ms: 1000 },
+        checks,
+      },
+    },
+  })
+
+  assert.equal(document.decision, 'ALLOW')
+  assert.deepEqual(document.performance.map((metric) => metric.id), [
+    'normalized_table_open',
+    'normalized_order_submit',
+    'normalized_kds_prepare_complete',
+    'normalized_service_task_flow',
+  ])
+  assert.ok(document.performance.every((metric) => metric.status === 'pass'))
+  assert.ok(document.performance.every((metric) => metric.workload.profile === 'mbox-normalized-core-regression-v1'))
+})
+
 test('distinguishes cancelled work from work that never ran', () => {
   const document = runWriter({
     results: { quality: 'success', browser: 'cancelled', database: 'skipped', performance: 'skipped' },

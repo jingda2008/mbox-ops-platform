@@ -49,12 +49,16 @@ test('every isolated phase receives a docker-assigned postgres port by default',
   assert.doesNotMatch(suite, /MBOX_LOCAL_LOAD_POSTGRES_PORT=/)
 })
 
-test('CI reserves enough time for all seven isolated performance phases', async () => {
+test('CI performance gate exercises the normalized service against a fresh database', async () => {
   const workflow = await readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8')
   const performanceJob = workflow.match(/\n  performance:\n([\s\S]*?)(?=\n  [a-z_]+:\n)/)?.[1]
   assert.ok(performanceJob, 'performance job must exist')
   const timeoutMinutes = Number(performanceJob.match(/timeout-minutes:\s*(\d+)/)?.[1])
-  assert.ok(timeoutMinutes >= 45, `performance timeout ${timeoutMinutes}m cannot cover the seven-phase suite`)
+  assert.ok(timeoutMinutes >= 10, `performance timeout ${timeoutMinutes}m cannot cover four 60-second scenarios`)
+  assert.match(performanceJob, /TEST_NORMALIZED_ADMIN_URL/)
+  assert.match(performanceJob, /DURATION_SECONDS: 60/)
+  assert.match(performanceJob, /acceptance:normalized:http/)
+  assert.doesNotMatch(performanceJob, /test:load:rc68:route-suite/)
 })
 
 test('API processes use dynamic ports and readiness is bound to the tested source', async () => {

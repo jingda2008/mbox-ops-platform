@@ -121,3 +121,18 @@ gate
 Mock通过只证明统计、分类和门禁逻辑可运行，不证明真实数据库、API或服务器达到性能目标。正式架构验收必须在全新规范化测试数据库、与目标部署同规格的服务实例上运行真实模式，并把JSON报告、提交SHA、镜像摘要和数据库迁移版本一起保存。
 
 本工具观测的是客户端到达与完成积压。数据库锁等待、连接池等待、Outbox积压和SQL执行时间仍应由服务端指标补充；两类证据都通过后才能认定规范化架构达到商业发布标准。
+
+## 8. CI门禁边界
+
+规范化候选的`performance`作业必须直接启动`createNormalizedApp`，并为每次执行创建、迁移、初始化和销毁独立PostgreSQL数据库。旧版`server/index.ts`、`runtime_states`投影、全局写队列指标和旧员工令牌不得作为规范化候选的性能判据。
+
+报告只有同时满足以下条件才可进入提交级质量台账：
+
+- `schemaVersion`为`normalized-load-acceptance-v2`；
+- `run.mode`为`http_isolated_postgres`；
+- `run.evidenceEligible`为`true`；
+- `workload.independentDatabasePerRun`为`true`；
+- `run.sourceCommitSha`与CI实际检出提交完全一致；
+- 四个场景门禁和KDS、幂等一致性门禁全部通过。
+
+旧RC路由套件可继续作为旧系统回归诊断，但不能阻断或放行规范化候选，也不能写入规范化候选的正式性能结论。

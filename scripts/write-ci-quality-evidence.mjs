@@ -69,12 +69,73 @@ if (scope === 'full' && (results.performance === 'success' || encodedLoad)) {
   const load = encodedLoad
     ? JSON.parse(Buffer.from(encodedLoad, 'base64').toString('utf8'))
     : JSON.parse(await readFile(loadPath, 'utf8'))
+  performance.push(...performanceRecords(load, {
+    checkedOutSha,
+    environmentId,
+    evidenceReference: process.env.GITHUB_EVENT_NAME === 'pull_request'
+      ? `github-job:performance:${process.env.GITHUB_RUN_ID}`
+      : `artifact:runtime-quality-${process.env.GITHUB_SHA}/client-observed-load.json`,
+  }))
+}
+
+function performanceRecords(load, context) {
+  if (load.schemaVersion === 'normalized-load-acceptance-v2') {
+    if (load.run?.mode !== 'http_isolated_postgres'
+      || load.run?.evidenceEligible !== true
+      || load.workload?.independentDatabasePerRun !== true) {
+      throw new Error('规范化性能证据必须来自独立新建数据库上的真实HTTP服务')
+    }
+    if (load.run?.sourceCommitSha !== context.checkedOutSha) {
+      throw new Error(`规范化性能证据提交 ${load.run?.sourceCommitSha ?? '(missing)'} 与检出提交不一致`)
+    }
+    const thresholds = load.gate?.thresholds ?? {}
+    return Object.entries(load.scenarios ?? {}).map(([name, scenario]) => {
+      const id = `normalized_${name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)}`
+      const scenarioChecks = (load.gate?.checks ?? []).filter((check) => check.id?.startsWith(`${name}.`))
+      const summary = scenario.summary ?? {}
+      const latency = summary.latencyMs ?? {}
+      return {
+        id,
+        required: true,
+        conclusionLevel: 'regression',
+        status: summary.errors === 0 && scenarioChecks.length > 0 && scenarioChecks.every((check) => check.passed)
+          ? 'pass' : 'fail',
+        artifactStatus: 'available',
+        validityStatus: 'valid',
+        samples: summary.requests,
+        successful: summary.successes,
+        failures: summary.errors,
+        p50Ms: latency.p50,
+        p95Ms: latency.p95,
+        p99Ms: latency.p99,
+        maxMs: latency.max,
+        limits: {
+          minSamples: load.workload?.requestsPerScenario ?? 300,
+          p95Ms: thresholds.maximumP95Ms,
+          p99Ms: thresholds.maximumP99Ms,
+        },
+        environmentRef: context.environmentId,
+        workload: {
+          profile: 'mbox-normalized-core-regression-v1',
+          model: 'open-arrival-rate',
+          route: name,
+          instances: 1,
+          targetRps: scenario.arrival?.targetRps,
+          achievedLaunchRps: scenario.arrival?.achievedLaunchRps,
+          maxConcurrency: scenario.arrival?.maximumConcurrency,
+          schedulingDelayP95Ms: scenario.arrival?.schedulingDelayP95Ms,
+        },
+        evidence: [context.evidenceReference],
+      }
+    })
+  }
+
   if (load.model?.evidenceEligible !== true || load.model?.independentBaselinePerPhase !== true) {
     throw new Error('性能发布证据必须来自独立数据库基线的分阶段路由套件')
   }
-  for (const [id, metric] of Object.entries(load.byLabel ?? {})) {
+  return Object.entries(load.byLabel ?? {}).map(([id, metric]) => {
     const arrival = load.model?.arrivalMetrics?.[id]
-    performance.push({
+    return {
       id,
       required: true,
       conclusionLevel: 'regression',
@@ -89,14 +150,12 @@ if (scope === 'full' && (results.performance === 'success' || encodedLoad)) {
       p99Ms: metric.p99Ms,
       maxMs: metric.maxMs,
       limits: { minSamples: metric.target?.minSamples ?? load.model?.samplesPerReadOrAction ?? 300, p95Ms: metric.target.p95, p99Ms: metric.target.p99 },
-      environmentRef: environmentId,
+      environmentRef: context.environmentId,
       workload: {
         profile: 'mbox-pr-route-regression-v1',
         model: id === 'bootstrap_role_coverage'
           ? 'bounded-role-coverage'
-          : arrival
-            ? 'open-arrival-rate'
-            : 'bounded-independent-request',
+          : arrival ? 'open-arrival-rate' : 'bounded-independent-request',
         route: id,
         instances: load.model?.instances ?? null,
         targetRps: arrival?.targetRps ?? null,
@@ -104,11 +163,9 @@ if (scope === 'full' && (results.performance === 'success' || encodedLoad)) {
         maxConcurrency: arrival?.maximumConcurrency ?? null,
         schedulingDelayP95Ms: arrival?.schedulingDelayP95Ms ?? null,
       },
-      evidence: [process.env.GITHUB_EVENT_NAME === 'pull_request'
-        ? `github-job:performance:${process.env.GITHUB_RUN_ID}`
-        : `artifact:runtime-quality-${process.env.GITHUB_SHA}/client-observed-load.json`],
-    })
-  }
+      evidence: [context.evidenceReference],
+    }
+  })
 }
 
 const allSelectedPassed = testRuns.every((run) => run.status === 'pass')

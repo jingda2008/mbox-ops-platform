@@ -27,7 +27,7 @@ command -v jq >/dev/null
 
 role_name=$(curl -fsS --max-time 2 http://100.100.100.200/latest/meta-data/ram/security-credentials/)
 test -n "${role_name}"
-oss_options=(--mode EcsRamRole --region "${region}" --endpoint "${oss_endpoint}")
+oss_options=(--quiet --mode EcsRamRole --region "${region}" --endpoint "${oss_endpoint}")
 aliyun configure set --profile "${profile}" --mode EcsRamRole --ram-role-name "${role_name}" --region "${region}" >/dev/null
 aliyun_cli=(aliyun --profile "${profile}")
 "${aliyun_cli[@]}" sts get-caller-identity >/dev/null

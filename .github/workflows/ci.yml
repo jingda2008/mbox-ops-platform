@@ -2,6 +2,15 @@ name: ci
 
 on:
   workflow_dispatch:
+    inputs:
+      release_intent:
+        description: Bundle intent only; this workflow never deploys
+        required: true
+        default: commercial
+        type: choice
+        options:
+          - commercial
+          - validation-only
   pull_request:
   push:
     branches: [main]
@@ -339,6 +348,7 @@ jobs:
           IMAGE_TAG: ${{ steps.metadata.outputs.image_tag }}
           VERSION: ${{ steps.metadata.outputs.version }}
           SHORT_SHA: ${{ steps.metadata.outputs.short_sha }}
+          MBOX_BUNDLE_RELEASE_INTENT: ${{ github.event_name == 'workflow_dispatch' && inputs.release_intent || 'commercial' }}
         run: |
           mkdir -p release-artifact
           archive="release-artifact/mbox-ops-${VERSION}-${SHORT_SHA}.tar.gz"

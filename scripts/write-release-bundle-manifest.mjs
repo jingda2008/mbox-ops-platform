@@ -14,13 +14,18 @@ const archiveSha256 = createHash('sha256').update(archive).digest('hex')
 const migration = JSON.parse(await readFile(resolve(required('MBOX_MIGRATION_MANIFEST')), 'utf8'))
 const releaseSha = required('MBOX_BUNDLE_SHA')
 const imageDigest = required('MBOX_BUNDLE_IMAGE_DIGEST')
+const releaseIntent = process.env.MBOX_BUNDLE_RELEASE_INTENT?.trim() || 'commercial'
 
 if (!/^[0-9a-f]{40}$/.test(releaseSha)) throw new Error('MBOX_BUNDLE_SHA must be a full commit SHA')
 if (!/^sha256:[0-9a-f]{64}$/.test(imageDigest)) throw new Error('MBOX_BUNDLE_IMAGE_DIGEST is not immutable')
+if (!['commercial', 'validation-only'].includes(releaseIntent)) {
+  throw new Error('MBOX_BUNDLE_RELEASE_INTENT must be commercial or validation-only')
+}
 
 const manifest = {
   schemaVersion: 1,
   generatedAt: new Date().toISOString(),
+  releaseIntent,
   releaseSha,
   releaseVersion: required('MBOX_BUNDLE_VERSION'),
   imageTag: required('MBOX_BUNDLE_IMAGE_TAG'),

@@ -9,6 +9,7 @@ import { spawnSync } from 'node:child_process'
 
 const deployScript = fileURLToPath(new URL('../deploy/aliyun/deploy-release.sh', import.meta.url))
 const activateScript = fileURLToPath(new URL('../deploy/aliyun/activate-release.sh', import.meta.url))
+const manifestGenerator = fileURLToPath(new URL('./write-release-bundle-manifest.mjs', import.meta.url))
 
 function runBash(source, env = {}) {
   return spawnSync('bash', ['-c', source], {
@@ -40,6 +41,79 @@ test('formal deployment always executes and must pass the release quality gate',
       enforce_release_intent "$MANIFEST" 0 production
     `, { DEPLOY_SCRIPT: deployScript, MANIFEST: manifest })
     assert.equal(failure.status, 23)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('release bundle manifest defaults to commercial and accepts validation-only', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mbox-release-manifest-'))
+  const archive = join(directory, 'image.tar.gz')
+  const migration = join(directory, 'migration-manifest.json')
+  await writeFile(archive, 'immutable-image-archive')
+  await writeFile(migration, '{"digest":"sha256:migration"}\n')
+  const baseEnv = {
+    MBOX_BUNDLE_ARCHIVE: archive,
+    MBOX_BUNDLE_SHA: '1'.repeat(40),
+    MBOX_BUNDLE_VERSION: '1.0.0-rc.68',
+    MBOX_BUNDLE_IMAGE_TAG: 'mbox-ops:test',
+    MBOX_BUNDLE_IMAGE_DIGEST: `sha256:${'2'.repeat(64)}`,
+    MBOX_MIGRATION_MANIFEST: migration,
+  }
+  try {
+    const commercialOutput = join(directory, 'commercial.json')
+    const defaultResult = spawnSync(process.execPath, [manifestGenerator], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ...baseEnv,
+        MBOX_BUNDLE_RELEASE_INTENT: '',
+        MBOX_BUNDLE_MANIFEST: commercialOutput,
+      },
+    })
+    assert.equal(defaultResult.status, 0, defaultResult.stderr)
+    assert.equal(JSON.parse(await readFile(commercialOutput, 'utf8')).releaseIntent, 'commercial')
+
+    const validationOutput = join(directory, 'validation.json')
+    const validationResult = spawnSync(process.execPath, [manifestGenerator], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ...baseEnv,
+        MBOX_BUNDLE_RELEASE_INTENT: 'validation-only',
+        MBOX_BUNDLE_MANIFEST: validationOutput,
+      },
+    })
+    assert.equal(validationResult.status, 0, validationResult.stderr)
+    assert.equal(JSON.parse(await readFile(validationOutput, 'utf8')).releaseIntent, 'validation-only')
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('release bundle manifest rejects unsupported release intent', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mbox-invalid-intent-'))
+  const archive = join(directory, 'image.tar.gz')
+  const migration = join(directory, 'migration-manifest.json')
+  await writeFile(archive, 'immutable-image-archive')
+  await writeFile(migration, '{"digest":"sha256:migration"}\n')
+  try {
+    const result = spawnSync(process.execPath, [manifestGenerator], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        MBOX_BUNDLE_ARCHIVE: archive,
+        MBOX_BUNDLE_SHA: '1'.repeat(40),
+        MBOX_BUNDLE_VERSION: '1.0.0-rc.68',
+        MBOX_BUNDLE_IMAGE_TAG: 'mbox-ops:test',
+        MBOX_BUNDLE_IMAGE_DIGEST: `sha256:${'2'.repeat(64)}`,
+        MBOX_MIGRATION_MANIFEST: migration,
+        MBOX_BUNDLE_RELEASE_INTENT: 'production-ish',
+        MBOX_BUNDLE_MANIFEST: join(directory, 'invalid.json'),
+      },
+    })
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /must be commercial or validation-only/)
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
@@ -182,6 +256,8 @@ test('loaded image, candidate and rollback checks use actual Docker identity', (
 test('activation checks each immutable identity boundary and records non-commercial intent', async () => {
   const deploy = await readFile(deployScript, 'utf8')
   const activate = await readFile(activateScript, 'utf8')
+  const workflow = await readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8')
+  const readme = await readFile(new URL('../deploy/aliyun/README.md', import.meta.url), 'utf8')
   assert.match(deploy, /MBOX_DEPLOYMENT_TIER:-validation/)
   assert.ok(deploy.indexOf('enforce_release_intent') < deploy.indexOf('ssh "${ssh_options[@]}"'))
   assert.match(activate, /verify_archive_image_identity "\$\{archive\}"/)
@@ -189,4 +265,8 @@ test('activation checks each immutable identity boundary and records non-commerc
   assert.match(activate, /verify_container_image_identity "\$\{candidate\}"/)
   assert.match(activate, /verify_container_release_identity "\$\{active_container\}"/)
   assert.match(activate, /commercialRelease: \(\$releaseIntent == "commercial"\)/)
+  assert.match(workflow, /release_intent:[\s\S]*options:[\s\S]*- commercial[\s\S]*- validation-only/)
+  assert.match(workflow, /MBOX_BUNDLE_RELEASE_INTENT:.*inputs\.release_intent.*commercial/)
+  assert.match(readme, /gh workflow run ci\.yml[\s\S]*release_intent=validation-only/)
+  assert.match(readme, /never connects to the ECS instance or activates a[\s\S]*container/)
 })

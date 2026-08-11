@@ -45,6 +45,25 @@ MBOX_DEPLOY_DRY_RUN=1 \
 ./deploy/aliyun/deploy-release.sh
 ```
 
+Generate a validation-only bundle without deploying it:
+
+```bash
+gh workflow run ci.yml \
+  --ref <branch-or-tag> \
+  -f release_intent=validation-only
+
+gh run watch <run-id>
+gh run download <run-id> \
+  --name mbox-image-<full-commit-sha> \
+  --dir .runtime/validation-bundle
+```
+
+The downloaded `release-manifest.json` must contain
+`"releaseIntent": "validation-only"`. This workflow only builds and uploads
+the validation bundle. It never connects to the ECS instance or activates a
+container. Pull requests, `main` pushes and version tags generate
+`commercial` manifests by default.
+
 Alibaba validation deployment:
 
 ```bash

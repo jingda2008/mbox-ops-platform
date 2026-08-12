@@ -4,7 +4,7 @@ FROM node:24-alpine AS build
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci
+RUN --mount=type=cache,id=mbox-normalized-build-npm,target=/root/.npm npm ci
 
 COPY . .
 RUN npm run build:normalized
@@ -22,8 +22,8 @@ ENV NODE_ENV=production \
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --ignore-scripts \
-  && npm cache clean --force
+RUN --mount=type=cache,id=mbox-normalized-runtime-npm,target=/root/.npm \
+  npm ci --omit=dev --ignore-scripts
 
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/dist-normalized ./dist-normalized

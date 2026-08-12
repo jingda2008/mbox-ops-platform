@@ -5,7 +5,7 @@ import {
   classifyZone,
   createArrivalSlots,
   formatMoney,
-  remainingHoldSeconds,
+  reservationArrivalHoldState,
   validateConfirmation,
   validateGuestDetails,
 } from './reservation-model'
@@ -34,20 +34,31 @@ describe('reservation presentation rules', () => {
     expect(classifyZone({ code: 'W', name: '屋顶露台', type: 'outdoor' })).toBe('outdoor')
   })
 
-  it('shows minimum spend clearly and validates self-selected confirmation', () => {
+  it('shows minimum spend clearly and validates a preference-only reservation', () => {
     expect(formatMoney(188800)).toBe('最低消费 ¥1,888')
     expect(formatMoney(null)).toBe('无最低消费')
     const draft: ReservationDraft = {
       date: '2026-08-12', time: '2026-08-12|1230', guestCount: 2,
-      mode: 'self_select', tableCodes: [], seatPreference: 'stage_atmosphere', customerName: '王女士', contact: '13800138000', note: '',
+      mode: 'direct', seatPreference: 'stage_atmosphere', customerName: '王女士', contact: '13800138000', note: '',
     }
-    expect(validateConfirmation(draft)).toBe('请选择一个座位')
-    expect(validateConfirmation({ ...draft, tableCodes: ['VIP1'] })).toBeNull()
+    expect(validateConfirmation(draft)).toBeNull()
     expect(validateGuestDetails(draft)).toBeNull()
   })
 
-  it('calculates the server-provided hold deadline without extending it locally', () => {
-    expect(remainingHoldSeconds('2026-08-12T12:20:00.000Z', new Date('2026-08-12T12:19:30.000Z'))).toBe(30)
-    expect(remainingHoldSeconds('2026-08-12T12:20:00.000Z', new Date('2026-08-12T12:21:00.000Z'))).toBe(0)
+  it('only starts the confirmed no-show countdown at the scheduled arrival time', () => {
+    const reservation = {
+      status: 'confirmed', arrivalState: 'not_arrived' as const,
+      arrivalAt: '2026-08-12T21:00:00+08:00', arrivalGraceEndsAt: '2026-08-12T21:10:00+08:00',
+    }
+    expect(reservationArrivalHoldState(reservation, new Date('2026-08-12T20:59:30+08:00')))
+      .toEqual({ kind: 'hidden', seconds: 0 })
+    expect(reservationArrivalHoldState(reservation, new Date('2026-08-12T21:00:01+08:00')))
+      .toEqual({ kind: 'active', seconds: 599 })
+    expect(reservationArrivalHoldState(reservation, new Date('2026-08-12T21:10:00+08:00')))
+      .toEqual({ kind: 'expired', seconds: 0 })
+    expect(reservationArrivalHoldState({ ...reservation, status: 'pending' }, new Date('2026-08-12T21:05:00+08:00')))
+      .toEqual({ kind: 'hidden', seconds: 0 })
+    expect(reservationArrivalHoldState({ ...reservation, arrivalState: 'arrived' }, new Date('2026-08-12T21:05:00+08:00')))
+      .toEqual({ kind: 'hidden', seconds: 0 })
   })
 })

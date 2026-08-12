@@ -66,6 +66,7 @@ export interface StoreProvisionConfig {
   }>
   reservationPolicy: {
     holdMinutes: 20
+    arrivalGraceMinutes: number
     maxAdvanceDays: number
     defaultDurationMinutes: number
     customerCancelCutoffMinutes: number
@@ -219,6 +220,7 @@ export function parseStoreProvisionConfig(value: unknown): StoreProvisionConfig 
   const policy = object(root.reservationPolicy, 'reservationPolicy')
   const holdMinutes = integer(policy.holdMinutes, 'reservationPolicy.holdMinutes')
   if (holdMinutes !== 20) throw new TypeError('reservationPolicy.holdMinutes must be 20')
+  const arrivalGraceMinutes = rangedInteger(policy.arrivalGraceMinutes, 'reservationPolicy.arrivalGraceMinutes', 1, 120)
   const maxAdvanceDays = rangedInteger(policy.maxAdvanceDays, 'reservationPolicy.maxAdvanceDays', 1, 365)
   const defaultDurationMinutes = rangedInteger(policy.defaultDurationMinutes, 'reservationPolicy.defaultDurationMinutes', 30, 720)
   const customerCancelCutoffMinutes = rangedInteger(policy.customerCancelCutoffMinutes, 'reservationPolicy.customerCancelCutoffMinutes', 0, 10_080)
@@ -249,6 +251,7 @@ export function parseStoreProvisionConfig(value: unknown): StoreProvisionConfig 
     areas, tables, roles, employees,
     reservationPolicy: {
       holdMinutes: 20,
+      arrivalGraceMinutes,
       maxAdvanceDays,
       defaultDurationMinutes,
       customerCancelCutoffMinutes,
@@ -331,16 +334,18 @@ export async function provisionNormalizedStore(input: {
 
     const policy = input.config.reservationPolicy
     await client.query(`INSERT INTO mbox.public_reservation_policies(
-        tenant_id, store_id, hold_minutes, max_advance_days, default_duration_minutes,
+        tenant_id, store_id, hold_minutes, arrival_grace_minutes, max_advance_days, default_duration_minutes,
         customer_cancel_cutoff_minutes, deposit_mode, deposit_minor, deposit_ratio_bps, deposit_rule_text)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
       ON CONFLICT (tenant_id, store_id) DO UPDATE SET
-        hold_minutes=EXCLUDED.hold_minutes, max_advance_days=EXCLUDED.max_advance_days,
+        hold_minutes=EXCLUDED.hold_minutes, arrival_grace_minutes=EXCLUDED.arrival_grace_minutes,
+        max_advance_days=EXCLUDED.max_advance_days,
         default_duration_minutes=EXCLUDED.default_duration_minutes,
         customer_cancel_cutoff_minutes=EXCLUDED.customer_cancel_cutoff_minutes,
         deposit_mode=EXCLUDED.deposit_mode, deposit_minor=EXCLUDED.deposit_minor,
         deposit_ratio_bps=EXCLUDED.deposit_ratio_bps, deposit_rule_text=EXCLUDED.deposit_rule_text`, [
-      tenant.id, store.id, policy.holdMinutes, policy.maxAdvanceDays, policy.defaultDurationMinutes,
+      tenant.id, store.id, policy.holdMinutes, policy.arrivalGraceMinutes,
+      policy.maxAdvanceDays, policy.defaultDurationMinutes,
       policy.customerCancelCutoffMinutes, policy.depositMode, policy.depositMinor ?? null,
       policy.depositRatioBps ?? null, policy.depositRuleText ?? null,
     ])
@@ -387,31 +392,8 @@ export async function provisionNormalizedStore(input: {
     }
     for (const role of input.config.roles) {
       const roleId = roleIds.get(role.code)
-      await client.query('DELETE FROM mbox.role_permission_assignments WHERE tenant_id=$1 AND store_id=$2 AND role_id=$3', [tenant.id, store.id, roleId])
-      await client.query(`INSERT INTO mbox.role_permission_assignments(tenant_id, store_id, role_id, permission_id)
-        SELECT $1, $2, $3, id FROM mbox.staff_permission_definitions
-        WHERE tenant_id=$1 AND store_id=$2 AND code = ANY($4::text[])`, [tenant.id, store.id, roleId, role.permissions])
-      await client.query('DELETE FROM mbox.role_navigation_items WHERE tenant_id=$1 AND store_id=$2 AND role_id=$3', [tenant.id, store.id, roleId])
-      for (const item of role.navigation ?? []) {
-        await client.query(`INSERT INTO mbox.role_navigation_items(
-            tenant_id, store_id, role_id, navigation_code, label, route, icon, sort_order, display_config)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`, [tenant.id, store.id, roleId, item.code,
-          item.label, item.route, item.icon ?? null, item.sortOrder, JSON.stringify({ highFrequency: item.highFrequency })])
-      }
-      await client.query('DELETE FROM mbox.role_data_scopes WHERE tenant_id=$1 AND store_id=$2 AND role_id=$3', [tenant.id, store.id, roleId])
-      for (const scope of role.dataScopes ?? []) {
-        await client.query(`INSERT INTO mbox.role_data_scopes(
-            tenant_id, store_id, role_id, scope_key, effect, scope_value, enabled)
-          VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7)`, [tenant.id, store.id, roleId, scope.key,
-          scope.effect, JSON.stringify(scope.value), scope.enabled])
-      }
-      await client.query('DELETE FROM mbox.role_approval_limits WHERE tenant_id=$1 AND store_id=$2 AND role_id=$3', [tenant.id, store.id, roleId])
-      for (const limit of role.approvalLimits ?? []) {
-        await client.query(`INSERT INTO mbox.role_approval_limits(
-            tenant_id, store_id, role_id, approval_code, amount_minor, currency, rules, enabled)
-          VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8)`, [tenant.id, store.id, roleId, limit.code,
-          limit.amountMinor, limit.currency ?? store.currency, JSON.stringify(limit.rules ?? {}), limit.enabled])
-      }
+      if (!roleId) throw new Error(`role ${role.code} is missing after provisioning`)
+      await reconcileRoleAccessDefaults(client, tenant.id, store.id, roleId, role, store.currency ?? 'CNY')
     }
 
     const employeeIds: Record<string, string> = {}
@@ -491,6 +473,129 @@ export async function provisionNormalizedStore(input: {
     throw error
   } finally {
     await client.end()
+  }
+}
+
+async function reconcileRoleAccessDefaults(
+  client: Client,
+  tenantId: string,
+  storeId: string,
+  roleId: string,
+  role: StoreProvisionConfig['roles'][number],
+  storeCurrency: string,
+) {
+  const authorityResult = await client.query<{ configuration_kind: string; configuration_code: string }>(`
+    SELECT configuration_kind, configuration_code
+    FROM mbox.role_access_configuration_authorities
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND role_id=$3::uuid
+  `, [tenantId, storeId, roleId])
+  const runtimeManaged = new Set(authorityResult.rows.map((row) => `${row.configuration_kind}:${row.configuration_code}`))
+
+  const permissionResult = await client.query<{ code: string }>(`
+    SELECT permission.code
+    FROM mbox.role_permission_assignments assignment
+    JOIN mbox.staff_permission_definitions permission
+      ON permission.tenant_id=assignment.tenant_id AND permission.store_id=assignment.store_id
+      AND permission.id=assignment.permission_id
+    WHERE assignment.tenant_id=$1::uuid AND assignment.store_id=$2::uuid AND assignment.role_id=$3::uuid
+  `, [tenantId, storeId, roleId])
+  const desiredPermissions = new Set(role.permissions)
+  for (const permissionCode of desiredPermissions) {
+    if (runtimeManaged.has(`permission:${permissionCode}`)) continue
+    await client.query(`INSERT INTO mbox.role_permission_assignments(
+        tenant_id, store_id, role_id, permission_id)
+      SELECT $1::uuid,$2::uuid,$3::uuid,permission.id
+      FROM mbox.staff_permission_definitions permission
+      WHERE permission.tenant_id=$1::uuid AND permission.store_id=$2::uuid AND permission.code=$4
+      ON CONFLICT (tenant_id, store_id, role_id, permission_id) DO NOTHING`, [tenantId, storeId, roleId, permissionCode])
+  }
+  for (const existing of permissionResult.rows) {
+    if (desiredPermissions.has(existing.code) || runtimeManaged.has(`permission:${existing.code}`)) continue
+    await client.query(`DELETE FROM mbox.role_permission_assignments assignment
+      USING mbox.staff_permission_definitions permission
+      WHERE assignment.tenant_id=$1::uuid AND assignment.store_id=$2::uuid AND assignment.role_id=$3::uuid
+        AND permission.tenant_id=assignment.tenant_id AND permission.store_id=assignment.store_id
+        AND permission.id=assignment.permission_id AND permission.code=$4`, [tenantId, storeId, roleId, existing.code])
+  }
+
+  const dataScopeResult = await client.query<{ scope_key: string; effect: 'include' | 'exclude' }>(`
+    SELECT scope_key, effect FROM mbox.role_data_scopes
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND role_id=$3::uuid
+  `, [tenantId, storeId, roleId])
+  const desiredScopes = new Set((role.dataScopes ?? []).map((scope) => `${scope.key}:${scope.effect}`))
+  for (const scope of role.dataScopes ?? []) {
+    const code = `${scope.key}:${scope.effect}`
+    if (runtimeManaged.has(`data_scope:${code}`)) continue
+    await client.query(`INSERT INTO mbox.role_data_scopes(
+        tenant_id, store_id, role_id, scope_key, effect, scope_value, enabled, configured_by_employee_id)
+      VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6::jsonb,$7,NULL)
+      ON CONFLICT (tenant_id, store_id, role_id, scope_key, effect) DO UPDATE
+      SET scope_value=EXCLUDED.scope_value, enabled=EXCLUDED.enabled,
+          configured_by_employee_id=NULL, updated_at=clock_timestamp()`, [
+      tenantId, storeId, roleId, scope.key, scope.effect, JSON.stringify(scope.value), scope.enabled ?? true,
+    ])
+  }
+  for (const existing of dataScopeResult.rows) {
+    const code = `${existing.scope_key}:${existing.effect}`
+    if (desiredScopes.has(code) || runtimeManaged.has(`data_scope:${code}`)) continue
+    await client.query(`DELETE FROM mbox.role_data_scopes
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND role_id=$3::uuid
+        AND scope_key=$4 AND effect=$5`, [tenantId, storeId, roleId, existing.scope_key, existing.effect])
+  }
+
+  const approvalResult = await client.query<{ approval_code: string; currency: string }>(`
+    SELECT approval_code, currency FROM mbox.role_approval_limits
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND role_id=$3::uuid
+  `, [tenantId, storeId, roleId])
+  const desiredApprovals = new Set((role.approvalLimits ?? []).map((approval) => `${approval.code}:${approval.currency ?? storeCurrency}`))
+  for (const approval of role.approvalLimits ?? []) {
+    const currency = approval.currency ?? storeCurrency
+    const code = `${approval.code}:${currency}`
+    if (runtimeManaged.has(`approval_limit:${code}`)) continue
+    await client.query(`INSERT INTO mbox.role_approval_limits(
+        tenant_id, store_id, role_id, approval_code, amount_minor, currency, rules, enabled, configured_by_employee_id)
+      VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7::jsonb,$8,NULL)
+      ON CONFLICT (tenant_id, store_id, role_id, approval_code, currency) DO UPDATE
+      SET amount_minor=EXCLUDED.amount_minor, rules=EXCLUDED.rules, enabled=EXCLUDED.enabled,
+          configured_by_employee_id=NULL, updated_at=clock_timestamp()`, [
+      tenantId, storeId, roleId, approval.code, approval.amountMinor, currency,
+      JSON.stringify(approval.rules ?? {}), approval.enabled ?? true,
+    ])
+  }
+  for (const existing of approvalResult.rows) {
+    const code = `${existing.approval_code}:${existing.currency}`
+    if (desiredApprovals.has(code) || runtimeManaged.has(`approval_limit:${code}`)) continue
+    await client.query(`DELETE FROM mbox.role_approval_limits
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND role_id=$3::uuid
+        AND approval_code=$4 AND currency=$5`, [tenantId, storeId, roleId, existing.approval_code, existing.currency])
+  }
+
+  const navigationResult = await client.query<{ navigation_code: string }>(`
+    SELECT navigation_code FROM mbox.role_navigation_items
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND role_id=$3::uuid
+  `, [tenantId, storeId, roleId])
+  const desiredNavigation = new Set((role.navigation ?? []).map((navigation) => navigation.code))
+  for (const navigation of role.navigation ?? []) {
+    if (runtimeManaged.has(`navigation:${navigation.code}`)) continue
+    await client.query(`INSERT INTO mbox.role_navigation_items(
+        tenant_id, store_id, role_id, navigation_code, label, route, icon,
+        sort_order, enabled, display_config, configured_by_employee_id)
+      VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,$8,true,$9::jsonb,NULL)
+      ON CONFLICT (tenant_id, store_id, role_id, navigation_code) DO UPDATE
+      SET label=EXCLUDED.label, route=EXCLUDED.route, icon=EXCLUDED.icon,
+          sort_order=EXCLUDED.sort_order, enabled=true, display_config=EXCLUDED.display_config,
+          configured_by_employee_id=NULL, updated_at=clock_timestamp()`, [
+      tenantId, storeId, roleId, navigation.code, navigation.label, navigation.route,
+      navigation.icon ?? null, navigation.sortOrder ?? 0,
+      JSON.stringify({ highFrequency: navigation.highFrequency ?? false }),
+    ])
+  }
+  for (const existing of navigationResult.rows) {
+    if (desiredNavigation.has(existing.navigation_code) || runtimeManaged.has(`navigation:${existing.navigation_code}`)) continue
+    await client.query(`DELETE FROM mbox.role_navigation_items
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND role_id=$3::uuid AND navigation_code=$4`, [
+      tenantId, storeId, roleId, existing.navigation_code,
+    ])
   }
 }
 

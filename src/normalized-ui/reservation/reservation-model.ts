@@ -1,6 +1,7 @@
 import type {
   ArrivalSlot,
   OperatingHours,
+  PublicReservation,
   ReservationArea,
   ReservationDraft,
   ReservationTable,
@@ -124,8 +125,6 @@ export function validateSchedule(draft: Readonly<ReservationDraft>, availableSlo
 }
 
 export function validateConfirmation(draft: Readonly<ReservationDraft>): string | null {
-  if (draft.mode === 'self_select' && draft.tableCodes.length === 0) return '请选择一个座位'
-  if (draft.tableCodes.length > 4) return '一次最多选择4个座位'
   return validateGuestDetails(draft)
 }
 
@@ -135,9 +134,26 @@ export function validateGuestDetails(draft: Pick<ReservationDraft, 'customerName
   return null
 }
 
-export function remainingHoldSeconds(holdExpiresAt: string | null, now = new Date()): number {
-  if (holdExpiresAt === null) return 0
-  return Math.max(0, Math.ceil((Date.parse(holdExpiresAt) - now.getTime()) / 1000))
+export type ReservationArrivalHoldState =
+  | { kind: 'hidden'; seconds: 0 }
+  | { kind: 'active'; seconds: number }
+  | { kind: 'expired'; seconds: 0 }
+
+export function reservationArrivalHoldState(
+  reservation: Pick<PublicReservation, 'status' | 'arrivalState' | 'arrivalAt' | 'arrivalGraceEndsAt'>,
+  now = new Date(),
+): ReservationArrivalHoldState {
+  if (reservation.status !== 'confirmed' || reservation.arrivalState !== 'not_arrived') {
+    return { kind: 'hidden', seconds: 0 }
+  }
+  const nowMs = now.getTime()
+  const arrivalMs = Date.parse(reservation.arrivalAt)
+  const graceEndMs = Date.parse(reservation.arrivalGraceEndsAt)
+  if (!Number.isFinite(arrivalMs) || !Number.isFinite(graceEndMs) || graceEndMs <= arrivalMs || nowMs < arrivalMs) {
+    return { kind: 'hidden', seconds: 0 }
+  }
+  if (nowMs >= graceEndMs) return { kind: 'expired', seconds: 0 }
+  return { kind: 'active', seconds: Math.ceil((graceEndMs - nowMs) / 1000) }
 }
 
 function parseDate(value: string): { year: number; month: number; day: number } {

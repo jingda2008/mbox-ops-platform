@@ -129,6 +129,8 @@ try {
     dailyCredential,
     employeeCode: 'liyan',
     employeePin: '5210',
+    adminEmployeeCode: 'wuya',
+    adminEmployeePin: '5210',
     orderableProductName: orderableProducts.bar,
     kitchenProductName: orderableProducts.kitchen,
     bundleProductName,

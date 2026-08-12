@@ -102,9 +102,7 @@ implements PaymentCapabilityAuthorizationPort {
                 AND employee_role.employee_id = employee.id
                 AND employee_role.starts_at <= clock_timestamp()
                 AND (employee_role.ends_at IS NULL OR employee_role.ends_at > clock_timestamp())
-                AND (
-                  $4 = ANY(role.capabilities)
-                  OR EXISTS (
+                AND EXISTS (
                     SELECT 1
                     FROM mbox.role_permission_assignments role_permission
                     JOIN mbox.staff_permission_definitions permission
@@ -116,7 +114,6 @@ implements PaymentCapabilityAuthorizationPort {
                       AND role_permission.store_id = role.store_id
                       AND role_permission.role_id = role.id
                       AND permission.code = $4
-                  )
                 )
             )
           )
@@ -203,9 +200,7 @@ implements PaymentCapabilityAuthorizationPort {
                   AND employee_role.employee_id = employee.id
                   AND employee_role.starts_at <= clock_timestamp()
                   AND (employee_role.ends_at IS NULL OR employee_role.ends_at > clock_timestamp())
-                  AND (
-                    'refund.approve' = ANY(role.capabilities)
-                    OR EXISTS (
+                  AND EXISTS (
                       SELECT 1
                       FROM mbox.role_permission_assignments role_permission
                       JOIN mbox.staff_permission_definitions permission
@@ -217,7 +212,6 @@ implements PaymentCapabilityAuthorizationPort {
                         AND role_permission.store_id = role.store_id
                         AND role_permission.role_id = role.id
                         AND permission.code = 'refund.approve'
-                    )
                   )
               )
             )

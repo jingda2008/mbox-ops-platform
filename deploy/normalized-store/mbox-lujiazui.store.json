@@ -17,6 +17,7 @@
   "bootstrapAdminEmployeeCode": "chenfangyu",
   "reservationPolicy": {
     "holdMinutes": 20,
+    "arrivalGraceMinutes": 10,
     "maxAdvanceDays": 90,
     "defaultDurationMinutes": 240,
     "customerCancelCutoffMinutes": 120,
@@ -1171,6 +1172,7 @@
       "permissions": [
         "dashboard.view",
         "table.view_all",
+        "reservation.view",
         "reservation.view.all",
         "fulfillment.view_all",
         "inventory.view",
@@ -1314,6 +1316,7 @@
         "service.execute",
         "service.manage",
         "reservation.view",
+        "reservation.view.all",
         "reservation.manage",
         "refund.request",
         "inventory.view",
@@ -1380,6 +1383,7 @@
         "service.view",
         "service.execute",
         "reservation.view",
+        "reservation.view.all",
         "reservation.manage",
         "payment.initiate.staff",
         "song.view"
@@ -1426,6 +1430,7 @@
         "dashboard.view",
         "table.open",
         "reservation.view",
+        "reservation.view.all",
         "reservation.manage",
         "service.view"
       ],

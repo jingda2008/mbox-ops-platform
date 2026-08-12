@@ -863,6 +863,22 @@ async function seedPaymentIntegration(pool: Pool): Promise<void> {
     integrationRequesterRoleId,
     integrationApproverRoleId,
   ])
+  await pool.query(`
+    INSERT INTO mbox.staff_permission_definitions(tenant_id, store_id, code, name)
+    SELECT $1::uuid, $2::uuid, code, code
+    FROM unnest(ARRAY['refund.request','payment.initiate.staff','refund.approve','refund.execute']::text[]) code
+    ON CONFLICT (tenant_id, store_id, code) DO UPDATE SET status='active'
+  `, [integrationTenantId, integrationStoreId])
+  await pool.query(`
+    INSERT INTO mbox.role_permission_assignments(tenant_id, store_id, role_id, permission_id)
+    SELECT $1::uuid, $2::uuid,
+      CASE WHEN permission.code IN ('refund.request','payment.initiate.staff') THEN $3::uuid ELSE $4::uuid END,
+      permission.id
+    FROM mbox.staff_permission_definitions permission
+    WHERE permission.tenant_id=$1::uuid AND permission.store_id=$2::uuid
+      AND permission.code IN ('refund.request','payment.initiate.staff','refund.approve','refund.execute')
+    ON CONFLICT DO NOTHING
+  `, [integrationTenantId, integrationStoreId, integrationRequesterRoleId, integrationApproverRoleId])
   await upsertPaymentApprovalLimit(pool)
   await pool.query(`
     INSERT INTO mbox.areas(id, tenant_id, store_id, code, name, area_type)

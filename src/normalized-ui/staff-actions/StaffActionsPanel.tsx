@@ -707,7 +707,7 @@ function TableActionSheet(props: TableActionSheetProps) {
   ))
 
   return (
-    <section className="staff-table-sheet" aria-label={`${table.code}桌台操作`}>
+    <section className="staff-table-sheet" aria-label={`${table.code}桌台操作`} data-action-reveal>
       <header>
         <span className="staff-table-sheet-icon"><TableProperties size={20} /></span>
         <div><strong>{table.code} · {table.displayName}</strong><small>{table.areaName} · 容量{table.capacity}人</small></div>
@@ -733,7 +733,7 @@ function TableActionSheet(props: TableActionSheetProps) {
             />
           </div>
           {requiresCapacityReason(table, guestNumber) && (
-            <label className="staff-capacity-reason">
+            <label className="staff-capacity-reason" data-action-reveal>
               加座说明
               <input value={props.capacityReason} maxLength={1000} placeholder="例如：现场加2把椅子，通道已确认" onChange={(event) => props.onCapacityReason(event.target.value)} />
             </label>
@@ -769,9 +769,9 @@ function TableActionSheet(props: TableActionSheetProps) {
               <button type="button" onClick={() => props.onPermissionGuidance('table.close')}>关台说明</button>
             )}
           </div>
-          {props.closeConfirm && <button type="button" className="staff-cancel-confirm" onClick={props.onCancelClose}>取消关台</button>}
+          {props.closeConfirm && <button type="button" className="staff-cancel-confirm" data-action-reveal onClick={props.onCancelClose}>取消关台</button>}
           {props.transferTargetId !== null && (
-            <div className="staff-transfer-targets">
+            <div className="staff-transfer-targets" data-action-reveal>
               <strong>选择空闲目标桌台</strong>
               <div>
                 {availableTargets.map((candidate) => (

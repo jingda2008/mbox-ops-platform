@@ -446,9 +446,7 @@ async function assertRecipientEligible(
                   AND employee_role.employee_id = employee.id
                   AND employee_role.starts_at <= clock_timestamp()
                   AND (employee_role.ends_at IS NULL OR employee_role.ends_at > clock_timestamp())
-                  AND (
-                    $4 = ANY(role.capabilities)
-                    OR EXISTS (
+                  AND EXISTS (
                       SELECT 1
                       FROM mbox.role_permission_assignments assignment
                       JOIN mbox.staff_permission_definitions permission
@@ -460,7 +458,6 @@ async function assertRecipientEligible(
                       WHERE assignment.tenant_id = role.tenant_id
                         AND assignment.store_id = role.store_id
                         AND assignment.role_id = role.id
-                    )
                   )
               )
             )
@@ -474,9 +471,7 @@ async function assertRecipientEligible(
             AND role.id = $3::uuid
             AND role.status = 'active'
             AND role.can_receive_tasks = true
-            AND (
-              $4 = ANY(role.capabilities)
-              OR EXISTS (
+            AND EXISTS (
                 SELECT 1
                 FROM mbox.role_permission_assignments assignment
                 JOIN mbox.staff_permission_definitions permission
@@ -488,7 +483,6 @@ async function assertRecipientEligible(
                 WHERE assignment.tenant_id = role.tenant_id
                   AND assignment.store_id = role.store_id
                   AND assignment.role_id = role.id
-              )
             )
           FOR KEY SHARE OF role
         `, [transaction.scope.tenantId, transaction.scope.storeId, recipient.id, capability])

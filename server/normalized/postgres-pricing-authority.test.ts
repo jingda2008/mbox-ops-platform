@@ -389,6 +389,23 @@ async function seed(pool: Pool): Promise<void> {
   `, [tenantId, storeId])
   permissionId = permission.rows[0]!.id
   await pool.query(`
+    INSERT INTO mbox.staff_permission_definitions(tenant_id, store_id, code, name)
+    SELECT $1::uuid, $2::uuid, code, code
+    FROM unnest(ARRAY['order.gift','kds.prepare']::text[]) code
+    ON CONFLICT (tenant_id, store_id, code) DO UPDATE SET status='active'
+  `, [tenantId, storeId])
+  await pool.query(`
+    INSERT INTO mbox.role_permission_assignments(tenant_id, store_id, role_id, permission_id)
+    SELECT $1::uuid, $2::uuid, role.id, permission.id
+    FROM mbox.roles role
+    JOIN mbox.staff_permission_definitions permission
+      ON permission.tenant_id=role.tenant_id AND permission.store_id=role.store_id
+    WHERE role.tenant_id=$1::uuid AND role.store_id=$2::uuid
+      AND ((role.id=$3::uuid AND permission.code IN ('order.discount','order.gift','kds.prepare'))
+        OR (role.id=$4::uuid AND permission.code IN ('order.discount','kds.prepare')))
+    ON CONFLICT DO NOTHING
+  `, [tenantId, storeId, roleId, deniedRoleId])
+  await pool.query(`
     INSERT INTO mbox.employee_permission_overrides(
       id, tenant_id, store_id, employee_id, permission_id, effect, reason, configured_by_employee_id
     ) VALUES ($1, $2, $3, $4, $5, 'deny', 'test explicit deny', $6)

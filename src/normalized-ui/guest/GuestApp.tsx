@@ -2,11 +2,14 @@ import {
   AlertCircle,
   Bell,
   Check,
+  CheckCircle2,
   LoaderCircle,
   MessageCircleWarning,
   RefreshCw,
+  ScanLine,
   Send,
   Store,
+  WifiOff,
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -29,12 +32,14 @@ import {
   type GuestMenuProduct,
   type GuestMood,
 } from './guest-model'
+import { guestGatePresentation, type GuestGateReason } from './guest-gate-model'
 import { guestMenuProductToMenuProduct } from './menu-product-adapter'
 import './guest-app.css'
 
 type GuestApiPort = Pick<GuestApiClient, 'scanTable' | 'loadSession' | 'searchMenu' | 'submitOrder' | 'loadTableOrders' | 'requestService' | 'recordMood'>
 type ServiceType = 'call_staff' | 'complaint' | 'custom'
 type Panel = 'orders' | 'complaint' | 'custom' | 'checkout' | null
+export type { GuestGateReason } from './guest-gate-model'
 
 export interface GuestAppProps {
   apiFactory?: (deviceKey: string) => GuestApiPort
@@ -65,7 +70,9 @@ const guestOrderSafety = {
 
 export function GuestApp({ apiFactory }: GuestAppProps) {
   const [phase, setPhase] = useState<'booting' | 'waiting' | 'ready' | 'blocked'>('booting')
+  const [gateReason, setGateReason] = useState<GuestGateReason>('connecting')
   const [gateMessage, setGateMessage] = useState('正在连接您的桌位…')
+  const [gateRefreshing, setGateRefreshing] = useState(false)
   const [table, setTable] = useState<GuestSessionView['table'] | null>(null)
   const [products, setProducts] = useState<GuestMenuProduct[]>([])
   const [partySize, setPartySize] = useState(1)
@@ -88,6 +95,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const menuRequest = useRef(0)
   const orderSubmittingRef = useRef(false)
   const serviceSubmittingRef = useRef(false)
+  const connectingRef = useRef(false)
   const toastSequence = useRef(0)
 
   const menuProducts = useMemo(() => products.map(guestMenuProductToMenuProduct), [products])
@@ -99,6 +107,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const blockForSession = useCallback((error: unknown) => {
     if (error instanceof GuestApiError && (error.status === 401 || error.code === 'TABLE_SESSION_ENDED')) {
       setPhase('blocked')
+      setGateReason(error.code.includes('ENDED') ? 'session_ended' : 'scan_required')
       setGateMessage('这桌的服务时段已经结束，请重新扫描桌面二维码。')
       return true
     }
@@ -141,12 +150,14 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const acceptSession = useCallback((session: GuestSessionView, expectedTable: string) => {
     if (session.table.code.toUpperCase() !== expectedTable.toUpperCase()) {
       setPhase('blocked')
+      setGateReason('table_mismatch')
       setGateMessage('当前会话与桌号不一致，请重新扫描所在桌面的二维码。')
       return false
     }
     setTable(session.table)
     if (session.status === 'waiting_for_table') {
       setPhase('waiting')
+      setGateReason('waiting')
       setGateMessage(session.message ?? '座位正在准备中，请稍候。')
       return false
     }
@@ -155,19 +166,33 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     return true
   }, [])
 
-  const connectTable = useCallback(async () => {
+  const connectTable = useCallback(async (quiet = false) => {
     const api = apiRef.current
     const expectedTable = tableCodeRef.current
-    if (api === null || expectedTable === null) return
-    setPhase('booting')
-    setGateMessage('正在连接您的桌位…')
+    if (api === null || expectedTable === null || connectingRef.current) return
+    connectingRef.current = true
+    if (quiet) {
+      setGateRefreshing(true)
+    } else {
+      setPhase('booting')
+      setGateReason('connecting')
+      setGateMessage('正在连接您的桌位…')
+    }
     try {
       const credential = qrCredentialRef.current
       const session = credential === null ? await api.loadSession() : await api.scanTable(credential)
       acceptSession(session, expectedTable)
     } catch (error) {
+      if (quiet && error instanceof GuestApiError && error.retryable) {
+        setGateMessage('网络刚才有点慢，我们会继续自动更新。')
+        return
+      }
       setPhase('blocked')
+      setGateReason(classifyGateError(error))
       setGateMessage(errorMessage(error, '暂时没有连接上桌边服务，请重试。'))
+    } finally {
+      connectingRef.current = false
+      setGateRefreshing(false)
     }
   }, [acceptSession])
 
@@ -182,6 +207,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     }
     if (expectedTable === null) {
       setPhase('blocked')
+      setGateReason('scan_required')
       setGateMessage(parsed.error ?? '没有识别到桌号，请重新扫描桌面二维码。')
       return
     }
@@ -196,6 +222,17 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     void loadMenu()
     void loadTableOrders(true)
   }, [loadMenu, loadTableOrders, phase])
+
+  useEffect(() => {
+    if (phase !== 'waiting') return
+    const refresh = () => { if (document.visibilityState === 'visible') void connectTable(true) }
+    const timer = window.setInterval(refresh, 8_000)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [connectTable, phase])
 
   useEffect(() => {
     if (phase !== 'ready' || panel !== 'orders') return
@@ -291,7 +328,13 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   }, [blockForSession, loadTableOrders, notify, tableOrders])
 
   if (phase !== 'ready') {
-    return <GuestGate phase={phase} message={gateMessage} table={table} onRetry={() => void connectTable()} />
+    return <GuestGate
+      reason={gateReason}
+      message={gateMessage}
+      table={table}
+      refreshing={gateRefreshing}
+      onRetry={() => void connectTable(phase === 'waiting')}
+    />
   }
 
   return (
@@ -330,7 +373,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
         </button>
       </section>
 
-      {menuError !== null && <div className="guest-inline-error"><AlertCircle /><span>{menuError}</span><button type="button" onClick={() => void loadMenu()}>重试</button></div>}
+      {menuError !== null && <div className="guest-inline-error" role="alert"><AlertCircle /><span>{menuError}</span><button type="button" onClick={() => void loadMenu()}>重试</button></div>}
       {menuLoading && menuProducts.length === 0 ? <div className="guest-menu-loading"><LoaderCircle className="is-spinning" /> 正在准备菜单</div> : (
         <MenuOrderingWorkspace
           products={menuProducts}
@@ -381,22 +424,50 @@ function findRecentDuplicateOrder(
   return null
 }
 
-function GuestGate({ phase, message, table, onRetry }: {
-  phase: 'booting' | 'waiting' | 'blocked'
+export function GuestGate({ reason, message, table, refreshing, onRetry }: {
+  reason: GuestGateReason
   message: string
   table: GuestSessionView['table'] | null
+  refreshing: boolean
   onRetry: () => void
 }) {
+  const content = guestGatePresentation(reason, table, message)
+  const Icon = reason === 'connecting' ? LoaderCircle
+    : reason === 'waiting' ? CheckCircle2
+      : reason === 'scan_required' ? ScanLine
+        : reason === 'temporary_failure' ? WifiOff
+          : reason === 'session_ended' ? Store
+            : AlertCircle
+
   return <main className="guest-gate">
-    <div className="guest-brand"><span>M</span><div><strong>M-BOX</strong><small>SUPERHIGH CULTURE · LIVEHOUSE</small></div></div>
-    <section>
-      <span className="guest-gate-icon">{phase === 'booting' ? <LoaderCircle className="is-spinning" /> : phase === 'waiting' ? <Store /> : <AlertCircle />}</span>
-      <small>{table?.displayName ?? '桌边服务'}</small>
-      <h1>{phase === 'booting' ? '正在为您准备' : phase === 'waiting' ? '座位正在准备' : '需要重新连接'}</h1>
-      <p>{message}</p>
-      {phase !== 'booting' && <button type="button" onClick={onRetry}><RefreshCw />{phase === 'waiting' ? '我已入座，继续' : '重新连接'}</button>}
+    <header className="guest-gate-header">
+      <div className="guest-brand"><span>M</span><div><strong>M-BOX</strong><small>SUPERHIGH CULTURE · LIVEHOUSE</small></div></div>
+      <span className="guest-gate-service"><Store />桌边服务</span>
+    </header>
+    <section className={`is-${reason}`} role={content.alert ? 'alert' : 'status'} aria-live="polite">
+      <div className="guest-gate-kicker"><span />{content.kicker}</div>
+      <span className="guest-gate-icon"><Icon className={reason === 'connecting' ? 'is-spinning' : ''} /></span>
+      <h1>{content.title}</h1>
+      <p>{content.description}</p>
+      {reason === 'waiting' && <div className="guest-gate-progress" aria-label="桌位连接进度">
+        <span className="is-done"><Check />桌位已识别</span><i />
+        <span className="is-current"><LoaderCircle className="is-spinning" />等待开台</span><i />
+        <span><Store />进入菜单</span>
+      </div>}
+      {content.note !== null && <div className="guest-gate-note">{content.note}</div>}
+      {content.action !== null && <button type="button" onClick={onRetry} disabled={refreshing}>
+        <RefreshCw className={refreshing ? 'is-spinning' : ''} />{refreshing ? '正在更新' : content.action}
+      </button>}
     </section>
+    <footer><span />M-BOX 服务在线</footer>
   </main>
+}
+
+function classifyGateError(error: unknown): GuestGateReason {
+  if (!(error instanceof GuestApiError)) return 'temporary_failure'
+  if (error.code.includes('ENDED')) return 'session_ended'
+  if (error.status === 401 || error.status === 404 || error.code.includes('QR_')) return 'scan_required'
+  return 'temporary_failure'
 }
 
 function GuestPanel({ title, dismissible, onClose, children }: { title: string; dismissible: boolean; onClose: () => void; children: React.ReactNode }) {

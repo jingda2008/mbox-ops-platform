@@ -1,16 +1,19 @@
 import { ScopedPostgresTransactionRunner } from './transaction-runner.js'
 import type { ScopedTransaction, StoreScope } from './transaction-runner.js'
+import { expireReservationArrivalGrace } from './reservation-arrival-grace-expiry.js'
 import { expireReservationHold } from './reservation-hold-expiry.js'
 
 interface ExpiredReservationRow extends Record<string, unknown> {
   id: string
   public_id: string
+  expiry_kind: 'pending_hold' | 'arrival_grace'
 }
 
 export interface ReservationHoldExpiryBatch {
   workerId: string
   claimed: number
   expiredReservationIds: readonly string[]
+  noShowReservationIds: readonly string[]
 }
 
 export class ReservationHoldExpiryWorker {
@@ -26,14 +29,18 @@ export class ReservationHoldExpiryWorker {
     return this.transactions.run(scope, async (transaction) => {
       const due = await claimExpiredReservations(transaction, batchSize)
       const expiredReservationIds: string[] = []
+      const noShowReservationIds: string[] = []
       for (const reservation of due) {
-        await expireReservationHold(transaction, {
-          id: reservation.id,
-          publicId: reservation.public_id,
-        }, workerId)
-        expiredReservationIds.push(reservation.id)
+        const reference = { id: reservation.id, publicId: reservation.public_id }
+        if (reservation.expiry_kind === 'pending_hold') {
+          await expireReservationHold(transaction, reference, workerId)
+          expiredReservationIds.push(reservation.id)
+        } else {
+          await expireReservationArrivalGrace(transaction, reference, workerId)
+          noShowReservationIds.push(reservation.id)
+        }
       }
-      return { workerId, claimed: due.length, expiredReservationIds }
+      return { workerId, claimed: due.length, expiredReservationIds, noShowReservationIds }
     })
   }
 }
@@ -43,21 +50,38 @@ async function claimExpiredReservations(
   batchSize: number,
 ): Promise<ExpiredReservationRow[]> {
   const result = await transaction.query<ExpiredReservationRow>(`
-    SELECT reservation.id, reservation.public_id
+    SELECT reservation.id, reservation.public_id,
+      CASE
+        WHEN reservation.status = 'confirmed' THEN 'arrival_grace'
+        ELSE 'pending_hold'
+      END AS expiry_kind
     FROM mbox.reservations AS reservation
     WHERE reservation.tenant_id = $1::uuid
       AND reservation.store_id = $2::uuid
-      AND reservation.status = 'pending'
-      AND EXISTS (
-        SELECT 1
-        FROM mbox.reservation_table_locks AS table_lock
-        WHERE table_lock.tenant_id = reservation.tenant_id
-          AND table_lock.store_id = reservation.store_id
-          AND table_lock.reservation_id = reservation.id
-          AND table_lock.status = 'held'
-          AND table_lock.hold_expires_at <= clock_timestamp()
+      AND (
+        (
+          reservation.status = 'pending'
+          AND EXISTS (
+            SELECT 1 FROM mbox.reservation_table_locks AS table_lock
+            WHERE table_lock.tenant_id = reservation.tenant_id
+              AND table_lock.store_id = reservation.store_id
+              AND table_lock.reservation_id = reservation.id
+              AND table_lock.status = 'held'
+              AND table_lock.hold_expires_at <= clock_timestamp()
+          )
+        ) OR (
+          reservation.status = 'confirmed'
+          AND reservation.arrival_at + make_interval(mins =>
+            CASE
+              WHEN reservation.reservation_snapshot->>'arrivalGraceMinutes' ~ '^[0-9]{1,3}$'
+                THEN LEAST(120, GREATEST(1, (reservation.reservation_snapshot->>'arrivalGraceMinutes')::integer))
+              ELSE 10
+            END
+          )
+          <= clock_timestamp()
+        )
       )
-    ORDER BY reservation.created_at ASC, reservation.id ASC
+    ORDER BY reservation.arrival_at ASC, reservation.id ASC
     FOR UPDATE OF reservation SKIP LOCKED
     LIMIT $3
   `, [transaction.scope.tenantId, transaction.scope.storeId, batchSize])

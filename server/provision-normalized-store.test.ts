@@ -17,6 +17,7 @@ const base = {
   employees: [{ code: 'tom', name: 'Tom', roleCodes: ['SERVER'], pinEnv: 'MBOX_EMPLOYEE_PIN_TOM' }],
   reservationPolicy: {
     holdMinutes: 20,
+    arrivalGraceMinutes: 10,
     maxAdvanceDays: 90,
     defaultDurationMinutes: 240,
     customerCancelCutoffMinutes: 120,

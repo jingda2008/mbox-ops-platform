@@ -70,6 +70,8 @@ import { SopCommandService } from './sop-repository.js'
 import { SopWorker, type SopActionPort } from './sop-worker.js'
 import { StaffAuthCommandService } from './staff-auth-command-service.js'
 import { staffAuthApiPlugin } from './staff-auth-api.js'
+import { staffAccessManagementApiPlugin } from './staff-access-management-api.js'
+import { StaffAccessManagementService } from './staff-access-management-service.js'
 import { StaffBootstrapQuery } from './staff-bootstrap-query.js'
 import { PostgresStaffLoginRateLimiter } from './staff-login-rate-limiter.js'
 import { staffWorkspaceApiPlugin } from './staff-workspace-api.js'
@@ -305,6 +307,11 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     instance.register(staffWorkspaceApiPlugin, {
       prefix: '/api',
       query: new StaffBootstrapQuery(transactions),
+      resolveContext: operationsContext,
+    })
+    instance.register(staffAccessManagementApiPlugin, {
+      prefix: '/api',
+      service: new StaffAccessManagementService(transactions, commandExecutor),
       resolveContext: operationsContext,
     })
     instance.register(guestSessionApiPlugin, {

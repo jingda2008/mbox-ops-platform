@@ -1,5 +1,5 @@
 export type ReservationStep = 'schedule' | 'confirm' | 'complete'
-export type BookingMode = 'direct' | 'self_select'
+export type BookingMode = 'direct'
 export type ReservationTableStatus = 'available' | 'reserved' | 'locked'
 export type ReservationZone = 'stage-front' | 'indoor-middle' | 'outdoor'
 export type SeatPreference =
@@ -43,7 +43,7 @@ export interface ReservationAvailability {
   arrivalAt: string
   expectedEndAt: string
   guestCount: number
-  holdMinutes: number
+  acceptingReservations: boolean
   depositRule: DepositRule
   areas: ReservationArea[]
 }
@@ -59,8 +59,7 @@ export interface PublicReservation {
   arrivalState: 'arrived' | 'not_arrived'
   note: string | null
   seatPreference: SeatPreference
-  tableCodes: string[]
-  holdExpiresAt: string | null
+  arrivalGraceEndsAt: string
   cancellationPolicy: Record<string, unknown>
 }
 
@@ -80,7 +79,6 @@ export interface ReservationDraft {
   time: string
   guestCount: number
   mode: BookingMode
-  tableCodes: string[]
   seatPreference: SeatPreference
   customerName: string
   contact: string

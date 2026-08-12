@@ -131,7 +131,7 @@ describe('NormalizedApiClient', () => {
   })
 
   it('directs expired sessions to login and rejects untrusted endpoint references', async () => {
-    const send = vi.fn(async () => new Response(JSON.stringify({
+    const send = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
       error: { code: 'AUTH_REQUIRED', message: '请重新登录', retryable: false },
     }), { status: 401, headers: { 'content-type': 'application/json' } }))
     const client = new NormalizedApiClient({ fetch: send })
@@ -177,6 +177,21 @@ describe('NormalizedApiClient', () => {
       '/api/staff/reservations',
     ])
     expect(paths).not.toContain('/api/staff/workspace')
+  })
+
+  it('sends permission deployments with an idempotency key and returns verified data', async () => {
+    const send = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
+      data: { status: 'verified', changes: [{ applied: true }] },
+      meta: { generatedAt: '2026-08-13T00:00:00.000Z' },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const client = new NormalizedApiClient({ fetch: send })
+
+    await expect(client.postEndpoint('/api/staff-access/deploy', { changes: [{}] }, {
+      idempotencyKey: 'permission-release-0001',
+    })).resolves.toEqual({ status: 'verified', changes: [{ applied: true }] })
+    const request = send.mock.calls[0]?.[1]
+    expect(new Headers(request?.headers).get('idempotency-key')).toBe('permission-release-0001')
+    expect(request).toMatchObject({ method: 'POST', credentials: 'include' })
   })
 
   it('recovers on a later request after a network failure', async () => {

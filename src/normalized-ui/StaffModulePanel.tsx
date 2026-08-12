@@ -13,6 +13,7 @@ import {
   ShieldCheck,
 } from 'lucide-react'
 import { NormalizedApiClient, NormalizedApiError, type StaffAuthView } from '../normalized-api'
+import { StaffAccessManagementPanel } from './StaffAccessManagementPanel'
 import './staff-module-panel.css'
 
 export type StaffModule = 'payments' | 'performance' | 'inventory' | 'operations' | 'devices' | 'settings'
@@ -202,8 +203,8 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
     if (module === 'inventory') return <InventoryModule view={data.inventory} />
     if (module === 'operations') return <OperationsModule view={data.profit} sales={data.employeeSales} canViewProfit={auth.permissions.includes('commercial.profit.view')} />
     if (module === 'devices') return <DevicesModule devices={data.devices} jobs={data.printJobs} />
-    return <SettingsModule auth={auth} />
-  }, [auth, data, module])
+    return <SettingsModule api={api} auth={auth} />
+  }, [api, auth, data, module])
 
   const modulePresentation = {
     payments: { title: '收银与退款', icon: CircleDollarSign },
@@ -215,7 +216,7 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
   } satisfies Record<StaffModule, { title: string; icon: typeof Settings2 }>
   const { title, icon: Icon } = modulePresentation[module]
 
-  return <section className="staff-module-panel" aria-label={title}>
+  return <section className="staff-module-panel" aria-label={title} data-action-reveal>
     <header>
       <span><Icon size={20} /></span>
       <div><small>岗位工作面</small><h2>{title}</h2></div>
@@ -223,8 +224,8 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
         <RefreshCw size={18} className={phase === 'loading' ? 'is-spinning' : ''} />
       </button>
     </header>
-    {phase === 'loading' && <div className="staff-module-state"><LoaderCircle className="is-spinning" /><strong>正在读取最新状态</strong></div>}
-    {phase === 'error' && <div className="staff-module-state is-error"><strong>暂时没有接上</strong><p>{message}</p><button type="button" onClick={() => void load()}>重试</button></div>}
+    {phase === 'loading' && <div className="staff-module-state" role="status"><LoaderCircle className="is-spinning" /><strong>正在读取最新状态</strong></div>}
+    {phase === 'error' && <div className="staff-module-state is-error" role="alert"><strong>暂时没有接上</strong><p>{message}</p><button type="button" onClick={() => void load()}>重试</button></div>}
     {phase === 'ready' && content}
   </section>
 }
@@ -304,11 +305,12 @@ function DevicesModule({ devices, jobs }: { devices: HardwareDeviceView[]; jobs:
   </div>
 }
 
-function SettingsModule({ auth }: { auth: StaffAuthView }) {
+function SettingsModule({ api, auth }: { api: NormalizedApiClient; auth: StaffAuthView }) {
+  if (auth.permissions.includes('staff.access.configure')) return <StaffAccessManagementPanel api={api} />
   return <div className="staff-module-body">
     <div className="staff-module-summary"><span><ShieldCheck size={18} /></span><div><strong>{auth.employee.roleCodes.join(' · ')}</strong><small>{auth.permissions.length} 项允许权限 · {auth.deniedPermissions.length} 项明确拒绝</small></div></div>
     <div className="staff-settings-grid">
-      <article><strong>员工与岗位</strong><span>{auth.permissions.includes('staff.access.configure') ? '可配置' : '只读'}</span></article>
+      <article><strong>员工与岗位</strong><span>只读</span></article>
       <article><strong>设备与打印</strong><span>{auth.permissions.includes('hardware.manage') ? '可配置' : '只读'}</span></article>
       <article><strong>AI执行策略</strong><span>{auth.permissions.includes('ai.schedule') ? '可配置' : '只读'}</span></article>
       <article><strong>门店业务数据</strong><span>规范化数据库</span></article>

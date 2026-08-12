@@ -133,7 +133,7 @@ describe('guestSessionApiPlugin', () => {
     expect(response.json()).toEqual({
       data: {
         status: 'waiting_for_table',
-        message: '欢迎到店，这张桌子还在准备中，请稍候或请服务伙伴为您开台。',
+        message: '桌位已识别，请告知身边的服务人员为本桌开台。开台后菜单会自动出现。',
         table: { code: 'W01', displayName: '室外 W01' },
       },
     })

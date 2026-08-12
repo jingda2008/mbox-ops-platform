@@ -167,7 +167,6 @@ export class PostgresPricingAuthority implements PricingAuthorityPort {
                 AND granted_override.starts_at <= clock_timestamp()
                 AND (granted_override.ends_at IS NULL OR granted_override.ends_at > clock_timestamp())
             )
-            OR approval.approval_code = ANY(role.capabilities)
             OR EXISTS (
               SELECT 1
               FROM mbox.role_permission_assignments role_permission

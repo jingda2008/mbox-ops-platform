@@ -69,11 +69,23 @@ quality_dir=${bundle_dir}/verified-ci-evidence/quality
 runtime_dir=${bundle_dir}/verified-ci-evidence/runtime
 if [ ! -f "${quality_dir}/SHA256SUMS" ]; then
   mkdir -p "${quality_dir}"
-  gh run download "${MBOX_CI_RUN_ID}" --name "quality-evidence-${release_sha}" --dir "${quality_dir}"
+  quality_archive="quality-evidence-${release_sha}.tar.gz"
+  if [ -f "${bundle_dir}/${quality_archive}" ] && [ -f "${bundle_dir}/${quality_archive}.sha256" ]; then
+    (cd "${bundle_dir}" && shasum -a 256 -c "${quality_archive}.sha256" >/dev/null)
+    tar -xzf "${bundle_dir}/${quality_archive}" -C "${quality_dir}"
+  else
+    gh run download "${MBOX_CI_RUN_ID}" --name "quality-evidence-${release_sha}" --dir "${quality_dir}"
+  fi
 fi
 if [ ! -f "${runtime_dir}/SHA256SUMS" ]; then
   mkdir -p "${runtime_dir}"
-  gh run download "${MBOX_CI_RUN_ID}" --name "runtime-quality-${release_sha}" --dir "${runtime_dir}"
+  runtime_archive="runtime-quality-${release_sha}.tar.gz"
+  if [ -f "${bundle_dir}/${runtime_archive}" ] && [ -f "${bundle_dir}/${runtime_archive}.sha256" ]; then
+    (cd "${bundle_dir}" && shasum -a 256 -c "${runtime_archive}.sha256" >/dev/null)
+    tar -xzf "${bundle_dir}/${runtime_archive}" -C "${runtime_dir}"
+  else
+    gh run download "${MBOX_CI_RUN_ID}" --name "runtime-quality-${release_sha}" --dir "${runtime_dir}"
+  fi
 fi
 for directory in "${quality_dir}" "${runtime_dir}"; do
   (cd "${directory}" && shasum -a 256 -c SHA256SUMS >/dev/null)

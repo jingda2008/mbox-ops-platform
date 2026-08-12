@@ -16,11 +16,14 @@ test('reviewed MBOX baseline is generated deterministically and contains only P0
   for (const line of lines) assert.match(line, /^[A-Z]{3}-\d{3}\|P[01]\|[0-9a-f]{64}$/)
 })
 
-test('tag release downloads and verifies exact CI quality and runtime artifacts', async () => {
+test('tag release downloads and verifies exact checksummed CI evidence bundles', async () => {
   const workflow = await readFile(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8')
-  assert.match(workflow, /gh run download "\$\{VERIFIED_RUN_ID\}"/)
-  assert.match(workflow, /quality-evidence-\$\{GITHUB_SHA\}/)
-  assert.match(workflow, /runtime-quality-\$\{GITHUB_SHA\}/)
+  assert.match(workflow, /if \[\[ "\$\{version\}" == \*-rc\.\* \]\]/)
+  assert.match(workflow, /npm run tc:verify/)
+  assert.match(workflow, /npm run release:quality-gate/)
+  assert.match(workflow, /gh release download "\$\{GITHUB_REF_NAME\}"/)
+  assert.match(workflow, /quality-evidence-\$\{GITHUB_SHA\}\.tar\.gz/)
+  assert.match(workflow, /runtime-quality-\$\{GITHUB_SHA\}\.tar\.gz/)
   assert.match(workflow, /sha256sum --check SHA256SUMS/)
   assert.match(workflow, /quality ledger CI run mismatch/)
 })
@@ -43,6 +46,9 @@ test('CI separates successful evidence from failed diagnostics and keeps uploads
   assert.doesNotMatch(workflow, /github\.ref_type == 'tag' && '' \|\|/)
   assert.match(workflow, /name: Upload the exact image used by validation and deployment\n\s+if: github\.ref_type != 'tag'\n\s+continue-on-error: true/)
   assert.match(workflow, /name: Download full-scope runtime evidence[\s\S]*continue-on-error: true/)
+  assert.match(workflow, /name: Materialize tag runtime evidence without Actions artifacts/)
+  assert.match(workflow, /name: Stage checksummed tag evidence in the pre-release/)
+  assert.match(workflow, /gh release upload "\$\{GITHUB_REF_NAME\}" release-evidence\/\* --clobber/)
   assert.doesNotMatch(workflow, /refs\/heads\/refs\/tags/)
   assert.match(workflow, /name: Publish pull-request quality evidence summary/)
   assert.match(workflow, /cat artifacts\/quality-evidence\/SHA256SUMS/)
@@ -58,4 +64,14 @@ test('tag release builds a checksummed transfer bundle without making GitHub the
   assert.match(workflow, /verify-sensitive-artifacts\.mjs oss-ready-evidence/)
   assert.match(workflow, /name: Upload short-lived OSS transfer bundle\n\s+continue-on-error: true/)
   assert.match(workflow, /retention-days: 14/)
+})
+
+test('Alibaba Cloud deployment prefers release evidence and keeps Actions artifacts as a legacy fallback', async () => {
+  const deploy = await readFile(new URL('../deploy/aliyun/deploy-release.sh', import.meta.url), 'utf8')
+  assert.match(deploy, /quality-evidence-\$\{release_sha\}\.tar\.gz/)
+  assert.match(deploy, /runtime-quality-\$\{release_sha\}\.tar\.gz/)
+  assert.match(deploy, /shasum -a 256 -c "\$\{quality_archive\}\.sha256"/)
+  assert.match(deploy, /shasum -a 256 -c "\$\{runtime_archive\}\.sha256"/)
+  assert.match(deploy, /gh run download "\$\{MBOX_CI_RUN_ID\}" --name "quality-evidence-\$\{release_sha\}"/)
+  assert.match(deploy, /gh run download "\$\{MBOX_CI_RUN_ID\}" --name "runtime-quality-\$\{release_sha\}"/)
 })

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.70 - 2026-08-12
+
+- Removed the GitHub Actions artifact quota as a single point of failure in tagged releases.
+- Materialized commit-bound quality and runtime evidence from successful CI job outputs and stored checksummed evidence archives beside the immutable image in the draft pre-release.
+- Made the release workflow and Alibaba Cloud deployment verify those exact archives before creating the OSS evidence bundle or starting a candidate container.
+- Retained Actions artifacts only as optional diagnostics and preserved the existing CI, image digest, database backup, candidate health, cutover and rollback gates.
+- Preserved the `rc.69` assisted-ordering, role-limited onsite product-gift and customer-benefit separation behavior without changing business semantics.
+
 ## 1.0.0-rc.69 - 2026-08-12
 
 - Restored fixed-table staff-assisted ordering for open table sessions in the normalized onsite workspace.

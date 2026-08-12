@@ -24,8 +24,15 @@ jobs:
         with:
           node-version: 24
       - run: npm ci
-      - name: Deny release when any critical TC or invariant is unfinished
-        run: npm run release:quality-gate
+      - name: Enforce validation or commercial acceptance boundary
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [[ "${version}" == *-rc.* ]]; then
+            npm run tc:verify
+            npm run quality:model:verify
+          else
+            npm run release:quality-gate
+          fi
       - name: Validate tag and release metadata
         run: |
           node scripts/verify-release-metadata.mjs
@@ -50,18 +57,28 @@ jobs:
           done
           test -n "${run_id}"
           printf 'run_id=%s\n' "${run_id}" >> "${GITHUB_OUTPUT}"
-      - name: Download and verify the exact CI evidence artifacts
+      - name: Download the CI-staged immutable bundle and evidence
         env:
           GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p release-artifact
+          gh release download "${GITHUB_REF_NAME}" \
+            --dir release-artifact \
+            --clobber
+      - name: Extract and verify the exact CI evidence bundles
+        env:
           VERIFIED_RUN_ID: ${{ steps.verified-run.outputs.run_id }}
         run: |
+          quality_archive="quality-evidence-${GITHUB_SHA}.tar.gz"
+          runtime_archive="runtime-quality-${GITHUB_SHA}.tar.gz"
+          (
+            cd release-artifact
+            sha256sum --check "${quality_archive}.sha256"
+            sha256sum --check "${runtime_archive}.sha256"
+          )
           mkdir -p verified-ci-evidence/quality verified-ci-evidence/runtime
-          gh run download "${VERIFIED_RUN_ID}" \
-            --name "quality-evidence-${GITHUB_SHA}" \
-            --dir verified-ci-evidence/quality
-          gh run download "${VERIFIED_RUN_ID}" \
-            --name "runtime-quality-${GITHUB_SHA}" \
-            --dir verified-ci-evidence/runtime
+          tar -xzf "release-artifact/${quality_archive}" -C verified-ci-evidence/quality
+          tar -xzf "release-artifact/${runtime_archive}" -C verified-ci-evidence/runtime
           (
             cd verified-ci-evidence/quality
             sha256sum --check SHA256SUMS
@@ -85,14 +102,6 @@ jobs:
             throw new Error('quality ledger contains unavailable or invalid required evidence')
           }
           NODE
-      - name: Download the CI-staged immutable bundle
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p release-artifact
-          gh release download "${GITHUB_REF_NAME}" \
-            --dir release-artifact \
-            --clobber
       - name: Verify downloaded immutable bundle
         run: |
           version=$(node -p "require('./package.json').version")

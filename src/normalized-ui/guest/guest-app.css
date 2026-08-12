@@ -38,6 +38,14 @@ button:active:not(:disabled) {
   padding-bottom: calc(88px + env(safe-area-inset-bottom));
 }
 
+.guest-app .menu-ordering-workspace {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.guest-app .menu-workspace-header {
+  display: none;
+}
+
 .guest-header {
   position: sticky;
   z-index: 20;
@@ -167,26 +175,27 @@ button:active:not(:disabled) {
 
 .guest-mood-options button {
   min-width: 0;
-  min-height: 58px;
-  padding: 5px 2px;
-  border: 1px solid #d5d8d1;
+  min-height: 66px;
+  padding: 5px 2px 6px;
+  border: 1px solid #cfd4cc;
   border-radius: 6px;
   background: #fbfcfa;
   color: #313630;
   display: grid;
   place-items: center;
-  transition: opacity 150ms ease, border-color 150ms ease, background-color 150ms ease;
+  box-shadow: 0 2px 0 #c5cac3, 0 4px 8px rgb(18 24 19 / 8%);
+  transition: opacity 150ms ease, filter 150ms ease, border-color 150ms ease, background-color 150ms ease, box-shadow 80ms ease, transform 80ms ease;
 }
 
-.guest-mood-options button span {
-  display: grid;
-  width: 27px;
-  height: 27px;
-  border: 1px solid #d6c993;
+.guest-mood-options button img {
+  display: block;
+  width: 38px;
+  height: 38px;
+  border: 1px solid #ded8c5;
   border-radius: 50%;
-  place-items: center;
-  color: #9b7820;
-  font-size: 16px;
+  object-fit: cover;
+  background: #fff;
+  box-shadow: 0 2px 5px rgb(38 34 22 / 10%);
 }
 
 .guest-mood-options button small {
@@ -194,13 +203,20 @@ button:active:not(:disabled) {
 }
 
 .guest-mood-options.has-selection button:not(.is-selected) {
-  opacity: 0.36;
+  opacity: 0.42;
+  filter: grayscale(1);
 }
 
 .guest-mood-options button.is-selected {
   border-color: #c4a444;
   background: #fff9e9;
-  box-shadow: inset 0 0 0 1px #d9bd61;
+  box-shadow: 0 2px 0 #a98424, 0 5px 12px rgb(118 91 20 / 18%), inset 0 0 0 1px #d9bd61;
+  transform: translateY(-1px);
+}
+
+.guest-mood-options button:active:not(:disabled) {
+  box-shadow: 0 1px 0 #aeb5ad;
+  transform: translateY(1px) scale(.98);
 }
 
 .guest-service-strip {
@@ -218,6 +234,8 @@ button:active:not(:disabled) {
   border: 1px solid #cdd1ca;
   border-radius: 6px;
   background: #fbfcfa;
+  box-shadow: 0 2px 0 #c4cac2, 0 4px 8px rgb(18 24 19 / 7%);
+  transition: border-color 120ms ease, background-color 120ms ease, box-shadow 80ms ease, transform 80ms ease;
   color: #252925;
   display: grid;
   gap: 3px;

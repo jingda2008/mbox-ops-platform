@@ -1,4 +1,4 @@
-:root { font-family: system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", sans-serif; color: #1b211d; background: #f2f3ef; font-synthesis: none; text-rendering: optimizeLegibility; }
+:root { --brand-yellow: #d8b34f; --brand-red: #df5b61; --wechat-green: #16794a; --ink: #171a17; --ink-soft: #697069; --line: #d8dbd4; --line-strong: #b8beb6; font-family: system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", sans-serif; color: #1b211d; background: #f2f3ef; font-synthesis: none; text-rendering: optimizeLegibility; }
 * { box-sizing: border-box; }
 html { min-width: 320px; min-height: 100%; background: #f2f3ef; }
 body { min-width: 320px; min-height: 100%; margin: 0; }

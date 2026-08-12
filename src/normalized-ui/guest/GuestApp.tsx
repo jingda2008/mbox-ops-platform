@@ -46,13 +46,13 @@ interface ToastState {
   message: string
 }
 
-const moods: ReadonlyArray<{ code: GuestMood; emoji: string; label: string }> = [
-  { code: 'happy', emoji: '☺', label: '开心' },
-  { code: 'excited', emoji: '✦', label: '兴奋' },
-  { code: 'listening', emoji: '♫', label: '听歌' },
-  { code: 'social', emoji: '✧', label: '想互动' },
-  { code: 'celebrating', emoji: '★', label: '庆祝' },
-  { code: 'quiet', emoji: '☾', label: '安静' },
+const moods: ReadonlyArray<{ code: GuestMood; asset: string; label: string }> = [
+  { code: 'happy', asset: 'happy', label: '开心' },
+  { code: 'excited', asset: 'tipsy', label: '微醺' },
+  { code: 'listening', asset: 'listen', label: '听歌' },
+  { code: 'social', asset: 'interactive', label: '互动' },
+  { code: 'celebrating', asset: 'celebrate', label: '庆祝' },
+  { code: 'quiet', asset: 'quiet', label: '安静' },
 ]
 
 const guestOrderSafety = {
@@ -314,7 +314,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
             aria-pressed={selectedMood === mood.code}
             aria-label={`心情：${mood.label}`}
             onClick={() => void selectMood(mood.code)}
-          ><span aria-hidden="true">{mood.emoji}</span><small>{mood.label}</small></button>)}
+          ><img src={`/brand/moods-v2/${mood.asset}.webp`} alt="" aria-hidden="true" decoding="async" /><small>{mood.label}</small></button>)}
         </div>
       </section>
 

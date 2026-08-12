@@ -423,6 +423,10 @@ export function MenuOrderingWorkspace({
   }
 
   function chooseRecommendedProduct(product: MenuProduct) {
+    if (guestSalesMode && product.productKind === 'single') {
+      openProductDetail(product)
+      return
+    }
     changeQuantity(product.id, 1)
     emitInteraction('recommendation_accepted', { productId: product.id })
   }
@@ -583,6 +587,7 @@ export function MenuOrderingWorkspace({
   const detailSavingsAmount = detailProduct && detailComparisonAmount !== null
     ? detailComparisonAmount - detailProduct.listPriceAmount
     : 0
+  const detailQuantity = detailProduct ? cart[detailProduct.id] ?? 0 : 0
   const upgradeProduct = orderedProducts.find((product) => product.id === upgradePromptProductId) ?? null
   const upgradeSourceProduct = orderedProducts.find((product) => product.id === upgradeSourceProductId) ?? null
 
@@ -781,6 +786,10 @@ export function MenuOrderingWorkspace({
                       <b>¥{(product.listPriceAmount / 100).toFixed(0)}</b>
                       {!status.orderable ? (
                         <button className="menu-unavailable-button" title={status.label} aria-label={`${product.name}暂不可点，${status.label}`} disabled><Clock3 size={18} /></button>
+                      ) : guestSalesMode && product.productKind === 'single' ? (
+                        <button className="menu-detail-entry" aria-label={`查看${product.name}详情`} onClick={() => openProductDetail(product)}>
+                          {quantity > 0 ? <><Check size={15} />已选 {quantity}</> : <>看详情<ChevronRight size={15} /></>}
+                        </button>
                       ) : quantity === 0 ? (
                         <button className="menu-add-button" title={`加入${product.name}`} aria-label={`加入${product.name}`} onClick={() => changeQuantity(product.id, 1)}><Plus size={20} /></button>
                       ) : (
@@ -875,14 +884,16 @@ export function MenuOrderingWorkspace({
           </div>
           <footer>
             <div><small>今晚价格</small><strong>¥{formatMenuAmount(detailProduct.listPriceAmount)}</strong></div>
-            <button
+            {detailQuantity === 0 ? <button
               className="menu-submit-button"
+              data-haptic="action"
               disabled={availability.get(detailProduct.id)?.orderable !== true}
-              onClick={() => {
-                changeQuantity(detailProduct.id, 1)
-                setDetailProductId('')
-              }}
-            ><Plus size={18} />加入今晚</button>
+              onClick={() => changeQuantity(detailProduct.id, 1)}
+            ><Plus size={18} />加入购物车</button> : <div className="menu-detail-stepper" aria-label={`${detailProduct.name}已选${detailQuantity}件`}>
+              <button type="button" aria-label={`减少${detailProduct.name}`} onClick={() => changeQuantity(detailProduct.id, -1)}><Minus size={18} /></button>
+              <span><small>已加入购物车</small><strong>{detailQuantity} 件</strong></span>
+              <button type="button" aria-label={`增加${detailProduct.name}`} onClick={() => changeQuantity(detailProduct.id, 1)}><Plus size={18} /></button>
+            </div>}
           </footer>
         </aside>
       </>}

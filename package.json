@@ -1,7 +1,7 @@
 {
   "name": "@mbox/ops-platform",
   "private": true,
-  "version": "1.0.0-rc.69",
+  "version": "1.0.0-rc.70",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n API,WEB -c yellow,cyan \"npm:dev:api\" \"npm:dev:web\"",
@@ -46,11 +46,11 @@
     "quality:evidence:verify": "node scripts/verify-quality-evidence.mjs",
     "quality:tc-register:test": "node --test scripts/verify-tc-register.test.mjs scripts/build-tc-reviewed-baseline.test.mjs scripts/verify-quality-model.test.mjs scripts/load-workload-model.test.mjs scripts/merge-rc68-load-reports.test.mjs",
     "quality:tc-register:verify": "node scripts/verify-tc-register.mjs",
-    "quality:model:verify": "node scripts/verify-quality-model.mjs --state-machine docs/quality/mbox-kds-state-machine-v1.json --invariants docs/quality/mbox-invariant-register-v1.csv --tc-register docs/tc-execution-register-1.0.0-rc.69.csv",
+    "quality:model:verify": "node scripts/verify-quality-model.mjs --state-machine docs/quality/mbox-kds-state-machine-v1.json --invariants docs/quality/mbox-invariant-register-v1.csv --tc-register docs/tc-execution-register-1.0.0-rc.70.csv",
     "quality:plan:test": "node --test scripts/run-software-quality-plan.test.mjs",
     "quality:plan:run": "node scripts/run-software-quality-plan.mjs",
     "quality:seed:verify": "node scripts/verify-deterministic-load-seed.mjs",
-    "release:quality-gate": "node scripts/build-tc-execution-register.mjs --check --require-release-pass && node scripts/verify-quality-model.mjs --state-machine docs/quality/mbox-kds-state-machine-v1.json --invariants docs/quality/mbox-invariant-register-v1.csv --tc-register docs/tc-execution-register-1.0.0-rc.69.csv --require-release-pass",
+    "release:quality-gate": "node scripts/build-tc-execution-register.mjs --check --require-release-pass && node scripts/verify-quality-model.mjs --state-machine docs/quality/mbox-kds-state-machine-v1.json --invariants docs/quality/mbox-invariant-register-v1.csv --tc-register docs/tc-execution-register-1.0.0-rc.70.csv --require-release-pass",
     "runtime:quality:test": "node --test scripts/analyze-runtime-logs.test.mjs scripts/verify-runtime-metrics.test.mjs scripts/run-local-rc68-load.test.mjs scripts/load-reference-time.test.mjs scripts/reset-runtime-metrics-window.test.mjs scripts/verify-sensitive-artifacts.test.mjs scripts/build-aliyun-evidence-bundle.test.mjs scripts/filter-sls-events.test.mjs scripts/aliyun-evidence-pipeline.test.mjs scripts/render-normalized-table-qr-pdfs.test.mjs",
     "check:miniprogram": "node scripts/check-miniprogram.mjs",
     "lint": "oxlint src server",

@@ -508,6 +508,9 @@ jobs:
     if: always()
     needs: [classify, docs, quality, fast_quality, ui_browser, browser, database, normalized_database, normalized_browser, performance, image]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v6
       - name: Download full-scope runtime evidence
@@ -547,6 +550,24 @@ jobs:
           cd artifacts/quality-evidence
           find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
           sha256sum --check SHA256SUMS
+      - name: Materialize tag runtime evidence without Actions artifacts
+        if: success() && github.ref_type == 'tag' && needs.classify.outputs.scope == 'full'
+        env:
+          LOAD_REPORT_B64: ${{ needs.performance.outputs.load_report_b64 }}
+          STARTUP_REPORT_B64: ${{ needs.normalized_browser.outputs.startup_report_b64 }}
+        run: |
+          test -n "${LOAD_REPORT_B64}"
+          test -n "${STARTUP_REPORT_B64}"
+          mkdir -p artifacts/runtime-quality
+          printf '%s' "${LOAD_REPORT_B64}" | base64 --decode > artifacts/runtime-quality/client-observed-load.json
+          printf '%s' "${STARTUP_REPORT_B64}" | base64 --decode > artifacts/runtime-quality/normalized-browser-startup.json
+          node -e "JSON.parse(require('fs').readFileSync('artifacts/runtime-quality/client-observed-load.json', 'utf8'))"
+          node -e "JSON.parse(require('fs').readFileSync('artifacts/runtime-quality/normalized-browser-startup.json', 'utf8'))"
+          (
+            cd artifacts/runtime-quality
+            find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+            sha256sum --check SHA256SUMS
+          )
       - name: Publish pull-request quality evidence summary
         if: always() && github.event_name == 'pull_request'
         run: |
@@ -647,3 +668,20 @@ jobs:
               test "${IMAGE_RESULT}" = skipped
             fi
           fi
+      - name: Stage checksummed tag evidence in the pre-release
+        if: success() && github.ref_type == 'tag' && needs.classify.outputs.scope == 'full'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p release-evidence
+          quality_archive="release-evidence/quality-evidence-${GITHUB_SHA}.tar.gz"
+          runtime_archive="release-evidence/runtime-quality-${GITHUB_SHA}.tar.gz"
+          tar -C artifacts/quality-evidence -czf "${quality_archive}" .
+          tar -C artifacts/runtime-quality -czf "${runtime_archive}" .
+          (
+            cd release-evidence
+            sha256sum "$(basename "${quality_archive}")" > "$(basename "${quality_archive}").sha256"
+            sha256sum "$(basename "${runtime_archive}")" > "$(basename "${runtime_archive}").sha256"
+            sha256sum --check ./*.sha256
+          )
+          gh release upload "${GITHUB_REF_NAME}" release-evidence/* --clobber

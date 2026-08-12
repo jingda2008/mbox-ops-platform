@@ -13,13 +13,13 @@ import {
 } from 'lucide-react'
 import { StaffActionsApi, StaffActionsApiError, type StaffActionsApiPort } from './staff-actions-api'
 import {
-  actionableFulfillmentItems,
-  actionableServiceTasks,
   fulfillmentAction,
   guidanceForPermission,
   hasPermission,
   requiresCapacityReason,
+  tableMoodPresentation,
   tableGroups,
+  unifiedActionQueue,
   validateOpenTableInput,
 } from './staff-actions-model'
 import type {
@@ -40,7 +40,7 @@ export interface StaffActionsPanelProps {
 
 export function StaffActionsPanel({
   api: suppliedApi,
-  initialTab = 'tables',
+  initialTab = 'work',
   onLoginRequired,
 }: StaffActionsPanelProps) {
   const api = useMemo(() => suppliedApi ?? new StaffActionsApi(), [suppliedApi])
@@ -55,10 +55,12 @@ export function StaffActionsPanel({
   const [transferTargetId, setTransferTargetId] = useState<string | null>(null)
   const [transferReason, setTransferReason] = useState('')
   const [closeConfirm, setCloseConfirm] = useState(false)
+  const [resolutionNotes, setResolutionNotes] = useState<Record<string, string>>({})
   const [pendingAction, setPendingAction] = useState<string | null>(null)
   const noticeRef = useRef<HTMLDivElement | null>(null)
   const noticeTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null)
   const requestRef = useRef<AbortController | null>(null)
+  const knownActionKeysRef = useRef<Set<string> | null>(null)
 
   const showNotice = useCallback((nextNotice: Exclude<StaffActionNotice, null>) => {
     if (noticeTimerRef.current !== null) globalThis.clearTimeout(noticeTimerRef.current)
@@ -76,12 +78,24 @@ export function StaffActionsPanel({
     requestRef.current = controller
     if (!quiet) setPhase('loading')
     try {
-      const [nextOperations, nextFulfillment] = await Promise.all([
+      const [operationsResult, fulfillmentResult] = await Promise.allSettled([
         api.loadOperations(controller.signal),
         api.loadFulfillment(controller.signal),
       ])
-      setOperations(nextOperations)
-      setFulfillment(nextFulfillment)
+      if (operationsResult.status === 'rejected') throw operationsResult.reason
+      setOperations(operationsResult.value)
+      if (fulfillmentResult.status === 'fulfilled') {
+        setFulfillment(fulfillmentResult.value)
+      } else if (fulfillmentResult.reason instanceof StaffActionsApiError
+        && fulfillmentResult.reason.status === 401) {
+        throw fulfillmentResult.reason
+      } else {
+        setFulfillment(null)
+        if (!(fulfillmentResult.reason instanceof StaffActionsApiError
+          && fulfillmentResult.reason.status === 403)) {
+          showNotice({ kind: 'error', message: '桌台与服务已更新，出品待办暂时无法读取' })
+        }
+      }
       setPhase('ready')
     } catch (error) {
       if (error instanceof StaffActionsApiError && error.code === 'ABORTED') return
@@ -99,14 +113,45 @@ export function StaffActionsPanel({
     }
   }, [load])
 
+  useEffect(() => {
+    const poll = () => {
+      if (document.visibilityState === 'visible' && pendingAction === null) void load(true)
+    }
+    const timer = globalThis.setInterval(poll, 5_000)
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') poll()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      globalThis.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [load, pendingAction])
+
   const revealPermissionGuidance = useCallback((permission: Parameters<typeof guidanceForPermission>[0]) => {
     showNotice({ kind: 'guidance', message: guidanceForPermission(permission) })
   }, [showNotice])
 
   const selectedTable = operations?.tables.find((table) => table.id === selectedTableId) ?? null
   const permissions = operations?.actor.capabilities ?? []
-  const serviceTasks = operations === null ? [] : actionableServiceTasks(operations.tasks, operations.actor.id)
-  const fulfillmentItems = fulfillment === null ? [] : actionableFulfillmentItems(fulfillment.workItems)
+  const unifiedActions = useMemo(() => operations === null
+    ? []
+    : unifiedActionQueue(operations.tasks, fulfillment?.workItems ?? [], operations.actor.id), [fulfillment, operations])
+  const visibleActions = unifiedActions.slice(0, 8)
+
+  useEffect(() => {
+    const current = new Set(unifiedActions.map((action) => action.key))
+    const previous = knownActionKeysRef.current
+    knownActionKeysRef.current = current
+    if (previous === null || pendingAction !== null) return
+    const hasNewAttention = unifiedActions.some((action) => (
+      !previous.has(action.key)
+      && (action.kind === 'service'
+        ? action.task.priority === 'urgent' || action.task.interactionMode === 'manager_resolution'
+        : action.item.readyForDelivery || action.item.overdue)
+    ))
+    if (hasNewAttention && typeof navigator.vibrate === 'function') navigator.vibrate([18, 45, 18])
+  }, [pendingAction, unifiedActions])
 
   const selectTable = (table: StaffActionTable) => {
     setSelectedTableId(table.id)
@@ -129,6 +174,7 @@ export function StaffActionsPanel({
       guestCount: validated.guestCount,
       status: 'open' as const,
       openedAt: new Date().toISOString(),
+      latestMood: null,
     }
     setPendingAction(`table:${selectedTable.id}`)
     setOperations(replaceTableSession(snapshot, selectedTable.id, optimisticSession))
@@ -204,11 +250,20 @@ export function StaffActionsPanel({
   const completeServiceTask = async (task: StaffServiceTask) => {
     if (operations === null) return
     if (!hasPermission(permissions, 'service.execute')) return revealPermissionGuidance('service.execute')
+    const resolutionNote = resolutionNotes[task.id]?.trim()
+    if (task.interactionMode === 'manager_resolution' && (resolutionNote?.length ?? 0) < 4) {
+      return showNotice({ kind: 'guidance', message: '投诉需要值班经理简要记录现场处理结果后再完成' })
+    }
     const snapshot = operations
     setPendingAction(`service:${task.id}`)
     setOperations({ ...snapshot, tasks: snapshot.tasks.filter((item) => item.id !== task.id) })
     try {
-      await api.completeServiceTask(task.id)
+      await api.completeServiceTask(task.id, resolutionNote)
+      setResolutionNotes((current) => {
+        const next = { ...current }
+        delete next[task.id]
+        return next
+      })
       showNotice({ kind: 'success', message: `${task.tableCode} 的“${task.title}”已完成` })
       await load(true)
     } catch (error) {
@@ -268,9 +323,8 @@ export function StaffActionsPanel({
       </div>
 
       <nav className="staff-actions-tabs" aria-label="现场工作分类">
+        <TabButton active={tab === 'work'} label="待办" count={unifiedActions.length} onClick={() => setTab('work')} />
         <TabButton active={tab === 'tables'} label="桌台" count={operations?.tables.length ?? 0} onClick={() => setTab('tables')} />
-        <TabButton active={tab === 'service'} label="服务" count={serviceTasks.length} onClick={() => setTab('service')} />
-        <TabButton active={tab === 'fulfillment'} label="出品" count={fulfillmentItems.length} onClick={() => setTab('fulfillment')} />
       </nav>
 
       {phase === 'error' && operations !== null && <p className="staff-actions-stale">刷新失败，当前显示上次成功数据。</p>}
@@ -281,7 +335,11 @@ export function StaffActionsPanel({
             <section className="staff-table-area" key={group.area}>
               <h3>{group.area}</h3>
               <div className="staff-table-grid">
-                {group.tables.map((table) => (
+                {group.tables.map((table) => {
+                  const mood = table.activeSession?.latestMood === null || table.activeSession === null
+                    ? null
+                    : tableMoodPresentation(table.activeSession.latestMood.code)
+                  return (
                   <button
                     type="button"
                     className={`staff-table-tile ${table.activeSession === null ? '' : 'is-open'} ${selectedTableId === table.id ? 'is-selected' : ''}`}
@@ -292,8 +350,14 @@ export function StaffActionsPanel({
                     <strong>{table.code}</strong>
                     <span>{table.activeSession === null ? `${table.capacity}人` : `${table.activeSession.guestCount}人 · 已开台`}</span>
                     {table.assignedToActor && <small>负责桌</small>}
+                    {mood !== null && (
+                      <span className="staff-table-mood" title={`客人状态：${mood.label}`} aria-label={`客人状态：${mood.label}`}>
+                        {mood.symbol}
+                      </span>
+                    )}
                   </button>
-                ))}
+                  )
+                })}
               </div>
             </section>
           ))}
@@ -322,31 +386,43 @@ export function StaffActionsPanel({
         </div>
       )}
 
-      {tab === 'service' && operations !== null && (
-        <ActionList empty="当前没有需要处理的服务任务">
-          {serviceTasks.map((task) => (
+      {tab === 'work' && operations !== null && (
+        <ActionList empty="当前没有需要处理的现场事项">
+          {visibleActions.map((action) => action.kind === 'service' ? (() => {
+            const task = action.task
+            return (
             <article className={`staff-action-card priority-${task.priority}`} key={task.id}>
               <div className="staff-action-card-main">
                 <strong>{task.tableCode} · {task.title}</strong>
                 {task.detail !== null && <p>{task.detail}</p>}
-                <small>{task.priority === 'urgent' ? '紧急' : task.priority === 'high' ? '优先处理' : '待处理'}</small>
+                <small>{task.interactionMode === 'manager_resolution'
+                  ? '值班经理处理 · 需留结果'
+                  : task.assignedToActor
+                    ? '我负责的桌台 · 一键完成'
+                    : task.priority === 'urgent' ? '紧急' : task.priority === 'high' ? '优先处理' : '待处理'}</small>
+                {task.interactionMode === 'manager_resolution' && (
+                  <input
+                    className="staff-resolution-note"
+                    value={resolutionNotes[task.id] ?? ''}
+                    maxLength={500}
+                    placeholder="简要记录客人诉求和处理结果"
+                    aria-label={`${task.tableCode}投诉处理结果`}
+                    onChange={(event) => setResolutionNotes((current) => ({ ...current, [task.id]: event.target.value }))}
+                  />
+                )}
               </div>
               {hasPermission(permissions, 'service.execute') ? (
                 <button type="button" onClick={() => void completeServiceTask(task)} disabled={pendingAction === `service:${task.id}`}>
-                  <Check size={18} /> 完成
+                  <Check size={18} /> {task.interactionMode === 'manager_resolution' ? '记录并完成' : '完成'}
                 </button>
               ) : (
                 <button type="button" className="is-readonly" onClick={() => revealPermissionGuidance('service.execute')}>查看说明</button>
               )}
             </article>
-          ))}
-        </ActionList>
-      )}
-
-      {tab === 'fulfillment' && (
-        <ActionList empty="当前岗位没有需要制作或配送的出品">
-          {fulfillmentItems.map((item) => {
-            const action = fulfillmentAction(item)
+            )
+          })() : (() => {
+            const item = action.item
+            const fulfillmentCommand = fulfillmentAction(item)
             return (
               <article className={`staff-action-card ${item.overdue ? 'is-overdue' : ''}`} key={item.taskId}>
                 <div className="staff-action-card-main">
@@ -355,15 +431,18 @@ export function StaffActionsPanel({
                   {item.attentionMessages.map((message) => <small className="staff-action-note" key={message}>备注：{message}</small>)}
                   {item.overdue && <small className="staff-action-overdue">已超时，优先处理</small>}
                 </div>
-                {action !== null && (
+                {fulfillmentCommand !== null && (
                   <button type="button" onClick={() => void runFulfillmentAction(item)} disabled={pendingAction === `kds:${item.taskId}`}>
-                    {action === 'deliver' ? <Send size={18} /> : <ChefHat size={18} />}
-                    {action === 'deliver' ? '已送达' : '制作完成'}
+                    {fulfillmentCommand === 'deliver' ? <Send size={18} /> : <ChefHat size={18} />}
+                    {fulfillmentCommand === 'deliver' ? '已送达' : '制作完成'}
                   </button>
                 )}
               </article>
             )
-          })}
+          })())}
+          {unifiedActions.length > visibleActions.length && (
+            <p className="staff-actions-more">还有 {unifiedActions.length - visibleActions.length} 项，完成当前事项后自动补入</p>
+          )}
         </ActionList>
       )}
 

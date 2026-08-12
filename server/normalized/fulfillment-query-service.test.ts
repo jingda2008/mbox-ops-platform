@@ -52,7 +52,7 @@ describe('FulfillmentQueryService', () => {
 
     const query = fulfillmentCall(fixture.client)
     expect(query.values.slice(3)).toEqual([false, ['bar'], true, false])
-    expect(query.sql).toContain("assignment.assignment_type IN ('primary', 'backup')")
+    expect(query.sql).toContain("(assignment.assignment_type IN ('primary', 'backup')) DESC")
     expect(query.sql).toContain("task.status = 'ready'")
     expect(query.sql).toContain('task.priority DESC')
     expect(query.sql).not.toMatch(/cost_snapshot|payment_status|payments|refunds/i)
@@ -60,7 +60,7 @@ describe('FulfillmentQueryService', () => {
     expect(fixture.client.released).toBe(true)
   })
 
-  it('limits delivery staff to ready work on primary or backup assigned tables', async () => {
+  it('lets delivery staff support any ready item while preserving assignment context', async () => {
     const fixture = scriptedService([
       employeeRow(actorId, 'SERVER01', '服务员'),
       rows([{ code: 'SERVER', name: '服务员' }]),
@@ -88,6 +88,36 @@ describe('FulfillmentQueryService', () => {
       table: { assignmentType: 'backup' },
     })
     expect(fulfillmentCall(fixture.client).values.slice(3)).toEqual([false, [], false, true])
+  })
+
+  it('lets an unassigned delivery-capable employee take a ready item without exposing production work', async () => {
+    const fixture = scriptedService([
+      employeeRow(actorId, 'SERVER02', '候补服务员'),
+      rows([{ code: 'SERVER', name: '服务员' }]),
+      permissionRows(KDS_DELIVER_PERMISSION),
+      rows([]),
+      rows([]),
+      rows([]),
+      rows([fulfillmentRow({
+        kds_status: 'ready',
+        ready_for_delivery: true,
+        can_deliver: true,
+        assignment_type: null,
+      })]),
+    ])
+
+    const result = await fixture.service.getStaffWorkQueue({ tenantId, storeId }, actorId)
+
+    expect(result.workItems).toHaveLength(1)
+    expect(result.workItems[0]).toMatchObject({
+      kdsStatus: 'ready',
+      canPrepare: false,
+      canDeliver: true,
+      table: { assignmentType: null },
+    })
+    const query = fulfillmentCall(fixture.client)
+    expect(query.sql).toContain("$7::boolean AND task.status = 'ready'")
+    expect(query.sql).not.toContain("task.status = 'ready' AND assignment.assignment_type")
   })
 
   it('shows the whole store only with the explicit fulfillment view-all permission', async () => {

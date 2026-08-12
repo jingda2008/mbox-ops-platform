@@ -88,9 +88,14 @@ button:active:not(:disabled) {
 
 .guest-table {
   display: grid;
-  min-width: 84px;
+  min-width: 94px;
   padding-left: 12px;
   border-left: 1px solid #d8dbd4;
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
+  background: transparent;
+  color: inherit;
   text-align: right;
 }
 
@@ -838,11 +843,124 @@ button:active:not(:disabled) {
 }
 
 .guest-cart-panel,
+.guest-table-orders,
 .guest-service-panel,
 .guest-checkout-result,
 .guest-quick-panel,
 .guest-shake-panel {
   padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
+}
+
+.guest-duplicate-warning {
+  margin-top: 10px;
+  padding: 9px 10px;
+  border: 1px solid #ddc56f;
+  border-radius: 6px;
+  background: #fff9e8;
+  color: #70581c;
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  gap: 8px;
+}
+
+.guest-duplicate-warning svg {
+  width: 18px;
+}
+
+.guest-duplicate-warning span {
+  display: grid;
+  gap: 2px;
+}
+
+.guest-duplicate-warning strong {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.guest-duplicate-warning small {
+  font-size: 11px;
+}
+
+.guest-table-orders-toolbar {
+  min-height: 42px;
+  border-bottom: 1px solid #dfe2dc;
+  color: #666c65;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+}
+
+.guest-table-orders-toolbar button {
+  min-height: 34px;
+  padding: 0 9px;
+  border: 1px solid #cbd0c8;
+  border-radius: 6px;
+  background: white;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.guest-table-orders-toolbar svg {
+  width: 15px;
+}
+
+.guest-table-orders article {
+  margin-top: 9px;
+  border: 1px solid #d6dad3;
+  border-radius: 6px;
+  background: white;
+  overflow: hidden;
+}
+
+.guest-table-orders article.is-private {
+  border-color: #d8c680;
+  background: #fffdf6;
+}
+
+.guest-table-orders article > header {
+  min-height: 39px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #e1e4de;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.guest-table-orders article > header strong {
+  font-size: 13px;
+}
+
+.guest-table-orders article > header span {
+  color: #28704b;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.guest-table-orders article > div {
+  padding: 4px 10px;
+}
+
+.guest-table-orders p {
+  min-height: 35px;
+  margin: 0;
+  border-bottom: 1px solid #eef0ec;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.guest-table-orders p:last-child {
+  border-bottom: 0;
+}
+
+.guest-table-orders p small {
+  flex: 0 0 auto;
+  color: #717770;
+  font-size: 10px;
 }
 
 .guest-quick-panel > p {

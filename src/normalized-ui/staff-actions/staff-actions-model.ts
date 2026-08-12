@@ -12,6 +12,10 @@ const SERVICE_PRIORITY: Record<StaffServiceTask['priority'], number> = {
   low: 1,
 }
 
+export type StaffUnifiedAction =
+  | { kind: 'service'; key: string; task: StaffServiceTask }
+  | { kind: 'fulfillment'; key: string; item: StaffFulfillmentItem }
+
 export function hasPermission(permissions: readonly string[], permission: StaffActionPermission): boolean {
   return permissions.includes(permission)
 }
@@ -45,8 +49,8 @@ export function actionableServiceTasks(
   return tasks
     .filter((task) => task.status === 'pending' || task.status === 'acknowledged' || task.status === 'in_progress')
     .toSorted((left, right) => {
-      const leftMine = left.assignedEmployeeId === actorId || left.backupEmployeeId === actorId ? 1 : 0
-      const rightMine = right.assignedEmployeeId === actorId || right.backupEmployeeId === actorId ? 1 : 0
+      const leftMine = left.assignedToActor || left.assignedEmployeeId === actorId || left.backupEmployeeId === actorId ? 1 : 0
+      const rightMine = right.assignedToActor || right.assignedEmployeeId === actorId || right.backupEmployeeId === actorId ? 1 : 0
       if (leftMine !== rightMine) return rightMine - leftMine
       const priority = SERVICE_PRIORITY[right.priority] - SERVICE_PRIORITY[left.priority]
       if (priority !== 0) return priority
@@ -68,10 +72,66 @@ export function actionableFulfillmentItems(items: readonly StaffFulfillmentItem[
     })
 }
 
+export function unifiedActionQueue(
+  serviceTasks: readonly StaffServiceTask[],
+  fulfillmentItems: readonly StaffFulfillmentItem[],
+  actorId: string,
+): StaffUnifiedAction[] {
+  const actions: StaffUnifiedAction[] = [
+    ...actionableServiceTasks(serviceTasks, actorId).map((task) => ({
+      kind: 'service' as const, key: `service:${task.id}`, task,
+    })),
+    ...actionableFulfillmentItems(fulfillmentItems).map((item) => ({
+      kind: 'fulfillment' as const, key: `fulfillment:${item.taskId}`, item,
+    })),
+  ]
+  return actions.toSorted((left, right) => {
+    const rank = unifiedActionRank(left) - unifiedActionRank(right)
+    if (rank !== 0) return rank
+    return unifiedActionTime(left) - unifiedActionTime(right)
+  })
+}
+
+function unifiedActionRank(action: StaffUnifiedAction): number {
+  if (action.kind === 'service') {
+    if (action.task.interactionMode === 'manager_resolution'
+      || action.task.taskType.includes('safety')) return 0
+    if (action.task.priority === 'urgent') return 1
+    if (action.task.assignedToActor) return 4
+    return action.task.priority === 'high' ? 5 : 6
+  }
+  if (action.item.overdue) return 2
+  if (action.item.readyForDelivery && action.item.canDeliver) {
+    return action.item.table.assignmentType === null ? 5 : 3
+  }
+  return 8
+}
+
+function unifiedActionTime(action: StaffUnifiedAction): number {
+  return action.kind === 'service'
+    ? eventTime(action.task.dueAt ?? action.task.createdAt)
+    : eventTime(action.item.dueAt ?? action.item.nextActionAt ?? action.item.createdAt)
+}
+
 export function fulfillmentAction(item: StaffFulfillmentItem): 'complete' | 'deliver' | null {
   if (item.canDeliver && item.readyForDelivery && item.kdsStatus === 'ready') return 'deliver'
   if (item.canPrepare && item.kdsStatus !== 'ready') return 'complete'
   return null
+}
+
+const TABLE_MOOD_PRESENTATION: Readonly<Record<string, { symbol: string; label: string }>> = Object.freeze({
+  happy: { symbol: '☺', label: '开心' },
+  excited: { symbol: '✦', label: '兴奋' },
+  listening: { symbol: '♫', label: '听歌' },
+  social: { symbol: '✧', label: '想互动' },
+  celebrating: { symbol: '★', label: '庆祝' },
+  quiet: { symbol: '☾', label: '安静' },
+  tired: { symbol: '·', label: '有点累' },
+  uncomfortable: { symbol: '!', label: '不太舒服' },
+})
+
+export function tableMoodPresentation(code: string): { symbol: string; label: string } {
+  return TABLE_MOOD_PRESENTATION[code] ?? { symbol: '·', label: '客人状态' }
 }
 
 export function tableGroups(tables: readonly StaffActionTable[]): Array<{ area: string; tables: StaffActionTable[] }> {

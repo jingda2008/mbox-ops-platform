@@ -58,7 +58,7 @@ type CommandExecutorPort = Pick<NormalizedCommandExecutor, 'execute'>
 type TableSessionRepositoryPort = Pick<TableSessionRepository, 'beginClosing' | 'completeClosing'>
 type ServiceTaskRepositoryPort = Pick<
   ServiceTaskRepository,
-  'create' | 'acknowledge' | 'start' | 'complete' | 'cancel'
+  'create' | 'findById' | 'acknowledge' | 'start' | 'complete' | 'cancel'
 >
 
 export interface NormalizedOperationsApiOptions {
@@ -328,6 +328,14 @@ async function executeTaskTransition(
     resultCodec: serviceTaskCodec,
   }, async (transaction) => {
     const repository = options.createServiceTaskRepository(transaction)
+    const currentTask = await repository.findById(taskId)
+    if (currentTask === null) throw new ServiceTaskNotFoundError(taskId)
+    if (currentTask.taskType === 'guest.complaint') {
+      requireCapability(context, 'service.manage')
+      if ((transition === 'complete' || transition === 'cancel') && (note?.trim().length ?? 0) < 4) {
+        throw new RequestValidationError('投诉处理结果至少需要4个字')
+      }
+    }
     const transitionInput = {
       taskId,
       actor: { type: 'employee' as const, employeeId: context.employeeId },

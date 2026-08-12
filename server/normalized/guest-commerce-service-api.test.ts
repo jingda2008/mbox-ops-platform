@@ -141,6 +141,7 @@ describe('guest commerce/service API trust boundaries', () => {
       tableSessionId,
       channel: 'guest_qr',
       settlementMode: 'immediate_payment',
+      createdByCustomerId: customerId,
       lines: [{ productId, quantity: 2, note: '少冰' }],
       note: '一起上，生日桌',
     }))
@@ -168,6 +169,18 @@ describe('guest commerce/service API trust boundaries', () => {
         },
       },
     })
+  })
+
+  it('shares paid table orders without payer or payment details', async () => {
+    const value = fixture()
+    const response = await value.app.inject({ method: 'GET', url: '/api/guest/orders/table' })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({ data: [{
+      publicId: 'shared-order-0001', round: 1, visibility: 'shared', isMine: false,
+      items: [{ productId, name: '青岛啤酒', quantity: 2, status: 'preparing' }],
+    }] })
+    expect(response.body).not.toMatch(/customerId|provider|paymentStatus|amountMinor/)
   })
 
   it('labels simulation as pending test confirmation instead of pretending it is paid', async () => {
@@ -375,7 +388,15 @@ integration('guest service and mood API with PostgreSQL', () => {
 })
 
 function fixture(overrides: Partial<GuestCommerceServiceApiOptions> = {}) {
-  const query = vi.fn(async () => ({
+  const query = vi.fn(async (sql: string) => sql.includes('WITH table_orders AS') ? ({
+    rows: [{
+      public_id: 'shared-order-0001', round_number: 1, channel: 'guest_qr',
+      order_status: 'submitted', visibility: 'shared', is_mine: false,
+      order_created_at: '2026-08-11T12:00:00.000Z', product_id: productId,
+      product_name: '青岛啤酒', quantity: 2, item_status: 'preparing',
+    }],
+    rowCount: 1,
+  }) : ({
     rows: [{
       id: productId,
       code: 'BEER-QD-330',
@@ -440,6 +461,7 @@ function commerceResult(): SubmittedCommerceResult {
       currency: 'CNY',
       note: '一起上，生日桌',
       createdByEmployeeId: null,
+      createdByCustomerId: customerId,
       createdAt: '2026-08-11T12:00:00.000Z',
       submittedAt: '2026-08-11T12:00:00.000Z',
       items: [{

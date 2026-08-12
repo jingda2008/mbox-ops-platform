@@ -42,6 +42,7 @@ const recipeAId = randomUUID()
 const recipeBId = randomUUID()
 const recipeKitchenId = randomUUID()
 const employeeId = randomUUID()
+const customerId = randomUUID()
 const kdsRoleId = randomUUID()
 const pricingAuthorizationId = randomUUID()
 
@@ -170,6 +171,7 @@ describe('CommerceCommandService unit transaction composition', () => {
     await expect(new CommerceCommandService(executor, authority).submitOrder({
       ...command('unit-guest-forged-gift', sessionOneId, productAId, 1, 'unit-guest-gift-0001'),
       channel: 'guest_qr',
+      createdByCustomerId: customerId,
       pricingAuthorization: {
         sourceType: 'employee',
         sourceId: employeeId,

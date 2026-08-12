@@ -293,6 +293,7 @@ function baseOrder(
     tableSessionId: sessionId,
     publicId,
     channel: 'guest_qr' as const,
+    createdByCustomerId: customerId,
     lines: [{ productId, quantity }],
     idempotencyKey,
   }

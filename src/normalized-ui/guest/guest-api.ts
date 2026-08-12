@@ -76,6 +76,22 @@ export interface GuestOrderResult {
   }
 }
 
+export interface GuestTableOrder {
+  publicId: string
+  round: number
+  channel: 'guest_qr' | 'staff_assisted' | 'cashier' | 'reservation' | 'integration'
+  status: 'submitted' | 'confirmed' | 'fulfilling' | 'completed'
+  visibility: 'shared' | 'private_pending'
+  isMine: boolean
+  createdAt: string
+  items: Array<{
+    productId: string
+    name: string
+    quantity: number
+    status: 'submitted' | 'accepted' | 'preparing' | 'ready' | 'delivered' | 'cancelled'
+  }>
+}
+
 export interface GuestServiceResult {
   status: 'created' | 'merged' | 'rate_limited'
   message: string
@@ -149,6 +165,15 @@ export class GuestApiClient {
     })
     const data = responseData(body)
     if (!isOrderResult(data)) throw invalidResponse()
+    return data
+  }
+
+  async loadTableOrders(options: Readonly<RequestOptions> = {}): Promise<GuestTableOrder[]> {
+    const body = await this.request<unknown>('/api/guest/orders/table', {
+      method: 'GET', signal: options.signal,
+    })
+    const data = responseData(body)
+    if (!Array.isArray(data) || !data.every(isTableOrder)) throw invalidResponse()
     return data
   }
 
@@ -290,6 +315,23 @@ function isMenuProduct(value: unknown): value is GuestMenuProduct {
     && (value.recommendation.valueCopy === null || typeof value.recommendation.valueCopy === 'string')
     && (value.recommendation.upgradeProductId === null || typeof value.recommendation.upgradeProductId === 'string')
     && typeof value.available === 'boolean'
+}
+
+function isTableOrder(value: unknown): value is GuestTableOrder {
+  return isObject(value)
+    && typeof value.publicId === 'string'
+    && Number.isSafeInteger(value.round)
+    && typeof value.channel === 'string'
+    && typeof value.status === 'string'
+    && (value.visibility === 'shared' || value.visibility === 'private_pending')
+    && typeof value.isMine === 'boolean'
+    && typeof value.createdAt === 'string'
+    && Array.isArray(value.items)
+    && value.items.every((item) => isObject(item)
+      && typeof item.productId === 'string'
+      && typeof item.name === 'string'
+      && Number.isSafeInteger(item.quantity)
+      && typeof item.status === 'string')
 }
 
 function isOrderResult(value: unknown): value is GuestOrderResult {

@@ -112,8 +112,8 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
 
 function normalizedStaffRoute(path: string): StaffActionsTab | null {
   if (path === '/staff/live') return 'tables'
-  if (path === '/staff/tasks') return 'service'
-  if (path === '/staff/fulfillment') return 'fulfillment'
+  if (path === '/staff/tasks') return 'work'
+  if (path === '/staff/fulfillment') return 'work'
   return null
 }
 

@@ -214,7 +214,7 @@ postgresIntegration('NormalizedKdsAuthorization PostgreSQL integration', () => {
     await expect(authorize(authorizedEmployeeId)).rejects.toMatchObject({ code: 'KDS_ACTOR_INACTIVE' })
   })
 
-  it('uses real PostgreSQL scope and assignment rows to deny cross-station and cross-table actions', async () => {
+  it('keeps production station-scoped and lets delivery-capable staff support another table', async () => {
     await pool.query(`
       UPDATE mbox.employees SET status = 'active'
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
@@ -237,8 +237,7 @@ postgresIntegration('NormalizedKdsAuthorization PostgreSQL integration', () => {
     await expect(authorize('kitchen', assignedTableId, 'start'))
       .rejects.toMatchObject({ code: 'KDS_STATION_FORBIDDEN' })
     await expect(authorize('bar', assignedTableId, 'deliver')).resolves.toBeUndefined()
-    await expect(authorize('bar', otherTableId, 'deliver'))
-      .rejects.toMatchObject({ code: 'KDS_TABLE_FORBIDDEN' })
+    await expect(authorize('bar', otherTableId, 'deliver')).resolves.toBeUndefined()
   })
 })
 

@@ -32,6 +32,7 @@ export interface CreateSubmittedOrderInput {
   lines: readonly SubmitOrderLineInput[]
   note?: string | null
   createdByEmployeeId?: string | null
+  createdByCustomerId?: string | null
 }
 
 export interface OrderItem {
@@ -68,6 +69,7 @@ export interface SubmittedOrder {
   currency: string
   note: string | null
   createdByEmployeeId: string | null
+  createdByCustomerId: string | null
   createdAt: string
   submittedAt: string
   items: readonly OrderItem[]
@@ -118,6 +120,7 @@ interface OrderRow extends Record<string, unknown> {
   currency: string
   note: string | null
   created_by_employee_id: string | null
+  created_by_customer_id: string | null
   created_at: string
   submitted_at: string
 }
@@ -197,15 +200,16 @@ export class OrderRepository {
       INSERT INTO mbox.orders (
         tenant_id, store_id, table_session_id, public_id, channel, settlement_mode,
         status, payment_status, subtotal_amount_minor, discount_amount_minor,
-        total_amount_minor, currency, note, created_by_employee_id, submitted_at
+        total_amount_minor, currency, note, created_by_employee_id,
+        created_by_customer_id, submitted_at
       ) VALUES (
         $1::uuid, $2::uuid, $3::uuid, $4, $5, $6,
         'submitted', 'unpaid', $7::bigint, $8::bigint,
-        $9::bigint, $10, $11, $12::uuid, clock_timestamp()
+        $9::bigint, $10, $11, $12::uuid, $13::uuid, clock_timestamp()
       )
       RETURNING id, table_session_id, public_id, channel, settlement_mode,
         status, payment_status, subtotal_amount_minor, discount_amount_minor,
-        total_amount_minor, currency, note, created_by_employee_id,
+        total_amount_minor, currency, note, created_by_employee_id, created_by_customer_id,
         created_at::text, submitted_at::text
     `, [
       this.transaction.scope.tenantId,
@@ -220,6 +224,7 @@ export class OrderRepository {
       currency,
       input.note ?? null,
       input.createdByEmployeeId ?? null,
+      input.createdByCustomerId ?? null,
     ])
     const order = requireOne(insertedOrder, 'Submitted order insert')
 
@@ -611,6 +616,7 @@ function mapOrder(row: OrderRow): Omit<SubmittedOrder, 'items'> {
     currency: row.currency,
     note: row.note,
     createdByEmployeeId: row.created_by_employee_id,
+    createdByCustomerId: row.created_by_customer_id,
     createdAt: row.created_at,
     submittedAt: row.submitted_at,
   }
@@ -644,6 +650,10 @@ function validateCreateInput(input: Readonly<CreateSubmittedOrderInput>): void {
     throw new TypeError('publicId must contain between 8 and 128 characters')
   }
   if (input.createdByEmployeeId) requireUuidLike('createdByEmployeeId', input.createdByEmployeeId)
+  if (input.createdByCustomerId) requireUuidLike('createdByCustomerId', input.createdByCustomerId)
+  if (input.createdByEmployeeId && input.createdByCustomerId) {
+    throw new TypeError('An order cannot have both an employee and guest creator')
+  }
   if (input.settlementMode !== undefined
     && input.settlementMode !== 'immediate_payment'
     && input.settlementMode !== 'table_tab') {

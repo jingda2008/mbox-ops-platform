@@ -86,6 +86,7 @@ describe('ServiceTaskRepository', () => {
   it.each([
     ['acknowledge', 'pending', 'acknowledged'],
     ['start', 'acknowledged', 'in_progress'],
+    ['complete', 'pending', 'completed'],
     ['complete', 'in_progress', 'completed'],
     ['cancel', 'pending', 'cancelled'],
   ] as const)('supports legal %s transitions with a conditional update and event', async (

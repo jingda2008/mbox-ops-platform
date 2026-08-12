@@ -38,6 +38,19 @@ test('mobile guest scans a fixed table QR, searches, orders and sees payment res
   await expect(resultDialog).toContainText('没有产生真实收款')
   await expect(page.getByText('备注已重点标记给出品和配送人员')).toBeVisible()
   await expect(page.getByText('本次应付')).toBeVisible()
+
+  await resultDialog.getByRole('button', { name: '返回菜单' }).click()
+  await page.getByRole('button', { name: /本桌已点/ }).click()
+  const tableOrders = page.getByRole('dialog', { name: '本桌已点' })
+  await expect(tableOrders).toContainText(data.orderableProductName)
+  await expect(tableOrders).toContainText(/等待付款|准备中|已送齐/)
+  await tableOrders.getByRole('button', { name: '关闭' }).click()
+
+  await page.getByRole('button', { name: `加入${data.orderableProductName}` }).click()
+  await page.getByRole('button', { name: /核对订单/ }).click()
+  await page.getByRole('button', { name: /确认订单并继续支付/ }).click()
+  await expect(page.getByRole('alert')).toContainText(`本桌刚点过 ${data.orderableProductName}`)
+  await expect(page.getByRole('button', { name: '确认继续加单' })).toBeVisible()
 })
 
 test('mobile public reservation loads real availability and seat details', async ({ page }) => {

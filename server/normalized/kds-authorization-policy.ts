@@ -123,7 +123,7 @@ export class NormalizedKdsAuthorization implements KdsAuthorizationPort {
       throw new KdsAuthorizationError('KDS_STATION_FORBIDDEN', input.action)
     }
 
-    if (input.action === 'deliver' || input.action === 'manager_cancel') {
+    if (input.action === 'manager_cancel') {
       const hasGlobalTableAccess = access.permissions.includes('table.view_all')
         || access.permissions.includes('fulfillment.view_all')
       if (!hasGlobalTableAccess) {
@@ -278,7 +278,7 @@ function messageFor(code: KdsAuthorizationErrorCode, action: KdsScopedAction): s
     case 'KDS_ACTOR_INACTIVE': return 'KDS actor is not an active employee'
     case 'KDS_SESSION_INVALID': return 'KDS action requires the employee current active device session'
     case 'KDS_STATION_FORBIDDEN': return 'KDS actor is outside the assigned station data scope'
-    case 'KDS_TABLE_FORBIDDEN': return 'KDS actor is not the primary or backup employee for this table'
+    case 'KDS_TABLE_FORBIDDEN': return 'KDS manager exception is outside the employee table scope'
     case 'KDS_DELIVER_FORBIDDEN': return `KDS actor lacks ${KDS_DELIVER_CAPABILITY} for action ${action}`
     case 'KDS_EXCEPTION_FORBIDDEN': return `KDS actor lacks ${KDS_EXCEPTION_MANAGE_CAPABILITY} for action ${action}`
     case 'KDS_PREPARE_FORBIDDEN': return `KDS actor lacks ${KDS_PREPARE_CAPABILITY} for action ${action}`

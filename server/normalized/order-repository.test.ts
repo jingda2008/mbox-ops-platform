@@ -190,6 +190,7 @@ function orderRow(): Record<string, unknown> {
     currency: 'CNY',
     note: null,
     created_by_employee_id: employeeId,
+    created_by_customer_id: null,
     created_at: '2026-08-11T12:00:00.000Z',
     submitted_at: '2026-08-11T12:00:00.000Z',
   }

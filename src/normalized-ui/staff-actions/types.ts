@@ -18,6 +18,10 @@ export interface StaffActionTableSession {
   guestCount: number
   status: 'open' | 'closing'
   openedAt: string
+  latestMood: null | {
+    code: string
+    occurredAt: string
+  }
 }
 
 export interface StaffActionTable {
@@ -34,6 +38,7 @@ export interface StaffActionTable {
 
 export interface StaffServiceTask {
   id: string
+  taskType: string
   tableId: string
   tableCode: string
   tableSessionId: string
@@ -43,6 +48,8 @@ export interface StaffServiceTask {
   status: 'pending' | 'acknowledged' | 'in_progress'
   assignedEmployeeId: string | null
   backupEmployeeId: string | null
+  assignedToActor: boolean
+  interactionMode: 'quick_complete' | 'manager_resolution'
   dueAt: string | null
   createdAt: string
 }
@@ -101,4 +108,4 @@ export type StaffActionNotice = {
   message: string
 } | null
 
-export type StaffActionsTab = 'tables' | 'service' | 'fulfillment'
+export type StaffActionsTab = 'tables' | 'work'

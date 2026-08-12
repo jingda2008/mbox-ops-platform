@@ -4,6 +4,8 @@ import {
   actionableServiceTasks,
   fulfillmentAction,
   requiresCapacityReason,
+  tableMoodPresentation,
+  unifiedActionQueue,
   validateOpenTableInput,
 } from './staff-actions-model'
 import type { StaffActionTable, StaffFulfillmentItem, StaffServiceTask } from './types'
@@ -28,10 +30,11 @@ describe('staff actions model', () => {
   it('puts assigned and urgent service work first while hiding terminal work', () => {
     const tasks: StaffServiceTask[] = [
       serviceTask({ id: 'normal', priority: 'normal', assignedEmployeeId: null }),
+      serviceTask({ id: 'table-mine', priority: 'low', assignedToActor: true }),
       serviceTask({ id: 'mine', priority: 'low', assignedEmployeeId: 'employee-1' }),
       serviceTask({ id: 'urgent', priority: 'urgent', assignedEmployeeId: null }),
     ]
-    expect(actionableServiceTasks(tasks, 'employee-1').map((task) => task.id)).toEqual(['mine', 'urgent', 'normal'])
+    expect(actionableServiceTasks(tasks, 'employee-1').map((task) => task.id)).toEqual(['table-mine', 'mine', 'urgent', 'normal'])
   })
 
   it('shows only executable KDS work and orders overdue then delivery before production', () => {
@@ -47,12 +50,39 @@ describe('staff actions model', () => {
     expect(fulfillmentAction(actionable[1]!)).toBe('deliver')
     expect(fulfillmentAction(items[3]!)).toBeNull()
   })
+
+  it('presents guest mood as a compact table marker instead of an action', () => {
+    expect(tableMoodPresentation('happy')).toEqual({ symbol: '☺', label: '开心' })
+    expect(tableMoodPresentation('quiet')).toEqual({ symbol: '☾', label: '安静' })
+    expect(tableMoodPresentation('unknown')).toEqual({ symbol: '·', label: '客人状态' })
+  })
+
+  it('builds one busy-time queue: complaint, overdue, delivery, assigned service, production', () => {
+    const complaint = serviceTask({ id: 'complaint', taskType: 'guest.complaint', interactionMode: 'manager_resolution' })
+    const assigned = serviceTask({ id: 'assigned', assignedToActor: true })
+    const overdue = fulfillmentItem({ taskId: 'overdue', overdue: true, canPrepare: true })
+    const delivery = fulfillmentItem({
+      taskId: 'delivery', kdsStatus: 'ready', readyForDelivery: true, canDeliver: true,
+      table: { id: 'table-1', code: 'VIP1', assignmentType: 'backup' },
+    })
+    const supportDelivery = fulfillmentItem({
+      taskId: 'support-delivery', kdsStatus: 'ready', readyForDelivery: true, canDeliver: true,
+    })
+    const production = fulfillmentItem({ taskId: 'production', canPrepare: true })
+
+    expect(unifiedActionQueue([assigned, complaint], [production, supportDelivery, delivery, overdue], 'employee-1')
+      .map((action) => action.key)).toEqual([
+        'service:complaint', 'fulfillment:overdue', 'fulfillment:delivery',
+        'service:assigned', 'fulfillment:support-delivery', 'fulfillment:production',
+      ])
+  })
 })
 
 function serviceTask(input: Partial<StaffServiceTask>): StaffServiceTask {
   return {
-    id: 'task', tableId: 'table-1', tableCode: 'VIP1', tableSessionId: 'session-1', title: '送水',
+    id: 'task', taskType: 'water', tableId: 'table-1', tableCode: 'VIP1', tableSessionId: 'session-1', title: '送水',
     detail: null, priority: 'normal', status: 'pending', assignedEmployeeId: null, backupEmployeeId: null,
+    assignedToActor: false, interactionMode: 'quick_complete',
     dueAt: '2026-08-11T12:10:00.000Z', createdAt: '2026-08-11T12:00:00.000Z', ...input,
   }
 }

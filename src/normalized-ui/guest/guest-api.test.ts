@@ -86,6 +86,19 @@ describe('GuestApiClient', () => {
     })
   })
 
+  it('loads the shared table order view without requiring an idempotency key', async () => {
+    const send = vi.fn(async () => jsonResponse({ data: [{
+      publicId: 'shared-order-0001', round: 1, channel: 'guest_qr', status: 'submitted',
+      visibility: 'shared', isMine: false, createdAt: '2026-08-11T12:00:00.000Z',
+      items: [{ productId: '55555555-5555-4555-8555-555555555555', name: '青岛啤酒', quantity: 2, status: 'preparing' }],
+    }] }))
+    const client = new GuestApiClient(deviceKey, { fetch: send })
+
+    await expect(client.loadTableOrders()).resolves.toHaveLength(1)
+    expect(send.mock.calls[0]?.[0]).toBe('/api/guest/orders/table')
+    expect(new Headers(send.mock.calls[0]?.[1]?.headers).has('idempotency-key')).toBe(false)
+  })
+
   it('returns the friendly persisted rate-limit response instead of losing it as an exception', async () => {
     const send = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => jsonResponse({ data: {
       status: 'rate_limited',

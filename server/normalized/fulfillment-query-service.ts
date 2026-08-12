@@ -156,7 +156,6 @@ async function readFulfillmentRows(
       (
         $7::boolean
         AND task.status = 'ready'
-        AND assignment.assignment_type IN ('primary', 'backup')
       ) AS can_deliver,
       task.due_at::text,
       task.next_action_at::text,
@@ -226,12 +225,12 @@ async function readFulfillmentRows(
         OR (
           $7::boolean
           AND task.status = 'ready'
-          AND assignment.assignment_type IN ('primary', 'backup')
         )
       )
     ORDER BY
       (task.due_at IS NOT NULL AND task.due_at < transaction_timestamp()) DESC,
       (task.status = 'ready') DESC,
+      (assignment.assignment_type IN ('primary', 'backup')) DESC,
       task.priority DESC,
       COALESCE(task.due_at, task.next_action_at, task.created_at),
       task.created_at,

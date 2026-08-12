@@ -34,6 +34,10 @@ export interface OperationsTableView {
     businessDate: string
     guestCount: number
     guestProfileSnapshot: JsonObject
+    latestMood: null | {
+      code: string
+      occurredAt: string
+    }
     status: 'open' | 'closing'
     openedAt: string
   }
@@ -54,6 +58,8 @@ export interface OperationsTaskView {
   requestedRoleCode: string | null
   assignedEmployeeId: string | null
   backupEmployeeId: string | null
+  assignedToActor: boolean
+  interactionMode: 'quick_complete' | 'manager_resolution'
   dueAt: string | null
   escalateAt: string | null
   createdAt: string
@@ -94,6 +100,8 @@ interface TableRow extends Record<string, unknown> {
   business_date: string | null
   guest_count: number | null
   guest_profile_snapshot: JsonObject | null
+  mood_code: string | null
+  mood_occurred_at: string | null
   session_status: 'open' | 'closing' | null
   opened_at: string | null
 }
@@ -113,6 +121,8 @@ interface TaskRow extends Record<string, unknown> {
   requested_role_code: string | null
   assigned_employee_id: string | null
   backup_employee_id: string | null
+  assigned_to_actor: boolean
+  interaction_mode: OperationsTaskView['interactionMode']
   due_at: string | null
   escalate_at: string | null
   created_at: string
@@ -139,7 +149,13 @@ export class OperationsQueryService {
       if (actor === null) throw new StaffNotFoundError(employeeId)
       const includeAllTables = actor.capabilities.includes('table.view_all')
       const tables = await readTables(transaction, employeeId, includeAllTables)
-      const tasks = await readTasks(transaction, employeeId, actor.roleCodes, includeAllTables)
+      const tasks = await readTasks(
+        transaction,
+        employeeId,
+        actor.roleCodes,
+        includeAllTables,
+        actor.capabilities.includes('service.manage'),
+      )
       return { store, actor, tables, tasks }
     }, { isolation: 'repeatable-read', readOnly: true })
   }
@@ -201,6 +217,7 @@ async function readTables(
       ) AS assigned_to_actor,
       session.id AS session_id, session.public_id AS session_public_id,
       session.business_date::text, session.guest_count, session.guest_profile_snapshot,
+      latest_mood.mood_code, latest_mood.mood_occurred_at,
       session.status AS session_status, session.opened_at::text
     FROM mbox.tables venue_table
     JOIN mbox.areas area
@@ -212,6 +229,18 @@ async function readTables(
       AND session.store_id = venue_table.store_id
       AND session.table_id = venue_table.id
       AND session.status IN ('open', 'closing')
+    LEFT JOIN LATERAL (
+      SELECT behavior.behavior_code AS mood_code,
+        behavior.occurred_at::text AS mood_occurred_at
+      FROM mbox.guest_behavior_events behavior
+      WHERE behavior.tenant_id = venue_table.tenant_id
+        AND behavior.store_id = venue_table.store_id
+        AND behavior.table_session_id = session.id
+        AND behavior.behavior_type = 'guest.mood.selected'
+        AND behavior.behavior_code IS NOT NULL
+      ORDER BY behavior.occurred_at DESC, behavior.id DESC
+      LIMIT 1
+    ) latest_mood ON session.id IS NOT NULL
     WHERE venue_table.tenant_id = $1::uuid
       AND venue_table.store_id = $2::uuid
       AND venue_table.status <> 'retired'
@@ -234,12 +263,29 @@ async function readTasks(
   employeeId: string,
   roleCodes: readonly string[],
   includeAllTables: boolean,
+  canManageService: boolean,
 ): Promise<OperationsTaskView[]> {
   const result = await transaction.query<TaskRow>(`
     SELECT task.id, task.public_id, task.table_id, venue_table.code AS table_code,
       task.table_session_id, task.task_type, task.title, task.detail, task.priority,
       task.status, task.source, task.requested_role_code, task.assigned_employee_id,
-      task.backup_employee_id, task.due_at::text, task.escalate_at::text, task.created_at::text
+      task.backup_employee_id,
+      (
+        task.assigned_employee_id = $3::uuid
+        OR task.backup_employee_id = $3::uuid
+        OR EXISTS (
+          SELECT 1 FROM mbox.table_assignments responsibility
+          WHERE responsibility.tenant_id = task.tenant_id
+            AND responsibility.store_id = task.store_id
+            AND responsibility.table_id = task.table_id
+            AND responsibility.employee_id = $3::uuid
+            AND responsibility.starts_at <= clock_timestamp()
+            AND (responsibility.ends_at IS NULL OR responsibility.ends_at > clock_timestamp())
+        )
+      ) AS assigned_to_actor,
+      CASE WHEN task.task_type = 'guest.complaint'
+        THEN 'manager_resolution' ELSE 'quick_complete' END AS interaction_mode,
+      task.due_at::text, task.escalate_at::text, task.created_at::text
     FROM mbox.service_tasks task
     JOIN mbox.tables venue_table
       ON venue_table.tenant_id = task.tenant_id
@@ -248,6 +294,7 @@ async function readTasks(
     WHERE task.tenant_id = $1::uuid
       AND task.store_id = $2::uuid
       AND task.status IN ('pending', 'acknowledged', 'in_progress')
+      AND (task.task_type <> 'guest.complaint' OR $6::boolean)
       AND (
         $5::boolean
         OR task.assigned_employee_id = $3::uuid
@@ -268,7 +315,14 @@ async function readTasks(
       task.due_at NULLS LAST,
       task.created_at,
       task.id
-  `, [transaction.scope.tenantId, transaction.scope.storeId, employeeId, [...roleCodes], includeAllTables])
+  `, [
+    transaction.scope.tenantId,
+    transaction.scope.storeId,
+    employeeId,
+    [...roleCodes],
+    includeAllTables,
+    canManageService,
+  ])
   return result.rows.map((row) => ({
     id: row.id,
     publicId: row.public_id,
@@ -284,6 +338,8 @@ async function readTasks(
     requestedRoleCode: row.requested_role_code,
     assignedEmployeeId: row.assigned_employee_id,
     backupEmployeeId: row.backup_employee_id,
+    assignedToActor: row.assigned_to_actor,
+    interactionMode: row.interaction_mode,
     dueAt: row.due_at,
     escalateAt: row.escalate_at,
     createdAt: row.created_at,
@@ -306,6 +362,9 @@ function mapTable(row: TableRow): OperationsTableView {
       businessDate: row.business_date!,
       guestCount: row.guest_count!,
       guestProfileSnapshot: row.guest_profile_snapshot ?? {},
+      latestMood: row.mood_code === null || row.mood_occurred_at === null
+        ? null
+        : { code: row.mood_code, occurredAt: row.mood_occurred_at },
       status: row.session_status!,
       openedAt: row.opened_at!,
     },

@@ -17,7 +17,13 @@ import {
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { GuestApiClient, GuestApiError, type GuestOrderResult, type GuestSessionView } from './guest-api'
+import {
+  GuestApiClient,
+  GuestApiError,
+  type GuestOrderResult,
+  type GuestSessionView,
+  type GuestTableOrder,
+} from './guest-api'
 import {
   addCartProduct,
   cartItemCount,
@@ -39,9 +45,9 @@ import {
 import { rankRecommendations, type RecommendationIntent } from './recommendation-ranking'
 import './guest-app.css'
 
-type GuestApiPort = Pick<GuestApiClient, 'scanTable' | 'loadSession' | 'searchMenu' | 'submitOrder' | 'requestService' | 'recordMood'>
+type GuestApiPort = Pick<GuestApiClient, 'scanTable' | 'loadSession' | 'searchMenu' | 'submitOrder' | 'loadTableOrders' | 'requestService' | 'recordMood'>
 type ServiceType = 'call_staff' | 'complaint' | 'custom'
-type Panel = 'cart' | 'complaint' | 'custom' | 'checkout' | 'quick' | 'shake' | null
+type Panel = 'cart' | 'orders' | 'complaint' | 'custom' | 'checkout' | 'quick' | 'shake' | null
 
 export interface GuestAppProps {
   apiFactory?: (deviceKey: string) => GuestApiPort
@@ -83,6 +89,9 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const [pendingMood, setPendingMood] = useState<GuestMood | null>(null)
   const [submittingOrder, setSubmittingOrder] = useState(false)
   const [orderResult, setOrderResult] = useState<GuestOrderResult | null>(null)
+  const [tableOrders, setTableOrders] = useState<GuestTableOrder[]>([])
+  const [tableOrdersLoading, setTableOrdersLoading] = useState(false)
+  const [duplicateWarning, setDuplicateWarning] = useState<string[]>([])
   const [toast, setToast] = useState<ToastState | null>(null)
   const apiRef = useRef<GuestApiPort | null>(null)
   const tableCodeRef = useRef<string | null>(null)
@@ -125,6 +134,21 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       if (requestId === menuRequest.current) setMenuLoading(false)
     }
   }, [blockForSession])
+
+  const loadTableOrders = useCallback(async (quiet = false) => {
+    const api = apiRef.current
+    if (api === null) return
+    if (!quiet) setTableOrdersLoading(true)
+    try {
+      setTableOrders(await api.loadTableOrders())
+    } catch (error) {
+      if (!blockForSession(error) && !quiet) {
+        notify(errorMessage(error, '本桌订单暂时没有更新，请再试一次。'), 'error')
+      }
+    } finally {
+      if (!quiet) setTableOrdersLoading(false)
+    }
+  }, [blockForSession, notify])
 
   const acceptSession = useCallback((session: GuestSessionView, expectedTable: string) => {
     if (session.table.code.toUpperCase() !== expectedTable.toUpperCase()) {
@@ -191,6 +215,25 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     const timer = window.setTimeout(() => void loadMenu(search), delay)
     return () => window.clearTimeout(timer)
   }, [loadMenu, phase, search])
+
+  useEffect(() => {
+    if (phase === 'ready') void loadTableOrders(true)
+  }, [loadTableOrders, phase])
+
+  useEffect(() => {
+    if (phase !== 'ready' || panel !== 'orders') return
+    const refresh = () => {
+      if (document.visibilityState === 'visible') void loadTableOrders(true)
+    }
+    const timer = window.setInterval(refresh, 8_000)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [loadTableOrders, panel, phase])
+
+  useEffect(() => setDuplicateWarning([]), [cart])
 
   useEffect(() => {
     if (toast === null) return
@@ -265,6 +308,21 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const submitOrder = useCallback(async () => {
     const api = apiRef.current
     if (api === null || itemCount === 0 || submittingOrder || orderSubmittingRef.current) return
+    if (duplicateWarning.length === 0) {
+      const cutoff = Date.now() - 10 * 60 * 1_000
+      const names = new Set<string>()
+      for (const order of tableOrders) {
+        if (Date.parse(order.createdAt) < cutoff) continue
+        for (const item of order.items) {
+          if (item.status !== 'cancelled' && cart[item.productId] !== undefined) names.add(item.name)
+        }
+      }
+      if (names.size > 0) {
+        setDuplicateWarning([...names])
+        haptic(10)
+        return
+      }
+    }
     orderSubmittingRef.current = true
     const attemptKey = orderAttemptKey.current ?? safeIdempotencyKey('guest-order')
     orderAttemptKey.current = attemptKey
@@ -281,6 +339,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       setPanel('checkout')
       orderAttemptKey.current = null
       notify('订单已经送达吧台与收银。', 'success')
+      void loadTableOrders(true)
     } catch (error) {
       if (error instanceof GuestApiError && error.kind === 'http' && error.status !== 429 && error.status !== null) {
         orderAttemptKey.current = null
@@ -290,7 +349,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       orderSubmittingRef.current = false
       setSubmittingOrder(false)
     }
-  }, [blockForSession, cart, itemCount, notify, orderNote, submittingOrder])
+  }, [blockForSession, cart, duplicateWarning.length, itemCount, loadTableOrders, notify, orderNote, submittingOrder, tableOrders])
 
   if (phase !== 'ready') {
     return <GuestGate phase={phase} message={gateMessage} table={table} onRetry={() => void connectTable()} />
@@ -300,7 +359,12 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     <main className="guest-app" data-testid="normalized-guest-app">
       <header className="guest-header">
         <div className="guest-brand"><span>M</span><div><strong>M-BOX</strong><small>LIVEHOUSE · LUJIAZUI</small></div></div>
-        <div className="guest-table"><small>当前桌台</small><strong>{table?.displayName ?? table?.code}</strong></div>
+        <button type="button" className="guest-table" onClick={() => { setPanel('orders'); void loadTableOrders() }}>
+          <small>本桌已点 · {tableOrders.reduce((sum, order) => (
+            sum + order.items.reduce((count, item) => count + item.quantity, 0)
+          ), 0)}件</small>
+          <strong>{table?.displayName ?? table?.code}</strong>
+        </button>
       </header>
 
       <section className="guest-welcome" aria-labelledby="guest-menu-title">
@@ -437,10 +501,14 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
               cart={cart}
               note={orderNote}
               submitting={submittingOrder}
+              duplicateWarning={duplicateWarning}
               onNoteChange={(value) => { orderAttemptKey.current = null; setOrderNote(value) }}
               onChangeQuantity={(productId, delta) => { orderAttemptKey.current = null; setCart((current) => changeCartQuantity(current, productId, delta)) }}
               onSubmit={() => void submitOrder()}
             />
+          )}
+          {panel === 'orders' && (
+            <TableOrdersPanel orders={tableOrders} loading={tableOrdersLoading} onRefresh={() => void loadTableOrders()} />
           )}
           {(panel === 'complaint' || panel === 'custom') && (
             <ServicePanel
@@ -537,6 +605,7 @@ function CartPanel({
   cart,
   note,
   submitting,
+  duplicateWarning,
   onNoteChange,
   onChangeQuantity,
   onSubmit,
@@ -544,6 +613,7 @@ function CartPanel({
   cart: GuestCart
   note: string
   submitting: boolean
+  duplicateWarning: string[]
   onNoteChange: (value: string) => void
   onChangeQuantity: (productId: string, delta: number) => void
   onSubmit: () => void
@@ -566,12 +636,66 @@ function CartPanel({
         ))}
       </div>
       <label className="guest-note"><span>订单备注 <small>出品和配送人员会重点看到</small></span><textarea maxLength={500} value={note} onChange={(event) => onNoteChange(event.target.value)} placeholder="例如：少冰、生日桌、一起上" /></label>
+      {duplicateWarning.length > 0 && (
+        <div className="guest-duplicate-warning" role="alert">
+          <AlertCircle />
+          <span><strong>本桌刚点过 {duplicateWarning.join('、')}</strong><small>确认是继续加单，再提交一次即可。</small></span>
+        </div>
+      )}
       <div className="guest-cart-total"><span>{count} 件商品</span><strong>{formatMoney(cartTotalMinor(cart))}</strong></div>
       <button type="button" className="guest-primary" disabled={count === 0 || submitting} onClick={onSubmit}>
-        {submitting ? <><LoaderCircle className="is-spinning" />正在提交，请勿重复点击</> : <>确认订单并继续支付<ChevronRight /></>}
+        {submitting
+          ? <><LoaderCircle className="is-spinning" />正在提交，请勿重复点击</>
+          : duplicateWarning.length > 0
+            ? <>确认继续加单<ChevronRight /></>
+            : <>确认订单并继续支付<ChevronRight /></>}
       </button>
     </div>
   )
+}
+
+function TableOrdersPanel({
+  orders,
+  loading,
+  onRefresh,
+}: {
+  orders: GuestTableOrder[]
+  loading: boolean
+  onRefresh: () => void
+}) {
+  return (
+    <div className="guest-table-orders">
+      <div className="guest-table-orders-toolbar">
+        <span>{orders.length === 0 ? '还没有已确认的订单' : `共 ${orders.length} 轮`}</span>
+        <button type="button" onClick={onRefresh} disabled={loading}><RefreshCw className={loading ? 'is-spinning' : ''} />刷新</button>
+      </div>
+      {orders.map((order) => (
+        <article key={order.publicId} className={order.visibility === 'private_pending' ? 'is-private' : ''}>
+          <header>
+            <strong>{order.visibility === 'private_pending' ? '我的待支付订单' : `本桌第 ${order.round} 轮`}</strong>
+            <span>{orderStatusCopy(order)}</span>
+          </header>
+          <div>{order.items.map((item) => (
+            <p key={item.productId}><span>{item.name} × {item.quantity}</span><small>{itemStatusCopy(item.status)}</small></p>
+          ))}</div>
+        </article>
+      ))}
+    </div>
+  )
+}
+
+function orderStatusCopy(order: GuestTableOrder): string {
+  if (order.visibility === 'private_pending') return '等待付款'
+  if (order.status === 'completed') return '已完成'
+  return order.items.every((item) => item.status === 'delivered' || item.status === 'cancelled') ? '已送齐' : '准备中'
+}
+
+function itemStatusCopy(status: GuestTableOrder['items'][number]['status']): string {
+  if (status === 'delivered') return '已送达'
+  if (status === 'ready') return '待送达'
+  if (status === 'cancelled') return '已取消'
+  if (status === 'preparing' || status === 'accepted') return '制作中'
+  return '已下单'
 }
 
 function ServicePanel({
@@ -674,6 +798,7 @@ function MenuSkeleton() {
 
 function panelTitle(panel: Exclude<Panel, null>): string {
   if (panel === 'cart') return '核对本次订单'
+  if (panel === 'orders') return '本桌已点'
   if (panel === 'complaint') return '我们想马上处理好'
   if (panel === 'custom') return '告诉我们您的需要'
   if (panel === 'quick') return '今晚想怎么喝？'

@@ -21,6 +21,7 @@ import {
   type GuestServiceRequestResult,
   type GuestServiceRequestType,
 } from './guest-service-repository.js'
+import { loadGuestTableOrders } from './guest-table-orders-query.js'
 import {
   GuestAuthenticationRequiredError,
   GuestCapabilityDeniedError,
@@ -124,11 +125,20 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       settlementMode: 'immediate_payment',
       lines: input.items,
       note: input.note,
+      createdByCustomerId: context.customerId,
     })
     const payment = await initiateGuestPayment(options, context, orderExecution.value, idempotencyKey, createPublicId)
     return reply.code(orderExecution.replayed ? 200 : 201).send(
       checkoutResponse(orderExecution, payment, options.paymentMode),
     )
+  }))
+
+  app.get('/guest/orders/table', async (request, reply) => handleRoute(reply, async () => {
+    const context = await requireTableContext(options, request, 'guest.session.read')
+    const orders = await options.transactions.run(context.scope, (transaction) => (
+      loadGuestTableOrders(transaction, context.tableSessionId, context.customerId)
+    ), { readOnly: true })
+    return reply.send({ data: orders, meta: { tableSessionId: context.tableSessionId, count: orders.length } })
   }))
 
   app.post('/guest/service-requests', async (request, reply) => handleRoute(reply, async () => {

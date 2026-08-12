@@ -36,7 +36,7 @@ export interface StaffActionsApiPort {
     targetTableId: string
     capacityOverrideReason?: string
   }>): Promise<void>
-  completeServiceTask(taskId: string): Promise<void>
+  completeServiceTask(taskId: string, note?: string): Promise<void>
   runKdsAction(taskId: string, action: 'complete' | 'deliver'): Promise<void>
 }
 
@@ -95,8 +95,12 @@ export class StaffActionsApi implements StaffActionsApiPort {
     )
   }
 
-  async completeServiceTask(taskId: string): Promise<void> {
-    await this.command(`/api/service-tasks/${encodeURIComponent(taskId)}/complete`, {}, 'idempotency-key')
+  async completeServiceTask(taskId: string, note?: string): Promise<void> {
+    await this.command(
+      `/api/service-tasks/${encodeURIComponent(taskId)}/complete`,
+      note === undefined ? {} : { note },
+      'idempotency-key',
+    )
   }
 
   async runKdsAction(taskId: string, action: 'complete' | 'deliver'): Promise<void> {

@@ -108,6 +108,7 @@ function fixture(overrides: Partial<NormalizedOperationsApiOptions> = {}) {
   }
   const taskRepository = {
     create: vi.fn(async () => task),
+    findById: vi.fn(async () => task),
     acknowledge: vi.fn(async () => ({ ...task, status: 'acknowledged' as const })),
     start: vi.fn(async () => ({ ...task, status: 'in_progress' as const })),
     complete: vi.fn(async () => ({ ...task, status: 'completed' as const })),
@@ -333,6 +334,48 @@ describe('normalizedOperationsApiPlugin', () => {
       note: '现场已确认',
       eventIdempotencyKey: `task-${action}-0001:${action}`,
     })
+  })
+
+  it('keeps complaints manager-only and requires a recorded resolution', async () => {
+    const complaint = { ...task, taskType: 'guest.complaint', title: '投诉 / 不满意', source: 'guest' as const }
+    const server = fixture()
+    server.taskRepository.findById.mockResolvedValue(complaint)
+    const denied = await server.app.inject({
+      method: 'POST',
+      url: `/api/service-tasks/${taskId}/complete`,
+      headers: { 'idempotency-key': 'complaint-server-denied-0001' },
+      payload: { note: '已经处理完成' },
+    })
+    expect(denied.statusCode).toBe(403)
+    expect(denied.json()).toMatchObject({ error: { code: 'CAPABILITY_FORBIDDEN' } })
+    expect(server.taskRepository.complete).not.toHaveBeenCalled()
+
+    const manager = fixture({
+      resolveContext: () => ({
+        scope: { tenantId, storeId }, employeeId, businessDate: '2026-08-11',
+        capabilities: ['service.execute', 'service.manage'],
+      }),
+    })
+    manager.taskRepository.findById.mockResolvedValue(complaint)
+    const missingResolution = await manager.app.inject({
+      method: 'POST',
+      url: `/api/service-tasks/${taskId}/complete`,
+      headers: { 'idempotency-key': 'complaint-manager-note-0001' },
+      payload: {},
+    })
+    expect(missingResolution.statusCode).toBe(400)
+    expect(manager.taskRepository.complete).not.toHaveBeenCalled()
+
+    const completed = await manager.app.inject({
+      method: 'POST',
+      url: `/api/service-tasks/${taskId}/complete`,
+      headers: { 'idempotency-key': 'complaint-manager-complete-0001' },
+      payload: { note: '已到桌沟通并补送饮品' },
+    })
+    expect(completed.statusCode).toBe(200)
+    expect(manager.taskRepository.complete).toHaveBeenCalledWith(expect.objectContaining({
+      note: '已到桌沟通并补送饮品',
+    }))
   })
 
   it('maps domain and idempotency failures to stable API errors', async () => {

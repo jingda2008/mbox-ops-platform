@@ -90,6 +90,7 @@ export class CommerceCommandService {
         lines: input.lines,
         note: input.note,
         createdByEmployeeId: input.createdByEmployeeId,
+        createdByCustomerId: input.createdByCustomerId,
       }
       const pricingAuthorization = await this.authorizePricing(transaction, orderInput, input)
       const schedulingOverride = await authorizeKdsOverride(transaction, input)
@@ -336,6 +337,7 @@ function orderToJson(order: SubmittedOrder): JsonObject {
     currency: order.currency,
     note: order.note,
     createdByEmployeeId: order.createdByEmployeeId,
+    createdByCustomerId: order.createdByCustomerId,
     createdAt: order.createdAt,
     submittedAt: order.submittedAt,
     items: order.items.map((item) => ({
@@ -394,6 +396,9 @@ function validateCommand(input: Readonly<SubmitOrderCommand>): void {
   }
   if (input.actor.type === 'employee' && input.createdByEmployeeId !== input.actor.employeeId) {
     throw new TypeError('createdByEmployeeId must match the employee audit actor')
+  }
+  if (input.channel === 'guest_qr' && (!input.createdByCustomerId || input.createdByEmployeeId)) {
+    throw new TypeError('Guest QR orders require an authenticated guest creator')
   }
   if (input.channel === 'staff_assisted') {
     if (input.actor.type !== 'employee' || !input.assistedOrderContext) {
@@ -457,6 +462,7 @@ function canonicalSubmitFingerprint(input: Readonly<SubmitOrderCommand>): string
     })),
     note: input.note?.trim() || null,
     createdByEmployeeId: input.createdByEmployeeId ?? null,
+    createdByCustomerId: input.createdByCustomerId ?? null,
     actor,
     businessDate: input.businessDate,
     kdsOverride: input.kdsOverride ? {

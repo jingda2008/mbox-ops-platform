@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0-rc.75 - 2026-08-13
+
+- Preserved the validated `rc.72` business behavior and the `rc.74` OCI archive digest-chain verification.
+- Replaced obsolete aggregate-projection release checks with the normalized service contract: exact commit, normalized schema flavor and migrated schema version.
+- Bound the candidate runtime to the exact release commit while keeping image identity authoritative in the immutable OCI manifest and release evidence.
+
 ## 1.0.0-rc.74 - 2026-08-13
 
 - Preserved the validated `rc.72` fixed-table QR, reservation, feedback, configuration and normalized authorization behavior.

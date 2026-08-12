@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0-rc.74 - 2026-08-13
+
+- Preserved the validated `rc.72` fixed-table QR, reservation, feedback, configuration and normalized authorization behavior.
+- Corrected Alibaba Cloud release verification for OCI multi-platform archives by independently verifying the OCI index, Linux/AMD64 manifest and image configuration digest chain.
+- Kept database backup, migration, candidate health, cutover and rollback gates unchanged.
+
 ## 1.0.0-rc.72 - 2026-08-13
 
 - 改为不绑具体桌位的预约申请，并在门店确认后的约定到店时间启动10分钟到店保留。

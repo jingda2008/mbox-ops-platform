@@ -13,8 +13,13 @@ require_value CANDIDATE_BASE_URL
 validate_commit_sha "$APP_COMMIT_SHA"
 validate_image_digest "$EXPECTED_IMAGE_DIGEST"
 assert_candidate_name "$CANDIDATE_CONTAINER_NAME"
+DEPLOYMENT_TIER="${DEPLOYMENT_TIER:-validation}"
 VERIFY_TIMEOUT_SECONDS="${VERIFY_TIMEOUT_SECONDS:-75}"
 [[ "$VERIFY_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || die 'VERIFY_TIMEOUT_SECONDS must be numeric'
+case "$DEPLOYMENT_TIER" in
+  validation|production) ;;
+  *) die 'DEPLOYMENT_TIER must be validation or production' ;;
+esac
 
 if ! is_apply_mode; then
   log 'candidate verification is in dry-run mode; no Docker or HTTP request will run'
@@ -43,11 +48,12 @@ done
 version_json="$(curl --fail --silent --show-error --max-time 4 "${CANDIDATE_BASE_URL}/api/version")"
 
 READY_JSON="$ready_json" VERSION_JSON="$version_json" EXPECTED_SHA="$APP_COMMIT_SHA" \
-EXPECTED_SCHEMA="$NORMALIZED_SCHEMA_FLAVOR" node --input-type=module <<'NODE'
+EXPECTED_SCHEMA="$NORMALIZED_SCHEMA_FLAVOR" DEPLOYMENT_TIER="$DEPLOYMENT_TIER" node --input-type=module <<'NODE'
 const ready = JSON.parse(process.env.READY_JSON)
 const version = JSON.parse(process.env.VERSION_JSON)
 const expectedSha = process.env.EXPECTED_SHA
 const expectedSchema = process.env.EXPECTED_SCHEMA
+const deploymentTier = process.env.DEPLOYMENT_TIER
 if (ready.status !== 'ready') throw new Error('candidate readiness status is not ready')
 if (ready.commitSha !== expectedSha || version.commitSha !== expectedSha) {
   throw new Error('candidate API commit SHA mismatch')
@@ -55,14 +61,19 @@ if (ready.commitSha !== expectedSha || version.commitSha !== expectedSha) {
 if (ready.schemaFlavor !== expectedSchema || version.schemaFlavor !== expectedSchema) {
   throw new Error('candidate API schema flavor mismatch')
 }
-const requiredAdapterCapabilities = [
-  'outbox.deliver', 'notification.deliver', 'print.deliver', 'sop.execute',
-  'payment.create.postar', 'refund.execute.postar',
-]
-const adapterCapabilities = new Set(ready.workers?.adapterCapabilities ?? [])
-if (ready.workers?.status !== 'healthy' || ready.workers?.integrationWorkersEnabled !== true
-  || requiredAdapterCapabilities.some((capability) => !adapterCapabilities.has(capability))) {
-  throw new Error('candidate integration workers are not healthy')
+if (ready.workers !== undefined && ready.workers.status !== 'healthy') {
+  throw new Error('candidate database workers are not healthy')
+}
+if (deploymentTier === 'production') {
+  const requiredAdapterCapabilities = [
+    'outbox.deliver', 'notification.deliver', 'print.deliver', 'sop.execute',
+    'payment.create.postar', 'refund.execute.postar',
+  ]
+  const adapterCapabilities = new Set(ready.workers?.adapterCapabilities ?? [])
+  if (ready.workers?.status !== 'healthy' || ready.workers?.integrationWorkersEnabled !== true
+    || requiredAdapterCapabilities.some((capability) => !adapterCapabilities.has(capability))) {
+    throw new Error('candidate integration workers are not commercially ready')
+  }
 }
 NODE
 

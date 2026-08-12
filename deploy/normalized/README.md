@@ -7,10 +7,14 @@ confirmation value are supplied.
 
 ## Safety boundaries
 
-- The existing `mbox-app` container is protected by name and is never stopped,
-  removed, renamed or replaced by these scripts.
-- There is no traffic-switching command. `pre-cutover-check.sh` is read-only and
-  emits a gate result for a later, separately reviewed routing change.
+- Candidate build, database, startup, verification and rollback scripts never
+  stop or replace the existing `mbox-app` container. Only the separately
+  confirmed `activate-candidate.sh` may rename it to a versioned rollback name
+  after the candidate has passed both isolated and public-route verification.
+- `pre-cutover-check.sh` is read-only. `activate-candidate.sh` is the separately
+  confirmed atomic routing change: it verifies the isolated candidate, switches
+  Caddy, checks the public SHA/schema identity, preserves the previous container
+  as a rollback target and restores it automatically if any later gate fails.
 - Database initialization accepts only a database with zero user tables. It
   runs `runNormalizedMigrations` from `database/normalized-migrations`; it does
   not import, copy or project legacy store JSON.
@@ -104,13 +108,20 @@ Actual startup requires `MBOX_DEPLOY_APPLY=1` and
    including Postar payment creation and approved refund execution. A generic
    no-op outbox adapter cannot satisfy this gate.
 
+For `DEPLOYMENT_TIER=validation`, database-only workers and simulated payment
+remain allowed because this environment is not approved for real settlement or
+hardware. `DEPLOYMENT_TIER=production` retains the external worker and payment
+capability gates above.
+
 ## Pre-cutover gate
 
 `pre-cutover-check.sh` checks both the current service and candidate without
 changing routing. Actual checking requires
 `NORMALIZED_PRE_CUTOVER_CONFIRM=CHECK_ONLY_NO_CUTOVER`. Passing this gate is not
 authorization to switch production traffic; payment, worker adapters and staff
-browser acceptance still require separate evidence.
+browser acceptance still require separate evidence. After those gates are
+reviewed, `activate-candidate.sh` requires the explicit confirmation value
+`NORMALIZED_ACTIVATION_CONFIRM=ACTIVATE_VERIFIED_NORMALIZED_CANDIDATE`.
 
 ## Candidate rollback
 

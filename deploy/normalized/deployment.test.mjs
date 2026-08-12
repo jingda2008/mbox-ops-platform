@@ -76,6 +76,7 @@ test('mutating entrypoints are dry-run by default and never invoke Docker', () =
     CANDIDATE_HOST_PORT: '18787',
     CANDIDATE_BASE_URL: 'http://localhost:18787',
     CURRENT_HEALTH_URL: 'https://current-service.example.test',
+    PUBLIC_BASE_URL: 'https://public-service.example.test',
   }
   for (const script of [
     'build-image.sh',
@@ -85,6 +86,7 @@ test('mutating entrypoints are dry-run by default and never invoke Docker', () =
     'verify-candidate.sh',
     'pre-cutover-check.sh',
     'rollback-candidate.sh',
+    'activate-candidate.sh',
   ]) {
     execFileSync('bash', [resolve(deployDir, script)], { env: baseEnv, stdio: 'pipe' })
   }
@@ -101,10 +103,22 @@ test('candidate scripts protect the existing production container', () => {
 
 test('candidate verification rejects missing external worker integrations', () => {
   const source = readFileSync(resolve(deployDir, 'verify-candidate.sh'), 'utf8')
+  assert.match(source, /deploymentTier === 'production'/)
   assert.match(source, /integrationWorkersEnabled !== true/)
   assert.match(source, /payment\.create\.postar/)
   assert.match(source, /refund\.execute\.postar/)
-  assert.match(source, /candidate integration workers are not healthy/)
+  assert.match(source, /candidate integration workers are not commercially ready/)
+})
+
+test('activation is atomic, verifies public identity and preserves a rollback container', () => {
+  const source = readFileSync(resolve(deployDir, 'activate-candidate.sh'), 'utf8')
+  assert.match(source, /ACTIVATE_VERIFIED_NORMALIZED_CANDIDATE/)
+  assert.match(source, /verify_public_candidate 15/)
+  assert.match(source, /rollback_container=/)
+  assert.match(source, /rollback_on_error/)
+  assert.match(source, /Caddyfile\.previous/)
+  assert.match(source, /deployment-manifest\.json/)
+  assert.doesNotMatch(source, /docker rm .*ACTIVE_CONTAINER_NAME/)
 })
 
 test('protected production name is rejected before Docker can be called', () => {

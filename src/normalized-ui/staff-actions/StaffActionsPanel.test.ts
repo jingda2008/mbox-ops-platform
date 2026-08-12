@@ -10,8 +10,9 @@ describe('StaffActionsPanel', () => {
     const api: StaffActionsApiPort = {
       loadOperations: vi.fn(() => new Promise<StaffOperationsData>(() => undefined)),
       loadFulfillment: vi.fn(() => new Promise<StaffFulfillmentData>(() => undefined)),
+      loadReservations: vi.fn(() => new Promise(() => undefined)),
       openTable: vi.fn(), closeTable: vi.fn(), transferTable: vi.fn(),
-      completeServiceTask: vi.fn(), runKdsAction: vi.fn(),
+      completeServiceTask: vi.fn(), runKdsAction: vi.fn(), actOnReservation: vi.fn(),
     }
     const html = renderToStaticMarkup(createElement(StaffActionsPanel, { api }))
 

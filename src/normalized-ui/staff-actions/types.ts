@@ -103,9 +103,37 @@ export interface StaffFulfillmentData {
   workItems: StaffFulfillmentItem[]
 }
 
+export type StaffReservationStatus =
+  | 'pending'
+  | 'confirmed'
+  | 'arrived'
+  | 'seated'
+  | 'completed'
+  | 'cancelled'
+  | 'no_show'
+
+export interface StaffReservation {
+  id: string
+  publicId: string
+  customerName: string
+  contactToken?: string
+  contactAvailable: boolean
+  guestCount: number
+  arrivalAt: string
+  expectedEndAt: string
+  status: StaffReservationStatus
+  source: 'wechat' | 'phone' | 'walk_in' | 'employee' | 'integration'
+  note: string | null
+  tableLocks: Array<{
+    tableCode: string
+    tableDisplayName: string
+    status: 'held' | 'confirmed' | 'released' | 'expired' | 'cancelled'
+  }>
+}
+
 export type StaffActionNotice = {
   kind: 'success' | 'error' | 'guidance'
   message: string
 } | null
 
-export type StaffActionsTab = 'tables' | 'work'
+export type StaffActionsTab = 'tables' | 'work' | 'reservations'

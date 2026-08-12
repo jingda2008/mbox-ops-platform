@@ -115,4 +115,8 @@ test('mobile manager completes device verification and reaches role-scoped works
   await expect(page.getByRole('heading', { name: '李艳' })).toBeVisible()
   await expect(page.getByText(/店长/)).toBeVisible()
   await expect(page.getByRole('heading', { name: '现在要做什么' })).toBeVisible()
+
+  await page.getByRole('button', { name: '预约到店', exact: true }).first().click()
+  await expect(page.getByText('预约与到店', { exact: true })).toBeVisible()
+  await expect(page.getByText('规范化改造中')).toHaveCount(0)
 })

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ArrowRightLeft,
+  CalendarDays,
   Check,
   ChefHat,
   CircleAlert,
@@ -28,6 +29,7 @@ import type {
   StaffActionTable,
   StaffFulfillmentData,
   StaffOperationsData,
+  StaffReservation,
   StaffServiceTask,
 } from './types'
 import './staff-actions-panel.css'
@@ -47,6 +49,8 @@ export function StaffActionsPanel({
   const [tab, setTab] = useState<StaffActionsTab>(initialTab)
   const [operations, setOperations] = useState<StaffOperationsData | null>(null)
   const [fulfillment, setFulfillment] = useState<StaffFulfillmentData | null>(null)
+  const [reservations, setReservations] = useState<StaffReservation[] | null>(null)
+  const [reservationMessage, setReservationMessage] = useState<string | null>(null)
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
   const [notice, setNotice] = useState<StaffActionNotice>(null)
   const [selectedTableId, setSelectedTableId] = useState<string | null>(null)
@@ -60,7 +64,10 @@ export function StaffActionsPanel({
   const noticeRef = useRef<HTMLDivElement | null>(null)
   const noticeTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null)
   const requestRef = useRef<AbortController | null>(null)
+  const reservationRequestRef = useRef<AbortController | null>(null)
   const knownActionKeysRef = useRef<Set<string> | null>(null)
+  const actionLocksRef = useRef(new Set<string>())
+  const pendingActionRef = useRef<string | null>(null)
 
   const showNotice = useCallback((nextNotice: Exclude<StaffActionNotice, null>) => {
     if (noticeTimerRef.current !== null) globalThis.clearTimeout(noticeTimerRef.current)
@@ -105,13 +112,52 @@ export function StaffActionsPanel({
     }
   }, [api, onLoginRequired, showNotice])
 
+  const loadReservations = useCallback(async () => {
+    reservationRequestRef.current?.abort()
+    const controller = new AbortController()
+    reservationRequestRef.current = controller
+    try {
+      setReservations(await api.loadReservations(controller.signal))
+      setReservationMessage(null)
+    } catch (error) {
+      if (error instanceof StaffActionsApiError && error.code === 'ABORTED') return
+      if (error instanceof StaffActionsApiError && error.status === 401) {
+        onLoginRequired?.()
+        return
+      }
+      if (error instanceof StaffActionsApiError && error.status === 403) {
+        setReservations([])
+        setReservationMessage('当前岗位没有预约查看权限')
+        return
+      }
+      setReservations([])
+      setReservationMessage('预约信息暂时无法读取，请刷新重试')
+    }
+  }, [api, onLoginRequired])
+
   useEffect(() => {
     void load()
     return () => {
       requestRef.current?.abort()
+      reservationRequestRef.current?.abort()
       if (noticeTimerRef.current !== null) globalThis.clearTimeout(noticeTimerRef.current)
     }
   }, [load])
+
+  useEffect(() => setTab(initialTab), [initialTab])
+
+  useEffect(() => {
+    pendingActionRef.current = pendingAction
+  }, [pendingAction])
+
+  useEffect(() => {
+    if (tab !== 'reservations') return
+    void loadReservations()
+    const timer = globalThis.setInterval(() => {
+      if (document.visibilityState === 'visible' && pendingActionRef.current === null) void loadReservations()
+    }, 15_000)
+    return () => globalThis.clearInterval(timer)
+  }, [loadReservations, tab])
 
   useEffect(() => {
     const poll = () => {
@@ -199,6 +245,9 @@ export function StaffActionsPanel({
     }
     const snapshot = operations
     const sessionId = selectedTable.activeSession.id
+    const actionKey = `table-close:${sessionId}`
+    if (actionLocksRef.current.has(actionKey)) return
+    actionLocksRef.current.add(actionKey)
     setPendingAction(`table:${selectedTable.id}`)
     setOperations(replaceTableSession(snapshot, selectedTable.id, null))
     try {
@@ -211,6 +260,34 @@ export function StaffActionsPanel({
       else setOperations(snapshot)
       showNotice({ kind: 'error', message: actionError(error, '关台未完成，已恢复真实桌台状态') })
     } finally {
+      actionLocksRef.current.delete(actionKey)
+      setPendingAction(null)
+    }
+  }
+
+  const actOnReservation = async (reservation: StaffReservation, action: 'confirm' | 'arrive') => {
+    const actionKey = `reservation:${reservation.id}:${action}`
+    if (actionLocksRef.current.has(actionKey)) return
+    actionLocksRef.current.add(actionKey)
+    const snapshot = reservations
+    setPendingAction(actionKey)
+    setReservations((current) => current?.map((item) => item.id === reservation.id
+      ? { ...item, status: action === 'confirm' ? 'confirmed' : 'arrived' }
+      : item) ?? null)
+    try {
+      await api.actOnReservation(reservation.id, action)
+      showNotice({
+        kind: 'success',
+        message: action === 'confirm'
+          ? `${reservation.customerName} 的预约已确认`
+          : `${reservation.customerName} 已登记到店`,
+      })
+      await loadReservations()
+    } catch (error) {
+      setReservations(snapshot)
+      showNotice({ kind: 'error', message: actionError(error, '预约状态未更新，请重试') })
+    } finally {
+      actionLocksRef.current.delete(actionKey)
       setPendingAction(null)
     }
   }
@@ -325,6 +402,7 @@ export function StaffActionsPanel({
       <nav className="staff-actions-tabs" aria-label="现场工作分类">
         <TabButton active={tab === 'work'} label="待办" count={unifiedActions.length} onClick={() => setTab('work')} />
         <TabButton active={tab === 'tables'} label="桌台" count={operations?.tables.length ?? 0} onClick={() => setTab('tables')} />
+        <TabButton active={tab === 'reservations'} label="预约" count={activeReservationCount(reservations)} onClick={() => setTab('reservations')} />
       </nav>
 
       {phase === 'error' && operations !== null && <p className="staff-actions-stale">刷新失败，当前显示上次成功数据。</p>}
@@ -446,11 +524,101 @@ export function StaffActionsPanel({
         </ActionList>
       )}
 
+      {tab === 'reservations' && (
+        <ReservationList
+          reservations={reservations}
+          message={reservationMessage}
+          pendingAction={pendingAction}
+          canManage={permissions.includes('reservation.manage')}
+          onAction={(reservation, action) => void actOnReservation(reservation, action)}
+          onRefresh={() => void loadReservations()}
+        />
+      )}
+
       <span className="staff-actions-announcer" aria-live="polite">
         {pendingAction === null ? '' : '操作正在后台确认'}
       </span>
     </section>
   )
+}
+
+function ReservationList({ reservations, message, pendingAction, canManage, onAction, onRefresh }: {
+  reservations: StaffReservation[] | null
+  message: string | null
+  pendingAction: string | null
+  canManage: boolean
+  onAction(reservation: StaffReservation, action: 'confirm' | 'arrive'): void
+  onRefresh(): void
+}) {
+  if (reservations === null) {
+    return <div className="staff-reservation-empty"><LoaderCircle className="is-spinning" size={20} /> 正在读取预约</div>
+  }
+  const active = reservations
+    .filter((item) => !['completed', 'cancelled', 'no_show'].includes(item.status))
+    .sort((left, right) => Date.parse(left.arrivalAt) - Date.parse(right.arrivalAt))
+  return <section className="staff-reservations" aria-label="预约工作台">
+    <header>
+      <div><CalendarDays size={20} /><span><strong>预约与到店</strong><small>待确认和即将到店优先</small></span></div>
+      <button type="button" onClick={onRefresh}><RefreshCw size={17} /> 刷新</button>
+    </header>
+    {message !== null && <p className="staff-reservation-message">{message}</p>}
+    {active.length === 0 ? <p className="staff-reservation-empty">当前没有待处理预约</p> : active.map((reservation) => {
+      const pending = pendingAction?.startsWith(`reservation:${reservation.id}:`) === true
+      const tableLabel = reservation.tableLocks
+        .filter((lock) => lock.status === 'held' || lock.status === 'confirmed')
+        .map((lock) => lock.tableCode)
+        .join('、') || '待安排桌位'
+      return <article className="staff-reservation-card" key={reservation.id}>
+        <div className="staff-reservation-time">
+          <strong>{formatReservationTime(reservation.arrivalAt)}</strong>
+          <span>{reservation.guestCount}人 · {tableLabel}</span>
+        </div>
+        <div className="staff-reservation-copy">
+          <strong>{reservation.customerName}</strong>
+          <span>{reservation.contactToken ?? (reservation.contactAvailable ? '联系方式已保护' : '未留联系方式')}</span>
+          {reservation.note !== null && <small>备注：{reservation.note}</small>}
+        </div>
+        <span className={`staff-reservation-status is-${reservation.status}`}>{reservationStatusLabel(reservation.status)}</span>
+        {canManage && reservation.status === 'pending' && (
+          <button type="button" disabled={pending} onClick={() => onAction(reservation, 'confirm')}>
+            {pending ? '确认中…' : '确认预约'}
+          </button>
+        )}
+        {canManage && reservation.status === 'confirmed' && (
+          <button type="button" disabled={pending} onClick={() => onAction(reservation, 'arrive')}>
+            {pending ? '登记中…' : '客人到店'}
+          </button>
+        )}
+      </article>
+    })}
+  </section>
+}
+
+function activeReservationCount(reservations: StaffReservation[] | null): number {
+  return reservations?.filter((item) => item.status === 'pending' || item.status === 'confirmed').length ?? 0
+}
+
+function formatReservationTime(value: string): string {
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(new Date(value))
+}
+
+function reservationStatusLabel(status: StaffReservation['status']): string {
+  return ({
+    pending: '待确认',
+    confirmed: '已确认',
+    arrived: '已到店',
+    seated: '已入座',
+    completed: '已完成',
+    cancelled: '已取消',
+    no_show: '未到店',
+  } satisfies Record<StaffReservation['status'], string>)[status]
 }
 
 interface TableActionSheetProps {
@@ -534,7 +702,9 @@ function TableActionSheet(props: TableActionSheetProps) {
               <button type="button" onClick={() => props.onPermissionGuidance('table.transfer')}>转桌说明</button>
             )}
             {hasPermission(props.permissions, 'table.close') ? (
-              <button type="button" className="is-danger" onClick={props.onClose}>{props.closeConfirm ? '再次确认关台' : '关台/翻台'}</button>
+              <button type="button" className="is-danger" onClick={props.onClose} disabled={props.pending}>
+                {props.pending ? '正在关台…' : props.closeConfirm ? '再次确认关台' : '关台/翻台'}
+              </button>
             ) : (
               <button type="button" onClick={() => props.onPermissionGuidance('table.close')}>关台说明</button>
             )}

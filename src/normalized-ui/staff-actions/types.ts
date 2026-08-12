@@ -2,6 +2,8 @@ export type StaffActionPermission =
   | 'table.open'
   | 'table.close'
   | 'table.transfer'
+  | 'order.create'
+  | 'order.gift'
   | 'service.execute'
   | 'kds.prepare'
   | 'kds.deliver'

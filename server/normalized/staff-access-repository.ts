@@ -14,6 +14,10 @@ export interface EffectiveApprovalLimit {
   rules: JsonObject
 }
 
+export interface StaffApprovalAuthority extends EffectiveApprovalLimit {
+  id: string
+}
+
 export interface EffectiveNavigationItem {
   code: string
   label: string
@@ -114,6 +118,7 @@ interface ScopeRow extends Record<string, unknown> {
 }
 
 interface ApprovalRow extends Record<string, unknown> {
+  id: string
   approval_code: string
   amount_minor: string | null
   currency: string
@@ -211,6 +216,42 @@ export class StaffAccessRepository {
       )
     }
     return access
+  }
+
+  async resolveApprovalAuthority(
+    employeeId: string,
+    approvalCode: string,
+    at = new Date().toISOString(),
+  ): Promise<StaffApprovalAuthority | null> {
+    const result = await this.transaction.query<ApprovalRow>(`
+      SELECT al.id, al.approval_code, al.amount_minor::text, al.currency, al.rules
+      FROM mbox.role_approval_limits AS al
+      JOIN mbox.employee_roles AS er
+        ON er.tenant_id = al.tenant_id AND er.store_id = al.store_id AND er.role_id = al.role_id
+      JOIN mbox.roles AS r
+        ON r.tenant_id = er.tenant_id AND r.store_id = er.store_id AND r.id = er.role_id
+      WHERE al.tenant_id = $1::uuid AND al.store_id = $2::uuid
+        AND er.employee_id = $3::uuid AND al.approval_code = $4
+        AND al.enabled = true AND r.status = 'active'
+        AND er.starts_at <= $5::timestamptz
+        AND (er.ends_at IS NULL OR er.ends_at > $5::timestamptz)
+      ORDER BY al.amount_minor DESC NULLS LAST, al.id
+      LIMIT 1
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      employeeId,
+      approvalCode,
+      at,
+    ])
+    const row = result.rows[0]
+    return row === undefined ? null : {
+      id: row.id,
+      code: row.approval_code,
+      amountMinor: row.amount_minor === null ? null : Number(row.amount_minor),
+      currency: row.currency,
+      rules: row.rules,
+    }
   }
 
   async upsertPermissionDefinition(input: Readonly<PermissionDefinitionInput>) {
@@ -459,7 +500,7 @@ export class StaffAccessRepository {
   private async resolveApprovalRows(employeeId: string, at: string) {
     const result = await this.transaction.query<ApprovalRow>(`
       SELECT DISTINCT ON (al.approval_code, al.currency)
-        al.approval_code, al.amount_minor::text, al.currency, al.rules
+        al.id, al.approval_code, al.amount_minor::text, al.currency, al.rules
       FROM mbox.role_approval_limits AS al
       JOIN mbox.employee_roles AS er
         ON er.tenant_id = al.tenant_id AND er.store_id = al.store_id AND er.role_id = al.role_id

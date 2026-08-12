@@ -6,13 +6,16 @@ import {
   Check,
   ChefHat,
   CircleAlert,
+  Gift,
   LoaderCircle,
   RefreshCw,
   Send,
+  ShoppingCart,
   TableProperties,
   Users,
 } from 'lucide-react'
 import { StaffActionsApi, StaffActionsApiError, type StaffActionsApiPort } from './staff-actions-api'
+import { AssistedOrderSheet } from './AssistedOrderSheet'
 import {
   fulfillmentAction,
   guidanceForPermission,
@@ -61,6 +64,7 @@ export function StaffActionsPanel({
   const [closeConfirm, setCloseConfirm] = useState(false)
   const [resolutionNotes, setResolutionNotes] = useState<Record<string, string>>({})
   const [pendingAction, setPendingAction] = useState<string | null>(null)
+  const [orderSheetMode, setOrderSheetMode] = useState<'paid' | 'gift' | null>(null)
   const noticeRef = useRef<HTMLDivElement | null>(null)
   const noticeTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null)
   const requestRef = useRef<AbortController | null>(null)
@@ -207,6 +211,7 @@ export function StaffActionsPanel({
     setTransferReason('')
     setCloseConfirm(false)
     setNotice(null)
+    setOrderSheetMode(null)
   }
 
   const openTable = async () => {
@@ -459,6 +464,8 @@ export function StaffActionsPanel({
               onTransfer={() => void transferTable()}
               onPermissionGuidance={revealPermissionGuidance}
               onCancelClose={() => setCloseConfirm(false)}
+              onOrder={() => setOrderSheetMode('paid')}
+              onGift={() => setOrderSheetMode('gift')}
             />
           )}
         </div>
@@ -538,6 +545,19 @@ export function StaffActionsPanel({
       <span className="staff-actions-announcer" aria-live="polite">
         {pendingAction === null ? '' : '操作正在后台确认'}
       </span>
+
+      {orderSheetMode !== null && selectedTable?.activeSession !== null && selectedTable !== null && (
+        <AssistedOrderSheet
+          api={api}
+          mode={orderSheetMode}
+          table={{ code: selectedTable.code, activeSession: selectedTable.activeSession }}
+          onClose={() => setOrderSheetMode(null)}
+          onSubmitted={(message) => {
+            showNotice({ kind: 'success', message })
+            void load(true)
+          }}
+        />
+      )}
     </section>
   )
 }
@@ -640,6 +660,8 @@ interface TableActionSheetProps {
   onTransfer(): void
   onPermissionGuidance(permission: 'table.open' | 'table.close' | 'table.transfer'): void
   onCancelClose(): void
+  onOrder(): void
+  onGift(): void
 }
 
 function TableActionSheet(props: TableActionSheetProps) {
@@ -696,6 +718,12 @@ function TableActionSheet(props: TableActionSheetProps) {
         <div className="staff-open-session">
           <p><strong>{table.activeSession.guestCount}人</strong><span>本桌服务进行中</span></p>
           <div className="staff-session-actions">
+            {hasPermission(props.permissions, 'order.create') && (
+              <button type="button" className="is-commerce" onClick={props.onOrder}><ShoppingCart size={17} /> 协助点单</button>
+            )}
+            {hasPermission(props.permissions, 'order.create') && hasPermission(props.permissions, 'order.gift') && (
+              <button type="button" className="is-gift" onClick={props.onGift}><Gift size={17} /> 赠送商品</button>
+            )}
             {hasPermission(props.permissions, 'table.transfer') ? (
               <button type="button" onClick={() => props.onTransferTarget(props.transferTargetId === null ? '' : null)}><ArrowRightLeft size={17} /> 转桌</button>
             ) : (

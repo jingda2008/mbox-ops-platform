@@ -133,6 +133,36 @@ integration('PostgresPricingAuthority PostgreSQL authorization integrity', () =>
     await expectNoOrder('pricing-forged-employee')
   })
 
+  it('allows the same employee role limit to authorize separate orders for one table session', async () => {
+    const runner = new ScopedPostgresTransactionRunner(asPool(pool))
+    const authorizationIds = await runner.run({ tenantId, storeId }, async (transaction) => {
+      const policy = new PricingAuthorizationPolicy(new PostgresPricingAuthority())
+      const request = {
+        scope: transaction.scope,
+        actor: { type: 'employee' as const, employeeId },
+        tableSessionId: sessionIds[2]!,
+        channel: 'staff_assisted' as const,
+        lines: [{ productId, quantity: 1 }],
+      }
+      const first = await policy.authorize(transaction, request, {
+        sourceType: 'employee', sourceId: discountLimitId,
+      })
+      const second = await policy.authorize(transaction, request, {
+        sourceType: 'employee', sourceId: discountLimitId,
+      })
+      return [first!.authorizationId, second!.authorizationId]
+    })
+
+    expect(new Set(authorizationIds).size).toBe(2)
+    const evidence = await pool.query<{ count: string }>(`
+      SELECT count(*)::text AS count
+      FROM mbox.pricing_authorizations
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        AND table_session_id=$3::uuid AND source_type='employee' AND source_id=$4::uuid
+    `, [tenantId, storeId, sessionIds[2], discountLimitId])
+    expect(evidence.rows[0]?.count).toBe('2')
+  })
+
   it('honours an explicit permission deny even while the role grants the capability', async () => {
     const runner = new ScopedPostgresTransactionRunner(asPool(pool))
     await expect(runner.run({ tenantId, storeId }, async (transaction) => {

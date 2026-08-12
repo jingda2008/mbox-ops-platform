@@ -13,15 +13,29 @@ export interface RuntimeRepositoryHealth {
   projectionReady?: boolean
   projectionRevision?: number | null
   projectionCountsMatch?: boolean
+  kdsAuthorityConsistent?: boolean
   projectionError?: string
+  databaseClockSkewMs?: number
+}
+
+export interface RuntimeStaffDirectorySnapshot {
+  storeId: string
+  businessDate: string
+  revision: number
+  employees: Array<{ id: string; roleId: string; status: string }>
 }
 
 export interface RuntimeRepository {
   init(): Promise<void>
   read(): Promise<RuntimeState>
   readFresh?(): Promise<RuntimeState>
+  readRevision?(): Promise<number>
+  readStaffDirectory?(): Promise<RuntimeStaffDirectorySnapshot>
   mutate<T>(mutation: (state: RuntimeState) => T | Promise<T>, options?: unknown): Promise<T>
   reset(): Promise<RuntimeState>
+  resetPerformanceMetrics?(): void | Promise<void>
+  waitForMutationIdle?(idleMs: number, maxWaitMs: number): Promise<boolean>
+  runWithDistributedLease?<T>(name: string, operation: () => Promise<T>): Promise<{ acquired: boolean; value?: T }>
   healthCheck(): Promise<RuntimeRepositoryHealth>
   close(): Promise<void>
 }
@@ -124,6 +138,30 @@ export class JsonRepository {
 
   async readFresh() {
     return this.read()
+  }
+
+  async readRevision() {
+    await this.queue
+    return this.state.revision
+  }
+
+  async readStaffDirectory(): Promise<RuntimeStaffDirectorySnapshot> {
+    await this.queue
+    return {
+      storeId: this.state.store.id,
+      businessDate: this.state.store.businessDate,
+      revision: this.state.revision,
+      employees: this.state.employees.map(({ id, roleId, status }) => ({ id, roleId, status })),
+    }
+  }
+
+  async waitForMutationIdle() {
+    await this.queue
+    return true
+  }
+
+  async runWithDistributedLease<T>(_name: string, operation: () => Promise<T>) {
+    return { acquired: true, value: await operation() }
   }
 
   async mutate<T>(mutation: (state: RuntimeState) => T | Promise<T>): Promise<T> {

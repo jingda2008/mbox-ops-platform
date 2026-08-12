@@ -14,7 +14,7 @@ import {
 } from '../src/shared/commerce-api.js'
 import type { ManagerKdsCancellationResult } from '../src/shared/commerce-api.js'
 import type { RuntimeState } from '../src/shared/contracts.js'
-import type { KdsTask } from '../src/shared/order-contracts.js'
+import type { KdsExceptionEvent, KdsTask } from '../src/shared/order-contracts.js'
 import { productAvailability } from '../src/shared/product-availability.js'
 import {
   completeKdsTask,
@@ -55,6 +55,7 @@ import { anonymousVisitId, type GuestInsightsStore } from './guest-insights.js'
 import { queuePrintJobsForOrder } from './commercial-ops.js'
 import { addConfiguredProductToOrder } from './product-order-expansion.js'
 import { requireGiftPolicy } from './gift-policy.js'
+import { requireRequestActor } from './auth-context.js'
 
 interface CommerceApiOptions {
   guestTokenSecret: string
@@ -76,6 +77,17 @@ const DEFAULT_COMMERCE_API_OPTIONS: CommerceApiOptions = {
 
 function deterministicId(prefix: string, key: string) {
   return `${prefix}_${createHash('sha256').update(key).digest('hex').slice(0, 32)}`
+}
+
+function normalizedKdsActionEventType(action: 'start' | 'complete' | 'completeAndDeliver' | 'pickUp' | 'pickupAndDeliver' | 'deliver') {
+  const normalized = action === 'pickUp'
+    ? 'pick_up'
+    : action === 'pickupAndDeliver'
+      ? 'pickup_and_deliver'
+      : action === 'completeAndDeliver'
+        ? 'complete_and_deliver'
+        : action
+  return `kds.${normalized}.v2` as const
 }
 
 function cancellationAccountingSnapshot(state: RuntimeState, task: KdsTask): ManagerKdsCancellationResult['accounting'] {
@@ -126,8 +138,28 @@ function requireKdsTaskActor(
   )
 
   const employee = state.employees.find((item) => item.id === actor.actorId)
-  if (!employee || employee.status !== 'active' || !employee.online || employee.paused) {
-    throw new AuthorizationError('当前员工不在可执行任务状态', operation)
+  const requestActor = requireRequestActor(request)
+  const hasVerifiedPresence = requestActor.authenticatedBy === 'signed_session'
+    && requestActor.businessDate === state.store.businessDate
+    && Number.isSafeInteger(requestActor.presenceExpiresAt)
+    && requestActor.presenceExpiresAt! > Date.now()
+  const actorIsOnline = hasVerifiedPresence || (
+    requestActor.authenticatedBy === 'local_header' && employee?.online === true
+  )
+  if (!employee || employee.status !== 'active') throw new AuthorizationError('当前员工账号已停用，不能执行出品', operation)
+  if (employee.paused) throw new AuthorizationError('当前员工已暂停接单，请先恢复接单状态', operation)
+  if (!actorIsOnline) {
+    request.log.warn({
+      actorId: requestActor.actorId,
+      authenticatedBy: requestActor.authenticatedBy,
+      actorBusinessDate: requestActor.businessDate ?? null,
+      storeBusinessDate: state.store.businessDate,
+      presenceExpiresAt: requestActor.presenceExpiresAt ?? null,
+      presenceStillValid: Number.isSafeInteger(requestActor.presenceExpiresAt)
+        && requestActor.presenceExpiresAt! > Date.now(),
+      aggregateOnline: employee.online,
+    }, 'kds actor presence rejected')
+    throw new AuthorizationError('当前设备在线会话已失效，请重新登录后继续', operation)
   }
   const activeShift = state.shiftAssignments.find((shift) => (
     shift.employeeId === actor.actorId &&
@@ -153,6 +185,20 @@ export function registerCommerceRoutes(
   repository: RuntimeRepository,
   options: CommerceApiOptions = DEFAULT_COMMERCE_API_OPTIONS,
 ) {
+  const orderCreationProjectionTables = [
+    'operational_orders',
+    'operational_order_items',
+    'operational_kds_tasks',
+    'operational_inventory_balances',
+  ] as const
+
+  const discardTransactionLocalOrderIdempotency = (state: RuntimeState, requestKey: string) => {
+    const prefix = `${requestKey}:`
+    state.orderDomain.idempotencyRecords = state.orderDomain.idempotencyRecords.filter(
+      (record) => !record.key.startsWith(prefix),
+    )
+  }
+
   app.post('/api/commerce/orders', async (request, reply) => {
     const input = cartOrderSchema.parse(request.body)
     let insightContext: { tableSessionId: string; tableCode: string; businessDate: string } | null = null
@@ -260,8 +306,19 @@ export function registerCommerceRoutes(
           idempotencyKey: input.idempotencyKey,
         },
       })
+      // The request-level audit entry and repository idempotency record are the
+      // durable replay boundary. Draft/item/submit keys are transaction-local
+      // implementation details and otherwise grow the hot aggregate per item.
+      discardTransactionLocalOrderIdempotency(state, input.idempotencyKey)
       state.revision += 1
       return submitted
+    }, {
+      idempotency: {
+        operationScope: 'commerce.cart_order.create.v1',
+        idempotencyKey: input.idempotencyKey,
+        requestFingerprint: JSON.stringify(input),
+      },
+      projectionTables: [...orderCreationProjectionTables],
     })
     if (options.guestInsights && insightContext) {
       const context = insightContext as { tableSessionId: string; tableCode: string; businessDate: string }
@@ -540,14 +597,23 @@ export function registerCommerceRoutes(
         occurredAt: now,
         details: { tableId: table.id, productId: product.id, quantity: input.quantity, idempotencyKey: input.idempotencyKey },
       })
+      discardTransactionLocalOrderIdempotency(state, input.idempotencyKey)
       state.revision += 1
       return submitted
+    }, {
+      idempotency: {
+        operationScope: 'commerce.quick_order.create.v1',
+        idempotencyKey: input.idempotencyKey,
+        requestFingerprint: JSON.stringify(input),
+      },
+      projectionTables: [...orderCreationProjectionTables],
     })
     return reply.status(201).send(order)
   })
 
   app.post<{ Params: { taskId: string } }>('/api/commerce/kds/:taskId/actions', async (request) => {
     const input = kdsActionSchema.parse(request.body)
+    const requestActor = requireRequestActor(request)
     return repository.mutate((state) => {
       syncOrderFulfillmentWorkstations(state)
       const currentTask = state.orderDomain.kdsTasks.find((item) => item.id === request.params.taskId)
@@ -708,11 +774,37 @@ export function registerCommerceRoutes(
       }
       if (changed) state.revision += 1
       return task
+    }, {
+      idempotency: {
+        operationScope: 'commerce.kds.action.v2',
+        idempotencyKey: input.idempotencyKey,
+        requestFingerprint: JSON.stringify({ taskId: request.params.taskId, requestActorId: requestActor.actorId, ...input }),
+      },
+      authoritativeKds: {
+        taskId: request.params.taskId,
+        eventType: normalizedKdsActionEventType(input.action),
+        actorId: requestActor.actorId,
+        requestId: request.id,
+      },
+      metricLabel: 'kds',
+      projectionTables: [
+        'operational_service_tasks',
+        'operational_orders',
+        'operational_order_items',
+        'operational_kds_tasks',
+      ],
+      projectionEntityIds: (task: KdsTask) => ({
+        operational_service_tasks: task.deliveryServiceTask?.id ? [task.deliveryServiceTask.id] : [],
+        operational_orders: [task.orderId],
+        operational_order_items: [task.orderItemId],
+        operational_kds_tasks: [task.id],
+      }),
     })
   })
 
   app.post<{ Params: { taskId: string } }>('/api/commerce/kds/:taskId/manager-cancel', async (request) => {
     const input = managerKdsCancellationSchema.parse(request.body)
+    const requestActor = requireRequestActor(request)
     return repository.mutate((state): ManagerKdsCancellationResult => {
       const replay = state.auditEntries.find((entry) => (
         entry.action === 'kds.manager_cancelled.v1'
@@ -806,11 +898,31 @@ export function registerCommerceRoutes(
       })
       state.revision += 1
       return result
+    }, {
+      idempotency: {
+        operationScope: 'commerce.kds.manager_cancel.v2',
+        idempotencyKey: input.idempotencyKey,
+        requestFingerprint: JSON.stringify({ taskId: request.params.taskId, requestActorId: requestActor.actorId, ...input }),
+      },
+      authoritativeKds: {
+        taskId: request.params.taskId,
+        eventType: 'kds.manager_cancel.v2',
+        actorId: requestActor.actorId,
+        requestId: request.id,
+      },
+      metricLabel: 'kds',
+      projectionTables: ['operational_orders', 'operational_order_items', 'operational_kds_tasks'],
+      projectionEntityIds: (result: ManagerKdsCancellationResult) => ({
+        operational_orders: [result.orderId],
+        operational_order_items: [result.orderItemId],
+        operational_kds_tasks: [request.params.taskId],
+      }),
     })
   })
 
   app.post<{ Params: { taskId: string } }>('/api/commerce/kds/:taskId/exceptions', async (request, reply) => {
     const input = kdsExceptionReportSchema.parse(request.body)
+    const requestActor = requireRequestActor(request)
     const event = await repository.mutate((state) => {
       syncOrderFulfillmentWorkstations(state)
       const currentTask = state.orderDomain.kdsTasks.find((item) => item.id === request.params.taskId)
@@ -854,12 +966,37 @@ export function registerCommerceRoutes(
         state.revision += 1
       }
       return result
+    }, {
+      idempotency: {
+        operationScope: 'commerce.kds.exception_report.v2',
+        idempotencyKey: input.idempotencyKey,
+        requestFingerprint: JSON.stringify({ taskId: request.params.taskId, requestActorId: requestActor.actorId, ...input }),
+      },
+      authoritativeKds: {
+        taskId: request.params.taskId,
+        eventType: 'kds.exception_report.v2',
+        actorId: requestActor.actorId,
+        requestId: request.id,
+      },
+      metricLabel: 'kds',
+      projectionTables: ['operational_orders', 'operational_order_items', 'operational_kds_tasks'],
+      projectionEntityIds: (result: KdsExceptionEvent) => ({
+        operational_orders: [result.orderId],
+        operational_order_items: [result.originalOrderItemId],
+        operational_kds_tasks: [request.params.taskId],
+      }),
     })
     return reply.status(201).send(event)
   })
 
   app.post<{ Params: { exceptionId: string } }>('/api/commerce/kds/exceptions/:exceptionId/decision', async (request) => {
     const input = kdsExceptionDecisionSchema.parse(request.body)
+    const requestActor = requireRequestActor(request)
+    const routingState = repository.readFresh ? await repository.readFresh() : await repository.read()
+    const routedTask = routingState.orderDomain.kdsTasks.find((task) => task.exceptionEvents?.some((event) => (
+      event.exceptionId === request.params.exceptionId && event.type === 'reported'
+    )))
+    if (!routedTask) throw new Error('KDS异常不存在')
     return repository.mutate((state) => {
       syncOrderFulfillmentWorkstations(state)
       const reportedTask = state.orderDomain.kdsTasks.find((task) => task.exceptionEvents?.some((event) => (
@@ -912,6 +1049,25 @@ export function registerCommerceRoutes(
         state.revision += 1
       }
       return result
+    }, {
+      idempotency: {
+        operationScope: 'commerce.kds.exception_decision.v2',
+        idempotencyKey: input.idempotencyKey,
+        requestFingerprint: JSON.stringify({ exceptionId: request.params.exceptionId, requestActorId: requestActor.actorId, ...input }),
+      },
+      authoritativeKds: {
+        taskId: routedTask.id,
+        eventType: 'kds.exception_decision.v2',
+        actorId: requestActor.actorId,
+        requestId: request.id,
+      },
+      metricLabel: 'kds',
+      projectionTables: ['operational_orders', 'operational_order_items', 'operational_kds_tasks'],
+      projectionEntityIds: (result: KdsExceptionEvent) => ({
+        operational_orders: [result.orderId],
+        operational_order_items: [result.originalOrderItemId],
+        operational_kds_tasks: [routedTask.id, ...(result.remakeKdsTaskId ? [result.remakeKdsTaskId] : [])],
+      }),
     })
   })
 

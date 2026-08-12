@@ -33,6 +33,7 @@ export interface NotificationDispatchOptions {
   maxRetrySeconds?: number
   limit?: number
   leaseSeconds?: number
+  minimumGlobalIdleMs?: number
 }
 
 export interface NotificationDispatchSummary {
@@ -68,6 +69,18 @@ export function selectDueNotifications(state: RuntimeState, now = new Date(), li
     ))
     .sort((left, right) => nextAttemptAt(left).localeCompare(nextAttemptAt(right)))
     .slice(0, Math.max(0, limit))
+}
+
+export function notificationsWouldDispatch(
+  state: RuntimeState,
+  adapters: readonly NotificationProviderAdapter[],
+  now = new Date(),
+  options: NotificationDispatchOptions = {},
+) {
+  const settings = validateOptions(options)
+  const configuredChannels = new Set(adapters.map((adapter) => adapter.channel))
+  return selectDueNotifications(state, now, settings.limit)
+    .some((notification) => configuredChannels.has(notification.channel))
 }
 
 function appendAudit(
@@ -261,10 +274,7 @@ export async function dispatchDueNotifications(
   snapshot?: RuntimeState,
 ) {
   if (adapters.length === 0) return { claimed: 0, sent: 0, retryScheduled: 0, failed: 0 }
-  const settings = validateOptions(options)
-  const configuredChannels = new Set(adapters.map((adapter) => adapter.channel))
-  const hasDueNotification = selectDueNotifications(snapshot ?? await repository.read(), now, settings.limit)
-    .some((notification) => configuredChannels.has(notification.channel))
+  const hasDueNotification = notificationsWouldDispatch(snapshot ?? await repository.read(), adapters, now, options)
   if (!hasDueNotification) return { claimed: 0, sent: 0, retryScheduled: 0, failed: 0 }
   const claims = await repository.mutate((state) => claimDueNotifications(
     state,
@@ -272,14 +282,17 @@ export async function dispatchDueNotifications(
     adapters.map((adapter) => adapter.channel),
     now,
     options,
-  ))
+  ), { metricLabel: 'scheduler', minimumGlobalIdleMs: options.minimumGlobalIdleMs })
   const summary = { claimed: claims.length, sent: 0, retryScheduled: 0, failed: 0 }
   for (const claim of claims) {
     const result = await callProvider(claim, adapters)
     let outcome: ReturnType<typeof applyNotificationDispatchResult> | null = null
     for (let attempt = 1; attempt <= 3 && outcome === null; attempt += 1) {
       try {
-        outcome = await repository.mutate((state) => applyNotificationDispatchResult(state, claim, result, new Date(), options))
+        outcome = await repository.mutate(
+          (state) => applyNotificationDispatchResult(state, claim, result, new Date(), options),
+          { metricLabel: 'scheduler' },
+        )
       } catch (error) {
         if (!(error instanceof PostgresOptimisticConcurrencyError) || attempt === 3) throw error
       }

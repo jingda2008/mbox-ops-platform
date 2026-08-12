@@ -28,9 +28,32 @@ interface AuthContextOptions {
     sessionExpiresAt: number
     now: number
   }) => Promise<boolean>
+  isStaffSessionActive?: (input: {
+    sessionId: string
+    actorId: string
+    storeId: string
+    businessDate: string
+    now: number
+  }) => Promise<boolean>
+  resolvePresenceSession?: (input: {
+    sessionId: string
+    actorId: string
+    storeId: string
+    sessionExpiresAt: number
+    now: number
+    touch: boolean
+    invalidate: boolean
+  }) => Promise<{ roleId: string; businessDate: string; expiresAt: number } | null>
 }
 
-const PUBLIC_PATHS = new Set(['/api/health', '/api/live', '/api/ready', '/api/metrics', '/api/auth/pilot-login'])
+const PUBLIC_PATHS = new Set([
+  '/api/health',
+  '/api/live',
+  '/api/ready',
+  '/api/metrics',
+  '/api/metrics/reset',
+  '/api/auth/pilot-login',
+])
 
 function isPaymentProviderCallback(path: string) {
   return /^\/api\/payments\/providers\/[^/]+\/callback$/.test(path)
@@ -174,13 +197,36 @@ export async function registerAuthContext(app: FastifyInstance, options: AuthCon
       if (!actorId || !storeId) throw new AuthenticationError('本地请求缺少员工和门店上下文')
     }
 
+    let resolvedPresence: Awaited<ReturnType<NonNullable<AuthContextOptions['resolvePresenceSession']>>> = null
+    if (authenticatedBy === 'signed_session' && sessionId && sessionExpiresAt && options.resolvePresenceSession) {
+      resolvedPresence = await options.resolvePresenceSession({
+        sessionId,
+        actorId,
+        storeId,
+        sessionExpiresAt,
+        now: Date.now(),
+        touch: path === '/api/auth/presence/heartbeat',
+        invalidate: path === '/api/auth/logout',
+      })
+      if (!resolvedPresence) throw new AuthenticationError('员工会话已退出或已过期', 401, 'STAFF_SESSION_REVOKED')
+    }
+    if (resolvedPresence) {
+      assertActorBinding(request, actorId, options.runtimeMode)
+      request.mboxActor = {
+        actorId, storeId, roleId: resolvedPresence.roleId, runtimeMode: options.runtimeMode,
+        authenticatedBy, sessionId, sessionExpiresAt, businessDate: resolvedPresence.businessDate,
+        presenceExpiresAt: resolvedPresence.expiresAt,
+      }
+      return
+    }
+
     const state = await options.readState()
     if (storeId !== state.store.id) throw new AuthenticationError('员工会话不属于当前门店', 403, 'STORE_ACCESS_FORBIDDEN')
     const employee = state.employees.find((item) => item.id === actorId && item.status === 'active')
     if (!employee) throw new AuthenticationError('员工不存在或已停用', 403, 'ACTOR_NOT_ACTIVE')
-    if (authenticatedBy === 'signed_session') {
+    if (authenticatedBy === 'signed_session' && !resolvedPresence) {
       const now = Date.now()
-      const lease = state.presenceLeases?.find((candidate) => (
+      const aggregateLease = state.presenceLeases?.find((candidate) => (
         candidate.sessionId === sessionId
         && candidate.actorId === actorId
         && candidate.storeId === storeId
@@ -188,7 +234,16 @@ export async function registerAuthContext(app: FastifyInstance, options: AuthCon
         && candidate.expiresAt > now
         && candidate.sessionExpiresAt > now
       ))
-      if (!lease) {
+      const normalizedLeaseActive = !aggregateLease && sessionId && options.isStaffSessionActive
+        ? await options.isStaffSessionActive({
+            sessionId,
+            actorId,
+            storeId,
+            businessDate: state.store.businessDate,
+            now,
+          })
+        : false
+      if (!aggregateLease && !normalizedLeaseActive) {
         const resumed = sessionId && sessionExpiresAt && options.resumeStaffSession
           ? await options.resumeStaffSession({ sessionId, actorId, storeId, sessionExpiresAt, now })
           : false
@@ -205,6 +260,8 @@ export async function registerAuthContext(app: FastifyInstance, options: AuthCon
       authenticatedBy,
       sessionId,
       sessionExpiresAt,
+      businessDate: undefined,
+      presenceExpiresAt: undefined,
     }
   })
 }

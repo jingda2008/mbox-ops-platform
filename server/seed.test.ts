@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { createSeedState } from './seed.js'
 
 describe('seed business date', () => {
+  it('uses the explicit reference time for every timestamped seed config field', () => {
+    const reference = new Date('2026-08-09T12:00:00.000Z')
+
+    expect(createSeedState(reference).config.publishedAt).toBe(reference.toISOString())
+  })
+
   it('keeps after-midnight operations on the previous Beijing business date', () => {
     const state = createSeedState(new Date('2026-07-19T17:00:00.000Z'))
 

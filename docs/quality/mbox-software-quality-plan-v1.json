@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "name": "M-BOX rc.68 software quality plan",
+  "workingDirectory": ".",
+  "profiles": {
+    "quick": ["metadata", "static", "quality_model", "unit"],
+    "pull_request": ["metadata", "static", "quality_model", "unit", "integration", "security", "e2e"],
+    "release": ["metadata", "static", "quality_model", "unit", "integration", "security", "e2e", "performance", "commercial_release"]
+  },
+  "gates": [
+    {
+      "id": "metadata",
+      "title": "Release metadata",
+      "category": "traceability",
+      "required": true,
+      "timeoutSeconds": 60,
+      "command": ["npm", "run", "release:metadata"]
+    },
+    {
+      "id": "static",
+      "title": "Static checks",
+      "category": "functional",
+      "required": true,
+      "timeoutSeconds": 300,
+      "command": ["npm", "run", "lint"]
+    },
+    {
+      "id": "quality_model",
+      "title": "State machine and invariant model",
+      "category": "quality-system",
+      "required": true,
+      "timeoutSeconds": 120,
+      "command": ["npm", "run", "quality:model:verify"]
+    },
+    {
+      "id": "unit",
+      "title": "Unit and domain tests",
+      "category": "functional",
+      "required": true,
+      "timeoutSeconds": 600,
+      "command": ["npm", "test"]
+    },
+    {
+      "id": "integration",
+      "title": "Payment, order and inventory integration",
+      "category": "functional",
+      "required": true,
+      "timeoutSeconds": 900,
+      "command": ["npm", "run", "test:integration"]
+    },
+    {
+      "id": "security",
+      "title": "Authorization, access and log security",
+      "category": "security",
+      "required": true,
+      "timeoutSeconds": 600,
+      "command": ["npm", "run", "test:security"]
+    },
+    {
+      "id": "e2e",
+      "title": "Critical browser journeys",
+      "category": "functional",
+      "required": true,
+      "timeoutSeconds": 1200,
+      "command": ["npm", "run", "test:e2e"]
+    },
+    {
+      "id": "performance",
+      "title": "Isolated route performance and invariants",
+      "category": "performance",
+      "required": true,
+      "timeoutSeconds": 3600,
+      "command": ["npm", "run", "test:performance"]
+    },
+    {
+      "id": "commercial_release",
+      "title": "Commercial P0 and P1 release gate",
+      "category": "release",
+      "required": true,
+      "timeoutSeconds": 180,
+      "command": ["npm", "run", "release:quality-gate"]
+    }
+  ]
+}

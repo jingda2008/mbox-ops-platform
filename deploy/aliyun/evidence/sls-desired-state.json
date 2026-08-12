@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "region": "cn-shanghai",
+  "endpoint": "cn-shanghai-internal.log.aliyuncs.com",
+  "project": "mbox-validation-139224254060",
+  "fullTextIndex": false,
+  "costControls": {
+    "collectorIntervalMinutes": 2,
+    "maximumEventsPerRun": 500,
+    "maximumPayloadBytesPerRun": 524288,
+    "monthlyBudgetCny": 30,
+    "budgetAlertPercentages": [50, 80, 100],
+    "billingAlertRequiresConsoleActivation": true
+  },
+  "logstores": [
+    {
+      "name": "runtime-errors",
+      "ttlDays": 7,
+      "shards": 1,
+      "categories": ["http_5xx", "database_pool", "container_lifecycle"],
+      "indexedFields": {
+        "timestamp": "text",
+        "eventType": "text",
+        "severity": "text",
+        "statusCode": "long",
+        "route": "text",
+        "code": "text",
+        "container": "text",
+        "outcome": "text",
+        "durationMs": "double",
+        "releaseSha": "text"
+      }
+    },
+    {
+      "name": "payment-audit",
+      "ttlDays": 90,
+      "shards": 1,
+      "categories": ["payment_exception", "refund_exception", "callback_exception"],
+      "indexedFields": {
+        "timestamp": "text",
+        "eventType": "text",
+        "severity": "text",
+        "statusCode": "long",
+        "route": "text",
+        "code": "text",
+        "outcome": "text",
+        "requestId": "text",
+        "releaseSha": "text"
+      }
+    },
+    {
+      "name": "release-audit",
+      "ttlDays": 90,
+      "shards": 1,
+      "categories": ["deployment", "cutover", "rollback", "permission_denied", "critical_audit"],
+      "indexedFields": {
+        "timestamp": "text",
+        "eventType": "text",
+        "severity": "text",
+        "code": "text",
+        "outcome": "text",
+        "releaseSha": "text",
+        "imageDigest": "text",
+        "actorId": "text",
+        "operation": "text"
+      }
+    }
+  ]
+}

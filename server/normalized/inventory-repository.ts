@@ -1,0 +1,1520 @@
+import type { JsonObject } from "./command-executor.js";
+import type { OrderItem } from "./order-repository.js";
+import type { ScopedTransaction } from "./transaction-runner.js";
+
+export interface InventoryConsumption {
+  movementId: string;
+  orderItemId: string;
+  inventoryItemId: string;
+  sku: string;
+  quantity: string;
+  remainingOnHandQuantity: string;
+}
+
+export interface ConsumeInventoryOptions {
+  createdByEmployeeId?: string | null;
+  reason?: string | null;
+  metadata?: JsonObject;
+}
+
+export interface InventoryItemRecord {
+  id: string;
+  sku: string;
+  name: string;
+  itemType: string;
+  baseUnit: string;
+  categoryCode: string;
+  lowStockThreshold: string | null;
+  wholeUnitCount: boolean;
+  reasonableWasteQuantity: string;
+  status: string;
+}
+
+export interface PurchaseReceiptRecord {
+  id: string;
+  publicId: string;
+  status: "draft" | "received" | "cancelled";
+  currency: string;
+  lineCount: number;
+  receivedAt: string | null;
+}
+
+export interface StockCountRecord {
+  id: string;
+  publicId: string;
+  status: "draft" | "submitted" | "approved" | "rejected";
+}
+
+export interface StoredBottleRecord {
+  id: string;
+  publicId: string;
+  inventoryItemId: string;
+  tableSessionId: string;
+  originalQuantity: string;
+  remainingQuantity: string;
+  status: "stored" | "in_use" | "consumed" | "voided";
+}
+
+export interface CreateInventoryItemInput {
+  sku: string;
+  name: string;
+  itemType:
+    "ingredient" | "bottle" | "food" | "packaging" | "consumable" | "other";
+  baseUnit: "ml" | "g" | "piece" | "bottle" | "portion";
+  categoryCode: string;
+  lowStockThreshold?: string | null;
+  wholeUnitCount?: boolean;
+  reasonableWasteQuantity?: string;
+}
+
+export interface BindBarcodeInput {
+  inventoryItemId: string;
+  code: string;
+  codeType?: "barcode" | "qr" | "internal";
+  packageQuantity?: string;
+  employeeId: string;
+}
+
+export interface RecipeComponentInput {
+  inventoryItemId: string;
+  quantity: string;
+  expectedWasteQuantity?: string;
+}
+
+export interface ReplaceRecipeInput {
+  productId: string;
+  yieldQuantity: number;
+  instructionsSnapshot?: JsonObject;
+  components: readonly RecipeComponentInput[];
+}
+
+export interface PurchaseReceiptLineInput {
+  inventoryItemId: string;
+  batchCode: string;
+  quantity: string;
+  unitCostMinor: string;
+  totalCostMinor: string;
+  expiresOn?: string | null;
+  metadata?: JsonObject;
+}
+
+export interface CreatePurchaseReceiptInput {
+  publicId: string;
+  supplierRef?: string | null;
+  supplierSnapshot?: JsonObject;
+  currency?: string;
+  invoiceTotalMinor?: string | null;
+  note?: string | null;
+  employeeId: string;
+  lines: readonly PurchaseReceiptLineInput[];
+}
+
+export interface StockCountLineInput {
+  inventoryItemId: string;
+  countedQuantity: string;
+  reason?: string | null;
+}
+
+interface DemandRow extends Record<string, unknown> {
+  order_item_id: string;
+  inventory_item_id: string;
+  sku: string;
+  required_quantity: string;
+}
+
+interface LockedBalanceRow extends Record<string, unknown> {
+  inventory_item_id: string;
+  sku: string;
+  on_hand_quantity: string;
+  reserved_quantity: string;
+  required_quantity: string;
+  insufficient: boolean;
+}
+
+interface InventoryItemRow extends Record<string, unknown> {
+  id: string;
+  sku: string;
+  name: string;
+  item_type: string;
+  base_unit: string;
+  category_code: string;
+  low_stock_threshold: string | null;
+  whole_unit_count: boolean;
+  reasonable_waste_quantity: string;
+  status: string;
+}
+
+interface ReceiptRow extends Record<string, unknown> {
+  id: string;
+  public_id: string;
+  status: "draft" | "received" | "cancelled";
+  currency: string;
+  line_count: string;
+  received_at: string | null;
+  created_by_employee_id: string;
+}
+
+interface ReceiptLineRow extends Record<string, unknown> {
+  id: string;
+  inventory_item_id: string;
+  quantity: string;
+  unit_cost_minor: string;
+}
+
+interface StockCountRow extends Record<string, unknown> {
+  id: string;
+  public_id: string;
+  status: "draft" | "submitted" | "approved" | "rejected";
+  created_by_employee_id: string;
+}
+
+interface StockCountLineRow extends Record<string, unknown> {
+  inventory_item_id: string;
+  counted_quantity: string;
+  system_quantity_snapshot: string;
+  variance_quantity: string;
+}
+
+interface StoredBottleRow extends Record<string, unknown> {
+  id: string;
+  public_id: string;
+  inventory_item_id: string;
+  current_table_session_id: string;
+  original_quantity: string;
+  remaining_quantity: string;
+  status: StoredBottleRecord["status"];
+}
+
+export class InventoryBalanceMissingError extends Error {
+  constructor(inventoryItemId: string) {
+    super(`Inventory balance is missing: ${inventoryItemId}`);
+    this.name = "InventoryBalanceMissingError";
+  }
+}
+
+export class InventoryRecipeMissingError extends Error {
+  constructor(orderItemId: string) {
+    super(`Active inventory recipe is missing for order item: ${orderItemId}`);
+    this.name = "InventoryRecipeMissingError";
+  }
+}
+
+export class InsufficientInventoryError extends Error {
+  constructor(
+    readonly sku: string,
+    readonly availableQuantity: string,
+    readonly requiredQuantity: string,
+  ) {
+    super(
+      `Insufficient inventory for ${sku}: available ${availableQuantity}, required ${requiredQuantity}`,
+    );
+    this.name = "InsufficientInventoryError";
+  }
+}
+
+export class InventoryConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InventoryConflictError";
+  }
+}
+
+export class InventoryNotFoundError extends Error {
+  constructor(resource: string, id: string) {
+    super(`${resource} was not found: ${id}`);
+    this.name = "InventoryNotFoundError";
+  }
+}
+
+export class InventoryRepository {
+  constructor(private readonly transaction: ScopedTransaction) {}
+
+  async createItem(
+    input: Readonly<CreateInventoryItemInput>,
+  ): Promise<InventoryItemRecord> {
+    const row = requireOne(
+      await this.transaction.query<InventoryItemRow>(
+        `
+      INSERT INTO mbox.inventory_items (
+        tenant_id, store_id, sku, name, item_type, base_unit, category_code,
+        low_stock_threshold, whole_unit_count, reasonable_waste_quantity
+      ) VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::numeric, $9, $10::numeric)
+      RETURNING id, sku, name, item_type, base_unit, category_code,
+        low_stock_threshold::text, whole_unit_count, reasonable_waste_quantity::text, status
+    `,
+        [
+          this.transaction.scope.tenantId,
+          this.transaction.scope.storeId,
+          input.sku,
+          input.name,
+          input.itemType,
+          input.baseUnit,
+          input.categoryCode,
+          input.lowStockThreshold ?? null,
+          input.wholeUnitCount ?? false,
+          input.reasonableWasteQuantity ?? "0",
+        ],
+      ),
+      "inventory item insert",
+    );
+    await this.transaction.query(
+      `
+      INSERT INTO mbox.inventory_balances (tenant_id, store_id, inventory_item_id)
+      VALUES ($1::uuid, $2::uuid, $3::uuid)
+    `,
+      [this.transaction.scope.tenantId, this.transaction.scope.storeId, row.id],
+    );
+    return mapItem(row);
+  }
+
+  async bindBarcode(
+    input: Readonly<BindBarcodeInput>,
+  ): Promise<{ id: string; replayed: boolean }> {
+    const inserted = await this.transaction.query<{ id: string }>(
+      `
+      INSERT INTO mbox.inventory_barcodes (
+        tenant_id, store_id, inventory_item_id, code, code_type,
+        package_quantity, created_by_employee_id
+      ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6::numeric, $7::uuid)
+      ON CONFLICT (tenant_id, store_id, code) DO NOTHING
+      RETURNING id
+    `,
+      [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        input.inventoryItemId,
+        input.code,
+        input.codeType ?? "barcode",
+        input.packageQuantity ?? "1",
+        input.employeeId,
+      ],
+    );
+    if (inserted.rowCount === 1 && inserted.rows[0])
+      return { id: inserted.rows[0].id, replayed: false };
+    const existing = requireOne(
+      await this.transaction.query<{
+        id: string;
+        inventory_item_id: string;
+        code_type: string;
+        package_quantity: string;
+      }>(
+        `
+      SELECT id, inventory_item_id, code_type, package_quantity::text
+      FROM mbox.inventory_barcodes
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND code = $3
+      FOR UPDATE
+    `,
+        [
+          this.transaction.scope.tenantId,
+          this.transaction.scope.storeId,
+          input.code,
+        ],
+      ),
+      "barcode lookup",
+    );
+    if (
+      existing.inventory_item_id !== input.inventoryItemId ||
+      existing.code_type !== (input.codeType ?? "barcode") ||
+      existing.package_quantity !==
+        normalizeDecimal(input.packageQuantity ?? "1")
+    ) {
+      throw new InventoryConflictError(
+        "Barcode is already bound to a different inventory package",
+      );
+    }
+    return { id: existing.id, replayed: true };
+  }
+
+  async resolveBarcode(
+    code: string,
+  ): Promise<{ inventoryItemId: string; packageQuantity: string }> {
+    const result = await this.transaction.query<{
+      inventory_item_id: string;
+      package_quantity: string;
+    }>(
+      `
+      SELECT inventory_item_id, package_quantity::text
+      FROM mbox.inventory_barcodes
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND code = $3 AND status = 'active'
+    `,
+      [this.transaction.scope.tenantId, this.transaction.scope.storeId, code],
+    );
+    if (!result.rows[0])
+      throw new InventoryNotFoundError("active inventory barcode", code);
+    return {
+      inventoryItemId: result.rows[0].inventory_item_id,
+      packageQuantity: result.rows[0].package_quantity,
+    };
+  }
+
+  async replaceActiveRecipe(
+    input: Readonly<ReplaceRecipeInput>,
+  ): Promise<{ id: string; version: number }> {
+    if (input.components.length === 0)
+      throw new TypeError("Recipe must contain at least one component");
+    await this.transaction.query(
+      `
+      SELECT pg_advisory_xact_lock(hashtextextended($1, 0))
+    `,
+      [
+        `inventory-recipe:${this.transaction.scope.tenantId}:${this.transaction.scope.storeId}:${input.productId}`,
+      ],
+    );
+    const versions = await this.transaction.query<{ version: number }>(
+      `
+      SELECT version
+      FROM mbox.recipes
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND product_id = $3::uuid
+      ORDER BY version DESC
+      FOR UPDATE
+    `,
+      [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        input.productId,
+      ],
+    );
+    const nextVersion = (versions.rows[0]?.version ?? 0) + 1;
+    await this.transaction.query(
+      `
+      UPDATE mbox.recipes SET status = 'retired', updated_at = clock_timestamp()
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+        AND product_id = $3::uuid AND status = 'active'
+    `,
+      [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        input.productId,
+      ],
+    );
+    const recipe = requireOne(
+      await this.transaction.query<{ id: string }>(
+        `
+      INSERT INTO mbox.recipes (
+        tenant_id, store_id, product_id, version, yield_quantity,
+        instructions_snapshot, status, effective_at
+      ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6::jsonb, 'active', clock_timestamp())
+      RETURNING id
+    `,
+        [
+          this.transaction.scope.tenantId,
+          this.transaction.scope.storeId,
+          input.productId,
+          nextVersion,
+          input.yieldQuantity,
+          JSON.stringify(input.instructionsSnapshot ?? {}),
+        ],
+      ),
+      "recipe insert",
+    );
+    for (const component of [...input.components].sort((a, b) =>
+      a.inventoryItemId.localeCompare(b.inventoryItemId),
+    )) {
+      await this.transaction.query(
+        `
+        INSERT INTO mbox.recipe_items (
+          tenant_id, store_id, recipe_id, inventory_item_id, quantity, expected_waste_quantity
+        ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::numeric, $6::numeric)
+      `,
+        [
+          this.transaction.scope.tenantId,
+          this.transaction.scope.storeId,
+          recipe.id,
+          component.inventoryItemId,
+          component.quantity,
+          component.expectedWasteQuantity ?? "0",
+        ],
+      );
+    }
+    return { id: recipe.id, version: nextVersion };
+  }
+
+  async createPurchaseReceipt(
+    input: Readonly<CreatePurchaseReceiptInput>,
+  ): Promise<PurchaseReceiptRecord> {
+    if (input.lines.length === 0 || input.lines.length > 200)
+      throw new TypeError("Receipt must contain 1 to 200 lines");
+    const receipt = requireOne(
+      await this.transaction.query<{ id: string }>(
+        `
+      INSERT INTO mbox.purchase_receipts (
+        tenant_id, store_id, public_id, supplier_ref, supplier_snapshot, currency,
+        invoice_total_minor, note, created_by_employee_id
+      ) VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb, $6, $7::bigint, $8, $9::uuid)
+      RETURNING id
+    `,
+        [
+          this.transaction.scope.tenantId,
+          this.transaction.scope.storeId,
+          input.publicId,
+          input.supplierRef ?? null,
+          JSON.stringify(input.supplierSnapshot ?? {}),
+          input.currency ?? "CNY",
+          input.invoiceTotalMinor ?? null,
+          input.note ?? null,
+          input.employeeId,
+        ],
+      ),
+      "purchase receipt insert",
+    );
+    for (const line of input.lines) {
+      await this.transaction.query(
+        `
+        INSERT INTO mbox.purchase_receipt_lines (
+          tenant_id, store_id, receipt_id, inventory_item_id, batch_code,
+          quantity, unit_cost_minor, total_cost_minor, expires_on, metadata
+        ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5,
+          $6::numeric, $7::numeric, $8::bigint, $9::date, $10::jsonb)
+      `,
+        [
+          this.transaction.scope.tenantId,
+          this.transaction.scope.storeId,
+          receipt.id,
+          line.inventoryItemId,
+          line.batchCode,
+          line.quantity,
+          line.unitCostMinor,
+          line.totalCostMinor,
+          line.expiresOn ?? null,
+          JSON.stringify(line.metadata ?? {}),
+        ],
+      );
+    }
+    return {
+      id: receipt.id,
+      publicId: input.publicId,
+      status: "draft",
+      currency: input.currency ?? "CNY",
+      lineCount: input.lines.length,
+      receivedAt: null,
+    };
+  }
+
+  async receivePurchaseReceipt(
+    receiptId: string,
+    employeeId: string,
+  ): Promise<PurchaseReceiptRecord> {
+    const receipt = requireOne(
+      await this.transaction.query<ReceiptRow>(
+        `
+      SELECT id, public_id, status, currency, received_at::text,
+        created_by_employee_id,
+        (SELECT count(*)::text FROM mbox.purchase_receipt_lines AS line
+          WHERE line.tenant_id = receipt.tenant_id AND line.store_id = receipt.store_id
+            AND line.receipt_id = receipt.id) AS line_count
+      FROM mbox.purchase_receipts AS receipt
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
+      FOR UPDATE
+    `,
+        [
+          this.transaction.scope.tenantId,
+          this.transaction.scope.storeId,
+          receiptId,
+        ],
+      ),
+      "purchase receipt",
+    );
+    if (receipt.status === "received") return mapReceipt(receipt);
+    if (receipt.status !== "draft")
+      throw new InventoryConflictError(
+        `Receipt cannot be received from ${receipt.status}`,
+      );
+    const lines = await this.transaction.query<ReceiptLineRow>(
+      `
+      SELECT id, inventory_item_id, quantity::text, unit_cost_minor::text
+      FROM mbox.purchase_receipt_lines
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND receipt_id = $3::uuid
+      ORDER BY inventory_item_id, id
+    `,
+      [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        receiptId,
+      ],
+    );
+    if (lines.rowCount === 0)
+      throw new InventoryConflictError("Receipt has no lines");
+    for (const line of lines.rows) {
+      const balance = await this.lockOrCreateBalance(line.inventory_item_id);
+      const movement = await this.insertMovement({
+        inventoryItemId: line.inventory_item_id,
+        movementType: "purchase",
+        quantityDelta: line.quantity,
+        unitCostMinor: line.unit_cost_minor,
+        referenceType: "purchase_receipt_line",
+        referenceId: line.id,
+        reason: "purchase receipt received",
+        employeeId,
+      });
+      await this.updateBalance(
+        line.inventory_item_id,
+        addDecimal(balance, line.quantity),
+        movement,
+      );
+    }
+    const updated = requireOne(
+      await this.transaction.query<ReceiptRow>(
+        `
+      UPDATE mbox.purchase_receipts
+      SET status = 'received', received_by_employee_id = $4::uuid,
+          received_at = clock_timestamp(), updated_at = clock_timestamp()
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid AND status = 'draft'
+      RETURNING id, public_id, status, currency, received_at::text,
+        created_by_employee_id, $5::text AS line_count
+    `,
+        [
+          this.transaction.scope.tenantId,
+          this.transaction.scope.storeId,
+          receiptId,
+          employeeId,
+          lines.rows.length,
+        ],
+      ),
+      "purchase receipt receive",
+    );
+    return mapReceipt(updated);
+  }
+
+  async createStockCount(
+    publicId: string,
+    employeeId: string,
+    lines: readonly StockCountLineInput[],
+    note?: string | null,
+  ): Promise<StockCountRecord> {
+    if (lines.length === 0 || lines.length > 500)
+      throw new TypeError("Stock count must contain 1 to 500 lines");
+    const count = requireOne(
+      await this.transaction.query<{ id: string }>(
+        `
+      INSERT INTO mbox.inventory_stock_counts (
+        tenant_id, store_id, public_id, note, created_by_employee_id
+      ) VALUES ($1::uuid, $2::uuid, $3, $4, $5::uuid)
+      RETURNING id
+    `,
+        [
+          this.transaction.scope.tenantId,
+          this.transaction.scope.storeId,
+          publicId,
+          note ?? null,
+          employeeId,
+        ],
+      ),
+      "stock count insert",
+    );
+    for (const line of [...lines].sort((a, b) =>
+      a.inventoryItemId.localeCompare(b.inventoryItemId),
+    )) {
+      const balance = await this.lockOrCreateBalance(line.inventoryItemId);
+      await this.transaction.query(
+        `
+        INSERT INTO mbox.inventory_stock_count_lines (
+          tenant_id, store_id, stock_count_id, inventory_item_id,
+          counted_quantity, system_quantity_snapshot, reason
+        ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::numeric, $6::numeric, $7)
+      `,
+        [
+          this.transaction.scope.tenantId,
+          this.transaction.scope.storeId,
+          count.id,
+          line.inventoryItemId,
+          line.countedQuantity,
+          balance,
+          line.reason ?? null,
+        ],
+      );
+    }
+    return { id: count.id, publicId, status: "draft" };
+  }
+
+  async submitStockCount(
+    countId: string,
+    employeeId: string,
+  ): Promise<StockCountRecord> {
+    return this.transitionStockCount(countId, "draft", "submitted", employeeId);
+  }
+
+  async approveStockCount(
+    countId: string,
+    employeeId: string,
+  ): Promise<StockCountRecord> {
+    const count = await this.lockStockCount(countId);
+    if (count.status === "approved") return mapCount(count);
+    if (count.status !== "submitted")
+      throw new InventoryConflictError(
+        `Stock count cannot be approved from ${count.status}`,
+      );
+    if (count.created_by_employee_id === employeeId)
+      throw new InventoryConflictError(
+        "Stock count requires independent approval",
+      );
+    const lines = await this.transaction.query<StockCountLineRow>(
+      `
+      SELECT inventory_item_id, counted_quantity::text, system_quantity_snapshot::text,
+        variance_quantity::text
+      FROM mbox.inventory_stock_count_lines
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND stock_count_id = $3::uuid
+      ORDER BY inventory_item_id
+    `,
+      [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        countId,
+      ],
+    );
+    for (const line of lines.rows) {
+      const current = await this.lockOrCreateBalance(line.inventory_item_id);
+      const delta = subtractDecimal(line.counted_quantity, current);
+      if (isZeroDecimal(delta)) continue;
+      const movement = await this.insertMovement({
+        inventoryItemId: line.inventory_item_id,
+        movementType: "count_adjustment",
+        quantityDelta: delta,
+        referenceType: "inventory_stock_count",
+        referenceId: countId,
+        reason: "approved stock count",
+        employeeId,
+        metadata: { capturedSystemQuantity: line.system_quantity_snapshot },
+      });
+      await this.updateBalance(
+        line.inventory_item_id,
+        line.counted_quantity,
+        movement,
+      );
+    }
+    const updated = requireOne(
+      await this.transaction.query<StockCountRow>(
+        `
+      UPDATE mbox.inventory_stock_counts
+      SET status = 'approved', decided_by_employee_id = $4::uuid,
+          decided_at = clock_timestamp(), decision_reason = '盘点差异已复核',
+          updated_at = clock_timestamp()
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid AND status = 'submitted'
+      RETURNING id, public_id, status, created_by_employee_id
+    `,
+        [
+          this.transaction.scope.tenantId,
+          this.transaction.scope.storeId,
+          countId,
+          employeeId,
+        ],
+      ),
+      "stock count approval",
+    );
+    return mapCount(updated);
+  }
+
+  async rejectStockCount(
+    countId: string,
+    employeeId: string,
+    reason: string,
+  ): Promise<StockCountRecord> {
+    const count = await this.lockStockCount(countId);
+    if (count.status === "rejected") return mapCount(count);
+    if (count.status !== "submitted")
+      throw new InventoryConflictError(
+        `Stock count cannot be rejected from ${count.status}`,
+      );
+    if (count.created_by_employee_id === employeeId)
+      throw new InventoryConflictError(
+        "Stock count requires independent approval",
+      );
+    const updated = requireOne(
+      await this.transaction.query<StockCountRow>(
+        `
+      UPDATE mbox.inventory_stock_counts
+      SET status = 'rejected', decided_by_employee_id = $4::uuid,
+          decided_at = clock_timestamp(), decision_reason = $5,
+          updated_at = clock_timestamp()
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid AND status = 'submitted'
+      RETURNING id, public_id, status, created_by_employee_id
+    `,
+        [
+          this.transaction.scope.tenantId,
+          this.transaction.scope.storeId,
+          countId,
+          employeeId,
+          reason,
+        ],
+      ),
+      "stock count rejection",
+    );
+    return mapCount(updated);
+  }
+
+  async recordWaste(
+    inventoryItemId: string,
+    quantity: string,
+    employeeId: string,
+    reason: string,
+    approvedOverride = false,
+  ): Promise<{ movementId: string; remainingQuantity: string }> {
+    const item = requireOne(
+      await this.transaction.query<{
+        sku: string;
+        reasonable_waste_quantity: string;
+      }>(
+        `
+      SELECT sku, reasonable_waste_quantity::text
+      FROM mbox.inventory_items
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid AND status = 'active'
+      FOR SHARE
+    `,
+        [
+          this.transaction.scope.tenantId,
+          this.transaction.scope.storeId,
+          inventoryItemId,
+        ],
+      ),
+      "inventory item",
+    );
+    if (
+      !approvedOverride &&
+      compareDecimal(quantity, item.reasonable_waste_quantity) > 0
+    ) {
+      throw new InventoryConflictError(
+        "Waste exceeds the configured reasonable allowance",
+      );
+    }
+    const balance = await this.lockOrCreateBalance(inventoryItemId);
+    if (compareDecimal(balance, quantity) < 0)
+      throw new InsufficientInventoryError(item.sku, balance, quantity);
+    const movement = await this.insertMovement({
+      inventoryItemId,
+      movementType: "waste",
+      quantityDelta: `-${normalizeDecimal(quantity)}`,
+      referenceType: "manual_waste",
+      reason,
+      employeeId,
+      metadata: { approvedOverride },
+    });
+    const remaining = subtractDecimal(balance, quantity);
+    await this.updateBalance(inventoryItemId, remaining, movement);
+    return { movementId: movement, remainingQuantity: remaining };
+  }
+
+  async storeBottle(input: {
+    publicId: string;
+    inventoryItemId: string;
+    tableSessionId: string;
+    quantity: string;
+    employeeId: string;
+    customerId?: string | null;
+    holderDisplayName?: string | null;
+    holderContactToken?: string | null;
+    sourceReceiptLineId?: string | null;
+    expiresAt?: string | null;
+  }): Promise<StoredBottleRecord> {
+    await this.assertOpenTableSession(input.tableSessionId);
+    const bottleItem = await this.transaction.query(
+      `
+      SELECT id FROM mbox.inventory_items
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
+        AND item_type = 'bottle' AND status = 'active'
+      FOR SHARE
+    `,
+      [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        input.inventoryItemId,
+      ],
+    );
+    if (bottleItem.rowCount !== 1)
+      throw new InventoryConflictError(
+        "Stored bottle must reference an active bottle inventory item",
+      );
+    const row = requireOne(
+      await this.transaction.query<StoredBottleRow>(
+        `
+      INSERT INTO mbox.stored_bottles (
+        tenant_id, store_id, public_id, inventory_item_id, source_receipt_line_id, customer_id,
+        holder_display_name, holder_contact_token, current_table_session_id,
+        original_quantity, remaining_quantity, stored_by_employee_id, expires_at
+      ) VALUES ($1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6::uuid, $7, $8, $9::uuid,
+        $10::numeric, $10::numeric, $11::uuid, $12::timestamptz)
+      RETURNING id, public_id, inventory_item_id, current_table_session_id,
+        original_quantity::text, remaining_quantity::text, status
+    `,
+        [
+          this.transaction.scope.tenantId,
+          this.transaction.scope.storeId,
+          input.publicId,
+          input.inventoryItemId,
+          input.sourceReceiptLineId ?? null,
+          input.customerId ?? null,
+          input.holderDisplayName ?? null,
+          input.holderContactToken ?? null,
+          input.tableSessionId,
+          input.quantity,
+          input.employeeId,
+          input.expiresAt ?? null,
+        ],
+      ),
+      "stored bottle insert",
+    );
+    await this.insertBottleEvent(
+      row.id,
+      "stored",
+      "0",
+      input.employeeId,
+      null,
+      input.tableSessionId,
+      "bottle stored",
+    );
+    return mapBottle(row);
+  }
+
+  async findStoredBottle(bottleId: string): Promise<StoredBottleRecord | null> {
+    const result = await this.transaction.query<StoredBottleRow>(
+      `
+      SELECT id, public_id, inventory_item_id, current_table_session_id,
+        original_quantity::text, remaining_quantity::text, status
+      FROM mbox.stored_bottles
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
+    `,
+      [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        bottleId,
+      ],
+    );
+    return result.rows[0] ? mapBottle(result.rows[0]) : null;
+  }
+
+  async useStoredBottle(
+    bottleId: string,
+    quantity: string,
+    employeeId: string,
+  ): Promise<StoredBottleRecord> {
+    const bottle = await this.lockBottle(bottleId);
+    if (!["stored", "in_use"].includes(bottle.status))
+      throw new InventoryConflictError(
+        `Bottle cannot be used from ${bottle.status}`,
+      );
+    if (compareDecimal(bottle.remaining_quantity, quantity) < 0) {
+      throw new InsufficientInventoryError(
+        bottle.public_id,
+        bottle.remaining_quantity,
+        quantity,
+      );
+    }
+    const remaining = subtractDecimal(bottle.remaining_quantity, quantity);
+    const row = requireOne(
+      await this.transaction.query<StoredBottleRow>(
+        `
+      UPDATE mbox.stored_bottles
+      SET remaining_quantity = $4::numeric,
+          status = CASE WHEN $4::numeric = 0 THEN 'consumed' ELSE 'in_use' END,
+          updated_at = clock_timestamp()
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
+      RETURNING id, public_id, inventory_item_id, current_table_session_id,
+        original_quantity::text, remaining_quantity::text, status
+    `,
+        [
+          this.transaction.scope.tenantId,
+          this.transaction.scope.storeId,
+          bottleId,
+          remaining,
+        ],
+      ),
+      "stored bottle use",
+    );
+    await this.insertBottleEvent(
+      bottleId,
+      "used",
+      `-${normalizeDecimal(quantity)}`,
+      employeeId,
+      bottle.current_table_session_id,
+      bottle.current_table_session_id,
+      "bottle used",
+    );
+    return mapBottle(row);
+  }
+
+  async transferStoredBottle(
+    bottleId: string,
+    toTableSessionId: string,
+    employeeId: string,
+    reason: string,
+  ): Promise<StoredBottleRecord> {
+    await this.assertOpenTableSession(toTableSessionId);
+    const bottle = await this.lockBottle(bottleId);
+    if (!["stored", "in_use"].includes(bottle.status))
+      throw new InventoryConflictError(
+        `Bottle cannot be transferred from ${bottle.status}`,
+      );
+    const row = requireOne(
+      await this.transaction.query<StoredBottleRow>(
+        `
+      UPDATE mbox.stored_bottles
+      SET current_table_session_id = $4::uuid, updated_at = clock_timestamp()
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
+      RETURNING id, public_id, inventory_item_id, current_table_session_id,
+        original_quantity::text, remaining_quantity::text, status
+    `,
+        [
+          this.transaction.scope.tenantId,
+          this.transaction.scope.storeId,
+          bottleId,
+          toTableSessionId,
+        ],
+      ),
+      "stored bottle transfer",
+    );
+    await this.insertBottleEvent(
+      bottleId,
+      "transferred",
+      "0",
+      employeeId,
+      bottle.current_table_session_id,
+      toTableSessionId,
+      reason,
+    );
+    return mapBottle(row);
+  }
+
+  async voidStoredBottle(
+    bottleId: string,
+    employeeId: string,
+    reason: string,
+  ): Promise<StoredBottleRecord> {
+    const bottle = await this.lockBottle(bottleId);
+    if (bottle.status === "voided") return mapBottle(bottle);
+    if (bottle.status === "consumed")
+      throw new InventoryConflictError("Consumed bottle cannot be voided");
+    const row = requireOne(
+      await this.transaction.query<StoredBottleRow>(
+        `
+      UPDATE mbox.stored_bottles SET status = 'voided', updated_at = clock_timestamp()
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
+      RETURNING id, public_id, inventory_item_id, current_table_session_id,
+        original_quantity::text, remaining_quantity::text, status
+    `,
+        [
+          this.transaction.scope.tenantId,
+          this.transaction.scope.storeId,
+          bottleId,
+        ],
+      ),
+      "stored bottle void",
+    );
+    await this.insertBottleEvent(
+      bottleId,
+      "voided",
+      "0",
+      employeeId,
+      bottle.current_table_session_id,
+      null,
+      reason,
+    );
+    return mapBottle(row);
+  }
+
+  async employeeHasTableResponsibility(
+    employeeId: string,
+    tableSessionId: string,
+  ): Promise<boolean> {
+    const result = await this.transaction.query<{ allowed: boolean }>(
+      `
+      SELECT EXISTS (
+        SELECT 1
+        FROM mbox.table_sessions AS session
+        JOIN mbox.table_assignments AS assignment
+          ON assignment.tenant_id = session.tenant_id AND assignment.store_id = session.store_id
+         AND assignment.table_id = session.table_id
+        WHERE session.tenant_id = $1::uuid AND session.store_id = $2::uuid
+          AND session.id = $3::uuid AND session.status IN ('open', 'closing')
+          AND assignment.employee_id = $4::uuid
+          AND assignment.starts_at <= clock_timestamp()
+          AND (assignment.ends_at IS NULL OR assignment.ends_at > clock_timestamp())
+      ) AS allowed
+    `,
+      [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        tableSessionId,
+        employeeId,
+      ],
+    );
+    return result.rows[0]?.allowed === true;
+  }
+
+  async consumeForOrderItems(
+    orderItems: readonly OrderItem[],
+    options: Readonly<ConsumeInventoryOptions> = {},
+  ): Promise<InventoryConsumption[]> {
+    if (orderItems.length === 0) return [];
+    if (orderItems.length > 100)
+      throw new TypeError("At most 100 order items can be consumed at once");
+    if (options.createdByEmployeeId)
+      requireUuid("createdByEmployeeId", options.createdByEmployeeId);
+    const demand = await this.loadRecipeDemand(orderItems);
+    const demandOrderItems = new Set(demand.map((row) => row.order_item_id));
+    const missingRecipe = orderItems.find(
+      (item) =>
+        (item.fulfillmentStation === "bar" ||
+          item.fulfillmentStation === "kitchen") &&
+        !demandOrderItems.has(item.id),
+    );
+    if (missingRecipe) throw new InventoryRecipeMissingError(missingRecipe.id);
+    if (demand.length === 0) return [];
+    const locked = await this.lockRequiredBalances(demand);
+    this.assertBalancesSufficient(demand, locked);
+    const results: InventoryConsumption[] = [];
+    for (const row of demand) {
+      const movement = await this.insertMovement({
+        inventoryItemId: row.inventory_item_id,
+        movementType: "sale",
+        quantityDelta: `-${normalizeDecimal(row.required_quantity)}`,
+        referenceType: "order_item",
+        referenceId: row.order_item_id,
+        orderItemId: row.order_item_id,
+        reason: options.reason ?? "order submitted",
+        employeeId: options.createdByEmployeeId ?? null,
+        metadata: options.metadata,
+      });
+      const balance = requireOne(
+        await this.transaction.query<{ on_hand_quantity: string }>(
+          `
+        UPDATE mbox.inventory_balances
+        SET on_hand_quantity = on_hand_quantity - $4::numeric,
+            last_movement_id = $5::uuid, updated_at = clock_timestamp()
+        WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+          AND inventory_item_id = $3::uuid
+          AND on_hand_quantity - reserved_quantity >= $4::numeric
+        RETURNING on_hand_quantity::text
+      `,
+          [
+            this.transaction.scope.tenantId,
+            this.transaction.scope.storeId,
+            row.inventory_item_id,
+            row.required_quantity,
+            movement,
+          ],
+        ),
+        "inventory balance update",
+      );
+      results.push({
+        movementId: movement,
+        orderItemId: row.order_item_id,
+        inventoryItemId: row.inventory_item_id,
+        sku: row.sku,
+        quantity: row.required_quantity,
+        remainingOnHandQuantity: balance.on_hand_quantity,
+      });
+    }
+    return results;
+  }
+
+  private async transitionStockCount(
+    countId: string,
+    from: string,
+    to: StockCountRecord["status"],
+    employeeId: string,
+  ): Promise<StockCountRecord> {
+    const result = await this.transaction.query<StockCountRow>(
+      `
+      UPDATE mbox.inventory_stock_counts
+      SET status = $4, submitted_by_employee_id = CASE WHEN $4 = 'submitted' THEN $5::uuid ELSE submitted_by_employee_id END,
+          submitted_at = CASE WHEN $4 = 'submitted' THEN clock_timestamp() ELSE submitted_at END,
+          updated_at = clock_timestamp()
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid AND status = $6
+      RETURNING id, public_id, status, created_by_employee_id
+    `,
+      [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        countId,
+        to,
+        employeeId,
+        from,
+      ],
+    );
+    if (result.rowCount !== 1 || !result.rows[0])
+      throw new InventoryConflictError(
+        `Stock count cannot transition from ${from} to ${to}`,
+      );
+    return mapCount(result.rows[0]);
+  }
+
+  private async lockStockCount(countId: string): Promise<StockCountRow> {
+    const result = await this.transaction.query<StockCountRow>(
+      `
+      SELECT id, public_id, status, created_by_employee_id
+      FROM mbox.inventory_stock_counts
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
+      FOR UPDATE
+    `,
+      [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        countId,
+      ],
+    );
+    if (!result.rows[0])
+      throw new InventoryNotFoundError("stock count", countId);
+    return result.rows[0];
+  }
+
+  private async lockBottle(bottleId: string): Promise<StoredBottleRow> {
+    const result = await this.transaction.query<StoredBottleRow>(
+      `
+      SELECT id, public_id, inventory_item_id, current_table_session_id,
+        original_quantity::text, remaining_quantity::text, status
+      FROM mbox.stored_bottles
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
+      FOR UPDATE
+    `,
+      [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        bottleId,
+      ],
+    );
+    if (!result.rows[0])
+      throw new InventoryNotFoundError("stored bottle", bottleId);
+    return result.rows[0];
+  }
+
+  private async insertBottleEvent(
+    bottleId: string,
+    type: string,
+    delta: string,
+    employeeId: string,
+    fromSession: string | null,
+    toSession: string | null,
+    reason: string,
+  ): Promise<void> {
+    await this.transaction.query(
+      `
+      INSERT INTO mbox.stored_bottle_events (
+        tenant_id, store_id, stored_bottle_id, event_type, quantity_delta,
+        from_table_session_id, to_table_session_id, reason, created_by_employee_id
+      ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5::numeric,
+        $6::uuid, $7::uuid, $8, $9::uuid)
+    `,
+      [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        bottleId,
+        type,
+        delta,
+        fromSession,
+        toSession,
+        reason,
+        employeeId,
+      ],
+    );
+  }
+
+  private async assertOpenTableSession(tableSessionId: string): Promise<void> {
+    const result = await this.transaction.query(
+      `
+      SELECT id FROM mbox.table_sessions
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
+        AND status IN ('open', 'closing')
+      FOR SHARE
+    `,
+      [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        tableSessionId,
+      ],
+    );
+    if (result.rowCount !== 1)
+      throw new InventoryNotFoundError("open table session", tableSessionId);
+  }
+
+  private async lockOrCreateBalance(inventoryItemId: string): Promise<string> {
+    await this.transaction.query(
+      `
+      INSERT INTO mbox.inventory_balances (tenant_id, store_id, inventory_item_id)
+      VALUES ($1::uuid, $2::uuid, $3::uuid)
+      ON CONFLICT (tenant_id, store_id, inventory_item_id) DO NOTHING
+    `,
+      [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        inventoryItemId,
+      ],
+    );
+    const result = await this.transaction.query<{ on_hand_quantity: string }>(
+      `
+      SELECT on_hand_quantity::text
+      FROM mbox.inventory_balances
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND inventory_item_id = $3::uuid
+      FOR UPDATE
+    `,
+      [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        inventoryItemId,
+      ],
+    );
+    if (!result.rows[0])
+      throw new InventoryBalanceMissingError(inventoryItemId);
+    return result.rows[0].on_hand_quantity;
+  }
+
+  private async updateBalance(
+    inventoryItemId: string,
+    quantity: string,
+    movementId: string,
+  ): Promise<void> {
+    const result = await this.transaction.query(
+      `
+      UPDATE mbox.inventory_balances
+      SET on_hand_quantity = $4::numeric, last_movement_id = $5::uuid, updated_at = clock_timestamp()
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND inventory_item_id = $3::uuid
+        AND $4::numeric >= reserved_quantity
+    `,
+      [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        inventoryItemId,
+        quantity,
+        movementId,
+      ],
+    );
+    if (result.rowCount !== 1)
+      throw new InventoryConflictError(
+        "Inventory balance update would violate reserved stock",
+      );
+  }
+
+  private async insertMovement(input: {
+    inventoryItemId: string;
+    movementType: string;
+    quantityDelta: string;
+    unitCostMinor?: string | null;
+    referenceType: string;
+    referenceId?: string | null;
+    orderItemId?: string | null;
+    reason?: string | null;
+    metadata?: JsonObject;
+    employeeId?: string | null;
+  }): Promise<string> {
+    const row = requireOne(
+      await this.transaction.query<{ id: string }>(
+        `
+      INSERT INTO mbox.inventory_movements (
+        tenant_id, store_id, inventory_item_id, movement_type, quantity_delta,
+        unit_cost_minor, currency, reference_type, reference_id, order_item_id,
+        reason, metadata, created_by_employee_id
+      ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5::numeric,
+        $6::numeric, 'CNY', $7, $8::uuid, $9::uuid, $10, $11::jsonb, $12::uuid)
+      RETURNING id
+    `,
+        [
+          this.transaction.scope.tenantId,
+          this.transaction.scope.storeId,
+          input.inventoryItemId,
+          input.movementType,
+          input.quantityDelta,
+          input.unitCostMinor ?? null,
+          input.referenceType,
+          input.referenceId ?? null,
+          input.orderItemId ?? null,
+          input.reason ?? null,
+          JSON.stringify(input.metadata ?? {}),
+          input.employeeId ?? null,
+        ],
+      ),
+      "inventory movement insert",
+    );
+    return row.id;
+  }
+
+  private async loadRecipeDemand(
+    orderItems: readonly OrderItem[],
+  ): Promise<DemandRow[]> {
+    const result = await this.transaction.query<DemandRow>(
+      `
+      WITH ordered AS (
+        SELECT order_item_id, product_id, ordered_quantity
+        FROM jsonb_to_recordset($3::jsonb)
+          AS line(order_item_id uuid, product_id uuid, ordered_quantity integer)
+      )
+      SELECT ordered.order_item_id, recipe_item.inventory_item_id, inventory_item.sku,
+        (((recipe_item.quantity + recipe_item.expected_waste_quantity)
+          * ordered.ordered_quantity::numeric) / recipe.yield_quantity::numeric)::numeric(18,6)::text AS required_quantity
+      FROM ordered
+      JOIN mbox.recipes AS recipe ON recipe.tenant_id = $1::uuid AND recipe.store_id = $2::uuid
+        AND recipe.product_id = ordered.product_id AND recipe.status = 'active'
+        AND recipe.effective_at <= clock_timestamp()
+      JOIN mbox.recipe_items AS recipe_item ON recipe_item.tenant_id = recipe.tenant_id
+        AND recipe_item.store_id = recipe.store_id AND recipe_item.recipe_id = recipe.id
+      JOIN mbox.inventory_items AS inventory_item ON inventory_item.tenant_id = recipe_item.tenant_id
+        AND inventory_item.store_id = recipe_item.store_id AND inventory_item.id = recipe_item.inventory_item_id
+        AND inventory_item.status = 'active'
+      ORDER BY recipe_item.inventory_item_id, ordered.order_item_id
+    `,
+      [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        JSON.stringify(
+          orderItems.map((item) => ({
+            order_item_id: item.id,
+            product_id: item.productId,
+            ordered_quantity: item.quantity,
+          })),
+        ),
+      ],
+    );
+    return result.rows;
+  }
+
+  private async lockRequiredBalances(
+    demand: readonly DemandRow[],
+  ): Promise<LockedBalanceRow[]> {
+    const result = await this.transaction.query<LockedBalanceRow>(
+      `
+      WITH demand AS (
+        SELECT inventory_item_id, sku, required_quantity
+        FROM jsonb_to_recordset($3::jsonb)
+          AS item(inventory_item_id uuid, sku text, required_quantity numeric)
+      ), required AS (
+        SELECT inventory_item_id, min(sku) AS sku, sum(required_quantity)::numeric(18,6) AS required_quantity
+        FROM demand GROUP BY inventory_item_id
+      )
+      SELECT balance.inventory_item_id, required.sku, balance.on_hand_quantity::text,
+        balance.reserved_quantity::text, required.required_quantity::text,
+        (balance.on_hand_quantity - balance.reserved_quantity < required.required_quantity) AS insufficient
+      FROM required
+      JOIN mbox.inventory_balances AS balance ON balance.tenant_id = $1::uuid AND balance.store_id = $2::uuid
+        AND balance.inventory_item_id = required.inventory_item_id
+      ORDER BY balance.inventory_item_id FOR UPDATE OF balance
+    `,
+      [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        JSON.stringify(
+          demand.map((row) => ({
+            inventory_item_id: row.inventory_item_id,
+            sku: row.sku,
+            required_quantity: row.required_quantity,
+          })),
+        ),
+      ],
+    );
+    return result.rows;
+  }
+
+  private assertBalancesSufficient(
+    demand: readonly DemandRow[],
+    locked: readonly LockedBalanceRow[],
+  ): void {
+    const requiredIds = new Set(demand.map((row) => row.inventory_item_id));
+    const lockedById = new Map(
+      locked.map((row) => [row.inventory_item_id, row]),
+    );
+    for (const inventoryItemId of [...requiredIds].toSorted()) {
+      const balance = lockedById.get(inventoryItemId);
+      if (!balance) throw new InventoryBalanceMissingError(inventoryItemId);
+      if (balance.insufficient)
+        throw new InsufficientInventoryError(
+          balance.sku,
+          subtractDecimal(balance.on_hand_quantity, balance.reserved_quantity),
+          balance.required_quantity,
+        );
+    }
+  }
+}
+
+function mapItem(row: InventoryItemRow): InventoryItemRecord {
+  return {
+    id: row.id,
+    sku: row.sku,
+    name: row.name,
+    itemType: row.item_type,
+    baseUnit: row.base_unit,
+    categoryCode: row.category_code,
+    lowStockThreshold: row.low_stock_threshold,
+    wholeUnitCount: row.whole_unit_count,
+    reasonableWasteQuantity: row.reasonable_waste_quantity,
+    status: row.status,
+  };
+}
+
+function mapReceipt(row: ReceiptRow): PurchaseReceiptRecord {
+  return {
+    id: row.id,
+    publicId: row.public_id,
+    status: row.status,
+    currency: row.currency,
+    lineCount: Number(row.line_count),
+    receivedAt: row.received_at,
+  };
+}
+
+function mapCount(row: StockCountRow): StockCountRecord {
+  return { id: row.id, publicId: row.public_id, status: row.status };
+}
+
+function mapBottle(row: StoredBottleRow): StoredBottleRecord {
+  return {
+    id: row.id,
+    publicId: row.public_id,
+    inventoryItemId: row.inventory_item_id,
+    tableSessionId: row.current_table_session_id,
+    originalQuantity: row.original_quantity,
+    remainingQuantity: row.remaining_quantity,
+    status: row.status,
+  };
+}
+
+function normalizeDecimal(value: string): string {
+  if (!/^-?(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(value))
+    throw new TypeError(`Invalid decimal quantity: ${value}`);
+  const [integer, fraction = ""] = value.split(".");
+  return `${integer}.${fraction.padEnd(6, "0")}`;
+}
+
+function decimalToBigInt(value: string): bigint {
+  const normalized = normalizeDecimal(value);
+  const negative = normalized.startsWith("-");
+  const [integer = "0", fraction = ""] = normalized.replace("-", "").split(".");
+  const result = BigInt(integer) * 1_000_000n + BigInt(fraction);
+  return negative ? -result : result;
+}
+
+function bigIntToDecimal(value: bigint): string {
+  const sign = value < 0 ? "-" : "";
+  const absolute = value < 0 ? -value : value;
+  return `${sign}${absolute / 1_000_000n}.${(absolute % 1_000_000n).toString().padStart(6, "0")}`;
+}
+
+function addDecimal(left: string, right: string): string {
+  return bigIntToDecimal(decimalToBigInt(left) + decimalToBigInt(right));
+}
+
+function subtractDecimal(left: string, right: string): string {
+  return bigIntToDecimal(decimalToBigInt(left) - decimalToBigInt(right));
+}
+
+function compareDecimal(left: string, right: string): number {
+  const delta = decimalToBigInt(left) - decimalToBigInt(right);
+  return delta < 0 ? -1 : delta > 0 ? 1 : 0;
+}
+
+function isZeroDecimal(value: string): boolean {
+  return decimalToBigInt(value) === 0n;
+}
+
+function requireUuid(name: string, value: string): void {
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      value,
+    )
+  )
+    throw new TypeError(`${name} must be a UUID`);
+}
+
+function requireOne<Row extends Record<string, unknown>>(
+  result: { rows: Row[]; rowCount: number | null },
+  operation: string,
+): Row {
+  const row = result.rows[0];
+  if (result.rowCount !== 1 || row === undefined)
+    throw new Error(`${operation} did not affect exactly one row`);
+  return row;
+}

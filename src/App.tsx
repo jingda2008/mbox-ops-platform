@@ -29,6 +29,7 @@ import {
 } from './api'
 import './App.css'
 import { ServiceIcon } from './components/ServiceIcon'
+import { RoleHomeView } from './components/RoleHomeView'
 import {
   clearOfflineDataForEmployeeChange,
   discardConflictedTaskAction,
@@ -61,9 +62,17 @@ const BOOTSTRAP_POLL_DELAYS_MS = [5_000, 8_000, 13_000, 20_000] as const
 const BOOTSTRAP_OFFLINE_RETRY_MS = 15_000
 const GuestPortal = lazy(() => import('./components/GuestPortal').then((module) => ({ default: module.GuestPortal })))
 const MemberBenefitsPortal = lazy(() => import('./components/MemberBenefitsPortal').then((module) => ({ default: module.MemberBenefitsPortal })))
-const OperationsConsole = lazy(() => import('./components/OperationsConsole').then((module) => ({ default: module.OperationsConsole })))
+const loadOperationsConsole = () => import('./components/OperationsConsole').then((module) => ({ default: module.OperationsConsole }))
+const OperationsConsole = lazy(loadOperationsConsole)
 const VoiceCommandMode = lazy(() => import('./components/VoiceCommandMode').then((module) => ({ default: module.VoiceCommandMode })))
 const PublicReservationPortal = lazy(() => import('./components/PublicReservationPortal').then((module) => ({ default: module.PublicReservationPortal })))
+
+// Staff bootstrap and the workstation chunk are independent. Start both on the
+// first navigation so the role home does not wait for a serial network round
+// trip after bootstrap, while public guest/member/reservation routes stay lean.
+if (typeof window !== 'undefined' && !['/guest', '/member', '/reserve'].some((path) => window.location.pathname.startsWith(path))) {
+  void loadOperationsConsole()
+}
 
 function WorkspaceLoading() {
   return <main className="system-state"><LoaderCircle className="spin" size={28} /><strong>正在载入工作台</strong></main>
@@ -71,6 +80,29 @@ function WorkspaceLoading() {
 
 function LazyWorkspace({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<WorkspaceLoading />}>{children}</Suspense>
+}
+
+function StaffWorkspaceFallback({
+  data,
+  employeeId,
+  onNavigate,
+}: {
+  data: BootstrapResponse
+  employeeId: string
+  onNavigate: (target: OperationsConsoleView, focus?: OperationsConsoleFocus) => void
+}) {
+  return (
+    <main className="staff-startup-workspace" aria-label="岗位首页">
+      <RoleHomeView
+        data={data}
+        employeeId={employeeId}
+        onNavigate={(target, focusQuery) => onNavigate(
+          target,
+          focusQuery ? { objectId: focusQuery, query: focusQuery } : undefined,
+        )}
+      />
+    </main>
+  )
 }
 
 interface BootstrapPollingOptions {
@@ -157,16 +189,22 @@ export function startBootstrapPolling(
       clearTimer()
     }
   }
+  const handlePageShow = (event: Event) => {
+    // A normal navigation emits pageshow after the initial refresh has already
+    // started. Only BFCache restoration needs an extra refresh.
+    if ('persisted' in event && !(event as PageTransitionEvent).persisted) return
+    refreshNow()
+  }
 
   visibilityTarget.addEventListener('visibilitychange', handleVisibilityChange)
-  pageShowTarget.addEventListener('pageshow', refreshNow)
+  pageShowTarget.addEventListener('pageshow', handlePageShow)
   refreshNow()
   return () => {
     stopped = true
     refreshAfterCurrent = false
     clearTimer()
     visibilityTarget.removeEventListener('visibilitychange', handleVisibilityChange)
-    pageShowTarget.removeEventListener('pageshow', refreshNow)
+    pageShowTarget.removeEventListener('pageshow', handlePageShow)
   }
 }
 
@@ -315,7 +353,9 @@ export default function App() {
     }
     document.addEventListener('visibilitychange', resumeHeartbeat)
     window.addEventListener('pageshow', resumeHeartbeat)
-    void heartbeat()
+    // Login already establishes a 90-second lease. Let the first workspace payload
+    // render before background presence traffic competes for the mobile connection.
+    schedule(10_000)
     return () => {
       stopped = true
       document.removeEventListener('visibilitychange', resumeHeartbeat)
@@ -456,7 +496,16 @@ export default function App() {
           <button title="关闭协作提示" onClick={() => setCollaborationGuidance(null)}>关闭</button>
         </div>
       )}
-      <LazyWorkspace>
+      <Suspense fallback={(
+        <StaffWorkspaceFallback
+          data={data}
+          employeeId={currentActorId}
+          onNavigate={(target, focus) => {
+            nextNavigationRequestId.current += 1
+            setNavigationRequest({ id: nextNavigationRequestId.current, target, focus })
+          }}
+        />
+      )}>
         <OperationsConsole data={data} onRefresh={refreshWorkspace} onOptimisticUpdate={updateWorkspace} navigationRequest={navigationRequest} />
         {staffMode === 'voice' && (
           <VoiceCommandMode
@@ -470,7 +519,7 @@ export default function App() {
             }}
           />
         )}
-      </LazyWorkspace>
+      </Suspense>
     </div>
   )
 }

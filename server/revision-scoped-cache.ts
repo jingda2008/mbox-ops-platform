@@ -24,6 +24,15 @@ export class RevisionScopedCache<T> {
     return value
   }
 
+  get(scope: string, revision: number): T | undefined {
+    const key = `${scope}:${revision}`
+    const cached = this.entries.get(key)
+    if (cached === undefined) return undefined
+    this.entries.delete(key)
+    this.entries.set(key, cached)
+    return cached
+  }
+
   delete(scope: string, revision: number) {
     return this.entries.delete(`${scope}:${revision}`)
   }

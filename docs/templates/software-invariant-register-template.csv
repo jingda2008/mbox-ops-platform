@@ -1,0 +1,2 @@
+invariant_id,entity,severity,expression,authoritative_source,check_timing,consistency_window_ms,tc_ids,production_monitor,evidence,status
+INV-EXAMPLE-001,order,P0,"同一幂等键只能对应一个订单结果",database_unique_constraint,"command;replay;recovery",0,TC-EXAMPLE-001,audit_duplicate_order_total,replace-with-traceable-evidence,not_run

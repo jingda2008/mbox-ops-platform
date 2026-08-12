@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "replace-with-state-machine-id",
+  "entity": "replace-with-entity",
+  "initialState": "created",
+  "terminalStates": ["completed", "cancelled"],
+  "states": ["created", "processing", "completed", "cancelled"],
+  "transitions": [
+    {
+      "id": "start",
+      "from": ["created"],
+      "to": "processing",
+      "roles": ["replace-with-role"],
+      "guard": "replace-with-precondition",
+      "sideEffects": ["replace-with-authoritative-write"],
+      "compensation": "replace-with-recovery-or-none",
+      "tcIds": ["TC-EXAMPLE-001"]
+    }
+  ],
+  "forbiddenTransitions": [
+    {
+      "from": "completed",
+      "to": "processing",
+      "reason": "终态不得无审计回退",
+      "tcIds": ["TC-EXAMPLE-002"]
+    }
+  ]
+}

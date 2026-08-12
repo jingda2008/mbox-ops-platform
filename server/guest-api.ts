@@ -15,7 +15,7 @@ import {
 } from '../src/shared/guest-contracts.js'
 import { guestBehaviorEventSchema, type GuestBehaviorEventType, type GuestBehaviorValue } from '../src/shared/guest-insight-contracts.js'
 import type { RuntimeState, ServiceTask, Table } from '../src/shared/contracts.js'
-import { chinaBusinessDateKey } from '../src/shared/china-time.js'
+import { venueBusinessDateKey } from '../src/shared/venue-time.js'
 import type { PaymentIntent } from '../src/shared/payment-contracts.js'
 import type { Order } from '../src/shared/order-contracts.js'
 import { productAvailability } from '../src/shared/product-availability.js'
@@ -193,8 +193,10 @@ async function recordGuestInsight(
       metadata: input.metadata ?? {},
       idempotencyKey: input.idempotencyKey,
     })
+    return true
   } catch (error) {
     request.log.error({ err: error, eventType: input.eventType }, 'guest insight event persistence failed')
+    return false
   }
 }
 
@@ -303,7 +305,11 @@ function sessionView(
   const primary = state.employees.find((employee) => employee.id === table.primaryEmployeeId)
   const sessionBusinessDate = tableSessionBusinessDate(state, tableSession)
   const sessionOperation = tableSessionOperation(state, tableSession)
-  const scheduleBusinessDate = chinaBusinessDateKey(nowMs)
+  const scheduleBusinessDate = venueBusinessDateKey(
+    nowMs,
+    state.store.timezone,
+    state.tableOperationsConfig?.businessDayRolloverHour ?? 6,
+  )
   const frozen = tableSessionRequiresHandover(state, tableSession, nowMs, enforceMaximumOpenHours)
   const orders = frozen ? [] : state.orderDomain.orders.filter((order) => order.tableSessionId === tableSession.id)
   const ledgerEntries = frozen ? [] : state.orderDomain.tableLedgerEntries.filter((entry) => entry.tableSessionId === tableSession.id)
@@ -535,12 +541,68 @@ function writeAccessFromToken(state: RuntimeState, token: string, options: Guest
 export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRepository, options: GuestApiOptions) {
   const resolveProvider = options.providerResolver ?? createEnvironmentPaymentProviderResolver()
   const guestInsights = options.guestInsights ?? new MemoryGuestInsightsStore()
+  const recordedSessionInsights = new Map<string, number>()
+  const pendingSessionInsights = new Map<string, Promise<boolean>>()
+  const recordedGuestActivity = new Map<string, number>()
+  const pendingGuestActivity = new Map<string, Promise<void>>()
+  const sessionInsightTtlMs = 12 * 60 * 60_000
+  const guestActivityTtlMs = 5 * 60_000
+  const sessionInsightCacheLimit = 2_000
+
+  const rememberBounded = (cache: Map<string, number>, key: string, recordedAt: number, limit: number) => {
+    cache.delete(key)
+    cache.set(key, recordedAt)
+    while (cache.size > limit) {
+      const oldest = cache.keys().next().value as string | undefined
+      if (!oldest) break
+      cache.delete(oldest)
+    }
+  }
+  const rememberSessionInsight = (key: string, recordedAt: number) => {
+    rememberBounded(recordedSessionInsights, key, recordedAt, sessionInsightCacheLimit)
+  }
+
+  const recordSessionInsight = async (
+    request: FastifyRequest,
+    input: Parameters<typeof recordGuestInsight>[2],
+  ) => {
+    const key = `${input.anonymousId}:${input.tableSessionId}`
+    const now = options.now?.() ?? Date.now()
+    const recordedAt = recordedSessionInsights.get(key)
+    if (recordedAt !== undefined && now - recordedAt < sessionInsightTtlMs) return false
+    if (recordedAt !== undefined) recordedSessionInsights.delete(key)
+
+    const pending = pendingSessionInsights.get(key)
+    if (pending) return pending
+    const write = (async () => {
+      const recorded = await recordGuestInsight(request, guestInsights, input)
+      if (recorded) rememberSessionInsight(key, now)
+      return recorded
+    })().finally(() => pendingSessionInsights.delete(key))
+    pendingSessionInsights.set(key, write)
+    return write
+  }
+
+  const touchGuestActivity = async (request: FastifyRequest, anonymousId: string, occurredAt: number) => {
+    const lastTouch = recordedGuestActivity.get(anonymousId)
+    if (lastTouch !== undefined && occurredAt - lastTouch < guestActivityTtlMs) return
+    const pending = pendingGuestActivity.get(anonymousId)
+    if (pending) return pending
+    const write = guestInsights.touchProfile(anonymousId, new Date(occurredAt).toISOString())
+      .then(() => rememberBounded(recordedGuestActivity, anonymousId, occurredAt, sessionInsightCacheLimit))
+      .catch((error: unknown) => request.log.error({ err: error }, 'guest profile activity touch failed'))
+      .finally(() => pendingGuestActivity.delete(anonymousId))
+    pendingGuestActivity.set(anonymousId, write)
+    return write
+  }
+
   const sessionExchangeSchema = z.object({ token: z.string().trim().min(20).max(2_048) }).strict()
   const exchangeSession = async (request: FastifyRequest, token?: string, legacyTable?: string) => {
     const state = await repository.read()
     const access = exchangeAccessFromRequest(state, token, legacyTable, options)
     const anonymousId = guestIdentityFromRequest(request, randomUUID)
-    await recordGuestInsight(request, guestInsights, {
+    const insightAt = options.now?.() ?? Date.now()
+    const sessionRecorded = await recordSessionInsight(request, {
       anonymousId,
       tableSessionId: access.tableSession.id,
       tableCode: access.table.code,
@@ -548,8 +610,10 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
       eventType: 'session_started',
       metadata: { entry: token ? 'table_qr_or_session' : 'local_table_sample' },
       idempotencyKey: `guest-session-started:${anonymousId}:${access.tableSession.id}`,
-      occurredAt: new Date(options.now?.() ?? Date.now()).toISOString(),
+      occurredAt: new Date(insightAt).toISOString(),
     })
+    if (sessionRecorded) rememberBounded(recordedGuestActivity, anonymousId, insightAt, sessionInsightCacheLimit)
+    else await touchGuestActivity(request, anonymousId, insightAt)
     return sessionView(
       state,
       access.table,
@@ -787,8 +851,17 @@ export function registerGuestRoutes(app: FastifyInstance, repository: RuntimeRep
           idempotencyKey: input.idempotencyKey,
         },
       })
+      const idempotencyPrefix = `${input.idempotencyKey}:`
+      state.orderDomain.idempotencyRecords = state.orderDomain.idempotencyRecords.filter(
+        (record) => !record.key.startsWith(idempotencyPrefix),
+      )
       state.revision += 1
       return state.orderDomain.orders.find((candidate) => candidate.id === orderId)!
+    }, {
+      projectionTables: [
+        'operational_orders',
+        'operational_order_items',
+      ],
     })
     if (insightContext) await recordGuestInsight(request, guestInsights, {
       anonymousId,

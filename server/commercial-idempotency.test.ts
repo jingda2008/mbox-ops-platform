@@ -132,6 +132,9 @@ describe('commercial API idempotency', () => {
     expect(finalState.paymentDomain.paymentIntents.filter((item) => item.id === firstPayment.json().id)).toHaveLength(1)
     expect(finalState.auditEntries.filter((entry) => entry.action === 'commerce.quick_order.v1')).toHaveLength(1)
     expect(finalState.auditEntries.filter((entry) => entry.action === 'payment.intent.created.v1')).toHaveLength(1)
+    expect(finalState.orderDomain.idempotencyRecords.some((record) => (
+      record.key.startsWith(`${orderPayload.idempotencyKey}:`)
+    ))).toBe(false)
     expect(finalState.inventoryDomain?.movements.filter((movement) => movement.type === 'sale')).toEqual([
       expect.objectContaining({
         productId: product.id,

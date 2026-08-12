@@ -75,7 +75,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: npm
+          cache: ${{ github.event_name == 'push' && github.ref_type != 'tag' && 'npm' || '' }}
       - run: npm ci
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
@@ -92,7 +92,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: npm
+          cache: ${{ github.event_name == 'push' && github.ref_type != 'tag' && 'npm' || '' }}
       - run: npm ci
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
@@ -109,16 +109,17 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: npm
+          cache: ${{ github.event_name == 'push' && github.ref_type != 'tag' && 'npm' || '' }}
       - run: npm ci
       - id: playwright-cache
+        if: github.event_name == 'push' && github.ref_type != 'tag'
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
       - name: Install Playwright system dependencies
         run: npx playwright install-deps chromium
-      - if: steps.playwright-cache.outputs.cache-hit != 'true'
+      - if: github.ref_type == 'tag' || steps.playwright-cache.outputs.cache-hit != 'true'
         name: Install Playwright Chromium
         run: npx playwright install chromium
       - name: Run targeted mobile UI smoke
@@ -140,16 +141,17 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: npm
+          cache: ${{ github.event_name == 'push' && github.ref_type != 'tag' && 'npm' || '' }}
       - run: npm ci
       - id: playwright-cache
+        if: github.event_name == 'push' && github.ref_type != 'tag'
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
       - name: Install Playwright system dependencies
         run: npx playwright install-deps chromium
-      - if: steps.playwright-cache.outputs.cache-hit != 'true'
+      - if: github.ref_type == 'tag' || steps.playwright-cache.outputs.cache-hit != 'true'
         name: Install Playwright Chromium
         run: npx playwright install chromium
       - name: Run browser commercial flows
@@ -185,7 +187,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: npm
+          cache: ${{ github.event_name == 'push' && github.ref_type != 'tag' && 'npm' || '' }}
       - run: npm ci
       - name: Provision database runtime role
         env:
@@ -202,6 +204,14 @@ jobs:
         run: npm run db:verify
         env:
           DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
+      - name: Verify checksum migration from revision 023 with a non-superuser owner
+        run: npm run db:verify:checksum-upgrade
+        env:
+          DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
+      - name: Verify UTC instants and 06:00 venue business-day boundary
+        run: npm run db:verify:time
+        env:
+          DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
       - name: Compile database integration helpers
         run: |
           npx tsc -p tsconfig.server.json
@@ -210,10 +220,210 @@ jobs:
         run: npm run db:verify:operational
         env:
           DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
+      - name: Verify authoritative KDS transactions
+        run: npm run db:verify:kds
+        env:
+          DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
+      - name: Verify cross-instance staff presence leases
+        run: npm run db:verify:presence
+        env:
+          DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
+
+  normalized_database:
+    if: needs.classify.outputs.scope == 'full'
+    needs: classify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mbox
+          POSTGRES_PASSWORD: mbox_normalized_test
+          POSTGRES_DB: mbox_normalized_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mbox -d mbox_normalized_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://mbox:mbox_normalized_test@127.0.0.1:5432/mbox_normalized_test
+      TEST_NORMALIZED_DATABASE_URL: postgresql://mbox:mbox_normalized_test@127.0.0.1:5432/mbox_normalized_test
+      TEST_NORMALIZED_ADMIN_URL: postgresql://mbox:mbox_normalized_test@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: ${{ github.event_name == 'push' && github.ref_type != 'tag' && 'npm' || '' }}
+      - run: npm ci
+      - name: Apply normalized-only migrations to a clean database
+        run: npm run db:migrate:normalized
+      - name: Run every normalized PostgreSQL transaction and RLS test
+        run: npm run test:normalized:postgres
+      - name: Run real normalized HTTP workflows against an isolated database
+        env:
+          DURATION_SECONDS: ${{ github.event_name == 'pull_request' && '10' || '60' }}
+          OUTPUT_FILE: artifacts/normalized-http-acceptance/report.json
+          APP_COMMIT_SHA: ${{ github.sha }}
+        run: npm run acceptance:normalized:http
+      - name: Seal normalized HTTP acceptance evidence
+        if: always()
+        run: |
+          if [ -f artifacts/normalized-http-acceptance/report.json ]; then
+            cd artifacts/normalized-http-acceptance
+            sha256sum report.json > SHA256SUMS
+            sha256sum --check SHA256SUMS
+          fi
+      - name: Upload normalized HTTP acceptance evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: normalized-http-acceptance-${{ github.sha }}
+          path: artifacts/normalized-http-acceptance
+          if-no-files-found: warn
+          retention-days: ${{ github.event_name == 'pull_request' && 3 || 14 }}
+      - name: Enforce normalized code and migration boundaries
+        run: |
+          npm run architecture:normalized:new
+          npm run architecture:normalized:zero
+
+  normalized_browser:
+    if: needs.classify.outputs.scope == 'full'
+    needs: classify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      startup_report_b64: ${{ steps.normalized-browser-evidence.outputs.startup_report_b64 }}
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mbox
+          POSTGRES_PASSWORD: mbox_normalized_browser_test
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mbox -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_NORMALIZED_ADMIN_URL: postgresql://mbox:mbox_normalized_browser_test@127.0.0.1:5432/postgres
+      APP_COMMIT_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: ${{ github.event_name == 'push' && github.ref_type != 'tag' && 'npm' || '' }}
+      - run: npm ci
+      - id: normalized-playwright-cache
+        if: github.event_name == 'push' && github.ref_type != 'tag'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+      - name: Install Playwright system dependencies
+        run: npx playwright install-deps chromium
+      - if: github.ref_type == 'tag' || steps.normalized-playwright-cache.outputs.cache-hit != 'true'
+        name: Install Playwright Chromium
+        run: npx playwright install chromium
+      - name: Run normalized mobile commercial flows against an isolated database
+        run: npm run test:e2e:normalized
+      - name: Seal normalized browser startup evidence
+        id: normalized-browser-evidence
+        run: |
+          node -e "const r=JSON.parse(require('fs').readFileSync('artifacts/normalized-browser/startup.json','utf8')); if(r.gate?.passed!==true) process.exit(1)"
+          printf 'startup_report_b64=%s\n' "$(base64 -w0 artifacts/normalized-browser/startup.json)" >> "${GITHUB_OUTPUT}"
+      - name: Upload normalized browser evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: normalized-browser-${{ github.sha }}
+          path: |
+            artifacts/normalized-browser/report
+            artifacts/normalized-browser/results
+            artifacts/normalized-browser/startup.json
+          if-no-files-found: warn
+          retention-days: ${{ github.event_name == 'pull_request' && 3 || 14 }}
+
+  performance:
+    if: needs.classify.outputs.scope == 'full'
+    needs: classify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      load_report_b64: ${{ steps.runtime-evidence.outputs.load_report_b64 }}
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mbox
+          POSTGRES_PASSWORD: mbox_normalized_performance_test
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mbox -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_NORMALIZED_ADMIN_URL: postgresql://mbox:mbox_normalized_performance_test@127.0.0.1:5432/postgres
+      APP_COMMIT_SHA: ${{ github.sha }}
+      MBOX_DATABASE_POOL_MAX: 12
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: ${{ github.event_name == 'push' && github.ref_type != 'tag' && 'npm' || '' }}
+      - run: npm ci
+      - name: Run normalized core at sustained 5 RPS against a fresh database
+        env:
+          TARGET_RPS: 5
+          DURATION_SECONDS: 60
+          OUTPUT_FILE: artifacts/runtime-quality/client-observed-load.json
+        run: npm run acceptance:normalized:http
+      - name: Seal and verify runtime evidence
+        if: always()
+        id: runtime-evidence
+        run: |
+          node -e "JSON.parse(require('fs').readFileSync('artifacts/runtime-quality/client-observed-load.json', 'utf8'))"
+          (
+            cd artifacts/runtime-quality
+            find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+            sha256sum --check SHA256SUMS
+          )
+          printf 'load_report_b64=%s\n' "$(base64 -w0 artifacts/runtime-quality/client-observed-load.json)" >> "${GITHUB_OUTPUT}"
+      - name: Upload successful runtime evidence
+        if: success()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-quality-${{ github.sha }}
+          path: artifacts/runtime-quality
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 3 || 14 }}
+      - name: Upload failed runtime diagnostics
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-diagnostics-${{ github.sha }}
+          path: artifacts/runtime-quality
+          if-no-files-found: warn
+          retention-days: 7
 
   image:
     if: needs.classify.outputs.full == 'true' && needs.classify.outputs.release_artifact_required == 'true'
-    needs: classify
+    needs: [classify, quality, browser, database, normalized_database, normalized_browser, performance]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -227,20 +437,21 @@ jobs:
         run: |
           version=$(node -p "require('./package.json').version")
           short_sha=${GITHUB_SHA:0:7}
-          image_tag="mbox-ops:${version}-${short_sha}"
+          image_tag="mbox-normalized:${version}-${short_sha}"
           printf 'version=%s\nshort_sha=%s\nimage_tag=%s\n' "${version}" "${short_sha}" "${image_tag}" >> "${GITHUB_OUTPUT}"
       - name: Build production image once
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: Dockerfile.normalized
           load: true
           platforms: linux/amd64
           tags: ${{ steps.metadata.outputs.image_tag }}
           build-args: |
-            MBOX_RELEASE_SHA=${{ github.sha }}
-            MBOX_RELEASE_VERSION=${{ steps.metadata.outputs.version }}
-          cache-from: type=gha,scope=mbox-runtime
-          cache-to: type=gha,mode=max,scope=mbox-runtime
+            APP_COMMIT_SHA=${{ github.sha }}
+            APP_RELEASE_VERSION=${{ steps.metadata.outputs.version }}
+          cache-from: type=gha,scope=mbox-normalized-runtime
+          cache-to: ${{ github.event_name == 'push' && github.ref_type != 'tag' && 'type=gha,mode=max,scope=mbox-normalized-runtime' || '' }}
       - name: Package immutable deployment bundle
         env:
           IMAGE_TAG: ${{ steps.metadata.outputs.image_tag }}
@@ -248,10 +459,11 @@ jobs:
           SHORT_SHA: ${{ steps.metadata.outputs.short_sha }}
         run: |
           mkdir -p release-artifact
-          archive="release-artifact/mbox-ops-${VERSION}-${SHORT_SHA}.tar.gz"
+          archive="release-artifact/mbox-normalized-${VERSION}-${SHORT_SHA}.tar.gz"
           docker save "${IMAGE_TAG}" | gzip -1 > "${archive}"
           image_digest=$(docker image inspect "${IMAGE_TAG}" --format '{{.Id}}')
           node scripts/generate-migration-manifest.mjs \
+            --directory database/normalized-migrations \
             --output release-artifact/migration-manifest.json >/dev/null
           MBOX_BUNDLE_ARCHIVE="${archive}" \
           MBOX_BUNDLE_SHA="${GITHUB_SHA}" \
@@ -267,12 +479,13 @@ jobs:
           )
       - name: Upload the exact image used by validation and deployment
         if: github.ref_type != 'tag'
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: mbox-image-${{ github.sha }}
+          name: mbox-normalized-image-${{ github.sha }}
           path: release-artifact
           compression-level: 0
-          retention-days: 7
+          retention-days: ${{ github.event_name == 'pull_request' && 3 || 14 }}
       - name: Stage the immutable tag bundle in a draft pre-release
         if: github.ref_type == 'tag'
         env:
@@ -293,10 +506,81 @@ jobs:
 
   verify:
     if: always()
-    needs: [classify, docs, quality, fast_quality, ui_browser, browser, database, image]
+    needs: [classify, docs, quality, fast_quality, ui_browser, browser, database, normalized_database, normalized_browser, performance, image]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v6
+      - name: Download full-scope runtime evidence
+        if: needs.classify.outputs.scope == 'full' && needs.performance.result == 'success' && github.event_name != 'pull_request'
+        id: runtime-evidence-download
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: runtime-quality-${{ github.sha }}
+          path: artifacts/runtime-quality
+      - name: Verify downloaded runtime evidence checksums
+        if: steps.runtime-evidence-download.outcome == 'success'
+        run: |
+          cd artifacts/runtime-quality
+          sha256sum --check SHA256SUMS
+      - name: Write commit-scoped CI quality ledger
+        env:
+          MBOX_CI_SCOPE: ${{ needs.classify.outputs.scope }}
+          MBOX_CI_RELEASE_ARTIFACT_REQUIRED: ${{ needs.classify.outputs.release_artifact_required }}
+          MBOX_CI_SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          MBOX_CI_LOAD_EVIDENCE_BASE64: ${{ needs.performance.outputs.load_report_b64 }}
+          MBOX_CI_BROWSER_STARTUP_EVIDENCE_BASE64: ${{ needs.normalized_browser.outputs.startup_report_b64 }}
+          MBOX_CI_RESULTS_JSON: >-
+            {"docs":"${{ needs.docs.result }}","quality":"${{ needs.quality.result }}","fast_quality":"${{ needs.fast_quality.result }}","ui_browser":"${{ needs.ui_browser.result }}","browser":"${{ needs.browser.result }}","database":"${{ needs.database.result }}","normalized_database":"${{ needs.normalized_database.result }}","normalized_browser":"${{ needs.normalized_browser.result }}","performance":"${{ needs.performance.result }}","image":"${{ needs.image.result }}"}
+        run: node scripts/write-ci-quality-evidence.mjs
+      - name: Verify immutable CI quality ledger
+        run: >-
+          node scripts/verify-quality-evidence.mjs
+          --input artifacts/quality-evidence/ci-quality-evidence.json
+          --policy docs/quality-policy-mbox-v1.json
+          --output artifacts/quality-evidence/verification-report.json
+          --require-immutable
+          --require-release-pass
+      - name: Seal CI quality ledger
+        if: always()
+        run: |
+          cd artifacts/quality-evidence
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - name: Publish pull-request quality evidence summary
+        if: always() && github.event_name == 'pull_request'
+        run: |
+          {
+            printf '## Commit-scoped quality evidence\n\n'
+            printf -- '- Commit: `%s`\n' "${GITHUB_SHA}"
+            printf -- '- Workflow run: `%s`\n' "${GITHUB_RUN_ID}"
+            printf -- '- Evidence checksums:\n\n```text\n'
+            cat artifacts/quality-evidence/SHA256SUMS
+            printf '```\n\n'
+            printf '<details><summary>Quality ledger</summary>\n\n```json\n'
+            cat artifacts/quality-evidence/ci-quality-evidence.json
+            printf '\n```\n</details>\n'
+          } >> "${GITHUB_STEP_SUMMARY}"
+      - name: Upload successful commit-scoped CI quality ledger
+        if: success()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-evidence-${{ github.sha }}
+          path: artifacts/quality-evidence
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 3 || 14 }}
+      - name: Upload failed quality diagnostics
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-diagnostics-${{ github.sha }}
+          path: artifacts/quality-evidence
+          if-no-files-found: warn
+          retention-days: 7
       - name: Enforce the selected release gate
+        if: always()
         env:
           SCOPE: ${{ needs.classify.outputs.scope }}
           CLASSIFY_RESULT: ${{ needs.classify.result }}
@@ -306,6 +590,9 @@ jobs:
           UI_BROWSER_RESULT: ${{ needs.ui_browser.result }}
           BROWSER_RESULT: ${{ needs.browser.result }}
           DATABASE_RESULT: ${{ needs.database.result }}
+          NORMALIZED_DATABASE_RESULT: ${{ needs.normalized_database.result }}
+          NORMALIZED_BROWSER_RESULT: ${{ needs.normalized_browser.result }}
+          PERFORMANCE_RESULT: ${{ needs.performance.result }}
           IMAGE_RESULT: ${{ needs.image.result }}
           RELEASE_ARTIFACT_REQUIRED: ${{ needs.classify.outputs.release_artifact_required }}
         run: |
@@ -317,6 +604,9 @@ jobs:
             test "${UI_BROWSER_RESULT}" = skipped
             test "${BROWSER_RESULT}" = skipped
             test "${DATABASE_RESULT}" = skipped
+            test "${NORMALIZED_DATABASE_RESULT}" = skipped
+            test "${NORMALIZED_BROWSER_RESULT}" = skipped
+            test "${PERFORMANCE_RESULT}" = skipped
             test "${IMAGE_RESULT}" = skipped
           elif [ "${SCOPE}" = ui ]; then
             test "${DOCS_RESULT}" = skipped
@@ -325,6 +615,9 @@ jobs:
             test "${UI_BROWSER_RESULT}" = success
             test "${BROWSER_RESULT}" = skipped
             test "${DATABASE_RESULT}" = skipped
+            test "${NORMALIZED_DATABASE_RESULT}" = skipped
+            test "${NORMALIZED_BROWSER_RESULT}" = skipped
+            test "${PERFORMANCE_RESULT}" = skipped
             test "${IMAGE_RESULT}" = skipped
           elif [ "${SCOPE}" = frontend ]; then
             test "${DOCS_RESULT}" = skipped
@@ -333,6 +626,9 @@ jobs:
             test "${UI_BROWSER_RESULT}" = skipped
             test "${BROWSER_RESULT}" = success
             test "${DATABASE_RESULT}" = skipped
+            test "${NORMALIZED_DATABASE_RESULT}" = skipped
+            test "${NORMALIZED_BROWSER_RESULT}" = skipped
+            test "${PERFORMANCE_RESULT}" = skipped
             test "${IMAGE_RESULT}" = skipped
           else
             test "${SCOPE}" = full
@@ -342,6 +638,9 @@ jobs:
             test "${UI_BROWSER_RESULT}" = skipped
             test "${BROWSER_RESULT}" = success
             test "${DATABASE_RESULT}" = success
+            test "${NORMALIZED_DATABASE_RESULT}" = success
+            test "${NORMALIZED_BROWSER_RESULT}" = success
+            test "${PERFORMANCE_RESULT}" = success
             if [ "${RELEASE_ARTIFACT_REQUIRED}" = true ]; then
               test "${IMAGE_RESULT}" = success
             else

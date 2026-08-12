@@ -33,12 +33,12 @@ test('presentation-only files use the UI lane and can include documentation', ()
   assert.equal(classifyChangedPaths(['src/App.css', 'docs/ui-note.md']).scope, 'ui')
 })
 
-test('allowlisted non-critical components use the frontend lane', () => {
-  for (const path of ['src/App.tsx', 'src/components/GuestPortal.tsx', 'src/components/GuestPortal.test.ts']) {
+test('only explicit frontend shells use the frontend lane', () => {
+  for (const path of ['src/App.tsx']) {
     assert.equal(isFrontendPath(path), true, path)
     assert.equal(classifyChangedPaths([path]).scope, 'frontend', path)
   }
-  assert.equal(classifyChangedPaths(['src/components/GuestPortal.tsx', 'docs/guest.md']).scope, 'frontend')
+  assert.equal(classifyChangedPaths(['src/components/GuestPortal.tsx', 'docs/guest.md']).scope, 'full')
 })
 
 test('critical, configuration, workflow and unknown changes always receive full verification', () => {
@@ -50,6 +50,10 @@ test('critical, configuration, workflow and unknown changes always receive full 
     'server/guest-api.ts',
     'config/seed.json',
     '.github/workflows/ci.yml',
+    'docs/quality-policy-mbox-v1.json',
+    'docs/templates/software-quality-evidence.template.json',
+    'docs/templates/software-required-tc-baseline-template.txt',
+    'docs/quality/mbox-kds-state-machine-v1.json',
     'Dockerfile',
     'unclassified/runtime.bin',
   ]) {
@@ -64,6 +68,12 @@ test('database migrations are explicitly identified', () => {
   const result = classifyChangedPaths(['database/migrations/020_example.sql'])
   assert.equal(result.scope, 'full')
   assert.equal(result.migrationChanged, true)
+
+  const normalized = classifyChangedPaths([
+    'database/normalized-migrations/011_pricing_authorizations.sql',
+  ])
+  assert.equal(normalized.scope, 'full')
+  assert.equal(normalized.migrationChanged, true)
 })
 
 test('unknown diffs and release tags fail closed to full verification', () => {

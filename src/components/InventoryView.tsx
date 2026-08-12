@@ -25,7 +25,7 @@ import {
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import * as inventoryApi from '../inventory-api'
 import type { Employee, MenuProduct, RoleConfig } from '../shared/contracts'
-import { chinaDateKey, formatChinaDateTime, shiftDateKey } from '../shared/china-time'
+import { chinaDateKey, chinaLocalDateTimeToIso, formatChinaDateTime, shiftDateKey } from '../shared/china-time'
 import type {
   BottleOwner,
   BottleStorageBatch,
@@ -593,7 +593,7 @@ function BottleDepositForm({
         owner,
         capacityQuantity: capacity,
         unitCode: unitCode.trim(),
-        expiresAt: new Date(`${expiresAt}T23:59:59+08:00`).toISOString(),
+        expiresAt: chinaLocalDateTimeToIso(`${expiresAt}T23:59:59`),
         tableSessionId: sessionId,
         orderId: effectiveOrderId,
         orderItemId: effectiveItemId,

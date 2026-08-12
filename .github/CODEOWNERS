@@ -1,0 +1,10 @@
+# Quality policy, release gates and evidence validators require explicit owner review.
+/docs/quality-policy-mbox-v1.json @jingda2008
+/docs/quality/** @jingda2008
+/docs/quality/mbox-required-tc-baseline-v1.txt @jingda2008
+/docs/templates/software-required-tc-baseline-template.txt @jingda2008
+/scripts/verify-quality-*.mjs @jingda2008
+/scripts/verify-tc-register.mjs @jingda2008
+/scripts/build-tc-execution-register.mjs @jingda2008
+/.github/workflows/ci.yml @jingda2008
+/.github/workflows/release.yml @jingda2008

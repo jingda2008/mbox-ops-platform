@@ -13,6 +13,7 @@ import type {
   TableSessionSummary,
   Table,
 } from '../src/shared/contracts.js'
+import { venueBusinessDateKey } from '../src/shared/venue-time.js'
 import type { SongTableSession } from '../src/shared/song-contracts.js'
 
 export const DEFAULT_TABLE_OPERATIONS_CONFIG: TableOperationsConfig = {
@@ -123,35 +124,15 @@ export function currentOpenTableSession(state: RuntimeState, tableId: string) {
   return sessions[0]!
 }
 
-function dateInTimeZone(timestamp: string, timeZone: string) {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(new Date(timestamp))
-  const year = parts.find((part) => part.type === 'year')?.value
-  const month = parts.find((part) => part.type === 'month')?.value
-  const day = parts.find((part) => part.type === 'day')?.value
-  const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? 0)
-  if (!year || !month || !day) throw new Error('桌次开台时间无效')
-  return { date: `${year}-${month}-${day}`, hour }
-}
-
-function previousDate(date: string) {
-  const value = new Date(`${date}T12:00:00.000Z`)
-  value.setUTCDate(value.getUTCDate() - 1)
-  return value.toISOString().slice(0, 10)
-}
-
 /** New IDs carry the business date; openedAt keeps legacy snapshots deterministic. */
 export function tableSessionBusinessDate(state: RuntimeState, session: SongTableSession) {
   const encodedDate = session.id.match(/(?:^|:)(\d{4}-\d{2}-\d{2})(?::|$)/)?.[1]
   if (encodedDate) return encodedDate
-  const local = dateInTimeZone(session.openedAt, state.store.timezone)
-  return local.hour < 6 ? previousDate(local.date) : local.date
+  return venueBusinessDateKey(
+    session.openedAt,
+    state.store.timezone,
+    tableOperationsConfig(state).businessDayRolloverHour ?? 6,
+  )
 }
 
 export function isCurrentBusinessDateTableSession(state: RuntimeState, session: SongTableSession) {

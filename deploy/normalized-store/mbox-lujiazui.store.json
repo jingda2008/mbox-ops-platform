@@ -1,0 +1,1756 @@
+{
+  "version": "2026.08.12-v3",
+  "tenant": {
+    "id": "10000000-0000-4000-8000-000000000001",
+    "code": "superhigh",
+    "name": "上海超嗨文化传媒有限公司"
+  },
+  "store": {
+    "id": "20000000-0000-4000-8000-000000000001",
+    "code": "mbox-lujiazui",
+    "name": "M-BOX 陆家嘴店",
+    "timezone": "Asia/Shanghai",
+    "businessDayCutoff": "06:00",
+    "currency": "CNY"
+  },
+  "dailyCredentialEnv": "MBOX_STORE_DAILY_CREDENTIAL",
+  "bootstrapAdminEmployeeCode": "chenfangyu",
+  "reservationPolicy": {
+    "holdMinutes": 20,
+    "maxAdvanceDays": 90,
+    "defaultDurationMinutes": 240,
+    "customerCancelCutoffMinutes": 120,
+    "depositMode": "disabled"
+  },
+  "areas": [
+    {
+      "code": "vip",
+      "name": "VIP卡座",
+      "type": "vip",
+      "sortOrder": 10
+    },
+    {
+      "code": "lounge",
+      "name": "室内休闲区",
+      "type": "indoor",
+      "sortOrder": 20
+    },
+    {
+      "code": "main",
+      "name": "室内中区",
+      "type": "indoor",
+      "sortOrder": 30
+    },
+    {
+      "code": "stage",
+      "name": "舞台互动区",
+      "type": "stage",
+      "sortOrder": 40
+    },
+    {
+      "code": "outdoor",
+      "name": "室外区域",
+      "type": "outdoor",
+      "sortOrder": 50
+    },
+    {
+      "code": "bar",
+      "name": "吧台单人位",
+      "type": "bar",
+      "sortOrder": 60
+    }
+  ],
+  "tables": [
+    {
+      "code": "VIP1",
+      "name": "VIP1",
+      "areaCode": "vip",
+      "capacity": 8,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 68.1,
+        "yPct": 31,
+        "widthPct": 10,
+        "heightPct": 5
+      }
+    },
+    {
+      "code": "VIP2",
+      "name": "VIP2",
+      "areaCode": "vip",
+      "capacity": 8,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 54.7,
+        "yPct": 31.2,
+        "widthPct": 10,
+        "heightPct": 5
+      }
+    },
+    {
+      "code": "VIP3",
+      "name": "VIP3",
+      "areaCode": "vip",
+      "capacity": 10,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 14.3,
+        "yPct": 27.9,
+        "widthPct": 10,
+        "heightPct": 5
+      }
+    },
+    {
+      "code": "VIP4",
+      "name": "VIP4",
+      "areaCode": "vip",
+      "capacity": 8,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 13.6,
+        "yPct": 20.4,
+        "widthPct": 10,
+        "heightPct": 5
+      }
+    },
+    {
+      "code": "VIP5",
+      "name": "VIP5",
+      "areaCode": "vip",
+      "capacity": 6,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 14.6,
+        "yPct": 14.1,
+        "widthPct": 10,
+        "heightPct": 5
+      }
+    },
+    {
+      "code": "L01",
+      "name": "L01",
+      "areaCode": "lounge",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 41.8,
+        "yPct": 30.5,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "L02",
+      "name": "L02",
+      "areaCode": "lounge",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 33.9,
+        "yPct": 29.4,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "L03",
+      "name": "L03",
+      "areaCode": "lounge",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 29.8,
+        "yPct": 28.5,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "L04",
+      "name": "L04",
+      "areaCode": "lounge",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 66.2,
+        "yPct": 27,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "L05",
+      "name": "L05",
+      "areaCode": "lounge",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 57.9,
+        "yPct": 26.9,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "L06",
+      "name": "L06",
+      "areaCode": "lounge",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 40.3,
+        "yPct": 25.8,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "L07",
+      "name": "L07",
+      "areaCode": "lounge",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 32,
+        "yPct": 24.5,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "666",
+      "name": "666",
+      "areaCode": "lounge",
+      "capacity": 8,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 14,
+        "yPct": 34.5,
+        "widthPct": 6.5,
+        "heightPct": 4
+      }
+    },
+    {
+      "code": "888",
+      "name": "888",
+      "areaCode": "lounge",
+      "capacity": 8,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 14,
+        "yPct": 39.5,
+        "widthPct": 6.5,
+        "heightPct": 4
+      }
+    },
+    {
+      "code": "A01",
+      "name": "A01",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 61.2,
+        "yPct": 37.1,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "A02",
+      "name": "A02",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 57,
+        "yPct": 37.1,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "A03",
+      "name": "A03",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 51.6,
+        "yPct": 37.1,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "A04",
+      "name": "A04",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 47.2,
+        "yPct": 37.1,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "A05",
+      "name": "A05",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 42.6,
+        "yPct": 37.1,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "A06",
+      "name": "A06",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 37.9,
+        "yPct": 37.1,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "A07",
+      "name": "A07",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 32.8,
+        "yPct": 37.1,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "A08",
+      "name": "A08",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 28.2,
+        "yPct": 37.1,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "B01",
+      "name": "B01",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 61.2,
+        "yPct": 41.6,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "B02",
+      "name": "B02",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 57,
+        "yPct": 41.6,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "B03",
+      "name": "B03",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 51.6,
+        "yPct": 41.6,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "B04",
+      "name": "B04",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 47.2,
+        "yPct": 41.6,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "B05",
+      "name": "B05",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 42.6,
+        "yPct": 41.6,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "B06",
+      "name": "B06",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 37.9,
+        "yPct": 41.6,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "B07",
+      "name": "B07",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 32.8,
+        "yPct": 41.6,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "B08",
+      "name": "B08",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 28.2,
+        "yPct": 41.6,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "C01",
+      "name": "C01",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 61.5,
+        "yPct": 49.6,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "C02",
+      "name": "C02",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 57.5,
+        "yPct": 49.6,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "C03",
+      "name": "C03",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 47.4,
+        "yPct": 49.6,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "C04",
+      "name": "C04",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 43.3,
+        "yPct": 49.6,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "C05",
+      "name": "C05",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 39.2,
+        "yPct": 49.6,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "C06",
+      "name": "C06",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 32.9,
+        "yPct": 49.6,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "C07",
+      "name": "C07",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 28.9,
+        "yPct": 49.6,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "S1",
+      "name": "S1",
+      "areaCode": "stage",
+      "capacity": 3,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 73.2,
+        "yPct": 38.9,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "S2",
+      "name": "S2",
+      "areaCode": "stage",
+      "capacity": 3,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 73.3,
+        "yPct": 42.9,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "S3",
+      "name": "S3",
+      "areaCode": "stage",
+      "capacity": 3,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 73.3,
+        "yPct": 47,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "S4",
+      "name": "S4",
+      "areaCode": "stage",
+      "capacity": 3,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 67.8,
+        "yPct": 36.8,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "S5",
+      "name": "S5",
+      "areaCode": "stage",
+      "capacity": 3,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 67.8,
+        "yPct": 40.9,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "S6",
+      "name": "S6",
+      "areaCode": "stage",
+      "capacity": 3,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 67.8,
+        "yPct": 45,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "S7",
+      "name": "S7",
+      "areaCode": "stage",
+      "capacity": 3,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 67.8,
+        "yPct": 49.3,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "W01",
+      "name": "W01",
+      "areaCode": "outdoor",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 29.2,
+        "yPct": 57.1,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "W02",
+      "name": "W02",
+      "areaCode": "outdoor",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 39.7,
+        "yPct": 57.1,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "W03",
+      "name": "W03",
+      "areaCode": "outdoor",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 45.6,
+        "yPct": 57.1,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "W04",
+      "name": "W04",
+      "areaCode": "outdoor",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 52.3,
+        "yPct": 57.1,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "W05",
+      "name": "W05",
+      "areaCode": "outdoor",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 58.3,
+        "yPct": 57.1,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "W06",
+      "name": "W06",
+      "areaCode": "outdoor",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 64.1,
+        "yPct": 57.1,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "W07",
+      "name": "W07",
+      "areaCode": "outdoor",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 53.9,
+        "yPct": 67.5,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "W08",
+      "name": "W08",
+      "areaCode": "outdoor",
+      "capacity": 8,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 79.6,
+        "yPct": 59.3,
+        "widthPct": 9,
+        "heightPct": 5
+      }
+    },
+    {
+      "code": "W09",
+      "name": "W09",
+      "areaCode": "outdoor",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 65.8,
+        "yPct": 66,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "W10",
+      "name": "W10",
+      "areaCode": "outdoor",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 41.6,
+        "yPct": 72.8,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "W11",
+      "name": "W11",
+      "areaCode": "outdoor",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 51.9,
+        "yPct": 72.8,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "W12",
+      "name": "W12",
+      "areaCode": "outdoor",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 52.6,
+        "yPct": 81.2,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "W13",
+      "name": "W13",
+      "areaCode": "outdoor",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 41.7,
+        "yPct": 81.2,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "W14",
+      "name": "W14",
+      "areaCode": "outdoor",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 31,
+        "yPct": 81.2,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "W15",
+      "name": "W15",
+      "areaCode": "outdoor",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 52.6,
+        "yPct": 85.2,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "W16",
+      "name": "W16",
+      "areaCode": "outdoor",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 41.7,
+        "yPct": 85.2,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "W17",
+      "name": "W17",
+      "areaCode": "outdoor",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 31.1,
+        "yPct": 85.2,
+        "widthPct": 4.5,
+        "heightPct": 3
+      }
+    },
+    {
+      "code": "BAR1",
+      "name": "吧台1",
+      "areaCode": "bar",
+      "capacity": 1,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 53.2,
+        "yPct": 19.4,
+        "widthPct": 3.5,
+        "heightPct": 2.5
+      }
+    },
+    {
+      "code": "BAR2",
+      "name": "吧台2",
+      "areaCode": "bar",
+      "capacity": 1,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 58.4,
+        "yPct": 19.4,
+        "widthPct": 3.5,
+        "heightPct": 2.5
+      }
+    },
+    {
+      "code": "BAR3",
+      "name": "吧台3",
+      "areaCode": "bar",
+      "capacity": 1,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 63.6,
+        "yPct": 19.4,
+        "widthPct": 3.5,
+        "heightPct": 2.5
+      }
+    },
+    {
+      "code": "BAR4",
+      "name": "吧台4",
+      "areaCode": "bar",
+      "capacity": 1,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "mapVersion": 1,
+        "xPct": 68.8,
+        "yPct": 19.4,
+        "widthPct": 3.5,
+        "heightPct": 2.5
+      }
+    }
+  ],
+  "roles": [
+    {
+      "code": "OWNER",
+      "name": "老板",
+      "canReceiveTasks": false,
+      "permissions": [
+        "dashboard.view",
+        "table.view_all",
+        "table.open",
+        "table.close",
+        "table.transfer",
+        "table.assignment.manage",
+        "order.create",
+        "order.view",
+        "order.discount",
+        "order.gift",
+        "fulfillment.view_all",
+        "service.view",
+        "service.execute",
+        "service.manage",
+        "reservation.view",
+        "reservation.view.all",
+        "reservation.manage",
+        "reservation.config.manage",
+        "payment.initiate.staff",
+        "payment.manual.cash.record",
+        "payment.manual.pos.record",
+        "refund.request",
+        "refund.approve",
+        "refund.execute",
+        "inventory.view",
+        "inventory.cost.view",
+        "inventory.manage",
+        "commercial.profit.view",
+        "commercial.cost.manage",
+        "commercial.sales.view_all",
+        "song.view",
+        "song.manage",
+        "hardware.view_all",
+        "hardware.manage",
+        "print.view_all",
+        "staff.access.configure",
+        "ai.execute",
+        "ai.schedule",
+        "business_day.view",
+        "business_day.close"
+      ],
+      "navigation": [
+        {
+          "code": "live",
+          "label": "现场",
+          "route": "/staff/live",
+          "sortOrder": 10,
+          "highFrequency": true
+        },
+        {
+          "code": "payments",
+          "label": "收银与退款",
+          "route": "/staff/payments",
+          "sortOrder": 20,
+          "highFrequency": true
+        },
+        {
+          "code": "operations",
+          "label": "经营分析",
+          "route": "/staff/operations",
+          "sortOrder": 30
+        },
+        {
+          "code": "settings",
+          "label": "系统配置",
+          "route": "/staff/settings",
+          "sortOrder": 40
+        }
+      ],
+      "approvalLimits": [
+        {
+          "code": "order.discount",
+          "amountMinor": 500000,
+          "currency": "CNY",
+          "rules": {
+            "discountBasisPoints": 3000,
+            "requiresReason": true
+          }
+        },
+        {
+          "code": "order.gift",
+          "amountMinor": 500000,
+          "currency": "CNY",
+          "rules": {
+            "allowFullGift": true,
+            "requiresReason": true
+          }
+        },
+        {
+          "code": "refund.approve",
+          "amountMinor": 2000000,
+          "currency": "CNY",
+          "rules": {
+            "requiresSecondActor": true,
+            "requiresReason": true
+          }
+        }
+      ]
+    },
+    {
+      "code": "OPS_LEAD",
+      "name": "运营负责人",
+      "permissions": [
+        "dashboard.view",
+        "table.view_all",
+        "table.open",
+        "table.close",
+        "table.transfer",
+        "table.assignment.manage",
+        "order.create",
+        "order.view",
+        "order.discount",
+        "order.gift",
+        "fulfillment.view_all",
+        "service.view",
+        "service.execute",
+        "service.manage",
+        "reservation.view",
+        "reservation.view.all",
+        "reservation.manage",
+        "payment.initiate.staff",
+        "refund.request",
+        "refund.approve",
+        "inventory.view",
+        "inventory.cost.view",
+        "inventory.manage",
+        "commercial.profit.view",
+        "commercial.cost.manage",
+        "commercial.sales.view_all",
+        "song.view",
+        "song.manage",
+        "business_day.view",
+        "business_day.close"
+      ],
+      "navigation": [
+        {
+          "code": "live",
+          "label": "现场",
+          "route": "/staff/live",
+          "sortOrder": 10,
+          "highFrequency": true
+        },
+        {
+          "code": "tasks",
+          "label": "任务",
+          "route": "/staff/tasks",
+          "sortOrder": 20,
+          "highFrequency": true
+        },
+        {
+          "code": "operations",
+          "label": "经营分析",
+          "route": "/staff/operations",
+          "sortOrder": 30
+        }
+      ],
+      "approvalLimits": [
+        {
+          "code": "order.discount",
+          "amountMinor": 100000,
+          "currency": "CNY",
+          "rules": {
+            "discountBasisPoints": 2000,
+            "requiresReason": true
+          }
+        },
+        {
+          "code": "order.gift",
+          "amountMinor": 100000,
+          "currency": "CNY",
+          "rules": {
+            "allowFullGift": true,
+            "requiresReason": true
+          }
+        },
+        {
+          "code": "refund.approve",
+          "amountMinor": 500000,
+          "currency": "CNY",
+          "rules": {
+            "requiresSecondActor": true,
+            "requiresReason": true
+          }
+        }
+      ]
+    },
+    {
+      "code": "ADMIN",
+      "name": "系统管理员",
+      "canReceiveTasks": false,
+      "permissions": [
+        "dashboard.view",
+        "table.view_all",
+        "reservation.view.all",
+        "fulfillment.view_all",
+        "inventory.view",
+        "commercial.profit.view",
+        "hardware.view_all",
+        "hardware.manage",
+        "print.view_all",
+        "staff.access.configure",
+        "ai.execute",
+        "ai.schedule"
+      ],
+      "navigation": [
+        {
+          "code": "settings",
+          "label": "系统配置",
+          "route": "/staff/settings",
+          "sortOrder": 10,
+          "highFrequency": true
+        },
+        {
+          "code": "devices",
+          "label": "设备",
+          "route": "/staff/devices",
+          "sortOrder": 20
+        }
+      ],
+      "approvalLimits": []
+    },
+    {
+      "code": "MANAGER",
+      "name": "店长",
+      "permissions": [
+        "dashboard.view",
+        "table.view_all",
+        "table.open",
+        "table.close",
+        "table.transfer",
+        "table.assignment.manage",
+        "order.create",
+        "order.view",
+        "order.discount",
+        "order.gift",
+        "fulfillment.view_all",
+        "kds.exception.manage",
+        "service.view",
+        "service.execute",
+        "service.manage",
+        "reservation.view",
+        "reservation.view.all",
+        "reservation.manage",
+        "payment.initiate.staff",
+        "payment.manual.cash.record",
+        "payment.manual.pos.record",
+        "refund.request",
+        "refund.approve",
+        "inventory.view",
+        "inventory.cost.view",
+        "inventory.manage",
+        "commercial.profit.view",
+        "commercial.sales.view_all",
+        "song.view",
+        "song.manage",
+        "business_day.view",
+        "business_day.close"
+      ],
+      "navigation": [
+        {
+          "code": "live",
+          "label": "现场",
+          "route": "/staff/live",
+          "sortOrder": 10,
+          "highFrequency": true
+        },
+        {
+          "code": "tasks",
+          "label": "任务",
+          "route": "/staff/tasks",
+          "sortOrder": 20,
+          "highFrequency": true
+        },
+        {
+          "code": "commerce",
+          "label": "出品",
+          "route": "/staff/fulfillment",
+          "sortOrder": 30,
+          "highFrequency": true
+        },
+        {
+          "code": "reservations",
+          "label": "预约",
+          "route": "/staff/reservations",
+          "sortOrder": 40
+        }
+      ],
+      "approvalLimits": [
+        {
+          "code": "order.discount",
+          "amountMinor": 50000,
+          "currency": "CNY",
+          "rules": {
+            "discountBasisPoints": 1500,
+            "requiresReason": true
+          }
+        },
+        {
+          "code": "order.gift",
+          "amountMinor": 50000,
+          "currency": "CNY",
+          "rules": {
+            "allowFullGift": true,
+            "requiresReason": true
+          }
+        },
+        {
+          "code": "refund.approve",
+          "amountMinor": 200000,
+          "currency": "CNY",
+          "rules": {
+            "requiresSecondActor": true,
+            "requiresReason": true
+          }
+        }
+      ]
+    },
+    {
+      "code": "DEPUT_MANAGER",
+      "name": "副店长",
+      "permissions": [
+        "dashboard.view",
+        "table.view_all",
+        "table.open",
+        "table.close",
+        "table.transfer",
+        "order.create",
+        "order.view",
+        "order.discount",
+        "order.gift",
+        "fulfillment.view_all",
+        "kds.exception.manage",
+        "service.view",
+        "service.execute",
+        "service.manage",
+        "reservation.view",
+        "reservation.manage",
+        "refund.request",
+        "inventory.view",
+        "inventory.cost.view",
+        "inventory.manage",
+        "song.view"
+      ],
+      "navigation": [
+        {
+          "code": "live",
+          "label": "现场",
+          "route": "/staff/live",
+          "sortOrder": 10,
+          "highFrequency": true
+        },
+        {
+          "code": "tasks",
+          "label": "任务",
+          "route": "/staff/tasks",
+          "sortOrder": 20,
+          "highFrequency": true
+        },
+        {
+          "code": "commerce",
+          "label": "出品",
+          "route": "/staff/fulfillment",
+          "sortOrder": 30,
+          "highFrequency": true
+        }
+      ],
+      "approvalLimits": [
+        {
+          "code": "order.discount",
+          "amountMinor": 30000,
+          "currency": "CNY",
+          "rules": {
+            "discountBasisPoints": 1000,
+            "requiresReason": true
+          }
+        },
+        {
+          "code": "order.gift",
+          "amountMinor": 30000,
+          "currency": "CNY",
+          "rules": {
+            "allowFullGift": true,
+            "requiresReason": true
+          }
+        }
+      ]
+    },
+    {
+      "code": "SERVER",
+      "name": "服务员",
+      "permissions": [
+        "dashboard.view",
+        "table.open",
+        "table.close",
+        "table.transfer",
+        "order.create",
+        "order.view",
+        "order.gift",
+        "kds.deliver",
+        "service.view",
+        "service.execute",
+        "reservation.view",
+        "reservation.manage",
+        "payment.initiate.staff",
+        "song.view"
+      ],
+      "navigation": [
+        {
+          "code": "live",
+          "label": "现场",
+          "route": "/staff/live",
+          "sortOrder": 10,
+          "highFrequency": true
+        },
+        {
+          "code": "tasks",
+          "label": "任务",
+          "route": "/staff/tasks",
+          "sortOrder": 20,
+          "highFrequency": true
+        },
+        {
+          "code": "commerce",
+          "label": "取送",
+          "route": "/staff/fulfillment",
+          "sortOrder": 30,
+          "highFrequency": true
+        }
+      ],
+      "approvalLimits": [
+        {
+          "code": "order.gift",
+          "amountMinor": 8800,
+          "currency": "CNY",
+          "rules": {
+            "allowFullGift": true,
+            "requiresReason": true
+          }
+        }
+      ]
+    },
+    {
+      "code": "GREETER",
+      "name": "门迎",
+      "permissions": [
+        "dashboard.view",
+        "table.open",
+        "reservation.view",
+        "reservation.manage",
+        "service.view"
+      ],
+      "navigation": [
+        {
+          "code": "reservations",
+          "label": "预约到店",
+          "route": "/staff/reservations",
+          "sortOrder": 10,
+          "highFrequency": true
+        },
+        {
+          "code": "live",
+          "label": "现场",
+          "route": "/staff/live",
+          "sortOrder": 20,
+          "highFrequency": true
+        }
+      ],
+      "approvalLimits": []
+    },
+    {
+      "code": "BARTENDER",
+      "name": "调酒师",
+      "permissions": [
+        "dashboard.view",
+        "order.view",
+        "kds.prepare",
+        "kds.exception.manage",
+        "inventory.view",
+        "inventory.manage",
+        "service.view"
+      ],
+      "dataScopes": [
+        {
+          "key": "kds.station_codes",
+          "effect": "include",
+          "value": [
+            "bar"
+          ]
+        }
+      ],
+      "navigation": [
+        {
+          "code": "commerce",
+          "label": "吧台出品",
+          "route": "/staff/fulfillment",
+          "sortOrder": 10,
+          "highFrequency": true
+        },
+        {
+          "code": "inventory",
+          "label": "吧台库存",
+          "route": "/staff/inventory",
+          "sortOrder": 20
+        }
+      ],
+      "approvalLimits": []
+    },
+    {
+      "code": "CASHIER",
+      "name": "收银员",
+      "permissions": [
+        "dashboard.view",
+        "order.view",
+        "payment.initiate.staff",
+        "payment.manual.cash.record",
+        "payment.manual.pos.record",
+        "refund.request",
+        "refund.execute",
+        "reconciliation.view",
+        "reservation.view"
+      ],
+      "navigation": [
+        {
+          "code": "payments",
+          "label": "收银",
+          "route": "/staff/payments",
+          "sortOrder": 10,
+          "highFrequency": true
+        },
+        {
+          "code": "reservations",
+          "label": "预约",
+          "route": "/staff/reservations",
+          "sortOrder": 20
+        }
+      ],
+      "approvalLimits": []
+    },
+    {
+      "code": "KITCHEN",
+      "name": "后厨",
+      "permissions": [
+        "dashboard.view",
+        "order.view",
+        "kds.prepare",
+        "kds.exception.manage",
+        "inventory.view",
+        "inventory.manage"
+      ],
+      "dataScopes": [
+        {
+          "key": "kds.station_codes",
+          "effect": "include",
+          "value": [
+            "kitchen"
+          ]
+        }
+      ],
+      "navigation": [
+        {
+          "code": "commerce",
+          "label": "后厨出品",
+          "route": "/staff/fulfillment",
+          "sortOrder": 10,
+          "highFrequency": true
+        },
+        {
+          "code": "inventory",
+          "label": "后厨库存",
+          "route": "/staff/inventory",
+          "sortOrder": 20
+        }
+      ],
+      "approvalLimits": []
+    },
+    {
+      "code": "STAGE_OPS",
+      "name": "舞台运营",
+      "permissions": [
+        "dashboard.view",
+        "song.view",
+        "song.manage",
+        "reservation.view",
+        "service.view"
+      ],
+      "navigation": [
+        {
+          "code": "performance",
+          "label": "演出点歌",
+          "route": "/staff/performance",
+          "sortOrder": 10,
+          "highFrequency": true
+        }
+      ],
+      "approvalLimits": []
+    },
+    {
+      "code": "AUDIO_LIGHTING",
+      "name": "调音灯光",
+      "permissions": [
+        "dashboard.view",
+        "song.view",
+        "service.view",
+        "service.execute"
+      ],
+      "navigation": [
+        {
+          "code": "performance",
+          "label": "演出现场",
+          "route": "/staff/performance",
+          "sortOrder": 10,
+          "highFrequency": true
+        }
+      ],
+      "approvalLimits": []
+    },
+    {
+      "code": "MARKETING",
+      "name": "市场运营",
+      "permissions": [
+        "dashboard.view",
+        "reservation.view",
+        "reservation.view.all",
+        "reservation.manage",
+        "commercial.sales.view"
+      ],
+      "navigation": [
+        {
+          "code": "reservations",
+          "label": "预约",
+          "route": "/staff/reservations",
+          "sortOrder": 10,
+          "highFrequency": true
+        },
+        {
+          "code": "operations",
+          "label": "客户与销售",
+          "route": "/staff/operations",
+          "sortOrder": 20
+        }
+      ],
+      "approvalLimits": []
+    },
+    {
+      "code": "DESIGN",
+      "name": "市场设计",
+      "canReceiveTasks": false,
+      "permissions": [
+        "dashboard.view",
+        "reservation.view",
+        "song.view"
+      ],
+      "navigation": [
+        {
+          "code": "reservations",
+          "label": "活动预约",
+          "route": "/staff/reservations",
+          "sortOrder": 10
+        }
+      ],
+      "approvalLimits": []
+    }
+  ],
+  "employees": [
+    {
+      "code": "chenfangyu",
+      "name": "陈方宇",
+      "roleCodes": [
+        "OWNER"
+      ],
+      "pinEnv": "MBOX_EMPLOYEE_PIN_CHENFANGYU"
+    },
+    {
+      "code": "hugu",
+      "name": "护古",
+      "roleCodes": [
+        "OPS_LEAD"
+      ],
+      "pinEnv": "MBOX_EMPLOYEE_PIN_HUGU"
+    },
+    {
+      "code": "wuya",
+      "name": "乌鸦",
+      "roleCodes": [
+        "ADMIN",
+        "MARKETING"
+      ],
+      "pinEnv": "MBOX_EMPLOYEE_PIN_WUYA"
+    },
+    {
+      "code": "tata",
+      "name": "挞挞",
+      "roleCodes": [
+        "DESIGN"
+      ],
+      "pinEnv": "MBOX_EMPLOYEE_PIN_TATA"
+    },
+    {
+      "code": "fuchunyu",
+      "name": "付淳羽",
+      "roleCodes": [
+        "STAGE_OPS"
+      ],
+      "pinEnv": "MBOX_EMPLOYEE_PIN_FUCHUNYU"
+    },
+    {
+      "code": "liyan",
+      "name": "李艳",
+      "roleCodes": [
+        "MANAGER",
+        "GREETER"
+      ],
+      "pinEnv": "MBOX_EMPLOYEE_PIN_LIYAN"
+    },
+    {
+      "code": "lengyanzhi",
+      "name": "冷言志",
+      "roleCodes": [
+        "DEPUT_MANAGER",
+        "BARTENDER"
+      ],
+      "pinEnv": "MBOX_EMPLOYEE_PIN_LENGYANZHI"
+    },
+    {
+      "code": "sanmu",
+      "name": "三沐",
+      "roleCodes": [
+        "CASHIER"
+      ],
+      "pinEnv": "MBOX_EMPLOYEE_PIN_SANMU"
+    },
+    {
+      "code": "tom",
+      "name": "Tom",
+      "roleCodes": [
+        "SERVER",
+        "GREETER"
+      ],
+      "pinEnv": "MBOX_EMPLOYEE_PIN_TOM"
+    },
+    {
+      "code": "jerry",
+      "name": "Jerry",
+      "roleCodes": [
+        "SERVER",
+        "GREETER"
+      ],
+      "pinEnv": "MBOX_EMPLOYEE_PIN_JERRY"
+    },
+    {
+      "code": "tyke",
+      "name": "Tyke",
+      "roleCodes": [
+        "SERVER",
+        "GREETER"
+      ],
+      "pinEnv": "MBOX_EMPLOYEE_PIN_TYKE"
+    },
+    {
+      "code": "shenliangliang",
+      "name": "申良良",
+      "roleCodes": [
+        "KITCHEN"
+      ],
+      "pinEnv": "MBOX_EMPLOYEE_PIN_SHENLIANGLIANG"
+    },
+    {
+      "code": "ajin",
+      "name": "阿金",
+      "roleCodes": [
+        "AUDIO_LIGHTING"
+      ],
+      "pinEnv": "MBOX_EMPLOYEE_PIN_AJIN"
+    }
+  ]
+}

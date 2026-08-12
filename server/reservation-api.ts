@@ -303,7 +303,7 @@ function requireSeparateRefundApprover(
 export function registerReservationRoutes(app: FastifyInstance, repository: RuntimeRepository) {
   app.get('/api/reservations', async (request) => {
     const query = listQuerySchema.parse(request.query)
-    const state = await repository.read() as RuntimeStateWithReservations
+    const state = (request.mboxAuthState ?? await repository.read()) as RuntimeStateWithReservations
     requireConfiguredOperation(request, state, 'reservation.view')
     const domain = reservationsFor(state)
     const reservations = domain.reservations.filter((item) => item.sourceCode !== 'walk_in')

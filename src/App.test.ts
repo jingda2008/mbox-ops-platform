@@ -85,12 +85,30 @@ describe('bootstrap polling', () => {
     lifecycle.dispatch('visibilitychange')
     expect(callbacks.size).toBe(0)
     visible = true
-    lifecycle.dispatch('pageshow')
+    lifecycle.dispatch('pageshow', { persisted: true } as PageTransitionEvent)
     expect(refresh).toHaveBeenCalledTimes(2)
     await flushPromises()
 
     stop()
     expect(lifecycle.listenerCount()).toBe(0)
+  })
+
+  it('does not duplicate bootstrap on a normal initial pageshow', async () => {
+    const refresh = vi.fn().mockResolvedValue(true)
+    const lifecycle = createLifecycleTarget()
+    const stop = startBootstrapPolling(true, refresh, {
+      isOnline: () => true,
+      isVisible: () => true,
+      schedule: vi.fn(() => 1),
+      cancel: vi.fn(),
+      visibilityTarget: lifecycle,
+      pageShowTarget: lifecycle,
+    })
+
+    lifecycle.dispatch('pageshow', { persisted: false } as PageTransitionEvent)
+    await flushPromises()
+    expect(refresh).toHaveBeenCalledTimes(1)
+    stop()
   })
 
   it('keeps one refresh in flight when foreground signals repeat', async () => {
@@ -107,7 +125,7 @@ describe('bootstrap polling', () => {
       visibilityTarget: lifecycle,
       pageShowTarget: lifecycle,
     })
-    lifecycle.dispatch('pageshow')
+    lifecycle.dispatch('pageshow', { persisted: true } as PageTransitionEvent)
     lifecycle.dispatch('visibilitychange')
     expect(refresh).toHaveBeenCalledTimes(1)
 
@@ -138,19 +156,19 @@ describe('bootstrap polling', () => {
 })
 
 function createLifecycleTarget() {
-  const listeners = new Map<string, Set<() => void>>()
+  const listeners = new Map<string, Set<(event: Event) => void>>()
   return {
     addEventListener(type: string, listener: EventListenerOrEventListenerObject) {
-      const callback = listener as () => void
-      const current = listeners.get(type) ?? new Set<() => void>()
+      const callback = listener as (event: Event) => void
+      const current = listeners.get(type) ?? new Set<(event: Event) => void>()
       current.add(callback)
       listeners.set(type, current)
     },
     removeEventListener(type: string, listener: EventListenerOrEventListenerObject) {
-      listeners.get(type)?.delete(listener as () => void)
+      listeners.get(type)?.delete(listener as (event: Event) => void)
     },
-    dispatch(type: string) {
-      for (const listener of listeners.get(type) ?? []) listener()
+    dispatch(type: string, event: Event = new Event(type)) {
+      for (const listener of listeners.get(type) ?? []) listener(event)
     },
     listenerCount() {
       return [...listeners.values()].reduce((total, current) => total + current.size, 0)

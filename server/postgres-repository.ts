@@ -1,8 +1,23 @@
 import { createHash } from 'node:crypto'
 import type { Pool as PgPool } from 'pg'
 import type { RuntimeState } from '../src/shared/contracts.js'
+import type { RuntimeStaffDirectorySnapshot } from './repository.js'
 import { migrateRuntimeState } from './runtime-state-migrations.js'
-import type { RuntimeStateProjector } from './operational-projection.js'
+import type {
+  OperationalProjectionEntityIds,
+  OperationalProjectionTable,
+  RuntimeStateProjector,
+} from './operational-projection.js'
+import {
+  authoritativeKdsTask,
+  inferKdsCommandOccurredAt,
+  installAuthoritativeKdsTask,
+  kdsAuthorityEventId,
+  kdsAuthorityEventPayload,
+  kdsRequestHash,
+  type KdsAuthorityCommand,
+  type NormalizedKdsAuthorityRow,
+} from './kds-authoritative-transaction.js'
 
 export interface PostgresQueryResult<Row extends Record<string, unknown> = Record<string, unknown>> {
   rows: Row[]
@@ -14,6 +29,8 @@ export interface PostgresPoolClient {
     text: string,
     values?: unknown[],
   ): Promise<PostgresQueryResult<Row>>
+  on?(event: 'error', listener: (error: Error) => void): PostgresPoolClient
+  removeListener?(event: 'error', listener: (error: Error) => void): PostgresPoolClient
   release(error?: Error | boolean): void
 }
 
@@ -23,10 +40,58 @@ export interface PostgresPool {
   totalCount?: number
   idleCount?: number
   waitingCount?: number
+  metricsSnapshot?(): PostgresPoolMetrics
+  resetMetrics?(): void
+}
+
+export interface PostgresPoolMetrics {
+  acquisitionCount: number
+  acquisitionFailedTotal: number
+  acquisitionWaitP50Ms: number
+  acquisitionWaitP95Ms: number
+  acquisitionWaitP99Ms: number
 }
 
 export function asPostgresPool(pool: PgPool): PostgresPool {
-  return pool
+  const waits: number[] = []
+  let acquisitionCount = 0
+  let acquisitionFailedTotal = 0
+  const percentile = (fraction: number) => {
+    if (waits.length === 0) return 0
+    const ordered = waits.toSorted((left, right) => left - right)
+    return ordered[Math.min(ordered.length - 1, Math.ceil(ordered.length * fraction) - 1)] ?? 0
+  }
+  return {
+    connect: async () => {
+      const startedAt = performance.now()
+      try {
+        const client = await pool.connect()
+        acquisitionCount += 1
+        waits.push(Math.max(0, performance.now() - startedAt))
+        if (waits.length > 2_048) waits.splice(0, waits.length - 2_048)
+        return client
+      } catch (error) {
+        acquisitionFailedTotal += 1
+        throw error
+      }
+    },
+    end: () => pool.end(),
+    get totalCount() { return pool.totalCount },
+    get idleCount() { return pool.idleCount },
+    get waitingCount() { return pool.waitingCount },
+    metricsSnapshot: () => ({
+      acquisitionCount,
+      acquisitionFailedTotal,
+      acquisitionWaitP50Ms: percentile(0.5),
+      acquisitionWaitP95Ms: percentile(0.95),
+      acquisitionWaitP99Ms: percentile(0.99),
+    }),
+    resetMetrics: () => {
+      waits.length = 0
+      acquisitionCount = 0
+      acquisitionFailedTotal = 0
+    },
+  }
 }
 
 export interface PostgresTenantContext {
@@ -42,8 +107,13 @@ export interface PostgresMutationIdempotency {
   lockMs?: number
 }
 
-export interface PostgresMutationOptions {
+export interface PostgresMutationOptions<T = unknown> {
   idempotency?: PostgresMutationIdempotency
+  projectionTables?: OperationalProjectionTable[]
+  projectionEntityIds?: (result: T) => OperationalProjectionEntityIds
+  metricLabel?: 'kds' | 'scheduler' | 'other'
+  minimumGlobalIdleMs?: number
+  authoritativeKds?: KdsAuthorityCommand
 }
 
 export interface PostgresRepositoryOptions extends PostgresTenantContext {
@@ -53,6 +123,7 @@ export interface PostgresRepositoryOptions extends PostgresTenantContext {
   defaultIdempotencyTtlMs?: number
   defaultIdempotencyLockMs?: number
   healthCheckTimeoutMs?: number
+  maxDatabaseClockSkewMs?: number
   readCacheValidationTtlMs?: number
   maxPendingMutations?: number
   mutationQueueTimeoutMs?: number
@@ -69,20 +140,70 @@ export interface PostgresRepositoryHealth {
     total: number | null
     idle: number | null
     waiting: number | null
+    acquisitionCount: number
+    acquisitionFailedTotal: number
+    acquisitionWaitP50Ms: number
+    acquisitionWaitP95Ms: number
+    acquisitionWaitP99Ms: number
   }
   mutationQueue: {
     pending: number
+    highWatermark: number
     active: boolean
     maxPending: number
+    rejectedTotal: number
+    timeoutTotal: number
+    waitSamples: number
+    waitP95Ms: number
+    waitP99Ms: number
+    waitMaxMs: number
+    serviceSamples: number
+    serviceP95Ms: number
+    serviceP99Ms: number
+    serviceMaxMs: number
+    revisionLockP95Ms: number
+    revisionLockMaxMs: number
+    cloneP95Ms: number
+    cloneMaxMs: number
+    domainP95Ms: number
+    domainMaxMs: number
+    serializationP95Ms: number
+    serializationMaxMs: number
+    stateWriteP95Ms: number
+    stateWriteMaxMs: number
+    projectionP95Ms: number
+    projectionMaxMs: number
+    sourceSamples: Record<'kds' | 'scheduler' | 'other', number>
+    sourceWaitP95Ms: Record<'kds' | 'scheduler' | 'other', number>
+    sourceWaitP99Ms: Record<'kds' | 'scheduler' | 'other', number>
+    sourceServiceP95Ms: Record<'kds' | 'scheduler' | 'other', number>
+    sourceAttempted: Record<'kds' | 'scheduler' | 'other', number>
+    sourceAcquired: Record<'kds' | 'scheduler' | 'other', number>
+    sourceCompleted: Record<'kds' | 'scheduler' | 'other', number>
+    sourceFailedAfterAcquire: Record<'kds' | 'scheduler' | 'other', number>
+    sourceRejected: Record<'kds' | 'scheduler' | 'other', number>
+    sourceTimeout: Record<'kds' | 'scheduler' | 'other', number>
+    initialSerializedStateBytes: number
+    serializedStateBytes: number
+    maxSerializedStateBytes: number
   }
   error?: string
   projectionReady?: boolean
   projectionRevision?: number | null
   projectionCountsMatch?: boolean
+  projectionChecksumMatch?: boolean
+  kdsAuthorityConsistent?: boolean
   projectionError?: string
+  databaseClockSkewMs: number
 }
 
 export class PostgresRepositoryError extends Error {}
+
+export class PostgresMutationNotIdleError extends PostgresRepositoryError {
+  constructor() {
+    super('A foreground mutation is active or the global quiet window has not elapsed')
+  }
+}
 
 export class PostgresRepositoryClosedError extends PostgresRepositoryError {
   constructor() {
@@ -185,6 +306,20 @@ interface RuntimeStateRow extends Record<string, unknown> {
   revision: number | string
   state: RuntimeState | string
   state_sha256: string
+  state_checksum_algorithm: string
+  checksum_valid?: boolean
+}
+
+export const APP_CANONICAL_STATE_CHECKSUM_ALGORITHM = 'app-canonical-json-sha256-v1' as const
+export const POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM = 'pg-jsonb-text-sha256-v1' as const
+export type RuntimeStateChecksumAlgorithm =
+  | typeof APP_CANONICAL_STATE_CHECKSUM_ALGORITHM
+  | typeof POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM
+
+interface LoadedRuntimeState {
+  state: RuntimeState
+  checksum: string
+  checksumAlgorithm: RuntimeStateChecksumAlgorithm
 }
 
 interface IdempotencyRow extends Record<string, unknown> {
@@ -199,15 +334,27 @@ interface IdempotencyEnvelope<T> {
   value: T | null
 }
 
+interface StaffDirectoryRow extends Record<string, unknown> {
+  revision: number | string
+  store_id: string
+  business_date: string
+  employees: unknown
+}
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const OPERATION_SCOPE_PATTERN = /^[a-z][a-z0-9_.-]{2,127}$/
 const DEFAULT_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000
 const DEFAULT_IDEMPOTENCY_LOCK_MS = 30 * 1000
 const DEFAULT_HEALTH_CHECK_TIMEOUT_MS = 2_000
+const DEFAULT_MAX_DATABASE_CLOCK_SKEW_MS = 5_000
 const DEFAULT_READ_CACHE_VALIDATION_TTL_MS = 3_000
 
 const SQL = {
-  beginRead: 'BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY',
+  // Repository reads often compare the aggregate revision with a normalized
+  // projection in a later statement. A repeatable snapshot prevents a
+  // concurrent writer from making those two statements observe different
+  // commits and incorrectly reporting the service as not ready.
+  beginRead: 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY',
   beginWrite: 'BEGIN ISOLATION LEVEL READ COMMITTED',
   commit: 'COMMIT',
   rollback: 'ROLLBACK',
@@ -218,24 +365,38 @@ const SQL = {
   `,
   setStatementTimeout: `SELECT set_config('statement_timeout', $1, true) AS statement_timeout`,
   schemaCheck: `
-    SELECT n.nspname || '.' || c.relname AS table_name
+    SELECT n.nspname || '.' || c.relname AS table_name,
+      EXISTS (
+        SELECT 1 FROM information_schema.columns column_info
+        WHERE column_info.table_schema = 'mbox'
+          AND column_info.table_name = 'runtime_states'
+          AND column_info.column_name = 'state_checksum_algorithm'
+      ) AS checksum_algorithm_ready
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'mbox' AND c.relname = 'runtime_states' AND c.relkind = 'r'
   `,
   seedState: `
     INSERT INTO mbox.runtime_states (
-      tenant_id, store_id, revision, state, state_sha256
-    ) VALUES ($1::uuid, $2::uuid, $3::bigint, $4::jsonb, $5)
+      tenant_id, store_id, revision, state, state_sha256, state_checksum_algorithm
+    ) VALUES (
+      $1::uuid, $2::uuid, $3::bigint, $4::jsonb,
+      encode(sha256(convert_to(($4::jsonb)::text, 'UTF8')), 'hex'),
+      'pg-jsonb-text-sha256-v1'
+    )
     ON CONFLICT (tenant_id, store_id) DO NOTHING
   `,
   selectState: `
-    SELECT revision, state, state_sha256
+    SELECT revision, state, state_sha256, state_checksum_algorithm,
+      state_checksum_algorithm = 'pg-jsonb-text-sha256-v1'
+        AND state_sha256 = encode(sha256(convert_to(state::text, 'UTF8')), 'hex') AS checksum_valid
     FROM mbox.runtime_states
     WHERE tenant_id = $1::uuid AND store_id = $2::uuid
   `,
   selectStateForUpdate: `
-    SELECT revision, state, state_sha256
+    SELECT revision, state, state_sha256, state_checksum_algorithm,
+      state_checksum_algorithm = 'pg-jsonb-text-sha256-v1'
+        AND state_sha256 = encode(sha256(convert_to(state::text, 'UTF8')), 'hex') AS checksum_valid
     FROM mbox.runtime_states
     WHERE tenant_id = $1::uuid AND store_id = $2::uuid
     FOR UPDATE
@@ -246,8 +407,35 @@ const SQL = {
     WHERE tenant_id = $1::uuid AND store_id = $2::uuid
     FOR UPDATE
   `,
+  selectRevisionAndIdleForUpdate: `
+    SELECT
+      revision,
+      EXTRACT(EPOCH FROM (clock_timestamp() - updated_at)) * 1000 AS idle_ms
+    FROM mbox.runtime_states
+    WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+    FOR UPDATE
+  `,
   selectRevision: `
     SELECT revision
+    FROM mbox.runtime_states
+    WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+  `,
+  selectMutationIdle: `
+    SELECT EXTRACT(EPOCH FROM (clock_timestamp() - updated_at)) * 1000 AS idle_ms
+    FROM mbox.runtime_states
+    WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+  `,
+  selectStaffDirectory: `
+    SELECT
+      revision,
+      state #>> '{store,id}' AS store_id,
+      state #>> '{store,businessDate}' AS business_date,
+      COALESCE(state -> 'employees', '[]'::jsonb) AS employees
+    FROM mbox.runtime_states
+    WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+  `,
+  selectHealth: `
+    SELECT revision, clock_timestamp() AS database_now
     FROM mbox.runtime_states
     WHERE tenant_id = $1::uuid AND store_id = $2::uuid
   `,
@@ -255,12 +443,13 @@ const SQL = {
     UPDATE mbox.runtime_states
     SET revision = $3::bigint,
         state = $4::jsonb,
-        state_sha256 = $5,
+        state_sha256 = encode(sha256(convert_to(($4::jsonb)::text, 'UTF8')), 'hex'),
+        state_checksum_algorithm = 'pg-jsonb-text-sha256-v1',
         updated_at = clock_timestamp()
     WHERE tenant_id = $1::uuid
       AND store_id = $2::uuid
-      AND revision = $6::bigint
-    RETURNING revision
+      AND revision = $5::bigint
+    RETURNING revision, state_sha256, state_checksum_algorithm
   `,
   insertIdempotency: `
     INSERT INTO mbox.idempotency_records (
@@ -299,6 +488,45 @@ const SQL = {
       AND operation_scope = $3
       AND idempotency_key = $4
   `,
+  selectAuthoritativeKdsForUpdate: `
+    SELECT source_id, status, payload, snapshot_revision
+    FROM mbox.operational_kds_tasks
+    WHERE tenant_id = $1::uuid
+      AND store_id = $2::uuid
+      AND source_id = $3
+    FOR UPDATE
+  `,
+  insertKdsAuthorityEvent: `
+    WITH inserted AS (
+      INSERT INTO mbox.operational_kds_task_events (
+        tenant_id, store_id, source_event_id, kds_task_id,
+        operation_scope, event_type, from_status, to_status,
+        actor_id, idempotency_key, request_sha256, request_id,
+        occurred_at, business_date, runtime_revision, payload
+      ) VALUES (
+        $1::uuid, $2::uuid, $3, $4,
+        $5, $6, $7, $8,
+        $9, $10, $11, $12,
+        $13::timestamptz, $14::date, $15::bigint, $16::jsonb
+      )
+      ON CONFLICT (tenant_id, store_id, operation_scope, idempotency_key) DO NOTHING
+      RETURNING source_event_id
+    )
+    SELECT source_event_id FROM inserted
+    UNION ALL
+    SELECT source_event_id
+    FROM mbox.operational_kds_task_events
+    WHERE tenant_id = $1::uuid
+      AND store_id = $2::uuid
+      AND operation_scope = $5
+      AND idempotency_key = $10
+      AND source_event_id = $3
+      AND kds_task_id = $4
+      AND event_type = $6
+      AND actor_id = $9
+      AND request_sha256 = $11
+    LIMIT 1
+  `,
 } as const
 
 export class PostgresRepository {
@@ -310,6 +538,7 @@ export class PostgresRepository {
   private readonly defaultIdempotencyTtlMs: number
   private readonly defaultIdempotencyLockMs: number
   private readonly healthCheckTimeoutMs: number
+  private readonly maxDatabaseClockSkewMs: number
   private readonly readCacheValidationTtlMs: number
   private readonly maxPendingMutations: number
   private readonly mutationQueueTimeoutMs: number
@@ -324,7 +553,44 @@ export class PostgresRepository {
   private cacheValidatedAt = 0
   private mutationTail: Promise<void> = Promise.resolve()
   private pendingMutations = 0
+  private mutationQueueHighWatermark = 0
   private activeMutations = 0
+  private lastMutationCompletedAt = 0
+  private mutationQueueRejectedTotal = 0
+  private mutationQueueTimeoutTotal = 0
+  private readonly mutationQueueWaits: number[] = []
+  private readonly mutationServiceDurations: number[] = []
+  private readonly mutationRevisionLockDurations: number[] = []
+  private readonly mutationCloneDurations: number[] = []
+  private readonly mutationDomainDurations: number[] = []
+  private readonly mutationSerializationDurations: number[] = []
+  private readonly mutationStateWriteDurations: number[] = []
+  private readonly mutationProjectionDurations: number[] = []
+  private readonly mutationWaitBySource = new Map<'kds' | 'scheduler' | 'other', number[]>([
+    ['kds', []],
+    ['scheduler', []],
+    ['other', []],
+  ])
+  private readonly mutationServiceBySource = new Map<'kds' | 'scheduler' | 'other', number[]>([
+    ['kds', []],
+    ['scheduler', []],
+    ['other', []],
+  ])
+  private readonly mutationSourceCounters = new Map<'kds' | 'scheduler' | 'other', {
+    attempted: number
+    acquired: number
+    completed: number
+    failedAfterAcquire: number
+    rejected: number
+    timeout: number
+  }>([
+    ['kds', { attempted: 0, acquired: 0, completed: 0, failedAfterAcquire: 0, rejected: 0, timeout: 0 }],
+    ['scheduler', { attempted: 0, acquired: 0, completed: 0, failedAfterAcquire: 0, rejected: 0, timeout: 0 }],
+    ['other', { attempted: 0, acquired: 0, completed: 0, failedAfterAcquire: 0, rejected: 0, timeout: 0 }],
+  ])
+  private initialSerializedStateBytes: number | null = null
+  private serializedStateBytes = 0
+  private maxSerializedStateBytes = 0
 
   constructor(options: PostgresRepositoryOptions) {
     assertUuid('tenantId', options.tenantId)
@@ -345,6 +611,10 @@ export class PostgresRepository {
     this.healthCheckTimeoutMs = positiveInteger(
       'healthCheckTimeoutMs',
       options.healthCheckTimeoutMs ?? DEFAULT_HEALTH_CHECK_TIMEOUT_MS,
+    )
+    this.maxDatabaseClockSkewMs = positiveInteger(
+      'maxDatabaseClockSkewMs',
+      options.maxDatabaseClockSkewMs ?? DEFAULT_MAX_DATABASE_CLOCK_SKEW_MS,
     )
     this.readCacheValidationTtlMs = positiveInteger(
       'readCacheValidationTtlMs',
@@ -395,16 +665,56 @@ export class PostgresRepository {
   async readFresh(): Promise<RuntimeState> {
     const loaded = await this.track(() => this.withTransaction(true, async (client) => this.loadState(client)))
     if (!this.cachedState || loaded.revision >= this.cachedState.revision) {
-      this.cachedState = structuredClone(loaded)
+      this.cachedState = loaded
     }
     this.cacheValidatedAt = Date.now()
     return structuredClone(this.cachedState)
   }
 
+  async readRevision(): Promise<number> {
+    return this.track(() => this.withTransaction(true, async (client) => {
+      const result = await client.query<{ revision: number | string }>(SQL.selectRevision, [this.tenantId, this.storeId])
+      if (result.rowCount !== 1 || !result.rows[0]) throw new PostgresRuntimeStateNotInitializedError()
+      return parseRevision(result.rows[0].revision)
+    }))
+  }
+
+  async readStaffDirectory(): Promise<RuntimeStaffDirectorySnapshot> {
+    return this.track(() => this.withTransaction(true, async (client) => {
+      const result = await client.query<StaffDirectoryRow>(SQL.selectStaffDirectory, [this.tenantId, this.storeId])
+      const row = result.rows[0]
+      if (result.rowCount !== 1 || !row) throw new PostgresRuntimeStateNotInitializedError()
+      const rawEmployees = typeof row.employees === 'string' ? JSON.parse(row.employees) : row.employees
+      if (!Array.isArray(rawEmployees)) throw new PostgresStateCorruptionError('Staff directory employees must be an array')
+      const employees = rawEmployees.map((employee, index) => {
+        if (!employee || typeof employee !== 'object') {
+          throw new PostgresStateCorruptionError(`Staff directory employee ${index} is invalid`)
+        }
+        const candidate = employee as Record<string, unknown>
+        if (typeof candidate.id !== 'string' || typeof candidate.roleId !== 'string' || typeof candidate.status !== 'string') {
+          throw new PostgresStateCorruptionError(`Staff directory employee ${index} is incomplete`)
+        }
+        return { id: candidate.id, roleId: candidate.roleId, status: candidate.status }
+      })
+      if (typeof row.store_id !== 'string' || typeof row.business_date !== 'string') {
+        throw new PostgresStateCorruptionError('Staff directory store identity is incomplete')
+      }
+      return {
+        storeId: row.store_id,
+        businessDate: row.business_date,
+        revision: parseRevision(row.revision),
+        employees,
+      }
+    }))
+  }
+
   async mutate<T>(
     mutation: (state: RuntimeState) => T | Promise<T>,
-    options: PostgresMutationOptions = {},
+    options: PostgresMutationOptions<T> = {},
   ): Promise<T> {
+    if (options.authoritativeKds && !options.idempotency) {
+      throw new TypeError('authoritativeKds requires repository idempotency')
+    }
     return this.track(() => this.enqueueMutation(async () => {
       let stateChanged = false
       let committedState: RuntimeState | null = null
@@ -414,40 +724,150 @@ export class PostgresRepository {
           : null
         if (replay?.replayed) return replay.value as T
 
+        const mutationGateName = `mbox:${this.tenantId}:${this.storeId}:foreground-mutation-gate`
+        const requiredIdleMs = options.minimumGlobalIdleMs === undefined
+          ? null
+          : Math.max(0, options.minimumGlobalIdleMs)
+        if (requiredIdleMs === null) {
+          await client.query('SELECT pg_advisory_xact_lock_shared(hashtextextended($1, 0))', [mutationGateName])
+        } else {
+          const gate = await client.query<{ acquired: boolean }>(
+            'SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0)) AS acquired',
+            [mutationGateName],
+          )
+          if (gate.rows[0]?.acquired !== true) throw new PostgresMutationNotIdleError()
+        }
+
         // Lock only the lightweight revision first. If this process already has
         // the same verified revision, avoid fetching and parsing the 1MB+ state
         // document again before every serialized write.
-        const locked = await client.query<{ revision: number | string }>(SQL.selectRevisionForUpdate, [
-          this.tenantId,
-          this.storeId,
-        ])
+        const revisionLockStartedAt = performance.now()
+        const locked = requiredIdleMs === null
+          ? await client.query<{ revision: number | string }>(SQL.selectRevisionForUpdate, [this.tenantId, this.storeId])
+          : await client.query<{ revision: number | string; idle_ms: number | string }>(
+            SQL.selectRevisionAndIdleForUpdate,
+            [this.tenantId, this.storeId],
+          )
+        this.recordMutationMetric(this.mutationRevisionLockDurations, performance.now() - revisionLockStartedAt)
         if (locked.rowCount !== 1 || !locked.rows[0]) throw new PostgresRuntimeStateNotInitializedError()
-        const expectedRevision = parseRevision(locked.rows[0].revision)
+        const lockedRow = locked.rows[0] as { revision: number | string; idle_ms?: number | string }
+        if (requiredIdleMs !== null) {
+          const idleMs = Number(lockedRow.idle_ms)
+          if (!Number.isFinite(idleMs) || idleMs < requiredIdleMs) throw new PostgresMutationNotIdleError()
+        }
+        const expectedRevision = parseRevision(lockedRow.revision)
+        // cachedState is never exposed directly. The mutation receives its own
+        // clone below, so cloning the verified cache once more only adds CPU
+        // and event-loop pressure on every hot write.
         const current = this.cachedState?.revision === expectedRevision
-          ? structuredClone(this.cachedState)
+          ? this.cachedState
           : await this.loadState(client)
-        const workingCopy = structuredClone(current)
+        const cloneStartedAt = performance.now()
+        const workingCopy = parseState(current)
+        let authoritativeBefore: ReturnType<typeof authoritativeKdsTask> | null = null
+        if (options.authoritativeKds) {
+          const authorityResult = await client.query<NormalizedKdsAuthorityRow>(
+            SQL.selectAuthoritativeKdsForUpdate,
+            [this.tenantId, this.storeId, options.authoritativeKds.taskId],
+          )
+          const authorityRow = authorityResult.rows[0]
+          if (authorityResult.rowCount !== 1 || !authorityRow) {
+            throw new PostgresStateCorruptionError('KDS规范化权威行不存在')
+          }
+          const authorityRevision = parseRevision(authorityRow.snapshot_revision)
+          if (authorityRevision > expectedRevision) {
+            throw new PostgresStateCorruptionError('KDS规范化权威行修订超过兼容镜像修订')
+          }
+          authoritativeBefore = structuredClone(installAuthoritativeKdsTask(
+            workingCopy,
+            authorityRow,
+            options.authoritativeKds.taskId,
+          ))
+        }
+        this.recordMutationMetric(this.mutationCloneDurations, performance.now() - cloneStartedAt)
+        // End the clone turn before canonical serialization. Otherwise both
+        // CPU stages can combine into one long event-loop stall.
+        await yieldToEventLoop()
+        const domainStartedAt = performance.now()
         const result = await mutation(workingCopy)
+        this.recordMutationMetric(this.mutationDomainDurations, performance.now() - domainStartedAt)
 
         if (workingCopy.revision !== expectedRevision) {
           if (!Number.isSafeInteger(workingCopy.revision) || workingCopy.revision <= expectedRevision) {
             throw new PostgresInvalidRevisionError(expectedRevision, workingCopy.revision)
           }
-          const serialized = serializeJson(workingCopy, 'runtime state')
-          const update = await client.query<{ revision: number | string }>(SQL.compareAndSwapState, [
+          const serializationStartedAt = performance.now()
+          const serialized = serializeRuntimeStatePayload(workingCopy)
+          this.recordSerializedStateSize(Buffer.byteLength(serialized))
+          this.recordMutationMetric(this.mutationSerializationDurations, performance.now() - serializationStartedAt)
+          // Yield between JSON serialization and the large PostgreSQL write so
+          // request feedback is not blocked by two consecutive CPU-heavy steps.
+          await yieldToEventLoop()
+          const stateWriteStartedAt = performance.now()
+          const update = await client.query<{
+            revision: number | string
+            state_sha256: string
+            state_checksum_algorithm: RuntimeStateChecksumAlgorithm
+          }>(SQL.compareAndSwapState, [
             this.tenantId,
             this.storeId,
             workingCopy.revision,
             serialized,
-            sha256(serialized),
             expectedRevision,
           ])
+          this.recordMutationMetric(this.mutationStateWriteDurations, performance.now() - stateWriteStartedAt)
           if (update.rowCount !== 1) throw new PostgresOptimisticConcurrencyError(expectedRevision)
+          const stateSha256 = update.rows[0]?.state_sha256?.trim()
+          if (!stateSha256) throw new PostgresStateCorruptionError('PostgreSQL did not return the runtime state checksum')
+          const stateChecksumAlgorithm = parseStateChecksumAlgorithm(update.rows[0]?.state_checksum_algorithm)
           if (this.projector) {
-            await this.projector.project(client, this.tenantContext(), current, workingCopy)
+            const projectionStartedAt = performance.now()
+            await this.projector.project(
+              client,
+              this.tenantContext(),
+              current,
+              workingCopy,
+              options.projectionTables,
+              stateSha256,
+              stateChecksumAlgorithm,
+              options.projectionEntityIds?.(result),
+            )
+            this.recordMutationMetric(this.mutationProjectionDurations, performance.now() - projectionStartedAt)
           }
           stateChanged = true
-          committedState = structuredClone(workingCopy)
+          // Recreate the cache from the exact committed payload. A domain
+          // callback may retain its working object, so caching that same object
+          // would allow post-commit mutations to diverge from PostgreSQL.
+          committedState = parseDatabaseState(serialized)
+        }
+
+        if (options.authoritativeKds && authoritativeBefore && options.idempotency) {
+          const after = authoritativeKdsTask(workingCopy, options.authoritativeKds.taskId)
+          const occurredAt = canonicalKdsOccurredAt(authoritativeBefore, after, this.clock)
+          const inserted = await client.query(SQL.insertKdsAuthorityEvent, [
+            this.tenantId,
+            this.storeId,
+            kdsAuthorityEventId(options.idempotency.operationScope, options.idempotency.idempotencyKey),
+            after.id,
+            options.idempotency.operationScope,
+            options.authoritativeKds.eventType,
+            authoritativeBefore.status,
+            after.status,
+            options.authoritativeKds.actorId,
+            options.idempotency.idempotencyKey,
+            kdsRequestHash(options.idempotency.requestFingerprint),
+            options.authoritativeKds.requestId ?? null,
+            occurredAt,
+            workingCopy.store.businessDate,
+            workingCopy.revision,
+            JSON.stringify({
+              ...kdsAuthorityEventPayload(authoritativeBefore, after),
+              stateChanged: workingCopy.revision !== expectedRevision,
+            }),
+          ])
+          if (inserted.rowCount !== 1) {
+            throw new PostgresStateCorruptionError('KDS规范化事件未能唯一写入')
+          }
         }
 
         if (options.idempotency) {
@@ -459,8 +879,93 @@ export class PostgresRepository {
         this.cachedState = committedState
         this.cacheValidatedAt = Date.now()
       }
-      return result
+      return stateChanged ? structuredClone(result) : result
+    }, options.metricLabel ?? 'other'))
+  }
+
+  async waitForMutationIdle(idleMs: number, maxWaitMs: number) {
+    const normalizedIdleMs = Math.max(0, idleMs)
+    const deadline = performance.now() + Math.max(0, maxWaitMs)
+    while (true) {
+      const now = performance.now()
+      if (this.pendingMutations === 0 && this.activeMutations === 0 && now - this.lastMutationCompletedAt >= normalizedIdleMs) {
+        break
+      }
+      if (now >= deadline) return false
+      const remainingIdle = Math.max(1, normalizedIdleMs - (now - this.lastMutationCompletedAt))
+      const remainingDeadline = Math.max(1, deadline - now)
+      await new Promise((resolve) => setTimeout(resolve, Math.min(25, remainingIdle, remainingDeadline)))
+    }
+    if (normalizedIdleMs === 0) return true
+
+    // Local queue state is insufficient with more than one API instance. A
+    // sibling can still hold or have just released the aggregate row lock.
+    // The row timestamp is the shared source of truth for the last committed
+    // mutation across the store.
+    return this.track(() => this.withTransaction(true, async (client) => {
+      const result = await client.query<{ idle_ms: number | string }>(SQL.selectMutationIdle, [
+        this.tenantId,
+        this.storeId,
+      ])
+      const value = result.rows[0]?.idle_ms
+      if (result.rowCount !== 1 || value === undefined) throw new PostgresRuntimeStateNotInitializedError()
+      const globalIdleMs = typeof value === 'number' ? value : Number(value)
+      return Number.isFinite(globalIdleMs) && globalIdleMs >= normalizedIdleMs
     }))
+  }
+
+  async runWithDistributedLease<T>(name: string, operation: () => Promise<T>) {
+    return this.track(async () => {
+      const client = await this.pool.connect()
+      const leaseName = `mbox:${this.tenantId}:${this.storeId}:${name}`
+      let connectionError: Error | undefined
+      const captureConnectionError = (error: Error) => {
+        connectionError ??= error
+      }
+      client.on?.('error', captureConnectionError)
+      let acquired: boolean
+      try {
+        const result = await client.query<{ acquired: boolean }>(
+          'SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS acquired',
+          [leaseName],
+        )
+        acquired = result.rows[0]?.acquired === true
+      } catch (error) {
+        client.release(error instanceof Error ? error : true)
+        throw error
+      }
+      if (!acquired) {
+        client.removeListener?.('error', captureConnectionError)
+        client.release()
+        return { acquired: false }
+      }
+
+      let value: T | undefined
+      let operationError: unknown
+      try {
+        value = await operation()
+      } catch (error) {
+        operationError = error
+      }
+
+      let unlockError: unknown
+      if (connectionError !== undefined) {
+        unlockError = connectionError
+      } else {
+        try {
+          await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [leaseName])
+        } catch (error) {
+          unlockError = error
+        }
+      }
+      // A session advisory lock survives until this connection closes. Never
+      // return a client with an uncertain lock state to the shared pool.
+      if (unlockError === undefined) client.removeListener?.('error', captureConnectionError)
+      client.release(unlockError instanceof Error ? unlockError : unlockError ? true : undefined)
+      if (operationError !== undefined) throw operationError
+      if (unlockError !== undefined) throw unlockError
+      return { acquired: true, value: value as T }
+    })
   }
 
   async reset(): Promise<RuntimeState> {
@@ -480,30 +985,40 @@ export class PostgresRepository {
     try {
       const health = await this.track(() => this.withTransaction(true, async (client) => {
         await client.query(SQL.setStatementTimeout, [`${this.healthCheckTimeoutMs}ms`])
-        const result = await client.query<{ revision: number | string }>(SQL.selectRevision, [
+        const appClockBefore = this.clock().getTime()
+        const result = await client.query<{ revision: number | string; database_now: string | Date }>(SQL.selectHealth, [
           this.tenantId,
           this.storeId,
         ])
+        const appClockAfter = this.clock().getTime()
         if (result.rowCount !== 1 || !result.rows[0]) {
           throw new PostgresRuntimeStateNotInitializedError()
         }
         const revision = parseRevision(result.rows[0].revision)
+        const databaseNow = new Date(result.rows[0].database_now).getTime()
+        if (!Number.isFinite(databaseNow)) throw new Error('PostgreSQL未返回有效数据库时间')
+        const databaseClockSkewMs = Math.abs(databaseNow - ((appClockBefore + appClockAfter) / 2))
         const projection = this.projector
           ? await this.projector.healthCheck(client, this.tenantContext(), revision)
           : null
-        return { revision, projection }
+        return { revision, projection, databaseClockSkewMs }
       }))
+      const clocksSynchronized = health.databaseClockSkewMs <= this.maxDatabaseClockSkewMs
+      const projectionReady = health.projection?.ready ?? true
       return {
-        ready: health.projection?.ready ?? true,
+        ready: projectionReady && clocksSynchronized,
         repository: 'postgres',
-        healthy: health.projection?.ready ?? true,
+        healthy: projectionReady && clocksSynchronized,
         latencyMs: performance.now() - startedAt,
         revision: health.revision,
+        databaseClockSkewMs: health.databaseClockSkewMs,
         pool,
         mutationQueue: this.mutationQueueHealth(),
         projectionReady: health.projection?.ready,
         projectionRevision: health.projection?.projectedRevision,
         projectionCountsMatch: health.projection?.countsMatch,
+        projectionChecksumMatch: health.projection?.checksumMatch,
+        kdsAuthorityConsistent: health.projection?.kdsAuthorityConsistent,
         projectionError: health.projection?.error,
       }
     } catch (error) {
@@ -513,6 +1028,7 @@ export class PostgresRepository {
         healthy: false,
         latencyMs: performance.now() - startedAt,
         revision: null,
+        databaseClockSkewMs: -1,
         pool,
         mutationQueue: this.mutationQueueHealth(),
         error: error instanceof Error ? error.message : String(error),
@@ -538,10 +1054,10 @@ export class PostgresRepository {
   private async initialize(): Promise<void> {
     const client = await this.pool.connect()
     try {
-      const schema = await client.query<{ table_name: string | null }>(SQL.schemaCheck)
-      if (schema.rows[0]?.table_name !== 'mbox.runtime_states') {
+      const schema = await client.query<{ table_name: string | null; checksum_algorithm_ready: boolean }>(SQL.schemaCheck)
+      if (schema.rows[0]?.table_name !== 'mbox.runtime_states' || schema.rows[0]?.checksum_algorithm_ready !== true) {
         throw new PostgresSchemaError(
-          'mbox.runtime_states is missing; apply POSTGRES_RUNTIME_STATE_MIGRATION_SQL as the next database migration',
+          'mbox.runtime_states checksum schema is missing; apply all database migrations before starting the service',
         )
       }
     } finally {
@@ -552,21 +1068,28 @@ export class PostgresRepository {
       if (this.seedState) {
         const seed = this.seedState()
         assertRuntimeState(seed)
-        const serialized = serializeJson(seed, 'seed runtime state')
+        const serialized = serializeRuntimeStatePayload(seed)
         await transactionClient.query(SQL.seedState, [
           this.tenantId,
           this.storeId,
           seed.revision,
           serialized,
-          sha256(serialized),
         ])
       }
       // Serialize startup rebuilds with live writers. Without this row lock a
       // newly starting revision could project an older snapshot after a live
       // instance had already committed a newer one.
-      const state = await this.loadState(transactionClient, true)
+      const loaded = await this.loadStateRecord(transactionClient, true)
       if (this.projector) {
-        await this.projector.project(transactionClient, this.tenantContext(), null, state)
+        await this.projector.project(
+          transactionClient,
+          this.tenantContext(),
+          null,
+          loaded.state,
+          undefined,
+          loaded.checksum,
+          loaded.checksumAlgorithm,
+        )
       }
     })
   }
@@ -605,6 +1128,10 @@ export class PostgresRepository {
   }
 
   private async loadState(client: PostgresPoolClient, forUpdate = false): Promise<RuntimeState> {
+    return (await this.loadStateRecord(client, forUpdate)).state
+  }
+
+  private async loadStateRecord(client: PostgresPoolClient, forUpdate = false): Promise<LoadedRuntimeState> {
     const result = await client.query<RuntimeStateRow>(forUpdate ? SQL.selectStateForUpdate : SQL.selectState, [
       this.tenantId,
       this.storeId,
@@ -614,18 +1141,24 @@ export class PostgresRepository {
     }
 
     const row = result.rows[0]
-    const state = parseState(row.state)
+    const state = parseDatabaseState(row.state)
     const revision = parseRevision(row.revision)
     if (state.revision !== revision) {
       throw new PostgresStateCorruptionError(
         `Runtime state document revision ${state.revision} does not match row revision ${revision}`,
       )
     }
-    const serialized = serializeJson(state, 'persisted runtime state')
-    if (sha256(serialized) !== row.state_sha256.trim()) {
+    const serialized = serializeRuntimeStatePayload(state)
+    this.recordSerializedStateSize(Buffer.byteLength(serialized))
+    const checksum = row.state_sha256.trim()
+    const checksumAlgorithm = parseStateChecksumAlgorithm(row.state_checksum_algorithm)
+    const checksumValid = checksumAlgorithm === POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM
+      ? row.checksum_valid === true
+      : runtimeStateValueChecksum(state) === checksum
+    if (!checksumValid) {
       throw new PostgresStateCorruptionError('Runtime state checksum mismatch')
     }
-    return migrateRuntimeState(state)
+    return { state: migrateRuntimeState(state), checksum, checksumAlgorithm }
   }
 
   private async loadStateCached(client: PostgresPoolClient): Promise<RuntimeState> {
@@ -638,22 +1171,22 @@ export class PostgresRepository {
       throw new PostgresRuntimeStateNotInitializedError()
     }
     const revision = parseRevision(revisionValue)
-    if (this.cachedState?.revision === revision) return structuredClone(this.cachedState)
+    if (this.cachedState?.revision === revision) return this.cachedState
 
     if (this.cacheRefreshPromise) {
       const shared = await this.cacheRefreshPromise
-      if (shared.revision >= revision) return structuredClone(shared)
+      if (shared.revision >= revision) return shared
     }
 
     const refresh = this.loadState(client).then((loaded) => {
       if (!this.cachedState || loaded.revision >= this.cachedState.revision) {
-        this.cachedState = structuredClone(loaded)
+        this.cachedState = loaded
       }
       return this.cachedState
     })
     this.cacheRefreshPromise = refresh
     try {
-      return structuredClone(await refresh)
+      return await refresh
     } finally {
       if (this.cacheRefreshPromise === refresh) this.cacheRefreshPromise = null
     }
@@ -754,11 +1287,19 @@ export class PostgresRepository {
     }
   }
 
-  private async enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
+  private async enqueueMutation<T>(
+    operation: () => Promise<T>,
+    metricLabel: 'kds' | 'scheduler' | 'other',
+  ): Promise<T> {
+    const sourceCounters = this.mutationSourceCounters.get(metricLabel)!
+    sourceCounters.attempted += 1
     if (this.pendingMutations >= this.maxPendingMutations) {
+      this.mutationQueueRejectedTotal += 1
+      sourceCounters.rejected += 1
       throw new PostgresMutationQueueFullError(this.maxPendingMutations)
     }
     this.pendingMutations += 1
+    this.mutationQueueHighWatermark = Math.max(this.mutationQueueHighWatermark, this.pendingMutations)
     const queuedAt = performance.now()
     const previous = this.mutationTail.catch(() => undefined)
     let release!: () => void
@@ -778,11 +1319,35 @@ export class PostgresRepository {
       if (timeout) clearTimeout(timeout)
       timeout = undefined
       acquired = true
+      sourceCounters.acquired += 1
       this.activeMutations += 1
-      return await operation()
+      const queueWaitMs = performance.now() - queuedAt
+      this.recordMutationMetric(this.mutationQueueWaits, queueWaitMs)
+      this.recordMutationMetric(this.mutationWaitBySource.get(metricLabel)!, queueWaitMs)
+      const operationStartedAt = performance.now()
+      try {
+        const result = await operation()
+        sourceCounters.completed += 1
+        return result
+      } catch (error) {
+        sourceCounters.failedAfterAcquire += 1
+        throw error
+      } finally {
+        const duration = performance.now() - operationStartedAt
+        this.recordMutationMetric(this.mutationServiceDurations, duration)
+        this.recordMutationMetric(this.mutationServiceBySource.get(metricLabel)!, duration)
+      }
+    } catch (error) {
+      if (!acquired && error instanceof PostgresMutationQueueTimeoutError) {
+        this.mutationQueueTimeoutTotal += 1
+        sourceCounters.timeout += 1
+        this.recordMutationMetric(this.mutationWaitBySource.get(metricLabel)!, performance.now() - queuedAt)
+      }
+      throw error
     } finally {
       if (timeout) clearTimeout(timeout)
       if (acquired) this.activeMutations -= 1
+      if (acquired) this.lastMutationCompletedAt = performance.now()
       this.pendingMutations -= 1
       release()
     }
@@ -802,10 +1367,18 @@ export class PostgresRepository {
   }
 
   private poolHealth() {
+    const acquisition = this.pool.metricsSnapshot?.() ?? {
+      acquisitionCount: 0,
+      acquisitionFailedTotal: 0,
+      acquisitionWaitP50Ms: 0,
+      acquisitionWaitP95Ms: 0,
+      acquisitionWaitP99Ms: 0,
+    }
     return {
       total: this.pool.totalCount ?? null,
       idle: this.pool.idleCount ?? null,
       waiting: this.pool.waitingCount ?? null,
+      ...acquisition,
     }
   }
 
@@ -813,9 +1386,124 @@ export class PostgresRepository {
   private mutationQueueHealth() {
     return {
       pending: this.pendingMutations,
+      highWatermark: this.mutationQueueHighWatermark,
       active: this.activeMutations > 0,
       maxPending: this.maxPendingMutations,
+      rejectedTotal: this.mutationQueueRejectedTotal,
+      timeoutTotal: this.mutationQueueTimeoutTotal,
+      waitSamples: this.mutationQueueWaits.length,
+      waitP95Ms: this.mutationPercentile(this.mutationQueueWaits, 0.95),
+      waitP99Ms: this.mutationPercentile(this.mutationQueueWaits, 0.99),
+      waitMaxMs: Math.max(0, ...this.mutationQueueWaits),
+      serviceSamples: this.mutationServiceDurations.length,
+      serviceP95Ms: this.mutationPercentile(this.mutationServiceDurations, 0.95),
+      serviceP99Ms: this.mutationPercentile(this.mutationServiceDurations, 0.99),
+      serviceMaxMs: Math.max(0, ...this.mutationServiceDurations),
+      revisionLockP95Ms: this.mutationPercentile(this.mutationRevisionLockDurations, 0.95),
+      revisionLockMaxMs: Math.max(0, ...this.mutationRevisionLockDurations),
+      cloneP95Ms: this.mutationPercentile(this.mutationCloneDurations, 0.95),
+      cloneMaxMs: Math.max(0, ...this.mutationCloneDurations),
+      domainP95Ms: this.mutationPercentile(this.mutationDomainDurations, 0.95),
+      domainMaxMs: Math.max(0, ...this.mutationDomainDurations),
+      serializationP95Ms: this.mutationPercentile(this.mutationSerializationDurations, 0.95),
+      serializationMaxMs: Math.max(0, ...this.mutationSerializationDurations),
+      stateWriteP95Ms: this.mutationPercentile(this.mutationStateWriteDurations, 0.95),
+      stateWriteMaxMs: Math.max(0, ...this.mutationStateWriteDurations),
+      projectionP95Ms: this.mutationPercentile(this.mutationProjectionDurations, 0.95),
+      projectionMaxMs: Math.max(0, ...this.mutationProjectionDurations),
+      sourceSamples: {
+        kds: this.mutationServiceBySource.get('kds')!.length,
+        scheduler: this.mutationServiceBySource.get('scheduler')!.length,
+        other: this.mutationServiceBySource.get('other')!.length,
+      },
+      sourceWaitP95Ms: {
+        kds: this.mutationPercentile(this.mutationWaitBySource.get('kds')!, 0.95),
+        scheduler: this.mutationPercentile(this.mutationWaitBySource.get('scheduler')!, 0.95),
+        other: this.mutationPercentile(this.mutationWaitBySource.get('other')!, 0.95),
+      },
+      sourceWaitP99Ms: {
+        kds: this.mutationPercentile(this.mutationWaitBySource.get('kds')!, 0.99),
+        scheduler: this.mutationPercentile(this.mutationWaitBySource.get('scheduler')!, 0.99),
+        other: this.mutationPercentile(this.mutationWaitBySource.get('other')!, 0.99),
+      },
+      sourceServiceP95Ms: {
+        kds: this.mutationPercentile(this.mutationServiceBySource.get('kds')!, 0.95),
+        scheduler: this.mutationPercentile(this.mutationServiceBySource.get('scheduler')!, 0.95),
+        other: this.mutationPercentile(this.mutationServiceBySource.get('other')!, 0.95),
+      },
+      sourceAttempted: this.mutationSourceCounts('attempted'),
+      sourceAcquired: this.mutationSourceCounts('acquired'),
+      sourceCompleted: this.mutationSourceCounts('completed'),
+      sourceFailedAfterAcquire: this.mutationSourceCounts('failedAfterAcquire'),
+      sourceRejected: this.mutationSourceCounts('rejected'),
+      sourceTimeout: this.mutationSourceCounts('timeout'),
+      initialSerializedStateBytes: this.initialSerializedStateBytes ?? 0,
+      serializedStateBytes: this.serializedStateBytes,
+      maxSerializedStateBytes: this.maxSerializedStateBytes,
     }
+  }
+
+  async resetPerformanceMetrics() {
+    if (this.pendingMutations !== 0 || this.activeMutations !== 0) {
+      throw new Error('cannot reset performance metrics while mutations are active')
+    }
+    const current = await this.readFresh()
+    if (this.pendingMutations !== 0 || this.activeMutations !== 0) {
+      throw new Error('cannot reset performance metrics while mutations are active')
+    }
+    const currentBytes = Buffer.byteLength(serializeRuntimeStatePayload(current))
+    this.pool.resetMetrics?.()
+    this.mutationQueueHighWatermark = 0
+    this.mutationQueueRejectedTotal = 0
+    this.mutationQueueTimeoutTotal = 0
+    this.mutationQueueWaits.length = 0
+    this.mutationServiceDurations.length = 0
+    this.mutationRevisionLockDurations.length = 0
+    this.mutationCloneDurations.length = 0
+    this.mutationDomainDurations.length = 0
+    this.mutationSerializationDurations.length = 0
+    this.mutationStateWriteDurations.length = 0
+    this.mutationProjectionDurations.length = 0
+    for (const samples of this.mutationWaitBySource.values()) samples.length = 0
+    for (const samples of this.mutationServiceBySource.values()) samples.length = 0
+    for (const counters of this.mutationSourceCounters.values()) {
+      counters.attempted = 0
+      counters.acquired = 0
+      counters.completed = 0
+      counters.failedAfterAcquire = 0
+      counters.rejected = 0
+      counters.timeout = 0
+    }
+    this.serializedStateBytes = currentBytes
+    this.initialSerializedStateBytes = currentBytes
+    this.maxSerializedStateBytes = currentBytes
+  }
+
+  private recordMutationMetric(samples: number[], value: number) {
+    samples.push(Math.max(0, value))
+    if (samples.length > 2_048) samples.splice(0, samples.length - 2_048)
+  }
+
+  private mutationSourceCounts(
+    key: 'attempted' | 'acquired' | 'completed' | 'failedAfterAcquire' | 'rejected' | 'timeout',
+  ) {
+    return {
+      kds: this.mutationSourceCounters.get('kds')![key],
+      scheduler: this.mutationSourceCounters.get('scheduler')![key],
+      other: this.mutationSourceCounters.get('other')![key],
+    }
+  }
+
+  private recordSerializedStateSize(bytes: number) {
+    if (this.initialSerializedStateBytes === null) this.initialSerializedStateBytes = bytes
+    this.serializedStateBytes = bytes
+    this.maxSerializedStateBytes = Math.max(this.maxSerializedStateBytes, bytes)
+  }
+
+  private mutationPercentile(samples: number[], fraction: number) {
+    if (samples.length === 0) return 0
+    const ordered = samples.toSorted((left, right) => left - right)
+    return ordered[Math.min(ordered.length - 1, Math.ceil(ordered.length * fraction) - 1)] ?? 0
   }
 }
 
@@ -836,6 +1524,13 @@ function parseRevision(value: number | string): number {
   return revision
 }
 
+function parseStateChecksumAlgorithm(value: unknown): RuntimeStateChecksumAlgorithm {
+  if (value === APP_CANONICAL_STATE_CHECKSUM_ALGORITHM || value === POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM) {
+    return value
+  }
+  throw new PostgresStateCorruptionError(`Unsupported runtime state checksum algorithm: ${String(value)}`)
+}
+
 function parseState(value: RuntimeState | string): RuntimeState {
   let parsed: unknown
   try {
@@ -847,6 +1542,37 @@ function parseState(value: RuntimeState | string): RuntimeState {
   return parsed
 }
 
+function parseDatabaseState(value: RuntimeState | string): RuntimeState {
+  let parsed: unknown
+  try {
+    // node-postgres creates a private JSONB result object. Repository callers
+    // never receive it directly, so cloning it again only blocks the loop.
+    parsed = typeof value === 'string' ? JSON.parse(value) : value
+  } catch (error) {
+    throw new PostgresStateCorruptionError(`Runtime state JSON is invalid: ${String(error)}`)
+  }
+  assertRuntimeState(parsed)
+  return parsed
+}
+
+function yieldToEventLoop() {
+  return new Promise<void>((resolve) => setImmediate(resolve))
+}
+
+function canonicalKdsOccurredAt(
+  before: ReturnType<typeof authoritativeKdsTask>,
+  after: ReturnType<typeof authoritativeKdsTask>,
+  clock: () => Date,
+) {
+  try {
+    return inferKdsCommandOccurredAt(before, after)
+  } catch {
+    // A semantically repeated command with a new idempotency key is recorded as
+    // a no-op attempt at database time without fabricating a business timestamp.
+    return clock().toISOString()
+  }
+}
+
 export function serializeRuntimeState(value: RuntimeState) {
   assertRuntimeState(value)
   return serializeJson(value, 'runtime state')
@@ -854,6 +1580,13 @@ export function serializeRuntimeState(value: RuntimeState) {
 
 export function runtimeStateChecksum(serialized: string) {
   return sha256(serialized)
+}
+
+export function runtimeStateValueChecksum(value: RuntimeState) {
+  assertRuntimeState(value)
+  const hash = createHash('sha256')
+  updateCanonicalJsonHash(hash, value)
+  return hash.digest('hex')
 }
 
 function assertRuntimeState(value: unknown): asserts value is RuntimeState {
@@ -872,21 +1605,93 @@ function serializeJson(value: unknown, label: string): string {
   }
 }
 
-function sortJson(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sortJson)
-  if (value === null || typeof value !== 'object') {
+function serializeRuntimeStatePayload(value: RuntimeState): string {
+  assertRuntimeState(value)
+  try {
+    return JSON.stringify(value, (_key, child: unknown) => {
+      if (typeof child === 'number' && !Number.isFinite(child)) {
+        throw new TypeError('Non-finite numbers are not valid JSON')
+      }
+      if (['bigint', 'function', 'symbol', 'undefined'].includes(typeof child)) {
+        throw new TypeError(`${typeof child} is not valid JSON`)
+      }
+      return child
+    })
+  } catch (error) {
+    throw new PostgresRepositoryError(`runtime state is not JSON serializable: ${String(error)}`)
+  }
+}
+
+function updateCanonicalJsonHash(
+  hash: ReturnType<typeof createHash>,
+  value: unknown,
+  seen = new WeakSet<object>(),
+): void {
+  if (value === null) {
+    hash.update('null')
+    return
+  }
+  if (typeof value !== 'object') {
+    if (typeof value === 'number' && !Number.isFinite(value)) throw new TypeError('Non-finite numbers are not valid JSON')
+    if (['bigint', 'function', 'symbol', 'undefined'].includes(typeof value)) {
+      throw new TypeError(`${typeof value} is not valid JSON`)
+    }
+    hash.update(JSON.stringify(value))
+    return
+  }
+  if (value instanceof Date) {
+    hash.update(JSON.stringify(value.toJSON()))
+    return
+  }
+  if (seen.has(value)) throw new TypeError('Circular references are not valid JSON')
+  seen.add(value)
+  if (Array.isArray(value)) {
+    hash.update('[')
+    for (let index = 0; index < value.length; index += 1) {
+      if (index > 0) hash.update(',')
+      updateCanonicalJsonHash(hash, value[index], seen)
+    }
+    hash.update(']')
+  } else {
+    hash.update('{')
+    const keys = Object.keys(value).sort()
+    for (let index = 0; index < keys.length; index += 1) {
+      if (index > 0) hash.update(',')
+      const key = keys[index]!
+      hash.update(JSON.stringify(key))
+      hash.update(':')
+      updateCanonicalJsonHash(hash, (value as Record<string, unknown>)[key], seen)
+    }
+    hash.update('}')
+  }
+  seen.delete(value)
+}
+
+function sortJson(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (value === null) return value
+  if (typeof value !== 'object') {
     if (typeof value === 'number' && !Number.isFinite(value)) throw new TypeError('Non-finite numbers are not valid JSON')
     if (['bigint', 'function', 'symbol', 'undefined'].includes(typeof value)) {
       throw new TypeError(`${typeof value} is not valid JSON`)
     }
     return value
   }
-  if (value instanceof Date) return value.toJSON()
-  const sorted: Record<string, unknown> = Object.create(null) as Record<string, unknown>
-  for (const key of Object.keys(value).sort()) {
-    const child = (value as Record<string, unknown>)[key]
-    sorted[key] = sortJson(child)
+  if (value instanceof Date) {
+    return value.toJSON()
   }
+  if (seen.has(value)) throw new TypeError('Circular references are not valid JSON')
+  seen.add(value)
+  let sorted: unknown
+  if (Array.isArray(value)) {
+    sorted = value.map((child) => sortJson(child, seen))
+  } else {
+    const object: Record<string, unknown> = Object.create(null) as Record<string, unknown>
+    for (const key of Object.keys(value).sort()) {
+      object[key] = sortJson((value as Record<string, unknown>)[key], seen)
+    }
+    sorted = object
+  }
+  seen.delete(value)
   return sorted
 }
 

@@ -1,5 +1,13 @@
 import type { RuntimeState } from '../src/shared/contracts.js'
-import type { PostgresPool, PostgresTenantContext } from './postgres-repository.js'
+import { migrateRuntimeState } from './runtime-state-migrations.js'
+import {
+  APP_CANONICAL_STATE_CHECKSUM_ALGORITHM,
+  POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM,
+  runtimeStateValueChecksum,
+  type PostgresPool,
+  type PostgresPoolClient,
+  type PostgresTenantContext,
+} from './postgres-repository.js'
 
 export interface OperationalReadSnapshot {
   revision: number
@@ -20,6 +28,12 @@ export interface OperationalRuntimeStateResult {
 
 interface OperationalReadRow extends Record<string, unknown> {
   runtime_revision: number | string
+  aggregate_state: RuntimeState | string
+  state_sha256: string
+  state_checksum_algorithm: string
+  checkpoint_state_sha256: string
+  checkpoint_checksum_algorithm: string
+  checksum_valid?: boolean
   tables: unknown
   table_sessions: unknown
   service_tasks: unknown
@@ -91,6 +105,33 @@ function snapshotFromRow(row: OperationalReadRow, expectedRevision: number): Ope
   }
 }
 
+function parseVerifiedAggregateState(row: OperationalReadRow, revision: number): RuntimeState {
+  let parsed: RuntimeState
+  try {
+    parsed = typeof row.aggregate_state === 'string'
+      ? JSON.parse(row.aggregate_state) as RuntimeState
+      : structuredClone(row.aggregate_state)
+  } catch (error) {
+    throw new OperationalReadStoreError(`Aggregate state JSON is invalid: ${String(error)}`)
+  }
+  if (!parsed || typeof parsed !== 'object' || parsed.revision !== revision) {
+    throw new OperationalReadStoreError('Aggregate state does not match the operational snapshot revision')
+  }
+  const checksumAlgorithm = row.state_checksum_algorithm
+  const checksumValid = checksumAlgorithm === POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM
+    ? row.checksum_valid === true
+    : checksumAlgorithm === APP_CANONICAL_STATE_CHECKSUM_ALGORITHM
+      && runtimeStateValueChecksum(parsed) === row.state_sha256.trim()
+  if (!checksumValid) {
+    throw new OperationalReadStoreError('Aggregate state checksum does not match the operational snapshot')
+  }
+  if (row.checkpoint_state_sha256.trim() !== row.state_sha256.trim()
+    || row.checkpoint_checksum_algorithm !== checksumAlgorithm) {
+    throw new OperationalReadStoreError('Projection checkpoint checksum does not match the runtime state')
+  }
+  return parsed
+}
+
 export function hydrateRuntimeStateFromOperationalTables(
   aggregate: RuntimeState,
   snapshot: OperationalReadSnapshot,
@@ -99,14 +140,18 @@ export function hydrateRuntimeStateFromOperationalTables(
     throw new OperationalReadRevisionError(aggregate.revision, snapshot.revision)
   }
   const hydrated = structuredClone(aggregate)
-  hydrated.tables = structuredClone(snapshot.tables)
-  hydrated.tasks = structuredClone(snapshot.serviceTasks)
-  hydrated.songState.tableSessions = structuredClone(snapshot.tableSessions)
-  hydrated.orderDomain.orders = structuredClone(snapshot.orders)
-  hydrated.orderDomain.kdsTasks = structuredClone(snapshot.kdsTasks)
-  hydrated.paymentDomain.paymentIntents = structuredClone(snapshot.paymentIntents)
+  return hydratePrivateRuntimeState(hydrated, snapshot)
+}
+
+function hydratePrivateRuntimeState(hydrated: RuntimeState, snapshot: OperationalReadSnapshot): RuntimeState {
+  hydrated.tables = snapshot.tables
+  hydrated.tasks = snapshot.serviceTasks
+  hydrated.songState.tableSessions = snapshot.tableSessions
+  hydrated.orderDomain.orders = snapshot.orders
+  hydrated.orderDomain.kdsTasks = snapshot.kdsTasks
+  hydrated.paymentDomain.paymentIntents = snapshot.paymentIntents
   if (hydrated.inventoryDomain) {
-    hydrated.inventoryDomain.balances = structuredClone(snapshot.inventoryBalances)
+    hydrated.inventoryDomain.balances = snapshot.inventoryBalances
   } else if (snapshot.inventoryBalances.length > 0) {
     throw new OperationalReadStoreError('Inventory balances exist without an inventory domain')
   }
@@ -149,7 +194,12 @@ export async function resolveOperationalRuntimeState(options: {
 }
 
 const READ_OPERATIONAL_SNAPSHOT_SQL = `
-  SELECT checkpoint.runtime_revision,
+  SELECT checkpoint.runtime_revision, runtime.state AS aggregate_state, runtime.state_sha256,
+    runtime.state_checksum_algorithm,
+    checkpoint.state_sha256 AS checkpoint_state_sha256,
+    checkpoint.state_checksum_algorithm AS checkpoint_checksum_algorithm,
+    runtime.state_checksum_algorithm = 'pg-jsonb-text-sha256-v1'
+      AND runtime.state_sha256 = encode(sha256(convert_to(runtime.state::text, 'UTF8')), 'hex') AS checksum_valid,
     COALESCE((
       SELECT jsonb_agg(payload ORDER BY table_code)
       FROM mbox.operational_tables
@@ -159,7 +209,7 @@ const READ_OPERATIONAL_SNAPSHOT_SQL = `
       SELECT jsonb_agg(payload ORDER BY opened_at, source_id)
       FROM mbox.operational_table_sessions
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
-        AND business_date = $3::date
+        AND business_date = COALESCE($3::date, (runtime.state #>> '{store,businessDate}')::date)
     ), '[]'::jsonb) AS table_sessions,
     COALESCE((
       SELECT jsonb_agg(payload ORDER BY created_at, source_id)
@@ -173,7 +223,8 @@ const READ_OPERATIONAL_SNAPSHOT_SQL = `
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND table_session_id IN (
           SELECT source_id FROM mbox.operational_table_sessions
-          WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND business_date = $3::date
+          WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+            AND business_date = COALESCE($3::date, (runtime.state #>> '{store,businessDate}')::date)
         )
     ), '[]'::jsonb) AS orders,
     COALESCE((
@@ -182,7 +233,8 @@ const READ_OPERATIONAL_SNAPSHOT_SQL = `
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND table_session_id IN (
           SELECT source_id FROM mbox.operational_table_sessions
-          WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND business_date = $3::date
+          WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+            AND business_date = COALESCE($3::date, (runtime.state #>> '{store,businessDate}')::date)
         )
     ), '[]'::jsonb) AS kds_tasks,
     COALESCE((
@@ -191,7 +243,8 @@ const READ_OPERATIONAL_SNAPSHOT_SQL = `
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND table_session_id IN (
           SELECT source_id FROM mbox.operational_table_sessions
-          WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND business_date = $3::date
+          WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+            AND business_date = COALESCE($3::date, (runtime.state #>> '{store,businessDate}')::date)
         )
     ), '[]'::jsonb) AS payment_intents,
     COALESCE((
@@ -214,6 +267,42 @@ export class PostgresOperationalReadStore {
   ) {}
 
   async read(expectedRevision: number, businessDate: string): Promise<OperationalReadSnapshot> {
+    return this.withReadTransaction(async (client) => {
+      const row = await this.readRow(client, businessDate)
+      const snapshot = snapshotFromRow(row, expectedRevision)
+      parseVerifiedAggregateState(row, expectedRevision)
+      return snapshot
+    })
+  }
+
+  async readLatestRuntimeState(): Promise<OperationalRuntimeStateResult> {
+    return this.withReadTransaction(async (client) => {
+      const row = await this.readRow(client, null)
+      const revision = parseRevision(row.runtime_revision)
+      const snapshot = snapshotFromRow(row, revision)
+      const parsed = parseVerifiedAggregateState(row, revision)
+      const state = migrateRuntimeState(parsed)
+      return {
+        state: hydratePrivateRuntimeState(state, snapshot),
+        source: 'normalized_tables',
+        revisionMismatches: 0,
+      }
+    })
+  }
+
+  private async readRow(client: PostgresPoolClient, businessDate: string | null) {
+    const result = await client.query<OperationalReadRow>(READ_OPERATIONAL_SNAPSHOT_SQL, [
+      this.context.tenantId,
+      this.context.storeId,
+      businessDate,
+    ])
+    if (result.rowCount !== 1 || !result.rows[0]) {
+      throw new OperationalReadRevisionError(0, null)
+    }
+    return result.rows[0]
+  }
+
+  private async withReadTransaction<T>(operation: (client: PostgresPoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect()
     let transactionStarted = false
     let releaseError: Error | boolean | undefined
@@ -223,17 +312,9 @@ export class PostgresOperationalReadStore {
       await client.query(`
         SELECT set_config('app.tenant_id', $1, true), set_config('app.store_id', $2, true)
       `, [this.context.tenantId, this.context.storeId])
-      const result = await client.query<OperationalReadRow>(READ_OPERATIONAL_SNAPSHOT_SQL, [
-        this.context.tenantId,
-        this.context.storeId,
-        businessDate,
-      ])
-      if (result.rowCount !== 1 || !result.rows[0]) {
-        throw new OperationalReadRevisionError(expectedRevision, null)
-      }
-      const snapshot = snapshotFromRow(result.rows[0], expectedRevision)
+      const value = await operation(client)
       await client.query('COMMIT')
-      return snapshot
+      return value
     } catch (error) {
       if (transactionStarted) {
         try {

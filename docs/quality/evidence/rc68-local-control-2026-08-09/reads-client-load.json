@@ -1,0 +1,304 @@
+{
+  "model": {
+    "runId": "standalone-40866",
+    "instances": 2,
+    "samplesPerReadOrAction": 300,
+    "kdsActionSamples": 600,
+    "readConcurrency": 60,
+    "staffColdStarts": 12,
+    "bootstrapLiveSamples": 300,
+    "bootstrapCachedSamples": 300,
+    "staffIdentityCount": 12,
+    "staffRoleNames": [
+      "运营负责人",
+      "系统管理员",
+      "市场设计",
+      "新媒体舞台运营",
+      "值班经理",
+      "鸡尾酒调酒师",
+      "收银员",
+      "主服务员",
+      "服务员·全店候补",
+      "厨房出品",
+      "调音灯光"
+    ],
+    "phase": "reads",
+    "setupConcurrency": 10,
+    "routeRegressionConcurrency": 60,
+    "evidenceEligible": true,
+    "arrivalRatesPerSecond": {
+      "read": 1,
+      "guestSession": 1,
+      "heartbeat": 1,
+      "setupWrite": 5,
+      "write": 2,
+      "staffStart": 2
+    },
+    "workloadInterpretation": "提交级单路由性能回归；不是代表性经营峰值，也不是正式容量结论",
+    "rateMultipliersOverFullNightAverage": {
+      "guestSession": 66,
+      "heartbeat": 3.8
+    },
+    "venue": {
+      "modelType": "representative_peak_window",
+      "guests": 300,
+      "employees": 12,
+      "operatingHours": 5.5,
+      "testWindowSeconds": 300,
+      "fullNightCompressionReferenceFactor": 66,
+      "equivalentToCompressedFullNight": false,
+      "guestArrivalsPerSecond": 0.015151515151515152,
+      "tenTimesGuestArrivalBurstPerSecond": 0.15151515151515152,
+      "testGuestSessionArrivalPerSecond": 1,
+      "employeeHeartbeatsPerSecond": 0.26666666666666666
+    },
+    "kdsWriteProfile": {
+      "modelType": "explicit_assumption_not_production_observation",
+      "guests": 300,
+      "operatingHours": 5.5,
+      "estimatedItemsPerGuest": 3,
+      "transitionsPerItem": 4,
+      "estimatedFullNightTransitions": 3600,
+      "estimatedFullNightAverageRps": 0.18181818181818182,
+      "representativeRegressionRps": 2,
+      "capacityProbeRps": 5,
+      "representativeMultiplier": 11,
+      "capacityProbeMultiplier": 27.5
+    },
+    "arrivalMetrics": {
+      "heartbeat": {
+        "requests": 300,
+        "targetRps": 1,
+        "achievedLaunchRps": 1,
+        "completionThroughputRps": 1,
+        "durationMs": 299021.4,
+        "launchDurationMs": 299003.2,
+        "arrivalIntervalMs": 1000,
+        "maximumConcurrency": 1,
+        "missedArrivalCount": 0,
+        "schedulingDelayP95Ms": 3.3,
+        "schedulingDelayP99Ms": 3.9,
+        "schedulingDelayMaxMs": 4
+      },
+      "reservations": {
+        "requests": 300,
+        "targetRps": 1,
+        "achievedLaunchRps": 1,
+        "completionThroughputRps": 1,
+        "durationMs": 299022.5,
+        "launchDurationMs": 299002.2,
+        "arrivalIntervalMs": 1000,
+        "maximumConcurrency": 1,
+        "missedArrivalCount": 0,
+        "schedulingDelayP95Ms": 3.5,
+        "schedulingDelayP99Ms": 3.9,
+        "schedulingDelayMaxMs": 4.2
+      },
+      "guest_session": {
+        "requests": 300,
+        "targetRps": 1,
+        "achievedLaunchRps": 1,
+        "completionThroughputRps": 1,
+        "durationMs": 299023.5,
+        "launchDurationMs": 299002.4,
+        "arrivalIntervalMs": 1000,
+        "maximumConcurrency": 1,
+        "missedArrivalCount": 0,
+        "schedulingDelayP95Ms": 3.4,
+        "schedulingDelayP99Ms": 3.8,
+        "schedulingDelayMaxMs": 4.1
+      },
+      "bootstrap_live": {
+        "requests": 300,
+        "targetRps": 1,
+        "achievedLaunchRps": 1,
+        "completionThroughputRps": 1,
+        "durationMs": 299027.5,
+        "launchDurationMs": 299001.4,
+        "arrivalIntervalMs": 1000,
+        "maximumConcurrency": 1,
+        "missedArrivalCount": 0,
+        "schedulingDelayP95Ms": 3.5,
+        "schedulingDelayP99Ms": 4.1,
+        "schedulingDelayMaxMs": 4.3
+      },
+      "guest_session_repeat": {
+        "requests": 300,
+        "targetRps": 20,
+        "achievedLaunchRps": 20,
+        "completionThroughputRps": 20,
+        "durationMs": 14967.3,
+        "launchDurationMs": 14952,
+        "arrivalIntervalMs": 50,
+        "maximumConcurrency": 1,
+        "missedArrivalCount": 0,
+        "schedulingDelayP95Ms": 2,
+        "schedulingDelayP99Ms": 2.7,
+        "schedulingDelayMaxMs": 3
+      },
+      "bootstrap_cached": {
+        "requests": 300,
+        "targetRps": 20,
+        "achievedLaunchRps": 20,
+        "completionThroughputRps": 20.1,
+        "durationMs": 14962.5,
+        "launchDurationMs": 14950.2,
+        "arrivalIntervalMs": 50,
+        "maximumConcurrency": 1,
+        "missedArrivalCount": 0,
+        "schedulingDelayP95Ms": 1.9,
+        "schedulingDelayP99Ms": 2.1,
+        "schedulingDelayMaxMs": 2.1
+      }
+    },
+    "setupArrivalMetrics": {},
+    "schedulingDelayP95LimitMs": 250,
+    "schedule": {
+      "passed": true,
+      "failedLabels": []
+    }
+  },
+  "totals": {
+    "measured": 1812,
+    "failures": 0,
+    "workflowFailures": 0
+  },
+  "byLabel": {
+    "heartbeat": {
+      "samples": 300,
+      "successful": 300,
+      "failures": 0,
+      "p50Ms": 18.2,
+      "p95Ms": 22.8,
+      "p99Ms": 28.5,
+      "maxMs": 35.5,
+      "statusCounts": {
+        "200": 300
+      },
+      "responseBytesP95": 158,
+      "responseBytesMax": 158,
+      "target": {
+        "p95": 150,
+        "p99": 300
+      },
+      "passed": true
+    },
+    "bootstrap_role_coverage": {
+      "samples": 12,
+      "successful": 12,
+      "failures": 0,
+      "p50Ms": 19.9,
+      "p95Ms": 22.5,
+      "p99Ms": 22.5,
+      "maxMs": 22.5,
+      "statusCounts": {
+        "200": 12
+      },
+      "responseBytesP95": 195061,
+      "responseBytesMax": 195061,
+      "target": {
+        "p95": 500,
+        "p99": 800,
+        "minSamples": 12
+      },
+      "passed": true
+    },
+    "bootstrap_live": {
+      "samples": 300,
+      "successful": 300,
+      "failures": 0,
+      "p50Ms": 24.4,
+      "p95Ms": 29.7,
+      "p99Ms": 39.1,
+      "maxMs": 43.3,
+      "statusCounts": {
+        "200": 300
+      },
+      "responseBytesP95": 176170,
+      "responseBytesMax": 176170,
+      "target": {
+        "p95": 500,
+        "p99": 800
+      },
+      "passed": true
+    },
+    "bootstrap_cached": {
+      "samples": 300,
+      "successful": 300,
+      "failures": 0,
+      "p50Ms": 11.2,
+      "p95Ms": 13.3,
+      "p99Ms": 15.3,
+      "maxMs": 19.6,
+      "statusCounts": {
+        "304": 300
+      },
+      "responseBytesP95": 0,
+      "responseBytesMax": 0,
+      "target": {
+        "p95": 150,
+        "p99": 300
+      },
+      "passed": true
+    },
+    "reservations": {
+      "samples": 300,
+      "successful": 300,
+      "failures": 0,
+      "p50Ms": 18.7,
+      "p95Ms": 23.5,
+      "p99Ms": 28.2,
+      "maxMs": 36.8,
+      "statusCounts": {
+        "200": 300
+      },
+      "responseBytesP95": 1854,
+      "responseBytesMax": 1854,
+      "target": {
+        "p95": 500,
+        "p99": 800
+      },
+      "passed": true
+    },
+    "guest_session": {
+      "samples": 300,
+      "successful": 300,
+      "failures": 0,
+      "p50Ms": 18.4,
+      "p95Ms": 24.2,
+      "p99Ms": 31.9,
+      "maxMs": 36.2,
+      "statusCounts": {
+        "200": 300
+      },
+      "responseBytesP95": 111054,
+      "responseBytesMax": 111054,
+      "target": {
+        "p95": 500,
+        "p99": 800
+      },
+      "passed": true
+    },
+    "guest_session_repeat": {
+      "samples": 300,
+      "successful": 300,
+      "failures": 0,
+      "p50Ms": 14.6,
+      "p95Ms": 18.4,
+      "p99Ms": 29.3,
+      "maxMs": 31.5,
+      "statusCounts": {
+        "200": 300
+      },
+      "responseBytesP95": 111054,
+      "responseBytesMax": 111054,
+      "target": {
+        "p95": 300,
+        "p99": 500
+      },
+      "passed": true
+    }
+  },
+  "failureSamples": [],
+  "passed": true
+}

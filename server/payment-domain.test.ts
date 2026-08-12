@@ -281,6 +281,37 @@ describe('cash payment confirmation', () => {
     expect(intent.status).toBe('succeeded')
     expect(state.cashPaymentConfirmations).toHaveLength(1)
   })
+
+  it('settles midnight-to-05:59 Beijing transactions into the previous 06:00 business day', () => {
+    const state = createPaymentDomainState()
+    const beforeCutoff = createPaymentIntent(state, intentCommand({
+      paymentIntentId: 'pay-before-cutoff',
+      channel: 'cash',
+      occurredAt: '2026-07-27T21:59:59.000Z',
+      expiresAt: '2026-07-27T22:14:59.000Z',
+      idempotencyKey: 'create-pay-before-cutoff',
+    }))
+    confirmCashPayment(state, {
+      confirmationId: 'cash-before-cutoff', paymentIntentId: beforeCutoff.id, amount: beforeCutoff.amount,
+      currency: beforeCutoff.currency, confirmedBy: 'cashier-1', deviceId: 'cashier-pc-1',
+      occurredAt: '2026-07-27T21:59:59.500Z', idempotencyKey: 'confirm-before-cutoff',
+    })
+    const afterCutoff = createPaymentIntent(state, intentCommand({
+      paymentIntentId: 'pay-after-cutoff',
+      channel: 'cash',
+      occurredAt: '2026-07-27T22:00:00.000Z',
+      expiresAt: '2026-07-27T22:15:00.000Z',
+      idempotencyKey: 'create-pay-after-cutoff',
+    }))
+    confirmCashPayment(state, {
+      confirmationId: 'cash-after-cutoff', paymentIntentId: afterCutoff.id, amount: afterCutoff.amount,
+      currency: afterCutoff.currency, confirmedBy: 'cashier-1', deviceId: 'cashier-pc-1',
+      occurredAt: '2026-07-27T22:00:00.500Z', idempotencyKey: 'confirm-after-cutoff',
+    })
+
+    expect(buildSettlementChannelSummaries(state, '2026-07-27').find((item) => item.channel === 'cash')?.systemReceivableAmount).toBe(3000)
+    expect(buildSettlementChannelSummaries(state, '2026-07-28').find((item) => item.channel === 'cash')?.systemReceivableAmount).toBe(3000)
+  })
 })
 
 describe('item-level refund state machine', () => {

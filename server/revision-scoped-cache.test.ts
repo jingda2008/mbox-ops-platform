@@ -34,4 +34,13 @@ describe('revision scoped cache', () => {
     expect(cache.delete('store-a', 9)).toBe(true)
     await expect(cache.getOrCreate('store-a', 9, async () => 11)).resolves.toBe(11)
   })
+
+  it('peeks only the exact scope and revision without creating a value', () => {
+    const cache = new RevisionScopedCache<number>()
+    cache.getOrCreate('employee-a', 7, () => 11)
+
+    expect(cache.get('employee-a', 7)).toBe(11)
+    expect(cache.get('employee-a', 8)).toBeUndefined()
+    expect(cache.get('employee-b', 7)).toBeUndefined()
+  })
 })

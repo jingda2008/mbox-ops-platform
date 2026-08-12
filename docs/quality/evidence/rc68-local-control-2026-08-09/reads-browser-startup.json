@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "mode": "guest",
+  "measurementClass": "fresh_browser_context_page_readiness",
+  "diagnosticSettleMs": 250,
+  "testStage": "measured",
+  "testPhase": "browser_guest",
+  "measurement": "navigation start to visible and painted guest menu categories in a fresh browser context from a static table QR",
+  "samples": 30,
+  "successful": 30,
+  "failures": 0,
+  "p50Ms": 56.2,
+  "p95Ms": 62.5,
+  "p99Ms": 118.9,
+  "maxMs": 118.9,
+  "phases": {
+    "domReadyP95Ms": 16.3,
+    "apiReadyP95Ms": 43.8,
+    "browserReadyP95Ms": 51.6,
+    "browserPaintedP95Ms": 62.5,
+    "playwrightUiReadyP95Ms": 64.9,
+    "playwrightObservedP95Ms": 319.6
+  },
+  "slowestSample": {
+    "domReadyMs": 42.4,
+    "apiReadyMs": 86.8,
+    "browserReadyMs": 105.7,
+    "browserPaintedMs": 118.9,
+    "playwrightUiReadyMs": 125.5,
+    "playwrightObservedMs": 382.7,
+    "browserTiming": {
+      "readyMs": 105.69999980926514,
+      "paintedMs": 118.89999985694885,
+      "responseEndMs": 9.5,
+      "domContentLoadedMs": 40.69999980926514,
+      "loadEventMs": 47.39999985694885,
+      "resources": [
+        {
+          "name": "http://127.0.0.1:54007/api/guest/session",
+          "duration": 9.700000047683716,
+          "transferSize": 13530
+        },
+        {
+          "name": "http://127.0.0.1:54007/menu/beer.jpg",
+          "duration": 9.100000143051147,
+          "transferSize": 0
+        },
+        {
+          "name": "http://127.0.0.1:54007/menu/cocktail.jpg",
+          "duration": 9.099999904632568,
+          "transferSize": 0
+        },
+        {
+          "name": "http://127.0.0.1:54007/api/guest/events",
+          "duration": 8,
+          "transferSize": 370
+        },
+        {
+          "name": "http://127.0.0.1:54007/assets/SuperHighCommunityBand-Zf4XC3vI.js",
+          "duration": 5.700000047683716,
+          "transferSize": 676
+        }
+      ]
+    }
+  },
+  "target": {
+    "minimumSamples": 30,
+    "p95Ms": 500
+  },
+  "failureSamples": [],
+  "passed": true
+}

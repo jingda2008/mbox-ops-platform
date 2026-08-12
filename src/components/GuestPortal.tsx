@@ -709,6 +709,7 @@ export function GuestPortal() {
           submitHint="付款成功后，订单会直接送到吧台和厨房，不用再招呼我们确认。"
           busy={checkoutBusy}
           timeZone={data?.store.timezone}
+          clockOffsetMs={serverOffset}
           orderSafety={data?.orderSafety}
           compactCart
           guestSalesMode

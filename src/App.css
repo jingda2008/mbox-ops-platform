@@ -115,9 +115,9 @@ html.staff-phone-device .app-shell > .nav-backdrop { display: block; }
 .pilot-login-error { padding: 10px 12px; border: 1px solid #efc7c9; border-radius: 6px; background: #fff0f0; color: #9f2f34; font-size: 13px; }
 .pilot-login-back { min-height: 36px; border: 0; background: transparent; color: var(--ink-soft); font-weight: 700; }
 .pilot-session-bar { min-height: 38px; display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 5px 16px; border-bottom: 1px solid var(--line); background: #fff; color: var(--ink-soft); font-size: 12px; }
-.pilot-session-bar > button { min-height: 30px; display: inline-flex; align-items: center; gap: 5px; padding: 0 9px; border: 1px solid var(--line); border-radius: 5px; background: #fff; color: var(--ink); font-size: 12px; font-weight: 750; }
+.pilot-session-bar > button { min-height: 44px; display: inline-flex; align-items: center; gap: 5px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px; background: #fff; color: var(--ink); font-size: 12px; font-weight: 750; }
 .staff-mode-switch { display: inline-flex; padding: 2px; border: 1px solid var(--line-strong); border-radius: 6px; background: #f1f2ee; }
-.staff-mode-switch button { min-height: 28px; display: inline-flex; align-items: center; gap: 5px; padding: 0 9px; border: 0; border-radius: 4px; background: transparent; color: var(--ink-soft); font-size: 12px; font-weight: 750; }
+.staff-mode-switch button { min-height: 44px; display: inline-flex; align-items: center; gap: 5px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: var(--ink-soft); font-size: 12px; font-weight: 750; }
 .staff-mode-switch button.is-active { background: #fff; color: var(--ink); box-shadow: 0 1px 4px rgba(26, 30, 25, .13); }
 .sidebar {
   position: sticky;
@@ -531,7 +531,7 @@ html.staff-phone-device .app-shell > .nav-backdrop { display: block; }
 .legend { display: flex; gap: 12px; color: var(--ink-soft); font-size: 12px; }
 .legend span { display: flex; align-items: center; gap: 5px; }
 .table-visibility-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
-.table-visibility-actions .secondary-button { min-height: 34px; padding-inline: 10px; }
+.table-visibility-actions .secondary-button { min-height: 44px; padding-inline: 12px; }
 .dot { width: 8px; height: 8px; display: inline-block; border-radius: 50%; background: #bbc0b8; }
 .dot.occupied { background: var(--success); }
 .dot.reserved { background: var(--warning); }
@@ -659,8 +659,8 @@ html.staff-phone-device .app-shell > .nav-backdrop { display: block; }
 
 .task-queue--compact .task-list { max-height: calc(100vh - 220px); overflow: auto; }
 .task-queue__focus { min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 16px; border-bottom: 1px solid #e2cc8b; background: #fff9e9; color: #72540d; font-size: 12px; font-weight: 800; }
-.task-queue__focus button { min-height: 30px; padding: 0 10px; border: 1px solid #c9aa50; border-radius: 4px; background: #fff; color: #72540d; font-weight: 800; }
-.task-busy-mode { min-height: 34px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid #aeb5ad; border-radius: 4px; background: #fff; color: #3d4740; font-size: 12px; font-weight: 800; }
+.task-queue__focus button { min-height: 44px; padding: 0 12px; border: 1px solid #c9aa50; border-radius: 4px; background: #fff; color: #72540d; font-weight: 800; }
+.task-busy-mode { min-height: 44px; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; border: 1px solid #aeb5ad; border-radius: 4px; background: #fff; color: #3d4740; font-size: 12px; font-weight: 800; }
 .task-busy-mode.is-active { border-color: #b58a16; background: #fff5d8; color: #71530b; }
 .task-list { display: grid; }
 .task-item { min-width: 0; padding: 12px 14px 11px; border-bottom: 1px solid var(--line); border-left: 4px solid transparent; }
@@ -732,7 +732,7 @@ html.staff-phone-device .app-shell > .nav-backdrop { display: block; }
 .ai-directive ol { margin: 5px 0 0; padding-left: 18px; color: #383e37; font-size: 12px; line-height: 1.55; }
 .task-actions { min-width: 0; min-height: 38px; display: flex; align-items: flex-end; gap: 8px; margin: 9px 0 0 43px; }
 .task-item--l1 .task-actions { min-height: 36px; margin-top: 8px; }
-.task-actions .primary-button { min-height: 36px; padding: 0 12px; font-size: 13px; }
+.task-actions .primary-button { min-height: 44px; padding: 0 12px; font-size: 13px; }
 .task-action-button { transition: transform 90ms ease, box-shadow 90ms ease, opacity 90ms ease; }
 .task-action-button:not(:disabled):active { transform: scale(.97); box-shadow: inset 0 2px 4px rgba(0, 0, 0, .18); }
 .task-action-button:disabled { cursor: progress; opacity: .72; }
@@ -747,7 +747,7 @@ html.staff-phone-device .app-shell > .nav-backdrop { display: block; }
 .manager-task-actions > strong { display: block; color: #645326; font-size: 11px; }
 .manager-task-actions__buttons { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 7px; }
 .manager-task-actions__buttons button {
-  min-height: 35px;
+  min-height: 44px;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -1281,7 +1281,7 @@ html.staff-phone-device .app-shell > .nav-backdrop { display: block; }
 }
 
 @media (max-width: 430px) {
-  .pilot-session-bar { min-height: 38px; justify-content: space-between; flex-wrap: nowrap; gap: 6px; padding: 4px 8px; }
+  .pilot-session-bar { min-height: 52px; justify-content: space-between; flex-wrap: nowrap; gap: 6px; padding: 4px 8px; }
   .pilot-session-bar > span { display: none; }
   .staff-mode-switch { flex: 1; }
   .staff-mode-switch button { flex: 1; justify-content: center; }
@@ -1432,6 +1432,19 @@ html.staff-phone-device .app-shell > .nav-backdrop { display: block; }
   padding: 0 11px;
   border: 1px solid #a88c51;
   background: #fff;
+}
+
+.staff-startup-workspace {
+  min-height: calc(100vh - 54px);
+  padding: 16px;
+  background: var(--background, #f1f2ee);
+}
+
+@media (max-width: 720px) {
+  .staff-startup-workspace {
+    min-height: calc(100vh - 52px);
+    padding: 10px 9px calc(76px + env(safe-area-inset-bottom));
+  }
 }
 
 @media (max-width: 720px) {

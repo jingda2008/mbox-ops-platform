@@ -9,7 +9,8 @@ import type {
   RecurringCostTemplate,
 } from '../src/shared/commercial-ops-contracts.js'
 import type { RuntimeState } from '../src/shared/contracts.js'
-import { chinaBusinessDateKey, shiftDateKey } from '../src/shared/china-time.js'
+import { shiftDateKey } from '../src/shared/china-time.js'
+import { venueBusinessDateKey } from '../src/shared/venue-time.js'
 import { commercialOpsFor } from './commercial-ops.js'
 import { tableOperationsConfig } from './table-sessions.js'
 
@@ -183,7 +184,7 @@ function movementCost(state: RuntimeState, movement: NonNullable<RuntimeState['i
 
 function configuredBusinessDate(state: RuntimeState, value: string) {
   const rolloverHour = tableOperationsConfig(state).businessDayRolloverHour ?? 6
-  return chinaBusinessDateKey(value, rolloverHour)
+  return venueBusinessDateKey(value, state.store.timezone, rolloverHour)
 }
 
 function orderDate(state: RuntimeState, order: RuntimeState['orderDomain']['orders'][number]) {

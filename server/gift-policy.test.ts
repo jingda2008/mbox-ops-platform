@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { RuntimeState } from '../src/shared/contracts.js'
 import { requireGiftPolicy } from './gift-policy.js'
 import { createSeedState } from './seed.js'
+import { tableOperationsConfig } from './table-sessions.js'
 
 const BUSINESS_DATE = '2026-07-27'
 const NOW = '2026-07-27T12:00:00.000Z'
@@ -133,6 +134,15 @@ describe('unified gift policy', () => {
     expect(decide(state).usageBefore.businessDayCount).toBe(1)
     addGrantedGift(state, 'after-boundary-2', 100, '2026-07-27T11:30:00.000Z', 'day-session-2')
     expect(() => decide(state)).toThrow('营业日赠送次数已达上限')
+  })
+
+  it('uses the configured cutoff instead of a hardcoded Beijing 06:00 boundary', () => {
+    const { state, authority } = stateForPolicy()
+    state.tableOperationsConfig = { ...tableOperationsConfig(state), businessDayRolloverHour: 4 }
+    authority.maxPerBusinessDayCount = 2
+    addGrantedGift(state, 'before-custom-boundary', 100, '2026-07-26T19:59:59.000Z', 'old-session')
+    addGrantedGift(state, 'after-custom-boundary', 100, '2026-07-26T20:00:00.000Z', 'current-session')
+    expect(decide(state).usageBefore.businessDayCount).toBe(1)
   })
 
   it('enforces the monthly value without counting the prior month', () => {

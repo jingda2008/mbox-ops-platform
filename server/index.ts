@@ -25,13 +25,13 @@ import {
   validateEnvironmentPaymentRuntime,
 } from './payment-provider.js'
 import { registerProactiveServiceRoutes } from './proactive-service.js'
-import { dispatchDueSopActions } from './sop-action-dispatch.js'
+import { dispatchDueSopActions, sopActionsWouldDispatch } from './sop-action-dispatch.js'
 import { createSopActionAdapters } from './sop-action-runtime.js'
 import { registerSopActionRoutes, SopActionBusinessError } from './sop-action-api.js'
 import { registerBenefitRoutes } from './benefit-domain.js'
 import { buildMemberPortal, registerMemberPortalRoutes } from './member-portal.js'
 import { registerNotificationRoutes } from './notification-api.js'
-import { dispatchDueNotifications } from './notification-dispatch.js'
+import { dispatchDueNotifications, notificationsWouldDispatch } from './notification-dispatch.js'
 import { BenefitRedemptionBusinessError, registerBenefitRedemptionRoutes } from './benefit-redemption.js'
 import { AuthenticationError, registerAuthContext, requireRequestActor } from './auth-context.js'
 import type { RuntimeMode } from '../src/shared/auth-contracts.js'
@@ -63,7 +63,9 @@ import { StoreImportValidationError } from './store-import.js'
 import {
   PostgresIdempotencyConflictError,
   PostgresIdempotencyInProgressError,
+  PostgresMutationNotIdleError,
   PostgresOptimisticConcurrencyError,
+  type PostgresRepositoryHealth,
 } from './postgres-repository.js'
 import { wechatApiPlugin } from './wechat-api.js'
 import {
@@ -82,11 +84,11 @@ import { applyScheduledOperations, scheduledOperationsWouldChange } from './oper
 import { projectRuntimeStateForActor } from './bootstrap-projection.js'
 import { buildBootstrapViewEtag } from './bootstrap-etag.js'
 import { RevisionScopedCache } from './revision-scoped-cache.js'
-import { resolveOperationalRuntimeState } from './operational-read-store.js'
 import { effectivePermissionIdsForEmployee } from '../src/shared/staff-access.js'
 import { preserveProtectedProductCost, productCostView } from './product-cost-policy.js'
 import { MemoryRateLimitStore, PostgresRateLimitStore } from './rate-limit.js'
-import { DEFAULT_PRESENCE_LEASE_TTL_MS, registerPresenceRoutes, resumePresenceLease } from './presence.js'
+import { DEFAULT_PRESENCE_LEASE_TTL_MS, endPresenceLease, registerPresenceRoutes, resumePresenceLease } from './presence.js'
+import { MemoryPresenceLeaseStore, PostgresPresenceLeaseStore } from './presence-store.js'
 import { MemoryGuestInsightsStore, PostgresGuestInsightsStore } from './guest-insights.js'
 import { GoogleCloudVoiceTranscriber, registerVoiceTranscriptionRoutes } from './voice-transcription.js'
 import { clientValidationError } from './validation-error.js'
@@ -94,7 +96,7 @@ import { registerAssistantRoutes } from './assistant-api.js'
 import { registerCommercialOpsRoutes } from './commercial-ops-api.js'
 import { registerHardwareRoutes } from './hardware-api.js'
 import { registerTaskRoutes } from './task-api.js'
-import { effectiveHardwareDeviceStatus, HardwareBusinessError } from './hardware-domain.js'
+import { HardwareBusinessError } from './hardware-domain.js'
 import { GeminiAssistantPlanner, QwenAssistantPlanner } from './assistant-planner.js'
 import {
   MemoryAssistantConversationStore,
@@ -103,6 +105,9 @@ import {
 import { BusinessRuleError } from './business-rule-error.js'
 import { isClientDisconnect, isPersistenceFailure } from './error-classification.js'
 import { requestLogSerializer } from './log-redaction.js'
+import { createStaffPresenceDirectoryResolver } from './staff-presence-directory.js'
+import { createHardwareReadinessResolver } from './hardware-readiness-cache.js'
+import { KeyedSingleFlight } from './keyed-single-flight.js'
 
 const runtimeConfig = loadRuntimeConfig()
 
@@ -158,6 +163,14 @@ const assistantConversationStore = runtimeDependencies.postgresPool
       storeId: runtimeConfig.storeUuid!,
     })
   : new MemoryAssistantConversationStore()
+const presenceLeaseStore = runtimeDependencies.postgresPool
+  ? new PostgresPresenceLeaseStore({
+      pool: runtimeDependencies.postgresPool,
+      tenantId: runtimeConfig.tenantId!,
+      storeId: runtimeConfig.storeUuid!,
+    })
+  : new MemoryPresenceLeaseStore()
+const pendingPresenceChecks = new KeyedSingleFlight<Awaited<ReturnType<typeof presenceLeaseStore.findActive>>>()
 
 await repository.init()
 const startupBusinessDayRollover = await repository.mutate((state) => reconcileAutomaticBusinessDay(state))
@@ -171,7 +184,33 @@ if (startupBusinessDayRollover.status === 'rolled_over') {
 await guestInsights.init()
 await assistantConversationStore.init()
 const paymentProviderResolver = createEnvironmentPaymentProviderResolver()
-const paymentRuntime = validateEnvironmentPaymentRuntime((await repository.read()).paymentDomain)
+const initialRuntimeState = await repository.read()
+const paymentRuntime = validateEnvironmentPaymentRuntime(initialRuntimeState.paymentDomain)
+const resolveStaffPresenceDirectory = createStaffPresenceDirectoryResolver(repository, initialRuntimeState)
+const resolveHardwareReadiness = createHardwareReadinessResolver(() => repository.read(), initialRuntimeState)
+const resumeNormalizedPresence = async (input: {
+  sessionId: string
+  actorId: string
+  storeId: string
+  sessionExpiresAt: number
+  now: number
+}) => {
+  if (await presenceLeaseStore.isRevoked({ sessionId: input.sessionId, actorId: input.actorId })) return null
+  const lease = await repository.mutate((state) => resumePresenceLease(state, {
+    ...input,
+    businessDate: state.store.businessDate,
+    leaseTtlMs: DEFAULT_PRESENCE_LEASE_TTL_MS,
+  }))
+  if (lease) {
+    try {
+      await presenceLeaseStore.upsert(lease)
+    } catch (error) {
+      await repository.mutate((state) => endPresenceLease(state, input.sessionId, input.actorId, input.now)).catch(() => undefined)
+      throw error
+    }
+  }
+  return lease
+}
 await app.register(cors, {
   origin: runtimeConfig.corsOrigins,
   credentials: true,
@@ -217,18 +256,11 @@ if (runtimeConfig.runtimeMode === 'staging' || runtimeConfig.runtimeMode === 'pr
 await registerObservability(app, {
   runtimeMode: runtimeConfig.runtimeMode,
   metricsToken: runtimeConfig.metricsToken,
+  resetRuntimeMetrics: () => repository.resetPerformanceMetrics?.(),
   readiness: async () => {
     const status = await repository.healthCheck()
-    const state = status.ready ? await repository.read() : null
-    const enabledDevices = state?.hardwareState?.devices.filter((device) => device.enabled) ?? []
-    const realDevices = enabledDevices.filter((device) => device.adapter !== 'simulator')
-    const realDevicesOnline = state?.hardwareState
-      ? realDevices.filter((device) => effectiveHardwareDeviceStatus(device, state.hardwareState!.config) === 'online').length
-      : 0
-    const simulatedDevicesEnabled = enabledDevices.filter((device) => device.adapter === 'simulator').length
-    const hardwareMode = realDevices.length > 0
-      ? realDevicesOnline === realDevices.length ? 'real_ready' : 'real_degraded'
-      : simulatedDevicesEnabled > 0 ? 'simulation_only' : 'unconfigured'
+    const postgresStatus = status.repository === 'postgres' ? status as PostgresRepositoryHealth : null
+    const hardware = await resolveHardwareReadiness()
     return {
       ready: status.ready,
       details: {
@@ -237,6 +269,76 @@ await registerObservability(app, {
         projectionReady: status.projectionReady ?? status.repository !== 'postgres',
         projectionRevision: status.projectionRevision ?? -1,
         projectionCountsMatch: status.projectionCountsMatch ?? status.repository !== 'postgres',
+        kdsAuthorityConsistent: status.kdsAuthorityConsistent ?? status.repository !== 'postgres',
+        databaseLatencyMs: postgresStatus?.latencyMs ?? 0,
+        databaseClockSkewMs: postgresStatus?.databaseClockSkewMs ?? 0,
+        databasePoolTotal: postgresStatus?.pool.total ?? 0,
+        databasePoolIdle: postgresStatus?.pool.idle ?? 0,
+        databasePoolWaiting: postgresStatus?.pool.waiting ?? 0,
+        databasePoolAcquireCount: postgresStatus?.pool.acquisitionCount ?? 0,
+        databasePoolAcquireFailedTotal: postgresStatus?.pool.acquisitionFailedTotal ?? 0,
+        databasePoolAcquireP50Ms: postgresStatus?.pool.acquisitionWaitP50Ms ?? 0,
+        databasePoolAcquireP95Ms: postgresStatus?.pool.acquisitionWaitP95Ms ?? 0,
+        databasePoolAcquireP99Ms: postgresStatus?.pool.acquisitionWaitP99Ms ?? 0,
+        mutationQueuePending: postgresStatus?.mutationQueue.pending ?? 0,
+        mutationQueueHighWatermark: postgresStatus?.mutationQueue.highWatermark ?? 0,
+        mutationQueueActive: postgresStatus?.mutationQueue.active ?? false,
+        mutationQueueCapacity: postgresStatus?.mutationQueue.maxPending ?? 0,
+        mutationQueueRejectedTotal: postgresStatus?.mutationQueue.rejectedTotal ?? 0,
+        mutationQueueTimeoutTotal: postgresStatus?.mutationQueue.timeoutTotal ?? 0,
+        mutationQueueWaitSamples: postgresStatus?.mutationQueue.waitSamples ?? 0,
+        mutationQueueWaitP95Ms: postgresStatus?.mutationQueue.waitP95Ms ?? 0,
+        mutationQueueWaitP99Ms: postgresStatus?.mutationQueue.waitP99Ms ?? 0,
+        mutationQueueWaitMaxMs: postgresStatus?.mutationQueue.waitMaxMs ?? 0,
+        mutationServiceSamples: postgresStatus?.mutationQueue.serviceSamples ?? 0,
+        mutationServiceP95Ms: postgresStatus?.mutationQueue.serviceP95Ms ?? 0,
+        mutationServiceP99Ms: postgresStatus?.mutationQueue.serviceP99Ms ?? 0,
+        mutationServiceMaxMs: postgresStatus?.mutationQueue.serviceMaxMs ?? 0,
+        mutationRevisionLockP95Ms: postgresStatus?.mutationQueue.revisionLockP95Ms ?? 0,
+        mutationRevisionLockMaxMs: postgresStatus?.mutationQueue.revisionLockMaxMs ?? 0,
+        mutationCloneP95Ms: postgresStatus?.mutationQueue.cloneP95Ms ?? 0,
+        mutationCloneMaxMs: postgresStatus?.mutationQueue.cloneMaxMs ?? 0,
+        mutationDomainP95Ms: postgresStatus?.mutationQueue.domainP95Ms ?? 0,
+        mutationDomainMaxMs: postgresStatus?.mutationQueue.domainMaxMs ?? 0,
+        mutationSerializationP95Ms: postgresStatus?.mutationQueue.serializationP95Ms ?? 0,
+        mutationSerializationMaxMs: postgresStatus?.mutationQueue.serializationMaxMs ?? 0,
+        mutationStateWriteP95Ms: postgresStatus?.mutationQueue.stateWriteP95Ms ?? 0,
+        mutationStateWriteMaxMs: postgresStatus?.mutationQueue.stateWriteMaxMs ?? 0,
+        mutationProjectionP95Ms: postgresStatus?.mutationQueue.projectionP95Ms ?? 0,
+        mutationProjectionMaxMs: postgresStatus?.mutationQueue.projectionMaxMs ?? 0,
+        mutationKdsSamples: postgresStatus?.mutationQueue.sourceSamples.kds ?? 0,
+        mutationKdsWaitP95Ms: postgresStatus?.mutationQueue.sourceWaitP95Ms.kds ?? 0,
+        mutationKdsWaitP99Ms: postgresStatus?.mutationQueue.sourceWaitP99Ms.kds ?? 0,
+        mutationKdsServiceP95Ms: postgresStatus?.mutationQueue.sourceServiceP95Ms.kds ?? 0,
+        mutationSchedulerSamples: postgresStatus?.mutationQueue.sourceSamples.scheduler ?? 0,
+        mutationSchedulerWaitP95Ms: postgresStatus?.mutationQueue.sourceWaitP95Ms.scheduler ?? 0,
+        mutationSchedulerWaitP99Ms: postgresStatus?.mutationQueue.sourceWaitP99Ms.scheduler ?? 0,
+        mutationSchedulerServiceP95Ms: postgresStatus?.mutationQueue.sourceServiceP95Ms.scheduler ?? 0,
+        mutationOtherSamples: postgresStatus?.mutationQueue.sourceSamples.other ?? 0,
+        mutationOtherWaitP95Ms: postgresStatus?.mutationQueue.sourceWaitP95Ms.other ?? 0,
+        mutationOtherWaitP99Ms: postgresStatus?.mutationQueue.sourceWaitP99Ms.other ?? 0,
+        mutationOtherServiceP95Ms: postgresStatus?.mutationQueue.sourceServiceP95Ms.other ?? 0,
+        mutationKdsAttempted: postgresStatus?.mutationQueue.sourceAttempted.kds ?? 0,
+        mutationKdsAcquired: postgresStatus?.mutationQueue.sourceAcquired.kds ?? 0,
+        mutationKdsCompleted: postgresStatus?.mutationQueue.sourceCompleted.kds ?? 0,
+        mutationKdsFailedAfterAcquire: postgresStatus?.mutationQueue.sourceFailedAfterAcquire.kds ?? 0,
+        mutationKdsRejected: postgresStatus?.mutationQueue.sourceRejected.kds ?? 0,
+        mutationKdsTimeout: postgresStatus?.mutationQueue.sourceTimeout.kds ?? 0,
+        mutationSchedulerAttempted: postgresStatus?.mutationQueue.sourceAttempted.scheduler ?? 0,
+        mutationSchedulerAcquired: postgresStatus?.mutationQueue.sourceAcquired.scheduler ?? 0,
+        mutationSchedulerCompleted: postgresStatus?.mutationQueue.sourceCompleted.scheduler ?? 0,
+        mutationSchedulerFailedAfterAcquire: postgresStatus?.mutationQueue.sourceFailedAfterAcquire.scheduler ?? 0,
+        mutationSchedulerRejected: postgresStatus?.mutationQueue.sourceRejected.scheduler ?? 0,
+        mutationSchedulerTimeout: postgresStatus?.mutationQueue.sourceTimeout.scheduler ?? 0,
+        mutationOtherAttempted: postgresStatus?.mutationQueue.sourceAttempted.other ?? 0,
+        mutationOtherAcquired: postgresStatus?.mutationQueue.sourceAcquired.other ?? 0,
+        mutationOtherCompleted: postgresStatus?.mutationQueue.sourceCompleted.other ?? 0,
+        mutationOtherFailedAfterAcquire: postgresStatus?.mutationQueue.sourceFailedAfterAcquire.other ?? 0,
+        mutationOtherRejected: postgresStatus?.mutationQueue.sourceRejected.other ?? 0,
+        mutationOtherTimeout: postgresStatus?.mutationQueue.sourceTimeout.other ?? 0,
+        initialSerializedStateBytes: postgresStatus?.mutationQueue.initialSerializedStateBytes ?? 0,
+        serializedStateBytes: postgresStatus?.mutationQueue.serializedStateBytes ?? 0,
+        maxSerializedStateBytes: postgresStatus?.mutationQueue.maxSerializedStateBytes ?? 0,
         operationalReadPath: runtimeDependencies.operationalReadStore ? 'normalized_tables' : 'aggregate_compatibility',
         operationalReadEntityTypes: runtimeDependencies.operationalReadStore ? 8 : 0,
         paymentMode: runtimeConfig.pilotPaymentSimulationEnabled ? 'simulation' : paymentRuntime.mode,
@@ -250,10 +352,7 @@ await registerObservability(app, {
             : 'disabled',
         releaseSha: runtimeConfig.releaseSha,
         releaseImageDigest: runtimeConfig.releaseImageDigest,
-        hardwareMode,
-        realHardwareDevices: realDevices.length,
-        realHardwareDevicesOnline: realDevicesOnline,
-        simulatedDevicesEnabled,
+        ...hardware,
       },
     }
   },
@@ -263,11 +362,39 @@ await registerAuthContext(app, {
   runtimeMode: runtimeConfig.runtimeMode as RuntimeMode,
   sessionSecret: runtimeConfig.sessionSecret,
   readState: () => repository.read(),
-  resumeStaffSession: async (input) => repository.mutate((state) => Boolean(resumePresenceLease(state, {
-    ...input,
-    businessDate: state.store.businessDate,
-    leaseTtlMs: DEFAULT_PRESENCE_LEASE_TTL_MS,
-  }))),
+  isStaffSessionActive: async (input) => Boolean(await presenceLeaseStore.findActive(input)),
+  resumeStaffSession: async (input) => Boolean(await resumeNormalizedPresence(input)),
+  resolvePresenceSession: async (input) => {
+    const directory = await resolveStaffPresenceDirectory()
+    const roleId = directory.storeId === input.storeId ? directory.employees.get(input.actorId) : undefined
+    if (!roleId) return null
+    if (await presenceLeaseStore.isRevoked({ sessionId: input.sessionId, actorId: input.actorId })) return null
+    const findActive = () => presenceLeaseStore.findActive({
+      sessionId: input.sessionId,
+      actorId: input.actorId,
+      businessDate: directory.businessDate,
+      now: input.now,
+    })
+    let active: Awaited<ReturnType<typeof presenceLeaseStore.findActive>>
+    if (input.touch) {
+      active = await presenceLeaseStore.heartbeat({
+          sessionId: input.sessionId,
+          actorId: input.actorId,
+          businessDate: directory.businessDate,
+          now: input.now,
+          leaseTtlMs: DEFAULT_PRESENCE_LEASE_TTL_MS,
+        })
+    } else if (input.invalidate) {
+      pendingPresenceChecks.invalidate(`${input.sessionId}:${input.actorId}:${directory.businessDate}`)
+      active = await findActive()
+    } else {
+      const key = `${input.sessionId}:${input.actorId}:${directory.businessDate}`
+      active = await pendingPresenceChecks.run(key, findActive)
+    }
+    active ??= await resumeNormalizedPresence(input)
+    if (!active) return null
+    return { roleId, businessDate: active.businessDate, expiresAt: active.expiresAt }
+  },
 })
 await registerVoiceTranscriptionRoutes(app, {
   rateLimitStore,
@@ -296,7 +423,7 @@ await registerAssistantRoutes(app, {
     : undefined,
 })
 if (runtimeConfig.runtimeMode === 'staging' || runtimeConfig.runtimeMode === 'production') {
-  await registerPresenceRoutes(app, repository)
+  await registerPresenceRoutes(app, repository, { leaseStore: presenceLeaseStore })
 }
 
 if (runtimeConfig.pilotAccessCode) {
@@ -306,6 +433,7 @@ if (runtimeConfig.pilotAccessCode) {
     sessionSecret: runtimeConfig.sessionSecret!,
     sessionHours: runtimeConfig.pilotSessionHours,
     rateLimitStore,
+    presenceLeaseStore,
   })
 }
 
@@ -466,37 +594,46 @@ app.setErrorHandler((error, request, reply) => {
 app.get('/api/health', async () => ({ status: 'ok', time: new Date().toISOString() }))
 
 app.get('/api/bootstrap', async (request, reply) => {
-  const aggregateState = request.mboxAuthState ?? await repository.read()
   const actor = requireRequestActor(request)
-  const authoritativePromise = operationalStateCache.getOrCreate(actor.storeId, aggregateState.revision, async () => {
+  const scope = `${actor.storeId}:${actor.actorId}`
+  const requestedEtag = request.headers['if-none-match'] ?? ''
+  let currentRevision: number | null = null
+  if (requestedEtag && repository.readRevision) {
+    currentRevision = await repository.readRevision()
+    const cachedView = bootstrapViewCache.get(scope, currentRevision)
+    if (cachedView && [cachedView.etag, `"${currentRevision}"`].includes(requestedEtag)) {
+      return reply
+        .header('etag', cachedView.etag)
+        .header('cache-control', 'private, no-cache')
+        .header('x-mbox-operational-source', cachedView.source)
+        .status(304)
+        .send()
+    }
+  }
+  const aggregateState = request.mboxAuthState
+  const revision = currentRevision ?? aggregateState?.revision ?? await repository.readRevision?.() ?? (await repository.read()).revision
+  const authoritativePromise = operationalStateCache.getOrCreate(actor.storeId, revision, async () => {
     if (!runtimeDependencies.operationalReadStore) {
-      return { state: aggregateState, source: 'aggregate_compatibility' as const }
+      return { state: aggregateState ?? await repository.read(), source: 'aggregate_compatibility' as const }
     }
     if (!repository.readFresh) {
-      return { state: aggregateState, source: 'aggregate_compatibility' as const }
+      return { state: aggregateState ?? await repository.read(), source: 'aggregate_compatibility' as const }
     }
-    const resolved = await resolveOperationalRuntimeState({
-      initialState: aggregateState,
-      readFresh: () => repository.readFresh!(),
-      readSnapshot: (revision, businessDate) => runtimeDependencies.operationalReadStore!.read(revision, businessDate),
-    })
-    if (resolved.source === 'aggregate_compatibility') {
-      app.log.warn({
-        revision: resolved.state.revision,
-        revisionMismatches: resolved.revisionMismatches,
-      }, 'operational read revision kept advancing; served fresh aggregate fallback')
-    }
-    return { state: resolved.state, source: resolved.source }
+    return runtimeDependencies.operationalReadStore.readLatestRuntimeState()
   })
   let authoritative: Awaited<typeof authoritativePromise>
   try {
     authoritative = await authoritativePromise
   } catch (error) {
-    operationalStateCache.delete(actor.storeId, aggregateState.revision)
+    operationalStateCache.delete(actor.storeId, revision)
     throw error
   }
+  if (authoritative.state.revision !== revision) {
+    operationalStateCache.delete(actor.storeId, revision)
+    operationalStateCache.getOrCreate(actor.storeId, authoritative.state.revision, () => Promise.resolve(authoritative))
+  }
   const state = authoritative.state
-  const view = bootstrapViewCache.getOrCreate(`${actor.storeId}:${actor.actorId}`, state.revision, () => {
+  const view = bootstrapViewCache.getOrCreate(scope, state.revision, () => {
     const projected = projectRuntimeStateForActor(state, actor)
     return {
       projected,
@@ -511,7 +648,7 @@ app.get('/api/bootstrap', async (request, reply) => {
     .header('etag', view.etag)
     .header('cache-control', 'private, no-cache')
     .header('x-mbox-operational-source', view.source)
-  if ([view.etag, legacyRevisionEtag].includes(request.headers['if-none-match'] ?? '')) {
+  if ([view.etag, legacyRevisionEtag].includes(requestedEtag)) {
     return reply.status(304).send()
   }
   return {
@@ -719,32 +856,88 @@ if (runtimeConfig.runtimeMode === 'staging' || runtimeConfig.runtimeMode === 'pr
 }
 
 let schedulerRunning = false
+let schedulerDeferredSince = 0
+// Scheduler mutations are aggregate compatibility writes and can take longer
+// than one foreground arrival interval on a slower instance. Require a quiet
+// window shared by every instance; during sustained traffic the bounded
+// deferral below preserves timer correctness without letting every two-second
+// tick delay KDS work.
+const schedulerIdleMs = 750
+const schedulerIdleWaitMs = 250
+const schedulerMaximumDeferralMs = 15_000
 const notificationWorkerId = `notification-worker:${process.pid}:${randomUUID()}`
 const sopActionWorkerId = `sop-action-worker:${process.pid}:${randomUUID()}`
 const scheduler = setInterval(() => {
   if (schedulerRunning) return
   schedulerRunning = true
-  const now = new Date()
-  void repository.read()
-    .then(async (snapshot) => {
-      const scheduledWorkDue = scheduledOperationsWouldChange(snapshot, now)
-      const businessDayRollover = scheduledWorkDue
-        ? await repository.mutate((state) => applyScheduledOperations(state, now))
-        : null
-      const dispatchSnapshot = scheduledWorkDue ? await repository.read() : snapshot
-      if (businessDayRollover?.status === 'rolled_over') {
-        app.log.info({
-          previousBusinessDate: businessDayRollover.steps[0]?.businessDate,
-          businessDate: businessDayRollover.businessDate,
-          rolledBusinessDayCount: businessDayRollover.steps.length,
-        }, 'business day automatically rolled over')
+  const runScheduler = async () => {
+    const snapshot = await repository.read()
+    const probeNow = new Date()
+    const scheduledWorkDue = scheduledOperationsWouldChange(snapshot, probeNow)
+    const notificationWorkDue = notificationsWouldDispatch(snapshot, customerNotificationAdapters, probeNow)
+    const sopActionWorkDue = sopActionsWouldDispatch(snapshot, probeNow)
+    const backgroundWorkDue = scheduledWorkDue || notificationWorkDue || sopActionWorkDue
+    const forceRun = backgroundWorkDue
+      && schedulerDeferredSince > 0
+      && Date.now() - schedulerDeferredSince >= schedulerMaximumDeferralMs
+    if (backgroundWorkDue) {
+      const idle = forceRun || !repository.waitForMutationIdle
+        ? true
+        : await repository.waitForMutationIdle(schedulerIdleMs, schedulerIdleWaitMs)
+      if (!idle) {
+        if (schedulerDeferredSince === 0) schedulerDeferredSince = Date.now()
+        return
       }
-      await Promise.all([
-        dispatchDueNotifications(repository, customerNotificationAdapters, notificationWorkerId, now, {}, dispatchSnapshot),
-        dispatchDueSopActions(repository, sopActionAdapters, sopActionWorkerId, now, dispatchSnapshot),
-      ])
+    }
+    const executionNow = new Date()
+    const currentSnapshot = backgroundWorkDue ? await repository.read() : snapshot
+    const workStillDue = scheduledWorkDue && scheduledOperationsWouldChange(currentSnapshot, executionNow)
+    const minimumGlobalIdleMs = forceRun ? undefined : schedulerIdleMs
+    const businessDayRollover = workStillDue
+      ? await repository.mutate(
+        (state) => applyScheduledOperations(state, executionNow),
+        { metricLabel: 'scheduler', minimumGlobalIdleMs },
+      )
+      : null
+    const dispatchSnapshot = workStillDue ? await repository.read() : currentSnapshot
+    if (businessDayRollover?.status === 'rolled_over') {
+      app.log.info({
+        previousBusinessDate: businessDayRollover.steps[0]?.businessDate,
+        businessDate: businessDayRollover.businessDate,
+        rolledBusinessDayCount: businessDayRollover.steps.length,
+      }, 'business day automatically rolled over')
+    }
+    await Promise.all([
+      dispatchDueNotifications(
+        repository,
+        customerNotificationAdapters,
+        notificationWorkerId,
+        executionNow,
+        { minimumGlobalIdleMs },
+        dispatchSnapshot,
+      ),
+      dispatchDueSopActions(
+        repository,
+        sopActionAdapters,
+        sopActionWorkerId,
+        executionNow,
+        dispatchSnapshot,
+        minimumGlobalIdleMs,
+      ),
+    ])
+    schedulerDeferredSince = 0
+  }
+  const leasedRun = repository.runWithDistributedLease
+    ? repository.runWithDistributedLease('operational-scheduler', runScheduler)
+    : runScheduler()
+  void leasedRun
+    .catch((error) => {
+      if (error instanceof PostgresMutationNotIdleError) {
+        if (schedulerDeferredSince === 0) schedulerDeferredSince = Date.now()
+        return
+      }
+      app.log.error(error)
     })
-    .catch((error) => app.log.error(error))
     .finally(() => { schedulerRunning = false })
 }, 2_000)
 scheduler.unref()

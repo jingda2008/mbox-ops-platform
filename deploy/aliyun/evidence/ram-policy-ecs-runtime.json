@@ -1,0 +1,30 @@
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "oss:GetObject",
+        "oss:PutObject",
+        "oss:DeleteObject",
+        "oss:ListObjects",
+        "oss:ListObjectVersions",
+        "oss:AbortMultipartUpload",
+        "oss:ListParts"
+      ],
+      "Resource": [
+        "acs:oss:*:*:m-box",
+        "acs:oss:*:*:m-box/mbox/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["log:PostLogStoreLogs", "log:GetLogStoreLogs", "log:GetLogStore"],
+      "Resource": [
+        "acs:log:cn-shanghai:*:project/mbox-validation-139224254060/logstore/runtime-errors",
+        "acs:log:cn-shanghai:*:project/mbox-validation-139224254060/logstore/payment-audit",
+        "acs:log:cn-shanghai:*:project/mbox-validation-139224254060/logstore/release-audit"
+      ]
+    }
+  ]
+}

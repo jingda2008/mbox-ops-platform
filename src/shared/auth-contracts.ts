@@ -26,6 +26,8 @@ export interface RequestActorContext {
   authenticatedBy: 'local_header' | 'signed_session'
   sessionId: string | null
   sessionExpiresAt: number | null
+  businessDate?: string
+  presenceExpiresAt?: number
 }
 
 export interface PilotEmployeeOption {

@@ -1,0 +1,39 @@
+{
+  "candidate": "1.0.0-rc.68-local-unpublished",
+  "sourceLogs": [
+    { "path": "/tmp/rc68-runtime-role-1.log", "sha256": "ace07e332e53c9609786a9c79f47b166ae13bd4513ce11177b2c57665f446a52" },
+    { "path": "/tmp/rc68-runtime-role-2.log", "sha256": "a8394d67495281a02eaa102ad44d70cf5381c9e4e97334416e50a264e5616546" }
+  ],
+  "signals": {
+    "fiveXx": 0,
+    "poolTimeouts": 0,
+    "projectionFallbacks": 0,
+    "dnsErrors": 0,
+    "prematureCloses": 0,
+    "nonJsonPreambleLines": 0
+  },
+  "serverObservedRoutes": {
+    "createTask": { "p95Ms": 325.8, "p99Ms": 358.5, "passed": true },
+    "createQuickOrder": { "p95Ms": 270.0, "p99Ms": 324.6, "passed": true },
+    "heartbeat": { "p95Ms": 59.0, "p99Ms": 72.4, "passed": true },
+    "bootstrap": { "p95Ms": 828.3, "p99Ms": 828.9, "passed": false },
+    "reservations": { "p95Ms": 403.2, "p99Ms": 441.0, "passed": true },
+    "guestSession": { "p95Ms": 498.7, "p99Ms": 518.4, "passed": true },
+    "taskAction": { "p95Ms": 84.0, "p99Ms": 93.3, "passed": true },
+    "kdsAction": { "p95Ms": 60.2, "p99Ms": 62.5, "passed": true }
+  },
+  "infrastructure": {
+    "databaseRuntimeRole": "mbox_app; LOGIN; NOSUPERUSER; NOBYPASSRLS",
+    "databasePoolAcquireP95MsByInstance": [58.039, 189.582],
+    "databasePoolAcquireP95TargetMs": 50,
+    "databasePoolAcquireFailures": 0,
+    "mutationQueueHighWatermarkByInstance": [11, 10],
+    "mutationQueueDepthTarget": 100,
+    "mutationQueueRejected": 0,
+    "mutationQueueTimeouts": 0,
+    "projectionReady": true,
+    "eventLoopDelayP95MsByInstance": [27.001, 28.377],
+    "eventLoopTargetP95Ms": 50
+  },
+  "passed": false
+}

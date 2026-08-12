@@ -1,9 +1,12 @@
+import { EventEmitter } from 'node:events'
 import { describe, expect, it } from 'vitest'
 import { createSeedState } from './seed.js'
 import {
   POSTGRES_RUNTIME_STATE_MIGRATION_SQL,
+  POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM,
   PostgresIdempotencyConflictError,
   PostgresInvalidRevisionError,
+  PostgresMutationNotIdleError,
   PostgresMutationQueueFullError,
   PostgresMutationQueueTimeoutError,
   PostgresOptimisticConcurrencyError,
@@ -12,6 +15,9 @@ import {
   PostgresRuntimeStateNotInitializedError,
   PostgresSchemaError,
   PostgresSeedDisabledError,
+  runtimeStateChecksum,
+  runtimeStateValueChecksum,
+  serializeRuntimeState,
   type PostgresPool,
   type PostgresPoolClient,
   type PostgresQueryResult,
@@ -25,6 +31,8 @@ interface FakeRuntimeRow {
   revision: number
   state: string
   state_sha256: string
+  state_checksum_algorithm: string
+  updated_at?: string
 }
 
 interface FakeIdempotencyRow {
@@ -46,6 +54,12 @@ class FakePool implements PostgresPool {
   totalCount = 4
   idleCount = 3
   waitingCount = 0
+  databaseNow = new Date(now)
+  advisoryLeaseHeld = false
+  failNextAdvisoryUnlock = false
+  terminateNextAdvisoryUnlock = false
+  foregroundMutationGateHeld = false
+  readonly releaseErrors: Array<Error | boolean | undefined> = []
 
   async connect(): Promise<PostgresPoolClient> {
     if (this.ended) throw new Error('pool ended')
@@ -57,7 +71,7 @@ class FakePool implements PostgresPool {
   }
 }
 
-class FakeClient implements PostgresPoolClient {
+class FakeClient extends EventEmitter implements PostgresPoolClient {
   private transaction: {
     readOnly: boolean
     runtime: FakeRuntimeRow | null
@@ -67,7 +81,9 @@ class FakeClient implements PostgresPoolClient {
     contextSet: boolean
   } | null = null
 
-  constructor(private readonly pool: FakePool) {}
+  constructor(private readonly pool: FakePool) {
+    super()
+  }
 
   async query<Row extends Record<string, unknown> = Record<string, unknown>>(
     text: string,
@@ -76,8 +92,38 @@ class FakeClient implements PostgresPoolClient {
     const sql = normalizeSql(text)
     this.pool.queries.push({ sql, values: structuredClone(values) })
 
+    if (sql.startsWith('SELECT pg_try_advisory_lock')) {
+      if (this.pool.advisoryLeaseHeld) return result([{ acquired: false }])
+      this.pool.advisoryLeaseHeld = true
+      return result([{ acquired: true }])
+    }
+    if (sql.startsWith('SELECT pg_advisory_xact_lock_shared')) {
+      this.requireContext()
+      return result([{ pg_advisory_xact_lock_shared: null }])
+    }
+    if (sql.startsWith('SELECT pg_try_advisory_xact_lock')) {
+      this.requireContext()
+      return result([{ acquired: !this.pool.foregroundMutationGateHeld }])
+    }
+    if (sql.startsWith('SELECT pg_advisory_unlock')) {
+      if (this.pool.terminateNextAdvisoryUnlock) {
+        this.pool.terminateNextAdvisoryUnlock = false
+        const error = new Error('terminating connection due to administrator command')
+        this.emit('error', error)
+        throw error
+      }
+      if (this.pool.failNextAdvisoryUnlock) {
+        this.pool.failNextAdvisoryUnlock = false
+        throw new Error('advisory unlock failed')
+      }
+      this.pool.advisoryLeaseHeld = false
+      return result([{ pg_advisory_unlock: true }])
+    }
+
     if (sql.startsWith("SELECT n.nspname || '.' || c.relname AS table_name")) {
-      return this.pool.schemaExists ? result([{ table_name: 'mbox.runtime_states' }]) : result([])
+      return this.pool.schemaExists
+        ? result([{ table_name: 'mbox.runtime_states', checksum_algorithm_ready: true }])
+        : result([])
     }
     if (sql.startsWith('BEGIN ISOLATION LEVEL')) {
       this.transaction = {
@@ -106,18 +152,58 @@ class FakeClient implements PostgresPoolClient {
       transaction.runtime = {
         revision: Number(values[2]),
         state: String(values[3]),
-        state_sha256: String(values[4]),
+        state_sha256: runtimeStateValueChecksum(JSON.parse(String(values[3]))),
+        state_checksum_algorithm: POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM,
       }
       transaction.runtimeDirty = true
       return result([], 1)
     }
-    if (sql.startsWith('SELECT revision, state, state_sha256 FROM mbox.runtime_states')) {
+    if (sql.startsWith('SELECT revision, state, state_sha256,')) {
       const transaction = this.requireContext()
-      return transaction.runtime ? result([structuredClone(transaction.runtime)]) : result([])
+      return transaction.runtime ? result([{
+        ...structuredClone(transaction.runtime),
+        checksum_valid: transaction.runtime.state_checksum_algorithm === POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM,
+      }]) : result([])
+    }
+    if (sql.startsWith('SELECT revision, clock_timestamp() AS database_now')) {
+      const transaction = this.requireContext()
+      return transaction.runtime ? result([{ revision: transaction.runtime.revision, database_now: this.pool.databaseNow.toISOString() }]) : result([])
+    }
+    if (sql.startsWith("SELECT revision, state #>> '{store,id}' AS store_id")) {
+      const transaction = this.requireContext()
+      if (!transaction.runtime) return result([])
+      const state = JSON.parse(transaction.runtime.state)
+      return result([{
+        revision: transaction.runtime.revision,
+        store_id: state.store.id,
+        business_date: state.store.businessDate,
+        employees: state.employees,
+      }])
     }
     if (sql.startsWith('SELECT revision FROM mbox.runtime_states')) {
       const transaction = this.requireContext()
       return transaction.runtime ? result([{ revision: transaction.runtime.revision }]) : result([])
+    }
+    if (sql.startsWith('SELECT revision, EXTRACT(EPOCH FROM (clock_timestamp() - updated_at))')) {
+      const transaction = this.requireContext()
+      if (!transaction.runtime) return result([])
+      const updatedAt = Date.parse(
+        transaction.runtime.updated_at
+          ?? new Date(this.pool.databaseNow.getTime() - 1_000).toISOString(),
+      )
+      return result([{
+        revision: transaction.runtime.revision,
+        idle_ms: this.pool.databaseNow.getTime() - updatedAt,
+      }])
+    }
+    if (sql.startsWith('SELECT EXTRACT(EPOCH FROM (clock_timestamp() - updated_at))')) {
+      const transaction = this.requireContext()
+      if (!transaction.runtime) return result([])
+      const updatedAt = Date.parse(
+        transaction.runtime.updated_at
+          ?? new Date(this.pool.databaseNow.getTime() - 1_000).toISOString(),
+      )
+      return result([{ idle_ms: this.pool.databaseNow.getTime() - updatedAt }])
     }
     if (sql.startsWith('UPDATE mbox.runtime_states SET revision')) {
       const transaction = this.requireWritableContext()
@@ -125,14 +211,21 @@ class FakeClient implements PostgresPoolClient {
         this.pool.failNextCompareAndSwap = false
         return result([], 0)
       }
-      if (!transaction.runtime || transaction.runtime.revision !== Number(values[5])) return result([], 0)
+      if (!transaction.runtime || transaction.runtime.revision !== Number(values[4])) return result([], 0)
+      const state = String(values[3])
       transaction.runtime = {
         revision: Number(values[2]),
-        state: String(values[3]),
-        state_sha256: String(values[4]),
+        state,
+        state_sha256: runtimeStateValueChecksum(JSON.parse(state)),
+        state_checksum_algorithm: POSTGRES_JSONB_STATE_CHECKSUM_ALGORITHM,
+        updated_at: this.pool.databaseNow.toISOString(),
       }
       transaction.runtimeDirty = true
-      return result([{ revision: transaction.runtime.revision }], 1)
+      return result([{
+        revision: transaction.runtime.revision,
+        state_sha256: transaction.runtime.state_sha256,
+        state_checksum_algorithm: transaction.runtime.state_checksum_algorithm,
+      }], 1)
     }
     if (sql.startsWith('INSERT INTO mbox.idempotency_records')) {
       const transaction = this.requireWritableContext()
@@ -193,8 +286,9 @@ class FakeClient implements PostgresPoolClient {
     throw new Error(`Unexpected SQL: ${sql}`)
   }
 
-  release(): void {
+  release(error?: Error | boolean): void {
     this.pool.releases += 1
+    this.pool.releaseErrors.push(error)
   }
 
   private requireTransaction() {
@@ -246,6 +340,14 @@ function createRepository(pool = new FakePool(), options: { maxPendingMutations?
 }
 
 describe('PostgresRepository', () => {
+  it('keeps streaming state checksums identical to canonical serialization regardless of key order', () => {
+    const state = createSeedState(now)
+    const reordered = Object.fromEntries(Object.entries(state).reverse()) as typeof state
+
+    expect(runtimeStateValueChecksum(state)).toBe(runtimeStateChecksum(serializeRuntimeState(state)))
+    expect(runtimeStateValueChecksum(reordered)).toBe(runtimeStateValueChecksum(state))
+  })
+
   it('requires the compatibility table instead of creating production schema at startup', async () => {
     const { pool, repository } = createRepository()
     pool.schemaExists = false
@@ -299,6 +401,20 @@ describe('PostgresRepository', () => {
     expect(pool.queries.filter(({ sql }) => sql.startsWith('SELECT revision FROM mbox.runtime_states'))).toHaveLength(revisionReadsBefore + 1)
   })
 
+  it('reads the staff authorization directory without loading the full aggregate', async () => {
+    const { pool, repository } = createRepository()
+    await repository.init()
+    const fullReadsBefore = pool.queries.filter(({ sql }) => sql.startsWith('SELECT revision, state, state_sha256')).length
+
+    const directory = await repository.readStaffDirectory()
+
+    expect(directory.storeId).toBe('mbox-lujiazui')
+    expect(directory.businessDate).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(directory.employees).toContainEqual({ id: 'emp-chen', roleId: 'manager', status: 'active' })
+    expect(pool.queries.filter(({ sql }) => sql.startsWith('SELECT revision, state, state_sha256'))).toHaveLength(fullReadsBefore)
+    expect(pool.queries.some(({ sql }) => sql.includes("state #>> '{store,id}'"))).toBe(true)
+  })
+
   it('commits one-step revisions and rejects stale compare-and-swap writes without partial state', async () => {
     const { pool, repository } = createRepository()
     await repository.init()
@@ -333,7 +449,7 @@ describe('PostgresRepository', () => {
       state.revision += 1
     })
     const fullReadsAfterCommit = pool.queries.filter(({ sql }) => (
-      sql.startsWith('SELECT revision, state, state_sha256 FROM mbox.runtime_states')
+      sql.startsWith('SELECT revision, state, state_sha256,')
     )).length
     const revisionReadsAfterCommit = pool.queries.filter(({ sql }) => (
       sql.startsWith('SELECT revision FROM mbox.runtime_states')
@@ -344,7 +460,7 @@ describe('PostgresRepository', () => {
     expect(state.store.name).toBe('Committed cache state')
     expect(state.revision).toBe(2)
     expect(pool.queries.filter(({ sql }) => (
-      sql.startsWith('SELECT revision, state, state_sha256 FROM mbox.runtime_states')
+      sql.startsWith('SELECT revision, state, state_sha256,')
     ))).toHaveLength(fullReadsAfterCommit)
     expect(pool.queries.filter(({ sql }) => (
       sql.startsWith('SELECT revision FROM mbox.runtime_states')
@@ -356,7 +472,7 @@ describe('PostgresRepository', () => {
     await repository.init()
     await repository.read()
     const fullReadsBefore = pool.queries.filter(({ sql }) => (
-      sql.startsWith('SELECT revision, state, state_sha256 FROM mbox.runtime_states')
+      sql.startsWith('SELECT revision, state, state_sha256,')
     )).length
     let active = 0
     let maximumActive = 0
@@ -384,9 +500,198 @@ describe('PostgresRepository', () => {
 
     await expect(Promise.all([first, second])).resolves.toEqual([2, 3])
     expect(maximumActive).toBe(1)
+    const completedQueue = (await repository.healthCheck()).mutationQueue
+    expect(completedQueue).toMatchObject({
+      pending: 0,
+      active: false,
+      serializedStateBytes: expect.any(Number),
+      initialSerializedStateBytes: expect.any(Number),
+      maxSerializedStateBytes: expect.any(Number),
+      waitSamples: expect.any(Number),
+      waitP95Ms: expect.any(Number),
+      waitP99Ms: expect.any(Number),
+      serviceSamples: expect.any(Number),
+      serviceP95Ms: expect.any(Number),
+      serviceP99Ms: expect.any(Number),
+      sourceWaitP95Ms: expect.objectContaining({ other: expect.any(Number) }),
+      sourceWaitP99Ms: expect.objectContaining({ other: expect.any(Number) }),
+    })
+    expect(completedQueue.serializedStateBytes).toBeGreaterThan(0)
+    expect(completedQueue.maxSerializedStateBytes).toBeGreaterThanOrEqual(completedQueue.serializedStateBytes)
+    expect(completedQueue.waitSamples).toBeGreaterThanOrEqual(2)
+    expect(completedQueue.serviceSamples).toBeGreaterThanOrEqual(2)
+    expect(completedQueue.serviceP95Ms).toBeGreaterThan(0)
     expect(pool.queries.filter(({ sql }) => (
-      sql.startsWith('SELECT revision, state, state_sha256 FROM mbox.runtime_states')
+      sql.startsWith('SELECT revision, state, state_sha256,')
     ))).toHaveLength(fullReadsBefore)
+  })
+
+  it('starts a fresh performance window from the current authoritative state', async () => {
+    const { repository } = createRepository()
+    await repository.init()
+    await repository.mutate((state) => {
+      state.store.name = 'Measured baseline'
+      state.revision += 1
+    })
+    expect((await repository.healthCheck()).mutationQueue.serviceSamples).toBeGreaterThan(0)
+
+    await repository.resetPerformanceMetrics()
+
+    const reset = (await repository.healthCheck()).mutationQueue
+    expect(reset).toMatchObject({
+      highWatermark: 0,
+      rejectedTotal: 0,
+      timeoutTotal: 0,
+      waitSamples: 0,
+      serviceSamples: 0,
+    })
+    expect(reset.initialSerializedStateBytes).toBeGreaterThan(0)
+    expect(reset.serializedStateBytes).toBe(reset.initialSerializedStateBytes)
+    expect(reset.maxSerializedStateBytes).toBe(reset.initialSerializedStateBytes)
+    expect(reset.serializedStateBytes).toBe(Buffer.byteLength(JSON.stringify(await repository.readFresh())))
+  })
+
+  it('keeps committed cache isolated from objects retained by a mutation callback', async () => {
+    const pool = new FakePool()
+    const first = createRepository(pool).repository
+    const second = createRepository(pool).repository
+    await first.init()
+    await second.init()
+    let retained!: ReturnType<typeof createSeedState>
+
+    await first.mutate((state) => {
+      state.store.name = 'Committed value'
+      state.revision += 1
+      retained = state
+    })
+    retained.store.name = 'Escaped mutation'
+
+    expect((await first.read()).store.name).toBe('Committed value')
+    expect((await first.readFresh()).store.name).toBe('Committed value')
+    expect((await second.readFresh()).store.name).toBe('Committed value')
+  })
+
+  it('runs singleton background work under a session advisory lease', async () => {
+    const { pool, repository } = createRepository()
+    await repository.init()
+    let release!: () => void
+    let entered!: () => void
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    const started = new Promise<void>((resolve) => { entered = resolve })
+
+    const first = repository.runWithDistributedLease('operational-scheduler', async () => {
+      entered()
+      await blocked
+      return 7
+    })
+    await started
+    await expect(repository.runWithDistributedLease('operational-scheduler', async () => 8))
+      .resolves.toEqual({ acquired: false })
+    release()
+    await expect(first).resolves.toEqual({ acquired: true, value: 7 })
+    expect(pool.advisoryLeaseHeld).toBe(false)
+    expect(pool.queries.filter(({ sql }) => sql.startsWith('SELECT pg_try_advisory_lock'))).toHaveLength(2)
+    expect(pool.queries.filter(({ sql }) => sql.startsWith('SELECT pg_advisory_unlock'))).toHaveLength(1)
+  })
+
+  it('destroys a leased connection when advisory unlock fails', async () => {
+    const { pool, repository } = createRepository()
+    await repository.init()
+    pool.failNextAdvisoryUnlock = true
+
+    await expect(repository.runWithDistributedLease('operational-scheduler', async () => 7))
+      .rejects.toThrow('advisory unlock failed')
+    expect(pool.releaseErrors.at(-1)).toBeInstanceOf(Error)
+  })
+
+  it('captures a terminated leased connection without an unhandled client error event', async () => {
+    const { pool, repository } = createRepository()
+    await repository.init()
+    pool.terminateNextAdvisoryUnlock = true
+
+    await expect(repository.runWithDistributedLease('operational-scheduler', async () => 7))
+      .rejects.toThrow('terminating connection due to administrator command')
+    expect(pool.releaseErrors.at(-1)).toMatchObject({
+      message: 'terminating connection due to administrator command',
+    })
+  })
+
+  it('preserves the business failure when both the operation and advisory unlock fail', async () => {
+    const { pool, repository } = createRepository()
+    await repository.init()
+    pool.failNextAdvisoryUnlock = true
+
+    await expect(repository.runWithDistributedLease('operational-scheduler', async () => {
+      throw new Error('scheduled operation failed')
+    })).rejects.toThrow('scheduled operation failed')
+    expect(pool.releaseErrors.at(-1)).toMatchObject({ message: 'advisory unlock failed' })
+  })
+
+  it('lets background work wait for a quiet mutation window without blocking forever', async () => {
+    const { repository, pool } = createRepository()
+    await repository.init()
+    let release!: () => void
+    let entered!: () => void
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    const mutation = repository.mutate(async (state) => {
+      entered()
+      await blocked
+      state.revision += 1
+    })
+    await started
+
+    await expect(repository.waitForMutationIdle(1, 5)).resolves.toBe(false)
+    release()
+    await mutation
+    pool.databaseNow = new Date(pool.databaseNow.getTime() + 2)
+    await expect(repository.waitForMutationIdle(1, 100)).resolves.toBe(true)
+  })
+
+  it('does not report a global idle window when another instance just committed', async () => {
+    const pool = new FakePool()
+    const { repository } = createRepository(pool)
+    await repository.init()
+    pool.runtime = { ...pool.runtime!, updated_at: pool.databaseNow.toISOString() }
+
+    await expect(repository.waitForMutationIdle(1, 0)).resolves.toBe(false)
+    await new Promise((resolve) => setTimeout(resolve, 2))
+    pool.databaseNow = new Date(pool.databaseNow.getTime() + 2)
+    await expect(repository.waitForMutationIdle(1, 0)).resolves.toBe(true)
+  })
+
+  it('skips a background mutation when a foreground instance holds the mutation gate', async () => {
+    const { pool, repository } = createRepository()
+    await repository.init()
+    pool.foregroundMutationGateHeld = true
+
+    await expect(repository.mutate((state) => {
+      state.revision += 1
+    }, { metricLabel: 'scheduler', minimumGlobalIdleMs: 750 }))
+      .rejects.toBeInstanceOf(PostgresMutationNotIdleError)
+    expect((await repository.read()).revision).toBe(1)
+  })
+
+  it('checks the committed quiet window while holding the exclusive mutation gate', async () => {
+    const { pool, repository } = createRepository()
+    await repository.init()
+    pool.runtime = { ...pool.runtime!, updated_at: pool.databaseNow.toISOString() }
+
+    await expect(repository.mutate((state) => {
+      state.revision += 1
+    }, { metricLabel: 'scheduler', minimumGlobalIdleMs: 750 }))
+      .rejects.toBeInstanceOf(PostgresMutationNotIdleError)
+
+    pool.databaseNow = new Date(pool.databaseNow.getTime() + 751)
+    await expect(repository.mutate((state) => {
+      state.revision += 1
+    }, { metricLabel: 'scheduler', minimumGlobalIdleMs: 750 })).resolves.toBeUndefined()
+    expect((await repository.read()).revision).toBe(2)
+    expect((await repository.healthCheck()).mutationQueue).toMatchObject({
+      sourceSamples: { kds: 0, scheduler: 2, other: 0 },
+      sourceWaitP95Ms: { kds: 0, scheduler: expect.any(Number), other: 0 },
+      sourceWaitP99Ms: { kds: 0, scheduler: expect.any(Number), other: 0 },
+    })
   })
 
   it('rejects excess or stale queued mutations before they consume database connections', async () => {
@@ -405,8 +710,17 @@ describe('PostgresRepository', () => {
     const second = full.repository.mutate((state) => { state.revision += 1 })
     await expect(full.repository.mutate((state) => { state.revision += 1 }))
       .rejects.toBeInstanceOf(PostgresMutationQueueFullError)
+    expect((await full.repository.healthCheck()).mutationQueue).toMatchObject({ rejectedTotal: 1, timeoutTotal: 0, maxPending: 2 })
     release()
     await Promise.all([first, second])
+    expect((await full.repository.healthCheck()).mutationQueue).toMatchObject({
+      sourceAttempted: { kds: 0, scheduler: 0, other: 3 },
+      sourceAcquired: { kds: 0, scheduler: 0, other: 2 },
+      sourceCompleted: { kds: 0, scheduler: 0, other: 2 },
+      sourceFailedAfterAcquire: { kds: 0, scheduler: 0, other: 0 },
+      sourceRejected: { kds: 0, scheduler: 0, other: 1 },
+      sourceTimeout: { kds: 0, scheduler: 0, other: 0 },
+    })
 
     const timed = createRepository(new FakePool(), { mutationQueueTimeoutMs: 1 })
     await timed.repository.init()
@@ -422,9 +736,49 @@ describe('PostgresRepository', () => {
     await timedStarted
     const timedSecond = timed.repository.mutate((state) => { state.revision += 1 })
     await expect(timedSecond).rejects.toBeInstanceOf(PostgresMutationQueueTimeoutError)
-    expect((await timed.repository.healthCheck()).mutationQueue).toMatchObject({ pending: 1, active: true })
+    expect((await timed.repository.healthCheck()).mutationQueue).toMatchObject({ pending: 1, active: true, rejectedTotal: 0, timeoutTotal: 1 })
     releaseTimed()
     await timedFirst
+    expect((await timed.repository.healthCheck()).mutationQueue).toMatchObject({
+      sourceAttempted: { kds: 0, scheduler: 0, other: 2 },
+      sourceAcquired: { kds: 0, scheduler: 0, other: 1 },
+      sourceCompleted: { kds: 0, scheduler: 0, other: 1 },
+      sourceFailedAfterAcquire: { kds: 0, scheduler: 0, other: 0 },
+      sourceRejected: { kds: 0, scheduler: 0, other: 0 },
+      sourceTimeout: { kds: 0, scheduler: 0, other: 1 },
+    })
+  })
+
+  it('accounts for acquired mutations that fail in the domain callback', async () => {
+    const { repository } = createRepository()
+    await repository.init()
+
+    await expect(repository.mutate(() => {
+      throw new Error('domain failure')
+    }, { metricLabel: 'kds' })).rejects.toThrow('domain failure')
+
+    expect((await repository.healthCheck()).mutationQueue).toMatchObject({
+      sourceAttempted: { kds: 1, scheduler: 0, other: 0 },
+      sourceAcquired: { kds: 1, scheduler: 0, other: 0 },
+      sourceCompleted: { kds: 0, scheduler: 0, other: 0 },
+      sourceFailedAfterAcquire: { kds: 1, scheduler: 0, other: 0 },
+      sourceRejected: { kds: 0, scheduler: 0, other: 0 },
+      sourceTimeout: { kds: 0, scheduler: 0, other: 0 },
+    })
+
+    await expect(repository.mutate(() => {
+      throw new PostgresMutationQueueTimeoutError(10)
+    }, { metricLabel: 'kds' })).rejects.toBeInstanceOf(PostgresMutationQueueTimeoutError)
+
+    expect((await repository.healthCheck()).mutationQueue).toMatchObject({
+      timeoutTotal: 0,
+      sourceAttempted: { kds: 2, scheduler: 0, other: 0 },
+      sourceAcquired: { kds: 2, scheduler: 0, other: 0 },
+      sourceCompleted: { kds: 0, scheduler: 0, other: 0 },
+      sourceFailedAfterAcquire: { kds: 2, scheduler: 0, other: 0 },
+      sourceRejected: { kds: 0, scheduler: 0, other: 0 },
+      sourceTimeout: { kds: 0, scheduler: 0, other: 0 },
+    })
   })
 
   it('accepts multi-event revision advances and rejects non-advancing revisions', async () => {
@@ -506,7 +860,20 @@ describe('PostgresRepository', () => {
       repository: 'postgres',
       healthy: true,
       revision: 1,
+      databaseClockSkewMs: expect.any(Number),
       pool: { total: 4, idle: 3, waiting: 0 },
+    })
+  })
+
+  it('fails readiness when the application and PostgreSQL clocks drift beyond the safety threshold', async () => {
+    const { pool, repository } = createRepository()
+    pool.databaseNow = new Date(now.getTime() + 6_000)
+    await repository.init()
+
+    await expect(repository.healthCheck()).resolves.toMatchObject({
+      ready: false,
+      healthy: false,
+      databaseClockSkewMs: 6_000,
     })
   })
 

@@ -25,15 +25,9 @@ test -f "${ssh_key}"
 
 mkdir -p "${bundle_dir}"
 if [ ! -f "${bundle_dir}/release-manifest.json" ]; then
-  if [ -n "${MBOX_CI_RUN_ID:-}" ]; then
-    gh run download "${MBOX_CI_RUN_ID}" \
-      --name "mbox-image-${MBOX_RELEASE_SHA:?MBOX_RELEASE_SHA is required with MBOX_CI_RUN_ID}" \
-      --dir "${bundle_dir}"
-  else
-    gh release download "${MBOX_RELEASE_TAG}" \
-      --dir "${bundle_dir}" \
-      --clobber
-  fi
+  gh release download "${MBOX_RELEASE_TAG}" \
+    --dir "${bundle_dir}" \
+    --clobber
 fi
 
 manifest=${bundle_dir}/release-manifest.json
@@ -59,6 +53,55 @@ test -f "${bundle_dir}/${archive_name}"
 
 actual_archive_sha=$(shasum -a 256 "${bundle_dir}/${archive_name}" | awk '{print $1}')
 test "${actual_archive_sha}" = "${archive_sha}"
+
+if [ -z "${MBOX_CI_RUN_ID:-}" ]; then
+  MBOX_CI_RUN_ID=$(gh run list \
+    --workflow ci.yml \
+    --branch "${MBOX_RELEASE_TAG}" \
+    --commit "${release_sha}" \
+    --event push \
+    --json databaseId,status,conclusion,headSha \
+    --jq 'map(select(.status == "completed" and .conclusion == "success" and .headSha == "'"${release_sha}"'")) | .[0].databaseId // empty')
+fi
+test -n "${MBOX_CI_RUN_ID}"
+
+quality_dir=${bundle_dir}/verified-ci-evidence/quality
+runtime_dir=${bundle_dir}/verified-ci-evidence/runtime
+if [ ! -f "${quality_dir}/SHA256SUMS" ]; then
+  mkdir -p "${quality_dir}"
+  gh run download "${MBOX_CI_RUN_ID}" --name "quality-evidence-${release_sha}" --dir "${quality_dir}"
+fi
+if [ ! -f "${runtime_dir}/SHA256SUMS" ]; then
+  mkdir -p "${runtime_dir}"
+  gh run download "${MBOX_CI_RUN_ID}" --name "runtime-quality-${release_sha}" --dir "${runtime_dir}"
+fi
+for directory in "${quality_dir}" "${runtime_dir}"; do
+  (cd "${directory}" && shasum -a 256 -c SHA256SUMS >/dev/null)
+done
+node -e "
+  const fs=require('node:fs');
+  const ledger=JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+  if (ledger.source?.commitSha !== process.argv[2]) throw new Error('quality ledger commit mismatch');
+  if (String(ledger.ci?.runId) !== process.argv[3]) throw new Error('quality ledger CI run mismatch');
+" "${quality_dir}/ci-quality-evidence.json" "${release_sha}" "${MBOX_CI_RUN_ID}"
+
+release_metadata=${bundle_dir}/release-metadata
+rm -rf "${release_metadata}"
+mkdir -p "${release_metadata}"
+cp "${bundle_dir}/release-manifest.json" "${release_metadata}/"
+cp "${bundle_dir}/migration-manifest.json" "${release_metadata}/"
+evidence_dir=${bundle_dir}/oss-ready-evidence
+node scripts/build-aliyun-evidence-bundle.mjs \
+  --output "${evidence_dir}" \
+  --channel rc \
+  --version "${release_version}" \
+  --sha "${release_sha}" \
+  --ci-run-id "${MBOX_CI_RUN_ID}" \
+  --input "quality=${quality_dir}" \
+  --input "runtime=${runtime_dir}" \
+  --input "release=${release_metadata}" >/dev/null
+node scripts/verify-sensitive-artifacts.mjs "${evidence_dir}"
+(cd "${evidence_dir}" && shasum -a 256 -c SHA256SUMS >/dev/null)
 
 short_sha=${release_sha:0:7}
 remote_release_dir="/opt/mbox/releases/${short_sha}"
@@ -96,6 +139,12 @@ rsync -a --partial "${rsync_resume_option}" \
   -e "ssh -i '${ssh_key}' -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p '${ssh_port}'" \
   "${bundle_dir}/" "${ssh_target}:${remote_release_dir}/"
 
+for helper in upload-oss-verified.sh stage-release-evidence.sh send-sls-events.sh prune-oss-images.sh; do
+  scp "${scp_options[@]}" "deploy/aliyun/${helper}" "${ssh_target}:${remote_release_dir}/${helper}"
+done
+ssh "${ssh_options[@]}" "${ssh_target}" \
+  "chmod 0700 '${remote_release_dir}'/*.sh && '${remote_release_dir}/stage-release-evidence.sh' '${remote_release_dir}' '${remote_release_dir}/oss-ready-evidence' '${MBOX_RELEASE_TAG}'"
+
 ssh "${ssh_options[@]}" "${ssh_target}" \
   bash -s -- "${remote_release_dir}" "${deployment_tier}" "${public_url}" "${backup_max_age_minutes}" \
   < deploy/aliyun/activate-release.sh
@@ -109,6 +158,9 @@ mkdir -p "${bundle_dir}/deployment"
 scp "${scp_options[@]}" \
   "${ssh_target}:${remote_release_dir}/deployment-manifest.json" \
   "${bundle_dir}/deployment/deployment-manifest.json"
+scp "${scp_options[@]}" \
+  "${ssh_target}:${remote_release_dir}/predeployment-oss-verification.json" \
+  "${bundle_dir}/deployment/predeployment-oss-verification.json"
 
 printf 'deployment=complete\nmanifest=%s\n' \
   "${bundle_dir}/deployment/deployment-manifest.json"

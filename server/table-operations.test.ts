@@ -498,6 +498,18 @@ describe('table operating line', () => {
     expect(state.auditEntries.some((entry) => entry.action === 'table.walk_in_opened.v1')).toBe(true)
   })
 
+  it('rejects an unsafe live change to the database-level business-day cutoff', async () => {
+    const { app } = await fixture()
+    const input = minimumConfig(100_000, 'table-cutoff-change-rejected-0001')
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/api/table-operations/config',
+      payload: { ...input, businessDayRolloverHour: 5 },
+    })
+    expect(response.statusCode).toBe(409)
+    expect(response.json().message).toContain('数据库级设置')
+  })
+
   it('opens a venue table even when its area is not offered as a reservation preference', async () => {
     const { app, repository, useActor } = await fixture()
     await repository.mutate((state) => {

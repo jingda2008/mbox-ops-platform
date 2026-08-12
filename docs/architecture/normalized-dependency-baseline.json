@@ -1,0 +1,8 @@
+{
+  "repository-mutate": 147,
+  "runtime-state-table": 22,
+  "runtime-state-type": 490,
+  "operational-projection": 6,
+  "global-mutation-tail": 3,
+  "whole-store-cas": 2
+}

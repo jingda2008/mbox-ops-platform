@@ -1,4 +1,10 @@
-# PostgreSQL production persistence baseline
+# PostgreSQL database architecture
+
+> On `refactor/normalized-core-v1`, `database/normalized-migrations` is the only migration source for the rebuilt application. It creates a fresh normalized database and deliberately refuses to run against a legacy database. The migrations in `database/migrations` are frozen rc.68 reference material only; the normalized application must not execute or edit them to simulate compatibility.
+
+Run the new baseline with `npm run db:migrate:normalized`. Its schema flavor, migration checksums, application image and seed-data version form one release unit. See `docs/architecture/normalized-only-rebuild-v1.md`.
+
+## Frozen rc.68 reference
 
 This directory is the production transactional database baseline for the M-Box operations platform. It follows `AI运营系统/11-总体技术架构.md`, `AI运营系统/12-核心数据模型与API契约.md`, and the current TypeScript contracts.
 
@@ -83,7 +89,7 @@ Benefit redemption is also transaction-bound. Creating a `benefit_redemptions` l
 
 `customer_notifications` is the business Outbox and delivery aggregate. Workers claim due rows with a short lease, append one immutable `notification_delivery_attempts` row per completed call, and update retry/DLQ fields in the same transaction. An expired lease is an unknown outcome: query the provider when possible and preserve the same business idempotency identity. Dead-letter replay creates new attempt evidence; it must not recreate the member benefit or mutate prior attempts.
 
-Commercial V1 executes against `runtime_states` as the authoritative store aggregate. `runtime_state_versions` is written by a database trigger and makes every revision/hash transition append-only. The normalized domain tables remain the target projection contract; they must not be described as live authoritative records until transactional projectors and parity reconciliation are enabled.
+Commercial V1 generally executes against `runtime_states` as the authoritative store aggregate. `runtime_state_versions` is written by a database trigger and makes every revision/hash transition append-only. Migration 025 is the first controlled exception: KDS commands lock and validate `operational_kds_tasks` as their row authority, append an immutable normalized command event, and update the aggregate compatibility mirror in the same transaction. Other normalized domain tables remain projection contracts and must not be described as live authoritative records until their own transactional cutovers and parity reconciliation are enabled.
 
 Payment success is accepted only after a verified provider callback or a server-side provider query. Frontend redirects never update a payment to `succeeded`. Refund triggers reserve the original payment amount across active refunds and prevent item quantities from exceeding the purchased quantity.
 

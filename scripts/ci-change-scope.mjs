@@ -6,6 +6,12 @@ const DOCUMENTATION_PATHS = [
   /^AGENTS\.md$/,
 ]
 
+const QUALITY_CONTROL_PATHS = [
+  /^docs\/quality-policy(?:-|\.)/,
+  /^docs\/templates\/software-(?:quality|tc-register|required-tc-baseline|state-machine|invariant-register)/,
+  /^docs\/quality\//,
+]
+
 const UI_ONLY_PATHS = [
   /^src\/presentation\//,
   /^src\/.*\.css$/,
@@ -13,7 +19,6 @@ const UI_ONLY_PATHS = [
 ]
 
 const FRONTEND_PATHS = [
-  /^src\/components\//,
   /^src\/(?:App|main)\.tsx$/,
   /^src\/.*\.css$/,
   /^public\//,
@@ -35,6 +40,7 @@ const HIGH_RISK_PATHS = [
 
 export function isDocumentationPath(path) {
   return DOCUMENTATION_PATHS.some((expression) => expression.test(path))
+    && !QUALITY_CONTROL_PATHS.some((expression) => expression.test(path))
 }
 
 export function isUiOnlyPath(path) {
@@ -54,7 +60,10 @@ export function classifyChangedPaths(paths, options = {}) {
   const docsOnly = !forceFull && normalized.length > 0 && runtimePaths.length === 0
   const uiOnly = !forceFull && runtimePaths.length > 0 && runtimePaths.every(isUiOnlyPath)
   const frontendOnly = !forceFull && runtimePaths.length > 0 && runtimePaths.every(isFrontendPath)
-  const migrationChanged = normalized.some((path) => path.startsWith('database/migrations/'))
+  const migrationChanged = normalized.some((path) => (
+    path.startsWith('database/migrations/')
+    || path.startsWith('database/normalized-migrations/')
+  ))
   const scope = docsOnly ? 'docs' : uiOnly ? 'ui' : frontendOnly ? 'frontend' : 'full'
 
   return {

@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.normalized-server.tsbuildinfo",
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "dist-normalized",
+    "rootDir": ".",
+    "types": ["node"],
+    "strict": true,
+    "skipLibCheck": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "files": [
+    "server/normalized-server.ts",
+    "server/migrate-normalized.ts",
+    "server/provision-normalized-store.ts",
+    "server/provision-normalized-catalog.ts",
+    "server/verify-normalized-commercial-readiness.ts",
+    "server/normalized/generate-table-qrs.ts"
+  ]
+}

@@ -31,6 +31,7 @@ export interface RecordGuestBehaviorInput extends Omit<GuestBehaviorEventRecord,
 export interface GuestInsightsStore {
   init(): Promise<void>
   recordEvent(input: RecordGuestBehaviorInput): Promise<GuestBehaviorEventRecord>
+  touchProfile(anonymousId: string, occurredAt: string): Promise<void>
   linkIdentity(anonymousId: string, input: { memberId?: string | null; wechatPrincipalId?: string | null }, occurredAt: string): Promise<GuestProfileRecord>
 }
 
@@ -71,6 +72,12 @@ export class MemoryGuestInsightsStore implements GuestInsightsStore {
     this.events.push(event)
     this.eventIdsByIdempotencyKey.set(input.idempotencyKey, event.id)
     return structuredClone(event)
+  }
+
+  async touchProfile(anonymousId: string, occurredAt: string) {
+    const profile = this.profiles.get(anonymousId) ?? newProfile(anonymousId, occurredAt)
+    if (Date.parse(occurredAt) > Date.parse(profile.lastSeenAt)) profile.lastSeenAt = occurredAt
+    this.profiles.set(anonymousId, profile)
   }
 
   async linkIdentity(anonymousId: string, input: { memberId?: string | null; wechatPrincipalId?: string | null }, occurredAt: string) {
@@ -115,37 +122,57 @@ export class PostgresGuestInsightsStore implements GuestInsightsStore {
         DO UPDATE SET last_seen_at = GREATEST(mbox.guest_profiles.last_seen_at, EXCLUDED.last_seen_at)
       `, [this.options.tenantId, this.options.storeId, input.anonymousId, input.occurredAt])
       const eventId = input.id ?? randomUUID()
-      const inserted = await client.query<{ event_id: string }>(`
-        INSERT INTO mbox.guest_behavior_events (
-          tenant_id, store_id, event_id, anonymous_id, table_session_id, table_code,
-          business_date, event_type, source, occurred_at, metadata, idempotency_key
-        ) VALUES (
-          $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7::date, $8, $9,
-          $10::timestamptz, $11::jsonb, $12
+      const persisted = await client.query<{ event_id: string }>(`
+        WITH inserted AS (
+          INSERT INTO mbox.guest_behavior_events (
+            tenant_id, store_id, event_id, anonymous_id, table_session_id, table_code,
+            business_date, event_type, source, occurred_at, metadata, idempotency_key
+          ) VALUES (
+            $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7::date, $8, $9,
+            $10::timestamptz, $11::jsonb, $12
+          )
+          ON CONFLICT (tenant_id, store_id, idempotency_key) DO NOTHING
+          RETURNING event_id
+        ), incremented AS (
+          UPDATE mbox.guest_profiles
+          SET visit_count = visit_count + 1
+          WHERE tenant_id = $1::uuid
+            AND store_id = $2::uuid
+            AND anonymous_id = $4::uuid
+            AND $8 = 'session_started'
+            AND EXISTS (SELECT 1 FROM inserted)
+          RETURNING anonymous_id
         )
-        ON CONFLICT (tenant_id, store_id, idempotency_key) DO NOTHING
-        RETURNING event_id::text
+        SELECT event_id::text
+        FROM inserted
+        UNION ALL
+        SELECT existing.event_id::text
+        FROM mbox.guest_behavior_events existing
+        WHERE existing.tenant_id = $1::uuid
+          AND existing.store_id = $2::uuid
+          AND existing.idempotency_key = $12
+          AND NOT EXISTS (SELECT 1 FROM inserted)
+        LIMIT 1
       `, [
         this.options.tenantId, this.options.storeId, eventId, input.anonymousId,
         input.tableSessionId, input.tableCode, input.businessDate, input.eventType,
         input.source, input.occurredAt, JSON.stringify(input.metadata), input.idempotencyKey,
       ])
-      if (inserted.rowCount === 1 && input.eventType === 'session_started') {
-        await client.query(`
-          UPDATE mbox.guest_profiles SET visit_count = visit_count + 1
-          WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND anonymous_id = $3::uuid
-        `, [this.options.tenantId, this.options.storeId, input.anonymousId])
-      }
-      let persistedEventId = inserted.rows[0]?.event_id
-      if (!persistedEventId) {
-        const existing = await client.query<{ event_id: string }>(`
-          SELECT event_id::text FROM mbox.guest_behavior_events
-          WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND idempotency_key = $3
-        `, [this.options.tenantId, this.options.storeId, input.idempotencyKey])
-        persistedEventId = existing.rows[0]?.event_id
-      }
+      const persistedEventId = persisted.rows[0]?.event_id
       if (!persistedEventId) throw new Error('客户行为事件写入后无法读取')
       return { ...structuredClone(input), id: persistedEventId }
+    })
+  }
+
+  async touchProfile(anonymousId: string, occurredAt: string) {
+    await this.withTransaction(async (client) => {
+      await client.query(`
+        INSERT INTO mbox.guest_profiles (
+          tenant_id, store_id, anonymous_id, first_seen_at, last_seen_at, visit_count
+        ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::timestamptz, $4::timestamptz, 0)
+        ON CONFLICT (tenant_id, store_id, anonymous_id)
+        DO UPDATE SET last_seen_at = GREATEST(mbox.guest_profiles.last_seen_at, EXCLUDED.last_seen_at)
+      `, [this.options.tenantId, this.options.storeId, anonymousId, occurredAt])
     })
   }
 

@@ -1415,6 +1415,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
                   focusQuery={activeNavigationRequest?.target === 'tasks' ? activeNavigationRequest.focus?.query : null}
                   focusRequestId={activeNavigationRequest?.target === 'tasks' ? activeNavigationRequest.id : null}
                   onClearFocus={() => setActiveNavigationRequest(null)}
+                  serverNow={data.serverNow}
                 />
               </div>
             </>
@@ -1441,6 +1442,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
                 focusQuery={activeNavigationRequest?.target === 'tasks' ? activeNavigationRequest.focus?.query : null}
                 focusRequestId={activeNavigationRequest?.target === 'tasks' ? activeNavigationRequest.id : null}
                 onClearFocus={() => setActiveNavigationRequest(null)}
+                serverNow={data.serverNow}
               />
             </>
           )}
@@ -1569,7 +1571,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
                 </div>
                 <div className="minimum-reminder-config">
                   <div className="switch-field"><span>营业日自动切换</span><label className="switch"><input type="checkbox" checked={tableOpsDraft.automaticBusinessDayRollover ?? true} onChange={(event) => { setTableOpsDraft({ ...tableOpsDraft, automaticBusinessDayRollover: event.target.checked }); setTableOpsDirty(true) }} /><span /></label></div>
-                  <label><span>切换时间（北京时间整点）</span><input type="number" min={0} max={23} value={tableOpsDraft.businessDayRolloverHour ?? 6} onChange={(event) => { setTableOpsDraft({ ...tableOpsDraft, businessDayRolloverHour: Number(event.target.value) }); setTableOpsDirty(true) }} /></label>
+                  <label><span>营业日切换（维护项）</span><input type="text" value={`${String(tableOpsDraft.businessDayRolloverHour ?? 6).padStart(2, '0')}:00 · ${data.store.timezone}`} disabled title="切换时间同时影响数据库归属和财务交班，只能通过维护发布修改" /></label>
                   <label><span>最长开台（小时）</span><input type="number" min={6} max={48} value={tableOpsDraft.maximumOpenHours ?? 12} onChange={(event) => { setTableOpsDraft({ ...tableOpsDraft, maximumOpenHours: Number(event.target.value) }); setTableOpsDirty(true) }} /></label>
                   <div className="switch-field"><span>启用提醒</span><label className="switch"><input type="checkbox" checked={tableOpsDraft.reminder.enabled} onChange={(event) => { setTableOpsDraft({ ...tableOpsDraft, reminder: { ...tableOpsDraft.reminder, enabled: event.target.checked } }); setTableOpsDirty(true) }} /><span /></label></div>
                   <label><span>首次提醒（分钟）</span><input type="number" min={1} max={720} value={tableOpsDraft.reminder.firstReminderMinutes} onChange={(event) => { setTableOpsDraft({ ...tableOpsDraft, reminder: { ...tableOpsDraft.reminder, firstReminderMinutes: Number(event.target.value) } }); setTableOpsDirty(true) }} /></label>

@@ -20,16 +20,121 @@ describe('observability', () => {
 
   it('protects metrics outside local and test', async () => {
     const app = Fastify()
+    let readinessCalls = 0
     await registerObservability(app, {
       runtimeMode: 'production',
       metricsToken: 'm'.repeat(32),
-      readiness: async () => ({ ready: false }),
+      readiness: async () => { readinessCalls += 1; return { ready: false } },
     })
     expect((await app.inject({ method: 'GET', url: '/api/metrics' })).statusCode).toBe(401)
     const response = await app.inject({ method: 'GET', url: '/api/metrics', headers: { authorization: `Bearer ${'m'.repeat(32)}` } })
     expect(response.statusCode).toBe(200)
     expect(response.body).toContain('mbox_api_requests_total')
     expect((await app.inject({ method: 'GET', url: '/api/ready' })).statusCode).toBe(503)
+    expect(readinessCalls).toBe(1)
+    await app.close()
+  })
+
+  it('does not reuse a readiness cache for mutable runtime metrics', async () => {
+    const app = Fastify()
+    let readinessCalls = 0
+    await registerObservability(app, {
+      runtimeMode: 'test',
+      readiness: async () => ({
+        ready: true,
+        details: { mutationServiceSamples: ++readinessCalls },
+      }),
+    })
+
+    expect((await app.inject('/api/ready')).json()).toMatchObject({ mutationServiceSamples: 1 })
+    const metrics = await app.inject('/api/metrics')
+    expect(metrics.body).toContain('mbox_mutation_service_samples 2')
+    expect(readinessCalls).toBe(2)
+    await app.close()
+  })
+
+  it('resets an isolated measurement window outside production only', async () => {
+    const app = Fastify()
+    let runtimeResets = 0
+    await registerObservability(app, {
+      runtimeMode: 'staging',
+      metricsToken: 'm'.repeat(32),
+      readiness: async () => ({ ready: true }),
+      resetRuntimeMetrics: () => { runtimeResets += 1 },
+    })
+    app.get('/api/measured', async () => ({ ok: true }))
+    await app.inject('/api/measured')
+    const reset = await app.inject({
+      method: 'POST',
+      url: '/api/metrics/reset',
+      headers: { authorization: `Bearer ${'m'.repeat(32)}` },
+    })
+    expect(reset.statusCode).toBe(200)
+    expect(reset.json()).toMatchObject({ status: 'reset' })
+    expect(runtimeResets).toBe(1)
+    const metrics = await app.inject({
+      method: 'GET',
+      url: '/api/metrics',
+      headers: { authorization: `Bearer ${'m'.repeat(32)}` },
+    })
+    expect(metrics.body).not.toContain('route="/api/measured"')
+    await app.close()
+
+    const production = Fastify()
+    await registerObservability(production, {
+      runtimeMode: 'production',
+      metricsToken: 'm'.repeat(32),
+      readiness: async () => ({ ready: true }),
+    })
+    expect((await production.inject({
+      method: 'POST',
+      url: '/api/metrics/reset',
+      headers: { authorization: `Bearer ${'m'.repeat(32)}` },
+    })).statusCode).toBe(403)
+    await production.close()
+  })
+
+  it('reports bounded route histograms without leaking path identifiers', async () => {
+    const app = Fastify()
+    await registerObservability(app, { runtimeMode: 'test', readiness: async () => ({ ready: true }) })
+    app.get<{ Params: { reservationId: string } }>('/api/reservations/:reservationId', async (request) => ({ id: request.params.reservationId }))
+    await app.inject({ method: 'GET', url: '/api/reservations/reservation-secret-a' })
+    await app.inject({ method: 'GET', url: '/api/reservations/reservation-secret-b' })
+    await app.inject({ method: 'GET', url: '/api/not-a-route' })
+
+    const response = await app.inject({ method: 'GET', url: '/api/metrics' })
+    expect(response.body).toContain('mbox_api_route_requests_total{method="GET",route="/api/reservations/:reservationId",status_class="2xx"} 2')
+    expect(response.body).toContain('mbox_api_route_request_duration_ms_bucket{method="GET",route="/api/reservations/:reservationId",status_class="2xx",le="+Inf"} 2')
+    expect(response.body).toContain('route="/api/unmatched",status_class="4xx"')
+    expect(response.body).not.toContain('reservation-secret-a')
+    expect(response.body).not.toContain('reservation-secret-b')
+    expect(response.body).toContain('mbox_node_event_loop_delay_ms{quantile="0.95"}')
+    expect(response.body).toContain('mbox_database_pool_connections{state="waiting"} 0')
+    expect(response.body).toContain('mbox_database_clock_skew_ms 0')
+    expect(response.body).toContain('mbox_database_pool_acquisition_wait_ms{quantile="0.95"} 0')
+    expect(response.body).toContain('mbox_database_pool_acquisitions_total{outcome="failed"} 0')
+    expect(response.body).toContain('mbox_mutation_queue_capacity 0')
+    expect(response.body).toContain('mbox_mutation_queue_failures_total{reason="timeout"} 0')
+    expect(response.body).toContain('mbox_mutation_queue_wait_ms{quantile="0.95"} 0')
+    expect(response.body).toContain('mbox_mutation_queue_wait_ms{quantile="0.99"} 0')
+    expect(response.body).toContain('mbox_mutation_queue_wait_samples 0')
+    expect(response.body).toContain('mbox_mutation_service_duration_ms{quantile="0.95"} 0')
+    expect(response.body).toContain('mbox_mutation_service_duration_ms{quantile="0.99"} 0')
+    expect(response.body).toContain('mbox_mutation_service_samples 0')
+    expect(response.body).toContain('mbox_mutation_stage_duration_ms{stage="revision_lock",quantile="0.95"} 0')
+    expect(response.body).toContain('mbox_mutation_stage_duration_ms{stage="clone",quantile="0.95"} 0')
+    expect(response.body).toContain('mbox_mutation_stage_duration_ms{stage="serialization",quantile="0.95"} 0')
+    expect(response.body).toContain('mbox_mutation_stage_duration_ms{stage="state_write",quantile="0.95"} 0')
+    expect(response.body).toContain('mbox_mutation_source_samples{source="kds"} 0')
+    expect(response.body).toContain('mbox_mutation_source_samples{source="scheduler"} 0')
+    expect(response.body).toContain('mbox_mutation_source_queue_wait_ms{source="kds",quantile="0.95"} 0')
+    expect(response.body).toContain('mbox_mutation_source_queue_wait_ms{source="scheduler",quantile="0.99"} 0')
+    expect(response.body).toContain('mbox_mutation_source_outcomes_total{source="kds",outcome="attempted"} 0')
+    expect(response.body).toContain('mbox_mutation_source_outcomes_total{source="scheduler",outcome="failed_after_acquire"} 0')
+    expect(response.body).toContain('mbox_mutation_source_outcomes_total{source="other",outcome="timeout"} 0')
+    expect(response.body).toContain('mbox_runtime_state_serialized_bytes{point="initial"} 0')
+    expect(response.body).toContain('mbox_runtime_state_serialized_bytes{point="current"} 0')
+    expect(response.body).toContain('mbox_runtime_state_serialized_bytes{point="max"} 0')
     await app.close()
   })
 

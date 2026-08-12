@@ -595,7 +595,14 @@ export function applyTaskAction(state: RuntimeState, taskId: string, input: Task
       closeTaskByStaff(state, task, input.actorId, now, eventPayload)
       break
     case 'quick_complete': {
-      if (task.completedBy === input.actorId && ['completed', 'confirmed'].includes(task.status)) return task
+      // A stale second device or a delayed retry may repeat a completion after
+      // another eligible colleague already closed the task. The requested end
+      // state is already true, so return the authoritative task instead of
+      // creating a noisy conflict that encourages repeated taps.
+      if (['completed', 'confirmed'].includes(task.status)) {
+        if (task.completedBy === input.actorId || task.notifiedEmployeeIds.includes(input.actorId)) return task
+        throw new BusinessRuleError('任务已由其他员工完成', 'TASK_COMPLETED_BY_OTHER', 403)
+      }
       if (taskWorkflowLevel(task) !== 'L1') throw new Error('只有快速服务可以一键完成')
       if (!claimableStatuses.has(task.status)) throw new BusinessRuleError('当前状态不能一键完成', 'TASK_QUICK_COMPLETE_STATE_CONFLICT')
       assertCompletionNote(state, task, input.note)

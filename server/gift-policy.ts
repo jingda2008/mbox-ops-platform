@@ -1,5 +1,7 @@
 import type { RuntimeState } from '../src/shared/contracts.js'
 import type { OrderAuthorizationAuthority } from '../src/shared/order-contracts.js'
+import { shiftDateKey, venueLocalDateTimeToIso } from '../src/shared/venue-time.js'
+import { tableOperationsConfig } from './table-sessions.js'
 
 export interface GiftPolicyItem {
   productId: string
@@ -44,18 +46,25 @@ interface GiftUsageRecord {
   occurredAt: number
 }
 
-function chinaBusinessDayRange(businessDate: string) {
-  const start = Date.parse(`${businessDate}T06:00:00+08:00`)
-  return { start, end: start + 24 * 60 * 60_000 }
+function businessDayRange(state: RuntimeState, businessDate: string) {
+  const hour = tableOperationsConfig(state).businessDayRolloverHour ?? 6
+  const localTime = `${String(hour).padStart(2, '0')}:00`
+  const start = Date.parse(venueLocalDateTimeToIso(`${businessDate}T${localTime}`, state.store.timezone))
+  const nextDate = shiftDateKey(businessDate, 1)
+  const end = Date.parse(venueLocalDateTimeToIso(`${nextDate}T${localTime}`, state.store.timezone))
+  return { start, end }
 }
 
-function chinaBusinessMonthRange(businessDate: string) {
+function businessMonthRange(state: RuntimeState, businessDate: string) {
   const year = Number(businessDate.slice(0, 4))
   const month = Number(businessDate.slice(5, 7))
-  const start = Date.parse(`${businessDate.slice(0, 7)}-01T06:00:00+08:00`)
+  const hour = tableOperationsConfig(state).businessDayRolloverHour ?? 6
+  const localTime = `${String(hour).padStart(2, '0')}:00`
+  const start = Date.parse(venueLocalDateTimeToIso(`${businessDate.slice(0, 7)}-01T${localTime}`, state.store.timezone))
   const nextYear = month === 12 ? year + 1 : year
   const nextMonth = month === 12 ? 1 : month + 1
-  const end = Date.parse(`${String(nextYear).padStart(4, '0')}-${String(nextMonth).padStart(2, '0')}-01T06:00:00+08:00`)
+  const nextMonthDate = `${String(nextYear).padStart(4, '0')}-${String(nextMonth).padStart(2, '0')}-01`
+  const end = Date.parse(venueLocalDateTimeToIso(`${nextMonthDate}T${localTime}`, state.store.timezone))
   return { start, end }
 }
 
@@ -100,8 +109,8 @@ function usageFor(
   ))
   const shiftStart = activeShift ? Date.parse(activeShift.startAt) : Date.parse(authority.validFrom)
   const shiftEnd = activeShift ? Date.parse(activeShift.endAt) : Date.parse(authority.validUntil)
-  const businessDay = chinaBusinessDayRange(state.store.businessDate)
-  const month = chinaBusinessMonthRange(state.store.businessDate)
+  const businessDay = businessDayRange(state, state.store.businessDate)
+  const month = businessMonthRange(state, state.store.businessDate)
   return {
     tableAmount: records.reduce((total, record) => (
       record.tableSessionId === request.tableSessionId ? total + record.amount : total

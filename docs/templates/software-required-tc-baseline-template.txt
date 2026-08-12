@@ -1,0 +1,7 @@
+# Keep this file independently reviewed from the execution register.
+# Removing a row from the register must not remove the release requirement.
+# Commercial release format: TC_ID|ORIGINAL_PRIORITY|DEFINITION_SHA256
+# The digest covers requirement_id, priority, risk_area, role, preconditions,
+# steps and expected_result. Keep this file under independent code-owner review.
+# Generate real rows from an independently reviewed register; do not use placeholders.
+# node scripts/verify-tc-register.mjs --input tc-register.csv --print-required-baseline

@@ -20,6 +20,12 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: Deny release when any critical TC or invariant is unfinished
+        run: npm run release:quality-gate
       - name: Validate tag and release metadata
         run: |
           node scripts/verify-release-metadata.mjs
@@ -44,6 +50,41 @@ jobs:
           done
           test -n "${run_id}"
           printf 'run_id=%s\n' "${run_id}" >> "${GITHUB_OUTPUT}"
+      - name: Download and verify the exact CI evidence artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFIED_RUN_ID: ${{ steps.verified-run.outputs.run_id }}
+        run: |
+          mkdir -p verified-ci-evidence/quality verified-ci-evidence/runtime
+          gh run download "${VERIFIED_RUN_ID}" \
+            --name "quality-evidence-${GITHUB_SHA}" \
+            --dir verified-ci-evidence/quality
+          gh run download "${VERIFIED_RUN_ID}" \
+            --name "runtime-quality-${GITHUB_SHA}" \
+            --dir verified-ci-evidence/runtime
+          (
+            cd verified-ci-evidence/quality
+            sha256sum --check SHA256SUMS
+          )
+          (
+            cd verified-ci-evidence/runtime
+            sha256sum --check SHA256SUMS
+          )
+          node scripts/verify-quality-evidence.mjs \
+            --input verified-ci-evidence/quality/ci-quality-evidence.json \
+            --policy docs/quality-policy-mbox-v1.json \
+            --require-immutable \
+            --require-release-pass
+          node - <<'NODE'
+          const fs = require('node:fs')
+          const ledger = JSON.parse(fs.readFileSync('verified-ci-evidence/quality/ci-quality-evidence.json', 'utf8'))
+          if (ledger.source?.commitSha !== process.env.GITHUB_SHA) throw new Error('quality ledger commit mismatch')
+          if (String(ledger.ci?.runId) !== process.env.VERIFIED_RUN_ID) throw new Error('quality ledger CI run mismatch')
+          if ([...(ledger.testRuns ?? []), ...(ledger.performance ?? [])]
+            .some((gate) => gate.required && (gate.artifactStatus !== 'available' || gate.validityStatus !== 'valid'))) {
+            throw new Error('quality ledger contains unavailable or invalid required evidence')
+          }
+          NODE
       - name: Download the CI-staged immutable bundle
         env:
           GH_TOKEN: ${{ github.token }}
@@ -66,6 +107,34 @@ jobs:
             cd release-artifact
             sha256sum --check ./*.tar.gz.sha256
           )
+      - name: Build the short-lived OSS transfer bundle
+        run: |
+          version=$(node -p "require('./package.json').version")
+          mkdir -p release-metadata
+          cp release-artifact/release-manifest.json release-metadata/
+          cp release-artifact/migration-manifest.json release-metadata/
+          node scripts/build-aliyun-evidence-bundle.mjs \
+            --output oss-ready-evidence \
+            --channel rc \
+            --version "${version}" \
+            --sha "${GITHUB_SHA}" \
+            --ci-run-id "${{ steps.verified-run.outputs.run_id }}" \
+            --input quality=verified-ci-evidence/quality \
+            --input runtime=verified-ci-evidence/runtime \
+            --input release=release-metadata
+          node scripts/verify-sensitive-artifacts.mjs oss-ready-evidence
+          (
+            cd oss-ready-evidence
+            sha256sum --check SHA256SUMS
+          )
+      - name: Upload short-lived OSS transfer bundle
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: oss-ready-evidence-${{ github.sha }}
+          path: oss-ready-evidence
+          if-no-files-found: error
+          retention-days: 14
       - name: Publish the verified GitHub pre-release
         env:
           GH_TOKEN: ${{ github.token }}

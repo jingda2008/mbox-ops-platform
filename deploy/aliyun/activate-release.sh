@@ -44,6 +44,7 @@ expected_digest=$(jq -er '.imageDigest' "${manifest}")
 archive_name=$(jq -er '.archive' "${manifest}")
 expected_archive_sha=$(jq -er '.archiveSha256' "${manifest}")
 migration_digest=$(jq -er '.migration.digest' "${manifest}")
+expected_schema_version=$(jq -er '.migration.count' "${manifest}")
 short_sha=${release_sha:0:7}
 archive=${release_dir}/${archive_name}
 
@@ -75,6 +76,7 @@ emit_release_audit() {
 
 [[ "${release_sha}" =~ ^[0-9a-f]{40}$ ]]
 [[ "${expected_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+[[ "${expected_schema_version}" =~ ^[0-9]+$ ]]
 [[ "${archive_name}" != */* ]]
 test -f "${archive}"
 test "$(sha256sum "${archive}" | awk '{print $1}')" = "${expected_archive_sha}"
@@ -123,6 +125,7 @@ set_env() {
 
 set_env MBOX_RELEASE_SHA "${release_sha}"
 set_env MBOX_RELEASE_IMAGE_DIGEST "${expected_digest}"
+set_env APP_COMMIT_SHA "${release_sha}"
 
 current_migration_digest=
 if [ -f "${current_link}/release-manifest.json" ]; then
@@ -238,14 +241,12 @@ candidate_ready=$(docker exec "${candidate}" \
   wget -q -O - http://127.0.0.1:8787/api/ready)
 printf '%s' "${candidate_ready}" | jq -e \
   --arg sha "${release_sha}" \
-  --arg digest "${expected_digest}" \
+  --arg schemaFlavor "normalized-core-v1" \
+  --argjson schemaVersion "${expected_schema_version}" \
   '.status == "ready"
-    and .repository == "postgres"
-    and .projectionReady == true
-    and .projectionCountsMatch == true
-    and .kdsAuthorityConsistent == true
-    and .releaseSha == $sha
-    and .releaseImageDigest == $digest' >/dev/null
+    and .schemaFlavor == $schemaFlavor
+    and (.schemaVersion | tonumber) >= $schemaVersion
+    and .commitSha == $sha' >/dev/null
 
 current_caddy=${release_dir}/Caddyfile.previous
 candidate_caddy=${release_dir}/Caddyfile.candidate
@@ -266,13 +267,12 @@ verify_public_release() {
     response=$(curl -fsS --max-time 10 "${public_url}/api/ready" 2>/dev/null || true)
     if printf '%s' "${response}" | jq -e \
       --arg sha "${release_sha}" \
-      --arg digest "${expected_digest}" \
+      --arg schemaFlavor "normalized-core-v1" \
+      --argjson schemaVersion "${expected_schema_version}" \
       '.status == "ready"
-        and .projectionReady == true
-        and .projectionCountsMatch == true
-        and .kdsAuthorityConsistent == true
-        and .releaseSha == $sha
-        and .releaseImageDigest == $digest' >/dev/null 2>&1; then
+        and .schemaFlavor == $schemaFlavor
+        and (.schemaVersion | tonumber) >= $schemaVersion
+        and .commitSha == $sha' >/dev/null 2>&1; then
       return 0
     fi
     sleep 2

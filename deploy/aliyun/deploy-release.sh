@@ -164,6 +164,7 @@ ssh "${ssh_options[@]}" "${ssh_target}" \
 MBOX_RELEASE_SMOKE_URL="${public_url}" \
 MBOX_RELEASE_EXPECTED_SHA="${release_sha}" \
 MBOX_RELEASE_EXPECTED_DIGEST="${image_digest}" \
+MBOX_RELEASE_EXPECTED_SCHEMA_VERSION="$(read_manifest migration.count)" \
   npm run release:verify
 
 mkdir -p "${bundle_dir}/deployment"

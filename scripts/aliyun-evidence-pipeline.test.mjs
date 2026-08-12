@@ -96,6 +96,15 @@ test('formal deployment requires OSS evidence before activation and uploads data
   assert.match(activate, /tar -xOf "\$\{archive\}" index\.json/)
   assert.match(activate, /platform\.os == "linux" and \.platform\.architecture == "amd64"/)
   assert.match(activate, /archive_config_digest=/)
+  assert.match(activate, /set_env APP_COMMIT_SHA "\$\{release_sha\}"/)
+  assert.match(activate, /\.schemaFlavor == \$schemaFlavor/)
+  assert.match(activate, /\.commitSha == \$sha/)
+  assert.doesNotMatch(activate, /\.projectionReady/)
+  assert.doesNotMatch(activate, /\.releaseImageDigest ==/)
+  const smoke = await read('../scripts/verify-release-smoke.mjs')
+  assert.match(smoke, /body\.schemaFlavor !== 'normalized-core-v1'/)
+  assert.match(smoke, /body\.commitSha !== expectedSha/)
+  assert.doesNotMatch(smoke, /body\.projectionReady/)
 })
 
 test('selective collection is outside the request path and only three stores can be written', async () => {

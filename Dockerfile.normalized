@@ -33,5 +33,5 @@ COPY --from=build --chown=node:node /app/deploy/normalized/initialize-empty-data
 USER node
 EXPOSE 8787
 HEALTHCHECK --interval=15s --timeout=4s --start-period=25s --retries=4 \
-  CMD wget -q -O - "http://localhost:${PORT}/api/ready" >/dev/null || exit 1
+  CMD wget -q -O - "http://127.0.0.1:${PORT}/api/ready" >/dev/null || exit 1
 CMD ["node", "dist-normalized/server/normalized-server.js"]

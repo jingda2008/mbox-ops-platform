@@ -24,7 +24,8 @@ test('normalized Dockerfile is isolated, non-root, immutable and readiness check
   assert.match(source, /dist-normalized\/server\/normalized-server\.js/)
   assert.match(source, /\.\/dist-normalized\/database\/normalized-migrations/)
   assert.match(source, /USER node/)
-  assert.match(source, /\/api\/ready/)
+  assert.match(source, /http:\/\/127\.0\.0\.1:\$\{PORT\}\/api\/ready/)
+  assert.doesNotMatch(source, /http:\/\/localhost:\$\{PORT\}\/api\/ready/)
   assert.doesNotMatch(source, /dist-server\/server\/index\.js/)
   assert.doesNotMatch(source, /database\/migrations(?:\s|\/)/)
 })
@@ -44,7 +45,8 @@ test('deployment scripts contain no embedded public endpoint or secret assignmen
       .filter((name) => !name.endsWith('.test.mjs'))
       .map((name) => readFileSync(resolve(deployDir, name), 'utf8')),
   ].join('\n')
-  assert.doesNotMatch(sources, /(?:^|[^0-9])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?:[^0-9]|$)/m)
+  const publicEndpointSources = sources.replaceAll('127.0.0.1', '<loopback>')
+  assert.doesNotMatch(publicEndpointSources, /(?:^|[^0-9])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?:[^0-9]|$)/m)
   assert.doesNotMatch(sources, /(?:AccessKey|Secret|Password)\s*[=:]\s*[A-Za-z0-9+/_.-]{12,}/i)
 })
 

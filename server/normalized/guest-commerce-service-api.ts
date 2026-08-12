@@ -22,7 +22,10 @@ import {
   type GuestServiceRequestType,
 } from './guest-service-repository.js'
 import {
+  GuestAuthenticationRequiredError,
   GuestCapabilityDeniedError,
+  GuestDeviceBindingError,
+  GuestStoreScopeError,
   type GuestRequestContext,
   requireGuestCapability,
 } from './guest-request-context.js'
@@ -701,6 +704,12 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<unknown
   } catch (error) {
     if (error instanceof GuestApiRequestError) {
       return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message } })
+    }
+    if (error instanceof GuestAuthenticationRequiredError || error instanceof GuestDeviceBindingError) {
+      return reply.code(401).send({ error: { code: 'GUEST_SESSION_INVALID', message: error.message } })
+    }
+    if (error instanceof GuestStoreScopeError) {
+      return reply.code(403).send({ error: { code: 'STORE_ACCESS_FORBIDDEN', message: error.message } })
     }
     if (error instanceof GuestCapabilityDeniedError) {
       return reply.code(403).send({ error: { code: 'GUEST_CAPABILITY_DENIED', message: '当前入口不能执行这项操作' } })

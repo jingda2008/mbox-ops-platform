@@ -9,7 +9,11 @@ import {
   guestCommerceServiceApiPlugin,
   type GuestCommerceServiceApiOptions,
 } from './guest-commerce-service-api.js'
-import type { GuestRequestContext } from './guest-request-context.js'
+import {
+  GuestAuthenticationRequiredError,
+  GuestStoreScopeError,
+  type GuestRequestContext,
+} from './guest-request-context.js'
 import type { Payment } from './payment-repository.js'
 import {
   ScopedPostgresTransactionRunner,
@@ -51,6 +55,32 @@ afterEach(async () => {
 })
 
 describe('guest commerce/service API trust boundaries', () => {
+  it('returns an authentication response instead of a server error when the guest session is missing', async () => {
+    const value = fixture({
+      resolveGuestContext: async () => { throw new GuestAuthenticationRequiredError() },
+    })
+    const response = await value.app.inject({
+      method: 'GET',
+      url: '/api/guest/menu/products',
+    })
+    expect(response.statusCode).toBe(401)
+    expect(response.json()).toMatchObject({ error: { code: 'GUEST_SESSION_INVALID' } })
+    expect(value.query).not.toHaveBeenCalled()
+  })
+
+  it('returns a forbidden response when the trusted store scope is invalid', async () => {
+    const value = fixture({
+      resolveGuestContext: async () => { throw new GuestStoreScopeError() },
+    })
+    const response = await value.app.inject({
+      method: 'GET',
+      url: '/api/guest/menu/products',
+    })
+    expect(response.statusCode).toBe(403)
+    expect(response.json()).toMatchObject({ error: { code: 'STORE_ACCESS_FORBIDDEN' } })
+    expect(value.query).not.toHaveBeenCalled()
+  })
+
   it('searches menu names, aliases, pinyin and specifications without exposing snapshots', async () => {
     const value = fixture()
     const response = await value.app.inject({

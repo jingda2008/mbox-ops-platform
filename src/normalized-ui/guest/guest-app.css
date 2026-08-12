@@ -28,7 +28,7 @@ button:active:not(:disabled) {
 .guest-app,
 .guest-gate {
   min-height: 100dvh;
-  background: var(--mbox-canvas, #f4f5f1);
+  background: #eef1eb;
   color: var(--mbox-ink, #171a17);
 }
 
@@ -53,7 +53,7 @@ button:active:not(:disabled) {
   min-height: 66px;
   padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
   border-bottom: 1px solid #d8dbd4;
-  background: rgb(250 251 248 / 96%);
+  background: rgb(247 249 245 / 96%);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -159,61 +159,61 @@ button:active:not(:disabled) {
 }
 
 .guest-mood {
-  padding: 9px 16px 12px;
-  border-bottom: 5px solid #e5e7e1;
+  padding: 4px 10px 5px;
+  border-bottom: 1px solid #d8dbd4;
+  background: #f6f8f4;
 }
 
 .guest-mood > div:first-child {
   display: flex;
   align-items: baseline;
   justify-content: flex-start;
-  gap: 8px;
+  gap: 5px;
 }
 
 .guest-mood > div:first-child small {
-  color: #8a7129;
-  font-size: 9px;
-  font-weight: 800;
+  display: none;
 }
 
 .guest-mood h2 {
-  font-size: 15px;
+  font-size: 11px;
+  line-height: 1.2;
 }
 
 .guest-mood-options {
   display: grid;
   grid-template-columns: repeat(6, minmax(44px, 1fr));
-  gap: 5px;
-  margin-top: 10px;
+  gap: 3px;
+  margin-top: 3px;
 }
 
 .guest-mood-options button {
   min-width: 0;
-  min-height: 62px;
-  padding: 5px 2px 6px;
+  min-height: 44px;
+  padding: 2px 1px 3px;
   border: 1px solid #cfd4cc;
   border-radius: 6px;
-  background: #fbfcfa;
+  background: #f9faf7;
   color: #313630;
   display: grid;
   place-items: center;
-  box-shadow: 0 2px 0 #c5cac3, 0 4px 8px rgb(18 24 19 / 8%);
+  box-shadow: 0 1px 0 #c5cac3, 0 3px 7px rgb(18 24 19 / 6%);
   transition: opacity 150ms ease, filter 150ms ease, border-color 150ms ease, background-color 150ms ease, box-shadow 80ms ease, transform 80ms ease;
 }
 
 .guest-mood-options button img {
   display: block;
-  width: 34px;
-  height: 34px;
+  width: 24px;
+  height: 24px;
   border: 1px solid #ded8c5;
   border-radius: 50%;
   object-fit: cover;
   background: #fff;
-  box-shadow: 0 2px 5px rgb(38 34 22 / 10%);
+  box-shadow: 0 1px 4px rgb(38 34 22 / 9%);
 }
 
 .guest-mood-options button small {
-  font-size: 10px;
+  font-size: 8px;
 }
 
 .guest-mood-options.has-selection button:not(.is-selected) {
@@ -236,25 +236,25 @@ button:active:not(:disabled) {
 .guest-service-strip {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 7px;
-  padding: 10px 16px;
+  gap: 5px;
+  padding: 6px 10px;
   border-bottom: 1px solid #d8dbd4;
-  background: #eceee9;
+  background: #ecefe9;
 }
 
 .guest-service-strip button {
-  min-height: 54px;
-  padding: 7px 4px;
+  min-height: 42px;
+  padding: 5px 6px;
   border: 1px solid #cdd1ca;
   border-radius: 6px;
-  background: #fbfcfa;
-  box-shadow: 0 2px 0 #c4cac2, 0 4px 8px rgb(18 24 19 / 7%);
+  background: #f8faf6;
+  box-shadow: 0 1px 0 #c4cac2, 0 3px 7px rgb(18 24 19 / 6%);
   transition: border-color 120ms ease, background-color 120ms ease, box-shadow 80ms ease, transform 80ms ease;
   color: #252925;
-  display: grid;
-  gap: 3px;
+  display: flex;
+  gap: 5px;
   place-items: center;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
 }
 
@@ -263,8 +263,8 @@ button:active:not(:disabled) {
 }
 
 .guest-service-strip svg {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
 }
 
 .guest-choice-strip {
@@ -1565,12 +1565,8 @@ button:active:not(:disabled) {
     font-size: 9px;
   }
 
-  .guest-mood-options {
-    grid-template-columns: repeat(3, 1fr);
-  }
-
   .guest-service-strip button span {
-    font-size: 10px;
+    font-size: 9px;
   }
 
   .guest-choice-strip {

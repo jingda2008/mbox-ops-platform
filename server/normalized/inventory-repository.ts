@@ -15,6 +15,7 @@ export interface ConsumeInventoryOptions {
   createdByEmployeeId?: string | null;
   reason?: string | null;
   metadata?: JsonObject;
+  allowMissingRecipes?: boolean;
 }
 
 export interface InventoryItemRecord {
@@ -1055,7 +1056,8 @@ export class InventoryRepository {
           item.fulfillmentStation === "kitchen") &&
         !demandOrderItems.has(item.id),
     );
-    if (missingRecipe) throw new InventoryRecipeMissingError(missingRecipe.id);
+    if (missingRecipe && options.allowMissingRecipes !== true)
+      throw new InventoryRecipeMissingError(missingRecipe.id);
     if (demand.length === 0) return [];
     const locked = await this.lockRequiredBalances(demand);
     this.assertBalancesSufficient(demand, locked);

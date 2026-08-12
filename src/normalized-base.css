@@ -1,9 +1,9 @@
 :root {
   color-scheme: light;
-  --mbox-canvas: #f2f3ef;
-  --mbox-surface: #ffffff;
-  --mbox-surface-soft: #f8f9f6;
-  --mbox-surface-muted: #e9ece6;
+  --mbox-canvas: #eef1eb;
+  --mbox-surface: #f9faf7;
+  --mbox-surface-soft: #f5f7f3;
+  --mbox-surface-muted: #e7ebe4;
   --mbox-ink: #171b18;
   --mbox-ink-soft: #687069;
   --mbox-line: #d6dbd4;

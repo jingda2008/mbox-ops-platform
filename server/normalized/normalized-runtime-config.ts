@@ -18,6 +18,7 @@ export interface NormalizedRuntimeConfig {
   secret: string
   payment: NormalizedPaymentRuntimeConfig | null
   guestPaymentMode: GuestCheckoutPaymentMode
+  inventoryEnforcementMode: 'strict' | 'audit_only'
   commitSha: string
   schemaFlavor: typeof NORMALIZED_SCHEMA_FLAVOR
   host: string
@@ -52,6 +53,11 @@ export function loadNormalizedRuntimeConfig(
   const secret = requiredSecret(environment.MBOX_NORMALIZED_SECRET, errors)
   const payment = readPayment(environment, nodeEnv, errors)
   const guestPaymentMode = readGuestPaymentMode(environment.MBOX_GUEST_PAYMENT_MODE, nodeEnv, errors)
+  const inventoryEnforcementMode = readInventoryEnforcementMode(
+    environment.MBOX_INVENTORY_ENFORCEMENT_MODE,
+    nodeEnv,
+    errors,
+  )
   const port = readInteger(environment.PORT, 'PORT', 3_000, 1, 65_535, errors)
   const poolMax = readInteger(environment.MBOX_DATABASE_POOL_MAX, 'MBOX_DATABASE_POOL_MAX', 12, 2, 100, errors)
   const workerPoolMax = readInteger(environment.MBOX_WORKER_DATABASE_POOL_MAX, 'MBOX_WORKER_DATABASE_POOL_MAX', 4, 2, 12, errors)
@@ -84,6 +90,7 @@ export function loadNormalizedRuntimeConfig(
     secret,
     payment,
     guestPaymentMode,
+    inventoryEnforcementMode,
     commitSha,
     schemaFlavor: NORMALIZED_SCHEMA_FLAVOR,
     host: optional(environment.HOST) ?? '0.0.0.0',
@@ -96,6 +103,21 @@ export function loadNormalizedRuntimeConfig(
     workerIntervalMs,
     workerAdapterModule,
   })
+}
+
+function readInventoryEnforcementMode(
+  value: string | undefined,
+  nodeEnv: NormalizedRuntimeConfig['nodeEnv'],
+  errors: string[],
+): NormalizedRuntimeConfig['inventoryEnforcementMode'] {
+  const normalized = optional(value)
+  if (normalized === 'strict') return normalized
+  if (normalized === 'audit_only') {
+    if (nodeEnv === 'production') errors.push('MBOX_INVENTORY_ENFORCEMENT_MODE')
+    return normalized
+  }
+  if (normalized !== null) errors.push('MBOX_INVENTORY_ENFORCEMENT_MODE')
+  return nodeEnv === 'production' ? 'strict' : 'audit_only'
 }
 
 function readWorkerId(value: string | undefined, enabled: boolean, errors: string[]): string | null {

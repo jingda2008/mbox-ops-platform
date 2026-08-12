@@ -30,20 +30,12 @@ if (!new RegExp(`^## ${escapedVersion} - \\d{4}-\\d{2}-\\d{2}$`, 'm').test(chang
   failures.push(`CHANGELOG.md is missing a dated ${version} heading`)
 }
 
-const migrationFiles = (await readdir('database/migrations'))
-  .filter((name) => /^\d{3}_.+\.sql$/.test(name))
-  .sort()
-const migrationNumbers = migrationFiles.map((name) => Number(name.slice(0, 3)))
-const uniqueMigrationNumbers = new Set(migrationNumbers)
-if (uniqueMigrationNumbers.size !== migrationNumbers.length) {
-  failures.push('database migration numbers are not unique')
-}
-for (let index = 0; index < migrationNumbers.length; index += 1) {
-  if (migrationNumbers[index] !== index + 1) {
-    failures.push(`database migrations are not contiguous at ${migrationFiles[index]}`)
-    break
-  }
-}
+const migrationFiles = await validateMigrationDirectory('database/migrations', 'database', failures)
+const normalizedMigrationFiles = await validateMigrationDirectory(
+  'database/normalized-migrations',
+  'normalized database',
+  failures,
+)
 
 const requestedTag = process.env.MBOX_RELEASE_TAG
   || (process.env.GITHUB_REF_TYPE === 'tag' ? process.env.GITHUB_REF_NAME : '')
@@ -57,5 +49,23 @@ if (failures.length > 0) {
 }
 
 process.stdout.write(
-  `Release metadata verified: ${releaseTag}, ${releaseDocumentPath}, ${migrationFiles.length} migrations.\n`,
+  `Release metadata verified: ${releaseTag}, ${releaseDocumentPath}, `
+    + `${migrationFiles.length} legacy migrations, ${normalizedMigrationFiles.length} normalized migrations.\n`,
 )
+
+async function validateMigrationDirectory(directory, label, targetFailures) {
+  const files = (await readdir(directory))
+    .filter((name) => /^\d{3}_.+\.sql$/.test(name))
+    .sort()
+  const numbers = files.map((name) => Number(name.slice(0, 3)))
+  if (new Set(numbers).size !== numbers.length) {
+    targetFailures.push(`${label} migration numbers are not unique`)
+  }
+  for (let index = 0; index < numbers.length; index += 1) {
+    if (numbers[index] !== index + 1) {
+      targetFailures.push(`${label} migrations are not contiguous at ${files[index]}`)
+      break
+    }
+  }
+  return files
+}

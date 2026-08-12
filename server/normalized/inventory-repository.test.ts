@@ -96,6 +96,16 @@ describe("InventoryRepository", () => {
     expect(tx.calls).toHaveLength(1);
   });
 
+  it("allows an unconfigured product only when validation audit mode is explicit", async () => {
+    const tx = new ScriptedTransaction([{ rows: [] }]);
+    await expect(
+      new InventoryRepository(tx).consumeForOrderItems([orderItem()], {
+        allowMissingRecipes: true,
+      }),
+    ).resolves.toEqual([]);
+    expect(tx.calls).toHaveLength(1);
+  });
+
   it("allows non-inventory service items without a recipe", async () => {
     const tx = new ScriptedTransaction([{ rows: [] }]);
     await expect(

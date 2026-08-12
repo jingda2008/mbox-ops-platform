@@ -6,24 +6,24 @@
 .guest-recommendation-entries {
   display: grid;
   grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-  gap: 8px;
-  padding: 9px 11px;
+  gap: 6px;
+  padding: 6px 10px;
   border-bottom: 1px solid #d9ddd7;
-  background: #f4f5f2;
+  background: #eef1eb;
 }
 
 .guest-recommendation-entry {
   min-width: 0;
-  min-height: 52px;
+  min-height: 44px;
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) auto;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
-  padding: 5px 10px;
+  gap: 6px;
+  padding: 4px 8px;
   border: 1px solid #cfd4cd;
   border-radius: 6px;
-  background: #fff;
-  box-shadow: 0 2px 0 #c5cac3, 0 4px 8px rgba(18, 24, 19, .07);
+  background: #f8faf6;
+  box-shadow: 0 1px 0 #c5cac3, 0 3px 7px rgba(18, 24, 19, .06);
   color: inherit;
   text-align: left;
   touch-action: manipulation;
@@ -31,7 +31,7 @@
 }
 
 .guest-recommendation-entry.is-shake {
-  grid-template-columns: 32px minmax(0, 1fr);
+  grid-template-columns: 28px minmax(0, 1fr);
 }
 
 .guest-recommendation-entry:hover,
@@ -57,8 +57,8 @@
 }
 
 .guest-recommendation-entry-icon {
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   display: grid;
   place-items: center;
   border: 1px solid #d8c88f;
@@ -81,12 +81,12 @@
 }
 
 .guest-recommendation-entry strong {
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .guest-recommendation-entry small {
   color: #6f766f;
-  font-size: 9px;
+  font-size: 8px;
 }
 
 .guest-recommendation-backdrop {

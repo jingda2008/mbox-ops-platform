@@ -336,7 +336,11 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       resolveContext: operationsContext,
       resolveGuestContext: () => ({ scope }),
     })
-    const commerce = new CommerceCommandService(commandExecutor, new PostgresPricingAuthority())
+    const commerce = new CommerceCommandService(
+      commandExecutor,
+      new PostgresPricingAuthority(),
+      { inventoryEnforcementMode: options.config.inventoryEnforcementMode },
+    )
     instance.register(commerceKdsApiPlugin, {
       prefix: '/api',
       commerce,
@@ -721,7 +725,11 @@ function registerSystemRoutes(
   scope: Readonly<StoreScope>,
   workerHealth?: NormalizedAppOptions['workerHealth'],
 ): void {
-  const version = Object.freeze({ commitSha: config.commitSha, schemaFlavor: config.schemaFlavor })
+  const version = Object.freeze({
+    commitSha: config.commitSha,
+    schemaFlavor: config.schemaFlavor,
+    inventoryEnforcementMode: config.inventoryEnforcementMode,
+  })
   app.get('/api/live', async () => ({ status: 'live', ...version }))
   app.get('/api/version', async () => version)
   app.get('/api/ready', async (_request, reply) => {

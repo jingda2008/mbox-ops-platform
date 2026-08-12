@@ -444,6 +444,7 @@ export function MenuOrderingWorkspace({
   }
 
   function applyQuantityChange(productId: string, delta: number) {
+    if (guestSalesMode) menuHaptic(delta > 0 ? 5 : 3)
     setProductQuantity(productId, (cart[productId] ?? 0) + delta, delta > 0 ? 'product_added' : 'product_removed')
   }
 
@@ -553,11 +554,11 @@ export function MenuOrderingWorkspace({
     <div className="menu-cart-line" key={product.id}>
       <div><strong>{product.name}</strong><span>¥{(product.listPriceAmount / 100).toFixed(0)} × {cart[product.id]}</span></div>
       <div className={`menu-stepper${(product.maxOrderQuantity ?? 50) > 50 ? ' has-direct-input' : ''}`}>
-        <button title={`移除${product.name}`} onClick={() => removeProduct(product.id)}><Trash2 size={15} /></button>
+        <button type="button" title={`移除${product.name}`} onClick={() => removeProduct(product.id)}><Trash2 size={15} /></button>
         {(product.maxOrderQuantity ?? 50) > 50
           ? <input aria-label={`${product.name}数量`} type="number" inputMode="numeric" min={1} max={product.maxOrderQuantity} value={cart[product.id]} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setProductQuantity(product.id, Number(event.target.value))} />
           : <strong>{cart[product.id]}</strong>}
-        <button title={`增加${product.name}`} onClick={() => changeQuantity(product.id, 1)}><Plus size={15} /></button>
+        <button type="button" title={`增加${product.name}`} onClick={() => changeQuantity(product.id, 1)}><Plus size={15} /></button>
       </div>
     </div>
   ))
@@ -783,14 +784,14 @@ export function MenuOrderingWorkspace({
                       {!status.orderable ? (
                         <button className="menu-unavailable-button" title={status.label} aria-label={`${product.name}暂不可点，${status.label}`} disabled><Clock3 size={18} /></button>
                       ) : quantity === 0 ? (
-                        <button className="menu-add-button" title={`加入${product.name}`} aria-label={`加入${product.name}`} onClick={() => changeQuantity(product.id, 1)}><Plus size={20} /></button>
+                        <button type="button" className="menu-add-button" title={`加入${product.name}`} aria-label={`加入${product.name}`} onClick={() => changeQuantity(product.id, 1)}><Plus size={20} strokeWidth={2.5} /></button>
                       ) : (
                         <div className={`menu-stepper${(product.maxOrderQuantity ?? 50) > 50 ? ' has-direct-input' : ''}`}>
-                          <button title={`减少${product.name}`} onClick={() => changeQuantity(product.id, -1)}><Minus size={17} /></button>
+                          <button type="button" title={`减少${product.name}`} onClick={() => changeQuantity(product.id, -1)}><Minus size={17} /></button>
                           {(product.maxOrderQuantity ?? 50) > 50
                             ? <input aria-label={`${product.name}数量`} type="number" inputMode="numeric" min={1} max={product.maxOrderQuantity} value={quantity} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setProductQuantity(product.id, Number(event.target.value))} />
                             : <strong>{quantity}</strong>}
-                          <button title={`增加${product.name}`} onClick={() => changeQuantity(product.id, 1)}><Plus size={17} /></button>
+                          <button type="button" title={`增加${product.name}`} onClick={() => changeQuantity(product.id, 1)}><Plus size={17} /></button>
                         </div>
                       )}
                     </footer>
@@ -832,7 +833,7 @@ export function MenuOrderingWorkspace({
               </span>
             </button>
             <button className="menu-submit-button" disabled={cartProducts.length === 0 || busy || submitDisabled} onClick={() => setCartOpen(true)}>
-              {submitDisabled ? submitLabel : '核对订单'}<ChevronRight size={18} />
+              {submitDisabled ? submitLabel : '查看已选'}<ChevronRight size={18} />
             </button>
           </aside>
         </> : (
@@ -955,4 +956,10 @@ export function MenuOrderingWorkspace({
       </div>}
     </section>
   )
+}
+
+function menuHaptic(duration: number): void {
+  if (typeof navigator === 'undefined' || !('vibrate' in navigator)) return
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+  navigator.vibrate(duration)
 }

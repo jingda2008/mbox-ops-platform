@@ -100,7 +100,7 @@ test('all real employees enter role-scoped mobile workspaces and every high-freq
       employee.highFrequencyEntries.map((entry) => entry.label).sort(),
       `${employee.name} high-frequency entry configuration drifted`,
     ).toEqual([...(expectedHighFrequencyEntries.get(employee.code) ?? [])].sort())
-    const context = await browser.newContext()
+    const context = await browser.newContext({ viewport: { width: 320, height: 720 }, isMobile: true, hasTouch: true })
     const page = await context.newPage()
     await login(page, data, employee)
     await expect(page.getByRole('heading', { name: employee.name })).toBeVisible()
@@ -180,7 +180,7 @@ test('one business-day order and guest requests flow through bartender, kitchen,
     await guest.getByLabel('搜索菜单商品').fill(productName)
     await guest.getByRole('button', { name: `加入${productName}` }).click()
   }
-  await guest.getByRole('button', { name: /核对订单/ }).click()
+  await guest.getByRole('button', { name: '查看已选' }).click()
   const cart = guest.getByRole('dialog', { name: '购物车明细' })
   await cart.getByPlaceholder('如：少冰、不要香菜、酒水和小食一起上').fill('营业日验收：酒水小食一起上')
   await cart.getByRole('button', { name: /确认订单并微信支付/ }).click()

@@ -20,6 +20,7 @@ describe('loadNormalizedRuntimeConfig', () => {
       nodeEnv: 'test',
       payment: null,
       guestPaymentMode: 'simulation',
+      inventoryEnforcementMode: 'audit_only',
       schemaFlavor: NORMALIZED_SCHEMA_FLAVOR,
       port: 3_000,
       poolMax: 12,
@@ -70,9 +71,30 @@ describe('loadNormalizedRuntimeConfig', () => {
       MBOX_WORKER_ADAPTER_MODULE: '/opt/mbox/worker-adapters.mjs',
     }
     expect(loadNormalizedRuntimeConfig(production).payment).toMatchObject({ provider: 'postar' })
+    expect(loadNormalizedRuntimeConfig(production).inventoryEnforcementMode).toBe('strict')
     expect(() => loadNormalizedRuntimeConfig({
       ...production,
       MBOX_GUEST_PAYMENT_MODE: 'simulation',
+    })).toThrowError(NormalizedRuntimeConfigurationError)
+  })
+
+  it('allows inventory audit mode only outside production', () => {
+    expect(loadNormalizedRuntimeConfig({
+      ...base,
+      MBOX_INVENTORY_ENFORCEMENT_MODE: 'audit_only',
+    }).inventoryEnforcementMode).toBe('audit_only')
+    expect(() => loadNormalizedRuntimeConfig({
+      ...base,
+      NODE_ENV: 'production',
+      MBOX_PAYMENT_PROVIDER: 'postar',
+      POSTAR_AGENCY_ID: 'agency-1',
+      POSTAR_MERCHANT_ID: 'merchant-1',
+      POSTAR_PUBLIC_KEY: 'public-key',
+      MBOX_GUEST_PAYMENT_MODE: 'wechat_native_qr',
+      MBOX_START_WORKERS: 'true',
+      MBOX_WORKER_ID: 'mbox-worker-production-01',
+      MBOX_WORKER_ADAPTER_MODULE: '/opt/mbox/worker-adapters.mjs',
+      MBOX_INVENTORY_ENFORCEMENT_MODE: 'audit_only',
     })).toThrowError(NormalizedRuntimeConfigurationError)
   })
 

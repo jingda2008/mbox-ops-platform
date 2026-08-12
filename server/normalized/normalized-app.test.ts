@@ -28,6 +28,7 @@ const config: NormalizedRuntimeConfig = {
   secret: '0123456789abcdef0123456789abcdef',
   payment: null,
   guestPaymentMode: 'simulation',
+  inventoryEnforcementMode: 'audit_only',
   commitSha: 'abcdef1234567890',
   schemaFlavor: NORMALIZED_SCHEMA_FLAVOR,
   host: '127.0.0.1',
@@ -97,12 +98,14 @@ describe('createNormalizedApp', () => {
       status: 'live',
       commitSha: config.commitSha,
       schemaFlavor: NORMALIZED_SCHEMA_FLAVOR,
+      inventoryEnforcementMode: 'audit_only',
     })
     const version = await runtime.app.inject({ method: 'GET', url: '/api/version' })
     expect(version.statusCode).toBe(200)
     expect(version.json()).toEqual({
       commitSha: config.commitSha,
       schemaFlavor: NORMALIZED_SCHEMA_FLAVOR,
+      inventoryEnforcementMode: 'audit_only',
     })
     await runtime.app.close()
 
@@ -122,6 +125,7 @@ describe('createNormalizedApp', () => {
       schemaVersion: NORMALIZED_MIN_SCHEMA_VERSION,
       commitSha: config.commitSha,
       schemaFlavor: NORMALIZED_SCHEMA_FLAVOR,
+      inventoryEnforcementMode: 'audit_only',
     })
     expect(pool.queries.some((query) => query.includes('normalized_schema_metadata'))).toBe(true)
     await runtime.app.close()

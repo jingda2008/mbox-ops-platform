@@ -62,12 +62,17 @@ export interface SubmittedCommerceResult {
   paymentNextStep: PaymentNextStep
 }
 
+export interface CommerceCommandServiceOptions {
+  inventoryEnforcementMode?: 'strict' | 'audit_only'
+}
+
 export class CommerceCommandService {
   private readonly pricingPolicy: PricingAuthorizationPolicy | null
 
   constructor(
     private readonly commands: Pick<NormalizedCommandExecutor, 'execute'>,
     pricingAuthority?: PricingAuthorityPort,
+    private readonly options: Readonly<CommerceCommandServiceOptions> = {},
   ) {
     this.pricingPolicy = pricingAuthority ? new PricingAuthorizationPolicy(pricingAuthority) : null
   }
@@ -97,6 +102,7 @@ export class CommerceCommandService {
       const order = await new OrderRepository(transaction).createSubmitted(orderInput, pricingAuthorization)
       if (pricingAuthorization) await this.pricingPolicy!.consume(transaction, pricingAuthorization, order.id)
 
+      const inventoryEnforcementMode = this.options.inventoryEnforcementMode ?? 'strict'
       const inventoryConsumptions = await new InventoryRepository(transaction).consumeForOrderItems(
         order.items,
         {
@@ -108,8 +114,19 @@ export class CommerceCommandService {
             pricingAuthorizationId: pricingAuthorization?.authorizationId ?? null,
             assistedOrderContextId: context.assistedContextId,
           },
+          allowMissingRecipes: inventoryEnforcementMode === 'audit_only',
         },
       )
+      const consumedOrderItemIds = new Set(inventoryConsumptions.map((item) => item.orderItemId))
+      const unconfiguredInventoryOrderItemIds = order.items
+        .filter((item) => (item.fulfillmentStation === 'bar' || item.fulfillmentStation === 'kitchen')
+          && !consumedOrderItemIds.has(item.id))
+        .map((item) => item.id)
+      const inventoryControl = {
+        enforcementMode: inventoryEnforcementMode,
+        configurationComplete: unconfiguredInventoryOrderItemIds.length === 0,
+        unconfiguredOrderItemIds: unconfiguredInventoryOrderItemIds,
+      } as const
       const kdsTasks = await createServerScheduledKdsTasks(transaction, order, schedulingOverride)
       const result: SubmittedCommerceResult = {
         order,
@@ -125,14 +142,14 @@ export class CommerceCommandService {
           objectType: 'order',
           objectId: order.id,
           businessDate: input.businessDate,
-          afterData: orderAuditSnapshot(result, pricingAuthorization, context, schedulingOverride),
+          afterData: orderAuditSnapshot(result, pricingAuthorization, context, schedulingOverride, inventoryControl),
         }],
         outboxMessages: [{
           aggregateType: 'order',
           aggregateId: order.id,
           aggregateVersion: 1,
           eventType: 'order.submitted.v1',
-          payload: orderOutboxPayload(result, pricingAuthorization, context, schedulingOverride),
+          payload: orderOutboxPayload(result, pricingAuthorization, context, schedulingOverride, inventoryControl),
         }],
       }
     })
@@ -282,6 +299,11 @@ function orderAuditSnapshot(
   authorization: Readonly<VerifiedPricingAuthorization> | undefined,
   context: Readonly<{ assistedContextId: string | null; tableCode: string | null }>,
   schedulingOverride?: Readonly<KdsSchedulingOverride>,
+  inventoryControl?: Readonly<{
+    enforcementMode: 'strict' | 'audit_only'
+    configurationComplete: boolean
+    unconfiguredOrderItemIds: readonly string[]
+  }>,
 ): JsonObject {
   return {
     id: result.order.id,
@@ -299,6 +321,11 @@ function orderAuditSnapshot(
     itemCount: result.order.items.length,
     kdsTaskCount: result.kdsTasks.length,
     inventoryMovementCount: result.inventoryConsumptions.length,
+    inventoryControl: inventoryControl ? {
+      enforcementMode: inventoryControl.enforcementMode,
+      configurationComplete: inventoryControl.configurationComplete,
+      unconfiguredOrderItemIds: [...inventoryControl.unconfiguredOrderItemIds],
+    } : null,
     assistedOrderContextId: context.assistedContextId,
     kdsOverrideReason: schedulingOverride?.reason ?? null,
     pricingAuthorization: authorizationToJson(authorization),
@@ -310,12 +337,22 @@ function orderOutboxPayload(
   authorization: Readonly<VerifiedPricingAuthorization> | undefined,
   context: Readonly<{ assistedContextId: string | null; tableCode: string | null }>,
   schedulingOverride?: Readonly<KdsSchedulingOverride>,
+  inventoryControl?: Readonly<{
+    enforcementMode: 'strict' | 'audit_only'
+    configurationComplete: boolean
+    unconfiguredOrderItemIds: readonly string[]
+  }>,
 ): JsonObject {
   return {
     order: orderToJson(result.order),
     paymentNextStep: { ...result.paymentNextStep },
     kdsTaskIds: result.kdsTasks.map((task) => task.id),
     inventoryMovementIds: result.inventoryConsumptions.map((movement) => movement.movementId),
+    inventoryControl: inventoryControl ? {
+      enforcementMode: inventoryControl.enforcementMode,
+      configurationComplete: inventoryControl.configurationComplete,
+      unconfiguredOrderItemIds: [...inventoryControl.unconfiguredOrderItemIds],
+    } : null,
     assistedOrderContextId: context.assistedContextId,
     tableCode: context.tableCode,
     kdsOverrideReason: schedulingOverride?.reason ?? null,

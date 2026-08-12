@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-rc.76 - 2026-08-13
+
+- Added an explicit validation-only inventory audit mode so incomplete recipe and stock setup no longer blocks simulated ordering, while production remains strict and rejects this mode.
+- Recorded unconfigured inventory items in order metadata, audit events and readiness/version responses instead of silently pretending that stock was deducted.
+- Rebalanced the guest ordering page for mobile: mood and service controls are compact, products appear earlier, menu items remain directly addable and detail pages remain available from product images.
+- Replaced pure-white normalized customer and staff surfaces with restrained soft off-white surfaces, strengthened tactile control feedback and kept final payment visually distinct from ordinary cart review.
+- Added 320, 360, 390 and 430 pixel customer, reservation, manager and all-employee role coverage, including overflow and high-frequency route checks.
+- Prevented concurrent store provisioners from retaining a stale serializable snapshot while waiting for the global provisioning lock, and added both concurrent PostgreSQL coverage and normalized migration-count verification.
+
 ## 1.0.0-rc.75 - 2026-08-13
 
 - Preserved the validated `rc.72` business behavior and the `rc.74` OCI archive digest-chain verification.

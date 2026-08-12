@@ -147,6 +147,44 @@ describe('CommerceCommandService unit transaction composition', () => {
     expect(executor.outcome).toBeNull()
   })
 
+  it('keeps validation ordering available without recipes and records the exact audit bypass', async () => {
+    const orderId = 'b1000000-0000-4000-8000-000000000011'
+    const orderItemId = 'b1000000-0000-4000-8000-000000000012'
+    const kdsTaskId = 'b1000000-0000-4000-8000-000000000013'
+    const transaction = new ScriptedTransaction([
+      { rows: [{ id: sessionOneId }] },
+      { rows: [{ request_index: 0, product_id: productAId, product_code: 'A', product_name: 'A', category_code: 'drink', product_kind: 'single', fulfillment_station: 'bar', product_snapshot: {}, price_type: 'standard', amount_minor: '8800', currency: 'CNY', store_timezone: 'Asia/Shanghai', store_local_time: '20:00', store_iso_weekday: 1 }] },
+      { rows: [{ id: orderId, table_session_id: sessionOneId, public_id: 'unit-audit-order', channel: 'integration', settlement_mode: 'table_tab', status: 'submitted', payment_status: 'unpaid', subtotal_amount_minor: '8800', discount_amount_minor: '0', total_amount_minor: '8800', currency: 'CNY', note: null, created_by_employee_id: null, created_at: '2026-08-11T12:00:00.000Z', submitted_at: '2026-08-11T12:00:00.000Z' }] },
+      { rows: [{ id: orderItemId, order_id: orderId, product_id: productAId, parent_order_item_id: null, quantity: 1, unit_price_minor: '8800', discount_amount_minor: '0', total_amount_minor: '8800', currency: 'CNY', fulfillment_station: 'bar', product_snapshot: {}, cost_snapshot: {}, status: 'submitted', note: null, created_at: '2026-08-11T12:00:00.000Z' }] },
+      { rows: [] },
+      { rows: [{ id: kdsTaskId, order_item_id: orderItemId, station_code: 'bar', status: 'pending', priority: 100, quantity: 1, assigned_employee_id: null, due_at: null, next_action_at: '2026-08-11T12:00:00Z', accepted_at: null, ready_at: null, cancelled_at: null }] },
+      { rows: [], rowCount: 1 },
+    ])
+    const executor = new RecordingExecutor(transaction)
+    const result = await new CommerceCommandService(
+      executor,
+      undefined,
+      { inventoryEnforcementMode: 'audit_only' },
+    ).submitOrder(command('unit-audit-order', sessionOneId, productAId, 1, 'unit-audit-command'))
+
+    expect(result.value.inventoryConsumptions).toEqual([])
+    expect(result.value.kdsTasks).toHaveLength(1)
+    expect(executor.outcome?.auditEvents[0]?.afterData).toMatchObject({
+      inventoryControl: {
+        enforcementMode: 'audit_only',
+        configurationComplete: false,
+        unconfiguredOrderItemIds: [orderItemId],
+      },
+    })
+    expect(executor.outcome?.outboxMessages[0]?.payload).toMatchObject({
+      inventoryControl: {
+        enforcementMode: 'audit_only',
+        configurationComplete: false,
+        unconfiguredOrderItemIds: [orderItemId],
+      },
+    })
+  })
+
   it('rejects a client-supplied adjustment amount instead of forwarding it to the authority', async () => {
     const executor = new RecordingExecutor(new ScriptedTransaction([]))
     const authority = employeePricingAuthority(8800, 'gift')

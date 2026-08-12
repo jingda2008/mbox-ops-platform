@@ -61,7 +61,7 @@ test('mobile guest scans a fixed table QR, searches, orders and sees payment res
   await add.click()
   const cartDockBackground = await page.locator('.menu-cart-dock').evaluate((element) => getComputedStyle(element).backgroundColor)
   expect(cartDockBackground).not.toMatch(/rgb\((?:0|1[0-9]|2[0-9]),\s*(?:0|1[0-9]|2[0-9]),\s*(?:0|1[0-9]|2[0-9])\)/)
-  await page.getByRole('button', { name: /核对订单/ }).click()
+  await page.getByRole('button', { name: '查看已选' }).click()
   const cart = page.getByRole('dialog', { name: '购物车明细' })
   await cart.getByPlaceholder('如：少冰、不要香菜、酒水和小食一起上').fill('浏览器验收备注')
   await cart.getByRole('button', { name: /确认订单并微信支付/ }).click()
@@ -82,7 +82,7 @@ test('mobile guest scans a fixed table QR, searches, orders and sees payment res
 
   await page.getByRole('button', { name: `加入${data.orderableProductName}` }).click()
   await page.getByRole('dialog', { name: '确认继续加单' }).getByRole('button', { name: '继续选商品' }).click()
-  await page.getByRole('button', { name: /核对订单/ }).click()
+  await page.getByRole('button', { name: '查看已选' }).click()
   await page.getByRole('dialog', { name: '购物车明细' }).getByRole('button', { name: /确认订单并微信支付/ }).click()
   await page.getByRole('dialog', { name: '确认上单' }).getByRole('button', { name: '确认上单' }).click()
   await expect(page.getByRole('alert')).toContainText(`本桌刚点过 ${data.orderableProductName}`)
@@ -112,6 +112,30 @@ test('desktop guest keeps recommendations comparable without turning the cart in
   })
   expect(dockStyle.background).not.toMatch(/rgb\((?:0|1[0-9]|2[0-9]),\s*(?:0|1[0-9]|2[0-9]),\s*(?:0|1[0-9]|2[0-9])\)/)
   expect(dockStyle.height).toBeLessThanOrEqual(90)
+})
+
+test('narrow mobile guest keeps mood and service controls compact above the menu', async ({ page }) => {
+  const data = await fixture()
+  for (const width of [320, 360, 390, 430]) {
+    await page.setViewportSize({ width, height: 800 })
+    await page.goto(data.guestUrl)
+    await expect(page.getByTestId('normalized-guest-app')).toBeVisible()
+
+    const moodButtons = page.locator('.guest-mood-options button')
+    await expect(moodButtons).toHaveCount(6)
+    const moodRows = await moodButtons.evaluateAll((buttons) => new Set(buttons.map((button) => Math.round(button.getBoundingClientRect().top))).size)
+    expect(moodRows, `${width}px mood controls wrapped`).toBe(1)
+    expect((await page.locator('.guest-mood').boundingBox())?.height ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(74)
+    expect((await page.locator('.guest-service-strip').boundingBox())?.height ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(58)
+    expect((await page.locator('.guest-recommendation-entries').boundingBox())?.height ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(60)
+    expect((await page.locator('.menu-recommendation-option').first().boundingBox())?.y ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(420)
+    await expectNoHorizontalOverflow(page)
+
+    await page.goto(data.reservationUrl)
+    await expect(page.getByTestId('reservation-booking')).toBeVisible()
+    await expect(page.getByRole('button', { name: /核对预约信息/ })).toBeVisible()
+    await expectNoHorizontalOverflow(page)
+  }
 })
 
 test('mobile public reservation uses preferences without exposing exact table selection', async ({ page }) => {
@@ -252,7 +276,12 @@ test('mobile manager completes device verification and reaches role-scoped works
   await expect(page.getByRole('heading', { name: '李艳' })).toBeVisible()
   await expect(page.getByText(/店长/)).toBeVisible()
   await expect(page.getByRole('heading', { name: '现在要做什么' })).toBeVisible()
-  await expectNoHorizontalOverflow(page)
+  for (const width of [320, 360, 390, 430]) {
+    await page.setViewportSize({ width, height: 800 })
+    await expectNoHorizontalOverflow(page)
+    await expect(page.getByRole('heading', { name: '现在要做什么' })).toBeVisible()
+    await expect(page.locator('.normalized-mobile-nav')).toBeVisible()
+  }
   const liveSummary = page.getByRole('button', { name: /营业桌台.*1.*进行中/ })
   await expect(liveSummary).toBeVisible()
   await expect(page.getByText('0', { exact: true })).toHaveCount(0)
@@ -341,7 +370,7 @@ test('mobile manager assists an open table order and gifts a product without mix
   const paidSheet = page.getByRole('dialog', { name: 'W01协助点单' })
   await paidSheet.getByLabel('搜索菜单商品').fill(data.orderableProductName)
   await paidSheet.getByRole('button', { name: `加入${data.orderableProductName}` }).click()
-  await paidSheet.getByRole('button', { name: '核对订单' }).click()
+  await paidSheet.getByRole('button', { name: '查看已选' }).click()
   await paidSheet.getByRole('dialog', { name: '购物车明细' }).getByRole('button', { name: '核对无误，确认下单' }).click()
   await paidSheet.getByRole('dialog', { name: '确认上单' }).getByRole('button', { name: '确认上单' }).click()
   await expect(page.getByRole('status')).toContainText('W01 订单已挂桌并发送出品')

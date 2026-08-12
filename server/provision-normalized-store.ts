@@ -314,7 +314,11 @@ export async function provisionNormalizedStore(input: {
   const client = new Client({ connectionString: input.databaseUrl, application_name: 'mbox-normalized-provisioner' })
   await client.connect()
   try {
-    await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE')
+    // The advisory transaction lock serializes provisioning. READ COMMITTED is
+    // intentional here: a transaction waiting for the lock must see the
+    // configuration committed by the previous provisioner instead of keeping
+    // a stale SERIALIZABLE snapshot and failing with 40001 after the wait.
+    await client.query('BEGIN ISOLATION LEVEL READ COMMITTED')
     await client.query(`SELECT pg_advisory_xact_lock(hashtext('mbox.normalized.store.provision'))`)
     const schema = await client.query<{ schema_flavor: string; schema_version: string }>(
       'SELECT schema_flavor, schema_version FROM mbox.normalized_schema_metadata WHERE singleton = true',

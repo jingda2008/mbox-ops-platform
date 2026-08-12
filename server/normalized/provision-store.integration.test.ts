@@ -59,6 +59,12 @@ integration('normalized store provisioning', () => {
       now: new Date('2026-08-11T12:00:00.000Z'), sourceCommitSha })
     const second = await provisionNormalizedStore({ databaseUrl: databaseUrl!, config, environment,
       now: new Date('2026-08-11T12:01:00.000Z'), sourceCommitSha })
+    const concurrent = await Promise.all([
+      provisionNormalizedStore({ databaseUrl: databaseUrl!, config, environment,
+        now: new Date('2026-08-11T12:01:10.000Z'), sourceCommitSha }),
+      provisionNormalizedStore({ databaseUrl: databaseUrl!, config, environment,
+        now: new Date('2026-08-11T12:01:20.000Z'), sourceCommitSha }),
+    ])
     await provisionNormalizedStore({ databaseUrl: databaseUrl!, config, environment,
       now: new Date('2026-08-11T12:01:30.000Z'), sourceCommitSha: nextSourceCommitSha })
     expect(first).toMatchObject({ areaCount: 1, tableCount: 1, roleCount: 1, employeeCount: 1,
@@ -66,6 +72,7 @@ integration('normalized store provisioning', () => {
     expect(first.configSha256).toMatch(/^[0-9a-f]{64}$/)
     expect(second.employeeIds['provision-tom']).toBe(first.employeeIds['provision-tom'])
     expect(second.configSha256).toBe(first.configSha256)
+    expect(concurrent.every((result) => result.configSha256 === first.configSha256)).toBe(true)
 
     const result = await pool.query<{
       pin_hash: string

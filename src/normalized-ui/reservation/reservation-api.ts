@@ -57,10 +57,24 @@ export interface ReservationMutationInput {
   tableCodes?: string[]
 }
 
+export async function withReservationSessionRecovery<Value>(
+  operation: () => Promise<Value>,
+  renewSession: () => Promise<void>,
+): Promise<Value> {
+  try {
+    return await operation()
+  } catch (error) {
+    if (!(error instanceof PublicReservationApiError) || !error.sessionInvalid) throw error
+    await renewSession()
+    return operation()
+  }
+}
+
 export class PublicReservationApi {
   private readonly send: typeof fetch
   private readonly timeoutMs: number
   private readonly createKey: () => string
+  private deviceFingerprint: string | null = null
 
   constructor(options: Readonly<PublicReservationApiOptions> = {}) {
     this.send = options.fetch ?? globalThis.fetch.bind(globalThis)
@@ -69,6 +83,7 @@ export class PublicReservationApi {
   }
 
   async issueSession(identity: Readonly<ReservationIdentity>, signal?: AbortSignal): Promise<void> {
+    this.deviceFingerprint = identity.deviceFingerprint
     await this.request('/api/public/reservation/session', {
       method: 'POST',
       body: identity,
@@ -155,6 +170,7 @@ export class PublicReservationApi {
       controller.abort()
     }, this.timeoutMs)
     const headers = new Headers({ accept: 'application/json' })
+    if (this.deviceFingerprint !== null) headers.set('x-mbox-guest-device', this.deviceFingerprint)
     if (options.body !== undefined) headers.set('content-type', 'application/json')
     if (options.idempotent === true) headers.set('idempotency-key', this.createKey())
 

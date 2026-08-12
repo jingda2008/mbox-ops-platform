@@ -16,7 +16,9 @@ export default defineConfig({
   use: {
     ...devices['iPhone 14 Pro Max'],
     browserName: 'chromium',
-    baseURL: `http://127.0.0.1:${port}`,
+    // Chromium treats localhost as a secure development origin, allowing the
+    // production Secure reservation cookie to be exercised without weakening it.
+    baseURL: `http://localhost:${port}`,
     locale: 'zh-CN',
     timezoneId: 'Asia/Shanghai',
     trace: 'retain-on-failure',

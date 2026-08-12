@@ -31,6 +31,23 @@ describe('StaffActionsApi', () => {
     } satisfies Partial<StaffActionsApiError>))
     expect(send).toHaveBeenNthCalledWith(1, '/api/table-sessions/session-1/begin-closing', expect.any(Object))
     expect(send).toHaveBeenNthCalledWith(2, '/api/table-sessions/session-1/close', expect.any(Object))
+    const beginHeaders = send.mock.calls[0]?.[1]?.headers as Headers
+    const closeHeaders = send.mock.calls[1]?.[1]?.headers as Headers
+    expect(beginHeaders.get('idempotency-key')).toBe('staff-close-session-1-begin')
+    expect(closeHeaders.get('idempotency-key')).toBe('staff-close-session-1-complete')
+  })
+
+  it('loads and updates staff reservations through normalized routes', async () => {
+    const send = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: {} }), { status: 200 }))
+    const api = new StaffActionsApi({ fetch: send })
+
+    await expect(api.loadReservations()).resolves.toEqual([])
+    await api.actOnReservation('reservation-1', 'confirm')
+
+    expect(send).toHaveBeenNthCalledWith(1, '/api/staff/reservations', expect.objectContaining({ method: 'GET' }))
+    expect(send).toHaveBeenNthCalledWith(2, '/api/staff/reservations/reservation-1/confirm', expect.objectContaining({ method: 'POST' }))
   })
 
   it('sends only supported KDS actions to the authoritative KDS endpoint', async () => {

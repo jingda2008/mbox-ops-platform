@@ -68,6 +68,40 @@ test('mobile public reservation loads real availability and seat details', async
   await expect(page.getByRole('button', { name: '下一步' })).toBeEnabled()
 })
 
+test('mobile public reservation silently renews one expired session before submit', async ({ page }) => {
+  const data = await fixture()
+  let reservationAttempts = 0
+  await page.route('**/api/public/reservations', async (route) => {
+    if (route.request().method() !== 'POST' || reservationAttempts > 0) {
+      await route.continue()
+      return
+    }
+    reservationAttempts += 1
+    await route.fulfill({
+      status: 401,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        error: {
+          code: 'RESERVATION_SESSION_INVALID',
+          message: '预约会话已失效，请重新进入预约页面',
+        },
+      }),
+    })
+  })
+
+  await page.goto(data.reservationUrl)
+  await expect(page.getByText('已连接微信')).toBeVisible()
+  await page.getByRole('button', { name: /查看可订座位/ }).click()
+  await page.getByRole('button', { name: /直接预约/ }).click()
+  await page.getByLabel('预约姓名').fill('会话恢复验收')
+  await page.getByLabel('手机或微信').fill('13800138001')
+  await page.getByRole('button', { name: '确认预约' }).click()
+
+  await expect(page.getByRole('heading', { name: '预约已提交' })).toBeVisible()
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  expect(reservationAttempts).toBe(1)
+})
+
 test('mobile manager completes device verification and reaches role-scoped workspace', async ({ page }) => {
   const data = await fixture()
   await page.goto(data.staffUrl)
@@ -81,4 +115,8 @@ test('mobile manager completes device verification and reaches role-scoped works
   await expect(page.getByRole('heading', { name: '李艳' })).toBeVisible()
   await expect(page.getByText(/店长/)).toBeVisible()
   await expect(page.getByRole('heading', { name: '现在要做什么' })).toBeVisible()
+
+  await page.getByRole('button', { name: '预约到店', exact: true }).first().click()
+  await expect(page.getByText('预约与到店', { exact: true })).toBeVisible()
+  await expect(page.getByText('规范化改造中')).toHaveCount(0)
 })

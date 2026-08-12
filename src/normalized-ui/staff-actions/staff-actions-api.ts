@@ -1,6 +1,7 @@
 import type {
   StaffFulfillmentData,
   StaffOperationsData,
+  StaffReservation,
 } from './types'
 
 export class StaffActionsApiError extends Error {
@@ -25,6 +26,7 @@ export class StaffActionsApiError extends Error {
 export interface StaffActionsApiPort {
   loadOperations(signal?: AbortSignal): Promise<StaffOperationsData>
   loadFulfillment(signal?: AbortSignal): Promise<StaffFulfillmentData>
+  loadReservations(signal?: AbortSignal): Promise<StaffReservation[]>
   openTable(input: Readonly<{
     tableId: string
     guestCount: number
@@ -38,6 +40,7 @@ export interface StaffActionsApiPort {
   }>): Promise<void>
   completeServiceTask(taskId: string, note?: string): Promise<void>
   runKdsAction(taskId: string, action: 'complete' | 'deliver'): Promise<void>
+  actOnReservation(reservationId: string, action: 'confirm' | 'arrive'): Promise<void>
 }
 
 export interface StaffActionsApiOptions {
@@ -65,6 +68,10 @@ export class StaffActionsApi implements StaffActionsApiPort {
     return this.getData('/api/commerce/fulfillment', signal)
   }
 
+  loadReservations(signal?: AbortSignal): Promise<StaffReservation[]> {
+    return this.getData('/api/staff/reservations', signal)
+  }
+
   async openTable(input: Readonly<{
     tableId: string
     guestCount: number
@@ -74,9 +81,20 @@ export class StaffActionsApi implements StaffActionsApiPort {
   }
 
   async closeTable(sessionId: string): Promise<void> {
-    await this.command(`/api/table-sessions/${encodeURIComponent(sessionId)}/begin-closing`, {}, 'idempotency-key')
+    const operationKey = `staff-close-${sessionId}`
+    await this.command(
+      `/api/table-sessions/${encodeURIComponent(sessionId)}/begin-closing`,
+      {},
+      'idempotency-key',
+      `${operationKey}-begin`,
+    )
     try {
-      await this.command(`/api/table-sessions/${encodeURIComponent(sessionId)}/close`, {}, 'idempotency-key')
+      await this.command(
+        `/api/table-sessions/${encodeURIComponent(sessionId)}/close`,
+        {},
+        'idempotency-key',
+        `${operationKey}-complete`,
+      )
     } catch (error) {
       const message = error instanceof Error ? error.message : '关台结果无法确认'
       throw new StaffActionsApiError(message, 'TABLE_CLOSE_PARTIAL', null, true)
@@ -107,6 +125,15 @@ export class StaffActionsApi implements StaffActionsApiPort {
     await this.command(`/api/commerce/kds/${encodeURIComponent(taskId)}/actions`, { action }, 'idempotency-key')
   }
 
+  async actOnReservation(reservationId: string, action: 'confirm' | 'arrive'): Promise<void> {
+    await this.command(
+      `/api/staff/reservations/${encodeURIComponent(reservationId)}/${action}`,
+      {},
+      'idempotency-key',
+      `staff-reservation-${action}-${reservationId}`,
+    )
+  }
+
   private async getData<Data>(url: string, signal?: AbortSignal): Promise<Data> {
     const response = await this.request(url, { method: 'GET', signal })
     const body = await readJson(response)
@@ -118,9 +145,10 @@ export class StaffActionsApi implements StaffActionsApiPort {
     url: string,
     body: object,
     idempotencyHeader: 'idempotency-key' | 'x-idempotency-key',
+    idempotencyKey = `staff-action-${this.createIdempotencyKey()}`,
   ): Promise<void> {
     const headers = new Headers({ accept: 'application/json', 'content-type': 'application/json' })
-    headers.set(idempotencyHeader, `staff-action-${this.createIdempotencyKey()}`)
+    headers.set(idempotencyHeader, idempotencyKey)
     await this.request(url, { method: 'POST', body: JSON.stringify(body), headers })
   }
 

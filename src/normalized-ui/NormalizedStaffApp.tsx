@@ -114,6 +114,7 @@ function normalizedStaffRoute(path: string): StaffActionsTab | null {
   if (path === '/staff/live') return 'tables'
   if (path === '/staff/tasks') return 'work'
   if (path === '/staff/fulfillment') return 'work'
+  if (path === '/staff/reservations') return 'reservations'
   return null
 }
 

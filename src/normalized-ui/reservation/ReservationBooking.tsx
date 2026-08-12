@@ -9,7 +9,11 @@ import {
   MapPin,
   X,
 } from 'lucide-react'
-import { PublicReservationApi, PublicReservationApiError } from './reservation-api'
+import {
+  PublicReservationApi,
+  PublicReservationApiError,
+  withReservationSessionRecovery,
+} from './reservation-api'
 import {
   addCalendarDays,
   arrivalIso,
@@ -120,6 +124,24 @@ export function ReservationBooking({
     }
   }, [api, identity.deviceFingerprint, identity.provider, identity.providerAssertion, run])
 
+  const runWithSession = useCallback(async <Value,>(
+    operation: (signal: AbortSignal) => Promise<Value>,
+  ): Promise<Value | null> => run(async (signal) => {
+    try {
+      return await withReservationSessionRecovery(
+        () => operation(signal),
+        () => api.issueSession({
+          provider: identity.provider,
+          providerAssertion: identity.providerAssertion,
+          deviceFingerprint: identity.deviceFingerprint,
+        }, signal),
+      )
+    } catch (error) {
+      if (error instanceof PublicReservationApiError && error.sessionInvalid) setSessionReady(false)
+      throw error
+    }
+  }), [api, identity.deviceFingerprint, identity.provider, identity.providerAssertion, run])
+
   useEffect(() => {
     void connect()
     return () => request.current?.abort()
@@ -128,7 +150,7 @@ export function ReservationBooking({
   useEffect(() => {
     if (!sessionReady || initialReservationId === undefined || reservation !== null) return
     setPhase('loading')
-    void run((signal) => api.getReservation(initialReservationId, signal))
+    void runWithSession((signal) => api.getReservation(initialReservationId, signal))
       .then((value) => {
         if (value === null) return
         setReservation(value)
@@ -137,7 +159,7 @@ export function ReservationBooking({
       })
       .catch(() => undefined)
       .finally(() => setPhase('idle'))
-  }, [api, initialReservationId, now, reservation, run, sessionReady])
+  }, [api, initialReservationId, now, reservation, runWithSession, sessionReady])
 
   useEffect(() => {
     if (reservation?.holdExpiresAt === null || reservation?.holdExpiresAt === undefined) return
@@ -207,7 +229,7 @@ export function ReservationBooking({
     setPhase('submitting')
     try {
       if (joinWaitlist) {
-        const created = await run((signal) => api.createWaitlist({
+        const created = await runWithSession((signal) => api.createWaitlist({
           customerName: draft.customerName.trim(),
           contact: draft.contact.trim(),
           guestCount: draft.guestCount,
@@ -230,11 +252,11 @@ export function ReservationBooking({
         ...(draft.mode === 'self_select' ? { tableCodes: draft.tableCodes } : {}),
       }
       const saved = editingId === null
-        ? await run((signal) => api.createReservation(draft.mode, {
+        ? await runWithSession((signal) => api.createReservation(draft.mode, {
           ...common,
           contact: draft.contact.trim(),
         }, signal))
-        : await run((signal) => api.updateReservation(editingId, {
+        : await runWithSession((signal) => api.updateReservation(editingId, {
           ...common,
           tableCodes: draft.tableCodes,
         }, signal))
@@ -257,7 +279,7 @@ export function ReservationBooking({
     } finally {
       setPhase('idle')
     }
-  }, [api, availability, draft, editingId, joinWaitlist, loadAvailability, now, onReservationChange, operatingHours, run, sessionReady])
+  }, [api, availability, draft, editingId, joinWaitlist, loadAvailability, now, onReservationChange, operatingHours, runWithSession, sessionReady])
 
   const cancel = useCallback(async () => {
     if (!cancelArmed) {
@@ -267,13 +289,13 @@ export function ReservationBooking({
     setPhase('submitting')
     try {
       if (reservation !== null) {
-        const cancelled = await run((signal) => api.cancelReservation(reservation.publicId, signal))
+        const cancelled = await runWithSession((signal) => api.cancelReservation(reservation.publicId, signal))
         if (cancelled !== null) {
           setReservation(cancelled)
           onReservationChange?.(null)
         }
       } else if (waitlist !== null) {
-        const cancelled = await run((signal) => api.cancelWaitlist(waitlist.publicId, signal))
+        const cancelled = await runWithSession((signal) => api.cancelWaitlist(waitlist.publicId, signal))
         if (cancelled !== null) setWaitlist(cancelled)
       }
       setCancelArmed(false)
@@ -282,7 +304,7 @@ export function ReservationBooking({
     } finally {
       setPhase('idle')
     }
-  }, [api, cancelArmed, onReservationChange, reservation, run, waitlist])
+  }, [api, cancelArmed, onReservationChange, reservation, runWithSession, waitlist])
 
   const editReservation = () => {
     if (reservation === null) return

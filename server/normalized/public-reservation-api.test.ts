@@ -120,6 +120,25 @@ integration('public reservation API with PostgreSQL', () => {
     await pool?.end()
   })
 
+  it('scopes the HttpOnly session cookie to the public reservation API', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/public/reservation/session',
+      headers: { 'idempotency-key': 'public-reservation-session-cookie-0001' },
+      payload: {
+        provider: 'anonymous',
+        providerAssertion: 'anonymous-reservation-identity',
+        deviceFingerprint: 'reservation-device-fingerprint',
+      },
+    })
+
+    expect(response.statusCode).toBe(201)
+    expect(response.headers['set-cookie']).toContain('Path=/api/public')
+    expect(response.headers['set-cookie']).toContain('HttpOnly')
+    expect(response.headers['set-cookie']).toContain('Secure')
+    expect(JSON.stringify(response.json())).not.toContain('reservation-test-session-token')
+  })
+
   it('publishes only area, table, capacity and minimum-spend availability fields', async () => {
     const response = await app.inject({
       method: 'GET',

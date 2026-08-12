@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Check, Gift, LoaderCircle, Minus, Plus, Search, ShoppingCart, X } from 'lucide-react'
+import { MenuOrderingWorkspace, type MenuSubmitOptions } from '../../components/MenuOrderingWorkspace'
+import type { MenuProduct, MenuRecommendationConfig, MenuRecommendationScene } from '../../shared/contracts'
 import type {
   AssistedOrderAccess,
   AssistedOrderCatalogProduct,
@@ -9,7 +11,10 @@ import type {
 export interface AssistedOrderSheetProps {
   api: StaffActionsApiPort
   mode: 'paid' | 'gift'
-  table: Readonly<{ code: string; activeSession: { id: string } }>
+  table: Readonly<{
+    code: string
+    activeSession: { id: string; guestCount: number; guestProfileSnapshot?: Record<string, unknown> }
+  }>
   onClose(): void
   onSubmitted(message: string): void
 }
@@ -99,6 +104,63 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
     }
   }
 
+  const submitPaidOrder = async (items: Array<{ productId: string; quantity: number }>, options: MenuSubmitOptions) => {
+    if (phase !== 'ready' || access?.canCreateOrder !== true || items.length === 0) return
+    setPhase('submitting')
+    setError(null)
+    try {
+      const token = await api.issueAssistedOrderContext({ tableSessionId: table.activeSession.id })
+      const result = await api.submitAssistedOrder({
+        tableSessionId: table.activeSession.id,
+        assistedOrderContextToken: token,
+        orderMode: 'paid',
+        items,
+        ...(options.fulfillmentNote.trim().length > 0 ? { fulfillmentNote: options.fulfillmentNote.trim() } : {}),
+        settlementMode,
+      })
+      onSubmitted(result.paymentNextStep.status === 'required'
+        ? `${table.code} 订单已建立，请由客人扫码或收银完成付款`
+        : `${table.code} 订单已挂桌并发送出品`)
+      onClose()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '订单没有提交成功，请重试')
+      setPhase('ready')
+      throw reason
+    }
+  }
+
+  if (mode === 'paid') {
+    const menuProducts = products.map(assistedProductToMenuProduct)
+    return <div className="staff-order-overlay" role="dialog" aria-modal="true" aria-label={`${table.code}协助点单`}>
+      <section className="staff-order-sheet is-shared-menu">
+        <header>
+          <div><small>{table.code} · 桌号已锁定</small><h2><ShoppingCart size={21} /> 协助点单</h2></div>
+          <button type="button" aria-label="关闭点单" onClick={onClose}><X size={21} /></button>
+        </header>
+        <div className="staff-order-settlement" aria-label="结算方式">
+          <button type="button" className={settlementMode === 'table_tab' ? 'is-active' : ''} onClick={() => setSettlementMode('table_tab')}>挂桌账</button>
+          <button type="button" className={settlementMode === 'immediate_payment' ? 'is-active' : ''} onClick={() => setSettlementMode('immediate_payment')}>立即结算</button>
+        </div>
+        {error !== null && <p className="staff-order-error" role="alert">{error}</p>}
+        {phase === 'loading' ? <p className="staff-order-loading"><LoaderCircle className="is-spinning" /> 正在读取可售商品</p> : (
+          <MenuOrderingWorkspace
+            products={menuProducts}
+            tableLabel={table.code}
+            submitLabel="核对无误，确认下单"
+            submitHint="桌号已锁定；提交后按选择进入挂账或付款流程。"
+            busy={phase === 'submitting'}
+            compactCart
+            deemphasizeCollapsedTotal
+            guestSalesMode
+            partySize={table.activeSession.guestCount}
+            recommendationScene={recommendationScene(table.activeSession.guestProfileSnapshot ?? {})}
+            onSubmit={submitPaidOrder}
+          />
+        )}
+      </section>
+    </div>
+  }
+
   return <div className="staff-order-overlay" role="dialog" aria-modal="true" aria-label={`${table.code}${mode === 'gift' ? '赠送商品' : '协助点单'}`}>
     <section className="staff-order-sheet">
       <header>
@@ -176,4 +238,96 @@ function money(amountMinor: number, currency = 'CNY'): string {
 function categoryLabel(code: string): string {
   return ({ alcohol: '酒水', beverage: '饮品', food: '小食', combo: '组合', other: '其他' } as Record<string, string>)[code]
     ?? code
+}
+
+function assistedProductToMenuProduct(product: AssistedOrderCatalogProduct): MenuProduct {
+  const snapshot = product.productSnapshot
+  const recommendation = record(snapshot.recommendation)
+  const amountMinor = Number(product.standardPrice?.amountMinor ?? 0)
+  const costAmount = integer(snapshot.costAmount, 0)
+  return {
+    id: product.id,
+    sku: product.code,
+    name: product.name,
+    specification: text(snapshot.specification),
+    productKind: product.productKind,
+    beverageFamily: beverageFamily(snapshot.beverageFamily),
+    bundleComponents: product.bundleComponents.map((component) => ({
+      productId: component.productId,
+      quantity: component.quantity,
+      note: component.note ?? undefined,
+    })),
+    substitutionProductIds: [],
+    recommendation: menuRecommendation(recommendation),
+    categoryId: product.categoryCode,
+    categoryName: text(snapshot.categoryName) || categoryLabel(product.categoryCode),
+    description: text(snapshot.description) || undefined,
+    imageUrl: text(snapshot.imageUrl) || undefined,
+    tags: stringArray(snapshot.tags),
+    sortOrder: integer(snapshot.sortOrder, 999),
+    soldOut: !product.isAvailable,
+    availableFrom: nullableText(snapshot.availableFrom),
+    availableUntil: nullableText(snapshot.availableUntil),
+    guestVisible: snapshot.guestVisible !== false,
+    requiresFulfillment: snapshot.requiresFulfillment !== false,
+    maxOrderQuantity: integer(snapshot.maxOrderQuantity, 50),
+    listPriceAmount: amountMinor,
+    costAmount,
+    stationId: product.fulfillmentStation,
+    enabled: product.isAvailable && amountMinor > 0,
+    configVersion: integer(snapshot.configVersion, 1),
+  }
+}
+
+function menuRecommendation(value: Record<string, unknown>): MenuRecommendationConfig {
+  return {
+    enabled: value.enabled === true,
+    priority: integer(value.priority, 100),
+    badge: text(value.badge),
+    headline: text(value.headline),
+    reason: text(value.reason),
+    minimumPartySize: integer(value.minimumPartySize, 1),
+    maximumPartySize: integer(value.maximumPartySize, 100),
+    sceneTags: stringArray(value.sceneTags).filter((item): item is MenuRecommendationConfig['sceneTags'][number] => ['date', 'brothers', 'besties', 'friends', 'business', 'celebration', 'unsure'].includes(item)),
+    intentTags: stringArray(value.intentTags).filter((item): item is MenuRecommendationConfig['intentTags'][number] => ['relaxed', 'energetic', 'ritual', 'unsure'].includes(item)),
+    tasteTags: stringArray(value.tasteTags).filter((item): item is MenuRecommendationConfig['tasteTags'][number] => ['refreshing', 'layered', 'strong', 'any'].includes(item)),
+    dwellTags: stringArray(value.dwellTags).filter((item): item is MenuRecommendationConfig['dwellTags'][number] => ['one_set', 'stay_longer', 'no_rush'].includes(item)),
+    singleWaveEligible: value.singleWaveEligible !== false,
+    expectedPrepMinutes: integer(value.expectedPrepMinutes, 8),
+    holdMinutes: integer(value.holdMinutes, 10),
+    upgradeProductId: typeof value.upgradeProductId === 'string' ? value.upgradeProductId : null,
+  }
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function text(value: unknown): string {
+  return typeof value === 'string' ? value : ''
+}
+
+function nullableText(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+function integer(value: unknown, fallback: number): number {
+  return Number.isSafeInteger(value) ? Number(value) : fallback
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
+function beverageFamily(value: unknown): MenuProduct['beverageFamily'] {
+  return typeof value === 'string' && ['none', 'cocktail', 'beer', 'wine', 'sparkling', 'spirits', 'non_alcoholic'].includes(value)
+    ? value as MenuProduct['beverageFamily']
+    : 'none'
+}
+
+function recommendationScene(snapshot: Record<string, unknown>): MenuRecommendationScene | undefined {
+  const value = snapshot.recommendationScene ?? snapshot.scene ?? snapshot.occasion
+  return typeof value === 'string' && ['unsure', 'date', 'brothers', 'besties', 'friends', 'business', 'celebration'].includes(value)
+    ? value as MenuRecommendationScene
+    : undefined
 }

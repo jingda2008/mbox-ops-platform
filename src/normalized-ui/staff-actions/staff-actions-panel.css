@@ -153,6 +153,10 @@
 
 .staff-order-overlay { position: fixed; inset: 0; z-index: 80; background: rgba(8, 13, 10, .72); display: flex; align-items: stretch; justify-content: flex-end; }
 .staff-order-sheet { width: min(100%, 760px); height: 100%; background: #f5f6f2; display: grid; grid-template-rows: auto auto auto auto minmax(0, 1fr) auto; box-shadow: -12px 0 34px rgba(0, 0, 0, .25); overflow: hidden; }
+.staff-order-sheet.is-shared-menu { width: 100%; grid-template-rows: auto auto auto minmax(0, 1fr); }
+.staff-order-sheet.is-shared-menu > .menu-ordering-workspace { min-height: 0; height: 100%; grid-row: 4; overflow-y: auto; overscroll-behavior: contain; }
+.staff-order-sheet.is-shared-menu > .staff-order-settlement { padding: 7px 12px; border-bottom: 1px solid #c8cec7; background: #fff; }
+.staff-order-sheet.is-shared-menu > .staff-order-error { margin: 0; padding: 8px 12px; background: #fff1f1; }
 .staff-order-sheet > header { min-height: 66px; padding: 10px 14px; color: #f8f4e8; background: #101712; border-bottom: 3px solid var(--staff-gold); display: flex; align-items: center; justify-content: space-between; }
 .staff-order-sheet > header small { color: #c6cabf; }
 .staff-order-sheet > header h2 { margin: 2px 0 0; font-size: 20px; display: flex; align-items: center; gap: 7px; }

@@ -1,4 +1,5 @@
 import type { GuestMenuProduct, GuestMood } from './guest-model'
+import type { MenuRecommendationScene } from '../../shared/contracts'
 
 export type GuestApiFailureKind = 'timeout' | 'network' | 'http' | 'invalid_response' | 'aborted'
 
@@ -92,6 +93,12 @@ export interface GuestTableOrder {
   }>
 }
 
+export interface GuestMenuCatalogResult {
+  products: GuestMenuProduct[]
+  partySize: number
+  recommendationScene?: MenuRecommendationScene
+}
+
 export interface GuestServiceResult {
   status: 'created' | 'merged' | 'rate_limited'
   message: string
@@ -140,8 +147,10 @@ export class GuestApiClient {
     return data
   }
 
-  async searchMenu(search = '', options: Readonly<RequestOptions> = {}): Promise<GuestMenuProduct[]> {
+  async searchMenu(search = '', options: Readonly<RequestOptions> = {}): Promise<GuestMenuCatalogResult> {
     const products: GuestMenuProduct[] = []
+    let partySize = 1
+    let recommendationScene: MenuRecommendationScene | undefined
     const pageSize = 100
     for (let offset = 0; offset < 1_000; offset += pageSize) {
       const query = new URLSearchParams({ search: search.trim(), limit: String(pageSize), offset: String(offset) })
@@ -150,10 +159,15 @@ export class GuestApiClient {
       })
       const data = responseData(body)
       if (!Array.isArray(data) || !data.every(isMenuProduct)) throw invalidResponse()
+      const meta = responseMeta(body)
+      if (Number.isSafeInteger(meta.partySize) && Number(meta.partySize) >= 1 && Number(meta.partySize) <= 200) {
+        partySize = Number(meta.partySize)
+      }
+      if (isRecommendationScene(meta.recommendationScene)) recommendationScene = meta.recommendationScene
       products.push(...data)
       if (data.length < pageSize) break
     }
-    return products
+    return { products, partySize, recommendationScene }
   }
 
   async submitOrder(
@@ -273,6 +287,10 @@ function responseData(value: unknown): unknown {
   return value.data
 }
 
+function responseMeta(value: unknown): Record<string, unknown> {
+  return isObject(value) && isObject(value.meta) ? value.meta : {}
+}
+
 function hasData(value: unknown): boolean {
   return isObject(value) && 'data' in value
 }
@@ -289,14 +307,24 @@ function isMenuProduct(value: unknown): value is GuestMenuProduct {
     && typeof value.code === 'string'
     && typeof value.name === 'string'
     && typeof value.categoryCode === 'string'
+    && typeof value.categoryName === 'string'
+    && ['none', 'cocktail', 'beer', 'wine', 'sparkling', 'spirits', 'non_alcoholic'].includes(String(value.beverageFamily))
     && Number.isSafeInteger(value.amountMinor)
     && (value.amountMinor as number) >= 0
     && typeof value.currency === 'string'
     && (value.specification === null || typeof value.specification === 'string')
     && Array.isArray(value.aliases)
     && value.aliases.every((alias) => typeof alias === 'string')
+    && Array.isArray(value.tags)
+    && value.tags.every((tag) => typeof tag === 'string')
     && (value.imageUrl === null || typeof value.imageUrl === 'string')
     && (value.description === null || typeof value.description === 'string')
+    && Number.isSafeInteger(value.sortOrder)
+    && (value.availableFrom === null || typeof value.availableFrom === 'string')
+    && (value.availableUntil === null || typeof value.availableUntil === 'string')
+    && typeof value.guestVisible === 'boolean'
+    && typeof value.requiresFulfillment === 'boolean'
+    && Number.isSafeInteger(value.maxOrderQuantity)
     && typeof value.fulfillmentStation === 'string'
     && (value.productKind === 'single' || value.productKind === 'bundle')
     && Array.isArray(value.bundleComponents)
@@ -306,14 +334,22 @@ function isMenuProduct(value: unknown): value is GuestMenuProduct {
       && Number.isSafeInteger(component.quantity)
       && (component.quantity as number) > 0)
     && isObject(value.recommendation)
-    && typeof value.recommendation.featured === 'boolean'
+    && typeof value.recommendation.enabled === 'boolean'
     && Number.isSafeInteger(value.recommendation.priority)
-    && typeof value.recommendation.partySizeMatched === 'boolean'
-    && Array.isArray(value.recommendation.intents)
-    && value.recommendation.intents.every((intent) => ['easy', 'party', 'ritual', 'explore'].includes(String(intent)))
-    && (value.recommendation.badge === null || typeof value.recommendation.badge === 'string')
-    && (value.recommendation.valueCopy === null || typeof value.recommendation.valueCopy === 'string')
+    && typeof value.recommendation.badge === 'string'
+    && typeof value.recommendation.headline === 'string'
+    && typeof value.recommendation.reason === 'string'
+    && Number.isSafeInteger(value.recommendation.minimumPartySize)
+    && Number.isSafeInteger(value.recommendation.maximumPartySize)
+    && Array.isArray(value.recommendation.sceneTags)
+    && Array.isArray(value.recommendation.intentTags)
+    && Array.isArray(value.recommendation.tasteTags)
+    && Array.isArray(value.recommendation.dwellTags)
+    && typeof value.recommendation.singleWaveEligible === 'boolean'
+    && Number.isSafeInteger(value.recommendation.expectedPrepMinutes)
+    && Number.isSafeInteger(value.recommendation.holdMinutes)
     && (value.recommendation.upgradeProductId === null || typeof value.recommendation.upgradeProductId === 'string')
+    && typeof value.recommendation.contributionPositive === 'boolean'
     && typeof value.available === 'boolean'
 }
 
@@ -359,6 +395,11 @@ function isServiceResult(value: unknown): value is GuestServiceResult {
   return isObject(value)
     && ['created', 'merged', 'rate_limited'].includes(String(value.status))
     && typeof value.message === 'string'
+}
+
+function isRecommendationScene(value: unknown): value is MenuRecommendationScene {
+  return typeof value === 'string'
+    && ['unsure', 'date', 'brothers', 'besties', 'friends', 'business', 'celebration'].includes(value)
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

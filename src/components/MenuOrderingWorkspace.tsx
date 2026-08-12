@@ -780,9 +780,9 @@ export function MenuOrderingWorkspace({
                     <footer>
                       <b>¥{(product.listPriceAmount / 100).toFixed(0)}</b>
                       {!status.orderable ? (
-                        <button className="menu-unavailable-button" title={status.label} disabled><Clock3 size={18} /></button>
+                        <button className="menu-unavailable-button" title={status.label} aria-label={`${product.name}暂不可点，${status.label}`} disabled><Clock3 size={18} /></button>
                       ) : quantity === 0 ? (
-                        <button className="menu-add-button" title={`加入${product.name}`} onClick={() => changeQuantity(product.id, 1)}><Plus size={20} /></button>
+                        <button className="menu-add-button" title={`加入${product.name}`} aria-label={`加入${product.name}`} onClick={() => changeQuantity(product.id, 1)}><Plus size={20} /></button>
                       ) : (
                         <div className={`menu-stepper${(product.maxOrderQuantity ?? 50) > 50 ? ' has-direct-input' : ''}`}>
                           <button title={`减少${product.name}`} onClick={() => changeQuantity(product.id, -1)}><Minus size={17} /></button>

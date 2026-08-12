@@ -18,6 +18,7 @@ export interface StaffActionActor {
 export interface StaffActionTableSession {
   id: string
   guestCount: number
+  guestProfileSnapshot?: Record<string, unknown>
   status: 'open' | 'closing'
   openedAt: string
   latestMood: null | {

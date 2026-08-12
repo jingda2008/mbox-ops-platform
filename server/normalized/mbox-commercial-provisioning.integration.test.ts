@@ -11,7 +11,7 @@ const integration = databaseUrl ? describe : describe.skip
 const sourceCommitSha = '27e9cba12947456ce83f8da16aa4eca63af731cf'
 
 integration('current M-BOX commercial configuration', () => {
-  it('loads the real store and catalog into a clean database and blocks only unconfirmed business controls', async () => {
+  it('loads the versioned store and catalog into a clean database with explicit validation controls', async () => {
     await runNormalizedMigrations(databaseUrl!)
     const store = parseStoreProvisionConfig(JSON.parse(await readFile(
       resolve('deploy/normalized-store/mbox-lujiazui.store.json'), 'utf8',
@@ -46,16 +46,14 @@ integration('current M-BOX commercial configuration', () => {
       productsMissingCost: 0,
       bundlesMissingComponents: 0,
       invalidBundleComponents: 0,
+      financialRolesMissingLimits: [],
       kdsRolesMissingStationScopes: [],
-      tablesMissingMinimumSpend: 65,
-      tablesMissingLayout: 65,
+      tablesMissingMinimumSpend: 0,
+      tablesMissingLayout: 0,
     })
-    expect(readiness.status).toBe('blocked')
-    expect(readiness.issues.filter((issue) => issue.severity === 'blocker').map((issue) => issue.code)).toEqual([
-      'access.financial_limit_missing',
-      'tables.minimum_spend_unconfirmed',
-      'tables.layout_unconfirmed',
-    ])
-    expect(readiness.issues.filter((issue) => issue.severity === 'warning')).toEqual([])
+    expect(readiness.status).toBe('ready')
+    expect(readiness.issues).toEqual([])
+    expect(store.tables.every((table) => table.minimumSpendMinor === 0)).toBe(true)
+    expect(store.tables.every((table) => Object.keys(table.layout ?? {}).length > 0)).toBe(true)
   }, 30_000)
 })

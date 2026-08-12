@@ -30,7 +30,7 @@ fi
 require_apply_confirmation NORMALIZED_VERIFY_CONFIRM 'VERIFY_ISOLATED_CANDIDATE'
 require_tool docker
 require_tool curl
-require_tool node
+require_tool jq
 verify_image_identity "$IMAGE_REF" "$APP_COMMIT_SHA" "$EXPECTED_IMAGE_DIGEST"
 
 container_image_id="$(docker container inspect --format '{{.Image}}' "$CANDIDATE_CONTAINER_NAME")"
@@ -47,35 +47,26 @@ until ready_json="$(curl --fail --silent --show-error --max-time 4 "${CANDIDATE_
 done
 version_json="$(curl --fail --silent --show-error --max-time 4 "${CANDIDATE_BASE_URL}/api/version")"
 
-READY_JSON="$ready_json" VERSION_JSON="$version_json" EXPECTED_SHA="$APP_COMMIT_SHA" \
-EXPECTED_SCHEMA="$NORMALIZED_SCHEMA_FLAVOR" DEPLOYMENT_TIER="$DEPLOYMENT_TIER" node --input-type=module <<'NODE'
-const ready = JSON.parse(process.env.READY_JSON)
-const version = JSON.parse(process.env.VERSION_JSON)
-const expectedSha = process.env.EXPECTED_SHA
-const expectedSchema = process.env.EXPECTED_SCHEMA
-const deploymentTier = process.env.DEPLOYMENT_TIER
-if (ready.status !== 'ready') throw new Error('candidate readiness status is not ready')
-if (ready.commitSha !== expectedSha || version.commitSha !== expectedSha) {
-  throw new Error('candidate API commit SHA mismatch')
-}
-if (ready.schemaFlavor !== expectedSchema || version.schemaFlavor !== expectedSchema) {
-  throw new Error('candidate API schema flavor mismatch')
-}
-if (ready.workers !== undefined && ready.workers.status !== 'healthy') {
-  throw new Error('candidate database workers are not healthy')
-}
-if (deploymentTier === 'production') {
-  const requiredAdapterCapabilities = [
-    'outbox.deliver', 'notification.deliver', 'print.deliver', 'sop.execute',
-    'payment.create.postar', 'refund.execute.postar',
-  ]
-  const adapterCapabilities = new Set(ready.workers?.adapterCapabilities ?? [])
-  if (ready.workers?.status !== 'healthy' || ready.workers?.integrationWorkersEnabled !== true
-    || requiredAdapterCapabilities.some((capability) => !adapterCapabilities.has(capability))) {
-    throw new Error('candidate integration workers are not commercially ready')
-  }
-}
-NODE
+jq -e --arg sha "$APP_COMMIT_SHA" --arg schema "$NORMALIZED_SCHEMA_FLAVOR" '
+  .status == "ready"
+  and .commitSha == $sha
+  and .schemaFlavor == $schema
+  and ((has("workers") | not) or .workers.status == "healthy")
+' <<<"$ready_json" >/dev/null || die 'candidate readiness identity or worker status is invalid'
+jq -e --arg sha "$APP_COMMIT_SHA" --arg schema "$NORMALIZED_SCHEMA_FLAVOR" '
+  .commitSha == $sha and .schemaFlavor == $schema
+' <<<"$version_json" >/dev/null || die 'candidate version identity is invalid'
+
+if [[ "$DEPLOYMENT_TIER" == production ]]; then
+  jq -e '
+    .workers.status == "healthy"
+    and .workers.integrationWorkersEnabled == true
+    and ([
+      "outbox.deliver", "notification.deliver", "print.deliver", "sop.execute",
+      "payment.create.postar", "refund.execute.postar"
+    ] - (.workers.adapterCapabilities // []) | length) == 0
+  ' <<<"$ready_json" >/dev/null || die 'candidate integration workers are not commercially ready'
+fi
 
 docker exec \
   --env "APP_COMMIT_SHA=${APP_COMMIT_SHA}" \

@@ -103,11 +103,20 @@ test('candidate scripts protect the existing production container', () => {
 
 test('candidate verification rejects missing external worker integrations', () => {
   const source = readFileSync(resolve(deployDir, 'verify-candidate.sh'), 'utf8')
-  assert.match(source, /deploymentTier === 'production'/)
-  assert.match(source, /integrationWorkersEnabled !== true/)
+  assert.match(source, /DEPLOYMENT_TIER.*production/)
+  assert.match(source, /integrationWorkersEnabled == true/)
   assert.match(source, /payment\.create\.postar/)
   assert.match(source, /refund\.execute\.postar/)
   assert.match(source, /candidate integration workers are not commercially ready/)
+})
+
+test('server-side deployment controls use jq and do not require host Node.js', () => {
+  for (const filename of ['verify-candidate.sh', 'activate-candidate.sh']) {
+    const source = readFileSync(resolve(deployDir, filename), 'utf8')
+    assert.match(source, /require_tool jq/)
+    assert.doesNotMatch(source, /require_tool node/)
+    assert.doesNotMatch(source, /node --input-type=module/)
+  }
 })
 
 test('activation is atomic, verifies public identity and preserves a rollback container', () => {

@@ -34,7 +34,7 @@ fi
 require_apply_confirmation NORMALIZED_ACTIVATION_CONFIRM 'ACTIVATE_VERIFIED_NORMALIZED_CANDIDATE'
 require_tool curl
 require_tool docker
-require_tool node
+require_tool jq
 
 docker container inspect "$ACTIVE_CONTAINER_NAME" >/dev/null 2>&1 \
   || die 'active container is missing'
@@ -100,12 +100,9 @@ verify_public_candidate() {
   local response
   for _ in $(seq 1 "$attempts"); do
     response="$(curl --fail --silent --show-error --max-time 8 "${PUBLIC_BASE_URL}/api/ready" 2>/dev/null || true)"
-    if READY_JSON="$response" EXPECTED_SHA="$APP_COMMIT_SHA" EXPECTED_SCHEMA="$NORMALIZED_SCHEMA_FLAVOR" \
-      node --input-type=module <<'NODE' >/dev/null 2>&1
-const ready = JSON.parse(process.env.READY_JSON)
-if (ready.status !== 'ready' || ready.commitSha !== process.env.EXPECTED_SHA
-  || ready.schemaFlavor !== process.env.EXPECTED_SCHEMA) process.exit(1)
-NODE
+    if jq -e --arg sha "$APP_COMMIT_SHA" --arg schema "$NORMALIZED_SCHEMA_FLAVOR" '
+      .status == "ready" and .commitSha == $sha and .schemaFlavor == $schema
+    ' <<<"$response" >/dev/null 2>&1
     then
       return 0
     fi
@@ -163,22 +160,22 @@ docker exec "$CADDY_CONTAINER_NAME" \
 verify_public_candidate 15
 
 deployed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-DEPLOYED_AT="$deployed_at" DEPLOYMENT_TIER="$DEPLOYMENT_TIER" \
-APP_COMMIT_SHA="$APP_COMMIT_SHA" EXPECTED_IMAGE_DIGEST="$EXPECTED_IMAGE_DIGEST" \
-NORMALIZED_SCHEMA_FLAVOR="$NORMALIZED_SCHEMA_FLAVOR" ROLLBACK_CONTAINER="$rollback_container" \
-  node --input-type=module - "$EVIDENCE_DIR/deployment-manifest.json" <<'NODE'
-import { writeFileSync } from 'node:fs'
-const [output] = process.argv.slice(2)
-writeFileSync(output, `${JSON.stringify({
-  schemaVersion: 1,
-  deployedAt: process.env.DEPLOYED_AT,
-  tier: process.env.DEPLOYMENT_TIER,
-  releaseSha: process.env.APP_COMMIT_SHA,
-  imageDigest: process.env.EXPECTED_IMAGE_DIGEST,
-  schemaFlavor: process.env.NORMALIZED_SCHEMA_FLAVOR,
-  rollbackContainer: process.env.ROLLBACK_CONTAINER,
-}, null, 2)}\n`)
-NODE
+jq -n \
+  --arg deployedAt "$deployed_at" \
+  --arg tier "$DEPLOYMENT_TIER" \
+  --arg releaseSha "$APP_COMMIT_SHA" \
+  --arg imageDigest "$EXPECTED_IMAGE_DIGEST" \
+  --arg schemaFlavor "$NORMALIZED_SCHEMA_FLAVOR" \
+  --arg rollbackContainer "$rollback_container" \
+  '{
+    schemaVersion: 1,
+    deployedAt: $deployedAt,
+    tier: $tier,
+    releaseSha: $releaseSha,
+    imageDigest: $imageDigest,
+    schemaFlavor: $schemaFlavor,
+    rollbackContainer: $rollbackContainer
+  }' > "$EVIDENCE_DIR/deployment-manifest.json"
 (
   cd "$EVIDENCE_DIR"
   sha256sum Caddyfile.previous Caddyfile.final deployment-manifest.json > SHA256SUMS

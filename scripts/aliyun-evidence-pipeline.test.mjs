@@ -91,7 +91,8 @@ test('formal deployment requires OSS evidence before activation and uploads data
   assert.match(stage, /mbox\/evidence\/rc/)
   assert.ok(deploy.indexOf('upload-oss-verified.sh') < deploy.indexOf('activate-release.sh'))
   assert.match(activate, /mbox\/backups/)
-  assert.ok(activate.indexOf('upload-oss-verified.sh') < activate.indexOf('node dist-server\/server\/migrate.js'))
+  assert.ok(activate.indexOf('upload-oss-verified.sh') < activate.indexOf('node dist-normalized/server/migrate-normalized.js'))
+  assert.doesNotMatch(activate, /node dist-server\/server\/migrate\.js/)
 })
 
 test('selective collection is outside the request path and only three stores can be written', async () => {

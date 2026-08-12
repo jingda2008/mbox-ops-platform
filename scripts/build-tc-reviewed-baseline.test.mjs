@@ -75,3 +75,9 @@ test('Alibaba Cloud deployment prefers release evidence and keeps Actions artifa
   assert.match(deploy, /gh run download "\$\{MBOX_CI_RUN_ID\}" --name "quality-evidence-\$\{release_sha\}"/)
   assert.match(deploy, /gh run download "\$\{MBOX_CI_RUN_ID\}" --name "runtime-quality-\$\{release_sha\}"/)
 })
+
+test('Alibaba Cloud activation runs only the migrator shipped by the normalized image', async () => {
+  const activation = await readFile(new URL('../deploy/aliyun/activate-release.sh', import.meta.url), 'utf8')
+  assert.match(activation, /node dist-normalized\/server\/migrate-normalized\.js/)
+  assert.doesNotMatch(activation, /node dist-server\/server\/migrate\.js/)
+})

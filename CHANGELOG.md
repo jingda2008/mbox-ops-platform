@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0-rc.71 - 2026-08-12
+
+- Replaced the obsolete aggregate-runtime migration command in Alibaba Cloud activation with the normalized migrator that is actually shipped in the immutable image.
+- Added a release regression test that rejects any return to the missing legacy migrator path.
+- Preserved the `rc.70` quota-independent evidence archives and the `rc.69` assisted-ordering, onsite product-gift and customer-benefit separation behavior.
+
 ## 1.0.0-rc.70 - 2026-08-12
 
 - Removed the GitHub Actions artifact quota as a single point of failure in tagged releases.

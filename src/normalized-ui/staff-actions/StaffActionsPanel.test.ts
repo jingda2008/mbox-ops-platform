@@ -3,14 +3,14 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { StaffActionsPanel } from './StaffActionsPanel'
 import type { StaffActionsApiPort } from './staff-actions-api'
-import type { StaffFulfillmentData, StaffOperationsData } from './types'
+import type { StaffFulfillmentData, StaffOperationsData, StaffReservation } from './types'
 
 describe('StaffActionsPanel', () => {
   it('renders a compact honest loading state before authoritative data arrives', () => {
     const api: StaffActionsApiPort = {
       loadOperations: vi.fn(() => new Promise<StaffOperationsData>(() => undefined)),
       loadFulfillment: vi.fn(() => new Promise<StaffFulfillmentData>(() => undefined)),
-      loadReservations: vi.fn(() => new Promise(() => undefined)),
+      loadReservations: vi.fn(() => new Promise<StaffReservation[]>(() => undefined)),
       openTable: vi.fn(), closeTable: vi.fn(), transferTable: vi.fn(),
       completeServiceTask: vi.fn(), runKdsAction: vi.fn(), actOnReservation: vi.fn(),
     }

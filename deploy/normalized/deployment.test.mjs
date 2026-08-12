@@ -117,6 +117,8 @@ test('activation is atomic, verifies public identity and preserves a rollback co
   assert.match(source, /rollback_container=/)
   assert.match(source, /rollback_on_error/)
   assert.match(source, /Caddyfile\.previous/)
+  assert.match(source, /caddy_source=/)
+  assert.match(source, /persistent_config_updated/)
   assert.match(source, /deployment-manifest\.json/)
   assert.doesNotMatch(source, /docker rm .*ACTIVE_CONTAINER_NAME/)
 })

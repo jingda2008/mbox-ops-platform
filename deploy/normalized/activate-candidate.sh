@@ -42,6 +42,12 @@ docker container inspect "$CADDY_CONTAINER_NAME" >/dev/null 2>&1 \
   || die 'Caddy container is missing'
 docker container inspect "$CANDIDATE_CONTAINER_NAME" >/dev/null 2>&1 \
   || die 'candidate container is missing'
+caddy_source="$(docker container inspect --format '{{range .Mounts}}{{if eq .Destination "/etc/caddy/Caddyfile"}}{{.Source}}{{end}}{{end}}' "$CADDY_CONTAINER_NAME")"
+case "$caddy_source" in
+  /opt/mbox/*) ;;
+  *) die 'Caddy configuration source must be a file below /opt/mbox' ;;
+esac
+require_file "$caddy_source"
 
 candidate_sha="$(docker container inspect --format '{{index .Config.Labels "com.mbox.release.sha"}}' "$CANDIDATE_CONTAINER_NAME")"
 candidate_schema="$(docker container inspect --format '{{index .Config.Labels "com.mbox.schema-flavor"}}' "$CANDIDATE_CONTAINER_NAME")"
@@ -76,6 +82,7 @@ rollback_container="${ACTIVE_CONTAINER_NAME}-rollback-${APP_COMMIT_SHA:0:7}-$(da
 traffic_switched=0
 old_renamed=0
 promoted=0
+persistent_config_updated=0
 complete=0
 
 reload_caddy() {
@@ -123,6 +130,9 @@ rollback_on_error() {
     docker start "$ACTIVE_CONTAINER_NAME" >/dev/null 2>&1
   fi
   if [[ "$traffic_switched" == 1 ]]; then
+    if [[ "$persistent_config_updated" == 1 ]]; then
+      cp "$current_caddy" "$caddy_source" >/dev/null 2>&1
+    fi
     reload_caddy "$current_caddy" /tmp/Caddyfile.rollback >/dev/null 2>&1
   fi
   curl --fail --silent --show-error --max-time 8 "${PUBLIC_BASE_URL}/api/ready" >/dev/null 2>&1
@@ -144,8 +154,12 @@ docker update --restart=unless-stopped "$ACTIVE_CONTAINER_NAME" >/dev/null
 
 reload_caddy "$final_caddy" /tmp/Caddyfile.normalized-final
 verify_public_candidate 15
-docker cp "$final_caddy" "${CADDY_CONTAINER_NAME}:/etc/caddy/Caddyfile"
-reload_caddy "$final_caddy" /tmp/Caddyfile.normalized-persisted
+cp "$final_caddy" "$caddy_source"
+persistent_config_updated=1
+docker exec "$CADDY_CONTAINER_NAME" \
+  caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
+docker exec "$CADDY_CONTAINER_NAME" \
+  caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
 verify_public_candidate 15
 
 deployed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"

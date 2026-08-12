@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
-import { PublicReservationApi, PublicReservationApiError } from './reservation-api'
+import {
+  PublicReservationApi,
+  PublicReservationApiError,
+  withReservationSessionRecovery,
+} from './reservation-api'
 
 type FetchCall = [input: RequestInfo | URL, init?: RequestInit]
 
@@ -21,6 +25,7 @@ describe('PublicReservationApi', () => {
     expect(String(calls[0]?.[0])).toBe('/api/public/reservation/session')
     expect(calls[0]?.[1]?.credentials).toBe('include')
     expect(new Headers(calls[0]?.[1]?.headers).get('idempotency-key')).toBe('session-command-0001')
+    expect(new Headers(calls[0]?.[1]?.headers).get('x-mbox-guest-device')).toBe('device-fingerprint-secret')
     expect(String(calls[0]?.[0])).not.toContain('wechat-assertion-secret')
     expect(JSON.parse(String(calls[0]?.[1]?.body))).toMatchObject({ provider: 'wechat' })
   })
@@ -58,6 +63,35 @@ describe('PublicReservationApi', () => {
     await expect(api.availability('2026-08-12T20:30:00+08:00', 2)).rejects.toSatisfy((error: unknown) => (
       error instanceof PublicReservationApiError && error.kind === 'network' && error.retryable
     ))
+  })
+
+  it('renews one expired session and retries the protected operation once', async () => {
+    const operation = vi.fn()
+      .mockRejectedValueOnce(new PublicReservationApiError(
+        '预约会话已失效，请重新进入预约页面',
+        'RESERVATION_SESSION_INVALID',
+        401,
+      ))
+      .mockResolvedValueOnce('reservation-created')
+    const renew = vi.fn().mockResolvedValue(undefined)
+
+    await expect(withReservationSessionRecovery(operation, renew)).resolves.toBe('reservation-created')
+    expect(renew).toHaveBeenCalledTimes(1)
+    expect(operation).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not loop when the renewed session is still rejected', async () => {
+    const invalid = new PublicReservationApiError(
+      '预约会话已失效，请重新进入预约页面',
+      'RESERVATION_SESSION_INVALID',
+      401,
+    )
+    const operation = vi.fn().mockRejectedValue(invalid)
+    const renew = vi.fn().mockResolvedValue(undefined)
+
+    await expect(withReservationSessionRecovery(operation, renew)).rejects.toBe(invalid)
+    expect(renew).toHaveBeenCalledTimes(1)
+    expect(operation).toHaveBeenCalledTimes(2)
   })
 })
 

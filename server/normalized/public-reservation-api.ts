@@ -914,7 +914,7 @@ function setSessionCookie(reply: FastifyReply, result: ReservationGuestSessionIs
   const maxAge = Math.max(0, Math.floor((expires.getTime() - Date.now()) / 1000))
   reply.header('set-cookie', [
     `mbox_reservation_session=${result.sessionToken}`,
-    'Path=/public',
+    'Path=/api/public',
     'HttpOnly',
     'Secure',
     'SameSite=Lax',

@@ -79,10 +79,25 @@ emit_release_audit() {
 test -f "${archive}"
 test "$(sha256sum "${archive}" | awk '{print $1}')" = "${expected_archive_sha}"
 
-expected_config_digest=${expected_digest#sha256:}
-archive_config=$(tar -xOf "${archive}" manifest.json | jq -er '.[0].Config')
-test "${archive_config}" = "blobs/sha256/${expected_config_digest}"
-test "$(tar -xOf "${archive}" "${archive_config}" | sha256sum | awk '{print $1}')" = "${expected_config_digest}"
+expected_index_digest=${expected_digest#sha256:}
+archive_index_digest=$(tar -xOf "${archive}" index.json \
+  | jq -er '.manifests[] | select(.annotations["org.opencontainers.image.ref.name"] != null) | .digest' \
+  | head -n 1)
+test "${archive_index_digest}" = "${expected_digest}"
+archive_index_blob="blobs/sha256/${expected_index_digest}"
+test "$(tar -xOf "${archive}" "${archive_index_blob}" | sha256sum | awk '{print $1}')" = "${expected_index_digest}"
+
+platform_manifest_digest=$(tar -xOf "${archive}" "${archive_index_blob}" \
+  | jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' \
+  | head -n 1)
+platform_manifest_hash=${platform_manifest_digest#sha256:}
+platform_manifest_blob="blobs/sha256/${platform_manifest_hash}"
+test "$(tar -xOf "${archive}" "${platform_manifest_blob}" | sha256sum | awk '{print $1}')" = "${platform_manifest_hash}"
+
+archive_config_digest=$(tar -xOf "${archive}" "${platform_manifest_blob}" | jq -er '.config.digest')
+archive_config_hash=${archive_config_digest#sha256:}
+archive_config_blob="blobs/sha256/${archive_config_hash}"
+test "$(tar -xOf "${archive}" "${archive_config_blob}" | sha256sum | awk '{print $1}')" = "${archive_config_hash}"
 
 docker load --input "${archive}" >/dev/null
 actual_sha=$(docker image inspect "${image_tag}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')

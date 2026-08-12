@@ -93,6 +93,9 @@ test('formal deployment requires OSS evidence before activation and uploads data
   assert.match(activate, /mbox\/backups/)
   assert.ok(activate.indexOf('upload-oss-verified.sh') < activate.indexOf('node dist-normalized/server/migrate-normalized.js'))
   assert.doesNotMatch(activate, /node dist-server\/server\/migrate\.js/)
+  assert.match(activate, /tar -xOf "\$\{archive\}" index\.json/)
+  assert.match(activate, /platform\.os == "linux" and \.platform\.architecture == "amd64"/)
+  assert.match(activate, /archive_config_digest=/)
 })
 
 test('selective collection is outside the request path and only three stores can be written', async () => {

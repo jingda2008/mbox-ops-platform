@@ -23,7 +23,7 @@ describe('StaffAccessRepository', () => {
     expect(access.deniedPermissions).toEqual(['order.create'])
     expect(access.navigation).toEqual([expect.objectContaining({ code: 'tasks', route: '/tasks' })])
     expect(access.approvalLimits).toEqual([
-      expect.objectContaining({ code: 'gift.approve', amountMinor: 8800, currency: 'CNY' }),
+      expect.objectContaining({ code: 'order.gift', amountMinor: 8800, currency: 'CNY' }),
     ])
     expect(access.dataScopes).toEqual([
       { key: 'area.ids', effect: 'include', value: ['lounge'] },
@@ -38,6 +38,19 @@ describe('StaffAccessRepository', () => {
     const active = new AccessFixtureTransaction()
     await expect(new StaffAccessRepository(active).assertPermission(employeeId, 'refund.approve'))
       .rejects.toBeInstanceOf(StaffAccessDeniedError)
+  })
+
+  it('resolves the server-only approval authority id for pricing enforcement', async () => {
+    const repository = new StaffAccessRepository(new AccessFixtureTransaction())
+    await expect(repository.resolveApprovalAuthority(
+      employeeId,
+      'order.gift',
+      '2026-08-11T10:00:00.000Z',
+    )).resolves.toEqual(expect.objectContaining({
+      id: '44444444-4444-4444-8444-444444444444',
+      code: 'order.gift',
+      amountMinor: 8800,
+    }))
   })
 })
 
@@ -68,7 +81,8 @@ class AccessFixtureTransaction implements ScopedTransaction {
     }
     if (sql.includes('FROM mbox.role_approval_limits')) {
       return result<Row>([{
-        approval_code: 'gift.approve',
+        id: '44444444-4444-4444-8444-444444444444',
+        approval_code: 'order.gift',
         amount_minor: '8800',
         currency: 'CNY',
         rules: {},

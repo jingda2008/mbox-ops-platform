@@ -32,6 +32,7 @@ const assistedContextId = '12121212-1212-4121-8121-121212121212'
 const staffSessionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const deviceAccessLeaseId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const assistedToken = 'A'.repeat(43)
+const giftApprovalId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
 
 const submittedOrderItem: OrderItem = {
   id: orderItemId,
@@ -121,6 +122,8 @@ function fixture(input: {
   kdsStatus?: KdsTask['status']
   replayed?: boolean
   commerceError?: Error
+  giftLimitAmountMinor?: number
+  commerceResultOverride?: SubmittedCommerceResult
 } = {}) {
   const permissions = input.permissions ?? [
     'order.create', 'order.view', 'kds.prepare', 'kds.deliver', 'kds.exception.manage',
@@ -169,6 +172,17 @@ function fixture(input: {
         return rows([{
           scope_key: 'kds.station_codes', effect: 'include', scope_value: ['bar'],
         }]) as PostgresQueryResult<Row>
+      }
+      if (sql.includes('FROM mbox.role_approval_limits')) {
+        return input.giftLimitAmountMinor === undefined
+          ? rows([]) as PostgresQueryResult<Row>
+          : rows([{
+            id: giftApprovalId,
+            approval_code: 'order.gift',
+            amount_minor: String(input.giftLimitAmountMinor),
+            currency: 'CNY',
+            rules: { allowFullGift: true },
+          }]) as PostgresQueryResult<Row>
       }
       return rows([]) as PostgresQueryResult<Row>
     },
@@ -280,7 +294,7 @@ function fixture(input: {
   const commerce = {
     submitOrder: vi.fn(async () => {
       if (input.commerceError) throw input.commerceError
-      return { value: commerceResult, replayed: input.replayed ?? false }
+      return { value: input.commerceResultOverride ?? commerceResult, replayed: input.replayed ?? false }
     }),
   }
   const fulfillmentQuery = {
@@ -321,6 +335,23 @@ function fixture(input: {
 }
 
 describe('commerceKdsApiPlugin', () => {
+  it('returns order and employee gift capability without exposing the authority source id', async () => {
+    const value = fixture({
+      permissions: ['order.create', 'order.gift'],
+      giftLimitAmountMinor: 50_000,
+    })
+    const response = await value.app.inject({ method: 'GET', url: '/api/commerce/assisted-order-access' })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toEqual({
+      data: {
+        canCreateOrder: true,
+        gift: { enabled: true, maximumAmountMinor: 50_000, currency: 'CNY' },
+      },
+    })
+    expect(JSON.stringify(response.json())).not.toContain(giftApprovalId)
+  })
+
   it('issues a server-bound short-lived assisted-order context for an open assigned table', async () => {
     const value = fixture()
     const response = await value.app.inject({
@@ -410,6 +441,86 @@ describe('commerceKdsApiPlugin', () => {
       },
     }))
     expect(value.staffQueries.some((sql) => sql.includes('role_granted'))).toBe(true)
+  })
+
+  it('resolves an employee gift authority on the server and records the required reason', async () => {
+    const giftResult: SubmittedCommerceResult = {
+      ...commerceResult,
+      order: {
+        ...commerceResult.order,
+        settlementMode: 'table_tab',
+        subtotalAmountMinor: 6_800,
+        discountAmountMinor: 6_800,
+        totalAmountMinor: 0,
+        note: '赠送原因：生日关怀',
+        items: [{
+          ...submittedOrderItem,
+          quantity: 1,
+          discountAmountMinor: 6_800,
+          totalAmountMinor: 0,
+        }],
+      },
+      paymentNextStep: {
+        status: 'deferred', action: 'settle_table_later', orderId, amountMinor: 0,
+        currency: 'CNY', paymentStatus: 'unpaid',
+      },
+    }
+    const value = fixture({
+      permissions: ['order.create', 'order.gift'],
+      giftLimitAmountMinor: 50_000,
+      commerceResultOverride: giftResult,
+    })
+    const response = await value.app.inject({
+      method: 'POST',
+      url: '/api/commerce/orders',
+      headers: {
+        'idempotency-key': 'gift-vip1-0001',
+        'x-assisted-order-context': assistedToken,
+      },
+      payload: {
+        tableSessionId,
+        orderMode: 'gift',
+        giftReason: '生日关怀',
+        items: [{ productId, quantity: 1 }],
+        pricingAuthorization: { sourceType: 'employee', sourceId: employeeId },
+      },
+    })
+
+    expect(response.statusCode).toBe(201)
+    expect(response.json()).toMatchObject({
+      orderMode: 'gift',
+      totalAmountMinor: 0,
+      amounts: { grossAmount: 6_800, discountAmount: 0, giftAmount: 6_800, payableAmount: 0 },
+    })
+    expect(value.commerce.submitOrder).toHaveBeenCalledWith(expect.objectContaining({
+      note: '赠送原因：生日关怀',
+      settlementMode: 'table_tab',
+      pricingAuthorization: { sourceType: 'employee', sourceId: giftApprovalId },
+    }))
+  })
+
+  it('rejects a gift without a reason before resolving or submitting authority', async () => {
+    const value = fixture({
+      permissions: ['order.create', 'order.gift'],
+      giftLimitAmountMinor: 50_000,
+    })
+    const response = await value.app.inject({
+      method: 'POST',
+      url: '/api/commerce/orders',
+      headers: { 'x-assisted-order-context': assistedToken },
+      payload: {
+        idempotencyKey: 'gift-reason-missing',
+        tableSessionId,
+        orderMode: 'gift',
+        items: [{ productId, quantity: 1 }],
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toEqual({
+      error: { code: 'GIFT_REASON_REQUIRED', message: '请填写至少2个字的赠送原因' },
+    })
+    expect(value.commerce.submitOrder).not.toHaveBeenCalled()
   })
 
   it('does not trust an old tableId claim during staff-assisted submit', async () => {

@@ -23,6 +23,47 @@ export class StaffActionsApiError extends Error {
   }
 }
 
+export interface AssistedOrderAccess {
+  canCreateOrder: boolean
+  gift: null | {
+    enabled: boolean
+    maximumAmountMinor: number | null
+    currency: string
+  }
+}
+
+export interface AssistedOrderCatalogProduct {
+  id: string
+  code: string
+  name: string
+  categoryCode: string
+  fulfillmentStation: 'bar' | 'kitchen' | 'cashier' | 'none'
+  productSnapshot: Record<string, unknown>
+  status: 'active' | 'sold_out' | 'inactive'
+  isAvailable: boolean
+  standardPrice: null | {
+    amountMinor: string | null
+    currency: string | null
+  }
+}
+
+export interface AssistedOrderResult {
+  id: string
+  orderMode: 'paid' | 'gift'
+  totalAmountMinor: number
+  currency: string
+  amounts: {
+    grossAmount: number
+    discountAmount: number
+    giftAmount: number
+    payableAmount: number
+  }
+  paymentNextStep: {
+    status: 'required' | 'deferred'
+    action: 'create_payment_intent' | 'settle_table_later'
+  }
+}
+
 export interface StaffActionsApiPort {
   loadOperations(signal?: AbortSignal): Promise<StaffOperationsData>
   loadFulfillment(signal?: AbortSignal): Promise<StaffFulfillmentData>
@@ -41,6 +82,20 @@ export interface StaffActionsApiPort {
   completeServiceTask(taskId: string, note?: string): Promise<void>
   runKdsAction(taskId: string, action: 'complete' | 'deliver'): Promise<void>
   actOnReservation(reservationId: string, action: 'confirm' | 'arrive'): Promise<void>
+  loadAssistedOrderAccess(signal?: AbortSignal): Promise<AssistedOrderAccess>
+  loadAssistedOrderCatalog(signal?: AbortSignal): Promise<AssistedOrderCatalogProduct[]>
+  issueAssistedOrderContext(input: Readonly<{
+    tableSessionId: string
+  }>): Promise<string>
+  submitAssistedOrder(input: Readonly<{
+    tableSessionId: string
+    assistedOrderContextToken: string
+    orderMode: 'paid' | 'gift'
+    items: ReadonlyArray<{ productId: string; quantity: number }>
+    fulfillmentNote?: string
+    giftReason?: string
+    settlementMode: 'immediate_payment' | 'table_tab'
+  }>): Promise<AssistedOrderResult>
 }
 
 export interface StaffActionsApiOptions {
@@ -132,6 +187,52 @@ export class StaffActionsApi implements StaffActionsApiPort {
       'idempotency-key',
       `staff-reservation-${action}-${reservationId}`,
     )
+  }
+
+  loadAssistedOrderAccess(signal?: AbortSignal): Promise<AssistedOrderAccess> {
+    return this.getData('/api/commerce/assisted-order-access', signal)
+  }
+
+  loadAssistedOrderCatalog(signal?: AbortSignal): Promise<AssistedOrderCatalogProduct[]> {
+    return this.getData('/api/catalog/products?status=active&limit=100', signal)
+  }
+
+  async issueAssistedOrderContext(input: Readonly<{ tableSessionId: string }>): Promise<string> {
+    const response = await this.request('/api/commerce/assisted-order-contexts', {
+      method: 'POST',
+      headers: new Headers({ accept: 'application/json', 'content-type': 'application/json' }),
+      body: JSON.stringify(input),
+    })
+    const body = await readJson(response)
+    if (!isObject(body) || !isObject(body.data) || typeof body.data.token !== 'string') {
+      throw new StaffActionsApiError('协助点单授权无法识别，请重新进入桌台', 'INVALID_RESPONSE', response.status)
+    }
+    return body.data.token
+  }
+
+  async submitAssistedOrder(input: Readonly<{
+    tableSessionId: string
+    assistedOrderContextToken: string
+    orderMode: 'paid' | 'gift'
+    items: ReadonlyArray<{ productId: string; quantity: number }>
+    fulfillmentNote?: string
+    giftReason?: string
+    settlementMode: 'immediate_payment' | 'table_tab'
+  }>): Promise<AssistedOrderResult> {
+    const headers = new Headers({
+      accept: 'application/json',
+      'content-type': 'application/json',
+      'idempotency-key': `staff-order-${this.createIdempotencyKey()}`,
+      'x-assisted-order-context': input.assistedOrderContextToken,
+    })
+    const response = await this.request('/api/commerce/orders', {
+      method: 'POST', headers, body: JSON.stringify(input),
+    })
+    const body = await readJson(response)
+    if (!isObject(body) || typeof body.id !== 'string') {
+      throw new StaffActionsApiError('订单结果无法识别，请到订单列表核对', 'INVALID_RESPONSE', response.status)
+    }
+    return body as unknown as AssistedOrderResult
   }
 
   private async getData<Data>(url: string, signal?: AbortSignal): Promise<Data> {

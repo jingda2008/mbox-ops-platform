@@ -59,4 +59,37 @@ describe('StaffActionsApi', () => {
       method: 'POST', body: JSON.stringify({ action: 'deliver' }),
     }))
   })
+
+  it('binds assisted ordering to the current table context and sends gift mode without a client authority id', async () => {
+    const token = 'T'.repeat(43)
+    const send = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { token } }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        id: 'order-1', orderMode: 'gift', totalAmountMinor: 0, currency: 'CNY',
+        amounts: { grossAmount: 6800, discountAmount: 0, giftAmount: 6800, payableAmount: 0 },
+        paymentNextStep: { status: 'deferred', action: 'settle_table_later' },
+      }), { status: 201 }))
+    const api = new StaffActionsApi({ fetch: send, createIdempotencyKey: () => 'gift-key-0001' })
+
+    await expect(api.issueAssistedOrderContext({ tableSessionId: 'session-1' })).resolves.toBe(token)
+    await api.submitAssistedOrder({
+      tableSessionId: 'session-1', assistedOrderContextToken: token, orderMode: 'gift',
+      giftReason: '生日关怀', items: [{ productId: 'product-1', quantity: 1 }],
+      settlementMode: 'table_tab',
+    })
+
+    expect(send).toHaveBeenNthCalledWith(1, '/api/commerce/assisted-order-contexts', expect.objectContaining({
+      method: 'POST', body: JSON.stringify({ tableSessionId: 'session-1' }),
+    }))
+    const orderRequest = send.mock.calls[1]?.[1]
+    const headers = orderRequest?.headers as Headers
+    expect(headers.get('x-assisted-order-context')).toBe(token)
+    expect(headers.get('idempotency-key')).toBe('staff-order-gift-key-0001')
+    expect(orderRequest?.body).toBe(JSON.stringify({
+      tableSessionId: 'session-1', assistedOrderContextToken: token, orderMode: 'gift',
+      giftReason: '生日关怀', items: [{ productId: 'product-1', quantity: 1 }],
+      settlementMode: 'table_tab',
+    }))
+    expect(String(orderRequest?.body)).not.toContain('sourceId')
+  })
 })

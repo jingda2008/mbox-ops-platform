@@ -205,6 +205,25 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
   app,
   options,
 ) => {
+  app.get('/commerce/assisted-order-access', async (request, reply) => handleRoute(reply, async () => {
+    const context = await resolveContext(options, request)
+    const access = await resolveStaffAccess(options, context)
+    const canCreateOrder = access.permissions.includes('order.create')
+    const giftLimit = canCreateOrder && access.permissions.includes('order.gift')
+      ? access.approvalLimits.find((limit) => limit.code === 'order.gift') ?? null
+      : null
+    return reply.send({
+      data: {
+        canCreateOrder,
+        gift: giftLimit === null ? null : {
+          enabled: giftLimit.rules.allowFullGift === true,
+          maximumAmountMinor: giftLimit.amountMinor,
+          currency: giftLimit.currency,
+        },
+      },
+    })
+  }))
+
   app.post('/commerce/assisted-order-contexts', async (request, reply) => handleRoute(reply, async () => {
     const context = await resolveContext(options, request)
     const body = readObject(request.body, '请求正文')
@@ -228,6 +247,9 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
     assertActorBinding(body, context.employeeId)
     const idempotencyKey = readIdempotencyKey(request, body)
     const input = readOrderInput(body)
+    const pricingAuthorization = input.orderMode === 'gift'
+      ? await resolveEmployeeGiftAuthorization(options, context)
+      : undefined
     const assistedToken = readAssistedOrderContextToken(request, body)
     const execution = await options.commerce.submitOrder({
       scope: context.scope,
@@ -239,8 +261,10 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
         ?? deterministicPublicId(context.scope, idempotencyKey),
       channel: 'staff_assisted',
       lines: input.lines,
-      note: input.note,
-      settlementMode: input.settlementMode,
+      note: input.orderMode === 'gift'
+        ? giftOrderNote(input.giftReason!, input.note)
+        : input.note,
+      settlementMode: input.orderMode === 'gift' ? 'table_tab' : input.settlementMode,
       createdByEmployeeId: context.employeeId,
       assistedOrderContext: {
         token: assistedToken,
@@ -248,9 +272,10 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
         staffSessionId: context.staffSessionId,
         deviceAccessLeaseId: context.deviceAccessLeaseId,
       },
+      pricingAuthorization,
       kdsOverride: input.kdsOverride,
     })
-    return reply.code(execution.replayed ? 200 : 201).send(commerceResponse(execution))
+    return reply.code(execution.replayed ? 200 : 201).send(commerceResponse(execution, input.orderMode))
   }))
 
   app.get('/commerce/fulfillment', async (request, reply) => handleRoute(reply, async () => {
@@ -745,12 +770,48 @@ function readOrderInput(body: JsonObject) {
   if (settlementMode !== null && !['immediate_payment', 'table_tab'].includes(settlementMode)) {
     throw new CommerceKdsRequestError('SETTLEMENT_MODE_INVALID', '结算方式无效')
   }
+  const orderMode = readOptionalString(body.orderMode, 'orderMode', 16) ?? 'paid'
+  if (!['paid', 'gift'].includes(orderMode)) {
+    throw new CommerceKdsRequestError('ORDER_MODE_INVALID', '订单类型无效')
+  }
+  const giftReason = readOptionalString(body.giftReason, 'giftReason', 200)
+  if (orderMode === 'gift' && (giftReason?.length ?? 0) < 2) {
+    throw new CommerceKdsRequestError('GIFT_REASON_REQUIRED', '请填写至少2个字的赠送原因')
+  }
   return {
     lines,
     note: readOptionalString(body.fulfillmentNote ?? body.note, 'fulfillmentNote', 500),
     settlementMode: (settlementMode ?? 'table_tab') as 'immediate_payment' | 'table_tab',
+    orderMode: orderMode as 'paid' | 'gift',
+    giftReason,
     kdsOverride: readKdsOverride(body.kdsOverride),
   }
+}
+
+async function resolveEmployeeGiftAuthorization(
+  options: CommerceKdsApiOptions,
+  context: CommerceKdsRequestContext,
+) {
+  return options.staffAccessTransactions.run(context.scope, async (transaction) => {
+    const repository = new StaffAccessRepository(transaction)
+    await repository.assertPermission(context.employeeId, 'order.gift')
+    const authority = await repository.resolveApprovalAuthority(context.employeeId, 'order.gift')
+    if (authority === null || authority.amountMinor === null || authority.amountMinor < 1
+      || authority.rules.allowFullGift !== true) {
+      throw new CommerceKdsRequestError(
+        'GIFT_LIMIT_UNAVAILABLE',
+        '当前岗位未配置可用的商品赠送额度，请联系店长或管理员',
+        403,
+      )
+    }
+    return { sourceType: 'employee' as const, sourceId: authority.id }
+  }, { readOnly: true })
+}
+
+function giftOrderNote(reason: string, fulfillmentNote: string | null): string {
+  return fulfillmentNote === null
+    ? `赠送原因：${reason}`
+    : `赠送原因：${reason}\n出品备注：${fulfillmentNote}`
 }
 
 function readKdsAction(value: unknown): KdsAction {
@@ -763,7 +824,10 @@ function readKdsAction(value: unknown): KdsAction {
   return value as KdsAction
 }
 
-function commerceResponse(execution: CommandExecution<SubmittedCommerceResult>) {
+function commerceResponse(
+  execution: CommandExecution<SubmittedCommerceResult>,
+  orderMode: 'paid' | 'gift' = 'paid',
+) {
   const order = execution.value.order
   const kdsByItem = new Map(execution.value.kdsTasks.map((task) => [task.orderItemId, task]))
   return {
@@ -778,6 +842,7 @@ function commerceResponse(execution: CommandExecution<SubmittedCommerceResult>) 
     discountAmountMinor: order.discountAmountMinor,
     totalAmountMinor: order.totalAmountMinor,
     currency: order.currency,
+    orderMode,
     items: order.items.map((item) => {
       const source = isJsonObject(item.productSnapshot.source) ? item.productSnapshot.source : {}
       const task = kdsByItem.get(item.id)
@@ -804,8 +869,8 @@ function commerceResponse(execution: CommandExecution<SubmittedCommerceResult>) 
     fulfillmentNote: order.note ?? '',
     amounts: {
       grossAmount: order.subtotalAmountMinor,
-      discountAmount: order.discountAmountMinor,
-      giftAmount: 0,
+      discountAmount: orderMode === 'gift' ? 0 : order.discountAmountMinor,
+      giftAmount: orderMode === 'gift' ? order.discountAmountMinor : 0,
       payableAmount: order.totalAmountMinor,
     },
     revision: 1,
@@ -1182,7 +1247,7 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
     return apiError(409, 'INVENTORY_INSUFFICIENT', '部分商品库存不足，请调整订单后重试')
   }
   if (error instanceof PricingAuthorizationDeniedError) {
-    return apiError(403, 'PRICING_AUTHORIZATION_DENIED', '折扣或赠送授权无效')
+    return apiError(403, 'PRICING_AUTHORIZATION_DENIED', '本次赠送超过当前岗位额度，或赠送权限已失效')
   }
   if (error instanceof KdsTransitionError) {
     return apiError(409, 'KDS_TRANSITION_CONFLICT', '出品状态已经变化，请刷新后重试')

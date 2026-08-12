@@ -295,6 +295,7 @@ function orderAuditSnapshot(
     paymentNextStep: { ...result.paymentNextStep },
     totalAmountMinor: result.order.totalAmountMinor,
     currency: result.order.currency,
+    note: result.order.note,
     itemCount: result.order.items.length,
     kdsTaskCount: result.kdsTasks.length,
     inventoryMovementCount: result.inventoryConsumptions.length,

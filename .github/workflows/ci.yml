@@ -75,7 +75,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: ${{ github.ref_type != 'tag' && 'npm' || '' }}
+          cache: ${{ github.event_name == 'push' && github.ref_type != 'tag' && 'npm' || '' }}
       - run: npm ci
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
@@ -92,7 +92,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: ${{ github.ref_type != 'tag' && 'npm' || '' }}
+          cache: ${{ github.event_name == 'push' && github.ref_type != 'tag' && 'npm' || '' }}
       - run: npm ci
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
@@ -109,10 +109,10 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: ${{ github.ref_type != 'tag' && 'npm' || '' }}
+          cache: ${{ github.event_name == 'push' && github.ref_type != 'tag' && 'npm' || '' }}
       - run: npm ci
       - id: playwright-cache
-        if: github.ref_type != 'tag'
+        if: github.event_name == 'push' && github.ref_type != 'tag'
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
@@ -141,10 +141,10 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: ${{ github.ref_type != 'tag' && 'npm' || '' }}
+          cache: ${{ github.event_name == 'push' && github.ref_type != 'tag' && 'npm' || '' }}
       - run: npm ci
       - id: playwright-cache
-        if: github.ref_type != 'tag'
+        if: github.event_name == 'push' && github.ref_type != 'tag'
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
@@ -187,7 +187,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: ${{ github.ref_type != 'tag' && 'npm' || '' }}
+          cache: ${{ github.event_name == 'push' && github.ref_type != 'tag' && 'npm' || '' }}
       - run: npm ci
       - name: Provision database runtime role
         env:
@@ -257,7 +257,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: ${{ github.ref_type != 'tag' && 'npm' || '' }}
+          cache: ${{ github.event_name == 'push' && github.ref_type != 'tag' && 'npm' || '' }}
       - run: npm ci
       - name: Apply normalized-only migrations to a clean database
         run: npm run db:migrate:normalized
@@ -320,10 +320,10 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: ${{ github.ref_type != 'tag' && 'npm' || '' }}
+          cache: ${{ github.event_name == 'push' && github.ref_type != 'tag' && 'npm' || '' }}
       - run: npm ci
       - id: normalized-playwright-cache
-        if: github.ref_type != 'tag'
+        if: github.event_name == 'push' && github.ref_type != 'tag'
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
@@ -383,7 +383,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: ${{ github.ref_type != 'tag' && 'npm' || '' }}
+          cache: ${{ github.event_name == 'push' && github.ref_type != 'tag' && 'npm' || '' }}
       - run: npm ci
       - name: Run normalized core at sustained 5 RPS against a fresh database
         env:
@@ -451,7 +451,7 @@ jobs:
             APP_COMMIT_SHA=${{ github.sha }}
             APP_RELEASE_VERSION=${{ steps.metadata.outputs.version }}
           cache-from: type=gha,scope=mbox-normalized-runtime
-          cache-to: ${{ github.ref_type != 'tag' && 'type=gha,mode=max,scope=mbox-normalized-runtime' || '' }}
+          cache-to: ${{ github.event_name == 'push' && github.ref_type != 'tag' && 'type=gha,mode=max,scope=mbox-normalized-runtime' || '' }}
       - name: Package immutable deployment bundle
         env:
           IMAGE_TAG: ${{ steps.metadata.outputs.image_tag }}

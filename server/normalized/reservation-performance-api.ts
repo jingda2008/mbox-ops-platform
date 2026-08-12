@@ -784,9 +784,17 @@ function publicReservation(reservation: Reservation) {
 
 function staffReservation(reservation: Reservation, canViewContact: boolean) {
   const { contactToken, ...base } = reservation
+  const seatPreference = reservationSeatPreference(reservation.reservationSnapshot)
   return canViewContact
-    ? { ...base, contactToken, contactAvailable: contactToken.length > 0 }
-    : { ...base, contactAvailable: contactToken.length > 0 }
+    ? { ...base, seatPreference, contactToken, contactAvailable: contactToken.length > 0 }
+    : { ...base, seatPreference, contactAvailable: contactToken.length > 0 }
+}
+
+function reservationSeatPreference(snapshot: JsonObject): string {
+  const value = snapshot.seatPreference
+  return typeof value === 'string' && [
+    'no_preference', 'stage_atmosphere', 'quiet_chat', 'comfortable_booth', 'outdoor_view',
+  ].includes(value) ? value : 'no_preference'
 }
 
 function publicDailyPerformance(view: DailyPerformanceView) {
@@ -854,9 +862,12 @@ function publicSongRequestSubmission(submission: {
 }
 
 function reservationVisibility(context: AuthorizedStaffContext) {
-  const managerRoles = new Set(['OWNER', 'ADMIN', 'MANAGER', 'STORE_MANAGER', 'OPERATIONS_MANAGER'])
+  const fullStoreRoles = new Set([
+    'OWNER', 'ADMIN', 'MANAGER', 'STORE_MANAGER', 'OPERATIONS_MANAGER',
+    'GREETER', 'SERVER',
+  ])
   const all = context.access.permissions.includes('reservation.view.all')
-    || context.access.roleCodes.some((role) => managerRoles.has(role))
+    || context.access.roleCodes.some((role) => fullStoreRoles.has(role))
     || context.access.dataScopes.some((scope) => (
       scope.key === 'reservation.visibility' && scope.effect === 'include' && scope.value === 'all'
     ))

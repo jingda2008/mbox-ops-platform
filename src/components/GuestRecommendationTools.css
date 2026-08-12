@@ -23,6 +23,7 @@
   border: 1px solid #cfd4cd;
   border-radius: 6px;
   background: #fff;
+  box-shadow: 0 2px 0 #c5cac3, 0 4px 8px rgba(18, 24, 19, .07);
   color: inherit;
   text-align: left;
   touch-action: manipulation;
@@ -51,7 +52,8 @@
 .guest-recommendation-options button:active,
 .guest-recommendation-actions button:active:not(:disabled),
 .guest-recommendation-icon-button:active {
-  transform: scale(.98);
+  box-shadow: 0 1px 0 #aeb5ad;
+  transform: translateY(1px) scale(.985);
 }
 
 .guest-recommendation-entry-icon {
@@ -212,6 +214,7 @@
   border: 1px solid #d4d8d2;
   border-radius: 6px;
   background: #fafbf9;
+  box-shadow: 0 2px 0 #c4cac2, 0 4px 8px rgba(18, 24, 19, .07);
   color: #252b26;
   font-size: 13px;
   font-weight: 700;

@@ -66,6 +66,7 @@ interface CatalogMenuRow extends Record<string, unknown> {
   amount_minor: string | null
   currency: string | null
   guest_count: number
+  guest_profile_snapshot: JsonObject
 }
 
 interface GuestServiceCommandResult {
@@ -105,7 +106,15 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
     ), { readOnly: true })
     return reply.send({
       data: products.map(publicCatalogProduct),
-      meta: { search: query.search, categoryCode: query.categoryCode, count: products.length },
+      meta: {
+        search: query.search,
+        categoryCode: query.categoryCode,
+        count: products.length,
+        partySize: products[0]?.guest_count ?? null,
+        recommendationScene: products[0] === undefined
+          ? null
+          : publicRecommendationScene(products[0].guest_profile_snapshot),
+      },
     })
   }))
 
@@ -294,7 +303,7 @@ async function searchGuestCatalog(
       COALESCE(component_list.items, '[]'::jsonb) AS bundle_components,
       product.product_snapshot, product.status,
       price.amount_minor::text, price.currency,
-      current_session.guest_count
+      current_session.guest_count, current_session.guest_profile_snapshot
     FROM mbox.products AS product
     JOIN mbox.table_sessions AS current_session
       ON current_session.tenant_id = product.tenant_id
@@ -370,10 +379,18 @@ async function searchGuestCatalog(
         OR COALESCE(product.product_snapshot -> 'source' ->> 'specification', '') ILIKE $6 ESCAPE '\\'
       )
     ORDER BY
-      CASE
-        WHEN product.product_snapshot -> 'recommendation' -> 'partySizes'
-          @> to_jsonb(ARRAY[current_session.guest_count]) THEN 0
-        ELSE 1
+      CASE WHEN
+        COALESCE(
+          CASE WHEN product.product_snapshot -> 'recommendation' ->> 'minimumPartySize' ~ '^\\d{1,3}$'
+            THEN (product.product_snapshot -> 'recommendation' ->> 'minimumPartySize')::integer END,
+          1
+        ) <= current_session.guest_count
+        AND COALESCE(
+          CASE WHEN product.product_snapshot -> 'recommendation' ->> 'maximumPartySize' ~ '^\\d{1,3}$'
+            THEN (product.product_snapshot -> 'recommendation' ->> 'maximumPartySize')::integer END,
+          200
+        ) >= current_session.guest_count
+        THEN 0 ELSE 1
       END,
       CASE
         WHEN product.product_snapshot -> 'recommendation' ->> 'priority' ~ '^\\d{1,4}$'
@@ -398,52 +415,78 @@ async function searchGuestCatalog(
 
 function publicCatalogProduct(row: CatalogMenuRow) {
   const source = jsonObject(row.product_snapshot.source)
+  const amountMinor = row.amount_minor === null ? null : Number(row.amount_minor)
   return {
     productId: row.id,
     code: row.code,
     name: row.name,
     categoryCode: row.category_code,
+    categoryName: publicString(row.product_snapshot.categoryName)
+      ?? publicString(source.categoryName)
+      ?? row.category_code,
+    beverageFamily: publicBeverageFamily(row.product_snapshot.beverageFamily ?? source.beverageFamily),
     specification: publicString(row.product_snapshot.specification)
       ?? publicString(source.specification),
     aliases: publicStringArray(row.product_snapshot.aliases ?? source.aliases),
+    tags: publicStringArray(row.product_snapshot.tags ?? source.tags),
     imageUrl: publicString(row.product_snapshot.imageUrl) ?? publicString(source.imageUrl),
     description: publicString(row.product_snapshot.description) ?? publicString(source.description),
-    amountMinor: row.amount_minor === null ? null : Number(row.amount_minor),
+    sortOrder: boundedInteger(row.product_snapshot.sortOrder ?? source.sortOrder, 0, 100_000, 999),
+    availableFrom: publicString(row.product_snapshot.availableFrom ?? source.availableFrom),
+    availableUntil: publicString(row.product_snapshot.availableUntil ?? source.availableUntil),
+    guestVisible: row.product_snapshot.guestVisible !== false && source.guestVisible !== false,
+    requiresFulfillment: row.product_snapshot.requiresFulfillment !== false && source.requiresFulfillment !== false,
+    maxOrderQuantity: boundedInteger(row.product_snapshot.maxOrderQuantity ?? source.maxOrderQuantity, 1, 999, 50),
+    amountMinor,
     currency: row.currency,
     fulfillmentStation: row.fulfillment_station,
     productKind: row.product_kind,
     bundleComponents: publicBundleComponents(row.bundle_components),
-    recommendation: publicRecommendation(row.product_snapshot, row.guest_count),
+    recommendation: publicRecommendation(row.product_snapshot, amountMinor),
     available: row.status === 'active' && row.amount_minor !== null,
   }
 }
 
-function publicRecommendation(snapshot: JsonObject, guestCount: number) {
+function publicRecommendation(snapshot: JsonObject, amountMinor: number | null) {
   const source = jsonObject(snapshot.recommendation)
-  const partySizes = publicIntegerArray(source.partySizes, 1, 200)
-  const intents = publicStringArray(source.intents)
-    .filter((value) => ['easy', 'party', 'ritual', 'explore'].includes(value))
-  const priority = Number.isSafeInteger(source.priority)
-    ? Math.max(0, Math.min(1_000, Number(source.priority)))
-    : 0
+  const costAmount = boundedInteger(snapshot.costAmount, 0, Number.MAX_SAFE_INTEGER, amountMinor ?? 0)
   return {
-    featured: source.featured === true,
-    priority,
-    partySizeMatched: partySizes.length === 0 || partySizes.includes(guestCount),
-    intents,
-    badge: publicString(source.badge),
-    valueCopy: publicString(source.valueCopy),
+    enabled: source.enabled === true,
+    priority: boundedInteger(source.priority, 0, 1_000, 100),
+    badge: publicString(source.badge) ?? '',
+    headline: publicString(source.headline) ?? '',
+    reason: publicString(source.reason) ?? '',
+    minimumPartySize: boundedInteger(source.minimumPartySize, 1, 200, 1),
+    maximumPartySize: boundedInteger(source.maximumPartySize, 1, 200, 100),
+    sceneTags: publicEnumArray(source.sceneTags, ['date', 'brothers', 'besties', 'friends', 'business', 'celebration', 'unsure']),
+    intentTags: publicEnumArray(source.intentTags, ['relaxed', 'energetic', 'ritual', 'unsure']),
+    tasteTags: publicEnumArray(source.tasteTags, ['refreshing', 'layered', 'strong', 'any']),
+    dwellTags: publicEnumArray(source.dwellTags, ['one_set', 'stay_longer', 'no_rush']),
+    singleWaveEligible: source.singleWaveEligible !== false,
+    expectedPrepMinutes: boundedInteger(source.expectedPrepMinutes, 0, 240, 8),
+    holdMinutes: boundedInteger(source.holdMinutes, 0, 240, 10),
     upgradeProductId: typeof source.upgradeProductId === 'string'
       && /^[0-9a-f-]{36}$/i.test(source.upgradeProductId)
       ? source.upgradeProductId
       : null,
+    contributionPositive: amountMinor !== null && amountMinor > costAmount,
   }
 }
 
-function publicIntegerArray(value: unknown, minimum: number, maximum: number): number[] {
-  if (!Array.isArray(value)) return []
-  return value.flatMap((item) => Number.isSafeInteger(item)
-    && Number(item) >= minimum && Number(item) <= maximum ? [Number(item)] : [])
+function boundedInteger(value: unknown, minimum: number, maximum: number, fallback: number): number {
+  return Number.isSafeInteger(value) && Number(value) >= minimum && Number(value) <= maximum
+    ? Number(value)
+    : fallback
+}
+
+function publicEnumArray<const Value extends string>(value: unknown, allowed: readonly Value[]): Value[] {
+  const allowedValues = new Set<string>(allowed)
+  return publicStringArray(value).filter((item): item is Value => allowedValues.has(item))
+}
+
+function publicBeverageFamily(value: unknown) {
+  const allowed = ['none', 'cocktail', 'beer', 'wine', 'sparkling', 'spirits', 'non_alcoholic'] as const
+  return typeof value === 'string' && allowed.includes(value as typeof allowed[number]) ? value : 'none'
 }
 
 function publicBundleComponents(value: unknown): Array<{ productId: string; name: string; quantity: number }> {
@@ -796,6 +839,13 @@ function publicStringArray(value: unknown): string[] {
   if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string').slice(0, 20)
   if (typeof value === 'string') return value.split(/[,，]/).map((item) => item.trim()).filter(Boolean).slice(0, 20)
   return []
+}
+
+function publicRecommendationScene(value: unknown): string | null {
+  const snapshot = jsonObject(value)
+  const allowed = new Set(['unsure', 'date', 'brothers', 'besties', 'friends', 'business', 'celebration'])
+  const candidates = [snapshot.recommendationScene, snapshot.scene, snapshot.occasion]
+  return candidates.find((candidate): candidate is string => typeof candidate === 'string' && allowed.has(candidate)) ?? null
 }
 
 function escapeLike(value: string): string {

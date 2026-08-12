@@ -92,6 +92,16 @@ interface AvailableTableRow extends Record<string, unknown> {
   availability_status: 'available' | 'reserved' | 'locked'
 }
 
+type SeatPreference = 'no_preference' | 'stage_atmosphere' | 'quiet_chat' | 'comfortable_booth' | 'outdoor_view'
+
+const SEAT_PREFERENCES = [
+  'no_preference',
+  'stage_atmosphere',
+  'quiet_chat',
+  'comfortable_booth',
+  'outdoor_view',
+] as const satisfies readonly SeatPreference[]
+
 interface PrivateContactRow extends Record<string, unknown> {
   masked_contact: string
 }
@@ -201,6 +211,9 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
     const guestCount = readInteger(body.guestCount, '人数', 1, 200)
     const arrivalAt = readTimestamp(body.arrivalAt, '到店时间')
     const note = readOptionalString(body.note, '备注', 1000)
+    const seatPreference = body.seatPreference === undefined
+      ? 'no_preference'
+      : readEnum(body.seatPreference, '座位偏好', SEAT_PREFERENCES)
     const requestedTableCodes = mode === 'self_select'
       ? readStringArray(body.tableCodes, '桌位', 1, 4)
       : []
@@ -210,7 +223,7 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
       scope: context.scope,
       operationScope: 'public.reservation.create',
       idempotencyKey,
-      requestFingerprint: fingerprint({ mode, customerName, contact: contact.hash, guestCount, arrivalAt, note, requestedTableCodes }),
+      requestFingerprint: fingerprint({ mode, customerName, contact: contact.hash, guestCount, arrivalAt, note, seatPreference, requestedTableCodes }),
       resultCodec: reservationCodec,
     }, async (transaction) => {
       await enforceRateLimit(transaction, 'reservation', hashActor(context.actorRef), 8, 60_000)
@@ -240,7 +253,7 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
         expectedEndAt,
         source: 'wechat',
         note,
-        reservationSnapshot: { bookingMode: mode, depositRule: deposit },
+        reservationSnapshot: { bookingMode: mode, depositRule: deposit, seatPreference },
         tableIds: selected.map((table) => table.table_id),
         initialStatus: 'pending',
         holdExpiresAt: heldUntil,
@@ -319,6 +332,9 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
           ? current.expectedEndAt
           : readTimestamp(body.expectedEndAt, '预计结束时间')
         const note = body.note === undefined ? current.note : readOptionalString(body.note, '备注', 1000)
+        const seatPreference = body.seatPreference === undefined
+          ? reservationSeatPreference(current.reservationSnapshot)
+          : readEnum(body.seatPreference, '座位偏好', SEAT_PREFERENCES)
         const policy = await readPolicy(transaction)
         validateReservationWindow(arrivalAt, expectedEndAt, now(), policy.max_advance_days)
         const requestedCodes = body.tableCodes === undefined
@@ -362,6 +378,7 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
           UPDATE mbox.reservations
           SET customer_name = $4, guest_count = $5, arrival_at = $6::timestamptz,
             expected_end_at = $7::timestamptz, note = $8,
+            reservation_snapshot = reservation_snapshot || jsonb_build_object('seatPreference', $9::text),
             aggregate_version = aggregate_version + 1
           WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
         `, [
@@ -373,6 +390,7 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
           arrivalAt,
           expectedEndAt,
           note,
+          seatPreference,
         ])
         const updated = await new ReservationRepository(transaction).findById(current.id)
         if (!updated) throw new ReservationNotFoundError(current.id)
@@ -788,6 +806,7 @@ function publicReservation(reservation: Reservation, maskedContact: string): Jso
       ? 'arrived'
       : 'not_arrived',
     note: reservation.note,
+    seatPreference: reservationSeatPreference(reservation.reservationSnapshot),
     tableCodes: reservation.tableLocks
       .filter((lock) => ['held', 'confirmed'].includes(lock.status))
       .map((lock) => lock.tableCode),
@@ -817,8 +836,14 @@ function reservationEvent(reservation: Reservation): JsonObject {
     expectedEndAt: reservation.expectedEndAt,
     status: reservation.status,
     source: reservation.source,
+    seatPreference: reservationSeatPreference(reservation.reservationSnapshot),
     tableCodes: reservation.tableLocks.map((lock) => lock.tableCode),
   }
+}
+
+function reservationSeatPreference(snapshot: JsonObject): SeatPreference {
+  const value = snapshot.seatPreference
+  return SEAT_PREFERENCES.includes(value as SeatPreference) ? value as SeatPreference : 'no_preference'
 }
 
 const reservationCodec: JsonCodec<Reservation> = {

@@ -764,6 +764,16 @@ postgresIntegration('reservationPerformanceApiPlugin PostgreSQL privacy and data
 
     staffAccess = scopedAccess({
       employeeId: scopedEmployeeId,
+      roleCodes: ['GREETER'],
+      permissions: ['reservation.view'],
+      dataScopes: [],
+    })
+    const greeter = await app.inject({ method: 'GET', url: '/api/staff/reservations' })
+    expect(greeter.json().data).toHaveLength(3)
+    expect(greeter.json().data.every((value: Record<string, unknown>) => !('contactToken' in value))).toBe(true)
+
+    staffAccess = scopedAccess({
+      employeeId: scopedEmployeeId,
       roleCodes: ['SERVICE'],
       permissions: ['reservation.view'],
       dataScopes: [],

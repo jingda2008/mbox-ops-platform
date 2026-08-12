@@ -146,7 +146,7 @@ if [ "${migration_changed}" = 1 ]; then
     --env-file "${release_env}" \
     --network "${network}" \
     "${image_tag}" \
-    node dist-server/server/migrate.js
+    node dist-normalized/server/migrate-normalized.js
 fi
 
 candidate="mbox-candidate-${short_sha}"

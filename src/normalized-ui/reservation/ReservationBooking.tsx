@@ -6,7 +6,7 @@ import {
   ChevronLeft,
   Clock3,
   LoaderCircle,
-  MapPin,
+  RefreshCw,
   X,
 } from 'lucide-react'
 import {
@@ -18,20 +18,16 @@ import {
   addCalendarDays,
   arrivalIso,
   createArrivalSlots,
-  findTable,
   formatMoney,
   remainingHoldSeconds,
+  seatPreferenceLabel,
   shanghaiBusinessDate,
-  tableStatusLabel,
-  tablesForZone,
   validateConfirmation,
   validateGuestDetails,
   validateSchedule,
-  zoneLabel,
   DEFAULT_OPERATING_HOURS,
 } from './reservation-model'
 import type {
-  BookingMode,
   OperatingHours,
   PublicReservation,
   PublicWaitlist,
@@ -39,12 +35,21 @@ import type {
   ReservationDraft,
   ReservationIdentity,
   ReservationStep,
-  ReservationTable,
-  ReservationZone,
+  SeatPreference,
 } from './types'
 import './reservation-booking.css'
 
-const ZONES: readonly ReservationZone[] = ['stage-front', 'indoor-middle', 'outdoor']
+const SEAT_PREFERENCES: ReadonlyArray<{
+  value: SeatPreference
+  label: string
+  detail: string
+}> = [
+  { value: 'no_preference', label: '门店帮我安排', detail: '综合人数和现场情况' },
+  { value: 'stage_atmosphere', label: '靠近舞台', detail: '氛围更热烈' },
+  { value: 'quiet_chat', label: '方便聊天', detail: '相对舒缓一些' },
+  { value: 'comfortable_booth', label: '卡座舒适', detail: '聚会久坐更轻松' },
+  { value: 'outdoor_view', label: '室外露台', detail: '喜欢开阔和景观' },
+]
 const systemNow = () => new Date()
 
 export interface ReservationBookingProps {
@@ -74,8 +79,6 @@ export function ReservationBooking({
   const [retryAt, setRetryAt] = useState<string | null>(null)
   const [sessionReady, setSessionReady] = useState(false)
   const [availability, setAvailability] = useState<ReservationAvailability | null>(null)
-  const [selectedZone, setSelectedZone] = useState<ReservationZone>('stage-front')
-  const [focusedTableCode, setFocusedTableCode] = useState<string | null>(null)
   const [reservation, setReservation] = useState<PublicReservation | null>(null)
   const [waitlist, setWaitlist] = useState<PublicWaitlist | null>(null)
   const [joinWaitlist, setJoinWaitlist] = useState(false)
@@ -157,7 +160,10 @@ export function ReservationBooking({
         setStep('complete')
         setHoldSeconds(remainingHoldSeconds(value.holdExpiresAt, now()))
       })
-      .catch(() => undefined)
+      .catch((error: unknown) => {
+        const lookupMessage = reservationLookupMessage(error, false)
+        if (lookupMessage !== null) setMessage(lookupMessage)
+      })
       .finally(() => setPhase('idle'))
   }, [api, initialReservationId, now, reservation, runWithSession, sessionReady])
 
@@ -169,8 +175,43 @@ export function ReservationBooking({
     return () => globalThis.clearInterval(timer)
   }, [now, reservation])
 
+  const refreshReservationStatus = useCallback(async (showProgress = true) => {
+    const publicId = reservation?.publicId
+    if (publicId === undefined || !sessionReady) return
+    if (showProgress) setPhase('loading')
+    try {
+      const latest = await runWithSession((signal) => api.getReservation(publicId, signal))
+      if (latest === null) return
+      setReservation(latest)
+      setHoldSeconds(remainingHoldSeconds(latest.holdExpiresAt, now()))
+      onReservationChange?.(latest)
+    } catch (error) {
+      const lookupMessage = reservationLookupMessage(error, reservation !== null)
+      if (lookupMessage !== null) setMessage(lookupMessage)
+      // Keep the submitted receipt visible so the guest can quote its number to the store.
+    } finally {
+      if (showProgress) setPhase('idle')
+    }
+  }, [api, now, onReservationChange, reservation, runWithSession, sessionReady])
+
+  useEffect(() => {
+    if (step !== 'complete' || reservation?.status !== 'pending' || !sessionReady || phase !== 'idle') return
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void refreshReservationStatus(false)
+    }
+    const timer = globalThis.setInterval(refreshWhenVisible, 15_000)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    return () => {
+      globalThis.clearInterval(timer)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+    }
+  }, [phase, refreshReservationStatus, reservation?.status, sessionReady, step])
+
   const loadAvailability = useCallback(async () => {
     const validation = validateSchedule(draft, slots)
+      ?? (editingId === null
+        ? validateGuestDetails(draft)
+        : draft.customerName.trim().length === 0 ? '请填写预约姓名' : null)
     if (validation !== null) {
       setMessage(validation)
       return
@@ -181,46 +222,26 @@ export function ReservationBooking({
       const value = await run((signal) => api.availability(arrivalAt, draft.guestCount, signal))
       if (value === null) return
       setAvailability(value)
-      setDraft((current) => ({ ...current, tableCodes: [] }))
-      setFocusedTableCode(null)
-      setJoinWaitlist(value.areas.every((area) => area.tables.length === 0))
-      setSelectedZone(firstZone(value) ?? 'stage-front')
-      setStep('seat')
+      setDraft((current) => ({ ...current, mode: 'direct', tableCodes: [] }))
+      setJoinWaitlist(value.areas.every((area) => area.tables.every((table) => table.status !== 'available')))
+      setStep('confirm')
     } catch {
       // The inline notice keeps the current schedule available for retry.
     } finally {
       setPhase('idle')
     }
-  }, [api, draft, operatingHours, run, slots])
-
-  const chooseMode = (mode: BookingMode) => {
-    setJoinWaitlist(false)
-    setDraft((current) => ({ ...current, mode, tableCodes: mode === 'direct' ? [] : current.tableCodes }))
-    if (mode === 'direct') setStep('confirm')
-  }
-
-  const chooseTable = (table: ReservationTable) => {
-    setFocusedTableCode(table.code)
-    if (table.status !== 'available') return
-    setDraft((current) => {
-      const selected = current.tableCodes.includes(table.code)
-      const tableCodes = selected
-        ? current.tableCodes.filter((code) => code !== table.code)
-        : current.tableCodes.length < 4 ? [...current.tableCodes, table.code] : current.tableCodes
-      return { ...current, mode: 'self_select', tableCodes }
-    })
-  }
+  }, [api, draft, editingId, operatingHours, run, slots])
 
   const submit = useCallback(async () => {
     if (!sessionReady) {
-      setMessage('微信身份尚未连接，请先重试连接')
+      setMessage('预约服务尚未连接，请先重试')
       return
     }
     const validation = joinWaitlist
       ? validateGuestDetails(draft)
       : editingId === null
         ? validateConfirmation(draft)
-      : draft.mode === 'self_select' && draft.tableCodes.length === 0 ? '请选择一个座位' : null
+        : null
     if (validation !== null) {
       setMessage(validation)
       return
@@ -249,17 +270,14 @@ export function ReservationBooking({
         arrivalAt,
         ...(availability === null ? {} : { expectedEndAt: availability.expectedEndAt }),
         note: emptyToNull(draft.note),
-        ...(draft.mode === 'self_select' ? { tableCodes: draft.tableCodes } : {}),
+        seatPreference: draft.seatPreference,
       }
       const saved = editingId === null
-        ? await runWithSession((signal) => api.createReservation(draft.mode, {
+        ? await runWithSession((signal) => api.createReservation('direct', {
           ...common,
           contact: draft.contact.trim(),
         }, signal))
-        : await runWithSession((signal) => api.updateReservation(editingId, {
-          ...common,
-          tableCodes: draft.tableCodes,
-        }, signal))
+        : await runWithSession((signal) => api.updateReservation(editingId, common, signal))
       if (saved === null) return
       setReservation(saved)
       setWaitlist(null)
@@ -269,9 +287,8 @@ export function ReservationBooking({
     } catch (error) {
       if (error instanceof PublicReservationApiError && error.seatConflict) {
         const conflictMessage = error.message
-        setStep('seat')
+        setStep('schedule')
         setDraft((current) => ({ ...current, tableCodes: [] }))
-        await loadAvailability()
         setMessage(conflictMessage)
       } else if (error instanceof PublicReservationApiError && error.sessionInvalid) {
         setSessionReady(false)
@@ -279,7 +296,7 @@ export function ReservationBooking({
     } finally {
       setPhase('idle')
     }
-  }, [api, availability, draft, editingId, joinWaitlist, loadAvailability, now, onReservationChange, operatingHours, runWithSession, sessionReady])
+  }, [api, availability, draft, editingId, joinWaitlist, now, onReservationChange, operatingHours, runWithSession, sessionReady])
 
   const cancel = useCallback(async () => {
     if (!cancelArmed) {
@@ -314,8 +331,9 @@ export function ReservationBooking({
       date: schedule.date,
       time: schedule.time,
       guestCount: reservation.guestCount,
-      mode: 'self_select',
-      tableCodes: reservation.tableCodes,
+      mode: 'direct',
+      tableCodes: [],
+      seatPreference: reservation.seatPreference,
       customerName: reservation.customerName,
       contact: '',
       note: reservation.note ?? '',
@@ -335,8 +353,6 @@ export function ReservationBooking({
       draft={draft}
       slots={slots}
       availability={availability}
-      selectedZone={selectedZone}
-      focusedTable={findTable(availability?.areas ?? [], focusedTableCode)}
       reservation={reservation}
       waitlist={waitlist}
       joinWaitlist={joinWaitlist}
@@ -346,13 +362,9 @@ export function ReservationBooking({
       maxDate={addCalendarDays(today, 90)}
       onDraftChange={(patch) => setDraft((current) => ({ ...current, ...patch }))}
       onLoadAvailability={() => void loadAvailability()}
-      onChooseMode={chooseMode}
-      onZoneChange={setSelectedZone}
-      onChooseTable={chooseTable}
-      onContinue={() => setStep('confirm')}
       onBack={() => {
         setMessage(null)
-        setStep(step === 'confirm' ? 'seat' : 'schedule')
+        setStep('schedule')
       }}
       onJoinWaitlist={() => {
         setJoinWaitlist(true)
@@ -360,6 +372,7 @@ export function ReservationBooking({
       }}
       onSubmit={() => void submit()}
       onReconnect={() => void connect()}
+      onRefreshStatus={() => void refreshReservationStatus()}
       onEdit={editReservation}
       onCancel={() => void cancel()}
       onDismissCancel={() => setCancelArmed(false)}
@@ -376,8 +389,6 @@ export interface ReservationBookingViewProps {
   draft: ReservationDraft
   slots: ReturnType<typeof createArrivalSlots>
   availability: ReservationAvailability | null
-  selectedZone: ReservationZone
-  focusedTable: ReservationTable | null
   reservation: PublicReservation | null
   waitlist: PublicWaitlist | null
   joinWaitlist: boolean
@@ -387,14 +398,11 @@ export interface ReservationBookingViewProps {
   maxDate: string
   onDraftChange: (patch: Partial<ReservationDraft>) => void
   onLoadAvailability: () => void
-  onChooseMode: (mode: BookingMode) => void
-  onZoneChange: (zone: ReservationZone) => void
-  onChooseTable: (table: ReservationTable) => void
-  onContinue: () => void
   onBack: () => void
   onJoinWaitlist: () => void
   onSubmit: () => void
   onReconnect: () => void
+  onRefreshStatus: () => void
   onEdit: () => void
   onCancel: () => void
   onDismissCancel: () => void
@@ -406,9 +414,9 @@ export function ReservationBookingView(props: ReservationBookingViewProps) {
     <main className="reservation-booking" data-testid="reservation-booking">
       <header className="reservation-header">
         <span className="reservation-brand">M</span>
-        <span><strong>M-BOX LIVEHOUSE</strong><small>陆家嘴 · 上海</small></span>
+        <span><strong>M-BOX LIVEHOUSE</strong><small>SUPERHIGH CULTURE · 陆家嘴</small></span>
         <span className={props.sessionReady ? 'reservation-secure is-ready' : 'reservation-secure'}>
-          {props.sessionReady ? '已连接微信' : '正在连接'}
+          {props.sessionReady ? '预约服务在线' : '正在连接'}
         </span>
       </header>
 
@@ -424,9 +432,6 @@ export function ReservationBookingView(props: ReservationBookingViewProps) {
       {props.step === 'schedule' && (
         <ScheduleStep {...props} busy={busy} />
       )}
-      {props.step === 'seat' && props.availability !== null && (
-        <SeatStep {...props} busy={busy} />
-      )}
       {props.step === 'confirm' && props.availability !== null && (
         <ConfirmStep {...props} busy={busy} />
       )}
@@ -441,9 +446,10 @@ function ScheduleStep(props: ReservationBookingViewProps & { busy: boolean }) {
   return (
     <section className="reservation-step" aria-labelledby="reservation-schedule-title">
       <div className="reservation-title-row">
-        <div><p>RESERVATION</p><h1 id="reservation-schedule-title">今晚几点来？</h1></div>
+        <div><p>RESERVATION</p><h1 id="reservation-schedule-title">为今晚留个位置</h1></div>
         <CalendarDays size={22} aria-hidden="true" />
       </div>
+      <p className="reservation-intro">告诉我们时间和偏好，门店会结合人数与现场情况为您确认合适的位置。</p>
       <div className="reservation-schedule-grid">
         <label>日期
           <input
@@ -473,119 +479,65 @@ function ScheduleStep(props: ReservationBookingViewProps & { busy: boolean }) {
           </span>
         </label>
       </div>
-      <p className="reservation-hint"><Clock3 size={16} aria-hidden="true" /> 午间12:00起可预约，凌晨时段标注“次日”</p>
+
+      <fieldset className="reservation-preferences">
+        <legend>位置偏好 <span>选一个就好</span></legend>
+        <div className="reservation-preference-grid">
+          {SEAT_PREFERENCES.map((preference) => (
+            <button
+              type="button"
+              className={props.draft.seatPreference === preference.value ? 'is-selected' : ''}
+              aria-pressed={props.draft.seatPreference === preference.value}
+              onClick={() => props.onDraftChange({ seatPreference: preference.value })}
+              key={preference.value}
+            >
+              <span>{preference.label}</span>
+              <small>{preference.detail}</small>
+              {props.draft.seatPreference === preference.value && <Check size={16} aria-hidden="true" />}
+            </button>
+          ))}
+        </div>
+        <small className="reservation-preference-note">偏好不等于锁台，具体位置以门店确认结果为准。</small>
+      </fieldset>
+
+      <div className="reservation-contact-grid is-first-step">
+        <label>怎么称呼您
+          <input value={props.draft.customerName} maxLength={128} autoComplete="name" placeholder="例如：王女士" onChange={(event) => props.onDraftChange({ customerName: event.target.value })} />
+        </label>
+        {props.reservation === null
+          ? <label>手机或微信
+            <input value={props.draft.contact} maxLength={256} autoComplete="tel" placeholder="方便门店确认预约" onChange={(event) => props.onDraftChange({ contact: event.target.value })} />
+          </label>
+          : <p className="reservation-protected-contact"><strong>联系方式</strong><span>沿用原预约联系方式，门店仍可正常联系您。</span></p>}
+        <label>想提前告诉我们（选填）
+          <textarea value={props.draft.note} maxLength={1000} rows={2} placeholder="生日、庆祝或其他到店需求" onChange={(event) => props.onDraftChange({ note: event.target.value })} />
+        </label>
+      </div>
+      <p className="reservation-hint"><Clock3 size={16} aria-hidden="true" /> 12:00起可预约，凌晨时段会标注“次日”</p>
       <button className="reservation-primary" type="button" disabled={props.busy} onClick={props.onLoadAvailability}>
-        {props.busy ? <LoaderCircle className="is-spinning" size={18} aria-hidden="true" /> : <MapPin size={18} aria-hidden="true" />}
-        查看可订座位
+        {props.busy ? <LoaderCircle className="is-spinning" size={18} aria-hidden="true" /> : <Check size={18} aria-hidden="true" />}
+        {props.busy ? '正在查询' : '核对预约信息'}
       </button>
     </section>
   )
 }
 
-function SeatStep(props: ReservationBookingViewProps & { busy: boolean }) {
-  const availability = props.availability!
-  const zoneAreas = tablesForZone(availability.areas, props.selectedZone)
-  const availableCount = availability.areas.flatMap((area) => area.tables).filter((table) => table.status === 'available').length
-  return (
-    <section className="reservation-step reservation-seat-step" aria-labelledby="reservation-seat-title">
-      <div className="reservation-title-row is-compact">
-        <button className="reservation-back" type="button" aria-label="返回时间选择" onClick={props.onBack}><ChevronLeft size={20} /></button>
-        <div><p>AVAILABLE TABLES</p><h1 id="reservation-seat-title">选一种预约方式</h1></div>
-        <strong className="reservation-count">余 {availableCount} 桌</strong>
-      </div>
-
-      <div className="reservation-mode-grid">
-        <button type="button" disabled={availableCount === 0} onClick={() => props.onChooseMode('direct')}>
-          <strong>直接预约</strong><small>系统安排合适位置</small>
-        </button>
-        <button className={props.draft.mode === 'self_select' ? 'is-selected' : ''} type="button" onClick={() => props.onChooseMode('self_select')}>
-          <strong>座位自选</strong><small>查看低消和位置</small>
-        </button>
-      </div>
-
-      {props.draft.mode === 'self_select' && (
-        <>
-          <div className="reservation-zone-tabs" role="tablist" aria-label="座位区域">
-            {ZONES.map((zone) => (
-              <button
-                type="button"
-                role="tab"
-                aria-selected={props.selectedZone === zone}
-                className={props.selectedZone === zone ? 'is-active' : ''}
-                onClick={() => props.onZoneChange(zone)}
-                key={zone}
-              >{zoneLabel(zone)}</button>
-            ))}
-          </div>
-          <div className="reservation-legend" aria-label="桌位状态说明">
-            <span><i className="is-available" />可预约</span>
-            <span><i className="is-reserved" />已预订</span>
-            <span><i className="is-locked" />临时锁定</span>
-          </div>
-          <div className="reservation-area-list">
-            {zoneAreas.length === 0 ? (
-              <p className="reservation-empty">这个区域当前没有适合{props.draft.guestCount}位的桌位</p>
-            ) : zoneAreas.map((area) => (
-              <section className="reservation-area" aria-label={area.name} key={area.code}>
-                <h2>{area.name}</h2>
-                <div className="reservation-table-grid">
-                  {area.tables.map((table) => (
-                    <button
-                      type="button"
-                      className={`reservation-table is-${table.status}${props.draft.tableCodes.includes(table.code) ? ' is-selected' : ''}`}
-                      aria-pressed={props.draft.tableCodes.includes(table.code)}
-                      onClick={() => props.onChooseTable(table)}
-                      key={table.code}
-                    >
-                      <strong>{table.code}</strong><small>{table.capacity}位</small>
-                    </button>
-                  ))}
-                </div>
-              </section>
-            ))}
-          </div>
-          {props.focusedTable !== null && (
-            <div className="reservation-table-detail" aria-live="polite">
-              <span><strong>{props.focusedTable.code}</strong> · {props.focusedTable.capacity}位</span>
-              <span>{formatMoney(props.focusedTable.minimumSpendMinor, props.focusedTable.currency)}</span>
-              <em>{tableStatusLabel(props.focusedTable.status)}</em>
-            </div>
-          )}
-          <div className="reservation-sticky-action">
-            <span>{props.draft.tableCodes.length === 0 ? '请选择桌位' : `已选 ${props.draft.tableCodes.join('、')}`}</span>
-            <button type="button" disabled={props.draft.tableCodes.length === 0} onClick={props.onContinue}>下一步</button>
-          </div>
-        </>
-      )}
-
-      {availableCount === 0 && (
-        <button className="reservation-secondary is-full" type="button" onClick={props.onJoinWaitlist}>没有合适位置，先加入候补</button>
-      )}
-    </section>
-  )
-}
-
 function ConfirmStep(props: ReservationBookingViewProps & { busy: boolean }) {
-  const selectedTables = props.draft.mode === 'direct' ? '由门店安排' : props.draft.tableCodes.join('、')
   const slot = props.slots.find((item) => item.value === props.draft.time)
   return (
     <section className="reservation-step" aria-labelledby="reservation-confirm-title">
       <div className="reservation-title-row is-compact">
-        <button className="reservation-back" type="button" aria-label="返回座位选择" onClick={props.onBack}><ChevronLeft size={20} /></button>
-        <div><p>{props.joinWaitlist ? 'WAITLIST' : 'CONFIRM'}</p><h1 id="reservation-confirm-title">{props.joinWaitlist ? '登记候补' : '确认预约'}</h1></div>
+        <button className="reservation-back" type="button" aria-label="返回修改预约信息" onClick={props.onBack}><ChevronLeft size={20} /></button>
+        <div><p>{props.joinWaitlist ? 'WAITLIST' : 'REQUEST'}</p><h1 id="reservation-confirm-title">{props.joinWaitlist ? '登记候补' : '提交预约申请'}</h1></div>
       </div>
       <dl className="reservation-summary">
         <div><dt>到店</dt><dd>{props.draft.date} · {slot?.label ?? '--:--'}</dd></div>
         <div><dt>人数</dt><dd>{props.draft.guestCount}位</dd></div>
-        <div><dt>位置</dt><dd>{props.joinWaitlist ? '有位后联系' : selectedTables}</dd></div>
+        <div><dt>位置偏好</dt><dd>{props.joinWaitlist ? '有位后联系' : seatPreferenceLabel(props.draft.seatPreference)}</dd></div>
+        <div><dt>称呼</dt><dd>{props.draft.customerName.trim()}</dd></div>
+        <div><dt>联系方式</dt><dd>{props.reservation === null ? props.draft.contact.trim() : '沿用原预约联系方式'}</dd></div>
+        {props.draft.note.trim().length > 0 && <div><dt>到店需求</dt><dd>{props.draft.note.trim()}</dd></div>}
       </dl>
-      <div className="reservation-contact-grid">
-        <label>预约姓名<input value={props.draft.customerName} maxLength={128} autoComplete="name" onChange={(event) => props.onDraftChange({ customerName: event.target.value })} /></label>
-        {props.reservation === null && (
-          <label>手机或微信<input value={props.draft.contact} maxLength={256} autoComplete="tel" onChange={(event) => props.onDraftChange({ contact: event.target.value })} /></label>
-        )}
-        <label>备注（选填）<textarea value={props.draft.note} maxLength={1000} rows={2} placeholder="生日、到店需求等" onChange={(event) => props.onDraftChange({ note: event.target.value })} /></label>
-      </div>
       {!props.joinWaitlist && props.availability?.depositRule.enabled === true && (
         <p className="reservation-deposit">
           {props.availability.depositRule.mode === 'minimum_spend_ratio' && props.draft.mode === 'direct'
@@ -594,10 +546,13 @@ function ConfirmStep(props: ReservationBookingViewProps & { busy: boolean }) {
           {props.availability.depositRule.ruleText === null ? '' : ` · ${props.availability.depositRule.ruleText}`}
         </p>
       )}
-      <p className="reservation-hint">座位提交后保留{props.availability?.holdMinutes ?? 20}分钟，请留意门店确认。</p>
+      <div className="reservation-request-note">
+        <strong>这是一份预约申请</strong>
+        <span>提交后由门店核对位置；收到“预约已确认”后才算预约成功。</span>
+      </div>
       <button className="reservation-primary" type="button" disabled={props.busy || !props.sessionReady} onClick={props.onSubmit}>
         {props.busy ? <LoaderCircle className="is-spinning" size={18} aria-hidden="true" /> : <Check size={18} aria-hidden="true" />}
-        {props.busy ? '正在提交' : props.joinWaitlist ? '确认加入候补' : '确认预约'}
+        {props.busy ? '正在提交' : props.joinWaitlist ? '确认加入候补' : '提交预约申请'}
       </button>
     </section>
   )
@@ -608,27 +563,57 @@ function CompleteStep(props: ReservationBookingViewProps & { busy: boolean }) {
   if (record === null) return <section className="reservation-step"><p className="reservation-empty">预约信息暂时无法显示</p></section>
   const isReservation = props.reservation !== null
   const cancelled = record.status === 'cancelled'
+  const pending = isReservation && props.reservation!.status === 'pending'
+  const noShow = isReservation && props.reservation!.status === 'no_show'
+  const confirmed = isReservation && ['confirmed', 'arrived', 'seated', 'completed'].includes(props.reservation!.status)
+  const heading = cancelled
+    ? '已取消'
+    : noShow
+      ? '预约已结束'
+      : pending
+        ? '等待门店确认'
+        : confirmed
+          ? '预约已确认'
+          : isReservation ? '预约状态已更新' : '候补已登记'
   return (
     <section className="reservation-step reservation-complete" aria-labelledby="reservation-complete-title">
-      <span className={cancelled ? 'reservation-result-icon is-cancelled' : 'reservation-result-icon'}>
-        {cancelled ? <X size={26} /> : <Check size={26} />}
+      <span className={`reservation-result-icon${cancelled || noShow ? ' is-cancelled' : pending ? ' is-pending' : ''}`}>
+        {cancelled || noShow ? <X size={26} /> : pending ? <Clock3 size={25} /> : <Check size={26} />}
       </span>
-      <p>{isReservation ? 'YOUR RESERVATION' : 'WAITLIST'}</p>
-      <h1 id="reservation-complete-title">{cancelled ? '已取消' : isReservation ? '预约已提交' : '候补已登记'}</h1>
+      <p>{pending ? 'REQUEST RECEIVED' : isReservation ? 'YOUR RESERVATION' : 'WAITLIST'}</p>
+      <h1 id="reservation-complete-title">{heading}</h1>
+      {pending && (
+        <div className="reservation-confirmation-state is-pending" role="status">
+          <strong>预约申请已收到</strong>
+          <span>门店确认后才正式生效，请留意本页或微信通知。</span>
+        </div>
+      )}
+      {confirmed && (
+        <div className="reservation-confirmation-state is-confirmed" role="status">
+          <strong>门店已确认本次预约</strong>
+          <span>请按约定时间到店，如有变化请提前联系。</span>
+        </div>
+      )}
       <dl className="reservation-summary">
         <div><dt>编号</dt><dd>{record.publicId}</dd></div>
         <div><dt>到店</dt><dd>{formatDateTime(isReservation ? props.reservation!.arrivalAt : props.waitlist!.desiredArrivalAt)}</dd></div>
         <div><dt>人数</dt><dd>{record.guestCount}位</dd></div>
         <div><dt>联系</dt><dd>{record.maskedContact}</dd></div>
-        {isReservation && <div><dt>位置</dt><dd>{props.reservation!.tableCodes.join('、') || '门店安排'}</dd></div>}
+        {isReservation && <div><dt>位置偏好</dt><dd>{seatPreferenceLabel(props.reservation!.seatPreference)}</dd></div>}
+        {isReservation && <div><dt>确认位置</dt><dd>{pending ? '待门店确认' : props.reservation!.tableCodes.join('、') || '门店安排'}</dd></div>}
       </dl>
-      {!cancelled && isReservation && props.reservation!.status === 'pending' && (
-        <p className={props.holdSeconds > 0 ? 'reservation-hold' : 'reservation-hold is-expired'}>
-          {props.holdSeconds > 0 ? `座位保留 ${formatCountdown(props.holdSeconds)}` : '座位保留时间已结束，请重新选择'}
-        </p>
+      {!cancelled && pending && (
+        <div className={props.holdSeconds > 0 ? 'reservation-hold' : 'reservation-hold is-expired'}>
+          <strong>{props.holdSeconds > 0 ? `临时锁位剩余 ${formatCountdown(props.holdSeconds)}` : '临时锁位已结束'}</strong>
+          <span>{props.holdSeconds > 0 ? '倒计时只表示座位暂时保留，不代表预约已确认。' : '本次申请尚未确认，请重新选择或联系门店。'}</span>
+        </div>
       )}
       {!cancelled && (
         <div className="reservation-complete-actions">
+          {pending && <button className="reservation-status-refresh" type="button" disabled={props.busy} onClick={props.onRefreshStatus}>
+            <RefreshCw size={16} className={props.busy ? 'is-spinning' : ''} aria-hidden="true" />
+            {props.busy ? '正在刷新' : '刷新确认状态'}
+          </button>}
           {isReservation && <button className="reservation-secondary" type="button" onClick={props.onEdit}>修改预约</button>}
           <button className={props.cancelArmed ? 'reservation-danger' : 'reservation-secondary'} type="button" disabled={props.busy} onClick={props.onCancel}>
             {props.cancelArmed ? '再次点击确认取消' : isReservation ? '取消预约' : '取消候补'}
@@ -641,10 +626,10 @@ function CompleteStep(props: ReservationBookingViewProps & { busy: boolean }) {
 }
 
 function Progress({ step }: { step: ReservationStep }) {
-  const active = step === 'schedule' ? 1 : step === 'seat' ? 2 : 3
+  const active = step === 'schedule' ? 1 : 2
   return (
     <ol className="reservation-progress" aria-label="预约进度">
-      {['时间人数', '选择桌位', '确认预约'].map((label, index) => (
+      {['预约信息', '提交申请'].map((label, index) => (
         <li className={index + 1 <= active ? 'is-active' : ''} key={label}><span>{index + 1}</span>{label}</li>
       ))}
     </ol>
@@ -652,11 +637,17 @@ function Progress({ step }: { step: ReservationStep }) {
 }
 
 function createDraft(date: string, time: string): ReservationDraft {
-  return { date, time, guestCount: 2, mode: 'direct', tableCodes: [], customerName: '', contact: '', note: '' }
-}
-
-function firstZone(availability: ReservationAvailability): ReservationZone | null {
-  return ZONES.find((zone) => tablesForZone(availability.areas, zone).length > 0) ?? null
+  return {
+    date,
+    time,
+    guestCount: 2,
+    mode: 'direct',
+    tableCodes: [],
+    seatPreference: 'no_preference',
+    customerName: '',
+    contact: '',
+    note: '',
+  }
 }
 
 function scheduleFromArrival(value: string): { date: string; time: string } {
@@ -676,6 +667,13 @@ function emptyToNull(value: string): string | null {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '预约服务暂时没有接上，请重试'
+}
+
+function reservationLookupMessage(error: unknown, hasSubmittedReceipt: boolean): string | null {
+  if (!(error instanceof PublicReservationApiError) || error.code !== 'RESERVATION_NOT_FOUND') return null
+  return hasSubmittedReceipt
+    ? '申请已经提交，但当前暂时无法在线核验。请勿重复提交，可将下方预约编号提供给门店查询。'
+    : '没有查到这条预约。请从原预约入口打开，或联系门店并提供预约编号核对。'
 }
 
 function retryLabel(value: string): string {

@@ -279,6 +279,40 @@ describe('normalizedOperationsApiPlugin', () => {
     })
   })
 
+  it('blocks final table closing while payable orders remain unsettled', async () => {
+    const unsettledTransaction: ScopedTransaction = {
+      scope: { tenantId, storeId },
+      query: vi.fn(async (sql: string) => sql.includes('outstanding_amount_minor')
+        ? { rows: [{ order_count: '2', outstanding_amount_minor: '15600' }], rowCount: 1 }
+        : { rows: [], rowCount: 0 }),
+    }
+    const commandExecutor = {
+      execute: vi.fn(async <Result>(
+        _command: Readonly<IdempotentCommand<Result>>,
+        handler: (value: ScopedTransaction) => Promise<CommandOutcome<Result>>,
+      ) => {
+        const outcome = await handler(unsettledTransaction)
+        return { value: outcome.result, replayed: false }
+      }),
+    }
+    const value = fixture({ commandExecutor })
+
+    const response = await value.app.inject({
+      method: 'POST',
+      url: `/api/table-sessions/${sessionId}/close`,
+      headers: { 'idempotency-key': 'close-unsettled-vip1-0001' },
+    })
+
+    expect(response.statusCode).toBe(409)
+    expect(response.json()).toEqual({
+      error: {
+        code: 'TABLE_SESSION_UNSETTLED',
+        message: '本桌仍有2笔未结订单（待收¥156.00），请先完成收款再关台',
+      },
+    })
+    expect(value.tableRepository.completeClosing).not.toHaveBeenCalled()
+  })
+
   it('creates an employee service task with audit and outbox in one command', async () => {
     const value = fixture()
     const response = await value.app.inject({

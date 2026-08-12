@@ -38,6 +38,15 @@ export interface AssistedOrderCatalogProduct {
   name: string
   categoryCode: string
   fulfillmentStation: 'bar' | 'kitchen' | 'cashier' | 'none'
+  productKind: 'single' | 'bundle'
+  bundleComponents: Array<{
+    productId: string
+    code: string
+    name: string
+    quantity: number
+    sortOrder: number
+    note: string | null
+  }>
   productSnapshot: Record<string, unknown>
   status: 'active' | 'sold_out' | 'inactive'
   isAvailable: boolean

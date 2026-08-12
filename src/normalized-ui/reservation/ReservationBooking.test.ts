@@ -5,9 +5,8 @@ import { ReservationBookingView, type ReservationBookingViewProps } from './Rese
 import type { ReservationAvailability } from './types'
 
 const callbacks = {
-  onDraftChange: vi.fn(), onLoadAvailability: vi.fn(), onChooseMode: vi.fn(), onZoneChange: vi.fn(),
-  onChooseTable: vi.fn(), onContinue: vi.fn(), onBack: vi.fn(), onJoinWaitlist: vi.fn(), onSubmit: vi.fn(),
-  onReconnect: vi.fn(), onEdit: vi.fn(), onCancel: vi.fn(), onDismissCancel: vi.fn(),
+  onDraftChange: vi.fn(), onLoadAvailability: vi.fn(), onBack: vi.fn(), onJoinWaitlist: vi.fn(), onSubmit: vi.fn(),
+  onReconnect: vi.fn(), onRefreshStatus: vi.fn(), onEdit: vi.fn(), onCancel: vi.fn(), onDismissCancel: vi.fn(),
 }
 
 function base(overrides: Partial<ReservationBookingViewProps> = {}): ReservationBookingViewProps {
@@ -15,10 +14,10 @@ function base(overrides: Partial<ReservationBookingViewProps> = {}): Reservation
     step: 'schedule', phase: 'idle', message: null, retryAt: null, sessionReady: true,
     draft: {
       date: '2026-08-12', time: '2026-08-12|1230', guestCount: 2, mode: 'direct', tableCodes: [],
-      customerName: '', contact: '', note: '',
+      seatPreference: 'no_preference', customerName: '王女士', contact: '13800138000', note: '',
     },
     slots: [{ value: '2026-08-12|1230', label: '12:30', iso: '2026-08-12T12:30:00+08:00', nextDay: false }],
-    availability: availability(), selectedZone: 'stage-front', focusedTable: null,
+    availability: availability(),
     reservation: null, waitlist: null, joinWaitlist: false, cancelArmed: false, holdSeconds: 0,
     minDate: '2026-08-12', maxDate: '2026-11-10', ...callbacks, ...overrides,
   }
@@ -31,39 +30,71 @@ function render(props: ReservationBookingViewProps): string {
 describe('ReservationBookingView', () => {
   it('keeps date, time and people on one compact first step', () => {
     const html = render(base())
-    expect(html).toContain('今晚几点来？')
+    expect(html).toContain('为今晚留个位置')
     expect(html).toContain('type="date"')
     expect(html).toContain('到店时间')
     expect(html).toContain('预约人数')
     expect(html).not.toContain('其他客户')
   })
 
-  it('offers direct booking and clickable grouped seats with visible commercial facts', () => {
-    const props = base({ step: 'seat', focusedTable: availability().areas[0]!.tables[0]! })
-    props.draft = { ...props.draft, mode: 'self_select' }
-    const html = render(props)
-    expect(html).toContain('直接预约')
-    expect(html).toContain('座位自选')
-    expect(html).toContain('舞台前')
-    expect(html).toContain('VIP1')
-    expect(html).toContain('最低消费 ¥1,888')
-    expect(html).toContain('已预订')
-    expect(html).toContain('临时锁定')
+  it('uses lightweight seat preferences without exposing exact table self-selection', () => {
+    const html = render(base())
+    expect(html).toContain('门店帮我安排')
+    expect(html).toContain('靠近舞台')
+    expect(html).toContain('方便聊天')
+    expect(html).toContain('卡座舒适')
+    expect(html).toContain('室外露台')
+    expect(html).toContain('偏好不等于锁台')
+    expect(html).not.toContain('座位自选')
+    expect(html).not.toContain('VIP1')
   })
 
-  it('shows only the signed-in customer result and the server hold countdown', () => {
+  it('summarizes the selected preference and explains that confirmation is required', () => {
+    const props = base({ step: 'confirm' })
+    props.draft = { ...props.draft, seatPreference: 'stage_atmosphere' }
+    const html = render(props)
+    expect(html).toContain('位置偏好')
+    expect(html).toContain('靠近舞台')
+    expect(html).toContain('这是一份预约申请')
+    expect(html).toContain('收到“预约已确认”后才算预约成功')
+  })
+
+  it('makes pending approval explicit and distinguishes it from the temporary table hold', () => {
     const html = render(base({
       step: 'complete', holdSeconds: 1139,
       reservation: {
         publicId: 'reservation-own-001', customerName: '王女士', maskedContact: '138****8000', guestCount: 2,
         arrivalAt: '2026-08-12T20:30:00+08:00', expectedEndAt: '2026-08-13T00:30:00+08:00', status: 'pending',
-        arrivalState: 'not_arrived', note: null, tableCodes: ['VIP1'], holdExpiresAt: '2026-08-12T12:20:00Z', cancellationPolicy: {},
+        arrivalState: 'not_arrived', note: null, seatPreference: 'stage_atmosphere', tableCodes: ['VIP1'], holdExpiresAt: '2026-08-12T12:20:00Z', cancellationPolicy: {},
       },
     }))
     expect(html).toContain('reservation-own-001')
     expect(html).toContain('138****8000')
-    expect(html).toContain('座位保留 18:59')
+    expect(html).toContain('等待门店确认')
+    expect(html).toContain('门店确认后才正式生效')
+    expect(html).toContain('临时锁位剩余 18:59')
+    expect(html).toContain('不代表预约已确认')
+    expect(html).toContain('刷新确认状态')
+    expect(html).toContain('确认位置</dt><dd>待门店确认')
+    expect(html).not.toContain('>VIP1<')
+    expect(html).not.toContain('<h1 id="reservation-complete-title">预约已确认</h1>')
     expect(html).not.toContain('联系电话原文')
+  })
+
+  it('shows a confirmed reservation only after the server status changes', () => {
+    const html = render(base({
+      step: 'complete',
+      reservation: {
+        publicId: 'reservation-confirmed-001', customerName: '王女士', maskedContact: '138****8000', guestCount: 2,
+        arrivalAt: '2026-08-12T20:30:00+08:00', expectedEndAt: '2026-08-13T00:30:00+08:00', status: 'confirmed',
+        arrivalState: 'not_arrived', note: null, seatPreference: 'comfortable_booth', tableCodes: ['VIP1'], holdExpiresAt: null, cancellationPolicy: {},
+      },
+    }))
+
+    expect(html).toContain('<h1 id="reservation-complete-title">预约已确认</h1>')
+    expect(html).toContain('门店已确认本次预约')
+    expect(html).not.toContain('临时锁位')
+    expect(html).not.toContain('刷新确认状态')
   })
 
   it('keeps retry and reconnect actions explicit after session or rate-limit failures', () => {

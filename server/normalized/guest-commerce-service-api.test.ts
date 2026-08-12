@@ -103,6 +103,7 @@ describe('guest commerce/service API trust boundaries', () => {
         amountMinor: 6800,
         available: true,
       }],
+      meta: { partySize: 2, recommendationScene: 'date' },
     })
     expect(response.body).not.toContain('internalCost')
   })
@@ -412,6 +413,7 @@ function fixture(overrides: Partial<GuestCommerceServiceApiOptions> = {}) {
       amount_minor: '6800',
       currency: 'CNY',
       guest_count: 2,
+      guest_profile_snapshot: { recommendationScene: 'date' },
     }],
     rowCount: 1,
   }))

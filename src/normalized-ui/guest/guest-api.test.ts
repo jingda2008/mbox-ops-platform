@@ -19,16 +19,31 @@ function product(index: number) {
     code: `PRODUCT-${index}`,
     name: `商品${index}`,
     categoryCode: 'beer',
+    categoryName: '酒水',
+    beverageFamily: 'beer',
     specification: '330ml',
     aliases: [],
+    tags: [],
     imageUrl: null,
     description: null,
+    sortOrder: index,
+    availableFrom: null,
+    availableUntil: null,
+    guestVisible: true,
+    requiresFulfillment: true,
+    maxOrderQuantity: 50,
     amountMinor: 6_800,
     currency: 'CNY',
     fulfillmentStation: 'bar',
     productKind: 'single',
     bundleComponents: [],
-    recommendation: { featured: false, priority: 0, partySizeMatched: true, intents: [], badge: null, valueCopy: null, upgradeProductId: null },
+    recommendation: {
+      enabled: false, priority: 0, badge: '', headline: '', reason: '',
+      minimumPartySize: 1, maximumPartySize: 100,
+      sceneTags: [], intentTags: [], tasteTags: [], dwellTags: [],
+      singleWaveEligible: true, expectedPrepMinutes: 8, holdMinutes: 10,
+      upgradeProductId: null, contributionPositive: true,
+    },
     available: true,
   }
 }
@@ -57,13 +72,15 @@ describe('GuestApiClient', () => {
   it('searches every menu page rather than silently stopping at the first 100 products', async () => {
     const firstPage = Array.from({ length: 100 }, (_, index) => product(index + 1))
     const send = vi.fn<(url: string | URL | Request, init?: RequestInit) => Promise<Response>>()
-      .mockResolvedValueOnce(jsonResponse({ data: firstPage, meta: { count: 100 } }))
-      .mockResolvedValueOnce(jsonResponse({ data: [product(101)], meta: { count: 1 } }))
+      .mockResolvedValueOnce(jsonResponse({ data: firstPage, meta: { count: 100, partySize: 2, recommendationScene: 'date' } }))
+      .mockResolvedValueOnce(jsonResponse({ data: [product(101)], meta: { count: 1, partySize: 2, recommendationScene: 'date' } }))
     const client = new GuestApiClient(deviceKey, { fetch: send })
 
     const result = await client.searchMenu('啤酒')
 
-    expect(result).toHaveLength(101)
+    expect(result.products).toHaveLength(101)
+    expect(result.partySize).toBe(2)
+    expect(result.recommendationScene).toBe('date')
     expect(String(send.mock.calls[0]?.[0])).toContain('search=%E5%95%A4%E9%85%92')
     expect(String(send.mock.calls[1]?.[0])).toContain('offset=100')
   })

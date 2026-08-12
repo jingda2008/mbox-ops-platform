@@ -5,15 +5,9 @@ export {
   type NormalizedStaffWorkspaceViewProps,
 } from './NormalizedStaffWorkspace'
 export {
-  availableResources,
   initialWorkspaceState,
-  resourceItems,
-  RESOURCE_DEFINITIONS,
   workspaceReducer,
   type NormalizedWorkspaceState,
-  type PresentationItem,
-  type ResourceDefinition,
-  type ResourceState,
   type WorkspaceAction,
   type WorkspacePhase,
 } from './workspace-model'

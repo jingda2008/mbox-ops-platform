@@ -147,6 +147,25 @@ export function tableGroups(tables: readonly StaffActionTable[]): Array<{ area: 
   }))
 }
 
+export type StaffTableScope = 'attention' | 'mine' | 'all'
+
+export function visibleStaffTables(
+  tables: readonly StaffActionTable[],
+  scope: StaffTableScope,
+  query: string,
+  attentionTableIds: ReadonlySet<string> = new Set(),
+): StaffActionTable[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase('zh-CN')
+  return tables.filter((table) => {
+    const matchesQuery = normalizedQuery.length === 0
+      || `${table.code} ${table.displayName} ${table.areaName}`.toLocaleLowerCase('zh-CN').includes(normalizedQuery)
+    if (!matchesQuery) return false
+    if (scope === 'all') return true
+    if (scope === 'mine') return table.assignedToActor
+    return table.activeSession !== null || table.assignedToActor || attentionTableIds.has(table.id)
+  })
+}
+
 export function guidanceForPermission(permission: StaffActionPermission): string {
   if (permission === 'table.open') return '当前账号只能查看桌台，请联系店长或有开台权限的同事处理。'
   if (permission === 'table.close') return '关台会结束本桌服务，请联系店长或有翻台权限的同事处理。'

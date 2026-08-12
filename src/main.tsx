@@ -24,7 +24,26 @@ async function startNormalizedApplication() {
   if (/^\/reserve(?:\/|$)/.test(path)) {
     const { ReservationBooking } = await import('./normalized-ui/reservation')
     const { getAnonymousReservationIdentity } = await import('./normalized-ui/reservation/reservation-identity')
-    render(<ReservationBooking identity={getAnonymousReservationIdentity()} />)
+    const currentUrl = new URL(window.location.href)
+    const reservationParam = currentUrl.searchParams.get('reservation')?.trim()
+    const initialReservationId = reservationParam !== undefined && reservationParam.length <= 128
+      ? reservationParam
+      : undefined
+    render(<ReservationBooking
+      identity={getAnonymousReservationIdentity()}
+      initialReservationId={initialReservationId}
+      onReservationChange={(reservation) => {
+        const nextUrl = new URL(window.location.href)
+        if (reservation === null) nextUrl.searchParams.delete('reservation')
+        else nextUrl.searchParams.set('reservation', reservation.publicId)
+        window.history.replaceState(null, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
+      }}
+    />)
+    return
+  }
+  if (/^\/member(?:\/|$)/.test(path)) {
+    const { MemberPortal } = await import('./normalized-ui/member/MemberPortal')
+    render(<MemberPortal />)
     return
   }
   const { NormalizedStaffApp } = await import('./normalized-ui/NormalizedStaffApp')

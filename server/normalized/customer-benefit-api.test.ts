@@ -6,6 +6,7 @@ import {
   type CustomerBenefitApiOptions,
 } from './customer-benefit-api.js'
 import type { Customer, PublicCustomer } from './customer-repository.js'
+import { GuestAuthenticationRequiredError } from './guest-request-context.js'
 import { StaffAccessDeniedError } from './staff-access-repository.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
@@ -87,6 +88,15 @@ const apps: FastifyInstance[] = []
 afterEach(async () => Promise.all(apps.splice(0).map((app) => app.close())))
 
 describe('customerBenefitApiPlugin privacy and permission boundaries', () => {
+  it('returns an authentication response instead of a service fault when guest identity is missing', async () => {
+    const value = fixture({
+      resolveGuestContext: vi.fn(async () => { throw new GuestAuthenticationRequiredError() }),
+    })
+    const response = await value.app.inject({ method: 'GET', url: '/api/guest/customer/profile' })
+    expect(response.statusCode).toBe(401)
+    expect(response.json()).toMatchObject({ error: { code: 'CUSTOMER_BENEFIT_AUTH_REQUIRED' } })
+  })
+
   it('returns a strict public customer DTO without identity hashes, consent, or staff preferences', async () => {
     const value = fixture()
     const response = await value.app.inject({ method: 'GET', url: '/api/guest/customer/profile' })

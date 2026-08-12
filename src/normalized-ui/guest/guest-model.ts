@@ -22,24 +22,25 @@ export interface GuestMenuProduct {
   code: string
   name: string
   categoryCode: string
+  categoryName: string
+  beverageFamily: MenuBeverageFamily
   specification: string | null
   aliases: string[]
+  tags: string[]
   imageUrl: string | null
   description: string | null
+  sortOrder: number
+  availableFrom: string | null
+  availableUntil: string | null
+  guestVisible: boolean
+  requiresFulfillment: boolean
+  maxOrderQuantity: number
   amountMinor: number
   currency: string
   fulfillmentStation: string
   productKind: 'single' | 'bundle'
   bundleComponents: Array<{ productId: string; name: string; quantity: number }>
-  recommendation: {
-    featured: boolean
-    priority: number
-    partySizeMatched: boolean
-    intents: Array<'easy' | 'party' | 'ritual' | 'explore'>
-    badge: string | null
-    valueCopy: string | null
-    upgradeProductId: string | null
-  }
+  recommendation: MenuRecommendationConfig & { contributionPositive: boolean }
   available: boolean
 }
 
@@ -153,3 +154,7 @@ export function formatMoney(amountMinor: number, currency = 'CNY'): string {
 export function safeIdempotencyKey(prefix: string, randomUuid: () => string = () => crypto.randomUUID()): string {
   return `${prefix}-${randomUuid()}`
 }
+import type {
+  MenuBeverageFamily,
+  MenuRecommendationConfig,
+} from '../../shared/contracts'

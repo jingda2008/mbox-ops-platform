@@ -5,6 +5,7 @@ import type {
   PublicWaitlist,
   ReservationAvailability,
   ReservationIdentity,
+  SeatPreference,
   ReservationTableStatus,
 } from './types'
 
@@ -54,6 +55,7 @@ export interface ReservationMutationInput {
   arrivalAt: string
   expectedEndAt?: string
   note?: string | null
+  seatPreference?: SeatPreference
   tableCodes?: string[]
 }
 
@@ -258,10 +260,17 @@ function parseReservation(value: unknown): PublicReservation {
     status: text(record.status, '预约状态'),
     arrivalState,
     note: nullableText(record.note, '备注'),
+    seatPreference: seatPreference(record.seatPreference),
     tableCodes: array(record.tableCodes, '桌位').map((item) => text(item, '桌号')),
     holdExpiresAt: nullableText(record.holdExpiresAt, '保留截止时间'),
     cancellationPolicy: object(record.cancellationPolicy, '取消规则'),
   }
+}
+
+function seatPreference(value: unknown): SeatPreference {
+  if (value === 'no_preference' || value === 'stage_atmosphere' || value === 'quiet_chat'
+    || value === 'comfortable_booth' || value === 'outdoor_view') return value
+  return 'no_preference'
 }
 
 function parseWaitlist(value: unknown): PublicWaitlist {

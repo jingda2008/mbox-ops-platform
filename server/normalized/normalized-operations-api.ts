@@ -102,6 +102,16 @@ class CapabilityDeniedError extends Error {
   }
 }
 
+class UnsettledTableSessionError extends Error {
+  constructor(
+    public readonly orderCount: number,
+    public readonly outstandingAmountMinor: number,
+  ) {
+    super(`本桌仍有${orderCount}笔未结订单（待收¥${(outstandingAmountMinor / 100).toFixed(2)}），请先完成收款再关台`)
+    this.name = 'UnsettledTableSessionError'
+  }
+}
+
 export const normalizedOperationsApiPlugin: FastifyPluginAsync<NormalizedOperationsApiOptions> = async (
   app,
   options,
@@ -281,6 +291,7 @@ async function executeTableTransition(
     resultCodec: tableSessionCodec,
   }, async (transaction) => {
     const repository = options.createTableSessionRepository(transaction)
+    if (transition === 'close') await assertTableSessionSettled(transaction, sessionId)
     const session = transition === 'begin-closing'
       ? await repository.beginClosing(sessionId, context.employeeId)
       : await repository.completeClosing(sessionId, context.employeeId)
@@ -309,6 +320,24 @@ async function executeTableTransition(
       }],
     }
   })
+}
+
+async function assertTableSessionSettled(transaction: ScopedTransaction, sessionId: string): Promise<void> {
+  const result = await transaction.query<{ order_count: string; outstanding_amount_minor: string }>(`
+    SELECT count(*)::text AS order_count,
+      COALESCE(sum(total_amount_minor), 0)::text AS outstanding_amount_minor
+    FROM mbox.orders
+    WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+      AND table_session_id = $3::uuid
+      AND total_amount_minor > 0
+      AND payment_status IN ('unpaid', 'pending')
+  `, [transaction.scope.tenantId, transaction.scope.storeId, sessionId])
+  const row = result.rows[0]
+  const orderCount = Number(row?.order_count ?? 0)
+  const outstandingAmountMinor = Number(row?.outstanding_amount_minor ?? 0)
+  if (orderCount > 0 || outstandingAmountMinor > 0) {
+    throw new UnsettledTableSessionError(orderCount, outstandingAmountMinor)
+  }
 }
 
 async function executeTaskTransition(
@@ -702,6 +731,9 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   if (error instanceof TableAlreadyOpenError) return apiError(409, 'TABLE_ALREADY_OPEN', error.message)
   if (error instanceof TableSessionTransitionError) {
     return apiError(409, 'TABLE_SESSION_TRANSITION_CONFLICT', error.message)
+  }
+  if (error instanceof UnsettledTableSessionError) {
+    return apiError(409, 'TABLE_SESSION_UNSETTLED', error.message)
   }
   if (error instanceof ServiceTaskTransitionError) {
     return apiError(409, 'SERVICE_TASK_TRANSITION_CONFLICT', error.message)

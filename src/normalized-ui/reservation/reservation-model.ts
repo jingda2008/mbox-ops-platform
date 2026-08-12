@@ -6,6 +6,7 @@ import type {
   ReservationTable,
   ReservationTableStatus,
   ReservationZone,
+  SeatPreference,
 } from './types'
 
 export const DEFAULT_OPERATING_HOURS: Readonly<OperatingHours> = Object.freeze({
@@ -83,6 +84,16 @@ export function tableStatusLabel(status: ReservationTableStatus): string {
   if (status === 'reserved') return '已预订'
   if (status === 'locked') return '临时锁定'
   return '可预约'
+}
+
+export function seatPreferenceLabel(preference: SeatPreference): string {
+  return ({
+    no_preference: '门店帮我安排',
+    stage_atmosphere: '靠近舞台',
+    quiet_chat: '方便聊天',
+    comfortable_booth: '卡座舒适',
+    outdoor_view: '室外露台',
+  } satisfies Record<SeatPreference, string>)[preference]
 }
 
 export function formatMoney(minor: number | null, currency = 'CNY'): string {

@@ -119,7 +119,7 @@ async function authenticatedGuestState(browser: Browser, baseURL: string, fixtur
     const page = await context.newPage()
     await page.goto(fixture.guestUrl)
     await expect(page.getByTestId('normalized-guest-app')).toBeVisible()
-    await expect(page.locator('button[aria-label^="加入"]').first()).toBeVisible()
+    await expect(page.getByRole('navigation', { name: '菜单分类' }).getByRole('button').first()).toBeVisible()
     const url = new URL(fixture.guestUrl, baseURL)
     url.hash = ''
     return { storageState: await context.storageState(), deviceKey, path: `${url.pathname}${url.search}` }
@@ -217,7 +217,7 @@ async function installReadinessProbe(page: Page, mode: 'employee' | 'guest') {
       if (windowState.__normalizedStartupPaintedAt) return
       const target = startupMode === 'employee'
         ? document.querySelector('[data-testid="normalized-workspace"] button:not(:disabled)')
-        : document.querySelector('[data-testid="normalized-guest-app"] button[aria-label^="加入"]:not(:disabled)')
+        : document.querySelector('[data-testid="normalized-guest-app"] nav[aria-label="菜单分类"] button:not(:disabled)')
       if (!target || target.getBoundingClientRect().width <= 0 || target.getBoundingClientRect().height <= 0) return
       windowState.__normalizedStartupReadyAt = performance.now()
       requestAnimationFrame(() => requestAnimationFrame(() => {

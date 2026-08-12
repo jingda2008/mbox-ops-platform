@@ -140,7 +140,7 @@ export class PaymentRepository {
     }
 
     const settlement = await this.readSettlement(order.id)
-    if (settlement.hasPending) {
+    if (settlement.has_pending) {
       throw new OrderNotPayableError(order.id, 'another payment is already pending')
     }
     const outstandingMinor = toSafeMinor(order.total_amount_minor, 'order total')
@@ -253,16 +253,16 @@ export class PaymentRepository {
     const grossPaid = toSafeMinor(settlement.gross_paid_minor, 'gross paid')
     const refunded = toSafeMinor(settlement.refunded_minor, 'refunded')
     const netPaid = grossPaid - refunded
-    const paymentStatus = refunded > 0 && netPaid <= 0
-      ? 'refunded'
-      : refunded > 0
-        ? 'partially_refunded'
-        : netPaid >= total
-          ? 'paid'
-          : netPaid > 0
-            ? 'partially_paid'
-            : settlement.hasPending
-              ? 'pending'
+    const paymentStatus = settlement.has_pending && netPaid < total
+      ? 'pending'
+      : netPaid >= total
+        ? 'paid'
+        : refunded > 0 && netPaid <= 0
+          ? 'refunded'
+          : refunded > 0
+            ? 'partially_refunded'
+            : netPaid > 0
+              ? 'partially_paid'
               : 'unpaid'
 
     const updated = await this.transaction.query<{ payment_status: string }>(`

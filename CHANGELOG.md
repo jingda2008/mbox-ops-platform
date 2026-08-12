@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-rc.69 - 2026-08-12
+
+- Restored fixed-table staff-assisted ordering for open table sessions in the normalized onsite workspace.
+- Restored role-limited product gifts with a required reason, immutable audit evidence and server-authoritative approval resolution.
+- Kept customer benefits out of onsite table actions so birthday, recall and daily customer-operation rights remain a separate business domain.
+- Preserved one-use customer-benefit authorization while allowing an employee role limit to authorize separate eligible gift orders on the same table.
+- Added mobile manager, API authorization, PostgreSQL concurrency, migration and TC regression coverage.
+- Kept real payment, printer hardware and external messaging integrations outside this validation release's completion claim.
+
 ## 1.0.0-rc.68 - 2026-08-09
 
 - Moved production staff presence heartbeats to normalized PostgreSQL leases so routine heartbeats and lightweight authentication no longer read, clone or rewrite the whole-store aggregate.

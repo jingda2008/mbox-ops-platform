@@ -316,8 +316,8 @@ export async function provisionNormalizedStore(input: {
     const schema = await client.query<{ schema_flavor: string; schema_version: string }>(
       'SELECT schema_flavor, schema_version FROM mbox.normalized_schema_metadata WHERE singleton = true',
     )
-    if (schema.rows[0]?.schema_flavor !== 'normalized-core-v1' || Number(schema.rows[0]?.schema_version ?? 0) < 33) {
-      throw new Error('Normalized schema 033 or later is required')
+    if (schema.rows[0]?.schema_flavor !== 'normalized-core-v1' || Number(schema.rows[0]?.schema_version ?? 0) < 34) {
+      throw new Error('Normalized schema 034 or later is required')
     }
     const { tenant, store } = input.config
     await client.query(`INSERT INTO mbox.tenants(id, code, name) VALUES ($1, $2, $3)
@@ -466,13 +466,13 @@ export async function provisionNormalizedStore(input: {
       SELECT config_sha256 FROM mbox.store_configuration_applications
       WHERE tenant_id=$1 AND store_id=$2 AND config_version=$3
       FOR UPDATE`, [tenant.id, store.id, input.config.version])
-    if (existingApplication.rows[0] !== undefined && existingApplication.rows[0].config_sha256 !== configSha256) {
+    if (existingApplication.rows.some((application) => application.config_sha256 !== configSha256)) {
       throw new Error('Configuration version already exists with different content')
     }
     await client.query(`INSERT INTO mbox.store_configuration_applications(
         tenant_id, store_id, config_version, config_sha256, source_commit_sha, summary)
       VALUES ($1,$2,$3,$4,$5,$6::jsonb)
-      ON CONFLICT (tenant_id, store_id, config_version) DO NOTHING`, [
+      ON CONFLICT (tenant_id, store_id, config_version, source_commit_sha) DO NOTHING`, [
       tenant.id, store.id, input.config.version, configSha256, sourceCommitSha.toLowerCase(),
       JSON.stringify({ areaCount: input.config.areas.length, tableCount: input.config.tables.length,
         roleCount: input.config.roles.length, employeeCount: input.config.employees.length }),

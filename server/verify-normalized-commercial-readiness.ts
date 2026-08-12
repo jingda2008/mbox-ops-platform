@@ -50,8 +50,8 @@ export function evaluateCommercialReadiness(
   const issues: CommercialReadinessIssue[] = []
   const blocker = (code: string, message: string) => issues.push({ severity: 'blocker', code, message })
 
-  if (snapshot.schemaFlavor !== 'normalized-core-v1' || Number(snapshot.schemaVersion ?? 0) < 33) {
-    blocker('schema.unavailable', '规范化数据库版本必须为033或更高')
+  if (snapshot.schemaFlavor !== 'normalized-core-v1' || Number(snapshot.schemaVersion ?? 0) < 34) {
+    blocker('schema.unavailable', '规范化数据库版本必须为034或更高')
   }
   if (!snapshot.storeActive) blocker('store.inactive', '目标门店不存在或未启用')
   if (snapshot.configurationApplications < 1 || !snapshot.latestConfigVersion || !snapshot.latestConfigSha256) {

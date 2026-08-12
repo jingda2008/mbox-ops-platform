@@ -53,10 +53,13 @@ integration('normalized store provisioning', () => {
       MBOX_STORE_DAILY_CREDENTIAL: 'MBOX521',
     }
     const sourceCommitSha = '27e9cba12947456ce83f8da16aa4eca63af731cf'
+    const nextSourceCommitSha = '38fadcba2947456ce83f8da16aa4eca63af731cf'
     const first = await provisionNormalizedStore({ databaseUrl: databaseUrl!, config, environment,
       now: new Date('2026-08-11T12:00:00.000Z'), sourceCommitSha })
     const second = await provisionNormalizedStore({ databaseUrl: databaseUrl!, config, environment,
       now: new Date('2026-08-11T12:01:00.000Z'), sourceCommitSha })
+    await provisionNormalizedStore({ databaseUrl: databaseUrl!, config, environment,
+      now: new Date('2026-08-11T12:01:30.000Z'), sourceCommitSha: nextSourceCommitSha })
     expect(first).toMatchObject({ areaCount: 1, tableCount: 1, roleCount: 1, employeeCount: 1,
       dailyCredentialConfigured: true, configVersion: 'integration-v2' })
     expect(first.configSha256).toMatch(/^[0-9a-f]{64}$/)
@@ -74,6 +77,7 @@ integration('normalized store provisioning', () => {
       reservation_policy_count: string
       configuration_application_count: string
       configuration_sha256: string
+      latest_source_commit_sha: string
       data_scope_count: string
       approval_limit_count: string
     }>(`SELECT
@@ -87,13 +91,18 @@ integration('normalized store provisioning', () => {
       (SELECT count(*)::text FROM mbox.public_reservation_policies WHERE tenant_id=$1 AND store_id=$2) AS reservation_policy_count,
       (SELECT count(*)::text FROM mbox.store_configuration_applications WHERE tenant_id=$1 AND store_id=$2) AS configuration_application_count,
       (SELECT config_sha256 FROM mbox.store_configuration_applications
-        WHERE tenant_id=$1 AND store_id=$2 AND config_version='integration-v2') AS configuration_sha256,
+        WHERE tenant_id=$1 AND store_id=$2 AND config_version='integration-v2'
+        ORDER BY applied_at DESC LIMIT 1) AS configuration_sha256,
+      (SELECT source_commit_sha FROM mbox.store_configuration_applications
+        WHERE tenant_id=$1 AND store_id=$2 AND config_version='integration-v2'
+        ORDER BY applied_at DESC LIMIT 1) AS latest_source_commit_sha,
       (SELECT count(*)::text FROM mbox.role_data_scopes WHERE tenant_id=$1 AND store_id=$2) AS data_scope_count,
       (SELECT count(*)::text FROM mbox.role_approval_limits WHERE tenant_id=$1 AND store_id=$2) AS approval_limit_count`, [tenantId, storeId])
     expect(result.rows[0]?.pin_hash).toMatch(/^scrypt\$/)
     expect(result.rows[0]).toMatchObject({ plaintext_pins: '0', active_roles: '1', role_history: '1', active_credentials: '1',
       permission_count: '3', navigation_count: '1', reservation_policy_count: '1',
-      configuration_application_count: '1', configuration_sha256: first.configSha256,
+      configuration_application_count: '2', configuration_sha256: first.configSha256,
+      latest_source_commit_sha: nextSourceCommitSha,
       data_scope_count: '1', approval_limit_count: '1' })
 
     const altered = parseStoreProvisionConfig({
@@ -108,10 +117,10 @@ integration('normalized store provisioning', () => {
       (SELECT name FROM mbox.stores WHERE tenant_id=$1 AND id=$2) AS name,
       (SELECT count(*)::text FROM mbox.store_configuration_applications
         WHERE tenant_id=$1 AND store_id=$2) AS applications`, [tenantId, storeId])
-    expect(rollback.rows[0]).toEqual({ name: 'Provision Store', applications: '1' })
+    expect(rollback.rows[0]).toEqual({ name: 'Provision Store', applications: '2' })
 
     const readiness = await inspectCommercialReadiness({
-      databaseUrl: databaseUrl!, tenantId, storeId, expectedCommitSha: sourceCommitSha,
+      databaseUrl: databaseUrl!, tenantId, storeId, expectedCommitSha: nextSourceCommitSha,
     })
     expect(readiness.status).toBe('blocked')
     expect(readiness.issues.filter((issue) => issue.severity === 'blocker').map((issue) => issue.code)).toEqual([

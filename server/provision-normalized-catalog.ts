@@ -92,6 +92,7 @@ export async function provisionNormalizedCatalog(input: {
   if (!sourceCommitSha || !/^[0-9a-f]{7,64}$/i.test(sourceCommitSha)) {
     throw new Error('APP_COMMIT_SHA is required for versioned catalog provisioning')
   }
+  const normalizedSourceCommitSha = sourceCommitSha.toLowerCase()
   const catalogSha256 = createHash('sha256').update(stableJson(input.catalog), 'utf8').digest('hex')
   const summaryBase = catalogSummary(input.catalog, catalogSha256)
   const client = new Client({ connectionString: input.databaseUrl, application_name: 'mbox-normalized-catalog-provisioner' })
@@ -102,20 +103,8 @@ export async function provisionNormalizedCatalog(input: {
     const schema = await client.query<{ schema_flavor: string; schema_version: string }>(
       'SELECT schema_flavor, schema_version FROM mbox.normalized_schema_metadata WHERE singleton=true',
     )
-    if (schema.rows[0]?.schema_flavor !== 'normalized-core-v1' || Number(schema.rows[0]?.schema_version ?? 0) < 33) {
-      throw new Error('Normalized schema 033 or later is required')
-    }
-    const existing = await client.query<{ catalog_sha256: string }>(`
-      SELECT catalog_sha256 FROM mbox.product_catalog_applications
-      WHERE tenant_id=$1 AND store_id=$2 AND catalog_version=$3 FOR UPDATE`, [
-      input.tenantId, input.storeId, input.catalog.version,
-    ])
-    if (existing.rows[0]) {
-      if (existing.rows[0].catalog_sha256 !== catalogSha256) {
-        throw new Error('Catalog version already exists with different content')
-      }
-      await client.query('COMMIT')
-      return { ...summaryBase, replayed: true }
+    if (schema.rows[0]?.schema_flavor !== 'normalized-core-v1' || Number(schema.rows[0]?.schema_version ?? 0) < 34) {
+      throw new Error('Normalized schema 034 or later is required')
     }
     const store = await client.query<{ currency: string }>(`
       SELECT currency FROM mbox.stores WHERE tenant_id=$1 AND id=$2 AND status='active' FOR UPDATE`, [
@@ -126,6 +115,23 @@ export async function provisionNormalizedCatalog(input: {
     await client.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.store_id', $2, true)`, [
       input.tenantId, input.storeId,
     ])
+    const existing = await client.query<{ catalog_sha256: string; source_commit_sha: string }>(`
+      SELECT catalog_sha256, source_commit_sha FROM mbox.product_catalog_applications
+      WHERE tenant_id=$1 AND store_id=$2 AND catalog_version=$3 FOR UPDATE`, [
+      input.tenantId, input.storeId, input.catalog.version,
+    ])
+    if (existing.rows.some((application) => application.catalog_sha256 !== catalogSha256)) {
+      throw new Error('Catalog version already exists with different content')
+    }
+    if (existing.rows.some((application) => application.source_commit_sha === normalizedSourceCommitSha)) {
+      await client.query('COMMIT')
+      return { ...summaryBase, replayed: true }
+    }
+    if (existing.rows.length > 0) {
+      await insertCatalogApplication(client, input, catalogSha256, normalizedSourceCommitSha, summaryBase)
+      await client.query('COMMIT')
+      return { ...summaryBase, replayed: true }
+    }
     await client.query('DELETE FROM mbox.product_bundle_components WHERE tenant_id=$1 AND store_id=$2', [input.tenantId, input.storeId])
     const productIds = new Map<string, string>()
     const preferredIds = new Map<string, string>()
@@ -175,19 +181,7 @@ export async function provisionNormalizedCatalog(input: {
         productIds.get(component.componentSku), component.quantity, index, component.note ?? null])
       }
     }
-    await client.query(`INSERT INTO mbox.product_catalog_applications(
-        tenant_id, store_id, catalog_version, catalog_sha256, source_commit_sha,
-        source_description, product_count, summary)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`, [input.tenantId, input.storeId,
-    input.catalog.version, catalogSha256, sourceCommitSha.toLowerCase(), input.catalog.source,
-    input.catalog.products.length, JSON.stringify(summaryBase)])
-    await client.query(`INSERT INTO mbox.audit_events(
-        tenant_id, store_id, actor_type, actor_ref, action, object_type, object_id,
-        business_date, after_snapshot, reason)
-      VALUES ($1,$2,'system','normalized-catalog-provisioner','catalog.provisioned','catalog',$3,
-        (clock_timestamp() AT TIME ZONE 'Asia/Shanghai' - interval '6 hours')::date,$4::jsonb,$5)`, [
-      input.tenantId, input.storeId, input.catalog.version, JSON.stringify(summaryBase), 'Versioned normalized catalog applied',
-    ])
+    await insertCatalogApplication(client, input, catalogSha256, normalizedSourceCommitSha, summaryBase)
     await client.query('COMMIT')
     return { ...summaryBase, replayed: false }
   } catch (error) {
@@ -196,6 +190,28 @@ export async function provisionNormalizedCatalog(input: {
   } finally {
     await client.end()
   }
+}
+
+async function insertCatalogApplication(
+  client: Client,
+  input: { tenantId: string; storeId: string; catalog: NormalizedCatalogConfig },
+  catalogSha256: string,
+  sourceCommitSha: string,
+  summary: Omit<CatalogProvisionSummary, 'replayed'>,
+): Promise<void> {
+  await client.query(`INSERT INTO mbox.product_catalog_applications(
+      tenant_id, store_id, catalog_version, catalog_sha256, source_commit_sha,
+      source_description, product_count, summary)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`, [input.tenantId, input.storeId,
+  input.catalog.version, catalogSha256, sourceCommitSha, input.catalog.source,
+  input.catalog.products.length, JSON.stringify(summary)])
+  await client.query(`INSERT INTO mbox.audit_events(
+      tenant_id, store_id, actor_type, actor_ref, action, object_type, object_id,
+      business_date, after_snapshot, reason)
+    VALUES ($1,$2,'system','normalized-catalog-provisioner','catalog.provisioned','catalog',$3,
+      (clock_timestamp() AT TIME ZONE 'Asia/Shanghai' - interval '6 hours')::date,$4::jsonb,$5)`, [
+    input.tenantId, input.storeId, input.catalog.version, JSON.stringify(summary), 'Versioned normalized catalog applied',
+  ])
 }
 
 function parseProduct(value: unknown, index: number): NormalizedCatalogProduct {

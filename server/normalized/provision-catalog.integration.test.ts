@@ -43,10 +43,15 @@ integration('normalized catalog provisioning', () => {
   afterAll(async () => pool.end())
 
   it('applies products, prices and bundle links atomically and replays by content hash', async () => {
+    const nextSourceCommitSha = '38fadcba2947456ce83f8da16aa4eca63af731cf'
     const first = await provisionNormalizedCatalog({ databaseUrl: databaseUrl!, tenantId, storeId, catalog, sourceCommitSha })
     const second = await provisionNormalizedCatalog({ databaseUrl: databaseUrl!, tenantId, storeId, catalog, sourceCommitSha })
+    const nextRelease = await provisionNormalizedCatalog({
+      databaseUrl: databaseUrl!, tenantId, storeId, catalog, sourceCommitSha: nextSourceCommitSha,
+    })
     expect(first).toMatchObject({ productCount: 2, bundleCount: 1, componentCount: 1, replayed: false })
     expect(second).toMatchObject({ catalogSha256: first.catalogSha256, replayed: true })
+    expect(nextRelease).toMatchObject({ catalogSha256: first.catalogSha256, replayed: true })
 
     const state = await pool.query<{
       products: string
@@ -56,6 +61,7 @@ integration('normalized catalog provisioning', () => {
       bundle_station: string
       upgrade_product_id: string
       upgrade_database_id: string
+      latest_source_commit_sha: string
     }>(`SELECT
       (SELECT count(*)::text FROM mbox.products WHERE tenant_id=$1 AND store_id=$2) AS products,
       (SELECT count(*)::text FROM mbox.product_prices WHERE tenant_id=$1 AND store_id=$2) AS prices,
@@ -64,9 +70,12 @@ integration('normalized catalog provisioning', () => {
       (SELECT fulfillment_station FROM mbox.products WHERE tenant_id=$1 AND store_id=$2 AND code='INT-BUNDLE-1') AS bundle_station,
       (SELECT product_snapshot#>>'{recommendation,upgradeProductId}' FROM mbox.products
         WHERE tenant_id=$1 AND store_id=$2 AND code='INT-DRINK-1') AS upgrade_product_id,
-      (SELECT id::text FROM mbox.products WHERE tenant_id=$1 AND store_id=$2 AND code='INT-BUNDLE-1') AS upgrade_database_id`, [tenantId, storeId])
+      (SELECT id::text FROM mbox.products WHERE tenant_id=$1 AND store_id=$2 AND code='INT-BUNDLE-1') AS upgrade_database_id,
+      (SELECT source_commit_sha FROM mbox.product_catalog_applications
+        WHERE tenant_id=$1 AND store_id=$2 ORDER BY applied_at DESC LIMIT 1) AS latest_source_commit_sha`, [tenantId, storeId])
     expect(state.rows[0]).toMatchObject({
-      products: '2', prices: '2', components: '1', applications: '1', bundle_station: 'none',
+      products: '2', prices: '2', components: '1', applications: '2', bundle_station: 'none',
+      latest_source_commit_sha: nextSourceCommitSha,
     })
     expect(state.rows[0]?.upgrade_product_id).toBe(state.rows[0]?.upgrade_database_id)
 

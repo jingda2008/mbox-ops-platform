@@ -6,7 +6,7 @@ import {
 
 const ready: CommercialReadinessSnapshot = {
   schemaFlavor: 'normalized-core-v1',
-  schemaVersion: '033',
+  schemaVersion: '034',
   storeActive: true,
   configurationApplications: 1,
   latestConfigVersion: 'v1',

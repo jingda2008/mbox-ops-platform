@@ -170,7 +170,17 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     tenantId: options.config.tenantId,
     storeId: options.config.storeId,
   })
+  const app = Fastify({
+    logger: options.logger ?? loggerConfiguration(options.config),
+    logController: new LogController({ disableRequestLogging: true }),
+    trustProxy: false,
+    requestIdHeader: false,
+    genReqId: () => randomUUID(),
+  })
   const pool = options.pool ?? createPool(options.config)
+  pool.on?.('error', (error) => {
+    app.log.error({ errorCode: safeErrorCode(error) }, 'normalized database pool idle client failed')
+  })
   const transactions = new ScopedPostgresTransactionRunner(pool)
   const commandExecutor = new NormalizedCommandExecutor(transactions)
   const businessClock = new PostgresNormalizedBusinessClock(transactions)
@@ -202,14 +212,6 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
   if (options.config.startWorkers && lifecycleControllers.length === 0) {
     throw new NormalizedRuntimeConfigurationError(['MBOX_START_WORKERS'])
   }
-
-  const app = Fastify({
-    logger: options.logger ?? loggerConfiguration(options.config),
-    logController: new LogController({ disableRequestLogging: true }),
-    trustProxy: false,
-    requestIdHeader: false,
-    genReqId: () => randomUUID(),
-  })
 
   registerStaffAuthenticationErrorClassification(app, transactions, scope)
 
@@ -842,6 +844,13 @@ function loggerConfiguration(config: Readonly<NormalizedRuntimeConfig>) {
       }),
     },
   }
+}
+
+function safeErrorCode(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string') {
+    return error.code.slice(0, 64)
+  }
+  return error instanceof Error ? error.name.slice(0, 64) : 'UNKNOWN_ERROR'
 }
 
 function isGuestRequest(request: FastifyRequest): boolean {

@@ -39,6 +39,21 @@ const config: NormalizedRuntimeConfig = {
 }
 
 describe('createNormalizedApp', () => {
+  it('subscribes to idle database client errors so they cannot crash the service', async () => {
+    let listener: ((error: unknown) => void) | undefined
+    const pool: InspectablePool = {
+      ...fakePool(),
+      on: vi.fn((_event: 'error', nextListener: (error: unknown) => void) => {
+        listener = nextListener
+      }),
+    }
+    const runtime = await createNormalizedApp({ config, pool, logger: false })
+
+    expect(pool.on).toHaveBeenCalledWith('error', expect.any(Function))
+    expect(() => listener?.(Object.assign(new Error('connection terminated'), { code: '57P01' }))).not.toThrow()
+    await runtime.app.close()
+  })
+
   it('registers the normalized system and domain routes without legacy dependencies', async () => {
     const pool = fakePool()
     const extension: FastifyPluginAsync<Record<string, unknown>> = async (app) => {

@@ -49,13 +49,17 @@ async function main(): Promise<void> {
     if (config.startWorkers) {
       const workerId = config.workerId
       if (workerId === null) throw new Error('Worker configuration invariant failed')
-      workerPool = new Pool({
+      const nativeWorkerPool = new Pool({
         connectionString: config.databaseUrl,
         max: config.workerPoolMax,
         connectionTimeoutMillis: 5_000,
         idleTimeoutMillis: 30_000,
         application_name: `mbox-normalized-worker:${config.commitSha.slice(0, 16)}`,
-      }) as unknown as PostgresPool
+      })
+      nativeWorkerPool.on('error', (error) => {
+        runtime.app.log.error({ errorCode: safeErrorCode(error) }, 'normalized worker database pool idle client failed')
+      })
+      workerPool = nativeWorkerPool as unknown as PostgresPool
       workers = createNormalizedWorkerRuntime({
         scope: { tenantId: config.tenantId, storeId: config.storeId },
         workerId,

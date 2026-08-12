@@ -16,6 +16,7 @@ export interface PostgresPoolClient {
 export interface PostgresPool {
   connect(): Promise<PostgresPoolClient>
   end(): Promise<void>
+  on?(event: 'error', listener: (error: unknown) => void): unknown
   readonly totalCount?: number
   readonly idleCount?: number
   readonly waitingCount?: number

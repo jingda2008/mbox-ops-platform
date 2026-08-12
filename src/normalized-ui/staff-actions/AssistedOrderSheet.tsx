@@ -19,6 +19,8 @@ export interface AssistedOrderSheetProps {
   onSubmitted(message: string): void
 }
 
+const IMMEDIATE_PAYMENT_AVAILABLE = false
+
 export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: AssistedOrderSheetProps) {
   const [access, setAccess] = useState<AssistedOrderAccess | null>(null)
   const [products, setProducts] = useState<AssistedOrderCatalogProduct[]>([])
@@ -139,8 +141,15 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
         </header>
         <div className="staff-order-settlement" aria-label="结算方式">
           <button type="button" className={settlementMode === 'table_tab' ? 'is-active' : ''} onClick={() => setSettlementMode('table_tab')}>挂桌账</button>
-          <button type="button" className={settlementMode === 'immediate_payment' ? 'is-active' : ''} onClick={() => setSettlementMode('immediate_payment')}>立即结算</button>
+          <button
+            type="button"
+            disabled={!IMMEDIATE_PAYMENT_AVAILABLE}
+            title="支付通道联调完成后开放"
+            className={settlementMode === 'immediate_payment' ? 'is-active' : ''}
+            onClick={() => setSettlementMode('immediate_payment')}
+          >立即结算（联调后开放）</button>
         </div>
+        {!IMMEDIATE_PAYMENT_AVAILABLE && <p className="staff-order-payment-note">当前先挂桌记账；关台前系统会检查未结订单，防止漏收。</p>}
         {error !== null && <p className="staff-order-error" role="alert">{error}</p>}
         {phase === 'loading' ? <p className="staff-order-loading"><LoaderCircle className="is-spinning" /> 正在读取可售商品</p> : (
           <MenuOrderingWorkspace
@@ -212,7 +221,13 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
           <input aria-label="赠送原因" value={giftReason} maxLength={200} placeholder="例如：生日关怀、服务补偿" onChange={(event) => setGiftReason(event.target.value)} />
         </label> : <div className="staff-order-settlement" aria-label="结算方式">
           <button type="button" className={settlementMode === 'table_tab' ? 'is-active' : ''} onClick={() => setSettlementMode('table_tab')}>挂桌账</button>
-          <button type="button" className={settlementMode === 'immediate_payment' ? 'is-active' : ''} onClick={() => setSettlementMode('immediate_payment')}>立即结算</button>
+          <button
+            type="button"
+            disabled={!IMMEDIATE_PAYMENT_AVAILABLE}
+            title="支付通道联调完成后开放"
+            className={settlementMode === 'immediate_payment' ? 'is-active' : ''}
+            onClick={() => setSettlementMode('immediate_payment')}
+          >立即结算（联调后开放）</button>
         </div>}
         <label>出品备注<input aria-label="出品备注" value={note} maxLength={500} placeholder="例如：少冰、一起上" onChange={(event) => setNote(event.target.value)} /></label>
         {error !== null && phase !== 'error' && <p className="staff-order-error" role="alert">{error}</p>}

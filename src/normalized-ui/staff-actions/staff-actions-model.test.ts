@@ -7,6 +7,7 @@ import {
   tableMoodPresentation,
   unifiedActionQueue,
   validateOpenTableInput,
+  visibleStaffTables,
 } from './staff-actions-model'
 import type { StaffActionTable, StaffFulfillmentItem, StaffServiceTask } from './types'
 
@@ -55,6 +56,22 @@ describe('staff actions model', () => {
     expect(tableMoodPresentation('happy')).toEqual({ symbol: '☺', label: '开心' })
     expect(tableMoodPresentation('quiet')).toEqual({ symbol: '☾', label: '安静' })
     expect(tableMoodPresentation('unknown')).toEqual({ symbol: '·', label: '客人状态' })
+  })
+
+  it('keeps the table workspace quiet by default while search can still find any table', () => {
+    const active = { ...table, id: 'active', code: 'W01', assignedToActor: false, activeSession: {
+      id: 'session-1', guestCount: 2, status: 'open' as const, openedAt: '2026-08-11T12:00:00.000Z', latestMood: null,
+    } }
+    const assigned = { ...table, id: 'assigned', code: 'VIP1', assignedToActor: true }
+    const quiet = { ...table, id: 'quiet', code: 'A01', assignedToActor: false }
+    const attention = new Set(['quiet'])
+
+    expect(visibleStaffTables([active, assigned, quiet], 'attention', '', attention).map((item) => item.code))
+      .toEqual(['W01', 'VIP1', 'A01'])
+    expect(visibleStaffTables([active, assigned, quiet], 'mine', '', attention).map((item) => item.code))
+      .toEqual(['VIP1'])
+    expect(visibleStaffTables([active, assigned, quiet], 'all', 'a01', attention).map((item) => item.code))
+      .toEqual(['A01'])
   })
 
   it('builds one busy-time queue: complaint, overdue, delivery, assigned service, production', () => {

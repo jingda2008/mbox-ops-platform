@@ -108,7 +108,7 @@ export const NORMALIZED_LOG_REDACTION_PATHS = Object.freeze([
   'payment.publicKey',
 ])
 
-export const NORMALIZED_MIN_SCHEMA_VERSION = '036'
+export const NORMALIZED_MIN_SCHEMA_VERSION = '037'
 export const NORMALIZED_INJECTABLE_PLUGIN_PORTS = Object.freeze([
   'customer-table-side',
 ] as const)
@@ -238,7 +238,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       await app.register(staticPlugin, {
         root: resolve(options.config.staticDir),
         prefix: '/',
-        wildcard: false,
+        wildcard: true,
         index: ['index.html'],
       })
       registerSinglePageApplicationFallback(app)
@@ -625,7 +625,7 @@ function registerSinglePageApplicationFallback(app: FastifyInstance): void {
 
 function isApplicationRoute(path: string): boolean {
   return path === '/'
-    || /^\/(?:guest|reserve|staff)(?:\/[^.]*)?$/.test(path)
+    || /^\/(?:guest|reserve|member|staff)(?:\/[^.]*)?$/.test(path)
 }
 
 function registerStaffAuthenticationErrorClassification(

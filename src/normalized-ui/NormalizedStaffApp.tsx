@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNo
 import { ArrowLeft, ArrowRight, KeyRound, LoaderCircle, ShieldCheck, UserRound } from 'lucide-react'
 import { NormalizedApiClient, NormalizedApiError, type StaffAuthView } from '../normalized-api'
 import { NormalizedStaffWorkspace } from './NormalizedStaffWorkspace'
+import { StaffModulePanel } from './StaffModulePanel'
 import { StaffActionsPanel } from './staff-actions'
 import type { StaffActionsTab } from './staff-actions/types'
+import { normalizedStaffRoute, type NormalizedStaffRoute } from './normalized-staff-routes'
 import { clearDeviceLease, getOrCreateDeviceKey, hasUsableDeviceLease, saveDeviceLease } from './staff-device'
 import './normalized-staff-login.css'
 
@@ -101,7 +103,9 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
         }}><ArrowLeft size={18} /> 工作台</button>
         <strong>{auth.employee.displayName}</strong>
       </header>
-      <StaffActionsPanel initialTab={staffRoute} onLoginRequired={loginRequired} />
+      {isStaffActionsTab(staffRoute)
+        ? <StaffActionsPanel initialTab={staffRoute} onLoginRequired={loginRequired} />
+        : <StaffModulePanel api={api} auth={auth} module={staffRoute} onLoginRequired={loginRequired} />}
     </main>
   }
   return <>
@@ -110,12 +114,8 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
   </>
 }
 
-function normalizedStaffRoute(path: string): StaffActionsTab | null {
-  if (path === '/staff/live') return 'tables'
-  if (path === '/staff/tasks') return 'work'
-  if (path === '/staff/fulfillment') return 'work'
-  if (path === '/staff/reservations') return 'reservations'
-  return null
+function isStaffActionsTab(route: NormalizedStaffRoute): route is StaffActionsTab {
+  return route === 'tables' || route === 'tasks' || route === 'fulfillment' || route === 'reservations'
 }
 
 function DeviceCredentialForm({ api, onReady, message }: {
@@ -184,7 +184,7 @@ function EmployeeLoginForm({ api, onReady, onCredentialRequired, message }: {
 }
 
 function StaffLoginShell({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
-  return <main className="normalized-login"><section><header><span className="normalized-login-mark">M</span><div><strong>M-BOX</strong><small>陆家嘴现场运营</small></div></header><div className="normalized-login-copy"><p>STAFF ACCESS</p><h1>{title}</h1><span>{subtitle}</span></div>{children}</section></main>
+  return <main className="normalized-login"><section><header><span className="normalized-login-mark">M</span><div><strong>M-BOX</strong><small>SUPERHIGH CULTURE · 陆家嘴现场运营</small></div></header><div className="normalized-login-copy"><p>STAFF ACCESS</p><h1>{title}</h1><span>{subtitle}</span></div>{children}</section></main>
 }
 
 function StaffGateLoading() {

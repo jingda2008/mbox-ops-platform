@@ -9,6 +9,7 @@ import {
   Gift,
   LoaderCircle,
   RefreshCw,
+  Search,
   Send,
   ShoppingCart,
   TableProperties,
@@ -18,13 +19,16 @@ import { StaffActionsApi, StaffActionsApiError, type StaffActionsApiPort } from 
 import { AssistedOrderSheet } from './AssistedOrderSheet'
 import {
   fulfillmentAction,
+  actionableFulfillmentItems,
+  actionableServiceTasks,
   guidanceForPermission,
   hasPermission,
   requiresCapacityReason,
   tableMoodPresentation,
   tableGroups,
-  unifiedActionQueue,
   validateOpenTableInput,
+  visibleStaffTables,
+  type StaffTableScope,
 } from './staff-actions-model'
 import type {
   StaffActionNotice,
@@ -45,7 +49,7 @@ export interface StaffActionsPanelProps {
 
 export function StaffActionsPanel({
   api: suppliedApi,
-  initialTab = 'work',
+  initialTab = 'tasks',
   onLoginRequired,
 }: StaffActionsPanelProps) {
   const api = useMemo(() => suppliedApi ?? new StaffActionsApi(), [suppliedApi])
@@ -65,6 +69,8 @@ export function StaffActionsPanel({
   const [resolutionNotes, setResolutionNotes] = useState<Record<string, string>>({})
   const [pendingAction, setPendingAction] = useState<string | null>(null)
   const [orderSheetMode, setOrderSheetMode] = useState<'paid' | 'gift' | null>(null)
+  const [tableScope, setTableScope] = useState<StaffTableScope>('attention')
+  const [tableQuery, setTableQuery] = useState('')
   const noticeRef = useRef<HTMLDivElement | null>(null)
   const noticeTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null)
   const requestRef = useRef<AbortController | null>(null)
@@ -184,24 +190,35 @@ export function StaffActionsPanel({
 
   const selectedTable = operations?.tables.find((table) => table.id === selectedTableId) ?? null
   const permissions = operations?.actor.capabilities ?? []
-  const unifiedActions = useMemo(() => operations === null
+  const serviceActions = useMemo(() => operations === null
     ? []
-    : unifiedActionQueue(operations.tasks, fulfillment?.workItems ?? [], operations.actor.id), [fulfillment, operations])
-  const visibleActions = unifiedActions.slice(0, 8)
+    : actionableServiceTasks(operations.tasks, operations.actor.id), [operations])
+  const fulfillmentActions = useMemo(() => actionableFulfillmentItems(fulfillment?.workItems ?? []), [fulfillment])
+  const attentionTableIds = useMemo(() => new Set([
+    ...serviceActions.map((task) => task.tableId),
+    ...fulfillmentActions.map((item) => item.table.id),
+  ]), [fulfillmentActions, serviceActions])
+  const visibleTables = useMemo(() => visibleStaffTables(
+    operations?.tables ?? [], tableScope, tableQuery, attentionTableIds,
+  ), [attentionTableIds, operations?.tables, tableQuery, tableScope])
+  const currentActionKeys = useMemo(() => [
+    ...serviceActions.map((task) => `service:${task.id}`),
+    ...fulfillmentActions.map((item) => `fulfillment:${item.taskId}`),
+  ], [fulfillmentActions, serviceActions])
 
   useEffect(() => {
-    const current = new Set(unifiedActions.map((action) => action.key))
+    const current = new Set(currentActionKeys)
     const previous = knownActionKeysRef.current
     knownActionKeysRef.current = current
     if (previous === null || pendingAction !== null) return
-    const hasNewAttention = unifiedActions.some((action) => (
-      !previous.has(action.key)
-      && (action.kind === 'service'
-        ? action.task.priority === 'urgent' || action.task.interactionMode === 'manager_resolution'
-        : action.item.readyForDelivery || action.item.overdue)
+    const hasNewAttention = serviceActions.some((task) => (
+      !previous.has(`service:${task.id}`)
+      && (task.priority === 'urgent' || task.interactionMode === 'manager_resolution')
+    )) || fulfillmentActions.some((item) => (
+      !previous.has(`fulfillment:${item.taskId}`) && (item.readyForDelivery || item.overdue)
     ))
     if (hasNewAttention && typeof navigator.vibrate === 'function') navigator.vibrate([18, 45, 18])
-  }, [pendingAction, unifiedActions])
+  }, [currentActionKeys, fulfillmentActions, pendingAction, serviceActions])
 
   const selectTable = (table: StaffActionTable) => {
     setSelectedTableId(table.id)
@@ -390,8 +407,8 @@ export function StaffActionsPanel({
     <section className="staff-actions-panel" aria-label="现场高频操作">
       <header className="staff-actions-header">
         <div>
-          <p>现场执行</p>
-          <h2>现在要处理什么</h2>
+          <p>{tab === 'tables' ? '现场调度' : tab === 'tasks' ? '服务执行' : tab === 'fulfillment' ? '出品履约' : '预约接待'}</p>
+          <h2>{tab === 'tables' ? '找到桌台，直接处理' : tab === 'tasks' ? '只看需要服务的事' : tab === 'fulfillment' ? '只做当前下一步' : '确认预约与到店'}</h2>
         </div>
         <button type="button" className="staff-actions-icon" aria-label="刷新现场" onClick={() => void load()}>
           <RefreshCw size={18} className={phase === 'loading' ? 'is-spinning' : ''} />
@@ -404,17 +421,20 @@ export function StaffActionsPanel({
         {notice !== null && <button type="button" aria-label="关闭提示" onClick={() => setNotice(null)}>×</button>}
       </div>
 
-      <nav className="staff-actions-tabs" aria-label="现场工作分类">
-        <TabButton active={tab === 'work'} label="待办" count={unifiedActions.length} onClick={() => setTab('work')} />
-        <TabButton active={tab === 'tables'} label="桌台" count={operations?.tables.length ?? 0} onClick={() => setTab('tables')} />
-        <TabButton active={tab === 'reservations'} label="预约" count={activeReservationCount(reservations)} onClick={() => setTab('reservations')} />
-      </nav>
-
       {phase === 'error' && operations !== null && <p className="staff-actions-stale">刷新失败，当前显示上次成功数据。</p>}
 
       {tab === 'tables' && operations !== null && (
         <div className="staff-table-workspace">
-          {tableGroups(operations.tables).map((group) => (
+          <div className="staff-table-tools">
+            <label><Search size={17} /><input value={tableQuery} onChange={(event) => setTableQuery(event.target.value)} placeholder="搜索桌号或区域" aria-label="搜索桌号或区域" /></label>
+            <div role="group" aria-label="桌台显示范围">
+              <button type="button" className={tableScope === 'attention' ? 'is-active' : ''} onClick={() => setTableScope('attention')}>营业中</button>
+              <button type="button" className={tableScope === 'mine' ? 'is-active' : ''} onClick={() => setTableScope('mine')}>负责桌</button>
+              <button type="button" className={tableScope === 'all' ? 'is-active' : ''} onClick={() => setTableScope('all')}>全部</button>
+            </div>
+          </div>
+          {visibleTables.length === 0 && <div className="staff-table-empty"><strong>当前范围没有桌台</strong><span>可搜索桌号，或切换到“全部”查看完整桌图。</span><button type="button" onClick={() => setTableScope('all')}>查看全部桌台</button></div>}
+          {tableGroups(visibleTables).map((group) => (
             <section className="staff-table-area" key={group.area}>
               <h3>{group.area}</h3>
               <div className="staff-table-grid">
@@ -471,11 +491,9 @@ export function StaffActionsPanel({
         </div>
       )}
 
-      {tab === 'work' && operations !== null && (
-        <ActionList empty="当前没有需要处理的现场事项">
-          {visibleActions.map((action) => action.kind === 'service' ? (() => {
-            const task = action.task
-            return (
+      {tab === 'tasks' && operations !== null && (
+        <ActionList empty="当前没有需要处理的服务任务">
+          {serviceActions.slice(0, 8).map((task) => (
             <article className={`staff-action-card priority-${task.priority}`} key={task.id}>
               <div className="staff-action-card-main">
                 <strong>{task.tableCode} · {task.title}</strong>
@@ -504,9 +522,16 @@ export function StaffActionsPanel({
                 <button type="button" className="is-readonly" onClick={() => revealPermissionGuidance('service.execute')}>查看说明</button>
               )}
             </article>
-            )
-          })() : (() => {
-            const item = action.item
+          ))}
+          {serviceActions.length > 8 && (
+            <p className="staff-actions-more">还有 {serviceActions.length - 8} 项，完成当前事项后自动补入</p>
+          )}
+        </ActionList>
+      )}
+
+      {tab === 'fulfillment' && operations !== null && (
+        <ActionList empty="当前没有需要制作或配送的出品">
+          {fulfillmentActions.slice(0, 8).map((item) => {
             const fulfillmentCommand = fulfillmentAction(item)
             return (
               <article className={`staff-action-card ${item.overdue ? 'is-overdue' : ''}`} key={item.taskId}>
@@ -524,9 +549,9 @@ export function StaffActionsPanel({
                 )}
               </article>
             )
-          })())}
-          {unifiedActions.length > visibleActions.length && (
-            <p className="staff-actions-more">还有 {unifiedActions.length - visibleActions.length} 项，完成当前事项后自动补入</p>
+          })}
+          {fulfillmentActions.length > 8 && (
+            <p className="staff-actions-more">还有 {fulfillmentActions.length - 8} 项，完成当前事项后自动补入</p>
           )}
         </ActionList>
       )}
@@ -596,6 +621,7 @@ function ReservationList({ reservations, message, pendingAction, canManage, onAc
         <div className="staff-reservation-copy">
           <strong>{reservation.customerName}</strong>
           <span>{reservation.contactToken ?? (reservation.contactAvailable ? '联系方式已保护' : '未留联系方式')}</span>
+          <small>位置偏好：{staffSeatPreferenceLabel(reservation.seatPreference)}</small>
           {reservation.note !== null && <small>备注：{reservation.note}</small>}
         </div>
         <span className={`staff-reservation-status is-${reservation.status}`}>{reservationStatusLabel(reservation.status)}</span>
@@ -612,10 +638,6 @@ function ReservationList({ reservations, message, pendingAction, canManage, onAc
       </article>
     })}
   </section>
-}
-
-function activeReservationCount(reservations: StaffReservation[] | null): number {
-  return reservations?.filter((item) => item.status === 'pending' || item.status === 'confirmed').length ?? 0
 }
 
 function formatReservationTime(value: string): string {
@@ -639,6 +661,16 @@ function reservationStatusLabel(status: StaffReservation['status']): string {
     cancelled: '已取消',
     no_show: '未到店',
   } satisfies Record<StaffReservation['status'], string>)[status]
+}
+
+function staffSeatPreferenceLabel(preference: StaffReservation['seatPreference']): string {
+  return ({
+    no_preference: '门店安排',
+    stage_atmosphere: '靠近舞台',
+    quiet_chat: '方便聊天',
+    comfortable_booth: '卡座舒适',
+    outdoor_view: '室外露台',
+  } satisfies Record<StaffReservation['seatPreference'], string>)[preference]
 }
 
 interface TableActionSheetProps {
@@ -762,10 +794,6 @@ function TableActionSheet(props: TableActionSheetProps) {
       )}
     </section>
   )
-}
-
-function TabButton({ active, label, count, onClick }: { active: boolean; label: string; count: number; onClick(): void }) {
-  return <button type="button" className={active ? 'is-active' : ''} aria-current={active ? 'page' : undefined} onClick={onClick}><span>{label}</span><small>{count}</small></button>
 }
 
 function ActionList({ children, empty }: { children: React.ReactNode; empty: string }) {

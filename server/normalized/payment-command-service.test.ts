@@ -391,9 +391,9 @@ integration('normalized payment PostgreSQL integration', () => {
         (SELECT r.decision_reason FROM mbox.refunds r JOIN mbox.payments p ON p.id = r.payment_id
           WHERE p.order_id = $1::uuid AND r.public_id = 'integration-refund-one') AS refund_decision,
         (SELECT reason FROM mbox.audit_events
-          WHERE object_type = 'refund' AND action = 'refund.approved'
+          WHERE object_type = 'refund' AND object_id = $2::text AND action = 'refund.approved'
           ORDER BY occurred_at DESC LIMIT 1) AS approval_audit_reason
-    `, [integrationOrderOne])
+    `, [integrationOrderOne, requested.value.id])
     expect(evidence.rows[0]).toMatchObject({ payments: '1', refunds: '1', reconciliation: '2' })
     expect(Number(evidence.rows[0]?.audits)).toBeGreaterThanOrEqual(6)
     expect(Number(evidence.rows[0]?.outbox)).toBeGreaterThanOrEqual(6)
@@ -539,6 +539,7 @@ class PaymentFlowTransaction implements ScopedTransaction {
   readonly calls: string[] = []
   readonly lockedOrderIds: string[] = []
   private readonly paymentStatus: 'pending' | 'succeeded'
+  private paymentStaged = false
 
   constructor(
     private readonly orderId: string,
@@ -572,9 +573,12 @@ class PaymentFlowTransaction implements ScopedTransaction {
     if (sql.includes('AS gross_paid_minor')) {
       return result([this.mode === 'callback'
         ? { gross_paid_minor: '8800', refunded_minor: '0', has_pending: false }
-        : { gross_paid_minor: '0', refunded_minor: '0', has_pending: true }])
+        : { gross_paid_minor: '0', refunded_minor: '0', has_pending: this.paymentStaged }])
     }
-    if (sql.includes('INSERT INTO mbox.payments')) return result([paymentRow(this.orderId, this.paymentId, 'pending')])
+    if (sql.includes('INSERT INTO mbox.payments')) {
+      this.paymentStaged = true
+      return result([paymentRow(this.orderId, this.paymentId, 'pending')])
+    }
     if (sql.includes('FROM mbox.payments') && sql.includes('FOR UPDATE')) {
       return result([paymentRow(this.orderId, this.paymentId, this.paymentStatus)])
     }

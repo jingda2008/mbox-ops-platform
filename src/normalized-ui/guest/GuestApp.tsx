@@ -297,7 +297,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   return (
     <main className="guest-app guest-app-restored-menu" data-testid="normalized-guest-app">
       <header className="guest-header">
-        <div className="guest-brand"><span>M</span><div><strong>M-BOX</strong><small>LIVEHOUSE · LUJIAZUI</small></div></div>
+        <div className="guest-brand"><span>M</span><div><strong>M-BOX</strong><small>SUPERHIGH CULTURE · LIVEHOUSE</small></div></div>
         <button type="button" className="guest-table" onClick={() => { setPanel('orders'); void loadTableOrders() }}>
           <small>本桌已点 · {tableOrders.reduce((sum, order) => sum + order.items.reduce((count, item) => count + item.quantity, 0), 0)}件</small>
           <strong>{table?.displayName ?? table?.code}</strong>
@@ -388,7 +388,7 @@ function GuestGate({ phase, message, table, onRetry }: {
   onRetry: () => void
 }) {
   return <main className="guest-gate">
-    <div className="guest-brand"><span>M</span><div><strong>M-BOX</strong><small>LIVEHOUSE · LUJIAZUI</small></div></div>
+    <div className="guest-brand"><span>M</span><div><strong>M-BOX</strong><small>SUPERHIGH CULTURE · LIVEHOUSE</small></div></div>
     <section>
       <span className="guest-gate-icon">{phase === 'booting' ? <LoaderCircle className="is-spinning" /> : phase === 'waiting' ? <Store /> : <AlertCircle />}</span>
       <small>{table?.displayName ?? '桌边服务'}</small>

@@ -1,7 +1,13 @@
-export type ReservationStep = 'schedule' | 'seat' | 'confirm' | 'complete'
+export type ReservationStep = 'schedule' | 'confirm' | 'complete'
 export type BookingMode = 'direct' | 'self_select'
 export type ReservationTableStatus = 'available' | 'reserved' | 'locked'
 export type ReservationZone = 'stage-front' | 'indoor-middle' | 'outdoor'
+export type SeatPreference =
+  | 'no_preference'
+  | 'stage_atmosphere'
+  | 'quiet_chat'
+  | 'comfortable_booth'
+  | 'outdoor_view'
 
 export interface ReservationIdentity {
   provider: 'anonymous' | 'wechat'
@@ -52,6 +58,7 @@ export interface PublicReservation {
   status: string
   arrivalState: 'arrived' | 'not_arrived'
   note: string | null
+  seatPreference: SeatPreference
   tableCodes: string[]
   holdExpiresAt: string | null
   cancellationPolicy: Record<string, unknown>
@@ -74,6 +81,7 @@ export interface ReservationDraft {
   guestCount: number
   mode: BookingMode
   tableCodes: string[]
+  seatPreference: SeatPreference
   customerName: string
   contact: string
   note: string

@@ -44,8 +44,7 @@ function view(): StaffBootstrapView {
 
 const callbacks = {
   onRefresh: vi.fn(),
-  onOpenResource: vi.fn(),
-  onCloseResource: vi.fn(),
+  onNavigate: vi.fn(),
 }
 
 function render(state: ReturnType<typeof initialWorkspaceState>): string {
@@ -66,22 +65,30 @@ describe('NormalizedStaffWorkspaceView', () => {
     expect(html).not.toContain('库存/存酒')
   })
 
-  it('shows a bounded on-demand task sheet without inventing execution controls', () => {
-    let state = workspaceReducer(initialWorkspaceState(), {
+  it('does not expose a second raw-data sheet beside the executable role pages', () => {
+    const state = workspaceReducer(initialWorkspaceState(), {
       type: 'bootstrap-ready', bootstrap: view(), etag: 'etag-1',
-    })
-    state = workspaceReducer(state, { type: 'resource-loading', resource: 'operations', requestId: 1 })
-    state = workspaceReducer(state, {
-      type: 'resource-ready', resource: 'operations', requestId: 1,
-      data: { tasks: [{ id: 'task-1', title: 'VIP1送两杯冰水', status: 'pending', detail: 'Tom负责' }] },
     })
     const html = render(state)
 
-    expect(html).toContain('VIP1送两杯冰水')
-    expect(html).toContain('Tom负责')
-    expect(html).toContain('pending')
-    expect(html).not.toContain('接单')
-    expect(html).not.toContain('完成任务')
+    expect(html).not.toContain('按需加载')
+    expect(html).not.toContain('available')
+    expect(html).toContain('点击查看详情')
+  })
+
+  it('shows active work instead of a misleading zero ready count', () => {
+    const bootstrap = view()
+    bootstrap.domainSummaries = [
+      { key: 'live', label: '营业桌台', activeCount: 1, attentionCount: 0, readyCount: 0, endpointRef: '/api/operations' },
+    ]
+    const state = workspaceReducer(initialWorkspaceState(), {
+      type: 'bootstrap-ready', bootstrap, etag: 'etag-active',
+    })
+    const html = render(state)
+
+    expect(html).toContain('营业桌台')
+    expect(html).toContain('进行中')
+    expect(html).not.toContain('0<small>已就绪</small>')
   })
 
   it('keeps the login-expired state explicit instead of presenting a false workspace', () => {

@@ -28,6 +28,11 @@ import {
   NormalizedStoreUnavailableError,
   TrustedStoreScopeError,
 } from './normalized-request-context.js'
+import {
+  GuestAuthenticationRequiredError,
+  GuestDeviceBindingError,
+  GuestStoreScopeError,
+} from './guest-request-context.js'
 import { StaffAccessDeniedError, StaffAccessRepository } from './staff-access-repository.js'
 import { StaffSessionNotFoundError } from './staff-session-repository.js'
 import type {
@@ -428,10 +433,12 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<Fastify
 }
 
 function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
-  if (error instanceof NormalizedAuthenticationRequiredError || error instanceof StaffSessionNotFoundError) {
+  if (error instanceof NormalizedAuthenticationRequiredError || error instanceof StaffSessionNotFoundError
+    || error instanceof GuestAuthenticationRequiredError || error instanceof GuestDeviceBindingError) {
     return apiError(401, 'CUSTOMER_BENEFIT_AUTH_REQUIRED', '登录或桌边会话已过期，请重新验证')
   }
-  if (error instanceof TrustedStoreScopeError || error instanceof NormalizedStoreUnavailableError) {
+  if (error instanceof TrustedStoreScopeError || error instanceof NormalizedStoreUnavailableError
+    || error instanceof GuestStoreScopeError) {
     return apiError(403, 'CUSTOMER_BENEFIT_STORE_FORBIDDEN', '当前门店不可用或无权访问')
   }
   if (error instanceof StaffAccessDeniedError || error instanceof BenefitAuthorizationError) {

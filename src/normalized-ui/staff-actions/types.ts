@@ -127,6 +127,7 @@ export interface StaffReservation {
   status: StaffReservationStatus
   source: 'wechat' | 'phone' | 'walk_in' | 'employee' | 'integration'
   note: string | null
+  seatPreference: 'no_preference' | 'stage_atmosphere' | 'quiet_chat' | 'comfortable_booth' | 'outdoor_view'
   tableLocks: Array<{
     tableCode: string
     tableDisplayName: string
@@ -139,4 +140,4 @@ export type StaffActionNotice = {
   message: string
 } | null
 
-export type StaffActionsTab = 'tables' | 'work' | 'reservations'
+export type StaffActionsTab = 'tables' | 'tasks' | 'fulfillment' | 'reservations'

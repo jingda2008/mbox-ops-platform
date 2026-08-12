@@ -320,7 +320,7 @@ describe('createNormalizedApp', () => {
       logger: false,
     })
     try {
-      for (const url of ['/guest?table=W01', '/reserve', '/staff/live']) {
+      for (const url of ['/guest?table=W01', '/reserve', '/member', '/staff/live']) {
         const response = await runtime.app.inject({
           method: 'GET', url, headers: { accept: 'text/html' },
         })

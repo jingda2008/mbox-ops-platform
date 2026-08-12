@@ -34,6 +34,7 @@ describe('normalized migration baseline', () => {
       '001', '002', '003', '004', '005', '006', '007', '008', '009', '010', '011', '012',
       '013', '014', '015', '016', '017', '018', '019', '020', '021', '022', '023', '024',
       '025', '026', '027', '028', '029', '030', '031', '032', '033', '034', '035', '036',
+      '037',
     ])
     for (const migration of migrations) {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
@@ -107,6 +108,7 @@ describe('normalized migration baseline', () => {
     expect(sql).toMatch(/notifications_delivery_claim_idx[\s\S]*status IN \('pending', 'failed', 'sending'\)/)
     expect(sql).toMatch(/notifications_attempt_limit_ck/)
     expect(sql).toMatch(/pricing_authorizations_benefit_once_per_table_uq/)
+    expect(sql).toMatch(/payments_one_active_intent_per_order_uq[\s\S]*status IN \('created', 'pending'\)/)
     expect(sql).toMatch(/table_session_customers_primary_uq/)
     expect(sql).toMatch(/status IN \('pending', 'sending', 'delivered', 'failed', 'dead', 'cancelled'\)/)
     expect(sql).toMatch(/service_task_events_append_only/)

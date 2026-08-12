@@ -11,7 +11,6 @@ import {
   RefreshCw,
   RotateCcw,
   ShieldCheck,
-  X,
 } from 'lucide-react'
 import {
   NormalizedApiClient,
@@ -20,12 +19,9 @@ import {
 import type {
   StaffBootstrapView,
   StaffDomainKey,
-  StaffOnDemandResource,
 } from '../shared/normalized-contracts'
 import {
   initialWorkspaceState,
-  resourceItems,
-  RESOURCE_DEFINITIONS,
   workspaceReducer,
   type NormalizedWorkspaceState,
 } from './workspace-model'
@@ -47,6 +43,16 @@ const domainIcon: Record<StaffDomainKey, typeof Grid2X2> = {
   printing: ClipboardList,
 }
 
+const domainRoute: Record<StaffDomainKey, string> = {
+  live: '/staff/live',
+  service: '/staff/tasks',
+  fulfillment: '/staff/fulfillment',
+  reservations: '/staff/reservations',
+  payments: '/staff/payments',
+  inventory: '/staff/inventory',
+  printing: '/staff/devices',
+}
+
 export function NormalizedStaffWorkspace({
   api: suppliedApi,
   onNavigate,
@@ -54,10 +60,8 @@ export function NormalizedStaffWorkspace({
 }: NormalizedStaffWorkspaceProps) {
   const api = useMemo(() => suppliedApi ?? new NormalizedApiClient(), [suppliedApi])
   const [state, dispatch] = useReducer(workspaceReducer, undefined, initialWorkspaceState)
-  const requestSequence = useRef(0)
   const bootstrapEtag = useRef<string | null>(null)
   const bootstrapAbort = useRef<AbortController | null>(null)
-  const resourceAbort = useRef<AbortController | null>(null)
 
   const loadBootstrap = useCallback(async () => {
     bootstrapAbort.current?.abort()
@@ -91,38 +95,13 @@ export function NormalizedStaffWorkspace({
     void loadBootstrap()
   }, [loadBootstrap])
 
-  useEffect(() => () => {
-    bootstrapAbort.current?.abort()
-    resourceAbort.current?.abort()
-  }, [])
-
-  const loadResource = useCallback(async (resource: StaffOnDemandResource) => {
-    resourceAbort.current?.abort()
-    const controller = new AbortController()
-    resourceAbort.current = controller
-    const requestId = ++requestSequence.current
-    dispatch({ type: 'resource-loading', resource, requestId })
-    try {
-      const data = await api.getOnDemand(resource, { signal: controller.signal })
-      dispatch({ type: 'resource-ready', resource, requestId, data })
-    } catch (error) {
-      if (error instanceof NormalizedApiError && error.kind === 'aborted') return
-      dispatch({
-        type: 'resource-error',
-        resource,
-        requestId,
-        message: errorMessage(error, '数据暂时没有接上，请重试'),
-      })
-    }
-  }, [api])
+  useEffect(() => () => bootstrapAbort.current?.abort(), [])
 
   return (
     <NormalizedStaffWorkspaceView
       state={state}
       onRefresh={() => void loadBootstrap()}
       onNavigate={onNavigate}
-      onOpenResource={(resource) => void loadResource(resource)}
-      onCloseResource={() => dispatch({ type: 'resource-close' })}
       onLoginRequired={onLoginRequired}
     />
   )
@@ -132,8 +111,6 @@ export interface NormalizedStaffWorkspaceViewProps {
   state: NormalizedWorkspaceState
   onRefresh: () => void
   onNavigate?: (route: string) => void
-  onOpenResource: (resource: StaffOnDemandResource) => void
-  onCloseResource: () => void
   onLoginRequired?: () => void
 }
 
@@ -141,8 +118,6 @@ export function NormalizedStaffWorkspaceView({
   state,
   onRefresh,
   onNavigate,
-  onOpenResource,
-  onCloseResource,
   onLoginRequired,
 }: NormalizedStaffWorkspaceViewProps) {
   if (state.bootstrap === null) {
@@ -150,9 +125,9 @@ export function NormalizedStaffWorkspaceView({
   }
 
   const bootstrap = state.bootstrap
-  const selectedDefinition = RESOURCE_DEFINITIONS.find((item) => item.resource === state.selectedResource)
-  const selectedState = state.selectedResource === null ? null : state.resources[state.selectedResource]
-
+  const attentionSummaries = bootstrap.domainSummaries.filter((summary) => (
+    summary.activeCount > 0 || summary.attentionCount > 0 || summary.readyCount > 0
+  ))
   return (
     <main className="normalized-workspace" data-testid="normalized-workspace">
       <header className="normalized-topbar">
@@ -160,7 +135,7 @@ export function NormalizedStaffWorkspaceView({
           <span className="normalized-brand-mark">M</span>
           <span>
             <strong>{bootstrap.store.name}</strong>
-            <small>{businessDayLabel(bootstrap)}</small>
+            <small>SUPERHIGH CULTURE · {businessDayLabel(bootstrap)}</small>
           </span>
         </div>
         <button
@@ -222,31 +197,38 @@ export function NormalizedStaffWorkspaceView({
           </div>
           <Clock3 size={18} aria-hidden="true" />
         </div>
-        <div className="normalized-summary-grid">
-          {bootstrap.domainSummaries.map((summary) => {
+        {attentionSummaries.length > 0 ? <div className="normalized-summary-grid">
+          {attentionSummaries.map((summary) => {
             const Icon = domainIcon[summary.key]
-            const resource = RESOURCE_DEFINITIONS.find((item) => item.domain === summary.key)?.resource
+            const status = summary.attentionCount > 0
+              ? { count: summary.attentionCount, label: '待关注', tone: 'is-alert' }
+              : summary.readyCount > 0
+                ? { count: summary.readyCount, label: '已就绪', tone: '' }
+                : { count: summary.activeCount, label: '进行中', tone: '' }
             return (
               <button
                 className="normalized-summary-card"
                 type="button"
                 key={summary.key}
-                onClick={() => resource !== undefined && onOpenResource(resource)}
-                disabled={resource === undefined}
+                onClick={() => onNavigate?.(domainRoute[summary.key])}
+                disabled={onNavigate === undefined}
               >
                 <span className="normalized-summary-icon"><Icon size={19} aria-hidden="true" /></span>
                 <span className="normalized-summary-copy">
                   <strong>{summary.label}</strong>
-                  <small>{summary.activeCount} 项进行中</small>
+                  <small>{summary.attentionCount > 0 ? `${summary.activeCount} 项进行中` : '点击查看详情'}</small>
                 </span>
-                <span className={summary.attentionCount > 0 ? 'normalized-count is-alert' : 'normalized-count'}>
-                  {summary.attentionCount > 0 ? summary.attentionCount : summary.readyCount}
-                  <small>{summary.attentionCount > 0 ? '待关注' : '已就绪'}</small>
+                <span className={`normalized-count ${status.tone}`.trim()}>
+                  {status.count}
+                  <small>{status.label}</small>
                 </span>
               </button>
             )
           })}
-        </div>
+        </div> : <div className="normalized-clear-state">
+          <ShieldCheck size={20} aria-hidden="true" />
+          <span><strong>当前没有待处理事项</strong><small>新任务和异常出现后会自动进入对应岗位工作面</small></span>
+        </div>}
       </section>
 
       <nav className="normalized-mobile-nav" aria-label="岗位导航">
@@ -262,21 +244,6 @@ export function NormalizedStaffWorkspaceView({
           </button>
         ))}
       </nav>
-
-      {selectedDefinition !== undefined && selectedState !== null && (
-        <ResourceSheet
-          label={selectedDefinition.label}
-          description={selectedDefinition.description}
-          resource={selectedDefinition.resource}
-          state={selectedState}
-          onRetry={() => onOpenResource(selectedDefinition.resource)}
-          onClose={onCloseResource}
-        />
-      )}
-
-      <p className="normalized-status-announcer" aria-live="polite" aria-atomic="true">
-        {selectedState?.phase === 'loading' ? `正在加载${selectedDefinition?.label ?? '数据'}` : ''}
-      </p>
     </main>
   )
 }
@@ -308,79 +275,6 @@ function WorkspaceGate({
         </>
       )}
     </main>
-  )
-}
-
-function ResourceSheet({
-  label,
-  description,
-  resource,
-  state,
-  onRetry,
-  onClose,
-}: {
-  label: string
-  description: string
-  resource: StaffOnDemandResource
-  state: NormalizedWorkspaceState['resources'][StaffOnDemandResource]
-  onRetry: () => void
-  onClose: () => void
-}) {
-  const items = state.phase === 'ready' ? resourceItems(resource, state.data) : []
-  return (
-    <div className="normalized-sheet-backdrop" role="presentation" onMouseDown={(event) => {
-      if (event.currentTarget === event.target) onClose()
-    }}>
-      <section className="normalized-sheet" role="dialog" aria-modal="true" aria-labelledby="resource-title">
-        <header>
-          <div>
-            <p className="normalized-eyebrow">按需加载</p>
-            <h2 id="resource-title">{label}</h2>
-            <p>{description}</p>
-          </div>
-          <button className="normalized-icon-button" type="button" aria-label={`关闭${label}`} onClick={onClose}>
-            <X size={20} aria-hidden="true" />
-          </button>
-        </header>
-        {state.phase === 'loading' && <LoadingRows />}
-        {state.phase === 'error' && (
-          <div className="normalized-sheet-state">
-            <AlertCircle size={24} aria-hidden="true" />
-            <strong>没有加载成功</strong>
-            <p>{state.message}</p>
-            <button type="button" onClick={onRetry}><RotateCcw size={16} aria-hidden="true" />重试</button>
-          </div>
-        )}
-        {state.phase === 'ready' && items.length === 0 && (
-          <div className="normalized-sheet-state">
-            <ShieldCheck size={24} aria-hidden="true" />
-            <strong>目前没有待处理内容</strong>
-            <p>这里只展示当前岗位有权查看的数据。</p>
-          </div>
-        )}
-        {state.phase === 'ready' && items.length > 0 && (
-          <ul className="normalized-resource-list">
-            {items.map((item) => (
-              <li key={item.id}>
-                <span>
-                  <strong>{item.title}</strong>
-                  {item.detail !== null && <small>{item.detail}</small>}
-                </span>
-                {item.status !== null && <em>{item.status}</em>}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-    </div>
-  )
-}
-
-function LoadingRows() {
-  return (
-    <div className="normalized-loading-rows" aria-label="正在加载">
-      <span /><span /><span />
-    </div>
   )
 }
 

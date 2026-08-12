@@ -862,12 +862,7 @@ function publicSongRequestSubmission(submission: {
 }
 
 function reservationVisibility(context: AuthorizedStaffContext) {
-  const fullStoreRoles = new Set([
-    'OWNER', 'ADMIN', 'MANAGER', 'STORE_MANAGER', 'OPERATIONS_MANAGER',
-    'GREETER', 'SERVER',
-  ])
   const all = context.access.permissions.includes('reservation.view.all')
-    || context.access.roleCodes.some((role) => fullStoreRoles.has(role))
     || context.access.dataScopes.some((scope) => (
       scope.key === 'reservation.visibility' && scope.effect === 'include' && scope.value === 'all'
     ))

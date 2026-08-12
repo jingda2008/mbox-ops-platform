@@ -8,6 +8,8 @@ interface Fixture {
   dailyCredential: string
   employeeCode: string
   employeePin: string
+  adminEmployeeCode: string
+  adminEmployeePin: string
   orderableProductName: string
   bundleProductName: string
 }
@@ -168,10 +170,41 @@ test('mobile public reservation silently renews one expired session before submi
 
   await expect(page.getByRole('heading', { name: '等待门店确认' })).toBeVisible()
   await expect(page.getByText('门店确认后才正式生效')).toBeVisible()
-  await expect(page.getByText(/临时锁位剩余/)).toBeVisible()
-  await expect(page.getByText('倒计时只表示座位暂时保留，不代表预约已确认。')).toBeVisible()
+  await expect(page.getByText(/临时锁位剩余/)).toHaveCount(0)
+  await expect(page.getByText(/预约锁位剩余/)).toHaveCount(0)
   await expect(page.getByRole('alert')).toHaveCount(0)
   expect(reservationAttempts).toBe(1)
+})
+
+test('confirmed reservation starts its ten-minute arrival retention only at the scheduled arrival time', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-08-12T21:00:01+08:00') })
+  await page.route('**/api/public/reservation/session', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ data: { status: 'active' } }),
+  }))
+  await page.route('**/api/public/reservations/reservation-arrival-grace-001', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      data: {
+        publicId: 'reservation-arrival-grace-001', customerName: '王女士', maskedContact: '138****8000',
+        guestCount: 2, arrivalAt: '2026-08-12T21:00:00+08:00', expectedEndAt: '2026-08-13T01:00:00+08:00',
+        status: 'confirmed', arrivalState: 'not_arrived', note: null, seatPreference: 'stage_atmosphere',
+        arrivalGraceEndsAt: '2026-08-12T21:10:00+08:00',
+        cancellationPolicy: {},
+      },
+    }),
+  }))
+
+  await page.goto('/reserve?reservation=reservation-arrival-grace-001')
+
+  await expect(page.getByRole('heading', { name: '预约已确认' })).toBeVisible()
+  await expect(page.getByText('预约到店保留剩余 09:59')).toBeVisible()
+  await expect(page.getByText('本次预约为您保留到 21:10；具体位置到店后由门迎安排。')).toBeVisible()
+  await expect(page.getByText('VIP1')).toHaveCount(0)
+  await expect(page.getByText(/临时锁位/)).toHaveCount(0)
+  await expectNoHorizontalOverflow(page)
 })
 
 test('submitted reservation keeps its receipt and gives actionable guidance if status lookup is unavailable', async ({ page }) => {
@@ -233,6 +266,59 @@ test('mobile manager completes device verification and reaches role-scoped works
   await page.getByRole('button', { name: '预约到店', exact: true }).first().click()
   await expect(page.getByText('预约与到店', { exact: true })).toBeVisible()
   await expect(page.getByText('规范化改造中')).toHaveCount(0)
+})
+
+test('mobile administrator publishes a permission and sees server-verified feedback in view', async ({ page }) => {
+  const data = await fixture()
+  await page.goto(data.staffUrl)
+  await page.getByLabel('门店口令').fill(data.dailyCredential)
+  await page.getByRole('button', { name: /验证设备/ }).click()
+  await page.getByLabel('员工账号').fill(data.adminEmployeeCode)
+  await page.getByLabel('四位 PIN').fill(data.adminEmployeePin)
+  await page.getByRole('button', { name: /进入工作台/ }).click()
+
+  await expect(page.getByRole('heading', { name: '乌鸦' })).toBeVisible()
+  await page.getByLabel('现在要做什么').getByRole('button', { name: '系统配置', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '管理员控制中心' })).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+
+  await page.getByRole('button', { name: /岗位权限/ }).click()
+  const editorHeading = page.getByRole('heading', { name: '岗位权限' })
+  await expect(editorHeading).toBeVisible()
+  await expect.poll(() => editorHeading.evaluate((element) => {
+    const rect = element.getBoundingClientRect()
+    return rect.top >= 0 && rect.bottom <= window.innerHeight
+  })).toBe(true)
+  await page.getByLabel('选择岗位').selectOption({ label: '系统管理员（1人）' })
+  await page.getByPlaceholder('搜索权限名称').fill('订单折扣')
+  const checkbox = page.getByRole('checkbox')
+  await expect(checkbox).toHaveCount(1)
+  await checkbox.check()
+  await page.getByLabel('发布原因').fill('浏览器验收岗位职责调整')
+  await page.getByRole('button', { name: '发布1项修改' }).click()
+
+  const feedback = page.getByRole('status').filter({ hasText: '配置已发布并复核生效' })
+  await expect(feedback).toBeVisible()
+  await expect(feedback).toContainText('服务端已重新读取数据库')
+  await expect.poll(() => feedback.evaluate((element) => {
+    const rect = element.getBoundingClientRect()
+    return rect.top >= 0 && rect.bottom <= window.innerHeight
+  })).toBe(true)
+
+  await page.getByRole('button', { name: /审批与范围/ }).click()
+  await page.getByLabel('选择岗位').selectOption({ label: '系统管理员（1人）' })
+  await page.getByLabel('订单折扣启用').check()
+  await page.getByLabel('订单折扣单次上限').fill('1000')
+  await page.getByRole('button', { name: '发布1项修改' }).click()
+  await expect(page.getByRole('status').filter({ hasText: '1项配置已发布并复核生效' })).toBeVisible()
+
+  await page.getByRole('button', { name: /入口与设备/ }).click()
+  await page.getByLabel('选择岗位').selectOption({ label: '系统管理员（1人）' })
+  await page.getByLabel('设备高频入口').check()
+  await page.getByRole('button', { name: '发布1项修改' }).click()
+  await expect(page.getByRole('status').filter({ hasText: '1项配置已发布并复核生效' })).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+  await page.screenshot({ path: 'artifacts/normalized-browser/staff-access-admin-mobile.png', fullPage: true })
 })
 
 test('mobile manager assists an open table order and gifts a product without mixing member benefits', async ({ page }) => {

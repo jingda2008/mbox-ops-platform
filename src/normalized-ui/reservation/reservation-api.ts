@@ -39,7 +39,9 @@ export class PublicReservationApiError extends Error {
   }
 
   get seatConflict(): boolean {
-    return this.code === 'TABLE_ALREADY_RESERVED' || this.code === 'RESERVATION_HOLD_EXPIRED'
+    return this.code === 'TABLE_ALREADY_RESERVED'
+      || this.code === 'RESERVATION_HOLD_EXPIRED'
+      || this.code === 'RESERVATION_CAPACITY_FULL'
   }
 }
 
@@ -56,7 +58,6 @@ export interface ReservationMutationInput {
   expectedEndAt?: string
   note?: string | null
   seatPreference?: SeatPreference
-  tableCodes?: string[]
 }
 
 export async function withReservationSessionRecovery<Value>(
@@ -206,7 +207,7 @@ function parseAvailability(value: unknown): ReservationAvailability {
     arrivalAt: text(record.arrivalAt, '到店时间'),
     expectedEndAt: text(record.expectedEndAt, '预计结束时间'),
     guestCount: integer(record.guestCount, '人数'),
-    holdMinutes: integer(record.holdMinutes, '保留时间'),
+    acceptingReservations: boolean(record.acceptingReservations, '预约名额状态'),
     depositRule: parseDepositRule(record.depositRule),
     areas: areasValue.map((areaValue) => {
       const area = object(areaValue, '区域')
@@ -261,8 +262,7 @@ function parseReservation(value: unknown): PublicReservation {
     arrivalState,
     note: nullableText(record.note, '备注'),
     seatPreference: seatPreference(record.seatPreference),
-    tableCodes: array(record.tableCodes, '桌位').map((item) => text(item, '桌号')),
-    holdExpiresAt: nullableText(record.holdExpiresAt, '保留截止时间'),
+    arrivalGraceEndsAt: text(record.arrivalGraceEndsAt, '到店锁位截止时间'),
     cancellationPolicy: object(record.cancellationPolicy, '取消规则'),
   }
 }

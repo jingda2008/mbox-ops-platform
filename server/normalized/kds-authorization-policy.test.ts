@@ -49,6 +49,7 @@ describe('NormalizedKdsAuthorization', () => {
     expect(calls[0]?.sql).toContain('employee_permission_overrides')
     expect(calls[0]?.sql).toContain('role_permission_assignments')
     expect(calls[0]?.sql).toContain('employee_roles')
+    expect(calls[0]?.sql).not.toContain('role.capabilities')
     expect(calls[0]?.sql).toContain('FOR SHARE')
     expect(calls[0]?.values).toEqual([tenantId, storeId, employeeId, KDS_PREPARE_CAPABILITY])
   })
@@ -212,6 +213,30 @@ postgresIntegration('NormalizedKdsAuthorization PostgreSQL integration', () => {
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
     `, [integrationTenantId, integrationStoreId, authorizedEmployeeId])
     await expect(authorize(authorizedEmployeeId)).rejects.toMatchObject({ code: 'KDS_ACTOR_INACTIVE' })
+  })
+
+  it('does not let the deprecated role capability cache restore a revoked permission', async () => {
+    await pool.query(`
+      UPDATE mbox.employees SET status='active'
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+    `, [integrationTenantId, integrationStoreId, authorizedEmployeeId])
+    await pool.query(`
+      UPDATE mbox.roles SET capabilities=ARRAY[$4]::text[]
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+    `, [integrationTenantId, integrationStoreId, roleId, KDS_PREPARE_CAPABILITY])
+    await pool.query(`
+      DELETE FROM mbox.role_permission_assignments
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND role_id=$3::uuid AND permission_id=$4::uuid
+    `, [integrationTenantId, integrationStoreId, roleId, permissionId])
+    const policy = new NormalizedKdsAuthorization()
+    await expect(runner.run(
+      { tenantId: integrationTenantId, storeId: integrationStoreId },
+      (transaction) => policy.assertCanPrepare({ transaction, employeeId: authorizedEmployeeId, action: 'start' }),
+    )).rejects.toMatchObject({ code: 'KDS_PREPARE_FORBIDDEN' })
+    await pool.query(`
+      INSERT INTO mbox.role_permission_assignments(tenant_id, store_id, role_id, permission_id)
+      VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid) ON CONFLICT DO NOTHING
+    `, [integrationTenantId, integrationStoreId, roleId, permissionId])
   })
 
   it('keeps production station-scoped and lets delivery-capable staff support another table', async () => {

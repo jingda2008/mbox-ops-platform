@@ -1,11 +1,14 @@
 import { StrictMode, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './normalized-base.css'
+import { installGlobalActionReveal } from './global-action-reveal'
 
 const element = document.getElementById('root')
 if (element === null) throw new Error('M-BOX application root is missing')
 const root = createRoot(element)
 const render = (content: ReactNode) => root.render(<StrictMode>{content}</StrictMode>)
+
+installGlobalActionReveal()
 
 render(<main className="normalized-system-state"><strong>正在打开 M-BOX</strong></main>)
 

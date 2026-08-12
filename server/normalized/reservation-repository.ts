@@ -60,6 +60,7 @@ export interface CreateReservationInput {
   note?: string | null
   reservationSnapshot?: JsonObject
   tableIds: readonly string[]
+  allowUnassignedTable?: boolean
   initialStatus?: 'pending' | 'confirmed'
   holdExpiresAt?: string | null
   customerCancelUntil?: string | null
@@ -178,40 +179,42 @@ export class ReservationRepository {
   async create(input: Readonly<CreateReservationInput>): Promise<Reservation> {
     validateCreateReservation(input)
     const tableIds = [...new Set(input.tableIds)].sort()
-    const existingTables = await this.transaction.query<{ id: string }>(`
-      SELECT id
-      FROM mbox.tables
-      WHERE tenant_id = $1::uuid AND store_id = $2::uuid
-        AND id = ANY($3::uuid[]) AND status = 'available'
-      ORDER BY id
-      FOR UPDATE
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, tableIds])
-    if (existingTables.rowCount !== tableIds.length) {
-      throw new ReservationTableUnavailableError()
-    }
-    const expiredReservations = await this.transaction.query<{ id: string; public_id: string }>(`
-      SELECT reservation.id, reservation.public_id
-      FROM mbox.reservations AS reservation
-      WHERE reservation.tenant_id = $1::uuid
-        AND reservation.store_id = $2::uuid
-        AND reservation.status = 'pending'
-        AND EXISTS (
-          SELECT 1 FROM mbox.reservation_table_locks AS table_lock
-          WHERE table_lock.tenant_id = reservation.tenant_id
-            AND table_lock.store_id = reservation.store_id
-            AND table_lock.reservation_id = reservation.id
-            AND table_lock.table_id = ANY($3::uuid[])
-            AND table_lock.status = 'held'
-            AND table_lock.hold_expires_at <= clock_timestamp()
-        )
-      ORDER BY reservation.id
-      FOR UPDATE OF reservation
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, tableIds])
-    for (const expired of expiredReservations.rows) {
-      await expireReservationHold(this.transaction, {
-        id: expired.id,
-        publicId: expired.public_id,
-      }, 'reservation-create-cleanup')
+    if (tableIds.length > 0) {
+      const existingTables = await this.transaction.query<{ id: string }>(`
+        SELECT id
+        FROM mbox.tables
+        WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+          AND id = ANY($3::uuid[]) AND status = 'available'
+        ORDER BY id
+        FOR UPDATE
+      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, tableIds])
+      if (existingTables.rowCount !== tableIds.length) {
+        throw new ReservationTableUnavailableError()
+      }
+      const expiredReservations = await this.transaction.query<{ id: string; public_id: string }>(`
+        SELECT reservation.id, reservation.public_id
+        FROM mbox.reservations AS reservation
+        WHERE reservation.tenant_id = $1::uuid
+          AND reservation.store_id = $2::uuid
+          AND reservation.status = 'pending'
+          AND EXISTS (
+            SELECT 1 FROM mbox.reservation_table_locks AS table_lock
+            WHERE table_lock.tenant_id = reservation.tenant_id
+              AND table_lock.store_id = reservation.store_id
+              AND table_lock.reservation_id = reservation.id
+              AND table_lock.table_id = ANY($3::uuid[])
+              AND table_lock.status = 'held'
+              AND table_lock.hold_expires_at <= clock_timestamp()
+          )
+        ORDER BY reservation.id
+        FOR UPDATE OF reservation
+      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, tableIds])
+      for (const expired of expiredReservations.rows) {
+        await expireReservationHold(this.transaction, {
+          id: expired.id,
+          publicId: expired.public_id,
+        }, 'reservation-create-cleanup')
+      }
     }
     if (input.customerId) {
       const customer = await this.transaction.query<{ id: string }>(`
@@ -504,7 +507,9 @@ function validateCreateReservation(input: Readonly<CreateReservationInput>): voi
   if (!Number.isInteger(input.guestCount) || input.guestCount < 1 || input.guestCount > 200) {
     throw new TypeError('guestCount must be an integer between 1 and 200')
   }
-  if (input.tableIds.length === 0) throw new TypeError('at least one table is required')
+  if (input.tableIds.length === 0 && input.allowUnassignedTable !== true) {
+    throw new TypeError('at least one table is required unless the reservation is explicitly unassigned')
+  }
   const startsAt = Date.parse(input.arrivalAt)
   const endsAt = Date.parse(input.expectedEndAt)
   if (!Number.isFinite(startsAt) || !Number.isFinite(endsAt) || endsAt <= startsAt) {

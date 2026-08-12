@@ -765,7 +765,7 @@ postgresIntegration('reservationPerformanceApiPlugin PostgreSQL privacy and data
     staffAccess = scopedAccess({
       employeeId: scopedEmployeeId,
       roleCodes: ['GREETER'],
-      permissions: ['reservation.view'],
+      permissions: ['reservation.view', 'reservation.view.all'],
       dataScopes: [],
     })
     const greeter = await app.inject({ method: 'GET', url: '/api/staff/reservations' })
@@ -785,7 +785,7 @@ postgresIntegration('reservationPerformanceApiPlugin PostgreSQL privacy and data
     staffAccess = scopedAccess({
       employeeId: scopedEmployeeId,
       roleCodes: ['MANAGER'],
-      permissions: ['reservation.view', 'reservation.contact.view'],
+      permissions: ['reservation.view', 'reservation.view.all', 'reservation.contact.view'],
       dataScopes: [],
     })
     const manager = await app.inject({ method: 'GET', url: '/api/staff/reservations' })

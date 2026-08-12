@@ -34,7 +34,7 @@ describe('normalized migration baseline', () => {
       '001', '002', '003', '004', '005', '006', '007', '008', '009', '010', '011', '012',
       '013', '014', '015', '016', '017', '018', '019', '020', '021', '022', '023', '024',
       '025', '026', '027', '028', '029', '030', '031', '032', '033', '034', '035', '036',
-      '037',
+      '037', '038', '039', '040',
     ])
     for (const migration of migrations) {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
@@ -50,6 +50,16 @@ describe('normalized migration baseline', () => {
     await rm(join(directory, '002_gap.sql'))
     await writeFile(join(directory, '001_unwrapped.sql'), 'SELECT 1;\n')
     await expect(loadNormalizedMigrations(directory)).rejects.toThrow('BEGIN/COMMIT')
+  })
+
+  it('protects every access configuration that existed before item-level authority', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '039')
+    expect(migration?.sql).toMatch(/authority_source IN \('runtime', 'migration_backfill'\)/)
+    expect(migration?.sql).toMatch(/configured_by_employee_id uuid[,\s]/)
+    expect(migration?.sql).toMatch(/FROM mbox\.role_permission_assignments/)
+    expect(migration?.sql).toMatch(/FROM mbox\.role_data_scopes/)
+    expect(migration?.sql).toMatch(/FROM mbox\.role_approval_limits/)
+    expect(migration?.sql).toMatch(/FROM mbox\.role_navigation_items/)
   })
 
   it('defines all required core tables without legacy runtime or projection tables', async () => {
@@ -86,6 +96,7 @@ describe('normalized migration baseline', () => {
       'waitlist_entries', 'waitlist_events', 'product_bundle_components',
       'store_configuration_applications',
       'product_catalog_applications',
+      'role_access_configuration_authorities', 'staff_access_configuration_definitions',
     ]
     for (const table of requiredTables) {
       expect(sql).toMatch(new RegExp(`CREATE TABLE mbox\\.${table}\\s*\\(`))

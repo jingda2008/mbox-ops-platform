@@ -31,6 +31,7 @@ integration('normalized store provisioning', () => {
     employees: [{ code: 'provision-tom', name: 'Tom', roleCodes: ['SERVER'], pinEnv: 'MBOX_EMPLOYEE_PIN_TOM' }],
     reservationPolicy: {
       holdMinutes: 20,
+      arrivalGraceMinutes: 10,
       maxAdvanceDays: 90,
       defaultDurationMinutes: 240,
       customerCancelCutoffMinutes: 120,
@@ -131,5 +132,50 @@ integration('normalized store provisioning', () => {
       'tables.minimum_spend_unconfirmed',
       'tables.layout_unconfirmed',
     ])
+  })
+
+  it('preserves a role configuration after an administrator has published it', async () => {
+    const identity = await pool.query<{ role_id: string; employee_id: string }>(`
+      SELECT role.id AS role_id, employee.id AS employee_id
+      FROM mbox.roles role
+      JOIN mbox.employees employee ON employee.tenant_id=role.tenant_id AND employee.store_id=role.store_id
+      WHERE role.tenant_id=$1 AND role.store_id=$2 AND role.code='SERVER' AND employee.employee_code='provision-tom'
+    `, [tenantId, storeId])
+    const row = identity.rows[0]
+    expect(row).toBeDefined()
+    await pool.query(`DELETE FROM mbox.role_permission_assignments assignment
+      USING mbox.staff_permission_definitions permission
+      WHERE assignment.tenant_id=$1 AND assignment.store_id=$2 AND assignment.role_id=$3
+        AND permission.tenant_id=assignment.tenant_id AND permission.store_id=assignment.store_id
+        AND permission.id=assignment.permission_id AND permission.code='order.gift'`, [tenantId, storeId, row!.role_id])
+    await pool.query(`INSERT INTO mbox.role_access_configuration_authorities(
+      tenant_id, store_id, role_id, configuration_kind, configuration_code, configured_by_employee_id)
+      VALUES ($1,$2,$3,'permission','order.gift',$4)`, [tenantId, storeId, row!.role_id, row!.employee_id])
+
+    const upgradedConfig = parseStoreProvisionConfig({
+      ...config,
+      version: 'integration-v3',
+      roles: config.roles.map((role) => ({
+        ...role,
+        permissions: [...role.permissions, 'table.close'],
+      })),
+    })
+    await provisionNormalizedStore({
+      databaseUrl: databaseUrl!, config: upgradedConfig,
+      environment: { MBOX_EMPLOYEE_PIN_TOM: '5210', MBOX_STORE_DAILY_CREDENTIAL: 'MBOX521' },
+      now: new Date('2026-08-11T12:03:00.000Z'),
+      sourceCommitSha: '49fbdcba2947456ce83f8da16aa4eca63af731cf',
+    })
+    const state = await pool.query<{ gift_enabled: boolean; new_default_enabled: boolean }>(`SELECT
+      EXISTS(SELECT 1 FROM mbox.role_permission_assignments assignment
+        JOIN mbox.staff_permission_definitions permission
+          ON permission.tenant_id=assignment.tenant_id AND permission.store_id=assignment.store_id AND permission.id=assignment.permission_id
+        WHERE assignment.tenant_id=$1 AND assignment.store_id=$2 AND assignment.role_id=$3 AND permission.code='order.gift') AS gift_enabled,
+      EXISTS(SELECT 1 FROM mbox.role_permission_assignments assignment
+        JOIN mbox.staff_permission_definitions permission
+          ON permission.tenant_id=assignment.tenant_id AND permission.store_id=assignment.store_id AND permission.id=assignment.permission_id
+        WHERE assignment.tenant_id=$1 AND assignment.store_id=$2 AND assignment.role_id=$3 AND permission.code='table.close') AS new_default_enabled
+    `, [tenantId, storeId, row!.role_id])
+    expect(state.rows[0]).toEqual({ gift_enabled: false, new_default_enabled: true })
   })
 })

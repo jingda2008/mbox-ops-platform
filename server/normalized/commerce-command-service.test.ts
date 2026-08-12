@@ -570,6 +570,17 @@ async function seed(pool: Pool): Promise<void> {
     ON CONFLICT DO NOTHING
   `, [tenantId, storeId, employeeId, kdsRoleId])
   await pool.query(`
+    INSERT INTO mbox.staff_permission_definitions(tenant_id, store_id, code, name)
+    VALUES ($1, $2, 'kds.prepare', 'Prepare KDS items')
+    ON CONFLICT (tenant_id, store_id, code) DO UPDATE SET status='active'
+  `, [tenantId, storeId])
+  await pool.query(`
+    INSERT INTO mbox.role_permission_assignments(tenant_id, store_id, role_id, permission_id)
+    SELECT $1, $2, $3, id FROM mbox.staff_permission_definitions
+    WHERE tenant_id=$1 AND store_id=$2 AND code='kds.prepare'
+    ON CONFLICT DO NOTHING
+  `, [tenantId, storeId, kdsRoleId])
+  await pool.query(`
     INSERT INTO mbox.products(id, tenant_id, store_id, code, name, category_code, fulfillment_station, product_kind) VALUES
       ($1, $3, $4, 'PRODUCT-A', 'Product A', 'drink', 'bar', 'single'),
       ($2, $3, $4, 'PRODUCT-B', 'Product B', 'drink', 'bar', 'single'),

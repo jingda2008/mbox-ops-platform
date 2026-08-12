@@ -159,34 +159,54 @@ integration('public reservation API with PostgreSQL', () => {
     })
     expect(JSON.stringify(body)).not.toContain(tableId)
     expect(JSON.stringify(body)).not.toContain(customerId)
+    expect(body.data.acceptingReservations).toBe(true)
+    expect(body.data).not.toHaveProperty('holdMinutes')
   })
 
-  it('allows one cross-midnight self-selected hold and rejects the concurrent collision', async () => {
+  it('rejects exact table selection because public reservations only record a seat preference', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/public/reservations',
+      headers: { 'idempotency-key': 'public-reservation-no-table-selection-0001' },
+      payload: {
+        mode: 'self_select', customerName: '王女士', contact: rawContact, guestCount: 2,
+        arrivalAt: crossMidnight.arrivalAt, expectedEndAt: crossMidnight.expectedEndAt,
+        tableCodes: ['VIP1'], seatPreference: 'stage_atmosphere',
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json().error.code).toBe('PUBLIC_RESERVATION_REQUEST_INVALID')
+  })
+
+  it('reserves shared guest capacity atomically without binding any exact table', async () => {
     const submit = (suffix: string) => app.inject({
       method: 'POST',
       url: '/public/reservations',
       headers: { 'idempotency-key': `public-reservation-concurrent-${suffix}` },
       payload: {
-        mode: 'self_select',
+        mode: 'direct',
         customerName: '王女士',
         contact: rawContact,
         guestCount: 2,
         arrivalAt: crossMidnight.arrivalAt,
         expectedEndAt: crossMidnight.expectedEndAt,
-        tableCodes: ['VIP1'],
+        seatPreference: 'stage_atmosphere',
         note: '靠近舞台即可',
       },
     })
-    const responses = await Promise.all([submit('A'), submit('B')])
-    expect(responses.map((response) => response.statusCode).toSorted()).toEqual([201, 409])
+    const responses = await Promise.all([submit('A'), submit('B'), submit('C'), submit('D')])
+    expect(responses.map((response) => response.statusCode).toSorted()).toEqual([201, 201, 201, 409])
     const success = responses.find((response) => response.statusCode === 201)!
     const body = success.json()
     expect(body.data).toMatchObject({
       customerName: '王女士',
       maskedContact,
-      tableCodes: ['VIP1'],
       status: 'pending',
+      arrivalGraceEndsAt: new Date(Date.parse(crossMidnight.arrivalAt) + 10 * 60_000).toISOString(),
     })
+    expect(body.data).not.toHaveProperty('tableCodes')
+    expect(body.data).not.toHaveProperty('holdExpiresAt')
     expect(JSON.stringify(body)).not.toContain(rawContact)
     expect(JSON.stringify(body)).not.toContain(customerId)
     expect(JSON.stringify(body)).not.toContain(tableId)
@@ -218,13 +238,13 @@ integration('public reservation API with PostgreSQL', () => {
           WHERE tenant_id = $1 AND store_id = $2 AND message_type = 'reservation.created.v1') AS outbox
     `, [tenantId, storeId, rawContact])
     expect(stored.rows[0]).toEqual({
-      reservations: '1',
-      locks: '1',
-      private_contacts: '1',
+      reservations: '3',
+      locks: '0',
+      private_contacts: '3',
       raw_contact_tokens: '0',
       raw_encrypted_text: '0',
-      audits: '1',
-      outbox: '1',
+      audits: '3',
+      outbox: '3',
     })
 
     const availability = await app.inject({
@@ -232,10 +252,11 @@ integration('public reservation API with PostgreSQL', () => {
       url: `/public/reservation/availability?arrivalAt=${encodeURIComponent(crossMidnight.arrivalAt)}&expectedEndAt=${encodeURIComponent(crossMidnight.expectedEndAt)}&guestCount=2`,
     })
     expect(availability.statusCode).toBe(200)
+    expect(availability.json().data).toMatchObject({ acceptingReservations: false })
     expect(availability.json().data.areas[0].tables[0]).toMatchObject({
       code: 'VIP1',
-      available: false,
-      status: 'locked',
+      available: true,
+      status: 'available',
     })
     expect(availability.body).not.toContain('王女士')
     expect(availability.body).not.toContain(maskedContact)

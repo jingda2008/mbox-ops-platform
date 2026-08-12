@@ -19,13 +19,14 @@ import {
   arrivalIso,
   createArrivalSlots,
   formatMoney,
-  remainingHoldSeconds,
+  reservationArrivalHoldState,
   seatPreferenceLabel,
   shanghaiBusinessDate,
   validateConfirmation,
   validateGuestDetails,
   validateSchedule,
   DEFAULT_OPERATING_HOURS,
+  type ReservationArrivalHoldState,
 } from './reservation-model'
 import type {
   OperatingHours,
@@ -83,7 +84,7 @@ export function ReservationBooking({
   const [waitlist, setWaitlist] = useState<PublicWaitlist | null>(null)
   const [joinWaitlist, setJoinWaitlist] = useState(false)
   const [cancelArmed, setCancelArmed] = useState(false)
-  const [holdSeconds, setHoldSeconds] = useState(0)
+  const [arrivalHold, setArrivalHold] = useState<ReservationArrivalHoldState>({ kind: 'hidden', seconds: 0 })
   const editingId = reservation?.publicId ?? initialReservationId ?? null
   const request = useRef<AbortController | null>(null)
 
@@ -158,7 +159,6 @@ export function ReservationBooking({
         if (value === null) return
         setReservation(value)
         setStep('complete')
-        setHoldSeconds(remainingHoldSeconds(value.holdExpiresAt, now()))
       })
       .catch((error: unknown) => {
         const lookupMessage = reservationLookupMessage(error, false)
@@ -168,11 +168,28 @@ export function ReservationBooking({
   }, [api, initialReservationId, now, reservation, runWithSession, sessionReady])
 
   useEffect(() => {
-    if (reservation?.holdExpiresAt === null || reservation?.holdExpiresAt === undefined) return
-    const update = () => setHoldSeconds(remainingHoldSeconds(reservation.holdExpiresAt, now()))
-    update()
-    const timer = globalThis.setInterval(update, 1_000)
-    return () => globalThis.clearInterval(timer)
+    if (reservation === null) {
+      setArrivalHold({ kind: 'hidden', seconds: 0 })
+      return
+    }
+    let timer: ReturnType<typeof globalThis.setTimeout> | null = null
+    let ticker: ReturnType<typeof globalThis.setInterval> | null = null
+    const update = () => setArrivalHold(reservationArrivalHoldState(reservation, now()))
+    const arm = () => {
+      update()
+      if (reservation.status !== 'confirmed' || reservation.arrivalState !== 'not_arrived') return
+      const delay = Date.parse(reservation.arrivalAt) - now().getTime()
+      if (delay > 0) {
+        timer = globalThis.setTimeout(arm, Math.min(delay, 60_000))
+        return
+      }
+      ticker = globalThis.setInterval(update, 1_000)
+    }
+    arm()
+    return () => {
+      if (timer !== null) globalThis.clearTimeout(timer)
+      if (ticker !== null) globalThis.clearInterval(ticker)
+    }
   }, [now, reservation])
 
   const refreshReservationStatus = useCallback(async (showProgress = true) => {
@@ -183,7 +200,6 @@ export function ReservationBooking({
       const latest = await runWithSession((signal) => api.getReservation(publicId, signal))
       if (latest === null) return
       setReservation(latest)
-      setHoldSeconds(remainingHoldSeconds(latest.holdExpiresAt, now()))
       onReservationChange?.(latest)
     } catch (error) {
       const lookupMessage = reservationLookupMessage(error, reservation !== null)
@@ -192,10 +208,12 @@ export function ReservationBooking({
     } finally {
       if (showProgress) setPhase('idle')
     }
-  }, [api, now, onReservationChange, reservation, runWithSession, sessionReady])
+  }, [api, onReservationChange, reservation, runWithSession, sessionReady])
 
   useEffect(() => {
-    if (step !== 'complete' || reservation?.status !== 'pending' || !sessionReady || phase !== 'idle') return
+    const shouldRefresh = reservation?.status === 'pending'
+      || (reservation?.status === 'confirmed' && reservation.arrivalState === 'not_arrived')
+    if (step !== 'complete' || !shouldRefresh || !sessionReady || phase !== 'idle') return
     const refreshWhenVisible = () => {
       if (document.visibilityState === 'visible') void refreshReservationStatus(false)
     }
@@ -205,7 +223,7 @@ export function ReservationBooking({
       globalThis.clearInterval(timer)
       document.removeEventListener('visibilitychange', refreshWhenVisible)
     }
-  }, [phase, refreshReservationStatus, reservation?.status, sessionReady, step])
+  }, [phase, refreshReservationStatus, reservation?.arrivalState, reservation?.status, sessionReady, step])
 
   const loadAvailability = useCallback(async () => {
     const validation = validateSchedule(draft, slots)
@@ -222,8 +240,8 @@ export function ReservationBooking({
       const value = await run((signal) => api.availability(arrivalAt, draft.guestCount, signal))
       if (value === null) return
       setAvailability(value)
-      setDraft((current) => ({ ...current, mode: 'direct', tableCodes: [] }))
-      setJoinWaitlist(value.areas.every((area) => area.tables.every((table) => table.status !== 'available')))
+      setDraft((current) => ({ ...current, mode: 'direct' }))
+      setJoinWaitlist(!value.acceptingReservations)
       setStep('confirm')
     } catch {
       // The inline notice keeps the current schedule available for retry.
@@ -282,13 +300,11 @@ export function ReservationBooking({
       setReservation(saved)
       setWaitlist(null)
       setStep('complete')
-      setHoldSeconds(remainingHoldSeconds(saved.holdExpiresAt, now()))
       onReservationChange?.(saved)
     } catch (error) {
       if (error instanceof PublicReservationApiError && error.seatConflict) {
         const conflictMessage = error.message
         setStep('schedule')
-        setDraft((current) => ({ ...current, tableCodes: [] }))
         setMessage(conflictMessage)
       } else if (error instanceof PublicReservationApiError && error.sessionInvalid) {
         setSessionReady(false)
@@ -296,7 +312,7 @@ export function ReservationBooking({
     } finally {
       setPhase('idle')
     }
-  }, [api, availability, draft, editingId, joinWaitlist, now, onReservationChange, operatingHours, runWithSession, sessionReady])
+  }, [api, availability, draft, editingId, joinWaitlist, onReservationChange, operatingHours, runWithSession, sessionReady])
 
   const cancel = useCallback(async () => {
     if (!cancelArmed) {
@@ -332,7 +348,6 @@ export function ReservationBooking({
       time: schedule.time,
       guestCount: reservation.guestCount,
       mode: 'direct',
-      tableCodes: [],
       seatPreference: reservation.seatPreference,
       customerName: reservation.customerName,
       contact: '',
@@ -357,7 +372,7 @@ export function ReservationBooking({
       waitlist={waitlist}
       joinWaitlist={joinWaitlist}
       cancelArmed={cancelArmed}
-      holdSeconds={holdSeconds}
+      arrivalHold={arrivalHold}
       minDate={today}
       maxDate={addCalendarDays(today, 90)}
       onDraftChange={(patch) => setDraft((current) => ({ ...current, ...patch }))}
@@ -393,7 +408,7 @@ export interface ReservationBookingViewProps {
   waitlist: PublicWaitlist | null
   joinWaitlist: boolean
   cancelArmed: boolean
-  holdSeconds: number
+  arrivalHold: ReservationArrivalHoldState
   minDate: string
   maxDate: string
   onDraftChange: (patch: Partial<ReservationDraft>) => void
@@ -600,12 +615,18 @@ function CompleteStep(props: ReservationBookingViewProps & { busy: boolean }) {
         <div><dt>人数</dt><dd>{record.guestCount}位</dd></div>
         <div><dt>联系</dt><dd>{record.maskedContact}</dd></div>
         {isReservation && <div><dt>位置偏好</dt><dd>{seatPreferenceLabel(props.reservation!.seatPreference)}</dd></div>}
-        {isReservation && <div><dt>确认位置</dt><dd>{pending ? '待门店确认' : props.reservation!.tableCodes.join('、') || '门店安排'}</dd></div>}
+        {isReservation && <div><dt>位置安排</dt><dd>{pending ? '确认后保留预约名额' : '到店后由门迎安排'}</dd></div>}
       </dl>
-      {!cancelled && pending && (
-        <div className={props.holdSeconds > 0 ? 'reservation-hold' : 'reservation-hold is-expired'}>
-          <strong>{props.holdSeconds > 0 ? `临时锁位剩余 ${formatCountdown(props.holdSeconds)}` : '临时锁位已结束'}</strong>
-          <span>{props.holdSeconds > 0 ? '倒计时只表示座位暂时保留，不代表预约已确认。' : '本次申请尚未确认，请重新选择或联系门店。'}</span>
+      {!cancelled && confirmed && props.arrivalHold.kind === 'active' && (
+        <div className="reservation-hold" role="status">
+          <strong>预约到店保留剩余 {formatCountdown(props.arrivalHold.seconds)}</strong>
+          <span>本次预约为您保留到 {formatClock(props.reservation!.arrivalGraceEndsAt)}；具体位置到店后由门迎安排。</span>
+        </div>
+      )}
+      {!cancelled && confirmed && props.arrivalHold.kind === 'expired' && (
+        <div className="reservation-hold is-expired" role="status">
+          <strong>预约到店保留时间已结束</strong>
+          <span>如仍计划到店，请尽快联系门店重新安排位置。</span>
         </div>
       )}
       {!cancelled && (
@@ -642,7 +663,6 @@ function createDraft(date: string, time: string): ReservationDraft {
     time,
     guestCount: 2,
     mode: 'direct',
-    tableCodes: [],
     seatPreference: 'no_preference',
     customerName: '',
     contact: '',
@@ -689,5 +709,11 @@ function formatCountdown(seconds: number): string {
 function formatDateTime(value: string): string {
   return new Intl.DateTimeFormat('zh-CN', {
     timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(new Date(value))
+}
+
+function formatClock(value: string): string {
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false,
   }).format(new Date(value))
 }

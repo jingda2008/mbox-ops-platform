@@ -13,12 +13,13 @@ function base(overrides: Partial<ReservationBookingViewProps> = {}): Reservation
   return {
     step: 'schedule', phase: 'idle', message: null, retryAt: null, sessionReady: true,
     draft: {
-      date: '2026-08-12', time: '2026-08-12|1230', guestCount: 2, mode: 'direct', tableCodes: [],
+      date: '2026-08-12', time: '2026-08-12|1230', guestCount: 2, mode: 'direct',
       seatPreference: 'no_preference', customerName: '王女士', contact: '13800138000', note: '',
     },
     slots: [{ value: '2026-08-12|1230', label: '12:30', iso: '2026-08-12T12:30:00+08:00', nextDay: false }],
     availability: availability(),
-    reservation: null, waitlist: null, joinWaitlist: false, cancelArmed: false, holdSeconds: 0,
+    reservation: null, waitlist: null, joinWaitlist: false, cancelArmed: false,
+    arrivalHold: { kind: 'hidden', seconds: 0 },
     minDate: '2026-08-12', maxDate: '2026-11-10', ...callbacks, ...overrides,
   }
 }
@@ -59,23 +60,24 @@ describe('ReservationBookingView', () => {
     expect(html).toContain('收到“预约已确认”后才算预约成功')
   })
 
-  it('makes pending approval explicit and distinguishes it from the temporary table hold', () => {
+  it('makes pending approval explicit without exposing the internal anti-conflict hold', () => {
     const html = render(base({
-      step: 'complete', holdSeconds: 1139,
+      step: 'complete',
       reservation: {
         publicId: 'reservation-own-001', customerName: '王女士', maskedContact: '138****8000', guestCount: 2,
         arrivalAt: '2026-08-12T20:30:00+08:00', expectedEndAt: '2026-08-13T00:30:00+08:00', status: 'pending',
-        arrivalState: 'not_arrived', note: null, seatPreference: 'stage_atmosphere', tableCodes: ['VIP1'], holdExpiresAt: '2026-08-12T12:20:00Z', cancellationPolicy: {},
+        arrivalState: 'not_arrived', note: null, seatPreference: 'stage_atmosphere',
+        arrivalGraceEndsAt: '2026-08-12T20:40:00+08:00', cancellationPolicy: {},
       },
     }))
     expect(html).toContain('reservation-own-001')
     expect(html).toContain('138****8000')
     expect(html).toContain('等待门店确认')
     expect(html).toContain('门店确认后才正式生效')
-    expect(html).toContain('临时锁位剩余 18:59')
-    expect(html).toContain('不代表预约已确认')
+    expect(html).not.toContain('临时锁位')
+    expect(html).not.toContain('预约锁位剩余')
     expect(html).toContain('刷新确认状态')
-    expect(html).toContain('确认位置</dt><dd>待门店确认')
+    expect(html).toContain('位置安排</dt><dd>确认后保留预约名额')
     expect(html).not.toContain('>VIP1<')
     expect(html).not.toContain('<h1 id="reservation-complete-title">预约已确认</h1>')
     expect(html).not.toContain('联系电话原文')
@@ -87,14 +89,35 @@ describe('ReservationBookingView', () => {
       reservation: {
         publicId: 'reservation-confirmed-001', customerName: '王女士', maskedContact: '138****8000', guestCount: 2,
         arrivalAt: '2026-08-12T20:30:00+08:00', expectedEndAt: '2026-08-13T00:30:00+08:00', status: 'confirmed',
-        arrivalState: 'not_arrived', note: null, seatPreference: 'comfortable_booth', tableCodes: ['VIP1'], holdExpiresAt: null, cancellationPolicy: {},
+        arrivalState: 'not_arrived', note: null, seatPreference: 'comfortable_booth',
+        arrivalGraceEndsAt: '2026-08-12T20:40:00+08:00', cancellationPolicy: {},
       },
     }))
 
     expect(html).toContain('<h1 id="reservation-complete-title">预约已确认</h1>')
     expect(html).toContain('门店已确认本次预约')
+    expect(html).toContain('位置安排</dt><dd>到店后由门迎安排')
     expect(html).not.toContain('临时锁位')
     expect(html).not.toContain('刷新确认状态')
+  })
+
+  it('shows the ten-minute arrival retention only after confirmed arrival time is reached', () => {
+    const reservation = {
+      publicId: 'reservation-confirmed-002', customerName: '王女士', maskedContact: '138****8000', guestCount: 2,
+      arrivalAt: '2026-08-12T21:00:00+08:00', expectedEndAt: '2026-08-13T01:00:00+08:00', status: 'confirmed',
+      arrivalState: 'not_arrived' as const, note: null, seatPreference: 'comfortable_booth' as const,
+      arrivalGraceEndsAt: '2026-08-12T21:10:00+08:00', cancellationPolicy: {},
+    }
+    const beforeArrival = render(base({ step: 'complete', reservation }))
+    expect(beforeArrival).not.toContain('预约到店保留剩余')
+
+    const duringGrace = render(base({
+      step: 'complete', reservation, arrivalHold: { kind: 'active', seconds: 599 },
+    }))
+    expect(duringGrace).toContain('预约到店保留剩余 09:59')
+    expect(duringGrace).toContain('本次预约为您保留到 21:10')
+    expect(duringGrace).toContain('具体位置到店后由门迎安排')
+    expect(duringGrace).not.toContain('VIP1')
   })
 
   it('keeps retry and reconnect actions explicit after session or rate-limit failures', () => {
@@ -115,7 +138,8 @@ describe('ReservationBookingView', () => {
 
 function availability(): ReservationAvailability {
   return {
-    arrivalAt: '2026-08-12T20:30:00+08:00', expectedEndAt: '2026-08-13T00:30:00+08:00', guestCount: 2, holdMinutes: 20,
+    arrivalAt: '2026-08-12T20:30:00+08:00', expectedEndAt: '2026-08-13T00:30:00+08:00', guestCount: 2,
+    acceptingReservations: true,
     depositRule: { enabled: true, mode: 'flat', amountMinor: 50000, ruleText: '可抵扣当日消费' },
     areas: [{
       code: 'VIP', name: '舞台前区', type: 'vip', zone: 'stage-front',

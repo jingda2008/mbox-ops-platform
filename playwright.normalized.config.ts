@@ -37,6 +37,7 @@ export default defineConfig({
     },
     url: `http://127.0.0.1:${port}/api/live`,
     timeout: 120_000,
+    gracefulShutdown: { signal: 'SIGTERM', timeout: 15_000 },
     reuseExistingServer: false,
   },
 })

@@ -104,6 +104,116 @@ export interface StaffBootstrapResponse {
   meta: NormalizedApiMeta
 }
 
+export interface StaffAccessPermissionView {
+  code: string
+  name: string
+  category: string
+  description: string | null
+}
+
+export interface StaffAccessRoleView {
+  id: string
+  code: string
+  name: string
+  status: string
+  memberCount: number
+  permissionCodes: string[]
+  dataScopes: StaffAccessDataScopeView[]
+  approvalLimits: StaffAccessApprovalLimitView[]
+  navigation: StaffAccessNavigationView[]
+  dataScopeCount: number
+  approvalLimitCount: number
+  navigationCount: number
+}
+
+export interface StaffAccessDataScopeView {
+  key: string
+  effect: 'include' | 'exclude'
+  value: unknown
+  enabled: boolean
+}
+
+export interface StaffAccessApprovalLimitView {
+  code: string
+  amountMinor: number | null
+  currency: string
+  rules: Record<string, unknown>
+  enabled: boolean
+}
+
+export interface StaffAccessNavigationView {
+  code: string
+  label: string
+  route: string
+  icon: string | null
+  sortOrder: number
+  enabled: boolean
+  displayConfig: Record<string, unknown>
+}
+
+export interface StaffAccessAreaView {
+  id: string
+  code: string
+  name: string
+}
+
+export interface StaffAccessConfigurationDefinitionView {
+  kind: 'approval_limit' | 'data_scope' | 'navigation'
+  code: string
+  label: string
+  description: string | null
+  requiredPermissionCodes: string[]
+  sortOrder: number
+  config: Record<string, unknown>
+}
+
+export interface StaffAccessEmployeeOverrideView {
+  permissionCode: string
+  effect: 'grant' | 'deny'
+  reason: string
+  endsAt: string | null
+}
+
+export interface StaffAccessEmployeeView {
+  id: string
+  code: string
+  displayName: string
+  status: string
+  roleCodes: string[]
+  overrides: StaffAccessEmployeeOverrideView[]
+}
+
+export interface StaffAccessManagementOverview {
+  generatedAt: string
+  roles: StaffAccessRoleView[]
+  employees: StaffAccessEmployeeView[]
+  permissions: StaffAccessPermissionView[]
+  areas: StaffAccessAreaView[]
+  configurationDefinitions: StaffAccessConfigurationDefinitionView[]
+}
+
+export type StaffPermissionDeploymentChange =
+  | { kind: 'role_permission'; roleId: string; permissionCode: string; enabled: boolean }
+  | { kind: 'employee_override'; employeeId: string; permissionCode: string; effect: 'grant' | 'deny' | null }
+  | { kind: 'role_data_scope'; roleId: string; scopeKey: string; effect: 'include' | 'exclude'; scopeValue: unknown; enabled: boolean }
+  | { kind: 'role_approval_limit'; roleId: string; approvalCode: string; amountMinor: number | null; currency: string; rules: Record<string, unknown>; enabled: boolean }
+  | { kind: 'role_navigation'; roleId: string; navigationCode: string; label: string; route: string; icon: string | null; sortOrder: number; enabled: boolean; displayConfig: Record<string, unknown> }
+
+export interface StaffPermissionDeploymentResult {
+  status: 'verified'
+  verifiedAt: string
+  replayed: boolean
+  changes: Array<{
+    kind: StaffPermissionDeploymentChange['kind']
+    targetId: string
+    configurationCode: string
+    applied: boolean
+    effectiveEmployeeCount: number
+    affectedEmployeeCount: number
+  }>
+  overview: StaffAccessManagementOverview
+}
+
 export interface NormalizedApiMeta {
   requestId?: string
   generatedAt: string

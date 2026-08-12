@@ -11,6 +11,7 @@ import {
   type StaffLoginRateLimiter,
 } from './staff-auth-command-service.js'
 import { StaffAccessDeniedError, StaffAccessRepository } from './staff-access-repository.js'
+import { StaffAccessManagementService } from './staff-access-management-service.js'
 import {
   DeviceAccessDeniedError,
   StaffSessionNotFoundError,
@@ -54,6 +55,7 @@ integration('normalized staff authentication PostgreSQL integration', () => {
   let limiter: RecordingRateLimiter
   let clock: MutableClock
   let service: StaffAuthCommandService
+  let accessManagement: StaffAccessManagementService
   const hasher = new ScryptCredentialHasher()
 
   beforeAll(async () => {
@@ -66,14 +68,16 @@ integration('normalized staff authentication PostgreSQL integration', () => {
   beforeEach(async () => {
     clock = new MutableClock('2026-08-11T10:00:00.000Z')
     limiter = new RecordingRateLimiter()
+    const executor = new NormalizedCommandExecutor(runner)
     service = new StaffAuthCommandService(
       runner,
-      new NormalizedCommandExecutor(runner),
+      executor,
       limiter,
       hasher,
       undefined,
       clock,
     )
+    accessManagement = new StaffAccessManagementService(runner, executor)
     await resetAuthenticationState(pool, hasher)
   })
 
@@ -128,6 +132,260 @@ integration('normalized staff authentication PostgreSQL integration', () => {
           WHERE message_type = 'staff.employee-permission-override.configured.v1') AS outbox
     `)
     expect(evidence.rows[0]).toEqual({ audits: '1', outbox: '1' })
+  })
+
+  it('publishes an employee permission exception atomically and verifies its effective state', async () => {
+    const before = await accessManagement.getOverview({ scope: { tenantId, storeId }, actorEmployeeId: adminId })
+    expect(before.roles.find((role) => role.id === serverRoleId)).toMatchObject({ memberCount: 2 })
+    expect(before.employees.find((employee) => employee.id === employeeOneId)?.overrides).toEqual([])
+    expect(before.configurationDefinitions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'approval_limit', code: 'order.gift' }),
+      expect.objectContaining({ kind: 'data_scope', code: 'kds.station_codes' }),
+      expect.objectContaining({ kind: 'navigation', code: 'commerce' }),
+    ]))
+
+    const result = await accessManagement.deployPermissions({
+      scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
+      idempotencyKey: 'staff-access-integration-0001',
+      requestFingerprint: 'tom-order-create-deny-v1',
+      reason: '临时风控验证',
+      changes: [{ kind: 'employee_override', employeeId: employeeOneId, permissionCode: 'order.create', effect: 'deny' }],
+    })
+
+    expect(result.status).toBe('verified')
+    expect(result.changes).toEqual([expect.objectContaining({
+      kind: 'employee_override', targetId: employeeOneId, applied: true,
+      affectedEmployeeCount: 1, effectiveEmployeeCount: 0,
+    })])
+    expect(result.overview.employees.find((employee) => employee.id === employeeOneId)?.overrides).toEqual([
+      expect.objectContaining({ permissionCode: 'order.create', effect: 'deny', reason: '临时风控验证' }),
+    ])
+
+    const replay = await accessManagement.deployPermissions({
+      scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
+      idempotencyKey: 'staff-access-integration-0001',
+      requestFingerprint: 'tom-order-create-deny-v1',
+      reason: '临时风控验证',
+      changes: [{ kind: 'employee_override', employeeId: employeeOneId, permissionCode: 'order.create', effect: 'deny' }],
+    })
+    expect(replay.replayed).toBe(true)
+    expect(replay.overview.employees.find((employee) => employee.id === employeeOneId)?.overrides).toEqual([
+      expect.objectContaining({ permissionCode: 'order.create', effect: 'deny' }),
+    ])
+    const evidence = await pool.query<{ audits: string; outbox: string }>(`
+      SELECT
+        (SELECT count(*)::text FROM mbox.audit_events
+          WHERE action='staff.permission-deployment.verified'
+            AND object_id=$1) AS audits,
+        (SELECT count(*)::text FROM mbox.outbox_messages
+          WHERE message_type='staff.permission-deployment.verified.v1'
+            AND aggregate_id=$1::uuid) AS outbox
+    `, [adminId])
+    expect(evidence.rows[0]).toEqual({ audits: '1', outbox: '1' })
+  })
+
+  it('publishes approval, data-scope, and navigation configuration in one verified transaction', async () => {
+    const result = await accessManagement.deployPermissions({
+      scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
+      idempotencyKey: 'staff-access-policy-integration-0001',
+      requestFingerprint: 'server-access-policy-v1', reason: '服务员岗位边界验收',
+      changes: [
+        { kind: 'role_approval_limit', roleId: serverRoleId, approvalCode: 'order.gift', amountMinor: 8_800, currency: 'CNY', rules: { requiresReason: true }, enabled: true },
+        { kind: 'role_data_scope', roleId: serverRoleId, scopeKey: 'kds.station_codes', effect: 'include', scopeValue: ['bar'], enabled: true },
+        { kind: 'role_navigation', roleId: serverRoleId, navigationCode: 'commerce', label: '取送', route: '/staff/fulfillment', icon: null, sortOrder: 10, enabled: true, displayConfig: { highFrequency: true } },
+      ],
+    })
+
+    expect(result.status).toBe('verified')
+    expect(result.changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'role_approval_limit', configurationCode: 'order.gift:CNY', applied: true, effectiveEmployeeCount: 2 }),
+      expect.objectContaining({ kind: 'role_data_scope', configurationCode: 'kds.station_codes:include', applied: true, effectiveEmployeeCount: 2 }),
+      expect.objectContaining({ kind: 'role_navigation', configurationCode: 'commerce', applied: true, effectiveEmployeeCount: 2 }),
+    ]))
+    const role = result.overview.roles.find((entry) => entry.id === serverRoleId)
+    expect(role?.approvalLimits).toContainEqual(expect.objectContaining({ code: 'order.gift', amountMinor: 8_800, enabled: true }))
+    expect(role?.dataScopes).toContainEqual(expect.objectContaining({ key: 'kds.station_codes', value: ['bar'], enabled: true }))
+    expect(role?.navigation).toContainEqual(expect.objectContaining({ code: 'commerce', label: '取送', enabled: true }))
+  })
+
+  it('rolls back an entry that the role cannot actually use', async () => {
+    await expect(accessManagement.deployPermissions({
+      scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
+      idempotencyKey: 'staff-access-route-lockout-0001',
+      requestFingerprint: 'server-payment-route-v1', reason: '入口越权验证',
+      changes: [{ kind: 'role_navigation', roleId: serverRoleId, navigationCode: 'payments', label: '收银', route: '/staff/payments', icon: null, sortOrder: 10, enabled: true, displayConfig: {} }],
+    })).rejects.toThrow('缺少使用/staff/payments所需权限')
+    const overview = await accessManagement.getOverview({ scope: { tenantId, storeId }, actorEmployeeId: adminId })
+    expect(overview.roles.find((entry) => entry.id === serverRoleId)?.navigation).toEqual([])
+  })
+
+  it('rejects configuration codes and routes that are not registered by the server catalog', async () => {
+    await expect(accessManagement.deployPermissions({
+      scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
+      idempotencyKey: 'staff-access-unknown-config-0001',
+      requestFingerprint: 'unknown-config-v1', reason: '伪造配置验证',
+      changes: [{ kind: 'role_data_scope', roleId: serverRoleId, scopeKey: 'unknown.scope', effect: 'include', scopeValue: ['all'], enabled: true }],
+    })).rejects.toThrow('未登记的配置能力')
+
+    await expect(accessManagement.deployPermissions({
+      scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
+      idempotencyKey: 'staff-access-route-tamper-0001',
+      requestFingerprint: 'route-tamper-v1', reason: '伪造入口验证',
+      changes: [{ kind: 'role_navigation', roleId: serverRoleId, navigationCode: 'commerce', label: '取送', route: '/staff/payments', icon: null, sortOrder: 10, enabled: true, displayConfig: {} }],
+    })).rejects.toThrow('入口地址与服务端目录不一致')
+  })
+
+  it('rejects forged scope values and approval policies outside the server catalog', async () => {
+    await expect(accessManagement.deployPermissions({
+      scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
+      idempotencyKey: 'staff-access-scope-value-tamper-0001',
+      requestFingerprint: 'scope-value-tamper-v1', reason: '伪造范围验证',
+      changes: [{
+        kind: 'role_data_scope', roleId: serverRoleId, scopeKey: 'kds.station_codes',
+        effect: 'include', scopeValue: ['forged-station'], enabled: true,
+      }],
+    })).rejects.toThrow('数据范围包含未登记选项')
+
+    await expect(accessManagement.deployPermissions({
+      scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
+      idempotencyKey: 'staff-access-approval-currency-tamper-0001',
+      requestFingerprint: 'approval-currency-tamper-v1', reason: '伪造额度验证',
+      changes: [{
+        kind: 'role_approval_limit', roleId: serverRoleId, approvalCode: 'order.gift',
+        amountMinor: 8_800, currency: 'USD', rules: { requiresReason: true }, enabled: true,
+      }],
+    })).rejects.toThrow('审批额度币种与服务端目录不一致')
+
+    await expect(accessManagement.deployPermissions({
+      scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
+      idempotencyKey: 'staff-access-approval-reason-tamper-0001',
+      requestFingerprint: 'approval-reason-tamper-v1', reason: '赠送留痕验证',
+      changes: [{
+        kind: 'role_approval_limit', roleId: serverRoleId, approvalCode: 'order.gift',
+        amountMinor: 8_800, currency: 'CNY', rules: { requiresReason: false }, enabled: true,
+      }],
+    })).rejects.toThrow('审批额度必须保留操作原因')
+  })
+
+  it('rejects enabled approval or scope configuration when the role lacks its required permission', async () => {
+    await pool.query(`
+      DELETE FROM mbox.role_permission_assignments assignment
+      USING mbox.staff_permission_definitions permission
+      WHERE assignment.tenant_id=$1::uuid AND assignment.store_id=$2::uuid
+        AND assignment.role_id=$3::uuid
+        AND permission.tenant_id=assignment.tenant_id AND permission.store_id=assignment.store_id
+        AND permission.id=assignment.permission_id AND permission.code='order.gift'
+    `, [tenantId, storeId, serverRoleId])
+
+    await expect(accessManagement.deployPermissions({
+      scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
+      idempotencyKey: 'staff-access-approval-prerequisite-0001',
+      requestFingerprint: 'approval-prerequisite-v1', reason: '缺少权限验证',
+      changes: [{
+        kind: 'role_approval_limit', roleId: serverRoleId, approvalCode: 'order.gift',
+        amountMinor: 8_800, currency: 'CNY', rules: { requiresReason: true }, enabled: true,
+      }],
+    })).rejects.toThrow('缺少配置order.gift所需权限')
+
+    await pool.query(`
+      INSERT INTO mbox.role_permission_assignments (tenant_id, store_id, role_id, permission_id)
+      SELECT $1::uuid, $2::uuid, $3::uuid, id
+      FROM mbox.staff_permission_definitions
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND code='order.gift'
+      ON CONFLICT (tenant_id, store_id, role_id, permission_id) DO NOTHING
+    `, [tenantId, storeId, serverRoleId])
+  })
+
+  it('does not let an unrelated legacy navigation entry block an employee exception', async () => {
+    await pool.query(`
+      INSERT INTO mbox.role_navigation_items (
+        tenant_id, store_id, role_id, navigation_code, label, route,
+        enabled, display_config, configured_by_employee_id
+      ) VALUES ($1::uuid, $2::uuid, $3::uuid, 'legacy', '旧入口', '/staff/legacy', true, '{}'::jsonb, $4::uuid)
+    `, [tenantId, storeId, serverRoleId, adminId])
+
+    const result = await accessManagement.deployPermissions({
+      scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
+      idempotencyKey: 'staff-access-legacy-route-exception-0001',
+      requestFingerprint: 'tom-legacy-route-exception-v1', reason: '员工例外独立发布',
+      changes: [{ kind: 'employee_override', employeeId: employeeOneId, permissionCode: 'order.create', effect: 'deny' }],
+    })
+
+    expect(result.status).toBe('verified')
+    expect(result.changes).toEqual([expect.objectContaining({
+      kind: 'employee_override', targetId: employeeOneId, applied: true,
+    })])
+  })
+
+  it('rolls back a deployment that would remove the final access administrator', async () => {
+    await expect(accessManagement.deployPermissions({
+      scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
+      idempotencyKey: 'staff-access-lockout-0001',
+      requestFingerprint: 'remove-final-admin-v1',
+      reason: '验证管理员保底',
+      changes: [{ kind: 'role_permission', roleId: adminRoleId, permissionCode: 'staff.access.configure', enabled: false }],
+    })).rejects.toThrow('门店没有任何权限管理员')
+
+    const overview = await accessManagement.getOverview({ scope: { tenantId, storeId }, actorEmployeeId: adminId })
+    expect(overview.roles.find((role) => role.id === adminRoleId)?.permissionCodes).toContain('staff.access.configure')
+    const failedEvidence = await pool.query<{ audits: string; outbox: string }>(`
+      SELECT
+        (SELECT count(*)::text FROM mbox.audit_events
+          WHERE action='staff.permission-deployment.verified'
+            AND reason='验证管理员保底') AS audits,
+        (SELECT count(*)::text FROM mbox.outbox_messages
+          WHERE message_key='staff-permission-deployment:staff-access-lockout-0001') AS outbox
+    `)
+    expect(failedEvidence.rows[0]).toEqual({ audits: '0', outbox: '0' })
+  })
+
+  it('rolls back and emits no verified evidence when the stored permission fails post-write verification', async () => {
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION mbox.test_ignore_server_permission_delete()
+      RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        IF OLD.role_id = '${serverRoleId}'::uuid THEN RETURN NULL; END IF;
+        RETURN OLD;
+      END
+      $$;
+      DROP TRIGGER IF EXISTS test_ignore_server_permission_delete
+        ON mbox.role_permission_assignments;
+      CREATE TRIGGER test_ignore_server_permission_delete
+        BEFORE DELETE ON mbox.role_permission_assignments
+        FOR EACH ROW EXECUTE FUNCTION mbox.test_ignore_server_permission_delete();
+    `)
+    try {
+      await expect(accessManagement.deployPermissions({
+        scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
+        idempotencyKey: 'staff-access-post-write-verification-0001',
+        requestFingerprint: 'server-order-create-disable-v1', reason: '写入后复核回滚验证',
+        changes: [{ kind: 'role_permission', roleId: serverRoleId, permissionCode: 'order.create', enabled: false }],
+      })).rejects.toThrow('权限写入后复核不一致，已回滚全部修改')
+    } finally {
+      await pool.query(`
+        DROP TRIGGER IF EXISTS test_ignore_server_permission_delete
+          ON mbox.role_permission_assignments;
+        DROP FUNCTION IF EXISTS mbox.test_ignore_server_permission_delete();
+      `)
+    }
+
+    const state = await pool.query<{ assignment: string; authority: string; audits: string; outbox: string }>(`
+      SELECT
+        (SELECT count(*)::text FROM mbox.role_permission_assignments assignment
+          JOIN mbox.staff_permission_definitions permission
+            ON permission.tenant_id=assignment.tenant_id AND permission.store_id=assignment.store_id
+            AND permission.id=assignment.permission_id
+          WHERE assignment.tenant_id=$1::uuid AND assignment.store_id=$2::uuid
+            AND assignment.role_id=$3::uuid AND permission.code='order.create') AS assignment,
+        (SELECT count(*)::text FROM mbox.role_access_configuration_authorities
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND role_id=$3::uuid
+            AND configuration_kind='permission' AND configuration_code='order.create') AS authority,
+        (SELECT count(*)::text FROM mbox.audit_events
+          WHERE action='staff.permission-deployment.verified' AND reason='写入后复核回滚验证') AS audits,
+        (SELECT count(*)::text FROM mbox.outbox_messages
+          WHERE message_key='staff-permission-deployment:staff-access-post-write-verification-0001') AS outbox
+    `, [tenantId, storeId, serverRoleId])
+    expect(state.rows[0]).toEqual({ assignment: '1', authority: '0', audits: '0', outbox: '0' })
   })
 
   it('revokes a session immediately and rejects subsequent authentication', async () => {
@@ -387,7 +645,9 @@ async function seedIdentityAndAccess(pool: Pool, hasher: ScryptCredentialHasher)
     VALUES
       ($1::uuid, $2::uuid, 'staff.access.configure', 'Configure staff access'),
       ($1::uuid, $2::uuid, 'staff.session.revoke', 'Revoke staff session'),
-      ($1::uuid, $2::uuid, 'order.create', 'Create order')
+      ($1::uuid, $2::uuid, 'order.create', 'Create order'),
+      ($1::uuid, $2::uuid, 'order.gift', 'Gift order items'),
+      ($1::uuid, $2::uuid, 'kds.prepare', 'Prepare KDS items')
     ON CONFLICT (tenant_id, store_id, code) DO UPDATE
     SET name = EXCLUDED.name
   `, [tenantId, storeId])
@@ -403,7 +663,8 @@ async function seedIdentityAndAccess(pool: Pool, hasher: ScryptCredentialHasher)
     INSERT INTO mbox.role_permission_assignments (tenant_id, store_id, role_id, permission_id)
     SELECT $1::uuid, $2::uuid, $3::uuid, id
     FROM mbox.staff_permission_definitions
-    WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND code = 'order.create'
+    WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+      AND code IN ('order.create', 'order.gift', 'kds.prepare')
     ON CONFLICT (tenant_id, store_id, role_id, permission_id) DO NOTHING
   `, [tenantId, storeId, serverRoleId])
 }
@@ -417,6 +678,7 @@ async function resetAuthenticationState(pool: Pool, hasher: ScryptCredentialHash
     'role_data_scopes',
     'role_approval_limits',
     'role_navigation_items',
+    'role_access_configuration_authorities',
     'idempotency_records',
   ] as const
   for (const table of tables) {

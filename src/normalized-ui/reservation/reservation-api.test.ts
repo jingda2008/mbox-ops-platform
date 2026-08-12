@@ -43,13 +43,13 @@ describe('PublicReservationApi', () => {
 
   it('preserves conflict and rate-limit recovery details', async () => {
     const conflictApi = new PublicReservationApi({
-      fetch: vi.fn(async () => json({ error: { code: 'TABLE_ALREADY_RESERVED', message: '这个位置刚刚被预订' } }, 409)) as unknown as typeof fetch,
+      fetch: vi.fn(async () => json({ error: { code: 'RESERVATION_CAPACITY_FULL', message: '这个时段预约已满' } }, 409)) as unknown as typeof fetch,
       createIdempotencyKey: () => 'reservation-command-0001',
     })
-    await expect(conflictApi.createReservation('self_select', {
+    await expect(conflictApi.createReservation('direct', {
       customerName: '王女士', contact: '13800138000', guestCount: 2,
-      arrivalAt: '2026-08-12T20:30:00+08:00', tableCodes: ['VIP1'],
-    })).rejects.toMatchObject({ code: 'TABLE_ALREADY_RESERVED', seatConflict: true })
+      arrivalAt: '2026-08-12T20:30:00+08:00',
+    })).rejects.toMatchObject({ code: 'RESERVATION_CAPACITY_FULL', seatConflict: true })
 
     const retryAt = '2026-08-12T12:00:30.000Z'
     const rateApi = new PublicReservationApi({
@@ -98,7 +98,7 @@ describe('PublicReservationApi', () => {
 function availabilityData() {
   return {
     arrivalAt: '2026-08-12T12:30:00.000Z', expectedEndAt: '2026-08-12T16:30:00.000Z', guestCount: 2,
-    holdMinutes: 20,
+    acceptingReservations: true,
     depositRule: { enabled: false, mode: 'disabled', amountMinor: 0, ruleText: null },
     areas: [{
       code: 'VIP', name: '舞台前区', type: 'vip',

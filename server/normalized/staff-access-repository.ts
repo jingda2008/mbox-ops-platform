@@ -421,6 +421,31 @@ export class StaffAccessRepository {
     return requiredId(result, 'role navigation item')
   }
 
+  async markRoleConfigurationRuntimeManaged(input: Readonly<{
+    roleId: string
+    configurationKind: 'permission' | 'data_scope' | 'approval_limit' | 'navigation'
+    configurationCode: string
+    configuredByEmployeeId: string
+  }>) {
+    await this.assertRole(input.roleId)
+    await this.transaction.query(`
+      INSERT INTO mbox.role_access_configuration_authorities(
+        tenant_id, store_id, role_id, configuration_kind, configuration_code,
+        configured_by_employee_id
+      ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6::uuid)
+      ON CONFLICT (tenant_id, store_id, role_id, configuration_kind, configuration_code) DO UPDATE
+      SET configured_by_employee_id=EXCLUDED.configured_by_employee_id,
+          authority_source='runtime', updated_at=clock_timestamp()
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      input.roleId,
+      input.configurationKind,
+      input.configurationCode,
+      input.configuredByEmployeeId,
+    ])
+  }
+
   private async activeRoles(employeeId: string, at: string) {
     const result = await this.transaction.query<{ code: string; name: string }>(`
       SELECT DISTINCT r.code, r.name

@@ -70,6 +70,7 @@ export interface PublicReservationApiOptions {
 
 interface ReservationPolicyRow extends Record<string, unknown> {
   hold_minutes: number
+  arrival_grace_minutes: number
   max_advance_days: number
   default_duration_minutes: number
   customer_cancel_cutoff_minutes: number
@@ -77,6 +78,11 @@ interface ReservationPolicyRow extends Record<string, unknown> {
   deposit_minor: string | number | null
   deposit_ratio_bps: number | null
   deposit_rule_text: string | null
+}
+
+interface ReservationCapacityRow extends Record<string, unknown> {
+  total_capacity: string | number
+  committed_guests: string | number
 }
 
 interface AvailableTableRow extends Record<string, unknown> {
@@ -123,6 +129,13 @@ class PublicReservationRequestError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'PublicReservationRequestError'
+  }
+}
+
+class PublicReservationCapacityUnavailableError extends Error {
+  constructor() {
+    super('这个时段预约已满，请换个时间或登记候补')
+    this.name = 'PublicReservationCapacityUnavailableError'
   }
 }
 
@@ -187,14 +200,15 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
       validateReservationWindow(arrivalAt, expectedEndAt, now(), policy.max_advance_days)
       await enforceRateLimit(transaction, 'availability', fingerprint({ arrivalAt, expectedEndAt, guestCount }), 30, 60_000)
       const tables = await listReservationTables(transaction, arrivalAt, expectedEndAt, guestCount)
-      return { policy, expectedEndAt, tables }
+      const capacity = await readReservationCapacity(transaction, arrivalAt, expectedEndAt, policy.hold_minutes)
+      return { policy, expectedEndAt, tables, capacity }
     })
     return reply.send({
       data: {
         arrivalAt,
         expectedEndAt: result.expectedEndAt,
         guestCount,
-        holdMinutes: result.policy.hold_minutes,
+        acceptingReservations: capacityAccepts(result.capacity, guestCount),
         depositRule: publicDepositRule(result.policy, null),
         areas: groupPublicTables(result.tables),
       },
@@ -205,7 +219,7 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
     const context = await requireGuest(options, request, 'guest.reservation.update')
     const body = readObject(request.body)
     rejectClaims(body, ['customerId', 'source', 'holdExpiresAt', 'contactToken', 'actor', 'scope'])
-    const mode = readEnum(body.mode, '选位方式', ['direct', 'self_select'] as const)
+    const mode = readEnum(body.mode, '预约方式', ['direct'] as const)
     const customerName = readString(body.customerName, '预约姓名', 1, 128)
     const contact = await options.protectContact(readString(body.contact, '联系方式', 3, 256))
     const guestCount = readInteger(body.guestCount, '人数', 1, 200)
@@ -214,35 +228,29 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
     const seatPreference = body.seatPreference === undefined
       ? 'no_preference'
       : readEnum(body.seatPreference, '座位偏好', SEAT_PREFERENCES)
-    const requestedTableCodes = mode === 'self_select'
-      ? readStringArray(body.tableCodes, '桌位', 1, 4)
-      : []
+    if (body.tableCodes !== undefined) throw new PublicReservationRequestError('预约只登记位置偏好，具体位置到店后由门店安排')
     const idempotencyKey = readIdempotencyKey(request)
     const publicId = readOptionalString(body.publicId, '预约编号', 128) ?? createPublicId('reservation')
     const execution = await options.commands.execute({
       scope: context.scope,
       operationScope: 'public.reservation.create',
       idempotencyKey,
-      requestFingerprint: fingerprint({ mode, customerName, contact: contact.hash, guestCount, arrivalAt, note, seatPreference, requestedTableCodes }),
+      requestFingerprint: fingerprint({ mode, customerName, contact: contact.hash, guestCount, arrivalAt, note, seatPreference }),
       resultCodec: reservationCodec,
     }, async (transaction) => {
       await enforceRateLimit(transaction, 'reservation', hashActor(context.actorRef), 8, 60_000)
-      const policy = await readPolicy(transaction)
+      const policy = await readPolicy(transaction, true)
       const expectedEndAt = body.expectedEndAt === undefined
         ? new Date(Date.parse(arrivalAt) + policy.default_duration_minutes * 60_000).toISOString()
         : readTimestamp(body.expectedEndAt, '预计结束时间')
       validateReservationWindow(arrivalAt, expectedEndAt, now(), policy.max_advance_days)
-      const available = (await listReservationTables(transaction, arrivalAt, expectedEndAt, guestCount))
-        .filter((table) => table.availability_status === 'available')
-      const selected = selectTables(mode, requestedTableCodes, available)
+      const capacity = await readReservationCapacity(transaction, arrivalAt, expectedEndAt, policy.hold_minutes)
+      if (!capacityAccepts(capacity, guestCount)) throw new PublicReservationCapacityUnavailableError()
       const heldUntil = new Date(Math.min(
         Date.parse(arrivalAt),
         now().getTime() + policy.hold_minutes * 60_000,
       )).toISOString()
-      const deposit = publicDepositRule(policy, selected.reduce(
-        (sum, table) => sum + Number(table.minimum_spend_minor ?? 0),
-        0,
-      ))
+      const deposit = publicDepositRule(policy, null)
       const reservation = await new ReservationRepository(transaction).create({
         publicId,
         customerId: context.customerId,
@@ -253,8 +261,15 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
         expectedEndAt,
         source: 'wechat',
         note,
-        reservationSnapshot: { bookingMode: mode, depositRule: deposit, seatPreference },
-        tableIds: selected.map((table) => table.table_id),
+        reservationSnapshot: {
+          bookingMode: mode,
+          depositRule: deposit,
+          seatPreference,
+          requestHoldMinutes: policy.hold_minutes,
+          arrivalGraceMinutes: policy.arrival_grace_minutes,
+        },
+        tableIds: [],
+        allowUnassignedTable: true,
         initialStatus: 'pending',
         holdExpiresAt: heldUntil,
         customerCancelUntil: new Date(
@@ -289,7 +304,10 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
     const maskedContact = contact.masked
     return reply.code(execution.replayed ? 200 : 201).send({
       data: publicReservation(execution.value, maskedContact),
-      meta: { replayed: execution.replayed, holdMinutes: 20 },
+      meta: {
+        replayed: execution.replayed,
+        arrivalGraceMinutes: reservationArrivalGraceMinutes(execution.value.reservationSnapshot),
+      },
     })
   }))
 
@@ -305,7 +323,7 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
     handle(reply, async () => {
       const context = await requireGuest(options, request, 'guest.reservation.update')
       const body = readObject(request.body)
-      rejectClaims(body, ['customerId', 'source', 'status', 'actor', 'scope'])
+      rejectClaims(body, ['customerId', 'source', 'status', 'actor', 'scope', 'tableCodes'])
       const publicId = readPublicId(request.params.publicId)
       const idempotencyKey = readIdempotencyKey(request)
       const execution = await options.commands.execute({
@@ -335,45 +353,21 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
         const seatPreference = body.seatPreference === undefined
           ? reservationSeatPreference(current.reservationSnapshot)
           : readEnum(body.seatPreference, '座位偏好', SEAT_PREFERENCES)
-        const policy = await readPolicy(transaction)
+        const policy = await readPolicy(transaction, true)
         validateReservationWindow(arrivalAt, expectedEndAt, now(), policy.max_advance_days)
-        const requestedCodes = body.tableCodes === undefined
-          ? current.tableLocks.map((lock) => lock.tableCode)
-          : readStringArray(body.tableCodes, '桌位', 1, 4)
+        const capacity = await readReservationCapacity(
+          transaction,
+          arrivalAt,
+          expectedEndAt,
+          policy.hold_minutes,
+          current.id,
+        )
+        if (!capacityAccepts(capacity, guestCount)) throw new PublicReservationCapacityUnavailableError()
         await transaction.query(`
           UPDATE mbox.reservation_table_locks SET status = 'released', hold_expires_at = NULL
           WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND reservation_id = $3::uuid
             AND status IN ('held', 'confirmed')
         `, [transaction.scope.tenantId, transaction.scope.storeId, current.id])
-        const tables = (await listReservationTables(transaction, arrivalAt, expectedEndAt, guestCount))
-          .filter((table) => table.availability_status === 'available')
-        const selected = selectTables('self_select', requestedCodes, tables)
-        const lockStatus = current.status === 'confirmed' ? 'confirmed' : 'held'
-        const holdExpiresAt = lockStatus === 'held'
-          ? new Date(Math.min(Date.parse(arrivalAt), now().getTime() + policy.hold_minutes * 60_000)).toISOString()
-          : null
-        try {
-          await transaction.query(`
-            INSERT INTO mbox.reservation_table_locks (
-              tenant_id, store_id, reservation_id, table_id, reserved_during, status, hold_expires_at
-            ) SELECT $1::uuid, $2::uuid, $3::uuid, table_id,
-              tstzrange($4::timestamptz, $5::timestamptz, '[)'), $6,
-              CASE WHEN $6 = 'held' THEN $7::timestamptz ELSE NULL END
-            FROM unnest($8::uuid[]) AS table_id
-          `, [
-            transaction.scope.tenantId,
-            transaction.scope.storeId,
-            current.id,
-            arrivalAt,
-            expectedEndAt,
-            lockStatus,
-            holdExpiresAt,
-            selected.map((table) => table.table_id),
-          ])
-        } catch (error) {
-          if (postgresCode(error) === '23P01') throw new ReservationConflictError()
-          throw error
-        }
         await transaction.query(`
           UPDATE mbox.reservations
           SET customer_name = $4, guest_count = $5, arrival_at = $6::timestamptz,
@@ -624,17 +618,80 @@ async function ownedReservationInTransaction(
   return reservation
 }
 
-async function readPolicy(transaction: ScopedTransaction): Promise<ReservationPolicyRow> {
+async function readPolicy(transaction: ScopedTransaction, lock = false): Promise<ReservationPolicyRow> {
   const result = await transaction.query<ReservationPolicyRow>(`
-    SELECT hold_minutes, max_advance_days, default_duration_minutes,
+    SELECT hold_minutes, arrival_grace_minutes, max_advance_days, default_duration_minutes,
       customer_cancel_cutoff_minutes, deposit_mode, deposit_minor,
       deposit_ratio_bps, deposit_rule_text
     FROM mbox.public_reservation_policies
     WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+    ${lock ? 'FOR UPDATE' : ''}
   `, [transaction.scope.tenantId, transaction.scope.storeId])
   const row = result.rows[0]
   if (!row) throw new Error('门店预约规则尚未配置')
   return row
+}
+
+async function readReservationCapacity(
+  transaction: ScopedTransaction,
+  arrivalAt: string,
+  expectedEndAt: string,
+  requestHoldMinutes: number,
+  excludeReservationId: string | null = null,
+): Promise<ReservationCapacityRow> {
+  const result = await transaction.query<ReservationCapacityRow>(`
+    SELECT
+      COALESCE((
+        SELECT sum(venue_table.capacity)
+        FROM mbox.tables AS venue_table
+        JOIN mbox.areas AS area
+          ON area.tenant_id = venue_table.tenant_id
+          AND area.store_id = venue_table.store_id
+          AND area.id = venue_table.area_id
+        WHERE venue_table.tenant_id = $1::uuid AND venue_table.store_id = $2::uuid
+          AND venue_table.status = 'available' AND area.status = 'active'
+      ), 0)::text AS total_capacity,
+      COALESCE((
+        SELECT sum(reservation.guest_count)
+        FROM mbox.reservations AS reservation
+        WHERE reservation.tenant_id = $1::uuid AND reservation.store_id = $2::uuid
+          AND ($6::uuid IS NULL OR reservation.id <> $6::uuid)
+          AND tstzrange(reservation.arrival_at, reservation.expected_end_at, '[)')
+            && tstzrange($3::timestamptz, $4::timestamptz, '[)')
+          AND (
+            reservation.status IN ('confirmed', 'arrived', 'seated')
+            OR (
+              reservation.status = 'pending'
+              AND (
+                reservation.source <> 'wechat'
+                OR LEAST(
+                  reservation.arrival_at,
+                  reservation.created_at + make_interval(mins =>
+                    CASE
+                      WHEN reservation.reservation_snapshot->>'requestHoldMinutes' ~ '^[0-9]{1,3}$'
+                        THEN LEAST(120, GREATEST(1,
+                          (reservation.reservation_snapshot->>'requestHoldMinutes')::integer))
+                      ELSE $5::integer
+                    END
+                  )
+                ) > clock_timestamp()
+              )
+            )
+          )
+      ), 0)::text AS committed_guests
+  `, [
+    transaction.scope.tenantId,
+    transaction.scope.storeId,
+    arrivalAt,
+    expectedEndAt,
+    requestHoldMinutes,
+    excludeReservationId,
+  ])
+  return result.rows[0] ?? { total_capacity: 0, committed_guests: 0 }
+}
+
+function capacityAccepts(capacity: ReservationCapacityRow, guestCount: number): boolean {
+  return Number(capacity.total_capacity) >= Number(capacity.committed_guests) + guestCount
 }
 
 async function listReservationTables(
@@ -675,21 +732,6 @@ async function listReservationTables(
       venue_table.capacity, venue_table.code
   `, [transaction.scope.tenantId, transaction.scope.storeId, arrivalAt, expectedEndAt, guestCount])
   return result.rows
-}
-
-function selectTables(
-  mode: 'direct' | 'self_select',
-  requestedCodes: readonly string[],
-  available: readonly AvailableTableRow[],
-): AvailableTableRow[] {
-  if (mode === 'direct') {
-    const first = available[0]
-    if (!first) throw new ReservationTableUnavailableError()
-    return [first]
-  }
-  const selected = requestedCodes.map((code) => available.find((table) => table.table_code === code))
-  if (selected.some((table) => table === undefined)) throw new ReservationTableUnavailableError()
-  return selected as AvailableTableRow[]
 }
 
 async function insertPrivateContact(
@@ -807,10 +849,9 @@ function publicReservation(reservation: Reservation, maskedContact: string): Jso
       : 'not_arrived',
     note: reservation.note,
     seatPreference: reservationSeatPreference(reservation.reservationSnapshot),
-    tableCodes: reservation.tableLocks
-      .filter((lock) => ['held', 'confirmed'].includes(lock.status))
-      .map((lock) => lock.tableCode),
-    holdExpiresAt: reservation.tableLocks.find((lock) => lock.status === 'held')?.holdExpiresAt ?? null,
+    arrivalGraceEndsAt: new Date(
+      Date.parse(reservation.arrivalAt) + reservationArrivalGraceMinutes(reservation.reservationSnapshot) * 60_000,
+    ).toISOString(),
     cancellationPolicy: reservation.cancellationPolicySnapshot,
   }
 }
@@ -844,6 +885,11 @@ function reservationEvent(reservation: Reservation): JsonObject {
 function reservationSeatPreference(snapshot: JsonObject): SeatPreference {
   const value = snapshot.seatPreference
   return SEAT_PREFERENCES.includes(value as SeatPreference) ? value as SeatPreference : 'no_preference'
+}
+
+function reservationArrivalGraceMinutes(snapshot: JsonObject): number {
+  const value = snapshot.arrivalGraceMinutes
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 120 ? value : 10
 }
 
 const reservationCodec: JsonCodec<Reservation> = {
@@ -909,6 +955,9 @@ function mapError(error: unknown): { status: number; code: string; message: stri
   }
   if (error instanceof PublicReservationOwnershipError || error instanceof WaitlistNotFoundError) {
     return { status: 404, code: 'RESERVATION_NOT_FOUND', message: error.message }
+  }
+  if (error instanceof PublicReservationCapacityUnavailableError) {
+    return { status: 409, code: 'RESERVATION_CAPACITY_FULL', message: error.message }
   }
   if (error instanceof ReservationConflictError || error instanceof ReservationTableUnavailableError) {
     return { status: 409, code: 'TABLE_ALREADY_RESERVED', message: '这个位置刚刚被预订，请重新选择' }
@@ -989,15 +1038,6 @@ function readString(value: unknown, label: string, minimum: number, maximum: num
 function readOptionalString(value: unknown, label: string, maximum: number): string | null {
   if (value === undefined || value === null || value === '') return null
   return readString(value, label, 1, maximum)
-}
-
-function readStringArray(value: unknown, label: string, minimum: number, maximum: number): string[] {
-  if (!Array.isArray(value) || value.length < minimum || value.length > maximum) {
-    throw new PublicReservationRequestError(`${label}数量无效`)
-  }
-  const values = value.map((item) => readString(item, label, 1, 32))
-  if (new Set(values).size !== values.length) throw new PublicReservationRequestError(`${label}不能重复`)
-  return values
 }
 
 function readInteger(value: unknown, label: string, minimum: number, maximum: number): number {

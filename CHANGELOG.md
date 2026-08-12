@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.72 - 2026-08-13
+
+- 改为不绑具体桌位的预约申请，并在门店确认后的约定到店时间启动10分钟到店保留。
+- 修正固定桌码未开台、无效入口和开台后的客户引导，不再要求更换静态桌码。
+- 增加全局操作结果定位和服务端复核的管理员权限控制中心。
+- 将权限、审批、数据范围和岗位入口改为服务端目录与单项运行时接管，版本初始化不覆盖现场已配置项目。
+- 删除规范化KDS、支付、退款、通知和调价对旧岗位能力数组的授权回退。
+
 ## 1.0.0-rc.71 - 2026-08-12
 
 - Replaced the obsolete aggregate-runtime migration command in Alibaba Cloud activation with the normalized migrator that is actually shipped in the immutable image.

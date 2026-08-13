@@ -3,7 +3,7 @@ import { basename, extname, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const textExtensions = new Set([
-  '.csv', '.html', '.js', '.json', '.jsonl', '.log', '.md', '.mjs', '.sha256', '.svg', '.ts', '.txt', '.xml', '.yaml', '.yml',
+  '.csv', '.html', '.js', '.json', '.jsonl', '.log', '.md', '.mjs', '.sh', '.sha256', '.svg', '.ts', '.txt', '.xml', '.yaml', '.yml',
 ])
 
 const extensionlessTextFiles = new Set(['SHA256SUMS'])

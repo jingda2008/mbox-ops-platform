@@ -9,7 +9,15 @@ test('accepts checksums and bounded operational evidence', async () => {
   const root = await mkdtemp(join(tmpdir(), 'mbox-safe-evidence-'))
   await writeFile(join(root, 'manifest.json'), JSON.stringify({ releaseSha: 'a'.repeat(40), status: 'passed' }))
   await writeFile(join(root, 'SHA256SUMS'), `${'b'.repeat(64)}  manifest.json\n`)
+  await writeFile(join(root, 'verify-release.sh'), '#!/bin/sh\nset -eu\nprintf "verified\\n"\n')
   assert.deepEqual(await inspectEvidenceDirectory(root), [])
+})
+
+test('inspects shell scripts for credentials instead of rejecting the extension', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mbox-shell-evidence-'))
+  await writeFile(join(root, 'deploy.sh'), `#!/bin/sh\nAPI_KEY=sk-${'x'.repeat(24)}\n`)
+  const findings = await inspectEvidenceDirectory(root)
+  assert.deepEqual(findings, [{ file: 'deploy.sh', rule: 'model-api-key', line: 2 }])
 })
 
 test('reports secret and privacy classes without echoing matched values', async () => {

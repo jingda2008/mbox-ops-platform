@@ -32,6 +32,8 @@ test('tag release downloads and verifies exact checksummed CI evidence bundles',
 
 test('CI separates successful evidence from failed diagnostics and keeps uploads non-authoritative', async () => {
   const workflow = await readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8')
+  const packageDocument = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
+  assert.match(packageDocument.scripts.check, /npm run typecheck:web/)
   assert.match(
     workflow,
     /name: Upload successful runtime evidence\n\s+if: success\(\)\n\s+continue-on-error: true/,

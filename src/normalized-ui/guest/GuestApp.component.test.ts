@@ -122,7 +122,7 @@ describe('GuestApp', () => {
       businessDate: '2026-08-13',
       capabilities: ['guest.order.create'],
     }
-    expect(guestCartStorageKey({ ...base, expiresAt: '2026-08-13T16:00:00.000Z', cartScope: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }))
-      .not.toBe(guestCartStorageKey({ ...base, expiresAt: '2026-08-13T18:00:00.000Z', cartScope: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' }))
+    expect(guestCartStorageKey({ ...base, cartScope: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }))
+      .not.toBe(guestCartStorageKey({ ...base, cartScope: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' }))
   })
 })

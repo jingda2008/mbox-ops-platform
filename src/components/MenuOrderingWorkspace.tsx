@@ -18,6 +18,7 @@ import { productAvailability } from '../shared/product-availability'
 import { GuestRecommendationTools, type GuestRecommendationContext } from './GuestRecommendationTools'
 import './MenuOrderingWorkspace.css'
 import { filterMenuProducts } from './menu-search'
+import { clearPersistedCart, persistCart, readPersistedCart } from './menu-cart-storage'
 
 export interface MenuCartItem {
   productId: string
@@ -123,6 +124,7 @@ interface MenuOrderingWorkspaceProps {
   guestSalesMode?: boolean
   partySize?: number
   recommendationScene?: MenuRecommendationScene
+  cartStorageKey?: string
   onSubmit: (items: MenuCartItem[], options: MenuSubmitOptions) => Promise<void>
   onInteraction?: (interaction: MenuInteraction) => void
   onCartCountChange?: (itemCount: number) => void
@@ -147,9 +149,10 @@ export function MenuOrderingWorkspace({
   guestSalesMode = false,
   partySize = 1,
   recommendationScene,
+  cartStorageKey,
   onCartCountChange,
 }: MenuOrderingWorkspaceProps) {
-  const [cart, setCart] = useState<Record<string, number>>({})
+  const [cart, setCart] = useState<Record<string, number>>(() => readPersistedCart(cartStorageKey))
   const [categoryId, setCategoryId] = useState('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [clock, setClock] = useState(() => Date.now() + clockOffsetMs)
@@ -175,6 +178,7 @@ export function MenuOrderingWorkspace({
   const previousRecommendationIdsRef = useRef('')
   const cartAbandonmentRef = useRef('')
   const suggestedUpgradeSourceIdsRef = useRef(new Set<string>())
+  useEffect(() => persistCart(cartStorageKey, cart), [cart, cartStorageKey])
   useEffect(() => {
     const updateClock = () => setClock(Date.now() + clockOffsetMs)
     updateClock()
@@ -506,6 +510,7 @@ export function MenuOrderingWorkspace({
         { confirmedDuplicateOrderId: duplicateOrderId, fulfillmentNote: fulfillmentNote.trim() },
       )
       setCart({})
+      clearPersistedCart(cartStorageKey)
       setFulfillmentNote('')
       setCartOpen(false)
       setLastSubmittedAt(Date.now())

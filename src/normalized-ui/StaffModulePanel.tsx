@@ -13,19 +13,11 @@ import {
   ShieldCheck,
 } from 'lucide-react'
 import { NormalizedApiClient, NormalizedApiError, type StaffAuthView } from '../normalized-api'
+import { CashierAfterSalesWorkbench } from './CashierAfterSalesWorkbench'
 import { StaffAccessManagementPanel } from './StaffAccessManagementPanel'
 import './staff-module-panel.css'
 
 export type StaffModule = 'payments' | 'performance' | 'inventory' | 'operations' | 'devices' | 'settings'
-
-interface ReconciliationEntry extends Record<string, unknown> {
-  id: string
-  entryType: string
-  amountMinor: number
-  currency: string
-  provider: string
-  occurredAt: string
-}
 
 interface ScheduleEntry extends Record<string, unknown> {
   id: string
@@ -105,8 +97,6 @@ interface EmployeeSalesView {
 }
 
 interface ModuleData {
-  reconciliation: ReconciliationEntry[]
-  pendingPayments: number
   performance: PerformanceView | null
   songRequests: SongRequestEntry[]
   inventory: InventoryView | null
@@ -117,8 +107,6 @@ interface ModuleData {
 }
 
 const emptyData: ModuleData = {
-  reconciliation: [],
-  pendingPayments: 0,
   performance: null,
   songRequests: [],
   inventory: null,
@@ -137,21 +125,14 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
   const [message, setMessage] = useState<string | null>(null)
   const [data, setData] = useState<ModuleData>(emptyData)
+  const [paymentRefreshToken, setPaymentRefreshToken] = useState(0)
 
   const load = useCallback(async () => {
     setPhase('loading')
     setMessage(null)
     try {
       if (module === 'payments') {
-        const [response, bootstrap] = await Promise.all([
-          api.getEndpoint<{ data: unknown }>('/api/reconciliation?limit=50'),
-          api.getStaffBootstrap(),
-        ])
-        setData({
-          ...emptyData,
-          reconciliation: reconciliationEntries(response.data),
-          pendingPayments: bootstrap.data?.domainSummaries.find((summary) => summary.key === 'payments')?.activeCount ?? 0,
-        })
+        setData(emptyData)
       } else if (module === 'performance') {
         const [performance, requests] = await Promise.all([
           api.getEndpoint<{ data: unknown }>('/api/staff/performances/today'),
@@ -197,14 +178,19 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
 
   const content = useMemo(() => {
     if (module === 'payments') {
-      return <PaymentsModule entries={data.reconciliation} pendingPayments={data.pendingPayments} />
+      return <CashierAfterSalesWorkbench
+        api={api}
+        auth={auth}
+        onLoginRequired={onLoginRequired}
+        refreshToken={paymentRefreshToken}
+      />
     }
     if (module === 'performance') return <PerformanceModule view={data.performance} requests={data.songRequests} />
     if (module === 'inventory') return <InventoryModule view={data.inventory} />
     if (module === 'operations') return <OperationsModule view={data.profit} sales={data.employeeSales} canViewProfit={auth.permissions.includes('commercial.profit.view')} />
     if (module === 'devices') return <DevicesModule devices={data.devices} jobs={data.printJobs} />
     return <SettingsModule api={api} auth={auth} />
-  }, [api, auth, data, module])
+  }, [api, auth, data, module, onLoginRequired, paymentRefreshToken])
 
   const modulePresentation = {
     payments: { title: '收银与退款', icon: CircleDollarSign },
@@ -220,7 +206,12 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
     <header>
       <span><Icon size={20} /></span>
       <div><small>岗位工作面</small><h1>{title}</h1></div>
-      <button type="button" aria-label={`刷新${title}`} onClick={() => void load()} disabled={phase === 'loading'}>
+      <button
+        type="button"
+        aria-label={`刷新${title}`}
+        onClick={() => module === 'payments' ? setPaymentRefreshToken((value) => value + 1) : void load()}
+        disabled={phase === 'loading'}
+      >
         <RefreshCw size={18} className={phase === 'loading' ? 'is-spinning' : ''} />
       </button>
     </header>
@@ -228,28 +219,6 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
     {phase === 'error' && <div className="staff-module-state is-error" role="alert"><strong>暂时没有接上</strong><p>{message}</p><button type="button" onClick={() => void load()}>重试</button></div>}
     {phase === 'ready' && content}
   </section>
-}
-
-function PaymentsModule({ entries, pendingPayments }: {
-  entries: ReconciliationEntry[]
-  pendingPayments: number
-}) {
-  return <div className="staff-module-body">
-    <div className={`staff-module-summary${pendingPayments > 0 ? ' has-attention' : ''}`}>
-      <span><CheckCircle2 size={18} /></span>
-      <div>
-        <strong>{pendingPayments} 笔待确认支付 · {entries.length} 笔已确认流水</strong>
-        <small>{pendingPayments > 0 ? '测试支付、未回调支付或待人工报送款项尚未入账' : '当前没有等待确认的支付'}</small>
-      </div>
-    </div>
-    {entries.length === 0 ? <EmptyState text="本营业日暂无已确认收款或退款" /> : <div className="staff-module-list">
-      {entries.map((entry) => <article key={entry.id}>
-        <div><strong>{entry.entryType === 'refund' ? '退款' : entry.entryType === 'payment' ? '收款' : '账务调整'}</strong><small>{entry.provider} · {formatTime(entry.occurredAt)}</small></div>
-        <b className={entry.entryType === 'refund' ? 'is-negative' : ''}>{entry.entryType === 'refund' ? '-' : '+'}¥{formatAmount(entry.amountMinor)}</b>
-      </article>)}
-    </div>}
-    <p className="staff-module-footnote">退款仍需按权限完成申请、审批和人工执行；本页不会自动越权退款。</p>
-  </div>
 }
 
 function PerformanceModule({ view, requests }: { view: PerformanceView | null; requests: SongRequestEntry[] }) {
@@ -321,18 +290,6 @@ function SettingsModule({ api, auth }: { api: NormalizedApiClient; auth: StaffAu
 
 function EmptyState({ text }: { text: string }) {
   return <div className="staff-module-empty"><CheckCircle2 size={22} /><strong>{text}</strong><span>有新数据时刷新后会自动出现。</span></div>
-}
-
-function reconciliationEntries(value: unknown): ReconciliationEntry[] {
-  if (!Array.isArray(value)) return []
-  return value.flatMap((entry) => isRecord(entry)
-    && typeof entry.id === 'string'
-    && typeof entry.entryType === 'string'
-    && typeof entry.amountMinor === 'number'
-    && typeof entry.currency === 'string'
-    && typeof entry.provider === 'string'
-    && typeof entry.occurredAt === 'string'
-    ? [entry as ReconciliationEntry] : [])
 }
 
 function performanceView(value: unknown): PerformanceView | null {

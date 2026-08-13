@@ -26,6 +26,8 @@ esac
 case "${object_prefix}" in *..*) echo 'OSS object prefix must not contain ..' >&2; exit 1 ;; esac
 test -d "${source_dir}"
 test -f "${source_dir}/SHA256SUMS"
+test ! -e "${source_dir}/_OBJECTS.json"
+test ! -e "${source_dir}/_COMPLETE.json"
 (
   cd "${source_dir}"
   sha256sum --check SHA256SUMS >/dev/null
@@ -43,7 +45,8 @@ test -n "${role_name}"
 oss_options=(--mode "${auth_mode}" --region "${region}" --endpoint "${endpoint}")
 verification_dir=$(mktemp -d)
 objects_json=$(mktemp)
-trap 'rm -rf "${verification_dir}"; rm -f "${objects_json}" "${objects_json}.next"' EXIT
+objects_manifest=$(mktemp)
+trap 'rm -rf "${verification_dir}"; rm -f "${objects_json}" "${objects_json}.next" "${objects_manifest}" "${completion_marker:-}"' EXIT
 printf '[]\n' > "${objects_json}"
 
 while IFS= read -r -d '' file; do
@@ -68,12 +71,45 @@ done < <(find "${source_dir}" -type f ! -path "${report}" -print0 | sort -z)
 generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 jq -n \
   --arg generatedAt "${generated_at}" \
+  --arg prefix "${object_prefix%/}" \
+  --slurpfile objects "${objects_json}" \
+  '{schemaVersion:1,generatedAt:$generatedAt,prefix:$prefix,objects:$objects[0]}' \
+  > "${objects_manifest}"
+objects_manifest_sha=$(sha256sum "${objects_manifest}" | awk '{print $1}')
+objects_manifest_key="${object_prefix%/}/_OBJECTS.json"
+objects_manifest_target="oss://${bucket}/${objects_manifest_key}"
+ossutil cp "${objects_manifest}" "${objects_manifest_target}" --force "${oss_options[@]}" >/dev/null
+objects_manifest_download="${verification_dir}/_OBJECTS.json"
+ossutil cp "${objects_manifest_target}" "${objects_manifest_download}" --force "${oss_options[@]}" >/dev/null
+test "$(sha256sum "${objects_manifest_download}" | awk '{print $1}')" = "${objects_manifest_sha}"
+jq -e --arg prefix "${object_prefix%/}" --argjson count "$(jq 'length' "${objects_json}")" \
+  '.schemaVersion == 1 and .prefix == $prefix and (.objects | length) == $count' \
+  "${objects_manifest_download}" >/dev/null
+completion_marker=$(mktemp)
+jq -n \
+  --arg completedAt "${generated_at}" \
+  --arg prefix "${object_prefix%/}" \
+  --arg objectsManifest "${objects_manifest_key}" \
+  --arg objectsManifestSha256 "${objects_manifest_sha}" \
+  --argjson objectCount "$(jq 'length' "${objects_json}")" \
+  '{schemaVersion:1,completedAt:$completedAt,prefix:$prefix,objectCount:$objectCount,objectsManifest:$objectsManifest,objectsManifestSha256:$objectsManifestSha256,verified:true}' \
+  > "${completion_marker}"
+marker_target="oss://${bucket}/${object_prefix%/}/_COMPLETE.json"
+ossutil cp "${completion_marker}" "${marker_target}" --force "${oss_options[@]}" >/dev/null
+marker_download="${verification_dir}/_COMPLETE.json"
+ossutil cp "${marker_target}" "${marker_download}" --force "${oss_options[@]}" >/dev/null
+test "$(sha256sum "${marker_download}" | awk '{print $1}')" = "$(sha256sum "${completion_marker}" | awk '{print $1}')"
+jq -n \
+  --arg generatedAt "${generated_at}" \
   --arg bucket "${bucket}" \
   --arg prefix "${object_prefix}" \
   --arg endpoint "${endpoint}" \
   --arg roleName "${role_name}" \
+  --arg completionMarker "${object_prefix%/}/_COMPLETE.json" \
+  --arg objectsManifest "${objects_manifest_key}" \
+  --arg objectsManifestSha256 "${objects_manifest_sha}" \
   --slurpfile objects "${objects_json}" \
-  '{schemaVersion:1,generatedAt:$generatedAt,bucket:$bucket,prefix:$prefix,endpoint:$endpoint,authMode:"EcsRamRole",roleName:$roleName,objects:$objects[0],verified:true}' \
+  '{schemaVersion:1,generatedAt:$generatedAt,bucket:$bucket,prefix:$prefix,endpoint:$endpoint,authMode:"EcsRamRole",roleName:$roleName,completionMarker:$completionMarker,objectsManifest:$objectsManifest,objectsManifestSha256:$objectsManifestSha256,objects:$objects[0],verified:true}' \
   > "${report}"
 chmod 0600 "${report}"
 printf 'oss_upload=verified\nreport=%s\nobjects=%s\n' "${report}" "$(jq '.objects | length' "${report}")"

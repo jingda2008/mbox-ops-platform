@@ -465,12 +465,16 @@ jobs:
           node scripts/generate-migration-manifest.mjs \
             --directory database/normalized-migrations \
             --output release-artifact/migration-manifest.json >/dev/null
+          cp deploy/normalized-store/mbox-lujiazui.store.json release-artifact/
+          cp config/menu-catalog-2026-07-27.json release-artifact/
           MBOX_BUNDLE_ARCHIVE="${archive}" \
           MBOX_BUNDLE_SHA="${GITHUB_SHA}" \
           MBOX_BUNDLE_VERSION="${VERSION}" \
           MBOX_BUNDLE_IMAGE_TAG="${IMAGE_TAG}" \
           MBOX_BUNDLE_IMAGE_DIGEST="${image_digest}" \
           MBOX_MIGRATION_MANIFEST=release-artifact/migration-manifest.json \
+          MBOX_STORE_CONFIG=release-artifact/mbox-lujiazui.store.json \
+          MBOX_CATALOG_CONFIG=release-artifact/menu-catalog-2026-07-27.json \
           MBOX_BUNDLE_MANIFEST=release-artifact/release-manifest.json \
             node scripts/write-release-bundle-manifest.mjs >/dev/null
           (

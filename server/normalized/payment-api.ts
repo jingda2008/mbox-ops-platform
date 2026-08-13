@@ -8,6 +8,8 @@ import {
   IdempotencyRecordError,
 } from './command-executor.js'
 import type { PaymentCommandService } from './payment-command-service.js'
+import type { CashierWorkbenchView } from '../../src/shared/cashier-workbench-contracts.js'
+import type { CashierWorkbenchQueryInput } from './cashier-workbench-query.js'
 import {
   OrderNotPayableError,
   PaymentCallbackMismatchError,
@@ -134,10 +136,15 @@ export interface ReconciliationQueryPort {
   list(input: Readonly<ReconciliationListInput>): Promise<ReconciliationListResult>
 }
 
+export interface CashierWorkbenchQueryPort {
+  get(input: Readonly<CashierWorkbenchQueryInput>): Promise<CashierWorkbenchView>
+}
+
 export interface PaymentApiOptions {
   commands: PaymentCommandPort
   providerVerifier: PaymentProviderVerifier
   reconciliationQuery: ReconciliationQueryPort
+  cashierWorkbenchQuery: CashierWorkbenchQueryPort
   resolveActorContext(request: FastifyRequest): Promise<PaymentApiActorContext> | PaymentApiActorContext
   resolveStaffContext(request: FastifyRequest): Promise<PaymentApiStaffContext> | PaymentApiStaffContext
   resolveProviderBusinessDate(
@@ -451,6 +458,27 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
     })
     return reply.send({ data: result.entries, meta: { nextCursor: result.nextCursor } })
   }))
+
+  app.get('/payments/workbench', async (request, reply) => handleRoute(reply, async () => {
+    const context = await resolveStaffContext(options, request)
+    requireAnyStaffCapability(context, [
+      'reconciliation.view',
+      'payment.manual.cash.record',
+      'payment.manual.pos.record',
+      'refund.approve',
+      'refund.execute',
+    ])
+    const query = readObject(request.query, '查询参数')
+    const result = await options.cashierWorkbenchQuery.get({
+      scope: context.scope,
+      employeeId: context.employeeId,
+      businessDate: context.businessDate,
+      capabilities: context.capabilities,
+      query: readOptionalString(query.query, 'query', 64) ?? undefined,
+      limit: query.limit === undefined ? 50 : readInteger(query.limit, 'limit', 1, 100),
+    })
+    return reply.send({ data: result })
+  }))
 }
 
 async function refundDecisionRoute(
@@ -507,6 +535,15 @@ async function resolveStaffContext(
 function requireStaffCapability(context: PaymentApiStaffContext, capability: string): void {
   if (!context.capabilities.includes(capability)) {
     throw new PaymentAuthorizationError(`Employee lacks financial capability: ${capability}`)
+  }
+}
+
+function requireAnyStaffCapability(
+  context: PaymentApiStaffContext,
+  capabilities: readonly string[],
+): void {
+  if (!capabilities.some((capability) => context.capabilities.includes(capability))) {
+    throw new PaymentAuthorizationError('Employee lacks a cashier workbench capability')
   }
 }
 

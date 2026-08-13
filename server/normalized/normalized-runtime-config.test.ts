@@ -23,7 +23,13 @@ describe('loadNormalizedRuntimeConfig', () => {
       metricsToken: null,
       guestPaymentMode: 'simulation',
       inventoryEnforcementMode: 'audit_only',
+      guestOrderSafetyPolicy: {
+        duplicateWindowSeconds: 45,
+        maxOrdersPerCustomerPerMinute: 5,
+        maxOrdersPerTablePerMinute: 20,
+      },
       schemaFlavor: NORMALIZED_SCHEMA_FLAVOR,
+      releaseImageDigest: null,
       port: 3_000,
       poolMax: 12,
       workerPoolMax: 4,
@@ -32,6 +38,17 @@ describe('loadNormalizedRuntimeConfig', () => {
       workerIntervalMs: 2_000,
       workerAdapterModule: null,
     })
+  })
+
+  it('accepts only an immutable release image digest', () => {
+    expect(loadNormalizedRuntimeConfig({
+      ...base,
+      MBOX_RELEASE_IMAGE_DIGEST: `sha256:${'a'.repeat(64)}`,
+    }).releaseImageDigest).toBe(`sha256:${'a'.repeat(64)}`)
+    expect(() => loadNormalizedRuntimeConfig({
+      ...base,
+      MBOX_RELEASE_IMAGE_DIGEST: 'mbox-normalized:latest',
+    })).toThrowError(NormalizedRuntimeConfigurationError)
   })
 
   it('fails closed without core production configuration and never includes secret values', () => {
@@ -101,6 +118,24 @@ describe('loadNormalizedRuntimeConfig', () => {
       inventoryEnforcementMode: 'audit_only',
       startWorkers: false,
     })
+  })
+
+  it('loads configurable guest duplicate and rate limits and rejects an invalid table limit', () => {
+    expect(loadNormalizedRuntimeConfig({
+      ...base,
+      MBOX_GUEST_ORDER_DUPLICATE_WINDOW_SECONDS: '60',
+      MBOX_GUEST_ORDER_CUSTOMER_LIMIT_PER_MINUTE: '4',
+      MBOX_GUEST_ORDER_TABLE_LIMIT_PER_MINUTE: '12',
+    }).guestOrderSafetyPolicy).toEqual({
+      duplicateWindowSeconds: 60,
+      maxOrdersPerCustomerPerMinute: 4,
+      maxOrdersPerTablePerMinute: 12,
+    })
+    expect(() => loadNormalizedRuntimeConfig({
+      ...base,
+      MBOX_GUEST_ORDER_CUSTOMER_LIMIT_PER_MINUTE: '8',
+      MBOX_GUEST_ORDER_TABLE_LIMIT_PER_MINUTE: '4',
+    })).toThrowError(NormalizedRuntimeConfigurationError)
   })
 
   it('rejects invalid deployment tiers and a production tier outside NODE_ENV production', () => {

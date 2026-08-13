@@ -295,6 +295,7 @@ export async function provisionNormalizedStore(input: {
   environment?: Readonly<Record<string, string | undefined>>
   now?: Date
   sourceCommitSha?: string
+  client?: Client
 }): Promise<ProvisionSummary> {
   const environment = input.environment ?? process.env
   const hasher = new ScryptCredentialHasher()
@@ -311,14 +312,15 @@ export async function provisionNormalizedStore(input: {
     throw new Error(`Missing store credential environment: ${input.config.dailyCredentialEnv}`)
   }
   const dailyCredentialHash = dailyCredential ? await hasher.hash(dailyCredential) : null
-  const client = new Client({ connectionString: input.databaseUrl, application_name: 'mbox-normalized-provisioner' })
-  await client.connect()
+  const ownsClient = input.client === undefined
+  const client = input.client ?? new Client({ connectionString: input.databaseUrl, application_name: 'mbox-normalized-provisioner' })
+  if (ownsClient) await client.connect()
   try {
     // The advisory transaction lock serializes provisioning. READ COMMITTED is
     // intentional here: a transaction waiting for the lock must see the
     // configuration committed by the previous provisioner instead of keeping
     // a stale SERIALIZABLE snapshot and failing with 40001 after the wait.
-    await client.query('BEGIN ISOLATION LEVEL READ COMMITTED')
+    if (ownsClient) await client.query('BEGIN ISOLATION LEVEL READ COMMITTED')
     await client.query(`SELECT pg_advisory_xact_lock(hashtext('mbox.normalized.store.provision'))`)
     const schema = await client.query<{ schema_flavor: string; schema_version: string }>(
       'SELECT schema_flavor, schema_version FROM mbox.normalized_schema_metadata WHERE singleton = true',
@@ -463,7 +465,7 @@ export async function provisionNormalizedStore(input: {
       JSON.stringify({ areaCount: input.config.areas.length, tableCount: input.config.tables.length,
         roleCount: input.config.roles.length, employeeCount: input.config.employees.length }),
     ])
-    await client.query('COMMIT')
+    if (ownsClient) await client.query('COMMIT')
     return {
       tenantId: tenant.id, storeId: store.id, areaCount: input.config.areas.length,
       tableCount: input.config.tables.length, roleCount: input.config.roles.length,
@@ -473,10 +475,10 @@ export async function provisionNormalizedStore(input: {
       configSha256,
     }
   } catch (error) {
-    await client.query('ROLLBACK').catch(() => undefined)
+    if (ownsClient) await client.query('ROLLBACK').catch(() => undefined)
     throw error
   } finally {
-    await client.end()
+    if (ownsClient) await client.end()
   }
 }
 

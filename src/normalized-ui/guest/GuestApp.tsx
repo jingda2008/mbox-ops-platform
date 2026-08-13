@@ -25,6 +25,7 @@ import {
 } from './guest-api'
 import {
   formatMoney,
+  guestCartStorageKey,
   parseGuestAccess,
   parseGuestTableCode,
   safeIdempotencyKey,
@@ -62,7 +63,7 @@ const moods: ReadonlyArray<{ code: GuestMood; asset: string; label: string }> = 
 
 const guestOrderSafety = {
   enabled: true,
-  duplicateWindowSeconds: 600,
+  duplicateWindowSeconds: 45,
   maxOrdersPerMinute: 5,
   requireSubmitConfirmation: true,
   requireContinuationConfirmationSeconds: 120,
@@ -74,6 +75,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const [gateMessage, setGateMessage] = useState('正在连接您的桌位…')
   const [gateRefreshing, setGateRefreshing] = useState(false)
   const [table, setTable] = useState<GuestSessionView['table'] | null>(null)
+  const [cartStorageKey, setCartStorageKey] = useState<string | undefined>()
   const [products, setProducts] = useState<GuestMenuProduct[]>([])
   const [partySize, setPartySize] = useState(1)
   const [recommendationScene, setRecommendationScene] = useState<MenuRecommendationScene | undefined>()
@@ -156,11 +158,13 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     }
     setTable(session.table)
     if (session.status === 'waiting_for_table') {
+      setCartStorageKey(undefined)
       setPhase('waiting')
       setGateReason('waiting')
       setGateMessage(session.message ?? '座位正在准备中，请稍候。')
       return false
     }
+    setCartStorageKey(guestCartStorageKey(session))
     qrCredentialRef.current = null
     setPhase('ready')
     return true
@@ -312,7 +316,13 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     haptic(8)
     try {
       const result = await api.submitOrder(
-        { items, note: options.fulfillmentNote || null },
+        {
+          items,
+          note: options.fulfillmentNote || null,
+          ...(options.confirmedDuplicateOrderId
+            ? { confirmedDuplicateOrderId: options.confirmedDuplicateOrderId }
+            : {}),
+        },
         { idempotencyKey: safeIdempotencyKey('guest-order') },
       )
       setOrderResult(result)
@@ -320,7 +330,14 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       notify('订单已经送达吧台与收银。', 'success')
       void loadTableOrders(true)
     } catch (error) {
-      if (!blockForSession(error)) throw error
+      if (error instanceof GuestApiError
+        && error.code === 'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED') {
+        throw new ApiError(error.message, error.status ?? 409, error.code, error.details)
+      }
+      if (blockForSession(error)) {
+        throw new ApiError('订单没有提交，已为您保留购物车。重新扫码并开台后可继续。', 401, 'GUEST_SESSION_RECONNECT_REQUIRED')
+      }
+      throw error
     } finally {
       orderSubmittingRef.current = false
       setSubmittingOrder(false)
@@ -377,6 +394,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       {menuError !== null && <div className="guest-inline-error" role="alert"><AlertCircle /><span>{menuError}</span><button type="button" onClick={() => void loadMenu()}>重试</button></div>}
       {menuLoading && menuProducts.length === 0 ? <div className="guest-menu-loading"><LoaderCircle className="is-spinning" /> 正在准备菜单</div> : (
         <MenuOrderingWorkspace
+          key={cartStorageKey}
           products={menuProducts}
           tableLabel={table?.displayName ?? table?.code ?? ''}
           submitLabel="确认订单并微信支付"
@@ -388,6 +406,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
           guestSalesMode
           partySize={partySize}
           recommendationScene={recommendationScene}
+          cartStorageKey={cartStorageKey}
           onSubmit={submitOrder}
         />
       )}
@@ -414,15 +433,22 @@ function findRecentDuplicateOrder(
   items: readonly { productId: string; quantity: number }[],
 ): { orderId: string; names: string[] } | null {
   const cutoff = Date.now() - guestOrderSafety.duplicateWindowSeconds * 1_000
-  const requested = new Set(items.map((item) => item.productId))
+  const requested = basketFingerprint(items)
   for (const order of orders) {
     if (Date.parse(order.createdAt) < cutoff) continue
-    const names = order.items
-      .filter((item) => item.status !== 'cancelled' && requested.has(item.productId))
-      .map((item) => item.name)
-    if (names.length > 0) return { orderId: order.publicId, names: [...new Set(names)] }
+    const activeItems = order.items.filter((item) => item.status !== 'cancelled')
+    const ordered = basketFingerprint(activeItems)
+    if (ordered !== requested) continue
+    return { orderId: order.publicId, names: [...new Set(activeItems.map((item) => item.name))] }
   }
   return null
+}
+
+function basketFingerprint(items: readonly { productId: string; quantity: number }[]): string {
+  return [...items]
+    .sort((left, right) => left.productId.localeCompare(right.productId))
+    .map((item) => `${item.productId}:${item.quantity}`)
+    .join('|')
 }
 
 export function GuestGate({ reason, message, table, refreshing, onRetry }: {

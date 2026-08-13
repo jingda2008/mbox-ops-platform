@@ -1,10 +1,12 @@
 import { lstat, readFile, readdir } from 'node:fs/promises'
-import { extname, relative, resolve } from 'node:path'
+import { basename, extname, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const textExtensions = new Set([
-  '', '.csv', '.html', '.js', '.json', '.jsonl', '.log', '.md', '.mjs', '.sha256', '.svg', '.ts', '.txt', '.xml', '.yaml', '.yml',
+  '.csv', '.html', '.js', '.json', '.jsonl', '.log', '.md', '.mjs', '.sha256', '.svg', '.ts', '.txt', '.xml', '.yaml', '.yml',
 ])
+
+const extensionlessTextFiles = new Set(['SHA256SUMS'])
 
 const forbiddenArtifactExtensions = new Set([
   '.env', '.gif', '.jpeg', '.jpg', '.mov', '.mp3', '.mp4', '.pdf', '.png', '.webp', '.wav',
@@ -66,8 +68,23 @@ export async function inspectEvidenceDirectory(rootInput) {
       findings.push({ file, rule: 'uninspectable-or-sensitive-artifact' })
       continue
     }
-    if (!textExtensions.has(extension)) continue
-    const content = await readFile(path, 'utf8')
+    if ((!extension && !extensionlessTextFiles.has(basename(path)))
+      || (extension && !textExtensions.has(extension))) {
+      findings.push({ file, rule: 'unapproved-artifact-extension' })
+      continue
+    }
+    const bytes = await readFile(path)
+    let content
+    try {
+      content = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+    } catch {
+      findings.push({ file, rule: 'invalid-text-encoding' })
+      continue
+    }
+    if (content.includes('\0')) {
+      findings.push({ file, rule: 'binary-content-in-text-artifact' })
+      continue
+    }
     for (const rule of rules) {
       const match = rule.expression.exec(content)
       if (match) findings.push({ file, rule: rule.id, line: content.slice(0, match.index).split('\n').length })

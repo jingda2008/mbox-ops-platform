@@ -39,7 +39,7 @@ const product: GuestMenuProduct = {
     minimumPartySize: 1, maximumPartySize: 100,
     sceneTags: [], intentTags: [], tasteTags: [], dwellTags: [],
     singleWaveEligible: true, expectedPrepMinutes: 8, holdMinutes: 10,
-    upgradeProductId: null, contributionPositive: true,
+    upgradeProductId: null,
   },
   available: true,
 }

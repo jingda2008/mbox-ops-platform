@@ -44,12 +44,22 @@ image_tag=$(read_manifest imageTag)
 image_digest=$(read_manifest imageDigest)
 archive_name=$(read_manifest archive)
 archive_sha=$(read_manifest archiveSha256)
+store_config_name=$(read_manifest configuration.store.file)
+store_config_sha=$(read_manifest configuration.store.sha256)
+catalog_config_name=$(read_manifest configuration.catalog.file)
+catalog_config_sha=$(read_manifest configuration.catalog.sha256)
 
 [[ "${release_sha}" =~ ^[0-9a-f]{40}$ ]]
 [[ "${image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
 [[ "${archive_name}" != */* ]]
 test "${MBOX_RELEASE_TAG}" = "v${release_version}"
 test -f "${bundle_dir}/${archive_name}"
+for config_name in "${store_config_name}" "${catalog_config_name}"; do
+  [[ "${config_name}" != */* ]]
+  test -f "${bundle_dir}/${config_name}"
+done
+test "$(shasum -a 256 "${bundle_dir}/${store_config_name}" | awk '{print $1}')" = "${store_config_sha}"
+test "$(shasum -a 256 "${bundle_dir}/${catalog_config_name}" | awk '{print $1}')" = "${catalog_config_sha}"
 
 actual_archive_sha=$(shasum -a 256 "${bundle_dir}/${archive_name}" | awk '{print $1}')
 test "${actual_archive_sha}" = "${archive_sha}"
@@ -102,6 +112,8 @@ rm -rf "${release_metadata}"
 mkdir -p "${release_metadata}"
 cp "${bundle_dir}/release-manifest.json" "${release_metadata}/"
 cp "${bundle_dir}/migration-manifest.json" "${release_metadata}/"
+cp "${bundle_dir}/${store_config_name}" "${release_metadata}/"
+cp "${bundle_dir}/${catalog_config_name}" "${release_metadata}/"
 evidence_dir=${bundle_dir}/oss-ready-evidence
 node scripts/build-aliyun-evidence-bundle.mjs \
   --output "${evidence_dir}" \
@@ -151,7 +163,7 @@ rsync -a --partial "${rsync_resume_option}" \
   -e "ssh -i '${ssh_key}' -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p '${ssh_port}'" \
   "${bundle_dir}/" "${ssh_target}:${remote_release_dir}/"
 
-for helper in upload-oss-verified.sh stage-release-evidence.sh send-sls-events.sh prune-oss-images.sh; do
+for helper in upload-oss-verified.sh stage-release-evidence.sh send-sls-events.sh prune-oss-images.sh rollback-activated-release.sh; do
   scp "${scp_options[@]}" "deploy/aliyun/${helper}" "${ssh_target}:${remote_release_dir}/${helper}"
 done
 ssh "${ssh_options[@]}" "${ssh_target}" \
@@ -161,11 +173,15 @@ ssh "${ssh_options[@]}" "${ssh_target}" \
   bash -s -- "${remote_release_dir}" "${deployment_tier}" "${public_url}" "${backup_max_age_minutes}" \
   < deploy/aliyun/activate-release.sh
 
-MBOX_RELEASE_SMOKE_URL="${public_url}" \
-MBOX_RELEASE_EXPECTED_SHA="${release_sha}" \
-MBOX_RELEASE_EXPECTED_DIGEST="${image_digest}" \
-MBOX_RELEASE_EXPECTED_SCHEMA_VERSION="$(read_manifest migration.count)" \
-  npm run release:verify
+if ! MBOX_RELEASE_SMOKE_URL="${public_url}" \
+  MBOX_RELEASE_EXPECTED_SHA="${release_sha}" \
+  MBOX_RELEASE_EXPECTED_DIGEST="${image_digest}" \
+  MBOX_RELEASE_EXPECTED_SCHEMA_VERSION="$(read_manifest migration.count)" \
+    npm run release:verify; then
+  ssh "${ssh_options[@]}" "${ssh_target}" \
+    "'${remote_release_dir}/rollback-activated-release.sh' '${remote_release_dir}' '${public_url}'"
+  exit 1
+fi
 
 mkdir -p "${bundle_dir}/deployment"
 scp "${scp_options[@]}" \

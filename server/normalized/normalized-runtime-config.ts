@@ -1,5 +1,6 @@
 import { isAbsolute } from 'node:path'
 import type { GuestCheckoutPaymentMode } from './guest-commerce-service-api.js'
+import type { GuestOrderSafetyPolicy } from './guest-order-safety.js'
 
 export const NORMALIZED_SCHEMA_FLAVOR = 'normalized-core-v1'
 
@@ -21,7 +22,9 @@ export interface NormalizedRuntimeConfig {
   payment: NormalizedPaymentRuntimeConfig | null
   guestPaymentMode: GuestCheckoutPaymentMode
   inventoryEnforcementMode: 'strict' | 'audit_only'
+  guestOrderSafetyPolicy: Readonly<GuestOrderSafetyPolicy>
   commitSha: string
+  releaseImageDigest: string | null
   schemaFlavor: typeof NORMALIZED_SCHEMA_FLAVOR
   host: string
   port: number
@@ -71,10 +74,41 @@ export function loadNormalizedRuntimeConfig(
     commercialProduction,
     errors,
   )
+  const guestOrderSafetyPolicy = Object.freeze({
+    duplicateWindowSeconds: readInteger(
+      environment.MBOX_GUEST_ORDER_DUPLICATE_WINDOW_SECONDS,
+      'MBOX_GUEST_ORDER_DUPLICATE_WINDOW_SECONDS',
+      45,
+      1,
+      600,
+      errors,
+    ),
+    maxOrdersPerCustomerPerMinute: readInteger(
+      environment.MBOX_GUEST_ORDER_CUSTOMER_LIMIT_PER_MINUTE,
+      'MBOX_GUEST_ORDER_CUSTOMER_LIMIT_PER_MINUTE',
+      5,
+      1,
+      100,
+      errors,
+    ),
+    maxOrdersPerTablePerMinute: readInteger(
+      environment.MBOX_GUEST_ORDER_TABLE_LIMIT_PER_MINUTE,
+      'MBOX_GUEST_ORDER_TABLE_LIMIT_PER_MINUTE',
+      20,
+      1,
+      500,
+      errors,
+    ),
+  })
+  if (guestOrderSafetyPolicy.maxOrdersPerTablePerMinute
+    < guestOrderSafetyPolicy.maxOrdersPerCustomerPerMinute) {
+    errors.push('MBOX_GUEST_ORDER_TABLE_LIMIT_PER_MINUTE')
+  }
   const port = readInteger(environment.PORT, 'PORT', 3_000, 1, 65_535, errors)
   const poolMax = readInteger(environment.MBOX_DATABASE_POOL_MAX, 'MBOX_DATABASE_POOL_MAX', 12, 2, 100, errors)
   const workerPoolMax = readInteger(environment.MBOX_WORKER_DATABASE_POOL_MAX, 'MBOX_WORKER_DATABASE_POOL_MAX', 4, 2, 12, errors)
   const commitSha = readCommitSha(environment.APP_COMMIT_SHA ?? environment.GITHUB_SHA)
+  const releaseImageDigest = readImageDigest(environment.MBOX_RELEASE_IMAGE_DIGEST, errors)
   const staticDir = optional(environment.MBOX_STATIC_DIR)
   const startWorkers = readBoolean(environment.MBOX_START_WORKERS, false, 'MBOX_START_WORKERS', errors)
   if (commercialProduction && !startWorkers) errors.push('MBOX_START_WORKERS')
@@ -106,7 +140,9 @@ export function loadNormalizedRuntimeConfig(
     payment,
     guestPaymentMode,
     inventoryEnforcementMode,
+    guestOrderSafetyPolicy,
     commitSha,
+    releaseImageDigest,
     schemaFlavor: NORMALIZED_SCHEMA_FLAVOR,
     host: optional(environment.HOST) ?? '0.0.0.0',
     port,
@@ -118,6 +154,16 @@ export function loadNormalizedRuntimeConfig(
     workerIntervalMs,
     workerAdapterModule,
   })
+}
+
+function readImageDigest(value: string | undefined, errors: string[]): string | null {
+  const normalized = optional(value)
+  if (normalized === null) return null
+  if (!/^sha256:[0-9a-f]{64}$/.test(normalized)) {
+    errors.push('MBOX_RELEASE_IMAGE_DIGEST')
+    return null
+  }
+  return normalized
 }
 
 function readInventoryEnforcementMode(

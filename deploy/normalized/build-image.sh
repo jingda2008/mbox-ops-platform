@@ -27,6 +27,11 @@ fi
 
 require_apply_confirmation NORMALIZED_BUILD_CONFIRM 'BUILD_NORMALIZED_IMAGE'
 require_tool docker
+require_tool git
+actual_head_sha="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+[[ "$actual_head_sha" == "$APP_COMMIT_SHA" ]] || die 'APP_COMMIT_SHA does not match the checked-out commit'
+[[ -z "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all)" ]] \
+  || die 'refusing to build release evidence from a dirty worktree'
 docker build \
   --platform "$TARGET_PLATFORM" \
   --file "${REPO_ROOT}/Dockerfile.normalized" \

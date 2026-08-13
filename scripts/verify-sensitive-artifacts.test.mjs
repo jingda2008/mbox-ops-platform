@@ -37,3 +37,16 @@ test('rejects credentials embedded in text and media that cannot be privacy-insp
   assert.equal(findings.filter((finding) => finding.rule === 'uninspectable-or-sensitive-artifact').length, 2)
   assert.equal(JSON.stringify(findings).includes('abcdefghijklmnopqrstuvwxyz123456'), false)
 })
+
+test('rejects unknown file types instead of silently skipping them', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mbox-unknown-evidence-'))
+  await writeFile(join(root, 'opaque.bin'), Buffer.from([0x00, 0x01, 0x02]))
+  await writeFile(join(root, 'opaque'), Buffer.from([0x00, 0x01, 0x02]))
+  await writeFile(join(root, 'invalid.txt'), Buffer.from([0xc3, 0x28]))
+  const findings = await inspectEvidenceDirectory(root)
+  assert.deepEqual(findings, [
+    { file: 'invalid.txt', rule: 'invalid-text-encoding' },
+    { file: 'opaque', rule: 'unapproved-artifact-extension' },
+    { file: 'opaque.bin', rule: 'unapproved-artifact-extension' },
+  ])
+})

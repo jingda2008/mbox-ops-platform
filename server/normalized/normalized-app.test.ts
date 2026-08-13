@@ -31,7 +31,13 @@ const config: NormalizedRuntimeConfig = {
   payment: null,
   guestPaymentMode: 'simulation',
   inventoryEnforcementMode: 'audit_only',
+  guestOrderSafetyPolicy: {
+    duplicateWindowSeconds: 45,
+    maxOrdersPerCustomerPerMinute: 5,
+    maxOrdersPerTablePerMinute: 20,
+  },
   commitSha: 'abcdef1234567890',
+  releaseImageDigest: null,
   schemaFlavor: NORMALIZED_SCHEMA_FLAVOR,
   host: '127.0.0.1',
   port: 3_000,
@@ -100,6 +106,7 @@ describe('createNormalizedApp', () => {
     expect(live.json()).toEqual({
       status: 'live',
       commitSha: config.commitSha,
+      releaseImageDigest: null,
       schemaFlavor: NORMALIZED_SCHEMA_FLAVOR,
       deploymentTier: 'validation',
       inventoryEnforcementMode: 'audit_only',
@@ -108,6 +115,7 @@ describe('createNormalizedApp', () => {
     expect(version.statusCode).toBe(200)
     expect(version.json()).toEqual({
       commitSha: config.commitSha,
+      releaseImageDigest: null,
       schemaFlavor: NORMALIZED_SCHEMA_FLAVOR,
       deploymentTier: 'validation',
       inventoryEnforcementMode: 'audit_only',
@@ -129,6 +137,7 @@ describe('createNormalizedApp', () => {
       status: 'ready',
       schemaVersion: NORMALIZED_MIN_SCHEMA_VERSION,
       commitSha: config.commitSha,
+      releaseImageDigest: null,
       schemaFlavor: NORMALIZED_SCHEMA_FLAVOR,
       deploymentTier: 'validation',
       inventoryEnforcementMode: 'audit_only',

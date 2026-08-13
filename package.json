@@ -1,7 +1,7 @@
 {
   "name": "@mbox/ops-platform",
   "private": true,
-  "version": "1.0.0-rc.77",
+  "version": "1.0.0-rc.78",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n API,WEB -c yellow,cyan \"npm:dev:api\" \"npm:dev:web\"",
@@ -46,7 +46,7 @@
     "architecture:normalized:new": "node scripts/verify-normalized-new-code.mjs",
     "architecture:normalized:zero": "node scripts/verify-normalized-architecture.mjs --require-zero",
     "ci:classifier:test": "node --test scripts/ci-change-scope.test.mjs",
-    "quality:evidence:test": "node --test scripts/verify-quality-evidence.test.mjs scripts/write-ci-quality-evidence.test.mjs",
+    "quality:evidence:test": "node --test scripts/verify-quality-evidence.test.mjs scripts/write-ci-quality-evidence.test.mjs scripts/release-evidence-eligibility.test.mjs",
     "quality:evidence:verify": "node scripts/verify-quality-evidence.mjs",
     "quality:tc-register:test": "node --test scripts/verify-tc-register.test.mjs scripts/build-tc-reviewed-baseline.test.mjs scripts/verify-quality-model.test.mjs scripts/load-workload-model.test.mjs scripts/merge-rc68-load-reports.test.mjs",
     "quality:tc-register:verify": "node scripts/verify-tc-register.mjs",

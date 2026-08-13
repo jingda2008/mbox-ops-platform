@@ -42,7 +42,7 @@ function product(index: number) {
       minimumPartySize: 1, maximumPartySize: 100,
       sceneTags: [], intentTags: [], tasteTags: [], dwellTags: [],
       singleWaveEligible: true, expectedPrepMinutes: 8, holdMinutes: 10,
-      upgradeProductId: null, contributionPositive: true,
+      upgradeProductId: null,
     },
     available: true,
   }
@@ -56,6 +56,7 @@ describe('GuestApiClient', () => {
       table: { code: 'W01', displayName: '室外 W01' },
       businessDate: '2026-08-11',
       expiresAt: '2026-08-12T02:00:00.000Z',
+      cartScope: 'abcdefghijklmnopqrstuvwxyzABCDEF',
       capabilities: ['guest.menu.read'],
     } }))
     const client = new GuestApiClient(deviceKey, { fetch: send })
@@ -92,6 +93,7 @@ describe('GuestApiClient', () => {
     const result = await client.submitOrder({
       items: [{ productId: '55555555-5555-4555-8555-555555555555', quantity: 2 }],
       note: '少冰，生日桌',
+      confirmedDuplicateOrderId: 'guest-order-existing-0001',
     }, { idempotencyKey: 'guest-order-test-0001' })
 
     expect(result.payment).toMatchObject({ status: 'pending', simulated: false })
@@ -100,6 +102,25 @@ describe('GuestApiClient', () => {
     expect(JSON.parse(String(init?.body))).toEqual({
       items: [{ productId: '55555555-5555-4555-8555-555555555555', quantity: 2 }],
       note: '少冰，生日桌',
+      confirmedDuplicateOrderId: 'guest-order-existing-0001',
+    })
+  })
+
+  it('preserves server duplicate details for the confirmation dialog', async () => {
+    const send = vi.fn(async () => jsonResponse({ error: {
+      code: 'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED',
+      message: '本桌刚提交过相同商品，请确认这是继续加单而不是重复操作',
+      details: { conflictingOrderId: 'guest-order-existing-0001' },
+    } }, 409))
+    const client = new GuestApiClient(deviceKey, { fetch: send })
+
+    await expect(client.submitOrder({
+      items: [{ productId: '55555555-5555-4555-8555-555555555555', quantity: 1 }],
+      note: null,
+    }, { idempotencyKey: 'guest-order-duplicate-0001' })).rejects.toMatchObject({
+      status: 409,
+      code: 'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED',
+      details: { conflictingOrderId: 'guest-order-existing-0001' },
     })
   })
 

@@ -23,6 +23,44 @@ async function expectNoHorizontalOverflow(page: import('@playwright/test').Page)
   expect(dimensions.page).toBeLessThanOrEqual(dimensions.viewport + 1)
 }
 
+async function expectReservationTouchTargets(page: import('@playwright/test').Page) {
+  const undersized = await page.locator('[data-testid="reservation-booking"] button, [data-testid="reservation-booking"] input, [data-testid="reservation-booking"] select, [data-testid="reservation-booking"] textarea')
+    .evaluateAll((elements) => elements
+      .filter((element) => {
+        const style = getComputedStyle(element)
+        const rect = element.getBoundingClientRect()
+        return style.visibility !== 'hidden' && style.display !== 'none' && (rect.width < 44 || rect.height < 44)
+      })
+      .map((element) => {
+        const rect = element.getBoundingClientRect()
+        return {
+          label: element.getAttribute('aria-label') ?? element.textContent?.trim() ?? element.tagName,
+          width: rect.width,
+          height: rect.height,
+        }
+      }))
+  expect(undersized).toEqual([])
+}
+
+async function expectCashierTouchTargets(page: import('@playwright/test').Page) {
+  const undersized = await page.locator('.cashier-workbench button, .cashier-workbench input, .cashier-workbench textarea')
+    .evaluateAll((elements) => elements
+      .filter((element) => {
+        const style = getComputedStyle(element)
+        const rect = element.getBoundingClientRect()
+        return style.visibility !== 'hidden' && style.display !== 'none' && (rect.width < 44 || rect.height < 44)
+      })
+      .map((element) => {
+        const rect = element.getBoundingClientRect()
+        return {
+          label: element.getAttribute('aria-label') ?? element.textContent?.trim() ?? element.tagName,
+          width: rect.width,
+          height: rect.height,
+        }
+      }))
+  expect(undersized).toEqual([])
+}
+
 async function fixture(): Promise<Fixture> {
   return JSON.parse(await readFile(
     process.env.NORMALIZED_E2E_FIXTURE_FILE ?? 'artifacts/normalized-browser/fixture.json',
@@ -143,6 +181,10 @@ test('narrow mobile guest keeps mood and service controls compact above the menu
       expect(quickAddBox!.height).toBeGreaterThanOrEqual(44)
       await quickAdd.click()
       await expect(checkoutDock).toContainText('已选 1 件')
+      await page.screenshot({ path: 'artifacts/normalized-browser/audit-rc78-guest-menu-cart-320.png', fullPage: true })
+    }
+    if (width === 390) {
+      await page.screenshot({ path: 'artifacts/normalized-browser/audit-rc78-guest-menu-390.png', fullPage: true })
     }
     await expectNoHorizontalOverflow(page)
 
@@ -177,6 +219,12 @@ test('mobile guest, reservation and staff work surfaces have no serious accessib
   const staffHome = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze()
   expect(staffHome.violations.filter((violation) => violation.impact === 'serious' || violation.impact === 'critical')).toEqual([])
 
+  await page.getByRole('button', { name: '预约到店', exact: true }).first().click()
+  await expect(page.getByRole('heading', { name: '确认预约与到店' })).toBeVisible()
+  const staffReservations = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze()
+  expect(staffReservations.violations.filter((violation) => violation.impact === 'serious' || violation.impact === 'critical')).toEqual([])
+
+  await page.getByRole('button', { name: '工作台', exact: true }).click()
   await page.getByRole('button', { name: '现场', exact: true }).first().click()
   await expect(page.getByRole('heading', { name: '找到桌台，直接处理' })).toBeVisible()
   const staffActions = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze()
@@ -274,15 +322,20 @@ test('confirmed reservation starts its ten-minute arrival retention only at the 
   await expect(page.getByText('VIP1')).toHaveCount(0)
   await expect(page.getByText(/临时锁位/)).toHaveCount(0)
   await expectNoHorizontalOverflow(page)
+  await page.screenshot({ path: 'artifacts/normalized-browser/audit-rc78-reservation/reservation-confirmed-arrival-grace-430.png', fullPage: true })
 })
 
 test('submitted reservation keeps its receipt and gives actionable guidance if status lookup is unavailable', async ({ page }) => {
   const data = await fixture()
+  await page.clock.install()
+  await page.setViewportSize({ width: 320, height: 568 })
+  let statusLookupAttempts = 0
   await page.route('**/api/public/reservations/reservation-*', async (route) => {
     if (route.request().method() !== 'GET') {
       await route.continue()
       return
     }
+    statusLookupAttempts += 1
     await route.fulfill({
       status: 404,
       contentType: 'application/json',
@@ -300,12 +353,115 @@ test('submitted reservation keeps its receipt and gives actionable guidance if s
   await page.getByRole('button', { name: '提交预约申请' }).click()
   await expect(page.getByRole('heading', { name: '等待门店确认' })).toBeVisible()
   await expect(page).toHaveURL(/reservation=reservation-/)
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
+
+  await page.clock.fastForward(16_000)
+  await expect.poll(() => statusLookupAttempts).toBe(1)
+  await expect(page.getByRole('alert')).toContainText('自动查询已暂停')
+  const noticeBox = await page.getByRole('alert').boundingBox()
+  expect(noticeBox).not.toBeNull()
+  expect(noticeBox!.y).toBeGreaterThanOrEqual(0)
+  expect(noticeBox!.y + noticeBox!.height).toBeLessThanOrEqual(568)
+  await page.screenshot({ path: 'artifacts/normalized-browser/audit-rc78-reservation/reservation-status-sync-paused-320.png', fullPage: true })
+  await page.clock.fastForward(60_000)
+  expect(statusLookupAttempts).toBe(1)
 
   await page.getByRole('button', { name: '刷新确认状态' }).click()
+  await expect.poll(() => statusLookupAttempts).toBe(2)
   await expect(page.getByRole('alert')).toContainText('请勿重复提交')
   await expect(page.getByRole('alert')).toContainText('预约编号')
   await expect(page.getByText('没有找到对应预约')).toHaveCount(0)
   await expect(page.getByText(/reservation-[0-9a-f-]{36}/)).toBeVisible()
+  await page.clock.fastForward(60_000)
+  expect(statusLookupAttempts).toBe(2)
+})
+
+test('opening a missing reservation link reports once without creating a 4xx polling loop', async ({ page }) => {
+  await page.clock.install()
+  let statusLookupAttempts = 0
+  await page.route('**/api/public/reservation/session', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ data: { status: 'active' } }),
+  }))
+  await page.route('**/api/public/reservations/reservation-missing-001', (route) => {
+    statusLookupAttempts += 1
+    return route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        error: { code: 'RESERVATION_NOT_FOUND', message: '没有找到对应预约' },
+      }),
+    })
+  })
+
+  await page.goto('/reserve?reservation=reservation-missing-001')
+
+  await expect(page.getByRole('alert')).toContainText('没有查到这条预约')
+  await expect.poll(() => statusLookupAttempts).toBe(1)
+  await page.clock.fastForward(60_000)
+  expect(statusLookupAttempts).toBe(1)
+})
+
+test('reservation actions keep mobile touch targets at least 44px through confirm and cancel states', async ({ page }) => {
+  const data = await fixture()
+  await page.setViewportSize({ width: 320, height: 568 })
+  await page.goto(data.reservationUrl)
+  await expect(page.getByTestId('reservation-booking')).toBeVisible()
+  await expectReservationTouchTargets(page)
+  await page.screenshot({ path: 'artifacts/normalized-browser/audit-rc78-reservation/reservation-initial-320.png', fullPage: true })
+
+  await page.getByLabel('怎么称呼您').fill('触控验收')
+  await page.getByLabel('手机或微信').fill('13800138004')
+  await page.getByRole('button', { name: /核对预约信息/ }).click()
+  await expect(page.getByRole('heading', { name: '提交预约申请' })).toBeVisible()
+  await expectReservationTouchTargets(page)
+  await page.screenshot({ path: 'artifacts/normalized-browser/audit-rc78-reservation/reservation-confirm-320.png', fullPage: true })
+
+  await page.getByRole('button', { name: '提交预约申请', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '等待门店确认' })).toBeVisible()
+  await page.getByRole('button', { name: '取消预约' }).click()
+  await expect(page.getByRole('button', { name: '暂不取消' })).toBeVisible()
+  await expectReservationTouchTargets(page)
+  await page.waitForTimeout(160)
+  await page.screenshot({ path: 'artifacts/normalized-browser/audit-rc78-reservation/reservation-pending-cancel-320.png', fullPage: true })
+  const pendingAccessibility = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze()
+  expect(pendingAccessibility.violations.filter((violation) => violation.impact === 'serious' || violation.impact === 'critical')).toEqual([])
+})
+
+test('reservation status polling stops after one session renewal is still rejected', async ({ page }) => {
+  const data = await fixture()
+  await page.clock.install()
+  let statusLookupAttempts = 0
+  await page.route('**/api/public/reservations/reservation-*', async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.continue()
+      return
+    }
+    statusLookupAttempts += 1
+    await route.fulfill({
+      status: 401,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        error: { code: 'RESERVATION_SESSION_INVALID', message: '预约连接已失效，请重新连接' },
+      }),
+    })
+  })
+
+  await page.goto(data.reservationUrl)
+  await expect(page.getByText('预约服务在线')).toBeVisible()
+  await page.getByLabel('怎么称呼您').fill('续签失败验收')
+  await page.getByLabel('手机或微信').fill('13800138003')
+  await page.getByRole('button', { name: /核对预约信息/ }).click()
+  await page.getByRole('button', { name: '提交预约申请' }).click()
+  await expect(page.getByRole('heading', { name: '等待门店确认' })).toBeVisible()
+
+  await page.clock.fastForward(16_000)
+  await expect.poll(() => statusLookupAttempts).toBe(2)
+  await expect(page.getByRole('button', { name: '重新连接' })).toBeVisible()
+  await expect(page.getByRole('alert')).toContainText('预约连接已失效')
+  await page.clock.fastForward(60_000)
+  expect(statusLookupAttempts).toBe(2)
 })
 
 test('mobile manager completes device verification and reaches role-scoped workspace', async ({ page }) => {
@@ -340,6 +496,36 @@ test('mobile manager completes device verification and reaches role-scoped works
   await page.getByRole('button', { name: '预约到店', exact: true }).first().click()
   await expect(page.getByText('预约与到店', { exact: true })).toBeVisible()
   await expect(page.getByText('规范化改造中')).toHaveCount(0)
+})
+
+test('mobile manager can review but cannot execute cashier refund work', async ({ page }) => {
+  const data = await fixture()
+  await page.setViewportSize({ width: 320, height: 800 })
+  await page.route('**/api/payments/workbench?*', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ data: cashierWorkbenchFixture() }),
+  }))
+  await page.goto(data.staffUrl)
+  await page.getByLabel('门店口令').fill(data.dailyCredential)
+  await page.getByRole('button', { name: /验证设备/ }).click()
+  await page.getByLabel('员工账号').fill(data.employeeCode)
+  await page.getByLabel('四位 PIN').fill(data.employeePin)
+  await page.getByRole('button', { name: /进入工作台/ }).click()
+
+  await page.getByRole('button', { name: '退款审批', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '收银与退款' })).toBeVisible()
+  await expect(page.getByText('待审批')).toBeVisible()
+  await page.getByRole('button', { name: /VIP1.*¥88\.00/ }).click()
+  await expect(page.getByText('原订单商品')).toBeVisible()
+  await expect(page.getByLabel('审批说明')).toBeVisible()
+  await expect(page.getByRole('button', { name: '同意' })).toBeVisible()
+  await expect(page.getByRole('button', { name: /进入渠道待处理/ })).toHaveCount(0)
+  await expectCashierTouchTargets(page)
+  await expectNoHorizontalOverflow(page)
+  const accessibility = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze()
+  expect(accessibility.violations.filter((violation) => violation.impact === 'serious' || violation.impact === 'critical')).toEqual([])
+  await page.screenshot({ path: 'artifacts/normalized-browser/audit-rc78-cashier/manager-refund-review-320.png', fullPage: true })
 })
 
 test('mobile administrator publishes a permission and sees server-verified feedback in view', async ({ page }) => {
@@ -430,3 +616,83 @@ test('mobile manager assists an open table order and gifts a product without mix
   await giftSheet.getByRole('button', { name: '确认赠送并出品' }).click()
   await expect(page.getByRole('status')).toContainText('W01 商品已赠送并发送出品')
 })
+
+function cashierWorkbenchFixture() {
+  return {
+    businessDate: '2026-08-13',
+    query: '',
+    actions: {
+      canRequestRefund: true,
+      canApproveRefund: true,
+      canExecuteRefund: false,
+      canViewReconciliation: false,
+    },
+    summary: {
+      orderCount: 1,
+      capturedPaymentCount: 1,
+      requestedRefundCount: 1,
+      processingRefundCount: 0,
+    },
+    orders: [{
+      id: 'order-browser-refund-001',
+      publicId: 'ORDER-VIP1-BROWSER-001',
+      tableCode: 'VIP1',
+      channel: 'staff_assisted',
+      status: 'completed',
+      paymentStatus: 'paid',
+      totalAmountMinor: 8_800,
+      currency: 'CNY',
+      submittedAt: '2026-08-13T12:00:00.000Z',
+      createdAt: '2026-08-13T11:59:00.000Z',
+      items: [{
+        id: 'item-browser-refund-001',
+        productName: '精酿啤酒',
+        quantity: 1,
+        totalAmountMinor: 8_800,
+        status: 'delivered',
+      }],
+      payments: [{
+        id: 'payment-browser-refund-001',
+        publicId: 'PAYMENT-BROWSER-001',
+        provider: 'postar',
+        method: 'native_qr',
+        providerTransactionId: 'POSTAR-BROWSER-001',
+        amountMinor: 8_800,
+        currency: 'CNY',
+        status: 'succeeded',
+        succeededAt: '2026-08-13T12:02:00.000Z',
+        createdAt: '2026-08-13T12:01:00.000Z',
+        reservedRefundAmountMinor: 1_000,
+        remainingRefundableMinor: 7_800,
+        refundableItems: [{
+          id: 'item-browser-refund-001',
+          productName: '精酿啤酒',
+          quantity: 1,
+          totalAmountMinor: 8_800,
+          status: 'delivered',
+          reservedRefundAmountMinor: 1_000,
+          remainingRefundableMinor: 7_800,
+        }],
+        refunds: [{
+          id: 'refund-browser-001',
+          publicId: 'REFUND-BROWSER-001',
+          paymentId: 'payment-browser-refund-001',
+          providerRefundId: null,
+          amountMinor: 1_000,
+          currency: 'CNY',
+          status: 'requested',
+          reason: '商品未出品',
+          requestedByEmployeeId: '00000000-0000-4000-8000-000000000099',
+          requestedByEmployeeName: '三沐',
+          approvedByEmployeeId: null,
+          approvedByEmployeeName: null,
+          decisionReason: null,
+          receiptReference: null,
+          completedAt: null,
+          createdAt: '2026-08-13T12:05:00.000Z',
+          allocations: [{ orderItemId: 'item-browser-refund-001', amountMinor: 1_000 }],
+        }],
+      }],
+    }],
+  }
+}

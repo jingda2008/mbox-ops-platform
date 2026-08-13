@@ -12,6 +12,10 @@ import type {
   SubmittedCommerceResult,
 } from './commerce-command-service.js'
 import {
+  GuestOrderDuplicateConfirmationRequiredError,
+  GuestOrderRateLimitedError,
+} from './guest-order-safety.js'
+import {
   GuestBehaviorRepository,
   GuestBehaviorSessionUnavailableError,
 } from './guest-behavior-repository.js'
@@ -135,6 +139,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       lines: input.items,
       note: input.note,
       createdByCustomerId: context.customerId,
+      confirmedDuplicateOrderPublicId: input.confirmedDuplicateOrderId,
     })
     const payment = await initiateGuestPayment(options, context, orderExecution.value, idempotencyKey, createPublicId)
     return reply.code(orderExecution.replayed ? 200 : 201).send(
@@ -398,6 +403,12 @@ async function searchGuestCatalog(
         ELSE 0
       END DESC,
       CASE WHEN product.product_kind = 'bundle' THEN 0 ELSE 1 END,
+      CASE
+        WHEN product.product_snapshot ->> 'costAmount' ~ '^\\d{1,12}$'
+          AND price.amount_minor > (product.product_snapshot ->> 'costAmount')::bigint
+        THEN price.amount_minor - (product.product_snapshot ->> 'costAmount')::bigint
+        ELSE 0
+      END DESC,
       product.category_code, product.name, product.id
     LIMIT $7 OFFSET $8
   `, [
@@ -450,8 +461,9 @@ function publicCatalogProduct(row: CatalogMenuRow) {
 function publicRecommendation(snapshot: JsonObject, amountMinor: number | null) {
   const source = jsonObject(snapshot.recommendation)
   const costAmount = boundedInteger(snapshot.costAmount, 0, Number.MAX_SAFE_INTEGER, amountMinor ?? 0)
+  const serverApproved = amountMinor !== null && amountMinor > costAmount
   return {
-    enabled: source.enabled === true,
+    enabled: source.enabled === true && serverApproved,
     priority: boundedInteger(source.priority, 0, 1_000, 100),
     badge: publicString(source.badge) ?? '',
     headline: publicString(source.headline) ?? '',
@@ -469,7 +481,6 @@ function publicRecommendation(snapshot: JsonObject, amountMinor: number | null) 
       && /^[0-9a-f-]{36}$/i.test(source.upgradeProductId)
       ? source.upgradeProductId
       : null,
-    contributionPositive: amountMinor !== null && amountMinor > costAmount,
   }
 }
 
@@ -667,8 +678,9 @@ function serviceResponse(result: GuestServiceCommandResult) {
 function readGuestOrder(value: unknown): {
   items: Array<{ productId: string; quantity: number; note?: string | null }>
   note: string | null
+  confirmedDuplicateOrderId: string | null
 } {
-  const body = readStrictObject(value, '请求正文', ['items', 'note'])
+  const body = readStrictObject(value, '请求正文', ['items', 'note', 'confirmedDuplicateOrderId'])
   if (!Array.isArray(body.items) || body.items.length < 1 || body.items.length > 50) {
     throw new GuestApiRequestError('ORDER_ITEMS_INVALID', '请选择1至50项商品后再下单')
   }
@@ -684,7 +696,15 @@ function readGuestOrder(value: unknown): {
     const note = readOptionalString(item.note, `items[${index}].note`, 300)
     return { productId, quantity, note }
   })
-  return { items, note: readOptionalString(body.note, 'note', 500) }
+  const confirmedDuplicateOrderId = readOptionalString(
+    body.confirmedDuplicateOrderId,
+    'confirmedDuplicateOrderId',
+    128,
+  )
+  if (confirmedDuplicateOrderId !== null && confirmedDuplicateOrderId.length < 8) {
+    throw new GuestApiRequestError('DUPLICATE_CONFIRMATION_INVALID', '重复订单确认信息无效')
+  }
+  return { items, note: readOptionalString(body.note, 'note', 500), confirmedDuplicateOrderId }
 }
 
 function readServiceRequest(value: unknown): { requestType: GuestServiceRequestType; detail: string | null } {
@@ -774,6 +794,24 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<unknown
     }
     if (error instanceof OrderProductUnavailableError) {
       return reply.code(409).send({ error: { code: 'PRODUCT_UNAVAILABLE', message: '有商品暂时无法供应，请返回购物车调整后再试' } })
+    }
+    if (error instanceof GuestOrderDuplicateConfirmationRequiredError) {
+      return reply.code(409).send({ error: {
+        code: 'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED',
+        message: error.message,
+        details: {
+          conflictingOrderId: error.conflictingOrderPublicId,
+          conflictingOrderCreatedAt: error.conflictingOrderCreatedAt,
+        },
+      } })
+    }
+    if (error instanceof GuestOrderRateLimitedError) {
+      return reply.code(429).send({ error: {
+        code: 'GUEST_ORDER_RATE_LIMITED',
+        message: error.message,
+        retryAt: error.retryAt,
+        details: { dimension: error.dimension },
+      } })
     }
     if (error instanceof OrderNotPayableError) {
       return reply.code(409).send({ error: { code: 'ORDER_NOT_PAYABLE', message: '订单已提交，但当前无法创建支付，请稍后重试或呼叫服务员' } })

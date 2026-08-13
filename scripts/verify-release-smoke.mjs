@@ -8,6 +8,7 @@ const waitMs = Number(process.env.MBOX_RELEASE_SMOKE_WAIT_MS ?? 5_000)
 if (!baseUrl || !expectedSha || !expectedDigest) {
   throw new Error('release smoke requires URL, expected SHA and expected digest')
 }
+if (!/^[0-9a-f]{40}$/.test(expectedSha)) throw new Error('expected SHA is not a full commit identity')
 if (!/^sha256:[0-9a-f]{64}$/.test(expectedDigest)) throw new Error('expected digest is not immutable')
 if (!Number.isInteger(expectedSchemaVersion) || expectedSchemaVersion < 1) {
   throw new Error('expected schema version is invalid')
@@ -25,11 +26,12 @@ for (let attempt = 1; attempt <= attempts; attempt += 1) {
       response.status !== 200 && `HTTP ${response.status}`,
       body.status !== 'ready' && `status=${body.status}`,
       body.commitSha !== expectedSha && `commitSha=${body.commitSha}`,
+      body.releaseImageDigest !== expectedDigest && `releaseImageDigest=${body.releaseImageDigest ?? 'missing'}`,
       body.schemaFlavor !== 'normalized-core-v1' && `schemaFlavor=${body.schemaFlavor}`,
       Number(body.schemaVersion) < expectedSchemaVersion && `schemaVersion=${body.schemaVersion}`,
     ].filter(Boolean)
     if (failures.length === 0) {
-      process.stdout.write(`${JSON.stringify({ verified: true, url: baseUrl, releaseSha: body.commitSha, digest: expectedDigest, schemaVersion: body.schemaVersion })}\n`)
+      process.stdout.write(`${JSON.stringify({ verified: true, url: baseUrl, releaseSha: body.commitSha, digest: body.releaseImageDigest, schemaVersion: body.schemaVersion })}\n`)
       process.exit(0)
     }
     lastFailure = failures.join(', ')

@@ -14,6 +14,10 @@ import {
   type AssistedOrderContextProof,
 } from './assisted-order-context.js'
 import { InventoryRepository, type InventoryConsumption } from './inventory-repository.js'
+import {
+  GuestOrderSafetyRepository,
+  type GuestOrderSafetyPolicy,
+} from './guest-order-safety.js'
 import { KDS_PRIORITY_OVERRIDE_CAPABILITY } from './kds-authorization-policy.js'
 import { KdsRepository, type KdsTask } from './kds-repository.js'
 import {
@@ -44,6 +48,7 @@ export interface SubmitOrderCommand extends Omit<CreateSubmittedOrderInput, 'tab
   assistedOrderContext?: Readonly<AssistedOrderContextProof>
   kdsOverride?: Readonly<KdsSchedulingOverride>
   pricingAuthorization?: Readonly<PricingAuthorizationRequest>
+  confirmedDuplicateOrderPublicId?: string | null
 }
 
 export interface PaymentNextStep {
@@ -64,6 +69,7 @@ export interface SubmittedCommerceResult {
 
 export interface CommerceCommandServiceOptions {
   inventoryEnforcementMode?: 'strict' | 'audit_only'
+  guestOrderSafetyPolicy?: Readonly<GuestOrderSafetyPolicy>
 }
 
 export class CommerceCommandService {
@@ -98,6 +104,14 @@ export class CommerceCommandService {
         createdByCustomerId: input.createdByCustomerId,
       }
       const pricingAuthorization = await this.authorizePricing(transaction, orderInput, input)
+      if (input.channel === 'guest_qr') {
+        await new GuestOrderSafetyRepository(transaction, this.options.guestOrderSafetyPolicy).assertAllowed({
+          tableSessionId: context.tableSessionId,
+          customerId: input.createdByCustomerId!,
+          lines: input.lines,
+          confirmedDuplicateOrderPublicId: input.confirmedDuplicateOrderPublicId,
+        })
+      }
       const schedulingOverride = await authorizeKdsOverride(transaction, input)
       const order = await new OrderRepository(transaction).createSubmitted(orderInput, pricingAuthorization)
       if (pricingAuthorization) await this.pricingPolicy!.consume(transaction, pricingAuthorization, order.id)
@@ -509,6 +523,7 @@ function canonicalSubmitFingerprint(input: Readonly<SubmitOrderCommand>): string
       reason: input.kdsOverride.reason.trim(),
     } : null,
     pricingAuthorization: input.pricingAuthorization ?? null,
+    confirmedDuplicateOrderPublicId: input.confirmedDuplicateOrderPublicId ?? null,
   })
 }
 

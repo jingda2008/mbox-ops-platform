@@ -111,6 +111,13 @@ jobs:
             if (manifest.releaseSha !== process.env.GITHUB_SHA) throw new Error('release SHA mismatch');
             if (manifest.releaseVersion !== '${version}') throw new Error('release version mismatch');
             if (!/^sha256:[0-9a-f]{64}$/.test(manifest.imageDigest)) throw new Error('image digest is not immutable');
+            for (const item of [manifest.configuration?.store, manifest.configuration?.catalog]) {
+              if (!item || !/^[0-9a-f]{64}$/.test(item.sha256)) throw new Error('configuration digest is missing');
+              const path = 'release-artifact/' + item.file;
+              if (!fs.existsSync(path)) throw new Error('release configuration file is missing');
+              const digest = require('node:crypto').createHash('sha256').update(fs.readFileSync(path)).digest('hex');
+              if (digest !== item.sha256) throw new Error('release configuration digest mismatch');
+            }
           "
           (
             cd release-artifact
@@ -122,6 +129,8 @@ jobs:
           mkdir -p release-metadata
           cp release-artifact/release-manifest.json release-metadata/
           cp release-artifact/migration-manifest.json release-metadata/
+          cp release-artifact/mbox-lujiazui.store.json release-metadata/
+          cp release-artifact/menu-catalog-2026-07-27.json release-metadata/
           node scripts/build-aliyun-evidence-bundle.mjs \
             --output oss-ready-evidence \
             --channel rc \

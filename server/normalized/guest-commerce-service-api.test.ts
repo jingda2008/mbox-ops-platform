@@ -6,6 +6,10 @@ import { runNormalizedMigrations } from '../migrate-normalized.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
 import type { SubmittedCommerceResult } from './commerce-command-service.js'
 import {
+  GuestOrderDuplicateConfirmationRequiredError,
+  GuestOrderRateLimitedError,
+} from './guest-order-safety.js'
+import {
   guestCommerceServiceApiPlugin,
   type GuestCommerceServiceApiOptions,
 } from './guest-commerce-service-api.js'
@@ -102,10 +106,11 @@ describe('guest commerce/service API trust boundaries', () => {
         specification: '330ml',
         amountMinor: 6800,
         available: true,
+        recommendation: { enabled: true },
       }],
       meta: { partySize: 2, recommendationScene: 'date' },
     })
-    expect(response.body).not.toContain('internalCost')
+    expect(response.body).not.toMatch(/internalCost|costAmount|grossMargin|contributionAmount|catalogContributionScore|contributionPositive/)
   })
 
   it('rejects client-supplied identity, table, scope and price fields before creating an order', async () => {
@@ -170,6 +175,70 @@ describe('guest commerce/service API trust boundaries', () => {
         },
       },
     })
+  })
+
+  it('forwards only the public conflicting order confirmation to server-authoritative validation', async () => {
+    const value = fixture()
+    const response = await value.app.inject({
+      method: 'POST',
+      url: '/api/guest/orders',
+      headers: { 'idempotency-key': 'guest-order-confirmed-0001' },
+      payload: {
+        items: [{ productId, quantity: 2 }],
+        confirmedDuplicateOrderId: 'guest-order-existing-0001',
+      },
+    })
+
+    expect(response.statusCode).toBe(201)
+    expect(value.commerce.submitOrder).toHaveBeenCalledWith(expect.objectContaining({
+      confirmedDuplicateOrderPublicId: 'guest-order-existing-0001',
+    }))
+  })
+
+  it('returns actionable duplicate and rate-limit responses without creating payment', async () => {
+    const duplicate = fixture({
+      commerce: {
+        submitOrder: vi.fn(async () => {
+          throw new GuestOrderDuplicateConfirmationRequiredError(
+            'guest-order-existing-0001',
+            '2026-08-13T12:00:00.000Z',
+          )
+        }),
+      } as never,
+    })
+    const duplicateResponse = await duplicate.app.inject({
+      method: 'POST',
+      url: '/api/guest/orders',
+      headers: { 'idempotency-key': 'guest-order-duplicate-0001' },
+      payload: { items: [{ productId, quantity: 1 }] },
+    })
+    expect(duplicateResponse.statusCode).toBe(409)
+    expect(duplicateResponse.json()).toMatchObject({ error: {
+      code: 'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED',
+      details: { conflictingOrderId: 'guest-order-existing-0001' },
+    } })
+    expect(duplicate.payments.initiate).not.toHaveBeenCalled()
+
+    const limited = fixture({
+      commerce: {
+        submitOrder: vi.fn(async () => {
+          throw new GuestOrderRateLimitedError('customer', '2026-08-13T12:01:00.000Z')
+        }),
+      } as never,
+    })
+    const limitedResponse = await limited.app.inject({
+      method: 'POST',
+      url: '/api/guest/orders',
+      headers: { 'idempotency-key': 'guest-order-limited-0001' },
+      payload: { items: [{ productId, quantity: 1 }] },
+    })
+    expect(limitedResponse.statusCode).toBe(429)
+    expect(limitedResponse.json()).toMatchObject({ error: {
+      code: 'GUEST_ORDER_RATE_LIMITED',
+      retryAt: '2026-08-13T12:01:00.000Z',
+      details: { dimension: 'customer' },
+    } })
+    expect(limited.payments.initiate).not.toHaveBeenCalled()
   })
 
   it('shares paid table orders without payer or payment details', async () => {
@@ -407,7 +476,9 @@ function fixture(overrides: Partial<GuestCommerceServiceApiOptions> = {}) {
       product_kind: 'single',
       bundle_components: [],
       product_snapshot: {
-        specification: '330ml', aliases: ['青啤'], pinyin: 'qingdao pijiu', internalCost: 1234,
+        specification: '330ml', aliases: ['青啤'], pinyin: 'qingdao pijiu',
+        costAmount: 1_800, internalCost: 1234,
+        recommendation: { enabled: true },
       },
       status: 'active',
       amount_minor: '6800',

@@ -8,6 +8,7 @@ export class GuestApiError extends Error {
   readonly status: number | null
   readonly code: string
   readonly retryAt: string | null
+  readonly details: Record<string, unknown> | null
 
   constructor(
     message: string,
@@ -15,6 +16,7 @@ export class GuestApiError extends Error {
     status: number | null = null,
     code = 'GUEST_API_ERROR',
     retryAt: string | null = null,
+    details: Record<string, unknown> | null = null,
   ) {
     super(message)
     this.name = 'GuestApiError'
@@ -22,6 +24,7 @@ export class GuestApiError extends Error {
     this.status = status
     this.code = code
     this.retryAt = retryAt
+    this.details = details
   }
 
   get retryable(): boolean {
@@ -35,6 +38,7 @@ export interface GuestSessionView {
   table: { code: string; displayName: string }
   businessDate?: string
   expiresAt?: string
+  cartScope?: string | null
   capabilities?: string[]
 }
 
@@ -164,14 +168,21 @@ export class GuestApiClient {
         partySize = Number(meta.partySize)
       }
       if (isRecommendationScene(meta.recommendationScene)) recommendationScene = meta.recommendationScene
-      products.push(...data)
+      products.push(...data.map((product, index) => ({
+        ...product,
+        serverRecommendationOrder: offset + index,
+      })))
       if (data.length < pageSize) break
     }
     return { products, partySize, recommendationScene }
   }
 
   async submitOrder(
-    input: Readonly<{ items: Array<{ productId: string; quantity: number }>; note: string | null }>,
+    input: Readonly<{
+      items: Array<{ productId: string; quantity: number }>
+      note: string | null
+      confirmedDuplicateOrderId?: string
+    }>,
     options: Readonly<RequestOptions> & { idempotencyKey: string },
   ): Promise<GuestOrderResult> {
     const body = await this.request<unknown>('/api/guest/orders', {
@@ -271,7 +282,8 @@ function responseError(response: Response, body: unknown): GuestApiError {
   const message = typeof error?.message === 'string' ? error.message : friendlyStatus(response.status)
   const code = typeof error?.code === 'string' ? error.code : 'HTTP_ERROR'
   const retryAt = typeof error?.retryAt === 'string' ? error.retryAt : null
-  return new GuestApiError(message, 'http', response.status, code, retryAt)
+  const details = isObject(error?.details) ? error.details : null
+  return new GuestApiError(message, 'http', response.status, code, retryAt, details)
 }
 
 async function readJson(response: Response): Promise<unknown> {
@@ -298,6 +310,7 @@ function hasData(value: unknown): boolean {
 function isSessionView(value: unknown): value is GuestSessionView {
   if (!isObject(value) || !['active', 'already_active', 'waiting_for_table'].includes(String(value.status))) return false
   if (typeof value.message !== 'string' && value.status !== 'active') return false
+  if (value.status !== 'waiting_for_table' && (typeof value.cartScope !== 'string' || !/^[A-Za-z0-9_-]{32}$/.test(value.cartScope))) return false
   return isObject(value.table) && typeof value.table.code === 'string' && typeof value.table.displayName === 'string'
 }
 
@@ -349,7 +362,6 @@ function isMenuProduct(value: unknown): value is GuestMenuProduct {
     && Number.isSafeInteger(value.recommendation.expectedPrepMinutes)
     && Number.isSafeInteger(value.recommendation.holdMinutes)
     && (value.recommendation.upgradeProductId === null || typeof value.recommendation.upgradeProductId === 'string')
-    && typeof value.recommendation.contributionPositive === 'boolean'
     && typeof value.available === 'boolean'
 }
 

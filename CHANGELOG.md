@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.0-rc.78 - 2026-08-13
+
+- Unified the default development, build, container and Alibaba Cloud release paths on the normalized runtime while retaining explicit legacy-only commands for controlled comparison.
+- Restored security response headers, protected runtime metrics and one-query readiness checks, and packaged the selective SLS collector in the immutable image.
+- Moved guest duplicate-order confirmation and per-customer/per-table rate limits to a server-authoritative transaction; thresholds are deployment-configurable and the table limit cannot be lower than the customer limit.
+- Restored contribution-sensitive menu ranking without exposing product cost to customer clients.
+- Stopped invalid reservation links and failed session renewals from creating repeated polling errors while preserving the submitted receipt and manual refresh path.
+- Added a current-business-day cashier after-sales workbench for original-item partial refunds, separate-person approval and channel-safe execution; real online refund success still requires a verified provider callback.
+- Preserved the current table-session cart after uncertain order failures while isolating the next turnover with a server-generated opaque scope.
+- Reused the exact refund payload and idempotency key after retryable failures, and added an explicit second confirmation before recording manual cash or POS refund results.
+- Made store and catalog publication atomic, bound release smoke checks to the runtime image digest and hardened rollback, OSS evidence and selective SLS handling.
+- Kept real payment, physical POS, printers, inventory reconciliation and staff field acceptance outside completed commercial acceptance.
+
 ## 1.0.0-rc.77 - 2026-08-13
 
 - Audited customer, reservation, employee, fulfillment, payment, refund, inventory, security, performance and release paths with browser, PostgreSQL, load and role simulations.

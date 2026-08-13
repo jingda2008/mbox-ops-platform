@@ -104,6 +104,14 @@ test('candidate scripts protect the existing production container', () => {
   assert.doesNotMatch(rollback, /docker (?:stop|rm).*PROTECTED_CONTAINER_NAME/)
 })
 
+test('release image build refuses a dirty or mismatched worktree', () => {
+  const source = readFileSync(resolve(deployDir, 'build-image.sh'), 'utf8')
+  assert.match(source, /git -C "\$REPO_ROOT" rev-parse HEAD/)
+  assert.match(source, /APP_COMMIT_SHA does not match the checked-out commit/)
+  assert.match(source, /status --porcelain --untracked-files=all/)
+  assert.match(source, /refusing to build release evidence from a dirty worktree/)
+})
+
 test('candidate verification rejects missing external worker integrations', () => {
   const source = readFileSync(resolve(deployDir, 'verify-candidate.sh'), 'utf8')
   assert.match(source, /DEPLOYMENT_TIER.*production/)

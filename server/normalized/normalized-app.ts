@@ -342,7 +342,10 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     const commerce = new CommerceCommandService(
       commandExecutor,
       new PostgresPricingAuthority(),
-      { inventoryEnforcementMode: options.config.inventoryEnforcementMode },
+      {
+        inventoryEnforcementMode: options.config.inventoryEnforcementMode,
+        guestOrderSafetyPolicy: options.config.guestOrderSafetyPolicy,
+      },
     )
     instance.register(commerceKdsApiPlugin, {
       prefix: '/api',
@@ -731,6 +734,7 @@ function registerSystemRoutes(
 ): void {
   const version = Object.freeze({
     commitSha: config.commitSha,
+    releaseImageDigest: config.releaseImageDigest,
     schemaFlavor: config.schemaFlavor,
     deploymentTier: config.deploymentTier,
     inventoryEnforcementMode: config.inventoryEnforcementMode,

@@ -1,5 +1,5 @@
 {
-  "version": "2026.08.13-v4",
+  "version": "2026.08.13-v5",
   "tenant": {
     "id": "10000000-0000-4000-8000-000000000001",
     "code": "superhigh",
@@ -1265,6 +1265,12 @@
           "label": "预约",
           "route": "/staff/reservations",
           "sortOrder": 40
+        },
+        {
+          "code": "payments",
+          "label": "退款审批",
+          "route": "/staff/payments",
+          "sortOrder": 50
         }
       ],
       "approvalLimits": [

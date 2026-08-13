@@ -12,6 +12,8 @@ const archivePath = resolve(required('MBOX_BUNDLE_ARCHIVE'))
 const archive = await readFile(archivePath)
 const archiveSha256 = createHash('sha256').update(archive).digest('hex')
 const migration = JSON.parse(await readFile(resolve(required('MBOX_MIGRATION_MANIFEST')), 'utf8'))
+const storeConfigPath = resolve(required('MBOX_STORE_CONFIG'))
+const catalogConfigPath = resolve(required('MBOX_CATALOG_CONFIG'))
 const releaseSha = required('MBOX_BUNDLE_SHA')
 const imageDigest = required('MBOX_BUNDLE_IMAGE_DIGEST')
 
@@ -19,7 +21,7 @@ if (!/^[0-9a-f]{40}$/.test(releaseSha)) throw new Error('MBOX_BUNDLE_SHA must be
 if (!/^sha256:[0-9a-f]{64}$/.test(imageDigest)) throw new Error('MBOX_BUNDLE_IMAGE_DIGEST is not immutable')
 
 const manifest = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   generatedAt: new Date().toISOString(),
   releaseSha,
   releaseVersion: required('MBOX_BUNDLE_VERSION'),
@@ -28,6 +30,16 @@ const manifest = {
   archive: basename(archivePath),
   archiveSha256,
   migration,
+  configuration: {
+    store: {
+      file: basename(storeConfigPath),
+      sha256: createHash('sha256').update(await readFile(storeConfigPath)).digest('hex'),
+    },
+    catalog: {
+      file: basename(catalogConfigPath),
+      sha256: createHash('sha256').update(await readFile(catalogConfigPath)).digest('hex'),
+    },
+  },
   ci: {
     repository: process.env.GITHUB_REPOSITORY ?? null,
     runId: process.env.GITHUB_RUN_ID ?? null,

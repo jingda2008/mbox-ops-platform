@@ -19,6 +19,7 @@
     "server/migrate-normalized.ts",
     "server/provision-normalized-store.ts",
     "server/provision-normalized-catalog.ts",
+    "server/provision-normalized-release.ts",
     "server/verify-normalized-commercial-readiness.ts",
     "server/normalized/generate-table-qrs.ts"
   ]

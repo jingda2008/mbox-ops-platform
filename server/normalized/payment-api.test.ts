@@ -10,6 +10,7 @@ import type { Payment } from './payment-repository.js'
 import { PaymentAuthorizationError } from './payment-security-policy.js'
 import type { ReconciliationEntry } from './reconciliation-repository.js'
 import { RefundApprovalRequiredError, type Refund } from './refund-repository.js'
+import type { CashierWorkbenchView } from '../../src/shared/cashier-workbench-contracts.js'
 
 const tenantId = '11111111-1111-4111-8111-111111111111'
 const storeId = '22222222-2222-4222-8222-222222222222'
@@ -80,6 +81,24 @@ const reconciliationEntry: ReconciliationEntry = {
   occurredAt: '2026-08-11T12:05:00.000Z',
   evidenceSnapshot: { signatureVerified: true },
   createdAt: '2026-08-11T12:05:00.000Z',
+}
+
+const cashierWorkbench: CashierWorkbenchView = {
+  businessDate: '2026-08-11',
+  query: 'VIP1',
+  actions: {
+    canRequestRefund: false,
+    canApproveRefund: false,
+    canExecuteRefund: false,
+    canViewReconciliation: true,
+  },
+  summary: {
+    orderCount: 1,
+    capturedPaymentCount: 1,
+    requestedRefundCount: 1,
+    processingRefundCount: 0,
+  },
+  orders: [],
 }
 
 const apps: FastifyInstance[] = []
@@ -175,10 +194,14 @@ function fixture(overrides: Partial<PaymentApiOptions> = {}) {
   const reconciliationQuery = {
     list: vi.fn(async () => ({ entries: [reconciliationEntry], nextCursor: null })),
   }
+  const cashierWorkbenchQuery = {
+    get: vi.fn(async () => cashierWorkbench),
+  }
   const options: PaymentApiOptions = {
     commands,
     providerVerifier,
     reconciliationQuery,
+    cashierWorkbenchQuery,
     resolveActorContext: () => ({
       scope: { tenantId, storeId },
       actor: { type: 'guest', ref: 'guest-session-0001' },
@@ -200,7 +223,7 @@ function fixture(overrides: Partial<PaymentApiOptions> = {}) {
   const app = Fastify()
   apps.push(app)
   app.register(paymentApiPlugin, { ...options, prefix: '/api' })
-  return { app, options, commands, providerVerifier, reconciliationQuery }
+  return { app, options, commands, providerVerifier, reconciliationQuery, cashierWorkbenchQuery }
 }
 
 describe('paymentApiPlugin', () => {
@@ -534,6 +557,59 @@ describe('paymentApiPlugin', () => {
     expect(response.statusCode).toBe(403)
     expect(response.json()).toMatchObject({ error: { code: 'FINANCIAL_ACTION_FORBIDDEN' } })
     expect(value.reconciliationQuery.list).not.toHaveBeenCalled()
+  })
+
+  it('returns the current business day cashier workbench from trusted staff scope', async () => {
+    const value = fixture()
+    const response = await value.app.inject({
+      method: 'GET',
+      url: '/api/payments/workbench?query=VIP1&limit=25&businessDate=2020-01-01',
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toEqual({ data: cashierWorkbench })
+    expect(value.cashierWorkbenchQuery.get).toHaveBeenCalledWith({
+      scope: { tenantId, storeId },
+      employeeId,
+      businessDate: '2026-08-11',
+      capabilities: ['reconciliation.view'],
+      query: 'VIP1',
+      limit: 25,
+    })
+  })
+
+  it('does not expose the cashier workbench without a financial capability', async () => {
+    const value = fixture({
+      resolveStaffContext: () => ({
+        scope: { tenantId, storeId },
+        actor: { type: 'employee', employeeId },
+        employeeId,
+        businessDate: '2026-08-11',
+        capabilities: ['dashboard.view'],
+      }),
+    })
+    const response = await value.app.inject({ method: 'GET', url: '/api/payments/workbench' })
+
+    expect(response.statusCode).toBe(403)
+    expect(response.json()).toMatchObject({ error: { code: 'FINANCIAL_ACTION_FORBIDDEN' } })
+    expect(value.cashierWorkbenchQuery.get).not.toHaveBeenCalled()
+  })
+
+  it('does not expose store-wide after-sales data to staff who can only initiate payment', async () => {
+    const value = fixture({
+      resolveStaffContext: () => ({
+        scope: { tenantId, storeId },
+        actor: { type: 'employee', employeeId },
+        employeeId,
+        businessDate: '2026-08-11',
+        capabilities: ['payment.initiate.staff'],
+      }),
+    })
+    const response = await value.app.inject({ method: 'GET', url: '/api/payments/workbench' })
+
+    expect(response.statusCode).toBe(403)
+    expect(response.json()).toMatchObject({ error: { code: 'FINANCIAL_ACTION_FORBIDDEN' } })
+    expect(value.cashierWorkbenchQuery.get).not.toHaveBeenCalled()
   })
 
   it('maps malformed requests and idempotency conflicts to stable errors', async () => {

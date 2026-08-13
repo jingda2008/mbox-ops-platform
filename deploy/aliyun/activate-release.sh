@@ -45,8 +45,14 @@ archive_name=$(jq -er '.archive' "${manifest}")
 expected_archive_sha=$(jq -er '.archiveSha256' "${manifest}")
 migration_digest=$(jq -er '.migration.digest' "${manifest}")
 expected_schema_version=$(jq -er '.migration.count' "${manifest}")
+store_config_name=$(jq -er '.configuration.store.file' "${manifest}")
+store_config_sha=$(jq -er '.configuration.store.sha256' "${manifest}")
+catalog_config_name=$(jq -er '.configuration.catalog.file' "${manifest}")
+catalog_config_sha=$(jq -er '.configuration.catalog.sha256' "${manifest}")
 short_sha=${release_sha:0:7}
 archive=${release_dir}/${archive_name}
+store_config=${release_dir}/${store_config_name}
+catalog_config=${release_dir}/${catalog_config_name}
 
 emit_release_audit() {
   local event_type=$1
@@ -78,8 +84,14 @@ emit_release_audit() {
 [[ "${expected_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
 [[ "${expected_schema_version}" =~ ^[0-9]+$ ]]
 [[ "${archive_name}" != */* ]]
+[[ "${store_config_name}" != */* ]]
+[[ "${catalog_config_name}" != */* ]]
 test -f "${archive}"
+test -f "${store_config}"
+test -f "${catalog_config}"
 test "$(sha256sum "${archive}" | awk '{print $1}')" = "${expected_archive_sha}"
+test "$(sha256sum "${store_config}" | awk '{print $1}')" = "${store_config_sha}"
+test "$(sha256sum "${catalog_config}" | awk '{print $1}')" = "${catalog_config_sha}"
 
 expected_index_digest=${expected_digest#sha256:}
 archive_index_digest=$(tar -xOf "${archive}" index.json \
@@ -168,6 +180,21 @@ if [ "${migration_changed}" = 1 ]; then
     node dist-normalized/server/migrate-normalized.js
 fi
 
+docker run --rm \
+  --env-file "${release_env}" \
+  --env "APP_COMMIT_SHA=${release_sha}" \
+  --network "${network}" \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=32m \
+  --security-opt no-new-privileges \
+  --cap-drop ALL \
+  --mount "type=bind,src=${store_config},dst=/run/mbox-config/store.json,readonly" \
+  --mount "type=bind,src=${catalog_config},dst=/run/mbox-config/catalog.json,readonly" \
+  "${image_tag}" \
+  node dist-normalized/server/provision-normalized-release.js \
+    --store=/run/mbox-config/store.json \
+    --catalog=/run/mbox-config/catalog.json
+
 candidate="mbox-candidate-${short_sha}"
 candidate_volume="mbox-data-${short_sha}-candidate"
 rollback_container=
@@ -255,7 +282,9 @@ current_caddy=${release_dir}/Caddyfile.previous
 candidate_caddy=${release_dir}/Caddyfile.candidate
 docker exec "${caddy_container}" cat /etc/caddy/Caddyfile > "${current_caddy}"
 grep -q 'mbox-app:8787' "${current_caddy}"
-sed "s/mbox-app:8787/${candidate}:8787/g" "${current_caddy}" > "${candidate_caddy}"
+candidate_ip=$(docker inspect "${candidate}" --format "{{with index .NetworkSettings.Networks \"${network}\"}}{{.IPAddress}}{{end}}")
+[[ "${candidate_ip}" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]
+sed "s/mbox-app:8787/${candidate_ip}:8787/g" "${current_caddy}" > "${candidate_caddy}"
 docker cp "${candidate_caddy}" "${caddy_container}:/tmp/Caddyfile.candidate"
 docker exec "${caddy_container}" \
   caddy validate --config /tmp/Caddyfile.candidate --adapter caddyfile >/dev/null
@@ -302,6 +331,11 @@ verify_public_release 15
 emit_release_audit cutover_succeeded info public-readiness-verified
 
 deployed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+previous_release_dir=$(readlink -f "${current_link}" 2>/dev/null || true)
+previous_release_sha=
+if [ -n "${previous_release_dir}" ] && [ -f "${previous_release_dir}/deployment-manifest.json" ]; then
+  previous_release_sha=$(jq -r '.releaseSha // empty' "${previous_release_dir}/deployment-manifest.json")
+fi
 jq -n \
   --arg deployedAt "${deployed_at}" \
   --arg tier "${deployment_tier}" \
@@ -314,6 +348,10 @@ jq -n \
   --argjson migrationChanged "${migration_changed}" \
   --arg backupPath "${backup_path}" \
   --arg rollbackContainer "${rollback_container}" \
+  --arg previousReleaseDir "${previous_release_dir}" \
+  --arg previousReleaseSha "${previous_release_sha}" \
+  --arg storeConfigSha256 "${store_config_sha}" \
+  --arg catalogConfigSha256 "${catalog_config_sha}" \
   '{
     schemaVersion: 1,
     deployedAt: $deployedAt,
@@ -326,7 +364,10 @@ jq -n \
     migrationDigest: $migrationDigest,
     migrationChanged: ($migrationChanged == 1),
     backupPath: (if $backupPath == "" then null else $backupPath end),
-    rollbackContainer: $rollbackContainer
+    rollbackContainer: $rollbackContainer,
+    previousReleaseDir: (if $previousReleaseDir == "" then null else $previousReleaseDir end),
+    previousReleaseSha: (if $previousReleaseSha == "" then null else $previousReleaseSha end),
+    configuration: {storeSha256:$storeConfigSha256,catalogSha256:$catalogConfigSha256}
   }' > "${release_dir}/deployment-manifest.json"
 
 deployment_evidence=${release_dir}/oss-deployment

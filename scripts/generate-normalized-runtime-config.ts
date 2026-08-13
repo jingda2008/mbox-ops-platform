@@ -1,8 +1,18 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { NORMALIZED_RUNTIME_CONFIG_VERSION } from '../server/normalized/normalized-runtime-config-contract.js'
+import { parseStoreProvisionConfig } from '../server/provision-normalized-store.js'
 
 const outputDirectory = resolve(process.argv[2] ?? 'deploy/aliyun/config')
+const storeConfig = parseStoreProvisionConfig(JSON.parse(
+  await readFile(resolve('deploy/normalized-store/mbox-lujiazui.store.json'), 'utf8'),
+))
+const provisioningFields = [
+  ...(storeConfig.dailyCredentialEnv ? [storeConfig.dailyCredentialEnv] : []),
+  ...storeConfig.employees.map((employee) => employee.pinEnv),
+].toSorted()
+const provisioningTemplate = provisioningFields.map((field) =>
+  `${field}=<${field === storeConfig.dailyCredentialEnv ? 'store-daily-credential' : 'unique-four-digit-pin'}>`)
 
 const common = [
   `MBOX_RUNTIME_CONFIG_VERSION=${NORMALIZED_RUNTIME_CONFIG_VERSION}`,
@@ -19,6 +29,7 @@ const common = [
   'MBOX_GUEST_ORDER_DUPLICATE_WINDOW_SECONDS=45',
   'MBOX_GUEST_ORDER_CUSTOMER_LIMIT_PER_MINUTE=5',
   'MBOX_GUEST_ORDER_TABLE_LIMIT_PER_MINUTE=20',
+  ...provisioningTemplate,
 ]
 
 const validation = [
@@ -70,6 +81,7 @@ const requiredFields = {
     ai: ['MBOX_AI_PROVIDER', 'MBOX_AI_ENDPOINT', 'MBOX_AI_MODEL', 'MBOX_AI_API_KEY'],
     printing: ['MBOX_PRINT_ENDPOINT'],
     headset: ['MBOX_HEADSET_ENDPOINT'],
+    storeProvisioning: provisioningFields,
   },
 }
 

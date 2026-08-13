@@ -81,6 +81,26 @@
       "automaticBlocker": "automatic rollback plus previous public identity verification",
       "fixCommit": "0ecf082d312befe5b687fcc5def9d2f2b80a46a8",
       "status": "covered"
+    },
+    {
+      "id": "REL-009",
+      "category": "dynamic-provisioning-config",
+      "rootCause": "The canonical environment allowlist removed store credential and employee PIN fields, while preflight did not validate the store provisioning contract.",
+      "earliestDetectionStage": "config_preflight",
+      "regressionTest": "server/verify-normalized-runtime-config.test.ts",
+      "automaticBlocker": "store-aware runtime preflight before backup or database work",
+      "fixCommit": "4999249d3b8bfefce9036e7f86109cad9c55e9cf",
+      "status": "covered"
+    },
+    {
+      "id": "REL-010",
+      "category": "tls-ip-sni",
+      "rootCause": "External preflight sent an IP address as the TLS SNI server name, relying on behavior deprecated by the Node.js runtime.",
+      "earliestDetectionStage": "external_preflight",
+      "regressionTest": "server/verify-normalized-runtime-config.test.ts",
+      "automaticBlocker": "IP-aware TLS server-name selection",
+      "fixCommit": "4999249d3b8bfefce9036e7f86109cad9c55e9cf",
+      "status": "covered"
     }
   ]
 }

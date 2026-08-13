@@ -1,8 +1,15 @@
 import { lookup } from 'node:dns/promises'
+import { isIP } from 'node:net'
+import { readFile } from 'node:fs/promises'
 import { connect } from 'node:tls'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 import { loadNormalizedRuntimeConfig } from './normalized/normalized-runtime-config.js'
+import {
+  parseStoreProvisionConfig,
+  validateStoreProvisionEnvironment,
+  type StoreProvisionConfig,
+} from './provision-normalized-store.js'
 
 export interface RuntimePreflightReport {
   schemaVersion: 1
@@ -14,11 +21,13 @@ export interface RuntimePreflightReport {
   imageDigest: string | null
   modes: Record<string, string>
   externalHosts: string[]
+  provisioning: { employeePinCount: number; dailyCredentialConfigured: boolean } | null
 }
 
 export async function verifyNormalizedRuntimeConfig(
   environment: Readonly<Record<string, string | undefined>> = process.env,
   checkExternal = false,
+  storeConfig?: StoreProvisionConfig,
 ): Promise<RuntimePreflightReport> {
   const config = loadNormalizedRuntimeConfig(environment)
   const expectedSha = environment.MBOX_EXPECTED_RELEASE_SHA?.trim()
@@ -37,6 +46,9 @@ export async function verifyNormalizedRuntimeConfig(
   if (checkExternal) {
     for (const hostname of hosts) await verifyDnsAndTls(hostname)
   }
+  const provisioning = storeConfig
+    ? validateStoreProvisionEnvironment(storeConfig, environment)
+    : null
 
   return {
     schemaVersion: 1,
@@ -48,13 +60,23 @@ export async function verifyNormalizedRuntimeConfig(
     imageDigest: config.releaseImageDigest,
     modes: { ...config.integrations.modes },
     externalHosts: hosts,
+    provisioning: provisioning
+      ? {
+          employeePinCount: provisioning.employeePins.size,
+          dailyCredentialConfigured: provisioning.dailyCredential !== null,
+        }
+      : null,
   }
+}
+
+export function tlsServernameForHost(hostname: string): string | undefined {
+  return isIP(hostname) ? undefined : hostname
 }
 
 async function verifyDnsAndTls(hostname: string) {
   await lookup(hostname)
   await new Promise<void>((resolvePromise, reject) => {
-    const socket = connect({ host: hostname, port: 443, servername: hostname, timeout: 8_000 }, () => {
+    const socket = connect({ host: hostname, port: 443, servername: tlsServernameForHost(hostname), timeout: 8_000 }, () => {
       if (!socket.authorized) {
         const reason = socket.authorizationError
         socket.destroy()
@@ -71,6 +93,10 @@ async function verifyDnsAndTls(hostname: string) {
 
 const isDirectRun = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])
 if (isDirectRun) {
-  const report = await verifyNormalizedRuntimeConfig(process.env, process.argv.includes('--external'))
+  const storeArgument = process.argv.find((argument) => argument.startsWith('--store='))
+  const storeConfig = storeArgument
+    ? parseStoreProvisionConfig(JSON.parse(await readFile(storeArgument.slice('--store='.length), 'utf8')))
+    : undefined
+  const report = await verifyNormalizedRuntimeConfig(process.env, process.argv.includes('--external'), storeConfig)
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
 }

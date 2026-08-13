@@ -92,6 +92,11 @@ export interface ProvisionSummary {
   configSha256: string
 }
 
+export interface StoreProvisionEnvironment {
+  employeePins: Map<string, string>
+  dailyCredential: string | null
+}
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const CODE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
 const ROLE_CODE = /^[A-Z][A-Z0-9_]{1,63}$/
@@ -299,18 +304,12 @@ export async function provisionNormalizedStore(input: {
 }): Promise<ProvisionSummary> {
   const environment = input.environment ?? process.env
   const hasher = new ScryptCredentialHasher()
+  const provisionEnvironment = validateStoreProvisionEnvironment(input.config, environment)
   const pins = new Map<string, string>()
-  for (const employee of input.config.employees) {
-    const pin = environment[employee.pinEnv]
-    if (!pin || !/^\d{4}$/.test(pin)) throw new Error(`Missing valid four-digit PIN environment: ${employee.pinEnv}`)
-    pins.set(employee.code, await hasher.hash(pin))
+  for (const [employeeCode, pin] of provisionEnvironment.employeePins) {
+    pins.set(employeeCode, await hasher.hash(pin))
   }
-  const dailyCredential = input.config.dailyCredentialEnv
-    ? environment[input.config.dailyCredentialEnv]
-    : undefined
-  if (input.config.dailyCredentialEnv && (!dailyCredential || dailyCredential.length < 6)) {
-    throw new Error(`Missing store credential environment: ${input.config.dailyCredentialEnv}`)
-  }
+  const dailyCredential = provisionEnvironment.dailyCredential
   const dailyCredentialHash = dailyCredential ? await hasher.hash(dailyCredential) : null
   const ownsClient = input.client === undefined
   const client = input.client ?? new Client({ connectionString: input.databaseUrl, application_name: 'mbox-normalized-provisioner' })
@@ -480,6 +479,27 @@ export async function provisionNormalizedStore(input: {
   } finally {
     if (ownsClient) await client.end()
   }
+}
+
+export function validateStoreProvisionEnvironment(
+  config: StoreProvisionConfig,
+  environment: Readonly<Record<string, string | undefined>>,
+): StoreProvisionEnvironment {
+  const employeePins = new Map<string, string>()
+  for (const employee of config.employees) {
+    const pin = environment[employee.pinEnv]
+    if (!pin || !/^\d{4}$/.test(pin)) {
+      throw new Error(`Missing valid four-digit PIN environment: ${employee.pinEnv}`)
+    }
+    employeePins.set(employee.code, pin)
+  }
+  const dailyCredentialValue = config.dailyCredentialEnv
+    ? environment[config.dailyCredentialEnv]
+    : null
+  if (config.dailyCredentialEnv && (!dailyCredentialValue || dailyCredentialValue.length < 6)) {
+    throw new Error(`Missing store credential environment: ${config.dailyCredentialEnv}`)
+  }
+  return { employeePins, dailyCredential: dailyCredentialValue ?? null }
 }
 
 async function reconcileRoleAccessDefaults(

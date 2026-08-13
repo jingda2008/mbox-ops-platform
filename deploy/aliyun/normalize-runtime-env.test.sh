@@ -18,6 +18,10 @@ MBOX_QWEN_API_KEY=old-unused-key
 MBOX_GUEST_PAYMENT_MODE=simulation
 MBOX_INVENTORY_ENFORCEMENT_MODE=audit_only
 MBOX_START_WORKERS=false
+MBOX_STORE_DAILY_CREDENTIAL=MBOX521
+MBOX_EMPLOYEE_PIN_LIYAN=5210
+MBOX_EMPLOYEE_PIN_TOM=5211
+MBOX_EMPLOYEE_PIN_bad=9999
 MBOX_UNRELATED_LEGACY_FIELD=remove-me
 ENV
 chmod 0600 "${env_file}"
@@ -26,7 +30,14 @@ grep -qx 'MBOX_RUNTIME_CONFIG_VERSION=normalized-runtime-config/v1' "${env_file}
 grep -qx 'MBOX_PAYMENT_MODE=disabled' "${env_file}"
 grep -qx 'MBOX_AI_MODE=disabled' "${env_file}"
 grep -qx 'DATABASE_URL=postgresql://private:secret@database/mbox' "${env_file}"
+grep -qx 'MBOX_STORE_DAILY_CREDENTIAL=MBOX521' "${env_file}"
+grep -qx 'MBOX_EMPLOYEE_PIN_LIYAN=5210' "${env_file}"
+grep -qx 'MBOX_EMPLOYEE_PIN_TOM=5211' "${env_file}"
 if grep -Eq 'MBOX_POSTAR_|MBOX_QWEN_|MBOX_UNRELATED_' "${env_file}"; then
   echo 'legacy field survived canonicalization' >&2
+  exit 1
+fi
+if grep -q 'MBOX_EMPLOYEE_PIN_bad=' "${env_file}"; then
+  echo 'invalid dynamic provisioning field survived canonicalization' >&2
   exit 1
 fi

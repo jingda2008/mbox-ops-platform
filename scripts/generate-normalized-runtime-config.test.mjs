@@ -17,5 +17,8 @@ test('config templates use explicit integration modes without secrets', () => {
   assert.doesNotMatch(validation, /POSTAR_AGENCY_ID=/)
   assert.match(production, /MBOX_PAYMENT_MODE=production/)
   assert.equal(required.configVersion, 'normalized-runtime-config/v1')
+  assert.match(validation, /MBOX_STORE_DAILY_CREDENTIAL=<store-daily-credential>/)
+  assert.match(validation, /MBOX_EMPLOYEE_PIN_LIYAN=<unique-four-digit-pin>/)
+  assert.deepEqual(required.conditional.storeProvisioning, [...required.conditional.storeProvisioning].sort())
   assert.doesNotMatch(`${validation}${production}`, /sk-[A-Za-z0-9]/)
 })

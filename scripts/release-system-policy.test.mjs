@@ -26,6 +26,8 @@ test('configuration and migration checks precede every database write and applic
   const candidate = activate.indexOf('docker run -d')
   assert.ok(config > 0 && config < migrationCompatibility)
   assert.ok(migrationCompatibility < backup && backup < migrate && migrate < provision && provision < candidate)
+  assert.match(activate.slice(config - 500, config + 500), /store_config[^\n]*\/run\/mbox-config\/store\.json/)
+  assert.match(activate.slice(config, config + 200), /--store=\/run\/mbox-config\/store\.json/)
   assert.match(activate, /release_state_require "\$\{state_file\}" migration_compatible/)
   assert.match(activate, /release_state_require "\$\{state_file\}" backup_verified/)
 })

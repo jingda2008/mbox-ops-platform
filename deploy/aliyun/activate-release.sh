@@ -237,24 +237,26 @@ set_env MBOX_EXPECTED_IMAGE_DIGEST "${expected_digest}"
 docker run --rm \
   --env-file "${release_env}" \
   --network "${network}" \
+  --mount "type=bind,src=${store_config},dst=/run/mbox-config/store.json,readonly" \
   --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=16m \
   --security-opt no-new-privileges \
   --cap-drop ALL \
   "${image_tag}" \
-  node dist-normalized/server/verify-normalized-runtime-config.js \
+  node dist-normalized/server/verify-normalized-runtime-config.js --store=/run/mbox-config/store.json \
   > "${release_dir}/config-preflight.json"
 release_state_transition "${state_file}" artifact_verified config_preflight_passed
 
 docker run --rm \
   --env-file "${release_env}" \
   --network "${network}" \
+  --mount "type=bind,src=${store_config},dst=/run/mbox-config/store.json,readonly" \
   --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=16m \
   --security-opt no-new-privileges \
   --cap-drop ALL \
   "${image_tag}" \
-  node dist-normalized/server/verify-normalized-runtime-config.js --external \
+  node dist-normalized/server/verify-normalized-runtime-config.js --external --store=/run/mbox-config/store.json \
   > "${release_dir}/external-preflight.json"
 release_state_transition "${state_file}" config_preflight_passed external_preflight_passed
 

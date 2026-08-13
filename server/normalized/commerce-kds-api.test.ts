@@ -124,6 +124,8 @@ function fixture(input: {
   commerceError?: Error
   giftLimitAmountMinor?: number
   commerceResultOverride?: SubmittedCommerceResult
+  onlinePaymentAvailable?: boolean
+  onlinePaymentProvider?: 'postar' | 'simulation' | null
 } = {}) {
   const permissions = input.permissions ?? [
     'order.create', 'order.view', 'kds.prepare', 'kds.deliver', 'kds.exception.manage',
@@ -317,6 +319,8 @@ function fixture(input: {
     resolveOpenTableSessionId: async (_scope, requestedTableId) => (
       requestedTableId === tableId ? tableSessionId : null
     ),
+    onlinePaymentAvailable: input.onlinePaymentAvailable,
+    onlinePaymentProvider: input.onlinePaymentProvider,
   }
   const app = Fastify()
   apps.push(app)
@@ -346,10 +350,28 @@ describe('commerceKdsApiPlugin', () => {
     expect(response.json()).toEqual({
       data: {
         canCreateOrder: true,
+        canInitiatePayment: false,
+        onlinePaymentProvider: null,
         gift: { enabled: true, maximumAmountMinor: 50_000, currency: 'CNY' },
       },
     })
     expect(JSON.stringify(response.json())).not.toContain(giftApprovalId)
+  })
+
+  it('returns the server-selected payment provider instead of letting the staff client guess it', async () => {
+    const value = fixture({
+      permissions: ['order.create', 'payment.initiate.staff'],
+      onlinePaymentAvailable: true,
+      onlinePaymentProvider: 'simulation',
+    })
+    const response = await value.app.inject({ method: 'GET', url: '/api/commerce/assisted-order-access' })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({ data: {
+      canCreateOrder: true,
+      canInitiatePayment: true,
+      onlinePaymentProvider: 'simulation',
+    } })
   })
 
   it('issues a server-bound short-lived assisted-order context for an open assigned table', async () => {

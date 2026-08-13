@@ -111,6 +111,28 @@ describe('ScopedPostgresTransactionRunner conflict retry', () => {
     })
   })
 
+  it('runs a scoped read in one database statement and records its query telemetry', async () => {
+    const client = fakeClient()
+    const runner = new ScopedPostgresTransactionRunner(fakePool([client]))
+    await runner.singleScopedQuery(scope, `
+      WITH request_scope AS MATERIALIZED (
+        SELECT set_config('app.tenant_id', $1::text, true),
+          set_config('app.store_id', $2::text, true)
+      )
+      SELECT 1 FROM request_scope
+    `)
+
+    expect(client.queries).toHaveLength(1)
+    expect(client.queries[0]).not.toContain('BEGIN')
+    expect(client.release).toHaveBeenCalledOnce()
+    expect(runner.telemetrySnapshot()).toMatchObject({
+      pool: { acquisitions: 1, acquisitionFailures: 0 },
+      transactions: { completed: 0, failed: 0 },
+      queries: { completed: 1, failed: 0 },
+    })
+    await expect(runner.singleScopedQuery(scope, 'SELECT 1')).rejects.toThrow('request-scope')
+  })
+
   it('keeps only a fixed telemetry sample window while preserving lifetime counters', () => {
     const telemetry = new NormalizedDatabaseTelemetry()
     for (let index = 0; index < 10_001; index += 1) telemetry.recordQuery(index, true)

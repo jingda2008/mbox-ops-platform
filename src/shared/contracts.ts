@@ -207,6 +207,8 @@ export interface MenuProduct {
   maxOrderQuantity?: number
   listPriceAmount: number
   costAmount: number
+  /** Client-local ordinal derived from the server-returned order; not part of the public API payload. */
+  serverRecommendationOrder?: number
   stationId: string
   enabled: boolean
   configVersion: number

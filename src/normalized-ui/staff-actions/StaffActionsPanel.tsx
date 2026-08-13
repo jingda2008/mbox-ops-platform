@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Children, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ArrowRightLeft,
@@ -408,7 +408,7 @@ export function StaffActionsPanel({
       <header className="staff-actions-header">
         <div>
           <p>{tab === 'tables' ? '现场调度' : tab === 'tasks' ? '服务执行' : tab === 'fulfillment' ? '出品履约' : '预约接待'}</p>
-          <h2>{tab === 'tables' ? '找到桌台，直接处理' : tab === 'tasks' ? '只看需要服务的事' : tab === 'fulfillment' ? '只做当前下一步' : '确认预约与到店'}</h2>
+          <h1>{tab === 'tables' ? '找到桌台，直接处理' : tab === 'tasks' ? '只看需要服务的事' : tab === 'fulfillment' ? '只做当前下一步' : '确认预约与到店'}</h1>
         </div>
         <button type="button" className="staff-actions-icon" aria-label="刷新现场" onClick={() => void load()}>
           <RefreshCw size={18} className={phase === 'loading' ? 'is-spinning' : ''} />
@@ -796,9 +796,9 @@ function TableActionSheet(props: TableActionSheetProps) {
   )
 }
 
-function ActionList({ children, empty }: { children: React.ReactNode; empty: string }) {
-  const hasChildren = Array.isArray(children) ? children.length > 0 : children !== null && children !== undefined
-  return <div className="staff-action-list">{hasChildren ? children : <p className="staff-actions-empty">{empty}</p>}</div>
+export function ActionList({ children, empty }: { children?: React.ReactNode; empty: string }) {
+  const visibleChildren = Children.toArray(children)
+  return <div className="staff-action-list">{visibleChildren.length > 0 ? visibleChildren : <p className="staff-actions-empty">{empty}</p>}</div>
 }
 
 function replaceTableSession(

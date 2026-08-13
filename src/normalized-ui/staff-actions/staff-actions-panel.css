@@ -31,8 +31,8 @@
 .staff-actions-panel button:active:not(:disabled) { transform: scale(.98); }
 .staff-actions-panel button:disabled { cursor: wait; opacity: .58; }
 .staff-actions-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-.staff-actions-header p { margin: 0 0 2px; color: #8b712c; font-size: 12px; font-weight: 700; }
-.staff-actions-header h2 { margin: 0; font-size: 20px; letter-spacing: 0; }
+.staff-actions-header p { margin: 0 0 2px; color: #735b1b; font-size: 12px; font-weight: 700; }
+.staff-actions-header h1 { margin: 0; font-size: 20px; letter-spacing: 0; }
 .staff-actions-icon { width: 42px; padding: 0; display: grid; place-items: center; border-radius: 6px; }
 .is-spinning { animation: staff-spin .8s linear infinite; }
 @keyframes staff-spin { to { transform: rotate(360deg); } }
@@ -204,6 +204,21 @@
 .staff-order-submit-row > button { min-height: 48px !important; color: #fff; background: #197b56; border-color: #197b56; display: flex; justify-content: center; align-items: center; gap: 7px; font-weight: 800; }
 .staff-order-submit-row > button:disabled { background: #aebbb4; border-color: #aebbb4; }
 .staff-order-error { margin: 0; color: #a32d35; font-size: 13px; }
+.staff-payment-choice { min-height: 0; padding: 22px 16px max(18px, env(safe-area-inset-bottom)); overflow-y: auto; display: flex; flex-direction: column; align-items: center; gap: 14px; background: #f5f6f2; }
+.staff-payment-summary { width: min(100%, 540px); padding: 14px; border: 1px solid #c9cec7; border-radius: 7px; background: #fff; display: grid; gap: 3px; }
+.staff-payment-summary small, .staff-payment-summary span, .staff-payment-choice > p { color: #687068; }
+.staff-payment-summary strong { font-size: 28px; }
+.staff-payment-methods { width: min(100%, 540px); display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.staff-payment-methods button { min-height: 128px !important; padding: 15px 8px; border: 1px solid #8e988f; border-radius: 7px; background: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; box-shadow: 0 2px 0 #b8beb8; }
+.staff-payment-methods button:active { transform: translateY(2px); box-shadow: none; }
+.staff-payment-methods button svg { color: #8a6b16; }
+.staff-payment-methods button small { color: #6b726c; }
+.staff-payment-choice > p { width: min(100%, 540px); margin: 0; text-align: center; font-size: 13px; }
+.staff-payment-qr { width: min(62vw, 260px); aspect-ratio: 1; border: 10px solid #fff; border-radius: 7px; box-shadow: 0 6px 18px rgb(23 32 25 / 12%); }
+.staff-payment-choice h3 { margin: 0; }
+.staff-payment-result { display: flex; align-items: center; gap: 9px; padding: 16px; color: #176647; }
+.staff-payment-done { width: min(100%, 360px); min-height: 48px !important; color: #fff; border-color: #197b56; background: #197b56; display: flex; align-items: center; justify-content: center; gap: 7px; }
+.staff-payment-busy { display: flex; align-items: center; gap: 7px; color: #705a20; }
 
 @media (min-width: 720px) {
   .staff-actions-panel { max-width: 920px; margin: 0 auto; }
@@ -220,4 +235,5 @@
   .staff-gift-boundary { grid-template-columns: 1fr; gap: 2px; }
   .staff-order-sheet > footer label { grid-template-columns: 1fr; gap: 4px; }
   .staff-order-submit-row { grid-template-columns: minmax(0, .8fr) minmax(180px, 1.2fr); }
+  .staff-payment-methods { grid-template-columns: 1fr; }
 }

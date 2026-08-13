@@ -20,6 +20,7 @@ const guestSessionId = '55555555-5555-4555-8555-555555555555'
 const tableQrToken = 'fixed_table_qr_'.padEnd(48, 'q')
 const deviceKey = 'wechat-device-guest-001'
 const sessionToken = 'guest_session_'.padEnd(48, 's')
+const publicCartScope = '4xCSvyzn1_sERyAFu6vINLZW6Z4ktJjS'
 
 const session: GuestSessionRecord = {
   id: guestSessionId,
@@ -99,6 +100,7 @@ describe('guestSessionApiPlugin', () => {
         table: { code: 'VIP1', displayName: 'VIP 1' },
         businessDate: '2026-08-11',
         expiresAt: '2026-08-11T13:00:00.000Z',
+        cartScope: publicCartScope,
         capabilities: session.scopes,
       },
     })
@@ -177,6 +179,7 @@ describe('guestSessionApiPlugin', () => {
         table: { code: 'VIP1', displayName: 'VIP 1' },
         businessDate: '2026-08-11',
         expiresAt: '2026-08-11T13:00:00.000Z',
+        cartScope: publicCartScope,
         capabilities: session.scopes,
       },
     })

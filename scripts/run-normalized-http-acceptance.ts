@@ -15,6 +15,10 @@ import {
 import { createNormalizedApp } from '../server/normalized/normalized-app.js'
 import { loadNormalizedRuntimeConfig } from '../server/normalized/normalized-runtime-config.js'
 import { runNormalizedLoadAcceptance } from './normalized-load-acceptance.mjs'
+import {
+  currentGitCommitSha,
+  inspectReleaseEvidenceEligibility,
+} from './release-evidence-eligibility.mjs'
 
 const adminSource = process.env.TEST_NORMALIZED_ADMIN_URL
 if (!adminSource) throw new Error('TEST_NORMALIZED_ADMIN_URL is required')
@@ -24,7 +28,8 @@ const storeConfigPath = resolve(process.env.STORE_CONFIG_FILE
 const catalogConfigPath = resolve(process.env.CATALOG_CONFIG_FILE
   ?? 'config/menu-catalog-2026-07-27.json')
 const outputPath = resolve(process.env.OUTPUT_FILE ?? '/tmp/normalized-http-acceptance.json')
-const commitSha = process.env.APP_COMMIT_SHA ?? '27e9cba12947456ce83f8da16aa4eca63af731cf'
+const commitSha = process.env.APP_COMMIT_SHA ?? currentGitCommitSha()
+const evidence = inspectReleaseEvidenceEligibility(commitSha)
 const databaseName = `mbox_normalized_http_${process.pid}_${randomBytes(4).toString('hex')}`
 const adminUrl = databaseUrl(adminSource, 'postgres')
 const testUrl = databaseUrl(adminSource, databaseName)
@@ -89,7 +94,7 @@ try {
     report = await runNormalizedLoadAcceptance({
       mode: 'http_isolated_postgres',
       sourceCommitSha: commitSha,
-      evidenceEligible: true,
+      evidenceEligible: evidence.eligible,
       independentDatabasePerRun: true,
       baseUrl,
       serviceToken: serviceLogin.token,
@@ -107,15 +112,26 @@ try {
   keepAlive.assertHealthy()
   const serverMetrics = await collectServerMetrics(runtime, store.tenant.id, store.store.id)
   const serverMetricChecks = evaluateServerMetrics(serverMetrics)
+  const evidenceCheck = {
+    id: 'evidence.source_identity',
+    passed: evidence.eligible,
+    actual: evidence.reason,
+    expected: 'clean_worktree_matches_source_commit',
+  }
   const combinedReport = {
     ...report,
+    evidence: {
+      eligible: evidence.eligible,
+      reason: evidence.reason,
+    },
     serverMetrics,
     gate: {
       ...report.gate,
-      passed: report.gate.passed && serverMetricChecks.every((check) => check.passed),
-      checks: [...report.gate.checks, ...serverMetricChecks],
+      passed: report.gate.passed && evidenceCheck.passed && serverMetricChecks.every((check) => check.passed),
+      checks: [...report.gate.checks, evidenceCheck, ...serverMetricChecks],
       failures: [
         ...report.gate.failures,
+        ...(!evidenceCheck.passed ? [evidenceCheck.id] : []),
         ...serverMetricChecks.filter((check) => !check.passed).map((check) => check.id),
       ],
     },

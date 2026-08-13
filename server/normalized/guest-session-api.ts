@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { FastifyPluginAsync, FastifyReply } from 'fastify'
 import {
   GuestSessionInvalidError,
@@ -65,6 +66,7 @@ export const guestSessionApiPlugin: FastifyPluginAsync<GuestSessionApiOptions> =
           },
           businessDate: result.session.businessDate,
           expiresAt: result.session.expiresAt,
+          cartScope: cartScope(result.session.tableSessionId),
           capabilities: result.session.scopes,
         },
       })
@@ -80,6 +82,7 @@ export const guestSessionApiPlugin: FastifyPluginAsync<GuestSessionApiOptions> =
           },
           businessDate: result.session.businessDate,
           expiresAt: result.session.expiresAt,
+          cartScope: cartScope(result.session.tableSessionId),
           capabilities: result.session.scopes,
         },
       })
@@ -125,10 +128,16 @@ export const guestSessionApiPlugin: FastifyPluginAsync<GuestSessionApiOptions> =
         },
         businessDate: context.businessDate,
         expiresAt: context.expiresAt,
+        cartScope: cartScope(context.tableSessionId),
         capabilities: context.capabilities,
       },
     })
   }))
+}
+
+function cartScope(tableSessionId: string | null): string | null {
+  if (tableSessionId === null) return null
+  return createHash('sha256').update(`mbox-cart-v1:${tableSessionId}`, 'utf8').digest('base64url').slice(0, 32)
 }
 
 async function handleRoute(

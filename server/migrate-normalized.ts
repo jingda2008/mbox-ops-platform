@@ -81,7 +81,7 @@ export function assertNormalizedMigrationTarget(inspection: TargetDatabaseInspec
   }
 }
 
-async function inspectTargetDatabase(client: Client): Promise<TargetDatabaseInspection> {
+export async function inspectTargetDatabase(client: Client): Promise<TargetDatabaseInspection> {
   const catalog = await client.query<{
     user_table_count: string
     legacy_migrations: string | null

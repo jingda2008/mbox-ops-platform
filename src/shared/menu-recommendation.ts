@@ -113,7 +113,7 @@ export function rankMenuRecommendations(
     .filter((product) => {
       const recommendation = recommendationConfig(product)
       return recommendation.enabled
-        && product.listPriceAmount > product.costAmount
+        && hasPositiveRecommendationContribution(product)
         && recommendation.minimumPartySize <= normalizedPartySize
         && recommendation.maximumPartySize >= normalizedPartySize
     })
@@ -270,10 +270,14 @@ function scoreProduct(product: MenuProduct, products: MenuProduct[], context: Me
   if (recommendation.expectedPrepMinutes > 0 && recommendation.expectedPrepMinutes <= 8) score += 10
   if (recommendation.expectedPrepMinutes > 15) score -= Math.min(24, recommendation.expectedPrepMinutes - 15)
 
-  const grossProfitAmount = product.listPriceAmount - product.costAmount
-  const grossMarginRatio = product.listPriceAmount > 0 ? grossProfitAmount / product.listPriceAmount : 0
-  if (grossProfitAmount > 0) score += Math.round(Math.max(0, Math.min(.75, grossMarginRatio)) * 24)
-  else score -= 80
+  const serverOrder = product.serverRecommendationOrder
+  if (serverOrder !== undefined) score += Math.max(0, 24 - Math.min(24, Math.max(0, serverOrder)))
+  else {
+    const grossProfitAmount = product.listPriceAmount - product.costAmount
+    const grossMarginRatio = product.listPriceAmount > 0 ? grossProfitAmount / product.listPriceAmount : 0
+    if (grossProfitAmount > 0) score += Math.round(Math.max(0, Math.min(.75, grossMarginRatio)) * 24)
+    else score -= 80
+  }
 
   score += tagScore(context.scene, recommendation.sceneTags, 42)
   score += tagScore(context.intent, recommendation.intentTags, 52)
@@ -292,6 +296,12 @@ function scoreProduct(product: MenuProduct, products: MenuProduct[], context: Me
   if (reasons.length === 0) reasons.push(defaultReason(product.beverageFamily ?? 'none'))
 
   return { product, score, reason: reasons.join(' · ') }
+}
+
+function hasPositiveRecommendationContribution(product: MenuProduct): boolean {
+  return product.serverRecommendationOrder === undefined
+    ? product.listPriceAmount > product.costAmount
+    : product.recommendation?.enabled === true
 }
 
 function tagScore<T extends string>(selected: T | undefined, tags: readonly T[], weight: number) {

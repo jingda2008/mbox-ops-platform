@@ -201,6 +201,7 @@ export class PaymentCommandService {
         succeededAt: input.occurredAt,
       })
       const payment = application.payment
+      await payments.consumeProviderAction(payment.id)
       if (!application.applied) return noOpOutcome(payment)
       await new ReconciliationRepository(transaction).append({
         paymentId: payment.id,

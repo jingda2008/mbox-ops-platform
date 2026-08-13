@@ -1,30 +1,35 @@
 # syntax=docker/dockerfile:1.7
 FROM node:24-alpine AS build
+ARG APP_COMMIT_SHA=development
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci
+RUN --mount=type=cache,id=mbox-normalized-build-npm,target=/root/.npm npm ci
 COPY . .
-RUN npm run build
+RUN APP_COMMIT_SHA="${APP_COMMIT_SHA}" npm run build:normalized
 
 FROM node:24-alpine AS runtime
-ARG MBOX_RELEASE_SHA=development
-ARG MBOX_RELEASE_VERSION=development
-LABEL org.opencontainers.image.revision=$MBOX_RELEASE_SHA
-LABEL org.opencontainers.image.version=$MBOX_RELEASE_VERSION
-ENV NODE_ENV=production
+ARG APP_COMMIT_SHA=development
+ARG APP_RELEASE_VERSION=development
+LABEL org.opencontainers.image.revision="${APP_COMMIT_SHA}"
+LABEL org.opencontainers.image.version="${APP_RELEASE_VERSION}"
+LABEL com.mbox.schema-flavor="normalized-core-v1"
+
+ENV NODE_ENV=production \
+  PORT=8787 \
+  MBOX_STATIC_DIR=/app/dist
 WORKDIR /app
-RUN addgroup -S mbox && adduser -S -G mbox mbox && mkdir /data && chown mbox:mbox /data
+
 COPY package.json package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
-COPY --from=build /app/dist ./dist
-COPY --from=build /app/dist-server ./dist-server
-COPY --from=build /app/database ./database
-COPY --from=build /app/scripts/verify-database.mjs ./scripts/verify-database.mjs
-COPY --from=build /app/scripts/verify-operational-read-path.mjs ./scripts/verify-operational-read-path.mjs
-COPY --from=build /app/scripts/filter-sls-events.mjs ./scripts/filter-sls-events.mjs
-USER mbox
-ENV MBOX_JSON_STATE_PATH=/data/state.json
-VOLUME ["/data"]
+RUN --mount=type=cache,id=mbox-normalized-runtime-npm,target=/root/.npm \
+  npm ci --omit=dev --ignore-scripts
+
+COPY --from=build --chown=node:node /app/dist ./dist
+COPY --from=build --chown=node:node /app/dist-normalized ./dist-normalized
+COPY --from=build --chown=node:node /app/database/normalized-migrations ./dist-normalized/database/normalized-migrations
+COPY --from=build --chown=node:node /app/scripts/filter-sls-events.mjs ./scripts/filter-sls-events.mjs
+
+USER node
 EXPOSE 8787
-HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 CMD wget -q -O - "http://127.0.0.1:${PORT:-8787}/api/live" || exit 1
-CMD ["node", "dist-server/server/index.js"]
+HEALTHCHECK --interval=15s --timeout=4s --start-period=25s --retries=4 \
+  CMD wget -q -O - "http://127.0.0.1:${PORT}/api/ready" >/dev/null || exit 1
+CMD ["node", "dist-normalized/server/normalized-server.js"]

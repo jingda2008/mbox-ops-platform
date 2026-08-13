@@ -304,17 +304,20 @@ integration('normalized staff authentication PostgreSQL integration', () => {
       ) VALUES ($1::uuid, $2::uuid, $3::uuid, 'legacy', '旧入口', '/staff/legacy', true, '{}'::jsonb, $4::uuid)
     `, [tenantId, storeId, serverRoleId, adminId])
 
-    const result = await accessManagement.deployPermissions({
-      scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
-      idempotencyKey: 'staff-access-legacy-route-exception-0001',
-      requestFingerprint: 'tom-legacy-route-exception-v1', reason: '员工例外独立发布',
-      changes: [{ kind: 'employee_override', employeeId: employeeOneId, permissionCode: 'order.create', effect: 'deny' }],
-    })
+    for (let index = 0; index < 8; index += 1) {
+      const effect = index % 2 === 0 ? 'deny' : 'grant'
+      const result = await accessManagement.deployPermissions({
+        scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
+        idempotencyKey: `staff-access-legacy-route-exception-${String(index).padStart(4, '0')}`,
+        requestFingerprint: `tom-legacy-route-exception-${effect}-${index}`, reason: '员工例外独立发布',
+        changes: [{ kind: 'employee_override', employeeId: employeeOneId, permissionCode: 'order.create', effect }],
+      })
 
-    expect(result.status).toBe('verified')
-    expect(result.changes).toEqual([expect.objectContaining({
-      kind: 'employee_override', targetId: employeeOneId, applied: true,
-    })])
+      expect(result.status).toBe('verified')
+      expect(result.changes).toEqual([expect.objectContaining({
+        kind: 'employee_override', targetId: employeeOneId, applied: true,
+      })])
+    }
   })
 
   it('rolls back a deployment that would remove the final access administrator', async () => {

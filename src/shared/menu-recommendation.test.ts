@@ -160,6 +160,35 @@ describe('menu recommendation ranking', () => {
     expect(rankMenuRecommendations([lossLeader], { partySize: 2 })).toEqual([])
   })
 
+  it('uses the server-returned order without exposing contribution scores to the customer', () => {
+    const secondChoice = product({
+      id: 'second-choice',
+      listPriceAmount: 10_000,
+      costAmount: 10_000,
+      serverRecommendationOrder: 1,
+    })
+    const firstChoice = product({
+      id: 'first-choice',
+      listPriceAmount: 10_000,
+      costAmount: 10_000,
+      serverRecommendationOrder: 0,
+    })
+    const serverRejected = product({
+      id: 'server-rejected',
+      listPriceAmount: 10_000,
+      costAmount: 10_000,
+      serverRecommendationOrder: 2,
+      recommendation: { ...product({}).recommendation!, enabled: false, priority: 999 },
+    })
+
+    const ranked = rankMenuRecommendations(
+      [secondChoice, firstChoice, serverRejected],
+      { partySize: 2 },
+    )
+
+    expect(ranked.map((entry) => entry.product.id)).toEqual(['first-choice', 'second-choice'])
+  })
+
   it('computes bundle value from current component prices instead of a marketing claim', () => {
     const cocktail = product({ id: 'cocktail', listPriceAmount: 8_800 })
     const snack = product({ id: 'snack', listPriceAmount: 9_800 })

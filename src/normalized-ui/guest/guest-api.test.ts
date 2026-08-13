@@ -42,7 +42,7 @@ function product(index: number) {
       minimumPartySize: 1, maximumPartySize: 100,
       sceneTags: [], intentTags: [], tasteTags: [], dwellTags: [],
       singleWaveEligible: true, expectedPrepMinutes: 8, holdMinutes: 10,
-      upgradeProductId: null, contributionPositive: true,
+      upgradeProductId: null,
     },
     available: true,
   }
@@ -56,6 +56,7 @@ describe('GuestApiClient', () => {
       table: { code: 'W01', displayName: '室外 W01' },
       businessDate: '2026-08-11',
       expiresAt: '2026-08-12T02:00:00.000Z',
+      cartScope: 'abcdefghijklmnopqrstuvwxyzABCDEF',
       capabilities: ['guest.menu.read'],
     } }))
     const client = new GuestApiClient(deviceKey, { fetch: send })
@@ -92,6 +93,7 @@ describe('GuestApiClient', () => {
     const result = await client.submitOrder({
       items: [{ productId: '55555555-5555-4555-8555-555555555555', quantity: 2 }],
       note: '少冰，生日桌',
+      confirmedDuplicateOrderId: 'guest-order-existing-0001',
     }, { idempotencyKey: 'guest-order-test-0001' })
 
     expect(result.payment).toMatchObject({ status: 'pending', simulated: false })
@@ -100,6 +102,25 @@ describe('GuestApiClient', () => {
     expect(JSON.parse(String(init?.body))).toEqual({
       items: [{ productId: '55555555-5555-4555-8555-555555555555', quantity: 2 }],
       note: '少冰，生日桌',
+      confirmedDuplicateOrderId: 'guest-order-existing-0001',
+    })
+  })
+
+  it('preserves server duplicate details for the confirmation dialog', async () => {
+    const send = vi.fn(async () => jsonResponse({ error: {
+      code: 'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED',
+      message: '本桌刚提交过相同商品，请确认这是继续加单而不是重复操作',
+      details: { conflictingOrderId: 'guest-order-existing-0001' },
+    } }, 409))
+    const client = new GuestApiClient(deviceKey, { fetch: send })
+
+    await expect(client.submitOrder({
+      items: [{ productId: '55555555-5555-4555-8555-555555555555', quantity: 1 }],
+      note: null,
+    }, { idempotencyKey: 'guest-order-duplicate-0001' })).rejects.toMatchObject({
+      status: 409,
+      code: 'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED',
+      details: { conflictingOrderId: 'guest-order-existing-0001' },
     })
   })
 
@@ -107,6 +128,7 @@ describe('GuestApiClient', () => {
     const send = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => jsonResponse({ data: [{
       publicId: 'shared-order-0001', round: 1, channel: 'guest_qr', status: 'submitted',
       visibility: 'shared', isMine: false, createdAt: '2026-08-11T12:00:00.000Z',
+      paymentStatus: 'unpaid', paymentAccess: 'available', payableAmountMinor: 13_600, currency: 'CNY',
       items: [{ productId: '55555555-5555-4555-8555-555555555555', name: '青岛啤酒', quantity: 2, status: 'preparing' }],
     }] }))
     const client = new GuestApiClient(deviceKey, { fetch: send })
@@ -166,7 +188,21 @@ function orderResult() {
     settlement: { subtotalAmountMinor: 13_600, discountAmountMinor: 0, payableAmountMinor: 13_600, currency: 'CNY' },
     payment: {
       publicId: 'guest-payment-public-0001', mode: 'wechat_jsapi', provider: 'postar', method: 'jsapi',
-      status: 'pending', simulated: false, providerAction: 'provider_order_required',
+      status: 'pending', simulated: false, providerAction: onlinePaymentAction('jsapi'),
     },
+  }
+}
+
+function onlinePaymentAction(presentation: 'jsapi' | 'qr' | 'barcode') {
+  return {
+    paymentId: '88888888-8888-4888-8888-888888888888',
+    paymentPublicId: 'guest-payment-public-0001',
+    orderPublicId: 'guest-order-public-0001',
+    status: 'pending',
+    presentation,
+    expiresAt: '2026-08-11T12:05:00.000Z',
+    payload: presentation === 'jsapi'
+      ? { appId: 'wx-app-1', package: 'prepay_id=test' }
+      : { qrCodeUrl: 'https://pay.example.test/order/1' },
   }
 }

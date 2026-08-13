@@ -22,14 +22,22 @@ import type {
 
 const config: NormalizedRuntimeConfig = {
   nodeEnv: 'test',
+  deploymentTier: 'validation',
   databaseUrl: 'postgresql://unused/normalized',
   tenantId: '11111111-1111-4111-8111-111111111111',
   storeId: '22222222-2222-4222-8222-222222222222',
   secret: '0123456789abcdef0123456789abcdef',
+  metricsToken: 'normalized-metrics-token-0123456789abcdef',
   payment: null,
   guestPaymentMode: 'simulation',
   inventoryEnforcementMode: 'audit_only',
+  guestOrderSafetyPolicy: {
+    duplicateWindowSeconds: 45,
+    maxOrdersPerCustomerPerMinute: 5,
+    maxOrdersPerTablePerMinute: 20,
+  },
   commitSha: 'abcdef1234567890',
+  releaseImageDigest: null,
   schemaFlavor: NORMALIZED_SCHEMA_FLAVOR,
   host: '127.0.0.1',
   port: 3_000,
@@ -70,6 +78,7 @@ describe('createNormalizedApp', () => {
       ['GET', '/api/live'],
       ['GET', '/api/ready'],
       ['GET', '/api/version'],
+      ['GET', '/api/metrics'],
       ['GET', '/api/operations'],
       ['GET', '/api/staff/workspace'],
       ['GET', '/api/catalog/products'],
@@ -97,14 +106,18 @@ describe('createNormalizedApp', () => {
     expect(live.json()).toEqual({
       status: 'live',
       commitSha: config.commitSha,
+      releaseImageDigest: null,
       schemaFlavor: NORMALIZED_SCHEMA_FLAVOR,
+      deploymentTier: 'validation',
       inventoryEnforcementMode: 'audit_only',
     })
     const version = await runtime.app.inject({ method: 'GET', url: '/api/version' })
     expect(version.statusCode).toBe(200)
     expect(version.json()).toEqual({
       commitSha: config.commitSha,
+      releaseImageDigest: null,
       schemaFlavor: NORMALIZED_SCHEMA_FLAVOR,
+      deploymentTier: 'validation',
       inventoryEnforcementMode: 'audit_only',
     })
     await runtime.app.close()
@@ -124,10 +137,73 @@ describe('createNormalizedApp', () => {
       status: 'ready',
       schemaVersion: NORMALIZED_MIN_SCHEMA_VERSION,
       commitSha: config.commitSha,
+      releaseImageDigest: null,
       schemaFlavor: NORMALIZED_SCHEMA_FLAVOR,
+      deploymentTier: 'validation',
       inventoryEnforcementMode: 'audit_only',
     })
     expect(pool.queries.some((query) => query.includes('normalized_schema_metadata'))).toBe(true)
+    expect(pool.queries).toHaveLength(1)
+    expect(pool.queries[0]).toContain("set_config('app.tenant_id'")
+    expect(pool.queries[0]).toContain("set_config('app.store_id'")
+    await runtime.app.close()
+  })
+
+  it('uses one database round trip when the database adds 1200ms per query', async () => {
+    const pool = fakePool({ queryDelayMs: 1_200 })
+    const runtime = await createNormalizedApp({ config, pool, logger: false })
+    const startedAt = performance.now()
+    const response = await runtime.app.inject({ method: 'GET', url: '/api/ready' })
+    const elapsedMs = performance.now() - startedAt
+
+    expect(response.statusCode).toBe(200)
+    expect(pool.queries).toHaveLength(1)
+    expect(elapsedMs).toBeGreaterThanOrEqual(1_100)
+    expect(elapsedMs).toBeLessThan(3_000)
+    await runtime.app.close()
+  })
+
+  it('sets application security headers and protects normalized metrics with a bearer token', async () => {
+    const runtime = await createNormalizedApp({ config, pool: fakePool(), logger: false })
+    const live = await runtime.app.inject({ method: 'GET', url: '/api/live' })
+    expect(live.headers).toMatchObject({
+      'x-content-type-options': 'nosniff',
+      'x-frame-options': 'DENY',
+      'referrer-policy': 'strict-origin-when-cross-origin',
+      'cross-origin-embedder-policy': 'credentialless',
+      'cross-origin-opener-policy': 'same-origin-allow-popups',
+      'cross-origin-resource-policy': 'same-site',
+    })
+    expect(live.headers['content-security-policy']).toContain("frame-ancestors 'none'")
+    expect(live.headers['permissions-policy']).toContain('microphone=(self)')
+    expect(live.headers['strict-transport-security']).toBeUndefined()
+
+    const rejected = await runtime.app.inject({ method: 'GET', url: '/api/metrics' })
+    expect(rejected.statusCode).toBe(401)
+    expect(rejected.body).not.toContain(config.metricsToken ?? '')
+
+    const accepted = await runtime.app.inject({
+      method: 'GET',
+      url: '/api/metrics',
+      headers: { authorization: `Bearer ${config.metricsToken}` },
+    })
+    expect(accepted.statusCode).toBe(200)
+    expect(accepted.headers['content-type']).toContain('text/plain')
+    expect(accepted.body).toContain('mbox_runtime_info{')
+    expect(accepted.body).toContain('deployment_tier="validation"')
+    expect(accepted.body).toContain('mbox_database_pool_acquisitions_total{outcome="success"}')
+    expect(accepted.body).not.toContain(config.metricsToken ?? '')
+    await runtime.app.close()
+  })
+
+  it('adds HSTS when the optimized runtime is used in the controlled validation tier', async () => {
+    const runtime = await createNormalizedApp({
+      config: { ...config, nodeEnv: 'production' },
+      pool: fakePool(),
+      logger: false,
+    })
+    const response = await runtime.app.inject({ method: 'GET', url: '/api/live' })
+    expect(response.headers['strict-transport-security']).toContain('max-age=31536000')
     await runtime.app.close()
   })
 
@@ -307,12 +383,18 @@ describe('createNormalizedApp', () => {
     ) as { compilerOptions: { outDir: string }; files: string[] }
     expect(serverSource).toContain("./normalized/normalized-app.js")
     expect(serverSource).not.toMatch(/server\/index|RuntimeState|RuntimeRepository/)
+    expect(packageJson.scripts.dev).toContain('npm:dev:api')
+    expect(packageJson.scripts['dev:api']).toBe('tsx watch server/normalized-server.ts')
     expect(packageJson.scripts['dev:normalized']).toBe('tsx watch server/normalized-server.ts')
+    expect(packageJson.scripts['dev:api:legacy']).toBe('tsx watch server/index.ts')
+    expect(packageJson.scripts.build).toBe('npm run build:normalized')
     expect(packageJson.scripts['build:normalized']).toContain('tsconfig.normalized-server.json')
     expect(packageJson.scripts['build:normalized']).not.toContain('tsconfig.server.json')
     expect(normalizedTsconfig.files).toContain('server/normalized-server.ts')
     expect(normalizedTsconfig.compilerOptions.outDir).toBe('dist-normalized')
     expect(packageJson.scripts['start:normalized']).toBe('node dist-normalized/server/normalized-server.js')
+    expect(packageJson.scripts.start).toBe('node dist-normalized/server/normalized-server.js')
+    expect(packageJson.scripts['start:legacy']).toBe('node dist-server/server/index.js')
   })
 
   it('serves direct SPA routes from the normalized image without hiding unknown APIs', async () => {
@@ -351,6 +433,7 @@ interface FakePoolOptions {
   failure?: Error
   events?: string[]
   deviceLeaseValid?: boolean
+  queryDelayMs?: number
 }
 
 type InspectablePool = PostgresPool & { queries: string[] }
@@ -362,6 +445,7 @@ function fakePool(options: FakePoolOptions = {}): InspectablePool {
       text: string,
     ): Promise<PostgresQueryResult<Row>> {
       queries.push(text)
+      if (options.queryDelayMs) await new Promise((resolveDelay) => setTimeout(resolveDelay, options.queryDelayMs))
       if (text.includes('normalized_schema_metadata')) {
         if (options.failure) throw options.failure
         const ready = options.ready ?? {

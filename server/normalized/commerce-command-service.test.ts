@@ -14,6 +14,10 @@ import {
   ScopedPostgresTransactionRunner,
 } from './index.js'
 import { CommerceCommandService, type SubmittedCommerceResult } from './commerce-command-service.js'
+import {
+  GuestOrderDuplicateConfirmationRequiredError,
+  GuestOrderRateLimitedError,
+} from './guest-order-safety.js'
 import { InsufficientInventoryError } from './inventory-repository.js'
 import { KdsRepository } from './kds-repository.js'
 import { StaffAccessDeniedError } from './staff-access-repository.js'
@@ -43,6 +47,7 @@ const recipeBId = randomUUID()
 const recipeKitchenId = randomUUID()
 const employeeId = randomUUID()
 const customerId = randomUUID()
+const customerTwoId = randomUUID()
 const kdsRoleId = randomUUID()
 const pricingAuthorizationId = randomUUID()
 
@@ -496,6 +501,85 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
       .toEqual([sessionOneId, sessionTwoId].toSorted())
   })
 
+  it('serializes same-table guest orders across customers, requires duplicate confirmation, and rate-limits per customer', async () => {
+    const guestService = new CommerceCommandService(
+      new NormalizedCommandExecutor(new ScopedPostgresTransactionRunner(asPool(pool))),
+      undefined,
+      {
+        guestOrderSafetyPolicy: {
+          duplicateWindowSeconds: 45,
+          maxOrdersPerCustomerPerMinute: 2,
+          maxOrdersPerTablePerMinute: 20,
+        },
+      },
+    )
+    const concurrentInputs = [
+      guestCommand('guest-race-one', customerId, productBId, 1, 'guest-race-one-0001'),
+      guestCommand('guest-race-two', customerTwoId, productBId, 1, 'guest-race-two-0001'),
+    ] as const
+    const results = await Promise.allSettled(concurrentInputs.map((input) => guestService.submitOrder(input)))
+    const fulfilledIndex = results.findIndex((result) => result.status === 'fulfilled')
+    const rejectedIndex = results.findIndex((result) => result.status === 'rejected')
+    expect(fulfilledIndex).toBeGreaterThanOrEqual(0)
+    expect(rejectedIndex).toBeGreaterThanOrEqual(0)
+    expect(results[rejectedIndex]).toMatchObject({
+      status: 'rejected',
+      reason: expect.any(GuestOrderDuplicateConfirmationRequiredError),
+    })
+
+    const accepted = results[fulfilledIndex]
+    if (accepted?.status !== 'fulfilled') throw new Error('Expected one accepted guest order')
+    const rejectedCustomerId = concurrentInputs[rejectedIndex]!.createdByCustomerId
+    const confirmed = await guestService.submitOrder({
+      ...guestCommand('guest-race-confirmed', rejectedCustomerId, productBId, 1, 'guest-race-confirmed-0001'),
+      confirmedDuplicateOrderPublicId: accepted.value.value.order.publicId,
+    })
+    expect(confirmed.value.order.createdByCustomerId).toBe(rejectedCustomerId)
+
+    await guestService.submitOrder(
+      guestCommand('guest-race-distinct', rejectedCustomerId, productAId, 1, 'guest-race-distinct-0001'),
+    )
+    await expect(guestService.submitOrder(
+      guestCommand('guest-race-rate-limited', rejectedCustomerId, productAId, 2, 'guest-race-limited-0001'),
+    )).rejects.toMatchObject({
+      name: 'GuestOrderRateLimitedError',
+      dimension: 'customer',
+    } satisfies Partial<GuestOrderRateLimitedError>)
+
+    const evidence = await pool.query<{ count: string }>(`
+      SELECT count(*)::text AS count
+      FROM mbox.orders
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+        AND public_id = ANY($3::text[])
+    `, [tenantId, storeId, ['guest-race-one', 'guest-race-two', 'guest-race-confirmed', 'guest-race-distinct', 'guest-race-rate-limited']])
+    expect(evidence.rows[0]?.count).toBe('3')
+  })
+
+  it('allows two customers at the same table to submit different baskets concurrently', async () => {
+    const guestService = new CommerceCommandService(
+      new NormalizedCommandExecutor(new ScopedPostgresTransactionRunner(asPool(pool))),
+      undefined,
+      {
+        guestOrderSafetyPolicy: {
+          duplicateWindowSeconds: 45,
+          maxOrdersPerCustomerPerMinute: 100,
+          maxOrdersPerTablePerMinute: 100,
+        },
+      },
+    )
+    const results = await Promise.all([
+      guestService.submitOrder(
+        guestCommand('guest-distinct-one', customerId, productAId, 3, 'guest-distinct-one-0001'),
+      ),
+      guestService.submitOrder(
+        guestCommand('guest-distinct-two', customerTwoId, productBId, 3, 'guest-distinct-two-0001'),
+      ),
+    ])
+
+    expect(results.map((result) => result.value.order.publicId).toSorted())
+      .toEqual(['guest-distinct-one', 'guest-distinct-two'])
+  })
+
   it('records each KDS production transition as an event without updating order-item status', async () => {
     const submitted = await service.submitOrder(command('integration-kds-events', sessionOneId, productBId, 1, 'integration-kds-events-0001'))
     const taskId = submitted.value.kdsTasks[0]!.id
@@ -556,6 +640,27 @@ function command(publicId: string, tableSessionId: string, productId: string, qu
   }
 }
 
+function guestCommand(
+  publicId: string,
+  createdByCustomerId: string,
+  productId: string,
+  quantity: number,
+  idempotencyKey: string,
+) {
+  return {
+    scope: { tenantId, storeId },
+    actor: { type: 'guest' as const, ref: `guest-test:${createdByCustomerId}` },
+    businessDate: '2026-08-11',
+    tableSessionId: sessionOneId,
+    publicId,
+    channel: 'guest_qr' as const,
+    settlementMode: 'immediate_payment' as const,
+    lines: [{ productId, quantity }],
+    createdByCustomerId,
+    idempotencyKey,
+  }
+}
+
 function asPool(pool: Pool): PostgresPool {
   return { connect: async () => pool.connect(), end: async () => pool.end() }
 }
@@ -597,6 +702,20 @@ async function seed(pool: Pool): Promise<void> {
     ON CONFLICT DO NOTHING
   `, [sessionOneId, sessionTwoId, tenantId, storeId, tableOneId, tableTwoId])
   await pool.query(`INSERT INTO mbox.employees(id, tenant_id, store_id, employee_code, display_name, status) VALUES ($1, $2, $3, 'KDS01', 'KDS Tester', 'active') ON CONFLICT DO NOTHING`, [employeeId, tenantId, storeId])
+  await pool.query(`
+    INSERT INTO mbox.customers(id, tenant_id, store_id, public_id) VALUES
+      ($1, $3, $4, 'commerce-guest-one'),
+      ($2, $3, $4, 'commerce-guest-two')
+    ON CONFLICT DO NOTHING
+  `, [customerId, customerTwoId, tenantId, storeId])
+  await pool.query(`
+    INSERT INTO mbox.table_session_customers(
+      tenant_id, store_id, table_session_id, customer_id, relationship
+    ) VALUES
+      ($1, $2, $3, $4, 'primary'),
+      ($1, $2, $3, $5, 'guest')
+    ON CONFLICT DO NOTHING
+  `, [tenantId, storeId, sessionOneId, customerId, customerTwoId])
   await pool.query(`
     INSERT INTO mbox.roles(id, tenant_id, store_id, code, name, capabilities, status)
     VALUES ($1, $2, $3, 'KDS_TESTER', 'KDS Tester', ARRAY['kds.prepare'], 'active')

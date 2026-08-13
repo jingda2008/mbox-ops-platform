@@ -1,10 +1,12 @@
 import { lstat, readFile, readdir } from 'node:fs/promises'
-import { extname, relative, resolve } from 'node:path'
+import { basename, extname, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const textExtensions = new Set([
-  '', '.csv', '.html', '.js', '.json', '.jsonl', '.log', '.md', '.mjs', '.sha256', '.svg', '.ts', '.txt', '.xml', '.yaml', '.yml',
+  '.csv', '.html', '.js', '.json', '.jsonl', '.log', '.md', '.mjs', '.sh', '.sha256', '.svg', '.ts', '.txt', '.xml', '.yaml', '.yml',
 ])
+
+const extensionlessTextFiles = new Set(['SHA256SUMS'])
 
 const forbiddenArtifactExtensions = new Set([
   '.env', '.gif', '.jpeg', '.jpg', '.mov', '.mp3', '.mp4', '.pdf', '.png', '.webp', '.wav',
@@ -17,8 +19,14 @@ const rules = [
   { id: 'bearer-credential', expression: /\bBearer\s+[A-Za-z0-9._~-]{20,}/i },
   { id: 'url-or-field-token', expression: /(?:[?&]|\b)(?:token|access_token|authorization)[=:]["']?(?!REDACTED\b)[A-Za-z0-9._~-]{20,}/i },
   { id: 'database-password', expression: /postgres(?:ql)?:\/\/[^\s:@/]+:(?!\*{3})[^\s@/]+@/i },
-  { id: 'raw-mobile-number', expression: /(?<!\d)1[3-9]\d{9}(?!\d)/ },
-  { id: 'raw-chinese-id', expression: /(?<!\d)\d{17}[\dXx](?!\d)/ },
+  // Do not interpret an 11-digit run inside a SHA256 or other hex identifier
+  // as a Chinese mobile number. Real serialized phone values still have a
+  // quote, delimiter or whitespace at both boundaries and remain detectable.
+  { id: 'raw-mobile-number', expression: /(?<![0-9a-f])1[3-9]\d{9}(?![0-9a-f])/i },
+  // A checksum can contain 18 consecutive decimal digits. Require hexadecimal
+  // boundaries so such a run is not mistaken for an identity number, while a
+  // serialized identity value next to quotes or delimiters remains blocked.
+  { id: 'raw-chinese-id', expression: /(?<![0-9a-f])\d{17}[\dX](?![0-9a-f])/i },
 ]
 
 const forbiddenJsonKeys = new Set([
@@ -66,8 +74,23 @@ export async function inspectEvidenceDirectory(rootInput) {
       findings.push({ file, rule: 'uninspectable-or-sensitive-artifact' })
       continue
     }
-    if (!textExtensions.has(extension)) continue
-    const content = await readFile(path, 'utf8')
+    if ((!extension && !extensionlessTextFiles.has(basename(path)))
+      || (extension && !textExtensions.has(extension))) {
+      findings.push({ file, rule: 'unapproved-artifact-extension' })
+      continue
+    }
+    const bytes = await readFile(path)
+    let content
+    try {
+      content = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+    } catch {
+      findings.push({ file, rule: 'invalid-text-encoding' })
+      continue
+    }
+    if (content.includes('\0')) {
+      findings.push({ file, rule: 'binary-content-in-text-artifact' })
+      continue
+    }
     for (const rule of rules) {
       const match = rule.expression.exec(content)
       if (match) findings.push({ file, rule: rule.id, line: content.slice(0, match.index).split('\n').length })

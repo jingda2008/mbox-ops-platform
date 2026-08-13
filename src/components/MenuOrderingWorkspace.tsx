@@ -18,6 +18,7 @@ import { productAvailability } from '../shared/product-availability'
 import { GuestRecommendationTools, type GuestRecommendationContext } from './GuestRecommendationTools'
 import './MenuOrderingWorkspace.css'
 import { filterMenuProducts } from './menu-search'
+import { clearPersistedCart, persistCart, readPersistedCart } from './menu-cart-storage'
 
 export interface MenuCartItem {
   productId: string
@@ -123,6 +124,7 @@ interface MenuOrderingWorkspaceProps {
   guestSalesMode?: boolean
   partySize?: number
   recommendationScene?: MenuRecommendationScene
+  cartStorageKey?: string
   onSubmit: (items: MenuCartItem[], options: MenuSubmitOptions) => Promise<void>
   onInteraction?: (interaction: MenuInteraction) => void
   onCartCountChange?: (itemCount: number) => void
@@ -147,9 +149,10 @@ export function MenuOrderingWorkspace({
   guestSalesMode = false,
   partySize = 1,
   recommendationScene,
+  cartStorageKey,
   onCartCountChange,
 }: MenuOrderingWorkspaceProps) {
-  const [cart, setCart] = useState<Record<string, number>>({})
+  const [cart, setCart] = useState<Record<string, number>>(() => readPersistedCart(cartStorageKey))
   const [categoryId, setCategoryId] = useState('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [clock, setClock] = useState(() => Date.now() + clockOffsetMs)
@@ -175,6 +178,7 @@ export function MenuOrderingWorkspace({
   const previousRecommendationIdsRef = useRef('')
   const cartAbandonmentRef = useRef('')
   const suggestedUpgradeSourceIdsRef = useRef(new Set<string>())
+  useEffect(() => persistCart(cartStorageKey, cart), [cart, cartStorageKey])
   useEffect(() => {
     const updateClock = () => setClock(Date.now() + clockOffsetMs)
     updateClock()
@@ -506,6 +510,7 @@ export function MenuOrderingWorkspace({
         { confirmedDuplicateOrderId: duplicateOrderId, fulfillmentNote: fulfillmentNote.trim() },
       )
       setCart({})
+      clearPersistedCart(cartStorageKey)
       setFulfillmentNote('')
       setCartOpen(false)
       setLastSubmittedAt(Date.now())
@@ -684,8 +689,14 @@ export function MenuOrderingWorkspace({
                       <span>{option.role === 'primary' ? '人气优选' : roleLabel}</span>
                     </b>
                   </button>
+                  {status.orderable && quantity === 0 && <button
+                    type="button"
+                    className="menu-recommendation-quick-add"
+                    aria-label={`快速加入${product.name}`}
+                    onClick={() => changeQuantity(product.id, 1)}
+                  ><Plus size={19} strokeWidth={2.5} /></button>}
                   <div className="menu-recommendation-option-copy">
-                    <button type="button" className="menu-recommendation-option-title" onClick={() => openProductDetail(product)}>
+                    <button type="button" className="menu-recommendation-option-title" aria-label={`查看${product.name}详情`} onClick={() => openProductDetail(product)}>
                       <strong>{product.name}</strong>
                       <span>{recommendationConfig(product).headline || option.reason}</span>
                     </button>
@@ -744,7 +755,7 @@ export function MenuOrderingWorkspace({
                 : guestSalesMode ? `可搜 ${guestSearchableProductCount} 项` : `共 ${visibleProducts.length} 项`}
             </span>
           </div>
-          {(!guestSalesMode || guestMenuView !== 'recommend' || searchQuery.trim() || visibleProducts.length > 0) && <div className="menu-product-grid">
+          {(!guestSalesMode || guestMenuView !== 'recommend' || searchQuery.trim() || visibleProducts.length > 0) && <div className={`menu-product-grid${visibleProducts.length === 1 ? ' has-single-product' : ''}`}>
             {visibleProducts.length === 0 && (
               <div className="menu-product-empty">
                 {guestSalesMode && guestMenuView === 'recommend' ? <Sparkles size={26} aria-hidden="true" /> : <Search size={26} aria-hidden="true" />}
@@ -774,7 +785,7 @@ export function MenuOrderingWorkspace({
                       : <span className={`menu-product-status is-${status.state}`}>{status.label}</span>}
                   </button>
                   <div className="menu-product-info">
-                    <button type="button" className="menu-product-title" onClick={() => openProductDetail(product)}><strong>{product.name}</strong><span>{product.specification}</span></button>
+                    <button type="button" className="menu-product-title" aria-label={`查看${product.name}详情`} onClick={() => openProductDetail(product)}><strong>{product.name}</strong><span>{product.specification}</span></button>
                     <p>{status.orderable
                       ? (recommendationRole ? recommendation.headline || recommendation.reason || rankedRecommendation?.reason : product.description) || '门店现制现送'
                       : status.label}</p>

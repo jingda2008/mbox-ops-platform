@@ -153,6 +153,37 @@ export class ScopedPostgresTransactionRunner {
     return this.telemetry.snapshot(this.pool)
   }
 
+  async singleScopedQuery<Row extends Record<string, unknown> = Record<string, unknown>>(
+    scope: Readonly<StoreScope>,
+    text: string,
+    values: readonly unknown[] = [],
+  ): Promise<PostgresQueryResult<Row>> {
+    validateScope(scope)
+    if (!text.includes("set_config('app.tenant_id'") || !text.includes("set_config('app.store_id'")) {
+      throw new TypeError('singleScopedQuery must establish both normalized request-scope settings')
+    }
+    const acquisitionStartedAt = performance.now()
+    let client: PostgresPoolClient
+    try {
+      client = await this.pool.connect()
+      this.telemetry.recordPoolAcquisition(performance.now() - acquisitionStartedAt, true)
+    } catch (error) {
+      this.telemetry.recordPoolAcquisition(performance.now() - acquisitionStartedAt, false)
+      throw error
+    }
+    const queryStartedAt = performance.now()
+    try {
+      const result = await client.query<Row>(text, [scope.tenantId, scope.storeId, ...values])
+      this.telemetry.recordQuery(performance.now() - queryStartedAt, true)
+      return result
+    } catch (error) {
+      this.telemetry.recordQuery(performance.now() - queryStartedAt, false)
+      throw error
+    } finally {
+      client.release()
+    }
+  }
+
   async run<Result>(
     scope: Readonly<StoreScope>,
     operation: (transaction: ScopedTransaction) => Promise<Result>,

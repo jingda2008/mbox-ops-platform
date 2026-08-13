@@ -20,11 +20,13 @@ import {
   GuestApiClient,
   GuestApiError,
   type GuestOrderResult,
+  type OnlinePaymentAction,
   type GuestSessionView,
   type GuestTableOrder,
 } from './guest-api'
 import {
   formatMoney,
+  guestCartStorageKey,
   parseGuestAccess,
   parseGuestTableCode,
   safeIdempotencyKey,
@@ -36,7 +38,7 @@ import { guestGatePresentation, type GuestGateReason } from './guest-gate-model'
 import { guestMenuProductToMenuProduct } from './menu-product-adapter'
 import './guest-app.css'
 
-type GuestApiPort = Pick<GuestApiClient, 'scanTable' | 'loadSession' | 'searchMenu' | 'submitOrder' | 'loadTableOrders' | 'requestService' | 'recordMood'>
+type GuestApiPort = Pick<GuestApiClient, 'scanTable' | 'loadSession' | 'searchMenu' | 'submitOrder' | 'loadTableOrders' | 'payTableOrder' | 'requestService' | 'recordMood'>
 type ServiceType = 'call_staff' | 'complaint' | 'custom'
 type Panel = 'orders' | 'complaint' | 'custom' | 'checkout' | null
 export type { GuestGateReason } from './guest-gate-model'
@@ -62,7 +64,7 @@ const moods: ReadonlyArray<{ code: GuestMood; asset: string; label: string }> = 
 
 const guestOrderSafety = {
   enabled: true,
-  duplicateWindowSeconds: 600,
+  duplicateWindowSeconds: 45,
   maxOrdersPerMinute: 5,
   requireSubmitConfirmation: true,
   requireContinuationConfirmationSeconds: 120,
@@ -74,6 +76,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const [gateMessage, setGateMessage] = useState('正在连接您的桌位…')
   const [gateRefreshing, setGateRefreshing] = useState(false)
   const [table, setTable] = useState<GuestSessionView['table'] | null>(null)
+  const [cartStorageKey, setCartStorageKey] = useState<string | undefined>()
   const [products, setProducts] = useState<GuestMenuProduct[]>([])
   const [partySize, setPartySize] = useState(1)
   const [recommendationScene, setRecommendationScene] = useState<MenuRecommendationScene | undefined>()
@@ -95,6 +98,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const menuRequest = useRef(0)
   const orderSubmittingRef = useRef(false)
   const serviceSubmittingRef = useRef(false)
+  const paymentSubmittingRef = useRef(new Set<string>())
   const connectingRef = useRef(false)
   const toastSequence = useRef(0)
 
@@ -141,11 +145,53 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     try {
       setTableOrders(await api.loadTableOrders())
     } catch (error) {
-      if (!blockForSession(error) && !quiet) notify(errorMessage(error, '本桌订单暂时没有更新，请再试一次。'), 'error')
+      if (!blockForSession(error)) {
+        notify(
+          errorMessage(error, quiet ? '本桌订单刚才没有更新，点击“本桌已点”可重试。' : '本桌订单暂时没有更新，请再试一次。'),
+          'error',
+        )
+      }
     } finally {
       if (!quiet) setTableOrdersLoading(false)
     }
   }, [blockForSession, notify])
+
+  const payTableOrder = useCallback(async (orderPublicId: string) => {
+    const api = apiRef.current
+    if (api === null || paymentSubmittingRef.current.has(orderPublicId)) return
+    paymentSubmittingRef.current.add(orderPublicId)
+    haptic(8)
+    try {
+      const action = await api.payTableOrder(orderPublicId, {
+        idempotencyKey: safeIdempotencyKey(`guest-pay-${orderPublicId}`),
+      })
+      if (action.status === 'failed') {
+        notify('支付机构刚才没有受理，订单仍在本桌，可以重新发起付款。', 'info')
+        await loadTableOrders(true)
+        return
+      }
+      if (action.status === 'unknown') {
+        notify('付款结果暂时无法确认，请先让收银核对，避免重复付款。', 'info')
+        await loadTableOrders(true)
+        return
+      }
+      if (action.payload === null) {
+        notify('订单已经同步，付款入口正在准备，请稍后从“本桌已点”继续。', 'info')
+        return
+      }
+      if (action.payload.presentation === 'simulation') {
+        notify('测试付款流程已完成，未产生真实扣款。', 'success')
+        await loadTableOrders(true)
+        return
+      }
+      await presentOnlinePayment(action)
+      notify(action.presentation === 'qr' ? '正在打开微信收银台。' : '付款已发起，请按微信页面完成。', 'success')
+    } catch (error) {
+      if (!blockForSession(error)) notify(errorMessage(error, '付款暂时没有发起，请稍后再试。'), 'error')
+    } finally {
+      paymentSubmittingRef.current.delete(orderPublicId)
+    }
+  }, [blockForSession, loadTableOrders, notify])
 
   const acceptSession = useCallback((session: GuestSessionView, expectedTable: string) => {
     if (session.table.code.toUpperCase() !== expectedTable.toUpperCase()) {
@@ -156,11 +202,13 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     }
     setTable(session.table)
     if (session.status === 'waiting_for_table') {
+      setCartStorageKey(undefined)
       setPhase('waiting')
       setGateReason('waiting')
       setGateMessage(session.message ?? '座位正在准备中，请稍候。')
       return false
     }
+    setCartStorageKey(guestCartStorageKey(session))
     qrCredentialRef.current = null
     setPhase('ready')
     return true
@@ -312,15 +360,37 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     haptic(8)
     try {
       const result = await api.submitOrder(
-        { items, note: options.fulfillmentNote || null },
+        {
+          items,
+          note: options.fulfillmentNote || null,
+          ...(options.confirmedDuplicateOrderId
+            ? { confirmedDuplicateOrderId: options.confirmedDuplicateOrderId }
+            : {}),
+        },
         { idempotencyKey: safeIdempotencyKey('guest-order') },
       )
       setOrderResult(result)
       setPanel('checkout')
-      notify('订单已经送达吧台与收银。', 'success')
       void loadTableOrders(true)
+      notify('订单已经送达吧台与收银，请完成付款。', 'success')
+      if (!result.payment.simulated
+        && result.payment.providerAction.status === 'pending'
+        && result.payment.providerAction.payload !== null) {
+        try {
+          await presentOnlinePayment(result.payment.providerAction)
+        } catch (paymentError) {
+          notify(errorMessage(paymentError, '订单已建立，付款暂未拉起，可在“本桌已点”继续支付。'), 'info')
+        }
+      }
     } catch (error) {
-      if (!blockForSession(error)) throw error
+      if (error instanceof GuestApiError
+        && error.code === 'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED') {
+        throw new ApiError(error.message, error.status ?? 409, error.code, error.details)
+      }
+      if (blockForSession(error)) {
+        throw new ApiError('订单没有提交，已为您保留购物车。重新扫码并开台后可继续。', 401, 'GUEST_SESSION_RECONNECT_REQUIRED')
+      }
+      throw error
     } finally {
       orderSubmittingRef.current = false
       setSubmittingOrder(false)
@@ -339,6 +409,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
 
   return (
     <main className="guest-app guest-app-restored-menu" data-testid="normalized-guest-app">
+      <h1 className="guest-page-title">M-BOX {table?.displayName ?? table?.code} 桌边点单</h1>
       <header className="guest-header">
         <div className="guest-brand"><span>M</span><div><strong>M-BOX</strong><small>SUPERHIGH CULTURE · LIVEHOUSE</small></div></div>
         <button type="button" className="guest-table" onClick={() => { setPanel('orders'); void loadTableOrders() }}>
@@ -376,6 +447,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       {menuError !== null && <div className="guest-inline-error" role="alert"><AlertCircle /><span>{menuError}</span><button type="button" onClick={() => void loadMenu()}>重试</button></div>}
       {menuLoading && menuProducts.length === 0 ? <div className="guest-menu-loading"><LoaderCircle className="is-spinning" /> 正在准备菜单</div> : (
         <MenuOrderingWorkspace
+          key={cartStorageKey}
           products={menuProducts}
           tableLabel={table?.displayName ?? table?.code ?? ''}
           submitLabel="确认订单并微信支付"
@@ -387,12 +459,13 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
           guestSalesMode
           partySize={partySize}
           recommendationScene={recommendationScene}
+          cartStorageKey={cartStorageKey}
           onSubmit={submitOrder}
         />
       )}
 
       {panel !== null && <GuestPanel title={panelTitle(panel)} onClose={() => panel !== 'checkout' && setPanel(null)} dismissible={panel !== 'checkout'}>
-        {panel === 'orders' && <TableOrdersPanel orders={tableOrders} loading={tableOrdersLoading} onRefresh={() => void loadTableOrders()} />}
+        {panel === 'orders' && <TableOrdersPanel orders={tableOrders} loading={tableOrdersLoading} onRefresh={() => void loadTableOrders()} onPay={(orderId) => void payTableOrder(orderId)} />}
         {(panel === 'complaint' || panel === 'custom') && <ServicePanel
           kind={panel}
           detail={serviceDetail}
@@ -400,7 +473,11 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
           onDetailChange={setServiceDetail}
           onSubmit={() => void requestService(panel, serviceDetail.trim() || null)}
         />}
-        {panel === 'checkout' && orderResult !== null && <CheckoutPanel result={orderResult} onClose={() => setPanel(null)} />}
+        {panel === 'checkout' && orderResult !== null && <CheckoutPanel
+          result={orderResult}
+          onRetryPayment={() => void payTableOrder(orderResult.order.publicId)}
+          onClose={() => setPanel(null)}
+        />}
       </GuestPanel>}
 
       {toast !== null && <div className={`guest-toast is-${toast.tone}`} role="status"><Check />{toast.message}</div>}
@@ -413,15 +490,22 @@ function findRecentDuplicateOrder(
   items: readonly { productId: string; quantity: number }[],
 ): { orderId: string; names: string[] } | null {
   const cutoff = Date.now() - guestOrderSafety.duplicateWindowSeconds * 1_000
-  const requested = new Set(items.map((item) => item.productId))
+  const requested = basketFingerprint(items)
   for (const order of orders) {
     if (Date.parse(order.createdAt) < cutoff) continue
-    const names = order.items
-      .filter((item) => item.status !== 'cancelled' && requested.has(item.productId))
-      .map((item) => item.name)
-    if (names.length > 0) return { orderId: order.publicId, names: [...new Set(names)] }
+    const activeItems = order.items.filter((item) => item.status !== 'cancelled')
+    const ordered = basketFingerprint(activeItems)
+    if (ordered !== requested) continue
+    return { orderId: order.publicId, names: [...new Set(activeItems.map((item) => item.name))] }
   }
   return null
+}
+
+function basketFingerprint(items: readonly { productId: string; quantity: number }[]): string {
+  return [...items]
+    .sort((left, right) => left.productId.localeCompare(right.productId))
+    .map((item) => `${item.productId}:${item.quantity}`)
+    .join('|')
 }
 
 export function GuestGate({ reason, message, table, refreshing, onRetry }: {
@@ -479,20 +563,42 @@ function GuestPanel({ title, dismissible, onClose, children }: { title: string; 
   </div>
 }
 
-function TableOrdersPanel({ orders, loading, onRefresh }: { orders: GuestTableOrder[]; loading: boolean; onRefresh: () => void }) {
+function TableOrdersPanel({ orders, loading, onRefresh, onPay }: { orders: GuestTableOrder[]; loading: boolean; onRefresh: () => void; onPay: (orderPublicId: string) => void }) {
   return <div className="guest-table-orders">
     <div className="guest-table-orders-toolbar"><span>{orders.length === 0 ? '还没有已确认的订单' : `共 ${orders.length} 轮`}</span><button type="button" onClick={onRefresh} disabled={loading}><RefreshCw className={loading ? 'is-spinning' : ''} />刷新</button></div>
-    {orders.map((order) => <article key={order.publicId} className={order.visibility === 'private_pending' ? 'is-private' : ''}>
-      <header><strong>{order.visibility === 'private_pending' ? '我的待支付订单' : `本桌第 ${order.round} 轮`}</strong><span>{orderStatusCopy(order)}</span></header>
+    {orders.map((order) => <article key={order.publicId} data-testid={`guest-table-order-${order.publicId}`}>
+      <header><strong>{`本桌第 ${order.round} 轮 · ${orderSourceCopy(order)}`}</strong><span>{orderStatusCopy(order)}</span></header>
       <div>{order.items.map((item) => <p key={item.productId}><span>{item.name} × {item.quantity}</span><small>{itemStatusCopy(item.status)}</small></p>)}</div>
+      {order.payableAmountMinor > 0 && order.paymentAccess === 'available' && <button type="button" className="guest-primary guest-order-pay" onClick={() => onPay(order.publicId)}>
+        微信支付 {formatMoney(order.payableAmountMinor, order.currency)}
+      </button>}
+      {order.paymentAccess !== 'available' && order.paymentAccess !== 'not_required' && <small className="guest-order-payment-state">{paymentAccessCopy(order.paymentAccess)}</small>}
     </article>)}
   </div>
 }
 
 function orderStatusCopy(order: GuestTableOrder): string {
-  if (order.visibility === 'private_pending') return '等待付款'
+  if (order.paymentAccess === 'staff_collecting') return '员工收款中'
+  if (order.paymentAccess === 'payment_in_progress') return '付款进行中'
+  if (order.paymentAccess === 'status_review') return '等待收银核对'
+  if (order.paymentAccess === 'available' && order.payableAmountMinor > 0) return '等待付款'
+  if (order.paymentStatus === 'unpaid' || order.paymentStatus === 'pending' || order.paymentStatus === 'partially_paid') return '等待付款'
   if (order.status === 'completed') return '已完成'
   return order.items.every((item) => item.status === 'delivered' || item.status === 'cancelled') ? '已送齐' : '准备中'
+}
+
+function orderSourceCopy(order: GuestTableOrder): string {
+  if (order.channel === 'staff_assisted') return '服务员协助点单'
+  if (order.channel === 'guest_qr') return order.isMine ? '我提交的' : '同桌客人提交'
+  if (order.channel === 'cashier') return '收银台录入'
+  if (order.channel === 'reservation') return '预约订单'
+  return '门店订单'
+}
+
+function paymentAccessCopy(access: GuestTableOrder['paymentAccess']): string {
+  if (access === 'staff_collecting') return '员工正在扫描付款码，请勿重复支付。'
+  if (access === 'payment_in_progress') return '同桌已有付款正在进行，请勿重复发起。'
+  return '付款状态需要收银核对，请勿重复支付。'
 }
 
 function itemStatusCopy(status: GuestTableOrder['items'][number]['status']): string {
@@ -520,19 +626,57 @@ function ServicePanel({ kind, detail, pending, onDetailChange, onSubmit }: {
   </div>
 }
 
-function CheckoutPanel({ result, onClose }: { result: GuestOrderResult; onClose: () => void }) {
+function CheckoutPanel({ result, onRetryPayment, onClose }: {
+  result: GuestOrderResult
+  onRetryPayment: () => void
+  onClose: () => void
+}) {
   const paymentCopy = paymentStatusCopy(result)
   return <div className="guest-checkout-result">
     <span className="guest-checkout-icon"><Check /></span><small>订单 {result.order.publicId}</small><h3>{paymentCopy.title}</h3><p>{paymentCopy.detail}</p>
     {result.order.attentionRequired && <div className="guest-attention">备注已重点标记给出品和配送人员</div>}
     <div className="guest-checkout-amount"><span>本次应付</span><strong>{formatMoney(result.settlement.payableAmountMinor, result.settlement.currency)}</strong></div>
-    <button type="button" className="guest-primary" onClick={onClose}>返回菜单</button>
+    {!result.payment.simulated && result.payment.providerAction.status === 'pending' && result.payment.providerAction.payload !== null && <button type="button" className="guest-primary" onClick={() => void presentOnlinePayment(result.payment.providerAction)}>
+      {result.payment.providerAction.presentation === 'jsapi' ? '打开微信支付' : '去微信支付'}
+    </button>}
+    {!result.payment.simulated && result.payment.providerAction.status === 'failed' && <button type="button" className="guest-primary" onClick={onRetryPayment}>
+      重新发起付款
+    </button>}
+    <button type="button" className="guest-secondary" onClick={onClose}>返回菜单</button>
   </div>
+}
+
+async function presentOnlinePayment(action: OnlinePaymentAction): Promise<void> {
+  if (action.status !== 'pending') {
+    throw new GuestApiError('当前付款状态需要先核对，请勿重复支付。', 'http', 409, 'PAYMENT_STATUS_REVIEW_REQUIRED')
+  }
+  if (action.presentation === 'qr') {
+    const paymentUrl = typeof action.payload?.qrCodeUrl === 'string' ? action.payload.qrCodeUrl : ''
+    if (!/^https:\/\//i.test(paymentUrl)) {
+      throw new GuestApiError('付款入口暂时没有准备好，请稍后再试。', 'invalid_response', 409, 'PAYMENT_URL_UNAVAILABLE')
+    }
+    window.location.assign(paymentUrl)
+    return
+  }
+  if (action.presentation !== 'jsapi' || action.payload === null) return
+  const bridge = (window as typeof window & { WeixinJSBridge?: { invoke(name: string, params: Record<string, unknown>, callback: (result: { err_msg?: string }) => void): void } }).WeixinJSBridge
+  if (bridge === undefined) throw new GuestApiError('请在微信内打开后付款，或选择扫码支付。', 'invalid_response', 409, 'WECHAT_BRIDGE_UNAVAILABLE')
+  const params = action.payload
+  await new Promise<void>((resolve, reject) => {
+    bridge.invoke('getBrandWCPayRequest', params, (result) => {
+      if (result.err_msg === 'get_brand_wcpay_request:ok') resolve()
+      else if (result.err_msg === 'get_brand_wcpay_request:cancel') reject(new GuestApiError('付款已取消，订单仍为待付款。', 'http', 409, 'PAYMENT_CANCELLED'))
+      else reject(new GuestApiError('微信支付没有完成，请勿重复下单。', 'http', 409, 'PAYMENT_NOT_COMPLETED'))
+    })
+  })
 }
 
 function paymentStatusCopy(result: GuestOrderResult): { title: string; detail: string } {
   if (result.payment.status === 'paid') return { title: '支付已经完成', detail: '吧台与收银已经收到付款状态。' }
   if (result.payment.simulated) return { title: '测试订单已建立', detail: '当前是测试支付，仍待人工测试确认，没有产生真实收款。' }
+  if (result.payment.providerAction.status === 'failed') return { title: '订单已建立，付款尚未发起', detail: '支付机构刚才没有受理，可在本桌订单中重新发起，不需要重复下单。' }
+  if (result.payment.providerAction.status === 'unknown') return { title: '订单已建立，付款状态待核对', detail: '请先让收银核对支付结果，避免重复付款。' }
+  if (result.payment.providerAction.payload === null) return { title: '订单已建立，正在准备付款', detail: '本桌订单已经同步，请稍后从“本桌已点”继续。' }
   if (result.payment.mode === 'wechat_jsapi') return { title: '订单已建立，等待微信支付', detail: '支付状态以微信支付通道返回结果为准，请勿重复下单。' }
   return { title: '订单已建立，等待扫码支付', detail: '支付二维码仍待支付通道返回，请勿重复下单。' }
 }

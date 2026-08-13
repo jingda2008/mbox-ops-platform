@@ -40,7 +40,9 @@ export interface GuestMenuProduct {
   fulfillmentStation: string
   productKind: 'single' | 'bundle'
   bundleComponents: Array<{ productId: string; name: string; quantity: number }>
-  recommendation: MenuRecommendationConfig & { contributionPositive: boolean }
+  recommendation: MenuRecommendationConfig
+  /** Added by the client from the server-returned order; never serialized by the API. */
+  serverRecommendationOrder?: number
   available: boolean
 }
 
@@ -54,6 +56,15 @@ export type GuestCart = Readonly<Record<string, GuestCartLine>>
 export interface GuestAccessParseResult {
   access: GuestAccess | null
   error: string | null
+}
+
+export function guestCartStorageKey(session: Readonly<{
+  status: 'active' | 'already_active' | 'waiting_for_table'
+  table: { code: string }
+  cartScope?: string | null
+}>): string | undefined {
+  if (session.status === 'waiting_for_table' || !session.cartScope) return undefined
+  return `mbox:guest-cart:${session.table.code}:${session.cartScope}`
 }
 
 const TABLE_CODE_PATTERN = /^[A-Z0-9-]{1,24}$/

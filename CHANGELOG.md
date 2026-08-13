@@ -1,5 +1,66 @@
 # Changelog
 
+## 1.0.0-rc.83 - 2026-08-14
+
+- Replaced parallel deployment paths with one Alibaba Cloud release chain, one root Dockerfile and one normalized runtime configuration contract.
+- Added explicit disabled/test/UAT/production modes for payment, AI, printing and headset integrations; legacy Postar aliases now fail closed after one protected server-side normalization.
+- Added configuration, DNS/TLS, migration-compatibility, backup, migration, candidate, cutover, evidence and completion states that cannot be skipped.
+- Required formal tags to be reachable from `main` and bound each release to one frozen SHA, image digest, configuration version and migration manifest.
+- Added a permanent release-incident register plus isolated config-rejection, post-cutover rollback and happy-path candidate drills with SHA256 evidence.
+- Kept GitHub diagnostic artifacts non-blocking while OSS evidence and checksum failures remain formal release blockers.
+- Removed obsolete Google Cloud and duplicate normalized deployment scripts without changing the normalized business runtime or database model.
+
+## 1.0.0-rc.82 - 2026-08-14
+
+- Kept inactive Postar UAT identifiers dormant when validation explicitly sets `MBOX_POSTAR_ENABLED=false` and uses simulated checkout.
+- Preserved fail-closed production payment requirements and explicit provider configuration, including the provider public key.
+- Added regression coverage for inactive validation settings, explicit provider precedence and production enforcement after the `rc.81` candidate startup rejection.
+- Preserved the `rc.81` immutable OCI identity checks and the `rc.80` shared-table assisted-ordering and payment handoff behavior.
+
+## 1.0.0-rc.81 - 2026-08-14
+
+- Preserved the `rc.80` shared-table assisted-ordering and guest-payment behavior without changing business semantics.
+- Accepted both OCI image indexes and Docker-flattened single-platform OCI manifests during Alibaba Cloud release verification.
+- Derived the release image identity from the immutable archive reference instead of a builder-local Docker image ID.
+- Kept archive, referenced-blob, Linux/AMD64 configuration and final Docker image-ID checks fail-closed before database migration or traffic cutover.
+
+## 1.0.0-rc.80 - 2026-08-14
+
+- Unified employee-assisted and guest self-service settlement around one shared table order and one active payment action.
+- Let employees choose either a customer-scanned payment QR or an employee-scanned customer payment code after assisted ordering, without creating a second order.
+- Synchronized assisted orders to every authenticated guest on the current table session and allowed a guest phone to continue the same reusable QR payment.
+- Prevented guest devices from interrupting employee barcode collection or reusing another guest's JSAPI parameters, while keeping payment-provider payloads encrypted at rest.
+- Added role-isolation, payment-method locking, same-table multi-guest, provider-rejection and real-browser regression coverage; real small-value acquiring remains a separately authorized acceptance step.
+
+## 1.0.0-rc.79 - 2026-08-13
+
+- Added bounded browser-style HTTP and rendered Playwright release gates for the home, fixed-table QR, reservation and employee deep links, including front-end build identity, root mounts and executable module assets.
+- Kept API-style unknown requests as structured 404 responses instead of weakening the single-page application boundary.
+- Hardened automatic and operator rollback with immutable identity, app-shell verification and restored container restart policy; exact-commit Playwright remains the rendered-browser acceptance gate.
+
+## 1.0.0-rc.78 - 2026-08-13
+
+- Unified the default development, build, container and Alibaba Cloud release paths on the normalized runtime while retaining explicit legacy-only commands for controlled comparison.
+- Restored security response headers, protected runtime metrics and one-query readiness checks, and packaged the selective SLS collector in the immutable image.
+- Moved guest duplicate-order confirmation and per-customer/per-table rate limits to a server-authoritative transaction; thresholds are deployment-configurable and the table limit cannot be lower than the customer limit.
+- Restored contribution-sensitive menu ranking without exposing product cost to customer clients.
+- Stopped invalid reservation links and failed session renewals from creating repeated polling errors while preserving the submitted receipt and manual refresh path.
+- Added a current-business-day cashier after-sales workbench for original-item partial refunds, separate-person approval and channel-safe execution; real online refund success still requires a verified provider callback.
+- Preserved the current table-session cart after uncertain order failures while isolating the next turnover with a server-generated opaque scope.
+- Reused the exact refund payload and idempotency key after retryable failures, and added an explicit second confirmation before recording manual cash or POS refund results.
+- Made store and catalog publication atomic, bound release smoke checks to the runtime image digest and hardened rollback, OSS evidence and selective SLS handling.
+- Kept real payment, physical POS, printers, inventory reconciliation and staff field acceptance outside completed commercial acceptance.
+
+## 1.0.0-rc.77 - 2026-08-13
+
+- Audited customer, reservation, employee, fulfillment, payment, refund, inventory, security, performance and release paths with browser, PostgreSQL, load and role simulations.
+- Fixed the normalized fulfillment empty state so filtered queues no longer render a blank work surface.
+- Improved narrow mobile ordering with a reachable 44px recommendation add action, full-width single search results and larger cart, search and quantity controls.
+- Added semantic page headings and corrected serious contrast issues across guest, reservation and employee work surfaces.
+- Added normalized browser accessibility coverage for guest ordering, public reservation, employee home and onsite actions.
+- Corrected isolated-load cleanup so expected rejection of closing unsettled fixture tables cannot contaminate database failure metrics; the repeated 5 RPS PostgreSQL gate completed with zero transaction failures.
+- Kept simulated payment, real acquiring, physical POS, printers and other hardware explicitly outside completed commercial acceptance.
+
 ## 1.0.0-rc.76 - 2026-08-13
 
 - Added an explicit validation-only inventory audit mode so incomplete recipe and stock setup no longer blocks simulated ordering, while production remains strict and rejects this mode.

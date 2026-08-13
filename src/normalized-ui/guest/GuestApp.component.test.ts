@@ -5,7 +5,7 @@ import { rankMenuRecommendations } from '../../shared/menu-recommendation'
 import { GuestApp, GuestGate } from './GuestApp'
 import { guestGatePresentation } from './guest-gate-model'
 import { guestMenuProductToMenuProduct } from './menu-product-adapter'
-import { menuRequestDelayMs, type GuestMenuProduct } from './guest-model'
+import { guestCartStorageKey, menuRequestDelayMs, type GuestMenuProduct } from './guest-model'
 
 function recommendationProduct(
   code: string,
@@ -37,6 +37,7 @@ function recommendationProduct(
     fulfillmentStation: 'bar',
     productKind: 'single',
     bundleComponents: [],
+    serverRecommendationOrder: 0,
     recommendation: {
       enabled: true,
       priority: 0,
@@ -53,7 +54,6 @@ function recommendationProduct(
       expectedPrepMinutes: 8,
       holdMinutes: 10,
       upgradeProductId: null,
-      contributionPositive: true,
     },
     available: true,
   }
@@ -113,5 +113,16 @@ describe('GuestApp', () => {
   it('loads the first menu immediately and only debounces later searches', () => {
     expect(menuRequestDelayMs(false)).toBe(0)
     expect(menuRequestDelayMs(true)).toBe(280)
+  })
+
+  it('isolates an interrupted cart from the next turnover on the same table', () => {
+    const base = {
+      status: 'active' as const,
+      table: { code: 'W01', displayName: '室外 W01' },
+      businessDate: '2026-08-13',
+      capabilities: ['guest.order.create'],
+    }
+    expect(guestCartStorageKey({ ...base, cartScope: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }))
+      .not.toBe(guestCartStorageKey({ ...base, cartScope: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' }))
   })
 })

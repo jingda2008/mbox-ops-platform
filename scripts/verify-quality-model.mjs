@@ -156,10 +156,15 @@ function option(name) {
   return index >= 0 ? process.argv[index + 1] : undefined
 }
 
+export function currentTcRegisterPath(explicitPath, version) {
+  return explicitPath ?? `docs/tc-execution-register-${version}.csv`
+}
+
 async function main() {
   const stateMachine = option('state-machine')
   const invariants = option('invariants')
-  const tcRegister = option('tc-register')
+  const packageDocument = JSON.parse(await readFile(resolve('package.json'), 'utf8'))
+  const tcRegister = currentTcRegisterPath(option('tc-register'), packageDocument.version)
   if (!stateMachine || !invariants) throw new Error('Usage: node scripts/verify-quality-model.mjs --state-machine <json> --invariants <csv> [--require-release-pass]')
   const report = await verifyQualityModelFiles(stateMachine, invariants, {
     requireReleasePass: process.argv.includes('--require-release-pass'),

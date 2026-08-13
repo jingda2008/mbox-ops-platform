@@ -92,4 +92,37 @@ describe('StaffActionsApi', () => {
     }))
     expect(String(orderRequest?.body)).not.toContain('sourceId')
   })
+
+  it('starts exactly the staff-selected payment path for the assisted order', async () => {
+    const providerAction = {
+      paymentId: '11111111-1111-4111-8111-111111111111',
+      paymentPublicId: 'PSTAFF0001',
+      orderPublicId: 'OSTAFF0001',
+      status: 'pending',
+      presentation: 'barcode',
+      expiresAt: '2026-08-13T13:05:00.000Z',
+      payload: { providerState: 'processing' },
+    }
+    const send = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      data: { providerAction }, meta: { replayed: false },
+    }), { status: 201, headers: { 'content-type': 'application/json' } }))
+    const api = new StaffActionsApi({ fetch: send, createIdempotencyKey: () => 'payment-key-0001' })
+
+    await expect(api.createOnlinePayment({
+      orderId: '22222222-2222-4222-8222-222222222222',
+      provider: 'postar',
+      method: 'auth_code',
+      customerAuthCode: '134567890123456789',
+    })).resolves.toEqual(providerAction)
+
+    const [, request] = send.mock.calls[0]!
+    expect(send.mock.calls[0]?.[0]).toBe('/api/payments')
+    expect(new Headers(request?.headers).get('idempotency-key')).toBe('staff-payment-payment-key-0001')
+    expect(JSON.parse(String(request?.body))).toEqual({
+      orderId: '22222222-2222-4222-8222-222222222222',
+      provider: 'postar',
+      method: 'auth_code',
+      customerAuthCode: '134567890123456789',
+    })
+  })
 })

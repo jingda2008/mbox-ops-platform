@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "policy": "Every known release failure requires a permanent automated blocker before the next candidate tag.",
+  "incidents": [
+    {
+      "id": "REL-001",
+      "category": "configuration-contract",
+      "rootCause": "Legacy and normalized payment fields were both accepted, leaving inactive partial configuration ambiguous.",
+      "earliestDetectionStage": "config_preflight",
+      "regressionTest": "server/normalized/normalized-runtime-config.test.ts",
+      "automaticBlocker": "verify-normalized-runtime-config",
+      "fixCommit": "ba9d70b4fceaa481497b0c4d53cc7e4d8624d378",
+      "status": "covered"
+    },
+    {
+      "id": "REL-002",
+      "category": "image-identity",
+      "rootCause": "OCI index, platform manifest, Docker image ID and release digest were previously compared inconsistently.",
+      "earliestDetectionStage": "artifact_verified",
+      "regressionTest": "scripts/aliyun-evidence-pipeline.test.mjs",
+      "automaticBlocker": "activate-release OCI identity verification",
+      "fixCommit": "0ecf082d312befe5b687fcc5def9d2f2b80a46a8",
+      "status": "covered"
+    },
+    {
+      "id": "REL-003",
+      "category": "branch-integration",
+      "rootCause": "Deployable changes were stacked on non-main PR bases and could be omitted from the final release line.",
+      "earliestDetectionStage": "candidate_freeze",
+      "regressionTest": "scripts/release-system-policy.test.mjs",
+      "automaticBlocker": "tag commit must be reachable from origin/main",
+      "fixCommit": "ba9d70b4fceaa481497b0c4d53cc7e4d8624d378",
+      "status": "covered"
+    },
+    {
+      "id": "REL-004",
+      "category": "artifact-quota",
+      "rootCause": "GitHub diagnostic artifact quota failures were mixed with test and formal evidence status.",
+      "earliestDetectionStage": "ci_evidence",
+      "regressionTest": "scripts/release-system-policy.test.mjs",
+      "automaticBlocker": "diagnostic artifacts are non-blocking; formal OSS evidence remains blocking",
+      "fixCommit": "ba9d70b4fceaa481497b0c4d53cc7e4d8624d378",
+      "status": "covered"
+    },
+    {
+      "id": "REL-005",
+      "category": "deep-route-verification",
+      "rootCause": "Root health checks did not prove guest table QR, reservation and staff routes worked.",
+      "earliestDetectionStage": "candidate_deep_verified",
+      "regressionTest": "scripts/aliyun-evidence-pipeline.test.mjs",
+      "automaticBlocker": "verify-public-app and release browser smoke",
+      "fixCommit": "0ecf082d312befe5b687fcc5def9d2f2b80a46a8",
+      "status": "covered"
+    },
+    {
+      "id": "REL-006",
+      "category": "external-dependency",
+      "rootCause": "DNS, TLS and callback host failures were first detected after deployment.",
+      "earliestDetectionStage": "external_preflight",
+      "regressionTest": "server/verify-normalized-runtime-config.test.ts",
+      "automaticBlocker": "read-only DNS and TLS preflight",
+      "fixCommit": "ba9d70b4fceaa481497b0c4d53cc7e4d8624d378",
+      "status": "covered"
+    },
+    {
+      "id": "REL-007",
+      "category": "migration-order",
+      "rootCause": "Database work could begin before the exact runtime configuration and migration lineage were validated.",
+      "earliestDetectionStage": "migration_compatible",
+      "regressionTest": "scripts/release-system-policy.test.mjs",
+      "automaticBlocker": "release state machine",
+      "fixCommit": "ba9d70b4fceaa481497b0c4d53cc7e4d8624d378",
+      "status": "covered"
+    },
+    {
+      "id": "REL-008",
+      "category": "cutover-rollback",
+      "rootCause": "A failure after traffic switching required reliable restoration of an already loaded previous image.",
+      "earliestDetectionStage": "cutover_verified",
+      "regressionTest": "scripts/aliyun-evidence-pipeline.test.mjs",
+      "automaticBlocker": "automatic rollback plus previous public identity verification",
+      "fixCommit": "0ecf082d312befe5b687fcc5def9d2f2b80a46a8",
+      "status": "covered"
+    }
+  ]
+}

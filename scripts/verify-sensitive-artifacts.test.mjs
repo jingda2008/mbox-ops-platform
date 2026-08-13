@@ -9,7 +9,37 @@ test('accepts checksums and bounded operational evidence', async () => {
   const root = await mkdtemp(join(tmpdir(), 'mbox-safe-evidence-'))
   await writeFile(join(root, 'manifest.json'), JSON.stringify({ releaseSha: 'a'.repeat(40), status: 'passed' }))
   await writeFile(join(root, 'SHA256SUMS'), `${'b'.repeat(64)}  manifest.json\n`)
+  await writeFile(join(root, 'verify-release.sh'), '#!/bin/sh\nset -eu\nprintf "verified\\n"\n')
   assert.deepEqual(await inspectEvidenceDirectory(root), [])
+})
+
+test('inspects shell scripts for credentials instead of rejecting the extension', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mbox-shell-evidence-'))
+  await writeFile(join(root, 'deploy.sh'), `#!/bin/sh\nAPI_KEY=sk-${'x'.repeat(24)}\n`)
+  const findings = await inspectEvidenceDirectory(root)
+  assert.deepEqual(findings, [{ file: 'deploy.sh', rule: 'model-api-key', line: 2 }])
+})
+
+test('does not misclassify digits embedded in a SHA256 as a mobile number', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mbox-sha-evidence-'))
+  await writeFile(join(root, 'manifest.json'), JSON.stringify({
+    sha256: '9666ec14025240724c8131be5c9f738832e0f63630afbfddbe17c0b605d7507b',
+  }))
+  assert.deepEqual(await inspectEvidenceDirectory(root), [])
+})
+
+test('does not misclassify digits embedded in a SHA256 as a Chinese identity number', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mbox-id-sha-evidence-'))
+  await writeFile(join(root, 'SHA256SUMS'), `${'a01db16e0af4c457be88c7c5bd068352433242120557b8404ad95842d6193ea1c'}  report.json\n`)
+  assert.deepEqual(await inspectEvidenceDirectory(root), [])
+})
+
+test('still rejects a serialized Chinese identity number', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mbox-id-evidence-'))
+  await writeFile(join(root, 'report.txt'), 'identity=11010519491231002X\n')
+  assert.deepEqual(await inspectEvidenceDirectory(root), [
+    { file: 'report.txt', rule: 'raw-chinese-id', line: 1 },
+  ])
 })
 
 test('reports secret and privacy classes without echoing matched values', async () => {
@@ -36,4 +66,17 @@ test('rejects credentials embedded in text and media that cannot be privacy-insp
   assert.ok(findings.some((finding) => finding.rule === 'bearer-credential'))
   assert.equal(findings.filter((finding) => finding.rule === 'uninspectable-or-sensitive-artifact').length, 2)
   assert.equal(JSON.stringify(findings).includes('abcdefghijklmnopqrstuvwxyz123456'), false)
+})
+
+test('rejects unknown file types instead of silently skipping them', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mbox-unknown-evidence-'))
+  await writeFile(join(root, 'opaque.bin'), Buffer.from([0x00, 0x01, 0x02]))
+  await writeFile(join(root, 'opaque'), Buffer.from([0x00, 0x01, 0x02]))
+  await writeFile(join(root, 'invalid.txt'), Buffer.from([0xc3, 0x28]))
+  const findings = await inspectEvidenceDirectory(root)
+  assert.deepEqual(findings, [
+    { file: 'invalid.txt', rule: 'invalid-text-encoding' },
+    { file: 'opaque', rule: 'unapproved-artifact-extension' },
+    { file: 'opaque.bin', rule: 'unapproved-artifact-extension' },
+  ])
 })

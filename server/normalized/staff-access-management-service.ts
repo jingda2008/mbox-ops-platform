@@ -160,7 +160,9 @@ export class StaffAccessManagementService {
           configuredByEmployeeId: input.actorEmployeeId,
         })
       }
-      const verifiedAt = new Date().toISOString()
+      // Compare temporal access rules against the same database clock that
+      // assigned starts_at. App and database hosts can differ by milliseconds.
+      const verifiedAt = await databaseTimestamp(transaction)
       await assertAdministratorRemains(transaction, repository, verifiedAt)
       if (input.changes.some((change) => change.kind === 'role_permission' || change.kind === 'role_navigation')) {
         await assertRoleNavigationIsUsable(transaction)
@@ -202,6 +204,20 @@ export class StaffAccessManagementService {
       overview: execution.value.overview,
     }
   }
+}
+
+async function databaseTimestamp(transaction: ScopedTransaction): Promise<string> {
+  const result = await transaction.query<{ verified_at: string }>(`
+    SELECT to_char(
+      clock_timestamp() AT TIME ZONE 'UTC',
+      'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+    ) AS verified_at
+  `)
+  const value = result.rows[0]?.verified_at
+  if (value === undefined || Number.isNaN(Date.parse(value))) {
+    throw new TypeError('数据库验证时间不可用，已回滚全部修改')
+  }
+  return value
 }
 
 async function readOverview(transaction: ScopedTransaction): Promise<StaffAccessManagementOverview> {

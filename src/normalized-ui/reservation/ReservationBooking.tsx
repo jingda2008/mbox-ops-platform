@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import {
   AlertCircle,
   CalendarDays,
@@ -85,8 +85,10 @@ export function ReservationBooking({
   const [joinWaitlist, setJoinWaitlist] = useState(false)
   const [cancelArmed, setCancelArmed] = useState(false)
   const [arrivalHold, setArrivalHold] = useState<ReservationArrivalHoldState>({ kind: 'hidden', seconds: 0 })
+  const [autoStatusRefreshEnabled, setAutoStatusRefreshEnabled] = useState(true)
   const editingId = reservation?.publicId ?? initialReservationId ?? null
   const request = useRef<AbortController | null>(null)
+  const noticeRef = useRef<HTMLDivElement>(null)
 
   const slots = useMemo(
     () => createArrivalSlots(draft.date, now(), operatingHours),
@@ -158,6 +160,7 @@ export function ReservationBooking({
       .then((value) => {
         if (value === null) return
         setReservation(value)
+        setAutoStatusRefreshEnabled(true)
         setStep('complete')
       })
       .catch((error: unknown) => {
@@ -166,6 +169,14 @@ export function ReservationBooking({
       })
       .finally(() => setPhase('idle'))
   }, [api, initialReservationId, now, reservation, runWithSession, sessionReady])
+
+  useEffect(() => {
+    if (message === null) return
+    const frame = globalThis.requestAnimationFrame(() => {
+      noticeRef.current?.scrollIntoView({ behavior: 'auto', block: 'nearest' })
+    })
+    return () => globalThis.cancelAnimationFrame(frame)
+  }, [message])
 
   useEffect(() => {
     if (reservation === null) {
@@ -200,8 +211,12 @@ export function ReservationBooking({
       const latest = await runWithSession((signal) => api.getReservation(publicId, signal))
       if (latest === null) return
       setReservation(latest)
+      setAutoStatusRefreshEnabled(true)
       onReservationChange?.(latest)
     } catch (error) {
+      if (error instanceof PublicReservationApiError && error.code === 'RESERVATION_NOT_FOUND') {
+        setAutoStatusRefreshEnabled(false)
+      }
       const lookupMessage = reservationLookupMessage(error, reservation !== null)
       if (lookupMessage !== null) setMessage(lookupMessage)
       // Keep the submitted receipt visible so the guest can quote its number to the store.
@@ -213,7 +228,7 @@ export function ReservationBooking({
   useEffect(() => {
     const shouldRefresh = reservation?.status === 'pending'
       || (reservation?.status === 'confirmed' && reservation.arrivalState === 'not_arrived')
-    if (step !== 'complete' || !shouldRefresh || !sessionReady || phase !== 'idle') return
+    if (step !== 'complete' || !shouldRefresh || !sessionReady || !autoStatusRefreshEnabled || phase !== 'idle') return
     const refreshWhenVisible = () => {
       if (document.visibilityState === 'visible') void refreshReservationStatus(false)
     }
@@ -223,7 +238,7 @@ export function ReservationBooking({
       globalThis.clearInterval(timer)
       document.removeEventListener('visibilitychange', refreshWhenVisible)
     }
-  }, [phase, refreshReservationStatus, reservation?.arrivalState, reservation?.status, sessionReady, step])
+  }, [autoStatusRefreshEnabled, phase, refreshReservationStatus, reservation?.arrivalState, reservation?.status, sessionReady, step])
 
   const loadAvailability = useCallback(async () => {
     const validation = validateSchedule(draft, slots)
@@ -298,6 +313,7 @@ export function ReservationBooking({
         : await runWithSession((signal) => api.updateReservation(editingId, common, signal))
       if (saved === null) return
       setReservation(saved)
+      setAutoStatusRefreshEnabled(true)
       setWaitlist(null)
       setStep('complete')
       onReservationChange?.(saved)
@@ -391,6 +407,7 @@ export function ReservationBooking({
       onEdit={editReservation}
       onCancel={() => void cancel()}
       onDismissCancel={() => setCancelArmed(false)}
+      noticeRef={noticeRef}
     />
   )
 }
@@ -421,6 +438,7 @@ export interface ReservationBookingViewProps {
   onEdit: () => void
   onCancel: () => void
   onDismissCancel: () => void
+  noticeRef?: RefObject<HTMLDivElement | null>
 }
 
 export function ReservationBookingView(props: ReservationBookingViewProps) {
@@ -437,7 +455,7 @@ export function ReservationBookingView(props: ReservationBookingViewProps) {
 
       {props.step !== 'complete' && <Progress step={props.step} />}
       {props.message !== null && (
-        <div className="reservation-notice" role="alert">
+        <div ref={props.noticeRef} className="reservation-notice" role="alert">
           <AlertCircle size={18} aria-hidden="true" />
           <span>{props.message}{props.retryAt === null ? '' : `，${retryLabel(props.retryAt)}`}</span>
           {!props.sessionReady && <button type="button" onClick={props.onReconnect}>重新连接</button>}
@@ -610,7 +628,7 @@ function CompleteStep(props: ReservationBookingViewProps & { busy: boolean }) {
         </div>
       )}
       <dl className="reservation-summary">
-        <div><dt>编号</dt><dd>{record.publicId}</dd></div>
+        <div><dt>编号</dt><dd className="reservation-reference">{record.publicId}</dd></div>
         <div><dt>到店</dt><dd>{formatDateTime(isReservation ? props.reservation!.arrivalAt : props.waitlist!.desiredArrivalAt)}</dd></div>
         <div><dt>人数</dt><dd>{record.guestCount}位</dd></div>
         <div><dt>联系</dt><dd>{record.maskedContact}</dd></div>
@@ -692,7 +710,7 @@ function errorMessage(error: unknown): string {
 function reservationLookupMessage(error: unknown, hasSubmittedReceipt: boolean): string | null {
   if (!(error instanceof PublicReservationApiError) || error.code !== 'RESERVATION_NOT_FOUND') return null
   return hasSubmittedReceipt
-    ? '申请已经提交，但当前暂时无法在线核验。请勿重复提交，可将下方预约编号提供给门店查询。'
+    ? '申请已经提交，但当前暂时无法在线核验。自动查询已暂停，请勿重复提交；可稍后手动刷新，或将下方预约编号提供给门店查询。'
     : '没有查到这条预约。请从原预约入口打开，或联系门店并提供预约编号核对。'
 }
 

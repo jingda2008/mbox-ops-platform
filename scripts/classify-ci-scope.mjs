@@ -31,7 +31,7 @@ if (base) {
 }
 
 const result = classifyChangedPaths(paths, { forceFull })
-const releaseArtifactRequired = ref.startsWith('refs/tags/v') || event === 'workflow_dispatch'
+const releaseArtifactRequired = ref.startsWith('refs/tags/v')
 const githubOutput = option('github-output') ?? process.env.GITHUB_OUTPUT
 if (githubOutput) {
   await appendFile(githubOutput, [

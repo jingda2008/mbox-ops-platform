@@ -84,6 +84,7 @@ async function main(): Promise<void> {
     port: config.port,
     commitSha: config.commitSha,
     schemaFlavor: config.schemaFlavor,
+    deploymentTier: config.deploymentTier,
     workersEnabled: config.startWorkers,
     integrationWorkersEnabled: adapters !== null,
   }, 'normalized service started')

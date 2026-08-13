@@ -32,7 +32,7 @@ test.describe('客人推荐销售路径', () => {
     await page.getByTestId('guest-menu-view-recommend').click()
     await comparison.getByRole('button', { name: /查看.+详情/ }).first().click()
     const detail = page.getByRole('dialog', { name: /商品详情/ })
-    await expect(detail).toContainText('今晚为您配好')
+    await expect(detail).toContainText('这份组合包含')
     await expect(detail).toContainText('按一轮集中准备')
     await expectNoHorizontalOverflow(page)
   })
@@ -55,6 +55,24 @@ test.describe('客人推荐销售路径', () => {
       scroll: document.documentElement.scrollWidth,
     }))
     expect(widthAfter).toEqual(widthBefore)
+    await expectNoHorizontalOverflow(page)
+  })
+
+  test('手机搜索只命中一个商品时使用完整内容宽度', async ({ page }) => {
+    await page.setViewportSize({ width: 430, height: 932 })
+    await page.goto('/guest?table=W01')
+    await page.getByLabel('搜索菜单商品').fill('COCKTAIL-001')
+    const grid = page.locator('.menu-product-grid')
+    await expect(grid).toHaveClass(/has-single-product/)
+    await expect(grid.locator('.menu-product')).toHaveCount(1)
+    const widths = await grid.evaluate((element) => {
+      const product = element.querySelector('.menu-product')
+      return {
+        grid: element.getBoundingClientRect().width,
+        product: product?.getBoundingClientRect().width ?? 0,
+      }
+    })
+    expect(widths.product).toBeGreaterThan(widths.grid * 0.9)
     await expectNoHorizontalOverflow(page)
   })
 

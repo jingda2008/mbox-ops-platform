@@ -1,5 +1,8 @@
 import type { GuestMenuProduct, GuestMood } from './guest-model'
 import type { MenuRecommendationScene } from '../../shared/contracts'
+import type { OnlinePaymentAction } from '../../shared/online-payment-contracts'
+
+export type { OnlinePaymentAction } from '../../shared/online-payment-contracts'
 
 export type GuestApiFailureKind = 'timeout' | 'network' | 'http' | 'invalid_response' | 'aborted'
 
@@ -8,6 +11,7 @@ export class GuestApiError extends Error {
   readonly status: number | null
   readonly code: string
   readonly retryAt: string | null
+  readonly details: Record<string, unknown> | null
 
   constructor(
     message: string,
@@ -15,6 +19,7 @@ export class GuestApiError extends Error {
     status: number | null = null,
     code = 'GUEST_API_ERROR',
     retryAt: string | null = null,
+    details: Record<string, unknown> | null = null,
   ) {
     super(message)
     this.name = 'GuestApiError'
@@ -22,6 +27,7 @@ export class GuestApiError extends Error {
     this.status = status
     this.code = code
     this.retryAt = retryAt
+    this.details = details
   }
 
   get retryable(): boolean {
@@ -35,6 +41,7 @@ export interface GuestSessionView {
   table: { code: string; displayName: string }
   businessDate?: string
   expiresAt?: string
+  cartScope?: string | null
   capabilities?: string[]
 }
 
@@ -73,7 +80,7 @@ export interface GuestOrderResult {
     method: string
     status: string
     simulated: boolean
-    providerAction: string
+    providerAction: OnlinePaymentAction
   }
 }
 
@@ -82,9 +89,13 @@ export interface GuestTableOrder {
   round: number
   channel: 'guest_qr' | 'staff_assisted' | 'cashier' | 'reservation' | 'integration'
   status: 'submitted' | 'confirmed' | 'fulfilling' | 'completed'
-  visibility: 'shared' | 'private_pending'
+  visibility: 'shared'
   isMine: boolean
   createdAt: string
+  paymentStatus: 'unpaid' | 'pending' | 'partially_paid' | 'paid' | 'partially_refunded' | 'refunded'
+  paymentAccess: 'available' | 'staff_collecting' | 'payment_in_progress' | 'status_review' | 'not_required'
+  payableAmountMinor: number
+  currency: string
   items: Array<{
     productId: string
     name: string
@@ -164,14 +175,21 @@ export class GuestApiClient {
         partySize = Number(meta.partySize)
       }
       if (isRecommendationScene(meta.recommendationScene)) recommendationScene = meta.recommendationScene
-      products.push(...data)
+      products.push(...data.map((product, index) => ({
+        ...product,
+        serverRecommendationOrder: offset + index,
+      })))
       if (data.length < pageSize) break
     }
     return { products, partySize, recommendationScene }
   }
 
   async submitOrder(
-    input: Readonly<{ items: Array<{ productId: string; quantity: number }>; note: string | null }>,
+    input: Readonly<{
+      items: Array<{ productId: string; quantity: number }>
+      note: string | null
+      confirmedDuplicateOrderId?: string
+    }>,
     options: Readonly<RequestOptions> & { idempotencyKey: string },
   ): Promise<GuestOrderResult> {
     const body = await this.request<unknown>('/api/guest/orders', {
@@ -188,6 +206,19 @@ export class GuestApiClient {
     })
     const data = responseData(body)
     if (!Array.isArray(data) || !data.every(isTableOrder)) throw invalidResponse()
+    return data
+  }
+
+  async payTableOrder(
+    orderPublicId: string,
+    options: Readonly<RequestOptions> & { idempotencyKey: string },
+  ): Promise<OnlinePaymentAction> {
+    const body = await this.request<unknown>(
+      `/api/guest/orders/${encodeURIComponent(orderPublicId)}/payment`,
+      { method: 'POST', body: {}, signal: options.signal, idempotencyKey: options.idempotencyKey },
+    )
+    const data = responseData(body)
+    if (!isOnlinePaymentAction(data)) throw invalidResponse()
     return data
   }
 
@@ -271,7 +302,8 @@ function responseError(response: Response, body: unknown): GuestApiError {
   const message = typeof error?.message === 'string' ? error.message : friendlyStatus(response.status)
   const code = typeof error?.code === 'string' ? error.code : 'HTTP_ERROR'
   const retryAt = typeof error?.retryAt === 'string' ? error.retryAt : null
-  return new GuestApiError(message, 'http', response.status, code, retryAt)
+  const details = isObject(error?.details) ? error.details : null
+  return new GuestApiError(message, 'http', response.status, code, retryAt, details)
 }
 
 async function readJson(response: Response): Promise<unknown> {
@@ -298,6 +330,7 @@ function hasData(value: unknown): boolean {
 function isSessionView(value: unknown): value is GuestSessionView {
   if (!isObject(value) || !['active', 'already_active', 'waiting_for_table'].includes(String(value.status))) return false
   if (typeof value.message !== 'string' && value.status !== 'active') return false
+  if (value.status !== 'waiting_for_table' && (typeof value.cartScope !== 'string' || !/^[A-Za-z0-9_-]{32}$/.test(value.cartScope))) return false
   return isObject(value.table) && typeof value.table.code === 'string' && typeof value.table.displayName === 'string'
 }
 
@@ -349,7 +382,6 @@ function isMenuProduct(value: unknown): value is GuestMenuProduct {
     && Number.isSafeInteger(value.recommendation.expectedPrepMinutes)
     && Number.isSafeInteger(value.recommendation.holdMinutes)
     && (value.recommendation.upgradeProductId === null || typeof value.recommendation.upgradeProductId === 'string')
-    && typeof value.recommendation.contributionPositive === 'boolean'
     && typeof value.available === 'boolean'
 }
 
@@ -359,9 +391,13 @@ function isTableOrder(value: unknown): value is GuestTableOrder {
     && Number.isSafeInteger(value.round)
     && typeof value.channel === 'string'
     && typeof value.status === 'string'
-    && (value.visibility === 'shared' || value.visibility === 'private_pending')
+    && value.visibility === 'shared'
     && typeof value.isMine === 'boolean'
     && typeof value.createdAt === 'string'
+    && typeof value.paymentStatus === 'string'
+    && ['available', 'staff_collecting', 'payment_in_progress', 'status_review', 'not_required'].includes(String(value.paymentAccess))
+    && Number.isSafeInteger(value.payableAmountMinor)
+    && typeof value.currency === 'string'
     && Array.isArray(value.items)
     && value.items.every((item) => isObject(item)
       && typeof item.productId === 'string'
@@ -388,7 +424,18 @@ function isOrderResult(value: unknown): value is GuestOrderResult {
     && ['wechat_jsapi', 'wechat_native_qr', 'simulation'].includes(String(value.payment.mode))
     && typeof value.payment.status === 'string'
     && typeof value.payment.simulated === 'boolean'
-    && typeof value.payment.providerAction === 'string'
+    && isOnlinePaymentAction(value.payment.providerAction)
+}
+
+function isOnlinePaymentAction(value: unknown): value is OnlinePaymentAction {
+  return isObject(value)
+    && typeof value.paymentId === 'string'
+    && typeof value.paymentPublicId === 'string'
+    && typeof value.orderPublicId === 'string'
+    && (value.status === 'pending' || value.status === 'unknown' || value.status === 'failed')
+    && ['jsapi', 'qr', 'barcode'].includes(String(value.presentation))
+    && typeof value.expiresAt === 'string'
+    && (value.payload === null || isObject(value.payload))
 }
 
 function isServiceResult(value: unknown): value is GuestServiceResult {

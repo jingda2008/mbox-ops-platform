@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { validateInvariantRegister, validateStateMachine } from './verify-quality-model.mjs'
+import { currentTcRegisterPath, validateInvariantRegister, validateStateMachine } from './verify-quality-model.mjs'
 
 const headers = [
   'invariant_id', 'entity', 'severity', 'expression', 'authoritative_source', 'check_timing',
   'consistency_window_ms', 'tc_ids', 'production_monitor', 'evidence', 'status',
 ]
+
+test('defaults quality verification to the current release TC register', () => {
+  assert.equal(currentTcRegisterPath(undefined, '1.0.0-rc.77'), 'docs/tc-execution-register-1.0.0-rc.77.csv')
+  assert.equal(currentTcRegisterPath('custom.csv', '1.0.0-rc.77'), 'custom.csv')
+})
 
 function machine() {
   return {

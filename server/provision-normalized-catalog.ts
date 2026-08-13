@@ -85,6 +85,7 @@ export async function provisionNormalizedCatalog(input: {
   storeId: string
   catalog: NormalizedCatalogConfig
   sourceCommitSha?: string
+  client?: Client
 }): Promise<CatalogProvisionSummary> {
   requireUuid(input.tenantId, 'tenantId')
   requireUuid(input.storeId, 'storeId')
@@ -95,10 +96,11 @@ export async function provisionNormalizedCatalog(input: {
   const normalizedSourceCommitSha = sourceCommitSha.toLowerCase()
   const catalogSha256 = createHash('sha256').update(stableJson(input.catalog), 'utf8').digest('hex')
   const summaryBase = catalogSummary(input.catalog, catalogSha256)
-  const client = new Client({ connectionString: input.databaseUrl, application_name: 'mbox-normalized-catalog-provisioner' })
-  await client.connect()
+  const ownsClient = input.client === undefined
+  const client = input.client ?? new Client({ connectionString: input.databaseUrl, application_name: 'mbox-normalized-catalog-provisioner' })
+  if (ownsClient) await client.connect()
   try {
-    await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE')
+    if (ownsClient) await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE')
     await client.query(`SELECT pg_advisory_xact_lock(hashtext('mbox.normalized.catalog.provision'))`)
     const schema = await client.query<{ schema_flavor: string; schema_version: string }>(
       'SELECT schema_flavor, schema_version FROM mbox.normalized_schema_metadata WHERE singleton=true',
@@ -124,12 +126,12 @@ export async function provisionNormalizedCatalog(input: {
       throw new Error('Catalog version already exists with different content')
     }
     if (existing.rows.some((application) => application.source_commit_sha === normalizedSourceCommitSha)) {
-      await client.query('COMMIT')
+      if (ownsClient) await client.query('COMMIT')
       return { ...summaryBase, replayed: true }
     }
     if (existing.rows.length > 0) {
       await insertCatalogApplication(client, input, catalogSha256, normalizedSourceCommitSha, summaryBase)
-      await client.query('COMMIT')
+      if (ownsClient) await client.query('COMMIT')
       return { ...summaryBase, replayed: true }
     }
     await client.query('DELETE FROM mbox.product_bundle_components WHERE tenant_id=$1 AND store_id=$2', [input.tenantId, input.storeId])
@@ -182,13 +184,13 @@ export async function provisionNormalizedCatalog(input: {
       }
     }
     await insertCatalogApplication(client, input, catalogSha256, normalizedSourceCommitSha, summaryBase)
-    await client.query('COMMIT')
+    if (ownsClient) await client.query('COMMIT')
     return { ...summaryBase, replayed: false }
   } catch (error) {
-    await client.query('ROLLBACK').catch(() => undefined)
+    if (ownsClient) await client.query('ROLLBACK').catch(() => undefined)
     throw error
   } finally {
-    await client.end()
+    if (ownsClient) await client.end()
   }
 }
 

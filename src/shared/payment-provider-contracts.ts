@@ -49,6 +49,8 @@ export interface ProviderCreatePaymentRequest {
   operatorId: string
   remark: string
   wxAppid?: string
+  /** 5 = WeChat official account/H5, 8 = WeChat mini program. */
+  wechatTradeType?: '5' | '8'
 }
 
 export interface ProviderCreatePaymentResult {

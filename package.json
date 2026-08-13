@@ -54,7 +54,7 @@
     "quality:model:verify": "node scripts/verify-quality-model.mjs --state-machine docs/quality/mbox-kds-state-machine-v1.json --invariants docs/quality/mbox-invariant-register-v1.csv",
     "quality:plan:test": "node --test scripts/run-software-quality-plan.test.mjs",
     "quality:plan:run": "node scripts/run-software-quality-plan.mjs",
-    "quality:seed:verify": "node scripts/verify-deterministic-load-seed.mjs",
+    "quality:seed:verify": "tsc -p tsconfig.server.json && node scripts/verify-deterministic-load-seed.mjs",
     "release:quality-gate": "node scripts/build-tc-execution-register.mjs --check --require-release-pass && node scripts/verify-quality-model.mjs --state-machine docs/quality/mbox-kds-state-machine-v1.json --invariants docs/quality/mbox-invariant-register-v1.csv --require-release-pass",
     "runtime:quality:test": "node --test scripts/analyze-runtime-logs.test.mjs scripts/verify-runtime-metrics.test.mjs scripts/run-local-rc68-load.test.mjs scripts/load-reference-time.test.mjs scripts/reset-runtime-metrics-window.test.mjs scripts/verify-sensitive-artifacts.test.mjs scripts/build-aliyun-evidence-bundle.test.mjs scripts/filter-sls-events.test.mjs scripts/aliyun-evidence-pipeline.test.mjs scripts/render-normalized-table-qr-pdfs.test.mjs deploy/ai-relay/deployment.test.mjs",
     "check:miniprogram": "node scripts/check-miniprogram.mjs",

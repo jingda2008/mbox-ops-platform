@@ -77,6 +77,8 @@ jobs:
           node-version: 24
           cache: ${{ github.event_name == 'push' && github.ref_type != 'tag' && 'npm' || '' }}
       - run: npm ci
+      - name: Install release-smoke browser
+        run: npx playwright install --with-deps chromium
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
       - name: Run code, unit, metadata and production-build checks
@@ -94,6 +96,8 @@ jobs:
           node-version: 24
           cache: ${{ github.event_name == 'push' && github.ref_type != 'tag' && 'npm' || '' }}
       - run: npm ci
+      - name: Install release-smoke browser
+        run: npx playwright install --with-deps chromium
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
       - name: Run deterministic frontend checks and production build

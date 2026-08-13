@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises'
+import AxeBuilder from '@axe-core/playwright'
 import { expect, test } from '@playwright/test'
 
 interface Fixture {
@@ -117,7 +118,7 @@ test('desktop guest keeps recommendations comparable without turning the cart in
 test('narrow mobile guest keeps mood and service controls compact above the menu', async ({ page }) => {
   const data = await fixture()
   for (const width of [320, 360, 390, 430]) {
-    await page.setViewportSize({ width, height: 800 })
+    await page.setViewportSize({ width, height: width === 320 ? 568 : 800 })
     await page.goto(data.guestUrl)
     await expect(page.getByTestId('normalized-guest-app')).toBeVisible()
 
@@ -129,6 +130,20 @@ test('narrow mobile guest keeps mood and service controls compact above the menu
     expect((await page.locator('.guest-service-strip').boundingBox())?.height ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(58)
     expect((await page.locator('.guest-recommendation-entries').boundingBox())?.height ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(60)
     expect((await page.locator('.menu-recommendation-option').first().boundingBox())?.y ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(420)
+    if (width === 320) {
+      const quickAdd = page.getByRole('button', { name: /快速加入/ }).first()
+      const checkoutDock = page.getByRole('complementary', { name: '订单结算' })
+      await expect(quickAdd).toBeVisible()
+      const quickAddBox = await quickAdd.boundingBox()
+      const dockBox = await checkoutDock.boundingBox()
+      expect(quickAddBox).not.toBeNull()
+      expect(dockBox).not.toBeNull()
+      expect(quickAddBox!.y + quickAddBox!.height).toBeLessThanOrEqual(dockBox!.y)
+      expect(quickAddBox!.width).toBeGreaterThanOrEqual(44)
+      expect(quickAddBox!.height).toBeGreaterThanOrEqual(44)
+      await quickAdd.click()
+      await expect(checkoutDock).toContainText('已选 1 件')
+    }
     await expectNoHorizontalOverflow(page)
 
     await page.goto(data.reservationUrl)
@@ -136,6 +151,36 @@ test('narrow mobile guest keeps mood and service controls compact above the menu
     await expect(page.getByRole('button', { name: /核对预约信息/ })).toBeVisible()
     await expectNoHorizontalOverflow(page)
   }
+})
+
+test('mobile guest, reservation and staff work surfaces have no serious accessibility violations', async ({ page }) => {
+  const data = await fixture()
+  await page.setViewportSize({ width: 320, height: 800 })
+
+  await page.goto(data.guestUrl)
+  await expect(page.getByTestId('normalized-guest-app')).toBeVisible()
+  const guest = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze()
+  expect(guest.violations.filter((violation) => violation.impact === 'serious' || violation.impact === 'critical')).toEqual([])
+
+  await page.goto(data.reservationUrl)
+  await expect(page.getByTestId('reservation-booking')).toBeVisible()
+  const reservation = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze()
+  expect(reservation.violations.filter((violation) => violation.impact === 'serious' || violation.impact === 'critical')).toEqual([])
+
+  await page.goto(data.staffUrl)
+  await page.getByLabel('门店口令').fill(data.dailyCredential)
+  await page.getByRole('button', { name: /验证设备/ }).click()
+  await page.getByLabel('员工账号').fill(data.employeeCode)
+  await page.getByLabel('四位 PIN').fill(data.employeePin)
+  await page.getByRole('button', { name: /进入工作台/ }).click()
+  await expect(page.getByTestId('normalized-workspace')).toBeVisible()
+  const staffHome = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze()
+  expect(staffHome.violations.filter((violation) => violation.impact === 'serious' || violation.impact === 'critical')).toEqual([])
+
+  await page.getByRole('button', { name: '现场', exact: true }).first().click()
+  await expect(page.getByRole('heading', { name: '找到桌台，直接处理' })).toBeVisible()
+  const staffActions = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze()
+  expect(staffActions.violations.filter((violation) => violation.impact === 'serious' || violation.impact === 'critical')).toEqual([])
 })
 
 test('mobile public reservation uses preferences without exposing exact table selection', async ({ page }) => {

@@ -106,14 +106,14 @@
   background: var(--reservation-line);
 }
 
-.reservation-progress li { position: relative; z-index: 1; color: #949b94; font-size: 11px; text-align: center; }
+.reservation-progress li { position: relative; z-index: 1; color: #626a63; font-size: 11px; text-align: center; }
 .reservation-progress span {
   display: inline-grid;
   width: 21px;
   height: 21px;
   margin-right: 6px;
   place-items: center;
-  color: #7c847d;
+  color: #5f685f;
   background: #fff;
   border: 1px solid #bdc4bd;
   border-radius: 50%;
@@ -195,7 +195,7 @@
 
 .reservation-preferences { min-width: 0; margin: 15px 0 0; padding: 0; border: 0; }
 .reservation-preferences legend { margin-bottom: 8px; color: #4d564e; font-size: 12px; font-weight: 800; }
-.reservation-preferences legend span { margin-left: 5px; color: #8a918a; font-size: 10px; font-weight: 600; }
+.reservation-preferences legend span { margin-left: 5px; color: #626a63; font-size: 10px; font-weight: 600; }
 .reservation-preference-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .reservation-preference-grid button {
   position: relative;
@@ -215,7 +215,7 @@
 .reservation-preference-grid button small { margin-top: 4px; overflow: hidden; color: var(--reservation-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .reservation-preference-grid button svg { position: absolute; top: 10px; right: 10px; color: var(--reservation-green); }
 .reservation-preference-grid button.is-selected { color: #155b43; background: var(--reservation-green-soft); border-color: #75ad96; box-shadow: inset 0 0 0 1px #75ad96, 0 4px 12px rgba(23, 111, 80, .08); }
-.reservation-preference-note { display: block; margin-top: 7px; color: #7b837c; font-size: 10px; line-height: 1.5; }
+.reservation-preference-note { display: block; margin-top: 7px; color: #5e675f; font-size: 10px; line-height: 1.5; }
 
 .reservation-hint { display: flex; align-items: center; gap: 6px; margin: 11px 0; color: var(--reservation-muted); font-size: 11px; }
 .reservation-primary,

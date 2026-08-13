@@ -206,7 +206,10 @@ export async function runNormalizedLoadAcceptance(options = {}) {
   const serviceResult = await runScenario('service_task_flow', { ...context, sessions }, runServiceTaskOperation)
   scenarioResults.serviceTaskFlow = serviceResult.result
 
-  await closeSessionsBestEffort({ context, sessions })
+  const sessionCleanup = options.independentDatabasePerRun === true
+    ? { attempted: false, reason: 'isolated_database_is_dropped_after_run' }
+    : { attempted: true, reason: 'shared_test_environment' }
+  if (sessionCleanup.attempted) await closeSessionsBestEffort({ context, sessions })
 
   const allObservations = Object.values(scenarioResults).flatMap((scenario) => scenario.observations)
   const idempotencyConflicts = countIdempotencyClasses(allObservations)
@@ -228,6 +231,7 @@ export async function runNormalizedLoadAcceptance(options = {}) {
       targetRps,
       durationSeconds,
       requestsPerScenario: requestCount,
+      sessionCleanup,
       scenarioOrder: ['tableOpen', 'orderSubmit', 'kdsPrepareComplete', 'serviceTaskFlow'],
     },
     scenarios: Object.fromEntries(Object.entries(scenarioResults).map(([name, result]) => [name, stripObservations(result)])),

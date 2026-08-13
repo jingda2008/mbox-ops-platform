@@ -339,6 +339,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
 
   return (
     <main className="guest-app guest-app-restored-menu" data-testid="normalized-guest-app">
+      <h1 className="guest-page-title">M-BOX {table?.displayName ?? table?.code} 桌边点单</h1>
       <header className="guest-header">
         <div className="guest-brand"><span>M</span><div><strong>M-BOX</strong><small>SUPERHIGH CULTURE · LIVEHOUSE</small></div></div>
         <button type="button" className="guest-table" onClick={() => { setPanel('orders'); void loadTableOrders() }}>

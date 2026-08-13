@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { StaffActionsPanel } from './StaffActionsPanel'
+import { ActionList, StaffActionsPanel } from './StaffActionsPanel'
 import type { StaffActionsApiPort } from './staff-actions-api'
 import type { StaffFulfillmentData, StaffOperationsData, StaffReservation } from './types'
 
@@ -22,5 +22,17 @@ describe('StaffActionsPanel', () => {
     expect(html).not.toContain('操作成功')
     expect(html).not.toContain('Runtime' + 'State')
     expect(html).not.toContain('/api/' + 'bootstrap')
+  })
+
+  it('renders the empty state when every conditional action is false', () => {
+    const html = renderToStaticMarkup(createElement(
+      ActionList,
+      { empty: '当前没有需要制作或配送的出品' },
+      false,
+      false,
+    ))
+
+    expect(html).toContain('当前没有需要制作或配送的出品')
+    expect(html).toContain('staff-actions-empty')
   })
 })

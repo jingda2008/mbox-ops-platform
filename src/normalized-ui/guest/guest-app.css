@@ -110,6 +110,7 @@ button:active:not(:disabled) {
 .guest-table {
   display: grid;
   min-width: 94px;
+  min-height: 44px;
   padding-left: 12px;
   border-left: 1px solid #d8dbd4;
   border-top: 0;
@@ -121,8 +122,18 @@ button:active:not(:disabled) {
 }
 
 .guest-table small {
-  color: #777c75;
+  color: #666d65;
   font-size: 10px;
+}
+
+.guest-page-title {
+  width: 1px;
+  height: 1px;
+  position: absolute;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .guest-table strong {

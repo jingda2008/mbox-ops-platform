@@ -219,7 +219,7 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
   return <section className="staff-module-panel" aria-label={title} data-action-reveal>
     <header>
       <span><Icon size={20} /></span>
-      <div><small>岗位工作面</small><h2>{title}</h2></div>
+      <div><small>岗位工作面</small><h1>{title}</h1></div>
       <button type="button" aria-label={`刷新${title}`} onClick={() => void load()} disabled={phase === 'loading'}>
         <RefreshCw size={18} className={phase === 'loading' ? 'is-spinning' : ''} />
       </button>

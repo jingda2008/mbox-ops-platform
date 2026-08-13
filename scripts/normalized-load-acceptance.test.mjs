@@ -79,6 +79,26 @@ test('records immutable evidence identity only when the isolated runner opts in'
   assert.equal(report.run.sourceCommitSha, sourceCommitSha)
   assert.equal(report.run.evidenceEligible, true)
   assert.equal(report.workload.independentDatabasePerRun, true)
+  assert.deepEqual(report.workload.sessionCleanup, {
+    attempted: false,
+    reason: 'isolated_database_is_dropped_after_run',
+  })
+})
+
+test('keeps best-effort session cleanup for shared test environments', async () => {
+  const transport = createMockTransport({ latencyMs: 0 })
+  const report = await runNormalizedLoadAcceptance({
+    mode: 'mock',
+    transport,
+    requestsPerScenario: 2,
+    durationSeconds: 0.4,
+    targetRps: 5,
+  })
+
+  assert.deepEqual(report.workload.sessionCleanup, {
+    attempted: true,
+    reason: 'shared_test_environment',
+  })
 })
 
 test('fails gates for lag, latency, errors, KDS inconsistency, and unknown idempotency conflicts', () => {

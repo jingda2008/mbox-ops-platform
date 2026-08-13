@@ -2,8 +2,8 @@
 .staff-module-panel > header { min-height: 64px; display: grid; grid-template-columns: 38px minmax(0, 1fr) 40px; align-items: center; gap: 9px; padding: 9px 12px; border-bottom: 1px solid var(--mbox-line, #d5d9d2); background: #fff; }
 .staff-module-panel > header > span { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 6px; background: #f6edd0; color: #755d18; }
 .staff-module-panel > header > div { min-width: 0; display: grid; gap: 2px; }
-.staff-module-panel > header small { color: #737970; font-size: 10px; }
-.staff-module-panel > header h2 { margin: 0; font-size: 18px; }
+.staff-module-panel > header small { color: #656c64; font-size: 10px; }
+.staff-module-panel > header h1 { margin: 0; font-size: 18px; }
 .staff-module-panel > header > button { width: 40px; height: 40px; display: grid; place-items: center; border: 1px solid #bfc5bd; border-radius: 6px; background: #fff; color: #343a34; box-shadow: 0 2px 0 #b9bfb7; }
 .staff-module-body { display: grid; gap: 8px; padding: 10px; }
 .staff-module-summary { min-height: 66px; display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: center; gap: 10px; padding: 11px 12px; border: 1px solid #cbd2ca; border-radius: 7px; background: #fff; }
@@ -17,7 +17,7 @@
 .staff-module-list article.has-attention { border-color: #dfbd5d; background: #fffaf0; }
 .staff-module-list article > div { min-width: 0; display: grid; gap: 3px; }
 .staff-module-list article strong { font-size: 13px; }
-.staff-module-list article small { color: #737970; font-size: 10px; }
+.staff-module-list article small { color: #656c64; font-size: 10px; }
 .staff-module-list article b { color: #176b43; font-size: 15px; white-space: nowrap; }
 .staff-module-list article b.is-negative { color: #b3383f; }
 .staff-module-list article em { padding: 4px 7px; border-radius: 4px; background: #f6edd0; color: #745d19; font-size: 10px; font-style: normal; }
@@ -38,7 +38,7 @@
 .staff-settings-grid span { color: #176b43; font-size: 10px; }
 .staff-metric-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
 .staff-metric-grid article { min-height: 82px; display: grid; align-content: center; gap: 5px; padding: 11px; border: 1px solid #d5d9d2; border-radius: 6px; background: #fff; }
-.staff-metric-grid small { color: #737970; font-size: 10px; }
+.staff-metric-grid small { color: #656c64; font-size: 10px; }
 .staff-metric-grid strong { font-size: 18px; }
 .staff-metric-grid strong.is-negative { color: #b3383f; }
 @media (min-width: 760px) {

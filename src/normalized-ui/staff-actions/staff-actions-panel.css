@@ -31,8 +31,8 @@
 .staff-actions-panel button:active:not(:disabled) { transform: scale(.98); }
 .staff-actions-panel button:disabled { cursor: wait; opacity: .58; }
 .staff-actions-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-.staff-actions-header p { margin: 0 0 2px; color: #8b712c; font-size: 12px; font-weight: 700; }
-.staff-actions-header h2 { margin: 0; font-size: 20px; letter-spacing: 0; }
+.staff-actions-header p { margin: 0 0 2px; color: #735b1b; font-size: 12px; font-weight: 700; }
+.staff-actions-header h1 { margin: 0; font-size: 20px; letter-spacing: 0; }
 .staff-actions-icon { width: 42px; padding: 0; display: grid; place-items: center; border-radius: 6px; }
 .is-spinning { animation: staff-spin .8s linear infinite; }
 @keyframes staff-spin { to { transform: rotate(360deg); } }

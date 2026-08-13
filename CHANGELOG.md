@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0-rc.77 - 2026-08-13
+
+- Audited customer, reservation, employee, fulfillment, payment, refund, inventory, security, performance and release paths with browser, PostgreSQL, load and role simulations.
+- Fixed the normalized fulfillment empty state so filtered queues no longer render a blank work surface.
+- Improved narrow mobile ordering with a reachable 44px recommendation add action, full-width single search results and larger cart, search and quantity controls.
+- Added semantic page headings and corrected serious contrast issues across guest, reservation and employee work surfaces.
+- Added normalized browser accessibility coverage for guest ordering, public reservation, employee home and onsite actions.
+- Corrected isolated-load cleanup so expected rejection of closing unsettled fixture tables cannot contaminate database failure metrics; the repeated 5 RPS PostgreSQL gate completed with zero transaction failures.
+- Kept simulated payment, real acquiring, physical POS, printers and other hardware explicitly outside completed commercial acceptance.
+
 ## 1.0.0-rc.76 - 2026-08-13
 
 - Added an explicit validation-only inventory audit mode so incomplete recipe and stock setup no longer blocks simulated ordering, while production remains strict and rejects this mode.

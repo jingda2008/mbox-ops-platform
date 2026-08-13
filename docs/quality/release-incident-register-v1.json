@@ -9,7 +9,7 @@
       "earliestDetectionStage": "config_preflight",
       "regressionTest": "server/normalized/normalized-runtime-config.test.ts",
       "automaticBlocker": "verify-normalized-runtime-config",
-      "fixCommit": "pending-release-system-v2",
+      "fixCommit": "ba9d70b4fceaa481497b0c4d53cc7e4d8624d378",
       "status": "covered"
     },
     {
@@ -29,7 +29,7 @@
       "earliestDetectionStage": "candidate_freeze",
       "regressionTest": "scripts/release-system-policy.test.mjs",
       "automaticBlocker": "tag commit must be reachable from origin/main",
-      "fixCommit": "pending-release-system-v2",
+      "fixCommit": "ba9d70b4fceaa481497b0c4d53cc7e4d8624d378",
       "status": "covered"
     },
     {
@@ -39,7 +39,7 @@
       "earliestDetectionStage": "ci_evidence",
       "regressionTest": "scripts/release-system-policy.test.mjs",
       "automaticBlocker": "diagnostic artifacts are non-blocking; formal OSS evidence remains blocking",
-      "fixCommit": "pending-release-system-v2",
+      "fixCommit": "ba9d70b4fceaa481497b0c4d53cc7e4d8624d378",
       "status": "covered"
     },
     {
@@ -59,7 +59,7 @@
       "earliestDetectionStage": "external_preflight",
       "regressionTest": "server/verify-normalized-runtime-config.test.ts",
       "automaticBlocker": "read-only DNS and TLS preflight",
-      "fixCommit": "pending-release-system-v2",
+      "fixCommit": "ba9d70b4fceaa481497b0c4d53cc7e4d8624d378",
       "status": "covered"
     },
     {
@@ -69,7 +69,7 @@
       "earliestDetectionStage": "migration_compatible",
       "regressionTest": "scripts/release-system-policy.test.mjs",
       "automaticBlocker": "release state machine",
-      "fixCommit": "pending-release-system-v2",
+      "fixCommit": "ba9d70b4fceaa481497b0c4d53cc7e4d8624d378",
       "status": "covered"
     },
     {

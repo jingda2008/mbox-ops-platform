@@ -20,6 +20,14 @@ test('inspects shell scripts for credentials instead of rejecting the extension'
   assert.deepEqual(findings, [{ file: 'deploy.sh', rule: 'model-api-key', line: 2 }])
 })
 
+test('does not misclassify digits embedded in a SHA256 as a mobile number', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mbox-sha-evidence-'))
+  await writeFile(join(root, 'manifest.json'), JSON.stringify({
+    sha256: '9666ec14025240724c8131be5c9f738832e0f63630afbfddbe17c0b605d7507b',
+  }))
+  assert.deepEqual(await inspectEvidenceDirectory(root), [])
+})
+
 test('reports secret and privacy classes without echoing matched values', async () => {
   const root = await mkdtemp(join(tmpdir(), 'mbox-unsafe-evidence-'))
   await mkdir(join(root, 'nested'))

@@ -19,7 +19,10 @@ const rules = [
   { id: 'bearer-credential', expression: /\bBearer\s+[A-Za-z0-9._~-]{20,}/i },
   { id: 'url-or-field-token', expression: /(?:[?&]|\b)(?:token|access_token|authorization)[=:]["']?(?!REDACTED\b)[A-Za-z0-9._~-]{20,}/i },
   { id: 'database-password', expression: /postgres(?:ql)?:\/\/[^\s:@/]+:(?!\*{3})[^\s@/]+@/i },
-  { id: 'raw-mobile-number', expression: /(?<!\d)1[3-9]\d{9}(?!\d)/ },
+  // Do not interpret an 11-digit run inside a SHA256 or other hex identifier
+  // as a Chinese mobile number. Real serialized phone values still have a
+  // quote, delimiter or whitespace at both boundaries and remain detectable.
+  { id: 'raw-mobile-number', expression: /(?<![0-9a-f])1[3-9]\d{9}(?![0-9a-f])/i },
   { id: 'raw-chinese-id', expression: /(?<!\d)\d{17}[\dXx](?!\d)/ },
 ]
 

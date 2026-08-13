@@ -230,8 +230,16 @@ function readPayment(
   commercialProduction: boolean,
   errors: string[],
 ): NormalizedPaymentRuntimeConfig | null {
-  const provider = optional(environment.MBOX_PAYMENT_PROVIDER)
-    ?? (environment.MBOX_POSTAR_ENABLED === 'true' ? 'postar' : null)
+  const configuredProvider = optional(environment.MBOX_PAYMENT_PROVIDER)
+  const legacyPostarEnabled = optional(environment.MBOX_POSTAR_ENABLED)
+  const provider = configuredProvider
+    ?? (legacyPostarEnabled === 'true' ? 'postar' : null)
+  // Validation hosts may retain inactive UAT identifiers for a later payment
+  // exercise. An explicit off switch must keep those dormant; production still
+  // fails closed and requires a complete provider configuration.
+  if (!commercialProduction && configuredProvider === null && legacyPostarEnabled === 'false') {
+    return null
+  }
   const postarEnvironment = optional(environment.POSTAR_ENVIRONMENT ?? environment.MBOX_POSTAR_ENVIRONMENT)
   const agencyId = optional(environment.POSTAR_AGENCY_ID ?? environment.MBOX_POSTAR_AGENCY_ID)
   const merchantId = optional(environment.POSTAR_MERCHANT_ID ?? environment.MBOX_POSTAR_MERCHANT_ID)

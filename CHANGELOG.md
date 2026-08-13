@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0-rc.82 - 2026-08-14
+
+- Kept inactive Postar UAT identifiers dormant when validation explicitly sets `MBOX_POSTAR_ENABLED=false` and uses simulated checkout.
+- Preserved fail-closed production payment requirements and explicit provider configuration, including the provider public key.
+- Added regression coverage for inactive validation settings, explicit provider precedence and production enforcement after the `rc.81` candidate startup rejection.
+- Preserved the `rc.81` immutable OCI identity checks and the `rc.80` shared-table assisted-ordering and payment handoff behavior.
+
 ## 1.0.0-rc.81 - 2026-08-14
 
 - Preserved the `rc.80` shared-table assisted-ordering and guest-payment behavior without changing business semantics.

@@ -40,6 +40,51 @@ describe('loadNormalizedRuntimeConfig', () => {
     })
   })
 
+  it('keeps Postar disabled in validation when inactive UAT identifiers remain configured', () => {
+    const config = loadNormalizedRuntimeConfig({
+      ...base,
+      MBOX_POSTAR_ENABLED: 'false',
+      MBOX_POSTAR_ENVIRONMENT: 'test',
+      MBOX_POSTAR_AGENCY_ID: 'inactive-agency',
+      MBOX_POSTAR_MERCHANT_ID: 'inactive-merchant',
+      MBOX_POSTAR_CALLBACK_URL: 'https://pay.shmbox.com/api/payments/providers/postar/callback',
+      MBOX_GUEST_PAYMENT_MODE: 'simulation',
+    })
+
+    expect(config.payment).toBeNull()
+    expect(config.guestPaymentMode).toBe('simulation')
+  })
+
+  it('does not let the legacy off switch disable an explicitly configured provider', () => {
+    expect(() => loadNormalizedRuntimeConfig({
+      ...base,
+      MBOX_POSTAR_ENABLED: 'false',
+      MBOX_PAYMENT_PROVIDER: 'postar',
+      POSTAR_ENVIRONMENT: 'uat',
+      POSTAR_AGENCY_ID: 'agency-1',
+      POSTAR_MERCHANT_ID: 'merchant-1',
+      POSTAR_CALLBACK_URL: 'https://pay.shmbox.com/api/payments/providers/postar/callback',
+    })).toThrowError(NormalizedRuntimeConfigurationError)
+  })
+
+  it('does not allow the legacy off switch to bypass production payment requirements', () => {
+    expect(() => loadNormalizedRuntimeConfig({
+      ...base,
+      NODE_ENV: 'production',
+      MBOX_DEPLOYMENT_TIER: 'production',
+      MBOX_METRICS_TOKEN: 'production-metrics-token-0123456789abcdef',
+      MBOX_POSTAR_ENABLED: 'false',
+      MBOX_POSTAR_ENVIRONMENT: 'production',
+      MBOX_POSTAR_AGENCY_ID: 'agency-1',
+      MBOX_POSTAR_MERCHANT_ID: 'merchant-1',
+      MBOX_POSTAR_CALLBACK_URL: 'https://pay.shmbox.com/api/payments/providers/postar/callback',
+      MBOX_GUEST_PAYMENT_MODE: 'wechat_native_qr',
+      MBOX_START_WORKERS: 'true',
+      MBOX_WORKER_ID: 'mbox-worker-production-01',
+      MBOX_WORKER_ADAPTER_MODULE: '/opt/mbox/worker-adapters.mjs',
+    })).toThrowError(NormalizedRuntimeConfigurationError)
+  })
+
   it('accepts only an immutable release image digest', () => {
     expect(loadNormalizedRuntimeConfig({
       ...base,

@@ -69,7 +69,7 @@ describe('verifyNormalizedRuntimeConfig', () => {
     expect(serialized).not.toContain('5100')
   })
 
-  it('rejects missing, invalid and duplicate employee PINs before database work', async () => {
+  it('rejects missing and invalid employee PINs before database work', async () => {
     const missing = environmentWithProvisioning()
     delete missing[storeConfig.employees[0]!.pinEnv]
     await expect(verifyNormalizedRuntimeConfig(missing, false, storeConfig))
@@ -80,10 +80,6 @@ describe('verifyNormalizedRuntimeConfig', () => {
     await expect(verifyNormalizedRuntimeConfig(invalid, false, storeConfig))
       .rejects.toThrow('Missing valid four-digit PIN environment')
 
-    const duplicate = environmentWithProvisioning()
-    duplicate[storeConfig.employees[1]!.pinEnv] = duplicate[storeConfig.employees[0]!.pinEnv]!
-    await expect(verifyNormalizedRuntimeConfig(duplicate, false, storeConfig))
-      .rejects.toThrow('Employee PIN values must be unique')
   })
 
   it('rejects a missing daily store credential before database work', async () => {

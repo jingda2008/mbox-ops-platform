@@ -4,7 +4,7 @@
 
 - Added the store credential and every employee PIN field from the authoritative store configuration to generated validation and production templates.
 - Preserved only valid dynamic provisioning fields during server-side environment canonicalization and rejected malformed aliases.
-- Moved store provisioning credential, PIN format and PIN uniqueness checks into the read-only configuration preflight before backup or database work.
+- Moved store provisioning credential and four-digit PIN format checks into the read-only configuration preflight before backup or database work.
 - Reused one provisioning validator in both preflight and database provisioning so the checks cannot drift.
 - Stopped sending IP addresses as TLS SNI server names and added permanent regression coverage for both failures observed during the rejected `rc.83` candidate.
 

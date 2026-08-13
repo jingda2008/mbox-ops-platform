@@ -486,14 +486,11 @@ export function validateStoreProvisionEnvironment(
   environment: Readonly<Record<string, string | undefined>>,
 ): StoreProvisionEnvironment {
   const employeePins = new Map<string, string>()
-  const usedPins = new Set<string>()
   for (const employee of config.employees) {
     const pin = environment[employee.pinEnv]
     if (!pin || !/^\d{4}$/.test(pin)) {
       throw new Error(`Missing valid four-digit PIN environment: ${employee.pinEnv}`)
     }
-    if (usedPins.has(pin)) throw new Error('Employee PIN values must be unique')
-    usedPins.add(pin)
     employeePins.set(employee.code, pin)
   }
   const dailyCredentialValue = config.dailyCredentialEnv

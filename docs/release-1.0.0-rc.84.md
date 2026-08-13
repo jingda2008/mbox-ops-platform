@@ -15,7 +15,7 @@ This candidate repairs the release configuration contract exposed by the rejecte
 ## Acceptance
 
 - Configuration generation and canonicalization tests pass.
-- Missing, malformed or duplicate employee PINs fail before database work.
+- Missing or malformed employee PINs fail before database work.
 - Missing store credentials fail before database work.
 - Preflight reports counts and status only; it does not emit credential values.
 - The full CI, immutable release identity, OSS evidence, candidate deep routes, cutover and rollback controls remain required.

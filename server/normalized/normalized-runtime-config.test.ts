@@ -4,6 +4,7 @@ import {
   NormalizedRuntimeConfigurationError,
   loadNormalizedRuntimeConfig,
 } from './normalized-runtime-config.js'
+import { NORMALIZED_RUNTIME_CONFIG_VERSION } from './normalized-runtime-config-contract.js'
 
 const base = {
   NODE_ENV: 'test',
@@ -40,8 +41,8 @@ describe('loadNormalizedRuntimeConfig', () => {
     })
   })
 
-  it('keeps Postar disabled in validation when inactive UAT identifiers remain configured', () => {
-    const config = loadNormalizedRuntimeConfig({
+  it('rejects legacy Postar aliases instead of silently retaining inactive configuration', () => {
+    expect(() => loadNormalizedRuntimeConfig({
       ...base,
       MBOX_POSTAR_ENABLED: 'false',
       MBOX_POSTAR_ENVIRONMENT: 'test',
@@ -49,10 +50,7 @@ describe('loadNormalizedRuntimeConfig', () => {
       MBOX_POSTAR_MERCHANT_ID: 'inactive-merchant',
       MBOX_POSTAR_CALLBACK_URL: 'https://pay.shmbox.com/api/payments/providers/postar/callback',
       MBOX_GUEST_PAYMENT_MODE: 'simulation',
-    })
-
-    expect(config.payment).toBeNull()
-    expect(config.guestPaymentMode).toBe('simulation')
+    })).toThrowError(NormalizedRuntimeConfigurationError)
   })
 
   it('does not let the legacy off switch disable an explicitly configured provider', () => {
@@ -112,10 +110,11 @@ describe('loadNormalizedRuntimeConfig', () => {
         'MBOX_STORE_ID',
         'MBOX_NORMALIZED_SECRET',
         'MBOX_METRICS_TOKEN',
-        'MBOX_PAYMENT_PROVIDER',
-        'POSTAR_AGENCY_ID',
-        'POSTAR_MERCHANT_ID',
-        'POSTAR_PUBLIC_KEY',
+        'MBOX_RUNTIME_CONFIG_VERSION',
+        'MBOX_PAYMENT_MODE',
+        'MBOX_AI_MODE',
+        'MBOX_PRINT_MODE',
+        'MBOX_HEADSET_MODE',
         'MBOX_GUEST_PAYMENT_MODE',
         'MBOX_START_WORKERS',
       ]))
@@ -127,6 +126,11 @@ describe('loadNormalizedRuntimeConfig', () => {
       ...base,
       NODE_ENV: 'production',
       MBOX_DEPLOYMENT_TIER: 'production',
+      MBOX_RUNTIME_CONFIG_VERSION: NORMALIZED_RUNTIME_CONFIG_VERSION,
+      MBOX_PAYMENT_MODE: 'production',
+      MBOX_AI_MODE: 'disabled',
+      MBOX_PRINT_MODE: 'disabled',
+      MBOX_HEADSET_MODE: 'disabled',
       MBOX_METRICS_TOKEN: 'production-metrics-token-0123456789abcdef',
       MBOX_PAYMENT_PROVIDER: 'postar',
       POSTAR_ENVIRONMENT: 'production',
@@ -152,6 +156,11 @@ describe('loadNormalizedRuntimeConfig', () => {
       ...base,
       NODE_ENV: 'production',
       MBOX_DEPLOYMENT_TIER: 'validation',
+      MBOX_RUNTIME_CONFIG_VERSION: NORMALIZED_RUNTIME_CONFIG_VERSION,
+      MBOX_PAYMENT_MODE: 'disabled',
+      MBOX_AI_MODE: 'disabled',
+      MBOX_PRINT_MODE: 'disabled',
+      MBOX_HEADSET_MODE: 'disabled',
       MBOX_METRICS_TOKEN: 'validation-metrics-token-0123456789abcdef',
       MBOX_GUEST_PAYMENT_MODE: 'simulation',
       MBOX_INVENTORY_ENFORCEMENT_MODE: 'audit_only',

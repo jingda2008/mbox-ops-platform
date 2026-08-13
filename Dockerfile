@@ -1,10 +1,11 @@
 # syntax=docker/dockerfile:1.7
 FROM node:24-alpine AS build
+ARG APP_COMMIT_SHA=development
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,id=mbox-normalized-build-npm,target=/root/.npm npm ci
 COPY . .
-RUN npm run build:normalized
+RUN APP_COMMIT_SHA="${APP_COMMIT_SHA}" npm run build:normalized
 
 FROM node:24-alpine AS runtime
 ARG APP_COMMIT_SHA=development
@@ -25,7 +26,6 @@ RUN --mount=type=cache,id=mbox-normalized-runtime-npm,target=/root/.npm \
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/dist-normalized ./dist-normalized
 COPY --from=build --chown=node:node /app/database/normalized-migrations ./dist-normalized/database/normalized-migrations
-COPY --from=build --chown=node:node /app/deploy/normalized/initialize-empty-database.mjs ./deploy/normalized/initialize-empty-database.mjs
 COPY --from=build --chown=node:node /app/scripts/filter-sls-events.mjs ./scripts/filter-sls-events.mjs
 
 USER node

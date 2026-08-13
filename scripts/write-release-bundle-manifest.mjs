@@ -16,6 +16,9 @@ const storeConfigPath = resolve(required('MBOX_STORE_CONFIG'))
 const catalogConfigPath = resolve(required('MBOX_CATALOG_CONFIG'))
 const releaseSha = required('MBOX_BUNDLE_SHA')
 const imageDigest = required('MBOX_BUNDLE_IMAGE_DIGEST')
+const sourceBranch = required('MBOX_BUNDLE_SOURCE_BRANCH')
+const frozenAt = required('MBOX_BUNDLE_FROZEN_AT')
+const runtimeConfigVersion = required('MBOX_BUNDLE_CONFIG_VERSION')
 const deploymentScriptDirectory = resolve(required('MBOX_DEPLOYMENT_SCRIPT_DIR'))
 const deploymentScriptNames = [
   'deploy-release.sh',
@@ -26,16 +29,26 @@ const deploymentScriptNames = [
   'upload-oss-verified.sh',
   'send-sls-events.sh',
   'prune-oss-images.sh',
+  'release-state.sh',
+  'normalize-runtime-env.sh',
 ]
 
 if (!/^[0-9a-f]{40}$/.test(releaseSha)) throw new Error('MBOX_BUNDLE_SHA must be a full commit SHA')
 if (!/^sha256:[0-9a-f]{64}$/.test(imageDigest)) throw new Error('MBOX_BUNDLE_IMAGE_DIGEST is not immutable')
+if (sourceBranch !== 'main') throw new Error('MBOX_BUNDLE_SOURCE_BRANCH must be main')
+if (Number.isNaN(Date.parse(frozenAt))) throw new Error('MBOX_BUNDLE_FROZEN_AT must be an ISO timestamp')
+if (runtimeConfigVersion !== 'normalized-runtime-config/v1') {
+  throw new Error('MBOX_BUNDLE_CONFIG_VERSION must be normalized-runtime-config/v1')
+}
 
 const manifest = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   generatedAt: new Date().toISOString(),
   releaseSha,
   releaseVersion: required('MBOX_BUNDLE_VERSION'),
+  sourceBranch,
+  frozenAt,
+  runtimeConfigVersion,
   imageTag: required('MBOX_BUNDLE_IMAGE_TAG'),
   imageDigest,
   archive: basename(archivePath),

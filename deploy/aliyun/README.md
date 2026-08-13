@@ -1,78 +1,79 @@
-# Alibaba Cloud validation ingress
+# M-BOX Alibaba Cloud release system v2
 
-`Caddyfile.validation-ip` is a validation-only HTTPS entry point for the
-Shanghai ECS instance. It requests a Let's Encrypt short-lived certificate for
-the public IPv4 address and renews it automatically.
+This directory is the only supported application deployment entry for the
+normalized runtime. The release process consumes one image, one full commit
+SHA, one image digest and `normalized-runtime-config/v1`.
 
-The IP address must stay allocated to this instance, and inbound TCP ports 80
-and 443 must remain open so ACME renewal can complete. Caddy data must persist
-across container replacements.
+## Candidate freeze
 
-This is not the commercial domain configuration. Before production launch:
+Formal release tags must point to a commit reachable from `origin/main`. The
+tag workflow reuses the image bundle produced for that exact commit; it never
+rebuilds a different image during deployment. Ordinary changes cannot enter a
+candidate after full CI starts. Only a P0 availability, money or data-integrity
+fix may replace it, and that replacement is a new candidate.
 
-1. complete ICP filing for the owned domain;
-2. point the filed domain to the production ingress;
-3. replace the IP site address with the filed domain;
-4. update `MBOX_PUBLIC_BASE_URL`, `MBOX_GUEST_BASE_URL`,
-   `MBOX_CORS_ORIGINS`, payment callbacks, WeChat legal domains and permanent
-   table QR files;
-5. verify certificate renewal, real payment callbacks and WeChat device flows.
+## Mandatory order
 
-## Immutable validation deployment without ACR
+1. Freeze the main-branch commit and verify SHA plus image digest.
+2. Run the redacted real-environment configuration preflight.
+3. Check public DNS, TLS and enabled external endpoints.
+4. Inspect migration lineage and checksums without writing the database.
+5. Create and verify the database backup in private OSS.
+6. Run migrations and provisioning.
+7. Start a zero-traffic candidate on an isolated port.
+8. Verify API, browser, table QR, reservation and employee deep routes.
+9. Switch Caddy traffic and repeat verification on the formal URL.
+10. Upload release evidence, checksums and state journal to OSS.
 
-The optimized release path uses the exact image built by GitHub CI:
+Configuration, external or migration-compatibility failures happen before any
+database write. Candidate, cutover or formal verification failures restore the
+previous immutable image without rebuilding it.
 
-1. pull requests run risk-classified CI;
-2. runtime changes run quality, browser, database and image jobs in parallel;
-3. the image job uses GitHub Actions layer cache and exports one immutable bundle;
-4. a version tag reuses that successful bundle instead of rebuilding it;
-5. `deploy-release.sh` downloads the GitHub release asset, verifies its archive
-   checksum and OCI config digest, resumes the SSH upload, starts a zero-traffic
-   candidate and switches Caddy only after readiness succeeds;
-6. any failed candidate or cutover restores the previous container.
+## Configuration contract
 
-The client machine must hold the deployment private key. The current default is
-`~/.ssh/mbox_aliyun_ed25519`; passwords are not accepted by the deployment
-script. Resumable upload uses `--append-verify` when the installed rsync supports
-it and falls back to `--append` on the macOS system rsync; the archive checksum
-is verified again on the server before loading.
-
-Dry-run bundle validation:
+Do not hand-maintain alternate environment examples. Generate validation and
+production templates from the schema:
 
 ```bash
-MBOX_RELEASE_TAG=v1.0.0-rc.48 \
-MBOX_DEPLOY_DRY_RUN=1 \
-./deploy/aliyun/deploy-release.sh
+npm run release:config:generate
 ```
 
-Alibaba validation deployment:
+Integration modes are `disabled`, `test`, `uat` or `production`. Disabled
+integrations reject leftover provider fields; enabled integrations require the
+whole group. Secrets are checked but never printed.
+
+## Deployment
+
+The client must have the deployment private key. Password authentication is
+not supported.
 
 ```bash
-MBOX_RELEASE_TAG=v1.0.0-rc.48 \
+MBOX_RELEASE_TAG=v1.0.0-rc.83 \
 MBOX_DEPLOYMENT_TIER=validation \
 ./deploy/aliyun/deploy-release.sh
 ```
 
-Production mode always creates a database backup before migration or cutover.
-Validation mode creates a backup when migrations changed or no recent backup
-exists. A migration manifest prevents repeated no-op migration runs.
+Dry-run artifact validation:
 
-This pipeline does not alter application features, API contracts, customer
-data, payment behavior or authorization rules. It only changes how a verified
-image reaches the validation server.
+```bash
+MBOX_RELEASE_TAG=v1.0.0-rc.83 \
+MBOX_DEPLOY_DRY_RUN=1 \
+./deploy/aliyun/deploy-release.sh
+```
 
-## Private OSS evidence and selective SLS logging
+The Shanghai validation ingress uses `Caddyfile.validation-ip`. Before a
+commercial launch, use the filed domain and revalidate TLS, payment callbacks,
+WeChat legal domains and permanent table QR files.
 
-The low-cost evidence design and verified resource boundaries are documented in
-`docs/aliyun-low-cost-evidence-observability-v1.md`.
+## Evidence and logging
 
-Cloud bootstrap must run on the Shanghai ECS instance after an instance RAM role
-is attached. Long-lived AccessKey environment variables make every script fail
-closed. The formal deployment also fails before candidate activation unless the
-CI evidence and rollback image have been uploaded through the internal OSS
-endpoint and downloaded again with identical byte size and SHA256.
+Formal evidence, manifests, checksums, backups and the latest rollback images
+are stored in private OSS and verified after upload. SLS only receives selected
+5xx, payment/refund, database-pool, container lifecycle, release and permission
+audit events. GitHub artifacts are temporary diagnostics and their quota cannot
+change a test result; OSS verification failure blocks a formal release.
 
-Bootstrap and verification:
+Cloud bootstrap and verification:
 
 ```bash
 ./deploy/aliyun/bootstrap-evidence-services.sh
@@ -80,8 +81,8 @@ Bootstrap and verification:
 ./deploy/aliyun/install-selective-observability.sh
 ```
 
-The collector is a two-minute systemd timer outside the request path. Stop it
-without affecting the application:
+The collector is outside the request path and can be stopped without affecting
+the application:
 
 ```bash
 systemctl disable --now mbox-sls-collector.timer

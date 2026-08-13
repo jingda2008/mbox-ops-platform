@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0-rc.83 - 2026-08-14
+
+- Replaced parallel deployment paths with one Alibaba Cloud release chain, one root Dockerfile and one normalized runtime configuration contract.
+- Added explicit disabled/test/UAT/production modes for payment, AI, printing and headset integrations; legacy Postar aliases now fail closed after one protected server-side normalization.
+- Added configuration, DNS/TLS, migration-compatibility, backup, migration, candidate, cutover, evidence and completion states that cannot be skipped.
+- Required formal tags to be reachable from `main` and bound each release to one frozen SHA, image digest, configuration version and migration manifest.
+- Added a permanent release-incident register plus isolated config-rejection, post-cutover rollback and happy-path candidate drills with SHA256 evidence.
+- Kept GitHub diagnostic artifacts non-blocking while OSS evidence and checksum failures remain formal release blockers.
+- Removed obsolete Google Cloud and duplicate normalized deployment scripts without changing the normalized business runtime or database model.
+
 ## 1.0.0-rc.82 - 2026-08-14
 
 - Kept inactive Postar UAT identifiers dormant when validation explicitly sets `MBOX_POSTAR_ENABLED=false` and uses simulated checkout.

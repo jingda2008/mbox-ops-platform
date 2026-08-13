@@ -253,7 +253,11 @@ test('formal deployment requires OSS evidence before activation and uploads data
   assert.match(smoke, /'\/staff\/live'/)
   assert.match(smoke, /text\/html/)
   assert.match(activate, /public_verifier=.*verify-public-app\.sh/)
-  assert.match(activate, /verify_public_release 15/)
+  const candidateVerification = activate.indexOf('"http://${candidate_ip}:8787"')
+  const cutover = activate.indexOf('candidate_deep_verified cutover_started')
+  const formalVerification = activate.indexOf('verify_release_at "${public_url}" 15')
+  assert.ok(candidateVerification > 0 && candidateVerification < cutover)
+  assert.ok(cutover < formalVerification)
   const publicVerifier = await read('../deploy/aliyun/verify-public-app.sh')
   assert.match(publicVerifier, /<div id="root"><\/div>/)
   assert.match(publicVerifier, /mbox-build-commit/)
@@ -272,13 +276,11 @@ test('formal deployment requires OSS evidence before activation and uploads data
 
 test('selective collection is outside the request path and only three stores can be written', async () => {
   const dockerfile = await read('../Dockerfile')
-  const normalizedDockerfile = await read('../Dockerfile.normalized')
   const installer = await read('../deploy/aliyun/install-selective-observability.sh')
   const service = await read('../deploy/aliyun/systemd/mbox-sls-collector.service')
   const collector = await read('../deploy/aliyun/collect-selective-events.sh')
   const sender = await read('../deploy/aliyun/send-sls-events.sh')
   assert.match(dockerfile, /filter-sls-events\.mjs/)
-  assert.match(normalizedDockerfile, /filter-sls-events\.mjs/)
   assert.match(installer, /node --check "\$\{filter_path\}"/)
   assert.match(installer, /normalized image is missing \$\{filter_path\}/)
   assert.match(installer, /selective observability installation failed:/)
@@ -372,7 +374,7 @@ test('external rollback starts and verifies the previous SHA before candidate-IP
     'deploy-release.sh',
     'activate-release.sh', 'rollback-activated-release.sh', 'verify-public-app.sh',
     'stage-release-evidence.sh', 'upload-oss-verified.sh', 'send-sls-events.sh',
-    'prune-oss-images.sh',
+    'prune-oss-images.sh', 'release-state.sh', 'normalize-runtime-env.sh',
   ]
   await Promise.all([
     mkdir(failedRelease, { recursive: true }),

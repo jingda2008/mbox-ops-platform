@@ -25,7 +25,7 @@ verify_deployment_scripts() {
     test "$(sha256sum "${release_dir}/${script_name}" | awk '{print $1}')" = "${expected_sha}"
     count=$((count + 1))
   done < <(jq -er '.deploymentScripts | to_entries[] | [.value.file,.value.sha256] | @tsv' "${release_dir}/release-manifest.json")
-  test "${count}" = 8
+  test "${count}" = 10
 }
 verify_deployment_scripts
 rollback_container=$(jq -er '.rollbackContainer' "${manifest}")

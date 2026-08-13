@@ -81,3 +81,12 @@ test('unknown diffs and release tags fail closed to full verification', () => {
   assert.equal(classifyChangedPaths(['docs/release.md'], { forceFull: true }).scope, 'full')
   assert.equal(classifyChangedPaths(['src/App.css'], { forceFull: true }).scope, 'full')
 })
+
+test('manual CI is diagnostic while only version tags request a deployable artifact', async () => {
+  const source = await import('node:fs/promises').then(({ readFile }) => readFile(
+    new URL('./classify-ci-scope.mjs', import.meta.url),
+    'utf8',
+  ))
+  assert.match(source, /const releaseArtifactRequired = ref\.startsWith\('refs\/tags\/v'\)/)
+  assert.doesNotMatch(source, /releaseArtifactRequired[^\n]*workflow_dispatch/)
+})

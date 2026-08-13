@@ -65,7 +65,7 @@ deployment_script_rows=$(node -e "
   const fs=require('node:fs');
   const manifest=JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
   const scripts=manifest.deploymentScripts;
-  if (!scripts || Object.keys(scripts).length !== 8) throw new Error('deployment script manifest is incomplete');
+  if (!scripts || Object.keys(scripts).length !== 10) throw new Error('deployment script manifest is incomplete');
   for (const entry of Object.values(scripts)) {
     if (!entry || !/^[a-z0-9-]+\\.sh$/.test(entry.file) || !/^[0-9a-f]{64}$/.test(entry.sha256)) {
       throw new Error('deployment script identity is invalid');
@@ -186,7 +186,7 @@ rsync -a --partial "${rsync_resume_option}" \
   "${bundle_dir}/" "${ssh_target}:${remote_release_dir}/"
 
 ssh "${ssh_options[@]}" "${ssh_target}" \
-  "cd '${remote_release_dir}' && test \"\$(jq -r '.deploymentScripts | length' release-manifest.json)\" = 8 && jq -er '.deploymentScripts | to_entries[] | [.value.file,.value.sha256] | @tsv' release-manifest.json | while IFS=\$'\\t' read -r file sha; do test \"\$(sha256sum \"\$file\" | awk '{print \$1}')\" = \"\$sha\" || exit 1; done && chmod 0700 ./*.sh && './stage-release-evidence.sh' '${remote_release_dir}' '${remote_release_dir}/oss-ready-evidence' '${MBOX_RELEASE_TAG}'"
+  "cd '${remote_release_dir}' && test \"\$(jq -r '.deploymentScripts | length' release-manifest.json)\" = 10 && jq -er '.deploymentScripts | to_entries[] | [.value.file,.value.sha256] | @tsv' release-manifest.json | while IFS=\$'\\t' read -r file sha; do test \"\$(sha256sum \"\$file\" | awk '{print \$1}')\" = \"\$sha\" || exit 1; done && chmod 0700 ./*.sh && './stage-release-evidence.sh' '${remote_release_dir}' '${remote_release_dir}/oss-ready-evidence' '${MBOX_RELEASE_TAG}'"
 
 ssh "${ssh_options[@]}" "${ssh_target}" \
   "'${remote_release_dir}/activate-release.sh' '${remote_release_dir}' '${deployment_tier}' '${public_url}' '${backup_max_age_minutes}'"

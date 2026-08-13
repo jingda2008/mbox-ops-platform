@@ -1,6 +1,11 @@
 import { isAbsolute } from 'node:path'
 import type { GuestCheckoutPaymentMode } from './guest-commerce-service-api.js'
 import type { GuestOrderSafetyPolicy } from './guest-order-safety.js'
+import {
+  NORMALIZED_RUNTIME_CONFIG_VERSION,
+  readNormalizedIntegrationContract,
+  type NormalizedIntegrationContract,
+} from './normalized-runtime-config-contract.js'
 
 export const NORMALIZED_SCHEMA_FLAVOR = 'normalized-core-v1'
 
@@ -26,6 +31,8 @@ export interface NormalizedRuntimeConfig {
   storeId: string
   secret: string
   metricsToken: string | null
+  configVersion: typeof NORMALIZED_RUNTIME_CONFIG_VERSION
+  integrations: NormalizedIntegrationContract
   payment: NormalizedPaymentRuntimeConfig | null
   guestPaymentMode: GuestCheckoutPaymentMode
   inventoryEnforcementMode: 'strict' | 'audit_only'
@@ -61,7 +68,7 @@ export function loadNormalizedRuntimeConfig(
   const nodeEnv = readNodeEnv(environment.NODE_ENV)
   const errors: string[] = []
   const deploymentTier = readDeploymentTier(
-    environment.MBOX_DEPLOYMENT_TIER ?? environment.DEPLOYMENT_TIER,
+    environment.MBOX_DEPLOYMENT_TIER,
     nodeEnv,
     errors,
   )
@@ -71,7 +78,13 @@ export function loadNormalizedRuntimeConfig(
   const storeId = requiredUuid(environment.MBOX_STORE_ID, 'MBOX_STORE_ID', errors)
   const secret = requiredSecret(environment.MBOX_NORMALIZED_SECRET, errors)
   const metricsToken = readMetricsToken(environment.MBOX_METRICS_TOKEN, nodeEnv, errors)
-  const payment = readPayment(environment, commercialProduction, errors)
+  const integrations = readNormalizedIntegrationContract(
+    environment,
+    nodeEnv,
+    deploymentTier,
+    errors,
+  )
+  const payment = readPayment(environment, integrations.modes.payment, errors)
   const guestPaymentMode = readGuestPaymentMode(
     environment.MBOX_GUEST_PAYMENT_MODE,
     commercialProduction,
@@ -149,6 +162,8 @@ export function loadNormalizedRuntimeConfig(
     storeId,
     secret,
     metricsToken,
+    configVersion: NORMALIZED_RUNTIME_CONFIG_VERSION,
+    integrations,
     payment,
     guestPaymentMode,
     inventoryEnforcementMode,
@@ -227,35 +242,25 @@ function readWorkerAdapterModule(
 
 function readPayment(
   environment: Readonly<Record<string, string | undefined>>,
-  commercialProduction: boolean,
+  mode: NormalizedIntegrationContract['modes']['payment'],
   errors: string[],
 ): NormalizedPaymentRuntimeConfig | null {
-  const configuredProvider = optional(environment.MBOX_PAYMENT_PROVIDER)
-  const legacyPostarEnabled = optional(environment.MBOX_POSTAR_ENABLED)
-  const provider = configuredProvider
-    ?? (legacyPostarEnabled === 'true' ? 'postar' : null)
-  // Validation hosts may retain inactive UAT identifiers for a later payment
-  // exercise. An explicit off switch must keep those dormant; production still
-  // fails closed and requires a complete provider configuration.
-  if (!commercialProduction && configuredProvider === null && legacyPostarEnabled === 'false') {
-    return null
-  }
-  const postarEnvironment = optional(environment.POSTAR_ENVIRONMENT ?? environment.MBOX_POSTAR_ENVIRONMENT)
-  const agencyId = optional(environment.POSTAR_AGENCY_ID ?? environment.MBOX_POSTAR_AGENCY_ID)
-  const merchantId = optional(environment.POSTAR_MERCHANT_ID ?? environment.MBOX_POSTAR_MERCHANT_ID)
-  const publicKey = optional(environment.POSTAR_PUBLIC_KEY ?? environment.MBOX_POSTAR_PUBLIC_KEY)
-  const callbackUrl = optional(environment.POSTAR_CALLBACK_URL ?? environment.MBOX_POSTAR_CALLBACK_URL)
+  const provider = optional(environment.MBOX_PAYMENT_PROVIDER)
+  const agencyId = optional(environment.POSTAR_AGENCY_ID)
+  const merchantId = optional(environment.POSTAR_MERCHANT_ID)
+  const publicKey = optional(environment.POSTAR_PUBLIC_KEY)
+  const callbackUrl = optional(environment.POSTAR_CALLBACK_URL)
   const wechatAppId = optional(environment.POSTAR_WECHAT_APP_ID)
   const wechatTradeType = optional(environment.POSTAR_WECHAT_TRADE_TYPE)
-  const anyPaymentField = provider !== null || postarEnvironment !== null || agencyId !== null
+  const anyPaymentField = provider !== null || agencyId !== null
     || merchantId !== null || publicKey !== null || callbackUrl !== null
     || wechatAppId !== null || wechatTradeType !== null
 
-  if (!commercialProduction && !anyPaymentField) return null
-  if (provider !== 'postar') errors.push('MBOX_PAYMENT_PROVIDER')
-  if (postarEnvironment !== 'test' && postarEnvironment !== 'uat' && postarEnvironment !== 'production') {
-    errors.push('POSTAR_ENVIRONMENT')
+  if (mode === 'disabled') {
+    if (anyPaymentField) errors.push('MBOX_PAYMENT_MODE')
+    return null
   }
+  if (provider !== 'postar') errors.push('MBOX_PAYMENT_PROVIDER')
   if (agencyId === null) errors.push('POSTAR_AGENCY_ID')
   if (merchantId === null) errors.push('POSTAR_MERCHANT_ID')
   if (publicKey === null) errors.push('POSTAR_PUBLIC_KEY')
@@ -267,7 +272,7 @@ function readPayment(
     errors.push('POSTAR_WECHAT_TRADE_TYPE')
   }
   const timeoutMs = readInteger(
-    environment.POSTAR_HTTP_TIMEOUT_MS ?? environment.MBOX_POSTAR_HTTP_TIMEOUT_MS,
+    environment.POSTAR_HTTP_TIMEOUT_MS,
     'POSTAR_HTTP_TIMEOUT_MS',
     10_000,
     1_000,
@@ -275,13 +280,12 @@ function readPayment(
     errors,
   )
   if (provider !== 'postar'
-    || (postarEnvironment !== 'test' && postarEnvironment !== 'uat' && postarEnvironment !== 'production')
     || agencyId === null || merchantId === null || publicKey === null
     || callbackUrl === null || !isHttpsUrl(callbackUrl)
     || (wechatTradeType !== null && wechatTradeType !== '5' && wechatTradeType !== '8')) return null
   return Object.freeze({
     provider,
-    environment: postarEnvironment,
+    environment: mode,
     agencyId,
     merchantId,
     publicKey,

@@ -19,6 +19,8 @@ test('release manifest binds the exact store and catalog configuration digests',
     'activate-release.sh', 'rollback-activated-release.sh', 'verify-public-app.sh',
     'stage-release-evidence.sh', 'upload-oss-verified.sh', 'send-sls-events.sh',
     'prune-oss-images.sh',
+    'release-state.sh',
+    'normalize-runtime-env.sh',
   ]) writeFileSync(join(scripts, name), `#!/bin/sh\nprintf '${name}\\n'\n`)
   writeFileSync(archive, 'image')
   writeFileSync(migration, JSON.stringify({ count: 40, digest: 'a'.repeat(64) }))
@@ -31,6 +33,9 @@ test('release manifest binds the exact store and catalog configuration digests',
       MBOX_BUNDLE_ARCHIVE: archive,
       MBOX_BUNDLE_SHA: 'b'.repeat(40),
       MBOX_BUNDLE_VERSION: '1.0.0-rc.test',
+      MBOX_BUNDLE_SOURCE_BRANCH: 'main',
+      MBOX_BUNDLE_FROZEN_AT: '2026-08-14T00:00:00Z',
+      MBOX_BUNDLE_CONFIG_VERSION: 'normalized-runtime-config/v1',
       MBOX_BUNDLE_IMAGE_TAG: 'mbox:test',
       MBOX_BUNDLE_IMAGE_DIGEST: `sha256:${'c'.repeat(64)}`,
       MBOX_MIGRATION_MANIFEST: migration,
@@ -41,13 +46,15 @@ test('release manifest binds the exact store and catalog configuration digests',
     },
   })
   const manifest = JSON.parse(readFileSync(output, 'utf8'))
-  assert.equal(manifest.schemaVersion, 3)
+  assert.equal(manifest.schemaVersion, 4)
+  assert.equal(manifest.sourceBranch, 'main')
+  assert.equal(manifest.runtimeConfigVersion, 'normalized-runtime-config/v1')
   assert.equal(manifest.configuration.store.file, 'store.json')
   assert.match(manifest.configuration.store.sha256, /^[0-9a-f]{64}$/)
   assert.equal(manifest.configuration.catalog.file, 'catalog.json')
   assert.match(manifest.configuration.catalog.sha256, /^[0-9a-f]{64}$/)
   assert.notEqual(manifest.configuration.store.sha256, manifest.configuration.catalog.sha256)
-  assert.equal(Object.keys(manifest.deploymentScripts).length, 8)
+  assert.equal(Object.keys(manifest.deploymentScripts).length, 10)
   assert.equal(manifest.deploymentScripts.activate_release.file, 'activate-release.sh')
   assert.match(manifest.deploymentScripts.activate_release.sha256, /^[0-9a-f]{64}$/)
 })

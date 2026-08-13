@@ -35,6 +35,8 @@ jobs:
           fi
       - name: Validate tag and release metadata
         run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "${GITHUB_SHA}" origin/main
           node scripts/verify-release-metadata.mjs
           version=$(node -p "require('./package.json').version")
           test "${GITHUB_REF_NAME}" = "v${version}"
@@ -119,7 +121,7 @@ jobs:
               if (digest !== item.sha256) throw new Error('release configuration digest mismatch');
             }
             const scripts = Object.values(manifest.deploymentScripts ?? {});
-            if (scripts.length !== 8) throw new Error('deployment script manifest is incomplete');
+            if (scripts.length !== 10) throw new Error('deployment script manifest is incomplete');
             for (const item of scripts) {
               if (!item || !/^[a-z0-9-]+\.sh$/.test(item.file) || !/^[0-9a-f]{64}$/.test(item.sha256)) throw new Error('deployment script identity is invalid');
               const path = 'release-artifact/' + item.file;
@@ -136,11 +138,12 @@ jobs:
         run: |
           version=$(node -p "require('./package.json').version")
           mkdir -p release-metadata
+          npm run release:drills -- release-metadata/release-drills
           cp release-artifact/release-manifest.json release-metadata/
           cp release-artifact/migration-manifest.json release-metadata/
           cp release-artifact/mbox-lujiazui.store.json release-metadata/
           cp release-artifact/menu-catalog-2026-07-27.json release-metadata/
-          cp release-artifact/{deploy-release,activate-release,rollback-activated-release,verify-public-app,stage-release-evidence,upload-oss-verified,send-sls-events,prune-oss-images}.sh release-metadata/
+          cp release-artifact/{deploy-release,activate-release,rollback-activated-release,verify-public-app,stage-release-evidence,upload-oss-verified,send-sls-events,prune-oss-images,release-state,normalize-runtime-env}.sh release-metadata/
           node scripts/build-aliyun-evidence-bundle.mjs \
             --output oss-ready-evidence \
             --channel rc \

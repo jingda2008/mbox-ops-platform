@@ -21,6 +21,8 @@
     "server/provision-normalized-catalog.ts",
     "server/provision-normalized-release.ts",
     "server/verify-normalized-commercial-readiness.ts",
+    "server/verify-normalized-runtime-config.ts",
+    "server/verify-normalized-migration-compatibility.ts",
     "server/normalized/generate-table-qrs.ts"
   ]
 }

@@ -89,7 +89,7 @@
       "earliestDetectionStage": "config_preflight",
       "regressionTest": "server/verify-normalized-runtime-config.test.ts",
       "automaticBlocker": "store-aware runtime preflight before backup or database work",
-      "fixCommit": "pending",
+      "fixCommit": "4999249d3b8bfefce9036e7f86109cad9c55e9cf",
       "status": "covered"
     },
     {
@@ -99,7 +99,7 @@
       "earliestDetectionStage": "external_preflight",
       "regressionTest": "server/verify-normalized-runtime-config.test.ts",
       "automaticBlocker": "IP-aware TLS server-name selection",
-      "fixCommit": "pending",
+      "fixCommit": "4999249d3b8bfefce9036e7f86109cad9c55e9cf",
       "status": "covered"
     }
   ]

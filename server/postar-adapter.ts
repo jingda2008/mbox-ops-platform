@@ -38,6 +38,13 @@ const DATE = /^\d{8}$/
 const DATE_TIME = /^\d{14}$/
 const ALPHANUMERIC_ORDER_ID = /^[A-Za-z0-9]{1,40}$/
 
+export class PostarPaymentRejectedError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'PostarPaymentRejectedError'
+  }
+}
+
 type JsonObject = Record<string, PostarJsonValue | undefined>
 
 function assertObject(value: unknown, label: string): asserts value is Record<string, unknown> {
@@ -531,6 +538,10 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
     const callbackUrl = new URL(request.callbackUrl)
     if (callbackUrl.protocol !== 'https:') throw new Error('星驿异步通知地址必须使用HTTPS')
     if (request.presentation === 'jsapi' && request.payWay === 'wechat' && !request.wxAppid?.trim()) throw new Error('星驿微信支付必须提供wxAppid')
+    if (request.presentation === 'jsapi' && request.payWay === 'wechat'
+      && request.wechatTradeType !== '5' && request.wechatTradeType !== '8') {
+      throw new Error('星驿微信支付必须提供有效traType')
+    }
     const expiresInMinutes = Math.ceil((Date.parse(request.expiresAt) - this.now().getTime()) / 60_000)
     if (!Number.isInteger(expiresInMinutes) || expiresInMinutes < 1 || expiresInMinutes > 15) {
       throw new Error('星驿支付有效期必须为1至15分钟')
@@ -562,7 +573,7 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
         headers: { 'content-type': 'application/json; charset=utf-8' },
         url: `${this.baseUrl}${POSTAR_ENDPOINTS.createQrPayment}`,
       }), publicKey)
-      if (response.code !== '000000') throw new Error(`星驿聚合支付码下单失败: ${response.code} ${response.msg}`)
+      if (response.code !== '000000') throw new PostarPaymentRejectedError(`星驿聚合支付码下单失败: ${response.code} ${response.msg}`)
       const qrCodeUrl = requireDataString(response)
       if (new URL(qrCodeUrl).protocol !== 'https:') throw new Error('星驿聚合支付码链接必须使用HTTPS')
       return {
@@ -591,7 +602,7 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
         url: `${this.baseUrl}${POSTAR_ENDPOINTS.createBarcodePayment}`,
       }), publicKey)
       if (!['000000', '222222'].includes(response.code)) {
-        throw new Error(`星驿付款码支付失败: ${response.code} ${response.msg}`)
+        throw new PostarPaymentRejectedError(`星驿付款码支付失败: ${response.code} ${response.msg}`)
       }
       const data = requireDataObject(response)
       assertAgency(data, agencyId)
@@ -625,12 +636,13 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
         operator: request.operatorId,
         payWay: request.payWay === 'wechat' ? '1' : '2',
         sceneType: '02',
+        traType: request.payWay === 'wechat' ? request.wechatTradeType : undefined,
         wxAppid: request.payWay === 'wechat' ? request.wxAppid : undefined,
       }, publicKey),
       headers: { 'content-type': 'application/json; charset=utf-8' },
       url: `${this.baseUrl}${POSTAR_ENDPOINTS.createJsapiPayment}`,
     }), publicKey)
-    if (response.code !== '000000') throw new Error(`星驿下单失败: ${response.code} ${response.msg}`)
+    if (response.code !== '000000') throw new PostarPaymentRejectedError(`星驿下单失败: ${response.code} ${response.msg}`)
     const data = requireDataObject(response)
     assertAgency(data, agencyId)
     const returnedIntentId = requiredString(data, 'threeOrderNo')

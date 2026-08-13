@@ -47,6 +47,7 @@ import { OperationsQueryService } from './operations-query-service.js'
 import { OrderRepository } from './order-repository.js'
 import { paymentApiPlugin, PaymentProviderVerificationError, type PaymentProviderVerifier } from './payment-api.js'
 import { PaymentCommandService } from './payment-command-service.js'
+import { OnlinePaymentService } from './online-payment-service.js'
 import { NormalizedPaymentCapabilityAuthorization } from './payment-security-policy.js'
 import { PostgresCashierWorkbenchQuery } from './cashier-workbench-query.js'
 import { registerNormalizedObservability } from './normalized-observability.js'
@@ -104,6 +105,9 @@ export const NORMALIZED_LOG_REDACTION_PATHS = Object.freeze([
   'body.deviceKey',
   'body.deviceFingerprint',
   'body.providerAssertion',
+  'body.customerAuthCode',
+  'body.openid',
+  'body.payerId',
   'body.phone',
   'body.contact',
   'body.contactToken',
@@ -112,7 +116,7 @@ export const NORMALIZED_LOG_REDACTION_PATHS = Object.freeze([
   'payment.publicKey',
 ])
 
-export const NORMALIZED_MIN_SCHEMA_VERSION = '037'
+export const NORMALIZED_MIN_SCHEMA_VERSION = '041'
 export const NORMALIZED_INJECTABLE_PLUGIN_PORTS = Object.freeze([
   'customer-table-side',
 ] as const)
@@ -177,7 +181,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
   const app = Fastify({
     logger: options.logger ?? loggerConfiguration(options.config),
     logController: new LogController({ disableRequestLogging: true }),
-    trustProxy: false,
+    trustProxy: options.config.trustProxyHops === 0 ? false : options.config.trustProxyHops,
     requestIdHeader: false,
     genReqId: () => randomUUID(),
   })
@@ -188,6 +192,11 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
   const transactions = new ScopedPostgresTransactionRunner(pool)
   registerNormalizedObservability(app, options.config, transactions)
   const commandExecutor = new NormalizedCommandExecutor(transactions)
+  const onlinePayments = new OnlinePaymentService(
+    transactions,
+    options.config.secret,
+    options.config.payment,
+  )
   const businessClock = new PostgresNormalizedBusinessClock(transactions)
   const trustedScope = fixedStoreScopeResolver(scope)
   const staffRateLimiter = new PostgresStaffLoginRateLimiter(transactions, options.config.secret)
@@ -357,6 +366,10 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       createKdsRepository: (transaction) => new KdsRepository(transaction),
       createOrderRepository: (transaction) => new OrderRepository(transaction),
       resolveOpenTableSessionId: (currentScope, tableId) => resolveOpenSession(transactions, currentScope, tableId),
+      onlinePaymentAvailable: options.config.payment !== null || options.config.guestPaymentMode === 'simulation',
+      onlinePaymentProvider: options.config.guestPaymentMode === 'simulation'
+        ? 'simulation'
+        : options.config.payment !== null ? 'postar' : null,
     })
     const paymentCommands = new PaymentCommandService(
       commandExecutor,
@@ -368,6 +381,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       providerVerifier: options.paymentProviderVerifier ?? paymentVerifier(options.config, scope),
       reconciliationQuery: new PostgresReconciliationQuery(transactions),
       cashierWorkbenchQuery: new PostgresCashierWorkbenchQuery(transactions),
+      onlinePayments,
       resolveActorContext: async (request) => {
         if (isGuestRequest(request)) {
           const context = await guestReservationContext(request)
@@ -459,9 +473,11 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       commandExecutor,
       commerce,
       payments: paymentCommands,
+      onlinePayments,
       resolveGuestContext: (request) => guestContext.resolve(request),
       resolveDeviceFingerprint: (request) => guestDevices.resolve(request),
       paymentMode: options.config.guestPaymentMode,
+      paymentActionSecret: options.config.secret,
     })
     instance.register(hardwareApiPlugin, {
       prefix: '/api',

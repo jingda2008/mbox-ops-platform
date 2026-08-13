@@ -1,5 +1,8 @@
 import type { GuestMenuProduct, GuestMood } from './guest-model'
 import type { MenuRecommendationScene } from '../../shared/contracts'
+import type { OnlinePaymentAction } from '../../shared/online-payment-contracts'
+
+export type { OnlinePaymentAction } from '../../shared/online-payment-contracts'
 
 export type GuestApiFailureKind = 'timeout' | 'network' | 'http' | 'invalid_response' | 'aborted'
 
@@ -77,7 +80,7 @@ export interface GuestOrderResult {
     method: string
     status: string
     simulated: boolean
-    providerAction: string
+    providerAction: OnlinePaymentAction
   }
 }
 
@@ -86,9 +89,13 @@ export interface GuestTableOrder {
   round: number
   channel: 'guest_qr' | 'staff_assisted' | 'cashier' | 'reservation' | 'integration'
   status: 'submitted' | 'confirmed' | 'fulfilling' | 'completed'
-  visibility: 'shared' | 'private_pending'
+  visibility: 'shared'
   isMine: boolean
   createdAt: string
+  paymentStatus: 'unpaid' | 'pending' | 'partially_paid' | 'paid' | 'partially_refunded' | 'refunded'
+  paymentAccess: 'available' | 'staff_collecting' | 'payment_in_progress' | 'status_review' | 'not_required'
+  payableAmountMinor: number
+  currency: string
   items: Array<{
     productId: string
     name: string
@@ -199,6 +206,19 @@ export class GuestApiClient {
     })
     const data = responseData(body)
     if (!Array.isArray(data) || !data.every(isTableOrder)) throw invalidResponse()
+    return data
+  }
+
+  async payTableOrder(
+    orderPublicId: string,
+    options: Readonly<RequestOptions> & { idempotencyKey: string },
+  ): Promise<OnlinePaymentAction> {
+    const body = await this.request<unknown>(
+      `/api/guest/orders/${encodeURIComponent(orderPublicId)}/payment`,
+      { method: 'POST', body: {}, signal: options.signal, idempotencyKey: options.idempotencyKey },
+    )
+    const data = responseData(body)
+    if (!isOnlinePaymentAction(data)) throw invalidResponse()
     return data
   }
 
@@ -371,9 +391,13 @@ function isTableOrder(value: unknown): value is GuestTableOrder {
     && Number.isSafeInteger(value.round)
     && typeof value.channel === 'string'
     && typeof value.status === 'string'
-    && (value.visibility === 'shared' || value.visibility === 'private_pending')
+    && value.visibility === 'shared'
     && typeof value.isMine === 'boolean'
     && typeof value.createdAt === 'string'
+    && typeof value.paymentStatus === 'string'
+    && ['available', 'staff_collecting', 'payment_in_progress', 'status_review', 'not_required'].includes(String(value.paymentAccess))
+    && Number.isSafeInteger(value.payableAmountMinor)
+    && typeof value.currency === 'string'
     && Array.isArray(value.items)
     && value.items.every((item) => isObject(item)
       && typeof item.productId === 'string'
@@ -400,7 +424,18 @@ function isOrderResult(value: unknown): value is GuestOrderResult {
     && ['wechat_jsapi', 'wechat_native_qr', 'simulation'].includes(String(value.payment.mode))
     && typeof value.payment.status === 'string'
     && typeof value.payment.simulated === 'boolean'
-    && typeof value.payment.providerAction === 'string'
+    && isOnlinePaymentAction(value.payment.providerAction)
+}
+
+function isOnlinePaymentAction(value: unknown): value is OnlinePaymentAction {
+  return isObject(value)
+    && typeof value.paymentId === 'string'
+    && typeof value.paymentPublicId === 'string'
+    && typeof value.orderPublicId === 'string'
+    && (value.status === 'pending' || value.status === 'unknown' || value.status === 'failed')
+    && ['jsapi', 'qr', 'barcode'].includes(String(value.presentation))
+    && typeof value.expiresAt === 'string'
+    && (value.payload === null || isObject(value.payload))
 }
 
 function isServiceResult(value: unknown): value is GuestServiceResult {

@@ -23,6 +23,7 @@ describe('loadGuestTableOrders', () => {
           public_id: 'order-shared-0001', round_number: 2, channel: 'guest_qr',
           order_status: 'submitted', visibility: 'shared', is_mine: false,
           order_created_at: '2026-08-12T12:00:00.000Z',
+          payment_status: 'unpaid', payment_access: 'available', payable_amount_minor: '6800', currency: 'CNY',
           product_id: '55555555-5555-4555-8555-555555555555', product_name: '精酿啤酒',
           quantity: 2, item_status: 'preparing',
         }], rowCount: 1 }
@@ -32,16 +33,18 @@ describe('loadGuestTableOrders', () => {
     await expect(loadGuestTableOrders(transaction, tableSessionId, customerId)).resolves.toEqual([{
       publicId: 'order-shared-0001', round: 2, channel: 'guest_qr', status: 'submitted',
       visibility: 'shared', isMine: false, createdAt: '2026-08-12T12:00:00.000Z',
+      paymentStatus: 'unpaid', paymentAccess: 'available', payableAmountMinor: 6800, currency: 'CNY',
       items: [{
         productId: '55555555-5555-4555-8555-555555555555', name: '精酿啤酒', quantity: 2,
         status: 'preparing',
       }],
     }])
     expect(capturedValues).toEqual([tenantId, storeId, tableSessionId, customerId])
-    expect(capturedSql).toContain("ordering.created_by_customer_id = $4::uuid")
-    expect(capturedSql).toContain("ordering.payment_status IN ('paid', 'partially_refunded', 'refunded')")
+    expect(capturedSql).toContain("COALESCE(ordering.created_by_customer_id = $4::uuid, false)")
+    expect(capturedSql).toContain("payment.status IN ('succeeded', 'partially_refunded', 'refunded')")
+    expect(capturedSql).toContain("WHEN active_payment.method = 'auth_code' THEN 'staff_collecting'")
     expect(capturedSql.indexOf('row_number() OVER')).toBeGreaterThan(capturedSql.indexOf('visible_orders_unbounded'))
-    expect(capturedSql).not.toMatch(/provider|amount_minor|customer_name|contact/i)
+    expect(capturedSql).not.toMatch(/provider_transaction|customer_name|contact/i)
   })
 })
 
@@ -82,7 +85,7 @@ integration('loadGuestTableOrders PostgreSQL privacy and turnover isolation', ()
     await pool?.end()
   })
 
-  it('shares paid rounds but keeps each guest unpaid round private', async () => {
+  it('shares every submitted table round while keeping payer identity private', async () => {
     const scope = { tenantId: integrationTenantId, storeId: integrationStoreId }
     const customerOne = await transactions.run(scope, (transaction) => (
       loadGuestTableOrders(transaction, firstSessionId, customerOneId)
@@ -92,14 +95,50 @@ integration('loadGuestTableOrders PostgreSQL privacy and turnover isolation', ()
     ), { readOnly: true })
 
     expect(customerOne.map((order) => order.publicId)).toEqual([
-      'shared-private-one', 'shared-paid-two',
+      'shared-private-one', 'shared-private-two', 'shared-paid-two', 'staff-assisted-unpaid',
     ])
-    expect(customerOne.map((order) => order.round)).toEqual([1, 2])
-    expect(customerOne.map((order) => order.visibility)).toEqual(['private_pending', 'shared'])
+    expect(customerOne.map((order) => order.round)).toEqual([1, 2, 3, 4])
+    expect(customerOne.map((order) => order.visibility)).toEqual(['shared', 'shared', 'shared', 'shared'])
     expect(customerTwo.map((order) => order.publicId)).toEqual([
-      'shared-private-two', 'shared-paid-two',
+      'shared-private-one', 'shared-private-two', 'shared-paid-two', 'staff-assisted-unpaid',
     ])
-    expect(customerTwo.map((order) => order.round)).toEqual([1, 2])
+    expect(customerTwo.map((order) => order.round)).toEqual([1, 2, 3, 4])
+    expect(customerTwo.at(-1)).toMatchObject({
+      channel: 'staff_assisted', paymentAccess: 'available', payableAmountMinor: 6800,
+    })
+  })
+
+  it('shows an employee barcode collection as busy instead of allowing a second guest payment', async () => {
+    await pool.query(`
+      INSERT INTO mbox.payments(
+        id, tenant_id, store_id, order_id, public_id, provider, method,
+        amount_minor, currency, status, provider_snapshot
+      ) VALUES (
+        '74000000-0000-4000-8000-000000000030', $1, $2,
+        '74000000-0000-4000-8000-000000000013', 'PSTAFFBARCODE0001',
+        'postar', 'auth_code', 6800, 'CNY', 'pending', '{}'::jsonb
+      )
+    `, [integrationTenantId, integrationStoreId])
+    await pool.query(`
+      INSERT INTO mbox.payment_provider_actions(
+        payment_id, tenant_id, store_id, presentation, initiated_by_type,
+        initiated_by_ref, state, expires_at
+      ) VALUES (
+        '74000000-0000-4000-8000-000000000030', $1, $2, 'barcode', 'employee',
+        '74000000-0000-4000-8000-000000000031', 'creating', clock_timestamp() + interval '5 minutes'
+      )
+    `, [integrationTenantId, integrationStoreId])
+
+    const scope = { tenantId: integrationTenantId, storeId: integrationStoreId }
+    const [customerOne, customerTwo] = await Promise.all([
+      transactions.run(scope, (transaction) => loadGuestTableOrders(transaction, firstSessionId, customerOneId), { readOnly: true }),
+      transactions.run(scope, (transaction) => loadGuestTableOrders(transaction, firstSessionId, customerTwoId), { readOnly: true }),
+    ])
+
+    expect(customerOne.find((order) => order.publicId === 'staff-assisted-unpaid')?.paymentAccess)
+      .toBe('staff_collecting')
+    expect(customerTwo.find((order) => order.publicId === 'staff-assisted-unpaid')?.paymentAccess)
+      .toBe('staff_collecting')
   })
 
   it('does not expose a prior table session after turnover', async () => {
@@ -152,6 +191,7 @@ async function seedSharedOrderFixture(pool: Pool, id: SharedOrderFixtureIds): Pr
       ('74000000-0000-4000-8000-000000000010', $1, $2, $3, 'shared-private-one', 'guest_qr', 'submitted', 'unpaid', 6800, 6800, $4, clock_timestamp() - interval '3 minutes', clock_timestamp()),
       ('74000000-0000-4000-8000-000000000011', $1, $2, $3, 'shared-private-two', 'guest_qr', 'submitted', 'unpaid', 6800, 6800, $5, clock_timestamp() - interval '2 minutes', clock_timestamp()),
       ('74000000-0000-4000-8000-000000000012', $1, $2, $3, 'shared-paid-two', 'guest_qr', 'fulfilling', 'paid', 13600, 13600, $5, clock_timestamp() - interval '1 minute', clock_timestamp())
+      ,('74000000-0000-4000-8000-000000000013', $1, $2, $3, 'staff-assisted-unpaid', 'staff_assisted', 'submitted', 'unpaid', 6800, 6800, NULL, clock_timestamp(), clock_timestamp())
   `, [id.tenantId, id.storeId, id.firstSessionId, id.customerOneId, id.customerTwoId])
   await pool.query(`
     INSERT INTO mbox.order_items(
@@ -161,5 +201,6 @@ async function seedSharedOrderFixture(pool: Pool, id: SharedOrderFixtureIds): Pr
       ('74000000-0000-4000-8000-000000000020', $1, $2, '74000000-0000-4000-8000-000000000010', $3, 1, 6800, 6800, 'bar', '{"name":"精酿啤酒"}', 'submitted'),
       ('74000000-0000-4000-8000-000000000021', $1, $2, '74000000-0000-4000-8000-000000000011', $3, 1, 6800, 6800, 'bar', '{"name":"精酿啤酒"}', 'submitted'),
       ('74000000-0000-4000-8000-000000000022', $1, $2, '74000000-0000-4000-8000-000000000012', $3, 2, 6800, 13600, 'bar', '{"name":"精酿啤酒"}', 'preparing')
+      ,('74000000-0000-4000-8000-000000000023', $1, $2, '74000000-0000-4000-8000-000000000013', $3, 1, 6800, 6800, 'bar', '{"name":"精酿啤酒"}', 'submitted')
   `, [id.tenantId, id.storeId, id.productId])
 }

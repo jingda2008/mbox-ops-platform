@@ -16,6 +16,7 @@ import {
   PaymentEvidenceError,
   PaymentNotFoundError,
   PaymentTransitionError,
+  type Payment,
   type PaymentProvider,
 } from './payment-repository.js'
 import {
@@ -41,6 +42,19 @@ import {
 import { StaffAccessDeniedError, StaffNotFoundError } from './staff-access-repository.js'
 import { StaffSessionNotFoundError } from './staff-session-repository.js'
 import type { StoreScope } from './transaction-runner.js'
+import type { OnlinePaymentAction, OnlinePaymentService } from './online-payment-service.js'
+import {
+  OnlinePaymentUnavailableError,
+  OnlinePaymentUnknownError,
+} from './online-payment-service.js'
+import {
+  ProviderPaymentInProgressError,
+  ProviderPaymentMethodConflictError,
+  ProviderPaymentUnknownError,
+  WechatPaymentIdentityRequiredError,
+  type ProviderPaymentContext,
+} from './payment-provider-action-repository.js'
+import { PostarPaymentRejectedError } from '../postar-adapter.js'
 
 type PaymentCommandPort = Pick<
   PaymentCommandService,
@@ -145,6 +159,7 @@ export interface PaymentApiOptions {
   providerVerifier: PaymentProviderVerifier
   reconciliationQuery: ReconciliationQueryPort
   cashierWorkbenchQuery: CashierWorkbenchQueryPort
+  onlinePayments?: Pick<OnlinePaymentService, 'create' | 'assertAvailable' | 'resolveActivePayment'>
   resolveActorContext(request: FastifyRequest): Promise<PaymentApiActorContext> | PaymentApiActorContext
   resolveStaffContext(request: FastifyRequest): Promise<PaymentApiStaffContext> | PaymentApiStaffContext
   resolveProviderBusinessDate(
@@ -206,6 +221,8 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
     const provider = readOnlineProvider(body.provider)
     const method = readOnlineMethod(body.method)
     assertOnlineMethod(provider, method)
+    assertActorPaymentMethod(context.actor, method)
+    options.onlinePayments?.assertAvailable(provider === 'simulation' ? 'simulation' : 'postar')
     const idempotencyKey = readIdempotencyKey(request)
     const publicId = readOptionalString(body.publicId, 'publicId', 128, 8)
       ?? createPublicId('payment')
@@ -213,24 +230,50 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       readOptionalJsonObject(body.providerSnapshot, 'providerSnapshot'),
     )
     const orderId = readUuid(body.orderId, 'orderId')
+    const customerAuthCode = method === 'auth_code'
+      ? readString(body.customerAuthCode, 'customerAuthCode', 32, 16)
+      : undefined
     const principal = paymentInitiationPrincipal(context)
-    const execution = await options.commands.initiate({
-      ...metadata(request, context, idempotencyKey, {
+    let execution: CommandExecution<Payment>
+    try {
+      execution = await options.commands.initiate({
+        ...metadata(request, context, idempotencyKey, {
+          orderId,
+          publicId,
+          provider,
+          method,
+          providerSnapshot: providerSnapshot ?? null,
+          principal: principalToJson(principal),
+        }),
         orderId,
         publicId,
         provider,
         method,
-        providerSnapshot: providerSnapshot ?? null,
-        principal: principalToJson(principal),
-      }),
-      orderId,
-      publicId,
-      provider,
-      method,
-      providerSnapshot,
+        providerSnapshot,
+        principal,
+      })
+    } catch (error) {
+      if (!(error instanceof OrderNotPayableError) || options.onlinePayments === undefined) throw error
+      const active = await options.onlinePayments.resolveActivePayment({
+        scope: context.scope,
+        orderId,
+        principal,
+      })
+      if (active === null) throw error
+      if (active.provider !== provider || active.method !== method) {
+        throw new ProviderPaymentMethodConflictError()
+      }
+      execution = { value: paymentFromProviderContext(active), replayed: true }
+    }
+    const action = options.onlinePayments === undefined ? null : await options.onlinePayments.create({
+      scope: context.scope,
+      paymentId: execution.value.id,
       principal,
+      clientIp: request.ip,
+      operatorId: context.actor.type === 'employee' ? context.actor.employeeId : 'MBOXGUEST',
+      ...(customerAuthCode === undefined ? {} : { customerAuthCode }),
     })
-    return reply.code(execution.replayed ? 200 : 201).send(executionResponse(execution))
+    return reply.code(execution.replayed ? 200 : 201).send(paymentExecutionResponse(execution, action))
   }))
 
   app.post('/payments/manual', async (request, reply) => handleRoute(reply, async () => {
@@ -481,6 +524,24 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
   }))
 }
 
+function paymentFromProviderContext(value: ProviderPaymentContext): Payment {
+  return {
+    id: value.id,
+    orderId: value.orderId,
+    publicId: value.publicId,
+    provider: value.provider,
+    providerTransactionId: null,
+    method: value.method,
+    amountMinor: value.amountMinor,
+    currency: value.currency,
+    status: value.status as Payment['status'],
+    providerSnapshot: {},
+    succeededAt: null,
+    createdAt: value.createdAt,
+    updatedAt: value.createdAt,
+  }
+}
+
 async function refundDecisionRoute(
   request: FastifyRequest<{ Params: { refundId: string } }>,
   reply: FastifyReply,
@@ -705,8 +766,21 @@ function executionResponse<Value>(execution: CommandExecution<Value>) {
   return { data: execution.value, meta: { replayed: execution.replayed } }
 }
 
+function paymentExecutionResponse(
+  execution: CommandExecution<Payment>,
+  action: OnlinePaymentAction | null,
+) {
+  return {
+    data: {
+      ...execution.value,
+      providerAction: action,
+    },
+    meta: { replayed: execution.replayed },
+  }
+}
+
 function defaultPublicId(kind: 'payment' | 'refund'): string {
-  return `${kind}-${randomUUID()}`
+  return `${kind === 'payment' ? 'P' : 'R'}${randomUUID().replaceAll('-', '')}`
 }
 
 function paymentInitiationPrincipal(
@@ -735,6 +809,15 @@ function principalToJson(
         tableSessionId: principal.tableSessionId,
         customerId: principal.customerId,
       }
+}
+
+function assertActorPaymentMethod(actor: Readonly<AuditActor>, method: Payment['method']): void {
+  if (actor.type === 'employee' && method === 'jsapi') {
+    throw new PaymentApiRequestError('员工协助收款请选择客人扫码或扫描客人付款码')
+  }
+  if (actor.type === 'guest' && method === 'auth_code') {
+    throw new PaymentAuthorizationError('客人端不能发起扫描付款码收款')
+  }
 }
 
 function providerAcknowledgement(): JsonObject {
@@ -952,6 +1035,24 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   if (error instanceof PaymentNotFoundError) return apiError(404, 'PAYMENT_NOT_FOUND', error.message)
   if (error instanceof RefundNotFoundError) return apiError(404, 'REFUND_NOT_FOUND', error.message)
   if (error instanceof OrderNotPayableError) return apiError(409, 'ORDER_NOT_PAYABLE', error.message)
+  if (error instanceof ProviderPaymentInProgressError) {
+    return apiError(409, 'PAYMENT_IN_PROGRESS', error.message)
+  }
+  if (error instanceof ProviderPaymentMethodConflictError) {
+    return apiError(409, 'PAYMENT_METHOD_LOCKED', error.message)
+  }
+  if (error instanceof ProviderPaymentUnknownError || error instanceof OnlinePaymentUnknownError) {
+    return apiError(409, 'PAYMENT_STATUS_UNKNOWN', error.message)
+  }
+  if (error instanceof WechatPaymentIdentityRequiredError) {
+    return apiError(409, 'WECHAT_IDENTITY_REQUIRED', error.message)
+  }
+  if (error instanceof OnlinePaymentUnavailableError) {
+    return apiError(503, 'ONLINE_PAYMENT_UNAVAILABLE', error.message)
+  }
+  if (error instanceof PostarPaymentRejectedError) {
+    return apiError(409, 'PROVIDER_PAYMENT_REJECTED', '支付机构未受理本次付款，请核对后重试')
+  }
   if (error instanceof PaymentCallbackMismatchError) {
     return apiError(409, 'PAYMENT_CALLBACK_MISMATCH', error.message)
   }

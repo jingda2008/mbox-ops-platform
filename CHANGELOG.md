@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.80 - 2026-08-14
+
+- Unified employee-assisted and guest self-service settlement around one shared table order and one active payment action.
+- Let employees choose either a customer-scanned payment QR or an employee-scanned customer payment code after assisted ordering, without creating a second order.
+- Synchronized assisted orders to every authenticated guest on the current table session and allowed a guest phone to continue the same reusable QR payment.
+- Prevented guest devices from interrupting employee barcode collection or reusing another guest's JSAPI parameters, while keeping payment-provider payloads encrypted at rest.
+- Added role-isolation, payment-method locking, same-table multi-guest, provider-rejection and real-browser regression coverage; real small-value acquiring remains a separately authorized acceptance step.
+
 ## 1.0.0-rc.79 - 2026-08-13
 
 - Added bounded browser-style HTTP and rendered Playwright release gates for the home, fixed-table QR, reservation and employee deep links, including front-end build identity, root mounts and executable module assets.

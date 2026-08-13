@@ -6,9 +6,16 @@ export const NORMALIZED_SCHEMA_FLAVOR = 'normalized-core-v1'
 
 export interface NormalizedPaymentRuntimeConfig {
   provider: 'postar'
+  environment: 'test' | 'uat' | 'production'
   agencyId: string
   merchantId: string
   publicKey: string
+  callbackUrl: string
+  timeoutMs: number
+  wechat: null | {
+    appId: string
+    tradeType: '5' | '8'
+  }
 }
 
 export interface NormalizedRuntimeConfig {
@@ -30,6 +37,7 @@ export interface NormalizedRuntimeConfig {
   port: number
   poolMax: number
   workerPoolMax: number
+  trustProxyHops: number
   staticDir: string | null
   startWorkers: boolean
   workerId: string | null
@@ -69,6 +77,9 @@ export function loadNormalizedRuntimeConfig(
     commercialProduction,
     errors,
   )
+  if (guestPaymentMode === 'wechat_jsapi' && payment?.wechat === null) {
+    errors.push('POSTAR_WECHAT_APP_ID', 'POSTAR_WECHAT_TRADE_TYPE')
+  }
   const inventoryEnforcementMode = readInventoryEnforcementMode(
     environment.MBOX_INVENTORY_ENFORCEMENT_MODE,
     commercialProduction,
@@ -107,6 +118,7 @@ export function loadNormalizedRuntimeConfig(
   const port = readInteger(environment.PORT, 'PORT', 3_000, 1, 65_535, errors)
   const poolMax = readInteger(environment.MBOX_DATABASE_POOL_MAX, 'MBOX_DATABASE_POOL_MAX', 12, 2, 100, errors)
   const workerPoolMax = readInteger(environment.MBOX_WORKER_DATABASE_POOL_MAX, 'MBOX_WORKER_DATABASE_POOL_MAX', 4, 2, 12, errors)
+  const trustProxyHops = readInteger(environment.MBOX_TRUST_PROXY_HOPS, 'MBOX_TRUST_PROXY_HOPS', 0, 0, 2, errors)
   const commitSha = readCommitSha(environment.APP_COMMIT_SHA ?? environment.GITHUB_SHA)
   const releaseImageDigest = readImageDigest(environment.MBOX_RELEASE_IMAGE_DIGEST, errors)
   const staticDir = optional(environment.MBOX_STATIC_DIR)
@@ -148,6 +160,7 @@ export function loadNormalizedRuntimeConfig(
     port,
     poolMax,
     workerPoolMax,
+    trustProxyHops,
     staticDir,
     startWorkers,
     workerId,
@@ -218,18 +231,66 @@ function readPayment(
   errors: string[],
 ): NormalizedPaymentRuntimeConfig | null {
   const provider = optional(environment.MBOX_PAYMENT_PROVIDER)
-  const agencyId = optional(environment.POSTAR_AGENCY_ID)
-  const merchantId = optional(environment.POSTAR_MERCHANT_ID)
-  const publicKey = optional(environment.POSTAR_PUBLIC_KEY)
-  const anyPaymentField = provider !== null || agencyId !== null || merchantId !== null || publicKey !== null
+    ?? (environment.MBOX_POSTAR_ENABLED === 'true' ? 'postar' : null)
+  const postarEnvironment = optional(environment.POSTAR_ENVIRONMENT ?? environment.MBOX_POSTAR_ENVIRONMENT)
+  const agencyId = optional(environment.POSTAR_AGENCY_ID ?? environment.MBOX_POSTAR_AGENCY_ID)
+  const merchantId = optional(environment.POSTAR_MERCHANT_ID ?? environment.MBOX_POSTAR_MERCHANT_ID)
+  const publicKey = optional(environment.POSTAR_PUBLIC_KEY ?? environment.MBOX_POSTAR_PUBLIC_KEY)
+  const callbackUrl = optional(environment.POSTAR_CALLBACK_URL ?? environment.MBOX_POSTAR_CALLBACK_URL)
+  const wechatAppId = optional(environment.POSTAR_WECHAT_APP_ID)
+  const wechatTradeType = optional(environment.POSTAR_WECHAT_TRADE_TYPE)
+  const anyPaymentField = provider !== null || postarEnvironment !== null || agencyId !== null
+    || merchantId !== null || publicKey !== null || callbackUrl !== null
+    || wechatAppId !== null || wechatTradeType !== null
 
   if (!commercialProduction && !anyPaymentField) return null
   if (provider !== 'postar') errors.push('MBOX_PAYMENT_PROVIDER')
+  if (postarEnvironment !== 'test' && postarEnvironment !== 'uat' && postarEnvironment !== 'production') {
+    errors.push('POSTAR_ENVIRONMENT')
+  }
   if (agencyId === null) errors.push('POSTAR_AGENCY_ID')
   if (merchantId === null) errors.push('POSTAR_MERCHANT_ID')
   if (publicKey === null) errors.push('POSTAR_PUBLIC_KEY')
-  if (provider !== 'postar' || agencyId === null || merchantId === null || publicKey === null) return null
-  return Object.freeze({ provider, agencyId, merchantId, publicKey })
+  if (callbackUrl === null || !isHttpsUrl(callbackUrl)) errors.push('POSTAR_CALLBACK_URL')
+  if ((wechatAppId === null) !== (wechatTradeType === null)) {
+    errors.push('POSTAR_WECHAT_APP_ID', 'POSTAR_WECHAT_TRADE_TYPE')
+  }
+  if (wechatTradeType !== null && wechatTradeType !== '5' && wechatTradeType !== '8') {
+    errors.push('POSTAR_WECHAT_TRADE_TYPE')
+  }
+  const timeoutMs = readInteger(
+    environment.POSTAR_HTTP_TIMEOUT_MS ?? environment.MBOX_POSTAR_HTTP_TIMEOUT_MS,
+    'POSTAR_HTTP_TIMEOUT_MS',
+    10_000,
+    1_000,
+    30_000,
+    errors,
+  )
+  if (provider !== 'postar'
+    || (postarEnvironment !== 'test' && postarEnvironment !== 'uat' && postarEnvironment !== 'production')
+    || agencyId === null || merchantId === null || publicKey === null
+    || callbackUrl === null || !isHttpsUrl(callbackUrl)
+    || (wechatTradeType !== null && wechatTradeType !== '5' && wechatTradeType !== '8')) return null
+  return Object.freeze({
+    provider,
+    environment: postarEnvironment,
+    agencyId,
+    merchantId,
+    publicKey,
+    callbackUrl,
+    timeoutMs,
+    wechat: wechatAppId === null || wechatTradeType === null
+      ? null
+      : Object.freeze({ appId: wechatAppId, tradeType: wechatTradeType }),
+  })
+}
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === 'https:'
+  } catch {
+    return false
+  }
 }
 
 function readGuestPaymentMode(

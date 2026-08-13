@@ -7,6 +7,7 @@ import {
   type PaymentApiOptions,
 } from './payment-api.js'
 import type { Payment } from './payment-repository.js'
+import { OrderNotPayableError } from './payment-repository.js'
 import { PaymentAuthorizationError } from './payment-security-policy.js'
 import type { ReconciliationEntry } from './reconciliation-repository.js'
 import { RefundApprovalRequiredError, type Refund } from './refund-repository.js'
@@ -242,7 +243,7 @@ describe('paymentApiPlugin', () => {
     })
 
     expect(response.statusCode).toBe(201)
-    expect(response.json()).toEqual({ data: payment, meta: { replayed: false } })
+    expect(response.json()).toEqual({ data: { ...payment, providerAction: null }, meta: { replayed: false } })
     expect(value.commands.initiate).toHaveBeenCalledWith(expect.objectContaining({
       scope: { tenantId, storeId },
       actor: { type: 'guest', ref: 'guest-session-0001' },
@@ -258,6 +259,96 @@ describe('paymentApiPlugin', () => {
     const initiatedCommand = value.commands.initiate.mock.calls[0]?.[0]
     expect(initiatedCommand).toBeDefined()
     expect(initiatedCommand?.requestFingerprint).toContain(orderId)
+  })
+
+  it('reuses the one active payment for the same order and presentation', async () => {
+    const action = {
+      paymentId, paymentPublicId: payment.publicId, orderPublicId: 'OORDER0001',
+      status: 'pending' as const, presentation: 'qr' as const,
+      expiresAt: '2026-08-11T12:05:00.000Z',
+      payload: { qrCodeUrl: 'https://pay.example.test/order/1' },
+    }
+    const onlinePayments = {
+      assertAvailable: vi.fn(),
+      resolveActivePayment: vi.fn(async () => ({
+        id: payment.id, orderId: payment.orderId, orderPublicId: 'OORDER0001',
+        publicId: payment.publicId, provider: payment.provider, method: payment.method,
+        amountMinor: payment.amountMinor, currency: payment.currency, status: payment.status,
+        tableSessionId, tableCode: 'W01', createdAt: payment.createdAt,
+      })),
+      create: vi.fn(async () => action),
+    }
+    const value = fixture({
+      resolveActorContext: () => ({
+        scope: { tenantId, storeId }, actor: { type: 'employee', employeeId }, businessDate: '2026-08-11',
+      }),
+      commands: {
+        ...fixtureCommands(),
+        initiate: vi.fn(async () => { throw new OrderNotPayableError(orderId, 'another payment is already pending') }),
+      },
+      onlinePayments,
+    })
+    const response = await value.app.inject({
+      method: 'POST', url: '/api/payments',
+      headers: { 'idempotency-key': 'payment-resume-0001' },
+      payload: { orderId, provider: 'postar', method: 'native_qr' },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({ data: { id: paymentId, providerAction: action }, meta: { replayed: true } })
+    expect(onlinePayments.create).toHaveBeenCalledWith(expect.objectContaining({ paymentId }))
+  })
+
+  it('does not switch an active payment to a different staff collection method', async () => {
+    const value = fixture({
+      resolveActorContext: () => ({
+        scope: { tenantId, storeId }, actor: { type: 'employee', employeeId }, businessDate: '2026-08-11',
+      }),
+      commands: {
+        ...fixtureCommands(),
+        initiate: vi.fn(async () => { throw new OrderNotPayableError(orderId, 'another payment is already pending') }),
+      },
+      onlinePayments: {
+        assertAvailable: vi.fn(),
+        resolveActivePayment: vi.fn(async () => ({
+          id: payment.id, orderId: payment.orderId, orderPublicId: 'OORDER0001',
+          publicId: payment.publicId, provider: payment.provider, method: 'native_qr' as const,
+          amountMinor: payment.amountMinor, currency: payment.currency, status: payment.status,
+          tableSessionId, tableCode: 'W01', createdAt: payment.createdAt,
+        })),
+        create: vi.fn(),
+      },
+    })
+    const response = await value.app.inject({
+      method: 'POST', url: '/api/payments',
+      headers: { 'idempotency-key': 'payment-switch-0001' },
+      payload: { orderId, provider: 'postar', method: 'auth_code', customerAuthCode: '134567890123456789' },
+    })
+
+    expect(response.statusCode).toBe(409)
+    expect(response.json()).toMatchObject({ error: { code: 'PAYMENT_METHOD_LOCKED' } })
+  })
+
+  it('keeps guest and employee payment methods inside their real operating channels', async () => {
+    const guest = fixture()
+    const guestResponse = await guest.app.inject({
+      method: 'POST', url: '/api/payments',
+      headers: { 'idempotency-key': 'guest-forged-barcode-0001' },
+      payload: { orderId, provider: 'postar', method: 'auth_code', customerAuthCode: '134567890123456789' },
+    })
+    expect(guestResponse.statusCode).toBe(403)
+    expect(guest.commands.initiate).not.toHaveBeenCalled()
+
+    const employee = fixture({ resolveActorContext: () => ({
+      scope: { tenantId, storeId }, actor: { type: 'employee', employeeId }, businessDate: '2026-08-11',
+    }) })
+    const employeeResponse = await employee.app.inject({
+      method: 'POST', url: '/api/payments',
+      headers: { 'idempotency-key': 'staff-forged-jsapi-0001' },
+      payload: { orderId, provider: 'postar', method: 'jsapi' },
+    })
+    expect(employeeResponse.statusCode).toBe(400)
+    expect(employee.commands.initiate).not.toHaveBeenCalled()
   })
 
   it('records cash or physical POS evidence with the authenticated employee, not a body actor', async () => {

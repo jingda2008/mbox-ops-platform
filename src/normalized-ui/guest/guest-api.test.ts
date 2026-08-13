@@ -128,6 +128,7 @@ describe('GuestApiClient', () => {
     const send = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => jsonResponse({ data: [{
       publicId: 'shared-order-0001', round: 1, channel: 'guest_qr', status: 'submitted',
       visibility: 'shared', isMine: false, createdAt: '2026-08-11T12:00:00.000Z',
+      paymentStatus: 'unpaid', paymentAccess: 'available', payableAmountMinor: 13_600, currency: 'CNY',
       items: [{ productId: '55555555-5555-4555-8555-555555555555', name: '青岛啤酒', quantity: 2, status: 'preparing' }],
     }] }))
     const client = new GuestApiClient(deviceKey, { fetch: send })
@@ -187,7 +188,21 @@ function orderResult() {
     settlement: { subtotalAmountMinor: 13_600, discountAmountMinor: 0, payableAmountMinor: 13_600, currency: 'CNY' },
     payment: {
       publicId: 'guest-payment-public-0001', mode: 'wechat_jsapi', provider: 'postar', method: 'jsapi',
-      status: 'pending', simulated: false, providerAction: 'provider_order_required',
+      status: 'pending', simulated: false, providerAction: onlinePaymentAction('jsapi'),
     },
+  }
+}
+
+function onlinePaymentAction(presentation: 'jsapi' | 'qr' | 'barcode') {
+  return {
+    paymentId: '88888888-8888-4888-8888-888888888888',
+    paymentPublicId: 'guest-payment-public-0001',
+    orderPublicId: 'guest-order-public-0001',
+    status: 'pending',
+    presentation,
+    expiresAt: '2026-08-11T12:05:00.000Z',
+    payload: presentation === 'jsapi'
+      ? { appId: 'wx-app-1', package: 'prepay_id=test' }
+      : { qrCodeUrl: 'https://pay.example.test/order/1' },
   }
 }

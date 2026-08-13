@@ -1006,6 +1006,13 @@ button:active:not(:disabled) {
   font-size: 10px;
 }
 
+.guest-order-payment-state {
+  display: block;
+  margin-top: 10px;
+  color: #785d1f;
+  line-height: 1.5;
+}
+
 .guest-quick-panel > p {
   margin: 0 0 10px;
   color: #656b64;

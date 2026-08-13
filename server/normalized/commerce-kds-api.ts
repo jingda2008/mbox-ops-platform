@@ -94,6 +94,8 @@ export interface CommerceKdsApiOptions {
     scope: Readonly<StoreScope>,
     tableId: string,
   ) => Promise<string | null>
+  onlinePaymentAvailable?: boolean
+  onlinePaymentProvider?: 'postar' | 'simulation' | null
 }
 
 type KdsAction =
@@ -215,6 +217,9 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
     return reply.send({
       data: {
         canCreateOrder,
+        canInitiatePayment: options.onlinePaymentAvailable === true
+          && access.permissions.includes('payment.initiate.staff'),
+        onlinePaymentProvider: options.onlinePaymentProvider ?? null,
         gift: giftLimit === null ? null : {
           enabled: giftLimit.rules.allowFullGift === true,
           maximumAmountMinor: giftLimit.amountMinor,

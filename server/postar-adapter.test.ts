@@ -168,7 +168,7 @@ describe('Postar JSAPI payment creation', () => {
       paymentIntentId: 'PaymentABC123', merchantId: 'MERCHANT001', amount: 3000, currency: 'CNY',
       expiresAt: '2026-07-14T04:20:00.000Z', presentation: 'jsapi', payWay: 'wechat', payerId: 'openid-1',
       clientIp: '203.0.113.10', callbackUrl: 'https://pay.example.test/postar/callback',
-      operatorId: 'cashier-1', remark: 'L01 table', wxAppid: 'wx-app-1',
+      operatorId: 'cashier-1', remark: 'L01 table', wxAppid: 'wx-app-1', wechatTradeType: '5',
     }, context)
 
     expect(result).toMatchObject({
@@ -180,7 +180,7 @@ describe('Postar JSAPI payment creation', () => {
     expect(decodeRequest(sent).payload).toMatchObject({
       agetId: 'AGENCY001', asyncNotify: 'https://pay.example.test/postar/callback', custId: 'MERCHANT001',
       ip: '203.0.113.10', openid: 'openid-1', orderNo: 'PaymentABC123', outTime: '15', payWay: '1',
-      txamt: '3000', wxAppid: 'wx-app-1',
+      traType: '5', txamt: '3000', wxAppid: 'wx-app-1',
     })
   })
 

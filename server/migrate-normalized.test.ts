@@ -34,7 +34,7 @@ describe('normalized migration baseline', () => {
       '001', '002', '003', '004', '005', '006', '007', '008', '009', '010', '011', '012',
       '013', '014', '015', '016', '017', '018', '019', '020', '021', '022', '023', '024',
       '025', '026', '027', '028', '029', '030', '031', '032', '033', '034', '035', '036',
-      '037', '038', '039', '040',
+      '037', '038', '039', '040', '041',
     ])
     for (const migration of migrations) {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
@@ -97,6 +97,7 @@ describe('normalized migration baseline', () => {
       'store_configuration_applications',
       'product_catalog_applications',
       'role_access_configuration_authorities', 'staff_access_configuration_definitions',
+      'payment_provider_actions', 'wechat_payment_identities',
     ]
     for (const table of requiredTables) {
       expect(sql).toMatch(new RegExp(`CREATE TABLE mbox\\.${table}\\s*\\(`))

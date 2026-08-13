@@ -91,9 +91,9 @@ export function CustomerPaymentCodeScanner({ tableCode, amountLabel, onClose, on
 
   return (
     <div className="payment-scanner-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
-      <form className="payment-scanner-dialog" role="dialog" aria-modal="true" aria-labelledby="payment-scanner-title" onSubmit={submit}>
+      <form className="payment-scanner-dialog" role="dialog" aria-modal="true" aria-labelledby="payment-scanner-context payment-scanner-title" onSubmit={submit}>
         <header>
-          <div><span>{tableCode} · 本次收款</span><strong id="payment-scanner-title">{amountLabel}</strong></div>
+          <div><span id="payment-scanner-context">{tableCode} · 本次收款</span><strong id="payment-scanner-title">{amountLabel}</strong></div>
           <button className="icon-button" type="button" title="关闭" onClick={onClose}>×</button>
         </header>
         <div className={`payment-camera is-${cameraState}`}>

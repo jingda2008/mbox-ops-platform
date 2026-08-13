@@ -246,6 +246,19 @@ export class PaymentRepository {
     }
   }
 
+  async consumeProviderAction(paymentId: string): Promise<void> {
+    await this.transaction.query(`
+      UPDATE mbox.payment_provider_actions
+      SET state = 'consumed', ciphertext = NULL, nonce = NULL, auth_tag = NULL,
+          consumed_at = COALESCE(consumed_at, clock_timestamp()),
+          last_error_code = NULL, updated_at = clock_timestamp()
+      WHERE tenant_id = $1::uuid
+        AND store_id = $2::uuid
+        AND payment_id = $3::uuid
+        AND state IN ('creating', 'ready', 'unknown', 'consumed')
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
+  }
+
   async syncOrderPaymentStatus(orderId: string): Promise<string> {
     const order = await this.lockOrder(orderId)
     const settlement = await this.readSettlement(order.id)

@@ -51,6 +51,8 @@ describe('PaymentCommandService', () => {
     expect(executor.outcomes[0]?.auditEvents).toHaveLength(1)
     expect(executor.outcomes[0]?.outboxMessages).toHaveLength(1)
     expect(transaction.calls.filter((sql) => sql.includes('UPDATE mbox.payments'))).toHaveLength(1)
+    expect(transaction.calls.filter((sql) => sql.includes('UPDATE mbox.payment_provider_actions')))
+      .toHaveLength(1)
     expect(transaction.calls.filter((sql) => sql.includes('INSERT INTO mbox.reconciliation_entries')))
       .toHaveLength(1)
   })
@@ -254,6 +256,20 @@ integration('normalized payment PostgreSQL integration', () => {
       'integration-payment-one',
       'integration-payment-init-0001',
     ))
+    await pool.query(`
+      INSERT INTO mbox.payment_provider_actions(
+        payment_id, tenant_id, store_id, presentation,
+        initiated_by_type, initiated_by_ref, state,
+        ciphertext, nonce, auth_tag, expires_at
+      ) VALUES (
+        $1::uuid, $2::uuid, $3::uuid, 'qr',
+        'employee', $4::uuid, 'ready',
+        decode(repeat('01', 24), 'hex'),
+        decode(repeat('02', 12), 'hex'),
+        decode(repeat('03', 16), 'hex'),
+        clock_timestamp() + interval '5 minutes'
+      )
+    `, [initiated.value.id, integrationTenantId, integrationStoreId, integrationRequesterId])
     const callback = integrationCallback(initiated.value.publicId, initiated.value.amountMinor)
     const first = await service.recordSucceededCallback(callback)
     const replay = await service.recordSucceededCallback(callback)
@@ -279,6 +295,8 @@ integration('normalized payment PostgreSQL integration', () => {
       audit_snapshot: JsonObject
       outbox_payload: JsonObject
       idempotency_snapshot: JsonObject
+      action_state: string
+      action_payload_cleared: boolean
     }>(`
       SELECT
         (SELECT count(*)::text FROM mbox.reconciliation_entries
@@ -293,7 +311,12 @@ integration('normalized payment PostgreSQL integration', () => {
           ORDER BY occurred_at DESC LIMIT 1) AS audit_snapshot,
         (SELECT payload FROM mbox.outbox_messages WHERE message_key = $3) AS outbox_payload,
         (SELECT response_snapshot FROM mbox.idempotency_records
-          WHERE operation_scope = 'payment.callback' AND idempotency_key = $4) AS idempotency_snapshot
+          WHERE operation_scope = 'payment.callback' AND idempotency_key = $4) AS idempotency_snapshot,
+        (SELECT state FROM mbox.payment_provider_actions
+          WHERE payment_id = $1::uuid) AS action_state,
+        (SELECT ciphertext IS NULL AND nonce IS NULL AND auth_tag IS NULL
+          FROM mbox.payment_provider_actions
+          WHERE payment_id = $1::uuid) AS action_payload_cleared
     `, [
       initiated.value.id,
       callback.providerTransactionId,
@@ -301,6 +324,10 @@ integration('normalized payment PostgreSQL integration', () => {
       'integration-payment-callback-provider-retry-0002',
     ])
     expect(callbackEvidence.rows[0]).toMatchObject({ reconciliation: '1', outbox: '1', audit: '1' })
+    expect(callbackEvidence.rows[0]).toMatchObject({
+      action_state: 'consumed',
+      action_payload_cleared: true,
+    })
     const serializedEvidence = JSON.stringify(callbackEvidence.rows[0])
     expect(serializedEvidence).not.toContain('secret-signature')
     expect(serializedEvidence).not.toContain('secret-token')
@@ -585,6 +612,7 @@ class PaymentFlowTransaction implements ScopedTransaction {
     if (sql.includes('UPDATE mbox.payments')) {
       return result([paymentRow(this.orderId, this.paymentId, 'succeeded', 'provider-payment-001')])
     }
+    if (sql.includes('UPDATE mbox.payment_provider_actions')) return result([])
     if (sql.includes('INSERT INTO mbox.reconciliation_entries')) {
       return result([reconciliationRow(this.paymentId)])
     }

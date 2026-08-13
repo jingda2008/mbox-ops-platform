@@ -581,7 +581,7 @@ test('mobile administrator publishes a permission and sees server-verified feedb
   await page.screenshot({ path: 'artifacts/normalized-browser/staff-access-admin-mobile.png', fullPage: true })
 })
 
-test('mobile manager assists an open table order and gifts a product without mixing member benefits', async ({ page }) => {
+test('mobile manager payment choices stay synchronized with two guests at the same table', async ({ page, browser }) => {
   const data = await fixture()
   await page.goto(data.staffUrl)
   await page.getByLabel('门店口令').fill(data.dailyCredential)
@@ -606,6 +606,51 @@ test('mobile manager assists an open table order and gifts a product without mix
   await paidSheet.getByRole('dialog', { name: '确认上单' }).getByRole('button', { name: '确认上单' }).click()
   await expect(page.getByRole('status')).toContainText('W01 订单已挂桌并发送出品')
 
+  await page.getByRole('button', { name: '协助点单' }).click()
+  const immediateSheet = page.getByRole('dialog', { name: 'W01协助点单' })
+  await immediateSheet.getByRole('button', { name: '立即结算' }).click()
+  await immediateSheet.getByLabel('搜索菜单商品').fill(data.orderableProductName)
+  await immediateSheet.getByRole('button', { name: `加入${data.orderableProductName}` }).click()
+  await immediateSheet.getByRole('button', { name: '查看已选' }).click()
+  await immediateSheet.getByRole('dialog', { name: '购物车明细' }).getByRole('button', { name: '核对无误，确认下单' }).click()
+  await immediateSheet.getByRole('dialog', { name: '确认上单' }).getByRole('button', { name: '确认上单' }).click()
+  await expect(immediateSheet.getByRole('button', { name: /客人扫二维码/ })).toBeVisible()
+  await expect(immediateSheet.getByRole('button', { name: /扫客人付款码/ })).toBeVisible()
+  await immediateSheet.getByRole('button', { name: /扫客人付款码/ }).click()
+  const scanner = page.getByRole('dialog', { name: /本次收款/ })
+  await expect(scanner.getByText('客户付款码')).toBeVisible()
+  await scanner.getByTitle('关闭').click()
+  const staffQrResponse = page.waitForResponse((response) => (
+    response.request().method() === 'POST' && response.url().endsWith('/api/payments')
+  ))
+  await immediateSheet.getByRole('button', { name: /客人扫二维码/ }).click()
+  const staffQrBody = await (await staffQrResponse).json() as {
+    data: { providerAction: { paymentId: string; orderPublicId: string } }
+  }
+  await expect(immediateSheet.getByText('测试付款动作已建立')).toBeVisible()
+  await immediateSheet.getByRole('button', { name: '完成演练' }).click()
+
+  await page.getByRole('button', { name: '协助点单' }).click()
+  const barcodeSheet = page.getByRole('dialog', { name: 'W01协助点单' })
+  await barcodeSheet.getByRole('button', { name: '立即结算' }).click()
+  await barcodeSheet.getByLabel('搜索菜单商品').fill(data.orderableProductName)
+  await barcodeSheet.getByRole('button', { name: `加入${data.orderableProductName}` }).click()
+  await barcodeSheet.getByRole('button', { name: '查看已选' }).click()
+  await barcodeSheet.getByRole('dialog', { name: '购物车明细' }).getByRole('button', { name: '核对无误，确认下单' }).click()
+  await barcodeSheet.getByRole('dialog', { name: '确认上单' }).getByRole('button', { name: '确认上单' }).click()
+  await barcodeSheet.getByRole('button', { name: /扫客人付款码/ }).click()
+  const barcodeScanner = page.getByRole('dialog', { name: /本次收款/ })
+  await barcodeScanner.getByLabel('客户付款码').fill('134567890123456789')
+  const barcodeResponse = page.waitForResponse((response) => (
+    response.request().method() === 'POST' && response.url().endsWith('/api/payments')
+  ))
+  await barcodeScanner.getByRole('button', { name: '确认发起收款' }).click()
+  const barcodeBody = await (await barcodeResponse).json() as {
+    data: { providerAction: { orderPublicId: string } }
+  }
+  await expect(barcodeSheet.getByText('测试付款动作已建立')).toBeVisible()
+  await barcodeSheet.getByRole('button', { name: '完成演练' }).click()
+
   await page.getByRole('button', { name: '赠送商品' }).click()
   const giftSheet = page.getByRole('dialog', { name: 'W01赠送商品' })
   await expect(giftSheet).toContainText('按本人岗位额度执行，赠送原因全程留痕')
@@ -615,6 +660,39 @@ test('mobile manager assists an open table order and gifts a product without mix
   await giftSheet.getByLabel('赠送原因').fill('浏览器验收生日关怀')
   await giftSheet.getByRole('button', { name: '确认赠送并出品' }).click()
   await expect(page.getByRole('status')).toContainText('W01 商品已赠送并发送出品')
+
+  await page.goto(data.guestUrl)
+  await expect(page.getByTestId('normalized-guest-app')).toBeVisible()
+  await page.getByRole('button', { name: /本桌已点.*W01/ }).click()
+  const syncedOrders = page.getByRole('dialog', { name: '本桌已点' })
+  await expect(syncedOrders.getByText('服务员协助点单')).toHaveCount(4)
+  const staffQrOrder = syncedOrders.getByTestId(`guest-table-order-${staffQrBody.data.providerAction.orderPublicId}`)
+  await expect(staffQrOrder.getByRole('button', { name: /微信支付/ })).toBeVisible()
+  const guestPayResponse = page.waitForResponse((response) => (
+    response.request().method() === 'POST' && /\/api\/guest\/orders\/.+\/payment$/.test(response.url())
+  ))
+  await staffQrOrder.getByRole('button', { name: /微信支付/ }).click()
+  const guestPayBody = await (await guestPayResponse).json() as { data: { paymentId: string } }
+  await expect(page.getByRole('status')).toContainText('测试付款流程已完成，未产生真实扣款')
+  expect(guestPayBody.data.paymentId).toBe(staffQrBody.data.providerAction.paymentId)
+
+  const barcodeOrder = syncedOrders.getByTestId(`guest-table-order-${barcodeBody.data.providerAction.orderPublicId}`)
+  await expect(barcodeOrder).toContainText('员工正在扫描付款码，请勿重复支付')
+  await expect(barcodeOrder.getByRole('button', { name: /微信支付/ })).toHaveCount(0)
+
+  const secondGuestContext = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    locale: 'zh-CN',
+  })
+  const secondGuest = await secondGuestContext.newPage()
+  await secondGuest.goto(data.guestUrl)
+  await expect(secondGuest.getByTestId('normalized-guest-app')).toBeVisible()
+  await secondGuest.getByRole('button', { name: /本桌已点.*W01/ }).click()
+  const secondGuestOrders = secondGuest.getByRole('dialog', { name: '本桌已点' })
+  await expect(secondGuestOrders.getByText('服务员协助点单')).toHaveCount(4)
+  await expect(secondGuestOrders.getByTestId(`guest-table-order-${staffQrBody.data.providerAction.orderPublicId}`)).toContainText(data.orderableProductName)
+  await expect(secondGuestOrders.getByTestId(`guest-table-order-${barcodeBody.data.providerAction.orderPublicId}`)).toContainText('员工正在扫描付款码，请勿重复支付')
+  await secondGuestContext.close()
 })
 
 function cashierWorkbenchFixture() {

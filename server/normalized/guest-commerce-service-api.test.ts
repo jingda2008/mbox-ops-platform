@@ -19,6 +19,8 @@ import {
   type GuestRequestContext,
 } from './guest-request-context.js'
 import type { Payment } from './payment-repository.js'
+import { OnlinePaymentUnknownError } from './online-payment-service.js'
+import { PostarPaymentRejectedError } from '../postar-adapter.js'
 import {
   ScopedPostgresTransactionRunner,
   type PostgresPool,
@@ -171,7 +173,7 @@ describe('guest commerce/service API trust boundaries', () => {
           method: 'jsapi',
           status: 'pending',
           simulated: false,
-          providerAction: 'provider_order_required',
+          providerAction: paymentAction('jsapi'),
         },
       },
     })
@@ -241,16 +243,81 @@ describe('guest commerce/service API trust boundaries', () => {
     expect(limited.payments.initiate).not.toHaveBeenCalled()
   })
 
-  it('shares paid table orders without payer or payment details', async () => {
+  it('shares table order settlement state without payer identity or provider evidence', async () => {
     const value = fixture()
     const response = await value.app.inject({ method: 'GET', url: '/api/guest/orders/table' })
 
     expect(response.statusCode).toBe(200)
     expect(response.json()).toMatchObject({ data: [{
       publicId: 'shared-order-0001', round: 1, visibility: 'shared', isMine: false,
+      paymentAccess: 'available',
       items: [{ productId, name: '青岛啤酒', quantity: 2, status: 'preparing' }],
     }] })
-    expect(response.body).not.toMatch(/customerId|provider|paymentStatus|amountMinor/)
+    expect(response.body).not.toMatch(/customerId|providerTransaction|providerSnapshot|openid|authCode/i)
+  })
+
+  it('continues the employee-created QR payment on a guest phone without creating a second payment', async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('SELECT ordering.id AS order_id')) {
+        return { rows: [{ order_id: orderId, payment_id: paymentId }], rowCount: 1 }
+      }
+      if (sql.includes('SELECT payment.id, payment.order_id')) {
+        return { rows: [{
+          id: paymentId,
+          order_id: orderId,
+          order_public_id: 'staff-order-public-0001',
+          public_id: 'staff-payment-public-0001',
+          provider: 'postar',
+          method: 'native_qr',
+          amount_minor: '13600',
+          currency: 'CNY',
+          status: 'pending',
+          table_session_id: tableSessionId,
+          table_code: 'VIP1',
+          created_at: '2026-08-14T12:00:00.000Z',
+        }], rowCount: 1 }
+      }
+      if (sql.includes('SELECT EXISTS')) return { rows: [{ linked: true }], rowCount: 1 }
+      throw new Error(`Unexpected query: ${sql}`)
+    })
+    const transaction = { scope: context.scope, query } as unknown as ScopedTransaction
+    const create = vi.fn(async () => ({
+      ...paymentAction('qr'),
+      paymentId,
+      paymentPublicId: 'staff-payment-public-0001',
+      orderPublicId: 'staff-order-public-0001',
+    }))
+    const value = fixture({
+      transactions: { run: vi.fn(async (_scope, operation) => operation(transaction)) },
+      onlinePayments: {
+        assertAvailable: vi.fn(),
+        resolveGuestMethod: vi.fn(async () => 'native_qr' as const),
+        resolveActivePayment: vi.fn(async () => null),
+        create,
+      },
+    })
+
+    const response = await value.app.inject({
+      method: 'POST',
+      url: '/api/guest/orders/staff-order-public-0001/payment',
+      headers: { 'idempotency-key': 'guest-continues-staff-payment-0001' },
+      payload: {},
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({ data: {
+      paymentId,
+      paymentPublicId: 'staff-payment-public-0001',
+      orderPublicId: 'staff-order-public-0001',
+      presentation: 'qr',
+    } })
+    expect(value.options.payments.initiate).not.toHaveBeenCalled()
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      paymentId,
+      principal: { type: 'guest', tableSessionId, customerId },
+    }))
+    const paymentContextSql = query.mock.calls.find(([sql]) => String(sql).includes('SELECT payment.id, payment.order_id'))?.[0]
+    expect(paymentContextSql).not.toContain('FOR SHARE')
   })
 
   it('labels simulation as pending test confirmation instead of pretending it is paid', async () => {
@@ -270,9 +337,74 @@ describe('guest commerce/service API trust boundaries', () => {
         mode: 'simulation',
         status: 'pending',
         simulated: true,
-        providerAction: 'simulation_confirmation_required',
+        providerAction: paymentAction('qr'),
       } },
     })
+  })
+
+  it('keeps the created order visible when the provider rejects payment initiation', async () => {
+    const value = fixture({
+      onlinePayments: {
+        assertAvailable: vi.fn(),
+        resolveGuestMethod: vi.fn(async () => 'jsapi' as const),
+        resolveActivePayment: vi.fn(async () => null),
+        create: vi.fn(async () => { throw new PostarPaymentRejectedError('test rejection') }),
+      },
+    })
+    const response = await value.app.inject({
+      method: 'POST',
+      url: '/api/guest/orders',
+      headers: { 'idempotency-key': 'guest-order-provider-rejected-0001' },
+      payload: { items: [{ productId, quantity: 1 }] },
+    })
+
+    expect(response.statusCode).toBe(201)
+    expect(value.commerce.submitOrder).toHaveBeenCalledOnce()
+    expect(response.json()).toMatchObject({ data: {
+      order: { publicId: 'guest-order-public-0001' },
+      payment: {
+        status: 'failed',
+        providerAction: {
+          orderPublicId: 'guest-order-public-0001',
+          status: 'failed',
+          presentation: 'jsapi',
+          payload: null,
+        },
+      },
+    } })
+  })
+
+  it('keeps an uncertain payment attached to the created order without issuing another action', async () => {
+    const value = fixture({
+      onlinePayments: {
+        assertAvailable: vi.fn(),
+        resolveGuestMethod: vi.fn(async () => 'native_qr' as const),
+        resolveActivePayment: vi.fn(async () => null),
+        create: vi.fn(async () => { throw new OnlinePaymentUnknownError() }),
+      },
+      paymentMode: 'wechat_native_qr',
+    })
+    const response = await value.app.inject({
+      method: 'POST',
+      url: '/api/guest/orders',
+      headers: { 'idempotency-key': 'guest-order-provider-unknown-0001' },
+      payload: { items: [{ productId, quantity: 1 }] },
+    })
+
+    expect(response.statusCode).toBe(201)
+    expect(value.commerce.submitOrder).toHaveBeenCalledOnce()
+    expect(response.json()).toMatchObject({ data: {
+      order: { publicId: 'guest-order-public-0001' },
+      payment: {
+        status: 'pending',
+        providerAction: {
+          orderPublicId: 'guest-order-public-0001',
+          status: 'unknown',
+          presentation: 'qr',
+          payload: null,
+        },
+      },
+    } })
   })
 })
 
@@ -353,9 +485,16 @@ integration('guest service and mood API with PostgreSQL', () => {
       commandExecutor,
       commerce: { submitOrder: vi.fn() } as never,
       payments: { initiate: vi.fn() } as never,
+      onlinePayments: {
+        assertAvailable: vi.fn(),
+        resolveGuestMethod: vi.fn(async () => 'native_qr'),
+        resolveActivePayment: vi.fn(async () => null),
+        create: vi.fn(),
+      } as never,
       resolveGuestContext: async () => integrationContext,
       resolveDeviceFingerprint: () => 'wechat-device-api-postgres-0001',
       paymentMode: 'simulation',
+      paymentActionSecret: 'integration-payment-action-secret-32-bytes',
       deviceServiceLimitPerMinute: 2,
       tableServiceLimitPerMinute: 20,
     })
@@ -458,11 +597,13 @@ integration('guest service and mood API with PostgreSQL', () => {
 })
 
 function fixture(overrides: Partial<GuestCommerceServiceApiOptions> = {}) {
-  const query = vi.fn(async (sql: string) => sql.includes('WITH table_orders AS') ? ({
+  const paymentMode = overrides.paymentMode ?? 'wechat_jsapi'
+  const query = vi.fn(async (sql: string) => sql.includes('WITH order_balances AS') ? ({
     rows: [{
       public_id: 'shared-order-0001', round_number: 1, channel: 'guest_qr',
       order_status: 'submitted', visibility: 'shared', is_mine: false,
-      order_created_at: '2026-08-11T12:00:00.000Z', product_id: productId,
+      order_created_at: '2026-08-11T12:00:00.000Z', payment_status: 'unpaid',
+      payment_access: 'available', payable_amount_minor: '13600', currency: 'CNY', product_id: productId,
       product_name: '青岛啤酒', quantity: 2, item_status: 'preparing',
     }],
     rowCount: 1,
@@ -501,14 +642,22 @@ function fixture(overrides: Partial<GuestCommerceServiceApiOptions> = {}) {
       replayed: false,
     })),
   }
+  const onlinePayments = overrides.onlinePayments ?? {
+    assertAvailable: vi.fn(),
+    resolveGuestMethod: vi.fn(async () => 'jsapi' as const),
+    resolveActivePayment: vi.fn(async () => null),
+    create: vi.fn(async () => paymentAction(paymentMode === 'simulation' ? 'qr' : 'jsapi')),
+  }
   const options: GuestCommerceServiceApiOptions = {
     transactions,
     commandExecutor: { execute: vi.fn() } as never,
     commerce,
     payments,
+    onlinePayments,
     resolveGuestContext: async () => context,
     resolveDeviceFingerprint: () => 'wechat-device-api-unit-test-0001',
-    paymentMode: 'wechat_jsapi',
+    paymentMode,
+    paymentActionSecret: 'unit-payment-action-secret-at-least-32-bytes',
     createPublicId: (kind) => `guest-${kind}-public-0001`,
     ...overrides,
   }
@@ -516,6 +665,20 @@ function fixture(overrides: Partial<GuestCommerceServiceApiOptions> = {}) {
   apps.push(app)
   app.register(guestCommerceServiceApiPlugin, { prefix: '/api', ...options })
   return { app, options, transactions, query, commerce, payments }
+}
+
+function paymentAction(presentation: 'jsapi' | 'qr' | 'barcode') {
+  return {
+    paymentId,
+    paymentPublicId: 'guest-payment-public-0001',
+    orderPublicId: 'guest-order-public-0001',
+    status: 'pending' as const,
+    presentation,
+    expiresAt: '2026-08-11T12:05:00.000Z',
+    payload: presentation === 'jsapi'
+      ? { appId: 'wx-app-1', package: 'prepay_id=test' }
+      : { qrCodeUrl: 'https://pay.example.test/order/1' },
+  }
 }
 
 function commerceResult(): SubmittedCommerceResult {

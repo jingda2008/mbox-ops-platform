@@ -37,6 +37,19 @@ import {
 import { OrderProductUnavailableError, TableSessionUnavailableForOrderError } from './order-repository.js'
 import type { PaymentCommandService } from './payment-command-service.js'
 import { OrderNotPayableError, type Payment } from './payment-repository.js'
+import type { OnlinePaymentAction, OnlinePaymentService } from './online-payment-service.js'
+import {
+  OnlinePaymentUnavailableError,
+  OnlinePaymentUnknownError,
+} from './online-payment-service.js'
+import {
+  PaymentProviderActionRepository,
+  ProviderPaymentInProgressError,
+  ProviderPaymentMethodConflictError,
+  ProviderPaymentUnknownError,
+  WechatPaymentIdentityRequiredError,
+} from './payment-provider-action-repository.js'
+import { PostarPaymentRejectedError } from '../postar-adapter.js'
 import type {
   ScopedPostgresTransactionRunner,
   ScopedTransaction,
@@ -49,9 +62,11 @@ export interface GuestCommerceServiceApiOptions {
   commandExecutor: Pick<NormalizedCommandExecutor, 'execute'>
   commerce: Pick<CommerceCommandService, 'submitOrder'>
   payments: Pick<PaymentCommandService, 'initiate'>
+  onlinePayments: Pick<OnlinePaymentService, 'create' | 'resolveGuestMethod' | 'assertAvailable' | 'resolveActivePayment'>
   resolveGuestContext(request: FastifyRequest): Promise<GuestRequestContext> | GuestRequestContext
   resolveDeviceFingerprint(request: FastifyRequest): string
   paymentMode: GuestCheckoutPaymentMode
+  paymentActionSecret: string
   deviceServiceLimitPerMinute?: number
   tableServiceLimitPerMinute?: number
   createPublicId?: (kind: 'order' | 'payment' | 'service', seed: string) => string
@@ -124,6 +139,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
 
   app.post('/guest/orders', async (request, reply) => handleRoute(reply, async () => {
     const context = await requireTableContext(options, request, 'guest.order.create')
+    options.onlinePayments.assertAvailable(options.paymentMode === 'simulation' ? 'simulation' : 'postar')
     const input = readGuestOrder(request.body)
     const idempotencyKey = readIdempotencyKey(request)
     const actor = guestActor(context)
@@ -142,8 +158,15 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       confirmedDuplicateOrderPublicId: input.confirmedDuplicateOrderId,
     })
     const payment = await initiateGuestPayment(options, context, orderExecution.value, idempotencyKey, createPublicId)
+    const providerAction = await createGuestProviderAction(
+      options,
+      context,
+      payment.value,
+      orderExecution.value.order.publicId,
+      request.ip,
+    )
     return reply.code(orderExecution.replayed ? 200 : 201).send(
-      checkoutResponse(orderExecution, payment, options.paymentMode),
+      checkoutResponse(orderExecution, payment, options.paymentMode, providerAction),
     )
   }))
 
@@ -154,6 +177,62 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
     ), { readOnly: true })
     return reply.send({ data: orders, meta: { tableSessionId: context.tableSessionId, count: orders.length } })
   }))
+
+  app.post<{ Params: { orderPublicId: string } }>(
+    '/guest/orders/:orderPublicId/payment',
+    async (request, reply) => handleRoute(reply, async () => {
+      const context = await requireTableContext(options, request, 'guest.order.create')
+      options.onlinePayments.assertAvailable(options.paymentMode === 'simulation' ? 'simulation' : 'postar')
+      const orderPublicId = readPublicId(request.params.orderPublicId, 'orderPublicId')
+      const resolved = await options.transactions.run(context.scope, async (transaction) => (
+        new PaymentProviderActionRepository(transaction, options.paymentActionSecret)
+          .resolveOrderForGuest(orderPublicId, {
+            type: 'guest',
+            tableSessionId: context.tableSessionId,
+            customerId: context.customerId,
+          })
+      ), { readOnly: true })
+      let payment: CommandExecution<Payment>
+      if (resolved.activePaymentId === null) {
+        const method = await options.onlinePayments.resolveGuestMethod(context.scope, context.customerId)
+        const idempotencyKey = readIdempotencyKey(request)
+        try {
+          payment = await options.payments.initiate({
+            scope: context.scope,
+            actor: guestActor(context),
+            businessDate: context.businessDate,
+            idempotencyKey,
+            requestFingerprint: stableJson({ orderId: resolved.orderId, method, customerId: context.customerId }),
+            orderId: resolved.orderId,
+            publicId: createPublicId('payment', `${context.scope.storeId}:${idempotencyKey}`),
+            provider: options.paymentMode === 'simulation' ? 'simulation' : 'postar',
+            method,
+            principal: { type: 'guest', tableSessionId: context.tableSessionId, customerId: context.customerId },
+            providerSnapshot: { channel: 'guest_table_order' },
+          })
+        } catch (error) {
+          if (!(error instanceof OrderNotPayableError)) throw error
+          const active = await options.onlinePayments.resolveActivePayment({
+            scope: context.scope,
+            orderId: resolved.orderId,
+            principal: { type: 'guest', tableSessionId: context.tableSessionId, customerId: context.customerId },
+          })
+          if (active === null) throw error
+          payment = { value: paymentFromContext(active), replayed: true }
+        }
+      } else {
+        const value = await options.transactions.run(context.scope, async (transaction) => (
+          new PaymentProviderActionRepository(transaction, options.paymentActionSecret)
+            .resolvePaymentContext(resolved.activePaymentId!, {
+              type: 'guest', tableSessionId: context.tableSessionId, customerId: context.customerId,
+            }, { lock: false })
+        ), { readOnly: true })
+        payment = { value: paymentFromContext(value), replayed: true }
+      }
+      const action = await createGuestProviderAction(options, context, payment.value, orderPublicId, request.ip)
+      return reply.send({ data: action, meta: { replayed: payment.replayed } })
+    }),
+  )
 
   app.post('/guest/service-requests', async (request, reply) => handleRoute(reply, async () => {
     const context = await requireTableContext(options, request, 'guest.service.create')
@@ -527,7 +606,9 @@ async function initiateGuestPayment(
   // WeChat is the customer-facing channel; Postar is the acquiring provider
   // whose order and callback identities must match the persisted payment.
   const provider = options.paymentMode === 'simulation' ? 'simulation' : 'postar'
-  const method = options.paymentMode === 'wechat_jsapi' ? 'jsapi' : 'native_qr'
+  const method = options.paymentMode === 'simulation'
+    ? 'native_qr'
+    : await options.onlinePayments.resolveGuestMethod(context.scope, context.customerId)
   const idempotencyKey = `guest-pay-${createHash('sha256').update(orderIdempotencyKey).digest('hex').slice(0, 48)}`
   const publicId = createPublicId('payment', `${context.scope.storeId}:${idempotencyKey}`)
   return options.payments.initiate({
@@ -556,10 +637,58 @@ async function initiateGuestPayment(
   })
 }
 
+async function createGuestProviderAction(
+  options: GuestCommerceServiceApiOptions,
+  context: GuestRequestContext & { tableSessionId: string },
+  payment: Payment,
+  orderPublicId: string,
+  clientIp: string,
+): Promise<OnlinePaymentAction> {
+  if (payment.method === 'auth_code') {
+    throw new ProviderPaymentMethodConflictError('本笔正在由员工扫描付款码收款，请勿从桌码重复支付')
+  }
+  try {
+    return await options.onlinePayments.create({
+      scope: context.scope,
+      paymentId: payment.id,
+      principal: { type: 'guest', tableSessionId: context.tableSessionId, customerId: context.customerId },
+      clientIp,
+      operatorId: 'MBOXGUEST',
+    })
+  } catch (error) {
+    if (error instanceof PostarPaymentRejectedError) return unavailablePaymentAction(payment, orderPublicId, 'failed')
+    if (error instanceof ProviderPaymentInProgressError) return unavailablePaymentAction(payment, orderPublicId, 'pending')
+    if (error instanceof ProviderPaymentUnknownError || error instanceof OnlinePaymentUnknownError) {
+      return unavailablePaymentAction(payment, orderPublicId, 'unknown')
+    }
+    throw error
+  }
+}
+
+function unavailablePaymentAction(
+  payment: Payment,
+  orderPublicId: string,
+  status: Extract<OnlinePaymentAction['status'], 'pending' | 'unknown' | 'failed'>,
+): OnlinePaymentAction {
+  const presentation = payment.method === 'jsapi' ? 'jsapi'
+    : payment.method === 'auth_code' ? 'barcode'
+      : 'qr'
+  return {
+    paymentId: payment.id,
+    paymentPublicId: payment.publicId,
+    orderPublicId,
+    status,
+    presentation,
+    expiresAt: new Date().toISOString(),
+    payload: null,
+  }
+}
+
 function checkoutResponse(
   orderExecution: CommandExecution<SubmittedCommerceResult>,
   paymentExecution: CommandExecution<Payment>,
   mode: GuestCheckoutPaymentMode,
+  providerAction: OnlinePaymentAction,
 ) {
   const order = orderExecution.value.order
   const payment = paymentExecution.value
@@ -596,14 +725,14 @@ function checkoutResponse(
       },
       payment: {
         publicId: payment.publicId,
-        mode,
+        mode: providerAction.presentation === 'jsapi'
+          ? 'wechat_jsapi'
+          : mode === 'simulation' ? 'simulation' : 'wechat_native_qr',
         provider: payment.provider,
         method: payment.method,
-        status: payment.status,
+        status: providerAction.status === 'failed' ? 'failed' : payment.status,
         simulated: mode === 'simulation',
-        providerAction: mode === 'simulation'
-          ? 'simulation_confirmation_required'
-          : 'provider_order_required',
+        providerAction,
       },
     },
     meta: {
@@ -757,7 +886,33 @@ function guestActor(context: GuestRequestContext): AuditActor {
 }
 
 function deterministicPublicId(kind: 'order' | 'payment' | 'service', seed: string): string {
-  return `guest-${kind}-${createHash('sha256').update(seed).digest('hex').slice(0, 32)}`
+  const prefix = kind === 'order' ? 'O' : kind === 'payment' ? 'P' : 'S'
+  return `${prefix}${createHash('sha256').update(seed).digest('hex').slice(0, 32)}`
+}
+
+function readPublicId(value: unknown, name: string): string {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9-]{8,128}$/.test(value)) {
+    throw new GuestApiRequestError('INVALID_PUBLIC_ID', `${name}格式无效`)
+  }
+  return value
+}
+
+function paymentFromContext(value: Awaited<ReturnType<PaymentProviderActionRepository['resolvePaymentContext']>>): Payment {
+  return {
+    id: value.id,
+    orderId: value.orderId,
+    publicId: value.publicId,
+    provider: value.provider,
+    providerTransactionId: null,
+    method: value.method,
+    amountMinor: value.amountMinor,
+    currency: value.currency,
+    status: value.status as Payment['status'],
+    providerSnapshot: {},
+    succeededAt: null,
+    createdAt: value.createdAt,
+    updatedAt: value.createdAt,
+  }
 }
 
 class GuestApiRequestError extends Error {
@@ -815,6 +970,24 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<unknown
     }
     if (error instanceof OrderNotPayableError) {
       return reply.code(409).send({ error: { code: 'ORDER_NOT_PAYABLE', message: '订单已提交，但当前无法创建支付，请稍后重试或呼叫服务员' } })
+    }
+    if (error instanceof ProviderPaymentInProgressError) {
+      return reply.code(409).send({ error: { code: 'PAYMENT_IN_PROGRESS', message: error.message } })
+    }
+    if (error instanceof ProviderPaymentMethodConflictError) {
+      return reply.code(409).send({ error: { code: 'PAYMENT_METHOD_LOCKED', message: error.message } })
+    }
+    if (error instanceof ProviderPaymentUnknownError || error instanceof OnlinePaymentUnknownError) {
+      return reply.code(409).send({ error: { code: 'PAYMENT_STATUS_UNKNOWN', message: error.message } })
+    }
+    if (error instanceof WechatPaymentIdentityRequiredError) {
+      return reply.code(409).send({ error: { code: 'WECHAT_IDENTITY_REQUIRED', message: error.message } })
+    }
+    if (error instanceof OnlinePaymentUnavailableError) {
+      return reply.code(503).send({ error: { code: 'ONLINE_PAYMENT_UNAVAILABLE', message: error.message } })
+    }
+    if (error instanceof PostarPaymentRejectedError) {
+      return reply.code(409).send({ error: { code: 'PROVIDER_PAYMENT_REJECTED', message: '支付机构未受理本次付款，请核对后重试' } })
     }
     if (error instanceof TypeError) {
       return reply.code(400).send({ error: { code: 'INVALID_REQUEST', message: error.message } })

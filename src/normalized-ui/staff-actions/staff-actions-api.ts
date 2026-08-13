@@ -3,6 +3,7 @@ import type {
   StaffOperationsData,
   StaffReservation,
 } from './types'
+import type { OnlinePaymentAction } from '../../shared/online-payment-contracts'
 
 export class StaffActionsApiError extends Error {
   readonly code: string
@@ -25,6 +26,8 @@ export class StaffActionsApiError extends Error {
 
 export interface AssistedOrderAccess {
   canCreateOrder: boolean
+  canInitiatePayment: boolean
+  onlinePaymentProvider: 'postar' | 'simulation' | null
   gift: null | {
     enabled: boolean
     maximumAmountMinor: number | null
@@ -70,6 +73,10 @@ export interface AssistedOrderResult {
   paymentNextStep: {
     status: 'required' | 'deferred'
     action: 'create_payment_intent' | 'settle_table_later'
+    orderId: string
+    amountMinor: number
+    currency: string
+    paymentStatus: string
   }
 }
 
@@ -105,6 +112,12 @@ export interface StaffActionsApiPort {
     giftReason?: string
     settlementMode: 'immediate_payment' | 'table_tab'
   }>): Promise<AssistedOrderResult>
+  createOnlinePayment(input: Readonly<{
+    orderId: string
+    provider: 'postar' | 'simulation'
+    method: 'native_qr' | 'auth_code'
+    customerAuthCode?: string
+  }>): Promise<OnlinePaymentAction>
 }
 
 export interface StaffActionsApiOptions {
@@ -244,6 +257,34 @@ export class StaffActionsApi implements StaffActionsApiPort {
     return body as unknown as AssistedOrderResult
   }
 
+  async createOnlinePayment(input: Readonly<{
+    orderId: string
+    provider: 'postar' | 'simulation'
+    method: 'native_qr' | 'auth_code'
+    customerAuthCode?: string
+  }>): Promise<OnlinePaymentAction> {
+    const headers = new Headers({
+      accept: 'application/json',
+      'content-type': 'application/json',
+      'idempotency-key': `staff-payment-${this.createIdempotencyKey()}`,
+    })
+    const response = await this.request('/api/payments', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        orderId: input.orderId,
+        provider: input.provider,
+        method: input.method,
+        ...(input.customerAuthCode === undefined ? {} : { customerAuthCode: input.customerAuthCode }),
+      }),
+    })
+    const body = await readJson(response)
+    if (!isObject(body) || !isObject(body.data) || !isOnlinePaymentAction(body.data.providerAction)) {
+      throw new StaffActionsApiError('支付结果无法识别，请到收银页面核对', 'INVALID_PAYMENT_RESPONSE', response.status)
+    }
+    return body.data.providerAction
+  }
+
   private async getData<Data>(url: string, signal?: AbortSignal): Promise<Data> {
     const response = await this.request(url, { method: 'GET', signal })
     const body = await readJson(response)
@@ -304,4 +345,15 @@ async function readJson(response: Response): Promise<unknown> {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isOnlinePaymentAction(value: unknown): value is OnlinePaymentAction {
+  return isObject(value)
+    && typeof value.paymentId === 'string'
+    && typeof value.paymentPublicId === 'string'
+    && typeof value.orderPublicId === 'string'
+    && (value.status === 'pending' || value.status === 'unknown' || value.status === 'failed')
+    && (value.presentation === 'jsapi' || value.presentation === 'qr' || value.presentation === 'barcode')
+    && typeof value.expiresAt === 'string'
+    && (value.payload === null || isObject(value.payload))
 }

@@ -2,9 +2,9 @@
 
 ## 1.0.0-rc.79 - 2026-08-13
 
-- Added browser-equivalent release gates for the home, fixed-table QR, reservation and employee deep links before and after traffic cutover.
+- Added bounded browser-style HTTP and rendered Playwright release gates for the home, fixed-table QR, reservation and employee deep links, including front-end build identity, root mounts and executable module assets.
 - Kept API-style unknown requests as structured 404 responses instead of weakening the single-page application boundary.
-- Recorded the rc.78 validation cutover and verified rollback without changing payment, inventory, order or other business behavior.
+- Hardened automatic and operator rollback with immutable identity, app-shell verification and restored container restart policy; exact-commit Playwright remains the rendered-browser acceptance gate.
 
 ## 1.0.0-rc.78 - 2026-08-13
 

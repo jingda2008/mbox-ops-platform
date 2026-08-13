@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { readFile, writeFile } from 'node:fs/promises'
-import { basename, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 
 function required(name) {
   const value = process.env[name]?.trim()
@@ -16,12 +16,23 @@ const storeConfigPath = resolve(required('MBOX_STORE_CONFIG'))
 const catalogConfigPath = resolve(required('MBOX_CATALOG_CONFIG'))
 const releaseSha = required('MBOX_BUNDLE_SHA')
 const imageDigest = required('MBOX_BUNDLE_IMAGE_DIGEST')
+const deploymentScriptDirectory = resolve(required('MBOX_DEPLOYMENT_SCRIPT_DIR'))
+const deploymentScriptNames = [
+  'deploy-release.sh',
+  'activate-release.sh',
+  'rollback-activated-release.sh',
+  'verify-public-app.sh',
+  'stage-release-evidence.sh',
+  'upload-oss-verified.sh',
+  'send-sls-events.sh',
+  'prune-oss-images.sh',
+]
 
 if (!/^[0-9a-f]{40}$/.test(releaseSha)) throw new Error('MBOX_BUNDLE_SHA must be a full commit SHA')
 if (!/^sha256:[0-9a-f]{64}$/.test(imageDigest)) throw new Error('MBOX_BUNDLE_IMAGE_DIGEST is not immutable')
 
 const manifest = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   generatedAt: new Date().toISOString(),
   releaseSha,
   releaseVersion: required('MBOX_BUNDLE_VERSION'),
@@ -40,6 +51,13 @@ const manifest = {
       sha256: createHash('sha256').update(await readFile(catalogConfigPath)).digest('hex'),
     },
   },
+  deploymentScripts: Object.fromEntries(await Promise.all(deploymentScriptNames.map(async (file) => {
+    const contents = await readFile(join(deploymentScriptDirectory, file))
+    return [file.replace(/\.sh$/, '').replaceAll('-', '_'), {
+      file,
+      sha256: createHash('sha256').update(contents).digest('hex'),
+    }]
+  }))),
   ci: {
     repository: process.env.GITHUB_REPOSITORY ?? null,
     runId: process.env.GITHUB_RUN_ID ?? null,

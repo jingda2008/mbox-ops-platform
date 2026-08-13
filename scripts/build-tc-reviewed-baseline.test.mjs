@@ -13,7 +13,9 @@ test('reviewed MBOX baseline is generated deterministically and contains only P0
   assert.equal(generated, tracked)
   const lines = tracked.trim().split(/\r?\n/)
   assert.ok(lines.length > 250)
-  for (const line of lines) assert.match(line, /^[A-Z]{3}-\d{3}\|P[01]\|[0-9a-f]{64}$/)
+  for (const line of lines) {
+    assert.match(line, /^(?:[A-Z]{3}-\d{3}|NC-[A-Z]+-\d{3}|AR\d{2}-\d{3})\|P[01]\|[0-9a-f]{64}$/)
+  }
 })
 
 test('tag release downloads and verifies exact checksummed CI evidence bundles', async () => {
@@ -74,6 +76,9 @@ test('Alibaba Cloud deployment prefers release evidence and keeps Actions artifa
   assert.match(deploy, /shasum -a 256 -c "\$\{runtime_archive\}\.sha256"/)
   assert.match(deploy, /gh run download "\$\{MBOX_CI_RUN_ID\}" --name "quality-evidence-\$\{release_sha\}"/)
   assert.match(deploy, /gh run download "\$\{MBOX_CI_RUN_ID\}" --name "runtime-quality-\$\{release_sha\}"/)
+  assert.match(deploy, /deploymentScripts/)
+  assert.match(deploy, /'\$\{remote_release_dir\}\/activate-release\.sh'/)
+  assert.doesNotMatch(deploy, /< deploy\/aliyun\/activate-release\.sh/)
 })
 
 test('Alibaba Cloud activation runs only the migrator shipped by the normalized image', async () => {

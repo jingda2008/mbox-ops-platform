@@ -16,6 +16,7 @@ current_link=${install_root}/current
 env_link=${install_root}/.env
 uploader=${release_dir}/upload-oss-verified.sh
 audit_sender=${release_dir}/send-sls-events.sh
+public_verifier=${release_dir}/verify-public-app.sh
 audit_queue=${install_root}/observability/pending-release-events.jsonl
 audit_queue_lock=${install_root}/observability/pending-events.lock
 
@@ -32,6 +33,22 @@ test -f "${manifest}"
 test -f "${secrets_env}"
 test -x "${uploader}"
 test -x "${audit_sender}"
+test -x "${public_verifier}"
+
+verify_deployment_scripts() {
+  local count=0
+  local script_name
+  local expected_sha
+  while IFS=$'\t' read -r script_name expected_sha; do
+    [[ "${script_name}" =~ ^[a-z0-9-]+\.sh$ ]]
+    [[ "${expected_sha}" =~ ^[0-9a-f]{64}$ ]]
+    test -f "${release_dir}/${script_name}"
+    test "$(sha256sum "${release_dir}/${script_name}" | awk '{print $1}')" = "${expected_sha}"
+    count=$((count + 1))
+  done < <(jq -er '.deploymentScripts | to_entries[] | [.value.file,.value.sha256] | @tsv' "${manifest}")
+  test "${count}" = 8
+}
+verify_deployment_scripts
 command -v flock >/dev/null
 docker network inspect "${network}" >/dev/null
 docker inspect "${caddy_container}" >/dev/null
@@ -140,6 +157,34 @@ set_env MBOX_RELEASE_IMAGE_DIGEST "${expected_digest}"
 set_env APP_COMMIT_SHA "${release_sha}"
 set_env MBOX_DEPLOYMENT_TIER "${deployment_tier}"
 
+previous_release_dir=$(readlink -f "${current_link}" 2>/dev/null || true)
+test -n "${previous_release_dir}"
+test -f "${previous_release_dir}/release-manifest.json"
+previous_ready=$(curl -fsS --max-time 5 -H 'Accept: application/json' "${public_url}/api/ready")
+previous_release_sha=$(jq -er '.releaseSha' "${previous_release_dir}/release-manifest.json")
+previous_release_digest=$(jq -er '.imageDigest' "${previous_release_dir}/release-manifest.json")
+previous_schema_version=$(jq -er '.migration.count' "${previous_release_dir}/release-manifest.json")
+previous_deployment_tier=$(jq -r '.tier // empty' "${previous_release_dir}/deployment-manifest.json" 2>/dev/null || true)
+if [ -z "${previous_deployment_tier}" ]; then
+  previous_deployment_tier=$(docker inspect "${active_container}" --format '{{range .Config.Env}}{{println .}}{{end}}' \
+    | sed -n 's/^MBOX_DEPLOYMENT_TIER=//p' | head -n 1)
+fi
+previous_deployment_tier=${previous_deployment_tier:-validation}
+previous_public_extended_identity=0
+if printf '%s' "${previous_ready}" | jq -e \
+  --arg sha "${previous_release_sha}" \
+  --arg digest "${previous_release_digest}" \
+  --arg tier "${previous_deployment_tier}" \
+  '.commitSha == $sha and .releaseImageDigest == $digest and .deploymentTier == $tier' >/dev/null 2>&1; then
+  previous_public_extended_identity=1
+fi
+printf '%s' "${previous_ready}" | jq -e --arg sha "${previous_release_sha}" \
+  '.status == "ready" and .commitSha == $sha' >/dev/null
+[[ "${previous_release_sha}" =~ ^[0-9a-f]{40}$ ]]
+[[ "${previous_release_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+[[ "${previous_schema_version}" =~ ^[0-9]+$ ]]
+case "${previous_deployment_tier}" in validation|production) ;; *) exit 1 ;; esac
+
 current_migration_digest=
 if [ -f "${current_link}/release-manifest.json" ]; then
   current_migration_digest=$(jq -r '.migration.digest // empty' "${current_link}/release-manifest.json")
@@ -198,39 +243,70 @@ docker run --rm \
 candidate="mbox-candidate-${short_sha}"
 candidate_volume="mbox-data-${short_sha}-candidate"
 rollback_container=
-traffic_switched=0
-old_renamed=0
-promoted=0
 complete=0
 
 rollback_on_error() {
-  local exit_code=$?
+  local exit_code=${1:-$?}
   local rollback_ok=1
-  local rollback_response
+  local active_sha=
+  local active_digest=
+  local failed_container="mbox-failed-${short_sha}-$(date +%Y%m%d-%H%M%S)"
   [ "${complete}" = 1 ] && return
+  trap - ERR INT TERM
   set +e
   echo "deployment failed; restoring previous application" >&2
   emit_release_audit deployment_failed error automatic-rollback
   emit_release_audit rollback_started warning previous-release-restore-started
-  if [ "${promoted}" = 1 ]; then
+
+  # Recover from the actual Docker state. Signals can arrive between a Docker
+  # mutation and a shell flag assignment, so flags alone are not authoritative.
+  if docker inspect "${active_container}" >/dev/null 2>&1; then
+    active_sha=$(docker inspect "${active_container}" \
+      --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)
+    active_digest=$(docker inspect "${active_container}" --format '{{.Image}}' 2>/dev/null)
+  fi
+  if [ "${active_sha}" = "${release_sha}" ] && [ "${active_digest}" = "${expected_digest}" ]; then
     docker update --restart=no "${active_container}" >/dev/null 2>&1
     docker stop -t 20 "${active_container}" >/dev/null 2>&1
-    docker rename "${active_container}" "mbox-failed-${short_sha}-$(date +%Y%m%d-%H%M%S)" >/dev/null 2>&1
-    docker rename "${rollback_container}" "${active_container}" >/dev/null 2>&1
-    docker start "${active_container}" >/dev/null 2>&1
-  elif [ "${old_renamed}" = 1 ]; then
-    docker rename "${rollback_container}" "${active_container}" >/dev/null 2>&1
-    docker start "${active_container}" >/dev/null 2>&1
+    docker rename "${active_container}" "${failed_container}" >/dev/null 2>&1
+  elif [ -n "${active_sha}" ] \
+    && { [ "${active_sha}" != "${previous_release_sha}" ] \
+      || [ "${active_digest}" != "${previous_release_digest}" ]; }; then
+    rollback_ok=0
   fi
-  if [ "${traffic_switched}" = 1 ]; then
-    docker exec "${caddy_container}" \
-      caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1
+
+  if ! docker inspect "${active_container}" >/dev/null 2>&1; then
+    if [ -n "${rollback_container}" ] \
+      && [ "$(docker inspect "${rollback_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" = "${previous_release_sha}" ] \
+      && [ "$(docker inspect "${rollback_container}" --format '{{.Image}}' 2>/dev/null)" = "${previous_release_digest}" ]; then
+      docker rename "${rollback_container}" "${active_container}" >/dev/null 2>&1
+    else
+      rollback_ok=0
+    fi
   fi
-  docker update --restart=no "${candidate}" >/dev/null 2>&1
-  docker stop -t 10 "${candidate}" >/dev/null 2>&1
+
+  if [ "$(docker inspect "${active_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" = "${previous_release_sha}" ] \
+    && [ "$(docker inspect "${active_container}" --format '{{.Image}}' 2>/dev/null)" = "${previous_release_digest}" ]; then
+    docker start "${active_container}" >/dev/null 2>&1
+    docker update --restart=unless-stopped "${active_container}" >/dev/null 2>&1
+  else
+    rollback_ok=0
+  fi
+
+  # Reload the canonical upstream unconditionally. This is harmless before
+  # cutover and closes the signal window immediately after candidate-IP reload.
+  docker exec "${caddy_container}" \
+    caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1
+  if docker inspect "${candidate}" >/dev/null 2>&1; then
+    docker update --restart=no "${candidate}" >/dev/null 2>&1
+    docker stop -t 10 "${candidate}" >/dev/null 2>&1
+  fi
   test "$(docker inspect "${active_container}" --format '{{.State.Running}}' 2>/dev/null)" = true || rollback_ok=0
-  rollback_response=$(curl -fsS --max-time 10 "${public_url}/api/ready" 2>/dev/null || true)
-  printf '%s' "${rollback_response}" | jq -e '.status == "ready"' >/dev/null 2>&1 || rollback_ok=0
+  test "$(docker inspect "${active_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" = "${previous_release_sha}" || rollback_ok=0
+  test "$(docker inspect "${active_container}" --format '{{.Image}}' 2>/dev/null)" = "${previous_release_digest}" || rollback_ok=0
+  "${public_verifier}" "${public_url}" "${previous_release_sha}" \
+    "${previous_release_digest}" "${previous_schema_version}" \
+    "${previous_deployment_tier}" 5 "${previous_public_extended_identity}" >/dev/null 2>&1 || rollback_ok=0
   if [ "${rollback_ok}" = 1 ]; then
     emit_release_audit rollback_succeeded warning previous-release-restored
   else
@@ -238,7 +314,9 @@ rollback_on_error() {
   fi
   exit "${exit_code}"
 }
-trap rollback_on_error ERR INT TERM
+trap 'rollback_on_error $?' ERR
+trap 'rollback_on_error 130' INT
+trap 'rollback_on_error 143' TERM
 
 if docker inspect "${candidate}" >/dev/null 2>&1; then
   docker update --restart=no "${candidate}" >/dev/null
@@ -269,6 +347,7 @@ candidate_ready=$(docker exec "${candidate}" \
   wget -q -O - http://127.0.0.1:8787/api/ready)
 printf '%s' "${candidate_ready}" | jq -e \
   --arg sha "${release_sha}" \
+  --arg digest "${expected_digest}" \
   --arg schemaFlavor "normalized-core-v1" \
   --arg deploymentTier "${deployment_tier}" \
   --argjson schemaVersion "${expected_schema_version}" \
@@ -276,6 +355,7 @@ printf '%s' "${candidate_ready}" | jq -e \
     and .schemaFlavor == $schemaFlavor
     and (.schemaVersion | tonumber) >= $schemaVersion
     and .commitSha == $sha
+    and .releaseImageDigest == $digest
     and .deploymentTier == $deploymentTier' >/dev/null
 
 current_caddy=${release_dir}/Caddyfile.previous
@@ -290,48 +370,10 @@ docker exec "${caddy_container}" \
   caddy validate --config /tmp/Caddyfile.candidate --adapter caddyfile >/dev/null
 docker exec "${caddy_container}" \
   caddy reload --config /tmp/Caddyfile.candidate --adapter caddyfile >/dev/null
-traffic_switched=1
 
 verify_public_release() {
-  local attempts=${1:-12}
-  local response
-  for _ in $(seq 1 "${attempts}"); do
-    response=$(curl -fsS --max-time 10 "${public_url}/api/ready" 2>/dev/null || true)
-    if printf '%s' "${response}" | jq -e \
-      --arg sha "${release_sha}" \
-      --arg schemaFlavor "normalized-core-v1" \
-      --arg deploymentTier "${deployment_tier}" \
-      --argjson schemaVersion "${expected_schema_version}" \
-      '.status == "ready"
-        and .schemaFlavor == $schemaFlavor
-        and (.schemaVersion | tonumber) >= $schemaVersion
-        and .commitSha == $sha
-        and .deploymentTier == $deploymentTier' >/dev/null 2>&1; then
-      local browser_routes_ok=1
-      local browser_route
-      local browser_status
-      local browser_type
-      local browser_body
-      for browser_route in '/' '/guest?table=W01' '/reserve' '/staff/live'; do
-        browser_body=$(mktemp)
-        browser_type=$(mktemp)
-        browser_status=$(curl -ksS --max-time 10 \
-          -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' \
-          -D "${browser_type}" -o "${browser_body}" -w '%{http_code}' \
-          "${public_url}${browser_route}" 2>/dev/null || true)
-        if [ "${browser_status}" != 200 ] \
-          || ! grep -Eiq '^content-type:[[:space:]]*text/html' "${browser_type}" \
-          || ! grep -Eiq '<!doctype html|<html([[:space:]]|>)' "${browser_body}"; then
-          browser_routes_ok=0
-        fi
-        rm -f "${browser_body}" "${browser_type}"
-        [ "${browser_routes_ok}" = 1 ] || break
-      done
-      [ "${browser_routes_ok}" = 1 ] && return 0
-    fi
-    sleep 2
-  done
-  return 1
+  "${public_verifier}" "${public_url}" "${release_sha}" "${expected_digest}" \
+    "${expected_schema_version}" "${deployment_tier}" "${1:-12}"
 }
 
 verify_public_release 15
@@ -340,10 +382,8 @@ rollback_container="mbox-app-rollback-${short_sha}-$(date +%Y%m%d-%H%M%S)"
 docker update --restart=no "${active_container}" >/dev/null
 docker stop -t 30 "${active_container}" >/dev/null
 docker rename "${active_container}" "${rollback_container}"
-old_renamed=1
 
 docker rename "${candidate}" "${active_container}"
-promoted=1
 docker update --restart=unless-stopped "${active_container}" >/dev/null
 docker exec "${caddy_container}" \
   caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
@@ -351,11 +391,6 @@ verify_public_release 15
 emit_release_audit cutover_succeeded info public-readiness-verified
 
 deployed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-previous_release_dir=$(readlink -f "${current_link}" 2>/dev/null || true)
-previous_release_sha=
-if [ -n "${previous_release_dir}" ] && [ -f "${previous_release_dir}/deployment-manifest.json" ]; then
-  previous_release_sha=$(jq -r '.releaseSha // empty' "${previous_release_dir}/deployment-manifest.json")
-fi
 jq -n \
   --arg deployedAt "${deployed_at}" \
   --arg tier "${deployment_tier}" \
@@ -372,6 +407,7 @@ jq -n \
   --arg previousReleaseSha "${previous_release_sha}" \
   --arg storeConfigSha256 "${store_config_sha}" \
   --arg catalogConfigSha256 "${catalog_config_sha}" \
+  --argjson previousIdentityComplete "${previous_public_extended_identity}" \
   '{
     schemaVersion: 1,
     deployedAt: $deployedAt,
@@ -387,8 +423,10 @@ jq -n \
     rollbackContainer: $rollbackContainer,
     previousReleaseDir: (if $previousReleaseDir == "" then null else $previousReleaseDir end),
     previousReleaseSha: (if $previousReleaseSha == "" then null else $previousReleaseSha end),
+    previousIdentityComplete: $previousIdentityComplete,
     configuration: {storeSha256:$storeConfigSha256,catalogSha256:$catalogConfigSha256}
-  }' > "${release_dir}/deployment-manifest.json"
+  }' \
+  > "${release_dir}/deployment-manifest.json"
 
 deployment_evidence=${release_dir}/oss-deployment
 rm -rf "${deployment_evidence}"

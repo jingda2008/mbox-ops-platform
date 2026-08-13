@@ -2,10 +2,25 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 const apiProxyTarget = process.env.API_PROXY_TARGET ?? 'http://127.0.0.1:8787'
+const suppliedBuildCommitSha = process.env.APP_COMMIT_SHA ?? process.env.GITHUB_SHA
+const buildCommitSha = suppliedBuildCommitSha && /^[0-9a-f]{40}$/.test(suppliedBuildCommitSha)
+  ? suppliedBuildCommitSha
+  : 'development'
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      name: 'mbox-build-identity',
+      transformIndexHtml(html) {
+        return html.replace(
+          '<meta charset="UTF-8" />',
+          `<meta charset="UTF-8" />\n    <meta name="mbox-build-commit" content="${buildCommitSha}" />`,
+        )
+      },
+    },
+  ],
   build: {
     rolldownOptions: {
       output: {

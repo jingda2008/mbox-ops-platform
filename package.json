@@ -79,7 +79,7 @@
     "tc:verify": "node scripts/build-tc-execution-register.mjs --check",
     "evidence:capture": "node scripts/capture-release-evidence.mjs",
     "release:metadata": "node scripts/verify-release-metadata.mjs",
-    "release:verify": "node scripts/verify-release-smoke.mjs",
+    "release:verify": "node scripts/verify-release-smoke.mjs && node scripts/verify-release-browser.mjs",
     "logs:audit": "node scripts/analyze-runtime-logs.mjs",
     "metrics:verify": "node scripts/verify-runtime-metrics.mjs",
     "evidence:aliyun:build": "node scripts/build-aliyun-evidence-bundle.mjs",

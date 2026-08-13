@@ -223,16 +223,20 @@ test('formal deployment requires OSS evidence before activation and uploads data
   assert.doesNotMatch(activate, /node dist-normalized\/server\/provision-normalized-catalog\.js/)
   assert.match(activate, /candidate_ip=/)
   assert.match(deploy, /rollback-activated-release\.sh/)
+  assert.match(deploy, /deploymentScripts/)
+  assert.match(deploy, /deployment script identity is invalid/)
+  assert.doesNotMatch(deploy, /< deploy\/aliyun\/activate-release\.sh/)
   const rollback = await read('../deploy/aliyun/rollback-activated-release.sh')
   assert.match(rollback, /previousReleaseSha/)
-  assert.match(rollback, /\.commitSha == \$previousReleaseSha/)
+  assert.match(rollback, /verify_public_release "\$\{previous_release_sha\}"/)
+  assert.match(rollback, /docker update --restart=unless-stopped "\$\{active_container\}"/)
   assert.ok(rollback.indexOf('docker start "${rollback_container}"') < rollback.indexOf('rollback_ip='))
   assert.ok(rollback.indexOf('rollback_ip=') < rollback.lastIndexOf('docker stop -t 20 "${active_container}"'))
   assert.match(activate, /\.schemaFlavor == \$schemaFlavor/)
   assert.match(activate, /\.commitSha == \$sha/)
   assert.match(activate, /\.deploymentTier == \$deploymentTier/)
   assert.doesNotMatch(activate, /\.projectionReady/)
-  assert.doesNotMatch(activate, /\.releaseImageDigest ==/)
+  assert.match(activate, /\.releaseImageDigest == \$digest/)
   const smoke = await read('../scripts/verify-release-smoke.mjs')
   assert.match(smoke, /body\.schemaFlavor !== 'normalized-core-v1'/)
   assert.match(smoke, /body\.commitSha !== expectedSha/)
@@ -241,12 +245,19 @@ test('formal deployment requires OSS evidence before activation and uploads data
   assert.match(smoke, /'\/reserve'/)
   assert.match(smoke, /'\/staff\/live'/)
   assert.match(smoke, /text\/html/)
-  assert.match(activate, /'\/guest\?table=W01' '\/reserve' '\/staff\/live'/)
-  assert.match(activate, /Accept: text\/html,application\/xhtml\+xml/)
+  assert.match(activate, /public_verifier=.*verify-public-app\.sh/)
+  assert.match(activate, /verify_public_release 15/)
+  const publicVerifier = await read('../deploy/aliyun/verify-public-app.sh')
+  assert.match(publicVerifier, /<div id="root"><\/div>/)
+  assert.match(publicVerifier, /mbox-build-commit/)
+  assert.match(publicVerifier, /\/assets\/\[\^"\]\+\\\.js/)
+  assert.match(publicVerifier, /releaseImageDigest == \$digest/)
+  assert.doesNotMatch(publicVerifier, /curl -k/)
   assert.doesNotMatch(smoke, /body\.projectionReady/)
   const releaseWorkflow = await read('../.github/workflows/release.yml')
   assert.match(releaseWorkflow, /createHash\('sha256'\)\.update\(fs\.readFileSync\(path\)\)\.digest\('hex'\)/)
   assert.match(releaseWorkflow, /release configuration digest mismatch/)
+  assert.match(releaseWorkflow, /deployment script digest mismatch/)
 })
 
 test('selective collection is outside the request path and only three stores can be written', async () => {
@@ -317,8 +328,23 @@ test('selective observability installer fails visibly before systemd changes whe
 test('rollback audit only reports success after the restored service is verified', async () => {
   const activate = await read('../deploy/aliyun/activate-release.sh')
   assert.match(activate, /emit_release_audit rollback_started/)
-  assert.match(activate, /rollback_response=.*\/api\/ready/)
+  assert.match(activate, /"\$\{public_verifier\}" "\$\{public_url\}" "\$\{previous_release_sha\}"/)
+  assert.match(activate, /previous_release_digest/)
+  assert.match(activate, /docker update --restart=unless-stopped "\$\{active_container\}"/)
   assert.match(activate, /if \[ "\$\{rollback_ok\}" = 1 \]; then[\s\S]*emit_release_audit rollback_succeeded[\s\S]*else[\s\S]*emit_release_audit rollback_failed/)
+  assert.match(activate, /trap 'rollback_on_error 130' INT/)
+  assert.match(activate, /trap 'rollback_on_error 143' TERM/)
+  assert.match(activate, /active_sha=.*docker inspect/)
+  assert.match(activate, /active_digest=.*docker inspect/)
+  assert.match(activate, /\[ "\$\{active_sha\}" = "\$\{release_sha\}" \]/)
+  assert.match(activate, /\[ "\$\{active_digest\}" = "\$\{expected_digest\}" \]/)
+  assert.doesNotMatch(activate, /old_renamed=|promoted=|traffic_switched=/)
+  assert.match(activate, /Reload the canonical upstream unconditionally/)
+  const externalRollback = await read('../deploy/aliyun/rollback-activated-release.sh')
+  assert.match(externalRollback, /active_sha=.*docker inspect/)
+  assert.match(externalRollback, /active_digest=.*docker inspect/)
+  assert.match(externalRollback, /\[ "\$\{active_sha\}" = "\$\{previous_release_sha\}" \]/)
+  assert.doesNotMatch(externalRollback, /failed_renamed=|rollback_promoted=|traffic_switched=/)
 })
 
 test('external rollback starts and verifies the previous SHA before candidate-IP cutover and stopping the failed release', async () => {
@@ -330,6 +356,14 @@ test('external rollback starts and verifies the previous SHA before candidate-IP
   const dockerLog = join(directory, 'docker.log')
   const failedSha = 'a'.repeat(40)
   const previousSha = 'b'.repeat(40)
+  const failedDigest = `sha256:${'c'.repeat(64)}`
+  const previousDigest = `sha256:${'d'.repeat(64)}`
+  const deploymentScriptNames = [
+    'deploy-release.sh',
+    'activate-release.sh', 'rollback-activated-release.sh', 'verify-public-app.sh',
+    'stage-release-evidence.sh', 'upload-oss-verified.sh', 'send-sls-events.sh',
+    'prune-oss-images.sh',
+  ]
   await Promise.all([
     mkdir(failedRelease, { recursive: true }),
     mkdir(previousRelease, { recursive: true }),
@@ -338,13 +372,31 @@ test('external rollback starts and verifies the previous SHA before candidate-IP
   await writeFile(join(failedRelease, 'deployment-manifest.json'), JSON.stringify({
     rollbackContainer: 'mbox-app-rollback-previous',
     releaseSha: failedSha,
+    tier: 'validation',
     previousReleaseSha: previousSha,
     previousReleaseDir: previousRelease,
   }))
-  await writeFile(join(previousRelease, 'release-manifest.json'), JSON.stringify({ releaseSha: previousSha }))
+  await writeFile(join(previousRelease, 'release-manifest.json'), JSON.stringify({
+    releaseSha: previousSha, imageDigest: previousDigest, migration: { count: 40 },
+  }))
+  await writeFile(join(previousRelease, 'deployment-manifest.json'), JSON.stringify({ tier: 'validation' }))
   await writeFile(join(previousRelease, 'app.env'), 'MBOX_ENV=test\n')
+  await writeFile(join(failedRelease, 'verify-public-app.sh'), `#!/bin/sh
+printf '%s\n' "$*" >> "$MBOX_PUBLIC_VERIFY_LOG"
+exit 0
+`, { mode: 0o700 })
+  for (const scriptName of deploymentScriptNames.filter((name) => name !== 'verify-public-app.sh')) {
+    await writeFile(join(failedRelease, scriptName), `#!/bin/sh\nprintf '${scriptName}\\n'\n`, { mode: 0o700 })
+  }
+  const deploymentScripts = Object.fromEntries(await Promise.all(deploymentScriptNames.map(async (scriptName) => [
+    scriptName.replace(/\.sh$/, '').replaceAll('-', '_'),
+    { file: scriptName, sha256: sha256(await readFile(join(failedRelease, scriptName))) },
+  ])))
+  await writeFile(join(failedRelease, 'release-manifest.json'), JSON.stringify({
+    releaseSha: failedSha, imageDigest: failedDigest, migration: { count: 40 }, deploymentScripts,
+  }))
   await writeFile(join(fakeBin, 'curl'), `#!/bin/sh
-printf '{"status":"ready","commitSha":"${previousSha}"}\n'
+printf '{"status":"ready","commitSha":"${previousSha}","releaseImageDigest":"${previousDigest}","schemaFlavor":"normalized-core-v1","schemaVersion":40,"deploymentTier":"validation"}\n'
 `, { mode: 0o700 })
   await writeFile(join(fakeBin, 'docker'), `#!/usr/bin/env bash
 set -euo pipefail
@@ -355,6 +407,8 @@ if [ "$1" = inspect ]; then
   arguments="$*"
   if [[ "\${arguments}" == *org.opencontainers.image.revision* ]]; then
     if [ "\${name}" = mbox-app ]; then printf '${failedSha}\\n'; else printf '${previousSha}\\n'; fi
+  elif [[ "\${arguments}" == *'{{.Image}}'* ]]; then
+    if [ "\${name}" = mbox-app ]; then printf '${failedDigest}\\n'; else printf '${previousDigest}\\n'; fi
   elif [[ "\${arguments}" == *NetworkSettings.Networks* ]]; then
     printf '172.18.0.9\\n'
   elif [[ "\${arguments}" == *State.Health* ]]; then
@@ -380,6 +434,7 @@ exit 0
     PATH: `${fakeBin}:${process.env.PATH}`,
     MBOX_INSTALL_ROOT: installRoot,
     MBOX_DOCKER_LOG: dockerLog,
+    MBOX_PUBLIC_VERIFY_LOG: join(directory, 'public-verify.log'),
   }
   try {
     const result = spawnSync('bash', [
@@ -396,6 +451,8 @@ exit 0
     assert.ok(startPrevious >= 0)
     assert.ok(candidateReload > startPrevious)
     assert.ok(stopFailed > candidateReload)
+    const publicChecks = await readFile(environment.MBOX_PUBLIC_VERIFY_LOG, 'utf8')
+    assert.match(publicChecks, new RegExp(`${previousSha} ${previousDigest.replace(':', '\\:')} 40 validation 15`))
     assert.equal(await readlink(join(installRoot, 'current')), previousRelease)
     assert.equal(await readlink(join(installRoot, '.env')), join(previousRelease, 'app.env'))
 
@@ -518,7 +575,21 @@ test('release smoke fails closed on a missing digest and reports the observed di
   const releaseDigest = `sha256:${'b'.repeat(64)}`
   let responseDigest
   let blockedBrowserRoute = null
+  let invalidShellRoute = null
+  let blockAsset = false
+  let transientAssetFailures = 0
+  let breakRuntime = false
   const server = createServer((request, response) => {
+    if (request.url === '/assets/app.js') {
+      const transientFailure = transientAssetFailures > 0
+      if (transientFailure) transientAssetFailures -= 1
+      response.statusCode = blockAsset ? 404 : transientFailure ? 503 : 200
+      response.setHeader('content-type', blockAsset || transientFailure ? 'text/plain' : 'application/javascript; charset=utf-8')
+      response.end(blockAsset || transientFailure ? 'missing' : breakRuntime
+        ? 'throw new Error("broken runtime")'
+        : 'const root=document.querySelector("#root");const main=document.createElement("main");main.textContent="M-BOX";root.append(main)')
+      return
+    }
     if (request.url !== '/api/ready') {
       if (request.url === blockedBrowserRoute) {
         response.statusCode = 404
@@ -527,7 +598,9 @@ test('release smoke fails closed on a missing digest and reports the observed di
       }
       if (request.headers.accept?.includes('text/html')) {
         response.setHeader('content-type', 'text/html; charset=utf-8')
-        response.end('<!doctype html><html><title>M-BOX</title></html>')
+        response.end(request.url === invalidShellRoute
+          ? `<!doctype html><html><head><meta name="mbox-build-commit" content="${releaseSha}" /></head><title>M-BOX</title></html>`
+          : `<!doctype html><html><head><meta name="mbox-build-commit" content="${releaseSha}" /></head><body><div id="root"></div><script type="module" src="/assets/app.js"></script></body></html>`)
         return
       }
       response.statusCode = 404
@@ -538,7 +611,7 @@ test('release smoke fails closed on a missing digest and reports the observed di
     response.setHeader('content-type', 'application/json')
     response.end(JSON.stringify({
       status: 'ready', commitSha: releaseSha, releaseImageDigest: responseDigest,
-      schemaFlavor: 'normalized-core-v1', schemaVersion: 34,
+      schemaFlavor: 'normalized-core-v1', schemaVersion: 34, deploymentTier: 'validation',
     }))
   })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -549,6 +622,7 @@ test('release smoke fails closed on a missing digest and reports the observed di
     MBOX_RELEASE_EXPECTED_SHA: releaseSha,
     MBOX_RELEASE_EXPECTED_DIGEST: releaseDigest,
     MBOX_RELEASE_EXPECTED_SCHEMA_VERSION: '34',
+    MBOX_RELEASE_EXPECTED_TIER: 'validation',
     MBOX_RELEASE_SMOKE_ATTEMPTS: '1',
     MBOX_RELEASE_SMOKE_WAIT_MS: '1',
   }
@@ -566,6 +640,31 @@ test('release smoke fails closed on a missing digest and reports the observed di
     assert.notEqual(missingBrowserRoute.status, 0)
     assert.match(missingBrowserRoute.stderr, /\/staff\/live=HTTP 404/)
     blockedBrowserRoute = null
+    invalidShellRoute = '/reserve'
+    const invalidShell = await runChild(process.execPath, [new URL('./verify-release-smoke.mjs', import.meta.url).pathname], {
+      env: environment, stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    assert.notEqual(invalidShell.status, 0)
+    assert.match(invalidShell.stderr, /\/reserve=root mount missing/)
+    invalidShellRoute = null
+    blockAsset = true
+    const missingAsset = await runChild(process.execPath, [new URL('./verify-release-smoke.mjs', import.meta.url).pathname], {
+      env: environment, stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    assert.notEqual(missingAsset.status, 0)
+    assert.match(missingAsset.stderr, /\/assets\/app\.js=HTTP 404/)
+    blockAsset = false
+    transientAssetFailures = 1
+    const recoveredAsset = await runChild(process.execPath, [new URL('./verify-release-smoke.mjs', import.meta.url).pathname], {
+      env: { ...environment, MBOX_RELEASE_SMOKE_ATTEMPTS: '2' }, stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    assert.equal(recoveredAsset.status, 0, recoveredAsset.stderr)
+    transientAssetFailures = 1
+    const shellRecoveredAsset = await runChild('bash', [
+      new URL('../deploy/aliyun/verify-public-app.sh', import.meta.url).pathname,
+      environment.MBOX_RELEASE_SMOKE_URL, releaseSha, releaseDigest, '34', 'validation', '2', '1',
+    ], { env: environment, stdio: ['ignore', 'pipe', 'pipe'] })
+    assert.equal(shellRecoveredAsset.status, 0, shellRecoveredAsset.stderr)
     const passed = await runChild(process.execPath, [new URL('./verify-release-smoke.mjs', import.meta.url).pathname], {
       env: environment, stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -573,6 +672,37 @@ test('release smoke fails closed on a missing digest and reports the observed di
     const result = JSON.parse(passed.stdout)
     assert.equal(result.digest, releaseDigest)
     assert.deepEqual(result.browserRoutes, ['/', '/guest?table=W01', '/reserve', '/staff/live'])
+
+    const renderedVerifier = new URL('./verify-release-browser.mjs', import.meta.url).pathname
+    const renderedPassed = await runChild(process.execPath, [renderedVerifier], {
+      env: environment, stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    assert.equal(renderedPassed.status, 0, renderedPassed.stderr)
+    breakRuntime = true
+    const renderedBroken = await runChild(process.execPath, [renderedVerifier], {
+      env: environment, stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    assert.notEqual(renderedBroken.status, 0)
+    assert.match(renderedBroken.stderr, /broken runtime/)
+    breakRuntime = false
+
+    const shellVerifier = new URL('../deploy/aliyun/verify-public-app.sh', import.meta.url).pathname
+    const shellPassed = await runChild('bash', [
+      shellVerifier, environment.MBOX_RELEASE_SMOKE_URL, releaseSha, releaseDigest, '34', 'validation', '1', '1',
+    ], { env: environment, stdio: ['ignore', 'pipe', 'pipe'] })
+    assert.equal(shellPassed.status, 0, shellPassed.stderr)
+    blockAsset = true
+    const shellMissingAsset = await runChild('bash', [
+      shellVerifier, environment.MBOX_RELEASE_SMOKE_URL, releaseSha, releaseDigest, '34', 'validation', '1', '1',
+    ], { env: environment, stdio: ['ignore', 'pipe', 'pipe'] })
+    assert.notEqual(shellMissingAsset.status, 0)
+    blockAsset = false
+
+    const invalidBounds = await runChild(process.execPath, [new URL('./verify-release-smoke.mjs', import.meta.url).pathname], {
+      env: { ...environment, MBOX_RELEASE_SMOKE_ATTEMPTS: '31' }, stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    assert.notEqual(invalidBounds.status, 0)
+    assert.match(invalidBounds.stderr, /attempts must be an integer from 1 to 30/)
   } finally {
     await new Promise((resolve) => server.close(resolve))
   }

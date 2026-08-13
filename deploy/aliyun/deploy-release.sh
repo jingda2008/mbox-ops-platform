@@ -61,6 +61,25 @@ done
 test "$(shasum -a 256 "${bundle_dir}/${store_config_name}" | awk '{print $1}')" = "${store_config_sha}"
 test "$(shasum -a 256 "${bundle_dir}/${catalog_config_name}" | awk '{print $1}')" = "${catalog_config_sha}"
 
+deployment_script_rows=$(node -e "
+  const fs=require('node:fs');
+  const manifest=JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+  const scripts=manifest.deploymentScripts;
+  if (!scripts || Object.keys(scripts).length !== 8) throw new Error('deployment script manifest is incomplete');
+  for (const entry of Object.values(scripts)) {
+    if (!entry || !/^[a-z0-9-]+\\.sh$/.test(entry.file) || !/^[0-9a-f]{64}$/.test(entry.sha256)) {
+      throw new Error('deployment script identity is invalid');
+    }
+    process.stdout.write(entry.file + '\\t' + entry.sha256 + '\\n');
+  }
+" "${manifest}")
+while IFS=$'\t' read -r script_name script_sha; do
+  test -f "${bundle_dir}/${script_name}"
+  test "$(shasum -a 256 "${bundle_dir}/${script_name}" | awk '{print $1}')" = "${script_sha}"
+done <<< "${deployment_script_rows}"
+expected_deploy_sha=$(node -e "const fs=require('node:fs');const m=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(m.deploymentScripts.deploy_release.sha256)" "${manifest}")
+test "$(shasum -a 256 "${BASH_SOURCE[0]}" | awk '{print $1}')" = "${expected_deploy_sha}"
+
 actual_archive_sha=$(shasum -a 256 "${bundle_dir}/${archive_name}" | awk '{print $1}')
 test "${actual_archive_sha}" = "${archive_sha}"
 
@@ -114,6 +133,9 @@ cp "${bundle_dir}/release-manifest.json" "${release_metadata}/"
 cp "${bundle_dir}/migration-manifest.json" "${release_metadata}/"
 cp "${bundle_dir}/${store_config_name}" "${release_metadata}/"
 cp "${bundle_dir}/${catalog_config_name}" "${release_metadata}/"
+while IFS=$'\t' read -r script_name _; do
+  cp "${bundle_dir}/${script_name}" "${release_metadata}/"
+done <<< "${deployment_script_rows}"
 evidence_dir=${bundle_dir}/oss-ready-evidence
 node scripts/build-aliyun-evidence-bundle.mjs \
   --output "${evidence_dir}" \
@@ -163,19 +185,16 @@ rsync -a --partial "${rsync_resume_option}" \
   -e "ssh -i '${ssh_key}' -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p '${ssh_port}'" \
   "${bundle_dir}/" "${ssh_target}:${remote_release_dir}/"
 
-for helper in upload-oss-verified.sh stage-release-evidence.sh send-sls-events.sh prune-oss-images.sh rollback-activated-release.sh; do
-  scp "${scp_options[@]}" "deploy/aliyun/${helper}" "${ssh_target}:${remote_release_dir}/${helper}"
-done
 ssh "${ssh_options[@]}" "${ssh_target}" \
-  "chmod 0700 '${remote_release_dir}'/*.sh && '${remote_release_dir}/stage-release-evidence.sh' '${remote_release_dir}' '${remote_release_dir}/oss-ready-evidence' '${MBOX_RELEASE_TAG}'"
+  "cd '${remote_release_dir}' && test \"\$(jq -r '.deploymentScripts | length' release-manifest.json)\" = 8 && jq -er '.deploymentScripts | to_entries[] | [.value.file,.value.sha256] | @tsv' release-manifest.json | while IFS=\$'\\t' read -r file sha; do test \"\$(sha256sum \"\$file\" | awk '{print \$1}')\" = \"\$sha\" || exit 1; done && chmod 0700 ./*.sh && './stage-release-evidence.sh' '${remote_release_dir}' '${remote_release_dir}/oss-ready-evidence' '${MBOX_RELEASE_TAG}'"
 
 ssh "${ssh_options[@]}" "${ssh_target}" \
-  bash -s -- "${remote_release_dir}" "${deployment_tier}" "${public_url}" "${backup_max_age_minutes}" \
-  < deploy/aliyun/activate-release.sh
+  "'${remote_release_dir}/activate-release.sh' '${remote_release_dir}' '${deployment_tier}' '${public_url}' '${backup_max_age_minutes}'"
 
 if ! MBOX_RELEASE_SMOKE_URL="${public_url}" \
   MBOX_RELEASE_EXPECTED_SHA="${release_sha}" \
   MBOX_RELEASE_EXPECTED_DIGEST="${image_digest}" \
+  MBOX_RELEASE_EXPECTED_TIER="${deployment_tier}" \
   MBOX_RELEASE_EXPECTED_SCHEMA_VERSION="$(read_manifest migration.count)" \
     npm run release:verify; then
   ssh "${ssh_options[@]}" "${ssh_target}" \

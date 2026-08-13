@@ -5,6 +5,8 @@ import { resolve } from 'node:path'
 const root = resolve(import.meta.dirname, '..')
 const baselinePath = resolve(root, 'docs/comprehensive-operating-test-cases.md')
 const qualitySupplementPath = resolve(root, 'docs/tc-time-capacity-performance-1.0.0-rc.68.md')
+const normalizedCorePath = resolve(root, 'docs/quality/normalized-core-v1-test-case-register.md')
+const releaseRouteGatePath = resolve(root, 'docs/tc-release-route-gate-1.0.0-rc.79.md')
 const reviewedBaselinePath = resolve(root, 'docs/quality/mbox-required-tc-baseline-v1.txt')
 const packageDocument = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'))
 const version = packageDocument.version
@@ -13,6 +15,8 @@ const reportPath = resolve(root, `docs/tc-execution-report-${versionSlug}.md`)
 const csvPath = resolve(root, `docs/tc-execution-register-${versionSlug}.csv`)
 const blockersPath = resolve(root, `docs/tc-release-blockers-${versionSlug}.csv`)
 const qualitySupplementReference = 'docs/tc-time-capacity-performance-1.0.0-rc.68.md'
+const normalizedCoreReference = 'docs/quality/normalized-core-v1-test-case-register.md'
+const releaseRouteGateReference = 'docs/tc-release-route-gate-1.0.0-rc.79.md'
 const checkMode = process.argv.includes('--check')
 const requireReleasePass = process.argv.includes('--require-release-pass')
 const printReviewedBaseline = process.argv.includes('--print-reviewed-baseline')
@@ -62,6 +66,33 @@ if (qualitySupplementCases.map((item) => item.id).toSorted().join(',') !== expec
   throw new Error('Time/capacity/performance TC baseline was replaced or has a gap')
 }
 
+function parseMarkdownGate(path, pattern, expectedPrefix) {
+  const document = readFileSync(path, 'utf8')
+  const cases = [...document.matchAll(pattern)].map((match) => ({
+    id: match[1],
+    priority: match[2],
+    scenario: match[3].trim(),
+    expected: match[4].trim(),
+    status: match[5].trim(),
+  }))
+  if (cases.length === 0) throw new Error(`${expectedPrefix} gate contains no test cases`)
+  if (new Set(cases.map((item) => item.id)).size !== cases.length) {
+    throw new Error(`${expectedPrefix} gate contains duplicate IDs`)
+  }
+  return cases
+}
+
+const normalizedCoreCases = parseMarkdownGate(
+  normalizedCorePath,
+  /^\| (NC-[A-Z]+-\d{3}) \| (P[01]) \| ([^|]+) \| ([^|]+) \| ([^|]+) \|/gm,
+  'Normalized core',
+)
+const releaseRouteGateCases = parseMarkdownGate(
+  releaseRouteGatePath,
+  /^\| (AR\d{2}-\d{3}) \| (P[01]) \| ([^|]+) \| ([^|]+) \| [^|]+ \| ([^|]+) \|/gm,
+  'Release route',
+)
+
 function reviewedDefinitionDigest(testCase) {
   return createHash('sha256').update(JSON.stringify([
     testCase.id, testCase.priority, testCase.scenario, testCase.expected,
@@ -75,7 +106,7 @@ function reviewedBaselineDocument(cases) {
     .join('\n')}\n`
 }
 
-const allBaselineCases = [...testCases, ...qualitySupplementCases]
+const allBaselineCases = [...testCases, ...qualitySupplementCases, ...normalizedCoreCases, ...releaseRouteGateCases]
 if (printReviewedBaseline) {
   process.stdout.write(reviewedBaselineDocument(allBaselineCases))
   process.exit(0)
@@ -295,6 +326,8 @@ const releaseBlocking = rows.filter((row) => row.result !== '通过' && (row.pri
 const supplementalReleaseBlocking = qualitySupplementCases.filter((item) => (
   item.status !== '通过' && (item.priority === 'P0' || item.priority === 'P1')
 ))
+const normalizedReleaseBlocking = normalizedCoreCases.filter((item) => item.status !== '通过')
+const routeReleaseBlocking = releaseRouteGateCases.filter((item) => item.status !== '通过')
 const p0p1Breakdown = releaseBlocking.reduce((summary, row) => {
   const key = `${row.priority}-${row.result}`
   summary[key] = (summary[key] ?? 0) + 1
@@ -329,6 +362,14 @@ const blockersCsv = csvDocument(
       row.id, row.priority, row.status, '专项门禁', '质量负责人/对应业务负责人',
       row.scenario, row.expected, `见 ${qualitySupplementReference}`,
     ]),
+    ...normalizedReleaseBlocking.map((row) => [
+      row.id, row.priority, row.status, '规范化候选门禁', '质量负责人/对应业务负责人',
+      row.scenario, row.expected, `见 ${normalizedCoreReference}`,
+    ]),
+    ...routeReleaseBlocking.map((row) => [
+      row.id, row.priority, row.status, '发布入口门禁', '发布负责人',
+      row.scenario, row.expected, `见 ${releaseRouteGateReference}`,
+    ]),
   ],
 )
 if (blockersCsv.includes(root)) throw new Error('Tracked TC artifacts must not contain checkout-specific absolute paths')
@@ -349,6 +390,8 @@ const report = `# M-BOX 213条经营TC执行报告
 
 另有 **${qualitySupplementCases.length}条** \`TME/CAP/RPF/DAT\` 增量专项TC；其失败、未通过、未执行、待执行或阻塞项同样阻止商业生产发布，状态以专项文件和不可变运行证据为准。
 
+规范化候选 **${normalizedCoreCases.length}条** \`NC-*\` 和发布入口 **${releaseRouteGateCases.length}条** \`AR79-*\` 也属于同一门禁；不能只检查原213条经营TC和性能专项。
+
 | 状态 | 数量 | 判定口径 |
 |---|---:|---|
 | 通过 | ${counts['通过'] ?? 0} | 只有提交级或现场证据账本可以把当前候选改为通过；受版本控制的计划表不预填通过 |
@@ -356,7 +399,7 @@ const report = `# M-BOX 213条经营TC执行报告
 | 阻塞 | ${counts['阻塞'] ?? 0} | 缺真实支付参数、外部流水或第三方生产通道 |
 | 失败 | ${counts['失败'] ?? 0} | 已执行但结果不符合预期；本轮为0 |
 
-**商业生产发布结论：不通过发布门禁。** 213条经营基线仍有 **${releaseBlocking.length}条 P0/P1** 未达到“通过”：${p0p1Breakdown['P0-阻塞'] ?? 0}条P0阻塞、${p0p1Breakdown['P0-未执行'] ?? 0}条P0未执行、${p0p1Breakdown['P1-阻塞'] ?? 0}条P1阻塞、${p0p1Breakdown['P1-未执行'] ?? 0}条P1未执行。另有 **${supplementalReleaseBlocking.length}条专项P0/P1** 未完成，已一并写入发布阻断CSV。
+**商业生产发布结论：不通过发布门禁。** 213条经营基线仍有 **${releaseBlocking.length}条 P0/P1** 未达到“通过”：${p0p1Breakdown['P0-阻塞'] ?? 0}条P0阻塞、${p0p1Breakdown['P0-未执行'] ?? 0}条P0未执行、${p0p1Breakdown['P1-阻塞'] ?? 0}条P1阻塞、${p0p1Breakdown['P1-未执行'] ?? 0}条P1未执行。另有 **${supplementalReleaseBlocking.length}条专项P0/P1**、**${normalizedReleaseBlocking.length}条规范化候选P0/P1**、**${routeReleaseBlocking.length}条发布入口P0/P1** 未完成，已一并写入发布阻断CSV。
 
 工程覆盖度与验收状态是两套口径：代码存在不等于现场验收通过。未通过项中，外部依赖${externalDependency.size}条、代码支持但待现场验证${codeSupportedFieldPending.size}条、明确能力缺口${capabilityGap.size}条、部分实现${partialGap.size}条；其余属于现场执行或云端复测项。
 
@@ -399,8 +442,14 @@ writeOrVerify(csvPath, csv)
 writeOrVerify(blockersPath, blockersCsv)
 writeOrVerify(reportPath, report)
 
-if (requireReleasePass && (releaseBlocking.length > 0 || supplementalReleaseBlocking.length > 0)) {
-  throw new Error(`Commercial release denied: ${releaseBlocking.length} operating P0/P1 TCs and ${supplementalReleaseBlocking.length} supplemental P0/P1 TCs are unfinished`)
+const allReleaseBlocking = [
+  ...releaseBlocking,
+  ...supplementalReleaseBlocking,
+  ...normalizedReleaseBlocking,
+  ...routeReleaseBlocking,
+]
+if (requireReleasePass && allReleaseBlocking.length > 0) {
+  throw new Error(`Commercial release denied: ${releaseBlocking.length} operating, ${supplementalReleaseBlocking.length} supplemental, ${normalizedReleaseBlocking.length} normalized-core and ${routeReleaseBlocking.length} route-gate P0/P1 TCs are unfinished`)
 }
 
 console.log(JSON.stringify({
@@ -411,7 +460,9 @@ console.log(JSON.stringify({
   counts,
   operatingReleaseBlocking: releaseBlocking.length,
   supplementalReleaseBlocking: supplementalReleaseBlocking.length,
-  releaseBlocking: releaseBlocking.length + supplementalReleaseBlocking.length,
+  normalizedReleaseBlocking: normalizedReleaseBlocking.length,
+  routeReleaseBlocking: routeReleaseBlocking.length,
+  releaseBlocking: allReleaseBlocking.length,
   reportPath,
   csvPath,
   blockersPath,

@@ -467,6 +467,7 @@ jobs:
             --output release-artifact/migration-manifest.json >/dev/null
           cp deploy/normalized-store/mbox-lujiazui.store.json release-artifact/
           cp config/menu-catalog-2026-07-27.json release-artifact/
+          cp deploy/aliyun/{deploy-release,activate-release,rollback-activated-release,verify-public-app,stage-release-evidence,upload-oss-verified,send-sls-events,prune-oss-images}.sh release-artifact/
           MBOX_BUNDLE_ARCHIVE="${archive}" \
           MBOX_BUNDLE_SHA="${GITHUB_SHA}" \
           MBOX_BUNDLE_VERSION="${VERSION}" \
@@ -475,6 +476,7 @@ jobs:
           MBOX_MIGRATION_MANIFEST=release-artifact/migration-manifest.json \
           MBOX_STORE_CONFIG=release-artifact/mbox-lujiazui.store.json \
           MBOX_CATALOG_CONFIG=release-artifact/menu-catalog-2026-07-27.json \
+          MBOX_DEPLOYMENT_SCRIPT_DIR=release-artifact \
           MBOX_BUNDLE_MANIFEST=release-artifact/release-manifest.json \
             node scripts/write-release-bundle-manifest.mjs >/dev/null
           (

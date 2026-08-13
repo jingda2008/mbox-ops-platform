@@ -18,7 +18,9 @@ describe('loadNormalizedRuntimeConfig', () => {
     const config = loadNormalizedRuntimeConfig(base)
     expect(config).toMatchObject({
       nodeEnv: 'test',
+      deploymentTier: 'validation',
       payment: null,
+      metricsToken: null,
       guestPaymentMode: 'simulation',
       inventoryEnforcementMode: 'audit_only',
       schemaFlavor: NORMALIZED_SCHEMA_FLAVOR,
@@ -47,6 +49,7 @@ describe('loadNormalizedRuntimeConfig', () => {
         'MBOX_TENANT_ID',
         'MBOX_STORE_ID',
         'MBOX_NORMALIZED_SECRET',
+        'MBOX_METRICS_TOKEN',
         'MBOX_PAYMENT_PROVIDER',
         'POSTAR_AGENCY_ID',
         'POSTAR_MERCHANT_ID',
@@ -61,6 +64,8 @@ describe('loadNormalizedRuntimeConfig', () => {
     const production = {
       ...base,
       NODE_ENV: 'production',
+      MBOX_DEPLOYMENT_TIER: 'production',
+      MBOX_METRICS_TOKEN: 'production-metrics-token-0123456789abcdef',
       MBOX_PAYMENT_PROVIDER: 'postar',
       POSTAR_AGENCY_ID: 'agency-1',
       POSTAR_MERCHANT_ID: 'merchant-1',
@@ -78,6 +83,37 @@ describe('loadNormalizedRuntimeConfig', () => {
     })).toThrowError(NormalizedRuntimeConfigurationError)
   })
 
+  it('allows a production-optimized validation runtime without claiming commercial readiness', () => {
+    const validation = loadNormalizedRuntimeConfig({
+      ...base,
+      NODE_ENV: 'production',
+      MBOX_DEPLOYMENT_TIER: 'validation',
+      MBOX_METRICS_TOKEN: 'validation-metrics-token-0123456789abcdef',
+      MBOX_GUEST_PAYMENT_MODE: 'simulation',
+      MBOX_INVENTORY_ENFORCEMENT_MODE: 'audit_only',
+      MBOX_START_WORKERS: 'false',
+    })
+    expect(validation).toMatchObject({
+      nodeEnv: 'production',
+      deploymentTier: 'validation',
+      payment: null,
+      guestPaymentMode: 'simulation',
+      inventoryEnforcementMode: 'audit_only',
+      startWorkers: false,
+    })
+  })
+
+  it('rejects invalid deployment tiers and a production tier outside NODE_ENV production', () => {
+    expect(() => loadNormalizedRuntimeConfig({
+      ...base,
+      MBOX_DEPLOYMENT_TIER: 'staging',
+    })).toThrowError(NormalizedRuntimeConfigurationError)
+    expect(() => loadNormalizedRuntimeConfig({
+      ...base,
+      MBOX_DEPLOYMENT_TIER: 'production',
+    })).toThrowError(NormalizedRuntimeConfigurationError)
+  })
+
   it('allows inventory audit mode only outside production', () => {
     expect(loadNormalizedRuntimeConfig({
       ...base,
@@ -86,6 +122,8 @@ describe('loadNormalizedRuntimeConfig', () => {
     expect(() => loadNormalizedRuntimeConfig({
       ...base,
       NODE_ENV: 'production',
+      MBOX_DEPLOYMENT_TIER: 'production',
+      MBOX_METRICS_TOKEN: 'production-metrics-token-0123456789abcdef',
       MBOX_PAYMENT_PROVIDER: 'postar',
       POSTAR_AGENCY_ID: 'agency-1',
       POSTAR_MERCHANT_ID: 'merchant-1',
@@ -152,6 +190,8 @@ describe('loadNormalizedRuntimeConfig', () => {
     expect(() => loadNormalizedRuntimeConfig({
       ...base,
       NODE_ENV: 'production',
+      MBOX_DEPLOYMENT_TIER: 'production',
+      MBOX_METRICS_TOKEN: 'production-metrics-token-0123456789abcdef',
       MBOX_PAYMENT_PROVIDER: 'postar',
       POSTAR_AGENCY_ID: 'agency-1',
       POSTAR_MERCHANT_ID: 'merchant-1',

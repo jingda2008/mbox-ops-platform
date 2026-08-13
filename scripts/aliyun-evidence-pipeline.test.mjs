@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -97,8 +97,10 @@ test('formal deployment requires OSS evidence before activation and uploads data
   assert.match(activate, /platform\.os == "linux" and \.platform\.architecture == "amd64"/)
   assert.match(activate, /archive_config_digest=/)
   assert.match(activate, /set_env APP_COMMIT_SHA "\$\{release_sha\}"/)
+  assert.match(activate, /set_env MBOX_DEPLOYMENT_TIER "\$\{deployment_tier\}"/)
   assert.match(activate, /\.schemaFlavor == \$schemaFlavor/)
   assert.match(activate, /\.commitSha == \$sha/)
+  assert.match(activate, /\.deploymentTier == \$deploymentTier/)
   assert.doesNotMatch(activate, /\.projectionReady/)
   assert.doesNotMatch(activate, /\.releaseImageDigest ==/)
   const smoke = await read('../scripts/verify-release-smoke.mjs')
@@ -109,10 +111,16 @@ test('formal deployment requires OSS evidence before activation and uploads data
 
 test('selective collection is outside the request path and only three stores can be written', async () => {
   const dockerfile = await read('../Dockerfile')
+  const normalizedDockerfile = await read('../Dockerfile.normalized')
+  const installer = await read('../deploy/aliyun/install-selective-observability.sh')
   const service = await read('../deploy/aliyun/systemd/mbox-sls-collector.service')
   const collector = await read('../deploy/aliyun/collect-selective-events.sh')
   const sender = await read('../deploy/aliyun/send-sls-events.sh')
   assert.match(dockerfile, /filter-sls-events\.mjs/)
+  assert.match(normalizedDockerfile, /filter-sls-events\.mjs/)
+  assert.match(installer, /node --check "\$\{filter_path\}"/)
+  assert.match(installer, /normalized image is missing \$\{filter_path\}/)
+  assert.match(installer, /selective observability installation failed:/)
   assert.match(service, /Type=oneshot/)
   assert.match(service, /IOSchedulingClass=idle/)
   assert.match(service, /ProtectHome=read-only/)
@@ -127,6 +135,41 @@ test('selective collection is outside the request path and only three stores can
   assert.match(collector, /cp "\$\{remainder\}" "\$\{queue_file\}"/)
   assert.doesNotMatch(collector, /: > "\$\{queue_file\}"/)
   assert.doesNotMatch(sender, /requestBody|paymentPayload|phoneNumber|idCard/)
+})
+
+test('selective observability installer fails visibly before systemd changes when the image asset is missing', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mbox-observability-installer-'))
+  const fakeBin = join(directory, 'bin')
+  const marker = join(directory, 'systemctl-invoked')
+  await mkdir(fakeBin, { recursive: true })
+  const executable = { mode: 0o700 }
+  await Promise.all([
+    writeFile(join(fakeBin, 'id'), '#!/bin/sh\nprintf "0\\n"\n', executable),
+    writeFile(join(fakeBin, 'curl'), '#!/bin/sh\nprintf "mbox-runtime-role\\n"\n', executable),
+    writeFile(join(fakeBin, 'docker'), `#!/bin/sh\nif [ "$1" = "container" ] && [ "$2" = "inspect" ]; then exit 0; fi\nif [ "$1" = "exec" ]; then exit 1; fi\nexit 0\n`, executable),
+    writeFile(join(fakeBin, 'aliyun'), '#!/bin/sh\nexit 0\n', executable),
+    writeFile(join(fakeBin, 'jq'), '#!/bin/sh\nexit 0\n', executable),
+    writeFile(join(fakeBin, 'flock'), '#!/bin/sh\nexit 0\n', executable),
+    writeFile(join(fakeBin, 'systemctl'), '#!/bin/sh\nprintf "called\\n" > "$MBOX_SYSTEMCTL_MARKER"\nexit 0\n', executable),
+  ])
+  try {
+    const result = spawnSync('bash', [new URL('../deploy/aliyun/install-selective-observability.sh', import.meta.url).pathname], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH}`,
+        MBOX_INSTALL_ROOT: join(directory, 'install'),
+        MBOX_SYSTEMCTL_MARKER: marker,
+      },
+    })
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /normalized image is missing \/app\/scripts\/filter-sls-events\.mjs/)
+    assert.doesNotMatch(result.stdout, /selective_observability=installed/)
+    const markerExists = await access(marker).then(() => true, () => false)
+    assert.equal(markerExists, false)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
 })
 
 test('rollback audit only reports success after the restored service is verified', async () => {

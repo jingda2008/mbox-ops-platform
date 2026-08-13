@@ -25,6 +25,7 @@ curl --fail --silent --show-error --max-time 5 "${CURRENT_HEALTH_URL}/api/ready"
 
 MBOX_DEPLOY_APPLY=1 \
   NORMALIZED_VERIFY_CONFIRM=VERIFY_ISOLATED_CANDIDATE \
+  DEPLOYMENT_TIER="${DEPLOYMENT_TIER:-validation}" \
   "${SCRIPT_DIR}/verify-candidate.sh"
 
 docker container inspect "$PROTECTED_CONTAINER_NAME" >/dev/null 2>&1 \

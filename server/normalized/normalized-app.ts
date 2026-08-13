@@ -48,6 +48,8 @@ import { OrderRepository } from './order-repository.js'
 import { paymentApiPlugin, PaymentProviderVerificationError, type PaymentProviderVerifier } from './payment-api.js'
 import { PaymentCommandService } from './payment-command-service.js'
 import { NormalizedPaymentCapabilityAuthorization } from './payment-security-policy.js'
+import { PostgresCashierWorkbenchQuery } from './cashier-workbench-query.js'
+import { registerNormalizedObservability } from './normalized-observability.js'
 import { PerformanceCommandService } from './performance-command-service.js'
 import { PerformerRepository } from './performer-repository.js'
 import { PostarRsaPaymentProviderVerifier } from './postar-provider-verifier.js'
@@ -184,6 +186,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     app.log.error({ errorCode: safeErrorCode(error) }, 'normalized database pool idle client failed')
   })
   const transactions = new ScopedPostgresTransactionRunner(pool)
+  registerNormalizedObservability(app, options.config, transactions)
   const commandExecutor = new NormalizedCommandExecutor(transactions)
   const businessClock = new PostgresNormalizedBusinessClock(transactions)
   const trustedScope = fixedStoreScopeResolver(scope)
@@ -361,6 +364,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       commands: paymentCommands,
       providerVerifier: options.paymentProviderVerifier ?? paymentVerifier(options.config, scope),
       reconciliationQuery: new PostgresReconciliationQuery(transactions),
+      cashierWorkbenchQuery: new PostgresCashierWorkbenchQuery(transactions),
       resolveActorContext: async (request) => {
         if (isGuestRequest(request)) {
           const context = await guestReservationContext(request)
@@ -728,24 +732,14 @@ function registerSystemRoutes(
   const version = Object.freeze({
     commitSha: config.commitSha,
     schemaFlavor: config.schemaFlavor,
+    deploymentTier: config.deploymentTier,
     inventoryEnforcementMode: config.inventoryEnforcementMode,
   })
   app.get('/api/live', async () => ({ status: 'live', ...version }))
   app.get('/api/version', async () => version)
   app.get('/api/ready', async (_request, reply) => {
     try {
-      const row = await transactions.run(scope, async (transaction) => {
-        const result = await transaction.query<ReadyRow>(`
-          SELECT metadata.schema_flavor, metadata.schema_version,
-            EXISTS (
-              SELECT 1 FROM mbox.stores
-              WHERE tenant_id = $1::uuid AND id = $2::uuid AND status = 'active'
-            ) AS store_active
-          FROM mbox.normalized_schema_metadata AS metadata
-          WHERE metadata.singleton = true
-        `, [scope.tenantId, scope.storeId])
-        return result.rows[0]
-      }, { readOnly: true })
+      const row = await queryReadinessOnce(transactions, scope)
       if (!row || row.schema_flavor !== NORMALIZED_SCHEMA_FLAVOR || row.store_active !== true) {
         return reply.code(503).send({ status: 'not_ready', reason: 'normalized_schema_unavailable', ...version })
       }
@@ -761,6 +755,28 @@ function registerSystemRoutes(
       return reply.code(503).send({ status: 'not_ready', reason: 'database_unavailable', ...version })
     }
   })
+}
+
+async function queryReadinessOnce(
+  transactions: ScopedPostgresTransactionRunner,
+  scope: Readonly<StoreScope>,
+): Promise<ReadyRow | undefined> {
+  const result = await transactions.singleScopedQuery<ReadyRow>(scope, `
+    WITH request_scope AS MATERIALIZED (
+      SELECT
+        set_config('app.tenant_id', $1::text, true) AS tenant_id,
+        set_config('app.store_id', $2::text, true) AS store_id
+    )
+    SELECT metadata.schema_flavor, metadata.schema_version,
+      EXISTS (
+        SELECT 1 FROM mbox.stores
+        WHERE tenant_id = $1::uuid AND id = $2::uuid AND status = 'active'
+      ) AS store_active
+    FROM mbox.normalized_schema_metadata AS metadata
+    CROSS JOIN request_scope
+    WHERE metadata.singleton = true
+  `)
+  return result.rows[0]
 }
 
 function createContactProtector(secret: string): (value: string) => ProtectedContact {
@@ -919,6 +935,7 @@ function assertRuntimeConfig(config: Readonly<NormalizedRuntimeConfig>): void {
   if (!config.storeId.trim()) fields.push('MBOX_STORE_ID')
   if (Buffer.byteLength(config.secret, 'utf8') < 32) fields.push('MBOX_NORMALIZED_SECRET')
   if (config.schemaFlavor !== NORMALIZED_SCHEMA_FLAVOR) fields.push('schemaFlavor')
-  if (config.nodeEnv === 'production' && config.payment === null) fields.push('payment')
+  if (config.deploymentTier === 'production' && config.payment === null) fields.push('payment')
+  if (config.nodeEnv === 'production' && config.metricsToken === null) fields.push('MBOX_METRICS_TOKEN')
   if (fields.length > 0) throw new NormalizedRuntimeConfigurationError(fields)
 }

@@ -12,10 +12,12 @@ export interface NormalizedPaymentRuntimeConfig {
 
 export interface NormalizedRuntimeConfig {
   nodeEnv: 'development' | 'test' | 'production'
+  deploymentTier: 'validation' | 'production'
   databaseUrl: string
   tenantId: string
   storeId: string
   secret: string
+  metricsToken: string | null
   payment: NormalizedPaymentRuntimeConfig | null
   guestPaymentMode: GuestCheckoutPaymentMode
   inventoryEnforcementMode: 'strict' | 'audit_only'
@@ -47,15 +49,26 @@ export function loadNormalizedRuntimeConfig(
 ): NormalizedRuntimeConfig {
   const nodeEnv = readNodeEnv(environment.NODE_ENV)
   const errors: string[] = []
+  const deploymentTier = readDeploymentTier(
+    environment.MBOX_DEPLOYMENT_TIER ?? environment.DEPLOYMENT_TIER,
+    nodeEnv,
+    errors,
+  )
+  const commercialProduction = deploymentTier === 'production'
   const databaseUrl = required(environment.DATABASE_URL, 'DATABASE_URL', errors)
   const tenantId = requiredUuid(environment.MBOX_TENANT_ID, 'MBOX_TENANT_ID', errors)
   const storeId = requiredUuid(environment.MBOX_STORE_ID, 'MBOX_STORE_ID', errors)
   const secret = requiredSecret(environment.MBOX_NORMALIZED_SECRET, errors)
-  const payment = readPayment(environment, nodeEnv, errors)
-  const guestPaymentMode = readGuestPaymentMode(environment.MBOX_GUEST_PAYMENT_MODE, nodeEnv, errors)
+  const metricsToken = readMetricsToken(environment.MBOX_METRICS_TOKEN, nodeEnv, errors)
+  const payment = readPayment(environment, commercialProduction, errors)
+  const guestPaymentMode = readGuestPaymentMode(
+    environment.MBOX_GUEST_PAYMENT_MODE,
+    commercialProduction,
+    errors,
+  )
   const inventoryEnforcementMode = readInventoryEnforcementMode(
     environment.MBOX_INVENTORY_ENFORCEMENT_MODE,
-    nodeEnv,
+    commercialProduction,
     errors,
   )
   const port = readInteger(environment.PORT, 'PORT', 3_000, 1, 65_535, errors)
@@ -64,7 +77,7 @@ export function loadNormalizedRuntimeConfig(
   const commitSha = readCommitSha(environment.APP_COMMIT_SHA ?? environment.GITHUB_SHA)
   const staticDir = optional(environment.MBOX_STATIC_DIR)
   const startWorkers = readBoolean(environment.MBOX_START_WORKERS, false, 'MBOX_START_WORKERS', errors)
-  if (nodeEnv === 'production' && !startWorkers) errors.push('MBOX_START_WORKERS')
+  if (commercialProduction && !startWorkers) errors.push('MBOX_START_WORKERS')
   const workerId = readWorkerId(environment.MBOX_WORKER_ID, startWorkers, errors)
   const workerIntervalMs = readInteger(
     environment.MBOX_WORKER_INTERVAL_MS,
@@ -77,17 +90,19 @@ export function loadNormalizedRuntimeConfig(
   const workerAdapterModule = readWorkerAdapterModule(
     environment.MBOX_WORKER_ADAPTER_MODULE,
     startWorkers,
-    nodeEnv,
+    commercialProduction,
     errors,
   )
 
   if (errors.length > 0) throw new NormalizedRuntimeConfigurationError([...new Set(errors)])
   return Object.freeze({
     nodeEnv,
+    deploymentTier,
     databaseUrl,
     tenantId,
     storeId,
     secret,
+    metricsToken,
     payment,
     guestPaymentMode,
     inventoryEnforcementMode,
@@ -107,17 +122,17 @@ export function loadNormalizedRuntimeConfig(
 
 function readInventoryEnforcementMode(
   value: string | undefined,
-  nodeEnv: NormalizedRuntimeConfig['nodeEnv'],
+  commercialProduction: boolean,
   errors: string[],
 ): NormalizedRuntimeConfig['inventoryEnforcementMode'] {
   const normalized = optional(value)
   if (normalized === 'strict') return normalized
   if (normalized === 'audit_only') {
-    if (nodeEnv === 'production') errors.push('MBOX_INVENTORY_ENFORCEMENT_MODE')
+    if (commercialProduction) errors.push('MBOX_INVENTORY_ENFORCEMENT_MODE')
     return normalized
   }
   if (normalized !== null) errors.push('MBOX_INVENTORY_ENFORCEMENT_MODE')
-  return nodeEnv === 'production' ? 'strict' : 'audit_only'
+  return commercialProduction ? 'strict' : 'audit_only'
 }
 
 function readWorkerId(value: string | undefined, enabled: boolean, errors: string[]): string | null {
@@ -136,12 +151,12 @@ function readWorkerId(value: string | undefined, enabled: boolean, errors: strin
 function readWorkerAdapterModule(
   value: string | undefined,
   enabled: boolean,
-  nodeEnv: NormalizedRuntimeConfig['nodeEnv'],
+  commercialProduction: boolean,
   errors: string[],
 ): string | null {
   const normalized = optional(value)
   if (normalized === null) {
-    if (enabled && nodeEnv === 'production') errors.push('MBOX_WORKER_ADAPTER_MODULE')
+    if (enabled && commercialProduction) errors.push('MBOX_WORKER_ADAPTER_MODULE')
     return null
   }
   if (!isAbsolute(normalized)) {
@@ -153,7 +168,7 @@ function readWorkerAdapterModule(
 
 function readPayment(
   environment: Readonly<Record<string, string | undefined>>,
-  nodeEnv: NormalizedRuntimeConfig['nodeEnv'],
+  commercialProduction: boolean,
   errors: string[],
 ): NormalizedPaymentRuntimeConfig | null {
   const provider = optional(environment.MBOX_PAYMENT_PROVIDER)
@@ -162,7 +177,7 @@ function readPayment(
   const publicKey = optional(environment.POSTAR_PUBLIC_KEY)
   const anyPaymentField = provider !== null || agencyId !== null || merchantId !== null || publicKey !== null
 
-  if (nodeEnv !== 'production' && !anyPaymentField) return null
+  if (!commercialProduction && !anyPaymentField) return null
   if (provider !== 'postar') errors.push('MBOX_PAYMENT_PROVIDER')
   if (agencyId === null) errors.push('POSTAR_AGENCY_ID')
   if (merchantId === null) errors.push('POSTAR_MERCHANT_ID')
@@ -173,20 +188,52 @@ function readPayment(
 
 function readGuestPaymentMode(
   value: string | undefined,
-  nodeEnv: NormalizedRuntimeConfig['nodeEnv'],
+  commercialProduction: boolean,
   errors: string[],
 ): GuestCheckoutPaymentMode {
   const normalized = optional(value)
   if (normalized === 'wechat_jsapi' || normalized === 'wechat_native_qr' || normalized === 'simulation') {
-    if (nodeEnv === 'production' && normalized === 'simulation') errors.push('MBOX_GUEST_PAYMENT_MODE')
+    if (commercialProduction && normalized === 'simulation') errors.push('MBOX_GUEST_PAYMENT_MODE')
     return normalized
   }
   if (normalized !== null) errors.push('MBOX_GUEST_PAYMENT_MODE')
-  if (nodeEnv === 'production') {
+  if (commercialProduction) {
     errors.push('MBOX_GUEST_PAYMENT_MODE')
     return 'wechat_native_qr'
   }
   return 'simulation'
+}
+
+function readDeploymentTier(
+  value: string | undefined,
+  nodeEnv: NormalizedRuntimeConfig['nodeEnv'],
+  errors: string[],
+): NormalizedRuntimeConfig['deploymentTier'] {
+  const normalized = optional(value)
+  if (normalized === 'validation') return normalized
+  if (normalized === 'production') {
+    if (nodeEnv !== 'production') errors.push('NODE_ENV')
+    return normalized
+  }
+  if (normalized !== null) errors.push('MBOX_DEPLOYMENT_TIER')
+  return nodeEnv === 'production' ? 'production' : 'validation'
+}
+
+function readMetricsToken(
+  value: string | undefined,
+  nodeEnv: NormalizedRuntimeConfig['nodeEnv'],
+  errors: string[],
+): string | null {
+  const normalized = optional(value)
+  if (normalized === null) {
+    if (nodeEnv === 'production') errors.push('MBOX_METRICS_TOKEN')
+    return null
+  }
+  if (Buffer.byteLength(normalized, 'utf8') < 32) {
+    errors.push('MBOX_METRICS_TOKEN')
+    return null
+  }
+  return normalized
 }
 
 function required(value: string | undefined, field: string, errors: string[]): string {

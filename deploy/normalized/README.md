@@ -23,6 +23,10 @@ confirmation value are supplied.
   fail-closed validation.
 - Secrets belong in an operator-owned environment file outside the repository.
   The scripts pass only its path to Docker and do not print its contents.
+- Use `env.validation.example` for the controlled validation tier and
+  `env.example` for commercial production. Both require a private metrics
+  bearer token; production additionally requires real payment and worker
+  adapter configuration.
 
 ## Image
 
@@ -99,7 +103,8 @@ Actual startup requires `MBOX_DEPLOY_APPLY=1` and
 1. OCI commit label equals `APP_COMMIT_SHA`.
 2. Local image ID equals `EXPECTED_IMAGE_DIGEST`.
 3. The container uses that exact image ID and normalized schema label.
-4. `/api/version` and `/api/ready` return the same SHA and schema flavor.
+4. `/api/version` and `/api/ready` return the same SHA, schema flavor and
+   deployment tier requested by the release command.
 5. The database is migrated and the configured store is active.
 6. The store configuration and catalog hashes are tied to the candidate SHA.
 7. Products, prices, bundle components, KDS scopes, financial approval limits,

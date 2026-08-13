@@ -47,14 +47,15 @@ until ready_json="$(curl --fail --silent --show-error --max-time 4 "${CANDIDATE_
 done
 version_json="$(curl --fail --silent --show-error --max-time 4 "${CANDIDATE_BASE_URL}/api/version")"
 
-jq -e --arg sha "$APP_COMMIT_SHA" --arg schema "$NORMALIZED_SCHEMA_FLAVOR" '
+jq -e --arg sha "$APP_COMMIT_SHA" --arg schema "$NORMALIZED_SCHEMA_FLAVOR" --arg tier "$DEPLOYMENT_TIER" '
   .status == "ready"
   and .commitSha == $sha
   and .schemaFlavor == $schema
+  and .deploymentTier == $tier
   and ((has("workers") | not) or .workers.status == "healthy")
 ' <<<"$ready_json" >/dev/null || die 'candidate readiness identity or worker status is invalid'
-jq -e --arg sha "$APP_COMMIT_SHA" --arg schema "$NORMALIZED_SCHEMA_FLAVOR" '
-  .commitSha == $sha and .schemaFlavor == $schema
+jq -e --arg sha "$APP_COMMIT_SHA" --arg schema "$NORMALIZED_SCHEMA_FLAVOR" --arg tier "$DEPLOYMENT_TIER" '
+  .commitSha == $sha and .schemaFlavor == $schema and .deploymentTier == $tier
 ' <<<"$version_json" >/dev/null || die 'candidate version identity is invalid'
 
 if [[ "$DEPLOYMENT_TIER" == production ]]; then

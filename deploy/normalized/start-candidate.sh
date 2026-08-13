@@ -13,11 +13,16 @@ require_value CANDIDATE_CONTAINER_NAME
 require_value CANDIDATE_BIND_ADDRESS
 require_value CANDIDATE_HOST_PORT
 require_value CANDIDATE_BASE_URL
+DEPLOYMENT_TIER="${DEPLOYMENT_TIER:-validation}"
 validate_commit_sha "$APP_COMMIT_SHA"
 validate_image_digest "$EXPECTED_IMAGE_DIGEST"
 assert_candidate_name "$CANDIDATE_CONTAINER_NAME"
 require_file "$ENV_FILE"
 [[ "$CANDIDATE_HOST_PORT" =~ ^[0-9]{2,5}$ ]] || die 'CANDIDATE_HOST_PORT must be numeric'
+case "$DEPLOYMENT_TIER" in
+  validation|production) ;;
+  *) die 'DEPLOYMENT_TIER must be validation or production' ;;
+esac
 
 docker_args=(
   docker run --detach
@@ -26,6 +31,7 @@ docker_args=(
   --label "com.mbox.schema-flavor=${NORMALIZED_SCHEMA_FLAVOR}"
   --env-file "$ENV_FILE"
   --env "APP_COMMIT_SHA=${APP_COMMIT_SHA}"
+  --env "MBOX_DEPLOYMENT_TIER=${DEPLOYMENT_TIER}"
   --publish "${CANDIDATE_BIND_ADDRESS}:${CANDIDATE_HOST_PORT}:8787"
   --read-only
   --tmpfs /tmp:rw,noexec,nosuid,size=64m
@@ -56,4 +62,5 @@ log "isolated candidate started: container=${CANDIDATE_CONTAINER_NAME} id=${dock
 
 MBOX_DEPLOY_APPLY=1 \
   NORMALIZED_VERIFY_CONFIRM=VERIFY_ISOLATED_CANDIDATE \
+  DEPLOYMENT_TIER="$DEPLOYMENT_TIER" \
   "${SCRIPT_DIR}/verify-candidate.sh"

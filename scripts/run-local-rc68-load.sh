@@ -44,7 +44,7 @@ if [ "${MBOX_LOCAL_LOAD_SKIP_BUILD:-0}" = "1" ]; then
     exit 1
   fi
 else
-  npm run build >/tmp/mbox-rc68-mixed-build.log
+  npm run build:legacy >/tmp/mbox-rc68-mixed-build.log
   node scripts/build-source-fingerprint.mjs --write "$build_marker" \
     --expected-source "$current_build_fingerprint" \
     --expected-environment "$current_build_environment" >/dev/null

@@ -17,17 +17,20 @@ test('all normalized deployment scripts use strict shell mode', () => {
   }
 })
 
-test('normalized Dockerfile is isolated, non-root, immutable and readiness checked', () => {
-  const source = readFileSync(resolve(root, 'Dockerfile.normalized'), 'utf8')
-  assert.match(source, /FROM node:24-alpine AS build/)
-  assert.match(source, /npm run build:normalized/)
-  assert.match(source, /dist-normalized\/server\/normalized-server\.js/)
-  assert.match(source, /\.\/dist-normalized\/database\/normalized-migrations/)
-  assert.match(source, /USER node/)
-  assert.match(source, /http:\/\/127\.0\.0\.1:\$\{PORT\}\/api\/ready/)
-  assert.doesNotMatch(source, /http:\/\/localhost:\$\{PORT\}\/api\/ready/)
-  assert.doesNotMatch(source, /dist-server\/server\/index\.js/)
-  assert.doesNotMatch(source, /database\/migrations(?:\s|\/)/)
+test('default and explicit normalized Dockerfiles are non-root normalized images with required runtime assets', () => {
+  for (const filename of ['Dockerfile', 'Dockerfile.normalized']) {
+    const source = readFileSync(resolve(root, filename), 'utf8')
+    assert.match(source, /FROM node:24-alpine AS build/)
+    assert.match(source, /npm run build:normalized/)
+    assert.match(source, /dist-normalized\/server\/normalized-server\.js/)
+    assert.match(source, /\.\/dist-normalized\/database\/normalized-migrations/)
+    assert.match(source, /filter-sls-events\.mjs/)
+    assert.match(source, /USER node/)
+    assert.match(source, /http:\/\/127\.0\.0\.1:\$\{PORT\}\/api\/ready/)
+    assert.doesNotMatch(source, /http:\/\/localhost:\$\{PORT\}\/api\/ready/)
+    assert.doesNotMatch(source, /dist-server\/server\/index\.js/)
+    assert.doesNotMatch(source, /database\/migrations(?:\s|\/)/)
+  }
 })
 
 test('database initializer accepts only a new empty database and normalized migrations', () => {
@@ -108,6 +111,27 @@ test('candidate verification rejects missing external worker integrations', () =
   assert.match(source, /payment\.create\.postar/)
   assert.match(source, /refund\.execute\.postar/)
   assert.match(source, /candidate integration workers are not commercially ready/)
+})
+
+test('deployment tier is passed into the container and verified before and after cutover', () => {
+  const start = readFileSync(resolve(deployDir, 'start-candidate.sh'), 'utf8')
+  const verify = readFileSync(resolve(deployDir, 'verify-candidate.sh'), 'utf8')
+  const activate = readFileSync(resolve(deployDir, 'activate-candidate.sh'), 'utf8')
+  const preCutover = readFileSync(resolve(deployDir, 'pre-cutover-check.sh'), 'utf8')
+  const production = readFileSync(resolve(deployDir, 'env.example'), 'utf8')
+  const validation = readFileSync(resolve(deployDir, 'env.validation.example'), 'utf8')
+
+  assert.match(start, /--env "MBOX_DEPLOYMENT_TIER=\$\{DEPLOYMENT_TIER\}"/)
+  assert.match(start, /DEPLOYMENT_TIER="\$DEPLOYMENT_TIER"[\s\S]*verify-candidate\.sh/)
+  assert.match(preCutover, /DEPLOYMENT_TIER="\$\{DEPLOYMENT_TIER:-validation\}"[\s\S]*verify-candidate\.sh/)
+  assert.match(verify, /\.deploymentTier == \$tier/)
+  assert.match(activate, /\.deploymentTier == \$tier/)
+  assert.match(production, /^MBOX_DEPLOYMENT_TIER=production$/m)
+  assert.match(production, /^MBOX_START_WORKERS=true$/m)
+  assert.match(production, /^MBOX_METRICS_TOKEN=</m)
+  assert.match(validation, /^MBOX_DEPLOYMENT_TIER=validation$/m)
+  assert.match(validation, /^MBOX_GUEST_PAYMENT_MODE=simulation$/m)
+  assert.match(validation, /^MBOX_START_WORKERS=false$/m)
 })
 
 test('server-side deployment controls use jq and do not require host Node.js', () => {

@@ -100,8 +100,11 @@ verify_public_candidate() {
   local response
   for _ in $(seq 1 "$attempts"); do
     response="$(curl --fail --silent --show-error --max-time 8 "${PUBLIC_BASE_URL}/api/ready" 2>/dev/null || true)"
-    if jq -e --arg sha "$APP_COMMIT_SHA" --arg schema "$NORMALIZED_SCHEMA_FLAVOR" '
-      .status == "ready" and .commitSha == $sha and .schemaFlavor == $schema
+    if jq -e --arg sha "$APP_COMMIT_SHA" --arg schema "$NORMALIZED_SCHEMA_FLAVOR" --arg tier "$DEPLOYMENT_TIER" '
+      .status == "ready"
+      and .commitSha == $sha
+      and .schemaFlavor == $schema
+      and .deploymentTier == $tier
     ' <<<"$response" >/dev/null 2>&1
     then
       return 0

@@ -29,6 +29,7 @@ COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/dist-normalized ./dist-normalized
 COPY --from=build --chown=node:node /app/database/normalized-migrations ./dist-normalized/database/normalized-migrations
 COPY --from=build --chown=node:node /app/deploy/normalized/initialize-empty-database.mjs ./deploy/normalized/initialize-empty-database.mjs
+COPY --from=build --chown=node:node /app/scripts/filter-sls-events.mjs ./scripts/filter-sls-events.mjs
 
 USER node
 EXPOSE 8787

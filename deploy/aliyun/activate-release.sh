@@ -126,6 +126,7 @@ set_env() {
 set_env MBOX_RELEASE_SHA "${release_sha}"
 set_env MBOX_RELEASE_IMAGE_DIGEST "${expected_digest}"
 set_env APP_COMMIT_SHA "${release_sha}"
+set_env MBOX_DEPLOYMENT_TIER "${deployment_tier}"
 
 current_migration_digest=
 if [ -f "${current_link}/release-manifest.json" ]; then
@@ -242,11 +243,13 @@ candidate_ready=$(docker exec "${candidate}" \
 printf '%s' "${candidate_ready}" | jq -e \
   --arg sha "${release_sha}" \
   --arg schemaFlavor "normalized-core-v1" \
+  --arg deploymentTier "${deployment_tier}" \
   --argjson schemaVersion "${expected_schema_version}" \
   '.status == "ready"
     and .schemaFlavor == $schemaFlavor
     and (.schemaVersion | tonumber) >= $schemaVersion
-    and .commitSha == $sha' >/dev/null
+    and .commitSha == $sha
+    and .deploymentTier == $deploymentTier' >/dev/null
 
 current_caddy=${release_dir}/Caddyfile.previous
 candidate_caddy=${release_dir}/Caddyfile.candidate
@@ -268,11 +271,13 @@ verify_public_release() {
     if printf '%s' "${response}" | jq -e \
       --arg sha "${release_sha}" \
       --arg schemaFlavor "normalized-core-v1" \
+      --arg deploymentTier "${deployment_tier}" \
       --argjson schemaVersion "${expected_schema_version}" \
       '.status == "ready"
         and .schemaFlavor == $schemaFlavor
         and (.schemaVersion | tonumber) >= $schemaVersion
-        and .commitSha == $sha' >/dev/null 2>&1; then
+        and .commitSha == $sha
+        and .deploymentTier == $deploymentTier' >/dev/null 2>&1; then
       return 0
     fi
     sleep 2

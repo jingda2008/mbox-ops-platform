@@ -110,17 +110,32 @@ test "$(sha256sum "${archive}" | awk '{print $1}')" = "${expected_archive_sha}"
 test "$(sha256sum "${store_config}" | awk '{print $1}')" = "${store_config_sha}"
 test "$(sha256sum "${catalog_config}" | awk '{print $1}')" = "${catalog_config_sha}"
 
-expected_index_digest=${expected_digest#sha256:}
-archive_index_digest=$(tar -xOf "${archive}" index.json \
+archive_reference_digest=$(tar -xOf "${archive}" index.json \
   | jq -er '.manifests[] | select(.annotations["org.opencontainers.image.ref.name"] != null) | .digest' \
   | head -n 1)
-test "${archive_index_digest}" = "${expected_digest}"
-archive_index_blob="blobs/sha256/${expected_index_digest}"
-test "$(tar -xOf "${archive}" "${archive_index_blob}" | sha256sum | awk '{print $1}')" = "${expected_index_digest}"
+archive_reference_hash=${archive_reference_digest#sha256:}
+archive_reference_blob="blobs/sha256/${archive_reference_hash}"
+test "$(tar -xOf "${archive}" "${archive_reference_blob}" | sha256sum | awk '{print $1}')" = "${archive_reference_hash}"
+archive_reference_media_type=$(tar -xOf "${archive}" "${archive_reference_blob}" | jq -er '.mediaType')
 
-platform_manifest_digest=$(tar -xOf "${archive}" "${archive_index_blob}" \
-  | jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' \
-  | head -n 1)
+case "${archive_reference_media_type}" in
+  application/vnd.oci.image.index.v1+json|application/vnd.docker.distribution.manifest.list.v2+json)
+    # Buildx may preserve the image ID as the tagged OCI index digest.
+    test "${archive_reference_digest}" = "${expected_digest}"
+    platform_manifest_digest=$(tar -xOf "${archive}" "${archive_reference_blob}" \
+      | jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' \
+      | head -n 1)
+    ;;
+  application/vnd.oci.image.manifest.v1+json|application/vnd.docker.distribution.manifest.v2+json)
+    # Docker save may flatten a single-platform index into a directly tagged manifest.
+    platform_manifest_digest=${archive_reference_digest}
+    ;;
+  *)
+    echo "unsupported OCI reference media type: ${archive_reference_media_type}" >&2
+    exit 1
+    ;;
+esac
+test "${archive_reference_digest}" = "${expected_digest}"
 platform_manifest_hash=${platform_manifest_digest#sha256:}
 platform_manifest_blob="blobs/sha256/${platform_manifest_hash}"
 test "$(tar -xOf "${archive}" "${platform_manifest_blob}" | sha256sum | awk '{print $1}')" = "${platform_manifest_hash}"
@@ -129,10 +144,14 @@ archive_config_digest=$(tar -xOf "${archive}" "${platform_manifest_blob}" | jq -
 archive_config_hash=${archive_config_digest#sha256:}
 archive_config_blob="blobs/sha256/${archive_config_hash}"
 test "$(tar -xOf "${archive}" "${archive_config_blob}" | sha256sum | awk '{print $1}')" = "${archive_config_hash}"
+tar -xOf "${archive}" "${archive_config_blob}" \
+  | jq -e '.os == "linux" and .architecture == "amd64"' >/dev/null
 
 docker load --input "${archive}" >/dev/null
+actual_image_digest=$(docker image inspect "${image_tag}" --format '{{.Id}}')
 actual_sha=$(docker image inspect "${image_tag}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
 actual_version=$(docker image inspect "${image_tag}" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')
+test "${actual_image_digest}" = "${expected_digest}"
 test "${actual_sha}" = "${release_sha}"
 test "${actual_version}" = "${release_version}"
 emit_release_audit deployment_started info candidate-preparation

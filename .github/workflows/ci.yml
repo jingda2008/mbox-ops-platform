@@ -465,7 +465,10 @@ jobs:
           mkdir -p release-artifact
           archive="release-artifact/mbox-normalized-${VERSION}-${SHORT_SHA}.tar.gz"
           docker save "${IMAGE_TAG}" | gzip -1 > "${archive}"
-          image_digest=$(docker image inspect "${IMAGE_TAG}" --format '{{.Id}}')
+          image_digest=$(tar -xOf "${archive}" index.json \
+            | jq -er '.manifests[] | select(.annotations["org.opencontainers.image.ref.name"] != null) | .digest' \
+            | head -n 1)
+          test "${image_digest}" = "sha256:$(tar -xOf "${archive}" "blobs/sha256/${image_digest#sha256:}" | sha256sum | awk '{print $1}')"
           node scripts/generate-migration-manifest.mjs \
             --directory database/normalized-migrations \
             --output release-artifact/migration-manifest.json >/dev/null

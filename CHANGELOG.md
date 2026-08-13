@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0-rc.81 - 2026-08-14
+
+- Preserved the `rc.80` shared-table assisted-ordering and guest-payment behavior without changing business semantics.
+- Accepted both OCI image indexes and Docker-flattened single-platform OCI manifests during Alibaba Cloud release verification.
+- Derived the release image identity from the immutable archive reference instead of a builder-local Docker image ID.
+- Kept archive, referenced-blob, Linux/AMD64 configuration and final Docker image-ID checks fail-closed before database migration or traffic cutover.
+
 ## 1.0.0-rc.80 - 2026-08-14
 
 - Unified employee-assisted and guest self-service settlement around one shared table order and one active payment action.

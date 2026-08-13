@@ -237,6 +237,12 @@ test('formal deployment requires OSS evidence before activation and uploads data
   assert.match(smoke, /body\.schemaFlavor !== 'normalized-core-v1'/)
   assert.match(smoke, /body\.commitSha !== expectedSha/)
   assert.match(smoke, /body\.releaseImageDigest !== expectedDigest/)
+  assert.match(smoke, /'\/guest\?table=W01'/)
+  assert.match(smoke, /'\/reserve'/)
+  assert.match(smoke, /'\/staff\/live'/)
+  assert.match(smoke, /text\/html/)
+  assert.match(activate, /'\/guest\?table=W01' '\/reserve' '\/staff\/live'/)
+  assert.match(activate, /Accept: text\/html,application\/xhtml\+xml/)
   assert.doesNotMatch(smoke, /body\.projectionReady/)
   const releaseWorkflow = await read('../.github/workflows/release.yml')
   assert.match(releaseWorkflow, /createHash\('sha256'\)\.update\(fs\.readFileSync\(path\)\)\.digest\('hex'\)/)
@@ -511,7 +517,24 @@ test('release smoke fails closed on a missing digest and reports the observed di
   const releaseSha = 'a'.repeat(40)
   const releaseDigest = `sha256:${'b'.repeat(64)}`
   let responseDigest
-  const server = createServer((_request, response) => {
+  let blockedBrowserRoute = null
+  const server = createServer((request, response) => {
+    if (request.url !== '/api/ready') {
+      if (request.url === blockedBrowserRoute) {
+        response.statusCode = 404
+        response.end('missing')
+        return
+      }
+      if (request.headers.accept?.includes('text/html')) {
+        response.setHeader('content-type', 'text/html; charset=utf-8')
+        response.end('<!doctype html><html><title>M-BOX</title></html>')
+        return
+      }
+      response.statusCode = 404
+      response.setHeader('content-type', 'application/json')
+      response.end(JSON.stringify({ error: { code: 'ROUTE_NOT_FOUND' } }))
+      return
+    }
     response.setHeader('content-type', 'application/json')
     response.end(JSON.stringify({
       status: 'ready', commitSha: releaseSha, releaseImageDigest: responseDigest,
@@ -536,11 +559,20 @@ test('release smoke fails closed on a missing digest and reports the observed di
     assert.notEqual(missing.status, 0)
     assert.match(missing.stderr, /releaseImageDigest=missing/)
     responseDigest = releaseDigest
+    blockedBrowserRoute = '/staff/live'
+    const missingBrowserRoute = await runChild(process.execPath, [new URL('./verify-release-smoke.mjs', import.meta.url).pathname], {
+      env: environment, stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    assert.notEqual(missingBrowserRoute.status, 0)
+    assert.match(missingBrowserRoute.stderr, /\/staff\/live=HTTP 404/)
+    blockedBrowserRoute = null
     const passed = await runChild(process.execPath, [new URL('./verify-release-smoke.mjs', import.meta.url).pathname], {
       env: environment, stdio: ['ignore', 'pipe', 'pipe'],
     })
     assert.equal(passed.status, 0, passed.stderr)
-    assert.equal(JSON.parse(passed.stdout).digest, releaseDigest)
+    const result = JSON.parse(passed.stdout)
+    assert.equal(result.digest, releaseDigest)
+    assert.deepEqual(result.browserRoutes, ['/', '/guest?table=W01', '/reserve', '/staff/live'])
   } finally {
     await new Promise((resolve) => server.close(resolve))
   }

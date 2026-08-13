@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0-rc.79 - 2026-08-13
+
+- Added browser-equivalent release gates for the home, fixed-table QR, reservation and employee deep links before and after traffic cutover.
+- Kept API-style unknown requests as structured 404 responses instead of weakening the single-page application boundary.
+- Recorded the rc.78 validation cutover and verified rollback without changing payment, inventory, order or other business behavior.
+
 ## 1.0.0-rc.78 - 2026-08-13
 
 - Unified the default development, build, container and Alibaba Cloud release paths on the normalized runtime while retaining explicit legacy-only commands for controlled comparison.

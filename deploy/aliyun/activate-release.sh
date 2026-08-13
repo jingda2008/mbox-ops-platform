@@ -307,7 +307,27 @@ verify_public_release() {
         and (.schemaVersion | tonumber) >= $schemaVersion
         and .commitSha == $sha
         and .deploymentTier == $deploymentTier' >/dev/null 2>&1; then
-      return 0
+      local browser_routes_ok=1
+      local browser_route
+      local browser_status
+      local browser_type
+      local browser_body
+      for browser_route in '/' '/guest?table=W01' '/reserve' '/staff/live'; do
+        browser_body=$(mktemp)
+        browser_type=$(mktemp)
+        browser_status=$(curl -ksS --max-time 10 \
+          -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' \
+          -D "${browser_type}" -o "${browser_body}" -w '%{http_code}' \
+          "${public_url}${browser_route}" 2>/dev/null || true)
+        if [ "${browser_status}" != 200 ] \
+          || ! grep -Eiq '^content-type:[[:space:]]*text/html' "${browser_type}" \
+          || ! grep -Eiq '<!doctype html|<html([[:space:]]|>)' "${browser_body}"; then
+          browser_routes_ok=0
+        fi
+        rm -f "${browser_body}" "${browser_type}"
+        [ "${browser_routes_ok}" = 1 ] || break
+      done
+      [ "${browser_routes_ok}" = 1 ] && return 0
     fi
     sleep 2
   done

@@ -23,7 +23,10 @@ const rules = [
   // as a Chinese mobile number. Real serialized phone values still have a
   // quote, delimiter or whitespace at both boundaries and remain detectable.
   { id: 'raw-mobile-number', expression: /(?<![0-9a-f])1[3-9]\d{9}(?![0-9a-f])/i },
-  { id: 'raw-chinese-id', expression: /(?<!\d)\d{17}[\dXx](?!\d)/ },
+  // A checksum can contain 18 consecutive decimal digits. Require hexadecimal
+  // boundaries so such a run is not mistaken for an identity number, while a
+  // serialized identity value next to quotes or delimiters remains blocked.
+  { id: 'raw-chinese-id', expression: /(?<![0-9a-f])\d{17}[\dX](?![0-9a-f])/i },
 ]
 
 const forbiddenJsonKeys = new Set([

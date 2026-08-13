@@ -28,6 +28,20 @@ test('does not misclassify digits embedded in a SHA256 as a mobile number', asyn
   assert.deepEqual(await inspectEvidenceDirectory(root), [])
 })
 
+test('does not misclassify digits embedded in a SHA256 as a Chinese identity number', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mbox-id-sha-evidence-'))
+  await writeFile(join(root, 'SHA256SUMS'), `${'a01db16e0af4c457be88c7c5bd068352433242120557b8404ad95842d6193ea1c'}  report.json\n`)
+  assert.deepEqual(await inspectEvidenceDirectory(root), [])
+})
+
+test('still rejects a serialized Chinese identity number', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mbox-id-evidence-'))
+  await writeFile(join(root, 'report.txt'), 'identity=11010519491231002X\n')
+  assert.deepEqual(await inspectEvidenceDirectory(root), [
+    { file: 'report.txt', rule: 'raw-chinese-id', line: 1 },
+  ])
+})
+
 test('reports secret and privacy classes without echoing matched values', async () => {
   const root = await mkdtemp(join(tmpdir(), 'mbox-unsafe-evidence-'))
   await mkdir(join(root, 'nested'))

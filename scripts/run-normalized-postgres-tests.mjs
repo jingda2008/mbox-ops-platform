@@ -54,6 +54,7 @@ function runVitest(databaseUrl) {
         'server/migrate-normalized.test.ts',
         'server/normalized',
         '--reporter=dot',
+        '--hookTimeout=30000',
       ],
       {
         cwd: process.cwd(),

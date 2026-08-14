@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0-rc.86 - 2026-08-14
+
+- Normalized Alibaba Cloud certificate bundles before Caddy activation by removing bundled self-signed root certificates while preserving the leaf and intermediate chain.
+- Replaced the immediate payment-domain TLS probe with a bounded readiness retry, so a successful Caddy reload is not rejected while the new TLS listener is still becoming ready.
+- Backed up and restored the managed certificate and private key together with the Caddyfile and domain snippet when ingress validation fails.
+- Kept provider payment disabled; this release repairs payment callback ingress installation and does not initiate a real transaction.
+
 ## 1.0.0-rc.85 - 2026-08-14
 
 - Added a signed, amount-checked active Postar payment query to the normalized runtime so an uncertain payment can be verified without creating another charge.

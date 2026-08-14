@@ -307,6 +307,33 @@ describe('Postar active payment query', () => {
     expect(secrets.getSecret).toHaveBeenCalledWith('postar.publicKey')
   })
 
+  it('uses the normalized payment creation date without consulting legacy metadata', async () => {
+    const post = vi.fn(async (_request: PostarHttpRequest) => response({
+      code: '222222',
+      data: {
+        agetId: 'AGENCY001',
+        orderNo: 'POSTAR202607140001',
+        orderStatus: '2',
+        orderTime: '20260714120506',
+        threeOrderNo: 'PaymentABC123',
+        txamt: '3000',
+      },
+      msg: 'success',
+    }))
+    const options = testOptions(post)
+    const adapter = new PostarPaymentProviderAdapter(options)
+
+    await adapter.queryPayment({
+      merchantId: 'MERCHANT001',
+      paymentIntentId: 'PaymentABC123',
+      providerTransactionId: null,
+      orderDate: '20260714',
+    }, context)
+
+    expect(decodeRequest(post.mock.calls[0]![0]).payload.orderTime).toBe('20260714')
+    expect(options.metadataSource.getPaymentMetadata).not.toHaveBeenCalled()
+  })
+
   it('fails closed when a synchronous response is unsigned or reports pre-authorisation', async () => {
     const unsigned = new PostarPaymentProviderAdapter(testOptions(async () => ({
       body: new TextEncoder().encode('{"code":"000000","msg":"success"}'),

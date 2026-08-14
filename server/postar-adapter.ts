@@ -711,8 +711,9 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
     request: ProviderPaymentQueryRequest,
     context: PaymentProviderContext,
   ): Promise<ProviderPaymentObservation> {
-    const metadata = await this.options.metadataSource.getPaymentMetadata(request)
-    assertDate(metadata.orderDate, '星驿原支付日期')
+    const orderDate = request.orderDate
+      ?? (await this.options.metadataSource.getPaymentMetadata(request)).orderDate
+    assertDate(orderDate, '星驿原支付日期')
     const { agencyId, publicKey } = await getCredentials(
       context,
       this.agencyIdSecretName,
@@ -723,7 +724,7 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
         agetId: agencyId,
         custId: request.merchantId,
         orderNo: request.paymentIntentId,
-        orderTime: metadata.orderDate,
+        orderTime: orderDate,
         timeStamp: formatPostarTimestamp(this.now()),
         version: VERSION,
       }, publicKey),

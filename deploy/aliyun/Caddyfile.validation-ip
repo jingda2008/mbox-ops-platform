@@ -37,3 +37,8 @@ https://139.224.254.60 {
 		}
 	}
 }
+
+# Optional private ingress snippets live in the persistent Caddy data volume.
+# The glob may be empty. Secrets and private certificate paths never belong in
+# this release-controlled file.
+import /data/mbox-ingress/*.caddy

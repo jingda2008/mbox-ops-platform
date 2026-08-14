@@ -68,6 +68,8 @@ export interface ProviderPaymentQueryRequest {
   paymentIntentId: string
   merchantId: string
   providerTransactionId: string | null
+  /** Original payment date in the provider's merchant timezone, YYYYMMDD. */
+  orderDate?: string
 }
 
 export type ProviderRefundStatus = 'processing' | 'succeeded' | 'failed'

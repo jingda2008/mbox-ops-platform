@@ -65,6 +65,21 @@ The Shanghai validation ingress uses `Caddyfile.validation-ip`. Before a
 commercial launch, use the filed domain and revalidate TLS, payment callbacks,
 WeChat legal domains and permanent table QR files.
 
+The filed payment callback domain is installed separately from application
+cutover. Its certificate and private key remain server-side and are never added
+to a release bundle or Git repository:
+
+```bash
+MBOX_PAYMENT_DOMAIN=pay.shmbox.com \
+MBOX_PAYMENT_CERT_FILE=/root/payment-tls/pay.shmbox.com.pem \
+MBOX_PAYMENT_KEY_FILE=/root/payment-tls/pay.shmbox.com.key \
+./deploy/aliyun/configure-payment-ingress.sh
+```
+
+The command validates hostname, expiry, key pairing, Caddy syntax and a local
+TLS application probe. Any failure restores the previous Caddyfile. Use the
+reported backup path with `rollback-payment-ingress.sh` to roll back later.
+
 ## Evidence and logging
 
 Formal evidence, manifests, checksums, backups and the latest rollback images

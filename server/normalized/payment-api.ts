@@ -61,6 +61,7 @@ type PaymentCommandPort = Pick<
   | 'initiate'
   | 'recordManual'
   | 'recordSucceededCallback'
+  | 'recordProviderQueryResult'
   | 'requestRefund'
   | 'approveRefund'
   | 'rejectRefund'
@@ -159,7 +160,7 @@ export interface PaymentApiOptions {
   providerVerifier: PaymentProviderVerifier
   reconciliationQuery: ReconciliationQueryPort
   cashierWorkbenchQuery: CashierWorkbenchQueryPort
-  onlinePayments?: Pick<OnlinePaymentService, 'create' | 'assertAvailable' | 'resolveActivePayment'>
+  onlinePayments?: Pick<OnlinePaymentService, 'create' | 'query' | 'assertAvailable' | 'resolveActivePayment'>
   resolveActorContext(request: FastifyRequest): Promise<PaymentApiActorContext> | PaymentApiActorContext
   resolveStaffContext(request: FastifyRequest): Promise<PaymentApiStaffContext> | PaymentApiStaffContext
   resolveProviderBusinessDate(
@@ -313,6 +314,49 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
     })
     return reply.code(execution.replayed ? 200 : 201).send(executionResponse(execution))
   }))
+
+  app.post<{ Params: { paymentId: string } }>(
+    '/payments/:paymentId/provider-query',
+    async (request, reply) => handleRoute(reply, async () => {
+      if (options.onlinePayments === undefined) throw new OnlinePaymentUnavailableError()
+      const context = await resolveActorContext(options, request)
+      const paymentId = readUuid(request.params.paymentId, 'paymentId')
+      const idempotencyKey = readIdempotencyKey(request)
+      const principal = paymentInitiationPrincipal(context)
+      const queried = await options.onlinePayments.query({
+        scope: context.scope,
+        paymentId,
+        principal,
+      })
+      const observed = queried.observation
+      const actor: AuditActor = { type: 'integration', ref: 'postar-active-query' }
+      const providerSnapshot = sanitizeProviderSnapshot({
+        signatureVerified: true,
+        providerStatus: observed.status,
+        occurredAt: observed.occurredAt,
+        receivedAt: new Date().toISOString(),
+      })
+      const execution = await options.commands.recordProviderQueryResult({
+        ...metadata(request, { ...context, actor }, idempotencyKey, {
+          paymentPublicId: queried.context.publicId,
+          provider: 'postar',
+          providerTransactionId: observed.providerTransactionId,
+          status: observed.status,
+          amountMinor: observed.amount,
+          currency: observed.currency,
+        }),
+        paymentPublicId: queried.context.publicId,
+        provider: 'postar',
+        providerTransactionId: readString(observed.providerTransactionId, 'providerTransactionId', 256),
+        reportedAmountMinor: readPositiveMinor(observed.amount, 'amountMinor'),
+        reportedCurrency: readCurrency(observed.currency),
+        status: observed.status,
+        providerSnapshot,
+        occurredAt: readTimestamp(observed.occurredAt, 'occurredAt'),
+      })
+      return reply.send(executionResponse(execution))
+    }),
+  )
 
   app.post<{ Params: { provider: string } }>(
     '/payments/providers/:provider/callback',
@@ -530,7 +574,7 @@ function paymentFromProviderContext(value: ProviderPaymentContext): Payment {
     orderId: value.orderId,
     publicId: value.publicId,
     provider: value.provider,
-    providerTransactionId: null,
+    providerTransactionId: value.providerTransactionId,
     method: value.method,
     amountMinor: value.amountMinor,
     currency: value.currency,

@@ -6,6 +6,7 @@ import type {
   JsonObject,
   NormalizedCommandExecutor,
 } from './command-executor.js'
+import type { ChannelPaymentStatus } from '../../src/shared/payment-contracts.js'
 import {
   PaymentRepository,
   type Payment,
@@ -63,6 +64,10 @@ export interface PaymentCallbackCommand extends CommandMetadata {
   reportedCurrency: string
   providerSnapshot?: JsonObject
   occurredAt: string
+}
+
+export interface PaymentProviderQueryResultCommand extends PaymentCallbackCommand {
+  status: ChannelPaymentStatus
 }
 
 export interface RequestRefundCommand extends CommandMetadata {
@@ -225,6 +230,56 @@ export class PaymentCommandService {
           payment.provider,
           input.providerTransactionId,
         ),
+      )
+    })
+  }
+
+  recordProviderQueryResult(
+    input: Readonly<PaymentProviderQueryResultCommand>,
+  ): Promise<CommandExecution<Payment>> {
+    const providerSnapshot = sanitizeProviderSnapshot(input.providerSnapshot)
+    requireVerifiedIntegration(input.actor, providerSnapshot, 'Payment provider query')
+    return this.commands.execute(command(input, 'payment.provider-query', paymentCodec), async (transaction) => {
+      const payments = new PaymentRepository(transaction)
+      const application = await payments.applyProviderQueryResult({
+        paymentPublicId: input.paymentPublicId,
+        provider: input.provider,
+        providerTransactionId: input.providerTransactionId,
+        reportedAmountMinor: input.reportedAmountMinor,
+        reportedCurrency: input.reportedCurrency,
+        providerSnapshot,
+        succeededAt: input.occurredAt,
+        status: input.status,
+      })
+      const payment = application.payment
+      if (!application.applied) return noOpOutcome(payment)
+      if (input.status === 'succeeded') {
+        await new ReconciliationRepository(transaction).append({
+          paymentId: payment.id,
+          entryType: 'payment',
+          provider: payment.provider,
+          providerReference: input.providerTransactionId,
+          amountMinor: payment.amountMinor,
+          currency: payment.currency,
+          businessDate: input.businessDate,
+          occurredAt: input.occurredAt,
+          evidenceSnapshot: providerSnapshot,
+        })
+      }
+      await payments.syncOrderPaymentStatus(payment.orderId)
+      const action = input.status === 'succeeded'
+        ? 'payment.succeeded'
+        : input.status === 'failed' || input.status === 'closed'
+          ? 'payment.provider_failed'
+          : 'payment.provider_pending'
+      return paymentOutcome(
+        input,
+        payment,
+        action,
+        input.status === 'succeeded' ? 2 : 1,
+        input.status === 'succeeded'
+          ? paymentBusinessEventKey('succeeded', payment.provider, input.providerTransactionId)
+          : undefined,
       )
     })
   }

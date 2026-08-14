@@ -124,6 +124,14 @@ function fixture(overrides: Partial<PaymentApiOptions> = {}) {
       },
       replayed: false,
     })),
+    recordProviderQueryResult: vi.fn(async () => ({
+      value: {
+        ...payment,
+        providerTransactionId: 'POSTAR-TX-0001',
+        status: 'succeeded' as const,
+      },
+      replayed: false,
+    })),
     requestRefund: vi.fn(async () => ({ value: refund, replayed: false })),
     approveRefund: vi.fn(async () => ({
       value: { ...refund, status: 'approved' as const, approvedByEmployeeId: employeeId },
@@ -272,11 +280,13 @@ describe('paymentApiPlugin', () => {
       assertAvailable: vi.fn(),
       resolveActivePayment: vi.fn(async () => ({
         id: payment.id, orderId: payment.orderId, orderPublicId: 'OORDER0001',
-        publicId: payment.publicId, provider: payment.provider, method: payment.method,
+        publicId: payment.publicId, provider: payment.provider, providerTransactionId: null,
+        method: payment.method,
         amountMinor: payment.amountMinor, currency: payment.currency, status: payment.status,
         tableSessionId, tableCode: 'W01', createdAt: payment.createdAt,
       })),
       create: vi.fn(async () => action),
+      query: vi.fn(),
     }
     const value = fixture({
       resolveActorContext: () => ({
@@ -312,11 +322,13 @@ describe('paymentApiPlugin', () => {
         assertAvailable: vi.fn(),
         resolveActivePayment: vi.fn(async () => ({
           id: payment.id, orderId: payment.orderId, orderPublicId: 'OORDER0001',
-          publicId: payment.publicId, provider: payment.provider, method: 'native_qr' as const,
+          publicId: payment.publicId, provider: payment.provider, providerTransactionId: null,
+          method: 'native_qr' as const,
           amountMinor: payment.amountMinor, currency: payment.currency, status: payment.status,
           tableSessionId, tableCode: 'W01', createdAt: payment.createdAt,
         })),
         create: vi.fn(),
+        query: vi.fn(),
       },
     })
     const response = await value.app.inject({
@@ -349,6 +361,62 @@ describe('paymentApiPlugin', () => {
     })
     expect(employeeResponse.statusCode).toBe(400)
     expect(employee.commands.initiate).not.toHaveBeenCalled()
+  })
+
+  it('actively queries a signed provider result and applies it through the command boundary', async () => {
+    const query = vi.fn(async () => ({
+      context: {
+        id: payment.id,
+        orderId: payment.orderId,
+        orderPublicId: 'OORDER0001',
+        publicId: payment.publicId,
+        provider: payment.provider,
+        providerTransactionId: null,
+        method: payment.method,
+        amountMinor: payment.amountMinor,
+        currency: payment.currency,
+        status: payment.status,
+        tableSessionId,
+        tableCode: 'W01',
+        createdAt: payment.createdAt,
+      },
+      observation: {
+        paymentIntentId: payment.publicId,
+        providerTransactionId: 'POSTAR-TX-0001',
+        status: 'succeeded' as const,
+        amount: payment.amountMinor,
+        currency: payment.currency,
+        merchantId: trustedMerchant.merchantId,
+        occurredAt: '2026-08-11T12:05:00.000Z',
+      },
+    }))
+    const value = fixture({
+      onlinePayments: {
+        assertAvailable: vi.fn(),
+        resolveActivePayment: vi.fn(),
+        create: vi.fn(),
+        query,
+      },
+    })
+    const response = await value.app.inject({
+      method: 'POST',
+      url: `/api/payments/${paymentId}/provider-query`,
+      headers: { 'idempotency-key': 'provider-query-0001' },
+      payload: {},
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(query).toHaveBeenCalledWith(expect.objectContaining({
+      paymentId,
+      principal: { type: 'guest', tableSessionId, customerId },
+    }))
+    expect(value.commands.recordProviderQueryResult).toHaveBeenCalledWith(expect.objectContaining({
+      actor: { type: 'integration', ref: 'postar-active-query' },
+      paymentPublicId: payment.publicId,
+      providerTransactionId: 'POSTAR-TX-0001',
+      status: 'succeeded',
+      providerSnapshot: expect.objectContaining({ signatureVerified: true }),
+    }))
   })
 
   it('records cash or physical POS evidence with the authenticated employee, not a body actor', async () => {
@@ -813,6 +881,7 @@ function fixtureCommands(): PaymentApiOptions['commands'] {
     initiate: vi.fn(async () => ({ value: payment, replayed: false })),
     recordManual: vi.fn(async () => ({ value: payment, replayed: false })),
     recordSucceededCallback: vi.fn(async () => ({ value: payment, replayed: false })),
+    recordProviderQueryResult: vi.fn(async () => ({ value: payment, replayed: false })),
     requestRefund: vi.fn(async () => ({ value: refund, replayed: false })),
     approveRefund: vi.fn(async () => ({ value: refund, replayed: false })),
     rejectRefund: vi.fn(async () => ({ value: refund, replayed: false })),

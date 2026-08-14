@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Check, Gift, LoaderCircle, Minus, Plus, QrCode, ScanLine, Search, ShoppingCart, X } from 'lucide-react'
+import { Check, Gift, LoaderCircle, Minus, Plus, QrCode, RefreshCcw, ScanLine, Search, ShoppingCart, X } from 'lucide-react'
 import { MenuOrderingWorkspace, type MenuSubmitOptions } from '../../components/MenuOrderingWorkspace'
 import { CustomerPaymentCodeScanner } from '../../components/CustomerPaymentCodeScanner'
 import type { MenuProduct, MenuRecommendationConfig, MenuRecommendationScene } from '../../shared/contracts'
@@ -169,6 +169,30 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
     }
   }
 
+  const queryPayment = async () => {
+    if (paymentAction === null || paymentBusy) return
+    setPaymentBusy(true)
+    setError(null)
+    try {
+      const status = await api.queryOnlinePayment(paymentAction.paymentId)
+      if (status === 'succeeded') {
+        onSubmitted(`${table.code} 已确认到账，订单和收银状态已同步`)
+        onClose()
+        return
+      }
+      if (status === 'failed' || status === 'closed') {
+        setPaymentAction(null)
+        setError('支付机构已确认本次未成功，可以重新发起收款。')
+        return
+      }
+      onSubmitted(`${table.code} 支付机构仍在处理，请勿重复收款`)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '暂时无法核对到账，请到收银页面查看')
+    } finally {
+      setPaymentBusy(false)
+    }
+  }
+
   if (mode === 'paid') {
     const menuProducts = products.map(assistedProductToMenuProduct)
     return <div className="staff-order-overlay" role="dialog" aria-modal="true" aria-label={`${table.code}协助点单`}>
@@ -197,6 +221,7 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
           tableCode={table.code}
           onCreateQr={() => void createPayment('native_qr')}
           onScan={() => setShowPaymentScanner(true)}
+          onQuery={() => void queryPayment()}
           onDone={onClose}
         /> : phase === 'loading' ? <p className="staff-order-loading"><LoaderCircle className="is-spinning" /> 正在读取可售商品</p> : (
           <MenuOrderingWorkspace
@@ -288,7 +313,7 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
   </div>
 }
 
-function StaffPaymentChoice({ action, amountMinor, currency, busy, tableCode, onCreateQr, onScan, onDone }: {
+function StaffPaymentChoice({ action, amountMinor, currency, busy, tableCode, onCreateQr, onScan, onQuery, onDone }: {
   action: OnlinePaymentAction | null
   amountMinor: number
   currency: string
@@ -296,6 +321,7 @@ function StaffPaymentChoice({ action, amountMinor, currency, busy, tableCode, on
   tableCode: string
   onCreateQr(): void
   onScan(): void
+  onQuery(): void
   onDone(): void
 }) {
   const qrValue = action?.presentation === 'qr' && typeof action.payload?.qrCodeUrl === 'string'
@@ -311,10 +337,12 @@ function StaffPaymentChoice({ action, amountMinor, currency, busy, tableCode, on
       <StaffPaymentQr value={qrValue} />
       <h3>请客人扫码付款</h3>
       <p>客人也可以打开桌码中的“本桌已点”，从自己的手机继续这笔付款。</p>
+      <button type="button" className="staff-payment-query" disabled={busy} onClick={onQuery}><RefreshCcw size={18} />核对是否到账</button>
       <button type="button" className="staff-payment-done" onClick={onDone}><Check size={18} />暂时收起</button>
     </> : action?.presentation === 'barcode' ? <>
       <span className="staff-payment-result"><LoaderCircle className="is-spinning" /><strong>付款已受理，正在确认到账</strong></span>
       <p>不要重复扫描；收银与订单状态会在支付通知到达后同步更新。</p>
+      <button type="button" className="staff-payment-query" disabled={busy} onClick={onQuery}><RefreshCcw size={18} />核对是否到账</button>
       <button type="button" className="staff-payment-done" onClick={onDone}><Check size={18} />完成</button>
     </> : <>
       <div className="staff-payment-methods">

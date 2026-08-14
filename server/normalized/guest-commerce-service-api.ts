@@ -903,7 +903,7 @@ function paymentFromContext(value: Awaited<ReturnType<PaymentProviderActionRepos
     orderId: value.orderId,
     publicId: value.publicId,
     provider: value.provider,
-    providerTransactionId: null,
+    providerTransactionId: value.providerTransactionId,
     method: value.method,
     amountMinor: value.amountMinor,
     currency: value.currency,

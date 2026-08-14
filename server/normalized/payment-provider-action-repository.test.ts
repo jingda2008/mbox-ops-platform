@@ -28,6 +28,7 @@ describe('PaymentProviderActionRepository', () => {
           order_public_id: 'order-shared-payment-0001',
           public_id: 'payment-shared-0001',
           provider: 'postar',
+          provider_transaction_id: null,
           method: 'native_qr',
           amount_minor: '8800',
           currency: 'CNY',

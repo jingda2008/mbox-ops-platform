@@ -1,4 +1,7 @@
-import type { PaymentProviderSecretSource } from '../../src/shared/payment-provider-contracts.js'
+import type {
+  PaymentProviderSecretSource,
+  ProviderPaymentObservation,
+} from '../../src/shared/payment-provider-contracts.js'
 import type { OnlinePaymentAction } from '../../src/shared/online-payment-contracts.js'
 import type { PostarHttpClient, PostarTransactionMetadataSource, PostarSftpBillSource } from '../../src/shared/postar-contracts.js'
 import { PostarPaymentProviderAdapter, PostarPaymentRejectedError } from '../postar-adapter.js'
@@ -26,6 +29,17 @@ export interface ActiveOnlinePaymentInput {
   scope: Readonly<StoreScope>
   orderId: string
   principal: Readonly<PaymentPrincipal>
+}
+
+export interface QueryOnlinePaymentInput {
+  scope: Readonly<StoreScope>
+  paymentId: string
+  principal: Readonly<PaymentPrincipal>
+}
+
+export interface OnlinePaymentQueryResult {
+  context: ProviderPaymentContext
+  observation: ProviderPaymentObservation
 }
 
 export class OnlinePaymentUnavailableError extends Error {
@@ -96,6 +110,32 @@ export class OnlinePaymentService {
     } catch {
       return 'native_qr'
     }
+  }
+
+  async query(input: Readonly<QueryOnlinePaymentInput>): Promise<OnlinePaymentQueryResult> {
+    if (this.adapter === null || this.secrets === null || this.config === null) {
+      throw new OnlinePaymentUnavailableError()
+    }
+    const context = await this.transactions.run(input.scope, async (transaction) => (
+      new PaymentProviderActionRepository(transaction, this.secret)
+        .resolvePaymentContext(input.paymentId, input.principal, { lock: false })
+    ), { readOnly: true })
+    if (context.provider !== 'postar') {
+      throw new OnlinePaymentUnavailableError('当前付款不支持星驿主动查单')
+    }
+    if (!['created', 'pending'].includes(context.status)) {
+      throw new OnlinePaymentUnavailableError('这笔付款已有明确结果，无需重复查单')
+    }
+    const observation = await this.adapter.queryPayment({
+      paymentIntentId: context.publicId,
+      merchantId: this.config.merchantId,
+      providerTransactionId: context.providerTransactionId,
+      orderDate: postarOrderDate(context.createdAt),
+    }, { secrets: this.secrets })
+    if (observation.amount !== context.amountMinor || observation.currency !== context.currency) {
+      throw new OnlinePaymentUnknownError()
+    }
+    return { context, observation }
   }
 
   async create(input: Readonly<CreateOnlinePaymentInput>): Promise<OnlinePaymentAction> {
@@ -265,6 +305,18 @@ function unsupportedMetadataSource(): PostarTransactionMetadataSource {
     getRefundMetadata: unavailable,
     getRefundQueryMetadata: unavailable,
   }
+}
+
+function postarOrderDate(value: string): string {
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime())) throw new OnlinePaymentUnknownError()
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date)
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value
+  const result = `${part('year') ?? ''}${part('month') ?? ''}${part('day') ?? ''}`
+  if (!/^\d{8}$/.test(result)) throw new OnlinePaymentUnknownError()
+  return result
 }
 
 function unsupportedBillSource(): PostarSftpBillSource {

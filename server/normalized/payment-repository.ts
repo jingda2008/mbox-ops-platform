@@ -1,4 +1,5 @@
 import type { JsonObject } from './command-executor.js'
+import type { ChannelPaymentStatus } from '../../src/shared/payment-contracts.js'
 import { sanitizeProviderSnapshot } from './payment-security-policy.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
@@ -55,6 +56,10 @@ export interface ApplyPaymentCallbackInput {
 export interface PaymentCallbackApplication {
   payment: Payment
   applied: boolean
+}
+
+export interface ApplyPaymentQueryResultInput extends ApplyPaymentCallbackInput {
+  status: ChannelPaymentStatus
 }
 
 interface PaymentRow extends Record<string, unknown> {
@@ -244,6 +249,98 @@ export class PaymentRepository {
       payment: onePayment(updated, `Payment ${payment.id} lost its callback transition`),
       applied: true,
     }
+  }
+
+  async applyProviderQueryResult(
+    input: Readonly<ApplyPaymentQueryResultInput>,
+  ): Promise<PaymentCallbackApplication> {
+    validateCallbackInput(input)
+    const paymentOrder = await this.transaction.query<{ id: string; order_id: string }>(`
+      SELECT id, order_id
+      FROM mbox.payments
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+        AND public_id = $3 AND provider = $4
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      input.paymentPublicId,
+      input.provider,
+    ])
+    const paymentId = paymentOrder.rows[0]?.id
+    const orderId = paymentOrder.rows[0]?.order_id
+    if (paymentId === undefined || orderId === undefined) {
+      throw new PaymentNotFoundError(input.paymentPublicId)
+    }
+    await this.lockOrder(orderId)
+    const selected = await this.transaction.query<PaymentRow>(`
+      SELECT ${PAYMENT_COLUMNS}
+      FROM mbox.payments
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
+      FOR UPDATE
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
+    const stored = selected.rows[0]
+    if (stored === undefined) throw new PaymentNotFoundError(input.paymentPublicId)
+    verifyCallback(stored, input)
+    if (CAPTURED_PAYMENT_STATUSES.includes(stored.status)) {
+      return { payment: mapPayment(stored), applied: false }
+    }
+
+    const nextStatus: PaymentStatus = input.status === 'succeeded'
+      ? 'succeeded'
+      : input.status === 'failed'
+        ? 'failed'
+        : input.status === 'closed'
+          ? 'closed'
+          : 'pending'
+    if (stored.status === 'failed' || stored.status === 'closed') {
+      if (stored.status !== nextStatus) throw new PaymentTransitionError(stored.id, stored.status)
+      return { payment: mapPayment(stored), applied: false }
+    }
+    const snapshot = sanitizeProviderSnapshot({
+      ...input.providerSnapshot,
+      providerStatus: input.status,
+      queryObservedAt: input.succeededAt ?? null,
+    })
+    const updated = await this.transaction.query<PaymentRow>(`
+      UPDATE mbox.payments
+      SET status = $4,
+          provider_transaction_id = $5,
+          provider_snapshot = provider_snapshot || $6::jsonb,
+          succeeded_at = CASE
+            WHEN $4 = 'succeeded' THEN COALESCE($7::timestamptz, clock_timestamp())
+            ELSE succeeded_at
+          END,
+          updated_at = clock_timestamp()
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
+        AND status IN ('created', 'pending')
+      RETURNING ${PAYMENT_COLUMNS}
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      stored.id,
+      nextStatus,
+      input.providerTransactionId,
+      JSON.stringify(snapshot),
+      input.succeededAt ?? null,
+    ])
+    const payment = onePayment(updated, `Payment ${stored.id} lost its provider query transition`)
+    if (nextStatus === 'succeeded') {
+      await this.consumeProviderAction(payment.id)
+    } else if (nextStatus === 'failed' || nextStatus === 'closed') {
+      await this.transaction.query(`
+        UPDATE mbox.payment_provider_actions
+        SET state = 'failed', ciphertext = NULL, nonce = NULL, auth_tag = NULL,
+            last_error_code = $4, updated_at = clock_timestamp()
+        WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND payment_id = $3::uuid
+          AND state IN ('creating', 'ready', 'unknown')
+      `, [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        payment.id,
+        `provider-query:${input.status}`,
+      ])
+    }
+    return { payment, applied: true }
   }
 
   async consumeProviderAction(paymentId: string): Promise<void> {

@@ -125,4 +125,18 @@ describe('StaffActionsApi', () => {
       customerAuthCode: '134567890123456789',
     })
   })
+
+  it('queries the original provider payment instead of creating another charge', async () => {
+    const paymentId = '11111111-1111-4111-8111-111111111111'
+    const send = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      data: { id: paymentId, status: 'succeeded' }, meta: { replayed: false },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const api = new StaffActionsApi({ fetch: send, createIdempotencyKey: () => 'query-key-0001' })
+
+    await expect(api.queryOnlinePayment(paymentId)).resolves.toBe('succeeded')
+    const [url, request] = send.mock.calls[0]!
+    expect(url).toBe(`/api/payments/${paymentId}/provider-query`)
+    expect(new Headers(request?.headers).get('idempotency-key')).toBe('staff-payment-query-query-key-0001')
+    expect(request?.method).toBe('POST')
+  })
 })

@@ -218,6 +218,7 @@
 .staff-payment-choice h3 { margin: 0; }
 .staff-payment-result { display: flex; align-items: center; gap: 9px; padding: 16px; color: #176647; }
 .staff-payment-done { width: min(100%, 360px); min-height: 48px !important; color: #fff; border-color: #197b56; background: #197b56; display: flex; align-items: center; justify-content: center; gap: 7px; }
+.staff-payment-query { width: min(100%, 360px); min-height: 46px !important; color: #4d421f; border-color: #c9ad54; background: #fff9e7; display: flex; align-items: center; justify-content: center; gap: 7px; }
 .staff-payment-busy { display: flex; align-items: center; gap: 7px; color: #705a20; }
 
 @media (min-width: 720px) {

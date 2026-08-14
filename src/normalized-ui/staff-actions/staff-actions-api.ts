@@ -118,6 +118,7 @@ export interface StaffActionsApiPort {
     method: 'native_qr' | 'auth_code'
     customerAuthCode?: string
   }>): Promise<OnlinePaymentAction>
+  queryOnlinePayment(paymentId: string): Promise<'pending' | 'succeeded' | 'failed' | 'closed'>
 }
 
 export interface StaffActionsApiOptions {
@@ -283,6 +284,23 @@ export class StaffActionsApi implements StaffActionsApiPort {
       throw new StaffActionsApiError('支付结果无法识别，请到收银页面核对', 'INVALID_PAYMENT_RESPONSE', response.status)
     }
     return body.data.providerAction
+  }
+
+  async queryOnlinePayment(paymentId: string): Promise<'pending' | 'succeeded' | 'failed' | 'closed'> {
+    const headers = new Headers({
+      accept: 'application/json',
+      'content-type': 'application/json',
+      'idempotency-key': `staff-payment-query-${this.createIdempotencyKey()}`,
+    })
+    const response = await this.request(`/api/payments/${encodeURIComponent(paymentId)}/provider-query`, {
+      method: 'POST', headers, body: '{}',
+    })
+    const body = await readJson(response)
+    const status = isObject(body) && isObject(body.data) ? body.data.status : undefined
+    if (status !== 'pending' && status !== 'succeeded' && status !== 'failed' && status !== 'closed') {
+      throw new StaffActionsApiError('查单结果无法识别，请到收银页面核对', 'INVALID_PAYMENT_QUERY_RESPONSE', response.status)
+    }
+    return status
   }
 
   private async getData<Data>(url: string, signal?: AbortSignal): Promise<Data> {

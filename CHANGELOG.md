@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.85 - 2026-08-14
+
+- Added a signed, amount-checked active Postar payment query to the normalized runtime so an uncertain payment can be verified without creating another charge.
+- Reconciled successful query results exactly once, preserved pending results and reopened failed or closed payment actions for a controlled retry.
+- Added an employee-facing "核对是否到账" action after QR or barcode initiation while keeping guests and staff on the same table payment.
+- Added a release-controlled `pay.shmbox.com` TLS ingress installer with certificate, private-key, Caddy validation, redacted access logging, health verification and rollback.
+- Added the first real one-yuan payment acceptance runbook and permanent regression coverage; production acquiring remains disabled until the correct provider public key, channel environment and explicit transaction authorization are present.
+
 ## 1.0.0-rc.84 - 2026-08-14
 
 - Added the store credential and every employee PIN field from the authoritative store configuration to generated validation and production templates.

@@ -11,6 +11,7 @@ export interface ProviderPaymentContext {
   orderPublicId: string
   publicId: string
   provider: PaymentProvider
+  providerTransactionId: string | null
   method: PaymentMethod
   amountMinor: number
   currency: string
@@ -30,6 +31,7 @@ interface ContextRow extends Record<string, unknown> {
   order_public_id: string
   public_id: string
   provider: PaymentProvider
+  provider_transaction_id: string | null
   method: PaymentMethod
   amount_minor: string | number
   currency: string
@@ -97,7 +99,8 @@ export class PaymentProviderActionRepository {
     const lockClause = options.lock === false ? '' : 'FOR SHARE OF payment, ordering'
     const result = await this.transaction.query<ContextRow>(`
       SELECT payment.id, payment.order_id, ordering.public_id AS order_public_id,
-        payment.public_id, payment.provider, payment.method, payment.amount_minor,
+        payment.public_id, payment.provider, payment.provider_transaction_id,
+        payment.method, payment.amount_minor,
         payment.currency, payment.status, payment.created_at::text,
         ordering.table_session_id, venue_table.code AS table_code
       FROM mbox.payments payment
@@ -164,7 +167,8 @@ export class PaymentProviderActionRepository {
   ): Promise<ProviderPaymentContext | null> {
     const result = await this.transaction.query<ContextRow>(`
       SELECT payment.id, payment.order_id, ordering.public_id AS order_public_id,
-        payment.public_id, payment.provider, payment.method, payment.amount_minor,
+        payment.public_id, payment.provider, payment.provider_transaction_id,
+        payment.method, payment.amount_minor,
         payment.currency, payment.status, payment.created_at::text,
         ordering.table_session_id, venue_table.code AS table_code
       FROM mbox.payments payment
@@ -414,6 +418,7 @@ function mapContext(row: ContextRow): ProviderPaymentContext {
     orderPublicId: row.order_public_id,
     publicId: row.public_id,
     provider: row.provider,
+    providerTransactionId: row.provider_transaction_id,
     method: row.method,
     amountMinor,
     currency: row.currency,

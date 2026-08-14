@@ -59,6 +59,57 @@ describe('PaymentRepository', () => {
     expect(transaction.calls).toHaveLength(3)
   })
 
+  it('applies a signed active query success once and consumes the provider action', async () => {
+    const transaction = new ScriptedTransaction([
+      rows([{ id: paymentId, order_id: orderId }]),
+      rows([orderRow(8800)]),
+      rows([paymentRow('pending', 8800)]),
+      rows([paymentRow('succeeded', 8800, 'provider-payment-001')]),
+      rows([]),
+    ])
+
+    const application = await new PaymentRepository(transaction).applyProviderQueryResult({
+      paymentPublicId: 'payment-order-0001',
+      provider: 'postar',
+      providerTransactionId: 'provider-payment-001',
+      reportedAmountMinor: 8800,
+      reportedCurrency: 'CNY',
+      status: 'succeeded',
+      providerSnapshot: { signatureVerified: true, providerStatus: 'succeeded' },
+      succeededAt: '2026-08-11T12:00:00.000Z',
+    })
+
+    expect(application).toMatchObject({ applied: true, payment: { status: 'succeeded' } })
+    expect(transaction.calls[3]?.sql).toContain("SET status = $4")
+    expect(transaction.calls[3]?.values[3]).toBe('succeeded')
+    expect(transaction.calls[4]?.sql).toContain("SET state = 'consumed'")
+  })
+
+  it('releases the order for a new attempt after a verified failed provider query', async () => {
+    const transaction = new ScriptedTransaction([
+      rows([{ id: paymentId, order_id: orderId }]),
+      rows([orderRow(8800)]),
+      rows([paymentRow('pending', 8800)]),
+      rows([paymentRow('failed', 8800, 'provider-payment-002')]),
+      rows([]),
+    ])
+
+    const application = await new PaymentRepository(transaction).applyProviderQueryResult({
+      paymentPublicId: 'payment-order-0001',
+      provider: 'postar',
+      providerTransactionId: 'provider-payment-002',
+      reportedAmountMinor: 8800,
+      reportedCurrency: 'CNY',
+      status: 'failed',
+      providerSnapshot: { signatureVerified: true, providerStatus: 'failed' },
+      succeededAt: '2026-08-11T12:00:00.000Z',
+    })
+
+    expect(application).toMatchObject({ applied: true, payment: { status: 'failed' } })
+    expect(transaction.calls[4]?.sql).toContain("SET state = 'failed'")
+    expect(transaction.calls[4]?.values[3]).toBe('provider-query:failed')
+  })
+
   it('stores only allowlisted provider evidence and excludes credentials and customer identifiers', async () => {
     const transaction = new ScriptedTransaction([
       rows([orderRow(8800)]),

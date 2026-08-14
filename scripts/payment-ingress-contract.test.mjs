@@ -34,6 +34,18 @@ test('payment ingress is private-key safe, redacts query secrets and restores on
   assert.doesNotMatch(configure, /cat "\$\{private_key\}"/)
 })
 
+test('payment ingress preserves the bind-mounted Caddyfile inode and verifies container visibility', () => {
+  assert.match(configure, /cat "\$\{candidate\}" > "\$\{config_source\}"/)
+  assert.match(configure, /cat "\$\{backup\}" > "\$\{config_source\}"/)
+  assert.match(configure, /docker exec "\$\{caddy_container\}" cat \/etc\/caddy\/Caddyfile \| sha256sum/)
+  assert.match(configure, /test "\$\{candidate_config_sha\}" = "\$\{container_config_sha\}"/)
+  assert.doesNotMatch(configure, /install -m 0600 "\$\{candidate\}" "\$\{config_source\}"/)
+
+  assert.match(rollback, /cat "\$\{backup\}" > "\$\{config_source\}"/)
+  assert.match(rollback, /test "\$\{host_config_sha\}" = "\$\{container_config_sha\}"/)
+  assert.doesNotMatch(rollback, /install -m 0600 "\$\{backup\}" "\$\{config_source\}"/)
+})
+
 test('payment ingress validates TLS and the reverse proxied application before success', () => {
   assert.match(configure, /caddy validate/)
   assert.match(configure, /for _ in \$\(seq 1 20\)/)

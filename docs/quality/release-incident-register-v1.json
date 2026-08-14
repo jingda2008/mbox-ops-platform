@@ -121,6 +121,16 @@
       "automaticBlocker": "bounded 30-second normalized database setup hook timeout",
       "fixCommit": "42a5b90d2482edda0274857b81b5499b10fbdf06",
       "status": "covered"
+    },
+    {
+      "id": "REL-013",
+      "category": "payment-ingress-bind-mount",
+      "rootCause": "Replacing the host Caddyfile inode left the running container attached to the old bind-mounted inode, so a valid host candidate was invisible to Caddy.",
+      "earliestDetectionStage": "payment_ingress_preflight",
+      "regressionTest": "scripts/payment-ingress-contract.test.mjs",
+      "automaticBlocker": "inode-preserving Caddyfile write plus host-to-container SHA256 visibility gate",
+      "fixCommit": "82e729128abf4b01ee2047e96a79686830cf0431",
+      "status": "covered"
     }
   ]
 }

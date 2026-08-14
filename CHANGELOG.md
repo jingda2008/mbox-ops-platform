@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0-rc.87 - 2026-08-14
+
+- Preserved the bind-mounted Caddyfile inode while installing or rolling back the payment domain, so the running container reads the exact host configuration that was validated.
+- Added a host-to-container SHA256 visibility gate before Caddy validation and reload; a stale bind mount now fails before activation.
+- Kept provider payment disabled; this release changes ingress activation only and does not initiate a real transaction.
+
 ## 1.0.0-rc.86 - 2026-08-14
 
 - Normalized Alibaba Cloud certificate bundles before Caddy activation by removing bundled self-signed root certificates while preserving the leaf and intermediate chain.

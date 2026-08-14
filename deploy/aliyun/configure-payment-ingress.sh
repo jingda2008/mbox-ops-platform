@@ -127,7 +127,8 @@ https://${domain} {
 EOF
 
 restore() {
-  install -m 0600 "${backup}" "${config_source}"
+  cat "${backup}" > "${config_source}"
+  chmod 0600 "${config_source}"
   if test -n "${snippet_backup}"; then
     install -m 0600 "${snippet_backup}" "${snippet}"
   else
@@ -146,8 +147,12 @@ restore() {
   docker exec "${caddy_container}" caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 || true
 }
 trap 'restore' ERR
-install -m 0600 "${candidate}" "${config_source}"
+cat "${candidate}" > "${config_source}"
+chmod 0600 "${config_source}"
 install -m 0600 "${snippet_candidate}" "${snippet}"
+candidate_config_sha=$(sha256sum "${candidate}" | awk '{print $1}')
+container_config_sha=$(docker exec "${caddy_container}" cat /etc/caddy/Caddyfile | sha256sum | awk '{print $1}')
+test "${candidate_config_sha}" = "${container_config_sha}"
 docker exec "${caddy_container}" caddy validate --config /etc/caddy/Caddyfile >/dev/null
 docker exec "${caddy_container}" caddy reload --config /etc/caddy/Caddyfile >/dev/null
 probe_succeeded=0

@@ -10,5 +10,6 @@ test('normalized PostgreSQL suite always uses an isolated disposable database', 
   assert.match(source, /pg_terminate_backend/)
   assert.match(source, /DROP DATABASE IF EXISTS/)
   assert.match(source, /TEST_NORMALIZED_DATABASE_URL: databaseUrl/)
+  assert.match(source, /--hookTimeout=30000/)
   assert.doesNotMatch(source, /DROP SCHEMA\s+mbox/i)
 })

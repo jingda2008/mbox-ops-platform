@@ -101,6 +101,26 @@
       "automaticBlocker": "IP-aware TLS server-name selection",
       "fixCommit": "4999249d3b8bfefce9036e7f86109cad9c55e9cf",
       "status": "covered"
+    },
+    {
+      "id": "REL-011",
+      "category": "payment-ingress-certificate-chain",
+      "rootCause": "The Alibaba Cloud PEM archive included a self-signed root certificate and the installer probed the reloaded TLS listener before it was ready.",
+      "earliestDetectionStage": "payment_ingress_preflight",
+      "regressionTest": "scripts/payment-ingress-contract.test.mjs",
+      "automaticBlocker": "normalized certificate-chain activation plus bounded TLS application probe",
+      "fixCommit": "cd615c4184a05521d6f1c21bf8623003f45e074e",
+      "status": "covered"
+    },
+    {
+      "id": "REL-012",
+      "category": "ci-database-setup-timeout",
+      "rootCause": "A disposable PostgreSQL migration hook inherited the 10-second unit-test default and could fail under runner contention after all business assertions remained healthy.",
+      "earliestDetectionStage": "normalized_database",
+      "regressionTest": "scripts/run-normalized-postgres-tests.test.mjs",
+      "automaticBlocker": "bounded 30-second normalized database setup hook timeout",
+      "fixCommit": "42a5b90d2482edda0274857b81b5499b10fbdf06",
+      "status": "covered"
     }
   ]
 }

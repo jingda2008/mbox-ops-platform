@@ -46,6 +46,14 @@ function signAsPostar(payload: PostarTopLevelPayload) {
 
 function response(payload: PostarTopLevelPayload): PostarHttpResponse {
   return {
+    body: new TextEncoder().encode(JSON.stringify(payload)),
+    headers: { 'content-type': 'application/json' },
+    status: 200,
+  }
+}
+
+function signedResponse(payload: PostarTopLevelPayload): PostarHttpResponse {
+  return {
     body: new TextEncoder().encode(JSON.stringify(signAsPostar(payload))),
     headers: { 'content-type': 'application/json' },
     status: 200,
@@ -184,8 +192,8 @@ describe('Postar JSAPI payment creation', () => {
     })
   })
 
-  it('fails closed on unsigned or provider-declined creation responses', async () => {
-    const unsigned = new PostarPaymentProviderAdapter(testOptions(async () => ({
+  it('accepts the official unsigned response contract but rejects incomplete or provider-declined creation responses', async () => {
+    const incomplete = new PostarPaymentProviderAdapter(testOptions(async () => ({
       body: new TextEncoder().encode('{"code":"000000","msg":"success"}'), headers: {}, status: 200,
     })))
     const request = {
@@ -194,9 +202,24 @@ describe('Postar JSAPI payment creation', () => {
       clientIp: '203.0.113.10', callbackUrl: 'https://pay.example.test/postar/callback',
       operatorId: 'cashier-1', remark: 'L01 table',
     }
-    await expect(unsigned.createPayment(request, context)).rejects.toThrow('响应缺少签名')
+    await expect(incomplete.createPayment(request, context)).rejects.toThrow('同步响应缺少data')
     const declined = new PostarPaymentProviderAdapter(testOptions(async () => response({ code: 'E100', msg: 'merchant disabled' })))
     await expect(declined.createPayment(request, context)).rejects.toThrow('星驿下单失败: E100 merchant disabled')
+  })
+
+  it('verifies an optional synchronous response signature when the provider supplies one', async () => {
+    const invalid = signedResponse({ code: '000000', data: 'https://pay.postar.example/qr/PaymentABC123', msg: 'success' })
+    const parsed = JSON.parse(new TextDecoder().decode(invalid.body)) as Record<string, unknown>
+    parsed.data = 'https://attacker.example/qr/tampered'
+    invalid.body = new TextEncoder().encode(JSON.stringify(parsed))
+    const adapter = new PostarPaymentProviderAdapter(testOptions(async () => invalid))
+
+    await expect(adapter.createPayment({
+      paymentIntentId: 'PaymentABC123', merchantId: 'MERCHANT001', amount: 3000, currency: 'CNY',
+      expiresAt: '2026-07-14T04:20:00.000Z', presentation: 'qr',
+      clientIp: '203.0.113.10', callbackUrl: 'https://pay.example.test/postar/callback',
+      operatorId: 'cashier-1', remark: 'L01 table',
+    }, context)).rejects.toThrow('签名验证失败')
   })
 })
 
@@ -267,7 +290,7 @@ describe('Postar customer payment code collection', () => {
 })
 
 describe('Postar active payment query', () => {
-  it('uses the whitelisted endpoint, injected HTTP/key/metadata sources and verifies response signing', async () => {
+  it('uses the whitelisted endpoint, injected HTTP/key/metadata sources and validates response binding', async () => {
     const post = vi.fn(async (_request: PostarHttpRequest) => response({
       code: '000000',
       data: {
@@ -286,6 +309,8 @@ describe('Postar active payment query', () => {
     const observation = await adapter.queryPayment({
       merchantId: 'MERCHANT001',
       paymentIntentId: 'PaymentABC123',
+      amount: 3000,
+      currency: 'CNY',
       providerTransactionId: null,
     }, context)
 
@@ -326,6 +351,8 @@ describe('Postar active payment query', () => {
     await adapter.queryPayment({
       merchantId: 'MERCHANT001',
       paymentIntentId: 'PaymentABC123',
+      amount: 3000,
+      currency: 'CNY',
       providerTransactionId: null,
       orderDate: '20260714',
     }, context)
@@ -334,17 +361,19 @@ describe('Postar active payment query', () => {
     expect(options.metadataSource.getPaymentMetadata).not.toHaveBeenCalled()
   })
 
-  it('fails closed when a synchronous response is unsigned or reports pre-authorisation', async () => {
-    const unsigned = new PostarPaymentProviderAdapter(testOptions(async () => ({
+  it('fails closed when a synchronous response is incomplete or reports pre-authorisation', async () => {
+    const incomplete = new PostarPaymentProviderAdapter(testOptions(async () => ({
       body: new TextEncoder().encode('{"code":"000000","msg":"success"}'),
       headers: {},
       status: 200,
     })))
-    await expect(unsigned.queryPayment({
+    await expect(incomplete.queryPayment({
       merchantId: 'MERCHANT001',
       paymentIntentId: 'PaymentABC123',
+      amount: 3000,
+      currency: 'CNY',
       providerTransactionId: null,
-    }, context)).rejects.toThrow('响应缺少签名')
+    }, context)).rejects.toThrow('同步响应缺少data')
 
     const preauthorised = new PostarPaymentProviderAdapter(testOptions(async () => response({
       code: '000000',
@@ -361,8 +390,64 @@ describe('Postar active payment query', () => {
     await expect(preauthorised.queryPayment({
       merchantId: 'MERCHANT001',
       paymentIntentId: 'PaymentABC123',
+      amount: 3000,
+      currency: 'CNY',
       providerTransactionId: null,
     }, context)).rejects.toThrow('不是普通支付状态')
+  })
+
+  it('keeps a provider pending result with zero txamt pending and bound to the expected amount', async () => {
+    const adapter = new PostarPaymentProviderAdapter(testOptions(async () => response({
+      code: '222222',
+      data: {
+        agetId: 'AGENCY001',
+        orderNo: 'POSTAR202607140001',
+        orderStatus: '2',
+        orderTime: '20260714120506',
+        threeOrderNo: 'PaymentABC123',
+        txamt: '0',
+      },
+      msg: '支付中',
+    })))
+
+    const observation = await adapter.queryPayment({
+      merchantId: 'MERCHANT001',
+      paymentIntentId: 'PaymentABC123',
+      amount: 3000,
+      currency: 'CNY',
+      providerTransactionId: null,
+      orderDate: '20260714',
+    }, context)
+
+    expect(observation).toMatchObject({
+      amount: 3000,
+      providerReportedAmount: 0,
+      status: 'processing',
+    })
+  })
+
+  it('rejects a successful provider query whose amount differs from the bound payment', async () => {
+    const adapter = new PostarPaymentProviderAdapter(testOptions(async () => response({
+      code: '000000',
+      data: {
+        agetId: 'AGENCY001',
+        orderNo: 'POSTAR202607140001',
+        orderStatus: '1',
+        orderTime: '20260714120506',
+        threeOrderNo: 'PaymentABC123',
+        txamt: '2999',
+      },
+      msg: '交易成功',
+    })))
+
+    await expect(adapter.queryPayment({
+      merchantId: 'MERCHANT001',
+      paymentIntentId: 'PaymentABC123',
+      amount: 3000,
+      currency: 'CNY',
+      providerTransactionId: null,
+      orderDate: '20260714',
+    }, context)).rejects.toThrow('支付成功金额与预期金额不匹配')
   })
 })
 

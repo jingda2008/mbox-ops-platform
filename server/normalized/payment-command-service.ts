@@ -254,7 +254,7 @@ export class PaymentCommandService {
     input: Readonly<PaymentProviderQueryResultCommand>,
   ): Promise<CommandExecution<Payment>> {
     const providerSnapshot = sanitizeProviderSnapshot(input.providerSnapshot)
-    requireVerifiedIntegration(input.actor, providerSnapshot, 'Payment provider query')
+    requireVerifiedProviderQuery(input.actor, providerSnapshot)
     return this.commands.execute(command(input, 'payment.provider-query', paymentCodec), async (transaction) => {
       const payments = new PaymentRepository(transaction)
       const application = await payments.applyProviderQueryResult({
@@ -624,6 +624,19 @@ function requireVerifiedIntegration(
     || providerSnapshot.signatureVerified !== true
   ) {
     throw new TypeError(`${action} requires an identified integration with verified signature`)
+  }
+}
+
+function requireVerifiedProviderQuery(actor: AuditActor, providerSnapshot: JsonObject): void {
+  const verifiedBySignature = providerSnapshot.signatureVerified === true
+  const verifiedByActiveQuery = providerSnapshot.verificationAlgorithm === 'rsa-request+tls+response-binding'
+  if (
+    actor.type !== 'integration'
+    || actor.ref === undefined
+    || actor.ref.trim().length === 0
+    || (!verifiedBySignature && !verifiedByActiveQuery)
+  ) {
+    throw new TypeError('Payment provider query requires an identified integration with verified response binding')
   }
 }
 

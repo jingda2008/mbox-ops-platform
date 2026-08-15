@@ -77,6 +77,34 @@ describe('PaymentCommandService', () => {
     expect(transaction.calls).toEqual([])
   })
 
+  it('accepts bound server-to-server query evidence without weakening callback signature checks', async () => {
+    const transaction = new PaymentFlowTransaction(orderOneId, paymentOneId, 'callback')
+    const executor = new MemoryIdempotentExecutor(() => transaction)
+    const service = new PaymentCommandService(executor, allowAllAuthorization)
+
+    await service.recordProviderQueryResult({
+      ...callbackCommand(),
+      actor: { type: 'integration', ref: 'postar-active-query' },
+      idempotencyKey: 'active-query-provider-payment-001',
+      status: 'succeeded',
+      providerSnapshot: {
+        signatureVerified: false,
+        verificationAlgorithm: 'rsa-request+tls+response-binding',
+        providerReportedAmountMinor: 8800,
+      },
+    })
+
+    expect(executor.handlerCalls).toBe(1)
+    expect(() => service.recordSucceededCallback({
+      ...callbackCommand(),
+      idempotencyKey: 'callback-query-evidence-is-not-signature-0001',
+      providerSnapshot: {
+        signatureVerified: false,
+        verificationAlgorithm: 'rsa-request+tls+response-binding',
+      },
+    })).toThrow('verified signature')
+  })
+
   it('lets different orders progress concurrently without a process-wide payment queue', async () => {
     const transactions = new Map([
       ['init-order-one-0001', new PaymentFlowTransaction(orderOneId, paymentOneId, 'initiate')],

@@ -129,6 +129,8 @@ export class OnlinePaymentService {
     const observation = await this.adapter.queryPayment({
       paymentIntentId: context.publicId,
       merchantId: this.config.merchantId,
+      amount: context.amountMinor,
+      currency: context.currency,
       providerTransactionId: context.providerTransactionId,
       orderDate: postarOrderDate(context.createdAt),
     }, { secrets: this.secrets })

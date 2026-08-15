@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.89 - 2026-08-15
+
+- Aligned Postar synchronous responses with the provider contract: requests remain RSA-signed, optional response signatures are verified when present, and unsigned synchronous responses are accepted only over the fixed HTTPS endpoint with strict merchant, order, status and amount binding.
+- Preserved pending payment queries when Postar reports `txamt=0`, while requiring the exact expected amount before any successful result can activate fulfillment.
+- Distinguished signed callbacks from server-to-server active queries in payment evidence instead of falsely marking unsigned query responses as signature-verified.
+- Preserved an explicitly configured `test`, `uat` or `production` payment mode during server environment canonicalization, preventing a valid test configuration from silently changing to UAT.
+- Kept store online-payment policy fail-closed and production acquiring unchanged; validation uses the restored Postar test channel only.
+
 ## 1.0.0-rc.88 - 2026-08-15
 
 - Restored role-scoped responsibility assignment, venue, performer, schedule, song-catalog and product operating configuration without exposing management actions to every logged-in employee.

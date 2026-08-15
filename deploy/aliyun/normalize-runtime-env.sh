@@ -33,8 +33,13 @@ set_env MBOX_DEPLOYMENT_TIER "${deployment_tier}"
 legacy_payment_enabled=$(get_env MBOX_POSTAR_ENABLED)
 payment_provider=$(get_env MBOX_PAYMENT_PROVIDER)
 if [ "${payment_provider}" = postar ] || [ "${legacy_payment_enabled}" = true ]; then
-  payment_mode=$(get_env POSTAR_ENVIRONMENT)
-  [ -n "${payment_mode}" ] || payment_mode=$(get_env MBOX_POSTAR_ENVIRONMENT)
+  payment_mode=$(get_env MBOX_PAYMENT_MODE)
+  case "${payment_mode}" in test|uat|production) ;;
+    *)
+      payment_mode=$(get_env POSTAR_ENVIRONMENT)
+      [ -n "${payment_mode}" ] || payment_mode=$(get_env MBOX_POSTAR_ENVIRONMENT)
+      ;;
+  esac
   set_env MBOX_PAYMENT_MODE "${payment_mode:-uat}"
   set_env MBOX_PAYMENT_PROVIDER postar
   for suffix in AGENCY_ID MERCHANT_ID PUBLIC_KEY CALLBACK_URL HTTP_TIMEOUT_MS; do

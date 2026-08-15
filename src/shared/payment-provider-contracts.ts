@@ -23,7 +23,10 @@ export interface ProviderPaymentObservation {
   paymentIntentId: string
   providerTransactionId: string
   status: ChannelPaymentStatus
+  /** Expected order amount after binding the provider result to the query request. */
   amount: MoneyAmount
+  /** Raw amount returned by the provider; some pending Postar queries return zero. */
+  providerReportedAmount?: MoneyAmount
   currency: string
   merchantId: string
   settlementChannel?: Extract<SettlementChannel, 'wechat' | 'alipay' | 'unionpay'>
@@ -67,6 +70,8 @@ export interface ProviderCreatePaymentResult {
 export interface ProviderPaymentQueryRequest {
   paymentIntentId: string
   merchantId: string
+  amount: MoneyAmount
+  currency: string
   providerTransactionId: string | null
   /** Original payment date in the provider's merchant timezone, YYYYMMDD. */
   orderDate?: string

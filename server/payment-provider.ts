@@ -271,6 +271,8 @@ export async function queryPaymentThroughProvider(input: QueryProviderPaymentInp
     {
       paymentIntentId: intent.id,
       merchantId: intent.merchantId,
+      amount: intent.amount,
+      currency: intent.currency,
       providerTransactionId: intent.channelTransactionId,
     },
     { secrets: input.secrets },

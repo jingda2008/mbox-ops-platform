@@ -204,10 +204,15 @@ function parseJsonBytes(body: Uint8Array, label: string) {
   return value
 }
 
-function parseSignedResponse(response: PostarHttpResponse, publicKey: string) {
+function parseSynchronousResponse(response: PostarHttpResponse, publicKey: string) {
   if (response.status !== 200) throw new Error(`星驿HTTP响应异常: ${response.status}`)
   const parsed = parseJsonBytes(response.body, '星驿同步响应')
-  verifyEncryptedDigest(parsed as PostarTopLevelPayload, publicKey)
+  // The official synchronous API contract defines code/msg/data and does not
+  // require a response signature. Requests remain RSA signed, transport stays
+  // HTTPS, and any optional signature supplied by Postar is still verified.
+  // Payment success is never inferred from order creation; it must come from a
+  // verified callback or a bound active query result.
+  if (Object.hasOwn(parsed, 'sign')) verifyEncryptedDigest(parsed as PostarTopLevelPayload, publicKey)
   const code = requiredString(parsed, 'code', '同步响应code')
   const msg = requiredString(parsed, 'msg', '同步响应msg')
   return { ...parsed, code, msg, data: parsed.data as PostarJsonValue | undefined } as PostarSynchronousResponse
@@ -374,9 +379,21 @@ function parsePaymentObservation(
   if (response.code === '555555' && status !== 'failed') {
     throw new Error('星驿支付失败响应与订单状态冲突')
   }
+  if (!Number.isSafeInteger(request.amount) || request.amount <= 0) {
+    throw new Error('星驿支付查询预期金额必须为正整数分')
+  }
+  if (request.currency !== 'CNY') throw new Error('星驿支付查询仅支持CNY')
+  const providerReportedAmount = parseMoney(data.txamt, '星驿支付金额')
+  if (status === 'succeeded' && providerReportedAmount !== request.amount) {
+    throw new Error('星驿支付成功金额与预期金额不匹配')
+  }
+  if (status !== 'succeeded' && providerReportedAmount !== 0 && providerReportedAmount !== request.amount) {
+    throw new Error('星驿支付查询金额与预期金额不匹配')
+  }
   return {
-    amount: parsePositiveMoney(data.txamt, '星驿支付金额'),
-    currency: 'CNY',
+    amount: request.amount,
+    providerReportedAmount,
+    currency: request.currency,
     merchantId: request.merchantId,
     settlementChannel: settlementChannel(data.payChannel),
     occurredAt: parsePostarDateTime(requiredString(data, 'orderTime'), '星驿支付完成时间'),
@@ -564,7 +581,7 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
       version: VERSION,
     }
     if (request.presentation === 'qr') {
-      const response = parseSignedResponse(await this.options.httpClient.post({
+      const response = parseSynchronousResponse(await this.options.httpClient.post({
         body: signedRequestBody({
           ...commonPayload,
           payType: '00',
@@ -589,7 +606,7 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
     }
 
     if (request.presentation === 'barcode') {
-      const response = parseSignedResponse(await this.options.httpClient.post({
+      const response = parseSynchronousResponse(await this.options.httpClient.post({
         body: signedRequestBody({
           ...commonPayload,
           code: request.customerAuthCode,
@@ -628,7 +645,7 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
       }
     }
 
-    const response = parseSignedResponse(await this.options.httpClient.post({
+    const response = parseSynchronousResponse(await this.options.httpClient.post({
       body: signedRequestBody({
         ...commonPayload,
         ip: request.clientIp,
@@ -731,7 +748,7 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
       headers: { 'content-type': 'application/json; charset=utf-8' },
       url: `${this.baseUrl}${POSTAR_ENDPOINTS.queryPayment}`,
     })
-    return parsePaymentObservation(parseSignedResponse(response, publicKey), request, agencyId)
+    return parsePaymentObservation(parseSynchronousResponse(response, publicKey), request, agencyId)
   }
 
   async requestRefund(
@@ -751,7 +768,7 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
       this.agencyIdSecretName,
       this.publicKeySecretName,
     )
-    const response = parseSignedResponse(await this.options.httpClient.post({
+    const response = parseSynchronousResponse(await this.options.httpClient.post({
       body: signedRequestBody({
         agetId: agencyId,
         custId: metadata.merchantId,
@@ -796,7 +813,7 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
       this.agencyIdSecretName,
       this.publicKeySecretName,
     )
-    const response = parseSignedResponse(await this.options.httpClient.post({
+    const response = parseSynchronousResponse(await this.options.httpClient.post({
       body: signedRequestBody({
         agetId: agencyId,
         custId: request.merchantId,

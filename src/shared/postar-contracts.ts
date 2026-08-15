@@ -96,8 +96,8 @@ export interface PostarSynchronousResponse {
   code: string
   msg: string
   data?: PostarJsonValue
-  /** Required by the safety specification but omitted from the endpoint response schemas. */
-  sign: string
+  /** Not present in the official synchronous schemas; verified when supplied. */
+  sign?: string
 }
 
 export interface PostarCallbackAcknowledgementCandidate {

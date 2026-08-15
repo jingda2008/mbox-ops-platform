@@ -336,8 +336,10 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       const observed = queried.observation
       const actor: AuditActor = { type: 'integration', ref: 'postar-active-query' }
       const providerSnapshot = sanitizeProviderSnapshot({
-        signatureVerified: true,
+        signatureVerified: false,
+        verificationAlgorithm: 'rsa-request+tls+response-binding',
         providerStatus: observed.status,
+        providerReportedAmountMinor: observed.providerReportedAmount ?? observed.amount,
         occurredAt: observed.occurredAt,
         receivedAt: new Date().toISOString(),
       })

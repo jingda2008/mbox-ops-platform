@@ -278,6 +278,7 @@ const PROVIDER_EVIDENCE_FIELDS = new Set([
   'merchantRefundId',
   'occurredAt',
   'providerOrderId',
+  'providerReportedAmountMinor',
   'providerStatus',
   'receiptReference',
   'receivedAt',

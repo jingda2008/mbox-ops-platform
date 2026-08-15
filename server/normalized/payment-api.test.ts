@@ -425,6 +425,7 @@ describe('paymentApiPlugin', () => {
         providerTransactionId: 'POSTAR-TX-0001',
         status: 'succeeded' as const,
         amount: payment.amountMinor,
+        providerReportedAmount: payment.amountMinor,
         currency: payment.currency,
         merchantId: trustedMerchant.merchantId,
         occurredAt: '2026-08-11T12:05:00.000Z',
@@ -455,7 +456,11 @@ describe('paymentApiPlugin', () => {
       paymentPublicId: payment.publicId,
       providerTransactionId: 'POSTAR-TX-0001',
       status: 'succeeded',
-      providerSnapshot: expect.objectContaining({ signatureVerified: true }),
+      providerSnapshot: expect.objectContaining({
+        signatureVerified: false,
+        verificationAlgorithm: 'rsa-request+tls+response-binding',
+        providerReportedAmountMinor: payment.amountMinor,
+      }),
     }))
   })
 

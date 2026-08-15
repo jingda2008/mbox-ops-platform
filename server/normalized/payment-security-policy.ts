@@ -22,8 +22,15 @@ export interface RefundApprovalAuthorization {
   refundId: string
 }
 
+export interface RefundRequestLimitAuthorization {
+  transaction: ScopedTransaction
+  employeeId: string
+  refundId: string
+}
+
 export interface PaymentCapabilityAuthorizationPort {
   assertEmployeeCapability(input: Readonly<EmployeeCapabilityAuthorization>): Promise<void>
+  assertRefundRequestLimit(input: Readonly<RefundRequestLimitAuthorization>): Promise<void>
   assertRefundApproval(input: Readonly<RefundApprovalAuthorization>): Promise<void>
 }
 
@@ -32,7 +39,7 @@ interface CapabilityRow extends Record<string, unknown> {
   allowed: boolean
 }
 
-interface RefundApprovalRow extends Record<string, unknown> {
+interface RefundAmountAuthorizationRow extends Record<string, unknown> {
   employee_status: string
   allowed: boolean
   requested_by_employee_id: string
@@ -139,7 +146,26 @@ implements PaymentCapabilityAuthorizationPort {
   }
 
   async assertRefundApproval(input: Readonly<RefundApprovalAuthorization>): Promise<void> {
-    const result = await input.transaction.query<RefundApprovalRow>(`
+    const row = await this.refundAmountAuthorization(input, 'refund.approve')
+    if (row.requested_by_employee_id === input.employeeId) {
+      throw new PaymentAuthorizationError('Refund requester cannot approve or reject the same refund')
+    }
+    assertConfiguredRefundLimit(row, 'approval')
+  }
+
+  async assertRefundRequestLimit(input: Readonly<RefundRequestLimitAuthorization>): Promise<void> {
+    const row = await this.refundAmountAuthorization(input, 'refund.request')
+    if (row.requested_by_employee_id !== input.employeeId) {
+      throw new PaymentAuthorizationError('Refund requester identity does not match the acting employee')
+    }
+    assertConfiguredRefundLimit(row, 'request')
+  }
+
+  private async refundAmountAuthorization(
+    input: Readonly<RefundApprovalAuthorization | RefundRequestLimitAuthorization>,
+    capability: 'refund.approve' | 'refund.request',
+  ): Promise<RefundAmountAuthorizationRow> {
+    const result = await input.transaction.query<RefundAmountAuthorizationRow>(`
       SELECT employee.status AS employee_status,
         refund.requested_by_employee_id,
         refund.amount_minor,
@@ -165,7 +191,7 @@ implements PaymentCapabilityAuthorizationPort {
               WHERE denied_override.tenant_id = employee.tenant_id
                 AND denied_override.store_id = employee.store_id
                 AND denied_override.employee_id = employee.id
-                AND denied_permission.code = 'refund.approve'
+                AND denied_permission.code = $5
                 AND denied_override.effect = 'deny'
                 AND denied_override.starts_at <= clock_timestamp()
                 AND (denied_override.ends_at IS NULL OR denied_override.ends_at > clock_timestamp())
@@ -182,7 +208,7 @@ implements PaymentCapabilityAuthorizationPort {
                 WHERE granted_override.tenant_id = employee.tenant_id
                   AND granted_override.store_id = employee.store_id
                   AND granted_override.employee_id = employee.id
-                  AND granted_permission.code = 'refund.approve'
+                  AND granted_permission.code = $5
                   AND granted_override.effect = 'grant'
                   AND granted_override.starts_at <= clock_timestamp()
                   AND (granted_override.ends_at IS NULL OR granted_override.ends_at > clock_timestamp())
@@ -211,7 +237,7 @@ implements PaymentCapabilityAuthorizationPort {
                       WHERE role_permission.tenant_id = role.tenant_id
                         AND role_permission.store_id = role.store_id
                         AND role_permission.role_id = role.id
-                        AND permission.code = 'refund.approve'
+                        AND permission.code = $5
                   )
               )
             )
@@ -228,7 +254,7 @@ implements PaymentCapabilityAuthorizationPort {
               ON approval_limit.tenant_id = limit_role.tenant_id
              AND approval_limit.store_id = limit_role.store_id
              AND approval_limit.role_id = limit_role.id
-             AND approval_limit.approval_code = 'refund.approve'
+             AND approval_limit.approval_code = $5
              AND approval_limit.currency = refund.currency
              AND approval_limit.enabled = true
             WHERE limit_employee_role.tenant_id = employee.tenant_id
@@ -247,24 +273,29 @@ implements PaymentCapabilityAuthorizationPort {
       input.transaction.scope.storeId,
       input.refundId,
       input.employeeId,
+      capability,
     ])
     const row = result.rows[0]
     if (row === undefined || row.employee_status !== 'active') {
       throw new PaymentAuthorizationError('Employee is not active or refund is unavailable')
     }
     if (!row.allowed) {
-      throw new PaymentAuthorizationError('Employee lacks financial capability: refund.approve')
+      throw new PaymentAuthorizationError(`Employee lacks financial capability: ${capability}`)
     }
-    if (row.requested_by_employee_id === input.employeeId) {
-      throw new PaymentAuthorizationError('Refund requester cannot approve or reject the same refund')
-    }
-    const limit = row.approval_limit_minor === null ? null : toSafeMinor(row.approval_limit_minor)
-    if (limit === null) {
-      throw new PaymentAuthorizationError(`Refund approval limit is not configured for ${row.currency}`)
-    }
-    if (toSafeMinor(row.amount_minor) > limit) {
-      throw new PaymentAuthorizationError(`Refund amount exceeds employee approval limit for ${row.currency}`)
-    }
+    return row
+  }
+}
+
+function assertConfiguredRefundLimit(
+  row: Readonly<RefundAmountAuthorizationRow>,
+  action: 'request' | 'approval',
+): void {
+  const limit = row.approval_limit_minor === null ? null : toSafeMinor(row.approval_limit_minor)
+  if (limit === null) {
+    throw new PaymentAuthorizationError(`Refund ${action} limit is not configured for ${row.currency}`)
+  }
+  if (toSafeMinor(row.amount_minor) > limit) {
+    throw new PaymentAuthorizationError(`Refund amount exceeds employee ${action} limit for ${row.currency}`)
   }
 }
 

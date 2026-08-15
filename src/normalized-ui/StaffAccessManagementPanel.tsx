@@ -223,7 +223,7 @@ function PolicyEditor({ overview, role, approvalDraft, setApprovalDraft, scopeDr
   }))
 
   return <div className="staff-access-policy">
-    <section><header><BadgeDollarSign /><div><strong>审批额度</strong><small>金额以单次操作计算；退款执行仍由人工完成。</small></div></header>
+    <section><header><BadgeDollarSign /><div><strong>资金操作额度</strong><small>岗位、发起和复核额度可配置；退款发起人与复核人必须分离。</small></div></header>
       <div className="staff-access-policy-list">{approvalDefinitions.map((definition) => {
         const value = approvalDraft[definition.code] ?? approvalValue(role, definition)
         const allowed = definitionAllowed(role, definition)
@@ -233,7 +233,7 @@ function PolicyEditor({ overview, role, approvalDraft, setApprovalDraft, scopeDr
           <div><strong>{definition.label}</strong><small>{allowed ? definition.description : '请先在岗位权限中授予对应能力'}</small></div>
           <label className="staff-access-money"><span>单次上限</span><span>¥</span><input aria-label={`${definition.label}单次上限`} type="number" min="0" step="1" disabled={!allowed} value={value.amountMinor === null ? '' : value.amountMinor / 100} onChange={(event) => updateApproval(definition, { amountMinor: moneyMinor(event.target.value) })} /></label>
           {controls.includes('discount_percent') && <label className="staff-access-money"><span>最高折扣</span><input aria-label={`${definition.label}最高折扣`} type="number" min="0" max="100" step="1" disabled={!allowed} value={discountPercent(value.rules)} onChange={(event) => updateApproval(definition, { rules: { ...value.rules, discountBasisPoints: Math.round(Number(event.target.value || 0) * 100), requiresReason: true } })} /><span>%</span></label>}
-          {controls.includes('second_actor') && <label className="staff-access-check"><input type="checkbox" disabled={!allowed} checked={value.rules.requiresSecondActor === true} onChange={(event) => updateApproval(definition, { rules: { ...value.rules, requiresSecondActor: event.target.checked, requiresReason: true } })} />需要第二人复核</label>}
+          {controls.includes('second_actor') && <label className="staff-access-check"><input type="checkbox" disabled checked />强制不同员工复核（不可关闭）</label>}
         </article>
       })}</div>
     </section>
@@ -421,7 +421,7 @@ const permissionLabels: Record<string, string> = {
   'kds.exception.manage': '处理出品异常', 'kds.prepare': '制作并完成出品', 'order.create': '创建订单', 'order.discount': '订单折扣',
   'order.gift': '赠送商品', 'order.view': '查看订单', 'payment.initiate.staff': '发起员工协助收款', 'payment.manual.cash.record': '登记现金收款',
   'payment.manual.pos.record': '登记POS收款', 'print.view_all': '查看全部打印任务', 'reconciliation.view': '查看对账', 'refund.approve': '审批退款',
-  'refund.execute': '执行退款', 'refund.request': '申请退款', 'reservation.config.manage': '管理预约规则', 'reservation.manage': '处理预约',
+  'refund.execute': '执行退款', 'refund.request': '发起退款', 'reservation.config.manage': '管理预约规则', 'reservation.manage': '处理预约',
   'reservation.view': '查看本人预约', 'reservation.view.all': '查看全部预约', 'service.execute': '处理服务需求', 'service.manage': '调度服务任务',
   'service.view': '查看服务需求', 'song.manage': '管理演出与点歌', 'song.view': '查看演出与点歌', 'staff.access.configure': '配置员工权限',
   'table.assignment.manage': '分配责任桌台', 'table.close': '结台', 'table.open': '开台', 'table.transfer': '转台', 'table.view_all': '查看全店桌台',

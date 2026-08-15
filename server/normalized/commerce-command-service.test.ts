@@ -417,6 +417,7 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
 
     const paymentAuthorization: PaymentCapabilityAuthorizationPort = {
       assertEmployeeCapability: async () => undefined,
+      assertRefundRequestLimit: async () => undefined,
       assertRefundApproval: async () => undefined,
     }
     const payment = new PaymentCommandService(

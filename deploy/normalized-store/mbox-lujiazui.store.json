@@ -1,5 +1,5 @@
 {
-  "version": "2026.08.15-v6",
+  "version": "2026.08.15-v7",
   "tenant": {
     "id": "10000000-0000-4000-8000-000000000001",
     "code": "superhigh",
@@ -1002,9 +1002,6 @@
         "payment.policy.manage",
         "payment.manual.cash.record",
         "payment.manual.pos.record",
-        "refund.request",
-        "refund.approve",
-        "refund.execute",
         "inventory.view",
         "inventory.cost.view",
         "inventory.manage",
@@ -1094,15 +1091,6 @@
             "allowFullGift": true,
             "requiresReason": true
           }
-        },
-        {
-          "code": "refund.approve",
-          "amountMinor": 2000000,
-          "currency": "CNY",
-          "rules": {
-            "requiresSecondActor": true,
-            "requiresReason": true
-          }
         }
       ]
     },
@@ -1129,8 +1117,6 @@
         "reservation.view.all",
         "reservation.manage",
         "payment.initiate.staff",
-        "refund.request",
-        "refund.approve",
         "inventory.view",
         "inventory.cost.view",
         "inventory.manage",
@@ -1208,15 +1194,6 @@
             "allowFullGift": true,
             "requiresReason": true
           }
-        },
-        {
-          "code": "refund.approve",
-          "amountMinor": 500000,
-          "currency": "CNY",
-          "rules": {
-            "requiresSecondActor": true,
-            "requiresReason": true
-          }
         }
       ]
     },
@@ -1286,7 +1263,6 @@
         "payment.manual.cash.record",
         "payment.manual.pos.record",
         "refund.request",
-        "refund.approve",
         "inventory.view",
         "inventory.cost.view",
         "inventory.manage",
@@ -1329,7 +1305,7 @@
         },
         {
           "code": "payments",
-          "label": "退款审批",
+          "label": "退款发起",
           "route": "/staff/payments",
           "sortOrder": 50
         },
@@ -1378,7 +1354,7 @@
           }
         },
         {
-          "code": "refund.approve",
+          "code": "refund.request",
           "amountMinor": 200000,
           "currency": "CNY",
           "rules": {
@@ -1409,7 +1385,6 @@
         "reservation.view",
         "reservation.view.all",
         "reservation.manage",
-        "refund.request",
         "inventory.view",
         "inventory.cost.view",
         "inventory.manage",
@@ -1620,7 +1595,7 @@
         "payment.initiate.staff",
         "payment.manual.cash.record",
         "payment.manual.pos.record",
-        "refund.request",
+        "refund.approve",
         "refund.execute",
         "reconciliation.view",
         "reservation.view"
@@ -1628,7 +1603,7 @@
       "navigation": [
         {
           "code": "payments",
-          "label": "收银",
+          "label": "收银复核",
           "route": "/staff/payments",
           "sortOrder": 10,
           "highFrequency": true
@@ -1640,7 +1615,17 @@
           "sortOrder": 20
         }
       ],
-      "approvalLimits": []
+      "approvalLimits": [
+        {
+          "code": "refund.approve",
+          "amountMinor": 200000,
+          "currency": "CNY",
+          "rules": {
+            "requiresSecondActor": true,
+            "requiresReason": true
+          }
+        }
+      ]
     },
     {
       "code": "KITCHEN",

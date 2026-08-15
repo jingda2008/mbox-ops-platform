@@ -35,11 +35,20 @@ describe('normalized migration baseline', () => {
       '013', '014', '015', '016', '017', '018', '019', '020', '021', '022', '023', '024',
       '025', '026', '027', '028', '029', '030', '031', '032', '033', '034', '035', '036',
       '037', '038', '039', '040', '041', '042', '043', '044', '045', '046', '047', '048',
+      '049',
     ])
     for (const migration of migrations) {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
       expect(unwrapNormalizedMigrationTransaction(migration.sql).trim().length).toBeGreaterThan(0)
     }
+  })
+
+  it('keeps refund roles and amount limits configurable while requiring two employees', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '049')
+    expect(migration?.sql).toMatch(/'refund\.request',\s*'退款发起额度'/)
+    expect(migration?.sql).toMatch(/ARRAY\['refund\.request'\]::text\[\]/)
+    expect(migration?.sql).toMatch(/'refund\.approve',\s*'退款复核额度'/)
+    expect(migration?.sql).toMatch(/复核人与发起人必须为不同员工/)
   })
 
   it('rejects migration gaps and files without one transaction wrapper', async () => {

@@ -43,7 +43,7 @@ describe('normalized commercial readiness', () => {
       activeProducts: 0,
       guestVisibleProducts: 0,
       recommendationProducts: 0,
-      financialRolesMissingLimits: ['MANAGER:refund.approve'],
+      financialRolesMissingLimits: ['MANAGER:refund.request'],
       kdsRolesMissingStationScopes: ['BARTENDER'],
     }, 'b'.repeat(40))
     expect(issues.filter((issue) => issue.severity === 'blocker').map((issue) => issue.code)).toEqual(expect.arrayContaining([

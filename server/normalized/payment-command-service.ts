@@ -329,6 +329,11 @@ export class PaymentCommandService {
         allocations: input.allocations,
         requestEvidence,
       })
+      await this.authorization.assertRefundRequestLimit({
+        transaction,
+        employeeId,
+        refundId: refund.id,
+      })
       return refundOutcome(input, refund, 'refund.requested', 1)
     })
   }

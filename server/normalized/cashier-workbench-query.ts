@@ -95,6 +95,7 @@ const WORKBENCH_CAPABILITIES = [
   'reconciliation.view',
   'payment.manual.cash.record',
   'payment.manual.pos.record',
+  'refund.request',
   'refund.approve',
   'refund.execute',
 ] as const

@@ -614,6 +614,9 @@ async function assertConfigurationChangesKnown(
       if (change.currency !== currency) throw new TypeError(`审批额度币种与服务端目录不一致：${code}`)
       if (change.rules.requiresReason !== true) throw new TypeError(`审批额度必须保留操作原因：${code}`)
       const controls = stringArrayConfig(definition.config, 'controls')
+      if (controls.includes('second_actor') && change.rules.requiresSecondActor !== true) {
+        throw new TypeError(`资金操作必须由不同员工复核：${code}`)
+      }
       const discountBasisPoints = change.rules.discountBasisPoints
       if (controls.includes('discount_percent')
         && (typeof discountBasisPoints !== 'number' || !Number.isInteger(discountBasisPoints)

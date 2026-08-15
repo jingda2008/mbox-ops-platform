@@ -25,10 +25,10 @@ describe('CashierAfterSalesWorkbenchView', () => {
     expect(html).toContain('原订单商品')
     expect(html).toContain('精酿啤酒')
     expect(html).toContain('剩余可退 ¥68.00')
-    expect(html).toContain('申请人不能审批自己的退款')
-    expect(html).toContain('审批说明')
-    expect(html).toContain('驳回')
-    expect(html).toContain('同意')
+    expect(html).toContain('发起人不能复核自己的退款')
+    expect(html).toContain('复核说明')
+    expect(html).toContain('复核驳回')
+    expect(html).toContain('复核通过')
   })
 
   it('never renders a manual success action for an online refund in processing', () => {

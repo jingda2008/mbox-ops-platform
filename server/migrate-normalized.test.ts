@@ -43,6 +43,14 @@ describe('normalized migration baseline', () => {
     }
   })
 
+  it('keeps refund roles and amount limits configurable while requiring two employees', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '049')
+    expect(migration?.sql).toMatch(/'refund\.request',\s*'退款发起额度'/)
+    expect(migration?.sql).toMatch(/ARRAY\['refund\.request'\]::text\[\]/)
+    expect(migration?.sql).toMatch(/'refund\.approve',\s*'退款复核额度'/)
+    expect(migration?.sql).toMatch(/复核人与发起人必须为不同员工/)
+  })
+
   it('rejects migration gaps and files without one transaction wrapper', async () => {
     const directory = await temporaryDirectory()
     await writeFile(join(directory, '002_gap.sql'), 'BEGIN; SELECT 1; COMMIT;\n')

@@ -44,7 +44,7 @@ const expectedHighFrequencyEntries = new Map<string, string[]>([
   ['fuchunyu', ['演出点歌']],
   ['liyan', ['现场', '任务', '出品', '预约到店']],
   ['lengyanzhi', ['现场', '任务', '吧台出品']],
-  ['sanmu', ['收银']],
+  ['sanmu', ['收银复核']],
   ['tom', ['现场', '任务', '取送', '预约到店']],
   ['jerry', ['现场', '任务', '取送', '预约到店']],
   ['tyke', ['现场', '任务', '取送', '预约到店']],
@@ -259,7 +259,7 @@ test('one business-day order and guest requests flow through bartender, kitchen,
   await manager.context.close()
 
   const cashier = await staffPage(browser, data, 'sanmu')
-  await cashier.page.getByRole('button', { name: '收银', exact: true }).first().click()
+  await cashier.page.getByRole('button', { name: '收银复核', exact: true }).first().click()
   await expect(cashier.page.getByRole('heading', { name: '收银与退款' })).toBeVisible()
   await expect(cashier.page.getByLabel('本营业日售后摘要')).toContainText('2订单')
   await expect(cashier.page.getByLabel('本营业日售后摘要')).toContainText('0已收款')

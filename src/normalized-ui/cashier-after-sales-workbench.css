@@ -65,6 +65,7 @@
 .cashier-form-total { display: flex; align-items: center; justify-content: space-between; font-size: 11px; }
 .cashier-form-total strong { font-size: 17px; }
 .cashier-action-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.cashier-action-row button { min-width: 0; padding-inline: 8px; gap: 4px; white-space: nowrap; }
 .cashier-inline-error { margin: 0; color: #a32e36; font-size: 10px; font-weight: 750; }
 .cashier-refund-row { display: grid; gap: 7px; padding: 9px; border: 1px solid #d7dbd4; border-left: 4px solid #a6ada4; border-radius: 5px; background: #f8f8f4; }
 .cashier-refund-row.is-requested { border-left-color: #cc9d28; }

@@ -116,6 +116,20 @@ describe('PostgresCashierWorkbenchQuery', () => {
     expect(runner.runCalls).toBe(0)
   })
 
+  it('allows a manager with only refund request permission to open the workbench', async () => {
+    const runner = new QueryRunner([[]])
+    const query = new PostgresCashierWorkbenchQuery(
+      runner as unknown as ScopedPostgresTransactionRunner,
+    )
+    await expect(query.get({
+      scope: { tenantId, storeId },
+      employeeId,
+      businessDate: '2026-08-13',
+      capabilities: ['refund.request'],
+      limit: 20,
+    })).resolves.toMatchObject({ actions: { canRequestRefund: true, canApproveRefund: false } })
+  })
+
   it('does not treat payment initiation alone as permission to read the store-wide workbench', () => {
     const runner = new QueryRunner([])
     const query = new PostgresCashierWorkbenchQuery(

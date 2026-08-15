@@ -235,7 +235,7 @@ function readinessSql(): string {
           JOIN mbox.staff_permission_definitions permission ON permission.tenant_id=assignment.tenant_id
             AND permission.store_id=assignment.store_id AND permission.id=assignment.permission_id AND permission.status='active'
           WHERE role.tenant_id=$1::uuid AND role.store_id=$2::uuid AND role.status='active'
-            AND permission.code IN ('order.gift','order.discount','refund.approve','benefit.issue')
+            AND permission.code IN ('order.gift','order.discount','refund.request','refund.approve','benefit.issue')
             AND NOT EXISTS (SELECT 1 FROM mbox.role_approval_limits approval WHERE approval.tenant_id=role.tenant_id
               AND approval.store_id=role.store_id AND approval.role_id=role.id AND approval.approval_code=permission.code
               AND approval.enabled=true AND approval.currency='CNY' AND approval.amount_minor IS NOT NULL)

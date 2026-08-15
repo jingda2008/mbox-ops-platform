@@ -24,6 +24,7 @@ const businessDate = '2026-08-12'
 
 const allowAll: PaymentCapabilityAuthorizationPort = {
   assertEmployeeCapability: async () => undefined,
+  assertRefundRequestLimit: async () => undefined,
   assertRefundApproval: async () => undefined,
 }
 

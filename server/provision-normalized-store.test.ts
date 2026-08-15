@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { parseStoreProvisionConfig, shanghaiBusinessDate } from './provision-normalized-store.js'
 
@@ -79,5 +80,28 @@ describe('normalized store provisioning config', () => {
         { code: 'order.gift', amountMinor: 100, rules: { invalid: Number.NaN } },
       ] }],
     })).toThrow(/valid JSON/)
+  })
+
+  it('defaults to manager request and cashier review without hard-coding an employee', () => {
+    const source = JSON.parse(readFileSync(
+      new URL('../deploy/normalized-store/mbox-lujiazui.store.json', import.meta.url),
+      'utf8',
+    )) as unknown
+    const config = parseStoreProvisionConfig(source)
+    const role = (code: string) => config.roles.find((candidate) => candidate.code === code)
+
+    expect(role('MANAGER')?.permissions.filter((code) => code.startsWith('refund.')))
+      .toEqual(['refund.request'])
+    expect(role('MANAGER')?.approvalLimits).toContainEqual(expect.objectContaining({
+      code: 'refund.request', amountMinor: 200_000, currency: 'CNY', enabled: true,
+    }))
+    expect(role('CASHIER')?.permissions.filter((code) => code.startsWith('refund.')))
+      .toEqual(['refund.approve', 'refund.execute'])
+    expect(role('CASHIER')?.approvalLimits).toContainEqual(expect.objectContaining({
+      code: 'refund.approve', amountMinor: 200_000, currency: 'CNY', enabled: true,
+    }))
+    expect(config.roles.filter((candidate) => candidate.code !== 'MANAGER' && candidate.code !== 'CASHIER')
+      .flatMap((candidate) => candidate.permissions.filter((code) => code.startsWith('refund.'))))
+      .toEqual([])
   })
 })

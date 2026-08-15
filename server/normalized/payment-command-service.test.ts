@@ -32,6 +32,7 @@ const paymentOneId = '44444444-4444-4444-8444-444444444441'
 const paymentTwoId = '44444444-4444-4444-8444-444444444442'
 const allowAllAuthorization: PaymentCapabilityAuthorizationPort = {
   assertEmployeeCapability: async () => undefined,
+  assertRefundRequestLimit: async () => undefined,
   assertRefundApproval: async () => undefined,
 }
 
@@ -155,6 +156,10 @@ describe('PaymentCommandService', () => {
         denied.push(capability)
         throw new PaymentAuthorizationError(`denied:${capability}`)
       },
+      assertRefundRequestLimit: async () => {
+        denied.push('refund.request.limit')
+        throw new PaymentAuthorizationError('denied:refund.request.limit')
+      },
       assertRefundApproval: async () => {
         denied.push('refund.approve')
         throw new PaymentAuthorizationError('denied:refund.approve')
@@ -254,6 +259,7 @@ const integrationApproverRoleId = 'c1000000-0000-4000-8000-000000000008'
 const integrationRequesterRoleAssignmentId = 'c1000000-0000-4000-8000-000000000009'
 const integrationApproverRoleAssignmentId = 'c1000000-0000-4000-8000-00000000000a'
 const integrationApprovalLimitId = 'c1000000-0000-4000-8000-00000000000b'
+const integrationRequestLimitId = 'c1000000-0000-4000-8000-00000000000c'
 const integrationOrderOne = 'c1000000-0000-4000-8000-000000000021'
 const integrationOrderTwo = 'c1000000-0000-4000-8000-000000000022'
 const integrationOrderThree = 'c1000000-0000-4000-8000-000000000023'
@@ -983,14 +989,18 @@ async function upsertPaymentApprovalLimit(pool: Pool): Promise<void> {
   await pool.query(`
     INSERT INTO mbox.role_approval_limits(
       id, tenant_id, store_id, role_id, approval_code, amount_minor, currency, enabled
-    ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'refund.approve', 5000, 'CNY', true)
+    ) VALUES
+      ($1::uuid, $3::uuid, $4::uuid, $5::uuid, 'refund.approve', 5000, 'CNY', true),
+      ($2::uuid, $3::uuid, $4::uuid, $6::uuid, 'refund.request', 10000, 'CNY', true)
     ON CONFLICT (id) DO UPDATE SET
       amount_minor = EXCLUDED.amount_minor,
       enabled = true
   `, [
     integrationApprovalLimitId,
+    integrationRequestLimitId,
     integrationTenantId,
     integrationStoreId,
     integrationApproverRoleId,
+    integrationRequesterRoleId,
   ])
 }

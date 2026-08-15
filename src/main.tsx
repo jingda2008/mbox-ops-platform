@@ -19,6 +19,11 @@ void startNormalizedApplication().catch(() => {
 
 async function startNormalizedApplication() {
   const path = window.location.pathname
+  if (/^\/mini-preview(?:\/|$)/.test(path)) {
+    const { MiniProgramPreview } = await import('./normalized-ui/MiniProgramPreview')
+    render(<MiniProgramPreview />)
+    return
+  }
   if (/^\/guest(?:\/|$)/.test(path)) {
     const { GuestApp } = await import('./normalized-ui/guest')
     render(<GuestApp />)

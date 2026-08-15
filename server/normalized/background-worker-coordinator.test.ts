@@ -15,6 +15,8 @@ describe('NormalizedBackgroundWorkerCoordinator', () => {
         runBatch: vi.fn(async () => { throw new Error('reservation worker unavailable') }),
       },
       paymentReservationExpiry: { runBatch: vi.fn(async () => paymentReservationResult()) },
+      activityRegistrationExpiry: { runBatch: vi.fn(async () => activityRegistrationResult()) },
+      experienceCueDispatch: { runBatch: vi.fn(async () => experienceCueResult()) },
       idempotencyCleanup: { runBatch: vi.fn(async () => ({ deleted: 0, ids: [] })) },
       staffLoginRateLimitCleanup: { cleanupExpired: vi.fn(async () => 2) },
       businessDay: { run: vi.fn(async () => businessDayResult()) },
@@ -59,6 +61,8 @@ describe('NormalizedBackgroundWorkerCoordinator', () => {
       serviceSla: { runBatch: serviceSla },
       reservationExpiry: { runBatch: vi.fn(async () => ({ workerId: 'reservation', claimed: 0, expiredReservationIds: [] })) },
       paymentReservationExpiry: { runBatch: vi.fn(async () => paymentReservationResult()) },
+      activityRegistrationExpiry: { runBatch: vi.fn(async () => activityRegistrationResult()) },
+      experienceCueDispatch: { runBatch: vi.fn(async () => experienceCueResult()) },
       idempotencyCleanup: { runBatch: vi.fn(async () => ({ deleted: 0, ids: [] })) },
       staffLoginRateLimitCleanup: { cleanupExpired: vi.fn(async () => 0) },
       businessDay: { run: vi.fn(async () => businessDayResult()) },
@@ -89,6 +93,8 @@ describe('NormalizedBackgroundWorkerCoordinator', () => {
       serviceSla: { runBatch: vi.fn(async () => ({ workerId: 'sla', claimed: 0, processed: [] })) },
       reservationExpiry: { runBatch: vi.fn(async () => ({ workerId: 'reservation', claimed: 0, expiredReservationIds: [] })) },
       paymentReservationExpiry: { runBatch: vi.fn(async () => paymentReservationResult()) },
+      activityRegistrationExpiry: { runBatch: vi.fn(async () => activityRegistrationResult()) },
+      experienceCueDispatch: { runBatch: vi.fn(async () => experienceCueResult()) },
       idempotencyCleanup: { runBatch: vi.fn(async () => ({ deleted: 0, ids: [] })) },
       staffLoginRateLimitCleanup: { cleanupExpired: vi.fn(async () => 0) },
       businessDay: { run: vi.fn(async () => businessDayResult()) },
@@ -122,6 +128,8 @@ describe('NormalizedBackgroundWorkerCoordinator', () => {
       serviceSla: { runBatch: serviceSla },
       reservationExpiry: { runBatch: vi.fn(async () => ({ workerId: 'reservation', claimed: 0, expiredReservationIds: [] })) },
       paymentReservationExpiry: { runBatch: vi.fn(async () => paymentReservationResult()) },
+      activityRegistrationExpiry: { runBatch: vi.fn(async () => activityRegistrationResult()) },
+      experienceCueDispatch: { runBatch: vi.fn(async () => experienceCueResult()) },
       idempotencyCleanup: { runBatch: cleanup },
       staffLoginRateLimitCleanup: { cleanupExpired: vi.fn(async () => 0) },
       businessDay: { run: vi.fn(async () => businessDayResult()) },
@@ -162,5 +170,24 @@ function paymentReservationResult() {
     releasedOrderIds: [],
     activatedOrderIds: [],
     reviewOrderIds: [],
+  }
+}
+
+function activityRegistrationResult() {
+  return {
+    workerId: 'activity-registration-expiry',
+    claimed: 0,
+    releasedRegistrationIds: [],
+    confirmedRegistrationIds: [],
+    reviewRegistrationIds: [],
+  }
+}
+
+function experienceCueResult() {
+  return {
+    workerId: 'experience-cue-dispatch',
+    claimed: 0,
+    dispatchedCueIds: [],
+    skippedCueIds: [],
   }
 }

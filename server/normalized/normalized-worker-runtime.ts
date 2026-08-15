@@ -12,6 +12,8 @@ import { OutboxDispatcher, type OutboxDelivery } from './outbox-dispatcher.js'
 import { PrintWorker, type PrintAdapter } from './print-worker.js'
 import { ReservationHoldExpiryWorker } from './reservation-hold-expiry-worker.js'
 import { PaymentReservationExpiryWorker } from './payment-reservation-expiry-worker.js'
+import { ActivityRegistrationExpiryWorker } from './activity-registration-expiry-worker.js'
+import { ExperienceCueDispatchWorker } from './experience-cue-dispatch-worker.js'
 import { ServiceTaskSlaWorker } from './service-task-sla-worker.js'
 import { AiScheduledExecutionWorker, SopWorker, type SopActionPort } from './sop-worker.js'
 import { PostgresStaffLoginRateLimiter } from './staff-login-rate-limiter.js'
@@ -94,6 +96,8 @@ export function createNormalizedWorkerRuntime(
     serviceSla: new ServiceTaskSlaWorker(transactions),
     reservationExpiry: new ReservationHoldExpiryWorker(transactions),
     paymentReservationExpiry: new PaymentReservationExpiryWorker(transactions),
+    activityRegistrationExpiry: new ActivityRegistrationExpiryWorker(transactions),
+    experienceCueDispatch: new ExperienceCueDispatchWorker(transactions),
     idempotencyCleanup: new IdempotencyCleanupWorker(transactions),
     staffLoginRateLimitCleanup: new PostgresStaffLoginRateLimiter(transactions, options.hashSecret),
     businessDay: new BusinessDayRolloverWorker(transactions),

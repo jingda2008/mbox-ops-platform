@@ -1,32 +1,48 @@
-const { getGuestSession } = require('../../utils/api')
+const { getTableOrders } = require('../../utils/api')
 const { getRuntimeConfig } = require('../../config/index')
 const { getTableSession } = require('../../utils/session')
 const { money, dateTime } = require('../../utils/format')
 
 const ORDER_STATUS = {
-  draft: '待提交',
-  authorization_pending: '待授权',
   submitted: '已下单',
-  in_fulfillment: '出品中',
-  fulfilled: '已送达',
+  confirmed: '已确认',
+  fulfilling: '出品中',
+  completed: '已完成',
+}
+
+const ITEM_STATUS = {
+  submitted: '已提交',
+  accepted: '已接单',
+  preparing: '制作中',
+  ready: '待送达',
+  delivered: '已送达',
+  cancelled: '已取消',
+}
+
+const PAYMENT_STATUS = {
+  unpaid: '待付款',
+  pending: '付款处理中',
+  partially_paid: '部分付款',
+  paid: '已付款',
+  partially_refunded: '部分退款',
+  refunded: '已退款',
 }
 
 Page({
   data: {
     loading: true,
     error: '',
-    warning: '',
     isDevelopment: false,
     tableCode: '',
-    sessionId: '',
     orders: [],
-    totals: { gross: '¥0.00', discount: '¥0.00', gift: '¥0.00', payable: '¥0.00', balance: '¥0.00' },
+    outstandingText: '¥0.00',
   },
 
   onLoad() {
     this.setData({ tableCode: getTableSession().tableCode, isDevelopment: getRuntimeConfig().isDevelopment })
-    this.loadData()
   },
+
+  onShow() { this.loadData() },
 
   onPullDownRefresh() {
     this.loadData().finally(() => wx.stopPullDownRefresh())
@@ -35,40 +51,25 @@ Page({
   async loadData() {
     this.setData({ loading: true, error: '' })
     try {
-      const result = await getGuestSession()
-      const data = result.data
-      const account = data.account
-      if (!account.tableSessionId) {
-        this.setData({ loading: false, warning: result.warning, sessionId: '', orders: [] })
-        return
-      }
-      const rawOrders = account.orders || []
-      const total = rawOrders.reduce((sum, order) => ({
-        gross: sum.gross + order.items.reduce((itemSum, item) => itemSum + item.amount, 0),
-        payable: sum.payable + order.payableAmount,
-      }), { gross: 0, payable: 0 })
-      const orders = rawOrders.map((order) => ({
-        id: order.id,
+      const rawOrders = await getTableOrders()
+      const orders = (rawOrders || []).map((order) => ({
+        publicId: order.publicId,
+        roundText: `第 ${order.round} 轮`,
         statusText: ORDER_STATUS[order.status] || order.status,
+        paymentText: PAYMENT_STATUS[order.paymentStatus] || order.paymentStatus,
         createdAtText: dateTime(order.createdAt),
-        payableText: money(order.payableAmount),
-        items: order.items.map((item) => ({
-          id: item.id,
+        payableText: money(order.payableAmountMinor),
+        payableAmountMinor: Number(order.payableAmountMinor || 0),
+        isMineText: order.isMine ? '本机下单' : '同桌订单',
+        items: (order.items || []).map((item) => ({
+          key: `${order.publicId}:${item.productId}`,
           name: item.name,
-          specification: item.specification,
           quantity: item.quantity,
-          amountText: money(item.amount),
-          fulfillmentText: item.fulfillmentStatus === 'delivered' ? '已送达' : item.fulfillmentStatus === 'draft' ? '待提交' : '出品流转中',
+          statusText: ITEM_STATUS[item.status] || item.status,
         })),
       }))
-      const discount = Math.max(0, total.gross - total.payable)
-      this.setData({
-        loading: false,
-        warning: result.warning,
-        sessionId: account.tableSessionId,
-        orders,
-        totals: { gross: money(total.gross), discount: money(discount), gift: money(0), payable: money(total.payable), balance: money(account.balanceAmount) },
-      })
+      const outstanding = orders.reduce((sum, order) => sum + order.payableAmountMinor, 0)
+      this.setData({ loading: false, orders, outstandingText: money(outstanding) })
     } catch (error) {
       this.setData({ loading: false, error: error.message || '桌账载入失败' })
     }

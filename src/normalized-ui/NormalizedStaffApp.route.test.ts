@@ -12,6 +12,7 @@ describe('normalized staff route coverage', () => {
       '/staff/live', '/staff/tasks', '/staff/fulfillment', '/staff/reservations',
       '/staff/payments', '/staff/performance', '/staff/inventory',
       '/staff/operations', '/staff/devices', '/staff/settings',
+      '/staff/customer-experience',
     ].map(normalizedStaffRoute)).not.toContain(null)
   })
 

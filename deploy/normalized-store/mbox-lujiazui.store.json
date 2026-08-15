@@ -1022,7 +1022,16 @@
         "ai.execute",
         "ai.schedule",
         "business_day.view",
-        "business_day.close"
+        "business_day.close",
+        "customer.experience.view",
+        "customer.experience.manage",
+        "customer.relationship.manage",
+        "loyalty.view",
+        "loyalty.adjust",
+        "community.activity.view",
+        "community.activity.manage",
+        "community.activity.publish",
+        "customer.experience.feature.manage"
       ],
       "navigation": [
         {
@@ -1068,6 +1077,12 @@
           "label": "经营分析",
           "route": "/staff/operations",
           "sortOrder": 70
+        },
+        {
+          "code": "experience",
+          "label": "客户体验与活动",
+          "route": "/staff/customer-experience",
+          "sortOrder": 75
         },
         {
           "code": "settings",
@@ -1142,7 +1157,16 @@
         "song.view",
         "song.manage",
         "business_day.view",
-        "business_day.close"
+        "business_day.close",
+        "customer.experience.view",
+        "customer.experience.manage",
+        "customer.relationship.manage",
+        "loyalty.view",
+        "loyalty.adjust",
+        "community.activity.view",
+        "community.activity.manage",
+        "community.activity.publish",
+        "customer.experience.feature.manage"
       ],
       "navigation": [
         {
@@ -1182,6 +1206,12 @@
           "label": "经营分析",
           "route": "/staff/operations",
           "sortOrder": 60
+        },
+        {
+          "code": "experience",
+          "label": "客户体验与活动",
+          "route": "/staff/customer-experience",
+          "sortOrder": 65
         },
         {
           "code": "settings",
@@ -1297,7 +1327,16 @@
         "song.view",
         "song.manage",
         "business_day.view",
-        "business_day.close"
+        "business_day.close",
+        "customer.experience.view",
+        "customer.experience.manage",
+        "customer.relationship.manage",
+        "loyalty.view",
+        "loyalty.adjust",
+        "community.activity.view",
+        "community.activity.manage",
+        "community.activity.publish",
+        "customer.experience.feature.manage"
       ],
       "navigation": [
         {
@@ -1350,6 +1389,12 @@
           "label": "经营分析",
           "route": "/staff/operations",
           "sortOrder": 80
+        },
+        {
+          "code": "experience",
+          "label": "客户体验与活动",
+          "route": "/staff/customer-experience",
+          "sortOrder": 85
         },
         {
           "code": "settings",
@@ -1413,7 +1458,12 @@
         "inventory.view",
         "inventory.cost.view",
         "inventory.manage",
-        "song.view"
+        "song.view",
+        "customer.experience.view",
+        "customer.experience.manage",
+        "customer.relationship.manage",
+        "community.activity.view",
+        "community.activity.manage"
       ],
       "navigation": [
         {
@@ -1448,6 +1498,12 @@
           "label": "演出与点歌",
           "route": "/staff/performance",
           "sortOrder": 50
+        },
+        {
+          "code": "experience",
+          "label": "客户体验",
+          "route": "/staff/customer-experience",
+          "sortOrder": 65
         },
         {
           "code": "inventory",
@@ -1728,7 +1784,11 @@
         "reservation.view",
         "reservation.view.all",
         "reservation.manage",
-        "commercial.sales.view"
+        "commercial.sales.view",
+        "customer.experience.view",
+        "customer.relationship.manage",
+        "community.activity.view",
+        "community.activity.manage"
       ],
       "navigation": [
         {
@@ -1736,6 +1796,13 @@
           "label": "预约",
           "route": "/staff/reservations",
           "sortOrder": 10,
+          "highFrequency": true
+        },
+        {
+          "code": "experience",
+          "label": "客户与活动",
+          "route": "/staff/customer-experience",
+          "sortOrder": 15,
           "highFrequency": true
         },
         {

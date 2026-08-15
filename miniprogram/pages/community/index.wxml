@@ -1,0 +1,29 @@
+<view class="page community-page">
+  <view class="top-band community-band"><text class="eyebrow">SUPERHIGH TRIBE</text><text class="community-title">不只今晚见</text><text class="community-copy">现场音乐、城市活动和会员小聚都在这里召集</text></view>
+  <state-panel wx:if="{{loading}}" type="loading" title="正在读取活动" />
+  <block wx:else><view wx:if="{{error}}" class="error-banner">{{error}}</view>
+    <view wx:if="{{activities.length}}" class="activity-list">
+      <view wx:for="{{activities}}" wx:key="publicId" class="activity-card">
+        <image wx:if="{{item.coverUrl}}" src="{{item.coverUrl}}" mode="aspectFill" />
+        <view class="activity-body">
+          <text class="activity-kind">{{item.kind}}</text>
+          <text class="activity-title">{{item.title}}</text>
+          <text class="activity-summary">{{item.summary}}</text>
+          <view class="activity-meta">
+            <text>{{item.dateText}}</text>
+            <text>{{item.assemblyLocation}}</text>
+            <text>{{item.feeText}} · {{item.availabilityText}}</text>
+          </view>
+          <view class="payment-rule"><text class="payment-label">报名规则</text><text>{{item.paymentText}}</text></view>
+          <view class="payment-rule payment-rule--muted"><text class="payment-label">取消退款</text><text>{{item.refundText}}</text></view>
+          <view wx:if="{{!item.registrationStatus && item.remainingCapacity > 0}}" class="party-row">
+            <text>报名人数</text>
+            <view class="stepper"><button bindtap="changePartySize" data-id="{{item.publicId}}" data-delta="-1" disabled="{{item.partySize <= 1}}">−</button><text>{{item.partySize}}</text><button bindtap="changePartySize" data-id="{{item.publicId}}" data-delta="1" disabled="{{item.partySize >= item.remainingCapacity}}">＋</button></view>
+          </view>
+          <button class="join-button" bindtap="join" data-id="{{item.publicId}}" loading="{{busyId === item.publicId}}" disabled="{{item.remainingCapacity < 1 || item.registrationStatus}}">{{item.actionText}}</button>
+        </view>
+      </view>
+    </view>
+    <state-panel wx:else type="empty" title="下一场正在准备" message="通过审批并确认安全信息的活动才会出现在这里" />
+  </block>
+</view>

@@ -17,6 +17,11 @@ import { CommerceCommandService } from './commerce-command-service.js'
 import { commerceKdsApiPlugin } from './commerce-kds-api.js'
 import { commercialOpsApiPlugin } from './commercial-ops-api.js'
 import { customerBenefitApiPlugin } from './customer-benefit-api.js'
+import { customerExperienceApiPlugin } from './customer-experience-api.js'
+import {
+  CustomerExperienceService,
+  resolveTableExperienceContext,
+} from './customer-experience-service.js'
 import { CustomerCommandService, CustomerRepository } from './customer-repository.js'
 import { FulfillmentQueryService } from './fulfillment-query-service.js'
 import { guestCommerceServiceApiPlugin } from './guest-commerce-service-api.js'
@@ -117,7 +122,7 @@ export const NORMALIZED_LOG_REDACTION_PATHS = Object.freeze([
   'payment.publicKey',
 ])
 
-export const NORMALIZED_MIN_SCHEMA_VERSION = '046'
+export const NORMALIZED_MIN_SCHEMA_VERSION = '049'
 export const NORMALIZED_INJECTABLE_PLUGIN_PORTS = Object.freeze([
   'customer-table-side',
 ] as const)
@@ -357,6 +362,11 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         guestOrderSafetyPolicy: options.config.guestOrderSafetyPolicy,
       },
     )
+    const customerExperience = new CustomerExperienceService(
+      transactions,
+      commandExecutor,
+      new CustomerCommandService(commandExecutor),
+    )
     const onlinePaymentProvider = options.config.guestPaymentMode === 'simulation'
       ? 'simulation' as const
       : options.config.payment !== null ? 'postar' as const : null
@@ -492,6 +502,35 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         ? options.config.guestPaymentMode
         : null,
       paymentActionSecret: options.config.secret,
+      checkoutUpgrades: {
+        select: async ({ context, offerPublicId, items, idempotencyKey }) => {
+          const table = await transactions.run(context.scope, (transaction) => resolveTableExperienceContext(transaction, {
+            customerId: context.customerId,
+            tableSessionId: context.tableSessionId,
+            businessDate: context.businessDate,
+            actorRef: context.actorRef,
+          }), { readOnly: true })
+          const result = await customerExperience.selectCheckoutUpgrade({ ...table, scope: context.scope }, {
+            offerPublicId,
+            originalItems: items,
+            idempotencyKey,
+          })
+          return result.value
+        },
+        markConverted: async ({ context, offerId, orderId, idempotencyKey }) => {
+          const table = await transactions.run(context.scope, (transaction) => resolveTableExperienceContext(transaction, {
+            customerId: context.customerId,
+            tableSessionId: context.tableSessionId,
+            businessDate: context.businessDate,
+            actorRef: context.actorRef,
+          }), { readOnly: true })
+          await customerExperience.markCheckoutUpgradeConverted({ ...table, scope: context.scope }, {
+            offerId,
+            orderId,
+            idempotencyKey,
+          })
+        },
+      },
     })
     instance.register(hardwareApiPlugin, {
       prefix: '/api',
@@ -548,6 +587,22 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         currentBusinessDate: async (currentScope) => (
           await businessClock.current(currentScope)
         ).businessDate,
+      })
+      await reservationApp.register(customerExperienceApiPlugin, {
+        transactions,
+        service: customerExperience,
+        resolvePublicContext: async (request) => {
+          const session = await authenticateReservationGuest(request)
+          const day = await businessClock.current(scope)
+          return {
+            scope,
+            customerId: session.customerId,
+            actorRef: session.actorRef,
+            businessDate: day.businessDate,
+          }
+        },
+        resolveGuestContext: guestReservationContext,
+        resolveStaffContext: staffReservationContext,
       })
     }, { prefix: '/api' })
   }

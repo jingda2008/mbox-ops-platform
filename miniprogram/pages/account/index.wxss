@@ -1,8 +1,9 @@
 .account-table { display: block; color: #ffffff; font-size: 38rpx; font-weight: 750; }
 .account-total__amount { display: block; margin: 10rpx 0 28rpx; color: #1e513c; font-size: 56rpx; font-weight: 750; }
-.account-breakdown { display: grid; grid-template-columns: 1fr 1fr; gap: 18rpx 28rpx; padding-top: 22rpx; border-top: 1rpx solid #e8eaee; }
-.account-breakdown view { display: flex; justify-content: space-between; color: #6b7380; font-size: 23rpx; }
-.account-breakdown view text:last-child { color: #25282e; font-weight: 650; }
+.account-note { display: block; padding-top: 22rpx; border-top: 1rpx solid #e8eaee; color: #6b7380; font-size: 23rpx; line-height: 1.5; }
 .payment-boundary { margin-top: 22rpx; }
 .order-card { margin-bottom: 16rpx; }
 .order-card__head { display: flex; padding-bottom: 18rpx; align-items: flex-start; justify-content: space-between; border-bottom: 1rpx solid #e8eaee; }
+.order-card__amount { flex: 0 0 auto; text-align: right; }
+.order-card__amount text { display: block; }
+.order-card__amount text:last-child { margin-top: 8rpx; color: #737b86; font-size: 21rpx; }

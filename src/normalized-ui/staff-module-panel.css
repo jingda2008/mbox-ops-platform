@@ -95,6 +95,21 @@
 .staff-song-catalog-list article > div:last-child { display: flex; gap: 5px; }
 .staff-song-catalog-list button.is-danger { border-color: #d6a6a8; background: #fff4f4; color: #9a3137; }
 .staff-module-notice { margin: 0; padding: 10px 11px; border: 1px solid #b9d6c7; border-left: 4px solid #176b4c; border-radius: 6px; background: #eff8f3; color: #175c43; font-size: 11px; line-height: 1.5; }
+.activity-config-form .activity-wide { grid-column: 1 / -1; }
+.activity-payment-preview { grid-column: 1 / -1; display: flex; align-items: center; gap: 7px; margin: 0; padding: 10px; border: 1px solid #d8c985; background: #fffaf0; color: #615a3d; font-size: 11px; line-height: 1.5; }
+.activity-admin-list { display: grid; gap: 7px; }
+.activity-admin-list > header { display: flex; align-items: end; justify-content: space-between; gap: 10px; padding: 2px; }
+.activity-admin-list > header strong { font-size: 14px; }
+.activity-admin-list > header small, .activity-admin-list > p { color: #687068; font-size: 10px; }
+.activity-admin-list > p { margin: 0; padding: 18px; border: 1px dashed #c8cdc6; background: #fff; text-align: center; }
+.activity-admin-list article { min-height: 86px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid #d5d9d2; border-radius: 6px; background: #fff; }
+.activity-admin-list article > div { min-width: 0; display: grid; gap: 4px; }
+.activity-admin-list article > div:last-child { justify-items: end; }
+.activity-admin-list article strong { font-size: 13px; }
+.activity-admin-list article span { color: #176b43; font-size: 11px; font-weight: 750; }
+.activity-admin-list article small { color: #687068; font-size: 10px; line-height: 1.4; }
+.activity-admin-list article em { padding: 4px 7px; border-radius: 4px; background: #f6edd0; color: #745d19; font-size: 10px; font-style: normal; }
+.activity-admin-list article button { min-height: 44px; padding: 0 10px; border: 1px solid #176b4c; border-radius: 5px; background: #eef7f2; color: #185d43; font-size: 11px; font-weight: 800; }
 .staff-inline-actions { display: flex !important; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 5px !important; }
 .staff-inline-actions button { min-width: 44px; min-height: 44px; padding: 0 9px; border: 1px solid #1a704e; border-radius: 5px; background: #eef7f2; color: #185d43; font-size: 11px; font-weight: 750; }
 .staff-inline-actions button.is-danger { border-color: #d6a6a8; background: #fff4f4; color: #9a3137; }
@@ -198,6 +213,9 @@
   .catalog-management-tools { grid-template-columns: 1fr; }
   .staff-module-form { grid-template-columns: 1fr; }
   .staff-module-form > header { grid-column: auto; }
+  .activity-config-form .activity-wide, .activity-payment-preview { grid-column: auto; }
+  .activity-admin-list article { grid-template-columns: 1fr; }
+  .activity-admin-list article > div:last-child { justify-items: start; }
   .staff-module-list article { align-items: flex-start; }
   .staff-inline-actions { max-width: 54%; }
   .staff-song-requests article { align-items: flex-start; flex-direction: column; }

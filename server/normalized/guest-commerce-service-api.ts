@@ -72,6 +72,20 @@ export interface GuestCommerceServiceApiOptions {
   deviceServiceLimitPerMinute?: number
   tableServiceLimitPerMinute?: number
   createPublicId?: (kind: 'order' | 'payment' | 'service', seed: string) => string
+  checkoutUpgrades?: {
+    select(input: Readonly<{
+      context: GuestRequestContext & { tableSessionId: string; businessDate: string }
+      offerPublicId: string
+      items: ReadonlyArray<{ productId: string; quantity: number; note?: string | null }>
+      idempotencyKey: string
+    }>): Promise<{ offerId: string; upgradedItems: Array<{ productId: string; quantity: number; note?: string | null }> }>
+    markConverted(input: Readonly<{
+      context: GuestRequestContext & { tableSessionId: string; businessDate: string }
+      offerId: string
+      orderId: string
+      idempotencyKey: string
+    }>): Promise<void>
+  }
 }
 
 interface CatalogMenuRow extends Record<string, unknown> {
@@ -166,6 +180,21 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
     const input = readGuestOrder(request.body)
     const idempotencyKey = readIdempotencyKey(request)
     const actor = guestActor(context)
+    let orderItems = input.items
+    let selectedUpgrade: { offerId: string } | null = null
+    if (input.checkoutUpgradeOfferPublicId !== null) {
+      if (options.checkoutUpgrades === undefined) {
+        throw new GuestApiRequestError('CHECKOUT_UPGRADE_UNAVAILABLE', '付款前升级暂未启用')
+      }
+      const selected = await options.checkoutUpgrades.select({
+        context,
+        offerPublicId: input.checkoutUpgradeOfferPublicId,
+        items: input.items,
+        idempotencyKey: `${idempotencyKey}:upgrade-select`,
+      })
+      orderItems = selected.upgradedItems
+      selectedUpgrade = { offerId: selected.offerId }
+    }
     const orderExecution = await options.commerce.submitOrder({
       scope: context.scope,
       actor,
@@ -175,11 +204,19 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       publicId: createPublicId('order', `${context.scope.storeId}:${idempotencyKey}`),
       channel: 'guest_qr',
       settlementMode: 'immediate_payment',
-      lines: input.items,
+      lines: orderItems,
       note: input.note,
       createdByCustomerId: context.customerId,
       confirmedDuplicateOrderPublicId: input.confirmedDuplicateOrderId,
     })
+    if (selectedUpgrade !== null) {
+      await options.checkoutUpgrades!.markConverted({
+        context,
+        offerId: selectedUpgrade.offerId,
+        orderId: orderExecution.value.order.id,
+        idempotencyKey: `${idempotencyKey}:upgrade-convert`,
+      })
+    }
     const payment = await initiateGuestPayment(options, context, orderExecution.value, idempotencyKey, createPublicId, paymentMode)
     const providerAction = await createGuestProviderAction(
       options,
@@ -836,8 +873,9 @@ function readGuestOrder(value: unknown): {
   items: Array<{ productId: string; quantity: number; note?: string | null }>
   note: string | null
   confirmedDuplicateOrderId: string | null
+  checkoutUpgradeOfferPublicId: string | null
 } {
-  const body = readStrictObject(value, '请求正文', ['items', 'note', 'confirmedDuplicateOrderId'])
+  const body = readStrictObject(value, '请求正文', ['items', 'note', 'confirmedDuplicateOrderId', 'checkoutUpgradeOfferPublicId'])
   if (!Array.isArray(body.items) || body.items.length < 1 || body.items.length > 50) {
     throw new GuestApiRequestError('ORDER_ITEMS_INVALID', '请选择1至50项商品后再下单')
   }
@@ -861,7 +899,20 @@ function readGuestOrder(value: unknown): {
   if (confirmedDuplicateOrderId !== null && confirmedDuplicateOrderId.length < 8) {
     throw new GuestApiRequestError('DUPLICATE_CONFIRMATION_INVALID', '重复订单确认信息无效')
   }
-  return { items, note: readOptionalString(body.note, 'note', 500), confirmedDuplicateOrderId }
+  const checkoutUpgradeOfferPublicId = readOptionalString(
+    body.checkoutUpgradeOfferPublicId,
+    'checkoutUpgradeOfferPublicId',
+    128,
+  )
+  if (checkoutUpgradeOfferPublicId !== null && checkoutUpgradeOfferPublicId.length < 8) {
+    throw new GuestApiRequestError('CHECKOUT_UPGRADE_INVALID', '付款前升级编号无效')
+  }
+  return {
+    items,
+    note: readOptionalString(body.note, 'note', 500),
+    confirmedDuplicateOrderId,
+    checkoutUpgradeOfferPublicId,
+  }
 }
 
 function readServiceRequest(value: unknown): { requestType: GuestServiceRequestType; detail: string | null } {

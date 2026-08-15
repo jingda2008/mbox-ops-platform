@@ -1,44 +1,33 @@
 <view class="page home-page">
   <view class="top-band home-hero">
-    <view class="brand-row">
-      <view class="brand"><view class="brand-mark">M</view><text>M-Box</text></view>
-      <text wx:if="{{isDevelopment}}" class="dev-badge">开发模式</text>
-    </view>
+    <view class="brand-row"><view class="brand"><view class="brand-mark">M</view><text>M-BOX</text></view><text wx:if="{{isDevelopment}}" class="dev-badge">开发模式</text></view>
     <view class="table-identity">
-      <text class="table-identity__label">{{hasTableSession ? '当前桌台' : '到店前服务'}}</text>
-      <text class="table-identity__name">{{hasTableSession ? (table ? table.displayName : tableCode) : '预约到店'}}</text>
-      <text class="table-identity__meta">{{hasTableSession ? (storeName + ' · 服务专员 ' + ownerName) : '无需桌码，微信身份只查看本人预约'}}</text>
+      <text class="table-identity__label">{{canEnter ? '今晚已连接' : '陆家嘴现场音乐与社交'}}</text>
+      <text class="table-identity__name">{{canEnter ? table.displayName : '把今晚提前安排好'}}</text>
+      <text class="table-identity__meta">{{canEnter ? '点单、桌边服务和演出互动都从本桌开始' : '预约、活动和会员权益无需桌码即可使用'}}</text>
     </view>
   </view>
-
-  <state-panel wx:if="{{loading}}" type="loading" title="正在确认桌台" message="请稍候，不要重复扫码" />
+  <state-panel wx:if="{{loading}}" type="loading" title="正在连接 M-BOX" />
   <block wx:else>
-    <view wx:if="{{warning}}" class="warning">{{warning}}</view>
-    <view wx:if="{{error}}" class="error-banner">{{error}}</view>
-
-    <view class="section prearrival-section">
-      <view class="section-title"><text>到店前安排</text><text class="section-link">无需桌码</text></view>
-      <button class="portal portal--reservation reservation-portal" bindtap="openReservation"><text class="portal__code">R</text><text class="portal__title">预约到店</text><text class="portal__meta">提交人数、时间、区域偏好和庆祝场景</text></button>
-    </view>
-
-    <view class="summary-strip" wx:if="{{table}}">
-      <view><text>{{openTaskCount}}</text><text>进行中服务</text></view>
-      <view><text>{{accountBalance}}</text><text>当前桌账</text></view>
-      <view><text>{{table.guestCount || 0}}</text><text>本桌人数</text></view>
-    </view>
-
-    <view class="section">
-      <view class="section-title"><text>本桌服务</text><text class="section-link">状态实时同步</text></view>
-      <view class="portal-grid">
-        <button class="portal portal--service" disabled="{{!canEnter}}" data-url="/pages/service/index" bindtap="openPage"><text class="portal__code">01</text><text class="portal__title">呼叫服务</text><text class="portal__meta">加水、加冰、协助点单</text></button>
-        <button class="portal" disabled="{{!canEnter}}" data-url="/pages/account/index" bindtap="openPage"><text class="portal__code">02</text><text class="portal__title">订单 / 桌账</text><text class="portal__meta">查看消费与出品状态</text></button>
-        <button class="portal portal--complaint" disabled="{{!canEnter}}" data-url="/pages/complaint/index" bindtap="openPage"><text class="portal__code">03</text><text class="portal__title">投诉反馈</text><text class="portal__meta">由领班接管并持续跟进</text></button>
-        <button class="portal" disabled="{{!canEnter}}" data-url="/pages/member/index" bindtap="openPage"><text class="portal__code">04</text><text class="portal__title">会员权益</text><text class="portal__meta">查看账户可用权益</text></button>
-        <button class="portal portal--song" disabled="{{!canEnter}}" data-url="/pages/songs/index" bindtap="openPage"><text class="portal__code">05</text><text class="portal__title">点歌</text><text class="portal__meta">按当日排班提交意向</text></button>
-        <button class="portal" disabled="{{!canEnter}}" data-url="/pages/status/index" bindtap="openPage"><text class="portal__code">06</text><text class="portal__title">状态反馈</text><text class="portal__meta">确认解决或继续升级</text></button>
+    <view wx:if="{{warning}}" class="warning">{{warning}}</view><view wx:if="{{error}}" class="error-banner">{{error}}</view>
+    <view wx:if="{{canEnter}}" class="section onsite-section">
+      <view class="section-title"><text>本桌今晚</text><text class="section-link">服务已连接</text></view>
+      <button class="primary-portal" data-url="/pages/order/index" bindtap="openTab"><text class="primary-portal__label">点单与桌边服务</text><text class="primary-portal__copy">按人数和今晚目的推荐组合，付款前可看到适用的升级选择</text><text class="primary-portal__action">开始安排</text></button>
+      <view class="compact-grid">
+        <button data-url="/pages/account/index" bindtap="openPage"><text>订单与桌账</text><text>查看出品状态</text></button>
+        <button data-url="/pages/songs/index" bindtap="openPage"><text>现场点歌</text><text>按今晚排班提交</text></button>
+        <button data-url="/pages/complaint/index" bindtap="openPage"><text>经理协助</text><text>问题由值班经理接管</text></button>
+        <button data-url="/pages/profile/index" bindtap="openTab"><text>会员与偏好</text><text>让下次更懂你</text></button>
       </view>
     </view>
-
+    <view wx:else class="section prearrival-section">
+      <view class="section-title"><text>来店前</text><text class="section-link">先做高频决定</text></view>
+      <button class="primary-portal reservation-portal" data-url="/pages/reservations/index" bindtap="openTab"><text class="primary-portal__label">预约今晚</text><text class="primary-portal__copy">确定人数、时间和座位倾向，费用与定金规则提交前看清</text><text class="primary-portal__action">去预约</text></button>
+      <view class="compact-grid">
+        <button data-url="/pages/community/index" bindtap="openTab"><text>超嗨部落</text><text>{{upcomingActivity ? upcomingActivity.title : '查看最新活动'}}</text></button>
+        <button data-url="/pages/profile/index" bindtap="openTab"><text>{{membership ? '我的会员' : '加入会员'}}</text><text>{{membership ? ('积分 ' + membership.pointsBalance) : '保留偏好与权益'}}</text></button>
+      </view>
+    </view>
     <navigator class="footer-link" url="/pages/privacy/index">隐私说明与数据使用</navigator>
   </block>
 </view>

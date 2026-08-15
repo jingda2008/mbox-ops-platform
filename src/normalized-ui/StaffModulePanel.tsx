@@ -18,10 +18,15 @@ import { CashierAfterSalesWorkbench } from './CashierAfterSalesWorkbench'
 import { CatalogManagementPanel } from './CatalogManagementPanel'
 import { VenueManagementPanel } from './VenueManagementPanel'
 import { StaffAccessManagementPanel } from './StaffAccessManagementPanel'
+import {
+  CustomerExperienceManagementPanel,
+  customerExperienceDashboard,
+  type CustomerExperienceDashboard,
+} from './CustomerExperienceManagementPanel'
 import { paymentPolicyPresentation } from './payment-policy-presentation'
 import './staff-module-panel.css'
 
-export type StaffModule = 'payments' | 'performance' | 'inventory' | 'operations' | 'devices' | 'settings'
+export type StaffModule = 'payments' | 'performance' | 'inventory' | 'operations' | 'experience' | 'devices' | 'settings'
 
 interface ScheduleEntry extends Record<string, unknown> {
   id: string
@@ -141,6 +146,7 @@ interface ModuleData {
   printJobs: PrintJobView[]
   employeeSales: EmployeeSalesView[]
   commercePolicy: CommercePolicyView | null
+  customerExperience: CustomerExperienceDashboard | null
 }
 
 const emptyData: ModuleData = {
@@ -153,6 +159,7 @@ const emptyData: ModuleData = {
   printJobs: [],
   employeeSales: [],
   commercePolicy: null,
+  customerExperience: null,
 }
 
 export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
@@ -195,6 +202,9 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
           const response = await api.getEndpoint<{ data: unknown }>('/api/commercial-ops/employee-sales')
           setData({ ...emptyData, employeeSales: employeeSales(response.data) })
         }
+      } else if (module === 'experience') {
+        const response = await api.getEndpoint<{ data: unknown }>('/api/staff/customer-experience/dashboard')
+        setData({ ...emptyData, customerExperience: customerExperienceDashboard(response.data) })
       } else if (module === 'devices') {
         const [devices, jobs] = await Promise.all([
           api.getEndpoint<{ data: unknown }>('/api/hardware/devices'),
@@ -236,6 +246,7 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
     if (module === 'performance') return <PerformanceModule api={api} auth={auth} view={data.performance} performers={data.performers} requests={data.songRequests} onChanged={refresh} />
     if (module === 'inventory') return <InventoryModule api={api} auth={auth} view={data.inventory} onChanged={refresh} />
     if (module === 'operations') return <OperationsModule view={data.profit} sales={data.employeeSales} canViewProfit={auth.permissions.includes('commercial.profit.view')} />
+    if (module === 'experience' && data.customerExperience !== null) return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={data.customerExperience} onChanged={refresh} />
     if (module === 'devices') return <DevicesModule api={api} auth={auth} devices={data.devices} jobs={data.printJobs} onChanged={refresh} />
     return <SettingsModule api={api} auth={auth} policy={data.commercePolicy} onChanged={refresh} />
   }, [api, auth, data, module, onLoginRequired, paymentRefreshToken, refresh])
@@ -245,6 +256,7 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
     performance: { title: '演出与点歌', icon: Music2 },
     inventory: { title: '库存与存酒', icon: PackageSearch },
     operations: { title: '经营数据', icon: BarChart3 },
+    experience: { title: '客户体验与活动', icon: CalendarClock },
     devices: { title: '设备与打印', icon: Printer },
     settings: { title: '系统配置状态', icon: Settings2 },
   } satisfies Record<StaffModule, { title: string; icon: typeof Settings2 }>

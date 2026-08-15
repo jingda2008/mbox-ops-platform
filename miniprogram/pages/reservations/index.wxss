@@ -4,6 +4,7 @@
 .reservation-band__meta { display: block; margin-top: 12rpx; color: #c8cdd4; font-size: 23rpx; }
 .form-section { margin-top: 0; }
 .reservation-form .field:last-of-type { margin-bottom: 28rpx; }
+.availability{display:grid;margin-bottom:22rpx;padding:18rpx;border-left:6rpx solid #a6493c;background:#f5f2ef;color:#5d5e62;font-size:21rpx;line-height:1.5;gap:6rpx}.availability.is-available{border-left-color:#287152;background:#edf6f1;color:#255f47}
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 18rpx; }
 .picker-field { height: 82rpx; padding: 0 22rpx; border: 1rpx solid #ccd1d9; border-radius: 8rpx; background: #ffffff; color: #17191d; font-size: 27rpx; line-height: 82rpx; }
 .reservation-list { padding-top: 0; padding-bottom: 0; }

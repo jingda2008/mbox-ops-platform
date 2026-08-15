@@ -5,6 +5,8 @@ import type { OutboxBatchResult, OutboxDelivery } from './outbox-dispatcher.js'
 import type { PrintAdapter, PrintBatchResult } from './print-worker.js'
 import type { ReservationHoldExpiryBatch } from './reservation-hold-expiry-worker.js'
 import type { PaymentReservationExpiryBatch } from './payment-reservation-expiry-worker.js'
+import type { ActivityRegistrationExpiryBatch } from './activity-registration-expiry-worker.js'
+import type { ExperienceCueDispatchBatch } from './experience-cue-dispatch-worker.js'
 import type { ServiceTaskSlaBatch } from './service-task-sla-worker.js'
 import type { SopWorkerBatchResult } from './sop-worker.js'
 import type { StoreScope } from './transaction-runner.js'
@@ -17,6 +19,12 @@ type ReservationExpiryPort = {
 }
 type PaymentReservationExpiryPort = {
   runBatch(scope: Readonly<StoreScope>, workerId: string): Promise<PaymentReservationExpiryBatch>
+}
+type ActivityRegistrationExpiryPort = {
+  runBatch(scope: Readonly<StoreScope>, workerId: string): Promise<ActivityRegistrationExpiryBatch>
+}
+type ExperienceCueDispatchPort = {
+  runBatch(scope: Readonly<StoreScope>, workerId: string): Promise<ExperienceCueDispatchBatch>
 }
 type IdempotencyCleanupPort = {
   runBatch(scope: Readonly<StoreScope>): Promise<IdempotencyCleanupResult>
@@ -72,6 +80,8 @@ export type NormalizedWorkerName =
   | 'service-sla'
   | 'reservation-expiry'
   | 'payment-reservation-expiry'
+  | 'activity-registration-expiry'
+  | 'experience-cue-dispatch'
   | 'idempotency-cleanup'
   | 'staff-login-rate-limit-cleanup'
   | 'business-day'
@@ -88,6 +98,8 @@ export interface NormalizedWorkerCycleResult {
     serviceSla: ServiceTaskSlaBatch | null
     reservationExpiry: ReservationHoldExpiryBatch | null
     paymentReservationExpiry: PaymentReservationExpiryBatch | null
+    activityRegistrationExpiry: ActivityRegistrationExpiryBatch | null
+    experienceCueDispatch: ExperienceCueDispatchBatch | null
     idempotencyCleanup: IdempotencyCleanupResult | null
     staffLoginRateLimitCleanup: number | null
     businessDay: BusinessDayRolloverResult | null
@@ -114,6 +126,8 @@ export class NormalizedBackgroundWorkerCoordinator {
       serviceSla: ServiceSlaPort
       reservationExpiry: ReservationExpiryPort
       paymentReservationExpiry: PaymentReservationExpiryPort
+      activityRegistrationExpiry: ActivityRegistrationExpiryPort
+      experienceCueDispatch: ExperienceCueDispatchPort
       idempotencyCleanup: IdempotencyCleanupPort
       staffLoginRateLimitCleanup: StaffLoginRateLimitCleanupPort
       businessDay: BusinessDayPort
@@ -167,6 +181,8 @@ export class NormalizedBackgroundWorkerCoordinator {
       'service-sla',
       'reservation-expiry',
       'payment-reservation-expiry',
+      'activity-registration-expiry',
+      'experience-cue-dispatch',
       'idempotency-cleanup',
       'staff-login-rate-limit-cleanup',
       'business-day',
@@ -182,6 +198,14 @@ export class NormalizedBackgroundWorkerCoordinator {
       this.runWhenDue('payment-reservation-expiry', () => this.workers.paymentReservationExpiry.runBatch(
         this.scope,
         `${this.options.workerId}:payment-reservation-expiry`,
+      )),
+      this.runWhenDue('activity-registration-expiry', () => this.workers.activityRegistrationExpiry.runBatch(
+        this.scope,
+        `${this.options.workerId}:activity-registration-expiry`,
+      )),
+      this.runWhenDue('experience-cue-dispatch', () => this.workers.experienceCueDispatch.runBatch(
+        this.scope,
+        `${this.options.workerId}:experience-cue-dispatch`,
       )),
       this.runWhenDue('idempotency-cleanup', () => this.workers.idempotencyCleanup.runBatch(this.scope)),
       this.runWhenDue('staff-login-rate-limit-cleanup', () => this.workers.staffLoginRateLimitCleanup.cleanupExpired(this.scope)),
@@ -221,14 +245,16 @@ export class NormalizedBackgroundWorkerCoordinator {
         serviceSla: fulfilledValue(executions[0]),
         reservationExpiry: fulfilledValue(executions[1]),
         paymentReservationExpiry: fulfilledValue(executions[2]),
-        idempotencyCleanup: fulfilledValue(executions[3]),
-        staffLoginRateLimitCleanup: fulfilledValue(executions[4]),
-        businessDay: fulfilledValue(executions[5]),
-        sop: fulfilledValue(executions[6]),
-        aiScheduled: fulfilledValue(executions[7]),
-        print: fulfilledValue(executions[8]),
-        outbox: fulfilledValue(executions[9]),
-        notification: fulfilledValue(executions[10]),
+        activityRegistrationExpiry: fulfilledValue(executions[3]),
+        experienceCueDispatch: fulfilledValue(executions[4]),
+        idempotencyCleanup: fulfilledValue(executions[5]),
+        staffLoginRateLimitCleanup: fulfilledValue(executions[6]),
+        businessDay: fulfilledValue(executions[7]),
+        sop: fulfilledValue(executions[8]),
+        aiScheduled: fulfilledValue(executions[9]),
+        print: fulfilledValue(executions[10]),
+        outbox: fulfilledValue(executions[11]),
+        notification: fulfilledValue(executions[12]),
       },
       failures,
     }
@@ -268,6 +294,8 @@ const DEFAULT_WORKER_CADENCES: Readonly<Record<NormalizedWorkerName, number>> = 
   'service-sla': 2_000,
   'reservation-expiry': 5_000,
   'payment-reservation-expiry': 5_000,
+  'activity-registration-expiry': 5_000,
+  'experience-cue-dispatch': 2_000,
   'idempotency-cleanup': 60_000,
   'staff-login-rate-limit-cleanup': 60_000,
   'business-day': 30_000,

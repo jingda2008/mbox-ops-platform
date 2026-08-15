@@ -16,7 +16,7 @@ button { letter-spacing: 0; transition: transform 100ms ease, opacity 100ms ease
 .warning { margin-bottom: 22rpx; padding: 18rpx 20rpx; border-left: 6rpx solid #d39b2f; background: #fff9e9; color: #765a1f; font-size: 23rpx; line-height: 1.5; }
 .error-banner { margin-bottom: 22rpx; padding: 18rpx 20rpx; border-left: 6rpx solid #b53d2e; background: #fff0ed; color: #8b3025; font-size: 24rpx; line-height: 1.5; }
 .success-banner { margin-bottom: 22rpx; padding: 18rpx 20rpx; border-left: 6rpx solid #2d7654; background: #edf8f1; color: #225c41; font-size: 24rpx; line-height: 1.5; }
-.primary-button, .secondary-button, .danger-button { height: 82rpx; border-radius: 8rpx; font-size: 28rpx; font-weight: 600; line-height: 82rpx; }
+.primary-button, .secondary-button, .danger-button { min-height: 88rpx; border-radius: 8rpx; font-size: 28rpx; font-weight: 600; line-height: 88rpx; }
 .primary-button { background: #202328; color: #ffffff; }
 .secondary-button { border: 1rpx solid #cfd4dc; background: #ffffff; color: #25282e; }
 .danger-button { background: #b53d2e; color: #ffffff; }

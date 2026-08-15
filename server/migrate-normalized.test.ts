@@ -35,6 +35,7 @@ describe('normalized migration baseline', () => {
       '013', '014', '015', '016', '017', '018', '019', '020', '021', '022', '023', '024',
       '025', '026', '027', '028', '029', '030', '031', '032', '033', '034', '035', '036',
       '037', '038', '039', '040', '041', '042', '043', '044', '045', '046', '047', '048',
+      '049',
     ])
     for (const migration of migrations) {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
@@ -98,6 +99,11 @@ describe('normalized migration baseline', () => {
       'product_catalog_applications',
       'role_access_configuration_authorities', 'staff_access_configuration_definitions',
       'payment_provider_actions', 'wechat_payment_identities',
+      'customer_experience_features', 'customer_memberships', 'loyalty_point_ledger',
+      'recommendation_sessions', 'customer_experience_plans', 'experience_plan_cues',
+      'checkout_upgrade_rules', 'checkout_upgrade_offers', 'community_activities',
+      'community_activity_registrations', 'member_content_cards', 'customer_followup_tasks',
+      'customer_experience_feedback',
     ]
     for (const table of requiredTables) {
       expect(sql).toMatch(new RegExp(`CREATE TABLE mbox\\.${table}\\s*\\(`))
@@ -117,6 +123,9 @@ describe('normalized migration baseline', () => {
     expect(sql).toMatch(/kds_tasks_claim_idx/)
     expect(sql).toMatch(/outbox_pending_claim_idx/)
     expect(sql).toMatch(/notifications_business_key_uq/)
+    expect(sql).toMatch(/registration_payment_mode[\s\S]*deposit_optional[\s\S]*deposit_required[\s\S]*full_required/)
+    expect(sql).toMatch(/fee_basis[\s\S]*per_person[\s\S]*per_registration/)
+    expect(sql).toMatch(/payment_status[\s\S]*not_required[\s\S]*pending[\s\S]*paid[\s\S]*expired[\s\S]*refunded/)
     expect(sql).toMatch(/notifications_delivery_claim_idx[\s\S]*status IN \('pending', 'failed', 'sending'\)/)
     expect(sql).toMatch(/notifications_attempt_limit_ck/)
     expect(sql).toMatch(/pricing_authorizations_benefit_once_per_table_uq/)
@@ -154,6 +163,12 @@ describe('normalized migration baseline', () => {
     expect(sql).toMatch(/print_jobs_claim_idx/)
     expect(sql).toMatch(/waitlist_entries_active_contact_uq/)
     expect(sql).toMatch(/stores_seed_permission_definitions/)
+    expect(sql).toMatch(/checkout_upgrade_rules_active_idx/)
+    expect(sql).toMatch(/checkout_upgrade_offers_active_idx/)
+    expect(sql).toMatch(/target_amount_minor = source_amount_minor \+ amount_to_add_minor/)
+    expect(sql).toMatch(/never refunds a paid drink/)
+    expect(sql).toMatch(/loyalty_point_ledger_append_only/)
+    expect(sql).toMatch(/customer_experience_feedback_append_only/)
     expect(sql).toMatch(/benefit_redemptions[\s\S]*authorization_source/)
     expect(sql).toMatch(/'order\.create'[\s\S]*'kds\.prepare'[\s\S]*'payment\.initiate\.staff'/)
     expect(sql).not.toMatch(/\b(?:real|double precision)\b/i)

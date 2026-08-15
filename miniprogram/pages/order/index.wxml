@@ -1,0 +1,21 @@
+<view class="page order-page">
+  <view class="top-band order-band"><text class="eyebrow">M-BOX · 今晚体验</text><text class="order-title">先选场景，再选酒水</text><text class="order-subtitle">组合优先展示，系统只推荐当前人数可售且价格已确认的商品</text></view>
+  <state-panel wx:if="{{loading}}" type="loading" title="正在读取今晚菜单" />
+  <block wx:else>
+    <view wx:if="{{error}}" class="error-banner">{{error}}</view>
+    <scroll-view scroll-x class="service-strip"><view class="service-actions"><button wx:for="{{serviceActions}}" wx:key="code" data-code="{{item.code}}" bindtap="callService">{{item.name}}</button></view></scroll-view>
+    <view class="decision-band">
+      <picker mode="selector" range="{{occasionOptions}}" range-key="name" value="{{occasionIndex}}" bindchange="onOccasionChange"><view><text>今晚是</text><text class="decision-value">{{occasionOptions[occasionIndex].name}}</text></view></picker>
+      <picker mode="selector" range="{{alcoholOptions}}" range-key="name" value="{{alcoholIndex}}" bindchange="onAlcoholChange"><view><text>想喝</text><text class="decision-value">{{alcoholOptions[alcoholIndex].name}}</text></view></picker>
+      <button bindtap="recommend" loading="{{busy}}">帮我选</button>
+    </view>
+    <view wx:if="{{recommendations.length}}" class="section"><view class="section-title"><text>为本桌安排</text><text class="section-link">舒适 · 推荐 · 尽兴</text></view>
+      <scroll-view scroll-x class="recommend-scroll"><view class="recommend-row"><view wx:for="{{recommendations}}" wx:key="productId" class="recommend-card"><text class="recommend-tier">{{item.tierText}}</text><text class="recommend-name">{{item.name}}</text><text>{{item.reason}}</text><text class="saving">{{item.savingsText}}</text><view><text class="recommend-price">{{item.priceText}}</text><button data-id="{{item.productId}}" data-source="recommendation" bindtap="addProduct">选择</button></view></view></view></scroll-view>
+    </view>
+    <view class="section"><view class="section-title"><text>今晚可点</text><text class="section-link">组合排在前面</text></view>
+      <view class="product-list"><view wx:for="{{products}}" wx:key="productId" class="product-row"><view><text class="product-kind">{{item.productKind === 'bundle' ? '体验组合' : item.categoryName}}</text><text class="product-name">{{item.name}}</text><text>{{item.description || item.includedText || '以现场菜单为准'}}</text></view><view><text class="product-price">{{item.priceText}}</text><button data-id="{{item.productId}}" bindtap="addProduct">+</button></view></view></view>
+    </view>
+  </block>
+  <view wx:if="{{cart.length}}" class="cart-dock"><view class="cart-lines"><view wx:for="{{cart}}" wx:key="productId"><text>{{item.name}}</text><view><button data-id="{{item.productId}}" data-delta="-1" bindtap="changeQuantity">−</button><text>{{item.quantity}}</text><button data-id="{{item.productId}}" data-delta="1" bindtap="changeQuantity">+</button></view></view></view><button class="checkout-button" bindtap="openCheckout" loading="{{busy}}"><text>确认订单并付款</text><text class="checkout-total">{{cartTotal}}</text></button></view>
+  <view wx:if="{{upgradeOffer}}" class="sheet-mask"><view class="upgrade-sheet"><text class="eyebrow">付款前最后确认</text><text class="upgrade-title">{{upgradeOffer.prompt.title}}</text><text class="upgrade-copy">{{upgradeOffer.prompt.body}}</text><view class="upgrade-price"><text>当前 {{upgradeOffer.sourceProduct.name}}</text><text class="upgrade-add">再加 {{upgradeAdd}}</text><text>升级后总价 {{targetTotal}}</text></view><view wx:for="{{upgradeOffer.targetExperience.included}}" wx:key="*this" class="included-line">{{item}}</view><text class="rule-copy">{{upgradeOffer.ruleCopy}}</text><button class="primary-button" bindtap="acceptUpgrade">{{upgradeOffer.prompt.callToAction}}</button><button class="secondary-button" bindtap="declineUpgrade">保持原选择</button></view></view>
+</view>

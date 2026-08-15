@@ -1,161 +1,126 @@
-const { getRuntimeConfig } = require('../config/index')
-const { developmentBootstrap, developmentMember } = require('../mock/data')
-const { request } = require('./request')
+const { request, deviceKey } = require('./request')
 const { randomId } = require('./id')
-const { getTableSession, updateTableToken } = require('./session')
+const { getTableSession } = require('./session')
 const { ensureCustomerSession } = require('./auth')
 
-async function withDevFallback(loader, fallback) {
-  try {
-    return { data: await loader(), source: 'api', warning: '' }
-  } catch (error) {
-    const config = getRuntimeConfig()
-    if (!config.isDevelopment || !config.allowDevDataFallback) throw error
-    return {
-      data: fallback,
-      source: 'development-fallback',
-      warning: `本地 API 不可用，当前展示开发占位数据：${error.message}`,
-    }
-  }
-}
-
-function developmentGuestSession() {
-  const table = developmentBootstrap.tables[0]
-  return {
-    store: developmentBootstrap.store,
-    table: { code: table.code, displayName: table.displayName, status: table.status, occupied: table.status === 'occupied' },
-    primaryServiceName: developmentBootstrap.employees[0].displayName,
-    serviceTypes: developmentBootstrap.config.serviceTypes,
-    tasks: [],
-    account: { tableSessionId: null, balanceAmount: 0, orders: [] },
-    songOffers: [],
-    songRequests: [],
-    tableToken: '',
-    serverNow: developmentBootstrap.serverNow,
-  }
-}
-
 async function loadGuestSession() {
-  const config = getRuntimeConfig()
   const session = getTableSession()
-  const query = config.isDevelopment && !session.tableToken
-    ? `table=${encodeURIComponent(session.tableCode)}`
-    : `token=${encodeURIComponent(session.tableToken)}`
-  const data = await request(`/api/guest/session?${query}`, { requireTableToken: false })
-  if (data.tableToken) updateTableToken(data.tableToken)
-  return data
-}
-
-function getGuestSession() {
-  return withDevFallback(loadGuestSession, developmentGuestSession())
-}
-
-function createServiceTask(input) {
-  const session = getTableSession()
-  return request('/api/guest/tasks', {
-    method: 'POST',
-    data: Object.assign({}, input, {
-      tableToken: session.tableToken,
-      idempotencyKey: randomId(`guest-${session.tableCode}-${input.serviceTypeId}`),
-    }),
-  })
-}
-
-function actOnTask(taskId, action) {
-  const session = getTableSession()
-  return request(`/api/guest/tasks/${encodeURIComponent(taskId)}/feedback`, {
-    method: 'POST',
-    data: {
-      tableToken: session.tableToken,
-      action,
-      note: action === 'unresolved' ? '客户反馈仍未解决' : '',
-      idempotencyKey: randomId(`guest-feedback-${taskId}-${action}`),
-    },
-  })
-}
-
-async function getMemberPortal() {
-  const config = getRuntimeConfig()
-  if (!config.isDevelopment) await ensureCustomerSession()
-  if (!config.isDevelopment) return { data: await request('/api/wechat/member-portal'), source: 'api', warning: '' }
-  const path = `/api/dev/member-portal/${encodeURIComponent(config.developmentMemberId)}`
-  return withDevFallback(() => request(path), developmentMember)
-}
-
-function submitSongRequest(input) {
-  const session = getTableSession()
-  return request('/api/guest/song-requests', {
-    method: 'POST',
-    data: Object.assign({}, input, {
-      tableToken: session.tableToken,
-      idempotencyKey: randomId('song-submit'),
-    }),
-  })
-}
-
-function reservationRequest(path, options) {
-  const config = getRuntimeConfig()
-  const settings = options || {}
-  if (!config.apiBaseUrl || !config.storeId) return Promise.reject(new Error('尚未配置 API 地址或门店编号'))
-  const headers = { 'content-type': 'application/json', 'x-mbox-store-id': config.storeId }
-  const customerToken = wx.getStorageSync('mbox.customer.session.token')
-  if (customerToken) headers.Authorization = `Bearer ${customerToken}`
-  if (config.isDevelopment && config.developmentActorId) headers['x-mbox-actor-id'] = config.developmentActorId
-  return new Promise((resolve, reject) => {
-    wx.request({
-      url: `${config.apiBaseUrl}${path}`,
-      method: settings.method || 'GET',
-      data: settings.data,
-      header: headers,
-      timeout: config.requestTimeoutMs,
-      success(response) {
-        if (response.statusCode >= 200 && response.statusCode < 300) return resolve(response.data)
-        const body = response.data || {}
-        const error = new Error(body.message || `预约请求失败（${response.statusCode}）`)
-        error.code = body.code || 'RESERVATION_HTTP_ERROR'
-        error.statusCode = response.statusCode
-        reject(error)
-      },
-      fail(error) {
-        const requestError = new Error(error.errMsg || '预约网络连接失败')
-        requestError.code = 'NETWORK_ERROR'
-        reject(requestError)
-      },
+  if (session.tableToken && wx.getStorageSync('mbox.connected.table.token') !== session.tableToken) {
+    const connected = await request('/api/guest/session/scan', {
+      method: 'POST',
+      requireTableSession: false,
+      data: { tableQrToken: session.tableToken, deviceKey: deviceKey() },
     })
-  })
+    wx.setStorageSync('mbox.connected.table.token', session.tableToken)
+    return connected.data
+  }
+  const response = await request('/api/guest/session', { requireTableSession: false })
+  return response.data
+}
+
+async function getGuestSession() { return { data: await loadGuestSession(), source: 'api', warning: '' } }
+
+async function publicRequest(path, options) {
+  await ensureCustomerSession(false)
+  return request(path, Object.assign({ requireTableSession: false }, options || {}))
+}
+
+async function getMiniBootstrap() { return (await publicRequest('/api/public/mini/bootstrap')).data }
+async function getActivities() { return (await publicRequest('/api/public/mini/activities')).data }
+async function enrollMembership() {
+  return (await publicRequest('/api/public/mini/membership/enroll', {
+    method: 'POST', headers: { 'idempotency-key': randomId('membership-enroll') }, data: {},
+  })).data
+}
+async function updatePreferences(preferences, displayName) {
+  return (await publicRequest('/api/public/mini/preferences', {
+    method: 'PATCH', headers: { 'idempotency-key': randomId('member-preferences') },
+    data: { preferences, displayName: displayName || null },
+  })).data
+}
+async function registerActivity(activityPublicId, partySize, contactSnapshot, safetyAcknowledgement, paymentChoice) {
+  return (await publicRequest(`/api/public/mini/activities/${encodeURIComponent(activityPublicId)}/registrations`, {
+    method: 'POST', headers: { 'idempotency-key': randomId('activity-register') },
+    data: { partySize, contactSnapshot, safetyAcknowledgement, paymentChoice: paymentChoice || 'none' },
+  })).data
 }
 
 async function getReservations() {
-  const config = getRuntimeConfig()
-  if (!config.isDevelopment) await ensureCustomerSession()
-  const path = config.isDevelopment ? '/api/reservations' : '/api/wechat/reservations'
-  return reservationRequest(path)
+  await ensureCustomerSession(false)
+  const ids = wx.getStorageSync('mbox.reservation.public.ids') || []
+  const records = await Promise.all(ids.slice(0, 20).map(async (id) => {
+    try { return (await publicRequest(`/api/public/reservations/${encodeURIComponent(id)}`)).data } catch (_error) { return null }
+  }))
+  return { reservations: records.filter(Boolean) }
+}
+
+async function getReservationAvailability(arrivalAt, guestCount) {
+  return (await publicRequest(`/api/public/reservation/availability?arrivalAt=${encodeURIComponent(arrivalAt)}&guestCount=${encodeURIComponent(guestCount)}`)).data
 }
 
 async function createCustomerReservation(input) {
-  const config = getRuntimeConfig()
-  if (!config.isDevelopment) await ensureCustomerSession()
-  const idempotencyKey = randomId('wechat-reservation')
-  const payload = Object.assign({}, input, { idempotencyKey })
-  if (config.isDevelopment) {
-    Object.assign(payload, {
-      customerReference: `development-member:${config.developmentMemberId}`,
-      contactReference: `development-member:${config.developmentMemberId}`,
-      sourceCode: 'wechat',
-      depositRequiredAmount: 0,
-      depositCurrency: 'CNY',
-    })
-  }
-  const path = config.isDevelopment ? '/api/reservations' : '/api/wechat/reservations'
-  return reservationRequest(path, { method: 'POST', data: payload })
+  const response = await publicRequest('/api/public/reservations', {
+    method: 'POST', headers: { 'idempotency-key': randomId('reservation') },
+    data: {
+      mode: 'direct', customerName: input.customerName, contact: input.contact,
+      guestCount: input.partySize, arrivalAt: input.scheduledAt,
+      seatPreference: input.seatPreference || 'no_preference', note: input.note || null,
+    },
+  })
+  const data = response.data
+  const ids = wx.getStorageSync('mbox.reservation.public.ids') || []
+  if (data && data.publicId) wx.setStorageSync('mbox.reservation.public.ids', [data.publicId].concat(ids.filter((id) => id !== data.publicId)).slice(0, 20))
+  return data
+}
+
+async function getMenu(query) {
+  const params = []
+  if (query && query.categoryCode) params.push(`categoryCode=${encodeURIComponent(query.categoryCode)}`)
+  if (query && query.search) params.push(`search=${encodeURIComponent(query.search)}`)
+  params.push('limit=100')
+  return (await request(`/api/guest/menu/products?${params.join('&')}`)).data
+}
+async function recommendExperience(input) {
+  return (await request('/api/guest/experience/recommendations', {
+    method: 'POST', headers: { 'idempotency-key': randomId('experience-recommend') }, data: input,
+  })).data
+}
+async function createExperiencePlan(input) {
+  return (await request('/api/guest/experience/plans', {
+    method: 'POST', headers: { 'idempotency-key': randomId('experience-plan') }, data: input,
+  })).data
+}
+async function prepareCheckoutUpgrade(items, occasion, alcoholPreference) {
+  return (await request('/api/guest/checkout/upgrade-offers', {
+    method: 'POST', headers: { 'idempotency-key': randomId('checkout-upgrade-offer') },
+    data: { items, occasion, alcoholPreference },
+  })).data
+}
+async function checkout(items, checkoutUpgradeOfferPublicId) {
+  return request('/api/guest/orders', {
+    method: 'POST', headers: { 'idempotency-key': randomId('guest-order') },
+    data: { items, checkoutUpgradeOfferPublicId: checkoutUpgradeOfferPublicId || null },
+  })
+}
+async function getTableOrders() { return (await request('/api/guest/orders/table')).data }
+async function createServiceTask(input) {
+  return request('/api/guest/service-requests', {
+    method: 'POST', headers: { 'idempotency-key': randomId('guest-service') },
+    data: { requestType: input.requestType || 'custom', detail: input.detail || null },
+  })
+}
+async function submitSongRequest(input) {
+  return request('/api/guest/song-requests', {
+    method: 'POST', headers: { 'idempotency-key': randomId('song-submit') }, data: input,
+  })
+}
+async function getTodayPerformances() {
+  return (await request('/api/guest/performances/today', { requireTableSession: false })).data
 }
 
 module.exports = {
-  getGuestSession,
-  createServiceTask,
-  actOnTask,
-  getMemberPortal,
-  submitSongRequest,
-  getReservations,
-  createCustomerReservation,
+  getGuestSession, getMiniBootstrap, getActivities, enrollMembership, updatePreferences,
+  registerActivity, getReservations, getReservationAvailability, createCustomerReservation, getMenu, recommendExperience,
+  createExperiencePlan, prepareCheckoutUpgrade, checkout, getTableOrders,
+  createServiceTask, submitSongRequest, getTodayPerformances,
 }

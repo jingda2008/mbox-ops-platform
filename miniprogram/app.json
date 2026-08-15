@@ -2,12 +2,12 @@
   "pages": [
     "pages/home/index",
     "pages/reservations/index",
-    "pages/service/index",
+    "pages/order/index",
+    "pages/community/index",
+    "pages/profile/index",
     "pages/account/index",
     "pages/complaint/index",
-    "pages/member/index",
     "pages/songs/index",
-    "pages/status/index",
     "pages/privacy/index"
   ],
   "window": {
@@ -16,6 +16,19 @@
     "navigationBarTitleText": "M-Box 桌台服务",
     "backgroundColor": "#f4f5f7",
     "backgroundTextStyle": "dark"
+  },
+  "tabBar": {
+    "color": "#747984",
+    "selectedColor": "#d84736",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "black",
+    "list": [
+      { "pagePath": "pages/home/index", "text": "首页" },
+      { "pagePath": "pages/reservations/index", "text": "预约" },
+      { "pagePath": "pages/order/index", "text": "点单" },
+      { "pagePath": "pages/community/index", "text": "超嗨" },
+      { "pagePath": "pages/profile/index", "text": "我的" }
+    ]
   },
   "usingComponents": {
     "state-panel": "/components/state-panel/index"

@@ -349,6 +349,7 @@ export class PostgresPricingAuthority implements PricingAuthorityPort {
       expiresAt: row.valid_until === null ? null : toIso(row.valid_until),
     }
   }
+
 }
 
 async function loadServerPricedBasket(

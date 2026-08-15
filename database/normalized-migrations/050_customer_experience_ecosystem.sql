@@ -1,3 +1,4 @@
+-- Runs after the configurable refund workflow migration (049).
 BEGIN;
 
 CREATE TABLE mbox.customer_experience_features (

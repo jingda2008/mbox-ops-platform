@@ -324,8 +324,8 @@ export async function provisionNormalizedStore(input: {
     const schema = await client.query<{ schema_flavor: string; schema_version: string }>(
       'SELECT schema_flavor, schema_version FROM mbox.normalized_schema_metadata WHERE singleton = true',
     )
-    if (schema.rows[0]?.schema_flavor !== 'normalized-core-v1' || Number(schema.rows[0]?.schema_version ?? 0) < 34) {
-      throw new Error('Normalized schema 034 or later is required')
+    if (schema.rows[0]?.schema_flavor !== 'normalized-core-v1' || Number(schema.rows[0]?.schema_version ?? 0) < 45) {
+      throw new Error('Normalized schema 046 or later is required')
     }
     const { tenant, store } = input.config
     await client.query(`INSERT INTO mbox.tenants(id, code, name) VALUES ($1, $2, $3)

@@ -1,6 +1,6 @@
 import { AlertTriangle, Check, CheckCircle2, ChevronRight, Clock3, Gift, MessageSquareWarning, Minus, Plus, Search, ShoppingCart, Sparkles, ThumbsUp, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ApiError } from '../api'
+import { ApiError } from '../shared/api-error'
 import type { OrderSafetyConfig } from '../shared/commercial-ops-contracts'
 import type { MenuProduct, MenuRecommendationScene } from '../shared/contracts'
 import type { GuestBehaviorEventType } from '../shared/guest-insight-contracts'
@@ -19,6 +19,7 @@ import { GuestRecommendationTools, type GuestRecommendationContext } from './Gue
 import './MenuOrderingWorkspace.css'
 import { filterMenuProducts } from './menu-search'
 import { clearPersistedCart, persistCart, readPersistedCart } from './menu-cart-storage'
+import { recommendationProductIsOrderable } from './menu-recommendation-availability'
 
 export interface MenuCartItem {
   productId: string
@@ -207,15 +208,8 @@ export function MenuOrderingWorkspace({
       scene: recommendationScene,
       ...recommendationContext,
     } as MenuRecommendationContext,
-    (product) => (
-      product.guestVisible !== false
-      &&
-      availability.get(product.id)?.orderable === true
-      && (product.productKind !== 'bundle' || (product.bundleComponents ?? []).every((component) => (
-        availability.get(component.productId)?.orderable === true
-      )))
-    ),
-  ), [availability, orderedProducts, partySize, recommendationContext, recommendationScene])
+    (product) => recommendationProductIsOrderable(product, availability, guestSalesMode),
+  ), [availability, guestSalesMode, orderedProducts, partySize, recommendationContext, recommendationScene])
   const recommendationSlots = useMemo(
     () => selectMenuRecommendationSlots(rankedRecommendations),
     [rankedRecommendations],
@@ -661,7 +655,7 @@ export function MenuOrderingWorkspace({
               <strong>{comparisonOptions.length >= 3 ? '三款都适合今晚' : '今晚适合您的选择'}</strong>
               <span>左右滑动比较酒型、价格和内容</span>
             </header>
-            <div className="menu-recommendation-options">
+            <div className={`menu-recommendation-options has-${Math.min(3, comparisonOptions.length)}`}>
               {comparisonOptions.map((option) => {
                 const product = option.product
                 const quantity = cart[product.id] ?? 0
@@ -673,10 +667,10 @@ export function MenuOrderingWorkspace({
                   : option.role === 'primary' ? '今晚正好'
                     : option.role === 'complete' ? '更完整'
                       : recommendationConfig(product).badge || comparisonFamilyLabels[product.beverageFamily ?? ''] || '换种风格'
-                const chooseLabel = option.role === 'lighter' ? '这份就好'
-                  : option.role === 'primary' ? '就这样安排'
-                    : option.role === 'complete' ? '今晚更尽兴'
-                      : '选这款'
+                const chooseLabel = option.role === 'lighter' ? '加入本次订单'
+                  : option.role === 'primary' ? '加入本次订单'
+                    : option.role === 'complete' ? '加入本次订单'
+                      : '加入本次订单'
                 return <article
                   className={`menu-recommendation-option is-${option.role}${status.orderable ? '' : ' is-unavailable'}`}
                   data-testid={`menu-product-${product.id}`}
@@ -817,7 +811,7 @@ export function MenuOrderingWorkspace({
           {cartOpen && <button className="menu-cart-drawer-backdrop" type="button" aria-label="关闭购物车" onClick={() => setCartOpen(false)} />}
           {cartOpen && (
             <aside className="menu-cart-drawer" role="dialog" aria-modal="true" aria-label="购物车明细">
-              <div className="menu-cart-heading"><ShoppingCart size={20} /><strong>已选商品</strong><span>{itemCount} 件</span><button className="icon-button" title="关闭购物车" onClick={() => setCartOpen(false)}><X size={18} /></button></div>
+              <div className="menu-cart-heading"><ShoppingCart size={20} /><strong>本次待提交</strong><span>{itemCount} 件</span><button className="icon-button" title="关闭购物车" onClick={() => setCartOpen(false)}><X size={18} /></button></div>
               <div className="menu-cart-lines">{cartLines}</div>
               {fulfillmentNoteField}
               <footer className="menu-cart-drawer-footer">
@@ -834,13 +828,13 @@ export function MenuOrderingWorkspace({
               type="button"
               disabled={itemCount === 0}
               aria-expanded={cartOpen}
-              aria-label={`查看购物车，已选${itemCount}件，合计${formatMenuAmount(total)}元`}
+              aria-label={`查看本次购物车，待提交${itemCount}件，合计${formatMenuAmount(total)}元`}
               onClick={() => setCartOpen((open) => !open)}
             >
               <span className="menu-cart-summary-icon"><ShoppingCart size={20} /><b>{itemCount}</b></span>
               <span className="menu-cart-summary-copy">
-                <strong>{itemCount > 0 ? `已选 ${itemCount} 件` : '还未选择商品'}</strong>
-                <small>{itemCount > 0 ? (deemphasizeCollapsedTotal ? '需要时打开核对' : `查看明细 · 合计 ¥${formatMenuAmount(total)}`) : '点击商品加入订单'}</small>
+                <strong>{itemCount > 0 ? `本次待提交 ${itemCount} 件` : '本次还未选择'}</strong>
+                <small>{itemCount > 0 ? (deemphasizeCollapsedTotal ? `打开核对 · 合计 ¥${formatMenuAmount(total)}` : `查看明细 · 合计 ¥${formatMenuAmount(total)}`) : '与右上角历史订单相互独立'}</small>
               </span>
             </button>
             <button className="menu-submit-button" disabled={cartProducts.length === 0 || busy || submitDisabled} onClick={() => setCartOpen(true)}>

@@ -174,8 +174,10 @@ integration("normalized catalog PostgreSQL integration", () => {
     ]);
     const hiddenCode = `HIDDEN-${integrationRunToken}`;
     await pool.query(`WITH product AS (
-      INSERT INTO mbox.products(tenant_id, store_id, code, name, category_code, fulfillment_station, product_snapshot)
-      VALUES ($1,$2,$3,'内部组成商品','cocktail','bar','{"guestVisible":false,"aliases":["内部隐藏"]}'::jsonb)
+      INSERT INTO mbox.products(tenant_id, store_id, code, name, category_code, fulfillment_station,
+        product_snapshot, guest_visible, search_text)
+      VALUES ($1,$2,$3,'内部组成商品','cocktail','bar','{"aliases":["内部隐藏"]}'::jsonb,
+        false,$3 || ' 内部组成商品 内部隐藏')
       RETURNING id
     ) INSERT INTO mbox.product_prices(tenant_id, store_id, product_id, amount_minor, currency, valid_from)
       SELECT $1,$2,id,100,'CNY',clock_timestamp() FROM product`, [tenantId, storeId, hiddenCode]);
@@ -334,15 +336,9 @@ integration("normalized catalog PostgreSQL integration", () => {
 });
 
 describe("normalized catalog HTTP API", () => {
-  it("uses a separately injected guest context and configured snapshot fields for customer search", async () => {
+  it("uses a separately injected guest context and the normalized search field for customer search", async () => {
     const fixture = await createFixture({
       failStaffContext: true,
-      searchSnapshotFields: [
-        "aliases",
-        "specification",
-        "pinyin",
-        "searchTags",
-      ],
     });
     const response = await fixture.app.inject({
       method: "GET",
@@ -355,7 +351,8 @@ describe("normalized catalog HTTP API", () => {
     const query = fixture.calls.find((call) =>
       call.sql.includes("FROM mbox.products AS product"),
     );
-    expect(query?.sql).toContain("unnest($8::text[])");
+    expect(query?.sql).toContain("product.search_text");
+    expect(query?.sql).not.toContain("product_snapshot ->");
     expect(query?.values).toEqual([
       tenantId,
       storeId,
@@ -364,7 +361,6 @@ describe("normalized catalog HTTP API", () => {
       "active",
       20,
       5,
-      ["aliases", "specification", "pinyin", "searchTags"],
       true,
     ]);
     expect(response.json().data[0].productSnapshot.costAmount).toBeUndefined();
@@ -508,7 +504,6 @@ interface QueryCall {
 interface FixtureOptions {
   grantedPermissions?: readonly string[];
   categoryRows?: Array<Record<string, unknown>>;
-  searchSnapshotFields?: readonly string[];
   serializationFailures?: number;
   failStaffContext?: boolean;
 }
@@ -580,7 +575,6 @@ async function createFixture(options: FixtureOptions = {}) {
       guestContextCalls += 1;
       return { scope };
     },
-    searchSnapshotFields: options.searchSnapshotFields,
     createCommandExecutor: (_transactions, transactionOptions) => {
       priceTransactionOptions.push({ ...transactionOptions });
       return { execute };
@@ -696,8 +690,29 @@ function productRow(withPrice: boolean): Record<string, unknown> {
       aliases: ["清爽特调"],
       specification: "330ml",
       pinyin: "qingshuang",
-      costAmount: 1050,
     },
+    guest_visible: true,
+    search_text: "COCKTAIL-01 招牌鸡尾酒 清爽特调 qingshuang 330ml",
+    recommendation_enabled: false,
+    recommendation_min_guests: 1,
+    recommendation_max_guests: 100,
+    recommendation_priority: 100,
+    recommendation_scene_tags: [],
+    recommendation_intent_tags: [],
+    recommendation_taste_tags: [],
+    recommendation_dwell_tags: [],
+    recommendation_single_wave_eligible: true,
+    recommendation_expected_prep_minutes: 8,
+    recommendation_hold_minutes: 10,
+    recommendation_upgrade_product_id: null,
+    menu_sort_order: 999,
+    available_from: null,
+    available_until: null,
+    allowed_channels: ['guest_qr', 'staff_assisted', 'cashier', 'reservation', 'integration'],
+    max_order_quantity: 50,
+    kds_priority: 100,
+    fulfillment_sla_seconds: null,
+    cost_amount_minor: "1050",
     status: "active",
     standard_price_id: withPrice ? priceId : null,
     amount_minor: withPrice ? "8800" : null,

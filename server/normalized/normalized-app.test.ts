@@ -386,7 +386,7 @@ describe('createNormalizedApp', () => {
     expect(packageJson.scripts.dev).toContain('npm:dev:api')
     expect(packageJson.scripts['dev:api']).toBe('tsx watch server/normalized-server.ts')
     expect(packageJson.scripts['dev:normalized']).toBe('tsx watch server/normalized-server.ts')
-    expect(packageJson.scripts['dev:api:legacy']).toBe('tsx watch server/index.ts')
+    expect(packageJson.scripts['dev:api:legacy']).toBeUndefined()
     expect(packageJson.scripts.build).toBe('npm run build:normalized')
     expect(packageJson.scripts['build:normalized']).toContain('tsconfig.normalized-server.json')
     expect(packageJson.scripts['build:normalized']).not.toContain('tsconfig.server.json')
@@ -394,7 +394,9 @@ describe('createNormalizedApp', () => {
     expect(normalizedTsconfig.compilerOptions.outDir).toBe('dist-normalized')
     expect(packageJson.scripts['start:normalized']).toBe('node dist-normalized/server/normalized-server.js')
     expect(packageJson.scripts.start).toBe('node dist-normalized/server/normalized-server.js')
-    expect(packageJson.scripts['start:legacy']).toBe('node dist-server/server/index.js')
+    expect(packageJson.scripts['start:legacy']).toBeUndefined()
+    expect(Object.values(packageJson.scripts).join('\n')).not.toContain('server/index.ts')
+    expect(Object.values(packageJson.scripts).join('\n')).not.toContain('dist-server/server/index.js')
   })
 
   it('serves direct SPA routes from the normalized image without hiding unknown APIs', async () => {

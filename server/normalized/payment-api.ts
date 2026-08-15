@@ -161,6 +161,7 @@ export interface PaymentApiOptions {
   reconciliationQuery: ReconciliationQueryPort
   cashierWorkbenchQuery: CashierWorkbenchQueryPort
   onlinePayments?: Pick<OnlinePaymentService, 'create' | 'query' | 'assertAvailable' | 'resolveActivePayment'>
+  resolveOnlinePaymentAvailable?: (scope: Readonly<StoreScope>) => Promise<boolean>
   resolveActorContext(request: FastifyRequest): Promise<PaymentApiActorContext> | PaymentApiActorContext
   resolveStaffContext(request: FastifyRequest): Promise<PaymentApiStaffContext> | PaymentApiStaffContext
   resolveProviderBusinessDate(
@@ -223,6 +224,10 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
     const method = readOnlineMethod(body.method)
     assertOnlineMethod(provider, method)
     assertActorPaymentMethod(context.actor, method)
+    if (options.resolveOnlinePaymentAvailable !== undefined
+      && !(await options.resolveOnlinePaymentAvailable(context.scope))) {
+      throw new OnlinePaymentUnavailableError('门店已暂停线上支付，请改用现场收款')
+    }
     options.onlinePayments?.assertAvailable(provider === 'simulation' ? 'simulation' : 'postar')
     const idempotencyKey = readIdempotencyKey(request)
     const publicId = readOptionalString(body.publicId, 'publicId', 128, 8)

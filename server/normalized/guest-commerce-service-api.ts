@@ -53,6 +53,7 @@ import { PostarPaymentRejectedError } from '../postar-adapter.js'
 import type {
   ScopedPostgresTransactionRunner,
   ScopedTransaction,
+  StoreScope,
 } from './transaction-runner.js'
 
 export type GuestCheckoutPaymentMode = 'wechat_jsapi' | 'wechat_native_qr' | 'simulation'
@@ -66,6 +67,7 @@ export interface GuestCommerceServiceApiOptions {
   resolveGuestContext(request: FastifyRequest): Promise<GuestRequestContext> | GuestRequestContext
   resolveDeviceFingerprint(request: FastifyRequest): string
   paymentMode: GuestCheckoutPaymentMode
+  resolvePaymentMode?: (scope: Readonly<StoreScope>) => Promise<GuestCheckoutPaymentMode | null>
   paymentActionSecret: string
   deviceServiceLimitPerMinute?: number
   tableServiceLimitPerMinute?: number
@@ -81,6 +83,26 @@ interface CatalogMenuRow extends Record<string, unknown> {
   product_kind: 'single' | 'bundle'
   bundle_components: unknown
   product_snapshot: JsonObject
+  guest_visible: boolean
+  search_text: string
+  recommendation_enabled: boolean
+  recommendation_min_guests: number
+  recommendation_max_guests: number
+  recommendation_priority: number
+  recommendation_scene_tags: string[]
+  recommendation_intent_tags: string[]
+  recommendation_taste_tags: string[]
+  recommendation_dwell_tags: string[]
+  recommendation_single_wave_eligible: boolean
+  recommendation_expected_prep_minutes: number
+  recommendation_hold_minutes: number
+  recommendation_upgrade_product_id: string | null
+  menu_sort_order: number
+  available_from: string | null
+  available_until: string | null
+  max_order_quantity: number
+  within_availability: boolean
+  cost_amount_minor: string | null
   status: string
   amount_minor: string | null
   currency: string | null
@@ -139,7 +161,8 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
 
   app.post('/guest/orders', async (request, reply) => handleRoute(reply, async () => {
     const context = await requireTableContext(options, request, 'guest.order.create')
-    options.onlinePayments.assertAvailable(options.paymentMode === 'simulation' ? 'simulation' : 'postar')
+    const paymentMode = await effectivePaymentMode(options, context.scope)
+    options.onlinePayments.assertAvailable(paymentMode === 'simulation' ? 'simulation' : 'postar')
     const input = readGuestOrder(request.body)
     const idempotencyKey = readIdempotencyKey(request)
     const actor = guestActor(context)
@@ -157,7 +180,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       createdByCustomerId: context.customerId,
       confirmedDuplicateOrderPublicId: input.confirmedDuplicateOrderId,
     })
-    const payment = await initiateGuestPayment(options, context, orderExecution.value, idempotencyKey, createPublicId)
+    const payment = await initiateGuestPayment(options, context, orderExecution.value, idempotencyKey, createPublicId, paymentMode)
     const providerAction = await createGuestProviderAction(
       options,
       context,
@@ -166,7 +189,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       request.ip,
     )
     return reply.code(orderExecution.replayed ? 200 : 201).send(
-      checkoutResponse(orderExecution, payment, options.paymentMode, providerAction),
+      checkoutResponse(orderExecution, payment, paymentMode, providerAction),
     )
   }))
 
@@ -182,7 +205,8 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
     '/guest/orders/:orderPublicId/payment',
     async (request, reply) => handleRoute(reply, async () => {
       const context = await requireTableContext(options, request, 'guest.order.create')
-      options.onlinePayments.assertAvailable(options.paymentMode === 'simulation' ? 'simulation' : 'postar')
+      const paymentMode = await effectivePaymentMode(options, context.scope)
+      options.onlinePayments.assertAvailable(paymentMode === 'simulation' ? 'simulation' : 'postar')
       const orderPublicId = readPublicId(request.params.orderPublicId, 'orderPublicId')
       const resolved = await options.transactions.run(context.scope, async (transaction) => (
         new PaymentProviderActionRepository(transaction, options.paymentActionSecret)
@@ -205,7 +229,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
             requestFingerprint: stableJson({ orderId: resolved.orderId, method, customerId: context.customerId }),
             orderId: resolved.orderId,
             publicId: createPublicId('payment', `${context.scope.storeId}:${idempotencyKey}`),
-            provider: options.paymentMode === 'simulation' ? 'simulation' : 'postar',
+            provider: paymentMode === 'simulation' ? 'simulation' : 'postar',
             method,
             principal: { type: 'guest', tableSessionId: context.tableSessionId, customerId: context.customerId },
             providerSnapshot: { channel: 'guest_table_order' },
@@ -385,7 +409,25 @@ async function searchGuestCatalog(
     SELECT product.id, product.code, product.name, product.category_code,
       product.fulfillment_station, product.product_kind,
       COALESCE(component_list.items, '[]'::jsonb) AS bundle_components,
-      product.product_snapshot, product.status,
+      product.product_snapshot, product.guest_visible, product.search_text,
+      product.recommendation_enabled, product.recommendation_min_guests,
+      product.recommendation_max_guests, product.recommendation_priority,
+      product.recommendation_scene_tags, product.recommendation_intent_tags,
+      product.recommendation_taste_tags, product.recommendation_dwell_tags,
+      product.recommendation_single_wave_eligible,
+      product.recommendation_expected_prep_minutes, product.recommendation_hold_minutes,
+      product.recommendation_upgrade_product_id, product.menu_sort_order,
+      to_char(product.available_from, 'HH24:MI') AS available_from,
+      to_char(product.available_until, 'HH24:MI') AS available_until,
+      product.max_order_quantity,
+      CASE WHEN product.available_from IS NULL THEN true
+        WHEN product.available_from < product.available_until THEN
+          (clock_timestamp() AT TIME ZONE store.timezone)::time >= product.available_from
+          AND (clock_timestamp() AT TIME ZONE store.timezone)::time < product.available_until
+        ELSE (clock_timestamp() AT TIME ZONE store.timezone)::time >= product.available_from
+          OR (clock_timestamp() AT TIME ZONE store.timezone)::time < product.available_until
+      END AS within_availability,
+      product.cost_amount_minor::text, product.status,
       price.amount_minor::text, price.currency,
       current_session.guest_count, current_session.guest_profile_snapshot
     FROM mbox.products AS product
@@ -394,6 +436,8 @@ async function searchGuestCatalog(
       AND current_session.store_id = product.store_id
       AND current_session.id = $3::uuid
       AND current_session.status = 'open'
+    JOIN mbox.stores AS store
+      ON store.tenant_id=product.tenant_id AND store.id=product.store_id AND store.status='active'
     LEFT JOIN LATERAL (
       SELECT amount_minor, currency
       FROM mbox.product_prices
@@ -426,6 +470,7 @@ async function searchGuestCatalog(
     WHERE product.tenant_id = $1::uuid
       AND product.store_id = $2::uuid
       AND product.status = 'active'
+      AND product.guest_visible
       AND price.amount_minor IS NOT NULL
       AND (
         product.product_kind = 'single'
@@ -455,37 +500,24 @@ async function searchGuestCatalog(
         $5 = ''
         OR product.name ILIKE $6 ESCAPE '\\'
         OR product.code ILIKE $6 ESCAPE '\\'
-        OR COALESCE(product.product_snapshot ->> 'aliases', '') ILIKE $6 ESCAPE '\\'
-        OR COALESCE(product.product_snapshot ->> 'pinyin', '') ILIKE $6 ESCAPE '\\'
-        OR COALESCE(product.product_snapshot ->> 'specification', '') ILIKE $6 ESCAPE '\\'
-        OR COALESCE(product.product_snapshot -> 'source' ->> 'aliases', '') ILIKE $6 ESCAPE '\\'
-        OR COALESCE(product.product_snapshot -> 'source' ->> 'pinyin', '') ILIKE $6 ESCAPE '\\'
-        OR COALESCE(product.product_snapshot -> 'source' ->> 'specification', '') ILIKE $6 ESCAPE '\\'
+        OR product.search_text ILIKE $6 ESCAPE '\\'
       )
     ORDER BY
-      CASE WHEN
-        COALESCE(
-          CASE WHEN product.product_snapshot -> 'recommendation' ->> 'minimumPartySize' ~ '^\\d{1,3}$'
-            THEN (product.product_snapshot -> 'recommendation' ->> 'minimumPartySize')::integer END,
-          1
-        ) <= current_session.guest_count
-        AND COALESCE(
-          CASE WHEN product.product_snapshot -> 'recommendation' ->> 'maximumPartySize' ~ '^\\d{1,3}$'
-            THEN (product.product_snapshot -> 'recommendation' ->> 'maximumPartySize')::integer END,
-          200
-        ) >= current_session.guest_count
-        THEN 0 ELSE 1
+      CASE WHEN product.recommendation_enabled
+        AND product.cost_amount_minor IS NOT NULL
+        AND price.amount_minor > product.cost_amount_minor
+        AND product.recommendation_min_guests <= current_session.guest_count
+        AND product.recommendation_max_guests >= current_session.guest_count
+        THEN 0
+        WHEN product.recommendation_enabled THEN 1
+        ELSE 2
       END,
-      CASE
-        WHEN product.product_snapshot -> 'recommendation' ->> 'priority' ~ '^\\d{1,4}$'
-          THEN (product.product_snapshot -> 'recommendation' ->> 'priority')::integer
-        ELSE 0
-      END DESC,
+      product.recommendation_priority DESC,
+      product.menu_sort_order,
       CASE WHEN product.product_kind = 'bundle' THEN 0 ELSE 1 END,
       CASE
-        WHEN product.product_snapshot ->> 'costAmount' ~ '^\\d{1,12}$'
-          AND price.amount_minor > (product.product_snapshot ->> 'costAmount')::bigint
-        THEN price.amount_minor - (product.product_snapshot ->> 'costAmount')::bigint
+        WHEN product.cost_amount_minor IS NOT NULL AND price.amount_minor > product.cost_amount_minor
+        THEN price.amount_minor - product.cost_amount_minor
         ELSE 0
       END DESC,
       product.category_code, product.name, product.id
@@ -521,57 +553,43 @@ function publicCatalogProduct(row: CatalogMenuRow) {
     tags: publicStringArray(row.product_snapshot.tags ?? source.tags),
     imageUrl: publicString(row.product_snapshot.imageUrl) ?? publicString(source.imageUrl),
     description: publicString(row.product_snapshot.description) ?? publicString(source.description),
-    sortOrder: boundedInteger(row.product_snapshot.sortOrder ?? source.sortOrder, 0, 100_000, 999),
-    availableFrom: publicString(row.product_snapshot.availableFrom ?? source.availableFrom),
-    availableUntil: publicString(row.product_snapshot.availableUntil ?? source.availableUntil),
-    guestVisible: row.product_snapshot.guestVisible !== false && source.guestVisible !== false,
-    requiresFulfillment: row.product_snapshot.requiresFulfillment !== false && source.requiresFulfillment !== false,
-    maxOrderQuantity: boundedInteger(row.product_snapshot.maxOrderQuantity ?? source.maxOrderQuantity, 1, 999, 50),
+    sortOrder: row.menu_sort_order,
+    availableFrom: row.available_from,
+    availableUntil: row.available_until,
+    guestVisible: row.guest_visible,
+    requiresFulfillment: row.product_kind === 'bundle' || row.fulfillment_station !== 'none',
+    maxOrderQuantity: row.max_order_quantity,
     amountMinor,
     currency: row.currency,
     fulfillmentStation: row.fulfillment_station,
     productKind: row.product_kind,
     bundleComponents: publicBundleComponents(row.bundle_components),
-    recommendation: publicRecommendation(row.product_snapshot, amountMinor),
-    available: row.status === 'active' && row.amount_minor !== null,
+    recommendation: publicRecommendation(row, amountMinor),
+    available: row.status === 'active' && row.amount_minor !== null && row.within_availability !== false,
   }
 }
 
-function publicRecommendation(snapshot: JsonObject, amountMinor: number | null) {
-  const source = jsonObject(snapshot.recommendation)
-  const costAmount = boundedInteger(snapshot.costAmount, 0, Number.MAX_SAFE_INTEGER, amountMinor ?? 0)
-  const serverApproved = amountMinor !== null && amountMinor > costAmount
+function publicRecommendation(row: CatalogMenuRow, amountMinor: number | null) {
+  const source = jsonObject(row.product_snapshot.recommendation)
+  const costAmount = row.cost_amount_minor === null ? null : Number(row.cost_amount_minor)
+  const serverApproved = amountMinor !== null && costAmount !== null && amountMinor > costAmount
   return {
-    enabled: source.enabled === true && serverApproved,
-    priority: boundedInteger(source.priority, 0, 1_000, 100),
+    enabled: row.recommendation_enabled && serverApproved,
+    priority: row.recommendation_priority,
     badge: publicString(source.badge) ?? '',
     headline: publicString(source.headline) ?? '',
     reason: publicString(source.reason) ?? '',
-    minimumPartySize: boundedInteger(source.minimumPartySize, 1, 200, 1),
-    maximumPartySize: boundedInteger(source.maximumPartySize, 1, 200, 100),
-    sceneTags: publicEnumArray(source.sceneTags, ['date', 'brothers', 'besties', 'friends', 'business', 'celebration', 'unsure']),
-    intentTags: publicEnumArray(source.intentTags, ['relaxed', 'energetic', 'ritual', 'unsure']),
-    tasteTags: publicEnumArray(source.tasteTags, ['refreshing', 'layered', 'strong', 'any']),
-    dwellTags: publicEnumArray(source.dwellTags, ['one_set', 'stay_longer', 'no_rush']),
-    singleWaveEligible: source.singleWaveEligible !== false,
-    expectedPrepMinutes: boundedInteger(source.expectedPrepMinutes, 0, 240, 8),
-    holdMinutes: boundedInteger(source.holdMinutes, 0, 240, 10),
-    upgradeProductId: typeof source.upgradeProductId === 'string'
-      && /^[0-9a-f-]{36}$/i.test(source.upgradeProductId)
-      ? source.upgradeProductId
-      : null,
+    minimumPartySize: row.recommendation_min_guests,
+    maximumPartySize: row.recommendation_max_guests,
+    sceneTags: row.recommendation_scene_tags,
+    intentTags: row.recommendation_intent_tags,
+    tasteTags: row.recommendation_taste_tags,
+    dwellTags: row.recommendation_dwell_tags,
+    singleWaveEligible: row.recommendation_single_wave_eligible,
+    expectedPrepMinutes: row.recommendation_expected_prep_minutes,
+    holdMinutes: row.recommendation_hold_minutes,
+    upgradeProductId: row.recommendation_upgrade_product_id,
   }
-}
-
-function boundedInteger(value: unknown, minimum: number, maximum: number, fallback: number): number {
-  return Number.isSafeInteger(value) && Number(value) >= minimum && Number(value) <= maximum
-    ? Number(value)
-    : fallback
-}
-
-function publicEnumArray<const Value extends string>(value: unknown, allowed: readonly Value[]): Value[] {
-  const allowedValues = new Set<string>(allowed)
-  return publicStringArray(value).filter((item): item is Value => allowedValues.has(item))
 }
 
 function publicBeverageFamily(value: unknown) {
@@ -602,11 +620,12 @@ async function initiateGuestPayment(
   commerce: SubmittedCommerceResult,
   orderIdempotencyKey: string,
   createPublicId: NonNullable<GuestCommerceServiceApiOptions['createPublicId']>,
+  paymentMode: GuestCheckoutPaymentMode,
 ): Promise<CommandExecution<Payment>> {
   // WeChat is the customer-facing channel; Postar is the acquiring provider
   // whose order and callback identities must match the persisted payment.
-  const provider = options.paymentMode === 'simulation' ? 'simulation' : 'postar'
-  const method = options.paymentMode === 'simulation'
+  const provider = paymentMode === 'simulation' ? 'simulation' : 'postar'
+  const method = paymentMode === 'simulation'
     ? 'native_qr'
     : await options.onlinePayments.resolveGuestMethod(context.scope, context.customerId)
   const idempotencyKey = `guest-pay-${createHash('sha256').update(orderIdempotencyKey).digest('hex').slice(0, 48)}`
@@ -633,8 +652,17 @@ async function initiateGuestPayment(
       tableSessionId: context.tableSessionId,
       customerId: context.customerId,
     },
-    providerSnapshot: { source: 'guest_checkout', configuredMode: options.paymentMode },
+    providerSnapshot: { source: 'guest_checkout', configuredMode: paymentMode },
   })
+}
+
+async function effectivePaymentMode(
+  options: GuestCommerceServiceApiOptions,
+  scope: Readonly<StoreScope>,
+): Promise<GuestCheckoutPaymentMode> {
+  const mode = options.resolvePaymentMode === undefined ? options.paymentMode : await options.resolvePaymentMode(scope)
+  if (mode === null) throw new OnlinePaymentUnavailableError('门店已暂停线上支付，请联系服务员')
+  return mode
 }
 
 async function createGuestProviderAction(
@@ -715,7 +743,7 @@ function checkoutResponse(
         paymentStatus: order.paymentStatus,
         note: order.note,
         attentionRequired,
-        kdsNotice: attentionRequired ? '订单含备注，出品与配送页面将重点提示' : null,
+        kdsNotice: attentionRequired ? '备注已保存，付款成功后将在出品与配送页面重点提示' : null,
       },
       settlement: {
         subtotalAmountMinor: order.subtotalAmountMinor,

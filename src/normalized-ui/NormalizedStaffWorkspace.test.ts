@@ -65,6 +65,24 @@ describe('NormalizedStaffWorkspaceView', () => {
     expect(html).not.toContain('库存/存酒')
   })
 
+  it('keeps every authorized navigation entry reachable beyond the first five items', () => {
+    const bootstrap = view()
+    bootstrap.navigation = [
+      ...bootstrap.navigation,
+      { code: 'reservations', label: '预约', route: '/staff/reservations', icon: null, sortOrder: 3, displayConfig: {} },
+      { code: 'performance', label: '演出与点歌', route: '/staff/performance', icon: null, sortOrder: 4, displayConfig: {} },
+      { code: 'inventory', label: '库存', route: '/staff/inventory', icon: null, sortOrder: 5, displayConfig: {} },
+      { code: 'settings', label: '系统配置', route: '/staff/settings', icon: null, sortOrder: 6, displayConfig: {} },
+    ]
+    const state = workspaceReducer(initialWorkspaceState(), {
+      type: 'bootstrap-ready', bootstrap, etag: 'etag-navigation',
+    })
+    const html = render(state)
+
+    expect(html).toContain('系统配置')
+    expect(html).toContain('当前岗位全部入口')
+  })
+
   it('does not expose a second raw-data sheet beside the executable role pages', () => {
     const state = workspaceReducer(initialWorkspaceState(), {
       type: 'bootstrap-ready', bootstrap: view(), etag: 'etag-1',
@@ -73,7 +91,8 @@ describe('NormalizedStaffWorkspaceView', () => {
 
     expect(html).not.toContain('按需加载')
     expect(html).not.toContain('available')
-    expect(html).toContain('点击查看详情')
+    expect(html).toContain('项已就绪')
+    expect(html).toContain('下一步先处理什么')
   })
 
   it('shows active work instead of a misleading zero ready count', () => {

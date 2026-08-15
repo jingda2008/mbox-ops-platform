@@ -1,5 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { execFile } from 'node:child_process'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { promisify } from 'node:util'
 import {
   classifyIdempotencyConflict,
   createMockTransport,
@@ -8,6 +13,8 @@ import {
   runNormalizedLoadAcceptance,
   summarizeObservations,
 } from './normalized-load-acceptance.mjs'
+
+const execFileAsync = promisify(execFile)
 
 test('calculates nearest-rank percentiles and operation summaries', () => {
   assert.equal(percentile([50, 10, 40, 20, 30], 0.95), 50)
@@ -61,6 +68,24 @@ test('passes a complete built-in mock run at sustained 5 RPS', async () => {
   assert.equal(report.run.baseUrl, null)
   assert.equal(report.run.evidenceEligible, false)
   assert.equal(report.workload.independentDatabasePerRun, false)
+})
+
+test('creates a missing evidence directory before writing a CLI report', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mbox-normalized-load-'))
+  const output = join(root, 'nested', 'evidence', 'report.json')
+  try {
+    await execFileAsync(process.execPath, [
+      resolve(import.meta.dirname, 'normalized-load-acceptance.mjs'),
+      '--mock',
+      '--duration-seconds=0.4',
+      '--requests-per-scenario=2',
+      `--output=${output}`,
+    ])
+    const report = JSON.parse(await readFile(output, 'utf8'))
+    assert.equal(report.gate.passed, true)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })
 
 test('records immutable evidence identity only when the isolated runner opts in', async () => {

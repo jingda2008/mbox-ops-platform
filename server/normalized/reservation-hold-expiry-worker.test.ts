@@ -80,12 +80,13 @@ describe('ReservationHoldExpiryWorker', () => {
       noShowReservationIds: [reservationId],
     })
     expect(client.calls).toEqual(expect.arrayContaining([
-      expect.stringContaining("reservation.reservation_snapshot->>'arrivalGraceMinutes'"),
+      expect.stringContaining('reservation.arrival_grace_ends_at'),
       expect.stringContaining("SET status = 'released', hold_expires_at = NULL"),
       expect.stringContaining("SET status = 'no_show', aggregate_version = aggregate_version + 1"),
       expect.stringContaining("'reservation.arrival_grace_expired'"),
       expect.stringContaining("'reservation.no_show.v1'"),
     ]))
+    expect(client.calls[2]).not.toContain('reservation_snapshot')
     expect(client.calls.at(-1)).toBe('COMMIT')
   })
 

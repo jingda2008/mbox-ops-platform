@@ -113,6 +113,30 @@ describe('customerBenefitApiPlugin privacy and permission boundaries', () => {
     expect(JSON.stringify(response.json())).not.toMatch(/COCKTAIL-SECRET|internalNote|issuedByEmployeeId/)
   })
 
+  it('does not expose notification-consent settings in the member API', async () => {
+    const value = fixture()
+    const response = await value.app.inject({
+      method: 'GET', url: '/api/guest/customer/notification-consents',
+    })
+    expect(response.statusCode).toBe(404)
+  })
+
+  it('rejects attempts to store notification consent in free-form customer JSON', async () => {
+    const value = fixture()
+    const response = await value.app.inject({
+      method: 'PATCH',
+      url: `/api/customers/${customerId}/profile`,
+      headers: { 'idempotency-key': 'staff-profile-consent-json-0001' },
+      payload: {
+        reason: '错误写入通知授权',
+        profile: { displayName: '林女士', consentSnapshot: { wechat: true } },
+      },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({ error: { code: 'CUSTOMER_BENEFIT_REQUEST_INVALID' } })
+    expect(value.updateProfile).not.toHaveBeenCalled()
+  })
+
   it('uses trusted guest customer and table context instead of body identity claims', async () => {
     const value = fixture()
     const response = await value.app.inject({
@@ -182,6 +206,7 @@ function fixture(overrides: Partial<CustomerBenefitApiOptions> = {}) {
   } as CustomerBenefitApiOptions['transactions']
   const reserve = vi.fn(async () => ({ value: reservation, replayed: false }))
   const issue = vi.fn(async () => ({ value: benefit, replayed: false }))
+  const updateProfile = vi.fn()
   const options: CustomerBenefitApiOptions = {
     transactions,
     resolveGuestContext: vi.fn(async () => ({
@@ -192,7 +217,7 @@ function fixture(overrides: Partial<CustomerBenefitApiOptions> = {}) {
       scope: { tenantId, storeId }, employeeId, businessDate: '2026-08-11',
     })),
     customers: {
-      createAnonymous: vi.fn(), linkIdentity: vi.fn(), updateProfile: vi.fn(), merge: vi.fn(),
+      createAnonymous: vi.fn(), linkIdentity: vi.fn(), updateProfile, merge: vi.fn(),
     } as unknown as CustomerCommandServiceMock,
     benefits: {
       issue,
@@ -215,7 +240,7 @@ function fixture(overrides: Partial<CustomerBenefitApiOptions> = {}) {
   const app = Fastify()
   apps.push(app)
   app.register(customerBenefitApiPlugin, { prefix: '/api', ...options })
-  return { app, reserve, issue }
+  return { app, reserve, issue, updateProfile }
 }
 
 type CustomerCommandServiceMock = CustomerBenefitApiOptions['customers']

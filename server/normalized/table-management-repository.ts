@@ -5,6 +5,7 @@ import type {
   JsonObject,
   NormalizedCommandExecutor,
 } from './command-executor.js'
+import { randomUUID } from 'node:crypto'
 import { StaffAccessRepository, type EffectiveStaffAccess } from './staff-access-repository.js'
 import type { ScopedTransaction, StoreScope } from './transaction-runner.js'
 
@@ -64,6 +65,24 @@ export interface TableResponsibilityAssignment {
   createdByEmployeeId: string | null
   createdAt: string
   updatedAt: string
+}
+
+export interface ResponsibilityAssignmentOptions {
+  employees: Array<{
+    id: string
+    code: string
+    displayName: string
+  }>
+  roles: Array<{
+    id: string
+    code: string
+    name: string
+  }>
+}
+
+export interface TableResponsibilityAssignmentBatch {
+  id: string
+  assignments: TableResponsibilityAssignment[]
 }
 
 export interface ManagedTableSession {
@@ -157,6 +176,15 @@ export interface AssignTableCommand extends TableManagementCommandBase {
   endsAt?: string | null
 }
 
+export interface AssignTablesCommand extends TableManagementCommandBase {
+  tableIds: string[]
+  employeeId: string
+  roleId: string
+  assignmentType: AssignmentType
+  startsAt: string
+  endsAt?: string | null
+}
+
 export interface EndAssignmentCommand extends TableManagementCommandBase {
   assignmentId: string
   endsAt: string
@@ -181,6 +209,10 @@ type AreaUpdateInput = Omit<UpdateAreaCommand, keyof TableManagementCommandBase>
 type TableCreateInput = Omit<CreateTableCommand, keyof TableManagementCommandBase>
 type TableUpdateInput = Omit<UpdateTableCommand, keyof TableManagementCommandBase>
 type AssignmentCreateInput = Omit<AssignTableCommand, keyof TableManagementCommandBase> & {
+  reason: string
+  createdByEmployeeId: string
+}
+type AssignmentBatchCreateInput = Omit<AssignTablesCommand, keyof TableManagementCommandBase> & {
   reason: string
   createdByEmployeeId: string
 }
@@ -399,6 +431,33 @@ export class TableManagementRepository {
     return result.rows.map(mapAssignment)
   }
 
+  async listAssignmentOptions(): Promise<ResponsibilityAssignmentOptions> {
+    const employeeResult = await this.transaction.query<{
+      id: string; employee_code: string; display_name: string
+    }>(`
+      SELECT id, employee_code, display_name
+      FROM mbox.employees
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND status = 'active'
+      ORDER BY display_name, employee_code, id
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId])
+    const roleResult = await this.transaction.query<{
+      id: string; code: string; name: string
+    }>(`
+      SELECT id, code, name
+      FROM mbox.roles
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND status = 'active'
+      ORDER BY name, code, id
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId])
+    return {
+      employees: employeeResult.rows.map((row) => ({
+        id: row.id,
+        code: row.employee_code,
+        displayName: row.display_name,
+      })),
+      roles: roleResult.rows.map((row) => ({ id: row.id, code: row.code, name: row.name })),
+    }
+  }
+
   async createArea(input: AreaCreateInput): Promise<ManagedArea> {
     validateArea(input)
     const result = await this.transaction.query<AreaRow>(`
@@ -516,6 +575,28 @@ export class TableManagementRepository {
       if (postgresCode(error) === '23P01') throw new TableManagementConflictError('该桌台责任时段与现有分配冲突')
       throw error
     }
+  }
+
+  async assignMany(input: AssignmentBatchCreateInput): Promise<TableResponsibilityAssignmentBatch> {
+    validateAssignment(input)
+    const tableIds = [...new Set(input.tableIds)].toSorted()
+    if (tableIds.length === 0 || tableIds.length > 80) throw new TypeError('每次请选择1至80个桌台')
+
+    // One transaction locks every target in stable order before the first insert.
+    // Any conflict therefore rolls the whole batch back instead of leaving a half-published roster.
+    const locked = await this.transaction.query<{ id: string }>(`
+      SELECT id FROM mbox.tables
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = ANY($3::uuid[])
+      ORDER BY id
+      FOR UPDATE
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, tableIds])
+    if (locked.rowCount !== tableIds.length) throw new TableManagementNotFoundError('批量分配中的桌台')
+
+    const assignments: TableResponsibilityAssignment[] = []
+    for (const tableId of tableIds) {
+      assignments.push(await this.assign({ ...input, tableId }))
+    }
+    return { id: randomUUID(), assignments }
   }
 
   async endAssignment(assignmentId: string, endsAt: string): Promise<TableResponsibilityAssignment> {
@@ -742,6 +823,14 @@ export class TableManagementCommandService {
     return this.execute(command, 'table.assignment.create', TABLE_ASSIGNMENT_MANAGE_PERMISSION,
       async (repository) => repository.assign({ ...command, createdByEmployeeId: command.actor.employeeId }),
       'table_assignment', 'table.assignment.created.v1')
+  }
+
+  assignMany(command: Readonly<AssignTablesCommand>) {
+    return this.execute(command, 'table.assignment.batch_create', TABLE_ASSIGNMENT_MANAGE_PERMISSION,
+      async (repository) => repository.assignMany({
+        ...command,
+        createdByEmployeeId: command.actor.employeeId,
+      }), 'table_assignment_batch', 'table.assignment.batch_created.v1')
   }
 
   endAssignment(command: Readonly<EndAssignmentCommand>) {

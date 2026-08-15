@@ -1,4 +1,4 @@
-export type ReservationStep = 'schedule' | 'confirm' | 'complete'
+export type ReservationStep = 'schedule' | 'details' | 'confirm' | 'complete'
 export type BookingMode = 'direct'
 export type ReservationTableStatus = 'available' | 'reserved' | 'locked'
 export type ReservationZone = 'stage-front' | 'indoor-middle' | 'outdoor'
@@ -46,6 +46,35 @@ export interface ReservationAvailability {
   acceptingReservations: boolean
   depositRule: DepositRule
   areas: ReservationArea[]
+}
+
+export type PublicPerformancePhase = 'no_schedule' | 'upcoming' | 'live' | 'between' | 'ended'
+
+export interface PublicPerformanceSchedule {
+  id: string
+  performerStageName: string
+  performerProfile: {
+    bio?: string
+    imageUrl?: string
+    genres?: string[]
+    styles?: string[]
+    highlights?: string[]
+  }
+  startsAt: string
+  endsAt: string
+  status: 'scheduled' | 'performing' | 'completed' | 'cancelled'
+  sortOrder: number
+}
+
+export interface PublicDailyPerformance {
+  timezone: string
+  localDate: string
+  phase: PublicPerformancePhase
+  current: PublicPerformanceSchedule | null
+  next: PublicPerformanceSchedule | null
+  startsInSeconds: number | null
+  remainingSeconds: number | null
+  schedules: PublicPerformanceSchedule[]
 }
 
 export interface PublicReservation {

@@ -32,15 +32,15 @@ import type {
   StoreScope,
   TransactionOptions,
 } from "./transaction-runner.js";
+import {
+  extractProductOperationalFields,
+  hydrateProductSnapshot,
+  type ProductOperationalFields,
+} from "./product-operational-fields.js";
 
 export const CATALOG_PRODUCT_MANAGE_PERMISSION = "catalog.product.manage";
 export const CATALOG_PRICE_MANAGE_PERMISSION = "catalog.price.manage";
 
-const DEFAULT_SEARCH_SNAPSHOT_FIELDS = [
-  "aliases",
-  "specification",
-  "pinyin",
-] as const;
 type TransactionRunnerPort = Pick<ScopedPostgresTransactionRunner, "run">;
 type CommandExecutorPort = Pick<NormalizedCommandExecutor, "execute">;
 
@@ -59,7 +59,6 @@ export interface CatalogApiOptions {
   resolveGuestContext(
     request: FastifyRequest,
   ): Promise<GuestCatalogReadContext> | GuestCatalogReadContext;
-  searchSnapshotFields?: readonly string[];
   createCommandExecutor?(
     transactions: TransactionRunnerPort,
     transactionOptions: Readonly<TransactionOptions>,
@@ -96,6 +95,28 @@ interface ProductRow extends Record<string, unknown> {
   bundle_components: JsonValue;
   bundle_components_available: boolean;
   product_snapshot: JsonObject;
+  guest_visible: boolean;
+  search_text: string;
+  recommendation_enabled: boolean;
+  recommendation_min_guests: number;
+  recommendation_max_guests: number;
+  recommendation_priority: number;
+  recommendation_scene_tags: string[];
+  recommendation_intent_tags: string[];
+  recommendation_taste_tags: string[];
+  recommendation_dwell_tags: string[];
+  recommendation_single_wave_eligible: boolean;
+  recommendation_expected_prep_minutes: number;
+  recommendation_hold_minutes: number;
+  recommendation_upgrade_product_id: string | null;
+  menu_sort_order: number;
+  available_from: string | null;
+  available_until: string | null;
+  allowed_channels: string[];
+  max_order_quantity: number;
+  kds_priority: number;
+  fulfillment_sla_seconds: number | null;
+  cost_amount_minor: string | null;
   status: ProductStatus;
   standard_price_id: string | null;
   amount_minor: string | null;
@@ -180,9 +201,6 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
   app,
   options,
 ) => {
-  const searchSnapshotFields = normalizeSearchSnapshotFields(
-    options.searchSnapshotFields,
-  );
   const priceCommandExecutor = (
     options.createCommandExecutor ?? createConfiguredCommandExecutor
   )(options.transactions, { isolation: "serializable", retryOnConflict: 3 });
@@ -196,7 +214,6 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
         options.transactions,
         context.scope,
         query,
-        searchSnapshotFields,
       );
     }),
   );
@@ -217,7 +234,6 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
         options.transactions,
         context.scope,
         query,
-        searchSnapshotFields,
       );
     }),
   );
@@ -233,6 +249,10 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
     handleRoute(reply, async () => {
       const context = await resolveStaffContext(options, request);
       const input = readCreateProduct(request.body);
+      const operational = extractProductOperationalFields(input.productSnapshot, {
+        code: input.code,
+        name: input.name,
+      });
       const idempotencyKey = readIdempotencyKey(request);
       const command = catalogCommand(
         request,
@@ -253,8 +273,21 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
             `
         INSERT INTO mbox.products (
           tenant_id, store_id, code, name, category_code,
-          fulfillment_station, product_kind, product_snapshot, status
-        ) VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::jsonb, $9)
+          fulfillment_station, product_kind, product_snapshot, status,
+          guest_visible, search_text, recommendation_enabled,
+          recommendation_min_guests, recommendation_max_guests,
+          recommendation_priority, recommendation_scene_tags, recommendation_intent_tags,
+          recommendation_taste_tags, recommendation_dwell_tags,
+          recommendation_single_wave_eligible, recommendation_expected_prep_minutes,
+          recommendation_hold_minutes, recommendation_upgrade_product_id,
+          menu_sort_order, available_from, available_until, allowed_channels,
+          max_order_quantity, kds_priority, fulfillment_sla_seconds, cost_amount_minor
+        ) VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::jsonb, $9,
+          $10::boolean, $11::text, $12::boolean, $13::smallint, $14::smallint,
+          $15::smallint, $16::text[], $17::text[], $18::text[], $19::text[],
+          $20::boolean, $21::smallint, $22::smallint, $23::uuid,
+          $24::integer, $25::time, $26::time, $27::text[],
+          $28::smallint, $29::smallint, $30::integer, $31::bigint)
         RETURNING id
       `,
             [
@@ -265,8 +298,30 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               input.categoryCode,
               input.fulfillmentStation,
               input.productKind,
-              JSON.stringify(input.productSnapshot),
+              JSON.stringify(compatibilitySnapshot(operational)),
               input.status,
+              operational.guestVisible,
+              operational.searchText,
+              operational.recommendationEnabled,
+              operational.recommendationMinGuests,
+              operational.recommendationMaxGuests,
+              operational.recommendationPriority,
+              operational.recommendationSceneTags,
+              operational.recommendationIntentTags,
+              operational.recommendationTasteTags,
+              operational.recommendationDwellTags,
+              operational.recommendationSingleWaveEligible,
+              operational.recommendationExpectedPrepMinutes,
+              operational.recommendationHoldMinutes,
+              operational.recommendationUpgradeProductId,
+              operational.menuSortOrder,
+              operational.availableFrom,
+              operational.availableUntil,
+              operational.allowedChannels,
+              operational.maxOrderQuantity,
+              operational.kdsPriority,
+              operational.fulfillmentSlaSeconds,
+              operational.costAmountMinor,
             ],
           );
           const productId = result.rows[0]?.id;
@@ -317,6 +372,11 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
             );
             await lockProduct(transaction, productId);
             const before = mapProduct(await getProduct(transaction, productId));
+            const targetSnapshot = patch.productSnapshot ?? before.productSnapshot;
+            const operational = extractProductOperationalFields(targetSnapshot, {
+              code: before.code,
+              name: patch.name ?? before.name,
+            });
             const targetKind = patch.productKind ?? before.productKind;
             const targetStation = patch.fulfillmentStation ?? before.fulfillmentStation;
             const targetComponents = patch.bundleComponents ?? before.bundleComponents.map(componentInput);
@@ -334,8 +394,31 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               category_code = COALESCE($5::text, category_code),
               fulfillment_station = COALESCE($6::text, fulfillment_station),
               product_kind = COALESCE($7::text, product_kind),
-              product_snapshot = COALESCE($8::jsonb, product_snapshot),
-              status = COALESCE($9::text, status)
+              product_snapshot = $8::jsonb,
+              status = COALESCE($9::text, status),
+              guest_visible = $10::boolean,
+              search_text = $11::text,
+              recommendation_enabled = $12::boolean,
+              recommendation_min_guests = $13::smallint,
+              recommendation_max_guests = $14::smallint,
+              recommendation_priority = $15::smallint,
+              recommendation_scene_tags = $16::text[],
+              recommendation_intent_tags = $17::text[],
+              recommendation_taste_tags = $18::text[],
+              recommendation_dwell_tags = $19::text[],
+              recommendation_single_wave_eligible = $20::boolean,
+              recommendation_expected_prep_minutes = $21::smallint,
+              recommendation_hold_minutes = $22::smallint,
+              recommendation_upgrade_product_id = $23::uuid,
+              menu_sort_order = $24::integer,
+              available_from = $25::time,
+              available_until = $26::time,
+              allowed_channels = $27::text[],
+              max_order_quantity = $28::smallint,
+              kds_priority = $29::smallint,
+              fulfillment_sla_seconds = $30::integer,
+              cost_amount_minor = $31::bigint,
+              updated_at = clock_timestamp()
           WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
           RETURNING id
         `,
@@ -347,10 +430,30 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
                 patch.categoryCode,
                 patch.fulfillmentStation,
                 patch.productKind,
-                patch.productSnapshot === null
-                  ? null
-                  : JSON.stringify(patch.productSnapshot),
+                JSON.stringify(compatibilitySnapshot(operational)),
                 patch.status,
+                operational.guestVisible,
+                operational.searchText,
+                operational.recommendationEnabled,
+                operational.recommendationMinGuests,
+                operational.recommendationMaxGuests,
+                operational.recommendationPriority,
+                operational.recommendationSceneTags,
+                operational.recommendationIntentTags,
+                operational.recommendationTasteTags,
+                operational.recommendationDwellTags,
+                operational.recommendationSingleWaveEligible,
+                operational.recommendationExpectedPrepMinutes,
+                operational.recommendationHoldMinutes,
+                operational.recommendationUpgradeProductId,
+                operational.menuSortOrder,
+                operational.availableFrom,
+                operational.availableUntil,
+                operational.allowedChannels,
+                operational.maxOrderQuantity,
+                operational.kdsPriority,
+                operational.fulfillmentSlaSeconds,
+                operational.costAmountMinor,
               ],
             );
             if (result.rowCount !== 1) throw new CatalogProductNotFoundError();
@@ -483,11 +586,10 @@ async function sendProductList(
   transactions: TransactionRunnerPort,
   scope: Readonly<StoreScope>,
   query: Readonly<ProductListQuery>,
-  searchSnapshotFields: readonly string[],
 ): Promise<FastifyReply> {
   const products = await transactions.run(
     scope,
-    (transaction) => listProducts(transaction, query, searchSnapshotFields),
+    (transaction) => listProducts(transaction, query),
     { readOnly: true },
   );
   return reply.send({
@@ -521,7 +623,6 @@ async function sendCategoryList(
 async function listProducts(
   transaction: ScopedTransaction,
   query: Readonly<ProductListQuery>,
-  searchSnapshotFields: readonly string[],
 ): Promise<ProductRow[]> {
   const result = await transaction.query<ProductRow>(
     `
@@ -529,7 +630,19 @@ async function listProducts(
       product.fulfillment_station, product.product_kind,
       COALESCE(component_list.items, '[]'::jsonb) AS bundle_components,
       COALESCE(component_list.all_available, false) AS bundle_components_available,
-      product.product_snapshot, product.status,
+      product.product_snapshot, product.guest_visible, product.search_text,
+      product.recommendation_enabled, product.recommendation_min_guests,
+      product.recommendation_max_guests, product.recommendation_priority,
+      product.recommendation_scene_tags, product.recommendation_intent_tags,
+      product.recommendation_taste_tags, product.recommendation_dwell_tags,
+      product.recommendation_single_wave_eligible,
+      product.recommendation_expected_prep_minutes, product.recommendation_hold_minutes,
+      product.recommendation_upgrade_product_id,
+      product.menu_sort_order, to_char(product.available_from, 'HH24:MI') AS available_from,
+      to_char(product.available_until, 'HH24:MI') AS available_until,
+      product.allowed_channels, product.max_order_quantity, product.kds_priority,
+      product.fulfillment_sla_seconds,
+      product.cost_amount_minor::text, product.status,
       price.id AS standard_price_id, price.amount_minor::text,
       price.currency, price.valid_from::text AS price_valid_from,
       price.valid_until::text AS price_valid_until,
@@ -577,19 +690,11 @@ async function listProducts(
         $3 = ''
         OR strpos(lower(product.name), lower($3)) > 0
         OR strpos(lower(product.code), lower($3)) > 0
-        OR EXISTS (
-          SELECT 1
-          FROM unnest($8::text[]) AS configured(field_name)
-          WHERE strpos(
-            lower(COALESCE(product.product_snapshot -> configured.field_name, 'null'::jsonb)::text),
-            lower($3)
-          ) > 0
-        )
+        OR strpos(lower(product.search_text), lower($3)) > 0
       )
       AND ($4::text IS NULL OR product.category_code = $4)
       AND ($5 = 'all' OR product.status = $5)
-      AND (NOT $9::boolean OR product.product_snapshot->'guestVisible' IS NULL
-        OR product.product_snapshot->'guestVisible' = 'true'::jsonb)
+      AND (NOT $8::boolean OR product.guest_visible)
     ORDER BY product.category_code, product.name, product.code, product.id
     LIMIT $6::integer OFFSET $7::integer
   `,
@@ -601,7 +706,6 @@ async function listProducts(
       query.status,
       query.limit,
       query.offset,
-      [...searchSnapshotFields],
       query.guest,
     ],
   );
@@ -633,8 +737,7 @@ async function listCategories(
       ON store.tenant_id = product.tenant_id AND store.id = product.store_id
     WHERE product.tenant_id = $1::uuid AND product.store_id = $2::uuid
       AND product.status <> 'inactive'
-      AND (NOT $3::boolean OR product.product_snapshot->'guestVisible' IS NULL
-        OR product.product_snapshot->'guestVisible' = 'true'::jsonb)
+      AND (NOT $3::boolean OR product.guest_visible)
     GROUP BY product.category_code, store.currency
     ORDER BY product.category_code
   `,
@@ -821,7 +924,19 @@ async function getProduct(
       product.fulfillment_station, product.product_kind,
       COALESCE(component_list.items, '[]'::jsonb) AS bundle_components,
       COALESCE(component_list.all_available, false) AS bundle_components_available,
-      product.product_snapshot, product.status,
+      product.product_snapshot, product.guest_visible, product.search_text,
+      product.recommendation_enabled, product.recommendation_min_guests,
+      product.recommendation_max_guests, product.recommendation_priority,
+      product.recommendation_scene_tags, product.recommendation_intent_tags,
+      product.recommendation_taste_tags, product.recommendation_dwell_tags,
+      product.recommendation_single_wave_eligible,
+      product.recommendation_expected_prep_minutes, product.recommendation_hold_minutes,
+      product.recommendation_upgrade_product_id,
+      product.menu_sort_order, to_char(product.available_from, 'HH24:MI') AS available_from,
+      to_char(product.available_until, 'HH24:MI') AS available_until,
+      product.allowed_channels, product.max_order_quantity, product.kds_priority,
+      product.fulfillment_sla_seconds,
+      product.cost_amount_minor::text, product.status,
       price.id AS standard_price_id, price.amount_minor::text,
       price.currency, price.valid_from::text AS price_valid_from,
       price.valid_until::text AS price_valid_until,
@@ -883,6 +998,30 @@ function mapProduct(row: ProductRow, guest = false): CatalogProduct {
           validFrom: row.price_valid_from,
           validUntil: row.price_valid_until,
         };
+  const hydratedSnapshot = hydrateProductSnapshot(row.product_snapshot, {
+    guestVisible: row.guest_visible,
+    searchText: row.search_text,
+    recommendationEnabled: row.recommendation_enabled,
+    recommendationMinGuests: row.recommendation_min_guests,
+    recommendationMaxGuests: row.recommendation_max_guests,
+    recommendationPriority: row.recommendation_priority,
+    recommendationSceneTags: row.recommendation_scene_tags,
+    recommendationIntentTags: row.recommendation_intent_tags,
+    recommendationTasteTags: row.recommendation_taste_tags,
+    recommendationDwellTags: row.recommendation_dwell_tags,
+    recommendationSingleWaveEligible: row.recommendation_single_wave_eligible,
+    recommendationExpectedPrepMinutes: row.recommendation_expected_prep_minutes,
+    recommendationHoldMinutes: row.recommendation_hold_minutes,
+    recommendationUpgradeProductId: row.recommendation_upgrade_product_id,
+    menuSortOrder: row.menu_sort_order,
+    availableFrom: row.available_from,
+    availableUntil: row.available_until,
+    allowedChannels: row.allowed_channels,
+    maxOrderQuantity: row.max_order_quantity,
+    kdsPriority: row.kds_priority,
+    fulfillmentSlaSeconds: row.fulfillment_sla_seconds,
+    costAmountMinor: row.cost_amount_minor === null ? null : Number(row.cost_amount_minor),
+  });
   return {
     id: row.id,
     code: row.code,
@@ -891,7 +1030,7 @@ function mapProduct(row: ProductRow, guest = false): CatalogProduct {
     fulfillmentStation: row.fulfillment_station,
     productKind: row.product_kind ?? "single",
     bundleComponents: readStoredBundleComponents(row.bundle_components ?? []),
-    productSnapshot: guest ? guestProductSnapshot(row.product_snapshot) : row.product_snapshot,
+    productSnapshot: guest ? guestProductSnapshot(hydratedSnapshot) : hydratedSnapshot,
     status: row.status,
     isAvailable: row.status === "active" && standardPrice !== null
       && (row.product_kind !== "bundle" || row.bundle_components_available === true),
@@ -899,6 +1038,11 @@ function mapProduct(row: ProductRow, guest = false): CatalogProduct {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function compatibilitySnapshot(fields: Readonly<ProductOperationalFields>): JsonObject {
+  const { displaySnapshot, ...operational } = fields
+  return hydrateProductSnapshot(displaySnapshot, operational)
 }
 
 function catalogOutcome(
@@ -1045,10 +1189,10 @@ function guestProductSnapshot(snapshot: JsonObject): JsonObject {
 
 function redact(value: JsonValue): JsonValue {
   if (Array.isArray(value)) return value.map(redact)
-  if (!isJsonObject(value)) return value
+  if (typeof value !== 'object' || value === null) return value
   return Object.fromEntries(Object.entries(value)
-    .filter(([key]) => !/(cost|margin|purchase.?price)/i.test(key))
-    .map(([key, entry]) => [key, redact(entry)]))
+    .filter(([key, entry]) => entry !== undefined && !/(cost|margin|purchase.?price)/i.test(key))
+    .map(([key, entry]) => [key, redact(entry as JsonValue)]))
 }
 
 function readCreateProduct(value: unknown): JsonObject & {
@@ -1140,23 +1284,6 @@ function readStandardPrice(value: unknown): JsonObject & {
     currency,
     reason: requiredText(body.reason, "reason", 500),
   };
-}
-
-function normalizeSearchSnapshotFields(
-  value: readonly string[] | undefined,
-): readonly string[] {
-  const fields = value ?? DEFAULT_SEARCH_SNAPSHOT_FIELDS;
-  if (fields.length === 0 || fields.length > 16) {
-    throw new TypeError("searchSnapshotFields必须包含1至16项");
-  }
-  return Object.freeze(
-    fields.map((field) => {
-      if (!/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(field)) {
-        throw new TypeError("searchSnapshotFields包含无效字段名");
-      }
-      return field;
-    }),
-  );
 }
 
 function readIdempotencyKey(request: FastifyRequest): string {

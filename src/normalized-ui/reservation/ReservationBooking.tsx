@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   Clock3,
   LoaderCircle,
+  Music2,
   RefreshCw,
   X,
 } from 'lucide-react'
@@ -31,6 +32,7 @@ import {
 import type {
   OperatingHours,
   PublicReservation,
+  PublicDailyPerformance,
   PublicWaitlist,
   ReservationAvailability,
   ReservationDraft,
@@ -80,6 +82,9 @@ export function ReservationBooking({
   const [retryAt, setRetryAt] = useState<string | null>(null)
   const [sessionReady, setSessionReady] = useState(false)
   const [availability, setAvailability] = useState<ReservationAvailability | null>(null)
+  const [performance, setPerformance] = useState<PublicDailyPerformance | null>(null)
+  const [performanceLoading, setPerformanceLoading] = useState(false)
+  const [performanceError, setPerformanceError] = useState<string | null>(null)
   const [reservation, setReservation] = useState<PublicReservation | null>(null)
   const [waitlist, setWaitlist] = useState<PublicWaitlist | null>(null)
   const [joinWaitlist, setJoinWaitlist] = useState(false)
@@ -88,6 +93,7 @@ export function ReservationBooking({
   const [autoStatusRefreshEnabled, setAutoStatusRefreshEnabled] = useState(true)
   const editingId = reservation?.publicId ?? initialReservationId ?? null
   const request = useRef<AbortController | null>(null)
+  const performanceRequest = useRef<AbortController | null>(null)
   const noticeRef = useRef<HTMLDivElement>(null)
 
   const slots = useMemo(
@@ -150,8 +156,33 @@ export function ReservationBooking({
 
   useEffect(() => {
     void connect()
-    return () => request.current?.abort()
+    return () => {
+      request.current?.abort()
+      performanceRequest.current?.abort()
+    }
   }, [connect])
+
+  const loadPerformance = useCallback(async (date: string) => {
+    performanceRequest.current?.abort()
+    const controller = new AbortController()
+    performanceRequest.current = controller
+    setPerformanceLoading(true)
+    setPerformanceError(null)
+    try {
+      setPerformance(await api.performance(date, controller.signal))
+    } catch (error) {
+      if (error instanceof PublicReservationApiError && error.kind === 'aborted') return
+      setPerformance(null)
+      setPerformanceError('演出安排暂时没有更新，不影响继续预约。')
+    } finally {
+      if (performanceRequest.current === controller) setPerformanceLoading(false)
+    }
+  }, [api])
+
+  useEffect(() => {
+    void loadPerformance(draft.date)
+    return () => performanceRequest.current?.abort()
+  }, [draft.date, loadPerformance])
 
   useEffect(() => {
     if (!sessionReady || initialReservationId === undefined || reservation !== null) return
@@ -264,6 +295,17 @@ export function ReservationBooking({
       setPhase('idle')
     }
   }, [api, draft, editingId, operatingHours, run, slots])
+
+  const continueToDetails = useCallback(() => {
+    const validation = validateSchedule(draft, slots)
+    if (validation !== null) {
+      setMessage(validation)
+      return
+    }
+    setMessage(null)
+    setAvailability(null)
+    setStep('details')
+  }, [draft, slots])
 
   const submit = useCallback(async () => {
     if (!sessionReady) {
@@ -389,13 +431,18 @@ export function ReservationBooking({
       joinWaitlist={joinWaitlist}
       cancelArmed={cancelArmed}
       arrivalHold={arrivalHold}
+      performance={performance}
+      performanceLoading={performanceLoading}
+      performanceError={performanceError}
       minDate={today}
       maxDate={addCalendarDays(today, 90)}
       onDraftChange={(patch) => setDraft((current) => ({ ...current, ...patch }))}
+      onContinueDetails={continueToDetails}
       onLoadAvailability={() => void loadAvailability()}
+      onRetryPerformance={() => void loadPerformance(draft.date)}
       onBack={() => {
         setMessage(null)
-        setStep('schedule')
+        setStep(step === 'confirm' ? 'details' : 'schedule')
       }}
       onJoinWaitlist={() => {
         setJoinWaitlist(true)
@@ -426,10 +473,15 @@ export interface ReservationBookingViewProps {
   joinWaitlist: boolean
   cancelArmed: boolean
   arrivalHold: ReservationArrivalHoldState
+  performance: PublicDailyPerformance | null
+  performanceLoading: boolean
+  performanceError: string | null
   minDate: string
   maxDate: string
   onDraftChange: (patch: Partial<ReservationDraft>) => void
+  onContinueDetails: () => void
   onLoadAvailability: () => void
+  onRetryPerformance: () => void
   onBack: () => void
   onJoinWaitlist: () => void
   onSubmit: () => void
@@ -465,6 +517,9 @@ export function ReservationBookingView(props: ReservationBookingViewProps) {
       {props.step === 'schedule' && (
         <ScheduleStep {...props} busy={busy} />
       )}
+      {props.step === 'details' && (
+        <DetailsStep {...props} busy={busy} />
+      )}
       {props.step === 'confirm' && props.availability !== null && (
         <ConfirmStep {...props} busy={busy} />
       )}
@@ -476,22 +531,22 @@ export function ReservationBookingView(props: ReservationBookingViewProps) {
 }
 
 function ScheduleStep(props: ReservationBookingViewProps & { busy: boolean }) {
+  const firstSlotLabel = props.slots[0]?.label ?? null
   return (
     <section className="reservation-step" aria-labelledby="reservation-schedule-title">
       <div className="reservation-title-row">
-        <div><p>RESERVATION</p><h1 id="reservation-schedule-title">为今晚留个位置</h1></div>
+        <div><p>RESERVATION</p><h1 id="reservation-schedule-title">选择日期和人数</h1></div>
         <CalendarDays size={22} aria-hidden="true" />
       </div>
-      <p className="reservation-intro">告诉我们时间和偏好，门店会结合人数与现场情况为您确认合适的位置。</p>
+      <p className="reservation-intro">先确认到店时间和人数，再选择位置偏好并填写联系信息。</p>
       <div className="reservation-schedule-grid">
         <label>日期
-          <input
-            type="date"
-            min={props.minDate}
-            max={props.maxDate}
+          <select
             value={props.draft.date}
             onChange={(event) => props.onDraftChange({ date: event.target.value, time: '' })}
-          />
+          >
+            {reservationDateOptions(props.minDate, props.maxDate).map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
+          </select>
         </label>
         <label>到店时间
           <select value={props.draft.time} onChange={(event) => props.onDraftChange({ time: event.target.value })}>
@@ -513,6 +568,33 @@ function ScheduleStep(props: ReservationBookingViewProps & { busy: boolean }) {
         </label>
       </div>
 
+      <ReservationPerformanceCard
+        date={props.draft.date}
+        performance={props.performance}
+        loading={props.performanceLoading}
+        error={props.performanceError}
+        onRetry={props.onRetryPerformance}
+      />
+      {firstSlotLabel === null && <p className="reservation-hint"><Clock3 size={16} aria-hidden="true" /> 当前日期暂无可选时段</p>}
+      <button className="reservation-primary" type="button" disabled={props.busy} onClick={props.onContinueDetails}>
+        下一步：位置与联系
+        <ChevronLeft className="reservation-forward-icon" size={18} aria-hidden="true" />
+      </button>
+    </section>
+  )
+}
+
+function DetailsStep(props: ReservationBookingViewProps & { busy: boolean }) {
+  const [showNote, setShowNote] = useState(props.draft.note.trim().length > 0)
+  const slot = props.slots.find((item) => item.value === props.draft.time)
+  return (
+    <section className="reservation-step" aria-labelledby="reservation-details-title">
+      <div className="reservation-title-row is-compact">
+        <button className="reservation-back" type="button" aria-label="返回修改日期和人数" onClick={props.onBack}><ChevronLeft size={20} /></button>
+        <div><p>DETAILS</p><h1 id="reservation-details-title">位置与联系</h1></div>
+      </div>
+      <p className="reservation-step-summary"><strong>{formatBusinessDate(props.draft.date)} · {slot?.label ?? '--:--'}</strong><span>{props.draft.guestCount}位</span></p>
+
       <fieldset className="reservation-preferences">
         <legend>位置偏好 <span>选一个就好</span></legend>
         <div className="reservation-preference-grid">
@@ -533,26 +615,114 @@ function ScheduleStep(props: ReservationBookingViewProps & { busy: boolean }) {
         <small className="reservation-preference-note">偏好不等于锁台，具体位置以门店确认结果为准。</small>
       </fieldset>
 
-      <div className="reservation-contact-grid is-first-step">
+      <div className="reservation-contact-grid">
         <label>怎么称呼您
           <input value={props.draft.customerName} maxLength={128} autoComplete="name" placeholder="例如：王女士" onChange={(event) => props.onDraftChange({ customerName: event.target.value })} />
         </label>
         {props.reservation === null
           ? <label>手机或微信
             <input value={props.draft.contact} maxLength={256} autoComplete="tel" placeholder="方便门店确认预约" onChange={(event) => props.onDraftChange({ contact: event.target.value })} />
+            <small className="reservation-field-help">仅用于预约确认、变更和到店联系。</small>
           </label>
           : <p className="reservation-protected-contact"><strong>联系方式</strong><span>沿用原预约联系方式，门店仍可正常联系您。</span></p>}
-        <label>想提前告诉我们（选填）
-          <textarea value={props.draft.note} maxLength={1000} rows={2} placeholder="生日、庆祝或其他到店需求" onChange={(event) => props.onDraftChange({ note: event.target.value })} />
-        </label>
       </div>
-      <p className="reservation-hint"><Clock3 size={16} aria-hidden="true" /> 12:00起可预约，凌晨时段会标注“次日”</p>
+      <div className={`reservation-extra${showNote ? ' is-open' : ''}`}>
+        <button type="button" aria-expanded={showNote} onClick={() => setShowNote((value) => !value)}>
+          <span><strong>生日、庆祝或其他到店需求</strong><small>选填，需要时再补充</small></span>
+          <ChevronLeft size={18} aria-hidden="true" />
+        </button>
+        {showNote && <label>提前告诉我们
+          <textarea value={props.draft.note} maxLength={1000} rows={2} placeholder="例如：生日、纪念日或行动不便" onChange={(event) => props.onDraftChange({ note: event.target.value })} />
+        </label>}
+      </div>
+      <div className="reservation-policy-note">
+        <strong>提交后由门店确认</strong>
+        <span>申请不锁定具体桌台；确认后才生效，取消和到店保留时限以确认页为准。</span>
+      </div>
       <button className="reservation-primary" type="button" disabled={props.busy} onClick={props.onLoadAvailability}>
         {props.busy ? <LoaderCircle className="is-spinning" size={18} aria-hidden="true" /> : <Check size={18} aria-hidden="true" />}
         {props.busy ? '正在查询' : '核对预约信息'}
       </button>
     </section>
   )
+}
+
+function ReservationPerformanceCard({
+  date,
+  performance,
+  loading,
+  error,
+  onRetry,
+}: {
+  date: string
+  performance: PublicDailyPerformance | null
+  loading: boolean
+  error: string | null
+  onRetry: () => void
+}) {
+  return <section className="reservation-performance" aria-labelledby="reservation-performance-title">
+    <header>
+      <span><Music2 size={17} aria-hidden="true" /></span>
+      <div><strong id="reservation-performance-title">{formatBusinessDate(date)}演出安排</strong><small>门店当前排班，变更以最终通知为准</small></div>
+      {loading && <LoaderCircle className="is-spinning" size={16} aria-label="正在更新演出" />}
+    </header>
+    {error !== null ? <div className="reservation-performance-state is-error">
+      <span>{error}</span><button type="button" onClick={onRetry}>重试</button>
+    </div> : performance === null || performance.schedules.length === 0 ? <div className="reservation-performance-state">
+      <span>{loading ? '正在查询演出安排…' : '该日期暂无演出排班，仍可正常预约。'}</span>
+    </div> : <div className="reservation-performance-list">
+      {performance.schedules.map((schedule) => <article key={schedule.id} className={schedule.status === 'performing' ? 'is-live' : ''}>
+        {schedule.performerProfile.imageUrl === undefined
+          ? <span className="reservation-performance-avatar"><Music2 size={16} aria-hidden="true" /></span>
+          : <img className="reservation-performance-avatar" src={schedule.performerProfile.imageUrl} alt="" decoding="async" />}
+        <div><strong>{schedule.performerStageName}</strong><small>{performanceTags(schedule.performerProfile)}</small></div>
+        <time dateTime={schedule.startsAt}>{formatPerformanceRange(schedule.startsAt, schedule.endsAt, performance.localDate)}</time>
+      </article>)}
+    </div>}
+  </section>
+}
+
+function performanceTags(profile: PublicDailyPerformance['schedules'][number]['performerProfile']): string {
+  const values = [...(profile.genres ?? []), ...(profile.styles ?? [])]
+  return values.slice(0, 2).join(' · ') || '现场演出'
+}
+
+function formatShanghaiClock(value: string): string {
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(new Date(value))
+}
+
+function formatPerformanceRange(startsAt: string, endsAt: string, businessDate: string): string {
+  const endDay = shanghaiCalendarDate(endsAt)
+  return `${formatShanghaiClock(startsAt)}–${endDay === businessDate ? '' : '次日 '}${formatShanghaiClock(endsAt)}`
+}
+
+function shanghaiCalendarDate(value: string): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date(value))
+  const valueFor = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? ''
+  return `${valueFor('year')}-${valueFor('month')}-${valueFor('day')}`
+}
+
+function formatBusinessDate(value: string): string {
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', weekday: 'short',
+  }).format(new Date(`${value}T12:00:00+08:00`))
+}
+
+function reservationDateOptions(minDate: string, maxDate: string): Array<{ value: string; label: string }> {
+  const options: Array<{ value: string; label: string }> = []
+  let value = minDate
+  for (let index = 0; index < 366 && value <= maxDate; index += 1) {
+    options.push({ value, label: `${formatBusinessDate(value)}${index === 0 ? ' · 今天' : ''}` })
+    value = addCalendarDays(value, 1)
+  }
+  return options
 }
 
 function ConfirmStep(props: ReservationBookingViewProps & { busy: boolean }) {
@@ -564,7 +734,7 @@ function ConfirmStep(props: ReservationBookingViewProps & { busy: boolean }) {
         <div><p>{props.joinWaitlist ? 'WAITLIST' : 'REQUEST'}</p><h1 id="reservation-confirm-title">{props.joinWaitlist ? '登记候补' : '提交预约申请'}</h1></div>
       </div>
       <dl className="reservation-summary">
-        <div><dt>到店</dt><dd>{props.draft.date} · {slot?.label ?? '--:--'}</dd></div>
+        <div><dt>到店</dt><dd>{formatBusinessDate(props.draft.date)} · {slot?.label ?? '--:--'}</dd></div>
         <div><dt>人数</dt><dd>{props.draft.guestCount}位</dd></div>
         <div><dt>位置偏好</dt><dd>{props.joinWaitlist ? '有位后联系' : seatPreferenceLabel(props.draft.seatPreference)}</dd></div>
         <div><dt>称呼</dt><dd>{props.draft.customerName.trim()}</dd></div>
@@ -665,10 +835,10 @@ function CompleteStep(props: ReservationBookingViewProps & { busy: boolean }) {
 }
 
 function Progress({ step }: { step: ReservationStep }) {
-  const active = step === 'schedule' ? 1 : 2
+  const active = step === 'schedule' ? 1 : step === 'details' ? 2 : 3
   return (
     <ol className="reservation-progress" aria-label="预约进度">
-      {['预约信息', '提交申请'].map((label, index) => (
+      {['时间人数', '位置联系', '确认提交'].map((label, index) => (
         <li className={index + 1 <= active ? 'is-active' : ''} key={label}><span>{index + 1}</span>{label}</li>
       ))}
     </ol>

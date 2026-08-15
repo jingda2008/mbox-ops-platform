@@ -1,6 +1,7 @@
 import { classifyZone } from './reservation-model'
 import type {
   BookingMode,
+  PublicDailyPerformance,
   PublicReservation,
   PublicWaitlist,
   ReservationAvailability,
@@ -99,6 +100,12 @@ export class PublicReservationApi {
     const query = new URLSearchParams({ arrivalAt, guestCount: String(guestCount) })
     const body = await this.request(`/api/public/reservation/availability?${query}`, { method: 'GET', signal })
     return parseAvailability(dataOf(body))
+  }
+
+  async performance(date: string, signal?: AbortSignal): Promise<PublicDailyPerformance> {
+    const query = new URLSearchParams({ date })
+    const body = await this.request(`/api/public/reservation/performances?${query}`, { method: 'GET', signal })
+    return parseDailyPerformance(dataOf(body))
   }
 
   async createReservation(
@@ -233,6 +240,51 @@ function parseAvailability(value: unknown): ReservationAvailability {
       }
     }),
   }
+}
+
+function parseDailyPerformance(value: unknown): PublicDailyPerformance {
+  const record = object(value, '演出信息')
+  const phase = text(record.phase, '演出状态')
+  if (!['no_schedule', 'upcoming', 'live', 'between', 'ended'].includes(phase)) invalid('演出状态')
+  return {
+    timezone: text(record.timezone, '时区'),
+    localDate: text(record.localDate, '演出日期'),
+    phase: phase as PublicDailyPerformance['phase'],
+    current: record.current === null ? null : parsePerformanceSchedule(record.current),
+    next: record.next === null ? null : parsePerformanceSchedule(record.next),
+    startsInSeconds: nullableInteger(record.startsInSeconds, '距开演时间'),
+    remainingSeconds: nullableInteger(record.remainingSeconds, '剩余演出时间'),
+    schedules: array(record.schedules, '演出场次').map(parsePerformanceSchedule),
+  }
+}
+
+function parsePerformanceSchedule(value: unknown): PublicDailyPerformance['schedules'][number] {
+  const record = object(value, '演出场次')
+  const status = text(record.status, '演出场次状态')
+  if (!['scheduled', 'performing', 'completed', 'cancelled'].includes(status)) invalid('演出场次状态')
+  return {
+    id: text(record.id, '演出场次编号'),
+    performerStageName: text(record.performerStageName, '演员名称'),
+    performerProfile: parsePerformerProfile(record.performerProfile),
+    startsAt: text(record.startsAt, '开始时间'),
+    endsAt: text(record.endsAt, '结束时间'),
+    status: status as PublicDailyPerformance['schedules'][number]['status'],
+    sortOrder: integer(record.sortOrder, '演出排序'),
+  }
+}
+
+function parsePerformerProfile(value: unknown): PublicDailyPerformance['schedules'][number]['performerProfile'] {
+  const record = object(value, '演员资料')
+  const profile: PublicDailyPerformance['schedules'][number]['performerProfile'] = {}
+  if (typeof record.bio === 'string') profile.bio = record.bio
+  if (typeof record.imageUrl === 'string') profile.imageUrl = record.imageUrl
+  for (const key of ['genres', 'styles', 'highlights'] as const) {
+    if (record[key] === undefined) continue
+    const values = array(record[key], '演员标签')
+    if (!values.every((item) => typeof item === 'string')) invalid('演员标签')
+    profile[key] = values as string[]
+  }
+  return profile
 }
 
 function parseDepositRule(value: unknown): ReservationAvailability['depositRule'] {

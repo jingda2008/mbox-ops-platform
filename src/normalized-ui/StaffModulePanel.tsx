@@ -3,6 +3,7 @@ import {
   BarChart3,
   CalendarClock,
   CheckCircle2,
+  ChevronRight,
   CircleDollarSign,
   LoaderCircle,
   Music2,
@@ -14,7 +15,10 @@ import {
 } from 'lucide-react'
 import { NormalizedApiClient, NormalizedApiError, type StaffAuthView } from '../normalized-api'
 import { CashierAfterSalesWorkbench } from './CashierAfterSalesWorkbench'
+import { CatalogManagementPanel } from './CatalogManagementPanel'
+import { VenueManagementPanel } from './VenueManagementPanel'
 import { StaffAccessManagementPanel } from './StaffAccessManagementPanel'
+import { paymentPolicyPresentation } from './payment-policy-presentation'
 import './staff-module-panel.css'
 
 export type StaffModule = 'payments' | 'performance' | 'inventory' | 'operations' | 'devices' | 'settings'
@@ -32,6 +36,25 @@ interface SongRequestEntry extends Record<string, unknown> {
   songTitle: string
   status: string
   createdAt: string
+}
+
+interface PerformerEntry extends Record<string, unknown> {
+  id: string
+  code: string
+  stageName: string
+  profileSnapshot: Record<string, unknown>
+  status: string
+}
+
+interface PerformerSongEntry extends Record<string, unknown> {
+  id: string
+  performerId: string
+  code: string | null
+  title: string
+  aliases: string[]
+  status: string
+  requestCount: number
+  performedCount: number
 }
 
 interface PerformanceView {
@@ -96,24 +119,40 @@ interface EmployeeSalesView {
   currency: string
 }
 
+interface CommercePolicyView extends Record<string, unknown> {
+  configured: boolean
+  policyOnlinePaymentEnabled: boolean
+  onlinePaymentEnabled: boolean
+  providerConfigured: boolean
+  provider: 'postar' | 'simulation' | null
+  paymentReservationMinutes: number
+  policyVersion: number
+  reason: string | null
+  updatedAt: string | null
+}
+
 interface ModuleData {
   performance: PerformanceView | null
+  performers: PerformerEntry[]
   songRequests: SongRequestEntry[]
   inventory: InventoryView | null
   profit: ProfitView | null
   devices: HardwareDeviceView[]
   printJobs: PrintJobView[]
   employeeSales: EmployeeSalesView[]
+  commercePolicy: CommercePolicyView | null
 }
 
 const emptyData: ModuleData = {
   performance: null,
+  performers: [],
   songRequests: [],
   inventory: null,
   profit: null,
   devices: [],
   printJobs: [],
   employeeSales: [],
+  commercePolicy: null,
 }
 
 export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
@@ -127,21 +166,23 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
   const [data, setData] = useState<ModuleData>(emptyData)
   const [paymentRefreshToken, setPaymentRefreshToken] = useState(0)
 
-  const load = useCallback(async () => {
-    setPhase('loading')
+  const load = useCallback(async (quiet = false) => {
+    if (!quiet) setPhase('loading')
     setMessage(null)
     try {
       if (module === 'payments') {
         setData(emptyData)
       } else if (module === 'performance') {
-        const [performance, requests] = await Promise.all([
+        const [performance, requests, performers] = await Promise.all([
           api.getEndpoint<{ data: unknown }>('/api/staff/performances/today'),
           api.getEndpoint<{ data: unknown }>('/api/staff/song-requests'),
+          api.getEndpoint<{ data: unknown }>('/api/staff/performers'),
         ])
         setData({
           ...emptyData,
           performance: performanceView(performance.data),
           songRequests: songRequests(requests.data),
+          performers: performerEntries(performers.data),
         })
       } else if (module === 'inventory') {
         const response = await api.getEndpoint<{ data: unknown }>('/api/inventory')
@@ -161,7 +202,12 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
         ])
         setData({ ...emptyData, devices: hardwareDevices(devices.data), printJobs: printJobs(jobs.data) })
       } else {
-        setData(emptyData)
+        if (auth.permissions.includes('payment.policy.manage')) {
+          const response = await api.getEndpoint<{ data: unknown }>('/api/store/commerce-policy')
+          setData({ ...emptyData, commercePolicy: commercePolicyView(response.data) })
+        } else {
+          setData(emptyData)
+        }
       }
       setPhase('ready')
     } catch (error) {
@@ -174,6 +220,8 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
     }
   }, [api, auth.permissions, module, onLoginRequired])
 
+  const refresh = useCallback(() => load(true), [load])
+
   useEffect(() => { void load() }, [load])
 
   const content = useMemo(() => {
@@ -185,12 +233,12 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
         refreshToken={paymentRefreshToken}
       />
     }
-    if (module === 'performance') return <PerformanceModule view={data.performance} requests={data.songRequests} />
-    if (module === 'inventory') return <InventoryModule view={data.inventory} />
+    if (module === 'performance') return <PerformanceModule api={api} auth={auth} view={data.performance} performers={data.performers} requests={data.songRequests} onChanged={refresh} />
+    if (module === 'inventory') return <InventoryModule api={api} auth={auth} view={data.inventory} onChanged={refresh} />
     if (module === 'operations') return <OperationsModule view={data.profit} sales={data.employeeSales} canViewProfit={auth.permissions.includes('commercial.profit.view')} />
-    if (module === 'devices') return <DevicesModule devices={data.devices} jobs={data.printJobs} />
-    return <SettingsModule api={api} auth={auth} />
-  }, [api, auth, data, module, onLoginRequired, paymentRefreshToken])
+    if (module === 'devices') return <DevicesModule api={api} auth={auth} devices={data.devices} jobs={data.printJobs} onChanged={refresh} />
+    return <SettingsModule api={api} auth={auth} policy={data.commercePolicy} onChanged={refresh} />
+  }, [api, auth, data, module, onLoginRequired, paymentRefreshToken, refresh])
 
   const modulePresentation = {
     payments: { title: '收银与退款', icon: CircleDollarSign },
@@ -221,28 +269,264 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
   </section>
 }
 
-function PerformanceModule({ view, requests }: { view: PerformanceView | null; requests: SongRequestEntry[] }) {
+function PerformanceModule({ api, auth, view, performers, requests, onChanged }: {
+  api: NormalizedApiClient
+  auth: StaffAuthView
+  view: PerformanceView | null
+  performers: PerformerEntry[]
+  requests: SongRequestEntry[]
+  onChanged(): Promise<void>
+}) {
   const schedules = view?.schedules ?? []
+  const canManage = auth.permissions.includes('song.manage')
+  const [form, setForm] = useState<'performer' | 'performer-edit' | 'schedule' | 'songs' | null>(null)
+  const [busyKey, setBusyKey] = useState<string | null>(null)
+  const [notice, setNotice] = useState('')
+  const [performerCode, setPerformerCode] = useState('')
+  const [stageName, setStageName] = useState('')
+  const [genres, setGenres] = useState('')
+  const [schedulePerformerId, setSchedulePerformerId] = useState(performers[0]?.id ?? '')
+  const [catalogPerformerId, setCatalogPerformerId] = useState(performers[0]?.id ?? '')
+  const [catalogSearch, setCatalogSearch] = useState('')
+  const [catalogSongs, setCatalogSongs] = useState<PerformerSongEntry[]>([])
+  const [catalogLoading, setCatalogLoading] = useState(false)
+  const [catalogMode, setCatalogMode] = useState<'upsert' | 'replace'>('upsert')
+  const [catalogRows, setCatalogRows] = useState('')
+  const [editingSong, setEditingSong] = useState<PerformerSongEntry | null>(null)
+  const [editSongCode, setEditSongCode] = useState('')
+  const [editSongTitle, setEditSongTitle] = useState('')
+  const [editSongAliases, setEditSongAliases] = useState('')
+  const [editPerformerName, setEditPerformerName] = useState('')
+  const [editPerformerGenres, setEditPerformerGenres] = useState('')
+  const [editPerformerStatus, setEditPerformerStatus] = useState<'active' | 'inactive'>('active')
+  const [startsAt, setStartsAt] = useState('')
+  const [endsAt, setEndsAt] = useState('')
+  const [quotes, setQuotes] = useState<Record<string, string>>({})
+
+  const selectedPerformer = performers.find((performer) => performer.id === catalogPerformerId) ?? performers[0]
+
+  useEffect(() => {
+    if (catalogPerformerId === '' && performers[0] !== undefined) setCatalogPerformerId(performers[0].id)
+  }, [catalogPerformerId, performers])
+
+  const loadCatalog = useCallback(async (performerId: string, search: string) => {
+    if (performerId === '') { setCatalogSongs([]); return }
+    setCatalogLoading(true)
+    try {
+      const response = await api.getEndpoint<{ data: unknown }>(`/api/staff/performers/${performerId}/songs?search=${encodeURIComponent(search.trim())}&limit=500`)
+      setCatalogSongs(performerSongEntries(response.data))
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '歌单读取失败')
+    } finally {
+      setCatalogLoading(false)
+    }
+  }, [api])
+
+  useEffect(() => {
+    if (form === 'songs' && catalogPerformerId !== '') void loadCatalog(catalogPerformerId, '')
+  }, [catalogPerformerId, form, loadCatalog])
+
+  async function run(key: string, operation: () => Promise<unknown>, success: string) {
+    if (busyKey !== null) return
+    setBusyKey(key)
+    setNotice('')
+    try {
+      await operation()
+      setNotice(success)
+      await onChanged()
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '操作未完成，请核对后重试')
+    } finally {
+      setBusyKey(null)
+    }
+  }
+
+  async function createPerformer(event: React.FormEvent) {
+    event.preventDefault()
+    await run('performer-create', () => api.postEndpoint('/api/staff/performers', {
+      code: performerCode.trim(),
+      stageName: stageName.trim(),
+      profileSnapshot: { genres: genres.split(/[，,]/).map((value) => value.trim()).filter(Boolean) },
+      status: 'active',
+    }, { idempotencyKey: operationIdempotency('performer-create') }), '演员资料已建立')
+    setPerformerCode('')
+    setStageName('')
+    setGenres('')
+  }
+
+  function openPerformerEdit() {
+    if (selectedPerformer === undefined) { setNotice('请先建立演员资料'); return }
+    const rawGenres = selectedPerformer.profileSnapshot.genres
+    setEditPerformerName(selectedPerformer.stageName)
+    setEditPerformerGenres(Array.isArray(rawGenres) ? rawGenres.filter((value): value is string => typeof value === 'string').join('，') : '')
+    setEditPerformerStatus(selectedPerformer.status === 'inactive' ? 'inactive' : 'active')
+    setForm(form === 'performer-edit' ? null : 'performer-edit')
+  }
+
+  async function updatePerformer(event: React.FormEvent) {
+    event.preventDefault()
+    if (selectedPerformer === undefined) return
+    await run(`performer-update-${selectedPerformer.id}`, () => api.patchEndpoint(`/api/staff/performers/${selectedPerformer.id}`, {
+      stageName: editPerformerName.trim(),
+      profileSnapshot: { ...selectedPerformer.profileSnapshot, genres: editPerformerGenres.split(/[，,]/).map((value) => value.trim()).filter(Boolean) },
+      status: editPerformerStatus,
+    }, { idempotencyKey: operationIdempotency('performer-update') }), '演员资料已更新，顾客端将读取最新状态')
+  }
+
+  async function importSongs(event: React.FormEvent) {
+    event.preventDefault()
+    if (catalogPerformerId === '') { setNotice('请选择演员'); return }
+    let songs: Array<{ code: string | null; title: string; aliases: string[] }>
+    try {
+      songs = parseSongImportRows(catalogRows)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '歌单格式无效')
+      return
+    }
+    if (songs.length === 0 && catalogMode !== 'replace') { setNotice('追加导入至少需要一首歌曲'); return }
+    if (catalogMode === 'replace' && !window.confirm(`确认用当前${songs.length}首歌曲替换该演员的可用歌单？未列出的歌曲将停用。`)) return
+    await run(`song-import-${catalogPerformerId}`, () => api.postEndpoint(`/api/staff/performers/${catalogPerformerId}/songs/import`, {
+      sourceName: '员工端批量维护', mode: catalogMode, songs,
+    }, { idempotencyKey: operationIdempotency('song-import') }), `已导入${songs.length}首歌曲`)
+    setCatalogRows('')
+    await loadCatalog(catalogPerformerId, catalogSearch)
+  }
+
+  function beginSongEdit(song: PerformerSongEntry) {
+    setEditingSong(song)
+    setEditSongCode(song.code ?? '')
+    setEditSongTitle(song.title)
+    setEditSongAliases(song.aliases.join('，'))
+  }
+
+  async function updateSong(event: React.FormEvent) {
+    event.preventDefault()
+    if (editingSong === null) return
+    await run(`song-update-${editingSong.id}`, () => api.patchEndpoint(`/api/staff/songs/${editingSong.id}`, {
+      code: editSongCode.trim() || null,
+      title: editSongTitle.trim(),
+      aliases: editSongAliases.split(/[，,]/).map((value) => value.trim()).filter(Boolean),
+    }, { idempotencyKey: operationIdempotency('song-update') }), '歌曲资料已更新')
+    setEditingSong(null)
+    await loadCatalog(catalogPerformerId, catalogSearch)
+  }
+
+  async function deactivateSong(song: PerformerSongEntry) {
+    if (!window.confirm(`确认停用“${song.title}”？停用后顾客不能再从该演员歌单点选。`)) return
+    await run(`song-disable-${song.id}`, () => api.patchEndpoint(`/api/staff/songs/${song.id}`, { status: 'inactive' }, {
+      idempotencyKey: operationIdempotency('song-disable'),
+    }), '歌曲已停用')
+    await loadCatalog(catalogPerformerId, catalogSearch)
+  }
+
+  async function createSchedule(event: React.FormEvent) {
+    event.preventDefault()
+    const performerId = schedulePerformerId || performers[0]?.id
+    if (performerId === undefined) { setNotice('请先建立演员资料'); return }
+    let start: string
+    let end: string
+    try {
+      start = localDateTimeIso(startsAt)
+      end = localDateTimeIso(endsAt)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '演出时间无效')
+      return
+    }
+    if (Date.parse(end) <= Date.parse(start)) { setNotice('结束时间必须晚于开始时间'); return }
+    await run('schedule-create', () => api.postEndpoint('/api/staff/schedules', {
+      performerId, startsAt: start, endsAt: end, sortOrder: schedules.length,
+    }, { idempotencyKey: operationIdempotency('schedule-create') }), '演出场次已保存并对顾客可见')
+    setStartsAt('')
+    setEndsAt('')
+  }
+
+  function transitionSchedule(schedule: ScheduleEntry, targetStatus: 'performing' | 'completed' | 'cancelled') {
+    if (targetStatus === 'cancelled' && !window.confirm(`确认取消“${schedule.performerStageName}”这场演出？顾客端将同步更新。`)) return
+    void run(`schedule-${schedule.id}-${targetStatus}`, () => api.postEndpoint(`/api/staff/schedules/${schedule.id}/status`, { targetStatus }, {
+      idempotencyKey: operationIdempotency(`schedule-${targetStatus}`),
+    }), targetStatus === 'performing' ? '已切换为演出中' : targetStatus === 'completed' ? '已标记演出结束' : '演出场次已取消')
+  }
+
+  function transitionSong(request: SongRequestEntry, action: 'confirm' | 'reject' | 'performed' | 'cancel') {
+    const quotedAmountMinor = Math.round(Number(quotes[request.id] ?? '') * 100)
+    const body = action === 'confirm'
+      ? { quotedAmountMinor, currency: 'CNY' }
+      : {}
+    if (action === 'confirm' && (!Number.isFinite(quotedAmountMinor) || quotedAmountMinor < 0)) {
+      setNotice('请填写有效的点歌报价；免费可填0')
+      return
+    }
+    void run(`song-${request.id}-${action}`, () => api.postEndpoint(`/api/staff/song-requests/${request.id}/${action}`, body, {
+      idempotencyKey: operationIdempotency(`song-${action}`),
+    }), action === 'confirm' ? '点歌需求已接受' : action === 'reject' ? '点歌需求已拒绝' : action === 'performed' ? '已记录演唱完成' : '点歌需求已取消')
+  }
+
   return <div className="staff-module-body">
     <div className="staff-module-summary"><span><CalendarClock size={18} /></span><div><strong>{performancePhase(view?.phase)}</strong><small>{schedules.length} 个演出时段 · {requests.length} 条点歌需求</small></div></div>
-    {schedules.length === 0 ? <EmptyState text="今日暂无已发布演出安排" /> : <div className="staff-module-list">
+    {notice !== '' && <p className="staff-module-notice" role="status">{notice}</p>}
+    {canManage && <div className="staff-module-actions"><button type="button" onClick={() => setForm(form === 'performer' ? null : 'performer')}>新增演员</button><button type="button" disabled={performers.length === 0} onClick={openPerformerEdit}>编辑演员</button><button type="button" disabled={performers.length === 0} onClick={() => setForm(form === 'songs' ? null : 'songs')}>维护歌单</button><button type="button" onClick={() => setForm(form === 'schedule' ? null : 'schedule')}>新增演出场次</button></div>}
+    {form === 'performer' && <form className="staff-module-form" onSubmit={(event) => void createPerformer(event)}><header><strong>新增演员资料</strong><small>演员资料和歌单分别保存，避免旧整块JSON覆盖。</small></header><label>演员编号<input required pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" value={performerCode} onChange={(event) => setPerformerCode(event.target.value)} placeholder="例如 singer-liyan" /></label><label>艺名<input required maxLength={120} value={stageName} onChange={(event) => setStageName(event.target.value)} /></label><label>风格标签<input value={genres} onChange={(event) => setGenres(event.target.value)} placeholder="爵士，流行" /></label><button type="submit" disabled={busyKey !== null}>{busyKey === 'performer-create' ? '保存中' : '保存演员'}</button></form>}
+    {form === 'performer-edit' && selectedPerformer !== undefined && <form className="staff-module-form" onSubmit={(event) => void updatePerformer(event)}><header><strong>编辑演员资料</strong><small>演员编号 {selectedPerformer.code} 保持不变；停用后不再进入顾客可选排班。</small></header><label>演员<select value={catalogPerformerId} onChange={(event) => { setCatalogPerformerId(event.target.value); const next = performers.find((item) => item.id === event.target.value); if (next) { setEditPerformerName(next.stageName); setEditPerformerStatus(next.status === 'inactive' ? 'inactive' : 'active'); const value = next.profileSnapshot.genres; setEditPerformerGenres(Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string').join('，') : '') } }}>{performers.map((performer) => <option value={performer.id} key={performer.id}>{performer.stageName}</option>)}</select></label><label>艺名<input required maxLength={120} value={editPerformerName} onChange={(event) => setEditPerformerName(event.target.value)} /></label><label>风格标签<input value={editPerformerGenres} onChange={(event) => setEditPerformerGenres(event.target.value)} /></label><label>可用状态<select value={editPerformerStatus} onChange={(event) => setEditPerformerStatus(event.target.value as 'active' | 'inactive')}><option value="active">启用</option><option value="inactive">停用</option></select></label><button type="submit" disabled={busyKey !== null}>保存演员变更</button></form>}
+    {form === 'songs' && <section className="staff-song-catalog"><header><div><strong>演员歌单</strong><small>可搜索、批量导入、逐首修改；点歌次数来自真实请求记录。</small></div><label>演员<select value={catalogPerformerId} onChange={(event) => setCatalogPerformerId(event.target.value)}>{performers.map((performer) => <option value={performer.id} key={performer.id}>{performer.stageName}</option>)}</select></label></header><div className="staff-song-search"><label><span className="sr-only">搜索歌名、编号或别名</span><input value={catalogSearch} onChange={(event) => setCatalogSearch(event.target.value)} placeholder="搜索歌名、编号或别名" /></label><button type="button" disabled={catalogLoading} onClick={() => void loadCatalog(catalogPerformerId, catalogSearch)}>{catalogLoading ? '搜索中' : '搜索'}</button></div><form className="staff-song-import" onSubmit={(event) => void importSongs(event)}><header><strong>批量导入</strong><small>每行格式：编号 | 歌名 | 别名1,别名2。编号和别名可留空。</small></header><textarea value={catalogRows} onChange={(event) => setCatalogRows(event.target.value)} rows={5} placeholder={'SONG-001 | 后来 | Hou Lai\n | 月亮代表我的心 | 月亮'} /><label>导入方式<select value={catalogMode} onChange={(event) => setCatalogMode(event.target.value as 'upsert' | 'replace')}><option value="upsert">追加或更新</option><option value="replace">整份替换</option></select></label><button type="submit" disabled={busyKey !== null}>开始导入</button></form>{editingSong !== null && <form className="staff-song-edit" onSubmit={(event) => void updateSong(event)}><strong>修改单曲</strong><label>编号<input value={editSongCode} onChange={(event) => setEditSongCode(event.target.value)} /></label><label>歌名<input required value={editSongTitle} onChange={(event) => setEditSongTitle(event.target.value)} /></label><label>别名<input value={editSongAliases} onChange={(event) => setEditSongAliases(event.target.value)} /></label><div><button type="submit" disabled={busyKey !== null}>保存</button><button type="button" onClick={() => setEditingSong(null)}>取消</button></div></form>}<div className="staff-song-catalog-list">{catalogSongs.length === 0 ? <p>{catalogLoading ? '正在读取歌单' : '暂无匹配歌曲'}</p> : catalogSongs.map((song) => <article key={song.id}><div><strong>{song.title}</strong><small>{song.code ?? '无编号'}{song.aliases.length > 0 ? ` · ${song.aliases.join('、')}` : ''}</small><span>点歌 {song.requestCount} 次 · 已演唱 {song.performedCount} 次</span></div><div><button type="button" onClick={() => beginSongEdit(song)}>修改</button><button type="button" className="is-danger" onClick={() => void deactivateSong(song)}>停用</button></div></article>)}</div></section>}
+    {form === 'schedule' && <form className="staff-module-form" onSubmit={(event) => void createSchedule(event)}><header><strong>新增演出场次</strong><small>保存后立即进入当前排班并对顾客可见，请先核对时间。</small></header><label>演员<select required value={schedulePerformerId || performers[0]?.id || ''} onChange={(event) => setSchedulePerformerId(event.target.value)}><option value="">请选择</option>{performers.filter((performer) => performer.status === 'active').map((performer) => <option value={performer.id} key={performer.id}>{performer.stageName}</option>)}</select></label><label>开始时间<input required type="datetime-local" value={startsAt} onChange={(event) => setStartsAt(event.target.value)} /></label><label>结束时间<input required type="datetime-local" value={endsAt} onChange={(event) => setEndsAt(event.target.value)} /></label><button type="submit" disabled={busyKey !== null || performers.length === 0}>{busyKey === 'schedule-create' ? '保存中' : '确认保存并展示'}</button></form>}
+    {schedules.length === 0 ? <EmptyState text="今日暂无演出排班" /> : <div className="staff-module-list">
       {schedules.map((schedule) => <article key={schedule.id}>
         <div><strong>{schedule.performerStageName}</strong><small>{formatTime(schedule.startsAt)} - {formatTime(schedule.endsAt)}</small></div>
-        <em>{scheduleStatus(schedule.status)}</em>
+        <div className="staff-inline-actions"><em>{scheduleStatus(schedule.status)}</em>{canManage && schedule.status === 'scheduled' && <><button type="button" disabled={busyKey !== null} onClick={() => transitionSchedule(schedule, 'performing')}>开始</button><button type="button" className="is-danger" disabled={busyKey !== null} onClick={() => transitionSchedule(schedule, 'cancelled')}>取消</button></>}{canManage && schedule.status === 'performing' && <button type="button" disabled={busyKey !== null} onClick={() => transitionSchedule(schedule, 'completed')}>结束</button>}</div>
       </article>)}
     </div>}
-    {requests.length > 0 && <section className="staff-song-requests"><h3>点歌待办</h3>{requests.slice(0, 8).map((request) => <article key={request.id}><strong>{request.songTitle}</strong><span>{songStatus(request.status)}</span></article>)}</section>}
+    {requests.length > 0 && <section className="staff-song-requests"><h3>点歌待办</h3>{requests.slice(0, 8).map((request) => <article key={request.id}><div><strong>{request.songTitle}</strong><span>{songStatus(request.status)}</span></div>{canManage && request.status === 'requested' && <div className="staff-song-actions"><label>报价（元）<input inputMode="decimal" value={quotes[request.id] ?? ''} onChange={(event) => setQuotes((current) => ({ ...current, [request.id]: event.target.value }))} placeholder="0" /></label><button type="button" disabled={busyKey !== null} onClick={() => transitionSong(request, 'confirm')}>接受</button><button type="button" className="is-danger" disabled={busyKey !== null} onClick={() => transitionSong(request, 'reject')}>拒绝</button></div>}{canManage && request.status === 'paid' && <button type="button" disabled={busyKey !== null} onClick={() => transitionSong(request, 'performed')}>已演唱</button>}{canManage && request.status === 'accepted' && <button type="button" className="is-danger" disabled={busyKey !== null} onClick={() => transitionSong(request, 'cancel')}>取消</button>}</article>)}</section>}
   </div>
 }
 
-function InventoryModule({ view }: { view: InventoryView | null }) {
+function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiClient; auth: StaffAuthView; view: InventoryView | null; onChanged(): Promise<void> }) {
+  const [mode, setMode] = useState<'count' | 'waste' | null>(null)
+  const [itemId, setItemId] = useState('')
+  const [quantity, setQuantity] = useState('')
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState('')
   if (view === null) return <EmptyState text="库存数据暂时为空" />
   const lowStock = view.items.filter((item) => item.lowStock)
   const visibleItems = [...lowStock, ...view.items.filter((item) => !item.lowStock)].slice(0, 20)
+  const canCount = auth.permissions.includes('inventory.count')
+  const canWaste = auth.permissions.includes('inventory.waste')
+
+  async function submitInventoryAction(event: React.FormEvent) {
+    event.preventDefault()
+    if (mode === null || busy) return
+    if (!itemId || !/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(quantity)) { setNotice('请选择物料并填写有效数量'); return }
+    if (mode === 'waste' && reason.trim().length < 1) { setNotice('损耗必须填写原因'); return }
+    setBusy(true)
+    setNotice('')
+    try {
+      if (mode === 'count') {
+        const count = await api.postEndpoint<{ id: string }>('/api/inventory/stock-counts', {
+          lines: [{ inventoryItemId: itemId, countedQuantity: quantity, reason: reason.trim() || null }],
+          note: '员工端单项盘点',
+        }, { idempotencyKey: operationIdempotency('inventory-count-create') })
+        await api.postEndpoint(`/api/inventory/stock-counts/${count.id}/submit`, {}, { idempotencyKey: operationIdempotency('inventory-count-submit') })
+        setNotice('盘点已提交，等待有审批权限的岗位复核')
+      } else {
+        await api.postEndpoint(`/api/inventory/items/${itemId}/waste`, { quantity, reason: reason.trim() }, { idempotencyKey: operationIdempotency('inventory-waste') })
+        setNotice('损耗已登记，库存数量已按服务端结果更新')
+      }
+      setQuantity('')
+      setReason('')
+      await onChanged()
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '库存操作未完成')
+    } finally {
+      setBusy(false)
+    }
+  }
   return <div className="staff-module-body">
     <div className={`staff-module-summary${view.lowStockCount > 0 ? ' has-attention' : ''}`}><span><PackageSearch size={18} /></span><div><strong>{view.lowStockCount} 项低库存 · {view.items.length} 项物料</strong><small>{view.receipts.length} 笔进货记录 · {view.storedBottles.length} 笔存酒</small></div></div>
+    {notice !== '' && <p className="staff-module-notice" role="status">{notice}</p>}
+    {(canCount || canWaste) && <div className="staff-module-actions">{canCount && <button type="button" onClick={() => setMode(mode === 'count' ? null : 'count')}>单项盘点</button>}{canWaste && <button type="button" onClick={() => setMode(mode === 'waste' ? null : 'waste')}>登记损耗</button>}</div>}
+    {mode !== null && <form className="staff-module-form" onSubmit={(event) => void submitInventoryAction(event)}><header><strong>{mode === 'count' ? '单项盘点' : '登记损耗'}</strong><small>{mode === 'count' ? '提交后由有审批权限的岗位复核差异。' : '提交后立即形成库存流水，请如实填写原因。'}</small></header><label>物料<select required value={itemId} onChange={(event) => setItemId(event.target.value)}><option value="">请选择</option>{view.items.map((item) => <option value={item.id} key={item.id}>{item.name} · 当前{item.availableQuantity}{item.baseUnit}</option>)}</select></label><label>{mode === 'count' ? '实盘数量' : '损耗数量'}<input required inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></label><label>{mode === 'count' ? '差异说明（选填）' : '损耗原因'}<input required={mode === 'waste'} maxLength={500} value={reason} onChange={(event) => setReason(event.target.value)} /></label><button type="submit" disabled={busy}>{busy ? '提交中' : mode === 'count' ? '提交盘点复核' : '确认登记损耗'}</button></form>}
     {visibleItems.length === 0 ? <EmptyState text="当前没有库存物料" /> : <div className="staff-module-list">{visibleItems.map((item) => <article key={item.id} className={item.lowStock ? 'has-attention' : ''}><div><strong>{item.name}</strong><small>{item.sku} · 可用 {item.availableQuantity} {item.baseUnit}</small></div><em>{item.lowStock ? '需补货' : '正常'}</em></article>)}</div>}
-    <p className="staff-module-footnote">订单完成后按配方扣减库存；低库存优先展示。入库、盘点和损耗登记仍按岗位权限留痕。</p>
+    <p className="staff-module-footnote">订单完成后按配方扣减库存；盘点须复核后生效，损耗登记立即留痕。进货收货仍需两段确认，避免误入库。</p>
   </div>
 }
 
@@ -264,27 +548,134 @@ function OperationsModule({ view, sales, canViewProfit }: { view: ProfitView | n
   </div>
 }
 
-function DevicesModule({ devices, jobs }: { devices: HardwareDeviceView[]; jobs: PrintJobView[] }) {
+function DevicesModule({ api, auth, devices, jobs, onChanged }: { api: NormalizedApiClient; auth: StaffAuthView; devices: HardwareDeviceView[]; jobs: PrintJobView[]; onChanged(): Promise<void> }) {
+  const [reason, setReason] = useState('现场人工检查后操作')
+  const [busyKey, setBusyKey] = useState<string | null>(null)
+  const [notice, setNotice] = useState('')
+  const canCommand = auth.permissions.includes('hardware.command')
+  const canRetry = auth.permissions.includes('print.retry')
   const attention = devices.filter((device) => device.connectivityStatus === 'offline' || device.connectivityStatus === 'degraded').length
     + jobs.filter((job) => job.status === 'failed' || job.status === 'dead').length
+
+  async function run(key: string, operation: () => Promise<unknown>, success: string) {
+    if (busyKey !== null) return
+    if (reason.trim().length < 3) { setNotice('请填写至少3个字的操作原因'); return }
+    setBusyKey(key)
+    setNotice('')
+    try {
+      await operation()
+      setNotice(success)
+      await onChanged()
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '设备操作未完成')
+    } finally {
+      setBusyKey(null)
+    }
+  }
+
+  function command(device: HardwareDeviceView, commandType: 'test_print' | 'reconnect' | 'ping') {
+    void run(`device-${device.id}-${commandType}`, () => api.postEndpoint(`/api/hardware/devices/${device.id}/commands`, {
+      commandType, reason: reason.trim(),
+    }, { idempotencyKey: operationIdempotency(`hardware-${commandType}`) }), commandType === 'ping' ? '连通检测已提交' : commandType === 'reconnect' ? '重连指令已提交' : '测试打印已提交')
+  }
+
+  function retry(job: PrintJobView) {
+    if (!window.confirm(`确认重试“${job.printerName}”的失败任务？请先检查打印机，避免重复出单。`)) return
+    void run(`job-${job.id}`, () => api.postEndpoint(`/api/hardware/print-jobs/${job.id}/retry`, { reason: reason.trim() }, {
+      idempotencyKey: operationIdempotency('print-retry'),
+    }), '打印任务已进入重试队列')
+  }
+
   return <div className="staff-module-body">
     <div className={`staff-module-summary${attention > 0 ? ' has-attention' : ''}`}><span><Printer size={18} /></span><div><strong>{devices.length} 台设备 · {jobs.length} 项打印待办</strong><small>{attention > 0 ? `${attention} 项需要管理员检查` : '当前没有设备或打印异常'}</small></div></div>
-    {devices.length === 0 ? <EmptyState text="尚未配置真实打印或硬件设备" /> : <div className="staff-module-list">{devices.map((device) => <article key={device.id} className={device.connectivityStatus === 'offline' ? 'has-attention' : ''}><div><strong>{device.name}</strong><small>{device.stationCode ?? '全店'} · {hardwareType(device.deviceType)}</small></div><em>{connectivityLabel(device.connectivityStatus)}</em></article>)}</div>}
-    {jobs.some((job) => job.status === 'failed' || job.status === 'dead') && <p className="staff-module-footnote">存在打印失败任务。重试前先确认打印机在线，避免重复出单。</p>}
+    {(canCommand || canRetry) && <label className="staff-device-reason">本次操作原因<input value={reason} maxLength={1000} onChange={(event) => setReason(event.target.value)} /></label>}
+    {notice !== '' && <p className="staff-module-notice" role="status">{notice}</p>}
+    {devices.length === 0 ? <EmptyState text="尚未配置真实打印或硬件设备" /> : <div className="staff-module-list">{devices.map((device) => <article key={device.id} className={device.connectivityStatus === 'offline' ? 'has-attention' : ''}><div><strong>{device.name}</strong><small>{device.stationCode ?? '全店'} · {hardwareType(device.deviceType)}</small></div><div className="staff-inline-actions"><em>{connectivityLabel(device.connectivityStatus)}</em>{canCommand && <button type="button" disabled={busyKey !== null} onClick={() => command(device, 'ping')}>检测</button>}{canCommand && device.connectivityStatus !== 'online' && <button type="button" disabled={busyKey !== null} onClick={() => command(device, 'reconnect')}>重连</button>}{canCommand && device.deviceType === 'printer' && <button type="button" disabled={busyKey !== null} onClick={() => command(device, 'test_print')}>测试打印</button>}</div></article>)}</div>}
+    {jobs.some((job) => job.status === 'failed' || job.status === 'dead') && <section className="staff-song-requests"><h3>打印失败待办</h3>{jobs.filter((job) => job.status === 'failed' || job.status === 'dead').map((job) => <article key={job.id}><div><strong>{job.printerName}</strong><span>{job.stationCode} · 已尝试{job.attempts}/{job.maxAttempts}次</span></div>{canRetry ? <button type="button" disabled={busyKey !== null || job.status === 'dead'} onClick={() => retry(job)}>{job.status === 'dead' ? '已停止自动重试' : '检查后重试'}</button> : <span>需打印重试权限</span>}</article>)}</section>}
+    {jobs.some((job) => job.status === 'failed' || job.status === 'dead') && <p className="staff-module-footnote">重试前必须确认设备在线并检查是否已实际出单；已停止自动重试的任务需管理员排查，不能直接重复发送。</p>}
   </div>
 }
 
-function SettingsModule({ api, auth }: { api: NormalizedApiClient; auth: StaffAuthView }) {
-  if (auth.permissions.includes('staff.access.configure')) return <StaffAccessManagementPanel api={api} />
+function SettingsModule({ api, auth, policy, onChanged }: { api: NormalizedApiClient; auth: StaffAuthView; policy: CommercePolicyView | null; onChanged(): Promise<void> }) {
+  const [reason, setReason] = useState('')
+  const [reservationMinutes, setReservationMinutes] = useState('10')
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState('')
+  const canManagePayment = auth.permissions.includes('payment.policy.manage')
+  const paymentPresentation = policy === null ? null : paymentPolicyPresentation(policy)
+
+  useEffect(() => {
+    if (policy !== null) setReservationMinutes(String(policy.paymentReservationMinutes))
+  }, [policy])
+
+  async function togglePayment() {
+    if (policy === null || busy) return
+    const target = !policy.policyOnlinePaymentEnabled
+    if (reason.trim().length < 3) { setNotice('请填写至少3个字的调整原因'); return }
+    if (!window.confirm(`确认${target ? '开放' : '关闭'}线上支付？顾客点单和员工协助收款将立即按新策略执行。`)) return
+    setBusy(true)
+    setNotice('')
+    try {
+      await api.patchEndpoint('/api/store/commerce-policy/online-payment', {
+        enabled: target,
+        expectedVersion: policy.policyVersion,
+        reason: reason.trim(),
+      }, { idempotencyKey: operationIdempotency('payment-policy') })
+      setReason('')
+      setNotice(`线上支付已${target ? '开放' : '关闭'}`)
+      await onChanged()
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '支付策略未更新')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function saveReservationPolicy() {
+    if (policy === null || busy) return
+    const minutes = Number(reservationMinutes)
+    if (!Number.isSafeInteger(minutes) || minutes < 2 || minutes > 30) {
+      setNotice('库存保留时间必须是2至30分钟的整数')
+      return
+    }
+    if (reason.trim().length < 3) { setNotice('请填写至少3个字的调整原因'); return }
+    if (!window.confirm(`确认将待付款库存保留时间调整为${minutes}分钟？新订单将立即按新策略执行。`)) return
+    setBusy(true)
+    setNotice('')
+    try {
+      await api.patchEndpoint('/api/store/commerce-policy/payment-reservation', {
+        paymentReservationMinutes: minutes,
+        expectedVersion: policy.policyVersion,
+        reason: reason.trim(),
+      }, { idempotencyKey: operationIdempotency('payment-reservation-policy') })
+      setReason('')
+      setNotice(`待付款库存保留时间已调整为${minutes}分钟`)
+      await onChanged()
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '库存保留策略未更新')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return <div className="staff-module-body">
     <div className="staff-module-summary"><span><ShieldCheck size={18} /></span><div><strong>{auth.employee.roleCodes.join(' · ')}</strong><small>{auth.permissions.length} 项允许权限 · {auth.deniedPermissions.length} 项明确拒绝</small></div></div>
-    <div className="staff-settings-grid">
-      <article><strong>员工与岗位</strong><span>只读</span></article>
-      <article><strong>设备与打印</strong><span>{auth.permissions.includes('hardware.manage') ? '可配置' : '只读'}</span></article>
-      <article><strong>AI执行策略</strong><span>{auth.permissions.includes('ai.schedule') ? '可配置' : '只读'}</span></article>
-      <article><strong>门店业务数据</strong><span>规范化数据库</span></article>
-    </div>
-    <p className="staff-module-footnote">这里先核对当前账号生效权限和配置状态。涉及权限、支付或库存的修改必须保留审计记录。</p>
+    <details className="staff-settings-scope">
+      <summary><span><strong>查看当前可配置范围</strong><small>员工、设备、演出、支付和门店数据</small></span><ChevronRight size={17} /></summary>
+      <div className="staff-settings-grid">
+        <article><strong>员工与岗位</strong><span>{auth.permissions.includes('staff.access.configure') ? '可配置并留痕' : '只读'}</span></article>
+        <article><strong>设备与打印</strong><span>{auth.permissions.includes('hardware.manage') ? '可配置' : '只读'}</span></article>
+        <article><strong>演员与演出</strong><span>{auth.permissions.includes('song.manage') ? '可配置' : '只读'}</span></article>
+        <article><strong>线上支付开关</strong><span className={policy?.onlinePaymentEnabled === true ? '' : 'is-blocked'}>{canManagePayment ? paymentPresentation?.summary ?? '状态待读取' : '无管理权限'}</span></article>
+        <article><strong>门店业务数据</strong><span>规范化数据库</span></article>
+      </div>
+    </details>
+    {canManagePayment && policy !== null && paymentPresentation !== null && <section className={`staff-payment-policy${policy.onlinePaymentEnabled ? ' is-enabled' : ' is-disabled'}`}><header><div><small>门店经营策略 · 版本 {policy.policyVersion}</small><strong>{paymentPresentation.title}</strong></div><em>{policy.providerConfigured ? policy.provider === 'simulation' ? '模拟渠道' : '支付渠道已配置' : '支付渠道未配置'}</em></header><p>{paymentPresentation.detail}</p><label>待付款库存保留时间<div className="staff-payment-policy-inline"><input type="number" min={2} max={30} step={1} inputMode="numeric" value={reservationMinutes} onChange={(event) => setReservationMinutes(event.target.value)} /><span>分钟</span><button type="button" disabled={busy || Number(reservationMinutes) === policy.paymentReservationMinutes} onClick={() => void saveReservationPolicy()}>保存时限</button></div></label><label>调整原因<input value={reason} maxLength={1000} onChange={(event) => setReason(event.target.value)} placeholder="例如：高峰期调整待付款库存保留时间" /></label><button type="button" className={policy.policyOnlinePaymentEnabled ? 'is-danger' : ''} disabled={busy || (!policy.policyOnlinePaymentEnabled && !policy.providerConfigured)} onClick={() => void togglePayment()}>{busy ? '正在更新' : policy.policyOnlinePaymentEnabled ? '关闭线上支付' : '开放线上支付'}</button>{policy.reason !== null && <small>上次原因：{policy.reason}{policy.updatedAt === null ? '' : ` · ${formatDateTime(policy.updatedAt)}`}</small>}</section>}
+    {notice !== '' && <p className="staff-module-notice" role="status">{notice}</p>}
+    <details className="staff-module-disclosure"><summary>支付安全边界</summary><p className="staff-module-footnote">支付渠道密钥和远端连接只能由受控部署配置提供，门店开关不会读取、显示或覆盖它们。每次调整要求原因、版本校验、幂等键和审计记录；关闭只阻止新支付，不得中断在途回调、查单、退款或对账。</p></details>
+    {auth.permissions.includes('table.manage') && <VenueManagementPanel api={api} />}
+    {auth.permissions.includes('catalog.product.manage') && <CatalogManagementPanel api={api} auth={auth} />}
+    {auth.permissions.includes('staff.access.configure') && <StaffAccessManagementPanel api={api} />}
   </div>
 }
 
@@ -320,6 +711,41 @@ function songRequests(value: unknown): SongRequestEntry[] {
     && typeof entry.status === 'string'
     && typeof entry.createdAt === 'string'
     ? [entry as SongRequestEntry] : [])
+}
+
+function performerEntries(value: unknown): PerformerEntry[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((entry) => isRecord(entry)
+    && typeof entry.id === 'string' && typeof entry.code === 'string'
+    && typeof entry.stageName === 'string' && typeof entry.status === 'string'
+    && isRecord(entry.profileSnapshot)
+    ? [entry as PerformerEntry] : [])
+}
+
+function performerSongEntries(value: unknown): PerformerSongEntry[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((entry) => isRecord(entry)
+    && typeof entry.id === 'string' && typeof entry.performerId === 'string'
+    && (typeof entry.code === 'string' || entry.code === null)
+    && typeof entry.title === 'string' && Array.isArray(entry.aliases)
+    && entry.aliases.every((alias) => typeof alias === 'string')
+    && typeof entry.status === 'string' && typeof entry.requestCount === 'number'
+    && typeof entry.performedCount === 'number'
+    ? [entry as PerformerSongEntry] : [])
+}
+
+function parseSongImportRows(value: string): Array<{ code: string | null; title: string; aliases: string[] }> {
+  const rows = value.split(/\r?\n/).map((row) => row.trim()).filter(Boolean)
+  if (rows.length > 5000) throw new Error('单次最多导入5000首歌曲')
+  return rows.map((row, index) => {
+    const columns = row.split('|').map((column) => column.trim())
+    if (columns.length < 2 || columns.length > 3) throw new Error(`第${index + 1}行格式不正确`)
+    const [code = '', title = '', aliasText = ''] = columns
+    if (title.length < 1 || title.length > 240) throw new Error(`第${index + 1}行歌名不能为空且不能超过240字`)
+    if (code.length > 64) throw new Error(`第${index + 1}行编号不能超过64字`)
+    const aliases = aliasText.split(/[，,]/).map((alias) => alias.trim()).filter(Boolean)
+    return { code: code || null, title, aliases }
+  })
 }
 
 function inventoryView(value: unknown): InventoryView | null {
@@ -370,10 +796,32 @@ function employeeSales(value: unknown): EmployeeSalesView[] {
     && typeof item.currency === 'string' ? [item as unknown as EmployeeSalesView] : [])
 }
 
+function commercePolicyView(value: unknown): CommercePolicyView | null {
+  if (!isRecord(value)
+    || typeof value.configured !== 'boolean'
+    || typeof value.policyOnlinePaymentEnabled !== 'boolean'
+    || typeof value.onlinePaymentEnabled !== 'boolean'
+    || typeof value.providerConfigured !== 'boolean'
+    || !(value.provider === 'postar' || value.provider === 'simulation' || value.provider === null)
+    || typeof value.paymentReservationMinutes !== 'number'
+    || !Number.isSafeInteger(value.paymentReservationMinutes)
+    || value.paymentReservationMinutes < 2
+    || value.paymentReservationMinutes > 30
+    || typeof value.policyVersion !== 'number'
+    || !(typeof value.reason === 'string' || value.reason === null)
+    || !(typeof value.updatedAt === 'string' || value.updatedAt === null)) return null
+  return value as CommercePolicyView
+}
+
 function formatAmount(value: number): string { return (Math.abs(value) / 100).toFixed(2) }
 function formatSignedAmount(value: number): string { return `${value < 0 ? '-' : ''}${formatAmount(value)}` }
 function formatTime(value: string): string {
   return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value))
+}
+function formatDateTime(value: string): string {
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(new Date(value))
 }
 function performancePhase(value: string | undefined): string {
   return ({ no_schedule: '今日暂无演出', upcoming: '演出尚未开始', live: '正在演出', between: '演出换场中', ended: '今日演出已结束' } as Record<string, string>)[value ?? ''] ?? '演出状态待确认'
@@ -382,4 +830,10 @@ function scheduleStatus(value: string): string { return ({ scheduled: '待演出
 function songStatus(value: string): string { return ({ requested: '待确认', accepted: '已接受', rejected: '未接受', paid: '已收费', performed: '已演唱', cancelled: '已取消' } as Record<string, string>)[value] ?? '状态待确认' }
 function hardwareType(value: string): string { return ({ printer: '打印机', kds_display: '出品屏', cash_drawer: '钱箱', headset: '耳机', controller: '控制器' } as Record<string, string>)[value] ?? '其他设备' }
 function connectivityLabel(value: string): string { return ({ online: '在线', offline: '离线', degraded: '需检查', unknown: '未检测' } as Record<string, string>)[value] ?? '未检测' }
+function operationIdempotency(scope: string): string { return `${scope}-${crypto.randomUUID()}` }
+function localDateTimeIso(value: string): string {
+  const instant = new Date(value)
+  if (value.trim() === '' || !Number.isFinite(instant.getTime())) throw new TypeError('请填写有效的演出时间')
+  return instant.toISOString()
+}
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value) }

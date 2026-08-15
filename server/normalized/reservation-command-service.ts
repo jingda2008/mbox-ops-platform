@@ -53,9 +53,24 @@ export class ReservationCommandService {
       const anonymous = input.anonymousCustomer === undefined
         ? null
         : await new CustomerRepository(transaction).createAnonymous(input.anonymousCustomer)
+      const policy = input.arrivalGraceEndsAt !== undefined && input.reservationPolicyVersion !== undefined
+        ? null
+        : await transaction.query<{ policy_version: number; arrival_grace_minutes: number }>(`
+          SELECT policy_version, arrival_grace_minutes
+          FROM mbox.public_reservation_policies
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+          FOR KEY SHARE
+        `, [transaction.scope.tenantId, transaction.scope.storeId])
+      const policyRow = policy?.rows[0]
+      if (policy !== null && policyRow === undefined) throw new Error('Reservation policy is not configured')
       const reservation = await new ReservationRepository(transaction).create({
         ...input,
         customerId: input.customerId ?? anonymous?.customer.id ?? null,
+        requestHoldExpiresAt: input.requestHoldExpiresAt ?? input.holdExpiresAt ?? null,
+        arrivalGraceEndsAt: input.arrivalGraceEndsAt ?? new Date(
+          Date.parse(input.arrivalAt) + (policyRow?.arrival_grace_minutes ?? 10) * 60_000,
+        ).toISOString(),
+        reservationPolicyVersion: input.reservationPolicyVersion ?? policyRow?.policy_version ?? 1,
       })
       const auditEvents = []
       const outboxMessages = []
@@ -187,6 +202,9 @@ function reservationToJson(reservation: Reservation): JsonObject {
     aggregateVersion: reservation.aggregateVersion,
     customerCancelUntil: reservation.customerCancelUntil,
     cancellationPolicySnapshot: reservation.cancellationPolicySnapshot,
+    requestHoldExpiresAt: reservation.requestHoldExpiresAt,
+    arrivalGraceEndsAt: reservation.arrivalGraceEndsAt,
+    reservationPolicyVersion: reservation.reservationPolicyVersion,
     tableLocks: reservation.tableLocks.map((lock) => ({
       id: lock.id,
       reservationId: lock.reservationId,

@@ -101,8 +101,10 @@ describe('NotificationRepository', () => {
       channel: 'wechat',
       recipient: { type: 'customer', id: customerId },
     })).rejects.toThrow('has not consented')
-    expect(transaction.calls[1]?.sql).toContain('consent_snapshot')
-    expect(transaction.calls[1]?.values[3]).toBe('wechatNotifications')
+    expect(transaction.calls[1]?.sql).toContain('customer_notification_consents')
+    expect(transaction.calls[1]?.sql).toContain("consent.purpose = 'transactional_service'")
+    expect(transaction.calls[1]?.sql).not.toContain('consent_snapshot')
+    expect(transaction.calls[1]?.values[3]).toBe('wechat')
   })
 
   it('rejects incompatible channel recipients and direct personal or secret data', async () => {

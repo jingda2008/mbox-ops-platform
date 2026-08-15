@@ -1,6 +1,6 @@
-import { writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
 const SCHEMA_VERSION = 'normalized-load-acceptance-v2'
@@ -845,7 +845,11 @@ async function main() {
   })
   const rendered = `${JSON.stringify(report, null, 2)}\n`
   const output = args.output ?? process.env.OUTPUT_FILE
-  if (output) await writeFile(resolve(output), rendered, { encoding: 'utf8', mode: 0o600 })
+  if (output) {
+    const outputPath = resolve(output)
+    await mkdir(dirname(outputPath), { recursive: true })
+    await writeFile(outputPath, rendered, { encoding: 'utf8', mode: 0o600 })
+  }
   process.stdout.write(rendered)
   if (!report.gate.passed) process.exitCode = 1
 }

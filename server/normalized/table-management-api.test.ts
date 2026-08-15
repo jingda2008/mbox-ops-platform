@@ -89,6 +89,44 @@ describe('table management API', () => {
       status: 'available',
     })])
   })
+
+  it('publishes a multi-table responsibility roster through one batch command', async () => {
+    const secondTableId = '55555555-5555-4555-8555-555555555555'
+    const roleId = '66666666-6666-4666-8666-666666666666'
+    const commands = commandPort()
+    commands.assignMany.mockResolvedValue({
+      replayed: false,
+      value: { id: '77777777-7777-4777-8777-777777777777', assignments: [] },
+    })
+    const app = await build(commands)
+    const response = await app.inject({
+      method: 'POST',
+      url: '/table-management/assignments/batch',
+      headers: { 'x-idempotency-key': 'assign-liyan-area-001' },
+      payload: {
+        tableIds: [tableId, secondTableId], employeeId, roleId,
+        assignmentType: 'primary', startsAt: '2026-08-15T11:00:00+08:00',
+        endsAt: '2026-08-15T23:00:00+08:00', reason: '李艳负责室外区晚班服务',
+      },
+    })
+
+    expect(response.statusCode).toBe(201)
+    expect(commands.assignMany).toHaveBeenCalledWith(expect.objectContaining({
+      tableIds: [tableId, secondTableId], employeeId, roleId,
+      assignmentType: 'primary', reason: '李艳负责室外区晚班服务',
+    }))
+  })
+
+  it('only exposes employee and role assignment options to configured managers', async () => {
+    const app = await build(commandPort(), scriptedTransaction(['table.assignment.manage']))
+    const response = await app.inject({ method: 'GET', url: '/table-management/assignment-options' })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json().data).toEqual({
+      employees: [{ id: employeeId, code: 'liyan', displayName: '李艳' }],
+      roles: [{ id: '66666666-6666-4666-8666-666666666666', code: 'WAITER', name: '服务员' }],
+    })
+  })
 })
 
 async function build(commands = commandPort(), transaction = scriptedTransaction()) {
@@ -112,11 +150,11 @@ async function build(commands = commandPort(), transaction = scriptedTransaction
 function commandPort() {
   return {
     createArea: vi.fn(), updateArea: vi.fn(), createTable: vi.fn(), updateTable: vi.fn(),
-    assign: vi.fn(), endAssignment: vi.fn(), open: vi.fn(), transfer: vi.fn(),
+    assign: vi.fn(), assignMany: vi.fn(), endAssignment: vi.fn(), open: vi.fn(), transfer: vi.fn(),
   }
 }
 
-function scriptedTransaction(): ScopedTransaction {
+function scriptedTransaction(permissionCodes: string[] = ['table.open']): ScopedTransaction {
   return {
     scope: { tenantId, storeId },
     query: async <Row extends Record<string, unknown>>(sql: string) => {
@@ -124,16 +162,18 @@ function scriptedTransaction(): ScopedTransaction {
       let rows: Record<string, unknown>[]
       if (normalized.includes('FROM mbox.employees')) {
         rows = [{ id: employeeId, employee_code: 'liyan', display_name: '李艳', status: 'active' }]
+      } else if (normalized.includes('permission_facts')) {
+        rows = permissionCodes.map((code) => ({ code, role_granted: true, override_granted: false, override_denied: false }))
       } else if (normalized.includes('FROM mbox.employee_roles')) {
         rows = [{ code: 'STORE_MANAGER', name: '店长' }]
-      } else if (normalized.includes('permission_facts')) {
-        rows = [{ code: 'table.open', role_granted: true, override_granted: false, override_denied: false }]
       } else if (normalized.includes('FROM mbox.role_data_scopes')) {
         rows = []
       } else if (normalized.includes('FROM mbox.role_approval_limits')) {
         rows = []
       } else if (normalized.includes('FROM mbox.role_navigation_items')) {
         rows = []
+      } else if (normalized.includes('FROM mbox.roles')) {
+        rows = [{ id: '66666666-6666-4666-8666-666666666666', code: 'WAITER', name: '服务员' }]
       } else if (normalized.includes('FROM mbox.tables AS venue_table')) {
         rows = [{
           id: tableId, area_id: '55555555-5555-4555-8555-555555555555',

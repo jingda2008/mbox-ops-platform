@@ -21,6 +21,10 @@ import {
 import { KDS_PRIORITY_OVERRIDE_CAPABILITY } from './kds-authorization-policy.js'
 import { KdsRepository, type KdsTask } from './kds-repository.js'
 import {
+  PaymentFulfillmentRepository,
+  buildFulfillmentPlan,
+} from './payment-fulfillment-repository.js'
+import {
   OrderRepository,
   type CreateSubmittedOrderInput,
   type SubmittedOrder,
@@ -117,31 +121,46 @@ export class CommerceCommandService {
       if (pricingAuthorization) await this.pricingPolicy!.consume(transaction, pricingAuthorization, order.id)
 
       const inventoryEnforcementMode = this.options.inventoryEnforcementMode ?? 'strict'
-      const inventoryConsumptions = await new InventoryRepository(transaction).consumeForOrderItems(
-        order.items,
+      const fulfillmentPlan = buildFulfillmentPlan(order.items, schedulingOverride)
+      const inventoryReservations = await new PaymentFulfillmentRepository(transaction).prepareSubmittedOrder(
+        order,
         {
-          createdByEmployeeId: input.createdByEmployeeId ?? null,
-          reason: 'order submitted',
-          metadata: {
-            orderId: order.id,
-            orderPublicId: order.publicId,
-            pricingAuthorizationId: pricingAuthorization?.authorizationId ?? null,
-            assistedOrderContextId: context.assistedContextId,
-          },
+          ...fulfillmentPlan,
+          overrideReason: schedulingOverride?.reason ?? null,
           allowMissingRecipes: inventoryEnforcementMode === 'audit_only',
         },
       )
-      const consumedOrderItemIds = new Set(inventoryConsumptions.map((item) => item.orderItemId))
+      const inventoryMetadata = {
+        orderId: order.id,
+        orderPublicId: order.publicId,
+        pricingAuthorizationId: pricingAuthorization?.authorizationId ?? null,
+        assistedOrderContextId: context.assistedContextId,
+      }
+      const inventoryConsumptions = order.settlementMode === 'immediate_payment'
+        ? []
+        : await new InventoryRepository(transaction).consumeForOrderItems(order.items, {
+            createdByEmployeeId: input.createdByEmployeeId ?? null,
+            reason: 'order submitted for deferred settlement',
+            metadata: inventoryMetadata,
+            allowMissingRecipes: inventoryEnforcementMode === 'audit_only',
+          })
+      const inventoryEvidenceOrderItemIds = new Set([
+        ...inventoryReservations.map((item) => item.orderItemId),
+        ...inventoryConsumptions.map((item) => item.orderItemId),
+      ])
       const unconfiguredInventoryOrderItemIds = order.items
         .filter((item) => (item.fulfillmentStation === 'bar' || item.fulfillmentStation === 'kitchen')
-          && !consumedOrderItemIds.has(item.id))
+          && !inventoryEvidenceOrderItemIds.has(item.id))
         .map((item) => item.id)
       const inventoryControl = {
         enforcementMode: inventoryEnforcementMode,
         configurationComplete: unconfiguredInventoryOrderItemIds.length === 0,
         unconfiguredOrderItemIds: unconfiguredInventoryOrderItemIds,
+        reservationCount: inventoryReservations.length,
       } as const
-      const kdsTasks = await createServerScheduledKdsTasks(transaction, order, schedulingOverride)
+      const kdsTasks = order.settlementMode === 'immediate_payment'
+        ? []
+        : await createServerScheduledKdsTasks(transaction, order, fulfillmentPlan)
       const result: SubmittedCommerceResult = {
         order,
         kdsTasks,
@@ -225,24 +244,20 @@ async function authorizeKdsOverride(
 async function createServerScheduledKdsTasks(
   transaction: ScopedTransaction,
   order: SubmittedOrder,
-  override?: Readonly<KdsSchedulingOverride>,
+  plan: Readonly<ReturnType<typeof buildFulfillmentPlan>>,
 ): Promise<KdsTask[]> {
   const repository = new KdsRepository(transaction)
   const tasks: KdsTask[] = []
   for (const item of order.items) {
     if (item.fulfillmentStation === 'none') continue
-    const source = jsonObject(item.productSnapshot.source)
-    const defaultPriority = configuredInteger(source.kdsPriority, 0, 1_000) ?? 100
-    const defaultSeconds = configuredInteger(source.fulfillmentSlaSeconds, 30, 4 * 60 * 60)
-      ?? defaultSlaSeconds(item.fulfillmentStation)
-    const dueAt = override?.dueAt !== undefined
-      ? override.dueAt
-      : new Date(Date.now() + defaultSeconds * 1_000).toISOString()
+    const priority = plan.priorityByOrderItemId.get(item.id)
+    const dueAt = plan.dueAtByOrderItemId.get(item.id)
+    if (priority === undefined || dueAt === undefined) throw new Error(`Fulfillment plan is missing for ${item.id}`)
     tasks.push(normalizeKdsTaskDates(await repository.create({
       orderItemId: item.id,
       stationCode: item.fulfillmentStation,
       quantity: item.quantity,
-      priority: override?.priority ?? defaultPriority,
+      priority,
       dueAt,
       eventIdempotencyKey: `created:${item.id}:${item.fulfillmentStation}`,
     })))
@@ -265,12 +280,6 @@ function timestampText(value: unknown): string | null {
   if (value === null || value === undefined) return null
   if (value instanceof Date) return value.toISOString()
   return String(value)
-}
-
-function defaultSlaSeconds(station: 'bar' | 'kitchen' | 'cashier'): number {
-  if (station === 'bar') return 5 * 60
-  if (station === 'kitchen') return 10 * 60
-  return 2 * 60
 }
 
 function paymentNextStep(order: SubmittedOrder): PaymentNextStep {
@@ -317,6 +326,7 @@ function orderAuditSnapshot(
     enforcementMode: 'strict' | 'audit_only'
     configurationComplete: boolean
     unconfiguredOrderItemIds: readonly string[]
+    reservationCount: number
   }>,
 ): JsonObject {
   return {
@@ -339,6 +349,7 @@ function orderAuditSnapshot(
       enforcementMode: inventoryControl.enforcementMode,
       configurationComplete: inventoryControl.configurationComplete,
       unconfiguredOrderItemIds: [...inventoryControl.unconfiguredOrderItemIds],
+      reservationCount: inventoryControl.reservationCount,
     } : null,
     assistedOrderContextId: context.assistedContextId,
     kdsOverrideReason: schedulingOverride?.reason ?? null,
@@ -355,6 +366,7 @@ function orderOutboxPayload(
     enforcementMode: 'strict' | 'audit_only'
     configurationComplete: boolean
     unconfiguredOrderItemIds: readonly string[]
+    reservationCount: number
   }>,
 ): JsonObject {
   return {
@@ -366,6 +378,7 @@ function orderOutboxPayload(
       enforcementMode: inventoryControl.enforcementMode,
       configurationComplete: inventoryControl.configurationComplete,
       unconfiguredOrderItemIds: [...inventoryControl.unconfiguredOrderItemIds],
+      reservationCount: inventoryControl.reservationCount,
     } : null,
     assistedOrderContextId: context.assistedContextId,
     tableCode: context.tableCode,
@@ -405,6 +418,8 @@ function orderToJson(order: SubmittedOrder): JsonObject {
       totalAmountMinor: item.totalAmountMinor,
       currency: item.currency,
       fulfillmentStation: item.fulfillmentStation,
+      fulfillmentPriority: item.fulfillmentPriority ?? 100,
+      fulfillmentDueAt: item.fulfillmentDueAt ?? null,
       productSnapshot: item.productSnapshot,
       costSnapshot: item.costSnapshot,
       status: item.status,
@@ -557,16 +572,6 @@ function isPaymentNextStep(value: unknown): value is PaymentNextStep {
     && typeof next.currency === 'string'
 }
 
-function jsonObject(value: unknown): JsonObject {
-  return jsonObjectOrNull(value) ? value : {}
-}
-
 function jsonObjectOrNull(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function configuredInteger(value: unknown, minimum: number, maximum: number): number | null {
-  return Number.isInteger(value) && Number(value) >= minimum && Number(value) <= maximum
-    ? Number(value)
-    : null
 }

@@ -2,6 +2,9 @@ import type {
   StaffFulfillmentData,
   StaffOperationsData,
   StaffReservation,
+  StaffTableAssignment,
+  StaffTableAssignmentOptions,
+  StaffTableAssignmentType,
 } from './types'
 import type { OnlinePaymentAction } from '../../shared/online-payment-contracts'
 
@@ -84,6 +87,18 @@ export interface StaffActionsApiPort {
   loadOperations(signal?: AbortSignal): Promise<StaffOperationsData>
   loadFulfillment(signal?: AbortSignal): Promise<StaffFulfillmentData>
   loadReservations(signal?: AbortSignal): Promise<StaffReservation[]>
+  loadTableAssignments(signal?: AbortSignal): Promise<StaffTableAssignment[]>
+  loadTableAssignmentOptions(signal?: AbortSignal): Promise<StaffTableAssignmentOptions>
+  assignTables(input: Readonly<{
+    tableIds: string[]
+    employeeId: string
+    roleId: string
+    assignmentType: StaffTableAssignmentType
+    startsAt: string
+    endsAt?: string | null
+    reason: string
+  }>): Promise<void>
+  endTableAssignment(assignmentId: string, reason: string): Promise<void>
   openTable(input: Readonly<{
     tableId: string
     guestCount: number
@@ -148,6 +163,34 @@ export class StaffActionsApi implements StaffActionsApiPort {
 
   loadReservations(signal?: AbortSignal): Promise<StaffReservation[]> {
     return this.getData('/api/staff/reservations', signal)
+  }
+
+  loadTableAssignments(signal?: AbortSignal): Promise<StaffTableAssignment[]> {
+    return this.getData('/api/table-management/assignments', signal)
+  }
+
+  loadTableAssignmentOptions(signal?: AbortSignal): Promise<StaffTableAssignmentOptions> {
+    return this.getData('/api/table-management/assignment-options', signal)
+  }
+
+  async assignTables(input: Readonly<{
+    tableIds: string[]
+    employeeId: string
+    roleId: string
+    assignmentType: StaffTableAssignmentType
+    startsAt: string
+    endsAt?: string | null
+    reason: string
+  }>): Promise<void> {
+    await this.command('/api/table-management/assignments/batch', input, 'x-idempotency-key')
+  }
+
+  async endTableAssignment(assignmentId: string, reason: string): Promise<void> {
+    await this.command(
+      `/api/table-management/assignments/${encodeURIComponent(assignmentId)}/end`,
+      { endsAt: new Date().toISOString(), reason },
+      'x-idempotency-key',
+    )
   }
 
   async openTable(input: Readonly<{

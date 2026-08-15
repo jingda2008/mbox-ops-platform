@@ -1,4 +1,5 @@
 import type { JsonObject } from './command-executor.js'
+import { PerformerSongRepository, type PerformerSongInput } from './performer-song-repository.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
 export type PerformerStatus = 'active' | 'inactive'
@@ -42,8 +43,25 @@ interface PerformerRow extends Record<string, unknown> {
 }
 
 const PERFORMER_COLUMNS = `
-  id, code, stage_name, profile_snapshot, song_catalog, status,
-  created_at::text, updated_at::text
+  performer.id, performer.code, performer.stage_name, performer.profile_snapshot,
+  COALESCE((
+    SELECT jsonb_agg(
+      song.metadata || jsonb_strip_nulls(jsonb_build_object(
+        'code', song.code,
+        'title', song.title,
+        'aliases', COALESCE((
+          SELECT jsonb_agg(alias.alias ORDER BY alias.alias)
+          FROM mbox.performer_song_aliases alias
+          WHERE alias.tenant_id=song.tenant_id AND alias.store_id=song.store_id
+            AND alias.song_id=song.id
+        ), '[]'::jsonb)
+      )) ORDER BY song.title, song.id
+    )
+    FROM mbox.performer_songs song
+    WHERE song.tenant_id=performer.tenant_id AND song.store_id=performer.store_id
+      AND song.performer_id=performer.id AND song.status='active'
+  ), '[]'::jsonb) AS song_catalog,
+  performer.status, performer.created_at::text, performer.updated_at::text
 `
 
 export class PerformerNotFoundError extends Error {
@@ -60,8 +78,8 @@ export class PerformerRepository {
     const lock = forUpdate ? 'FOR UPDATE' : ''
     const result = await this.transaction.query<PerformerRow>(`
       SELECT ${PERFORMER_COLUMNS}
-      FROM mbox.performers
-      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
+      FROM mbox.performers performer
+      WHERE performer.tenant_id = $1::uuid AND performer.store_id = $2::uuid AND performer.id = $3::uuid
       ${lock}
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, id])
     return result.rows[0] === undefined ? null : mapPerformer(result.rows[0])
@@ -70,32 +88,42 @@ export class PerformerRepository {
   async listActive(): Promise<Performer[]> {
     const result = await this.transaction.query<PerformerRow>(`
       SELECT ${PERFORMER_COLUMNS}
-      FROM mbox.performers
-      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND status = 'active'
-      ORDER BY stage_name, code, id
+      FROM mbox.performers performer
+      WHERE performer.tenant_id = $1::uuid AND performer.store_id = $2::uuid AND performer.status = 'active'
+      ORDER BY performer.stage_name, performer.code, performer.id
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId])
     return result.rows.map(mapPerformer)
   }
 
   async create(input: Readonly<CreatePerformerInput>): Promise<Performer> {
     validateCreate(input)
-    const inserted = await this.transaction.query<PerformerRow>(`
+    const inserted = await this.transaction.query<{ id: string }>(`
       INSERT INTO mbox.performers (
-        tenant_id, store_id, code, stage_name, profile_snapshot, song_catalog, status
+        tenant_id, store_id, code, stage_name, profile_snapshot, status
       ) VALUES (
-        $1::uuid, $2::uuid, $3, $4, $5::jsonb, $6::jsonb, $7
+        $1::uuid, $2::uuid, $3, $4, $5::jsonb, $6
       )
-      RETURNING ${PERFORMER_COLUMNS}
+      RETURNING id
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
       input.code.trim(),
       input.stageName.trim(),
       JSON.stringify(input.profileSnapshot ?? {}),
-      JSON.stringify(input.songCatalog ?? []),
       input.status ?? 'active',
     ])
-    return mapPerformer(requireOne(inserted, 'performer insert'))
+    const performerId = requireOne(inserted, 'performer insert').id
+    if ((input.songCatalog?.length ?? 0) > 0) {
+      await new PerformerSongRepository(this.transaction).import({
+        performerId,
+        sourceName: 'performer compatibility create',
+        mode: 'replace',
+        songs: catalogInputs(input.songCatalog ?? []),
+      })
+    }
+    const created = await this.findById(performerId)
+    if (created === null) throw new Error('performer insert could not be reloaded')
+    return created
   }
 
   async update(input: Readonly<UpdatePerformerInput>): Promise<Performer> {
@@ -103,14 +131,14 @@ export class PerformerRepository {
     const current = await this.findById(input.performerId, true)
     if (current === null) throw new PerformerNotFoundError(input.performerId)
 
-    const updated = await this.transaction.query<PerformerRow>(`
+    await this.transaction.query<{ id: string }>(`
       UPDATE mbox.performers
       SET stage_name = CASE WHEN $4::boolean THEN $5 ELSE stage_name END,
           profile_snapshot = CASE WHEN $6::boolean THEN $7::jsonb ELSE profile_snapshot END,
-          song_catalog = CASE WHEN $8::boolean THEN $9::jsonb ELSE song_catalog END,
-          status = COALESCE($10, status)
+          status = COALESCE($8, status),
+          updated_at = clock_timestamp()
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
-      RETURNING ${PERFORMER_COLUMNS}
+      RETURNING id
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -119,11 +147,19 @@ export class PerformerRepository {
       input.stageName?.trim() ?? null,
       input.profileSnapshot !== undefined,
       JSON.stringify(input.profileSnapshot ?? {}),
-      input.songCatalog !== undefined,
-      JSON.stringify(input.songCatalog ?? []),
       input.status ?? null,
     ])
-    return mapPerformer(requireOne(updated, 'performer update'))
+    if (input.songCatalog !== undefined) {
+      await new PerformerSongRepository(this.transaction).import({
+        performerId: input.performerId,
+        sourceName: 'performer compatibility update',
+        mode: 'replace',
+        songs: catalogInputs(input.songCatalog),
+      })
+    }
+    const updated = await this.findById(input.performerId)
+    if (updated === null) throw new PerformerNotFoundError(input.performerId)
+    return updated
   }
 }
 
@@ -172,6 +208,18 @@ export function validateSongCatalog(catalog: readonly JsonObject[]): void {
       throw new TypeError(`Song catalog item ${index} aliases are invalid`)
     }
   }
+}
+
+function catalogInputs(catalog: readonly JsonObject[]): PerformerSongInput[] {
+  return catalog.map((song) => {
+    const { code, title, aliases, ...metadata } = song
+    return {
+      code: typeof code === 'string' ? code : null,
+      title: typeof title === 'string' ? title : '',
+      aliases: Array.isArray(aliases) ? aliases.filter((value): value is string => typeof value === 'string') : [],
+      metadata,
+    }
+  })
 }
 
 function mapPerformer(row: PerformerRow): Performer {

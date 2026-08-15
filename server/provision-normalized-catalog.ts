@@ -3,6 +3,12 @@ import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Client } from 'pg'
+import type { JsonObject } from './normalized/command-executor.js'
+import {
+  extractProductOperationalFields,
+  hydrateProductSnapshot,
+  type ProductOperationalFields,
+} from './normalized/product-operational-fields.js'
 
 export interface NormalizedCatalogProduct {
   sku: string
@@ -105,8 +111,8 @@ export async function provisionNormalizedCatalog(input: {
     const schema = await client.query<{ schema_flavor: string; schema_version: string }>(
       'SELECT schema_flavor, schema_version FROM mbox.normalized_schema_metadata WHERE singleton=true',
     )
-    if (schema.rows[0]?.schema_flavor !== 'normalized-core-v1' || Number(schema.rows[0]?.schema_version ?? 0) < 34) {
-      throw new Error('Normalized schema 034 or later is required')
+    if (schema.rows[0]?.schema_flavor !== 'normalized-core-v1' || Number(schema.rows[0]?.schema_version ?? 0) < 44) {
+      throw new Error('Normalized schema 044 or later is required')
     }
     const store = await client.query<{ currency: string }>(`
       SELECT currency FROM mbox.stores WHERE tenant_id=$1 AND id=$2 AND status='active' FOR UPDATE`, [
@@ -138,14 +144,55 @@ export async function provisionNormalizedCatalog(input: {
     const productIds = new Map<string, string>()
     const preferredIds = new Map<string, string>()
     for (const product of input.catalog.products) {
+      const operational = extractProductOperationalFields(snapshotWithoutUpgrade(product.snapshot) as JsonObject, {
+        code: product.sku,
+        name: product.name,
+      })
       const result = await client.query<{ id: string }>(`INSERT INTO mbox.products(
-          tenant_id, store_id, code, name, category_code, fulfillment_station, product_kind, product_snapshot, status)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9)
+          tenant_id, store_id, code, name, category_code, fulfillment_station, product_kind,
+          product_snapshot, status, guest_visible, search_text, recommendation_enabled,
+          recommendation_min_guests, recommendation_max_guests, recommendation_priority,
+          recommendation_scene_tags, recommendation_intent_tags, recommendation_taste_tags,
+          recommendation_dwell_tags, recommendation_single_wave_eligible,
+          recommendation_expected_prep_minutes, recommendation_hold_minutes,
+          recommendation_upgrade_product_id, menu_sort_order, available_from, available_until,
+          allowed_channels, max_order_quantity, kds_priority, fulfillment_sla_seconds, cost_amount_minor)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,
+          $16::text[],$17::text[],$18::text[],$19::text[],$20,$21,$22,$23::uuid,
+          $24,$25::time,$26::time,$27::text[],$28,$29,$30,$31)
         ON CONFLICT (tenant_id, store_id, code) DO UPDATE SET name=EXCLUDED.name,
           category_code=EXCLUDED.category_code, fulfillment_station=EXCLUDED.fulfillment_station,
-          product_kind=EXCLUDED.product_kind, product_snapshot=EXCLUDED.product_snapshot, status=EXCLUDED.status
+          product_kind=EXCLUDED.product_kind, product_snapshot=EXCLUDED.product_snapshot, status=EXCLUDED.status,
+          guest_visible=EXCLUDED.guest_visible, search_text=EXCLUDED.search_text,
+          recommendation_enabled=EXCLUDED.recommendation_enabled,
+          recommendation_min_guests=EXCLUDED.recommendation_min_guests,
+          recommendation_max_guests=EXCLUDED.recommendation_max_guests,
+          recommendation_priority=EXCLUDED.recommendation_priority,
+          recommendation_scene_tags=EXCLUDED.recommendation_scene_tags,
+          recommendation_intent_tags=EXCLUDED.recommendation_intent_tags,
+          recommendation_taste_tags=EXCLUDED.recommendation_taste_tags,
+          recommendation_dwell_tags=EXCLUDED.recommendation_dwell_tags,
+          recommendation_single_wave_eligible=EXCLUDED.recommendation_single_wave_eligible,
+          recommendation_expected_prep_minutes=EXCLUDED.recommendation_expected_prep_minutes,
+          recommendation_hold_minutes=EXCLUDED.recommendation_hold_minutes,
+          recommendation_upgrade_product_id=EXCLUDED.recommendation_upgrade_product_id,
+          menu_sort_order=EXCLUDED.menu_sort_order, available_from=EXCLUDED.available_from,
+          available_until=EXCLUDED.available_until, allowed_channels=EXCLUDED.allowed_channels,
+          max_order_quantity=EXCLUDED.max_order_quantity, kds_priority=EXCLUDED.kds_priority,
+          fulfillment_sla_seconds=EXCLUDED.fulfillment_sla_seconds,
+          cost_amount_minor=EXCLUDED.cost_amount_minor, updated_at=clock_timestamp()
         RETURNING id`, [input.tenantId, input.storeId, product.sku, product.name, product.categoryId,
-      station(product), product.productKind, JSON.stringify(product.snapshot), status(product)])
+      station(product), product.productKind, JSON.stringify(compatibilitySnapshot(operational)), status(product),
+      operational.guestVisible, operational.searchText, operational.recommendationEnabled,
+      operational.recommendationMinGuests, operational.recommendationMaxGuests,
+      operational.recommendationPriority, operational.recommendationSceneTags,
+      operational.recommendationIntentTags, operational.recommendationTasteTags,
+      operational.recommendationDwellTags, operational.recommendationSingleWaveEligible,
+      operational.recommendationExpectedPrepMinutes, operational.recommendationHoldMinutes,
+      operational.recommendationUpgradeProductId, operational.menuSortOrder,
+      operational.availableFrom, operational.availableUntil, operational.allowedChannels,
+      operational.maxOrderQuantity, operational.kdsPriority, operational.fulfillmentSlaSeconds,
+      operational.costAmountMinor])
       const id = result.rows[0]?.id
       if (!id) throw new Error(`Unable to provision product ${product.sku}`)
       productIds.set(product.sku, id)
@@ -161,8 +208,29 @@ export async function provisionNormalizedCatalog(input: {
     for (const product of input.catalog.products) {
       const productId = productIds.get(product.sku)
       const snapshot = translateSnapshot(product.snapshot, preferredIds)
-      await client.query('UPDATE mbox.products SET product_snapshot=$4::jsonb WHERE tenant_id=$1 AND store_id=$2 AND id=$3', [
-        input.tenantId, input.storeId, productId, JSON.stringify(snapshot),
+      const operational = extractProductOperationalFields(snapshot as JsonObject, { code: product.sku, name: product.name })
+      await client.query(`UPDATE mbox.products SET product_snapshot=$4::jsonb,
+        guest_visible=$5, search_text=$6, recommendation_enabled=$7,
+        recommendation_min_guests=$8, recommendation_max_guests=$9, recommendation_priority=$10,
+        recommendation_scene_tags=$11::text[], recommendation_intent_tags=$12::text[],
+        recommendation_taste_tags=$13::text[], recommendation_dwell_tags=$14::text[],
+        recommendation_single_wave_eligible=$15, recommendation_expected_prep_minutes=$16,
+        recommendation_hold_minutes=$17, recommendation_upgrade_product_id=$18::uuid,
+        menu_sort_order=$19, available_from=$20::time, available_until=$21::time,
+        allowed_channels=$22::text[], max_order_quantity=$23, kds_priority=$24,
+        fulfillment_sla_seconds=$25, cost_amount_minor=$26
+        WHERE tenant_id=$1 AND store_id=$2 AND id=$3`, [
+        input.tenantId, input.storeId, productId, JSON.stringify(compatibilitySnapshot(operational)),
+        operational.guestVisible, operational.searchText, operational.recommendationEnabled,
+        operational.recommendationMinGuests, operational.recommendationMaxGuests,
+        operational.recommendationPriority, operational.recommendationSceneTags,
+        operational.recommendationIntentTags, operational.recommendationTasteTags,
+        operational.recommendationDwellTags, operational.recommendationSingleWaveEligible,
+        operational.recommendationExpectedPrepMinutes, operational.recommendationHoldMinutes,
+        operational.recommendationUpgradeProductId, operational.menuSortOrder,
+        operational.availableFrom, operational.availableUntil, operational.allowedChannels,
+        operational.maxOrderQuantity, operational.kdsPriority, operational.fulfillmentSlaSeconds,
+        operational.costAmountMinor,
       ])
       await client.query(`UPDATE mbox.product_prices SET valid_until=$5::timestamptz
         WHERE tenant_id=$1 AND store_id=$2 AND product_id=$3 AND price_type='standard' AND currency=$4
@@ -268,6 +336,18 @@ function translateSnapshot(snapshot: Record<string, unknown>, preferredIds: Read
     ))
   }
   return translated
+}
+
+function snapshotWithoutUpgrade(snapshot: Record<string, unknown>): Record<string, unknown> {
+  const prepared = structuredClone(snapshot)
+  const recommendation = recordOrNull(prepared.recommendation)
+  if (recommendation) recommendation.upgradeProductId = null
+  return prepared
+}
+
+function compatibilitySnapshot(fields: Readonly<ProductOperationalFields>): JsonObject {
+  const { displaySnapshot, ...operational } = fields
+  return hydrateProductSnapshot(displaySnapshot, operational)
 }
 
 function station(product: NormalizedCatalogProduct): 'bar' | 'kitchen' | 'none' {

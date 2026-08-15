@@ -349,7 +349,7 @@
 }
 .staff-access-state.is-error { color: #8b3339; }
 .staff-access-state span { font-size: 12px; }
-.staff-access-state button { min-height: 38px; padding: 0 13px; border: 1px solid currentColor; border-radius: 5px; background: #fff; color: inherit; }
+.staff-access-state button { min-height: 44px; padding: 0 13px; border: 1px solid currentColor; border-radius: 5px; background: #fff; color: inherit; }
 
 @media (max-width: 640px) {
   .staff-access-management { padding: 8px; }

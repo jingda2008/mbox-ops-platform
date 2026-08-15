@@ -855,6 +855,11 @@ async function seedApiScope(pool: Pool, input: {
     VALUES ($1, $2, $3, 'API Scope Store', 'Asia/Shanghai', '06:00')
   `, [input.storeId, input.tenantId, `api-scope-${suffix}`])
   await pool.query(`
+    INSERT INTO mbox.public_reservation_policies (
+      tenant_id, store_id, hold_minutes, arrival_grace_minutes
+    ) VALUES ($1, $2, 20, 10)
+  `, [input.tenantId, input.storeId])
+  await pool.query(`
     INSERT INTO mbox.areas(id, tenant_id, store_id, code, name, area_type) VALUES
       ($1, $3, $4, 'AREA_A', 'Area A', 'indoor'),
       ($2, $3, $4, 'AREA_B', 'Area B', 'indoor')

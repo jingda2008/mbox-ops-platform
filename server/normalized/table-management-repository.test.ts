@@ -37,6 +37,8 @@ integration('normalized table management PostgreSQL concurrency', () => {
   const parallelTwoId = randomUUID()
   const capacityTableId = randomUUID()
   const assignmentTableId = randomUUID()
+  const batchOneId = randomUUID()
+  const batchTwoId = randomUUID()
   const transferSourceId = randomUUID()
   const transferTargetId = randomUUID()
   let pool: Pool
@@ -73,15 +75,17 @@ integration('normalized table management PostgreSQL concurrency', () => {
     `, [tenantId, storeId, employeeOneId, managerRoleId])
     await pool.query(`
       INSERT INTO mbox.tables(id, tenant_id, store_id, area_id, code, display_name, capacity) VALUES
-        ($1, $8, $9, $10, 'SAME', '冲突桌', 4),
-        ($2, $8, $9, $10, 'P01', '并行桌1', 4),
-        ($3, $8, $9, $10, 'P02', '并行桌2', 4),
-        ($4, $8, $9, $10, 'CAP', '加座桌', 4),
-        ($5, $8, $9, $10, 'ASN', '分配桌', 4),
-        ($6, $8, $9, $10, 'SRC', '转桌源', 4),
-        ($7, $8, $9, $10, 'DST', '转桌目标', 6)
+        ($1, $10, $11, $12, 'SAME', '冲突桌', 4),
+        ($2, $10, $11, $12, 'P01', '并行桌1', 4),
+        ($3, $10, $11, $12, 'P02', '并行桌2', 4),
+        ($4, $10, $11, $12, 'CAP', '加座桌', 4),
+        ($5, $10, $11, $12, 'ASN', '分配桌', 4),
+        ($6, $10, $11, $12, 'SRC', '转桌源', 4),
+        ($7, $10, $11, $12, 'DST', '转桌目标', 6),
+        ($8, $10, $11, $12, 'B01', '批量桌1', 4),
+        ($9, $10, $11, $12, 'B02', '批量桌2', 4)
     `, [sameTableId, parallelOneId, parallelTwoId, capacityTableId, assignmentTableId,
-      transferSourceId, transferTargetId, tenantId, storeId, areaId])
+      transferSourceId, transferTargetId, batchOneId, batchTwoId, tenantId, storeId, areaId])
     await pool.query(`
       INSERT INTO mbox.staff_permission_definitions(tenant_id, store_id, code, name)
       VALUES
@@ -193,6 +197,41 @@ integration('normalized table management PostgreSQL concurrency', () => {
       roleCode: 'BARTENDER',
       assignmentType: 'backup',
     })
+  })
+
+  it('publishes a multi-table roster atomically and rolls every table back on one conflict', async () => {
+    const startsAt = '2026-08-16T10:00:00.000Z'
+    const endsAt = '2026-08-16T18:00:00.000Z'
+    await commands.assign({
+      ...base('batch-blocker'), tableId: batchTwoId, employeeId: employeeOneId,
+      roleId: managerRoleId, assignmentType: 'primary', startsAt, endsAt,
+      reason: '预置主服务冲突',
+    })
+
+    await expect(commands.assignMany({
+      ...base('batch-primary-conflict'), tableIds: [batchOneId, batchTwoId],
+      employeeId: employeeTwoId, roleId: bartenderRoleId, assignmentType: 'primary',
+      startsAt, endsAt, reason: '整区主服务安排',
+    })).rejects.toBeInstanceOf(TableManagementConflictError)
+    const partial = await pool.query<{ count: string }>(`
+      SELECT count(*)::text AS count FROM mbox.table_assignments
+      WHERE tenant_id = $1 AND store_id = $2 AND table_id = $3 AND employee_id = $4
+    `, [tenantId, storeId, batchOneId, employeeTwoId])
+    expect(partial.rows[0]?.count).toBe('0')
+
+    const published = await commands.assignMany({
+      ...base('batch-backup-success'), tableIds: [batchTwoId, batchOneId],
+      employeeId: employeeTwoId, roleId: bartenderRoleId, assignmentType: 'backup',
+      startsAt, endsAt, reason: '整区候补服务安排',
+    })
+    expect(published.value.assignments.map((assignment) => assignment.tableCode).toSorted())
+      .toEqual(['B01', 'B02'])
+    const audit = await pool.query<{ count: string }>(`
+      SELECT count(*)::text AS count FROM mbox.audit_events
+      WHERE tenant_id = $1 AND store_id = $2 AND object_id = $3
+        AND action = 'table.assignment.batch_created'
+    `, [tenantId, storeId, published.value.id])
+    expect(audit.rows[0]?.count).toBe('1')
   })
 
   it('shows all areas to table.open staff even when no table is assigned to them', async () => {

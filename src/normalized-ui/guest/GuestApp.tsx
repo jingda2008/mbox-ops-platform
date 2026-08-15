@@ -3,8 +3,11 @@ import {
   Bell,
   Check,
   CheckCircle2,
+  ChevronRight,
+  Clock3,
   LoaderCircle,
   MessageCircleWarning,
+  Music2,
   RefreshCw,
   ScanLine,
   Send,
@@ -13,13 +16,14 @@ import {
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ApiError } from '../../api'
+import { ApiError } from '../../shared/api-error'
 import { MenuOrderingWorkspace, type MenuSubmitOptions } from '../../components/MenuOrderingWorkspace'
 import type { MenuRecommendationScene } from '../../shared/contracts'
 import {
   GuestApiClient,
   GuestApiError,
   type GuestOrderResult,
+  type GuestDailyPerformanceView,
   type OnlinePaymentAction,
   type GuestSessionView,
   type GuestTableOrder,
@@ -38,7 +42,7 @@ import { guestGatePresentation, type GuestGateReason } from './guest-gate-model'
 import { guestMenuProductToMenuProduct } from './menu-product-adapter'
 import './guest-app.css'
 
-type GuestApiPort = Pick<GuestApiClient, 'scanTable' | 'loadSession' | 'searchMenu' | 'submitOrder' | 'loadTableOrders' | 'payTableOrder' | 'requestService' | 'recordMood'>
+type GuestApiPort = Pick<GuestApiClient, 'scanTable' | 'loadSession' | 'searchMenu' | 'submitOrder' | 'loadTableOrders' | 'loadTodayPerformance' | 'payTableOrder' | 'requestService' | 'recordMood'>
 type ServiceType = 'call_staff' | 'complaint' | 'custom'
 type Panel = 'orders' | 'complaint' | 'custom' | 'checkout' | null
 export type { GuestGateReason } from './guest-gate-model'
@@ -87,10 +91,14 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const [pendingService, setPendingService] = useState<ServiceType | null>(null)
   const [selectedMood, setSelectedMood] = useState<GuestMood | null>(null)
   const [pendingMood, setPendingMood] = useState<GuestMood | null>(null)
+  const [moodExpanded, setMoodExpanded] = useState(false)
   const [submittingOrder, setSubmittingOrder] = useState(false)
   const [orderResult, setOrderResult] = useState<GuestOrderResult | null>(null)
   const [tableOrders, setTableOrders] = useState<GuestTableOrder[]>([])
   const [tableOrdersLoading, setTableOrdersLoading] = useState(false)
+  const [performance, setPerformance] = useState<GuestDailyPerformanceView | null>(null)
+  const [performanceLoading, setPerformanceLoading] = useState(false)
+  const [performanceError, setPerformanceError] = useState<string | null>(null)
   const [toast, setToast] = useState<ToastState | null>(null)
   const apiRef = useRef<GuestApiPort | null>(null)
   const tableCodeRef = useRef<string | null>(null)
@@ -147,7 +155,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     } catch (error) {
       if (!blockForSession(error)) {
         notify(
-          errorMessage(error, quiet ? '本桌订单刚才没有更新，点击“本桌已点”可重试。' : '本桌订单暂时没有更新，请再试一次。'),
+          errorMessage(error, quiet ? '本桌历史订单刚才没有更新，点击右上角可重试。' : '本桌历史订单暂时没有更新，请再试一次。'),
           'error',
         )
       }
@@ -155,6 +163,22 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       if (!quiet) setTableOrdersLoading(false)
     }
   }, [blockForSession, notify])
+
+  const loadPerformance = useCallback(async () => {
+    const api = apiRef.current
+    if (api === null) return
+    setPerformanceLoading(true)
+    setPerformanceError(null)
+    try {
+      setPerformance(await api.loadTodayPerformance())
+    } catch (error) {
+      if (!blockForSession(error)) {
+        setPerformanceError(errorMessage(error, '演出信息暂时没有更新，点一下可重试。'))
+      }
+    } finally {
+      setPerformanceLoading(false)
+    }
+  }, [blockForSession])
 
   const payTableOrder = useCallback(async (orderPublicId: string) => {
     const api = apiRef.current
@@ -176,7 +200,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
         return
       }
       if (action.payload === null) {
-        notify('订单已经同步，付款入口正在准备，请稍后从“本桌已点”继续。', 'info')
+        notify('订单已经同步，付款入口正在准备，请稍后从“本桌历史订单”继续。', 'info')
         return
       }
       if (action.payload.presentation === 'simulation') {
@@ -269,7 +293,8 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     if (phase !== 'ready') return
     void loadMenu()
     void loadTableOrders(true)
-  }, [loadMenu, loadTableOrders, phase])
+    void loadPerformance()
+  }, [loadMenu, loadPerformance, loadTableOrders, phase])
 
   useEffect(() => {
     if (phase !== 'waiting') return
@@ -379,7 +404,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
         try {
           await presentOnlinePayment(result.payment.providerAction)
         } catch (paymentError) {
-          notify(errorMessage(paymentError, '订单已建立，付款暂未拉起，可在“本桌已点”继续支付。'), 'info')
+          notify(errorMessage(paymentError, '订单已建立，付款暂未拉起，可在“本桌历史订单”继续支付。'), 'info')
         }
       }
     } catch (error) {
@@ -413,14 +438,25 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       <header className="guest-header">
         <div className="guest-brand"><span>M</span><div><strong>M-BOX</strong><small>SUPERHIGH CULTURE · LIVEHOUSE</small></div></div>
         <button type="button" className="guest-table" onClick={() => { setPanel('orders'); void loadTableOrders() }}>
-          <small>本桌已点 · {tableOrders.reduce((sum, order) => sum + order.items.reduce((count, item) => count + item.quantity, 0), 0)}件</small>
+          <small>历史已下单 · {tableOrders.reduce((sum, order) => sum + order.items.reduce((count, item) => count + item.quantity, 0), 0)}件</small>
           <strong>{table?.displayName ?? table?.code}</strong>
         </button>
       </header>
 
-      <section className="guest-mood" aria-labelledby="guest-mood-title">
-        <div><small>YOUR MOOD</small><h2 id="guest-mood-title">今晚是什么状态？</h2></div>
-        <div className={selectedMood === null ? 'guest-mood-options' : 'guest-mood-options has-selection'}>
+      <GuestPerformanceCard
+        performance={performance}
+        loading={performanceLoading}
+        error={performanceError}
+        onRetry={() => void loadPerformance()}
+      />
+
+      <section className={`guest-mood${moodExpanded ? ' is-expanded' : ''}`} aria-labelledby="guest-mood-title">
+        <button className="guest-mood-toggle" type="button" aria-expanded={moodExpanded} onClick={() => setMoodExpanded((value) => !value)}>
+          <span><small>可选</small><strong id="guest-mood-title">记录今晚心情</strong></span>
+          <span>{selectedMood === null ? '用于优化推荐' : `已选：${moods.find((item) => item.code === selectedMood)?.label ?? '已记录'}`}</span>
+          <ChevronRight aria-hidden="true" />
+        </button>
+        {moodExpanded && <div className={selectedMood === null ? 'guest-mood-options' : 'guest-mood-options has-selection'}>
           {moods.map((mood) => <button
             type="button"
             key={mood.code}
@@ -429,7 +465,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
             aria-label={`心情：${mood.label}`}
             onClick={() => void selectMood(mood.code)}
           ><img src={`/brand/moods-v2/${mood.asset}.webp`} alt="" aria-hidden="true" decoding="async" /><small>{mood.label}</small></button>)}
-        </div>
+        </div>}
       </section>
 
       <section className="guest-service-strip" aria-label="桌边服务">
@@ -451,7 +487,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
           products={menuProducts}
           tableLabel={table?.displayName ?? table?.code ?? ''}
           submitLabel="确认订单并微信支付"
-          submitHint="确认后会创建本桌订单，并进入微信支付。"
+          submitHint="这里只提交本次购物车；历史订单不会重复提交。"
           busy={submittingOrder}
           orderSafety={guestOrderSafety}
           compactCart
@@ -483,6 +519,67 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       {toast !== null && <div className={`guest-toast is-${toast.tone}`} role="status"><Check />{toast.message}</div>}
     </main>
   )
+}
+
+function GuestPerformanceCard({
+  performance,
+  loading,
+  error,
+  onRetry,
+}: {
+  performance: GuestDailyPerformanceView | null
+  loading: boolean
+  error: string | null
+  onRetry: () => void
+}) {
+  if (performance === null && loading) {
+    return <section className="guest-performance-card is-loading" aria-label="正在加载今晚演出">
+      <LoaderCircle className="is-spinning" aria-hidden="true" />
+      <span><strong>正在同步今晚演出</strong><small>菜单仍可正常浏览</small></span>
+    </section>
+  }
+  if (performance === null && error !== null) {
+    return <section className="guest-performance-card is-error" aria-label="演出信息暂时未更新">
+      <Music2 aria-hidden="true" />
+      <span><strong>演出信息暂未更新</strong><small>{error}</small></span>
+      <button type="button" onClick={onRetry}>重试</button>
+    </section>
+  }
+  if (performance === null || performance.schedules.length === 0) {
+    return <section className="guest-performance-card is-empty" aria-label="今晚演出">
+      <Music2 aria-hidden="true" />
+      <span><strong>今晚暂无演出排班</strong><small>门店更新后会显示在这里，点单不受影响</small></span>
+    </section>
+  }
+
+  const featured = performance.current ?? performance.next ?? performance.schedules.at(-1)!
+  const stateLabel = performance.current !== null
+    ? 'LIVE · 正在演出'
+    : performance.next !== null
+      ? 'UP NEXT · 即将开始'
+      : 'TONIGHT · 今晚演出'
+  return <section className={`guest-performance-card is-${performance.phase}`} aria-labelledby="guest-performance-title">
+    {featured.performerProfile.imageUrl === undefined
+      ? <span className="guest-performance-cover"><Music2 aria-hidden="true" /></span>
+      : <img className="guest-performance-cover" src={featured.performerProfile.imageUrl} alt="" decoding="async" />}
+    <span className="guest-performance-copy">
+      <small>{stateLabel}</small>
+      <strong id="guest-performance-title">{featured.performerStageName}</strong>
+      <span><Clock3 aria-hidden="true" />{formatShanghaiClock(featured.startsAt)}–{formatShanghaiClock(featured.endsAt)}</span>
+    </span>
+    {performance.next !== null && performance.current !== null && <span className="guest-performance-next">
+      <small>下一场</small><strong>{performance.next.performerStageName}</strong><span>{formatShanghaiClock(performance.next.startsAt)}</span>
+    </span>}
+  </section>
+}
+
+function formatShanghaiClock(value: string): string {
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(new Date(value))
 }
 
 function findRecentDuplicateOrder(
@@ -634,7 +731,7 @@ function CheckoutPanel({ result, onRetryPayment, onClose }: {
   const paymentCopy = paymentStatusCopy(result)
   return <div className="guest-checkout-result">
     <span className="guest-checkout-icon"><Check /></span><small>订单 {result.order.publicId}</small><h3>{paymentCopy.title}</h3><p>{paymentCopy.detail}</p>
-    {result.order.attentionRequired && <div className="guest-attention">备注已重点标记给出品和配送人员</div>}
+    {result.order.attentionRequired && <div className="guest-attention">{result.order.kdsNotice ?? '备注已保存，付款成功后同步给出品和配送人员'}</div>}
     <div className="guest-checkout-amount"><span>本次应付</span><strong>{formatMoney(result.settlement.payableAmountMinor, result.settlement.currency)}</strong></div>
     {!result.payment.simulated && result.payment.providerAction.status === 'pending' && result.payment.providerAction.payload !== null && <button type="button" className="guest-primary" onClick={() => void presentOnlinePayment(result.payment.providerAction)}>
       {result.payment.providerAction.presentation === 'jsapi' ? '打开微信支付' : '去微信支付'}
@@ -676,13 +773,13 @@ function paymentStatusCopy(result: GuestOrderResult): { title: string; detail: s
   if (result.payment.simulated) return { title: '测试订单已建立', detail: '当前是测试支付，仍待人工测试确认，没有产生真实收款。' }
   if (result.payment.providerAction.status === 'failed') return { title: '订单已建立，付款尚未发起', detail: '支付机构刚才没有受理，可在本桌订单中重新发起，不需要重复下单。' }
   if (result.payment.providerAction.status === 'unknown') return { title: '订单已建立，付款状态待核对', detail: '请先让收银核对支付结果，避免重复付款。' }
-  if (result.payment.providerAction.payload === null) return { title: '订单已建立，正在准备付款', detail: '本桌订单已经同步，请稍后从“本桌已点”继续。' }
+  if (result.payment.providerAction.payload === null) return { title: '订单已建立，正在准备付款', detail: '本桌订单已经同步，请稍后从“本桌历史订单”继续。' }
   if (result.payment.mode === 'wechat_jsapi') return { title: '订单已建立，等待微信支付', detail: '支付状态以微信支付通道返回结果为准，请勿重复下单。' }
   return { title: '订单已建立，等待扫码支付', detail: '支付二维码仍待支付通道返回，请勿重复下单。' }
 }
 
 function panelTitle(panel: Exclude<Panel, null>): string {
-  if (panel === 'orders') return '本桌已点'
+  if (panel === 'orders') return '本桌历史订单'
   if (panel === 'complaint') return '我们想马上处理好'
   if (panel === 'custom') return '告诉我们您的需要'
   return '订单与支付状态'

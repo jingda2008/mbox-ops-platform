@@ -11,6 +11,7 @@ import { NotificationWorker, type NotificationDelivery } from './notification-wo
 import { OutboxDispatcher, type OutboxDelivery } from './outbox-dispatcher.js'
 import { PrintWorker, type PrintAdapter } from './print-worker.js'
 import { ReservationHoldExpiryWorker } from './reservation-hold-expiry-worker.js'
+import { PaymentReservationExpiryWorker } from './payment-reservation-expiry-worker.js'
 import { ServiceTaskSlaWorker } from './service-task-sla-worker.js'
 import { AiScheduledExecutionWorker, SopWorker, type SopActionPort } from './sop-worker.js'
 import { PostgresStaffLoginRateLimiter } from './staff-login-rate-limiter.js'
@@ -92,6 +93,7 @@ export function createNormalizedWorkerRuntime(
   const coordinator = new NormalizedBackgroundWorkerCoordinator(options.scope, {
     serviceSla: new ServiceTaskSlaWorker(transactions),
     reservationExpiry: new ReservationHoldExpiryWorker(transactions),
+    paymentReservationExpiry: new PaymentReservationExpiryWorker(transactions),
     idempotencyCleanup: new IdempotencyCleanupWorker(transactions),
     staffLoginRateLimitCleanup: new PostgresStaffLoginRateLimiter(transactions, options.hashSecret),
     businessDay: new BusinessDayRolloverWorker(transactions),

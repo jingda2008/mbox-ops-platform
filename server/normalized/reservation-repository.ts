@@ -44,6 +44,9 @@ export interface Reservation {
   aggregateVersion: number
   customerCancelUntil: string | null
   cancellationPolicySnapshot: JsonObject
+  requestHoldExpiresAt: string | null
+  arrivalGraceEndsAt: string
+  reservationPolicyVersion: number
   tableLocks: ReservationTableLock[]
 }
 
@@ -65,6 +68,9 @@ export interface CreateReservationInput {
   holdExpiresAt?: string | null
   customerCancelUntil?: string | null
   cancellationPolicySnapshot?: JsonObject
+  requestHoldExpiresAt?: string | null
+  arrivalGraceEndsAt?: string
+  reservationPolicyVersion?: number
 }
 
 export interface ReservationMutationResult {
@@ -91,6 +97,9 @@ interface ReservationRow extends Record<string, unknown> {
   aggregate_version: string | number
   customer_cancel_until: string | null
   cancellation_policy_snapshot: JsonObject
+  request_hold_expires_at: string | null
+  arrival_grace_ends_at: string
+  reservation_policy_version: string | number
 }
 
 interface ReservationLockRow extends Record<string, unknown> {
@@ -226,20 +235,25 @@ export class ReservationRepository {
     }
 
     const reservationSnapshot: JsonObject = input.reservationSnapshot ?? {}
+    const requestHoldExpiresAt = input.requestHoldExpiresAt ?? input.holdExpiresAt ?? null
+    const arrivalGraceEndsAt = input.arrivalGraceEndsAt
+      ?? new Date(Date.parse(input.arrivalAt) + 10 * 60_000).toISOString()
     const inserted = await this.transaction.query<ReservationRow>(`
       INSERT INTO mbox.reservations (
         tenant_id, store_id, public_id, customer_id, customer_name, contact_token, guest_count,
         arrival_at, expected_end_at, status, source, owner_employee_id, note,
-        reservation_snapshot, customer_cancel_until, cancellation_policy_snapshot
+        reservation_snapshot, customer_cancel_until, cancellation_policy_snapshot,
+        request_hold_expires_at, arrival_grace_ends_at, reservation_policy_version
       ) VALUES (
         $1::uuid, $2::uuid, $3, $4::uuid, $5, $6, $7,
         $8::timestamptz, $9::timestamptz, $10, $11, $12::uuid, $13, $14::jsonb,
-        $15::timestamptz, $16::jsonb
+        $15::timestamptz, $16::jsonb, $17::timestamptz, $18::timestamptz, $19::integer
       )
       RETURNING id, public_id, customer_id, customer_name, contact_token, guest_count,
         arrival_at::text, expected_end_at::text, status, source, owner_employee_id,
         note, reservation_snapshot, created_at::text, updated_at::text,
-        aggregate_version, customer_cancel_until::text, cancellation_policy_snapshot
+        aggregate_version, customer_cancel_until::text, cancellation_policy_snapshot,
+        request_hold_expires_at::text, arrival_grace_ends_at::text, reservation_policy_version
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -257,6 +271,9 @@ export class ReservationRepository {
       JSON.stringify(reservationSnapshot),
       input.customerCancelUntil ?? null,
       JSON.stringify(input.cancellationPolicySnapshot ?? {}),
+      requestHoldExpiresAt,
+      arrivalGraceEndsAt,
+      input.reservationPolicyVersion ?? 1,
     ])
     const reservationRow = inserted.rows[0]
     if (inserted.rowCount !== 1 || reservationRow === undefined) {
@@ -396,13 +413,16 @@ export class ReservationRepository {
     }
     const updated = await this.transaction.query<ReservationRow>(`
       UPDATE mbox.reservations
-      SET status = $4, aggregate_version = aggregate_version + 1
+      SET status = $4,
+          request_hold_expires_at = CASE WHEN $4='confirmed' THEN NULL ELSE request_hold_expires_at END,
+          aggregate_version = aggregate_version + 1
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
         AND status = ANY($5::text[])
       RETURNING id, public_id, customer_id, customer_name, contact_token, guest_count,
         arrival_at::text, expected_end_at::text, status, source, owner_employee_id,
         note, reservation_snapshot, created_at::text, updated_at::text,
-        aggregate_version, customer_cancel_until::text, cancellation_policy_snapshot
+        aggregate_version, customer_cancel_until::text, cancellation_policy_snapshot,
+        request_hold_expires_at::text, arrival_grace_ends_at::text, reservation_policy_version
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -455,7 +475,9 @@ export class ReservationRepository {
         r.arrival_at::text, r.expected_end_at::text, r.status, r.source,
         r.owner_employee_id, r.note, r.reservation_snapshot,
         r.created_at::text, r.updated_at::text, r.aggregate_version,
-        r.customer_cancel_until::text, r.cancellation_policy_snapshot
+        r.customer_cancel_until::text, r.cancellation_policy_snapshot,
+        r.request_hold_expires_at::text, r.arrival_grace_ends_at::text,
+        r.reservation_policy_version
       FROM mbox.reservations AS r
       WHERE r.tenant_id = $1::uuid AND r.store_id = $2::uuid AND ${predicate}
       ${lock}
@@ -472,30 +494,43 @@ function mapReservation(row: ReservationRow, locks: readonly ReservationLockRow[
     customerName: row.customer_name,
     contactToken: row.contact_token,
     guestCount: row.guest_count,
-    arrivalAt: row.arrival_at,
-    expectedEndAt: row.expected_end_at,
+    arrivalAt: isoInstant(row.arrival_at),
+    expectedEndAt: isoInstant(row.expected_end_at),
     status: row.status,
     source: row.source,
     ownerEmployeeId: row.owner_employee_id,
     note: row.note,
     reservationSnapshot: row.reservation_snapshot,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: isoInstant(row.created_at),
+    updatedAt: isoInstant(row.updated_at),
     aggregateVersion: Number(row.aggregate_version),
-    customerCancelUntil: row.customer_cancel_until,
+    customerCancelUntil: nullableIsoInstant(row.customer_cancel_until),
     cancellationPolicySnapshot: row.cancellation_policy_snapshot,
+    requestHoldExpiresAt: nullableIsoInstant(row.request_hold_expires_at),
+    arrivalGraceEndsAt: isoInstant(row.arrival_grace_ends_at),
+    reservationPolicyVersion: Number(row.reservation_policy_version),
     tableLocks: locks.map((lock) => ({
       id: lock.id,
       reservationId: lock.reservation_id,
       tableId: lock.table_id,
-      startsAt: lock.starts_at,
-      endsAt: lock.ends_at,
+      startsAt: isoInstant(lock.starts_at),
+      endsAt: isoInstant(lock.ends_at),
       status: lock.status,
-      holdExpiresAt: lock.hold_expires_at,
+      holdExpiresAt: nullableIsoInstant(lock.hold_expires_at),
       tableCode: lock.table_code,
       tableDisplayName: lock.table_display_name,
     })),
   }
+}
+
+function isoInstant(value: string): string {
+  const timestamp = Date.parse(value)
+  if (!Number.isFinite(timestamp)) throw new TypeError('Reservation timestamp is invalid')
+  return new Date(timestamp).toISOString()
+}
+
+function nullableIsoInstant(value: string | null): string | null {
+  return value === null ? null : isoInstant(value)
 }
 
 function validateCreateReservation(input: Readonly<CreateReservationInput>): void {
@@ -520,6 +555,16 @@ function validateCreateReservation(input: Readonly<CreateReservationInput>): voi
     if (!Number.isFinite(holdExpiresAt)) throw new TypeError('pending reservation requires holdExpiresAt')
     if (holdExpiresAt > startsAt) throw new TypeError('holdExpiresAt must not be after arrivalAt')
   }
+  const requestHoldExpiresAt = input.requestHoldExpiresAt ?? input.holdExpiresAt ?? null
+  if (requestHoldExpiresAt !== null && (
+    !Number.isFinite(Date.parse(requestHoldExpiresAt)) || Date.parse(requestHoldExpiresAt) > startsAt
+  )) throw new TypeError('requestHoldExpiresAt must be a valid instant no later than arrivalAt')
+  if (input.arrivalGraceEndsAt !== undefined && (
+    !Number.isFinite(Date.parse(input.arrivalGraceEndsAt)) || Date.parse(input.arrivalGraceEndsAt) <= startsAt
+  )) throw new TypeError('arrivalGraceEndsAt must be a valid instant after arrivalAt')
+  if (input.reservationPolicyVersion !== undefined && (
+    !Number.isSafeInteger(input.reservationPolicyVersion) || input.reservationPolicyVersion < 1
+  )) throw new TypeError('reservationPolicyVersion must be a positive integer')
   if (
     input.customerCancelUntil !== undefined
     && input.customerCancelUntil !== null

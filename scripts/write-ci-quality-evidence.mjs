@@ -20,9 +20,9 @@ if (process.env.GITHUB_SHA && process.env.GITHUB_SHA !== checkedOutSha) {
 
 const selectedByScope = {
   docs: ['docs'],
-  ui: ['fast_quality', 'ui_browser'],
-  frontend: ['fast_quality', 'browser'],
-  full: ['quality', 'browser', 'database', 'normalized_database', 'normalized_browser', 'performance'],
+  ui: ['fast_quality', 'normalized_browser'],
+  frontend: ['fast_quality', 'normalized_browser'],
+  full: ['quality', 'normalized_database', 'normalized_browser', 'performance'],
 }
 const selected = [...(selectedByScope[scope] ?? selectedByScope.full)]
 if (releaseArtifactRequired) selected.push('image')

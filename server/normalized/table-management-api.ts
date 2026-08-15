@@ -18,6 +18,7 @@ import {
   TableManagementConflictError,
   TableManagementNotFoundError,
   TableManagementRepository,
+  TABLE_ASSIGNMENT_MANAGE_PERMISSION,
   type AreaStatus,
   type ManagedArea,
   type ManagedTable,
@@ -34,7 +35,7 @@ import {
 type TransactionRunnerPort = Pick<ScopedPostgresTransactionRunner, 'run'>
 type TableManagementCommandPort = Pick<TableManagementCommandService,
   'createArea' | 'updateArea' | 'createTable' | 'updateTable' | 'assign' |
-  'endAssignment' | 'open' | 'transfer'>
+  'assignMany' | 'endAssignment' | 'open' | 'transfer'>
 
 export interface TableManagementApiOptions {
   transactions: TransactionRunnerPort
@@ -77,6 +78,18 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
     const data = await options.transactions.run(context.scope, async (transaction) => {
       const access = await new StaffAccessRepository(transaction).resolve(context.employeeId)
       return new TableManagementRepository(transaction).listAssignments(access)
+    }, { readOnly: true })
+    return reply.send({ data })
+  }))
+
+  app.get('/table-management/assignment-options', async (request, reply) => handle(reply, async () => {
+    const context = await authorizedContext(options, request)
+    const data = await options.transactions.run(context.scope, async (transaction) => {
+      await new StaffAccessRepository(transaction).assertPermission(
+        context.employeeId,
+        TABLE_ASSIGNMENT_MANAGE_PERMISSION,
+      )
+      return new TableManagementRepository(transaction).listAssignmentOptions()
     }, { readOnly: true })
     return reply.send({ data })
   }))
@@ -133,6 +146,20 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
     const body = readObject(request.body)
     const execution = await options.commands.assign(commandBase(request, context, body, '分配桌台责任', {
       tableId: readUuid(body.tableId, 'tableId'),
+      employeeId: readUuid(body.employeeId, 'employeeId'),
+      roleId: readUuid(body.roleId, 'roleId'),
+      assignmentType: readEnum(body.assignmentType, 'assignmentType', ['primary', 'backup', 'temporary']),
+      startsAt: readTimestamp(body.startsAt, 'startsAt'),
+      endsAt: optionalTimestamp(body.endsAt, 'endsAt'),
+    }))
+    return reply.code(201).send(commandResponse(execution))
+  }))
+
+  app.post('/table-management/assignments/batch', async (request, reply) => handle(reply, async () => {
+    const context = await authorizedContext(options, request)
+    const body = readObject(request.body)
+    const execution = await options.commands.assignMany(commandBase(request, context, body, '批量分配桌台责任', {
+      tableIds: readUuidArray(body.tableIds, 'tableIds', 80),
       employeeId: readUuid(body.employeeId, 'employeeId'),
       roleId: readUuid(body.roleId, 'roleId'),
       assignmentType: readEnum(body.assignmentType, 'assignmentType', ['primary', 'backup', 'temporary']),
@@ -238,7 +265,7 @@ function readTable(body: Record<string, unknown>, includeCode: boolean): Omit<Ma
 }
 
 function readIdempotencyKey(request: FastifyRequest): string {
-  const value = request.headers['x-idempotency-key']
+  const value = request.headers['x-idempotency-key'] ?? request.headers['idempotency-key']
   if (typeof value !== 'string' || value.trim().length < 8 || value.length > 160) {
     throw new TableManagementRequestError('请提供有效的X-Idempotency-Key')
   }
@@ -296,6 +323,15 @@ function readUuid(value: unknown, field: string): string {
     throw new TableManagementRequestError(`${field}格式无效`)
   }
   return uuid
+}
+
+function readUuidArray(value: unknown, field: string, max: number): string[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > max) {
+    throw new TableManagementRequestError(`${field}必须包含1至${max}项`)
+  }
+  const parsed = value.map((item, index) => readUuid(item, `${field}[${index}]`))
+  if (new Set(parsed).size !== parsed.length) throw new TableManagementRequestError(`${field}不能包含重复桌台`)
+  return parsed
 }
 
 function readEnum<const Value extends string>(value: unknown, field: string, allowed: readonly Value[]): Value {

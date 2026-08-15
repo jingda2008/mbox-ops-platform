@@ -369,21 +369,35 @@ async function assertRecipientEligible(
   assertUuid(recipient.id, 'recipient.id')
 
   if (recipient.type === 'customer' && channel !== 'in_app') {
-    const consentKey = channel === 'wechat' ? 'wechatNotifications' : 'smsNotifications'
     const result = await transaction.query(`
       SELECT customer.id
       FROM mbox.customers customer
-      JOIN mbox.customer_profiles profile
-        ON profile.tenant_id = customer.tenant_id
-       AND profile.store_id = customer.store_id
-       AND profile.customer_id = customer.id
       WHERE customer.tenant_id = $1::uuid
         AND customer.store_id = $2::uuid
         AND customer.id = $3::uuid
         AND customer.status = 'active'
-        AND COALESCE(profile.consent_snapshot ->> $4, 'false') = 'true'
+        AND EXISTS (
+          SELECT 1
+          FROM mbox.customer_notification_consents AS consent
+          WHERE consent.tenant_id = customer.tenant_id
+            AND consent.store_id = customer.store_id
+            AND consent.customer_id = customer.id
+            AND consent.channel = $4
+            AND consent.purpose = 'transactional_service'
+            AND consent.decision = 'granted'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM mbox.customer_notification_consents AS later
+              WHERE later.tenant_id = consent.tenant_id
+                AND later.store_id = consent.store_id
+                AND later.customer_id = consent.customer_id
+                AND later.channel = consent.channel
+                AND later.purpose = consent.purpose
+                AND later.consent_version > consent.consent_version
+            )
+        )
       FOR KEY SHARE OF customer
-    `, [transaction.scope.tenantId, transaction.scope.storeId, recipient.id, consentKey])
+    `, [transaction.scope.tenantId, transaction.scope.storeId, recipient.id, channel])
     if (result.rowCount !== 1) {
       throw new NotificationPolicyError(`Customer has not consented to ${channel} notifications`)
     }

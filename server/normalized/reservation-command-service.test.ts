@@ -54,6 +54,11 @@ integration('normalized reservation, customer and benefit transactions', () => {
       VALUES ($1::uuid, $2::uuid, $3, 'Reservation Test Store')
     `, [storeId, tenantId, `store-${storeId.slice(0, 8)}`])
     await nativePool.query(`
+      INSERT INTO mbox.public_reservation_policies (
+        tenant_id, store_id, hold_minutes, arrival_grace_minutes
+      ) VALUES ($1::uuid, $2::uuid, 20, 10)
+    `, [tenantId, storeId])
+    await nativePool.query(`
       INSERT INTO mbox.areas (id, tenant_id, store_id, code, name, area_type)
       VALUES ($1::uuid, $2::uuid, $3::uuid, 'RESERVE', 'Reservation Area', 'indoor')
     `, [areaId, tenantId, storeId])

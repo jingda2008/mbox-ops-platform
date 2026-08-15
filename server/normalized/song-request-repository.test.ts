@@ -13,6 +13,7 @@ const currentScheduleId = '30000000-0000-4000-8000-000000000005'
 const nextScheduleId = '30000000-0000-4000-8000-000000000006'
 const requestId = '30000000-0000-4000-8000-000000000007'
 const customerId = '30000000-0000-4000-8000-000000000008'
+const songId = '30000000-0000-4000-8000-000000000009'
 
 class ScriptedTransaction implements ScopedTransaction {
   readonly scope = { tenantId, storeId }
@@ -49,7 +50,8 @@ describe('SongRequestRepository', () => {
       requiresStaffConfirmation: true,
       request: { songTitle: '后来', status: 'confirming' },
     })
-    expect(transaction.calls.at(-1)?.values[8]).toBe('confirming')
+    expect(transaction.calls.at(-1)?.values[9]).toBe('confirming')
+    expect(transaction.calls.at(-1)?.values[6]).toBe(songId)
   })
 
   it('allows the next scheduled performer and requires custom songs to be confirmed', async () => {
@@ -58,7 +60,7 @@ describe('SongRequestRepository', () => {
       request_type: 'custom',
       song_title: '一首特别的歌',
       status: 'confirming',
-    }))
+    }), true, false)
     const result = await new SongRequestRepository(transaction).submit({
       tableSessionId: sessionId,
       scheduleId: nextScheduleId,
@@ -112,6 +114,7 @@ function submissionTransaction(
   targetScheduleId: string,
   inserted: Record<string, unknown> | null,
   includeInsert = true,
+  includeCatalogLookup = true,
 ): ScriptedTransaction {
   const target = targetScheduleId === currentScheduleId
     ? scheduleRow(currentScheduleId, '2026-08-11T12:30:00.000Z', '2026-08-11T13:15:00.000Z')
@@ -127,6 +130,7 @@ function submissionTransaction(
     ] },
     { rows: [performerRow()] },
   ]
+  if (includeCatalogLookup) responses.push({ rows: includeInsert ? [{ id: songId, title: '后来' }] : [] })
   if (includeInsert && inserted !== null) responses.push({ rows: [inserted] })
   return new ScriptedTransaction(responses)
 }
@@ -144,6 +148,7 @@ function scheduleRow(id: string, startsAt: string, endsAt: string): Record<strin
   return {
     id,
     performer_id: performerId,
+    song_id: null,
     performer_code: 'NATALIE',
     performer_stage_name: 'Natalie',
     performer_profile_snapshot: {},

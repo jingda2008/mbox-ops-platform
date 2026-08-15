@@ -87,7 +87,7 @@ describe('guest commerce/service API trust boundaries', () => {
     expect(value.query).not.toHaveBeenCalled()
   })
 
-  it('searches menu names, aliases, pinyin and specifications without exposing snapshots', async () => {
+  it('searches the normalized menu search field without exposing internal snapshots', async () => {
     const value = fixture()
     const response = await value.app.inject({
       method: 'GET',
@@ -95,12 +95,11 @@ describe('guest commerce/service API trust boundaries', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(value.query).toHaveBeenCalledWith(
-      expect.stringContaining("product.product_snapshot ->> 'pinyin'"),
+      expect.stringContaining('product.search_text ILIKE'),
       expect.arrayContaining(['qingdao']),
     )
-    expect(value.query.mock.calls[0]?.[0]).toContain(
-      "product.product_snapshot -> 'recommendation' ->> 'priority' ~ '^\\d{1,4}$'",
-    )
+    expect(value.query.mock.calls[0]?.[0]).toContain('product.recommendation_priority DESC')
+    expect(value.query.mock.calls[0]?.[0]).not.toContain("product.product_snapshot -> 'recommendation'")
     expect(response.json()).toMatchObject({
       data: [{
         productId,
@@ -164,7 +163,7 @@ describe('guest commerce/service API trust boundaries', () => {
         order: {
           publicId: 'guest-order-public-0001',
           attentionRequired: true,
-          kdsNotice: '订单含备注，出品与配送页面将重点提示',
+          kdsNotice: '备注已保存，付款成功后将在出品与配送页面重点提示',
         },
         settlement: { payableAmountMinor: 13_600, currency: 'CNY' },
         payment: {
@@ -177,6 +176,21 @@ describe('guest commerce/service API trust boundaries', () => {
         },
       },
     })
+  })
+
+  it('does not create a guest order when the store has closed online payment', async () => {
+    const value = fixture({ resolvePaymentMode: vi.fn(async () => null) })
+    const response = await value.app.inject({
+      method: 'POST',
+      url: '/api/guest/orders',
+      headers: { 'idempotency-key': 'guest-order-policy-closed-0001' },
+      payload: { items: [{ productId, quantity: 1 }] },
+    })
+
+    expect(response.statusCode).toBe(503)
+    expect(response.json()).toMatchObject({ error: { code: 'ONLINE_PAYMENT_UNAVAILABLE' } })
+    expect(value.commerce.submitOrder).not.toHaveBeenCalled()
+    expect(value.payments.initiate).not.toHaveBeenCalled()
   })
 
   it('forwards only the public conflicting order confirmation to server-authoritative validation', async () => {
@@ -618,9 +632,28 @@ function fixture(overrides: Partial<GuestCommerceServiceApiOptions> = {}) {
       bundle_components: [],
       product_snapshot: {
         specification: '330ml', aliases: ['青啤'], pinyin: 'qingdao pijiu',
-        costAmount: 1_800, internalCost: 1234,
-        recommendation: { enabled: true },
+        internalCost: 1234,
       },
+      guest_visible: true,
+      search_text: 'BEER-QD-330 青岛啤酒 青啤 qingdao pijiu 330ml',
+      recommendation_enabled: true,
+      recommendation_min_guests: 1,
+      recommendation_max_guests: 4,
+      recommendation_priority: 800,
+      recommendation_scene_tags: ['date', 'friends'],
+      recommendation_intent_tags: ['relaxed'],
+      recommendation_taste_tags: ['refreshing'],
+      recommendation_dwell_tags: ['one_set'],
+      recommendation_single_wave_eligible: true,
+      recommendation_expected_prep_minutes: 3,
+      recommendation_hold_minutes: 10,
+      recommendation_upgrade_product_id: null,
+      menu_sort_order: 20,
+      available_from: null,
+      available_until: null,
+      max_order_quantity: 50,
+      within_availability: true,
+      cost_amount_minor: '1800',
       status: 'active',
       amount_minor: '6800',
       currency: 'CNY',

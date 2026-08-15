@@ -8,7 +8,7 @@ import test from 'node:test'
 const repoRoot = new URL('..', import.meta.url).pathname
 const currentSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim()
 
-function runWriter({ results, load, browserStartup }) {
+function runWriter({ results, load, browserStartup, scope = 'full' }) {
   const directory = mkdtempSync(join(tmpdir(), 'mbox-quality-evidence-'))
   const output = join(directory, 'evidence.json')
   try {
@@ -20,7 +20,7 @@ function runWriter({ results, load, browserStartup }) {
         GITHUB_EVENT_NAME: 'pull_request',
         GITHUB_REPOSITORY: 'jingda2008/mbox-ops-platform',
         GITHUB_RUN_ID: '31327038745',
-        MBOX_CI_SCOPE: 'full',
+        MBOX_CI_SCOPE: scope,
         MBOX_CI_SOURCE_HEAD_SHA: currentSha,
         MBOX_CI_RESULTS_JSON: JSON.stringify(results),
         MBOX_CI_EVIDENCE_PATH: output,
@@ -67,7 +67,7 @@ function validBrowserStartup() {
 
 test('preserves failed route metrics instead of replacing them with missing evidence', () => {
   const document = runWriter({
-    results: { quality: 'success', browser: 'success', database: 'success', performance: 'failure' },
+    results: { quality: 'success', normalized_database: 'success', normalized_browser: 'skipped', performance: 'failure' },
     load: {
       model: {
         evidenceEligible: true,
@@ -144,7 +144,7 @@ test('converts normalized isolated load evidence into release performance record
   )
   const document = runWriter({
     results: {
-      quality: 'success', browser: 'success', database: 'success', normalized_database: 'success',
+      quality: 'success', normalized_database: 'success',
       normalized_browser: 'success', performance: 'success',
     },
     load: {
@@ -203,7 +203,7 @@ test('rejects normalized browser startup evidence from another commit', () => {
   browserStartup.run.sourceCommitSha = '0'.repeat(40)
   assert.throws(() => runWriter({
     results: {
-      quality: 'success', browser: 'success', database: 'success', normalized_database: 'success',
+      quality: 'success', normalized_database: 'success',
       normalized_browser: 'success', performance: 'success',
     },
     browserStartup,
@@ -219,7 +219,7 @@ test('rejects normalized browser startup evidence with too few samples', () => {
   }
   assert.throws(() => runWriter({
     results: {
-      quality: 'success', browser: 'success', database: 'success', normalized_database: 'success',
+      quality: 'success', normalized_database: 'success',
       normalized_browser: 'success', performance: 'success',
     },
     browserStartup,
@@ -236,7 +236,7 @@ test('rejects normalized evidence that omits server database telemetry', () => {
   }
   assert.throws(() => runWriter({
     results: {
-      quality: 'success', browser: 'success', database: 'success', normalized_database: 'success',
+      quality: 'success', normalized_database: 'success',
       normalized_browser: 'success', performance: 'success',
     },
     load,
@@ -246,17 +246,17 @@ test('rejects normalized evidence that omits server database telemetry', () => {
 
 test('distinguishes cancelled work from work that never ran', () => {
   const document = runWriter({
-    results: { quality: 'success', browser: 'cancelled', database: 'skipped', performance: 'skipped' },
+    results: { quality: 'success', normalized_browser: 'cancelled', normalized_database: 'skipped', performance: 'skipped' },
   })
 
   const byId = Object.fromEntries(document.testRuns.map((run) => [run.id, run]))
   assert.equal(document.decision, 'DENY')
   assert.deepEqual(
-    { status: byId.browser.status, blocked: byId.browser.blocked, notRun: byId.browser.notRun },
+    { status: byId.normalized_browser.status, blocked: byId.normalized_browser.blocked, notRun: byId.normalized_browser.notRun },
     { status: 'blocked', blocked: 1, notRun: 0 },
   )
   assert.deepEqual(
-    { status: byId.database.status, blocked: byId.database.blocked, notRun: byId.database.notRun },
+    { status: byId.normalized_database.status, blocked: byId.normalized_database.blocked, notRun: byId.normalized_database.notRun },
     { status: 'not_run', blocked: 0, notRun: 1 },
   )
 })
@@ -264,7 +264,7 @@ test('distinguishes cancelled work from work that never ran', () => {
 test('requires the normalized database gate for a full release decision', () => {
   const denied = runWriter({
     results: {
-      quality: 'success', browser: 'success', database: 'success',
+      quality: 'success',
       normalized_database: 'skipped', performance: 'skipped',
     },
   })
@@ -278,7 +278,7 @@ test('requires the normalized database gate for a full release decision', () => 
 test('requires the normalized real-browser gate for a full release decision', () => {
   const denied = runWriter({
     results: {
-      quality: 'success', browser: 'success', database: 'success', normalized_database: 'success',
+      quality: 'success', normalized_database: 'success',
       normalized_browser: 'skipped', performance: 'skipped',
     },
   })
@@ -287,4 +287,15 @@ test('requires the normalized real-browser gate for a full release decision', ()
   assert.equal(denied.decision, 'DENY')
   assert.equal(gate.status, 'not_run')
   assert.equal(gate.required, true)
+})
+
+test('uses the normalized real-browser gate for UI and frontend changes', () => {
+  for (const scope of ['ui', 'frontend']) {
+    const document = runWriter({
+      scope,
+      results: { fast_quality: 'success', normalized_browser: 'success' },
+    })
+    assert.deepEqual(document.testRuns.map((run) => run.id), ['fast_quality', 'normalized_browser'])
+    assert.equal(document.decision, 'ALLOW')
+  }
 })

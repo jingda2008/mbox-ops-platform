@@ -93,8 +93,8 @@ describe('PaymentCommandService', () => {
     expect(executor.maxActiveHandlers).toBe(2)
     expect(first.value.orderId).toBe(orderOneId)
     expect(second.value.orderId).toBe(orderTwoId)
-    expect(transactions.get('init-order-one-0001')?.lockedOrderIds).toEqual([orderOneId, orderOneId])
-    expect(transactions.get('init-order-two-0001')?.lockedOrderIds).toEqual([orderTwoId, orderTwoId])
+    expect(transactions.get('init-order-one-0001')?.lockedOrderIds).toEqual([orderOneId, orderOneId, orderOneId])
+    expect(transactions.get('init-order-two-0001')?.lockedOrderIds).toEqual([orderTwoId, orderTwoId, orderTwoId])
   })
 
   it('rolls the payment mutation back when audit insertion fails', async () => {

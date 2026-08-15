@@ -13,6 +13,12 @@ import {
   type UpdatePerformerInput,
 } from './performer-repository.js'
 import {
+  PerformerSongRepository,
+  type PerformerSong,
+  type PerformerSongImportResult,
+  type PerformerSongInput,
+} from './performer-song-repository.js'
+import {
   ScheduleRepository,
   type CreateScheduleInput,
   type PerformanceSchedule,
@@ -39,6 +45,16 @@ interface CommandMetadata {
 
 export interface CreatePerformerCommand extends CreatePerformerInput, CommandMetadata {}
 export interface UpdatePerformerCommand extends UpdatePerformerInput, CommandMetadata {}
+export interface ImportPerformerSongsCommand extends CommandMetadata {
+  performerId: string
+  sourceName: string
+  mode: 'upsert' | 'replace'
+  songs: readonly PerformerSongInput[]
+}
+export interface UpdatePerformerSongCommand extends CommandMetadata {
+  songId: string
+  changes: Partial<PerformerSongInput>
+}
 export interface CreateScheduleCommand extends CreateScheduleInput, CommandMetadata {}
 export interface UpdateScheduleCommand extends UpdateScheduleInput, CommandMetadata {}
 
@@ -90,6 +106,58 @@ export class PerformanceCommandService {
         performer.id,
         { stageName: performer.stageName, status: performer.status, songCount: performer.songCatalog.length },
         before === null ? null : { stageName: before.stageName, status: before.status, songCount: before.songCatalog.length },
+      )
+    })
+  }
+
+  importPerformerSongs(
+    input: Readonly<ImportPerformerSongsCommand>,
+  ): Promise<CommandExecution<PerformerSongImportResult>> {
+    return this.commands.execute(command(input, 'performer-song.import', songImportCodec), async (transaction) => {
+      const result = await new PerformerSongRepository(transaction).import({
+        performerId: input.performerId,
+        employeeId: input.actor.type === 'employee' ? input.actor.employeeId : null,
+        sourceName: input.sourceName,
+        mode: input.mode,
+        songs: input.songs,
+      })
+      return outcome(
+        result,
+        input.actor,
+        input.businessDate,
+        input.idempotencyKey,
+        'performer_song.imported',
+        'performer_song_import_batch',
+        result.batchId,
+        {
+          performerId: result.performerId,
+          mode: result.mode,
+          rowCount: result.rowCount,
+          importedCount: result.importedCount,
+          rejectedCount: result.rejectedCount,
+          sourceSha256: result.sourceSha256,
+        },
+      )
+    })
+  }
+
+  updatePerformerSong(
+    input: Readonly<UpdatePerformerSongCommand>,
+  ): Promise<CommandExecution<PerformerSong>> {
+    return this.commands.execute(command(input, 'performer-song.update', performerSongCodec), async (transaction) => {
+      const repository = new PerformerSongRepository(transaction)
+      const before = await repository.findById(input.songId, true)
+      const song = await repository.update(input.songId, input.changes)
+      return outcome(
+        song,
+        input.actor,
+        input.businessDate,
+        input.idempotencyKey,
+        'performer_song.updated',
+        'performer_song',
+        song.id,
+        performerSongAuditData(song),
+        before === null ? null : performerSongAuditData(before),
       )
     })
   }
@@ -341,6 +409,16 @@ function songRequestAuditData(request: SongRequest): JsonObject {
   }
 }
 
+function performerSongAuditData(song: PerformerSong): JsonObject {
+  return {
+    performerId: song.performerId,
+    code: song.code,
+    title: song.title,
+    aliases: song.aliases,
+    status: song.status,
+  }
+}
+
 function ensureEmployeeActor(actor: AuditActor, employeeId: string): void {
   if (actor.type !== 'employee' || actor.employeeId !== employeeId) {
     throw new TypeError('Song request employee action must use the authenticated employee actor')
@@ -369,6 +447,8 @@ function jsonCodec<Result>(): JsonCodec<Result> {
 }
 
 const performerCodec = jsonCodec<Performer>()
+const performerSongCodec = jsonCodec<PerformerSong>()
+const songImportCodec = jsonCodec<PerformerSongImportResult>()
 const scheduleCodec = jsonCodec<PerformanceSchedule>()
 const songRequestCodec = jsonCodec<SongRequest>()
 const submissionCodec = jsonCodec<SongRequestSubmission>()

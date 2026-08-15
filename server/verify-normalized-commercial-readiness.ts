@@ -50,8 +50,8 @@ export function evaluateCommercialReadiness(
   const issues: CommercialReadinessIssue[] = []
   const blocker = (code: string, message: string) => issues.push({ severity: 'blocker', code, message })
 
-  if (snapshot.schemaFlavor !== 'normalized-core-v1' || Number(snapshot.schemaVersion ?? 0) < 34) {
-    blocker('schema.unavailable', '规范化数据库版本必须为034或更高')
+  if (snapshot.schemaFlavor !== 'normalized-core-v1' || Number(snapshot.schemaVersion ?? 0) < 45) {
+    blocker('schema.unavailable', '规范化数据库版本必须为046或更高')
   }
   if (!snapshot.storeActive) blocker('store.inactive', '目标门店不存在或未启用')
   if (snapshot.configurationApplications < 1 || !snapshot.latestConfigVersion || !snapshot.latestConfigSha256) {
@@ -206,20 +206,16 @@ function readinessSql(): string {
       (SELECT count(*)::text FROM mbox.employees WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND status='active') AS active_employees,
       (SELECT count(*)::text FROM mbox.products WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND status='active') AS active_products,
       (SELECT count(*)::text FROM mbox.products WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND status='active'
-        AND COALESCE((product_snapshot->>'guestVisible')::boolean, true)) AS guest_visible_products,
+        AND guest_visible) AS guest_visible_products,
       (SELECT count(*)::text FROM mbox.products WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND status='active'
-        AND COALESCE((product_snapshot->>'guestVisible')::boolean, true)
-        AND COALESCE((product_snapshot#>>'{recommendation,enabled}')::boolean, false)) AS recommendation_products,
+        AND guest_visible AND recommendation_enabled) AS recommendation_products,
       (SELECT count(*)::text FROM mbox.products product WHERE product.tenant_id=$1::uuid AND product.store_id=$2::uuid
         AND product.status='active' AND NOT EXISTS (
           SELECT 1 FROM mbox.product_prices price WHERE price.tenant_id=product.tenant_id AND price.store_id=product.store_id
             AND price.product_id=product.id AND price.price_type='standard' AND price.valid_from <= clock_timestamp()
             AND (price.valid_until IS NULL OR price.valid_until > clock_timestamp()))) AS products_missing_current_price,
       (SELECT count(*)::text FROM mbox.products product WHERE product.tenant_id=$1::uuid AND product.store_id=$2::uuid
-        AND product.status='active' AND NOT (
-          jsonb_typeof(product.product_snapshot->'costAmount')='number'
-          AND (product.product_snapshot->>'costAmount') ~ '^\\d+$'
-        )) AS products_missing_cost,
+        AND product.status='active' AND product.cost_amount_minor IS NULL) AS products_missing_cost,
       (SELECT count(*)::text FROM mbox.products product WHERE product.tenant_id=$1::uuid AND product.store_id=$2::uuid
         AND product.status='active' AND product.product_kind='bundle' AND NOT EXISTS (
           SELECT 1 FROM mbox.product_bundle_components component WHERE component.tenant_id=product.tenant_id

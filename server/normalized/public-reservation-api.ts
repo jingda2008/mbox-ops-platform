@@ -24,6 +24,10 @@ import {
   ReservationTransitionError,
   type Reservation,
 } from './reservation-repository.js'
+import {
+  ScheduleRepository,
+  type DailyPerformanceView,
+} from './schedule-repository.js'
 import type {
   ScopedPostgresTransactionRunner,
   ScopedTransaction,
@@ -64,11 +68,13 @@ export interface PublicReservationApiOptions {
   resolveStaff(request: FastifyRequest): Promise<PublicReservationStaffContext> | PublicReservationStaffContext
   protectContact(value: string): Promise<ProtectedContact> | ProtectedContact
   currentBusinessDate(scope: Readonly<StoreScope>): Promise<string> | string
+  createScheduleRepository?(transaction: ScopedTransaction): Pick<ScheduleRepository, 'getDailyView'>
   now?: () => Date
   createPublicId?: (kind: 'reservation' | 'waitlist') => string
 }
 
 interface ReservationPolicyRow extends Record<string, unknown> {
+  policy_version: number
   hold_minutes: number
   arrival_grace_minutes: number
   max_advance_days: number
@@ -159,6 +165,7 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
 ) => {
   const now = options.now ?? (() => new Date())
   const createPublicId = options.createPublicId ?? ((kind) => `${kind}-${randomUUID()}`)
+  const createSchedules = options.createScheduleRepository ?? ((transaction) => new ScheduleRepository(transaction))
 
   app.post('/public/reservation/session', async (request, reply) => handle(reply, async () => {
     const body = readObject(request.body)
@@ -200,7 +207,7 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
       validateReservationWindow(arrivalAt, expectedEndAt, now(), policy.max_advance_days)
       await enforceRateLimit(transaction, 'availability', fingerprint({ arrivalAt, expectedEndAt, guestCount }), 30, 60_000)
       const tables = await listReservationTables(transaction, arrivalAt, expectedEndAt, guestCount)
-      const capacity = await readReservationCapacity(transaction, arrivalAt, expectedEndAt, policy.hold_minutes)
+      const capacity = await readReservationCapacity(transaction, arrivalAt, expectedEndAt)
       return { policy, expectedEndAt, tables, capacity }
     })
     return reply.send({
@@ -213,6 +220,19 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
         areas: groupPublicTables(result.tables),
       },
     })
+  }))
+
+  app.get('/public/reservation/performances', async (request, reply) => handle(reply, async () => {
+    const scope = await options.resolveTrustedScope(request)
+    const query = readQuery(request)
+    const businessDate = readBusinessDate(query.date, '演出日期')
+    const currentBusinessDate = await options.currentBusinessDate(scope)
+    const view = await options.transactions.run(scope, async (transaction) => {
+      const policy = await readPolicy(transaction)
+      validatePublicPerformanceDate(businessDate, currentBusinessDate, policy.max_advance_days)
+      return createSchedules(transaction).getDailyView(businessDate, now().toISOString())
+    }, { readOnly: true })
+    return reply.send({ data: publicDailyPerformance(view) })
   }))
 
   app.post('/public/reservations', async (request, reply) => handle(reply, async () => {
@@ -244,7 +264,7 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
         ? new Date(Date.parse(arrivalAt) + policy.default_duration_minutes * 60_000).toISOString()
         : readTimestamp(body.expectedEndAt, '预计结束时间')
       validateReservationWindow(arrivalAt, expectedEndAt, now(), policy.max_advance_days)
-      const capacity = await readReservationCapacity(transaction, arrivalAt, expectedEndAt, policy.hold_minutes)
+      const capacity = await readReservationCapacity(transaction, arrivalAt, expectedEndAt)
       if (!capacityAccepts(capacity, guestCount)) throw new PublicReservationCapacityUnavailableError()
       const heldUntil = new Date(Math.min(
         Date.parse(arrivalAt),
@@ -265,13 +285,16 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
           bookingMode: mode,
           depositRule: deposit,
           seatPreference,
-          requestHoldMinutes: policy.hold_minutes,
-          arrivalGraceMinutes: policy.arrival_grace_minutes,
         },
         tableIds: [],
         allowUnassignedTable: true,
         initialStatus: 'pending',
         holdExpiresAt: heldUntil,
+        requestHoldExpiresAt: heldUntil,
+        arrivalGraceEndsAt: new Date(
+          Date.parse(arrivalAt) + policy.arrival_grace_minutes * 60_000,
+        ).toISOString(),
+        reservationPolicyVersion: policy.policy_version,
         customerCancelUntil: new Date(
           Date.parse(arrivalAt) - policy.customer_cancel_cutoff_minutes * 60_000,
         ).toISOString(),
@@ -306,7 +329,7 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
       data: publicReservation(execution.value, maskedContact),
       meta: {
         replayed: execution.replayed,
-        arrivalGraceMinutes: reservationArrivalGraceMinutes(execution.value.reservationSnapshot),
+        arrivalGraceMinutes: reservationArrivalGraceMinutes(execution.value),
       },
     })
   }))
@@ -359,7 +382,6 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
           transaction,
           arrivalAt,
           expectedEndAt,
-          policy.hold_minutes,
           current.id,
         )
         if (!capacityAccepts(capacity, guestCount)) throw new PublicReservationCapacityUnavailableError()
@@ -373,6 +395,11 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
           SET customer_name = $4, guest_count = $5, arrival_at = $6::timestamptz,
             expected_end_at = $7::timestamptz, note = $8,
             reservation_snapshot = reservation_snapshot || jsonb_build_object('seatPreference', $9::text),
+            request_hold_expires_at = CASE WHEN status='pending'
+              THEN LEAST($6::timestamptz, clock_timestamp() + make_interval(mins => $10::integer))
+              ELSE NULL END,
+            arrival_grace_ends_at = $6::timestamptz + make_interval(mins => $11::integer),
+            reservation_policy_version = $12::integer,
             aggregate_version = aggregate_version + 1
           WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
         `, [
@@ -385,6 +412,9 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
           expectedEndAt,
           note,
           seatPreference,
+          policy.hold_minutes,
+          policy.arrival_grace_minutes,
+          policy.policy_version,
         ])
         const updated = await new ReservationRepository(transaction).findById(current.id)
         if (!updated) throw new ReservationNotFoundError(current.id)
@@ -620,7 +650,7 @@ async function ownedReservationInTransaction(
 
 async function readPolicy(transaction: ScopedTransaction, lock = false): Promise<ReservationPolicyRow> {
   const result = await transaction.query<ReservationPolicyRow>(`
-    SELECT hold_minutes, arrival_grace_minutes, max_advance_days, default_duration_minutes,
+    SELECT policy_version, hold_minutes, arrival_grace_minutes, max_advance_days, default_duration_minutes,
       customer_cancel_cutoff_minutes, deposit_mode, deposit_minor,
       deposit_ratio_bps, deposit_rule_text
     FROM mbox.public_reservation_policies
@@ -636,7 +666,6 @@ async function readReservationCapacity(
   transaction: ScopedTransaction,
   arrivalAt: string,
   expectedEndAt: string,
-  requestHoldMinutes: number,
   excludeReservationId: string | null = null,
 ): Promise<ReservationCapacityRow> {
   const result = await transaction.query<ReservationCapacityRow>(`
@@ -655,7 +684,7 @@ async function readReservationCapacity(
         SELECT sum(reservation.guest_count)
         FROM mbox.reservations AS reservation
         WHERE reservation.tenant_id = $1::uuid AND reservation.store_id = $2::uuid
-          AND ($6::uuid IS NULL OR reservation.id <> $6::uuid)
+          AND ($5::uuid IS NULL OR reservation.id <> $5::uuid)
           AND tstzrange(reservation.arrival_at, reservation.expected_end_at, '[)')
             && tstzrange($3::timestamptz, $4::timestamptz, '[)')
           AND (
@@ -664,17 +693,7 @@ async function readReservationCapacity(
               reservation.status = 'pending'
               AND (
                 reservation.source <> 'wechat'
-                OR LEAST(
-                  reservation.arrival_at,
-                  reservation.created_at + make_interval(mins =>
-                    CASE
-                      WHEN reservation.reservation_snapshot->>'requestHoldMinutes' ~ '^[0-9]{1,3}$'
-                        THEN LEAST(120, GREATEST(1,
-                          (reservation.reservation_snapshot->>'requestHoldMinutes')::integer))
-                      ELSE $5::integer
-                    END
-                  )
-                ) > clock_timestamp()
+                OR reservation.request_hold_expires_at > clock_timestamp()
               )
             )
           )
@@ -684,7 +703,6 @@ async function readReservationCapacity(
     transaction.scope.storeId,
     arrivalAt,
     expectedEndAt,
-    requestHoldMinutes,
     excludeReservationId,
   ])
   return result.rows[0] ?? { total_capacity: 0, committed_guests: 0 }
@@ -849,9 +867,8 @@ function publicReservation(reservation: Reservation, maskedContact: string): Jso
       : 'not_arrived',
     note: reservation.note,
     seatPreference: reservationSeatPreference(reservation.reservationSnapshot),
-    arrivalGraceEndsAt: new Date(
-      Date.parse(reservation.arrivalAt) + reservationArrivalGraceMinutes(reservation.reservationSnapshot) * 60_000,
-    ).toISOString(),
+    arrivalGraceEndsAt: reservation.arrivalGraceEndsAt,
+    reservationPolicyVersion: reservation.reservationPolicyVersion,
     cancellationPolicy: reservation.cancellationPolicySnapshot,
   }
 }
@@ -867,6 +884,41 @@ function publicWaitlist(entry: WaitlistEntry): JsonObject {
     arrivalState: entry.status === 'arrived' || entry.status === 'seated' ? 'arrived' : 'not_arrived',
     note: entry.note,
   }
+}
+
+function publicDailyPerformance(view: DailyPerformanceView): JsonObject {
+  const publicSchedule = (schedule: DailyPerformanceView['schedules'][number]): JsonObject => ({
+    id: schedule.id,
+    performerStageName: schedule.performerStageName,
+    performerProfile: publicPerformerProfile(schedule.performerProfileSnapshot),
+    startsAt: schedule.startsAt,
+    endsAt: schedule.endsAt,
+    status: schedule.status,
+    sortOrder: schedule.sortOrder,
+  })
+  return {
+    timezone: view.timezone,
+    localDate: view.localDate,
+    phase: view.phase,
+    current: view.current === null ? null : publicSchedule(view.current),
+    next: view.next === null ? null : publicSchedule(view.next),
+    startsInSeconds: view.startsInSeconds,
+    remainingSeconds: view.remainingSeconds,
+    schedules: view.schedules.map(publicSchedule),
+  }
+}
+
+function publicPerformerProfile(profile: Record<string, unknown>): JsonObject {
+  const result: Record<string, string | string[]> = {}
+  for (const key of ['bio', 'imageUrl'] as const) {
+    const value = profile[key]
+    if (typeof value === 'string') result[key] = value
+  }
+  for (const key of ['genres', 'styles', 'highlights'] as const) {
+    const value = profile[key]
+    if (Array.isArray(value) && value.every((item) => typeof item === 'string')) result[key] = value
+  }
+  return result
 }
 
 function reservationEvent(reservation: Reservation): JsonObject {
@@ -887,9 +939,10 @@ function reservationSeatPreference(snapshot: JsonObject): SeatPreference {
   return SEAT_PREFERENCES.includes(value as SeatPreference) ? value as SeatPreference : 'no_preference'
 }
 
-function reservationArrivalGraceMinutes(snapshot: JsonObject): number {
-  const value = snapshot.arrivalGraceMinutes
-  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 120 ? value : 10
+function reservationArrivalGraceMinutes(reservation: Reservation): number {
+  return Math.max(1, Math.round(
+    (Date.parse(reservation.arrivalGraceEndsAt) - Date.parse(reservation.arrivalAt)) / 60_000,
+  ))
 }
 
 const reservationCodec: JsonCodec<Reservation> = {
@@ -912,6 +965,9 @@ const reservationCodec: JsonCodec<Reservation> = {
     aggregateVersion: reservation.aggregateVersion,
     customerCancelUntil: reservation.customerCancelUntil,
     cancellationPolicySnapshot: reservation.cancellationPolicySnapshot,
+    requestHoldExpiresAt: reservation.requestHoldExpiresAt,
+    arrivalGraceEndsAt: reservation.arrivalGraceEndsAt,
+    reservationPolicyVersion: reservation.reservationPolicyVersion,
     tableLocks: reservation.tableLocks.map((lock) => ({ ...lock })),
   }),
   decode: (value) => {
@@ -1009,6 +1065,18 @@ function validateReservationWindow(arrivalAt: string, expectedEndAt: string, cur
   }
 }
 
+function validatePublicPerformanceDate(value: string, currentBusinessDate: string, maxDays: number): void {
+  const requested = Date.parse(`${value}T00:00:00.000Z`)
+  const current = Date.parse(`${currentBusinessDate}T00:00:00.000Z`)
+  if (!Number.isFinite(requested) || !Number.isFinite(current)) {
+    throw new PublicReservationRequestError('演出日期格式无效')
+  }
+  const days = Math.round((requested - current) / 86_400_000)
+  if (days < 0 || days > maxDays) {
+    throw new PublicReservationRequestError(`仅可查询今天起${maxDays}天内的演出`)
+  }
+}
+
 function fingerprint(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value), 'utf8').digest('hex')
 }
@@ -1024,6 +1092,18 @@ function readObject(value: unknown): Record<string, unknown> {
 
 function readQuery(request: FastifyRequest): Record<string, unknown> {
   return isObject(request.query) ? request.query : {}
+}
+
+function readBusinessDate(value: unknown, label: string): string {
+  const normalized = readString(value, label, 10, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    throw new PublicReservationRequestError(`${label}格式无效`)
+  }
+  const instant = new Date(`${normalized}T00:00:00.000Z`)
+  if (!Number.isFinite(instant.getTime()) || instant.toISOString().slice(0, 10) !== normalized) {
+    throw new PublicReservationRequestError(`${label}格式无效`)
+  }
+  return normalized
 }
 
 function readString(value: unknown, label: string, minimum: number, maximum: number): string {

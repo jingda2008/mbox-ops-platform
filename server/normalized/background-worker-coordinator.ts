@@ -4,6 +4,7 @@ import type { NotificationBatchResult, NotificationDelivery } from './notificati
 import type { OutboxBatchResult, OutboxDelivery } from './outbox-dispatcher.js'
 import type { PrintAdapter, PrintBatchResult } from './print-worker.js'
 import type { ReservationHoldExpiryBatch } from './reservation-hold-expiry-worker.js'
+import type { PaymentReservationExpiryBatch } from './payment-reservation-expiry-worker.js'
 import type { ServiceTaskSlaBatch } from './service-task-sla-worker.js'
 import type { SopWorkerBatchResult } from './sop-worker.js'
 import type { StoreScope } from './transaction-runner.js'
@@ -13,6 +14,9 @@ type ServiceSlaPort = {
 }
 type ReservationExpiryPort = {
   runBatch(scope: Readonly<StoreScope>, workerId: string): Promise<ReservationHoldExpiryBatch>
+}
+type PaymentReservationExpiryPort = {
+  runBatch(scope: Readonly<StoreScope>, workerId: string): Promise<PaymentReservationExpiryBatch>
 }
 type IdempotencyCleanupPort = {
   runBatch(scope: Readonly<StoreScope>): Promise<IdempotencyCleanupResult>
@@ -67,6 +71,7 @@ export interface NormalizedWorkerCoordinatorOptions {
 export type NormalizedWorkerName =
   | 'service-sla'
   | 'reservation-expiry'
+  | 'payment-reservation-expiry'
   | 'idempotency-cleanup'
   | 'staff-login-rate-limit-cleanup'
   | 'business-day'
@@ -82,6 +87,7 @@ export interface NormalizedWorkerCycleResult {
   workers: {
     serviceSla: ServiceTaskSlaBatch | null
     reservationExpiry: ReservationHoldExpiryBatch | null
+    paymentReservationExpiry: PaymentReservationExpiryBatch | null
     idempotencyCleanup: IdempotencyCleanupResult | null
     staffLoginRateLimitCleanup: number | null
     businessDay: BusinessDayRolloverResult | null
@@ -107,6 +113,7 @@ export class NormalizedBackgroundWorkerCoordinator {
     private readonly workers: Readonly<{
       serviceSla: ServiceSlaPort
       reservationExpiry: ReservationExpiryPort
+      paymentReservationExpiry: PaymentReservationExpiryPort
       idempotencyCleanup: IdempotencyCleanupPort
       staffLoginRateLimitCleanup: StaffLoginRateLimitCleanupPort
       businessDay: BusinessDayPort
@@ -159,6 +166,7 @@ export class NormalizedBackgroundWorkerCoordinator {
     const names: readonly NormalizedWorkerName[] = [
       'service-sla',
       'reservation-expiry',
+      'payment-reservation-expiry',
       'idempotency-cleanup',
       'staff-login-rate-limit-cleanup',
       'business-day',
@@ -171,6 +179,10 @@ export class NormalizedBackgroundWorkerCoordinator {
     const executions = await Promise.allSettled([
       this.runWhenDue('service-sla', () => this.workers.serviceSla.runBatch(this.scope, `${this.options.workerId}:service-sla`)),
       this.runWhenDue('reservation-expiry', () => this.workers.reservationExpiry.runBatch(this.scope, `${this.options.workerId}:reservation-expiry`)),
+      this.runWhenDue('payment-reservation-expiry', () => this.workers.paymentReservationExpiry.runBatch(
+        this.scope,
+        `${this.options.workerId}:payment-reservation-expiry`,
+      )),
       this.runWhenDue('idempotency-cleanup', () => this.workers.idempotencyCleanup.runBatch(this.scope)),
       this.runWhenDue('staff-login-rate-limit-cleanup', () => this.workers.staffLoginRateLimitCleanup.cleanupExpired(this.scope)),
       this.runWhenDue('business-day', () => this.workers.businessDay.run(this.scope, `${this.options.workerId}:business-day`)),
@@ -208,14 +220,15 @@ export class NormalizedBackgroundWorkerCoordinator {
       workers: {
         serviceSla: fulfilledValue(executions[0]),
         reservationExpiry: fulfilledValue(executions[1]),
-        idempotencyCleanup: fulfilledValue(executions[2]),
-        staffLoginRateLimitCleanup: fulfilledValue(executions[3]),
-        businessDay: fulfilledValue(executions[4]),
-        sop: fulfilledValue(executions[5]),
-        aiScheduled: fulfilledValue(executions[6]),
-        print: fulfilledValue(executions[7]),
-        outbox: fulfilledValue(executions[8]),
-        notification: fulfilledValue(executions[9]),
+        paymentReservationExpiry: fulfilledValue(executions[2]),
+        idempotencyCleanup: fulfilledValue(executions[3]),
+        staffLoginRateLimitCleanup: fulfilledValue(executions[4]),
+        businessDay: fulfilledValue(executions[5]),
+        sop: fulfilledValue(executions[6]),
+        aiScheduled: fulfilledValue(executions[7]),
+        print: fulfilledValue(executions[8]),
+        outbox: fulfilledValue(executions[9]),
+        notification: fulfilledValue(executions[10]),
       },
       failures,
     }
@@ -254,6 +267,7 @@ function validateInterval(value: number): number {
 const DEFAULT_WORKER_CADENCES: Readonly<Record<NormalizedWorkerName, number>> = Object.freeze({
   'service-sla': 2_000,
   'reservation-expiry': 5_000,
+  'payment-reservation-expiry': 5_000,
   'idempotency-cleanup': 60_000,
   'staff-login-rate-limit-cleanup': 60_000,
   'business-day': 30_000,

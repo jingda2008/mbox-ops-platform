@@ -72,6 +72,21 @@ try {
     if (!result.rows[0]) throw new Error('normalized browser fixture employee is missing')
     return result.rows[0].id
   }, { readOnly: true })
+  await runtime.transactions.run(scope, async (transaction) => {
+    await transaction.query(`
+      INSERT INTO mbox.store_commerce_policies(
+        tenant_id, store_id, online_payment_enabled, policy_version,
+        reason, updated_by_employee_id, payment_reservation_minutes
+      ) VALUES ($1::uuid,$2::uuid,true,1,$3,$4::uuid,10)
+      ON CONFLICT (tenant_id, store_id) DO UPDATE SET
+        online_payment_enabled=true,
+        policy_version=mbox.store_commerce_policies.policy_version+1,
+        reason=EXCLUDED.reason,
+        updated_by_employee_id=EXCLUDED.updated_by_employee_id,
+        payment_reservation_minutes=10,
+        updated_at=clock_timestamp()
+    `, [scope.tenantId, scope.storeId, '隔离浏览器验收显式启用模拟支付', employeeId])
+  })
   const qr = await new TableQrProvisioner(runtime.transactions, secret).provision({
     scope,
     businessDate,
@@ -166,7 +181,7 @@ async function seedOrderableInventory(
       SELECT id, name, fulfillment_station FROM mbox.products
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND status='active'
         AND product_kind='single' AND fulfillment_station = ANY($3::text[])
-        AND (product_snapshot->'guestVisible' IS NULL OR product_snapshot->'guestVisible'='true'::jsonb)
+        AND guest_visible
       ORDER BY fulfillment_station, code
     `, [tenantId, storeId, ['bar', 'kitchen']])
     const selected = {
@@ -218,11 +233,23 @@ async function seedPerformance(
     await client.query(`SELECT set_config('app.tenant_id', $1, false), set_config('app.store_id', $2, false)`, [tenantId, storeId])
     const performer = await client.query<{ id: string }>(`
       INSERT INTO mbox.performers(
-        tenant_id, store_id, code, stage_name, profile_snapshot, song_catalog)
-      VALUES ($1,$2,'BROWSER-SINGER','林小满','{"bio":"浏览器营业日验收歌手"}'::jsonb,
-        '[{"code":"BROWSER-SONG","title":"后来"}]'::jsonb)
+        tenant_id, store_id, code, stage_name, profile_snapshot)
+      VALUES ($1,$2,'BROWSER-SINGER','林小满','{"bio":"浏览器营业日验收歌手"}'::jsonb)
       RETURNING id
     `, [tenantId, storeId])
+    const songBatch = await client.query<{ id: string }>(`
+      INSERT INTO mbox.performer_song_import_batches(
+        tenant_id, store_id, performer_id, public_id, source_name, source_sha256,
+        import_mode, status, row_count, imported_count, completed_at)
+      VALUES ($1,$2,$3,'browser-e2e-song-import','browser e2e',repeat('0',64),
+        'replace','completed',1,1,clock_timestamp())
+      RETURNING id
+    `, [tenantId, storeId, performer.rows[0]!.id])
+    await client.query(`
+      INSERT INTO mbox.performer_songs(
+        tenant_id, store_id, performer_id, import_batch_id, code, title)
+      VALUES ($1,$2,$3,$4,'BROWSER-SONG','后来')
+    `, [tenantId, storeId, performer.rows[0]!.id, songBatch.rows[0]!.id])
     const now = Date.now()
     const schedule = await client.query<{ id: string }>(`
       INSERT INTO mbox.schedules(

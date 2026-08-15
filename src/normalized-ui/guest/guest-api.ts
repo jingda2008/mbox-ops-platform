@@ -110,6 +110,35 @@ export interface GuestMenuCatalogResult {
   recommendationScene?: MenuRecommendationScene
 }
 
+export type GuestPerformancePhase = 'no_schedule' | 'upcoming' | 'live' | 'between' | 'ended'
+
+export interface GuestPerformanceSchedule {
+  id: string
+  performerStageName: string
+  performerProfile: {
+    bio?: string
+    imageUrl?: string
+    genres?: string[]
+    styles?: string[]
+    highlights?: string[]
+  }
+  startsAt: string
+  endsAt: string
+  status: 'scheduled' | 'performing' | 'completed' | 'cancelled'
+  sortOrder: number
+}
+
+export interface GuestDailyPerformanceView {
+  timezone: string
+  localDate: string
+  phase: GuestPerformancePhase
+  current: GuestPerformanceSchedule | null
+  next: GuestPerformanceSchedule | null
+  startsInSeconds: number | null
+  remainingSeconds: number | null
+  schedules: GuestPerformanceSchedule[]
+}
+
 export interface GuestServiceResult {
   status: 'created' | 'merged' | 'rate_limited'
   message: string
@@ -206,6 +235,15 @@ export class GuestApiClient {
     })
     const data = responseData(body)
     if (!Array.isArray(data) || !data.every(isTableOrder)) throw invalidResponse()
+    return data
+  }
+
+  async loadTodayPerformance(options: Readonly<RequestOptions> = {}): Promise<GuestDailyPerformanceView> {
+    const body = await this.request<unknown>('/api/guest/performances/today', {
+      method: 'GET', signal: options.signal,
+    })
+    const data = responseData(body)
+    if (!isDailyPerformance(data)) throw invalidResponse()
     return data
   }
 
@@ -404,6 +442,39 @@ function isTableOrder(value: unknown): value is GuestTableOrder {
       && typeof item.name === 'string'
       && Number.isSafeInteger(item.quantity)
       && typeof item.status === 'string')
+}
+
+function isDailyPerformance(value: unknown): value is GuestDailyPerformanceView {
+  return isObject(value)
+    && typeof value.timezone === 'string'
+    && typeof value.localDate === 'string'
+    && ['no_schedule', 'upcoming', 'live', 'between', 'ended'].includes(String(value.phase))
+    && (value.current === null || isPerformanceSchedule(value.current))
+    && (value.next === null || isPerformanceSchedule(value.next))
+    && (value.startsInSeconds === null || Number.isSafeInteger(value.startsInSeconds))
+    && (value.remainingSeconds === null || Number.isSafeInteger(value.remainingSeconds))
+    && Array.isArray(value.schedules)
+    && value.schedules.every(isPerformanceSchedule)
+}
+
+function isPerformanceSchedule(value: unknown): value is GuestPerformanceSchedule {
+  return isObject(value)
+    && typeof value.id === 'string'
+    && typeof value.performerStageName === 'string'
+    && isObject(value.performerProfile)
+    && (value.performerProfile.bio === undefined || typeof value.performerProfile.bio === 'string')
+    && (value.performerProfile.imageUrl === undefined || typeof value.performerProfile.imageUrl === 'string')
+    && stringArrayOrUndefined(value.performerProfile.genres)
+    && stringArrayOrUndefined(value.performerProfile.styles)
+    && stringArrayOrUndefined(value.performerProfile.highlights)
+    && typeof value.startsAt === 'string'
+    && typeof value.endsAt === 'string'
+    && ['scheduled', 'performing', 'completed', 'cancelled'].includes(String(value.status))
+    && Number.isSafeInteger(value.sortOrder)
+}
+
+function stringArrayOrUndefined(value: unknown): boolean {
+  return value === undefined || (Array.isArray(value) && value.every((item) => typeof item === 'string'))
 }
 
 function isOrderResult(value: unknown): value is GuestOrderResult {

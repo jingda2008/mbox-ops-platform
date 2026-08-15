@@ -23,7 +23,13 @@ class ScriptedTransaction implements ScopedTransaction {
 
 describe('PerformerRepository', () => {
   it('creates editable performer profile and song catalog without old runtime state', async () => {
-    const transaction = new ScriptedTransaction([{ rows: [performerRow()] }])
+    const transaction = new ScriptedTransaction([
+      { rows: [{ id: performerId }] },
+      { rows: [] },
+      { rows: [{ id: '20000000-0000-4000-8000-000000000001', public_id: 'song-import-test-create' }] },
+      { rows: [] }, { rows: [] }, { rows: [] }, { rows: [] }, { rows: [] }, { rows: [] }, { rows: [] },
+      { rows: [performerRow()] },
+    ])
     const result = await new PerformerRepository(transaction).create({
       code: 'NATALIE',
       stageName: 'Natalie',
@@ -33,12 +39,17 @@ describe('PerformerRepository', () => {
 
     expect(result.songCatalog).toEqual([{ code: 'SONG-1', title: '后来', aliases: ['Hou Lai'] }])
     expect(transaction.calls[0]?.sql).toContain('INSERT INTO mbox.performers')
-    expect(transaction.calls[0]?.values[5]).toBe('[{"code":"SONG-1","title":"后来","aliases":["Hou Lai"]}]')
+    expect(transaction.calls[0]?.sql).not.toContain('song_catalog')
+    expect(transaction.calls.some((call) => call.sql.includes('INSERT INTO mbox.performer_songs'))).toBe(true)
   })
 
   it('locks one performer and updates only supplied editable fields', async () => {
     const transaction = new ScriptedTransaction([
       { rows: [performerRow()] },
+      { rows: [{ id: performerId }] },
+      { rows: [] },
+      { rows: [{ id: '20000000-0000-4000-8000-000000000002', public_id: 'song-import-test-update' }] },
+      { rows: [] }, { rows: [] }, { rows: [] }, { rows: [] }, { rows: [] }, { rows: [] }, { rows: [] },
       { rows: [performerRow({ stage_name: '林小满', song_catalog: [{ title: '月亮代表我的心' }] })] },
     ])
     const result = await new PerformerRepository(transaction).update({
@@ -49,7 +60,8 @@ describe('PerformerRepository', () => {
 
     expect(result.stageName).toBe('林小满')
     expect(transaction.calls[0]?.sql).toContain('FOR UPDATE')
-    expect(transaction.calls[1]?.sql).toContain('CASE WHEN $8::boolean')
+    expect(transaction.calls[1]?.sql).not.toContain('song_catalog')
+    expect(transaction.calls.some((call) => call.sql.includes("SET status='inactive'"))).toBe(true)
   })
 
   it('rejects malformed and duplicate catalog entries before writing', async () => {

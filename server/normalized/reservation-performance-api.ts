@@ -13,6 +13,12 @@ import {
   type Performer,
   type PerformerStatus,
 } from './performer-repository.js'
+import {
+  PerformerSongNotFoundError,
+  PerformerSongRepository,
+  type PerformerSongInput,
+  type PerformerSongStatus,
+} from './performer-song-repository.js'
 import type { ReservationCommandService } from './reservation-command-service.js'
 import {
   ReservationConflictError,
@@ -84,6 +90,8 @@ type PerformanceCommands = Pick<
   PerformanceCommandService,
   | 'createPerformer'
   | 'updatePerformer'
+  | 'importPerformerSongs'
+  | 'updatePerformerSong'
   | 'createSchedule'
   | 'updateSchedule'
   | 'transitionSchedule'
@@ -97,6 +105,7 @@ type PerformanceCommands = Pick<
 type StaffAccessPort = Pick<StaffAccessRepository, 'assertPermission'>
 type ReservationRepositoryPort = Pick<ReservationRepository, 'findById' | 'findByPublicId'>
 type PerformerRepositoryPort = Pick<PerformerRepository, 'findById'>
+type PerformerSongRepositoryPort = Pick<PerformerSongRepository, 'list'>
 type ScheduleRepositoryPort = Pick<ScheduleRepository, 'getDailyView'>
 type SongRequestRepositoryPort = Pick<SongRequestRepository, 'findById'>
 
@@ -111,6 +120,7 @@ export interface ReservationPerformanceApiOptions {
   createStaffAccessRepository?(transaction: ScopedTransaction): StaffAccessPort
   createReservationRepository?(transaction: ScopedTransaction): ReservationRepositoryPort
   createPerformerRepository?(transaction: ScopedTransaction): PerformerRepositoryPort
+  createPerformerSongRepository?(transaction: ScopedTransaction): PerformerSongRepositoryPort
   createScheduleRepository?(transaction: ScopedTransaction): ScheduleRepositoryPort
   createSongRequestRepository?(transaction: ScopedTransaction): SongRequestRepositoryPort
   createPublicId?: (kind: 'reservation') => string
@@ -176,6 +186,7 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
   const createAccess = options.createStaffAccessRepository ?? ((tx) => new StaffAccessRepository(tx))
   const createReservations = options.createReservationRepository ?? ((tx) => new ReservationRepository(tx))
   const createPerformers = options.createPerformerRepository ?? ((tx) => new PerformerRepository(tx))
+  const createPerformerSongs = options.createPerformerSongRepository ?? ((tx) => new PerformerSongRepository(tx))
   const createSchedules = options.createScheduleRepository ?? ((tx) => new ScheduleRepository(tx))
   const createSongRequests = options.createSongRequestRepository ?? ((tx) => new SongRequestRepository(tx))
 
@@ -544,6 +555,64 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
         businessDate: context.businessDate,
         idempotencyKey,
         requestFingerprint: fingerprint(request, context, input),
+      })
+      return reply.send({ data: execution.value, meta: { replayed: execution.replayed } })
+    }),
+  )
+
+  app.get<{ Params: { performerId: string } }>(
+    '/staff/performers/:performerId/songs',
+    async (request, reply) => handleRoute(reply, async () => {
+      const context = await authorizedStaff(options, request, 'song.view', createAccess)
+      const performerId = readUuid(request.params.performerId, 'performerId')
+      const query = readQuery(request)
+      const search = query.search === undefined ? '' : readString(query.search, 'search', 120, 0)
+      const limit = readQueryInteger(query.limit, 'limit', 1, 1000, 200)
+      const songs = await options.transactions.run(context.scope, (transaction) => (
+        createPerformerSongs(transaction).list(performerId, search, limit)
+      ), { readOnly: true })
+      return reply.send({ data: songs })
+    }),
+  )
+
+  app.post<{ Params: { performerId: string } }>(
+    '/staff/performers/:performerId/songs/import',
+    async (request, reply) => handleRoute(reply, async () => {
+      const context = await authorizedStaff(options, request, 'song.manage', createAccess)
+      const performerId = readUuid(request.params.performerId, 'performerId')
+      const body = readObject(request.body)
+      rejectClaims(body, ['employeeId', 'actor', 'scope', 'performerId'])
+      const input = readPerformerSongImport(body, performerId)
+      const idempotencyKey = readIdempotencyKey(request)
+      const execution = await options.performance.importPerformerSongs({
+        ...input,
+        scope: context.scope,
+        actor: employeeActor(context.employeeId),
+        businessDate: context.businessDate,
+        idempotencyKey,
+        requestFingerprint: fingerprint(request, context, input),
+      })
+      return reply.code(execution.replayed ? 200 : 201).send({ data: execution.value, meta: { replayed: execution.replayed } })
+    }),
+  )
+
+  app.patch<{ Params: { songId: string } }>(
+    '/staff/songs/:songId',
+    async (request, reply) => handleRoute(reply, async () => {
+      const context = await authorizedStaff(options, request, 'song.manage', createAccess)
+      const songId = readUuid(request.params.songId, 'songId')
+      const body = readObject(request.body)
+      rejectClaims(body, ['employeeId', 'actor', 'scope', 'songId', 'performerId'])
+      const changes = readPerformerSongUpdate(body)
+      const idempotencyKey = readIdempotencyKey(request)
+      const execution = await options.performance.updatePerformerSong({
+        songId,
+        changes,
+        scope: context.scope,
+        actor: employeeActor(context.employeeId),
+        businessDate: context.businessDate,
+        idempotencyKey,
+        requestFingerprint: fingerprint(request, context, { songId, changes }),
       })
       return reply.send({ data: execution.value, meta: { replayed: execution.replayed } })
     }),
@@ -979,6 +1048,41 @@ function readPerformerUpdate(body: JsonObject, performerId: string) {
   return input
 }
 
+function readPerformerSongImport(body: JsonObject, performerId: string) {
+  const mode = body.mode === undefined ? 'upsert' : readSongImportMode(body.mode)
+  const rows = readJsonObjectArray(body.songs, 'songs')
+  if (rows.length > 5000 || (rows.length === 0 && mode !== 'replace')) {
+    throw new ApiRequestError('songs必须包含1至5000首；replace模式允许空歌单')
+  }
+  return {
+    performerId,
+    sourceName: readString(body.sourceName ?? 'staff manual import', 'sourceName', 256),
+    mode,
+    songs: rows.map((row, index) => readPerformerSong(row, `songs[${index}]`)),
+  }
+}
+
+function readPerformerSongUpdate(body: JsonObject): Partial<PerformerSongInput> {
+  const changes: Partial<PerformerSongInput> = {}
+  if (body.code !== undefined) changes.code = body.code === null ? null : readString(body.code, 'code', 64)
+  if (body.title !== undefined) changes.title = readString(body.title, 'title', 240)
+  if (body.aliases !== undefined) changes.aliases = readStringArray(body.aliases, 'aliases', 0, 100)
+  if (body.metadata !== undefined) changes.metadata = readJsonObject(body.metadata, 'metadata')
+  if (body.status !== undefined) changes.status = readPerformerSongStatus(body.status)
+  if (Object.keys(changes).length === 0) throw new ApiRequestError('至少提供一个歌曲变更')
+  return changes
+}
+
+function readPerformerSong(row: JsonObject, label: string): PerformerSongInput {
+  return {
+    code: row.code === undefined || row.code === null ? null : readString(row.code, `${label}.code`, 64),
+    title: readString(row.title, `${label}.title`, 240),
+    aliases: row.aliases === undefined ? [] : readStringArray(row.aliases, `${label}.aliases`, 0, 100),
+    metadata: row.metadata === undefined ? {} : readJsonObject(row.metadata, `${label}.metadata`),
+    status: row.status === undefined ? 'active' : readPerformerSongStatus(row.status),
+  }
+}
+
 function readScheduleCreate(body: JsonObject) {
   return {
     performerId: readUuid(body.performerId, 'performerId'),
@@ -1051,6 +1155,23 @@ function readInteger(value: unknown, label: string, minimum: number, maximum: nu
     throw new ApiRequestError(`${label}格式无效`)
   }
   return value
+}
+
+function readQueryInteger(value: unknown, label: string, minimum: number, maximum: number, fallback: number): number {
+  if (value === undefined || value === null || value === '') return fallback
+  if (typeof value !== 'string' || !/^\d+$/.test(value)) throw new ApiRequestError(`${label}格式无效`)
+  return readInteger(Number(value), label, minimum, maximum)
+}
+
+function readStringArray(value: unknown, label: string, minimum: number, maximum: number): string[] {
+  if (!Array.isArray(value) || value.length < minimum || value.length > maximum) {
+    throw new ApiRequestError(`${label}格式无效`)
+  }
+  const values = value.map((entry) => readString(entry, label, 240))
+  if (new Set(values.map((entry) => entry.toLocaleLowerCase('zh-CN'))).size !== values.length) {
+    throw new ApiRequestError(`${label}不能包含重复值`)
+  }
+  return values
 }
 
 function readBoolean(value: unknown, label: string): boolean {
@@ -1138,6 +1259,16 @@ function readOptionalReservationStatus(value: unknown): ReservationStatus | null
 function readSongRequestType(value: unknown): SongRequestType {
   if (value === 'catalog' || value === 'custom') return value
   throw new ApiRequestError('requestType必须是catalog或custom')
+}
+
+function readSongImportMode(value: unknown): 'upsert' | 'replace' {
+  if (value === 'upsert' || value === 'replace') return value
+  throw new ApiRequestError('mode必须是upsert或replace')
+}
+
+function readPerformerSongStatus(value: unknown): PerformerSongStatus {
+  if (value === 'active' || value === 'inactive') return value
+  throw new ApiRequestError('歌曲状态无效')
 }
 
 function readOptionalSongStatus(value: unknown): SongRequestStatus | null {
@@ -1230,6 +1361,7 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   if (error instanceof ReservationNotFoundError) return apiError(404, 'RESERVATION_NOT_FOUND', '预约不存在')
   if (error instanceof ReservationCustomerNotFoundError) return apiError(404, 'RESERVATION_CUSTOMER_NOT_FOUND', '预约客户不存在')
   if (error instanceof PerformerNotFoundError) return apiError(404, 'PERFORMER_NOT_FOUND', '歌手不存在')
+  if (error instanceof PerformerSongNotFoundError) return apiError(404, 'PERFORMER_SONG_NOT_FOUND', '歌曲不存在')
   if (error instanceof ScheduleNotFoundError) return apiError(404, 'SCHEDULE_NOT_FOUND', '演出排班不存在')
   if (error instanceof SongRequestNotFoundError) return apiError(404, 'SONG_REQUEST_NOT_FOUND', '点歌请求不存在')
   if (error instanceof ReservationConflictError) return apiError(409, 'RESERVATION_TABLE_CONFLICT', '所选桌位在该时段已不可预约')
@@ -1248,11 +1380,17 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   if (error instanceof SongRequestPaymentEvidenceError) return apiError(409, 'SONG_REQUEST_PAYMENT_EVIDENCE_INVALID', error.message)
   if (error instanceof SongRequestEligibilityError) return apiError(409, 'SONG_REQUEST_NOT_ELIGIBLE', '当前桌次或演出安排暂不支持该点歌请求')
   if (error instanceof SongRequestTransitionError) return apiError(409, 'SONG_REQUEST_STATE_CONFLICT', '当前点歌状态不允许此操作')
+  if (isPostgresConstraintError(error)) return apiError(409, 'SONG_CATALOG_CONFLICT', '歌曲名称、编号或别名与现有歌单冲突')
   if (error instanceof IdempotencyConflictError) return apiError(409, 'IDEMPOTENCY_CONFLICT', '重复请求内容不一致')
   if (error instanceof IdempotencyInProgressError) return apiError(425, 'IDEMPOTENCY_IN_PROGRESS', '相同请求正在处理中')
   if (error instanceof ApiRequestError || error instanceof TypeError) return apiError(400, 'REQUEST_INVALID', error.message)
   if (error instanceof IdempotencyRecordError) return apiError(503, 'COMMAND_TEMPORARILY_UNAVAILABLE', '操作暂时不可用，请稍后重试')
   return apiError(500, 'INTERNAL_ERROR', '服务暂时不可用，请稍后重试')
+}
+
+function isPostgresConstraintError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null
+    && 'code' in error && (error.code === '23505' || error.code === '23514' || error.code === '23503')
 }
 
 function apiError(statusCode: number, code: string, message: string) {

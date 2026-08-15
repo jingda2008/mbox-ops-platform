@@ -78,6 +78,7 @@ import { StaffAccessManagementService } from './staff-access-management-service.
 import { StaffBootstrapQuery } from './staff-bootstrap-query.js'
 import { PostgresStaffLoginRateLimiter } from './staff-login-rate-limiter.js'
 import { staffWorkspaceApiPlugin } from './staff-workspace-api.js'
+import { resolveEffectiveOnlinePayment, storeCommercePolicyApiPlugin } from './store-commerce-policy.js'
 import { tableManagementApiPlugin } from './table-management-api.js'
 import { TableManagementCommandService, TableManagementRepository } from './table-management-repository.js'
 import { TableSessionCommandService, TableSessionRepository } from './table-session-repository.js'
@@ -116,7 +117,7 @@ export const NORMALIZED_LOG_REDACTION_PATHS = Object.freeze([
   'payment.publicKey',
 ])
 
-export const NORMALIZED_MIN_SCHEMA_VERSION = '041'
+export const NORMALIZED_MIN_SCHEMA_VERSION = '046'
 export const NORMALIZED_INJECTABLE_PLUGIN_PORTS = Object.freeze([
   'customer-table-side',
 ] as const)
@@ -356,6 +357,16 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         guestOrderSafetyPolicy: options.config.guestOrderSafetyPolicy,
       },
     )
+    const onlinePaymentProvider = options.config.guestPaymentMode === 'simulation'
+      ? 'simulation' as const
+      : options.config.payment !== null ? 'postar' as const : null
+    const paymentProviderConfigured = onlinePaymentProvider !== null
+    const paymentPolicy = (currentScope: Readonly<StoreScope>) => resolveEffectiveOnlinePayment(
+      transactions,
+      currentScope,
+      paymentProviderConfigured,
+      onlinePaymentProvider,
+    )
     instance.register(commerceKdsApiPlugin, {
       prefix: '/api',
       commerce,
@@ -366,10 +377,9 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       createKdsRepository: (transaction) => new KdsRepository(transaction),
       createOrderRepository: (transaction) => new OrderRepository(transaction),
       resolveOpenTableSessionId: (currentScope, tableId) => resolveOpenSession(transactions, currentScope, tableId),
-      onlinePaymentAvailable: options.config.payment !== null || options.config.guestPaymentMode === 'simulation',
-      onlinePaymentProvider: options.config.guestPaymentMode === 'simulation'
-        ? 'simulation'
-        : options.config.payment !== null ? 'postar' : null,
+      onlinePaymentAvailable: paymentProviderConfigured,
+      resolveOnlinePaymentAvailable: async (currentScope) => (await paymentPolicy(currentScope)).onlinePaymentEnabled,
+      onlinePaymentProvider,
     })
     const paymentCommands = new PaymentCommandService(
       commandExecutor,
@@ -382,6 +392,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       reconciliationQuery: new PostgresReconciliationQuery(transactions),
       cashierWorkbenchQuery: new PostgresCashierWorkbenchQuery(transactions),
       onlinePayments,
+      resolveOnlinePaymentAvailable: async (currentScope) => (await paymentPolicy(currentScope)).onlinePaymentEnabled,
       resolveActorContext: async (request) => {
         if (isGuestRequest(request)) {
           const context = await guestReservationContext(request)
@@ -477,12 +488,23 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       resolveGuestContext: (request) => guestContext.resolve(request),
       resolveDeviceFingerprint: (request) => guestDevices.resolve(request),
       paymentMode: options.config.guestPaymentMode,
+      resolvePaymentMode: async (currentScope) => (await paymentPolicy(currentScope)).onlinePaymentEnabled
+        ? options.config.guestPaymentMode
+        : null,
       paymentActionSecret: options.config.secret,
     })
     instance.register(hardwareApiPlugin, {
       prefix: '/api',
       transactions,
       commands: commandExecutor,
+      resolveContext: operationsContext,
+    })
+    instance.register(storeCommercePolicyApiPlugin, {
+      prefix: '/api',
+      transactions,
+      commands: commandExecutor,
+      providerConfigured: paymentProviderConfigured,
+      provider: onlinePaymentProvider,
       resolveContext: operationsContext,
     })
     instance.register(async (reservationApp) => {

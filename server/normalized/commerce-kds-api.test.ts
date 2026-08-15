@@ -126,6 +126,7 @@ function fixture(input: {
   commerceResultOverride?: SubmittedCommerceResult
   onlinePaymentAvailable?: boolean
   onlinePaymentProvider?: 'postar' | 'simulation' | null
+  resolveOnlinePaymentAvailable?: (scope: Readonly<{ tenantId: string; storeId: string }>) => Promise<boolean>
 } = {}) {
   const permissions = input.permissions ?? [
     'order.create', 'order.view', 'kds.prepare', 'kds.deliver', 'kds.exception.manage',
@@ -320,6 +321,7 @@ function fixture(input: {
       requestedTableId === tableId ? tableSessionId : null
     ),
     onlinePaymentAvailable: input.onlinePaymentAvailable,
+    resolveOnlinePaymentAvailable: input.resolveOnlinePaymentAvailable,
     onlinePaymentProvider: input.onlinePaymentProvider,
   }
   const app = Fastify()
@@ -372,6 +374,19 @@ describe('commerceKdsApiPlugin', () => {
       canInitiatePayment: true,
       onlinePaymentProvider: 'simulation',
     } })
+  })
+
+  it('uses the current store policy instead of the startup payment flag', async () => {
+    const value = fixture({
+      permissions: ['order.create', 'payment.initiate.staff'],
+      onlinePaymentAvailable: true,
+      onlinePaymentProvider: 'postar',
+      resolveOnlinePaymentAvailable: vi.fn(async () => false),
+    })
+    const response = await value.app.inject({ method: 'GET', url: '/api/commerce/assisted-order-access' })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({ data: { canInitiatePayment: false, onlinePaymentProvider: 'postar' } })
   })
 
   it('issues a server-bound short-lived assisted-order context for an open assigned table', async () => {

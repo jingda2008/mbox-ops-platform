@@ -1,6 +1,14 @@
 import type { CapacitorConfig } from '@capacitor/cli'
 
 const validationHost = 'mbox-ops-validation-845187646287.asia-east1.run.app'
+const defaultValidationUrl = `https://${validationHost}`
+const mobileValidationUrl = process.env.MBOX_MOBILE_VALIDATION === '1'
+  ? process.env.MBOX_MOBILE_VALIDATION_URL?.trim()
+  : undefined
+const serverUrl = mobileValidationUrl === undefined || mobileValidationUrl === ''
+  ? defaultValidationUrl
+  : mobileValidationUrl
+const serverHost = new URL(serverUrl).hostname
 
 const config: CapacitorConfig = {
   appId: 'com.superhigh.mbox.ops',
@@ -9,9 +17,9 @@ const config: CapacitorConfig = {
   backgroundColor: '#111310',
   loggingBehavior: 'debug',
   server: {
-    url: `https://${validationHost}`,
-    cleartext: false,
-    allowNavigation: [validationHost],
+    url: serverUrl,
+    cleartext: serverUrl.startsWith('http://'),
+    allowNavigation: [serverHost],
   },
   ios: {
     scheme: 'MBOXOps',

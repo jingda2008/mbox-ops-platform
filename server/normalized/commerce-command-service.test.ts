@@ -20,6 +20,8 @@ import {
 } from './guest-order-safety.js'
 import { InsufficientInventoryError } from './inventory-repository.js'
 import { KdsRepository } from './kds-repository.js'
+import { PaymentCommandService } from './payment-command-service.js'
+import type { PaymentCapabilityAuthorizationPort } from './payment-security-policy.js'
 import { StaffAccessDeniedError } from './staff-access-repository.js'
 import {
   PricingAuthorizationDeniedError,
@@ -101,22 +103,25 @@ class RecordingPricingAuthority implements PricingAuthorityPort {
 }
 
 describe('CommerceCommandService unit transaction composition', () => {
-  it('composes order, inventory and KDS writes before returning audit and outbox evidence', async () => {
+  it('reserves inventory and withholds KDS for an immediate-payment order', async () => {
     const orderId = 'b1000000-0000-4000-8000-000000000001'
     const orderItemId = 'b1000000-0000-4000-8000-000000000002'
-    const movementId = 'b1000000-0000-4000-8000-000000000003'
-    const kdsTaskId = 'b1000000-0000-4000-8000-000000000004'
+    const reservationId = 'b1000000-0000-4000-8000-000000000003'
+    const expiresAt = '2026-08-11T12:10:00.000Z'
     const transaction = new ScriptedTransaction([
       { rows: [{ id: sessionOneId }] },
-      { rows: [{ request_index: 0, product_id: productAId, product_code: 'A', product_name: 'A', category_code: 'drink', product_kind: 'single', fulfillment_station: 'bar', product_snapshot: {}, price_type: 'standard', amount_minor: '8800', currency: 'CNY', store_timezone: 'Asia/Shanghai', store_local_time: '20:00', store_iso_weekday: 1 }] },
+      { rows: [typedPriceRow()] },
       { rows: [{ id: orderId, table_session_id: sessionOneId, public_id: 'unit-order-0001', channel: 'integration', settlement_mode: 'immediate_payment', status: 'submitted', payment_status: 'unpaid', subtotal_amount_minor: '8800', discount_amount_minor: '0', total_amount_minor: '8800', currency: 'CNY', note: null, created_by_employee_id: null, created_at: '2026-08-11T12:00:00.000Z', submitted_at: '2026-08-11T12:00:00.000Z' }] },
       { rows: [{ id: orderItemId, order_id: orderId, product_id: productAId, parent_order_item_id: null, quantity: 1, unit_price_minor: '8800', discount_amount_minor: '0', total_amount_minor: '8800', currency: 'CNY', fulfillment_station: 'bar', product_snapshot: {}, cost_snapshot: {}, status: 'submitted', note: null, created_at: '2026-08-11T12:00:00.000Z' }] },
-      { rows: [{ order_item_id: orderItemId, inventory_item_id: inventoryAId, sku: 'A-ING', required_quantity: '1.000000' }] },
-      { rows: [{ inventory_item_id: inventoryAId, sku: 'A-ING', on_hand_quantity: '10.000000', reserved_quantity: '0.000000', required_quantity: '1.000000', insufficient: false }] },
-      { rows: [{ id: movementId }] },
-      { rows: [{ on_hand_quantity: '9.000000' }] },
-      { rows: [{ id: kdsTaskId, order_item_id: orderItemId, station_code: 'bar', status: 'pending', priority: 100, quantity: 1, assigned_employee_id: null, due_at: null, next_action_at: '2026-08-11T12:00:00Z', accepted_at: null, ready_at: null, cancelled_at: null }] },
       { rows: [], rowCount: 1 },
+      { rows: [], rowCount: 1 },
+      { rows: [{ fulfillment_expires_at: expiresAt, fulfillment_state: 'awaiting_payment' }] },
+      { rows: [{ order_item_id: orderItemId, inventory_item_id: inventoryAId, sku: 'A-ING', required_quantity: '1.000000' }] },
+      { rows: [] },
+      { rows: [{ inventory_item_id: inventoryAId, sku: 'A-ING', on_hand_quantity: '10.000000', reserved_quantity: '0.000000', required_quantity: '1.000000', insufficient: false }] },
+      { rows: [], rowCount: 1 },
+      { rows: [], rowCount: 1 },
+      { rows: [{ id: reservationId, order_id: orderId, order_item_id: orderItemId, inventory_item_id: inventoryAId, sku: 'A-ING', quantity: '1.000000', status: 'reserved', expires_at: expiresAt, movement_id: null }] },
     ])
     const executor = new RecordingExecutor(transaction)
     const result = await new CommerceCommandService(executor).submitOrder({
@@ -124,8 +129,8 @@ describe('CommerceCommandService unit transaction composition', () => {
       settlementMode: 'immediate_payment',
     })
     expect(result.value.order.id).toBe(orderId)
-    expect(result.value.inventoryConsumptions).toHaveLength(1)
-    expect(result.value.kdsTasks).toHaveLength(1)
+    expect(result.value.inventoryConsumptions).toHaveLength(0)
+    expect(result.value.kdsTasks).toHaveLength(0)
     expect(result.value.paymentNextStep).toEqual({
       status: 'required', action: 'create_payment_intent', orderId,
       amountMinor: 8800, currency: 'CNY', paymentStatus: 'unpaid',
@@ -158,9 +163,11 @@ describe('CommerceCommandService unit transaction composition', () => {
     const kdsTaskId = 'b1000000-0000-4000-8000-000000000013'
     const transaction = new ScriptedTransaction([
       { rows: [{ id: sessionOneId }] },
-      { rows: [{ request_index: 0, product_id: productAId, product_code: 'A', product_name: 'A', category_code: 'drink', product_kind: 'single', fulfillment_station: 'bar', product_snapshot: {}, price_type: 'standard', amount_minor: '8800', currency: 'CNY', store_timezone: 'Asia/Shanghai', store_local_time: '20:00', store_iso_weekday: 1 }] },
+      { rows: [typedPriceRow()] },
       { rows: [{ id: orderId, table_session_id: sessionOneId, public_id: 'unit-audit-order', channel: 'integration', settlement_mode: 'table_tab', status: 'submitted', payment_status: 'unpaid', subtotal_amount_minor: '8800', discount_amount_minor: '0', total_amount_minor: '8800', currency: 'CNY', note: null, created_by_employee_id: null, created_at: '2026-08-11T12:00:00.000Z', submitted_at: '2026-08-11T12:00:00.000Z' }] },
       { rows: [{ id: orderItemId, order_id: orderId, product_id: productAId, parent_order_item_id: null, quantity: 1, unit_price_minor: '8800', discount_amount_minor: '0', total_amount_minor: '8800', currency: 'CNY', fulfillment_station: 'bar', product_snapshot: {}, cost_snapshot: {}, status: 'submitted', note: null, created_at: '2026-08-11T12:00:00.000Z' }] },
+      { rows: [], rowCount: 1 },
+      { rows: [], rowCount: 1 },
       { rows: [] },
       { rows: [{ id: kdsTaskId, order_item_id: orderItemId, station_code: 'bar', status: 'pending', priority: 100, quantity: 1, assigned_employee_id: null, due_at: null, next_action_at: '2026-08-11T12:00:00Z', accepted_at: null, ready_at: null, cancelled_at: null }] },
       { rows: [], rowCount: 1 },
@@ -251,9 +258,11 @@ describe('CommerceCommandService unit transaction composition', () => {
     const kdsTaskId = 'b2000000-0000-4000-8000-000000000004'
     const transaction = new ScriptedTransaction([
       { rows: [{ id: sessionOneId }] },
-      { rows: [{ request_index: 0, product_id: productAId, product_code: 'A', product_name: 'A', category_code: 'drink', product_kind: 'single', fulfillment_station: 'bar', product_snapshot: {}, price_type: 'standard', amount_minor: '8800', currency: 'CNY', store_timezone: 'Asia/Shanghai', store_local_time: '20:00', store_iso_weekday: 1 }] },
+      { rows: [typedPriceRow()] },
       { rows: [{ id: orderId, table_session_id: sessionOneId, public_id: 'unit-gift-order', channel: 'cashier', settlement_mode: 'table_tab', status: 'submitted', payment_status: 'unpaid', subtotal_amount_minor: '8800', discount_amount_minor: '8800', total_amount_minor: '0', currency: 'CNY', note: null, created_by_employee_id: employeeId, created_at: '2026-08-11T12:00:00.000Z', submitted_at: '2026-08-11T12:00:00.000Z' }] },
       { rows: [{ id: orderItemId, order_id: orderId, product_id: productAId, parent_order_item_id: null, quantity: 1, unit_price_minor: '8800', discount_amount_minor: '8800', total_amount_minor: '0', currency: 'CNY', fulfillment_station: 'bar', product_snapshot: {}, cost_snapshot: {}, status: 'submitted', note: null, created_at: '2026-08-11T12:00:00.000Z' }] },
+      { rows: [], rowCount: 1 },
+      { rows: [], rowCount: 1 },
       { rows: [{ order_item_id: orderItemId, inventory_item_id: inventoryAId, sku: 'A-ING', required_quantity: '1.000000' }] },
       { rows: [{ inventory_item_id: inventoryAId, sku: 'A-ING', on_hand_quantity: '10.000000', reserved_quantity: '0.000000', required_quantity: '1.000000', insufficient: false }] },
       { rows: [{ id: movementId }] },
@@ -355,6 +364,107 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
         (SELECT count(*)::text FROM mbox.outbox_messages WHERE aggregate_id = $3::uuid) AS outbox
     `, [input.publicId, first.value.order.items[0]!.id, first.value.order.id, tenantId, storeId])
     expect(evidence.rows[0]).toEqual({ orders: '1', movements: '1', tasks: '1', events: '1', audits: '1', outbox: '1' })
+  })
+
+  it('keeps an immediate-payment order out of inventory consumption and KDS until trusted payment succeeds', async () => {
+    const publicId = 'integration-payment-gated-order'
+    const order = await service.submitOrder({
+      ...command(publicId, sessionOneId, productAId, 1, 'integration-payment-gated-0001'),
+      settlementMode: 'immediate_payment',
+    })
+    const orderId = order.value.order.id
+    const orderItemId = order.value.order.items[0]!.id
+    const before = await pool.query<{
+      fulfillment_state: string
+      payment_status: string
+      reservation_status: string
+      on_hand: string
+      reserved: string
+      movements: string
+      tasks: string
+    }>(`
+      SELECT order_row.fulfillment_state, order_row.payment_status,
+        reservation.status AS reservation_status,
+        balance.on_hand_quantity::text AS on_hand,
+        balance.reserved_quantity::text AS reserved,
+        (SELECT count(*)::text FROM mbox.inventory_movements WHERE order_item_id = $2::uuid) AS movements,
+        (SELECT count(*)::text FROM mbox.kds_tasks WHERE order_item_id = $2::uuid) AS tasks
+      FROM mbox.orders AS order_row
+      JOIN mbox.inventory_order_reservations AS reservation
+        ON reservation.order_id = order_row.id AND reservation.order_item_id = $2::uuid
+      JOIN mbox.inventory_balances AS balance
+        ON balance.tenant_id = reservation.tenant_id AND balance.store_id = reservation.store_id
+       AND balance.inventory_item_id = reservation.inventory_item_id
+      WHERE order_row.id = $1::uuid
+    `, [orderId, orderItemId])
+    expect(before.rows[0]).toEqual({
+      fulfillment_state: 'awaiting_payment', payment_status: 'unpaid',
+      reservation_status: 'reserved', on_hand: '5.000000', reserved: '1.000000',
+      movements: '0', tasks: '0',
+    })
+
+    await expect(pool.query(`
+      UPDATE mbox.orders
+      SET fulfillment_state = 'active', fulfillment_expires_at = NULL,
+        fulfillment_activated_at = clock_timestamp()
+      WHERE id = $1::uuid
+    `, [orderId])).rejects.toMatchObject({ code: '23514' })
+    await expect(pool.query(`
+      INSERT INTO mbox.kds_tasks(
+        id, tenant_id, store_id, order_item_id, station_code, priority, quantity
+      ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'bar', 100, 1)
+    `, [randomUUID(), tenantId, storeId, orderItemId])).rejects.toMatchObject({ code: '23514' })
+
+    const paymentAuthorization: PaymentCapabilityAuthorizationPort = {
+      assertEmployeeCapability: async () => undefined,
+      assertRefundApproval: async () => undefined,
+    }
+    const payment = new PaymentCommandService(
+      new NormalizedCommandExecutor(new ScopedPostgresTransactionRunner(asPool(pool))),
+      paymentAuthorization,
+    )
+    await payment.recordManual({
+      scope: { tenantId, storeId },
+      actor: { type: 'employee', employeeId },
+      businessDate: '2026-08-11',
+      idempotencyKey: 'integration-payment-gated-cash-0001',
+      requestFingerprint: 'a'.repeat(64),
+      orderId,
+      publicId: 'integration-payment-gated-cash',
+      provider: 'cash',
+      method: 'cash',
+      evidence: { collectedByEmployeeId: employeeId, receiptReference: 'CASH-TEST-0001' },
+      occurredAt: '2026-08-11T12:05:00.000Z',
+    })
+
+    const after = await pool.query<{
+      fulfillment_state: string
+      payment_status: string
+      reservation_status: string
+      on_hand: string
+      reserved: string
+      movements: string
+      tasks: string
+    }>(`
+      SELECT order_row.fulfillment_state, order_row.payment_status,
+        reservation.status AS reservation_status,
+        balance.on_hand_quantity::text AS on_hand,
+        balance.reserved_quantity::text AS reserved,
+        (SELECT count(*)::text FROM mbox.inventory_movements WHERE order_item_id = $2::uuid) AS movements,
+        (SELECT count(*)::text FROM mbox.kds_tasks WHERE order_item_id = $2::uuid) AS tasks
+      FROM mbox.orders AS order_row
+      JOIN mbox.inventory_order_reservations AS reservation
+        ON reservation.order_id = order_row.id AND reservation.order_item_id = $2::uuid
+      JOIN mbox.inventory_balances AS balance
+        ON balance.tenant_id = reservation.tenant_id AND balance.store_id = reservation.store_id
+       AND balance.inventory_item_id = reservation.inventory_item_id
+      WHERE order_row.id = $1::uuid
+    `, [orderId, orderItemId])
+    expect(after.rows[0]).toEqual({
+      fulfillment_state: 'active', payment_status: 'paid',
+      reservation_status: 'consumed', on_hand: '4.000000', reserved: '0.000000',
+      movements: '1', tasks: '1',
+    })
   })
 
   it('persists settlement mode and treats a changed settlement mode as an idempotency conflict', async () => {
@@ -626,6 +736,19 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
     expect(evidence.rows[0]).toEqual({ accepted: '2', events: '2' })
   })
 })
+
+function typedPriceRow() {
+  return {
+    request_index: 0, product_id: productAId, product_code: 'A', product_name: 'A',
+    category_code: 'drink', product_kind: 'single', fulfillment_station: 'bar',
+    product_snapshot: {}, guest_visible: true,
+    allowed_channels: ['guest_qr', 'staff_assisted', 'cashier', 'reservation', 'integration'],
+    max_order_quantity: 50, available_from: null, available_until: null,
+    kds_priority: 100, fulfillment_sla_seconds: 300,
+    price_type: 'standard', amount_minor: '8800', currency: 'CNY',
+    store_timezone: 'Asia/Shanghai', store_local_time: '20:00', store_iso_weekday: 1,
+  }
+}
 
 function command(publicId: string, tableSessionId: string, productId: string, quantity: number, idempotencyKey: string) {
   return {

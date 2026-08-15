@@ -27,6 +27,11 @@ import {
   type RefundAllocation,
 } from './refund-repository.js'
 import type { StoreScope } from './transaction-runner.js'
+import {
+  PaymentFulfillmentRepository,
+  type PaymentFulfillmentActivation,
+  type PaymentFulfillmentRelease,
+} from './payment-fulfillment-repository.js'
 
 interface CommandMetadata {
   scope: Readonly<StoreScope>
@@ -134,6 +139,7 @@ export class PaymentCommandService {
       } else if (input.actor.type !== 'guest') {
         throw new TypeError('Guest payment initiation requires a guest actor')
       }
+      await new PaymentFulfillmentRepository(transaction).ensureReservationBeforePayment(input.orderId)
       const payments = new PaymentRepository(transaction)
       const payment = await payments.createForOrder({
         orderId: input.orderId,
@@ -163,6 +169,8 @@ export class PaymentCommandService {
           ? 'payment.manual.cash.record'
           : 'payment.manual.pos.record',
       })
+      const fulfillment = new PaymentFulfillmentRepository(transaction)
+      await fulfillment.ensureReservationBeforePayment(input.orderId)
       const payments = new PaymentRepository(transaction)
       const reference = requiredEvidenceString(evidence, 'receiptReference')
       const payment = await payments.createForOrder({
@@ -187,7 +195,11 @@ export class PaymentCommandService {
         evidenceSnapshot: evidence,
       })
       await payments.syncOrderPaymentStatus(payment.orderId)
-      return paymentOutcome(input, payment, 'payment.manual_recorded', 1)
+      const activation = await fulfillment.activatePaidOrder(payment.orderId, {
+        createdByEmployeeId: employeeId,
+        metadata: { paymentId: payment.id, paymentProvider: payment.provider },
+      })
+      return paymentOutcome(input, payment, 'payment.manual_recorded', 1, undefined, activation)
     })
   }
 
@@ -220,6 +232,9 @@ export class PaymentCommandService {
         evidenceSnapshot: providerSnapshot,
       })
       await payments.syncOrderPaymentStatus(payment.orderId)
+      const activation = await new PaymentFulfillmentRepository(transaction).activatePaidOrder(payment.orderId, {
+        metadata: { paymentId: payment.id, paymentProvider: payment.provider },
+      })
       return paymentOutcome(
         input,
         payment,
@@ -230,6 +245,7 @@ export class PaymentCommandService {
           payment.provider,
           input.providerTransactionId,
         ),
+        activation,
       )
     })
   }
@@ -267,6 +283,17 @@ export class PaymentCommandService {
         })
       }
       await payments.syncOrderPaymentStatus(payment.orderId)
+      const fulfillment = new PaymentFulfillmentRepository(transaction)
+      const fulfillmentResult = input.status === 'succeeded'
+        ? await fulfillment.activatePaidOrder(payment.orderId, {
+            metadata: { paymentId: payment.id, paymentProvider: payment.provider },
+          })
+        : input.status === 'failed' || input.status === 'closed'
+          ? await fulfillment.releaseAfterDefinitiveFailure(
+              payment.orderId,
+              `verified provider result: ${input.status}`,
+            )
+          : undefined
       const action = input.status === 'succeeded'
         ? 'payment.succeeded'
         : input.status === 'failed' || input.status === 'closed'
@@ -280,6 +307,7 @@ export class PaymentCommandService {
         input.status === 'succeeded'
           ? paymentBusinessEventKey('succeeded', payment.provider, input.providerTransactionId)
           : undefined,
+        fulfillmentResult,
       )
     })
   }
@@ -455,8 +483,33 @@ function paymentOutcome(
   action: string,
   version: number,
   businessEventKey?: string,
+  fulfillment?: PaymentFulfillmentActivation | PaymentFulfillmentRelease,
 ) {
   const snapshot = paymentToJson(payment)
+  const fulfillmentChanged = fulfillment !== undefined && (
+    ('activated' in fulfillment && fulfillment.activated)
+    || ('released' in fulfillment && fulfillment.released)
+  )
+  const fulfillmentEvent = !fulfillmentChanged
+    ? null
+    : 'activated' in fulfillment
+      ? {
+          action: 'order.fulfillment_activated_after_payment',
+          eventType: 'order.fulfillment_activated_after_payment.v1',
+          payload: {
+            orderId: fulfillment.orderId,
+            inventoryMovementCount: fulfillment.inventoryConsumptions.length,
+            kdsTaskCount: fulfillment.kdsTasks.length,
+          } as JsonObject,
+        }
+      : {
+          action: 'order.fulfillment_reservation_released',
+          eventType: 'order.fulfillment_reservation_released.v1',
+          payload: {
+            orderId: fulfillment.orderId,
+            reservationCount: fulfillment.reservationCount,
+          } as JsonObject,
+        }
   return {
     result: payment,
     auditEvents: [{
@@ -466,7 +519,14 @@ function paymentOutcome(
       objectId: payment.id,
       businessDate: input.businessDate,
       afterData: snapshot,
-    }],
+    }, ...(fulfillmentEvent === null ? [] : [{
+      actor: input.actor,
+      action: fulfillmentEvent.action,
+      objectType: 'order',
+      objectId: fulfillment!.orderId,
+      businessDate: input.businessDate,
+      afterData: fulfillmentEvent.payload,
+    }])],
     outboxMessages: [{
       businessEventKey,
       aggregateType: 'payment',
@@ -474,7 +534,14 @@ function paymentOutcome(
       aggregateVersion: version,
       eventType: `${action}.v1`,
       payload: snapshot,
-    }],
+    }, ...(fulfillmentEvent === null ? [] : [{
+      businessEventKey: `fulfillment:${fulfillmentEvent.action}:${fulfillment!.orderId}`,
+      aggregateType: 'order',
+      aggregateId: fulfillment!.orderId,
+      aggregateVersion: 2,
+      eventType: fulfillmentEvent.eventType,
+      payload: fulfillmentEvent.payload,
+    }])],
   }
 }
 

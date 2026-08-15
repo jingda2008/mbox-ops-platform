@@ -95,3 +95,7 @@ export {
   type NormalizedWorkerCycleResult,
   type NormalizedWorkerName,
 } from './background-worker-coordinator.js'
+export {
+  PaymentReservationExpiryWorker,
+  type PaymentReservationExpiryBatch,
+} from './payment-reservation-expiry-worker.js'

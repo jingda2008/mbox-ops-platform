@@ -10,11 +10,7 @@ import {
   BenefitReservationNotFoundError,
   BenefitUnavailableError,
 } from './benefit-repository.js'
-import {
-  IdempotencyConflictError,
-  IdempotencyInProgressError,
-  type JsonObject,
-} from './command-executor.js'
+import { type JsonObject } from './command-executor.js'
 import {
   CustomerCommandService,
   CustomerIdentityConflictError,
@@ -415,13 +411,15 @@ function readIssueBenefit(body: JsonObject) {
 
 function readProfile(value: unknown) {
   const body = readObject(value)
+  if ('consentSnapshot' in body) {
+    throw new CustomerBenefitRequestError('通知同意不能写入自由JSON客户资料，必须由受控渠道记录强类型决定')
+  }
   return {
     displayName: readOptionalString(body.displayName, '称呼', 128, 1),
     tags: readStringArray(body.tags, '标签'),
     publicTags: readStringArray(body.publicTags, '公开标签'),
     preferences: readOptionalObject(body.preferences),
     publicPreferenceKeys: readStringArray(body.publicPreferenceKeys, '公开偏好键'),
-    consentSnapshot: readOptionalObject(body.consentSnapshot),
   }
 }
 
@@ -455,11 +453,8 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
     return apiError(409, 'BENEFIT_UNAVAILABLE', '权益已过期、已用完或状态已变化')
   }
   if (error instanceof BenefitIdempotencyConflictError || error instanceof CustomerIdentityConflictError
-    || error instanceof CustomerMergeConflictError || error instanceof IdempotencyConflictError) {
+    || error instanceof CustomerMergeConflictError) {
     return apiError(409, 'CUSTOMER_BENEFIT_CONFLICT', error.message)
-  }
-  if (error instanceof IdempotencyInProgressError) {
-    return apiError(409, 'CUSTOMER_BENEFIT_IN_PROGRESS', '相同操作正在处理中，请稍候查看结果')
   }
   if (error instanceof CustomerBenefitRequestError || error instanceof TypeError) {
     return apiError(400, 'CUSTOMER_BENEFIT_REQUEST_INVALID', error.message)

@@ -269,6 +269,46 @@ describe('paymentApiPlugin', () => {
     expect(initiatedCommand?.requestFingerprint).toContain(orderId)
   })
 
+  it('rejects a new online payment when the store operating policy is closed', async () => {
+    const value = fixture({ resolveOnlinePaymentAvailable: vi.fn(async () => false) })
+    const response = await value.app.inject({
+      method: 'POST',
+      url: '/api/payments',
+      headers: { 'idempotency-key': 'payment-policy-closed-0001' },
+      payload: { orderId, provider: 'postar', method: 'native_qr' },
+    })
+
+    expect(response.statusCode).toBe(503)
+    expect(response.json()).toMatchObject({ error: { code: 'ONLINE_PAYMENT_UNAVAILABLE' } })
+    expect(value.commands.initiate).not.toHaveBeenCalled()
+  })
+
+  it('keeps verified callbacks and human refund handling available after new payment initiation is closed', async () => {
+    const resolveOnlinePaymentAvailable = vi.fn(async () => false)
+    const value = fixture({ resolveOnlinePaymentAvailable })
+
+    const callback = await value.app.inject({
+      method: 'POST',
+      url: '/api/payments/providers/postar/callback',
+      payload: { delivery: 'in-flight-payment-after-policy-close' },
+    })
+    const refundRequest = await value.app.inject({
+      method: 'POST',
+      url: `/api/payments/${paymentId}/refunds`,
+      headers: { 'idempotency-key': 'refund-after-policy-close-0001' },
+      payload: {
+        reason: '支付开关关闭后继续处理已收款订单退款',
+        allocations: [{ orderItemId, amountMinor: 1_000 }],
+      },
+    })
+
+    expect(callback.statusCode).toBe(200)
+    expect(refundRequest.statusCode).toBe(201)
+    expect(value.commands.recordSucceededCallback).toHaveBeenCalledOnce()
+    expect(value.commands.requestRefund).toHaveBeenCalledOnce()
+    expect(resolveOnlinePaymentAvailable).not.toHaveBeenCalled()
+  })
+
   it('reuses the one active payment for the same order and presentation', async () => {
     const action = {
       paymentId, paymentPublicId: payment.publicId, orderPublicId: 'OORDER0001',

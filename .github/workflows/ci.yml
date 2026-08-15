@@ -103,136 +103,6 @@ jobs:
       - name: Run deterministic frontend checks and production build
         run: npm run check
 
-  ui_browser:
-    if: needs.classify.outputs.ui_only == 'true'
-    needs: classify
-    runs-on: ubuntu-latest
-    timeout-minutes: 12
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24
-          cache: ${{ github.event_name == 'push' && github.ref_type != 'tag' && 'npm' || '' }}
-      - run: npm ci
-      - id: playwright-cache
-        if: github.event_name == 'push' && github.ref_type != 'tag'
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
-      - name: Install Playwright system dependencies
-        run: npx playwright install-deps chromium
-      - if: github.ref_type == 'tag' || steps.playwright-cache.outputs.cache-hit != 'true'
-        name: Install Playwright Chromium
-        run: npx playwright install chromium
-      - name: Run targeted mobile UI smoke
-        run: npm run test:e2e:smoke
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-ui-smoke-failure-${{ github.sha }}
-          path: artifacts/playwright
-          retention-days: 7
-
-  browser:
-    if: needs.classify.outputs.scope == 'full' || needs.classify.outputs.frontend_only == 'true'
-    needs: classify
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24
-          cache: ${{ github.event_name == 'push' && github.ref_type != 'tag' && 'npm' || '' }}
-      - run: npm ci
-      - id: playwright-cache
-        if: github.event_name == 'push' && github.ref_type != 'tag'
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
-      - name: Install Playwright system dependencies
-        run: npx playwright install-deps chromium
-      - if: github.ref_type == 'tag' || steps.playwright-cache.outputs.cache-hit != 'true'
-        name: Install Playwright Chromium
-        run: npx playwright install chromium
-      - name: Run browser commercial flows
-        run: npm run test:e2e
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-failure-${{ github.sha }}
-          path: artifacts/playwright
-          retention-days: 7
-
-  database:
-    if: needs.classify.outputs.scope == 'full'
-    needs: classify
-    runs-on: ubuntu-latest
-    timeout-minutes: 12
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: mbox
-          POSTGRES_PASSWORD: mbox_test
-          POSTGRES_DB: mbox_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U mbox -d mbox_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24
-          cache: ${{ github.event_name == 'push' && github.ref_type != 'tag' && 'npm' || '' }}
-      - run: npm ci
-      - name: Provision database runtime role
-        env:
-          PGPASSWORD: mbox_test
-        run: >-
-          psql postgresql://mbox@127.0.0.1:5432/mbox_test
-          --set ON_ERROR_STOP=1
-          --command "CREATE ROLE mbox_app NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS"
-      - name: Apply migrations
-        run: npm run db:migrate
-        env:
-          DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
-      - name: Verify migration checksums and forced RLS
-        run: npm run db:verify
-        env:
-          DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
-      - name: Verify checksum migration from revision 023 with a non-superuser owner
-        run: npm run db:verify:checksum-upgrade
-        env:
-          DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
-      - name: Verify UTC instants and 06:00 venue business-day boundary
-        run: npm run db:verify:time
-        env:
-          DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
-      - name: Compile database integration helpers
-        run: |
-          npx tsc -p tsconfig.server.json
-          node scripts/copy-runtime-assets.mjs
-      - name: Verify normalized operational read path
-        run: npm run db:verify:operational
-        env:
-          DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
-      - name: Verify authoritative KDS transactions
-        run: npm run db:verify:kds
-        env:
-          DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
-      - name: Verify cross-instance staff presence leases
-        run: npm run db:verify:presence
-        env:
-          DATABASE_URL: postgresql://mbox:mbox_test@127.0.0.1:5432/mbox_test
-
   normalized_database:
     if: needs.classify.outputs.scope == 'full'
     needs: classify
@@ -296,7 +166,7 @@ jobs:
           npm run architecture:normalized:zero
 
   normalized_browser:
-    if: needs.classify.outputs.scope == 'full'
+    if: needs.classify.outputs.scope == 'full' || needs.classify.outputs.scope == 'ui' || needs.classify.outputs.scope == 'frontend'
     needs: classify
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -427,7 +297,7 @@ jobs:
 
   image:
     if: needs.classify.outputs.full == 'true' && needs.classify.outputs.release_artifact_required == 'true'
-    needs: [classify, quality, browser, database, normalized_database, normalized_browser, performance]
+    needs: [classify, quality, normalized_database, normalized_browser, performance]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -529,7 +399,7 @@ jobs:
 
   verify:
     if: always()
-    needs: [classify, docs, quality, fast_quality, ui_browser, browser, database, normalized_database, normalized_browser, performance, image]
+    needs: [classify, docs, quality, fast_quality, normalized_database, normalized_browser, performance, image]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -557,7 +427,7 @@ jobs:
           MBOX_CI_LOAD_EVIDENCE_BASE64: ${{ needs.performance.outputs.load_report_b64 }}
           MBOX_CI_BROWSER_STARTUP_EVIDENCE_BASE64: ${{ needs.normalized_browser.outputs.startup_report_b64 }}
           MBOX_CI_RESULTS_JSON: >-
-            {"docs":"${{ needs.docs.result }}","quality":"${{ needs.quality.result }}","fast_quality":"${{ needs.fast_quality.result }}","ui_browser":"${{ needs.ui_browser.result }}","browser":"${{ needs.browser.result }}","database":"${{ needs.database.result }}","normalized_database":"${{ needs.normalized_database.result }}","normalized_browser":"${{ needs.normalized_browser.result }}","performance":"${{ needs.performance.result }}","image":"${{ needs.image.result }}"}
+            {"docs":"${{ needs.docs.result }}","quality":"${{ needs.quality.result }}","fast_quality":"${{ needs.fast_quality.result }}","normalized_database":"${{ needs.normalized_database.result }}","normalized_browser":"${{ needs.normalized_browser.result }}","performance":"${{ needs.performance.result }}","image":"${{ needs.image.result }}"}
         run: node scripts/write-ci-quality-evidence.mjs
       - name: Verify immutable CI quality ledger
         run: >-
@@ -631,9 +501,6 @@ jobs:
           DOCS_RESULT: ${{ needs.docs.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
           FAST_QUALITY_RESULT: ${{ needs.fast_quality.result }}
-          UI_BROWSER_RESULT: ${{ needs.ui_browser.result }}
-          BROWSER_RESULT: ${{ needs.browser.result }}
-          DATABASE_RESULT: ${{ needs.database.result }}
           NORMALIZED_DATABASE_RESULT: ${{ needs.normalized_database.result }}
           NORMALIZED_BROWSER_RESULT: ${{ needs.normalized_browser.result }}
           PERFORMANCE_RESULT: ${{ needs.performance.result }}
@@ -645,9 +512,6 @@ jobs:
             test "${DOCS_RESULT}" = success
             test "${QUALITY_RESULT}" = skipped
             test "${FAST_QUALITY_RESULT}" = skipped
-            test "${UI_BROWSER_RESULT}" = skipped
-            test "${BROWSER_RESULT}" = skipped
-            test "${DATABASE_RESULT}" = skipped
             test "${NORMALIZED_DATABASE_RESULT}" = skipped
             test "${NORMALIZED_BROWSER_RESULT}" = skipped
             test "${PERFORMANCE_RESULT}" = skipped
@@ -656,22 +520,16 @@ jobs:
             test "${DOCS_RESULT}" = skipped
             test "${QUALITY_RESULT}" = skipped
             test "${FAST_QUALITY_RESULT}" = success
-            test "${UI_BROWSER_RESULT}" = success
-            test "${BROWSER_RESULT}" = skipped
-            test "${DATABASE_RESULT}" = skipped
             test "${NORMALIZED_DATABASE_RESULT}" = skipped
-            test "${NORMALIZED_BROWSER_RESULT}" = skipped
+            test "${NORMALIZED_BROWSER_RESULT}" = success
             test "${PERFORMANCE_RESULT}" = skipped
             test "${IMAGE_RESULT}" = skipped
           elif [ "${SCOPE}" = frontend ]; then
             test "${DOCS_RESULT}" = skipped
             test "${QUALITY_RESULT}" = skipped
             test "${FAST_QUALITY_RESULT}" = success
-            test "${UI_BROWSER_RESULT}" = skipped
-            test "${BROWSER_RESULT}" = success
-            test "${DATABASE_RESULT}" = skipped
             test "${NORMALIZED_DATABASE_RESULT}" = skipped
-            test "${NORMALIZED_BROWSER_RESULT}" = skipped
+            test "${NORMALIZED_BROWSER_RESULT}" = success
             test "${PERFORMANCE_RESULT}" = skipped
             test "${IMAGE_RESULT}" = skipped
           else
@@ -679,9 +537,6 @@ jobs:
             test "${DOCS_RESULT}" = skipped
             test "${QUALITY_RESULT}" = success
             test "${FAST_QUALITY_RESULT}" = skipped
-            test "${UI_BROWSER_RESULT}" = skipped
-            test "${BROWSER_RESULT}" = success
-            test "${DATABASE_RESULT}" = success
             test "${NORMALIZED_DATABASE_RESULT}" = success
             test "${NORMALIZED_BROWSER_RESULT}" = success
             test "${PERFORMANCE_RESULT}" = success

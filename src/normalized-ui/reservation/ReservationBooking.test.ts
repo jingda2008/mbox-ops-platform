@@ -5,7 +5,7 @@ import { ReservationBookingView, type ReservationBookingViewProps } from './Rese
 import type { ReservationAvailability } from './types'
 
 const callbacks = {
-  onDraftChange: vi.fn(), onLoadAvailability: vi.fn(), onBack: vi.fn(), onJoinWaitlist: vi.fn(), onSubmit: vi.fn(),
+  onDraftChange: vi.fn(), onContinueDetails: vi.fn(), onLoadAvailability: vi.fn(), onRetryPerformance: vi.fn(), onBack: vi.fn(), onJoinWaitlist: vi.fn(), onSubmit: vi.fn(),
   onReconnect: vi.fn(), onRefreshStatus: vi.fn(), onEdit: vi.fn(), onCancel: vi.fn(), onDismissCancel: vi.fn(),
 }
 
@@ -20,6 +20,7 @@ function base(overrides: Partial<ReservationBookingViewProps> = {}): Reservation
     availability: availability(),
     reservation: null, waitlist: null, joinWaitlist: false, cancelArmed: false,
     arrivalHold: { kind: 'hidden', seconds: 0 },
+    performance: null, performanceLoading: false, performanceError: null,
     minDate: '2026-08-12', maxDate: '2026-11-10', ...callbacks, ...overrides,
   }
 }
@@ -31,21 +32,47 @@ function render(props: ReservationBookingViewProps): string {
 describe('ReservationBookingView', () => {
   it('keeps date, time and people on one compact first step', () => {
     const html = render(base())
-    expect(html).toContain('为今晚留个位置')
-    expect(html).toContain('type="date"')
+    expect(html).toContain('选择日期和人数')
+    expect(html).toContain('8月12日周三 · 今天')
     expect(html).toContain('到店时间')
     expect(html).toContain('预约人数')
+    expect(html).toContain('下一步：位置与联系')
+    expect(html).not.toContain('怎么称呼您')
+    expect(html).not.toContain('门店帮我安排')
     expect(html).not.toContain('其他客户')
   })
 
+  it('shows published performers for the selected date without blocking reservation', () => {
+    const html = render(base({
+      performance: {
+        timezone: 'Asia/Shanghai', localDate: '2026-08-12', phase: 'upcoming',
+        current: null, next: null, startsInSeconds: 3600, remainingSeconds: null,
+        schedules: [{
+          id: 'schedule-0001', performerStageName: '李艳', performerProfile: { genres: ['流行'] },
+          startsAt: '2026-08-12T12:30:00.000Z', endsAt: '2026-08-12T13:15:00.000Z',
+          status: 'scheduled', sortOrder: 1,
+        }],
+      },
+    }))
+    expect(html).toContain('8月12日周三演出安排')
+    expect(html).toContain('李艳')
+    expect(html).toContain('20:30–21:15')
+    expect(html).toContain('下一步：位置与联系')
+  })
+
   it('uses lightweight seat preferences without exposing exact table self-selection', () => {
-    const html = render(base())
+    const html = render(base({ step: 'details' }))
+    expect(html).toContain('位置与联系')
+    expect(html).toContain('怎么称呼您')
+    expect(html).toContain('手机或微信')
     expect(html).toContain('门店帮我安排')
     expect(html).toContain('靠近舞台')
     expect(html).toContain('方便聊天')
     expect(html).toContain('卡座舒适')
     expect(html).toContain('室外露台')
     expect(html).toContain('偏好不等于锁台')
+    expect(html).toContain('核对预约信息')
+    expect(html).not.toContain('到店时间')
     expect(html).not.toContain('座位自选')
     expect(html).not.toContain('VIP1')
   })

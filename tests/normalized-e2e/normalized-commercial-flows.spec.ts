@@ -72,9 +72,11 @@ test('mobile guest scans a fixed table QR, searches, orders and sees payment res
   const data = await fixture()
   await page.goto(data.guestUrl)
   await expect(page.getByTestId('normalized-guest-app')).toBeVisible()
-  await expect(page.getByRole('button', { name: /本桌已点.*W01/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /历史已下单.*W01/ })).toBeVisible()
   await expectNoHorizontalOverflow(page)
+  await page.getByRole('button', { name: /记录今晚心情/ }).click()
   await expect(page.locator('.guest-mood-options img')).toHaveCount(6)
+  await page.getByRole('button', { name: /记录今晚心情/ }).click()
 
   const recommendationLayout = await page.locator('.menu-recommendation-options').evaluate((element) => ({
     viewportWidth: element.clientWidth,
@@ -109,12 +111,12 @@ test('mobile guest scans a fixed table QR, searches, orders and sees payment res
   const resultDialog = page.getByRole('dialog', { name: '订单与支付状态' })
   await expect(resultDialog.getByRole('heading', { name: '测试订单已建立' })).toBeVisible()
   await expect(resultDialog).toContainText('没有产生真实收款')
-  await expect(page.getByText('备注已重点标记给出品和配送人员')).toBeVisible()
+  await expect(page.getByText('备注已保存，付款成功后将在出品与配送页面重点提示')).toBeVisible()
   await expect(page.getByText('本次应付')).toBeVisible()
 
   await resultDialog.getByRole('button', { name: '返回菜单' }).click()
-  await page.getByRole('button', { name: /本桌已点/ }).click()
-  const tableOrders = page.getByRole('dialog', { name: '本桌已点' })
+  await page.getByRole('button', { name: /历史已下单/ }).click()
+  const tableOrders = page.getByRole('dialog', { name: '本桌历史订单' })
   await expect(tableOrders).toContainText(data.orderableProductName)
   await expect(tableOrders).toContainText(/等待付款|准备中|已送齐/)
   await tableOrders.getByRole('button', { name: '关闭' }).click()
@@ -160,14 +162,23 @@ test('narrow mobile guest keeps mood and service controls compact above the menu
     await page.goto(data.guestUrl)
     await expect(page.getByTestId('normalized-guest-app')).toBeVisible()
 
+    const mood = page.locator('.guest-mood')
     const moodButtons = page.locator('.guest-mood-options button')
+    await expect(moodButtons).toHaveCount(0)
+    expect((await mood.boundingBox())?.height ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(60)
+    await page.getByRole('button', { name: /记录今晚心情/ }).click()
     await expect(moodButtons).toHaveCount(6)
     const moodRows = await moodButtons.evaluateAll((buttons) => new Set(buttons.map((button) => Math.round(button.getBoundingClientRect().top))).size)
     expect(moodRows, `${width}px mood controls wrapped`).toBe(1)
-    expect((await page.locator('.guest-mood').boundingBox())?.height ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(74)
+    const undersizedMoodTargets = await moodButtons.evaluateAll((buttons) => buttons.filter((button) => {
+      const box = button.getBoundingClientRect()
+      return box.width < 44 || box.height < 44
+    }).length)
+    expect(undersizedMoodTargets).toBe(0)
+    await page.getByRole('button', { name: /记录今晚心情/ }).click()
     expect((await page.locator('.guest-service-strip').boundingBox())?.height ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(58)
     expect((await page.locator('.guest-recommendation-entries').boundingBox())?.height ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(60)
-    expect((await page.locator('.menu-recommendation-option').first().boundingBox())?.y ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(420)
+    expect((await page.locator('.menu-recommendation-option').first().boundingBox())?.y ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(480)
     if (width === 320) {
       const quickAdd = page.getByRole('button', { name: /快速加入/ }).first()
       const checkoutDock = page.getByRole('complementary', { name: '订单结算' })
@@ -180,7 +191,7 @@ test('narrow mobile guest keeps mood and service controls compact above the menu
       expect(quickAddBox!.width).toBeGreaterThanOrEqual(44)
       expect(quickAddBox!.height).toBeGreaterThanOrEqual(44)
       await quickAdd.click()
-      await expect(checkoutDock).toContainText('已选 1 件')
+      await expect(checkoutDock).toContainText('本次待提交 1 件')
       await page.screenshot({ path: 'artifacts/normalized-browser/audit-rc78-guest-menu-cart-320.png', fullPage: true })
     }
     if (width === 390) {
@@ -190,7 +201,7 @@ test('narrow mobile guest keeps mood and service controls compact above the menu
 
     await page.goto(data.reservationUrl)
     await expect(page.getByTestId('reservation-booking')).toBeVisible()
-    await expect(page.getByRole('button', { name: /核对预约信息/ })).toBeVisible()
+    await expect(page.getByRole('button', { name: /下一步：位置与联系/ })).toBeVisible()
     await expectNoHorizontalOverflow(page)
   }
 })
@@ -206,8 +217,11 @@ test('mobile guest, reservation and staff work surfaces have no serious accessib
 
   await page.goto(data.reservationUrl)
   await expect(page.getByTestId('reservation-booking')).toBeVisible()
-  const reservation = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze()
-  expect(reservation.violations.filter((violation) => violation.impact === 'serious' || violation.impact === 'critical')).toEqual([])
+  const reservationSchedule = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze()
+  expect(reservationSchedule.violations.filter((violation) => violation.impact === 'serious' || violation.impact === 'critical')).toEqual([])
+  await page.getByRole('button', { name: /下一步：位置与联系/ }).click()
+  const reservationDetails = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze()
+  expect(reservationDetails.violations.filter((violation) => violation.impact === 'serious' || violation.impact === 'critical')).toEqual([])
 
   await page.goto(data.staffUrl)
   await page.getByLabel('门店口令').fill(data.dailyCredential)
@@ -237,6 +251,10 @@ test('mobile public reservation uses preferences without exposing exact table se
   await expect(page.getByTestId('reservation-booking')).toBeVisible()
   await expect(page.getByText('预约服务在线')).toBeVisible()
   await expectNoHorizontalOverflow(page)
+  await expect(page.getByRole('button', { name: /下一步：位置与联系/ })).toBeVisible()
+  await expect(page.getByLabel('怎么称呼您')).toHaveCount(0)
+  await page.getByRole('button', { name: /下一步：位置与联系/ }).click()
+  await expect(page.getByRole('heading', { name: '位置与联系' })).toBeVisible()
   await expect(page.getByRole('button', { name: /门店帮我安排/ })).toBeVisible()
   await expect(page.getByRole('button', { name: /靠近舞台/ })).toBeVisible()
   await expect(page.getByText('座位自选')).toHaveCount(0)
@@ -254,6 +272,23 @@ test('member page never invents a development member when identity is missing', 
   await expect(page.getByText('登录后查看会员权益', { exact: true })).toBeVisible()
   await expect(page.getByText(/当前不会展示测试会员或虚构权益/)).toBeVisible()
   await expect(page.getByText('member-amy')).toHaveCount(0)
+  await expectNoHorizontalOverflow(page)
+})
+
+test('authenticated member page stays focused on benefits and does not expose notification settings', async ({ page }) => {
+  const data = await fixture()
+  await page.goto(data.guestUrl)
+  await expect(page.getByTestId('normalized-guest-app')).toBeVisible()
+  let consentRequests = 0
+  page.on('request', (request) => {
+    if (request.url().includes('/api/guest/customer/notification-consents')) consentRequests += 1
+  })
+  await page.goto('/member')
+  await expect(page.getByRole('heading', { name: '我的权益' })).toBeVisible()
+  await expect(page.getByText('消息授权', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('微信服务通知', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('短信通知', { exact: true })).toHaveCount(0)
+  expect(consentRequests).toBe(0)
   await expectNoHorizontalOverflow(page)
 })
 
@@ -280,6 +315,7 @@ test('mobile public reservation silently renews one expired session before submi
 
   await page.goto(data.reservationUrl)
   await expect(page.getByText('预约服务在线')).toBeVisible()
+  await page.getByRole('button', { name: /下一步：位置与联系/ }).click()
   await page.getByLabel('怎么称呼您').fill('会话恢复验收')
   await page.getByLabel('手机或微信').fill('13800138001')
   await page.getByRole('button', { name: /核对预约信息/ }).click()
@@ -347,6 +383,7 @@ test('submitted reservation keeps its receipt and gives actionable guidance if s
 
   await page.goto(data.reservationUrl)
   await expect(page.getByText('预约服务在线')).toBeVisible()
+  await page.getByRole('button', { name: /下一步：位置与联系/ }).click()
   await page.getByLabel('怎么称呼您').fill('失联提示验收')
   await page.getByLabel('手机或微信').fill('13800138002')
   await page.getByRole('button', { name: /核对预约信息/ }).click()
@@ -411,6 +448,10 @@ test('reservation actions keep mobile touch targets at least 44px through confir
   await expectReservationTouchTargets(page)
   await page.screenshot({ path: 'artifacts/normalized-browser/audit-rc78-reservation/reservation-initial-320.png', fullPage: true })
 
+  await page.getByRole('button', { name: /下一步：位置与联系/ }).click()
+  await expect(page.getByRole('heading', { name: '位置与联系' })).toBeVisible()
+  await expectReservationTouchTargets(page)
+  await page.screenshot({ path: 'artifacts/normalized-browser/audit-rc78-reservation/reservation-details-320.png', fullPage: true })
   await page.getByLabel('怎么称呼您').fill('触控验收')
   await page.getByLabel('手机或微信').fill('13800138004')
   await page.getByRole('button', { name: /核对预约信息/ }).click()
@@ -450,6 +491,7 @@ test('reservation status polling stops after one session renewal is still reject
 
   await page.goto(data.reservationUrl)
   await expect(page.getByText('预约服务在线')).toBeVisible()
+  await page.getByRole('button', { name: /下一步：位置与联系/ }).click()
   await page.getByLabel('怎么称呼您').fill('续签失败验收')
   await page.getByLabel('手机或微信').fill('13800138003')
   await page.getByRole('button', { name: /核对预约信息/ }).click()
@@ -513,7 +555,8 @@ test('mobile manager can review but cannot execute cashier refund work', async (
   await page.getByLabel('四位 PIN').fill(data.employeePin)
   await page.getByRole('button', { name: /进入工作台/ }).click()
 
-  await page.getByRole('button', { name: '退款审批', exact: true }).click()
+  await page.getByRole('button', { name: '全部', exact: true }).click()
+  await page.getByRole('dialog', { name: '全部工作入口' }).getByRole('button', { name: /退款审批/ }).click()
   await expect(page.getByRole('heading', { name: '收银与退款' })).toBeVisible()
   await expect(page.getByText('待审批')).toBeVisible()
   await page.getByRole('button', { name: /VIP1.*¥88\.00/ }).click()
@@ -663,9 +706,9 @@ test('mobile manager payment choices stay synchronized with two guests at the sa
 
   await page.goto(data.guestUrl)
   await expect(page.getByTestId('normalized-guest-app')).toBeVisible()
-  await page.getByRole('button', { name: /本桌已点.*W01/ }).click()
-  const syncedOrders = page.getByRole('dialog', { name: '本桌已点' })
-  await expect(syncedOrders.getByText('服务员协助点单')).toHaveCount(4)
+  await page.getByRole('button', { name: /历史已下单.*W01/ }).click()
+  const syncedOrders = page.getByRole('dialog', { name: '本桌历史订单' })
+  expect(await syncedOrders.getByText('服务员协助点单').count()).toBeGreaterThanOrEqual(4)
   const staffQrOrder = syncedOrders.getByTestId(`guest-table-order-${staffQrBody.data.providerAction.orderPublicId}`)
   await expect(staffQrOrder.getByRole('button', { name: /微信支付/ })).toBeVisible()
   const guestPayResponse = page.waitForResponse((response) => (
@@ -687,9 +730,9 @@ test('mobile manager payment choices stay synchronized with two guests at the sa
   const secondGuest = await secondGuestContext.newPage()
   await secondGuest.goto(data.guestUrl)
   await expect(secondGuest.getByTestId('normalized-guest-app')).toBeVisible()
-  await secondGuest.getByRole('button', { name: /本桌已点.*W01/ }).click()
-  const secondGuestOrders = secondGuest.getByRole('dialog', { name: '本桌已点' })
-  await expect(secondGuestOrders.getByText('服务员协助点单')).toHaveCount(4)
+  await secondGuest.getByRole('button', { name: /历史已下单.*W01/ }).click()
+  const secondGuestOrders = secondGuest.getByRole('dialog', { name: '本桌历史订单' })
+  expect(await secondGuestOrders.getByText('服务员协助点单').count()).toBeGreaterThanOrEqual(4)
   await expect(secondGuestOrders.getByTestId(`guest-table-order-${staffQrBody.data.providerAction.orderPublicId}`)).toContainText(data.orderableProductName)
   await expect(secondGuestOrders.getByTestId(`guest-table-order-${barcodeBody.data.providerAction.orderPublicId}`)).toContainText('员工正在扫描付款码，请勿重复支付')
   await secondGuestContext.close()

@@ -48,6 +48,8 @@ export interface OrderItem {
   totalAmountMinor: number
   currency: string
   fulfillmentStation: FulfillmentStation
+  fulfillmentPriority?: number
+  fulfillmentDueAt?: string | null
   productSnapshot: JsonObject
   costSnapshot: JsonObject
   status: 'submitted' | 'delivered' | 'cancelled'
@@ -62,7 +64,7 @@ export interface SubmittedOrder {
   channel: OrderChannel
   settlementMode: SettlementMode
   status: 'submitted'
-  paymentStatus: 'unpaid'
+  paymentStatus: 'unpaid' | 'pending' | 'partially_paid' | 'paid' | 'partially_refunded' | 'refunded'
   subtotalAmountMinor: number
   discountAmountMinor: number
   totalAmountMinor: number
@@ -84,6 +86,14 @@ interface ProductPriceRow extends Record<string, unknown> {
   product_kind: 'single' | 'bundle'
   fulfillment_station: FulfillmentStation
   product_snapshot: unknown
+  guest_visible: boolean
+  allowed_channels: OrderChannel[]
+  max_order_quantity: number
+  available_from: string | null
+  available_until: string | null
+  kds_priority: number
+  fulfillment_sla_seconds: number | null
+  cost_amount_minor: string | number | null
   price_type: string
   amount_minor: string | number
   currency: string
@@ -101,6 +111,8 @@ interface BundleComponentRow extends Record<string, unknown> {
   component_category_code: string
   component_fulfillment_station: FulfillmentStation
   component_product_snapshot: unknown
+  component_kds_priority: number
+  component_fulfillment_sla_seconds: number | null
   component_product_kind: 'single' | 'bundle'
   component_status: 'active' | 'sold_out' | 'inactive'
   component_quantity: number
@@ -113,7 +125,7 @@ interface OrderRow extends Record<string, unknown> {
   channel: OrderChannel
   settlement_mode: SettlementMode
   status: 'submitted'
-  payment_status: 'unpaid'
+  payment_status: SubmittedOrder['paymentStatus']
   subtotal_amount_minor: string | number
   discount_amount_minor: string | number
   total_amount_minor: string | number
@@ -136,6 +148,8 @@ interface OrderItemRow extends Record<string, unknown> {
   total_amount_minor: string | number
   currency: string
   fulfillment_station: FulfillmentStation
+  fulfillment_priority: number
+  fulfillment_due_at: string | null
   product_snapshot: unknown
   cost_snapshot: unknown
   status: 'submitted' | 'delivered' | 'cancelled'
@@ -201,11 +215,19 @@ export class OrderRepository {
         tenant_id, store_id, table_session_id, public_id, channel, settlement_mode,
         status, payment_status, subtotal_amount_minor, discount_amount_minor,
         total_amount_minor, currency, note, created_by_employee_id,
-        created_by_customer_id, submitted_at
+        created_by_customer_id, submitted_at, fulfillment_state,
+        fulfillment_expires_at, fulfillment_activated_at
       ) VALUES (
         $1::uuid, $2::uuid, $3::uuid, $4, $5, $6,
         'submitted', 'unpaid', $7::bigint, $8::bigint,
-        $9::bigint, $10, $11, $12::uuid, $13::uuid, clock_timestamp()
+        $9::bigint, $10, $11, $12::uuid, $13::uuid, clock_timestamp(),
+        CASE WHEN $6 = 'immediate_payment' THEN 'awaiting_payment' ELSE 'active' END,
+        CASE WHEN $6 = 'immediate_payment' THEN clock_timestamp() + make_interval(mins => COALESCE((
+          SELECT policy.payment_reservation_minutes
+          FROM mbox.store_commerce_policies AS policy
+          WHERE policy.tenant_id = $1::uuid AND policy.store_id = $2::uuid
+        ), 10)) ELSE NULL END,
+        CASE WHEN $6 = 'table_tab' THEN clock_timestamp() ELSE NULL END
       )
       RETURNING id, table_session_id, public_id, channel, settlement_mode,
         status, payment_status, subtotal_amount_minor, discount_amount_minor,
@@ -234,14 +256,16 @@ export class OrderRepository {
         INSERT INTO mbox.order_items (
           id, tenant_id, store_id, order_id, product_id, parent_order_item_id, quantity,
           unit_price_minor, discount_amount_minor, total_amount_minor, currency,
-          fulfillment_station, product_snapshot, cost_snapshot, status, note
+          fulfillment_station, fulfillment_priority, fulfillment_due_at,
+          product_snapshot, cost_snapshot, status, note
         ) VALUES (
           $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6::uuid, $7,
           $8::bigint, $9::bigint, $10::bigint, $11,
-          $12, $13::jsonb, $14::jsonb, 'submitted', $15
+          $12, $13::smallint, $14::timestamptz, $15::jsonb, $16::jsonb, 'submitted', $17
         )
         RETURNING id, order_id, product_id, parent_order_item_id, quantity, unit_price_minor,
           discount_amount_minor, total_amount_minor, currency, fulfillment_station,
+          fulfillment_priority, fulfillment_due_at::text,
           product_snapshot, cost_snapshot, status, note, created_at::text
       `, [
         item.id,
@@ -256,6 +280,8 @@ export class OrderRepository {
         item.totalAmountMinor,
         item.currency,
         item.fulfillmentStation,
+        item.fulfillmentPriority,
+        item.fulfillmentDueAt,
         JSON.stringify(item.productSnapshot),
         JSON.stringify(item.costSnapshot),
         item.note,
@@ -264,6 +290,32 @@ export class OrderRepository {
     }
 
     return { ...mapOrder(order), items: insertedItems }
+  }
+
+  async getSubmittedForFulfillment(orderId: string): Promise<SubmittedOrder> {
+    requireUuidLike('orderId', orderId)
+    const selectedOrder = await this.transaction.query<OrderRow>(`
+      SELECT id, table_session_id, public_id, channel, settlement_mode,
+        status, payment_status, subtotal_amount_minor, discount_amount_minor,
+        total_amount_minor, currency, note, created_by_employee_id, created_by_customer_id,
+        created_at::text, submitted_at::text
+      FROM mbox.orders
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+        AND id = $3::uuid AND status = 'submitted'
+      FOR UPDATE
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
+    const order = requireOne(selectedOrder, 'Submitted fulfillment order lookup')
+    const selectedItems = await this.transaction.query<OrderItemRow>(`
+      SELECT id, order_id, product_id, parent_order_item_id, quantity, unit_price_minor,
+        discount_amount_minor, total_amount_minor, currency, fulfillment_station,
+        fulfillment_priority, fulfillment_due_at::text,
+        product_snapshot, cost_snapshot, status, note, created_at::text
+      FROM mbox.order_items
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND order_id = $3::uuid
+      ORDER BY created_at, id
+      FOR UPDATE
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
+    return { ...mapOrder(order), items: selectedItems.rows.map(mapOrderItem) }
   }
 
   async markDelivered(orderItemId: string, deliveredByEmployeeId: string): Promise<OrderItem> {
@@ -304,6 +356,7 @@ export class OrderRepository {
       RETURNING item.id, item.order_id, item.product_id, item.parent_order_item_id, item.quantity,
         item.unit_price_minor, item.discount_amount_minor, item.total_amount_minor,
         item.currency, item.fulfillment_station, item.product_snapshot,
+        item.fulfillment_priority, item.fulfillment_due_at::text,
         item.cost_snapshot, item.status, item.note, item.created_at::text
     `, [
       this.transaction.scope.tenantId,
@@ -342,7 +395,12 @@ export class OrderRepository {
       SELECT requested.request_index, product.id AS product_id,
         product.code AS product_code, product.name AS product_name,
         product.category_code, product.product_kind, product.fulfillment_station,
-        product.product_snapshot, price.price_type,
+        product.product_snapshot, product.guest_visible, product.allowed_channels,
+        product.max_order_quantity,
+        to_char(product.available_from, 'HH24:MI') AS available_from,
+        to_char(product.available_until, 'HH24:MI') AS available_until,
+        product.kds_priority, product.fulfillment_sla_seconds,
+        product.cost_amount_minor, price.price_type,
         price.amount_minor, price.currency, store.timezone AS store_timezone,
         to_char(clock_timestamp() AT TIME ZONE store.timezone, 'HH24:MI') AS store_local_time,
         extract(isodow FROM clock_timestamp() AT TIME ZONE store.timezone)::integer AS store_iso_weekday
@@ -412,6 +470,8 @@ export class OrderRepository {
         product.category_code AS component_category_code,
         product.fulfillment_station AS component_fulfillment_station,
         product.product_snapshot AS component_product_snapshot,
+        product.kds_priority AS component_kds_priority,
+        product.fulfillment_sla_seconds AS component_fulfillment_sla_seconds,
         product.product_kind AS component_product_kind,
         product.status AS component_status,
         component.quantity * requested_bundle.ordered_quantity AS component_quantity
@@ -478,6 +538,7 @@ function buildItem(price: ProductPriceRow, requested: RequestedLineRecord) {
   if (!Number.isSafeInteger(gross)) {
     throw new TypeError(`Invalid line total for product ${requested.productId}`)
   }
+  const fulfillmentStation = price.product_kind === 'bundle' ? 'none' as const : price.fulfillment_station
   return {
     id: randomUUID(),
     requestIndex: requested.requestIndex,
@@ -488,7 +549,9 @@ function buildItem(price: ProductPriceRow, requested: RequestedLineRecord) {
     discountAmountMinor: 0,
     totalAmountMinor: gross,
     currency: price.currency,
-    fulfillmentStation: price.product_kind === 'bundle' ? 'none' as const : price.fulfillment_station,
+    fulfillmentStation,
+    fulfillmentPriority: price.kds_priority,
+    fulfillmentDueAt: fulfillmentDueAt(fulfillmentStation, price.fulfillment_sla_seconds),
     productSnapshot: {
       code: price.product_code,
       name: price.product_name,
@@ -497,7 +560,7 @@ function buildItem(price: ProductPriceRow, requested: RequestedLineRecord) {
       productKind: price.product_kind,
       source: toJsonObject(price.product_snapshot),
     },
-    costSnapshot: costSnapshot(price.product_snapshot),
+    costSnapshot: costSnapshot(price.cost_amount_minor),
     note: requested.note,
   }
 }
@@ -521,6 +584,11 @@ function expandBundleItems<T extends ReturnType<typeof buildItem>>(
         discountAmountMinor: 0,
         totalAmountMinor: 0,
         fulfillmentStation: component.component_fulfillment_station,
+        fulfillmentPriority: component.component_kds_priority,
+        fulfillmentDueAt: fulfillmentDueAt(
+          component.component_fulfillment_station,
+          component.component_fulfillment_sla_seconds,
+        ),
         productSnapshot: {
           code: component.component_code,
           name: component.component_name,
@@ -538,9 +606,10 @@ function expandBundleItems<T extends ReturnType<typeof buildItem>>(
   return operational
 }
 
-function costSnapshot(productSnapshot: unknown): JsonObject {
-  const source = toJsonObject(productSnapshot)
-  const unitCostMinor = source.costAmount
+function costSnapshot(costAmountMinor: unknown): JsonObject {
+  const unitCostMinor = typeof costAmountMinor === 'string' && /^\d+$/.test(costAmountMinor)
+    ? Number(costAmountMinor)
+    : costAmountMinor
   if (!Number.isSafeInteger(unitCostMinor) || Number(unitCostMinor) < 0) return {}
   return {
     unitCostMinor: Number(unitCostMinor),
@@ -636,6 +705,8 @@ function mapOrderItem(row: OrderItemRow): OrderItem {
     totalAmountMinor: asSafeMoney(row.total_amount_minor, 'total'),
     currency: row.currency,
     fulfillmentStation: row.fulfillment_station,
+    fulfillmentPriority: row.fulfillment_priority,
+    fulfillmentDueAt: row.fulfillment_due_at,
     productSnapshot: toJsonObject(row.product_snapshot),
     costSnapshot: toJsonObject(row.cost_snapshot),
     status: row.status,
@@ -666,55 +737,24 @@ function assertProductOrderable(
   requested: RequestedLineRecord,
   channel: OrderChannel,
 ): void {
-  const snapshot = toJsonObject(price.product_snapshot)
-  const configuredMaximum = snapshot.maxOrderQuantity
-  const maximum = configuredMaximum === undefined || configuredMaximum === null
-    ? 50
-    : readPositiveInteger(configuredMaximum)
-  if (maximum === null) {
+  if (requested.quantity > price.max_order_quantity) {
     throw new OrderProductUnavailableError(requested.productId)
   }
-  if (requested.quantity > maximum) {
+  if (!price.allowed_channels.includes(channel)
+    || (channel === 'guest_qr' && !price.guest_visible)) {
     throw new OrderProductUnavailableError(requested.productId)
   }
-  const allowedChannels = readStringArray(snapshot.allowedChannels)
-  if (allowedChannels !== null && !allowedChannels.includes(channel)) {
-    throw new OrderProductUnavailableError(requested.productId)
-  }
-  const windows = snapshot.orderWindows
-  if (windows === undefined || windows === null) return
-  if (!Array.isArray(windows) || windows.length === 0) {
-    throw new OrderProductUnavailableError(requested.productId)
-  }
-  const localTime = price.store_local_time
-  const weekday = price.store_iso_weekday
-  const orderable = windows.some((value) => {
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-    const window = value as Record<string, unknown>
-    const days = Array.isArray(window.days)
-      ? window.days.filter((day): day is number => Number.isInteger(day) && Number(day) >= 1 && Number(day) <= 7)
-      : []
-    if (days.length > 0 && !days.includes(weekday)) return false
-    if (typeof window.start !== 'string' || typeof window.end !== 'string'
-      || !/^([01]\d|2[0-3]):[0-5]\d$/.test(window.start)
-      || !/^([01]\d|2[0-3]):[0-5]\d$/.test(window.end)) return false
-    return window.start <= window.end
-      ? localTime >= window.start && localTime < window.end
-      : localTime >= window.start || localTime < window.end
-  })
+  if (price.available_from === null || price.available_until === null) return
+  const orderable = price.available_from < price.available_until
+    ? price.store_local_time >= price.available_from && price.store_local_time < price.available_until
+    : price.store_local_time >= price.available_from || price.store_local_time < price.available_until
   if (!orderable) throw new OrderProductUnavailableError(requested.productId)
 }
 
-function readPositiveInteger(value: unknown): number | null {
-  return Number.isInteger(value) && Number(value) > 0 && Number(value) <= 999
-    ? Number(value)
-    : null
-}
-
-function readStringArray(value: unknown): string[] | null {
-  if (value === undefined || value === null) return null
-  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) return []
-  return value.map((item) => String(item))
+function fulfillmentDueAt(station: FulfillmentStation, configuredSeconds: number | null): string | null {
+  if (station === 'none') return null
+  const fallback = station === 'bar' ? 5 * 60 : station === 'kitchen' ? 10 * 60 : 2 * 60
+  return new Date(Date.now() + (configuredSeconds ?? fallback) * 1_000).toISOString()
 }
 
 function requireUuidLike(name: string, value: string): void {

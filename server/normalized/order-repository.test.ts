@@ -65,7 +65,7 @@ describe('OrderRepository', () => {
     expect(tx.calls[2]?.sql).toContain('settlement_mode')
     expect(tx.calls[2]?.values[5]).toBe('table_tab')
     expect(tx.calls[3]?.sql).toContain('INSERT INTO mbox.order_items')
-    expect(tx.calls[3]?.values[13]).toBe(JSON.stringify({
+    expect(tx.calls[3]?.values[15]).toBe(JSON.stringify({
       unitCostMinor: 1050,
       source: 'catalog_at_order_submission',
     }))
@@ -121,14 +121,14 @@ describe('OrderRepository', () => {
   })
 
   it.each([
-    [{ maxOrderQuantity: 1 }, 'guest_qr' as const, 2],
-    [{ maxOrderQuantity: 'unlimited' }, 'guest_qr' as const, 1],
-    [{ allowedChannels: ['cashier'] }, 'guest_qr' as const, 1],
-    [{ orderWindows: [{ days: [2], start: '10:00', end: '11:00' }] }, 'guest_qr' as const, 1],
-  ])('enforces quantity, channel and local-time availability from the product snapshot', async (snapshot, channel, quantity) => {
+    [{ max_order_quantity: 1 }, 'guest_qr' as const, 2],
+    [{ allowed_channels: ['cashier'] }, 'guest_qr' as const, 1],
+    [{ available_from: '10:00', available_until: '11:00' }, 'guest_qr' as const, 1],
+    [{ guest_visible: false }, 'guest_qr' as const, 1],
+  ])('enforces quantity, channel, visibility and local time from typed product fields', async (fields, channel, quantity) => {
     const tx = new ScriptedTransaction([
       { rows: [{ id: sessionId }] },
-      { rows: [{ ...priceRow(), product_snapshot: snapshot }] },
+      { rows: [{ ...priceRow(), ...fields }] },
     ])
     await expect(new OrderRepository(tx).createSubmitted({
       tableSessionId: sessionId,
@@ -165,7 +165,15 @@ function priceRow(): Record<string, unknown> {
     category_code: 'cocktail',
     product_kind: 'single',
     fulfillment_station: 'bar',
-    product_snapshot: { image: 'cocktail.jpg', costAmount: 1050 },
+    product_snapshot: { image: 'cocktail.jpg' },
+    guest_visible: true,
+    allowed_channels: ['guest_qr', 'staff_assisted', 'cashier', 'reservation', 'integration'],
+    max_order_quantity: 50,
+    available_from: null,
+    available_until: null,
+    kds_priority: 100,
+    fulfillment_sla_seconds: 300,
+    cost_amount_minor: '1050',
     price_type: 'standard',
     amount_minor: '8800',
     currency: 'CNY',
@@ -208,6 +216,8 @@ function itemRow(): Record<string, unknown> {
     total_amount_minor: '17600',
     currency: 'CNY',
     fulfillment_station: 'bar',
+    fulfillment_priority: 100,
+    fulfillment_due_at: '2026-08-11T12:05:00.000Z',
     product_snapshot: { name: 'Signature Cocktail' },
     cost_snapshot: {},
     status: 'submitted',

@@ -11,6 +11,17 @@ export interface InventoryConsumption {
   remainingOnHandQuantity: string;
 }
 
+export interface InventoryOrderReservation {
+  id: string;
+  orderId: string;
+  orderItemId: string;
+  inventoryItemId: string;
+  sku: string;
+  quantity: string;
+  status: "reserved" | "consumed" | "released";
+  expiresAt: string | null;
+}
+
 export interface ConsumeInventoryOptions {
   createdByEmployeeId?: string | null;
   reason?: string | null;
@@ -130,6 +141,18 @@ interface LockedBalanceRow extends Record<string, unknown> {
   reserved_quantity: string;
   required_quantity: string;
   insufficient: boolean;
+}
+
+interface InventoryOrderReservationRow extends Record<string, unknown> {
+  id: string;
+  order_id: string;
+  order_item_id: string;
+  inventory_item_id: string;
+  sku: string;
+  quantity: string;
+  status: "reserved" | "consumed" | "released";
+  expires_at: string | null;
+  movement_id: string | null;
 }
 
 interface InventoryItemRow extends Record<string, unknown> {
@@ -1107,6 +1130,248 @@ export class InventoryRepository {
     return results;
   }
 
+  async reserveForImmediatePaymentOrder(
+    orderId: string,
+    orderItems: readonly OrderItem[],
+    options: Readonly<{ allowMissingRecipes?: boolean }> = {},
+  ): Promise<InventoryOrderReservation[]> {
+    requireUuid("orderId", orderId);
+    if (orderItems.length === 0) return [];
+    if (orderItems.length > 100)
+      throw new TypeError("At most 100 order items can be reserved at once");
+    const order = requireOne(
+      await this.transaction.query<{ fulfillment_expires_at: string | null; fulfillment_state: string }>(`
+        SELECT fulfillment_expires_at::text, fulfillment_state
+        FROM mbox.orders
+        WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
+        FOR UPDATE
+      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId]),
+      "immediate-payment order lookup",
+    );
+    if (order.fulfillment_state !== "awaiting_payment" || order.fulfillment_expires_at === null) {
+      throw new InventoryConflictError("Order is not awaiting payment inventory reservation");
+    }
+
+    const demand = await this.loadRecipeDemand(orderItems);
+    const demandOrderItems = new Set(demand.map((row) => row.order_item_id));
+    const missingRecipe = orderItems.find(
+      (item) =>
+        (item.fulfillmentStation === "bar" || item.fulfillmentStation === "kitchen") &&
+        !demandOrderItems.has(item.id),
+    );
+    if (missingRecipe && options.allowMissingRecipes !== true)
+      throw new InventoryRecipeMissingError(missingRecipe.id);
+    if (demand.length === 0) return [];
+
+    const existing = await this.readOrderReservations(orderId, true);
+    const demandKeys = new Map(demand.map((row) => [
+      `${row.order_item_id}:${row.inventory_item_id}`,
+      normalizeDecimal(row.required_quantity),
+    ]));
+    if (existing.length > 0) {
+      const sameShape = existing.length === demand.length && existing.every((row) => (
+        demandKeys.get(`${row.order_item_id}:${row.inventory_item_id}`) === normalizeDecimal(row.quantity)
+      ));
+      if (!sameShape || existing.some((row) => row.status === "consumed")) {
+        throw new InventoryConflictError("Stored order reservation does not match current recipe demand");
+      }
+      if (existing.every((row) => row.status === "reserved")) return existing.map(mapOrderReservation);
+      if (!existing.every((row) => row.status === "released")) {
+        throw new InventoryConflictError("Order inventory reservations are in mixed states");
+      }
+    }
+
+    const locked = await this.lockRequiredBalances(demand);
+    this.assertBalancesSufficient(demand, locked);
+    for (const row of demand) {
+      const balance = await this.transaction.query(`
+        UPDATE mbox.inventory_balances
+        SET reserved_quantity = reserved_quantity + $4::numeric,
+            updated_at = clock_timestamp()
+        WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+          AND inventory_item_id = $3::uuid
+          AND on_hand_quantity - reserved_quantity >= $4::numeric
+      `, [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        row.inventory_item_id,
+        row.required_quantity,
+      ]);
+      if (balance.rowCount !== 1) {
+        throw new InsufficientInventoryError(row.sku, "0", row.required_quantity);
+      }
+      if (existing.length === 0) {
+        await this.transaction.query(`
+          INSERT INTO mbox.inventory_order_reservations (
+            tenant_id, store_id, order_id, order_item_id, inventory_item_id,
+            quantity, status, expires_at
+          ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6::numeric, 'reserved', $7::timestamptz)
+        `, [
+          this.transaction.scope.tenantId,
+          this.transaction.scope.storeId,
+          orderId,
+          row.order_item_id,
+          row.inventory_item_id,
+          row.required_quantity,
+          order.fulfillment_expires_at,
+        ]);
+      } else {
+        const restored = await this.transaction.query(`
+          UPDATE mbox.inventory_order_reservations
+          SET status = 'reserved', expires_at = $6::timestamptz,
+              release_reason = NULL, released_at = NULL,
+              reserved_at = clock_timestamp(), updated_at = clock_timestamp()
+          WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+            AND order_item_id = $3::uuid AND inventory_item_id = $4::uuid
+            AND order_id = $5::uuid AND status = 'released'
+        `, [
+          this.transaction.scope.tenantId,
+          this.transaction.scope.storeId,
+          row.order_item_id,
+          row.inventory_item_id,
+          orderId,
+          order.fulfillment_expires_at,
+        ]);
+        if (restored.rowCount !== 1) throw new InventoryConflictError("Released reservation could not be restored");
+      }
+    }
+    return (await this.readOrderReservations(orderId, false)).map(mapOrderReservation);
+  }
+
+  async consumeImmediatePaymentReservations(
+    orderId: string,
+    options: Readonly<ConsumeInventoryOptions> = {},
+  ): Promise<InventoryConsumption[]> {
+    requireUuid("orderId", orderId);
+    const reservations = await this.readOrderReservations(orderId, true);
+    if (reservations.length === 0) return [];
+    if (reservations.every((row) => row.status === "consumed")) return [];
+    if (!reservations.every((row) => row.status === "reserved")) {
+      throw new InventoryConflictError("Only reserved inventory can be consumed after payment");
+    }
+    await this.lockReservationBalances(reservations);
+    const results: InventoryConsumption[] = [];
+    for (const reservation of reservations) {
+      const movement = await this.insertMovement({
+        inventoryItemId: reservation.inventory_item_id,
+        movementType: "sale",
+        quantityDelta: `-${normalizeDecimal(reservation.quantity)}`,
+        referenceType: "order_item",
+        referenceId: reservation.order_item_id,
+        orderItemId: reservation.order_item_id,
+        reason: options.reason ?? "payment succeeded",
+        employeeId: options.createdByEmployeeId ?? null,
+        metadata: options.metadata,
+      });
+      const balance = requireOne(
+        await this.transaction.query<{ on_hand_quantity: string }>(`
+          UPDATE mbox.inventory_balances
+          SET on_hand_quantity = on_hand_quantity - $4::numeric,
+              reserved_quantity = reserved_quantity - $4::numeric,
+              last_movement_id = $5::uuid, updated_at = clock_timestamp()
+          WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+            AND inventory_item_id = $3::uuid
+            AND on_hand_quantity >= $4::numeric AND reserved_quantity >= $4::numeric
+          RETURNING on_hand_quantity::text
+        `, [
+          this.transaction.scope.tenantId,
+          this.transaction.scope.storeId,
+          reservation.inventory_item_id,
+          reservation.quantity,
+          movement,
+        ]),
+        "reserved inventory consumption",
+      );
+      const consumed = await this.transaction.query(`
+        UPDATE mbox.inventory_order_reservations
+        SET status = 'consumed', expires_at = NULL, movement_id = $4::uuid,
+            consumed_at = clock_timestamp(), updated_at = clock_timestamp()
+        WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+          AND id = $3::uuid AND status = 'reserved'
+      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, reservation.id, movement]);
+      if (consumed.rowCount !== 1) throw new InventoryConflictError("Inventory reservation lost its consume transition");
+      results.push({
+        movementId: movement,
+        orderItemId: reservation.order_item_id,
+        inventoryItemId: reservation.inventory_item_id,
+        sku: reservation.sku,
+        quantity: reservation.quantity,
+        remainingOnHandQuantity: balance.on_hand_quantity,
+      });
+    }
+    return results;
+  }
+
+  async releaseImmediatePaymentReservations(orderId: string, reason: string): Promise<number> {
+    requireUuid("orderId", orderId);
+    if (reason.trim().length < 3 || reason.length > 300) throw new TypeError("release reason is invalid");
+    const reservations = await this.readOrderReservations(orderId, true);
+    const reserved = reservations.filter((row) => row.status === "reserved");
+    if (reserved.length === 0) return 0;
+    await this.lockReservationBalances(reserved);
+    for (const reservation of reserved) {
+      const balance = await this.transaction.query(`
+        UPDATE mbox.inventory_balances
+        SET reserved_quantity = reserved_quantity - $4::numeric,
+            updated_at = clock_timestamp()
+        WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+          AND inventory_item_id = $3::uuid AND reserved_quantity >= $4::numeric
+      `, [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        reservation.inventory_item_id,
+        reservation.quantity,
+      ]);
+      if (balance.rowCount !== 1) throw new InventoryConflictError("Reserved inventory balance is inconsistent");
+      const released = await this.transaction.query(`
+        UPDATE mbox.inventory_order_reservations
+        SET status = 'released', expires_at = NULL, release_reason = $4,
+            released_at = clock_timestamp(), updated_at = clock_timestamp()
+        WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+          AND id = $3::uuid AND status = 'reserved'
+      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, reservation.id, reason.trim()]);
+      if (released.rowCount !== 1) throw new InventoryConflictError("Inventory reservation lost its release transition");
+    }
+    return reserved.length;
+  }
+
+  private async readOrderReservations(
+    orderId: string,
+    lock: boolean,
+  ): Promise<InventoryOrderReservationRow[]> {
+    const result = await this.transaction.query<InventoryOrderReservationRow>(`
+      SELECT reservation.id, reservation.order_id, reservation.order_item_id,
+        reservation.inventory_item_id, item.sku, reservation.quantity::text,
+        reservation.status, reservation.expires_at::text, reservation.movement_id
+      FROM mbox.inventory_order_reservations AS reservation
+      JOIN mbox.inventory_items AS item
+        ON item.tenant_id = reservation.tenant_id AND item.store_id = reservation.store_id
+       AND item.id = reservation.inventory_item_id
+      WHERE reservation.tenant_id = $1::uuid AND reservation.store_id = $2::uuid
+        AND reservation.order_id = $3::uuid
+      ORDER BY reservation.inventory_item_id, reservation.order_item_id
+      ${lock ? "FOR UPDATE OF reservation" : ""}
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId]);
+    return result.rows;
+  }
+
+  private async lockReservationBalances(
+    reservations: readonly InventoryOrderReservationRow[],
+  ): Promise<void> {
+    const inventoryItemIds = [...new Set(reservations.map((row) => row.inventory_item_id))].sort();
+    const locked = await this.transaction.query(`
+      SELECT inventory_item_id
+      FROM mbox.inventory_balances
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+        AND inventory_item_id = ANY($3::uuid[])
+      ORDER BY inventory_item_id
+      FOR UPDATE
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, inventoryItemIds]);
+    if (locked.rowCount !== inventoryItemIds.length) {
+      throw new InventoryBalanceMissingError(inventoryItemIds[0] ?? "unknown");
+    }
+  }
+
   private async transitionStockCount(
     countId: string,
     from: string,
@@ -1434,6 +1699,19 @@ function mapItem(row: InventoryItemRow): InventoryItemRecord {
     wholeUnitCount: row.whole_unit_count,
     reasonableWasteQuantity: row.reasonable_waste_quantity,
     status: row.status,
+  };
+}
+
+function mapOrderReservation(row: InventoryOrderReservationRow): InventoryOrderReservation {
+  return {
+    id: row.id,
+    orderId: row.order_id,
+    orderItemId: row.order_item_id,
+    inventoryItemId: row.inventory_item_id,
+    sku: row.sku,
+    quantity: row.quantity,
+    status: row.status,
+    expiresAt: row.expires_at,
   };
 }
 

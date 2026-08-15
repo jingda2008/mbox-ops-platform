@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.88 - 2026-08-15
+
+- Restored role-scoped responsibility assignment, venue, performer, schedule, song-catalog and product operating configuration without exposing management actions to every logged-in employee.
+- Normalized performer songs and aliases, product eligibility/search/recommendation/cost fields, reservation timing policy and customer notification consent while retaining display snapshots only for flexible copy, images and immutable history.
+- Added a fail-closed store payment policy and database-enforced unpaid-order inventory reservation/KDS isolation; no configured provider or missing policy can silently open new online payment.
+- Restored current performance information on guest ordering and date-specific performance information on reservation, removed member notification switches, and corrected server-validated hidden bundle components in guest recommendations.
+- Added migrations 042–048, rollback-window compatibility adapters, exact legacy-dependency gates and unit, PostgreSQL, browser, accessibility, responsive and load regression coverage.
+
 ## 1.0.0-rc.87 - 2026-08-14
 
 - Preserved the bind-mounted Caddyfile inode while installing or rolling back the payment domain, so the running container reads the exact host configuration that was validated.

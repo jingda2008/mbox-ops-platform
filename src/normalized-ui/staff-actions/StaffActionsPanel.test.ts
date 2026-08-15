@@ -11,6 +11,8 @@ describe('StaffActionsPanel', () => {
       loadOperations: vi.fn(() => new Promise<StaffOperationsData>(() => undefined)),
       loadFulfillment: vi.fn(() => new Promise<StaffFulfillmentData>(() => undefined)),
       loadReservations: vi.fn(() => new Promise<StaffReservation[]>(() => undefined)),
+      loadTableAssignments: vi.fn(), loadTableAssignmentOptions: vi.fn(),
+      assignTables: vi.fn(), endTableAssignment: vi.fn(),
       openTable: vi.fn(), closeTable: vi.fn(), transferTable: vi.fn(),
       completeServiceTask: vi.fn(), runKdsAction: vi.fn(), actOnReservation: vi.fn(),
       loadAssistedOrderAccess: vi.fn(), loadAssistedOrderCatalog: vi.fn(),

@@ -94,6 +94,7 @@ import type {
   GuestTaskView,
 } from './shared/guest-contracts'
 import type { GuestBehaviorAccepted, GuestBehaviorEventInput } from './shared/guest-insight-contracts'
+import { ApiError } from './shared/api-error'
 import {
   isHighRiskOfflineWrite,
   getOfflineStatus,
@@ -104,19 +105,7 @@ import {
 } from './offline'
 import { shouldTrackMutation, withInteractionAction } from './interaction-feedback'
 
-export class ApiError extends Error {
-  readonly status: number
-  readonly code: string
-  readonly details: Record<string, unknown> | null
-
-  constructor(message: string, status: number, code = 'API_ERROR', details: Record<string, unknown> | null = null) {
-    super(message)
-    this.name = 'ApiError'
-    this.status = status
-    this.code = code
-    this.details = details
-  }
-}
+export { ApiError } from './shared/api-error'
 
 export class OfflineWriteBlockedError extends Error {
   constructor() {

@@ -71,14 +71,7 @@ async function claimExpiredReservations(
           )
         ) OR (
           reservation.status = 'confirmed'
-          AND reservation.arrival_at + make_interval(mins =>
-            CASE
-              WHEN reservation.reservation_snapshot->>'arrivalGraceMinutes' ~ '^[0-9]{1,3}$'
-                THEN LEAST(120, GREATEST(1, (reservation.reservation_snapshot->>'arrivalGraceMinutes')::integer))
-              ELSE 10
-            END
-          )
-          <= clock_timestamp()
+          AND reservation.arrival_grace_ends_at <= clock_timestamp()
         )
       )
     ORDER BY reservation.arrival_at ASC, reservation.id ASC

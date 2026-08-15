@@ -139,6 +139,22 @@ export class NormalizedApiClient {
     return payload.data
   }
 
+  async patchEndpoint<Data>(
+    endpointRef: string,
+    body: unknown,
+    options: Readonly<{ idempotencyKey?: string; timeoutMs?: number }> = {},
+  ): Promise<Data> {
+    return this.mutateEndpoint<Data>('PATCH', endpointRef, body, options)
+  }
+
+  async putEndpoint<Data>(
+    endpointRef: string,
+    body: unknown,
+    options: Readonly<{ idempotencyKey?: string; timeoutMs?: number }> = {},
+  ): Promise<Data> {
+    return this.mutateEndpoint<Data>('PUT', endpointRef, body, options)
+  }
+
   getSessions<Data = unknown>(options: Readonly<NormalizedRequestOptions> = {}): Promise<Data> {
     return this.getDataEndpoint<Data>('/api/operations', options)
   }
@@ -192,6 +208,29 @@ export class NormalizedApiClient {
     return payload.data
   }
 
+  private async mutateEndpoint<Data>(
+    method: 'PATCH' | 'PUT',
+    endpointRef: string,
+    body: unknown,
+    options: Readonly<{ idempotencyKey?: string; timeoutMs?: number }>,
+  ): Promise<Data> {
+    if (!endpointRef.startsWith('/api/')) {
+      throw new NormalizedApiError('接口地址不受信任', 'invalid_response', 'none')
+    }
+    const headers = new Headers({ accept: 'application/json', 'content-type': 'application/json' })
+    if (options.idempotencyKey !== undefined) headers.set('idempotency-key', options.idempotencyKey)
+    const response = await this.request(endpointRef, {
+      method,
+      headers,
+      body: JSON.stringify(body),
+    }, { timeoutMs: options.timeoutMs })
+    const payload = await readJson<NormalizedApiSuccessBody<Data>>(response)
+    if (!isObject(payload) || !('data' in payload)) {
+      throw new NormalizedApiError('服务返回了无法识别的数据，请重试', 'invalid_response', 'retry')
+    }
+    return payload.data
+  }
+
   private async get(
     url: string,
     options: Readonly<NormalizedRequestOptions & { headers?: Headers }> = {},
@@ -201,7 +240,7 @@ export class NormalizedApiClient {
 
   private async request(
     url: string,
-    request: Readonly<{ method: 'GET' | 'POST'; headers?: Headers; body?: string }>,
+    request: Readonly<{ method: 'GET' | 'POST' | 'PATCH' | 'PUT'; headers?: Headers; body?: string }>,
     options: Readonly<NormalizedRequestOptions> = {},
   ): Promise<Response> {
     if (!url.startsWith('/api/')) throw new NormalizedApiError('接口地址不受信任', 'invalid_response', 'none')

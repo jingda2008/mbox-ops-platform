@@ -8,6 +8,30 @@ import {
 type FetchCall = [input: RequestInfo | URL, init?: RequestInit]
 
 describe('PublicReservationApi', () => {
+  it('loads the selected date performance without requiring a reservation mutation', async () => {
+    const send = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => json({ data: {
+      timezone: 'Asia/Shanghai', localDate: '2026-08-12', phase: 'upcoming',
+      current: null, startsInSeconds: 3600, remainingSeconds: null,
+      next: {
+        id: 'schedule-0001', performerStageName: '李艳', performerProfile: { genres: ['流行'] },
+        startsAt: '2026-08-12T12:30:00.000Z', endsAt: '2026-08-12T13:15:00.000Z',
+        status: 'scheduled', sortOrder: 1,
+      },
+      schedules: [{
+        id: 'schedule-0001', performerStageName: '李艳', performerProfile: { genres: ['流行'] },
+        startsAt: '2026-08-12T12:30:00.000Z', endsAt: '2026-08-12T13:15:00.000Z',
+        status: 'scheduled', sortOrder: 1,
+      }],
+    } }))
+    const api = new PublicReservationApi({ fetch: send as unknown as typeof globalThis.fetch })
+
+    await expect(api.performance('2026-08-12')).resolves.toMatchObject({
+      phase: 'upcoming', next: { performerStageName: '李艳' },
+    })
+    expect(String(send.mock.calls[0]?.[0])).toBe('/api/public/reservation/performances?date=2026-08-12')
+    expect(send.mock.calls[0]?.[1]?.method).toBe('GET')
+  })
+
   it('uses HttpOnly-cookie credentials and does not put identity or contact in URLs', async () => {
     const calls: FetchCall[] = []
     const send = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

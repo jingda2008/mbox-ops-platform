@@ -1,5 +1,5 @@
-import type { JsonObject } from './command-executor.js'
 import { PerformerRepository } from './performer-repository.js'
+import { PerformerSongRepository } from './performer-song-repository.js'
 import { ScheduleRepository } from './schedule-repository.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
@@ -17,6 +17,7 @@ export interface SongRequest {
   id: string
   tableSessionId: string
   performerId: string
+  songId: string | null
   scheduleId: string
   customerId: string | null
   songTitle: string
@@ -71,6 +72,7 @@ interface SongRequestRow extends Record<string, unknown> {
   id: string
   table_session_id: string
   performer_id: string
+  song_id: string | null
   schedule_id: string
   customer_id: string | null
   song_title: string
@@ -84,7 +86,7 @@ interface SongRequestRow extends Record<string, unknown> {
 }
 
 const REQUEST_COLUMNS = `
-  id, table_session_id, performer_id, schedule_id, customer_id,
+  id, table_session_id, performer_id, song_id, schedule_id, customer_id,
   song_title, request_type, status, quoted_amount_minor, currency, note,
   created_at::text, updated_at::text
 `
@@ -188,21 +190,25 @@ export class SongRequestRepository {
     if (performer === null || performer.status !== 'active') {
       throw new SongRequestEligibilityError('The selected performer is unavailable')
     }
-    const canonicalTitle = input.requestType === 'catalog'
-      ? findCatalogTitle(performer.songCatalog, input.songTitle)
-      : input.songTitle.trim()
-    if (canonicalTitle === null) {
+    const canonicalSong = input.requestType === 'catalog'
+      ? await new PerformerSongRepository(this.transaction).findCanonical(
+        performer.id,
+        input.songTitle,
+      )
+      : null
+    if (input.requestType === 'catalog' && canonicalSong === null) {
       throw new SongRequestEligibilityError('The song is not in the selected performer\'s available catalog')
     }
+    const canonicalTitle = canonicalSong?.title ?? input.songTitle.trim()
 
     const needsConfirmation = input.requestType === 'custom' || input.requestExtension === true
     const inserted = await this.transaction.query<SongRequestRow>(`
       INSERT INTO mbox.song_requests (
         tenant_id, store_id, table_session_id, performer_id, schedule_id, customer_id,
-        song_title, request_type, status, note
+        song_id, song_title, request_type, status, note
       ) VALUES (
         $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6::uuid,
-        $7, $8, $9, $10
+        $7::uuid, $8, $9, $10, $11
       )
       RETURNING ${REQUEST_COLUMNS}
     `, [
@@ -212,6 +218,7 @@ export class SongRequestRepository {
       target.performerId,
       target.id,
       input.customerId ?? null,
+      canonicalSong?.id ?? null,
       canonicalTitle,
       input.requestType,
       needsConfirmation ? 'confirming' : 'requested',
@@ -417,26 +424,6 @@ export class SongRequestRepository {
   }
 }
 
-function findCatalogTitle(catalog: readonly JsonObject[], requestedTitle: string): string | null {
-  const expected = normalizeSongName(requestedTitle)
-  for (const song of catalog) {
-    if (song.available === false) continue
-    const title = song.title
-    if (typeof title !== 'string') continue
-    const aliases = Array.isArray(song.aliases)
-      ? song.aliases.filter((alias): alias is string => typeof alias === 'string')
-      : []
-    if ([title, ...aliases].some((candidate) => normalizeSongName(candidate) === expected)) {
-      return title.trim()
-    }
-  }
-  return null
-}
-
-function normalizeSongName(value: string): string {
-  return value.trim().normalize('NFKC').toLocaleLowerCase('zh-CN')
-}
-
 function validateSubmit(input: Readonly<SubmitSongRequestInput>): void {
   if (input.tableSessionId.trim().length === 0) throw new TypeError('tableSessionId must not be blank')
   if (input.scheduleId.trim().length === 0) throw new TypeError('scheduleId must not be blank')
@@ -463,6 +450,7 @@ function mapSongRequest(row: SongRequestRow): SongRequest {
     id: row.id,
     tableSessionId: row.table_session_id,
     performerId: row.performer_id,
+    songId: row.song_id,
     scheduleId: row.schedule_id,
     customerId: row.customer_id,
     songTitle: row.song_title,

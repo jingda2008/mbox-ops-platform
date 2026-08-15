@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { StaffActionsApi, StaffActionsApiError, type StaffActionsApiPort } from './staff-actions-api'
 import { AssistedOrderSheet } from './AssistedOrderSheet'
+import { ResponsibilityAssignmentPanel } from './ResponsibilityAssignmentPanel'
 import {
   fulfillmentAction,
   actionableFulfillmentItems,
@@ -425,6 +426,9 @@ export function StaffActionsPanel({
 
       {tab === 'tables' && operations !== null && (
         <div className="staff-table-workspace">
+          {permissions.includes('table.assignment.manage') && (
+            <ResponsibilityAssignmentPanel api={api} tables={operations.tables} />
+          )}
           <div className="staff-table-tools">
             <label><Search size={17} /><input value={tableQuery} onChange={(event) => setTableQuery(event.target.value)} placeholder="搜索桌号或区域" aria-label="搜索桌号或区域" /></label>
             <div role="group" aria-label="桌台显示范围">

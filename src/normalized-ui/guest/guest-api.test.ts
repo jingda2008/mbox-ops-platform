@@ -138,6 +138,24 @@ describe('GuestApiClient', () => {
     expect(new Headers(send.mock.calls[0]?.[1]?.headers).has('idempotency-key')).toBe(false)
   })
 
+  it('loads the published performance timeline as a read-only guest view', async () => {
+    const schedule = {
+      id: 'schedule-0001', performerStageName: '李艳', performerProfile: { genres: ['流行'] },
+      startsAt: '2026-08-11T12:30:00.000Z', endsAt: '2026-08-11T13:15:00.000Z',
+      status: 'performing', sortOrder: 1,
+    }
+    const send = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => jsonResponse({ data: {
+      timezone: 'Asia/Shanghai', localDate: '2026-08-11', phase: 'live',
+      current: schedule, next: null, startsInSeconds: null, remainingSeconds: 900, schedules: [schedule],
+    } }))
+    const client = new GuestApiClient(deviceKey, { fetch: send })
+
+    await expect(client.loadTodayPerformance()).resolves.toMatchObject({
+      phase: 'live', current: { performerStageName: '李艳' },
+    })
+    expect(send.mock.calls[0]?.[0]).toBe('/api/guest/performances/today')
+  })
+
   it('returns the friendly persisted rate-limit response instead of losing it as an exception', async () => {
     const send = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => jsonResponse({ data: {
       status: 'rate_limited',
@@ -183,7 +201,7 @@ function orderResult() {
     cart: { itemCount: 2, lineCount: 1, items: [] },
     order: {
       publicId: 'guest-order-public-0001', status: 'submitted', paymentStatus: 'pending', note: '少冰，生日桌',
-      attentionRequired: true, kdsNotice: '订单含备注，出品与配送页面将重点提示',
+      attentionRequired: true, kdsNotice: '备注已保存，付款成功后将在出品与配送页面重点提示',
     },
     settlement: { subtotalAmountMinor: 13_600, discountAmountMinor: 0, payableAmountMinor: 13_600, currency: 'CNY' },
     payment: {

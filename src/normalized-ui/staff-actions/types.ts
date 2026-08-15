@@ -2,6 +2,7 @@ export type StaffActionPermission =
   | 'table.open'
   | 'table.close'
   | 'table.transfer'
+  | 'table.assignment.manage'
   | 'order.create'
   | 'order.gift'
   | 'service.execute'
@@ -61,6 +62,35 @@ export interface StaffOperationsData {
   actor: StaffActionActor
   tables: StaffActionTable[]
   tasks: StaffServiceTask[]
+}
+
+export type StaffTableAssignmentType = 'primary' | 'backup' | 'temporary'
+
+export interface StaffTableAssignment {
+  id: string
+  tableId: string
+  tableCode: string
+  employeeId: string
+  employeeName: string
+  roleId: string
+  roleCode: string
+  assignmentType: StaffTableAssignmentType
+  startsAt: string
+  endsAt: string | null
+  reason: string
+}
+
+export interface StaffTableAssignmentOptions {
+  employees: Array<{
+    id: string
+    code: string
+    displayName: string
+  }>
+  roles: Array<{
+    id: string
+    code: string
+    name: string
+  }>
 }
 
 export type FulfillmentStation = 'bar' | 'kitchen' | 'cashier'

@@ -209,12 +209,17 @@ export class PersonalContactGovernanceService {
       const inserted = await transaction.query<{
         outcome: 'claimed'; display_expires_at: string
       }>(`
+        WITH claim_now AS (
+          SELECT clock_timestamp() AS requested_at
+        )
         INSERT INTO mbox.activity_contact_access_events(
           tenant_id,store_id,contact_version_id,employee_id,access_purpose,outcome,
           denial_code,claim_token,context_kind,context_id,idempotency_key,request_sha256,
-          display_expires_at
-        ) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,'claimed',NULL,$6::uuid,$7,$8::uuid,$9,$10,
-          clock_timestamp()+interval '60 seconds')
+          requested_at,display_expires_at
+        )
+        SELECT $1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,'claimed',NULL,$6::uuid,$7,$8::uuid,$9,$10,
+          claim_now.requested_at,claim_now.requested_at + interval '60 seconds'
+        FROM claim_now
         ON CONFLICT (tenant_id,store_id,employee_id,idempotency_key) DO NOTHING
         RETURNING outcome,display_expires_at::text
       `, [

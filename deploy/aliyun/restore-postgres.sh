@@ -23,7 +23,7 @@ connection_reference() {
 write_database_evidence() {
   local source_url=$1 output=$2 temporary
   temporary=$(mktemp "${output}.XXXXXX")
-  PGOPTIONS='-c default_transaction_read_only=on' psql -XAt --dbname="${source_url}" > "${temporary}" <<'SQL'
+  PGOPTIONS='-c default_transaction_read_only=on -c search_path=pg_catalog' psql -XAt --dbname="${source_url}" > "${temporary}" <<'SQL'
 WITH object_owners AS (
   SELECT 'schema'::text AS object_kind, quote_ident(namespace.nspname) AS object_identity,
     pg_get_userbyid(namespace.nspowner) AS owner_name

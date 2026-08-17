@@ -7,10 +7,12 @@ import type {
   JsonObject,
   NormalizedCommandExecutor,
 } from './command-executor.js'
-import type {
-  CommerceCommandService,
-  SubmittedCommerceResult,
+import {
+  GuestTablePositionChangedError,
+  type CommerceCommandService,
+  type SubmittedCommerceResult,
 } from './commerce-command-service.js'
+import { CustomerExperienceRequestError } from './customer-experience-repository.js'
 import {
   GuestOrderDuplicateConfirmationRequiredError,
   GuestOrderRateLimitedError,
@@ -20,8 +22,12 @@ import {
   GuestBehaviorSessionUnavailableError,
 } from './guest-behavior-repository.js'
 import {
+  GuestServiceFeedbackStateError,
   GuestServiceRepository,
+  GuestServiceRequestNotFoundError,
   GuestServiceSessionUnavailableError,
+  type GuestServiceFeedbackAction,
+  type GuestServiceFeedbackResult,
   type GuestServiceRequestResult,
   type GuestServiceRequestType,
 } from './guest-service-repository.js'
@@ -37,6 +43,7 @@ import {
 import { OrderProductUnavailableError, TableSessionUnavailableForOrderError } from './order-repository.js'
 import type { PaymentCommandService } from './payment-command-service.js'
 import { OrderNotPayableError, type Payment } from './payment-repository.js'
+import { FulfillmentCapacityUnavailableError } from './fulfillment-capacity-repository.js'
 import type { OnlinePaymentAction, OnlinePaymentService } from './online-payment-service.js'
 import {
   OnlinePaymentUnavailableError,
@@ -50,6 +57,10 @@ import {
   WechatPaymentIdentityRequiredError,
 } from './payment-provider-action-repository.js'
 import { PostarPaymentRejectedError } from '../postar-adapter.js'
+import {
+  lockBoundGuestTablePosition,
+  requireGuestSessionIdFromActorRef,
+} from './guest-table-authority.js'
 import type {
   ScopedPostgresTransactionRunner,
   ScopedTransaction,
@@ -72,20 +83,6 @@ export interface GuestCommerceServiceApiOptions {
   deviceServiceLimitPerMinute?: number
   tableServiceLimitPerMinute?: number
   createPublicId?: (kind: 'order' | 'payment' | 'service', seed: string) => string
-  checkoutUpgrades?: {
-    select(input: Readonly<{
-      context: GuestRequestContext & { tableSessionId: string; businessDate: string }
-      offerPublicId: string
-      items: ReadonlyArray<{ productId: string; quantity: number; note?: string | null }>
-      idempotencyKey: string
-    }>): Promise<{ offerId: string; upgradedItems: Array<{ productId: string; quantity: number; note?: string | null }> }>
-    markConverted(input: Readonly<{
-      context: GuestRequestContext & { tableSessionId: string; businessDate: string }
-      offerId: string
-      orderId: string
-      idempotencyKey: string
-    }>): Promise<void>
-  }
 }
 
 interface CatalogMenuRow extends Record<string, unknown> {
@@ -99,6 +96,7 @@ interface CatalogMenuRow extends Record<string, unknown> {
   product_snapshot: JsonObject
   guest_visible: boolean
   search_text: string
+  recommendation_beverage_family: string
   recommendation_enabled: boolean
   recommendation_min_guests: number
   recommendation_max_guests: number
@@ -156,9 +154,12 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
   app.get('/guest/menu/products', async (request, reply) => handleRoute(reply, async () => {
     const context = await requireTableContext(options, request, 'guest.menu.read')
     const query = readMenuQuery(request.query)
-    const products = await options.transactions.run(context.scope, (transaction) => (
-      searchGuestCatalog(transaction, context.tableSessionId, query)
-    ), { readOnly: true })
+    const products = await options.transactions.run(context.scope, async (transaction) => {
+      if (!await lockBoundGuestTablePosition(transaction, context)) {
+        throw new GuestAuthenticationRequiredError()
+      }
+      return searchGuestCatalog(transaction, context.tableSessionId, query)
+    })
     return reply.send({
       data: products.map(publicCatalogProduct),
       meta: {
@@ -180,21 +181,6 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
     const input = readGuestOrder(request.body)
     const idempotencyKey = readIdempotencyKey(request)
     const actor = guestActor(context)
-    let orderItems = input.items
-    let selectedUpgrade: { offerId: string } | null = null
-    if (input.checkoutUpgradeOfferPublicId !== null) {
-      if (options.checkoutUpgrades === undefined) {
-        throw new GuestApiRequestError('CHECKOUT_UPGRADE_UNAVAILABLE', '付款前升级暂未启用')
-      }
-      const selected = await options.checkoutUpgrades.select({
-        context,
-        offerPublicId: input.checkoutUpgradeOfferPublicId,
-        items: input.items,
-        idempotencyKey: `${idempotencyKey}:upgrade-select`,
-      })
-      orderItems = selected.upgradedItems
-      selectedUpgrade = { offerId: selected.offerId }
-    }
     const orderExecution = await options.commerce.submitOrder({
       scope: context.scope,
       actor,
@@ -204,19 +190,18 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       publicId: createPublicId('order', `${context.scope.storeId}:${idempotencyKey}`),
       channel: 'guest_qr',
       settlementMode: 'immediate_payment',
-      lines: orderItems,
+      lines: input.items,
       note: input.note,
       createdByCustomerId: context.customerId,
       confirmedDuplicateOrderPublicId: input.confirmedDuplicateOrderId,
+      checkoutUpgradeOfferPublicId: input.checkoutUpgradeOfferPublicId,
+      ...(input.recommendationPublicId === null ? {} : {
+        recommendationAttribution: {
+          recommendationPublicId: input.recommendationPublicId,
+          selectedProductId: input.selectedRecommendationProductId!,
+        },
+      }),
     })
-    if (selectedUpgrade !== null) {
-      await options.checkoutUpgrades!.markConverted({
-        context,
-        offerId: selectedUpgrade.offerId,
-        orderId: orderExecution.value.order.id,
-        idempotencyKey: `${idempotencyKey}:upgrade-convert`,
-      })
-    }
     const payment = await initiateGuestPayment(options, context, orderExecution.value, idempotencyKey, createPublicId, paymentMode)
     const providerAction = await createGuestProviderAction(
       options,
@@ -232,9 +217,12 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
 
   app.get('/guest/orders/table', async (request, reply) => handleRoute(reply, async () => {
     const context = await requireTableContext(options, request, 'guest.session.read')
-    const orders = await options.transactions.run(context.scope, (transaction) => (
-      loadGuestTableOrders(transaction, context.tableSessionId, context.customerId)
-    ), { readOnly: true })
+    const orders = await options.transactions.run(context.scope, async (transaction) => {
+      if (!await lockBoundGuestTablePosition(transaction,context)) {
+        throw new GuestAuthenticationRequiredError()
+      }
+      return loadGuestTableOrders(transaction, context.tableSessionId, context.customerId)
+    })
     return reply.send({ data: orders, meta: { tableSessionId: context.tableSessionId, count: orders.length } })
   }))
 
@@ -247,12 +235,8 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       const orderPublicId = readPublicId(request.params.orderPublicId, 'orderPublicId')
       const resolved = await options.transactions.run(context.scope, async (transaction) => (
         new PaymentProviderActionRepository(transaction, options.paymentActionSecret)
-          .resolveOrderForGuest(orderPublicId, {
-            type: 'guest',
-            tableSessionId: context.tableSessionId,
-            customerId: context.customerId,
-          })
-      ), { readOnly: true })
+          .resolveOrderForGuest(orderPublicId, guestPaymentPrincipal(context))
+      ))
       let payment: CommandExecution<Payment>
       if (resolved.activePaymentId === null) {
         const method = await options.onlinePayments.resolveGuestMethod(context.scope, context.customerId)
@@ -268,7 +252,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
             publicId: createPublicId('payment', `${context.scope.storeId}:${idempotencyKey}`),
             provider: paymentMode === 'simulation' ? 'simulation' : 'postar',
             method,
-            principal: { type: 'guest', tableSessionId: context.tableSessionId, customerId: context.customerId },
+            principal: guestPaymentPrincipal(context),
             providerSnapshot: { channel: 'guest_table_order' },
           })
         } catch (error) {
@@ -276,7 +260,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
           const active = await options.onlinePayments.resolveActivePayment({
             scope: context.scope,
             orderId: resolved.orderId,
-            principal: { type: 'guest', tableSessionId: context.tableSessionId, customerId: context.customerId },
+            principal: guestPaymentPrincipal(context),
           })
           if (active === null) throw error
           payment = { value: paymentFromContext(active), replayed: true }
@@ -284,10 +268,8 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       } else {
         const value = await options.transactions.run(context.scope, async (transaction) => (
           new PaymentProviderActionRepository(transaction, options.paymentActionSecret)
-            .resolvePaymentContext(resolved.activePaymentId!, {
-              type: 'guest', tableSessionId: context.tableSessionId, customerId: context.customerId,
-            }, { lock: false })
-        ), { readOnly: true })
+            .resolvePaymentContext(resolved.activePaymentId!,guestPaymentPrincipal(context),{ lock:false })
+        ))
         payment = { value: paymentFromContext(value), replayed: true }
       }
       const action = await createGuestProviderAction(options, context, payment.value, orderPublicId, request.ip)
@@ -304,7 +286,11 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       scope: context.scope,
       operationScope: 'guest.service.request',
       idempotencyKey,
-      requestFingerprint: stableJson({ requestType: input.requestType, detail: input.detail }),
+      requestFingerprint: stableJson({
+        requestType: input.requestType,
+        detail: input.detail,
+        relatedOrderPublicId: input.relatedOrderPublicId,
+      }),
       resultCodec: guestServiceResultCodec,
     }, async (transaction) => {
       const service = new GuestServiceRepository(transaction, {
@@ -319,6 +305,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
         deviceFingerprint,
         requestType: input.requestType,
         detail: input.detail,
+        relatedOrderPublicId: input.relatedOrderPublicId,
       })
       const commandResult = toGuestServiceCommandResult(result, input.requestType)
       const behaviorType = result.status === 'rate_limited'
@@ -368,6 +355,82 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       meta: { replayed: execution.replayed },
     })
   }))
+
+  app.get('/guest/service-requests', async (request, reply) => handleRoute(reply, async () => {
+    const context = await requireTableContext(options, request, 'guest.session.read')
+    const requests = await options.transactions.run(context.scope, async (transaction) => {
+      if (!await lockBoundGuestTablePosition(transaction,context)) {
+        throw new GuestAuthenticationRequiredError()
+      }
+      return new GuestServiceRepository(transaction).listOwned(context.tableSessionId, context.customerId)
+    })
+    return reply.send({
+      data: requests,
+      meta: { count: requests.length },
+    })
+  }))
+
+  app.post<{ Params: { publicId: string } }>(
+    '/guest/service-requests/:publicId/feedback',
+    async (request, reply) => handleRoute(reply, async () => {
+      const context = await requireTableContext(options, request, 'guest.service.create')
+      const publicId = readPublicId(request.params.publicId, 'publicId')
+      const action = readServiceFeedback(request.body)
+      const idempotencyKey = readIdempotencyKey(request)
+      const execution = await options.commandExecutor.execute({
+        scope: context.scope,
+        operationScope: 'guest.service.feedback',
+        idempotencyKey,
+        requestFingerprint: stableJson({ publicId, action }),
+        resultCodec: guestServiceFeedbackCodec,
+      }, async (transaction) => {
+        const result = await new GuestServiceRepository(transaction).feedback({
+          tableSessionId: context.tableSessionId,
+          customerId: context.customerId,
+          actorRef: context.actorRef,
+          publicId,
+          action,
+        })
+        return {
+          result,
+          auditEvents: result.changed ? [{
+            actor: guestActor(context),
+            action: `guest.service.${action === 'confirm' ? 'confirmed' : 'escalated'}`,
+            objectType: 'service_task',
+            objectId: result.taskId,
+            businessDate: context.businessDate,
+            afterData: {
+              publicId: result.publicId,
+              action: result.action,
+              taskStatus: result.taskStatus,
+            },
+          }] : [],
+          outboxMessages: result.changed ? [{
+            businessEventKey: `guest-service-feedback:${result.taskId}:${result.action}`,
+            aggregateType: 'service_task',
+            aggregateId: result.taskId,
+            aggregateVersion: 1,
+            eventType: `guest.service.${action === 'confirm' ? 'confirmed' : 'escalated'}.v1`,
+            payload: {
+              publicId: result.publicId,
+              action: result.action,
+              taskStatus: result.taskStatus,
+            },
+          }] : [],
+        }
+      })
+      return reply.send({
+        data: {
+          publicId: execution.value.publicId,
+          action: execution.value.action,
+          taskStatus: execution.value.taskStatus,
+          recorded: true,
+          occurredAt: execution.value.occurredAt,
+        },
+        meta: { replayed: execution.replayed || !execution.value.changed },
+      })
+    }),
+  )
 
   app.post('/guest/mood', async (request, reply) => handleRoute(reply, async () => {
     const context = await requireTableContext(options, request, 'guest.service.create')
@@ -447,6 +510,7 @@ async function searchGuestCatalog(
       product.fulfillment_station, product.product_kind,
       COALESCE(component_list.items, '[]'::jsonb) AS bundle_components,
       product.product_snapshot, product.guest_visible, product.search_text,
+      product.recommendation_beverage_family,
       product.recommendation_enabled, product.recommendation_min_guests,
       product.recommendation_max_guests, product.recommendation_priority,
       product.recommendation_scene_tags, product.recommendation_intent_tags,
@@ -583,7 +647,7 @@ function publicCatalogProduct(row: CatalogMenuRow) {
     categoryName: publicString(row.product_snapshot.categoryName)
       ?? publicString(source.categoryName)
       ?? row.category_code,
-    beverageFamily: publicBeverageFamily(row.product_snapshot.beverageFamily ?? source.beverageFamily),
+    beverageFamily: publicBeverageFamily(row.recommendation_beverage_family),
     specification: publicString(row.product_snapshot.specification)
       ?? publicString(source.specification),
     aliases: publicStringArray(row.product_snapshot.aliases ?? source.aliases),
@@ -630,7 +694,7 @@ function publicRecommendation(row: CatalogMenuRow, amountMinor: number | null) {
 }
 
 function publicBeverageFamily(value: unknown) {
-  const allowed = ['none', 'cocktail', 'beer', 'wine', 'sparkling', 'spirits', 'non_alcoholic'] as const
+  const allowed = ['none', 'cocktail', 'beer', 'wine', 'sparkling', 'spirits', 'non_alcoholic', 'mixed'] as const
   return typeof value === 'string' && allowed.includes(value as typeof allowed[number]) ? value : 'none'
 }
 
@@ -684,11 +748,7 @@ async function initiateGuestPayment(
     publicId,
     provider,
     method,
-    principal: {
-      type: 'guest',
-      tableSessionId: context.tableSessionId,
-      customerId: context.customerId,
-    },
+    principal: guestPaymentPrincipal(context),
     providerSnapshot: { source: 'guest_checkout', configuredMode: paymentMode },
   })
 }
@@ -716,7 +776,7 @@ async function createGuestProviderAction(
     return await options.onlinePayments.create({
       scope: context.scope,
       paymentId: payment.id,
-      principal: { type: 'guest', tableSessionId: context.tableSessionId, customerId: context.customerId },
+      principal: guestPaymentPrincipal(context),
       clientIp,
       operatorId: 'MBOXGUEST',
     })
@@ -874,8 +934,13 @@ function readGuestOrder(value: unknown): {
   note: string | null
   confirmedDuplicateOrderId: string | null
   checkoutUpgradeOfferPublicId: string | null
+  recommendationPublicId: string | null
+  selectedRecommendationProductId: string | null
 } {
-  const body = readStrictObject(value, '请求正文', ['items', 'note', 'confirmedDuplicateOrderId', 'checkoutUpgradeOfferPublicId'])
+  const body = readStrictObject(value, '请求正文', [
+    'items', 'note', 'confirmedDuplicateOrderId', 'checkoutUpgradeOfferPublicId',
+    'recommendationPublicId', 'selectedRecommendationProductId',
+  ])
   if (!Array.isArray(body.items) || body.items.length < 1 || body.items.length > 50) {
     throw new GuestApiRequestError('ORDER_ITEMS_INVALID', '请选择1至50项商品后再下单')
   }
@@ -907,16 +972,40 @@ function readGuestOrder(value: unknown): {
   if (checkoutUpgradeOfferPublicId !== null && checkoutUpgradeOfferPublicId.length < 8) {
     throw new GuestApiRequestError('CHECKOUT_UPGRADE_INVALID', '付款前升级编号无效')
   }
+  const recommendationPublicId = readOptionalString(
+    body.recommendationPublicId,
+    'recommendationPublicId',
+    128,
+  )
+  if (recommendationPublicId !== null && recommendationPublicId.length < 8) {
+    throw new GuestApiRequestError('RECOMMENDATION_ATTRIBUTION_INVALID', '推荐编号无效')
+  }
+  const selectedRecommendationProductId = body.selectedRecommendationProductId === undefined
+    || body.selectedRecommendationProductId === null
+    ? null
+    : readUuid(body.selectedRecommendationProductId, 'selectedRecommendationProductId')
+  if ((recommendationPublicId === null) !== (selectedRecommendationProductId === null)) {
+    throw new GuestApiRequestError(
+      'RECOMMENDATION_ATTRIBUTION_INVALID',
+      '推荐编号和所选推荐商品必须同时提供',
+    )
+  }
   return {
     items,
     note: readOptionalString(body.note, 'note', 500),
     confirmedDuplicateOrderId,
     checkoutUpgradeOfferPublicId,
+    recommendationPublicId,
+    selectedRecommendationProductId,
   }
 }
 
-function readServiceRequest(value: unknown): { requestType: GuestServiceRequestType; detail: string | null } {
-  const body = readStrictObject(value, '请求正文', ['requestType', 'detail'])
+function readServiceRequest(value: unknown): {
+  requestType: GuestServiceRequestType
+  detail: string | null
+  relatedOrderPublicId: string | null
+} {
+  const body = readStrictObject(value, '请求正文', ['requestType', 'detail', 'relatedOrderPublicId'])
   if (typeof body.requestType !== 'string'
     || !['call_staff', 'complaint', 'custom'].includes(body.requestType)) {
     throw new GuestApiRequestError('SERVICE_REQUEST_INVALID', '请选择需要的服务类型')
@@ -926,7 +1015,20 @@ function readServiceRequest(value: unknown): { requestType: GuestServiceRequestT
   if (requestType === 'custom' && (detail === null || detail.length < 2)) {
     throw new GuestApiRequestError('SERVICE_DETAIL_REQUIRED', '请简单说说您需要什么，我们好马上安排')
   }
-  return { requestType, detail }
+  const relatedOrderPublicId = body.relatedOrderPublicId === undefined || body.relatedOrderPublicId === null
+    ? null : readPublicId(body.relatedOrderPublicId, 'relatedOrderPublicId')
+  if (relatedOrderPublicId !== null && requestType !== 'complaint') {
+    throw new GuestApiRequestError('SERVICE_REQUEST_INVALID', '只有订单问题可以关联订单')
+  }
+  return { requestType, detail, relatedOrderPublicId }
+}
+
+function readServiceFeedback(value: unknown): GuestServiceFeedbackAction {
+  const body = readStrictObject(value, '请求正文', ['action'])
+  if (body.action !== 'confirm' && body.action !== 'escalate') {
+    throw new GuestApiRequestError('SERVICE_FEEDBACK_INVALID', '请选择确认完成或再次催办')
+  }
+  return body.action
 }
 
 function readMood(value: unknown): GuestMood {
@@ -964,6 +1066,15 @@ function guestActor(context: GuestRequestContext): AuditActor {
   return { type: 'guest', ref: context.actorRef }
 }
 
+function guestPaymentPrincipal(context: GuestRequestContext & { tableSessionId: string }) {
+  return {
+    type:'guest' as const,
+    tableSessionId:context.tableSessionId,
+    customerId:context.customerId,
+    guestSessionId:requireGuestSessionIdFromActorRef(context.actorRef),
+  }
+}
+
 function deterministicPublicId(kind: 'order' | 'payment' | 'service', seed: string): string {
   const prefix = kind === 'order' ? 'O' : kind === 'payment' ? 'P' : 'S'
   return `${prefix}${createHash('sha256').update(seed).digest('hex').slice(0, 32)}`
@@ -979,10 +1090,13 @@ function readPublicId(value: unknown, name: string): string {
 function paymentFromContext(value: Awaited<ReturnType<PaymentProviderActionRepository['resolvePaymentContext']>>): Payment {
   return {
     id: value.id,
+    payableKind: 'order',
     orderId: value.orderId,
+    activityRegistrationId: null,
     publicId: value.publicId,
     provider: value.provider,
     providerTransactionId: value.providerTransactionId,
+    settlementChannel: null,
     method: value.method,
     amountMinor: value.amountMinor,
     currency: value.currency,
@@ -1023,11 +1137,24 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<unknown
     }
     if (error instanceof GuestBehaviorSessionUnavailableError
       || error instanceof GuestServiceSessionUnavailableError
-      || error instanceof TableSessionUnavailableForOrderError) {
+      || error instanceof TableSessionUnavailableForOrderError
+      || error instanceof GuestTablePositionChangedError) {
       return reply.code(409).send({ error: { code: 'TABLE_SESSION_ENDED', message: '这桌已经结束服务，请重新扫描桌面二维码' } })
+    }
+    if (error instanceof GuestServiceRequestNotFoundError) {
+      return reply.code(404).send({ error: { code: 'SERVICE_REQUEST_NOT_FOUND', message: error.message } })
+    }
+    if (error instanceof GuestServiceFeedbackStateError) {
+      return reply.code(409).send({ error: { code: 'SERVICE_FEEDBACK_STATE_CONFLICT', message: error.message } })
     }
     if (error instanceof OrderProductUnavailableError) {
       return reply.code(409).send({ error: { code: 'PRODUCT_UNAVAILABLE', message: '有商品暂时无法供应，请返回购物车调整后再试' } })
+    }
+    if (error instanceof FulfillmentCapacityUnavailableError) {
+      return reply.code(409).send({ error: { code: error.code, message: error.message } })
+    }
+    if (error instanceof CustomerExperienceRequestError) {
+      return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message } })
     }
     if (error instanceof GuestOrderDuplicateConfirmationRequiredError) {
       return reply.code(409).send({ error: {
@@ -1159,6 +1286,22 @@ const guestServiceResultCodec: JsonCodec<GuestServiceCommandResult> = {
       throw new TypeError('Stored guest service result is invalid')
     }
     return row as unknown as GuestServiceCommandResult
+  },
+}
+
+const guestServiceFeedbackCodec: JsonCodec<GuestServiceFeedbackResult> = {
+  encode: (value) => ({ ...value }),
+  decode: (value) => {
+    const row = jsonObject(value)
+    if (typeof row.taskId !== 'string'
+      || typeof row.publicId !== 'string'
+      || (row.action !== 'confirm' && row.action !== 'escalate')
+      || typeof row.taskStatus !== 'string'
+      || typeof row.changed !== 'boolean'
+      || typeof row.occurredAt !== 'string') {
+      throw new TypeError('Stored guest service feedback result is invalid')
+    }
+    return row as unknown as GuestServiceFeedbackResult
   },
 }
 

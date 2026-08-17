@@ -1,0 +1,100 @@
+{
+  "format": "mbox.wechat-miniprogram-release-evidence.v1",
+  "candidate": {
+    "manifestPath": "candidate/candidate-manifest.json",
+    "manifestSha256": "待生成候选包后填写64位SHA256"
+  },
+  "appId": "待填写正式小程序AppID",
+  "appIdEvidenceRef": {
+    "path": "evidence/wechat-appid-proof.pdf",
+    "sha256": "待填写64位SHA256"
+  },
+  "sourceCommitSha": "待填写候选提交的40位小写Git SHA",
+  "apiBaseUrl": "https://待审核的正式API域名",
+  "requestDomains": [
+    "https://待审核的正式API域名"
+  ],
+  "requestDomainsEvidenceRef": {
+    "path": "evidence/wechat-request-domain-proof.pdf",
+    "sha256": "待填写64位SHA256"
+  },
+  "privacy": {
+    "operatorName": "待运营主体确认",
+    "contact": "待隐私联系人确认",
+    "dataRetentionPolicyVersion": "待确认",
+    "thirdPartyRegisterVersion": "待确认",
+    "reviewedAt": "待填写UTC时间",
+    "evidenceRef": {
+      "path": "evidence/privacy-review.pdf",
+      "sha256": "待填写64位SHA256"
+    }
+  },
+  "deviceValidation": {
+    "wechatDeveloperToolEvidenceRef": {
+      "path": "evidence/wechat-developer-tool.txt",
+      "sha256": "待填写64位SHA256"
+    },
+    "iosEvidenceRef": {
+      "path": "evidence/ios-real-device.txt",
+      "sha256": "待填写64位SHA256"
+    },
+    "androidEvidenceRef": {
+      "path": "evidence/android-real-device.txt",
+      "sha256": "待填写64位SHA256"
+    }
+  },
+  "subscriptionTemplates": [
+    {
+      "notificationType": "loyalty_points_credited",
+      "templateId": "待填写审核通过的模板ID",
+      "approvedAt": "待填写UTC时间",
+      "evidenceRef": { "path": "evidence/template-points-credited.pdf", "sha256": "待填写64位SHA256" }
+    },
+    {
+      "notificationType": "loyalty_points_reversed",
+      "templateId": "待填写审核通过的模板ID",
+      "approvedAt": "待填写UTC时间",
+      "evidenceRef": { "path": "evidence/template-points-reversed.pdf", "sha256": "待填写64位SHA256" }
+    },
+    {
+      "notificationType": "loyalty_points_expiring",
+      "templateId": "待填写审核通过的模板ID",
+      "approvedAt": "待填写UTC时间",
+      "evidenceRef": { "path": "evidence/template-points-expiring.pdf", "sha256": "待填写64位SHA256" }
+    },
+    {
+      "notificationType": "reservation_performance_revised",
+      "templateId": "待填写审核通过的模板ID",
+      "approvedAt": "待填写UTC时间",
+      "evidenceRef": { "path": "evidence/template-reservation-revised.pdf", "sha256": "待填写64位SHA256" }
+    }
+  ],
+  "officialTableCodes": {
+    "auditManifestPath": "evidence/official-codes/wechat-mini-codes.audit.json",
+    "auditManifestSha256": "待填写64位SHA256"
+  },
+  "upload": {
+    "version": "待上传",
+    "receiptId": "待填写微信平台上传回执编号",
+    "uploadedAt": "待填写UTC时间",
+    "evidenceRef": { "path": "evidence/wechat-upload.pdf", "sha256": "待填写64位SHA256" }
+  },
+  "review": {
+    "approvalId": "待微信审核",
+    "approvedAt": "待填写UTC时间",
+    "evidenceRef": { "path": "evidence/wechat-review.pdf", "sha256": "待填写64位SHA256" }
+  },
+  "productionRelease": {
+    "releaseId": "待正式发布",
+    "releasedAt": "待填写UTC时间",
+    "evidenceRef": { "path": "evidence/wechat-release.pdf", "sha256": "待填写64位SHA256" }
+  },
+  "trust": {
+    "kind": "signed-platform-attestation",
+    "keyId": "待填写GitHub受保护环境中预先配置的公钥编号",
+    "attestationPath": "evidence/platform-attestation.release.json",
+    "attestationSha256": "待填写64位SHA256",
+    "signaturePath": "evidence/platform-attestation.release.sig",
+    "signatureSha256": "待填写64位SHA256"
+  }
+}

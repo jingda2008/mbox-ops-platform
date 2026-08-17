@@ -77,7 +77,10 @@ class AccessFixtureTransaction implements ScopedTransaction {
       ])
     }
     if (sql.includes('FROM mbox.role_data_scopes')) {
-      return result<Row>([{ scope_key: 'area.ids', effect: 'include', scope_value: ['lounge'] }])
+      return result<Row>([{
+        scope_key: 'area.ids', effect: 'include', value_kind: 'text_set',
+        boolean_value: null, text_value: null, text_values: ['lounge'],
+      }])
     }
     if (sql.includes('FROM mbox.role_approval_limits')) {
       return result<Row>([{
@@ -85,7 +88,9 @@ class AccessFixtureTransaction implements ScopedTransaction {
         approval_code: 'order.gift',
         amount_minor: '8800',
         currency: 'CNY',
-        rules: {},
+        calculation_mode: 'amount_limit', fixed_amount_minor: null,
+        discount_basis_points: null, allow_full_gift: false,
+        requires_reason: true, requires_second_actor: false,
       }])
     }
     if (sql.includes('FROM mbox.role_navigation_items')) {

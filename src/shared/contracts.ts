@@ -131,6 +131,7 @@ export const menuBeverageFamilies = [
   'sparkling',
   'spirits',
   'non_alcoholic',
+  'mixed',
 ] as const
 export type MenuBeverageFamily = (typeof menuBeverageFamilies)[number]
 

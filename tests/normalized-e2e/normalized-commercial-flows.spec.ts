@@ -345,6 +345,7 @@ test('confirmed reservation starts its ten-minute arrival retention only at the 
         guestCount: 2, arrivalAt: '2026-08-12T21:00:00+08:00', expectedEndAt: '2026-08-13T01:00:00+08:00',
         status: 'confirmed', arrivalState: 'not_arrived', note: null, seatPreference: 'stage_atmosphere',
         arrivalGraceEndsAt: '2026-08-12T21:10:00+08:00',
+        reservationPolicyVersion: 1, preferredScheduleId: null,
         cancellationPolicy: {},
       },
     }),

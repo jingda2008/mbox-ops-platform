@@ -23,6 +23,11 @@ import {
   type PostgresQueryResult,
   type ScopedTransaction,
 } from './transaction-runner.js'
+import {
+  NormalizedProviderObservationAuthority,
+  VerifiedProviderObservationService,
+  type ProviderObservationAuthorityPort,
+} from './provider-verification-observation.js'
 
 const tenantId = '11111111-1111-4111-8111-111111111111'
 const storeId = '22222222-2222-4222-8222-222222222222'
@@ -30,17 +35,25 @@ const orderOneId = '33333333-3333-4333-8333-333333333331'
 const orderTwoId = '33333333-3333-4333-8333-333333333332'
 const paymentOneId = '44444444-4444-4444-8444-444444444441'
 const paymentTwoId = '44444444-4444-4444-8444-444444444442'
+const verifiedObservationId = '55555555-5555-4555-8555-555555555555'
 const allowAllAuthorization: PaymentCapabilityAuthorizationPort = {
   assertEmployeeCapability: async () => undefined,
   assertRefundRequestLimit: async () => undefined,
   assertRefundApproval: async () => undefined,
+}
+const allowAllProviderObservations: ProviderObservationAuthorityPort = {
+  consume: async () => undefined,
 }
 
 describe('PaymentCommandService', () => {
   it('uses the command idempotency boundary so a duplicate payment callback runs once', async () => {
     const transaction = new PaymentFlowTransaction(orderOneId, paymentOneId, 'callback')
     const executor = new MemoryIdempotentExecutor(() => transaction)
-    const service = new PaymentCommandService(executor, allowAllAuthorization)
+    const service = new PaymentCommandService(
+      executor,
+      allowAllAuthorization,
+      allowAllProviderObservations,
+    )
     const input = callbackCommand()
 
     const first = await service.recordSucceededCallback(input)
@@ -58,30 +71,41 @@ describe('PaymentCommandService', () => {
       .toHaveLength(1)
   })
 
-  it('rejects an unverified or unidentified provider callback before opening a transaction', async () => {
+  it('rejects JSON verification flags and unidentified provider actors', async () => {
     const transaction = new PaymentFlowTransaction(orderOneId, paymentOneId, 'callback')
     const executor = new MemoryIdempotentExecutor(() => transaction)
     const service = new PaymentCommandService(executor, allowAllAuthorization)
 
-    expect(() => service.recordSucceededCallback({
+    await expect(service.recordSucceededCallback({
       ...callbackCommand(),
       idempotencyKey: 'callback-unverified-provider-0001',
-      providerSnapshot: { tradeState: 'SUCCESS', signature: 'untrusted' },
-    })).toThrow('verified signature')
+      providerSnapshot: { signatureVerified: true, verificationAlgorithm: 'forged' },
+    })).rejects.toThrow('matching unconsumed verified observation')
     expect(() => service.recordSucceededCallback({
       ...callbackCommand(),
       idempotencyKey: 'callback-unidentified-provider-0002',
       actor: { type: 'employee', employeeId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
     })).toThrow('identified integration')
 
-    expect(executor.handlerCalls).toBe(0)
+    expect(executor.handlerCalls).toBe(1)
     expect(transaction.calls).toEqual([])
   })
 
   it('accepts bound server-to-server query evidence without weakening callback signature checks', async () => {
     const transaction = new PaymentFlowTransaction(orderOneId, paymentOneId, 'callback')
     const executor = new MemoryIdempotentExecutor(() => transaction)
-    const service = new PaymentCommandService(executor, allowAllAuthorization)
+    const queryOnlyAuthority: ProviderObservationAuthorityPort = {
+      consume: async (input) => {
+        if (input.operation !== 'payment.provider-query') {
+          throw new Error('callback observation kind mismatch')
+        }
+      },
+    }
+    const service = new PaymentCommandService(
+      executor,
+      allowAllAuthorization,
+      queryOnlyAuthority,
+    )
 
     await service.recordProviderQueryResult({
       ...callbackCommand(),
@@ -96,14 +120,15 @@ describe('PaymentCommandService', () => {
     })
 
     expect(executor.handlerCalls).toBe(1)
-    expect(() => service.recordSucceededCallback({
+    const forgedCallback = service.recordSucceededCallback({
       ...callbackCommand(),
       idempotencyKey: 'callback-query-evidence-is-not-signature-0001',
       providerSnapshot: {
         signatureVerified: false,
         verificationAlgorithm: 'rsa-request+tls+response-binding',
       },
-    })).toThrow('verified signature')
+    })
+    await expect(forgedCallback).rejects.toThrow('callback observation kind mismatch')
   })
 
   it('lets different orders progress concurrently without a process-wide payment queue', async () => {
@@ -269,13 +294,17 @@ const integrationItemOne = 'c1000000-0000-4000-8000-000000000031'
 integration('normalized payment PostgreSQL integration', () => {
   let pool: Pool
   let service: PaymentCommandService
+  let providerObservations: VerifiedProviderObservationService
 
   beforeAll(async () => {
     await runNormalizedMigrations(databaseUrl!)
     pool = new Pool({ connectionString: databaseUrl, max: 6 })
+    const runner = new ScopedPostgresTransactionRunner(asPool(pool))
+    providerObservations = new VerifiedProviderObservationService(runner)
     service = new PaymentCommandService(
-      new NormalizedCommandExecutor(new ScopedPostgresTransactionRunner(asPool(pool))),
+      new NormalizedCommandExecutor(runner),
       new NormalizedPaymentCapabilityAuthorization(),
+      new NormalizedProviderObservationAuthority(),
     )
     await seedPaymentIntegration(pool)
   })
@@ -304,12 +333,27 @@ integration('normalized payment PostgreSQL integration', () => {
         clock_timestamp() + interval '5 minutes'
       )
     `, [initiated.value.id, integrationTenantId, integrationStoreId, integrationRequesterId])
-    const callback = integrationCallback(initiated.value.publicId, initiated.value.amountMinor)
+    const callbackInput = integrationCallback(initiated.value.publicId, initiated.value.amountMinor)
+    const callbackObservationId = await providerObservations.recordPayment({
+      scope: callbackInput.scope,
+      provider: callbackInput.provider,
+      verificationKind: 'callback_signature',
+      providerEventId: 'integration-payment-event-0001',
+      integrationRef: callbackInput.actor.ref,
+      paymentPublicId: callbackInput.paymentPublicId,
+      providerTransactionId: callbackInput.providerTransactionId,
+      reportedAmountMinor: callbackInput.reportedAmountMinor,
+      reportedCurrency: callbackInput.reportedCurrency,
+      status: 'succeeded',
+      occurredAt: callbackInput.occurredAt,
+      evidence: callbackInput.providerSnapshot,
+    })
+    const callback = { ...callbackInput, verifiedObservationId: callbackObservationId }
     const first = await service.recordSucceededCallback(callback)
     const replay = await service.recordSucceededCallback(callback)
     expect(first.replayed).toBe(false)
     expect(replay.replayed).toBe(true)
-    const providerReplay = await service.recordSucceededCallback({
+    await expect(service.recordSucceededCallback({
       ...callback,
       idempotencyKey: 'integration-payment-callback-provider-retry-0002',
       requestFingerprint: JSON.stringify({
@@ -318,8 +362,7 @@ integration('normalized payment PostgreSQL integration', () => {
         transaction: callback.providerTransactionId,
         delivery: 2,
       }),
-    })
-    expect(providerReplay).toMatchObject({ replayed: false, value: { status: 'succeeded' } })
+    })).rejects.toThrow('already consumed')
 
     const callbackEvidence = await pool.query<{
       reconciliation: string
@@ -367,10 +410,7 @@ integration('normalized payment PostgreSQL integration', () => {
     expect(serializedEvidence).not.toContain('secret-token')
     expect(serializedEvidence).not.toContain('customer-openid')
     expect(serializedEvidence).not.toContain('authorization')
-    expect(callbackEvidence.rows[0]?.stored_snapshot).toEqual({
-      signatureVerified: true,
-      tradeState: 'SUCCESS',
-    })
+    expect(callbackEvidence.rows[0]?.stored_snapshot).toEqual({ tradeState: 'SUCCESS' })
 
     const requested = await service.requestRefund({
       ...integrationMetadata('integration-refund-request-0001', '{"refund":1000}'),
@@ -418,9 +458,25 @@ integration('normalized payment PostgreSQL integration', () => {
       actor: { type: 'employee', employeeId: integrationApproverId },
       refundId: requested.value.id,
     })
+    const refundObservationId = await providerObservations.recordRefund({
+      scope: callback.scope,
+      provider: 'postar',
+      verificationKind: 'callback_signature',
+      providerEventId: 'integration-refund-event-0001',
+      integrationRef: 'postar-refund-callback',
+      refundPublicId: requested.value.publicId,
+      providerTransactionId: 'integration-provider-refund-0001',
+      originalProviderTransactionId: callback.providerTransactionId,
+      reportedAmountMinor: requested.value.amountMinor,
+      reportedCurrency: requested.value.currency,
+      status: 'succeeded',
+      occurredAt: '2026-08-11T13:00:00.000Z',
+      evidence: { refundState: 'SUCCESS' },
+    })
     await service.recordProviderRefundResult({
       ...integrationMetadata('integration-refund-result-0001', '{"result":"succeeded"}'),
       actor: { type: 'integration', ref: 'postar-refund-callback' },
+      verifiedObservationId: refundObservationId,
       refundPublicId: requested.value.publicId,
       provider: 'postar',
       succeeded: true,
@@ -428,7 +484,7 @@ integration('normalized payment PostgreSQL integration', () => {
       originalProviderTransactionId: callback.providerTransactionId,
       reportedAmountMinor: requested.value.amountMinor,
       reportedCurrency: requested.value.currency,
-      providerSnapshot: { signatureVerified: true },
+      providerSnapshot: { refundState: 'SUCCESS' },
       occurredAt: '2026-08-11T13:00:00.000Z',
     })
 
@@ -618,6 +674,11 @@ class PaymentFlowTransaction implements ScopedTransaction {
     this.calls.push(sql)
     await Promise.resolve()
 
+    if (sql.includes('pg_advisory_xact_lock_shared')) return result([])
+    if (sql.startsWith('SELECT capability FROM mbox.loyalty_operational_control_states')) return result([])
+    if (sql.includes("FROM (VALUES('points_accrual')")) return result([
+      operationalState('points_accrual'),operationalState('points_redemption'),operationalState('wechat_notification'),
+    ])
     if (sql.includes('FROM mbox.orders') && sql.includes('FOR UPDATE')) {
       this.lockedOrderIds.push(String(values[2]))
       return result([{
@@ -628,8 +689,10 @@ class PaymentFlowTransaction implements ScopedTransaction {
         status: 'submitted',
       }])
     }
-    if (sql.startsWith('SELECT id, order_id FROM mbox.payments')) {
-      return result([{ id: this.paymentId, order_id: this.orderId }])
+    if (sql.startsWith('SELECT id, payable_kind, order_id, activity_registration_id FROM mbox.payments')) {
+      return result([{
+        id: this.paymentId, payable_kind: 'order', order_id: this.orderId, activity_registration_id: null,
+      }])
     }
     if (sql.includes('AS gross_paid_minor')) {
       return result([this.mode === 'callback'
@@ -650,10 +713,18 @@ class PaymentFlowTransaction implements ScopedTransaction {
     if (sql.includes('INSERT INTO mbox.reconciliation_entries')) {
       return result([reconciliationRow(this.paymentId)])
     }
+    if (sql.includes('INSERT INTO mbox.recommendation_behavior_events')) return result([])
     if (sql.includes('UPDATE mbox.orders')) {
       return result([{ payment_status: this.mode === 'callback' ? 'paid' : 'pending' }])
     }
     throw new Error(`Unexpected query: ${sql}`)
+  }
+}
+
+function operationalState(capability:string) {
+  return {
+    capability,state:'active',control_version:0,reason:null,review_at:null,
+    changed_by_employee_id:null,changed_at:null,pending_accrual_count:0,
   }
 }
 
@@ -715,6 +786,7 @@ function callbackCommand() {
     businessDate: '2026-08-11',
     idempotencyKey: 'callback-provider-payment-001',
     requestFingerprint: '{"transaction":"provider-payment-001","amount":8800}',
+    verifiedObservationId,
     paymentPublicId: `payment-${paymentOneId.slice(-8)}`,
     provider: 'postar' as const,
     providerTransactionId: 'provider-payment-001',
@@ -759,7 +831,9 @@ function paymentRow(
   const snapshot: JsonObject = {}
   return {
     id: paymentId,
+    payable_kind: 'order',
     order_id: orderId,
+    activity_registration_id: null,
     public_id: `payment-${paymentId.slice(-8)}`,
     provider: 'postar',
     provider_transaction_id: providerTransactionId,

@@ -6,7 +6,6 @@ import { Client } from 'pg'
 import type { JsonObject } from './normalized/command-executor.js'
 import {
   extractProductOperationalFields,
-  hydrateProductSnapshot,
   type ProductOperationalFields,
 } from './normalized/product-operational-fields.js'
 
@@ -106,7 +105,11 @@ export async function provisionNormalizedCatalog(input: {
   const client = input.client ?? new Client({ connectionString: input.databaseUrl, application_name: 'mbox-normalized-catalog-provisioner' })
   if (ownsClient) await client.connect()
   try {
-    if (ownsClient) await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE')
+    // The global advisory lock is the serialization boundary. READ COMMITTED is
+    // required so a provisioner that waited for the lock observes the release
+    // that just committed instead of failing on a stale SERIALIZABLE snapshot.
+    if (ownsClient) await client.query('BEGIN ISOLATION LEVEL READ COMMITTED')
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext('mbox.normalized.configuration.provision'))`)
     await client.query(`SELECT pg_advisory_xact_lock(hashtext('mbox.normalized.catalog.provision'))`)
     const schema = await client.query<{ schema_flavor: string; schema_version: string }>(
       'SELECT schema_flavor, schema_version FROM mbox.normalized_schema_metadata WHERE singleton=true',
@@ -182,7 +185,7 @@ export async function provisionNormalizedCatalog(input: {
           fulfillment_sla_seconds=EXCLUDED.fulfillment_sla_seconds,
           cost_amount_minor=EXCLUDED.cost_amount_minor, updated_at=clock_timestamp()
         RETURNING id`, [input.tenantId, input.storeId, product.sku, product.name, product.categoryId,
-      station(product), product.productKind, JSON.stringify(compatibilitySnapshot(operational)), status(product),
+      station(product), product.productKind, JSON.stringify(persistedDisplaySnapshot(operational)), status(product),
       operational.guestVisible, operational.searchText, operational.recommendationEnabled,
       operational.recommendationMinGuests, operational.recommendationMaxGuests,
       operational.recommendationPriority, operational.recommendationSceneTags,
@@ -220,7 +223,7 @@ export async function provisionNormalizedCatalog(input: {
         allowed_channels=$22::text[], max_order_quantity=$23, kds_priority=$24,
         fulfillment_sla_seconds=$25, cost_amount_minor=$26
         WHERE tenant_id=$1 AND store_id=$2 AND id=$3`, [
-        input.tenantId, input.storeId, productId, JSON.stringify(compatibilitySnapshot(operational)),
+        input.tenantId, input.storeId, productId, JSON.stringify(persistedDisplaySnapshot(operational)),
         operational.guestVisible, operational.searchText, operational.recommendationEnabled,
         operational.recommendationMinGuests, operational.recommendationMaxGuests,
         operational.recommendationPriority, operational.recommendationSceneTags,
@@ -345,9 +348,8 @@ function snapshotWithoutUpgrade(snapshot: Record<string, unknown>): Record<strin
   return prepared
 }
 
-function compatibilitySnapshot(fields: Readonly<ProductOperationalFields>): JsonObject {
-  const { displaySnapshot, ...operational } = fields
-  return hydrateProductSnapshot(displaySnapshot, operational)
+function persistedDisplaySnapshot(fields: Readonly<ProductOperationalFields>): JsonObject {
+  return fields.displaySnapshot
 }
 
 function station(product: NormalizedCatalogProduct): 'bar' | 'kitchen' | 'none' {

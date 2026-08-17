@@ -65,7 +65,7 @@ integration('normalized guest sessions with PostgreSQL', () => {
         const result = await new CustomerRepository(input.transaction).createAnonymous({
           publicId: input.publicId,
           identityHash: input.identityHash,
-          profile: { consentSnapshot: { anonymousAnalytics: true } },
+          profile: {},
         })
         if (result.created) customerCreates += 1
         return { customerId: result.customer.id }
@@ -73,7 +73,7 @@ integration('normalized guest sessions with PostgreSQL', () => {
     }
     service = new GuestSessionService(transactions, identities, secret, {
       sessionTtlMs: 30 * 60_000,
-      now: () => new Date('2026-08-11T12:00:00.000Z'),
+      now: () => new Date(),
     })
 
     await pool.query(`

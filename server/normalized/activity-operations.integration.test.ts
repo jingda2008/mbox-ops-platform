@@ -1,0 +1,269 @@
+import { randomUUID } from 'node:crypto'
+import { Pool } from 'pg'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { runNormalizedMigrations } from '../migrate-normalized.js'
+import {
+  ActivityOperationsRepository,
+  type ActivityDraftInput,
+} from './activity-operations-repository.js'
+import { ScopedPostgresTransactionRunner, type PostgresPool } from './transaction-runner.js'
+
+const databaseUrl = process.env.TEST_NORMALIZED_DATABASE_URL
+const integration = databaseUrl ? describe : describe.skip
+const tenantId = randomUUID()
+const storeId = randomUUID()
+const employeeId = randomUUID()
+const customerIds = Array.from({ length: 6 }, () => randomUUID())
+const draftActivityId = randomUUID()
+const publishedActivityId = randomUUID()
+const freeRegistrationId = randomUUID()
+const noShowRegistrationId = randomUUID()
+const paidRegistrationId = randomUUID()
+const pendingRegistrationId = randomUUID()
+const concurrentRegistrationId = randomUUID()
+const paidPaymentId = randomUUID()
+const pendingPaymentId = randomUUID()
+const suffix = tenantId.replaceAll('-', '').slice(0, 12)
+
+integration('activity operations PostgreSQL integration', () => {
+  let pool: Pool
+  let runner: ScopedPostgresTransactionRunner
+
+  beforeAll(async () => {
+    await runNormalizedMigrations(databaseUrl!)
+    pool = new Pool({ connectionString: databaseUrl, max: 8 })
+    runner = new ScopedPostgresTransactionRunner(asPool(pool))
+    await seed(pool)
+  })
+
+  afterAll(async () => { await pool?.end() })
+
+  it('reads operational counts without exposing protected contact and updates draft-only promises', async () => {
+    const listed = await run((repository) => repository.list())
+    expect(listed).toEqual(expect.arrayContaining([
+      expect.objectContaining({ publicId: 'activity-ops-published', occupiedSeats: 7, waitlistedSeats: 0 }),
+      expect.objectContaining({ publicId: 'activity-ops-draft', occupiedSeats: 0 }),
+    ]))
+    const detail = await run((repository) => repository.detail('activity-ops-published'))
+    expect(detail.registrations).toHaveLength(5)
+    expect(JSON.stringify(detail)).not.toContain('encryptedContact')
+    expect(JSON.stringify(detail)).not.toContain('13800138000')
+
+    const updated = await run((repository) => repository.updateDraft('activity-ops-draft', {
+      ...draftInput,
+      title: '更新后的活动草稿',
+      memberBenefitText: '会员到场可领取纪念徽章',
+    }))
+    expect(updated).toMatchObject({ title: '更新后的活动草稿', status: 'draft', pointsReward: 0 })
+    await expect(run((repository) => repository.updateDraft('activity-ops-published', draftInput)))
+      .rejects.toMatchObject({ code: 'PUBLISHED_ACTIVITY_IMMUTABLE', statusCode: 409 })
+  })
+
+  it('supports attendance but rejects premature no-show and direct paid cancellation', async () => {
+    const checkedIn = await run((repository) => repository.transitionRegistration(
+      'activity-ops-registration-free', 'check_in', '现场确认顾客到场',
+    ))
+    expect(checkedIn).toMatchObject({ status: 'checked_in', paymentStatus: 'not_required' })
+
+    await expect(run((repository) => repository.transitionRegistration(
+      'activity-ops-registration-no-show', 'no_show', '现场尚未见到顾客',
+    ))).rejects.toMatchObject({ code: 'ACTIVITY_NO_SHOW_TOO_EARLY' })
+
+    await expect(run((repository) => repository.transitionRegistration(
+      'activity-ops-registration-paid', 'cancel', '顾客申请取消',
+    ))).rejects.toMatchObject({ code: 'ACTIVITY_PAID_CANCELLATION_REQUIRES_REFUND' })
+    const paid = await pool.query<{ status: string; payment_status: string }>(`
+      SELECT status,payment_status FROM mbox.community_activity_registrations
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+    `, [tenantId, storeId, paidRegistrationId])
+    expect(paid.rows[0]).toEqual({ status: 'confirmed', payment_status: 'paid' })
+  })
+
+  it('requires a provider query after any payment-channel action and does not release the seat', async () => {
+    await expect(run((repository) => repository.transitionRegistration(
+      'activity-ops-registration-pending', 'cancel', '顾客申请取消待付款报名',
+    ))).rejects.toMatchObject({ code: 'ACTIVITY_PAYMENT_QUERY_REQUIRED' })
+    const current = await pool.query<{ registration_status: string; payment_status: string }>(`
+      SELECT registration.status AS registration_status,payment.status AS payment_status
+      FROM mbox.community_activity_registrations registration
+      JOIN mbox.payments payment ON payment.tenant_id=registration.tenant_id
+        AND payment.store_id=registration.store_id AND payment.id=registration.payment_id
+      WHERE registration.tenant_id=$1::uuid AND registration.store_id=$2::uuid
+        AND registration.id=$3::uuid
+    `, [tenantId, storeId, pendingRegistrationId])
+    expect(current.rows[0]).toEqual({ registration_status: 'payment_pending', payment_status: 'pending' })
+  })
+
+  it('serializes two operator cancellations so only one transition can release the same seat', async () => {
+    const attempts = await Promise.allSettled([
+      run((repository) => repository.transitionRegistration(
+        'activity-ops-registration-concurrent', 'cancel', '第一位员工处理取消',
+      )),
+      run((repository) => repository.transitionRegistration(
+        'activity-ops-registration-concurrent', 'cancel', '第二位员工重复处理',
+      )),
+    ])
+    expect(attempts.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(attempts.filter((result) => result.status === 'rejected')).toHaveLength(1)
+    const stored = await pool.query<{ status: string }>(`
+      SELECT status FROM mbox.community_activity_registrations
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+    `, [tenantId, storeId, concurrentRegistrationId])
+    expect(stored.rows[0]?.status).toBe('cancelled')
+  })
+
+  async function run<Result>(operation: (repository: ActivityOperationsRepository) => Promise<Result>) {
+    return runner.run({ tenantId, storeId }, (transaction) => operation(new ActivityOperationsRepository(transaction)))
+  }
+})
+
+const draftInput: ActivityDraftInput = {
+  kind: 'member_night', title: '活动草稿', summary: '活动草稿摘要', coverUrl: null,
+  startsAt: '2026-09-10T11:00:00.000Z', endsAt: '2026-09-10T14:00:00.000Z',
+  assemblyLocation: 'M-BOX陆家嘴店', capacity: 30, feeAmountMinor: 0, depositAmountMinor: 0,
+  feeBasis: 'per_registration', paymentMode: 'none', paymentDeadlineMinutes: 15,
+  paymentRuleText: '本活动无需预付', pointsReward: 0, visibility: 'public',
+  audienceMemberLevels: [], audienceLifecycleStages: [], safetyPolicyVersion: 'activity-safety-v1',
+  safetyAcknowledgementText: '我已阅读并同意安全要求', safetyRequirements: ['须年满18周岁'],
+  refundPolicyVersion: 'activity-refund-v1', refundPolicySummary: '免费活动可在开始前取消',
+  activityDetails: '现场音乐、交流与限定饮品体验。', includedItems: ['欢迎饮品'],
+  participationRequirements: ['请提前15分钟到场'], contactInstructions: '报名成功后在小程序查看集合通知',
+  memberBenefitText: null,
+}
+
+async function seed(pool: Pool) {
+  await pool.query(`INSERT INTO mbox.tenants(id,code,name) VALUES ($1::uuid,$2,'Activity Ops Tenant')`, [tenantId, `activity_ops_${suffix}`])
+  await pool.query(`
+    INSERT INTO mbox.stores(id,tenant_id,code,name)
+    VALUES ($1::uuid,$2::uuid,$3,'Activity Ops Store')
+  `, [storeId, tenantId, `activity_ops_store_${suffix}`])
+  await pool.query(`
+    INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name)
+    VALUES ($1::uuid,$2::uuid,$3::uuid,'ACTIVITY_MANAGER','活动店长')
+  `, [employeeId, tenantId, storeId])
+  for (const [index, customerId] of customerIds.entries()) {
+    await pool.query(`
+      INSERT INTO mbox.customers(id,tenant_id,store_id,public_id,status)
+      VALUES ($1::uuid,$2::uuid,$3::uuid,$4,'active')
+    `, [customerId, tenantId, storeId, `activity-ops-customer-${index + 1}`])
+    await pool.query(`
+      INSERT INTO mbox.customer_profiles(tenant_id,store_id,customer_id,display_name)
+      VALUES ($1::uuid,$2::uuid,$3::uuid,$4)
+    `, [tenantId, storeId, customerId, `顾客${index + 1}`])
+  }
+  await insertActivity(pool, draftActivityId, 'activity-ops-draft', 'draft', '活动草稿')
+  await insertActivity(pool, publishedActivityId, 'activity-ops-published', 'published', '已发布活动')
+  await insertRegistration(pool, freeRegistrationId, 'activity-ops-registration-free', customerIds[0]!, 'confirmed', 'not_required', 1)
+  await insertRegistration(pool, noShowRegistrationId, 'activity-ops-registration-no-show', customerIds[1]!, 'confirmed', 'not_required', 1)
+  await insertRegistration(pool, paidRegistrationId, 'activity-ops-registration-paid', customerIds[2]!, 'confirmed', 'paid', 2)
+  await insertRegistration(pool, pendingRegistrationId, 'activity-ops-registration-pending', customerIds[3]!, 'payment_pending', 'pending', 1)
+  await insertRegistration(pool, concurrentRegistrationId, 'activity-ops-registration-concurrent', customerIds[4]!, 'confirmed', 'not_required', 2)
+  await pool.query(`
+    INSERT INTO mbox.payments(
+      id,tenant_id,store_id,payable_kind,activity_registration_id,public_id,
+      provider,provider_transaction_id,method,amount_minor,currency,status,
+      provider_snapshot,succeeded_at
+    ) VALUES (
+      $1::uuid,$2::uuid,$3::uuid,'activity_registration',$4::uuid,'activity-ops-payment-paid',
+      'postar','ACTIVITY-OPS-PROVIDER-TRANSACTION-PAID','jsapi',5000,'CNY',
+      'succeeded','{}'::jsonb,clock_timestamp()
+    )
+  `, [paidPaymentId, tenantId, storeId, paidRegistrationId])
+  await pool.query(`
+    UPDATE mbox.community_activity_registrations SET payment_id=$4::uuid,paid_amount_minor=5000
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+  `, [tenantId, storeId, paidRegistrationId, paidPaymentId])
+  await pool.query(`
+    INSERT INTO mbox.payments(
+      id,tenant_id,store_id,payable_kind,activity_registration_id,public_id,
+      provider,method,amount_minor,currency,status,provider_snapshot
+    ) VALUES (
+      $1::uuid,$2::uuid,$3::uuid,'activity_registration',$4::uuid,'activity-ops-payment-pending',
+      'postar','jsapi',2000,'CNY','pending','{}'::jsonb
+    )
+  `, [pendingPaymentId, tenantId, storeId, pendingRegistrationId])
+  await pool.query(`
+    UPDATE mbox.community_activity_registrations SET payment_id=$4::uuid
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+  `, [tenantId, storeId, pendingRegistrationId, pendingPaymentId])
+  await pool.query(`
+    INSERT INTO mbox.payment_provider_actions(
+      tenant_id,store_id,payment_id,presentation,initiated_by_type,
+      initiated_by_ref,state,expires_at
+    ) VALUES (
+      $1::uuid,$2::uuid,$3::uuid,'jsapi','guest',$4::uuid,'unknown',
+      clock_timestamp()+interval '15 minutes'
+    )
+  `, [tenantId, storeId, pendingPaymentId, customerIds[3]])
+}
+
+async function insertActivity(pool: Pool, id: string, publicId: string, status: 'draft' | 'published', title: string) {
+  await pool.query(`
+    INSERT INTO mbox.community_activities(
+      id,tenant_id,store_id,public_id,activity_kind,title,summary,starts_at,ends_at,
+      assembly_location,capacity,fee_amount_minor,deposit_amount_minor,fee_basis,
+      registration_payment_mode,payment_deadline_minutes,payment_rule_text,currency,
+      points_reward,visibility,audience_member_levels,audience_lifecycle_stages,
+      safety_policy_version,safety_acknowledgement_text,safety_requirements,
+      refund_policy_version,refund_policy_summary,activity_details,included_items,
+      participation_requirements,contact_instructions,member_benefit_text,status,
+      published_at,created_by_employee_id,approved_by_employee_id
+    ) VALUES (
+      $1::uuid,$2::uuid,$3::uuid,$4,'member_night',$5,'活动运营集成测试',
+      clock_timestamp()+interval '2 days',clock_timestamp()+interval '2 days 3 hours',
+      'M-BOX陆家嘴店',20,0,0,'per_registration','none',15,'本活动无需预付','CNY',
+      0,'public','{}'::text[],'{}'::text[],'activity-safety-v1','我已阅读并同意安全要求',
+      ARRAY['须年满18周岁']::text[],'activity-refund-v1','免费活动可提前取消',
+      '现场音乐、交流与限定饮品体验。',ARRAY['欢迎饮品']::text[],ARRAY['提前到场']::text[],
+      '报名成功后在小程序查看集合通知',NULL,$6,
+      CASE WHEN $6='published' THEN clock_timestamp() ELSE NULL END,$7::uuid,
+      CASE WHEN $6='published' THEN $7::uuid ELSE NULL END
+    )
+  `, [id, tenantId, storeId, publicId, title, status, employeeId])
+}
+
+async function insertRegistration(
+  pool: Pool,
+  id: string,
+  publicId: string,
+  customerId: string,
+  status: 'confirmed' | 'payment_pending',
+  paymentStatus: 'not_required' | 'pending' | 'paid',
+  partySize: number,
+) {
+  const amountDue = paymentStatus === 'pending' ? 2000 : 0
+  const fee = paymentStatus === 'paid' ? 5000 : amountDue
+  await pool.query(`
+    INSERT INTO mbox.community_activity_registrations(
+      id,tenant_id,store_id,public_id,activity_id,customer_id,party_size,status,
+      payment_choice,payment_status,fee_amount_minor,amount_due_minor,paid_amount_minor,
+      currency,contact_snapshot,safety_acknowledgement,idempotency_key,
+      payment_due_at,seat_hold_expires_at,refund_policy_snapshot,
+      acknowledged_safety_policy_version,acknowledged_refund_policy_version,
+      terms_acknowledged_at,terms_acknowledgement_source,
+      requested_payment_choice,requested_payment_method,requested_amount_due_minor
+    ) VALUES (
+      $1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6::uuid,$7,$8,
+      CASE WHEN $9='pending' THEN 'deposit' WHEN $9='paid' THEN 'full' ELSE 'none' END,$9,
+      $10::bigint,$11::bigint,CASE WHEN $9='paid' THEN $10::bigint ELSE 0 END,'CNY',
+      jsonb_build_object('contactType','phone','contactHash',repeat('a',64),
+        'encryptedContact','AQcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=',
+        'encryptionKeyId','normalized-contact-v1','maskedContact','138****8000','source','mini_program'),
+      '{}'::jsonb,$12,
+      CASE WHEN $9='pending' THEN clock_timestamp()+interval '15 minutes' ELSE NULL END,
+      CASE WHEN $9='pending' THEN clock_timestamp()+interval '15 minutes' ELSE NULL END,
+      jsonb_build_object('policyVersion','activity-refund-v1'),
+      'activity-safety-v1','activity-refund-v1',clock_timestamp(),'staff_assisted'
+      ,CASE WHEN $9='pending' THEN 'deposit' WHEN $9='paid' THEN 'full' ELSE 'none' END
+      ,CASE WHEN $9 IN ('pending','paid') THEN 'jsapi' ELSE NULL END
+      ,CASE WHEN $9='paid' THEN $10::bigint WHEN $9='pending' THEN $11::bigint ELSE 0 END
+    )
+  `, [
+    id, tenantId, storeId, publicId, publishedActivityId, customerId, partySize, status,
+    paymentStatus, fee, amountDue, `activity-ops-registration-key-${publicId}`.slice(0,128),
+  ])
+}
+
+function asPool(pool: Pool): PostgresPool {
+  return { connect: async () => pool.connect(), end: async () => pool.end() }
+}

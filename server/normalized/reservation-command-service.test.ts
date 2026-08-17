@@ -27,6 +27,7 @@ integration('normalized reservation, customer and benefit transactions', () => {
   const tableThreeId = randomUUID()
   const tableFourId = randomUUID()
   const paymentTableSessionId = randomUUID()
+  const benefitProductId = randomUUID()
   const reservationWindow = nextShanghaiCrossMidnightWindow()
   let nativePool: Pool
   let commands: NormalizedCommandExecutor
@@ -53,6 +54,11 @@ integration('normalized reservation, customer and benefit transactions', () => {
       INSERT INTO mbox.stores (id, tenant_id, code, name)
       VALUES ($1::uuid, $2::uuid, $3, 'Reservation Test Store')
     `, [storeId, tenantId, `store-${storeId.slice(0, 8)}`])
+    await nativePool.query(`
+      INSERT INTO mbox.products (
+        id, tenant_id, store_id, code, name, category_code, fulfillment_station
+      ) VALUES ($1, $2, $3, 'RESERVATION-GIFT', 'Reservation Gift Product', 'drink', 'bar')
+    `, [benefitProductId, tenantId, storeId])
     await nativePool.query(`
       INSERT INTO mbox.public_reservation_policies (
         tenant_id, store_id, hold_minutes, arrival_grace_minutes
@@ -384,8 +390,8 @@ integration('normalized reservation, customer and benefit transactions', () => {
       displayName: 'Guest target',
       tags: ['source', 'target', 'test'],
       preferences: { drinkStyle: 'target' },
-      consentSnapshot: { analytics: true },
     })
+    expect(first.value.profile).not.toHaveProperty('consentSnapshot')
   })
 
   it('redeems a benefit once, replays duplicates, retains authorization, and rolls back audit failure', async () => {
@@ -493,7 +499,6 @@ integration('normalized reservation, customer and benefit transactions', () => {
         displayName: `Guest ${suffix}`,
         tags: [suffix, 'test'],
         preferences: { drinkStyle: suffix },
-        consentSnapshot: { analytics: true },
       },
       idempotencyKey: `customer-create-${suffix}-key-0001`,
       requestFingerprint: JSON.stringify({ suffix }),
@@ -508,6 +513,7 @@ integration('normalized reservation, customer and benefit transactions', () => {
       customerId,
       benefitCode: `gift.${suffix}`,
       benefitType: 'gift_product' as const,
+      allowedProductIds: [benefitProductId],
       benefitSnapshot: { productCode: 'BEER-001' },
       validFrom: '2026-08-01T00:00:00+08:00',
       validUntil: '2027-08-01T00:00:00+08:00',

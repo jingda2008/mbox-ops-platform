@@ -17,7 +17,6 @@ export interface CustomerProfileInput {
   publicTags?: readonly string[]
   preferences?: JsonObject
   publicPreferenceKeys?: readonly string[]
-  consentSnapshot?: JsonObject
 }
 
 export interface CustomerProfile {
@@ -26,7 +25,6 @@ export interface CustomerProfile {
   publicTags: string[]
   preferences: JsonObject
   publicPreferences: JsonObject
-  consentSnapshot: JsonObject
 }
 
 export interface CustomerIdentitySummary {
@@ -127,7 +125,6 @@ interface CustomerRow extends Record<string, unknown> {
   public_tags: string[] | null
   preferences: JsonObject | null
   public_preferences: JsonObject | null
-  consent_snapshot: JsonObject | null
   identities: CustomerIdentitySummary[] | null
 }
 
@@ -182,6 +179,13 @@ export class CustomerRepository {
       AND c.public_id = $3
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, publicId])
     return result.rows[0] === undefined ? null : mapCustomer(result.rows[0])
+  }
+
+  async findByIdentity(identityKind: CustomerIdentityKind, identityHash: string): Promise<Customer | null> {
+    validateIdentityHash(identityHash)
+    await this.lockIdentity(`${identityKind}:${identityHash}`)
+    const owner = await this.identityOwner(identityKind, identityHash)
+    return owner === null ? null : this.resolveCanonical(owner.customer_id)
   }
 
   async createAnonymous(
@@ -291,6 +295,13 @@ export class CustomerRepository {
 
   async merge(sourceCustomerId: string, targetCustomerId: string): Promise<Customer> {
     if (sourceCustomerId === targetCustomerId) return this.resolveCanonical(targetCustomerId)
+    // Customer-family rewrites and table-location movements both derive
+    // authorization/blocker scope from the canonical family.  Serialize them
+    // before taking row locks so a movement cannot authorize against one
+    // family root and evaluate business blockers against another.
+    await this.transaction.query(`SELECT pg_advisory_xact_lock(hashtextextended(
+      'table-customer-movement:' || $1::text || ':' || $2::text, 0
+    ))`, [this.transaction.scope.tenantId, this.transaction.scope.storeId])
     const orderedIds = [sourceCustomerId, targetCustomerId].sort()
     const locked = await this.transaction.query<{ id: string; status: CustomerStatus; merged_into_customer_id: string | null }>(`
       SELECT id, status, merged_into_customer_id
@@ -350,19 +361,15 @@ export class CustomerRepository {
     const publicKeys = new Set(profile.publicPreferenceKeys ?? [])
     await this.transaction.query(`
       INSERT INTO mbox.customer_profiles (
-        tenant_id, store_id, customer_id, display_name, consent_snapshot
-      ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5::jsonb)
+        tenant_id, store_id, customer_id, display_name
+      ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4)
       ON CONFLICT (tenant_id, store_id, customer_id) DO UPDATE
-      SET display_name = COALESCE(EXCLUDED.display_name, mbox.customer_profiles.display_name),
-          consent_snapshot = CASE WHEN $6::boolean
-            THEN EXCLUDED.consent_snapshot ELSE mbox.customer_profiles.consent_snapshot END
+      SET display_name = COALESCE(EXCLUDED.display_name, mbox.customer_profiles.display_name)
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
       customerId,
       normalizeDisplayName(profile.displayName),
-      JSON.stringify(profile.consentSnapshot ?? {}),
-      profile.consentSnapshot !== undefined,
     ])
     if (profile.tags !== undefined || profile.publicTags !== undefined) {
       const existing = await this.transaction.query<{ tag: string; visibility: 'public' | 'staff' }>(`
@@ -604,7 +611,6 @@ function customerSelectSql(alias = 'c'): string {
       COALESCE(tags.public_tags, ARRAY[]::text[]) AS public_tags,
       COALESCE(preferences.preferences, '{}'::jsonb) AS preferences,
       COALESCE(preferences.public_preferences, '{}'::jsonb) AS public_preferences,
-      COALESCE(profile.consent_snapshot, '{}'::jsonb) AS consent_snapshot,
       COALESCE(identities.identities, '[]'::jsonb) AS identities
     FROM mbox.customers AS c
     LEFT JOIN mbox.customer_profiles AS profile
@@ -654,7 +660,6 @@ function mapCustomer(row: CustomerRow): Customer {
       publicTags: row.public_tags ?? [],
       preferences: row.preferences ?? {},
       publicPreferences: row.public_preferences ?? {},
-      consentSnapshot: row.consent_snapshot ?? {},
     },
     identities: row.identities ?? [],
   }
@@ -674,7 +679,6 @@ function customerToJson(customer: Customer): JsonObject {
       publicTags: customer.profile.publicTags,
       preferences: customer.profile.preferences,
       publicPreferences: customer.profile.publicPreferences,
-      consentSnapshot: customer.profile.consentSnapshot,
     },
     identities: customer.identities.map((identity) => ({
       kind: identity.kind,
@@ -743,7 +747,7 @@ function normalizeTags(tags: readonly string[] | undefined): string[] {
 }
 
 function profileFields(profile: Readonly<CustomerProfileInput>): string[] {
-  return ['displayName', 'tags', 'publicTags', 'preferences', 'consentSnapshot']
+  return ['displayName', 'tags', 'publicTags', 'preferences']
     .filter((key) => profile[key as keyof CustomerProfileInput] !== undefined)
 }
 

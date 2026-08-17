@@ -8,6 +8,9 @@ import {
   type NormalizedWorkerRuntime,
 } from './normalized/normalized-worker-runtime.js'
 import { ScopedPostgresTransactionRunner, type PostgresPool } from './normalized/transaction-runner.js'
+import { PostgresWechatIdentityRepository } from './wechat-production-adapters.js'
+import type { PostgresPool as WechatPostgresPool } from './postgres-repository.js'
+import { OfficialWechatSubscriptionMessageAdapter } from './normalized/wechat-subscription-message-adapter.js'
 
 async function main(): Promise<void> {
   const config = loadNormalizedRuntimeConfig()
@@ -60,6 +63,25 @@ async function main(): Promise<void> {
         runtime.app.log.error({ errorCode: safeErrorCode(error) }, 'normalized worker database pool idle client failed')
       })
       workerPool = nativeWorkerPool as unknown as PostgresPool
+      const wechatLoyaltyNotification = config.wechatIdentity === null || config.wechatNotification === null
+        ? null
+        : {
+            recipients: new PostgresWechatIdentityRepository({
+              pool: workerPool as unknown as WechatPostgresPool,
+              tenantId: config.tenantId,
+              storeId: config.storeId,
+              appId: config.wechatIdentity.appId,
+              activeKeyVersion: config.wechatIdentity.encryptionKeyVersion,
+              encryptionKeys: new Map([[
+                config.wechatIdentity.encryptionKeyVersion,
+                config.wechatIdentity.encryptionKey,
+              ]]),
+            }),
+            delivery: new OfficialWechatSubscriptionMessageAdapter({
+              appId: config.wechatIdentity.appId,
+              appSecret: config.wechatIdentity.appSecret,
+            }),
+          }
       workers = createNormalizedWorkerRuntime({
         scope: { tenantId: config.tenantId, storeId: config.storeId },
         workerId,
@@ -68,6 +90,8 @@ async function main(): Promise<void> {
         transactions: new ScopedPostgresTransactionRunner(workerPool),
         aiExecutions: runtime.services.ai,
         adapters,
+        wechatLoyaltyNotification,
+        reservationPerformanceNotification: wechatLoyaltyNotification,
         onError: (worker, error) => {
           runtime.app.log.error({ worker, errorCode: safeErrorCode(error) }, 'normalized worker failed')
         },

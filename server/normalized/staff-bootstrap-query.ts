@@ -297,7 +297,10 @@ async function readIdentity(
       COALESCE((SELECT jsonb_agg(code ORDER BY code) FROM permission_facts
         WHERE override_denied), '[]'::jsonb) AS denied_permissions,
       COALESCE((SELECT jsonb_agg(jsonb_build_object(
-        'key', scope.scope_key, 'effect', scope.effect, 'value', scope.scope_value
+        'key', scope.scope_key, 'effect', scope.effect, 'value', CASE scope.value_kind
+          WHEN 'boolean' THEN to_jsonb(scope.boolean_value)
+          WHEN 'text' THEN to_jsonb(scope.text_value)
+          ELSE to_jsonb(scope.text_values) END
       ) ORDER BY scope.scope_key, scope.effect)
         FROM mbox.role_data_scopes AS scope
         JOIN active_roles AS active_role ON active_role.id = scope.role_id
@@ -307,7 +310,13 @@ async function readIdentity(
         'code', approval.approval_code,
         'amountMinor', approval.amount_minor,
         'currency', approval.currency,
-        'rules', approval.rules
+        'rules', jsonb_strip_nulls(jsonb_build_object(
+          'allowFullGift', CASE WHEN approval.allow_full_gift THEN true ELSE NULL END,
+          'fixedAmountMinor', approval.fixed_amount_minor,
+          'discountBasisPoints', approval.discount_basis_points,
+          'requiresReason', CASE WHEN approval.requires_reason THEN true ELSE NULL END,
+          'requiresSecondActor', CASE WHEN approval.requires_second_actor THEN true ELSE NULL END
+        ))
       ) ORDER BY approval.approval_code, approval.currency, approval.amount_minor DESC NULLS LAST)
         FROM mbox.role_approval_limits AS approval
         JOIN active_roles AS active_role ON active_role.id = approval.role_id

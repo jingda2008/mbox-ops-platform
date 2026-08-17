@@ -59,6 +59,8 @@ export interface ReservationMutationInput {
   expectedEndAt?: string
   note?: string | null
   seatPreference?: SeatPreference
+  reservationPolicyVersion: number
+  preferredScheduleId?: string | null
 }
 
 export async function withReservationSessionRecovery<Value>(
@@ -296,6 +298,7 @@ function parseDepositRule(value: unknown): ReservationAvailability['depositRule'
     mode: mode as ReservationAvailability['depositRule']['mode'],
     amountMinor: integer(rule.amountMinor, '定金金额'),
     ruleText: nullableText(rule.ruleText, '定金说明'),
+    policyVersion: integer(rule.policyVersion, '预约规则版本'),
   }
 }
 
@@ -315,6 +318,8 @@ function parseReservation(value: unknown): PublicReservation {
     note: nullableText(record.note, '备注'),
     seatPreference: seatPreference(record.seatPreference),
     arrivalGraceEndsAt: text(record.arrivalGraceEndsAt, '到店锁位截止时间'),
+    reservationPolicyVersion: integer(record.reservationPolicyVersion, '预约规则版本'),
+    preferredScheduleId: nullableText(record.preferredScheduleId, '演出偏好'),
     cancellationPolicy: object(record.cancellationPolicy, '取消规则'),
   }
 }

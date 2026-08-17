@@ -2,6 +2,7 @@ import { PerformerRepository } from './performer-repository.js'
 import { PerformerSongRepository } from './performer-song-repository.js'
 import { ScheduleRepository } from './schedule-repository.js'
 import type { ScopedTransaction } from './transaction-runner.js'
+import { lockBoundGuestTablePosition } from './guest-table-authority.js'
 
 export type SongRequestType = 'catalog' | 'custom'
 export type SongRequestStatus =
@@ -140,7 +141,10 @@ export class SongRequestRepository {
     return result.rows[0] === undefined ? null : mapSongRequest(result.rows[0])
   }
 
-  async submit(input: Readonly<SubmitSongRequestInput>): Promise<SongRequestSubmission> {
+  async submit(
+    input: Readonly<SubmitSongRequestInput>,
+    guestActorRef?: string,
+  ): Promise<SongRequestSubmission> {
     validateSubmit(input)
     const at = input.requestedAt ?? new Date().toISOString()
     const session = await this.transaction.query<{ id: string }>(`
@@ -155,18 +159,14 @@ export class SongRequestRepository {
     if (input.customerId === undefined || input.customerId === null) {
       throw new SongRequestCustomerSessionError()
     }
-    const customerLink = await this.transaction.query<{ id: string }>(`
-      SELECT id FROM mbox.table_session_customers
-      WHERE tenant_id = $1::uuid AND store_id = $2::uuid
-        AND table_session_id = $3::uuid AND customer_id = $4::uuid
-      FOR KEY SHARE
-    `, [
-      this.transaction.scope.tenantId,
-      this.transaction.scope.storeId,
-      input.tableSessionId,
-      input.customerId,
-    ])
-    if (customerLink.rowCount !== 1) throw new SongRequestCustomerSessionError()
+    const linked=guestActorRef === undefined
+      ? (await this.transaction.query<{ participation_id: string | null }>(`
+          SELECT mbox.lock_active_table_customer_position($1::uuid,$2::uuid) AS participation_id
+        `,[input.tableSessionId,input.customerId])).rows[0]?.participation_id!==null
+      : await lockBoundGuestTablePosition(this.transaction,{
+          tableSessionId:input.tableSessionId,customerId:input.customerId,actorRef:guestActorRef,
+        })
+    if (!linked) throw new SongRequestCustomerSessionError()
 
     const schedules = new ScheduleRepository(this.transaction)
     const target = await schedules.findById(input.scheduleId, true)

@@ -2,10 +2,13 @@ export type StaffActionPermission =
   | 'table.open'
   | 'table.close'
   | 'table.transfer'
+  | 'table.participation.manage'
   | 'table.assignment.manage'
   | 'order.create'
   | 'order.gift'
   | 'service.execute'
+  | 'observation.record'
+  | 'recommendation.staff.modify'
   | 'kds.prepare'
   | 'kds.deliver'
 
@@ -19,6 +22,7 @@ export interface StaffActionActor {
 export interface StaffActionTableSession {
   id: string
   guestCount: number
+  capacityAtOpen: number
   guestProfileSnapshot?: Record<string, unknown>
   status: 'open' | 'closing'
   openedAt: string
@@ -64,6 +68,39 @@ export interface StaffOperationsData {
   tasks: StaffServiceTask[]
 }
 
+export type RecommendationStaffModificationReason =
+  | 'customer_request'
+  | 'availability_substitution'
+  | 'service_recovery'
+  | 'staff_judgement'
+
+export interface StaffRecommendationSession {
+  recommendationPublicId: string
+  tableSessionId: string
+  createdAt: string
+  options: Array<{
+    productId: string
+    productName: string
+    rank: number
+    tier: 'comfortable' | 'enhanced' | 'signature'
+    amountMinor: number
+    currency: string
+  }>
+}
+
+export interface StaffRecommendationModification {
+  eventId: string
+  recommendationPublicId: string
+  tableSessionId: string
+  sourceProductId: string
+  sourceProductName: string
+  targetProductId: string
+  targetProductName: string
+  reasonCode: RecommendationStaffModificationReason
+  employeeId: string
+  occurredAt: string
+}
+
 export type StaffTableAssignmentType = 'primary' | 'backup' | 'temporary'
 
 export interface StaffTableAssignment {
@@ -91,6 +128,43 @@ export interface StaffTableAssignmentOptions {
     code: string
     name: string
   }>
+}
+
+export interface StaffTableParticipant {
+  publicId:string
+  customerPublicId:string
+  role:'reservation_owner'|'organizer'|'payer'|'companion'|'unknown'
+  confirmationState:'unconfirmed'|'confirmed'|'corrected'
+  identityLevel:'anonymous'|'identified'|'member'
+  seatLabel:string|null
+  locationStartedAt:string
+}
+
+export interface StaffParticipantMovementPreview {
+  movementKind:'participant_split'|'participant_merge'
+  movedGuestCount:number
+  selectedParticipantCount:number
+  targetTableId:string
+  targetTableSessionId:string|null
+  targetCapacity:number
+  projectedGuestCount:number
+  requiresCapacityOverride:boolean
+  roleAdjustments:Array<{
+    participantPublicId:string
+    fromRole:'organizer'
+    toRole:'companion'
+    reason:string
+  }>
+  blockers:Array<{
+    code:'ORDER_UNSETTLED'|'ORDER_ITEM_UNRESOLVED'|'KDS_ACTIVE'|'PAYMENT_PENDING'
+      |'REFUND_PENDING'|'SERVICE_ACTIVE'|'PRICING_RESERVED'|'SONG_ACTIVE'
+      |'BENEFIT_RESERVED'|'EXPERIENCE_ACTIVE'|'REDEMPTION_PENDING'|'CHECKOUT_OFFER_ACTIVE'
+    count:number
+    label:string
+    resolution:string
+  }>
+  finalRevalidationRequired:true
+  accountingBoundary:string
 }
 
 export type FulfillmentStation = 'bar' | 'kitchen' | 'cashier'

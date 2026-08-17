@@ -1,10 +1,15 @@
 import type {
   StaffFulfillmentData,
   StaffOperationsData,
+  RecommendationStaffModificationReason,
+  StaffRecommendationModification,
+  StaffRecommendationSession,
   StaffReservation,
   StaffTableAssignment,
   StaffTableAssignmentOptions,
   StaffTableAssignmentType,
+  StaffTableParticipant,
+  StaffParticipantMovementPreview,
 } from './types'
 import type { OnlinePaymentAction } from '../../shared/online-payment-contracts'
 
@@ -54,6 +59,24 @@ export interface AssistedOrderCatalogProduct {
     note: string | null
   }>
   productSnapshot: Record<string, unknown>
+  guestVisible: boolean
+  recommendationEnabled: boolean
+  recommendationMinGuests: number
+  recommendationMaxGuests: number
+  recommendationPriority: number
+  recommendationSceneTags: string[]
+  recommendationIntentTags: string[]
+  recommendationTasteTags: string[]
+  recommendationDwellTags: string[]
+  recommendationSingleWaveEligible: boolean
+  recommendationExpectedPrepMinutes: number
+  recommendationHoldMinutes: number
+  recommendationUpgradeProductId: string | null
+  menuSortOrder: number
+  availableFrom: string | null
+  availableUntil: string | null
+  maxOrderQuantity: number
+  costAmountMinor: number | null
   status: 'active' | 'sold_out' | 'inactive'
   isAvailable: boolean
   standardPrice: null | {
@@ -83,6 +106,108 @@ export interface AssistedOrderResult {
   }
 }
 
+export interface ObservationCandidate {
+  id: string
+  mentionIndex: number
+  rawMention: string
+  orderItemId: string
+  productId: string
+  productName: string
+  rank: number
+  confidence: number
+  matchKind: 'exact_name' | 'search_text' | 'order_context' | 'manual'
+}
+
+export interface ObservationDraft {
+  publicId: string
+  status: 'draft'
+  inputKind: 'text' | 'voice_transcript'
+  rawContent: string
+  parseConfidence: number
+  needsImmediateAction: boolean
+  serviceTaskId: string | null
+  candidates: ObservationCandidate[]
+  clarificationRequired: boolean
+  clarificationPrompt: string | null
+}
+
+export type ObservationExpressionKind = 'objective_fact' | 'customer_quote' | 'staff_judgement' | 'system_inference'
+export type ObservationScopeKind = 'table' | 'seat' | 'customer' | 'product'
+export type ObservationEventType = 'remaining' | 'consumed_little' | 'praise' | 'complaint' | 'too_sweet'
+  | 'too_cold' | 'served_late' | 'presentation' | 'portion' | 'other'
+export type ObservationDegree = 'little' | 'half' | 'most' | 'almost_untouched' | 'unknown'
+
+export interface ObservationEvent {
+  id: string
+  eventGroupId: string
+  revision: number
+  expressionKind: ObservationExpressionKind
+  scopeKind: ObservationScopeKind
+  eventType: ObservationEventType
+  degree: ObservationDegree | null
+  reasonCode: string | null
+  seatLabel: string | null
+  customerId: string | null
+  productId: string | null
+  productName: string | null
+  orderItemId: string | null
+  selectedCandidateId: string | null
+  confidence: number
+  rawExcerpt: string | null
+  needsImmediateAction: boolean
+  serviceTaskId: string | null
+  createdAt: string
+}
+
+export interface ObservationRevision {
+  id: string
+  reason: string
+  correctedBy: string
+  createdAt: string
+  before: Record<string, unknown>
+  after: Record<string, unknown>
+}
+
+export interface ObservationHistoryItem {
+  publicId: string
+  inputKind: 'text' | 'voice_transcript'
+  rawContent: string | null
+  parseConfidence: number
+  needsImmediateAction: boolean
+  serviceTaskId: string | null
+  serviceTaskStatus: string | null
+  recordedBy: string
+  confirmedBy: string
+  confirmedAt: string
+  events: ObservationEvent[]
+  revisions: ObservationRevision[]
+}
+
+export interface ObservationHistory {
+  items: ObservationHistoryItem[]
+  permissions: { canCorrect: boolean; canViewRaw: boolean }
+}
+
+export interface ObservationEventReplacement {
+  expressionKind: ObservationExpressionKind
+  scopeKind: ObservationScopeKind
+  eventType: ObservationEventType
+  degree: ObservationDegree | null
+  reasonCode: string | null
+  seatLabel: string | null
+  customerId: string | null
+  candidateId: string | null
+  productId: string | null
+  confidence: number
+  rawExcerpt: string
+}
+
+export interface VoiceTranscriptionResult {
+  transcript: string
+  confidence: number | null
+  alternatives: Array<{ transcript: string; confidence: number | null }>
+}
+
 export interface StaffActionsApiPort {
   loadOperations(signal?: AbortSignal): Promise<StaffOperationsData>
   loadFulfillment(signal?: AbortSignal): Promise<StaffFulfillmentData>
@@ -110,6 +235,26 @@ export interface StaffActionsApiPort {
     targetTableId: string
     capacityOverrideReason?: string
   }>): Promise<void>
+  loadTableParticipants(tableSessionId:string,signal?:AbortSignal):Promise<StaffTableParticipant[]>
+  previewParticipantMovement(input:Readonly<{
+    sourceTableSessionId:string
+    movementKind:'participant_split'|'participant_merge'
+    targetTableId:string
+    targetTableSessionId:string|null
+    movedGuestCount:number
+    participantPublicIds:string[]
+    capacityOverrideReason?:string
+  }>):Promise<StaffParticipantMovementPreview>
+  moveParticipants(input:Readonly<{
+    sourceTableSessionId:string
+    movementKind:'participant_split'|'participant_merge'
+    targetTableId:string
+    targetTableSessionId:string|null
+    movedGuestCount:number
+    participantPublicIds:string[]
+    reason:string
+    capacityOverrideReason?:string
+  }>):Promise<void>
   completeServiceTask(taskId: string, note?: string): Promise<void>
   runKdsAction(taskId: string, action: 'complete' | 'deliver'): Promise<void>
   actOnReservation(reservationId: string, action: 'confirm' | 'arrive'): Promise<void>
@@ -134,6 +279,40 @@ export interface StaffActionsApiPort {
     customerAuthCode?: string
   }>): Promise<OnlinePaymentAction>
   queryOnlinePayment(paymentId: string): Promise<'pending' | 'succeeded' | 'failed' | 'closed'>
+  transcribeObservationAudio(input: Readonly<{
+    audioBase64: string
+    mimeType: 'audio/webm' | 'audio/webm;codecs=opus' | 'audio/ogg' | 'audio/ogg;codecs=opus'
+    phrases: string[]
+  }>): Promise<VoiceTranscriptionResult>
+  parseObservation(input: Readonly<{
+    tableSessionId: string
+    rawContent: string
+    needsImmediateAction: boolean
+    inputKind?: 'text' | 'voice_transcript'
+  }>): Promise<ObservationDraft>
+  confirmObservation(input: Readonly<{
+    observationPublicId: string
+    candidateId: string | null
+    confidence: number
+    rawExcerpt: string
+    expressionKind: ObservationExpressionKind
+    eventType: ObservationEventType
+    degree: ObservationDegree | null
+  }>): Promise<{ publicId: string; status: string; serviceTaskId: string | null }>
+  loadRecentObservations(tableSessionId: string, signal?: AbortSignal): Promise<ObservationHistory>
+  loadTableRecommendation(tableSessionId: string, signal?: AbortSignal): Promise<StaffRecommendationSession | null>
+  modifyTableRecommendation(input: Readonly<{
+    recommendationPublicId: string
+    sourceProductId: string
+    targetProductId: string
+    reasonCode: RecommendationStaffModificationReason
+  }>): Promise<StaffRecommendationModification>
+  reviseObservation(input: Readonly<{
+    observationPublicId: string
+    eventId: string
+    reason: string
+    replacement: ObservationEventReplacement
+  }>): Promise<ObservationEvent>
 }
 
 export interface StaffActionsApiOptions {
@@ -231,6 +410,43 @@ export class StaffActionsApi implements StaffActionsApiPort {
       `/api/table-management/sessions/${encodeURIComponent(input.tableSessionId)}/transfer`,
       { targetTableId: input.targetTableId, capacityOverrideReason: input.capacityOverrideReason },
       'x-idempotency-key',
+    )
+  }
+
+  loadTableParticipants(tableSessionId:string,signal?:AbortSignal):Promise<StaffTableParticipant[]> {
+    return this.getData(
+      `/api/table-management/sessions/${encodeURIComponent(tableSessionId)}/participants`,signal,
+    )
+  }
+
+  previewParticipantMovement(input:Readonly<{
+    sourceTableSessionId:string
+    movementKind:'participant_split'|'participant_merge'
+    targetTableId:string
+    targetTableSessionId:string|null
+    movedGuestCount:number
+    participantPublicIds:string[]
+    capacityOverrideReason?:string
+  }>):Promise<StaffParticipantMovementPreview> {
+    return this.postData(
+      `/api/table-management/sessions/${encodeURIComponent(input.sourceTableSessionId)}/participant-movements/preview`,
+      input,'x-idempotency-key',
+    )
+  }
+
+  async moveParticipants(input:Readonly<{
+    sourceTableSessionId:string
+    movementKind:'participant_split'|'participant_merge'
+    targetTableId:string
+    targetTableSessionId:string|null
+    movedGuestCount:number
+    participantPublicIds:string[]
+    reason:string
+    capacityOverrideReason?:string
+  }>):Promise<void> {
+    await this.command(
+      `/api/table-management/sessions/${encodeURIComponent(input.sourceTableSessionId)}/participant-movements`,
+      input,'x-idempotency-key',
     )
   }
 
@@ -346,6 +562,188 @@ export class StaffActionsApi implements StaffActionsApiPort {
     return status
   }
 
+  async parseObservation(input: Readonly<{
+    tableSessionId: string
+    rawContent: string
+    needsImmediateAction: boolean
+    inputKind?: 'text' | 'voice_transcript'
+  }>): Promise<ObservationDraft> {
+    const response = await this.request(
+      `/api/staff/table-sessions/${encodeURIComponent(input.tableSessionId)}/observations/parse`,
+      {
+        method: 'POST',
+        headers: new Headers({
+          accept: 'application/json',
+          'content-type': 'application/json',
+          'idempotency-key': `staff-observation-parse-${this.createIdempotencyKey()}`,
+        }),
+        body: JSON.stringify({
+          inputKind: input.inputKind ?? 'text',
+          rawContent: input.rawContent,
+          needsImmediateAction: input.needsImmediateAction,
+        }),
+      },
+    )
+    const body = await readJson(response)
+    if (!isObject(body) || !isObject(body.data) || typeof body.data.publicId !== 'string') {
+      throw new StaffActionsApiError('桌台记录解析结果无法识别，请保留原话后重试', 'INVALID_OBSERVATION_RESPONSE', response.status)
+    }
+    return observationDraft(body.data, response.status)
+  }
+
+  async transcribeObservationAudio(input: Readonly<{
+    audioBase64: string
+    mimeType: 'audio/webm' | 'audio/webm;codecs=opus' | 'audio/ogg' | 'audio/ogg;codecs=opus'
+    phrases: string[]
+  }>): Promise<VoiceTranscriptionResult> {
+    const response = await this.request('/api/voice/transcribe', {
+      method: 'POST',
+      headers: new Headers({ accept: 'application/json', 'content-type': 'application/json' }),
+      body: JSON.stringify(input),
+    })
+    const body = await readJson(response)
+    if (!isObject(body) || typeof body.transcript !== 'string'
+      || (body.confidence !== null && typeof body.confidence !== 'number')
+      || (body.alternatives !== undefined && !Array.isArray(body.alternatives))) {
+      throw new StaffActionsApiError('语音转写结果无法识别，可以直接输入文字', 'INVALID_VOICE_TRANSCRIPTION', response.status)
+    }
+    const alternatives = (body.alternatives ?? []).map((item) => {
+      if (!isObject(item) || typeof item.transcript !== 'string'
+        || (item.confidence !== null && typeof item.confidence !== 'number')) {
+        throw new StaffActionsApiError('语音候选结果无法识别，可以直接输入文字', 'INVALID_VOICE_TRANSCRIPTION', response.status)
+      }
+      return { transcript: item.transcript, confidence: item.confidence as number | null }
+    })
+    return {
+      transcript: body.transcript,
+      confidence: body.confidence as number | null,
+      alternatives,
+    }
+  }
+
+  async confirmObservation(input: Readonly<{
+    observationPublicId: string
+    candidateId: string | null
+    confidence: number
+    rawExcerpt: string
+    expressionKind: ObservationExpressionKind
+    eventType: ObservationEventType
+    degree: ObservationDegree | null
+  }>): Promise<{ publicId: string; status: string; serviceTaskId: string | null }> {
+    const response = await this.request(
+      `/api/staff/observations/${encodeURIComponent(input.observationPublicId)}/confirm`,
+      {
+        method: 'POST',
+        headers: new Headers({
+          accept: 'application/json',
+          'content-type': 'application/json',
+          'idempotency-key': `staff-observation-confirm-${this.createIdempotencyKey()}`,
+        }),
+        body: JSON.stringify({
+          events: [{
+            expressionKind: input.expressionKind,
+            scopeKind: input.candidateId === null ? 'table' : 'product',
+            eventType: input.eventType,
+            degree: input.degree,
+            reasonCode: null,
+            candidateId: input.candidateId,
+            confidence: input.confidence,
+            rawExcerpt: input.rawExcerpt,
+          }],
+        }),
+      },
+    )
+    const body = await readJson(response)
+    if (!isObject(body) || !isObject(body.data) || typeof body.data.publicId !== 'string') {
+      throw new StaffActionsApiError('桌台记录确认结果无法识别，请到最近记录核对', 'INVALID_OBSERVATION_CONFIRMATION', response.status)
+    }
+    const taskId = body.data.serviceTaskId
+    if (typeof body.data.status !== 'string' || (taskId !== null && typeof taskId !== 'string')) {
+      throw new StaffActionsApiError('桌台记录确认结果无法识别，请到最近记录核对', 'INVALID_OBSERVATION_CONFIRMATION', response.status)
+    }
+    return { publicId: body.data.publicId, status: body.data.status, serviceTaskId: taskId }
+  }
+
+  async loadRecentObservations(tableSessionId: string, signal?: AbortSignal): Promise<ObservationHistory> {
+    const response = await this.request(
+      `/api/staff/table-sessions/${encodeURIComponent(tableSessionId)}/observations/recent`,
+      { method: 'GET', signal },
+    )
+    const body = await readJson(response)
+    if (!isObject(body) || !isObject(body.data)) {
+      throw new StaffActionsApiError('最近桌台记录无法识别，请刷新后重试', 'INVALID_OBSERVATION_HISTORY', response.status)
+    }
+    return observationHistory(body.data, response.status)
+  }
+
+  async loadTableRecommendation(
+    tableSessionId: string,
+    signal?: AbortSignal,
+  ): Promise<StaffRecommendationSession | null> {
+    const response = await this.request(
+      `/api/staff/customer-experience/recommendations?tableSessionId=${encodeURIComponent(tableSessionId)}`,
+      { method: 'GET',signal },
+    )
+    const body = await readJson(response)
+    if (!isObject(body) || !('data' in body)) throw new StaffActionsApiError(
+      '桌台推荐无法识别，请刷新后重试','INVALID_RECOMMENDATION_RESPONSE',response.status,
+    )
+    if (body.data === null) return null
+    return staffRecommendationSession(body.data,response.status)
+  }
+
+  async modifyTableRecommendation(input: Readonly<{
+    recommendationPublicId: string
+    sourceProductId: string
+    targetProductId: string
+    reasonCode: RecommendationStaffModificationReason
+  }>): Promise<StaffRecommendationModification> {
+    const response = await this.request(
+      `/api/staff/customer-experience/recommendations/${encodeURIComponent(input.recommendationPublicId)}/modifications`,
+      {
+        method: 'POST',
+        headers: new Headers({
+          accept: 'application/json','content-type': 'application/json',
+          'idempotency-key': `staff-recommendation-modification-${this.createIdempotencyKey()}`,
+        }),
+        body: JSON.stringify({
+          sourceProductId: input.sourceProductId,targetProductId: input.targetProductId,
+          reasonCode: input.reasonCode,
+        }),
+      },
+    )
+    const body = await readJson(response)
+    if (!isObject(body) || !isObject(body.data)) throw new StaffActionsApiError(
+      '推荐调整结果无法识别，请刷新后核对','INVALID_RECOMMENDATION_MODIFICATION_RESPONSE',response.status,
+    )
+    return staffRecommendationModification(body.data,response.status)
+  }
+
+  async reviseObservation(input: Readonly<{
+    observationPublicId: string
+    eventId: string
+    reason: string
+    replacement: ObservationEventReplacement
+  }>): Promise<ObservationEvent> {
+    const response = await this.request(
+      `/api/staff/observations/${encodeURIComponent(input.observationPublicId)}/events/${encodeURIComponent(input.eventId)}/revise`,
+      {
+        method: 'POST',
+        headers: new Headers({
+          accept: 'application/json',
+          'content-type': 'application/json',
+          'idempotency-key': `staff-observation-revise-${this.createIdempotencyKey()}`,
+        }),
+        body: JSON.stringify({ reason: input.reason, replacement: input.replacement }),
+      },
+    )
+    const body = await readJson(response)
+    if (!isObject(body) || !isObject(body.data)) {
+      throw new StaffActionsApiError('修正结果无法识别，请刷新最近记录核对', 'INVALID_OBSERVATION_REVISION', response.status)
+    }
+    return observationEvent(body.data, response.status)
+  }
+
   private async getData<Data>(url: string, signal?: AbortSignal): Promise<Data> {
     const response = await this.request(url, { method: 'GET', signal })
     const body = await readJson(response)
@@ -362,6 +760,19 @@ export class StaffActionsApi implements StaffActionsApiPort {
     const headers = new Headers({ accept: 'application/json', 'content-type': 'application/json' })
     headers.set(idempotencyHeader, idempotencyKey)
     await this.request(url, { method: 'POST', body: JSON.stringify(body), headers })
+  }
+
+  private async postData<Data>(
+    url:string,body:object,idempotencyHeader:'idempotency-key'|'x-idempotency-key',
+  ):Promise<Data> {
+    const headers=new Headers({ accept:'application/json','content-type':'application/json' })
+    headers.set(idempotencyHeader,`staff-action-${this.createIdempotencyKey()}`)
+    const response=await this.request(url,{ method:'POST',body:JSON.stringify(body),headers })
+    const value=await readJson(response)
+    if (!isObject(value) || !('data' in value)) throw new StaffActionsApiError(
+      '预检结果无法识别','INVALID_RESPONSE',response.status,
+    )
+    return value.data as Data
   }
 
   private async request(url: string, init: RequestInit): Promise<Response> {
@@ -398,6 +809,152 @@ async function apiError(response: Response): Promise<StaffActionsApiError> {
     )
   }
   return new StaffActionsApiError('操作未完成，请重试', 'HTTP_ERROR', response.status)
+}
+
+function observationDraft(value: Record<string, unknown>, status: number): ObservationDraft {
+  const candidates = value.candidates
+  if (value.status !== 'draft' || (value.inputKind !== 'text' && value.inputKind !== 'voice_transcript')
+    || typeof value.rawContent !== 'string' || typeof value.parseConfidence !== 'number'
+    || !Number.isFinite(value.parseConfidence) || value.parseConfidence < 0 || value.parseConfidence > 1
+    || typeof value.needsImmediateAction !== 'boolean'
+    || (value.serviceTaskId !== null && typeof value.serviceTaskId !== 'string')
+    || typeof value.clarificationRequired !== 'boolean'
+    || (value.clarificationPrompt !== null && typeof value.clarificationPrompt !== 'string')
+    || !Array.isArray(candidates)) {
+    throw new StaffActionsApiError('桌台记录解析结果无法识别，请保留原话后重试', 'INVALID_OBSERVATION_RESPONSE', status)
+  }
+  const normalizedCandidates = candidates.map((item) => {
+    if (!isObject(item) || typeof item.id !== 'string' || typeof item.mentionIndex !== 'number'
+      || typeof item.rawMention !== 'string' || typeof item.orderItemId !== 'string'
+      || typeof item.productId !== 'string' || typeof item.productName !== 'string'
+      || typeof item.rank !== 'number' || typeof item.confidence !== 'number'
+      || !['exact_name', 'search_text', 'order_context', 'manual'].includes(String(item.matchKind))) {
+      throw new StaffActionsApiError('桌台记录商品候选无法识别，请保留原话后重试', 'INVALID_OBSERVATION_RESPONSE', status)
+    }
+    return item as unknown as ObservationCandidate
+  })
+  return {
+    publicId: String(value.publicId), status: 'draft', inputKind: value.inputKind,
+    rawContent: value.rawContent, parseConfidence: value.parseConfidence,
+    needsImmediateAction: value.needsImmediateAction, serviceTaskId: value.serviceTaskId as string | null,
+    candidates: normalizedCandidates, clarificationRequired: value.clarificationRequired,
+    clarificationPrompt: value.clarificationPrompt as string | null,
+  }
+}
+
+function staffRecommendationSession(value: unknown,status: number): StaffRecommendationSession {
+  if (!isObject(value) || typeof value.recommendationPublicId !== 'string'
+    || typeof value.tableSessionId !== 'string' || typeof value.createdAt !== 'string'
+    || !Array.isArray(value.options)) throw new StaffActionsApiError(
+      '桌台推荐无法识别，请刷新后重试','INVALID_RECOMMENDATION_RESPONSE',status,
+    )
+  const options = value.options.map((option) => {
+    if (!isObject(option) || typeof option.productId !== 'string' || typeof option.productName !== 'string'
+      || !Number.isInteger(option.rank) || !['comfortable','enhanced','signature'].includes(String(option.tier))
+      || !Number.isSafeInteger(option.amountMinor) || Number(option.amountMinor)<0
+      || typeof option.currency !== 'string') throw new StaffActionsApiError(
+        '推荐方案无法识别，请刷新后重试','INVALID_RECOMMENDATION_RESPONSE',status,
+      )
+    return option as unknown as StaffRecommendationSession['options'][number]
+  })
+  return { recommendationPublicId: value.recommendationPublicId,tableSessionId: value.tableSessionId,
+    createdAt: value.createdAt,options }
+}
+
+function staffRecommendationModification(
+  value: Record<string, unknown>,status: number,
+): StaffRecommendationModification {
+  const fields = [
+    'eventId','recommendationPublicId','tableSessionId','sourceProductId','sourceProductName',
+    'targetProductId','targetProductName','employeeId','occurredAt',
+  ] as const
+  const reasons: RecommendationStaffModificationReason[] = [
+    'customer_request','availability_substitution','service_recovery','staff_judgement',
+  ]
+  if (fields.some((field) => typeof value[field] !== 'string')
+    || !reasons.includes(value.reasonCode as RecommendationStaffModificationReason)) {
+    throw new StaffActionsApiError(
+      '推荐调整结果无法识别，请刷新后核对','INVALID_RECOMMENDATION_MODIFICATION_RESPONSE',status,
+    )
+  }
+  return value as unknown as StaffRecommendationModification
+}
+
+function observationHistory(value: Record<string, unknown>, status: number): ObservationHistory {
+  if (!Array.isArray(value.items) || !isObject(value.permissions)
+    || typeof value.permissions.canCorrect !== 'boolean' || typeof value.permissions.canViewRaw !== 'boolean') {
+    throw new StaffActionsApiError('最近桌台记录无法识别，请刷新后重试', 'INVALID_OBSERVATION_HISTORY', status)
+  }
+  const items = value.items.map((item) => {
+    if (!isObject(item) || typeof item.publicId !== 'string'
+      || (item.inputKind !== 'text' && item.inputKind !== 'voice_transcript')
+      || (item.rawContent !== null && typeof item.rawContent !== 'string')
+      || typeof item.parseConfidence !== 'number' || !Number.isFinite(item.parseConfidence)
+      || item.parseConfidence < 0 || item.parseConfidence > 1 || typeof item.needsImmediateAction !== 'boolean'
+      || (item.serviceTaskId !== null && typeof item.serviceTaskId !== 'string')
+      || (item.serviceTaskStatus !== null && typeof item.serviceTaskStatus !== 'string')
+      || typeof item.recordedBy !== 'string' || typeof item.confirmedBy !== 'string'
+      || typeof item.confirmedAt !== 'string' || !Array.isArray(item.events) || !Array.isArray(item.revisions)) {
+      throw new StaffActionsApiError('最近桌台记录无法识别，请刷新后重试', 'INVALID_OBSERVATION_HISTORY', status)
+    }
+    const events = item.events.map((event) => {
+      if (!isObject(event) || typeof event.needsImmediateAction !== 'boolean'
+        || (event.serviceTaskId !== null && typeof event.serviceTaskId !== 'string')
+        || typeof event.createdAt !== 'string') {
+        throw new StaffActionsApiError('观察事件无法识别，请刷新后重试', 'INVALID_OBSERVATION_HISTORY', status)
+      }
+      return observationEvent(event, status)
+    })
+    const revisions = item.revisions.map((revision) => {
+      if (!isObject(revision) || typeof revision.id !== 'string' || typeof revision.reason !== 'string'
+        || typeof revision.correctedBy !== 'string' || typeof revision.createdAt !== 'string'
+        || !isObject(revision.before) || !isObject(revision.after)) {
+        throw new StaffActionsApiError('修订记录无法识别，请刷新后重试', 'INVALID_OBSERVATION_HISTORY', status)
+      }
+      return revision as unknown as ObservationRevision
+    })
+    return { ...item, events, revisions } as unknown as ObservationHistoryItem
+  })
+  return {
+    items,
+    permissions: { canCorrect: value.permissions.canCorrect, canViewRaw: value.permissions.canViewRaw },
+  }
+}
+
+function observationEvent(value: Record<string, unknown>, status: number): ObservationEvent {
+  const expressionKinds: ObservationExpressionKind[] = ['objective_fact', 'customer_quote', 'staff_judgement', 'system_inference']
+  const scopeKinds: ObservationScopeKind[] = ['table', 'seat', 'customer', 'product']
+  const eventTypes: ObservationEventType[] = ['remaining', 'consumed_little', 'praise', 'complaint', 'too_sweet', 'too_cold', 'served_late', 'presentation', 'portion', 'other']
+  const degrees: ObservationDegree[] = ['little', 'half', 'most', 'almost_untouched', 'unknown']
+  if (typeof value.id !== 'string' || typeof value.eventGroupId !== 'string' || typeof value.revision !== 'number'
+    || !expressionKinds.includes(value.expressionKind as ObservationExpressionKind)
+    || !scopeKinds.includes(value.scopeKind as ObservationScopeKind)
+    || !eventTypes.includes(value.eventType as ObservationEventType)
+    || (value.degree !== null && !degrees.includes(value.degree as ObservationDegree))
+    || (value.reasonCode !== null && typeof value.reasonCode !== 'string')
+    || (value.seatLabel !== undefined && value.seatLabel !== null && typeof value.seatLabel !== 'string')
+    || (value.customerId !== undefined && value.customerId !== null && typeof value.customerId !== 'string')
+    || (value.productId !== null && typeof value.productId !== 'string')
+    || (value.productName !== undefined && value.productName !== null && typeof value.productName !== 'string')
+    || (value.orderItemId !== undefined && value.orderItemId !== null && typeof value.orderItemId !== 'string')
+    || (value.selectedCandidateId !== null && typeof value.selectedCandidateId !== 'string')
+    || typeof value.confidence !== 'number'
+    || (value.rawExcerpt !== null && typeof value.rawExcerpt !== 'string')
+    || (value.needsImmediateAction !== undefined && typeof value.needsImmediateAction !== 'boolean')
+    || (value.serviceTaskId !== undefined && value.serviceTaskId !== null && typeof value.serviceTaskId !== 'string')
+    || (value.createdAt !== undefined && typeof value.createdAt !== 'string')) {
+    throw new StaffActionsApiError('观察事件无法识别，请刷新后重试', 'INVALID_OBSERVATION_HISTORY', status)
+  }
+  return {
+    ...value,
+    seatLabel: typeof value.seatLabel === 'string' ? value.seatLabel : null,
+    customerId: typeof value.customerId === 'string' ? value.customerId : null,
+    productName: typeof value.productName === 'string' ? value.productName : null,
+    orderItemId: typeof value.orderItemId === 'string' ? value.orderItemId : null,
+    needsImmediateAction: value.needsImmediateAction === true,
+    serviceTaskId: typeof value.serviceTaskId === 'string' ? value.serviceTaskId : null,
+    createdAt: typeof value.createdAt === 'string' ? value.createdAt : '',
+  } as unknown as ObservationEvent
 }
 
 async function readJson(response: Response): Promise<unknown> {

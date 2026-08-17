@@ -94,7 +94,8 @@ describe('ReservationBookingView', () => {
         publicId: 'reservation-own-001', customerName: '王女士', maskedContact: '138****8000', guestCount: 2,
         arrivalAt: '2026-08-12T20:30:00+08:00', expectedEndAt: '2026-08-13T00:30:00+08:00', status: 'pending',
         arrivalState: 'not_arrived', note: null, seatPreference: 'stage_atmosphere',
-        arrivalGraceEndsAt: '2026-08-12T20:40:00+08:00', cancellationPolicy: {},
+        arrivalGraceEndsAt: '2026-08-12T20:40:00+08:00', reservationPolicyVersion: 1,
+        preferredScheduleId: null, cancellationPolicy: {},
       },
     }))
     expect(html).toContain('reservation-own-001')
@@ -117,7 +118,8 @@ describe('ReservationBookingView', () => {
         publicId: 'reservation-confirmed-001', customerName: '王女士', maskedContact: '138****8000', guestCount: 2,
         arrivalAt: '2026-08-12T20:30:00+08:00', expectedEndAt: '2026-08-13T00:30:00+08:00', status: 'confirmed',
         arrivalState: 'not_arrived', note: null, seatPreference: 'comfortable_booth',
-        arrivalGraceEndsAt: '2026-08-12T20:40:00+08:00', cancellationPolicy: {},
+        arrivalGraceEndsAt: '2026-08-12T20:40:00+08:00', reservationPolicyVersion: 1,
+        preferredScheduleId: null, cancellationPolicy: {},
       },
     }))
 
@@ -133,7 +135,8 @@ describe('ReservationBookingView', () => {
       publicId: 'reservation-confirmed-002', customerName: '王女士', maskedContact: '138****8000', guestCount: 2,
       arrivalAt: '2026-08-12T21:00:00+08:00', expectedEndAt: '2026-08-13T01:00:00+08:00', status: 'confirmed',
       arrivalState: 'not_arrived' as const, note: null, seatPreference: 'comfortable_booth' as const,
-      arrivalGraceEndsAt: '2026-08-12T21:10:00+08:00', cancellationPolicy: {},
+      arrivalGraceEndsAt: '2026-08-12T21:10:00+08:00', reservationPolicyVersion: 1,
+      preferredScheduleId: null, cancellationPolicy: {},
     }
     const beforeArrival = render(base({ step: 'complete', reservation }))
     expect(beforeArrival).not.toContain('预约到店保留剩余')
@@ -156,7 +159,7 @@ describe('ReservationBookingView', () => {
 
   it('does not present a zero deposit before a direct-booking table is assigned', () => {
     const value = availability()
-    value.depositRule = { enabled: true, mode: 'minimum_spend_ratio', amountMinor: 0, ruleText: '定金抵扣消费' }
+    value.depositRule = { enabled: true, mode: 'minimum_spend_ratio', amountMinor: 0, ruleText: '定金抵扣消费', policyVersion: 1 }
     const html = render(base({ step: 'confirm', availability: value }))
     expect(html).toContain('预约定金将按门店最终安排位置计算')
     expect(html).not.toContain('预约定金 ¥0')
@@ -167,7 +170,7 @@ function availability(): ReservationAvailability {
   return {
     arrivalAt: '2026-08-12T20:30:00+08:00', expectedEndAt: '2026-08-13T00:30:00+08:00', guestCount: 2,
     acceptingReservations: true,
-    depositRule: { enabled: true, mode: 'flat', amountMinor: 50000, ruleText: '可抵扣当日消费' },
+    depositRule: { enabled: true, mode: 'flat', amountMinor: 50000, ruleText: '可抵扣当日消费', policyVersion: 1 },
     areas: [{
       code: 'VIP', name: '舞台前区', type: 'vip', zone: 'stage-front',
       tables: [{ code: 'VIP1', name: 'VIP 1', capacity: 6, minimumSpendMinor: 188800, currency: 'CNY', status: 'available' }],

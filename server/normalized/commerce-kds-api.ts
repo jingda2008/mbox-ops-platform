@@ -32,6 +32,7 @@ import {
   InventoryRecipeMissingError,
   InsufficientInventoryError,
 } from './inventory-repository.js'
+import { FulfillmentCapacityUnavailableError } from './fulfillment-capacity-repository.js'
 import {
   KdsAuthorizationError,
   NormalizedKdsAuthorization,
@@ -225,7 +226,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
           && access.permissions.includes('payment.initiate.staff'),
         onlinePaymentProvider: options.onlinePaymentProvider ?? null,
         gift: giftLimit === null ? null : {
-          enabled: giftLimit.rules.allowFullGift === true,
+          enabled: giftLimit.allowFullGift,
           maximumAmountMinor: giftLimit.amountMinor,
           currency: giftLimit.currency,
         },
@@ -641,7 +642,11 @@ async function lockKdsCommandTarget(
       ordering.table_session_id, table_session.table_id,
       venue_table.code AS table_code, item.product_id,
       COALESCE(item.product_snapshot ->> 'name', product.name) AS product_name,
-      COALESCE(item.product_snapshot -> 'source' ->> 'specification', '') AS specification,
+      COALESCE(
+        NULLIF(item.product_snapshot ->> 'specification', ''),
+        NULLIF(item.product_snapshot -> 'source' ->> 'specification', ''),
+        ''
+      ) AS specification,
       item.product_snapshot, ordering.note AS fulfillment_note
     FROM mbox.order_items AS item
     JOIN mbox.orders AS ordering
@@ -806,7 +811,7 @@ async function resolveEmployeeGiftAuthorization(
     await repository.assertPermission(context.employeeId, 'order.gift')
     const authority = await repository.resolveApprovalAuthority(context.employeeId, 'order.gift')
     if (authority === null || authority.amountMinor === null || authority.amountMinor < 1
-      || authority.rules.allowFullGift !== true) {
+      || !authority.allowFullGift || authority.calculationMode !== 'full_gift') {
       throw new CommerceKdsRequestError(
         'GIFT_LIMIT_UNAVAILABLE',
         '当前岗位未配置可用的商品赠送额度，请联系店长或管理员',
@@ -1254,6 +1259,9 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   }
   if (error instanceof InsufficientInventoryError) {
     return apiError(409, 'INVENTORY_INSUFFICIENT', '部分商品库存不足，请调整订单后重试')
+  }
+  if (error instanceof FulfillmentCapacityUnavailableError) {
+    return apiError(409, error.code, error.message)
   }
   if (error instanceof PricingAuthorizationDeniedError) {
     return apiError(403, 'PRICING_AUTHORIZATION_DENIED', '本次赠送超过当前岗位额度，或赠送权限已失效')

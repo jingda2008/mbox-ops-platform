@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { ScopedTransaction } from './index.js'
 import {
   OrderDeliveryBlockedError,
+  OrderProductCostUnavailableError,
   OrderProductUnavailableError,
   OrderRepository,
 } from './order-repository.js'
@@ -57,6 +58,7 @@ describe('OrderRepository', () => {
     expect(tx.calls[1]?.sql).toContain('JOIN LATERAL')
     expect(tx.calls[1]?.sql).toContain("product.status = 'active'")
     expect(tx.calls[1]?.sql).toContain("candidate.price_type = 'standard'")
+    expect(tx.calls[1]?.sql).toContain('FOR SHARE OF product')
     expect(tx.calls[1]?.values[2]).toBe(JSON.stringify([{
       request_index: 0,
       product_id: productId,
@@ -67,8 +69,18 @@ describe('OrderRepository', () => {
     expect(tx.calls[3]?.sql).toContain('INSERT INTO mbox.order_items')
     expect(tx.calls[3]?.values[15]).toBe(JSON.stringify({
       unitCostMinor: 1050,
-      source: 'catalog_at_order_submission',
+      totalCostMinor: 2100,
+      source: 'catalog_product',
+      authority: 'strong_order_item_columns',
     }))
+    expect(tx.calls[3]?.values.slice(16, 22)).toEqual([
+      1050,
+      2100,
+      'catalog_product',
+      productId,
+      null,
+      '2026-08-11T11:59:00.000Z',
+    ])
   })
 
   it('rejects client-selected price types and full line discounts before database access', async () => {
@@ -117,6 +129,20 @@ describe('OrderRepository', () => {
       channel: 'guest_qr',
       lines: [{ productId, quantity: 1 }],
     })).rejects.toBeInstanceOf(OrderProductUnavailableError)
+    expect(tx.calls).toHaveLength(2)
+  })
+
+  it('fails closed before order creation when the catalog has no authoritative cost', async () => {
+    const tx = new ScriptedTransaction([
+      { rows: [{ id: sessionId }] },
+      { rows: [{ ...priceRow(), cost_amount_minor: null }] },
+    ])
+    await expect(new OrderRepository(tx).createSubmitted({
+      tableSessionId: sessionId,
+      publicId: 'order-missing-cost-0001',
+      channel: 'guest_qr',
+      lines: [{ productId, quantity: 1 }],
+    })).rejects.toBeInstanceOf(OrderProductCostUnavailableError)
     expect(tx.calls).toHaveLength(2)
   })
 
@@ -174,6 +200,7 @@ function priceRow(): Record<string, unknown> {
     kds_priority: 100,
     fulfillment_sla_seconds: 300,
     cost_amount_minor: '1050',
+    product_updated_at: '2026-08-11T11:59:00.000Z',
     price_type: 'standard',
     amount_minor: '8800',
     currency: 'CNY',
@@ -220,6 +247,12 @@ function itemRow(): Record<string, unknown> {
     fulfillment_due_at: '2026-08-11T12:05:00.000Z',
     product_snapshot: { name: 'Signature Cocktail' },
     cost_snapshot: {},
+    unit_cost_minor_at_submission: '1050',
+    total_cost_minor_at_submission: '2100',
+    cost_source: 'catalog_product',
+    cost_reference_product_id: productId,
+    cost_reference_order_item_id: null,
+    cost_reference_product_updated_at: '2026-08-11T11:59:00.000Z',
     status: 'submitted',
     note: null,
     created_at: '2026-08-11T12:00:00.000Z',

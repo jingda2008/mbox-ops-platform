@@ -147,6 +147,7 @@ export function categoryLabel(categoryCode: string): string {
     sparkling: '起泡酒',
     spirits: '洋酒',
     non_alcoholic: '无酒精',
+    mixed: '混合组合',
     snack: '小食',
     food: '餐食',
     other: '其他',

@@ -1,0 +1,18 @@
+.loyalty-emergency-panel { display:grid; gap:10px; padding:12px; border:1px solid #d2d8d1; border-radius:8px; background:#f8faf7; }
+.loyalty-emergency-panel > header { display:flex; align-items:center; gap:8px; }
+.loyalty-emergency-panel > header > span { display:grid; place-items:center; width:32px; height:32px; border-radius:8px; background:#e6f1eb; color:#185d43; }
+.loyalty-emergency-panel > header div { display:grid; gap:2px; }
+.loyalty-emergency-panel > header strong { font-size:14px; }
+.loyalty-emergency-panel > header small,.loyalty-emergency-panel article small { color:#626b64; font-size:10px; line-height:1.45; }
+.loyalty-emergency-panel > p { margin:0; padding:7px 9px; border-radius:5px; background:#fff8da; color:#685719; font-size:11px; }
+.loyalty-emergency-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
+.loyalty-emergency-grid article { display:grid; align-content:start; gap:7px; min-width:0; padding:10px; border:1px solid #d6dbd5; border-radius:7px; background:#fff; }
+.loyalty-emergency-grid article[data-state="paused"] { border-color:#d3a39c; background:#fff8f7; }
+.loyalty-emergency-grid article > div { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.loyalty-emergency-grid article strong { font-size:12px; }
+.loyalty-emergency-grid article em { padding:3px 6px; border-radius:999px; background:#eaf5ee; color:#176b43; font-size:9px; font-style:normal; font-weight:750; white-space:nowrap; }
+.loyalty-emergency-grid article[data-state="paused"] em { background:#f6dfdc; color:#98453a; }
+.loyalty-emergency-grid article b { color:#985325; font-size:10px; }
+.loyalty-emergency-grid button { display:flex; align-items:center; justify-content:center; gap:5px; min-height:44px; margin-top:auto; border:1px solid #9da79f; border-radius:6px; background:#fff; color:#35443b; font-size:11px; font-weight:750; }
+.loyalty-emergency-grid article[data-state="paused"] button { border-color:#176b43; color:#176b43; }
+@media (max-width:760px) { .loyalty-emergency-grid { grid-template-columns:1fr; } }

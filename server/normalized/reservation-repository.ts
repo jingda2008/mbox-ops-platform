@@ -12,6 +12,12 @@ export type ReservationStatus =
   | 'no_show'
 export type ReservationSource = 'wechat' | 'phone' | 'walk_in' | 'employee' | 'integration'
 export type ReservationLockStatus = 'held' | 'confirmed' | 'released' | 'expired' | 'cancelled'
+export type ReservationSeatPreference =
+  | 'no_preference'
+  | 'stage_atmosphere'
+  | 'quiet_chat'
+  | 'comfortable_booth'
+  | 'outdoor_view'
 
 export interface ReservationTableLock {
   id: string
@@ -38,6 +44,7 @@ export interface Reservation {
   source: ReservationSource
   ownerEmployeeId: string | null
   note: string | null
+  seatPreference: ReservationSeatPreference
   reservationSnapshot: JsonObject
   createdAt: string
   updatedAt: string
@@ -47,6 +54,8 @@ export interface Reservation {
   requestHoldExpiresAt: string | null
   arrivalGraceEndsAt: string
   reservationPolicyVersion: number
+  reservationPolicyAcknowledgedVersion: number
+  preferredScheduleId: string | null
   tableLocks: ReservationTableLock[]
 }
 
@@ -61,6 +70,7 @@ export interface CreateReservationInput {
   source: ReservationSource
   ownerEmployeeId?: string | null
   note?: string | null
+  seatPreference?: ReservationSeatPreference
   reservationSnapshot?: JsonObject
   tableIds: readonly string[]
   allowUnassignedTable?: boolean
@@ -69,8 +79,10 @@ export interface CreateReservationInput {
   customerCancelUntil?: string | null
   cancellationPolicySnapshot?: JsonObject
   requestHoldExpiresAt?: string | null
-  arrivalGraceEndsAt?: string
-  reservationPolicyVersion?: number
+  arrivalGraceEndsAt: string
+  reservationPolicyVersion: number
+  reservationPolicyAcknowledgedVersion?: number
+  preferredScheduleId?: string | null
 }
 
 export interface ReservationMutationResult {
@@ -91,6 +103,7 @@ interface ReservationRow extends Record<string, unknown> {
   source: ReservationSource
   owner_employee_id: string | null
   note: string | null
+  seat_preference: ReservationSeatPreference
   reservation_snapshot: JsonObject
   created_at: string
   updated_at: string
@@ -100,6 +113,8 @@ interface ReservationRow extends Record<string, unknown> {
   request_hold_expires_at: string | null
   arrival_grace_ends_at: string
   reservation_policy_version: string | number
+  reservation_policy_acknowledged_version: string | number
+  preferred_schedule_id: string | null
 }
 
 interface ReservationLockRow extends Record<string, unknown> {
@@ -237,23 +252,25 @@ export class ReservationRepository {
     const reservationSnapshot: JsonObject = input.reservationSnapshot ?? {}
     const requestHoldExpiresAt = input.requestHoldExpiresAt ?? input.holdExpiresAt ?? null
     const arrivalGraceEndsAt = input.arrivalGraceEndsAt
-      ?? new Date(Date.parse(input.arrivalAt) + 10 * 60_000).toISOString()
     const inserted = await this.transaction.query<ReservationRow>(`
       INSERT INTO mbox.reservations (
         tenant_id, store_id, public_id, customer_id, customer_name, contact_token, guest_count,
         arrival_at, expected_end_at, status, source, owner_employee_id, note,
         reservation_snapshot, customer_cancel_until, cancellation_policy_snapshot,
-        request_hold_expires_at, arrival_grace_ends_at, reservation_policy_version
+        request_hold_expires_at, arrival_grace_ends_at, reservation_policy_version,
+        reservation_policy_acknowledged_version, preferred_schedule_id, seat_preference
       ) VALUES (
         $1::uuid, $2::uuid, $3, $4::uuid, $5, $6, $7,
         $8::timestamptz, $9::timestamptz, $10, $11, $12::uuid, $13, $14::jsonb,
-        $15::timestamptz, $16::jsonb, $17::timestamptz, $18::timestamptz, $19::integer
+        $15::timestamptz, $16::jsonb, $17::timestamptz, $18::timestamptz, $19::integer,
+        $20::integer, $21::uuid, $22
       )
       RETURNING id, public_id, customer_id, customer_name, contact_token, guest_count,
         arrival_at::text, expected_end_at::text, status, source, owner_employee_id,
-        note, reservation_snapshot, created_at::text, updated_at::text,
+        note, reservation_snapshot, seat_preference, created_at::text, updated_at::text,
         aggregate_version, customer_cancel_until::text, cancellation_policy_snapshot,
-        request_hold_expires_at::text, arrival_grace_ends_at::text, reservation_policy_version
+        request_hold_expires_at::text, arrival_grace_ends_at::text, reservation_policy_version,
+        reservation_policy_acknowledged_version, preferred_schedule_id
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -273,7 +290,10 @@ export class ReservationRepository {
       JSON.stringify(input.cancellationPolicySnapshot ?? {}),
       requestHoldExpiresAt,
       arrivalGraceEndsAt,
-      input.reservationPolicyVersion ?? 1,
+      input.reservationPolicyVersion,
+      input.reservationPolicyAcknowledgedVersion ?? input.reservationPolicyVersion ?? 1,
+      input.preferredScheduleId ?? null,
+      input.seatPreference ?? 'no_preference',
     ])
     const reservationRow = inserted.rows[0]
     if (inserted.rowCount !== 1 || reservationRow === undefined) {
@@ -420,9 +440,10 @@ export class ReservationRepository {
         AND status = ANY($5::text[])
       RETURNING id, public_id, customer_id, customer_name, contact_token, guest_count,
         arrival_at::text, expected_end_at::text, status, source, owner_employee_id,
-        note, reservation_snapshot, created_at::text, updated_at::text,
+        note, reservation_snapshot, seat_preference, created_at::text, updated_at::text,
         aggregate_version, customer_cancel_until::text, cancellation_policy_snapshot,
-        request_hold_expires_at::text, arrival_grace_ends_at::text, reservation_policy_version
+        request_hold_expires_at::text, arrival_grace_ends_at::text, reservation_policy_version,
+        reservation_policy_acknowledged_version, preferred_schedule_id
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -473,11 +494,12 @@ export class ReservationRepository {
     const result = await this.transaction.query<ReservationRow>(`
       SELECT r.id, r.public_id, r.customer_id, r.customer_name, r.contact_token, r.guest_count,
         r.arrival_at::text, r.expected_end_at::text, r.status, r.source,
-        r.owner_employee_id, r.note, r.reservation_snapshot,
+        r.owner_employee_id, r.note, r.reservation_snapshot, r.seat_preference,
         r.created_at::text, r.updated_at::text, r.aggregate_version,
         r.customer_cancel_until::text, r.cancellation_policy_snapshot,
         r.request_hold_expires_at::text, r.arrival_grace_ends_at::text,
-        r.reservation_policy_version
+        r.reservation_policy_version, r.reservation_policy_acknowledged_version,
+        r.preferred_schedule_id
       FROM mbox.reservations AS r
       WHERE r.tenant_id = $1::uuid AND r.store_id = $2::uuid AND ${predicate}
       ${lock}
@@ -500,6 +522,7 @@ function mapReservation(row: ReservationRow, locks: readonly ReservationLockRow[
     source: row.source,
     ownerEmployeeId: row.owner_employee_id,
     note: row.note,
+    seatPreference: row.seat_preference,
     reservationSnapshot: row.reservation_snapshot,
     createdAt: isoInstant(row.created_at),
     updatedAt: isoInstant(row.updated_at),
@@ -509,6 +532,8 @@ function mapReservation(row: ReservationRow, locks: readonly ReservationLockRow[
     requestHoldExpiresAt: nullableIsoInstant(row.request_hold_expires_at),
     arrivalGraceEndsAt: isoInstant(row.arrival_grace_ends_at),
     reservationPolicyVersion: Number(row.reservation_policy_version),
+    reservationPolicyAcknowledgedVersion: Number(row.reservation_policy_acknowledged_version),
+    preferredScheduleId: row.preferred_schedule_id,
     tableLocks: locks.map((lock) => ({
       id: lock.id,
       reservationId: lock.reservation_id,

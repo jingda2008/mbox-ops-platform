@@ -111,7 +111,7 @@ describe('NormalizedPaymentCapabilityAuthorization', () => {
       openid: 'do-not-copy',
       payer: { phone: '13800000000' },
     })
-    expect(sanitized).toEqual({ signatureVerified: true, tradeState: 'SUCCESS' })
+    expect(sanitized).toEqual({ tradeState: 'SUCCESS' })
     const first = paymentBusinessEventKey('succeeded', 'postar', 'provider-transaction-001')
     const second = paymentBusinessEventKey('succeeded', 'postar', 'provider-transaction-001')
     expect(first).toBe(second)

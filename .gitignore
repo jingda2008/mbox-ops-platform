@@ -27,6 +27,7 @@ backups/
 # Local pilot handoff artifacts may contain access codes, employee PINs, or signed table QR tokens.
 deliverables/
 output/
+outputs/
 tmp/
 
 # Android validation build products and private signing material.

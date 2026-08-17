@@ -34,7 +34,6 @@ import type {
 } from "./transaction-runner.js";
 import {
   extractProductOperationalFields,
-  hydrateProductSnapshot,
   type ProductOperationalFields,
 } from "./product-operational-fields.js";
 
@@ -136,6 +135,28 @@ interface CatalogProduct {
   productKind: ProductKind;
   bundleComponents: BundleComponent[];
   productSnapshot: JsonObject;
+  guestVisible: boolean;
+  searchText: string;
+  recommendationEnabled: boolean;
+  recommendationMinGuests: number;
+  recommendationMaxGuests: number;
+  recommendationPriority: number;
+  recommendationSceneTags: string[];
+  recommendationIntentTags: string[];
+  recommendationTasteTags: string[];
+  recommendationDwellTags: string[];
+  recommendationSingleWaveEligible: boolean;
+  recommendationExpectedPrepMinutes: number;
+  recommendationHoldMinutes: number;
+  recommendationUpgradeProductId: string | null;
+  menuSortOrder: number;
+  availableFrom: string | null;
+  availableUntil: string | null;
+  allowedChannels: string[];
+  maxOrderQuantity: number;
+  kdsPriority: number;
+  fulfillmentSlaSeconds: number | null;
+  costAmountMinor: number | null;
   status: ProductStatus;
   isAvailable: boolean;
   standardPrice: {
@@ -249,10 +270,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
     handleRoute(reply, async () => {
       const context = await resolveStaffContext(options, request);
       const input = readCreateProduct(request.body);
-      const operational = extractProductOperationalFields(input.productSnapshot, {
-        code: input.code,
-        name: input.name,
-      });
+      const operational = input.operationalFields;
       const idempotencyKey = readIdempotencyKey(request);
       const command = catalogCommand(
         request,
@@ -298,7 +316,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               input.categoryCode,
               input.fulfillmentStation,
               input.productKind,
-              JSON.stringify(compatibilitySnapshot(operational)),
+              JSON.stringify(persistedDisplaySnapshot(operational)),
               input.status,
               operational.guestVisible,
               operational.searchText,
@@ -372,11 +390,14 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
             );
             await lockProduct(transaction, productId);
             const before = mapProduct(await getProduct(transaction, productId));
-            const targetSnapshot = patch.productSnapshot ?? before.productSnapshot;
-            const operational = extractProductOperationalFields(targetSnapshot, {
-              code: before.code,
-              name: patch.name ?? before.name,
-            });
+            const displaySnapshot = patch.productSnapshot ?? before.productSnapshot;
+            const operational = strongProductOperationalFields(
+              patch.operationalInput,
+              { code: before.code, name: patch.name ?? before.name },
+              displaySnapshot,
+              before,
+            );
+            assertActiveProductCost(patch.status ?? before.status, operational.costAmountMinor);
             const targetKind = patch.productKind ?? before.productKind;
             const targetStation = patch.fulfillmentStation ?? before.fulfillmentStation;
             const targetComponents = patch.bundleComponents ?? before.bundleComponents.map(componentInput);
@@ -430,7 +451,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
                 patch.categoryCode,
                 patch.fulfillmentStation,
                 patch.productKind,
-                JSON.stringify(compatibilitySnapshot(operational)),
+                JSON.stringify(persistedDisplaySnapshot(operational)),
                 patch.status,
                 operational.guestVisible,
                 operational.searchText,
@@ -998,7 +1019,15 @@ function mapProduct(row: ProductRow, guest = false): CatalogProduct {
           validFrom: row.price_valid_from,
           validUntil: row.price_valid_until,
         };
-  const hydratedSnapshot = hydrateProductSnapshot(row.product_snapshot, {
+  return {
+    id: row.id,
+    code: row.code,
+    name: row.name,
+    categoryCode: row.category_code,
+    fulfillmentStation: row.fulfillment_station,
+    productKind: row.product_kind ?? "single",
+    bundleComponents: readStoredBundleComponents(row.bundle_components ?? []),
+    productSnapshot: guest ? guestProductSnapshot(row.product_snapshot) : row.product_snapshot,
     guestVisible: row.guest_visible,
     searchText: row.search_text,
     recommendationEnabled: row.recommendation_enabled,
@@ -1021,16 +1050,6 @@ function mapProduct(row: ProductRow, guest = false): CatalogProduct {
     kdsPriority: row.kds_priority,
     fulfillmentSlaSeconds: row.fulfillment_sla_seconds,
     costAmountMinor: row.cost_amount_minor === null ? null : Number(row.cost_amount_minor),
-  });
-  return {
-    id: row.id,
-    code: row.code,
-    name: row.name,
-    categoryCode: row.category_code,
-    fulfillmentStation: row.fulfillment_station,
-    productKind: row.product_kind ?? "single",
-    bundleComponents: readStoredBundleComponents(row.bundle_components ?? []),
-    productSnapshot: guest ? guestProductSnapshot(hydratedSnapshot) : hydratedSnapshot,
     status: row.status,
     isAvailable: row.status === "active" && standardPrice !== null
       && (row.product_kind !== "bundle" || row.bundle_components_available === true),
@@ -1040,9 +1059,8 @@ function mapProduct(row: ProductRow, guest = false): CatalogProduct {
   };
 }
 
-function compatibilitySnapshot(fields: Readonly<ProductOperationalFields>): JsonObject {
-  const { displaySnapshot, ...operational } = fields
-  return hydrateProductSnapshot(displaySnapshot, operational)
+function persistedDisplaySnapshot(fields: Readonly<ProductOperationalFields>): JsonObject {
+  return fields.displaySnapshot
 }
 
 function catalogOutcome(
@@ -1099,7 +1117,7 @@ function catalogCommand(
   context: NormalizedOperationsRequestContext,
   operationScope: string,
   idempotencyKey: string,
-  payload: JsonObject,
+  payload: unknown,
 ): IdempotentCommand<CatalogProduct> {
   return {
     scope: context.scope,
@@ -1112,10 +1130,14 @@ function catalogCommand(
       tenantId: context.scope.tenantId,
       storeId: context.scope.storeId,
       employeeId: context.employeeId,
-      payload,
+      payload: jsonFingerprintValue(payload),
     }),
     resultCodec: catalogProductCodec,
   };
+}
+
+function jsonFingerprintValue(value: unknown): JsonValue {
+  return JSON.parse(JSON.stringify(value)) as JsonValue;
 }
 
 function createConfiguredCommandExecutor(
@@ -1195,7 +1217,7 @@ function redact(value: JsonValue): JsonValue {
     .map(([key, entry]) => [key, redact(entry as JsonValue)]))
 }
 
-function readCreateProduct(value: unknown): JsonObject & {
+function readCreateProduct(value: unknown): {
   code: string;
   name: string;
   categoryCode: string;
@@ -1203,36 +1225,48 @@ function readCreateProduct(value: unknown): JsonObject & {
   productKind: ProductKind;
   bundleComponents: BundleComponentInput[];
   productSnapshot: JsonObject;
+  operationalFields: ProductOperationalFields;
   status: ProductStatus;
 } {
   const body = readJsonObject(value, "请求正文");
+  const code = requiredCode(body.code, "code");
+  const name = requiredText(body.name, "name", 160);
   const productKind = readProductKind(body.productKind);
   const fulfillmentStation = readStation(body.fulfillmentStation);
   const bundleComponents = readBundleComponents(body.bundleComponents, productKind === "bundle");
+  const productSnapshot = optionalJsonObject(body.productSnapshot);
+  assertDisplayOnlyProductSnapshot(productSnapshot);
   assertProductShape(productKind, fulfillmentStation, bundleComponents);
+  const operationalFields = strongProductOperationalFields(body, { code, name }, productSnapshot);
+  const status = body.status === undefined ? "active" : readStatus(body.status, false);
+  assertActiveProductCost(status, operationalFields.costAmountMinor);
   return {
-    code: requiredCode(body.code, "code"),
-    name: requiredText(body.name, "name", 160),
+    code,
+    name,
     categoryCode: requiredCode(body.categoryCode, "categoryCode"),
     fulfillmentStation,
     productKind,
     bundleComponents,
-    productSnapshot: optionalJsonObject(body.productSnapshot),
-    status:
-      body.status === undefined ? "active" : readStatus(body.status, false),
+    productSnapshot,
+    operationalFields,
+    status,
   };
 }
 
-function readUpdateProduct(value: unknown): JsonObject & {
+function readUpdateProduct(value: unknown): {
   name: string | null;
   categoryCode: string | null;
   fulfillmentStation: FulfillmentStation | null;
   productKind: ProductKind | null;
   bundleComponents: BundleComponentInput[] | null;
   productSnapshot: JsonObject | null;
+  operationalInput: JsonObject;
   status: ProductStatus | null;
 } {
   const body = readJsonObject(value, "请求正文");
+  const productSnapshot = body.productSnapshot === undefined
+    ? null : optionalJsonObject(body.productSnapshot);
+  if (productSnapshot !== null) assertDisplayOnlyProductSnapshot(productSnapshot);
   const patch = {
     name: body.name === undefined ? null : requiredText(body.name, "name", 160),
     categoryCode:
@@ -1249,16 +1283,99 @@ function readUpdateProduct(value: unknown): JsonObject & {
       body.bundleComponents === undefined
         ? null
         : readBundleComponents(body.bundleComponents, false),
-    productSnapshot:
-      body.productSnapshot === undefined
-        ? null
-        : optionalJsonObject(body.productSnapshot),
+    productSnapshot,
+    operationalInput: body,
     status: body.status === undefined ? null : readStatus(body.status, false),
   };
-  if (Object.values(patch).every((item) => item === null)) {
+  if ([patch.name, patch.categoryCode, patch.fulfillmentStation, patch.productKind,
+    patch.bundleComponents, patch.productSnapshot, patch.status].every((item) => item === null)
+    && !PRODUCT_OPERATIONAL_INPUT_KEYS.some((key) => body[key] !== undefined)) {
     throw new CatalogRequestError("至少提供一个可修改字段");
   }
   return patch;
+}
+
+const PRODUCT_OPERATIONAL_INPUT_KEYS = [
+  'guestVisible', 'searchText', 'recommendationEnabled', 'recommendationMinGuests',
+  'recommendationMaxGuests', 'recommendationPriority', 'recommendationSceneTags',
+  'recommendationIntentTags', 'recommendationTasteTags', 'recommendationDwellTags',
+  'recommendationSingleWaveEligible', 'recommendationExpectedPrepMinutes',
+  'recommendationHoldMinutes', 'recommendationUpgradeProductId', 'menuSortOrder',
+  'availableFrom', 'availableUntil', 'allowedChannels', 'maxOrderQuantity',
+  'kdsPriority', 'fulfillmentSlaSeconds', 'costAmountMinor',
+] as const;
+
+function strongProductOperationalFields(
+  input: Readonly<JsonObject>,
+  identity: Readonly<{ code: string; name: string }>,
+  displaySnapshot: Readonly<JsonObject>,
+  fallback?: Readonly<CatalogProduct>,
+): ProductOperationalFields {
+  const value = <Key extends typeof PRODUCT_OPERATIONAL_INPUT_KEYS[number]>(
+    key: Key,
+    defaultValue: JsonValue,
+  ): JsonValue => input[key] === undefined
+    ? (fallback?.[key] as JsonValue | undefined) ?? defaultValue
+    : input[key] as JsonValue;
+  const defaultSearchText = `${identity.code} ${identity.name}`;
+  const requestedSearchText = value('searchText', defaultSearchText);
+  const operational = extractProductOperationalFields({
+    guestVisible: value('guestVisible', true),
+    searchText: typeof requestedSearchText === 'string' && requestedSearchText.trim() === ''
+      ? defaultSearchText : requestedSearchText,
+    sortOrder: value('menuSortOrder', 999),
+    availableFrom: value('availableFrom', null),
+    availableUntil: value('availableUntil', null),
+    allowedChannels: value('allowedChannels', ['guest_qr', 'staff_assisted', 'cashier', 'reservation', 'integration']),
+    maxOrderQuantity: value('maxOrderQuantity', 50),
+    kdsPriority: value('kdsPriority', 100),
+    fulfillmentSlaSeconds: value('fulfillmentSlaSeconds', null),
+    costAmount: value('costAmountMinor', null),
+    recommendation: {
+      enabled: value('recommendationEnabled', false),
+      minimumPartySize: value('recommendationMinGuests', 1),
+      maximumPartySize: value('recommendationMaxGuests', 100),
+      priority: value('recommendationPriority', 100),
+      sceneTags: value('recommendationSceneTags', []),
+      intentTags: value('recommendationIntentTags', []),
+      tasteTags: value('recommendationTasteTags', []),
+      dwellTags: value('recommendationDwellTags', []),
+      singleWaveEligible: value('recommendationSingleWaveEligible', true),
+      expectedPrepMinutes: value('recommendationExpectedPrepMinutes', 8),
+      holdMinutes: value('recommendationHoldMinutes', 10),
+      upgradeProductId: value('recommendationUpgradeProductId', null),
+    },
+  }, identity);
+  return { ...operational, displaySnapshot: { ...displaySnapshot } };
+}
+
+function assertDisplayOnlyProductSnapshot(snapshot: Readonly<JsonObject>): void {
+  const topLevel = new Set([
+    'guestVisible', 'searchText', 'sortOrder', 'availableFrom', 'availableUntil',
+    'allowedChannels', 'maxOrderQuantity', 'kdsPriority', 'fulfillmentSlaSeconds',
+    'costAmount', 'orderWindows',
+  ]);
+  if (Object.keys(snapshot).some((key) => topLevel.has(key))) {
+    throw new CatalogRequestError('productSnapshot只能保存图片、描述等展示信息，经营字段必须使用强类型字段');
+  }
+  const nestedKeys = new Set([
+    'enabled', 'minimumPartySize', 'maximumPartySize', 'priority', 'sceneTags',
+    'intentTags', 'tasteTags', 'dwellTags', 'singleWaveEligible',
+    'expectedPrepMinutes', 'holdMinutes', 'upgradeProductId',
+  ]);
+  for (const key of ['recommendation', 'source']) {
+    const nested = snapshot[key];
+    if (typeof nested === 'object' && nested !== null && !Array.isArray(nested)
+      && Object.keys(nested).some((entry) => nestedKeys.has(entry) || topLevel.has(entry))) {
+      throw new CatalogRequestError('productSnapshot中的经营字段已停用，请改用强类型字段');
+    }
+  }
+}
+
+function assertActiveProductCost(status: ProductStatus, costAmountMinor: number | null): void {
+  if (status === "active" && costAmountMinor === null) {
+    throw new CatalogRequestError("在售商品必须配置成本金额；未知成本请先保存为停用，避免错误经营归因");
+  }
 }
 
 function readStandardPrice(value: unknown): JsonObject & {
@@ -1525,6 +1642,28 @@ function catalogProductToJson(product: CatalogProduct): JsonObject {
     productKind: product.productKind,
     bundleComponents: product.bundleComponents.map((component) => ({ ...component })),
     productSnapshot: product.productSnapshot,
+    guestVisible: product.guestVisible,
+    searchText: product.searchText,
+    recommendationEnabled: product.recommendationEnabled,
+    recommendationMinGuests: product.recommendationMinGuests,
+    recommendationMaxGuests: product.recommendationMaxGuests,
+    recommendationPriority: product.recommendationPriority,
+    recommendationSceneTags: product.recommendationSceneTags,
+    recommendationIntentTags: product.recommendationIntentTags,
+    recommendationTasteTags: product.recommendationTasteTags,
+    recommendationDwellTags: product.recommendationDwellTags,
+    recommendationSingleWaveEligible: product.recommendationSingleWaveEligible,
+    recommendationExpectedPrepMinutes: product.recommendationExpectedPrepMinutes,
+    recommendationHoldMinutes: product.recommendationHoldMinutes,
+    recommendationUpgradeProductId: product.recommendationUpgradeProductId,
+    menuSortOrder: product.menuSortOrder,
+    availableFrom: product.availableFrom,
+    availableUntil: product.availableUntil,
+    allowedChannels: product.allowedChannels,
+    maxOrderQuantity: product.maxOrderQuantity,
+    kdsPriority: product.kdsPriority,
+    fulfillmentSlaSeconds: product.fulfillmentSlaSeconds,
+    costAmountMinor: product.costAmountMinor,
     status: product.status,
     isAvailable: product.isAvailable,
     standardPrice:
@@ -1555,14 +1694,45 @@ const catalogProductCodec: JsonCodec<CatalogProduct> = {
     }
     if (
       typeof value.isAvailable !== "boolean" ||
+      typeof value.guestVisible !== "boolean" ||
+      typeof value.searchText !== "string" ||
+      typeof value.recommendationEnabled !== "boolean" ||
+      typeof value.recommendationSingleWaveEligible !== "boolean" ||
       !isJsonObject(value.productSnapshot) ||
       !Array.isArray(value.bundleComponents)
     ) {
       throw new TypeError("Stored catalog product is invalid");
     }
+    const numberFields = [
+      "recommendationMinGuests", "recommendationMaxGuests", "recommendationPriority",
+      "recommendationExpectedPrepMinutes", "recommendationHoldMinutes", "menuSortOrder",
+      "maxOrderQuantity", "kdsPriority",
+    ];
+    const stringArrayFields = [
+      "recommendationSceneTags", "recommendationIntentTags", "recommendationTasteTags",
+      "recommendationDwellTags", "allowedChannels",
+    ];
+    if (numberFields.some((field) => !Number.isSafeInteger(value[field]))
+      || stringArrayFields.some((field) => !Array.isArray(value[field])
+        || (value[field] as JsonValue[]).some((entry) => typeof entry !== "string"))
+      || !nullableString(value.recommendationUpgradeProductId)
+      || !nullableString(value.availableFrom)
+      || !nullableString(value.availableUntil)
+      || !nullableSafeInteger(value.fulfillmentSlaSeconds)
+      || !nullableSafeInteger(value.costAmountMinor)) {
+      throw new TypeError("Stored catalog product is invalid");
+    }
     return value as unknown as CatalogProduct;
   },
 };
+
+function nullableString(value: JsonValue | undefined): boolean {
+  return value === null || typeof value === "string";
+}
+
+function nullableSafeInteger(value: JsonValue | undefined): boolean {
+  return value === null || Number.isSafeInteger(value);
+}
 
 function executionResponse(execution: CommandExecution<CatalogProduct>) {
   return { data: execution.value, meta: { replayed: execution.replayed } };

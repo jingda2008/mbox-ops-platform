@@ -7,6 +7,7 @@ import {
   GuestBehaviorSessionUnavailableError,
   hashGuestBehaviorPrincipal,
 } from './guest-behavior-repository.js'
+import { seedActiveGuestTableAuthority } from './guest-table-authority.test-helper.js'
 import {
   ScopedPostgresTransactionRunner,
   type PostgresPool,
@@ -33,6 +34,7 @@ integration('normalized guest behavior repository with PostgreSQL', () => {
   let storeId: string
   let tableSessionId: string
   let customerId: string
+  let guestActorRef: string
 
   beforeAll(async () => {
     await runNormalizedMigrations(databaseUrl!)
@@ -79,6 +81,9 @@ integration('normalized guest behavior repository with PostgreSQL', () => {
        ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'primary')`,
       [tenantId, storeId, tableSessionId, customerId],
     )
+    guestActorRef=await seedActiveGuestTableAuthority(pool,{
+      tenantId,storeId,tableSessionId,customerId,
+    })
   })
 
   afterAll(async () => {
@@ -86,7 +91,7 @@ integration('normalized guest behavior repository with PostgreSQL', () => {
   })
 
   it('records mood without raw credentials and preserves it after table turnover', async () => {
-    const actorRef = 'guest-session:behavior-test-session'
+    const actorRef = guestActorRef
     const device = 'wechat-device-behavior-test-0001'
     const event = await transactions.run({ tenantId, storeId }, (transaction) => (
       new GuestBehaviorRepository(transaction).record({

@@ -16,13 +16,18 @@ import {
 } from './reservation-repository.js'
 import type { StoreScope } from './transaction-runner.js'
 
-export interface CreateReservationCommand extends CreateReservationInput {
+export interface CreateReservationCommand extends Omit<
+  CreateReservationInput,
+  'arrivalGraceEndsAt' | 'reservationPolicyVersion'
+> {
   scope: Readonly<StoreScope>
   actor: AuditActor
   businessDate: string
   idempotencyKey: string
   requestFingerprint: string
   anonymousCustomer?: CreateAnonymousCustomerInput
+  arrivalGraceEndsAt?: string
+  reservationPolicyVersion?: number
 }
 
 export interface ReservationTransitionCommand {
@@ -53,24 +58,31 @@ export class ReservationCommandService {
       const anonymous = input.anonymousCustomer === undefined
         ? null
         : await new CustomerRepository(transaction).createAnonymous(input.anonymousCustomer)
-      const policy = input.arrivalGraceEndsAt !== undefined && input.reservationPolicyVersion !== undefined
-        ? null
-        : await transaction.query<{ policy_version: number; arrival_grace_minutes: number }>(`
-          SELECT policy_version, arrival_grace_minutes
-          FROM mbox.public_reservation_policies
-          WHERE tenant_id=$1::uuid AND store_id=$2::uuid
-          FOR KEY SHARE
-        `, [transaction.scope.tenantId, transaction.scope.storeId])
-      const policyRow = policy?.rows[0]
-      if (policy !== null && policyRow === undefined) throw new Error('Reservation policy is not configured')
+      const policy = await transaction.query<{ policy_version: number; arrival_grace_minutes: number }>(`
+        SELECT policy_version, arrival_grace_minutes
+        FROM mbox.public_reservation_policies
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        FOR KEY SHARE
+      `, [transaction.scope.tenantId, transaction.scope.storeId])
+      const policyRow = policy.rows[0]
+      if (policyRow === undefined) throw new Error('Reservation policy is not configured')
+      if (input.reservationPolicyVersion !== undefined
+        && input.reservationPolicyVersion !== policyRow.policy_version) {
+        throw new Error('Reservation policy changed; refresh before creating the reservation')
+      }
+      const policyArrivalGraceEndsAt = new Date(
+        Date.parse(input.arrivalAt) + policyRow.arrival_grace_minutes * 60_000,
+      ).toISOString()
+      if (input.arrivalGraceEndsAt !== undefined
+        && Date.parse(input.arrivalGraceEndsAt) !== Date.parse(policyArrivalGraceEndsAt)) {
+        throw new Error('Reservation arrival grace must match the active policy')
+      }
       const reservation = await new ReservationRepository(transaction).create({
         ...input,
         customerId: input.customerId ?? anonymous?.customer.id ?? null,
         requestHoldExpiresAt: input.requestHoldExpiresAt ?? input.holdExpiresAt ?? null,
-        arrivalGraceEndsAt: input.arrivalGraceEndsAt ?? new Date(
-          Date.parse(input.arrivalAt) + (policyRow?.arrival_grace_minutes ?? 10) * 60_000,
-        ).toISOString(),
-        reservationPolicyVersion: input.reservationPolicyVersion ?? policyRow?.policy_version ?? 1,
+        arrivalGraceEndsAt: policyArrivalGraceEndsAt,
+        reservationPolicyVersion: policyRow.policy_version,
       })
       const auditEvents = []
       const outboxMessages = []
@@ -196,6 +208,7 @@ function reservationToJson(reservation: Reservation): JsonObject {
     source: reservation.source,
     ownerEmployeeId: reservation.ownerEmployeeId,
     note: reservation.note,
+    seatPreference: reservation.seatPreference,
     reservationSnapshot: reservation.reservationSnapshot,
     createdAt: reservation.createdAt,
     updatedAt: reservation.updatedAt,
@@ -227,6 +240,7 @@ function reservationEventJson(reservation: Reservation): JsonObject {
     expectedEndAt: reservation.expectedEndAt,
     status: reservation.status,
     source: reservation.source,
+    seatPreference: reservation.seatPreference,
     aggregateVersion: reservation.aggregateVersion,
     contactAvailable: reservation.contactToken.length > 0,
     tableCodes: reservation.tableLocks.map((lock) => lock.tableCode),

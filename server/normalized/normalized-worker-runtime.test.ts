@@ -49,6 +49,7 @@ describe('NormalizedWorkerRuntime', () => {
 
     expect(result.failures).toEqual(['reservation-expiry'])
     expect(result.workers.serviceSla).not.toBeNull()
+    expect(result.workers.loyaltyRedemptionRecovery).not.toBeNull()
     expect(result.workers.businessDay?.businessDate).toBe('2026-08-11')
     expect(result.workers.sop).not.toBeNull()
     expect(result.workers.aiScheduled).not.toBeNull()
@@ -123,6 +124,7 @@ describe('NormalizedWorkerRuntime', () => {
 
     expect(result.failures).toEqual([])
     expect(result.workers.serviceSla).not.toBeNull()
+    expect(result.workers.loyaltyRedemptionRecovery).not.toBeNull()
     expect(result.workers.reservationExpiry).not.toBeNull()
     expect(result.workers.businessDay).not.toBeNull()
     expect(result.workers.aiScheduled).not.toBeNull()
@@ -130,10 +132,70 @@ describe('NormalizedWorkerRuntime', () => {
     expect(result.workers.print).toBeNull()
     expect(result.workers.outbox).toBeNull()
     expect(result.workers.notification).toBeNull()
+    expect(result.workers.wechatLoyaltyNotification).toBeNull()
+    expect(result.workers.reservationPerformanceNotification).toBeNull()
     expect(sql.some((statement) => statement.includes('FROM mbox.sop_step_executions'))).toBe(false)
     expect(sql.some((statement) => statement.includes('FROM mbox.outbox_messages'))).toBe(false)
     expect(sql.some((statement) => statement.includes('FROM mbox.notifications'))).toBe(false)
     expect(sql.some((statement) => statement.includes('FROM mbox.print_jobs'))).toBe(false)
+  })
+
+  it('assembles the loyalty subscription-message worker only with explicit formal adapters', async () => {
+    const preflight = vi.fn(async () => undefined)
+    const resolveRecipient = vi.fn(async () => null)
+    const runtime = createNormalizedWorkerRuntime({
+      scope,
+      workerId: 'normalized-wechat-notification-test',
+      intervalMs: 1_000,
+      hashSecret: '0123456789abcdef0123456789abcdef',
+      transactions: fakeTransactions(emptyOrStoreClock),
+      aiExecutions: aiExecutions(),
+      adapters: null,
+      wechatLoyaltyNotification: {
+        recipients: { resolveMiniProgramNotificationRecipient: resolveRecipient },
+        delivery: {
+          preflight,
+          send: async () => ({ outcome: 'accepted', providerReference: null }),
+        },
+      },
+    })
+
+    const result = await runtime.runOnce()
+
+    expect(result.failures).toEqual([])
+    expect(result.workers.wechatLoyaltyNotification).toMatchObject({
+      expiryJobsCreated: 0,
+      claimed: 0,
+    })
+    expect(preflight).toHaveBeenCalledOnce()
+    expect(resolveRecipient).not.toHaveBeenCalled()
+  })
+
+  it('assembles the reservation-context message worker only with its explicit typed adapter', async () => {
+    const preflight = vi.fn(async () => undefined)
+    const sendTemplate = vi.fn()
+    const runtime = createNormalizedWorkerRuntime({
+      scope,
+      workerId: 'normalized-reservation-notification-test',
+      intervalMs: 1_000,
+      hashSecret: '0123456789abcdef0123456789abcdef',
+      transactions: fakeTransactions(emptyOrStoreClock),
+      aiExecutions: aiExecutions(),
+      adapters: null,
+      reservationPerformanceNotification: {
+        recipients: { resolveMiniProgramNotificationRecipient: vi.fn() },
+        delivery: { preflight, sendTemplate },
+      },
+    })
+
+    const result = await runtime.runOnce()
+
+    expect(result.failures).toEqual([])
+    expect(result.workers.reservationPerformanceNotification).toMatchObject({
+      claimed: 0, suppressed: 0,
+    })
+    expect(preflight).toHaveBeenCalledOnce()
+    expect(sendTemplate).not.toHaveBeenCalled()
   })
 })
 
@@ -278,6 +340,15 @@ function fakeTransactions(
 }
 
 function emptyOrStoreClock(sql: string) {
+  if (sql.includes("FROM (VALUES('points_accrual')")) {
+    return {
+      rows: ['points_accrual','points_redemption','wechat_notification'].map((capability) => ({
+        capability,state:'active',control_version:0,reason:null,review_at:null,
+        changed_by_employee_id:null,changed_at:null,pending_accrual_count:0,
+      })),
+      rowCount: 3,
+    }
+  }
   if (sql.includes('AS business_date') && sql.includes('FROM mbox.stores')) {
     return {
       rows: [{ business_date: '2026-08-11', timezone: 'Asia/Shanghai', cutoff: '06:00:00' }],

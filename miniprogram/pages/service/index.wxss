@@ -1,13 +1,24 @@
-.service-table { display: block; color: #ffffff; font-size: 48rpx; font-weight: 750; }
-.service-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16rpx; }
-.service-item { min-height: 154rpx; margin: 0; padding: 26rpx 22rpx; border: 1rpx solid #dfe2e7; border-radius: 8rpx; background: #ffffff; color: #202329; text-align: left; line-height: 1.2; }
-.service-item::after { border: 0; }
-.service-item[disabled] { background: #eef0f2; color: #8a9099; }
-.service-item__name { display: block; font-size: 28rpx; font-weight: 700; }
-.service-item__meta { display: block; margin-top: 14rpx; color: #777f8a; font-size: 21rpx; line-height: 1.4; }
-.note-field { margin-top: 30rpx; }
-.custom-request-row { display: grid; grid-template-columns: minmax(0, 1fr) 168rpx; gap: 14rpx; }
-.custom-request-button { height: 82rpx; margin: 0; padding: 0; border-radius: 8rpx; background: #202328; color: #ffffff; font-size: 26rpx; font-weight: 700; line-height: 82rpx; }
-.custom-request-button::after { border: 0; }
-.custom-request-button[disabled] { background: #a8adb5; color: #f4f5f7; }
-.status-link { display: block; margin-top: 18rpx; text-align: center; }
+.service-page{padding-top:0}
+.service-head{margin:0 -28rpx 28rpx;padding:46rpx 28rpx 42rpx;background:linear-gradient(145deg,#191715,#302a25);color:#fff}
+.service-title,.service-copy{display:block}
+.service-title{margin-top:8rpx;font-family:"Songti SC","STSong",serif;font-size:43rpx;font-weight:600}
+.service-copy{margin-top:13rpx;color:#cbc3b8;font-size:23rpx;line-height:1.55}
+.service-grid{display:grid;grid-template-columns:1fr 1fr;gap:14rpx}
+.service-grid button{display:flex;min-height:152rpx;margin:0;padding:22rpx;align-items:center;border:1rpx solid #ddd7cf;border-radius:20rpx;background:#fff;color:#2c2925;text-align:left;gap:18rpx}
+.service-grid button::after{border:0}
+.service-mark{display:flex;width:58rpx;height:58rpx;align-items:center;justify-content:center;flex:0 0 auto;border-radius:50%;background:#eee6da;color:#795a35;font-size:22rpx;font-weight:700}
+.service-item__name{font-size:26rpx;font-weight:700}
+.custom-panel{padding:26rpx;border:1rpx solid #ddd7cf;border-radius:20rpx;background:#fff}
+.custom-panel textarea{width:100%;min-height:180rpx;padding:20rpx;border:1rpx solid #d8d1c8;border-radius:16rpx;background:#fbfaf8;font-size:24rpx;line-height:1.5}
+.custom-panel .primary-button{margin-top:18rpx}
+.manager-panel{margin-top:24rpx;padding:18rpx;border:1rpx solid #caa297;border-radius:20rpx;background:#fff8f5}
+.manager-order{display:flex;padding:2rpx 8rpx 14rpx;align-items:center;justify-content:space-between;gap:18rpx;color:#8d6c65;font-size:21rpx}
+.manager-order picker{max-width:68%;color:#553a34;font-weight:650;text-align:right;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.manager-entry{display:flex;width:100%;min-height:112rpx;margin:0;padding:20rpx 18rpx;align-items:center;justify-content:space-between;border:0;border-top:1rpx solid #e7cbc4;border-radius:0;background:transparent;color:#733e34;text-align:left}
+.manager-entry::after{border:0}
+.manager-entry view text{display:block}
+.manager-entry view text:first-child{font-size:26rpx;font-weight:700}
+.manager-entry view text:last-child{margin-top:7rpx;color:#8d6c65;font-size:20rpx}
+.manager-entry>text{font-size:34rpx}
+.status-link{margin-top:16rpx}
+@media(max-width:350px){.service-grid{grid-template-columns:1fr}.service-grid button{min-height:126rpx}.manager-order{display:block}.manager-order picker{max-width:100%;margin-top:8rpx;text-align:left}}

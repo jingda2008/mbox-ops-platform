@@ -73,6 +73,7 @@ describe('PublicReservationApi', () => {
     await expect(conflictApi.createReservation('direct', {
       customerName: '王女士', contact: '13800138000', guestCount: 2,
       arrivalAt: '2026-08-12T20:30:00+08:00',
+      reservationPolicyVersion: 1,
     })).rejects.toMatchObject({ code: 'RESERVATION_CAPACITY_FULL', seatConflict: true })
 
     const retryAt = '2026-08-12T12:00:30.000Z'
@@ -123,7 +124,7 @@ function availabilityData() {
   return {
     arrivalAt: '2026-08-12T12:30:00.000Z', expectedEndAt: '2026-08-12T16:30:00.000Z', guestCount: 2,
     acceptingReservations: true,
-    depositRule: { enabled: false, mode: 'disabled', amountMinor: 0, ruleText: null },
+    depositRule: { enabled: false, mode: 'disabled', amountMinor: 0, ruleText: null, policyVersion: 1 },
     areas: [{
       code: 'VIP', name: '舞台前区', type: 'vip',
       tables: [{ code: 'VIP1', name: 'VIP 1', capacity: 6, minimumSpendMinor: 188800, currency: 'CNY', available: true }],

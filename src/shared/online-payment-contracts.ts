@@ -3,7 +3,9 @@ export type OnlinePaymentPresentation = 'jsapi' | 'qr' | 'barcode'
 export interface OnlinePaymentAction {
   paymentId: string
   paymentPublicId: string
-  orderPublicId: string
+  payableKind?: 'order' | 'activity_registration'
+  orderPublicId: string | null
+  activityRegistrationPublicId?: string | null
   status: 'pending' | 'unknown' | 'failed'
   presentation: OnlinePaymentPresentation
   expiresAt: string

@@ -8,6 +8,7 @@ import {
 import type { Customer, PublicCustomer } from './customer-repository.js'
 import { GuestAuthenticationRequiredError } from './guest-request-context.js'
 import { StaffAccessDeniedError } from './staff-access-repository.js'
+import { ReservationGuestSessionInvalidError } from './reservation-guest-session.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
 const tenantId = '11111111-1111-4111-8111-111111111111'
@@ -102,6 +103,8 @@ describe('customerBenefitApiPlugin privacy and permission boundaries', () => {
     const response = await value.app.inject({ method: 'GET', url: '/api/guest/customer/profile' })
     expect(response.statusCode).toBe(200)
     expect(response.json()).toEqual({ data: publicCustomer })
+    expect(response.headers['cache-control']).toBe('private, no-store')
+    expect(response.headers.pragma).toBe('no-cache')
     expect(JSON.stringify(response.json())).not.toMatch(/identity|hash|consent|internalRisk/i)
   })
 
@@ -110,7 +113,57 @@ describe('customerBenefitApiPlugin privacy and permission boundaries', () => {
     const response = await value.app.inject({ method: 'GET', url: '/api/guest/customer/benefits' })
     expect(response.statusCode).toBe(200)
     expect(response.json()).toMatchObject({ data: [{ id: benefitId, display: { title: '生日赠饮' } }] })
+    expect(response.headers['cache-control']).toBe('private, no-store')
+    expect(response.headers.pragma).toBe('no-cache')
     expect(JSON.stringify(response.json())).not.toMatch(/COCKTAIL-SECRET|internalNote|issuedByEmployeeId/)
+  })
+
+  it('allows the authenticated member to read profile and benefits without a table session', async () => {
+    const value = fixture({
+      resolveSelfContext: vi.fn(async () => ({
+        scope: { tenantId, storeId }, customerId, tableSessionId: null,
+        businessDate: '2026-08-11', actorRef: `customer:${customerId}`,
+      })),
+    })
+    const profile = await value.app.inject({ method: 'GET', url: '/api/public/mini/customer/profile' })
+    const benefits = await value.app.inject({ method: 'GET', url: '/api/public/mini/customer/benefits' })
+    expect(profile.statusCode).toBe(200)
+    expect(profile.json()).toEqual({ data: publicCustomer })
+    expect(profile.headers['cache-control']).toBe('private, no-store')
+    expect(profile.headers.pragma).toBe('no-cache')
+    expect(benefits.statusCode).toBe(200)
+    expect(benefits.json()).toMatchObject({ data: [{ id: benefitId }] })
+    expect(benefits.headers['cache-control']).toBe('private, no-store')
+    expect(benefits.headers.pragma).toBe('no-cache')
+  })
+
+  it('maps an expired reservation identity to 401 without caching the error', async () => {
+    const value = fixture({
+      resolveSelfContext: vi.fn(async () => { throw new ReservationGuestSessionInvalidError() }),
+    })
+    const response = await value.app.inject({
+      method: 'GET', url: '/api/public/mini/customer/benefits',
+    })
+    expect(response.statusCode).toBe(401)
+    expect(response.json()).toMatchObject({ error: { code: 'CUSTOMER_BENEFIT_AUTH_REQUIRED' } })
+    expect(response.headers['cache-control']).toBe('private, no-store')
+    expect(response.headers.pragma).toBe('no-cache')
+  })
+
+  it('rejects sensitive reads when the exact guest-session position was revoked', async () => {
+    const query = vi.fn(async () => ({ rows: [{ participation_id: null }], rowCount: 1 }))
+    const value = fixture({
+      transactions: {
+        run: vi.fn(async (_scope, operation) => operation({
+          scope: { tenantId, storeId }, query,
+        } as unknown as ScopedTransaction)),
+      },
+    })
+    const profile = await value.app.inject({ method: 'GET', url: '/api/guest/customer/profile' })
+    const benefits = await value.app.inject({ method: 'GET', url: '/api/guest/customer/benefits' })
+    expect(profile.statusCode).toBe(401)
+    expect(benefits.statusCode).toBe(401)
+    expect(query).toHaveBeenCalledTimes(2)
   })
 
   it('does not expose notification-consent settings in the member API', async () => {
@@ -199,7 +252,9 @@ describe('customerBenefitApiPlugin privacy and permission boundaries', () => {
 function fixture(overrides: Partial<CustomerBenefitApiOptions> = {}) {
   const transaction = {
     scope: { tenantId, storeId },
-    query: vi.fn(async () => ({ rows: [], rowCount: 0 })),
+    query: vi.fn(async (sql: string) => sql.includes('lock_active_table_guest_session_position')
+      ? ({ rows: [{ participation_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }], rowCount: 1 })
+      : ({ rows: [], rowCount: 0 })),
   } as unknown as ScopedTransaction
   const transactions = {
     run: vi.fn(async (_scope, operation) => operation(transaction)),
@@ -209,9 +264,14 @@ function fixture(overrides: Partial<CustomerBenefitApiOptions> = {}) {
   const updateProfile = vi.fn()
   const options: CustomerBenefitApiOptions = {
     transactions,
+    resolveSelfContext: vi.fn(async () => ({
+      scope: { tenantId, storeId }, customerId, tableSessionId: null,
+      businessDate: '2026-08-11', actorRef: `customer:${customerId}`,
+    })),
     resolveGuestContext: vi.fn(async () => ({
       scope: { tenantId, storeId }, customerId, tableSessionId,
-      businessDate: '2026-08-11', actorRef: 'guest-session-safe',
+      businessDate: '2026-08-11',
+      actorRef: 'guest-session:99999999-9999-4999-8999-999999999999',
     })),
     resolveStaffContext: vi.fn(async () => ({
       scope: { tenantId, storeId }, employeeId, businessDate: '2026-08-11',

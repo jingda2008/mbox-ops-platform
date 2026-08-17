@@ -19,7 +19,8 @@ export interface RefundAllocation {
 export interface Refund {
   id: string
   paymentId: string
-  orderId: string
+  orderId: string | null
+  activityRegistrationId: string | null
   paymentProvider: PaymentProvider
   publicId: string
   providerRefundId: string | null
@@ -43,6 +44,14 @@ export interface RequestRefundInput {
   reason: string
   requestedByEmployeeId: string
   allocations: readonly RefundAllocation[]
+  requestEvidence?: JsonObject
+}
+
+export interface RequestActivityRefundInput {
+  paymentId: string
+  publicId: string
+  reason: string
+  requestedByEmployeeId: string
   requestEvidence?: JsonObject
 }
 
@@ -88,7 +97,8 @@ interface RefundStoredRow extends Record<string, unknown> {
 }
 
 interface RefundRow extends RefundStoredRow {
-  order_id: string
+  order_id: string | null
+  activity_registration_id: string | null
   payment_provider: PaymentProvider
   payment_provider_transaction_id: string | null
   allocations: unknown
@@ -96,7 +106,9 @@ interface RefundRow extends RefundStoredRow {
 
 interface PaymentForRefundRow extends Record<string, unknown> {
   id: string
-  order_id: string
+  payable_kind: 'order' | 'activity_registration'
+  order_id: string | null
+  activity_registration_id: string | null
   provider: PaymentProvider
   provider_transaction_id: string | null
   amount_minor: string | number
@@ -175,6 +187,9 @@ export class RefundRepository {
     const payment = await this.lockPayment(input.paymentId)
     if (!['succeeded', 'partially_refunded'].includes(payment.status)) {
       throw new RefundLimitError(`Payment ${payment.id} is not refundable from status ${payment.status}`)
+    }
+    if (payment.order_id === null) {
+      throw new RefundLimitError('Activity payments require the full activity refund workflow')
     }
 
     const allocations = normalizeAllocations(input.allocations)
@@ -275,9 +290,66 @@ export class RefundRepository {
     return mapRefund({
       ...row,
       order_id: payment.order_id,
+      activity_registration_id: null,
       payment_provider: payment.provider,
       payment_provider_transaction_id: payment.provider_transaction_id,
       allocations: insertedAllocations.rows.map(allocationRowToJson),
+    })
+  }
+
+  async requestActivity(input: Readonly<RequestActivityRefundInput>): Promise<Refund> {
+    validateActivityRequest(input)
+    const payment = await this.lockPayment(input.paymentId)
+    if (payment.payable_kind !== 'activity_registration' || payment.activity_registration_id === null) {
+      throw new RefundLimitError('Payment does not belong to an activity registration')
+    }
+    if (!['succeeded', 'partially_refunded'].includes(payment.status)) {
+      throw new RefundLimitError(`Payment ${payment.id} is not refundable from status ${payment.status}`)
+    }
+    const existing = await this.transaction.query<ExistingRefundTotalRow>(`
+      SELECT COALESCE(SUM(amount_minor), 0)::text AS reserved_total_minor
+      FROM mbox.refunds
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND payment_id=$3::uuid
+        AND status=ANY($4::text[])
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      payment.id,
+      RESERVING_REFUND_STATUSES,
+    ])
+    const amountMinor = toSafeMinor(payment.amount_minor, 'activity payment amount')
+      - toSafeMinor(existing.rows[0]?.reserved_total_minor ?? 0, 'activity refund reserved amount')
+    if (amountMinor <= 0) throw new RefundLimitError('Activity payment has no refundable balance')
+    const inserted = await this.transaction.query<RefundStoredRow>(`
+      INSERT INTO mbox.refunds (
+        tenant_id, store_id, payment_id, public_id, amount_minor, currency,
+        status, reason, requested_by_employee_id, provider_snapshot
+      ) VALUES (
+        $1::uuid, $2::uuid, $3::uuid, $4, $5::bigint, $6,
+        'requested', $7, $8::uuid, $9::jsonb
+      ) RETURNING ${REFUND_BASE_COLUMNS}
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      payment.id,
+      input.publicId,
+      amountMinor,
+      payment.currency,
+      input.reason.trim(),
+      input.requestedByEmployeeId,
+      JSON.stringify({ requestEvidence: input.requestEvidence ?? {}, targetKind: 'activity_registration' }),
+    ])
+    const row = inserted.rows[0]
+    if (inserted.rowCount !== 1 || row === undefined) {
+      throw new Error('Creating an activity refund request did not insert exactly one row')
+    }
+    return mapRefund({
+      ...row,
+      order_id: null,
+      activity_registration_id: payment.activity_registration_id,
+      payment_provider: payment.provider,
+      payment_provider_transaction_id: payment.provider_transaction_id,
+      allocations: [],
     })
   }
 
@@ -422,18 +494,21 @@ export class RefundRepository {
   }
 
   private async lockPayment(paymentId: string): Promise<PaymentForRefundRow> {
-    const reference = await this.transaction.query<{ order_id: string }>(`
-      SELECT order_id
+    const reference = await this.transaction.query<{
+      payable_kind: 'order' | 'activity_registration'; order_id: string | null; activity_registration_id: string | null
+    }>(`
+      SELECT payable_kind, order_id, activity_registration_id
       FROM mbox.payments
       WHERE tenant_id = $1::uuid
         AND store_id = $2::uuid
         AND id = $3::uuid
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
-    const orderId = reference.rows[0]?.order_id
-    if (orderId === undefined) throw new RefundNotFoundError(paymentId)
-    await this.lockOrder(orderId)
+    const target = reference.rows[0]
+    if (target === undefined) throw new RefundNotFoundError(paymentId)
+    await this.lockPaymentTarget(target)
     const result = await this.transaction.query<PaymentForRefundRow>(`
-      SELECT id, order_id, provider, provider_transaction_id, amount_minor, currency, status
+      SELECT id, payable_kind, order_id, activity_registration_id,
+        provider, provider_transaction_id, amount_minor, currency, status
       FROM mbox.payments
       WHERE tenant_id = $1::uuid
         AND store_id = $2::uuid
@@ -460,8 +535,10 @@ export class RefundRepository {
   }
 
   private async lockRefund(refundId: string): Promise<RefundRow> {
-    const reference = await this.transaction.query<{ order_id: string }>(`
-      SELECT p.order_id
+    const reference = await this.transaction.query<{
+      payable_kind: 'order' | 'activity_registration'; order_id: string | null; activity_registration_id: string | null
+    }>(`
+      SELECT p.payable_kind, p.order_id, p.activity_registration_id
       FROM mbox.refunds AS r
       JOIN mbox.payments AS p
         ON p.tenant_id = r.tenant_id
@@ -471,9 +548,9 @@ export class RefundRepository {
         AND r.store_id = $2::uuid
         AND r.id = $3::uuid
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, refundId])
-    const orderId = reference.rows[0]?.order_id
-    if (orderId === undefined) throw new RefundNotFoundError(refundId)
-    await this.lockOrder(orderId)
+    const target = reference.rows[0]
+    if (target === undefined) throw new RefundNotFoundError(refundId)
+    await this.lockPaymentTarget(target)
     const result = await this.transaction.query<RefundRow>(`
       SELECT ${JOINED_REFUND_COLUMNS}
       FROM mbox.refunds AS r
@@ -497,7 +574,11 @@ export class RefundRepository {
       FROM mbox.refunds
       WHERE tenant_id = $1::uuid
         AND store_id = $2::uuid
-        AND public_id = $3
+        AND (
+          public_id = $3
+          OR provider_refund_id = $3
+          OR merchant_refund_id = $3
+        )
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, refundPublicId])
     const refundId = reference.rows[0]?.id
     if (refundId === undefined) throw new RefundNotFoundError(refundPublicId)
@@ -514,6 +595,24 @@ export class RefundRepository {
       FOR UPDATE
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
     if (locked.rowCount !== 1) throw new RefundNotFoundError(orderId)
+  }
+
+  private async lockPaymentTarget(target: Readonly<{
+    payable_kind: 'order' | 'activity_registration'; order_id: string | null; activity_registration_id: string | null
+  }>): Promise<void> {
+    if (target.payable_kind === 'order' && target.order_id !== null) {
+      await this.lockOrder(target.order_id)
+      return
+    }
+    if (target.payable_kind === 'activity_registration' && target.activity_registration_id !== null) {
+      const locked = await this.transaction.query(`
+        SELECT id FROM mbox.community_activity_registrations
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid FOR UPDATE
+      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, target.activity_registration_id])
+      if (locked.rowCount !== 1) throw new RefundNotFoundError(target.activity_registration_id)
+      return
+    }
+    throw new RefundNotFoundError('invalid payment target')
   }
 
   private async transition(
@@ -574,7 +673,8 @@ const REFUND_BASE_COLUMNS = `
 `
 
 const JOINED_REFUND_COLUMNS = `
-  r.id, r.payment_id, p.order_id, p.provider AS payment_provider,
+  r.id, r.payment_id, p.order_id, p.activity_registration_id,
+  p.provider AS payment_provider,
   p.provider_transaction_id AS payment_provider_transaction_id,
   r.public_id, r.provider_refund_id, r.amount_minor, r.currency,
   r.status, r.reason, r.requested_by_employee_id, r.approved_by_employee_id, r.decision_reason,
@@ -602,6 +702,19 @@ function validateRequest(input: Readonly<RequestRefundInput>): void {
   }
   if (input.allocations.length === 0) {
     throw new TypeError('refund requires at least one order item allocation')
+  }
+}
+
+function validateActivityRequest(input: Readonly<RequestActivityRefundInput>): void {
+  if (input.paymentId.trim().length === 0) throw new TypeError('paymentId must not be blank')
+  if (input.publicId.length < 8 || input.publicId.length > 128) {
+    throw new TypeError('publicId must contain between 8 and 128 characters')
+  }
+  if (input.reason.trim().length < 2 || input.reason.trim().length > 1_000) {
+    throw new TypeError('activity refund reason must contain between 2 and 1000 characters')
+  }
+  if (input.requestedByEmployeeId.trim().length === 0) {
+    throw new TypeError('requestedByEmployeeId must not be blank')
   }
 }
 
@@ -688,6 +801,7 @@ function mapRefund(row: RefundRow): Refund {
     id: row.id,
     paymentId: row.payment_id,
     orderId: row.order_id,
+    activityRegistrationId: row.activity_registration_id,
     paymentProvider: row.payment_provider,
     publicId: row.public_id,
     providerRefundId: row.provider_refund_id,

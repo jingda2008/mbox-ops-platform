@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import type { FastifyPluginAsync } from 'fastify'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  NORMALIZED_LOG_REDACTION_PATHS,
   NORMALIZED_MIN_SCHEMA_VERSION,
   createNormalizedApp,
   type NormalizedLifecycleController,
@@ -29,6 +30,7 @@ const config: NormalizedRuntimeConfig = {
   secret: '0123456789abcdef0123456789abcdef',
   metricsToken: 'normalized-metrics-token-0123456789abcdef',
   payment: null,
+  wechatIdentity: null,
   guestPaymentMode: 'simulation',
   inventoryEnforcementMode: 'audit_only',
   guestOrderSafetyPolicy: {
@@ -48,6 +50,30 @@ const config: NormalizedRuntimeConfig = {
 }
 
 describe('createNormalizedApp', () => {
+  it('redacts contact plaintext and one-use phone authorization codes from defensive logs', () => {
+    expect(NORMALIZED_LOG_REDACTION_PATHS).toEqual(expect.arrayContaining([
+      'body.contactValue', 'body.phoneAuthorizationCode',
+    ]))
+  })
+
+  it('keeps a contract migration candidate read-only and visibly non-writable',async()=>{
+    const mutation:FastifyPluginAsync<Record<string,unknown>>=async(app)=>{
+      app.post('/mutation',async()=>({ written:true }))
+    }
+    const runtime=await createNormalizedApp({
+      config:{ ...config,runtimeRole:'contract_candidate' },pool:fakePool(),logger:false,
+      injectedPlugins:[{ name:'candidate-mutation-probe',plugin:mutation,prefix:'/api' }],
+    })
+    const blocked=await runtime.app.inject({ method:'POST',url:'/api/mutation' })
+    expect(blocked.statusCode).toBe(503)
+    expect(blocked.json()).toEqual({ error:{
+      code:'CONTRACT_CANDIDATE_READ_ONLY',message:'系统正在完成安全升级，暂不接受写入操作。',
+    } })
+    const live=await runtime.app.inject({ method:'GET',url:'/api/live' })
+    expect(live.json()).toMatchObject({ runtimeRole:'contract_candidate',writeEnabled:false })
+    await runtime.app.close()
+  })
+
   it('subscribes to idle database client errors so they cannot crash the service', async () => {
     let listener: ((error: unknown) => void) | undefined
     const pool: InspectablePool = {
@@ -110,6 +136,8 @@ describe('createNormalizedApp', () => {
       schemaFlavor: NORMALIZED_SCHEMA_FLAVOR,
       deploymentTier: 'validation',
       inventoryEnforcementMode: 'audit_only',
+      runtimeRole:'normal',
+      writeEnabled:true,
     })
     const version = await runtime.app.inject({ method: 'GET', url: '/api/version' })
     expect(version.statusCode).toBe(200)
@@ -119,11 +147,38 @@ describe('createNormalizedApp', () => {
       schemaFlavor: NORMALIZED_SCHEMA_FLAVOR,
       deploymentTier: 'validation',
       inventoryEnforcementMode: 'audit_only',
+      runtimeRole:'normal',
+      writeEnabled:true,
     })
     await runtime.app.close()
 
     const source = await readFile(new URL('./normalized-app.ts', import.meta.url), 'utf8')
     expect(source).not.toMatch(/RuntimeState|runtime_states|RuntimeRepository|repository\.mutate|mutationTail/)
+  })
+
+  it('registers formal WeChat challenge and code authentication routes only when identity is configured', async () => {
+    const disabled = await createNormalizedApp({ config, pool: fakePool(), logger: false })
+    expect(disabled.app.hasRoute({ method: 'POST', url: '/api/wechat/challenges' })).toBe(false)
+    await disabled.app.close()
+
+    const enabled = await createNormalizedApp({
+      config: {
+        ...config,
+        wechatIdentity: {
+          appId: 'wxformalidentity',
+          appSecret: 'wechat-app-secret-for-test-only',
+          stateSecret: 'wechat-state-secret-for-test-only-1234567890',
+          encryptionKeyVersion: 1,
+          encryptionKey: Buffer.alloc(32, 7),
+        },
+      },
+      pool: fakePool(),
+      logger: false,
+    })
+    expect(enabled.app.hasRoute({ method: 'POST', url: '/api/wechat/challenges' })).toBe(true)
+    expect(enabled.app.hasRoute({ method: 'POST', url: '/api/wechat/code-authentication' })).toBe(true)
+    expect(enabled.app.hasRoute({ method: 'POST', url: '/api/wechat/logout' })).toBe(true)
+    await enabled.app.close()
   })
 
   it('checks the database schema and trusted store before reporting ready', async () => {
@@ -141,15 +196,21 @@ describe('createNormalizedApp', () => {
       schemaFlavor: NORMALIZED_SCHEMA_FLAVOR,
       deploymentTier: 'validation',
       inventoryEnforcementMode: 'audit_only',
+      runtimeRole:'normal',
+      writeEnabled:true,
     })
     expect(pool.queries.some((query) => query.includes('normalized_schema_metadata'))).toBe(true)
-    expect(pool.queries).toHaveLength(1)
-    expect(pool.queries[0]).toContain("set_config('app.tenant_id'")
-    expect(pool.queries[0]).toContain("set_config('app.store_id'")
+    expect(pool.queries).toHaveLength(2)
+    expect(pool.queries.every((query)=>query.includes("set_config('app.tenant_id'")
+      && query.includes("set_config('app.store_id'"))).toBe(true)
+    const keyProbe=pool.queries.find((query)=>query.includes('oldest_rank'))
+    expect(keyProbe).toContain('newest_rank')
+    await runtime.app.inject({method:'GET',url:'/api/ready'})
+    expect(pool.queries.filter((query)=>query.includes('oldest_rank'))).toHaveLength(1)
     await runtime.app.close()
   })
 
-  it('uses one database round trip when the database adds 1200ms per query', async () => {
+  it('uses one request-time database round trip after the startup key probe is cached', async () => {
     const pool = fakePool({ queryDelayMs: 1_200 })
     const runtime = await createNormalizedApp({ config, pool, logger: false })
     const startedAt = performance.now()
@@ -157,7 +218,7 @@ describe('createNormalizedApp', () => {
     const elapsedMs = performance.now() - startedAt
 
     expect(response.statusCode).toBe(200)
-    expect(pool.queries).toHaveLength(1)
+    expect(pool.queries).toHaveLength(2)
     expect(elapsedMs).toBeGreaterThanOrEqual(1_100)
     expect(elapsedMs).toBeLessThan(3_000)
     await runtime.app.close()
@@ -242,8 +303,9 @@ describe('createNormalizedApp', () => {
   })
 
   it('does not report ready when normalized migrations are older than registered plugins', async () => {
+    expect(NORMALIZED_MIN_SCHEMA_VERSION).toBe('096')
     const pool = fakePool({
-      ready: { schema_flavor: NORMALIZED_SCHEMA_FLAVOR, schema_version: '027', store_active: true },
+      ready: { schema_flavor: NORMALIZED_SCHEMA_FLAVOR, schema_version: '095', store_active: true },
     })
     const runtime = await createNormalizedApp({ config, pool, logger: false })
     const response = await runtime.app.inject({ method: 'GET', url: '/api/ready' })
@@ -408,7 +470,7 @@ describe('createNormalizedApp', () => {
       logger: false,
     })
     try {
-      for (const url of ['/guest?table=W01', '/reserve', '/member', '/staff/live']) {
+      for (const url of ['/guest?table=W01', '/reserve', '/member', '/mini-preview', '/staff/live']) {
         const response = await runtime.app.inject({
           method: 'GET', url, headers: { accept: 'text/html' },
         })

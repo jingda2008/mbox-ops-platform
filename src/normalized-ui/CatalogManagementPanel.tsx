@@ -1,10 +1,19 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, CirclePlus, LoaderCircle, PackageOpen, Pencil } from 'lucide-react'
 import { NormalizedApiClient, type StaffAuthView } from '../normalized-api'
 
 type ProductStatus = 'active' | 'sold_out' | 'inactive'
 type ProductKind = 'single' | 'bundle'
 type FulfillmentStation = 'bar' | 'kitchen' | 'cashier' | 'none'
+type PerformancePhaseCode = 'before_show' | 'acoustic' | 'band_live' | 'intermission' | 'after_show'
+
+const performancePhaseOptions: ReadonlyArray<{ code: PerformancePhaseCode; label: string }> = [
+  { code: 'before_show', label: '演出前' },
+  { code: 'acoustic', label: '不插电' },
+  { code: 'band_live', label: '乐队现场' },
+  { code: 'intermission', label: '中场' },
+  { code: 'after_show', label: '演出后' },
+]
 
 interface CatalogProduct {
   id: string
@@ -15,6 +24,28 @@ interface CatalogProduct {
   productKind: ProductKind
   bundleComponents: Array<{ productId: string; quantity: number; sortOrder: number; note: string | null }>
   productSnapshot: Record<string, unknown>
+  guestVisible: boolean
+  searchText: string
+  recommendationEnabled: boolean
+  recommendationMinGuests: number
+  recommendationMaxGuests: number
+  recommendationPriority: number
+  recommendationSceneTags: string[]
+  recommendationIntentTags: string[]
+  recommendationTasteTags: string[]
+  recommendationDwellTags: string[]
+  recommendationSingleWaveEligible: boolean
+  recommendationExpectedPrepMinutes: number
+  recommendationHoldMinutes: number
+  recommendationUpgradeProductId: string | null
+  menuSortOrder: number
+  availableFrom: string | null
+  availableUntil: string | null
+  allowedChannels: string[]
+  maxOrderQuantity: number
+  kdsPriority: number
+  fulfillmentSlaSeconds: number | null
+  costAmountMinor: number | null
   status: ProductStatus
   standardPrice: null | { amountMinor: string | null; currency: string | null }
   updatedAt: string
@@ -61,6 +92,7 @@ interface ProductDraft {
 export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient; auth: StaffAuthView }) {
   const canManageProduct = auth.permissions.includes('catalog.product.manage')
   const canManagePrice = auth.permissions.includes('catalog.price.manage')
+  const canConfigurePerformancePhase = auth.permissions.includes('recommendation.phase.configure')
   const [expanded, setExpanded] = useState(false)
   const [products, setProducts] = useState<CatalogProduct[]>([])
   const [phase, setPhase] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
@@ -68,7 +100,13 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
   const [draft, setDraft] = useState<ProductDraft | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [performancePhaseState, setPerformancePhaseState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const [performancePhaseCodes, setPerformancePhaseCodes] = useState<PerformancePhaseCode[]>([])
+  const [savedPerformancePhaseCodes, setSavedPerformancePhaseCodes] = useState<PerformancePhaseCode[]>([])
+  const [performancePhaseReason, setPerformancePhaseReason] = useState('')
+  const [performancePhaseBusy, setPerformancePhaseBusy] = useState(false)
   const [notice, setNotice] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
+  const performancePhaseRequest = useRef(0)
 
   const load = useCallback(async () => {
     setPhase('loading')
@@ -96,17 +134,52 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
   const singleProducts = useMemo(() => products.filter((product) => (
     product.productKind === 'single' && product.id !== draft?.id
   )), [draft?.id, products])
+  const performancePhaseDirty = performancePhaseState === 'ready'
+    && !samePerformancePhases(performancePhaseCodes, savedPerformancePhaseCodes)
 
   if (!canManageProduct) return null
 
+  const resetPerformancePhaseEditor = () => {
+    performancePhaseRequest.current += 1
+    setPerformancePhaseState('idle')
+    setPerformancePhaseCodes([])
+    setSavedPerformancePhaseCodes([])
+    setPerformancePhaseReason('')
+    setPerformancePhaseBusy(false)
+  }
+
+  const loadProductPerformancePhases = async (productId: string) => {
+    if (!canConfigurePerformancePhase) return
+    const requestId = performancePhaseRequest.current + 1
+    performancePhaseRequest.current = requestId
+    setPerformancePhaseState('loading')
+    setPerformancePhaseReason('')
+    try {
+      const response = await api.getEndpoint<{ data: unknown }>(
+        `/api/staff/customer-experience/products/${productId}/performance-phases`,
+      )
+      if (performancePhaseRequest.current !== requestId) return
+      const configuration = performancePhaseConfiguration(response.data, productId)
+      if (configuration === null) throw new Error('商品演出阶段返回格式无效')
+      setPerformancePhaseCodes(configuration.phaseCodes)
+      setSavedPerformancePhaseCodes(configuration.phaseCodes)
+      setPerformancePhaseState('ready')
+    } catch (error) {
+      if (performancePhaseRequest.current !== requestId) return
+      setPerformancePhaseState('error')
+      setNotice({ kind: 'error', text: error instanceof Error ? error.message : '商品演出阶段读取失败' })
+    }
+  }
+
   const startCreate = () => {
+    resetPerformancePhaseEditor()
     setDraft(emptyDraft())
     setShowAdvanced(false)
     setNotice(null)
   }
 
   const startEdit = (product: CatalogProduct) => {
-    const recommendation = objectValue(product.productSnapshot.recommendation)
+    resetPerformancePhaseEditor()
     setDraft({
       id: product.id,
       code: product.code,
@@ -115,28 +188,28 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
       fulfillmentStation: product.fulfillmentStation,
       productKind: product.productKind,
       status: product.status,
-      guestVisible: product.productSnapshot.guestVisible !== false,
-      searchText: typeof product.productSnapshot.searchText === 'string' ? product.productSnapshot.searchText : '',
-      recommendationEnabled: recommendation.enabled === true,
-      recommendationMinGuests: integerText(recommendation.minimumPartySize, '1'),
-      recommendationMaxGuests: integerText(recommendation.maximumPartySize, '100'),
-      recommendationPriority: integerText(recommendation.priority, '100'),
-      recommendationSceneTags: stringList(recommendation.sceneTags),
-      recommendationIntentTags: stringList(recommendation.intentTags),
-      recommendationTasteTags: stringList(recommendation.tasteTags),
-      recommendationDwellTags: stringList(recommendation.dwellTags),
-      recommendationSingleWaveEligible: recommendation.singleWaveEligible !== false,
-      recommendationExpectedPrepMinutes: integerText(recommendation.expectedPrepMinutes, '8'),
-      recommendationHoldMinutes: integerText(recommendation.holdMinutes, '10'),
-      recommendationUpgradeProductId: typeof recommendation.upgradeProductId === 'string' ? recommendation.upgradeProductId : '',
-      sortOrder: integerText(product.productSnapshot.sortOrder, '999'),
-      availableFrom: typeof product.productSnapshot.availableFrom === 'string' ? product.productSnapshot.availableFrom : '',
-      availableUntil: typeof product.productSnapshot.availableUntil === 'string' ? product.productSnapshot.availableUntil : '',
-      allowedChannels: stringArray(product.productSnapshot.allowedChannels, ['guest_qr', 'staff_assisted', 'cashier', 'reservation', 'integration']),
-      maxOrderQuantity: integerText(product.productSnapshot.maxOrderQuantity, '50'),
-      kdsPriority: integerText(product.productSnapshot.kdsPriority, '100'),
-      fulfillmentSlaSeconds: integerText(product.productSnapshot.fulfillmentSlaSeconds, ''),
-      costYuan: minorToYuan(product.productSnapshot.costAmount),
+      guestVisible: product.guestVisible,
+      searchText: product.searchText,
+      recommendationEnabled: product.recommendationEnabled,
+      recommendationMinGuests: integerText(product.recommendationMinGuests, '1'),
+      recommendationMaxGuests: integerText(product.recommendationMaxGuests, '100'),
+      recommendationPriority: integerText(product.recommendationPriority, '100'),
+      recommendationSceneTags: product.recommendationSceneTags.join(', '),
+      recommendationIntentTags: product.recommendationIntentTags.join(', '),
+      recommendationTasteTags: product.recommendationTasteTags.join(', '),
+      recommendationDwellTags: product.recommendationDwellTags.join(', '),
+      recommendationSingleWaveEligible: product.recommendationSingleWaveEligible,
+      recommendationExpectedPrepMinutes: integerText(product.recommendationExpectedPrepMinutes, '8'),
+      recommendationHoldMinutes: integerText(product.recommendationHoldMinutes, '10'),
+      recommendationUpgradeProductId: product.recommendationUpgradeProductId ?? '',
+      sortOrder: integerText(product.menuSortOrder, '999'),
+      availableFrom: product.availableFrom ?? '',
+      availableUntil: product.availableUntil ?? '',
+      allowedChannels: product.allowedChannels,
+      maxOrderQuantity: integerText(product.maxOrderQuantity, '50'),
+      kdsPriority: integerText(product.kdsPriority, '100'),
+      fulfillmentSlaSeconds: integerText(product.fulfillmentSlaSeconds, ''),
+      costYuan: minorToYuan(product.costAmountMinor),
       priceYuan: minorToYuan(product.standardPrice?.amountMinor ?? null),
       priceReason: '商品配置同步调整标准售价',
       description: typeof product.productSnapshot.description === 'string' ? product.productSnapshot.description : '',
@@ -146,6 +219,12 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
     })
     setShowAdvanced(false)
     setNotice(null)
+    if (canConfigurePerformancePhase) void loadProductPerformancePhases(product.id)
+  }
+
+  const closeDraft = () => {
+    resetPerformancePhaseEditor()
+    setDraft(null)
   }
 
   const updateDraft = <Key extends keyof ProductDraft>(key: Key, value: ProductDraft[Key]) => {
@@ -158,6 +237,46 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
     if (productId in quantities) delete quantities[productId]
     else quantities[productId] = '1'
     updateDraft('componentQuantities', quantities)
+  }
+
+  const togglePerformancePhase = (phaseCode: PerformancePhaseCode) => {
+    setPerformancePhaseCodes((current) => current.includes(phaseCode)
+      ? current.filter((item) => item !== phaseCode)
+      : [...current, phaseCode])
+  }
+
+  const savePerformancePhases = async () => {
+    if (draft?.id === null || draft === null || performancePhaseBusy || performancePhaseState !== 'ready') return
+    const reason = performancePhaseReason.trim()
+    if (reason.length < 2 || reason.length > 240) {
+      setNotice({ kind: 'error', text: '请填写2至240字的阶段配置原因' })
+      return
+    }
+    setPerformancePhaseBusy(true)
+    setNotice(null)
+    try {
+      const response = await api.putEndpoint<unknown>(
+        `/api/staff/customer-experience/products/${draft.id}/performance-phases`,
+        { phaseCodes: performancePhaseCodes, reason },
+        { idempotencyKey: operationKey('catalog-performance-phases') },
+      )
+      const configuration = performancePhaseConfiguration(response, draft.id)
+      if (configuration === null) throw new Error('商品演出阶段保存结果无法确认')
+      setPerformancePhaseCodes(configuration.phaseCodes)
+      setSavedPerformancePhaseCodes(configuration.phaseCodes)
+      setPerformancePhaseReason('')
+      setNotice({
+        kind: 'success',
+        text: performancePhaseCodes.length === 0
+          ? `${draft.name} 已取消演出阶段限制`
+          : `${draft.name} 的适用演出阶段已保存并读回`,
+      })
+    } catch (error) {
+      setNotice({ kind: 'error', text: error instanceof Error ? error.message : '商品演出阶段未保存' })
+      await loadProductPerformancePhases(draft.id)
+    } finally {
+      setPerformancePhaseBusy(false)
+    }
   }
 
   const save = async (event: React.FormEvent) => {
@@ -184,8 +303,9 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
       || kdsPriority === null || fulfillmentSlaSeconds === undefined
       || sceneTags === null || intentTags === null || tasteTags === null || dwellTags === null
       || draft.allowedChannels.length === 0 || Boolean(draft.availableFrom) !== Boolean(draft.availableUntil)
-      || (draft.availableFrom !== '' && draft.availableFrom === draft.availableUntil) || costAmount === undefined) {
-      setNotice({ kind: 'error', text: '请核对推荐、供应时段、渠道、限购、出品时限和成本配置' })
+      || (draft.availableFrom !== '' && draft.availableFrom === draft.availableUntil)
+      || costAmount === undefined || (draft.status === 'active' && costAmount === null)) {
+      setNotice({ kind: 'error', text: '请核对推荐、供应时段、渠道、限购和出品时限；在售商品必须填写成本' })
       return
     }
     if (draft.productKind === 'bundle' && Object.keys(draft.componentQuantities).length === 0) {
@@ -202,36 +322,10 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
       setNotice({ kind: 'error', text: '组合商品数量必须为1至100' })
       return
     }
-    const oldRecommendation = objectValue(draft.snapshot.recommendation)
     const productSnapshot = {
       ...draft.snapshot,
       description: draft.description.trim(),
       imageUrl: draft.imageUrl.trim(),
-      guestVisible: draft.guestVisible,
-      searchText: draft.searchText.trim(),
-      sortOrder,
-      availableFrom: draft.availableFrom || null,
-      availableUntil: draft.availableUntil || null,
-      allowedChannels: draft.allowedChannels,
-      maxOrderQuantity,
-      kdsPriority,
-      fulfillmentSlaSeconds,
-      ...(costAmount === null ? { costAmount: null } : { costAmount }),
-      recommendation: {
-        ...oldRecommendation,
-        enabled: draft.recommendationEnabled,
-        minimumPartySize: minimum,
-        maximumPartySize: maximum,
-        priority,
-        sceneTags,
-        intentTags,
-        tasteTags,
-        dwellTags,
-        singleWaveEligible: draft.recommendationSingleWaveEligible,
-        expectedPrepMinutes: prepMinutes,
-        holdMinutes,
-        upgradeProductId: draft.recommendationUpgradeProductId || null,
-      },
     }
     const payload = {
       ...(draft.id === null ? { code: draft.code.trim() } : {}),
@@ -241,6 +335,28 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
       productKind: draft.productKind,
       bundleComponents: draft.productKind === 'bundle' ? bundleComponents : [],
       productSnapshot,
+      guestVisible: draft.guestVisible,
+      searchText: draft.searchText.trim(),
+      recommendationEnabled: draft.recommendationEnabled,
+      recommendationMinGuests: minimum,
+      recommendationMaxGuests: maximum,
+      recommendationPriority: priority,
+      recommendationSceneTags: sceneTags,
+      recommendationIntentTags: intentTags,
+      recommendationTasteTags: tasteTags,
+      recommendationDwellTags: dwellTags,
+      recommendationSingleWaveEligible: draft.recommendationSingleWaveEligible,
+      recommendationExpectedPrepMinutes: prepMinutes,
+      recommendationHoldMinutes: holdMinutes,
+      recommendationUpgradeProductId: draft.recommendationUpgradeProductId || null,
+      menuSortOrder: sortOrder,
+      availableFrom: draft.availableFrom || null,
+      availableUntil: draft.availableUntil || null,
+      allowedChannels: draft.allowedChannels,
+      maxOrderQuantity,
+      kdsPriority,
+      fulfillmentSlaSeconds,
+      costAmountMinor: costAmount,
       status: draft.status,
     }
 
@@ -267,7 +383,7 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
         }
       }
       await load()
-      setDraft(null)
+      closeDraft()
       setNotice(priceWarning === ''
         ? { kind: 'success', text: `${saved.name} 已保存并从服务端读回` }
         : { kind: 'error', text: priceWarning.slice(1) })
@@ -291,7 +407,7 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
       {phase === 'ready' && <>
         <div className="catalog-management-tools"><input aria-label="搜索配置商品" placeholder="搜索商品名、编号或分类" value={query} onChange={(event) => setQuery(event.target.value)} /><button type="button" onClick={startCreate}><CirclePlus size={17} /> 新增商品</button></div>
         {draft !== null && <form className="catalog-management-form" onSubmit={(event) => void save(event)}>
-          <header><strong>{draft.id === null ? '新增商品' : `编辑 ${draft.name}`}</strong><button type="button" onClick={() => setDraft(null)}>取消</button></header>
+          <header><strong>{draft.id === null ? '新增商品' : `编辑 ${draft.name}`}</strong><button type="button" onClick={closeDraft}>取消</button></header>
           <div className="catalog-form-grid">
             <label>商品编号<input required disabled={draft.id !== null} pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" value={draft.code} onChange={(event) => updateDraft('code', event.target.value)} /></label>
             <label>商品名称<input required maxLength={160} value={draft.name} onChange={(event) => updateDraft('name', event.target.value)} /></label>
@@ -328,11 +444,23 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
               <label className="catalog-check"><input type="checkbox" checked={draft.recommendationSingleWaveEligible} onChange={(event) => updateDraft('recommendationSingleWaveEligible', event.target.checked)} />可一次出齐</label>
               <fieldset className="catalog-wide"><legend>允许下单渠道</legend>{[['guest_qr', '顾客扫码'], ['staff_assisted', '员工协助'], ['cashier', '收银'], ['reservation', '预约'], ['integration', '系统接入']].map(([value, label]) => <label className="catalog-check" key={value}><input type="checkbox" checked={draft.allowedChannels.includes(value)} onChange={() => updateDraft('allowedChannels', draft.allowedChannels.includes(value) ? draft.allowedChannels.filter((item) => item !== value) : [...draft.allowedChannels, value])} />{label}</label>)}</fieldset>
             </>}
+            {canConfigurePerformancePhase && draft.id === null && <p className="catalog-performance-phase-note catalog-wide">请先创建商品，再配置适用演出阶段；新商品默认不受阶段限制。</p>}
+            {canConfigurePerformancePhase && draft.id !== null && <section className="catalog-performance-phase catalog-wide" aria-label="商品适用演出阶段">
+              <header><div><strong>适用演出阶段</strong><small>强类型运行门禁；未选择任何阶段表示不受演出阶段限制。</small></div><em>{performancePhaseCodes.length === 0 ? '不限阶段' : `已选 ${performancePhaseCodes.length} 项`}</em></header>
+              {performancePhaseState === 'loading' && <p><LoaderCircle className="is-spinning" size={17} /> 正在读取当前配置</p>}
+              {performancePhaseState === 'error' && <button type="button" onClick={() => void loadProductPerformancePhases(draft.id!)}>重新读取阶段配置</button>}
+              {performancePhaseState === 'ready' && <>
+                <div className="catalog-performance-phase-options">{performancePhaseOptions.map((option) => <label key={option.code}><input type="checkbox" checked={performancePhaseCodes.includes(option.code)} onChange={() => togglePerformancePhase(option.code)} /><span>{option.label}</span></label>)}</div>
+                {performancePhaseDirty && <p>阶段选择有未保存修改，请先单独保存或恢复后再保存商品资料。</p>}
+                <label>配置原因<input minLength={2} maxLength={240} value={performancePhaseReason} placeholder={performancePhaseCodes.length === 0 ? '例如：取消阶段限制，恢复全时段推荐' : '例如：仅在乐队现场与中场推荐'} onChange={(event) => setPerformancePhaseReason(event.target.value)} /></label>
+                <button type="button" disabled={performancePhaseBusy || performancePhaseReason.trim().length < 2} onClick={() => void savePerformancePhases()}>{performancePhaseBusy ? '保存中' : '单独保存阶段配置'}</button>
+              </>}
+            </section>}
           </div>
           {draft.productKind === 'bundle' && <section className="catalog-components"><strong>组合内容</strong><div>{singleProducts.map((product) => <label key={product.id} className={product.id in draft.componentQuantities ? 'is-selected' : ''}><input type="checkbox" checked={product.id in draft.componentQuantities} onChange={() => toggleComponent(product.id)} /><span>{product.name}</span>{product.id in draft.componentQuantities && <input aria-label={`${product.name}数量`} inputMode="numeric" value={draft.componentQuantities[product.id]} onChange={(event) => updateDraft('componentQuantities', { ...draft.componentQuantities, [product.id]: event.target.value })} />}</label>)}</div></section>}
-          <button type="submit" className="catalog-save" disabled={busy}>{busy ? <LoaderCircle className="is-spinning" size={18} /> : <Check size={18} />}保存并读回验证</button>
+          <button type="submit" className="catalog-save" disabled={busy || performancePhaseDirty}>{busy ? <LoaderCircle className="is-spinning" size={18} /> : <Check size={18} />}{performancePhaseDirty ? '请先处理阶段配置' : '保存并读回验证'}</button>
         </form>}
-        <div className="catalog-management-list">{visibleProducts.map((product) => <article key={product.id}><div><strong>{product.name}</strong><span>{product.code} · {product.categoryCode} · {product.productKind === 'bundle' ? '组合' : stationLabel(product.fulfillmentStation)}</span><small>{statusLabel(product.status)} · {product.productSnapshot.guestVisible === false ? '顾客隐藏' : '顾客可见'} · {product.standardPrice?.amountMinor == null ? '未定价' : `¥${minorToYuan(product.standardPrice.amountMinor)}`}</small></div><button type="button" onClick={() => startEdit(product)}><Pencil size={16} /> 编辑</button></article>)}</div>
+        <div className="catalog-management-list">{visibleProducts.map((product) => <article key={product.id}><div><strong>{product.name}</strong><span>{product.code} · {product.categoryCode} · {product.productKind === 'bundle' ? '组合' : stationLabel(product.fulfillmentStation)}</span><small>{statusLabel(product.status)} · {product.guestVisible ? '顾客可见' : '顾客隐藏'} · {product.standardPrice?.amountMinor == null ? '未定价' : `¥${minorToYuan(product.standardPrice.amountMinor)}`}</small></div><button type="button" onClick={() => startEdit(product)}><Pencil size={16} /> 编辑</button></article>)}</div>
       </>}
     </div>}
   </section>
@@ -353,17 +481,37 @@ function emptyDraft(): ProductDraft {
   }
 }
 
+function performancePhaseConfiguration(value: unknown, productId: string): {
+  productId: string
+  phaseCodes: PerformancePhaseCode[]
+} | null {
+  if (!isRecord(value) || value.productId !== productId || !Array.isArray(value.phaseCodes)) return null
+  const phaseCodes = value.phaseCodes.flatMap((phaseCode): PerformancePhaseCode[] => (
+    isPerformancePhaseCode(phaseCode) ? [phaseCode] : []
+  ))
+  if (phaseCodes.length !== value.phaseCodes.length || new Set(phaseCodes).size !== phaseCodes.length) return null
+  return { productId, phaseCodes }
+}
+
+function isPerformancePhaseCode(value: unknown): value is PerformancePhaseCode {
+  return value === 'before_show' || value === 'acoustic' || value === 'band_live'
+    || value === 'intermission' || value === 'after_show'
+}
+
+function samePerformancePhases(left: readonly PerformancePhaseCode[], right: readonly PerformancePhaseCode[]): boolean {
+  return left.length === right.length && left.every((phaseCode) => right.includes(phaseCode))
+}
+
 function readProducts(value: unknown): CatalogProduct[] {
   if (!Array.isArray(value)) return []
   return value.flatMap((item) => isRecord(item)
     && typeof item.id === 'string' && typeof item.code === 'string' && typeof item.name === 'string'
     && typeof item.categoryCode === 'string' && isRecord(item.productSnapshot)
+    && typeof item.guestVisible === 'boolean' && typeof item.searchText === 'string'
+    && typeof item.recommendationEnabled === 'boolean'
+    && Array.isArray(item.allowedChannels)
     && Array.isArray(item.bundleComponents) && typeof item.updatedAt === 'string'
     ? [item as unknown as CatalogProduct] : [])
-}
-
-function objectValue(value: unknown): Record<string, unknown> {
-  return isRecord(value) ? value : {}
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -374,13 +522,6 @@ function integerText(value: unknown, fallback: string): string {
   return Number.isSafeInteger(value) ? String(value) : fallback
 }
 
-function stringList(value: unknown): string {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string').join(',') : ''
-}
-
-function stringArray(value: unknown, fallback: string[]): string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === 'string') ? value : fallback
-}
 
 function readEnumList<const Value extends string>(value: string, allowed: readonly Value[]): Value[] | null {
   const items = value.split(',').map((item) => item.trim()).filter(Boolean)

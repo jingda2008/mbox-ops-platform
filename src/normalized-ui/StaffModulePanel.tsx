@@ -24,6 +24,7 @@ import {
   type CustomerExperienceDashboard,
 } from './CustomerExperienceManagementPanel'
 import { paymentPolicyPresentation } from './payment-policy-presentation'
+import { PerformanceRevisionPanel } from './PerformanceRevisionPanel'
 import './staff-module-panel.css'
 
 export type StaffModule = 'payments' | 'performance' | 'inventory' | 'operations' | 'experience' | 'devices' | 'settings'
@@ -67,6 +68,19 @@ interface PerformanceView {
   current: ScheduleEntry | null
   next: ScheduleEntry | null
   schedules: ScheduleEntry[]
+}
+
+type PerformancePhaseCode = 'before_show' | 'acoustic' | 'band_live' | 'intermission' | 'after_show'
+
+interface PerformancePhaseEvent {
+  publicId: string
+  scheduleId: string
+  performerStageName: string
+  phaseCode: PerformancePhaseCode
+  status: 'active' | 'ended' | 'cancelled'
+  startedAt: string
+  endedAt: string | null
+  cancelledAt: string | null
 }
 
 interface InventoryItemView {
@@ -140,6 +154,7 @@ interface ModuleData {
   performance: PerformanceView | null
   performers: PerformerEntry[]
   songRequests: SongRequestEntry[]
+  performancePhases: PerformancePhaseEvent[]
   inventory: InventoryView | null
   profit: ProfitView | null
   devices: HardwareDeviceView[]
@@ -153,6 +168,7 @@ const emptyData: ModuleData = {
   performance: null,
   performers: [],
   songRequests: [],
+  performancePhases: [],
   inventory: null,
   profit: null,
   devices: [],
@@ -180,16 +196,18 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
       if (module === 'payments') {
         setData(emptyData)
       } else if (module === 'performance') {
-        const [performance, requests, performers] = await Promise.all([
+        const [performance, requests, performers, phases] = await Promise.all([
           api.getEndpoint<{ data: unknown }>('/api/staff/performances/today'),
           api.getEndpoint<{ data: unknown }>('/api/staff/song-requests'),
           api.getEndpoint<{ data: unknown }>('/api/staff/performers'),
+          api.getEndpoint<{ data: unknown }>('/api/staff/customer-experience/performance-phases/current'),
         ])
         setData({
           ...emptyData,
           performance: performanceView(performance.data),
           songRequests: songRequests(requests.data),
           performers: performerEntries(performers.data),
+          performancePhases: performancePhaseEvents(phases.data),
         })
       } else if (module === 'inventory') {
         const response = await api.getEndpoint<{ data: unknown }>('/api/inventory')
@@ -243,7 +261,7 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
         refreshToken={paymentRefreshToken}
       />
     }
-    if (module === 'performance') return <PerformanceModule api={api} auth={auth} view={data.performance} performers={data.performers} requests={data.songRequests} onChanged={refresh} />
+    if (module === 'performance') return <PerformanceModule api={api} auth={auth} view={data.performance} performers={data.performers} requests={data.songRequests} phases={data.performancePhases} onChanged={refresh} />
     if (module === 'inventory') return <InventoryModule api={api} auth={auth} view={data.inventory} onChanged={refresh} />
     if (module === 'operations') return <OperationsModule view={data.profit} sales={data.employeeSales} canViewProfit={auth.permissions.includes('commercial.profit.view')} />
     if (module === 'experience' && data.customerExperience !== null) return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={data.customerExperience} onChanged={refresh} />
@@ -281,16 +299,21 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
   </section>
 }
 
-function PerformanceModule({ api, auth, view, performers, requests, onChanged }: {
+function PerformanceModule({ api, auth, view, performers, requests, phases, onChanged }: {
   api: NormalizedApiClient
   auth: StaffAuthView
   view: PerformanceView | null
   performers: PerformerEntry[]
   requests: SongRequestEntry[]
+  phases: PerformancePhaseEvent[]
   onChanged(): Promise<void>
 }) {
   const schedules = view?.schedules ?? []
+  const stalePhases = phases.filter((phase) => (
+    schedules.find((schedule) => schedule.id === phase.scheduleId)?.status !== 'performing'
+  ))
   const canManage = auth.permissions.includes('song.manage')
+  const canManagePhase = auth.permissions.includes('performance.phase.manage')
   const [form, setForm] = useState<'performer' | 'performer-edit' | 'schedule' | 'songs' | null>(null)
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [notice, setNotice] = useState('')
@@ -314,6 +337,7 @@ function PerformanceModule({ api, auth, view, performers, requests, onChanged }:
   const [startsAt, setStartsAt] = useState('')
   const [endsAt, setEndsAt] = useState('')
   const [quotes, setQuotes] = useState<Record<string, string>>({})
+  const [phaseChoice, setPhaseChoice] = useState<Record<string, PerformancePhaseCode>>({})
 
   const selectedPerformer = performers.find((performer) => performer.id === catalogPerformerId) ?? performers[0]
 
@@ -452,11 +476,28 @@ function PerformanceModule({ api, auth, view, performers, requests, onChanged }:
     setEndsAt('')
   }
 
-  function transitionSchedule(schedule: ScheduleEntry, targetStatus: 'performing' | 'completed' | 'cancelled') {
-    if (targetStatus === 'cancelled' && !window.confirm(`确认取消“${schedule.performerStageName}”这场演出？顾客端将同步更新。`)) return
+  function transitionSchedule(schedule: ScheduleEntry, targetStatus: 'performing' | 'completed') {
     void run(`schedule-${schedule.id}-${targetStatus}`, () => api.postEndpoint(`/api/staff/schedules/${schedule.id}/status`, { targetStatus }, {
       idempotencyKey: operationIdempotency(`schedule-${targetStatus}`),
-    }), targetStatus === 'performing' ? '已切换为演出中' : targetStatus === 'completed' ? '已标记演出结束' : '演出场次已取消')
+    }), targetStatus === 'performing' ? '已切换为演出中' : '已标记演出结束')
+  }
+
+  function startPhase(schedule: ScheduleEntry) {
+    const phaseCode = phaseChoice[schedule.id] ?? 'band_live'
+    void run(`phase-${schedule.id}-start`, () => api.postEndpoint(
+      `/api/staff/customer-experience/schedules/${schedule.id}/performance-phases`,
+      { phaseCode, reason: '舞台授权人员确认现场阶段开始' },
+      { idempotencyKey: operationIdempotency('performance-phase-start') },
+    ), `已开始“${performancePhaseCodeLabel(phaseCode)}”，受阶段限制的推荐将立即按此筛选`)
+  }
+
+  function transitionPhase(event: PerformancePhaseEvent, action: 'end' | 'cancel') {
+    if (action === 'cancel' && !window.confirm('确认取消这条现场阶段记录？取消后受阶段限制的商品将停止推荐。')) return
+    void run(`phase-${event.publicId}-${action}`, () => api.postEndpoint(
+      `/api/staff/customer-experience/performance-phases/${event.publicId}/${action}`,
+      { reason: action === 'end' ? '舞台授权人员确认本阶段结束' : '舞台授权人员确认阶段记录取消' },
+      { idempotencyKey: operationIdempotency(`performance-phase-${action}`) },
+    ), action === 'end' ? '现场阶段已结束' : '现场阶段记录已取消')
   }
 
   function transitionSong(request: SongRequestEntry, action: 'confirm' | 'reject' | 'performed' | 'cancel') {
@@ -481,12 +522,28 @@ function PerformanceModule({ api, auth, view, performers, requests, onChanged }:
     {form === 'performer-edit' && selectedPerformer !== undefined && <form className="staff-module-form" onSubmit={(event) => void updatePerformer(event)}><header><strong>编辑演员资料</strong><small>演员编号 {selectedPerformer.code} 保持不变；停用后不再进入顾客可选排班。</small></header><label>演员<select value={catalogPerformerId} onChange={(event) => { setCatalogPerformerId(event.target.value); const next = performers.find((item) => item.id === event.target.value); if (next) { setEditPerformerName(next.stageName); setEditPerformerStatus(next.status === 'inactive' ? 'inactive' : 'active'); const value = next.profileSnapshot.genres; setEditPerformerGenres(Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string').join('，') : '') } }}>{performers.map((performer) => <option value={performer.id} key={performer.id}>{performer.stageName}</option>)}</select></label><label>艺名<input required maxLength={120} value={editPerformerName} onChange={(event) => setEditPerformerName(event.target.value)} /></label><label>风格标签<input value={editPerformerGenres} onChange={(event) => setEditPerformerGenres(event.target.value)} /></label><label>可用状态<select value={editPerformerStatus} onChange={(event) => setEditPerformerStatus(event.target.value as 'active' | 'inactive')}><option value="active">启用</option><option value="inactive">停用</option></select></label><button type="submit" disabled={busyKey !== null}>保存演员变更</button></form>}
     {form === 'songs' && <section className="staff-song-catalog"><header><div><strong>演员歌单</strong><small>可搜索、批量导入、逐首修改；点歌次数来自真实请求记录。</small></div><label>演员<select value={catalogPerformerId} onChange={(event) => setCatalogPerformerId(event.target.value)}>{performers.map((performer) => <option value={performer.id} key={performer.id}>{performer.stageName}</option>)}</select></label></header><div className="staff-song-search"><label><span className="sr-only">搜索歌名、编号或别名</span><input value={catalogSearch} onChange={(event) => setCatalogSearch(event.target.value)} placeholder="搜索歌名、编号或别名" /></label><button type="button" disabled={catalogLoading} onClick={() => void loadCatalog(catalogPerformerId, catalogSearch)}>{catalogLoading ? '搜索中' : '搜索'}</button></div><form className="staff-song-import" onSubmit={(event) => void importSongs(event)}><header><strong>批量导入</strong><small>每行格式：编号 | 歌名 | 别名1,别名2。编号和别名可留空。</small></header><textarea value={catalogRows} onChange={(event) => setCatalogRows(event.target.value)} rows={5} placeholder={'SONG-001 | 后来 | Hou Lai\n | 月亮代表我的心 | 月亮'} /><label>导入方式<select value={catalogMode} onChange={(event) => setCatalogMode(event.target.value as 'upsert' | 'replace')}><option value="upsert">追加或更新</option><option value="replace">整份替换</option></select></label><button type="submit" disabled={busyKey !== null}>开始导入</button></form>{editingSong !== null && <form className="staff-song-edit" onSubmit={(event) => void updateSong(event)}><strong>修改单曲</strong><label>编号<input value={editSongCode} onChange={(event) => setEditSongCode(event.target.value)} /></label><label>歌名<input required value={editSongTitle} onChange={(event) => setEditSongTitle(event.target.value)} /></label><label>别名<input value={editSongAliases} onChange={(event) => setEditSongAliases(event.target.value)} /></label><div><button type="submit" disabled={busyKey !== null}>保存</button><button type="button" onClick={() => setEditingSong(null)}>取消</button></div></form>}<div className="staff-song-catalog-list">{catalogSongs.length === 0 ? <p>{catalogLoading ? '正在读取歌单' : '暂无匹配歌曲'}</p> : catalogSongs.map((song) => <article key={song.id}><div><strong>{song.title}</strong><small>{song.code ?? '无编号'}{song.aliases.length > 0 ? ` · ${song.aliases.join('、')}` : ''}</small><span>点歌 {song.requestCount} 次 · 已演唱 {song.performedCount} 次</span></div><div><button type="button" onClick={() => beginSongEdit(song)}>修改</button><button type="button" className="is-danger" onClick={() => void deactivateSong(song)}>停用</button></div></article>)}</div></section>}
     {form === 'schedule' && <form className="staff-module-form" onSubmit={(event) => void createSchedule(event)}><header><strong>新增演出场次</strong><small>保存后立即进入当前排班并对顾客可见，请先核对时间。</small></header><label>演员<select required value={schedulePerformerId || performers[0]?.id || ''} onChange={(event) => setSchedulePerformerId(event.target.value)}><option value="">请选择</option>{performers.filter((performer) => performer.status === 'active').map((performer) => <option value={performer.id} key={performer.id}>{performer.stageName}</option>)}</select></label><label>开始时间<input required type="datetime-local" value={startsAt} onChange={(event) => setStartsAt(event.target.value)} /></label><label>结束时间<input required type="datetime-local" value={endsAt} onChange={(event) => setEndsAt(event.target.value)} /></label><button type="submit" disabled={busyKey !== null || performers.length === 0}>{busyKey === 'schedule-create' ? '保存中' : '确认保存并展示'}</button></form>}
+    {stalePhases.map((phase) => <div key={phase.publicId} className="staff-performance-phase staff-performance-phase-alert"><div><strong>发现未关闭的阶段记录</strong><small>{phase.performerStageName} · {performancePhaseCodeLabel(phase.phaseCode)}；对应场次已不在演出中，受限商品已停止推荐。</small></div>{canManagePhase && <div><button type="button" className="is-danger" disabled={busyKey !== null} onClick={() => transitionPhase(phase, 'cancel')}>取消过期记录</button></div>}</div>)}
     {schedules.length === 0 ? <EmptyState text="今日暂无演出排班" /> : <div className="staff-module-list">
-      {schedules.map((schedule) => <article key={schedule.id}>
-        <div><strong>{schedule.performerStageName}</strong><small>{formatTime(schedule.startsAt)} - {formatTime(schedule.endsAt)}</small></div>
-        <div className="staff-inline-actions"><em>{scheduleStatus(schedule.status)}</em>{canManage && schedule.status === 'scheduled' && <><button type="button" disabled={busyKey !== null} onClick={() => transitionSchedule(schedule, 'performing')}>开始</button><button type="button" className="is-danger" disabled={busyKey !== null} onClick={() => transitionSchedule(schedule, 'cancelled')}>取消</button></>}{canManage && schedule.status === 'performing' && <button type="button" disabled={busyKey !== null} onClick={() => transitionSchedule(schedule, 'completed')}>结束</button>}</div>
-      </article>)}
+      {schedules.map((schedule) => {
+        const activePhase = phases.find((phase) => phase.scheduleId === schedule.id && phase.status === 'active')
+        return <article key={schedule.id} className={schedule.status === 'performing' ? 'has-performance-phase' : undefined}>
+          <div><strong>{schedule.performerStageName}</strong><small>{formatTime(schedule.startsAt)} - {formatTime(schedule.endsAt)}</small></div>
+          <div className="staff-inline-actions"><em>{scheduleStatus(schedule.status)}</em>{canManage && schedule.status === 'scheduled' && <button type="button" disabled={busyKey !== null} onClick={() => transitionSchedule(schedule, 'performing')}>开始</button>}{canManage && schedule.status === 'performing' && activePhase === undefined && <button type="button" disabled={busyKey !== null} onClick={() => transitionSchedule(schedule, 'completed')}>结束整场</button>}</div>
+          {schedule.status === 'performing' && <div className="staff-performance-phase">
+            {activePhase === undefined
+              ? <>
+                <div><strong>推荐阶段尚未确认</strong><small>受阶段限制的商品当前不会进入推荐。</small></div>
+                {canManagePhase && <div><select aria-label="现场演出阶段" value={phaseChoice[schedule.id] ?? 'band_live'} onChange={(event) => setPhaseChoice((current) => ({ ...current, [schedule.id]: event.target.value as PerformancePhaseCode }))}><option value="before_show">演出前</option><option value="acoustic">不插电</option><option value="band_live">乐队现场</option><option value="intermission">中场</option><option value="after_show">演出后</option></select><button type="button" disabled={busyKey !== null} onClick={() => startPhase(schedule)}>开始阶段</button></div>}
+              </>
+              : <>
+                <div><strong>{performancePhaseCodeLabel(activePhase.phaseCode)}</strong><small>{formatTime(activePhase.startedAt)} 开始 · 已作为推荐硬门禁</small></div>
+                {canManagePhase && <div><button type="button" disabled={busyKey !== null} onClick={() => transitionPhase(activePhase, 'end')}>结束阶段</button><button type="button" className="is-danger" disabled={busyKey !== null} onClick={() => transitionPhase(activePhase, 'cancel')}>取消记录</button></div>}
+              </>}
+          </div>}
+        </article>
+      })}
     </div>}
+    <PerformanceRevisionPanel api={api} auth={auth} schedules={schedules} onChanged={onChanged} />
     {requests.length > 0 && <section className="staff-song-requests"><h3>点歌待办</h3>{requests.slice(0, 8).map((request) => <article key={request.id}><div><strong>{request.songTitle}</strong><span>{songStatus(request.status)}</span></div>{canManage && request.status === 'requested' && <div className="staff-song-actions"><label>报价（元）<input inputMode="decimal" value={quotes[request.id] ?? ''} onChange={(event) => setQuotes((current) => ({ ...current, [request.id]: event.target.value }))} placeholder="0" /></label><button type="button" disabled={busyKey !== null} onClick={() => transitionSong(request, 'confirm')}>接受</button><button type="button" className="is-danger" disabled={busyKey !== null} onClick={() => transitionSong(request, 'reject')}>拒绝</button></div>}{canManage && request.status === 'paid' && <button type="button" disabled={busyKey !== null} onClick={() => transitionSong(request, 'performed')}>已演唱</button>}{canManage && request.status === 'accepted' && <button type="button" className="is-danger" disabled={busyKey !== null} onClick={() => transitionSong(request, 'cancel')}>取消</button>}</article>)}</section>}
   </div>
 }
@@ -715,6 +772,36 @@ function scheduleEntry(value: unknown): ScheduleEntry | null {
     ? value as ScheduleEntry : null
 }
 
+function performancePhaseEvents(value: unknown): PerformancePhaseEvent[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((entry): PerformancePhaseEvent[] => {
+    if (!isRecord(entry)
+      || typeof entry.publicId !== 'string'
+      || typeof entry.scheduleId !== 'string'
+      || typeof entry.performerStageName !== 'string'
+      || !isPerformancePhaseCode(entry.phaseCode)
+      || entry.status !== 'active'
+      || typeof entry.startedAt !== 'string'
+      || !(entry.endedAt === null || typeof entry.endedAt === 'string')
+      || !(entry.cancelledAt === null || typeof entry.cancelledAt === 'string')) return []
+    return [{
+      publicId: entry.publicId,
+      scheduleId: entry.scheduleId,
+      performerStageName: entry.performerStageName,
+      phaseCode: entry.phaseCode,
+      status: entry.status,
+      startedAt: entry.startedAt,
+      endedAt: entry.endedAt,
+      cancelledAt: entry.cancelledAt,
+    }]
+  })
+}
+
+function isPerformancePhaseCode(value: unknown): value is PerformancePhaseCode {
+  return value === 'before_show' || value === 'acoustic' || value === 'band_live'
+    || value === 'intermission' || value === 'after_show'
+}
+
 function songRequests(value: unknown): SongRequestEntry[] {
   if (!Array.isArray(value)) return []
   return value.flatMap((entry) => isRecord(entry)
@@ -837,6 +924,12 @@ function formatDateTime(value: string): string {
 }
 function performancePhase(value: string | undefined): string {
   return ({ no_schedule: '今日暂无演出', upcoming: '演出尚未开始', live: '正在演出', between: '演出换场中', ended: '今日演出已结束' } as Record<string, string>)[value ?? ''] ?? '演出状态待确认'
+}
+function performancePhaseCodeLabel(value: PerformancePhaseCode): string {
+  return ({
+    before_show: '演出前', acoustic: '不插电', band_live: '乐队现场',
+    intermission: '中场', after_show: '演出后',
+  } as Record<PerformancePhaseCode, string>)[value]
 }
 function scheduleStatus(value: string): string { return ({ scheduled: '待演出', performing: '演出中', completed: '已结束', cancelled: '已取消' } as Record<string, string>)[value] ?? '状态待确认' }
 function songStatus(value: string): string { return ({ requested: '待确认', accepted: '已接受', rejected: '未接受', paid: '已收费', performed: '已演唱', cancelled: '已取消' } as Record<string, string>)[value] ?? '状态待确认' }

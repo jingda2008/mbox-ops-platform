@@ -77,6 +77,21 @@ integration('CustomerNotificationConsentRepository PostgreSQL integration', () =
       new CustomerNotificationConsentRepository(transaction).isGranted(customerId, 'wechat')
     ), { readOnly: true })).resolves.toBe(false)
 
+    const denied = await transactions.run(scope, (transaction) => (
+      new CustomerNotificationConsentRepository(transaction).record({
+        customerId, channel: 'wechat', purpose: 'transactional_service',
+        decision: 'denied', expectedVersion: 2, policyVersion: 'wechat-service-v2',
+        source: 'wechat_authorization', sourceReference: 'loyalty_accrual',
+        templateId: 'wechat-template-001', authorizationContext: 'loyalty_accrual',
+        platformResult: 'reject', platformEventReference: 'wx-event-reference-001',
+        actorType: 'customer', actorRef: 'integration-customer-session',
+      })
+    ))
+    expect(denied).toMatchObject({
+      decision: 'denied', consentVersion: 3, templateId: 'wechat-template-001',
+      authorizationContext: 'loyalty_accrual', platformResult: 'reject',
+    })
+
     const rows = await pool.query<{ purpose: string; decision: string; consent_version: number }>(`
       SELECT purpose, decision, consent_version
       FROM mbox.customer_notification_consents
@@ -86,6 +101,7 @@ integration('CustomerNotificationConsentRepository PostgreSQL integration', () =
     expect(rows.rows).toEqual([
       { purpose: 'transactional_service', decision: 'granted', consent_version: 1 },
       { purpose: 'transactional_service', decision: 'revoked', consent_version: 2 },
+      { purpose: 'transactional_service', decision: 'denied', consent_version: 3 },
     ])
     await expect(pool.query(`
       UPDATE mbox.customer_notification_consents

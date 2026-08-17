@@ -1,0 +1,19 @@
+<view class="page terms-page">
+  <state-panel wx:if="{{loading}}" type="loading" title="正在读取当前入会条款" />
+  <block wx:else>
+    <view wx:if="{{error}}" class="error-banner">{{error}}</view>
+    <state-panel wx:if="{{!terms}}" type="empty" title="当前入会条款尚未发布" message="新入会暂未开放；点单、预约和找回原会员不受影响" />
+    <block wx:else>
+      <view class="terms-head">
+        <text class="terms-kicker">M-BOX MEMBERSHIP TERMS</text>
+        <text class="terms-title">{{terms.title}}</text>
+        <text class="terms-version">第 {{terms.version}} 版 · 生效时间 {{terms.effectiveFrom}}</text>
+        <text class="terms-summary">{{terms.summary}}</text>
+      </view>
+      <view class="terms-content"><text user-select="true">{{terms.content}}</text></view>
+      <view wx:if="{{membership}}" class="terms-status">您已经是会员，本页仅供查看当前条款，不要求重复确认。</view>
+      <button wx:elif="{{allowEnrollment}}" class="accept-button" bindtap="acceptAndEnroll" loading="{{busy}}">我已阅读，同意并加入</button>
+      <text wx:if="{{allowEnrollment && !membership}}" class="terms-note">本次确认只用于会员加入；手机号、短信和微信服务通知不会同时开启。</text>
+    </block>
+  </block>
+</view>

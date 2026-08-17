@@ -22,7 +22,10 @@ interface EmployeeAuthorityRow extends Record<string, unknown> {
   approval_code: string
   maximum_amount_minor: string | number | null
   currency: string
-  rules: unknown
+  calculation_mode: 'amount_limit' | 'fixed_amount' | 'basis_points' | 'full_gift'
+  fixed_amount_minor: string | number | null
+  discount_basis_points: number | null
+  allow_full_gift: boolean
   role_ends_at: string | Date | null
   allowed: boolean
 }
@@ -32,7 +35,7 @@ interface BenefitAuthorityRow extends Record<string, unknown> {
   benefit_status: string
   value_amount_minor: string | number | null
   currency: string | null
-  benefit_snapshot: unknown
+  allowed_product_ids: string[]
   valid_from: string | Date
   valid_until: string | Date | null
 }
@@ -131,7 +134,10 @@ export class PostgresPricingAuthority implements PricingAuthorityPort {
         approval.approval_code,
         approval.amount_minor AS maximum_amount_minor,
         approval.currency,
-        approval.rules,
+        approval.calculation_mode,
+        approval.fixed_amount_minor,
+        approval.discount_basis_points,
+        approval.allow_full_gift,
         employee_role.ends_at AS role_ends_at,
         (
           NOT EXISTS (
@@ -219,9 +225,13 @@ export class PostgresPricingAuthority implements PricingAuthorityPort {
       throw new PricingAuthorizationDeniedError('Employee pricing currency does not match the order')
     }
     const maximumAmountMinor = asMoney(row.maximum_amount_minor, 'approval maximum amount')
-    const rules = asObject(row.rules, 'approval rules')
     const kind = approvalKind(row.approval_code)
-    const amountMinor = employeeAdjustment(kind, maximumAmountMinor, rules, basket.subtotalAmountMinor)
+    const amountMinor = employeeAdjustment(kind, maximumAmountMinor, {
+      calculationMode: row.calculation_mode,
+      fixedAmountMinor: row.fixed_amount_minor === null ? null : asMoney(row.fixed_amount_minor, 'fixed discount'),
+      discountBasisPoints: row.discount_basis_points,
+      allowFullGift: row.allow_full_gift,
+    }, basket.subtotalAmountMinor)
     const authorizationId = randomUUID()
     const expiresAt = row.role_ends_at === null ? null : toIso(row.role_ends_at)
 
@@ -237,7 +247,7 @@ export class PostgresPricingAuthority implements PricingAuthorityPort {
       employeeId: context.actor.employeeId,
       capability: row.approval_code,
       expiresAt,
-      snapshot: { calculation: adjustmentCalculation(rules), approvalLimitId: context.request.sourceId },
+      snapshot: { calculation: row.calculation_mode, approvalLimitId: context.request.sourceId },
     })
     return {
       authorized: true,
@@ -259,25 +269,37 @@ export class PostgresPricingAuthority implements PricingAuthorityPort {
     context: Readonly<PricingAuthorityContext>,
     basket: Readonly<Basket>,
   ): Promise<Readonly<PricingAuthorityDecision>> {
+    const lockedSession = await transaction.query<{ id: string }>(`
+      SELECT session.id
+      FROM mbox.table_sessions session
+      WHERE session.tenant_id=$1::uuid AND session.store_id=$2::uuid
+        AND session.id=$3::uuid AND session.status='open'
+      FOR UPDATE
+    `, [transaction.scope.tenantId, transaction.scope.storeId, context.tableSessionId])
+    if (!lockedSession.rows[0]) {
+      throw new PricingAuthorizationDeniedError('Table session is no longer open')
+    }
     const result = await transaction.query<BenefitAuthorityRow>(`
       SELECT benefit.benefit_type, benefit.status AS benefit_status,
-        benefit.value_amount_minor, benefit.currency, benefit.benefit_snapshot,
+        benefit.value_amount_minor, benefit.currency,
+        COALESCE((
+          SELECT array_agg(allowed.product_id::text ORDER BY allowed.product_id)
+          FROM mbox.benefit_allowed_products allowed
+          WHERE allowed.tenant_id=benefit.tenant_id AND allowed.store_id=benefit.store_id
+            AND allowed.benefit_id=benefit.id
+        ), '{}'::text[]) AS allowed_product_ids,
         benefit.valid_from, benefit.valid_until
       FROM mbox.benefits AS benefit
-      JOIN mbox.table_session_customers AS session_customer
-        ON session_customer.tenant_id = benefit.tenant_id
-       AND session_customer.store_id = benefit.store_id
-       AND session_customer.customer_id = benefit.customer_id
-       AND session_customer.table_session_id = $4::uuid
       JOIN mbox.table_sessions AS session
-        ON session.tenant_id = session_customer.tenant_id
-       AND session.store_id = session_customer.store_id
-       AND session.id = session_customer.table_session_id
+        ON session.tenant_id = benefit.tenant_id
+       AND session.store_id = benefit.store_id
+       AND session.id = $4::uuid
        AND session.status = 'open'
       WHERE benefit.tenant_id = $1::uuid
         AND benefit.store_id = $2::uuid
         AND benefit.id = $3::uuid
-      FOR UPDATE OF benefit, session
+        AND mbox.lock_active_table_customer_position(session.id,benefit.customer_id) IS NOT NULL
+      FOR UPDATE OF benefit
     `, [
       transaction.scope.tenantId,
       transaction.scope.storeId,
@@ -298,11 +320,10 @@ export class PostgresPricingAuthority implements PricingAuthorityPort {
       throw new PricingAuthorizationDeniedError('Benefit currency does not match the order')
     }
     const maximumAmountMinor = asMoney(row.value_amount_minor, 'benefit value')
-    const snapshot = asObject(row.benefit_snapshot, 'benefit snapshot')
     const { kind, amountMinor } = benefitAdjustment(
       row.benefit_type,
       maximumAmountMinor,
-      snapshot,
+      row.allowed_product_ids,
       basket,
     )
     const authorizationId = randomUUID()
@@ -451,10 +472,10 @@ async function reserveAuthorization(
         status, expires_at, authorization_snapshot
       ) VALUES (
         $1::uuid, $2::uuid, $3::uuid, $4::uuid,
-        $5, $6::uuid, $7, $8::bigint, $9::bigint, $10,
-        $11::uuid, $12,
-        CASE WHEN $5 = 'benefit' THEN $6::uuid ELSE NULL END,
-        CASE WHEN $5 = 'employee' THEN $6::uuid ELSE NULL END,
+        $5::text, $6::uuid, $7::text, $8::bigint, $9::bigint, $10::text,
+        $11::uuid, $12::text,
+        CASE WHEN $5::text = 'benefit' THEN $6::uuid ELSE NULL END,
+        CASE WHEN $5::text = 'employee' THEN $6::uuid ELSE NULL END,
         'reserved', $13::timestamptz, $14::jsonb
       )
       RETURNING id
@@ -488,25 +509,26 @@ async function reserveAuthorization(
 function employeeAdjustment(
   kind: PricingAuthorizationKind,
   maximumAmountMinor: number,
-  rules: Record<string, unknown>,
+  control: Readonly<{
+    calculationMode: EmployeeAuthorityRow['calculation_mode']
+    fixedAmountMinor: number | null
+    discountBasisPoints: number | null
+    allowFullGift: boolean
+  }>,
   subtotalAmountMinor: number,
 ): number {
   if (kind === 'gift') {
-    if (rules.allowFullGift !== true || maximumAmountMinor < subtotalAmountMinor) {
+    if (control.calculationMode !== 'full_gift' || !control.allowFullGift
+      || maximumAmountMinor < subtotalAmountMinor) {
       throw new PricingAuthorizationDeniedError('Role limit does not authorize this full gift')
     }
     return subtotalAmountMinor
   }
-  const fixed = rules.fixedAmountMinor
-  const basisPoints = rules.discountBasisPoints
   let amountMinor: number
-  if (fixed !== undefined) {
-    amountMinor = asMoney(fixed, 'fixed discount')
-  } else if (basisPoints !== undefined) {
-    if (!Number.isInteger(basisPoints) || (basisPoints as number) < 1 || (basisPoints as number) > 9_999) {
-      throw new PricingAuthorizationDeniedError('discountBasisPoints must be between 1 and 9999')
-    }
-    amountMinor = Math.floor(subtotalAmountMinor * (basisPoints as number) / 10_000)
+  if (control.calculationMode === 'fixed_amount' && control.fixedAmountMinor !== null) {
+    amountMinor = control.fixedAmountMinor
+  } else if (control.calculationMode === 'basis_points' && control.discountBasisPoints !== null) {
+    amountMinor = Math.floor(subtotalAmountMinor * control.discountBasisPoints / 10_000)
   } else {
     throw new PricingAuthorizationDeniedError(
       'Role approval rules must define fixedAmountMinor or discountBasisPoints',
@@ -521,7 +543,7 @@ function employeeAdjustment(
 function benefitAdjustment(
   benefitType: string,
   maximumAmountMinor: number,
-  snapshot: Record<string, unknown>,
+  allowedProductIds: readonly string[],
   basket: Readonly<Basket>,
 ): { kind: PricingAuthorizationKind; amountMinor: number } {
   if (benefitType === 'discount') {
@@ -539,21 +561,14 @@ function benefitAdjustment(
     }
   }
   if (benefitType === 'gift_product') {
-    const allowed = snapshot.allowedProductIds
-    if (!Array.isArray(allowed) || allowed.length === 0
-      || basket.productIds.some((productId) => !allowed.includes(productId))
+    if (allowedProductIds.length === 0
+      || basket.productIds.some((productId) => !allowedProductIds.includes(productId))
       || maximumAmountMinor < basket.subtotalAmountMinor) {
       throw new PricingAuthorizationDeniedError('Gift benefit does not cover every ordered product')
     }
     return { kind: 'gift', amountMinor: basket.subtotalAmountMinor }
   }
   throw new PricingAuthorizationDeniedError(`Benefit type is not valid for order pricing: ${benefitType}`)
-}
-
-function adjustmentCalculation(rules: Record<string, unknown>): string {
-  if (rules.fixedAmountMinor !== undefined) return 'fixed_amount'
-  if (rules.discountBasisPoints !== undefined) return 'basis_points'
-  return 'full_gift'
 }
 
 function approvalKind(approvalCode: string): PricingAuthorizationKind {
@@ -568,13 +583,6 @@ function asMoney(value: unknown, name: string): number {
     throw new PricingAuthorizationDeniedError(`${name} is not a valid amount`)
   }
   return normalized as number
-}
-
-function asObject(value: unknown, name: string): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new PricingAuthorizationDeniedError(`${name} must be an object`)
-  }
-  return value as Record<string, unknown>
 }
 
 function toIso(value: string | Date): string {

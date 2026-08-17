@@ -6,6 +6,10 @@ import { NormalizedCommandExecutor, type AuditActor } from './command-executor.j
 import { PaymentCommandService } from './payment-command-service.js'
 import type { PaymentCapabilityAuthorizationPort } from './payment-security-policy.js'
 import {
+  NormalizedProviderObservationAuthority,
+  VerifiedProviderObservationService,
+} from './provider-verification-observation.js'
+import {
   ScopedPostgresTransactionRunner,
   type PostgresPool,
 } from './transaction-runner.js'
@@ -21,6 +25,7 @@ const cashierId = 'ca500000-0000-4000-8000-000000000005'
 const areaId = 'ca500000-0000-4000-8000-000000000006'
 const productId = 'ca500000-0000-4000-8000-000000000007'
 const businessDate = '2026-08-12'
+let providerObservationRecorder: VerifiedProviderObservationService
 
 const allowAll: PaymentCapabilityAuthorizationPort = {
   assertEmployeeCapability: async () => undefined,
@@ -55,9 +60,12 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
   beforeAll(async () => {
     await runNormalizedMigrations(databaseUrl!)
     pool = new Pool({ connectionString: databaseUrl, max: 12 })
+    const runner = new ScopedPostgresTransactionRunner(asPool(pool))
+    providerObservationRecorder = new VerifiedProviderObservationService(runner)
     service = new PaymentCommandService(
-      new NormalizedCommandExecutor(new ScopedPostgresTransactionRunner(asPool(pool))),
+      new NormalizedCommandExecutor(runner),
       allowAll,
+      new NormalizedProviderObservationAuthority(),
     )
     await seedFoundation(pool)
   })
@@ -523,15 +531,35 @@ async function succeedPaymentCallback(
   payment: { publicId: string; amountMinor: number },
 ) {
   const transaction = randomReference('postar-payment')
+  const integrationRef = 'postar-test'
+  const occurredAt = '2026-08-12T12:00:00.000Z'
+  const providerSnapshot = { signatureVerified: true, tradeState: 'SUCCESS' }
+  const verifiedObservationId = await providerObservationRecorder.recordPayment({
+    scope: { tenantId, storeId },
+    provider: 'postar',
+    verificationKind: 'callback_signature',
+    providerEventId: randomReference('postar-payment-event'),
+    integrationRef,
+    paymentPublicId: payment.publicId,
+    providerTransactionId: transaction,
+    reportedAmountMinor: payment.amountMinor,
+    reportedCurrency: 'CNY',
+    status: 'succeeded',
+    settlementChannel: 'wechat',
+    occurredAt,
+    evidence: providerSnapshot,
+  })
   return (await service.recordSucceededCallback({
-    ...metadata(`pay-callback-${randomUUID()}`, { type: 'integration', ref: 'postar-test' }),
+    ...metadata(`pay-callback-${randomUUID()}`, { type: 'integration', ref: integrationRef }),
+    verifiedObservationId,
     paymentPublicId: payment.publicId,
     provider: 'postar',
     providerTransactionId: transaction,
     reportedAmountMinor: payment.amountMinor,
     reportedCurrency: 'CNY',
-    providerSnapshot: { signatureVerified: true, tradeState: 'SUCCESS' },
-    occurredAt: '2026-08-12T12:00:00.000Z',
+    settlementChannel: 'wechat',
+    providerSnapshot,
+    occurredAt,
   })).value
 }
 
@@ -621,21 +649,44 @@ async function recordProviderRefund(
     occurredAt?: string
   } = {},
 ) {
+  const integrationRef = 'postar-test'
+  const providerRefundId = override.providerRefundId ?? randomReference('postar-refund')
+  const originalProviderTransactionId = override.originalTransactionId ?? payment.providerTransactionId!
+  const reportedAmountMinor = override.amountMinor ?? refund.amountMinor
+  const reportedCurrency = override.currency ?? 'CNY'
+  const occurredAt = override.occurredAt ?? '2026-08-12T13:00:00.000Z'
+  const providerSnapshot = { signatureVerified: true, refundState: succeeded ? 'SUCCESS' : 'FAILED' }
+  const verifiedObservationId = await providerObservationRecorder.recordRefund({
+    scope: { tenantId, storeId },
+    provider: 'postar',
+    verificationKind: 'callback_signature',
+    providerEventId: randomReference('postar-refund-event'),
+    integrationRef,
+    refundPublicId: refund.publicId,
+    providerTransactionId: providerRefundId,
+    originalProviderTransactionId,
+    reportedAmountMinor,
+    reportedCurrency,
+    status: succeeded ? 'succeeded' : 'failed',
+    occurredAt,
+    evidence: providerSnapshot,
+  })
   return (await service.recordProviderRefundResult({
     ...metadata(
       `refund-result-${randomUUID()}`,
-      { type: 'integration', ref: 'postar-test' },
+      { type: 'integration', ref: integrationRef },
       override.businessDate,
     ),
+    verifiedObservationId,
     refundPublicId: refund.publicId,
     provider: 'postar',
-    providerRefundId: override.providerRefundId ?? randomReference('postar-refund'),
-    originalProviderTransactionId: override.originalTransactionId ?? payment.providerTransactionId!,
-    reportedAmountMinor: override.amountMinor ?? refund.amountMinor,
-    reportedCurrency: override.currency ?? 'CNY',
+    providerRefundId,
+    originalProviderTransactionId,
+    reportedAmountMinor,
+    reportedCurrency,
     succeeded,
-    providerSnapshot: { signatureVerified: true, refundState: succeeded ? 'SUCCESS' : 'FAILED' },
-    occurredAt: override.occurredAt ?? '2026-08-12T13:00:00.000Z',
+    providerSnapshot,
+    occurredAt,
   })).value
 }
 

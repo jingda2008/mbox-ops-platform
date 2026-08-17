@@ -13,6 +13,7 @@ import {
 import type { SubmittedCommerceResult } from './commerce-command-service.js'
 import type { FulfillmentStaffView } from './fulfillment-query-service.js'
 import type { KdsTask } from './kds-repository.js'
+import { FulfillmentCapacityUnavailableError } from './fulfillment-capacity-repository.js'
 import { OrderProductUnavailableError, type OrderItem } from './order-repository.js'
 import type {
   PostgresQueryResult,
@@ -173,7 +174,8 @@ function fixture(input: {
       }
       if (sql.includes('FROM mbox.role_data_scopes')) {
         return rows([{
-          scope_key: 'kds.station_codes', effect: 'include', scope_value: ['bar'],
+          scope_key: 'kds.station_codes', effect: 'include', value_kind: 'text_set',
+          boolean_value: null, text_value: null, text_values: ['bar'],
         }]) as PostgresQueryResult<Row>
       }
       if (sql.includes('FROM mbox.role_approval_limits')) {
@@ -184,7 +186,9 @@ function fixture(input: {
             approval_code: 'order.gift',
             amount_minor: String(input.giftLimitAmountMinor),
             currency: 'CNY',
-            rules: { allowFullGift: true },
+            calculation_mode: 'full_gift', fixed_amount_minor: null,
+            discount_basis_points: null, allow_full_gift: true,
+            requires_reason: true, requires_second_actor: false,
           }]) as PostgresQueryResult<Row>
       }
       return rows([]) as PostgresQueryResult<Row>
@@ -245,7 +249,10 @@ function fixture(input: {
         return rows(permissions.map((code) => ({ code, role_granted: true, override_granted: false, override_denied: false }))) as PostgresQueryResult<Row>
       }
       if (sql.includes('FROM mbox.role_data_scopes')) {
-        return rows([{ scope_key: 'kds.station_codes', effect: 'include', scope_value: ['bar'] }]) as PostgresQueryResult<Row>
+        return rows([{
+          scope_key: 'kds.station_codes', effect: 'include', value_kind: 'text_set',
+          boolean_value: null, text_value: null, text_values: ['bar'],
+        }]) as PostgresQueryResult<Row>
       }
       if (sql.includes('FROM mbox.staff_sessions AS session')) {
         return rows([{ id: staffSessionId }]) as PostgresQueryResult<Row>
@@ -821,6 +828,27 @@ describe('commerceKdsApiPlugin', () => {
     })
     expect(staleResponse.statusCode).toBe(409)
     expect(staleResponse.json()).toMatchObject({ error: { code: 'ORDER_PRODUCT_UNAVAILABLE' } })
+
+    const capacity = fixture({
+      commerceError: new FulfillmentCapacityUnavailableError(
+        'FULFILLMENT_CAPACITY_CONFIGURATION_INCOMPLETE',
+        '出品产能时间窗未完整配置，请联系值班经理',
+      ),
+    })
+    const capacityResponse = await capacity.app.inject({
+      method: 'POST',
+      url: '/api/commerce/orders',
+      headers: { 'x-assisted-order-context': assistedToken },
+      payload: {
+        tableSessionId,
+        idempotencyKey: 'order-capacity-incomplete',
+        items: [{ productId, quantity: 1 }],
+      },
+    })
+    expect(capacityResponse.statusCode).toBe(409)
+    expect(capacityResponse.json()).toMatchObject({ error: {
+      code: 'FULFILLMENT_CAPACITY_CONFIGURATION_INCOMPLETE',
+    } })
 
     const idempotency = fixture({
       commerceError: new IdempotencyConflictError('commerce.order.submit', 'order-conflict-0001'),

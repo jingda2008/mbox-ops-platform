@@ -1,6 +1,10 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { GuestSessionRecord, TableScanResult } from './guest-session-repository.js'
+import {
+  GuestCustomerAtAnotherTableError,
+  type GuestSessionRecord,
+  type TableScanResult,
+} from './guest-session-repository.js'
 import {
   GUEST_DEVICE_HEADER,
   GUEST_SESSION_COOKIE,
@@ -46,7 +50,13 @@ afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()))
 })
 
-function fixture(result: TableScanResult = { status: 'active', sessionToken, session }) {
+function fixture(
+  result: TableScanResult = { status: 'active', sessionToken, session },
+  overview: { guestCount: number; primaryServiceName: string | null } = {
+    guestCount: 4,
+    primaryServiceName: '李艳',
+  },
+) {
   const scanTable = vi.fn(async () => result)
   const authenticate = vi.fn(async () => session)
   const requestContext = new GuestRequestContextResolver(
@@ -58,6 +68,7 @@ function fixture(result: TableScanResult = { status: 'active', sessionToken, ses
     sessions: { scanTable },
     requestContext,
     businessClock: { current: async () => ({ businessDate: '2026-08-11' }) },
+    loadTableOverview: vi.fn(async () => overview),
   }
   const app = Fastify()
   apps.push(app)
@@ -101,6 +112,8 @@ describe('guestSessionApiPlugin', () => {
         businessDate: '2026-08-11',
         expiresAt: '2026-08-11T13:00:00.000Z',
         cartScope: publicCartScope,
+        guestCount: 4,
+        primaryServiceName: '李艳',
         capabilities: session.scopes,
       },
     })
@@ -157,6 +170,8 @@ describe('guestSessionApiPlugin', () => {
       data: {
         status: 'already_active',
         table: { code: 'VIP1', displayName: 'VIP 1' },
+        guestCount: 4,
+        primaryServiceName: '李艳',
       },
     })
   })
@@ -180,6 +195,8 @@ describe('guestSessionApiPlugin', () => {
         businessDate: '2026-08-11',
         expiresAt: '2026-08-11T13:00:00.000Z',
         cartScope: publicCartScope,
+        guestCount: 4,
+        primaryServiceName: '李艳',
         capabilities: session.scopes,
       },
     })
@@ -192,6 +209,20 @@ describe('guestSessionApiPlugin', () => {
       sessionToken,
       deviceFingerprint: deviceKey,
     })
+  })
+
+  it('returns null instead of inventing a primary service employee', async () => {
+    const value = fixture(undefined, { guestCount: 4, primaryServiceName: null })
+    const response = await value.app.inject({
+      method: 'GET',
+      url: '/api/guest/session',
+      headers: {
+        authorization: `Bearer ${sessionToken}`,
+        [GUEST_DEVICE_HEADER]: deviceKey,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.json().data).toMatchObject({ guestCount: 4, primaryServiceName: null })
   })
 
   it('rejects invalid QR credentials without reflecting them', async () => {
@@ -210,6 +241,24 @@ describe('guestSessionApiPlugin', () => {
       },
     })
     expect(JSON.stringify(response.json())).not.toContain(tableQrToken)
+  })
+
+  it('returns a private conflict when the customer is already active at another table',async () => {
+    const value=fixture()
+    value.scanTable.mockRejectedValueOnce(new GuestCustomerAtAnotherTableError())
+    const response=await value.app.inject({
+      method:'POST',url:'/api/guest/session/scan',
+      headers:{ [GUEST_DEVICE_HEADER]:deviceKey },payload:{ tableQrToken,deviceKey },
+    })
+    expect(response.statusCode).toBe(409)
+    expect(response.json()).toEqual({ error:{
+      code:'CUSTOMER_AT_OTHER_TABLE',
+      message:'当前身份已在其他桌次使用，请扫描您当前所在桌面的二维码，或联系服务人员调整桌位',
+    } })
+    const serialized=JSON.stringify(response.json())
+    expect(serialized).not.toContain('VIP1')
+    expect(serialized).not.toContain(tableSessionId)
+    expect(serialized).not.toContain(guestSessionId)
   })
 
   it('returns a retry time when fixed-table scans are rate limited', async () => {

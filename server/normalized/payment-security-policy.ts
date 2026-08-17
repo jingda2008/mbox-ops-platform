@@ -316,11 +316,9 @@ const PROVIDER_EVIDENCE_FIELDS = new Set([
   'refundState',
   'resultCode',
   'settledAt',
-  'signatureVerified',
   'terminalId',
   'tradeState',
   'transactionState',
-  'verificationAlgorithm',
 ])
 
 const CLIENT_PAYMENT_HINT_FIELDS = new Set([

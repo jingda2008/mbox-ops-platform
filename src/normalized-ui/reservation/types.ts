@@ -20,6 +20,7 @@ export interface DepositRule {
   mode: 'disabled' | 'flat' | 'minimum_spend_ratio'
   amountMinor: number
   ruleText: string | null
+  policyVersion: number
 }
 
 export interface ReservationTable {
@@ -89,6 +90,8 @@ export interface PublicReservation {
   note: string | null
   seatPreference: SeatPreference
   arrivalGraceEndsAt: string
+  reservationPolicyVersion: number
+  preferredScheduleId: string | null
   cancellationPolicy: Record<string, unknown>
 }
 

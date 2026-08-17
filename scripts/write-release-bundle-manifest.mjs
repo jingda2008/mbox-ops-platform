@@ -31,6 +31,8 @@ const deploymentScriptNames = [
   'prune-oss-images.sh',
   'release-state.sh',
   'normalize-runtime-env.sh',
+  'backup-postgres.sh',
+  'restore-postgres.sh',
 ]
 
 if (!/^[0-9a-f]{40}$/.test(releaseSha)) throw new Error('MBOX_BUNDLE_SHA must be a full commit SHA')

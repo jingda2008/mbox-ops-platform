@@ -60,7 +60,8 @@ describe('staff actions model', () => {
 
   it('keeps the table workspace quiet by default while search can still find any table', () => {
     const active = { ...table, id: 'active', code: 'W01', assignedToActor: false, activeSession: {
-      id: 'session-1', guestCount: 2, status: 'open' as const, openedAt: '2026-08-11T12:00:00.000Z', latestMood: null,
+      id: 'session-1', guestCount: 2, capacityAtOpen:4, status: 'open' as const,
+      openedAt: '2026-08-11T12:00:00.000Z', latestMood: null,
     } }
     const assigned = { ...table, id: 'assigned', code: 'VIP1', assignedToActor: true }
     const quiet = { ...table, id: 'quiet', code: 'A01', assignedToActor: false }

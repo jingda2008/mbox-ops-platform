@@ -21,7 +21,10 @@ audit_queue=${install_root}/observability/pending-release-events.jsonl
 audit_queue_lock=${install_root}/observability/pending-events.lock
 state_helper=${release_dir}/release-state.sh
 env_normalizer=${release_dir}/normalize-runtime-env.sh
+database_backupper=${release_dir}/backup-postgres.sh
+database_restorer=${release_dir}/restore-postgres.sh
 state_file=${release_dir}/release-state.json
+database_maintenance_env=${install_root}/secrets/database-maintenance.env
 
 case "${release_dir}" in
   /opt/mbox/releases/*) ;;
@@ -39,8 +42,11 @@ test -x "${audit_sender}"
 test -x "${public_verifier}"
 test -x "${state_helper}"
 test -x "${env_normalizer}"
+test -x "${database_backupper}"
+test -x "${database_restorer}"
 # shellcheck source=release-state.sh
 source "${state_helper}"
+release_lock_acquire "${install_root}" 0
 
 verify_deployment_scripts() {
   local count=0
@@ -53,7 +59,7 @@ verify_deployment_scripts() {
     test "$(sha256sum "${release_dir}/${script_name}" | awk '{print $1}')" = "${expected_sha}"
     count=$((count + 1))
   done < <(jq -er '.deploymentScripts | to_entries[] | [.value.file,.value.sha256] | @tsv' "${manifest}")
-  test "${count}" = 10
+  test "${count}" = 12
 }
 verify_deployment_scripts
 command -v flock >/dev/null
@@ -296,6 +302,230 @@ migration_changed=0
 if [ "${current_migration_digest}" != "${migration_digest}" ]; then
   migration_changed=1
 fi
+contract_migration=0
+if [ "${previous_schema_version}" -lt 96 ] && [ "${expected_schema_version}" -ge 96 ]; then
+  contract_migration=1
+fi
+candidate="mbox-candidate-${short_sha}"
+candidate_volume="mbox-data-${short_sha}-candidate"
+maintenance_container="mbox-maintenance-${short_sha}"
+maintenance_current_caddy="${release_dir}/.Caddyfile.contract-current"
+maintenance_candidate_caddy="${release_dir}/.Caddyfile.contract-maintenance"
+rollback_container=
+complete=0
+selected_backup=
+contract_database_url=
+contract_database_identity=
+contract_admin_database_url=
+backup_database_url=
+application_database_service=
+backup_database_service=
+admin_database_service=
+database_pgservice_file=
+database_pgpass_file=
+runtime_database_identity=
+candidate_database_identity=
+database_maintenance_loaded=0
+contract_restore_evidence=${release_dir}/contract-restore-source.json
+contract_restore_report=${release_dir}/contract-restore-report.json
+
+load_database_maintenance_secrets() {
+  [ "${database_maintenance_loaded}" = 0 ] || return 0
+  test -f "${database_maintenance_env}"
+  test "$(stat -c '%u:%a' "${database_maintenance_env}")" = 0:600
+  for key in APPLICATION_DATABASE_SERVICE BACKUP_DATABASE_SERVICE ADMIN_DATABASE_SERVICE \
+    PGSERVICEFILE PGPASSFILE; do
+    test "$(awk -F= -v expected="${key}" '$1 == expected { count += 1 } END { print count + 0 }' \
+      "${database_maintenance_env}")" = 1
+  done
+  test -z "$(awk -F= '
+    /^[[:space:]]*($|#)/ { next }
+    $1 != "APPLICATION_DATABASE_SERVICE" && $1 != "BACKUP_DATABASE_SERVICE"
+      && $1 != "ADMIN_DATABASE_SERVICE" && $1 != "PGSERVICEFILE" && $1 != "PGPASSFILE" { print NR }
+  ' "${database_maintenance_env}")"
+  application_database_service=$(sed -n 's/^APPLICATION_DATABASE_SERVICE=//p' "${database_maintenance_env}")
+  backup_database_service=$(sed -n 's/^BACKUP_DATABASE_SERVICE=//p' "${database_maintenance_env}")
+  admin_database_service=$(sed -n 's/^ADMIN_DATABASE_SERVICE=//p' "${database_maintenance_env}")
+  database_pgservice_file=$(sed -n 's/^PGSERVICEFILE=//p' "${database_maintenance_env}")
+  database_pgpass_file=$(sed -n 's/^PGPASSFILE=//p' "${database_maintenance_env}")
+  for service in "${application_database_service}" "${backup_database_service}" \
+    "${admin_database_service}"; do
+    [[ "${service}" =~ ^[a-zA-Z0-9_.-]{1,63}$ ]]
+  done
+  for secret_file in "${database_pgservice_file}" "${database_pgpass_file}"; do
+    case "${secret_file}" in /opt/mbox/secrets/*) ;; *) exit 1 ;; esac
+    test -f "${secret_file}"
+    test "$(stat -c '%u:%a' "${secret_file}")" = 0:600
+  done
+  ! grep -Eiq '^[[:space:]]*(password|passfile)[[:space:]]*=' "${database_pgservice_file}"
+  contract_database_url="service=${application_database_service}"
+  backup_database_url="service=${backup_database_service}"
+  contract_admin_database_url="service=${admin_database_service}"
+  database_maintenance_loaded=1
+}
+
+assert_backup_targets_application_database() {
+  local application_database_identity backup_database_identity running
+  running=$(docker inspect "${active_container}" --format '{{.State.Running}}')
+  if [ "${running}" = true ]; then
+    runtime_database_identity=$(docker exec -i "${active_container}" node <<'NODE'
+const {Client}=require('pg')
+const client=new Client({connectionString:process.env.DATABASE_URL})
+client.connect()
+  .then(()=>client.query(`SELECT current_database() || '|' ||
+    COALESCE(inet_server_addr()::text,'local') || '|' || current_setting('port') AS identity`))
+  .then((result)=>{process.stdout.write(result.rows[0].identity);return client.end()})
+  .catch((error)=>{console.error(error.message);process.exit(1)})
+NODE
+    )
+  fi
+  test -n "${runtime_database_identity}"
+  application_database_identity=$(PGSERVICEFILE="${database_pgservice_file}" \
+    PGPASSFILE="${database_pgpass_file}" psql -XAt --dbname="${contract_database_url}" \
+    --command="SELECT current_database() || '|' || COALESCE(inet_server_addr()::text,'local') || '|' || current_setting('port')")
+  backup_database_identity=$(PGSERVICEFILE="${database_pgservice_file}" \
+    PGPASSFILE="${database_pgpass_file}" PGOPTIONS='-c default_transaction_read_only=on' \
+    psql -XAt --dbname="${backup_database_url}" \
+    --command="SELECT current_database() || '|' || COALESCE(inet_server_addr()::text,'local') || '|' || current_setting('port')")
+  test -n "${application_database_identity}"
+  test "${application_database_identity}" = "${runtime_database_identity}"
+  test -n "${candidate_database_identity}"
+  test "${application_database_identity}" = "${candidate_database_identity}"
+  test "${backup_database_identity}" = "${application_database_identity}"
+}
+
+restore_contract_database_and_previous_app() {
+  local exit_code=$1
+  local rollback_ok=1
+  local current_state
+  local failed_container="mbox-failed-${short_sha}-$(date +%Y%m%d-%H%M%S)"
+  trap - ERR INT TERM
+  set +e
+
+  if [ -f "${release_dir}/.contract-write-resumed" ]; then
+    current_state=$(jq -r '.current // "unknown"' "${state_file}" 2>/dev/null)
+    if [ -f "${release_dir}/.cutover-started" ] \
+      && [ "${current_state}" = cutover_started ]; then
+      docker exec "${caddy_container}" caddy reload \
+        --config /tmp/Caddyfile.contract-maintenance --adapter caddyfile >/dev/null 2>&1
+      if [ "$(docker inspect "${active_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" = "${release_sha}" ]; then
+        docker update --restart=no "${active_container}" >/dev/null 2>&1
+        docker stop -t 20 "${active_container}" >/dev/null 2>&1
+      fi
+    elif docker inspect "${candidate}" >/dev/null 2>&1; then
+      docker update --restart=no "${candidate}" >/dev/null 2>&1
+      docker stop -t 20 "${candidate}" >/dev/null 2>&1
+      docker rm "${candidate}" >/dev/null 2>&1
+    fi
+    emit_release_audit rollback_failed error contract-cutover-forward-recovery-required
+    write_release_failure "${exit_code}" forward-recovery-required
+    exit "${exit_code}"
+  fi
+  if docker inspect "${candidate}" >/dev/null 2>&1; then
+    docker update --restart=no "${candidate}" >/dev/null 2>&1
+    docker stop -t 10 "${candidate}" >/dev/null 2>&1
+  fi
+  if [ "$(docker inspect "${active_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" = "${release_sha}" ]; then
+    docker update --restart=no "${active_container}" >/dev/null 2>&1
+    docker stop -t 20 "${active_container}" >/dev/null 2>&1
+    docker rename "${active_container}" "${failed_container}" >/dev/null 2>&1 || rollback_ok=0
+  else
+    docker update --restart=no "${active_container}" >/dev/null 2>&1
+    docker stop -t 20 "${active_container}" >/dev/null 2>&1
+  fi
+
+  if [ -f "${release_dir}/.database-write-started" ]; then
+    test -n "${contract_database_url}" || rollback_ok=0
+    test -n "${contract_database_identity}" || rollback_ok=0
+    if [ "${rollback_ok}" = 1 ]; then
+      DATABASE_SERVICE="${application_database_service}" \
+        ADMIN_DATABASE_SERVICE="${admin_database_service}" \
+        PGSERVICEFILE="${database_pgservice_file}" PGPASSFILE="${database_pgpass_file}" \
+        MBOX_EXPECTED_RESTORE_DATABASE="${contract_database_identity}" \
+        MBOX_EXPECTED_RESTORE_SCHEMA_VERSION="$(printf '%03d' "${previous_schema_version}")" \
+        MBOX_EXPECTED_RESTORE_MANIFEST="${previous_release_dir}/release-manifest.json" \
+        MBOX_EXPECTED_RESTORE_EVIDENCE="${contract_restore_evidence}" \
+        MBOX_RESTORE_REPORT="${contract_restore_report}" \
+        MBOX_CONFIRM_RESTORE=RESTORE \
+        "${database_restorer}" restore "${selected_backup}" >/dev/null 2>&1 || rollback_ok=0
+    fi
+    if [ "${rollback_ok}" = 1 ]; then
+      test "$(PGSERVICEFILE="${database_pgservice_file}" PGPASSFILE="${database_pgpass_file}" \
+        psql -XAt --dbname="${contract_database_url}" \
+        --command='SELECT schema_version FROM mbox.normalized_schema_metadata WHERE singleton=true' \
+        2>/dev/null)" = "$(printf '%03d' "${previous_schema_version}")" || rollback_ok=0
+    fi
+    if [ "${rollback_ok}" = 1 ]; then
+      current_state=$(jq -r '.current' "${state_file}")
+      release_state_transition "${state_file}" "${current_state}" database_restored >/dev/null 2>&1 \
+        || rollback_ok=0
+    fi
+  fi
+
+  if ! docker inspect "${active_container}" >/dev/null 2>&1 \
+    && [ -n "${rollback_container}" ] \
+    && [ "$(docker inspect "${rollback_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" = "${previous_release_sha}" ]; then
+    docker rename "${rollback_container}" "${active_container}" >/dev/null 2>&1 || rollback_ok=0
+  fi
+  test "$(docker inspect "${active_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" = "${previous_release_sha}" || rollback_ok=0
+  if [ "${rollback_ok}" = 1 ]; then
+    docker start "${active_container}" >/dev/null 2>&1 || rollback_ok=0
+    docker update --restart=unless-stopped "${active_container}" >/dev/null 2>&1 || rollback_ok=0
+  fi
+  if [ "${rollback_ok}" = 1 ]; then
+    previous_private_ready=$(docker exec "${active_container}" \
+      wget -q -O - http://127.0.0.1:8787/api/ready 2>/dev/null) || rollback_ok=0
+  fi
+  if [ "${rollback_ok}" = 1 ]; then
+    printf '%s' "${previous_private_ready}" | jq -e \
+      --arg sha "${previous_release_sha}" --argjson schema "${previous_schema_version}" \
+      '.status=="ready" and .commitSha==$sha and (.schemaVersion|tonumber)==$schema' \
+      >/dev/null 2>&1 || rollback_ok=0
+  fi
+  if [ "${rollback_ok}" = 1 ]; then
+    docker exec "${caddy_container}" caddy reload --config /etc/caddy/Caddyfile \
+      --adapter caddyfile >/dev/null 2>&1 || rollback_ok=0
+  fi
+  if [ "${rollback_ok}" = 1 ]; then
+    "${public_verifier}" "${public_url}" "${previous_release_sha}" \
+      "${previous_release_digest}" "${previous_schema_version}" \
+      "${previous_deployment_tier}" 10 "${previous_public_extended_identity}" >/dev/null 2>&1 \
+      || rollback_ok=0
+  fi
+  if [ "${rollback_ok}" = 1 ]; then
+    if docker inspect "${maintenance_container}" >/dev/null 2>&1; then
+      docker update --restart=no "${maintenance_container}" >/dev/null 2>&1
+      docker stop -t 5 "${maintenance_container}" >/dev/null 2>&1
+      docker rm "${maintenance_container}" >/dev/null 2>&1
+    fi
+  else
+    docker exec "${caddy_container}" caddy reload \
+      --config /tmp/Caddyfile.contract-maintenance --adapter caddyfile >/dev/null 2>&1 || true
+    if [ "$(docker inspect "${active_container}" --format '{{.State.Running}}' 2>/dev/null)" = true ]; then
+      docker update --restart=no "${active_container}" >/dev/null 2>&1
+      docker stop -t 20 "${active_container}" >/dev/null 2>&1
+    fi
+  fi
+  if [ "${rollback_ok}" = 1 ]; then
+    current_state=$(jq -r '.current' "${state_file}")
+    if [ "${current_state}" != rolled_back ]; then
+      release_state_transition "${state_file}" "${current_state}" rolled_back >/dev/null 2>&1 \
+        || rollback_ok=0
+    fi
+  fi
+  if [ "${rollback_ok}" = 1 ]; then
+    emit_release_audit rollback_succeeded warning contract-database-and-previous-release-restored
+    write_release_failure "${exit_code}" contract-database-and-previous-release-restored
+  else
+    emit_release_audit rollback_failed error contract-database-restore-unverified-writes-remain-drained
+    write_release_failure "${exit_code}" contract-database-restore-unverified-writes-remain-drained
+  fi
+  exit "${exit_code}"
+}
+
+rollback_contract_on_error() {
+  restore_contract_database_and_previous_app "${1:-$?}"
+}
 
 release_state_require "${state_file}" external_preflight_passed
 docker run --rm \
@@ -308,35 +538,129 @@ docker run --rm \
   "${image_tag}" \
   node dist-normalized/server/verify-normalized-migration-compatibility.js \
   > "${release_dir}/migration-preflight.json"
+candidate_database_identity=$(jq -er \
+  '.databaseIdentity | [.database,.serverAddress,.serverPort] | join("|")' \
+  "${release_dir}/migration-preflight.json")
+test -n "${candidate_database_identity}"
 release_state_transition "${state_file}" external_preflight_passed migration_compatible
 
 backup_path=
 release_state_require "${state_file}" migration_compatible
-recent_backup=$(find "${install_root}/backups" -type f -name 'mbox-*.dump' \
-  -mmin "-${backup_max_age_minutes}" -print -quit)
-if [ "${deployment_tier}" = production ] || [ "${migration_changed}" = 1 ] || [ -z "${recent_backup}" ]; then
-  backup_path=$("${install_root}/bin/backup-postgres.sh")
+recent_backup=
+if [ "${contract_migration}" = 1 ]; then
+  command -v pg_restore >/dev/null
+  command -v psql >/dev/null
+  load_database_maintenance_secrets
+  contract_database_identity=$(PGSERVICEFILE="${database_pgservice_file}" \
+    PGPASSFILE="${database_pgpass_file}" psql -XAt --dbname="${contract_database_url}" \
+    --command='SELECT current_database()')
+  test -n "${contract_database_identity}"
+  assert_backup_targets_application_database
+  trap 'rollback_contract_on_error $?' ERR
+  trap 'rollback_contract_on_error 130' INT
+  trap 'rollback_contract_on_error 143' TERM
+  if docker inspect "${maintenance_container}" >/dev/null 2>&1; then
+    docker update --restart=no "${maintenance_container}" >/dev/null
+    docker stop -t 5 "${maintenance_container}" >/dev/null 2>&1 || true
+    docker rm "${maintenance_container}" >/dev/null
+  fi
+  docker run -d --name "${maintenance_container}" --restart=no --network "${network}" \
+    --read-only --tmpfs /tmp:rw,noexec,nosuid,size=8m --security-opt no-new-privileges \
+    --cap-drop ALL "${image_tag}" node -e \
+    'require("node:http").createServer((_,response)=>{response.writeHead(503,{"content-type":"application/json","cache-control":"no-store"});response.end(JSON.stringify({status:"maintenance",reason:"table_location_contract_cutover"}))}).listen(8787,"0.0.0.0")' \
+    >/dev/null
+  maintenance_ip=$(docker inspect "${maintenance_container}" \
+    --format "{{with index .NetworkSettings.Networks \"${network}\"}}{{.IPAddress}}{{end}}")
+  [[ "${maintenance_ip}" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]
+  docker exec "${caddy_container}" cat /etc/caddy/Caddyfile > "${maintenance_current_caddy}"
+  grep -q 'mbox-app:8787' "${maintenance_current_caddy}"
+  sed "s/mbox-app:8787/${maintenance_ip}:8787/g" "${maintenance_current_caddy}" \
+    > "${maintenance_candidate_caddy}"
+  docker cp "${maintenance_candidate_caddy}" "${caddy_container}:/tmp/Caddyfile.contract-maintenance"
+  docker exec "${caddy_container}" caddy validate \
+    --config /tmp/Caddyfile.contract-maintenance --adapter caddyfile >/dev/null
+  docker exec "${caddy_container}" caddy reload \
+    --config /tmp/Caddyfile.contract-maintenance --adapter caddyfile >/dev/null
+  maintenance_response="${release_dir}/maintenance-response.json"
+  test "$(curl -sS --max-time 5 -o "${maintenance_response}" -w '%{http_code}' "${public_url}/api/ready")" = 503
+  jq -e '.status=="maintenance" and .reason=="table_location_contract_cutover"' \
+    "${maintenance_response}" >/dev/null
+  docker update --restart=no "${active_container}" >/dev/null
+  docker stop -t 30 "${active_container}" >/dev/null
+  test "$(docker inspect "${active_container}" --format '{{.State.Running}}')" = false
+  test -z "$(docker ps --filter \
+    "label=org.opencontainers.image.revision=${previous_release_sha}" --format '{{.ID}}')"
+  test "$(PGSERVICEFILE="${database_pgservice_file}" PGPASSFILE="${database_pgpass_file}" \
+    psql -XAt --dbname="${contract_database_url}" \
+    --command="SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid() AND backend_type='client backend'")" = 0
+  : > "${release_dir}/.writer-drained"
+  release_state_transition "${state_file}" migration_compatible writer_drained
+  assert_backup_targets_application_database
+  DATABASE_SERVICE="${backup_database_service}" \
+    PGSERVICEFILE="${database_pgservice_file}" PGPASSFILE="${database_pgpass_file}" \
+    MBOX_EXPECTED_RESTORE_DATABASE="${contract_database_identity}" \
+    "${database_restorer}" capture "${contract_restore_evidence}"
+  backup_path=$(DATABASE_SERVICE="${backup_database_service}" \
+    PGSERVICEFILE="${database_pgservice_file}" PGPASSFILE="${database_pgpass_file}" \
+    BACKUP_DIR="${install_root}/backups" \
+    "${database_backupper}")
+  test "$(PGSERVICEFILE="${database_pgservice_file}" PGPASSFILE="${database_pgpass_file}" \
+    psql -XAt --dbname="${contract_database_url}" \
+    --command="SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid() AND backend_type='client backend'")" = 0
+else
+  recent_backup=$(find "${install_root}/backups" -type f -name 'mbox-*.dump' \
+    -mmin "-${backup_max_age_minutes}" -print -quit)
+fi
+if [ "${contract_migration}" != 1 ] \
+  && { [ "${deployment_tier}" = production ] || [ "${migration_changed}" = 1 ] \
+    || [ -z "${recent_backup}" ]; }; then
+  load_database_maintenance_secrets
+  assert_backup_targets_application_database
+  backup_path=$(DATABASE_SERVICE="${backup_database_service}" \
+    PGSERVICEFILE="${database_pgservice_file}" PGPASSFILE="${database_pgpass_file}" \
+    BACKUP_DIR="${install_root}/backups" \
+    "${database_backupper}")
 fi
 selected_backup=${backup_path:-${recent_backup}}
 test -n "${selected_backup}"
 test -f "${selected_backup}"
+test -f "${selected_backup}.sha256"
 backup_stage=${release_dir}/oss-backup
 rm -rf "${backup_stage}"
 install -d -m 0700 "${backup_stage}"
 backup_name=$(basename "${selected_backup}")
 ln "${selected_backup}" "${backup_stage}/${backup_name}" 2>/dev/null \
   || cp "${selected_backup}" "${backup_stage}/${backup_name}"
+if [ "${contract_migration}" = 1 ]; then
+  install -m 0600 "${contract_restore_evidence}" \
+    "${backup_stage}/contract-restore-source.json"
+  install -m 0600 "${previous_release_dir}/release-manifest.json" \
+    "${backup_stage}/previous-release-manifest.json"
+fi
 (
   cd "${backup_stage}"
-  sha256sum "${backup_name}" > SHA256SUMS
+  if [ "${contract_migration}" = 1 ]; then
+    sha256sum "${backup_name}" contract-restore-source.json previous-release-manifest.json \
+      > SHA256SUMS
+  else
+    sha256sum "${backup_name}" > SHA256SUMS
+  fi
   sha256sum --check SHA256SUMS >/dev/null
 )
 MBOX_OSS_VERIFICATION_REPORT="${release_dir}/oss-backup-verification.json" \
   "${uploader}" "${backup_stage}" "mbox/backups/$(date -u +%Y-%m-%d)/${release_sha}"
-release_state_transition "${state_file}" migration_compatible backup_verified
+if [ "${contract_migration}" = 1 ]; then
+  release_state_transition "${state_file}" writer_drained post_drain_backup_verified
+else
+  release_state_transition "${state_file}" migration_compatible backup_verified
+fi
 
 if [ "${migration_changed}" = 1 ]; then
-  release_state_require "${state_file}" backup_verified
+  if [ "${contract_migration}" = 1 ]; then
+    release_state_require "${state_file}" post_drain_backup_verified
+  else
+    release_state_require "${state_file}" backup_verified
+  fi
   : > "${release_dir}/.database-write-started"
   docker run --rm \
     --env-file "${release_env}" \
@@ -344,7 +668,11 @@ if [ "${migration_changed}" = 1 ]; then
     "${image_tag}" \
     node dist-normalized/server/migrate-normalized.js
 fi
-release_state_transition "${state_file}" backup_verified migrated
+if [ "${contract_migration}" = 1 ]; then
+  release_state_transition "${state_file}" post_drain_backup_verified migrated
+else
+  release_state_transition "${state_file}" backup_verified migrated
+fi
 
 release_state_require "${state_file}" migrated
 : > "${release_dir}/.database-write-started"
@@ -364,11 +692,6 @@ docker run --rm \
     --catalog=/run/mbox-config/catalog.json
 release_state_transition "${state_file}" migrated provisioned
 
-candidate="mbox-candidate-${short_sha}"
-candidate_volume="mbox-data-${short_sha}-candidate"
-rollback_container=
-complete=0
-
 rollback_on_error() {
   local exit_code=${1:-$?}
   local rollback_ok=1
@@ -378,6 +701,9 @@ rollback_on_error() {
   [ "${complete}" = 1 ] && return
   trap - ERR INT TERM
   set +e
+  if [ "${contract_migration}" = 1 ]; then
+    restore_contract_database_and_previous_app "${exit_code}"
+  fi
   echo "deployment failed; restoring previous application" >&2
   emit_release_audit deployment_failed error automatic-rollback
   emit_release_audit rollback_started warning previous-release-restore-started
@@ -455,10 +781,19 @@ if docker inspect "${candidate}" >/dev/null 2>&1; then
 fi
 
 release_state_require "${state_file}" provisioned
+candidate_runtime_args=()
+if [ "${contract_migration}" = 1 ]; then
+  candidate_runtime_args+=(
+    --env MBOX_RUNTIME_ROLE=contract_candidate
+    --env MBOX_START_WORKERS=false
+    --env 'PGOPTIONS=-c default_transaction_read_only=on'
+  )
+fi
 docker run -d \
   --name "${candidate}" \
   --restart=no \
   --env-file "${release_env}" \
+  "${candidate_runtime_args[@]}" \
   --network "${network}" \
   --volume "${candidate_volume}:/data" \
   "${image_tag}" >/dev/null
@@ -482,13 +817,17 @@ printf '%s' "${candidate_ready}" | jq -e \
   --arg digest "${expected_digest}" \
   --arg schemaFlavor "normalized-core-v1" \
   --arg deploymentTier "${deployment_tier}" \
+  --argjson contractMigration "${contract_migration}" \
   --argjson schemaVersion "${expected_schema_version}" \
   '.status == "ready"
     and .schemaFlavor == $schemaFlavor
     and (.schemaVersion | tonumber) >= $schemaVersion
     and .commitSha == $sha
     and .releaseImageDigest == $digest
-    and .deploymentTier == $deploymentTier' >/dev/null
+    and .deploymentTier == $deploymentTier
+    and (if $contractMigration == 1
+      then .runtimeRole == "contract_candidate" and .writeEnabled == false
+      else .runtimeRole == "normal" and .writeEnabled == true end)' >/dev/null
 
 candidate_ip=$(docker inspect "${candidate}" --format "{{with index .NetworkSettings.Networks \"${network}\"}}{{.IPAddress}}{{end}}")
 [[ "${candidate_ip}" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]
@@ -504,6 +843,32 @@ verify_release_at() {
   "${expected_schema_version}" "${deployment_tier}" 15
 release_state_transition "${state_file}" candidate_healthy candidate_deep_verified
 
+if [ "${contract_migration}" = 1 ]; then
+  docker update --restart=no "${candidate}" >/dev/null
+  docker stop -t 20 "${candidate}" >/dev/null
+  docker rm "${candidate}" >/dev/null
+  : > "${release_dir}/.contract-write-resumed"
+  docker run -d \
+    --name "${candidate}" \
+    --restart=no \
+    --env-file "${release_env}" \
+    --network "${network}" \
+    --volume "${candidate_volume}:/data" \
+    "${image_tag}" >/dev/null
+  for _ in $(seq 1 60); do
+    health=$(docker inspect "${candidate}" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')
+    [ "${health}" = healthy ] && break
+    [ "${health}" = unhealthy ] && exit 1
+    sleep 2
+  done
+  test "$(docker inspect "${candidate}" --format '{{.State.Health.Status}}')" = healthy
+  full_candidate_ready=$(docker exec "${candidate}" wget -q -O - http://127.0.0.1:8787/api/ready)
+  printf '%s' "${full_candidate_ready}" | jq -e \
+    --arg sha "${release_sha}" --arg digest "${expected_digest}" \
+    '.status=="ready" and .commitSha==$sha and .releaseImageDigest==$digest
+      and .runtimeRole=="normal" and .writeEnabled==true' >/dev/null
+fi
+
 release_state_transition "${state_file}" candidate_deep_verified cutover_started
 : > "${release_dir}/.cutover-started"
 rollback_container="mbox-app-rollback-${short_sha}-$(date +%Y%m%d-%H%M%S)"
@@ -517,6 +882,11 @@ docker exec "${caddy_container}" \
   caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
 verify_release_at "${public_url}" 15
 release_state_transition "${state_file}" cutover_started cutover_verified
+if [ "${contract_migration}" = 1 ] && docker inspect "${maintenance_container}" >/dev/null 2>&1; then
+  docker update --restart=no "${maintenance_container}" >/dev/null
+  docker stop -t 5 "${maintenance_container}" >/dev/null
+  docker rm "${maintenance_container}" >/dev/null
+fi
 emit_release_audit cutover_succeeded info public-readiness-verified
 
 deployed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -537,6 +907,9 @@ jq -n \
   --arg storeConfigSha256 "${store_config_sha}" \
   --arg catalogConfigSha256 "${catalog_config_sha}" \
   --argjson previousIdentityComplete "${previous_public_extended_identity}" \
+  --argjson previousSchemaVersion "${previous_schema_version}" \
+  --argjson targetSchemaVersion "${expected_schema_version}" \
+  --argjson contractMigration "${contract_migration}" \
   '{
     schemaVersion: 1,
     deployedAt: $deployedAt,
@@ -552,6 +925,10 @@ jq -n \
     rollbackContainer: $rollbackContainer,
     previousReleaseDir: (if $previousReleaseDir == "" then null else $previousReleaseDir end),
     previousReleaseSha: (if $previousReleaseSha == "" then null else $previousReleaseSha end),
+    previousSchemaVersion: $previousSchemaVersion,
+    targetSchemaVersion: $targetSchemaVersion,
+    rollbackMode: (if $contractMigration == 1
+      then "forward_only_after_contract_cutover" else "application_image" end),
     previousIdentityComplete: $previousIdentityComplete,
     configuration: {storeSha256:$storeConfigSha256,catalogSha256:$catalogConfigSha256}
   }' \

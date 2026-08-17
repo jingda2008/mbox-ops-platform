@@ -1,3 +1,5 @@
+const RELEASE_CONFIG = require('./release-config.generated')
+
 const DEVELOPMENT_DEFAULTS = Object.freeze({
   mode: 'development',
   apiBaseUrl: 'http://127.0.0.1:8787',
@@ -9,6 +11,7 @@ const DEVELOPMENT_DEFAULTS = Object.freeze({
   allowDevDataFallback: true,
   requestTimeoutMs: 10000,
   wechatIdentityEnabled: false,
+  membershipInviteCooldownHours: 720,
   identityTenantId: '',
   identityStoreId: '',
   wechatAppId: '',
@@ -25,6 +28,7 @@ const DEPLOYMENT_DEFAULTS = Object.freeze({
   allowDevDataFallback: false,
   requestTimeoutMs: 10000,
   wechatIdentityEnabled: false,
+  membershipInviteCooldownHours: 720,
   identityTenantId: '',
   identityStoreId: '',
   wechatAppId: '',
@@ -53,7 +57,9 @@ function getRuntimeConfig() {
   }
   const stored = envVersion === 'develop' ? (wx.getStorageSync('mbox.runtime.config') || {}) : {}
   const defaults = envVersion === 'develop' ? DEVELOPMENT_DEFAULTS : DEPLOYMENT_DEFAULTS
-  const merged = Object.assign({}, defaults, compact(extConfig.mbox || extConfig), compact(stored))
+  const merged = Object.assign(
+    {}, defaults, compact(extConfig.mbox || extConfig), compact(stored), compact(RELEASE_CONFIG),
+  )
   merged.apiBaseUrl = String(merged.apiBaseUrl || '').replace(/\/$/, '')
   merged.isDevelopment = merged.mode === 'development'
   merged.envVersion = envVersion

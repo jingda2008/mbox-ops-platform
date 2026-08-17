@@ -384,7 +384,7 @@ function assistedProductToMenuProduct(product: AssistedOrderCatalogProduct): Men
   const snapshot = product.productSnapshot
   const recommendation = record(snapshot.recommendation)
   const amountMinor = Number(product.standardPrice?.amountMinor ?? 0)
-  const costAmount = integer(snapshot.costAmount, 0)
+  const costAmount = product.costAmountMinor ?? 0
   return {
     id: product.id,
     sku: product.code,
@@ -398,19 +398,19 @@ function assistedProductToMenuProduct(product: AssistedOrderCatalogProduct): Men
       note: component.note ?? undefined,
     })),
     substitutionProductIds: [],
-    recommendation: menuRecommendation(recommendation),
+    recommendation: menuRecommendation(recommendation, product),
     categoryId: product.categoryCode,
     categoryName: text(snapshot.categoryName) || categoryLabel(product.categoryCode),
     description: text(snapshot.description) || undefined,
     imageUrl: text(snapshot.imageUrl) || undefined,
     tags: stringArray(snapshot.tags),
-    sortOrder: integer(snapshot.sortOrder, 999),
+    sortOrder: product.menuSortOrder,
     soldOut: !product.isAvailable,
-    availableFrom: nullableText(snapshot.availableFrom),
-    availableUntil: nullableText(snapshot.availableUntil),
-    guestVisible: snapshot.guestVisible !== false,
+    availableFrom: product.availableFrom,
+    availableUntil: product.availableUntil,
+    guestVisible: product.guestVisible,
     requiresFulfillment: snapshot.requiresFulfillment !== false,
-    maxOrderQuantity: integer(snapshot.maxOrderQuantity, 50),
+    maxOrderQuantity: product.maxOrderQuantity,
     listPriceAmount: amountMinor,
     costAmount,
     stationId: product.fulfillmentStation,
@@ -419,23 +419,26 @@ function assistedProductToMenuProduct(product: AssistedOrderCatalogProduct): Men
   }
 }
 
-function menuRecommendation(value: Record<string, unknown>): MenuRecommendationConfig {
+function menuRecommendation(
+  value: Record<string, unknown>,
+  product: AssistedOrderCatalogProduct,
+): MenuRecommendationConfig {
   return {
-    enabled: value.enabled === true,
-    priority: integer(value.priority, 100),
+    enabled: product.recommendationEnabled,
+    priority: product.recommendationPriority,
     badge: text(value.badge),
     headline: text(value.headline),
     reason: text(value.reason),
-    minimumPartySize: integer(value.minimumPartySize, 1),
-    maximumPartySize: integer(value.maximumPartySize, 100),
-    sceneTags: stringArray(value.sceneTags).filter((item): item is MenuRecommendationConfig['sceneTags'][number] => ['date', 'brothers', 'besties', 'friends', 'business', 'celebration', 'unsure'].includes(item)),
-    intentTags: stringArray(value.intentTags).filter((item): item is MenuRecommendationConfig['intentTags'][number] => ['relaxed', 'energetic', 'ritual', 'unsure'].includes(item)),
-    tasteTags: stringArray(value.tasteTags).filter((item): item is MenuRecommendationConfig['tasteTags'][number] => ['refreshing', 'layered', 'strong', 'any'].includes(item)),
-    dwellTags: stringArray(value.dwellTags).filter((item): item is MenuRecommendationConfig['dwellTags'][number] => ['one_set', 'stay_longer', 'no_rush'].includes(item)),
-    singleWaveEligible: value.singleWaveEligible !== false,
-    expectedPrepMinutes: integer(value.expectedPrepMinutes, 8),
-    holdMinutes: integer(value.holdMinutes, 10),
-    upgradeProductId: typeof value.upgradeProductId === 'string' ? value.upgradeProductId : null,
+    minimumPartySize: product.recommendationMinGuests,
+    maximumPartySize: product.recommendationMaxGuests,
+    sceneTags: product.recommendationSceneTags as MenuRecommendationConfig['sceneTags'],
+    intentTags: product.recommendationIntentTags as MenuRecommendationConfig['intentTags'],
+    tasteTags: product.recommendationTasteTags as MenuRecommendationConfig['tasteTags'],
+    dwellTags: product.recommendationDwellTags as MenuRecommendationConfig['dwellTags'],
+    singleWaveEligible: product.recommendationSingleWaveEligible,
+    expectedPrepMinutes: product.recommendationExpectedPrepMinutes,
+    holdMinutes: product.recommendationHoldMinutes,
+    upgradeProductId: product.recommendationUpgradeProductId,
   }
 }
 
@@ -447,10 +450,6 @@ function text(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
 
-function nullableText(value: unknown): string | null {
-  return typeof value === 'string' && value.length > 0 ? value : null
-}
-
 function integer(value: unknown, fallback: number): number {
   return Number.isSafeInteger(value) ? Number(value) : fallback
 }
@@ -460,7 +459,7 @@ function stringArray(value: unknown): string[] {
 }
 
 function beverageFamily(value: unknown): MenuProduct['beverageFamily'] {
-  return typeof value === 'string' && ['none', 'cocktail', 'beer', 'wine', 'sparkling', 'spirits', 'non_alcoholic'].includes(value)
+  return typeof value === 'string' && ['none', 'cocktail', 'beer', 'wine', 'sparkling', 'spirits', 'non_alcoholic', 'mixed'].includes(value)
     ? value as MenuProduct['beverageFamily']
     : 'none'
 }

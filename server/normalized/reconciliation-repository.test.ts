@@ -82,7 +82,7 @@ function entryRow(): Record<string, unknown> {
     currency: 'CNY',
     business_date: '2026-08-11',
     occurred_at: '2026-08-11T12:00:00.000Z',
-    evidence_snapshot: { signatureVerified: true },
+    evidence_snapshot: {},
     created_at: '2026-08-11T12:00:01.000Z',
   }
 }

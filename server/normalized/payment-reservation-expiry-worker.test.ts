@@ -55,6 +55,9 @@ class ExpiryClient implements PostgresPoolClient {
     if (normalized.startsWith('SELECT inventory_item_id FROM mbox.inventory_balances')) {
       return result([{ inventory_item_id: inventoryItemId }])
     }
+    if (normalized.startsWith('SELECT mbox.release_reserved_order_fulfillment_capacity')) {
+      return result([{ affected_count: 0 }])
+    }
     if (normalized.startsWith('UPDATE mbox.inventory_balances')) return result([{}])
     if (normalized.startsWith('UPDATE mbox.inventory_order_reservations')) return result([{}])
     if (normalized.startsWith('UPDATE mbox.orders')) return result([{}])

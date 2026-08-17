@@ -8,6 +8,7 @@ import { NormalizedCommandExecutor } from './command-executor.js'
 import { CustomerRepository } from './customer-repository.js'
 import { StaffAccessRepository } from './staff-access-repository.js'
 import type { ScopedTransaction, StoreScope } from './transaction-runner.js'
+import { lockBoundGuestTablePosition } from './guest-table-authority.js'
 
 export type BenefitType = 'gift_product' | 'discount' | 'credit' | 'access' | 'other'
 export type BenefitStatus = 'issued' | 'reserved' | 'redeemed' | 'expired' | 'revoked'
@@ -70,6 +71,7 @@ export interface IssueBenefitInput {
   valueAmountMinor?: number | null
   currency?: string | null
   quantity?: number
+  allowedProductIds?: readonly string[]
   benefitSnapshot?: JsonObject
   validFrom?: string
   validUntil?: string | null
@@ -336,13 +338,35 @@ export class BenefitRepository {
       input.issuanceIdempotencyKey,
       input.issuanceFingerprint,
     ])
-    return mapBenefit(requireOne(inserted, 'Issuing a benefit'))
+    const benefit = requireOne(inserted, 'Issuing a benefit')
+    const allowedProductIds = [...new Set(input.allowedProductIds ?? [])].toSorted()
+    if (allowedProductIds.length > 0) {
+      const allowed = await this.transaction.query(`
+        INSERT INTO mbox.benefit_allowed_products (
+          tenant_id, store_id, benefit_id, product_id
+        )
+        SELECT $1::uuid, $2::uuid, $3::uuid, product.id
+        FROM mbox.products product
+        WHERE product.tenant_id=$1::uuid AND product.store_id=$2::uuid
+          AND product.id=ANY($4::uuid[]) AND product.status='active'
+        ON CONFLICT DO NOTHING
+      `, [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        benefit.id,
+        allowedProductIds,
+      ])
+      if (allowed.rowCount !== allowedProductIds.length) {
+        throw new TypeError('allowedProductIds contains an unavailable product')
+      }
+    }
+    return mapBenefit(benefit)
   }
 
-  async reserve(input: Readonly<ReserveBenefitInput>): Promise<BenefitReservation> {
+  async reserve(input: Readonly<ReserveBenefitInput>,guestActorRef?: string): Promise<BenefitReservation> {
     validateReserve(input)
     const canonical = await new CustomerRepository(this.transaction).resolveCanonical(input.customerId)
-    await this.assertCurrentTableCustomer(canonical.id, input.tableSessionId)
+    await this.assertCurrentTableCustomer(canonical.id, input.tableSessionId,guestActorRef)
     await this.lockIdempotency(`benefit-reserve:${input.reservationIdempotencyKey}`)
     const existing = await this.transaction.query<ReservationRow>(`${reservationSelectSql()}
       AND reservation.reservation_idempotency_key = $3 LIMIT 1
@@ -392,10 +416,11 @@ export class BenefitRepository {
   async redeem(
     input: Readonly<RedeemBenefitInput>,
     giftOrders?: GiftOrderPort,
+    guestActorRef?: string,
   ): Promise<BenefitRedemption> {
     validateRedeem(input)
     const canonical = await new CustomerRepository(this.transaction).resolveCanonical(input.customerId)
-    await this.assertCurrentTableCustomer(canonical.id, input.tableSessionId)
+    await this.assertCurrentTableCustomer(canonical.id, input.tableSessionId,guestActorRef)
     await this.lockIdempotency(`benefit-redeem:${input.redemptionIdempotencyKey}`)
     const existing = await this.transaction.query<RedemptionRow>(`${redemptionSelectSql()}
       AND redemption.redemption_idempotency_key = $3 LIMIT 1
@@ -500,10 +525,12 @@ export class BenefitRepository {
     return mapRedemption(requireOne(inserted, 'Redeeming a benefit'))
   }
 
-  async cancelReservation(input: Readonly<CancelBenefitReservationInput>): Promise<BenefitReservation> {
+  async cancelReservation(
+    input: Readonly<CancelBenefitReservationInput>,guestActorRef?: string,
+  ): Promise<BenefitReservation> {
     validateCancel(input)
     const canonical = await new CustomerRepository(this.transaction).resolveCanonical(input.customerId)
-    await this.assertCurrentTableCustomer(canonical.id, input.tableSessionId)
+    await this.assertCurrentTableCustomer(canonical.id, input.tableSessionId,guestActorRef)
     const reservation = await this.selectReservation(input.benefitReservationId, true)
     if (reservation === null) throw new BenefitReservationNotFoundError(input.benefitReservationId)
     if (reservation.customer_id !== canonical.id || reservation.table_session_id !== input.tableSessionId) {
@@ -574,32 +601,19 @@ export class BenefitRepository {
     }
   }
 
-  private async assertCurrentTableCustomer(canonicalCustomerId: string, tableSessionId: string): Promise<void> {
-    const result = await this.transaction.query(`
-      WITH RECURSIVE family(id) AS (
-        SELECT $4::uuid
-        UNION ALL
-        SELECT customer.id
-        FROM mbox.customers AS customer
-        JOIN family ON customer.merged_into_customer_id = family.id
-        WHERE customer.tenant_id = $1::uuid AND customer.store_id = $2::uuid
-      )
-      SELECT membership.id
-      FROM mbox.table_session_customers AS membership
-      JOIN mbox.table_sessions AS session
-        ON session.tenant_id = membership.tenant_id AND session.store_id = membership.store_id
-       AND session.id = membership.table_session_id AND session.status IN ('open', 'closing')
-      WHERE membership.tenant_id = $1::uuid AND membership.store_id = $2::uuid
-        AND membership.table_session_id = $3::uuid
-        AND membership.customer_id IN (SELECT id FROM family)
-      FOR UPDATE OF membership, session
-    `, [
-      this.transaction.scope.tenantId,
-      this.transaction.scope.storeId,
-      tableSessionId,
-      canonicalCustomerId,
-    ])
-    if (result.rowCount !== 1) throw new BenefitOwnershipError()
+  private async assertCurrentTableCustomer(
+    canonicalCustomerId: string,tableSessionId: string,guestActorRef?: string,
+  ): Promise<void> {
+    if (guestActorRef!==undefined) {
+      if (!await lockBoundGuestTablePosition(this.transaction,{
+        tableSessionId,customerId:canonicalCustomerId,actorRef:guestActorRef,
+      })) throw new BenefitOwnershipError()
+      return
+    }
+    const result=await this.transaction.query<{ participation_id: string | null }>(`
+      SELECT mbox.lock_active_table_customer_position($1::uuid,$2::uuid) AS participation_id
+    `,[tableSessionId,canonicalCustomerId])
+    if (result.rows[0]?.participation_id===null) throw new BenefitOwnershipError()
   }
 
   private async isSameCustomerFamily(ownerId: string, canonicalId: string): Promise<boolean> {
@@ -661,14 +675,16 @@ export class BenefitCommandService {
 
   reserve(input: Readonly<ReserveBenefitCommand>): Promise<CommandExecution<BenefitReservation>> {
     return this.executeBenefit('benefit.reserve', input, reservationCodec, async (repository) => ({
-      result: await repository.reserve(input),
+      result: await repository.reserve(input,input.actor.type==='guest' ? input.actor.ref : undefined),
       action: 'benefit.reserved',
     }))
   }
 
   redeem(input: Readonly<RedeemBenefitCommand>): Promise<CommandExecution<BenefitRedemption>> {
     return this.executeBenefit('benefit.redeem', input, redemptionCodec, async (repository) => ({
-      result: await repository.redeem(input, this.giftOrders),
+      result: await repository.redeem(
+        input,this.giftOrders,input.actor.type==='guest' ? input.actor.ref : undefined,
+      ),
       action: 'benefit.redeemed',
     }))
   }
@@ -681,7 +697,9 @@ export class BenefitCommandService {
       idempotencyKey: input.cancellationIdempotencyKey,
       requestFingerprint: input.cancellationFingerprint,
     }, reservationCodec, async (repository) => ({
-      result: await repository.cancelReservation(input),
+      result: await repository.cancelReservation(
+        input,input.actor.type==='guest' ? input.actor.ref : undefined,
+      ),
       action: 'benefit.reservation-cancelled',
     }))
   }
@@ -894,6 +912,16 @@ function validateIssue(input: Readonly<IssueBenefitInput>): void {
   validateCommandKeys(input.issuanceIdempotencyKey, input.issuanceFingerprint)
   validateMoney(input.valueAmountMinor, input.currency)
   validateQuantity(input.quantity ?? 1)
+  const allowedProductIds = [...new Set(input.allowedProductIds ?? [])]
+  if (allowedProductIds.some((productId) => !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(productId))) {
+    throw new TypeError('allowedProductIds must contain UUID product ids')
+  }
+  if (input.benefitType === 'gift_product' && allowedProductIds.length === 0) {
+    throw new TypeError('gift_product benefit requires allowedProductIds')
+  }
+  if (input.benefitType !== 'gift_product' && allowedProductIds.length > 0) {
+    throw new TypeError('allowedProductIds is only valid for gift_product benefits')
+  }
 }
 
 function validateReserve(input: Readonly<ReserveBenefitInput>): void {

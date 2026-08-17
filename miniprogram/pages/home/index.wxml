@@ -1,33 +1,79 @@
 <view class="page home-page">
-  <view class="top-band home-hero">
-    <view class="brand-row"><view class="brand"><view class="brand-mark">M</view><text>M-BOX</text></view><text wx:if="{{isDevelopment}}" class="dev-badge">开发模式</text></view>
-    <view class="table-identity">
-      <text class="table-identity__label">{{canEnter ? '今晚已连接' : '陆家嘴现场音乐与社交'}}</text>
-      <text class="table-identity__name">{{canEnter ? table.displayName : '把今晚提前安排好'}}</text>
-      <text class="table-identity__meta">{{canEnter ? '点单、桌边服务和演出互动都从本桌开始' : '预约、活动和会员权益无需桌码即可使用'}}</text>
+  <view class="home-hero">
+    <view class="brand-row">
+      <view class="brand"><view class="brand-mark">M</view><text>M-BOX</text></view>
+      <text wx:if="{{isDevelopment}}" class="dev-badge">开发模式</text>
+    </view>
+    <view class="hero-content">
+      <text class="hero-kicker">LIVE MUSIC · SOCIAL NIGHT</text>
+      <text class="hero-title">{{visitState === 'active' ? table.displayName : visitState === 'waiting' ? table.displayName : '今晚，刚刚好'}}</text>
+      <text class="hero-copy">{{visitState === 'active' ? ('本桌已连接 · ' + serviceOwner) : visitState === 'waiting' ? '桌码已识别，开台后菜单会自动出现' : '现场音乐、精心酒水与刚好的相遇'}}</text>
     </view>
   </view>
-  <state-panel wx:if="{{loading}}" type="loading" title="正在连接 M-BOX" />
+
+  <state-panel wx:if="{{loading}}" type="loading" title="正在准备今晚" />
   <block wx:else>
-    <view wx:if="{{warning}}" class="warning">{{warning}}</view><view wx:if="{{error}}" class="error-banner">{{error}}</view>
-    <view wx:if="{{canEnter}}" class="section onsite-section">
-      <view class="section-title"><text>本桌今晚</text><text class="section-link">服务已连接</text></view>
-      <button class="primary-portal" data-url="/pages/order/index" bindtap="openTab"><text class="primary-portal__label">点单与桌边服务</text><text class="primary-portal__copy">按人数和今晚目的推荐组合，付款前可看到适用的升级选择</text><text class="primary-portal__action">开始安排</text></button>
-      <view class="compact-grid">
-        <button data-url="/pages/account/index" bindtap="openPage"><text>订单与桌账</text><text>查看出品状态</text></button>
-        <button data-url="/pages/songs/index" bindtap="openPage"><text>现场点歌</text><text>按今晚排班提交</text></button>
-        <button data-url="/pages/complaint/index" bindtap="openPage"><text>经理协助</text><text>问题由值班经理接管</text></button>
-        <button data-url="/pages/profile/index" bindtap="openTab"><text>会员与偏好</text><text>让下次更懂你</text></button>
-      </view>
+    <view wx:if="{{warning}}" class="warning">{{warning}}</view>
+    <view wx:if="{{error}}" class="error-banner">{{error}}</view>
+
+    <view wx:if="{{visitState === 'waiting'}}" class="state-card state-card--waiting">
+      <view class="state-card__icon">···</view>
+      <view class="state-card__body"><text class="state-card__eyebrow">等待开台</text><text class="state-card__title">{{table.displayName}}</text><text class="state-card__copy">{{connectionMessage}}</text></view>
+      <button class="state-card__action" bindtap="retryTable">刷新</button>
     </view>
-    <view wx:else class="section prearrival-section">
-      <view class="section-title"><text>来店前</text><text class="section-link">先做高频决定</text></view>
-      <button class="primary-portal reservation-portal" data-url="/pages/reservations/index" bindtap="openTab"><text class="primary-portal__label">预约今晚</text><text class="primary-portal__copy">确定人数、时间和座位倾向，费用与定金规则提交前看清</text><text class="primary-portal__action">去预约</text></button>
-      <view class="compact-grid">
-        <button data-url="/pages/community/index" bindtap="openTab"><text>超嗨部落</text><text>{{upcomingActivity ? upcomingActivity.title : '查看最新活动'}}</text></button>
-        <button data-url="/pages/profile/index" bindtap="openTab"><text>{{membership ? '我的会员' : '加入会员'}}</text><text>{{membership ? ('积分 ' + membership.pointsBalance) : '保留偏好与权益'}}</text></button>
+
+    <block wx:elif="{{visitState === 'active'}}">
+      <view class="onsite-summary">
+        <view><text class="summary-value">{{table.displayName}}</text><text class="summary-label">当前桌位</text></view>
+        <view><text class="summary-value">{{guestCountText}}</text><text class="summary-label">本桌人数</text></view>
+        <view><text class="summary-value">{{serviceOwner}}</text><text class="summary-label">服务负责</text></view>
       </view>
-    </view>
-    <navigator class="footer-link" url="/pages/privacy/index">隐私说明与数据使用</navigator>
+
+      <button class="primary-experience" data-url="/pages/order/index" bindtap="openTab">
+        <view><text class="primary-experience__kicker">今晚从这里开始</text><text class="primary-experience__title">点单与付款</text><text class="primary-experience__copy">实时菜单、三档推荐与付款前升级</text></view>
+        <text class="primary-experience__arrow">→</text>
+      </button>
+
+      <view wx:if="{{performance}}" class="performance-card">
+        <image wx:if="{{performance.imageUrl}}" src="{{performance.imageUrl}}" mode="aspectFill" />
+        <view><text class="performance-state">{{performance.stateText}}</text><text class="performance-name">{{performance.performer}}</text><text class="performance-time">{{performance.timeText}}</text></view>
+      </view>
+
+      <view class="section compact-section">
+        <view class="section-title"><text>本桌快捷服务</text><text class="section-link">状态实时同步</text></view>
+        <view class="action-grid">
+          <button data-url="/pages/service/index" bindtap="openPage"><text class="action-icon">水</text><text>桌边服务</text></button>
+          <button data-url="/pages/status/index" bindtap="openPage"><text class="action-icon">进</text><text>处理进度</text></button>
+          <button data-url="/pages/songs/index" bindtap="openPage"><text class="action-icon">歌</text><text>现场点歌</text></button>
+          <button data-url="/pages/account/index" bindtap="openPage"><text class="action-icon">账</text><text>订单桌账</text></button>
+        </view>
+      </view>
+    </block>
+
+    <block wx:else>
+      <view wx:if="{{upcomingReservation}}" class="state-card reservation-state">
+        <view class="state-card__body"><text class="state-card__eyebrow">我的预约</text><text class="state-card__title">{{upcomingReservation.title}}</text><text class="state-card__copy">{{upcomingReservation.statusText}}</text></view>
+        <button class="state-card__action" data-url="/pages/reservations/index" bindtap="openTab">查看</button>
+      </view>
+      <button wx:else class="primary-experience reservation-experience" data-url="/pages/reservations/index" bindtap="openTab">
+        <view><text class="primary-experience__kicker">提前安排</text><text class="primary-experience__title">预约今晚</text><text class="primary-experience__copy">先选时间人数，再看演出与位置</text></view><text class="primary-experience__arrow">→</text>
+      </button>
+
+      <view wx:if="{{performance}}" class="section">
+        <view class="section-title"><text>今晚现场</text><text class="section-link">{{performance.stateText}}</text></view>
+        <view class="performance-card performance-card--public">
+          <image wx:if="{{performance.imageUrl}}" src="{{performance.imageUrl}}" mode="aspectFill" />
+          <view><text class="performance-state">{{performance.summary}}</text><text class="performance-name">{{performance.performer}}</text><text class="performance-time">{{performance.timeText}}</text></view>
+        </view>
+      </view>
+
+      <view class="section">
+        <view class="section-title"><text>值得去看看</text><text class="section-link">M-BOX精选</text></view>
+        <view class="discovery-grid">
+          <button class="discovery-card discovery-card--activity" data-url="/pages/community/index" bindtap="openTab"><text>超嗨</text><text>{{upcomingActivity ? upcomingActivity.title : '等待下一场发布'}}</text><text>活动与城市体验 →</text></button>
+          <button class="discovery-card discovery-card--member" data-url="/pages/profile/index" bindtap="openTab"><text>{{membership ? '我的会员' : '加入会员'}}</text><text>{{benefitCount ? (benefitCount + ' 项权益可用') : membership ? ('积分 ' + membership.pointsBalance) : '记录偏好与美好时刻'}}</text><text>查看权益 →</text></button>
+        </view>
+      </view>
+    </block>
   </block>
 </view>

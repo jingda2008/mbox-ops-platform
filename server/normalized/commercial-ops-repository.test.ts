@@ -134,7 +134,7 @@ integration('CommercialOpsRepository PostgreSQL integrity', () => {
     expect(evidence.rows[0]).toEqual({ redemptions: '1', audits: '1' })
   })
 
-  it('snapshots configured item ownership and reverses partial then final refunds exactly', async () => {
+  it('uses frozen strong item cost despite tampered JSON and reverses refunds exactly', async () => {
     await transactions.run({ tenantId, storeId }, async (transaction) => {
       await new CommercialOpsRepository(transaction).createSalesRule({
         productId, attributionMode: 'explicit', salesCreditBps: 10_000,
@@ -143,6 +143,9 @@ integration('CommercialOpsRepository PostgreSQL integrity', () => {
         configuredByEmployeeId: managerId,
       })
     })
+    await pool.query(`UPDATE mbox.order_items
+      SET cost_snapshot='{"totalCostMinor":99999999,"source":"forged"}'::jsonb
+      WHERE tenant_id=$1 AND store_id=$2 AND id=$3`, [tenantId, storeId, orderItemId])
     const sale = await transactions.run({ tenantId, storeId }, async (transaction) => (
       new CommercialOpsRepository(transaction).recordSaleAttribution({
         orderItemId, explicitEmployeeId: salespersonId, recordedByEmployeeId: managerId,
@@ -271,10 +274,12 @@ integration('CommercialOpsRepository PostgreSQL integrity', () => {
     await pool.query(`INSERT INTO mbox.order_items (
       id, tenant_id, store_id, order_id, product_id, quantity, unit_price_minor,
       total_amount_minor, currency, fulfillment_station, product_snapshot,
-      cost_snapshot, status
+      cost_snapshot, unit_cost_minor_at_submission, total_cost_minor_at_submission,
+      cost_source, cost_reference_product_id, cost_reference_product_updated_at, status
     ) VALUES (
       $1, $2, $3, $4, $5, 2, 5000, 10000, 'CNY', 'bar',
-      '{"code":"WINE-001","name":"测试红酒"}', '{"totalCostMinor":4000}', 'delivered'
+      '{"code":"WINE-001","name":"测试红酒"}', '{"totalCostMinor":99999999,"source":"forged"}',
+      2000, 4000, 'catalog_product', $5, '2026-08-11T11:59:00Z', 'delivered'
     )`, [orderItemId, tenantId, storeId, orderId, productId])
     await pool.query(`INSERT INTO mbox.payments (
       id, tenant_id, store_id, order_id, public_id, provider,

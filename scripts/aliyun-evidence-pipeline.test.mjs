@@ -374,7 +374,8 @@ test('external rollback starts and verifies the previous SHA before candidate-IP
     'deploy-release.sh',
     'activate-release.sh', 'rollback-activated-release.sh', 'verify-public-app.sh',
     'stage-release-evidence.sh', 'upload-oss-verified.sh', 'send-sls-events.sh',
-    'prune-oss-images.sh', 'release-state.sh', 'normalize-runtime-env.sh',
+    'prune-oss-images.sh', 'release-state.sh', 'normalize-runtime-env.sh', 'backup-postgres.sh',
+    'restore-postgres.sh',
   ]
   await Promise.all([
     mkdir(failedRelease, { recursive: true }),
@@ -409,6 +410,14 @@ exit 0
   }))
   await writeFile(join(fakeBin, 'curl'), `#!/bin/sh
 printf '{"status":"ready","commitSha":"${previousSha}","releaseImageDigest":"${previousDigest}","schemaFlavor":"normalized-core-v1","schemaVersion":40,"deploymentTier":"validation"}\n'
+`, { mode: 0o700 })
+  await writeFile(join(fakeBin, 'stat'), `#!/bin/sh
+[ "$1" = -c ] && [ "$2" = '%u:%a' ]
+printf '0:700\n'
+`, { mode: 0o700 })
+  await writeFile(join(fakeBin, 'flock'), `#!/bin/sh
+[ "$1" = -n ]
+exit 0
 `, { mode: 0o700 })
   await writeFile(join(fakeBin, 'docker'), `#!/usr/bin/env bash
 set -euo pipefail

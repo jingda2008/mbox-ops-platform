@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { Pool } from 'pg'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
+import { seedActiveGuestTableAuthority } from './guest-table-authority.test-helper.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
 import { PerformanceCommandService } from './performance-command-service.js'
 import { ScheduleRepository } from './schedule-repository.js'
@@ -23,8 +24,34 @@ const areaId = randomUUID()
 const tableId = randomUUID()
 const tableSessionId = randomUUID()
 const employeeId = randomUUID()
+let guestActorRef=''
 const customerId = randomUUID()
 const businessDate = '2026-08-11'
+
+describe('PerformanceCommandService guest table authority', () => {
+  it('checks the exact guest-session position inside the cancellation command transaction', async () => {
+    const query = vi.fn(async () => ({ rows: [{ participation_id: null }], rowCount: 1 }))
+    const commands = {
+      execute: vi.fn(async (_command, operation) => operation({
+        scope: { tenantId, storeId },
+        query,
+      })),
+    }
+    const service = new PerformanceCommandService(commands as never)
+
+    await expect(service.cancelSongRequest({
+      ...metadata('song-cancel-revoked-position-0001', {
+        type: 'guest',
+        ref: 'guest-session:99999999-9999-4999-8999-999999999999',
+      }),
+      requestId: randomUUID(),
+      customerId,
+      tableSessionId,
+    })).rejects.toBeInstanceOf(SongRequestCustomerSessionError)
+    expect(query).toHaveBeenCalledOnce()
+    expect(query.mock.calls[0]?.[0]).toContain('lock_active_table_guest_session_position')
+  })
+})
 
 integration('PerformanceCommandService PostgreSQL integration', () => {
   let pool: Pool
@@ -110,7 +137,7 @@ integration('PerformanceCommandService PostgreSQL integration', () => {
 
   it('submits a near-end extension once and preserves audit/outbox atomically', async () => {
     const input = {
-      ...metadata('song-extension-submit-0001', { type: 'guest' as const, ref: 'table-guest' }),
+      ...metadata('song-extension-submit-0001', { type: 'guest' as const }),
       tableSessionId,
       customerId,
       scheduleId: currentScheduleId,
@@ -281,7 +308,7 @@ integration('PerformanceCommandService PostgreSQL integration', () => {
 function metadata(idempotencyKey: string, actor = { type: 'employee' as const, employeeId }) {
   return {
     scope: { tenantId, storeId },
-    actor,
+    actor: actor.type==='guest' ? { ...actor,ref:actor.ref ?? guestActorRef } : actor,
     businessDate,
     idempotencyKey,
     requestFingerprint: JSON.stringify({ idempotencyKey }),
@@ -336,6 +363,9 @@ async function seed(pool: Pool): Promise<void> {
       tenant_id, store_id, table_session_id, customer_id, relationship
     ) VALUES ($1, $2, $3, $4, 'primary')
   `, [tenantId, storeId, tableSessionId, customerId])
+  guestActorRef=await seedActiveGuestTableAuthority(pool,{
+    tenantId,storeId,tableSessionId,customerId,
+  })
   await pool.query(`
     INSERT INTO mbox.employees(id, tenant_id, store_id, employee_code, display_name, status)
     VALUES ($1, $2, $3, 'PERF01', 'Performance Manager', 'active')

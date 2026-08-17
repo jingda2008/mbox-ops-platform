@@ -1,31 +1,64 @@
 <view class="page privacy-page">
   <view class="top-band">
     <text class="eyebrow">M-Box 客户桌码服务</text>
-    <text class="privacy-title">隐私说明</text>
-    <text class="privacy-version">开发版 · 更新于 2026-07-14</text>
+    <text class="privacy-title">会员规则与隐私说明</text>
+    <text class="privacy-version">上架候选版 · 更新于 2026-08-16</text>
   </view>
   <view class="privacy-section">
-    <text>1. 我们处理哪些信息</text>
-    <text>为识别当前服务场景，小程序会处理门店编号、桌号、桌台会话令牌、您提交的服务或投诉说明，以及对应任务状态。会员页在您主动绑定身份后才应展示会员资料与权益。</text>
+    <text>1. 点单不以入会为条件</text>
+    <text>您可以不加入会员，仍可在扫码并开台后浏览菜单、点单、支付和呼叫服务。关闭会员邀请不会降低商品、价格、库存或服务能力。</text>
   </view>
   <view class="privacy-section">
-    <text>2. 信息如何使用</text>
-    <text>上述信息仅用于派发现场服务、同步进度、核对本桌订单、处理投诉、展示权益和点歌履约。投诉内容应限制在处理问题所需范围内。</text>
+    <text>2. 加入会员后获得什么</text>
+    <text>加入后可查看本人会员号、积分、成长值、等级、门店赠送、活动资格和积分兑换记录。积分只能兑换目录中列明的完整商品或权益，不能抵现金、提现、转账或拆分为“积分加现金”。</text>
   </view>
   <view class="privacy-section">
-    <text>3. 支付与敏感凭证</text>
-    <text>当前小程序不发起或模拟支付。AppSecret、支付密钥、服务商 access token 和员工会话密钥不得写入小程序代码、缓存或日志，必须由后端保管。</text>
+    <text>3. 我们处理哪些信息</text>
+    <text>为提供服务，小程序会处理经微信核验的最小身份标识、门店与桌次、订单和支付状态、预约与活动报名、会员积分权益、您主动填写的偏好和服务内容。支付密钥、微信 AppSecret 和员工凭证只保存在服务端，不写入小程序。</text>
   </view>
   <view class="privacy-section">
-    <text>4. 开发模式</text>
-    <text>页面出现“开发模式”或“开发占位数据”时，相关数据只用于本地联调，不代表真实会员、订单、支付、通知送达或门店承诺。</text>
+    <text>4. 手机号、通知与语音</text>
+    <text>手机号只在您点击“找回原会员”等专用按钮并完成微信授权后用于账户核验，不代表同意短信营销。微信服务通知也需单独授权，可随时关闭。顾客页面不提供语音或麦克风入口。</text>
   </view>
   <view class="privacy-section">
-    <text>5. 您的选择</text>
-    <text>您可以不绑定会员身份，仍通过匿名桌码会话呼叫现场服务。需要更正或删除会员资料时，应通过门店公布的正式客服渠道申请。</text>
+    <text>5. 付款、退款、积分与履约</text>
+    <text>只有经支付渠道确认成功的付款才会进入出品和自动积分。付款结果未知时不会重复扣款或提前积分。退款由店长发起、收银复核执行；渠道确认退款成功后，系统按原交易冲回相应积分并保留可追溯记录。</text>
   </view>
   <view class="privacy-section">
-    <text>6. 正式发布前</text>
-    <text>运营主体需根据实际上线的数据字段、第三方 SDK、服务器域名、保存期限和联系方式补充并审核微信小程序隐私保护指引。</text>
+    <text>6. 您的选择与账户安全</text>
+    <text>您可以拒绝手机号或通知授权而继续点单。一个手机号匹配多个历史会员时不会自动合并，也不会向顾客展示候选账户隐私；须经员工核验和另一名授权人员复核。更正、关闭会员或处理必要交易记录，请通过门店公布的正式客服渠道申请。</text>
+  </view>
+  <view class="privacy-section privacy-release-note">
+    <text>正式发布提示</text>
+    <text>本页是与当前代码一致的上架候选文本。运营主体名称、客服联系方式、实际服务器域名、信息保存期限、第三方服务清单以及微信平台隐私保护指引，仍须由运营主体逐项核准后才能正式发布。</text>
+  </view>
+  <view class="privacy-contact-tools">
+    <button class="privacy-contact-toggle" bindtap="toggleContactTools">{{contactToolsOpen ? '收起我的联系方式' : '管理我的联系方式'}}</button>
+    <view wx:if="{{contactToolsOpen}}" class="privacy-contact-body">
+      <text class="privacy-contact-note">仅显示掩码。更换或停用不会删除订单、退款、会员合并等必要审计事实。</text>
+      <text wx:if="{{contactMessage}}" class="privacy-contact-message">{{contactMessage}}</text>
+      <text wx:if="{{loadingContacts}}" class="privacy-contact-note">正在读取…</text>
+      <view class="privacy-contact-group">
+        <text class="privacy-contact-heading">已验证手机号</text>
+        <view wx:for="{{verifiedPhones}}" wx:key="publicId" class="privacy-contact-row">
+          <view><text>{{item.maskedPhone}}</text><text>{{item.status === 'active' ? '当前可用' : '已停用'}}</text></view>
+          <button wx:if="{{item.status === 'active'}}" data-public-id="{{item.publicId}}" bindtap="revokePhone" loading="{{contactBusy === item.publicId}}">停用</button>
+        </view>
+        <text wx:if="{{!verifiedPhones.length}}" class="privacy-contact-note">当前没有可用的验证手机号。</text>
+        <button class="privacy-phone-replace" open-type="getPhoneNumber" bindgetphonenumber="replacePhone" loading="{{contactBusy === 'phone-replace'}}">授权并更换微信手机号</button>
+      </view>
+      <view class="privacy-contact-group">
+        <text class="privacy-contact-heading">活动报名联系</text>
+        <view wx:for="{{activityRegistrations}}" wx:key="publicId" class="privacy-contact-row activity-contact-row">
+          <view><text>{{item.activityTitle}}</text><text>{{item.maskedContact || '已清除'}} · {{item.status}}</text></view>
+          <button wx:if="{{item.canUpdateContact}}" data-public-id="{{item.publicId}}" bindtap="startActivityContactEdit">更正</button>
+          <view wx:if="{{editingRegistrationPublicId === item.publicId}}" class="privacy-contact-editor">
+            <input type="number" maxlength="11" placeholder="新的11位手机号" value="{{editingContactValue}}" bindinput="onActivityContactInput" />
+            <button bindtap="saveActivityContact" loading="{{contactBusy === item.publicId}}">保存</button><button bindtap="cancelActivityContactEdit">取消</button>
+          </view>
+        </view>
+        <text wx:if="{{!activityRegistrations.length}}" class="privacy-contact-note">当前没有活动报名联系方式。</text>
+      </view>
+    </view>
   </view>
 </view>

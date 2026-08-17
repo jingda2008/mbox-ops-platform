@@ -1,4 +1,4 @@
-import { createCipheriv, createHash, createHmac, randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import staticPlugin from '@fastify/static'
 import Fastify, {
@@ -8,8 +8,18 @@ import Fastify, {
   LogController,
 } from 'fastify'
 import { Pool } from 'pg'
+import { wechatApiPlugin } from '../wechat-api.js'
+import {
+  OfficialWechatCodeSessionProvider,
+  PostgresWechatChallengeRepository,
+  PostgresWechatIdentityRepository,
+} from '../wechat-production-adapters.js'
+import type { PostgresPool as WechatPostgresPool } from '../postgres-repository.js'
 import { AiCapabilityCenter, createCoreAiCapabilities } from './ai-capability-center.js'
 import { aiExecutionApiPlugin } from './ai-execution-api.js'
+import { ActivityPaymentService } from './activity-payment-service.js'
+import { activityOperationsApiPlugin } from './activity-operations-api.js'
+import { ActivityOperationsService } from './activity-operations-service.js'
 import { BenefitCommandService } from './benefit-repository.js'
 import { catalogApiPlugin } from './catalog-api.js'
 import { NormalizedCommandExecutor, type JsonObject } from './command-executor.js'
@@ -17,11 +27,13 @@ import { CommerceCommandService } from './commerce-command-service.js'
 import { commerceKdsApiPlugin } from './commerce-kds-api.js'
 import { commercialOpsApiPlugin } from './commercial-ops-api.js'
 import { customerBenefitApiPlugin } from './customer-benefit-api.js'
+import { customerExperienceAnalyticsApiPlugin } from './customer-experience-analytics-api.js'
 import { customerExperienceApiPlugin } from './customer-experience-api.js'
-import {
-  CustomerExperienceService,
-  resolveTableExperienceContext,
-} from './customer-experience-service.js'
+import { CustomerExperienceService } from './customer-experience-service.js'
+import { customerPreferenceApiPlugin } from './customer-preference-api.js'
+import { CustomerPreferenceService } from './customer-preference-service.js'
+import { recommendationStaffModificationApiPlugin } from './recommendation-staff-modification-api.js'
+import { RecommendationStaffModificationService } from './recommendation-staff-modification-service.js'
 import { CustomerCommandService, CustomerRepository } from './customer-repository.js'
 import { FulfillmentQueryService } from './fulfillment-query-service.js'
 import { guestCommerceServiceApiPlugin } from './guest-commerce-service-api.js'
@@ -31,11 +43,21 @@ import {
   HeaderGuestDeviceFingerprintResolver,
 } from './guest-request-context.js'
 import { guestSessionApiPlugin } from './guest-session-api.js'
-import { GuestSessionService } from './guest-session-repository.js'
+import { GuestSessionService, GuestTableSessionEndedError } from './guest-session-repository.js'
 import { hardwareApiPlugin } from './hardware-api.js'
 import { inventoryApiPlugin } from './inventory-api.js'
 import { InventoryQueryService } from './inventory-query-service.js'
 import { KdsRepository } from './kds-repository.js'
+import { loyaltyTierBenefitManagementApiPlugin } from './loyalty-tier-benefit-management-api.js'
+import { LoyaltyTierBenefitManagementService } from './loyalty-tier-benefit-management-service.js'
+import { loyaltyOperationalControlApiPlugin } from './loyalty-operational-control-api.js'
+import { LoyaltyOperationalControlService } from './loyalty-operational-control-service.js'
+import { membershipConfigurationApiPlugin } from './membership-configuration-api.js'
+import {
+  MembershipRecoveryService,
+  createMembershipRecoveryPhoneProtector,
+  type MembershipRecoveryPhoneAuthorizationPort,
+} from './membership-recovery-service.js'
 import {
   DEVICE_ACCESS_COOKIE,
   PostgresNormalizedBusinessClock,
@@ -59,9 +81,19 @@ import { registerNormalizedObservability } from './normalized-observability.js'
 import { PerformanceCommandService } from './performance-command-service.js'
 import { PerformerRepository } from './performer-repository.js'
 import { PostarRsaPaymentProviderVerifier } from './postar-provider-verifier.js'
+import {
+  NormalizedProviderObservationAuthority,
+  VerifiedProviderObservationService,
+} from './provider-verification-observation.js'
 import { PostgresPricingAuthority } from './postgres-pricing-authority.js'
 import { PostgresReconciliationQuery } from './postgres-reconciliation-query.js'
 import { ProfitQueryService } from './profit-query-service.js'
+import { promotionalLoyaltyApiPlugin } from './promotional-loyalty-api.js'
+import {
+  promotionalLoyaltyPublicApiPlugin,
+  PromotionalLoyaltyPublicQuery,
+} from './promotional-loyalty-public-api.js'
+import { PromotionalLoyaltyService } from './promotional-loyalty-service.js'
 import { publicReservationApiPlugin } from './public-reservation-api.js'
 import { ReservationCommandService } from './reservation-command-service.js'
 import {
@@ -70,6 +102,9 @@ import {
   type ReservationIdentityPort,
 } from './reservation-guest-session.js'
 import { reservationPerformanceApiPlugin } from './reservation-performance-api.js'
+import { reservationPerformanceNotificationApiPlugin } from './reservation-performance-notification-api.js'
+import { reservationPerformanceRevisionApiPlugin } from './reservation-performance-revision-api.js'
+import { ReservationPerformanceRevisionService } from './reservation-performance-revision-service.js'
 import { ReservationRepository } from './reservation-repository.js'
 import { ScheduleRepository } from './schedule-repository.js'
 import { ServiceTaskRepository } from './service-task-repository.js'
@@ -87,7 +122,13 @@ import { resolveEffectiveOnlinePayment, storeCommercePolicyApiPlugin } from './s
 import { tableManagementApiPlugin } from './table-management-api.js'
 import { TableManagementCommandService, TableManagementRepository } from './table-management-repository.js'
 import { TableSessionCommandService, TableSessionRepository } from './table-session-repository.js'
-import { WaitlistCommandService, type ProtectedContact } from './waitlist-repository.js'
+import { WaitlistCommandService } from './waitlist-repository.js'
+import { OfficialWechatPhoneAuthorizationProvider } from './wechat-phone-authorization.js'
+import { wechatLoyaltyNotificationApiPlugin } from './wechat-loyalty-notification-api.js'
+import { MembershipTermsService } from './membership-terms-service.js'
+import { createActivityContactProtectionKeyring } from './personal-contact-protection.js'
+import { personalContactGovernanceApiPlugin } from './personal-contact-governance-api.js'
+import { PersonalContactGovernanceService } from './personal-contact-governance-service.js'
 import {
   NORMALIZED_SCHEMA_FLAVOR,
   NormalizedRuntimeConfigurationError,
@@ -116,13 +157,15 @@ export const NORMALIZED_LOG_REDACTION_PATHS = Object.freeze([
   'body.payerId',
   'body.phone',
   'body.contact',
+  'body.contactValue',
   'body.contactToken',
+  'body.phoneAuthorizationCode',
   'databaseUrl',
   'secret',
   'payment.publicKey',
 ])
 
-export const NORMALIZED_MIN_SCHEMA_VERSION = '049'
+export const NORMALIZED_MIN_SCHEMA_VERSION = '096'
 export const NORMALIZED_INJECTABLE_PLUGIN_PORTS = Object.freeze([
   'customer-table-side',
 ] as const)
@@ -146,6 +189,7 @@ export interface NormalizedAppOptions {
   pool?: PostgresPool
   logger?: boolean
   paymentProviderVerifier?: PaymentProviderVerifier
+  recoveryPhoneAuthorization?: MembershipRecoveryPhoneAuthorizationPort
   lifecycleControllers?: readonly NormalizedLifecycleController[]
   injectedPlugins?: readonly NormalizedInjectedPlugin[]
   workerHealth?: { snapshot(): Readonly<{
@@ -178,6 +222,14 @@ interface ReadyRow extends Record<string, unknown> {
   store_active: boolean
 }
 
+interface PersonalContactKeyProbeRow extends Record<string,unknown> {
+  personal_contact_key_ids: string[]
+  personal_contact_key_probes: Array<{
+    kind:'activity_registration_contact'|'verified_membership_phone'
+    keyId:string; contactHash:string; encryptedBase64:string
+  }>
+}
+
 export async function createNormalizedApp(options: Readonly<NormalizedAppOptions>): Promise<NormalizedAppRuntime> {
   assertRuntimeConfig(options.config)
   const scope = Object.freeze({
@@ -191,13 +243,40 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     requestIdHeader: false,
     genReqId: () => randomUUID(),
   })
+  if (options.config.runtimeRole==='contract_candidate') {
+    app.addHook('onRequest',async(request,reply)=>{
+      if (request.method==='GET' || request.method==='HEAD' || request.method==='OPTIONS') return
+      return reply.code(503).send({ error:{
+        code:'CONTRACT_CANDIDATE_READ_ONLY',
+        message:'系统正在完成安全升级，暂不接受写入操作。',
+      } })
+    })
+  }
   const pool = options.pool ?? createPool(options.config)
   pool.on?.('error', (error) => {
     app.log.error({ errorCode: safeErrorCode(error) }, 'normalized database pool idle client failed')
   })
   const transactions = new ScopedPostgresTransactionRunner(pool)
+  const activityContactProtection = createActivityContactProtectionKeyring(
+    options.config.personalContactProtection ?? null,
+    options.config.secret,
+  )
+  const wechatIdentity = options.config.wechatIdentity === null
+    ? null
+    : new PostgresWechatIdentityRepository({
+        pool: pool as unknown as WechatPostgresPool,
+        tenantId: scope.tenantId,
+        storeId: scope.storeId,
+        appId: options.config.wechatIdentity.appId,
+        activeKeyVersion: options.config.wechatIdentity.encryptionKeyVersion,
+        encryptionKeys: new Map([[
+          options.config.wechatIdentity.encryptionKeyVersion,
+          options.config.wechatIdentity.encryptionKey,
+        ]]),
+      })
   registerNormalizedObservability(app, options.config, transactions)
   const commandExecutor = new NormalizedCommandExecutor(transactions)
+  const providerObservations = new VerifiedProviderObservationService(transactions)
   const onlinePayments = new OnlinePaymentService(
     transactions,
     options.config.secret,
@@ -251,7 +330,36 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
   })
 
   try {
-    registerSystemRoutes(app, options.config, transactions, scope, options.workerHealth)
+    registerSystemRoutes(
+      app,options.config,transactions,scope,activityContactProtection,options.workerHealth,
+    )
+    if (options.config.wechatIdentity !== null && wechatIdentity !== null) {
+      const repositoryOptions = {
+        pool: pool as unknown as WechatPostgresPool,
+        tenantId: scope.tenantId,
+        storeId: scope.storeId,
+        appId: options.config.wechatIdentity.appId,
+        activeKeyVersion: options.config.wechatIdentity.encryptionKeyVersion,
+        encryptionKeys: new Map([[
+          options.config.wechatIdentity.encryptionKeyVersion,
+          options.config.wechatIdentity.encryptionKey,
+        ]]),
+      }
+      await app.register(wechatApiPlugin, {
+        runtimeMode: options.config.nodeEnv === 'development' ? 'local' : options.config.nodeEnv,
+        stateSecret: options.config.wechatIdentity.stateSecret,
+        provider: new OfficialWechatCodeSessionProvider({
+          appSecrets: { [options.config.wechatIdentity.appId]: options.config.wechatIdentity.appSecret },
+        }),
+        challengeRepository: new PostgresWechatChallengeRepository(repositoryOptions),
+        identityRepository: wechatIdentity,
+        applications: [{
+          tenantId: scope.tenantId,
+          storeId: scope.storeId,
+          appId: options.config.wechatIdentity.appId,
+        }],
+      })
+    }
     registerDomainPlugins(app)
     await registerInjectedPlugins(app, options.injectedPlugins ?? [])
     if (options.config.staticDir !== null) {
@@ -337,6 +445,44 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       sessions: guestSessions,
       requestContext: guestContext,
       businessClock,
+      loadTableOverview: (currentScope, tableSessionId) => transactions.run(
+        currentScope,
+        async (transaction) => {
+          const selected = await transaction.query<{
+            guest_count: number
+            primary_service_name: string | null
+          }>(`
+            SELECT table_session.guest_count,
+              CASE WHEN count(employee.id) = 1 THEN min(employee.display_name) ELSE NULL END
+                AS primary_service_name
+            FROM mbox.table_sessions AS table_session
+            LEFT JOIN mbox.table_assignments AS assignment
+              ON assignment.tenant_id = table_session.tenant_id
+             AND assignment.store_id = table_session.store_id
+             AND assignment.table_id = table_session.table_id
+             AND assignment.assignment_type = 'primary'
+             AND assignment.starts_at <= clock_timestamp()
+             AND (assignment.ends_at IS NULL OR assignment.ends_at > clock_timestamp())
+            LEFT JOIN mbox.employees AS employee
+              ON employee.tenant_id = assignment.tenant_id
+             AND employee.store_id = assignment.store_id
+             AND employee.id = assignment.employee_id
+             AND employee.status = 'active'
+            WHERE table_session.tenant_id = $1::uuid
+              AND table_session.store_id = $2::uuid
+              AND table_session.id = $3::uuid
+              AND table_session.status = 'open'
+            GROUP BY table_session.id, table_session.guest_count
+          `, [transaction.scope.tenantId, transaction.scope.storeId, tableSessionId])
+          const row = selected.rows[0]
+          if (row === undefined) throw new GuestTableSessionEndedError()
+          return {
+            guestCount: Number(row.guest_count),
+            primaryServiceName: row.primary_service_name,
+          }
+        },
+        { readOnly: true },
+      ),
     })
     instance.register(normalizedOperationsApiPlugin, {
       prefix: '/api',
@@ -366,7 +512,25 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       transactions,
       commandExecutor,
       new CustomerCommandService(commandExecutor),
+      options.config.payment !== null,
     )
+    const personalContactGovernance = new PersonalContactGovernanceService(
+      transactions,activityContactProtection,
+    )
+    const customerPreferences = new CustomerPreferenceService(transactions, commandExecutor)
+    const tierBenefitManagement = new LoyaltyTierBenefitManagementService(transactions, commandExecutor)
+    const loyaltyOperationalControl = new LoyaltyOperationalControlService(transactions, commandExecutor)
+    const promotionalLoyalty = new PromotionalLoyaltyService(transactions, commandExecutor)
+    const membershipRecovery = new MembershipRecoveryService(
+      transactions,
+      createMembershipRecoveryPhoneProtector(activityContactProtection),
+    )
+    const membershipTerms = new MembershipTermsService(transactions, commandExecutor)
+    const recoveryPhoneAuthorization = options.recoveryPhoneAuthorization
+      ?? (options.config.wechatIdentity === null ? undefined : new OfficialWechatPhoneAuthorizationProvider({
+          appId: options.config.wechatIdentity.appId,
+          appSecret: options.config.wechatIdentity.appSecret,
+        }))
     const onlinePaymentProvider = options.config.guestPaymentMode === 'simulation'
       ? 'simulation' as const
       : options.config.payment !== null ? 'postar' as const : null
@@ -394,11 +558,14 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     const paymentCommands = new PaymentCommandService(
       commandExecutor,
       new NormalizedPaymentCapabilityAuthorization(),
+      new NormalizedProviderObservationAuthority(),
     )
+    const activityPayments = new ActivityPaymentService(transactions, paymentCommands, onlinePayments)
     instance.register(paymentApiPlugin, {
       prefix: '/api',
       commands: paymentCommands,
       providerVerifier: options.paymentProviderVerifier ?? paymentVerifier(options.config, scope),
+      providerObservations,
       reconciliationQuery: new PostgresReconciliationQuery(transactions),
       cashierWorkbenchQuery: new PostgresCashierWorkbenchQuery(transactions),
       onlinePayments,
@@ -454,6 +621,17 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       transactions,
       customers: new CustomerCommandService(commandExecutor),
       benefits: new BenefitCommandService(commandExecutor),
+      resolveSelfContext: async (request) => {
+        const session = await authenticateReservationGuest(request)
+        const businessDate = (await businessClock.current(scope)).businessDate
+        return {
+          scope,
+          customerId: session.customerId,
+          tableSessionId: null,
+          businessDate,
+          actorRef: session.actorRef,
+        }
+      },
       resolveGuestContext: guestReservationContext,
       resolveStaffContext: staffReservationContext,
     })
@@ -502,35 +680,6 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         ? options.config.guestPaymentMode
         : null,
       paymentActionSecret: options.config.secret,
-      checkoutUpgrades: {
-        select: async ({ context, offerPublicId, items, idempotencyKey }) => {
-          const table = await transactions.run(context.scope, (transaction) => resolveTableExperienceContext(transaction, {
-            customerId: context.customerId,
-            tableSessionId: context.tableSessionId,
-            businessDate: context.businessDate,
-            actorRef: context.actorRef,
-          }), { readOnly: true })
-          const result = await customerExperience.selectCheckoutUpgrade({ ...table, scope: context.scope }, {
-            offerPublicId,
-            originalItems: items,
-            idempotencyKey,
-          })
-          return result.value
-        },
-        markConverted: async ({ context, offerId, orderId, idempotencyKey }) => {
-          const table = await transactions.run(context.scope, (transaction) => resolveTableExperienceContext(transaction, {
-            customerId: context.customerId,
-            tableSessionId: context.tableSessionId,
-            businessDate: context.businessDate,
-            actorRef: context.actorRef,
-          }), { readOnly: true })
-          await customerExperience.markCheckoutUpgradeConverted({ ...table, scope: context.scope }, {
-            offerId,
-            orderId,
-            idempotencyKey,
-          })
-        },
-      },
     })
     instance.register(hardwareApiPlugin, {
       prefix: '/api',
@@ -545,6 +694,29 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       providerConfigured: paymentProviderConfigured,
       provider: onlinePaymentProvider,
       resolveContext: operationsContext,
+    })
+    instance.register(loyaltyTierBenefitManagementApiPlugin, {
+      prefix: '/api',
+      transactions,
+      service: tierBenefitManagement,
+      resolveStaffContext: staffReservationContext,
+    })
+    instance.register(loyaltyOperationalControlApiPlugin, {
+      prefix: '/api',
+      transactions,
+      service: loyaltyOperationalControl,
+      resolveStaffContext: staffReservationContext,
+    })
+    instance.register(membershipConfigurationApiPlugin, {
+      prefix: '/api',
+      transactions,
+      resolveStaffContext: staffReservationContext,
+    })
+    instance.register(promotionalLoyaltyApiPlugin, {
+      prefix: '/api',
+      transactions,
+      service: promotionalLoyalty,
+      resolveStaffContext: staffReservationContext,
     })
     instance.register(async (reservationApp) => {
       reservationApp.addHook('onSend', async (_request, reply, payload) => {
@@ -583,10 +755,45 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
             visibleOwnerEmployeeIds: [context.employeeId],
           }
         },
-        protectContact: createContactProtector(options.config.secret),
+        protectContact: (value) => activityContactProtection.protect(value),
         currentBusinessDate: async (currentScope) => (
           await businessClock.current(currentScope)
         ).businessDate,
+      })
+      await reservationApp.register(promotionalLoyaltyPublicApiPlugin, {
+        query: new PromotionalLoyaltyPublicQuery(transactions),
+        resolveScope: () => scope,
+      })
+      await reservationApp.register(reservationPerformanceRevisionApiPlugin, {
+        transactions,
+        service: new ReservationPerformanceRevisionService(transactions, commandExecutor),
+        resolveCustomerContext: async (request) => {
+          const session = await authenticateReservationGuest(request)
+          const day = await businessClock.current(scope)
+          return {
+            scope,
+            customerId: session.customerId,
+            actorRef: session.actorRef,
+            businessDate: day.businessDate,
+          }
+        },
+        resolveStaffContext: staffReservationContext,
+      })
+      await reservationApp.register(reservationPerformanceNotificationApiPlugin, {
+        transactions,
+        commands: commandExecutor,
+        channelConfigured: options.config.wechatIdentity !== null
+          && options.config.wechatNotification !== null,
+        resolveCustomerContext: async (request) => {
+          const session = await authenticateReservationGuest(request)
+          const day = await businessClock.current(scope)
+          return {
+            scope,
+            customerId: session.customerId,
+            actorRef: session.actorRef,
+            businessDate: day.businessDate,
+          }
+        },
       })
       await reservationApp.register(customerExperienceApiPlugin, {
         transactions,
@@ -603,23 +810,109 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         },
         resolveGuestContext: guestReservationContext,
         resolveStaffContext: staffReservationContext,
+        protectContact: (value) => activityContactProtection.protect(value),
+        activityPayments,
+        resolveActivityPaymentMethod: (currentScope, customerId) => (
+          onlinePayments.resolveGuestMethod(currentScope, customerId)
+        ),
+        notificationConsentPolicy: options.config.wechatNotification,
+        membershipRecovery,
+        membershipTerms,
+        ...(recoveryPhoneAuthorization === undefined
+          ? {}
+          : { recoveryPhoneAuthorization }),
+      })
+      await reservationApp.register(personalContactGovernanceApiPlugin, {
+        transactions,
+        service:personalContactGovernance,
+        protection:activityContactProtection,
+        resolvePublicContext:async (request) => {
+          const session=await authenticateReservationGuest(request)
+          const day=await businessClock.current(scope)
+          return {
+            scope,customerId:session.customerId,actorRef:session.actorRef,
+            businessDate:day.businessDate,
+          }
+        },
+        resolveStaffContext:staffReservationContext,
+      })
+      await reservationApp.register(customerExperienceAnalyticsApiPlugin, {
+        transactions,
+        resolveStaffContext: staffReservationContext,
+      })
+      await reservationApp.register(recommendationStaffModificationApiPlugin, {
+        service: new RecommendationStaffModificationService(transactions,commandExecutor),
+        resolveStaffContext: staffReservationContext,
+      })
+      await reservationApp.register(activityOperationsApiPlugin, {
+        transactions,
+        service: new ActivityOperationsService(transactions, commandExecutor),
+        activityPayments,
+        resolveStaffContext: staffReservationContext,
+      })
+      await reservationApp.register(customerPreferenceApiPlugin, {
+        service: customerPreferences,
+        resolvePublicContext: async (request) => {
+          const session = await authenticateReservationGuest(request)
+          const day = await businessClock.current(scope)
+          return {
+            scope,
+            customerId: session.customerId,
+            actorRef: session.actorRef,
+            businessDate: day.businessDate,
+          }
+        },
+      })
+      await reservationApp.register(wechatLoyaltyNotificationApiPlugin, {
+        transactions,
+        commands: commandExecutor,
+        channelConfigured: options.config.wechatIdentity !== null
+          && options.config.wechatNotification !== null,
+        resolvePublicContext: async (request) => {
+          const session = await authenticateReservationGuest(request)
+          const day = await businessClock.current(scope)
+          return {
+            scope,
+            customerId: session.customerId,
+            actorRef: session.actorRef,
+            businessDate: day.businessDate,
+          }
+        },
       })
     }, { prefix: '/api' })
   }
 
   function createReservationIdentityPort(): ReservationIdentityPort {
     return {
-      resolve: async ({ transaction, provider, identitySubjectHash }) => {
+      resolve: async ({ transaction, provider, providerAssertion, identitySubjectHash }) => {
         const customers = new CustomerRepository(transaction)
+        if (provider === 'wechat') {
+          if (wechatIdentity === null) throw new ReservationGuestSessionInvalidError()
+          const tokenHash = createHash('sha256').update(providerAssertion).digest('base64url')
+          const session = await wechatIdentity.findSession(tokenHash)
+          if (session === null || session.revokedAt !== null || session.expiresAt <= Date.now()) {
+            throw new ReservationGuestSessionInvalidError()
+          }
+          const principal = session.principal
+          if (principal.tenantId !== scope.tenantId || principal.storeId !== scope.storeId
+            || principal.appId !== options.config.wechatIdentity?.appId) {
+            throw new ReservationGuestSessionInvalidError()
+          }
+          const principalHash = createHash('sha256')
+            .update(`wechat:${principal.principalId}`)
+            .digest('hex')
+          const existing = await customers.findByIdentity('wechat', principalHash)
+          if (existing !== null) return { customerId: existing.id, actorRef: `customer:${existing.id}` }
+          const created = await customers.createAnonymous({ publicId: `wechat-${principalHash.slice(0, 40)}` })
+          const linked = await customers.linkIdentity(created.customer.id, 'wechat', principalHash)
+          return { customerId: linked.id, actorRef: `customer:${linked.id}` }
+        }
         const publicId = `reservation-${identitySubjectHash.slice(0, 40)}`
         const created = await customers.createAnonymous({
           publicId,
-          ...(provider === 'anonymous' ? { identityHash: identitySubjectHash } : {}),
+          identityHash: identitySubjectHash,
         })
-        const customer = provider === 'wechat'
-          ? await customers.linkIdentity(created.customer.id, 'wechat', identitySubjectHash)
-          : created.customer
-        return { customerId: customer.id, actorRef: `customer:${customer.id}` }
+        return { customerId: created.customer.id, actorRef: `customer:${created.customer.id}` }
       },
     }
   }
@@ -736,6 +1029,7 @@ function registerSinglePageApplicationFallback(app: FastifyInstance): void {
 
 function isApplicationRoute(path: string): boolean {
   return path === '/'
+    || /^\/mini-preview(?:\/[^.]*)?$/.test(path)
     || /^\/(?:guest|reserve|member|staff)(?:\/[^.]*)?$/.test(path)
 }
 
@@ -823,17 +1117,39 @@ function registerSystemRoutes(
   config: Readonly<NormalizedRuntimeConfig>,
   transactions: ScopedPostgresTransactionRunner,
   scope: Readonly<StoreScope>,
+  activityContactProtection: ReturnType<typeof createActivityContactProtectionKeyring>,
   workerHealth?: NormalizedAppOptions['workerHealth'],
 ): void {
+  let personalContactKeyReadiness:
+    | { status:'ready' }
+    | { status:'unavailable'|'invalid' }={status:'unavailable'}
   const version = Object.freeze({
     commitSha: config.commitSha,
     releaseImageDigest: config.releaseImageDigest,
     schemaFlavor: config.schemaFlavor,
     deploymentTier: config.deploymentTier,
     inventoryEnforcementMode: config.inventoryEnforcementMode,
+    runtimeRole:config.runtimeRole ?? 'normal',
+    writeEnabled:config.runtimeRole!=='contract_candidate',
   })
   app.get('/api/live', async () => ({ status: 'live', ...version }))
   app.get('/api/version', async () => version)
+  app.addHook('onReady',async()=>{
+    try{
+      const evidence=await queryPersonalContactKeyProbesOnce(transactions,scope)
+      if (!(evidence?.personal_contact_key_ids ?? []).every((keyId)=>activityContactProtection.hasKey(keyId))){
+        personalContactKeyReadiness={status:'unavailable'}
+        return
+      }
+      personalContactKeyReadiness=(evidence?.personal_contact_key_probes ?? []).every((probe)=>
+        activityContactProtection.validateProbe({
+          kind:probe.kind,encryptionKeyId:probe.keyId,contactHash:probe.contactHash,
+          encryptedValue:Buffer.from(probe.encryptedBase64,'base64'),
+        })) ? {status:'ready'} : {status:'invalid'}
+    }catch{
+      personalContactKeyReadiness={status:'unavailable'}
+    }
+  })
   app.get('/api/ready', async (_request, reply) => {
     try {
       const row = await queryReadinessOnce(transactions, scope)
@@ -842,6 +1158,12 @@ function registerSystemRoutes(
       }
       if (!schemaVersionAtLeast(row.schema_version, NORMALIZED_MIN_SCHEMA_VERSION)) {
         return reply.code(503).send({ status: 'not_ready', reason: 'normalized_schema_outdated', ...version })
+      }
+      if (personalContactKeyReadiness.status==='unavailable') {
+        return reply.code(503).send({ status: 'not_ready', reason: 'personal_contact_key_unavailable', ...version })
+      }
+      if (personalContactKeyReadiness.status==='invalid') {
+        return reply.code(503).send({ status:'not_ready',reason:'personal_contact_key_invalid',...version })
       }
       const workers = workerHealth?.snapshot()
       if (workers !== undefined && workers.status !== 'healthy') {
@@ -876,27 +1198,44 @@ async function queryReadinessOnce(
   return result.rows[0]
 }
 
-function createContactProtector(secret: string): (value: string) => ProtectedContact {
-  const key = createHash('sha256').update(`mbox:reservation-contact:v1:${secret}`, 'utf8').digest()
-  return (value: string) => {
-    const normalized = value.trim()
-    const iv = randomBytes(12)
-    const cipher = createCipheriv('aes-256-gcm', key, iv)
-    const encrypted = Buffer.concat([cipher.update(normalized, 'utf8'), cipher.final()])
-    const tag = cipher.getAuthTag()
-    return {
-      hash: createHmac('sha256', key).update(normalized, 'utf8').digest('hex'),
-      encryptedBase64: Buffer.concat([Buffer.from([1]), iv, tag, encrypted]).toString('base64'),
-      keyId: 'normalized-contact-v1',
-      masked: maskContact(normalized),
-    }
-  }
-}
-
-function maskContact(value: string): string {
-  if (/^1\d{10}$/.test(value)) return `${value.slice(0, 3)}****${value.slice(-4)}`
-  if (value.length <= 4) return '*'.repeat(value.length)
-  return `${value.slice(0, 2)}***${value.slice(-2)}`
+async function queryPersonalContactKeyProbesOnce(
+  transactions:ScopedPostgresTransactionRunner,
+  scope:Readonly<StoreScope>,
+):Promise<PersonalContactKeyProbeRow|undefined>{
+  const result=await transactions.singleScopedQuery<PersonalContactKeyProbeRow>(scope,`
+    WITH request_scope AS MATERIALIZED (
+      SELECT set_config('app.tenant_id',$1::text,true),set_config('app.store_id',$2::text,true)
+    ), source AS (
+      SELECT 'activity_registration_contact'::text AS kind,
+        contact.encryption_key_id AS key_id,contact.contact_hash,
+        contact.encrypted_contact AS encrypted_value,contact.captured_at AS recorded_at,contact.id
+      FROM mbox.community_activity_registration_contact_versions contact
+      CROSS JOIN request_scope
+      WHERE contact.tenant_id=$1::uuid AND contact.store_id=$2::uuid
+        AND contact.encrypted_contact IS NOT NULL
+      UNION ALL
+      SELECT 'verified_membership_phone',verified.contact_encryption_key_id,
+        verified.contact_hash,verified.encrypted_value,verified.created_at,verified.id
+      FROM mbox.customer_verified_contacts verified
+      WHERE verified.tenant_id=$1::uuid AND verified.store_id=$2::uuid
+        AND verified.encrypted_value IS NOT NULL
+    ), ranked AS (
+      SELECT source.*,
+        row_number() OVER (PARTITION BY kind,key_id ORDER BY recorded_at,id) AS oldest_rank,
+        row_number() OVER (PARTITION BY kind,key_id ORDER BY recorded_at DESC,id DESC) AS newest_rank
+      FROM source
+    )
+    SELECT ARRAY(
+        SELECT DISTINCT key_id FROM source WHERE key_id IS NOT NULL ORDER BY key_id
+      ) AS personal_contact_key_ids,
+      COALESCE((SELECT jsonb_agg(jsonb_build_object(
+        'kind',probe.kind,'keyId',probe.key_id,'contactHash',probe.contact_hash,
+        'encryptedBase64',encode(probe.encrypted_value,'base64')
+      ) ORDER BY probe.kind,probe.key_id,probe.recorded_at,probe.id)
+      FROM ranked probe WHERE probe.oldest_rank=1 OR probe.newest_rank=1),'[]'::jsonb)
+      AS personal_contact_key_probes
+  `)
+  return result.rows[0]
 }
 
 function reservationApiCookiePath(value: string): string {
@@ -1031,6 +1370,10 @@ function assertRuntimeConfig(config: Readonly<NormalizedRuntimeConfig>): void {
   if (!config.tenantId.trim()) fields.push('MBOX_TENANT_ID')
   if (!config.storeId.trim()) fields.push('MBOX_STORE_ID')
   if (Buffer.byteLength(config.secret, 'utf8') < 32) fields.push('MBOX_NORMALIZED_SECRET')
+  if (config.deploymentTier === 'production' && config.personalContactProtection == null) {
+    fields.push('MBOX_CONTACT_ACTIVE_KEY_ID','MBOX_CONTACT_ACTIVE_KEY_BASE64',
+      'MBOX_CONTACT_LOOKUP_KEY_BASE64','MBOX_CONTACT_LEGACY_PHONE_LOOKUP_KEY_BASE64')
+  }
   if (config.schemaFlavor !== NORMALIZED_SCHEMA_FLAVOR) fields.push('schemaFlavor')
   if (config.deploymentTier === 'production' && config.payment === null) fields.push('payment')
   if (config.nodeEnv === 'production' && config.metricsToken === null) fields.push('MBOX_METRICS_TOKEN')

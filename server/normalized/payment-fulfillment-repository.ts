@@ -5,9 +5,14 @@ import {
   type InventoryOrderReservation,
 } from './inventory-repository.js'
 import { KdsRepository, type KdsTask } from './kds-repository.js'
+import { FulfillmentCapacityRepository } from './fulfillment-capacity-repository.js'
 import { OrderRepository, type OrderItem, type SubmittedOrder } from './order-repository.js'
 import { OrderNotPayableError } from './payment-repository.js'
 import type { ScopedTransaction } from './transaction-runner.js'
+import {
+  ExperiencePlanActivationRepository,
+  type ExperiencePlanActivationResult,
+} from './experience-plan-activation-repository.js'
 
 interface FulfillmentOrderRow extends Record<string, unknown> {
   id: string
@@ -28,6 +33,7 @@ export interface PaymentFulfillmentActivation {
   orderId: string
   inventoryConsumptions: readonly InventoryConsumption[]
   kdsTasks: readonly KdsTask[]
+  experiencePlan: ExperiencePlanActivationResult
 }
 
 export interface PaymentFulfillmentRelease {
@@ -50,6 +56,8 @@ export class PaymentFulfillmentRepository {
   ): Promise<readonly InventoryOrderReservation[]> {
     await this.persistPlan(order, options)
     if (order.settlementMode !== 'immediate_payment') return []
+    await new FulfillmentCapacityRepository(this.transaction)
+      .reserveForImmediatePaymentOrder(order.id)
     return new InventoryRepository(this.transaction).reserveForImmediatePaymentOrder(
       order.id,
       order.items,
@@ -91,19 +99,27 @@ export class PaymentFulfillmentRepository {
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
     if (restored.rowCount !== 1) throw new OrderNotPayableError(orderId, 'reservation restore lost a concurrent update')
     const submitted = await new OrderRepository(this.transaction).getSubmittedForFulfillment(orderId)
+    await new FulfillmentCapacityRepository(this.transaction)
+      .reserveForImmediatePaymentOrder(orderId)
     await new InventoryRepository(this.transaction).reserveForImmediatePaymentOrder(orderId, submitted.items)
   }
 
   async activatePaidOrder(
     orderId: string,
-    options: Readonly<{ createdByEmployeeId?: string | null; metadata?: JsonObject }> = {},
+    options: Readonly<{
+      createdByEmployeeId?: string | null
+      metadata?: JsonObject
+      paymentId?: string | null
+    }> = {},
   ): Promise<PaymentFulfillmentActivation> {
     const state = await this.lockOrder(orderId)
     if (state.settlement_mode !== 'immediate_payment') {
-      return { activated: false, orderId, inventoryConsumptions: [], kdsTasks: [] }
+      return { activated: false, orderId, inventoryConsumptions: [], kdsTasks: [], experiencePlan: absentPlan() }
     }
     if (state.fulfillment_state === 'active') {
-      return { activated: false, orderId, inventoryConsumptions: [], kdsTasks: [] }
+      const experiencePlan = await new ExperiencePlanActivationRepository(this.transaction)
+        .activatePaidNonCritical(orderId, options.paymentId ?? null)
+      return { activated: false, orderId, inventoryConsumptions: [], kdsTasks: [], experiencePlan }
     }
     if (state.fulfillment_state !== 'awaiting_payment' || state.payment_status !== 'paid') {
       throw new OrderNotPayableError(orderId, 'trusted full payment is required before fulfillment')
@@ -116,6 +132,7 @@ export class PaymentFulfillmentRepository {
         AND id = $3::uuid AND fulfillment_state = 'awaiting_payment' AND payment_status = 'paid'
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
     if (activated.rowCount !== 1) throw new Error(`Order ${orderId} lost its fulfillment activation transition`)
+    await new FulfillmentCapacityRepository(this.transaction).activateForPaidOrder(orderId)
     const order = await new OrderRepository(this.transaction).getSubmittedForFulfillment(orderId)
     const inventoryConsumptions = await new InventoryRepository(this.transaction)
       .consumeImmediatePaymentReservations(orderId, {
@@ -140,7 +157,9 @@ export class PaymentFulfillmentRepository {
         eventIdempotencyKey: `payment-activated:${item.id}:${item.fulfillmentStation}`,
       }))
     }
-    return { activated: true, orderId, inventoryConsumptions, kdsTasks }
+    const experiencePlan = await new ExperiencePlanActivationRepository(this.transaction)
+      .activatePaidNonCritical(orderId, options.paymentId ?? null)
+    return { activated: true, orderId, inventoryConsumptions, kdsTasks, experiencePlan }
   }
 
   async releaseAfterDefinitiveFailure(orderId: string, reason: string): Promise<PaymentFulfillmentRelease> {
@@ -152,6 +171,7 @@ export class PaymentFulfillmentRepository {
   }
 
   private async release(orderId: string, reason: string): Promise<PaymentFulfillmentRelease> {
+    await new FulfillmentCapacityRepository(this.transaction).releaseReservedForOrder(orderId, reason)
     const reservationCount = await new InventoryRepository(this.transaction)
       .releaseImmediatePaymentReservations(orderId, reason)
     const released = await this.transaction.query(`
@@ -163,6 +183,8 @@ export class PaymentFulfillmentRepository {
         AND id = $3::uuid AND fulfillment_state = 'awaiting_payment'
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
     if (released.rowCount !== 1) throw new Error(`Order ${orderId} lost its fulfillment release transition`)
+    await new ExperiencePlanActivationRepository(this.transaction)
+      .cancelAfterDefinitivePaymentFailure(orderId)
     return { released: true, orderId, reservationCount }
   }
 
@@ -236,6 +258,10 @@ export class PaymentFulfillmentRepository {
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
     return result.rows
   }
+}
+
+function absentPlan(): ExperiencePlanActivationResult {
+  return { planPublicId: null, state: 'absent', changed: false, cueCount: 0 }
 }
 
 function earliest(values: Iterable<string | null>): string | null {

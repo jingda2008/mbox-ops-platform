@@ -21,7 +21,7 @@ const approverId = '88888888-8888-4888-8888-888888888888'
 describe('RefundRepository', () => {
   it('stores item allocations and derives the refund amount from them', async () => {
     const transaction = new ScriptedTransaction([
-      rows([{ order_id: orderId }]),
+      rows([paymentTargetRow()]),
       rows([{ id: orderId }]),
       rows([paymentRow('succeeded', 10000)]),
       rows([{ id: itemId, total_amount_minor: '6000', currency: 'CNY', status: 'delivered' }]),
@@ -53,7 +53,7 @@ describe('RefundRepository', () => {
 
   it('rejects cumulative refunds above the captured payment', async () => {
     const transaction = new ScriptedTransaction([
-      rows([{ order_id: orderId }]),
+      rows([paymentTargetRow()]),
       rows([{ id: orderId }]),
       rows([paymentRow('partially_refunded', 10000)]),
       rows([{ id: itemId, total_amount_minor: '10000', currency: 'CNY', status: 'delivered' }]),
@@ -74,7 +74,7 @@ describe('RefundRepository', () => {
 
   it('rejects cumulative item refunds above that order item even when payment total remains available', async () => {
     const transaction = new ScriptedTransaction([
-      rows([{ order_id: orderId }]),
+      rows([paymentTargetRow()]),
       rows([{ id: orderId }]),
       rows([paymentRow('partially_refunded', 20000)]),
       rows([{ id: itemId, total_amount_minor: '6000', currency: 'CNY', status: 'delivered' }]),
@@ -93,7 +93,7 @@ describe('RefundRepository', () => {
 
   it('does not allow a requested refund to execute before human approval', async () => {
     const transaction = new ScriptedTransaction([
-      rows([{ order_id: orderId }]),
+      rows([paymentTargetRow()]),
       rows([{ id: orderId }]),
       rows([refundJoinedRow('requested', 2500)]),
     ])
@@ -105,7 +105,7 @@ describe('RefundRepository', () => {
 
   it('keeps request and approval duties separated', async () => {
     const samePerson = new ScriptedTransaction([
-      rows([{ order_id: orderId }]),
+      rows([paymentTargetRow()]),
       rows([{ id: orderId }]),
       rows([refundJoinedRow('requested', 2500)]),
     ])
@@ -113,7 +113,7 @@ describe('RefundRepository', () => {
       .rejects.toBeInstanceOf(RefundTransitionError)
 
     const differentPerson = new ScriptedTransaction([
-      rows([{ order_id: orderId }]),
+      rows([paymentTargetRow()]),
       rows([{ id: orderId }]),
       rows([refundJoinedRow('requested', 2500)]),
       rows([refundJoinedRow('approved', 2500, approverId)]),
@@ -126,7 +126,7 @@ describe('RefundRepository', () => {
 
   it('never permits a manual result to close an online-provider refund', async () => {
     const transaction = new ScriptedTransaction([
-      rows([{ order_id: orderId }]),
+      rows([paymentTargetRow()]),
       rows([{ id: orderId }]),
       rows([refundJoinedRow('processing', 2500, approverId)]),
     ])
@@ -211,7 +211,9 @@ function rows(data: Record<string, unknown>[], rowCount = data.length): Response
 function paymentRow(status: string, amountMinor: number): Record<string, unknown> {
   return {
     id: paymentId,
+    payable_kind: 'order',
     order_id: orderId,
+    activity_registration_id: null,
     provider: 'postar',
     amount_minor: String(amountMinor),
     currency: 'CNY',
@@ -248,6 +250,7 @@ function refundJoinedRow(
   return {
     ...refundBaseRow(status, amountMinor),
     order_id: orderId,
+    activity_registration_id: null,
     payment_provider: 'postar',
     payment_provider_transaction_id: 'POSTAR-TX-001',
     approved_by_employee_id: approvedByEmployeeId,
@@ -258,10 +261,14 @@ function refundJoinedRow(
 function providerCallbackTransaction(row: Record<string, unknown>): ScriptedTransaction {
   return new ScriptedTransaction([
     rows([{ id: refundId }]),
-    rows([{ order_id: orderId }]),
+    rows([paymentTargetRow()]),
     rows([{ id: orderId }]),
     rows([row]),
   ])
+}
+
+function paymentTargetRow(): Record<string, unknown> {
+  return { payable_kind: 'order', order_id: orderId, activity_registration_id: null }
 }
 
 function normalizeSql(value: string): string {

@@ -6,6 +6,7 @@ import {
   type ServiceTask,
 } from './service-task-repository.js'
 import type { ScopedTransaction } from './transaction-runner.js'
+import { lockBoundGuestTablePosition } from './guest-table-authority.js'
 
 export type GuestServiceRequestType = 'call_staff' | 'complaint' | 'custom'
 export type GuestServiceWorkflow = 'visible_then_complete' | 'manager_attention'
@@ -17,6 +18,7 @@ export interface GuestServiceRequestInput {
   deviceFingerprint: string
   requestType: GuestServiceRequestType
   detail?: string | null
+  relatedOrderPublicId?: string | null
 }
 
 export interface GuestServiceRequestAccepted {
@@ -37,6 +39,26 @@ export type GuestServiceRequestResult =
   | GuestServiceRequestAccepted
   | GuestServiceRequestRateLimited
 
+export type GuestServiceFeedbackAction = 'confirm' | 'escalate'
+
+export interface GuestServiceRequestView {
+  publicId: string
+  requestType: GuestServiceRequestType
+  status: ServiceTask['status']
+  assignedStaffName: string | null
+  requestCount: number
+  createdAt: string
+}
+
+export interface GuestServiceFeedbackResult {
+  taskId: string
+  publicId: string
+  action: GuestServiceFeedbackAction
+  taskStatus: ServiceTask['status']
+  changed: boolean
+  occurredAt: string
+}
+
 export interface GuestServiceRepositoryOptions {
   deviceLimitPerMinute?: number
   tableLimitPerMinute?: number
@@ -49,6 +71,7 @@ export interface GuestServiceRepositoryOptions {
 
 interface TableContextRow extends Record<string, unknown> {
   table_id: string
+  is_member: boolean
 }
 
 interface RateLimitRow extends Record<string, unknown> {
@@ -62,12 +85,49 @@ interface RequestGroupRow extends Record<string, unknown> {
   request_count: number
 }
 
+interface GuestServiceViewRow extends Record<string, unknown> {
+  public_id: string
+  request_type: GuestServiceRequestType
+  status: ServiceTask['status']
+  assigned_staff_name: string | null
+  request_count: number
+  created_at: string
+}
+
+interface FeedbackTaskRow extends Record<string, unknown> {
+  task_id: string
+  public_id: string
+  request_group_id: string
+  status: ServiceTask['status']
+  priority: ServiceTask['priority']
+}
+
+interface FeedbackEventRow extends Record<string, unknown> {
+  occurred_at: string
+}
+
 const ACTIVE_TASK_STATUSES = new Set(['pending', 'acknowledged', 'in_progress'])
 
 export class GuestServiceSessionUnavailableError extends Error {
   constructor() {
     super('当前桌次已经结束，请重新扫描桌面二维码')
     this.name = 'GuestServiceSessionUnavailableError'
+  }
+}
+
+export class GuestServiceRequestNotFoundError extends Error {
+  constructor() {
+    super('没有找到这项服务请求')
+    this.name = 'GuestServiceRequestNotFoundError'
+  }
+}
+
+export class GuestServiceFeedbackStateError extends Error {
+  constructor(action: GuestServiceFeedbackAction) {
+    super(action === 'confirm'
+      ? '服务完成后才能确认结果'
+      : '当前服务状态不能再次催办')
+    this.name = 'GuestServiceFeedbackStateError'
   }
 }
 
@@ -90,7 +150,14 @@ export class GuestServiceRepository {
 
   async request(input: Readonly<GuestServiceRequestInput>): Promise<GuestServiceRequestResult> {
     const detail = validateRequest(input)
-    const tableId = await this.requireOpenTableMembership(input.tableSessionId, input.customerId)
+    const tableId = await this.requireOpenTableMembership(
+      input.tableSessionId,input.customerId,true,input.actorRef,
+    )
+    const relatedOrderId = await this.resolveRelatedOrderId(
+      input.tableSessionId,
+      input.requestType,
+      input.relatedOrderPublicId ?? null,
+    )
     const tableLimit = await this.consumeRateLimit(
       'table',
       hashGuestBehaviorPrincipal(`table:${input.tableSessionId}`),
@@ -104,11 +171,12 @@ export class GuestServiceRepository {
     )
     if (deviceLimit !== null) return deviceLimit
 
-    const mergeKey = serviceMergeKey(input.requestType, detail)
+    const mergeKey = serviceMergeKey(input.requestType, detail, relatedOrderId)
     await this.transaction.query(`
       INSERT INTO mbox.guest_service_request_groups (
-        tenant_id, store_id, table_session_id, customer_id, request_type, merge_key
-      ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6)
+        tenant_id, store_id, table_session_id, customer_id, request_type, merge_key,
+        related_order_id
+      ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7::uuid)
       ON CONFLICT (
         tenant_id, store_id, table_session_id, merge_key
       ) DO NOTHING
@@ -119,6 +187,7 @@ export class GuestServiceRepository {
       input.customerId,
       input.requestType,
       mergeKey,
+      relatedOrderId,
     ])
     const group = await this.lockGroup(input, mergeKey)
     const tasks = this.createTasks!(this.transaction)
@@ -165,20 +234,146 @@ export class GuestServiceRepository {
     }
   }
 
-  private async requireOpenTableMembership(tableSessionId: string, customerId: string): Promise<string> {
+  async listOwned(tableSessionId: string, customerId: string): Promise<GuestServiceRequestView[]> {
+    await this.requireOpenTableMembership(tableSessionId, customerId, false)
+    const result = await this.transaction.query<GuestServiceViewRow>(`
+      SELECT task.public_id, request_group.request_type, task.status,
+        assigned_employee.display_name AS assigned_staff_name,
+        request_group.request_count, task.created_at::text
+      FROM mbox.guest_service_request_groups AS request_group
+      JOIN mbox.service_tasks AS task
+        ON task.tenant_id = request_group.tenant_id
+       AND task.store_id = request_group.store_id
+       AND task.id = request_group.current_service_task_id
+      LEFT JOIN mbox.employees AS assigned_employee
+        ON assigned_employee.tenant_id = task.tenant_id
+       AND assigned_employee.store_id = task.store_id
+       AND assigned_employee.id = task.assigned_employee_id
+       AND assigned_employee.status = 'active'
+      WHERE request_group.tenant_id = $1::uuid
+        AND request_group.store_id = $2::uuid
+        AND request_group.table_session_id = $3::uuid
+      ORDER BY task.created_at DESC, task.id DESC
+      LIMIT 100
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      tableSessionId,
+    ])
+    return result.rows.map((row) => ({
+      publicId: row.public_id,
+      requestType: row.request_type,
+      status: row.status,
+      assignedStaffName: row.assigned_staff_name,
+      requestCount: Number(row.request_count),
+      createdAt: timestamp(row.created_at),
+    }))
+  }
+
+  async feedback(input: Readonly<{
+    tableSessionId: string
+    customerId: string
+    actorRef: string
+    publicId: string
+    action: GuestServiceFeedbackAction
+  }>): Promise<GuestServiceFeedbackResult> {
+    await this.requireOpenTableMembership(input.tableSessionId, input.customerId, true,input.actorRef)
+    const task = await this.lockOwnedTask(input.tableSessionId, input.publicId)
+    const eventType = input.action === 'confirm' ? 'guest.confirmed' : 'guest.escalated'
+    const existing = await this.findFeedbackEvent(task.task_id, eventType)
+    if (existing !== null) {
+      return {
+        taskId: task.task_id,
+        publicId: task.public_id,
+        action: input.action,
+        taskStatus: task.status,
+        changed: false,
+        occurredAt: timestamp(existing.occurred_at),
+      }
+    }
+    if (input.action === 'confirm' && task.status !== 'completed') {
+      throw new GuestServiceFeedbackStateError(input.action)
+    }
+    if (input.action === 'escalate' && !ACTIVE_TASK_STATUSES.has(task.status)) {
+      throw new GuestServiceFeedbackStateError(input.action)
+    }
+    if (input.action === 'escalate') {
+      const updated = await this.transaction.query(`
+        UPDATE mbox.service_tasks
+        SET priority = 'urgent',
+            escalate_at = COALESCE(escalate_at, clock_timestamp()),
+            next_action_at = LEAST(next_action_at, clock_timestamp())
+        WHERE tenant_id = $1::uuid
+          AND store_id = $2::uuid
+          AND id = $3::uuid
+          AND status = ANY($4::text[])
+      `, [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        task.task_id,
+        [...ACTIVE_TASK_STATUSES],
+      ])
+      if (updated.rowCount !== 1) throw new GuestServiceFeedbackStateError(input.action)
+    }
+    const inserted = await this.transaction.query<FeedbackEventRow>(`
+      INSERT INTO mbox.service_task_events (
+        tenant_id, store_id, service_task_id, event_type,
+        from_status, to_status, actor_type, actor_employee_id,
+        note, metadata, idempotency_key
+      ) VALUES (
+        $1::uuid, $2::uuid, $3::uuid, $4,
+        $5, $5, 'guest', NULL,
+        NULL, jsonb_build_object('requestGroupId', $6::text), $7
+      )
+      ON CONFLICT (tenant_id, store_id, service_task_id, idempotency_key)
+        WHERE idempotency_key IS NOT NULL
+      DO NOTHING
+      RETURNING occurred_at::text
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      task.task_id,
+      eventType,
+      task.status,
+      task.request_group_id,
+      `guest-feedback:${input.action}`,
+    ])
+    const occurredAt = inserted.rows[0]?.occurred_at
+      ?? (await this.findFeedbackEvent(task.task_id, eventType))?.occurred_at
+    if (occurredAt === undefined) throw new Error('Guest service feedback was not recorded')
+    return {
+      taskId: task.task_id,
+      publicId: task.public_id,
+      action: input.action,
+      taskStatus: task.status,
+      changed: inserted.rowCount === 1,
+      occurredAt: timestamp(occurredAt),
+    }
+  }
+
+  private async requireOpenTableMembership(
+    tableSessionId: string,
+    customerId: string,
+    lock = true,
+    actorRef?: string,
+  ): Promise<string> {
+    if (lock && !await lockBoundGuestTablePosition(this.transaction,{ tableSessionId,customerId,actorRef })) {
+      throw new GuestServiceRequestNotFoundError()
+    }
     const selected = await this.transaction.query<TableContextRow>(`
-      SELECT session.table_id
-      FROM mbox.table_sessions AS session
-      JOIN mbox.table_session_customers AS membership
-        ON membership.tenant_id = session.tenant_id
-       AND membership.store_id = session.store_id
-       AND membership.table_session_id = session.id
-       AND membership.customer_id = $4::uuid
-      WHERE session.tenant_id = $1::uuid
-        AND session.store_id = $2::uuid
-        AND session.id = $3::uuid
-        AND session.status = 'open'
-      FOR UPDATE OF session
+      SELECT session.table_id,EXISTS(
+        SELECT 1 FROM mbox.table_session_customer_participations participation
+        WHERE participation.tenant_id=session.tenant_id
+          AND participation.store_id=session.store_id
+          AND participation.table_session_id=session.id
+          AND participation.table_id=session.table_id AND participation.left_at IS NULL
+          AND mbox.canonical_customer_id(
+            participation.tenant_id,participation.store_id,participation.customer_id
+          )=mbox.canonical_customer_id(session.tenant_id,session.store_id,$4::uuid)
+      ) AS is_member
+      FROM mbox.table_sessions session
+      WHERE session.tenant_id=$1::uuid AND session.store_id=$2::uuid
+        AND session.id=$3::uuid AND session.status='open'
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -189,7 +384,55 @@ export class GuestServiceRepository {
     if (selected.rowCount !== 1 || tableId === undefined) {
       throw new GuestServiceSessionUnavailableError()
     }
+    if (selected.rows[0]?.is_member !== true) throw new GuestServiceRequestNotFoundError()
     return tableId
+  }
+
+  private async lockOwnedTask(
+    tableSessionId: string,
+    publicId: string,
+  ): Promise<FeedbackTaskRow> {
+    const selected = await this.transaction.query<FeedbackTaskRow>(`
+      SELECT task.id AS task_id, task.public_id, request_group.id AS request_group_id,
+        task.status, task.priority
+      FROM mbox.guest_service_request_groups AS request_group
+      JOIN mbox.service_tasks AS task
+        ON task.tenant_id = request_group.tenant_id
+       AND task.store_id = request_group.store_id
+       AND task.id = request_group.current_service_task_id
+      WHERE request_group.tenant_id = $1::uuid
+        AND request_group.store_id = $2::uuid
+        AND request_group.table_session_id = $3::uuid
+        AND task.public_id = $4
+      FOR UPDATE OF request_group, task
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      tableSessionId,
+      publicId,
+    ])
+    const row = selected.rows[0]
+    if (selected.rowCount !== 1 || row === undefined) throw new GuestServiceRequestNotFoundError()
+    return row
+  }
+
+  private async findFeedbackEvent(taskId: string, eventType: string): Promise<FeedbackEventRow | null> {
+    const selected = await this.transaction.query<FeedbackEventRow>(`
+      SELECT occurred_at::text
+      FROM mbox.service_task_events
+      WHERE tenant_id = $1::uuid
+        AND store_id = $2::uuid
+        AND service_task_id = $3::uuid
+        AND event_type = $4
+      ORDER BY occurred_at, id
+      LIMIT 1
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      taskId,
+      eventType,
+    ])
+    return selected.rows[0] ?? null
   }
 
   private async consumeRateLimit(
@@ -250,6 +493,27 @@ export class GuestServiceRepository {
     return row
   }
 
+  private async resolveRelatedOrderId(
+    tableSessionId: string,
+    requestType: GuestServiceRequestType,
+    relatedOrderPublicId: string | null,
+  ): Promise<string | null> {
+    if (relatedOrderPublicId === null) return null
+    if (requestType !== 'complaint') throw new TypeError('relatedOrderPublicId is allowed only for complaints')
+    const result = await this.transaction.query<{ id: string }>(`
+      SELECT id FROM mbox.orders
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        AND table_session_id=$3::uuid AND public_id=$4
+      FOR KEY SHARE
+    `, [
+      this.transaction.scope.tenantId,this.transaction.scope.storeId,
+      tableSessionId,relatedOrderPublicId,
+    ])
+    const id = result.rows[0]?.id
+    if (!id) throw new GuestServiceRequestNotFoundError()
+    return id
+  }
+
   private async markRequested(
     groupId: string,
     deviceFingerprint: string,
@@ -284,9 +548,18 @@ export class GuestServiceRepository {
   }
 }
 
-export function serviceMergeKey(requestType: GuestServiceRequestType, detail: string | null): string {
+function timestamp(value: unknown): string {
+  return value instanceof Date ? value.toISOString() : String(value)
+}
+
+export function serviceMergeKey(
+  requestType: GuestServiceRequestType,
+  detail: string | null,
+  relatedOrderId: string | null = null,
+): string {
   const normalizedDetail = detail?.trim().replace(/\s+/g, ' ').toLocaleLowerCase('zh-CN') ?? ''
-  return createHash('sha256').update(`${requestType}\n${normalizedDetail}`, 'utf8').digest('hex')
+  const orderScope = relatedOrderId === null ? '' : `\norder:${relatedOrderId}`
+  return createHash('sha256').update(`${requestType}\n${normalizedDetail}${orderScope}`, 'utf8').digest('hex')
 }
 
 function validateRequest(input: Readonly<GuestServiceRequestInput>): string | null {
@@ -299,6 +572,11 @@ function validateRequest(input: Readonly<GuestServiceRequestInput>): string | nu
   }
   if (input.requestType === 'custom' && (detail === null || detail.length < 2)) {
     throw new TypeError('custom service detail must contain at least 2 characters')
+  }
+  if (input.relatedOrderPublicId !== undefined && input.relatedOrderPublicId !== null
+    && (typeof input.relatedOrderPublicId !== 'string'
+      || !/^[A-Za-z0-9-]{8,128}$/.test(input.relatedOrderPublicId))) {
+    throw new TypeError('relatedOrderPublicId is invalid')
   }
   hashGuestBehaviorPrincipal(input.actorRef)
   hashGuestBehaviorPrincipal(input.deviceFingerprint)

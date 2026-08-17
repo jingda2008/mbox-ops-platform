@@ -1,77 +1,83 @@
-const { createServiceTask, getGuestSession } = require('../../utils/api')
+const { createServiceTask, getTableOrders } = require('../../utils/api')
 const { getRuntimeConfig } = require('../../config/index')
 const { getTableSession } = require('../../utils/session')
 
+const LOCAL_REQUESTS_KEY = 'mbox.guest.service.requests.v2'
+
 Page({
   data: {
-    loading: true,
-    error: '',
-    warning: '',
-    success: '',
-    isDevelopment: false,
-    isFallback: false,
-    tableCode: '',
-    serviceTypes: [],
-    customServiceTypeId: '',
-    note: '',
-    submittingId: '',
+    submittingId: '', error: '', success: '', isDevelopment: false, tableCode: '', note: '',
+    complaintOrders: [{ publicId: '', label: '整桌问题（不指定订单）' }], complaintOrderIndex: 0,
+    serviceTypes: [
+      { id: 'water', name: '加水', detail: '顾客需要加水', mark: '水' },
+      { id: 'ice', name: '加冰', detail: '顾客需要加冰', mark: '冰' },
+      { id: 'tableware', name: '补充杯具', detail: '顾客需要补充杯具或餐具', mark: '杯' },
+      { id: 'order_help', name: '点单协助', detail: '顾客需要点单协助', mark: '单' },
+      { id: 'bill_help', name: '买单协助', detail: '顾客需要买单协助', mark: '账' },
+      { id: 'call_staff', name: '呼叫服务人员', detail: '', mark: '人' },
+    ],
   },
 
   onLoad() {
-    const session = getTableSession()
-    this.setData({ tableCode: session.tableCode, isDevelopment: getRuntimeConfig().isDevelopment })
-    this.loadData()
+    this.setData({ tableCode: getTableSession().tableCode, isDevelopment: getRuntimeConfig().isDevelopment })
+    this.loadComplaintOrders()
   },
 
-  async loadData() {
-    this.setData({ loading: true, error: '' })
+  async loadComplaintOrders() {
     try {
-      const result = await getGuestSession()
-      const availableTypes = result.data.serviceTypes || []
-      const customType = availableTypes.find((item) => item.code === 'CUSTOM_REQUEST')
-      const serviceTypes = availableTypes.filter((item) => (
-        item.code !== 'complaint' && item.id !== 'complaint' && item.code !== 'CUSTOM_REQUEST'
-      ))
-      this.setData({ loading: false, warning: result.warning, isFallback: result.source !== 'api', serviceTypes, customServiceTypeId: customType ? customType.id : '' })
-    } catch (error) {
-      this.setData({ loading: false, error: error.message || '服务项目载入失败' })
-    }
+      const orders = await getTableOrders()
+      const complaintOrders = [{ publicId: '', label: '整桌问题（不指定订单）' }].concat(
+        (orders || []).slice(0, 8).map((order) => ({
+          publicId: order.publicId,
+          label: `${String(order.publicId || '').slice(-8)} · ${(order.items || []).slice(0, 2).map((item) => item.name).join('、') || '订单'}`,
+        })),
+      )
+      this.setData({ complaintOrders, complaintOrderIndex: 0 })
+    } catch (_) {}
   },
 
-  onNoteInput(event) {
-    this.setData({ note: event.detail.value })
+  onNoteInput(event) { this.setData({ note: event.detail.value }) },
+  onComplaintOrderChange(event) { this.setData({ complaintOrderIndex: Number(event.detail.value) }) },
+
+  requestService(event) {
+    const item = this.data.serviceTypes.find((value) => value.id === event.currentTarget.dataset.id)
+    if (!item) return
+    return this.submitService(item.id, item.id === 'call_staff' ? 'call_staff' : 'custom', item.detail)
   },
 
-  async requestService(event) {
-    return this.submitService(event.currentTarget.dataset.id, '')
-  },
-
-  async submitCustomRequest() {
+  submitCustomRequest() {
     const note = this.data.note.trim()
-    if (!note) {
-      this.setData({ error: '请先填写您的个性化需求', success: '' })
-      return
-    }
-    if (!this.data.customServiceTypeId) {
-      this.setData({ error: '个性化需求服务暂未启用，请直接呼叫服务员', success: '' })
-      return
-    }
-    return this.submitService(this.data.customServiceTypeId, note)
+    if (note.length < 2) return this.setData({ error: '请简单说明需要什么，我们好马上安排', success: '' })
+    return this.submitService('custom', 'custom', note)
   },
 
-  async submitService(serviceTypeId, note) {
-    if (this.data.isFallback) {
-      this.setData({ error: '开发占位数据不能提交服务，请启动本地 API 后重试' })
-      return
-    }
-    this.setData({ submittingId: serviceTypeId, error: '', success: '' })
-    try {
-      const task = await createServiceTask({ serviceTypeId, note })
-      this.setData({ success: task.customerReply || '已收到，服务人员正在处理。', note: '' })
-    } catch (error) {
-      this.setData({ error: error.message || '请求未提交，请重试' })
-    } finally {
-      this.setData({ submittingId: '' })
-    }
+  requestManager() {
+    const selected = this.data.complaintOrders[this.data.complaintOrderIndex]
+    return this.submitService('manager', 'complaint', '顾客请求值班经理到桌协助', selected && selected.publicId)
   },
+
+  async submitService(id, requestType, detail, relatedOrderPublicId) {
+    if (this.data.submittingId) return
+    this.setData({ submittingId: id, error: '', success: '' })
+    try {
+      const response = await createServiceTask({ requestType, detail, relatedOrderPublicId })
+      const task = response.data || response
+      const record = {
+        publicId: task.taskPublicId || `local-${Date.now()}`,
+        requestType,
+        name: id === 'manager' ? '值班经理协助' : (this.data.serviceTypes.find((item) => item.id === id) || {}).name || '个性化需求',
+        detail,
+        status: task.taskStatus || 'pending',
+        statusText: '等待接单',
+        createdAt: new Date().toISOString(),
+      }
+      const stored = wx.getStorageSync(LOCAL_REQUESTS_KEY) || []
+      wx.setStorageSync(LOCAL_REQUESTS_KEY, [record].concat(stored.filter((item) => item.publicId !== record.publicId)).slice(0, 30))
+      this.setData({ success: task.message || '收到，我们马上来照顾您。', note: '' })
+    } catch (error) {
+      this.setData({ error: error.message || '请求暂时没有送达，请稍后重试' })
+    } finally { this.setData({ submittingId: '' }) }
+  },
+
+  openStatus() { wx.navigateTo({ url: '/pages/status/index' }) },
 })

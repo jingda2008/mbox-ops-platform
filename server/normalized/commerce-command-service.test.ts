@@ -14,6 +14,7 @@ import {
   ScopedPostgresTransactionRunner,
 } from './index.js'
 import { CommerceCommandService, type SubmittedCommerceResult } from './commerce-command-service.js'
+import { CustomerExperienceRepository } from './customer-experience-repository.js'
 import {
   GuestOrderDuplicateConfirmationRequiredError,
   GuestOrderRateLimitedError,
@@ -21,8 +22,10 @@ import {
 import { InsufficientInventoryError } from './inventory-repository.js'
 import { KdsRepository } from './kds-repository.js'
 import { PaymentCommandService } from './payment-command-service.js'
+import { LoyaltyOperationalControlService } from './loyalty-operational-control-service.js'
 import type { PaymentCapabilityAuthorizationPort } from './payment-security-policy.js'
 import { StaffAccessDeniedError } from './staff-access-repository.js'
+import { seedActiveGuestTableAuthority } from './guest-table-authority.test-helper.js'
 import {
   PricingAuthorizationDeniedError,
   type PricingAuthorityContext,
@@ -48,8 +51,11 @@ const recipeAId = randomUUID()
 const recipeBId = randomUUID()
 const recipeKitchenId = randomUUID()
 const employeeId = randomUUID()
+const checkoutRuleDrafterId = randomUUID()
+const checkoutRulePublisherId = randomUUID()
 const customerId = randomUUID()
 const customerTwoId = randomUUID()
+const guestActorRefs=new Map<string,string>([[customerId,`guest-session:${randomUUID()}`]])
 const kdsRoleId = randomUUID()
 const pricingAuthorizationId = randomUUID()
 
@@ -115,6 +121,7 @@ describe('CommerceCommandService unit transaction composition', () => {
       { rows: [{ id: orderItemId, order_id: orderId, product_id: productAId, parent_order_item_id: null, quantity: 1, unit_price_minor: '8800', discount_amount_minor: '0', total_amount_minor: '8800', currency: 'CNY', fulfillment_station: 'bar', product_snapshot: {}, cost_snapshot: {}, status: 'submitted', note: null, created_at: '2026-08-11T12:00:00.000Z' }] },
       { rows: [], rowCount: 1 },
       { rows: [], rowCount: 1 },
+      { rows: [{ affected_count: 0 }] },
       { rows: [{ fulfillment_expires_at: expiresAt, fulfillment_state: 'awaiting_payment' }] },
       { rows: [{ order_item_id: orderItemId, inventory_item_id: inventoryAId, sku: 'A-ING', required_quantity: '1.000000' }] },
       { rows: [] },
@@ -216,12 +223,13 @@ describe('CommerceCommandService unit transaction composition', () => {
   })
 
   it('rejects a guest presenting an employee pricing source even when a port claims approval', async () => {
-    const executor = new RecordingExecutor(new ScriptedTransaction([]))
+    const executor = new RecordingExecutor(new ScriptedTransaction([
+      { rows: [{ id: sessionOneId }] },
+      { rows: [{ participation_id: randomUUID() }] },
+    ]))
     const authority = employeePricingAuthority(8800, 'gift')
     await expect(new CommerceCommandService(executor, authority).submitOrder({
-      ...command('unit-guest-forged-gift', sessionOneId, productAId, 1, 'unit-guest-gift-0001'),
-      channel: 'guest_qr',
-      createdByCustomerId: customerId,
+      ...guestCommand('unit-guest-forged-gift',customerId,productAId,1,'unit-guest-gift-0001'),
       pricingAuthorization: {
         sourceType: 'employee',
         sourceId: employeeId,
@@ -333,6 +341,20 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
 
   beforeEach(async () => {
     await pool.query(`
+      UPDATE mbox.checkout_upgrade_offers SET status='expired',updated_at=clock_timestamp()
+      WHERE tenant_id=$1 AND store_id=$2 AND status IN ('offered','selected')
+    `, [tenantId, storeId])
+    await pool.query(`
+      UPDATE mbox.checkout_upgrade_rules
+      SET status='retired',valid_until=clock_timestamp(),updated_at=clock_timestamp()
+      WHERE tenant_id=$1 AND store_id=$2 AND status='active' AND publication_mode='separated'
+    `, [tenantId, storeId])
+    await pool.query(`
+      UPDATE mbox.customer_experience_features
+      SET rollout_state='disabled', updated_at=clock_timestamp()
+      WHERE tenant_id=$1 AND store_id=$2 AND feature_code='checkout_upgrade'
+    `, [tenantId, storeId])
+    await pool.query(`
       UPDATE mbox.inventory_balances
       SET on_hand_quantity = CASE inventory_item_id
         WHEN $3::uuid THEN 5
@@ -364,6 +386,210 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
         (SELECT count(*)::text FROM mbox.outbox_messages WHERE aggregate_id = $3::uuid) AS outbox
     `, [input.publicId, first.value.order.items[0]!.id, first.value.order.id, tenantId, storeId])
     expect(evidence.rows[0]).toEqual({ orders: '1', movements: '1', tasks: '1', events: '1', audits: '1', outbox: '1' })
+  })
+
+  it('replays a pre-066 idempotency result without inferring cost from JSON', async () => {
+    const input = command(
+      `integration-legacy-cost-replay-${randomUUID()}`,
+      sessionOneId,
+      productAId,
+      1,
+      `legacy-cost-replay-${randomUUID()}`,
+    )
+    const first = await service.submitOrder(input)
+    await pool.query(`
+      UPDATE mbox.idempotency_records AS record
+      SET response_snapshot=jsonb_set(
+        record.response_snapshot,
+        '{result,order,items}',
+        (
+          SELECT jsonb_agg(item
+            - 'unitCostMinorAtSubmission'
+            - 'totalCostMinorAtSubmission'
+            - 'costSource'
+            - 'costReferenceProductId'
+            - 'costReferenceOrderItemId'
+            - 'costReferenceProductUpdatedAt')
+          FROM jsonb_array_elements(record.response_snapshot #> '{result,order,items}') AS item
+        )
+      )
+      WHERE record.tenant_id=$1 AND record.store_id=$2
+        AND record.operation_scope='commerce.order.submit'
+        AND record.idempotency_key=$3
+    `, [tenantId, storeId, input.idempotencyKey])
+
+    const replay = await service.submitOrder(input)
+    expect(replay.replayed).toBe(true)
+    expect(replay.value.order.id).toBe(first.value.order.id)
+    expect(replay.value.order.items[0]).toMatchObject({
+      unitCostMinorAtSubmission: null,
+      totalCostMinorAtSubmission: null,
+      costSource: 'unavailable',
+      costReferenceProductId: null,
+      costReferenceOrderItemId: null,
+      costReferenceProductUpdatedAt: null,
+    })
+  })
+
+  it('binds a valid recommendation option to the order transaction and fingerprints the attribution', async () => {
+    const recommendation = await seedRecommendation(pool, {
+      customerId,
+      tableSessionId: sessionOneId,
+      productId: productAId,
+    })
+    const input = {
+      ...guestCommand(
+        'integration-recommendation-order',
+        customerId,
+        productAId,
+        1,
+        'integration-recommendation-order-0001',
+      ),
+      recommendationAttribution: {
+        recommendationPublicId: recommendation.publicId,
+        selectedProductId: productAId,
+      },
+    }
+
+    const submitted = await service.submitOrder(input)
+    const replayed = await service.submitOrder(input)
+    expect(replayed).toEqual({ value: submitted.value, replayed: true })
+    await expect(service.submitOrder({
+      ...input,
+      recommendationAttribution: {
+        recommendationPublicId: recommendation.publicId,
+        selectedProductId: productBId,
+      },
+    })).rejects.toBeInstanceOf(IdempotencyConflictError)
+
+    const evidence = await pool.query<{
+      event_type: string
+      customer_id: string
+      table_session_id: string
+      order_id: string
+      ordered_events: string
+    }>(`
+      SELECT event.event_type, event.customer_id::text, event.table_session_id::text,
+        event.order_id::text,
+        (SELECT count(*)::text FROM mbox.recommendation_behavior_events duplicate
+          WHERE duplicate.tenant_id=event.tenant_id AND duplicate.store_id=event.store_id
+            AND duplicate.recommendation_session_id=event.recommendation_session_id
+            AND duplicate.event_type='ordered') AS ordered_events
+      FROM mbox.recommendation_behavior_events AS event
+      WHERE event.tenant_id=$1::uuid AND event.store_id=$2::uuid
+        AND event.recommendation_session_id=$3::uuid AND event.event_type='ordered'
+    `, [tenantId, storeId, recommendation.sessionId])
+    expect(evidence.rows[0]).toEqual({
+      event_type: 'ordered',
+      customer_id: customerId,
+      table_session_id: sessionOneId,
+      order_id: submitted.value.order.id,
+      ordered_events: '1',
+    })
+  })
+
+  it('keeps selected evidence without writing a false ordered event when transformed checkout omits attribution', async () => {
+    const recommendation = await seedRecommendation(pool, {
+      customerId,
+      tableSessionId: sessionOneId,
+      productId: productAId,
+    })
+    await pool.query(`
+      INSERT INTO mbox.recommendation_behavior_events (
+        tenant_id, store_id, recommendation_session_id, recommendation_option_id,
+        customer_id, table_session_id, event_type, actor_type, actor_ref,
+        reason_code, evidence_snapshot
+      ) VALUES (
+        $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6::uuid,
+        'selected', 'guest', 'guest-test:selected-before-upgrade', NULL,
+        '{"surface":"guest_order_recommendations"}'::jsonb
+      )
+    `, [
+      tenantId,
+      storeId,
+      recommendation.sessionId,
+      recommendation.optionId,
+      customerId,
+      sessionOneId,
+    ])
+
+    await service.submitOrder(guestCommand(
+      'integration-recommendation-transformed-order',
+      customerId,
+      productBId,
+      1,
+      'integration-recommendation-transformed-order-0001',
+    ))
+
+    const evidence = await pool.query<{ selected: string; ordered: string }>(`
+      SELECT
+        count(*) FILTER (WHERE event_type='selected')::text AS selected,
+        count(*) FILTER (WHERE event_type='ordered')::text AS ordered
+      FROM mbox.recommendation_behavior_events
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        AND recommendation_session_id=$3::uuid
+    `, [tenantId, storeId, recommendation.sessionId])
+    expect(evidence.rows[0]).toEqual({ selected: '1', ordered: '0' })
+  })
+
+  it('rolls back the whole order when recommendation attribution belongs to another table or is absent from order lines', async () => {
+    const forgedTable = await seedRecommendation(pool, {
+      customerId: customerTwoId,
+      tableSessionId: sessionTwoId,
+      productId: productAId,
+    })
+    const missingLine = await seedRecommendation(pool, {
+      customerId,
+      tableSessionId: sessionOneId,
+      productId: productBId,
+    })
+    const attempts = [
+      {
+        publicId: 'integration-recommendation-forged-table',
+        idempotencyKey: 'integration-recommendation-forged-table-0001',
+        recommendationPublicId: forgedTable.publicId,
+        selectedProductId: productAId,
+      },
+      {
+        publicId: 'integration-recommendation-missing-line',
+        idempotencyKey: 'integration-recommendation-missing-line-0001',
+        recommendationPublicId: missingLine.publicId,
+        selectedProductId: productBId,
+      },
+    ]
+
+    for (const attempt of attempts) {
+      await expect(service.submitOrder({
+        ...guestCommand(attempt.publicId, customerId, productAId, 5, attempt.idempotencyKey),
+        recommendationAttribution: {
+          recommendationPublicId: attempt.recommendationPublicId,
+          selectedProductId: attempt.selectedProductId,
+        },
+      })).rejects.toMatchObject({
+        code: 'RECOMMENDATION_ORDER_INVALID',
+        statusCode: 409,
+      })
+    }
+
+    const evidence = await pool.query<{ orders: string; events: string; reserved: string }>(`
+      SELECT
+        (SELECT count(*)::text FROM mbox.orders
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+            AND public_id=ANY($3::text[])) AS orders,
+        (SELECT count(*)::text FROM mbox.recommendation_behavior_events
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+            AND recommendation_session_id=ANY($4::uuid[]) AND event_type='ordered') AS events,
+        (SELECT reserved_quantity::text FROM mbox.inventory_balances
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+            AND inventory_item_id=$5::uuid) AS reserved
+    `, [
+      tenantId,
+      storeId,
+      attempts.map((attempt) => attempt.publicId),
+      [forgedTable.sessionId, missingLine.sessionId],
+      inventoryAId,
+    ])
+    expect(evidence.rows[0]).toEqual({ orders: '0', events: '0', reserved: '0.000000' })
   })
 
   it('keeps an immediate-payment order out of inventory consumption and KDS until trusted payment succeeds', async () => {
@@ -424,6 +650,16 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
       new NormalizedCommandExecutor(new ScopedPostgresTransactionRunner(asPool(pool))),
       paymentAuthorization,
     )
+    const operationalControl = new LoyaltyOperationalControlService(
+      new ScopedPostgresTransactionRunner(asPool(pool)),
+      new NormalizedCommandExecutor(new ScopedPostgresTransactionRunner(asPool(pool))),
+    )
+    await operationalControl.set({
+      scope:{tenantId,storeId},employeeId,businessDate:'2026-08-11',
+    },{
+      capability:'points_accrual',operation:'pause',reason:'积分规则待复核，付款继续正常处理',
+      reviewAt:null,expectedVersion:0,idempotencyKey:'integration-payment-loyalty-pause-087',
+    })
     await payment.recordManual({
       scope: { tenantId, storeId },
       actor: { type: 'employee', employeeId },
@@ -466,6 +702,132 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
       reservation_status: 'consumed', on_hand: '4.000000', reserved: '0.000000',
       movements: '1', tasks: '1',
     })
+    expect((await pool.query(`SELECT status,pause_control_version FROM mbox.loyalty_accrual_deferred_orders
+      WHERE tenant_id=$1 AND store_id=$2 AND order_id=$3`,[tenantId,storeId,orderId])).rows[0])
+      .toEqual({status:'pending',pause_control_version:1})
+    await operationalControl.set({
+      scope:{tenantId,storeId},employeeId,businessDate:'2026-08-11',
+    },{
+      capability:'points_accrual',operation:'resume',reason:'积分规则复核完成，恢复补算',
+      reviewAt:null,expectedVersion:1,idempotencyKey:'integration-payment-loyalty-resume-087',
+    })
+  })
+
+  it('locks, revalidates and converts a checkout upgrade in the same order transaction', async () => {
+    const runner = new ScopedPostgresTransactionRunner(asPool(pool))
+    const ruleCode = `UPGRADE_${randomUUID().replaceAll('-', '').slice(0, 12).toUpperCase()}`
+    await pool.query(`
+      INSERT INTO mbox.customer_experience_features(
+        tenant_id, store_id, feature_code, rollout_state, configuration, reason
+      ) VALUES ($1, $2, 'checkout_upgrade', 'enabled', '{}'::jsonb, '原子结账数据库测试')
+      ON CONFLICT (tenant_id, store_id, feature_code) DO UPDATE
+      SET rollout_state='enabled', updated_at=clock_timestamp()
+    `, [tenantId, storeId])
+    await seedReleasedCheckoutUpgradeRule(pool, ruleCode, 'Atomic upgrade')
+    const offer = await runner.run({ tenantId, storeId }, async (transaction) => (
+      new CustomerExperienceRepository(transaction).prepareCheckoutUpgrade({
+        customerId,
+        tableSessionId: sessionOneId,
+        businessDate: '2026-08-11',
+        actorRef: 'checkout-upgrade-integration',
+        partySize: 2,
+      }, {
+        items: [{ productId: productBId, quantity: 1 }],
+        idempotencyKey: `checkout-upgrade-offer-${randomUUID()}`,
+      })
+    ))
+    expect(offer).not.toBeNull()
+
+    const submitted = await service.submitOrder({
+      ...guestCommand(
+        'integration-checkout-upgrade-order', customerId, productBId, 1,
+        `integration-checkout-upgrade-${randomUUID()}`,
+      ),
+      checkoutUpgradeOfferPublicId: offer!.publicId,
+    })
+
+    expect(submitted.value.order.items.filter((item) => item.billable)).toEqual([
+      expect.objectContaining({ productId: bundleProductId, unitPriceMinor: 14800, quantity: 1 }),
+    ])
+    expect(submitted.value.kdsTasks).toHaveLength(0)
+    expect(submitted.value.inventoryConsumptions).toHaveLength(0)
+    const evidence = await pool.query<{
+      offer_status: string
+      converted_order_id: string
+      reservations: string
+      kds_tasks: string
+    }>(`
+      SELECT offer.status AS offer_status, offer.converted_order_id::text,
+        (SELECT count(*)::text FROM mbox.inventory_order_reservations reservation
+          WHERE reservation.order_id=offer.converted_order_id) AS reservations,
+        (SELECT count(*)::text FROM mbox.kds_tasks task
+          JOIN mbox.order_items item ON item.id=task.order_item_id
+          WHERE item.order_id=offer.converted_order_id) AS kds_tasks
+      FROM mbox.checkout_upgrade_offers offer
+      WHERE offer.tenant_id=$1 AND offer.store_id=$2 AND offer.public_id=$3
+    `, [tenantId, storeId, offer!.publicId])
+    expect(evidence.rows[0]).toEqual({
+      offer_status: 'converted',
+      converted_order_id: submitted.value.order.id,
+      reservations: '2',
+      kds_tasks: '0',
+    })
+  })
+
+  it('rolls back the whole order command when an accepted upgrade price changed', async () => {
+    const runner = new ScopedPostgresTransactionRunner(asPool(pool))
+    const ruleCode = `UPGRADE_${randomUUID().replaceAll('-', '').slice(0, 12).toUpperCase()}`
+    await pool.query(`
+      INSERT INTO mbox.customer_experience_features(
+        tenant_id, store_id, feature_code, rollout_state, configuration, reason
+      ) VALUES ($1, $2, 'checkout_upgrade', 'enabled', '{}'::jsonb, '价格变化回滚数据库测试')
+      ON CONFLICT (tenant_id, store_id, feature_code) DO UPDATE
+      SET rollout_state='enabled', updated_at=clock_timestamp()
+    `, [tenantId, storeId])
+    await seedReleasedCheckoutUpgradeRule(pool, ruleCode, 'Price change upgrade')
+    const offer = await runner.run({ tenantId, storeId }, async (transaction) => (
+      new CustomerExperienceRepository(transaction).prepareCheckoutUpgrade({
+        customerId,
+        tableSessionId: sessionOneId,
+        businessDate: '2026-08-11',
+        actorRef: 'checkout-upgrade-price-change',
+        partySize: 2,
+      }, {
+        items: [{ productId: productBId, quantity: 1 }],
+        idempotencyKey: `checkout-upgrade-price-offer-${randomUUID()}`,
+      })
+    ))
+    const changedPrice = await pool.query<{ id: string }>(`
+      UPDATE mbox.product_prices
+      SET amount_minor=14900
+      WHERE tenant_id=$1 AND store_id=$2 AND product_id=$3
+        AND price_type='standard' AND valid_until IS NULL
+      RETURNING id
+    `, [tenantId, storeId, bundleProductId])
+    const publicId = 'integration-checkout-upgrade-price-changed'
+    const idempotencyKey = `integration-checkout-upgrade-price-${randomUUID()}`
+    try {
+      await expect(service.submitOrder({
+        ...guestCommand(publicId, customerId, productBId, 1, idempotencyKey),
+        checkoutUpgradeOfferPublicId: offer!.publicId,
+      })).rejects.toMatchObject({ code: 'CHECKOUT_UPGRADE_PRICE_CHANGED', statusCode: 409 })
+      const evidence = await pool.query<{
+        orders: string
+        claims: string
+        offer_status: string
+      }>(`
+        SELECT
+          (SELECT count(*)::text FROM mbox.orders
+            WHERE tenant_id=$1 AND store_id=$2 AND public_id=$3) AS orders,
+          (SELECT count(*)::text FROM mbox.idempotency_records
+            WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$4) AS claims,
+          (SELECT status FROM mbox.checkout_upgrade_offers
+            WHERE tenant_id=$1 AND store_id=$2 AND public_id=$5) AS offer_status
+      `, [tenantId, storeId, publicId, idempotencyKey, offer!.publicId])
+      expect(evidence.rows[0]).toEqual({ orders: '0', claims: '0', offer_status: 'offered' })
+    } finally {
+      await pool.query(`UPDATE mbox.product_prices SET amount_minor=14800 WHERE id=$1`, [changedPrice.rows[0]!.id])
+    }
   })
 
   it('persists settlement mode and treats a changed settlement mode as an idempotency conflict', async () => {
@@ -613,6 +975,39 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
   })
 
   it('serializes same-table guest orders across customers, requires duplicate confirmation, and rate-limits per customer', async () => {
+    const raceCustomerOneId = randomUUID()
+    const raceCustomerTwoId = randomUUID()
+    const raceTableId = randomUUID()
+    const raceSessionId = randomUUID()
+    const raceSuffix = raceSessionId.replaceAll('-', '').slice(0, 12)
+    await pool.query(`
+      INSERT INTO mbox.tables(
+        id, tenant_id, store_id, area_id, code, display_name, capacity
+      ) VALUES ($1, $2, $3, $4, $5, 'Guest race table', 4)
+    `, [raceTableId, tenantId, storeId, areaId, `RACE_${raceSuffix}`])
+    await pool.query(`
+      INSERT INTO mbox.table_sessions(
+        id, tenant_id, store_id, table_id, public_id, business_date, guest_count, status
+      ) VALUES ($1, $2, $3, $4, $5, '2026-08-11', 2, 'open')
+    `, [raceSessionId, tenantId, storeId, raceTableId, `guest-race-session-${raceSuffix}`])
+    await pool.query(`
+      INSERT INTO mbox.customers(id, tenant_id, store_id, public_id) VALUES
+        ($1, $3, $4, $5), ($2, $3, $4, $6)
+    `, [
+      raceCustomerOneId, raceCustomerTwoId, tenantId, storeId,
+      `guest-race-${raceCustomerOneId}`, `guest-race-${raceCustomerTwoId}`,
+    ])
+    await pool.query(`
+      INSERT INTO mbox.table_session_customers(
+        tenant_id, store_id, table_session_id, customer_id, relationship
+      ) VALUES ($1, $2, $3, $4, 'guest'), ($1, $2, $3, $5, 'guest')
+    `, [tenantId, storeId, raceSessionId, raceCustomerOneId, raceCustomerTwoId])
+    guestActorRefs.set(raceCustomerOneId,await seedActiveGuestTableAuthority(pool,{
+      tenantId,storeId,tableSessionId:raceSessionId,customerId:raceCustomerOneId,
+    }))
+    guestActorRefs.set(raceCustomerTwoId,await seedActiveGuestTableAuthority(pool,{
+      tenantId,storeId,tableSessionId:raceSessionId,customerId:raceCustomerTwoId,
+    }))
     const guestService = new CommerceCommandService(
       new NormalizedCommandExecutor(new ScopedPostgresTransactionRunner(asPool(pool))),
       undefined,
@@ -625,8 +1020,8 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
       },
     )
     const concurrentInputs = [
-      guestCommand('guest-race-one', customerId, productBId, 1, 'guest-race-one-0001'),
-      guestCommand('guest-race-two', customerTwoId, productBId, 1, 'guest-race-two-0001'),
+      guestCommand('guest-race-one', raceCustomerOneId, productBId, 1, 'guest-race-one-0001', raceSessionId),
+      guestCommand('guest-race-two', raceCustomerTwoId, productBId, 1, 'guest-race-two-0001', raceSessionId),
     ] as const
     const results = await Promise.allSettled(concurrentInputs.map((input) => guestService.submitOrder(input)))
     const fulfilledIndex = results.findIndex((result) => result.status === 'fulfilled')
@@ -642,16 +1037,16 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
     if (accepted?.status !== 'fulfilled') throw new Error('Expected one accepted guest order')
     const rejectedCustomerId = concurrentInputs[rejectedIndex]!.createdByCustomerId
     const confirmed = await guestService.submitOrder({
-      ...guestCommand('guest-race-confirmed', rejectedCustomerId, productBId, 1, 'guest-race-confirmed-0001'),
+      ...guestCommand('guest-race-confirmed', rejectedCustomerId, productBId, 1, 'guest-race-confirmed-0001', raceSessionId),
       confirmedDuplicateOrderPublicId: accepted.value.value.order.publicId,
     })
     expect(confirmed.value.order.createdByCustomerId).toBe(rejectedCustomerId)
 
     await guestService.submitOrder(
-      guestCommand('guest-race-distinct', rejectedCustomerId, productAId, 1, 'guest-race-distinct-0001'),
+      guestCommand('guest-race-distinct', rejectedCustomerId, productAId, 1, 'guest-race-distinct-0001', raceSessionId),
     )
     await expect(guestService.submitOrder(
-      guestCommand('guest-race-rate-limited', rejectedCustomerId, productAId, 2, 'guest-race-limited-0001'),
+      guestCommand('guest-race-rate-limited', rejectedCustomerId, productAId, 2, 'guest-race-limited-0001', raceSessionId),
     )).rejects.toMatchObject({
       name: 'GuestOrderRateLimitedError',
       dimension: 'customer',
@@ -746,9 +1141,53 @@ function typedPriceRow() {
     allowed_channels: ['guest_qr', 'staff_assisted', 'cashier', 'reservation', 'integration'],
     max_order_quantity: 50, available_from: null, available_until: null,
     kds_priority: 100, fulfillment_sla_seconds: 300,
+    cost_amount_minor: '3000', product_updated_at: '2026-08-11T11:59:00.000Z',
     price_type: 'standard', amount_minor: '8800', currency: 'CNY',
     store_timezone: 'Asia/Shanghai', store_local_time: '20:00', store_iso_weekday: 1,
   }
+}
+
+async function seedRecommendation(
+  pool: Pool,
+  input: Readonly<{ customerId: string; tableSessionId: string; productId: string }>,
+): Promise<{ sessionId: string; optionId: string; publicId: string }> {
+  const policyId = randomUUID()
+  const sessionId = randomUUID()
+  const optionId = randomUUID()
+  const token = sessionId.replaceAll('-', '').slice(0, 16)
+  const publicId = `recommendation-order-${token}`
+  await pool.query(`
+    INSERT INTO mbox.recommendation_policy_versions (
+      id, tenant_id, store_id, public_id, policy_code, version, status,
+      created_by_employee_id, draft_reason, explanation_template
+    ) VALUES (
+      $1::uuid, $2::uuid, $3::uuid, $4, $5, 1, 'draft',
+      $6::uuid, '仅作为订单归因外键测试，不进入运行推荐', '订单推荐归因测试'
+    )
+  `, [policyId, tenantId, storeId, `recommendation-policy-${token}`, `TEST_${token.toUpperCase()}`, employeeId])
+  await pool.query(`
+    INSERT INTO mbox.recommendation_sessions (
+      id, tenant_id, store_id, public_id, customer_id, table_session_id,
+      business_date, source, party_size, occasion, alcohol_preference,
+      experience_level, service_intensity, answers_snapshot, recommendation_snapshot
+    ) VALUES (
+      $1::uuid, $2::uuid, $3::uuid, $4, $5::uuid, $6::uuid,
+      '2026-08-11', 'miniprogram', 2, 'friends', 'undecided',
+      'enhanced', 'balanced', '{}'::jsonb, '[]'::jsonb
+    )
+  `, [sessionId, tenantId, storeId, publicId, input.customerId, input.tableSessionId])
+  await pool.query(`
+    INSERT INTO mbox.recommendation_options (
+      id, tenant_id, store_id, recommendation_session_id, policy_version_id,
+      product_id, rank, tier, amount_minor, cost_amount_minor, currency,
+      total_score, explanation, display_snapshot
+    ) VALUES (
+      $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid,
+      $6::uuid, 1, 'enhanced', 8800, 3000, 'CNY',
+      100, '适合当前桌次', '{}'::jsonb
+    )
+  `, [optionId, tenantId, storeId, sessionId, policyId, input.productId])
+  return { sessionId, optionId, publicId }
 }
 
 function command(publicId: string, tableSessionId: string, productId: string, quantity: number, idempotencyKey: string) {
@@ -770,12 +1209,13 @@ function guestCommand(
   productId: string,
   quantity: number,
   idempotencyKey: string,
+  tableSessionId = sessionOneId,
 ) {
   return {
     scope: { tenantId, storeId },
-    actor: { type: 'guest' as const, ref: `guest-test:${createdByCustomerId}` },
+    actor: { type: 'guest' as const, ref: guestActorRefs.get(createdByCustomerId)! },
     businessDate: '2026-08-11',
-    tableSessionId: sessionOneId,
+    tableSessionId,
     publicId,
     channel: 'guest_qr' as const,
     settlementMode: 'immediate_payment' as const,
@@ -808,6 +1248,31 @@ function employeePricingAuthority(
   })
 }
 
+async function seedReleasedCheckoutUpgradeRule(pool: Pool, code: string, name: string): Promise<void> {
+  const created = await pool.query<{ id: string }>(`
+    INSERT INTO mbox.checkout_upgrade_rules(
+      tenant_id,store_id,code,revision,name,source_product_id,target_product_id,
+      prompt_title,prompt_body,call_to_action,status,drafted_by_employee_id,
+      minimum_gross_margin_basis_points,publication_mode
+    ) VALUES ($1,$2,$3,1,$4,$5,$6,'升级今晚体验','将当前单品换成完整套餐',
+      '确认升级','draft',$7,100,'separated')
+    RETURNING id
+  `, [tenantId,storeId,code,name,productBId,bundleProductId,checkoutRuleDrafterId])
+  const ruleId = created.rows[0]!.id
+  await pool.query(`
+    UPDATE mbox.checkout_upgrade_rules
+    SET status='approved',approved_by_employee_id=$4,approved_at=clock_timestamp(),
+      approval_reason='测试复核价格、毛利、套餐和配方'
+    WHERE tenant_id=$1 AND store_id=$2 AND id=$3
+  `, [tenantId,storeId,ruleId,employeeId])
+  await pool.query(`
+    UPDATE mbox.checkout_upgrade_rules
+    SET status='active',published_by_employee_id=$4,published_at=clock_timestamp(),
+      publication_reason='测试发布原子升级规则',valid_from=clock_timestamp()
+    WHERE tenant_id=$1 AND store_id=$2 AND id=$3
+  `, [tenantId,storeId,ruleId,checkoutRulePublisherId])
+}
+
 async function seed(pool: Pool): Promise<void> {
   const suffix = tenantId.slice(0, 8)
   await pool.query(`INSERT INTO mbox.tenants(id, code, name) VALUES ($1, $2, 'Commerce Tenant') ON CONFLICT DO NOTHING`, [tenantId, `commerce-${suffix}`])
@@ -825,7 +1290,13 @@ async function seed(pool: Pool): Promise<void> {
       ($2, $3, $4, $6, 'commerce-session-two', '2026-08-11', 2, 'open')
     ON CONFLICT DO NOTHING
   `, [sessionOneId, sessionTwoId, tenantId, storeId, tableOneId, tableTwoId])
-  await pool.query(`INSERT INTO mbox.employees(id, tenant_id, store_id, employee_code, display_name, status) VALUES ($1, $2, $3, 'KDS01', 'KDS Tester', 'active') ON CONFLICT DO NOTHING`, [employeeId, tenantId, storeId])
+  await pool.query(`
+    INSERT INTO mbox.employees(id, tenant_id, store_id, employee_code, display_name, status) VALUES
+      ($1, $3, $4, 'KDS01', 'KDS Tester', 'active'),
+      ($2, $3, $4, 'UPGRADE_DRAFTER', 'Upgrade Rule Drafter', 'active'),
+      ($5, $3, $4, 'UPGRADE_PUBLISHER', 'Upgrade Rule Publisher', 'active')
+    ON CONFLICT DO NOTHING
+  `, [employeeId, checkoutRuleDrafterId, tenantId, storeId, checkoutRulePublisherId])
   await pool.query(`
     INSERT INTO mbox.customers(id, tenant_id, store_id, public_id) VALUES
       ($1, $3, $4, 'commerce-guest-one'),
@@ -840,6 +1311,12 @@ async function seed(pool: Pool): Promise<void> {
       ($1, $2, $3, $5, 'guest')
     ON CONFLICT DO NOTHING
   `, [tenantId, storeId, sessionOneId, customerId, customerTwoId])
+  guestActorRefs.set(customerId,await seedActiveGuestTableAuthority(pool,{
+    tenantId,storeId,tableSessionId:sessionOneId,customerId,
+  }))
+  guestActorRefs.set(customerTwoId,await seedActiveGuestTableAuthority(pool,{
+    tenantId,storeId,tableSessionId:sessionOneId,customerId:customerTwoId,
+  }))
   await pool.query(`
     INSERT INTO mbox.roles(id, tenant_id, store_id, code, name, capabilities, status)
     VALUES ($1, $2, $3, 'KDS_TESTER', 'KDS Tester', ARRAY['kds.prepare'], 'active')
@@ -862,11 +1339,14 @@ async function seed(pool: Pool): Promise<void> {
     ON CONFLICT DO NOTHING
   `, [tenantId, storeId, kdsRoleId])
   await pool.query(`
-    INSERT INTO mbox.products(id, tenant_id, store_id, code, name, category_code, fulfillment_station, product_kind) VALUES
-      ($1, $3, $4, 'PRODUCT-A', 'Product A', 'drink', 'bar', 'single'),
-      ($2, $3, $4, 'PRODUCT-B', 'Product B', 'drink', 'bar', 'single'),
-      ($5, $3, $4, 'PRODUCT-KITCHEN', 'Kitchen Product', 'food', 'kitchen', 'single'),
-      ($6, $3, $4, 'BUNDLE-AB', 'Bar and Kitchen Bundle', 'bundle', 'none', 'bundle')
+    INSERT INTO mbox.products(
+      id, tenant_id, store_id, code, name, category_code,
+      fulfillment_station, product_kind, cost_amount_minor
+    ) VALUES
+      ($1, $3, $4, 'PRODUCT-A', 'Product A', 'drink', 'bar', 'single', 3000),
+      ($2, $3, $4, 'PRODUCT-B', 'Product B', 'drink', 'bar', 'single', 2000),
+      ($5, $3, $4, 'PRODUCT-KITCHEN', 'Kitchen Product', 'food', 'kitchen', 'single', 2000),
+      ($6, $3, $4, 'BUNDLE-AB', 'Bar and Kitchen Bundle', 'bundle', 'none', 'bundle', 6000)
     ON CONFLICT DO NOTHING
   `, [productAId, productBId, tenantId, storeId, productKitchenId, bundleProductId])
   await pool.query(`

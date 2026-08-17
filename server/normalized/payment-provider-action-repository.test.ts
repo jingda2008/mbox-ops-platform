@@ -24,8 +24,11 @@ describe('PaymentProviderActionRepository', () => {
         capturedSql = text
         return { rows: [{
           id: paymentId,
+          payable_kind: 'order',
           order_id: '88888888-8888-4888-8888-888888888888',
           order_public_id: 'order-shared-payment-0001',
+          activity_registration_id: null,
+          activity_registration_public_id: null,
           public_id: 'payment-shared-0001',
           provider: 'postar',
           provider_transaction_id: null,
@@ -34,6 +37,7 @@ describe('PaymentProviderActionRepository', () => {
           currency: 'CNY',
           status: 'pending',
           table_session_id: tableSessionId,
+          customer_id: null,
           table_code: 'W01',
           created_at: '2026-08-14T00:00:00.000Z',
         }], rowCount: 1 }
@@ -85,6 +89,24 @@ describe('PaymentProviderActionRepository', () => {
     await expect(repository.claim(paymentId, 'barcode', expiresAt, { type: 'employee', employeeId }))
       .rejects.toBeInstanceOf(ProviderPaymentMethodConflictError)
   })
+
+  it('replays the same activity action key but rejects reusing it for another guest', async () => {
+    const transaction = new ActionTransaction()
+    const repository = new PaymentProviderActionRepository(transaction, secret)
+    const idempotencyKey = 'activity-action-key-0001'
+    await repository.claim(paymentId, 'qr', expiresAt, {
+      type: 'guest', tableSessionId: null, customerId: customerOneId,
+    }, idempotencyKey)
+    const payload = { qrCodeUrl: 'https://pay.example.test/activity' }
+    await repository.complete(paymentId, 'qr', payload, expiresAt, null)
+
+    await expect(repository.claim(paymentId, 'qr', expiresAt, {
+      type: 'guest', tableSessionId: null, customerId: customerOneId,
+    }, idempotencyKey)).resolves.toEqual({ claimed: false, payload, expiresAt })
+    await expect(repository.claim(paymentId, 'qr', expiresAt, {
+      type: 'guest', tableSessionId: null, customerId: customerTwoId,
+    }, idempotencyKey)).rejects.toBeInstanceOf(ProviderPaymentMethodConflictError)
+  })
 })
 
 class ActionTransaction implements ScopedTransaction {
@@ -99,6 +121,8 @@ class ActionTransaction implements ScopedTransaction {
     auth_tag: Buffer
     expires_at: string
     updated_at: string
+    request_idempotency_key: string | null
+    request_fingerprint: string | null
   } = null
 
   async query<Row extends Record<string, unknown> = Record<string, unknown>>(
@@ -115,6 +139,8 @@ class ActionTransaction implements ScopedTransaction {
         state: 'creating',
         ciphertext: Buffer.alloc(0), nonce: Buffer.alloc(0), auth_tag: Buffer.alloc(0),
         expires_at: String(values[6]), updated_at: new Date().toISOString(),
+        request_idempotency_key: values[7] === null ? null : String(values[7]),
+        request_fingerprint: values[8] === null ? null : String(values[8]),
       }
       return { rows: [], rowCount: 1 }
     }

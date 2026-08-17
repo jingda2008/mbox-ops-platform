@@ -17,6 +17,8 @@ describe('ReservationRepository validation', () => {
       source: 'wechat',
       tableIds: ['10000000-0000-4000-8000-000000000001'],
       holdExpiresAt: '2026-08-11T23:20:00+08:00',
+      arrivalGraceEndsAt: '2026-08-12T00:00:00+08:00',
+      reservationPolicyVersion: 1,
     })).rejects.toThrow('query reached')
   })
 
@@ -32,6 +34,8 @@ describe('ReservationRepository validation', () => {
       source: 'wechat',
       tableIds: ['10000000-0000-4000-8000-000000000001'],
       holdExpiresAt: '2026-08-11T23:20:00+08:00',
+      arrivalGraceEndsAt: '2026-08-12T02:10:00+08:00',
+      reservationPolicyVersion: 1,
     })).rejects.toThrow('expectedEndAt must be after arrivalAt')
   })
 })

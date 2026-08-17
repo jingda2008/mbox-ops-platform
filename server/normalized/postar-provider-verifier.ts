@@ -68,6 +68,7 @@ export class PostarRsaPaymentProviderVerifier implements PaymentProviderVerifier
     }
     if (prepared.amountMinor <= 0) throw new PaymentProviderVerificationError('星驿支付金额无效')
     const providerTransactionId = prepared.providerOrderId
+    const settlementChannel = postarSettlementChannel(prepared.fields.PAY_CHANNEL)
     const businessIdentity = hashBusinessIdentity([
       'payment',
       prepared.merchant.agencyId,
@@ -84,6 +85,7 @@ export class PostarRsaPaymentProviderVerifier implements PaymentProviderVerifier
       providerTransactionId,
       amountMinor: prepared.amountMinor,
       currency: 'CNY',
+      ...(settlementChannel === null ? {} : { settlementChannel }),
       occurredAt: prepared.occurredAt,
       evidence: providerEvidence(prepared, businessIdentity),
     }
@@ -239,15 +241,22 @@ function parsePublicKey(value: string): KeyObject {
 }
 
 function providerEvidence(prepared: PreparedNotification, eventId: string): JsonObject {
+  const channel = postarSettlementChannel(prepared.fields.PAY_CHANNEL)
   return {
-    signatureVerified: true,
-    verificationAlgorithm: 'POSTAR_SHA256_RSA_PUBLIC_DECRYPT',
     providerOrderId: prepared.providerOrderId,
     merchantOrderId: prepared.merchantOrderId,
     transactionState: prepared.status,
     eventId,
     occurredAt: prepared.occurredAt,
+    ...(channel === null ? {} : { channel }),
   }
+}
+
+function postarSettlementChannel(value: JsonValue | undefined): 'wechat' | 'alipay' | 'unionpay' | null {
+  if (value === '2') return 'wechat'
+  if (value === '1') return 'alipay'
+  if (value === '9') return 'unionpay'
+  return null
 }
 
 function hashBusinessIdentity(parts: readonly string[]): string {

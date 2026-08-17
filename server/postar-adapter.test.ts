@@ -506,6 +506,7 @@ describe('Postar ordinary partial refund', () => {
         orderStatus: '4',
         orderTime: '20260714120700',
         refundAmt: '-1200',
+        oldOrderNo: 'POSTAR202607140001',
       },
       msg: 'success',
     })))
@@ -513,12 +514,23 @@ describe('Postar ordinary partial refund', () => {
       merchantId: 'MERCHANT001',
       providerRefundId: 'RefundABC123',
       refundId: 'RefundABC123',
+      originalProviderTransactionId: 'POSTAR202607140001',
+      refundDate: '20260714',
     }, context)
     expect(observation).toMatchObject({
       amount: 1200,
       providerRefundTransactionId: 'POSTARREFUND001',
+      originalProviderTransactionId: 'POSTAR202607140001',
       status: 'succeeded',
     })
+
+    await expect(success.queryRefund({
+      merchantId: 'MERCHANT001',
+      providerRefundId: 'RefundABC123',
+      refundId: 'RefundABC123',
+      originalProviderTransactionId: 'FORGED-ORIGINAL-PAYMENT',
+      refundDate: '20260714',
+    }, context)).rejects.toThrow('原支付订单号不匹配')
 
     const withdrawal = new PostarPaymentProviderAdapter(testOptions(async () => response({
       code: '000000',
@@ -529,6 +541,7 @@ describe('Postar ordinary partial refund', () => {
         orderStatus: '7',
         orderTime: '20260714120700',
         refundAmt: '-1200',
+        oldOrderNo: 'POSTAR202607140001',
       },
       msg: 'success',
     })))
@@ -536,6 +549,8 @@ describe('Postar ordinary partial refund', () => {
       merchantId: 'MERCHANT001',
       providerRefundId: 'RefundABC123',
       refundId: 'RefundABC123',
+      originalProviderTransactionId: 'POSTAR202607140001',
+      refundDate: '20260714',
     }, context)).rejects.toThrow('不是普通退款状态')
   })
 })

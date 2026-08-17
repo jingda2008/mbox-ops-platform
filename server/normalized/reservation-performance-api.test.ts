@@ -563,6 +563,20 @@ describe('reservationPerformanceApiPlugin performance and song requests', () => 
     expect(publicSongJson).not.toContain(tableSessionId)
     expect(publicSongJson).not.toContain(performerId)
     expect(publicSongJson).not.toContain('note')
+
+    const cancelled = await value.app.inject({
+      method: 'DELETE',
+      url: `/api/guest/song-requests/${songRequestId}`,
+      headers: { 'idempotency-key': 'guest-song-cancel-0001' },
+    })
+    expect(cancelled.statusCode).toBe(200)
+    expect(value.performance.cancelSongRequest).toHaveBeenCalledWith(expect.objectContaining({
+      requestId: songRequestId,
+      customerId,
+      tableSessionId,
+      actor: { type: 'guest', ref: guestContext.actorRef },
+    }))
+    expect(value.songRequestRepository.findById).not.toHaveBeenCalled()
   })
 
   it('uses song.view for staff queues and song.manage for performer, schedule and request changes', async () => {

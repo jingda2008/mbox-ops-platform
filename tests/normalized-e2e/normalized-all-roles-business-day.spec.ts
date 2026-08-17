@@ -39,7 +39,7 @@ const expectedEmployees = new Map([
 const expectedHighFrequencyEntries = new Map<string, string[]>([
   ['chenfangyu', ['现场', '收银与退款']],
   ['hugu', ['现场', '任务']],
-  ['wuya', ['系统配置', '预约']],
+  ['wuya', ['客户与活动', '系统配置', '预约']],
   ['tata', []],
   ['fuchunyu', ['演出点歌']],
   ['liyan', ['现场', '任务', '出品', '预约到店']],
@@ -147,6 +147,7 @@ async function expectStaffRoute(page: Page, route: string) {
     '/staff/performance': '演出与点歌',
     '/staff/inventory': '库存与存酒',
     '/staff/operations': '经营数据',
+    '/staff/customer-experience': '客户体验与活动',
     '/staff/devices': '设备与打印',
     '/staff/settings': '系统配置状态',
   } as Record<string, string>)[route]

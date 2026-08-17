@@ -8,16 +8,21 @@ import {
   CircleAlert,
   Gift,
   LoaderCircle,
+  MessageSquareText,
   RefreshCw,
   Search,
   Send,
   ShoppingCart,
+  Sparkles,
   TableProperties,
   Users,
 } from 'lucide-react'
 import { StaffActionsApi, StaffActionsApiError, type StaffActionsApiPort } from './staff-actions-api'
 import { AssistedOrderSheet } from './AssistedOrderSheet'
 import { ResponsibilityAssignmentPanel } from './ResponsibilityAssignmentPanel'
+import { TableObservationSheet } from './TableObservationSheet'
+import { TableRecommendationSheet } from './TableRecommendationSheet'
+import { ParticipantMovementSheet } from './ParticipantMovementSheet'
 import {
   fulfillmentAction,
   actionableFulfillmentItems,
@@ -70,6 +75,9 @@ export function StaffActionsPanel({
   const [resolutionNotes, setResolutionNotes] = useState<Record<string, string>>({})
   const [pendingAction, setPendingAction] = useState<string | null>(null)
   const [orderSheetMode, setOrderSheetMode] = useState<'paid' | 'gift' | null>(null)
+  const [observationOpen, setObservationOpen] = useState(false)
+  const [recommendationOpen, setRecommendationOpen] = useState(false)
+  const [participantMovementOpen,setParticipantMovementOpen]=useState(false)
   const [tableScope, setTableScope] = useState<StaffTableScope>('attention')
   const [tableQuery, setTableQuery] = useState('')
   const noticeRef = useRef<HTMLDivElement | null>(null)
@@ -230,6 +238,8 @@ export function StaffActionsPanel({
     setCloseConfirm(false)
     setNotice(null)
     setOrderSheetMode(null)
+    setObservationOpen(false)
+    setRecommendationOpen(false)
   }
 
   const openTable = async () => {
@@ -241,6 +251,7 @@ export function StaffActionsPanel({
     const optimisticSession = {
       id: `optimistic-${selectedTable.id}`,
       guestCount: validated.guestCount,
+      capacityAtOpen: selectedTable.capacity,
       status: 'open' as const,
       openedAt: new Date().toISOString(),
       latestMood: null,
@@ -490,6 +501,9 @@ export function StaffActionsPanel({
               onCancelClose={() => setCloseConfirm(false)}
               onOrder={() => setOrderSheetMode('paid')}
               onGift={() => setOrderSheetMode('gift')}
+              onObservation={() => setObservationOpen(true)}
+              onRecommendation={() => setRecommendationOpen(true)}
+              onParticipantMovement={() => setParticipantMovementOpen(true)}
             />
           )}
         </div>
@@ -586,6 +600,29 @@ export function StaffActionsPanel({
             void load(true)
           }}
         />
+      )}
+      {observationOpen && selectedTable?.activeSession !== null && selectedTable !== null && (
+        <TableObservationSheet
+          api={api}
+          tableCode={selectedTable.code}
+          tableSessionId={selectedTable.activeSession.id}
+          onClose={() => setObservationOpen(false)}
+          onSaved={(message) => {
+            showNotice({ kind: 'success', message })
+            void load(true)
+          }}
+        />
+      )}
+      {recommendationOpen && selectedTable?.activeSession !== null && selectedTable !== null && (
+        <TableRecommendationSheet api={api} tableCode={selectedTable.code}
+          tableSessionId={selectedTable.activeSession.id} onClose={() => setRecommendationOpen(false)}
+          onSaved={(message) => { showNotice({ kind: 'success',message });void load(true) }} />
+      )}
+      {participantMovementOpen && selectedTable?.activeSession !== null && selectedTable !== null && (
+        <ParticipantMovementSheet api={api} table={selectedTable} allTables={operations?.tables ?? []}
+          onClose={() => setParticipantMovementOpen(false)} onDone={(message) => {
+            setParticipantMovementOpen(false);showNotice({ kind:'success',message });void load(true)
+          }}/>
       )}
     </section>
   )
@@ -698,6 +735,9 @@ interface TableActionSheetProps {
   onCancelClose(): void
   onOrder(): void
   onGift(): void
+  onObservation(): void
+  onRecommendation(): void
+  onParticipantMovement():void
 }
 
 function TableActionSheet(props: TableActionSheetProps) {
@@ -754,6 +794,14 @@ function TableActionSheet(props: TableActionSheetProps) {
         <div className="staff-open-session">
           <p><strong>{table.activeSession.guestCount}人</strong><span>本桌服务进行中</span></p>
           <div className="staff-session-actions">
+            {hasPermission(props.permissions, 'observation.record') && (
+              <button type="button" className="is-observation" onClick={props.onObservation}><MessageSquareText size={17} /> 记录桌台情况</button>
+            )}
+            {hasPermission(props.permissions, 'recommendation.staff.modify') && (
+              <button type="button" className="is-recommendation" onClick={props.onRecommendation}>
+                <Sparkles size={17} /> 查看/调整推荐
+              </button>
+            )}
             {hasPermission(props.permissions, 'order.create') && (
               <button type="button" className="is-commerce" onClick={props.onOrder}><ShoppingCart size={17} /> 协助点单</button>
             )}
@@ -764,6 +812,9 @@ function TableActionSheet(props: TableActionSheetProps) {
               <button type="button" onClick={() => props.onTransferTarget(props.transferTargetId === null ? '' : null)}><ArrowRightLeft size={17} /> 转桌</button>
             ) : (
               <button type="button" onClick={() => props.onPermissionGuidance('table.transfer')}>转桌说明</button>
+            )}
+            {hasPermission(props.permissions,'table.participation.manage') && (
+              <button type="button" onClick={props.onParticipantMovement}><Users size={17}/> 人员拆并桌</button>
             )}
             {hasPermission(props.permissions, 'table.close') ? (
               <button type="button" className="is-danger" onClick={props.onClose} disabled={props.pending}>

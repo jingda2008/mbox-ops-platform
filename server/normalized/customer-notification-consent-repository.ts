@@ -4,7 +4,7 @@ import type { ScopedTransaction } from './transaction-runner.js'
 export type CustomerNotificationChannel = 'wechat' | 'sms'
 export type CustomerNotificationPurpose = 'transactional_service'
 export const CUSTOMER_NOTIFICATION_PURPOSE: CustomerNotificationPurpose = 'transactional_service'
-export type CustomerNotificationConsentDecision = 'granted' | 'revoked'
+export type CustomerNotificationConsentDecision = 'granted' | 'denied' | 'revoked'
 export type CustomerNotificationConsentSource =
   | 'legacy_migration'
   | 'customer_self_service'
@@ -24,6 +24,10 @@ export interface CustomerNotificationConsent {
   policyVersion: string
   source: CustomerNotificationConsentSource
   sourceReference: string | null
+  templateId: string | null
+  authorizationContext: 'loyalty_accrual' | 'reservation' | 'activity' | 'service' | null
+  platformResult: 'accept' | 'reject' | 'ban' | null
+  platformEventReference: string | null
   actorType: 'customer' | 'employee' | 'integration' | 'system'
   actorRef: string | null
   occurredAt: string
@@ -39,6 +43,10 @@ interface ConsentRow extends Record<string, unknown> {
   policy_version: string
   source: CustomerNotificationConsentSource
   source_reference: string | null
+  template_id: string | null
+  authorization_context: CustomerNotificationConsent['authorizationContext']
+  platform_result: CustomerNotificationConsent['platformResult']
+  platform_event_reference: string | null
   actor_type: CustomerNotificationConsent['actorType']
   actor_ref: string | null
   occurred_at: string
@@ -56,7 +64,8 @@ export class CustomerNotificationConsentRepository {
     validateChannel(channel)
     const result = await this.transaction.query<ConsentRow>(`
       SELECT id, customer_id, channel, purpose, decision, consent_version, policy_version,
-        source, source_reference, actor_type, actor_ref, occurred_at::text
+        source, source_reference, template_id, authorization_context, platform_result,
+        platform_event_reference, actor_type, actor_ref, occurred_at::text
       FROM mbox.customer_notification_consents
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND customer_id = $3::uuid AND channel = $4 AND purpose = $5
@@ -83,6 +92,10 @@ export class CustomerNotificationConsentRepository {
     policyVersion: string
     source: CustomerNotificationConsentSource
     sourceReference?: string | null
+    templateId?: string | null
+    authorizationContext?: CustomerNotificationConsent['authorizationContext']
+    platformResult?: CustomerNotificationConsent['platformResult']
+    platformEventReference?: string | null
     actorType: CustomerNotificationConsent['actorType']
     actorRef?: string | null
     evidenceSnapshot?: JsonObject
@@ -100,14 +113,15 @@ export class CustomerNotificationConsentRepository {
     const inserted = await this.transaction.query<ConsentRow>(`
       INSERT INTO mbox.customer_notification_consents (
         tenant_id, store_id, customer_id, channel, purpose, decision, consent_version,
-        policy_version, source, source_reference, actor_type, actor_ref,
-        evidence_snapshot, occurred_at
+        policy_version, source, source_reference, template_id, authorization_context,
+        platform_result, platform_event_reference, actor_type, actor_ref, evidence_snapshot, occurred_at
       ) VALUES (
         $1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-        $13::jsonb, COALESCE($14::timestamptz, clock_timestamp())
+        $13, $14, $15, $16, $17::jsonb, COALESCE($18::timestamptz, clock_timestamp())
       )
       RETURNING id, customer_id, channel, purpose, decision, consent_version, policy_version,
-        source, source_reference, actor_type, actor_ref, occurred_at::text
+        source, source_reference, template_id, authorization_context, platform_result,
+        platform_event_reference, actor_type, actor_ref, occurred_at::text
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -119,6 +133,10 @@ export class CustomerNotificationConsentRepository {
       input.policyVersion.trim(),
       input.source,
       input.sourceReference?.trim() || null,
+      input.templateId?.trim() || null,
+      input.authorizationContext ?? null,
+      input.platformResult ?? null,
+      input.platformEventReference?.trim() || null,
       input.actorType,
       input.actorRef?.trim() || null,
       JSON.stringify(input.evidenceSnapshot ?? {}),
@@ -148,6 +166,10 @@ function mapConsent(row: ConsentRow): CustomerNotificationConsent {
     policyVersion: row.policy_version,
     source: row.source,
     sourceReference: row.source_reference,
+    templateId: row.template_id,
+    authorizationContext: row.authorization_context,
+    platformResult: row.platform_result,
+    platformEventReference: row.platform_event_reference,
     actorType: row.actor_type,
     actorRef: row.actor_ref,
     occurredAt: row.occurred_at,
@@ -162,13 +184,17 @@ function validateRecord(input: Readonly<{
   expectedVersion: number
   policyVersion: string
   source: CustomerNotificationConsentSource
+  templateId?: string | null
+  authorizationContext?: CustomerNotificationConsent['authorizationContext']
+  platformResult?: CustomerNotificationConsent['platformResult']
+  platformEventReference?: string | null
   actorType: CustomerNotificationConsent['actorType']
   occurredAt?: string
 }>): void {
   validateCustomerId(input.customerId)
   validateChannel(input.channel)
   if (input.purpose !== CUSTOMER_NOTIFICATION_PURPOSE) throw new TypeError('notification consent purpose is invalid')
-  if (!['granted', 'revoked'].includes(input.decision)) throw new TypeError('consent decision is invalid')
+  if (!['granted', 'denied', 'revoked'].includes(input.decision)) throw new TypeError('consent decision is invalid')
   if (!Number.isSafeInteger(input.expectedVersion) || input.expectedVersion < 0) throw new TypeError('expectedVersion is invalid')
   if (input.policyVersion.trim().length < 1 || input.policyVersion.length > 64) throw new TypeError('policyVersion is invalid')
   if (![
@@ -176,6 +202,16 @@ function validateRecord(input: Readonly<{
     'reservation', 'member_portal', 'staff_record', 'import',
   ].includes(input.source)) throw new TypeError('consent source is invalid')
   if (!['customer', 'employee', 'integration', 'system'].includes(input.actorType)) throw new TypeError('consent actor type is invalid')
+  if (input.source === 'wechat_authorization') {
+    if (input.channel !== 'wechat'
+      || typeof input.templateId !== 'string' || input.templateId.trim().length < 8
+      || !['loyalty_accrual', 'reservation', 'activity', 'service'].includes(input.authorizationContext ?? '')
+      || !['accept', 'reject', 'ban'].includes(input.platformResult ?? '')
+      || typeof input.platformEventReference !== 'string' || input.platformEventReference.trim().length < 8
+      || (input.platformResult === 'accept' ? input.decision !== 'granted' : input.decision !== 'denied')) {
+      throw new TypeError('WeChat authorization evidence is invalid')
+    }
+  }
   if (input.occurredAt !== undefined && !Number.isFinite(Date.parse(input.occurredAt))) throw new TypeError('occurredAt is invalid')
 }
 

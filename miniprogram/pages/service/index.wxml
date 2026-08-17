@@ -1,26 +1,17 @@
-<view class="page">
-  <view class="top-band">
-    <view class="brand-row"><view><text class="eyebrow">当前桌台</text><text class="service-table">{{tableCode}}</text></view><text wx:if="{{isDevelopment}}" class="dev-badge">开发模式</text></view>
+<view class="page service-page">
+  <view class="service-head"><text class="eyebrow">{{tableCode}} · TABLE SERVICE</text><text class="service-title">需要我们做什么？</text><text class="service-copy">高频需求一键送达；相同请求会自动合并，不必重复点击。</text></view>
+  <view wx:if="{{error}}" class="error-banner">{{error}}</view><view wx:if="{{success}}" class="success-banner">{{success}}</view>
+  <view class="service-grid">
+    <button wx:for="{{serviceTypes}}" wx:key="id" data-id="{{item.id}}" disabled="{{submittingId}}" bindtap="requestService"><text class="service-mark">{{item.mark}}</text><text class="service-item__name">{{submittingId === item.id ? '正在通知' : item.name}}</text></button>
   </view>
-  <state-panel wx:if="{{loading}}" type="loading" title="正在载入服务项目" />
-  <block wx:else>
-    <view wx:if="{{warning}}" class="warning">{{warning}}</view>
-    <view wx:if="{{error}}" class="error-banner">{{error}}</view>
-    <view wx:if="{{success}}" class="success-banner">{{success}}</view>
-    <view wx:if="{{serviceTypes.length}}" class="service-grid">
-      <button wx:for="{{serviceTypes}}" wx:key="id" class="service-item" data-id="{{item.id}}" disabled="{{submittingId || isFallback}}" bindtap="requestService">
-        <text class="service-item__name">{{submittingId === item.id ? '正在提交' : item.name}}</text>
-        <text class="service-item__meta">提交后可在状态页查看进度</text>
-      </button>
-    </view>
-    <state-panel wx:else type="empty" title="暂无可用服务项目" message="门店可能正在调整服务配置" />
-    <view class="field note-field">
-      <text class="field__label">个性化需求</text>
-      <view class="custom-request-row">
-        <input class="field__input" maxlength="300" value="{{note}}" placeholder="例如：需要两杯温水" bindinput="onNoteInput" />
-        <button class="custom-request-button" disabled="{{!note || submittingId || isFallback || !customServiceTypeId}}" bindtap="submitCustomRequest">{{submittingId === customServiceTypeId ? '提交中' : '提交'}}</button>
-      </view>
-    </view>
-    <navigator class="secondary-button status-link" url="/pages/status/index">查看服务进度</navigator>
-  </block>
+  <view class="section custom-panel">
+    <view class="section-title"><text>其他需要</text><text class="section-link">300字以内</text></view>
+    <textarea maxlength="300" value="{{note}}" placeholder="例如：需要两杯温水、想调整上桌节奏" bindinput="onNoteInput" />
+    <button class="primary-button" disabled="{{!note || submittingId}}" bindtap="submitCustomRequest">提交需求</button>
+  </view>
+  <view class="manager-panel">
+    <view class="manager-order"><text>涉及哪笔订单</text><picker range="{{complaintOrders}}" range-key="label" value="{{complaintOrderIndex}}" bindchange="onComplaintOrderChange"><view>{{complaintOrders[complaintOrderIndex].label}}⌄</view></picker></view>
+    <button class="manager-entry" disabled="{{submittingId}}" bindtap="requestManager"><view><text>需要值班经理</text><text>投诉、不满意或需要进一步协调</text></view><text>→</text></button>
+  </view>
+  <button class="secondary-button status-link" bindtap="openStatus">查看处理进度</button>
 </view>

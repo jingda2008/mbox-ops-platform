@@ -5,19 +5,27 @@
   <state-panel wx:if="{{loading}}" type="loading" title="正在核对桌账" />
   <block wx:else>
     <view wx:if="{{error}}" class="error-banner">{{error}}</view>
+    <view wx:if="{{success}}" class="success-banner">{{success}}</view>
     <view class="account-total panel">
       <text class="eyebrow">当前未结余额</text>
       <text class="account-total__amount">{{outstandingText}}</text>
       <text class="account-note">同桌订单共同可见，但不会展示付款人身份或支付凭证。</text>
     </view>
-    <view class="warning payment-boundary">本页只展示订单、出品进度与未结余额，不在这里模拟支付。金额有疑问请在点单页呼叫买单服务。</view>
+    <view class="warning payment-boundary">金额来自后端按成功付款和成功退款计算的实时未结余额。遇到“处理中”或“待核对”时不会再次发起支付。</view>
     <view class="section">
       <view class="section-title"><text>本桌订单</text><text class="section-link">下拉刷新</text></view>
       <view wx:if="{{orders.length}}" class="order-list">
         <view wx:for="{{orders}}" wx:key="publicId" class="panel order-card">
           <view class="order-card__head">
-            <view><text class="list-row__title">{{item.roundText}} · {{item.statusText}}</text><text class="list-row__meta">{{item.isMineText}} · {{item.createdAtText}}</text></view>
+            <view>
+              <view class="order-title-row"><text class="list-row__title">{{item.roundText}} · {{item.statusText}}</text><text wx:if="{{item.pricingLabel}}" class="pricing-badge pricing-badge--{{item.pricingKind}}">{{item.pricingLabel}}</text></view>
+              <text class="list-row__meta">{{item.isMineText}} · {{item.createdAtText}}</text>
+            </view>
             <view class="order-card__amount"><text class="amount">{{item.payableText}}</text><text>{{item.paymentText}}</text></view>
+          </view>
+          <view class="payment-line">
+            <text class="payment-line__hint">{{item.paymentHint}}</text>
+            <button wx:if="{{item.canPay}}" class="payment-line__button" loading="{{busyOrderId === item.publicId}}" disabled="{{!!busyOrderId}}" data-id="{{item.publicId}}" bindtap="continuePayment">继续支付</button>
           </view>
           <view wx:for="{{item.items}}" wx:for-item="product" wx:key="key" class="list-row">
             <view class="list-row__main"><text class="list-row__title">{{product.name}} ×{{product.quantity}}</text><text class="list-row__meta">{{product.statusText}}</text></view>

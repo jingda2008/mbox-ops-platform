@@ -32,14 +32,10 @@ export class ActivityRegistrationExpiryWorker {
           await transaction.query(`
             UPDATE mbox.community_activity_registrations
             SET seat_hold_expires_at = clock_timestamp() + interval '15 minutes',
-              updated_at = clock_timestamp(),
-              contact_snapshot = contact_snapshot || jsonb_build_object(
-                'paymentReviewReason', $4,
-                'paymentReviewAt', clock_timestamp()
-              )
+              updated_at = clock_timestamp()
             WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
               AND status = 'payment_pending' AND payment_status = 'pending'
-          `, [transaction.scope.tenantId, transaction.scope.storeId, registration.id, registration.payment_state])
+          `, [transaction.scope.tenantId, transaction.scope.storeId, registration.id])
           reviewRegistrationIds.push(registration.id)
           await recordReview(transaction, registration, workerId, registration.payment_state)
           continue
@@ -58,10 +54,24 @@ export class ActivityRegistrationExpiryWorker {
           continue
         }
         await transaction.query(`
+          UPDATE mbox.payments payment
+          SET status='closed', provider_snapshot=provider_snapshot ||
+            jsonb_build_object('providerStatus','closed_after_activity_hold_expiry'),
+            updated_at=clock_timestamp()
+          WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
+            AND payment.id=$3::uuid AND payment.status IN ('created','pending')
+            AND NOT EXISTS (
+              SELECT 1 FROM mbox.payment_provider_actions provider_action
+              WHERE provider_action.tenant_id=payment.tenant_id
+                AND provider_action.store_id=payment.store_id
+                AND provider_action.payment_id=payment.id
+            )
+        `, [transaction.scope.tenantId, transaction.scope.storeId, registration.payment_id])
+        await transaction.query(`
           UPDATE mbox.community_activity_registrations
           SET status = 'cancelled', payment_status = 'expired', amount_due_minor = 0,
-            cancelled_at = clock_timestamp(), updated_at = clock_timestamp(),
-            contact_snapshot = contact_snapshot || '{"cancellationReason":"payment_deadline_expired"}'::jsonb
+            payment_due_at=NULL, seat_hold_expires_at=NULL,
+            cancelled_at = clock_timestamp(), updated_at = clock_timestamp()
           WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
             AND status = 'payment_pending' AND payment_status = 'pending'
         `, [transaction.scope.tenantId, transaction.scope.storeId, registration.id])
@@ -79,7 +89,10 @@ async function claimDue(transaction: ScopedTransaction, batchSize: number): Prom
       CASE
         WHEN payment.status = 'succeeded' AND payment.amount_minor >= registration.amount_due_minor THEN 'captured'
         WHEN payment.status = 'succeeded' THEN 'amount_mismatch'
-        WHEN payment.status IN ('created', 'pending', 'partially_refunded') THEN 'unknown'
+        WHEN payment.status IN ('created', 'pending') AND provider_action.state IS NULL THEN 'none'
+        WHEN payment.status IN ('created', 'pending')
+          AND provider_action.state IN ('creating','ready','unknown') THEN 'unknown'
+        WHEN payment.status = 'partially_refunded' THEN 'captured'
         WHEN payment.status = 'refunded' THEN 'terminal'
         WHEN payment.id IS NOT NULL THEN 'terminal'
         ELSE 'none'
@@ -91,6 +104,10 @@ async function claimDue(transaction: ScopedTransaction, batchSize: number): Prom
       ON payment.tenant_id = registration.tenant_id
      AND payment.store_id = registration.store_id
      AND payment.id = registration.payment_id
+    LEFT JOIN mbox.payment_provider_actions AS provider_action
+      ON provider_action.tenant_id=payment.tenant_id
+     AND provider_action.store_id=payment.store_id
+     AND provider_action.payment_id=payment.id
     WHERE registration.tenant_id = $1::uuid AND registration.store_id = $2::uuid
       AND registration.status = 'payment_pending' AND registration.payment_status = 'pending'
       AND registration.seat_hold_expires_at <= clock_timestamp()

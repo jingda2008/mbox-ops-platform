@@ -238,13 +238,23 @@ async function readOverview(transaction: ScopedTransaction): Promise<StaffAccess
        WHERE assignment.tenant_id=role.tenant_id AND assignment.store_id=role.store_id
          AND assignment.role_id=role.id), ARRAY[]::text[]) AS permission_codes,
       COALESCE((SELECT jsonb_agg(jsonb_build_object(
-        'key', scope.scope_key, 'effect', scope.effect, 'value', scope.scope_value, 'enabled', scope.enabled
+        'key', scope.scope_key, 'effect', scope.effect, 'value', CASE scope.value_kind
+          WHEN 'boolean' THEN to_jsonb(scope.boolean_value)
+          WHEN 'text' THEN to_jsonb(scope.text_value)
+          ELSE to_jsonb(scope.text_values) END,
+        'enabled', scope.enabled
       ) ORDER BY scope.scope_key, scope.effect)
        FROM mbox.role_data_scopes scope
        WHERE scope.tenant_id=role.tenant_id AND scope.store_id=role.store_id AND scope.role_id=role.id), '[]'::jsonb) AS data_scopes,
       COALESCE((SELECT jsonb_agg(jsonb_build_object(
         'code', approval.approval_code, 'amountMinor', approval.amount_minor, 'currency', approval.currency,
-        'rules', approval.rules, 'enabled', approval.enabled
+        'rules', jsonb_strip_nulls(jsonb_build_object(
+          'allowFullGift', CASE WHEN approval.allow_full_gift THEN true ELSE NULL END,
+          'fixedAmountMinor', approval.fixed_amount_minor,
+          'discountBasisPoints', approval.discount_basis_points,
+          'requiresReason', CASE WHEN approval.requires_reason THEN true ELSE NULL END,
+          'requiresSecondActor', CASE WHEN approval.requires_second_actor THEN true ELSE NULL END
+        )), 'enabled', approval.enabled
       ) ORDER BY approval.approval_code, approval.currency)
        FROM mbox.role_approval_limits approval
        WHERE approval.tenant_id=role.tenant_id AND approval.store_id=role.store_id AND approval.role_id=role.id), '[]'::jsonb) AS approval_limits,
@@ -360,7 +370,11 @@ async function verifyChange(
   }
   if (change.kind === 'role_data_scope') {
     const result = await transaction.query<{ scope_value: JsonValue; enabled: boolean }>(`
-      SELECT scope_value, enabled FROM mbox.role_data_scopes
+      SELECT CASE value_kind
+          WHEN 'boolean' THEN to_jsonb(boolean_value)
+          WHEN 'text' THEN to_jsonb(text_value)
+          ELSE to_jsonb(text_values) END AS scope_value,
+        enabled FROM mbox.role_data_scopes
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND role_id=$3::uuid
         AND scope_key=$4 AND effect=$5
     `, [transaction.scope.tenantId, transaction.scope.storeId, change.roleId, change.scopeKey, change.effect])
@@ -375,7 +389,15 @@ async function verifyChange(
   }
   if (change.kind === 'role_approval_limit') {
     const result = await transaction.query<{ amount_minor: string | null; currency: string; rules: JsonObject; enabled: boolean }>(`
-      SELECT amount_minor::text, currency, rules, enabled FROM mbox.role_approval_limits
+      SELECT amount_minor::text, currency,
+        jsonb_strip_nulls(jsonb_build_object(
+          'allowFullGift', CASE WHEN allow_full_gift THEN true ELSE NULL END,
+          'fixedAmountMinor', fixed_amount_minor,
+          'discountBasisPoints', discount_basis_points,
+          'requiresReason', CASE WHEN requires_reason THEN true ELSE NULL END,
+          'requiresSecondActor', CASE WHEN requires_second_actor THEN true ELSE NULL END
+        )) AS rules,
+        enabled FROM mbox.role_approval_limits
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND role_id=$3::uuid
         AND approval_code=$4 AND currency=$5
     `, [transaction.scope.tenantId, transaction.scope.storeId, change.roleId, change.approvalCode, change.currency])

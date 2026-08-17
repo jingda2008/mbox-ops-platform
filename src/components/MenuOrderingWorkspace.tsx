@@ -66,6 +66,7 @@ function customerFacingProductTag(product: MenuProduct) {
       sparkling: '起泡酒组合',
       spirits: '洋酒组合',
       non_alcoholic: '无酒精组合',
+      mixed: '混合酒水组合',
     }
     return bundleLabels[product.beverageFamily ?? ''] ?? '组合甄选'
   }
@@ -88,6 +89,7 @@ const beverageFamilies = [
   { id: 'sparkling', name: '起泡酒' },
   { id: 'spirits', name: '洋酒' },
   { id: 'non_alcoholic', name: '无酒精' },
+  { id: 'mixed', name: '混合组合' },
 ] as const
 
 const comparisonFamilyLabels: Record<string, string> = {
@@ -97,6 +99,7 @@ const comparisonFamilyLabels: Record<string, string> = {
   sparkling: '一点仪式感',
   spirits: '整瓶主场',
   non_alcoholic: '轻松无酒精',
+  mixed: '多种风格组合',
 }
 
 const recommendationSceneLabels: Partial<Record<MenuRecommendationScene, string>> = {

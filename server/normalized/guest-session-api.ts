@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { FastifyPluginAsync, FastifyReply } from 'fastify'
 import {
   GuestSessionInvalidError,
+  GuestCustomerAtAnotherTableError,
   GuestSessionRateLimitError,
   GuestSessionService,
   GuestTableSessionEndedError,
@@ -25,6 +26,10 @@ export interface GuestSessionApiOptions {
   sessions: GuestSessionPort
   requestContext: GuestRequestContextResolver
   businessClock: GuestBusinessClock
+  loadTableOverview(
+    scope: Readonly<StoreScope>,
+    tableSessionId: string,
+  ): Promise<{ guestCount: number; primaryServiceName: string | null }>
 }
 
 interface ApiErrorBody {
@@ -55,6 +60,7 @@ export const guestSessionApiPlugin: FastifyPluginAsync<GuestSessionApiOptions> =
     reply.header('cache-control', 'no-store')
 
     if (result.status === 'active') {
+      const overview = await options.loadTableOverview(scope, result.session.tableSessionId!)
       setGuestCookie(reply, result.sessionToken, result.session.expiresAt)
       return reply.send({
         data: {
@@ -67,11 +73,14 @@ export const guestSessionApiPlugin: FastifyPluginAsync<GuestSessionApiOptions> =
           businessDate: result.session.businessDate,
           expiresAt: result.session.expiresAt,
           cartScope: cartScope(result.session.tableSessionId),
+          guestCount: overview.guestCount,
+          primaryServiceName: overview.primaryServiceName,
           capabilities: result.session.scopes,
         },
       })
     }
     if (result.status === 'already_active') {
+      const overview = await options.loadTableOverview(scope, result.session.tableSessionId!)
       return reply.send({
         data: {
           status: 'already_active',
@@ -83,6 +92,8 @@ export const guestSessionApiPlugin: FastifyPluginAsync<GuestSessionApiOptions> =
           businessDate: result.session.businessDate,
           expiresAt: result.session.expiresAt,
           cartScope: cartScope(result.session.tableSessionId),
+          guestCount: overview.guestCount,
+          primaryServiceName: overview.primaryServiceName,
           capabilities: result.session.scopes,
         },
       })
@@ -117,6 +128,9 @@ export const guestSessionApiPlugin: FastifyPluginAsync<GuestSessionApiOptions> =
 
   app.get('/session', async (request, reply) => handleRoute(reply, async () => {
     const context = await options.requestContext.resolve(request)
+    const overview = context.tableSessionId === null
+      ? { guestCount: null, primaryServiceName: null }
+      : await options.loadTableOverview(context.scope, context.tableSessionId)
     reply.header('cache-control', 'no-store')
     return reply.send({
       data: {
@@ -129,6 +143,8 @@ export const guestSessionApiPlugin: FastifyPluginAsync<GuestSessionApiOptions> =
         businessDate: context.businessDate,
         expiresAt: context.expiresAt,
         cartScope: cartScope(context.tableSessionId),
+        guestCount: overview.guestCount,
+        primaryServiceName: overview.primaryServiceName,
         capabilities: context.capabilities,
       },
     })
@@ -176,6 +192,13 @@ function mapError(error: unknown): {
       statusCode: 401,
       body: { error: { code: 'TABLE_SESSION_ENDED', message: error.message } },
       clearCookie: true,
+    }
+  }
+  if (error instanceof GuestCustomerAtAnotherTableError) {
+    return {
+      statusCode:409,
+      body:{ error:{ code:'CUSTOMER_AT_OTHER_TABLE',message:error.message } },
+      clearCookie:true,
     }
   }
   if (

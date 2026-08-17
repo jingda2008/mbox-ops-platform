@@ -404,8 +404,13 @@ staging_evidence=$(mktemp)
 write_database_evidence "${staging_connection}" "${staging_evidence}"
 validate_manifest_and_evidence "${staging_evidence}" "${MBOX_EXPECTED_RESTORE_MANIFEST}" \
   "${MBOX_EXPECTED_RESTORE_SCHEMA_VERSION}"
-test "$(jq -cS 'del(.database.name)' "${staging_evidence}")" = \
-  "$(jq -cS 'del(.database.name)' "${MBOX_EXPECTED_RESTORE_EVIDENCE}")"
+if ! test "$(jq -cS 'del(.database.name)' "${staging_evidence}")" = \
+  "$(jq -cS 'del(.database.name)' "${MBOX_EXPECTED_RESTORE_EVIDENCE}")"; then
+  echo "RESTORE_EVIDENCE_MISMATCH staging_vs_source" >&2
+  diff <(jq -S 'del(.database.name)' "${staging_evidence}") \
+    <(jq -S 'del(.database.name)' "${MBOX_EXPECTED_RESTORE_EVIDENCE}") >&2 || true
+  exit 1
+fi
 test "$(psql -XAt --dbname="${staging_connection}" \
   --command="SELECT to_regclass('mbox.table_customer_movement_events') IS NULL")" = t
 rm -f "${staging_evidence}"
@@ -441,8 +446,13 @@ SQL
 
 final_evidence=$(mktemp)
 write_database_evidence "${target_admin_connection}" "${final_evidence}"
-test "$(jq -cS 'del(.database.name)' "${final_evidence}")" = \
-  "$(jq -cS 'del(.database.name)' "${MBOX_EXPECTED_RESTORE_EVIDENCE}")"
+if ! test "$(jq -cS 'del(.database.name)' "${final_evidence}")" = \
+  "$(jq -cS 'del(.database.name)' "${MBOX_EXPECTED_RESTORE_EVIDENCE}")"; then
+  echo "RESTORE_EVIDENCE_MISMATCH final_vs_source" >&2
+  diff <(jq -S 'del(.database.name)' "${final_evidence}") \
+    <(jq -S 'del(.database.name)' "${MBOX_EXPECTED_RESTORE_EVIDENCE}") >&2 || true
+  exit 1
+fi
 rm -f "${final_evidence}"
 jq -n --arg restoredDatabase "${MBOX_EXPECTED_RESTORE_DATABASE}" \
   --arg preservedDatabase "${preserved_database}" \

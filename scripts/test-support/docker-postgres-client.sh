@@ -13,6 +13,9 @@ fi
 docker_env=()
 container_service_file=
 container_pass_file=
+if [ -n "${PGOPTIONS:-}" ]; then
+  docker_env+=(--env "PGOPTIONS=${PGOPTIONS}")
+fi
 if [ -n "${PGSERVICEFILE:-}" ] || [ -n "${PGPASSFILE:-}" ]; then
   : "${PGSERVICEFILE:?PGSERVICEFILE is required}"
   : "${PGPASSFILE:?PGPASSFILE is required}"
@@ -22,7 +25,7 @@ if [ -n "${PGSERVICEFILE:-}" ] || [ -n "${PGPASSFILE:-}" ]; then
   docker cp "${PGPASSFILE}" "${TEST_POSTGRES_CONTAINER}:${container_pass_file}" >/dev/null
   docker exec "${TEST_POSTGRES_CONTAINER}" chmod 0600 \
     "${container_service_file}" "${container_pass_file}"
-  docker_env=(--env "PGSERVICEFILE=${container_service_file}" --env "PGPASSFILE=${container_pass_file}")
+  docker_env+=(--env "PGSERVICEFILE=${container_service_file}" --env "PGPASSFILE=${container_pass_file}")
   cleanup_libpq_files() {
     docker exec "${TEST_POSTGRES_CONTAINER}" rm -f \
       "${container_service_file}" "${container_pass_file}" >/dev/null 2>&1 || true

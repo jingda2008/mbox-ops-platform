@@ -2,7 +2,7 @@
 
 版本：阿里云验证环境`1.0.0-rc.89`/`9d2c261` + 客户体验、商品观察、推荐与退款策略本地候选（已冻结提交`70af86a`，已推送分支`agent/096-freeze-20260817`，PR #89 CI全绿，未合并、未部署）
 形成日期：`2026-07-27`
-最后更新：`2026-08-18 01:34 CST`（PR #89 固定提交 Linux CI 全绿：998/998 测试、http acceptance、browser、performance、verify 全部通过；未合并、未部署，商业发布仍为`DENY`）
+最后更新：`2026-08-18 02:14 CST`（PR #89 固定提交 Linux CI 全绿并保持：`68717bf` 运行32052761968 全链路 SUCCESS；未合并、未部署，商业发布仍为`DENY`）
 适用范围：上海 M-BOX 陆家嘴店验证环境、门店试运行和商业生产发布
 清单负责人：乌鸦（系统管理员）
 经营批准：陈方宇、护古、李艳
@@ -477,3 +477,4 @@ ID：
 | 2026-08-17 22:13 | 096候选冻结提交（本地） | 096工作树已冻结为本地提交`70af86ab5bfc5929c264eb564bf4973456bb62f7`（短`70af86a`，分支`codex/wechat-membership-platform`）：439文件（+82760/−2659），含迁移051—096共46个、服务端/前端/小程序/发布链全部本地候选（覆盖SYS-040至SYS-061所涉未提交项）。未推送、未部署，商业发布仍为`DENY` | 提交`70af86a`；冻结前置审计（.gitignore覆盖、无敏感文件、无冲突标记、无大文件、无删除）通过；本地数字沿用2026-08-16 18:54记录，`npm run check`因冻结环境npm不可用未能重跑，须以固定提交Linux CI为准 | 接手代理 |
 | 2026-08-17 22:15 | 096候选推送与PR | 冻结分支已推送`agent/096-freeze-20260817`（HEAD`52c4d19`），创建PR #89（https://github.com/jingda2008/mbox-ops-platform/pull/89 ）触发Linux CI；CI结果与全量数字待回填。未合并、未部署，商业发布仍为`DENY` | 分支`agent/096-freeze-20260817`、PR #89 | 接手代理 |
 | 2026-08-18 01:34 | PR #89 Linux CI全绿 | 固定提交CI全链路通过（HEAD`40a5240`，运行32050445057）：quality、normalized_database（998/998含恢复演练、http acceptance）、normalized_browser、performance、verify全SUCCESS。迭代修复共9轮：loyalty切换点时间炸弹、restore证据search_path不对称、docker exec不传PGOPTIONS、claim过期时间双时钟竞态、恢复失败回滚trap语义、http acceptance单轮runner抖动重跑通过。测试发现并修复的问题均为生产代码真实改进。未合并、未部署，商业发布仍为`DENY` | PR #89、运行32050445057、提交链`70af86a`…`40a5240` | 接手代理 |
+| 2026-08-18 02:14 | PR #89最终全绿确认 | 双客人支付同步e2e的非等待count()断言改为toPass()自动等待（`68717bf`），消除时序抖动；重跑全链路（运行32052761968）classify/quality/normalized_database/normalized_browser/performance/verify全部SUCCESS。PR #89保持绿，未合并、未部署，商业发布仍为`DENY` | PR #89、运行32052761968、提交`68717bf` | 接手代理 |

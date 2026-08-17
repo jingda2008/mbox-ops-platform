@@ -103,6 +103,11 @@ integration('loyalty accrual PostgreSQL integration', () => {
   })
 
   it('separates policy approval from publication and keeps the current version active until cut-over', async () => {
+    const cutoverAt = new Date(Date.now() + 60_000)
+    const cutoverIso = cutoverAt.toISOString()
+    const expectedCutoverText = `${cutoverIso.slice(0, 19).replace('T', ' ')} +00`
+    const overlapFromIso = new Date(cutoverAt.getTime() + 2 * 60_000).toISOString()
+    const overlapUntilIso = new Date(cutoverAt.getTime() + 3 * 60_000).toISOString()
     const service = new CustomerExperienceService(
       runner,
       new NormalizedCommandExecutor(runner),
@@ -137,14 +142,14 @@ integration('loyalty accrual PostgreSQL integration', () => {
     expect(approved.status).toBe('approved')
     await expect(service.publishLoyaltyPolicy(staff(id.approver), {
       policyId: draft.value.id,
-      effectiveFrom: '2026-08-17T00:00:00.000Z',
+      effectiveFrom: cutoverIso,
       effectiveUntil: null,
       reason: '审批人不能正式发布',
       idempotencyKey: 'loyalty-policy-approver-publish-v2',
     })).rejects.toMatchObject<CustomerExperienceRequestError>({ code: 'LOYALTY_POLICY_PUBLISHER_NOT_INDEPENDENT' })
     const published = await service.publishLoyaltyPolicy(staff(id.publisher), {
       policyId: draft.value.id,
-      effectiveFrom: '2026-08-17T00:00:00.000Z',
+      effectiveFrom: cutoverIso,
       effectiveUntil: null,
       reason: '最高授权人员确认正式排期发布',
       idempotencyKey: 'loyalty-policy-publish-v2',
@@ -153,7 +158,7 @@ integration('loyalty accrual PostgreSQL integration', () => {
     const policies = await service.listLoyaltyPolicies(staff(id.approver))
     expect(policies.slice(0, 2).map((policy) => ({ version: policy.version, status: policy.status })))
       .toEqual([{ version: 2, status: 'published' }, { version: 1, status: 'published' }])
-    expect(policies.find((policy) => policy.version===1)?.effectiveUntil).toBe('2026-08-17 00:00:00+00')
+    expect(policies.find((policy) => policy.version===1)?.effectiveUntil).toBe(expectedCutoverText)
     const orderId = randomUUID()
     await pool.query(`
       INSERT INTO mbox.orders(
@@ -170,7 +175,7 @@ integration('loyalty accrual PostgreSQL integration', () => {
         effective_from,effective_until,drafted_by_employee_id,approved_by_employee_id,approved_at,
         published_by_employee_id,published_at,publication_mode,reason
       ) VALUES($1,$2,'BASE',3,'published',3,100,1,100,'floor',18,
-        '2026-08-16T12:00:00Z','2026-08-16T13:00:00Z',$3,$4,'2026-08-16T10:00:00Z',
+        '${overlapFromIso}','${overlapUntilIso}',$3,$4,'2026-08-16T10:00:00Z',
         $5,'2026-08-16T10:01:00Z','separated','重叠时间窗必须由数据库拒绝')
     `, [id.tenant, id.store, id.drafter, id.approver, id.publisher]))
       .rejects.toThrow(/loyalty_policy_versions_no_published_overlap_excl/)

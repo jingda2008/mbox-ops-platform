@@ -26,6 +26,19 @@ const containerUrl = (source: string, database: string) => {
   url.pathname = `/${database}`
   return url.toString()
 }
+const runChecked = (command: string, args: string[], options: Parameters<typeof execFileSync>[2]) => {
+  try {
+    return execFileSync(command, args, options)
+  } catch (error) {
+    const detail = error as { status?: number | null; stdout?: Buffer | string; stderr?: Buffer | string }
+    const decode = (value: Buffer | string | undefined) =>
+      value ? Buffer.from(value).toString('utf8').trim() : ''
+    throw new Error(
+      `${command} ${args.join(' ')} failed (status ${detail.status ?? 'unknown'})\n` +
+      `--- stdout ---\n${decode(detail.stdout) || '(empty)'}\n--- stderr ---\n${decode(detail.stderr) || '(empty)'}`,
+    )
+  }
+}
 
 integration('contract database maintenance recovery', () => {
   it('restores 095 into a verified staging database before retaining and swapping out 096', async () => {
@@ -125,13 +138,13 @@ integration('contract database maintenance recovery', () => {
       await admin.query(`REVOKE CONNECT,TEMPORARY ON DATABASE ${quoteIdentifier(databaseName)} FROM PUBLIC`)
       await admin.query(`GRANT CONNECT ON DATABASE ${quoteIdentifier(databaseName)} TO ${quoteIdentifier(backupRole)}`)
       await admin.query(`ALTER DATABASE ${quoteIdentifier(databaseName)} SET statement_timeout='45s'`)
-      execFileSync(resolve('deploy/aliyun/restore-postgres.sh'), ['capture', evidence], {
+      runChecked(resolve('deploy/aliyun/restore-postgres.sh'), ['capture', evidence], {
         env: { ...environment, DATABASE_SERVICE: backupService, MBOX_EXPECTED_RESTORE_DATABASE: databaseName },
       })
-      const backup = execFileSync(resolve('deploy/aliyun/backup-postgres.sh'), [], {
+      const backup = runChecked(resolve('deploy/aliyun/backup-postgres.sh'), [], {
         encoding: 'utf8',
         env: { ...environment, DATABASE_SERVICE: backupService, BACKUP_DIR: backupDirectory },
-      }).trim()
+      }).toString().trim()
       writeFileSync(manifest, JSON.stringify({ migration: {
         count: migrations.length,
         files: migrations.map((migration) => ({ filename: migration.filename, sha256: migration.checksum })),
@@ -147,7 +160,7 @@ integration('contract database maintenance recovery', () => {
         updated_at=clock_timestamp() WHERE singleton=true`)
       await upgraded.query('COMMIT')
       await upgraded.end()
-      execFileSync(resolve('deploy/aliyun/restore-postgres.sh'), ['restore', backup], {
+      runChecked(resolve('deploy/aliyun/restore-postgres.sh'), ['restore', backup], {
         env: {
           ...environment,
           DATABASE_SERVICE: targetService,

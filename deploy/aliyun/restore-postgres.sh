@@ -409,7 +409,7 @@ if ! test "$(jq -cS 'del(.database.name)' "${staging_evidence}")" = \
   echo "RESTORE_EVIDENCE_MISMATCH staging_vs_source" >&2
   diff <(jq -S 'del(.database.name)' "${staging_evidence}") \
     <(jq -S 'del(.database.name)' "${MBOX_EXPECTED_RESTORE_EVIDENCE}") >&2 || true
-  exit 1
+  false
 fi
 test "$(psql -XAt --dbname="${staging_connection}" \
   --command="SELECT to_regclass('mbox.table_customer_movement_events') IS NULL")" = t
@@ -451,7 +451,7 @@ if ! test "$(jq -cS 'del(.database.name)' "${final_evidence}")" = \
   echo "RESTORE_EVIDENCE_MISMATCH final_vs_source" >&2
   diff <(jq -S 'del(.database.name)' "${final_evidence}") \
     <(jq -S 'del(.database.name)' "${MBOX_EXPECTED_RESTORE_EVIDENCE}") >&2 || true
-  exit 1
+  false
 fi
 rm -f "${final_evidence}"
 jq -n --arg restoredDatabase "${MBOX_EXPECTED_RESTORE_DATABASE}" \

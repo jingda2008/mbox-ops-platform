@@ -4,7 +4,8 @@
 - 冻结提交：`70af86ab5bfc5929c264eb564bf4973456bb62f7`（短 `70af86a`）
 - 分支：`codex/wechat-membership-platform`（基线 `v1.0.0-rc.89`/`9d2c261` + 3 个既有提交）
 - 执行者：接手代理（接替 Codex 的 agent 开发纪律；本记录与提交说明共同构成冻结证据）
-- 关联清单：`docs/commercialization-pending-checklist.md`（最后更新 `2026-08-17 22:13 CST`，变更记录已追加一行）
+- 关联清单：`docs/commercialization-pending-checklist.md`（最后更新 `2026-08-17 22:15 CST`，变更记录已追加两行）
+- 推送状态：`2026-08-17 22:15 CST` 推送分支 `agent/096-freeze-20260817`（HEAD `52c4d19`），创建 **PR #89**（https://github.com/jingda2008/mbox-ops-platform/pull/89 ），触发固定提交 Linux CI
 
 ## 1. 冻结内容
 
@@ -40,11 +41,11 @@
 - 真实维护窗执行（503 维护态→排空→备份→只读候选→切流→回滚演练）
 - OWNER/OPS_LEAD/MANAGER 三岗位与真实营业现场验收；table-group 拼桌模型（明确不在本轮）
 
-**商业发布结论维持 `DENY`，未推送、未部署。**
+**商业发布结论维持 `DENY`，未合并、未部署。**
 
 ## 5. 冻结后的下一步
 
-1. `git push` 分支到 origin → 打开 PR（目标 `main`）→ 触发固定提交 Linux CI（验证 `flock`、正式数据库测试不跳过）。
-2. CI 通过后回填全量数字到清单（同一轮工作内更新）。
+1. ✅ 已推送分支 `agent/096-freeze-20260817` 并创建 **PR #89**，触发固定提交 Linux CI（验证 `flock`、正式数据库测试不跳过）。
+2. ⏳ 等待 CI 完成，回填全量数字到清单（同一轮工作内更新）。
 3. 按外部证据清单推进：生产凭据交付、PITR/备份演练、微信正式资料、星驿真实小额交易、三岗位现场验收。
 4. 完成验收后按 `docs/operations-runbook.md` 与 `deploy/aliyun/activate-release.sh` 契约执行真实维护窗发布。

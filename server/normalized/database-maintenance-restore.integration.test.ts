@@ -55,6 +55,8 @@ integration('contract database maintenance recovery', () => {
     const serviceFile = join(root, 'pg_service.conf')
     const passFile = join(root, 'pgpass')
     const argvLog = join(root, 'postgres-client-argv.log')
+    const traceFile = join(root, 'bash-trace.sh')
+    writeFileSync(traceFile, 'set -x\n')
     const targetService = `target_${suffix}`
     const adminService = `admin_${suffix}`
     const backupService = `backup_${suffix}`
@@ -86,6 +88,7 @@ integration('contract database maintenance recovery', () => {
       PGSERVICEFILE: serviceFile,
       PGPASSFILE: passFile,
       TEST_POSTGRES_ARGV_LOG: argvLog,
+      BASH_ENV: traceFile,
     }
     const base = new URL(sourceAdminUrl!)
     base.pathname = '/postgres'

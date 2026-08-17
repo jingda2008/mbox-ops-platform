@@ -103,9 +103,9 @@ integration('loyalty accrual PostgreSQL integration', () => {
   })
 
   it('separates policy approval from publication and keeps the current version active until cut-over', async () => {
-    const cutoverAt = new Date(Date.now() + 60_000)
+    const cutoverAt = new Date(Math.ceil((Date.now() + 60_000) / 1000) * 1000)
     const cutoverIso = cutoverAt.toISOString()
-    const expectedCutoverText = `${cutoverIso.slice(0, 19).replace('T', ' ')} +00`
+    const expectedCutoverText = `${cutoverIso.slice(0, 19).replace('T', ' ')}+00`
     const overlapFromIso = new Date(cutoverAt.getTime() + 2 * 60_000).toISOString()
     const overlapUntilIso = new Date(cutoverAt.getTime() + 3 * 60_000).toISOString()
     const service = new CustomerExperienceService(

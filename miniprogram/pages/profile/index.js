@@ -21,6 +21,7 @@ const {
 } = require('../../utils/api')
 const { getTableConnection } = require('../../utils/session')
 const { dateTime, money } = require('../../utils/format')
+const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 
 const LEVEL_NAMES = { member: 'M-BOX会员', silver: '银卡会员', gold: '金卡会员' }
 const BENEFIT_NAMES = { gift_product: '赠送好礼', discount: '折扣权益', credit: '金额权益', access: '专属资格', other: '会员权益' }
@@ -350,6 +351,8 @@ Page({
 
   openPrivacy() { wx.navigateTo({ url: '/pages/privacy/index' }) },
 
+  onAgreePrivacyAuthorization() {},
+
   showMembershipTerms() {
     if (!this.data.membershipTerms) return
     wx.navigateTo({ url: '/pages/membership-terms/index?source=mini_profile&action=view' })
@@ -384,15 +387,16 @@ Page({
 
   async recoverMembership(event) {
     if (this.data.recoveryBusy) return
-    const code = event && event.detail && event.detail.code
-    if (!code) {
-      this.setData({ recoveryMessage: '未取得微信手机号授权，不影响点单和加入新会员。' })
+    const authorization = readWechatPhoneAuthorization(event)
+    if (!authorization.code) {
+      this.setData({ recoveryMessage: authorization.message })
+      wx.showToast({ title: authorization.message, icon: 'none' })
       return
     }
     this.setData({ recoveryBusy: true, recoveryMessage: '', error: '' })
     try {
       const challenge = await startMembershipRecovery()
-      const result = await verifyMembershipRecovery(challenge.challengePublicId, code)
+      const result = await verifyMembershipRecovery(challenge.challengePublicId, authorization.code)
       this.setData({ recoveryMessage: result.message || '找回申请已经提交' })
       if (result.status === 'completed') await this.load()
     } catch (error) {

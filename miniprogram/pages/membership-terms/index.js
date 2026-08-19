@@ -1,24 +1,5 @@
-const { getMiniBootstrap, enrollMembership } = require('../../utils/api')
-
-function confirmEnrollment(terms) {
-  return new Promise((resolve) => {
-    wx.showModal({
-      title: '确认加入会员',
-      content: `我已阅读本页展示的《${terms.title}》第${terms.version}版，并同意按该版本加入会员。手机号和通知仍需另行授权。`,
-      // WeChat showModal confirmText/cancelText are capped at 4 characters.
-      confirmText: '同意加入',
-      cancelText: '再看看',
-      success: (result) => resolve(Boolean(result.confirm)),
-      fail: (error) => {
-        wx.showToast({
-          title: (error && error.errMsg) || '确认弹窗未能打开',
-          icon: 'none',
-        })
-        resolve(false)
-      },
-    })
-  })
-}
+const { getMiniBootstrap, enrollMembership, replaceVerifiedPhone } = require('../../utils/api')
+const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 
 Page({
   data: {
@@ -50,7 +31,9 @@ Page({
     }
   },
 
-  async acceptAndEnroll() {
+  onAgreePrivacyAuthorization() {},
+
+  async acceptAndEnroll(event) {
     const terms = this.data.terms
     if (this.data.busy) return
     if (this.data.membership) {
@@ -66,11 +49,25 @@ Page({
       })
       return
     }
-    const confirmed = await confirmEnrollment(terms)
-    if (!confirmed) return
+    const authorization = readWechatPhoneAuthorization(event)
+    if (!authorization.code) {
+      this.setData({ error: authorization.message })
+      wx.showToast({ title: authorization.message, icon: 'none' })
+      return
+    }
     this.setData({ busy: true, error: '' })
     try {
       await enrollMembership(terms.version, this.data.acknowledgementSource)
+      try {
+        await replaceVerifiedPhone(authorization.code)
+      } catch (phoneError) {
+        this.setData({ error: phoneError.message || '会员已加入，手机号未能保存' })
+        wx.showToast({ title: '已加入，手机号未保存', icon: 'none', duration: 1800 })
+        setTimeout(() => {
+          wx.navigateBack({ fail: () => wx.switchTab({ url: '/pages/profile/index' }) })
+        }, 1600)
+        return
+      }
       wx.showToast({ title: '入会成功', icon: 'success', duration: 1200 })
       setTimeout(() => {
         wx.navigateBack({

@@ -68,9 +68,8 @@
   line-height: 92rpx;
   box-shadow: 0 12rpx 30rpx rgba(45, 41, 37, 0.16);
 }
-.accept-button-hover {
-  background: #1f1c19;
-  opacity: 0.92;
+.accept-button.wx-phone-button {
+  transform: none;
 }
 .terms-note {
   display: block;

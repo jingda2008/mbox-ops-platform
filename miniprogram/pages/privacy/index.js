@@ -2,6 +2,7 @@ const {
   getActivityRegistrations, updateActivityRegistrationContact,
   getVerifiedPhones, replaceVerifiedPhone, revokeVerifiedPhone,
 } = require('../../utils/api')
+const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 
 Page({
   data: {
@@ -31,12 +32,14 @@ Page({
     } finally { this.setData({ loadingContacts: false }) }
   },
 
+  onAgreePrivacyAuthorization() {},
+
   async replacePhone(event) {
-    const code = event && event.detail && event.detail.code
-    if (!code) return this.setData({ contactMessage: '您没有授权新的微信手机号，原记录不会改变。' })
+    const authorization = readWechatPhoneAuthorization(event)
+    if (!authorization.code) return this.setData({ contactMessage: authorization.message })
     this.setData({ contactBusy: 'phone-replace', contactMessage: '' })
     try {
-      await replaceVerifiedPhone(code)
+      await replaceVerifiedPhone(authorization.code)
       this.setData({ contactMessage: '已记录新的验证手机号，旧版本保留为不可用历史证据。' })
       await this.loadContactTools()
     } catch (error) { this.setData({ contactMessage: error.message || '手机号未能更换' }) }

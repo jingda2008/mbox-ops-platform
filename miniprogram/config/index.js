@@ -11,28 +11,28 @@ const DEVELOPMENT_DEFAULTS = Object.freeze({
   developmentMemberId: 'member-amy',
   allowDevDataFallback: true,
   requestTimeoutMs: 10000,
-  wechatIdentityEnabled: false,
+  wechatIdentityEnabled: true,
   membershipInviteCooldownHours: 720,
-  identityTenantId: '',
-  identityStoreId: '',
-  wechatAppId: '',
+  identityTenantId: '10000000-0000-4000-8000-000000000001',
+  identityStoreId: '20000000-0000-4000-8000-000000000001',
+  wechatAppId: 'wxdb9f2dc413484f2d',
 })
 
 const DEPLOYMENT_DEFAULTS = Object.freeze({
   mode: 'production',
-  apiBaseUrl: '',
-  storeId: '',
+  apiBaseUrl: 'https://mbox.shmbox.com',
+  storeId: 'mbox-lujiazui',
   defaultTableCode: '',
   defaultTableToken: '',
   developmentActorId: '',
   developmentMemberId: '',
   allowDevDataFallback: false,
   requestTimeoutMs: 10000,
-  wechatIdentityEnabled: false,
+  wechatIdentityEnabled: true,
   membershipInviteCooldownHours: 720,
-  identityTenantId: '',
-  identityStoreId: '',
-  wechatAppId: '',
+  identityTenantId: '10000000-0000-4000-8000-000000000001',
+  identityStoreId: '20000000-0000-4000-8000-000000000001',
+  wechatAppId: 'wxdb9f2dc413484f2d',
 })
 
 function compact(object) {

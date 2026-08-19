@@ -173,6 +173,16 @@ function preferenceEditorState(index) {
   }
 }
 
+function explainJoinBlock(content) {
+  return new Promise((resolve) => wx.showModal({
+    title: '暂时无法加入',
+    content,
+    showCancel: false,
+    confirmText: '知道了',
+    complete: () => resolve(),
+  }))
+}
+
 function customerPreferenceView(snapshot) {
   const facts = ((snapshot && snapshot.facts) || []).map((fact) => ({
     viewKey: `${fact.key}:${fact.value}`,
@@ -310,12 +320,32 @@ Page({
     } catch (error) { this.setData({ loading: false, error: error.message || '会员信息暂时无法读取' }) }
   },
 
-  becomeMember() {
-    if (!this.data.membershipTerms) {
-      this.setData({ error: '当前入会条款尚未发布，暂不能新加入会员' })
-      return
+  async becomeMember() {
+    if (this.data.busy) return
+    this.setData({ busy: true, error: '' })
+    try {
+      if (!this.data.membershipTerms) {
+        try {
+          const data = await getMiniBootstrap()
+          if (data.membership) {
+            await this.load()
+            wx.showToast({ title: '您已经是会员', icon: 'none' })
+            return
+          }
+          this.setData({ membershipTerms: data.membershipTerms || null })
+        } catch (error) {
+          await explainJoinBlock(error.message || '会员信息暂时无法读取，请稍后重试')
+          return
+        }
+      }
+      if (!this.data.membershipTerms) {
+        await explainJoinBlock('当前入会条款尚未发布，暂不能新加入会员。点单和找回原会员不受影响。')
+        return
+      }
+      wx.navigateTo({ url: '/pages/membership-terms/index?source=mini_profile&action=enroll' })
+    } finally {
+      this.setData({ busy: false })
     }
-    wx.navigateTo({ url: '/pages/membership-terms/index?source=mini_profile&action=enroll' })
   },
 
   openPrivacy() { wx.navigateTo({ url: '/pages/privacy/index' }) },

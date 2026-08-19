@@ -213,6 +213,9 @@ describe('mini-program mobile business flow contract', () => {
     expect(orderView).toContain('查看当前入会条款全文')
     expect(orderView).toContain('membershipTerms.version')
     expect(termsPage).toContain('手机号和通知仍需另行授权')
+    expect(termsPage).toContain("confirmText: '同意加入'")
+    expect(termsPage).not.toContain("confirmText: '同意并加入'")
+    expect(termsPage).not.toMatch(/open-type=["']getPhoneNumber["']/)
     expect(api).toContain("mbox.membership.enroll.attempt.v1")
     expect(api).toContain("error.code !== 'NETWORK_ERROR'")
     expect(config).toContain('membershipInviteCooldownHours: 720')
@@ -221,6 +224,20 @@ describe('mini-program mobile business flow contract', () => {
     expect(privacy).toContain('顾客页面不提供语音或麦克风入口')
     expect(privacy).toContain('仍须由运营主体逐项核准后才能正式发布')
     expect(privacy).not.toContain('当前小程序不发起或模拟支付')
+  })
+
+  it('keeps membership join tappable so WeChat review is not a silent disabled button', () => {
+    const profile = read('miniprogram/pages/profile/index.js')
+    const profileView = read('miniprogram/pages/profile/index.wxml')
+    const termsPage = read('miniprogram/pages/membership-terms/index.js')
+    const communityView = read('miniprogram/pages/community-detail/index.wxml')
+    expect(profileView).toContain('同意条款并加入')
+    expect(profileView).toContain('bindtap="becomeMember"')
+    expect(profileView).not.toContain('disabled="{{!membershipTerms}}"')
+    expect(profile).toContain("/pages/membership-terms/index?source=mini_profile&action=enroll")
+    expect(profile).toContain("wx.showModal")
+    expect(termsPage).toContain('暂时无法加入')
+    expect(communityView).not.toContain('disabled="{{activity.registrationBlocked || busy}}"')
   })
 
   it('keeps key customer inputs and actions at least 44px and has a compact-width fallback', () => {

@@ -2,7 +2,8 @@ const RELEASE_CONFIG = require('./release-config.generated')
 
 const DEVELOPMENT_DEFAULTS = Object.freeze({
   mode: 'development',
-  apiBaseUrl: 'http://127.0.0.1:8787',
+  // DevTools 默认打现网；本机 8787 可在控制台写入 mbox.runtime.config.apiBaseUrl 覆盖。
+  apiBaseUrl: 'https://mbox.shmbox.com',
   storeId: 'mbox-lujiazui',
   defaultTableCode: 'L01',
   defaultTableToken: '',

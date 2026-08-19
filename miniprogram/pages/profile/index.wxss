@@ -238,6 +238,10 @@
   background: #b7b0a8;
   color: #f5f1eb;
 }
+.join-card .join-submit-hover {
+  background: #1f1c19;
+  opacity: .92;
+}
 .join-card button {
   min-height: 88rpx;
   margin: 26rpx 0 0;

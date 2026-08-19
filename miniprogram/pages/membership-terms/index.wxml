@@ -12,8 +12,10 @@
       </view>
       <view class="terms-content"><text user-select="true">{{terms.content}}</text></view>
       <view wx:if="{{membership}}" class="terms-status">您已经是会员，本页仅供查看当前条款，不要求重复确认。</view>
-      <button wx:elif="{{allowEnrollment}}" class="accept-button" bindtap="acceptAndEnroll" loading="{{busy}}">我已阅读，同意并加入</button>
-      <text wx:if="{{allowEnrollment && !membership}}" class="terms-note">本次确认只用于会员加入；手机号、短信和微信服务通知不会同时开启。</text>
+      <view wx:elif="{{allowEnrollment}}" class="terms-dock">
+        <button class="accept-button" bindtap="acceptAndEnroll" loading="{{busy}}" hover-class="accept-button-hover">我已阅读，同意并加入</button>
+        <text class="terms-note">本次确认只完成会员加入。微信手机号请回「我的」用「找回原会员」单独授权，不会在此同时开启短信或营销。</text>
+      </view>
     </block>
   </block>
 </view>

@@ -443,8 +443,12 @@ prepare_worker_adapter_mount() {
   install -d -m 0700 "${worker_adapter_directory}"
   cp -a "${active_mount_source}/." "${worker_adapter_directory}/"
   test -z "$(find "${worker_adapter_directory}" -type l -print -quit)"
-  chmod -R go-rwx "${worker_adapter_directory}"
+  # The application runs as a non-root user. Adapter code is not secret, but
+  # only root may change it; every runtime user needs read/traverse access.
+  chmod -R a+rX,go-w "${worker_adapter_directory}"
   test -f "${worker_adapter_directory}/${relative_module}"
+  test $(( 8#$(stat -c '%a' "${worker_adapter_directory}/${relative_module}") & 8#444 )) = $(( 8#444 ))
+  test $(( 8#$(stat -c '%a' "${worker_adapter_directory}/${relative_module}") & 8#022 )) = 0
   worker_adapter_source=${active_mount_source}
   worker_adapter_sha=$(sha256sum "${worker_adapter_directory}/${relative_module}" | awk '{print $1}')
   worker_adapter_tree_sha=$(tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 \

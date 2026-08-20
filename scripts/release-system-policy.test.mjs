@@ -154,6 +154,8 @@ test('production worker adapters are inherited as immutable read-only release ev
   assert.match(activate, /\/opt\/mbox\/releases\/\*\/worker-adapters/)
   assert.match(activate, /find "\$\{active_mount_source\}" -type l/)
   assert.match(activate, /stat -c '%U:%G'[\s\S]*root:root/)
+  assert.match(activate, /chmod -R a\+rX,go-w/)
+  assert.match(activate, /8#444[\s\S]*8#022/)
   assert.match(activate, /worker_adapter_mount_args\[@\]/)
   assert.match(activate, /workerAdapterTreeSha256[\s\S]*readOnly:true/)
   assert.doesNotMatch(activate, /\[ "\$\{health\}" = unhealthy \] && exit 1/)

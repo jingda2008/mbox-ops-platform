@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-rc.98 - 2026-08-21
+
+- Keeps inherited production worker-adapter code readable by the non-root
+  application user while preserving root-only write authority and a read-only
+  container mount.
+- Supersedes `1.0.0-rc.97`, whose production candidate correctly inherited the
+  adapter mount but could not read its over-restricted `0700/0600` copy; the
+  release automatically restored and reverified the previous application.
+
 ## 1.0.0-rc.97 - 2026-08-21
 
 - Carries the production worker adapter from the currently verified release

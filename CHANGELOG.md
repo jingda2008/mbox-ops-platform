@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.94 - 2026-08-21
+
+- Included the customer preview's M-BOX badge in the production Docker build
+  context instead of importing it from the intentionally excluded mini-program
+  source tree.
+- Retains the menu drafts, inventory recipe editor, refined customer
+  experience and next-business-day reservation handling from `1.0.0-rc.93`.
+
 ## 1.0.0-rc.93 - 2026-08-21
 
 - Added a first-party image library and 56 inactive, cost-unapproved menu drafts

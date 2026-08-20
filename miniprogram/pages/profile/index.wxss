@@ -70,10 +70,14 @@
   color: #9d958b;
   font-size: 18rpx;
 }
-.member-card__top > text {
-  font-family: serif;
-  font-size: 44rpx;
-  color: #c9a875;
+.member-card__logo {
+  display: block;
+  width: 60rpx;
+  height: 60rpx;
+  flex: 0 0 60rpx;
+  border: 1rpx solid rgba(209, 173, 116, 0.46);
+  border-radius: 50%;
+  box-shadow: 0 8rpx 20rpx rgba(0, 0, 0, 0.18);
 }
 .member-balance-grid {
   position: relative;

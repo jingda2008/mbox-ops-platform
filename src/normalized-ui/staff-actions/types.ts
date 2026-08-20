@@ -172,6 +172,8 @@ export type FulfillmentStatus = 'pending' | 'accepted' | 'preparing' | 'ready'
 
 export interface StaffFulfillmentItem {
   taskId: string
+  businessDate: string
+  carryover: boolean
   stationCode: FulfillmentStation
   kdsStatus: FulfillmentStatus
   priority: number

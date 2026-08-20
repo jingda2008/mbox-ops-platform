@@ -43,6 +43,7 @@ class ScriptedTransaction implements ScopedTransaction {
 describe("InventoryRepository", () => {
   it("locks aggregate balances in deterministic item order before writing movement and balance", async () => {
     const tx = new ScriptedTransaction([
+      { rows: [{ order_item_id: orderItemId }] },
       { rows: [demandRow()] },
       { rows: [balanceRow(false)] },
       { rows: [{ id: movementId }] },
@@ -56,24 +57,25 @@ describe("InventoryRepository", () => {
       quantity: "2.000000",
       remainingOnHandQuantity: "8.000000",
     });
-    expect(tx.calls[1]?.sql).toContain(
+    expect(tx.calls[2]?.sql).toContain(
       "ORDER BY balance.inventory_item_id FOR UPDATE OF balance",
     );
-    expect(tx.calls[2]?.sql).toContain("INSERT INTO mbox.inventory_movements");
-    expect(tx.calls[3]?.sql).toContain(
+    expect(tx.calls[3]?.sql).toContain("INSERT INTO mbox.inventory_movements");
+    expect(tx.calls[4]?.sql).toContain(
       "on_hand_quantity - reserved_quantity >= $4::numeric",
     );
   });
 
   it("fails before any inventory write when aggregate stock is insufficient", async () => {
     const tx = new ScriptedTransaction([
+      { rows: [{ order_item_id: orderItemId }] },
       { rows: [demandRow()] },
       { rows: [balanceRow(true)] },
     ]);
     await expect(
       new InventoryRepository(tx).consumeForOrderItems([orderItem()]),
     ).rejects.toBeInstanceOf(InsufficientInventoryError);
-    expect(tx.calls).toHaveLength(2);
+    expect(tx.calls).toHaveLength(3);
     expect(
       tx.calls.some((call) =>
         call.sql.includes("INSERT INTO mbox.inventory_movements"),
@@ -82,28 +84,28 @@ describe("InventoryRepository", () => {
   });
 
   it("rejects a recipe ingredient without a balance row", async () => {
-    const tx = new ScriptedTransaction([{ rows: [demandRow()] }, { rows: [] }]);
+    const tx = new ScriptedTransaction([{ rows: [{ order_item_id: orderItemId }] }, { rows: [demandRow()] }, { rows: [] }]);
     await expect(
       new InventoryRepository(tx).consumeForOrderItems([orderItem()]),
     ).rejects.toBeInstanceOf(InventoryBalanceMissingError);
   });
 
   it("rejects bar or kitchen products without an active recipe", async () => {
-    const tx = new ScriptedTransaction([{ rows: [] }]);
+    const tx = new ScriptedTransaction([{ rows: [{ order_item_id: orderItemId }] }, { rows: [] }]);
     await expect(
       new InventoryRepository(tx).consumeForOrderItems([orderItem()]),
     ).rejects.toBeInstanceOf(InventoryRecipeMissingError);
-    expect(tx.calls).toHaveLength(1);
+    expect(tx.calls).toHaveLength(2);
   });
 
   it("allows an unconfigured product only when validation audit mode is explicit", async () => {
-    const tx = new ScriptedTransaction([{ rows: [] }]);
+    const tx = new ScriptedTransaction([{ rows: [{ order_item_id: orderItemId }] }, { rows: [] }]);
     await expect(
       new InventoryRepository(tx).consumeForOrderItems([orderItem()], {
         allowMissingRecipes: true,
       }),
     ).resolves.toEqual([]);
-    expect(tx.calls).toHaveLength(1);
+    expect(tx.calls).toHaveLength(2);
   });
 
   it("allows non-inventory service items without a recipe", async () => {
@@ -116,6 +118,15 @@ describe("InventoryRepository", () => {
         },
       ]),
     ).resolves.toEqual([]);
+  });
+
+  it("allows a product explicitly marked not managed without creating inventory demand", async () => {
+    const tx = new ScriptedTransaction([{ rows: [] }]);
+    await expect(
+      new InventoryRepository(tx).consumeForOrderItems([orderItem()]),
+    ).resolves.toEqual([]);
+    expect(tx.calls).toHaveLength(1);
+    expect(tx.calls[0]?.sql).toContain("inventory_control_mode = 'tracked'");
   });
 });
 

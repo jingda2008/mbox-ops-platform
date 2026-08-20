@@ -89,10 +89,20 @@ function responses(): Array<PostgresQueryResult> {
         open_service_tasks: '4',
         urgent_service_tasks: '1',
         active_kds_tasks: '3',
+        active_bar_kds_tasks: '0',
+        active_kitchen_kds_tasks: '3',
         ready_kds_tasks: '2',
+        ready_bar_kds_tasks: '1',
+        ready_kitchen_kds_tasks: '1',
         overdue_kds_tasks: '1',
+        overdue_bar_kds_tasks: '0',
+        overdue_kitchen_kds_tasks: '1',
         carryover_kds_tasks: '2',
+        carryover_bar_kds_tasks: '0',
+        carryover_kitchen_kds_tasks: '2',
         carryover_ready_kds_tasks: '1',
+        carryover_ready_bar_kds_tasks: '1',
+        carryover_ready_kitchen_kds_tasks: '0',
         active_reservations: '8',
         reservation_attention: '2',
         pending_payments: '1',
@@ -195,6 +205,33 @@ describe('StaffBootstrapQuery', () => {
     })
     expect(result.view.domainSummaries.find((item) => item.key === 'payments')).toMatchObject({
       activeCount: 0, attentionCount: 0, carryoverCount: 0,
+    })
+  })
+
+  it('uses the same station and action scope as the fulfillment work queue', async () => {
+    const scripted = responses()
+    const identity = structuredClone(scripted[0]!.rows[0]!) as Record<string, unknown>
+    identity.permissions = ['dashboard.view', 'kds.prepare']
+    identity.data_scopes = [{ key: 'kds.station_codes', effect: 'include', value: ['bar'] }]
+    identity.navigation = [
+      { code: 'commerce', label: '出品', route: '/staff/fulfillment', icon: null, sortOrder: 1, displayConfig: {} },
+    ]
+    const summary = structuredClone(scripted[1]!.rows[0]!) as Record<string, unknown>
+    summary.active_kds_tasks = '14'
+    summary.active_bar_kds_tasks = '0'
+    summary.active_kitchen_kds_tasks = '14'
+    summary.ready_kds_tasks = '3'
+    summary.ready_bar_kds_tasks = '1'
+    summary.ready_kitchen_kds_tasks = '2'
+    const value = fixture([{ rows: [identity], rowCount: 1 }, { rows: [summary], rowCount: 1 }])
+
+    const result = await value.query.get({ tenantId, storeId }, employeeId, '2026-08-11')
+
+    expect(result.view.domainSummaries.find((item) => item.key === 'fulfillment')).toMatchObject({
+      activeCount: 0,
+      attentionCount: 0,
+      readyCount: 1,
+      carryoverCount: 1,
     })
   })
 

@@ -67,6 +67,7 @@ export interface CatalogApiOptions {
 type ProductStatus = "active" | "sold_out" | "inactive";
 type FulfillmentStation = "bar" | "kitchen" | "cashier" | "none";
 type ProductKind = "single" | "bundle";
+type InventoryControlMode = "tracked" | "not_managed";
 
 interface BundleComponent {
   productId: string;
@@ -91,8 +92,10 @@ interface ProductRow extends Record<string, unknown> {
   category_code: string;
   fulfillment_station: FulfillmentStation;
   product_kind: ProductKind;
+  inventory_control_mode: InventoryControlMode;
   bundle_components: JsonValue;
   bundle_components_available: boolean;
+  inventory_configuration_complete: boolean;
   product_snapshot: JsonObject;
   guest_visible: boolean;
   search_text: string;
@@ -133,6 +136,7 @@ interface CatalogProduct {
   categoryCode: string;
   fulfillmentStation: FulfillmentStation;
   productKind: ProductKind;
+  inventoryControlMode: InventoryControlMode;
   bundleComponents: BundleComponent[];
   productSnapshot: JsonObject;
   guestVisible: boolean;
@@ -159,6 +163,7 @@ interface CatalogProduct {
   costAmountMinor: number | null;
   status: ProductStatus;
   isAvailable: boolean;
+  inventoryConfigurationComplete: boolean;
   standardPrice: {
     id: string;
     amountMinor: string | null;
@@ -299,13 +304,14 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
           recommendation_single_wave_eligible, recommendation_expected_prep_minutes,
           recommendation_hold_minutes, recommendation_upgrade_product_id,
           menu_sort_order, available_from, available_until, allowed_channels,
-          max_order_quantity, kds_priority, fulfillment_sla_seconds, cost_amount_minor
+          max_order_quantity, kds_priority, fulfillment_sla_seconds, cost_amount_minor,
+          inventory_control_mode
         ) VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::jsonb, $9,
           $10::boolean, $11::text, $12::boolean, $13::smallint, $14::smallint,
           $15::smallint, $16::text[], $17::text[], $18::text[], $19::text[],
           $20::boolean, $21::smallint, $22::smallint, $23::uuid,
           $24::integer, $25::time, $26::time, $27::text[],
-          $28::smallint, $29::smallint, $30::integer, $31::bigint)
+          $28::smallint, $29::smallint, $30::integer, $31::bigint, $32::text)
         RETURNING id
       `,
             [
@@ -340,6 +346,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               operational.kdsPriority,
               operational.fulfillmentSlaSeconds,
               operational.costAmountMinor,
+              input.inventoryControlMode,
             ],
           );
           const productId = result.rows[0]?.id;
@@ -439,6 +446,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               kds_priority = $29::smallint,
               fulfillment_sla_seconds = $30::integer,
               cost_amount_minor = $31::bigint,
+              inventory_control_mode = COALESCE($32::text, inventory_control_mode),
               updated_at = clock_timestamp()
           WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
           RETURNING id
@@ -475,6 +483,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
                 operational.kdsPriority,
                 operational.fulfillmentSlaSeconds,
                 operational.costAmountMinor,
+                patch.inventoryControlMode,
               ],
             );
             if (result.rowCount !== 1) throw new CatalogProductNotFoundError();
@@ -648,9 +657,10 @@ async function listProducts(
   const result = await transaction.query<ProductRow>(
     `
     SELECT product.id, product.code, product.name, product.category_code,
-      product.fulfillment_station, product.product_kind,
+      product.fulfillment_station, product.product_kind, product.inventory_control_mode,
       COALESCE(component_list.items, '[]'::jsonb) AS bundle_components,
       COALESCE(component_list.all_available, false) AS bundle_components_available,
+      COALESCE(inventory_readiness.configuration_complete, false) AS inventory_configuration_complete,
       product.product_snapshot, product.guest_visible, product.search_text,
       product.recommendation_enabled, product.recommendation_min_guests,
       product.recommendation_max_guests, product.recommendation_priority,
@@ -706,6 +716,53 @@ async function listProducts(
         AND component.store_id = product.store_id
         AND component.bundle_product_id = product.id
     ) AS component_list ON true
+    LEFT JOIN LATERAL (
+      SELECT COALESCE(bool_and(
+        required_product.inventory_control_mode = 'not_managed'
+        OR required_product.fulfillment_station NOT IN ('bar', 'kitchen')
+        OR EXISTS (
+          SELECT 1
+          FROM mbox.recipes AS recipe
+          WHERE recipe.tenant_id=product.tenant_id AND recipe.store_id=product.store_id
+            AND recipe.product_id=required_product.product_id
+            AND recipe.status='active' AND recipe.effective_at<=statement_timestamp()
+            AND EXISTS (
+              SELECT 1 FROM mbox.recipe_items AS recipe_item
+              WHERE recipe_item.tenant_id=recipe.tenant_id AND recipe_item.store_id=recipe.store_id
+                AND recipe_item.recipe_id=recipe.id
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM mbox.recipe_items AS recipe_item
+              LEFT JOIN mbox.inventory_items AS inventory_item
+                ON inventory_item.tenant_id=recipe_item.tenant_id
+               AND inventory_item.store_id=recipe_item.store_id
+               AND inventory_item.id=recipe_item.inventory_item_id
+              LEFT JOIN mbox.inventory_balances AS balance
+                ON balance.tenant_id=recipe_item.tenant_id
+               AND balance.store_id=recipe_item.store_id
+               AND balance.inventory_item_id=recipe_item.inventory_item_id
+              WHERE recipe_item.tenant_id=recipe.tenant_id AND recipe_item.store_id=recipe.store_id
+                AND recipe_item.recipe_id=recipe.id
+                AND (inventory_item.id IS NULL OR inventory_item.status<>'active' OR balance.id IS NULL)
+            )
+        )
+      ), true) AS configuration_complete
+      FROM (
+        SELECT product.id AS product_id, product.fulfillment_station, product.inventory_control_mode
+        WHERE COALESCE(product.product_kind, 'single')<>'bundle'
+        UNION ALL
+        SELECT component_product.id, component_product.fulfillment_station, component_product.inventory_control_mode
+        FROM mbox.product_bundle_components AS component
+        JOIN mbox.products AS component_product
+          ON component_product.tenant_id=component.tenant_id
+         AND component_product.store_id=component.store_id
+         AND component_product.id=component.component_product_id
+        WHERE component.tenant_id=product.tenant_id AND component.store_id=product.store_id
+          AND component.bundle_product_id=product.id
+          AND COALESCE(product.product_kind, 'single')='bundle'
+      ) AS required_product
+    ) AS inventory_readiness ON true
     WHERE product.tenant_id = $1::uuid AND product.store_id = $2::uuid
       AND (
         $3 = ''
@@ -942,9 +999,10 @@ async function getProduct(
   const result = await transaction.query<ProductRow>(
     `
     SELECT product.id, product.code, product.name, product.category_code,
-      product.fulfillment_station, product.product_kind,
+      product.fulfillment_station, product.product_kind, product.inventory_control_mode,
       COALESCE(component_list.items, '[]'::jsonb) AS bundle_components,
       COALESCE(component_list.all_available, false) AS bundle_components_available,
+      COALESCE(inventory_readiness.configuration_complete, false) AS inventory_configuration_complete,
       product.product_snapshot, product.guest_visible, product.search_text,
       product.recommendation_enabled, product.recommendation_min_guests,
       product.recommendation_max_guests, product.recommendation_priority,
@@ -1000,6 +1058,53 @@ async function getProduct(
         AND component.store_id = product.store_id
         AND component.bundle_product_id = product.id
     ) AS component_list ON true
+    LEFT JOIN LATERAL (
+      SELECT COALESCE(bool_and(
+        required_product.inventory_control_mode = 'not_managed'
+        OR required_product.fulfillment_station NOT IN ('bar', 'kitchen')
+        OR EXISTS (
+          SELECT 1
+          FROM mbox.recipes AS recipe
+          WHERE recipe.tenant_id=product.tenant_id AND recipe.store_id=product.store_id
+            AND recipe.product_id=required_product.product_id
+            AND recipe.status='active' AND recipe.effective_at<=statement_timestamp()
+            AND EXISTS (
+              SELECT 1 FROM mbox.recipe_items AS recipe_item
+              WHERE recipe_item.tenant_id=recipe.tenant_id AND recipe_item.store_id=recipe.store_id
+                AND recipe_item.recipe_id=recipe.id
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM mbox.recipe_items AS recipe_item
+              LEFT JOIN mbox.inventory_items AS inventory_item
+                ON inventory_item.tenant_id=recipe_item.tenant_id
+               AND inventory_item.store_id=recipe_item.store_id
+               AND inventory_item.id=recipe_item.inventory_item_id
+              LEFT JOIN mbox.inventory_balances AS balance
+                ON balance.tenant_id=recipe_item.tenant_id
+               AND balance.store_id=recipe_item.store_id
+               AND balance.inventory_item_id=recipe_item.inventory_item_id
+              WHERE recipe_item.tenant_id=recipe.tenant_id AND recipe_item.store_id=recipe.store_id
+                AND recipe_item.recipe_id=recipe.id
+                AND (inventory_item.id IS NULL OR inventory_item.status<>'active' OR balance.id IS NULL)
+            )
+        )
+      ), true) AS configuration_complete
+      FROM (
+        SELECT product.id AS product_id, product.fulfillment_station, product.inventory_control_mode
+        WHERE COALESCE(product.product_kind, 'single')<>'bundle'
+        UNION ALL
+        SELECT component_product.id, component_product.fulfillment_station, component_product.inventory_control_mode
+        FROM mbox.product_bundle_components AS component
+        JOIN mbox.products AS component_product
+          ON component_product.tenant_id=component.tenant_id
+         AND component_product.store_id=component.store_id
+         AND component_product.id=component.component_product_id
+        WHERE component.tenant_id=product.tenant_id AND component.store_id=product.store_id
+          AND component.bundle_product_id=product.id
+          AND COALESCE(product.product_kind, 'single')='bundle'
+      ) AS required_product
+    ) AS inventory_readiness ON true
     WHERE product.tenant_id = $1::uuid AND product.store_id = $2::uuid
       AND product.id = $3::uuid
   `,
@@ -1019,6 +1124,8 @@ function mapProduct(row: ProductRow, guest = false): CatalogProduct {
           validFrom: row.price_valid_from,
           validUntil: row.price_valid_until,
         };
+  const catalogAvailable = row.status === "active" && standardPrice !== null
+    && (row.product_kind !== "bundle" || row.bundle_components_available === true);
   return {
     id: row.id,
     code: row.code,
@@ -1026,6 +1133,7 @@ function mapProduct(row: ProductRow, guest = false): CatalogProduct {
     categoryCode: row.category_code,
     fulfillmentStation: row.fulfillment_station,
     productKind: row.product_kind ?? "single",
+    inventoryControlMode: row.inventory_control_mode,
     bundleComponents: readStoredBundleComponents(row.bundle_components ?? []),
     productSnapshot: guest ? guestProductSnapshot(row.product_snapshot) : row.product_snapshot,
     guestVisible: row.guest_visible,
@@ -1051,8 +1159,8 @@ function mapProduct(row: ProductRow, guest = false): CatalogProduct {
     fulfillmentSlaSeconds: row.fulfillment_sla_seconds,
     costAmountMinor: row.cost_amount_minor === null ? null : Number(row.cost_amount_minor),
     status: row.status,
-    isAvailable: row.status === "active" && standardPrice !== null
-      && (row.product_kind !== "bundle" || row.bundle_components_available === true),
+    isAvailable: catalogAvailable && (!guest || row.inventory_configuration_complete),
+    inventoryConfigurationComplete: row.inventory_configuration_complete,
     standardPrice,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -1223,6 +1331,7 @@ function readCreateProduct(value: unknown): {
   categoryCode: string;
   fulfillmentStation: FulfillmentStation;
   productKind: ProductKind;
+  inventoryControlMode: InventoryControlMode;
   bundleComponents: BundleComponentInput[];
   productSnapshot: JsonObject;
   operationalFields: ProductOperationalFields;
@@ -1239,6 +1348,9 @@ function readCreateProduct(value: unknown): {
   assertProductShape(productKind, fulfillmentStation, bundleComponents);
   const operationalFields = strongProductOperationalFields(body, { code, name }, productSnapshot);
   const status = body.status === undefined ? "active" : readStatus(body.status, false);
+  const inventoryControlMode = body.inventoryControlMode === undefined
+    ? (requiredCode(body.categoryCode, "categoryCode") === "food" ? "not_managed" : "tracked")
+    : readInventoryControlMode(body.inventoryControlMode);
   assertActiveProductCost(status, operationalFields.costAmountMinor);
   return {
     code,
@@ -1246,6 +1358,7 @@ function readCreateProduct(value: unknown): {
     categoryCode: requiredCode(body.categoryCode, "categoryCode"),
     fulfillmentStation,
     productKind,
+    inventoryControlMode,
     bundleComponents,
     productSnapshot,
     operationalFields,
@@ -1258,6 +1371,7 @@ function readUpdateProduct(value: unknown): {
   categoryCode: string | null;
   fulfillmentStation: FulfillmentStation | null;
   productKind: ProductKind | null;
+  inventoryControlMode: InventoryControlMode | null;
   bundleComponents: BundleComponentInput[] | null;
   productSnapshot: JsonObject | null;
   operationalInput: JsonObject;
@@ -1279,6 +1393,8 @@ function readUpdateProduct(value: unknown): {
         : readStation(body.fulfillmentStation),
     productKind:
       body.productKind === undefined ? null : readProductKind(body.productKind),
+    inventoryControlMode: body.inventoryControlMode === undefined
+      ? null : readInventoryControlMode(body.inventoryControlMode),
     bundleComponents:
       body.bundleComponents === undefined
         ? null
@@ -1287,7 +1403,7 @@ function readUpdateProduct(value: unknown): {
     operationalInput: body,
     status: body.status === undefined ? null : readStatus(body.status, false),
   };
-  if ([patch.name, patch.categoryCode, patch.fulfillmentStation, patch.productKind,
+  if ([patch.name, patch.categoryCode, patch.fulfillmentStation, patch.productKind, patch.inventoryControlMode,
     patch.bundleComponents, patch.productSnapshot, patch.status].every((item) => item === null)
     && !PRODUCT_OPERATIONAL_INPUT_KEYS.some((key) => body[key] !== undefined)) {
     throw new CatalogRequestError("至少提供一个可修改字段");
@@ -1430,6 +1546,11 @@ function readProductKind(value: JsonValue | undefined): ProductKind {
   if (value === undefined || value === "single") return "single";
   if (value === "bundle") return value;
   throw new CatalogRequestError("productKind无效");
+}
+
+function readInventoryControlMode(value: JsonValue | undefined): InventoryControlMode {
+  if (value === "tracked" || value === "not_managed") return value;
+  throw new CatalogRequestError("inventoryControlMode无效");
 }
 
 function readBundleComponents(
@@ -1640,6 +1761,7 @@ function catalogProductToJson(product: CatalogProduct): JsonObject {
     categoryCode: product.categoryCode,
     fulfillmentStation: product.fulfillmentStation,
     productKind: product.productKind,
+    inventoryControlMode: product.inventoryControlMode,
     bundleComponents: product.bundleComponents.map((component) => ({ ...component })),
     productSnapshot: product.productSnapshot,
     guestVisible: product.guestVisible,
@@ -1666,6 +1788,7 @@ function catalogProductToJson(product: CatalogProduct): JsonObject {
     costAmountMinor: product.costAmountMinor,
     status: product.status,
     isAvailable: product.isAvailable,
+    inventoryConfigurationComplete: product.inventoryConfigurationComplete,
     standardPrice:
       product.standardPrice === null ? null : { ...product.standardPrice },
     createdAt: product.createdAt,
@@ -1685,6 +1808,7 @@ const catalogProductCodec: JsonCodec<CatalogProduct> = {
       "categoryCode",
       "fulfillmentStation",
       "productKind",
+      "inventoryControlMode",
       "status",
       "createdAt",
       "updatedAt",
@@ -1694,6 +1818,8 @@ const catalogProductCodec: JsonCodec<CatalogProduct> = {
     }
     if (
       typeof value.isAvailable !== "boolean" ||
+      typeof value.inventoryConfigurationComplete !== "boolean" ||
+      (value.inventoryControlMode !== "tracked" && value.inventoryControlMode !== "not_managed") ||
       typeof value.guestVisible !== "boolean" ||
       typeof value.searchText !== "string" ||
       typeof value.recommendationEnabled !== "boolean" ||

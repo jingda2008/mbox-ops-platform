@@ -10,6 +10,7 @@ import {
   PackageSearch,
   Printer,
   RefreshCw,
+  ScanLine,
   Settings2,
   ShieldCheck,
 } from 'lucide-react'
@@ -25,6 +26,7 @@ import {
 } from './CustomerExperienceManagementPanel'
 import { paymentPolicyPresentation } from './payment-policy-presentation'
 import { PerformanceRevisionPanel } from './PerformanceRevisionPanel'
+import { InventoryBarcodeScanner } from './InventoryBarcodeScanner'
 import './staff-module-panel.css'
 
 export type StaffModule = 'payments' | 'performance' | 'inventory' | 'operations' | 'experience' | 'devices' | 'settings'
@@ -87,15 +89,35 @@ interface InventoryItemView {
   id: string
   sku: string
   name: string
+  itemType: string
   baseUnit: string
+  categoryCode: string
   availableQuantity: string
   lowStock: boolean
+}
+
+interface PurchaseReceiptView {
+  id: string
+  publicId: string
+  status: string
+  lineCount: number
+  lines: Array<{ inventoryItemId: string; itemName: string; batchCode: string; quantity: string; baseUnit: string }>
+  createdAt: string
+  receivedAt: string | null
+}
+
+interface PurchaseReceiptCommandView {
+  id: string
+  publicId: string
+  status: string
+  lineCount: number
+  receivedAt: string | null
 }
 
 interface InventoryView {
   items: InventoryItemView[]
   lowStockCount: number
-  receipts: unknown[]
+  receipts: PurchaseReceiptView[]
   storedBottles: unknown[]
 }
 
@@ -549,10 +571,19 @@ function PerformanceModule({ api, auth, view, performers, requests, phases, onCh
 }
 
 function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiClient; auth: StaffAuthView; view: InventoryView | null; onChanged(): Promise<void> }) {
-  const [mode, setMode] = useState<'count' | 'waste' | null>(null)
+  const [mode, setMode] = useState<'count' | 'waste' | 'receive' | 'bind' | null>(null)
   const [itemId, setItemId] = useState('')
   const [quantity, setQuantity] = useState('')
   const [reason, setReason] = useState('')
+  const [scanCode, setScanCode] = useState('')
+  const [scannerOpen, setScannerOpen] = useState(false)
+  const [batchCode, setBatchCode] = useState('')
+  const [packages, setPackages] = useState('1')
+  const [totalCostYuan, setTotalCostYuan] = useState('')
+  const [supplierName, setSupplierName] = useState('')
+  const [packageQuantity, setPackageQuantity] = useState('1')
+  const [codeType, setCodeType] = useState<'barcode' | 'qr'>('barcode')
+  const [pendingReceipt, setPendingReceipt] = useState<PurchaseReceiptCommandView | null>(null)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   if (view === null) return <EmptyState text="库存数据暂时为空" />
@@ -560,6 +591,23 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
   const visibleItems = [...lowStock, ...view.items.filter((item) => !item.lowStock)].slice(0, 20)
   const canCount = auth.permissions.includes('inventory.count')
   const canWaste = auth.permissions.includes('inventory.waste')
+  const canReceive = auth.permissions.includes('inventory.receive')
+  const canManage = auth.permissions.includes('inventory.manage')
+  const draftReceipts = view.receipts.filter((receipt) => receipt.status === 'draft' && receipt.id !== pendingReceipt?.id)
+  const bindableItems = view.items.filter((item) => item.categoryCode !== 'food' && (item.itemType === 'ingredient' || item.itemType === 'bottle'))
+  const selectedBindableItem = bindableItems.find((item) => item.id === itemId) ?? null
+
+  function chooseMode(nextMode: 'count' | 'waste' | 'receive' | 'bind') {
+    setMode(mode === nextMode ? null : nextMode)
+    setNotice('')
+    if (nextMode !== 'receive') setPendingReceipt(null)
+  }
+
+  function acceptScan(code: string) {
+    setScanCode(code)
+    setScannerOpen(false)
+    setNotice('条码已识别，请核对后继续')
+  }
 
   async function submitInventoryAction(event: React.FormEvent) {
     event.preventDefault()
@@ -589,13 +637,124 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
       setBusy(false)
     }
   }
+
+  async function createReceipt(event: React.FormEvent) {
+    event.preventDefault()
+    if (busy || pendingReceipt !== null) return
+    const normalizedCode = scanCode.trim()
+    const totalCostMinor = yuanInputToMinor(totalCostYuan)
+    if (normalizedCode.length < 3 || normalizedCode.length > 128) { setNotice('请扫描或输入有效条码'); return }
+    if (batchCode.trim().length < 1) { setNotice('请填写批次号，可使用送货单号或当天批次'); return }
+    if (!/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(packages) || packages === '0') { setNotice('请填写有效的包装数量'); return }
+    if (totalCostMinor === null) { setNotice('本次总额最多保留两位小数'); return }
+    setBusy(true)
+    setNotice('')
+    try {
+      const receipt = await api.postEndpoint<PurchaseReceiptCommandView>('/api/inventory/receipts', {
+        supplierSnapshot: supplierName.trim() === '' ? {} : { name: supplierName.trim() },
+        currency: 'CNY',
+        invoiceTotalMinor: totalCostMinor,
+        note: '员工手机扫码创建，待实物验收确认',
+        lines: [{
+          scanCode: normalizedCode,
+          batchCode: batchCode.trim(),
+          packages,
+          totalCostMinor,
+          metadata: { entryMethod: 'staff_mobile_camera' },
+        }],
+      }, { idempotencyKey: operationIdempotency('inventory-receipt-create') })
+      setPendingReceipt(receipt)
+      setNotice('收货单已建立，库存尚未增加。请核对实物后进行第二次确认。')
+      await onChanged()
+    } catch (error) {
+      setNotice(inventoryActionMessage(error, '收货单未建立；若提示条码未绑定，请由库存管理员先绑定'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function confirmReceipt(receipt: { id: string }) {
+    if (busy) return
+    setBusy(true)
+    setNotice('')
+    try {
+      await api.postEndpoint<PurchaseReceiptCommandView>(`/api/inventory/receipts/${receipt.id}/receive`, {}, {
+        idempotencyKey: operationIdempotency('inventory-receipt-confirm'),
+      })
+      setNotice('实物已确认入库，库存数量已更新')
+      if (pendingReceipt?.id === receipt.id) {
+        setPendingReceipt(null)
+        setScanCode('')
+        setBatchCode('')
+        setPackages('1')
+        setTotalCostYuan('')
+        setSupplierName('')
+      }
+      await onChanged()
+    } catch (error) {
+      setNotice(inventoryActionMessage(error, '入库确认未完成'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function bindCode(event: React.FormEvent) {
+    event.preventDefault()
+    if (busy) return
+    const normalizedCode = scanCode.trim()
+    if (!itemId || normalizedCode.length < 3 || normalizedCode.length > 128) { setNotice('请选择酒水物料并扫描有效条码'); return }
+    if (!/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(packageQuantity) || packageQuantity === '0') { setNotice('请填写每个条码包装包含的有效数量'); return }
+    setBusy(true)
+    setNotice('')
+    try {
+      await api.postEndpoint(`/api/inventory/items/${itemId}/barcodes`, {
+        code: normalizedCode,
+        codeType,
+        packageQuantity,
+      }, { idempotencyKey: operationIdempotency('inventory-barcode-bind') })
+      setNotice('条码已绑定。以后收货人员可直接扫码建立收货单。')
+    } catch (error) {
+      setNotice(inventoryActionMessage(error, '条码绑定未完成'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return <div className="staff-module-body">
     <div className={`staff-module-summary${view.lowStockCount > 0 ? ' has-attention' : ''}`}><span><PackageSearch size={18} /></span><div><strong>{view.lowStockCount} 项低库存 · {view.items.length} 项物料</strong><small>{view.receipts.length} 笔进货记录 · {view.storedBottles.length} 笔存酒</small></div></div>
     {notice !== '' && <p className="staff-module-notice" role="status">{notice}</p>}
-    {(canCount || canWaste) && <div className="staff-module-actions">{canCount && <button type="button" onClick={() => setMode(mode === 'count' ? null : 'count')}>单项盘点</button>}{canWaste && <button type="button" onClick={() => setMode(mode === 'waste' ? null : 'waste')}>登记损耗</button>}</div>}
-    {mode !== null && <form className="staff-module-form" onSubmit={(event) => void submitInventoryAction(event)}><header><strong>{mode === 'count' ? '单项盘点' : '登记损耗'}</strong><small>{mode === 'count' ? '提交后由有审批权限的岗位复核差异。' : '提交后立即形成库存流水，请如实填写原因。'}</small></header><label>物料<select required value={itemId} onChange={(event) => setItemId(event.target.value)}><option value="">请选择</option>{view.items.map((item) => <option value={item.id} key={item.id}>{item.name} · 当前{item.availableQuantity}{item.baseUnit}</option>)}</select></label><label>{mode === 'count' ? '实盘数量' : '损耗数量'}<input required inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></label><label>{mode === 'count' ? '差异说明（选填）' : '损耗原因'}<input required={mode === 'waste'} maxLength={500} value={reason} onChange={(event) => setReason(event.target.value)} /></label><button type="submit" disabled={busy}>{busy ? '提交中' : mode === 'count' ? '提交盘点复核' : '确认登记损耗'}</button></form>}
+    {(canCount || canWaste || canReceive || canManage) && <div className="staff-module-actions">
+      {canReceive && <button type="button" className="is-primary" onClick={() => chooseMode('receive')}><ScanLine size={16} />手机扫码入库</button>}
+      {canManage && <button type="button" onClick={() => chooseMode('bind')}>首次绑定条码</button>}
+      {canCount && <button type="button" onClick={() => chooseMode('count')}>单项盘点</button>}
+      {canWaste && <button type="button" onClick={() => chooseMode('waste')}>登记损耗</button>}
+    </div>}
+    {canReceive && draftReceipts.length > 0 && <section className="inventory-draft-receipts" aria-label="待确认收货单">
+      <header><strong>待确认收货</strong><small>刷新或退出页面后仍可在这里继续。确认实物前不会增加库存。</small></header>
+      {draftReceipts.map((receipt) => <article key={receipt.id}><div><strong>{receipt.publicId}</strong><small>{receipt.lineCount} 项 · {formatDateTime(receipt.createdAt)}</small>{receipt.lines.map((line) => <span key={`${line.inventoryItemId}:${line.batchCode}`}>{line.itemName} · 批次 {line.batchCode} · {line.quantity}{line.baseUnit}</span>)}</div><button type="button" disabled={busy} onClick={() => void confirmReceipt(receipt)}>{busy ? '正在确认' : '核对并确认入库'}</button></article>)}
+    </section>}
+    {(mode === 'count' || mode === 'waste') && <form className="staff-module-form" onSubmit={(event) => void submitInventoryAction(event)}><header><strong>{mode === 'count' ? '单项盘点' : '登记损耗'}</strong><small>{mode === 'count' ? '提交后由有审批权限的岗位复核差异。' : '提交后立即形成库存流水，请如实填写原因。'}</small></header><label>物料<select required value={itemId} onChange={(event) => setItemId(event.target.value)}><option value="">请选择</option>{view.items.map((item) => <option value={item.id} key={item.id}>{item.name} · 当前{item.availableQuantity}{item.baseUnit}</option>)}</select></label><label>{mode === 'count' ? '实盘数量' : '损耗数量'}<input required inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></label><label>{mode === 'count' ? '差异说明（选填）' : '损耗原因'}<input required={mode === 'waste'} maxLength={500} value={reason} onChange={(event) => setReason(event.target.value)} /></label><button type="submit" disabled={busy}>{busy ? '提交中' : mode === 'count' ? '提交盘点复核' : '确认登记损耗'}</button></form>}
+    {mode === 'receive' && pendingReceipt === null && <form className="staff-module-form inventory-receipt-form" onSubmit={(event) => void createReceipt(event)}>
+      <header><strong>手机扫码建立收货单</strong><small>第一步只登记待收货，不改变库存；建立后还需核对实物并再次确认。</small></header>
+      <label className="inventory-code-field">酒瓶条形码或二维码<div><input required autoComplete="off" maxLength={128} value={scanCode} onChange={(event) => setScanCode(event.target.value.replace(/\s/g, ''))} placeholder="点击右侧用手机扫描" /><button type="button" onClick={() => setScannerOpen(true)}><ScanLine size={17} />扫码</button></div></label>
+      <label>批次号<input required maxLength={128} value={batchCode} onChange={(event) => setBatchCode(event.target.value)} placeholder="送货单号或当天批次" /></label>
+      <label>包装数量<input required inputMode="decimal" value={packages} onChange={(event) => setPackages(event.target.value)} placeholder="1" /></label>
+      <label>本行货款总额（元）<input required inputMode="decimal" value={totalCostYuan} onChange={(event) => setTotalCostYuan(event.target.value)} placeholder="0.00" /><small>服务端会按条码包装量和实际数量计算库存单位成本，避免把整瓶价格误记为每毫升价格。</small></label>
+      <label>供应商（选填）<input maxLength={200} value={supplierName} onChange={(event) => setSupplierName(event.target.value)} /></label>
+      <button type="submit" disabled={busy}>{busy ? '正在建立' : '第一步：建立待收货单'}</button>
+    </form>}
+    {mode === 'receive' && pendingReceipt !== null && <section className="inventory-receipt-confirm"><header><strong>待实物确认</strong><small>{pendingReceipt.publicId} · {pendingReceipt.lineCount} 项</small></header><p>条码 {scanCode} · 批次 {batchCode} · {packages} 个包装 · 总额 ¥{totalCostYuan}。请核对酒水、数量和送货单；点击确认后才会正式增加库存。</p><button type="button" disabled={busy} onClick={() => void confirmReceipt(pendingReceipt)}>{busy ? '正在确认' : '第二步：确认实物无误并入库'}</button></section>}
+    {mode === 'bind' && <form className="staff-module-form inventory-bind-form" onSubmit={(event) => void bindCode(event)}>
+      <header><strong>首次绑定酒水条码</strong><small>只在新酒款或新包装首次出现时操作。条码只能绑定一个物料，绑定后普通收货岗位可直接扫码。</small></header>
+      <label>酒水原料或瓶装酒<select required value={itemId} onChange={(event) => setItemId(event.target.value)}><option value="">请选择</option>{bindableItems.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.sku} · 单位 {item.baseUnit}</option>)}</select></label>
+      <label className="inventory-code-field">条形码或二维码<div><input required autoComplete="off" maxLength={128} value={scanCode} onChange={(event) => setScanCode(event.target.value.replace(/\s/g, ''))} /><button type="button" onClick={() => setScannerOpen(true)}><ScanLine size={17} />扫码</button></div></label>
+      <label>码类型<select value={codeType} onChange={(event) => setCodeType(event.target.value as 'barcode' | 'qr')}><option value="barcode">商品条形码</option><option value="qr">二维码</option></select></label>
+      <label>每个条码包装计入数量（{selectedBindableItem?.baseUnit ?? '库存单位'}）<input required inputMode="decimal" value={packageQuantity} onChange={(event) => setPackageQuantity(event.target.value)} /><small>例如750ml酒瓶填750；按整瓶计数的物料填1。</small></label>
+      <button type="submit" disabled={busy}>{busy ? '正在绑定' : '确认绑定条码'}</button>
+    </form>}
     {visibleItems.length === 0 ? <EmptyState text="当前没有库存物料" /> : <div className="staff-module-list">{visibleItems.map((item) => <article key={item.id} className={item.lowStock ? 'has-attention' : ''}><div><strong>{item.name}</strong><small>{item.sku} · 可用 {item.availableQuantity} {item.baseUnit}</small></div><em>{item.lowStock ? '需补货' : '正常'}</em></article>)}</div>}
-    <p className="staff-module-footnote">订单完成后按配方扣减库存；盘点须复核后生效，损耗登记立即留痕。进货收货仍需两段确认，避免误入库。</p>
+    <p className="staff-module-footnote">酒水按配方扣减库存；小吃和水果标记为暂不管理库存时不拦截下单。盘点须复核后生效，扫码进货必须经过建立收货单和实物确认两步。</p>
+    {scannerOpen && <InventoryBarcodeScanner onClose={() => setScannerOpen(false)} onDetected={acceptScan} />}
   </div>
 }
 
@@ -852,12 +1011,29 @@ function inventoryView(value: unknown): InventoryView | null {
   return {
     items: value.items.flatMap((item) => isRecord(item)
       && typeof item.id === 'string' && typeof item.sku === 'string' && typeof item.name === 'string'
-      && typeof item.baseUnit === 'string' && typeof item.availableQuantity === 'string' && typeof item.lowStock === 'boolean'
+      && typeof item.itemType === 'string' && typeof item.baseUnit === 'string'
+      && typeof item.categoryCode === 'string' && typeof item.availableQuantity === 'string' && typeof item.lowStock === 'boolean'
       ? [item as unknown as InventoryItemView] : []),
     lowStockCount: typeof value.lowStockCount === 'number' ? value.lowStockCount : 0,
-    receipts: Array.isArray(value.receipts) ? value.receipts : [],
+    receipts: purchaseReceiptViews(value.receipts),
     storedBottles: Array.isArray(value.storedBottles) ? value.storedBottles : [],
   }
+}
+
+function purchaseReceiptViews(value: unknown): PurchaseReceiptView[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((entry): PurchaseReceiptView[] => {
+    if (!isRecord(entry) || typeof entry.id !== 'string' || typeof entry.publicId !== 'string'
+      || typeof entry.status !== 'string' || typeof entry.lineCount !== 'number'
+      || !Array.isArray(entry.lines)
+      || typeof entry.createdAt !== 'string'
+      || !(entry.receivedAt === null || typeof entry.receivedAt === 'string')) return []
+    const lines = entry.lines.flatMap((line) => isRecord(line)
+      && typeof line.inventoryItemId === 'string' && typeof line.itemName === 'string'
+      && typeof line.batchCode === 'string' && typeof line.quantity === 'string' && typeof line.baseUnit === 'string'
+      ? [{ inventoryItemId: line.inventoryItemId, itemName: line.itemName, batchCode: line.batchCode, quantity: line.quantity, baseUnit: line.baseUnit }] : [])
+    return [{ id: entry.id, publicId: entry.publicId, status: entry.status, lineCount: entry.lineCount, lines, createdAt: entry.createdAt, receivedAt: entry.receivedAt }]
+  })
 }
 
 function profitView(value: unknown): ProfitView | null {
@@ -913,6 +1089,19 @@ function commercePolicyView(value: unknown): CommercePolicyView | null {
 }
 
 function formatAmount(value: number): string { return (Math.abs(value) / 100).toFixed(2) }
+
+function yuanInputToMinor(value: string): string | null {
+  const normalized = value.trim()
+  if (!/^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/.test(normalized)) return null
+  const [yuan = '0', fen = ''] = normalized.split('.')
+  return (BigInt(yuan) * 100n + BigInt(`${fen}00`.slice(0, 2))).toString()
+}
+
+function inventoryActionMessage(error: unknown, fallback: string): string {
+  if (error instanceof NormalizedApiError && error.message.trim() !== '') return error.message
+  if (error instanceof Error && error.message.trim() !== '') return error.message
+  return fallback
+}
 function formatSignedAmount(value: number): string { return `${value < 0 ? '-' : ''}${formatAmount(value)}` }
 function formatTime(value: string): string {
   return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value))

@@ -104,7 +104,7 @@ export interface PurchaseReceiptLineInput {
   inventoryItemId: string;
   batchCode: string;
   quantity: string;
-  unitCostMinor: string;
+  unitCostMinor?: string | null;
   totalCostMinor: string;
   expiresOn?: string | null;
   metadata?: JsonObject;
@@ -488,7 +488,9 @@ export class InventoryRepository {
           tenant_id, store_id, receipt_id, inventory_item_id, batch_code,
           quantity, unit_cost_minor, total_cost_minor, expires_on, metadata
         ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5,
-          $6::numeric, $7::numeric, $8::bigint, $9::date, $10::jsonb)
+          $6::numeric,
+          COALESCE($7::numeric, $8::numeric / NULLIF($6::numeric, 0)),
+          $8::bigint, $9::date, $10::jsonb)
       `,
         [
           this.transaction.scope.tenantId,
@@ -497,7 +499,7 @@ export class InventoryRepository {
           line.inventoryItemId,
           line.batchCode,
           line.quantity,
-          line.unitCostMinor,
+          line.unitCostMinor ?? null,
           line.totalCostMinor,
           line.expiresOn ?? null,
           JSON.stringify(line.metadata ?? {}),
@@ -1071,12 +1073,13 @@ export class InventoryRepository {
       throw new TypeError("At most 100 order items can be consumed at once");
     if (options.createdByEmployeeId)
       requireUuid("createdByEmployeeId", options.createdByEmployeeId);
+    const trackedOrderItems = await this.loadTrackedInventoryOrderItemIds(orderItems);
+    if (trackedOrderItems.size === 0) return [];
     const demand = await this.loadRecipeDemand(orderItems);
     const demandOrderItems = new Set(demand.map((row) => row.order_item_id));
     const missingRecipe = orderItems.find(
       (item) =>
-        (item.fulfillmentStation === "bar" ||
-          item.fulfillmentStation === "kitchen") &&
+        trackedOrderItems.has(item.id) &&
         !demandOrderItems.has(item.id),
     );
     if (missingRecipe && options.allowMissingRecipes !== true)
@@ -1152,11 +1155,13 @@ export class InventoryRepository {
       throw new InventoryConflictError("Order is not awaiting payment inventory reservation");
     }
 
+    const trackedOrderItems = await this.loadTrackedInventoryOrderItemIds(orderItems);
+    if (trackedOrderItems.size === 0) return [];
     const demand = await this.loadRecipeDemand(orderItems);
     const demandOrderItems = new Set(demand.map((row) => row.order_item_id));
     const missingRecipe = orderItems.find(
       (item) =>
-        (item.fulfillmentStation === "bar" || item.fulfillmentStation === "kitchen") &&
+        trackedOrderItems.has(item.id) &&
         !demandOrderItems.has(item.id),
     );
     if (missingRecipe && options.allowMissingRecipes !== true)
@@ -1605,6 +1610,8 @@ export class InventoryRepository {
         (((recipe_item.quantity + recipe_item.expected_waste_quantity)
           * ordered.ordered_quantity::numeric) / recipe.yield_quantity::numeric)::numeric(18,6)::text AS required_quantity
       FROM ordered
+      JOIN mbox.products AS product ON product.tenant_id = $1::uuid AND product.store_id = $2::uuid
+        AND product.id = ordered.product_id AND product.inventory_control_mode = 'tracked'
       JOIN mbox.recipes AS recipe ON recipe.tenant_id = $1::uuid AND recipe.store_id = $2::uuid
         AND recipe.product_id = ordered.product_id AND recipe.status = 'active'
         AND recipe.effective_at <= clock_timestamp()
@@ -1628,6 +1635,33 @@ export class InventoryRepository {
       ],
     );
     return result.rows;
+  }
+
+  private async loadTrackedInventoryOrderItemIds(
+    orderItems: readonly OrderItem[],
+  ): Promise<Set<string>> {
+    const result = await this.transaction.query<{ order_item_id: string }>(
+      `
+      WITH ordered AS (
+        SELECT order_item_id, product_id
+        FROM jsonb_to_recordset($3::jsonb)
+          AS line(order_item_id uuid, product_id uuid)
+      )
+      SELECT ordered.order_item_id
+      FROM ordered
+      JOIN mbox.products AS product
+        ON product.tenant_id = $1::uuid AND product.store_id = $2::uuid
+       AND product.id = ordered.product_id
+      WHERE product.inventory_control_mode = 'tracked'
+        AND product.fulfillment_station IN ('bar', 'kitchen')
+      `,
+      [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        JSON.stringify(orderItems.map((item) => ({ order_item_id: item.id, product_id: item.productId }))),
+      ],
+    );
+    return new Set(result.rows.map((row) => row.order_item_id));
   }
 
   private async lockRequiredBalances(

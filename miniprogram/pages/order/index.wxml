@@ -7,12 +7,35 @@
   <state-panel wx:if="{{loading}}" type="loading" title="正在确认桌次与菜单" />
 
   <view wx:elif="{{connectionState === 'needs_scan'}}" class="gate-wrap">
-    <view class="gate-art"><view class="gate-ring"></view><view class="gate-mark">M</view></view>
-    <text class="gate-kicker">TABLE ACCESS</text><text class="gate-title">扫码后开始点单</text>
-    <text class="gate-copy">正式菜单、库存、价格和付款都与当前桌次绑定。请扫描桌面上的 M-BOX 固定二维码。</text>
-    <button class="primary-button gate-button" bindtap="scanTable">扫描桌码</button>
-    <text class="gate-note">来店前可继续使用预约、超嗨活动和会员权益</text>
+    <view class="browse-intro">
+      <image class="gate-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX Logo" />
+      <view class="browse-intro__copy">
+        <text class="gate-kicker">M-BOX · TONIGHT MENU</text><text class="gate-title">先看今晚，再决定怎么喝</text>
+        <text class="gate-copy">菜单与价格可以提前浏览；到店扫描桌码后，才会连接实时库存、加入购物车并付款。</text>
+      </view>
+      <button class="primary-button gate-button" bindtap="scanTable">到店扫码点单</button>
+      <text class="gate-note">浏览菜单不要求加入会员，也不会创建订单</text>
+    </view>
     <view wx:if="{{error}}" class="error-banner gate-error">{{error}}</view>
+
+    <view class="browse-menu">
+      <view class="browse-menu__heading"><view><text>今晚菜单</text><text>价格透明 · 到店后按实时库存下单</text></view><text>{{visibleProducts.length}} 款</text></view>
+      <view class="menu-tools menu-tools--browse">
+        <view class="search-box"><text>⌕</text><input value="{{searchText}}" placeholder="搜索酒水、套餐或口味" bindinput="onSearchInput" /></view>
+        <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="category-scroll"><view class="category-row"><button wx:for="{{categories}}" wx:key="code" class="{{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory">{{item.name}}</button></view></scroll-view>
+      </view>
+      <view wx:if="{{visibleProducts.length}}" class="preview-product-grid">
+        <view wx:for="{{visibleProducts}}" wx:key="productId" class="preview-product-card">
+          <view class="preview-product-card__visual">
+            <image wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
+            <view wx:else class="preview-product-card__placeholder"><text>M</text><text>{{item.productKind === 'bundle' ? 'EXPERIENCE' : 'SELECTION'}}</text></view>
+            <text class="preview-product-card__kind">{{item.productKind === 'bundle' ? '体验组合' : item.categoryName}}</text>
+          </view>
+          <view class="preview-product-card__body"><text class="preview-product-card__name">{{item.name}}</text><text class="preview-product-card__copy">{{item.description || item.includedText || '当晚正式菜单精选'}}</text><view><text>{{item.priceText}}</text><text class="{{item.available ? '' : 'is-unavailable'}}">{{item.availabilityText}}</text></view></view>
+        </view>
+      </view>
+      <state-panel wx:else type="empty" title="没有找到符合条件的商品" message="可清空搜索或切换分类" />
+    </view>
   </view>
 
   <view wx:elif="{{connectionState === 'waiting'}}" class="gate-wrap">
@@ -80,9 +103,12 @@
       <view class="section-title"><text>今晚可点</text><text wx:if="{{benefitCount}}" class="section-link" bindtap="openBenefits">{{benefitCount}}项权益可用</text></view>
       <view wx:if="{{visibleProducts.length}}" class="product-list">
         <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row">
-          <image wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
+          <view class="product-media">
+            <image wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
+            <view wx:else class="product-media__placeholder"><text>M</text></view>
+          </view>
           <view class="product-main"><text class="product-kind">{{item.productKind === 'bundle' ? '体验组合' : item.categoryName}}</text><text class="product-name">{{item.name}}</text><text class="product-copy">{{item.description || item.includedText || '详情以当晚正式菜单为准'}}</text></view>
-          <view class="product-action"><text class="product-price">{{item.priceText}}</text><button data-id="{{item.productId}}" bindtap="addProduct">＋</button></view>
+          <view class="product-action"><text class="product-price">{{item.priceText}}</text><button aria-label="添加{{item.name}}" data-id="{{item.productId}}" bindtap="addProduct">＋</button></view>
         </view>
       </view>
       <state-panel wx:else type="empty" title="没有找到符合条件的商品" message="可清空搜索或切换分类" />

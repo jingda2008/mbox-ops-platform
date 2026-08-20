@@ -100,6 +100,7 @@ integration("normalized catalog PostgreSQL integration", () => {
     expect(created.statusCode).toBe(201);
     expect(replayedCreate.statusCode).toBe(200);
     expect(replayedCreate.json().meta.replayed).toBe(true);
+    expect(replayedCreate.json().data).toEqual(created.json().data);
     const createdId = created.json().data.id as string;
     const createdUpdatedAt = created.json().data.updatedAt as string;
     expect(replayedCreate.json().data.id).toBe(createdId);
@@ -196,7 +197,8 @@ integration("normalized catalog PostgreSQL integration", () => {
     expect(response.json().data).toEqual([
       expect.objectContaining({
         code: integrationProductCode,
-        isAvailable: true,
+        isAvailable: false,
+        inventoryConfigurationComplete: false,
       }),
     ]);
     const hiddenCode = `HIDDEN-${integrationRunToken}`;
@@ -268,7 +270,8 @@ integration("normalized catalog PostgreSQL integration", () => {
     expect(guest.json().data).toEqual([
       expect.objectContaining({
         productKind: "bundle",
-        isAvailable: true,
+        isAvailable: false,
+        inventoryConfigurationComplete: false,
         standardPrice: expect.objectContaining({ amountMinor: "22800" }),
         bundleComponents: [expect.objectContaining({ productId: componentId, quantity: 2 })],
       }),
@@ -486,6 +489,7 @@ describe("normalized catalog HTTP API", () => {
       30,
       420,
       3200,
+      "tracked",
     ]);
     expect(fixture.commandCalls[0]?.requestFingerprint).toContain('"costAmountMinor":3200');
   });
@@ -821,6 +825,11 @@ function productRow(withPrice: boolean): Record<string, unknown> {
     name: "招牌鸡尾酒",
     category_code: "wine",
     fulfillment_station: "bar",
+    product_kind: "single",
+    inventory_control_mode: "tracked",
+    bundle_components: [],
+    bundle_components_available: false,
+    inventory_configuration_complete: true,
     product_snapshot: {
       aliases: ["清爽特调"],
       specification: "330ml",

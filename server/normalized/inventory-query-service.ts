@@ -32,6 +32,13 @@ export interface PurchaseReceiptView {
   supplierRef?: string | null;
   supplier?: JsonObject;
   lineCount: number;
+  lines: Array<{
+    inventoryItemId: string;
+    itemName: string;
+    batchCode: string;
+    quantity: string;
+    baseUnit: string;
+  }>;
   createdAt: string;
   receivedAt: string | null;
 }
@@ -84,6 +91,13 @@ interface ReceiptRow extends Record<string, unknown> {
   supplier_ref: string | null;
   supplier_snapshot: JsonObject;
   line_count: string;
+  lines: Array<{
+    inventoryItemId: string;
+    itemName: string;
+    batchCode: string;
+    quantity: string;
+    baseUnit: string;
+  }>;
   created_at: string;
   received_at: string | null;
 }
@@ -160,14 +174,26 @@ export class InventoryQueryService {
           CASE WHEN $3::boolean THEN receipt.invoice_total_minor::text ELSE NULL END AS invoice_total_minor,
           CASE WHEN $3::boolean THEN receipt.supplier_ref ELSE NULL END AS supplier_ref,
           CASE WHEN $3::boolean THEN receipt.supplier_snapshot ELSE '{}'::jsonb END AS supplier_snapshot,
-          count(line.id)::text AS line_count, receipt.created_at::text, receipt.received_at::text
+          count(line.id)::text AS line_count,
+          COALESCE(jsonb_agg(jsonb_build_object(
+            'inventoryItemId', item.id,
+            'itemName', item.name,
+            'batchCode', line.batch_code,
+            'quantity', line.quantity::text,
+            'baseUnit', item.base_unit
+          ) ORDER BY line.id) FILTER (WHERE line.id IS NOT NULL), '[]'::jsonb) AS lines,
+          receipt.created_at::text, receipt.received_at::text
         FROM mbox.purchase_receipts AS receipt
         LEFT JOIN mbox.purchase_receipt_lines AS line
           ON line.tenant_id = receipt.tenant_id AND line.store_id = receipt.store_id
          AND line.receipt_id = receipt.id
+        LEFT JOIN mbox.inventory_items AS item
+          ON item.tenant_id = line.tenant_id AND item.store_id = line.store_id
+         AND item.id = line.inventory_item_id
         WHERE receipt.tenant_id = $1::uuid AND receipt.store_id = $2::uuid
         GROUP BY receipt.id
-        ORDER BY receipt.created_at DESC, receipt.id DESC LIMIT 100
+        ORDER BY CASE WHEN receipt.status = 'draft' THEN 0 ELSE 1 END,
+          receipt.created_at DESC, receipt.id DESC LIMIT 100
       `,
           [scope.tenantId, scope.storeId, canViewCosts],
         );
@@ -249,6 +275,7 @@ export class InventoryQueryService {
                   supplier: row.supplier_snapshot,
                 }
               : {}),
+            lines: row.lines,
           })),
           storedBottles: bottles.rows.map((row) => ({
             id: row.id,

@@ -4,9 +4,12 @@ const {
   getReservations,
   getTodayPerformances,
   getCustomerBenefits,
+  enrollMembership,
 } = require('../../utils/api')
 const { getRuntimeConfig } = require('../../config/index')
 const { dateTime } = require('../../utils/format')
+const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
+const MEMBERSHIP_INVITE_DISMISSED_KEY = 'mbox.membership.invite.dismissed.until.v1'
 
 function settled(loader, fallback) {
   return loader().then((value) => value).catch(() => fallback)
@@ -37,6 +40,37 @@ function reservationView(items) {
   }
 }
 
+const CONTENT_TAB_TARGETS = new Set([
+  '/pages/home/index', '/pages/reservations/index', '/pages/order/index',
+  '/pages/community/index', '/pages/profile/index',
+])
+
+function safeContentTarget(value) {
+  return CONTENT_TAB_TARGETS.has(value) ? value : null
+}
+
+function contentCardView(item) {
+  const targetPath = safeContentTarget(item && item.targetPath)
+  return {
+    code: String(item.code || ''),
+    type: String(item.type || 'article'),
+    eyebrow: item.type === 'show' ? 'M-BOX LIVE' : item.type === 'benefit' ? 'MEMBER EDIT' : 'M-BOX STORY',
+    title: String(item.title || ''),
+    summary: String(item.summary || ''),
+    imageUrl: item.imageUrl || '',
+    ctaLabel: String(item.ctaLabel || '查看内容'),
+    targetPath,
+  }
+}
+
+function activityFeatureView(item) {
+  if (!item) return null
+  return Object.assign({}, item, {
+    dateText: dateTime(item.startsAt),
+    availabilityText: item.remainingCapacity > 0 ? `余 ${item.remainingCapacity} 位` : '名额已满',
+  })
+}
+
 Page({
   data: {
     loading: true,
@@ -46,8 +80,13 @@ Page({
     tableCode: '',
     table: null,
     membership: null,
+    membershipTerms: null,
+    membershipInviteVisible: false,
+    membershipInviteAgreed: false,
+    membershipInviteBusy: false,
     benefitCount: 0,
     upcomingActivity: null,
+    editorialCards: [],
     upcomingReservation: null,
     performance: null,
     visitState: 'prearrival',
@@ -96,10 +135,23 @@ Page({
       settled(() => getTodayPerformances(), null),
       settled(() => getCustomerBenefits(), []),
     ])
+    const app = getApp()
+    const dismissedUntil = Number(wx.getStorageSync(MEMBERSHIP_INVITE_DISMISSED_KEY) || 0)
+    const inviteVisible = Boolean(
+      bootstrap && !bootstrap.membership && bootstrap.membershipTerms
+      && Date.now() >= dismissedUntil
+      && !app.globalData.membershipInvitePresented,
+    )
+    if (inviteVisible) app.globalData.membershipInvitePresented = true
     this.setData({
       membership: bootstrap.membership || null,
+      membershipTerms: bootstrap.membershipTerms || null,
+      membershipInviteVisible: inviteVisible,
       benefitCount: (benefits || []).reduce((sum, item) => sum + Number(item.quantityAvailable || 0), 0),
-      upcomingActivity: bootstrap.activities && bootstrap.activities.length ? bootstrap.activities[0] : null,
+      upcomingActivity: activityFeatureView(bootstrap.activities && bootstrap.activities.length ? bootstrap.activities[0] : null),
+      editorialCards: (bootstrap.content || []).filter((item) => item && item.type !== 'activity')
+        .sort((left, right) => Number(left.priority || 0) - Number(right.priority || 0))
+        .slice(0, 2).map(contentCardView),
       upcomingReservation: reservationView(reservations.reservations),
       performance: performanceView(performances),
     })
@@ -143,4 +195,86 @@ Page({
   retryTable() { this.loadTableState(false) },
   openPage(event) { wx.navigateTo({ url: event.currentTarget.dataset.url }) },
   openTab(event) { wx.switchTab({ url: event.currentTarget.dataset.url }) },
+  openMenu() { wx.switchTab({ url: '/pages/order/index' }) },
+
+  openFeaturedActivity() {
+    const activity = this.data.upcomingActivity
+    if (!activity || !activity.publicId) return
+    wx.navigateTo({ url: `/pages/community-detail/index?id=${encodeURIComponent(activity.publicId)}` })
+  },
+
+  openEditorial(event) {
+    const card = this.data.editorialCards.find((item) => item.code === event.currentTarget.dataset.code)
+    if (!card) return
+    if (!card.targetPath || card.targetPath === '/pages/home/index') {
+      wx.showModal({ title: card.title, content: card.summary, showCancel: false, confirmText: '知道了' })
+      return
+    }
+    wx.switchTab({ url: card.targetPath })
+  },
+
+  dismissMembershipInvite() {
+    const configuredHours = Number(getRuntimeConfig().membershipInviteCooldownHours)
+    const cooldownHours = Number.isFinite(configuredHours) && configuredHours >= 1 && configuredHours <= 2160
+      ? configuredHours : 24
+    wx.setStorageSync(MEMBERSHIP_INVITE_DISMISSED_KEY, Date.now() + cooldownHours * 60 * 60 * 1000)
+    this.setData({ membershipInviteVisible: false, membershipInviteAgreed: false })
+  },
+
+  onMembershipInviteAgreementChange(event) {
+    const values = event && event.detail && Array.isArray(event.detail.value) ? event.detail.value : []
+    this.setData({ membershipInviteAgreed: values.indexOf('agree') >= 0 })
+  },
+
+  remindMembershipInviteAgreement() {
+    wx.showToast({ title: '请先阅读并勾选同意协议', icon: 'none' })
+  },
+
+  showMembershipTerms() {
+    wx.navigateTo({ url: '/pages/membership-terms/index?source=mini_profile&action=view' })
+  },
+
+  openPrivacy() {
+    wx.navigateTo({ url: '/pages/privacy/index' })
+  },
+
+  onAgreePrivacyAuthorization() {},
+
+  async acceptMembershipInvite(event) {
+    if (this.data.membershipInviteBusy) return
+    if (!this.data.membershipInviteAgreed) {
+      this.remindMembershipInviteAgreement()
+      return
+    }
+    const terms = this.data.membershipTerms
+    if (!terms) {
+      wx.showToast({ title: '当前会员协议暂时无法读取', icon: 'none' })
+      return
+    }
+    const authorization = readWechatPhoneAuthorization(event)
+    if (!authorization.code) {
+      wx.showToast({ title: authorization.message, icon: 'none' })
+      return
+    }
+    this.setData({ membershipInviteBusy: true, error: '' })
+    try {
+      const result = await enrollMembership(terms.version, 'mini_profile', authorization.code)
+      this.setData({
+        membership: result.membership || null,
+        membershipInviteVisible: false,
+        membershipInviteAgreed: false,
+      })
+      wx.showToast({ title: '入会成功', icon: 'success' })
+    } catch (error) {
+      this.setData({ error: error.message || '入会暂时没有完成' })
+      wx.showToast({ title: error.message || '入会未完成', icon: 'none' })
+    } finally {
+      this.setData({ membershipInviteBusy: false })
+    }
+  },
+
+  declineMembershipInvite() {
+    this.dismissMembershipInvite()
+  },
+  noop() {},
 })

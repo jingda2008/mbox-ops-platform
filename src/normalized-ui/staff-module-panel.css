@@ -62,14 +62,52 @@
 
 .staff-module-actions { display: flex; flex-wrap: wrap; gap: 7px; }
 .staff-module-actions button { min-height: 44px; padding: 0 13px; border: 1px solid #1a704e; border-radius: 6px; background: #fff; color: #185d43; font-size: 12px; font-weight: 750; box-shadow: 0 2px 0 #b9c9c0; }
+.staff-module-actions button.is-primary { background: #176f4c; color: #fff; display: inline-flex; align-items: center; gap: 6px; }
 .staff-module-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; padding: 12px; border: 1px solid #c9d0c8; border-top: 3px solid #d4b44f; border-radius: 7px; background: #fff; }
 .staff-module-form > header { grid-column: 1 / -1; display: grid; gap: 3px; }
 .staff-module-form > header strong { font-size: 14px; }
 .staff-module-form > header small { color: #687068; font-size: 11px; line-height: 1.45; }
 .staff-module-form label, .staff-device-reason { min-width: 0; display: grid; gap: 5px; color: #535b54; font-size: 11px; font-weight: 750; }
+.staff-module-form label > small { color: #6b746d; font-size: 10px; font-weight: 500; line-height: 1.45; }
 .staff-module-form input, .staff-module-form select, .staff-module-form textarea, .staff-device-reason input { width: 100%; min-height: 44px; padding: 8px 10px; border: 1px solid #c4cbc3; border-radius: 6px; background: #fff; color: #202621; font: inherit; }
 .staff-module-form textarea { resize: vertical; line-height: 1.55; }
 .staff-module-form > button { min-height: 44px; align-self: end; padding: 0 14px; border: 1px solid #105f3f; border-radius: 6px; background: #176f4c; color: #fff; font-size: 12px; font-weight: 800; }
+.inventory-code-field { grid-column: 1 / -1; }
+.inventory-code-field > div { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
+.inventory-code-field > div > button { min-width: 86px; min-height: 44px; padding: 0 12px; border: 1px solid #176b4c; border-radius: 6px; background: #eef7f2; color: #175d42; display: flex; align-items: center; justify-content: center; gap: 5px; font-weight: 800; }
+.inventory-receipt-confirm { padding: 13px; border: 1px solid #b8cfc2; border-top: 3px solid #176b4c; border-radius: 7px; background: #fff; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 9px; }
+.inventory-receipt-confirm header, .inventory-receipt-confirm p { grid-column: 1 / -1; }
+.inventory-receipt-confirm header { display: grid; gap: 3px; }
+.inventory-receipt-confirm header strong { font-size: 15px; }
+.inventory-receipt-confirm header small, .inventory-receipt-confirm p { color: #606961; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.inventory-receipt-confirm p { margin: 0; padding: 10px; background: #fff8e7; border-left: 3px solid #d4b44f; }
+.inventory-receipt-confirm button { min-height: 46px; padding: 0 13px; border: 1px solid #176b4c; border-radius: 6px; background: #176b4c; color: #fff; font: inherit; font-size: 12px; font-weight: 800; }
+.inventory-receipt-confirm > button { grid-column: 1 / -1; }
+.inventory-draft-receipts { padding: 12px; border: 1px solid #d7c58d; border-radius: 7px; background: #fffaf0; display: grid; gap: 8px; }
+.inventory-draft-receipts > header { display: grid; gap: 3px; }
+.inventory-draft-receipts > header strong { font-size: 14px; }
+.inventory-draft-receipts > header small { color: #696558; font-size: 10px; line-height: 1.45; }
+.inventory-draft-receipts article { min-width: 0; padding: 9px; border: 1px solid #e3d8b8; border-radius: 6px; background: #fff; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.inventory-draft-receipts article > div { min-width: 0; display: grid; gap: 3px; }
+.inventory-draft-receipts article strong, .inventory-draft-receipts article small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inventory-draft-receipts article small { color: #687068; font-size: 10px; }
+.inventory-draft-receipts article span { color: #3f4942; font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
+.inventory-draft-receipts article button { min-height: 42px; padding: 0 11px; border: 1px solid #176b4c; border-radius: 6px; background: #176b4c; color: #fff; font: inherit; font-size: 11px; font-weight: 800; }
+.inventory-scanner-overlay { position: fixed; inset: 0; z-index: 90; padding: max(14px, env(safe-area-inset-top)) 12px max(14px, env(safe-area-inset-bottom)); background: rgb(5 10 7 / 82%); display: grid; place-items: center; }
+.inventory-scanner-dialog { width: min(100%, 430px); max-height: 100%; padding: 13px; border-radius: 14px; background: #f7f8f5; box-shadow: 0 18px 60px rgb(0 0 0 / 38%); display: grid; gap: 11px; overflow-y: auto; }
+.inventory-scanner-dialog > header { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.inventory-scanner-dialog > header > div { display: grid; gap: 2px; }
+.inventory-scanner-dialog > header small { color: #647067; font-size: 10px; }
+.inventory-scanner-dialog > header strong { font-size: 16px; }
+.inventory-scanner-dialog > header button { width: 44px; height: 44px; border: 1px solid #c7cec7; border-radius: 50%; background: #fff; color: #263029; display: grid; place-items: center; }
+.inventory-camera { position: relative; min-height: min(58dvh, 440px); border-radius: 11px; background: #0c100e; overflow: hidden; display: grid; place-items: center; }
+.inventory-camera video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.inventory-camera > i { position: relative; z-index: 1; width: min(78%, 300px); height: 132px; border: 2px solid #e4c95f; border-radius: 10px; box-shadow: 0 0 0 999px rgb(0 0 0 / 25%); }
+.inventory-camera > span { position: absolute; z-index: 2; left: 50%; bottom: 15px; translate: -50% 0; min-width: 190px; min-height: 42px; padding: 8px 12px; border-radius: 22px; background: rgb(0 0 0 / 72%); color: #fff; display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 12px; font-weight: 750; }
+.inventory-camera.is-unavailable > i { display: none; }
+.inventory-camera.is-unavailable { min-height: 220px; background: #222824; }
+.inventory-scanner-dialog > p { margin: 0; color: #606961; font-size: 11px; line-height: 1.5; }
+.inventory-scanner-accept { min-height: 48px; border: 1px solid #176b4c; border-radius: 7px; background: #176b4c; color: #fff; font: inherit; font-weight: 800; }
 .staff-song-catalog { display: grid; gap: 10px; padding: 12px; border: 1px solid #c9d0c8; border-top: 3px solid #d4b44f; border-radius: 7px; background: #fff; }
 .staff-song-catalog > header { display: flex; align-items: end; justify-content: space-between; gap: 12px; }
 .staff-song-catalog > header > div { display: grid; gap: 3px; }
@@ -235,6 +273,9 @@
   .staff-module-body { max-width: 860px; margin: 0 auto; padding: 18px; }
 }
 @media (max-width: 640px) {
+  .inventory-receipt-confirm { grid-template-columns: 1fr; }
+  .inventory-receipt-confirm header, .inventory-receipt-confirm p { grid-column: auto; }
+  .inventory-draft-receipts article { grid-template-columns: 1fr; }
   .venue-management-form, .venue-management-list { grid-template-columns: 1fr; }
   .venue-management-form > header { grid-column: auto; }
   .venue-management-trigger > span:last-child { font-size: 0; }

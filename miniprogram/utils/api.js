@@ -483,6 +483,13 @@ async function getMenu(query) {
   params.push('limit=100')
   return (await request(`/api/guest/menu/products?${params.join('&')}`)).data
 }
+async function getPublicMenu(query) {
+  const params = []
+  if (query && query.categoryCode) params.push(`categoryCode=${encodeURIComponent(query.categoryCode)}`)
+  if (query && query.search) params.push(`search=${encodeURIComponent(query.search)}`)
+  params.push('limit=100')
+  return (await publicRequest(`/api/public/mini/menu/products?${params.join('&')}`)).data
+}
 async function recommendExperience(input) {
   return (await request('/api/guest/experience/recommendations', {
     method: 'POST', headers: { 'idempotency-key': randomId('experience-recommend') }, data: input,
@@ -589,7 +596,7 @@ module.exports = {
   getReservationPerformanceImpacts, acknowledgeReservationPerformanceImpact,
   getReservationPerformanceNotificationAuthorizations,
   recordReservationPerformanceNotificationAuthorization,
-  getMenu, recommendExperience, recordRecommendationEvent, prepareCheckoutUpgrade, recordCheckoutUpgradeEvent,
+  getMenu, getPublicMenu, recommendExperience, recordRecommendationEvent, prepareCheckoutUpgrade, recordCheckoutUpgradeEvent,
   checkout, getTableOrders, retryOrderPayment,
   createServiceTask, getServiceRequests, actOnServiceTask,
   getCustomerBenefits, reserveCustomerBenefit, submitSongRequest, getTodayPerformances,

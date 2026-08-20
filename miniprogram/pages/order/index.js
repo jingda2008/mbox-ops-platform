@@ -1,6 +1,7 @@
 const {
   getGuestSession,
   getMenu,
+  getPublicMenu,
   recommendExperience,
   recordRecommendationEvent,
   prepareCheckoutUpgrade,
@@ -62,9 +63,32 @@ function parseScanValue(value) {
   }, {})
 }
 
+function menuProducts(items, includeUnavailable) {
+  return (items || []).filter((item) => includeUnavailable || item.available).sort((left, right) => {
+    if (left.productKind !== right.productKind) return left.productKind === 'bundle' ? -1 : 1
+    return (left.sortOrder || 0) - (right.sortOrder || 0)
+  }).map((item) => Object.assign({}, item, {
+    priceText: money(item.amountMinor),
+    includedText: (item.bundleComponents || []).map((line) => `${line.name || '组合内容'}×${line.quantity || 1}`).join(' · '),
+    imageUrl: item.imageUrl || '',
+    availabilityText: item.available ? '到店可点' : '暂不可点',
+  }))
+}
+
+function menuCategories(products) {
+  const categories = [{ code: 'all', name: '全部' }]
+  products.forEach((item) => {
+    if (!categories.some((category) => category.code === item.categoryCode)) {
+      categories.push({ code: item.categoryCode, name: item.categoryName || item.categoryCode })
+    }
+  })
+  return categories
+}
+
 Page({
   data: {
     loading: true,
+    browseOnly: false,
     busy: false,
     error: '',
     success: '',
@@ -119,7 +143,7 @@ Page({
     const session = getTableSession()
     const config = getRuntimeConfig()
     if (!session.tableToken && !session.tableCode && !config.isDevelopment) {
-      this.setData({ loading: false, connectionState: 'needs_scan', table: null })
+      await this.loadBrowseData()
       return
     }
     try {
@@ -142,11 +166,37 @@ Page({
       this.setData({ connectionState: 'active', table: connected.table || null })
       await this.loadActiveData()
     } catch (error) {
+      await this.loadBrowseData(error.message || '桌台连接已失效，请重新扫描桌面二维码')
+    }
+  },
+
+  async loadBrowseData(connectionError) {
+    try {
+      const [menu, performance] = await Promise.all([
+        getPublicMenu({}),
+        getTodayPerformances().catch(() => null),
+      ])
+      const products = menuProducts(menu, true)
       this.setData({
         loading: false,
+        browseOnly: true,
         connectionState: 'needs_scan',
         table: null,
-        error: error.message || '桌台连接已失效，请重新扫描桌面二维码',
+        products,
+        categories: menuCategories(products),
+        performance: performanceView(performance),
+        error: connectionError || '',
+      })
+      this.applyFilters()
+    } catch (error) {
+      this.setData({
+        loading: false,
+        browseOnly: true,
+        connectionState: 'needs_scan',
+        table: null,
+        products: [],
+        visibleProducts: [],
+        error: connectionError || error.message || '今晚菜单暂时无法读取，请稍后再试',
       })
     }
   },
@@ -160,20 +210,8 @@ Page({
       getMiniBootstrap().catch(() => null),
       getWechatNotificationAuthorizations().catch(() => ({ available: false, authorizations: [] })),
     ])
-    const products = (results[0] || []).filter((item) => item.available).sort((left, right) => {
-      if (left.productKind !== right.productKind) return left.productKind === 'bundle' ? -1 : 1
-      return (left.sortOrder || 0) - (right.sortOrder || 0)
-    }).map((item) => Object.assign({}, item, {
-      priceText: money(item.amountMinor),
-      includedText: (item.bundleComponents || []).map((line) => `${line.name || '组合内容'}×${line.quantity || 1}`).join(' · '),
-      imageUrl: item.imageUrl || '',
-    }))
-    const categories = [{ code: 'all', name: '全部' }]
-    products.forEach((item) => {
-      if (!categories.some((category) => category.code === item.categoryCode)) {
-        categories.push({ code: item.categoryCode, name: item.categoryName || item.categoryCode })
-      }
-    })
+    const products = menuProducts(results[0])
+    const categories = menuCategories(products)
     const storedCart = wx.getStorageSync(this.cartStorageKey()) || []
     const cart = storedCart.filter((line) => products.some((product) => product.productId === line.productId))
     const tableOrders = results[3] || []
@@ -195,6 +233,7 @@ Page({
     const dismissedUntil = Number(wx.getStorageSync(MEMBERSHIP_INVITE_DISMISSED_KEY) || 0)
     this.setData({
       loading: false,
+      browseOnly: false,
       products,
       categories,
       performance: performanceView(results[1]),
@@ -214,7 +253,7 @@ Page({
   dismissMembershipInvite() {
     const configuredHours = Number(getRuntimeConfig().membershipInviteCooldownHours)
     const cooldownHours = Number.isFinite(configuredHours) && configuredHours >= 1 && configuredHours <= 2160
-      ? configuredHours : 720
+      ? configuredHours : 24
     wx.setStorageSync(MEMBERSHIP_INVITE_DISMISSED_KEY, Date.now() + cooldownHours * 60 * 60 * 1000)
     this.setData({ membershipInviteVisible: false })
   },

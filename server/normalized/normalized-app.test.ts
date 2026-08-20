@@ -119,6 +119,7 @@ describe('createNormalizedApp', () => {
       ['GET', '/api/hardware/devices'],
       ['POST', '/api/public/reservation/session'],
       ['GET', '/api/public/reservation/availability'],
+      ['GET', '/api/public/mini/menu/products'],
       ['POST', '/api/public/reservations'],
       ['GET', '/api/staff/reservation-intake'],
       ['GET', '/api/extensions/probe'],
@@ -303,9 +304,9 @@ describe('createNormalizedApp', () => {
   })
 
   it('does not report ready when normalized migrations are older than registered plugins', async () => {
-    expect(NORMALIZED_MIN_SCHEMA_VERSION).toBe('096')
+    expect(NORMALIZED_MIN_SCHEMA_VERSION).toBe('097')
     const pool = fakePool({
-      ready: { schema_flavor: NORMALIZED_SCHEMA_FLAVOR, schema_version: '095', store_active: true },
+      ready: { schema_flavor: NORMALIZED_SCHEMA_FLAVOR, schema_version: '096', store_active: true },
     })
     const runtime = await createNormalizedApp({ config, pool, logger: false })
     const response = await runtime.app.inject({ method: 'GET', url: '/api/ready' })

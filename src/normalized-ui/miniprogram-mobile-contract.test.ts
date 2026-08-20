@@ -8,7 +8,7 @@ const read = (path: string) => readFileSync(new URL(path, projectRoot), 'utf8')
 describe('mini-program mobile business flow contract', () => {
   it('keeps exactly five fixed customer tabs in the agreed order', () => {
     const app = JSON.parse(read('miniprogram/app.json')) as { tabBar: { list: Array<{ pagePath: string; text: string }> } }
-    expect(app.tabBar.list).toEqual([
+    expect(app.tabBar.list.map(({ pagePath,text })=>({ pagePath,text }))).toEqual([
       { pagePath: 'pages/home/index', text: '首页' },
       { pagePath: 'pages/reservations/index', text: '预约' },
       { pagePath: 'pages/order/index', text: '点单' },
@@ -26,7 +26,7 @@ describe('mini-program mobile business flow contract', () => {
     expect(order).toContain('this.scheduleWaitingPoll()')
     expect(order).toContain("['active', 'already_active'].includes(connected.status)")
     expect(order).toContain('onlyFromCamera: true')
-    expect(orderView).toContain('桌面上的 M-BOX 固定二维码')
+    expect(orderView).toContain('到店扫描桌码后')
     expect(session).toContain("connection.status === 'waiting_for_table'")
     expect(session).toContain('connectionAge <= 30 * 60 * 1000')
     expect(session).toContain("return { token: decoded }")
@@ -228,7 +228,7 @@ describe('mini-program mobile business flow contract', () => {
     expect(api).toContain("'/api/public/mini/membership/enroll-with-phone'")
     expect(api).toContain('phoneAuthorizationCode')
     expect(api).toContain("error.code !== 'NETWORK_ERROR'")
-    expect(config).toContain('membershipInviteCooldownHours: 720')
+    expect(config).toContain('membershipInviteCooldownHours: 24')
     const privacy = read('miniprogram/pages/privacy/index.wxml')
     expect(privacy).toContain('点单不以入会为条件')
     expect(privacy).toContain('顾客页面不提供语音或麦克风入口')

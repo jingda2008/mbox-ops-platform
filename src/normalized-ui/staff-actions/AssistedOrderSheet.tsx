@@ -10,6 +10,7 @@ import type {
   AssistedOrderResult,
   StaffActionsApiPort,
 } from './staff-actions-api'
+import { assistedProductAvailability } from './assisted-order-product'
 
 export interface AssistedOrderSheetProps {
   api: StaffActionsApiPort
@@ -281,13 +282,14 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
         {phase !== 'loading' && filtered.length === 0 && <p>没有找到可售商品</p>}
         {filtered.map((product) => {
           const quantity = quantities[product.id] ?? 0
-          return <article className={quantity > 0 ? 'is-selected' : ''} key={product.id}>
-            <div><strong>{product.name}</strong><small>{product.code} · {categoryLabel(product.categoryCode)}</small></div>
+          const configurationReady = product.inventoryConfigurationComplete
+          return <article className={`${quantity > 0 ? 'is-selected' : ''}${configurationReady ? '' : ' is-unavailable'}`} key={product.id}>
+            <div><strong>{product.name}</strong><small>{product.code} · {categoryLabel(product.categoryCode)}</small>{!configurationReady && <small>库存或配方配置未完成，暂不能下单</small>}</div>
             <b>{money(Number(product.standardPrice?.amountMinor ?? 0), product.standardPrice?.currency ?? 'CNY')}</b>
             <div className="staff-order-quantity">
               {quantity > 0 && <button type="button" aria-label={`减少${product.name}`} onClick={() => changeQuantity(product.id, -1)}><Minus size={17} /></button>}
               {quantity > 0 && <span>{quantity}</span>}
-              <button type="button" aria-label={`添加${product.name}`} onClick={() => changeQuantity(product.id, 1)}><Plus size={17} /></button>
+              <button type="button" aria-label={`添加${product.name}`} disabled={!configurationReady} onClick={() => changeQuantity(product.id, 1)}><Plus size={17} /></button>
             </div>
           </article>
         })}
@@ -385,6 +387,7 @@ function assistedProductToMenuProduct(product: AssistedOrderCatalogProduct): Men
   const recommendation = record(snapshot.recommendation)
   const amountMinor = Number(product.standardPrice?.amountMinor ?? 0)
   const costAmount = product.costAmountMinor ?? 0
+  const availability = assistedProductAvailability(product)
   return {
     id: product.id,
     sku: product.code,
@@ -405,7 +408,7 @@ function assistedProductToMenuProduct(product: AssistedOrderCatalogProduct): Men
     imageUrl: text(snapshot.imageUrl) || undefined,
     tags: stringArray(snapshot.tags),
     sortOrder: product.menuSortOrder,
-    soldOut: !product.isAvailable,
+    soldOut: availability.soldOut,
     availableFrom: product.availableFrom,
     availableUntil: product.availableUntil,
     guestVisible: product.guestVisible,
@@ -414,7 +417,7 @@ function assistedProductToMenuProduct(product: AssistedOrderCatalogProduct): Men
     listPriceAmount: amountMinor,
     costAmount,
     stationId: product.fulfillmentStation,
-    enabled: product.isAvailable && amountMinor > 0,
+    enabled: availability.enabled,
     configVersion: integer(snapshot.configVersion, 1),
   }
 }

@@ -18,6 +18,30 @@ describe('StaffActionsApi', () => {
     expect(headers.get('x-idempotency-key')).toBe('staff-action-open-key-0001')
   })
 
+  it('keeps the server reference on an unexpected order failure for staff escalation', async () => {
+    const send = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: '服务暂时不可用，请稍后重试',
+        referenceId: 'req-order-17',
+      },
+    }), { status: 500, headers: { 'content-type': 'application/json' } }))
+    const api = new StaffActionsApi({ fetch: send, createIdempotencyKey: () => 'order-error-key-0001' })
+
+    await expect(api.submitAssistedOrder({
+      tableSessionId: 'session-1',
+      assistedOrderContextToken: 'T'.repeat(43),
+      orderMode: 'paid',
+      items: [{ productId: 'product-1', quantity: 1 }],
+      settlementMode: 'immediate_payment',
+    })).rejects.toMatchObject({
+      code: 'INTERNAL_ERROR',
+      status: 500,
+      referenceId: 'req-order-17',
+      message: '服务暂时不可用，请稍后重试（编号：req-order-17）',
+    })
+  })
+
   it('marks a close as partial when begin-closing succeeded but close did not', async () => {
     const send = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: {} }), { status: 200 }))

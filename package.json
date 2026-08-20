@@ -1,7 +1,7 @@
 {
   "name": "@mbox/ops-platform",
   "private": true,
-  "version": "1.0.0-rc.89",
+  "version": "1.0.0-rc.91",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n API,WEB -c yellow,cyan \"npm:dev:api\" \"npm:dev:web\"",
@@ -60,7 +60,7 @@
     "release:verify": "node scripts/verify-release-smoke.mjs && node scripts/verify-release-browser.mjs",
     "release:miniprogram:verify": "node scripts/verify-miniprogram-release.mjs",
     "release:miniprogram:build": "node scripts/build-miniprogram-release-candidate.mjs",
-    "release:miniprogram:test": "node --test scripts/miniprogram-session-launch.test.mjs scripts/build-miniprogram-release-candidate.test.mjs scripts/verify-miniprogram-release.test.mjs",
+    "release:miniprogram:test": "node --test scripts/miniprogram-session-launch.test.mjs scripts/miniprogram-customer-funnel.test.mjs scripts/build-miniprogram-release-candidate.test.mjs scripts/verify-miniprogram-release.test.mjs",
     "release:config:generate": "tsx scripts/generate-normalized-runtime-config.ts",
     "release:config:test": "vitest run server/normalized/normalized-runtime-config.test.ts server/verify-normalized-runtime-config.test.ts && node --test scripts/generate-normalized-runtime-config.test.mjs && bash deploy/aliyun/release-lock.test.sh && bash deploy/aliyun/release-state.test.sh && bash deploy/aliyun/normalize-runtime-env.test.sh",
     "release:system:test": "npm run release:config:test && node scripts/verify-release-incident-register.mjs && node --test scripts/release-system-policy.test.mjs scripts/payment-ingress-contract.test.mjs scripts/contract-recovery-faults.test.mjs && node --test scripts/write-release-bundle-manifest.test.mjs && node --test scripts/run-release-chain-drills.test.mjs",

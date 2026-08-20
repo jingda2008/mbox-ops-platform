@@ -24,6 +24,7 @@ import { PostarPaymentRejectedError } from '../postar-adapter.js'
 import { FulfillmentCapacityUnavailableError } from './fulfillment-capacity-repository.js'
 import { ServiceTaskRepository } from './service-task-repository.js'
 import { seedActiveGuestTableAuthority } from './guest-table-authority.test-helper.js'
+import { ReservationGuestSessionInvalidError } from './reservation-guest-session.js'
 import {
   ScopedPostgresTransactionRunner,
   type PostgresPool,
@@ -64,6 +65,38 @@ afterEach(async () => {
 })
 
 describe('guest commerce/service API trust boundaries', () => {
+  it('allows an authenticated mini-program customer to browse the current menu without a table session', async () => {
+    const resolvePublicContext = vi.fn(async () => ({ scope: context.scope }))
+    const value = fixture({
+      resolvePublicContext,
+      resolveGuestContext: async () => { throw new GuestAuthenticationRequiredError() },
+    })
+    const response = await value.app.inject({
+      method: 'GET',
+      url: '/api/public/mini/menu/products?search=qingdao',
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(resolvePublicContext).toHaveBeenCalledOnce()
+    expect(response.json()).toMatchObject({
+      data: [{ productId, name: '青岛啤酒', amountMinor: 6800, available: true }],
+      meta: { partySize: null, recommendationScene: null, orderingRequiresTableScan: true },
+    })
+    expect(value.query).toHaveBeenCalledOnce()
+    expect(value.query.mock.calls[0]?.[1]).toEqual(expect.arrayContaining([null, 'qingdao']))
+  })
+
+  it('returns an authentication response when the public mini-program session has expired', async () => {
+    const value = fixture({
+      resolvePublicContext: async () => { throw new ReservationGuestSessionInvalidError() },
+    })
+    const response = await value.app.inject({ method: 'GET', url: '/api/public/mini/menu/products' })
+
+    expect(response.statusCode).toBe(401)
+    expect(response.json()).toMatchObject({ error: { code: 'GUEST_SESSION_INVALID' } })
+    expect(value.query).not.toHaveBeenCalled()
+  })
+
   it('returns an authentication response instead of a server error when the guest session is missing', async () => {
     const value = fixture({
       resolveGuestContext: async () => { throw new GuestAuthenticationRequiredError() },
@@ -549,6 +582,7 @@ integration('guest service and mood API with PostgreSQL', () => {
   let integrationStoreId: string
   let integrationSessionId: string
   let integrationCustomerId: string
+  let integrationProductId: string
   let app: FastifyInstance
 
   beforeAll(async () => {
@@ -560,6 +594,7 @@ integration('guest service and mood API with PostgreSQL', () => {
     integrationStoreId = randomUUID()
     integrationCustomerId = randomUUID()
     integrationSessionId = randomUUID()
+    integrationProductId = randomUUID()
     const areaId = randomUUID()
     const tableId = randomUUID()
     await pool.query(
@@ -584,6 +619,22 @@ integration('guest service and mood API with PostgreSQL', () => {
     await pool.query(
       `INSERT INTO mbox.customers (id, tenant_id, store_id, public_id) VALUES ($1::uuid, $2::uuid, $3::uuid, $4)`,
       [integrationCustomerId, integrationTenantId, integrationStoreId, `gapi-customer-${integrationCustomerId.slice(0, 8)}`],
+    )
+    await pool.query(
+      `INSERT INTO mbox.products (
+         id, tenant_id, store_id, code, name, category_code, fulfillment_station,
+         product_kind, guest_visible, search_text, status
+       ) VALUES (
+         $1::uuid, $2::uuid, $3::uuid, $4, '公开菜单测试饮品', 'drink', 'bar',
+         'single', true, $4 || ' 公开菜单测试饮品', 'active'
+       )`,
+      [integrationProductId, integrationTenantId, integrationStoreId, `PUBLIC-${integrationProductId.slice(0, 8)}`],
+    )
+    await pool.query(
+      `INSERT INTO mbox.product_prices (
+         tenant_id, store_id, product_id, price_type, amount_minor, currency, valid_from
+       ) VALUES ($1::uuid, $2::uuid, $3::uuid, 'standard', 6800, 'CNY', clock_timestamp() - interval '1 minute')`,
+      [integrationTenantId, integrationStoreId, integrationProductId],
     )
     await pool.query(
       `INSERT INTO mbox.table_sessions (
@@ -628,6 +679,7 @@ integration('guest service and mood API with PostgreSQL', () => {
         create: vi.fn(),
       } as never,
       resolveGuestContext: async () => integrationContext,
+      resolvePublicContext: async () => ({ scope: integrationContext.scope }),
       resolveDeviceFingerprint: () => 'wechat-device-api-postgres-0001',
       paymentMode: 'simulation',
       paymentActionSecret: 'integration-payment-action-secret-32-bytes',
@@ -640,6 +692,19 @@ integration('guest service and mood API with PostgreSQL', () => {
   afterAll(async () => {
     await app?.close()
     await pool?.end()
+  })
+
+  it('loads a public read-only menu without a table session and fails closed when inventory setup is incomplete', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/public/mini/menu/products?search=${integrationProductId.slice(0, 8)}`,
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({
+      data: [{ productId: integrationProductId, name: '公开菜单测试饮品', available: false }],
+      meta: { partySize: null, recommendationScene: null, orderingRequiresTableScan: true },
+    })
   })
 
   it('records mood, audit and outbox without creating an employee task', async () => {
@@ -861,6 +926,7 @@ function fixture(overrides: Partial<GuestCommerceServiceApiOptions> = {}) {
       currency: 'CNY',
       guest_count: 2,
       guest_profile_snapshot: { recommendationScene: 'date' },
+      inventory_configuration_complete: true,
     }],
     rowCount: 1,
   }))
@@ -890,6 +956,7 @@ function fixture(overrides: Partial<GuestCommerceServiceApiOptions> = {}) {
     payments,
     onlinePayments,
     resolveGuestContext: async () => context,
+    resolvePublicContext: async () => ({ scope: context.scope }),
     resolveDeviceFingerprint: () => 'wechat-device-api-unit-test-0001',
     paymentMode,
     paymentActionSecret: 'unit-payment-action-secret-at-least-32-bytes',

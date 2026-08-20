@@ -5,6 +5,7 @@ import { NormalizedApiClient, type StaffAuthView } from '../normalized-api'
 type ProductStatus = 'active' | 'sold_out' | 'inactive'
 type ProductKind = 'single' | 'bundle'
 type FulfillmentStation = 'bar' | 'kitchen' | 'cashier' | 'none'
+type InventoryControlMode = 'tracked' | 'not_managed'
 type PerformancePhaseCode = 'before_show' | 'acoustic' | 'band_live' | 'intermission' | 'after_show'
 
 const performancePhaseOptions: ReadonlyArray<{ code: PerformancePhaseCode; label: string }> = [
@@ -22,6 +23,7 @@ interface CatalogProduct {
   categoryCode: string
   fulfillmentStation: FulfillmentStation
   productKind: ProductKind
+  inventoryControlMode: InventoryControlMode
   bundleComponents: Array<{ productId: string; quantity: number; sortOrder: number; note: string | null }>
   productSnapshot: Record<string, unknown>
   guestVisible: boolean
@@ -58,6 +60,7 @@ interface ProductDraft {
   categoryCode: string
   fulfillmentStation: FulfillmentStation
   productKind: ProductKind
+  inventoryControlMode: InventoryControlMode
   status: ProductStatus
   guestVisible: boolean
   searchText: string
@@ -187,6 +190,7 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
       categoryCode: product.categoryCode,
       fulfillmentStation: product.fulfillmentStation,
       productKind: product.productKind,
+      inventoryControlMode: product.inventoryControlMode,
       status: product.status,
       guestVisible: product.guestVisible,
       searchText: product.searchText,
@@ -229,6 +233,16 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
 
   const updateDraft = <Key extends keyof ProductDraft>(key: Key, value: ProductDraft[Key]) => {
     setDraft((current) => current === null ? null : { ...current, [key]: value })
+  }
+
+  const updateCategory = (categoryCode: string) => {
+    setDraft((current) => current === null ? null : {
+      ...current,
+      categoryCode,
+      inventoryControlMode: categoryCode.trim() === 'food'
+        ? 'not_managed'
+        : current.categoryCode.trim() === 'food' ? 'tracked' : current.inventoryControlMode,
+    })
   }
 
   const toggleComponent = (productId: string) => {
@@ -333,6 +347,7 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
       categoryCode: draft.categoryCode.trim(),
       fulfillmentStation: draft.productKind === 'bundle' ? 'none' : draft.fulfillmentStation,
       productKind: draft.productKind,
+      inventoryControlMode: draft.productKind === 'bundle' ? 'tracked' : draft.inventoryControlMode,
       bundleComponents: draft.productKind === 'bundle' ? bundleComponents : [],
       productSnapshot,
       guestVisible: draft.guestVisible,
@@ -411,10 +426,11 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
           <div className="catalog-form-grid">
             <label>商品编号<input required disabled={draft.id !== null} pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" value={draft.code} onChange={(event) => updateDraft('code', event.target.value)} /></label>
             <label>商品名称<input required maxLength={160} value={draft.name} onChange={(event) => updateDraft('name', event.target.value)} /></label>
-            <label>分类编号<input required pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" value={draft.categoryCode} onChange={(event) => updateDraft('categoryCode', event.target.value)} /></label>
+            <label>分类编号<input required pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" value={draft.categoryCode} onChange={(event) => updateCategory(event.target.value)} /></label>
             <label>商品类型<select value={draft.productKind} onChange={(event) => updateDraft('productKind', event.target.value as ProductKind)}><option value="single">单品</option><option value="bundle">组合商品</option></select></label>
             <label>出品岗位<select disabled={draft.productKind === 'bundle'} value={draft.productKind === 'bundle' ? 'none' : draft.fulfillmentStation} onChange={(event) => updateDraft('fulfillmentStation', event.target.value as FulfillmentStation)}><option value="bar">吧台</option><option value="kitchen">后厨</option><option value="cashier">收银</option><option value="none">无需出品</option></select></label>
             <label>销售状态<select value={draft.status} onChange={(event) => updateDraft('status', event.target.value as ProductStatus)}><option value="active">在售</option><option value="sold_out">售罄</option><option value="inactive">停用</option></select></label>
+            <label>库存方式<select disabled={draft.productKind === 'bundle'} value={draft.productKind === 'bundle' ? 'tracked' : draft.inventoryControlMode} onChange={(event) => updateDraft('inventoryControlMode', event.target.value as InventoryControlMode)}><option value="tracked">跟踪库存（酒水等）</option><option value="not_managed">暂不管理数量（小吃水果）</option></select></label>
             <label>搜索文本<input maxLength={4000} value={draft.searchText} onChange={(event) => updateDraft('searchText', event.target.value)} /></label>
             <label>标准售价（元）<input disabled={!canManagePrice} inputMode="decimal" value={draft.priceYuan} onChange={(event) => updateDraft('priceYuan', event.target.value)} /></label>
             <label>成本金额（元）<input inputMode="decimal" value={draft.costYuan} onChange={(event) => updateDraft('costYuan', event.target.value)} /></label>
@@ -460,7 +476,7 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
           {draft.productKind === 'bundle' && <section className="catalog-components"><strong>组合内容</strong><div>{singleProducts.map((product) => <label key={product.id} className={product.id in draft.componentQuantities ? 'is-selected' : ''}><input type="checkbox" checked={product.id in draft.componentQuantities} onChange={() => toggleComponent(product.id)} /><span>{product.name}</span>{product.id in draft.componentQuantities && <input aria-label={`${product.name}数量`} inputMode="numeric" value={draft.componentQuantities[product.id]} onChange={(event) => updateDraft('componentQuantities', { ...draft.componentQuantities, [product.id]: event.target.value })} />}</label>)}</div></section>}
           <button type="submit" className="catalog-save" disabled={busy || performancePhaseDirty}>{busy ? <LoaderCircle className="is-spinning" size={18} /> : <Check size={18} />}{performancePhaseDirty ? '请先处理阶段配置' : '保存并读回验证'}</button>
         </form>}
-        <div className="catalog-management-list">{visibleProducts.map((product) => <article key={product.id}><div><strong>{product.name}</strong><span>{product.code} · {product.categoryCode} · {product.productKind === 'bundle' ? '组合' : stationLabel(product.fulfillmentStation)}</span><small>{statusLabel(product.status)} · {product.guestVisible ? '顾客可见' : '顾客隐藏'} · {product.standardPrice?.amountMinor == null ? '未定价' : `¥${minorToYuan(product.standardPrice.amountMinor)}`}</small></div><button type="button" onClick={() => startEdit(product)}><Pencil size={16} /> 编辑</button></article>)}</div>
+        <div className="catalog-management-list">{visibleProducts.map((product) => <article key={product.id}><div><strong>{product.name}</strong><span>{product.code} · {product.categoryCode} · {product.productKind === 'bundle' ? '组合' : stationLabel(product.fulfillmentStation)}</span><small>{statusLabel(product.status)} · {product.inventoryControlMode === 'tracked' ? '跟踪库存' : '暂不管理数量'} · {product.guestVisible ? '顾客可见' : '顾客隐藏'} · {product.standardPrice?.amountMinor == null ? '未定价' : `¥${minorToYuan(product.standardPrice.amountMinor)}`}</small></div><button type="button" onClick={() => startEdit(product)}><Pencil size={16} /> 编辑</button></article>)}</div>
       </>}
     </div>}
   </section>
@@ -468,7 +484,7 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
 
 function emptyDraft(): ProductDraft {
   return {
-    id: null, code: '', name: '', categoryCode: 'drinks', fulfillmentStation: 'bar', productKind: 'single',
+    id: null, code: '', name: '', categoryCode: 'drinks', fulfillmentStation: 'bar', productKind: 'single', inventoryControlMode: 'tracked',
     status: 'active', guestVisible: true, searchText: '', recommendationEnabled: false,
     recommendationMinGuests: '1', recommendationMaxGuests: '100', recommendationPriority: '100',
     recommendationSceneTags: '', recommendationIntentTags: '', recommendationTasteTags: '',
@@ -506,7 +522,7 @@ function readProducts(value: unknown): CatalogProduct[] {
   if (!Array.isArray(value)) return []
   return value.flatMap((item) => isRecord(item)
     && typeof item.id === 'string' && typeof item.code === 'string' && typeof item.name === 'string'
-    && typeof item.categoryCode === 'string' && isRecord(item.productSnapshot)
+    && typeof item.categoryCode === 'string' && (item.inventoryControlMode === 'tracked' || item.inventoryControlMode === 'not_managed') && isRecord(item.productSnapshot)
     && typeof item.guestVisible === 'boolean' && typeof item.searchText === 'string'
     && typeof item.recommendationEnabled === 'boolean'
     && Array.isArray(item.allowedChannels)

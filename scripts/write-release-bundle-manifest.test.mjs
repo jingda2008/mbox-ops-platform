@@ -48,7 +48,12 @@ test('release manifest binds the exact store and catalog configuration digests',
     },
   })
   const manifest = JSON.parse(readFileSync(output, 'utf8'))
-  assert.equal(manifest.schemaVersion, 4)
+  assert.equal(manifest.schemaVersion, 5)
+  assert.deepEqual(manifest.deploymentScope, {
+    kind: 'normalized-staff-service-database',
+    includes: ['normalized-web', 'normalized-server', 'normalized-database'],
+    excludes: ['wechat-miniprogram'],
+  })
   assert.equal(manifest.sourceBranch, 'main')
   assert.equal(manifest.runtimeConfigVersion, 'normalized-runtime-config/v1')
   assert.equal(manifest.configuration.store.file, 'store.json')

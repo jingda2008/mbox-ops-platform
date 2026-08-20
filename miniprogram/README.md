@@ -100,7 +100,7 @@ miniprogram-upload-evidence-<commit>.tar.gz
 miniprogram-release-evidence-<commit>.tar.gz
 ```
 
-`小程序分阶段验证` workflow 可手动选择 `candidate/upload/release`，每个阶段只下载对应受控产物，防止阶段混用。正式 `release.yml` 只下载 `miniprogram-release-evidence-<commit>.tar.gz`，且写死 `MBOX_MINIPROGRAM_RELEASE_STAGE=release`；不能通过变量退回 `candidate` 或 `upload`。`miniprogram-production-release` Environment 必须在 GitHub 中配置独立审批人和受保护的公钥/key-id。仓库目前没有正式平台资料或受保护公钥，因此正式门禁预期为拒绝；这不影响服务进程启动，也不代表当前线上小程序已被替换。
+`小程序分阶段验证` workflow 可手动选择 `candidate/upload/release`，每个阶段只下载对应受控产物，防止阶段混用。员工后台、标准服务端和数据库使用独立的 `release.yml` 与 `production` Environment；其发布清单明确排除 `wechat-miniprogram`，不会上传、审核或替换微信端代码。小程序正式发布只允许经 `miniprogram-release-stage.yml` 的 `release` 阶段验证对应 `miniprogram-release-evidence-<commit>.tar.gz`，不能从员工/服务端发布结果推断微信已发布。各 `miniprogram-*` Environment 必须在 GitHub 中配置独立审批人和受保护的公钥/key-id；资料或公钥缺失时，小程序门禁按设计拒绝，但不阻断员工/服务端发布。
 
 商业就绪检查需同时传入 `MBOX_MINIPROGRAM_RELEASE_REPORT`、受保护的 key-id 和公钥。它会再次验证报告内嵌的原始 attestation 和签名，并且只接受 `release + trusted_external_attestation`；手写 `status=ready`、缺公钥、伪签名、过期签名、`candidate` 或 `upload` 报告均会失败关闭。
 

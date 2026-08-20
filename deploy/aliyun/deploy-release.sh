@@ -33,6 +33,19 @@ fi
 manifest=${bundle_dir}/release-manifest.json
 test -f "${manifest}"
 
+node -e "
+  const fs=require('node:fs');
+  const manifest=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));
+  const expected={
+    kind:'normalized-staff-service-database',
+    includes:['normalized-web','normalized-server','normalized-database'],
+    excludes:['wechat-miniprogram'],
+  };
+  if (JSON.stringify(manifest.deploymentScope) !== JSON.stringify(expected)) {
+    throw new Error('release deployment scope mismatch');
+  }
+" "${manifest}"
+
 read_manifest() {
   node -e "const fs=require('node:fs'); const m=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); const value=process.argv[2].split('.').reduce((x,k)=>x?.[k],m); if (value === undefined || value === null) process.exit(2); process.stdout.write(String(value))" \
     "${manifest}" "$1"

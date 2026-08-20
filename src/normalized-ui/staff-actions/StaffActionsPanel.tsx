@@ -645,7 +645,7 @@ function ReservationList({ reservations, message, pendingAction, canManage, onAc
     .sort((left, right) => Date.parse(left.arrivalAt) - Date.parse(right.arrivalAt))
   return <section className="staff-reservations" aria-label="预约工作台">
     <header>
-      <div><CalendarDays size={20} /><span><strong>预约与到店</strong><small>待确认和即将到店优先</small></span></div>
+      <div><CalendarDays size={20} /><span><strong>预约与到店</strong><small>待确认预约和当日到店安排</small></span></div>
       <button type="button" onClick={onRefresh}><RefreshCw size={17} /> 刷新</button>
     </header>
     {message !== null && <p className="staff-reservation-message">{message}</p>}

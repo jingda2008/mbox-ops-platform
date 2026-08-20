@@ -1,0 +1,1082 @@
+{
+  "schemaVersion": 1,
+  "version": "2026-08-21-draft-v1",
+  "source": "菜单(1)(1).pptx and verified generated first-party images",
+  "deploymentPolicy": "inactive-drafts-only",
+  "products": [
+    {
+      "code": "SNACK-01",
+      "name": "脆爽黄瓜仔",
+      "categoryCode": "food",
+      "productKind": "single",
+      "fulfillmentStation": "kitchen",
+      "inventoryControlMode": "not_managed",
+      "priceAmountMinor": 3800,
+      "description": "腌渍小黄瓜，爽脆解腻。",
+      "imageUrl": "/menu/2026-08/items/snack-01.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "真实采购成本",
+        "实物份量与出品验收"
+      ]
+    },
+    {
+      "code": "SNACK-02",
+      "name": "柿种生仁",
+      "categoryCode": "food",
+      "productKind": "single",
+      "fulfillmentStation": "kitchen",
+      "inventoryControlMode": "not_managed",
+      "priceAmountMinor": 3000,
+      "description": "香脆柿种裹花生仁，越嚼越香的下酒小食。",
+      "imageUrl": "/menu/2026-08/items/snack-02.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "真实采购成本",
+        "实物份量与出品验收"
+      ]
+    },
+    {
+      "code": "SNACK-03",
+      "name": "炸洋葱圈",
+      "categoryCode": "food",
+      "productKind": "single",
+      "fulfillmentStation": "kitchen",
+      "inventoryControlMode": "not_managed",
+      "priceAmountMinor": 4000,
+      "description": "金黄酥脆，外酥内嫩，蘸酱更美味。",
+      "imageUrl": "/menu/2026-08/items/snack-03.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "真实采购成本",
+        "实物份量与出品验收"
+      ]
+    },
+    {
+      "code": "SNACK-04",
+      "name": "川麻鸡块",
+      "categoryCode": "food",
+      "productKind": "single",
+      "fulfillmentStation": "kitchen",
+      "inventoryControlMode": "not_managed",
+      "priceAmountMinor": 4800,
+      "description": "麻辣鲜香，外酥里嫩，川味经典。",
+      "imageUrl": "/menu/2026-08/items/snack-04.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "真实采购成本",
+        "实物份量与出品验收"
+      ]
+    },
+    {
+      "code": "SNACK-05",
+      "name": "炸薯条",
+      "categoryCode": "food",
+      "productKind": "single",
+      "fulfillmentStation": "kitchen",
+      "inventoryControlMode": "not_managed",
+      "priceAmountMinor": 4000,
+      "description": "外脆里软，金黄诱人，佐番茄酱更佳。",
+      "imageUrl": "/menu/2026-08/items/snack-05.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "真实采购成本",
+        "实物份量与出品验收"
+      ]
+    },
+    {
+      "code": "SNACK-06",
+      "name": "鸡米花",
+      "categoryCode": "food",
+      "productKind": "single",
+      "fulfillmentStation": "kitchen",
+      "inventoryControlMode": "not_managed",
+      "priceAmountMinor": 4500,
+      "description": "一口一个，外酥里嫩。",
+      "imageUrl": "/menu/2026-08/items/snack-06.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "真实采购成本",
+        "实物份量与出品验收"
+      ]
+    },
+    {
+      "code": "SNACK-07",
+      "name": "墨西哥玉米片",
+      "categoryCode": "food",
+      "productKind": "single",
+      "fulfillmentStation": "kitchen",
+      "inventoryControlMode": "not_managed",
+      "priceAmountMinor": 5000,
+      "description": "搭配莎莎酱与芝士，层次鲜明。",
+      "imageUrl": "/menu/2026-08/items/snack-07.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "真实采购成本",
+        "实物份量与出品验收"
+      ]
+    },
+    {
+      "code": "SNACK-08",
+      "name": "奥尔良香烤鸡翅",
+      "categoryCode": "food",
+      "productKind": "single",
+      "fulfillmentStation": "kitchen",
+      "inventoryControlMode": "not_managed",
+      "priceAmountMinor": 5500,
+      "description": "蜜汁烤香，奥尔良风味，嫩滑多汁。",
+      "imageUrl": "/menu/2026-08/items/snack-08.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "真实采购成本",
+        "实物份量与出品验收"
+      ]
+    },
+    {
+      "code": "SNACK-09",
+      "name": "酥炸鱿鱼拼盘",
+      "categoryCode": "food",
+      "productKind": "single",
+      "fulfillmentStation": "kitchen",
+      "inventoryControlMode": "not_managed",
+      "priceAmountMinor": 5800,
+      "description": "酥脆弹牙，海鲜鲜香，适合佐酒分享。",
+      "imageUrl": "/menu/2026-08/items/snack-09.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "真实采购成本",
+        "实物份量与出品验收"
+      ]
+    },
+    {
+      "code": "SNACK-10",
+      "name": "橄榄酸黄瓜小碟",
+      "categoryCode": "food",
+      "productKind": "single",
+      "fulfillmentStation": "kitchen",
+      "inventoryControlMode": "not_managed",
+      "priceAmountMinor": 5800,
+      "description": "迷你酸黄瓜搭配青黑橄榄与珍珠洋葱，开胃解腻。",
+      "imageUrl": "/menu/2026-08/items/snack-10.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "真实采购成本",
+        "实物份量与出品验收"
+      ]
+    },
+    {
+      "code": "SNACK-11",
+      "name": "台式碳烤香肠",
+      "categoryCode": "food",
+      "productKind": "single",
+      "fulfillmentStation": "kitchen",
+      "inventoryControlMode": "not_managed",
+      "priceAmountMinor": 6000,
+      "description": "炭火现烤，外焦里嫩，蒜香十足。",
+      "imageUrl": "/menu/2026-08/items/snack-11.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "真实采购成本",
+        "实物份量与出品验收"
+      ]
+    },
+    {
+      "code": "SNACK-12",
+      "name": "香辣手抓骨",
+      "categoryCode": "food",
+      "productKind": "single",
+      "fulfillmentStation": "kitchen",
+      "inventoryControlMode": "not_managed",
+      "priceAmountMinor": 6800,
+      "description": "香辣入味，肉嫩脱骨，适合手持畅吃。",
+      "imageUrl": "/menu/2026-08/items/snack-12.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "真实采购成本",
+        "实物份量与出品验收"
+      ]
+    },
+    {
+      "code": "SNACK-13",
+      "name": "蔓越莓坚果芝士盘",
+      "categoryCode": "food",
+      "productKind": "single",
+      "fulfillmentStation": "kitchen",
+      "inventoryControlMode": "not_managed",
+      "priceAmountMinor": 6000,
+      "description": "多种芝士搭配蔓越莓与坚果，咸甜交织。",
+      "imageUrl": "/menu/2026-08/items/snack-13.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "真实采购成本",
+        "实物份量与出品验收"
+      ]
+    },
+    {
+      "code": "SNACK-14",
+      "name": "水果拼盘",
+      "categoryCode": "food",
+      "productKind": "single",
+      "fulfillmentStation": "kitchen",
+      "inventoryControlMode": "not_managed",
+      "priceAmountMinor": 8800,
+      "description": "时令鲜果，清甜爽口。",
+      "imageUrl": "/menu/2026-08/items/snack-14.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "真实采购成本",
+        "实物份量与出品验收"
+      ]
+    },
+    {
+      "code": "SNACK-15",
+      "name": "伊利比亚火腿拼盘",
+      "categoryCode": "food",
+      "productKind": "single",
+      "fulfillmentStation": "kitchen",
+      "inventoryControlMode": "not_managed",
+      "priceAmountMinor": 10800,
+      "description": "伊比利亚火腿，入口柔润，适合佐酒分享。",
+      "imageUrl": "/menu/2026-08/items/snack-15.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "真实采购成本",
+        "实物份量与出品验收"
+      ]
+    },
+    {
+      "code": "SNACK-16",
+      "name": "小蛋糕",
+      "categoryCode": "food",
+      "productKind": "single",
+      "fulfillmentStation": "kitchen",
+      "inventoryControlMode": "not_managed",
+      "priceAmountMinor": 5800,
+      "description": "绵软香甜，为今晚留一份轻盈收尾。",
+      "imageUrl": "/menu/2026-08/items/snack-16.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "真实采购成本",
+        "实物份量与出品验收"
+      ]
+    },
+    {
+      "code": "SIGNATURE-01",
+      "name": "真我",
+      "categoryCode": "signature",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 26800,
+      "description": "社交面具戴累了，百富的苦与咖啡的醇替你摘下，做回自己。",
+      "imageUrl": "/menu/2026-08/items/signature-01.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "实际成本复核"
+      ]
+    },
+    {
+      "code": "SIGNATURE-02",
+      "name": "喜",
+      "categoryCode": "signature",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 16800,
+      "description": "蔓越莓与牛奶在舌尖起舞，嘴角自然上扬。",
+      "imageUrl": "/menu/2026-08/items/signature-02.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "实际成本复核"
+      ]
+    },
+    {
+      "code": "SIGNATURE-03",
+      "name": "乐",
+      "categoryCode": "signature",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 16800,
+      "description": "金酒与君度铺开明亮果香，今晚先享受当下。",
+      "imageUrl": "/menu/2026-08/items/signature-03.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "实际成本复核"
+      ]
+    },
+    {
+      "code": "SIGNATURE-04",
+      "name": "哀",
+      "categoryCode": "signature",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 16800,
+      "description": "蜜瓜的甜意掠过沉静酒体，留下一段克制的回味。",
+      "imageUrl": "/menu/2026-08/items/signature-04.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "实际成本复核"
+      ]
+    },
+    {
+      "code": "SIGNATURE-05",
+      "name": "怒",
+      "categoryCode": "signature",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 16800,
+      "description": "辣椒籽在龙舌兰里炸开，压抑已久的火，一口释放。",
+      "imageUrl": "/menu/2026-08/items/signature-05.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "实际成本复核"
+      ]
+    },
+    {
+      "code": "SIGNATURE-06",
+      "name": "悠然",
+      "categoryCode": "signature",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 10800,
+      "description": "芭乐清甜跌入金酒，气泡轻诉热带风情。",
+      "imageUrl": "/menu/2026-08/items/signature-06.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "实际成本复核"
+      ]
+    },
+    {
+      "code": "SIGNATURE-07",
+      "name": "安愉",
+      "categoryCode": "signature",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 10800,
+      "description": "蜜桃的甜，刚好抚平今天的小褶皱。",
+      "imageUrl": "/menu/2026-08/items/signature-07.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "实际成本复核"
+      ]
+    },
+    {
+      "code": "SIGNATURE-08",
+      "name": "清欢",
+      "categoryCode": "signature",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 10800,
+      "description": "青瓜在汤力水里慢慢呼吸，安静也是情绪。",
+      "imageUrl": "/menu/2026-08/items/signature-08.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "实际成本复核"
+      ]
+    },
+    {
+      "code": "SIGNATURE-09",
+      "name": "逢喜",
+      "categoryCode": "signature",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 10800,
+      "description": "玫瑰在橙汁里盛开，喜事来了，藏不住。",
+      "imageUrl": "/menu/2026-08/items/signature-09.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "实际成本复核"
+      ]
+    },
+    {
+      "code": "SIGNATURE-10",
+      "name": "坎坷",
+      "categoryCode": "signature",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 10800,
+      "description": "红石榴与橙汁交织酸甜，余味里仍有光。",
+      "imageUrl": "/menu/2026-08/items/signature-10.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "实际成本复核"
+      ]
+    },
+    {
+      "code": "SIGNATURE-11",
+      "name": "彷徨",
+      "categoryCode": "signature",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 10800,
+      "description": "紫罗兰在杯中回旋，像站在十字路口的自己。",
+      "imageUrl": "/menu/2026-08/items/signature-11.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "实际成本复核"
+      ]
+    },
+    {
+      "code": "SIGNATURE-12",
+      "name": "期许",
+      "categoryCode": "signature",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 10800,
+      "description": "薄荷清凉像不安的心跳，盼一个人推门而入。",
+      "imageUrl": "/menu/2026-08/items/signature-12.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "实际成本复核"
+      ]
+    },
+    {
+      "code": "SIGNATURE-13",
+      "name": "妒忌",
+      "categoryCode": "signature",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 10800,
+      "description": "龙舌兰的热与蜜多丽的甜相互拉扯，克制又直接。",
+      "imageUrl": "/menu/2026-08/items/signature-13.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "实际成本复核"
+      ]
+    },
+    {
+      "code": "SIGNATURE-14",
+      "name": "愤恨",
+      "categoryCode": "signature",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 10800,
+      "description": "金巴利的苦与红味美思的甜交错，一杯饮尽爱恨。",
+      "imageUrl": "/menu/2026-08/items/signature-14.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "实际成本复核"
+      ]
+    },
+    {
+      "code": "SIGNATURE-15",
+      "name": "莓你不行",
+      "categoryCode": "signature",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 10800,
+      "description": "草莓、柑橘与奶香交织，酸甜轻盈的无酒精特调。",
+      "imageUrl": "/menu/2026-08/items/signature-15.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "实际成本复核"
+      ]
+    },
+    {
+      "code": "SIGNATURE-16",
+      "name": "都市绿洲",
+      "categoryCode": "signature",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 10800,
+      "description": "青瓜与气泡联手，把烦躁一一按进冰里。",
+      "imageUrl": "/menu/2026-08/items/signature-16.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "实际成本复核"
+      ]
+    },
+    {
+      "code": "CLASSIC-01",
+      "name": "金汤力",
+      "categoryCode": "classic",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 9800,
+      "description": "金酒草本与汤力气泡的经典搭配，清爽微苦。",
+      "imageUrl": "/menu/2026-08/items/classic-01.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "杯量与成本复核"
+      ]
+    },
+    {
+      "code": "CLASSIC-02",
+      "name": "莫吉托",
+      "categoryCode": "classic",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 9800,
+      "description": "薄荷清凉与朗姆热情碰撞，像哈瓦那的海风。",
+      "imageUrl": "/menu/2026-08/items/classic-02.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "杯量与成本复核"
+      ]
+    },
+    {
+      "code": "CLASSIC-03",
+      "name": "茉莉",
+      "categoryCode": "classic",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 9800,
+      "description": "东方茶韵遇上西方基酒，茉莉幽香在泡沫中绽放。",
+      "imageUrl": "/menu/2026-08/items/classic-03.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "杯量与成本复核"
+      ]
+    },
+    {
+      "code": "CLASSIC-04",
+      "name": "新加坡司令",
+      "categoryCode": "classic",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 9800,
+      "description": "红宝石般的色泽下，藏着复杂而明亮的热带果香。",
+      "imageUrl": "/menu/2026-08/items/classic-04.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "杯量与成本复核"
+      ]
+    },
+    {
+      "code": "CLASSIC-05",
+      "name": "龙舌兰日出",
+      "categoryCode": "classic",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 9800,
+      "description": "红石榴缓缓沉底，如晨曦染红天际线。",
+      "imageUrl": "/menu/2026-08/items/classic-05.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "杯量与成本复核"
+      ]
+    },
+    {
+      "code": "CLASSIC-06",
+      "name": "威士忌酸",
+      "categoryCode": "classic",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 9800,
+      "description": "威士忌的力量被柠檬驯服，留下恰到好处的酸甜平衡。",
+      "imageUrl": "/menu/2026-08/items/classic-06.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "杯量与成本复核"
+      ]
+    },
+    {
+      "code": "CLASSIC-07",
+      "name": "椰林飘香",
+      "categoryCode": "classic",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 9800,
+      "description": "椰香与菠萝把加勒比海的阳光装进杯中。",
+      "imageUrl": "/menu/2026-08/items/classic-07.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "杯量与成本复核"
+      ]
+    },
+    {
+      "code": "CLASSIC-08",
+      "name": "僵尸",
+      "categoryCode": "classic",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 9800,
+      "description": "多重朗姆叠加热带果香，层次复杂而强劲。",
+      "imageUrl": "/menu/2026-08/items/classic-08.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "杯量与成本复核"
+      ]
+    },
+    {
+      "code": "CLASSIC-09",
+      "name": "大吉利",
+      "categoryCode": "classic",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 9800,
+      "description": "朗姆与柠檬的纯粹对话，酸爽有力。",
+      "imageUrl": "/menu/2026-08/items/classic-09.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "杯量与成本复核"
+      ]
+    },
+    {
+      "code": "CLASSIC-10",
+      "name": "长岛冰茶",
+      "categoryCode": "classic",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 9800,
+      "description": "多种烈酒汇于一杯，入口顺滑而酒体强劲。",
+      "imageUrl": "/menu/2026-08/items/classic-10.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "杯量与成本复核"
+      ]
+    },
+    {
+      "code": "CLASSIC-11",
+      "name": "尼格罗尼",
+      "categoryCode": "classic",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 9800,
+      "description": "金巴利的苦、味美思的甜与金酒的香，构成优雅三角。",
+      "imageUrl": "/menu/2026-08/items/classic-11.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "杯量与成本复核"
+      ]
+    },
+    {
+      "code": "CLASSIC-12",
+      "name": "Highball",
+      "categoryCode": "classic",
+      "productKind": "single",
+      "fulfillmentStation": "bar",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 9800,
+      "description": "威士忌由细密气泡唤醒，极简而纯粹。",
+      "imageUrl": "/menu/2026-08/items/classic-12.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "activationBlockers": [
+        "强类型配方",
+        "真实物料库存",
+        "杯量与成本复核"
+      ]
+    },
+    {
+      "code": "PACKAGE-01",
+      "name": "我好累",
+      "categoryCode": "packages",
+      "productKind": "bundle",
+      "fulfillmentStation": "none",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 29800,
+      "description": "真我鸡尾酒、柿种生仁、脆爽黄瓜仔。",
+      "imageUrl": "/menu/2026-08/items/package-01.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "componentCodes": [
+        "SIGNATURE-01",
+        "SNACK-02",
+        "SNACK-01"
+      ],
+      "activationBlockers": [
+        "全部组件映射",
+        "组合成本与毛利",
+        "实物与履约验收"
+      ]
+    },
+    {
+      "code": "PACKAGE-02",
+      "name": "要期待",
+      "categoryCode": "packages",
+      "productKind": "bundle",
+      "fulfillmentStation": "none",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 39900,
+      "description": "打卡款特调×2、水果拼盘、炸薯条。",
+      "imageUrl": "/menu/2026-08/items/package-02.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "componentCodes": [
+        "V3-COMPONENT-VISUAL-DRINK",
+        "SNACK-14",
+        "SNACK-05"
+      ],
+      "activationBlockers": [
+        "全部组件映射",
+        "组合成本与毛利",
+        "实物与履约验收"
+      ]
+    },
+    {
+      "code": "PACKAGE-03",
+      "name": "醉眼前",
+      "categoryCode": "packages",
+      "productKind": "bundle",
+      "fulfillmentStation": "none",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 59900,
+      "description": "打卡款特调×2、伊利比亚火腿拼盘、水果拼盘、炸薯条、川麻鸡块及场景布置。",
+      "imageUrl": "/menu/2026-08/items/package-03.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "componentCodes": [
+        "V3-COMPONENT-VISUAL-DRINK",
+        "SNACK-15",
+        "SNACK-14",
+        "SNACK-05",
+        "SNACK-04"
+      ],
+      "activationBlockers": [
+        "全部组件映射",
+        "组合成本与毛利",
+        "实物与履约验收"
+      ]
+    },
+    {
+      "code": "PACKAGE-04",
+      "name": "好心动",
+      "categoryCode": "packages",
+      "productKind": "bundle",
+      "fulfillmentStation": "none",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 89900,
+      "description": "蚝湾长相思干白、伊利比亚火腿拼盘、水果拼盘、柿种生仁、脆爽黄瓜仔及场景布置。",
+      "imageUrl": "/menu/2026-08/items/package-04.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "componentCodes": [
+        "V2-WINE-OYSTER-BAY",
+        "SNACK-15",
+        "SNACK-14",
+        "SNACK-02",
+        "SNACK-01"
+      ],
+      "activationBlockers": [
+        "全部组件映射",
+        "组合成本与毛利",
+        "实物与履约验收"
+      ]
+    },
+    {
+      "code": "PACKAGE-05",
+      "name": "烦死了",
+      "categoryCode": "packages",
+      "productKind": "bundle",
+      "fulfillmentStation": "none",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 59900,
+      "description": "三款不同打卡特调、水果拼盘、柿种生仁、川麻鸡块。",
+      "imageUrl": "/menu/2026-08/items/package-05.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "componentCodes": [
+        "V3-COMPONENT-VISUAL-DRINK",
+        "SNACK-14",
+        "SNACK-02",
+        "SNACK-04"
+      ],
+      "activationBlockers": [
+        "全部组件映射",
+        "组合成本与毛利",
+        "实物与履约验收"
+      ]
+    },
+    {
+      "code": "PACKAGE-06",
+      "name": "想发疯",
+      "categoryCode": "packages",
+      "productKind": "bundle",
+      "fulfillmentStation": "none",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 89900,
+      "description": "三款打卡特调、特调体验装 Shot×6、三份小蛋糕及水果拼盘。",
+      "imageUrl": "/menu/2026-08/items/package-06.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "componentCodes": [
+        "V3-COMPONENT-VISUAL-DRINK",
+        "V2-COMPONENT-SHOW-SIP",
+        "SNACK-16",
+        "SNACK-14"
+      ],
+      "activationBlockers": [
+        "全部组件映射",
+        "组合成本与毛利",
+        "实物与履约验收"
+      ]
+    },
+    {
+      "code": "PACKAGE-07",
+      "name": "吐槽中",
+      "categoryCode": "packages",
+      "productKind": "bundle",
+      "fulfillmentStation": "none",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 119900,
+      "description": "奔富 Bin 128、伊利比亚火腿拼盘、水果拼盘。",
+      "imageUrl": "/menu/2026-08/items/package-07.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "componentCodes": [
+        "V2-WINE-PENFOLDS-128",
+        "SNACK-15",
+        "SNACK-14"
+      ],
+      "activationBlockers": [
+        "全部组件映射",
+        "组合成本与毛利",
+        "实物与履约验收"
+      ]
+    },
+    {
+      "code": "PACKAGE-08",
+      "name": "走一个",
+      "categoryCode": "packages",
+      "productKind": "bundle",
+      "fulfillmentStation": "none",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 99900,
+      "description": "杰克丹尼、伊利比亚火腿拼盘、水果拼盘及气泡水×3。",
+      "imageUrl": "/menu/2026-08/items/package-08.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "componentCodes": [
+        "V3-SPIRIT-JACK-DANIELS",
+        "SNACK-15",
+        "SNACK-14",
+        "V2-COMPONENT-SOFT-DRINK"
+      ],
+      "activationBlockers": [
+        "全部组件映射",
+        "组合成本与毛利",
+        "实物与履约验收"
+      ]
+    },
+    {
+      "code": "PACKAGE-09",
+      "name": "须尽欢",
+      "categoryCode": "packages",
+      "productKind": "bundle",
+      "fulfillmentStation": "none",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 169900,
+      "description": "达摩12、芙丝矿泉水×3、伊利比亚火腿拼盘、水果拼盘、炸薯条、川麻鸡块及柿种生仁。",
+      "imageUrl": "/menu/2026-08/items/package-09.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "componentCodes": [
+        "V3-COMPONENT-SPECIFIED-SPIRIT",
+        "V2-COMPONENT-SOFT-DRINK",
+        "SNACK-15",
+        "SNACK-14",
+        "SNACK-05",
+        "SNACK-04",
+        "SNACK-02"
+      ],
+      "activationBlockers": [
+        "全部组件映射",
+        "组合成本与毛利",
+        "实物与履约验收"
+      ]
+    },
+    {
+      "code": "PACKAGE-10",
+      "name": "爽翻了",
+      "categoryCode": "packages",
+      "productKind": "bundle",
+      "fulfillmentStation": "none",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 218800,
+      "description": "马爹利名仕、芙丝矿泉水×6、水果拼盘及香辣手抓骨。",
+      "imageUrl": "/menu/2026-08/items/package-10.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "componentCodes": [
+        "V3-COMPONENT-SPECIFIED-SPIRIT",
+        "V2-COMPONENT-SOFT-DRINK",
+        "SNACK-14",
+        "SNACK-12"
+      ],
+      "activationBlockers": [
+        "全部组件映射",
+        "组合成本与毛利",
+        "实物与履约验收"
+      ]
+    },
+    {
+      "code": "PACKAGE-11",
+      "name": "够尽兴",
+      "categoryCode": "packages",
+      "productKind": "bundle",
+      "fulfillmentStation": "none",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 188800,
+      "description": "巴黎之花经典香槟、伊利比亚火腿拼盘、水果拼盘、香辣手抓骨、生日特调、炸薯条、川麻鸡块及小蛋糕。",
+      "imageUrl": "/menu/2026-08/items/package-11.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "componentCodes": [
+        "V2-CHAMPAGNE-PERRIER",
+        "SNACK-15",
+        "SNACK-14",
+        "SNACK-12",
+        "V3-COMPONENT-VISUAL-DRINK",
+        "SNACK-05",
+        "SNACK-04",
+        "SNACK-16"
+      ],
+      "activationBlockers": [
+        "全部组件映射",
+        "组合成本与毛利",
+        "实物与履约验收"
+      ]
+    },
+    {
+      "code": "PACKAGE-12",
+      "name": "一起疯",
+      "categoryCode": "packages",
+      "productKind": "bundle",
+      "fulfillmentStation": "none",
+      "inventoryControlMode": "tracked",
+      "priceAmountMinor": 398800,
+      "description": "轩尼诗 XO、芙丝矿泉水×6、伊利比亚火腿拼盘、炸薯条、川麻鸡块、奥尔良香烤鸡翅及水果拼盘。",
+      "imageUrl": "/menu/2026-08/items/package-12.jpg",
+      "status": "inactive",
+      "costAmountMinor": null,
+      "componentCodes": [
+        "V3-COMPONENT-SPECIFIED-SPIRIT",
+        "V2-COMPONENT-SOFT-DRINK",
+        "SNACK-15",
+        "SNACK-05",
+        "SNACK-04",
+        "SNACK-08",
+        "SNACK-14"
+      ],
+      "activationBlockers": [
+        "全部组件映射",
+        "组合成本与毛利",
+        "实物与履约验收"
+      ]
+    }
+  ]
+}
+

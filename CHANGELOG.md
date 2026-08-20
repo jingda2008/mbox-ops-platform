@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.0.0-rc.93 - 2026-08-21
+
+- Added a first-party image library and 56 inactive, cost-unapproved menu drafts
+  for the August sales catalogue. Drafts remain hidden from guests until real
+  procurement costs, recipes, stock and physical output are approved.
+- Added an authorized inventory-recipe readback and editor so managers can bind
+  tracked products to real inventory items without hiding recipe quantities in
+  product snapshots.
+- Refined the customer mini-program home, member invitation, order layout and
+  narrow-screen presentation while preserving explicit agreement before WeChat
+  phone authorization.
+- Defaulted after-hours booking to the next available business date and made
+  future pending reservations available for staff confirmation without
+  presenting them as current-day arrivals.
+- Serialized PostgreSQL integration files that mutate shared role privileges,
+  eliminating false cross-suite ACL races without weakening database guards.
+- Includes the protected Alibaba Cloud RDS recovery and reservation business-day
+  corrections from `1.0.0-rc.92`.
+
 ## 1.0.0-rc.92 - 2026-08-21
 
 - Allow protected backup and restore paths to recognize an Alibaba Cloud RDS

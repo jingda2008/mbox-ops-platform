@@ -450,6 +450,8 @@ describe('reservationPerformanceApiPlugin staff reservation permissions', () => 
     expect(response.json().data[0]).not.toHaveProperty('contactToken')
     expect(response.json().data[0]).toMatchObject({ contactAvailable: true })
     const scopedCall = value.query.mock.calls.find(([sql]) => sql.includes('FROM mbox.reservations AS reservation'))
+    expect(scopedCall?.[0]).toContain("reservation.status = 'pending'")
+    expect(scopedCall?.[0]).toContain("($9::date + 1)::timestamp + reservation_store.business_day_cutoff")
     expect(scopedCall?.[1]).toEqual([
       tenantId, storeId, null, null, null, false, [employeeId], [areaId], '2026-08-11',
     ])

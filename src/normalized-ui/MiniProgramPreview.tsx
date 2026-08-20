@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react'
 import {
   ArrowLeft, CalendarDays, Check, ChevronRight, Crown, Gift, House, MapPin,
-  Martini, Music2, ScanLine, ShieldCheck, TicketCheck, UserRound, UsersRound,
+  Martini, Music2, ScanLine, ShieldCheck, TicketCheck, UserRound, UsersRound, Zap,
 } from 'lucide-react'
+import miniLogo from '../../miniprogram/assets/brand/mbox-logo-badge.png'
 import './mini-program-preview.css'
 
 type Tab = 'home' | 'reservation' | 'order' | 'community' | 'profile'
@@ -17,12 +18,12 @@ const tabs: Array<{ code: Tab; label: string; icon: typeof House }> = [
 
 export function MiniProgramPreview() {
   const [tab, setTab] = useState<Tab>('home')
-  const [tableReady, setTableReady] = useState(false)
+  const [tableReady, setTableReady] = useState(() => new URLSearchParams(window.location.search).get('connected') === '1')
   const [reservationStep, setReservationStep] = useState(1)
   const [activityOpen, setActivityOpen] = useState<'paid' | 'free' | null>(null)
   const [partySize, setPartySize] = useState(2)
   const content = useMemo(() => ({
-    home: <HomePreview onScan={() => { setTableReady(true); setTab('order') }} onActivity={() => { setActivityOpen('paid'); setTab('community') }} />,
+    home: <HomePreview tableReady={tableReady} onOrder={() => setTab('order')} onActivity={() => { setActivityOpen('paid'); setTab('community') }} />,
     reservation: <ReservationPreview step={reservationStep} onStep={setReservationStep} />,
     order: <OrderPreview tableReady={tableReady} onScan={() => setTableReady(true)} />,
     community: <CommunityPreview open={activityOpen} onOpen={setActivityOpen} partySize={partySize} onPartySize={setPartySize} />,
@@ -31,7 +32,7 @@ export function MiniProgramPreview() {
 
   return <main className="mini-preview-stage">
     <section className="mini-preview-shell" aria-label="M-BOX 小程序交互预览">
-      <header className="mini-preview-status"><span>21:08</span><strong>M-BOX</strong><span>交互预览</span></header>
+      <header className="mini-preview-status"><span>20:18</span><strong aria-hidden="true"></strong><span>5G&nbsp;&nbsp;89%</span></header>
       <div className="mini-preview-content">{content}</div>
       <nav className="mini-preview-tabs" aria-label="小程序主导航">
         {tabs.map((item) => {
@@ -43,20 +44,35 @@ export function MiniProgramPreview() {
   </main>
 }
 
-function HomePreview({ onScan, onActivity }: { onScan(): void; onActivity(): void }) {
+function HomePreview({ tableReady, onOrder, onActivity }: { tableReady: boolean; onOrder(): void; onActivity(): void }) {
+  const [performancePanel, setPerformancePanel] = useState<'tonight' | 'artist' | 'month' | null>(null)
   return <>
     <header className="mini-home-hero">
-      <span className="mini-kicker">M-BOX · LUJIAZUI</span>
-      <h1>让今晚，<br />自然发生。</h1>
-      <p>现场音乐、好酒和刚好的照顾。</p>
-      <button type="button" onClick={onScan}><ScanLine size={19} />扫码入座并点单</button>
+      <div className="mini-home-brand"><span><img src={miniLogo} alt="M-BOX" />M-BOX</span><i aria-hidden="true"><b>•••</b><b>—</b><b>◎</b></i></div>
+      <div className="mini-home-message"><span className="mini-kicker">LIVE MUSIC · SOCIAL NIGHT</span><h1>{tableReady ? 'A08桌' : '今晚，刚刚好'}</h1><p>{tableReady ? '本桌已连接 · 服务负责人 Tom' : '现场音乐、精心酒水与刚好的相遇'}</p></div>
     </header>
-    <section className="mini-section mini-tonight">
-      <header><div><small>TONIGHT</small><strong>今晚的现场</strong></div><span>8月15日</span></header>
-      <article><div className="mini-live-time"><b>21:30</b><span>第一场</span></div><div><strong>Live Band · 城市夜航</strong><p>主唱 林南 · 吉他 周木 · 约45分钟</p></div><ChevronRight size={18} /></article>
-      <article><div className="mini-live-time"><b>23:00</b><span>第二场</span></div><div><strong>Acoustic · 深夜点唱</strong><p>可在入座后提交今晚点歌</p></div><ChevronRight size={18} /></article>
+    {tableReady && <>
+      <section className="mini-home-connected" aria-label="已连接桌位"><div><small>当前桌位</small><strong>A08桌</strong></div><div><small>本桌人数</small><strong>2位</strong></div><div><small>服务负责</small><strong>Tom</strong></div></section>
+      <button type="button" className="mini-home-order-card" onClick={onOrder}><span><small>今晚从这里开始</small><strong>今晚菜单与点单</strong><b>实时库存、清晰价格与舒适选择</b></span><ChevronRight size={28} /></button>
+    </>}
+    <section className="mini-section mini-home-tonight">
+      <header><strong>今晚现场</strong><span className="mini-live-indicator"><i></i>正在演出</span></header>
+      <button type="button" className="mini-home-stage-card is-live" onClick={() => setPerformancePanel('tonight')}>
+        <small>LIVE NOW · 21:30—22:15</small><strong>驻唱乐队 · 第一场</strong><span>当前演出正在进行，下一场 23:00 开始。</span><b>查看整晚安排 →</b>
+      </button>
+      <div className="mini-home-performance-links">
+        <button type="button" onClick={() => setPerformancePanel('artist')}><Music2 /><span><small>ARTIST</small><strong>乐队及歌手</strong><b>认识今晚阵容</b></span><ChevronRight /></button>
+        <button type="button" onClick={() => setPerformancePanel('month')}><CalendarDays /><span><small>MONTHLY</small><strong>当月演出安排</strong><b>按日期看场次</b></span><ChevronRight /></button>
+      </div>
     </section>
-    <section className="mini-section mini-home-shortcuts"><header><strong>到店前也能安排</strong><span>少填、分步确认</span></header><div><button type="button"><CalendarDays /><strong>预约座位</strong><small>三步完成</small></button><button type="button" onClick={onActivity}><UsersRound /><strong>本周超嗨</strong><small>查看活动</small></button></div></section>
+    {!tableReady && <section className="mini-home-state" aria-label="桌位状态"><span><Zap size={16} /></span><div><small>当前状态</small><strong>尚未连接桌位</strong><p>到店后从“点单”页扫描桌码，即可进入实时菜单和桌边服务。</p></div></section>}
+    {tableReady && <section className="mini-section mini-home-services"><header><strong>本桌快捷服务</strong><span>状态实时同步</span></header><div><button type="button"><b>水</b><span>桌边服务</span></button><button type="button"><b>进</b><span>处理进度</span></button><button type="button"><b>歌</b><span>现场点歌</span></button><button type="button"><b>账</b><span>订单桌账</span></button></div></section>}
+    <section className="mini-section mini-home-discovery">
+      <header><strong>发现 M-BOX</strong><span>精选内容</span></header>
+      <button type="button" className="mini-home-activity-card" onClick={onActivity}><small>超嗨 · 本期精选</small><strong>当期活动</strong><span>仅展示已经发布、仍可参与的活动内容。</span><b>查看活动详情 →</b></button>
+      <button type="button" className="mini-home-story-card"><img src={miniLogo} alt="M-BOX 1999" /><span><small>M-BOX STORY</small><strong>从1999开始</strong><b>关于上海、现场与 M-BOX 的故事　→</b></span></button>
+    </section>
+    {performancePanel && <div className="mini-performance-mask" role="presentation" onClick={() => setPerformancePanel(null)}><section className="mini-performance-sheet" role="dialog" aria-modal="true" aria-label={performancePanel === 'tonight' ? '整晚演出安排' : performancePanel === 'artist' ? '乐队及歌手介绍' : '当月演出安排'} onClick={(event) => event.stopPropagation()}><i className="mini-sheet-handle"></i><header><div><small>{performancePanel === 'tonight' ? 'TONIGHT AT M-BOX' : performancePanel === 'artist' ? 'ARTIST PROFILE' : 'MONTHLY LIVE'}</small><strong>{performancePanel === 'tonight' ? '整晚演出安排' : performancePanel === 'artist' ? '乐队及歌手介绍' : '当月演出安排'}</strong></div><button type="button" onClick={() => setPerformancePanel(null)}>×</button></header>{performancePanel === 'tonight' && <div className="mini-performance-list"><article className="is-current"><time><b>21:30</b><span>正在演出</span></time><div><strong>驻唱乐队 · 第一场</strong><span>21:30—22:15</span></div></article><article><time><b>23:00</b><span>即将开始</span></time><div><strong>驻唱乐队 · 第二场</strong><span>23:00—23:45</span></div></article><article><time><b>00:30</b><span>今晚场次</span></time><div><strong>深夜现场</strong><span>00:30—01:15</span></div></article></div>}{performancePanel === 'artist' && <div className="mini-artist-profile"><div><Music2 /></div><span><strong>今晚舞台阵容</strong><small>流行 · Soul · 现场互动</small><p>正式小程序展示员工后台随当晚场次发布的歌手简介、风格与舞台亮点。</p></span></div>}{performancePanel === 'month' && <div className="mini-month-view"><p>按日期查看门店已经发布的演出场次，未发布内容不会提前展示。</p><button type="button" className="mini-primary">进入演出日历</button></div>}<footer>演出时间与阵容以门店当日发布安排为准。</footer></section></div>}
   </>
 }
 
@@ -73,11 +89,15 @@ function ReservationPreview({ step, onStep }: { step: number; onStep(value: numb
 }
 
 function OrderPreview({ tableReady, onScan }: { tableReady: boolean; onScan(): void }) {
-  if (!tableReady) return <><Band eyebrow="ORDER AT TABLE" title="入座后，再开始点单" copy="先扫描桌面二维码，确认门店、桌号和开台状态，避免误下单。" />
-    <section className="mini-order-gate"><div><ScanLine size={36} /></div><h2>扫描本桌二维码</h2><p>正式菜单只在有效桌码和已开台状态下开放。预约、演出和活动仍可直接浏览。</p><button type="button" className="mini-primary" onClick={onScan}>模拟扫码确认桌号</button><small><ShieldCheck size={14} />不会因打开页面自动创建订单或扣款</small></section>
+  const [cartCount, setCartCount] = useState(0)
+  const [checkoutOpen, setCheckoutOpen] = useState(false)
+  if (!tableReady) return <><header className="mini-order-browse-head"><span>M-BOX · TONIGHT MENU</span><h1>先看今晚，再决定怎么喝</h1><p>菜单与价格可以提前浏览；到店扫码后连接实时库存、购物车和付款。</p><button type="button" className="mini-primary" onClick={onScan}><ScanLine size={17} />到店扫码点单</button><small><ShieldCheck size={13} />浏览菜单不要求加入会员，也不会创建订单</small></header>
+    <section className="mini-section mini-browse-products"><header><div><small>TONIGHT SELECTION</small><strong>今晚菜单</strong></div><span>价格提前可见</span></header><div className="mini-product is-featured"><div><em>体验组合</em><strong>两人微醺现场</strong><span>两杯核心酒水 · 分享小食 · 今晚点歌权益</span></div><b>¥398</b><small>到店后可选</small></div><div className="mini-product"><div><em>分享组合</em><strong>乐队主场分享夜</strong><span>酒水升级 · 分享冷食 · 现场氛围</span></div><b>¥598</b><small>到店后可选</small></div></section>
   </>
   return <><header className="mini-order-head"><span><MapPin size={14} />陆家嘴店 · A08桌 · 已开台</span><h1>今晚想喝点什么？</h1><p>朋友聚会 · 2人 <button type="button">调整</button></p></header>
-    <section className="mini-section"><header><div><small>JUST FOR THIS TABLE</small><strong>三档，差别说清楚</strong></div><span>按库存实时推荐</span></header><div className="mini-product is-featured"><div><em>最适合本桌</em><strong>两人微醺现场</strong><span>两杯核心酒水 · 分享小食 · 今晚点歌权益</span></div><b>¥398</b><button type="button">加入点单</button></div><div className="mini-product"><div><em>更尽兴</em><strong>乐队主场分享夜</strong><span>酒水升级 · 分享冷食 · 隐藏互动</span></div><b>¥598</b><button type="button">加入点单</button></div><p className="mini-upgrade-note">付款前如有真实适配的升级，只展示一次；拒绝后不反复打扰。</p></section>
+    <section className="mini-section mini-order-products"><header><div><small>JUST FOR THIS TABLE</small><strong>三档，差别说清楚</strong></div><span>按库存实时推荐</span></header><div className="mini-product is-featured"><div><em>最适合本桌</em><strong>两人微醺现场</strong><span>两杯核心酒水 · 分享小食 · 今晚点歌权益</span></div><b>¥398</b><button type="button" onClick={() => setCartCount((value) => value + 1)}>加入点单</button></div><div className="mini-product"><div><em>更尽兴</em><strong>乐队主场分享夜</strong><span>酒水升级 · 分享冷食 · 隐藏互动</span></div><b>¥598</b><button type="button" onClick={() => setCartCount((value) => value + 1)}>加入点单</button></div><p className="mini-upgrade-note">付款前如有真实适配的升级，只展示一次；拒绝后不反复打扰。</p></section>
+    {cartCount > 0 && <aside className="mini-cart-dock"><span><strong>{cartCount}件 · ¥398</strong><small>可继续调整购物车</small></span><button type="button" onClick={() => setCheckoutOpen(true)}>确认并付款</button></aside>}
+    {checkoutOpen && <div className="mini-performance-mask" role="presentation" onClick={() => setCheckoutOpen(false)}><section className="mini-checkout-sheet" role="dialog" aria-modal="true" aria-label="确认订单" onClick={(event) => event.stopPropagation()}><i className="mini-sheet-handle"></i><small>CHECKOUT</small><h2>确认本次点单</h2><div><span>两人微醺现场 × {cartCount}</span><strong>¥398</strong></div><p>提交后将进入微信支付确认，不会在打开弹层时自动扣款。</p><button type="button">微信支付</button><button type="button" onClick={() => setCheckoutOpen(false)}>继续选购</button></section></div>}
   </>
 }
 

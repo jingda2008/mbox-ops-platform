@@ -19,6 +19,7 @@ import {
   addCalendarDays,
   arrivalIso,
   createArrivalSlots,
+  firstBookableSchedule,
   formatMoney,
   reservationArrivalHoldState,
   seatPreferenceLabel,
@@ -74,8 +75,10 @@ export function ReservationBooking({
 }: ReservationBookingProps) {
   const api = useMemo(() => suppliedApi ?? new PublicReservationApi(), [suppliedApi])
   const today = shanghaiBusinessDate(now())
-  const initialSlots = createArrivalSlots(today, now(), operatingHours)
-  const [draft, setDraft] = useState<ReservationDraft>(() => createDraft(today, initialSlots[0]?.value ?? ''))
+  const [draft, setDraft] = useState<ReservationDraft>(() => {
+    const schedule = firstBookableSchedule(now(), operatingHours)
+    return createDraft(schedule.date, schedule.time)
+  })
   const [step, setStep] = useState<ReservationStep>('schedule')
   const [phase, setPhase] = useState<'idle' | 'loading' | 'submitting'>('idle')
   const [message, setMessage] = useState<string | null>(null)

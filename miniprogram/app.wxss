@@ -2,7 +2,7 @@ page { min-height: 100%; background: #f7f4ef; color: #29251f; font-family: -appl
 view, text, button, input, textarea { box-sizing: border-box; }
 button { letter-spacing: 0; transition: transform 100ms ease, opacity 100ms ease, filter 100ms ease, box-shadow 140ms ease; }
 .page { min-height: 100vh; padding: 0 28rpx calc(48rpx + env(safe-area-inset-bottom)); }
-.top-band { margin: 0 -28rpx 28rpx; padding: 38rpx 28rpx 34rpx; background: linear-gradient(145deg, #201d19, #343029); color: #fffdf8; }
+.top-band { margin: 0 -28rpx 28rpx; padding: 38rpx 28rpx 34rpx; background: radial-gradient(circle at 90% 4%, rgba(198, 163, 105, .22), transparent 34%), linear-gradient(145deg, #0d1712, #234031 68%, #101512); color: #fffdf8; }
 .brand-row { display: flex; align-items: center; justify-content: space-between; }
 .brand { display: flex; align-items: center; gap: 14rpx; font-size: 31rpx; font-weight: 650; letter-spacing: 1rpx; }
 .brand-mark { display: flex; width: 52rpx; height: 52rpx; align-items: center; justify-content: center; border: 1rpx solid #c69a68; border-radius: 14rpx; color: #fffdf8; }
@@ -19,8 +19,8 @@ button { letter-spacing: 0; transition: transform 100ms ease, opacity 100ms ease
 .error-banner { margin-bottom: 22rpx; padding: 18rpx 20rpx; border-left: 5rpx solid #984f43; border-radius: 12rpx; background: #faeeeb; color: #7c3930; font-size: 24rpx; line-height: 1.6; }
 .success-banner { margin-bottom: 22rpx; padding: 18rpx 20rpx; border-left: 5rpx solid #557461; border-radius: 12rpx; background: #edf4ef; color: #3b6048; font-size: 24rpx; line-height: 1.6; }
 .primary-button, .secondary-button, .danger-button { min-height: 88rpx; border-radius: 999rpx; font-size: 28rpx; font-weight: 600; line-height: 88rpx; }
-.primary-button { background: #2b2823; color: #fffdf8; }
-.secondary-button { border: 1rpx solid #d3c7b8; background: #fffdfa; color: #3b342c; }
+.primary-button { background: linear-gradient(145deg, #315d46, #214635); color: #fffdf8; box-shadow: 0 10rpx 24rpx rgba(35, 78, 58, .16); }
+.secondary-button { border: 1rpx solid #b9c8bf; background: #fffdfa; color: #315d46; }
 .danger-button { background: #8d493e; color: #fffdf8; }
 .primary-button::after, .secondary-button::after, .danger-button::after { border: 0; }
 .primary-button[disabled], .danger-button[disabled] { background: #b9b1a7; color: #f4f1ed; }
@@ -60,3 +60,77 @@ button[disabled] { transform: none; filter: grayscale(.2); }
 .safety-facts { display: flex; margin-top: 16rpx; flex-wrap: wrap; gap: 10rpx; }
 .safety-facts text { padding: 9rpx 14rpx; border: 1rpx solid #d6ccbf; border-radius: 999rpx; color: #6d655c; font-size: 20rpx; }
 .blocked-copy { padding-top: 14rpx; border-top: 1rpx solid #d8c5aa; color: #8b3f34 !important; font-weight: 600; }
+
+/* Customer journey visual system: luminous forest for trust, warm pearl for browsing. */
+page .reservation-head,
+page .points-head,
+page .service-head,
+page .status-head {
+  background:
+    radial-gradient(circle at 88% 4%, rgba(198, 163, 105, .28), transparent 32%),
+    radial-gradient(circle at 18% 96%, rgba(69, 123, 92, .28), transparent 42%),
+    linear-gradient(145deg, #0d1712, #234031 68%, #101512);
+}
+page .balance-card {
+  background:
+    radial-gradient(circle at 86% 8%, rgba(198, 163, 105, .2), transparent 34%),
+    linear-gradient(145deg, #284536, #101713);
+  box-shadow: 0 18rpx 42rpx rgba(25, 70, 49, .15);
+}
+page .progress-card,
+page .ledger-row,
+page .service-grid button,
+page .custom-panel,
+page .status-card,
+page .account-total {
+  background: linear-gradient(145deg, #fff, #f8f4ed);
+  box-shadow: 0 12rpx 30rpx rgba(30, 54, 40, .06);
+}
+page .step-progress > view.is-active { color: #315d46; }
+page .step-progress > view.is-active > text:first-child { border-color: #315d46; background: #315d46; color: #fff; }
+page .step-line.is-active { background: #315d46; }
+page .show-card.is-selected { border-color: #315d46; background: #f1f7f3; }
+page .reservation-status { background: #eaf3ee; color: #315d46; }
+page .progress-marker.is-active { background: #315d46; box-shadow: 0 0 0 7rpx rgba(49, 93, 70, .12); }
+page .ledger-tabs button.is-active { color: #315d46; box-shadow: 0 5rpx 16rpx rgba(35, 78, 58, .1); }
+page .service-mark { background: #eaf3ee; color: #315d46; }
+page .privacy-contact-tools { border-color: #d5ddd7; background: linear-gradient(145deg, #fff, #f5f8f6); box-shadow: 0 12rpx 30rpx rgba(30, 54, 40, .06); }
+page .privacy-contact-toggle {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.1), rgba(255,255,255,0) 44%),
+    linear-gradient(145deg, #315d46, #214635);
+}
+page .privacy-contact-row { background: linear-gradient(145deg, #fff, #f8f4ed); box-shadow: 0 8rpx 22rpx rgba(30, 54, 40, .05); }
+page .privacy-contact-row button,
+page .privacy-phone-replace { border-color: #9fb6a8; color: #315d46; }
+page .terms-head,
+page .terms-content,
+page .terms-status { background: linear-gradient(145deg, #fff, #f8f4ed); box-shadow: 0 12rpx 30rpx rgba(30, 54, 40, .055); }
+page .accept-button {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,0) 44%),
+    linear-gradient(145deg, #315d46, #214635);
+  box-shadow: 0 12rpx 30rpx rgba(35, 78, 58, .2);
+}
+page .accept-button--pending { background: #aeb8b0; box-shadow: none; }
+page .community-head {
+  background:
+    radial-gradient(circle at 86% 2%, rgba(218, 177, 112, .28), transparent 34%),
+    radial-gradient(circle at 18% 96%, rgba(111, 48, 44, .34), transparent 44%),
+    linear-gradient(145deg, #171211, #43221f 68%, #1a1211);
+}
+page .activity-card { box-shadow: 0 20rpx 48rpx rgba(70, 30, 27, .16); }
+page .activity-placeholder,
+page .detail-placeholder {
+  background:
+    radial-gradient(circle at 82% 18%, rgba(218, 177, 112, .22), transparent 32%),
+    linear-gradient(145deg, #5a2f2a, #1a1211);
+}
+page .payment-rule-grid,
+page .registration-panel { background: linear-gradient(145deg, #fff, #f8f4ed); box-shadow: 0 12rpx 30rpx rgba(57, 35, 27, .055); }
+page .payment-line__button,
+page .detail-dock > button.payment-button {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,0) 44%),
+    linear-gradient(145deg, #315d46, #214635);
+}

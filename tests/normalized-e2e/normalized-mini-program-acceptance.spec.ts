@@ -90,7 +90,7 @@ async function openPreview(page: Page, width: number, height: number) {
   await expectNoHorizontalOverflow(page, `${width}px preview`)
 }
 
-test('five-tab customer preview keeps scan gate, three-step reservation, activities and benefits usable at 320/390', async ({ page }) => {
+test('five-tab customer preview keeps pre-scan menu browsing, three-step reservation, activities and benefits usable at 320/390', async ({ page }) => {
   for (const viewport of viewports) {
     const suffix = String(viewport.width)
     await openPreview(page, viewport.width, viewport.height)
@@ -101,15 +101,16 @@ test('five-tab customer preview keeps scan gate, three-step reservation, activit
 
     await openPreview(page, viewport.width, viewport.height)
     await page.getByRole('button', { name: '点单', exact: true }).click()
-    await expect(page.getByRole('heading', { name: '扫描本桌二维码' })).toBeVisible()
-    await expect(page.getByText('正式菜单只在有效桌码和已开台状态下开放。预约、演出和活动仍可直接浏览。')).toBeVisible()
-    await expect(page.getByText('两人微醺现场')).toHaveCount(0)
-    await expectTouchTargets(page, '.mini-preview-shell', `${suffix}px order gate`)
-    await captureExpandedPreview(page, `order-scan-gate-${suffix}`)
+    await expect(page.getByRole('heading', { name: '先看今晚，再决定怎么喝' })).toBeVisible()
+    await expect(page.getByText('菜单与价格可以提前浏览；到店扫码后连接实时库存、购物车和付款。')).toBeVisible()
+    await expect(page.getByText('两人微醺现场')).toBeVisible()
+    await expect(page.getByRole('button', { name: '到店扫码点单' })).toBeVisible()
+    await expectTouchTargets(page, '.mini-preview-shell', `${suffix}px order browsing`)
+    await captureExpandedPreview(page, `order-browsing-${suffix}`)
 
     await openPreview(page, viewport.width, viewport.height)
     await page.getByRole('button', { name: '点单', exact: true }).click()
-    await page.getByRole('button', { name: '模拟扫码确认桌号' }).click()
+    await page.getByRole('button', { name: '到店扫码点单' }).click()
     await expect(page.getByText('陆家嘴店 · A08桌 · 已开台')).toBeVisible()
     await expect(page.getByText('两人微醺现场')).toBeVisible()
     await expectTouchTargets(page, '.mini-preview-shell', `${suffix}px menu`)

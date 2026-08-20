@@ -11,7 +11,7 @@ test('home offers menu browsing and an explicit opt-in membership invitation', a
     read('miniprogram/config/index.js'),
   ])
 
-  assert.match(homeView, /bindtap="openMenu"/)
+  assert.match(homeView, /data-url="\/pages\/order\/index" bindtap="openTab"/)
   assert.match(homeView, /欢迎加入 M-BOX/)
   assert.doesNotMatch(homeView, /了解权益并阅读条款/)
   assert.match(homeView, /我已阅读并同意以下协议/)
@@ -113,7 +113,7 @@ test('customers can browse a read-only menu before scanning, but the browse view
   assert.match(apiSource, /publicRequest\(`\/api\/public\/mini\/menu\/products/)
 })
 
-test('customer-facing primary controls keep a comfortable touch target and checkout uses WeChat green', async () => {
+test('customer-facing primary controls keep a comfortable touch target and checkout uses M-BOX brand green', async () => {
   const [homeStyle, orderStyle] = await Promise.all([
     read('miniprogram/pages/home/index.wxss'),
     read('miniprogram/pages/order/index.wxss'),
@@ -122,7 +122,7 @@ test('customer-facing primary controls keep a comfortable touch target and check
   assert.match(homeStyle, /\.member-invite-refuse,[\s\S]*?\.member-invite-agree\s*\{[\s\S]*?min-height:\s*92rpx/)
   assert.match(homeStyle, /\.member-invite-agree\s*\{[\s\S]*?background:\s*#315d46/)
   assert.match(orderStyle, /\.checkout-button[\s\S]*?min-height:\s*92rpx/)
-  assert.match(orderStyle, /\.checkout-button[\s\S]*?background:\s*#07c160/)
+  assert.match(orderStyle, /\.checkout-button[\s\S]*?linear-gradient\(145deg,\s*#315d46,\s*#214635\)/)
   assert.match(orderStyle, /@media\s*\(max-width:\s*350px\)/)
   assert.match(orderStyle, /\.order-page\s*\{[\s\S]*?overflow-x:\s*hidden/)
   const narrowLayout = orderStyle.slice(orderStyle.indexOf('@media (max-width: 350px)'))

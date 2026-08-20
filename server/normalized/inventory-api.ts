@@ -48,7 +48,7 @@ import type { ScopedTransaction } from "./transaction-runner.js";
 
 export interface InventoryApiOptions {
   commands: Pick<NormalizedCommandExecutor, "execute">;
-  query: Pick<InventoryQueryService, "getDashboard">;
+  query: Pick<InventoryQueryService, "getDashboard" | "getActiveRecipe">;
   resolveContext(
     request: FastifyRequest,
   ):
@@ -85,6 +85,21 @@ export const inventoryApiPlugin: FastifyPluginAsync<
       );
       return reply.send({ data });
     }),
+  );
+
+  app.get<{ Params: { productId: string } }>(
+    "/inventory/products/:productId/recipe",
+    async (request, reply) =>
+      handleRoute(reply, async () => {
+        const context = await options.resolveContext(request);
+        const productId = readUuid(request.params.productId, "productId");
+        const data = await options.query.getActiveRecipe(
+          context.scope,
+          context.employeeId,
+          productId,
+        );
+        return reply.send({ data });
+      }),
   );
 
   app.post("/inventory/items", async (request, reply) =>

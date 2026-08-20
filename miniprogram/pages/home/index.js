@@ -18,14 +18,32 @@ function settled(loader, fallback) {
 function performanceView(view) {
   if (!view) return null
   const schedule = view.current || view.next
-  if (!schedule) return null
-  const current = Boolean(view.current && view.current.id === schedule.id)
+  const current = Boolean(schedule && view.current && view.current.id === schedule.id)
+  const schedules = (view.schedules || []).filter((item) => item.status !== 'cancelled').map((item) => ({
+    id: item.id,
+    performer: item.performerStageName,
+    imageUrl: item.performerProfile && item.performerProfile.imageUrl,
+    bio: item.performerProfile && item.performerProfile.bio || '',
+    tags: item.performerProfile && ([]).concat(item.performerProfile.genres || [], item.performerProfile.styles || []).slice(0, 3).join(' · '),
+    timeText: `${dateTime(item.startsAt)}–${dateTime(item.endsAt).slice(6)}`,
+    stateText: item.id === (view.current && view.current.id) ? '正在演出' : item.id === (view.next && view.next.id) ? '即将开始' : '今晚场次',
+  }))
+  if (!schedule) return {
+    hasSchedule: false,
+    stateText: '今晚安排',
+    summary: '当晚暂无已发布场次',
+    schedules,
+  }
   return {
+    hasSchedule: true,
     performer: schedule.performerStageName,
     imageUrl: schedule.performerProfile && schedule.performerProfile.imageUrl,
+    bio: schedule.performerProfile && schedule.performerProfile.bio || '',
+    tags: schedule.performerProfile && ([]).concat(schedule.performerProfile.genres || [], schedule.performerProfile.styles || []).slice(0, 3).join(' · '),
     timeText: `${dateTime(schedule.startsAt)}–${dateTime(schedule.endsAt).slice(6)}`,
-    stateText: current ? '正在演出' : '下一场',
-    summary: current ? '现场正在进行' : '今晚即将登台',
+    stateText: current ? '正在演出' : '即将开始',
+    summary: current ? 'LIVE NOW' : 'UP NEXT',
+    schedules,
   }
 }
 
@@ -87,8 +105,10 @@ Page({
     benefitCount: 0,
     upcomingActivity: null,
     editorialCards: [],
+    monthlyPerformanceCard: null,
     upcomingReservation: null,
     performance: null,
+    performancePanel: '',
     visitState: 'prearrival',
     canEnter: false,
     hasTableSession: false,
@@ -149,9 +169,12 @@ Page({
       membershipInviteVisible: inviteVisible,
       benefitCount: (benefits || []).reduce((sum, item) => sum + Number(item.quantityAvailable || 0), 0),
       upcomingActivity: activityFeatureView(bootstrap.activities && bootstrap.activities.length ? bootstrap.activities[0] : null),
-      editorialCards: (bootstrap.content || []).filter((item) => item && item.type !== 'activity')
+      editorialCards: (bootstrap.content || []).filter((item) => item && !['activity', 'show'].includes(item.type))
         .sort((left, right) => Number(left.priority || 0) - Number(right.priority || 0))
         .slice(0, 2).map(contentCardView),
+      monthlyPerformanceCard: contentCardView((bootstrap.content || []).find((item) => item && item.type === 'show') || {
+        code: '', type: 'show', title: '当月演出安排', summary: '按日期查看门店已经发布的演出场次', ctaLabel: '查看安排', targetPath: '/pages/reservations/index',
+      }),
       upcomingReservation: reservationView(reservations.reservations),
       performance: performanceView(performances),
     })
@@ -195,7 +218,37 @@ Page({
   retryTable() { this.loadTableState(false) },
   openPage(event) { wx.navigateTo({ url: event.currentTarget.dataset.url }) },
   openTab(event) { wx.switchTab({ url: event.currentTarget.dataset.url }) },
-  openMenu() { wx.switchTab({ url: '/pages/order/index' }) },
+
+  openTonightSchedule() {
+    if (!this.data.performance || !this.data.performance.schedules.length) {
+      wx.showToast({ title: '今晚暂无已发布演出', icon: 'none' })
+      return
+    }
+    this.setData({ performancePanel: 'tonight' })
+  },
+
+  openPerformerProfile() {
+    if (!this.data.performance || !this.data.performance.hasSchedule) {
+      wx.showToast({ title: '歌手与乐队资料待发布', icon: 'none' })
+      return
+    }
+    this.setData({ performancePanel: 'performer' })
+  },
+
+  closePerformancePanel() { this.setData({ performancePanel: '' }) },
+
+  openMonthlyPerformance() {
+    const card = this.data.monthlyPerformanceCard
+    if (!card || !card.code) {
+      wx.switchTab({ url: '/pages/reservations/index' })
+      return
+    }
+    if (!card.targetPath || card.targetPath === '/pages/home/index') {
+      wx.showModal({ title: card.title, content: card.summary, showCancel: false, confirmText: '知道了' })
+      return
+    }
+    wx.switchTab({ url: card.targetPath })
+  },
 
   openFeaturedActivity() {
     const activity = this.data.upcomingActivity

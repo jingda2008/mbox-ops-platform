@@ -65,6 +65,22 @@ export interface InventoryDashboard {
   visibility: { costs: boolean; supplierDetails: boolean; allTables: boolean };
 }
 
+export interface ActiveRecipeView {
+  id: string;
+  productId: string;
+  version: number;
+  yieldQuantity: number;
+  instructionsSnapshot: JsonObject;
+  components: Array<{
+    inventoryItemId: string;
+    sku: string;
+    name: string;
+    baseUnit: string;
+    quantity: string;
+    expectedWasteQuantity: string;
+  }>;
+}
+
 interface ItemRow extends Record<string, unknown> {
   id: string;
   sku: string;
@@ -297,6 +313,79 @@ export class InventoryQueryService {
             supplierDetails: canViewCosts,
             allTables: canManageAllBottles,
           },
+        };
+      },
+      { readOnly: true },
+    );
+  }
+
+  getActiveRecipe(
+    scope: Readonly<StoreScope>,
+    employeeId: string,
+    productId: string,
+  ): Promise<ActiveRecipeView | null> {
+    return this.transactions.run(
+      scope,
+      async (transaction) => {
+        await new StaffAccessRepository(transaction).assertPermission(
+          employeeId,
+          "inventory.manage",
+        );
+        const recipe = await transaction.query<{
+          id: string;
+          product_id: string;
+          version: number;
+          yield_quantity: number;
+          instructions_snapshot: JsonObject;
+        }>(
+          `
+          SELECT id, product_id, version, yield_quantity, instructions_snapshot
+          FROM mbox.recipes
+          WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+            AND product_id = $3::uuid AND status = 'active'
+          ORDER BY version DESC
+          LIMIT 1
+        `,
+          [scope.tenantId, scope.storeId, productId],
+        );
+        const current = recipe.rows[0];
+        if (!current) return null;
+        const components = await transaction.query<{
+          inventory_item_id: string;
+          sku: string;
+          name: string;
+          base_unit: string;
+          quantity: string;
+          expected_waste_quantity: string;
+        }>(
+          `
+          SELECT item.id AS inventory_item_id, item.sku, item.name, item.base_unit,
+            component.quantity::text, component.expected_waste_quantity::text
+          FROM mbox.recipe_items AS component
+          JOIN mbox.inventory_items AS item
+            ON item.tenant_id = component.tenant_id
+           AND item.store_id = component.store_id
+           AND item.id = component.inventory_item_id
+          WHERE component.tenant_id = $1::uuid AND component.store_id = $2::uuid
+            AND component.recipe_id = $3::uuid
+          ORDER BY item.category_code, item.name, item.id
+        `,
+          [scope.tenantId, scope.storeId, current.id],
+        );
+        return {
+          id: current.id,
+          productId: current.product_id,
+          version: current.version,
+          yieldQuantity: current.yield_quantity,
+          instructionsSnapshot: current.instructions_snapshot,
+          components: components.rows.map((component) => ({
+            inventoryItemId: component.inventory_item_id,
+            sku: component.sku,
+            name: component.name,
+            baseUnit: component.base_unit,
+            quantity: component.quantity,
+            expectedWasteQuantity: component.expected_waste_quantity,
+          })),
         };
       },
       { readOnly: true },

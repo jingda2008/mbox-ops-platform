@@ -183,6 +183,30 @@ release_state_init "${state_file}" "${release_sha}" "${expected_digest}"
 release_state_transition "${state_file}" frozen artifact_verified
 emit_release_audit deployment_started info candidate-preparation
 
+# Public traffic may traverse a separate edge address from the deployment
+# host. Treat a short edge handshake timeout as transient, but keep a bounded
+# fail-closed window before any database write or writer drain begins.
+fetch_public_ready_response() {
+  local expected_status=$1 output_file=$2 attempts=${3:-12}
+  local attempt status temporary
+  [[ "${expected_status}" =~ ^[0-9]{3}$ ]]
+  [[ "${attempts}" =~ ^[0-9]+$ ]]
+  [ "${attempts}" -ge 1 ] && [ "${attempts}" -le 30 ]
+  temporary=$(mktemp "${release_dir}/.public-ready.XXXXXX")
+  for attempt in $(seq 1 "${attempts}"); do
+    status=$(curl -sS --connect-timeout 3 --max-time 8 \
+      -H 'Accept: application/json' -H 'User-Agent: mbox-release-preflight/1.0' \
+      -o "${temporary}" -w '%{http_code}' "${public_url}/api/ready" 2>/dev/null || true)
+    if [ "${status}" = "${expected_status}" ]; then
+      mv "${temporary}" "${output_file}"
+      return 0
+    fi
+    sleep 2
+  done
+  rm -f "${temporary}"
+  return 1
+}
+
 write_release_failure() {
   local exit_code=$1 recovery=$2
   local stage active_healthy=false database_write_started=false cutover_started=false
@@ -276,7 +300,10 @@ release_state_transition "${state_file}" config_preflight_passed external_prefli
 previous_release_dir=$(readlink -f "${current_link}" 2>/dev/null || true)
 test -n "${previous_release_dir}"
 test -f "${previous_release_dir}/release-manifest.json"
-previous_ready=$(curl -fsS --max-time 5 -H 'Accept: application/json' "${public_url}/api/ready")
+previous_ready_file=$(mktemp "${release_dir}/.previous-ready.XXXXXX")
+fetch_public_ready_response 200 "${previous_ready_file}" 12
+previous_ready=$(cat "${previous_ready_file}")
+rm -f "${previous_ready_file}"
 previous_release_sha=$(jq -er '.releaseSha' "${previous_release_dir}/release-manifest.json")
 previous_release_digest=$(jq -er '.imageDigest' "${previous_release_dir}/release-manifest.json")
 previous_schema_version=$(jq -er '.migration.count' "${previous_release_dir}/release-manifest.json")
@@ -589,7 +616,7 @@ if [ "${contract_migration}" = 1 ]; then
   docker exec "${caddy_container}" caddy reload \
     --config /tmp/Caddyfile.contract-maintenance --adapter caddyfile >/dev/null
   maintenance_response="${release_dir}/maintenance-response.json"
-  test "$(curl -sS --max-time 5 -o "${maintenance_response}" -w '%{http_code}' "${public_url}/api/ready")" = 503
+  fetch_public_ready_response 503 "${maintenance_response}" 12
   jq -e '.status=="maintenance" and .reason=="table_location_contract_cutover"' \
     "${maintenance_response}" >/dev/null
   docker update --restart=no "${active_container}" >/dev/null

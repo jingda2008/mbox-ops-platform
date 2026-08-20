@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-rc.95 - 2026-08-21
+
+- Makes the remote public readiness checks before migration and during the
+  maintenance cutover tolerate bounded edge-network handshake timeouts while
+  remaining fail-closed before database writes.
+- Supersedes `1.0.0-rc.94`, whose immutable package passed CI but was not
+  deployed because the release host twice timed out on its first public
+  readiness request; both attempts stopped before database writes or cutover.
+
 ## 1.0.0-rc.94 - 2026-08-21
 
 - Included the customer preview's M-BOX badge in the production Docker build

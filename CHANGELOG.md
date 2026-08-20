@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.0-rc.99 - 2026-08-21
+
+- Restores the production inventory workflow permissions that the versioned
+  store configuration had omitted: managers, deputy managers and bartenders
+  may count tracked beverage stock and record waste; owners and operations
+  leads may approve a count performed by another employee.
+- Keeps kitchen, cashier and customer roles outside those inventory mutation
+  permissions. Database separation of duties continues to reject self-approval.
+- Supersedes `1.0.0-rc.98`, which deployed successfully but exposed the missing
+  role assignments during a production-safe simulated receiving flow.
+
 ## 1.0.0-rc.98 - 2026-08-21
 
 - Keeps inherited production worker-adapter code readable by the non-root

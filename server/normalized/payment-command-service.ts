@@ -10,6 +10,7 @@ import type { ChannelPaymentStatus } from '../../src/shared/payment-contracts.js
 import {
   PaymentRepository,
   type Payment,
+  type AuthoritativeSettlementChannel,
   type PaymentMethod,
   type PaymentProvider,
 } from './payment-repository.js'
@@ -32,6 +33,13 @@ import {
   type PaymentFulfillmentActivation,
   type PaymentFulfillmentRelease,
 } from './payment-fulfillment-repository.js'
+import { RecommendationFinancialAttributionRepository } from './recommendation-financial-attribution-repository.js'
+import { LoyaltyAccrualRepository } from './loyalty-accrual-repository.js'
+import { ExperiencePlanActivationRepository } from './experience-plan-activation-repository.js'
+import {
+  RejectingProviderObservationAuthority,
+  type ProviderObservationAuthorityPort,
+} from './provider-verification-observation.js'
 
 interface CommandMetadata {
   scope: Readonly<StoreScope>
@@ -49,7 +57,7 @@ export interface InitiatePaymentCommand extends CommandMetadata {
   providerSnapshot?: JsonObject
   principal:
     | { type: 'employee'; employeeId: string }
-    | { type: 'guest'; tableSessionId: string; customerId: string }
+    | { type: 'guest'; tableSessionId: string; customerId: string; guestSessionId: string }
 }
 
 export interface RecordManualPaymentCommand extends CommandMetadata {
@@ -62,11 +70,13 @@ export interface RecordManualPaymentCommand extends CommandMetadata {
 }
 
 export interface PaymentCallbackCommand extends CommandMetadata {
+  verifiedObservationId: string
   paymentPublicId: string
-  provider: Extract<PaymentProvider, 'wechat' | 'postar' | 'simulation'>
+  provider: Extract<PaymentProvider, 'wechat' | 'postar'>
   providerTransactionId: string
   reportedAmountMinor: number
   reportedCurrency: string
+  settlementChannel?: AuthoritativeSettlementChannel
   providerSnapshot?: JsonObject
   occurredAt: string
 }
@@ -80,6 +90,13 @@ export interface RequestRefundCommand extends CommandMetadata {
   publicId: string
   reason: string
   allocations: readonly RefundAllocation[]
+  requestEvidence?: JsonObject
+}
+
+export interface RequestActivityRefundCommand extends CommandMetadata {
+  paymentId: string
+  publicId: string
+  reason: string
   requestEvidence?: JsonObject
 }
 
@@ -98,6 +115,7 @@ export interface BeginRefundExecutionCommand extends CommandMetadata {
 }
 
 export interface RecordProviderRefundResultCommand extends CommandMetadata {
+  verifiedObservationId: string
   refundPublicId: string
   provider: Extract<PaymentProvider, 'wechat' | 'postar'>
   providerRefundId: string
@@ -121,6 +139,7 @@ export class PaymentCommandService {
   constructor(
     private readonly commands: Pick<NormalizedCommandExecutor, 'execute'>,
     private readonly authorization: PaymentCapabilityAuthorizationPort,
+    private readonly providerObservations: ProviderObservationAuthorityPort = new RejectingProviderObservationAuthority(),
   ) {}
 
   initiate(input: Readonly<InitiatePaymentCommand>): Promise<CommandExecution<Payment>> {
@@ -150,6 +169,7 @@ export class PaymentCommandService {
         initialStatus: 'pending',
         principal: input.principal,
       })
+      if (payment.orderId === null) throw new Error('Order payment lost its order target')
       await payments.syncOrderPaymentStatus(payment.orderId)
       return paymentOutcome(input, payment, 'payment.initiated', 1)
     })
@@ -194,10 +214,24 @@ export class PaymentCommandService {
         occurredAt: input.occurredAt,
         evidenceSnapshot: evidence,
       })
-      await payments.syncOrderPaymentStatus(payment.orderId)
+      if (payment.orderId === null) throw new Error('Manual payment lost its order target')
+      const orderPaymentStatus = await payments.syncOrderPaymentStatus(payment.orderId)
+      if (orderPaymentStatus === 'paid') {
+        await new RecommendationFinancialAttributionRepository(transaction).recordPaidForOrder({
+          paymentId: payment.id,
+          orderId: payment.orderId,
+          actorRef: `payment:${payment.id}`,
+        })
+        await new LoyaltyAccrualRepository(transaction).recordPaidOrder({
+          paymentId: payment.id,
+          orderId: payment.orderId,
+          occurredAt: input.occurredAt,
+        })
+      }
       const activation = await fulfillment.activatePaidOrder(payment.orderId, {
         createdByEmployeeId: employeeId,
         metadata: { paymentId: payment.id, paymentProvider: payment.provider },
+        paymentId: payment.id,
       })
       return paymentOutcome(input, payment, 'payment.manual_recorded', 1, undefined, activation)
     })
@@ -205,8 +239,22 @@ export class PaymentCommandService {
 
   recordSucceededCallback(input: Readonly<PaymentCallbackCommand>): Promise<CommandExecution<Payment>> {
     const providerSnapshot = sanitizeProviderSnapshot(input.providerSnapshot)
-    requireVerifiedIntegration(input.actor, providerSnapshot, 'Payment callback')
+    const integrationRef = requireIntegrationRef(input.actor, 'Payment callback')
     return this.commands.execute(command(input, 'payment.callback', paymentCodec), async (transaction) => {
+      await this.providerObservations.consume({
+        transaction,
+        observationId: input.verifiedObservationId,
+        operation: 'payment.callback',
+        idempotencyKey: input.idempotencyKey,
+        integrationRef,
+        provider: input.provider,
+        subjectPublicId: input.paymentPublicId,
+        providerTransactionId: input.providerTransactionId,
+        reportedAmountMinor: input.reportedAmountMinor,
+        reportedCurrency: input.reportedCurrency,
+        observedStatus: 'payment_succeeded',
+        settlementChannel: input.settlementChannel,
+      })
       const payments = new PaymentRepository(transaction)
       const application = await payments.applySucceededCallback({
         paymentPublicId: input.paymentPublicId,
@@ -214,6 +262,7 @@ export class PaymentCommandService {
         providerTransactionId: input.providerTransactionId,
         reportedAmountMinor: input.reportedAmountMinor,
         reportedCurrency: input.reportedCurrency,
+        settlementChannel: input.settlementChannel,
         providerSnapshot,
         succeededAt: input.occurredAt,
       })
@@ -231,10 +280,28 @@ export class PaymentCommandService {
         occurredAt: input.occurredAt,
         evidenceSnapshot: providerSnapshot,
       })
-      await payments.syncOrderPaymentStatus(payment.orderId)
-      const activation = await new PaymentFulfillmentRepository(transaction).activatePaidOrder(payment.orderId, {
-        metadata: { paymentId: payment.id, paymentProvider: payment.provider },
-      })
+      let activation: PaymentFulfillmentActivation | undefined
+      if (payment.orderId === null) {
+        await payments.syncActivityRegistrationPaymentStatus(payment)
+      } else {
+        const orderPaymentStatus = await payments.syncOrderPaymentStatus(payment.orderId)
+        if (orderPaymentStatus === 'paid') {
+          await new RecommendationFinancialAttributionRepository(transaction).recordPaidForOrder({
+            paymentId: payment.id,
+            orderId: payment.orderId,
+            actorRef: `payment:${payment.id}`,
+          })
+          await new LoyaltyAccrualRepository(transaction).recordPaidOrder({
+            paymentId: payment.id,
+            orderId: payment.orderId,
+            occurredAt: input.occurredAt,
+          })
+        }
+        activation = await new PaymentFulfillmentRepository(transaction).activatePaidOrder(payment.orderId, {
+          metadata: { paymentId: payment.id, paymentProvider: payment.provider },
+          paymentId: payment.id,
+        })
+      }
       return paymentOutcome(
         input,
         payment,
@@ -254,8 +321,28 @@ export class PaymentCommandService {
     input: Readonly<PaymentProviderQueryResultCommand>,
   ): Promise<CommandExecution<Payment>> {
     const providerSnapshot = sanitizeProviderSnapshot(input.providerSnapshot)
-    requireVerifiedProviderQuery(input.actor, providerSnapshot)
+    const integrationRef = requireIntegrationRef(input.actor, 'Payment provider query')
     return this.commands.execute(command(input, 'payment.provider-query', paymentCodec), async (transaction) => {
+      await this.providerObservations.consume({
+        transaction,
+        observationId: input.verifiedObservationId,
+        operation: 'payment.provider-query',
+        idempotencyKey: input.idempotencyKey,
+        integrationRef,
+        provider: input.provider,
+        subjectPublicId: input.paymentPublicId,
+        providerTransactionId: input.providerTransactionId,
+        reportedAmountMinor: input.reportedAmountMinor,
+        reportedCurrency: input.reportedCurrency,
+        observedStatus: input.status === 'succeeded'
+          ? 'payment_succeeded'
+          : input.status === 'failed'
+            ? 'payment_failed'
+            : input.status === 'closed'
+              ? 'payment_closed'
+              : 'payment_pending',
+        settlementChannel: input.settlementChannel,
+      })
       const payments = new PaymentRepository(transaction)
       const application = await payments.applyProviderQueryResult({
         paymentPublicId: input.paymentPublicId,
@@ -263,6 +350,7 @@ export class PaymentCommandService {
         providerTransactionId: input.providerTransactionId,
         reportedAmountMinor: input.reportedAmountMinor,
         reportedCurrency: input.reportedCurrency,
+        settlementChannel: input.settlementChannel,
         providerSnapshot,
         succeededAt: input.occurredAt,
         status: input.status,
@@ -282,18 +370,36 @@ export class PaymentCommandService {
           evidenceSnapshot: providerSnapshot,
         })
       }
-      await payments.syncOrderPaymentStatus(payment.orderId)
-      const fulfillment = new PaymentFulfillmentRepository(transaction)
-      const fulfillmentResult = input.status === 'succeeded'
-        ? await fulfillment.activatePaidOrder(payment.orderId, {
-            metadata: { paymentId: payment.id, paymentProvider: payment.provider },
+      let fulfillmentResult: PaymentFulfillmentActivation | PaymentFulfillmentRelease | undefined
+      if (payment.orderId === null) {
+        await payments.syncActivityRegistrationPaymentStatus(payment)
+      } else {
+        const orderPaymentStatus = await payments.syncOrderPaymentStatus(payment.orderId)
+        if (input.status === 'succeeded' && orderPaymentStatus === 'paid') {
+          await new RecommendationFinancialAttributionRepository(transaction).recordPaidForOrder({
+            paymentId: payment.id,
+            orderId: payment.orderId,
+            actorRef: `payment:${payment.id}`,
           })
-        : input.status === 'failed' || input.status === 'closed'
-          ? await fulfillment.releaseAfterDefinitiveFailure(
-              payment.orderId,
-              `verified provider result: ${input.status}`,
-            )
-          : undefined
+          await new LoyaltyAccrualRepository(transaction).recordPaidOrder({
+            paymentId: payment.id,
+            orderId: payment.orderId,
+            occurredAt: input.occurredAt,
+          })
+        }
+        const fulfillment = new PaymentFulfillmentRepository(transaction)
+        fulfillmentResult = input.status === 'succeeded'
+          ? await fulfillment.activatePaidOrder(payment.orderId, {
+              metadata: { paymentId: payment.id, paymentProvider: payment.provider },
+              paymentId: payment.id,
+            })
+          : input.status === 'failed' || input.status === 'closed'
+            ? await fulfillment.releaseAfterDefinitiveFailure(
+                payment.orderId,
+                `verified provider result: ${input.status}`,
+              )
+            : undefined
+      }
       const action = input.status === 'succeeded'
         ? 'payment.succeeded'
         : input.status === 'failed' || input.status === 'closed'
@@ -329,7 +435,37 @@ export class PaymentCommandService {
         allocations: input.allocations,
         requestEvidence,
       })
+      await this.authorization.assertRefundRequestLimit({
+        transaction,
+        employeeId,
+        refundId: refund.id,
+      })
       return refundOutcome(input, refund, 'refund.requested', 1)
+    })
+  }
+
+  requestActivityRefund(input: Readonly<RequestActivityRefundCommand>): Promise<CommandExecution<Refund>> {
+    const employeeId = requireEmployee(input.actor, 'Activity refund request')
+    const requestEvidence = sanitizeClientRefundEvidence(input.requestEvidence)
+    return this.commands.execute(command(input, 'refund.activity-request', refundCodec), async (transaction) => {
+      await this.authorization.assertEmployeeCapability({
+        transaction,
+        employeeId,
+        capability: 'refund.request',
+      })
+      const refund = await new RefundRepository(transaction).requestActivity({
+        paymentId: input.paymentId,
+        publicId: input.publicId,
+        reason: input.reason,
+        requestedByEmployeeId: employeeId,
+        requestEvidence,
+      })
+      await this.authorization.assertRefundRequestLimit({
+        transaction,
+        employeeId,
+        refundId: refund.id,
+      })
+      return refundOutcome(input, refund, 'refund.activity_requested', 1)
     })
   }
 
@@ -378,8 +514,22 @@ export class PaymentCommandService {
     input: Readonly<RecordProviderRefundResultCommand>,
   ): Promise<CommandExecution<Refund>> {
     const providerSnapshot = sanitizeProviderSnapshot(input.providerSnapshot)
-    requireVerifiedIntegration(input.actor, providerSnapshot, 'Refund result')
+    const integrationRef = requireIntegrationRef(input.actor, 'Refund provider result')
     return this.commands.execute(command(input, 'refund.result', refundCodec), async (transaction) => {
+      await this.providerObservations.consume({
+        transaction,
+        observationId: input.verifiedObservationId,
+        operation: 'refund.result',
+        idempotencyKey: input.idempotencyKey,
+        integrationRef,
+        provider: input.provider,
+        subjectPublicId: input.refundPublicId,
+        providerTransactionId: input.providerRefundId,
+        originalProviderTransactionId: input.originalProviderTransactionId,
+        reportedAmountMinor: input.reportedAmountMinor,
+        reportedCurrency: input.reportedCurrency,
+        observedStatus: input.succeeded ? 'refund_succeeded' : 'refund_failed',
+      })
       const refunds = new RefundRepository(transaction)
       const application = await refunds.completeProviderExecution({
         refundPublicId: input.refundPublicId,
@@ -407,7 +557,25 @@ export class PaymentCommandService {
           evidenceSnapshot: providerSnapshot,
         })
         await refunds.syncPaymentRefundStatus(refund.paymentId)
-        await new PaymentRepository(transaction).syncOrderPaymentStatus(refund.orderId)
+        const payments = new PaymentRepository(transaction)
+        if (refund.orderId === null) await payments.syncActivityRegistrationRefundStatus(refund.paymentId)
+        else {
+          await new RecommendationFinancialAttributionRepository(transaction).recordRefundedForOrder({
+            refundId: refund.id,
+            paymentId: refund.paymentId,
+            orderId: refund.orderId,
+            actorRef: `refund:${refund.id}`,
+          })
+          await new LoyaltyAccrualRepository(transaction).reverseSucceededRefund({
+            refundId: refund.id,
+            paymentId: refund.paymentId,
+            orderId: refund.orderId,
+            occurredAt: input.occurredAt,
+          })
+          await payments.syncOrderPaymentStatus(refund.orderId)
+          await new ExperiencePlanActivationRepository(transaction)
+            .cancelAfterFullRefund(refund.orderId,refund.paymentId)
+        }
       }
       return refundOutcome(
         input,
@@ -450,7 +618,25 @@ export class PaymentCommandService {
           evidenceSnapshot: providerSnapshot,
         })
         await refunds.syncPaymentRefundStatus(refund.paymentId)
-        await new PaymentRepository(transaction).syncOrderPaymentStatus(refund.orderId)
+        const payments = new PaymentRepository(transaction)
+        if (refund.orderId === null) await payments.syncActivityRegistrationRefundStatus(refund.paymentId)
+        else {
+          await new RecommendationFinancialAttributionRepository(transaction).recordRefundedForOrder({
+            refundId: refund.id,
+            paymentId: refund.paymentId,
+            orderId: refund.orderId,
+            actorRef: `refund:${refund.id}`,
+          })
+          await new LoyaltyAccrualRepository(transaction).reverseSucceededRefund({
+            refundId: refund.id,
+            paymentId: refund.paymentId,
+            orderId: refund.orderId,
+            occurredAt: input.occurredAt,
+          })
+          await payments.syncOrderPaymentStatus(refund.orderId)
+          await new ExperiencePlanActivationRepository(transaction)
+            .cancelAfterFullRefund(refund.orderId,refund.paymentId)
+        }
       }
       return refundOutcome(
         input,
@@ -576,12 +762,12 @@ function refundOutcome(
 
 const paymentCodec: JsonCodec<Payment> = {
   encode: paymentToJson,
-  decode: (value) => decodeObject<Payment>(value, ['id', 'orderId', 'publicId', 'provider', 'status']),
+  decode: (value) => decodeObject<Payment>(value, ['id', 'payableKind', 'publicId', 'provider', 'status']),
 }
 
 const refundCodec: JsonCodec<Refund> = {
   encode: refundToJson,
-  decode: (value) => decodeObject<Refund>(value, ['id', 'paymentId', 'orderId', 'publicId', 'status']),
+  decode: (value) => decodeObject<Refund>(value, ['id', 'paymentId', 'publicId', 'status']),
 }
 
 function paymentToJson(payment: Payment): JsonObject {
@@ -612,32 +798,15 @@ function requireEmployee(actor: AuditActor, action: string): string {
   return actor.employeeId
 }
 
-function requireVerifiedIntegration(
-  actor: AuditActor,
-  providerSnapshot: JsonObject,
-  action: string,
-): void {
+function requireIntegrationRef(actor: AuditActor, action: string): string {
   if (
     actor.type !== 'integration'
     || actor.ref === undefined
     || actor.ref.trim().length === 0
-    || providerSnapshot.signatureVerified !== true
   ) {
-    throw new TypeError(`${action} requires an identified integration with verified signature`)
+    throw new TypeError(`${action} requires an identified integration and verified observation`)
   }
-}
-
-function requireVerifiedProviderQuery(actor: AuditActor, providerSnapshot: JsonObject): void {
-  const verifiedBySignature = providerSnapshot.signatureVerified === true
-  const verifiedByActiveQuery = providerSnapshot.verificationAlgorithm === 'rsa-request+tls+response-binding'
-  if (
-    actor.type !== 'integration'
-    || actor.ref === undefined
-    || actor.ref.trim().length === 0
-    || (!verifiedBySignature && !verifiedByActiveQuery)
-  ) {
-    throw new TypeError('Payment provider query requires an identified integration with verified response binding')
-  }
+  return actor.ref
 }
 
 function noOpOutcome<Result>(result: Result): CommandOutcome<Result> {

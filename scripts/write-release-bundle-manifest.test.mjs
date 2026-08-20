@@ -21,6 +21,8 @@ test('release manifest binds the exact store and catalog configuration digests',
     'prune-oss-images.sh',
     'release-state.sh',
     'normalize-runtime-env.sh',
+    'backup-postgres.sh',
+    'restore-postgres.sh',
   ]) writeFileSync(join(scripts, name), `#!/bin/sh\nprintf '${name}\\n'\n`)
   writeFileSync(archive, 'image')
   writeFileSync(migration, JSON.stringify({ count: 40, digest: 'a'.repeat(64) }))
@@ -54,7 +56,7 @@ test('release manifest binds the exact store and catalog configuration digests',
   assert.equal(manifest.configuration.catalog.file, 'catalog.json')
   assert.match(manifest.configuration.catalog.sha256, /^[0-9a-f]{64}$/)
   assert.notEqual(manifest.configuration.store.sha256, manifest.configuration.catalog.sha256)
-  assert.equal(Object.keys(manifest.deploymentScripts).length, 10)
+  assert.equal(Object.keys(manifest.deploymentScripts).length, 12)
   assert.equal(manifest.deploymentScripts.activate_release.file, 'activate-release.sh')
   assert.match(manifest.deploymentScripts.activate_release.sha256, /^[0-9a-f]{64}$/)
 })

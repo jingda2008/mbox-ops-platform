@@ -200,7 +200,8 @@ interface SaleSourceRow extends Record<string, unknown> {
   product_code: string
   product_name: string
   category_code: string
-  cost_snapshot: JsonObject
+  total_cost_minor_at_submission: string | number | null
+  cost_source: 'catalog_product' | 'legacy_snapshot' | 'included_in_parent' | 'unavailable'
 }
 
 interface AttributionRow extends Record<string, unknown> {
@@ -361,13 +362,14 @@ export class CommercialOpsRepository {
     const itemSales = safeMinor(source.total_amount_minor, 'order item total')
     const attributedSales = prorate(itemSales, rule.sales_credit_bps, 10_000)
     if (attributedSales <= 0) throw new SalesAttributionNotAllowedError('Attributed sales amount rounds to zero')
-    const itemCost = rule.cost_source === 'none' ? null : readCostSnapshot(source.cost_snapshot, source.quantity)
+    const itemCost = rule.cost_source === 'none' ? null : requireFrozenOrderItemCost(source)
     const attributedCost = itemCost === null ? null : prorate(itemCost, rule.sales_credit_bps, 10_000)
     const quantityDelta = decimalProduct(source.quantity, rule.sales_credit_bps, 10_000)
     const snapshot: JsonObject = {
       attributionMode: rule.attribution_mode,
       salesCreditBps: rule.sales_credit_bps,
       costSource: rule.cost_source,
+      orderItemCostSource: source.cost_source,
       ruleId: rule.id,
     }
     const inserted = await this.transaction.query<AttributionRow>(`
@@ -599,7 +601,8 @@ export class CommercialOpsRepository {
         session.business_date::text, order_row.payment_status,
         order_row.status AS order_status, item.product_id, item.quantity,
         item.total_amount_minor::text, item.currency, product.code AS product_code,
-        product.name AS product_name, product.category_code, item.cost_snapshot
+        product.name AS product_name, product.category_code,
+        item.total_cost_minor_at_submission::text, item.cost_source
       FROM mbox.order_items AS item
       JOIN mbox.orders AS order_row
         ON order_row.tenant_id = item.tenant_id AND order_row.store_id = item.store_id
@@ -611,6 +614,7 @@ export class CommercialOpsRepository {
         ON product.tenant_id = item.tenant_id AND product.store_id = item.store_id
        AND product.id = item.product_id
       WHERE item.tenant_id = $1::uuid AND item.store_id = $2::uuid AND item.id = $3::uuid
+        AND item.parent_order_item_id IS NULL
       FOR UPDATE OF item, order_row
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderItemId])
     const row = result.rows[0]
@@ -811,16 +815,14 @@ function validateVoucher(input: Readonly<RedeemGroupVoucherInput>): void {
   nonBlank(input.redeemedByEmployeeId, 'redeemedByEmployeeId')
 }
 
-function readCostSnapshot(snapshot: JsonObject, quantity: number): number | null {
-  const total = readInteger(snapshot.totalCostMinor)
-  if (total !== null) return total
-  const unit = readInteger(snapshot.unitCostMinor)
-  return unit === null ? null : unit * quantity
-}
-
-function readInteger(value: unknown): number | null {
-  const parsed = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value
-  return Number.isSafeInteger(parsed) && Number(parsed) >= 0 ? Number(parsed) : null
+function requireFrozenOrderItemCost(source: SaleSourceRow): number {
+  if (source.cost_source !== 'catalog_product' && source.cost_source !== 'legacy_snapshot') {
+    throw new SalesAttributionNotAllowedError('Order item has no authoritative frozen contribution cost')
+  }
+  if (source.total_cost_minor_at_submission === null) {
+    throw new SalesAttributionNotAllowedError('Order item frozen contribution cost is unavailable')
+  }
+  return safeMinor(source.total_cost_minor_at_submission, 'order item frozen cost')
 }
 
 function safeMinor(value: string | number, label: string): number {

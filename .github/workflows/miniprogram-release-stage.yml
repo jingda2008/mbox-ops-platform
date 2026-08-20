@@ -1,0 +1,90 @@
+name: mini-program release stage verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Evidence claim to verify; upload and release require independent signed attestation
+        required: true
+        type: choice
+        options: [candidate, upload, release]
+      release_tag:
+        description: Existing draft GitHub release that stores the controlled evidence artifact
+        required: true
+        type: string
+      source_commit_sha:
+        description: Exact 40-character source commit bound to the candidate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: miniprogram-${{ inputs.stage }}-${{ inputs.source_commit_sha }}
+  cancel-in-progress: false
+
+jobs:
+  verify-controlled-artifact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: miniprogram-${{ inputs.stage }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_commit_sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: Download the stage-specific controlled evidence artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_STAGE: ${{ inputs.stage }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_COMMIT_SHA: ${{ inputs.source_commit_sha }}
+        run: |
+          printf '%s' "${SOURCE_COMMIT_SHA}" | grep -Eq '^[0-9a-f]{40}$'
+          test "$(git rev-parse HEAD)" = "${SOURCE_COMMIT_SHA}"
+          archive="miniprogram-${RELEASE_STAGE}-evidence-${SOURCE_COMMIT_SHA}.tar.gz"
+          mkdir -p stage-artifact
+          gh release download "${RELEASE_TAG}" \
+            --pattern "${archive}" \
+            --pattern "${archive}.sha256" \
+            --dir stage-artifact
+          test "$(wc -l < "stage-artifact/${archive}.sha256" | tr -d ' ')" = 1
+          expected_digest=$(cut -d' ' -f1 "stage-artifact/${archive}.sha256")
+          printf '%s' "${expected_digest}" | grep -Eq '^[0-9a-f]{64}$'
+          actual_digest=$(sha256sum "stage-artifact/${archive}" | cut -d' ' -f1)
+          test "${actual_digest}" = "${expected_digest}"
+          if tar -tzf "stage-artifact/${archive}" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
+            echo 'unsafe mini-program evidence archive path' >&2
+            exit 1
+          fi
+          if tar -tvzf "stage-artifact/${archive}" | grep -Eq '^[lh]'; then
+            echo 'mini-program evidence archive links are forbidden' >&2
+            exit 1
+          fi
+          mkdir -p controlled-stage-evidence
+          tar -xzf "stage-artifact/${archive}" \
+            --no-same-owner --no-same-permissions \
+            -C controlled-stage-evidence
+          test -f controlled-stage-evidence/evidence.json
+      - name: Verify the selected claim without promoting it to another stage
+        env:
+          APP_COMMIT_SHA: ${{ inputs.source_commit_sha }}
+          MBOX_MINIPROGRAM_RELEASE_STAGE: ${{ inputs.stage }}
+          MBOX_MINIPROGRAM_RELEASE_EVIDENCE: controlled-stage-evidence/evidence.json
+          MBOX_MINIPROGRAM_RELEASE_REPORT: controlled-stage-evidence/stage-verification.json
+          MBOX_MINIPROGRAM_RELEASE_TRUSTED_KEY_ID: ${{ vars.MBOX_MINIPROGRAM_RELEASE_TRUSTED_KEY_ID }}
+          MBOX_MINIPROGRAM_RELEASE_TRUSTED_PUBLIC_KEY_BASE64: ${{ vars.MBOX_MINIPROGRAM_RELEASE_TRUSTED_PUBLIC_KEY_BASE64 }}
+        run: npm run release:miniprogram:verify
+      - name: Preserve the verification report as diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: miniprogram-${{ inputs.stage }}-verification-${{ inputs.source_commit_sha }}
+          path: controlled-stage-evidence/stage-verification.json
+          if-no-files-found: warn
+          retention-days: 14

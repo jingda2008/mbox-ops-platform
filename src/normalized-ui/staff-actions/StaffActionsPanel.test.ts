@@ -1,4 +1,5 @@
 import { createElement } from 'react'
+import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { ActionList, StaffActionsPanel } from './StaffActionsPanel'
@@ -6,6 +7,16 @@ import type { StaffActionsApiPort } from './staff-actions-api'
 import type { StaffFulfillmentData, StaffOperationsData, StaffReservation } from './types'
 
 describe('StaffActionsPanel', () => {
+  it('keeps the final paid-order confirmation as a flat WeChat-green action', () => {
+    const css = readFileSync(new URL('./staff-actions-panel.css', import.meta.url), 'utf8')
+    const rule = css.match(/\.staff-order-sheet \.menu-cart-drawer-footer > \.menu-submit-button:not\(:disabled\) \{([^}]+)\}/)?.[1]
+
+    expect(rule).toContain('background: #07c160')
+    expect(rule).toContain('border-color: #07c160')
+    expect(rule).toContain('color: #fff')
+    expect(rule).toContain('box-shadow: none')
+  })
+
   it('renders a compact honest loading state before authoritative data arrives', () => {
     const api: StaffActionsApiPort = {
       loadOperations: vi.fn(() => new Promise<StaffOperationsData>(() => undefined)),

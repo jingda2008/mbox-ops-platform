@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { parseStoreProvisionConfig, shanghaiBusinessDate } from './provision-normalized-store.js'
 
@@ -79,5 +80,166 @@ describe('normalized store provisioning config', () => {
         { code: 'order.gift', amountMinor: 100, rules: { invalid: Number.NaN } },
       ] }],
     })).toThrow(/valid JSON/)
+  })
+
+  it('defaults to manager request and cashier review without hard-coding an employee', () => {
+    const source = JSON.parse(readFileSync(
+      new URL('../deploy/normalized-store/mbox-lujiazui.store.json', import.meta.url),
+      'utf8',
+    )) as unknown
+    const config = parseStoreProvisionConfig(source)
+    const role = (code: string) => config.roles.find((candidate) => candidate.code === code)
+
+    expect(role('MANAGER')?.permissions.filter((code) => code.startsWith('refund.')))
+      .toEqual(['refund.request'])
+    expect(role('MANAGER')?.approvalLimits).toContainEqual(expect.objectContaining({
+      code: 'refund.request', amountMinor: 200_000, currency: 'CNY', enabled: true,
+    }))
+    expect(role('CASHIER')?.permissions.filter((code) => code.startsWith('refund.')))
+      .toEqual(['refund.approve', 'refund.execute'])
+    expect(role('CASHIER')?.approvalLimits).toContainEqual(expect.objectContaining({
+      code: 'refund.approve', amountMinor: 200_000, currency: 'CNY', enabled: true,
+    }))
+    expect(config.roles.filter((candidate) => candidate.code !== 'MANAGER' && candidate.code !== 'CASHIER')
+      .flatMap((candidate) => candidate.permissions.filter((code) => code.startsWith('refund.'))))
+      .toEqual([])
+  })
+
+  it('assigns loyalty and membership-recovery permissions by operating duty, not technical access', () => {
+    const source = JSON.parse(readFileSync(
+      new URL('../deploy/normalized-store/mbox-lujiazui.store.json', import.meta.url),
+      'utf8',
+    )) as unknown
+    const config = parseStoreProvisionConfig(source)
+    const permissions = (code: string) => new Set(
+      config.roles.find((candidate) => candidate.code === code)?.permissions ?? [],
+    )
+
+    const owner = permissions('OWNER')
+    expect([...owner]).toEqual(expect.arrayContaining([
+      'loyalty.policy.publish', 'loyalty.accrual.approve', 'loyalty.adjust.manual',
+      'loyalty.redemption.catalog.publish', 'loyalty.redemption.exception',
+      'customer.membership.recovery.verify', 'customer.membership.merge.approve',
+      'loyalty.configuration.view', 'loyalty.configuration.preview',
+    ]))
+    expect(owner.has('loyalty.policy.manage')).toBe(false)
+    expect(owner.has('loyalty.policy.approve')).toBe(false)
+    expect(owner.has('loyalty.configuration.edit')).toBe(false)
+    expect(owner.has('loyalty.configuration.approve')).toBe(false)
+
+    const operations = permissions('OPS_LEAD')
+    expect([...operations]).toEqual(expect.arrayContaining([
+      'loyalty.policy.approve', 'loyalty.accrual.request', 'loyalty.accrual.approve',
+      'loyalty.adjust.manual', 'loyalty.redemption.catalog.approve',
+      'loyalty.redemption.exception',
+      'customer.membership.recovery.verify', 'customer.membership.merge.approve',
+      'loyalty.configuration.view', 'loyalty.configuration.preview', 'loyalty.configuration.approve',
+    ]))
+    expect(operations.has('loyalty.policy.manage')).toBe(false)
+    expect(operations.has('loyalty.policy.publish')).toBe(false)
+    expect(operations.has('loyalty.configuration.edit')).toBe(false)
+    const manager = permissions('MANAGER')
+    expect([...manager]).toEqual(expect.arrayContaining([
+      'loyalty.policy.view', 'loyalty.policy.manage', 'loyalty.account.view',
+      'loyalty.accrual.request', 'loyalty.redemption.fulfill',
+      'loyalty.redemption.catalog.manage', 'loyalty.redemption.exception',
+      'customer.membership.recovery.verify',
+      'loyalty.configuration.view', 'loyalty.configuration.edit', 'loyalty.configuration.preview',
+    ]))
+    expect(manager.has('loyalty.accrual.approve')).toBe(false)
+    expect(manager.has('loyalty.adjust.manual')).toBe(false)
+    expect(manager.has('customer.membership.merge.approve')).toBe(false)
+    expect(manager.has('loyalty.policy.publish')).toBe(false)
+    expect(manager.has('loyalty.redemption.catalog.publish')).toBe(false)
+    expect(manager.has('loyalty.configuration.approve')).toBe(false)
+
+    const deputy = permissions('DEPUT_MANAGER')
+    expect(deputy.has('customer.membership.recovery.verify')).toBe(true)
+    expect(deputy.has('loyalty.redemption.exception')).toBe(true)
+    expect(deputy.has('customer.membership.merge.approve')).toBe(false)
+
+    const technicalAdmin = permissions('ADMIN')
+    expect(technicalAdmin.has('loyalty.account.view')).toBe(false)
+    expect(technicalAdmin.has('customer.membership.recovery.verify')).toBe(false)
+    expect(technicalAdmin.has('customer.membership.merge.approve')).toBe(false)
+    for (const role of ['CASHIER','SERVER','BAR','KITCHEN','SINGER']) {
+      expect(permissions(role).has('loyalty.redemption.exception')).toBe(false)
+    }
+  })
+
+  it('keeps migration-seeded operating permissions in the versioned store configuration', () => {
+    const source = JSON.parse(readFileSync(
+      new URL('../deploy/normalized-store/mbox-lujiazui.store.json', import.meta.url),
+      'utf8',
+    )) as unknown
+    const config = parseStoreProvisionConfig(source)
+    const permissions = (code: string) => new Set(
+      config.roles.find((candidate) => candidate.code === code)?.permissions ?? [],
+    )
+
+    expect([...permissions('OWNER')]).toEqual(expect.arrayContaining([
+      'checkout.upgrade.rule.view', 'checkout.upgrade.rule.publish',
+      'fulfillment.capacity.view', 'fulfillment.capacity.publish',
+      'performance.schedule.revise', 'loyalty.promotion.view', 'loyalty.promotion.publish',
+      'membership.terms.view', 'membership.terms.publish',
+      'loyalty.operations.view', 'loyalty.operations.control',
+      'recommendation.staff.modify', 'recommendation.staff.modify.all',
+      'community.activity.contact.reveal', 'privacy.contact.retention.view',
+      'privacy.contact.retention.publish', 'privacy.contact.legal_hold',
+    ]))
+    expect([...permissions('OPS_LEAD')]).toEqual(expect.arrayContaining([
+      'checkout.upgrade.rule.view', 'checkout.upgrade.rule.approve',
+      'fulfillment.capacity.view', 'fulfillment.capacity.approve',
+      'performance.schedule.revise', 'loyalty.promotion.view', 'loyalty.promotion.approve',
+      'membership.terms.view', 'membership.terms.approve',
+      'recommendation.staff.modify', 'recommendation.staff.modify.all',
+      'community.activity.contact.reveal', 'privacy.contact.retention.view',
+      'privacy.contact.retention.approve',
+    ]))
+    expect([...permissions('MANAGER')]).toEqual(expect.arrayContaining([
+      'checkout.upgrade.rule.view', 'checkout.upgrade.rule.draft',
+      'fulfillment.capacity.view', 'fulfillment.capacity.draft',
+      'performance.schedule.revise', 'loyalty.promotion.view', 'loyalty.promotion.manage',
+      'membership.terms.view', 'membership.terms.manage',
+      'recommendation.staff.modify', 'recommendation.staff.modify.all',
+      'community.activity.contact.reveal', 'privacy.contact.retention.view',
+      'privacy.contact.retention.draft',
+    ]))
+    expect([...permissions('DEPUT_MANAGER')]).toEqual(expect.arrayContaining([
+      'checkout.upgrade.rule.view', 'fulfillment.capacity.view', 'loyalty.promotion.view',
+      'membership.terms.view',
+      'recommendation.staff.modify',
+      'community.activity.contact.reveal', 'privacy.contact.retention.view',
+    ]))
+    expect(permissions('DEPUT_MANAGER').has('checkout.upgrade.rule.approve')).toBe(false)
+    expect(permissions('DEPUT_MANAGER').has('loyalty.promotion.publish')).toBe(false)
+    expect(permissions('DEPUT_MANAGER').has('membership.terms.manage')).toBe(false)
+    expect(permissions('DEPUT_MANAGER').has('loyalty.operations.control')).toBe(false)
+    expect(permissions('DEPUT_MANAGER').has('privacy.contact.retention.draft')).toBe(false)
+    expect(permissions('DEPUT_MANAGER').has('privacy.contact.retention.approve')).toBe(false)
+    expect(permissions('DEPUT_MANAGER').has('privacy.contact.retention.publish')).toBe(false)
+    expect(permissions('DEPUT_MANAGER').has('privacy.contact.legal_hold')).toBe(false)
+    expect(permissions('MANAGER').has('privacy.contact.retention.approve')).toBe(false)
+    expect(permissions('MANAGER').has('privacy.contact.retention.publish')).toBe(false)
+    expect(permissions('OPS_LEAD').has('privacy.contact.retention.draft')).toBe(false)
+    expect(permissions('OPS_LEAD').has('privacy.contact.retention.publish')).toBe(false)
+    expect(permissions('MARKETING').has('loyalty.promotion.view')).toBe(true)
+    expect(permissions('MARKETING').has('loyalty.promotion.approve')).toBe(false)
+    expect(permissions('MARKETING').has('loyalty.promotion.publish')).toBe(false)
+    expect(permissions('SERVER').has('recommendation.staff.modify')).toBe(true)
+    expect(permissions('SERVER').has('recommendation.staff.modify.all')).toBe(false)
+    expect(permissions('ADMIN').has('recommendation.staff.modify')).toBe(false)
+    const rolesWith = (permission: string) => config.roles
+      .filter((candidate) => candidate.permissions.includes(permission))
+      .map((candidate) => candidate.code)
+      .sort()
+    expect(rolesWith('community.activity.contact.reveal'))
+      .toEqual(['DEPUT_MANAGER', 'MANAGER', 'OPS_LEAD', 'OWNER'])
+    expect(rolesWith('privacy.contact.retention.view'))
+      .toEqual(['DEPUT_MANAGER', 'MANAGER', 'OPS_LEAD', 'OWNER'])
+    expect(rolesWith('privacy.contact.retention.draft')).toEqual(['MANAGER'])
+    expect(rolesWith('privacy.contact.retention.approve')).toEqual(['OPS_LEAD'])
+    expect(rolesWith('privacy.contact.retention.publish')).toEqual(['OWNER'])
+    expect(rolesWith('privacy.contact.legal_hold')).toEqual(['OWNER'])
   })
 })

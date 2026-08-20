@@ -23,6 +23,23 @@ const provisioned = [{
 }]
 
 describe('normalized fixed table QR generation', () => {
+  it('uses a 32-character opaque credential compatible with official WeChat scene limits', async () => {
+    const run = vi.fn(async (_scope, command) => command({
+      scope,
+      query: vi.fn()
+        .mockResolvedValueOnce({ rows: [{
+          id: provisioned[0]!.tableId, code: 'L01', display_name: '互动01',
+          qr_version: 1, active_credential_id: null,
+        }] })
+        .mockResolvedValue({ rows: [] }),
+    }))
+    const { TableQrProvisioner } = await import('./table-qr-provisioner.js')
+    const result = await new TableQrProvisioner({ run }, 'S'.repeat(32)).provision({
+      scope, businessDate: '2026-08-16', actorEmployeeId, tableCodes: ['L01'], reason: '正式小程序桌码',
+    })
+    expect(result[0]?.tableQrToken).toMatch(/^[A-Za-z0-9_-]{32}$/)
+  })
+
   it('places the credential only in the URL fragment and keeps a harmless table hint in the query', () => {
     const [entry] = buildNormalizedTableQrEntries(provisioned, 'https://mbox.example/guest?channel=table')
     const url = new URL(entry!.url)

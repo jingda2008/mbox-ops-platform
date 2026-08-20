@@ -34,14 +34,26 @@
 
 ## 备份与恢复
 
-```bash
-DATABASE_URL='postgresql://...' BACKUP_DIR='/secure/mbox-backups' ./scripts/backup-postgres.sh
-DATABASE_URL='postgresql://...' MBOX_CONFIRM_RESTORE=RESTORE \
-  ./scripts/restore-postgres.sh '/secure/mbox-backups/<file>.dump'
-DATABASE_URL='postgresql://...' npm run db:verify
-```
+生产备份与恢复只允许走已冻结发布包内的维护流程。主机必须另行配置 root:600 的
+`/opt/mbox/secrets/database-maintenance.env`、libpq service 文件和 `PGPASSFILE`。维护配置只写
+应用、备份和管理三个 service 名及两个 root:600 文件路径；service 文件禁止内嵌 `password` 或
+另行指定 `passfile`，维护账号密码只存在于该专用 `PGPASSFILE`，不得出现在命令参数、应用环境、
+容器或发布产物。应用运行账号凭据仍由既有受控 runtime secret 注入应用容器，不得进入维护文件、
+命令参数或发布产物。备份账号必须是非超级用户、具备
+`BYPASSRLS` 与 `pg_monitor`，管理账号只在主机恢复进程中使用，二者都不得进入应用环境、容器或发布产物。
+备份账号还必须具备 `pg_read_all_data`（或经逐表证明等价的全库只读授权）；缺少任一项时维护前检直接拒绝。
 
-生产环境至少每日备份并启用PITR。每月恢复到独立数据库，核对迁移校验和、运行状态、审计和财务汇总；不得直接覆盖生产库进行演练。
+096 及以后涉及收缩式迁移时，流程必须先进入公开 503 维护态并排空全部写入，再生成保留
+owner/ACL 的完整备份和源库权威快照。恢复只能先落到同 owner、编码和 locale 的临时数据库，
+逐项核对迁移校验和、跨租户计数、对象与 SECURITY DEFINER owner、数据库/对象 ACL、RLS/FORCE
+RLS 和数据库设置；全部通过且两库零连接后才可换名。原数据库必须保留到旧版本服务私有与公开
+ready 均通过；失败则恢复原库名并继续展示维护页，禁止只回旧镜像。
+当前自动恢复只接受 PostgreSQL libc locale provider，并同时核对 collation version；ICU 数据库必须先
+补齐并验收 `LOCALE_PROVIDER`、ICU locale/rules 的重建链，否则恢复前检拒绝。
+
+每日备份、PITR 和每月隔离恢复演练属于外部运维门禁：当前仓库只实现发布维护窗内的版本化备份与配对恢复，
+尚未提供或验收独立的每日调度、PITR 配置及恢复演练调度。在平台提供并验收这些证据前，生产 readiness
+必须保持拒绝。不得用仓库根目录的旧脚本直接备份或覆盖数据库，也不得在生产库上试跑恢复。
 
 ## 版本发布与回滚
 

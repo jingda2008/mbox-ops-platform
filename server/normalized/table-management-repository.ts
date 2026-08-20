@@ -5,8 +5,11 @@ import type {
   JsonObject,
   NormalizedCommandExecutor,
 } from './command-executor.js'
+import { hashRequestFingerprint } from './command-executor.js'
 import { randomUUID } from 'node:crypto'
-import { StaffAccessRepository, type EffectiveStaffAccess } from './staff-access-repository.js'
+import {
+  StaffAccessDeniedError,StaffAccessRepository,type EffectiveStaffAccess,
+} from './staff-access-repository.js'
 import type { ScopedTransaction, StoreScope } from './transaction-runner.js'
 
 export const TABLE_OPEN_PERMISSION = 'table.open'
@@ -14,6 +17,7 @@ export const TABLE_VIEW_ALL_PERMISSION = 'table.view_all'
 export const TABLE_MANAGE_PERMISSION = 'table.manage'
 export const TABLE_ASSIGNMENT_MANAGE_PERMISSION = 'table.assignment.manage'
 export const TABLE_TRANSFER_PERMISSION = 'table.transfer'
+export const TABLE_PARTICIPATION_MANAGE_PERMISSION = 'table.participation.manage'
 
 export type AreaStatus = 'active' | 'paused' | 'retired'
 export type TableStatus = 'available' | 'paused' | 'retired'
@@ -113,6 +117,29 @@ export interface TableTransferResult {
   occurredAt: string
 }
 
+export interface ManagedTableParticipant {
+  publicId: string
+  customerPublicId: string
+  role: 'reservation_owner'|'organizer'|'payer'|'companion'|'unknown'
+  confirmationState: 'unconfirmed'|'confirmed'|'corrected'
+  identityLevel: 'anonymous'|'identified'|'member'
+  seatLabel: string | null
+  locationStartedAt: string
+}
+
+export interface TableParticipantMovementResult {
+  eventId: string
+  targetTableSessionId: string
+  movedParticipantCount: number
+  revokedGuestSessionCount: number
+  occurredAt: string
+  targetCapacityAtMovement: number
+  targetGuestCountBefore: number
+  targetGuestCountAfter: number
+  capacityOverrideReason: string | null
+  movementStoreReplayed?: boolean
+}
+
 export interface TableTransferOwnershipPort {
   capture(transaction: ScopedTransaction, tableSessionId: string): Promise<JsonObject>
 }
@@ -204,6 +231,16 @@ export interface TransferTableCommand extends TableManagementCommandBase {
   capacityOverrideReason?: string | null
 }
 
+export interface MoveTableParticipantsCommand extends TableManagementCommandBase {
+  movementKind: 'participant_split'|'participant_merge'
+  sourceTableSessionId: string
+  targetTableId: string
+  targetTableSessionId: string | null
+  movedGuestCount: number
+  participantPublicIds: string[]
+  capacityOverrideReason?: string | null
+}
+
 type AreaCreateInput = Omit<CreateAreaCommand, keyof TableManagementCommandBase>
 type AreaUpdateInput = Omit<UpdateAreaCommand, keyof TableManagementCommandBase>
 type TableCreateInput = Omit<CreateTableCommand, keyof TableManagementCommandBase>
@@ -223,6 +260,15 @@ type ManagedOpenInput = Omit<OpenManagedTableCommand, keyof TableManagementComma
 type ManagedTransferInput = Omit<TransferTableCommand, keyof TableManagementCommandBase> & {
   reason: string
   transferredByEmployeeId: string
+  idempotencyKey: string
+  requestFingerprint: string
+}
+type ManagedParticipantMovementInput = Omit<MoveTableParticipantsCommand,keyof TableManagementCommandBase> & {
+  movedByEmployeeId:string
+  reason:string
+  idempotencyKey:string
+  requestFingerprint:string
+  businessDate:string
 }
 
 interface AreaRow extends Record<string, unknown> {
@@ -289,16 +335,25 @@ interface SessionRow extends Record<string, unknown> {
   opened_at: string
 }
 
-interface TransferRow extends Record<string, unknown> {
-  event_id: string
-  table_session_id: string
-  source_table_id: string
-  source_table_code: string
-  target_table_id: string
-  target_table_code: string
-  reason: string
-  ownership_snapshot: JsonObject
-  occurred_at: string
+interface StoredMovementRow extends Record<string,unknown> {
+  id:string
+  movement_kind:'whole_table_transfer'|'participant_split'|'participant_merge'
+  source_table_session_id:string
+  source_table_id:string
+  source_table_code:string
+  target_table_session_id:string
+  target_table_id:string
+  target_table_code:string
+  moved_participant_count:number
+  revoked_guest_session_count:number
+  target_capacity_at_movement:number
+  target_guest_count_before:number
+  target_guest_count_after:number
+  capacity_override_reason:string|null
+  reason:string
+  request_fingerprint:string
+  ownership_snapshot:JsonObject|null
+  occurred_at:string
 }
 
 export class TableManagementNotFoundError extends Error {
@@ -681,6 +736,23 @@ export class TableManagementRepository {
     input: ManagedTransferInput,
     ownership: TableTransferOwnershipPort,
   ): Promise<TableTransferResult> {
+    await this.transaction.query(`
+      SELECT pg_advisory_xact_lock(hashtextextended(
+        'table-customer-movement:' || $1::text || ':' || $2::text,0
+      ))
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId])
+    const movementKey=`whole_table_transfer:${input.idempotencyKey}`
+    const movementFingerprint=hashRequestFingerprint(input.requestFingerprint)
+    const stored=await this.loadStoredMovement(movementKey,movementFingerprint)
+    if (stored!==null) {
+      const value={ eventId:stored.id,tableSessionId:stored.target_table_session_id,
+        sourceTableId:stored.source_table_id,sourceTableCode:stored.source_table_code,
+        targetTableId:stored.target_table_id,targetTableCode:stored.target_table_code,
+        reason:stored.reason,ownershipSnapshot:stored.ownership_snapshot ?? {},
+        occurredAt:stored.occurred_at }
+      Object.defineProperty(value,'movementStoreReplayed',{ value:true,enumerable:false })
+      return value
+    }
     const sessionResult = await this.transaction.query<SessionRow>(`
       SELECT session.id, session.table_id, source.code AS table_code, session.public_id,
         session.business_date::text, session.guest_count, session.capacity_at_open,
@@ -740,27 +812,150 @@ export class TableManagementRepository {
       targetCapacity: target.capacity,
       targetCapacityOverrideReason: targetOverrideReason,
     }
-    await this.transaction.query(`
-      UPDATE mbox.table_sessions
-      SET table_id = $4::uuid,
-          capacity_at_open = $5,
-          capacity_override_reason = $6,
-          capacity_overridden_by_employee_id = $7::uuid
-      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid AND status = 'open'
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, session.id, target.id,
-      target.capacity, targetOverrideReason, targetOverCapacity ? input.transferredByEmployeeId : null])
-    const result = await this.transaction.query<TransferRow>(`
-      INSERT INTO mbox.table_session_transfer_events (
-        tenant_id, store_id, table_session_id, source_table_id, target_table_id,
-        transferred_by_employee_id, reason, ownership_snapshot
-      ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6::uuid, $7, $8::jsonb)
-      RETURNING id AS event_id, table_session_id, source_table_id,
-        $9::text AS source_table_code, target_table_id, $10::text AS target_table_code,
-        reason, ownership_snapshot, occurred_at::text
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, session.id,
-      source.id, target.id, input.transferredByEmployeeId, input.reason,
-      JSON.stringify(ownershipSnapshot), source.code, target.code])
-    return mapTransfer(requiredRow(result.rows[0], '转桌事件'))
+    const result = await this.transaction.query<{
+      movement_event_id: string
+      target_table_session_id: string
+      occurred_at: string
+      replayed: boolean
+    }>(`
+      SELECT movement_event_id,target_table_session_id,occurred_at::text,replayed
+      FROM mbox.execute_table_customer_movement(
+        'whole_table_transfer', $1::uuid, NULL::uuid, $2::uuid, $3::integer,
+        ARRAY[]::uuid[], ARRAY[]::text[], ARRAY[]::text[], $4::uuid, $5,
+        $6, $7::char(64), NULL, $8, $9::jsonb
+      )
+    `, [session.id, target.id, session.guestCount, input.transferredByEmployeeId,
+      input.reason,movementKey,movementFingerprint,targetOverrideReason,
+      JSON.stringify(ownershipSnapshot)])
+    const movement = requiredRow(result.rows[0], '转桌事件')
+    const value = {
+      eventId: movement.movement_event_id,
+      tableSessionId: movement.target_table_session_id,
+      sourceTableId: source.id,
+      sourceTableCode: source.code,
+      targetTableId: target.id,
+      targetTableCode: target.code,
+      reason: input.reason,
+      ownershipSnapshot,
+      occurredAt: movement.occurred_at,
+    }
+    Object.defineProperty(value,'movementStoreReplayed',{ value:movement.replayed,enumerable:false })
+    return value
+  }
+
+  async listParticipants(tableSessionId:string):Promise<ManagedTableParticipant[]> {
+    const result=await this.transaction.query<{
+      public_id:string; customer_public_id:string; participation_role:ManagedTableParticipant['role']
+      confirmation_state:ManagedTableParticipant['confirmationState']
+      identity_level:ManagedTableParticipant['identityLevel']; seat_label:string|null
+      location_started_at:string
+    }>(`
+      SELECT participation.public_id,customer.public_id AS customer_public_id,
+        participation.participation_role,participation.confirmation_state,
+        CASE participation.identity_level WHEN 'wechat' THEN 'identified'
+          ELSE participation.identity_level END AS identity_level,participation.seat_label,
+        participation.location_started_at::text
+      FROM mbox.table_sessions session
+      JOIN mbox.table_session_customer_participations participation
+        ON participation.tenant_id=session.tenant_id AND participation.store_id=session.store_id
+       AND participation.table_session_id=session.id AND participation.table_id=session.table_id
+       AND participation.left_at IS NULL
+      JOIN mbox.customers customer ON customer.tenant_id=participation.tenant_id
+       AND customer.store_id=participation.store_id AND customer.id=participation.customer_id
+      WHERE session.tenant_id=$1::uuid AND session.store_id=$2::uuid
+        AND session.id=$3::uuid AND session.status='open'
+      ORDER BY participation.location_started_at,participation.id
+    `,[this.transaction.scope.tenantId,this.transaction.scope.storeId,tableSessionId])
+    return result.rows.map((row) => ({
+      publicId:row.public_id,customerPublicId:row.customer_public_id,role:row.participation_role,
+      confirmationState:row.confirmation_state,identityLevel:row.identity_level,
+      seatLabel:row.seat_label,locationStartedAt:row.location_started_at,
+    }))
+  }
+
+  async moveParticipants(input:ManagedParticipantMovementInput):Promise<TableParticipantMovementResult> {
+    await this.transaction.query(`SELECT pg_advisory_xact_lock(hashtextextended(
+      'table-customer-movement:'||$1::text||':'||$2::text,0
+    ))`,[this.transaction.scope.tenantId,this.transaction.scope.storeId])
+    const movementKey=`${input.movementKind}:${input.idempotencyKey}`
+    const movementFingerprint=hashRequestFingerprint(input.requestFingerprint)
+    const stored=await this.loadStoredMovement(movementKey,movementFingerprint)
+    if (stored!==null) {
+      const value:TableParticipantMovementResult={ eventId:stored.id,
+        targetTableSessionId:stored.target_table_session_id,
+        movedParticipantCount:Number(stored.moved_participant_count),
+        revokedGuestSessionCount:Number(stored.revoked_guest_session_count),
+        occurredAt:stored.occurred_at,
+        targetCapacityAtMovement:Number(stored.target_capacity_at_movement),
+        targetGuestCountBefore:Number(stored.target_guest_count_before),
+        targetGuestCountAfter:Number(stored.target_guest_count_after),
+        capacityOverrideReason:stored.capacity_override_reason }
+      Object.defineProperty(value,'movementStoreReplayed',{ value:true,enumerable:false })
+      return value
+    }
+    const participants=await this.transaction.query<{
+      id:string; public_id:string; participation_role:string; confirmation_state:string
+    }>(`
+      SELECT participation.id,participation.public_id,participation.participation_role,
+        participation.confirmation_state
+      FROM mbox.table_sessions session
+      JOIN mbox.table_session_customer_participations participation
+        ON participation.tenant_id=session.tenant_id AND participation.store_id=session.store_id
+       AND participation.table_session_id=session.id AND participation.table_id=session.table_id
+       AND participation.left_at IS NULL
+      WHERE session.tenant_id=$1::uuid AND session.store_id=$2::uuid
+        AND session.id=$3::uuid AND session.status='open'
+        AND participation.public_id=ANY($4::text[])
+      ORDER BY participation.id FOR UPDATE OF session,participation
+    `,[this.transaction.scope.tenantId,this.transaction.scope.storeId,
+      input.sourceTableSessionId,input.participantPublicIds])
+    if (participants.rowCount!==input.participantPublicIds.length) {
+      throw new TableManagementConflictError('所选顾客位置已变化，请刷新后重新选择')
+    }
+    try {
+      const result=await this.transaction.query<{
+        movement_event_id:string; target_table_session_id:string; moved_participant_count:number
+        revoked_guest_session_count:number; occurred_at:string
+        target_capacity_at_movement:number;target_guest_count_before:number
+        target_guest_count_after:number;capacity_override_reason:string|null;replayed:boolean
+      }>(`
+        SELECT movement_event_id,target_table_session_id,moved_participant_count,
+          revoked_guest_session_count,occurred_at::text,target_capacity_at_movement,
+          target_guest_count_before,target_guest_count_after,capacity_override_reason,replayed
+        FROM mbox.execute_table_customer_movement(
+          $1,$2::uuid,$3::uuid,$4::uuid,$5::integer,$6::uuid[],$7::text[],$8::text[],
+          $9::uuid,$10,$11,$12::char(64),$13,$14,$15::jsonb
+        )
+      `,[input.movementKind,input.sourceTableSessionId,input.targetTableSessionId,
+        input.targetTableId,input.movedGuestCount,participants.rows.map((row) => row.id),
+        participants.rows.map((row) => row.participation_role),
+        participants.rows.map((row) => row.confirmation_state),input.movedByEmployeeId,
+        input.reason,movementKey,movementFingerprint,
+        input.movementKind==='participant_split' ? `table-session-${randomUUID()}` : null,
+        normalizeReason(input.capacityOverrideReason ?? null),JSON.stringify({
+          command:'staff_participant_movement',participantPublicIds:input.participantPublicIds,
+        })])
+      const row=requiredRow(result.rows[0],'顾客位置移动结果')
+      const value:TableParticipantMovementResult={
+        eventId:row.movement_event_id,targetTableSessionId:row.target_table_session_id,
+        movedParticipantCount:Number(row.moved_participant_count),
+        revokedGuestSessionCount:Number(row.revoked_guest_session_count),occurredAt:row.occurred_at,
+        targetCapacityAtMovement:Number(row.target_capacity_at_movement),
+        targetGuestCountBefore:Number(row.target_guest_count_before),
+        targetGuestCountAfter:Number(row.target_guest_count_after),
+        capacityOverrideReason:row.capacity_override_reason,
+      }
+      Object.defineProperty(value,'movementStoreReplayed',{ value:row.replayed,enumerable:false })
+      return value
+    } catch (error) {
+      if (postgresCode(error)==='42501') {
+        throw new StaffAccessDeniedError('Employee lost table participation permission during movement')
+      }
+      if (['22023','23514','40001','55000'].includes(postgresCode(error) ?? '')) {
+        throw new TableManagementConflictError('当前桌次存在未结业务、容量或位置冲突，请处理后重试')
+      }
+      throw error
+    }
   }
 
   private async assertArea(areaId: string): Promise<void> {
@@ -769,6 +964,36 @@ export class TableManagementRepository {
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, areaId])
     if (result.rowCount !== 1) throw new TableManagementNotFoundError('区域')
+  }
+
+  private async loadStoredMovement(
+    idempotencyKey:string,
+    requestFingerprint:string,
+  ):Promise<StoredMovementRow|null> {
+    const result=await this.transaction.query<StoredMovementRow>(`
+      SELECT event.id,event.movement_kind,event.source_table_session_id,event.source_table_id,
+        event.source_table_code_snapshot AS source_table_code,event.target_table_session_id,
+        event.target_table_id,event.target_table_code_snapshot AS target_table_code,
+        event.moved_participant_count,
+        event.revoked_guest_session_count,event.target_capacity_at_movement,
+        event.target_guest_count_before,event.target_guest_count_after,
+        event.capacity_override_reason,event.reason,event.request_fingerprint,
+        transfer.ownership_snapshot,event.occurred_at::text
+      FROM mbox.table_customer_movement_events event
+      LEFT JOIN mbox.table_session_transfer_events transfer
+        ON transfer.tenant_id=event.tenant_id AND transfer.store_id=event.store_id
+       AND transfer.table_session_id=event.source_table_session_id
+       AND transfer.source_table_id=event.source_table_id
+       AND transfer.target_table_id=event.target_table_id
+       AND transfer.occurred_at=event.occurred_at
+      WHERE event.tenant_id=$1::uuid AND event.store_id=$2::uuid
+        AND event.idempotency_key=$3
+    `,[this.transaction.scope.tenantId,this.transaction.scope.storeId,idempotencyKey])
+    const stored=result.rows[0] ?? null
+    if (stored!==null && stored.request_fingerprint!==requestFingerprint) {
+      throw new TableManagementConflictError('幂等键已被另一项桌台移动使用')
+    }
+    return stored
   }
 
   private async assertAssignmentReferences(tableId: string, employeeId: string, roleId: string): Promise<void> {
@@ -854,6 +1079,13 @@ export class TableManagementCommandService {
     }, this.ownership), 'table_session_transfer', 'table.session.transferred.v1')
   }
 
+  moveParticipants(command:Readonly<MoveTableParticipantsCommand>) {
+    return this.execute(command,'table.participation.move',TABLE_PARTICIPATION_MANAGE_PERMISSION,
+      async (repository) => repository.moveParticipants({
+        ...command,movedByEmployeeId:command.actor.employeeId,
+      }),'table_customer_movement','table.participation.moved.v1')
+  }
+
   private execute<Result extends { id?: string; eventId?: string; tableSessionId?: string }>(
     command: Readonly<TableManagementCommandBase>,
     operationScope: string,
@@ -875,9 +1107,10 @@ export class TableManagementCommandService {
       const objectId = result.id ?? result.eventId ?? result.tableSessionId
       if (objectId === undefined) throw new TypeError('桌台命令结果缺少对象标识')
       const payload = asJsonObject(result)
+      const movementStoreReplayed=(result as { movementStoreReplayed?:boolean }).movementStoreReplayed===true
       return {
         result,
-        auditEvents: [{
+        auditEvents: movementStoreReplayed ? [] : [{
           actor: command.actor,
           action: eventType.replace(/\.v1$/, ''),
           objectType,
@@ -886,7 +1119,7 @@ export class TableManagementCommandService {
           reason: command.reason,
           afterData: payload,
         }],
-        outboxMessages: [{
+        outboxMessages: movementStoreReplayed ? [] : [{
           aggregateType: objectType,
           aggregateId: objectId,
           aggregateVersion: 1,
@@ -961,13 +1194,6 @@ function mapSession(row: SessionRow): ManagedTableSession {
     capacityOverriddenByEmployeeId: row.capacity_overridden_by_employee_id,
     guestProfileSnapshot: row.guest_profile_snapshot, status: row.status,
     openedByEmployeeId: row.opened_by_employee_id, openedAt: row.opened_at }
-}
-
-function mapTransfer(row: TransferRow): TableTransferResult {
-  return { eventId: row.event_id, tableSessionId: row.table_session_id,
-    sourceTableId: row.source_table_id, sourceTableCode: row.source_table_code,
-    targetTableId: row.target_table_id, targetTableCode: row.target_table_code,
-    reason: row.reason, ownershipSnapshot: row.ownership_snapshot, occurredAt: row.occurred_at }
 }
 
 function validateCommandBase(command: Readonly<TableManagementCommandBase>): void {

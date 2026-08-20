@@ -18,6 +18,17 @@ export type SettlementMode = 'immediate_payment' | 'table_tab'
 
 export type FulfillmentStation = 'bar' | 'kitchen' | 'cashier' | 'none'
 
+export type OrderItemCostSource =
+  | 'catalog_product'
+  | 'legacy_snapshot'
+  | 'included_in_parent'
+  | 'unavailable'
+
+export type OrderItemLoyaltyEligibilitySource =
+  | 'catalog_product'
+  | 'included_in_parent'
+  | 'legacy_current_catalog'
+
 export interface SubmitOrderLineInput {
   productId: string
   quantity: number
@@ -52,6 +63,14 @@ export interface OrderItem {
   fulfillmentDueAt?: string | null
   productSnapshot: JsonObject
   costSnapshot: JsonObject
+  unitCostMinorAtSubmission: number | null
+  totalCostMinorAtSubmission: number | null
+  costSource: OrderItemCostSource
+  costReferenceProductId: string | null
+  costReferenceOrderItemId: string | null
+  costReferenceProductUpdatedAt: string | null
+  loyaltyEligibleAtSubmission: boolean
+  loyaltyEligibilitySource: OrderItemLoyaltyEligibilitySource
   status: 'submitted' | 'delivered' | 'cancelled'
   note: string | null
   createdAt: string
@@ -94,6 +113,8 @@ interface ProductPriceRow extends Record<string, unknown> {
   kds_priority: number
   fulfillment_sla_seconds: number | null
   cost_amount_minor: string | number | null
+  loyalty_eligible: boolean
+  product_updated_at: string
   price_type: string
   amount_minor: string | number
   currency: string
@@ -152,6 +173,14 @@ interface OrderItemRow extends Record<string, unknown> {
   fulfillment_due_at: string | null
   product_snapshot: unknown
   cost_snapshot: unknown
+  unit_cost_minor_at_submission: string | number | null
+  total_cost_minor_at_submission: string | number | null
+  cost_source: OrderItemCostSource
+  cost_reference_product_id: string | null
+  cost_reference_order_item_id: string | null
+  cost_reference_product_updated_at: string | null
+  loyalty_eligible_at_submission: boolean
+  loyalty_eligibility_source: OrderItemLoyaltyEligibilitySource
   status: 'submitted' | 'delivered' | 'cancelled'
   note: string | null
   created_at: string
@@ -175,6 +204,13 @@ export class OrderProductUnavailableError extends Error {
   constructor(productId: string) {
     super(`Product or active standard price is unavailable: ${productId}`)
     this.name = 'OrderProductUnavailableError'
+  }
+}
+
+export class OrderProductCostUnavailableError extends Error {
+  constructor(productId: string) {
+    super(`Product has no authoritative catalog cost: ${productId}`)
+    this.name = 'OrderProductCostUnavailableError'
   }
 }
 
@@ -257,16 +293,26 @@ export class OrderRepository {
           id, tenant_id, store_id, order_id, product_id, parent_order_item_id, quantity,
           unit_price_minor, discount_amount_minor, total_amount_minor, currency,
           fulfillment_station, fulfillment_priority, fulfillment_due_at,
-          product_snapshot, cost_snapshot, status, note
+          product_snapshot, cost_snapshot, unit_cost_minor_at_submission,
+          total_cost_minor_at_submission, cost_source, cost_reference_product_id,
+          cost_reference_order_item_id, cost_reference_product_updated_at,
+          loyalty_eligible_at_submission, loyalty_eligibility_source,
+          status, note
         ) VALUES (
           $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6::uuid, $7,
           $8::bigint, $9::bigint, $10::bigint, $11,
-          $12, $13::smallint, $14::timestamptz, $15::jsonb, $16::jsonb, 'submitted', $17
+          $12, $13::smallint, $14::timestamptz, $15::jsonb, $16::jsonb,
+          $17::bigint, $18::bigint, $19, $20::uuid, $21::uuid, $22::timestamptz,
+          $23, $24, 'submitted', $25
         )
         RETURNING id, order_id, product_id, parent_order_item_id, quantity, unit_price_minor,
           discount_amount_minor, total_amount_minor, currency, fulfillment_station,
           fulfillment_priority, fulfillment_due_at::text,
-          product_snapshot, cost_snapshot, status, note, created_at::text
+          product_snapshot, cost_snapshot, unit_cost_minor_at_submission,
+          total_cost_minor_at_submission, cost_source, cost_reference_product_id,
+          cost_reference_order_item_id, cost_reference_product_updated_at::text,
+          loyalty_eligible_at_submission, loyalty_eligibility_source,
+          status, note, created_at::text
       `, [
         item.id,
         this.transaction.scope.tenantId,
@@ -284,6 +330,14 @@ export class OrderRepository {
         item.fulfillmentDueAt,
         JSON.stringify(item.productSnapshot),
         JSON.stringify(item.costSnapshot),
+        item.unitCostMinorAtSubmission,
+        item.totalCostMinorAtSubmission,
+        item.costSource,
+        item.costReferenceProductId,
+        item.costReferenceOrderItemId,
+        item.costReferenceProductUpdatedAt,
+        item.loyaltyEligibleAtSubmission,
+        item.loyaltyEligibilitySource,
         item.note,
       ])
       insertedItems.push(mapOrderItem(requireOne(inserted, 'Order item insert')))
@@ -309,7 +363,11 @@ export class OrderRepository {
       SELECT id, order_id, product_id, parent_order_item_id, quantity, unit_price_minor,
         discount_amount_minor, total_amount_minor, currency, fulfillment_station,
         fulfillment_priority, fulfillment_due_at::text,
-        product_snapshot, cost_snapshot, status, note, created_at::text
+        product_snapshot, cost_snapshot, unit_cost_minor_at_submission,
+        total_cost_minor_at_submission, cost_source, cost_reference_product_id,
+        cost_reference_order_item_id, cost_reference_product_updated_at::text,
+        loyalty_eligible_at_submission, loyalty_eligibility_source,
+        status, note, created_at::text
       FROM mbox.order_items
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND order_id = $3::uuid
       ORDER BY created_at, id
@@ -357,7 +415,12 @@ export class OrderRepository {
         item.unit_price_minor, item.discount_amount_minor, item.total_amount_minor,
         item.currency, item.fulfillment_station, item.product_snapshot,
         item.fulfillment_priority, item.fulfillment_due_at::text,
-        item.cost_snapshot, item.status, item.note, item.created_at::text
+        item.cost_snapshot, item.unit_cost_minor_at_submission,
+        item.total_cost_minor_at_submission, item.cost_source,
+        item.cost_reference_product_id, item.cost_reference_order_item_id,
+        item.cost_reference_product_updated_at::text,
+        item.loyalty_eligible_at_submission, item.loyalty_eligibility_source,
+        item.status, item.note, item.created_at::text
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -400,7 +463,9 @@ export class OrderRepository {
         to_char(product.available_from, 'HH24:MI') AS available_from,
         to_char(product.available_until, 'HH24:MI') AS available_until,
         product.kds_priority, product.fulfillment_sla_seconds,
-        product.cost_amount_minor, price.price_type,
+        product.cost_amount_minor, product.loyalty_eligible,
+        product.updated_at::text AS product_updated_at,
+        price.price_type,
         price.amount_minor, price.currency, store.timezone AS store_timezone,
         to_char(clock_timestamp() AT TIME ZONE store.timezone, 'HH24:MI') AS store_local_time,
         extract(isodow FROM clock_timestamp() AT TIME ZONE store.timezone)::integer AS store_iso_weekday
@@ -427,7 +492,7 @@ export class OrderRepository {
         LIMIT 1
       ) AS price ON true
       ORDER BY requested.request_index
-      FOR KEY SHARE OF product
+      FOR SHARE OF product
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -539,6 +604,16 @@ function buildItem(price: ProductPriceRow, requested: RequestedLineRecord) {
     throw new TypeError(`Invalid line total for product ${requested.productId}`)
   }
   const fulfillmentStation = price.product_kind === 'bundle' ? 'none' as const : price.fulfillment_station
+  const unitCostMinorAtSubmission = authoritativeCatalogCost(price.cost_amount_minor, requested.productId)
+  const totalCostMinorAtSubmission = multiplySafeMoney(
+    unitCostMinorAtSubmission,
+    requested.quantity,
+    `catalog cost total for product ${requested.productId}`,
+  )
+  const costReferenceProductUpdatedAt = authoritativeCatalogCostVersion(
+    price.product_updated_at,
+    requested.productId,
+  )
   return {
     id: randomUUID(),
     requestIndex: requested.requestIndex,
@@ -560,7 +635,19 @@ function buildItem(price: ProductPriceRow, requested: RequestedLineRecord) {
       productKind: price.product_kind,
       source: toJsonObject(price.product_snapshot),
     },
-    costSnapshot: costSnapshot(price.cost_amount_minor),
+    unitCostMinorAtSubmission,
+    totalCostMinorAtSubmission,
+    costSource: 'catalog_product' as const,
+    costReferenceProductId: requested.productId,
+    costReferenceOrderItemId: null as string | null,
+    costReferenceProductUpdatedAt,
+    loyaltyEligibleAtSubmission: price.loyalty_eligible,
+    loyaltyEligibilitySource: 'catalog_product' as const,
+    costSnapshot: costSnapshot(
+      unitCostMinorAtSubmission,
+      totalCostMinorAtSubmission,
+      'catalog_product',
+    ),
     note: requested.note,
   }
 }
@@ -599,21 +686,54 @@ function expandBundleItems<T extends ReturnType<typeof buildItem>>(
           bundleComponent: true,
           paidByParentOrderItemId: parent.id,
         },
-        costSnapshot: {},
+        unitCostMinorAtSubmission: 0,
+        totalCostMinorAtSubmission: 0,
+        costSource: 'included_in_parent',
+        costReferenceProductId: null,
+        costReferenceOrderItemId: parent.id,
+        costReferenceProductUpdatedAt: null,
+        loyaltyEligibleAtSubmission: false,
+        loyaltyEligibilitySource: 'included_in_parent',
+        costSnapshot: costSnapshot(0, 0, 'included_in_parent'),
       })
     }
   }
   return operational
 }
 
-function costSnapshot(costAmountMinor: unknown): JsonObject {
+function authoritativeCatalogCost(costAmountMinor: unknown, productId: string): number {
   const unitCostMinor = typeof costAmountMinor === 'string' && /^\d+$/.test(costAmountMinor)
     ? Number(costAmountMinor)
     : costAmountMinor
-  if (!Number.isSafeInteger(unitCostMinor) || Number(unitCostMinor) < 0) return {}
+  if (!Number.isSafeInteger(unitCostMinor) || Number(unitCostMinor) < 0) {
+    throw new OrderProductCostUnavailableError(productId)
+  }
+  return Number(unitCostMinor)
+}
+
+function multiplySafeMoney(unitAmount: number, quantity: number, label: string): number {
+  const total = unitAmount * quantity
+  if (!Number.isSafeInteger(total) || total < 0) throw new RangeError(`${label} is not a non-negative safe integer`)
+  return total
+}
+
+function authoritativeCatalogCostVersion(value: unknown, productId: string): string {
+  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) {
+    throw new OrderProductCostUnavailableError(productId)
+  }
+  return value
+}
+
+function costSnapshot(
+  unitCostMinor: number,
+  totalCostMinor: number,
+  source: 'catalog_product' | 'included_in_parent',
+): JsonObject {
   return {
-    unitCostMinor: Number(unitCostMinor),
-    source: 'catalog_at_order_submission',
+    unitCostMinor,
+    totalCostMinor,
+    source,
+    authority: 'strong_order_item_columns',
   }
 }
 
@@ -709,10 +829,28 @@ function mapOrderItem(row: OrderItemRow): OrderItem {
     fulfillmentDueAt: row.fulfillment_due_at,
     productSnapshot: toJsonObject(row.product_snapshot),
     costSnapshot: toJsonObject(row.cost_snapshot),
+    unitCostMinorAtSubmission: nullableSafeMoney(
+      row.unit_cost_minor_at_submission ?? null,
+      'unit cost at submission',
+    ),
+    totalCostMinorAtSubmission: nullableSafeMoney(
+      row.total_cost_minor_at_submission ?? null,
+      'total cost at submission',
+    ),
+    costSource: row.cost_source ?? 'unavailable',
+    costReferenceProductId: row.cost_reference_product_id ?? null,
+    costReferenceOrderItemId: row.cost_reference_order_item_id ?? null,
+    costReferenceProductUpdatedAt: row.cost_reference_product_updated_at ?? null,
+    loyaltyEligibleAtSubmission: row.loyalty_eligible_at_submission,
+    loyaltyEligibilitySource: row.loyalty_eligibility_source,
     status: row.status,
     note: row.note,
     createdAt: row.created_at,
   }
+}
+
+function nullableSafeMoney(value: string | number | null, label: string): number | null {
+  return value === null ? null : asSafeMoney(value, label)
 }
 
 function validateCreateInput(input: Readonly<CreateSubmittedOrderInput>): void {

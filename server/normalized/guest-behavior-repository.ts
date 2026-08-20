@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { JsonObject } from './command-executor.js'
 import type { ScopedTransaction } from './transaction-runner.js'
+import { lockBoundGuestTablePosition } from './guest-table-authority.js'
 
 export type GuestBehaviorType =
   | 'guest.mood.selected'
@@ -50,20 +51,18 @@ export class GuestBehaviorRepository {
 
   async record(input: Readonly<RecordGuestBehaviorInput>): Promise<GuestBehaviorEvent> {
     validateInput(input)
+    if (!await lockBoundGuestTablePosition(this.transaction,input)) {
+      throw new GuestBehaviorSessionUnavailableError()
+    }
     const inserted = await this.transaction.query<GuestBehaviorRow>(`
       INSERT INTO mbox.guest_behavior_events (
         tenant_id, store_id, table_session_id, customer_id,
         behavior_type, behavior_code, behavior_data, actor_ref_hash, device_hash
       )
       SELECT
-        $1::uuid, $2::uuid, session.id, membership.customer_id,
+        $1::uuid, $2::uuid, session.id, $4::uuid,
         $5, $6, $7::jsonb, $8, $9
       FROM mbox.table_sessions AS session
-      JOIN mbox.table_session_customers AS membership
-        ON membership.tenant_id = session.tenant_id
-       AND membership.store_id = session.store_id
-       AND membership.table_session_id = session.id
-       AND membership.customer_id = $4::uuid
       WHERE session.tenant_id = $1::uuid
         AND session.store_id = $2::uuid
         AND session.id = $3::uuid

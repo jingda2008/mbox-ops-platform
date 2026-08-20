@@ -345,6 +345,7 @@ test('confirmed reservation starts its ten-minute arrival retention only at the 
         guestCount: 2, arrivalAt: '2026-08-12T21:00:00+08:00', expectedEndAt: '2026-08-13T01:00:00+08:00',
         status: 'confirmed', arrivalState: 'not_arrived', note: null, seatPreference: 'stage_atmosphere',
         arrivalGraceEndsAt: '2026-08-12T21:10:00+08:00',
+        reservationPolicyVersion: 1, preferredScheduleId: null,
         cancellationPolicy: {},
       },
     }),
@@ -540,7 +541,7 @@ test('mobile manager completes device verification and reaches role-scoped works
   await expect(page.getByText('规范化改造中')).toHaveCount(0)
 })
 
-test('mobile manager can review but cannot execute cashier refund work', async ({ page }) => {
+test('mobile manager can initiate but cannot review cashier refund work', async ({ page }) => {
   const data = await fixture()
   await page.setViewportSize({ width: 320, height: 800 })
   await page.route('**/api/payments/workbench?*', (route) => route.fulfill({
@@ -555,20 +556,59 @@ test('mobile manager can review but cannot execute cashier refund work', async (
   await page.getByLabel('四位 PIN').fill(data.employeePin)
   await page.getByRole('button', { name: /进入工作台/ }).click()
 
-  await page.getByRole('button', { name: '全部', exact: true }).click()
-  await page.getByRole('dialog', { name: '全部工作入口' }).getByRole('button', { name: /退款审批/ }).click()
+  await page.getByRole('button', { name: '全部岗位入口', exact: true }).click()
+  await page.getByRole('dialog', { name: '全部工作入口' }).getByRole('button', { name: /退款发起/ }).click()
   await expect(page.getByRole('heading', { name: '收银与退款' })).toBeVisible()
-  await expect(page.getByText('待审批')).toBeVisible()
+  await expect(page.getByText('待复核')).toBeVisible()
   await page.getByRole('button', { name: /VIP1.*¥88\.00/ }).click()
   await expect(page.getByText('原订单商品')).toBeVisible()
-  await expect(page.getByLabel('审批说明')).toBeVisible()
-  await expect(page.getByRole('button', { name: '同意' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '选择原商品发起退款' })).toBeVisible()
+  await expect(page.getByLabel('复核说明')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '复核通过' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: /进入渠道待处理/ })).toHaveCount(0)
   await expectCashierTouchTargets(page)
   await expectNoHorizontalOverflow(page)
   const accessibility = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze()
   expect(accessibility.violations.filter((violation) => violation.impact === 'serious' || violation.impact === 'critical')).toEqual([])
-  await page.screenshot({ path: 'artifacts/normalized-browser/audit-rc78-cashier/manager-refund-review-320.png', fullPage: true })
+  await page.screenshot({ path: 'artifacts/normalized-browser/refund-policy/manager-refund-request-320.png', fullPage: true })
+})
+
+test('mobile cashier can review but cannot initiate manager refund work', async ({ page }) => {
+  const data = await fixture()
+  await page.setViewportSize({ width: 320, height: 800 })
+  await page.route('**/api/payments/workbench?*', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ data: cashierWorkbenchFixture({
+      canRequestRefund: false,
+      canApproveRefund: true,
+      canExecuteRefund: true,
+    }) }),
+  }))
+  await page.goto(data.staffUrl)
+  await page.getByLabel('门店口令').fill(data.dailyCredential)
+  await page.getByRole('button', { name: /验证设备/ }).click()
+  await page.getByLabel('员工账号').fill('sanmu')
+  await page.getByLabel('四位 PIN').fill(data.employeePin)
+  await page.getByRole('button', { name: /进入工作台/ }).click()
+
+  await page.getByRole('button', { name: '收银复核', exact: true }).first().click()
+  await expect(page.getByRole('heading', { name: '收银与退款' })).toBeVisible()
+  await page.getByRole('button', { name: /VIP1.*¥88\.00/ }).click()
+  await expect(page.getByLabel('复核说明')).toBeVisible()
+  await expect(page.getByRole('button', { name: '复核驳回' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '复核通过' })).toBeVisible()
+  for (const label of ['复核驳回', '复核通过']) {
+    const button = page.getByRole('button', { name: label })
+    await expect(button).toHaveCSS('white-space', 'nowrap')
+    expect((await button.boundingBox())?.height).toBeLessThanOrEqual(48)
+  }
+  await expect(page.getByRole('button', { name: '选择原商品发起退款' })).toHaveCount(0)
+  await expectCashierTouchTargets(page)
+  await expectNoHorizontalOverflow(page)
+  const accessibility = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze()
+  expect(accessibility.violations.filter((violation) => violation.impact === 'serious' || violation.impact === 'critical')).toEqual([])
+  await page.screenshot({ path: 'artifacts/normalized-browser/refund-policy/cashier-refund-review-320.png', fullPage: true })
 })
 
 test('mobile administrator publishes a permission and sees server-verified feedback in view', async ({ page }) => {
@@ -708,7 +748,9 @@ test('mobile manager payment choices stay synchronized with two guests at the sa
   await expect(page.getByTestId('normalized-guest-app')).toBeVisible()
   await page.getByRole('button', { name: /历史已下单.*W01/ }).click()
   const syncedOrders = page.getByRole('dialog', { name: '本桌历史订单' })
-  expect(await syncedOrders.getByText('服务员协助点单').count()).toBeGreaterThanOrEqual(4)
+  await expect(async () => {
+    expect(await syncedOrders.getByText('服务员协助点单').count()).toBeGreaterThanOrEqual(4)
+  }).toPass()
   const staffQrOrder = syncedOrders.getByTestId(`guest-table-order-${staffQrBody.data.providerAction.orderPublicId}`)
   await expect(staffQrOrder.getByRole('button', { name: /微信支付/ })).toBeVisible()
   const guestPayResponse = page.waitForResponse((response) => (
@@ -738,14 +780,20 @@ test('mobile manager payment choices stay synchronized with two guests at the sa
   await secondGuestContext.close()
 })
 
-function cashierWorkbenchFixture() {
+function cashierWorkbenchFixture(actions: {
+  canRequestRefund: boolean
+  canApproveRefund: boolean
+  canExecuteRefund: boolean
+} = {
+  canRequestRefund: true,
+  canApproveRefund: false,
+  canExecuteRefund: false,
+}) {
   return {
     businessDate: '2026-08-13',
     query: '',
     actions: {
-      canRequestRefund: true,
-      canApproveRefund: true,
-      canExecuteRefund: false,
+      ...actions,
       canViewReconciliation: false,
     },
     summary: {

@@ -70,16 +70,16 @@ async function postCutoverRollbackDrill() {
   runTo(state, [
     ['frozen', 'artifact_verified'], ['artifact_verified', 'config_preflight_passed'],
     ['config_preflight_passed', 'external_preflight_passed'],
-    ['external_preflight_passed', 'migration_compatible'], ['migration_compatible', 'backup_verified'],
-    ['backup_verified', 'migrated'], ['migrated', 'provisioned'],
+    ['external_preflight_passed', 'migration_compatible'], ['migration_compatible', 'writer_drained'],
+    ['writer_drained', 'post_drain_backup_verified'], ['post_drain_backup_verified', 'migrated'],
+    ['migrated', 'provisioned'],
     ['provisioned', 'candidate_healthy'], ['candidate_healthy', 'candidate_deep_verified'],
-    ['candidate_deep_verified', 'cutover_started'],
+    ['candidate_deep_verified', 'cutover_started'], ['cutover_started','cutover_verified'],
+    ['cutover_verified','evidence_archived'],['evidence_archived','completed'],
   ])
-  let active = candidate
-  active = previous
-  transition(state, 'cutover_started', 'rolled_back')
-  return report('candidate-post-cutover-rollback', candidate, state, 'previous-release-restored', {
-    databaseWrites: 1, cutovers: 1, imageBuilds: 1, rollbackRebuilds: 0, active, expectedState: 'rolled_back',
+  return report('candidate-post-cutover-rollback', candidate, state, 'forward-recovery-required', {
+    databaseWrites: 1, databaseRestores:0, cutovers: 1, imageBuilds: 1,
+    rollbackRebuilds: 0, active:candidate,oldApplicationStarted:false,expectedState: 'completed',
   })
 }
 
@@ -89,10 +89,13 @@ async function migrationFailureDrill() {
   runTo(state, [
     ['frozen', 'artifact_verified'], ['artifact_verified', 'config_preflight_passed'],
     ['config_preflight_passed', 'external_preflight_passed'],
-    ['external_preflight_passed', 'migration_compatible'], ['migration_compatible', 'backup_verified'],
+    ['external_preflight_passed', 'migration_compatible'], ['migration_compatible', 'writer_drained'],
+    ['writer_drained','post_drain_backup_verified'],
+    ['post_drain_backup_verified','database_restored'],['database_restored','rolled_back'],
   ])
-  return report('candidate-migration-failed', candidate, state, 'previous-release-unmodified', {
-    databaseWrites: 1, cutovers: 0, imageBuilds: 1, active: previous, expectedState: 'backup_verified',
+  return report('candidate-migration-failed', candidate, state, 'contract-database-and-previous-release-restored', {
+    databaseWrites:1,databaseRestores:1,cutovers:0,imageBuilds:1,active:previous,
+    writerDrained:true,expectedState:'rolled_back',
   })
 }
 
@@ -102,12 +105,12 @@ async function candidateStartupFailureDrill() {
   runTo(state, [
     ['frozen', 'artifact_verified'], ['artifact_verified', 'config_preflight_passed'],
     ['config_preflight_passed', 'external_preflight_passed'],
-    ['external_preflight_passed', 'migration_compatible'], ['migration_compatible', 'backup_verified'],
-    ['backup_verified', 'migrated'], ['migrated', 'provisioned'],
-    ['provisioned', 'rolled_back'],
+    ['external_preflight_passed', 'migration_compatible'], ['migration_compatible', 'writer_drained'],
+    ['writer_drained','post_drain_backup_verified'],['post_drain_backup_verified', 'migrated'],
+    ['migrated', 'provisioned'],['provisioned','database_restored'],['database_restored','rolled_back'],
   ])
-  return report('candidate-startup-failed', candidate, state, 'previous-release-remained-active', {
-    databaseWrites: 1, cutovers: 0, imageBuilds: 1, rollbackRebuilds: 0,
+  return report('candidate-startup-failed', candidate, state, 'contract-database-and-previous-release-restored', {
+    databaseWrites: 1,databaseRestores:1,cutovers: 0, imageBuilds: 1, rollbackRebuilds: 0,
     active: previous, expectedState: 'rolled_back',
   })
 }
@@ -118,14 +121,14 @@ async function cutoverInterruptionDrill() {
   runTo(state, [
     ['frozen', 'artifact_verified'], ['artifact_verified', 'config_preflight_passed'],
     ['config_preflight_passed', 'external_preflight_passed'],
-    ['external_preflight_passed', 'migration_compatible'], ['migration_compatible', 'backup_verified'],
-    ['backup_verified', 'migrated'], ['migrated', 'provisioned'],
+    ['external_preflight_passed', 'migration_compatible'], ['migration_compatible', 'writer_drained'],
+    ['writer_drained','post_drain_backup_verified'],['post_drain_backup_verified', 'migrated'], ['migrated', 'provisioned'],
     ['provisioned', 'candidate_healthy'], ['candidate_healthy', 'candidate_deep_verified'],
-    ['candidate_deep_verified', 'cutover_started'], ['cutover_started', 'rolled_back'],
+    ['candidate_deep_verified', 'cutover_started'],
   ])
-  return report('candidate-cutover-interrupted', candidate, state, 'previous-release-restored', {
-    databaseWrites: 1, cutovers: 1, imageBuilds: 1, rollbackRebuilds: 0,
-    active: previous, expectedState: 'rolled_back',
+  return report('candidate-cutover-interrupted', candidate, state, 'forward-recovery-required', {
+    databaseWrites:1,databaseRestores:0,cutovers:1,imageBuilds:1,rollbackRebuilds:0,
+    active:candidate,oldApplicationStarted:false,expectedState:'cutover_started',
   })
 }
 
@@ -149,8 +152,8 @@ async function happyPathDrill() {
   runTo(state, [
     ['frozen', 'artifact_verified'], ['artifact_verified', 'config_preflight_passed'],
     ['config_preflight_passed', 'external_preflight_passed'],
-    ['external_preflight_passed', 'migration_compatible'], ['migration_compatible', 'backup_verified'],
-    ['backup_verified', 'migrated'], ['migrated', 'provisioned'],
+    ['external_preflight_passed', 'migration_compatible'], ['migration_compatible', 'writer_drained'],
+    ['writer_drained','post_drain_backup_verified'],['post_drain_backup_verified', 'migrated'], ['migrated', 'provisioned'],
     ['provisioned', 'candidate_healthy'], ['candidate_healthy', 'candidate_deep_verified'],
     ['candidate_deep_verified', 'cutover_started'], ['cutover_started', 'cutover_verified'],
     ['cutover_verified', 'evidence_archived'], ['evidence_archived', 'completed'],

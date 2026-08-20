@@ -339,6 +339,12 @@ export function ReservationBooking({
         return
       }
 
+      const reservationPolicyVersion = availability?.depositRule.policyVersion
+        ?? reservation?.reservationPolicyVersion
+      if (reservationPolicyVersion === undefined) {
+        setMessage('预约规则尚未读取，请返回上一步重新查询')
+        return
+      }
       const common = {
         customerName: draft.customerName.trim(),
         guestCount: draft.guestCount,
@@ -346,6 +352,10 @@ export function ReservationBooking({
         ...(availability === null ? {} : { expectedEndAt: availability.expectedEndAt }),
         note: emptyToNull(draft.note),
         seatPreference: draft.seatPreference,
+        reservationPolicyVersion,
+        preferredScheduleId: reservation !== null && scheduleFromArrival(reservation.arrivalAt).date === draft.date
+          ? reservation.preferredScheduleId
+          : null,
       }
       const saved = editingId === null
         ? await runWithSession((signal) => api.createReservation('direct', {
@@ -370,7 +380,7 @@ export function ReservationBooking({
     } finally {
       setPhase('idle')
     }
-  }, [api, availability, draft, editingId, joinWaitlist, onReservationChange, operatingHours, runWithSession, sessionReady])
+  }, [api, availability, draft, editingId, joinWaitlist, onReservationChange, operatingHours, reservation, runWithSession, sessionReady])
 
   const cancel = useCallback(async () => {
     if (!cancelArmed) {

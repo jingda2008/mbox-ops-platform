@@ -11,6 +11,12 @@ export interface EffectiveApprovalLimit {
   code: string
   amountMinor: number | null
   currency: string
+  calculationMode: 'amount_limit' | 'fixed_amount' | 'basis_points' | 'full_gift'
+  fixedAmountMinor: number | null
+  discountBasisPoints: number | null
+  allowFullGift: boolean
+  requiresReason: boolean
+  requiresSecondActor: boolean
   rules: JsonObject
 }
 
@@ -114,7 +120,10 @@ interface PermissionRow extends Record<string, unknown> {
 interface ScopeRow extends Record<string, unknown> {
   scope_key: string
   effect: 'include' | 'exclude'
-  scope_value: JsonValue
+  value_kind: 'boolean' | 'text' | 'text_set'
+  boolean_value: boolean | null
+  text_value: string | null
+  text_values: string[]
 }
 
 interface ApprovalRow extends Record<string, unknown> {
@@ -122,7 +131,12 @@ interface ApprovalRow extends Record<string, unknown> {
   approval_code: string
   amount_minor: string | null
   currency: string
-  rules: JsonObject
+  calculation_mode: EffectiveApprovalLimit['calculationMode']
+  fixed_amount_minor: string | null
+  discount_basis_points: number | null
+  allow_full_gift: boolean
+  requires_reason: boolean
+  requires_second_actor: boolean
 }
 
 interface NavigationRow extends Record<string, unknown> {
@@ -188,14 +202,9 @@ export class StaffAccessRepository {
       dataScopes: scopeRows.map((row) => ({
         key: row.scope_key,
         effect: row.effect,
-        value: row.scope_value,
+        value: scopeValue(row),
       })),
-      approvalLimits: approvalRows.map((row) => ({
-        code: row.approval_code,
-        amountMinor: row.amount_minor === null ? null : Number(row.amount_minor),
-        currency: row.currency,
-        rules: row.rules,
-      })),
+      approvalLimits: approvalRows.map(approvalView),
       navigation: navigationRows.map((row) => ({
         code: row.navigation_code,
         label: row.label,
@@ -224,7 +233,9 @@ export class StaffAccessRepository {
     at = new Date().toISOString(),
   ): Promise<StaffApprovalAuthority | null> {
     const result = await this.transaction.query<ApprovalRow>(`
-      SELECT al.id, al.approval_code, al.amount_minor::text, al.currency, al.rules
+      SELECT al.id, al.approval_code, al.amount_minor::text, al.currency,
+        al.calculation_mode, al.fixed_amount_minor::text, al.discount_basis_points,
+        al.allow_full_gift, al.requires_reason, al.requires_second_actor
       FROM mbox.role_approval_limits AS al
       JOIN mbox.employee_roles AS er
         ON er.tenant_id = al.tenant_id AND er.store_id = al.store_id AND er.role_id = al.role_id
@@ -245,13 +256,7 @@ export class StaffAccessRepository {
       at,
     ])
     const row = result.rows[0]
-    return row === undefined ? null : {
-      id: row.id,
-      code: row.approval_code,
-      amountMinor: row.amount_minor === null ? null : Number(row.amount_minor),
-      currency: row.currency,
-      rules: row.rules,
-    }
+    return row === undefined ? null : { id: row.id, ...approvalView(row) }
   }
 
   async upsertPermissionDefinition(input: Readonly<PermissionDefinitionInput>) {
@@ -345,13 +350,20 @@ export class StaffAccessRepository {
 
   async setRoleDataScope(input: Readonly<RoleDataScopeInput>) {
     await this.assertRole(input.roleId)
+    const strongValue = strongScopeValue(input.scopeValue)
     const result = await this.transaction.query<{ id: string }>(`
       INSERT INTO mbox.role_data_scopes (
         tenant_id, store_id, role_id, scope_key, effect, scope_value,
+        value_kind, boolean_value, text_value, text_values,
         enabled, configured_by_employee_id
-      ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6::jsonb, $7, $8::uuid)
+      ) VALUES (
+        $1::uuid, $2::uuid, $3::uuid, $4, $5, $6::jsonb,
+        $7, $8::boolean, $9, $10::text[], $11, $12::uuid
+      )
       ON CONFLICT (tenant_id, store_id, role_id, scope_key, effect) DO UPDATE
-      SET scope_value = EXCLUDED.scope_value, enabled = EXCLUDED.enabled,
+      SET scope_value = EXCLUDED.scope_value, value_kind=EXCLUDED.value_kind,
+          boolean_value=EXCLUDED.boolean_value, text_value=EXCLUDED.text_value,
+          text_values=EXCLUDED.text_values, enabled = EXCLUDED.enabled,
           configured_by_employee_id = EXCLUDED.configured_by_employee_id
       RETURNING id
     `, [
@@ -361,6 +373,10 @@ export class StaffAccessRepository {
       input.scopeKey,
       input.effect,
       JSON.stringify(input.scopeValue),
+      strongValue.kind,
+      strongValue.booleanValue,
+      strongValue.textValue,
+      strongValue.textValues,
       input.enabled,
       input.configuredByEmployeeId,
     ])
@@ -369,13 +385,25 @@ export class StaffAccessRepository {
 
   async setRoleApprovalLimit(input: Readonly<RoleApprovalLimitInput>) {
     await this.assertRole(input.roleId)
+    const strongRules = strongApprovalRules(input.rules ?? {})
     const result = await this.transaction.query<{ id: string }>(`
       INSERT INTO mbox.role_approval_limits (
         tenant_id, store_id, role_id, approval_code, amount_minor, currency,
-        rules, enabled, configured_by_employee_id
-      ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5::bigint, $6, $7::jsonb, $8, $9::uuid)
+        rules, calculation_mode, fixed_amount_minor, discount_basis_points,
+        allow_full_gift, requires_reason, requires_second_actor,
+        enabled, configured_by_employee_id
+      ) VALUES (
+        $1::uuid, $2::uuid, $3::uuid, $4, $5::bigint, $6, $7::jsonb,
+        $8, $9::bigint, $10::integer, $11, $12, $13, $14, $15::uuid
+      )
       ON CONFLICT (tenant_id, store_id, role_id, approval_code, currency) DO UPDATE
       SET amount_minor = EXCLUDED.amount_minor, rules = EXCLUDED.rules,
+          calculation_mode=EXCLUDED.calculation_mode,
+          fixed_amount_minor=EXCLUDED.fixed_amount_minor,
+          discount_basis_points=EXCLUDED.discount_basis_points,
+          allow_full_gift=EXCLUDED.allow_full_gift,
+          requires_reason=EXCLUDED.requires_reason,
+          requires_second_actor=EXCLUDED.requires_second_actor,
           enabled = EXCLUDED.enabled, configured_by_employee_id = EXCLUDED.configured_by_employee_id
       RETURNING id
     `, [
@@ -386,6 +414,12 @@ export class StaffAccessRepository {
       input.amountMinor,
       input.currency,
       JSON.stringify(input.rules ?? {}),
+      strongRules.calculationMode,
+      strongRules.fixedAmountMinor,
+      strongRules.discountBasisPoints,
+      strongRules.allowFullGift,
+      strongRules.requiresReason,
+      strongRules.requiresSecondActor,
       input.enabled,
       input.configuredByEmployeeId,
     ])
@@ -507,7 +541,8 @@ export class StaffAccessRepository {
 
   private async resolveDataScopeRows(employeeId: string, at: string) {
     const result = await this.transaction.query<ScopeRow>(`
-      SELECT DISTINCT ds.scope_key, ds.effect, ds.scope_value
+      SELECT DISTINCT ds.scope_key, ds.effect, ds.value_kind,
+        ds.boolean_value, ds.text_value, ds.text_values
       FROM mbox.role_data_scopes AS ds
       JOIN mbox.employee_roles AS er
         ON er.tenant_id = ds.tenant_id AND er.store_id = ds.store_id AND er.role_id = ds.role_id
@@ -525,7 +560,9 @@ export class StaffAccessRepository {
   private async resolveApprovalRows(employeeId: string, at: string) {
     const result = await this.transaction.query<ApprovalRow>(`
       SELECT DISTINCT ON (al.approval_code, al.currency)
-        al.id, al.approval_code, al.amount_minor::text, al.currency, al.rules
+        al.id, al.approval_code, al.amount_minor::text, al.currency,
+        al.calculation_mode, al.fixed_amount_minor::text, al.discount_basis_points,
+        al.allow_full_gift, al.requires_reason, al.requires_second_actor
       FROM mbox.role_approval_limits AS al
       JOIN mbox.employee_roles AS er
         ON er.tenant_id = al.tenant_id AND er.store_id = al.store_id AND er.role_id = al.role_id
@@ -588,4 +625,89 @@ function requiredId(result: { rows: { id: string }[]; rowCount: number | null },
   const row = result.rows[0]
   if (result.rowCount !== 1 || row === undefined) throw new Error(`${subject} was not found or persisted`)
   return row.id
+}
+
+function scopeValue(row: ScopeRow): JsonValue {
+  if (row.value_kind === 'boolean') {
+    if (row.boolean_value === null) throw new Error('Boolean staff data scope is incomplete')
+    return row.boolean_value
+  }
+  if (row.value_kind === 'text') {
+    if (row.text_value === null) throw new Error('Text staff data scope is incomplete')
+    return row.text_value
+  }
+  return [...row.text_values]
+}
+
+function strongScopeValue(value: JsonValue): {
+  kind: ScopeRow['value_kind']
+  booleanValue: boolean | null
+  textValue: string | null
+  textValues: string[]
+} {
+  if (typeof value === 'boolean') {
+    return { kind: 'boolean', booleanValue: value, textValue: null, textValues: [] }
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return { kind: 'text', booleanValue: null, textValue: value.trim(), textValues: [] }
+  }
+  if (Array.isArray(value) && value.every((entry) => typeof entry === 'string' && entry.trim().length > 0)) {
+    return {
+      kind: 'text_set',
+      booleanValue: null,
+      textValue: null,
+      textValues: [...new Set(value.map((entry) => (entry as string).trim()))].toSorted(),
+    }
+  }
+  throw new TypeError('Role data scope must be a boolean, text, or text array')
+}
+
+function strongApprovalRules(rules: JsonObject) {
+  const allowFullGift = rules.allowFullGift === true
+  const fixedAmountMinor = rules.fixedAmountMinor === undefined
+    ? null : strongPositiveInteger(rules.fixedAmountMinor, 'fixedAmountMinor')
+  const discountBasisPoints = rules.discountBasisPoints === undefined
+    ? null : strongPositiveInteger(rules.discountBasisPoints, 'discountBasisPoints')
+  const configured = Number(allowFullGift) + Number(fixedAmountMinor !== null) + Number(discountBasisPoints !== null)
+  if (configured > 1 || (discountBasisPoints !== null && discountBasisPoints > 9999)) {
+    throw new TypeError('Approval rules must select one valid calculation mode')
+  }
+  return {
+    calculationMode: allowFullGift ? 'full_gift' as const
+      : fixedAmountMinor !== null ? 'fixed_amount' as const
+        : discountBasisPoints !== null ? 'basis_points' as const : 'amount_limit' as const,
+    fixedAmountMinor,
+    discountBasisPoints,
+    allowFullGift,
+    requiresReason: rules.requiresReason !== false,
+    requiresSecondActor: rules.requiresSecondActor === true,
+  }
+}
+
+function strongPositiveInteger(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) throw new TypeError(`${label} must be a positive integer`)
+  return value as number
+}
+
+function approvalView(row: ApprovalRow): EffectiveApprovalLimit {
+  const fixedAmountMinor = row.fixed_amount_minor === null ? null : Number(row.fixed_amount_minor)
+  const rules: JsonObject = {
+    ...(row.calculation_mode === 'full_gift' ? { allowFullGift: true } : {}),
+    ...(fixedAmountMinor === null ? {} : { fixedAmountMinor }),
+    ...(row.discount_basis_points === null ? {} : { discountBasisPoints: row.discount_basis_points }),
+    ...(row.requires_reason ? { requiresReason: true } : {}),
+    ...(row.requires_second_actor ? { requiresSecondActor: true } : {}),
+  }
+  return {
+    code: row.approval_code,
+    amountMinor: row.amount_minor === null ? null : Number(row.amount_minor),
+    currency: row.currency,
+    calculationMode: row.calculation_mode,
+    fixedAmountMinor,
+    discountBasisPoints: row.discount_basis_points,
+    allowFullGift: row.allow_full_gift,
+    requiresReason: row.requires_reason,
+    requiresSecondActor: row.requires_second_actor,
+    rules,
+  }
 }

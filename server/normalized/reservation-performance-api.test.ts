@@ -451,7 +451,7 @@ describe('reservationPerformanceApiPlugin staff reservation permissions', () => 
     expect(response.json().data[0]).toMatchObject({ contactAvailable: true })
     const scopedCall = value.query.mock.calls.find(([sql]) => sql.includes('FROM mbox.reservations AS reservation'))
     expect(scopedCall?.[1]).toEqual([
-      tenantId, storeId, null, null, null, false, [employeeId], [areaId],
+      tenantId, storeId, null, null, null, false, [employeeId], [areaId], '2026-08-11',
     ])
   })
 
@@ -563,6 +563,20 @@ describe('reservationPerformanceApiPlugin performance and song requests', () => 
     expect(publicSongJson).not.toContain(tableSessionId)
     expect(publicSongJson).not.toContain(performerId)
     expect(publicSongJson).not.toContain('note')
+
+    const cancelled = await value.app.inject({
+      method: 'DELETE',
+      url: `/api/guest/song-requests/${songRequestId}`,
+      headers: { 'idempotency-key': 'guest-song-cancel-0001' },
+    })
+    expect(cancelled.statusCode).toBe(200)
+    expect(value.performance.cancelSongRequest).toHaveBeenCalledWith(expect.objectContaining({
+      requestId: songRequestId,
+      customerId,
+      tableSessionId,
+      actor: { type: 'guest', ref: guestContext.actorRef },
+    }))
+    expect(value.songRequestRepository.findById).not.toHaveBeenCalled()
   })
 
   it('uses song.view for staff queues and song.manage for performer, schedule and request changes', async () => {
@@ -736,6 +750,7 @@ postgresIntegration('reservationPerformanceApiPlugin PostgreSQL privacy and data
   })
 
   it('uses strict public DTOs and enforces owner, area, manager and contact scopes', async () => {
+    const staffUrl = '/api/staff/reservations?from=2026-08-12T00%3A00%3A00.000Z&to=2026-08-13T00%3A00%3A00.000Z'
     const guest = await app.inject({ method: 'GET', url: '/api/guest/reservations' })
     expect(guest.statusCode).toBe(200)
     expect(guest.json().data).toHaveLength(3)
@@ -757,7 +772,7 @@ postgresIntegration('reservationPerformanceApiPlugin PostgreSQL privacy and data
       'internalRule',
     ]) expect(publicJson).not.toContain(privateValue)
 
-    const areaScoped = await app.inject({ method: 'GET', url: '/api/staff/reservations' })
+    const areaScoped = await app.inject({ method: 'GET', url: staffUrl })
     expect(areaScoped.statusCode).toBe(200)
     expect(areaScoped.json().data).toHaveLength(2)
     expect(areaScoped.json().data.every((value: Record<string, unknown>) => !('contactToken' in value))).toBe(true)
@@ -768,7 +783,7 @@ postgresIntegration('reservationPerformanceApiPlugin PostgreSQL privacy and data
       permissions: ['reservation.view', 'reservation.view.all'],
       dataScopes: [],
     })
-    const greeter = await app.inject({ method: 'GET', url: '/api/staff/reservations' })
+    const greeter = await app.inject({ method: 'GET', url: staffUrl })
     expect(greeter.json().data).toHaveLength(3)
     expect(greeter.json().data.every((value: Record<string, unknown>) => !('contactToken' in value))).toBe(true)
 
@@ -778,7 +793,7 @@ postgresIntegration('reservationPerformanceApiPlugin PostgreSQL privacy and data
       permissions: ['reservation.view'],
       dataScopes: [],
     })
-    const ownerOnly = await app.inject({ method: 'GET', url: '/api/staff/reservations' })
+    const ownerOnly = await app.inject({ method: 'GET', url: staffUrl })
     expect(ownerOnly.json().data).toHaveLength(1)
     expect(ownerOnly.json().data[0]).toMatchObject({ ownerEmployeeId: scopedEmployeeId })
 
@@ -788,7 +803,7 @@ postgresIntegration('reservationPerformanceApiPlugin PostgreSQL privacy and data
       permissions: ['reservation.view', 'reservation.view.all', 'reservation.contact.view'],
       dataScopes: [],
     })
-    const manager = await app.inject({ method: 'GET', url: '/api/staff/reservations' })
+    const manager = await app.inject({ method: 'GET', url: staffUrl })
     expect(manager.json().data).toHaveLength(3)
     expect(manager.json().data.every((value: Record<string, unknown>) => (
       typeof value.contactToken === 'string' && value.contactToken.startsWith('private-contact-')

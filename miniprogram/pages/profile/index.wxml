@@ -1,0 +1,112 @@
+<view class="page profile-page">
+  <view class="profile-head"><view class="brand"><view class="brand-mark">M</view><text>M-BOX MEMBER</text></view><text class="profile-greeting">我的今晚</text><text class="profile-copy">权益、预约、活动与偏好，都在这里清楚可见。</text></view>
+  <state-panel wx:if="{{loading}}" type="loading" title="正在读取会员与权益" />
+  <block wx:else>
+    <view wx:if="{{error}}" class="error-banner">{{error}}</view>
+    <view wx:if="{{membership}}" class="member-card"><view class="member-card__top"><view><text>{{membership.levelText}}</text><text>{{membership.memberNo}}</text></view><text>M</text></view><view class="member-balance-grid"><view class="member-balance"><text>{{membership.pointsBalance}}</text><text>可用积分</text></view><view class="member-balance"><text>{{membership.growthValue}}</text><text>成长值</text></view></view><view wx:if="{{membership.upgradeText || membership.retainText || membership.periodText}}" class="member-progress"><text wx:if="{{membership.upgradeText}}">{{membership.upgradeText}}</text><text wx:if="{{membership.retainText}}">{{membership.retainText}}</text><text wx:if="{{membership.periodText}}">{{membership.periodText}}</text></view><view wx:if="{{membership.expiryText}}" class="member-expiry"><text>{{membership.expiryText}}</text><button wx:if="{{expiryNotificationOption}}" bindtap="enableExpiryReminder">到期前提醒我</button></view><view wx:if="{{membership.pendingRecoveryPoints > 0}}" class="member-recovery">当前有 {{membership.pendingRecoveryPoints}} 积分欠额；新到账积分会优先冲抵，期间暂不可兑换</view><button class="member-ledger-link" bindtap="openPoints">查看积分与成长值明细</button><view class="member-card__foot"><text>到店 {{membership.visitCount}} 次</text><text>{{benefitCount}} 项权益可用</text></view></view>
+    <view wx:else class="join-card"><text class="join-kicker">M-BOX MEMBERSHIP</text><text class="join-title">把每次相遇留下来</text><text class="join-copy">保存积分、到店偏好、活动资格和门店发放的专属权益。</text><view wx:if="{{membershipTerms}}" class="membership-terms-summary"><text>{{membershipTerms.title}} · 第{{membershipTerms.version}}版</text><text>{{membershipTerms.summary}}</text><button bindtap="showMembershipTerms">查看当前条款全文</button></view><text wx:else class="membership-terms-unavailable">当前入会条款尚未发布，新入会暂未开放；点单和找回原会员不受影响。</text><checkbox-group bindchange="onAgreementChange"><label class="join-agree-row"><checkbox value="agree" checked="{{agreedToPolicies}}" color="#2d2925" /><text class="join-agree-copy">我已阅读并同意</text></label></checkbox-group><view class="join-agree-links"><text bindtap="showMembershipTerms">《用户服务协议》</text><text bindtap="openPrivacy">《隐私政策》</text></view><button class="join-submit" bindtap="becomeMember" loading="{{busy}}" hover-class="join-submit-hover">阅读入会条款</button><button wx:if="{{agreedToPolicies}}" class="recovery-button wx-phone-button" open-type="getPhoneNumber|agreePrivacyAuthorization" bindgetphonenumber="recoverMembership" bindagreeprivacyauthorization="onAgreePrivacyAuthorization" hover-class="none" loading="{{recoveryBusy}}">授权手机号找回会员</button><button wx:else class="recovery-button recovery-button--pending" bindtap="remindAgreement" hover-class="none">授权手机号找回会员</button><text class="recovery-note">请先自行勾选同意《用户服务协议》和《隐私政策》。新客再阅读入会条款并授权手机号入会；老客勾选后可授权手机号找回原会员。不会开启短信或营销。</text><text wx:if="{{recoveryMessage}}" class="recovery-result">{{recoveryMessage}}</text></view>
+
+    <view wx:if="{{showRedemptions}}" class="section redemption-section">
+      <view class="section-title"><text>积分兑换</text><text class="section-link">不抵现金</text></view>
+      <view wx:if="{{redemptionError}}" class="warning">{{redemptionError}}</view>
+      <scroll-view wx:if="{{redemptionItems.length}}" scroll-x enhanced show-scrollbar="{{false}}" class="redemption-scroll"><view class="redemption-row">
+        <view wx:for="{{redemptionItems}}" wx:key="publicId" class="redemption-card">
+          <view class="redemption-card__head"><text>{{item.name}}</text><text>{{item.minimumTier === 'gold' ? '金卡' : item.minimumTier === 'silver' ? '银卡' : '会员'}}</text></view>
+          <text class="redemption-description">{{item.description}}</text>
+          <view class="redemption-meta"><text>{{item.inventoryText}}</text><text wx:if="{{item.availableUntilText}}">有效至 {{item.availableUntilText}}</text></view>
+          <button data-id="{{item.publicId}}" disabled="{{!item.eligible}}" loading="{{redemptionBusyId === item.publicId}}" bindtap="redeemItem">{{item.actionText}}</button>
+        </view>
+      </view></scroll-view>
+      <view wx:if="{{redemptions.length}}" class="redemption-history">
+        <view wx:for="{{redemptions}}" wx:key="publicId" class="redemption-history__row"><view><text>{{item.name}}</text><text>{{item.pointsUsed}}积分 · {{item.statusText}}</text></view><button wx:if="{{item.canCancel}}" data-id="{{item.publicId}}" loading="{{redemptionBusyId === item.publicId}}" bindtap="cancelRedemption">取消</button></view>
+      </view>
+    </view>
+
+    <view class="section benefit-section">
+      <view class="section-title"><text>我的权益与赠送</text><text class="section-link">{{benefitCount}}项可用</text></view>
+      <view wx:if="{{benefitError}}" class="warning">{{benefitError}}</view>
+      <scroll-view wx:if="{{benefits.length}}" scroll-x enhanced show-scrollbar="{{false}}" class="benefit-scroll"><view class="benefit-row">
+        <view wx:for="{{benefits}}" wx:key="id" class="benefit-card"><view class="benefit-card__head"><text>{{item.typeText}}</text><text>{{item.quantityText}}</text></view><text class="benefit-title">{{item.title}}</text><text class="benefit-description">{{item.description}}</text><view class="benefit-foot"><view><text wx:if="{{item.valueText}}">{{item.valueText}}</text><text>有效至 {{item.validText}}</text></view><button data-id="{{item.id}}" loading="{{benefitBusyId === item.id}}" bindtap="requestBenefitUse">使用</button></view></view>
+      </view></scroll-view>
+      <state-panel wx:else type="empty" title="当前没有可用权益" message="赠饮、实物好礼和活动资格发放后会显示在这里" />
+    </view>
+
+    <view wx:if="{{reservations.length || registrations.length}}" class="section journey-section">
+      <view class="section-title"><text>接下来的安排</text><text class="section-link">预约与活动</text></view>
+      <button wx:for="{{reservations}}" wx:key="publicId" class="journey-row" bindtap="openReservations"><view><text>预约到店</text><text>{{item.title}}</text></view><text>{{item.statusText}} →</text></button>
+      <button wx:for="{{registrations}}" wx:key="publicId" class="journey-row" data-id="{{item.activityPublicId}}" bindtap="openCommunity"><view><text>{{item.title}}</text><text>{{item.startsText}} · {{item.partySize}}人</text></view><text>{{item.statusText}} →</text></button>
+    </view>
+    <view wx:if="{{registrationError}}" class="warning">{{registrationError}}</view>
+
+    <view class="section preference-fact-section">
+      <view class="section-title preference-section-head">
+        <view><text>我的到店偏好</text><text>只用于本店推荐，可纠正和撤回</text></view>
+        <button class="preference-head-action" bindtap="togglePreferenceEditor" aria-label="{{showPreferenceEditor ? '收起偏好填写' : '补充新的偏好'}}">{{showPreferenceEditor ? '收起' : '补充'}}</button>
+      </view>
+      <view wx:if="{{preferenceError}}" class="warning">{{preferenceError}}</view>
+      <view class="panel preference-fact-panel">
+        <view wx:if="{{preferenceFacts.length}}" class="preference-fact-list">
+          <view wx:for="{{preferenceFacts}}" wx:key="viewKey" class="preference-fact-row {{item.isActive ? '' : 'is-muted'}}">
+            <view class="preference-fact-copy">
+              <view class="preference-fact-line"><text>{{item.keyText}}</text><text>{{item.statusText}}</text></view>
+              <text class="preference-fact-value">{{item.valueText}}</text>
+              <text class="preference-fact-meta">{{item.evidenceText}}<text wx:if="{{item.lastEvidenceText}}"> · 最近 {{item.lastEvidenceText}}</text></text>
+            </view>
+            <button wx:if="{{item.isActive}}" data-key="{{item.key}}" data-value="{{item.value}}" disabled="{{preferenceBusyId !== ''}}" bindtap="correctCustomerPreference">纠正</button>
+          </view>
+        </view>
+        <view wx:else class="preference-empty"><text>还没有已确认的偏好</text><text>您可以主动补充；到店确认的结构化记录也会出现在这里。</text></view>
+        <button wx:if="{{preferenceSources.length}}" class="preference-evidence-toggle" bindtap="togglePreferenceEvidence" aria-label="{{showPreferenceEvidence ? '收起偏好依据' : '查看偏好依据摘要'}}">{{showPreferenceEvidence ? '收起依据' : '查看依据'}} · {{preferenceSourceCount}}条</button>
+      </view>
+
+      <view wx:if="{{showPreferenceEditor}}" class="panel preference-editor">
+        <label class="field"><text class="field__label">偏好类型</text><picker mode="selector" range="{{preferenceTypeOptions}}" range-key="name" value="{{preferenceTypeIndex}}" bindchange="onPreferenceTypeChange"><view class="picker-field">{{preferenceTypeOptions[preferenceTypeIndex].name}}</view></picker></label>
+        <label wx:if="{{preferenceUsesPicker}}" class="field"><text class="field__label">具体偏好</text><picker mode="selector" range="{{preferenceValueOptions}}" range-key="name" value="{{preferenceValueIndex}}" bindchange="onPreferenceValueChange"><view class="picker-field">{{preferenceValueOptions[preferenceValueIndex].name}}</view></picker></label>
+        <label wx:else class="field"><text class="field__label">具体偏好</text><input class="field__input" maxlength="80" value="{{preferenceTextValue}}" placeholder="{{preferenceInputPlaceholder}}" bindinput="onPreferenceTextInput" /></label>
+        <text class="preference-editor-note">请只填写与到店体验和推荐有关的信息，不要填写手机号等身份信息。</text>
+        <button class="primary-button" loading="{{preferenceBusyId === 'create'}}" disabled="{{preferenceBusyId !== ''}}" bindtap="submitCustomerPreference">记录这项偏好</button>
+      </view>
+
+      <view wx:if="{{showPreferenceEvidence && preferenceSources.length}}" class="panel preference-evidence-list">
+        <view wx:for="{{preferenceSources}}" wx:key="publicId" class="preference-evidence-row {{item.withdrawn ? 'is-withdrawn' : ''}}">
+          <view><text>{{item.keyText}} · {{item.valueText}}</text><text>{{item.sourceText}} · {{item.relationText}}<text wx:if="{{item.createdAtText}}"> · {{item.createdAtText}}</text></text></view>
+          <button wx:if="{{!item.withdrawn}}" data-id="{{item.publicId}}" loading="{{preferenceBusyId === item.publicId}}" disabled="{{preferenceBusyId !== ''}}" bindtap="withdrawCustomerPreference">撤回</button>
+          <text wx:else class="preference-withdrawn-label">已撤回</text>
+        </view>
+        <text class="preference-evidence-note">仅显示最近{{preferenceSources.length}}条结构化摘要，不展示员工原话、员工身份或内部备注。</text>
+      </view>
+    </view>
+
+    <view wx:if="{{productRestrictions.length}}" class="section restriction-section">
+      <view class="section-title"><text>不再向我推荐</text><text class="section-link">本人可撤回</text></view>
+      <view class="panel restriction-list">
+        <view wx:for="{{productRestrictions}}" wx:key="publicId" class="restriction-row">
+          <view><text>{{item.productName}}</text><text>{{item.restrictionText}}</text></view>
+          <button data-id="{{item.publicId}}" loading="{{restrictionBusyId === item.publicId}}" bindtap="withdrawRestriction">恢复推荐</button>
+        </view>
+        <text class="restriction-note">“过敏或不能饮用”只用于过滤本店推荐，不代替点单前的成分核对或医疗建议。</text>
+      </view>
+    </view>
+
+    <view wx:if="{{points.length}}" class="section"><view class="section-title"><text>最近积分</text><text class="section-link">最近{{points.length}}条</text></view><view class="panel points-list"><view wx:for="{{points}}" wx:key="id" class="point-row"><view><text>{{item.description || '积分变动'}}</text><text>{{item.occurredAt}}</text></view><text class="{{item.pointsDelta > 0 ? 'positive' : ''}}">{{item.pointsDelta > 0 ? '+' : ''}}{{item.pointsDelta}}</text></view></view></view>
+
+    <view wx:if="{{contentCards.length}}" class="section member-content-section">
+      <view class="section-title member-content-head"><view><text>活动与内容推荐</text><text>仅供了解，不代表权益已到账</text></view><text class="section-link">最多3条</text></view>
+      <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="member-content-scroll">
+        <view class="member-content-row">
+          <view wx:for="{{contentCards}}" wx:key="code" class="member-content-card">
+            <image wx:if="{{item.imageUrl}}" class="member-content-image" src="{{item.imageUrl}}" mode="aspectFill" aria-label="{{item.title}}" />
+            <view class="member-content-copy">
+              <text class="member-content-type">{{item.typeText}}</text>
+              <text class="member-content-title">{{item.title}}</text>
+              <text class="member-content-summary">{{item.summary}}</text>
+              <button wx:if="{{item.hasTarget}}" data-code="{{item.code}}" bindtap="openMemberContentCard">{{item.ctaLabel}}</button>
+              <text wx:else class="member-content-static">仅供查看</text>
+            </view>
+          </view>
+        </view>
+      </scroll-view>
+      <text class="member-content-boundary">已到账的赠送和权益只在上方“我的权益与赠送”中显示。</text>
+    </view>
+  </block>
+</view>

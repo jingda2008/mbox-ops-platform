@@ -12,9 +12,26 @@ import { OutboxDispatcher, type OutboxDelivery } from './outbox-dispatcher.js'
 import { PrintWorker, type PrintAdapter } from './print-worker.js'
 import { ReservationHoldExpiryWorker } from './reservation-hold-expiry-worker.js'
 import { PaymentReservationExpiryWorker } from './payment-reservation-expiry-worker.js'
+import { ActivityRegistrationExpiryWorker } from './activity-registration-expiry-worker.js'
+import { ActivityWaitlistPromotionWorker } from './activity-waitlist-promotion-worker.js'
+import { ExperienceCueDispatchWorker } from './experience-cue-dispatch-worker.js'
 import { ServiceTaskSlaWorker } from './service-task-sla-worker.js'
 import { AiScheduledExecutionWorker, SopWorker, type SopActionPort } from './sop-worker.js'
 import { PostgresStaffLoginRateLimiter } from './staff-login-rate-limiter.js'
+import { LoyaltyPointsExpiryWorker } from './loyalty-points-expiry-worker.js'
+import { LoyaltyAccrualDeferredWorker } from './loyalty-accrual-deferred-worker.js'
+import { LoyaltyRedemptionRecoveryWorker } from './loyalty-redemption-recovery-worker.js'
+import { LoyaltyTierBenefitExpiryWorker } from './loyalty-tier-benefit-expiry-worker.js'
+import { LoyaltyTierReviewWorker } from './loyalty-tier-review-worker.js'
+import {
+  WechatLoyaltyNotificationWorker,
+  type WechatMiniProgramNotificationRecipientResolver,
+  type WechatSubscriptionMessageDelivery,
+} from './wechat-loyalty-notification-worker.js'
+import { ReservationPerformanceNotificationWorker } from './reservation-performance-notification-worker.js'
+import { PromotionalLoyaltyWorker } from './promotional-loyalty-worker.js'
+import { PersonalContactDispositionWorker } from './personal-contact-disposition-worker.js'
+import type { WechatTemplateMessageDelivery } from './wechat-subscription-message-adapter.js'
 import type { ScopedPostgresTransactionRunner, StoreScope } from './transaction-runner.js'
 
 export interface NormalizedWorkerAdapters {
@@ -52,6 +69,14 @@ export interface NormalizedWorkerRuntimeOptions {
   transactions: ScopedPostgresTransactionRunner
   aiExecutions: AiScheduledExecutionPort
   adapters?: Readonly<NormalizedWorkerAdapters> | null
+  wechatLoyaltyNotification?: Readonly<{
+    recipients: WechatMiniProgramNotificationRecipientResolver
+    delivery: WechatSubscriptionMessageDelivery
+  }> | null
+  reservationPerformanceNotification?: Readonly<{
+    recipients: WechatMiniProgramNotificationRecipientResolver
+    delivery: WechatTemplateMessageDelivery
+  }> | null
   onError?: (worker: NormalizedWorkerName, error: unknown) => void
   onCycle?: (result: Readonly<NormalizedWorkerCycleResult>) => void
 }
@@ -94,11 +119,38 @@ export function createNormalizedWorkerRuntime(
     serviceSla: new ServiceTaskSlaWorker(transactions),
     reservationExpiry: new ReservationHoldExpiryWorker(transactions),
     paymentReservationExpiry: new PaymentReservationExpiryWorker(transactions),
+    activityRegistrationExpiry: new ActivityRegistrationExpiryWorker(transactions),
+    activityWaitlistPromotion: new ActivityWaitlistPromotionWorker(
+      transactions,
+      adapters?.capabilities.includes('payment.create.postar') ?? false,
+    ),
+    experienceCueDispatch: new ExperienceCueDispatchWorker(transactions),
+    loyaltyPointsExpiry: new LoyaltyPointsExpiryWorker(transactions),
+    loyaltyAccrualDeferred: new LoyaltyAccrualDeferredWorker(transactions),
+    loyaltyRedemptionRecovery: new LoyaltyRedemptionRecoveryWorker(transactions),
+    promotionalLoyalty: new PromotionalLoyaltyWorker(transactions),
+    loyaltyTierBenefitExpiry: new LoyaltyTierBenefitExpiryWorker(transactions),
+    loyaltyTierReview: new LoyaltyTierReviewWorker(transactions),
+    ...(options.wechatLoyaltyNotification == null ? {} : {
+      wechatLoyaltyNotification: new WechatLoyaltyNotificationWorker(
+        transactions,
+        options.wechatLoyaltyNotification.recipients,
+        options.wechatLoyaltyNotification.delivery,
+      ),
+    }),
+    ...(options.reservationPerformanceNotification == null ? {} : {
+      reservationPerformanceNotification: new ReservationPerformanceNotificationWorker(
+        transactions,
+        options.reservationPerformanceNotification.recipients,
+        options.reservationPerformanceNotification.delivery,
+      ),
+    }),
     idempotencyCleanup: new IdempotencyCleanupWorker(transactions),
     staffLoginRateLimitCleanup: new PostgresStaffLoginRateLimiter(transactions, options.hashSecret),
     businessDay: new BusinessDayRolloverWorker(transactions),
     ...(adapters === null ? {} : { sop: new SopWorker(transactions, adapters.sop) }),
     aiScheduled: new AiScheduledExecutionWorker(transactions, options.aiExecutions),
+    personalContactDisposition:new PersonalContactDispositionWorker(transactions),
     ...(adapters === null ? {} : {
       print: new PrintWorker(transactions),
       outbox: new OutboxDispatcher(transactions),

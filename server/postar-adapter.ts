@@ -415,6 +415,7 @@ function refundFailure(
     occurredAt,
     providerRefundId: request.refundId,
     providerRefundTransactionId: null,
+    originalProviderTransactionId: request.providerTransactionId,
     refundId: request.refundId,
     status: 'failed',
   }
@@ -437,6 +438,10 @@ function parseRefundQueryObservation(
   const refundAmount = Math.abs(parseMoney(data.refundAmt, '星驿退款金额', { allowNegative: true }))
   const status = refundStatus(requiredString(data, 'orderStatus'))
   const transactionId = requiredString(data, 'orderFlowNo')
+  const originalProviderTransactionId = requiredString(data, 'oldOrderNo')
+  if (originalProviderTransactionId !== request.originalProviderTransactionId) {
+    throw new Error('星驿退款查询原支付订单号不匹配')
+  }
   return {
     amount: refundAmount,
     currency: 'CNY',
@@ -444,6 +449,7 @@ function parseRefundQueryObservation(
     occurredAt: parsePostarDateTime(requiredString(data, 'orderTime'), '星驿退款订单时间'),
     providerRefundId: request.providerRefundId,
     providerRefundTransactionId: status === 'succeeded' ? transactionId : null,
+    originalProviderTransactionId,
     refundId: request.refundId,
     status,
   } satisfies ProviderRefundObservation
@@ -797,6 +803,7 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
       occurredAt: parsePostarDateTime(requiredString(data, 'orderTime'), '星驿退款创建时间'),
       providerRefundId: request.refundId,
       providerRefundTransactionId: null,
+      originalProviderTransactionId: request.providerTransactionId,
       refundId: request.refundId,
       status: 'processing',
     }
@@ -806,8 +813,9 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
     request: ProviderRefundQueryRequest,
     context: PaymentProviderContext,
   ): Promise<ProviderRefundObservation> {
-    const metadata = await this.options.metadataSource.getRefundQueryMetadata(request)
-    assertDate(metadata.refundDate, '星驿退款日期')
+    const refundDate = request.refundDate
+      ?? (await this.options.metadataSource.getRefundQueryMetadata(request)).refundDate
+    assertDate(refundDate, '星驿退款日期')
     const { agencyId, publicKey } = await getCredentials(
       context,
       this.agencyIdSecretName,
@@ -818,7 +826,7 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
         agetId: agencyId,
         custId: request.merchantId,
         orderNo: request.providerRefundId,
-        originTradeDate: metadata.refundDate,
+        originTradeDate: refundDate,
         timeStamp: formatPostarTimestamp(this.now()),
         version: VERSION,
       }, publicKey),

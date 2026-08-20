@@ -36,11 +36,24 @@ import {
   type VerifiedPricingAuthorization,
 } from './pricing-authorization-policy.js'
 import { StaffAccessRepository } from './staff-access-repository.js'
+import {
+  CustomerExperienceRepository,
+  CustomerExperienceRequestError,
+  type SelectedCheckoutUpgrade,
+} from './customer-experience-repository.js'
+import { ExperiencePlanActivationRepository } from './experience-plan-activation-repository.js'
+import { lockBoundGuestTablePosition } from './guest-table-authority.js'
 
 export interface KdsSchedulingOverride {
   priority?: number
   dueAt?: string | null
   reason: string
+}
+
+export interface RecommendationOrderAttribution {
+  recommendationPublicId: string
+  selectedProductId: string
+  experiencePlanState?: 'active' | 'planned' | 'failed'
 }
 
 export interface SubmitOrderCommand extends Omit<CreateSubmittedOrderInput, 'tableSessionId'> {
@@ -53,6 +66,8 @@ export interface SubmitOrderCommand extends Omit<CreateSubmittedOrderInput, 'tab
   kdsOverride?: Readonly<KdsSchedulingOverride>
   pricingAuthorization?: Readonly<PricingAuthorizationRequest>
   confirmedDuplicateOrderPublicId?: string | null
+  checkoutUpgradeOfferPublicId?: string | null
+  recommendationAttribution?: Readonly<RecommendationOrderAttribution> | null
 }
 
 export interface PaymentNextStep {
@@ -76,6 +91,13 @@ export interface CommerceCommandServiceOptions {
   guestOrderSafetyPolicy?: Readonly<GuestOrderSafetyPolicy>
 }
 
+export class GuestTablePositionChangedError extends Error {
+  constructor() {
+    super('顾客已不在当前桌次位置，请重新扫描所在桌二维码')
+    this.name = 'GuestTablePositionChangedError'
+  }
+}
+
 export class CommerceCommandService {
   private readonly pricingPolicy: PricingAuthorizationPolicy | null
 
@@ -97,12 +119,28 @@ export class CommerceCommandService {
       resultCodec: submittedCommerceCodec,
     }, async (transaction) => {
       const context = await resolveAuthoritativeTableContext(transaction, input)
+      if (input.channel === 'guest_qr') {
+        const lockedSession=await transaction.query<{ id:string }>(`
+          SELECT id FROM mbox.table_sessions
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status='open'
+          FOR UPDATE
+        `,[transaction.scope.tenantId,transaction.scope.storeId,context.tableSessionId])
+        if (!lockedSession.rows[0]) throw new GuestTablePositionChangedError()
+        const allowed=await lockBoundGuestTablePosition(transaction,{
+          tableSessionId:context.tableSessionId,
+          customerId:input.createdByCustomerId!,
+          actorRef:input.actor.ref,
+        })
+        if (!allowed) throw new GuestTablePositionChangedError()
+      }
+      const selectedUpgrade = await selectCheckoutUpgrade(transaction, input, context.tableSessionId)
+      const effectiveLines = selectedUpgrade?.upgradedItems ?? input.lines
       const orderInput: CreateSubmittedOrderInput = {
         tableSessionId: context.tableSessionId,
         publicId: input.publicId,
         channel: input.channel,
         settlementMode: input.settlementMode ?? 'table_tab',
-        lines: input.lines,
+        lines: effectiveLines,
         note: input.note,
         createdByEmployeeId: input.createdByEmployeeId,
         createdByCustomerId: input.createdByCustomerId,
@@ -112,7 +150,7 @@ export class CommerceCommandService {
         await new GuestOrderSafetyRepository(transaction, this.options.guestOrderSafetyPolicy).assertAllowed({
           tableSessionId: context.tableSessionId,
           customerId: input.createdByCustomerId!,
-          lines: input.lines,
+          lines: effectiveLines,
           confirmedDuplicateOrderPublicId: input.confirmedDuplicateOrderPublicId,
         })
       }
@@ -161,6 +199,22 @@ export class CommerceCommandService {
       const kdsTasks = order.settlementMode === 'immediate_payment'
         ? []
         : await createServerScheduledKdsTasks(transaction, order, fulfillmentPlan)
+      if (selectedUpgrade !== null) {
+        assertCheckoutUpgradeOrder(order, selectedUpgrade)
+        await new CustomerExperienceRepository(transaction).markCheckoutUpgradeConverted({
+          offerId: selectedUpgrade.offerId,
+          orderId: order.id,
+          targetProductId: selectedUpgrade.targetProductId,
+          targetAmountMinor: selectedUpgrade.targetAmountMinor,
+          currency: selectedUpgrade.currency,
+        })
+      }
+      const orderedRecommendation = await recordOrderedRecommendation(
+        transaction,
+        input,
+        context.tableSessionId,
+        order,
+      )
       const result: SubmittedCommerceResult = {
         order,
         kdsTasks,
@@ -175,14 +229,20 @@ export class CommerceCommandService {
           objectType: 'order',
           objectId: order.id,
           businessDate: input.businessDate,
-          afterData: orderAuditSnapshot(result, pricingAuthorization, context, schedulingOverride, inventoryControl),
+          afterData: orderAuditSnapshot(
+            result, pricingAuthorization, context, schedulingOverride, inventoryControl, selectedUpgrade?.offerId ?? null,
+            orderedRecommendation,
+          ),
         }],
         outboxMessages: [{
           aggregateType: 'order',
           aggregateId: order.id,
           aggregateVersion: 1,
           eventType: 'order.submitted.v1',
-          payload: orderOutboxPayload(result, pricingAuthorization, context, schedulingOverride, inventoryControl),
+          payload: orderOutboxPayload(
+            result, pricingAuthorization, context, schedulingOverride, inventoryControl, selectedUpgrade?.offerId ?? null,
+            orderedRecommendation,
+          ),
         }],
       }
     })
@@ -203,6 +263,90 @@ export class CommerceCommandService {
       lines: input.lines,
     }, input.pricingAuthorization)
   }
+}
+
+async function recordOrderedRecommendation(
+  transaction: ScopedTransaction,
+  input: Readonly<SubmitOrderCommand>,
+  tableSessionId: string,
+  order: Readonly<SubmittedOrder>,
+): Promise<Readonly<RecommendationOrderAttribution> | null> {
+  const attribution = input.recommendationAttribution ?? null
+  if (attribution === null) return null
+  if (input.channel !== 'guest_qr' || !input.createdByCustomerId || input.actor.type !== 'guest') {
+    throw new TypeError('Recommendation attribution requires an authenticated guest order')
+  }
+  const normalized = {
+    recommendationPublicId: attribution.recommendationPublicId.trim(),
+    selectedProductId: attribution.selectedProductId.trim(),
+  }
+  const reference = await new CustomerExperienceRepository(transaction).recordRecommendationOrdered({
+    recommendationPublicId: normalized.recommendationPublicId,
+    selectedProductId: normalized.selectedProductId,
+    customerId: input.createdByCustomerId,
+    tableSessionId,
+    businessDate: input.businessDate,
+    orderId: order.id,
+    orderPublicId: order.publicId,
+    actorRef: input.actor.ref ?? 'guest-order',
+  })
+  const plan = await new ExperiencePlanActivationRepository(transaction).recordOrderedNonCritical({
+    reference,
+    orderId: order.id,
+    actorRef: input.actor.ref ?? 'guest-order',
+  })
+  return { ...normalized, experiencePlanState: plan.state === 'active' || plan.state === 'planned' ? plan.state : 'failed' }
+}
+
+async function selectCheckoutUpgrade(
+  transaction: ScopedTransaction,
+  input: Readonly<SubmitOrderCommand>,
+  tableSessionId: string,
+): Promise<SelectedCheckoutUpgrade | null> {
+  const publicId = input.checkoutUpgradeOfferPublicId?.trim() || null
+  if (publicId === null) return null
+  if (input.channel !== 'guest_qr' || !input.createdByCustomerId
+    || (input.settlementMode ?? 'table_tab') !== 'immediate_payment') {
+    throw new TypeError('Checkout upgrades require an authenticated guest immediate-payment order')
+  }
+  return new CustomerExperienceRepository(transaction).selectCheckoutUpgrade({
+    customerId: input.createdByCustomerId,
+    tableSessionId,
+    businessDate: input.businessDate,
+  }, publicId, input.lines)
+}
+
+function assertCheckoutUpgradeOrder(
+  order: Readonly<SubmittedOrder>,
+  selected: Readonly<SelectedCheckoutUpgrade>,
+): void {
+  const expected = selected.upgradedItems.map((line) => ({
+    productId: line.productId,
+    quantity: line.quantity,
+    note: line.note?.trim() || null,
+  })).toSorted(compareBasketLine)
+  const actual = order.items
+    .filter((item) => item.billable && item.parentOrderItemId === null)
+    .map((item) => ({
+      productId: item.productId,
+      quantity: item.quantity,
+      note: item.note?.trim() || null,
+    }))
+    .toSorted(compareBasketLine)
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new CustomerExperienceRequestError(
+      '升级后的订单内容与顾客确认不一致，已取消本次下单',
+      'CHECKOUT_UPGRADE_ORDER_MISMATCH',
+      409,
+    )
+  }
+}
+
+function compareBasketLine(
+  left: Readonly<{ productId: string; note: string | null }>,
+  right: Readonly<{ productId: string; note: string | null }>,
+): number {
+  return left.productId.localeCompare(right.productId) || (left.note ?? '').localeCompare(right.note ?? '')
 }
 
 async function resolveAuthoritativeTableContext(
@@ -299,13 +443,57 @@ const submittedCommerceCodec: JsonCodec<SubmittedCommerceResult> = {
   encode: submittedCommerceToJson,
   decode: (value) => {
     if (!jsonObjectOrNull(value)) throw new TypeError('Stored commerce result is invalid')
-    const result = value as Partial<SubmittedCommerceResult>
+    const rawResult = value as Partial<SubmittedCommerceResult>
+    const result = {
+      ...rawResult,
+      order: normalizeStoredOrderSubmissionCosts(rawResult.order),
+    } as Partial<SubmittedCommerceResult>
     if (!isSubmittedOrder(result.order) || !Array.isArray(result.kdsTasks)
       || !Array.isArray(result.inventoryConsumptions) || !isPaymentNextStep(result.paymentNextStep)) {
       throw new TypeError('Stored commerce result is incomplete')
     }
     return result as SubmittedCommerceResult
   },
+}
+
+function normalizeStoredOrderSubmissionCosts(value: unknown): unknown {
+  if (!jsonObjectOrNull(value) || !Array.isArray(value.items)) return value
+  return {
+    ...value,
+    items: value.items.map((item) => {
+      if (!jsonObjectOrNull(item)) return item
+      const hasAnySubmissionCostField = [
+        'unitCostMinorAtSubmission',
+        'totalCostMinorAtSubmission',
+        'costSource',
+        'costReferenceProductId',
+        'costReferenceOrderItemId',
+        'costReferenceProductUpdatedAt',
+      ].some((key) => Object.hasOwn(item, key))
+      const withLoyalty = Object.hasOwn(item, 'loyaltyEligibleAtSubmission')
+        && Object.hasOwn(item, 'loyaltyEligibilitySource')
+        ? item
+        : {
+            ...item,
+            // Old idempotency payloads are response compatibility only. They are
+            // never used for accrual; the database order row remains authoritative.
+            loyaltyEligibleAtSubmission: false,
+            loyaltyEligibilitySource: 'legacy_current_catalog',
+          }
+      if (hasAnySubmissionCostField) return withLoyalty
+      // Idempotency results written before migration 066 remain replayable, but
+      // no cost is inferred from their historical JSON snapshot.
+      return {
+        ...withLoyalty,
+        unitCostMinorAtSubmission: null,
+        totalCostMinorAtSubmission: null,
+        costSource: 'unavailable',
+        costReferenceProductId: null,
+        costReferenceOrderItemId: null,
+        costReferenceProductUpdatedAt: null,
+      }
+    }),
+  }
 }
 
 function submittedCommerceToJson(result: SubmittedCommerceResult): JsonObject {
@@ -328,6 +516,8 @@ function orderAuditSnapshot(
     unconfiguredOrderItemIds: readonly string[]
     reservationCount: number
   }>,
+  checkoutUpgradeOfferId: string | null = null,
+  recommendationAttribution: Readonly<RecommendationOrderAttribution> | null = null,
 ): JsonObject {
   return {
     id: result.order.id,
@@ -354,6 +544,8 @@ function orderAuditSnapshot(
     assistedOrderContextId: context.assistedContextId,
     kdsOverrideReason: schedulingOverride?.reason ?? null,
     pricingAuthorization: authorizationToJson(authorization),
+    checkoutUpgradeOfferId,
+    ...(recommendationAttribution ? { recommendationAttribution: { ...recommendationAttribution } } : {}),
   }
 }
 
@@ -368,6 +560,8 @@ function orderOutboxPayload(
     unconfiguredOrderItemIds: readonly string[]
     reservationCount: number
   }>,
+  checkoutUpgradeOfferId: string | null = null,
+  recommendationAttribution: Readonly<RecommendationOrderAttribution> | null = null,
 ): JsonObject {
   return {
     order: orderToJson(result.order),
@@ -384,6 +578,8 @@ function orderOutboxPayload(
     tableCode: context.tableCode,
     kdsOverrideReason: schedulingOverride?.reason ?? null,
     pricingAuthorization: authorizationToJson(authorization),
+    checkoutUpgradeOfferId,
+    ...(recommendationAttribution ? { recommendationAttribution: { ...recommendationAttribution } } : {}),
   }
 }
 
@@ -422,6 +618,14 @@ function orderToJson(order: SubmittedOrder): JsonObject {
       fulfillmentDueAt: item.fulfillmentDueAt ?? null,
       productSnapshot: item.productSnapshot,
       costSnapshot: item.costSnapshot,
+      unitCostMinorAtSubmission: item.unitCostMinorAtSubmission,
+      totalCostMinorAtSubmission: item.totalCostMinorAtSubmission,
+      costSource: item.costSource,
+      costReferenceProductId: item.costReferenceProductId,
+      costReferenceOrderItemId: item.costReferenceOrderItemId,
+      costReferenceProductUpdatedAt: item.costReferenceProductUpdatedAt,
+      loyaltyEligibleAtSubmission: item.loyaltyEligibleAtSubmission,
+      loyaltyEligibilitySource: item.loyaltyEligibilitySource,
       status: item.status,
       note: item.note,
       createdAt: item.createdAt,
@@ -466,6 +670,28 @@ function validateCommand(input: Readonly<SubmitOrderCommand>): void {
   }
   if (input.channel === 'guest_qr' && (!input.createdByCustomerId || input.createdByEmployeeId)) {
     throw new TypeError('Guest QR orders require an authenticated guest creator')
+  }
+  if (input.checkoutUpgradeOfferPublicId !== undefined && input.checkoutUpgradeOfferPublicId !== null) {
+    if (input.checkoutUpgradeOfferPublicId.trim().length < 8) {
+      throw new TypeError('checkoutUpgradeOfferPublicId is invalid')
+    }
+    if (input.channel !== 'guest_qr' || (input.settlementMode ?? 'table_tab') !== 'immediate_payment') {
+      throw new TypeError('Checkout upgrades require a guest immediate-payment order')
+    }
+  }
+  if (input.recommendationAttribution !== undefined && input.recommendationAttribution !== null) {
+    const recommendationPublicId = input.recommendationAttribution.recommendationPublicId.trim()
+    const selectedProductId = input.recommendationAttribution.selectedProductId.trim()
+    if (recommendationPublicId.length < 8 || recommendationPublicId.length > 128) {
+      throw new TypeError('recommendationPublicId is invalid')
+    }
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(selectedProductId)) {
+      throw new TypeError('selected recommendation product ID is invalid')
+    }
+    if (input.channel !== 'guest_qr' || !input.createdByCustomerId
+      || input.actor.type !== 'guest' || (input.settlementMode ?? 'table_tab') !== 'immediate_payment') {
+      throw new TypeError('Recommendation attribution requires a guest immediate-payment order')
+    }
   }
   if (input.channel === 'staff_assisted') {
     if (input.actor.type !== 'employee' || !input.assistedOrderContext) {
@@ -539,6 +765,13 @@ function canonicalSubmitFingerprint(input: Readonly<SubmitOrderCommand>): string
     } : null,
     pricingAuthorization: input.pricingAuthorization ?? null,
     confirmedDuplicateOrderPublicId: input.confirmedDuplicateOrderPublicId ?? null,
+    checkoutUpgradeOfferPublicId: input.checkoutUpgradeOfferPublicId?.trim() || null,
+    ...(input.recommendationAttribution ? {
+      recommendationAttribution: {
+        recommendationPublicId: input.recommendationAttribution.recommendationPublicId.trim(),
+        selectedProductId: input.recommendationAttribution.selectedProductId.trim(),
+      },
+    } : {}),
   })
 }
 
@@ -558,7 +791,17 @@ function isSubmittedOrder(value: unknown): value is SubmittedOrder {
     && order.items.every((item) => jsonObjectOrNull(item)
       && (item.parentOrderItemId === null || typeof item.parentOrderItemId === 'string')
       && typeof item.billable === 'boolean'
-      && typeof item.consumesInventory === 'boolean')
+      && typeof item.consumesInventory === 'boolean'
+      && (item.unitCostMinorAtSubmission === null || typeof item.unitCostMinorAtSubmission === 'number')
+      && (item.totalCostMinorAtSubmission === null || typeof item.totalCostMinorAtSubmission === 'number')
+      && ['catalog_product', 'legacy_snapshot', 'included_in_parent', 'unavailable'].includes(String(item.costSource))
+      && (item.costReferenceProductId === null || typeof item.costReferenceProductId === 'string')
+      && (item.costReferenceOrderItemId === null || typeof item.costReferenceOrderItemId === 'string')
+      && (item.costReferenceProductUpdatedAt === null
+        || typeof item.costReferenceProductUpdatedAt === 'string')
+      && typeof item.loyaltyEligibleAtSubmission === 'boolean'
+      && ['catalog_product', 'included_in_parent', 'legacy_current_catalog']
+        .includes(String(item.loyaltyEligibilitySource)))
 }
 
 function isPaymentNextStep(value: unknown): value is PaymentNextStep {

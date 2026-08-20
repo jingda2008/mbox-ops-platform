@@ -1,0 +1,31 @@
+<view class="page terms-page">
+  <state-panel wx:if="{{loading}}" type="loading" title="正在读取当前入会条款" />
+  <block wx:else>
+    <view wx:if="{{error}}" class="error-banner">{{error}}</view>
+    <state-panel wx:if="{{!terms}}" type="empty" title="当前入会条款尚未发布" message="新入会暂未开放；点单、预约和找回原会员不受影响" />
+    <block wx:else>
+      <view class="terms-head">
+        <text class="terms-kicker">M-BOX MEMBERSHIP TERMS</text>
+        <text class="terms-title">{{terms.title}}</text>
+        <text class="terms-version">第 {{terms.version}} 版 · 生效时间 {{terms.effectiveFrom}}</text>
+        <text class="terms-summary">{{terms.summary}}</text>
+      </view>
+      <view class="terms-content"><text user-select="true">{{terms.content}}</text></view>
+      <view wx:if="{{membership}}" class="terms-status">您已经是会员，本页仅供查看当前条款，不要求重复确认。</view>
+      <view wx:elif="{{allowEnrollment}}" class="terms-dock">
+        <checkbox-group bindchange="onAgreementChange">
+          <label class="agree-row">
+            <checkbox value="agree" checked="{{agreedToPolicies}}" color="#2d2925" />
+            <text class="agree-copy">我已阅读并同意《用户服务协议》和《隐私政策》</text>
+          </label>
+        </checkbox-group>
+        <view class="agree-links">
+          <text bindtap="openPrivacy">查看《隐私政策》</text>
+        </view>
+        <button wx:if="{{agreedToPolicies}}" class="accept-button wx-phone-button" open-type="getPhoneNumber|agreePrivacyAuthorization" bindgetphonenumber="acceptAndEnroll" bindagreeprivacyauthorization="onAgreePrivacyAuthorization" hover-class="none" loading="{{busy}}">授权手机号并加入</button>
+        <button wx:else class="accept-button accept-button--pending" bindtap="remindAgreement" hover-class="none">授权手机号并加入</button>
+        <text class="terms-note">须先自行勾选同意后再授权手机号加入；未勾选或拒绝授权都不会入会。不会开启短信或营销。老客请回「我的」用「授权手机号找回会员」。</text>
+      </view>
+    </block>
+  </block>
+</view>

@@ -19,6 +19,8 @@ export interface GuestTableOrderView {
   paymentAccess: 'available' | 'staff_collecting' | 'payment_in_progress' | 'status_review' | 'not_required'
   payableAmountMinor: number
   currency: string
+  pricingKind: 'none' | 'discount' | 'gift'
+  pricingLabel: string | null
   items: GuestTableOrderItemView[]
 }
 
@@ -34,6 +36,7 @@ interface GuestTableOrderRow extends Record<string, unknown> {
   payment_access: GuestTableOrderView['paymentAccess']
   payable_amount_minor: string | number
   currency: string
+  pricing_kind: GuestTableOrderView['pricingKind']
   product_id: string
   product_name: string
   quantity: number
@@ -51,6 +54,7 @@ export async function loadGuestTableOrders(
         ordering.public_id, ordering.channel, ordering.status,
         ordering.payment_status, ordering.created_by_customer_id,
         ordering.created_at, ordering.currency,
+        COALESCE(pricing_authorization.kind, 'none') AS pricing_kind,
         GREATEST(
           ordering.total_amount_minor
           - COALESCE((
@@ -76,6 +80,11 @@ export async function loadGuestTableOrders(
           0
         ) AS payable_amount_minor
       FROM mbox.orders AS ordering
+      LEFT JOIN mbox.pricing_authorizations AS pricing_authorization
+        ON pricing_authorization.tenant_id = ordering.tenant_id
+       AND pricing_authorization.store_id = ordering.store_id
+       AND pricing_authorization.order_id = ordering.id
+       AND pricing_authorization.status = 'consumed'
       WHERE ordering.tenant_id = $1::uuid
         AND ordering.store_id = $2::uuid
         AND ordering.table_session_id = $3::uuid
@@ -123,7 +132,7 @@ export async function loadGuestTableOrders(
       COALESCE(ordering.created_by_customer_id = $4::uuid, false) AS is_mine,
       ordering.created_at::text AS order_created_at,
       ordering.payment_status, ordering.payment_access,
-      ordering.payable_amount_minor::text, ordering.currency,
+      ordering.payable_amount_minor::text, ordering.currency, ordering.pricing_kind,
       item.product_id, COALESCE(NULLIF(item.product_snapshot ->> 'name', ''), product.name) AS product_name,
       item.quantity, item.status AS item_status
     FROM visible_orders AS ordering
@@ -155,6 +164,10 @@ export async function loadGuestTableOrders(
         paymentAccess: row.payment_access,
         payableAmountMinor: safeMinor(row.payable_amount_minor),
         currency: row.currency,
+        pricingKind: row.pricing_kind,
+        pricingLabel: row.pricing_kind === 'gift'
+          ? '门店赠送'
+          : row.pricing_kind === 'discount' ? '优惠' : null,
         items: [],
       }
       orders.set(row.public_id, order)

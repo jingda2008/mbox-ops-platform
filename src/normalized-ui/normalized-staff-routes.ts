@@ -12,6 +12,7 @@ export function normalizedStaffRoute(path: string): NormalizedStaffRoute | null 
   if (path === '/staff/performance') return 'performance'
   if (path === '/staff/inventory') return 'inventory'
   if (path === '/staff/operations') return 'operations'
+  if (path === '/staff/customer-experience') return 'experience'
   if (path === '/staff/devices') return 'devices'
   if (path === '/staff/settings') return 'settings'
   return null

@@ -1,14 +1,18 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import type { PaymentMethod, PaymentProvider } from './payment-repository.js'
 import type { ScopedTransaction } from './transaction-runner.js'
+import { lockBoundGuestTablePosition } from './guest-table-authority.js'
 
 export type ProviderPresentation = 'jsapi' | 'qr' | 'barcode'
 export type ProviderActionPayload = Readonly<Record<string, unknown>>
 
 export interface ProviderPaymentContext {
   id: string
-  orderId: string
-  orderPublicId: string
+  payableKind: 'order' | 'activity_registration'
+  orderId: string | null
+  orderPublicId: string | null
+  activityRegistrationId: string | null
+  activityRegistrationPublicId: string | null
   publicId: string
   provider: PaymentProvider
   providerTransactionId: string | null
@@ -16,19 +20,23 @@ export interface ProviderPaymentContext {
   amountMinor: number
   currency: string
   status: string
-  tableSessionId: string
-  tableCode: string
+  customerId: string | null
+  tableSessionId: string | null
+  tableCode: string | null
   createdAt: string
 }
 
 export type PaymentPrincipal =
   | { type: 'employee'; employeeId: string }
-  | { type: 'guest'; tableSessionId: string; customerId: string }
+  | { type: 'guest'; tableSessionId: string | null; customerId: string; guestSessionId?: string }
 
 interface ContextRow extends Record<string, unknown> {
   id: string
-  order_id: string
-  order_public_id: string
+  payable_kind: ProviderPaymentContext['payableKind']
+  order_id: string | null
+  order_public_id: string | null
+  activity_registration_id: string | null
+  activity_registration_public_id: string | null
   public_id: string
   provider: PaymentProvider
   provider_transaction_id: string | null
@@ -36,8 +44,9 @@ interface ContextRow extends Record<string, unknown> {
   amount_minor: string | number
   currency: string
   status: string
-  table_session_id: string
-  table_code: string
+  customer_id: string | null
+  table_session_id: string | null
+  table_code: string | null
   created_at: string
 }
 
@@ -51,6 +60,8 @@ interface ActionRow extends Record<string, unknown> {
   auth_tag: Buffer | null
   expires_at: string
   updated_at: string
+  request_idempotency_key: string | null
+  request_fingerprint: string | null
 }
 
 export class ProviderPaymentInProgressError extends Error {
@@ -96,26 +107,34 @@ export class PaymentProviderActionRepository {
     principal: Readonly<PaymentPrincipal>,
     options: Readonly<{ lock?: boolean }> = {},
   ): Promise<ProviderPaymentContext> {
-    const lockClause = options.lock === false ? '' : 'FOR SHARE OF payment, ordering'
+    const lockClause = options.lock === false ? '' : 'FOR SHARE OF payment'
     const result = await this.transaction.query<ContextRow>(`
-      SELECT payment.id, payment.order_id, ordering.public_id AS order_public_id,
+      SELECT payment.id, payment.payable_kind, payment.order_id,
+        ordering.public_id AS order_public_id,
+        payment.activity_registration_id,
+        activity_registration.public_id AS activity_registration_public_id,
         payment.public_id, payment.provider, payment.provider_transaction_id,
         payment.method, payment.amount_minor,
         payment.currency, payment.status, payment.created_at::text,
+        activity_registration.customer_id,
         ordering.table_session_id, venue_table.code AS table_code
       FROM mbox.payments payment
-      JOIN mbox.orders ordering
+      LEFT JOIN mbox.orders ordering
         ON ordering.tenant_id = payment.tenant_id
        AND ordering.store_id = payment.store_id
        AND ordering.id = payment.order_id
-      JOIN mbox.table_sessions table_session
+      LEFT JOIN mbox.table_sessions table_session
         ON table_session.tenant_id = ordering.tenant_id
        AND table_session.store_id = ordering.store_id
        AND table_session.id = ordering.table_session_id
-      JOIN mbox.tables venue_table
+      LEFT JOIN mbox.tables venue_table
         ON venue_table.tenant_id = table_session.tenant_id
        AND venue_table.store_id = table_session.store_id
        AND venue_table.id = table_session.table_id
+      LEFT JOIN mbox.community_activity_registrations activity_registration
+        ON activity_registration.tenant_id = payment.tenant_id
+       AND activity_registration.store_id = payment.store_id
+       AND activity_registration.id = payment.activity_registration_id
       WHERE payment.tenant_id = $1::uuid
         AND payment.store_id = $2::uuid
         AND payment.id = $3::uuid
@@ -123,7 +142,7 @@ export class PaymentProviderActionRepository {
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
     const row = result.rows[0]
     if (row === undefined) throw new Error('支付记录不存在')
-    await this.assertAccess(row.table_session_id, principal)
+    await this.assertAccess(row, principal)
     return mapContext(row)
   }
 
@@ -131,6 +150,7 @@ export class PaymentProviderActionRepository {
     orderPublicId: string,
     principal: Extract<PaymentPrincipal, { type: 'guest' }>,
   ): Promise<{ orderId: string; activePaymentId: string | null }> {
+    if (principal.tableSessionId === null) throw new Error('当前入口没有关联桌次')
     const linked = await this.transaction.query<{ order_id: string; payment_id: string | null }>(`
       SELECT ordering.id AS order_id,
         (
@@ -157,7 +177,10 @@ export class PaymentProviderActionRepository {
     ])
     const row = linked.rows[0]
     if (row === undefined) throw new Error('当前桌次没有找到这笔订单')
-    await this.assertAccess(principal.tableSessionId, principal)
+    if (principal.guestSessionId===undefined || !await lockBoundGuestTablePosition(this.transaction,{
+      tableSessionId:principal.tableSessionId,customerId:principal.customerId,
+      actorRef:`guest-session:${principal.guestSessionId}`,
+    })) throw new Error('当前客人未关联到这桌')
     return { orderId: row.order_id, activePaymentId: row.payment_id }
   }
 
@@ -166,10 +189,14 @@ export class PaymentProviderActionRepository {
     principal: Readonly<PaymentPrincipal>,
   ): Promise<ProviderPaymentContext | null> {
     const result = await this.transaction.query<ContextRow>(`
-      SELECT payment.id, payment.order_id, ordering.public_id AS order_public_id,
+      SELECT payment.id, payment.payable_kind, payment.order_id,
+        ordering.public_id AS order_public_id,
+        NULL::uuid AS activity_registration_id,
+        NULL::text AS activity_registration_public_id,
         payment.public_id, payment.provider, payment.provider_transaction_id,
         payment.method, payment.amount_minor,
         payment.currency, payment.status, payment.created_at::text,
+        NULL::uuid AS customer_id,
         ordering.table_session_id, venue_table.code AS table_code
       FROM mbox.payments payment
       JOIN mbox.orders ordering
@@ -193,7 +220,7 @@ export class PaymentProviderActionRepository {
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
     const row = result.rows[0]
     if (row === undefined) return null
-    await this.assertAccess(row.table_session_id, principal)
+    await this.assertAccess(row, principal)
     return mapContext(row)
   }
 
@@ -202,12 +229,23 @@ export class PaymentProviderActionRepository {
     presentation: ProviderPresentation,
     expiresAt: string,
     principal: Readonly<PaymentPrincipal>,
+    idempotencyKey?: string,
   ): Promise<{ claimed: true } | { claimed: false; payload: ProviderActionPayload; expiresAt: string }> {
+    if (idempotencyKey !== undefined && (idempotencyKey.length < 8 || idempotencyKey.length > 128)) {
+      throw new TypeError('payment action idempotency key must contain between 8 and 128 characters')
+    }
+    const requestFingerprint = idempotencyKey === undefined ? null : createHash('sha256').update(JSON.stringify({
+      paymentId,
+      presentation,
+      principalType: principal.type,
+      principalRef: principalReference(principal),
+    })).digest('hex')
     const inserted = await this.transaction.query(`
       INSERT INTO mbox.payment_provider_actions (
         payment_id, tenant_id, store_id, presentation,
-        initiated_by_type, initiated_by_ref, state, expires_at
-      ) VALUES ($3::uuid, $1::uuid, $2::uuid, $4, $5, $6::uuid, 'creating', $7::timestamptz)
+        initiated_by_type, initiated_by_ref, state, expires_at,
+        request_idempotency_key, request_fingerprint
+      ) VALUES ($3::uuid, $1::uuid, $2::uuid, $4, $5, $6::uuid, 'creating', $7::timestamptz, $8, $9)
       ON CONFLICT (tenant_id, store_id, payment_id) DO NOTHING
     `, [
       this.transaction.scope.tenantId,
@@ -217,12 +255,15 @@ export class PaymentProviderActionRepository {
       principal.type,
       principalReference(principal),
       expiresAt,
+      idempotencyKey ?? null,
+      requestFingerprint,
     ])
     if (inserted.rowCount === 1) return { claimed: true }
     const selected = await this.transaction.query<ActionRow>(`
       SELECT presentation, initiated_by_type, initiated_by_ref,
         state, ciphertext, nonce, auth_tag,
-        expires_at::text, updated_at::text
+        expires_at::text, updated_at::text,
+        request_idempotency_key, request_fingerprint
       FROM mbox.payment_provider_actions
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND payment_id = $3::uuid
       FOR UPDATE
@@ -230,6 +271,10 @@ export class PaymentProviderActionRepository {
     const action = selected.rows[0]
     if (action === undefined) throw new Error('支付动作抢占失败')
     if (action.presentation !== presentation) throw new ProviderPaymentMethodConflictError()
+    if (idempotencyKey !== undefined && action.request_idempotency_key === idempotencyKey
+      && action.request_fingerprint !== requestFingerprint) {
+      throw new ProviderPaymentMethodConflictError('同一幂等键的活动支付请求内容不一致')
+    }
     if (presentation === 'jsapi' && (
       action.initiated_by_type !== principal.type
       || action.initiated_by_ref !== principalReference(principal)
@@ -325,7 +370,7 @@ export class PaymentProviderActionRepository {
         WHERE payment.tenant_id = $1::uuid AND payment.store_id = $2::uuid
           AND payment.id = action_updated.payment_id
           AND payment.status IN ('created', 'pending')
-        RETURNING payment.order_id
+        RETURNING payment.order_id, payment.activity_registration_id, payment.payable_kind
       )
       UPDATE mbox.orders ordering
       SET payment_status = 'unpaid', updated_at = clock_timestamp()
@@ -333,6 +378,18 @@ export class PaymentProviderActionRepository {
       WHERE ordering.tenant_id = $1::uuid AND ordering.store_id = $2::uuid
         AND ordering.id = payment_updated.order_id
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId, errorCode.slice(0, 128)])
+    await this.transaction.query(`
+      UPDATE mbox.community_activity_registrations registration
+      SET status='cancelled', payment_status='expired', amount_due_minor=0,
+        payment_due_at=NULL, seat_hold_expires_at=NULL,
+        cancelled_at=COALESCE(cancelled_at, clock_timestamp()), updated_at=clock_timestamp()
+      FROM mbox.payments payment
+      WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid AND payment.id=$3::uuid
+        AND payment.payable_kind='activity_registration'
+        AND registration.tenant_id=payment.tenant_id AND registration.store_id=payment.store_id
+        AND registration.id=payment.activity_registration_id
+        AND registration.status='payment_pending' AND registration.payment_status='pending'
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
   }
 
   async resolveWechatPayerId(
@@ -361,22 +418,37 @@ export class PaymentProviderActionRepository {
     }
   }
 
-  private async assertAccess(tableSessionId: string, principal: Readonly<PaymentPrincipal>): Promise<void> {
+  private async assertAccess(row: Readonly<ContextRow>, principal: Readonly<PaymentPrincipal>): Promise<void> {
     if (principal.type === 'employee') return
-    if (principal.tableSessionId !== tableSessionId) throw new Error('订单不属于当前桌次')
-    const result = await this.transaction.query<{ linked: boolean }>(`
-      SELECT EXISTS (
-        SELECT 1 FROM mbox.table_session_customers
-        WHERE tenant_id = $1::uuid AND store_id = $2::uuid
-          AND table_session_id = $3::uuid AND customer_id = $4::uuid
-      ) AS linked
-    `, [
-      this.transaction.scope.tenantId,
-      this.transaction.scope.storeId,
-      principal.tableSessionId,
-      principal.customerId,
-    ])
-    if (result.rows[0]?.linked !== true) throw new Error('当前客人未关联到这桌')
+    if (row.payable_kind === 'activity_registration') {
+      if (row.customer_id === null) throw new Error('活动报名支付缺少客户归属')
+      const owned = await this.transaction.query<{ owned: boolean }>(`
+        WITH RECURSIVE ancestry AS (
+          SELECT id, merged_into_customer_id FROM mbox.customers
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+          UNION ALL
+          SELECT parent.id, parent.merged_into_customer_id
+          FROM mbox.customers parent JOIN ancestry child ON child.merged_into_customer_id=parent.id
+          WHERE parent.tenant_id=$1::uuid AND parent.store_id=$2::uuid
+        ), canonical AS (
+          SELECT id FROM ancestry WHERE merged_into_customer_id IS NULL LIMIT 1
+        ), family AS (
+          SELECT id FROM canonical
+          UNION ALL
+          SELECT child.id FROM mbox.customers child JOIN family parent ON child.merged_into_customer_id=parent.id
+          WHERE child.tenant_id=$1::uuid AND child.store_id=$2::uuid
+        ) SELECT $4::uuid IN (SELECT id FROM family) AS owned
+      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, principal.customerId, row.customer_id])
+      if (owned.rows[0]?.owned !== true) throw new Error('活动报名不属于当前客人')
+      return
+    }
+    if (row.table_session_id === null || principal.tableSessionId !== row.table_session_id) {
+      throw new Error('订单不属于当前桌次')
+    }
+    if (principal.guestSessionId===undefined || !await lockBoundGuestTablePosition(this.transaction,{
+      tableSessionId:row.table_session_id,customerId:principal.customerId,
+      actorRef:`guest-session:${principal.guestSessionId}`,
+    })) throw new Error('当前客人未关联到这桌')
   }
 
   private encrypt(paymentId: string, presentation: ProviderPresentation, payload: ProviderActionPayload) {
@@ -414,8 +486,11 @@ function mapContext(row: ContextRow): ProviderPaymentContext {
   if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) throw new Error('支付金额无效')
   return {
     id: row.id,
+    payableKind: row.payable_kind,
     orderId: row.order_id,
     orderPublicId: row.order_public_id,
+    activityRegistrationId: row.activity_registration_id,
+    activityRegistrationPublicId: row.activity_registration_public_id,
     publicId: row.public_id,
     provider: row.provider,
     providerTransactionId: row.provider_transaction_id,
@@ -423,6 +498,7 @@ function mapContext(row: ContextRow): ProviderPaymentContext {
     amountMinor,
     currency: row.currency,
     status: row.status,
+    customerId: row.customer_id,
     tableSessionId: row.table_session_id,
     tableCode: row.table_code,
     createdAt: row.created_at,

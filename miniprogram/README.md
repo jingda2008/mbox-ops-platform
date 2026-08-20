@@ -27,9 +27,9 @@ miniprogram/
 
 ## 本地运行
 
-1. 在 `/Users/jingda/mbox/mbox-ops-platform` 启动现有 API，使 `http://127.0.0.1:8787/api/health` 可访问。
+1. 在当前仓库启动规范化 API，使配置的健康检查地址可访问。
 2. 打开微信开发者工具，选择“导入项目”。
-3. 项目目录选择 `/Users/jingda/mbox/mbox-ops-platform/miniprogram`。
+3. 项目目录选择当前仓库的 `miniprogram` 目录。
 4. 使用测试号运行；`project.config.json` 已配置 `touristappid` 和编译条件“开发桌码 L01”。
 5. 开发者工具中保持“不校验合法域名”开启。本地真机不能访问电脑的 `127.0.0.1`，真机联调需使用 HTTPS 测试域名或可访问的局域网地址。
 
@@ -49,23 +49,64 @@ miniprogram/
 
 ## 桌码参数
 
-普通二维码/编译参数：
+网页二维码/编译参数保留既有地址兼容：
 
 ```text
-pages/home/index?table=L01&token=<short-lived-table-token>
+pages/home/index?table=L01&token=<fixed-table-token>
 ```
 
-小程序码 `scene` 使用同样的键值格式并进行 URL 编码：
+微信官方小程序码受 `scene` 长度限制，只放置32字符随机桌码凭证；后端凭证可权威识别门店和桌台，不依赖客户端桌号：
 
 ```text
-table=L01&token=<short-lived-table-token>
+<32-character-fixed-table-token>
 ```
 
-优先级为：二维码参数或 `scene` > `extConfig`/本地运行时配置 > 开发默认值。体验版和正式版忽略本地运行时配置，也不会复用开发缓存中的桌号或令牌。
+优先级为：二维码参数或 `scene` > `extConfig`/本地运行时配置 > 开发默认值。体验版和正式版忽略本地运行时配置，也不会复用开发缓存中的桌号或令牌。旧的长凭证不能直接冒充微信官方小程序码，必须经过明确轮换。
+
+正式桌码分两步生成：先使用 `npm run qr:generate:normalized` 签发受保护的固定桌码清单，再使用 `npm run qr:render:wechat-mini` 调用微信官方接口渲染体验版或正式版小程序码。两个步骤均需显式确认变量；私密清单、图片和审计清单使用受限文件权限，正式渲染缺少 AppID/AppSecret 或页面未被微信接受时会停止，不回退成普通网页二维码。
+
+替换线上小程序前必须使用 `npm run release:miniprogram:verify` 分阶段核对：
+
+- `candidate` 只声明“本地候选包完整、正式运行配置形式有效且绑定指定提交”，报告标记为 `local_integrity_only`，不宣称已经微信验证。
+- `upload` 核对 AppID、合法域名、隐私资料、模板、开发者工具、iOS/Android 真机附件和微信上传回执，并且必须由受控复核岗对当前候选包和证据摘要做 Ed25519 独立签名。
+- `release` 不会继承或提升 `upload` 结果；它还必须核对审核编号、正式发布编号、正式桌码，并取得一份明确声明 `release` 的新签名。
+
+附件路径和 SHA-256 只证明“这次核对的文件没被替换”，不能证明文件来自微信。上传/发布阶段的可信边界是：仓库外受控复核人、受保护的签名私钥、GitHub Environment 审批和与候选提交精确绑定的证据包。签名私钥禁止进入代码库、Actions 产物或小程序包。示例结构位于 `docs/miniprogram-release-evidence.example.json`，占位内容按设计会被拒绝。
+
+源码工程始终保留测试 AppID 和开发默认配置，禁止直接作为正式上传包。正式候选必须在仓库外的全新目录生成：
+
+```text
+APP_COMMIT_SHA=<40位候选提交SHA> \
+MBOX_MINIPROGRAM_RUNTIME_CONFIG=<正式非秘密配置JSON> \
+MBOX_MINIPROGRAM_CANDIDATE_OUTPUT=<全新且不存在的输出目录> \
+npm run release:miniprogram:build
+```
+
+构建器会写入正式 AppID、强制打开微信合法域名校验、注入不含密钥的正式运行配置，并生成覆盖候选包全部文件的 SHA-256 清单。空 API、空门店、空微信身份、IP 地址、端口或路径域名、默认桌码、开发身份、私钥和重复覆盖目录都会被拒绝。`AppSecret`、身份加密密钥和桌码私密清单不得进入候选包。
+
+候选、上传和发布应分别执行：
+
+```text
+APP_COMMIT_SHA=<同一提交SHA> MBOX_MINIPROGRAM_RELEASE_STAGE=candidate MBOX_MINIPROGRAM_RELEASE_EVIDENCE=<证据JSON> npm run release:miniprogram:verify
+APP_COMMIT_SHA=<同一提交SHA> MBOX_MINIPROGRAM_RELEASE_STAGE=upload MBOX_MINIPROGRAM_RELEASE_EVIDENCE=<证据JSON> MBOX_MINIPROGRAM_RELEASE_TRUSTED_KEY_ID=<受保护key-id> MBOX_MINIPROGRAM_RELEASE_TRUSTED_PUBLIC_KEY_BASE64=<Ed25519公钥PEM的base64> npm run release:miniprogram:verify
+APP_COMMIT_SHA=<同一提交SHA> MBOX_MINIPROGRAM_RELEASE_STAGE=release MBOX_MINIPROGRAM_RELEASE_EVIDENCE=<证据JSON> MBOX_MINIPROGRAM_RELEASE_TRUSTED_KEY_ID=<受保护key-id> MBOX_MINIPROGRAM_RELEASE_TRUSTED_PUBLIC_KEY_BASE64=<Ed25519公钥PEM的base64> npm run release:miniprogram:verify
+```
+
+Actions 不会读取开发电脑或 runner 上的任意绝对路径。将 `evidence.json`、候选目录、附件、attestation 和独立签名放在同一个受控 tar.gz 产物根目录，以下名称上传到指定提交的已有 GitHub draft release，并同时提供 GNU `sha256sum` 格式的 `.sha256`：
+
+```text
+miniprogram-candidate-evidence-<commit>.tar.gz
+miniprogram-upload-evidence-<commit>.tar.gz
+miniprogram-release-evidence-<commit>.tar.gz
+```
+
+`小程序分阶段验证` workflow 可手动选择 `candidate/upload/release`，每个阶段只下载对应受控产物，防止阶段混用。正式 `release.yml` 只下载 `miniprogram-release-evidence-<commit>.tar.gz`，且写死 `MBOX_MINIPROGRAM_RELEASE_STAGE=release`；不能通过变量退回 `candidate` 或 `upload`。`miniprogram-production-release` Environment 必须在 GitHub 中配置独立审批人和受保护的公钥/key-id。仓库目前没有正式平台资料或受保护公钥，因此正式门禁预期为拒绝；这不影响服务进程启动，也不代表当前线上小程序已被替换。
+
+商业就绪检查需同时传入 `MBOX_MINIPROGRAM_RELEASE_REPORT`、受保护的 key-id 和公钥。它会再次验证报告内嵌的原始 attestation 和签名，并且只接受 `release + trusted_external_attestation`；手写 `status=ready`、缺公钥、伪签名、过期签名、`candidate` 或 `upload` 报告均会失败关闭。
 
 ## 预发布与生产配置
 
-体验版和正式版默认不提供 API、门店或桌台令牌，也不启用开发数据兜底。部署方应通过小程序托管/第三方平台的 `extConfig` 注入 `config/runtime-config.example.json` 所示的非秘密配置，或在构建前替换部署配置。
+体验版和正式版默认不提供 API、门店或桌台令牌，也不启用开发数据兜底。正式上传只使用上述隔离候选构建产物；`extConfig` 可继续提供非秘密运行配置，但不得用来补救一个本身缺少正式 API、门店或微信身份的上传包。
 
 桌台令牌应来自每桌二维码或后端换取的短期会话，不应把全店永久令牌写入代码。正式 API 域名必须：
 

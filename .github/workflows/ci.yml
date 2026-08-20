@@ -83,6 +83,8 @@ jobs:
         run: npm audit --omit=dev --audit-level=high
       - name: Run code, unit, metadata and production-build checks
         run: npm run check && npm run release:system:test
+      - name: Verify candidate, upload and release gate semantics
+        run: npm run release:miniprogram:test
 
   fast_quality:
     if: needs.classify.outputs.fast == 'true'
@@ -136,6 +138,8 @@ jobs:
       - name: Apply normalized-only migrations to a clean database
         run: npm run db:migrate:normalized
       - name: Run every normalized PostgreSQL transaction and RLS test
+        env:
+          TEST_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
         run: npm run test:normalized:postgres
       - name: Run real normalized HTTP workflows against an isolated database
         env:
@@ -351,7 +355,7 @@ jobs:
             --output release-artifact/migration-manifest.json >/dev/null
           cp deploy/normalized-store/mbox-lujiazui.store.json release-artifact/
           cp config/menu-catalog-2026-07-27.json release-artifact/
-          cp deploy/aliyun/{deploy-release,activate-release,rollback-activated-release,verify-public-app,stage-release-evidence,upload-oss-verified,send-sls-events,prune-oss-images,release-state,normalize-runtime-env}.sh release-artifact/
+          cp deploy/aliyun/{deploy-release,activate-release,rollback-activated-release,verify-public-app,stage-release-evidence,upload-oss-verified,send-sls-events,prune-oss-images,release-state,normalize-runtime-env,backup-postgres,restore-postgres}.sh release-artifact/
           MBOX_BUNDLE_ARCHIVE="${archive}" \
           MBOX_BUNDLE_SHA="${GITHUB_SHA}" \
           MBOX_BUNDLE_VERSION="${VERSION}" \

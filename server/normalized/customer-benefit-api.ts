@@ -31,6 +31,8 @@ import {
 } from './guest-request-context.js'
 import { StaffAccessDeniedError, StaffAccessRepository } from './staff-access-repository.js'
 import { StaffSessionNotFoundError } from './staff-session-repository.js'
+import { ReservationGuestSessionInvalidError } from './reservation-guest-session.js'
+import { lockBoundGuestTablePosition } from './guest-table-authority.js'
 import type {
   ScopedPostgresTransactionRunner,
   ScopedTransaction,
@@ -58,6 +60,7 @@ export interface CustomerBenefitApiOptions {
   customers: CustomerCommandService
   benefits: BenefitCommandService
   now?: () => Date
+  resolveSelfContext(request: FastifyRequest): Promise<CustomerBenefitGuestContext> | CustomerBenefitGuestContext
   resolveGuestContext(request: FastifyRequest): Promise<CustomerBenefitGuestContext> | CustomerBenefitGuestContext
   resolveStaffContext(request: FastifyRequest): Promise<CustomerBenefitStaffContext> | CustomerBenefitStaffContext
   createCustomerRepository?(transaction: ScopedTransaction): CustomerRepository
@@ -78,20 +81,67 @@ export const customerBenefitApiPlugin: FastifyPluginAsync<CustomerBenefitApiOpti
   app,
   options,
 ) => {
-  app.get('/guest/customer/profile', async (request, reply) => handleRoute(reply, async () => {
-    const context = await options.resolveGuestContext(request)
-    const customer = await options.transactions.run(context.scope, async (transaction) =>
-      customerRepository(options, transaction).findPublicById(context.customerId), { readOnly: true })
-    if (customer === null) throw new CustomerNotFoundError(context.customerId)
-    return reply.send({ data: customer })
-  }))
+  app.get('/public/mini/customer/profile', async (request, reply) => {
+    privateNoStore(reply)
+    return handleRoute(reply, async () => {
+      const context = await options.resolveSelfContext(request)
+      const customer = await options.transactions.run(context.scope, (transaction) => (
+        customerRepository(options, transaction).findPublicById(context.customerId)
+      ), { readOnly: true })
+      if (customer === null) throw new CustomerNotFoundError(context.customerId)
+      return reply.send({ data: customer })
+    })
+  })
 
-  app.get('/guest/customer/benefits', async (request, reply) => handleRoute(reply, async () => {
-    const context = await options.resolveGuestContext(request)
-    const benefits = await options.transactions.run(context.scope, async (transaction) =>
-      benefitRepository(options, transaction).listAvailableForCustomer(context.customerId), { readOnly: true })
-    return reply.send({ data: benefits.map(toPublicBenefit) })
-  }))
+  app.get('/public/mini/customer/benefits', async (request, reply) => {
+    privateNoStore(reply)
+    return handleRoute(reply, async () => {
+      const context = await options.resolveSelfContext(request)
+      const benefits = await options.transactions.run(context.scope, (transaction) => (
+        benefitRepository(options, transaction).listAvailableForCustomer(context.customerId)
+      ), { readOnly: true })
+      return reply.send({ data: benefits.map(toPublicBenefit) })
+    })
+  })
+
+  app.get('/guest/customer/profile', async (request, reply) => {
+    privateNoStore(reply)
+    return handleRoute(reply, async () => {
+      const context = await options.resolveGuestContext(request)
+      const customer = await options.transactions.run(context.scope, async (transaction) => {
+        if (context.tableSessionId === null) throw new GuestAuthenticationRequiredError()
+        if (!await lockBoundGuestTablePosition(transaction, {
+          tableSessionId: context.tableSessionId,
+          customerId: context.customerId,
+          actorRef: context.actorRef,
+        })) {
+          throw new GuestAuthenticationRequiredError()
+        }
+        return customerRepository(options, transaction).findPublicById(context.customerId)
+      })
+      if (customer === null) throw new CustomerNotFoundError(context.customerId)
+      return reply.send({ data: customer })
+    })
+  })
+
+  app.get('/guest/customer/benefits', async (request, reply) => {
+    privateNoStore(reply)
+    return handleRoute(reply, async () => {
+      const context = await options.resolveGuestContext(request)
+      const benefits = await options.transactions.run(context.scope, async (transaction) => {
+        if (context.tableSessionId === null) throw new GuestAuthenticationRequiredError()
+        if (!await lockBoundGuestTablePosition(transaction, {
+          tableSessionId: context.tableSessionId,
+          customerId: context.customerId,
+          actorRef: context.actorRef,
+        })) {
+          throw new GuestAuthenticationRequiredError()
+        }
+        return benefitRepository(options, transaction).listAvailableForCustomer(context.customerId)
+      })
+      return reply.send({ data: benefits.map(toPublicBenefit) })
+    })
+  })
 
   app.post('/guest/customer/benefits/:benefitId/reservations', async (request, reply) =>
     handleRoute(reply, async () => {
@@ -393,6 +443,10 @@ function readIssueBenefit(body: JsonObject) {
   const authorizationLimitId = readString(body.authorizationLimitId, '审批额度来源', 64, 8)
   const validFrom = readOptionalTimestamp(body.validFrom, '生效时间')
   const validUntil = readOptionalTimestamp(body.validUntil, '失效时间')
+  const benefitSnapshot = readOptionalObject(body.benefitSnapshot)
+  if ('allowedProductIds' in benefitSnapshot) {
+    throw new CustomerBenefitRequestError('适用商品必须使用强类型allowedProductIds字段，不能写入权益快照')
+  }
   return {
     customerId: readString(body.customerId, '客户', 64, 8),
     benefitCode: readString(body.benefitCode, '权益编码', 64, 2),
@@ -400,7 +454,8 @@ function readIssueBenefit(body: JsonObject) {
     valueAmountMinor: readOptionalInteger(body.valueAmountMinor, '权益金额', 0, Number.MAX_SAFE_INTEGER),
     currency: readOptionalString(body.currency, '币种', 3, 3),
     quantity: readInteger(body.quantity, '数量', 1, 10_000, 1),
-    benefitSnapshot: readOptionalObject(body.benefitSnapshot),
+    allowedProductIds: readStringArray(body.allowedProductIds, '适用商品') ?? [],
+    benefitSnapshot,
     ...(validFrom === null ? {} : { validFrom }),
     ...(validUntil === null ? {} : { validUntil }),
     authorizationLimitId,
@@ -432,7 +487,8 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<Fastify
 
 function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   if (error instanceof NormalizedAuthenticationRequiredError || error instanceof StaffSessionNotFoundError
-    || error instanceof GuestAuthenticationRequiredError || error instanceof GuestDeviceBindingError) {
+    || error instanceof GuestAuthenticationRequiredError || error instanceof GuestDeviceBindingError
+    || error instanceof ReservationGuestSessionInvalidError) {
     return apiError(401, 'CUSTOMER_BENEFIT_AUTH_REQUIRED', '登录或桌边会话已过期，请重新验证')
   }
   if (error instanceof TrustedStoreScopeError || error instanceof NormalizedStoreUnavailableError
@@ -460,6 +516,11 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
     return apiError(400, 'CUSTOMER_BENEFIT_REQUEST_INVALID', error.message)
   }
   return apiError(500, 'CUSTOMER_BENEFIT_INTERNAL_ERROR', '客户权益服务暂时不可用，请稍后再试')
+}
+
+function privateNoStore(reply: FastifyReply): void {
+  reply.header('cache-control', 'private, no-store')
+  reply.header('pragma', 'no-cache')
 }
 
 function apiError(statusCode: number, code: string, message: string) {

@@ -1,0 +1,14 @@
+{
+  "format": "mbox.wechat-miniprogram-platform-attestation.v1",
+  "stage": "release",
+  "keyId": "待填写GitHub受保护环境中预先配置的公钥编号",
+  "issuer": "待填写独立发布复核岗位",
+  "approvalTicket": "待填写受控审批单号",
+  "issuedAt": "待填写UTC签发时间",
+  "expiresAt": "待填写不超过签发后72小时的UTC失效时间",
+  "evidencePayloadSha256": "待从未通过的分阶段核验报告取得当前证据内容摘要",
+  "candidateManifestSha256": "待填写当前候选包清单SHA256",
+  "sourceCommitSha": "待填写候选提交的40位小写Git SHA",
+  "appId": "待填写正式小程序AppID",
+  "apiBaseUrl": "https://待审核的正式API域名"
+}

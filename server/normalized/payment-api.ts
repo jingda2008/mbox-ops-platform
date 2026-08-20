@@ -43,6 +43,7 @@ import { StaffAccessDeniedError, StaffNotFoundError } from './staff-access-repos
 import { StaffSessionNotFoundError } from './staff-session-repository.js'
 import type { StoreScope } from './transaction-runner.js'
 import type { OnlinePaymentAction, OnlinePaymentService } from './online-payment-service.js'
+import type { OnlineRefundResult } from './online-payment-service.js'
 import {
   OnlinePaymentUnavailableError,
   OnlinePaymentUnknownError,
@@ -55,6 +56,8 @@ import {
   type ProviderPaymentContext,
 } from './payment-provider-action-repository.js'
 import { PostarPaymentRejectedError } from '../postar-adapter.js'
+import type { ProviderObservationRecorderPort } from './provider-verification-observation.js'
+import { requireGuestSessionIdFromActorRef } from './guest-table-authority.js'
 
 type PaymentCommandPort = Pick<
   PaymentCommandService,
@@ -109,6 +112,7 @@ export interface VerifiedPaymentCallback {
   providerTransactionId: string
   amountMinor: number
   currency: string
+  settlementChannel?: 'wechat' | 'alipay' | 'unionpay'
   occurredAt: string
   evidence?: JsonObject
 }
@@ -158,9 +162,13 @@ export interface CashierWorkbenchQueryPort {
 export interface PaymentApiOptions {
   commands: PaymentCommandPort
   providerVerifier: PaymentProviderVerifier
+  providerObservations: ProviderObservationRecorderPort
   reconciliationQuery: ReconciliationQueryPort
   cashierWorkbenchQuery: CashierWorkbenchQueryPort
-  onlinePayments?: Pick<OnlinePaymentService, 'create' | 'query' | 'assertAvailable' | 'resolveActivePayment'>
+  onlinePayments?: Pick<
+    OnlinePaymentService,
+    'create' | 'query' | 'assertAvailable' | 'resolveActivePayment' | 'requestRefund' | 'queryRefund'
+  >
   resolveOnlinePaymentAvailable?: (scope: Readonly<StoreScope>) => Promise<boolean>
   resolveActorContext(request: FastifyRequest): Promise<PaymentApiActorContext> | PaymentApiActorContext
   resolveStaffContext(request: FastifyRequest): Promise<PaymentApiStaffContext> | PaymentApiStaffContext
@@ -331,17 +339,17 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       const queried = await options.onlinePayments.query({
         scope: context.scope,
         paymentId,
+        queryBindingId: idempotencyKey,
         principal,
       })
       const observed = queried.observation
       const actor: AuditActor = { type: 'integration', ref: 'postar-active-query' }
       const providerSnapshot = sanitizeProviderSnapshot({
-        signatureVerified: false,
-        verificationAlgorithm: 'rsa-request+tls+response-binding',
         providerStatus: observed.status,
         providerReportedAmountMinor: observed.providerReportedAmount ?? observed.amount,
         occurredAt: observed.occurredAt,
         receivedAt: new Date().toISOString(),
+        ...(observed.settlementChannel === undefined ? {} : { channel: observed.settlementChannel }),
       })
       const execution = await options.commands.recordProviderQueryResult({
         ...metadata(request, { ...context, actor }, idempotencyKey, {
@@ -351,12 +359,15 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
           status: observed.status,
           amountMinor: observed.amount,
           currency: observed.currency,
+          settlementChannel: observed.settlementChannel ?? null,
         }),
         paymentPublicId: queried.context.publicId,
+        verifiedObservationId: queried.verifiedObservationId,
         provider: 'postar',
         providerTransactionId: readString(observed.providerTransactionId, 'providerTransactionId', 256),
         reportedAmountMinor: readPositiveMinor(observed.amount, 'amountMinor'),
         reportedCurrency: readCurrency(observed.currency),
+        settlementChannel: observed.settlementChannel,
         status: observed.status,
         providerSnapshot,
         occurredAt: readTimestamp(observed.occurredAt, 'occurredAt'),
@@ -375,6 +386,21 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       const idempotencyKey = providerIdempotencyKey(provider, 'payment', verified.businessIdentity)
       const actor: AuditActor = { type: 'integration', ref: verified.merchant.integrationRef }
       const providerSnapshot = verifiedSnapshot(verified.evidence, verified.eventId, verified.occurredAt)
+      const verifiedObservationId = await options.providerObservations.recordPayment({
+        scope: context.scope,
+        provider,
+        verificationKind: 'callback_signature',
+        providerEventId: verified.eventId,
+        integrationRef: verified.merchant.integrationRef,
+        paymentPublicId: verified.paymentPublicId,
+        providerTransactionId: verified.providerTransactionId,
+        reportedAmountMinor: verified.amountMinor,
+        reportedCurrency: verified.currency,
+        status: 'succeeded',
+        settlementChannel: verified.settlementChannel,
+        occurredAt: verified.occurredAt,
+        evidence: providerSnapshot,
+      })
       await options.commands.recordSucceededCallback({
         ...metadata(request, { ...context, actor }, idempotencyKey, {
           paymentPublicId: verified.paymentPublicId,
@@ -384,7 +410,9 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
           reportedCurrency: verified.currency,
           occurredAt: verified.occurredAt,
           providerSnapshot,
+          verifiedObservationId,
         }),
+        verifiedObservationId,
         paymentPublicId: readString(verified.paymentPublicId, 'paymentPublicId', 128, 8),
         provider,
         providerTransactionId: readString(
@@ -394,6 +422,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
         ),
         reportedAmountMinor: readPositiveMinor(verified.amountMinor, 'amountMinor'),
         reportedCurrency: readCurrency(verified.currency),
+        settlementChannel: verified.settlementChannel,
         providerSnapshot,
         occurredAt: readTimestamp(verified.occurredAt, 'occurredAt'),
       })
@@ -454,7 +483,40 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
         ...metadata(request, context, idempotencyKey, { refundId }),
         refundId,
       })
-      return reply.send(executionResponse(execution))
+      if (execution.value.paymentProvider !== 'postar') return reply.send(executionResponse(execution))
+      if (options.onlinePayments === undefined) throw new OnlinePaymentUnavailableError('线上退款执行尚未配置')
+      const providerQueryBindingId = providerResultIdempotencyKey(idempotencyKey)
+      const provider = await options.onlinePayments.requestRefund(
+        context.scope,
+        refundId,
+        providerQueryBindingId,
+      )
+      const terminal = await applyTerminalRefundObservation(
+        options, request, context, provider, providerQueryBindingId,
+      )
+      return reply.send(terminal === null
+        ? { ...executionResponse(execution), provider: publicRefundObservation(provider) }
+        : { ...executionResponse(terminal), provider: publicRefundObservation(provider) })
+    }),
+  )
+
+  app.post<{ Params: { refundId: string } }>(
+    '/refunds/:refundId/provider-query',
+    async (request, reply) => handleRoute(reply, async () => {
+      if (options.onlinePayments === undefined) throw new OnlinePaymentUnavailableError('线上退款查询尚未配置')
+      const context = await resolveStaffContext(options, request)
+      requireStaffCapability(context, 'refund.execute')
+      const body = readOptionalObject(request.body)
+      assertActorBinding(body, context.actor)
+      const refundId = readUuid(request.params.refundId, 'refundId')
+      const idempotencyKey = readIdempotencyKey(request)
+      const provider = await options.onlinePayments.queryRefund(context.scope, refundId, idempotencyKey)
+      const terminal = await applyTerminalRefundObservation(options, request, context, provider, idempotencyKey)
+      return reply.send({
+        data: terminal?.value ?? { status: 'processing' },
+        meta: { replayed: terminal?.replayed ?? false },
+        provider: publicRefundObservation(provider),
+      })
     }),
   )
 
@@ -503,6 +565,21 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       const idempotencyKey = providerIdempotencyKey(provider, 'refund', verified.businessIdentity)
       const actor: AuditActor = { type: 'integration', ref: verified.merchant.integrationRef }
       const providerSnapshot = verifiedSnapshot(verified.evidence, verified.eventId, verified.occurredAt)
+      const verifiedObservationId = await options.providerObservations.recordRefund({
+        scope: context.scope,
+        provider,
+        verificationKind: 'callback_signature',
+        providerEventId: verified.eventId,
+        integrationRef: verified.merchant.integrationRef,
+        refundPublicId: verified.refundPublicId,
+        providerTransactionId: verified.providerRefundId,
+        originalProviderTransactionId: verified.originalProviderTransactionId,
+        reportedAmountMinor: verified.amountMinor,
+        reportedCurrency: verified.currency,
+        status: verified.succeeded ? 'succeeded' : 'failed',
+        occurredAt: verified.occurredAt,
+        evidence: providerSnapshot,
+      })
       await options.commands.recordProviderRefundResult({
         ...metadata(request, { ...context, actor }, idempotencyKey, {
           refundPublicId: verified.refundPublicId,
@@ -513,8 +590,10 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
           reportedAmountMinor: verified.amountMinor,
           reportedCurrency: verified.currency,
           providerSnapshot,
+          verifiedObservationId,
           occurredAt: verified.occurredAt,
         }),
+        verifiedObservationId,
         refundPublicId: readString(verified.refundPublicId, 'refundPublicId', 128, 8),
         provider,
         succeeded: verified.succeeded,
@@ -578,10 +657,13 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
 function paymentFromProviderContext(value: ProviderPaymentContext): Payment {
   return {
     id: value.id,
+    payableKind: 'order',
     orderId: value.orderId,
+    activityRegistrationId: null,
     publicId: value.publicId,
     provider: value.provider,
     providerTransactionId: value.providerTransactionId,
+    settlementChannel: null,
     method: value.method,
     amountMinor: value.amountMinor,
     currency: value.currency,
@@ -745,7 +827,6 @@ function verifiedSnapshot(
 ): JsonObject {
   return sanitizeProviderSnapshot({
     ...(evidence ?? {}),
-    signatureVerified: true,
     eventId: readString(eventId, 'eventId', 256),
     occurredAt: readTimestamp(occurredAt, 'occurredAt'),
   })
@@ -834,9 +915,62 @@ function defaultPublicId(kind: 'payment' | 'refund'): string {
   return `${kind === 'payment' ? 'P' : 'R'}${randomUUID().replaceAll('-', '')}`
 }
 
+async function applyTerminalRefundObservation(
+  options: PaymentApiOptions,
+  request: FastifyRequest,
+  context: PaymentApiStaffContext,
+  result: OnlineRefundResult,
+  idempotencyKey: string,
+) {
+  const observed = result.observation
+  if (observed.status === 'processing' || result.verifiedObservationId === null) return null
+  const actor: AuditActor = { type: 'integration', ref: 'postar-refund-active-query' }
+  const providerSnapshot: JsonObject = {
+    merchantRefundId: result.merchantRefundId,
+    providerStatus: observed.status,
+    providerReportedAmountMinor: observed.amount,
+    occurredAt: observed.occurredAt,
+    receivedAt: new Date().toISOString(),
+  }
+  return options.commands.recordProviderRefundResult({
+    ...metadata(request, { ...context, actor }, idempotencyKey, {
+      merchantRefundId: result.merchantRefundId,
+      providerRefundTransactionId: observed.providerRefundTransactionId,
+      status: observed.status,
+      amountMinor: observed.amount,
+      currency: observed.currency,
+    }),
+    refundPublicId: result.merchantRefundId,
+    verifiedObservationId: result.verifiedObservationId,
+    provider: 'postar',
+    succeeded: observed.status === 'succeeded',
+    providerRefundId: observed.providerRefundTransactionId ?? result.merchantRefundId,
+    originalProviderTransactionId: result.originalProviderTransactionId,
+    reportedAmountMinor: observed.amount,
+    reportedCurrency: observed.currency,
+    providerSnapshot,
+    occurredAt: observed.occurredAt,
+  })
+}
+
+function publicRefundObservation(result: OnlineRefundResult) {
+  return {
+    status: result.observation.status,
+    amountMinor: result.observation.amount,
+    currency: result.observation.currency,
+    occurredAt: result.observation.occurredAt,
+  }
+}
+
+function providerResultIdempotencyKey(value: string): string {
+  return `refund-result-${createHash('sha256').update(value).digest('hex')}`
+}
+
 function paymentInitiationPrincipal(
   context: Readonly<PaymentApiActorContext>,
-): { type: 'employee'; employeeId: string } | { type: 'guest'; tableSessionId: string; customerId: string } {
+): { type: 'employee'; employeeId: string } | {
+  type: 'guest'; tableSessionId: string; customerId: string; guestSessionId: string
+} {
   if (context.actor.type === 'employee') {
     return { type: 'employee', employeeId: context.actor.employeeId }
   }
@@ -847,11 +981,14 @@ function paymentInitiationPrincipal(
     type: 'guest',
     tableSessionId: readUuid(context.tableSessionId, 'tableSessionId'),
     customerId: readUuid(context.customerId, 'customerId'),
+    guestSessionId: requireGuestSessionIdFromActorRef(context.actor.ref),
   }
 }
 
 function principalToJson(
-  principal: { type: 'employee'; employeeId: string } | { type: 'guest'; tableSessionId: string; customerId: string },
+  principal: { type: 'employee'; employeeId: string } | {
+    type: 'guest'; tableSessionId: string; customerId: string; guestSessionId: string
+  },
 ): JsonObject {
   return principal.type === 'employee'
     ? { type: principal.type, employeeId: principal.employeeId }
@@ -859,6 +996,7 @@ function principalToJson(
         type: principal.type,
         tableSessionId: principal.tableSessionId,
         customerId: principal.customerId,
+        guestSessionId: principal.guestSessionId,
       }
 }
 

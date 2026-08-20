@@ -320,6 +320,7 @@ export async function provisionNormalizedStore(input: {
     // configuration committed by the previous provisioner instead of keeping
     // a stale SERIALIZABLE snapshot and failing with 40001 after the wait.
     if (ownsClient) await client.query('BEGIN ISOLATION LEVEL READ COMMITTED')
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext('mbox.normalized.configuration.provision'))`)
     await client.query(`SELECT pg_advisory_xact_lock(hashtext('mbox.normalized.store.provision'))`)
     const schema = await client.query<{ schema_flavor: string; schema_version: string }>(
       'SELECT schema_flavor, schema_version FROM mbox.normalized_schema_metadata WHERE singleton = true',
@@ -552,13 +553,20 @@ async function reconcileRoleAccessDefaults(
   for (const scope of role.dataScopes ?? []) {
     const code = `${scope.key}:${scope.effect}`
     if (runtimeManaged.has(`data_scope:${code}`)) continue
+    const strongValue = strongProvisionedScope(scope.value)
     await client.query(`INSERT INTO mbox.role_data_scopes(
-        tenant_id, store_id, role_id, scope_key, effect, scope_value, enabled, configured_by_employee_id)
-      VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6::jsonb,$7,NULL)
+        tenant_id, store_id, role_id, scope_key, effect, scope_value,
+        value_kind, boolean_value, text_value, text_values,
+        enabled, configured_by_employee_id)
+      VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6::jsonb,$7,$8::boolean,$9,$10::text[],$11,NULL)
       ON CONFLICT (tenant_id, store_id, role_id, scope_key, effect) DO UPDATE
-      SET scope_value=EXCLUDED.scope_value, enabled=EXCLUDED.enabled,
+      SET scope_value=EXCLUDED.scope_value, value_kind=EXCLUDED.value_kind,
+          boolean_value=EXCLUDED.boolean_value, text_value=EXCLUDED.text_value,
+          text_values=EXCLUDED.text_values, enabled=EXCLUDED.enabled,
           configured_by_employee_id=NULL, updated_at=clock_timestamp()`, [
-      tenantId, storeId, roleId, scope.key, scope.effect, JSON.stringify(scope.value), scope.enabled ?? true,
+      tenantId, storeId, roleId, scope.key, scope.effect, JSON.stringify(scope.value),
+      strongValue.kind, strongValue.booleanValue, strongValue.textValue, strongValue.textValues,
+      scope.enabled ?? true,
     ])
   }
   for (const existing of dataScopeResult.rows) {
@@ -578,14 +586,31 @@ async function reconcileRoleAccessDefaults(
     const currency = approval.currency ?? storeCurrency
     const code = `${approval.code}:${currency}`
     if (runtimeManaged.has(`approval_limit:${code}`)) continue
+    const strongRules = strongProvisionedApproval(approval.rules ?? {})
     await client.query(`INSERT INTO mbox.role_approval_limits(
-        tenant_id, store_id, role_id, approval_code, amount_minor, currency, rules, enabled, configured_by_employee_id)
-      VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7::jsonb,$8,NULL)
+        tenant_id, store_id, role_id, approval_code, amount_minor, currency, rules,
+        calculation_mode, fixed_amount_minor, discount_basis_points,
+        allow_full_gift, requires_reason, requires_second_actor,
+        enabled, configured_by_employee_id)
+      VALUES (
+        $1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7::jsonb,
+        $8,$9::bigint,$10::integer,$11,$12,$13,$14,NULL
+      )
       ON CONFLICT (tenant_id, store_id, role_id, approval_code, currency) DO UPDATE
-      SET amount_minor=EXCLUDED.amount_minor, rules=EXCLUDED.rules, enabled=EXCLUDED.enabled,
+      SET amount_minor=EXCLUDED.amount_minor, rules=EXCLUDED.rules,
+          calculation_mode=EXCLUDED.calculation_mode,
+          fixed_amount_minor=EXCLUDED.fixed_amount_minor,
+          discount_basis_points=EXCLUDED.discount_basis_points,
+          allow_full_gift=EXCLUDED.allow_full_gift,
+          requires_reason=EXCLUDED.requires_reason,
+          requires_second_actor=EXCLUDED.requires_second_actor,
+          enabled=EXCLUDED.enabled,
           configured_by_employee_id=NULL, updated_at=clock_timestamp()`, [
       tenantId, storeId, roleId, approval.code, approval.amountMinor, currency,
-      JSON.stringify(approval.rules ?? {}), approval.enabled ?? true,
+      JSON.stringify(approval.rules ?? {}), strongRules.calculationMode,
+      strongRules.fixedAmountMinor, strongRules.discountBasisPoints,
+      strongRules.allowFullGift, strongRules.requiresReason, strongRules.requiresSecondActor,
+      approval.enabled ?? true,
     ])
   }
   for (const existing of approvalResult.rows) {
@@ -622,6 +647,43 @@ async function reconcileRoleAccessDefaults(
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND role_id=$3::uuid AND navigation_code=$4`, [
       tenantId, storeId, roleId, existing.navigation_code,
     ])
+  }
+}
+
+function strongProvisionedScope(value: unknown) {
+  if (typeof value === 'boolean') {
+    return { kind: 'boolean', booleanValue: value, textValue: null, textValues: [] as string[] }
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return { kind: 'text', booleanValue: null, textValue: value.trim(), textValues: [] as string[] }
+  }
+  if (Array.isArray(value) && value.every((entry) => typeof entry === 'string' && entry.trim().length > 0)) {
+    return {
+      kind: 'text_set', booleanValue: null, textValue: null,
+      textValues: [...new Set(value.map((entry) => (entry as string).trim()))].toSorted(),
+    }
+  }
+  throw new TypeError('Provisioned data scope must be a boolean, text, or text array')
+}
+
+function strongProvisionedApproval(rules: Record<string, unknown>) {
+  const allowFullGift = rules.allowFullGift === true
+  const fixedAmountMinor = rules.fixedAmountMinor === undefined
+    ? null : rangedInteger(rules.fixedAmountMinor, 'fixedAmountMinor', 1, Number.MAX_SAFE_INTEGER)
+  const discountBasisPoints = rules.discountBasisPoints === undefined
+    ? null : rangedInteger(rules.discountBasisPoints, 'discountBasisPoints', 1, 9999)
+  if (Number(allowFullGift) + Number(fixedAmountMinor !== null) + Number(discountBasisPoints !== null) > 1) {
+    throw new TypeError('Provisioned approval must select one calculation mode')
+  }
+  return {
+    calculationMode: allowFullGift ? 'full_gift'
+      : fixedAmountMinor !== null ? 'fixed_amount'
+        : discountBasisPoints !== null ? 'basis_points' : 'amount_limit',
+    fixedAmountMinor,
+    discountBasisPoints,
+    allowFullGift,
+    requiresReason: rules.requiresReason !== false,
+    requiresSecondActor: rules.requiresSecondActor === true,
   }
 }
 

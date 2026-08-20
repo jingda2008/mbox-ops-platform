@@ -1,6 +1,9 @@
+const RELEASE_CONFIG = require('./release-config.generated')
+
 const DEVELOPMENT_DEFAULTS = Object.freeze({
   mode: 'development',
-  apiBaseUrl: 'http://127.0.0.1:8787',
+  // DevTools 默认打现网；本机 8787 可在控制台写入 mbox.runtime.config.apiBaseUrl 覆盖。
+  apiBaseUrl: 'https://mbox.shmbox.com',
   storeId: 'mbox-lujiazui',
   defaultTableCode: 'L01',
   defaultTableToken: '',
@@ -8,26 +11,28 @@ const DEVELOPMENT_DEFAULTS = Object.freeze({
   developmentMemberId: 'member-amy',
   allowDevDataFallback: true,
   requestTimeoutMs: 10000,
-  wechatIdentityEnabled: false,
-  identityTenantId: '',
-  identityStoreId: '',
-  wechatAppId: '',
+  wechatIdentityEnabled: true,
+  membershipInviteCooldownHours: 720,
+  identityTenantId: '10000000-0000-4000-8000-000000000001',
+  identityStoreId: '20000000-0000-4000-8000-000000000001',
+  wechatAppId: 'wxdb9f2dc413484f2d',
 })
 
 const DEPLOYMENT_DEFAULTS = Object.freeze({
   mode: 'production',
-  apiBaseUrl: '',
-  storeId: '',
+  apiBaseUrl: 'https://mbox.shmbox.com',
+  storeId: 'mbox-lujiazui',
   defaultTableCode: '',
   defaultTableToken: '',
   developmentActorId: '',
   developmentMemberId: '',
   allowDevDataFallback: false,
   requestTimeoutMs: 10000,
-  wechatIdentityEnabled: false,
-  identityTenantId: '',
-  identityStoreId: '',
-  wechatAppId: '',
+  wechatIdentityEnabled: true,
+  membershipInviteCooldownHours: 720,
+  identityTenantId: '10000000-0000-4000-8000-000000000001',
+  identityStoreId: '20000000-0000-4000-8000-000000000001',
+  wechatAppId: 'wxdb9f2dc413484f2d',
 })
 
 function compact(object) {
@@ -53,7 +58,9 @@ function getRuntimeConfig() {
   }
   const stored = envVersion === 'develop' ? (wx.getStorageSync('mbox.runtime.config') || {}) : {}
   const defaults = envVersion === 'develop' ? DEVELOPMENT_DEFAULTS : DEPLOYMENT_DEFAULTS
-  const merged = Object.assign({}, defaults, compact(extConfig.mbox || extConfig), compact(stored))
+  const merged = Object.assign(
+    {}, defaults, compact(extConfig.mbox || extConfig), compact(stored), compact(RELEASE_CONFIG),
+  )
   merged.apiBaseUrl = String(merged.apiBaseUrl || '').replace(/\/$/, '')
   merged.isDevelopment = merged.mode === 'development'
   merged.envVersion = envVersion

@@ -118,6 +118,11 @@ interface PrivateContactRow extends Record<string, unknown> {
   masked_contact: string
 }
 
+interface OwnedReservationListRow extends Record<string, unknown> {
+  id: string
+  masked_contact: string
+}
+
 interface IntakeRow extends Record<string, unknown> {
   kind: 'reservation' | 'waitlist'
   public_id: string
@@ -142,6 +147,13 @@ class PublicReservationCapacityUnavailableError extends Error {
   constructor() {
     super('这个时段预约已满，请换个时间或登记候补')
     this.name = 'PublicReservationCapacityUnavailableError'
+  }
+}
+
+class PublicReservationPolicyVersionConflictError extends Error {
+  constructor() {
+    super('预约规则刚刚更新，请返回确认页重新查看定金与到店规则')
+    this.name = 'PublicReservationPolicyVersionConflictError'
   }
 }
 
@@ -248,6 +260,8 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
     const seatPreference = body.seatPreference === undefined
       ? 'no_preference'
       : readEnum(body.seatPreference, '座位偏好', SEAT_PREFERENCES)
+    const acknowledgedPolicyVersion = readInteger(body.reservationPolicyVersion, '预约规则版本', 1, 2_147_483_647)
+    const preferredScheduleId = readOptionalUuid(body.preferredScheduleId, '演出偏好')
     if (body.tableCodes !== undefined) throw new PublicReservationRequestError('预约只登记位置偏好，具体位置到店后由门店安排')
     const idempotencyKey = readIdempotencyKey(request)
     const publicId = readOptionalString(body.publicId, '预约编号', 128) ?? createPublicId('reservation')
@@ -255,11 +269,15 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
       scope: context.scope,
       operationScope: 'public.reservation.create',
       idempotencyKey,
-      requestFingerprint: fingerprint({ mode, customerName, contact: contact.hash, guestCount, arrivalAt, note, seatPreference }),
+      requestFingerprint: fingerprint({ mode, customerName, contact: contact.hash, guestCount, arrivalAt, note, seatPreference, acknowledgedPolicyVersion, preferredScheduleId }),
       resultCodec: reservationCodec,
     }, async (transaction) => {
       await enforceRateLimit(transaction, 'reservation', hashActor(context.actorRef), 8, 60_000)
       const policy = await readPolicy(transaction, true)
+      if (policy.policy_version !== acknowledgedPolicyVersion) {
+        throw new PublicReservationPolicyVersionConflictError()
+      }
+      await assertPreferredSchedule(transaction, preferredScheduleId, arrivalAt)
       const expectedEndAt = body.expectedEndAt === undefined
         ? new Date(Date.parse(arrivalAt) + policy.default_duration_minutes * 60_000).toISOString()
         : readTimestamp(body.expectedEndAt, '预计结束时间')
@@ -284,8 +302,8 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
         reservationSnapshot: {
           bookingMode: mode,
           depositRule: deposit,
-          seatPreference,
         },
+        seatPreference,
         tableIds: [],
         allowUnassignedTable: true,
         initialStatus: 'pending',
@@ -295,6 +313,8 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
           Date.parse(arrivalAt) + policy.arrival_grace_minutes * 60_000,
         ).toISOString(),
         reservationPolicyVersion: policy.policy_version,
+        reservationPolicyAcknowledgedVersion: acknowledgedPolicyVersion,
+        preferredScheduleId,
         customerCancelUntil: new Date(
           Date.parse(arrivalAt) - policy.customer_cancel_cutoff_minutes * 60_000,
         ).toISOString(),
@@ -334,6 +354,12 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
     })
   }))
 
+  app.get('/public/reservations/mine', async (request, reply) => handle(reply, async () => {
+    const context = await requireGuest(options, request, 'guest.reservation.read')
+    const reservations = await listOwnedReservations(options, context)
+    return reply.send({ data: { reservations }, meta: { count: reservations.length } })
+  }))
+
   app.get<{ Params: { publicId: string } }>('/public/reservations/:publicId', async (request, reply) => (
     handle(reply, async () => {
       const context = await requireGuest(options, request, 'guest.reservation.read')
@@ -346,14 +372,23 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
     handle(reply, async () => {
       const context = await requireGuest(options, request, 'guest.reservation.update')
       const body = readObject(request.body)
-      rejectClaims(body, ['customerId', 'source', 'status', 'actor', 'scope', 'tableCodes'])
+      rejectClaims(body, [
+        'customerId', 'source', 'status', 'actor', 'scope', 'tableCodes',
+        'reservationPolicyAcknowledgedVersion',
+      ])
       const publicId = readPublicId(request.params.publicId)
       const idempotencyKey = readIdempotencyKey(request)
+      const acknowledgedPolicyVersion = readInteger(
+        body.reservationPolicyVersion,
+        '预约规则版本',
+        1,
+        2_147_483_647,
+      )
       const execution = await options.commands.execute({
         scope: context.scope,
         operationScope: 'public.reservation.update',
         idempotencyKey,
-        requestFingerprint: fingerprint({ publicId, body }),
+        requestFingerprint: fingerprint({ publicId, body, acknowledgedPolicyVersion }),
         resultCodec: reservationCodec,
       }, async (transaction) => {
         const current = await ownedReservationInTransaction(transaction, publicId, context.customerId, true)
@@ -369,14 +404,26 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
         const arrivalAt = body.arrivalAt === undefined
           ? current.arrivalAt
           : readTimestamp(body.arrivalAt, '到店时间')
+        const arrivalChanged = Date.parse(arrivalAt) !== Date.parse(current.arrivalAt)
+        const preferredScheduleProvided = Object.prototype.hasOwnProperty.call(body, 'preferredScheduleId')
+        if (arrivalChanged && !preferredScheduleProvided) {
+          throw new PublicReservationRequestError('到店时间变化后，请重新选择演出或明确清空演出偏好')
+        }
+        const preferredScheduleId = preferredScheduleProvided
+          ? readOptionalUuid(body.preferredScheduleId, '演出偏好')
+          : current.preferredScheduleId
         const expectedEndAt = body.expectedEndAt === undefined
           ? current.expectedEndAt
           : readTimestamp(body.expectedEndAt, '预计结束时间')
         const note = body.note === undefined ? current.note : readOptionalString(body.note, '备注', 1000)
         const seatPreference = body.seatPreference === undefined
-          ? reservationSeatPreference(current.reservationSnapshot)
+          ? current.seatPreference
           : readEnum(body.seatPreference, '座位偏好', SEAT_PREFERENCES)
         const policy = await readPolicy(transaction, true)
+        if (policy.policy_version !== acknowledgedPolicyVersion) {
+          throw new PublicReservationPolicyVersionConflictError()
+        }
+        await assertPreferredSchedule(transaction, preferredScheduleId, arrivalAt)
         validateReservationWindow(arrivalAt, expectedEndAt, now(), policy.max_advance_days)
         const capacity = await readReservationCapacity(
           transaction,
@@ -394,12 +441,16 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
           UPDATE mbox.reservations
           SET customer_name = $4, guest_count = $5, arrival_at = $6::timestamptz,
             expected_end_at = $7::timestamptz, note = $8,
-            reservation_snapshot = reservation_snapshot || jsonb_build_object('seatPreference', $9::text),
+            seat_preference = $9,
             request_hold_expires_at = CASE WHEN status='pending'
               THEN LEAST($6::timestamptz, clock_timestamp() + make_interval(mins => $10::integer))
               ELSE NULL END,
             arrival_grace_ends_at = $6::timestamptz + make_interval(mins => $11::integer),
             reservation_policy_version = $12::integer,
+            reservation_policy_acknowledged_version = $12::integer,
+            preferred_schedule_id = $13::uuid,
+            customer_cancel_until = $6::timestamptz - make_interval(mins => $14::integer),
+            cancellation_policy_snapshot = $15::jsonb,
             aggregate_version = aggregate_version + 1
           WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
         `, [
@@ -415,6 +466,12 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
           policy.hold_minutes,
           policy.arrival_grace_minutes,
           policy.policy_version,
+          preferredScheduleId,
+          policy.customer_cancel_cutoff_minutes,
+          JSON.stringify({
+            cutoffMinutes: policy.customer_cancel_cutoff_minutes,
+            depositMode: policy.deposit_mode,
+          }),
         ])
         const updated = await new ReservationRepository(transaction).findById(current.id)
         if (!updated) throw new ReservationNotFoundError(current.id)
@@ -614,6 +671,58 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
   }))
 }
 
+async function listOwnedReservations(
+  options: PublicReservationApiOptions,
+  context: PublicReservationGuestContext,
+): Promise<JsonObject[]> {
+  return options.transactions.run(context.scope, async (transaction) => {
+    const selected = await transaction.query<OwnedReservationListRow>(`
+      WITH RECURSIVE ancestry(id, merged_into_customer_id) AS (
+        SELECT customer.id, customer.merged_into_customer_id
+        FROM mbox.customers AS customer
+        WHERE customer.tenant_id = $1::uuid
+          AND customer.store_id = $2::uuid
+          AND customer.id = $3::uuid
+        UNION ALL
+        SELECT parent.id, parent.merged_into_customer_id
+        FROM mbox.customers AS parent
+        JOIN ancestry AS child ON child.merged_into_customer_id = parent.id
+        WHERE parent.tenant_id = $1::uuid
+          AND parent.store_id = $2::uuid
+      ), canonical AS (
+        SELECT id FROM ancestry WHERE merged_into_customer_id IS NULL LIMIT 1
+      ), family(id) AS (
+        SELECT id FROM canonical
+        UNION ALL
+        SELECT child.id
+        FROM mbox.customers AS child
+        JOIN family AS parent ON child.merged_into_customer_id = parent.id
+        WHERE child.tenant_id = $1::uuid
+          AND child.store_id = $2::uuid
+      )
+      SELECT reservation.id,
+        COALESCE(private_contact.masked_contact, '已留联系方式') AS masked_contact
+      FROM mbox.reservations AS reservation
+      JOIN family ON family.id = reservation.customer_id
+      LEFT JOIN mbox.reservation_private_contacts AS private_contact
+        ON private_contact.tenant_id = reservation.tenant_id
+       AND private_contact.store_id = reservation.store_id
+       AND private_contact.reservation_id = reservation.id
+      WHERE reservation.tenant_id = $1::uuid
+        AND reservation.store_id = $2::uuid
+      ORDER BY reservation.arrival_at DESC, reservation.created_at DESC, reservation.id DESC
+      LIMIT 50
+    `, [transaction.scope.tenantId, transaction.scope.storeId, context.customerId])
+    const output: JsonObject[] = []
+    const repository = new ReservationRepository(transaction)
+    for (const row of selected.rows) {
+      const reservation = await repository.findById(row.id)
+      if (reservation !== null) output.push(publicReservation(reservation, row.masked_contact))
+    }
+    return output
+  }, { readOnly: true })
+}
+
 async function findOwnedReservation(
   options: PublicReservationApiOptions,
   context: PublicReservationGuestContext,
@@ -636,10 +745,32 @@ async function ownedReservationInTransaction(
   lock: boolean,
 ): Promise<Reservation> {
   const selected = await transaction.query<{ id: string }>(`
-    SELECT id FROM mbox.reservations
-    WHERE tenant_id = $1::uuid AND store_id = $2::uuid
-      AND public_id = $3 AND customer_id = $4::uuid
-    ${lock ? 'FOR UPDATE' : ''}
+    WITH RECURSIVE ancestry(id, merged_into_customer_id) AS (
+      SELECT customer.id, customer.merged_into_customer_id
+      FROM mbox.customers AS customer
+      WHERE customer.tenant_id = $1::uuid AND customer.store_id = $2::uuid
+        AND customer.id = $4::uuid
+      UNION ALL
+      SELECT parent.id, parent.merged_into_customer_id
+      FROM mbox.customers AS parent
+      JOIN ancestry AS child ON child.merged_into_customer_id = parent.id
+      WHERE parent.tenant_id = $1::uuid AND parent.store_id = $2::uuid
+    ), canonical AS (
+      SELECT id FROM ancestry WHERE merged_into_customer_id IS NULL LIMIT 1
+    ), family(id) AS (
+      SELECT id FROM canonical
+      UNION ALL
+      SELECT child.id
+      FROM mbox.customers AS child
+      JOIN family AS parent ON child.merged_into_customer_id = parent.id
+      WHERE child.tenant_id = $1::uuid AND child.store_id = $2::uuid
+    )
+    SELECT reservation.id
+    FROM mbox.reservations AS reservation
+    JOIN family ON family.id = reservation.customer_id
+    WHERE reservation.tenant_id = $1::uuid AND reservation.store_id = $2::uuid
+      AND reservation.public_id = $3
+    ${lock ? 'FOR UPDATE OF reservation' : ''}
   `, [transaction.scope.tenantId, transaction.scope.storeId, publicId, customerId])
   const id = selected.rows[0]?.id
   if (!id) throw new PublicReservationOwnershipError()
@@ -839,6 +970,28 @@ function groupPublicTables(rows: readonly AvailableTableRow[]): Array<{
   return [...groups.values()]
 }
 
+async function assertPreferredSchedule(
+  transaction: ScopedTransaction,
+  scheduleId: string | null,
+  arrivalAt: string,
+): Promise<void> {
+  if (scheduleId === null) return
+  const result = await transaction.query<{ id: string }>(`
+    SELECT schedule.id
+    FROM mbox.schedules AS schedule
+    JOIN mbox.stores AS store
+      ON store.tenant_id = schedule.tenant_id AND store.id = schedule.store_id
+    WHERE schedule.tenant_id = $1::uuid AND schedule.store_id = $2::uuid
+      AND schedule.id = $3::uuid AND schedule.status IN ('scheduled', 'performing')
+      AND (schedule.starts_at AT TIME ZONE store.timezone)::date
+        = ($4::timestamptz AT TIME ZONE store.timezone)::date
+    FOR KEY SHARE OF schedule
+  `, [transaction.scope.tenantId, transaction.scope.storeId, scheduleId, arrivalAt])
+  if (result.rowCount !== 1) {
+    throw new PublicReservationRequestError('所选演出已改期或取消，请返回上一步重新选择')
+  }
+}
+
 function publicDepositRule(policy: ReservationPolicyRow, minimumSpendMinor: number | null): JsonObject {
   const amount = policy.deposit_mode === 'flat'
     ? Number(policy.deposit_minor ?? 0)
@@ -850,6 +1003,7 @@ function publicDepositRule(policy: ReservationPolicyRow, minimumSpendMinor: numb
     mode: policy.deposit_mode,
     amountMinor: amount,
     ruleText: policy.deposit_rule_text,
+    policyVersion: policy.policy_version,
   }
 }
 
@@ -866,9 +1020,10 @@ function publicReservation(reservation: Reservation, maskedContact: string): Jso
       ? 'arrived'
       : 'not_arrived',
     note: reservation.note,
-    seatPreference: reservationSeatPreference(reservation.reservationSnapshot),
+    seatPreference: reservation.seatPreference,
     arrivalGraceEndsAt: reservation.arrivalGraceEndsAt,
     reservationPolicyVersion: reservation.reservationPolicyVersion,
+    preferredScheduleId: reservation.preferredScheduleId,
     cancellationPolicy: reservation.cancellationPolicySnapshot,
   }
 }
@@ -929,14 +1084,12 @@ function reservationEvent(reservation: Reservation): JsonObject {
     expectedEndAt: reservation.expectedEndAt,
     status: reservation.status,
     source: reservation.source,
-    seatPreference: reservationSeatPreference(reservation.reservationSnapshot),
+    seatPreference: reservation.seatPreference,
+    preferredScheduleId: reservation.preferredScheduleId,
+    reservationPolicyVersion: reservation.reservationPolicyVersion,
+    reservationPolicyAcknowledgedVersion: reservation.reservationPolicyAcknowledgedVersion,
     tableCodes: reservation.tableLocks.map((lock) => lock.tableCode),
   }
-}
-
-function reservationSeatPreference(snapshot: JsonObject): SeatPreference {
-  const value = snapshot.seatPreference
-  return SEAT_PREFERENCES.includes(value as SeatPreference) ? value as SeatPreference : 'no_preference'
 }
 
 function reservationArrivalGraceMinutes(reservation: Reservation): number {
@@ -959,6 +1112,7 @@ const reservationCodec: JsonCodec<Reservation> = {
     source: reservation.source,
     ownerEmployeeId: reservation.ownerEmployeeId,
     note: reservation.note,
+    seatPreference: reservation.seatPreference,
     reservationSnapshot: reservation.reservationSnapshot,
     createdAt: reservation.createdAt,
     updatedAt: reservation.updatedAt,
@@ -968,6 +1122,8 @@ const reservationCodec: JsonCodec<Reservation> = {
     requestHoldExpiresAt: reservation.requestHoldExpiresAt,
     arrivalGraceEndsAt: reservation.arrivalGraceEndsAt,
     reservationPolicyVersion: reservation.reservationPolicyVersion,
+    reservationPolicyAcknowledgedVersion: reservation.reservationPolicyAcknowledgedVersion,
+    preferredScheduleId: reservation.preferredScheduleId,
     tableLocks: reservation.tableLocks.map((lock) => ({ ...lock })),
   }),
   decode: (value) => {
@@ -1014,6 +1170,9 @@ function mapError(error: unknown): { status: number; code: string; message: stri
   }
   if (error instanceof PublicReservationCapacityUnavailableError) {
     return { status: 409, code: 'RESERVATION_CAPACITY_FULL', message: error.message }
+  }
+  if (error instanceof PublicReservationPolicyVersionConflictError) {
+    return { status: 409, code: 'RESERVATION_POLICY_CHANGED', message: error.message }
   }
   if (error instanceof ReservationConflictError || error instanceof ReservationTableUnavailableError) {
     return { status: 409, code: 'TABLE_ALREADY_RESERVED', message: '这个位置刚刚被预订，请重新选择' }
@@ -1118,6 +1277,15 @@ function readString(value: unknown, label: string, minimum: number, maximum: num
 function readOptionalString(value: unknown, label: string, maximum: number): string | null {
   if (value === undefined || value === null || value === '') return null
   return readString(value, label, 1, maximum)
+}
+
+function readOptionalUuid(value: unknown, label: string): string | null {
+  if (value === undefined || value === null || value === '') return null
+  const normalized = readString(value, label, 36, 36)
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(normalized)) {
+    throw new PublicReservationRequestError(`${label}格式无效`)
+  }
+  return normalized
 }
 
 function readInteger(value: unknown, label: string, minimum: number, maximum: number): number {

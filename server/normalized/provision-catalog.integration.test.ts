@@ -61,6 +61,7 @@ integration('normalized catalog provisioning', () => {
       bundle_station: string
       upgrade_product_id: string
       upgrade_database_id: string
+      persisted_upgrade_snapshot: string | null
       latest_source_commit_sha: string
     }>(`SELECT
       (SELECT count(*)::text FROM mbox.products WHERE tenant_id=$1 AND store_id=$2) AS products,
@@ -68,9 +69,11 @@ integration('normalized catalog provisioning', () => {
       (SELECT count(*)::text FROM mbox.product_bundle_components WHERE tenant_id=$1 AND store_id=$2) AS components,
       (SELECT count(*)::text FROM mbox.product_catalog_applications WHERE tenant_id=$1 AND store_id=$2) AS applications,
       (SELECT fulfillment_station FROM mbox.products WHERE tenant_id=$1 AND store_id=$2 AND code='INT-BUNDLE-1') AS bundle_station,
-      (SELECT product_snapshot#>>'{recommendation,upgradeProductId}' FROM mbox.products
+      (SELECT recommendation_upgrade_product_id::text FROM mbox.products
         WHERE tenant_id=$1 AND store_id=$2 AND code='INT-DRINK-1') AS upgrade_product_id,
       (SELECT id::text FROM mbox.products WHERE tenant_id=$1 AND store_id=$2 AND code='INT-BUNDLE-1') AS upgrade_database_id,
+      (SELECT product_snapshot#>>'{recommendation,upgradeProductId}' FROM mbox.products
+        WHERE tenant_id=$1 AND store_id=$2 AND code='INT-DRINK-1') AS persisted_upgrade_snapshot,
       (SELECT source_commit_sha FROM mbox.product_catalog_applications
         WHERE tenant_id=$1 AND store_id=$2 ORDER BY applied_at DESC LIMIT 1) AS latest_source_commit_sha`, [tenantId, storeId])
     expect(state.rows[0]).toMatchObject({
@@ -78,6 +81,7 @@ integration('normalized catalog provisioning', () => {
       latest_source_commit_sha: nextSourceCommitSha,
     })
     expect(state.rows[0]?.upgrade_product_id).toBe(state.rows[0]?.upgrade_database_id)
+    expect(state.rows[0]?.persisted_upgrade_snapshot).toBeNull()
 
     const altered = parseNormalizedCatalog({
       version: catalog.version, source: catalog.source,

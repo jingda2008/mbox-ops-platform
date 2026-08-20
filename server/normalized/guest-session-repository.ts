@@ -42,6 +42,7 @@ export interface GuestSessionRecord {
 
 export interface ActiveTableCredential {
   credentialId: string
+  credentialHash: string
   tableId: string
   tableCode: string
   tableDisplayName: string
@@ -127,6 +128,13 @@ export class GuestTableSessionEndedError extends Error {
   constructor() {
     super('本桌本次服务已经结束，请重新扫描桌面固定二维码')
     this.name = 'GuestTableSessionEndedError'
+  }
+}
+
+export class GuestCustomerAtAnotherTableError extends Error {
+  constructor() {
+    super('当前身份已在其他桌次使用，请扫描您当前所在桌面的二维码，或联系服务人员调整桌位')
+    this.name = 'GuestCustomerAtAnotherTableError'
   }
 }
 
@@ -241,6 +249,7 @@ export class GuestSessionRepository {
     const tableSession = tableSessionResult.rows[0]
     return {
       credentialId: credential.credential_id,
+      credentialHash,
       tableId: credential.table_id,
       tableCode: credential.table_code,
       tableDisplayName: credential.table_display_name,
@@ -285,17 +294,12 @@ export class GuestSessionRepository {
     ])
     if (open.rowCount !== 1) throw new GuestTableSessionEndedError()
 
-    await this.transaction.query(`
-      INSERT INTO mbox.table_session_customers (
-        tenant_id, store_id, table_session_id, customer_id, relationship
-      ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'guest')
-      ON CONFLICT (tenant_id, store_id, table_session_id, customer_id) DO NOTHING
-    `, [
-      this.transaction.scope.tenantId,
-      this.transaction.scope.storeId,
-      input.credential.tableSessionId,
-      input.customerId,
-    ])
+    const position = await this.transaction.query<{ participation_id: string | null }>(`
+      SELECT mbox.ensure_scanned_table_customer_position(
+        $1::char(64),$2::uuid,$3::uuid
+      ) AS participation_id
+    `, [input.credential.credentialHash, input.credential.tableSessionId, input.customerId])
+    if (position.rows[0]?.participation_id === null) throw new GuestTableSessionEndedError()
 
     const existing = await this.transaction.query<GuestSessionRow>(`
       SELECT guest.id, guest.session_kind, guest.customer_id,
@@ -418,6 +422,27 @@ export class GuestSessionRepository {
     requireSha256(input.tokenHash, 'tokenHash')
     requireSha256(input.deviceHash, 'deviceHash')
     requireSha256(input.invalidPrincipalHash, 'invalidPrincipalHash')
+    const candidate = await this.transaction.query<{
+      id: string
+      session_kind: GuestSessionKind
+      table_session_id: string | null
+      customer_id: string
+    }>(`
+      SELECT id,session_kind,table_session_id,customer_id
+      FROM mbox.guest_sessions
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        AND token_hash=$3 AND device_hash=$4
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId,
+      input.tokenHash, input.deviceHash])
+    const candidateRow = candidate.rows[0]
+    let activePosition = true
+    if (candidateRow?.session_kind === 'table' && candidateRow.table_session_id !== null) {
+      const guard = await this.transaction.query<{ participation_id: string | null }>(`
+        SELECT mbox.lock_active_table_guest_session_position($1::uuid,$2::uuid,$3::uuid)
+          AS participation_id
+      `, [candidateRow.table_session_id, candidateRow.customer_id, candidateRow.id])
+      activePosition = guard.rows[0]?.participation_id !== null
+    }
     const result = await this.transaction.query<GuestSessionRow>(`
       SELECT guest.id, guest.session_kind, guest.customer_id,
         guest.table_session_id, guest.reservation_id,
@@ -457,7 +482,8 @@ export class GuestSessionRepository {
 
     const expired = new Date(row.expires_at).getTime() <= new Date(input.now).getTime()
     const unavailableCustomer = row.customer_status !== 'active'
-    const tableEnded = row.session_kind === 'table' && row.table_session_status !== 'open'
+    const tableEnded = row.session_kind === 'table'
+      && (row.table_session_status !== 'open' || !activePosition)
     if (row.revoked_at !== null || expired || unavailableCustomer || tableEnded) {
       const reasonCode = tableEnded ? 'TABLE_SESSION_ENDED'
         : expired ? 'SESSION_EXPIRED'
@@ -687,14 +713,20 @@ export class GuestSessionService {
         publicId: this.randomPublicId(),
         businessDate: input.businessDate,
       })
-      const issuance = await repository.issueTableSession({
-        credential,
-        customerId: identity.customerId,
-        tokenHash,
-        deviceHash,
-        issuedAt: issuedAt.toISOString(),
-        expiresAt: expiresAt.toISOString(),
-      })
+      let issuance: Awaited<ReturnType<GuestSessionRepository['issueTableSession']>>
+      try {
+        issuance = await repository.issueTableSession({
+          credential,
+          customerId: identity.customerId,
+          tokenHash,
+          deviceHash,
+          issuedAt: issuedAt.toISOString(),
+          expiresAt: expiresAt.toISOString(),
+        })
+      } catch (error) {
+        if (isCustomerAtAnotherTableError(error)) throw new GuestCustomerAtAnotherTableError()
+        throw error
+      }
       if (issuance.status === 'already_active') {
         return { status: 'already_active', session: issuance.session }
       }
@@ -735,6 +767,13 @@ export class GuestSessionService {
     if (outcome.retryAt) throw new GuestSessionRateLimitError(outcome.retryAt)
     throw new GuestSessionInvalidError()
   }
+}
+
+function isCustomerAtAnotherTableError(error: unknown): boolean {
+  return typeof error==='object' && error!==null
+    && 'code' in error && error.code==='55000'
+    && 'message' in error && typeof error.message==='string'
+    && error.message.includes('customer already has another active table position')
 }
 
 export function hashGuestSessionToken(token: string): string {

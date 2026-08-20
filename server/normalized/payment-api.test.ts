@@ -16,6 +16,8 @@ import type { CashierWorkbenchView } from '../../src/shared/cashier-workbench-co
 const tenantId = '11111111-1111-4111-8111-111111111111'
 const storeId = '22222222-2222-4222-8222-222222222222'
 const employeeId = '33333333-3333-4333-8333-333333333333'
+const verifiedPaymentObservationId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1'
+const verifiedRefundObservationId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2'
 const requesterId = '44444444-4444-4444-8444-444444444444'
 const paymentId = '55555555-5555-4555-8555-555555555555'
 const refundId = '66666666-6666-4666-8666-666666666666'
@@ -23,6 +25,7 @@ const orderId = '77777777-7777-4777-8777-777777777777'
 const orderItemId = '88888888-8888-4888-8888-888888888888'
 const tableSessionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const customerId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+const guestSessionId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 
 const trustedMerchant = {
   provider: 'postar' as const,
@@ -34,10 +37,13 @@ const trustedMerchant = {
 
 const payment: Payment = {
   id: paymentId,
+  payableKind: 'order',
   orderId,
+  activityRegistrationId: null,
   publicId: 'payment-public-0001',
   provider: 'postar',
   providerTransactionId: null,
+  settlementChannel: null,
   method: 'native_qr',
   amountMinor: 8_800,
   currency: 'CNY',
@@ -178,6 +184,7 @@ function fixture(overrides: Partial<PaymentApiOptions> = {}) {
       providerTransactionId: 'POSTAR-TX-0001',
       amountMinor: 8_800,
       currency: 'CNY',
+      settlementChannel: 'wechat' as const,
       occurredAt: '2026-08-11T12:05:00.000Z',
       evidence: {
         tradeState: 'SUCCESS',
@@ -206,14 +213,19 @@ function fixture(overrides: Partial<PaymentApiOptions> = {}) {
   const cashierWorkbenchQuery = {
     get: vi.fn(async () => cashierWorkbench),
   }
+  const providerObservations = {
+    recordPayment: vi.fn(async () => verifiedPaymentObservationId),
+    recordRefund: vi.fn(async () => verifiedRefundObservationId),
+  }
   const options: PaymentApiOptions = {
     commands,
     providerVerifier,
+    providerObservations,
     reconciliationQuery,
     cashierWorkbenchQuery,
     resolveActorContext: () => ({
       scope: { tenantId, storeId },
-      actor: { type: 'guest', ref: 'guest-session-0001' },
+      actor: { type: 'guest', ref: `guest-session:${guestSessionId}` },
       businessDate: '2026-08-11',
       tableSessionId,
       customerId,
@@ -232,7 +244,10 @@ function fixture(overrides: Partial<PaymentApiOptions> = {}) {
   const app = Fastify()
   apps.push(app)
   app.register(paymentApiPlugin, { ...options, prefix: '/api' })
-  return { app, options, commands, providerVerifier, reconciliationQuery, cashierWorkbenchQuery }
+  return {
+    app, options, commands, providerVerifier, providerObservations,
+    reconciliationQuery, cashierWorkbenchQuery,
+  }
 }
 
 describe('paymentApiPlugin', () => {
@@ -254,14 +269,14 @@ describe('paymentApiPlugin', () => {
     expect(response.json()).toEqual({ data: { ...payment, providerAction: null }, meta: { replayed: false } })
     expect(value.commands.initiate).toHaveBeenCalledWith(expect.objectContaining({
       scope: { tenantId, storeId },
-      actor: { type: 'guest', ref: 'guest-session-0001' },
+      actor: { type: 'guest', ref: `guest-session:${guestSessionId}` },
       businessDate: '2026-08-11',
       idempotencyKey: 'payment-init-0001',
       orderId,
       publicId: 'payment-generated-0001',
       provider: 'postar',
       method: 'native_qr',
-      principal: { type: 'guest', tableSessionId, customerId },
+      principal: { type: 'guest', tableSessionId, customerId, guestSessionId },
       providerSnapshot: { channel: 'QR' },
     }))
     const initiatedCommand = value.commands.initiate.mock.calls[0]?.[0]
@@ -427,9 +442,11 @@ describe('paymentApiPlugin', () => {
         amount: payment.amountMinor,
         providerReportedAmount: payment.amountMinor,
         currency: payment.currency,
+        settlementChannel: 'wechat' as const,
         merchantId: trustedMerchant.merchantId,
         occurredAt: '2026-08-11T12:05:00.000Z',
       },
+      verifiedObservationId: verifiedPaymentObservationId,
     }))
     const value = fixture({
       onlinePayments: {
@@ -449,18 +466,19 @@ describe('paymentApiPlugin', () => {
     expect(response.statusCode).toBe(200)
     expect(query).toHaveBeenCalledWith(expect.objectContaining({
       paymentId,
-      principal: { type: 'guest', tableSessionId, customerId },
+      queryBindingId: 'provider-query-0001',
+      principal: { type: 'guest', tableSessionId, customerId, guestSessionId },
     }))
     expect(value.commands.recordProviderQueryResult).toHaveBeenCalledWith(expect.objectContaining({
       actor: { type: 'integration', ref: 'postar-active-query' },
       paymentPublicId: payment.publicId,
       providerTransactionId: 'POSTAR-TX-0001',
       status: 'succeeded',
+      settlementChannel: 'wechat',
       providerSnapshot: expect.objectContaining({
-        signatureVerified: false,
-        verificationAlgorithm: 'rsa-request+tls+response-binding',
         providerReportedAmountMinor: payment.amountMinor,
       }),
+      verifiedObservationId: verifiedPaymentObservationId,
     }))
   })
 
@@ -564,8 +582,9 @@ describe('paymentApiPlugin', () => {
       providerTransactionId: 'POSTAR-TX-0001',
       reportedAmountMinor: 8_800,
       reportedCurrency: 'CNY',
+      settlementChannel: 'wechat',
+      verifiedObservationId: verifiedPaymentObservationId,
       providerSnapshot: {
-        signatureVerified: true,
         tradeState: 'SUCCESS',
         eventId: 'postar-payment-event-0001',
         occurredAt: '2026-08-11T12:05:00.000Z',
@@ -581,7 +600,28 @@ describe('paymentApiPlugin', () => {
   })
 
   it('keeps refund request, human decision and execution as separate HTTP commands', async () => {
-    const value = fixture()
+    const value = fixture({
+      onlinePayments: {
+        create: vi.fn(), query: vi.fn(), assertAvailable: vi.fn(), resolveActivePayment: vi.fn(),
+        requestRefund: vi.fn(async () => ({
+          refundId, refundPublicId: refund.publicId,
+          merchantRefundId: refundId.replaceAll('-', ''),
+          paymentPublicId: payment.publicId,
+          originalProviderTransactionId: 'POSTAR-TX-0001',
+          amountMinor: refund.amountMinor, currency: refund.currency,
+          observation: {
+            refundId: refundId.replaceAll('-', ''),
+            providerRefundId: refundId.replaceAll('-', ''),
+            providerRefundTransactionId: null,
+            originalProviderTransactionId: 'POSTAR-TX-0001',
+            status: 'processing', amount: refund.amountMinor, currency: refund.currency,
+            occurredAt: '2026-08-11T12:20:00.000Z',
+          },
+          verifiedObservationId: null,
+        })),
+        queryRefund: vi.fn(),
+      },
+    })
     const requested = await value.app.inject({
       method: 'POST',
       url: `/api/payments/${paymentId}/refunds`,
@@ -625,6 +665,55 @@ describe('paymentApiPlugin', () => {
     }))
     expect(value.commands.recordProviderRefundResult).not.toHaveBeenCalled()
     expect(value.commands.recordManualRefundResult).not.toHaveBeenCalled()
+  })
+
+  it('writes a terminal refund only from a bound provider query', async () => {
+    const merchantRefundId = refundId.replaceAll('-', '')
+    const queryRefund = vi.fn(async () => ({
+      refundId, refundPublicId: refund.publicId, merchantRefundId,
+      paymentPublicId: payment.publicId,
+      originalProviderTransactionId: 'POSTAR-TX-0001',
+      amountMinor: refund.amountMinor, currency: refund.currency,
+      observation: {
+        refundId: merchantRefundId, providerRefundId: merchantRefundId,
+        providerRefundTransactionId: 'POSTAR-REFUND-TX-0001',
+        originalProviderTransactionId: 'POSTAR-TX-0001',
+        status: 'succeeded' as const, amount: refund.amountMinor, currency: refund.currency,
+        occurredAt: '2026-08-11T12:21:00.000Z',
+      },
+      verifiedObservationId: verifiedRefundObservationId,
+    }))
+    const onlinePayments = {
+      create: vi.fn(), query: vi.fn(), assertAvailable: vi.fn(), resolveActivePayment: vi.fn(),
+      requestRefund: vi.fn(), queryRefund,
+    }
+    const value = fixture({
+      onlinePayments,
+      resolveStaffContext: () => ({
+        scope: { tenantId, storeId }, actor: { type: 'employee' as const, employeeId },
+        employeeId, businessDate: '2026-08-11', capabilities: ['refund.execute'],
+      }),
+    })
+    const response = await value.app.inject({
+      method: 'POST', url: `/api/refunds/${refundId}/provider-query`,
+      headers: { 'idempotency-key': 'refund-provider-query-0001' },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(queryRefund).toHaveBeenCalledWith(
+      { tenantId, storeId }, refundId, 'refund-provider-query-0001',
+    )
+    expect(value.commands.recordProviderRefundResult).toHaveBeenCalledWith(expect.objectContaining({
+      refundPublicId: merchantRefundId,
+      providerRefundId: 'POSTAR-REFUND-TX-0001',
+      originalProviderTransactionId: 'POSTAR-TX-0001',
+      reportedAmountMinor: refund.amountMinor,
+      verifiedObservationId: verifiedRefundObservationId,
+    }))
+    expect(response.json().provider).toEqual({
+      status: 'succeeded', amountMinor: refund.amountMinor, currency: 'CNY',
+      occurredAt: '2026-08-11T12:21:00.000Z',
+    })
   })
 
   it('preserves authorization and approval guards from the payment command service', async () => {
@@ -687,8 +776,8 @@ describe('paymentApiPlugin', () => {
       originalProviderTransactionId: 'POSTAR-TX-0001',
       reportedAmountMinor: 1_000,
       reportedCurrency: 'CNY',
+      verifiedObservationId: verifiedRefundObservationId,
       providerSnapshot: {
-        signatureVerified: true,
         refundState: 'SUCCESS',
         eventId: 'postar-refund-event-0001',
         occurredAt: '2026-08-11T12:20:00.000Z',

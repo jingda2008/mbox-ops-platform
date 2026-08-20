@@ -1,10 +1,12 @@
 import type { JsonObject } from './command-executor.js'
-import type { ChannelPaymentStatus } from '../../src/shared/payment-contracts.js'
+import type { ChannelPaymentStatus, SettlementChannel } from '../../src/shared/payment-contracts.js'
 import { sanitizeProviderSnapshot } from './payment-security-policy.js'
 import type { ScopedTransaction } from './transaction-runner.js'
+import { lockBoundGuestTablePosition } from './guest-table-authority.js'
 
 export type PaymentProvider = 'wechat' | 'postar' | 'cash' | 'physical_pos' | 'simulation'
 export type PaymentMethod = 'jsapi' | 'native_qr' | 'auth_code' | 'cash' | 'card' | 'manual'
+export type AuthoritativeSettlementChannel = Extract<SettlementChannel, 'wechat' | 'alipay' | 'unionpay'>
 export type PaymentStatus =
   | 'created'
   | 'pending'
@@ -16,10 +18,13 @@ export type PaymentStatus =
 
 export interface Payment {
   id: string
-  orderId: string
+  payableKind: 'order' | 'activity_registration'
+  orderId: string | null
+  activityRegistrationId: string | null
   publicId: string
   provider: PaymentProvider
   providerTransactionId: string | null
+  settlementChannel: AuthoritativeSettlementChannel | null
   method: PaymentMethod
   amountMinor: number
   currency: string
@@ -28,6 +33,14 @@ export interface Payment {
   succeededAt: string | null
   createdAt: string
   updatedAt: string
+}
+
+export interface CreatePaymentForActivityRegistrationInput {
+  activityRegistrationId: string
+  publicId: string
+  method: Extract<PaymentMethod, 'jsapi' | 'native_qr'>
+  amountMinor: number
+  currency: string
 }
 
 export interface CreatePaymentForOrderInput {
@@ -40,7 +53,7 @@ export interface CreatePaymentForOrderInput {
   initialStatus?: 'created' | 'pending' | 'succeeded'
   principal:
     | { type: 'employee'; employeeId: string }
-    | { type: 'guest'; tableSessionId: string; customerId: string }
+    | { type: 'guest'; tableSessionId: string; customerId: string; guestSessionId: string }
 }
 
 export interface ApplyPaymentCallbackInput {
@@ -50,6 +63,7 @@ export interface ApplyPaymentCallbackInput {
   reportedAmountMinor: number
   reportedCurrency: string
   providerSnapshot?: JsonObject
+  settlementChannel?: AuthoritativeSettlementChannel
   succeededAt?: string | null
 }
 
@@ -64,10 +78,13 @@ export interface ApplyPaymentQueryResultInput extends ApplyPaymentCallbackInput 
 
 interface PaymentRow extends Record<string, unknown> {
   id: string
-  order_id: string
+  payable_kind: Payment['payableKind']
+  order_id: string | null
+  activity_registration_id: string | null
   public_id: string
   provider: PaymentProvider
   provider_transaction_id: string | null
+  settlement_channel: AuthoritativeSettlementChannel | null
   method: PaymentMethod
   amount_minor: string | number
   currency: string
@@ -158,11 +175,11 @@ export class PaymentRepository {
     const status = input.initialStatus ?? 'created'
     const inserted = await this.transaction.query<PaymentRow>(`
       INSERT INTO mbox.payments (
-        tenant_id, store_id, order_id, public_id, provider,
+        tenant_id, store_id, payable_kind, order_id, public_id, provider,
         provider_transaction_id, method, amount_minor, currency, status,
         provider_snapshot, succeeded_at
       ) VALUES (
-        $1::uuid, $2::uuid, $3::uuid, $4, $5,
+        $1::uuid, $2::uuid, 'order', $3::uuid, $4, $5,
         $6, $7, $8::bigint, $9, $10,
         $11::jsonb,
         CASE WHEN $10 = 'succeeded' THEN clock_timestamp() ELSE NULL END
@@ -184,12 +201,71 @@ export class PaymentRepository {
     return onePayment(inserted, 'Creating a payment did not insert exactly one row')
   }
 
+  async createForActivityRegistration(
+    input: Readonly<CreatePaymentForActivityRegistrationInput>,
+  ): Promise<Payment> {
+    nonBlank('activityRegistrationId', input.activityRegistrationId)
+    if (input.publicId.length < 8 || input.publicId.length > 128) {
+      throw new TypeError('publicId must contain between 8 and 128 characters')
+    }
+    if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0) {
+      throw new TypeError('activity payment amount must be a positive safe integer')
+    }
+    if (!/^[A-Z]{3}$/.test(input.currency)) throw new TypeError('activity payment currency is invalid')
+    const registration = await this.transaction.query<{
+      id: string; amount_due_minor: string | number; currency: string; status: string; payment_id: string | null
+    }>(`
+      SELECT id, amount_due_minor, currency, status, payment_id
+      FROM mbox.community_activity_registrations
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+      FOR UPDATE
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.activityRegistrationId])
+    const row = registration.rows[0]
+    if (row === undefined || row.status !== 'payment_pending' || row.payment_id !== null) {
+      throw new OrderNotPayableError(input.activityRegistrationId, 'activity registration is not awaiting a new payment')
+    }
+    if (toSafeMinor(row.amount_due_minor, 'activity amount due') !== input.amountMinor
+      || row.currency !== input.currency) {
+      throw new OrderNotPayableError(input.activityRegistrationId, 'activity amount or currency changed')
+    }
+    const inserted = await this.transaction.query<PaymentRow>(`
+      INSERT INTO mbox.payments (
+        tenant_id, store_id, payable_kind, order_id, activity_registration_id,
+        public_id, provider, method, amount_minor, currency, status, provider_snapshot
+      ) VALUES (
+        $1::uuid, $2::uuid, 'activity_registration', NULL, $3::uuid,
+        $4, 'postar', $5, $6::bigint, $7, 'pending',
+        jsonb_build_object('source', 'community_activity_registration')
+      )
+      RETURNING ${PAYMENT_COLUMNS}
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      input.activityRegistrationId,
+      input.publicId,
+      input.method,
+      input.amountMinor,
+      input.currency,
+    ])
+    const payment = onePayment(inserted, 'Creating an activity payment did not insert exactly one row')
+    const linked = await this.transaction.query(`
+      UPDATE mbox.community_activity_registrations
+      SET payment_id=$4::uuid, updated_at=clock_timestamp()
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+        AND status='payment_pending' AND payment_status='pending' AND payment_id IS NULL
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.activityRegistrationId, payment.id])
+    if (linked.rowCount !== 1) throw new Error('Activity registration lost its payment link transition')
+    return payment
+  }
+
   async applySucceededCallback(
     input: Readonly<ApplyPaymentCallbackInput>,
   ): Promise<PaymentCallbackApplication> {
     validateCallbackInput(input)
-    const paymentOrder = await this.transaction.query<{ id: string; order_id: string }>(`
-      SELECT id, order_id
+    const paymentOrder = await this.transaction.query<{
+      id: string; payable_kind: Payment['payableKind']; order_id: string | null; activity_registration_id: string | null
+    }>(`
+      SELECT id, payable_kind, order_id, activity_registration_id
       FROM mbox.payments
       WHERE tenant_id = $1::uuid
         AND store_id = $2::uuid
@@ -201,12 +277,12 @@ export class PaymentRepository {
       input.paymentPublicId,
       input.provider,
     ])
-    const orderId = paymentOrder.rows[0]?.order_id
-    const paymentId = paymentOrder.rows[0]?.id
-    if (orderId === undefined || paymentId === undefined) {
+    const reference = paymentOrder.rows[0]
+    const paymentId = reference?.id
+    if (reference === undefined || paymentId === undefined) {
       throw new PaymentNotFoundError(input.paymentPublicId)
     }
-    await this.lockOrder(orderId)
+    await this.lockPayable(reference)
     const selected = await this.transaction.query<PaymentRow>(`
       SELECT ${PAYMENT_COLUMNS}
       FROM mbox.payments
@@ -219,7 +295,7 @@ export class PaymentRepository {
     if (payment === undefined) throw new PaymentNotFoundError(input.paymentPublicId)
     verifyCallback(payment, input)
     if (CAPTURED_PAYMENT_STATUSES.includes(payment.status)) {
-      return { payment: mapPayment(payment), applied: false }
+      return { payment: await this.enrichSettlementChannel(payment, input.settlementChannel), applied: false }
     }
     if (payment.status === 'failed' || payment.status === 'closed') {
       throw new PaymentTransitionError(payment.id, payment.status)
@@ -231,6 +307,7 @@ export class PaymentRepository {
           provider_transaction_id = $4,
           provider_snapshot = provider_snapshot || $5::jsonb,
           succeeded_at = COALESCE($6::timestamptz, clock_timestamp()),
+          settlement_channel = COALESCE(settlement_channel, $7),
           updated_at = clock_timestamp()
       WHERE tenant_id = $1::uuid
         AND store_id = $2::uuid
@@ -244,6 +321,7 @@ export class PaymentRepository {
       input.providerTransactionId,
       JSON.stringify(sanitizeProviderSnapshot(input.providerSnapshot)),
       input.succeededAt ?? null,
+      input.settlementChannel ?? null,
     ])
     return {
       payment: onePayment(updated, `Payment ${payment.id} lost its callback transition`),
@@ -255,8 +333,10 @@ export class PaymentRepository {
     input: Readonly<ApplyPaymentQueryResultInput>,
   ): Promise<PaymentCallbackApplication> {
     validateCallbackInput(input)
-    const paymentOrder = await this.transaction.query<{ id: string; order_id: string }>(`
-      SELECT id, order_id
+    const paymentOrder = await this.transaction.query<{
+      id: string; payable_kind: Payment['payableKind']; order_id: string | null; activity_registration_id: string | null
+    }>(`
+      SELECT id, payable_kind, order_id, activity_registration_id
       FROM mbox.payments
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND public_id = $3 AND provider = $4
@@ -266,12 +346,12 @@ export class PaymentRepository {
       input.paymentPublicId,
       input.provider,
     ])
-    const paymentId = paymentOrder.rows[0]?.id
-    const orderId = paymentOrder.rows[0]?.order_id
-    if (paymentId === undefined || orderId === undefined) {
+    const reference = paymentOrder.rows[0]
+    const paymentId = reference?.id
+    if (reference === undefined || paymentId === undefined) {
       throw new PaymentNotFoundError(input.paymentPublicId)
     }
-    await this.lockOrder(orderId)
+    await this.lockPayable(reference)
     const selected = await this.transaction.query<PaymentRow>(`
       SELECT ${PAYMENT_COLUMNS}
       FROM mbox.payments
@@ -282,7 +362,7 @@ export class PaymentRepository {
     if (stored === undefined) throw new PaymentNotFoundError(input.paymentPublicId)
     verifyCallback(stored, input)
     if (CAPTURED_PAYMENT_STATUSES.includes(stored.status)) {
-      return { payment: mapPayment(stored), applied: false }
+      return { payment: await this.enrichSettlementChannel(stored, input.settlementChannel), applied: false }
     }
 
     const nextStatus: PaymentStatus = input.status === 'succeeded'
@@ -310,6 +390,7 @@ export class PaymentRepository {
             WHEN $4 = 'succeeded' THEN COALESCE($7::timestamptz, clock_timestamp())
             ELSE succeeded_at
           END,
+          settlement_channel = COALESCE(settlement_channel, $8),
           updated_at = clock_timestamp()
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
         AND status IN ('created', 'pending')
@@ -322,6 +403,7 @@ export class PaymentRepository {
       input.providerTransactionId,
       JSON.stringify(snapshot),
       input.succeededAt ?? null,
+      input.settlementChannel ?? null,
     ])
     const payment = onePayment(updated, `Payment ${stored.id} lost its provider query transition`)
     if (nextStatus === 'succeeded') {
@@ -354,6 +436,26 @@ export class PaymentRepository {
         AND payment_id = $3::uuid
         AND state IN ('creating', 'ready', 'unknown', 'consumed')
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
+  }
+
+  private async enrichSettlementChannel(
+    payment: PaymentRow,
+    settlementChannel: AuthoritativeSettlementChannel | undefined,
+  ): Promise<Payment> {
+    if (settlementChannel === undefined || payment.settlement_channel !== null) return mapPayment(payment)
+    const updated = await this.transaction.query<PaymentRow>(`
+      UPDATE mbox.payments
+      SET settlement_channel=$4, updated_at=clock_timestamp()
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+        AND settlement_channel IS NULL
+      RETURNING ${PAYMENT_COLUMNS}
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      payment.id,
+      settlementChannel,
+    ])
+    return onePayment(updated, `Payment ${payment.id} lost its settlement-channel enrichment`)
   }
 
   async syncOrderPaymentStatus(orderId: string): Promise<string> {
@@ -390,6 +492,86 @@ export class PaymentRepository {
     return row.payment_status
   }
 
+  async syncActivityRegistrationPaymentStatus(payment: Readonly<Payment>): Promise<void> {
+    if (payment.payableKind !== 'activity_registration' || payment.activityRegistrationId === null) {
+      throw new TypeError('payment does not target an activity registration')
+    }
+    if (payment.status === 'succeeded' || payment.status === 'partially_refunded') {
+      const updated = await this.transaction.query(`
+        UPDATE mbox.community_activity_registrations
+        SET status='confirmed', payment_status='paid',
+          paid_amount_minor=LEAST(fee_amount_minor, $4::bigint), amount_due_minor=0,
+          payment_due_at=NULL, seat_hold_expires_at=NULL, updated_at=clock_timestamp()
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+          AND status='payment_pending' AND payment_status='pending' AND payment_id=$5::uuid
+      `, [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        payment.activityRegistrationId,
+        payment.amountMinor,
+        payment.id,
+      ])
+      if (updated.rowCount !== 1) {
+        const current = await this.transaction.query<{ payment_status: string }>(`
+          SELECT payment_status FROM mbox.community_activity_registrations
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND payment_id=$4::uuid
+        `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, payment.activityRegistrationId, payment.id])
+        if (current.rows[0]?.payment_status !== 'paid') {
+          throw new Error('Activity registration lost its payment confirmation transition')
+        }
+      }
+      return
+    }
+    if (payment.status === 'failed' || payment.status === 'closed') {
+      await this.transaction.query(`
+        UPDATE mbox.community_activity_registrations
+        SET status='cancelled', payment_status='expired', amount_due_minor=0,
+          payment_due_at=NULL, seat_hold_expires_at=NULL,
+          cancelled_at=COALESCE(cancelled_at, clock_timestamp()), updated_at=clock_timestamp()
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+          AND status='payment_pending' AND payment_status='pending' AND payment_id=$4::uuid
+      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, payment.activityRegistrationId, payment.id])
+    }
+  }
+
+  async syncActivityRegistrationRefundStatus(paymentId: string): Promise<void> {
+    const result = await this.transaction.query<{ activity_registration_id: string | null; status: PaymentStatus }>(`
+      SELECT activity_registration_id, status FROM mbox.payments
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+      FOR UPDATE
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
+    const payment = result.rows[0]
+    if (payment?.activity_registration_id === null || payment?.activity_registration_id === undefined) {
+      throw new TypeError('payment does not target an activity registration')
+    }
+    if (payment.status !== 'refunded') return
+    await this.transaction.query(`
+      UPDATE mbox.community_activity_registrations
+      SET status='refunded', payment_status='refunded', amount_due_minor=0,
+        cancelled_at=COALESCE(cancelled_at, clock_timestamp()), updated_at=clock_timestamp()
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+        AND payment_id=$4::uuid AND payment_status='paid'
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, payment.activity_registration_id, paymentId])
+  }
+
+  private async lockPayable(reference: Readonly<{
+    payable_kind: Payment['payableKind']; order_id: string | null; activity_registration_id: string | null
+  }>): Promise<void> {
+    if (reference.payable_kind === 'order' && reference.order_id !== null) {
+      await this.lockOrder(reference.order_id)
+      return
+    }
+    if (reference.payable_kind === 'activity_registration' && reference.activity_registration_id !== null) {
+      const locked = await this.transaction.query(`
+        SELECT id FROM mbox.community_activity_registrations
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid FOR UPDATE
+      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, reference.activity_registration_id])
+      if (locked.rowCount !== 1) throw new PaymentNotFoundError(reference.activity_registration_id)
+      return
+    }
+    throw new PaymentNotFoundError('invalid payable target')
+  }
+
   private async lockOrder(orderId: string): Promise<OrderRow> {
     const result = await this.transaction.query<OrderRow>(`
       SELECT id, table_session_id, total_amount_minor, currency, status
@@ -412,22 +594,10 @@ export class PaymentRepository {
     if (order.table_session_id !== principal.tableSessionId) {
       throw new OrderNotPayableError(order.id, 'order does not belong to the authenticated table session')
     }
-    const linked = await this.transaction.query<{ linked: boolean }>(`
-      SELECT EXISTS (
-        SELECT 1
-        FROM mbox.table_session_customers
-        WHERE tenant_id = $1::uuid
-          AND store_id = $2::uuid
-          AND table_session_id = $3::uuid
-          AND customer_id = $4::uuid
-      ) AS linked
-    `, [
-      this.transaction.scope.tenantId,
-      this.transaction.scope.storeId,
-      principal.tableSessionId,
-      principal.customerId,
-    ])
-    if (linked.rows[0]?.linked !== true) {
+    if (!await lockBoundGuestTablePosition(this.transaction,{
+      tableSessionId:principal.tableSessionId,customerId:principal.customerId,
+      actorRef:`guest-session:${principal.guestSessionId}`,
+    })) {
       throw new OrderNotPayableError(order.id, 'customer is not linked to the authenticated table session')
     }
   }
@@ -461,7 +631,8 @@ export class PaymentRepository {
 }
 
 const PAYMENT_COLUMNS = `
-  id, order_id, public_id, provider, provider_transaction_id, method,
+  id, payable_kind, order_id, activity_registration_id, public_id,
+  provider, provider_transaction_id, settlement_channel, method,
   amount_minor, currency, status, provider_snapshot,
   succeeded_at::text, created_at::text, updated_at::text
 `
@@ -479,6 +650,11 @@ function verifyCallback(payment: PaymentRow, input: Readonly<ApplyPaymentCallbac
   if (payment.provider_transaction_id !== null
     && payment.provider_transaction_id !== input.providerTransactionId) {
     throw new PaymentCallbackMismatchError('Payment callback transaction id conflicts with the stored transaction')
+  }
+  if (input.settlementChannel !== undefined
+    && payment.settlement_channel !== null
+    && payment.settlement_channel !== input.settlementChannel) {
+    throw new PaymentCallbackMismatchError('Payment callback settlement channel conflicts with the stored payment')
   }
 }
 
@@ -526,6 +702,10 @@ function validateCallbackInput(input: Readonly<ApplyPaymentCallbackInput>): void
   if (!/^[A-Z]{3}$/.test(input.reportedCurrency)) {
     throw new TypeError('reportedCurrency must be a three-letter uppercase currency code')
   }
+  if (input.settlementChannel !== undefined
+    && !['wechat', 'alipay', 'unionpay'].includes(input.settlementChannel)) {
+    throw new TypeError('settlementChannel is invalid')
+  }
 }
 
 function requireEvidence(evidence: JsonObject, keys: readonly string[], label: string): void {
@@ -548,10 +728,13 @@ function onePayment(
 function mapPayment(row: PaymentRow): Payment {
   return {
     id: row.id,
+    payableKind: row.payable_kind,
     orderId: row.order_id,
+    activityRegistrationId: row.activity_registration_id,
     publicId: row.public_id,
     provider: row.provider,
     providerTransactionId: row.provider_transaction_id,
+    settlementChannel: row.settlement_channel ?? null,
     method: row.method,
     amountMinor: toSafeMinor(row.amount_minor, 'payment amount'),
     currency: row.currency,

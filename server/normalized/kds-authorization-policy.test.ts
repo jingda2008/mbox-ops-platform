@@ -135,10 +135,15 @@ postgresIntegration('NormalizedKdsAuthorization PostgreSQL integration', () => {
     `, [integrationTenantId, integrationStoreId, roleId, deliverPermissionId])
     await pool.query(`
       INSERT INTO mbox.role_data_scopes(
-        tenant_id, store_id, role_id, scope_key, effect, scope_value, enabled
-      ) VALUES ($1::uuid, $2::uuid, $3::uuid, 'kds.station_codes', 'include', '["bar"]'::jsonb, true)
+        tenant_id, store_id, role_id, scope_key, effect, scope_value,
+        value_kind, text_values, enabled
+      ) VALUES (
+        $1::uuid, $2::uuid, $3::uuid, 'kds.station_codes', 'include',
+        '["bar"]'::jsonb, 'text_set', ARRAY['bar']::text[], true
+      )
       ON CONFLICT (tenant_id, store_id, role_id, scope_key, effect)
-      DO UPDATE SET scope_value = EXCLUDED.scope_value, enabled = true
+      DO UPDATE SET scope_value = EXCLUDED.scope_value,
+        value_kind='text_set', text_values=ARRAY['bar']::text[], enabled = true
     `, [integrationTenantId, integrationStoreId, roleId])
     await pool.query(`
       INSERT INTO mbox.areas(id, tenant_id, store_id, code, name, area_type)

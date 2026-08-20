@@ -25,10 +25,10 @@ describe('CashierAfterSalesWorkbenchView', () => {
     expect(html).toContain('原订单商品')
     expect(html).toContain('精酿啤酒')
     expect(html).toContain('剩余可退 ¥68.00')
-    expect(html).toContain('申请人不能审批自己的退款')
-    expect(html).toContain('审批说明')
-    expect(html).toContain('驳回')
-    expect(html).toContain('同意')
+    expect(html).toContain('发起人不能复核自己的退款')
+    expect(html).toContain('复核说明')
+    expect(html).toContain('复核驳回')
+    expect(html).toContain('复核通过')
   })
 
   it('never renders a manual success action for an online refund in processing', () => {
@@ -40,6 +40,18 @@ describe('CashierAfterSalesWorkbenchView', () => {
     expect(html).toContain('本页不能把线上退款手工改成成功')
     expect(html).not.toContain('登记已退')
     expect(html).not.toContain('退款凭证号')
+  })
+
+  it('keeps prior-day unresolved refunds visibly separated from current turnover', () => {
+    const view = workbench([payment('postar', [refund('refund-carryover', 'requested', otherEmployeeId)])])
+    view.summary.carryoverOrderCount = 1
+    view.orders[0]!.businessDate = '2026-08-12'
+    view.orders[0]!.carryover = true
+    const html = render(view)
+
+    expect(html).toContain('交班遗留')
+    expect(html).toContain('2026-08-12遗留')
+    expect(html).toContain('不会并入今日营业额')
   })
 
   it('requires a separate receipt surface for cash and physical POS manual results', () => {

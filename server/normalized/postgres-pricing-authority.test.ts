@@ -11,6 +11,7 @@ import {
 import { CommerceCommandService } from './commerce-command-service.js'
 import { InsufficientInventoryError } from './inventory-repository.js'
 import { PostgresPricingAuthority } from './postgres-pricing-authority.js'
+import { seedActiveGuestTableAuthority } from './guest-table-authority.test-helper.js'
 import {
   PricingAuthorizationDeniedError,
   PricingAuthorizationPolicy,
@@ -33,6 +34,7 @@ const deniedLimitId = randomUUID()
 let permissionId: string
 const denyOverrideId = randomUUID()
 const customerId = randomUUID()
+const tableCustomerIds = [customerId, randomUUID(), randomUUID()] as const
 const unlinkedCustomerId = randomUUID()
 const discountBenefitId = randomUUID()
 const rollbackBenefitId = randomUUID()
@@ -43,6 +45,7 @@ const concurrentBenefitId = randomUUID()
 const productId = randomUUID()
 const inventoryId = randomUUID()
 const recipeId = randomUUID()
+const guestActorRefs=new Map<string,string>()
 
 describe('PostgresPricingAuthority deterministic rejection', () => {
   it('rejects activity pricing before querying because no authoritative activity table exists', async () => {
@@ -318,12 +321,12 @@ function baseOrder(
 ) {
   return {
     scope: { tenantId, storeId },
-    actor: { type: 'guest' as const, ref: 'pricing-test' },
+    actor: { type: 'guest' as const, ref: guestActorRefs.get(sessionId)! },
     businessDate: '2026-08-11',
     tableSessionId: sessionId,
     publicId,
     channel: 'guest_qr' as const,
-    createdByCustomerId: customerId,
+    createdByCustomerId: tableCustomerIds[sessionIds.indexOf(sessionId)]!,
     lines: [{ productId, quantity }],
     idempotencyKey,
   }
@@ -341,12 +344,25 @@ async function insertApprovalLimit(
   rules: Record<string, unknown>,
   approvalRoleId = roleId,
 ): Promise<void> {
+  const allowFullGift = rules.allowFullGift === true
+  const fixedAmountMinor = typeof rules.fixedAmountMinor === 'number' ? rules.fixedAmountMinor : null
+  const discountBasisPoints = typeof rules.discountBasisPoints === 'number' ? rules.discountBasisPoints : null
+  const calculationMode = allowFullGift ? 'full_gift'
+    : fixedAmountMinor !== null ? 'fixed_amount'
+      : discountBasisPoints !== null ? 'basis_points' : 'amount_limit'
   await transaction.query(`
     INSERT INTO mbox.role_approval_limits(
       id, tenant_id, store_id, role_id, approval_code,
-      amount_minor, currency, rules, enabled
-    ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6::bigint, 'CNY', $7::jsonb, true)
-  `, [id, tenantId, storeId, approvalRoleId, approvalCode, amountMinor, JSON.stringify(rules)])
+      amount_minor, currency, rules, calculation_mode, fixed_amount_minor,
+      discount_basis_points, allow_full_gift, enabled
+    ) VALUES (
+      $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6::bigint, 'CNY', $7::jsonb,
+      $8, $9::bigint, $10::integer, $11, true
+    )
+  `, [
+    id, tenantId, storeId, approvalRoleId, approvalCode, amountMinor, JSON.stringify(rules),
+    calculationMode, fixedAmountMinor, discountBasisPoints, allowFullGift,
+  ])
 }
 
 async function seed(pool: Pool): Promise<void> {
@@ -412,48 +428,60 @@ async function seed(pool: Pool): Promise<void> {
   `, [denyOverrideId, tenantId, storeId, deniedEmployeeId, permissionId, employeeId])
   await pool.query(`
     INSERT INTO mbox.customers(id, tenant_id, store_id, public_id, status) VALUES
-      ($1, $3, $4, 'pricing-customer-linked', 'active'),
-      ($2, $3, $4, 'pricing-customer-unlinked', 'active')
-  `, [customerId, unlinkedCustomerId, tenantId, storeId])
+      ($1, $5, $6, 'pricing-customer-linked-one', 'active'),
+      ($2, $5, $6, 'pricing-customer-linked-two', 'active'),
+      ($3, $5, $6, 'pricing-customer-linked-three', 'active'),
+      ($4, $5, $6, 'pricing-customer-unlinked', 'active')
+  `, [...tableCustomerIds, unlinkedCustomerId, tenantId, storeId])
   await pool.query(`
     INSERT INTO mbox.table_session_customers(tenant_id, store_id, table_session_id, customer_id, relationship)
     VALUES
-      ($1, $2, $3, $5, 'primary'),
-      ($1, $2, $4, $5, 'primary'),
-      ($1, $2, $6, $5, 'primary')
-  `, [tenantId, storeId, sessionIds[0], sessionIds[1], customerId, sessionIds[2]])
+      ($1, $2, $3, $6, 'primary'),
+      ($1, $2, $4, $7, 'primary'),
+      ($1, $2, $5, $8, 'primary')
+  `, [tenantId,storeId,...sessionIds,...tableCustomerIds])
+  for (const [index,sessionId] of sessionIds.entries()) {
+    guestActorRefs.set(sessionId,await seedActiveGuestTableAuthority(pool,{
+      tenantId,storeId,tableSessionId:sessionId,customerId:tableCustomerIds[index]!,
+    }))
+  }
   await pool.query(`
     INSERT INTO mbox.benefits(
       id, tenant_id, store_id, customer_id, benefit_code, benefit_type, status,
       value_amount_minor, currency, benefit_snapshot, valid_from, valid_until
     ) VALUES
-      ($1, $4, $5, $6, 'PRICE500', 'discount', 'issued', 500, 'CNY', '{}',
+      ($1, $4, $5, $10, 'PRICE500', 'discount', 'issued', 500, 'CNY', '{}',
         clock_timestamp() - interval '1 hour', clock_timestamp() + interval '1 day'),
-      ($2, $4, $5, $6, 'ROLLBACKGIFT', 'gift_product', 'issued', 900000, 'CNY',
-        jsonb_build_object('allowedProductIds', jsonb_build_array($7::text)),
+      ($2, $4, $5, $10, 'ROLLBACKGIFT', 'gift_product', 'issued', 900000, 'CNY',
+        '{}'::jsonb,
         clock_timestamp() - interval '1 hour', clock_timestamp() + interval '1 day'),
-      ($3, $4, $5, $8, 'UNLINKED500', 'discount', 'issued', 500, 'CNY', '{}',
+      ($3, $4, $5, $6, 'UNLINKED500', 'discount', 'issued', 500, 'CNY', '{}',
         clock_timestamp() - interval '1 hour', clock_timestamp() + interval '1 day'),
-      ($9, $4, $5, $6, 'EXPIRED500', 'discount', 'issued', 500, 'CNY', '{}',
+      ($7, $4, $5, $10, 'EXPIRED500', 'discount', 'issued', 500, 'CNY', '{}',
         clock_timestamp() - interval '2 days', clock_timestamp() - interval '1 day'),
-      ($10, $4, $5, $6, 'USD500', 'discount', 'issued', 500, 'USD', '{}',
+      ($8, $4, $5, $10, 'USD500', 'discount', 'issued', 500, 'USD', '{}',
         clock_timestamp() - interval '1 hour', clock_timestamp() + interval '1 day'),
-      ($11, $4, $5, $6, 'CONCURRENT500', 'discount', 'issued', 500, 'CNY', '{}',
+      ($9, $4, $5, $11, 'CONCURRENT500', 'discount', 'issued', 500, 'CNY', '{}',
         clock_timestamp() - interval '1 hour', clock_timestamp() + interval '1 day')
   `, [
     discountBenefitId, rollbackBenefitId, unlinkedBenefitId,
-    tenantId, storeId, customerId, productId, unlinkedCustomerId,
+    tenantId, storeId, unlinkedCustomerId,
     expiredBenefitId, foreignCurrencyBenefitId, concurrentBenefitId,
+    tableCustomerIds[1],tableCustomerIds[2],
   ])
   await pool.query(`
     INSERT INTO mbox.products(
       id, tenant_id, store_id, code, name, category_code,
-      fulfillment_station, product_snapshot
+      fulfillment_station, product_snapshot, max_order_quantity, cost_amount_minor
     ) VALUES (
       $1, $2, $3, 'PRICE-PRODUCT', 'Pricing Product', 'drink', 'bar',
-      '{"maxOrderQuantity": 100}'::jsonb
+      '{"maxOrderQuantity": 100}'::jsonb, 100, 5000
     )
   `, [productId, tenantId, storeId])
+  await pool.query(`
+    INSERT INTO mbox.benefit_allowed_products(tenant_id, store_id, benefit_id, product_id)
+    VALUES ($1, $2, $3, $4)
+  `, [tenantId, storeId, rollbackBenefitId, productId])
   await pool.query(`
     INSERT INTO mbox.product_prices(tenant_id, store_id, product_id, price_type, amount_minor, currency, valid_from)
     VALUES ($1, $2, $3, 'standard', 8800, 'CNY', clock_timestamp() - interval '1 day')

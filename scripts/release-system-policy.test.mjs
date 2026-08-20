@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import test from 'node:test'
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8')
@@ -16,20 +20,127 @@ test('formal release freezes a main-reachable tag and builds exactly one deploya
   assert.match(manifest, /Date\.parse\(frozenAt\)/)
 })
 
+test('candidate, upload and release use controlled artifacts while formal release cannot downgrade the claim', async () => {
+  const packageJson = JSON.parse(await read('../package.json'))
+  const ci = await read('../.github/workflows/ci.yml')
+  const release = await read('../.github/workflows/release.yml')
+  const stages = await read('../.github/workflows/miniprogram-release-stage.yml')
+  assert.match(packageJson.scripts.check, /release:miniprogram:test/)
+  assert.match(packageJson.scripts.check, /check:miniprogram/)
+  assert.match(packageJson.scripts['test:commercial'], /MBOX_MINIPROGRAM_RELEASE_STAGE=release npm run release:miniprogram:verify/)
+  assert.match(ci, /Verify candidate, upload and release gate semantics[\s\S]{0,120}release:miniprogram:test/)
+  assert.doesNotMatch(ci, /MBOX_MINIPROGRAM_RELEASE_EVIDENCE_PATH/)
+  assert.doesNotMatch(release, /MBOX_MINIPROGRAM_RELEASE_EVIDENCE_PATH/)
+  assert.match(stages, /options: \[candidate, upload, release\]/)
+  assert.match(stages, /gh release download/)
+  assert.match(stages, /MBOX_MINIPROGRAM_RELEASE_STAGE: \$\{\{ inputs\.stage \}\}/)
+  assert.match(release, /environment:[\s\S]{0,80}miniprogram-production-release/)
+  assert.match(release, /miniprogram-release-evidence-\$\{GITHUB_SHA\}\.tar\.gz/)
+  assert.match(release, /MBOX_MINIPROGRAM_RELEASE_STAGE: release/)
+  assert.match(release, /MBOX_MINIPROGRAM_RELEASE_TRUSTED_PUBLIC_KEY_BASE64/)
+  assert.doesNotMatch(release, /MBOX_MINIPROGRAM_RELEASE_STAGE: (?:candidate|upload)/)
+})
+
 test('configuration and migration checks precede every database write and application candidate', async () => {
   const activate = await read('../deploy/aliyun/activate-release.sh')
   const config = activate.indexOf('verify-normalized-runtime-config.js')
   const migrationCompatibility = activate.indexOf('verify-normalized-migration-compatibility.js')
-  const backup = activate.indexOf('backup-postgres.sh')
+  const candidateDatabaseIdentity = activate.indexOf('candidate_database_identity=$(jq', migrationCompatibility)
+  const databaseIdentityGate = activate.indexOf('assert_backup_targets_application_database', candidateDatabaseIdentity)
+  const writerDrain = activate.indexOf('migration_compatible writer_drained')
+  const backup = activate.indexOf('backup_path=$(DATABASE_SERVICE=', writerDrain)
   const migrate = activate.indexOf('migrate-normalized.js')
   const provision = activate.indexOf('provision-normalized-release.js')
-  const candidate = activate.indexOf('docker run -d')
+  const candidate = activate.indexOf('docker run -d',provision)
   assert.ok(config > 0 && config < migrationCompatibility)
-  assert.ok(migrationCompatibility < backup && backup < migrate && migrate < provision && provision < candidate)
+  assert.ok(migrationCompatibility < candidateDatabaseIdentity
+    && candidateDatabaseIdentity < databaseIdentityGate && databaseIdentityGate < writerDrain
+    && writerDrain < backup
+    && backup < migrate && migrate < provision && provision < candidate)
   assert.match(activate.slice(config - 500, config + 500), /store_config[^\n]*\/run\/mbox-config\/store\.json/)
   assert.match(activate.slice(config, config + 200), /--store=\/run\/mbox-config\/store\.json/)
   assert.match(activate, /release_state_require "\$\{state_file\}" migration_compatible/)
   assert.match(activate, /release_state_require "\$\{state_file\}" backup_verified/)
+  assert.match(activate, /pg_stat_activity[\s\S]*backend_type='client backend'/)
+  assert.match(activate, /MBOX_RUNTIME_ROLE=contract_candidate/)
+  assert.match(activate, /default_transaction_read_only=on/)
+  assert.match(activate, /CONTRACT_CANDIDATE_READ_ONLY|writeEnabled == false/)
+  assert.match(activate, /contract-database-and-previous-release-restored/)
+  assert.match(activate, /forward-recovery-required/)
+  const rollback=await read('../deploy/aliyun/rollback-activated-release.sh')
+  assert.match(rollback,/forward_only_after_contract_cutover[\s\S]*application-only rollback is forbidden/)
+  assert.match(rollback,/release\.lock[\s\S]*flock -n 8/)
+  assert.ok(rollback.indexOf('flock -n 8') < rollback.indexOf('docker network inspect'))
+})
+
+test('database maintenance credentials stay root-only and the frozen backup preserves authority', async () => {
+  const activate = await read('../deploy/aliyun/activate-release.sh')
+  const backup = await read('../deploy/aliyun/backup-postgres.sh')
+  const migrationPreflight = await read('../server/verify-normalized-migration-compatibility.ts')
+  const ci = await read('../.github/workflows/ci.yml')
+  assert.match(activate, /database_maintenance_env=\$\{install_root\}\/secrets\/database-maintenance\.env/)
+  assert.match(activate, /stat -c '%u:%a'[^\n]*database_maintenance_env/)
+  assert.match(activate, /\)" = 0:600/)
+  assert.match(activate, /APPLICATION_DATABASE_SERVICE/)
+  assert.match(activate, /BACKUP_DATABASE_SERVICE/)
+  assert.match(activate, /ADMIN_DATABASE_SERVICE/)
+  assert.match(activate, /PGSERVICEFILE[\s\S]*PGPASSFILE/)
+  assert.doesNotMatch(activate, /BACKUP_DATABASE_URL|ADMIN_DATABASE_URL/)
+  assert.doesNotMatch(activate, /MBOX_RESTORE_ADMIN_DATABASE_URL=.*release_env/)
+  assert.match(activate, /docker exec -i "\$\{active_container\}" node[\s\S]*process\.env\.DATABASE_URL/)
+  assert.match(activate, /application_database_identity[\s\S]*runtime_database_identity/)
+  assert.match(activate, /application_database_identity[\s\S]*candidate_database_identity/)
+  assert.match(migrationPreflight, /databaseIdentity:[\s\S]*serverAddress[\s\S]*serverPort/)
+  assert.match(activate, /current_database\(\).*inet_server_addr[\s\S]*backup_database_identity/)
+  assert.match(activate, /contract-restore-source\.json[\s\S]*previous-release-manifest\.json[\s\S]*SHA256SUMS/)
+  assert.match(backup, /NOT role\.rolsuper AND role\.rolbypassrls/)
+  assert.match(backup, /pg_read_all_data/)
+  assert.match(backup, /default_transaction_read_only=on/)
+  assert.match(backup, /--dbname="\$\{database_connection\}"/)
+  assert.doesNotMatch(backup, /--no-owner/)
+  const restore = await read('../deploy/aliyun/restore-postgres.sh')
+  assert.match(restore, /localeProvider[\s\S]*= c/)
+  assert.doesNotMatch(`${backup}\n${restore}`, /--dbname="\$\{(?:DATABASE_URL|ADMIN_DATABASE_URL)\}"/)
+  assert.doesNotMatch(`${backup}\n${restore}`, /passwordless DATABASE_URL|test-only/)
+  assert.match(ci, /Run every normalized PostgreSQL transaction and RLS test\n\s+env:\n\s+TEST_POSTGRES_CONTAINER: \$\{\{ job\.services\.postgres\.id \}\}\n\s+run: npm run test:normalized:postgres/)
+  const legacyBackup = await read('./backup-postgres.sh')
+  const legacyRestore = await read('./restore-postgres.sh')
+  const runbook = await read('../docs/operations-runbook.md')
+  assert.match(legacyBackup, /retired[\s\S]*exit 64/)
+  assert.match(legacyRestore, /retired[\s\S]*exit 64/)
+  assert.doesNotMatch(`${legacyBackup}\n${legacyRestore}\n${runbook}`, /pg_dump[^\n]*--no-owner/)
+  assert.doesNotMatch(`${legacyBackup}\n${legacyRestore}\n${runbook}`, /pg_restore[^\n]*--clean/)
+})
+
+test('database maintenance clients receive only password-free service references in argv', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mbox-libpq-argv-'))
+  const bin = join(root, 'bin')
+  const backups = join(root, 'backups')
+  const log = join(root, 'argv.log')
+  const service = join(root, 'pg_service.conf')
+  const pass = join(root, 'pgpass')
+  const secret = 'do-not-leak-password-7b81'
+  execFileSync('mkdir', ['-p', bin, backups])
+  writeFileSync(service, '[backup]\nhost=127.0.0.1\nport=5432\ndbname=mbox\nuser=backup\n')
+  writeFileSync(pass, `127.0.0.1:5432:mbox:backup:${secret}\n`)
+  chmodSync(service, 0o600)
+  chmodSync(pass, 0o600)
+  writeFileSync(join(bin, 'psql'), `#!/bin/sh\nprintf 'psql %s\\n' "$*" >> "$ARGV_LOG"\ncat >/dev/null\nprintf 'authorized\\n'\n`)
+  writeFileSync(join(bin, 'pg_dump'), `#!/bin/sh\nprintf 'pg_dump %s\\n' "$*" >> "$ARGV_LOG"\nfor argument in "$@"; do\n  case "$argument" in --file=*) : > "\${argument#--file=}" ;; esac\ndone\n`)
+  chmodSync(join(bin, 'psql'), 0o700)
+  chmodSync(join(bin, 'pg_dump'), 0o700)
+  execFileSync(resolve('deploy/aliyun/backup-postgres.sh'), [], { env: {
+    ...process.env, PATH: `${bin}:${process.env.PATH}`, ARGV_LOG: log,
+    DATABASE_SERVICE: 'backup', PGSERVICEFILE: service, PGPASSFILE: pass, BACKUP_DIR: backups,
+  } })
+  const argv = readFileSync(log, 'utf8')
+  assert.match(argv, /--dbname=service=backup/)
+  assert.doesNotMatch(argv, new RegExp(secret))
+  assert.doesNotMatch(argv, /postgres(?:ql)?:\/\//)
+  assert.throws(() => execFileSync(resolve('deploy/aliyun/backup-postgres.sh'), [], { env: {
+    ...process.env, PATH: `${bin}:${process.env.PATH}`, ARGV_LOG: log,
+    DATABASE_URL: `postgresql://backup:${secret}@127.0.0.1:5432/mbox`, BACKUP_DIR: backups,
+  }, stdio: 'pipe' }))
 })
 
 test('diagnostic GitHub artifacts cannot hide tests while formal OSS failures block release', async () => {

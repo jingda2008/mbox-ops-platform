@@ -1,117 +1,291 @@
-const { getReservations, createCustomerReservation } = require('../../utils/api')
+const {
+  getReservations,
+  getReservationAvailability,
+  getReservationPerformances,
+  createCustomerReservation,
+  getReservationPerformanceImpacts,
+  acknowledgeReservationPerformanceImpact,
+  getReservationPerformanceNotificationAuthorizations,
+  recordReservationPerformanceNotificationAuthorization,
+} = require('../../utils/api')
+const { randomId } = require('../../utils/id')
 const { getRuntimeConfig } = require('../../config/index')
+const { money, dateTime } = require('../../utils/format')
 
-const STATUS_NAMES = {
-  requested: '待确认',
-  confirmed: '已确认',
-  arrived: '已到店',
-  seated: '已入座',
-  cancelled: '已取消',
-  no_show: '未到店',
+const STATUS_NAMES = { pending: '等待门店确认', confirmed: '预约已确认', arrived: '已经到店', seated: '已经入座', cancelled: '已取消', no_show: '未到店', expired: '已失效' }
+const DEFAULT_SEATS = [
+  { code: 'no_preference', name: '由门店安排', copy: '交给现场团队按人数和当晚情况安排' },
+  { code: 'comfortable_booth', name: '舒适卡座', copy: '适合多人交流与较完整的桌面服务' },
+  { code: 'stage_atmosphere', name: '靠近舞台', copy: '更接近演出氛围，现场音量也会更高' },
+  { code: 'quiet_chat', name: '适合聊天', copy: '优先考虑相对便于交谈的位置' },
+  { code: 'outdoor_view', name: '外景位置', copy: '以天气和当晚开放情况为准' },
+]
+const DEFAULT_OCCASIONS = [
+  { code: '', name: '普通到店' }, { code: 'date', name: '约会' }, { code: 'friends', name: '朋友聚会' },
+  { code: 'business', name: '商务沟通' }, { code: 'birthday', name: '生日庆祝' }, { code: 'proposal', name: '特别安排' },
+]
+
+function shanghaiDate(days) {
+  return new Date(Date.now() + days * 86400000 + 8 * 3600000).toISOString().slice(0, 10)
 }
 
-function shanghaiDate(daysFromToday) {
-  return new Date(Date.now() + (daysFromToday * 86400000) + (8 * 3600000)).toISOString().slice(0, 10)
+function performanceRows(view) {
+  return (view && view.schedules || []).filter((item) => item.status !== 'cancelled').map((item) => ({
+    id: item.id,
+    name: item.performerStageName,
+    timeText: `${dateTime(item.startsAt)}–${dateTime(item.endsAt).slice(6)}`,
+    imageUrl: item.performerProfile && item.performerProfile.imageUrl,
+  }))
 }
 
-function displayTime(value) {
-  const chinaTime = new Date(Date.parse(value) + (8 * 3600000)).toISOString()
-  return `${chinaTime.slice(0, 10)} ${chinaTime.slice(11, 16)}`
+function impactView(impact) {
+  const revision = impact.revision || {}
+  const kind = revision.kind
+  const title = kind === 'rescheduled' ? '演出时间有调整' : kind === 'replaced' ? '演出已换场' : '原演出已取消'
+  const resultingScheduleEligible = (impact.eligibleSchedules || []).some((schedule) => (
+    schedule.id === revision.resultingScheduleId
+  ))
+  const acceptLabel = kind === 'cancelled' || !resultingScheduleEligible
+    ? '保留预约，不选演出' : kind === 'rescheduled' ? '接受改期' : '接受换场'
+  const previousText = revision.previousStartsAt ? `${revision.previousPerformerStageName || '原演出'} · ${dateTime(revision.previousStartsAt)}` : ''
+  const resultingText = revision.resultingStartsAt && kind !== 'cancelled'
+    ? `${revision.resultingPerformerStageName || '调整后演出'} · ${dateTime(revision.resultingStartsAt)}` : ''
+  return Object.assign({}, impact, {
+    title, acceptLabel, previousText, resultingText,
+    pending: !impact.acknowledgement,
+    eligibleSchedules: (impact.eligibleSchedules || []).map((schedule) => Object.assign({}, schedule, {
+      timeText: dateTime(schedule.startsAt),
+    })),
+  })
 }
 
 Page({
   data: {
-    loading: true,
-    submitting: false,
-    error: '',
-    success: '',
-    isDevelopment: false,
-    config: null,
-    reservations: [],
-    customerName: '',
-    partySize: 2,
-    reservationDate: '',
-    reservationTime: '20:00',
-    minimumDate: '',
-    areaOptions: [{ code: '', name: '不限区域' }],
-    areaIndex: 0,
-    occasionOptions: [{ code: '', name: '无特殊场景' }],
-    occasionIndex: 0,
-    occasionNote: '',
+    loading: true, checking: false, submitting: false, loadingShows: false,
+    error: '', success: '', isDevelopment: false,
+    reservations: [], showForm: true, step: 1,
+    performanceImpacts: [], impactsError: '', impactBusyId: '', impactNotice: '',
+    expandedImpactId: '', impactAttempts: {},
+    notificationBusyId: '', notificationNotice: '',
+    customerName: '', contact: '', partySize: 2, reservationDate: '', reservationTime: '20:00', minimumDate: '',
+    seatOptions: DEFAULT_SEATS, seatIndex: 0, occasionOptions: DEFAULT_OCCASIONS, occasionIndex: 0, occasionNote: '',
+    performances: [], selectedPerformanceId: '', selectedPerformance: null,
+    availability: null, availabilityText: '选择时间和人数后确认容量', depositText: '', maxGuestCount: 200,
   },
 
   onLoad() {
-    this.setData({
-      isDevelopment: getRuntimeConfig().isDevelopment,
-      minimumDate: shanghaiDate(0),
-      reservationDate: shanghaiDate(1),
-    })
-    this.loadData()
+    this.setData({ isDevelopment: getRuntimeConfig().isDevelopment, minimumDate: shanghaiDate(0), reservationDate: shanghaiDate(1) })
   },
-
-  onPullDownRefresh() {
-    this.loadData().finally(() => wx.stopPullDownRefresh())
-  },
+  onShow() { this.loadData() },
+  onPullDownRefresh() { this.loadData().finally(() => wx.stopPullDownRefresh()) },
 
   async loadData() {
     this.setData({ loading: true, error: '' })
     try {
-      const data = await getReservations()
-      const areaOptions = [{ code: '', name: '不限区域' }].concat(data.config.areaPreferences || [])
-      const occasionOptions = [{ code: '', name: '无特殊场景' }].concat(data.config.occasions || [])
-      const reservations = (data.reservations || []).map((item) => Object.assign({}, item, {
-        statusText: STATUS_NAMES[item.status] || item.status,
-        scheduledAtText: displayTime(item.scheduledAt),
-        areaName: (areaOptions.find((option) => option.code === item.areaPreferenceCode) || {}).name || '不限区域',
-        occasionName: (occasionOptions.find((option) => option.code === item.occasionCode) || {}).name || '',
-      }))
-      this.setData({
-        loading: false,
-        config: data.config,
-        areaOptions,
-        occasionOptions,
-        reservations,
+      const [reservationResult, impactResult, notificationResult] = await Promise.allSettled([
+        getReservations(), getReservationPerformanceImpacts(),
+        getReservationPerformanceNotificationAuthorizations(),
+      ])
+      if (reservationResult.status === 'rejected') throw reservationResult.reason
+      const data = reservationResult.value
+      const performanceImpacts = impactResult.status === 'fulfilled'
+        ? (impactResult.value.impacts || []).map(impactView) : []
+      const pendingByReservation = new Map()
+      performanceImpacts.filter((impact) => impact.pending).forEach((impact) => {
+        if (!pendingByReservation.has(impact.reservationPublicId)) pendingByReservation.set(impact.reservationPublicId, impact)
       })
-    } catch (error) {
-      this.setData({ loading: false, error: error.message || '预约信息载入失败' })
-    }
+      const notificationByReservation = new Map()
+      if (notificationResult.status === 'fulfilled') {
+        ;(notificationResult.value.authorizations || []).forEach((option) => {
+          notificationByReservation.set(option.reservationPublicId, option)
+        })
+      }
+      const reservations = (data.reservations || []).map((item) => ({
+        ...item,
+        statusText: STATUS_NAMES[item.status] || '状态待确认',
+        scheduledAtText: dateTime(item.arrivalAt),
+        partySize: item.guestCount,
+        seatName: (this.data.seatOptions.find((option) => option.code === item.seatPreference) || this.data.seatOptions[0]).name,
+        active: !['cancelled', 'expired', 'no_show'].includes(item.status),
+        performanceImpact: pendingByReservation.get(item.publicId) || null,
+        performanceNotificationOption: notificationByReservation.get(item.publicId) || null,
+      })).sort((left, right) => String(right.arrivalAt).localeCompare(String(left.arrivalAt)))
+      this.setData({
+        loading: false, reservations, performanceImpacts,
+        impactsError: impactResult.status === 'rejected' ? '演出调整状态暂时无法读取，请重试' : '',
+        showForm: !reservations.some((item) => item.active),
+      })
+      await Promise.all([this.checkAvailability(), this.loadPerformances()])
+    } catch (error) { this.setData({ loading: false, error: error.message || '预约信息载入失败' }) }
   },
 
+  retryImpacts() { this.loadData() },
+  toggleImpactSchedules(event) {
+    const impactId = event.currentTarget.dataset.impact
+    this.setData({ expandedImpactId: this.data.expandedImpactId === impactId ? '' : impactId, impactNotice: '' })
+  },
+  async acknowledgeImpact(event) {
+    const impactId = event.currentTarget.dataset.impact
+    const decision = event.currentTarget.dataset.decision
+    const selectedScheduleId = event.currentTarget.dataset.schedule || null
+    if (!impactId || this.data.impactBusyId) return
+    const signature = `${decision}:${selectedScheduleId || ''}`
+    const previous = this.data.impactAttempts[impactId]
+    const attempt = previous && previous.signature === signature
+      ? previous : { signature, key: randomId(`reservation-performance-${decision}`) }
+    this.setData({
+      impactBusyId: impactId, impactNotice: '',
+      [`impactAttempts.${impactId}`]: attempt,
+    })
+    try {
+      await acknowledgeReservationPerformanceImpact(
+        impactId, decision, selectedScheduleId, attempt.key,
+      )
+      this.setData({
+        impactNotice: decision === 'reselect' ? '已更新演出偏好，预约仍然有效。' : '已确认演出调整，预约仍然有效。',
+        expandedImpactId: '',
+        [`impactAttempts.${impactId}`]: null,
+      })
+      await this.loadData()
+    } catch (error) {
+      this.setData({ impactNotice: `${error.message || '确认未完成'}；选择已保留，可直接重试。` })
+    } finally { this.setData({ impactBusyId: '' }) }
+  },
+
+  async enablePerformanceNotification(event) {
+    const reservationPublicId = event.currentTarget.dataset.reservation
+    const reservation = this.data.reservations.find((item) => item.publicId === reservationPublicId)
+    const option = reservation && reservation.performanceNotificationOption
+    if (!option || this.data.notificationBusyId || typeof wx.requestSubscribeMessage !== 'function') return
+    this.setData({ notificationBusyId: reservationPublicId, notificationNotice: '' })
+    try {
+      const platform = await new Promise((resolve, reject) => wx.requestSubscribeMessage({
+        tmplIds: [option.templateId], success: resolve, fail: reject,
+      }))
+      const platformResult = platform[option.templateId]
+      if (!['accept','reject','ban'].includes(platformResult)) {
+        this.setData({ notificationNotice: '微信没有返回明确授权结果，未保存提醒授权。' })
+        return
+      }
+      await recordReservationPerformanceNotificationAuthorization({
+        reservationPublicId,
+        policyId: option.policyId,
+        policyVersion: option.policyVersion,
+        templateId: option.templateId,
+        expectedVersion: option.authorizationVersion,
+        platformResult,
+      })
+      this.setData({
+        notificationNotice: platformResult === 'accept'
+          ? '本次预约的演出变更提醒已申请。' : '未开启提醒，不影响预约和到店。',
+      })
+      await this.loadData()
+    } catch (error) {
+      this.setData({
+        notificationNotice: error && error.code === 'NETWORK_ERROR'
+          ? `${error.message || '提醒授权未完成'}；授权结果已保留，可直接重试。`
+          : `${error.message || '提醒授权未完成'}；请刷新预约后重试。`,
+      })
+    } finally { this.setData({ notificationBusyId: '' }) }
+  },
+
+  arrivalAt() { return `${this.data.reservationDate}T${this.data.reservationTime}:00+08:00` },
+
+  async checkAvailability() {
+    if (this.data.partySize < 1 || this.data.partySize > this.data.maxGuestCount) return
+    this.setData({ checking: true })
+    try {
+      const availability = await getReservationAvailability(this.arrivalAt(), this.data.partySize)
+      const rule = availability.depositRule || {}
+      const seatOptions = Array.isArray(availability.seatPreferences) && availability.seatPreferences.length
+        ? availability.seatPreferences : this.data.seatOptions
+      this.setData({
+        availability,
+        seatOptions,
+        maxGuestCount: Number(availability.maximumGuestCount || availability.maxGuestCount || this.data.maxGuestCount),
+        availabilityText: availability.acceptingReservations ? '当前时段可提交，具体位置由门店确认' : '当前容量不足，请调整时间或人数',
+        depositText: rule.enabled ? `需付${money(rule.amountMinor || 0)}定金 · ${rule.ruleText || '提交前再次确认'}` : '当前不要求线上定金',
+      })
+    } catch (error) {
+      this.setData({ availability: null, availabilityText: error.message || '暂时无法确认容量', depositText: '' })
+    } finally { this.setData({ checking: false }) }
+  },
+
+  async loadPerformances() {
+    this.setData({ loadingShows: true })
+    try {
+      const view = await getReservationPerformances(this.data.reservationDate)
+      const performances = performanceRows(view)
+      const selectedPerformanceId = performances.some((item) => item.id === this.data.selectedPerformanceId) ? this.data.selectedPerformanceId : ''
+      this.setData({
+        performances,
+        selectedPerformanceId,
+        selectedPerformance: performances.find((item) => item.id === selectedPerformanceId) || null,
+      })
+    } catch (_error) { this.setData({ performances: [], selectedPerformanceId: '', selectedPerformance: null }) }
+    finally { this.setData({ loadingShows: false }) }
+  },
+
+  startNewReservation() { this.setData({ showForm: true, step: 1, error: '', success: '' }) },
+  closeForm() { if (this.data.reservations.length) this.setData({ showForm: false, error: '' }) },
   onNameInput(event) { this.setData({ customerName: event.detail.value }) },
+  onContactInput(event) { this.setData({ contact: event.detail.value }) },
   onPartySizeInput(event) { this.setData({ partySize: Number(event.detail.value) || 0 }) },
-  onDateChange(event) { this.setData({ reservationDate: event.detail.value }) },
-  onTimeChange(event) { this.setData({ reservationTime: event.detail.value }) },
-  onAreaChange(event) { this.setData({ areaIndex: Number(event.detail.value) }) },
+  onPartySizeConfirm() { this.checkAvailability() },
+  onDateChange(event) {
+    this.setData({ reservationDate: event.detail.value }, () => Promise.all([this.checkAvailability(), this.loadPerformances()]))
+  },
+  onTimeChange(event) { this.setData({ reservationTime: event.detail.value }, () => this.checkAvailability()) },
+  onSeatChange(event) { this.setData({ seatIndex: Number(event.detail.value) }) },
   onOccasionChange(event) { this.setData({ occasionIndex: Number(event.detail.value) }) },
   onNoteInput(event) { this.setData({ occasionNote: event.detail.value }) },
+  selectPerformance(event) {
+    const id = event.currentTarget.dataset.id
+    const selectedPerformanceId = this.data.selectedPerformanceId === id ? '' : id
+    this.setData({
+      selectedPerformanceId,
+      selectedPerformance: this.data.performances.find((item) => item.id === selectedPerformanceId) || null,
+    })
+  },
+
+  nextStep() {
+    if (this.data.step === 1) {
+      if (this.data.partySize < 1 || this.data.partySize > this.data.maxGuestCount) {
+        return this.setData({ error: `预约人数需在1至${this.data.maxGuestCount}人之间` })
+      }
+      if (!this.data.availability || !this.data.availability.acceptingReservations) {
+        return this.setData({ error: '请先选择当前可接受预约的时间与人数' })
+      }
+    }
+    this.setData({ step: Math.min(3, this.data.step + 1), error: '' })
+  },
+  previousStep() { this.setData({ step: Math.max(1, this.data.step - 1), error: '' }) },
 
   async submitReservation() {
     if (this.data.submitting) return
     const customerName = this.data.customerName.trim()
-    const config = this.data.config
+    const contact = this.data.contact.trim()
     if (!customerName) return this.setData({ error: '请填写预约称呼', success: '' })
-    if (!config || this.data.partySize < config.minimumPartySize || this.data.partySize > config.maximumPartySize) {
-      return this.setData({ error: `预约人数需在 ${config ? config.minimumPartySize : 1} 至 ${config ? config.maximumPartySize : 100} 人之间`, success: '' })
-    }
-    const area = this.data.areaOptions[this.data.areaIndex]
-    const occasion = this.data.occasionOptions[this.data.occasionIndex]
-    const payload = {
-      customerName,
-      partySize: this.data.partySize,
-      scheduledAt: `${this.data.reservationDate}T${this.data.reservationTime}:00+08:00`,
-      occasionNote: this.data.occasionNote.trim(),
-    }
-    if (area && area.code) payload.areaPreferenceCode = area.code
-    if (occasion && occasion.code) payload.occasionCode = occasion.code
+    if (contact.length < 3) return this.setData({ error: '请填写可联系的手机号或微信', success: '' })
     this.setData({ submitting: true, error: '', success: '' })
     try {
-      await createCustomerReservation(payload)
-      this.setData({ success: '预约已提交，门店确认后状态会在本页更新', occasionNote: '' })
+      const availability = await getReservationAvailability(this.arrivalAt(), this.data.partySize)
+      if (!availability.acceptingReservations) throw new Error('当前时间容量已经变化，请重新选择')
+      const occasion = this.data.occasionOptions[this.data.occasionIndex]
+      const show = this.data.performances.find((item) => item.id === this.data.selectedPerformanceId)
+      const noteParts = [
+        occasion.code ? `到店场景：${occasion.name}` : '',
+        this.data.occasionNote.trim(),
+      ].filter(Boolean)
+      await createCustomerReservation({
+        customerName, contact, partySize: this.data.partySize, scheduledAt: this.arrivalAt(),
+        seatPreference: this.data.seatOptions[this.data.seatIndex].code, note: noteParts.join('；') || null,
+        reservationPolicyVersion: Number((availability.depositRule || {}).policyVersion),
+        preferredScheduleId: show ? show.id : null,
+      })
+      this.setData({ success: '预约已提交，门店确认后会更新状态。', occasionNote: '', showForm: false, step: 1 })
       await this.loadData()
-    } catch (error) {
-      this.setData({ error: error.message || '预约提交失败' })
-    } finally {
-      this.setData({ submitting: false })
-    }
+    } catch (error) { this.setData({ error: error.message || '预约提交失败' }) }
+    finally { this.setData({ submitting: false }) }
   },
 })

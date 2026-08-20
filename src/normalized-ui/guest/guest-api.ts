@@ -379,7 +379,7 @@ function isMenuProduct(value: unknown): value is GuestMenuProduct {
     && typeof value.name === 'string'
     && typeof value.categoryCode === 'string'
     && typeof value.categoryName === 'string'
-    && ['none', 'cocktail', 'beer', 'wine', 'sparkling', 'spirits', 'non_alcoholic'].includes(String(value.beverageFamily))
+    && ['none', 'cocktail', 'beer', 'wine', 'sparkling', 'spirits', 'non_alcoholic', 'mixed'].includes(String(value.beverageFamily))
     && Number.isSafeInteger(value.amountMinor)
     && (value.amountMinor as number) >= 0
     && typeof value.currency === 'string'

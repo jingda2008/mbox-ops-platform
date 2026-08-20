@@ -5,6 +5,7 @@ import { runNormalizedMigrations } from '../migrate-normalized.js'
 import { BenefitCommandService, BenefitUnavailableError } from './benefit-repository.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
 import { CustomerCommandService } from './customer-repository.js'
+import { seedActiveGuestTableAuthority } from './guest-table-authority.test-helper.js'
 import {
   ScopedPostgresTransactionRunner,
   type PostgresPool,
@@ -22,10 +23,12 @@ integration('BenefitRepository normalized grant and redemption integrity', () =>
   const employeeId = randomUUID()
   const roleId = randomUUID()
   const approvalLimitId = randomUUID()
+  const productId = randomUUID()
   let pool: Pool
   let customers: CustomerCommandService
   let benefits: BenefitCommandService
   let customerId: string
+  let guestActorRef: string
   const giftOrder = vi.fn(async () => ({ reference: `gift-order-${randomUUID()}` }))
 
   beforeAll(async () => {
@@ -53,6 +56,9 @@ integration('BenefitRepository normalized grant and redemption integrity', () =>
         tenant_id, store_id, table_session_id, customer_id, relationship
       ) VALUES ($1, $2, $3, $4, 'primary')
     `, [tenantId, storeId, tableSessionId, customerId])
+    guestActorRef=await seedActiveGuestTableAuthority(pool,{
+      tenantId,storeId,tableSessionId,customerId,
+    })
   })
 
   afterAll(async () => pool?.end())
@@ -88,7 +94,7 @@ integration('BenefitRepository normalized grant and redemption integrity', () =>
     const issued = await benefits.issue(issueCommand('race', 500, 1))
     const reserve = (suffix: string) => benefits.reserve({
       scope: { tenantId, storeId },
-      actor: { type: 'guest' as const, ref: `guest-${suffix}` },
+      actor: { type: 'guest' as const, ref: guestActorRef },
       businessDate: '2026-08-11',
       benefitId: issued.value.id,
       customerId,
@@ -111,7 +117,7 @@ integration('BenefitRepository normalized grant and redemption integrity', () =>
   it('binds redemption to the current customer/table, invokes gift order port, and replays safely', async () => {
     const issued = await benefits.issue(issueCommand('redeem', 300, 1))
     const reserved = await benefits.reserve({
-      scope: { tenantId, storeId }, actor: { type: 'guest', ref: 'guest-redeem' },
+      scope: { tenantId, storeId }, actor: { type: 'guest', ref: guestActorRef },
       businessDate: '2026-08-11', benefitId: issued.value.id, customerId, tableSessionId,
       expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
       reservationIdempotencyKey: 'benefit-reserve-redeem-0001',
@@ -152,14 +158,14 @@ integration('BenefitRepository normalized grant and redemption integrity', () =>
   it('cancels a reservation idempotently and restores available quantity', async () => {
     const issued = await benefits.issue(issueCommand('cancel', 200, 1))
     const reserved = await benefits.reserve({
-      scope: { tenantId, storeId }, actor: { type: 'guest', ref: 'guest-cancel' },
+      scope: { tenantId, storeId }, actor: { type: 'guest', ref: guestActorRef },
       businessDate: '2026-08-11', benefitId: issued.value.id, customerId, tableSessionId,
       expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
       reservationIdempotencyKey: 'benefit-reserve-cancel-0001',
       reservationFingerprint: 'benefit-reserve-cancel-fingerprint',
     })
     const command = {
-      scope: { tenantId, storeId }, actor: { type: 'guest' as const, ref: 'guest-cancel' },
+      scope: { tenantId, storeId }, actor: { type: 'guest' as const, ref: guestActorRef },
       businessDate: '2026-08-11', benefitReservationId: reserved.value.id,
       customerId, tableSessionId, reason: '客人改变选择',
       cancellationIdempotencyKey: 'benefit-cancel-reservation-0001',
@@ -203,6 +209,7 @@ integration('BenefitRepository normalized grant and redemption integrity', () =>
       valueAmountMinor,
       currency: 'CNY',
       quantity,
+      allowedProductIds: [productId],
       benefitSnapshot: { productCode: 'BEER-001', publicDisplay: { title: '生日赠饮' } },
       validUntil: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
       issuedByEmployeeId: employeeId,
@@ -219,6 +226,10 @@ integration('BenefitRepository normalized grant and redemption integrity', () =>
       [tenantId, `benefit-${tenantId.slice(0, 8)}`])
     await pool.query(`INSERT INTO mbox.stores (id, tenant_id, code, name) VALUES ($1, $2, $3, 'Benefit Store')`,
       [storeId, tenantId, `store-${storeId.slice(0, 8)}`])
+    await pool.query(`INSERT INTO mbox.products (
+      id, tenant_id, store_id, code, name, category_code, fulfillment_station
+    ) VALUES ($1, $2, $3, 'BENEFIT-GIFT', 'Benefit Gift Product', 'drink', 'bar')`,
+    [productId, tenantId, storeId])
     await pool.query(`INSERT INTO mbox.areas (id, tenant_id, store_id, code, name, area_type)
       VALUES ($1, $2, $3, 'BENEFIT', 'Benefit Area', 'indoor')`, [areaId, tenantId, storeId])
     await pool.query(`INSERT INTO mbox.tables (id, tenant_id, store_id, area_id, code, display_name, capacity)

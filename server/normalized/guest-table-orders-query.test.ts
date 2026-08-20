@@ -24,6 +24,7 @@ describe('loadGuestTableOrders', () => {
           order_status: 'submitted', visibility: 'shared', is_mine: false,
           order_created_at: '2026-08-12T12:00:00.000Z',
           payment_status: 'unpaid', payment_access: 'available', payable_amount_minor: '6800', currency: 'CNY',
+          pricing_kind: 'gift',
           product_id: '55555555-5555-4555-8555-555555555555', product_name: '精酿啤酒',
           quantity: 2, item_status: 'preparing',
         }], rowCount: 1 }
@@ -34,6 +35,7 @@ describe('loadGuestTableOrders', () => {
       publicId: 'order-shared-0001', round: 2, channel: 'guest_qr', status: 'submitted',
       visibility: 'shared', isMine: false, createdAt: '2026-08-12T12:00:00.000Z',
       paymentStatus: 'unpaid', paymentAccess: 'available', payableAmountMinor: 6800, currency: 'CNY',
+      pricingKind: 'gift', pricingLabel: '门店赠送',
       items: [{
         productId: '55555555-5555-4555-8555-555555555555', name: '精酿啤酒', quantity: 2,
         status: 'preparing',
@@ -43,6 +45,8 @@ describe('loadGuestTableOrders', () => {
     expect(capturedSql).toContain("COALESCE(ordering.created_by_customer_id = $4::uuid, false)")
     expect(capturedSql).toContain("payment.status IN ('succeeded', 'partially_refunded', 'refunded')")
     expect(capturedSql).toContain("WHEN active_payment.method = 'auth_code' THEN 'staff_collecting'")
+    expect(capturedSql).toContain("pricing_authorization.status = 'consumed'")
+    expect(capturedSql).not.toContain("pricing_authorization.authorization_snapshot")
     expect(capturedSql.indexOf('row_number() OVER')).toBeGreaterThan(capturedSql.indexOf('visible_orders_unbounded'))
     expect(capturedSql).not.toMatch(/provider_transaction|customer_name|contact/i)
   })

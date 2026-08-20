@@ -1,5 +1,5 @@
 {
-  "version": "2026.08.15-v6",
+  "version": "2026.08.16-v10",
   "tenant": {
     "id": "10000000-0000-4000-8000-000000000001",
     "code": "superhigh",
@@ -985,6 +985,7 @@
         "table.open",
         "table.close",
         "table.transfer",
+        "table.participation.manage",
         "table.assignment.manage",
         "order.create",
         "order.view",
@@ -1002,9 +1003,6 @@
         "payment.policy.manage",
         "payment.manual.cash.record",
         "payment.manual.pos.record",
-        "refund.request",
-        "refund.approve",
-        "refund.execute",
         "inventory.view",
         "inventory.cost.view",
         "inventory.manage",
@@ -1015,6 +1013,8 @@
         "commercial.sales.view_all",
         "song.view",
         "song.manage",
+        "performance.phase.manage",
+        "recommendation.phase.configure",
         "hardware.view_all",
         "hardware.manage",
         "print.view_all",
@@ -1022,7 +1022,60 @@
         "ai.execute",
         "ai.schedule",
         "business_day.view",
-        "business_day.close"
+        "business_day.close",
+        "customer.experience.view",
+        "customer.experience.manage",
+        "customer.relationship.manage",
+        "loyalty.view",
+        "loyalty.adjust",
+        "loyalty.policy.view",
+        "loyalty.policy.publish",
+        "loyalty.configuration.view",
+        "loyalty.configuration.preview",
+        "loyalty.account.view",
+        "loyalty.accrual.exception.view",
+        "loyalty.accrual.request",
+        "loyalty.accrual.approve",
+        "loyalty.accrual.reconcile",
+        "loyalty.adjust.manual",
+        "loyalty.redemption.fulfill",
+        "loyalty.redemption.catalog.publish",
+        "loyalty.redemption.control",
+        "loyalty.redemption.exception",
+        "membership.terms.view",
+        "membership.terms.publish",
+        "loyalty.operations.view",
+        "loyalty.operations.control",
+        "customer.membership.recovery.verify",
+        "customer.membership.merge.approve",
+        "community.activity.view",
+        "community.activity.manage",
+        "community.activity.publish",
+        "community.activity.contact.reveal",
+        "privacy.contact.retention.view",
+        "privacy.contact.retention.publish",
+        "privacy.contact.legal_hold",
+        "customer.experience.feature.manage",
+        "checkout.upgrade.rule.view",
+        "checkout.upgrade.rule.draft",
+        "checkout.upgrade.rule.approve",
+        "checkout.upgrade.rule.publish",
+        "fulfillment.capacity.view",
+        "fulfillment.capacity.publish",
+        "performance.schedule.revise",
+        "loyalty.promotion.view",
+        "loyalty.promotion.publish",
+        "observation.record",
+        "observation.record.all",
+        "recommendation.staff.modify",
+        "recommendation.staff.modify.all",
+        "observation.confirm",
+        "observation.correct",
+        "observation.view.raw",
+        "recommendation.rule.view",
+        "recommendation.rule.publish",
+        "recommendation.analytics.view",
+        "product.observation.analytics.view"
       ],
       "navigation": [
         {
@@ -1070,6 +1123,12 @@
           "sortOrder": 70
         },
         {
+          "code": "experience",
+          "label": "客户体验与活动",
+          "route": "/staff/customer-experience",
+          "sortOrder": 75
+        },
+        {
           "code": "settings",
           "label": "系统配置",
           "route": "/staff/settings",
@@ -1094,15 +1153,6 @@
             "allowFullGift": true,
             "requiresReason": true
           }
-        },
-        {
-          "code": "refund.approve",
-          "amountMinor": 2000000,
-          "currency": "CNY",
-          "rules": {
-            "requiresSecondActor": true,
-            "requiresReason": true
-          }
         }
       ]
     },
@@ -1116,6 +1166,7 @@
         "table.open",
         "table.close",
         "table.transfer",
+        "table.participation.manage",
         "table.assignment.manage",
         "order.create",
         "order.view",
@@ -1129,8 +1180,6 @@
         "reservation.view.all",
         "reservation.manage",
         "payment.initiate.staff",
-        "refund.request",
-        "refund.approve",
         "inventory.view",
         "inventory.cost.view",
         "inventory.manage",
@@ -1141,8 +1190,60 @@
         "commercial.sales.view_all",
         "song.view",
         "song.manage",
+        "performance.phase.manage",
+        "recommendation.phase.configure",
         "business_day.view",
-        "business_day.close"
+        "business_day.close",
+        "customer.experience.view",
+        "customer.experience.manage",
+        "customer.relationship.manage",
+        "loyalty.view",
+        "loyalty.adjust",
+        "loyalty.policy.view",
+        "loyalty.policy.approve",
+        "loyalty.configuration.view",
+        "loyalty.configuration.preview",
+        "loyalty.configuration.approve",
+        "loyalty.account.view",
+        "loyalty.accrual.exception.view",
+        "loyalty.accrual.request",
+        "loyalty.accrual.approve",
+        "loyalty.accrual.reconcile",
+        "loyalty.adjust.manual",
+        "loyalty.redemption.fulfill",
+        "loyalty.redemption.catalog.approve",
+        "loyalty.redemption.control",
+        "loyalty.redemption.exception",
+        "membership.terms.view",
+        "membership.terms.approve",
+        "customer.membership.recovery.verify",
+        "customer.membership.merge.approve",
+        "community.activity.view",
+        "community.activity.manage",
+        "community.activity.publish",
+        "community.activity.contact.reveal",
+        "privacy.contact.retention.view",
+        "privacy.contact.retention.approve",
+        "customer.experience.feature.manage",
+        "checkout.upgrade.rule.view",
+        "checkout.upgrade.rule.draft",
+        "checkout.upgrade.rule.approve",
+        "fulfillment.capacity.view",
+        "fulfillment.capacity.approve",
+        "performance.schedule.revise",
+        "loyalty.promotion.view",
+        "loyalty.promotion.approve",
+        "observation.record",
+        "observation.record.all",
+        "recommendation.staff.modify",
+        "recommendation.staff.modify.all",
+        "observation.confirm",
+        "observation.correct",
+        "observation.view.raw",
+        "recommendation.rule.view",
+        "recommendation.rule.approve",
+        "recommendation.analytics.view",
+        "product.observation.analytics.view"
       ],
       "navigation": [
         {
@@ -1184,6 +1285,12 @@
           "sortOrder": 60
         },
         {
+          "code": "experience",
+          "label": "客户体验与活动",
+          "route": "/staff/customer-experience",
+          "sortOrder": 65
+        },
+        {
           "code": "settings",
           "label": "经营配置",
           "route": "/staff/settings",
@@ -1208,15 +1315,6 @@
             "allowFullGift": true,
             "requiresReason": true
           }
-        },
-        {
-          "code": "refund.approve",
-          "amountMinor": 500000,
-          "currency": "CNY",
-          "rules": {
-            "requiresSecondActor": true,
-            "requiresReason": true
-          }
         }
       ]
     },
@@ -1239,7 +1337,11 @@
         "print.view_all",
         "staff.access.configure",
         "ai.execute",
-        "ai.schedule"
+        "ai.schedule",
+        "observation.view.raw",
+        "recommendation.rule.view",
+        "recommendation.analytics.view",
+        "product.observation.analytics.view"
       ],
       "navigation": [
         {
@@ -1268,6 +1370,7 @@
         "table.open",
         "table.close",
         "table.transfer",
+        "table.participation.manage",
         "table.assignment.manage",
         "order.create",
         "order.view",
@@ -1286,7 +1389,6 @@
         "payment.manual.cash.record",
         "payment.manual.pos.record",
         "refund.request",
-        "refund.approve",
         "inventory.view",
         "inventory.cost.view",
         "inventory.manage",
@@ -1296,8 +1398,55 @@
         "commercial.sales.view_all",
         "song.view",
         "song.manage",
+        "performance.phase.manage",
+        "recommendation.phase.configure",
         "business_day.view",
-        "business_day.close"
+        "business_day.close",
+        "customer.experience.view",
+        "customer.experience.manage",
+        "customer.relationship.manage",
+        "loyalty.view",
+        "loyalty.adjust",
+        "loyalty.policy.view",
+        "loyalty.policy.manage",
+        "loyalty.configuration.view",
+        "loyalty.configuration.edit",
+        "loyalty.configuration.preview",
+        "loyalty.account.view",
+        "loyalty.accrual.exception.view",
+        "loyalty.accrual.request",
+        "loyalty.redemption.fulfill",
+        "loyalty.redemption.catalog.manage",
+        "loyalty.redemption.exception",
+        "membership.terms.view",
+        "membership.terms.manage",
+        "customer.membership.recovery.verify",
+        "community.activity.view",
+        "community.activity.manage",
+        "community.activity.publish",
+        "community.activity.contact.reveal",
+        "privacy.contact.retention.view",
+        "privacy.contact.retention.draft",
+        "customer.experience.feature.manage",
+        "checkout.upgrade.rule.view",
+        "checkout.upgrade.rule.draft",
+        "checkout.upgrade.rule.approve",
+        "fulfillment.capacity.view",
+        "fulfillment.capacity.draft",
+        "performance.schedule.revise",
+        "loyalty.promotion.view",
+        "loyalty.promotion.manage",
+        "observation.record",
+        "observation.record.all",
+        "recommendation.staff.modify",
+        "recommendation.staff.modify.all",
+        "observation.confirm",
+        "observation.correct",
+        "observation.view.raw",
+        "recommendation.rule.view",
+        "recommendation.rule.draft",
+        "recommendation.analytics.view",
+        "product.observation.analytics.view"
       ],
       "navigation": [
         {
@@ -1329,7 +1478,7 @@
         },
         {
           "code": "payments",
-          "label": "退款审批",
+          "label": "退款发起",
           "route": "/staff/payments",
           "sortOrder": 50
         },
@@ -1350,6 +1499,12 @@
           "label": "经营分析",
           "route": "/staff/operations",
           "sortOrder": 80
+        },
+        {
+          "code": "experience",
+          "label": "客户体验与活动",
+          "route": "/staff/customer-experience",
+          "sortOrder": 85
         },
         {
           "code": "settings",
@@ -1378,7 +1533,7 @@
           }
         },
         {
-          "code": "refund.approve",
+          "code": "refund.request",
           "amountMinor": 200000,
           "currency": "CNY",
           "rules": {
@@ -1397,6 +1552,7 @@
         "table.open",
         "table.close",
         "table.transfer",
+        "table.participation.manage",
         "order.create",
         "order.view",
         "order.discount",
@@ -1409,11 +1565,35 @@
         "reservation.view",
         "reservation.view.all",
         "reservation.manage",
-        "refund.request",
         "inventory.view",
         "inventory.cost.view",
         "inventory.manage",
-        "song.view"
+        "song.view",
+        "customer.experience.view",
+        "customer.experience.manage",
+        "customer.relationship.manage",
+        "loyalty.policy.view",
+        "loyalty.account.view",
+        "loyalty.accrual.exception.view",
+        "loyalty.redemption.fulfill",
+        "loyalty.redemption.exception",
+        "membership.terms.view",
+        "customer.membership.recovery.verify",
+        "community.activity.view",
+        "community.activity.manage",
+        "community.activity.contact.reveal",
+        "privacy.contact.retention.view",
+        "checkout.upgrade.rule.view",
+        "fulfillment.capacity.view",
+        "loyalty.promotion.view",
+        "observation.record",
+        "recommendation.staff.modify",
+        "observation.confirm",
+        "observation.correct",
+        "observation.view.raw",
+        "recommendation.rule.view",
+        "recommendation.analytics.view",
+        "product.observation.analytics.view"
       ],
       "navigation": [
         {
@@ -1448,6 +1628,12 @@
           "label": "演出与点歌",
           "route": "/staff/performance",
           "sortOrder": 50
+        },
+        {
+          "code": "experience",
+          "label": "客户体验",
+          "route": "/staff/customer-experience",
+          "sortOrder": 65
         },
         {
           "code": "inventory",
@@ -1495,7 +1681,10 @@
         "reservation.view.all",
         "reservation.manage",
         "payment.initiate.staff",
-        "song.view"
+        "song.view",
+        "observation.record",
+        "recommendation.staff.modify",
+        "observation.confirm"
       ],
       "navigation": [
         {
@@ -1620,7 +1809,7 @@
         "payment.initiate.staff",
         "payment.manual.cash.record",
         "payment.manual.pos.record",
-        "refund.request",
+        "refund.approve",
         "refund.execute",
         "reconciliation.view",
         "reservation.view"
@@ -1628,7 +1817,7 @@
       "navigation": [
         {
           "code": "payments",
-          "label": "收银",
+          "label": "收银复核",
           "route": "/staff/payments",
           "sortOrder": 10,
           "highFrequency": true
@@ -1640,7 +1829,17 @@
           "sortOrder": 20
         }
       ],
-      "approvalLimits": []
+      "approvalLimits": [
+        {
+          "code": "refund.approve",
+          "amountMinor": 200000,
+          "currency": "CNY",
+          "rules": {
+            "requiresSecondActor": true,
+            "requiresReason": true
+          }
+        }
+      ]
     },
     {
       "code": "KITCHEN",
@@ -1686,6 +1885,7 @@
         "dashboard.view",
         "song.view",
         "song.manage",
+        "performance.phase.manage",
         "reservation.view",
         "service.view"
       ],
@@ -1728,7 +1928,16 @@
         "reservation.view",
         "reservation.view.all",
         "reservation.manage",
-        "commercial.sales.view"
+        "commercial.sales.view",
+        "customer.experience.view",
+        "customer.relationship.manage",
+        "community.activity.view",
+        "community.activity.manage",
+        "loyalty.policy.view",
+        "loyalty.promotion.view",
+        "recommendation.rule.view",
+        "recommendation.analytics.view",
+        "product.observation.analytics.view"
       ],
       "navigation": [
         {
@@ -1736,6 +1945,13 @@
           "label": "预约",
           "route": "/staff/reservations",
           "sortOrder": 10,
+          "highFrequency": true
+        },
+        {
+          "code": "experience",
+          "label": "客户与活动",
+          "route": "/staff/customer-experience",
+          "sortOrder": 15,
           "highFrequency": true
         },
         {

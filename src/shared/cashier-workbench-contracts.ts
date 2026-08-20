@@ -83,6 +83,9 @@ export interface CashierWorkbenchOrder {
   currency: string
   submittedAt: string | null
   createdAt: string
+  /** Source business day; older unresolved refunds remain visible for handover. */
+  businessDate?: string
+  carryover?: boolean
   items: CashierWorkbenchItem[]
   payments: CashierWorkbenchPayment[]
 }
@@ -101,6 +104,7 @@ export interface CashierWorkbenchView {
     capturedPaymentCount: number
     requestedRefundCount: number
     processingRefundCount: number
+    carryoverOrderCount?: number
   }
   orders: CashierWorkbenchOrder[]
 }

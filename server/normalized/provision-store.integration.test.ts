@@ -132,10 +132,12 @@ integration('normalized store provisioning', () => {
     })
     expect(readiness.status).toBe('blocked')
     expect(readiness.issues.filter((issue) => issue.severity === 'blocker').map((issue) => issue.code)).toEqual([
+      'miniprogram.release_evidence_missing',
       'catalog.unversioned',
       'catalog.empty',
       'catalog.guest_empty',
       'catalog.recommendations_insufficient',
+      'access.operational_permission_missing',
       'tables.minimum_spend_unconfirmed',
       'tables.layout_unconfirmed',
     ])

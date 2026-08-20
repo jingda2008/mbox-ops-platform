@@ -27,12 +27,15 @@ import {
 } from './schedule-repository.js'
 import {
   SongRequestRepository,
+  SongRequestCustomerSessionError,
+  SongRequestNotFoundError,
   type ConfirmSongRequestInput,
   type MarkSongRequestPaidInput,
   type SongRequest,
   type SongRequestSubmission,
   type SubmitSongRequestInput,
 } from './song-request-repository.js'
+import { lockBoundGuestTablePosition } from './guest-table-authority.js'
 import type { StoreScope } from './transaction-runner.js'
 
 interface CommandMetadata {
@@ -70,6 +73,8 @@ export interface MarkSongRequestPaidCommand extends MarkSongRequestPaidInput, Co
 export interface SongRequestTransitionCommand extends CommandMetadata {
   requestId: string
   actorEmployeeId?: string
+  customerId?: string
+  tableSessionId?: string
 }
 
 export class PerformanceCommandService {
@@ -226,7 +231,9 @@ export class PerformanceCommandService {
     input: Readonly<SubmitSongRequestCommand>,
   ): Promise<CommandExecution<SongRequestSubmission>> {
     return this.commands.execute(command(input, 'song-request.submit', submissionCodec), async (transaction) => {
-      const submission = await new SongRequestRepository(transaction).submit(input)
+      const submission = await new SongRequestRepository(transaction).submit(
+        input,input.actor.type==='guest' ? input.actor.ref : undefined,
+      )
       const request = submission.request
       const afterData: JsonObject = {
         status: request.status,
@@ -310,6 +317,37 @@ export class PerformanceCommandService {
   cancelSongRequest(
     input: Readonly<SongRequestTransitionCommand>,
   ): Promise<CommandExecution<SongRequest>> {
+    if (input.actor.type === 'guest') {
+      return this.commands.execute(command(input, 'song-request.cancel', songRequestCodec), async (transaction) => {
+        if (input.customerId === undefined || input.tableSessionId === undefined) {
+          throw new SongRequestCustomerSessionError()
+        }
+        if (!await lockBoundGuestTablePosition(transaction, {
+          tableSessionId: input.tableSessionId,
+          customerId: input.customerId,
+          actorRef: input.actor.ref,
+        })) throw new SongRequestCustomerSessionError()
+        const repository = new SongRequestRepository(transaction)
+        const before = await repository.findById(input.requestId, true)
+        if (before === null
+          || before.customerId !== input.customerId
+          || before.tableSessionId !== input.tableSessionId) {
+          throw new SongRequestNotFoundError(input.requestId)
+        }
+        const request = await repository.cancel(input.requestId)
+        return outcome(
+          request,
+          input.actor,
+          input.businessDate,
+          input.idempotencyKey,
+          'song_request.cancelled',
+          'song_request',
+          request.id,
+          songRequestAuditData(request),
+          songRequestAuditData(before),
+        )
+      })
+    }
     return this.songCommand(input, 'song-request.cancel', 'song_request.cancelled', async (repository) => (
       repository.cancel(input.requestId)
     ))

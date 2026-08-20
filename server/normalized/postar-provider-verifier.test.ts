@@ -35,6 +35,7 @@ describe('PostarRsaPaymentProviderVerifier', () => {
       TXAMT: '8800',
       ORDER_STATUS: '1',
       ORDER_TIME: '20260811200506',
+      PAY_CHANNEL: '2',
       OPTIONAL_EMPTY: '',
       OPTIONAL_NULL: null,
     })
@@ -57,9 +58,11 @@ describe('PostarRsaPaymentProviderVerifier', () => {
       providerTransactionId: 'POSTAR-TX-0001',
       amountMinor: 8800,
       currency: 'CNY',
+      settlementChannel: 'wechat',
       occurredAt: '2026-08-11T12:05:06.000Z',
     })
     expect(verified.businessIdentity).toMatch(/^postar:[0-9a-f]{64}$/)
+    expect(verified.evidence).toMatchObject({ channel: 'wechat' })
     expect(verified.evidence).not.toHaveProperty('sign')
     expect(JSON.stringify(verified)).not.toContain(publicKey.slice(0, 20))
   })

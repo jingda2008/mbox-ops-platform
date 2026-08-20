@@ -200,6 +200,7 @@ const beverageFamilyLabels = {
   sparkling: '起泡酒 / 香槟',
   spirits: '洋酒 / 烈酒',
   non_alcoholic: '无酒精',
+  mixed: '混合酒水组合',
 } satisfies Record<(typeof menuBeverageFamilies)[number], string>
 
 const recommendationSceneLabels = {

@@ -39,12 +39,12 @@ const expectedEmployees = new Map([
 const expectedHighFrequencyEntries = new Map<string, string[]>([
   ['chenfangyu', ['现场', '收银与退款']],
   ['hugu', ['现场', '任务']],
-  ['wuya', ['系统配置', '预约']],
+  ['wuya', ['客户与活动', '系统配置', '预约']],
   ['tata', []],
   ['fuchunyu', ['演出点歌']],
   ['liyan', ['现场', '任务', '出品', '预约到店']],
   ['lengyanzhi', ['现场', '任务', '吧台出品']],
-  ['sanmu', ['收银']],
+  ['sanmu', ['收银复核']],
   ['tom', ['现场', '任务', '取送', '预约到店']],
   ['jerry', ['现场', '任务', '取送', '预约到店']],
   ['tyke', ['现场', '任务', '取送', '预约到店']],
@@ -147,6 +147,7 @@ async function expectStaffRoute(page: Page, route: string) {
     '/staff/performance': '演出与点歌',
     '/staff/inventory': '库存与存酒',
     '/staff/operations': '经营数据',
+    '/staff/customer-experience': '客户体验与活动',
     '/staff/devices': '设备与打印',
     '/staff/settings': '系统配置状态',
   } as Record<string, string>)[route]
@@ -259,7 +260,7 @@ test('one business-day order and guest requests flow through bartender, kitchen,
   await manager.context.close()
 
   const cashier = await staffPage(browser, data, 'sanmu')
-  await cashier.page.getByRole('button', { name: '收银', exact: true }).first().click()
+  await cashier.page.getByRole('button', { name: '收银复核', exact: true }).first().click()
   await expect(cashier.page.getByRole('heading', { name: '收银与退款' })).toBeVisible()
   await expect(cashier.page.getByLabel('本营业日售后摘要')).toContainText('2订单')
   await expect(cashier.page.getByLabel('本营业日售后摘要')).toContainText('0已收款')
@@ -354,7 +355,7 @@ test('李艳可由授权管理页批量安排为主服务员并安全结束责�
   const data = await fixture()
   const manager = await staffPage(browser, data, 'liyan')
   await manager.page.setViewportSize({ width: 390, height: 844 })
-  await manager.page.getByRole('button', { name: '全部', exact: true }).click()
+  await manager.page.getByRole('button', { name: '全部岗位入口', exact: true }).click()
   const allEntries = manager.page.getByRole('dialog', { name: '全部工作入口' })
   await expect(allEntries).toBeVisible()
   await allEntries.getByRole('button', { name: '现场', exact: true }).click()

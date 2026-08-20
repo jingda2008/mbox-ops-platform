@@ -41,7 +41,7 @@ describe('PaymentRepository', () => {
 
   it('accepts an already-applied identical callback without a second update', async () => {
     const transaction = new ScriptedTransaction([
-      rows([{ id: paymentId, order_id: orderId }]),
+      rows([paymentTargetRow()]),
       rows([{ id: orderId }]),
       rows([paymentRow('succeeded', 8800, 'provider-payment-001')]),
     ])
@@ -59,12 +59,52 @@ describe('PaymentRepository', () => {
     expect(transaction.calls).toHaveLength(3)
   })
 
+  it('enriches a captured payment only when a later authoritative result supplies the missing channel', async () => {
+    const transaction = new ScriptedTransaction([
+      rows([paymentTargetRow()]),
+      rows([{ id: orderId }]),
+      rows([paymentRow('succeeded', 8800, 'provider-payment-001')]),
+      rows([{ ...paymentRow('succeeded', 8800, 'provider-payment-001'), settlement_channel: 'wechat' }]),
+    ])
+
+    const application = await new PaymentRepository(transaction).applySucceededCallback({
+      paymentPublicId: 'payment-order-0001',
+      provider: 'postar',
+      providerTransactionId: 'provider-payment-001',
+      reportedAmountMinor: 8800,
+      reportedCurrency: 'CNY',
+      settlementChannel: 'wechat',
+    })
+
+    expect(application).toMatchObject({ applied: false, payment: { settlementChannel: 'wechat' } })
+    expect(transaction.calls[3]?.sql).toContain('SET settlement_channel=$4')
+    expect(transaction.calls[3]?.sql).not.toContain("SET status = 'succeeded'")
+  })
+
+  it('rejects a later authoritative settlement channel that conflicts with the stored one', async () => {
+    const transaction = new ScriptedTransaction([
+      rows([paymentTargetRow()]),
+      rows([{ id: orderId }]),
+      rows([{ ...paymentRow('succeeded', 8800, 'provider-payment-001'), settlement_channel: 'wechat' }]),
+    ])
+
+    await expect(new PaymentRepository(transaction).applySucceededCallback({
+      paymentPublicId: 'payment-order-0001',
+      provider: 'postar',
+      providerTransactionId: 'provider-payment-001',
+      reportedAmountMinor: 8800,
+      reportedCurrency: 'CNY',
+      settlementChannel: 'alipay',
+    })).rejects.toBeInstanceOf(PaymentCallbackMismatchError)
+    expect(transaction.calls).toHaveLength(3)
+  })
+
   it('applies a signed active query success once and consumes the provider action', async () => {
     const transaction = new ScriptedTransaction([
-      rows([{ id: paymentId, order_id: orderId }]),
+      rows([paymentTargetRow()]),
       rows([orderRow(8800)]),
       rows([paymentRow('pending', 8800)]),
-      rows([paymentRow('succeeded', 8800, 'provider-payment-001')]),
+      rows([{ ...paymentRow('succeeded', 8800, 'provider-payment-001'), settlement_channel: 'wechat' }]),
       rows([]),
     ])
 
@@ -74,20 +114,49 @@ describe('PaymentRepository', () => {
       providerTransactionId: 'provider-payment-001',
       reportedAmountMinor: 8800,
       reportedCurrency: 'CNY',
+      settlementChannel: 'wechat',
       status: 'succeeded',
       providerSnapshot: { signatureVerified: true, providerStatus: 'succeeded' },
       succeededAt: '2026-08-11T12:00:00.000Z',
     })
 
-    expect(application).toMatchObject({ applied: true, payment: { status: 'succeeded' } })
+    expect(application).toMatchObject({
+      applied: true,
+      payment: { status: 'succeeded', settlementChannel: 'wechat' },
+    })
     expect(transaction.calls[3]?.sql).toContain("SET status = $4")
+    expect(transaction.calls[3]?.sql).toContain('settlement_channel = COALESCE(settlement_channel, $8)')
     expect(transaction.calls[3]?.values[3]).toBe('succeeded')
+    expect(transaction.calls[3]?.values[7]).toBe('wechat')
     expect(transaction.calls[4]?.sql).toContain("SET state = 'consumed'")
+  })
+
+  it('stores a verified callback settlement channel in the strong payment column', async () => {
+    const transaction = new ScriptedTransaction([
+      rows([paymentTargetRow()]),
+      rows([{ id: orderId }]),
+      rows([paymentRow('pending', 8800)]),
+      rows([{ ...paymentRow('succeeded', 8800, 'provider-payment-003'), settlement_channel: 'alipay' }]),
+    ])
+
+    const application = await new PaymentRepository(transaction).applySucceededCallback({
+      paymentPublicId: 'payment-order-0001',
+      provider: 'postar',
+      providerTransactionId: 'provider-payment-003',
+      reportedAmountMinor: 8800,
+      reportedCurrency: 'CNY',
+      settlementChannel: 'alipay',
+      providerSnapshot: { signatureVerified: true, channel: 'alipay' },
+    })
+
+    expect(application.payment.settlementChannel).toBe('alipay')
+    expect(transaction.calls[3]?.sql).toContain('settlement_channel = COALESCE(settlement_channel, $7)')
+    expect(transaction.calls[3]?.values[6]).toBe('alipay')
   })
 
   it('releases the order for a new attempt after a verified failed provider query', async () => {
     const transaction = new ScriptedTransaction([
-      rows([{ id: paymentId, order_id: orderId }]),
+      rows([paymentTargetRow()]),
       rows([orderRow(8800)]),
       rows([paymentRow('pending', 8800)]),
       rows([paymentRow('failed', 8800, 'provider-payment-002')]),
@@ -116,7 +185,7 @@ describe('PaymentRepository', () => {
       rows([{ gross_paid_minor: '0', refunded_minor: '0', has_pending: false }]),
       rows([{
         ...paymentRow('created', 8800),
-        provider_snapshot: { signatureVerified: true, tradeState: 'SUCCESS' },
+        provider_snapshot: { tradeState: 'SUCCESS' },
       }]),
     ])
 
@@ -137,7 +206,7 @@ describe('PaymentRepository', () => {
     })
 
     const persisted = JSON.parse(String(transaction.calls[2]?.values[10])) as JsonObject
-    expect(persisted).toEqual({ signatureVerified: true, tradeState: 'SUCCESS' })
+    expect(persisted).toEqual({ tradeState: 'SUCCESS' })
     expect(payment.providerSnapshot).toEqual(persisted)
     expect(JSON.stringify(persisted)).not.toContain('secret')
     expect(JSON.stringify(persisted)).not.toContain('openid')
@@ -145,7 +214,7 @@ describe('PaymentRepository', () => {
 
   it('rejects a callback amount that differs from the order-derived amount', async () => {
     const transaction = new ScriptedTransaction([
-      rows([{ id: paymentId, order_id: orderId }]),
+      rows([paymentTargetRow()]),
       rows([{ id: orderId }]),
       rows([paymentRow('pending', 8800)]),
     ])
@@ -223,7 +292,7 @@ describe('PaymentRepository', () => {
   it('allows a guest to pay only an order owned by the authenticated table session and linked customer', async () => {
     const allowed = new ScriptedTransaction([
       rows([orderRow(8800)]),
-      rows([{ linked: true }]),
+      rows([{ participation_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }]),
       rows([{ gross_paid_minor: '0', refunded_minor: '0', has_pending: false }]),
       rows([paymentRow('created', 8800)]),
     ])
@@ -232,9 +301,13 @@ describe('PaymentRepository', () => {
       publicId: 'payment-guest-owned-0001',
       provider: 'postar',
       method: 'native_qr',
-      principal: { type: 'guest', tableSessionId, customerId },
+      principal: {
+        type: 'guest',tableSessionId,customerId,
+        guestSessionId:'99999999-9999-4999-8999-999999999999',
+      },
     })).resolves.toMatchObject({ orderId })
-    expect(allowed.calls[1]?.sql).toContain('FROM mbox.table_session_customers')
+    expect(allowed.calls[1]?.sql).toContain('mbox.lock_active_table_guest_session_position')
+    expect(allowed.calls[1]?.sql).not.toContain('mbox.table_session_customers')
 
     const foreignSession = new ScriptedTransaction([
       rows([{ ...orderRow(8800), table_session_id: '88888888-8888-4888-8888-888888888888' }]),
@@ -289,10 +362,13 @@ function paymentRow(
   const snapshot: JsonObject = {}
   return {
     id: paymentId,
+    payable_kind: 'order',
     order_id: orderId,
+    activity_registration_id: null,
     public_id: 'payment-order-0001',
     provider: 'postar',
     provider_transaction_id: providerTransactionId,
+    settlement_channel: null,
     method: 'native_qr',
     amount_minor: String(amountMinor),
     currency: 'CNY',
@@ -302,6 +378,10 @@ function paymentRow(
     created_at: '2026-08-11T11:59:00.000Z',
     updated_at: '2026-08-11T12:00:00.000Z',
   }
+}
+
+function paymentTargetRow(): Record<string, unknown> {
+  return { id: paymentId, payable_kind: 'order', order_id: orderId, activity_registration_id: null }
 }
 
 function orderRow(totalAmountMinor: number): Record<string, unknown> {

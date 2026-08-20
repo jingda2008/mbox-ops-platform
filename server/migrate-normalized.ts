@@ -27,7 +27,17 @@ export interface TargetDatabaseInspection {
 }
 
 export function unwrapNormalizedMigrationTransaction(sql: string) {
-  const match = sql.match(/^\s*BEGIN\s*;([\s\S]*?)COMMIT\s*;\s*$/i)
+  let transactionSql = sql.trimStart()
+  while (transactionSql.startsWith('--') || transactionSql.startsWith('/*')) {
+    if (transactionSql.startsWith('--')) {
+      const lineEnd = transactionSql.indexOf('\n')
+      transactionSql = lineEnd === -1 ? '' : transactionSql.slice(lineEnd + 1).trimStart()
+      continue
+    }
+    const commentEnd = transactionSql.indexOf('*/', 2)
+    transactionSql = commentEnd === -1 ? '' : transactionSql.slice(commentEnd + 2).trimStart()
+  }
+  const match = transactionSql.match(/^BEGIN\s*;([\s\S]*?)COMMIT\s*;\s*$/i)
   if (!match?.[1]) throw new Error('规范化迁移文件必须由单一BEGIN/COMMIT事务包裹')
   return match[1]
 }

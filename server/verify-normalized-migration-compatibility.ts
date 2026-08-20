@@ -15,6 +15,14 @@ export async function verifyNormalizedMigrationCompatibility(databaseUrl: string
   await client.connect()
   try {
     await client.query('SET default_transaction_read_only = on')
+    const databaseIdentity = (await client.query<{
+      database: string
+      server_address: string
+      server_port: string
+    }>(`SELECT current_database() AS database,
+      COALESCE(inet_server_addr()::text,'local') AS server_address,
+      current_setting('port') AS server_port`)).rows[0]
+    if (!databaseIdentity) throw new Error('数据库身份预检没有返回结果')
     const inspection = await inspectTargetDatabase(client)
     assertNormalizedMigrationTarget(inspection)
     const available = await loadNormalizedMigrations()
@@ -36,6 +44,11 @@ export async function verifyNormalizedMigrationCompatibility(databaseUrl: string
       schemaVersion: 1,
       checkedAt: new Date().toISOString(),
       status: 'pass' as const,
+      databaseIdentity: {
+        database: databaseIdentity.database,
+        serverAddress: databaseIdentity.server_address,
+        serverPort: databaseIdentity.server_port,
+      },
       schemaFlavor: inspection.schemaFlavor ?? 'empty',
       appliedCount: applied.length,
       availableCount: available.length,

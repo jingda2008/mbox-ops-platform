@@ -374,11 +374,13 @@ export async function queryRefundThroughProvider(input: QueryProviderRefundInput
   assertProvider(intent.channel, input.adapter.provider)
   if (!input.requestedBy.trim()) throw new Error('退款查询发起人不能为空')
   if (!refund.channelRefundId) throw new Error('退款尚未提交渠道')
+  if (!intent.channelTransactionId) throw new Error('原支付缺少渠道交易号，不能查询退款')
 
   const observation = await input.adapter.queryRefund(
     {
       refundId: refund.id,
       providerRefundId: refund.channelRefundId,
+      originalProviderTransactionId: intent.channelTransactionId,
       merchantId: intent.merchantId,
     },
     { secrets: input.secrets },

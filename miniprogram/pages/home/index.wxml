@@ -1,44 +1,79 @@
 <view class="page home-page">
-  <view class="top-band home-hero">
+  <view class="home-hero">
     <view class="brand-row">
-      <view class="brand"><view class="brand-mark">M</view><text>M-Box</text></view>
+      <view class="brand"><view class="brand-mark">M</view><text>M-BOX</text></view>
       <text wx:if="{{isDevelopment}}" class="dev-badge">开发模式</text>
     </view>
-    <view class="table-identity">
-      <text class="table-identity__label">{{hasTableSession ? '当前桌台' : '到店前服务'}}</text>
-      <text class="table-identity__name">{{hasTableSession ? (table ? table.displayName : tableCode) : '预约到店'}}</text>
-      <text class="table-identity__meta">{{hasTableSession ? (storeName + ' · 服务专员 ' + ownerName) : '无需桌码，微信身份只查看本人预约'}}</text>
+    <view class="hero-content">
+      <text class="hero-kicker">LIVE MUSIC · SOCIAL NIGHT</text>
+      <text class="hero-title">{{visitState === 'active' ? table.displayName : visitState === 'waiting' ? table.displayName : '今晚，刚刚好'}}</text>
+      <text class="hero-copy">{{visitState === 'active' ? ('本桌已连接 · ' + serviceOwner) : visitState === 'waiting' ? '桌码已识别，开台后菜单会自动出现' : '现场音乐、精心酒水与刚好的相遇'}}</text>
     </view>
   </view>
 
-  <state-panel wx:if="{{loading}}" type="loading" title="正在确认桌台" message="请稍候，不要重复扫码" />
+  <state-panel wx:if="{{loading}}" type="loading" title="正在准备今晚" />
   <block wx:else>
     <view wx:if="{{warning}}" class="warning">{{warning}}</view>
     <view wx:if="{{error}}" class="error-banner">{{error}}</view>
 
-    <view class="section prearrival-section">
-      <view class="section-title"><text>到店前安排</text><text class="section-link">无需桌码</text></view>
-      <button class="portal portal--reservation reservation-portal" bindtap="openReservation"><text class="portal__code">R</text><text class="portal__title">预约到店</text><text class="portal__meta">提交人数、时间、区域偏好和庆祝场景</text></button>
+    <view wx:if="{{visitState === 'waiting'}}" class="state-card state-card--waiting">
+      <view class="state-card__icon">···</view>
+      <view class="state-card__body"><text class="state-card__eyebrow">等待开台</text><text class="state-card__title">{{table.displayName}}</text><text class="state-card__copy">{{connectionMessage}}</text></view>
+      <button class="state-card__action" bindtap="retryTable">刷新</button>
     </view>
 
-    <view class="summary-strip" wx:if="{{table}}">
-      <view><text>{{openTaskCount}}</text><text>进行中服务</text></view>
-      <view><text>{{accountBalance}}</text><text>当前桌账</text></view>
-      <view><text>{{table.guestCount || 0}}</text><text>本桌人数</text></view>
-    </view>
-
-    <view class="section">
-      <view class="section-title"><text>本桌服务</text><text class="section-link">状态实时同步</text></view>
-      <view class="portal-grid">
-        <button class="portal portal--service" disabled="{{!canEnter}}" data-url="/pages/service/index" bindtap="openPage"><text class="portal__code">01</text><text class="portal__title">呼叫服务</text><text class="portal__meta">加水、加冰、协助点单</text></button>
-        <button class="portal" disabled="{{!canEnter}}" data-url="/pages/account/index" bindtap="openPage"><text class="portal__code">02</text><text class="portal__title">订单 / 桌账</text><text class="portal__meta">查看消费与出品状态</text></button>
-        <button class="portal portal--complaint" disabled="{{!canEnter}}" data-url="/pages/complaint/index" bindtap="openPage"><text class="portal__code">03</text><text class="portal__title">投诉反馈</text><text class="portal__meta">由领班接管并持续跟进</text></button>
-        <button class="portal" disabled="{{!canEnter}}" data-url="/pages/member/index" bindtap="openPage"><text class="portal__code">04</text><text class="portal__title">会员权益</text><text class="portal__meta">查看账户可用权益</text></button>
-        <button class="portal portal--song" disabled="{{!canEnter}}" data-url="/pages/songs/index" bindtap="openPage"><text class="portal__code">05</text><text class="portal__title">点歌</text><text class="portal__meta">按当日排班提交意向</text></button>
-        <button class="portal" disabled="{{!canEnter}}" data-url="/pages/status/index" bindtap="openPage"><text class="portal__code">06</text><text class="portal__title">状态反馈</text><text class="portal__meta">确认解决或继续升级</text></button>
+    <block wx:elif="{{visitState === 'active'}}">
+      <view class="onsite-summary">
+        <view><text class="summary-value">{{table.displayName}}</text><text class="summary-label">当前桌位</text></view>
+        <view><text class="summary-value">{{guestCountText}}</text><text class="summary-label">本桌人数</text></view>
+        <view><text class="summary-value">{{serviceOwner}}</text><text class="summary-label">服务负责</text></view>
       </view>
-    </view>
 
-    <navigator class="footer-link" url="/pages/privacy/index">隐私说明与数据使用</navigator>
+      <button class="primary-experience" data-url="/pages/order/index" bindtap="openTab">
+        <view><text class="primary-experience__kicker">今晚从这里开始</text><text class="primary-experience__title">点单与付款</text><text class="primary-experience__copy">实时菜单、三档推荐与付款前升级</text></view>
+        <text class="primary-experience__arrow">→</text>
+      </button>
+
+      <view wx:if="{{performance}}" class="performance-card">
+        <image wx:if="{{performance.imageUrl}}" src="{{performance.imageUrl}}" mode="aspectFill" />
+        <view><text class="performance-state">{{performance.stateText}}</text><text class="performance-name">{{performance.performer}}</text><text class="performance-time">{{performance.timeText}}</text></view>
+      </view>
+
+      <view class="section compact-section">
+        <view class="section-title"><text>本桌快捷服务</text><text class="section-link">状态实时同步</text></view>
+        <view class="action-grid">
+          <button data-url="/pages/service/index" bindtap="openPage"><text class="action-icon">水</text><text>桌边服务</text></button>
+          <button data-url="/pages/status/index" bindtap="openPage"><text class="action-icon">进</text><text>处理进度</text></button>
+          <button data-url="/pages/songs/index" bindtap="openPage"><text class="action-icon">歌</text><text>现场点歌</text></button>
+          <button data-url="/pages/account/index" bindtap="openPage"><text class="action-icon">账</text><text>订单桌账</text></button>
+        </view>
+      </view>
+    </block>
+
+    <block wx:else>
+      <view wx:if="{{upcomingReservation}}" class="state-card reservation-state">
+        <view class="state-card__body"><text class="state-card__eyebrow">我的预约</text><text class="state-card__title">{{upcomingReservation.title}}</text><text class="state-card__copy">{{upcomingReservation.statusText}}</text></view>
+        <button class="state-card__action" data-url="/pages/reservations/index" bindtap="openTab">查看</button>
+      </view>
+      <button wx:else class="primary-experience reservation-experience" data-url="/pages/reservations/index" bindtap="openTab">
+        <view><text class="primary-experience__kicker">提前安排</text><text class="primary-experience__title">预约今晚</text><text class="primary-experience__copy">先选时间人数，再看演出与位置</text></view><text class="primary-experience__arrow">→</text>
+      </button>
+
+      <view wx:if="{{performance}}" class="section">
+        <view class="section-title"><text>今晚现场</text><text class="section-link">{{performance.stateText}}</text></view>
+        <view class="performance-card performance-card--public">
+          <image wx:if="{{performance.imageUrl}}" src="{{performance.imageUrl}}" mode="aspectFill" />
+          <view><text class="performance-state">{{performance.summary}}</text><text class="performance-name">{{performance.performer}}</text><text class="performance-time">{{performance.timeText}}</text></view>
+        </view>
+      </view>
+
+      <view class="section">
+        <view class="section-title"><text>值得去看看</text><text class="section-link">M-BOX精选</text></view>
+        <view class="discovery-grid">
+          <button class="discovery-card discovery-card--activity" data-url="/pages/community/index" bindtap="openTab"><text>超嗨</text><text>{{upcomingActivity ? upcomingActivity.title : '等待下一场发布'}}</text><text>活动与城市体验 →</text></button>
+          <button class="discovery-card discovery-card--member" data-url="/pages/profile/index" bindtap="openTab"><text>{{membership ? '我的会员' : '加入会员'}}</text><text>{{benefitCount ? (benefitCount + ' 项权益可用') : membership ? ('积分 ' + membership.pointsBalance) : '记录偏好与美好时刻'}}</text><text>查看权益 →</text></button>
+        </view>
+      </view>
+    </block>
   </block>
 </view>

@@ -67,6 +67,40 @@ describe('NormalizedPaymentCapabilityAuthorization', () => {
     })).resolves.toBeUndefined()
   })
 
+  it('requires a configurable request limit for the acting refund requester', async () => {
+    const policy = new NormalizedPaymentCapabilityAuthorization()
+    const request = (overrides: Record<string, unknown> = {}) => ({
+      employee_status: 'active',
+      allowed: true,
+      requested_by_employee_id: employeeId,
+      amount_minor: '5000',
+      currency: 'CNY',
+      approval_limit_minor: '5000',
+      ...overrides,
+    })
+
+    await expect(policy.assertRefundRequestLimit({
+      transaction: transaction([request({ requested_by_employee_id: '55555555-5555-4555-8555-555555555555' })]),
+      employeeId,
+      refundId,
+    })).rejects.toThrow('identity does not match')
+    await expect(policy.assertRefundRequestLimit({
+      transaction: transaction([request({ approval_limit_minor: null })]),
+      employeeId,
+      refundId,
+    })).rejects.toThrow('request limit is not configured')
+    await expect(policy.assertRefundRequestLimit({
+      transaction: transaction([request({ amount_minor: '5001' })]),
+      employeeId,
+      refundId,
+    })).rejects.toThrow('exceeds employee request limit')
+    await expect(policy.assertRefundRequestLimit({
+      transaction: transaction([request()]),
+      employeeId,
+      refundId,
+    })).resolves.toBeUndefined()
+  })
+
   it('uses a strict evidence allowlist and stable opaque business event keys', () => {
     const sanitized = sanitizeProviderSnapshot({
       signatureVerified: true,
@@ -77,7 +111,7 @@ describe('NormalizedPaymentCapabilityAuthorization', () => {
       openid: 'do-not-copy',
       payer: { phone: '13800000000' },
     })
-    expect(sanitized).toEqual({ signatureVerified: true, tradeState: 'SUCCESS' })
+    expect(sanitized).toEqual({ tradeState: 'SUCCESS' })
     const first = paymentBusinessEventKey('succeeded', 'postar', 'provider-transaction-001')
     const second = paymentBusinessEventKey('succeeded', 'postar', 'provider-transaction-001')
     expect(first).toBe(second)

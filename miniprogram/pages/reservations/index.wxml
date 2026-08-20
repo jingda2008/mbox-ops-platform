@@ -1,40 +1,65 @@
 <view class="page reservations-page">
-  <view class="top-band reservation-band">
-    <view class="brand-row"><view class="brand"><view class="brand-mark">M</view><text>预约到店</text></view><text wx:if="{{isDevelopment}}" class="dev-badge">开发模式</text></view>
-    <text class="reservation-band__title">提前安排，现场确认</text>
-    <text class="reservation-band__meta">本人微信会话仅可查看本人预约</text>
-  </view>
-
-  <state-panel wx:if="{{loading}}" type="loading" title="正在载入预约信息" />
+  <view class="reservation-head"><view class="brand-row"><view><text class="eyebrow">M-BOX · RESERVATION</text><text class="reservation-title">预约到店</text></view><text wx:if="{{isDevelopment}}" class="dev-badge">开发模式</text></view><text class="reservation-copy">分三步完成，只在最后确认联系信息与费用规则。</text></view>
+  <state-panel wx:if="{{loading}}" type="loading" title="正在读取本人预约" />
   <block wx:else>
-    <view wx:if="{{error}}" class="error-banner">{{error}}</view>
-    <view wx:if="{{success}}" class="success-banner">{{success}}</view>
+    <view wx:if="{{error}}" class="error-banner">{{error}}</view><view wx:if="{{success}}" class="success-banner">{{success}}</view>
 
-    <view class="section form-section">
-      <view class="section-title"><text>预约信息</text><text class="section-link">门店确认后生效</text></view>
-      <view class="panel reservation-form">
-        <label class="field"><text class="field__label">称呼</text><input class="field__input" maxlength="100" value="{{customerName}}" placeholder="如：林女士" bindinput="onNameInput" /></label>
-        <label class="field"><text class="field__label">人数</text><input class="field__input" type="number" value="{{partySize}}" bindinput="onPartySizeInput" /></label>
-        <view class="field-row">
-          <label class="field"><text class="field__label">日期</text><picker mode="date" value="{{reservationDate}}" start="{{minimumDate}}" bindchange="onDateChange"><view class="picker-field">{{reservationDate}}</view></picker></label>
-          <label class="field"><text class="field__label">时间</text><picker mode="time" value="{{reservationTime}}" bindchange="onTimeChange"><view class="picker-field">{{reservationTime}}</view></picker></label>
+    <view wx:if="{{reservations.length}}" class="section reservation-history">
+      <view class="section-title"><text>我的预约</text><button wx:if="{{!showForm}}" bindtap="startNewReservation">＋ 新预约</button></view>
+      <view wx:if="{{impactsError}}" class="impact-load-error"><text>{{impactsError}}</text><button bindtap="retryImpacts">重试</button></view>
+      <view wx:if="{{impactNotice}}" class="impact-global-notice" role="status">{{impactNotice}}</view>
+      <view wx:if="{{notificationNotice}}" class="impact-global-notice" role="status">{{notificationNotice}}</view>
+      <view class="reservation-list"><view wx:for="{{reservations}}" wx:key="publicId" class="reservation-record">
+        <view class="reservation-card {{item.active ? 'is-active' : ''}}"><view><text class="reservation-date">{{item.scheduledAtText}} · {{item.partySize}}人</text><text class="reservation-meta">{{item.seatName}}{{item.note ? ' · ' + item.note : ''}}</text></view><text class="reservation-status">{{item.statusText}}</text></view>
+        <view wx:if="{{item.performanceImpact}}" class="performance-impact-card">
+          <view class="performance-impact-head"><view><text class="performance-impact-kicker">需要您确认</text><text class="performance-impact-title">{{item.performanceImpact.title}}</text></view><text class="performance-impact-status">预约仍有效</text></view>
+          <view class="performance-impact-change"><text>{{item.performanceImpact.previousText}}</text><text wx:if="{{item.performanceImpact.resultingText}}">调整为 {{item.performanceImpact.resultingText}}</text><text wx:else>本次调整后不再指定该演出</text></view>
+          <text class="performance-impact-reason">原因：{{item.performanceImpact.revision.reason}}</text>
+          <text class="performance-impact-note">演出偏好不是座位或场次保证；无论如何选择，系统都不会自动取消到店预约。</text>
+          <view class="performance-impact-actions">
+            <button class="impact-primary" loading="{{impactBusyId === item.performanceImpact.publicId}}" disabled="{{impactBusyId}}" data-impact="{{item.performanceImpact.publicId}}" data-decision="keep" bindtap="acknowledgeImpact">{{item.performanceImpact.acceptLabel}}</button>
+            <button wx:if="{{item.performanceImpact.eligibleSchedules.length}}" disabled="{{impactBusyId}}" data-impact="{{item.performanceImpact.publicId}}" bindtap="toggleImpactSchedules">{{expandedImpactId === item.performanceImpact.publicId ? '收起其他演出' : '改选演出'}}</button>
+            <button disabled="{{impactBusyId}}" data-impact="{{item.performanceImpact.publicId}}" data-decision="clear" bindtap="acknowledgeImpact">不指定演出</button>
+          </view>
+          <view wx:if="{{expandedImpactId === item.performanceImpact.publicId}}" class="performance-impact-options">
+            <button wx:for="{{item.performanceImpact.eligibleSchedules}}" wx:for-item="show" wx:key="id" disabled="{{impactBusyId}}" data-impact="{{item.performanceImpact.publicId}}" data-decision="reselect" data-schedule="{{show.id}}" bindtap="acknowledgeImpact"><text>{{show.performerStageName}}</text><text>{{show.timeText}}</text></button>
+          </view>
         </view>
-        <label class="field"><text class="field__label">区域偏好</text><picker mode="selector" range="{{areaOptions}}" range-key="name" value="{{areaIndex}}" bindchange="onAreaChange"><view class="picker-field">{{areaOptions[areaIndex].name}}</view></picker></label>
-        <label class="field"><text class="field__label">到店场景</text><picker mode="selector" range="{{occasionOptions}}" range-key="name" value="{{occasionIndex}}" bindchange="onOccasionChange"><view class="picker-field">{{occasionOptions[occasionIndex].name}}</view></picker></label>
-        <label class="field"><text class="field__label">备注</text><textarea class="field__textarea" maxlength="500" value="{{occasionNote}}" placeholder="如生日称呼、希望安排的互动时间" bindinput="onNoteInput" /></label>
-        <button class="primary-button" loading="{{submitting}}" disabled="{{submitting}}" bindtap="submitReservation">提交预约</button>
-      </view>
+        <view wx:if="{{item.performanceNotificationOption}}" class="reservation-notification-row">
+          <text wx:if="{{item.performanceNotificationOption.usesRemaining > 0}}">本次预约的演出变更提醒已申请</text>
+          <block wx:else><text>需要时，可只为这次预约申请一次演出变更提醒</text><button loading="{{notificationBusyId === item.publicId}}" disabled="{{notificationBusyId}}" data-reservation="{{item.publicId}}" bindtap="enablePerformanceNotification">{{item.performanceNotificationOption.decision === 'granted' ? '再次开启' : '开启提醒'}}</button></block>
+        </view>
+      </view></view>
     </view>
 
-    <view class="section">
-      <view class="section-title"><text>我的预约</text><text class="section-link">{{reservations.length}} 条</text></view>
-      <view wx:if="{{reservations.length}}" class="panel reservation-list">
-        <view wx:for="{{reservations}}" wx:key="id" class="list-row reservation-row">
-          <view class="list-row__main"><text class="list-row__title">{{item.scheduledAtText}} · {{item.partySize}}人</text><text class="list-row__meta">{{item.areaName}}{{item.occasionName ? ' · ' + item.occasionName : ''}}</text><text wx:if="{{item.occasionNote}}" class="reservation-note">{{item.occasionNote}}</text></view>
-          <text class="status-tag status-tag--{{item.status}}">{{item.statusText}}</text>
-        </view>
+    <view wx:if="{{showForm}}" class="booking-flow">
+      <view class="step-head"><view class="step-progress"><view class="{{step >= 1 ? 'is-active' : ''}}"><text>1</text><text>时间人数</text></view><view class="step-line {{step >= 2 ? 'is-active' : ''}}"></view><view class="{{step >= 2 ? 'is-active' : ''}}"><text>2</text><text>演出位置</text></view><view class="step-line {{step >= 3 ? 'is-active' : ''}}"></view><view class="{{step >= 3 ? 'is-active' : ''}}"><text>3</text><text>确认提交</text></view></view></view>
+
+      <view wx:if="{{step === 1}}" class="flow-panel">
+        <text class="flow-kicker">STEP 01</text><text class="flow-title">什么时候来，几位？</text>
+        <view class="field-row"><label class="field"><text class="field__label">日期</text><picker mode="date" value="{{reservationDate}}" start="{{minimumDate}}" bindchange="onDateChange"><view class="picker-field">{{reservationDate}}</view></picker></label><label class="field"><text class="field__label">时间</text><picker mode="time" value="{{reservationTime}}" bindchange="onTimeChange"><view class="picker-field">{{reservationTime}}</view></picker></label></view>
+        <label class="field"><text class="field__label">到店人数</text><input class="field__input" type="number" value="{{partySize}}" bindinput="onPartySizeInput" bindblur="onPartySizeConfirm" /></label>
+        <view class="availability {{availability && availability.acceptingReservations ? 'is-available' : ''}}"><text>{{checking ? '正在确认容量…' : availabilityText}}</text><text wx:if="{{depositText}}">{{depositText}}</text></view>
       </view>
-      <state-panel wx:else type="empty" title="暂无预约" message="提交后可在本页查看门店确认状态" />
+
+      <view wx:elif="{{step === 2}}" class="flow-panel">
+        <text class="flow-kicker">STEP 02</text><text class="flow-title">想要怎样的今晚？</text>
+        <view class="show-selection"><view class="field-title"><text>当日演出</text><text>可不选，由门店按时间安排</text></view><state-panel wx:if="{{loadingShows}}" type="loading" title="正在读取演出" /><scroll-view wx:elif="{{performances.length}}" scroll-x enhanced show-scrollbar="{{false}}"><view class="show-row"><button wx:for="{{performances}}" wx:key="id" class="show-card {{selectedPerformanceId === item.id ? 'is-selected' : ''}}" data-id="{{item.id}}" bindtap="selectPerformance"><image wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" /><text>{{item.name}}</text><text>{{item.timeText}}</text></button></view></scroll-view><text wx:else class="empty-inline">该日期暂无已发布演出，仍可正常预约。</text></view>
+        <label class="field"><text class="field__label">位置倾向</text><picker mode="selector" range="{{seatOptions}}" range-key="name" value="{{seatIndex}}" bindchange="onSeatChange"><view class="picker-field picker-field--stack"><text>{{seatOptions[seatIndex].name}}</text><text>{{seatOptions[seatIndex].copy}}</text></view></picker></label>
+        <label class="field"><text class="field__label">到店场景</text><picker mode="selector" range="{{occasionOptions}}" range-key="name" value="{{occasionIndex}}" bindchange="onOccasionChange"><view class="picker-field">{{occasionOptions[occasionIndex].name}}</view></picker></label>
+        <label class="field"><text class="field__label">需要提前知道的事（选填）</text><textarea class="field__textarea" maxlength="500" value="{{occasionNote}}" placeholder="如生日称呼、商务安静沟通、希望安排互动" bindinput="onNoteInput" /></label>
+      </view>
+
+      <view wx:else class="flow-panel">
+        <text class="flow-kicker">STEP 03</text><text class="flow-title">最后核对</text>
+        <view class="booking-summary"><view><text>到店</text><text>{{reservationDate}} {{reservationTime}} · {{partySize}}人</text></view><view><text>位置</text><text>{{seatOptions[seatIndex].name}}</text></view><view><text>场景</text><text>{{occasionOptions[occasionIndex].name}}</text></view><view wx:if="{{selectedPerformance}}"><text>演出</text><text>{{selectedPerformance.name}} · {{selectedPerformance.timeText}}</text></view></view>
+        <label class="field"><text class="field__label">预约称呼</text><input class="field__input" maxlength="100" value="{{customerName}}" placeholder="如：林女士" bindinput="onNameInput" /></label>
+        <label class="field"><text class="field__label">手机号或微信</text><input class="field__input" maxlength="100" value="{{contact}}" placeholder="仅用于本次预约联系" bindinput="onContactInput" /></label>
+        <view class="rule-confirm"><text>预约与费用规则</text><text>{{depositText}}</text><text>具体桌位由门店结合人数、位置倾向和现场情况确认；提交不代表锁定某张桌。</text></view>
+      </view>
+
+      <view class="flow-actions"><button wx:if="{{step > 1}}" class="secondary-button" bindtap="previousStep">上一步</button><button wx:if="{{step < 3}}" class="primary-button" disabled="{{checking}}" bindtap="nextStep">下一步</button><button wx:else class="primary-button" loading="{{submitting}}" disabled="{{submitting}}" bindtap="submitReservation">确认提交</button></view>
+      <button wx:if="{{reservations.length}}" class="close-flow" bindtap="closeForm">暂不新建预约</button>
     </view>
   </block>
 </view>

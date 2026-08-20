@@ -5,12 +5,22 @@ release_dir=${1:?release directory is required}
 public_url=${2:?public URL is required}
 manifest=${release_dir}/deployment-manifest.json
 install_root=${MBOX_INSTALL_ROOT:-/opt/mbox}
+release_lock_dir=${install_root}/locks
+release_lock_file=${release_lock_dir}/release.lock
 active_container=mbox-app
 caddy_container=mbox-caddy
 network=mbox-net
 public_verifier=${release_dir}/verify-public-app.sh
 
 case "${release_dir}" in "${install_root}"/releases/*) ;; *) exit 1 ;; esac
+install -d -m 0700 "${release_lock_dir}"
+test "$(stat -c '%u:%a' "${release_lock_dir}")" = 0:700
+exec 8>"${release_lock_file}"
+chmod 0600 "${release_lock_file}"
+if ! flock -n 8; then
+  echo "another release or database-maintenance operation is active" >&2
+  exit 75
+fi
 test -f "${manifest}"
 test -x "${public_verifier}"
 
@@ -25,9 +35,15 @@ verify_deployment_scripts() {
     test "$(sha256sum "${release_dir}/${script_name}" | awk '{print $1}')" = "${expected_sha}"
     count=$((count + 1))
   done < <(jq -er '.deploymentScripts | to_entries[] | [.value.file,.value.sha256] | @tsv' "${release_dir}/release-manifest.json")
-  test "${count}" = 10
+  test "${count}" = 12
 }
 verify_deployment_scripts
+rollback_mode=$(jq -r '.rollbackMode // "application_image"' "${manifest}")
+if [ "${rollback_mode}" = forward_only_after_contract_cutover ]; then
+  echo "contract migration cutover has resumed writes; application-only rollback is forbidden" >&2
+  exit 2
+fi
+test "${rollback_mode}" = application_image
 rollback_container=$(jq -er '.rollbackContainer' "${manifest}")
 failed_sha=$(jq -er '.releaseSha' "${manifest}")
 previous_release_sha=$(jq -er '.previousReleaseSha' "${manifest}")

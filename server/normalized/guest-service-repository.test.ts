@@ -3,11 +3,14 @@ import { Pool, type PoolClient } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
 import {
+  GuestServiceFeedbackStateError,
   GuestServiceRepository,
+  GuestServiceRequestNotFoundError,
   GuestServiceSessionUnavailableError,
   serviceMergeKey,
 } from './guest-service-repository.js'
 import { ServiceTaskRepository } from './service-task-repository.js'
+import { seedActiveGuestTableAuthority } from './guest-table-authority.test-helper.js'
 import {
   ScopedPostgresTransactionRunner,
   type PostgresPool,
@@ -34,6 +37,9 @@ integration('normalized guest service requests with PostgreSQL', () => {
   let tableSessionId: string
   let customerId: string
   let otherCustomerId: string
+  const guestActorRefs=new Map<string,string>()
+  const relatedOrderId = randomUUID()
+  const relatedOrderPublicId = `gs-order-${relatedOrderId.slice(0,8)}`
 
   beforeAll(async () => {
     await runNormalizedMigrations(databaseUrl!)
@@ -91,6 +97,18 @@ integration('normalized guest service requests with PostgreSQL', () => {
        ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'guest')`,
       [tenantId, storeId, tableSessionId, otherCustomerId],
     )
+    guestActorRefs.set(customerId,await seedActiveGuestTableAuthority(pool,{
+      tenantId,storeId,tableSessionId,customerId,
+    }))
+    guestActorRefs.set(otherCustomerId,await seedActiveGuestTableAuthority(pool,{
+      tenantId,storeId,tableSessionId,customerId:otherCustomerId,
+    }))
+    await pool.query(`
+      INSERT INTO mbox.orders(
+        id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,
+        subtotal_amount_minor,discount_amount_minor,total_amount_minor,currency
+      ) VALUES ($1,$2,$3,$4,$5,'guest_qr','submitted','unpaid',0,0,0,'CNY')
+    `, [relatedOrderId,tenantId,storeId,tableSessionId,relatedOrderPublicId])
   })
 
   afterAll(async () => {
@@ -105,7 +123,7 @@ integration('normalized guest service requests with PostgreSQL', () => {
       }).request({
         tableSessionId,
         customerId: requestCustomerId,
-        actorRef: 'guest-session:service-concurrency-test',
+        actorRef: guestActorRefs.get(requestCustomerId)!,
         deviceFingerprint: 'wechat-device-service-concurrency-0001',
         requestType: 'call_staff',
       })
@@ -149,7 +167,7 @@ integration('normalized guest service requests with PostgreSQL', () => {
       }).request({
         tableSessionId,
         customerId,
-        actorRef: 'guest-session:service-concurrency-test',
+        actorRef: guestActorRefs.get(customerId)!,
         deviceFingerprint: 'wechat-device-service-concurrency-0001',
         requestType: 'call_staff',
       })
@@ -163,6 +181,122 @@ integration('normalized guest service requests with PostgreSQL', () => {
     expect(count.rows[0]?.count).toBe('2')
   })
 
+  it('lists only the current table service state and records idempotent guest feedback', async () => {
+    const employeeId = randomUUID()
+    await pool.query(`
+      INSERT INTO mbox.employees (id, tenant_id, store_id, employee_code, display_name)
+      VALUES ($1::uuid, $2::uuid, $3::uuid, $4, '李艳')
+    `, [employeeId, tenantId, storeId, `GS-${employeeId.slice(0, 8)}`])
+    await pool.query(`
+      UPDATE mbox.service_tasks
+      SET assigned_employee_id = $4::uuid, detail = '内部备注不得对客显示'
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+        AND table_session_id = $3::uuid AND status = 'pending'
+    `, [tenantId, storeId, tableSessionId, employeeId])
+
+    const visible = await transactions.run({ tenantId, storeId }, (transaction) => (
+      new GuestServiceRepository(transaction).listOwned(tableSessionId, otherCustomerId)
+    ), { readOnly: true })
+    expect(visible).toHaveLength(1)
+    expect(visible[0]).toMatchObject({
+      requestType: 'call_staff',
+      status: 'pending',
+      assignedStaffName: '李艳',
+      requestCount: 4,
+    })
+    expect(visible[0]).not.toHaveProperty('detail')
+    const publicId = visible[0]!.publicId
+
+    const escalate = () => transactions.run({ tenantId, storeId }, (transaction) => (
+      new GuestServiceRepository(transaction).feedback({
+        tableSessionId,
+        customerId: otherCustomerId,
+        actorRef:guestActorRefs.get(otherCustomerId)!,
+        publicId,
+        action: 'escalate',
+      })
+    ))
+    await expect(escalate()).resolves.toMatchObject({ action: 'escalate', changed: true })
+    await expect(escalate()).resolves.toMatchObject({ action: 'escalate', changed: false })
+    await expect(transactions.run({ tenantId, storeId }, (transaction) => (
+      new GuestServiceRepository(transaction).feedback({
+        tableSessionId,
+        customerId,
+        actorRef:guestActorRefs.get(customerId)!,
+        publicId,
+        action: 'confirm',
+      })
+    ))).rejects.toBeInstanceOf(GuestServiceFeedbackStateError)
+
+    const active = await transactions.run({ tenantId, storeId }, (transaction) => (
+      new ServiceTaskRepository(transaction).findActiveByTableSession(tableSessionId)
+    ), { readOnly: true })
+    expect(active[0]).toMatchObject({ publicId, priority: 'urgent' })
+    await transactions.run({ tenantId, storeId }, (transaction) => (
+      new ServiceTaskRepository(transaction).complete({
+        taskId: active[0]!.id,
+        actor: { type: 'system' },
+        eventIdempotencyKey: 'guest-feedback-complete-0001',
+      })
+    ))
+    const confirm = () => transactions.run({ tenantId, storeId }, (transaction) => (
+      new GuestServiceRepository(transaction).feedback({
+        tableSessionId,
+        customerId,
+        actorRef:guestActorRefs.get(customerId)!,
+        publicId,
+        action: 'confirm',
+      })
+    ))
+    await expect(confirm()).resolves.toMatchObject({ action: 'confirm', changed: true, taskStatus: 'completed' })
+    await expect(confirm()).resolves.toMatchObject({ action: 'confirm', changed: false })
+
+    await expect(transactions.run({ tenantId, storeId }, (transaction) => (
+      new GuestServiceRepository(transaction).feedback({
+        tableSessionId,
+        customerId: randomUUID(),
+        actorRef:guestActorRefs.get(customerId)!,
+        publicId,
+        action: 'confirm',
+      })
+    ))).rejects.toBeInstanceOf(GuestServiceRequestNotFoundError)
+
+    const evidence = await pool.query<{ escalations: string; confirmations: string }>(`
+      SELECT
+        count(*) FILTER (WHERE event_type = 'guest.escalated')::text AS escalations,
+        count(*) FILTER (WHERE event_type = 'guest.confirmed')::text AS confirmations
+      FROM mbox.service_task_events AS event
+      JOIN mbox.service_tasks AS task ON task.id = event.service_task_id
+      WHERE event.tenant_id = $1::uuid AND event.store_id = $2::uuid
+        AND task.public_id = $3
+    `, [tenantId, storeId, publicId])
+    expect(evidence.rows[0]).toEqual({ escalations: '1', confirmations: '1' })
+  })
+
+  it('binds a complaint to an authoritative order from the same table only', async () => {
+    const result = await transactions.run({ tenantId,storeId }, (transaction) => (
+      new GuestServiceRepository(transaction, { deviceLimitPerMinute:20,tableLimitPerMinute:40 }).request({
+        tableSessionId,customerId,actorRef:guestActorRefs.get(customerId)!,
+        deviceFingerprint:'wechat-device-order-complaint',requestType:'complaint',
+        detail:'这笔订单需要值班经理协助',relatedOrderPublicId,
+      })
+    ))
+    expect(result).toMatchObject({ status:'created',workflow:'manager_attention' })
+    const stored = await pool.query<{ related_order_id:string; request_type:string }>(`
+      SELECT related_order_id::text,request_type FROM mbox.guest_service_request_groups
+      WHERE tenant_id=$1 AND store_id=$2 AND current_service_task_id=$3
+    `, [tenantId,storeId,result.status==='rate_limited'?null:result.task.id])
+    expect(stored.rows[0]).toEqual({ related_order_id:relatedOrderId,request_type:'complaint' })
+
+    await expect(transactions.run({ tenantId,storeId }, (transaction) => (
+      new GuestServiceRepository(transaction).request({
+        tableSessionId,customerId,actorRef:guestActorRefs.get(customerId)!,
+        deviceFingerprint:'wechat-device-forged-order-complaint',requestType:'complaint',
+        detail:'伪造订单关联',relatedOrderPublicId:'order-does-not-exist',
+      })
+    ))).rejects.toBeInstanceOf(GuestServiceRequestNotFoundError)
+  })
+
   it('enforces both persisted device limits and table-session invalidation', async () => {
     const limitedDevice = 'wechat-device-service-limited-0002'
     const request = () => transactions.run({ tenantId, storeId }, (transaction) => (
@@ -172,7 +306,7 @@ integration('normalized guest service requests with PostgreSQL', () => {
       }).request({
         tableSessionId,
         customerId,
-        actorRef: 'guest-session:service-limit-test',
+        actorRef: guestActorRefs.get(customerId)!,
         deviceFingerprint: limitedDevice,
         requestType: 'custom',
         detail: '需要两杯温水',
@@ -189,11 +323,11 @@ integration('normalized guest service requests with PostgreSQL', () => {
       new GuestServiceRepository(transaction).request({
         tableSessionId,
         customerId,
-        actorRef: 'guest-session:service-after-close',
+        actorRef: guestActorRefs.get(customerId)!,
         deviceFingerprint: 'wechat-device-service-after-close',
         requestType: 'complaint',
       })
-    ))).rejects.toBeInstanceOf(GuestServiceSessionUnavailableError)
+    ))).rejects.toBeInstanceOf(GuestServiceRequestNotFoundError)
 
     const history = await pool.query<{ groups: string; rate_windows: string }>(`
       SELECT

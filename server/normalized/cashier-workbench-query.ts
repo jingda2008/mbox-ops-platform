@@ -30,6 +30,7 @@ interface OrderRow extends Record<string, unknown> {
   currency: string
   submitted_at: string | null
   created_at: string
+  business_date: string
 }
 
 interface ItemRow extends Record<string, unknown> {
@@ -95,6 +96,7 @@ const WORKBENCH_CAPABILITIES = [
   'reconciliation.view',
   'payment.manual.cash.record',
   'payment.manual.pos.record',
+  'refund.request',
   'refund.approve',
   'refund.execute',
 ] as const
@@ -110,7 +112,8 @@ export class PostgresCashierWorkbenchQuery {
         SELECT orders.id, orders.public_id, table_row.code AS table_code,
           orders.channel, orders.status, orders.payment_status,
           orders.total_amount_minor, orders.currency,
-          orders.submitted_at::text, orders.created_at::text
+          orders.submitted_at::text, orders.created_at::text,
+          session.business_date::text
         FROM mbox.orders AS orders
         JOIN mbox.table_sessions AS session
           ON session.tenant_id = orders.tenant_id
@@ -122,7 +125,20 @@ export class PostgresCashierWorkbenchQuery {
          AND table_row.id = session.table_id
         WHERE orders.tenant_id = $1::uuid
           AND orders.store_id = $2::uuid
-          AND session.business_date = $3::date
+          AND (
+            session.business_date = $3::date
+            OR (session.business_date < $3::date AND EXISTS (
+              SELECT 1 FROM mbox.payments AS carryover_payment
+              JOIN mbox.refunds AS carryover_refund
+                ON carryover_refund.tenant_id=carryover_payment.tenant_id
+               AND carryover_refund.store_id=carryover_payment.store_id
+               AND carryover_refund.payment_id=carryover_payment.id
+              WHERE carryover_payment.tenant_id=orders.tenant_id
+                AND carryover_payment.store_id=orders.store_id
+                AND carryover_payment.order_id=orders.id
+                AND carryover_refund.status IN ('requested','approved','processing')
+            ))
+          )
           AND orders.status <> 'draft'
           AND (
             $4::text = ''
@@ -154,7 +170,8 @@ export class PostgresCashierWorkbenchQuery {
                 )
             )
           )
-        ORDER BY COALESCE(orders.submitted_at, orders.created_at) DESC, orders.id DESC
+        ORDER BY (session.business_date < $3::date) DESC,
+          COALESCE(orders.submitted_at, orders.created_at) DESC, orders.id DESC
         LIMIT $5
       `, [
         input.scope.tenantId,
@@ -315,6 +332,8 @@ function assembleView(
       currency: order.currency,
       submittedAt: order.submitted_at,
       createdAt: order.created_at,
+      businessDate: order.business_date,
+      carryover: order.business_date < input.businessDate,
       items,
       payments,
     }
@@ -328,6 +347,7 @@ function assembleView(
       capturedPaymentCount: paymentRows.filter((payment) => CAPTURED_PAYMENT_STATUSES.includes(payment.status)).length,
       requestedRefundCount: refundRows.filter((refund) => refund.status === 'requested').length,
       processingRefundCount: refundRows.filter((refund) => refund.status === 'approved' || refund.status === 'processing').length,
+      carryoverOrderCount: orders.filter((order) => order.carryover === true).length,
     },
     orders,
   }
@@ -338,7 +358,7 @@ function emptyView(input: Readonly<CashierWorkbenchQueryInput>, query: string): 
     businessDate: input.businessDate,
     query,
     actions: actions(input.capabilities),
-    summary: { orderCount: 0, capturedPaymentCount: 0, requestedRefundCount: 0, processingRefundCount: 0 },
+    summary: { orderCount: 0, capturedPaymentCount: 0, requestedRefundCount: 0, processingRefundCount: 0, carryoverOrderCount: 0 },
     orders: [],
   }
 }

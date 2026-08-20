@@ -552,6 +552,41 @@ export interface WechatCleanupResult {
 export class PostgresWechatIdentityRepository
   extends ScopedWechatPostgresRepository
   implements WechatApiIdentityRepository, WechatNotificationRecipientResolver {
+  async resolveMiniProgramNotificationRecipient(
+    customerId: string,
+    identityExternalId: string,
+  ): Promise<{ identityExternalId: string; openId: string } | null> {
+    assertUuid(customerId, 'customerId')
+    if (!identityExternalId.trim() || identityExternalId.length > 200) {
+      throw new Error('identityExternalId is invalid')
+    }
+    return this.transaction(true, async (client) => {
+      const result = await client.query<IdentityRow>(`
+        SELECT identity.id,identity.external_identity_id,identity.principal_id,
+          identity.tenant_id,identity.store_id,identity.app_id,
+          identity.openid_sha256,identity.openid_ciphertext,identity.openid_key_version,
+          identity.unionid_sha256,identity.unionid_ciphertext,identity.unionid_key_version,
+          identity.member_id,identity.created_at,identity.updated_at,identity.last_authenticated_at
+        FROM mbox.wechat_identities identity
+        JOIN mbox.customer_identities customer_identity
+          ON customer_identity.tenant_id=identity.tenant_id
+         AND customer_identity.store_id=identity.store_id
+         AND customer_identity.identity_kind='wechat'
+         AND customer_identity.identity_hash=encode(digest('wechat:'||identity.principal_id,'sha256'),'hex')
+         AND customer_identity.status='active'
+        WHERE identity.tenant_id=$1::uuid AND identity.store_id=$2::uuid
+          AND identity.app_id=$3 AND identity.channel='mini_program'
+          AND identity.external_identity_id=$4 AND identity.revoked_at IS NULL
+          AND customer_identity.customer_id=$5::uuid
+        LIMIT 1
+      `, [this.tenantId, this.storeId, this.appId, identityExternalId, customerId])
+      const row = result.rows[0]
+      if (!row) return null
+      const identity = this.decodeIdentity(row)
+      return { identityExternalId: identity.id, openId: identity.openId }
+    })
+  }
+
   async findByAppOpenId(tenantId: string, appId: string, openId: string) {
     this.assertTenant(tenantId)
     if (appId !== this.appId) throw new Error('Cross-application WeChat identity access rejected')

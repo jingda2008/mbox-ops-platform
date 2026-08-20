@@ -137,7 +137,7 @@ export class TableQrProvisioner {
   constructor(
     private readonly transactions: Pick<ScopedPostgresTransactionRunner, 'run'>,
     private readonly hashSecret: string,
-    private readonly randomToken: () => string = () => randomBytes(32).toString('base64url'),
+    private readonly randomToken: () => string = () => randomBytes(24).toString('base64url'),
   ) {
     if (hashSecret.length < 32) throw new TypeError('桌码哈希密钥至少需要32个字符')
   }

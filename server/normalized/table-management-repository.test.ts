@@ -3,7 +3,9 @@ import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
-import { StaffAccessRepository, type EffectiveStaffAccess } from './staff-access-repository.js'
+import {
+  StaffAccessDeniedError,StaffAccessRepository,type EffectiveStaffAccess,
+} from './staff-access-repository.js'
 import {
   CapacityOverrideReasonRequiredError,
   TableManagementCommandService,
@@ -21,6 +23,29 @@ describe('table management authorization rules', () => {
     expect(canViewAllTables(access(['table.open'], ['WAITER']))).toBe(true)
     expect(canViewAllTables(access([], ['STORE_MANAGER']))).toBe(true)
     expect(canViewAllTables(access([], ['WAITER']))).toBe(false)
+  })
+
+  it('maps a permission revoked inside the movement transaction to staff access denied', async () => {
+    const scope={ tenantId:randomUUID(),storeId:randomUUID() }
+    const participantPublicId='participant-permission-race'
+    const transaction={ scope,query:async <Row extends Record<string,unknown>>(sql:string) => {
+      if (sql.includes('pg_advisory_xact_lock')) return { rows:[] as Row[],rowCount:0 }
+      if (sql.includes('FROM mbox.table_customer_movement_events event')) {
+        return { rows:[] as Row[],rowCount:0 }
+      }
+      if (sql.includes('participation.public_id=ANY')) return { rows:[{
+        id:randomUUID(),public_id:participantPublicId,participation_role:'companion',
+        confirmation_state:'confirmed',
+      } as Row],rowCount:1 }
+      if (sql.includes('execute_table_customer_movement')) throw Object.assign(new Error('revoked'),{ code:'42501' })
+      throw new Error(`Unexpected query: ${sql}`)
+    } }
+    await expect(new TableManagementRepository(transaction).moveParticipants({
+      movementKind:'participant_merge',sourceTableSessionId:randomUUID(),
+      targetTableSessionId:randomUUID(),targetTableId:randomUUID(),movedGuestCount:1,
+      participantPublicIds:[participantPublicId],movedByEmployeeId:randomUUID(),
+      reason:'顾客确认并桌',idempotencyKey:'permission-race-0001',requestFingerprint:'permission-race',
+    })).rejects.toBeInstanceOf(StaffAccessDeniedError)
   })
 })
 
@@ -106,7 +131,7 @@ integration('normalized table management PostgreSQL concurrency', () => {
       FROM mbox.role_permission_assignments
       WHERE tenant_id = $1 AND store_id = $2 AND role_id = $3
     `, [tenantId, storeId, managerRoleId])
-    expect(accessSeed.rows[0]?.permission_count).toBe('5')
+    expect(accessSeed.rows[0]?.permission_count).toBe('6')
   })
 
   afterAll(async () => {

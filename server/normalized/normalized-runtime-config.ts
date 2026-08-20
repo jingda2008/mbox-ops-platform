@@ -23,9 +23,31 @@ export interface NormalizedPaymentRuntimeConfig {
   }
 }
 
+export interface NormalizedWechatIdentityRuntimeConfig {
+  appId: string
+  appSecret: string
+  stateSecret: string
+  encryptionKeyVersion: number
+  encryptionKey: Buffer
+}
+
+export interface NormalizedWechatNotificationRuntimeConfig {
+  serviceTemplateId: string
+  policyVersion: string
+}
+
+export interface NormalizedPersonalContactRuntimeConfig {
+  activeKeyId: string
+  activeKey: Buffer
+  lookupKey: Buffer
+  legacyPhoneLookupKey: Buffer
+  previousKeys: readonly Readonly<{ keyId: string; key: Buffer }>[]
+}
+
 export interface NormalizedRuntimeConfig {
   nodeEnv: 'development' | 'test' | 'production'
   deploymentTier: 'validation' | 'production'
+  runtimeRole?: 'normal' | 'contract_candidate'
   databaseUrl: string
   tenantId: string
   storeId: string
@@ -34,6 +56,9 @@ export interface NormalizedRuntimeConfig {
   configVersion: typeof NORMALIZED_RUNTIME_CONFIG_VERSION
   integrations: NormalizedIntegrationContract
   payment: NormalizedPaymentRuntimeConfig | null
+  wechatIdentity: NormalizedWechatIdentityRuntimeConfig | null
+  wechatNotification: NormalizedWechatNotificationRuntimeConfig | null
+  personalContactProtection?: NormalizedPersonalContactRuntimeConfig | null
   guestPaymentMode: GuestCheckoutPaymentMode
   inventoryEnforcementMode: 'strict' | 'audit_only'
   guestOrderSafetyPolicy: Readonly<GuestOrderSafetyPolicy>
@@ -73,6 +98,7 @@ export function loadNormalizedRuntimeConfig(
     errors,
   )
   const commercialProduction = deploymentTier === 'production'
+  const runtimeRole = readRuntimeRole(environment.MBOX_RUNTIME_ROLE,errors)
   const databaseUrl = required(environment.DATABASE_URL, 'DATABASE_URL', errors)
   const tenantId = requiredUuid(environment.MBOX_TENANT_ID, 'MBOX_TENANT_ID', errors)
   const storeId = requiredUuid(environment.MBOX_STORE_ID, 'MBOX_STORE_ID', errors)
@@ -85,6 +111,11 @@ export function loadNormalizedRuntimeConfig(
     errors,
   )
   const payment = readPayment(environment, integrations.modes.payment, errors)
+  const wechatIdentity = readWechatIdentity(environment, errors)
+  const wechatNotification = readWechatNotification(environment, errors)
+  const personalContactProtection = readPersonalContactProtection(
+    environment,commercialProduction,errors,
+  )
   const guestPaymentMode = readGuestPaymentMode(
     environment.MBOX_GUEST_PAYMENT_MODE,
     commercialProduction,
@@ -92,6 +123,10 @@ export function loadNormalizedRuntimeConfig(
   )
   if (guestPaymentMode === 'wechat_jsapi' && payment?.wechat === null) {
     errors.push('POSTAR_WECHAT_APP_ID', 'POSTAR_WECHAT_TRADE_TYPE')
+  }
+  if (guestPaymentMode === 'wechat_jsapi' && payment !== null && payment.wechat !== null
+    && wechatIdentity !== null && payment.wechat.appId !== wechatIdentity.appId) {
+    errors.push('MBOX_WECHAT_APP_ID', 'POSTAR_WECHAT_APP_ID')
   }
   const inventoryEnforcementMode = readInventoryEnforcementMode(
     environment.MBOX_INVENTORY_ENFORCEMENT_MODE,
@@ -136,7 +171,12 @@ export function loadNormalizedRuntimeConfig(
   const releaseImageDigest = readImageDigest(environment.MBOX_RELEASE_IMAGE_DIGEST, errors)
   const staticDir = optional(environment.MBOX_STATIC_DIR)
   const startWorkers = readBoolean(environment.MBOX_START_WORKERS, false, 'MBOX_START_WORKERS', errors)
-  if (commercialProduction && !startWorkers) errors.push('MBOX_START_WORKERS')
+  if (commercialProduction && !startWorkers && runtimeRole!=='contract_candidate') {
+    errors.push('MBOX_START_WORKERS')
+  }
+  if (runtimeRole==='contract_candidate' && (!commercialProduction || startWorkers)) {
+    errors.push('MBOX_RUNTIME_ROLE','MBOX_START_WORKERS')
+  }
   const workerId = readWorkerId(environment.MBOX_WORKER_ID, startWorkers, errors)
   const workerIntervalMs = readInteger(
     environment.MBOX_WORKER_INTERVAL_MS,
@@ -157,6 +197,7 @@ export function loadNormalizedRuntimeConfig(
   return Object.freeze({
     nodeEnv,
     deploymentTier,
+    runtimeRole,
     databaseUrl,
     tenantId,
     storeId,
@@ -165,6 +206,9 @@ export function loadNormalizedRuntimeConfig(
     configVersion: NORMALIZED_RUNTIME_CONFIG_VERSION,
     integrations,
     payment,
+    wechatIdentity,
+    wechatNotification,
+    personalContactProtection,
     guestPaymentMode,
     inventoryEnforcementMode,
     guestOrderSafetyPolicy,
@@ -182,6 +226,131 @@ export function loadNormalizedRuntimeConfig(
     workerIntervalMs,
     workerAdapterModule,
   })
+}
+
+function readRuntimeRole(value:string|undefined,errors:string[]):NormalizedRuntimeConfig['runtimeRole']{
+  const normalized=optional(value) ?? 'normal'
+  if (normalized==='normal' || normalized==='contract_candidate') return normalized
+  errors.push('MBOX_RUNTIME_ROLE')
+  return 'normal'
+}
+
+function readPersonalContactProtection(
+  environment: Readonly<Record<string, string | undefined>>,
+  requiredForProduction: boolean,
+  errors: string[],
+): NormalizedPersonalContactRuntimeConfig | null {
+  const activeKeyId = optional(environment.MBOX_CONTACT_ACTIVE_KEY_ID)
+  const activeKeyRaw = optional(environment.MBOX_CONTACT_ACTIVE_KEY_BASE64)
+  const lookupKeyRaw = optional(environment.MBOX_CONTACT_LOOKUP_KEY_BASE64)
+  const legacyPhoneLookupKeyRaw = optional(environment.MBOX_CONTACT_LEGACY_PHONE_LOOKUP_KEY_BASE64)
+  const previousRaw = optional(environment.MBOX_CONTACT_PREVIOUS_KEYS)
+  if (activeKeyId === null && activeKeyRaw === null && lookupKeyRaw === null
+    && legacyPhoneLookupKeyRaw === null && previousRaw === null) {
+    if (requiredForProduction) {
+      errors.push('MBOX_CONTACT_ACTIVE_KEY_ID','MBOX_CONTACT_ACTIVE_KEY_BASE64',
+        'MBOX_CONTACT_LOOKUP_KEY_BASE64','MBOX_CONTACT_LEGACY_PHONE_LOOKUP_KEY_BASE64',
+        'MBOX_CONTACT_PREVIOUS_KEYS')
+    }
+    return null
+  }
+  if (activeKeyId === null || !/^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/.test(activeKeyId)
+    || activeKeyId === 'normalized-contact-v1' || activeKeyId === 'normalized-phone-v1') {
+    errors.push('MBOX_CONTACT_ACTIVE_KEY_ID')
+  }
+  const activeKey = decodeContactKey(activeKeyRaw,'MBOX_CONTACT_ACTIVE_KEY_BASE64',errors)
+  const lookupKey = decodeContactKey(lookupKeyRaw,'MBOX_CONTACT_LOOKUP_KEY_BASE64',errors)
+  const legacyPhoneLookupKey = decodeContactKey(
+    legacyPhoneLookupKeyRaw,'MBOX_CONTACT_LEGACY_PHONE_LOOKUP_KEY_BASE64',errors,
+  )
+  const previousKeys: Array<{ keyId: string; key: Buffer }> = []
+  if (requiredForProduction && previousRaw===null) errors.push('MBOX_CONTACT_PREVIOUS_KEYS')
+  if (previousRaw !== null) {
+    for (const item of previousRaw.split(';').map((value) => value.trim()).filter(Boolean)) {
+      const separator = item.indexOf('=')
+      const keyId = separator < 0 ? '' : item.slice(0,separator)
+      const encoded = separator < 0 ? '' : item.slice(separator+1)
+      const key = decodeContactKey(encoded,'MBOX_CONTACT_PREVIOUS_KEYS',errors)
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/.test(keyId)
+        || keyId === activeKeyId || previousKeys.some((entry) => entry.keyId === keyId)) {
+        errors.push('MBOX_CONTACT_PREVIOUS_KEYS')
+      } else if (key !== null) previousKeys.push({ keyId,key })
+    }
+  }
+  if (activeKeyId === null || activeKey === null || lookupKey === null
+    || legacyPhoneLookupKey === null) return null
+  return Object.freeze({
+    activeKeyId,activeKey,lookupKey,legacyPhoneLookupKey,
+    previousKeys:Object.freeze(previousKeys),
+  })
+}
+
+function decodeContactKey(value: string | null, field: string, errors: string[]): Buffer | null {
+  if (value === null) { errors.push(field); return null }
+  const key = Buffer.from(value,'base64')
+  if (key.length !== 32 || key.toString('base64') !== value) {
+    errors.push(field)
+    return null
+  }
+  return key
+}
+
+function readWechatNotification(
+  environment: Readonly<Record<string, string | undefined>>,
+  errors: string[],
+): NormalizedWechatNotificationRuntimeConfig | null {
+  const serviceTemplateId = optional(environment.MBOX_WECHAT_SERVICE_TEMPLATE_ID)
+  const policyVersion = optional(environment.MBOX_WECHAT_NOTIFICATION_POLICY_VERSION)
+  if (serviceTemplateId === null && policyVersion === null) return null
+  if (serviceTemplateId === null || !/^[A-Za-z0-9_-]{8,128}$/.test(serviceTemplateId)) {
+    errors.push('MBOX_WECHAT_SERVICE_TEMPLATE_ID')
+  }
+  if (policyVersion === null || !/^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/.test(policyVersion)) {
+    errors.push('MBOX_WECHAT_NOTIFICATION_POLICY_VERSION')
+  }
+  if (serviceTemplateId === null || policyVersion === null) return null
+  return Object.freeze({ serviceTemplateId, policyVersion })
+}
+
+function readWechatIdentity(
+  environment: Readonly<Record<string, string | undefined>>,
+  errors: string[],
+): NormalizedWechatIdentityRuntimeConfig | null {
+  const enabled = readBoolean(environment.MBOX_WECHAT_ENABLED, false, 'MBOX_WECHAT_ENABLED', errors)
+  const appId = optional(environment.MBOX_WECHAT_APP_ID)
+  const appSecret = optional(environment.MBOX_WECHAT_APP_SECRET)
+  const stateSecret = optional(environment.MBOX_WECHAT_STATE_SECRET)
+  const keyVersionRaw = optional(environment.MBOX_WECHAT_ENCRYPTION_KEY_VERSION)
+  const keyRaw = optional(environment.MBOX_WECHAT_ENCRYPTION_KEY_BASE64)
+  const anyField = appId !== null || appSecret !== null || stateSecret !== null
+    || keyVersionRaw !== null || keyRaw !== null
+
+  if (!enabled) {
+    if (anyField) errors.push('MBOX_WECHAT_ENABLED')
+    return null
+  }
+  if (appId === null || !/^wx[A-Za-z0-9_-]{4,126}$/.test(appId)) errors.push('MBOX_WECHAT_APP_ID')
+  if (appSecret === null || appSecret.length < 16) errors.push('MBOX_WECHAT_APP_SECRET')
+  if (stateSecret === null || Buffer.byteLength(stateSecret, 'utf8') < 32) errors.push('MBOX_WECHAT_STATE_SECRET')
+  const keyVersion = Number(keyVersionRaw)
+  if (!Number.isSafeInteger(keyVersion) || keyVersion < 1) errors.push('MBOX_WECHAT_ENCRYPTION_KEY_VERSION')
+  let encryptionKey: Buffer | null = null
+  if (keyRaw === null) {
+    errors.push('MBOX_WECHAT_ENCRYPTION_KEY_BASE64')
+  } else {
+    try {
+      encryptionKey = Buffer.from(keyRaw, 'base64')
+    } catch {
+      encryptionKey = null
+    }
+    if (encryptionKey === null || encryptionKey.length !== 32 || encryptionKey.toString('base64') !== keyRaw) {
+      errors.push('MBOX_WECHAT_ENCRYPTION_KEY_BASE64')
+      encryptionKey = null
+    }
+  }
+  if (appId === null || appSecret === null || stateSecret === null
+    || !Number.isSafeInteger(keyVersion) || keyVersion < 1 || encryptionKey === null) return null
+  return Object.freeze({ appId, appSecret, stateSecret, encryptionKeyVersion: keyVersion, encryptionKey })
 }
 
 function readImageDigest(value: string | undefined, errors: string[]): string | null {

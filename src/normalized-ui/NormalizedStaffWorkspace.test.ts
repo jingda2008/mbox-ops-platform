@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { StaffBootstrapView } from '../shared/normalized-contracts'
-import { NormalizedStaffWorkspaceView } from './NormalizedStaffWorkspace'
+import { NormalizedStaffWorkspaceView, StaffBottomNavigation } from './NormalizedStaffWorkspace'
 import { initialWorkspaceState, workspaceReducer } from './workspace-model'
 
 function view(): StaffBootstrapView {
@@ -65,6 +65,35 @@ describe('NormalizedStaffWorkspaceView', () => {
     expect(html).not.toContain('库存/存酒')
   })
 
+  it('keeps employee switching reachable from the home top bar', () => {
+    const state = workspaceReducer(initialWorkspaceState(), {
+      type: 'bootstrap-ready', bootstrap: view(), etag: 'etag-session-actions',
+    })
+    const html = renderToStaticMarkup(createElement(NormalizedStaffWorkspaceView, {
+      state,
+      ...callbacks,
+      sessionControls: createElement('button', { type: 'button' }, '李艳 · 切换员工'),
+    }))
+
+    expect(html).toContain('normalized-topbar-actions')
+    expect(html).toContain('李艳 · 切换员工')
+  })
+
+  it('keeps employee switching reachable when workspace data cannot load', () => {
+    const state = workspaceReducer(initialWorkspaceState(), {
+      type: 'bootstrap-error', message: '工作台数据暂时不可用', loginRequired: false,
+    })
+    const html = renderToStaticMarkup(createElement(NormalizedStaffWorkspaceView, {
+      state,
+      ...callbacks,
+      sessionControls: createElement('button', { type: 'button' }, '李艳 · 切换员工'),
+    }))
+
+    expect(html).toContain('normalized-gate-session')
+    expect(html).toContain('李艳 · 切换员工')
+    expect(html).toContain('工作台数据暂时不可用')
+  })
+
   it('keeps every authorized navigation entry reachable beyond the first five items', () => {
     const bootstrap = view()
     bootstrap.navigation = [
@@ -81,6 +110,20 @@ describe('NormalizedStaffWorkspaceView', () => {
 
     expect(html).toContain('系统配置')
     expect(html).toContain('当前岗位全部入口')
+  })
+
+  it('renders the authorized bottom shortcuts independently from the home workspace', () => {
+    const html = renderToStaticMarkup(createElement(StaffBottomNavigation, {
+      entries: view().navigation,
+      activeRoute: '/staff/tasks',
+      onNavigate: callbacks.onNavigate,
+    }))
+
+    expect(html).toContain('岗位快捷功能')
+    expect(html).toContain('现场')
+    expect(html).toContain('任务')
+    expect(html).toContain('aria-current="page"')
+    expect(html).toContain('aria-label="全部岗位入口"')
   })
 
   it('does not expose a second raw-data sheet beside the executable role pages', () => {
@@ -108,6 +151,21 @@ describe('NormalizedStaffWorkspaceView', () => {
     expect(html).toContain('营业桌台')
     expect(html).toContain('进行中')
     expect(html).not.toContain('0<small>已就绪</small>')
+  })
+
+  it('labels unresolved work from a previous business day as handover instead of a current-day anomaly', () => {
+    const bootstrap = view()
+    bootstrap.domainSummaries = [
+      { key: 'fulfillment', label: '出品履约', activeCount: 1, attentionCount: 0, readyCount: 0, carryoverCount: 2, endpointRef: '/api/commerce/fulfillment' },
+    ]
+    const state = workspaceReducer(initialWorkspaceState(), {
+      type: 'bootstrap-ready', bootstrap, etag: 'etag-carryover',
+    })
+    const html = render(state)
+
+    expect(html).toContain('交班遗留')
+    expect(html).toContain('2 项上个营业日遗留')
+    expect(html).toContain('1 项今日进行中')
   })
 
   it('keeps the login-expired state explicit instead of presenting a false workspace', () => {

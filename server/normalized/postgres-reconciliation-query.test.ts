@@ -20,10 +20,7 @@ describe('PostgresReconciliationQuery', () => {
 
     expect(first.entries).toHaveLength(2)
     expect(first.nextCursor).not.toBeNull()
-    expect(first.entries[0]?.evidenceSnapshot).toEqual({
-      signatureVerified: true,
-      transactionState: '1',
-    })
+    expect(first.entries[0]?.evidenceSnapshot).toEqual({ transactionState: '1' })
     expect(JSON.stringify(first.entries)).not.toContain('customer-phone')
     expect(runner.lastCall?.sql).toContain('tenant_id = $1::uuid')
     expect(runner.lastCall?.sql).toContain('ORDER BY occurred_at DESC, id DESC')

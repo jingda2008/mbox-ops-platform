@@ -189,7 +189,7 @@ export function CashierAfterSalesWorkbenchView({
       `refund-request-${payment.id}`,
       `/api/payments/${encodeURIComponent(payment.id)}/refunds`,
       { reason: refundDraft.reason, allocations, requestEvidence: { source: 'cashier_workbench' } },
-      '退款申请已提交，等待另一位有权限员工审批。',
+      '退款申请已提交，等待收银复核。',
     )
     if (completed) setRefundDraft(null)
   }
@@ -223,8 +223,9 @@ export function CashierAfterSalesWorkbenchView({
     <div className="cashier-workbench-summary" aria-label="本营业日售后摘要">
       <span><b>{view.summary.orderCount}</b><small>订单</small></span>
       <span><b>{view.summary.capturedPaymentCount}</b><small>已收款</small></span>
-      <span className={view.summary.requestedRefundCount > 0 ? 'has-attention' : ''}><b>{view.summary.requestedRefundCount}</b><small>待审批</small></span>
+      <span className={view.summary.requestedRefundCount > 0 ? 'has-attention' : ''}><b>{view.summary.requestedRefundCount}</b><small>待复核</small></span>
       <span className={view.summary.processingRefundCount > 0 ? 'has-attention' : ''}><b>{view.summary.processingRefundCount}</b><small>待执行</small></span>
+      {(view.summary.carryoverOrderCount ?? 0) > 0 && <span className="has-attention"><b>{view.summary.carryoverOrderCount}</b><small>交班遗留</small></span>}
     </div>
 
     {view.orders.length === 0
@@ -239,11 +240,12 @@ export function CashierAfterSalesWorkbenchView({
                 aria-expanded={expanded}
                 onClick={() => setExpandedOrderId(expanded ? null : order.id)}
               >
-                <span><b>{order.tableCode}</b><small>{shortReference(order.publicId)} · {formatTime(order.submittedAt ?? order.createdAt)}</small></span>
+                <span><b>{order.tableCode}</b><small>{order.carryover ? `${order.businessDate ?? '前一营业日'}遗留 · ` : ''}{shortReference(order.publicId)} · {formatTime(order.submittedAt ?? order.createdAt)}</small></span>
                 <span><strong>¥{formatAmount(order.totalAmountMinor)}</strong><em>{paymentStatusLabel(order.paymentStatus)}</em></span>
                 <ChevronDown size={18} className={expanded ? 'is-open' : ''} />
               </button>
               {expanded && <div className="cashier-order-detail">
+                {order.carryover && <p className="cashier-guidance">这是前一营业日尚未闭环的退款事项；处理结果继续记在原订单，不会并入今日营业额。</p>}
                 <section>
                   <h3>原订单商品</h3>
                   {order.items.map((item) => <div className="cashier-line" key={item.id}>
@@ -343,7 +345,7 @@ function PaymentBlock({
     </div>
 
     {actions.canRequestRefund && payment.remainingRefundableMinor > 0 && !drafting && <button type="button" className="cashier-secondary-action" onClick={() => onOpenRefund(payment)}>
-      选择原商品申请退款
+      选择原商品发起退款
     </button>}
 
     {drafting && <div className="cashier-refund-form">
@@ -368,7 +370,7 @@ function PaymentBlock({
         </label>
       })}
       <label className="cashier-field"><span>退款原因</span><textarea value={refundDraft.reason} maxLength={1_000} placeholder="例如：商品未出品，客人取消" onChange={(event) => onRefundReason(event.target.value)} /></label>
-      <div className="cashier-form-total"><span>本次申请</span><strong>¥{formatAmount(selectedTotal)}</strong></div>
+      <div className="cashier-form-total"><span>本次发起</span><strong>¥{formatAmount(selectedTotal)}</strong></div>
       {selectedTotal > payment.remainingRefundableMinor && <p className="cashier-inline-error">所选金额超过该支付单剩余可退额。</p>}
       {drafting && Object.entries(refundDraft.amounts).some(([itemId, amount]) => {
         const amountMinor = yuanToMinor(amount)
@@ -378,7 +380,7 @@ function PaymentBlock({
       <div className="cashier-action-row">
         <button type="button" className="cashier-quiet-action" onClick={onCancelRefund}><X size={17} />取消</button>
         <button type="button" className="cashier-primary-action" disabled={!validRefund || busyKey !== null} onClick={() => void onSubmitRefund(payment)}>
-          {busyKey === `refund-request-${payment.id}` ? <LoaderCircle className="is-spinning" size={17} /> : <Send size={17} />}提交申请
+          {busyKey === `refund-request-${payment.id}` ? <LoaderCircle className="is-spinning" size={17} /> : <Send size={17} />}提交退款
         </button>
       </div>
     </div>}
@@ -432,17 +434,17 @@ function RefundBlock({
   const canRecordManual = refund.status === 'processing' && actions.canExecuteRefund && manualProvider
   return <div className={`cashier-refund-row is-${refund.status}`}>
     <div className="cashier-refund-heading">
-      <span><b>退款 ¥{formatAmount(refund.amountMinor)}</b><small>{refundStatusLabel(refund.status)} · {refund.requestedByEmployeeName}申请</small></span>
+      <span><b>退款 ¥{formatAmount(refund.amountMinor)}</b><small>{refundStatusLabel(refund.status)} · {refund.requestedByEmployeeName}发起</small></span>
       <Clock3 size={17} />
     </div>
     <p>{refund.reason}</p>
-    {refund.decisionReason && <small>审批说明：{refund.decisionReason}</small>}
+    {refund.decisionReason && <small>复核说明：{refund.decisionReason}</small>}
     {refund.receiptReference && <small>退款凭证：{refund.receiptReference}</small>}
 
-    {refund.status === 'requested' && ownRequest && <p className="cashier-guidance">申请人不能审批自己的退款，请另一位有权限员工处理。</p>}
-    {refund.status === 'requested' && !actions.canApproveRefund && <p className="cashier-guidance">等待店长或其他有审批权限的员工处理。</p>}
+    {refund.status === 'requested' && ownRequest && <p className="cashier-guidance">发起人不能复核自己的退款，请交给收银处理。</p>}
+    {refund.status === 'requested' && !actions.canApproveRefund && <p className="cashier-guidance">等待具备退款复核权限和额度的收银处理。</p>}
     {canDecide && <div className="cashier-decision-form">
-      <label className="cashier-field"><span>审批说明</span><input value={decisionReason} placeholder="核对商品、金额和原因" onChange={(event) => onDecisionReason(refund.id, event.target.value)} /></label>
+      <label className="cashier-field"><span>复核说明</span><input value={decisionReason} placeholder="核对原支付、商品、金额和原因" onChange={(event) => onDecisionReason(refund.id, event.target.value)} /></label>
       <div className="cashier-action-row">
         <button
           type="button"
@@ -454,7 +456,7 @@ function RefundBlock({
             { reason: decisionReason },
             '退款申请已驳回，可由申请人更正后重新提交。',
           )}
-        ><X size={17} />驳回</button>
+        ><X size={17} />复核驳回</button>
         <button
           type="button"
           className="cashier-primary-action"
@@ -463,9 +465,9 @@ function RefundBlock({
             `refund-approve-${refund.id}`,
             `/api/refunds/${encodeURIComponent(refund.id)}/approve`,
             { reason: decisionReason },
-            '退款已审批，下一步仍需人工执行或等待支付渠道。',
+            '退款已复核通过，下一步仍需执行退款或等待支付渠道。',
           )}
-        ><Check size={17} />同意</button>
+        ><Check size={17} />复核通过</button>
       </div>
     </div>}
 
@@ -552,7 +554,7 @@ function paymentStatusLabel(value: string): string {
   return ({ created: '待提交', pending: '待支付', succeeded: '已收款', failed: '支付失败', closed: '已关闭', partially_refunded: '部分已退', refunded: '已全退', unpaid: '未支付', partially_paid: '部分支付', paid: '已支付' } as Record<string, string>)[value] ?? value
 }
 function refundStatusLabel(value: string): string {
-  return ({ requested: '待审批', approved: '已审批待执行', rejected: '已驳回', processing: '处理中', succeeded: '已退款', failed: '退款失败', cancelled: '已取消' } as Record<string, string>)[value] ?? value
+  return ({ requested: '待收银复核', approved: '复核通过待执行', rejected: '复核驳回', processing: '处理中', succeeded: '已退款', failed: '退款失败', cancelled: '已取消' } as Record<string, string>)[value] ?? value
 }
 function itemStatusLabel(value: string): string {
   return ({ submitted: '已下单', accepted: '已接单', preparing: '制作中', ready: '待送达', delivered: '已送达', cancelled: '已取消' } as Record<string, string>)[value] ?? value

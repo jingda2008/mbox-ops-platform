@@ -2,25 +2,44 @@
   "pages": [
     "pages/home/index",
     "pages/reservations/index",
-    "pages/service/index",
+    "pages/order/index",
+    "pages/community/index",
+    "pages/community-detail/index",
+    "pages/profile/index",
+    "pages/points/index",
+    "pages/membership-terms/index",
     "pages/account/index",
-    "pages/complaint/index",
-    "pages/member/index",
-    "pages/songs/index",
+    "pages/service/index",
     "pages/status/index",
+    "pages/complaint/index",
+    "pages/songs/index",
     "pages/privacy/index"
   ],
   "window": {
-    "navigationBarBackgroundColor": "#111214",
+    "navigationBarBackgroundColor": "#211e1a",
     "navigationBarTextStyle": "white",
     "navigationBarTitleText": "M-Box 桌台服务",
-    "backgroundColor": "#f4f5f7",
+    "backgroundColor": "#f7f4ef",
     "backgroundTextStyle": "dark"
+  },
+  "tabBar": {
+    "color": "#7b746c",
+    "selectedColor": "#765332",
+    "backgroundColor": "#fffdfa",
+    "borderStyle": "black",
+    "list": [
+      { "pagePath": "pages/home/index", "text": "首页" },
+      { "pagePath": "pages/reservations/index", "text": "预约" },
+      { "pagePath": "pages/order/index", "text": "点单" },
+      { "pagePath": "pages/community/index", "text": "超嗨" },
+      { "pagePath": "pages/profile/index", "text": "我的" }
+    ]
   },
   "usingComponents": {
     "state-panel": "/components/state-panel/index"
   },
   "style": "v2",
   "sitemapLocation": "sitemap.json",
-  "lazyCodeLoading": "requiredComponents"
+  "lazyCodeLoading": "requiredComponents",
+  "__usePrivacyCheck__": true
 }

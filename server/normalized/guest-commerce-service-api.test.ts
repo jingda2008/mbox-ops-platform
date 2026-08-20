@@ -21,6 +21,9 @@ import {
 import type { Payment } from './payment-repository.js'
 import { OnlinePaymentUnknownError } from './online-payment-service.js'
 import { PostarPaymentRejectedError } from '../postar-adapter.js'
+import { FulfillmentCapacityUnavailableError } from './fulfillment-capacity-repository.js'
+import { ServiceTaskRepository } from './service-task-repository.js'
+import { seedActiveGuestTableAuthority } from './guest-table-authority.test-helper.js'
 import {
   ScopedPostgresTransactionRunner,
   type PostgresPool,
@@ -51,7 +54,7 @@ const context: GuestRequestContext = {
   businessDate: '2026-08-11',
   expiresAt: '2026-08-11T15:00:00.000Z',
   capabilities: ['guest.session.read', 'guest.menu.read', 'guest.order.create', 'guest.service.create'],
-  actorRef: 'guest-session:api-unit-test-session',
+  actorRef: 'guest-session:99999999-9999-4999-8999-999999999999',
 }
 
 const apps: FastifyInstance[] = []
@@ -98,12 +101,15 @@ describe('guest commerce/service API trust boundaries', () => {
       expect.stringContaining('product.search_text ILIKE'),
       expect.arrayContaining(['qingdao']),
     )
-    expect(value.query.mock.calls[0]?.[0]).toContain('product.recommendation_priority DESC')
-    expect(value.query.mock.calls[0]?.[0]).not.toContain("product.product_snapshot -> 'recommendation'")
+    const catalogSql = value.query.mock.calls.find(([sql]) => sql.includes('product.recommendation_priority'))?.[0]
+    expect(catalogSql).toContain('product.recommendation_priority DESC')
+    expect(catalogSql).toContain('product.recommendation_beverage_family')
+    expect(catalogSql).not.toContain("product.product_snapshot -> 'recommendation'")
     expect(response.json()).toMatchObject({
       data: [{
         productId,
         name: '青岛啤酒',
+        beverageFamily: 'beer',
         specification: '330ml',
         amountMinor: 6800,
         available: true,
@@ -112,6 +118,21 @@ describe('guest commerce/service API trust boundaries', () => {
       meta: { partySize: 2, recommendationScene: 'date' },
     })
     expect(response.body).not.toMatch(/internalCost|costAmount|grossMargin|contributionAmount|catalogContributionScore|contributionPositive/)
+  })
+
+  it('does not read table-scoped menu context after the exact guest position is revoked', async () => {
+    const query = vi.fn(async () => ({ rows: [{ participation_id: null }], rowCount: 1 }))
+    const value = fixture({
+      transactions: {
+        run: vi.fn(async (_scope, operation) => operation({
+          scope: context.scope, query,
+        } as unknown as ScopedTransaction)),
+      },
+    })
+    const response = await value.app.inject({ method: 'GET', url: '/api/guest/menu/products' })
+    expect(response.statusCode).toBe(401)
+    expect(query).toHaveBeenCalledOnce()
+    expect(query.mock.calls[0]?.[0]).toContain('lock_active_table_guest_session_position')
   })
 
   it('rejects client-supplied identity, table, scope and price fields before creating an order', async () => {
@@ -155,7 +176,10 @@ describe('guest commerce/service API trust boundaries', () => {
     expect(value.payments.initiate).toHaveBeenCalledWith(expect.objectContaining({
       provider: 'postar',
       method: 'jsapi',
-      principal: { type: 'guest', tableSessionId, customerId },
+      principal: {
+        type: 'guest',tableSessionId,customerId,
+        guestSessionId:'99999999-9999-4999-8999-999999999999',
+      },
     }))
     expect(response.json()).toMatchObject({
       data: {
@@ -176,6 +200,65 @@ describe('guest commerce/service API trust boundaries', () => {
         },
       },
     })
+  })
+
+  it('passes a checkout upgrade reference into the single atomic order command', async () => {
+    const value = fixture()
+    const response = await value.app.inject({
+      method: 'POST',
+      url: '/api/guest/orders',
+      headers: { 'idempotency-key': 'guest-order-upgrade-atomic-0001' },
+      payload: {
+        items: [{ productId, quantity: 1 }],
+        checkoutUpgradeOfferPublicId: 'checkout-upgrade-public-0001',
+      },
+    })
+
+    expect(response.statusCode).toBe(201)
+    expect(value.commerce.submitOrder).toHaveBeenCalledOnce()
+    expect(value.commerce.submitOrder).toHaveBeenCalledWith(expect.objectContaining({
+      lines: [{ productId, quantity: 1, note: null }],
+      checkoutUpgradeOfferPublicId: 'checkout-upgrade-public-0001',
+    }))
+  })
+
+  it('forwards an optional server recommendation attribution into the order command', async () => {
+    const value = fixture()
+    const response = await value.app.inject({
+      method: 'POST',
+      url: '/api/guest/orders',
+      headers: { 'idempotency-key': 'guest-order-recommendation-0001' },
+      payload: {
+        items: [{ productId, quantity: 1 }],
+        recommendationPublicId: 'recommendation-public-0001',
+        selectedRecommendationProductId: productId,
+      },
+    })
+
+    expect(response.statusCode).toBe(201)
+    expect(value.commerce.submitOrder).toHaveBeenCalledWith(expect.objectContaining({
+      recommendationAttribution: {
+        recommendationPublicId: 'recommendation-public-0001',
+        selectedProductId: productId,
+      },
+    }))
+  })
+
+  it('rejects a partial recommendation attribution without invoking commerce', async () => {
+    const value = fixture()
+    const response = await value.app.inject({
+      method: 'POST',
+      url: '/api/guest/orders',
+      headers: { 'idempotency-key': 'guest-order-recommendation-invalid-0001' },
+      payload: {
+        items: [{ productId, quantity: 1 }],
+        recommendationPublicId: 'recommendation-public-0001',
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({ error: { code: 'RECOMMENDATION_ATTRIBUTION_INVALID' } })
+    expect(value.commerce.submitOrder).not.toHaveBeenCalled()
   })
 
   it('does not create a guest order when the store has closed online payment', async () => {
@@ -257,6 +340,31 @@ describe('guest commerce/service API trust boundaries', () => {
     expect(limited.payments.initiate).not.toHaveBeenCalled()
   })
 
+  it('returns a stable capacity error without starting payment', async () => {
+    const value = fixture({
+      commerce: {
+        submitOrder: vi.fn(async () => {
+          throw new FulfillmentCapacityUnavailableError(
+            'FULFILLMENT_CAPACITY_EXCEEDED',
+            '该出品时段的可用产能已满，请稍后重试或调整商品',
+          )
+        }),
+      } as never,
+    })
+    const response = await value.app.inject({
+      method: 'POST',
+      url: '/api/guest/orders',
+      headers: { 'idempotency-key': 'guest-order-capacity-0001' },
+      payload: { items: [{ productId, quantity: 1 }] },
+    })
+
+    expect(response.statusCode).toBe(409)
+    expect(response.json()).toMatchObject({ error: {
+      code: 'FULFILLMENT_CAPACITY_EXCEEDED',
+    } })
+    expect(value.payments.initiate).not.toHaveBeenCalled()
+  })
+
   it('shares table order settlement state without payer identity or provider evidence', async () => {
     const value = fixture()
     const response = await value.app.inject({ method: 'GET', url: '/api/guest/orders/table' })
@@ -264,6 +372,7 @@ describe('guest commerce/service API trust boundaries', () => {
     expect(response.statusCode).toBe(200)
     expect(response.json()).toMatchObject({ data: [{
       publicId: 'shared-order-0001', round: 1, visibility: 'shared', isMine: false,
+      pricingKind: 'gift', pricingLabel: '门店赠送',
       paymentAccess: 'available',
       items: [{ productId, name: '青岛啤酒', quantity: 2, status: 'preparing' }],
     }] })
@@ -272,13 +381,19 @@ describe('guest commerce/service API trust boundaries', () => {
 
   it('continues the employee-created QR payment on a guest phone without creating a second payment', async () => {
     const query = vi.fn(async (sql: string) => {
+      if (sql.includes('lock_active_table_guest_session_position')) {
+        return { rows: [{ participation_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }], rowCount:1 }
+      }
       if (sql.includes('SELECT ordering.id AS order_id')) {
         return { rows: [{ order_id: orderId, payment_id: paymentId }], rowCount: 1 }
       }
-      if (sql.includes('SELECT payment.id, payment.order_id')) {
+      if (sql.includes('SELECT payment.id, payment.payable_kind, payment.order_id')) {
         return { rows: [{
           id: paymentId,
+          payable_kind: 'order',
           order_id: orderId,
+          activity_registration_id: null,
+          activity_registration_public_id: null,
           order_public_id: 'staff-order-public-0001',
           public_id: 'staff-payment-public-0001',
           provider: 'postar',
@@ -328,9 +443,12 @@ describe('guest commerce/service API trust boundaries', () => {
     expect(value.options.payments.initiate).not.toHaveBeenCalled()
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
       paymentId,
-      principal: { type: 'guest', tableSessionId, customerId },
+      principal: {
+        type: 'guest',tableSessionId,customerId,
+        guestSessionId:'99999999-9999-4999-8999-999999999999',
+      },
     }))
-    const paymentContextSql = query.mock.calls.find(([sql]) => String(sql).includes('SELECT payment.id, payment.order_id'))?.[0]
+    const paymentContextSql = query.mock.calls.find(([sql]) => String(sql).includes('SELECT payment.id, payment.payable_kind, payment.order_id'))?.[0]
     expect(paymentContextSql).not.toContain('FOR SHARE')
   })
 
@@ -479,6 +597,10 @@ integration('guest service and mood API with PostgreSQL', () => {
        ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'primary')`,
       [integrationTenantId, integrationStoreId, integrationSessionId, integrationCustomerId],
     )
+    const integrationActorRef=await seedActiveGuestTableAuthority(pool,{
+      tenantId:integrationTenantId,storeId:integrationStoreId,
+      tableSessionId:integrationSessionId,customerId:integrationCustomerId,
+    })
     integrationContext = {
       scope: { tenantId: integrationTenantId, storeId: integrationStoreId },
       sessionKind: 'table',
@@ -489,8 +611,8 @@ integration('guest service and mood API with PostgreSQL', () => {
       tableDisplayName: 'VIP 3',
       businessDate: '2026-08-11',
       expiresAt: '2026-08-11T15:00:00.000Z',
-      capabilities: ['guest.service.create'],
-      actorRef: 'guest-session:api-postgres-integration-session',
+      capabilities: ['guest.session.read', 'guest.service.create'],
+      actorRef: integrationActorRef,
     }
     app = Fastify()
     app.register(guestCommerceServiceApiPlugin, {
@@ -590,6 +712,82 @@ integration('guest service and mood API with PostgreSQL', () => {
     `, [integrationTenantId, integrationStoreId, integrationSessionId])
     expect(evidence.rows[0]).toEqual({ tasks: '1', groups: '1', behaviors: '3', audits: '3', outbox: '3' })
 
+    const visible = await app.inject({ method: 'GET', url: '/api/guest/service-requests' })
+    expect(visible.statusCode).toBe(200)
+    expect(visible.json()).toMatchObject({
+      data: [{ requestType: 'call_staff', status: 'pending', assignedStaffName: null }],
+      meta: { count: 1 },
+    })
+    expect(visible.body).not.toMatch(/detail|requestSnapshot|customerId|employeeId/i)
+    const taskPublicId = visible.json().data[0].publicId as string
+    const escalate = () => app.inject({
+      method: 'POST',
+      url: `/api/guest/service-requests/${taskPublicId}/feedback`,
+      headers: { 'idempotency-key': 'guest-service-feedback-escalate-0001' },
+      payload: { action: 'escalate' },
+    })
+    const escalated = await escalate()
+    expect(escalated.statusCode).toBe(200)
+    expect(escalated.json()).toMatchObject({
+      data: { publicId: taskPublicId, action: 'escalate', recorded: true },
+      meta: { replayed: false },
+    })
+    const escalatedReplay = await escalate()
+    expect(escalatedReplay.statusCode).toBe(200)
+    expect(escalatedReplay.json()).toMatchObject({ meta: { replayed: true } })
+    const prematureConfirm = await app.inject({
+      method: 'POST',
+      url: `/api/guest/service-requests/${taskPublicId}/feedback`,
+      headers: { 'idempotency-key': 'guest-service-feedback-confirm-early-0001' },
+      payload: { action: 'confirm' },
+    })
+    expect(prematureConfirm.statusCode).toBe(409)
+    expect(prematureConfirm.json()).toMatchObject({ error: { code: 'SERVICE_FEEDBACK_STATE_CONFLICT' } })
+
+    const activeTask = await transactions.run(integrationContext.scope, (transaction) => (
+      new ServiceTaskRepository(transaction).findActiveByTableSession(integrationSessionId)
+    ), { readOnly: true })
+    await transactions.run(integrationContext.scope, (transaction) => (
+      new ServiceTaskRepository(transaction).complete({
+        taskId: activeTask[0]!.id,
+        actor: { type: 'system' },
+        eventIdempotencyKey: 'guest-service-api-complete-0001',
+      })
+    ))
+    const confirm = () => app.inject({
+      method: 'POST',
+      url: `/api/guest/service-requests/${taskPublicId}/feedback`,
+      headers: { 'idempotency-key': 'guest-service-feedback-confirm-0001' },
+      payload: { action: 'confirm' },
+    })
+    const confirmed = await confirm()
+    expect(confirmed.statusCode).toBe(200)
+    expect(confirmed.json()).toMatchObject({
+      data: { publicId: taskPublicId, action: 'confirm', taskStatus: 'completed', recorded: true },
+      meta: { replayed: false },
+    })
+    expect((await confirm()).json()).toMatchObject({ meta: { replayed: true } })
+    const feedbackEvidence = await pool.query<{ escalations: string; confirmations: string; audits: string }>(`
+      SELECT
+        (SELECT count(*)::text FROM mbox.service_task_events
+          WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+            AND service_task_id = $3::uuid AND event_type = 'guest.escalated') AS escalations,
+        (SELECT count(*)::text FROM mbox.service_task_events
+          WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+            AND service_task_id = $3::uuid AND event_type = 'guest.confirmed') AS confirmations,
+        (SELECT count(*)::text FROM mbox.audit_events
+          WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+            AND object_id = $3::text AND action LIKE 'guest.service.%') AS audits
+    `, [integrationTenantId, integrationStoreId, activeTask[0]!.id])
+    expect(feedbackEvidence.rows[0]).toEqual({ escalations: '1', confirmations: '1', audits: '2' })
+
+    const ownedContext = integrationContext
+    integrationContext = { ...integrationContext, customerId: randomUUID() }
+    const forbidden = await app.inject({ method: 'GET', url: '/api/guest/service-requests' })
+    integrationContext = ownedContext
+    expect(forbidden.statusCode).toBe(401)
+    expect(forbidden.json()).toMatchObject({ error: { code: 'GUEST_SESSION_INVALID' } })
+
     await pool.query(`
       UPDATE mbox.table_sessions SET status = 'closing'
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
@@ -612,12 +810,15 @@ integration('guest service and mood API with PostgreSQL', () => {
 
 function fixture(overrides: Partial<GuestCommerceServiceApiOptions> = {}) {
   const paymentMode = overrides.paymentMode ?? 'wechat_jsapi'
-  const query = vi.fn(async (sql: string) => sql.includes('WITH order_balances AS') ? ({
+  const query = vi.fn(async (sql: string) => sql.includes('lock_active_table_guest_session_position') ? ({
+    rows:[{ participation_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }],rowCount:1,
+  }) : sql.includes('WITH order_balances AS') ? ({
     rows: [{
       public_id: 'shared-order-0001', round_number: 1, channel: 'guest_qr',
       order_status: 'submitted', visibility: 'shared', is_mine: false,
       order_created_at: '2026-08-11T12:00:00.000Z', payment_status: 'unpaid',
       payment_access: 'available', payable_amount_minor: '13600', currency: 'CNY', product_id: productId,
+      pricing_kind: 'gift',
       product_name: '青岛啤酒', quantity: 2, item_status: 'preparing',
     }],
     rowCount: 1,
@@ -631,11 +832,12 @@ function fixture(overrides: Partial<GuestCommerceServiceApiOptions> = {}) {
       product_kind: 'single',
       bundle_components: [],
       product_snapshot: {
-        specification: '330ml', aliases: ['青啤'], pinyin: 'qingdao pijiu',
+        specification: '330ml', aliases: ['青啤'], pinyin: 'qingdao pijiu', beverageFamily: 'wine',
         internalCost: 1234,
       },
       guest_visible: true,
       search_text: 'BEER-QD-330 青岛啤酒 青啤 qingdao pijiu 330ml',
+      recommendation_beverage_family: 'beer',
       recommendation_enabled: true,
       recommendation_min_guests: 1,
       recommendation_max_guests: 4,

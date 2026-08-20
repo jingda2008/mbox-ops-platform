@@ -94,12 +94,16 @@ export interface ProviderRefundQueryRequest {
   refundId: string
   providerRefundId: string
   merchantId: string
+  originalProviderTransactionId: string
+  /** Original refund submission date in the provider's merchant timezone, YYYYMMDD. */
+  refundDate?: string
 }
 
 export interface ProviderRefundObservation {
   refundId: string
   providerRefundId: string
   providerRefundTransactionId: string | null
+  originalProviderTransactionId: string
   status: ProviderRefundStatus
   amount: MoneyAmount
   currency: string

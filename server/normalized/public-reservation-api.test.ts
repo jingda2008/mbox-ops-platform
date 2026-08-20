@@ -22,6 +22,7 @@ integration('public reservation API with PostgreSQL', () => {
   let storeId: string
   let customerId: string
   let tableId: string
+  let scheduleId: string
   let publicSequence = 0
   const fixedNow = new Date()
   const crossMidnight = futureCrossMidnight(fixedNow)
@@ -38,7 +39,9 @@ integration('public reservation API with PostgreSQL', () => {
     storeId = randomUUID()
     customerId = randomUUID()
     tableId = randomUUID()
+    scheduleId = randomUUID()
     const areaId = randomUUID()
+    const performerId = randomUUID()
 
     await pool.query(`INSERT INTO mbox.tenants (id, code, name) VALUES ($1, $2, 'Public reservation tenant')`, [
       tenantId,
@@ -66,6 +69,14 @@ integration('public reservation API with PostgreSQL', () => {
         id, tenant_id, store_id, area_id, code, display_name, capacity, minimum_spend_minor
       ) VALUES ($1, $2, $3, $4, 'VIP1', 'VIP 1', 6, 188800)
     `, [tableId, tenantId, storeId, areaId])
+    await pool.query(`
+      INSERT INTO mbox.performers (id, tenant_id, store_id, code, stage_name)
+      VALUES ($1, $2, $3, 'PUBLIC_TEST', '预约测试歌手')
+    `, [performerId, tenantId, storeId])
+    await pool.query(`
+      INSERT INTO mbox.schedules (id, tenant_id, store_id, performer_id, starts_at, ends_at)
+      VALUES ($1, $2, $3, $4, $5::timestamptz, $6::timestamptz)
+    `, [scheduleId, tenantId, storeId, performerId, crossMidnight.arrivalAt, crossMidnight.expectedEndAt])
 
     app = Fastify()
     await app.register(publicReservationApiPlugin, {
@@ -160,6 +171,7 @@ integration('public reservation API with PostgreSQL', () => {
     expect(JSON.stringify(body)).not.toContain(tableId)
     expect(JSON.stringify(body)).not.toContain(customerId)
     expect(body.data.acceptingReservations).toBe(true)
+    expect(body.data.depositRule.policyVersion).toBe(1)
     expect(body.data).not.toHaveProperty('holdMinutes')
   })
 
@@ -179,6 +191,22 @@ integration('public reservation API with PostgreSQL', () => {
     expect(response.json().error.code).toBe('PUBLIC_RESERVATION_REQUEST_INVALID')
   })
 
+  it('rejects a reservation when the policy version changed after the confirmation screen', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/public/reservations',
+      headers: { 'idempotency-key': 'public-reservation-stale-policy-0001' },
+      payload: {
+        mode: 'direct', customerName: '王女士', contact: rawContact, guestCount: 2,
+        arrivalAt: crossMidnight.arrivalAt, expectedEndAt: crossMidnight.expectedEndAt,
+        seatPreference: 'stage_atmosphere', reservationPolicyVersion: 999,
+      },
+    })
+    expect(response.statusCode).toBe(409)
+    expect(response.json().error.code).toBe('RESERVATION_POLICY_CHANGED')
+    expect(response.json().error.message).toContain('预约规则刚刚更新')
+  })
+
   it('reserves shared guest capacity atomically without binding any exact table', async () => {
     const submit = (suffix: string) => app.inject({
       method: 'POST',
@@ -192,6 +220,8 @@ integration('public reservation API with PostgreSQL', () => {
         arrivalAt: crossMidnight.arrivalAt,
         expectedEndAt: crossMidnight.expectedEndAt,
         seatPreference: 'stage_atmosphere',
+        reservationPolicyVersion: 1,
+        preferredScheduleId: scheduleId,
         note: '靠近舞台即可',
       },
     })
@@ -203,6 +233,7 @@ integration('public reservation API with PostgreSQL', () => {
       customerName: '王女士',
       maskedContact,
       status: 'pending',
+      preferredScheduleId: scheduleId,
       arrivalGraceEndsAt: new Date(Date.parse(crossMidnight.arrivalAt) + 10 * 60_000).toISOString(),
     })
     expect(body.data).not.toHaveProperty('tableCodes')
@@ -271,6 +302,185 @@ integration('public reservation API with PostgreSQL', () => {
     expect(response.json().data.maskedContact).toBe(maskedContact)
     expect(response.body).not.toContain(rawContact)
     expect(response.body).not.toContain(customerId)
+  })
+
+  it('requires the current policy acknowledgement and an explicit performance decision when arrival changes', async () => {
+    const selected = await pool.query<{
+      id: string
+      public_id: string
+      arrival_at: string
+      expected_end_at: string
+      aggregate_version: number
+    }>(`
+      SELECT id,public_id,arrival_at::text,expected_end_at::text,aggregate_version
+      FROM mbox.reservations
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND customer_id=$3::uuid
+      ORDER BY created_at,id LIMIT 1
+    `, [tenantId, storeId, customerId])
+    const reservation = selected.rows[0]!
+    await pool.query(`
+      UPDATE mbox.public_reservation_policies
+      SET arrival_grace_minutes=arrival_grace_minutes+1
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+    `, [tenantId, storeId])
+    const policy = await pool.query<{ policy_version: number }>(`
+      SELECT policy_version FROM mbox.public_reservation_policies
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+    `, [tenantId, storeId])
+    const policyVersion = Number(policy.rows[0]!.policy_version)
+    expect(policyVersion).toBeGreaterThan(1)
+
+    const missingPolicy = await app.inject({
+      method: 'PATCH', url: `/public/reservations/${encodeURIComponent(reservation.public_id)}`,
+      headers: { 'idempotency-key': 'reservation-update-policy-required-0001' },
+      payload: { note: '不能在未确认新规则时修改' },
+    })
+    expect(missingPolicy.statusCode).toBe(400)
+
+    const stalePolicy = await app.inject({
+      method: 'PATCH', url: `/public/reservations/${encodeURIComponent(reservation.public_id)}`,
+      headers: { 'idempotency-key': 'reservation-update-policy-stale-0001' },
+      payload: { note: '旧规则版本', reservationPolicyVersion: 1 },
+    })
+    expect(stalePolicy.statusCode).toBe(409)
+    expect(stalePolicy.json().error.code).toBe('RESERVATION_POLICY_CHANGED')
+
+    const nextArrivalAt = new Date(Date.parse(reservation.arrival_at) + 86_400_000).toISOString()
+    const nextExpectedEndAt = new Date(Date.parse(reservation.expected_end_at) + 86_400_000).toISOString()
+    const missingPerformanceDecision = await app.inject({
+      method: 'PATCH', url: `/public/reservations/${encodeURIComponent(reservation.public_id)}`,
+      headers: { 'idempotency-key': 'reservation-update-performance-required-0001' },
+      payload: {
+        arrivalAt: nextArrivalAt, expectedEndAt: nextExpectedEndAt,
+        reservationPolicyVersion: policyVersion,
+      },
+    })
+    expect(missingPerformanceDecision.statusCode).toBe(400)
+    expect(missingPerformanceDecision.json().error.message).toContain('重新选择演出或明确清空')
+
+    const stalePerformance = await app.inject({
+      method: 'PATCH', url: `/public/reservations/${encodeURIComponent(reservation.public_id)}`,
+      headers: { 'idempotency-key': 'reservation-update-performance-stale-0001' },
+      payload: {
+        arrivalAt: nextArrivalAt, expectedEndAt: nextExpectedEndAt,
+        reservationPolicyVersion: policyVersion, preferredScheduleId: scheduleId,
+      },
+    })
+    expect(stalePerformance.statusCode).toBe(400)
+    expect(stalePerformance.json().error.message).toContain('已改期或取消')
+
+    const updated = await app.inject({
+      method: 'PATCH', url: `/public/reservations/${encodeURIComponent(reservation.public_id)}`,
+      headers: { 'idempotency-key': 'reservation-update-performance-clear-0001' },
+      payload: {
+        arrivalAt: nextArrivalAt, expectedEndAt: nextExpectedEndAt,
+        reservationPolicyVersion: policyVersion, preferredScheduleId: null,
+      },
+    })
+    expect(updated.statusCode).toBe(200)
+    expect(updated.json().data).toMatchObject({
+      arrivalAt: nextArrivalAt,
+      preferredScheduleId: null,
+      reservationPolicyVersion: policyVersion,
+    })
+    const stored = await pool.query<{
+      reservation_policy_version: number
+      reservation_policy_acknowledged_version: number
+      preferred_schedule_id: string | null
+      aggregate_version: number
+    }>(`
+      SELECT reservation_policy_version,reservation_policy_acknowledged_version,
+        preferred_schedule_id,aggregate_version::integer
+      FROM mbox.reservations WHERE id=$1::uuid
+    `, [reservation.id])
+    expect(stored.rows[0]).toMatchObject({
+      reservation_policy_version: policyVersion,
+      reservation_policy_acknowledged_version: policyVersion,
+      preferred_schedule_id: null,
+      aggregate_version: Number(reservation.aggregate_version) + 1,
+    })
+  })
+
+  it('lists recent reservations across the canonical customer family without leaking another customer', async () => {
+    const mergedCustomerId = randomUUID()
+    const outsiderCustomerId = randomUUID()
+    await pool.query(`
+      INSERT INTO mbox.customers (
+        id, tenant_id, store_id, public_id, status, merged_into_customer_id
+      ) VALUES
+        ($1::uuid, $3::uuid, $4::uuid, $5, 'merged', $2::uuid),
+        ($6::uuid, $3::uuid, $4::uuid, $7, 'active', NULL)
+    `, [
+      mergedCustomerId,
+      customerId,
+      tenantId,
+      storeId,
+      `merged-customer-${mergedCustomerId}`,
+      outsiderCustomerId,
+      `outsider-customer-${outsiderCustomerId}`,
+    ])
+    const rows = await pool.query<{ id: string; public_id: string }>(`
+      SELECT id, public_id FROM mbox.reservations
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+      ORDER BY id
+    `, [tenantId, storeId])
+    expect(rows.rows).toHaveLength(3)
+    await pool.query(`
+      UPDATE mbox.reservations
+      SET customer_id = CASE
+        WHEN id = $3::uuid THEN $4::uuid
+        WHEN id = $5::uuid THEN $6::uuid
+        ELSE customer_id
+      END
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+    `, [
+      tenantId,
+      storeId,
+      rows.rows[0]!.id,
+      mergedCustomerId,
+      rows.rows[1]!.id,
+      outsiderCustomerId,
+    ])
+
+    const response = await app.inject({ method: 'GET', url: '/public/reservations/mine' })
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({
+      data: { reservations: expect.any(Array) },
+      meta: { count: 2 },
+    })
+    const publicIds = response.json().data.reservations
+      .map((reservation: { publicId: string }) => reservation.publicId)
+    expect(publicIds).toContain(rows.rows[0]!.public_id)
+    expect(publicIds).not.toContain(rows.rows[1]!.public_id)
+
+    const detail = await app.inject({
+      method: 'GET', url: `/public/reservations/${encodeURIComponent(rows.rows[0]!.public_id)}`,
+    })
+    expect(detail.statusCode).toBe(200)
+    const currentPolicy = await pool.query<{ policy_version: number }>(`
+      SELECT policy_version FROM mbox.public_reservation_policies
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+    `, [tenantId, storeId])
+    const changed = await app.inject({
+      method: 'PATCH', url: `/public/reservations/${encodeURIComponent(rows.rows[0]!.public_id)}`,
+      headers: { 'idempotency-key': 'reservation-canonical-family-update-0001' },
+      payload: {
+        note: '合并身份仍可修改本人预约',
+        reservationPolicyVersion: Number(currentPolicy.rows[0]!.policy_version),
+      },
+    })
+    expect(changed.statusCode).toBe(200)
+    expect(changed.json().data.note).toBe('合并身份仍可修改本人预约')
+    const cancelled = await app.inject({
+      method: 'DELETE', url: `/public/reservations/${encodeURIComponent(rows.rows[0]!.public_id)}`,
+      headers: { 'idempotency-key': 'reservation-canonical-family-cancel-0001' },
+    })
+    expect(cancelled.statusCode).toBe(200)
+    expect(cancelled.json().data.status).toBe('cancelled')
+    expect(response.body).not.toContain(customerId)
+    expect(response.body).not.toContain(mergedCustomerId)
+    expect(response.body).not.toContain(outsiderCustomerId)
+    expect(response.body).not.toContain(rawContact)
   })
 })
 

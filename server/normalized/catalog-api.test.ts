@@ -86,6 +86,7 @@ integration("normalized catalog PostgreSQL integration", () => {
         name: "真实数据库鸡尾酒",
         categoryCode: "cocktail",
         fulfillmentStation: "bar",
+        costAmountMinor: 3200,
         productSnapshot: {
           aliases: ["青柠特调", "清爽特调"],
           specification: "330ml",
@@ -102,6 +103,32 @@ integration("normalized catalog PostgreSQL integration", () => {
     const createdId = created.json().data.id as string;
     const createdUpdatedAt = created.json().data.updatedAt as string;
     expect(replayedCreate.json().data.id).toBe(createdId);
+    expect(replayedCreate.json().data).toMatchObject({
+      guestVisible: true,
+      maxOrderQuantity: 50,
+      recommendationEnabled: false,
+      costAmountMinor: 3200,
+    });
+    const persistedProduct = await pool.query<{
+      product_snapshot: Record<string, unknown>;
+      search_text: string;
+      max_order_quantity: number;
+    }>(`
+      SELECT product_snapshot, search_text, max_order_quantity
+      FROM mbox.products
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+    `, [tenantId, storeId, createdId]);
+    expect(persistedProduct.rows[0]).toMatchObject({
+      product_snapshot: {
+        aliases: ["青柠特调", "清爽特调"],
+        specification: "330ml",
+      },
+      max_order_quantity: 50,
+    });
+    expect(persistedProduct.rows[0]?.product_snapshot).not.toHaveProperty("searchText");
+    expect(persistedProduct.rows[0]?.product_snapshot).not.toHaveProperty("maxOrderQuantity");
+    expect(persistedProduct.rows[0]?.product_snapshot).not.toHaveProperty("recommendation.enabled");
+    expect(persistedProduct.rows[0]?.search_text).toContain("真实数据库鸡尾酒");
     await pool.query("SELECT pg_sleep(0.01)");
 
     const priceRequest = {
@@ -214,6 +241,7 @@ integration("normalized catalog PostgreSQL integration", () => {
         categoryCode: "combo",
         fulfillmentStation: "none",
         productKind: "bundle",
+        costAmountMinor: 6400,
         bundleComponents: [{ productId: componentId, quantity: 2 }],
         productSnapshot: { description: "两杯今晚精选" },
       },
@@ -405,6 +433,112 @@ describe("normalized catalog HTTP API", () => {
         eventType: "catalog.product.created.v1",
       }),
     ]);
+  });
+
+  it("writes operating decisions from top-level typed fields and keeps productSnapshot display-only", async () => {
+    const fixture = await createFixture();
+    const response = await fixture.app.inject({
+      method: "POST",
+      url: "/api/catalog/products",
+      headers: { "idempotency-key": "catalog-strong-fields-001" },
+      payload: {
+        ...createPayload(),
+        guestVisible: false,
+        searchText: "招牌 清爽 低糖",
+        recommendationEnabled: true,
+        recommendationMinGuests: 2,
+        recommendationMaxGuests: 8,
+        recommendationPriority: 12,
+        recommendationSceneTags: ["date"],
+        menuSortOrder: 20,
+        allowedChannels: ["staff_assisted", "cashier"],
+        maxOrderQuantity: 6,
+        kdsPriority: 30,
+        fulfillmentSlaSeconds: 420,
+        costAmountMinor: 3200,
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    const insert = fixture.calls.find((call) => call.sql.includes("INSERT INTO mbox.products"));
+    expect(insert?.values.slice(7)).toEqual([
+      JSON.stringify(createPayload().productSnapshot),
+      "active",
+      false,
+      "招牌 清爽 低糖",
+      true,
+      2,
+      8,
+      12,
+      ["date"],
+      [],
+      [],
+      [],
+      true,
+      8,
+      10,
+      null,
+      20,
+      null,
+      null,
+      ["staff_assisted", "cashier"],
+      6,
+      30,
+      420,
+      3200,
+    ]);
+    expect(fixture.commandCalls[0]?.requestFingerprint).toContain('"costAmountMinor":3200');
+  });
+
+  it("rejects operational and amount fields hidden inside productSnapshot", async () => {
+    const fixture = await createFixture();
+    const legacyVisibility = await fixture.app.inject({
+      method: "POST",
+      url: "/api/catalog/products",
+      headers: { "idempotency-key": "catalog-json-reject-001" },
+      payload: {
+        ...createPayload(),
+        productSnapshot: { description: "展示文案", guestVisible: false },
+      },
+    });
+    const legacyRecommendation = await fixture.app.inject({
+      method: "POST",
+      url: "/api/catalog/products",
+      headers: { "idempotency-key": "catalog-json-reject-002" },
+      payload: {
+        ...createPayload(),
+        productSnapshot: { recommendation: { enabled: true, priority: 1 } },
+      },
+    });
+    const legacyCost = await fixture.app.inject({
+      method: "POST",
+      url: "/api/catalog/products",
+      headers: { "idempotency-key": "catalog-json-reject-003" },
+      payload: {
+        ...createPayload(),
+        productSnapshot: { costAmount: 1 },
+      },
+    });
+
+    expect(legacyVisibility.statusCode).toBe(400);
+    expect(legacyRecommendation.statusCode).toBe(400);
+    expect(legacyCost.statusCode).toBe(400);
+    expect(fixture.commandCalls).toHaveLength(0);
+  });
+
+  it("fails closed when an active product has no strong cost", async () => {
+    const fixture = await createFixture();
+    const payload = createPayload();
+    const response = await fixture.app.inject({
+      method: "POST",
+      url: "/api/catalog/products",
+      headers: { "idempotency-key": "catalog-cost-required-001" },
+      payload: { ...payload, costAmountMinor: null },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.message).toContain("在售商品必须配置成本金额");
+    expect(fixture.commandCalls).toHaveLength(0);
   });
 
   it("checks separate live permissions and requires a nonempty price-change reason", async () => {
@@ -671,6 +805,7 @@ function createPayload() {
     name: "招牌鸡尾酒",
     categoryCode: "wine",
     fulfillmentStation: "bar",
+    costAmountMinor: 1050,
     productSnapshot: {
       aliases: ["清爽特调"],
       specification: "330ml",

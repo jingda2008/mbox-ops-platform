@@ -31,6 +31,7 @@ import {
   ReservationTransitionError,
   ReservationTableUnavailableError,
   type Reservation,
+  type ReservationSeatPreference,
   type ReservationSource,
   type ReservationStatus,
 } from './reservation-repository.js'
@@ -250,6 +251,7 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
       expectedEndAt: input.expectedEndAt,
       source: 'wechat',
       note: input.note,
+      seatPreference: input.seatPreference,
       reservationSnapshot: input.reservationSnapshot,
       tableIds: input.tableIds,
       initialStatus: 'pending',
@@ -332,20 +334,15 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
     async (request, reply) => handleRoute(reply, async () => {
       const context = await guestContext(options, request)
       const requestId = readUuid(request.params.requestId, 'requestId')
-      const songRequest = await options.transactions.run(context.scope, (transaction) => (
-        createSongRequests(transaction).findById(requestId)
-      ), { readOnly: true })
-      if (
-        songRequest === null
-        || songRequest.customerId !== context.customerId
-        || songRequest.tableSessionId !== context.tableSessionId
-      ) throw new GuestResourceNotFoundError()
+      if (context.tableSessionId === null) throw new GuestResourceNotFoundError()
       const idempotencyKey = readIdempotencyKey(request)
       const execution = await options.performance.cancelSongRequest({
         scope: context.scope,
         actor: { type: 'guest', ref: context.actorRef },
         businessDate: context.businessDate,
         requestId,
+        customerId: context.customerId,
+        tableSessionId: context.tableSessionId,
         idempotencyKey,
         requestFingerprint: fingerprint(request, context, { requestId }),
       })
@@ -370,6 +367,18 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
           AND ($3::text IS NULL OR reservation.status = $3)
           AND ($4::timestamptz IS NULL OR reservation.arrival_at >= $4::timestamptz)
           AND ($5::timestamptz IS NULL OR reservation.arrival_at < $5::timestamptz)
+          AND (
+            $4::timestamptz IS NOT NULL OR $5::timestamptz IS NOT NULL
+            OR EXISTS (
+              SELECT 1 FROM mbox.stores AS reservation_store
+              WHERE reservation_store.tenant_id=reservation.tenant_id
+                AND reservation_store.id=reservation.store_id
+                AND reservation.arrival_at >= (($9::date::timestamp + reservation_store.business_day_cutoff)
+                  AT TIME ZONE reservation_store.timezone)
+                AND reservation.arrival_at < ((($9::date + 1)::timestamp + reservation_store.business_day_cutoff)
+                  AT TIME ZONE reservation_store.timezone)
+            )
+          )
           AND (
             $6::boolean
             OR reservation.owner_employee_id = ANY($7::uuid[])
@@ -397,6 +406,7 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
         visibility.all,
         visibility.ownerEmployeeIds,
         visibility.areaIds,
+        context.businessDate,
       ])
       return hydrateReservations(createReservations(transaction), ids.rows)
     }, { readOnly: true })
@@ -436,6 +446,7 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
       source,
       ownerEmployeeId: readOptionalUuid(body.ownerEmployeeId, 'ownerEmployeeId') ?? context.employeeId,
       note: input.note,
+      seatPreference: input.seatPreference,
       reservationSnapshot: input.reservationSnapshot,
       tableIds: input.tableIds,
       initialStatus,
@@ -853,17 +864,9 @@ function publicReservation(reservation: Reservation) {
 
 function staffReservation(reservation: Reservation, canViewContact: boolean) {
   const { contactToken, ...base } = reservation
-  const seatPreference = reservationSeatPreference(reservation.reservationSnapshot)
   return canViewContact
-    ? { ...base, seatPreference, contactToken, contactAvailable: contactToken.length > 0 }
-    : { ...base, seatPreference, contactAvailable: contactToken.length > 0 }
-}
-
-function reservationSeatPreference(snapshot: JsonObject): string {
-  const value = snapshot.seatPreference
-  return typeof value === 'string' && [
-    'no_preference', 'stage_atmosphere', 'quiet_chat', 'comfortable_booth', 'outdoor_view',
-  ].includes(value) ? value : 'no_preference'
+    ? { ...base, contactToken, contactAvailable: contactToken.length > 0 }
+    : { ...base, contactAvailable: contactToken.length > 0 }
 }
 
 function publicDailyPerformance(view: DailyPerformanceView) {
@@ -978,9 +981,18 @@ function readReservationInput(body: JsonObject) {
     arrivalAt,
     expectedEndAt,
     note: readOptionalString(body.note, 'note', 2_000),
+    seatPreference: readSeatPreference(body.seatPreference),
     reservationSnapshot: readOptionalJsonObject(body.reservationSnapshot, 'reservationSnapshot'),
     tableIds: readUuidArray(body.tableIds, 'tableIds', 1, 20),
   }
+}
+
+function readSeatPreference(value: unknown): ReservationSeatPreference {
+  if (value === undefined) return 'no_preference'
+  if (typeof value !== 'string' || ![
+    'no_preference', 'stage_atmosphere', 'quiet_chat', 'comfortable_booth', 'outdoor_view',
+  ].includes(value)) throw new ApiRequestError('seatPreference无效')
+  return value as ReservationSeatPreference
 }
 
 function serverReservationTiming(

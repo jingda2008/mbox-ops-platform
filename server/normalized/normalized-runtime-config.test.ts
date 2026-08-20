@@ -21,6 +21,7 @@ describe('loadNormalizedRuntimeConfig', () => {
       nodeEnv: 'test',
       deploymentTier: 'validation',
       payment: null,
+      wechatIdentity: null,
       metricsToken: null,
       guestPaymentMode: 'simulation',
       inventoryEnforcementMode: 'audit_only',
@@ -39,6 +40,65 @@ describe('loadNormalizedRuntimeConfig', () => {
       workerIntervalMs: 2_000,
       workerAdapterModule: null,
     })
+  })
+
+  it('loads a complete WeChat identity adapter without exposing its secrets', () => {
+    const encryptionKey = Buffer.alloc(32, 7).toString('base64')
+    const config = loadNormalizedRuntimeConfig({
+      ...base,
+      MBOX_WECHAT_ENABLED: 'true',
+      MBOX_WECHAT_APP_ID: 'wxMboxCommercial01',
+      MBOX_WECHAT_APP_SECRET: 'wechat-app-secret-value',
+      MBOX_WECHAT_STATE_SECRET: 'wechat-state-secret-0123456789abcdef',
+      MBOX_WECHAT_ENCRYPTION_KEY_VERSION: '1',
+      MBOX_WECHAT_ENCRYPTION_KEY_BASE64: encryptionKey,
+    })
+    expect(config.wechatIdentity).toMatchObject({
+      appId: 'wxMboxCommercial01',
+      encryptionKeyVersion: 1,
+    })
+    expect(config.wechatIdentity?.encryptionKey).toEqual(Buffer.alloc(32, 7))
+
+    const secret = 'do-not-leak-this-wechat-secret'
+    try {
+      loadNormalizedRuntimeConfig({
+        ...base,
+        MBOX_WECHAT_ENABLED: 'true',
+        MBOX_WECHAT_APP_ID: 'invalid',
+        MBOX_WECHAT_APP_SECRET: secret,
+        MBOX_WECHAT_STATE_SECRET: 'short',
+        MBOX_WECHAT_ENCRYPTION_KEY_VERSION: '0',
+        MBOX_WECHAT_ENCRYPTION_KEY_BASE64: 'invalid',
+      })
+    } catch (error) {
+      expect(String(error)).not.toContain(secret)
+      expect((error as NormalizedRuntimeConfigurationError).fields).toEqual(expect.arrayContaining([
+        'MBOX_WECHAT_APP_ID',
+        'MBOX_WECHAT_STATE_SECRET',
+        'MBOX_WECHAT_ENCRYPTION_KEY_VERSION',
+        'MBOX_WECHAT_ENCRYPTION_KEY_BASE64',
+      ]))
+    }
+  })
+
+  it('rejects orphan WeChat credentials while identity is disabled', () => {
+    expect(() => loadNormalizedRuntimeConfig({
+      ...base,
+      MBOX_WECHAT_APP_ID: 'wxMboxCommercial01',
+    })).toThrowError(NormalizedRuntimeConfigurationError)
+  })
+
+  it('loads a server-controlled WeChat service template only when template and policy are paired', () => {
+    expect(loadNormalizedRuntimeConfig({
+      ...base,
+      MBOX_WECHAT_SERVICE_TEMPLATE_ID: 'wechatTemplate_001',
+      MBOX_WECHAT_NOTIFICATION_POLICY_VERSION: 'service-notice-v1',
+    }).wechatNotification).toEqual({
+      serviceTemplateId: 'wechatTemplate_001', policyVersion: 'service-notice-v1',
+    })
+    expect(() => loadNormalizedRuntimeConfig({
+      ...base, MBOX_WECHAT_SERVICE_TEMPLATE_ID: 'wechatTemplate_001',
+    })).toThrowError(NormalizedRuntimeConfigurationError)
   })
 
   it('rejects legacy Postar aliases instead of silently retaining inactive configuration', () => {
@@ -71,6 +131,11 @@ describe('loadNormalizedRuntimeConfig', () => {
       NODE_ENV: 'production',
       MBOX_DEPLOYMENT_TIER: 'production',
       MBOX_METRICS_TOKEN: 'production-metrics-token-0123456789abcdef',
+      MBOX_CONTACT_ACTIVE_KEY_ID: 'contact-key-2026-01',
+      MBOX_CONTACT_ACTIVE_KEY_BASE64: Buffer.alloc(32,11).toString('base64'),
+      MBOX_CONTACT_LOOKUP_KEY_BASE64: Buffer.alloc(32,12).toString('base64'),
+      MBOX_CONTACT_LEGACY_PHONE_LOOKUP_KEY_BASE64: Buffer.alloc(32,13).toString('base64'),
+      MBOX_CONTACT_PREVIOUS_KEYS: `normalized-contact-v1=${Buffer.alloc(32,14).toString('base64')};normalized-phone-v1=${Buffer.alloc(32,15).toString('base64')}`,
       MBOX_POSTAR_ENABLED: 'false',
       MBOX_POSTAR_ENVIRONMENT: 'production',
       MBOX_POSTAR_AGENCY_ID: 'agency-1',
@@ -132,6 +197,11 @@ describe('loadNormalizedRuntimeConfig', () => {
       MBOX_PRINT_MODE: 'disabled',
       MBOX_HEADSET_MODE: 'disabled',
       MBOX_METRICS_TOKEN: 'production-metrics-token-0123456789abcdef',
+      MBOX_CONTACT_ACTIVE_KEY_ID: 'contact-key-2026-01',
+      MBOX_CONTACT_ACTIVE_KEY_BASE64: Buffer.alloc(32,11).toString('base64'),
+      MBOX_CONTACT_LOOKUP_KEY_BASE64: Buffer.alloc(32,12).toString('base64'),
+      MBOX_CONTACT_LEGACY_PHONE_LOOKUP_KEY_BASE64: Buffer.alloc(32,13).toString('base64'),
+      MBOX_CONTACT_PREVIOUS_KEYS: `normalized-contact-v1=${Buffer.alloc(32,14).toString('base64')};normalized-phone-v1=${Buffer.alloc(32,15).toString('base64')}`,
       MBOX_PAYMENT_PROVIDER: 'postar',
       POSTAR_ENVIRONMENT: 'production',
       POSTAR_AGENCY_ID: 'agency-1',
@@ -145,6 +215,13 @@ describe('loadNormalizedRuntimeConfig', () => {
     }
     expect(loadNormalizedRuntimeConfig(production).payment).toMatchObject({ provider: 'postar' })
     expect(loadNormalizedRuntimeConfig(production).inventoryEnforcementMode).toBe('strict')
+    expect(loadNormalizedRuntimeConfig({
+      ...production,MBOX_RUNTIME_ROLE:'contract_candidate',MBOX_START_WORKERS:'false',
+      MBOX_WORKER_ID:undefined,MBOX_WORKER_ADAPTER_MODULE:undefined,
+    })).toMatchObject({ runtimeRole:'contract_candidate',startWorkers:false,deploymentTier:'production' })
+    expect(()=>loadNormalizedRuntimeConfig({
+      ...production,MBOX_RUNTIME_ROLE:'contract_candidate',
+    })).toThrowError(NormalizedRuntimeConfigurationError)
     expect(() => loadNormalizedRuntimeConfig({
       ...production,
       MBOX_GUEST_PAYMENT_MODE: 'simulation',

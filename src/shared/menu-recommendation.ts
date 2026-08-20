@@ -318,6 +318,7 @@ function defaultReason(family: MenuBeverageFamily) {
     sparkling: '适合庆祝与仪式感',
     spirits: '酒感更完整',
     non_alcoholic: '轻松无负担',
+    mixed: '适合多人分享不同风格',
   }
   return labels[family]
 }

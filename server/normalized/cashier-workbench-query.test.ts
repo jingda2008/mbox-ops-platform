@@ -52,6 +52,7 @@ describe('PostgresCashierWorkbenchQuery', () => {
       capturedPaymentCount: 1,
       requestedRefundCount: 1,
       processingRefundCount: 0,
+      carryoverOrderCount: 0,
     })
     expect(view.orders[0]).toMatchObject({ publicId: 'ORDER-VIP1-0001', tableCode: 'VIP1' })
     expect(view.orders[0]?.payments[0]).toMatchObject({
@@ -100,6 +101,23 @@ describe('PostgresCashierWorkbenchQuery', () => {
     expect(runner.calls).toHaveLength(1)
   })
 
+  it('keeps an unresolved prior-business-day refund visible as handover work', async () => {
+    const priorOrder = { ...orderRow(), business_date: '2026-08-12' }
+    const runner = new QueryRunner([[priorOrder], [itemRow()], [paymentRow()], [refundRow()], [allocationRow()]])
+    const query = new PostgresCashierWorkbenchQuery(
+      runner as unknown as ScopedPostgresTransactionRunner,
+    )
+
+    const view = await query.get({
+      scope: { tenantId, storeId }, employeeId, businessDate: '2026-08-13',
+      capabilities: ['refund.approve'], limit: 20,
+    })
+
+    expect(view.summary.carryoverOrderCount).toBe(1)
+    expect(view.orders[0]).toMatchObject({ businessDate: '2026-08-12', carryover: true })
+    expect(runner.calls[0]?.sql).toContain("carryover_refund.status IN ('requested','approved','processing')")
+  })
+
   it('rejects callers without a financial capability before opening the database', () => {
     const runner = new QueryRunner([])
     const query = new PostgresCashierWorkbenchQuery(
@@ -114,6 +132,20 @@ describe('PostgresCashierWorkbenchQuery', () => {
       limit: 50,
     })).toThrow('requires a financial capability')
     expect(runner.runCalls).toBe(0)
+  })
+
+  it('allows a manager with only refund request permission to open the workbench', async () => {
+    const runner = new QueryRunner([[]])
+    const query = new PostgresCashierWorkbenchQuery(
+      runner as unknown as ScopedPostgresTransactionRunner,
+    )
+    await expect(query.get({
+      scope: { tenantId, storeId },
+      employeeId,
+      businessDate: '2026-08-13',
+      capabilities: ['refund.request'],
+      limit: 20,
+    })).resolves.toMatchObject({ actions: { canRequestRefund: true, canApproveRefund: false } })
   })
 
   it('does not treat payment initiation alone as permission to read the store-wide workbench', () => {
@@ -320,6 +352,7 @@ function orderRow(): Record<string, unknown> {
     currency: 'CNY',
     submitted_at: '2026-08-13T12:00:00.000Z',
     created_at: '2026-08-13T11:59:00.000Z',
+    business_date: '2026-08-13',
   }
 }
 

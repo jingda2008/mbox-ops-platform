@@ -26,8 +26,8 @@ describe('FulfillmentQueryService', () => {
       rows([{ code: 'BARTENDER', name: '调酒师' }]),
       permissionRows(KDS_PREPARE_PERMISSION),
       rows([
-        { scope_key: KDS_STATION_SCOPE, effect: 'include', scope_value: ['bar', 'kitchen'] },
-        { scope_key: KDS_STATION_SCOPE, effect: 'exclude', scope_value: ['kitchen'] },
+        { scope_key: KDS_STATION_SCOPE, effect: 'include', value_kind: 'text_set', boolean_value: null, text_value: null, text_values: ['bar', 'kitchen'] },
+        { scope_key: KDS_STATION_SCOPE, effect: 'exclude', value_kind: 'text_set', boolean_value: null, text_value: null, text_values: ['kitchen'] },
       ]),
       rows([]),
       rows([]),
@@ -397,8 +397,9 @@ async function seedIntegrationData(pool: Pool, id: IntegrationIds): Promise<void
   `, [tenantId, storeId, KDS_PREPARE_PERMISSION, KDS_DELIVER_PERMISSION, FULFILLMENT_VIEW_ALL_PERMISSION, id.barRoleId, id.serverRoleId, id.managerRoleId])
   await pool.query(`
     INSERT INTO mbox.role_data_scopes(
-      tenant_id, store_id, role_id, scope_key, effect, scope_value
-    ) VALUES ($1, $2, $3, $4, 'include', '["bar"]'::jsonb)
+      tenant_id, store_id, role_id, scope_key, effect, scope_value,
+      value_kind, text_values
+    ) VALUES ($1, $2, $3, $4, 'include', '["bar"]'::jsonb, 'text_set', ARRAY['bar']::text[])
   `, [tenantId, storeId, id.barRoleId, KDS_STATION_SCOPE])
   await pool.query(`
     INSERT INTO mbox.table_assignments(

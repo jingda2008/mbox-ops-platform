@@ -1,0 +1,76 @@
+<view class="page detail-page">
+  <state-panel wx:if="{{loading}}" type="loading" title="正在读取活动详情" />
+  <block wx:elif="{{activity}}">
+    <view class="detail-hero">
+      <image wx:if="{{activity.coverUrl}}" src="{{activity.coverUrl}}" mode="aspectFill" />
+      <view wx:else class="detail-placeholder">SUPERHIGH</view>
+      <view class="detail-shade"></view>
+      <view class="detail-title"><text>{{activity.kindText}}</text><text>{{activity.title}}</text><text>{{activity.startsText}} · {{activity.assemblyLocation}}</text></view>
+    </view>
+    <view wx:if="{{error}}" class="error-banner">{{error}}</view>
+    <view wx:if="{{success}}" class="success-banner">{{success}}</view>
+
+    <view class="detail-facts">
+      <view><text>{{activity.feeText}}</text><text>活动费用</text></view>
+      <view><text>{{activity.remainingCapacity}}</text><text>剩余名额</text></view>
+    </view>
+
+    <view class="section detail-section"><text class="detail-heading">关于这次活动</text><text class="detail-summary">{{activity.details}}</text></view>
+    <view wx:if="{{activity.includedItems.length}}" class="section detail-section"><text class="detail-heading">费用包含</text><view class="bullet-list"><view wx:for="{{activity.includedItems}}" wx:key="*this"><text>✓</text><text>{{item}}</text></view></view></view>
+    <view wx:if="{{activity.memberBenefitText}}" class="section detail-section benefit-highlight"><text class="detail-heading">会员权益与赠送</text><text class="detail-summary">{{activity.memberBenefitText}}</text></view>
+    <view wx:if="{{loyaltyBenefits.length}}" class="section detail-section loyalty-benefits">
+      <text class="detail-heading">本次活动会员积分</text>
+      <text class="loyalty-benefits__note">仅对已入会且符合等级的会员生效，不会因参加活动自动入会。</text>
+      <view wx:for="{{loyaltyBenefits}}" wx:key="ruleCode" class="loyalty-benefit-card">
+        <view><text>+{{item.points}}</text><text>积分</text></view>
+        <view><text>{{item.name}}</text><text>{{item.triggerText}}<text wx:if="{{item.minimumPaidText}}"> · {{item.minimumPaidText}}</text></text><text>{{item.levelText}} · {{item.pointValidityDays}}天有效 · {{item.refundText}}</text></view>
+      </view>
+    </view>
+    <view class="section detail-section"><text class="detail-heading">时间与集合</text><view class="info-list"><view><text>开始</text><text>{{activity.startsText}}</text></view><view><text>结束</text><text>{{activity.endsText}}</text></view><view><text>地点</text><text>{{activity.assemblyLocation}}</text></view></view></view>
+
+    <view class="section detail-section">
+      <text class="detail-heading">报名、付款与退款</text>
+      <view class="payment-rule-grid">
+        <view><text>活动费用</text><text>{{activity.feeText}}</text></view>
+        <view><text>订金</text><text>{{activity.depositText}}</text></view>
+        <view><text>付款时限</text><text>{{activity.deadlineText}}</text></view>
+        <view><text>支付说明</text><text>{{activity.paymentText}}</text></view>
+        <view><text>取消退款</text><text>{{activity.refundText}}</text></view>
+        <view><text>安全规则</text><text>{{activity.safetyPolicyText}}</text></view>
+      </view>
+      <view wx:if="{{activity.paymentBlockedText}}" class="rule-card"><text class="blocked-copy">{{activity.paymentBlockedText}}</text></view>
+    </view>
+    <view wx:if="{{activity.participationRequirements.length}}" class="section detail-section"><text class="detail-heading">参加条件</text><view class="bullet-list"><view wx:for="{{activity.participationRequirements}}" wx:key="*this"><text>•</text><text>{{item}}</text></view></view></view>
+    <view class="section detail-section"><text class="detail-heading">安全与参加要求</text><view wx:if="{{activity.safetyFacts.length}}" class="safety-facts"><text wx:for="{{activity.safetyFacts}}" wx:key="*this">{{item}}</text></view><view wx:if="{{activity.safetyRequirements.length}}" class="bullet-list"><view wx:for="{{activity.safetyRequirements}}" wx:key="*this"><text>!</text><text>{{item}}</text></view></view><text wx:else class="detail-summary">请根据自身健康和出行情况决定是否参加，并遵守现场指引。</text></view>
+    <view wx:if="{{activity.contactInstructions}}" class="section detail-section"><text class="detail-heading">报名后联系与集合</text><text class="detail-summary">{{activity.contactInstructions}}</text></view>
+
+    <view wx:if="{{!registration || registration.canReRegister}}" class="registration-panel">
+      <view class="party-row"><view><text>报名人数</text><text>按实际参加人数选择</text></view><view class="stepper"><button data-delta="-1" disabled="{{partySize <= 1}}" bindtap="changePartySize">−</button><text>{{partySize}}</text><button data-delta="1" disabled="{{partySize >= activity.remainingCapacity}}" bindtap="changePartySize">＋</button></view></view>
+      <label class="field"><text class="field__label">本次活动联系方式</text><input class="field__input" value="{{contact}}" maxlength="100" placeholder="手机号或微信，仅用于本次活动" bindinput="onContactInput" /></label>
+      <checkbox-group bindchange="onAcknowledgementChange"><label class="ack-row"><checkbox value="ack" checked="{{ruleAcknowledged}}" color="#7b5a35" /><text>{{activity.acknowledgementText}}</text></label></checkbox-group>
+    </view>
+
+    <view wx:if="{{registration}}" class="registration-status">
+      <view class="registration-status__head"><text>{{registration.statusText}}</text><text wx:if="{{registration.resolutionText}}">{{registration.resolutionText}}</text></view>
+      <text>报名编号 {{registration.publicId}}</text>
+      <text wx:if="{{registration.paymentAmountMinor > 0}}">本次应付 {{registration.amountDueText}}<text wx:if="{{registration.paymentMethodText}}"> · {{registration.paymentMethodText}}</text></text>
+      <text wx:if="{{registration.seatHoldText}}">名额保留至 {{registration.seatHoldText}}</text>
+      <text wx:if="{{registration.paymentDueText}}">付款截止 {{registration.paymentDueText}}</text>
+      <text wx:if="{{registration.refundStatusText}}" class="refund-state">{{registration.refundStatusText}}</text>
+      <text wx:if="{{registration.requiresManualCancellation}}">已付款报名不能由顾客端直接退款；由店长发起、收银复核，进度会显示在这里。</text>
+      <button wx:if="{{registration.canCancelDirectly && registration.canStartPayment}}" class="status-secondary" loading="{{busy}}" bindtap="cancelRegistration">不再参加，取消未付报名</button>
+    </view>
+
+    <view class="detail-bottom-space"></view>
+    <view class="detail-dock">
+      <view><text>{{registration && registration.resolutionText ? registration.resolutionText : activity.feeText}}</text><text>{{activity.registrationBlocked ? '报名条件暂未开放' : registration && registration.seatHoldText ? ('名额保留至 ' + registration.seatHoldText) : activity.remainingCapacity > 0 ? ('剩余 ' + activity.remainingCapacity + ' 位') : '名额已满，可申请候补'}}</text></view>
+      <button wx:if="{{!registration || registration.canReRegister}}" disabled="{{busy}}" loading="{{busy}}" bindtap="register">{{activity.registrationBlocked ? '暂不开放' : registration && registration.canReRegister ? '重新报名' : activity.remainingCapacity > 0 ? '确认报名' : '加入候补'}}</button>
+      <button wx:elif="{{registration.canStartPayment}}" loading="{{busy}}" bindtap="startPayment">微信支付</button>
+      <button wx:elif="{{registration.canQueryPayment}}" loading="{{busy}}" bindtap="queryPayment">查询付款结果</button>
+      <button wx:elif="{{registration.canCancelDirectly}}" class="cancel-button" loading="{{busy}}" bindtap="cancelRegistration">取消报名</button>
+      <button wx:elif="{{registration.requiresManualCancellation}}" class="cancel-button" bindtap="showCancellationHelp">退款与联系</button>
+      <button wx:else disabled>{{registration.statusText}}</button>
+    </view>
+  </block>
+  <state-panel wx:else type="error" title="活动不可用" message="{{error}}" />
+</view>

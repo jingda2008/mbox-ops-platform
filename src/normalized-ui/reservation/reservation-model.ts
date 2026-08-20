@@ -19,7 +19,9 @@ export const DEFAULT_OPERATING_HOURS: Readonly<OperatingHours> = Object.freeze({
 const SHANGHAI_OFFSET = '+08:00'
 
 export function shanghaiBusinessDate(now = new Date()): string {
-  return new Date(now.getTime() + 8 * 60 * 60_000).toISOString().slice(0, 10)
+  const shanghai = new Date(now.getTime() + 8 * 60 * 60_000)
+  if (shanghai.getUTCHours() < 6) shanghai.setUTCDate(shanghai.getUTCDate() - 1)
+  return shanghai.toISOString().slice(0, 10)
 }
 
 export function addCalendarDays(date: string, days: number): string {

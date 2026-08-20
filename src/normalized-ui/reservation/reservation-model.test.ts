@@ -6,12 +6,25 @@ import {
   createArrivalSlots,
   formatMoney,
   reservationArrivalHoldState,
+  shanghaiBusinessDate,
   validateConfirmation,
   validateGuestDetails,
 } from './reservation-model'
 import type { ReservationDraft } from './types'
 
 describe('reservation operating schedule', () => {
+  it('keeps after-midnight arrivals on the active Shanghai business date', () => {
+    expect(shanghaiBusinessDate(new Date('2026-08-20T15:59:59.000Z'))).toBe('2026-08-20')
+    expect(shanghaiBusinessDate(new Date('2026-08-20T16:14:00.000Z'))).toBe('2026-08-20')
+    expect(shanghaiBusinessDate(new Date('2026-08-20T22:00:00.000Z'))).toBe('2026-08-21')
+
+    const slots = createArrivalSlots(
+      shanghaiBusinessDate(new Date('2026-08-20T16:14:00.000Z')),
+      new Date('2026-08-20T16:14:00.000Z'),
+    )
+    expect(slots[0]).toMatchObject({ label: '00:30 次日', iso: '2026-08-21T00:30:00+08:00' })
+  })
+
   it('creates Shanghai slots from noon through the next morning without natural-day ambiguity', () => {
     const slots = createArrivalSlots('2026-08-12', new Date('2026-08-11T00:00:00.000Z'))
 

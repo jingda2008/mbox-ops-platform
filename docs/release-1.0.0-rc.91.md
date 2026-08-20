@@ -2,10 +2,13 @@
 
 ## Scope
 
-This candidate upgrades the customer mini-program experience, staff operating
-workflows, editable home content and mobile inventory receiving. It adds
-normalized migration 097 so stock behavior is explicit per product instead of
-being inferred from product category or fulfillment station.
+This source candidate contains customer mini-program improvements, staff
+operating workflows, editable home content and mobile inventory receiving. The
+deployable release bundle is intentionally limited to the normalized web app,
+service and database; it does not upload, review or replace the WeChat
+mini-program. It adds normalized migration 097 so stock behavior is explicit
+per product instead of being inferred from product category or fulfillment
+station.
 
 ## Customer experience
 

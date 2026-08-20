@@ -20,7 +20,7 @@ test('formal release freezes a main-reachable tag and builds exactly one deploya
   assert.match(manifest, /Date\.parse\(frozenAt\)/)
 })
 
-test('candidate, upload and release use controlled artifacts while formal release cannot downgrade the claim', async () => {
+test('mini-program stages stay controlled while staff, service and database release is independent', async () => {
   const packageJson = JSON.parse(await read('../package.json'))
   const ci = await read('../.github/workflows/ci.yml')
   const release = await read('../.github/workflows/release.yml')
@@ -34,11 +34,25 @@ test('candidate, upload and release use controlled artifacts while formal releas
   assert.match(stages, /options: \[candidate, upload, release\]/)
   assert.match(stages, /gh release download/)
   assert.match(stages, /MBOX_MINIPROGRAM_RELEASE_STAGE: \$\{\{ inputs\.stage \}\}/)
-  assert.match(release, /environment:[\s\S]{0,80}miniprogram-production-release/)
-  assert.match(release, /miniprogram-release-evidence-\$\{GITHUB_SHA\}\.tar\.gz/)
-  assert.match(release, /MBOX_MINIPROGRAM_RELEASE_STAGE: release/)
-  assert.match(release, /MBOX_MINIPROGRAM_RELEASE_TRUSTED_PUBLIC_KEY_BASE64/)
-  assert.doesNotMatch(release, /MBOX_MINIPROGRAM_RELEASE_STAGE: (?:candidate|upload)/)
+  assert.match(release, /environment:[\s\S]{0,80}name: production/)
+  assert.match(release, /normalized-staff-service-database/)
+  assert.match(release, /wechat-miniprogram/)
+  assert.doesNotMatch(release, /miniprogram-(?:candidate|upload|release)-evidence/)
+  assert.doesNotMatch(release, /MBOX_MINIPROGRAM_RELEASE_(?:STAGE|EVIDENCE|TRUSTED)/)
+  assert.match(stages, /environment:[\s\S]{0,80}miniprogram-\$\{\{ inputs\.stage \}\}/)
+})
+
+test('deployment manifest and both activation boundaries enforce the backend-only scope', async () => {
+  const manifest = await read('./write-release-bundle-manifest.mjs')
+  const deploy = await read('../deploy/aliyun/deploy-release.sh')
+  const activate = await read('../deploy/aliyun/activate-release.sh')
+  for (const source of [manifest, deploy, activate]) {
+    assert.match(source, /normalized-staff-service-database/)
+    assert.match(source, /normalized-web/)
+    assert.match(source, /normalized-server/)
+    assert.match(source, /normalized-database/)
+    assert.match(source, /wechat-miniprogram/)
+  }
 })
 
 test('configuration and migration checks precede every database write and application candidate', async () => {
@@ -95,11 +109,16 @@ test('database maintenance credentials stay root-only and the frozen backup pres
   assert.match(activate, /contract-restore-source\.json[\s\S]*previous-release-manifest\.json[\s\S]*SHA256SUMS/)
   assert.match(backup, /NOT role\.rolsuper AND role\.rolbypassrls/)
   assert.match(backup, /pg_read_all_data/)
+  assert.match(backup, /provider_role\.rolname='pg_rds_superuser'[\s\S]*pg_has_role\(role\.oid,provider_role\.oid,'member'\)/)
   assert.match(backup, /default_transaction_read_only=on/)
   assert.match(backup, /--dbname="\$\{database_connection\}"/)
   assert.doesNotMatch(backup, /--no-owner/)
   const restore = await read('../deploy/aliyun/restore-postgres.sh')
   assert.match(restore, /localeProvider[\s\S]*= c/)
+  assert.match(restore, /role\.rolsuper OR \([\s\S]*role\.rolcreatedb[\s\S]*role\.rolcreaterole[\s\S]*role\.rolbypassrls/)
+  assert.match(restore, /provider_role\.rolname='pg_rds_superuser'[\s\S]*pg_has_role\(role\.oid,provider_role\.oid,'member'\)/)
+  assert.match(restore, /NOT role\.rolsuper AND role\.rolbypassrls[\s\S]*pg_read_all_data[\s\S]*provider_role\.rolname='pg_rds_superuser'/)
+  assert.match(restore, /SELECT current_user[\s\S]*\.database\.owner/)
   assert.doesNotMatch(`${backup}\n${restore}`, /--dbname="\$\{(?:DATABASE_URL|ADMIN_DATABASE_URL)\}"/)
   assert.doesNotMatch(`${backup}\n${restore}`, /passwordless DATABASE_URL|test-only/)
   assert.match(ci, /Run every normalized PostgreSQL transaction and RLS test\n\s+env:\n\s+TEST_POSTGRES_CONTAINER: \$\{\{ job\.services\.postgres\.id \}\}\n\s+run: npm run test:normalized:postgres/)

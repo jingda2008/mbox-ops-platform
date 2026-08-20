@@ -44,6 +44,13 @@ test -x "${state_helper}"
 test -x "${env_normalizer}"
 test -x "${database_backupper}"
 test -x "${database_restorer}"
+jq -e '
+  .deploymentScope == {
+    kind: "normalized-staff-service-database",
+    includes: ["normalized-web", "normalized-server", "normalized-database"],
+    excludes: ["wechat-miniprogram"]
+  }
+' "${manifest}" >/dev/null
 # shellcheck source=release-state.sh
 source "${state_helper}"
 release_lock_acquire "${install_root}" 0

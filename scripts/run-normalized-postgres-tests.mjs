@@ -55,6 +55,8 @@ function runVitest(databaseUrl) {
         'server/normalized',
         '--reporter=dot',
         '--hookTimeout=30000',
+        '--pool=forks',
+        '--maxWorkers=1',
       ],
       {
         cwd: process.cwd(),

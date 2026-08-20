@@ -556,7 +556,7 @@ test('mobile manager can initiate but cannot review cashier refund work', async 
   await page.getByLabel('四位 PIN').fill(data.employeePin)
   await page.getByRole('button', { name: /进入工作台/ }).click()
 
-  await page.getByRole('button', { name: '全部', exact: true }).click()
+  await page.getByRole('button', { name: '全部岗位入口', exact: true }).click()
   await page.getByRole('dialog', { name: '全部工作入口' }).getByRole('button', { name: /退款发起/ }).click()
   await expect(page.getByRole('heading', { name: '收银与退款' })).toBeVisible()
   await expect(page.getByText('待复核')).toBeVisible()

@@ -355,7 +355,7 @@ test('李艳可由授权管理页批量安排为主服务员并安全结束责�
   const data = await fixture()
   const manager = await staffPage(browser, data, 'liyan')
   await manager.page.setViewportSize({ width: 390, height: 844 })
-  await manager.page.getByRole('button', { name: '全部', exact: true }).click()
+  await manager.page.getByRole('button', { name: '全部岗位入口', exact: true }).click()
   const allEntries = manager.page.getByRole('dialog', { name: '全部工作入口' })
   await expect(allEntries).toBeVisible()
   await allEntries.getByRole('button', { name: '现场', exact: true }).click()

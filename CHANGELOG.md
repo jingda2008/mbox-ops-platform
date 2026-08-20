@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-rc.96 - 2026-08-21
+
+- Loads the authenticated employee session and server-filtered staff workspace
+  concurrently, then reuses the prefetched workspace for the first paint.
+- Recreates the workspace after an employee switch so navigation and operating
+  data cannot remain from the previous employee.
+- Keeps the 500 ms real-browser startup gate unchanged; the local 30-sample
+  employee startup p95 after the correction was 104.8 ms.
+
 ## 1.0.0-rc.95 - 2026-08-21
 
 - Makes the remote public readiness checks before migration and during the

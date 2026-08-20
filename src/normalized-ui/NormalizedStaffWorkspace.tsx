@@ -31,6 +31,7 @@ import './normalized-staff-workspace.css'
 
 export interface NormalizedStaffWorkspaceProps {
   api?: NormalizedApiClient
+  initialBootstrap?: StaffBootstrapView | null
   onNavigate?: (route: string) => void
   onLoginRequired?: () => void
   onBootstrapReady?: (bootstrap: StaffBootstrapView) => void
@@ -60,6 +61,7 @@ const domainRoute: Record<StaffDomainKey, string> = {
 
 export function NormalizedStaffWorkspace({
   api: suppliedApi,
+  initialBootstrap = null,
   onNavigate,
   onLoginRequired,
   onBootstrapReady,
@@ -67,7 +69,13 @@ export function NormalizedStaffWorkspace({
   sessionControls,
 }: NormalizedStaffWorkspaceProps) {
   const api = useMemo(() => suppliedApi ?? new NormalizedApiClient(), [suppliedApi])
-  const [state, dispatch] = useReducer(workspaceReducer, undefined, initialWorkspaceState)
+  const [state, dispatch] = useReducer(
+    workspaceReducer,
+    initialBootstrap,
+    (bootstrap): NormalizedWorkspaceState => bootstrap === null
+      ? initialWorkspaceState()
+      : { phase: 'ready', bootstrap, etag: null, message: null },
+  )
   const bootstrapEtag = useRef<string | null>(null)
   const bootstrapAbort = useRef<AbortController | null>(null)
 
@@ -101,8 +109,9 @@ export function NormalizedStaffWorkspace({
   }, [api, onBootstrapReady, onLoginRequired])
 
   useEffect(() => {
+    if (initialBootstrap !== null) return
     void loadBootstrap()
-  }, [loadBootstrap])
+  }, [initialBootstrap, loadBootstrap])
 
   useEffect(() => () => bootstrapAbort.current?.abort(), [])
 

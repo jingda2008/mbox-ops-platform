@@ -15,6 +15,7 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
   const [auth, setAuth] = useState<StaffAuthView | null>(null)
   const [phase, setPhase] = useState<'checking' | 'credential' | 'login' | 'ready'>('checking')
   const [message, setMessage] = useState<string | null>(null)
+  const [initialBootstrap, setInitialBootstrap] = useState<StaffBootstrapView | null>(null)
   const [staffRoute, setStaffRoute] = useState(() => normalizedStaffRoute(window.location.pathname))
   const [staffNavigation, setStaffNavigation] = useState<StaffBootstrapView['navigation'] | null>(null)
   const authenticatedSessionId = auth?.session.id ?? null
@@ -25,8 +26,15 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
   const checkSession = useCallback(async () => {
     setPhase('checking')
     try {
-      const session = await api.getStaffSession()
+      const [session, bootstrapResult] = await Promise.all([
+        api.getStaffSession(),
+        api.getStaffBootstrap().catch(() => null),
+      ])
       setAuth(session)
+      setInitialBootstrap(bootstrapResult?.data ?? null)
+      if (bootstrapResult?.data !== null && bootstrapResult?.data !== undefined) {
+        setStaffNavigation(bootstrapResult.data.navigation)
+      }
       setPhase('ready')
     } catch (error) {
       setAuth(null)
@@ -109,6 +117,7 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
     setStaffRoute(null)
     setMessage(null)
     setStaffNavigation(null)
+    setInitialBootstrap(null)
     setAuth(session)
   }
   const logoutReady = () => {
@@ -149,7 +158,9 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
   ) : (<>
       {message !== null && <p className="normalized-route-notice" role="status">{message}</p>}
       <NormalizedStaffWorkspace
+        key={authenticatedSessionId}
         api={api}
+        initialBootstrap={initialBootstrap}
         onNavigate={navigate}
         onLoginRequired={loginRequired}
         onBootstrapReady={rememberStaffNavigation}

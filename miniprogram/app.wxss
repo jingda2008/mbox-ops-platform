@@ -6,6 +6,7 @@ button { letter-spacing: 0; transition: transform 100ms ease, opacity 100ms ease
 .brand-row { display: flex; align-items: center; justify-content: space-between; }
 .brand { display: flex; align-items: center; gap: 14rpx; font-size: 31rpx; font-weight: 650; letter-spacing: 1rpx; }
 .brand-mark { display: flex; width: 52rpx; height: 52rpx; align-items: center; justify-content: center; border: 1rpx solid #c69a68; border-radius: 14rpx; color: #fffdf8; }
+.brand-logo { display: block; width: 60rpx; height: 60rpx; flex: 0 0 60rpx; border-radius: 50%; }
 .dev-badge { padding: 8rpx 14rpx; border: 1rpx solid #b78d5e; border-radius: 999rpx; color: #e8c79d; font-size: 21rpx; }
 .eyebrow { display: block; margin-bottom: 10rpx; color: #8a8177; font-size: 23rpx; letter-spacing: 1rpx; }
 .top-band .eyebrow { color: #c8bdb0; }

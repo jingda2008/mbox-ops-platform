@@ -141,6 +141,7 @@ interface ApiErrorBody {
   error: {
     code: string
     message: string
+    referenceId?: string
   }
 }
 
@@ -296,7 +297,11 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
       KDS_DELIVER_PERMISSION,
       FULFILLMENT_VIEW_ALL_PERMISSION,
     ])
-    const view = await options.fulfillmentQuery.getStaffWorkQueue(context.scope, context.employeeId)
+    const view = await options.fulfillmentQuery.getStaffWorkQueue(
+      context.scope,
+      context.employeeId,
+      context.businessDate,
+    )
     return reply.send({ data: view })
   }))
 
@@ -1208,10 +1213,17 @@ async function handleRoute(
   } catch (error) {
     const mapped = mapError(error)
     if (mapped.statusCode >= 500) {
-      reply.request.log.error({ errorCode: safeErrorCode(error) }, 'normalized commerce request failed')
+      const referenceId = safeReferenceId(reply.request.id)
+      mapped.body.error.referenceId = referenceId
+      reply.request.log.error({ errorCode: safeErrorCode(error), referenceId }, 'normalized commerce request failed')
     }
     return reply.code(mapped.statusCode).send(mapped.body)
   }
+}
+
+function safeReferenceId(value: string): string {
+  const normalized = value.replace(/[^A-Za-z0-9._:-]/g, '').slice(0, 64)
+  return normalized.length > 0 ? normalized : 'unknown-request'
 }
 
 function safeErrorCode(error: unknown): string {

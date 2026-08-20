@@ -556,6 +556,7 @@ export function StaffActionsPanel({
                 <div className="staff-action-card-main">
                   <strong>{item.table.code} · {item.item.productName} × {item.item.quantity}</strong>
                   <p>{item.stationCode === 'bar' ? '吧台' : item.stationCode === 'kitchen' ? '后厨' : '收银'} · {item.readyForDelivery ? '待配送' : '待制作'}</p>
+                  {item.carryover && <small className="staff-action-carryover">前营业日遗留 · 原营业日 {item.businessDate}，处理结果仍归原订单</small>}
                   {item.attentionMessages.map((message) => <small className="staff-action-note" key={message}>备注：{message}</small>)}
                   {item.overdue && <small className="staff-action-overdue">已超时，优先处理</small>}
                 </div>

@@ -189,6 +189,26 @@ export function MenuOrderingWorkspace({
     const interval = window.setInterval(updateClock, 30_000)
     return () => window.clearInterval(interval)
   }, [clockOffsetMs])
+  useEffect(() => {
+    if (!guestSalesMode) return
+    let frame = 0
+    const keepFocusedControlVisible = () => {
+      window.cancelAnimationFrame(frame)
+      frame = window.requestAnimationFrame(() => {
+        const active = document.activeElement
+        if (!(active instanceof HTMLElement) || !active.closest('.menu-ordering-workspace')) return
+        if (!active.matches('input, textarea, select, [contenteditable="true"]')) return
+        active.scrollIntoView({ block: 'center', inline: 'nearest' })
+      })
+    }
+    window.addEventListener('resize', keepFocusedControlVisible)
+    window.visualViewport?.addEventListener('resize', keepFocusedControlVisible)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.removeEventListener('resize', keepFocusedControlVisible)
+      window.visualViewport?.removeEventListener('resize', keepFocusedControlVisible)
+    }
+  }, [guestSalesMode])
   const orderedProducts = useMemo(
     () => products.filter((item) => item.enabled).sort((left, right) => (left.sortOrder ?? 999) - (right.sortOrder ?? 999)),
     [products],

@@ -210,6 +210,21 @@ export const inventoryApiPlugin: FastifyPluginAsync<
             "每条收货明细必须且只能提供inventoryItemId或scanCode",
           );
         }
+        if (scanCode !== null && line.quantity !== undefined) {
+          throw new InventoryRequestError(
+            "扫码收货数量必须由已绑定包装量和packages计算",
+          );
+        }
+        if (scanCode !== null && line.unitCostMinor !== undefined) {
+          throw new InventoryRequestError(
+            "扫码收货单位成本必须由totalCostMinor和实际数量计算",
+          );
+        }
+        if (inventoryItemId !== null && line.quantity === undefined) {
+          throw new InventoryRequestError(
+            "按物料收货必须提供quantity",
+          );
+        }
         return {
           inventoryItemId,
           scanCode,
@@ -222,7 +237,10 @@ export const inventoryApiPlugin: FastifyPluginAsync<
             line.packages === undefined
               ? "1"
               : readDecimal(line.packages, "packages", false),
-          unitCostMinor: readDecimal(line.unitCostMinor, "unitCostMinor", true),
+          unitCostMinor:
+            line.unitCostMinor === undefined
+              ? null
+              : readDecimal(line.unitCostMinor, "unitCostMinor", true),
           totalCostMinor: readIntegerString(
             line.totalCostMinor,
             "totalCostMinor",

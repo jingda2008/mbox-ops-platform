@@ -1,7 +1,7 @@
 <view class="page home-page">
   <view class="home-hero">
     <view class="brand-row">
-      <view class="brand"><view class="brand-mark">M</view><text>M-BOX</text></view>
+      <view class="brand"><image class="brand-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX Logo" /><text>M-BOX</text></view>
       <text wx:if="{{isDevelopment}}" class="dev-badge">开发模式</text>
     </view>
     <view class="hero-content">
@@ -15,6 +15,11 @@
   <block wx:else>
     <view wx:if="{{warning}}" class="warning">{{warning}}</view>
     <view wx:if="{{error}}" class="error-banner">{{error}}</view>
+
+    <button wx:if="{{visitState !== 'active'}}" class="home-menu-entry" bindtap="openMenu">
+      <view><text class="home-menu-entry__kicker">TONIGHT'S SELECTION</text><text class="home-menu-entry__title">先看今晚菜单</text><text class="home-menu-entry__copy">酒水、组合与价格可以提前浏览，到店扫码后再下单</text></view>
+      <view class="home-menu-entry__action"><text>MENU</text><text>→</text></view>
+    </button>
 
     <view wx:if="{{visitState === 'waiting'}}" class="state-card state-card--waiting">
       <view class="state-card__icon">···</view>
@@ -30,7 +35,7 @@
       </view>
 
       <button class="primary-experience" data-url="/pages/order/index" bindtap="openTab">
-        <view><text class="primary-experience__kicker">今晚从这里开始</text><text class="primary-experience__title">点单与付款</text><text class="primary-experience__copy">实时菜单、三档推荐与付款前升级</text></view>
+        <view><text class="primary-experience__kicker">今晚从这里开始</text><text class="primary-experience__title">今晚菜单与点单</text><text class="primary-experience__copy">实时库存、清晰价格与舒适选择</text></view>
         <text class="primary-experience__arrow">→</text>
       </button>
 
@@ -55,9 +60,10 @@
         <view class="state-card__body"><text class="state-card__eyebrow">我的预约</text><text class="state-card__title">{{upcomingReservation.title}}</text><text class="state-card__copy">{{upcomingReservation.statusText}}</text></view>
         <button class="state-card__action" data-url="/pages/reservations/index" bindtap="openTab">查看</button>
       </view>
-      <button wx:else class="primary-experience reservation-experience" data-url="/pages/reservations/index" bindtap="openTab">
-        <view><text class="primary-experience__kicker">提前安排</text><text class="primary-experience__title">预约今晚</text><text class="primary-experience__copy">先选时间人数，再看演出与位置</text></view><text class="primary-experience__arrow">→</text>
-      </button>
+      <view wx:else class="state-card current-state">
+        <view class="state-card__icon">⌁</view>
+        <view class="state-card__body"><text class="state-card__eyebrow">当前状态</text><text class="state-card__title">尚未连接桌位</text><text class="state-card__copy">到店后从“点单”页扫描桌码，即可进入实时菜单和桌边服务。</text></view>
+      </view>
 
       <view wx:if="{{performance}}" class="section">
         <view class="section-title"><text>今晚现场</text><text class="section-link">{{performance.stateText}}</text></view>
@@ -67,13 +73,46 @@
         </view>
       </view>
 
-      <view class="section">
-        <view class="section-title"><text>值得去看看</text><text class="section-link">M-BOX精选</text></view>
-        <view class="discovery-grid">
-          <button class="discovery-card discovery-card--activity" data-url="/pages/community/index" bindtap="openTab"><text>超嗨</text><text>{{upcomingActivity ? upcomingActivity.title : '等待下一场发布'}}</text><text>活动与城市体验 →</text></button>
-          <button class="discovery-card discovery-card--member" data-url="/pages/profile/index" bindtap="openTab"><text>{{membership ? '我的会员' : '加入会员'}}</text><text>{{benefitCount ? (benefitCount + ' 项权益可用') : membership ? ('积分 ' + membership.pointsBalance) : '记录偏好与美好时刻'}}</text><text>查看权益 →</text></button>
-        </view>
-      </view>
     </block>
+
+    <view wx:if="{{upcomingActivity || editorialCards.length}}" class="section home-editorial-section">
+      <view class="section-title"><text>发现 M-BOX</text><text class="section-link">精选内容</text></view>
+      <button wx:if="{{upcomingActivity}}" class="featured-activity-card" bindtap="openFeaturedActivity">
+        <image wx:if="{{upcomingActivity.coverUrl}}" src="{{upcomingActivity.coverUrl}}" mode="aspectFill" />
+        <view class="featured-activity-card__shade"></view>
+        <view class="featured-activity-card__copy"><text>超嗨 · 本期精选</text><text>{{upcomingActivity.title}}</text><text>{{upcomingActivity.dateText}} · {{upcomingActivity.availabilityText}}</text><text>查看活动详情 →</text></view>
+      </button>
+      <button wx:for="{{editorialCards}}" wx:key="code" class="editorial-story-card" data-code="{{item.code}}" bindtap="openEditorial">
+        <image wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
+        <image wx:else src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" />
+        <view><text>{{item.eyebrow}}</text><text>{{item.title}}</text><text>{{item.summary}}</text><text>{{item.ctaLabel}} →</text></view>
+      </button>
+    </view>
   </block>
+
+  <view wx:if="{{membershipInviteVisible}}" class="member-invite-mask" catchtouchmove="noop">
+    <view class="member-invite-sheet">
+      <button class="member-invite-close" aria-label="关闭会员邀请" bindtap="dismissMembershipInvite">×</button>
+      <text class="member-invite-kicker">M-BOX MEMBERSHIP</text>
+      <text class="member-invite-title">欢迎加入 M-BOX</text>
+      <text class="member-invite-copy">加入后按已发布规则享消费积分、会员权益与活动资格。</text>
+      <image class="member-invite-logo" src="/assets/brand/mbox-logo-full.png" mode="aspectFit" aria-label="M-BOX Shanghai 1999 Logo" />
+      <checkbox-group bindchange="onMembershipInviteAgreementChange">
+        <label class="member-invite-agreement">
+          <checkbox value="agree" checked="{{membershipInviteAgreed}}" color="#315d46" />
+          <text>我已阅读并同意以下协议</text>
+        </label>
+      </checkbox-group>
+      <view class="member-invite-links">
+        <text bindtap="showMembershipTerms">《{{membershipTerms.title}}》</text>
+        <text bindtap="openPrivacy">《隐私政策》</text>
+      </view>
+      <view class="member-invite-actions">
+        <button class="member-invite-refuse" bindtap="declineMembershipInvite">暂不加入</button>
+        <button wx:if="{{membershipInviteAgreed}}" class="member-invite-agree wx-phone-button" open-type="getPhoneNumber|agreePrivacyAuthorization" bindgetphonenumber="acceptMembershipInvite" bindagreeprivacyauthorization="onAgreePrivacyAuthorization" hover-class="none" loading="{{membershipInviteBusy}}">同意</button>
+        <button wx:else class="member-invite-agree member-invite-agree--pending" bindtap="remindMembershipInviteAgreement" hover-class="none">同意</button>
+      </view>
+      <text class="member-invite-note">须由您亲自勾选并授权微信手机号；拒绝或关闭不影响浏览菜单、预约及点单。</text>
+    </view>
+  </view>
 </view>

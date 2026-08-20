@@ -487,6 +487,29 @@ describe('commerceKdsApiPlugin', () => {
     expect(value.staffQueries.some((sql) => sql.includes('role_granted'))).toBe(true)
   })
 
+  it('returns a safe request reference when an unexpected order failure needs investigation', async () => {
+    const value = fixture({ commerceError: new Error('database detail must stay private') })
+    const response = await value.app.inject({
+      method: 'POST',
+      url: '/api/commerce/orders',
+      headers: {
+        'idempotency-key': 'order-unexpected-0001',
+        'x-assisted-order-context': assistedToken,
+      },
+      payload: { tableSessionId, items: [{ productId, quantity: 1 }] },
+    })
+
+    expect(response.statusCode).toBe(500)
+    expect(response.json()).toEqual({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: '服务暂时不可用，请稍后重试',
+        referenceId: expect.stringMatching(/^[A-Za-z0-9._:-]{1,64}$/),
+      },
+    })
+    expect(response.body).not.toContain('database detail')
+  })
+
   it('resolves an employee gift authority on the server and records the required reason', async () => {
     const giftResult: SubmittedCommerceResult = {
       ...commerceResult,
@@ -632,6 +655,7 @@ describe('commerceKdsApiPlugin', () => {
     expect(value.fulfillmentQuery.getStaffWorkQueue).toHaveBeenCalledWith(
       { tenantId, storeId },
       employeeId,
+      '2026-08-11',
     )
 
     const denied = fixture({ permissions: ['dashboard.view'] })

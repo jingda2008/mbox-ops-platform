@@ -72,7 +72,7 @@ function releaseRuntime(value) {
     mode: 'production', apiBaseUrl, storeId,
     defaultTableCode: '', defaultTableToken: '', developmentActorId: '', developmentMemberId: '',
     allowDevDataFallback: false, requestTimeoutMs, wechatIdentityEnabled: true,
-    membershipInviteCooldownHours: Number(input.membershipInviteCooldownHours ?? 720),
+    membershipInviteCooldownHours: Number(input.membershipInviteCooldownHours ?? 24),
     identityTenantId, identityStoreId, wechatAppId: appId,
   })
 }

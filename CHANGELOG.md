@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-rc.91 - 2026-08-20
+
+- Required explicit customer agreement before WeChat phone authorization and membership enrollment while preserving browse-and-order access after refusal.
+- Refined the mini-program home, menu entry, ordering layout, tab bar, M-BOX artwork and Huawei X5 narrow-screen behavior without duplicating member functions across tabs.
+- Added authorized, typed home-content draft, publish and pause management for customer-facing activities and brand stories.
+- Preserved staff shortcuts and explicit employee switching while tightening staff-assisted ordering contracts.
+- Added mobile barcode and QR receiving for tracked inventory, typed product inventory-control modes, and safe receipt unit-cost derivation; food and snack products can remain explicitly not managed.
+- Added normalized migration 097 and PostgreSQL coverage for inventory and home-content publication; WeChat review, real payment and physical-device acceptance remain separate release evidence.
+
 ## 1.0.0-rc.89 - 2026-08-15
 
 - Aligned Postar synchronous responses with the provider contract: requests remain RSA-signed, optional response signatures are verified when present, and unsigned synchronous responses are accepted only over the fixed HTTPS endpoint with strict merchant, order, status and amount binding.

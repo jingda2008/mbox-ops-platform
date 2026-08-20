@@ -23,16 +23,41 @@
     "backgroundTextStyle": "dark"
   },
   "tabBar": {
-    "color": "#7b746c",
-    "selectedColor": "#765332",
+    "color": "#817a72",
+    "selectedColor": "#315d46",
     "backgroundColor": "#fffdfa",
-    "borderStyle": "black",
+    "borderStyle": "white",
     "list": [
-      { "pagePath": "pages/home/index", "text": "首页" },
-      { "pagePath": "pages/reservations/index", "text": "预约" },
-      { "pagePath": "pages/order/index", "text": "点单" },
-      { "pagePath": "pages/community/index", "text": "超嗨" },
-      { "pagePath": "pages/profile/index", "text": "我的" }
+      {
+        "pagePath": "pages/home/index",
+        "text": "首页",
+        "iconPath": "assets/tabbar/home.png",
+        "selectedIconPath": "assets/tabbar/home-active.png"
+      },
+      {
+        "pagePath": "pages/reservations/index",
+        "text": "预约",
+        "iconPath": "assets/tabbar/reservations.png",
+        "selectedIconPath": "assets/tabbar/reservations-active.png"
+      },
+      {
+        "pagePath": "pages/order/index",
+        "text": "点单",
+        "iconPath": "assets/tabbar/order.png",
+        "selectedIconPath": "assets/tabbar/order-active.png"
+      },
+      {
+        "pagePath": "pages/community/index",
+        "text": "超嗨",
+        "iconPath": "assets/tabbar/community.png",
+        "selectedIconPath": "assets/tabbar/community-active.png"
+      },
+      {
+        "pagePath": "pages/profile/index",
+        "text": "我的",
+        "iconPath": "assets/tabbar/profile.png",
+        "selectedIconPath": "assets/tabbar/profile-active.png"
+      }
     ]
   },
   "usingComponents": {

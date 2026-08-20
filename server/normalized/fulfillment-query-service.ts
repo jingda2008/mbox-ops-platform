@@ -1,9 +1,4 @@
-import type { JsonValue } from './command-executor.js'
-import {
-  StaffAccessRepository,
-  type EffectiveDataScope,
-  type EffectiveStaffAccess,
-} from './staff-access-repository.js'
+import { StaffAccessRepository, type EffectiveStaffAccess } from './staff-access-repository.js'
 import {
   ScopedPostgresTransactionRunner,
   type ScopedTransaction,
@@ -20,6 +15,8 @@ export type FulfillmentKdsStatus = 'pending' | 'accepted' | 'preparing' | 'ready
 
 export interface FulfillmentWorkItem {
   taskId: string
+  businessDate: string
+  carryover: boolean
   stationCode: FulfillmentStation
   kdsStatus: FulfillmentKdsStatus
   priority: number
@@ -69,6 +66,8 @@ export interface FulfillmentStaffView {
 
 interface FulfillmentRow extends Record<string, unknown> {
   task_id: string
+  business_date: string
+  carryover: boolean
   station_code: FulfillmentStation
   kds_status: FulfillmentKdsStatus
   priority: number
@@ -102,8 +101,10 @@ export class FulfillmentQueryService {
   getStaffWorkQueue(
     scope: Readonly<StoreScope>,
     employeeId: string,
+    businessDate: string,
   ): Promise<FulfillmentStaffView> {
     if (employeeId.trim().length === 0) throw new TypeError('employeeId must not be blank')
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(businessDate)) throw new TypeError('businessDate must be YYYY-MM-DD')
 
     return this.transactions.run(scope, async (transaction) => {
       const access = await new StaffAccessRepository(transaction).resolve(employeeId)
@@ -111,10 +112,11 @@ export class FulfillmentQueryService {
       const canPrepare = access.permissions.includes(KDS_PREPARE_PERMISSION)
       const canDeliver = access.permissions.includes(KDS_DELIVER_PERMISSION)
       const allowedStations = canPrepare
-        ? resolveAllowedStations(access.dataScopes)
+        ? resolveFulfillmentAllowedStations(access.dataScopes)
         : []
       const rows = await readFulfillmentRows(transaction, {
         employeeId,
+        businessDate,
         canViewAll,
         canPrepare,
         canDeliver,
@@ -134,6 +136,7 @@ async function readFulfillmentRows(
   transaction: ScopedTransaction,
   access: Readonly<{
     employeeId: string
+    businessDate: string
     canViewAll: boolean
     canPrepare: boolean
     canDeliver: boolean
@@ -143,6 +146,8 @@ async function readFulfillmentRows(
   const result = await transaction.query<FulfillmentRow>(`
     SELECT
       task.id AS task_id,
+      session.business_date::text AS business_date,
+      (session.business_date < $8::date) AS carryover,
       task.station_code,
       task.status AS kds_status,
       task.priority,
@@ -243,14 +248,18 @@ async function readFulfillmentRows(
     [...access.allowedStations],
     access.canPrepare,
     access.canDeliver,
+    access.businessDate,
   ])
   return result.rows
 }
 
-function resolveAllowedStations(scopes: readonly EffectiveDataScope[]): FulfillmentStation[] {
+export function resolveFulfillmentAllowedStations(
+  scopes: readonly { key: string; effect: 'include' | 'exclude'; value: unknown }[],
+): Array<Exclude<FulfillmentStation, 'cashier'>> {
+  type PreparatoryStation = Exclude<FulfillmentStation, 'cashier'>
   const relevant = scopes.filter((scope) => scope.key === KDS_STATION_SCOPE)
-  const included = new Set<FulfillmentStation>()
-  const excluded = new Set<FulfillmentStation>()
+  const included = new Set<PreparatoryStation>()
+  const excluded = new Set<PreparatoryStation>()
 
   for (const scope of relevant) {
     const target = scope.effect === 'include' ? included : excluded
@@ -260,16 +269,16 @@ function resolveAllowedStations(scopes: readonly EffectiveDataScope[]): Fulfillm
   return [...included].filter((station) => !excluded.has(station)).toSorted()
 }
 
-function readStations(value: JsonValue): FulfillmentStation[] {
+function readStations(value: unknown): Array<Exclude<FulfillmentStation, 'cashier'>> {
   const candidates = Array.isArray(value)
     ? value
     : typeof value === 'string'
       ? [value]
-      : value !== null && typeof value === 'object' && !Array.isArray(value)
+      : value !== null && typeof value === 'object' && !Array.isArray(value) && 'stationCodes' in value
         ? value.stationCodes
         : []
   if (!Array.isArray(candidates)) return []
-  return candidates.filter((candidate): candidate is FulfillmentStation => (
+  return candidates.filter((candidate): candidate is Exclude<FulfillmentStation, 'cashier'> => (
     candidate === 'bar' || candidate === 'kitchen'
   ))
 }
@@ -295,6 +304,8 @@ function mapWorkItem(row: FulfillmentRow): FulfillmentWorkItem {
     .filter((note): note is string => note !== null && note.trim().length > 0)
   return {
     taskId: row.task_id,
+    businessDate: row.business_date,
+    carryover: row.carryover,
     stationCode: row.station_code,
     kdsStatus: row.kds_status,
     priority: row.priority,

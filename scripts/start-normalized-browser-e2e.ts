@@ -177,26 +177,30 @@ async function seedOrderableInventory(
   await client.connect()
   try {
     await client.query(`SELECT set_config('app.tenant_id', $1, false), set_config('app.store_id', $2, false)`, [tenantId, storeId])
-    const products = await client.query<{ id: string; name: string; fulfillment_station: 'bar' | 'kitchen' }>(`
-      SELECT id, name, fulfillment_station FROM mbox.products
+    const products = await client.query<{
+      id: string
+      name: string
+      fulfillment_station: 'bar' | 'kitchen'
+      inventory_control_mode: 'tracked' | 'not_managed'
+      guest_visible: boolean
+    }>(`
+      SELECT id, name, fulfillment_station, inventory_control_mode, guest_visible FROM mbox.products
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND status='active'
         AND product_kind='single' AND fulfillment_station = ANY($3::text[])
-        AND guest_visible
       ORDER BY fulfillment_station, code
     `, [tenantId, storeId, ['bar', 'kitchen']])
     const selected = {
-      bar: products.rows.find((product) => product.fulfillment_station === 'bar'),
-      kitchen: products.rows.find((product) => product.fulfillment_station === 'kitchen'),
+      bar: products.rows.find((product) => product.fulfillment_station === 'bar' && product.guest_visible),
+      kitchen: products.rows.find((product) => product.fulfillment_station === 'kitchen' && product.guest_visible),
     }
     if (!selected.bar || !selected.kitchen) throw new Error('normalized browser fixture needs guest-visible bar and kitchen products')
-    for (const station of ['bar', 'kitchen'] as const) {
-      const product = selected[station]!
+    for (const product of products.rows.filter((candidate) => candidate.inventory_control_mode === 'tracked')) {
       const item = await client.query<{ id: string }>(`
         INSERT INTO mbox.inventory_items(
           tenant_id, store_id, sku, name, item_type, base_unit, low_stock_threshold)
         VALUES ($1,$2,$3,$4,'ingredient','piece',10)
         RETURNING id
-      `, [tenantId, storeId, `BROWSER-E2E-${station.toUpperCase()}`, `${station}浏览器验收原料`])
+      `, [tenantId, storeId, `BROWSER-E2E-${product.id}`, `${product.name}浏览器验收原料`])
       const recipe = await client.query<{ id: string }>(`
         INSERT INTO mbox.recipes(
           tenant_id, store_id, product_id, version, yield_quantity,

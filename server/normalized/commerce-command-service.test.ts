@@ -44,6 +44,7 @@ const productAId = randomUUID()
 const productBId = randomUUID()
 const productKitchenId = randomUUID()
 const bundleProductId = randomUUID()
+const nonFulfillmentProductId = randomUUID()
 const inventoryAId = randomUUID()
 const inventoryBId = randomUUID()
 const inventoryKitchenId = randomUUID()
@@ -123,6 +124,7 @@ describe('CommerceCommandService unit transaction composition', () => {
       { rows: [], rowCount: 1 },
       { rows: [{ affected_count: 0 }] },
       { rows: [{ fulfillment_expires_at: expiresAt, fulfillment_state: 'awaiting_payment' }] },
+      { rows: [{ order_item_id: orderItemId }] },
       { rows: [{ order_item_id: orderItemId, inventory_item_id: inventoryAId, sku: 'A-ING', required_quantity: '1.000000' }] },
       { rows: [] },
       { rows: [{ inventory_item_id: inventoryAId, sku: 'A-ING', on_hand_quantity: '10.000000', reserved_quantity: '0.000000', required_quantity: '1.000000', insufficient: false }] },
@@ -271,6 +273,7 @@ describe('CommerceCommandService unit transaction composition', () => {
       { rows: [{ id: orderItemId, order_id: orderId, product_id: productAId, parent_order_item_id: null, quantity: 1, unit_price_minor: '8800', discount_amount_minor: '8800', total_amount_minor: '0', currency: 'CNY', fulfillment_station: 'bar', product_snapshot: {}, cost_snapshot: {}, status: 'submitted', note: null, created_at: '2026-08-11T12:00:00.000Z' }] },
       { rows: [], rowCount: 1 },
       { rows: [], rowCount: 1 },
+      { rows: [{ order_item_id: orderItemId }] },
       { rows: [{ order_item_id: orderItemId, inventory_item_id: inventoryAId, sku: 'A-ING', required_quantity: '1.000000' }] },
       { rows: [{ inventory_item_id: inventoryAId, sku: 'A-ING', on_hand_quantity: '10.000000', reserved_quantity: '0.000000', required_quantity: '1.000000', insufficient: false }] },
       { rows: [{ id: movementId }] },
@@ -850,6 +853,42 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
     expect(stored.rows[0]).toEqual({ settlement_mode: 'table_tab', payment_status: 'unpaid' })
   })
 
+  it('submits a one-yuan non-fulfillment item for immediate payment without inventory or KDS work', async () => {
+    const result = await service.submitOrder({
+      ...command(
+        'integration-one-yuan-payment',
+        sessionOneId,
+        nonFulfillmentProductId,
+        1,
+        'integration-one-yuan-payment-0001',
+      ),
+      settlementMode: 'immediate_payment',
+    })
+
+    expect(result.value.order).toMatchObject({
+      totalAmountMinor: 100,
+      settlementMode: 'immediate_payment',
+    })
+    expect(result.value.inventoryConsumptions).toEqual([])
+    expect(result.value.kdsTasks).toEqual([])
+    expect(result.value.paymentNextStep).toMatchObject({
+      status: 'required', action: 'create_payment_intent', amountMinor: 100, currency: 'CNY',
+    })
+    const evidence = await pool.query<{ fulfillment_state: string; reservations: string; kds_tasks: string }>(`
+      SELECT order_row.fulfillment_state,
+        (SELECT count(*)::text FROM mbox.inventory_order_reservations
+          WHERE order_id=order_row.id) AS reservations,
+        (SELECT count(*)::text FROM mbox.kds_tasks AS task
+          JOIN mbox.order_items AS item ON item.id=task.order_item_id
+          WHERE item.order_id=order_row.id) AS kds_tasks
+      FROM mbox.orders AS order_row
+      WHERE order_row.id=$1::uuid
+    `, [result.value.order.id])
+    expect(evidence.rows[0]).toEqual({
+      fulfillment_state: 'awaiting_payment', reservations: '0', kds_tasks: '0',
+    })
+  })
+
   it('charges a bundle once while routing its components to separate KDS stations and inventory recipes', async () => {
     const submitted = await service.submitOrder(command(
       'integration-bundle-order',
@@ -1346,9 +1385,13 @@ async function seed(pool: Pool): Promise<void> {
       ($1, $3, $4, 'PRODUCT-A', 'Product A', 'drink', 'bar', 'single', 3000),
       ($2, $3, $4, 'PRODUCT-B', 'Product B', 'drink', 'bar', 'single', 2000),
       ($5, $3, $4, 'PRODUCT-KITCHEN', 'Kitchen Product', 'food', 'kitchen', 'single', 2000),
-      ($6, $3, $4, 'BUNDLE-AB', 'Bar and Kitchen Bundle', 'bundle', 'none', 'bundle', 6000)
+      ($6, $3, $4, 'BUNDLE-AB', 'Bar and Kitchen Bundle', 'bundle', 'none', 'bundle', 6000),
+      ($7, $3, $4, 'PAYMENT-ONE-YUAN', '真实支付联调1元', 'other', 'none', 'single', 0)
     ON CONFLICT DO NOTHING
-  `, [productAId, productBId, tenantId, storeId, productKitchenId, bundleProductId])
+  `, [
+    productAId, productBId, tenantId, storeId, productKitchenId, bundleProductId,
+    nonFulfillmentProductId,
+  ])
   await pool.query(`
     INSERT INTO mbox.product_bundle_components(
       tenant_id, store_id, bundle_product_id, component_product_id, quantity, sort_order
@@ -1360,9 +1403,13 @@ async function seed(pool: Pool): Promise<void> {
       ($1, $2, $3, 'standard', 8800, '2026-01-01T00:00:00Z'),
       ($1, $2, $4, 'standard', 6800, '2026-01-01T00:00:00Z'),
       ($1, $2, $5, 'standard', 5800, '2026-01-01T00:00:00Z'),
-      ($1, $2, $6, 'standard', 14800, '2026-01-01T00:00:00Z')
+      ($1, $2, $6, 'standard', 14800, '2026-01-01T00:00:00Z'),
+      ($1, $2, $7, 'standard', 100, '2026-01-01T00:00:00Z')
     ON CONFLICT DO NOTHING
-  `, [tenantId, storeId, productAId, productBId, productKitchenId, bundleProductId])
+  `, [
+    tenantId, storeId, productAId, productBId, productKitchenId, bundleProductId,
+    nonFulfillmentProductId,
+  ])
   await pool.query(`
     INSERT INTO mbox.inventory_items(id, tenant_id, store_id, sku, name, item_type, base_unit) VALUES
       ($1, $3, $4, 'ING-A', 'Ingredient A', 'ingredient', 'ml'),

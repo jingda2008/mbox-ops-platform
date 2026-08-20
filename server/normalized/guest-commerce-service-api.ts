@@ -61,6 +61,7 @@ import {
   lockBoundGuestTablePosition,
   requireGuestSessionIdFromActorRef,
 } from './guest-table-authority.js'
+import { ReservationGuestSessionInvalidError } from './reservation-guest-session.js'
 import type {
   ScopedPostgresTransactionRunner,
   ScopedTransaction,
@@ -76,6 +77,7 @@ export interface GuestCommerceServiceApiOptions {
   payments: Pick<PaymentCommandService, 'initiate'>
   onlinePayments: Pick<OnlinePaymentService, 'create' | 'resolveGuestMethod' | 'assertAvailable' | 'resolveActivePayment'>
   resolveGuestContext(request: FastifyRequest): Promise<GuestRequestContext> | GuestRequestContext
+  resolvePublicContext(request: FastifyRequest): Promise<{ scope: Readonly<StoreScope> }> | { scope: Readonly<StoreScope> }
   resolveDeviceFingerprint(request: FastifyRequest): string
   paymentMode: GuestCheckoutPaymentMode
   resolvePaymentMode?: (scope: Readonly<StoreScope>) => Promise<GuestCheckoutPaymentMode | null>
@@ -120,6 +122,7 @@ interface CatalogMenuRow extends Record<string, unknown> {
   currency: string | null
   guest_count: number
   guest_profile_snapshot: JsonObject
+  inventory_configuration_complete: boolean
 }
 
 interface GuestServiceCommandResult {
@@ -150,6 +153,19 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
   options,
 ) => {
   const createPublicId = options.createPublicId ?? deterministicPublicId
+
+  app.get('/public/mini/menu/products', async (request, reply) => handleRoute(reply, async () => {
+    const context = await options.resolvePublicContext(request)
+    const query = readMenuQuery(request.query)
+    const products = await options.transactions.run(context.scope, (transaction) => (
+      searchGuestCatalog(transaction, null, query)
+    ))
+    return reply.send({
+      data: products.map(publicCatalogProduct),
+      meta: { search: query.search, categoryCode: query.categoryCode, count: products.length,
+        partySize: null, recommendationScene: null, orderingRequiresTableScan: true },
+    })
+  }))
 
   app.get('/guest/menu/products', async (request, reply) => handleRoute(reply, async () => {
     const context = await requireTableContext(options, request, 'guest.menu.read')
@@ -501,7 +517,7 @@ async function requireTableContext(
 
 async function searchGuestCatalog(
   transaction: ScopedTransaction,
-  tableSessionId: string,
+  tableSessionId: string | null,
   query: Readonly<{ search: string; categoryCode: string | null; limit: number; offset: number }>,
 ): Promise<CatalogMenuRow[]> {
   const searchPattern = `%${escapeLike(query.search)}%`
@@ -530,9 +546,11 @@ async function searchGuestCatalog(
       END AS within_availability,
       product.cost_amount_minor::text, product.status,
       price.amount_minor::text, price.currency,
-      current_session.guest_count, current_session.guest_profile_snapshot
+      COALESCE(current_session.guest_count, 2) AS guest_count,
+      COALESCE(current_session.guest_profile_snapshot, '{}'::jsonb) AS guest_profile_snapshot,
+      COALESCE(inventory_readiness.configuration_complete, false) AS inventory_configuration_complete
     FROM mbox.products AS product
-    JOIN mbox.table_sessions AS current_session
+    LEFT JOIN mbox.table_sessions AS current_session
       ON current_session.tenant_id = product.tenant_id
       AND current_session.store_id = product.store_id
       AND current_session.id = $3::uuid
@@ -568,8 +586,56 @@ async function searchGuestCatalog(
         AND component.store_id = product.store_id
         AND component.bundle_product_id = product.id
     ) AS component_list ON true
+    LEFT JOIN LATERAL (
+      SELECT COALESCE(bool_and(
+        required_product.inventory_control_mode = 'not_managed'
+        OR required_product.fulfillment_station NOT IN ('bar', 'kitchen')
+        OR EXISTS (
+          SELECT 1
+          FROM mbox.recipes AS recipe
+          WHERE recipe.tenant_id=product.tenant_id AND recipe.store_id=product.store_id
+            AND recipe.product_id=required_product.product_id
+            AND recipe.status='active' AND recipe.effective_at<=statement_timestamp()
+            AND EXISTS (
+              SELECT 1 FROM mbox.recipe_items AS recipe_item
+              WHERE recipe_item.tenant_id=recipe.tenant_id AND recipe_item.store_id=recipe.store_id
+                AND recipe_item.recipe_id=recipe.id
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM mbox.recipe_items AS recipe_item
+              LEFT JOIN mbox.inventory_items AS inventory_item
+                ON inventory_item.tenant_id=recipe_item.tenant_id
+               AND inventory_item.store_id=recipe_item.store_id
+               AND inventory_item.id=recipe_item.inventory_item_id
+              LEFT JOIN mbox.inventory_balances AS balance
+                ON balance.tenant_id=recipe_item.tenant_id
+               AND balance.store_id=recipe_item.store_id
+               AND balance.inventory_item_id=recipe_item.inventory_item_id
+              WHERE recipe_item.tenant_id=recipe.tenant_id AND recipe_item.store_id=recipe.store_id
+                AND recipe_item.recipe_id=recipe.id
+                AND (inventory_item.id IS NULL OR inventory_item.status<>'active' OR balance.id IS NULL)
+            )
+        )
+      ), true) AS configuration_complete
+      FROM (
+        SELECT product.id AS product_id, product.fulfillment_station, product.inventory_control_mode
+        WHERE COALESCE(product.product_kind, 'single')<>'bundle'
+        UNION ALL
+        SELECT component_product.id, component_product.fulfillment_station, component_product.inventory_control_mode
+        FROM mbox.product_bundle_components AS component
+        JOIN mbox.products AS component_product
+          ON component_product.tenant_id=component.tenant_id
+         AND component_product.store_id=component.store_id
+         AND component_product.id=component.component_product_id
+        WHERE component.tenant_id=product.tenant_id AND component.store_id=product.store_id
+          AND component.bundle_product_id=product.id
+          AND COALESCE(product.product_kind, 'single')='bundle'
+      ) AS required_product
+    ) AS inventory_readiness ON true
     WHERE product.tenant_id = $1::uuid
       AND product.store_id = $2::uuid
+      AND ($3::uuid IS NULL OR current_session.id IS NOT NULL)
       AND product.status = 'active'
       AND product.guest_visible
       AND price.amount_minor IS NOT NULL
@@ -607,8 +673,8 @@ async function searchGuestCatalog(
       CASE WHEN product.recommendation_enabled
         AND product.cost_amount_minor IS NOT NULL
         AND price.amount_minor > product.cost_amount_minor
-        AND product.recommendation_min_guests <= current_session.guest_count
-        AND product.recommendation_max_guests >= current_session.guest_count
+        AND product.recommendation_min_guests <= COALESCE(current_session.guest_count, 2)
+        AND product.recommendation_max_guests >= COALESCE(current_session.guest_count, 2)
         THEN 0
         WHEN product.recommendation_enabled THEN 1
         ELSE 2
@@ -666,7 +732,8 @@ function publicCatalogProduct(row: CatalogMenuRow) {
     productKind: row.product_kind,
     bundleComponents: publicBundleComponents(row.bundle_components),
     recommendation: publicRecommendation(row, amountMinor),
-    available: row.status === 'active' && row.amount_minor !== null && row.within_availability !== false,
+    available: row.status === 'active' && row.amount_minor !== null
+      && row.within_availability !== false && row.inventory_configuration_complete,
   }
 }
 
@@ -1126,7 +1193,9 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<unknown
     if (error instanceof GuestApiRequestError) {
       return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message } })
     }
-    if (error instanceof GuestAuthenticationRequiredError || error instanceof GuestDeviceBindingError) {
+    if (error instanceof GuestAuthenticationRequiredError
+      || error instanceof GuestDeviceBindingError
+      || error instanceof ReservationGuestSessionInvalidError) {
       return reply.code(401).send({ error: { code: 'GUEST_SESSION_INVALID', message: error.message } })
     }
     if (error instanceof GuestStoreScopeError) {

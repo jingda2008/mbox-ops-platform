@@ -12,6 +12,12 @@ import {
   type ScopedTransaction,
   type StoreScope,
 } from './transaction-runner.js'
+import {
+  FULFILLMENT_VIEW_ALL_PERMISSION,
+  KDS_DELIVER_PERMISSION,
+  KDS_PREPARE_PERMISSION,
+  resolveFulfillmentAllowedStations,
+} from './fulfillment-query-service.js'
 
 export interface StaffBootstrapQueryResult {
   view: StaffBootstrapView
@@ -48,10 +54,20 @@ interface SummaryRow extends Record<string, unknown> {
   open_service_tasks: string
   urgent_service_tasks: string
   active_kds_tasks: string
+  active_bar_kds_tasks: string
+  active_kitchen_kds_tasks: string
   ready_kds_tasks: string
+  ready_bar_kds_tasks: string
+  ready_kitchen_kds_tasks: string
   overdue_kds_tasks: string
+  overdue_bar_kds_tasks: string
+  overdue_kitchen_kds_tasks: string
   carryover_kds_tasks: string
+  carryover_bar_kds_tasks: string
+  carryover_kitchen_kds_tasks: string
   carryover_ready_kds_tasks: string
+  carryover_ready_bar_kds_tasks: string
+  carryover_ready_kitchen_kds_tasks: string
   active_reservations: string
   reservation_attention: string
   pending_payments: string
@@ -76,6 +92,7 @@ interface DomainDefinition {
   values(
     row: SummaryRow,
     permissions: ReadonlySet<string>,
+    dataScopes: StaffBootstrapView['access']['dataScopes'],
   ): Pick<StaffDomainSummary, 'activeCount' | 'attentionCount' | 'readyCount' | 'carryoverCount'>
 }
 
@@ -107,15 +124,8 @@ const DOMAIN_DEFINITIONS: readonly DomainDefinition[] = [
   },
   {
     key: 'fulfillment', label: '出品履约', endpointRef: 'fulfillment',
-    permissionPrefixes: ['order.', 'work.'], navigationCodes: ['commerce'],
-    values: (row, permissions) => permissions.has('kds.prepare') || permissions.has('kds.deliver')
-      ? counts(
-          row.active_kds_tasks,
-          row.overdue_kds_tasks,
-          row.ready_kds_tasks,
-          addCounts(row.carryover_kds_tasks, row.carryover_ready_kds_tasks),
-        )
-      : counts('0', '0', '0', '0'),
+    permissionPrefixes: ['order.', 'work.', 'kds.', 'fulfillment.'], navigationCodes: ['commerce'],
+    values: fulfillmentCounts,
   },
   {
     key: 'reservations', label: '当日预约', endpointRef: 'reservations',
@@ -242,7 +252,12 @@ export class StaffBootstrapQuery {
       },
       navigation,
       highFrequencyEntries: highFrequencyEntries(navigation),
-      domainSummaries: visibleDomainSummaries(summary, permissions, navigation.map((item) => item.code)),
+      domainSummaries: visibleDomainSummaries(
+        summary,
+        permissions,
+        dataScopes,
+        navigation.map((item) => item.code),
+      ),
       endpointRefs: { ...ENDPOINT_REFERENCES },
     }
     return { view, etag: `"staff-bootstrap-${watermark}"` }
@@ -401,6 +416,23 @@ async function readSummaries(
         (($3::date + 1)::timestamp + business_day_cutoff) AT TIME ZONE timezone AS ends_at
       FROM mbox.stores
       WHERE tenant_id = $1::uuid AND id = $2::uuid
+    ),
+    kds_work AS (
+      SELECT task.status, task.station_code, task.due_at, session.business_date
+      FROM mbox.kds_tasks AS task
+      JOIN mbox.order_items AS item
+        ON item.tenant_id=task.tenant_id AND item.store_id=task.store_id
+        AND item.id=task.order_item_id
+      JOIN mbox.orders AS customer_order
+        ON customer_order.tenant_id=item.tenant_id AND customer_order.store_id=item.store_id
+        AND customer_order.id=item.order_id
+      JOIN mbox.table_sessions AS session
+        ON session.tenant_id=customer_order.tenant_id AND session.store_id=customer_order.store_id
+        AND session.id=customer_order.table_session_id
+      WHERE task.tenant_id=$1::uuid AND task.store_id=$2::uuid
+        AND task.status IN ('pending','accepted','preparing','ready')
+        AND item.status IN ('submitted','accepted','preparing','ready')
+        AND customer_order.status IN ('submitted','confirmed','fulfilling')
     )
     SELECT
       (SELECT count(*) FROM mbox.table_sessions WHERE tenant_id = $1::uuid AND store_id = $2::uuid
@@ -410,62 +442,39 @@ async function readSummaries(
       (SELECT count(*) FROM mbox.service_tasks WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND status IN ('pending', 'acknowledged', 'in_progress')
         AND (priority IN ('urgent', 'high') OR (due_at IS NOT NULL AND due_at <= clock_timestamp())))::text AS urgent_service_tasks,
-      (SELECT count(*) FROM mbox.kds_tasks WHERE tenant_id = $1::uuid AND store_id = $2::uuid
-        AND status IN ('pending', 'accepted', 'preparing')
-        AND EXISTS (
-          SELECT 1 FROM mbox.order_items AS item
-          JOIN mbox.orders AS customer_order ON customer_order.tenant_id=item.tenant_id
-            AND customer_order.store_id=item.store_id AND customer_order.id=item.order_id
-          JOIN mbox.table_sessions AS session ON session.tenant_id=customer_order.tenant_id
-            AND session.store_id=customer_order.store_id AND session.id=customer_order.table_session_id
-          WHERE item.tenant_id=kds_tasks.tenant_id AND item.store_id=kds_tasks.store_id
-            AND item.id=kds_tasks.order_item_id AND session.business_date=$3::date
-        ))::text AS active_kds_tasks,
-      (SELECT count(*) FROM mbox.kds_tasks WHERE tenant_id = $1::uuid AND store_id = $2::uuid
-        AND status = 'ready'
-        AND EXISTS (
-          SELECT 1 FROM mbox.order_items AS item
-          JOIN mbox.orders AS customer_order ON customer_order.tenant_id=item.tenant_id
-            AND customer_order.store_id=item.store_id AND customer_order.id=item.order_id
-          JOIN mbox.table_sessions AS session ON session.tenant_id=customer_order.tenant_id
-            AND session.store_id=customer_order.store_id AND session.id=customer_order.table_session_id
-          WHERE item.tenant_id=kds_tasks.tenant_id AND item.store_id=kds_tasks.store_id
-            AND item.id=kds_tasks.order_item_id AND session.business_date=$3::date
-        ))::text AS ready_kds_tasks,
-      (SELECT count(*) FROM mbox.kds_tasks WHERE tenant_id = $1::uuid AND store_id = $2::uuid
-        AND status IN ('pending', 'accepted', 'preparing') AND due_at IS NOT NULL
-        AND due_at <= clock_timestamp()
-        AND EXISTS (
-          SELECT 1 FROM mbox.order_items AS item
-          JOIN mbox.orders AS customer_order ON customer_order.tenant_id=item.tenant_id
-            AND customer_order.store_id=item.store_id AND customer_order.id=item.order_id
-          JOIN mbox.table_sessions AS session ON session.tenant_id=customer_order.tenant_id
-            AND session.store_id=customer_order.store_id AND session.id=customer_order.table_session_id
-          WHERE item.tenant_id=kds_tasks.tenant_id AND item.store_id=kds_tasks.store_id
-            AND item.id=kds_tasks.order_item_id AND session.business_date=$3::date
-        ))::text AS overdue_kds_tasks,
-      (SELECT count(*) FROM mbox.kds_tasks WHERE tenant_id = $1::uuid AND store_id = $2::uuid
-        AND status IN ('pending', 'accepted', 'preparing')
-        AND EXISTS (
-          SELECT 1 FROM mbox.order_items AS item
-          JOIN mbox.orders AS customer_order ON customer_order.tenant_id=item.tenant_id
-            AND customer_order.store_id=item.store_id AND customer_order.id=item.order_id
-          JOIN mbox.table_sessions AS session ON session.tenant_id=customer_order.tenant_id
-            AND session.store_id=customer_order.store_id AND session.id=customer_order.table_session_id
-          WHERE item.tenant_id=kds_tasks.tenant_id AND item.store_id=kds_tasks.store_id
-            AND item.id=kds_tasks.order_item_id AND session.business_date<$3::date
-        ))::text AS carryover_kds_tasks,
-      (SELECT count(*) FROM mbox.kds_tasks WHERE tenant_id = $1::uuid AND store_id = $2::uuid
-        AND status = 'ready'
-        AND EXISTS (
-          SELECT 1 FROM mbox.order_items AS item
-          JOIN mbox.orders AS customer_order ON customer_order.tenant_id=item.tenant_id
-            AND customer_order.store_id=item.store_id AND customer_order.id=item.order_id
-          JOIN mbox.table_sessions AS session ON session.tenant_id=customer_order.tenant_id
-            AND session.store_id=customer_order.store_id AND session.id=customer_order.table_session_id
-          WHERE item.tenant_id=kds_tasks.tenant_id AND item.store_id=kds_tasks.store_id
-            AND item.id=kds_tasks.order_item_id AND session.business_date<$3::date
-        ))::text AS carryover_ready_kds_tasks,
+      (SELECT count(*) FILTER (WHERE status IN ('pending','accepted','preparing')
+        AND business_date=$3::date) FROM kds_work)::text AS active_kds_tasks,
+      (SELECT count(*) FILTER (WHERE status IN ('pending','accepted','preparing')
+        AND station_code='bar' AND business_date=$3::date) FROM kds_work)::text AS active_bar_kds_tasks,
+      (SELECT count(*) FILTER (WHERE status IN ('pending','accepted','preparing')
+        AND station_code='kitchen' AND business_date=$3::date) FROM kds_work)::text AS active_kitchen_kds_tasks,
+      (SELECT count(*) FILTER (WHERE status='ready' AND business_date=$3::date)
+        FROM kds_work)::text AS ready_kds_tasks,
+      (SELECT count(*) FILTER (WHERE status='ready' AND station_code='bar'
+        AND business_date=$3::date) FROM kds_work)::text AS ready_bar_kds_tasks,
+      (SELECT count(*) FILTER (WHERE status='ready' AND station_code='kitchen'
+        AND business_date=$3::date) FROM kds_work)::text AS ready_kitchen_kds_tasks,
+      (SELECT count(*) FILTER (WHERE status IN ('pending','accepted','preparing')
+        AND due_at IS NOT NULL AND due_at<=clock_timestamp() AND business_date=$3::date)
+        FROM kds_work)::text AS overdue_kds_tasks,
+      (SELECT count(*) FILTER (WHERE status IN ('pending','accepted','preparing')
+        AND station_code='bar' AND due_at IS NOT NULL AND due_at<=clock_timestamp()
+        AND business_date=$3::date) FROM kds_work)::text AS overdue_bar_kds_tasks,
+      (SELECT count(*) FILTER (WHERE status IN ('pending','accepted','preparing')
+        AND station_code='kitchen' AND due_at IS NOT NULL AND due_at<=clock_timestamp()
+        AND business_date=$3::date) FROM kds_work)::text AS overdue_kitchen_kds_tasks,
+      (SELECT count(*) FILTER (WHERE status IN ('pending','accepted','preparing')
+        AND business_date<$3::date) FROM kds_work)::text AS carryover_kds_tasks,
+      (SELECT count(*) FILTER (WHERE status IN ('pending','accepted','preparing')
+        AND station_code='bar' AND business_date<$3::date) FROM kds_work)::text AS carryover_bar_kds_tasks,
+      (SELECT count(*) FILTER (WHERE status IN ('pending','accepted','preparing')
+        AND station_code='kitchen' AND business_date<$3::date) FROM kds_work)::text AS carryover_kitchen_kds_tasks,
+      (SELECT count(*) FILTER (WHERE status='ready' AND business_date<$3::date)
+        FROM kds_work)::text AS carryover_ready_kds_tasks,
+      (SELECT count(*) FILTER (WHERE status='ready' AND station_code='bar'
+        AND business_date<$3::date) FROM kds_work)::text AS carryover_ready_bar_kds_tasks,
+      (SELECT count(*) FILTER (WHERE status='ready' AND station_code='kitchen'
+        AND business_date<$3::date) FROM kds_work)::text AS carryover_ready_kitchen_kds_tasks,
       (SELECT count(*) FROM mbox.reservations WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND arrival_at >= business_window.starts_at AND arrival_at < business_window.ends_at
         AND status IN ('pending', 'confirmed', 'arrived', 'seated'))::text AS active_reservations,
@@ -574,6 +583,7 @@ function highFrequencyEntries(navigation: StaffBootstrapView['navigation']): Sta
 function visibleDomainSummaries(
   row: SummaryRow,
   permissions: readonly string[],
+  dataScopes: StaffBootstrapView['access']['dataScopes'],
   navigationCodes: readonly string[],
 ): StaffDomainSummary[] {
   const permissionSet = new Set(permissions)
@@ -583,9 +593,52 @@ function visibleDomainSummaries(
   )).map((domain) => ({
     key: domain.key,
     label: domain.label,
-    ...domain.values(row, permissionSet),
+    ...domain.values(row, permissionSet, dataScopes),
     endpointRef: ENDPOINT_REFERENCES[domain.endpointRef],
   }))
+}
+
+function fulfillmentCounts(
+  row: SummaryRow,
+  permissions: ReadonlySet<string>,
+  dataScopes: StaffBootstrapView['access']['dataScopes'],
+): Pick<StaffDomainSummary, 'activeCount' | 'attentionCount' | 'readyCount' | 'carryoverCount'> {
+  const canPrepare = permissions.has(KDS_PREPARE_PERMISSION)
+  const canDeliver = permissions.has(KDS_DELIVER_PERMISSION)
+  if (!canPrepare && !canDeliver) return counts('0', '0', '0', '0')
+  const canViewAll = permissions.has(FULFILLMENT_VIEW_ALL_PERMISSION)
+  const stations = canPrepare ? resolveFulfillmentAllowedStations(dataScopes) : []
+  const active = canViewAll ? row.active_kds_tasks : stationCount(row, stations, 'active')
+  const overdue = canViewAll ? row.overdue_kds_tasks : stationCount(row, stations, 'overdue')
+  const ready = canViewAll || canDeliver
+    ? row.ready_kds_tasks
+    : stationCount(row, stations, 'ready')
+  const carryoverActive = canViewAll
+    ? row.carryover_kds_tasks
+    : stationCount(row, stations, 'carryover')
+  const carryoverReady = canViewAll || canDeliver
+    ? row.carryover_ready_kds_tasks
+    : stationCount(row, stations, 'carryoverReady')
+  return counts(active, overdue, ready, addCounts(carryoverActive, carryoverReady))
+}
+
+function stationCount(
+  row: SummaryRow,
+  stations: readonly ('bar' | 'kitchen')[],
+  kind: 'active' | 'ready' | 'overdue' | 'carryover' | 'carryoverReady',
+): string {
+  const fields = {
+    active: ['active_bar_kds_tasks', 'active_kitchen_kds_tasks'],
+    ready: ['ready_bar_kds_tasks', 'ready_kitchen_kds_tasks'],
+    overdue: ['overdue_bar_kds_tasks', 'overdue_kitchen_kds_tasks'],
+    carryover: ['carryover_bar_kds_tasks', 'carryover_kitchen_kds_tasks'],
+    carryoverReady: ['carryover_ready_bar_kds_tasks', 'carryover_ready_kitchen_kds_tasks'],
+  } as const
+  const [barField, kitchenField] = fields[kind]
+  return String(
+    (stations.includes('bar') ? safeCount(row[barField]) : 0)
+    + (stations.includes('kitchen') ? safeCount(row[kitchenField]) : 0),
+  )
 }
 
 function counts(active: string, attention: string, ready: string, carryover: string) {

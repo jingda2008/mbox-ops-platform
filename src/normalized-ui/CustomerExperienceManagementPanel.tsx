@@ -9,6 +9,7 @@ import { CheckoutUpgradeManagementPanel } from './CheckoutUpgradeManagementPanel
 import { RecommendationPolicyManagementPanel } from './RecommendationPolicyManagementPanel'
 import { MembershipConfigurationCenterPanel } from './MembershipConfigurationCenterPanel'
 import { PersonalContactGovernancePanel } from './PersonalContactGovernancePanel'
+import { HomeContentManagementPanel } from './HomeContentManagementPanel'
 
 type PaymentMode = 'none' | 'deposit_optional' | 'deposit_required' | 'full_required'
 
@@ -339,6 +340,7 @@ export function CustomerExperienceManagementPanel({ api, auth, dashboard, onChan
     <MembershipRecoveryPanel api={api} auth={auth} />
     <PersonalContactGovernancePanel api={api} auth={auth} />
     <ActivityOperationsPanel api={api} auth={auth} />
+    <HomeContentManagementPanel api={api} auth={auth} />
     {legacyActivityEditorEnabled && <section className="activity-admin-list" aria-label="活动列表">
       <header><strong>活动列表</strong><small>草稿必须经过有发布权限的人员复核</small></header>
       {dashboard.activities.length === 0 && <p>还没有活动草稿。</p>}

@@ -127,6 +127,8 @@ import { WaitlistCommandService } from './waitlist-repository.js'
 import { OfficialWechatPhoneAuthorizationProvider } from './wechat-phone-authorization.js'
 import { wechatLoyaltyNotificationApiPlugin } from './wechat-loyalty-notification-api.js'
 import { MembershipTermsService } from './membership-terms-service.js'
+import { memberContentCardApiPlugin } from './member-content-card-api.js'
+import { MemberContentCardService } from './member-content-card-service.js'
 import { createActivityContactProtectionKeyring } from './personal-contact-protection.js'
 import { personalContactGovernanceApiPlugin } from './personal-contact-governance-api.js'
 import { PersonalContactGovernanceService } from './personal-contact-governance-service.js'
@@ -166,7 +168,7 @@ export const NORMALIZED_LOG_REDACTION_PATHS = Object.freeze([
   'payment.publicKey',
 ])
 
-export const NORMALIZED_MIN_SCHEMA_VERSION = '096'
+export const NORMALIZED_MIN_SCHEMA_VERSION = '097'
 export const NORMALIZED_INJECTABLE_PLUGIN_PORTS = Object.freeze([
   'customer-table-side',
 ] as const)
@@ -681,6 +683,10 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       payments: paymentCommands,
       onlinePayments,
       resolveGuestContext: (request) => guestContext.resolve(request),
+      resolvePublicContext: async (request) => {
+        await authenticateReservationGuest(request)
+        return { scope }
+      },
       resolveDeviceFingerprint: (request) => guestDevices.resolve(request),
       paymentMode: options.config.guestPaymentMode,
       resolvePaymentMode: async (currentScope) => (await paymentPolicy(currentScope)).onlinePaymentEnabled
@@ -856,6 +862,11 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         transactions,
         service: new ActivityOperationsService(transactions, commandExecutor),
         activityPayments,
+        resolveStaffContext: staffReservationContext,
+      })
+      await reservationApp.register(memberContentCardApiPlugin, {
+        transactions,
+        service: new MemberContentCardService(transactions, commandExecutor),
         resolveStaffContext: staffReservationContext,
       })
       await reservationApp.register(customerPreferenceApiPlugin, {

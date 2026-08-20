@@ -47,6 +47,7 @@ test('builds an isolated non-secret upload candidate with formal identity and UR
   assert.equal(resolved.apiBaseUrl, runtime.apiBaseUrl)
   assert.equal(resolved.storeId, runtime.storeId)
   assert.equal(resolved.wechatAppId, runtime.wechatAppId)
+  assert.equal(resolved.membershipInviteCooldownHours, 24)
 })
 
 test('rejects empty identity, IP origins, development fallback and output overwrite', async () => {

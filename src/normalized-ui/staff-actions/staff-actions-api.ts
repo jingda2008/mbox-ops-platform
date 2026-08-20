@@ -17,18 +17,21 @@ export class StaffActionsApiError extends Error {
   readonly code: string
   readonly status: number | null
   readonly partialMutation: boolean
+  readonly referenceId: string | null
 
   constructor(
     message: string,
     code: string,
     status: number | null,
     partialMutation = false,
+    referenceId: string | null = null,
   ) {
     super(message)
     this.name = 'StaffActionsApiError'
     this.code = code
     this.status = status
     this.partialMutation = partialMutation
+    this.referenceId = referenceId
   }
 }
 
@@ -79,6 +82,7 @@ export interface AssistedOrderCatalogProduct {
   costAmountMinor: number | null
   status: 'active' | 'sold_out' | 'inactive'
   isAvailable: boolean
+  inventoryConfigurationComplete: boolean
   standardPrice: null | {
     amountMinor: string | null
     currency: string | null
@@ -802,10 +806,17 @@ export class StaffActionsApi implements StaffActionsApiPort {
 async function apiError(response: Response): Promise<StaffActionsApiError> {
   const body = await readJson(response).catch(() => null)
   if (isObject(body) && isObject(body.error)) {
+    const referenceId = typeof body.error.referenceId === 'string'
+      && /^[A-Za-z0-9._:-]{1,64}$/.test(body.error.referenceId)
+      ? body.error.referenceId
+      : null
+    const message = typeof body.error.message === 'string' ? body.error.message : '操作未完成'
     return new StaffActionsApiError(
-      typeof body.error.message === 'string' ? body.error.message : '操作未完成',
+      referenceId === null ? message : `${message}（编号：${referenceId}）`,
       typeof body.error.code === 'string' ? body.error.code : 'HTTP_ERROR',
       response.status,
+      false,
+      referenceId,
     )
   }
   return new StaffActionsApiError('操作未完成，请重试', 'HTTP_ERROR', response.status)

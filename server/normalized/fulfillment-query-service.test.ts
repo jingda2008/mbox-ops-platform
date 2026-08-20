@@ -8,6 +8,7 @@ import {
   KDS_PREPARE_PERMISSION,
   KDS_STATION_SCOPE,
 } from './fulfillment-query-service.js'
+import { StaffBootstrapQuery } from './staff-bootstrap-query.js'
 import {
   ScopedPostgresTransactionRunner,
   type PostgresPool,
@@ -34,7 +35,7 @@ describe('FulfillmentQueryService', () => {
       rows([fulfillmentRow({ station_code: 'bar', can_prepare: true })]),
     ])
 
-    const result = await fixture.service.getStaffWorkQueue({ tenantId, storeId }, actorId)
+    const result = await fixture.service.getStaffWorkQueue({ tenantId, storeId }, actorId, '2026-08-11')
 
     expect(result.actor).toMatchObject({
       employeeId: actorId,
@@ -44,6 +45,8 @@ describe('FulfillmentQueryService', () => {
     })
     expect(result.workItems[0]).toMatchObject({
       stationCode: 'bar',
+      businessDate: '2026-08-10',
+      carryover: true,
       canPrepare: true,
       canDeliver: false,
       table: { code: 'VIP1' },
@@ -51,7 +54,7 @@ describe('FulfillmentQueryService', () => {
     })
 
     const query = fulfillmentCall(fixture.client)
-    expect(query.values.slice(3)).toEqual([false, ['bar'], true, false])
+    expect(query.values.slice(3)).toEqual([false, ['bar'], true, false, '2026-08-11'])
     expect(query.sql).toContain("(assignment.assignment_type IN ('primary', 'backup')) DESC")
     expect(query.sql).toContain("task.status = 'ready'")
     expect(query.sql).toContain('task.priority DESC')
@@ -76,7 +79,7 @@ describe('FulfillmentQueryService', () => {
       })]),
     ])
 
-    const result = await fixture.service.getStaffWorkQueue({ tenantId, storeId }, actorId)
+    const result = await fixture.service.getStaffWorkQueue({ tenantId, storeId }, actorId, '2026-08-11')
 
     expect(result.actor.allowedStations).toEqual([])
     expect(result.workItems).toHaveLength(1)
@@ -87,7 +90,7 @@ describe('FulfillmentQueryService', () => {
       canDeliver: true,
       table: { assignmentType: 'backup' },
     })
-    expect(fulfillmentCall(fixture.client).values.slice(3)).toEqual([false, [], false, true])
+    expect(fulfillmentCall(fixture.client).values.slice(3)).toEqual([false, [], false, true, '2026-08-11'])
   })
 
   it('lets an unassigned delivery-capable employee take a ready item without exposing production work', async () => {
@@ -106,7 +109,7 @@ describe('FulfillmentQueryService', () => {
       })]),
     ])
 
-    const result = await fixture.service.getStaffWorkQueue({ tenantId, storeId }, actorId)
+    const result = await fixture.service.getStaffWorkQueue({ tenantId, storeId }, actorId, '2026-08-11')
 
     expect(result.workItems).toHaveLength(1)
     expect(result.workItems[0]).toMatchObject({
@@ -131,7 +134,7 @@ describe('FulfillmentQueryService', () => {
       rows([fulfillmentRow({ station_code: 'kitchen' })]),
     ])
 
-    const result = await fixture.service.getStaffWorkQueue({ tenantId, storeId }, actorId)
+    const result = await fixture.service.getStaffWorkQueue({ tenantId, storeId }, actorId, '2026-08-11')
 
     expect(result.actor.canViewAll).toBe(true)
     expect(result.workItems[0]).toMatchObject({
@@ -139,7 +142,7 @@ describe('FulfillmentQueryService', () => {
       canPrepare: false,
       canDeliver: false,
     })
-    expect(fulfillmentCall(fixture.client).values.slice(3)).toEqual([true, [], false, false])
+    expect(fulfillmentCall(fixture.client).values.slice(3)).toEqual([true, [], false, false, '2026-08-11'])
   })
 })
 
@@ -203,9 +206,10 @@ integration('FulfillmentQueryService PostgreSQL authorization and ordering', () 
 
   it('enforces station, delivery-table and explicit all-store visibility with deterministic priority', async () => {
     const scope = { tenantId, storeId }
-    const bartender = await service.getStaffWorkQueue(scope, bartenderId)
-    const server = await service.getStaffWorkQueue(scope, serverId)
-    const manager = await service.getStaffWorkQueue(scope, managerId)
+    const businessDate = new Date().toISOString().slice(0, 10)
+    const bartender = await service.getStaffWorkQueue(scope, bartenderId, businessDate)
+    const server = await service.getStaffWorkQueue(scope, serverId, businessDate)
+    const manager = await service.getStaffWorkQueue(scope, managerId, businessDate)
 
     expect(bartender.workItems.map((item) => item.taskId)).toEqual([
       '71000000-0000-4000-8000-000000000023',
@@ -231,6 +235,26 @@ integration('FulfillmentQueryService PostgreSQL authorization and ordering', () 
     expect(manager.actor).toMatchObject({ canViewAll: true, allowedStations: [] })
     expect(manager.workItems.every((item) => !item.canPrepare && !item.canDeliver)).toBe(true)
     expect(JSON.stringify(manager)).not.toMatch(/costSnapshot|paymentStatus|amountMinor|provider|refund/i)
+  })
+
+  it('keeps bootstrap fulfillment counts identical to each employee action scope', async () => {
+    const query = new StaffBootstrapQuery(new ScopedPostgresTransactionRunner(asPool(pool)))
+    const businessDate = new Date().toISOString().slice(0, 10)
+    const [bartender, server, manager] = await Promise.all([
+      query.get({ tenantId, storeId }, bartenderId, businessDate),
+      query.get({ tenantId, storeId }, serverId, businessDate),
+      query.get({ tenantId, storeId }, managerId, businessDate),
+    ])
+
+    expect(bartender.view.domainSummaries.find((item) => item.key === 'fulfillment')).toMatchObject({
+      activeCount: 1, attentionCount: 1, readyCount: 1, carryoverCount: 0,
+    })
+    expect(server.view.domainSummaries.find((item) => item.key === 'fulfillment')).toMatchObject({
+      activeCount: 0, attentionCount: 0, readyCount: 1, carryoverCount: 0,
+    })
+    expect(manager.view.domainSummaries.find((item) => item.key === 'fulfillment')).toMatchObject({
+      activeCount: 0, attentionCount: 0, readyCount: 0, carryoverCount: 0,
+    })
   })
 })
 
@@ -293,6 +317,8 @@ function rows(values: Record<string, unknown>[]): PostgresQueryResult {
 function fulfillmentRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     task_id: '71000000-0000-4000-8000-000000000100',
+    business_date: '2026-08-10',
+    carryover: true,
     station_code: 'bar',
     kds_status: 'preparing',
     priority: 300,

@@ -6,6 +6,7 @@ import { runNormalizedMigrations } from "../migrate-normalized.js";
 import { NormalizedCommandExecutor } from "./command-executor.js";
 import { inventoryApiPlugin } from "./inventory-api.js";
 import { InventoryQueryService } from "./inventory-query-service.js";
+import { InventoryRepository } from "./inventory-repository.js";
 import {
   ScopedPostgresTransactionRunner,
   type PostgresPool,
@@ -191,6 +192,142 @@ integration("normalized inventory API PostgreSQL integration", () => {
     });
   });
 
+  it("allows an explicitly not-managed food product without a recipe or fake stock", async () => {
+    const foodProductId = randomUUID();
+    await pool.query(
+      `
+      INSERT INTO mbox.products (
+        tenant_id, store_id, id, code, name, category_code, fulfillment_station,
+        product_snapshot, status, cost_amount_minor, inventory_control_mode
+      ) VALUES ($1::uuid, $2::uuid, $3::uuid, 'FRUIT-PLATE', '鲜果盘', 'food', 'kitchen',
+        '{}'::jsonb, 'active', 1800, 'not_managed')
+      `,
+      [tenantId, storeId, foodProductId],
+    );
+    const runner = new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool);
+    const result = await runner.run({ tenantId, storeId }, (transaction) => (
+      new InventoryRepository(transaction).consumeForOrderItems([{
+        id: randomUUID(),
+        orderId: randomUUID(),
+        productId: foodProductId,
+        quantity: 1,
+        unitPriceMinor: 5800,
+        discountAmountMinor: 0,
+        totalAmountMinor: 5800,
+        currency: 'CNY',
+        fulfillmentStation: 'kitchen',
+        productSnapshot: {},
+        costSnapshot: {},
+        status: 'submitted',
+        note: null,
+      }])
+    ));
+    expect(result).toEqual([]);
+    const movements = await pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM mbox.inventory_movements
+       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND reference_type='order_item'`,
+      [tenantId, storeId],
+    );
+    expect(movements.rows[0]?.count).toBe('0');
+  });
+
+  it("turns a mobile scan package count into a draft first and changes stock only after physical confirmation", async () => {
+    const mobileItem = await createItem(
+      "MOBILE-SCAN-BOTTLE",
+      "手机扫码测试酒水",
+      true,
+      "inventory-mobile-item-0001",
+      'bottle',
+      'bottle',
+      'alcohol',
+    );
+    const bind = await app.inject({
+      method: 'POST',
+      url: `/api/inventory/items/${mobileItem.id}/barcodes`,
+      headers: headers(managerId, 'inventory-mobile-bind-0001'),
+      payload: { code: 'MBOX-QR-CASE-0001', codeType: 'qr', packageQuantity: '6' },
+    });
+    expect(bind.statusCode).toBe(200);
+    const rejectedOverride = await app.inject({
+      method: 'POST',
+      url: '/api/inventory/receipts',
+      headers: headers(managerId, 'inventory-mobile-receipt-override-0001'),
+      payload: {
+        invoiceTotalMinor: '18000',
+        lines: [{
+          scanCode: 'MBOX-QR-CASE-0001',
+          batchCode: 'MOBILE-BATCH-OVERRIDE',
+          packages: '3',
+          quantity: '999',
+          unitCostMinor: '1',
+          totalCostMinor: '18000',
+        }],
+      },
+    });
+    expect(rejectedOverride.statusCode).toBe(400);
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/inventory/receipts',
+      headers: headers(managerId, 'inventory-mobile-receipt-0001'),
+      payload: {
+        supplierSnapshot: { name: '手机扫码供应商' },
+        invoiceTotalMinor: '18000',
+        lines: [{
+          scanCode: 'MBOX-QR-CASE-0001',
+          batchCode: 'MOBILE-BATCH-1',
+          packages: '3',
+          totalCostMinor: '18000',
+          metadata: { entryMethod: 'staff_mobile_camera' },
+        }],
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const receiptId = created.json().data.id as string;
+    const draft = await pool.query<{ quantity: string; unit_cost: string; on_hand: string; entry_method: string }>(
+      `SELECT line.quantity::text AS quantity, line.unit_cost_minor::text AS unit_cost,
+        balance.on_hand_quantity::text AS on_hand,
+        line.metadata->>'entryMethod' AS entry_method
+       FROM mbox.purchase_receipt_lines AS line
+       JOIN mbox.inventory_balances AS balance
+         ON balance.tenant_id=line.tenant_id AND balance.store_id=line.store_id
+        AND balance.inventory_item_id=line.inventory_item_id
+       WHERE line.tenant_id=$1::uuid AND line.store_id=$2::uuid AND line.receipt_id=$3::uuid`,
+      [tenantId, storeId, receiptId],
+    );
+    expect(draft.rows[0]).toEqual({ quantity: '18.000000', unit_cost: '1000.000000', on_hand: '0.000000', entry_method: 'staff_mobile_camera' });
+    const dashboard = await app.inject({
+      method: 'GET',
+      url: '/api/inventory',
+      headers: { 'x-employee-id': managerId },
+    });
+    expect(dashboard.statusCode).toBe(200);
+    const recoverableDraft = (dashboard.json().data.receipts as Array<Record<string, unknown>>)
+      .find((receipt) => receipt.id === receiptId);
+    expect(recoverableDraft).toEqual(expect.objectContaining({
+      status: 'draft',
+      lineCount: 1,
+      lines: [{
+        inventoryItemId: mobileItem.id,
+        itemName: '手机扫码测试酒水',
+        batchCode: 'MOBILE-BATCH-1',
+        quantity: '18.000000',
+        baseUnit: 'bottle',
+      }],
+    }));
+    const received = await app.inject({
+      method: 'POST',
+      url: `/api/inventory/receipts/${receiptId}/receive`,
+      headers: headers(managerId, 'inventory-mobile-receive-0001'),
+    });
+    expect(received.statusCode).toBe(200);
+    const balance = await pool.query<{ on_hand: string }>(
+      `SELECT on_hand_quantity::text AS on_hand FROM mbox.inventory_balances
+       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND inventory_item_id=$3::uuid`,
+      [tenantId, storeId, mobileItem.id],
+    );
+    expect(balance.rows[0]?.on_hand).toBe('18.000000');
+  });
+
   it("receives a purchase batch once, keeps decimal cost, and redacts supplier data without cost permission", async () => {
     const created = await app.inject({
       method: "POST",
@@ -202,7 +339,7 @@ integration("normalized inventory API PostgreSQL integration", () => {
         invoiceTotalMinor: "10000",
         lines: [
           {
-            scanCode: "690000000001",
+            inventoryItemId: spiritItemId,
             batchCode: "BATCH-A",
             quantity: "10",
             unitCostMinor: "12.345678",
@@ -481,6 +618,9 @@ integration("normalized inventory API PostgreSQL integration", () => {
     name: string,
     wholeUnitCount: boolean,
     key: string,
+    itemType = 'food',
+    baseUnit = 'piece',
+    categoryCode = 'snack',
   ) {
     const result = await app.inject({
       method: "POST",
@@ -489,9 +629,9 @@ integration("normalized inventory API PostgreSQL integration", () => {
       payload: {
         sku,
         name,
-        itemType: "food",
-        baseUnit: "piece",
-        categoryCode: "snack",
+        itemType,
+        baseUnit,
+        categoryCode,
         wholeUnitCount,
         reasonableWasteQuantity: "1",
       },

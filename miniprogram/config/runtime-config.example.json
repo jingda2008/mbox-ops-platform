@@ -4,7 +4,7 @@
     "apiBaseUrl": "https://api.example.com",
     "storeId": "your-store-id",
     "wechatIdentityEnabled": true,
-    "membershipInviteCooldownHours": 720,
+    "membershipInviteCooldownHours": 24,
     "identityTenantId": "your-tenant-uuid",
     "identityStoreId": "your-store-uuid",
     "wechatAppId": "wx-your-mini-program-app-id",

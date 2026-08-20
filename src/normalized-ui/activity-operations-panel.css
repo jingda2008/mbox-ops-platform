@@ -5,6 +5,10 @@
 .activity-operations-panel button, .activity-operations-panel input, .activity-operations-panel select { min-height: 44px; }
 .activity-operations-panel button { padding: 0 12px; border: 1px solid #c7b980; border-radius: 6px; background: #fff; color: #554b2c; font: inherit; font-weight: 750; display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; }
 .activity-operations-panel button:disabled { cursor: default; opacity: .55; }
+.home-content-action-row { display: flex; min-height: 58px; padding: 9px; align-items: center; justify-content: space-between; border: 1px solid #ddd8ca; border-radius: 7px; background: #fff; gap: 10px; }
+.home-content-action-row > div:first-child { display: grid; min-width: 0; gap: 3px; }
+.home-content-action-row small { color: #737068; font-size: 10px; }
+.home-content-action-row > div:last-child { display: flex; flex: 0 0 auto; gap: 6px; }
 .activity-operations-notice { margin: 0; padding: 10px 12px; border-radius: 6px; background: #f1eee3; color: #514c3f; line-height: 1.55; }
 .activity-operations-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #69655c; font-size: 11px; }
 .activity-operations-toolbar > div { display: flex; flex-wrap: wrap; gap: 7px; }

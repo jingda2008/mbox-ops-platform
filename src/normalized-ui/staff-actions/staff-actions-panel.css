@@ -186,6 +186,7 @@
 .staff-action-card-main strong { line-height: 1.35; }
 .staff-action-card-main p, .staff-action-card-main small { margin: 0; color: var(--staff-muted); font-size: 12px; line-height: 1.4; }
 .staff-action-card-main .staff-action-note { color: #7d5d14; font-weight: 700; }
+.staff-action-card-main .staff-action-carryover { color: #76540b; font-weight: 800; }
 .staff-action-card-main .staff-action-overdue { color: var(--staff-red); font-weight: 700; }
 .staff-resolution-note {
   width: 100%;
@@ -338,6 +339,8 @@
 .staff-order-products > p { grid-column: 1 / -1; min-height: 120px; display: flex; align-items: center; justify-content: center; gap: 7px; color: #697069; }
 .staff-order-products article { min-height: 82px; padding: 10px; border: 1px solid #d2d7d0; border-radius: 6px; background: #fff; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 1fr auto; gap: 5px 8px; }
 .staff-order-products article.is-selected { border-color: #439173; box-shadow: inset 0 0 0 1px #439173; }
+.staff-order-products article.is-unavailable { background: #f4f3ef; color: #666b66; }
+.staff-order-products article.is-unavailable button:disabled { cursor: not-allowed; opacity: .45; }
 .staff-order-products article > div:first-child { min-width: 0; display: flex; flex-direction: column; }
 .staff-order-products article strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .staff-order-products article small { color: #737a73; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

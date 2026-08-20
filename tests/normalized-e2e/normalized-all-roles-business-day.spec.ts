@@ -123,7 +123,7 @@ test('all real employees enter role-scoped mobile workspaces and every high-freq
       if (entry.route === '/staff/settings') await expect(page.getByRole('heading', { name: '系统配置状态' })).toBeVisible()
       await expectNoHorizontalOverflow(page)
       if (new URL(page.url()).pathname !== '/') {
-        await page.getByRole('button', { name: /工作台/ }).click()
+        await page.getByRole('button', { name: '工作台', exact: true }).click()
         await expect(page.getByTestId('normalized-workspace')).toBeVisible()
       }
     }

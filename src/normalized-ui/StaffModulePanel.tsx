@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BarChart3,
   CalendarClock,
@@ -210,6 +210,7 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
   const [message, setMessage] = useState<string | null>(null)
   const [data, setData] = useState<ModuleData>(emptyData)
   const [paymentRefreshToken, setPaymentRefreshToken] = useState(0)
+  const loadedModule = useRef<StaffModule | null>(null)
 
   const load = useCallback(async (quiet = false) => {
     if (!quiet) setPhase('loading')
@@ -272,7 +273,11 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
 
   const refresh = useCallback(() => load(true), [load])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    const quiet = loadedModule.current === module
+    loadedModule.current = module
+    void load(quiet)
+  }, [load, module])
 
   const content = useMemo(() => {
     if (module === 'payments') {

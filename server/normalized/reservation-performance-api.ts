@@ -373,10 +373,19 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
               SELECT 1 FROM mbox.stores AS reservation_store
               WHERE reservation_store.tenant_id=reservation.tenant_id
                 AND reservation_store.id=reservation.store_id
-                AND reservation.arrival_at >= (($9::date::timestamp + reservation_store.business_day_cutoff)
-                  AT TIME ZONE reservation_store.timezone)
-                AND reservation.arrival_at < ((($9::date + 1)::timestamp + reservation_store.business_day_cutoff)
-                  AT TIME ZONE reservation_store.timezone)
+                AND (
+                  (
+                    reservation.arrival_at >= (($9::date::timestamp + reservation_store.business_day_cutoff)
+                      AT TIME ZONE reservation_store.timezone)
+                    AND reservation.arrival_at < ((($9::date + 1)::timestamp + reservation_store.business_day_cutoff)
+                      AT TIME ZONE reservation_store.timezone)
+                  )
+                  OR (
+                    reservation.status = 'pending'
+                    AND reservation.arrival_at >= ((($9::date + 1)::timestamp + reservation_store.business_day_cutoff)
+                      AT TIME ZONE reservation_store.timezone)
+                  )
+                )
             )
           )
           AND (

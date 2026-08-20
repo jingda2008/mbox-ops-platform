@@ -273,7 +273,7 @@ test('one business-day order and guest requests flow through bartender, kitchen,
   await cashier.context.close()
 })
 
-test('public reservation is confirmed by marketing and marked arrived by the greeter', async ({ browser }) => {
+test('future public reservation is confirmed by marketing and kept out of today arrival queue', async ({ browser }) => {
   test.setTimeout(90_000)
   const data = await fixture()
   const customerName = '跨岗位预约验收'
@@ -307,10 +307,7 @@ test('public reservation is confirmed by marketing and marked arrived by the gre
   const greeter = await staffPage(browser, data, 'tom')
   await greeter.page.getByRole('button', { name: '预约到店', exact: true }).first().click()
   const confirmed = greeter.page.locator('.staff-reservation-card').filter({ hasText: customerName }).first()
-  await expect(confirmed).toBeVisible()
-  await expect(confirmed).toContainText('已确认')
-  await confirmed.getByRole('button', { name: '客人到店' }).click()
-  await expect(greeter.page.getByRole('status')).toContainText('已登记到店')
+  await expect(confirmed).toHaveCount(0)
   await greeter.context.close()
 })
 

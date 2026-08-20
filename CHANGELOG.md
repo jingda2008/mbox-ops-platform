@@ -11,6 +11,9 @@
 - Refined the customer mini-program home, member invitation, order layout and
   narrow-screen presentation while preserving explicit agreement before WeChat
   phone authorization.
+- Defaulted after-hours booking to the next available business date and made
+  future pending reservations available for staff confirmation without
+  presenting them as current-day arrivals.
 - Serialized PostgreSQL integration files that mutate shared role privileges,
   eliminating false cross-suite ACL races without weakening database guards.
 - Includes the protected Alibaba Cloud RDS recovery and reservation business-day

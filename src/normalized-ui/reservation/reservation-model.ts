@@ -51,6 +51,23 @@ export function createArrivalSlots(
   return slots
 }
 
+export function firstBookableSchedule(
+  now = new Date(),
+  hours: Readonly<OperatingHours> = DEFAULT_OPERATING_HOURS,
+  maximumDays = 90,
+): { date: string; time: string } {
+  if (!Number.isInteger(maximumDays) || maximumDays < 0 || maximumDays > 365) {
+    throw new TypeError('可预约日期范围无效')
+  }
+  const businessDate = shanghaiBusinessDate(now)
+  for (let offset = 0; offset <= maximumDays; offset += 1) {
+    const date = addCalendarDays(businessDate, offset)
+    const firstSlot = createArrivalSlots(date, now, hours)[0]
+    if (firstSlot !== undefined) return { date, time: firstSlot.value }
+  }
+  return { date: businessDate, time: '' }
+}
+
 export function arrivalIso(
   businessDate: string,
   slotValue: string,

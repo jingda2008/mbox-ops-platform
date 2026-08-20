@@ -4,6 +4,7 @@ import {
   arrivalIso,
   classifyZone,
   createArrivalSlots,
+  firstBookableSchedule,
   formatMoney,
   reservationArrivalHoldState,
   shanghaiBusinessDate,
@@ -37,6 +38,11 @@ describe('reservation operating schedule', () => {
     const slots = createArrivalSlots('2026-08-12', new Date('2026-08-12T13:20:00+08:00'))
     expect(slots[0]?.label).toBe('14:00')
     expect(addCalendarDays('2026-02-28', 1)).toBe('2026-03-01')
+  })
+
+  it('opens on the next bookable business date after the final arrival time', () => {
+    const schedule = firstBookableSchedule(new Date('2026-08-21T02:30:00+08:00'))
+    expect(schedule).toEqual({ date: '2026-08-21', time: '2026-08-21|720' })
   })
 })
 

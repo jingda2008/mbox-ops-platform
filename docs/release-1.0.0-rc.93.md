@@ -27,6 +27,10 @@ recovery and reservation business-day corrections already released in
 - Preserves customer choice: browsing and ordering continue after refusal, and
   WeChat phone authorization is available only after the customer actively
   selects the agreement control.
+- After the final arrival slot has passed, opens public booking on the next
+  bookable business date instead of presenting an unusable current-date form.
+- Lets authorized staff confirm future pending reservations in advance while
+  keeping future confirmed reservations out of the current-day arrival queue.
 
 ## Acceptance boundary
 

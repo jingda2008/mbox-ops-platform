@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.0-rc.92 - 2026-08-21
+
+- Allow protected backup and restore paths to recognize an Alibaba Cloud RDS
+  privileged account without pretending it is a PostgreSQL native superuser.
+  Restore still requires `CREATEDB`, `CREATEROLE`, `BYPASSRLS`, membership in
+  `pg_rds_superuser`, and ownership of the protected database. Ordinary roles
+  remain denied; self-managed PostgreSQL keeps its stricter native-role paths.
+- Keep public reservations made between midnight and the 06:00 store cutoff on
+  the active Shanghai business date, so the same request remains visible to the
+  staff reservation workflow.
+
 ## 1.0.0-rc.91 - 2026-08-20
 
 - Required explicit customer agreement before WeChat phone authorization and membership enrollment while preserving browse-and-order access after refusal.

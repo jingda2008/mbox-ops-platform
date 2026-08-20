@@ -18,9 +18,15 @@ connection_reference() {
 database_connection=$(connection_reference)
 
 test "$(PGOPTIONS='-c default_transaction_read_only=on' psql -XAt --dbname="${database_connection}" <<'SQL'
-SELECT CASE WHEN NOT role.rolsuper AND role.rolbypassrls
-    AND pg_has_role(current_user,'pg_monitor','member')
-    AND pg_has_role(current_user,'pg_read_all_data','member')
+SELECT CASE WHEN NOT role.rolsuper AND role.rolbypassrls AND (
+    (pg_has_role(current_user,'pg_monitor','member')
+      AND pg_has_role(current_user,'pg_read_all_data','member'))
+    OR EXISTS (
+      SELECT 1 FROM pg_roles AS provider_role
+      WHERE provider_role.rolname='pg_rds_superuser'
+        AND pg_has_role(role.oid,provider_role.oid,'member')
+    )
+  )
   THEN 'authorized' ELSE 'denied' END
 FROM pg_roles AS role
 WHERE role.rolname = current_user;

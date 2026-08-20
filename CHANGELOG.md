@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.90 - 2026-08-20
+
+- Added explicit employee account switching with the next employee's own code and PIN, plus a separate two-step logout that clears employee authority while retaining the verified store device lease.
+- Kept staff quick actions available across module navigation and disambiguated the mobile account, workspace and refresh controls for reliable touch and accessibility behavior.
+- Required customers to actively select the service and privacy agreements before WeChat phone-number membership enrollment on both profile and full-terms pages.
+- Added normalized migrations 090–096 for reservation and recommendation release, membership configuration impact approval, personal-contact governance and table-customer location movement with strong evidence and fail-closed authority.
+- Preserved historical orders and payments during table movement, revoked stale guest access, retained cross-business-day exception context and required the maintenance-mode release path for migration 096.
+
 ## 1.0.0-rc.89 - 2026-08-15
 
 - Aligned Postar synchronous responses with the provider contract: requests remain RSA-signed, optional response signatures are verified when present, and unsigned synchronous responses are accepted only over the fixed HTTPS endpoint with strict merchant, order, status and amount binding.

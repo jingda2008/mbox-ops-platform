@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { StaffBootstrapView } from '../shared/normalized-contracts'
-import { NormalizedStaffWorkspaceView, StaffBottomNavigation } from './NormalizedStaffWorkspace'
+import { NormalizedStaffWorkspace, NormalizedStaffWorkspaceView, StaffBottomNavigation } from './NormalizedStaffWorkspace'
 import { initialWorkspaceState, workspaceReducer } from './workspace-model'
 
 function view(): StaffBootstrapView {
@@ -52,6 +52,16 @@ function render(state: ReturnType<typeof initialWorkspaceState>): string {
 }
 
 describe('NormalizedStaffWorkspaceView', () => {
+  it('can paint from the bootstrap prefetched with the staff session', () => {
+    const html = renderToStaticMarkup(createElement(NormalizedStaffWorkspace, {
+      initialBootstrap: view(),
+    }))
+
+    expect(html).toContain('data-testid="normalized-workspace"')
+    expect(html).toContain('李艳')
+    expect(html).not.toContain('正在加载岗位入口')
+  })
+
   it('renders only server-filtered navigation and compact role information', () => {
     const state = workspaceReducer(initialWorkspaceState(), {
       type: 'bootstrap-ready', bootstrap: view(), etag: 'etag-1',

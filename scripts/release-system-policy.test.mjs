@@ -20,6 +20,12 @@ test('formal release freezes a main-reachable tag and builds exactly one deploya
   assert.match(manifest, /Date\.parse\(frozenAt\)/)
 })
 
+test('normalized HTTP acceptance uses the full duration on pull requests and tags', async () => {
+  const ci = await read('../.github/workflows/ci.yml')
+  assert.match(ci, /Run real normalized HTTP workflows against an isolated database[\s\S]*?DURATION_SECONDS:\s*60/)
+  assert.doesNotMatch(ci, /DURATION_SECONDS:\s*\$\{\{\s*github\.event_name\s*==\s*'pull_request'/)
+})
+
 test('mini-program stages stay controlled while staff, service and database release is independent', async () => {
   const packageJson = JSON.parse(await read('../package.json'))
   const ci = await read('../.github/workflows/ci.yml')

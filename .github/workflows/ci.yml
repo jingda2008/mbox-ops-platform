@@ -143,7 +143,7 @@ jobs:
         run: npm run test:normalized:postgres
       - name: Run real normalized HTTP workflows against an isolated database
         env:
-          DURATION_SECONDS: ${{ github.event_name == 'pull_request' && '10' || '60' }}
+          DURATION_SECONDS: 60
           OUTPUT_FILE: artifacts/normalized-http-acceptance/report.json
           APP_COMMIT_SHA: ${{ github.sha }}
         run: npm run acceptance:normalized:http

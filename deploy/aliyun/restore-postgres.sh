@@ -181,9 +181,15 @@ if [ "${mode}" = capture ]; then
   test "$(psql -XAt --dbname="${database_connection}" --command='SELECT current_database()')" = \
     "${MBOX_EXPECTED_RESTORE_DATABASE}"
   test "$(psql -XAt --dbname="${database_connection}" <<'SQL'
-SELECT CASE WHEN NOT role.rolsuper AND role.rolbypassrls
-    AND pg_has_role(current_user,'pg_monitor','member')
-    AND pg_has_role(current_user,'pg_read_all_data','member')
+SELECT CASE WHEN NOT role.rolsuper AND role.rolbypassrls AND (
+    (pg_has_role(current_user,'pg_monitor','member')
+      AND pg_has_role(current_user,'pg_read_all_data','member'))
+    OR EXISTS (
+      SELECT 1 FROM pg_roles AS provider_role
+      WHERE provider_role.rolname='pg_rds_superuser'
+        AND pg_has_role(role.oid,provider_role.oid,'member')
+    )
+  )
   THEN 'authorized' ELSE 'denied' END
 FROM pg_roles AS role WHERE role.rolname=current_user;
 SQL
@@ -227,10 +233,19 @@ admin_database=$(psql -XAt --dbname="${admin_connection}" --command='SELECT curr
 test -n "${admin_database}"
 test "${admin_database}" != "${MBOX_EXPECTED_RESTORE_DATABASE}"
 test "$(psql -XAt --dbname="${admin_connection}" <<'SQL'
-SELECT CASE WHEN role.rolsuper THEN 'authorized' ELSE 'denied' END
+SELECT CASE WHEN role.rolsuper OR (
+    role.rolcreatedb AND role.rolcreaterole AND role.rolbypassrls
+    AND EXISTS (
+      SELECT 1 FROM pg_roles AS provider_role
+      WHERE provider_role.rolname='pg_rds_superuser'
+        AND pg_has_role(role.oid,provider_role.oid,'member')
+    )
+  ) THEN 'authorized' ELSE 'denied' END
 FROM pg_roles AS role WHERE role.rolname=current_user;
 SQL
 )" = authorized
+test "$(psql -XAt --dbname="${admin_connection}" --command='SELECT current_user')" = \
+  "$(jq -er '.database.owner' "${MBOX_EXPECTED_RESTORE_EVIDENCE}")"
 admin_cluster_identity=$(psql -XAt --dbname="${admin_connection}" <<'SQL'
 SELECT COALESCE(inet_server_addr()::text,'local') || '|' || current_setting('port') || '|' ||
   pg_postmaster_start_time()::text || '|' || current_setting('server_version_num');

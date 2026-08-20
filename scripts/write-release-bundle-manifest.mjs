@@ -44,10 +44,15 @@ if (runtimeConfigVersion !== 'normalized-runtime-config/v1') {
 }
 
 const manifest = {
-  schemaVersion: 4,
+  schemaVersion: 5,
   generatedAt: new Date().toISOString(),
   releaseSha,
   releaseVersion: required('MBOX_BUNDLE_VERSION'),
+  deploymentScope: {
+    kind: 'normalized-staff-service-database',
+    includes: ['normalized-web', 'normalized-server', 'normalized-database'],
+    excludes: ['wechat-miniprogram'],
+  },
   sourceBranch,
   frozenAt,
   runtimeConfigVersion,

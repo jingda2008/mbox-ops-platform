@@ -14,10 +14,11 @@ concurrency:
 
 jobs:
   publish-pre-release:
+    name: Publish staff, service and database release
     runs-on: ubuntu-latest
     timeout-minutes: 25
     environment:
-      name: miniprogram-production-release
+      name: production
     steps:
       - uses: actions/checkout@v6
         with:
@@ -69,41 +70,6 @@ jobs:
           gh release download "${GITHUB_REF_NAME}" \
             --dir release-artifact \
             --clobber
-      - name: Extract the controlled mini-program release evidence artifact
-        run: |
-          archive="miniprogram-release-evidence-${GITHUB_SHA}.tar.gz"
-          test -f "release-artifact/${archive}"
-          test -f "release-artifact/${archive}.sha256"
-          test "$(wc -l < "release-artifact/${archive}.sha256" | tr -d ' ')" = 1
-          expected_digest=$(cut -d' ' -f1 "release-artifact/${archive}.sha256")
-          printf '%s' "${expected_digest}" | grep -Eq '^[0-9a-f]{64}$'
-          actual_digest=$(sha256sum "release-artifact/${archive}" | cut -d' ' -f1)
-          test "${actual_digest}" = "${expected_digest}"
-          if tar -tzf "release-artifact/${archive}" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
-            echo 'unsafe mini-program evidence archive path' >&2
-            exit 1
-          fi
-          if tar -tvzf "release-artifact/${archive}" | grep -Eq '^[lh]'; then
-            echo 'mini-program evidence archive links are forbidden' >&2
-            exit 1
-          fi
-          mkdir -p controlled-miniprogram-release
-          tar -xzf "release-artifact/${archive}" \
-            --no-same-owner --no-same-permissions \
-            -C controlled-miniprogram-release
-          test -f controlled-miniprogram-release/evidence.json
-      - name: Enforce signed platform proof at the formal release stage
-        env:
-          APP_COMMIT_SHA: ${{ github.sha }}
-          MBOX_MINIPROGRAM_RELEASE_STAGE: release
-          MBOX_MINIPROGRAM_RELEASE_EVIDENCE: controlled-miniprogram-release/evidence.json
-          MBOX_MINIPROGRAM_RELEASE_REPORT: controlled-miniprogram-release/release-verification.json
-          MBOX_MINIPROGRAM_RELEASE_TRUSTED_KEY_ID: ${{ vars.MBOX_MINIPROGRAM_RELEASE_TRUSTED_KEY_ID }}
-          MBOX_MINIPROGRAM_RELEASE_TRUSTED_PUBLIC_KEY_BASE64: ${{ vars.MBOX_MINIPROGRAM_RELEASE_TRUSTED_PUBLIC_KEY_BASE64 }}
-        run: |
-          test -n "${MBOX_MINIPROGRAM_RELEASE_TRUSTED_KEY_ID}"
-          test -n "${MBOX_MINIPROGRAM_RELEASE_TRUSTED_PUBLIC_KEY_BASE64}"
-          npm run release:miniprogram:verify
       - name: Extract and verify the exact CI evidence bundles
         env:
           VERIFIED_RUN_ID: ${{ steps.verified-run.outputs.run_id }}
@@ -149,6 +115,14 @@ jobs:
             const manifest = JSON.parse(fs.readFileSync('release-artifact/release-manifest.json', 'utf8'));
             if (manifest.releaseSha !== process.env.GITHUB_SHA) throw new Error('release SHA mismatch');
             if (manifest.releaseVersion !== '${version}') throw new Error('release version mismatch');
+            const expectedScope = {
+              kind: 'normalized-staff-service-database',
+              includes: ['normalized-web', 'normalized-server', 'normalized-database'],
+              excludes: ['wechat-miniprogram'],
+            };
+            if (JSON.stringify(manifest.deploymentScope) !== JSON.stringify(expectedScope)) {
+              throw new Error('release deployment scope mismatch');
+            }
             if (!/^sha256:[0-9a-f]{64}$/.test(manifest.imageDigest)) throw new Error('image digest is not immutable');
             for (const item of [manifest.configuration?.store, manifest.configuration?.catalog]) {
               if (!item || !/^[0-9a-f]{64}$/.test(item.sha256)) throw new Error('configuration digest is missing');

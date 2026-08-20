@@ -143,6 +143,23 @@ test('database maintenance credentials stay root-only and the frozen backup pres
   assert.doesNotMatch(`${legacyBackup}\n${legacyRestore}\n${runbook}`, /pg_restore[^\n]*--clean/)
 })
 
+test('production worker adapters are inherited as immutable read-only release evidence', async () => {
+  const activate = await read('../deploy/aliyun/activate-release.sh')
+  const prepare = activate.indexOf('prepare_worker_adapter_mount()')
+  const invoke = activate.indexOf('prepare_worker_adapter_mount', prepare + 1)
+  const migrationPreflight = activate.indexOf('verify-normalized-migration-compatibility.js')
+  const firstCandidate = activate.indexOf('docker run -d', migrationPreflight)
+  assert.ok(prepare > 0 && invoke > prepare && invoke < migrationPreflight && migrationPreflight < firstCandidate)
+  assert.match(activate, /Destination == "\/app\/worker-adapters" and \.RW == false/)
+  assert.match(activate, /\/opt\/mbox\/releases\/\*\/worker-adapters/)
+  assert.match(activate, /find "\$\{active_mount_source\}" -type l/)
+  assert.match(activate, /stat -c '%U:%G'[\s\S]*root:root/)
+  assert.match(activate, /worker_adapter_mount_args\[@\]/)
+  assert.match(activate, /workerAdapterTreeSha256[\s\S]*readOnly:true/)
+  assert.doesNotMatch(activate, /\[ "\$\{health\}" = unhealthy \] && exit 1/)
+  assert.match(activate, /invalid_maintenance_keys=\$\(awk[\s\S]*test -z "\$\{invalid_maintenance_keys\}"/)
+})
+
 test('database maintenance clients receive only password-free service references in argv', () => {
   const root = mkdtempSync(join(tmpdir(), 'mbox-libpq-argv-'))
   const bin = join(root, 'bin')

@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.0-rc.97 - 2026-08-21
+
+- Carries the production worker adapter from the currently verified release
+  into the new immutable release directory, checks its owner, write bits,
+  symlink boundary and SHA-256, and mounts it read-only in both candidate modes.
+- Records the inherited adapter module and file/tree digests in deployment
+  evidence, so a production candidate cannot silently start without the
+  integration worker used by the active release.
+- Makes the database-maintenance allowlist portable across the production awk
+  implementation and fails closed on unknown keys.
+- Routes candidate health failures through the normal rollback and evidence
+  path instead of exiting before the previous application is reverified.
+
 ## 1.0.0-rc.96 - 2026-08-21
 
 - Loads the authenticated employee session and server-filtered staff workspace

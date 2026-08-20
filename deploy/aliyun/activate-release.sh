@@ -362,6 +362,12 @@ candidate_database_identity=
 database_maintenance_loaded=0
 contract_restore_evidence=${release_dir}/contract-restore-source.json
 contract_restore_report=${release_dir}/contract-restore-report.json
+worker_adapter_module=
+worker_adapter_source=
+worker_adapter_directory=
+worker_adapter_sha=
+worker_adapter_tree_sha=
+worker_adapter_mount_args=()
 
 load_database_maintenance_secrets() {
   [ "${database_maintenance_loaded}" = 0 ] || return 0
@@ -372,11 +378,14 @@ load_database_maintenance_secrets() {
     test "$(awk -F= -v expected="${key}" '$1 == expected { count += 1 } END { print count + 0 }' \
       "${database_maintenance_env}")" = 1
   done
-  test -z "$(awk -F= '
+  invalid_maintenance_keys=$(awk -F= '
     /^[[:space:]]*($|#)/ { next }
-    $1 != "APPLICATION_DATABASE_SERVICE" && $1 != "BACKUP_DATABASE_SERVICE"
-      && $1 != "ADMIN_DATABASE_SERVICE" && $1 != "PGSERVICEFILE" && $1 != "PGPASSFILE" { print NR }
-  ' "${database_maintenance_env}")"
+    {
+      if ($1 != "APPLICATION_DATABASE_SERVICE" && $1 != "BACKUP_DATABASE_SERVICE" &&
+          $1 != "ADMIN_DATABASE_SERVICE" && $1 != "PGSERVICEFILE" && $1 != "PGPASSFILE") print NR
+    }
+  ' "${database_maintenance_env}")
+  test -z "${invalid_maintenance_keys}"
   application_database_service=$(sed -n 's/^APPLICATION_DATABASE_SERVICE=//p' "${database_maintenance_env}")
   backup_database_service=$(sed -n 's/^BACKUP_DATABASE_SERVICE=//p' "${database_maintenance_env}")
   admin_database_service=$(sed -n 's/^ADMIN_DATABASE_SERVICE=//p' "${database_maintenance_env}")
@@ -397,6 +406,57 @@ load_database_maintenance_secrets() {
   contract_admin_database_url="service=${admin_database_service}"
   database_maintenance_loaded=1
 }
+
+prepare_worker_adapter_mount() {
+  local active_mount_source relative_module resolved_module source_module
+  worker_adapter_module=$(sed -n 's/^MBOX_WORKER_ADAPTER_MODULE=//p' "${release_env}")
+  if [ -z "${worker_adapter_module}" ]; then
+    return 0
+  fi
+  case "${worker_adapter_module}" in
+    /app/worker-adapters/*) ;;
+    *) echo "worker adapter module must be mounted below /app/worker-adapters" >&2; return 1 ;;
+  esac
+  relative_module=${worker_adapter_module#/app/worker-adapters/}
+  [[ "${relative_module}" =~ ^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]]
+  active_mount_source=$(docker inspect "${active_container}" | jq -er '
+    [.[0].Mounts[] | select(.Type == "bind" and .Destination == "/app/worker-adapters" and .RW == false) | .Source]
+    | if length == 1 then .[0] else error("exactly one read-only worker adapter mount is required") end')
+  case "${active_mount_source}" in
+    /opt/mbox/releases/*/worker-adapters) ;;
+    *) echo "active worker adapter source is outside the immutable release tree" >&2; return 1 ;;
+  esac
+  test -d "${active_mount_source}"
+  test -z "$(find "${active_mount_source}" -type l -print -quit)"
+  source_module=${active_mount_source}/${relative_module}
+  resolved_module=$(realpath "${source_module}")
+  case "${resolved_module}" in
+    "${active_mount_source}"/*) ;;
+    *) echo "worker adapter module resolves outside its release directory" >&2; return 1 ;;
+  esac
+  test -f "${resolved_module}"
+  test "$(stat -c '%U:%G' "${resolved_module}")" = root:root
+  test $(( 8#$(stat -c '%a' "${resolved_module}") & 8#022 )) = 0
+
+  worker_adapter_directory=${release_dir}/worker-adapters
+  rm -rf "${worker_adapter_directory}"
+  install -d -m 0700 "${worker_adapter_directory}"
+  cp -a "${active_mount_source}/." "${worker_adapter_directory}/"
+  test -z "$(find "${worker_adapter_directory}" -type l -print -quit)"
+  chmod -R go-rwx "${worker_adapter_directory}"
+  test -f "${worker_adapter_directory}/${relative_module}"
+  worker_adapter_source=${active_mount_source}
+  worker_adapter_sha=$(sha256sum "${worker_adapter_directory}/${relative_module}" | awk '{print $1}')
+  worker_adapter_tree_sha=$(tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 \
+    --numeric-owner -cf - -C "${worker_adapter_directory}" . | sha256sum | awk '{print $1}')
+  [[ "${worker_adapter_sha}" =~ ^[0-9a-f]{64}$ ]]
+  [[ "${worker_adapter_tree_sha}" =~ ^[0-9a-f]{64}$ ]]
+  worker_adapter_mount_args+=(
+    --mount "type=bind,src=${worker_adapter_directory},dst=/app/worker-adapters,readonly"
+  )
+}
+
+prepare_worker_adapter_mount
 
 assert_backup_targets_application_database() {
   local application_database_identity backup_database_identity running
@@ -828,6 +888,7 @@ docker run -d \
   --restart=no \
   --env-file "${release_env}" \
   "${candidate_runtime_args[@]}" \
+  "${worker_adapter_mount_args[@]}" \
   --network "${network}" \
   --volume "${candidate_volume}:/data" \
   "${image_tag}" >/dev/null
@@ -837,10 +898,12 @@ for _ in $(seq 1 60); do
   [ "${health}" = healthy ] && break
   [ "${health}" = unhealthy ] && {
     docker logs --tail 100 "${candidate}" >&2
-    exit 1
+    candidate_health_failed=1
+    break
   }
   sleep 2
 done
+test "${candidate_health_failed:-0}" = 0
 test "$(docker inspect "${candidate}" --format '{{.State.Health.Status}}')" = healthy
 release_state_transition "${state_file}" provisioned candidate_healthy
 
@@ -886,15 +949,21 @@ if [ "${contract_migration}" = 1 ]; then
     --name "${candidate}" \
     --restart=no \
     --env-file "${release_env}" \
+    "${worker_adapter_mount_args[@]}" \
     --network "${network}" \
     --volume "${candidate_volume}:/data" \
     "${image_tag}" >/dev/null
   for _ in $(seq 1 60); do
     health=$(docker inspect "${candidate}" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')
     [ "${health}" = healthy ] && break
-    [ "${health}" = unhealthy ] && exit 1
+    [ "${health}" = unhealthy ] && {
+      docker logs --tail 100 "${candidate}" >&2
+      full_candidate_health_failed=1
+      break
+    }
     sleep 2
   done
+  test "${full_candidate_health_failed:-0}" = 0
   test "$(docker inspect "${candidate}" --format '{{.State.Health.Status}}')" = healthy
   full_candidate_ready=$(docker exec "${candidate}" wget -q -O - http://127.0.0.1:8787/api/ready)
   printf '%s' "${full_candidate_ready}" | jq -e \
@@ -944,6 +1013,10 @@ jq -n \
   --argjson previousSchemaVersion "${previous_schema_version}" \
   --argjson targetSchemaVersion "${expected_schema_version}" \
   --argjson contractMigration "${contract_migration}" \
+  --arg workerAdapterModule "${worker_adapter_module}" \
+  --arg workerAdapterSource "${worker_adapter_source}" \
+  --arg workerAdapterSha256 "${worker_adapter_sha}" \
+  --arg workerAdapterTreeSha256 "${worker_adapter_tree_sha}" \
   '{
     schemaVersion: 1,
     deployedAt: $deployedAt,
@@ -964,7 +1037,15 @@ jq -n \
     rollbackMode: (if $contractMigration == 1
       then "forward_only_after_contract_cutover" else "application_image" end),
     previousIdentityComplete: $previousIdentityComplete,
-    configuration: {storeSha256:$storeConfigSha256,catalogSha256:$catalogConfigSha256}
+    configuration: {storeSha256:$storeConfigSha256,catalogSha256:$catalogConfigSha256},
+    workerAdapter: (if $workerAdapterModule == "" then null else {
+      module:$workerAdapterModule,
+      inheritedFrom:$workerAdapterSource,
+      sha256:$workerAdapterSha256,
+      treeSha256:$workerAdapterTreeSha256,
+      mount:"/app/worker-adapters",
+      readOnly:true
+    } end)
   }' \
   > "${release_dir}/deployment-manifest.json"
 

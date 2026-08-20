@@ -33,6 +33,7 @@ describe('StaffSessionMenuView', () => {
 
     expect(html).toContain('李艳')
     expect(html).toContain('切换员工')
+    expect(html).toContain('aria-label="李艳，切换账号"')
     expect(html).not.toContain('下一位员工账号')
   })
 

@@ -123,6 +123,7 @@ describe('NormalizedStaffWorkspaceView', () => {
     expect(html).toContain('现场')
     expect(html).toContain('任务')
     expect(html).toContain('aria-current="page"')
+    expect(html).toContain('aria-label="全部岗位入口"')
   })
 
   it('does not expose a second raw-data sheet beside the executable role pages', () => {

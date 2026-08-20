@@ -280,7 +280,7 @@ export function StaffSessionMenuView({
   onLogout: () => void
 }) {
   return <>
-    <button type="button" className="normalized-session-trigger" aria-label={`${currentEmployee}，切换员工`} aria-expanded={open} onClick={onOpen}>
+    <button type="button" className="normalized-session-trigger" aria-label={`${currentEmployee}，切换账号`} aria-expanded={open} onClick={onOpen}>
       <UserRound size={17} aria-hidden="true" />
       <span><strong>{currentEmployee}</strong><small>切换员工</small></span>
     </button>

@@ -321,7 +321,7 @@ export function StaffBottomNavigation({
           {entry.label}
         </button>
       })}
-      <button type="button" aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen(true)}><Menu size={18} aria-hidden="true" />全部</button>
+      <button type="button" aria-label="全部岗位入口" aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen(true)}><Menu size={18} aria-hidden="true" />全部</button>
     </nav>
     {mobileMenuOpen && <>
       <button className="normalized-mobile-menu-backdrop" type="button" aria-label="关闭全部岗位入口" onClick={() => setMobileMenuOpen(false)} />

@@ -59,6 +59,10 @@
   gap: 8px;
 }
 
+.normalized-topbar-actions .normalized-icon-button {
+  min-width: 44px;
+}
+
 .normalized-brand {
   display: flex;
   align-items: center;

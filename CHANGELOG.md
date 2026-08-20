@@ -8,6 +8,9 @@
   data cannot remain from the previous employee.
 - Keeps the 500 ms real-browser startup gate unchanged; the local 30-sample
   employee startup p95 after the correction was 104.8 ms.
+- Uses the same 60-second HTTP acceptance duration for pull requests and tags,
+  preventing a single runner scheduling pause from dominating a ten-second
+  sample while keeping every latency and throughput threshold unchanged.
 
 ## 1.0.0-rc.95 - 2026-08-21
 

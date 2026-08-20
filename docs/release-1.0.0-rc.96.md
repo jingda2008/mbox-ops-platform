@@ -17,6 +17,9 @@ paint exceeded the unchanged 500 ms p95 gate on two tag-CI attempts.
 - Keeps the existing 500 ms p95 and 1,000 ms p99 release thresholds unchanged.
   A local isolated PostgreSQL run completed all 30 employee and 30 guest
   samples with employee p95 104.8 ms and guest p95 74.5 ms.
+- Runs HTTP acceptance for 60 seconds on pull requests as well as tags. This
+  strengthens the sample and prevents one host scheduling pause from dominating
+  the former ten-second run; the release thresholds are unchanged.
 
 ## Included business changes
 

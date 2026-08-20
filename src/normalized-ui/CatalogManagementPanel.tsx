@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, CirclePlus, LoaderCircle, PackageOpen, Pencil } from 'lucide-react'
 import { NormalizedApiClient, type StaffAuthView } from '../normalized-api'
+import { menuImageOptions } from './menu-image-library'
 
 type ProductStatus = 'active' | 'sold_out' | 'inactive'
 type ProductKind = 'single' | 'bundle'
@@ -92,9 +93,22 @@ interface ProductDraft {
   componentQuantities: Record<string, string>
 }
 
+interface InventoryItemOption {
+  id: string
+  sku: string
+  name: string
+  baseUnit: string
+}
+
+interface RecipeComponentDraft {
+  quantity: string
+  expectedWasteQuantity: string
+}
+
 export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient; auth: StaffAuthView }) {
   const canManageProduct = auth.permissions.includes('catalog.product.manage')
   const canManagePrice = auth.permissions.includes('catalog.price.manage')
+  const canManageInventory = auth.permissions.includes('inventory.manage')
   const canConfigurePerformancePhase = auth.permissions.includes('recommendation.phase.configure')
   const [expanded, setExpanded] = useState(false)
   const [products, setProducts] = useState<CatalogProduct[]>([])
@@ -108,6 +122,12 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
   const [savedPerformancePhaseCodes, setSavedPerformancePhaseCodes] = useState<PerformancePhaseCode[]>([])
   const [performancePhaseReason, setPerformancePhaseReason] = useState('')
   const [performancePhaseBusy, setPerformancePhaseBusy] = useState(false)
+  const [recipeState, setRecipeState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const [inventoryItems, setInventoryItems] = useState<InventoryItemOption[]>([])
+  const [recipeVersion, setRecipeVersion] = useState<number | null>(null)
+  const [recipeYield, setRecipeYield] = useState('1')
+  const [recipeComponents, setRecipeComponents] = useState<Record<string, RecipeComponentDraft>>({})
+  const [recipeBusy, setRecipeBusy] = useState(false)
   const [notice, setNotice] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
   const performancePhaseRequest = useRef(0)
 
@@ -151,6 +171,39 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
     setPerformancePhaseBusy(false)
   }
 
+  const resetRecipeEditor = () => {
+    setRecipeState('idle')
+    setInventoryItems([])
+    setRecipeVersion(null)
+    setRecipeYield('1')
+    setRecipeComponents({})
+    setRecipeBusy(false)
+  }
+
+  const loadRecipeEditor = async (productId: string) => {
+    if (!canManageInventory) return
+    setRecipeState('loading')
+    try {
+      const [dashboardResponse, recipeResponse] = await Promise.all([
+        api.getEndpoint<{ data: unknown }>('/api/inventory'),
+        api.getEndpoint<{ data: unknown }>(`/api/inventory/products/${productId}/recipe`),
+      ])
+      const items = readInventoryItems(dashboardResponse.data)
+      const recipe = readActiveRecipe(recipeResponse.data)
+      setInventoryItems(items)
+      setRecipeVersion(recipe?.version ?? null)
+      setRecipeYield(recipe === null ? '1' : String(recipe.yieldQuantity))
+      setRecipeComponents(Object.fromEntries((recipe?.components ?? []).map((component) => [
+        component.inventoryItemId,
+        { quantity: component.quantity, expectedWasteQuantity: component.expectedWasteQuantity },
+      ])))
+      setRecipeState('ready')
+    } catch (error) {
+      setRecipeState('error')
+      setNotice({ kind: 'error', text: error instanceof Error ? error.message : '商品库存配方读取失败' })
+    }
+  }
+
   const loadProductPerformancePhases = async (productId: string) => {
     if (!canConfigurePerformancePhase) return
     const requestId = performancePhaseRequest.current + 1
@@ -176,6 +229,7 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
 
   const startCreate = () => {
     resetPerformancePhaseEditor()
+    resetRecipeEditor()
     setDraft(emptyDraft())
     setShowAdvanced(false)
     setNotice(null)
@@ -183,6 +237,7 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
 
   const startEdit = (product: CatalogProduct) => {
     resetPerformancePhaseEditor()
+    resetRecipeEditor()
     setDraft({
       id: product.id,
       code: product.code,
@@ -224,10 +279,14 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
     setShowAdvanced(false)
     setNotice(null)
     if (canConfigurePerformancePhase) void loadProductPerformancePhases(product.id)
+    if (canManageInventory && product.productKind === 'single' && product.inventoryControlMode === 'tracked') {
+      void loadRecipeEditor(product.id)
+    }
   }
 
   const closeDraft = () => {
     resetPerformancePhaseEditor()
+    resetRecipeEditor()
     setDraft(null)
   }
 
@@ -251,6 +310,57 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
     if (productId in quantities) delete quantities[productId]
     else quantities[productId] = '1'
     updateDraft('componentQuantities', quantities)
+  }
+
+  const toggleRecipeComponent = (inventoryItemId: string) => {
+    setRecipeComponents((current) => {
+      const next = { ...current }
+      if (inventoryItemId in next) delete next[inventoryItemId]
+      else next[inventoryItemId] = { quantity: '1', expectedWasteQuantity: '0' }
+      return next
+    })
+  }
+
+  const updateRecipeComponent = (
+    inventoryItemId: string,
+    key: keyof RecipeComponentDraft,
+    value: string,
+  ) => {
+    setRecipeComponents((current) => ({
+      ...current,
+      [inventoryItemId]: { ...current[inventoryItemId], [key]: value },
+    }))
+  }
+
+  const saveRecipe = async () => {
+    if (draft?.id == null || recipeBusy || recipeState !== 'ready') return
+    const yieldQuantity = readInteger(recipeYield, 1, 1000)
+    const components = Object.entries(recipeComponents).map(([inventoryItemId, component]) => ({
+      inventoryItemId,
+      quantity: component.quantity.trim(),
+      expectedWasteQuantity: component.expectedWasteQuantity.trim(),
+    }))
+    if (yieldQuantity === null || components.length === 0
+      || components.some((component) => !isPositiveDecimal(component.quantity)
+        || !isNonNegativeDecimal(component.expectedWasteQuantity))) {
+      setNotice({ kind: 'error', text: '配方至少选择一项物料；产出量、用量和损耗必须是有效数字' })
+      return
+    }
+    setRecipeBusy(true)
+    setNotice(null)
+    try {
+      await api.putEndpoint(
+        `/api/inventory/products/${draft.id}/recipe`,
+        { yieldQuantity, instructionsSnapshot: {}, components },
+        { idempotencyKey: operationKey('inventory-recipe') },
+      )
+      await loadRecipeEditor(draft.id)
+      setNotice({ kind: 'success', text: `${draft.name} 的库存配方已保存并读回核对` })
+    } catch (error) {
+      setNotice({ kind: 'error', text: error instanceof Error ? error.message : '商品库存配方未保存' })
+    } finally {
+      setRecipeBusy(false)
+    }
   }
 
   const togglePerformancePhase = (phaseCode: PerformancePhaseCode) => {
@@ -456,7 +566,9 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
               <label>口味标签<input value={draft.recommendationTasteTags} placeholder="refreshing,layered" onChange={(event) => updateDraft('recommendationTasteTags', event.target.value)} /></label>
               <label>停留标签<input value={draft.recommendationDwellTags} placeholder="one_set,stay_longer" onChange={(event) => updateDraft('recommendationDwellTags', event.target.value)} /></label>
               <label className="catalog-wide">商品文案<input maxLength={1000} value={draft.description} onChange={(event) => updateDraft('description', event.target.value)} /></label>
-              <label className="catalog-wide">图片地址<input maxLength={2000} value={draft.imageUrl} onChange={(event) => updateDraft('imageUrl', event.target.value)} /></label>
+              <label className="catalog-wide">菜单图片<select value={menuImageOptions.some((option) => option.url === draft.imageUrl) ? draft.imageUrl : ''} onChange={(event) => updateDraft('imageUrl', event.target.value)}><option value="">自定义地址或暂不设置</option>{menuImageOptions.map((option) => <option value={option.url} key={option.url}>{option.label}</option>)}</select></label>
+              <label className="catalog-wide">图片地址<input maxLength={2000} value={draft.imageUrl} onChange={(event) => updateDraft('imageUrl', event.target.value)} placeholder="可选择上方已核对素材，也可输入同站安全地址" /></label>
+              {draft.imageUrl !== '' && <figure className="catalog-image-preview catalog-wide"><img src={draft.imageUrl} alt={`${draft.name || '商品'}菜单图预览`} /><figcaption>保存前预览；图片中的“以实物为准”提示不会替代真实配方、品牌和份量核对。</figcaption></figure>}
               <label className="catalog-check"><input type="checkbox" checked={draft.recommendationSingleWaveEligible} onChange={(event) => updateDraft('recommendationSingleWaveEligible', event.target.checked)} />可一次出齐</label>
               <fieldset className="catalog-wide"><legend>允许下单渠道</legend>{[['guest_qr', '顾客扫码'], ['staff_assisted', '员工协助'], ['cashier', '收银'], ['reservation', '预约'], ['integration', '系统接入']].map(([value, label]) => <label className="catalog-check" key={value}><input type="checkbox" checked={draft.allowedChannels.includes(value)} onChange={() => updateDraft('allowedChannels', draft.allowedChannels.includes(value) ? draft.allowedChannels.filter((item) => item !== value) : [...draft.allowedChannels, value])} />{label}</label>)}</fieldset>
             </>}
@@ -470,6 +582,25 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
                 {performancePhaseDirty && <p>阶段选择有未保存修改，请先单独保存或恢复后再保存商品资料。</p>}
                 <label>配置原因<input minLength={2} maxLength={240} value={performancePhaseReason} placeholder={performancePhaseCodes.length === 0 ? '例如：取消阶段限制，恢复全时段推荐' : '例如：仅在乐队现场与中场推荐'} onChange={(event) => setPerformancePhaseReason(event.target.value)} /></label>
                 <button type="button" disabled={performancePhaseBusy || performancePhaseReason.trim().length < 2} onClick={() => void savePerformancePhases()}>{performancePhaseBusy ? '保存中' : '单独保存阶段配置'}</button>
+              </>}
+            </section>}
+            {canManageInventory && draft.productKind === 'single' && draft.inventoryControlMode === 'tracked' && <section className="catalog-recipe catalog-wide" aria-label="商品库存配方">
+              <header><div><strong>库存扣减配方</strong><small>订单出品时按此配方扣减真实物料；小吃水果选择“暂不管理数量”即可跳过。</small></div><em>{recipeVersion === null ? '尚未配置' : `第 ${recipeVersion} 版`}</em></header>
+              {draft.id === null && <p>请先把商品保存为停用状态，再返回编辑并配置物料配方；配方和真实成本核对完成前不要上架。</p>}
+              {draft.id !== null && recipeState === 'loading' && <p><LoaderCircle className="is-spinning" size={17} /> 正在读取库存物料与当前配方</p>}
+              {draft.id !== null && recipeState === 'error' && <button type="button" onClick={() => void loadRecipeEditor(draft.id!)}>重新读取库存配方</button>}
+              {draft.id !== null && recipeState === 'ready' && <>
+                <label>每份配方产出数量<input type="number" min={1} max={1000} value={recipeYield} onChange={(event) => setRecipeYield(event.target.value)} /></label>
+                {inventoryItems.length === 0
+                  ? <p>当前还没有库存物料。请先在“库存与瓶存”中扫码或手工建立物料，再回来配置配方。</p>
+                  : <div className="catalog-recipe-items">{inventoryItems.map((item) => {
+                    const component = recipeComponents[item.id]
+                    return <article key={item.id} className={component === undefined ? '' : 'is-selected'}>
+                      <label><input type="checkbox" checked={component !== undefined} onChange={() => toggleRecipeComponent(item.id)} /><span><strong>{item.name}</strong><small>{item.sku} · {item.baseUnit}</small></span></label>
+                      {component !== undefined && <div><label>每份用量<input inputMode="decimal" value={component.quantity} onChange={(event) => updateRecipeComponent(item.id, 'quantity', event.target.value)} /></label><label>预计损耗<input inputMode="decimal" value={component.expectedWasteQuantity} onChange={(event) => updateRecipeComponent(item.id, 'expectedWasteQuantity', event.target.value)} /></label></div>}
+                    </article>
+                  })}</div>}
+                <button type="button" disabled={recipeBusy || inventoryItems.length === 0} onClick={() => void saveRecipe()}>{recipeBusy ? '保存中' : '单独保存库存配方'}</button>
               </>}
             </section>}
           </div>
@@ -530,6 +661,38 @@ function readProducts(value: unknown): CatalogProduct[] {
     ? [item as unknown as CatalogProduct] : [])
 }
 
+function readInventoryItems(value: unknown): InventoryItemOption[] {
+  if (!isRecord(value) || !Array.isArray(value.items)) return []
+  return value.items.flatMap((item): InventoryItemOption[] => (
+    isRecord(item) && typeof item.id === 'string' && typeof item.sku === 'string'
+      && typeof item.name === 'string' && typeof item.baseUnit === 'string'
+      ? [{ id: item.id, sku: item.sku, name: item.name, baseUnit: item.baseUnit }]
+      : []
+  ))
+}
+
+function readActiveRecipe(value: unknown): {
+  version: number
+  yieldQuantity: number
+  components: Array<RecipeComponentDraft & { inventoryItemId: string }>
+} | null {
+  if (value === null) return null
+  if (!isRecord(value) || !Number.isSafeInteger(value.version) || !Number.isSafeInteger(value.yieldQuantity)
+    || !Array.isArray(value.components)) throw new Error('库存配方返回格式无效')
+  const components = value.components.flatMap((component): Array<RecipeComponentDraft & { inventoryItemId: string }> => (
+    isRecord(component) && typeof component.inventoryItemId === 'string'
+      && typeof component.quantity === 'string' && typeof component.expectedWasteQuantity === 'string'
+      ? [{
+          inventoryItemId: component.inventoryItemId,
+          quantity: component.quantity,
+          expectedWasteQuantity: component.expectedWasteQuantity,
+        }]
+      : []
+  ))
+  if (components.length !== value.components.length) throw new Error('库存配方组成返回格式无效')
+  return { version: value.version as number, yieldQuantity: value.yieldQuantity as number, components }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -549,6 +712,14 @@ function readInteger(value: string, minimum: number, maximum: number): number | 
   if (!/^\d+$/.test(value)) return null
   const parsed = Number(value)
   return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : null
+}
+
+function isPositiveDecimal(value: string): boolean {
+  return /^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(value) && Number(value) > 0
+}
+
+function isNonNegativeDecimal(value: string): boolean {
+  return /^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(value)
 }
 
 function moneyToMinor(value: string, allowBlank: boolean): number | null | undefined {

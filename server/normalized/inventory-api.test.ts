@@ -190,6 +190,33 @@ integration("normalized inventory API PostgreSQL integration", () => {
       waste: "1.250000",
       active_count: "1",
     });
+
+    const readable = await app.inject({
+      method: "GET",
+      url: `/api/inventory/products/${productId}/recipe`,
+      headers: { "x-employee-id": managerId },
+    });
+    expect(readable.statusCode).toBe(200);
+    expect(readable.json().data).toMatchObject({
+      productId,
+      version: 1,
+      yieldQuantity: 1,
+      components: [{
+        inventoryItemId: spiritItemId,
+        sku: "GIN-ML",
+        name: "金酒原液",
+        baseUnit: "ml",
+        quantity: "45.500000",
+        expectedWasteQuantity: "1.250000",
+      }],
+    });
+
+    const denied = await app.inject({
+      method: "GET",
+      url: `/api/inventory/products/${productId}/recipe`,
+      headers: { "x-employee-id": viewerId },
+    });
+    expect(denied.statusCode).toBe(403);
   });
 
   it("allows an explicitly not-managed food product without a recipe or fake stock", async () => {

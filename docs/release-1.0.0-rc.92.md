@@ -6,6 +6,11 @@ This candidate contains the same staff web, normalized service and normalized
 database scope as `1.0.0-rc.91`. It does not upload, review or replace the
 WeChat mini-program.
 
+It also aligns the public web reservation date with the store's 06:00 business
+day cutoff. A request submitted after midnight but before cutoff now stays in
+the active business day and is visible to the authorized staff reservation
+workflow.
+
 ## Alibaba Cloud RDS release correction
 
 - The protected restore path now recognizes Alibaba Cloud RDS privileged

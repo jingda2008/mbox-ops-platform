@@ -774,7 +774,9 @@ test('mobile manager payment choices stay synchronized with two guests at the sa
   await expect(secondGuest.getByTestId('normalized-guest-app')).toBeVisible()
   await secondGuest.getByRole('button', { name: /历史已下单.*W01/ }).click()
   const secondGuestOrders = secondGuest.getByRole('dialog', { name: '本桌历史订单' })
-  expect(await secondGuestOrders.getByText('服务员协助点单').count()).toBeGreaterThanOrEqual(4)
+  await expect(async () => {
+    expect(await secondGuestOrders.getByText('服务员协助点单').count()).toBeGreaterThanOrEqual(4)
+  }).toPass()
   await expect(secondGuestOrders.getByTestId(`guest-table-order-${staffQrBody.data.providerAction.orderPublicId}`)).toContainText(data.orderableProductName)
   await expect(secondGuestOrders.getByTestId(`guest-table-order-${barcodeBody.data.providerAction.orderPublicId}`)).toContainText('员工正在扫描付款码，请勿重复支付')
   await secondGuestContext.close()

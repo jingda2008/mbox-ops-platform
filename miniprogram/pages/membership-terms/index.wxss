@@ -1,5 +1,5 @@
 .terms-page {
-  padding: 28rpx 24rpx 220rpx;
+  padding: 28rpx 24rpx 360rpx;
   background: #f5f1ea;
   color: #2d2925;
 }
@@ -55,8 +55,35 @@
   bottom: 0;
   left: 0;
   z-index: 20;
-  padding: 20rpx 24rpx calc(20rpx + env(safe-area-inset-bottom));
+  padding: 16rpx 24rpx calc(16rpx + env(safe-area-inset-bottom));
   background: linear-gradient(180deg, rgba(245, 241, 234, 0), #f5f1ea 28%);
+}
+.agree-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12rpx;
+  padding: 0 8rpx 10rpx;
+}
+.agree-row checkbox {
+  flex: 0 0 auto;
+  margin-top: 4rpx;
+}
+.agree-copy {
+  flex: 1;
+  color: #4d4640;
+  font-size: 22rpx;
+  line-height: 1.55;
+}
+.agree-links {
+  display: flex;
+  justify-content: flex-start;
+  padding: 0 8rpx 16rpx;
+}
+.agree-links text {
+  color: #8a6a3d;
+  font-size: 22rpx;
+  line-height: 1.4;
+  text-decoration: underline;
 }
 .accept-button {
   min-height: 92rpx;
@@ -67,6 +94,10 @@
   font-size: 24rpx;
   line-height: 92rpx;
   box-shadow: 0 12rpx 30rpx rgba(45, 41, 37, 0.16);
+}
+.accept-button--pending {
+  background: #9a938a;
+  box-shadow: none;
 }
 .accept-button.wx-phone-button {
   transform: none;

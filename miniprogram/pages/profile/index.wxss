@@ -524,6 +524,37 @@
   background: transparent;
   color: #66513a;
 }
+.join-card .recovery-button--pending {
+  color: #9a938a;
+  border-color: #cfc7bc;
+}
+.join-agree-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12rpx;
+  margin-top: 18rpx;
+}
+.join-agree-row checkbox {
+  flex: 0 0 auto;
+  margin-top: 4rpx;
+}
+.join-agree-copy {
+  flex: 1;
+  color: #4d4640;
+  font-size: 22rpx;
+  line-height: 1.55;
+}
+.join-agree-links {
+  display: flex;
+  gap: 18rpx;
+  margin: 8rpx 0 16rpx 52rpx;
+}
+.join-agree-links text {
+  color: #8a6a3d;
+  font-size: 22rpx;
+  line-height: 1.4;
+  text-decoration: underline;
+}
 .join-card .privacy-button {
   min-height: 72rpx;
   margin-top: 8rpx;

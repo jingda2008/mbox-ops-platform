@@ -49,7 +49,7 @@
       <view class="membership-invite__actions"><button bindtap="enrollFromMenu" loading="{{membershipBusy}}">阅读并加入</button><button bindtap="dismissMembershipInvite">暂不加入</button></view>
       <button class="membership-invite__recovery" bindtap="openMembershipRecovery">已有会员，找回权益</button>
       <button class="membership-invite__privacy" bindtap="showMembershipTerms">查看当前入会条款全文</button>
-      <button class="membership-invite__privacy" bindtap="openPrivacy">查看隐私说明</button>
+      <button class="membership-invite__privacy" bindtap="openPrivacy">查看《隐私政策》</button>
     </view>
 
     <view class="recommend-entry">

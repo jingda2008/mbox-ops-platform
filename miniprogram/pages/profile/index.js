@@ -219,6 +219,7 @@ Page({
     error: '', benefitError: '', registrationError: '', redemptionError: '', preferenceError: '',
     membership: null, points: [], benefits: [], reservations: [], registrations: [], contentCards: [],
     membershipTerms: null,
+    agreedToPolicies: false,
     redemptionItems: [], redemptions: [], showRedemptions: false,
     productRestrictions: [], restrictionBusyId: '', expiryNotificationOption: null,
     preferenceFacts: [], preferenceSources: [], preferenceSourceCount: 0, preferenceActiveCount: 0,
@@ -351,10 +352,18 @@ Page({
 
   openPrivacy() { wx.navigateTo({ url: '/pages/privacy/index' }) },
 
+  onAgreementChange(event) {
+    const values = event && event.detail && Array.isArray(event.detail.value) ? event.detail.value : []
+    this.setData({ agreedToPolicies: values.indexOf('agree') >= 0 })
+  },
+
+  remindAgreement() {
+    wx.showToast({ title: '请先勾选同意协议与隐私政策', icon: 'none' })
+  },
+
   onAgreePrivacyAuthorization() {},
 
   showMembershipTerms() {
-    if (!this.data.membershipTerms) return
     wx.navigateTo({ url: '/pages/membership-terms/index?source=mini_profile&action=view' })
   },
 
@@ -387,6 +396,10 @@ Page({
 
   async recoverMembership(event) {
     if (this.data.recoveryBusy) return
+    if (!this.data.agreedToPolicies) {
+      this.remindAgreement()
+      return
+    }
     const authorization = readWechatPhoneAuthorization(event)
     if (!authorization.code) {
       this.setData({ recoveryMessage: authorization.message })

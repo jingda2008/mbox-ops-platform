@@ -1,7 +1,7 @@
 <view class="page privacy-page">
   <view class="top-band">
     <text class="eyebrow">M-Box 客户桌码服务</text>
-    <text class="privacy-title">会员规则与隐私说明</text>
+    <text class="privacy-title">隐私政策</text>
     <text class="privacy-version">上架候选版 · 更新于 2026-08-16</text>
   </view>
   <view class="privacy-section">

@@ -5,6 +5,7 @@ Page({
   data: {
     loading: true, busy: false, error: '', membership: null,
     terms: null, acknowledgementSource: 'mini_profile', allowEnrollment: false,
+    agreedToPolicies: false,
   },
 
   onLoad(query) {
@@ -12,6 +13,7 @@ Page({
     this.setData({
       acknowledgementSource: source,
       allowEnrollment: Boolean(query && query.action === 'enroll'),
+      agreedToPolicies: false,
     })
   },
 
@@ -31,11 +33,28 @@ Page({
     }
   },
 
+  onAgreementChange(event) {
+    const values = event && event.detail && Array.isArray(event.detail.value) ? event.detail.value : []
+    this.setData({ agreedToPolicies: values.indexOf('agree') >= 0 })
+  },
+
+  remindAgreement() {
+    wx.showToast({ title: '请先勾选同意协议与隐私政策', icon: 'none' })
+  },
+
+  openPrivacy() {
+    wx.navigateTo({ url: '/pages/privacy/index' })
+  },
+
   onAgreePrivacyAuthorization() {},
 
   async acceptAndEnroll(event) {
     const terms = this.data.terms
     if (this.data.busy) return
+    if (!this.data.agreedToPolicies) {
+      this.remindAgreement()
+      return
+    }
     if (this.data.membership) {
       wx.showToast({ title: '您已经是会员', icon: 'none' })
       return

@@ -127,6 +127,7 @@
 .detail-dock > view text:first-child { font-size: 27rpx; font-weight: 750; }
 .detail-dock > view text:last-child { margin-top: 4rpx; color: #827a71; font-size: 19rpx; }
 .detail-dock > button { width: 280rpx; min-height: 44px; margin: 0; padding: 0 20rpx; border-radius: 999rpx; background: #873e30; color: #fff; font-size: 25rpx; line-height: 44px; }
+.detail-dock > button.payment-button { background: linear-gradient(145deg, #315d46, #214635); box-shadow: 0 10rpx 24rpx rgba(35, 78, 58, .2); }
 .detail-dock > button::after { border: 0; }
 .detail-dock > button.cancel-button { border: 1rpx solid #b8a58c; background: #fff; color: #664d31; }
 

@@ -5,8 +5,8 @@
   margin: 0 -28rpx 28rpx;
   padding: 38rpx 28rpx 48rpx;
   background:
-    radial-gradient(circle at 88% 8%, rgba(177, 127, 66, 0.3), transparent 36%),
-    linear-gradient(145deg, #171513, #302821);
+    radial-gradient(circle at 88% 8%, rgba(198, 163, 105, 0.24), transparent 36%),
+    linear-gradient(145deg, #0d1712, #234031 68%, #101512);
   color: #fff;
 }
 .profile-greeting,
@@ -35,9 +35,9 @@
       rgba(208, 168, 108, 0.22),
       transparent 34%
     ),
-    linear-gradient(145deg, #2c2823, #151412);
+    linear-gradient(145deg, #284536, #101713);
   color: #fff;
-  box-shadow: 0 20rpx 50rpx rgba(25, 20, 16, 0.2);
+  box-shadow: 0 20rpx 50rpx rgba(25, 70, 49, 0.18);
 }
 .member-card::after {
   position: absolute;

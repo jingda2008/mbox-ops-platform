@@ -10,7 +10,10 @@
   padding: 34rpx 28rpx 30rpx;
   align-items: center;
   justify-content: space-between;
-  background: #151412;
+  background:
+    radial-gradient(circle at 88% 0, rgba(198, 163, 105, .28), transparent 32%),
+    radial-gradient(circle at 18% 96%, rgba(69, 123, 92, .28), transparent 42%),
+    linear-gradient(145deg, #0d1712, #234031 68%, #101512);
   color: #fff;
 }
 .order-title {
@@ -43,12 +46,9 @@
   border: 1rpx solid rgba(202, 170, 119, 0.38);
   border-radius: 28rpx;
   background:
-    radial-gradient(
-      circle at 88% 10%,
-      rgba(196, 157, 99, 0.24),
-      transparent 32%
-    ),
-    linear-gradient(145deg, #26221e, #12110f);
+    radial-gradient(circle at 88% 10%, rgba(198, 163, 105, .28), transparent 32%),
+    radial-gradient(circle at 18% 96%, rgba(69, 123, 92, .28), transparent 42%),
+    linear-gradient(145deg, #0d1712, #234031 68%, #101512);
   color: #fff;
   box-shadow: 0 20rpx 54rpx rgba(25, 21, 17, 0.16);
 }
@@ -214,13 +214,15 @@
   min-width: 0;
   border: 1rpx solid #dfd8ce;
   border-radius: 22rpx;
-  background: #fff;
-  box-shadow: 0 10rpx 30rpx rgba(42, 34, 26, 0.055);
+  background: linear-gradient(145deg, #fff, #f8f4ed);
+  box-shadow: 0 14rpx 34rpx rgba(30, 54, 40, .075);
 }
 .preview-product-card__visual {
   position: relative;
   height: 220rpx;
-  background: linear-gradient(145deg, #342e28, #171513);
+  background:
+    radial-gradient(circle at 78% 12%, rgba(198, 163, 105, .22), transparent 32%),
+    linear-gradient(145deg, #284536, #101713);
 }
 .preview-product-card__visual image {
   width: 100%;
@@ -403,7 +405,7 @@
   margin: 0;
   padding: 0 18rpx;
   border-radius: 36rpx;
-  background: #2c2925;
+  background: #315d46;
   color: #fff;
   font-size: 21rpx;
   line-height: 72rpx;
@@ -418,7 +420,7 @@
   margin-top: 24rpx;
   padding: 26rpx;
   border-radius: 20rpx;
-  background: linear-gradient(145deg, #2e2924, #171615);
+  background: linear-gradient(145deg, #284536, #101713);
   color: #fff;
 }
 .recommend-entry__copy text {
@@ -443,9 +445,9 @@
 .decision-row picker > view {
   height: 88rpx;
   padding: 12rpx 16rpx;
-  border: 1rpx solid #514a42;
+  border: 1rpx solid #4f6a5c;
   border-radius: 14rpx;
-  background: #24211e;
+  background: #17271f;
 }
 .decision-row picker text {
   display: block;
@@ -538,7 +540,7 @@
   min-height: 72rpx;
   margin: 0;
   border-radius: 36rpx;
-  background: #292622;
+  background: #315d46;
   color: #fff;
   font-size: 22rpx;
   line-height: 72rpx;
@@ -594,8 +596,8 @@
   line-height: 70rpx;
 }
 .category-row button.is-active {
-  border-color: #302b25;
-  background: #302b25;
+  border-color: #315d46;
+  background: #315d46;
   color: #fff;
 }
 .product-section {
@@ -625,7 +627,7 @@
   flex: 0 0 auto;
   justify-content: center;
   border-radius: 18rpx;
-  background: linear-gradient(145deg, #37312b, #1d1a17);
+  background: linear-gradient(145deg, #284536, #101713);
 }
 .product-media image {
   width: 100%;
@@ -687,7 +689,9 @@
   justify-content: center;
   border: 1rpx solid #315d46;
   border-radius: 44rpx;
-  background: #315d46;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,0) 44%),
+    linear-gradient(145deg, #315d46, #214635);
   color: #fff;
   font-size: 34rpx;
   line-height: 88rpx;
@@ -700,7 +704,7 @@
   left: 0;
   padding: 16rpx 24rpx calc(18rpx + env(safe-area-inset-bottom));
   border-top: 1rpx solid #d8d2c9;
-  background: rgba(255, 253, 250, 0.98);
+  background: rgba(248, 247, 242, 0.98);
   box-shadow: 0 -14rpx 38rpx rgba(24, 20, 17, 0.12);
 }
 .cart-summary {
@@ -730,12 +734,14 @@
   min-height: 92rpx;
   margin: 0;
   border-radius: 46rpx;
-  background: #07c160;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,0) 44%),
+    linear-gradient(145deg, #315d46, #214635);
   color: #fff;
   font-size: 25rpx;
   font-weight: 700;
   line-height: 92rpx;
-  box-shadow: 0 10rpx 24rpx rgba(7, 193, 96, 0.2);
+  box-shadow: 0 10rpx 24rpx rgba(35, 78, 58, 0.2);
 }
 .cart-lines {
   max-height: 150rpx;

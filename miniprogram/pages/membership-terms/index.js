@@ -1,4 +1,4 @@
-const { getMiniBootstrap, enrollMembership, replaceVerifiedPhone } = require('../../utils/api')
+const { getMiniBootstrap, enrollMembership } = require('../../utils/api')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 
 Page({
@@ -76,17 +76,7 @@ Page({
     }
     this.setData({ busy: true, error: '' })
     try {
-      await enrollMembership(terms.version, this.data.acknowledgementSource)
-      try {
-        await replaceVerifiedPhone(authorization.code)
-      } catch (phoneError) {
-        this.setData({ error: phoneError.message || '会员已加入，手机号未能保存' })
-        wx.showToast({ title: '已加入，手机号未保存', icon: 'none', duration: 1800 })
-        setTimeout(() => {
-          wx.navigateBack({ fail: () => wx.switchTab({ url: '/pages/profile/index' }) })
-        }, 1600)
-        return
-      }
+      await enrollMembership(terms.version, this.data.acknowledgementSource, authorization.code)
       wx.showToast({ title: '入会成功', icon: 'success', duration: 1200 })
       setTimeout(() => {
         wx.navigateBack({

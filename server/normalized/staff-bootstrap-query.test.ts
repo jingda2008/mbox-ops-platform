@@ -91,11 +91,17 @@ function responses(): Array<PostgresQueryResult> {
         active_kds_tasks: '3',
         ready_kds_tasks: '2',
         overdue_kds_tasks: '1',
+        carryover_kds_tasks: '2',
+        carryover_ready_kds_tasks: '1',
         active_reservations: '8',
         reservation_attention: '2',
         pending_payments: '1',
         failed_payments: '0',
         refund_approvals: '0',
+        current_refund_approval_tasks: '0',
+        current_refund_execution_tasks: '0',
+        carryover_refund_approval_tasks: '0',
+        carryover_refund_execution_tasks: '0',
         low_inventory_items: '5',
         active_print_jobs: '0',
         failed_print_jobs: '0',
@@ -124,9 +130,10 @@ describe('StaffBootstrapQuery', () => {
     expect(first.view.domainSummaries).toEqual([
       expect.objectContaining({ key: 'live', activeCount: 6 }),
       expect.objectContaining({ key: 'service', activeCount: 4, attentionCount: 1 }),
-      expect.objectContaining({ key: 'reservations', activeCount: 8, attentionCount: 2 }),
+      expect.objectContaining({ key: 'reservations', activeCount: 8, attentionCount: 0 }),
       expect.objectContaining({ key: 'inventory', attentionCount: 5 }),
     ])
+    expect(first.view.domainSummaries.find((summary) => summary.key === 'fulfillment')).toBeUndefined()
     expect(first.view.endpointRefs.fulfillment).toBe('/api/commerce/fulfillment')
     const calls = value.clients.flatMap((client) => client.calls)
     const businessQueries = calls.filter((call) => (
@@ -157,6 +164,38 @@ describe('StaffBootstrapQuery', () => {
 
     expect(peakReads).toBe(2)
     expect(value.clients.every((client) => client.released)).toBe(true)
+  })
+
+  it('does not present store-wide fulfillment or refund queues as a manager task without action permission', async () => {
+    const scripted = responses()
+    const identity = structuredClone(scripted[0]!.rows[0]!) as Record<string, unknown>
+    identity.permissions = [
+      'dashboard.view', 'fulfillment.view_all', 'kds.exception.manage',
+      'reservation.view', 'reservation.manage', 'refund.request',
+    ]
+    identity.navigation = [
+      { code: 'commerce', label: '出品', route: '/staff/fulfillment', icon: null, sortOrder: 1, displayConfig: {} },
+      { code: 'reservations', label: '预约', route: '/staff/reservations', icon: null, sortOrder: 2, displayConfig: {} },
+      { code: 'payments', label: '退款发起', route: '/staff/payments', icon: null, sortOrder: 3, displayConfig: {} },
+    ]
+    const summary = structuredClone(scripted[1]!.rows[0]!) as Record<string, unknown>
+    summary.current_refund_approval_tasks = '3'
+    summary.current_refund_execution_tasks = '2'
+    summary.carryover_refund_approval_tasks = '4'
+    summary.carryover_refund_execution_tasks = '1'
+    const value = fixture([{ rows: [identity], rowCount: 1 }, { rows: [summary], rowCount: 1 }])
+
+    const result = await value.query.get({ tenantId, storeId }, employeeId, '2026-08-11')
+
+    expect(result.view.domainSummaries.find((item) => item.key === 'fulfillment')).toMatchObject({
+      activeCount: 0, attentionCount: 0, readyCount: 0, carryoverCount: 0,
+    })
+    expect(result.view.domainSummaries.find((item) => item.key === 'reservations')).toMatchObject({
+      activeCount: 8, attentionCount: 2,
+    })
+    expect(result.view.domainSummaries.find((item) => item.key === 'payments')).toMatchObject({
+      activeCount: 0, attentionCount: 0, carryoverCount: 0,
+    })
   })
 
   it('fails closed when the active store cannot be resolved', async () => {

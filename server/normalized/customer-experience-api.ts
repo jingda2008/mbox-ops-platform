@@ -38,6 +38,7 @@ import type {
   MembershipRecoveryService,
 } from './membership-recovery-service.js'
 import type { MembershipTermsService } from './membership-terms-service.js'
+import type { MembershipEnrollmentService } from './membership-enrollment-service.js'
 
 interface GuestExperienceContext {
   scope: Readonly<StoreScope>
@@ -62,6 +63,7 @@ interface CustomerExperienceApiOptions {
   membershipRecovery?: MembershipRecoveryService
   recoveryPhoneAuthorization?: MembershipRecoveryPhoneAuthorizationPort
   membershipTerms?: MembershipTermsService
+  membershipEnrollment?: MembershipEnrollmentService
 }
 
 const OCCASIONS = ['business', 'friends', 'date', 'birthday', 'music', 'relax', 'other'] as const
@@ -331,13 +333,28 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
   )
 
   app.post('/public/mini/membership/enroll', async (request, reply) => handle(reply, async () => {
+    reply.header('Cache-Control','private, no-store, max-age=0').header('Pragma','no-cache')
+    await options.resolvePublicContext(request)
+    throw new CustomerExperienceRequestError(
+      '请更新小程序后重新授权手机号加入会员',
+      'MEMBERSHIP_ENROLLMENT_CLIENT_UPGRADE_REQUIRED',
+      426,
+    )
+  }))
+
+  app.post('/public/mini/membership/enroll-with-phone', async (request, reply) => handle(reply, async () => {
+    reply.header('Cache-Control','private, no-store, max-age=0').header('Pragma','no-cache')
     const context = await options.resolvePublicContext(request)
+    if (options.membershipEnrollment === undefined) throw new CustomerExperienceRequestError(
+      '微信手机号入会尚未接通', 'MEMBERSHIP_ENROLLMENT_PHONE_NOT_CONFIGURED', 503,
+    )
     const body = objectBody(request.body)
-    const result = await options.service.enrollMembership(context, {
+    const result = await options.membershipEnrollment.enroll(context, {
       termsVersion: integer(body.termsVersion, '入会条款版本', 1, 2_000_000_000),
       acknowledgementSource: enumValue(
         body.acknowledgementSource, '入会确认入口', ['mini_menu','mini_profile'] as const,
       ),
+      phoneAuthorizationCode: text(body.phoneAuthorizationCode, '微信手机号授权凭证', 8, 512),
       idempotencyKey: idempotencyKey(request),
     })
     return reply.code(result.replayed ? 200 : 201).send({ data: result.value, meta: { replayed: result.replayed } })

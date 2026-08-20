@@ -368,6 +368,18 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
           AND ($4::timestamptz IS NULL OR reservation.arrival_at >= $4::timestamptz)
           AND ($5::timestamptz IS NULL OR reservation.arrival_at < $5::timestamptz)
           AND (
+            $4::timestamptz IS NOT NULL OR $5::timestamptz IS NOT NULL
+            OR EXISTS (
+              SELECT 1 FROM mbox.stores AS reservation_store
+              WHERE reservation_store.tenant_id=reservation.tenant_id
+                AND reservation_store.id=reservation.store_id
+                AND reservation.arrival_at >= (($9::date::timestamp + reservation_store.business_day_cutoff)
+                  AT TIME ZONE reservation_store.timezone)
+                AND reservation.arrival_at < ((($9::date + 1)::timestamp + reservation_store.business_day_cutoff)
+                  AT TIME ZONE reservation_store.timezone)
+            )
+          )
+          AND (
             $6::boolean
             OR reservation.owner_employee_id = ANY($7::uuid[])
             OR EXISTS (
@@ -394,6 +406,7 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
         visibility.all,
         visibility.ownerEmployeeIds,
         visibility.areaIds,
+        context.businessDate,
       ])
       return hydrateReservations(createReservations(transaction), ids.rows)
     }, { readOnly: true })

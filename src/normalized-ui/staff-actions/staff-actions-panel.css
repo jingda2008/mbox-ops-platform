@@ -360,6 +360,9 @@
 .staff-order-submit-row > span strong { font-size: 18px; }
 .staff-order-submit-row > button { min-height: 48px !important; color: #fff; background: #197b56; border-color: #197b56; display: flex; justify-content: center; align-items: center; gap: 7px; font-weight: 800; }
 .staff-order-submit-row > button:disabled { background: #aebbb4; border-color: #aebbb4; }
+.staff-order-sheet .menu-cart-drawer-footer > .menu-submit-button:not(:disabled) { border-color: #07c160; background: #07c160; color: #fff; box-shadow: none; filter: none; }
+.staff-order-sheet .menu-cart-drawer-footer > .menu-submit-button:hover:not(:disabled) { background: #06ad56; }
+.staff-order-sheet .menu-cart-drawer-footer > .menu-submit-button:active:not(:disabled) { background: #06ad56; box-shadow: none; transform: none; }
 .staff-order-error { margin: 0; color: #a32d35; font-size: 13px; }
 .staff-payment-choice { min-height: 0; padding: 22px 16px max(18px, env(safe-area-inset-bottom)); overflow-y: auto; display: flex; flex-direction: column; align-items: center; gap: 14px; background: #f5f6f2; }
 .staff-payment-summary { width: min(100%, 540px); padding: 14px; border: 1px solid #c9cec7; border-radius: 7px; background: #fff; display: grid; gap: 3px; }

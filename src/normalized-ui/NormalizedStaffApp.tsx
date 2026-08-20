@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
-import { ArrowLeft, ArrowRight, KeyRound, LoaderCircle, ShieldCheck, UserRound } from 'lucide-react'
+import { ArrowLeft, ArrowRight, KeyRound, LoaderCircle, LogOut, Repeat2, ShieldCheck, UserRound, X } from 'lucide-react'
 import { NormalizedApiClient, NormalizedApiError, type StaffAuthView } from '../normalized-api'
-import { NormalizedStaffWorkspace } from './NormalizedStaffWorkspace'
+import type { StaffBootstrapView } from '../shared/normalized-contracts'
+import { NormalizedStaffWorkspace, StaffBottomNavigation } from './NormalizedStaffWorkspace'
 import { StaffModulePanel } from './StaffModulePanel'
 import { StaffActionsPanel } from './staff-actions'
 import type { StaffActionsTab } from './staff-actions/types'
@@ -15,7 +16,11 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
   const [phase, setPhase] = useState<'checking' | 'credential' | 'login' | 'ready'>('checking')
   const [message, setMessage] = useState<string | null>(null)
   const [staffRoute, setStaffRoute] = useState(() => normalizedStaffRoute(window.location.pathname))
+  const [staffNavigation, setStaffNavigation] = useState<StaffBootstrapView['navigation'] | null>(null)
   const authenticatedSessionId = auth?.session.id ?? null
+  const rememberStaffNavigation = useCallback((bootstrap: StaffBootstrapView) => {
+    setStaffNavigation(bootstrap.navigation)
+  }, [])
 
   const checkSession = useCallback(async () => {
     setPhase('checking')
@@ -46,6 +51,7 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
       } catch (error) {
         if (!stopped && error instanceof NormalizedApiError && error.recovery === 'login') {
           setAuth(null)
+          setStaffNavigation(null)
           setMessage('登录状态已结束，请重新登录')
           setPhase('login')
         }
@@ -72,6 +78,20 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
     window.addEventListener('popstate', syncRoute)
     return () => window.removeEventListener('popstate', syncRoute)
   }, [])
+  useEffect(() => { setStaffNavigation(null) }, [authenticatedSessionId])
+  useEffect(() => {
+    if (phase !== 'ready' || auth === null || staffRoute === null || staffNavigation !== null) return
+    const controller = new AbortController()
+    void api.getStaffBootstrap({ signal: controller.signal }).then((result) => {
+      if (result.data !== null) setStaffNavigation(result.data.navigation)
+    }).catch((error) => {
+      if (error instanceof NormalizedApiError && error.recovery === 'login') {
+        setAuth(null)
+        setPhase('login')
+      }
+    })
+    return () => controller.abort()
+  }, [api, auth, phase, staffNavigation, staffRoute])
 
   if (phase === 'checking') return <StaffGateLoading />
   if (phase === 'credential') {
@@ -80,10 +100,23 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
   if (phase === 'login') {
     return <EmployeeLoginForm api={api} message={message} onCredentialRequired={() => {
       clearDeviceLease(); setMessage('这台设备需要重新验证门店口令'); setPhase('credential')
-    }} onReady={(session) => { setMessage(null); setAuth(session); setPhase('ready') }} />
+    }} onReady={(session) => { setMessage(null); setStaffNavigation(null); setAuth(session); setPhase('ready') }} />
   }
   if (auth === null) return <StaffGateLoading />
-  const loginRequired = () => { setAuth(null); setPhase('login') }
+  const loginRequired = () => { setAuth(null); setStaffNavigation(null); setPhase('login') }
+  const switchReady = (session: StaffAuthView) => {
+    window.history.replaceState({}, '', '/')
+    setStaffRoute(null)
+    setMessage(null)
+    setStaffNavigation(null)
+    setAuth(session)
+  }
+  const logoutReady = () => {
+    window.history.replaceState({}, '', '/')
+    setStaffRoute(null)
+    setMessage(null)
+    loginRequired()
+  }
   const navigate = (route: string) => {
     const next = normalizedStaffRoute(route)
     if (next === null) {
@@ -94,23 +127,183 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
     setMessage(null)
     setStaffRoute(next)
   }
-  if (staffRoute !== null) {
-    return <main className="normalized-staff-action-shell">
+  const sessionControls = <StaffSessionMenu
+    api={api}
+    auth={auth}
+    onSwitched={switchReady}
+    onLoggedOut={logoutReady}
+  />
+  const content = staffRoute !== null ? (
+    <main className="normalized-staff-action-shell">
       <header>
         <button type="button" onClick={() => {
           window.history.pushState({}, '', '/')
           setStaffRoute(null)
         }}><ArrowLeft size={18} /> 工作台</button>
-        <strong>{auth.employee.displayName}</strong>
+        {sessionControls}
       </header>
       {isStaffActionsTab(staffRoute)
         ? <StaffActionsPanel initialTab={staffRoute} onLoginRequired={loginRequired} />
         : <StaffModulePanel api={api} auth={auth} module={staffRoute} onLoginRequired={loginRequired} />}
     </main>
-  }
+  ) : (<>
+      {message !== null && <p className="normalized-route-notice" role="status">{message}</p>}
+      <NormalizedStaffWorkspace
+        api={api}
+        onNavigate={navigate}
+        onLoginRequired={loginRequired}
+        onBootstrapReady={rememberStaffNavigation}
+        showMobileNavigation={false}
+        sessionControls={sessionControls}
+      />
+    </>)
   return <>
-    {message !== null && <p className="normalized-route-notice" role="status">{message}</p>}
-    <NormalizedStaffWorkspace api={api} onNavigate={navigate} onLoginRequired={loginRequired} />
+    {content}
+    {staffNavigation !== null && <StaffBottomNavigation
+      entries={staffNavigation}
+      activeRoute={staffRoute === null ? null : window.location.pathname}
+      onNavigate={navigate}
+    />}
+  </>
+}
+
+function StaffSessionMenu({ api, auth, onSwitched, onLoggedOut }: {
+  api: NormalizedApiClient
+  auth: StaffAuthView
+  onSwitched: (session: StaffAuthView) => void
+  onLoggedOut: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [employeeCode, setEmployeeCode] = useState('')
+  const [pin, setPin] = useState('')
+  const [pending, setPending] = useState(false)
+  const [logoutArmed, setLogoutArmed] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const close = () => {
+    if (pending) return
+    setOpen(false)
+    setPin('')
+    setError(null)
+    setLogoutArmed(false)
+  }
+  const submitSwitch = async (event: FormEvent) => {
+    event.preventDefault()
+    if (pending || employeeCode.trim() === '' || pin.length !== 4) return
+    setPending(true)
+    setError(null)
+    setLogoutArmed(false)
+    try {
+      const session = await api.switchStaff({ employeeCode: employeeCode.trim(), pin })
+      setEmployeeCode('')
+      setPin('')
+      setOpen(false)
+      onSwitched(session)
+    } catch (reason) {
+      if (reason instanceof NormalizedApiError && reason.status === 401) {
+        setError('账号、PIN或当前登录状态无效，请核对后重试')
+      } else {
+        setError(displayError(reason, '员工切换暂时没有完成，请重试'))
+      }
+    } finally {
+      setPending(false)
+    }
+  }
+  const logout = async () => {
+    if (pending) return
+    if (!logoutArmed) {
+      setLogoutArmed(true)
+      setError(null)
+      return
+    }
+    setPending(true)
+    setError(null)
+    try {
+      await api.logoutStaff()
+      setOpen(false)
+      onLoggedOut()
+    } catch (reason) {
+      setLogoutArmed(false)
+      setError(displayError(reason, '退出结果无法确认，请重试'))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return <StaffSessionMenuView
+    currentEmployee={auth.employee.displayName}
+    currentEmployeeCode={auth.employee.code}
+    open={open}
+    employeeCode={employeeCode}
+    pin={pin}
+    pending={pending}
+    logoutArmed={logoutArmed}
+    error={error}
+    onOpen={() => { setOpen(true); setError(null); setLogoutArmed(false) }}
+    onClose={close}
+    onEmployeeCodeChange={setEmployeeCode}
+    onPinChange={(value) => setPin(value.replace(/\D/g, '').slice(0, 4))}
+    onSwitch={(event) => void submitSwitch(event)}
+    onLogout={() => void logout()}
+  />
+}
+
+export function StaffSessionMenuView({
+  currentEmployee,
+  currentEmployeeCode,
+  open,
+  employeeCode,
+  pin,
+  pending,
+  logoutArmed,
+  error,
+  onOpen,
+  onClose,
+  onEmployeeCodeChange,
+  onPinChange,
+  onSwitch,
+  onLogout,
+}: {
+  currentEmployee: string
+  currentEmployeeCode: string
+  open: boolean
+  employeeCode: string
+  pin: string
+  pending: boolean
+  logoutArmed: boolean
+  error: string | null
+  onOpen: () => void
+  onClose: () => void
+  onEmployeeCodeChange: (value: string) => void
+  onPinChange: (value: string) => void
+  onSwitch: (event: FormEvent) => void
+  onLogout: () => void
+}) {
+  return <>
+    <button type="button" className="normalized-session-trigger" aria-label={`${currentEmployee}，切换员工`} aria-expanded={open} onClick={onOpen}>
+      <UserRound size={17} aria-hidden="true" />
+      <span><strong>{currentEmployee}</strong><small>切换员工</small></span>
+    </button>
+    {open && <>
+      <button type="button" className="normalized-session-backdrop" aria-label="关闭员工切换" onClick={onClose} />
+      <section className="normalized-session-dialog" role="dialog" aria-modal="true" aria-labelledby="staff-switch-title">
+        <header>
+          <div><small>当前员工 · {currentEmployeeCode}</small><h2 id="staff-switch-title">切换员工</h2></div>
+          <button type="button" aria-label="关闭员工切换" onClick={onClose} disabled={pending}><X size={20} /></button>
+        </header>
+        <p className="normalized-session-boundary">门店设备保持验证，只结束当前员工工作状态；下一位员工必须输入自己的账号和四位 PIN。</p>
+        <form className="normalized-session-form" onSubmit={onSwitch}>
+          <label><span>下一位员工账号</span><input autoFocus autoComplete="username" value={employeeCode} onChange={(event) => onEmployeeCodeChange(event.target.value)} /></label>
+          <label><span>四位 PIN</span><input inputMode="numeric" type="password" autoComplete="current-password" maxLength={4} pattern="[0-9]{4}" value={pin} onChange={(event) => onPinChange(event.target.value)} /></label>
+          {error !== null && <p role="alert">{error}</p>}
+          <button type="submit" disabled={pending || employeeCode.trim() === '' || pin.length !== 4}>{pending ? <LoaderCircle className="is-spinning" /> : <Repeat2 />} 验证并切换</button>
+        </form>
+        <div className="normalized-session-logout">
+          <span><strong>结束当前员工状态</strong><small>退出后返回员工登录页，不会清除门店设备验证。</small></span>
+          <button type="button" className={logoutArmed ? 'is-confirming' : undefined} disabled={pending} onClick={onLogout}><LogOut size={17} />{logoutArmed ? '再次确认退出' : '退出当前员工'}</button>
+        </div>
+      </section>
+    </>}
   </>
 }
 

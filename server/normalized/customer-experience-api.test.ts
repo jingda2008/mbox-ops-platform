@@ -405,20 +405,34 @@ describe('customer experience activity contact API', () => {
       value: { membership: { memberNo: 'MBX-TEST' }, created: true }, replayed: false,
     }))
     const app = membershipTermsFixture({} as MembershipTermsService, enrollMembership)
-    const missing = await app.inject({
+    const legacy = await app.inject({
       method: 'POST', url: '/public/mini/membership/enroll',
+      headers: { 'idempotency-key': 'membership-enroll-legacy-client-0001' },
+      payload: { termsVersion: 3, acknowledgementSource: 'mini_menu' },
+    })
+    expect(legacy.statusCode).toBe(426)
+    expect(legacy.headers['cache-control']).toContain('no-store')
+    expect(enrollMembership).not.toHaveBeenCalled()
+    const missing = await app.inject({
+      method: 'POST', url: '/public/mini/membership/enroll-with-phone',
       headers: { 'idempotency-key': 'membership-enroll-missing-terms-0001' }, payload: {},
     })
     expect(missing.statusCode).toBe(400)
     expect(enrollMembership).not.toHaveBeenCalled()
     const accepted = await app.inject({
-      method: 'POST', url: '/public/mini/membership/enroll',
+      method: 'POST', url: '/public/mini/membership/enroll-with-phone',
       headers: { 'idempotency-key': 'membership-enroll-typed-terms-0001' },
-      payload: { termsVersion: 3, acknowledgementSource: 'mini_menu' },
+      payload: {
+        termsVersion: 3,
+        acknowledgementSource: 'mini_menu',
+        phoneAuthorizationCode: 'wechat-phone-code-enroll-0001',
+      },
     })
     expect(accepted.statusCode).toBe(201)
+    expect(accepted.headers['cache-control']).toContain('no-store')
     expect(enrollMembership).toHaveBeenCalledWith(expect.anything(), {
       termsVersion: 3, acknowledgementSource: 'mini_menu',
+      phoneAuthorizationCode: 'wechat-phone-code-enroll-0001',
       idempotencyKey: 'membership-enroll-typed-terms-0001',
     })
   })
@@ -732,7 +746,7 @@ function membershipTermsFixture(
   }
   void app.register(customerExperienceApiPlugin, {
     transactions: { run: async (_scope, action) => action({ scope, query: vi.fn() } as never) },
-    service: { enrollMembership } as unknown as CustomerExperienceService,
+    service: {} as CustomerExperienceService,
     resolvePublicContext: () => context,
     resolveGuestContext: async () => { throw new Error('not used') },
     resolveStaffContext: () => ({
@@ -740,6 +754,7 @@ function membershipTermsFixture(
     }),
     protectContact: () => { throw new Error('not used') },
     membershipTerms,
+    membershipEnrollment: { enroll: enrollMembership } as never,
   })
   return app
 }

@@ -263,18 +263,19 @@ async function revokeVerifiedPhone(contactPublicId) {
     throw error
   }
 }
-async function enrollMembership(termsVersion, acknowledgementSource) {
+async function enrollMembership(termsVersion, acknowledgementSource, phoneAuthorizationCode) {
   const storageKey = 'mbox.membership.enroll.attempt.v1'
-  const payload = { termsVersion: Number(termsVersion), acknowledgementSource }
+  const payload = { termsVersion: Number(termsVersion), acknowledgementSource, phoneAuthorizationCode }
   const stored = wx.getStorageSync(storageKey)
   const attempt = stored && typeof stored === 'object'
     && stored.termsVersion === payload.termsVersion
     && stored.acknowledgementSource === payload.acknowledgementSource
+    && stored.phoneAuthorizationCode === payload.phoneAuthorizationCode
     && typeof stored.idempotencyKey === 'string' && stored.idempotencyKey.length >= 8
     ? stored : Object.assign({}, payload, { idempotencyKey: randomId('membership-enroll') })
   wx.setStorageSync(storageKey, attempt)
   try {
-    const result = (await publicRequest('/api/public/mini/membership/enroll', {
+    const result = (await publicRequest('/api/public/mini/membership/enroll-with-phone', {
       method: 'POST', headers: { 'idempotency-key': attempt.idempotencyKey }, data: payload,
     })).data
     wx.removeStorageSync(storageKey)

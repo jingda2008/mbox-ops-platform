@@ -33,6 +33,8 @@ export interface StaffDomainSummary {
   activeCount: number
   attentionCount: number
   readyCount: number
+  /** Unfinished work from an earlier business day that this employee can act on. */
+  carryoverCount?: number
   endpointRef: string
 }
 

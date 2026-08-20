@@ -53,6 +53,7 @@ import { LoyaltyTierBenefitManagementService } from './loyalty-tier-benefit-mana
 import { loyaltyOperationalControlApiPlugin } from './loyalty-operational-control-api.js'
 import { LoyaltyOperationalControlService } from './loyalty-operational-control-service.js'
 import { membershipConfigurationApiPlugin } from './membership-configuration-api.js'
+import { MembershipEnrollmentService } from './membership-enrollment-service.js'
 import {
   MembershipRecoveryService,
   createMembershipRecoveryPhoneProtector,
@@ -521,16 +522,22 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     const tierBenefitManagement = new LoyaltyTierBenefitManagementService(transactions, commandExecutor)
     const loyaltyOperationalControl = new LoyaltyOperationalControlService(transactions, commandExecutor)
     const promotionalLoyalty = new PromotionalLoyaltyService(transactions, commandExecutor)
-    const membershipRecovery = new MembershipRecoveryService(
-      transactions,
-      createMembershipRecoveryPhoneProtector(activityContactProtection),
-    )
     const membershipTerms = new MembershipTermsService(transactions, commandExecutor)
     const recoveryPhoneAuthorization = options.recoveryPhoneAuthorization
       ?? (options.config.wechatIdentity === null ? undefined : new OfficialWechatPhoneAuthorizationProvider({
           appId: options.config.wechatIdentity.appId,
           appSecret: options.config.wechatIdentity.appSecret,
         }))
+    const membershipPhoneProtection = createMembershipRecoveryPhoneProtector(activityContactProtection)
+    const membershipRecovery = new MembershipRecoveryService(
+      transactions,
+      membershipPhoneProtection,
+    )
+    const membershipEnrollment = recoveryPhoneAuthorization === undefined
+      ? undefined
+      : new MembershipEnrollmentService(
+          commandExecutor, recoveryPhoneAuthorization, membershipPhoneProtection,
+        )
     const onlinePaymentProvider = options.config.guestPaymentMode === 'simulation'
       ? 'simulation' as const
       : options.config.payment !== null ? 'postar' as const : null
@@ -818,6 +825,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         notificationConsentPolicy: options.config.wechatNotification,
         membershipRecovery,
         membershipTerms,
+        ...(membershipEnrollment === undefined ? {} : { membershipEnrollment }),
         ...(recoveryPhoneAuthorization === undefined
           ? {}
           : { recoveryPhoneAuthorization }),

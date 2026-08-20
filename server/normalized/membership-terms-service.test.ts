@@ -1,9 +1,9 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
-import { CustomerExperienceService } from './customer-experience-service.js'
+import { MembershipEnrollmentService } from './membership-enrollment-service.js'
 import { PostgresMembershipConfigurationDraftRepository } from './membership-configuration-draft-repository.js'
 import { MembershipConfigurationDraftService } from './membership-configuration-draft-service.js'
 import { MembershipTermsService } from './membership-terms-service.js'
@@ -23,7 +23,8 @@ integration('membership terms release and acceptance', () => {
   let pool: Pool
   let terms: MembershipTermsService
   let configuration: MembershipConfigurationDraftService
-  let customerExperience: CustomerExperienceService
+  let membershipEnrollment: MembershipEnrollmentService
+  let phoneVerificationCount = 0
   let now = new Date()
 
   beforeAll(async () => {
@@ -35,8 +36,31 @@ integration('membership terms release and acceptance', () => {
     configuration = new MembershipConfigurationDraftService(
       new PostgresMembershipConfigurationDraftRepository(transactions, scope(id.store)), () => now,
     )
-    customerExperience = new CustomerExperienceService(
-      transactions, commands, {} as never, false,
+    membershipEnrollment = new MembershipEnrollmentService(
+      commands,
+      {
+        verify: async ({ authorizationCode }) => {
+          phoneVerificationCount += 1
+          return {
+            e164Phone: '+8613800138000',
+            providerReference: `provider:${authorizationCode}`,
+            verifiedAt: now.toISOString(),
+          }
+        },
+      },
+      {
+        protect: (phone) => {
+          const contactHash = createHash('sha256').update(phone).digest('hex')
+          return {
+            contactHash,
+            encryptedValue: Buffer.alloc(48, 7),
+            encryptionKeyVersion: 1,
+            encryptionKeyId: 'normalized-phone-v1',
+            matchHashes: [contactHash],
+            maskedValue: '138****8000',
+          }
+        },
+      },
     )
     await seed(pool)
   })
@@ -111,8 +135,9 @@ integration('membership terms release and acceptance', () => {
 
   it('writes acceptance atomically, fails closed without current terms and does not block existing members', async () => {
     now = new Date()
-    const stale = customerExperience.enrollMembership(publicContext(id.store, id.customer), {
+    const stale = membershipEnrollment.enroll(publicContext(id.store, id.customer), {
       termsVersion: 999, acknowledgementSource: 'mini_profile',
+      phoneAuthorizationCode: 'wechat-phone-code-stale-0001',
       idempotencyKey: 'membership-enroll-stale-terms-0001',
     })
     await expect(stale).rejects.toMatchObject({ code: 'MEMBERSHIP_TERMS_STALE' })
@@ -121,16 +146,20 @@ integration('membership terms release and acceptance', () => {
     `, [id.tenant, id.store, id.customer])
     expect(rolledBack.rowCount).toBe(0)
 
-    const enrolled = await customerExperience.enrollMembership(publicContext(id.store, id.customer), {
+    const verificationsBeforeEnrollment = phoneVerificationCount
+    const enrolled = await membershipEnrollment.enroll(publicContext(id.store, id.customer), {
       termsVersion: 1, acknowledgementSource: 'mini_profile',
+      phoneAuthorizationCode: 'wechat-phone-code-enroll-0001',
       idempotencyKey: 'membership-enroll-accepted-terms-0001',
     })
     expect(enrolled).toMatchObject({ replayed: false, value: { created: true } })
-    const replay = await customerExperience.enrollMembership(publicContext(id.store, id.customer), {
+    const replay = await membershipEnrollment.enroll(publicContext(id.store, id.customer), {
       termsVersion: 1, acknowledgementSource: 'mini_profile',
+      phoneAuthorizationCode: 'wechat-phone-code-enroll-0001',
       idempotencyKey: 'membership-enroll-accepted-terms-0001',
     })
     expect(replay).toMatchObject({ replayed: true, value: { created: true } })
+    expect(phoneVerificationCount).toBe(verificationsBeforeEnrollment + 1)
     const acceptance = await pool.query(`
       SELECT acceptance.terms_version,acceptance.acknowledgement_source,
         acceptance.customer_id,membership.customer_id AS membership_customer_id,
@@ -144,15 +173,33 @@ integration('membership terms release and acceptance', () => {
       customer_id: id.customer, membership_customer_id: id.customer, acceptance_count: 1,
     })
 
-    await expect(customerExperience.enrollMembership(
+    const phone = await pool.query(`
+      SELECT contact.processing_status,acceptance.id AS acceptance_id
+      FROM mbox.customer_verified_contacts contact
+      JOIN mbox.membership_terms_acceptances acceptance
+        ON acceptance.tenant_id=contact.tenant_id AND acceptance.store_id=contact.store_id
+       AND acceptance.customer_id=contact.customer_id
+      WHERE contact.tenant_id=$1 AND contact.store_id=$2 AND contact.customer_id=$3
+        AND contact.contact_type='phone'
+    `, [id.tenant, id.store, id.customer])
+    expect(phone.rows).toEqual([expect.objectContaining({ processing_status: 'active' })])
+
+    await expect(membershipEnrollment.enroll(
       publicContext(id.storeWithoutTerms, id.noTermsCustomer), {
         termsVersion: 1, acknowledgementSource: 'mini_menu',
+        phoneAuthorizationCode: 'wechat-phone-code-no-terms-0001',
         idempotencyKey: 'membership-enroll-no-current-terms-0001',
       },
     )).rejects.toMatchObject({ code: 'MEMBERSHIP_TERMS_NOT_AVAILABLE' })
-    const existing = await customerExperience.enrollMembership(
+    const failedPhone = await pool.query(`
+      SELECT 1 FROM mbox.customer_verified_contacts
+      WHERE tenant_id=$1 AND store_id=$2 AND customer_id=$3
+    `, [id.tenant, id.storeWithoutTerms, id.noTermsCustomer])
+    expect(failedPhone.rowCount).toBe(0)
+    const existing = await membershipEnrollment.enroll(
       publicContext(id.storeWithoutTerms, id.existingCustomer), {
         termsVersion: 999, acknowledgementSource: 'mini_menu',
+        phoneAuthorizationCode: 'wechat-phone-code-existing-0001',
         idempotencyKey: 'membership-enroll-existing-no-terms-0001',
       },
     )

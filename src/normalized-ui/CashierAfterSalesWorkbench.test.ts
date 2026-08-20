@@ -42,6 +42,18 @@ describe('CashierAfterSalesWorkbenchView', () => {
     expect(html).not.toContain('退款凭证号')
   })
 
+  it('keeps prior-day unresolved refunds visibly separated from current turnover', () => {
+    const view = workbench([payment('postar', [refund('refund-carryover', 'requested', otherEmployeeId)])])
+    view.summary.carryoverOrderCount = 1
+    view.orders[0]!.businessDate = '2026-08-12'
+    view.orders[0]!.carryover = true
+    const html = render(view)
+
+    expect(html).toContain('交班遗留')
+    expect(html).toContain('2026-08-12遗留')
+    expect(html).toContain('不会并入今日营业额')
+  })
+
   it('requires a separate receipt surface for cash and physical POS manual results', () => {
     const cashHtml = render(workbench([
       payment('cash', [refund('refund-cash', 'processing', otherEmployeeId)]),

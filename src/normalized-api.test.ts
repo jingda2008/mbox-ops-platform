@@ -91,6 +91,32 @@ describe('NormalizedApiClient', () => {
     }))
   })
 
+  it('switches employees through the authenticated session and logs out without clearing device access', async () => {
+    const switched = {
+      session: {
+        id: 'session-2', employeeId: 'employee-2', issuedAt: '2026-08-11T12:03:00.000Z',
+        expiresAt: '2026-08-11T18:03:00.000Z', onlineLeaseUntil: '2026-08-11T12:05:00.000Z', isOnline: true,
+      },
+      employee: { id: 'employee-2', code: 'tom', displayName: 'Tom', roleCodes: ['SERVER'] },
+      permissions: ['service.view'], deniedPermissions: [],
+    }
+    const send = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: switched }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    const client = new NormalizedApiClient({ fetch: send })
+
+    await expect(client.switchStaff({ employeeCode: 'tom', pin: '1248' })).resolves.toEqual(switched)
+    await expect(client.logoutStaff()).resolves.toBeUndefined()
+    expect(send).toHaveBeenNthCalledWith(1, '/api/auth/switch', expect.objectContaining({
+      method: 'POST', credentials: 'include', body: JSON.stringify({ employeeCode: 'tom', pin: '1248' }),
+    }))
+    expect(send).toHaveBeenNthCalledWith(2, '/api/auth/logout', expect.objectContaining({
+      method: 'POST', credentials: 'include',
+    }))
+  })
+
   it('uses conditional requests and preserves cached data on 304', async () => {
     const send = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       expect(new Headers(init?.headers).get('if-none-match')).toBe('"bootstrap-v1"')

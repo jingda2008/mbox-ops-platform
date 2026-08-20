@@ -46,10 +46,6 @@ import {
   type MemberRedemptionView,
   type RedemptionFailureCode,
 } from './loyalty-redemption-repository.js'
-import {
-  MembershipTermsRepository,
-  type MembershipTermsAcknowledgementSource,
-} from './membership-terms-service.js'
 import { CheckoutUpgradeManagementRepository } from './checkout-upgrade-management-repository.js'
 import { lockBoundGuestTablePosition } from './guest-table-authority.js'
 
@@ -1512,52 +1508,6 @@ export class CustomerExperienceService {
     return this.transactions.run(context.scope, (transaction) => (
       new CustomerExperienceRepository(transaction, this.activityPaymentProviderConfigured).publicActivityRegistrations(context.customerId)
     ), { readOnly: true })
-  }
-
-  enrollMembership(
-    context: PublicCustomerExperienceContext,
-    input: Readonly<{
-      termsVersion: number
-      acknowledgementSource: MembershipTermsAcknowledgementSource
-      idempotencyKey: string
-    }>,
-  ): Promise<CommandExecution<{ membership: PublicPortalSnapshot['membership']; created: boolean }>> {
-    const memberNo = memberNumber(context.customerId)
-    return this.commands.execute({
-      scope: context.scope,
-      operationScope: 'customer.membership.enroll',
-      idempotencyKey: input.idempotencyKey,
-      requestFingerprint: fingerprint({
-        customerId: context.customerId, memberNo,
-        termsVersion: input.termsVersion,
-        acknowledgementSource: input.acknowledgementSource,
-      }),
-      resultCodec: objectCodec<{ membership: PublicPortalSnapshot['membership']; created: boolean }>(),
-    }, async (transaction) => {
-      const result = await new CustomerExperienceRepository(transaction)
-        .enrollMembership(context.customerId, memberNo)
-      if (result.created) await new MembershipTermsRepository(transaction).acceptCurrentEnrollment({
-        customerId: context.customerId,
-        memberNo,
-        termsVersion: input.termsVersion,
-        acknowledgementSource: input.acknowledgementSource,
-      })
-      return commandOutcome(
-        result,
-        guestActor(context),
-        'membership.enrolled',
-        'customer_membership',
-        context.customerId,
-        context.businessDate,
-        {
-          memberNo, created: result.created,
-          ...(result.created ? {
-            termsVersion: input.termsVersion,
-            acknowledgementSource: input.acknowledgementSource,
-          } : {}),
-        },
-      )
-    })
   }
 
   updatePreferences(
@@ -3276,10 +3226,6 @@ function nullableObjectCodec<Value>(): JsonCodec<Value | null> {
       return value as unknown as Value
     },
   }
-}
-
-function memberNumber(customerId: string): string {
-  return `MBX-${createHash('sha256').update(customerId).digest('hex').slice(0, 12).toUpperCase()}`
 }
 
 function normalizeActivityPublicationFields(

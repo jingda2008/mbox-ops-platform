@@ -50,11 +50,17 @@ interface SummaryRow extends Record<string, unknown> {
   active_kds_tasks: string
   ready_kds_tasks: string
   overdue_kds_tasks: string
+  carryover_kds_tasks: string
+  carryover_ready_kds_tasks: string
   active_reservations: string
   reservation_attention: string
   pending_payments: string
   failed_payments: string
   refund_approvals: string
+  current_refund_approval_tasks: string
+  current_refund_execution_tasks: string
+  carryover_refund_approval_tasks: string
+  carryover_refund_execution_tasks: string
   low_inventory_items: string
   active_print_jobs: string
   failed_print_jobs: string
@@ -67,7 +73,10 @@ interface DomainDefinition {
   endpointRef: keyof StaffEndpointReferences
   permissionPrefixes: readonly string[]
   navigationCodes: readonly string[]
-  values(row: SummaryRow): Pick<StaffDomainSummary, 'activeCount' | 'attentionCount' | 'readyCount'>
+  values(
+    row: SummaryRow,
+    permissions: ReadonlySet<string>,
+  ): Pick<StaffDomainSummary, 'activeCount' | 'attentionCount' | 'readyCount' | 'carryoverCount'>
 }
 
 const ENDPOINT_REFERENCES: StaffEndpointReferences = Object.freeze({
@@ -89,37 +98,60 @@ const DOMAIN_DEFINITIONS: readonly DomainDefinition[] = [
   {
     key: 'live', label: '营业桌台', endpointRef: 'operations',
     permissionPrefixes: ['dashboard.', 'table.'], navigationCodes: ['live'],
-    values: (row) => counts(row.active_tables, '0', '0'),
+    values: (row) => counts(row.active_tables, '0', '0', '0'),
   },
   {
     key: 'service', label: '服务任务', endpointRef: 'operations',
     permissionPrefixes: ['service.', 'sop.'], navigationCodes: ['tasks'],
-    values: (row) => counts(row.open_service_tasks, row.urgent_service_tasks, '0'),
+    values: (row) => counts(row.open_service_tasks, row.urgent_service_tasks, '0', '0'),
   },
   {
     key: 'fulfillment', label: '出品履约', endpointRef: 'fulfillment',
     permissionPrefixes: ['order.', 'work.'], navigationCodes: ['commerce'],
-    values: (row) => counts(row.active_kds_tasks, row.overdue_kds_tasks, row.ready_kds_tasks),
+    values: (row, permissions) => permissions.has('kds.prepare') || permissions.has('kds.deliver')
+      ? counts(
+          row.active_kds_tasks,
+          row.overdue_kds_tasks,
+          row.ready_kds_tasks,
+          addCounts(row.carryover_kds_tasks, row.carryover_ready_kds_tasks),
+        )
+      : counts('0', '0', '0', '0'),
   },
   {
     key: 'reservations', label: '当日预约', endpointRef: 'reservations',
     permissionPrefixes: ['reservation.'], navigationCodes: ['reservations'],
-    values: (row) => counts(row.active_reservations, row.reservation_attention, '0'),
+    values: (row, permissions) => counts(
+      row.active_reservations,
+      permissions.has('reservation.manage') ? row.reservation_attention : '0',
+      '0',
+      '0',
+    ),
   },
   {
-    key: 'payments', label: '收银异常', endpointRef: 'reconciliation',
+    key: 'payments', label: '收银待办', endpointRef: 'reconciliation',
     permissionPrefixes: ['payment.', 'refund.', 'cash.'], navigationCodes: ['payments'],
-    values: (row) => counts(row.pending_payments, addCounts(row.failed_payments, row.refund_approvals), '0'),
+    values: (row, permissions) => {
+      const currentApproval = permissions.has('refund.approve') ? row.current_refund_approval_tasks : '0'
+      const currentExecution = permissions.has('refund.execute') ? row.current_refund_execution_tasks : '0'
+      const carryoverApproval = permissions.has('refund.approve') ? row.carryover_refund_approval_tasks : '0'
+      const carryoverExecution = permissions.has('refund.execute') ? row.carryover_refund_execution_tasks : '0'
+      return counts(
+        addCounts(currentApproval, currentExecution),
+        addCounts(currentApproval, currentExecution),
+        '0',
+        addCounts(carryoverApproval, carryoverExecution),
+      )
+    },
   },
   {
     key: 'inventory', label: '库存预警', endpointRef: 'inventory',
     permissionPrefixes: ['inventory.', 'bottle.'], navigationCodes: ['inventory'],
-    values: (row) => counts(row.low_inventory_items, row.low_inventory_items, '0'),
+    values: (row) => counts(row.low_inventory_items, row.low_inventory_items, '0', '0'),
   },
   {
     key: 'printing', label: '打印任务', endpointRef: 'hardwareWork',
     permissionPrefixes: ['print.', 'hardware.'], navigationCodes: ['devices'],
-    values: (row) => counts(row.active_print_jobs, row.failed_print_jobs, '0'),
+    values: (row) => counts(row.active_print_jobs, row.failed_print_jobs, '0', '0'),
   },
 ]
 
@@ -379,12 +411,61 @@ async function readSummaries(
         AND status IN ('pending', 'acknowledged', 'in_progress')
         AND (priority IN ('urgent', 'high') OR (due_at IS NOT NULL AND due_at <= clock_timestamp())))::text AS urgent_service_tasks,
       (SELECT count(*) FROM mbox.kds_tasks WHERE tenant_id = $1::uuid AND store_id = $2::uuid
-        AND status IN ('pending', 'accepted', 'preparing'))::text AS active_kds_tasks,
+        AND status IN ('pending', 'accepted', 'preparing')
+        AND EXISTS (
+          SELECT 1 FROM mbox.order_items AS item
+          JOIN mbox.orders AS customer_order ON customer_order.tenant_id=item.tenant_id
+            AND customer_order.store_id=item.store_id AND customer_order.id=item.order_id
+          JOIN mbox.table_sessions AS session ON session.tenant_id=customer_order.tenant_id
+            AND session.store_id=customer_order.store_id AND session.id=customer_order.table_session_id
+          WHERE item.tenant_id=kds_tasks.tenant_id AND item.store_id=kds_tasks.store_id
+            AND item.id=kds_tasks.order_item_id AND session.business_date=$3::date
+        ))::text AS active_kds_tasks,
       (SELECT count(*) FROM mbox.kds_tasks WHERE tenant_id = $1::uuid AND store_id = $2::uuid
-        AND status = 'ready')::text AS ready_kds_tasks,
+        AND status = 'ready'
+        AND EXISTS (
+          SELECT 1 FROM mbox.order_items AS item
+          JOIN mbox.orders AS customer_order ON customer_order.tenant_id=item.tenant_id
+            AND customer_order.store_id=item.store_id AND customer_order.id=item.order_id
+          JOIN mbox.table_sessions AS session ON session.tenant_id=customer_order.tenant_id
+            AND session.store_id=customer_order.store_id AND session.id=customer_order.table_session_id
+          WHERE item.tenant_id=kds_tasks.tenant_id AND item.store_id=kds_tasks.store_id
+            AND item.id=kds_tasks.order_item_id AND session.business_date=$3::date
+        ))::text AS ready_kds_tasks,
       (SELECT count(*) FROM mbox.kds_tasks WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND status IN ('pending', 'accepted', 'preparing') AND due_at IS NOT NULL
-        AND due_at <= clock_timestamp())::text AS overdue_kds_tasks,
+        AND due_at <= clock_timestamp()
+        AND EXISTS (
+          SELECT 1 FROM mbox.order_items AS item
+          JOIN mbox.orders AS customer_order ON customer_order.tenant_id=item.tenant_id
+            AND customer_order.store_id=item.store_id AND customer_order.id=item.order_id
+          JOIN mbox.table_sessions AS session ON session.tenant_id=customer_order.tenant_id
+            AND session.store_id=customer_order.store_id AND session.id=customer_order.table_session_id
+          WHERE item.tenant_id=kds_tasks.tenant_id AND item.store_id=kds_tasks.store_id
+            AND item.id=kds_tasks.order_item_id AND session.business_date=$3::date
+        ))::text AS overdue_kds_tasks,
+      (SELECT count(*) FROM mbox.kds_tasks WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+        AND status IN ('pending', 'accepted', 'preparing')
+        AND EXISTS (
+          SELECT 1 FROM mbox.order_items AS item
+          JOIN mbox.orders AS customer_order ON customer_order.tenant_id=item.tenant_id
+            AND customer_order.store_id=item.store_id AND customer_order.id=item.order_id
+          JOIN mbox.table_sessions AS session ON session.tenant_id=customer_order.tenant_id
+            AND session.store_id=customer_order.store_id AND session.id=customer_order.table_session_id
+          WHERE item.tenant_id=kds_tasks.tenant_id AND item.store_id=kds_tasks.store_id
+            AND item.id=kds_tasks.order_item_id AND session.business_date<$3::date
+        ))::text AS carryover_kds_tasks,
+      (SELECT count(*) FROM mbox.kds_tasks WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+        AND status = 'ready'
+        AND EXISTS (
+          SELECT 1 FROM mbox.order_items AS item
+          JOIN mbox.orders AS customer_order ON customer_order.tenant_id=item.tenant_id
+            AND customer_order.store_id=item.store_id AND customer_order.id=item.order_id
+          JOIN mbox.table_sessions AS session ON session.tenant_id=customer_order.tenant_id
+            AND session.store_id=customer_order.store_id AND session.id=customer_order.table_session_id
+          WHERE item.tenant_id=kds_tasks.tenant_id AND item.store_id=kds_tasks.store_id
+            AND item.id=kds_tasks.order_item_id AND session.business_date<$3::date
+        ))::text AS carryover_ready_kds_tasks,
       (SELECT count(*) FROM mbox.reservations WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND arrival_at >= business_window.starts_at AND arrival_at < business_window.ends_at
         AND status IN ('pending', 'confirmed', 'arrived', 'seated'))::text AS active_reservations,
@@ -397,6 +478,46 @@ async function readSummaries(
         AND status = 'failed')::text AS failed_payments,
       (SELECT count(*) FROM mbox.refunds WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND status = 'requested')::text AS refund_approvals,
+      (SELECT count(*) FROM mbox.refunds AS refund
+        JOIN mbox.payments AS payment ON payment.tenant_id=refund.tenant_id
+          AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
+        JOIN mbox.orders AS customer_order ON customer_order.tenant_id=payment.tenant_id
+          AND customer_order.store_id=payment.store_id AND customer_order.id=payment.order_id
+        JOIN mbox.table_sessions AS session ON session.tenant_id=customer_order.tenant_id
+          AND session.store_id=customer_order.store_id AND session.id=customer_order.table_session_id
+        WHERE refund.tenant_id=$1::uuid AND refund.store_id=$2::uuid
+          AND refund.status='requested' AND refund.requested_by_employee_id<>$4::uuid
+          AND session.business_date=$3::date)::text AS current_refund_approval_tasks,
+      (SELECT count(*) FROM mbox.refunds AS refund
+        JOIN mbox.payments AS payment ON payment.tenant_id=refund.tenant_id
+          AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
+        JOIN mbox.orders AS customer_order ON customer_order.tenant_id=payment.tenant_id
+          AND customer_order.store_id=payment.store_id AND customer_order.id=payment.order_id
+        JOIN mbox.table_sessions AS session ON session.tenant_id=customer_order.tenant_id
+          AND session.store_id=customer_order.store_id AND session.id=customer_order.table_session_id
+        WHERE refund.tenant_id=$1::uuid AND refund.store_id=$2::uuid
+          AND refund.status IN ('approved','processing')
+          AND session.business_date=$3::date)::text AS current_refund_execution_tasks,
+      (SELECT count(*) FROM mbox.refunds AS refund
+        JOIN mbox.payments AS payment ON payment.tenant_id=refund.tenant_id
+          AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
+        JOIN mbox.orders AS customer_order ON customer_order.tenant_id=payment.tenant_id
+          AND customer_order.store_id=payment.store_id AND customer_order.id=payment.order_id
+        JOIN mbox.table_sessions AS session ON session.tenant_id=customer_order.tenant_id
+          AND session.store_id=customer_order.store_id AND session.id=customer_order.table_session_id
+        WHERE refund.tenant_id=$1::uuid AND refund.store_id=$2::uuid
+          AND refund.status='requested' AND refund.requested_by_employee_id<>$4::uuid
+          AND session.business_date<$3::date)::text AS carryover_refund_approval_tasks,
+      (SELECT count(*) FROM mbox.refunds AS refund
+        JOIN mbox.payments AS payment ON payment.tenant_id=refund.tenant_id
+          AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
+        JOIN mbox.orders AS customer_order ON customer_order.tenant_id=payment.tenant_id
+          AND customer_order.store_id=payment.store_id AND customer_order.id=payment.order_id
+        JOIN mbox.table_sessions AS session ON session.tenant_id=customer_order.tenant_id
+          AND session.store_id=customer_order.store_id AND session.id=customer_order.table_session_id
+        WHERE refund.tenant_id=$1::uuid AND refund.store_id=$2::uuid
+          AND refund.status IN ('approved','processing')
+          AND session.business_date<$3::date)::text AS carryover_refund_execution_tasks,
       (SELECT count(*) FROM mbox.inventory_balances AS balance
         JOIN mbox.inventory_items AS item ON item.tenant_id = balance.tenant_id
           AND item.store_id = balance.store_id AND item.id = balance.inventory_item_id
@@ -455,22 +576,24 @@ function visibleDomainSummaries(
   permissions: readonly string[],
   navigationCodes: readonly string[],
 ): StaffDomainSummary[] {
+  const permissionSet = new Set(permissions)
   return DOMAIN_DEFINITIONS.filter((domain) => (
     domain.navigationCodes.some((code) => navigationCodes.includes(code))
     || domain.permissionPrefixes.some((prefix) => permissions.some((permission) => permission.startsWith(prefix)))
   )).map((domain) => ({
     key: domain.key,
     label: domain.label,
-    ...domain.values(row),
+    ...domain.values(row, permissionSet),
     endpointRef: ENDPOINT_REFERENCES[domain.endpointRef],
   }))
 }
 
-function counts(active: string, attention: string, ready: string) {
+function counts(active: string, attention: string, ready: string, carryover: string) {
   return {
     activeCount: safeCount(active),
     attentionCount: safeCount(attention),
     readyCount: safeCount(ready),
+    carryoverCount: safeCount(carryover),
   }
 }
 

@@ -225,6 +225,7 @@ export function CashierAfterSalesWorkbenchView({
       <span><b>{view.summary.capturedPaymentCount}</b><small>已收款</small></span>
       <span className={view.summary.requestedRefundCount > 0 ? 'has-attention' : ''}><b>{view.summary.requestedRefundCount}</b><small>待复核</small></span>
       <span className={view.summary.processingRefundCount > 0 ? 'has-attention' : ''}><b>{view.summary.processingRefundCount}</b><small>待执行</small></span>
+      {(view.summary.carryoverOrderCount ?? 0) > 0 && <span className="has-attention"><b>{view.summary.carryoverOrderCount}</b><small>交班遗留</small></span>}
     </div>
 
     {view.orders.length === 0
@@ -239,11 +240,12 @@ export function CashierAfterSalesWorkbenchView({
                 aria-expanded={expanded}
                 onClick={() => setExpandedOrderId(expanded ? null : order.id)}
               >
-                <span><b>{order.tableCode}</b><small>{shortReference(order.publicId)} · {formatTime(order.submittedAt ?? order.createdAt)}</small></span>
+                <span><b>{order.tableCode}</b><small>{order.carryover ? `${order.businessDate ?? '前一营业日'}遗留 · ` : ''}{shortReference(order.publicId)} · {formatTime(order.submittedAt ?? order.createdAt)}</small></span>
                 <span><strong>¥{formatAmount(order.totalAmountMinor)}</strong><em>{paymentStatusLabel(order.paymentStatus)}</em></span>
                 <ChevronDown size={18} className={expanded ? 'is-open' : ''} />
               </button>
               {expanded && <div className="cashier-order-detail">
+                {order.carryover && <p className="cashier-guidance">这是前一营业日尚未闭环的退款事项；处理结果继续记在原订单，不会并入今日营业额。</p>}
                 <section>
                   <h3>原订单商品</h3>
                   {order.items.map((item) => <div className="cashier-line" key={item.id}>

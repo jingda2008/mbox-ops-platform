@@ -76,8 +76,31 @@ integration('current M-BOX commercial configuration', () => {
     ])
     expect(store.tables.every((table) => table.minimumSpendMinor === 0)).toBe(true)
     expect(store.tables.every((table) => Object.keys(table.layout ?? {}).length > 0)).toBe(true)
+    const inventoryModes = await readProductInventoryModes(databaseUrl!, tenantId, storeId)
+    expect(inventoryModes.food).toEqual(['not_managed'])
+    expect(inventoryModes.nonFood).toEqual(['tracked'])
   }, 30_000)
 })
+
+async function readProductInventoryModes(connectionString: string, tenantId: string, storeId: string) {
+  const client = new Client({ connectionString, application_name: 'mbox-catalog-inventory-mode-contract-test' })
+  await client.connect()
+  try {
+    const result = await client.query<{ category_code: string; inventory_control_mode: string }>(`
+      SELECT category_code, inventory_control_mode
+      FROM mbox.products
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+    `, [tenantId, storeId])
+    return {
+      food: [...new Set(result.rows.filter((row) => row.category_code === 'food')
+        .map((row) => row.inventory_control_mode))].sort(),
+      nonFood: [...new Set(result.rows.filter((row) => row.category_code !== 'food')
+        .map((row) => row.inventory_control_mode))].sort(),
+    }
+  } finally {
+    await client.end()
+  }
+}
 
 async function expectMigrationSeededRolePermissionsInConfig(
   connectionString: string,

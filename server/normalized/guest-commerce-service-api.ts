@@ -588,7 +588,8 @@ async function searchGuestCatalog(
     ) AS component_list ON true
     LEFT JOIN LATERAL (
       SELECT COALESCE(bool_and(
-        required_product.fulfillment_station NOT IN ('bar', 'kitchen')
+        required_product.inventory_control_mode = 'not_managed'
+        OR required_product.fulfillment_station NOT IN ('bar', 'kitchen')
         OR EXISTS (
           SELECT 1
           FROM mbox.recipes AS recipe
@@ -618,10 +619,10 @@ async function searchGuestCatalog(
         )
       ), true) AS configuration_complete
       FROM (
-        SELECT product.id AS product_id, product.fulfillment_station
+        SELECT product.id AS product_id, product.fulfillment_station, product.inventory_control_mode
         WHERE COALESCE(product.product_kind, 'single')<>'bundle'
         UNION ALL
-        SELECT component_product.id, component_product.fulfillment_station
+        SELECT component_product.id, component_product.fulfillment_station, component_product.inventory_control_mode
         FROM mbox.product_bundle_components AS component
         JOIN mbox.products AS component_product
           ON component_product.tenant_id=component.tenant_id

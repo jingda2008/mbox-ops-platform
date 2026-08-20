@@ -159,10 +159,11 @@ export async function provisionNormalizedCatalog(input: {
           recommendation_dwell_tags, recommendation_single_wave_eligible,
           recommendation_expected_prep_minutes, recommendation_hold_minutes,
           recommendation_upgrade_product_id, menu_sort_order, available_from, available_until,
-          allowed_channels, max_order_quantity, kds_priority, fulfillment_sla_seconds, cost_amount_minor)
+          allowed_channels, max_order_quantity, kds_priority, fulfillment_sla_seconds, cost_amount_minor,
+          inventory_control_mode)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,
           $16::text[],$17::text[],$18::text[],$19::text[],$20,$21,$22,$23::uuid,
-          $24,$25::time,$26::time,$27::text[],$28,$29,$30,$31)
+          $24,$25::time,$26::time,$27::text[],$28,$29,$30,$31,$32)
         ON CONFLICT (tenant_id, store_id, code) DO UPDATE SET name=EXCLUDED.name,
           category_code=EXCLUDED.category_code, fulfillment_station=EXCLUDED.fulfillment_station,
           product_kind=EXCLUDED.product_kind, product_snapshot=EXCLUDED.product_snapshot, status=EXCLUDED.status,
@@ -195,7 +196,7 @@ export async function provisionNormalizedCatalog(input: {
       operational.recommendationUpgradeProductId, operational.menuSortOrder,
       operational.availableFrom, operational.availableUntil, operational.allowedChannels,
       operational.maxOrderQuantity, operational.kdsPriority, operational.fulfillmentSlaSeconds,
-      operational.costAmountMinor])
+      operational.costAmountMinor, product.categoryId === 'food' ? 'not_managed' : 'tracked'])
       const id = result.rows[0]?.id
       if (!id) throw new Error(`Unable to provision product ${product.sku}`)
       productIds.set(product.sku, id)

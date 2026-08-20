@@ -583,6 +583,7 @@ integration('guest service and mood API with PostgreSQL', () => {
   let integrationSessionId: string
   let integrationCustomerId: string
   let integrationProductId: string
+  let integrationNotManagedProductId: string
   let app: FastifyInstance
 
   beforeAll(async () => {
@@ -595,6 +596,7 @@ integration('guest service and mood API with PostgreSQL', () => {
     integrationCustomerId = randomUUID()
     integrationSessionId = randomUUID()
     integrationProductId = randomUUID()
+    integrationNotManagedProductId = randomUUID()
     const areaId = randomUUID()
     const tableId = randomUUID()
     await pool.query(
@@ -631,10 +633,26 @@ integration('guest service and mood API with PostgreSQL', () => {
       [integrationProductId, integrationTenantId, integrationStoreId, `PUBLIC-${integrationProductId.slice(0, 8)}`],
     )
     await pool.query(
+      `INSERT INTO mbox.products (
+         id, tenant_id, store_id, code, name, category_code, fulfillment_station,
+         product_kind, inventory_control_mode, guest_visible, search_text, status
+       ) VALUES (
+         $1::uuid, $2::uuid, $3::uuid, $4, '公开菜单测试小食', 'food', 'kitchen',
+         'single', 'not_managed', true, $4 || ' 公开菜单测试小食', 'active'
+       )`,
+      [integrationNotManagedProductId, integrationTenantId, integrationStoreId, `PUBLIC-${integrationNotManagedProductId.slice(0, 8)}`],
+    )
+    await pool.query(
       `INSERT INTO mbox.product_prices (
          tenant_id, store_id, product_id, price_type, amount_minor, currency, valid_from
        ) VALUES ($1::uuid, $2::uuid, $3::uuid, 'standard', 6800, 'CNY', clock_timestamp() - interval '1 minute')`,
       [integrationTenantId, integrationStoreId, integrationProductId],
+    )
+    await pool.query(
+      `INSERT INTO mbox.product_prices (
+         tenant_id, store_id, product_id, price_type, amount_minor, currency, valid_from
+       ) VALUES ($1::uuid, $2::uuid, $3::uuid, 'standard', 3800, 'CNY', clock_timestamp() - interval '1 minute')`,
+      [integrationTenantId, integrationStoreId, integrationNotManagedProductId],
     )
     await pool.query(
       `INSERT INTO mbox.table_sessions (
@@ -704,6 +722,18 @@ integration('guest service and mood API with PostgreSQL', () => {
     expect(response.json()).toMatchObject({
       data: [{ productId: integrationProductId, name: '公开菜单测试饮品', available: false }],
       meta: { partySize: null, recommendationScene: null, orderingRequiresTableScan: true },
+    })
+  })
+
+  it('keeps explicitly not-managed food orderable without inventing an inventory recipe', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/public/mini/menu/products?search=${integrationNotManagedProductId.slice(0, 8)}`,
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({
+      data: [{ productId: integrationNotManagedProductId, name: '公开菜单测试小食', available: true }],
     })
   })
 

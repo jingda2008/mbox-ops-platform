@@ -3,7 +3,7 @@ import {
   ArrowLeft, CalendarDays, Check, ChevronRight, Crown, Gift, House, MapPin,
   Martini, Music2, ScanLine, ShieldCheck, TicketCheck, UserRound, UsersRound, Zap,
 } from 'lucide-react'
-import miniLogo from '../../miniprogram/assets/brand/mbox-logo-badge.png'
+import miniLogo from './assets/mbox-logo-badge.png'
 import './mini-program-preview.css'
 
 type Tab = 'home' | 'reservation' | 'order' | 'community' | 'profile'

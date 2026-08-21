@@ -5,14 +5,25 @@ import {
   ChevronRight,
   ClipboardList,
   Clock3,
+  CreditCard,
+  Database,
+  Gift,
   Grid2X2,
+  LayoutDashboard,
   LoaderCircle,
+  MapPinned,
   Menu,
+  MonitorCog,
+  Music2,
   PackageCheck,
   RefreshCw,
   RotateCcw,
+  Settings,
   ShieldCheck,
+  UtensilsCrossed,
+  Warehouse,
   X,
+  type LucideIcon,
 } from 'lucide-react'
 import {
   NormalizedApiClient,
@@ -27,6 +38,7 @@ import {
   workspaceReducer,
   type NormalizedWorkspaceState,
 } from './workspace-model'
+import staffLogo from './assets/mbox-logo-badge.png'
 import './normalized-staff-workspace.css'
 
 export interface NormalizedStaffWorkspaceProps {
@@ -57,6 +69,31 @@ const domainRoute: Record<StaffDomainKey, string> = {
   payments: '/staff/payments',
   inventory: '/staff/inventory',
   printing: '/staff/devices',
+}
+
+const navigationIcon: Record<string, LucideIcon> = {
+  live: LayoutDashboard,
+  service: ClipboardList,
+  tasks: ClipboardList,
+  reservations: CalendarDays,
+  commerce: UtensilsCrossed,
+  fulfillment: PackageCheck,
+  inventory: Warehouse,
+  payments: CreditCard,
+  benefits: Gift,
+  operations: Grid2X2,
+  devices: MonitorCog,
+  performance: Music2,
+  songs: Music2,
+  layout: MapPinned,
+  master: Database,
+  settings: Settings,
+  config: Settings,
+}
+
+function StaffNavigationIcon({ code, size = 20 }: { code: string; size?: number }) {
+  const Icon = navigationIcon[code] ?? LayoutDashboard
+  return <Icon size={size} strokeWidth={1.8} aria-hidden="true" />
 }
 
 export function NormalizedStaffWorkspace({
@@ -165,7 +202,7 @@ export function NormalizedStaffWorkspaceView({
     <main className="normalized-workspace" data-testid="normalized-workspace">
       <header className="normalized-topbar">
         <div className="normalized-brand" aria-label={`${bootstrap.store.name} 员工工作台`}>
-          <span className="normalized-brand-mark">M</span>
+          <span className="normalized-brand-mark"><img src={staffLogo} alt="" aria-hidden="true" /></span>
           <span>
             <strong>{bootstrap.store.name}</strong>
             <small>SUPERHIGH CULTURE · {businessDayLabel(bootstrap)}</small>
@@ -326,7 +363,7 @@ export function StaffBottomNavigation({
           onClick={() => onNavigate?.(entry.route)}
           disabled={onNavigate === undefined}
         >
-          <span aria-hidden="true">{entry.icon ?? '•'}</span>
+          <span className="normalized-nav-icon"><StaffNavigationIcon code={entry.code} /></span>
           {entry.label}
         </button>
       })}
@@ -336,7 +373,7 @@ export function StaffBottomNavigation({
       <button className="normalized-mobile-menu-backdrop" type="button" aria-label="关闭全部岗位入口" onClick={() => setMobileMenuOpen(false)} />
       <aside className="normalized-mobile-menu" role="dialog" aria-modal="true" aria-labelledby="mobile-menu-title">
         <header><div><small>当前岗位</small><h2 id="mobile-menu-title">全部工作入口</h2></div><button type="button" aria-label="关闭" onClick={() => setMobileMenuOpen(false)}><X size={20} /></button></header>
-        <div>{entries.map((entry) => <button type="button" key={entry.code} onClick={() => { setMobileMenuOpen(false); onNavigate?.(entry.route) }} disabled={onNavigate === undefined}><span aria-hidden="true">{entry.icon ?? '•'}</span><strong>{entry.label}</strong><ChevronRight size={17} /></button>)}</div>
+        <div>{entries.map((entry) => <button type="button" key={entry.code} onClick={() => { setMobileMenuOpen(false); onNavigate?.(entry.route) }} disabled={onNavigate === undefined}><span className="normalized-nav-icon"><StaffNavigationIcon code={entry.code} size={19} /></span><strong>{entry.label}</strong><ChevronRight size={17} /></button>)}</div>
       </aside>
     </>}
   </>
@@ -362,7 +399,7 @@ function RoleNavigation({
         onClick={() => onNavigate?.(entry.route)}
         disabled={onNavigate === undefined}
       >
-        <span aria-hidden="true">{entry.icon ?? '•'}</span>
+        <span className="normalized-nav-icon"><StaffNavigationIcon code={entry.code} size={18} /></span>
         <strong>{entry.label}</strong>
         <ChevronRight size={16} aria-hidden="true" />
       </button>)}
@@ -380,7 +417,7 @@ function WorkspaceGate({
   return (
     <main className="normalized-gate">
       {sessionControls !== undefined && <div className="normalized-gate-session">{sessionControls}</div>}
-      <span className="normalized-brand-mark">M</span>
+      <span className="normalized-brand-mark"><img src={staffLogo} alt="" aria-hidden="true" /></span>
       {loading ? (
         <>
           <LoaderCircle className="is-spinning" size={28} aria-hidden="true" />

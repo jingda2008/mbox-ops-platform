@@ -14,6 +14,149 @@
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
 }
 
+/* M-BOX live operations: premium brand-green surface treatment only. */
+.staff-actions-panel {
+  --staff-line: #ded7cc;
+  --staff-soft: #f7f3ec;
+  --staff-green: #315d46;
+  --staff-green-deep: #214635;
+  --staff-gold: #c9a85b;
+  background:
+    radial-gradient(circle at 6% 0%, rgb(68 120 89 / 7%), transparent 27rem),
+    radial-gradient(circle at 96% 16%, rgb(201 168 91 / 10%), transparent 22rem),
+    linear-gradient(180deg, #fbfaf6, #f2eee6);
+}
+
+.staff-actions-panel .staff-actions-header {
+  min-height: 66px;
+  margin: -12px -12px 14px;
+  padding: 10px 14px;
+  background:
+    radial-gradient(circle at 92% -45%, rgb(202 166 89 / 20%), transparent 50%),
+    linear-gradient(135deg, #0d1712, #234031 68%, #101512);
+  color: #f8f5ed;
+  box-shadow: 0 10px 26px rgb(24 28 22 / 20%);
+}
+
+.staff-actions-panel .staff-actions-header p {
+  color: #e7cf8c;
+  letter-spacing: .07em;
+}
+
+.staff-actions-panel .staff-actions-icon {
+  border-color: rgb(255 255 255 / 20%) !important;
+  border-radius: 11px;
+  background: rgb(255 255 255 / 9%) !important;
+  color: #fff !important;
+}
+
+.staff-actions-panel .staff-assignment-panel,
+.staff-actions-panel .staff-table-tools > label,
+.staff-actions-panel .staff-table-empty,
+.staff-actions-panel .staff-table-sheet,
+.staff-actions-panel .staff-action-card,
+.staff-actions-panel .staff-reservations > header,
+.staff-actions-panel .staff-reservation-card {
+  border-color: var(--staff-line);
+  border-radius: 12px;
+  background: linear-gradient(145deg, #fff, #faf7f1);
+  box-shadow: 0 7px 21px rgb(71 57 37 / 7%);
+}
+
+.staff-actions-panel .staff-table-tools > div button,
+.staff-actions-panel .staff-table-tile,
+.staff-actions-panel .staff-primary-action,
+.staff-actions-panel .staff-session-actions button,
+.staff-actions-panel .staff-action-card > button,
+.staff-actions-panel .staff-action-card-actions > button,
+.staff-actions-panel .staff-reservation-card > button {
+  border-radius: 10px;
+}
+
+.staff-actions-panel .staff-table-tools > div button.is-active,
+.staff-actions-panel .staff-count-picks .is-active,
+.staff-actions-panel .staff-transfer-targets .is-active,
+.staff-actions-panel .staff-primary-action,
+.staff-actions-panel .staff-action-card > button:not(.is-readonly),
+.staff-actions-panel .staff-action-card-actions > button:not(.is-readonly),
+.staff-actions-panel .staff-reservation-card > button,
+.staff-actions-panel .staff-assignment-submit {
+  border-color: var(--staff-green-deep) !important;
+  background: linear-gradient(135deg, #3d7055, var(--staff-green) 56%, var(--staff-green-deep)) !important;
+  color: #fff !important;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 13%), 0 6px 16px rgb(33 70 53 / 17%);
+}
+
+.staff-actions-panel .staff-table-tile {
+  min-height: 70px !important;
+  border-color: #ddd6cb;
+  background: rgb(255 253 249 / 90%);
+  box-shadow: inset 0 1px 0 #fff;
+}
+
+.staff-actions-panel .staff-table-tile.is-open {
+  border-color: #83aa91;
+  background: linear-gradient(145deg, #edf6f0, #e2eee6);
+  box-shadow: 0 6px 16px rgb(49 93 70 / 9%), inset 0 1px 0 #fff;
+}
+
+.staff-actions-panel .staff-table-tile.is-selected {
+  outline-color: #c9a85b;
+  box-shadow: 0 0 0 3px rgb(201 168 91 / 13%), 0 7px 18px rgb(49 93 70 / 11%);
+}
+
+.staff-actions-panel .staff-table-sheet {
+  border-top: 0;
+  box-shadow: 0 10px 26px rgb(71 57 37 / 9%);
+}
+
+.staff-actions-panel .staff-table-sheet-icon {
+  border-radius: 10px;
+  background: linear-gradient(145deg, #eef6f1, #dcebe1);
+  color: var(--staff-green);
+}
+
+.staff-actions-panel .staff-session-actions .is-commerce {
+  border-color: #8eaf9b;
+  background: linear-gradient(145deg, #eff7f2, #e4f0e8);
+  color: var(--staff-green-deep);
+}
+
+.staff-actions-panel .staff-action-card {
+  border-left-width: 4px;
+}
+
+.staff-actions-panel .staff-action-card:not(.priority-urgent):not(.priority-high):not(.is-overdue) {
+  border-left-color: #7fa28c;
+}
+
+.staff-actions-panel .staff-reservation-card {
+  border-left-color: var(--staff-gold);
+}
+
+.staff-actions-panel .staff-observation-sheet {
+  background: #f5f0e8;
+}
+
+.staff-actions-panel .staff-observation-sheet > header {
+  border-bottom-color: #c9a85b;
+  background:
+    radial-gradient(circle at 92% -45%, rgb(202 166 89 / 18%), transparent 50%),
+    linear-gradient(135deg, #0d1712, #234031 68%, #101512);
+}
+
+@media (min-width: 720px) {
+  .staff-actions-panel {
+    padding-top: 18px;
+  }
+
+  .staff-actions-panel .staff-actions-header {
+    margin: 0 0 16px;
+    padding-inline: 16px;
+    border-radius: 16px;
+  }
+}
+
 .staff-actions-panel button,
 .staff-actions-panel input,
 .staff-actions-panel select,

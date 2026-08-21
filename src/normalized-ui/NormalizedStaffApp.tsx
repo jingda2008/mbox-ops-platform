@@ -8,6 +8,7 @@ import { StaffActionsPanel } from './staff-actions'
 import type { StaffActionsTab } from './staff-actions/types'
 import { normalizedStaffRoute, type NormalizedStaffRoute } from './normalized-staff-routes'
 import { clearDeviceLease, getOrCreateDeviceKey, hasUsableDeviceLease, saveDeviceLease } from './staff-device'
+import staffLogo from './assets/mbox-logo-badge.png'
 import './normalized-staff-login.css'
 
 export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiClient }) {
@@ -388,7 +389,7 @@ function EmployeeLoginForm({ api, onReady, onCredentialRequired, message }: {
 }
 
 function StaffLoginShell({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
-  return <main className="normalized-login"><section><header><span className="normalized-login-mark">M</span><div><strong>M-BOX</strong><small>SUPERHIGH CULTURE · 陆家嘴现场运营</small></div></header><div className="normalized-login-copy"><p>STAFF ACCESS</p><h1>{title}</h1><span>{subtitle}</span></div>{children}</section></main>
+  return <main className="normalized-login"><section><header><span className="normalized-login-mark"><img src={staffLogo} alt="" aria-hidden="true" /></span><div><strong>M-BOX</strong><small>SUPERHIGH CULTURE · 陆家嘴现场运营</small></div></header><div className="normalized-login-copy"><p>STAFF ACCESS</p><h1>{title}</h1><span>{subtitle}</span></div>{children}</section></main>
 }
 
 function StaffGateLoading() {

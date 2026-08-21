@@ -327,6 +327,10 @@ test('post-cutover evidence uses the external relay before activation can comple
   }
   assert.match(deploy, /post-cutover-\$\{evidence_kind\}/)
   assert.match(activate, /archive_release_evidence[\s\S]*authMode == "EcsRamRole"/)
+  assert.match(activate, /ledger_key="\$\{object_prefix\}\/SHA256SUMS"/)
+  assert.match(activate, /ledger_sha=\$\(sha256sum "\$\{evidence_directory\}\/SHA256SUMS"/)
+  assert.match(activate, /ledger_bytes=\$\(stat -c '%s' "\$\{evidence_directory\}\/SHA256SUMS"/)
+  assert.match(activate, /any\(\.objects\[\]; \.key == \$key and \.sha256 == \$sha and \.bytes == \$bytes[\s\S]*expected_count=\$\(\(expected_count \+ 1\)\)/)
   assert.match(activate, /any\(\.objects\[\]; \.key == \$key and \.sha256 == \$sha and \.bytes == \$bytes/)
   assert.match(deploy, /activate-release\.sh[\s\S]*> "\$\{activation_log\}" 2>&1[\s\S]*&/)
   assert.match(deploy, /relay_post_cutover_evidence[\s\S]*deployment[\s\S]*completion/)

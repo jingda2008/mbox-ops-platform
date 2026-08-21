@@ -277,6 +277,12 @@ test('formal deployment requires OSS evidence before activation and uploads data
   const ciWorkflow = await read('../.github/workflows/ci.yml')
   assert.match(ciWorkflow, /image_digest=\$\(tar -xOf "\$\{archive\}" index\.json/)
   assert.doesNotMatch(ciWorkflow, /image_digest=\$\(docker image inspect/)
+  assert.match(ciWorkflow, /reference_media_type=.*jq -er '\.mediaType'/)
+  assert.match(ciWorkflow, /application\/vnd\.oci\.image\.index\.v1\+json/)
+  assert.match(ciWorkflow, /application\/vnd\.oci\.image\.manifest\.v1\+json/)
+  assert.match(ciWorkflow, /platform_manifest_digest=\$\{image_digest\}/)
+  assert.match(ciWorkflow, /platform_image_digest=[\s\S]*?\.config\.digest/)
+  assert.match(ciWorkflow, /test "\$\{platform_image_digest\}" = "\$\(docker image inspect/)
 })
 
 test('selective collection is outside the request path and only three stores can be written', async () => {

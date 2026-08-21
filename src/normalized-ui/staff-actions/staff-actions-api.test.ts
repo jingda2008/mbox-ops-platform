@@ -65,13 +65,16 @@ describe('StaffActionsApi', () => {
     const send = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: [] }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: {} }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: {} }), { status: 200 }))
     const api = new StaffActionsApi({ fetch: send })
 
     await expect(api.loadReservations()).resolves.toEqual([])
     await api.actOnReservation('reservation-1', 'confirm')
+    await api.actOnReservation('reservation-1', 'complete')
 
     expect(send).toHaveBeenNthCalledWith(1, '/api/staff/reservations', expect.objectContaining({ method: 'GET' }))
     expect(send).toHaveBeenNthCalledWith(2, '/api/staff/reservations/reservation-1/confirm', expect.objectContaining({ method: 'POST' }))
+    expect(send).toHaveBeenNthCalledWith(3, '/api/staff/reservations/reservation-1/complete', expect.objectContaining({ method: 'POST' }))
   })
 
   it('sends only supported KDS actions to the authoritative KDS endpoint', async () => {

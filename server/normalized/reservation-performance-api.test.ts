@@ -184,6 +184,7 @@ function fixture(overrides: Partial<ReservationPerformanceApiOptions> = {}) {
     create: vi.fn(async () => ({ value: reservation, replayed: false })),
     confirm: vi.fn(async () => ({ value: { ...reservation, status: 'confirmed' as const }, replayed: false })),
     arrive: vi.fn(async () => ({ value: { ...reservation, status: 'arrived' as const }, replayed: false })),
+    complete: vi.fn(async () => ({ value: { ...reservation, status: 'completed' as const }, replayed: false })),
     cancel: vi.fn(async () => ({ value: { ...reservation, status: 'cancelled' as const }, replayed: false })),
   }
   const submission: SongRequestSubmission = {
@@ -400,6 +401,20 @@ describe('reservationPerformanceApiPlugin staff reservation permissions', () => 
     expect(value.reservations.arrive).toHaveBeenCalledWith(expect.objectContaining({
       reservationId,
       actor: { type: 'employee', employeeId },
+    }))
+
+    const completed = await value.app.inject({
+      method: 'POST',
+      url: `/api/staff/reservations/${reservationId}/complete`,
+      headers: { 'idempotency-key': 'staff-reservation-complete-0001' },
+      payload: { reason: '本次接待已完成，归档当日预约' },
+    })
+    expect(completed.statusCode).toBe(200)
+    expect(value.assertPermission).toHaveBeenNthCalledWith(3, employeeId, 'reservation.manage')
+    expect(value.reservations.complete).toHaveBeenCalledWith(expect.objectContaining({
+      reservationId,
+      actor: { type: 'employee', employeeId },
+      reason: '本次接待已完成，归档当日预约',
     }))
   })
 

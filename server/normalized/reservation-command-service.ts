@@ -130,13 +130,17 @@ export class ReservationCommandService {
     return this.transition(input, 'arrive', 'reservation.arrived')
   }
 
+  complete(input: Readonly<ReservationTransitionCommand>): Promise<CommandExecution<Reservation>> {
+    return this.transition(input, 'complete', 'reservation.completed')
+  }
+
   cancel(input: Readonly<ReservationTransitionCommand>): Promise<CommandExecution<Reservation>> {
     return this.transition(input, 'cancel', 'reservation.cancelled')
   }
 
   private transition(
     input: Readonly<ReservationTransitionCommand>,
-    transition: 'confirm' | 'arrive' | 'cancel',
+    transition: 'confirm' | 'arrive' | 'complete' | 'cancel',
     eventType: string,
   ): Promise<CommandExecution<Reservation>> {
     return this.commands.execute({
@@ -151,7 +155,9 @@ export class ReservationCommandService {
         ? await repository.confirmWithResult(input.reservationId)
         : transition === 'arrive'
           ? await repository.arriveWithResult(input.reservationId)
-          : await repository.cancelWithResult(input.reservationId, { overridePolicy: input.overridePolicy })
+          : transition === 'complete'
+            ? await repository.completeWithResult(input.reservationId)
+            : await repository.cancelWithResult(input.reservationId, { overridePolicy: input.overridePolicy })
       const reservation = mutation.reservation
       if (!mutation.changed) return { result: reservation, auditEvents: [], outboxMessages: [] }
       const payload: JsonObject = {

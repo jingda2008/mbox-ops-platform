@@ -9,6 +9,7 @@ import { ReservationCommandService } from './reservation-command-service.js'
 import {
   ReservationCancellationPolicyError,
   ReservationConflictError,
+  ReservationTransitionError,
 } from './reservation-repository.js'
 import {
   ScopedPostgresTransactionRunner,
@@ -222,6 +223,103 @@ integration('normalized reservation, customer and benefit transactions', () => {
     })
     expect(arrived.value.status).toBe('arrived')
     expect(arrived.value.tableLocks[0]).toMatchObject({ status: 'confirmed', holdExpiresAt: null })
+  })
+
+  it('archives an arrived reservation exactly once, releases its table, and rejects a premature completion', async () => {
+    const now = Date.now()
+    const employeeId = await seedEmployee(nativePool, tenantId, storeId)
+    const created = await reservations.create({
+      scope: { tenantId, storeId },
+      actor: { type: 'guest', ref: 'completion-test' },
+      businessDate: '2026-08-11',
+      publicId: 'reservation-completion-release',
+      customerName: 'Completion Guest',
+      contactToken: 'completion-contact',
+      guestCount: 2,
+      arrivalAt: new Date(now + 30 * 60_000).toISOString(),
+      expectedEndAt: new Date(now + 150 * 60_000).toISOString(),
+      source: 'wechat',
+      tableIds: [tableThreeId],
+      holdExpiresAt: new Date(now + 20 * 60_000).toISOString(),
+      idempotencyKey: 'reservation-completion-create-key-0001',
+      requestFingerprint: JSON.stringify({ tableThreeId, action: 'create-completion' }),
+    })
+
+    await expect(reservations.complete({
+      scope: { tenantId, storeId },
+      actor: { type: 'employee', employeeId },
+      businessDate: '2026-08-12',
+      reservationId: created.value.id,
+      reason: '不能在客人到店前归档',
+      idempotencyKey: 'reservation-completion-premature-key-0001',
+      requestFingerprint: JSON.stringify({ reservationId: created.value.id, action: 'complete-premature' }),
+    })).rejects.toBeInstanceOf(ReservationTransitionError)
+
+    await reservations.arrive({
+      scope: { tenantId, storeId },
+      actor: { type: 'employee', employeeId },
+      businessDate: '2026-08-11',
+      reservationId: created.value.id,
+      idempotencyKey: 'reservation-completion-arrive-key-0001',
+      requestFingerprint: JSON.stringify({ reservationId: created.value.id, action: 'arrive' }),
+    })
+
+    const outcomes = await Promise.all([
+      reservations.complete({
+        scope: { tenantId, storeId },
+        actor: { type: 'employee', employeeId },
+        businessDate: '2026-08-12',
+        reservationId: created.value.id,
+        reason: '跨营业日人工完成接待',
+        idempotencyKey: 'reservation-completion-concurrent-key-0001',
+        requestFingerprint: JSON.stringify({ reservationId: created.value.id, action: 'complete', request: 1 }),
+      }),
+      reservations.complete({
+        scope: { tenantId, storeId },
+        actor: { type: 'employee', employeeId },
+        businessDate: '2026-08-12',
+        reservationId: created.value.id,
+        reason: '跨营业日人工完成接待',
+        idempotencyKey: 'reservation-completion-concurrent-key-0002',
+        requestFingerprint: JSON.stringify({ reservationId: created.value.id, action: 'complete', request: 2 }),
+      }),
+    ])
+    expect(outcomes.map((outcome) => outcome.value.status)).toEqual(['completed', 'completed'])
+
+    const evidence = await nativePool.query<{
+      lock_status: string
+      completed_audits: string
+      completed_outbox: string
+    }>(`
+      SELECT
+        (SELECT status FROM mbox.reservation_table_locks
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND reservation_id=$3::uuid) AS lock_status,
+        (SELECT count(*)::text FROM mbox.audit_events
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND object_id=$3::text
+            AND action='reservation.completed') AS completed_audits,
+        (SELECT count(*)::text FROM mbox.outbox_messages
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND aggregate_id=$3::uuid
+            AND message_type='reservation.completed.v1') AS completed_outbox
+    `, [tenantId, storeId, created.value.id])
+    expect(evidence.rows[0]).toEqual({ lock_status: 'released', completed_audits: '1', completed_outbox: '1' })
+
+    const replacement = await reservations.create({
+      scope: { tenantId, storeId },
+      actor: { type: 'system', ref: 'completion-release-check' },
+      businessDate: '2026-08-12',
+      publicId: 'reservation-after-completion-release',
+      customerName: 'Replacement Completion Guest',
+      contactToken: 'replacement-completion-contact',
+      guestCount: 2,
+      arrivalAt: new Date(now + 45 * 60_000).toISOString(),
+      expectedEndAt: new Date(now + 120 * 60_000).toISOString(),
+      source: 'phone',
+      tableIds: [tableThreeId],
+      initialStatus: 'confirmed',
+      idempotencyKey: 'reservation-after-completion-key-0001',
+      requestFingerprint: JSON.stringify({ tableThreeId, action: 'replacement-after-complete' }),
+    })
+    expect(replacement.value.status).toBe('confirmed')
   })
 
   it('increments aggregate version under the row lock and uses it for every outbox event', async () => {

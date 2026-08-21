@@ -551,11 +551,14 @@
 .member-content-copy { padding: 18rpx 20rpx 20rpx; }
 .member-content-type { color: #315d46; font-size: 18rpx; font-weight: 750; }
 .member-content-title {
-  display: block;
+  display: -webkit-box;
   margin-top: 6rpx;
+  overflow: hidden;
   color: #211e1a;
   font-size: 26rpx;
   font-weight: 700;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 .member-content-summary {
   display: -webkit-box;
@@ -569,14 +572,14 @@
 }
 .member-content-copy button {
   width: auto;
-  min-height: 56rpx;
+  min-height: 88rpx;
   margin-top: 12rpx;
   padding: 0 18rpx;
   border-radius: 28rpx;
   background: #315d46;
   color: #fff;
   font-size: 20rpx;
-  line-height: 56rpx;
+  line-height: 88rpx;
 }
 .member-content-copy button::after { border: 0; }
 

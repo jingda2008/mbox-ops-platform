@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0-rc.111 - 2026-08-22
+
+- Accepts both OCI image indexes and directly tagged single-platform image
+  manifests when GitHub packages the already validated linux/amd64 image.
+- Still derives and verifies the immutable platform configuration digest
+  against Docker's loaded image ID; unsupported media types remain blocked.
+- Supersedes rc.110, whose tag pipeline stopped before producing a deployable
+  release bundle. Production remained on rc.104 and the WeChat mini-program
+  remains outside this deployment.
+
 ## 1.0.0-rc.110 - 2026-08-22
 
 - Separates the immutable OCI archive digest from the loaded amd64 Docker

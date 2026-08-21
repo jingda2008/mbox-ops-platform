@@ -350,9 +350,22 @@ jobs:
             | jq -er '.manifests[] | select(.annotations["org.opencontainers.image.ref.name"] != null) | .digest' \
             | head -n 1)
           test "${image_digest}" = "sha256:$(tar -xOf "${archive}" "blobs/sha256/${image_digest#sha256:}" | sha256sum | awk '{print $1}')"
-          platform_manifest_digest=$(tar -xOf "${archive}" "blobs/sha256/${image_digest#sha256:}" \
-            | jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' \
-            | head -n 1)
+          reference_blob="blobs/sha256/${image_digest#sha256:}"
+          reference_media_type=$(tar -xOf "${archive}" "${reference_blob}" | jq -er '.mediaType')
+          case "${reference_media_type}" in
+            application/vnd.oci.image.index.v1+json|application/vnd.docker.distribution.manifest.list.v2+json)
+              platform_manifest_digest=$(tar -xOf "${archive}" "${reference_blob}" \
+                | jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' \
+                | head -n 1)
+              ;;
+            application/vnd.oci.image.manifest.v1+json|application/vnd.docker.distribution.manifest.v2+json)
+              platform_manifest_digest=${image_digest}
+              ;;
+            *)
+              echo "unsupported OCI reference media type: ${reference_media_type}" >&2
+              exit 1
+              ;;
+          esac
           platform_image_digest=$(tar -xOf "${archive}" "blobs/sha256/${platform_manifest_digest#sha256:}" \
             | jq -er '.config.digest')
           test "${platform_image_digest}" = "$(docker image inspect "${IMAGE_TAG}" --format '{{.Id}}')"

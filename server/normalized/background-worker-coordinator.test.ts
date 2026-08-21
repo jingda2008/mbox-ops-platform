@@ -230,6 +230,12 @@ function businessDayResult() {
     cutoff: '06:00:00',
     created: false,
     rolledOverBusinessDayIds: [],
+    closure: {
+      businessDays: [],
+      closedBusinessDayCount: 0,
+      closedTableSessionCount: 0,
+      blockedTableSessionCount: 0,
+    },
   }
 }
 

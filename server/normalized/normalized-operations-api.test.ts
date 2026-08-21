@@ -313,6 +313,29 @@ describe('normalizedOperationsApiPlugin', () => {
     expect(value.tableRepository.completeClosing).not.toHaveBeenCalled()
   })
 
+  it('lets authorized managers safely process only awaiting prior business days',async()=>{
+    const value=fixture({resolveContext:()=>({
+      scope:{tenantId,storeId},employeeId,businessDate:'2026-08-11',
+      capabilities:['dashboard.view','business_day.close'],
+    })})
+    const response=await value.app.inject({
+      method:'POST',url:'/api/business-days/close-pending',
+      headers:{'idempotency-key':'close-pending-days-0001'},payload:{},
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({data:{businessDays:[],closedBusinessDayCount:0,
+      closedTableSessionCount:0,blockedTableSessionCount:0},meta:{replayed:false}})
+    expect(value.executions.at(-1)?.command.operationScope).toBe('business-day.close-pending')
+  })
+
+  it('denies prior-day closure without the dedicated capability',async()=>{
+    const value=fixture()
+    const response=await value.app.inject({method:'POST',url:'/api/business-days/close-pending',
+      headers:{'idempotency-key':'close-pending-days-denied-0001'},payload:{}})
+    expect(response.statusCode).toBe(403)
+    expect(response.json()).toMatchObject({error:{code:'CAPABILITY_FORBIDDEN'}})
+  })
+
   it('creates an employee service task with audit and outbox in one command', async () => {
     const value = fixture()
     const response = await value.app.inject({

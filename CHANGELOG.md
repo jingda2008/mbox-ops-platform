@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.0-rc.105 - 2026-08-21
+
+- Ends safe prior-business-day table sessions automatically instead of carrying
+  them forward as unexplained open tables, while keeping the original business
+  date and append-only operating facts intact.
+- Leaves any table with unsettled orders, KDS work, payment/refund ambiguity or
+  other typed operational blockers open and visible for authorized handling;
+  it never hides, rewrites or silently abandons unresolved business.
+- Adds an authorized cashier/manager action showing the exact blocking category
+  and resolution, so a second business day can close the prior day after its
+  remaining work is settled.
+- Deploys only the normalized staff web and service. It adds no migration and
+  does not upload or overwrite the WeChat mini-program package.
+
 ## 1.0.0-rc.104 - 2026-08-21
 
 - Adds a permissioned, append-only cancellation flow for unpaid orders while

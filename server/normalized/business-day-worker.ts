@@ -1,4 +1,5 @@
-import type { JsonObject } from './command-executor.js'
+import { appendAuditEvent, appendOutboxMessage, type JsonObject } from './command-executor.js'
+import { closeAwaitingBusinessDays, type BusinessDayClosureResult } from './business-day-closure.js'
 import {
   ScopedPostgresTransactionRunner,
   type ScopedTransaction,
@@ -23,6 +24,7 @@ export interface BusinessDayRolloverResult {
   cutoff: string
   created: boolean
   rolledOverBusinessDayIds: string[]
+  closure: BusinessDayClosureResult
 }
 
 export class BusinessDayRolloverWorker {
@@ -65,12 +67,20 @@ export class BusinessDayRolloverWorker {
           status: created.status,
         })
       }
+      const closure = await closeAwaitingBusinessDays(
+        transaction,
+        { type: 'system', ref: workerId },
+        'automatic_business_day_rollover',
+      )
+      for (const event of closure.auditEvents) await appendAuditEvent(transaction, event)
+      for (const message of closure.outboxMessages) await appendOutboxMessage(transaction, message)
       return {
         businessDate: clock.business_date,
         timezone: clock.timezone,
         cutoff: clock.cutoff,
         created: created !== null,
         rolledOverBusinessDayIds: stale.map((row) => row.id),
+        closure: closure.result,
       }
     }, { isolation: 'serializable', retryOnConflict: 2 })
   }

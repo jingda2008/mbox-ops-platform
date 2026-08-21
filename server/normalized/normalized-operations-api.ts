@@ -42,6 +42,7 @@ import {
   NormalizedStoreUnavailableError,
   TrustedStoreScopeError,
 } from './normalized-request-context.js'
+import { businessDayClosureCodec, closeAwaitingBusinessDays } from './business-day-closure.js'
 import { StaffSessionNotFoundError } from './staff-session-repository.js'
 import type { ScopedTransaction, StoreScope } from './transaction-runner.js'
 
@@ -199,6 +200,26 @@ export const normalizedOperationsApiPlugin: FastifyPluginAsync<NormalizedOperati
       return reply.send(executionResponse(execution))
     }),
   )
+
+  app.post('/business-days/close-pending', async (request, reply) => handleRoute(reply, async () => {
+    const context = await resolveAndValidateContext(options, request)
+    requireCapability(context, 'business_day.close')
+    const body = readOptionalObject(request.body)
+    assertActorBinding(body, context.employeeId)
+    const idempotencyKey = readIdempotencyKey(request)
+    const execution = await options.commandExecutor.execute({
+      scope: context.scope,
+      operationScope: 'business-day.close-pending',
+      idempotencyKey,
+      requestFingerprint: fingerprint(request, context, {}),
+      resultCodec: businessDayClosureCodec,
+    }, async (transaction) => closeAwaitingBusinessDays(
+      transaction,
+      employeeActor(context.employeeId),
+      'manual_pending_business_day_close',
+    ))
+    return reply.send(executionResponse(execution))
+  }))
 
   app.post('/service-tasks', async (request, reply) => handleRoute(reply, async () => {
     const context = await resolveAndValidateContext(options, request)

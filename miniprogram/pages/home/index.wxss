@@ -250,12 +250,20 @@
   color: #807870;
   font-size: 21rpx;
 }
-.live-section { margin-top: 30rpx; }
+.live-section {
+  display: flex;
+  margin-top: 30rpx;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+}
 .performance-compact {
   position: relative;
   display: block;
   overflow: hidden;
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 218rpx;
   margin: 0;
   padding: 0;
@@ -267,8 +275,8 @@
   color: #fff;
   text-align: left;
   box-shadow: 0 16rpx 40rpx rgba(25, 70, 49, 0.16);
+  box-sizing: border-box;
 }
-.performance-compact::after { border: 0; }
 .performance-compact > image,
 .performance-compact__shade { position: absolute; inset: 0; width: 100%; height: 100%; }
 .performance-compact > image { opacity: .42; }
@@ -277,26 +285,87 @@
   position: relative;
   z-index: 1;
   display: flex;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 218rpx;
-  padding: 34rpx 34rpx 30rpx;
+  padding: 34rpx;
   flex-direction: column;
   justify-content: flex-end;
+  gap: 10rpx;
+  box-sizing: border-box;
 }
-.performance-compact__content text { display: block; }
-.performance-compact__state { color: #d5ab72; font-size: 18rpx; font-weight: 700; letter-spacing: 4rpx; }
+.performance-compact__state,
+.performance-compact__name,
+.performance-compact__time {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.performance-compact__state {
+  color: #d5ab72;
+  font-size: 18rpx;
+  font-weight: 700;
+  letter-spacing: 2rpx;
+  line-height: 1.35;
+}
 .performance-compact.is-live .performance-compact__state { color: #88c9a4; }
-.performance-compact__name { margin-top: 12rpx; font-family: "Songti SC", "STSong", serif; font-size: 38rpx; font-weight: 600; }
-.performance-compact__time { margin-top: 10rpx; color: #d1c9c0; font-size: 21rpx; }
-.performance-compact__action { position: absolute; z-index: 2; right: 28rpx; bottom: 28rpx; color: #e4c596; font-size: 21rpx; }
-.performance-shortcuts { display: grid; margin-top: 14rpx; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14rpx; }
-.performance-shortcuts button {
+.performance-compact__name {
+  overflow: hidden;
+  font-family: "Songti SC", "STSong", serif;
+  font-size: 36rpx;
+  font-weight: 600;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.performance-compact__footer {
+  display: flex;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16rpx;
+}
+.performance-compact__time {
+  flex: 1;
+  min-width: 0;
+  color: #d1c9c0;
+  font-size: 21rpx;
+  line-height: 1.4;
+  white-space: normal;
+  word-break: break-word;
+}
+.performance-compact__action {
+  flex: 0 0 auto;
+  color: #e4c596;
+  font-size: 21rpx;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.performance-shortcuts {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  margin-top: 14rpx;
+  align-items: stretch;
+  flex-direction: row;
+  gap: 14rpx;
+  box-sizing: border-box;
+}
+.performance-shortcut {
   display: flex;
   overflow: hidden;
+  width: 0;
   min-width: 0;
-  min-height: 156rpx;
+  min-height: 180rpx;
   margin: 0;
   padding: 22rpx;
-  align-items: flex-start;
+  align-items: stretch;
+  flex: 1 1 0%;
   flex-direction: column;
   border: 1rpx solid #dfd2c1;
   border-radius: 20rpx;
@@ -304,12 +373,53 @@
   color: #29241f;
   text-align: left;
   box-shadow: 0 9rpx 26rpx rgba(42, 32, 23, .05);
+  box-sizing: border-box;
 }
-.performance-shortcuts button::after { border: 0; }
-.performance-shortcuts text { display: block; max-width: 100%; }
-.performance-shortcuts text:first-child { color: #9a7343; font-size: 16rpx; font-weight: 700; letter-spacing: 3rpx; }
-.performance-shortcuts text:nth-child(2) { margin-top: 12rpx; overflow: hidden; font-family: "Songti SC", "STSong", serif; font-size: 26rpx; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.performance-shortcuts text:last-child { display: -webkit-box; margin-top: 8rpx; overflow: hidden; color: #766e65; font-size: 19rpx; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.performance-shortcut__kicker,
+.performance-shortcut__title,
+.performance-shortcut__copy {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  min-width: 0;
+  align-self: stretch;
+  box-sizing: border-box;
+}
+.performance-shortcut__kicker {
+  color: #9a7343;
+  font-size: 16rpx;
+  font-weight: 700;
+  letter-spacing: 2rpx;
+  line-height: 1.3;
+}
+.performance-shortcut__title {
+  margin-top: 12rpx;
+  font-family: "Songti SC", "STSong", serif;
+  font-size: 26rpx;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.performance-shortcut__copy {
+  margin-top: 8rpx;
+  color: #766e65;
+  font-size: 19rpx;
+  line-height: 1.45;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+@media (min-width: 560px) {
+  .performance-shortcuts {
+    flex-direction: column;
+  }
+  .performance-shortcut {
+    width: 100%;
+    flex: 0 0 auto;
+  }
+}
 .performance-panel-mask { position: fixed; z-index: 70; inset: 0; display: flex; align-items: flex-end; background: rgba(10, 8, 7, .68); }
 .performance-panel { width: 100%; max-height: 78vh; overflow-y: auto; padding: 16rpx 28rpx calc(34rpx + env(safe-area-inset-bottom)); border-radius: 30rpx 30rpx 0 0; background: #f7f3ed; color: #28231f; }
 .performance-panel__handle { width: 72rpx; height: 8rpx; margin: 0 auto 24rpx; border-radius: 999rpx; background: #cfc6ba; }

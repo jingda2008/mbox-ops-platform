@@ -173,7 +173,7 @@ Page({
         .sort((left, right) => Number(left.priority || 0) - Number(right.priority || 0))
         .slice(0, 2).map(contentCardView),
       monthlyPerformanceCard: contentCardView((bootstrap.content || []).find((item) => item && item.type === 'show') || {
-        code: '', type: 'show', title: '当月演出安排', summary: '按日期查看门店已经发布的演出场次', ctaLabel: '查看安排', targetPath: '/pages/reservations/index',
+        code: '', type: 'show', title: '当月演出', summary: '按日期查看演出场次', ctaLabel: '查看安排', targetPath: '/pages/reservations/index',
       }),
       upcomingReservation: reservationView(reservations.reservations),
       performance: performanceView(performances),

@@ -209,6 +209,10 @@ test('formal deployment requires OSS evidence before activation and uploads data
   assert.match(deploy, /oss-ready-evidence/)
   assert.match(stage, /mbox\/evidence\/rc/)
   assert.ok(deploy.indexOf('upload-oss-verified.sh') < deploy.indexOf('activate-release.sh'))
+  assert.match(deploy, /MBOX_EVIDENCE_SSH_HOST/)
+  assert.match(deploy, /evidence-relay/)
+  assert.match(deploy, /predeployment-oss-verification\.json/)
+  assert.ok(deploy.indexOf('stage-release-evidence.sh') < deploy.indexOf('activate-release.sh'))
   assert.match(activate, /mbox\/backups/)
   assert.ok(activate.indexOf('upload-oss-verified.sh') < activate.indexOf('node dist-normalized/server/migrate-normalized.js'))
   assert.doesNotMatch(activate, /node dist-server\/server\/migrate\.js/)
@@ -219,9 +223,10 @@ test('formal deployment requires OSS evidence before activation and uploads data
   assert.match(activate, /application\/vnd\.oci\.image\.manifest\.v1\+json/)
   assert.match(activate, /platform\.os == "linux" and \.platform\.architecture == "amd64"/)
   assert.match(activate, /archive_config_digest=/)
+  assert.match(activate, /test "\$\{archive_config_digest\}" = "\$\{expected_platform_image_digest\}"/)
   assert.match(activate, /\.os == "linux" and \.architecture == "amd64"/)
   assert.match(activate, /actual_image_digest=.*docker image inspect/)
-  assert.match(activate, /test "\$\{actual_image_digest\}" = "\$\{expected_digest\}"/)
+  assert.match(activate, /test "\$\{actual_image_digest\}" = "\$\{expected_platform_image_digest\}"/)
   assert.match(activate, /set_env APP_COMMIT_SHA "\$\{release_sha\}"/)
   assert.match(activate, /set_env MBOX_DEPLOYMENT_TIER "\$\{deployment_tier\}"/)
   assert.match(activate, /configuration\.store\.sha256/)
@@ -349,7 +354,7 @@ test('rollback audit only reports success after the restored service is verified
   assert.match(activate, /active_sha=.*docker inspect/)
   assert.match(activate, /active_digest=.*docker inspect/)
   assert.match(activate, /\[ "\$\{active_sha\}" = "\$\{release_sha\}" \]/)
-  assert.match(activate, /\[ "\$\{active_digest\}" = "\$\{expected_digest\}" \]/)
+  assert.match(activate, /\[ "\$\{active_digest\}" = "\$\{expected_platform_image_digest\}" \]/)
   assert.doesNotMatch(activate, /old_renamed=|promoted=|traffic_switched=/)
   assert.match(activate, /Reload the canonical upstream unconditionally/)
   const externalRollback = await read('../deploy/aliyun/rollback-activated-release.sh')
@@ -370,6 +375,8 @@ test('external rollback starts and verifies the previous SHA before candidate-IP
   const previousSha = 'b'.repeat(40)
   const failedDigest = `sha256:${'c'.repeat(64)}`
   const previousDigest = `sha256:${'d'.repeat(64)}`
+  const failedPlatformDigest = `sha256:${'e'.repeat(64)}`
+  const previousPlatformDigest = `sha256:${'f'.repeat(64)}`
   const deploymentScriptNames = [
     'deploy-release.sh',
     'activate-release.sh', 'rollback-activated-release.sh', 'verify-public-app.sh',
@@ -388,6 +395,8 @@ test('external rollback starts and verifies the previous SHA before candidate-IP
     tier: 'validation',
     previousReleaseSha: previousSha,
     previousReleaseDir: previousRelease,
+    previousPlatformImageDigest: previousPlatformDigest,
+    previousDeploymentTier: 'validation',
   }))
   await writeFile(join(previousRelease, 'release-manifest.json'), JSON.stringify({
     releaseSha: previousSha, imageDigest: previousDigest, migration: { count: 40 },
@@ -406,7 +415,8 @@ exit 0
     { file: scriptName, sha256: sha256(await readFile(join(failedRelease, scriptName))) },
   ])))
   await writeFile(join(failedRelease, 'release-manifest.json'), JSON.stringify({
-    releaseSha: failedSha, imageDigest: failedDigest, migration: { count: 40 }, deploymentScripts,
+    releaseSha: failedSha, imageDigest: failedDigest, platformImageDigest: failedPlatformDigest,
+    migration: { count: 40 }, deploymentScripts,
   }))
   await writeFile(join(fakeBin, 'curl'), `#!/bin/sh
 printf '{"status":"ready","commitSha":"${previousSha}","releaseImageDigest":"${previousDigest}","schemaFlavor":"normalized-core-v1","schemaVersion":40,"deploymentTier":"validation"}\n'
@@ -429,7 +439,7 @@ if [ "$1" = inspect ]; then
   if [[ "\${arguments}" == *org.opencontainers.image.revision* ]]; then
     if [ "\${name}" = mbox-app ]; then printf '${failedSha}\\n'; else printf '${previousSha}\\n'; fi
   elif [[ "\${arguments}" == *'{{.Image}}'* ]]; then
-    if [ "\${name}" = mbox-app ]; then printf '${failedDigest}\\n'; else printf '${previousDigest}\\n'; fi
+    if [ "\${name}" = mbox-app ]; then printf '${failedPlatformDigest}\\n'; else printf '${previousPlatformDigest}\\n'; fi
   elif [[ "\${arguments}" == *NetworkSettings.Networks* ]]; then
     printf '172.18.0.9\\n'
   elif [[ "\${arguments}" == *State.Health* ]]; then

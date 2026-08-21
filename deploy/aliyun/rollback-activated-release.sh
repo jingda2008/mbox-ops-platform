@@ -59,13 +59,17 @@ test -d "${previous_release_dir}"
 test -f "${previous_release_dir}/release-manifest.json"
 test "$(jq -er '.releaseSha' "${previous_release_dir}/release-manifest.json")" = "${previous_release_sha}"
 failed_release_digest=$(jq -er '.imageDigest' "${release_dir}/release-manifest.json")
+failed_platform_image_digest=$(jq -er '.platformImageDigest' "${release_dir}/release-manifest.json")
 failed_schema_version=$(jq -er '.migration.count' "${release_dir}/release-manifest.json")
 failed_deployment_tier=$(jq -er '.tier' "${manifest}")
 previous_release_digest=$(jq -er '.imageDigest' "${previous_release_dir}/release-manifest.json")
+previous_platform_image_digest=$(jq -er '.previousPlatformImageDigest' "${manifest}")
 previous_schema_version=$(jq -er '.migration.count' "${previous_release_dir}/release-manifest.json")
-previous_deployment_tier=$(jq -er '.tier' "${previous_release_dir}/deployment-manifest.json")
+previous_deployment_tier=$(jq -er '.previousDeploymentTier' "${manifest}")
 [[ "${previous_release_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
 [[ "${failed_release_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+[[ "${failed_platform_image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+[[ "${previous_platform_image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
 [[ "${previous_schema_version}" =~ ^[0-9]+$ ]]
 [[ "${failed_schema_version}" =~ ^[0-9]+$ ]]
 case "${previous_deployment_tier}" in validation|production) ;; *) exit 1 ;; esac
@@ -75,8 +79,8 @@ docker inspect "${active_container}" >/dev/null
 docker inspect "${rollback_container}" >/dev/null
 test "$(docker inspect "${active_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "${failed_sha}"
 test "$(docker inspect "${rollback_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "${previous_release_sha}"
-test "$(docker inspect "${active_container}" --format '{{.Image}}')" = "${failed_release_digest}"
-test "$(docker inspect "${rollback_container}" --format '{{.Image}}')" = "${previous_release_digest}"
+test "$(docker inspect "${active_container}" --format '{{.Image}}')" = "${failed_platform_image_digest}"
+test "$(docker inspect "${rollback_container}" --format '{{.Image}}')" = "${previous_platform_image_digest}"
 
 current_caddy=$(mktemp "${release_dir}/.Caddyfile.rollback-current.XXXXXX")
 candidate_caddy=$(mktemp "${release_dir}/.Caddyfile.rollback-candidate.XXXXXX")
@@ -108,18 +112,18 @@ restore_failed_release_on_error() {
     active_digest=$(docker inspect "${active_container}" --format '{{.Image}}' 2>/dev/null)
   fi
   if [ "${active_sha}" = "${previous_release_sha}" ] \
-    && [ "${active_digest}" = "${previous_release_digest}" ]; then
+    && [ "${active_digest}" = "${previous_platform_image_digest}" ]; then
     docker update --restart=no "${active_container}" >/dev/null 2>&1
     docker stop -t 20 "${active_container}" >/dev/null 2>&1
     docker rename "${active_container}" "${rollback_container}" >/dev/null 2>&1
   fi
   if ! docker inspect "${active_container}" >/dev/null 2>&1 \
     && [ "$(docker inspect "${failed_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" = "${failed_sha}" ] \
-    && [ "$(docker inspect "${failed_container}" --format '{{.Image}}' 2>/dev/null)" = "${failed_release_digest}" ]; then
+    && [ "$(docker inspect "${failed_container}" --format '{{.Image}}' 2>/dev/null)" = "${failed_platform_image_digest}" ]; then
     docker rename "${failed_container}" "${active_container}" >/dev/null 2>&1
   fi
   if [ "$(docker inspect "${active_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" = "${failed_sha}" ] \
-    && [ "$(docker inspect "${active_container}" --format '{{.Image}}' 2>/dev/null)" = "${failed_release_digest}" ]; then
+    && [ "$(docker inspect "${active_container}" --format '{{.Image}}' 2>/dev/null)" = "${failed_platform_image_digest}" ]; then
     docker start "${active_container}" >/dev/null 2>&1
     docker update --restart=unless-stopped "${active_container}" >/dev/null 2>&1
   fi

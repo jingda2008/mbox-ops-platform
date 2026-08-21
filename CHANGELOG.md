@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.0-rc.110 - 2026-08-22
+
+- Separates the immutable OCI archive digest from the loaded amd64 Docker
+  image ID, and freezes both identities in the release manifest.
+- Verifies the archive index, selected platform manifest, image configuration,
+  loaded image and runtime readiness against their correct identities instead
+  of incorrectly requiring the OCI index digest to equal Docker's image ID.
+- Keeps rollback compatible with rc.104 manifests by deriving the previous
+  platform image ID only from the already verified running container, then
+  records that identity and the previous deployment tier for later rollback.
+- Supersedes rc.109, which stopped safely before candidate startup on the
+  digest mismatch. The production service remained on rc.104 and the WeChat
+  mini-program remains outside this deployment.
+
 ## 1.0.0-rc.109 - 2026-08-22
 
 - Carries the complete normalized staff, service and database history from

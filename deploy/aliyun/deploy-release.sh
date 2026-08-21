@@ -16,6 +16,10 @@ ssh_host=${MBOX_SSH_HOST:-139.224.254.60}
 ssh_port=${MBOX_SSH_PORT:-6122}
 ssh_user=${MBOX_SSH_USER:-root}
 ssh_key=${MBOX_SSH_KEY_PATH:-${HOME}/.ssh/mbox_aliyun_ed25519}
+evidence_ssh_host=${MBOX_EVIDENCE_SSH_HOST:-${ssh_host}}
+evidence_ssh_port=${MBOX_EVIDENCE_SSH_PORT:-${ssh_port}}
+evidence_ssh_user=${MBOX_EVIDENCE_SSH_USER:-${ssh_user}}
+evidence_ssh_key=${MBOX_EVIDENCE_SSH_KEY_PATH:-${ssh_key}}
 public_url=${MBOX_PUBLIC_URL:-https://139.224.254.60}
 backup_max_age_minutes=${MBOX_BACKUP_MAX_AGE_MINUTES:-720}
 bundle_dir=${MBOX_RELEASE_BUNDLE_DIR:-${repo_root}/.runtime/deploy/${MBOX_RELEASE_TAG}}
@@ -27,7 +31,10 @@ case "${deployment_tier}" in
 esac
 [[ "${backup_max_age_minutes}" =~ ^[0-9]+$ ]]
 [[ "${ssh_host}" =~ ^[A-Za-z0-9.-]+$ ]]
+[[ "${evidence_ssh_host}" =~ ^[A-Za-z0-9.-]+$ ]]
+[[ "${evidence_ssh_port}" =~ ^[0-9]{1,5}$ ]]
 test -f "${ssh_key}"
+test -f "${evidence_ssh_key}"
 
 public_host=$(node -e "
   const url = new URL(process.argv[1]);
@@ -70,6 +77,7 @@ release_sha=$(read_manifest releaseSha)
 release_version=$(read_manifest releaseVersion)
 image_tag=$(read_manifest imageTag)
 image_digest=$(read_manifest imageDigest)
+platform_image_digest=$(read_manifest platformImageDigest)
 archive_name=$(read_manifest archive)
 archive_sha=$(read_manifest archiveSha256)
 store_config_name=$(read_manifest configuration.store.file)
@@ -79,6 +87,7 @@ catalog_config_sha=$(read_manifest configuration.catalog.sha256)
 
 [[ "${release_sha}" =~ ^[0-9a-f]{40}$ ]]
 [[ "${image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+[[ "${platform_image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
 [[ "${archive_name}" != */* ]]
 test "${MBOX_RELEASE_TAG}" = "v${release_version}"
 test -f "${bundle_dir}/${archive_name}"
@@ -180,6 +189,7 @@ node scripts/verify-sensitive-artifacts.mjs "${evidence_dir}"
 short_sha=${release_sha:0:7}
 remote_release_dir="/opt/mbox/releases/${short_sha}"
 ssh_target="${ssh_user}@${ssh_host}"
+evidence_ssh_target="${evidence_ssh_user}@${evidence_ssh_host}"
 ssh_options=(
   -i "${ssh_key}"
   -o BatchMode=yes
@@ -193,6 +203,20 @@ scp_options=(
   -o StrictHostKeyChecking=accept-new
   -o ConnectTimeout=15
   -P "${ssh_port}"
+)
+evidence_ssh_options=(
+  -i "${evidence_ssh_key}"
+  -o BatchMode=yes
+  -o StrictHostKeyChecking=accept-new
+  -o ConnectTimeout=15
+  -p "${evidence_ssh_port}"
+)
+evidence_scp_options=(
+  -i "${evidence_ssh_key}"
+  -o BatchMode=yes
+  -o StrictHostKeyChecking=accept-new
+  -o ConnectTimeout=15
+  -P "${evidence_ssh_port}"
 )
 
 # This deployment script only owns a direct public origin. Refuse to touch a
@@ -214,8 +238,8 @@ if ! comm -12 \
   exit 1
 fi
 
-printf 'release=%s\nsha=%s\nimage=%s\nimage_digest=%s\ntier=%s\nbundle=%s\n' \
-  "${release_version}" "${release_sha}" "${image_tag}" "${image_digest}" \
+printf 'release=%s\nsha=%s\nimage=%s\nimage_digest=%s\nplatform_image_digest=%s\ntier=%s\nbundle=%s\n' \
+  "${release_version}" "${release_sha}" "${image_tag}" "${image_digest}" "${platform_image_digest}" \
   "${deployment_tier}" "${bundle_dir}"
 
 if [ "${dry_run}" = 1 ]; then
@@ -233,7 +257,36 @@ rsync -a --partial "${rsync_resume_option}" \
   "${bundle_dir}/" "${ssh_target}:${remote_release_dir}/"
 
 ssh "${ssh_options[@]}" "${ssh_target}" \
-  "cd '${remote_release_dir}' && test \"\$(jq -r '.deploymentScripts | length' release-manifest.json)\" = 12 && jq -er '.deploymentScripts | to_entries[] | [.value.file,.value.sha256] | @tsv' release-manifest.json | while IFS=\$'\\t' read -r file sha; do test \"\$(sha256sum \"\$file\" | awk '{print \$1}')\" = \"\$sha\" || exit 1; done && chmod 0700 ./*.sh && './stage-release-evidence.sh' '${remote_release_dir}' '${remote_release_dir}/oss-ready-evidence' '${MBOX_RELEASE_TAG}'"
+  "cd '${remote_release_dir}' && test \"\$(jq -r '.deploymentScripts | length' release-manifest.json)\" = 12 && jq -er '.deploymentScripts | to_entries[] | [.value.file,.value.sha256] | @tsv' release-manifest.json | while IFS=\$'\\t' read -r file sha; do test \"\$(sha256sum \"\$file\" | awk '{print \$1}')\" = \"\$sha\" || exit 1; done && chmod 0700 ./*.sh"
+
+if [ "${evidence_ssh_host}:${evidence_ssh_port}:${evidence_ssh_user}:${evidence_ssh_key}" \
+  = "${ssh_host}:${ssh_port}:${ssh_user}:${ssh_key}" ]; then
+  ssh "${ssh_options[@]}" "${ssh_target}" \
+    "'${remote_release_dir}/stage-release-evidence.sh' '${remote_release_dir}' '${remote_release_dir}/oss-ready-evidence' '${MBOX_RELEASE_TAG}'"
+else
+  evidence_release_dir="/opt/mbox/releases/${short_sha}-evidence-relay"
+  ssh "${evidence_ssh_options[@]}" "${evidence_ssh_target}" \
+    "install -d -m 0700 '${evidence_release_dir}'"
+  rsync -a --partial "${rsync_resume_option}" \
+    -e "ssh -i '${evidence_ssh_key}' -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p '${evidence_ssh_port}'" \
+    "${bundle_dir}/" "${evidence_ssh_target}:${evidence_release_dir}/"
+  ssh "${evidence_ssh_options[@]}" "${evidence_ssh_target}" \
+    "cd '${evidence_release_dir}' && test \"\$(jq -r '.releaseSha' release-manifest.json)\" = '${release_sha}' && chmod 0700 ./*.sh && './stage-release-evidence.sh' '${evidence_release_dir}' '${evidence_release_dir}/oss-ready-evidence' '${MBOX_RELEASE_TAG}'"
+  relay_reports=$(mktemp -d "${bundle_dir}/.evidence-relay.XXXXXX")
+  for report in predeployment-oss-verification.json oss-evidence-verification.json oss-image-verification.json; do
+    scp "${evidence_scp_options[@]}" \
+      "${evidence_ssh_target}:${evidence_release_dir}/${report}" "${relay_reports}/${report}"
+  done
+  jq -e --arg sha "${release_sha}" --arg version "${release_version}" \
+    '.verified == true and .releaseSha == $sha and .releaseVersion == $version' \
+    "${relay_reports}/predeployment-oss-verification.json" >/dev/null
+  scp "${scp_options[@]}" "${relay_reports}"/*.json \
+    "${ssh_target}:${remote_release_dir}/"
+  rm -f "${relay_reports}"/*.json
+  rmdir "${relay_reports}"
+  ssh "${ssh_options[@]}" "${ssh_target}" \
+    "cd '${remote_release_dir}' && test \"\$(jq -r '.releaseSha' predeployment-oss-verification.json)\" = '${release_sha}' && test \"\$(jq -r '.verified' predeployment-oss-verification.json)\" = true"
+fi
 
 # This check runs from the release operator, outside the production host, so it
 # proves that the current public edge is serving a healthy release without

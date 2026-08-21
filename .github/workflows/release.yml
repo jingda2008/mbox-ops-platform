@@ -124,6 +124,7 @@ jobs:
               throw new Error('release deployment scope mismatch');
             }
             if (!/^sha256:[0-9a-f]{64}$/.test(manifest.imageDigest)) throw new Error('image digest is not immutable');
+            if (!/^sha256:[0-9a-f]{64}$/.test(manifest.platformImageDigest)) throw new Error('platform image digest is not immutable');
             for (const item of [manifest.configuration?.store, manifest.configuration?.catalog]) {
               if (!item || !/^[0-9a-f]{64}$/.test(item.sha256)) throw new Error('configuration digest is missing');
               const path = 'release-artifact/' + item.file;

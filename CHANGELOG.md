@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.0-rc.104 - 2026-08-21
+
+- Adds a permissioned, append-only cancellation flow for unpaid orders while
+  preserving delivered items, consumed inventory and the original business
+  date; payment ambiguity and concurrent conflicts remain fail-closed.
+- Keeps prior-business-day unpaid orders and KDS carryover visible so authorized
+  cashiers and managers can close the exact historical work without moving it
+  into current-day revenue.
+- Makes tracked beverage availability reflect configured recipes and current
+  unreserved stock, while explicitly not-managed snacks and fruit remain
+  orderable.
+- Verifies versioned role permissions and navigation after provisioning, and
+  prevents the runtime-role replay test from persisting obsolete broad grants.
+- Deploys only the normalized staff web, server and database; the WeChat
+  mini-program package is not uploaded or overwritten.
+
 ## 1.0.0-rc.103 - 2026-08-21
 
 - Completes the versioned operating-test register, report and blocker ledger

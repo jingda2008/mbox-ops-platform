@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0-rc.103 - 2026-08-21
+
+- Completes the versioned operating-test register, report and blocker ledger
+  required by the formal candidate quality gate.
+- Supersedes the unreleaseable `1.0.0-rc.102` tag; no application behaviour,
+  migration or customer-facing scope is changed from that candidate.
+
 ## 1.0.0-rc.102 - 2026-08-21
 
 - Refines the customer mini-program experience with a compact, explicit

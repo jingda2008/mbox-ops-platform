@@ -151,6 +151,16 @@
       "automaticBlocker": "explicit evidence SSH relay with SHA and version-bound report transfer before activation",
       "fixCommit": "5629b46ea22134dfea32f18b4eb1d41b7cbaf040",
       "status": "covered"
+    },
+    {
+      "id": "REL-016",
+      "category": "oci-reference-media-type",
+      "rootCause": "The tag packaging step assumed the Docker archive reference blob was always an OCI index, although docker save may emit a directly tagged single-platform image manifest.",
+      "earliestDetectionStage": "image_package",
+      "regressionTest": "scripts/aliyun-evidence-pipeline.test.mjs",
+      "automaticBlocker": "media-type dispatch accepts only a verified OCI index or direct image manifest and still binds the selected config digest to the loaded Docker image ID",
+      "fixCommit": "fc352462bd0ef7ed266987c3c717b024981c22bc",
+      "status": "covered"
     }
   ]
 }

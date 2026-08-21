@@ -1000,23 +1000,28 @@ if docker inspect "${candidate}" >/dev/null 2>&1; then
 fi
 
 release_state_require "${state_file}" provisioned
-candidate_runtime_args=()
+candidate_docker_args=(
+  run -d
+  --name "${candidate}"
+  --restart=no
+  --env-file "${release_env}"
+)
 if [ "${contract_migration}" = 1 ]; then
-  candidate_runtime_args+=(
+  candidate_docker_args+=(
     --env MBOX_RUNTIME_ROLE=contract_candidate
     --env MBOX_START_WORKERS=false
     --env 'PGOPTIONS=-c default_transaction_read_only=on'
   )
 fi
-docker run -d \
-  --name "${candidate}" \
-  --restart=no \
-  --env-file "${release_env}" \
-  "${candidate_runtime_args[@]}" \
-  "${worker_adapter_mount_args[@]}" \
-  --network "${network}" \
-  --volume "${candidate_volume}:/data" \
-  "${image_tag}" >/dev/null
+if [ "${#worker_adapter_mount_args[@]}" -gt 0 ]; then
+  candidate_docker_args+=("${worker_adapter_mount_args[@]}")
+fi
+candidate_docker_args+=(
+  --network "${network}"
+  --volume "${candidate_volume}:/data"
+  "${image_tag}"
+)
+docker "${candidate_docker_args[@]}" >/dev/null
 
 for _ in $(seq 1 60); do
   health=$(docker inspect "${candidate}" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')
@@ -1070,14 +1075,21 @@ if [ "${contract_migration}" = 1 ]; then
   docker stop -t 20 "${candidate}" >/dev/null
   docker rm "${candidate}" >/dev/null
   : > "${release_dir}/.contract-write-resumed"
-  docker run -d \
-    --name "${candidate}" \
-    --restart=no \
-    --env-file "${release_env}" \
-    "${worker_adapter_mount_args[@]}" \
-    --network "${network}" \
-    --volume "${candidate_volume}:/data" \
-    "${image_tag}" >/dev/null
+  full_candidate_docker_args=(
+    run -d
+    --name "${candidate}"
+    --restart=no
+    --env-file "${release_env}"
+  )
+  if [ "${#worker_adapter_mount_args[@]}" -gt 0 ]; then
+    full_candidate_docker_args+=("${worker_adapter_mount_args[@]}")
+  fi
+  full_candidate_docker_args+=(
+    --network "${network}"
+    --volume "${candidate_volume}:/data"
+    "${image_tag}"
+  )
+  docker "${full_candidate_docker_args[@]}" >/dev/null
   for _ in $(seq 1 60); do
     health=$(docker inspect "${candidate}" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')
     [ "${health}" = healthy ] && break

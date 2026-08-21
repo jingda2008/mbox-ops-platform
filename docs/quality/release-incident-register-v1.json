@@ -211,6 +211,16 @@
       "automaticBlocker": "activation now verifies the SHA256SUMS object by exact key, size and SHA256 before checking every ledger entry and requiring the combined exact object count",
       "fixCommit": "da5cb5ec78d19f818df07c4da7649b0e36d8033b",
       "status": "covered"
+    },
+    {
+      "id": "REL-022",
+      "category": "fixed-business-date-test-fixture",
+      "rootCause": "The unpaid-order cancellation integration fixture hard-coded the release-day business date, so the database correctly rejected it as stale when CI crossed the store's Asia/Shanghai 06:00 business-day boundary.",
+      "earliestDetectionStage": "pull-request normalized_database",
+      "regressionTest": "server/normalized/order-cancellation.integration.test.ts",
+      "automaticBlocker": "the fixture derives the authoritative action business date from the test store timezone and cutoff and creates source facts on the immediately preceding business date",
+      "fixCommit": "7b4b3153436d1c2ed5e078c63bedbaf470b14611",
+      "status": "covered"
     }
   ]
 }

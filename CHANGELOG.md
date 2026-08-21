@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.0-rc.109 - 2026-08-22
+
+- Carries the complete normalized staff, service and database history from
+  rc.104 through the current main branch, including the safe prior-business-
+  day closure and verified production-origin release controls.
+- Refines the staff login, workspace, navigation and operating modules with the
+  M-BOX brand-green visual language while preserving permissions and workflows.
+- Keeps mobile quick functions persistent and restores WCAG AA contrast for
+  inactive navigation labels; no database migration is added beyond `098`.
+- Uses the validated payment-server jump path to reach the actual production
+  origin. The WeChat mini-program remains outside this deployment and is not
+  uploaded or overwritten.
+
 ## 1.0.0-rc.108 - 2026-08-21
 
 - Requires the production SSH target and public URL to be supplied explicitly,

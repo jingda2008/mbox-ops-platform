@@ -42,7 +42,10 @@ describe('mini-program mobile business flow contract', () => {
     expect(view).toContain('STEP 01')
     expect(view).toContain('STEP 02')
     expect(view).toContain('STEP 03')
-    expect(view).toContain('该日期暂无已发布演出，仍可正常预约。')
+    expect(view).toContain('这天暂未发布演出；预约照常进行。')
+    expect(view).toContain('更想坐在哪里？')
+    expect(view).toContain('这次想怎样相聚？')
+    expect(view).toContain('max-width:420px')
   })
 
   it('routes every Superhigh card to detail and separates free registration from blocked paid registration', () => {

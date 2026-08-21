@@ -41,6 +41,18 @@ export interface PublicFeature {
   enabled: boolean
 }
 
+export interface PublicSupportContact {
+  phone: string
+  phoneLabel: string
+  wecomName: string
+  wecomQrImageUrl: string | null
+}
+
+export interface StaffSupportContactConfiguration {
+  rolloutState: RolloutState
+  contact: PublicSupportContact | null
+}
+
 export interface PublicMembership {
   memberNo: string
   level: 'member' | 'silver' | 'gold'
@@ -201,6 +213,7 @@ export interface PublicPortalSnapshot {
   activities: PublicActivity[]
   benefits: PublicBenefit[]
   membershipTerms: PublicMembershipTerms | null
+  supportContact: PublicSupportContact | null
 }
 
 export interface RecommendationAnswer {
@@ -388,6 +401,11 @@ interface MembershipRow extends Record<string, unknown> {
 interface FeatureRow extends Record<string, unknown> {
   feature_code: string
   rollout_state: RolloutState
+}
+
+interface SupportContactFeatureRow extends Record<string, unknown> {
+  rollout_state: RolloutState
+  configuration: JsonObject
 }
 
 interface PointRow extends Record<string, unknown> {
@@ -641,7 +659,7 @@ export class CustomerExperienceRepository {
   ) {}
 
   async publicPortal(customerId: string): Promise<PublicPortalSnapshot> {
-    const [features, membership, preferences, cards, activities, benefits, membershipTerms] = await Promise.all([
+    const [features, membership, preferences, cards, activities, benefits, membershipTerms, supportContact] = await Promise.all([
       this.listFeatures(),
       this.findMembership(customerId),
       this.publicOwnedPreferences(customerId),
@@ -649,6 +667,7 @@ export class CustomerExperienceRepository {
       this.listActivities(customerId),
       this.listBenefits(customerId),
       this.currentMembershipTerms(),
+      this.publicSupportContact(),
     ])
     const points = membership === null ? [] : await this.listPointLedger(membership.id)
     const publicMembership = membership === null ? null : membershipView(membership)
@@ -673,7 +692,40 @@ export class CustomerExperienceRepository {
         .map((activity) => activityView(activity, this.activityPaymentProviderConfigured)),
       benefits: benefits.map(benefitPortalView),
       membershipTerms,
+      supportContact,
     }
+  }
+
+  private async publicSupportContact(): Promise<PublicSupportContact | null> {
+    const result = await this.transaction.query<SupportContactFeatureRow>(`
+      SELECT rollout_state,configuration
+      FROM mbox.customer_experience_features
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        AND feature_code='customer.support.contact'
+        AND rollout_state IN ('pilot','enabled')
+        AND (effective_from IS NULL OR effective_from<=clock_timestamp())
+        AND (effective_until IS NULL OR effective_until>clock_timestamp())
+      LIMIT 1
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId])
+    const row = result.rows[0]
+    if (row === undefined) return null
+    try { return publicSupportContact(row.configuration) }
+    catch (_error) { return null }
+  }
+
+  async staffSupportContact(): Promise<StaffSupportContactConfiguration> {
+    const result = await this.transaction.query<SupportContactFeatureRow>(`
+      SELECT rollout_state,configuration
+      FROM mbox.customer_experience_features
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        AND feature_code='customer.support.contact'
+      LIMIT 1
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId])
+    const row = result.rows[0]
+    if (row === undefined || (row.rollout_state === 'disabled' && Object.keys(row.configuration).length === 0)) {
+      return { rolloutState: 'disabled', contact: null }
+    }
+    return { rolloutState: row.rollout_state, contact: publicSupportContact(row.configuration) }
   }
 
   private async currentMembershipTerms(): Promise<PublicMembershipTerms | null> {
@@ -947,7 +999,7 @@ export class CustomerExperienceRepository {
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
       customerId,
-      ['preferredAlcohol', 'serviceIntensity'],
+      ['preferredAlcohol', 'tasteNotes', 'musicStyles', 'serviceIntensity', 'seatPreference', 'dietaryNotes', 'birthdayMonthDay'],
     ])
     return Object.fromEntries(result.rows.map((row) => [row.preference_key, row.preference_value])) as JsonObject
   }
@@ -4140,6 +4192,31 @@ function featureView(row: FeatureRow): PublicFeature {
     state: row.rollout_state,
     enabled: row.rollout_state === 'pilot' || row.rollout_state === 'enabled',
   }
+}
+
+function publicSupportContact(value: JsonObject): PublicSupportContact {
+  const phone = typeof value.phone === 'string' ? value.phone.trim() : ''
+  const phoneLabel = typeof value.phoneLabel === 'string' ? value.phoneLabel.trim() : ''
+  const wecomName = typeof value.wecomName === 'string' ? value.wecomName.trim() : ''
+  const wecomQrImageUrl = typeof value.wecomQrImageUrl === 'string' ? value.wecomQrImageUrl.trim() : ''
+  if (!isPublicSupportPhone(phone) || phoneLabel.length < 2 || phoneLabel.length > 40
+    || wecomName.length < 2 || wecomName.length > 40
+    || (wecomQrImageUrl !== '' && !isPublicSupportAsset(wecomQrImageUrl))) {
+    throw new CustomerExperienceRequestError(
+      '门店联系信息配置无效，已停止向顾客端展示',
+      'SUPPORT_CONTACT_CONFIGURATION_INVALID',
+      503,
+    )
+  }
+  return { phone, phoneLabel, wecomName, wecomQrImageUrl: wecomQrImageUrl || null }
+}
+
+function isPublicSupportPhone(value: string): boolean {
+  return /^[+0-9][0-9 -]{5,30}$/.test(value)
+}
+
+function isPublicSupportAsset(value: string): boolean {
+  return (value.startsWith('/') && !value.startsWith('//')) || /^https:\/\//i.test(value)
 }
 
 function cardView(row: CardRow): PublicContentCard {

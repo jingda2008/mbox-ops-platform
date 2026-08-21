@@ -559,6 +559,9 @@ async function actOnServiceTask(taskPublicId, action) {
 async function getCustomerBenefits() {
   return (await publicRequest('/api/public/mini/customer/benefits')).data
 }
+async function getCustomerProfile() {
+  return (await publicRequest('/api/public/mini/customer/profile')).data
+}
 async function reserveCustomerBenefit(benefitId, quantity) {
   return (await request(`/api/guest/customer/benefits/${encodeURIComponent(benefitId)}/reservations`, {
     method: 'POST', headers: { 'idempotency-key': randomId(`guest-benefit-${benefitId}`) }, data: { quantity: quantity || 1 },
@@ -599,5 +602,5 @@ module.exports = {
   getMenu, getPublicMenu, recommendExperience, recordRecommendationEvent, prepareCheckoutUpgrade, recordCheckoutUpgradeEvent,
   checkout, getTableOrders, retryOrderPayment,
   createServiceTask, getServiceRequests, actOnServiceTask,
-  getCustomerBenefits, reserveCustomerBenefit, submitSongRequest, getTodayPerformances,
+  getCustomerBenefits, getCustomerProfile, reserveCustomerBenefit, submitSongRequest, getTodayPerformances,
 }

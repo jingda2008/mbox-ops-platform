@@ -747,6 +747,24 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
     return reply.send({ data: await options.service.dashboard(context) })
   }))
 
+  app.get('/staff/customer-experience/support-contact', async (request, reply) => handle(reply, async () => {
+    const context = await staffContextWithPermission(options, request, 'customer.experience.feature.manage')
+    return reply.send({ data: await options.service.supportContact(context) })
+  }))
+
+  app.put('/staff/customer-experience/support-contact', async (request, reply) => handle(reply, async () => {
+    const context = await staffContextWithPermission(options, request, 'customer.experience.feature.manage')
+    const body = objectBody(request.body)
+    const result = await options.service.setFeature(context, {
+      featureCode: 'customer.support.contact',
+      rolloutState: enumValue(body.rolloutState, '启用状态', ['disabled', 'pilot', 'enabled'] as const),
+      configuration: object(body.configuration, '门店联系配置'),
+      reason: text(body.reason, '修改原因', 2, 240),
+      idempotencyKey: idempotencyKey(request),
+    })
+    return reply.send({ data: result.value, meta: { replayed: result.replayed } })
+  }))
+
   app.put<{ Params: { featureCode: string } }>('/staff/customer-experience/features/:featureCode', async (request, reply) => handle(reply, async () => {
     const code = featureCode(request.params.featureCode)
     const context = await staffContextWithPermission(

@@ -444,6 +444,7 @@
 .performance-panel__artist view text:nth-child(2) { margin-top: 12rpx; color: #9b7141; font-size: 19rpx; }
 .performance-panel__artist view text:last-child { margin-top: 16rpx; color: #6e675f; font-size: 22rpx; line-height: 1.65; }
 .performance-panel__note { display: block; margin-top: 24rpx; color: #8b837a; font-size: 18rpx; line-height: 1.55; }
+.home-campaign-mask{position:fixed;z-index:74;inset:0;display:flex;align-items:flex-end;background:rgba(9,14,11,.58)}.home-campaign-sheet{position:relative;width:100%;padding:26rpx 30rpx calc(38rpx + env(safe-area-inset-bottom));box-sizing:border-box;border-radius:32rpx 32rpx 0 0;background:linear-gradient(145deg,#fffefb,#f3f6f2);color:#26221f}.home-campaign-close{position:absolute;z-index:2;top:20rpx;right:24rpx;width:64rpx;height:64rpx;margin:0;padding:0;border:1rpx solid rgba(255,255,255,.78);border-radius:50%;background:rgba(15,24,18,.58);color:#fff;font-size:36rpx;line-height:60rpx}.home-campaign-close::after,.home-campaign-cta::after{border:0}.home-campaign-image{width:100%;height:264rpx;border-radius:20rpx;background:#193223}.home-campaign-logo{display:block;width:122rpx;height:122rpx;margin:0 auto 12rpx}.home-campaign-kicker,.home-campaign-title,.home-campaign-copy,.home-campaign-note{display:block}.home-campaign-kicker{margin-top:22rpx;color:#527460;font-size:18rpx;font-weight:700;letter-spacing:3rpx}.home-campaign-title{margin-top:10rpx;font-family:"Songti SC","STSong",serif;font-size:42rpx;font-weight:600;line-height:1.24}.home-campaign-copy{margin-top:12rpx;color:#6f685f;font-size:23rpx;line-height:1.55}.home-campaign-cta{width:100%;min-height:92rpx;margin-top:24rpx;border-radius:16rpx;background:#315d46;color:#fff;font-size:25rpx;font-weight:700;line-height:92rpx}.home-campaign-cta--quiet{background:#fff;color:#315d46;border:1rpx solid #315d46}.home-campaign-note{margin-top:14rpx;color:#8d857c;font-size:18rpx;text-align:center}
 .compact-section {
   margin-top: 34rpx;
 }
@@ -545,26 +546,26 @@
 .member-invite-sheet {
   position: relative;
   width: 100%;
-  padding: 46rpx 32rpx calc(30rpx + env(safe-area-inset-bottom));
-  border-radius: 32rpx 32rpx 24rpx 24rpx;
-  background: #fffdfa;
-  box-shadow: 0 -20rpx 70rpx rgba(0, 0, 0, 0.24);
+  padding: 42rpx 42rpx calc(34rpx + env(safe-area-inset-bottom));
+  border-radius: 34rpx 34rpx 0 0;
+  background: #fffefb;
+  box-shadow: 0 -18rpx 56rpx rgba(0, 0, 0, 0.22);
   text-align: center;
 }
 .member-invite-close {
   position: absolute;
-  top: 18rpx;
-  right: 18rpx;
-  width: 64rpx;
-  height: 64rpx;
+  top: 20rpx;
+  right: 24rpx;
+  width: 58rpx;
+  height: 58rpx;
   margin: 0;
   padding: 0;
   border: 0;
   border-radius: 50%;
-  background: rgba(43, 39, 34, 0.07);
-  color: #5e574f;
-  font-size: 36rpx;
-  line-height: 64rpx;
+  background: rgba(43, 39, 34, 0.06);
+  color: #79716a;
+  font-size: 34rpx;
+  line-height: 56rpx;
 }
 .member-invite-close::after {
   border: 0;
@@ -633,71 +634,78 @@
   display: block;
 }
 .member-invite-kicker {
-  margin-top: 8rpx;
-  color: #967044;
-  font-size: 18rpx;
-  letter-spacing: 3rpx;
+  margin-top: 2rpx;
+  color: #8a6c48;
+  font-size: 17rpx;
+  font-weight: 700;
+  letter-spacing: 3.5rpx;
 }
 .member-invite-title {
-  margin-top: 12rpx;
+  margin-top: 14rpx;
   font-family: "Songti SC", "STSong", serif;
-  font-size: 46rpx;
+  font-size: 48rpx;
   font-weight: 600;
+  letter-spacing: 1rpx;
 }
 .member-invite-copy {
-  margin-top: 12rpx;
-  color: #6e665d;
+  margin-top: 14rpx;
+  color: #706860;
   font-size: 22rpx;
-  line-height: 1.65;
+  line-height: 1.6;
 }
 .member-invite-logo {
   display: block;
-  width: 176rpx;
-  height: 176rpx;
-  margin: 22rpx auto 16rpx;
-  border: 1rpx solid rgba(176, 136, 83, 0.5);
+  width: 126rpx;
+  height: 126rpx;
+  margin: 28rpx auto 22rpx;
+  border: 1rpx solid rgba(117, 91, 62, 0.22);
   border-radius: 50%;
   background: #000;
-  box-shadow: 0 12rpx 28rpx rgba(27, 22, 18, 0.13);
+  box-shadow: 0 10rpx 24rpx rgba(27, 22, 18, 0.14);
 }
 .member-invite-agreement {
   display: flex;
-  min-height: 64rpx;
-  align-items: center;
-  justify-content: center;
-  color: #5f574f;
-  font-size: 22rpx;
-  gap: 12rpx;
+  min-height: 72rpx;
+  align-items: flex-start;
+  justify-content: flex-start;
+  color: #675f57;
+  font-size: 21rpx;
+  line-height: 1.55;
+  text-align: left;
+  gap: 10rpx;
 }
 .member-invite-agreement checkbox {
   flex: 0 0 auto;
-  transform: scale(0.9);
+  margin-top: 1rpx;
+  transform: scale(0.86);
 }
+.member-invite-agreement .wx-checkbox-input { width: 34rpx; height: 34rpx; border: 1rpx solid #bdb5ac; border-radius: 50%; }
+.member-invite-agreement .wx-checkbox-input.wx-checkbox-input-checked { border-color: #315d46; background: #315d46; }
+.member-invite-agreement-copy { flex: 1; min-width: 0; }
 .member-invite-links {
   display: flex;
-  min-height: 54rpx;
-  align-items: center;
-  justify-content: center;
+  align-items: flex-start;
   flex-wrap: wrap;
   color: #8a6036;
-  font-size: 21rpx;
-  gap: 4rpx;
+  font-size: 20rpx;
+  gap: 0 10rpx;
 }
 .member-invite-actions {
   display: grid;
-  margin-top: 18rpx;
+  margin-top: 24rpx;
   grid-template-columns: 1fr 1fr;
-  gap: 18rpx;
+  gap: 16rpx;
 }
 .member-invite-refuse,
 .member-invite-agree {
   width: 100%;
-  min-height: 92rpx;
+  min-height: 88rpx;
   margin: 0;
   border: 1rpx solid #315d46;
-  border-radius: 46rpx;
-  font-size: 25rpx;
-  line-height: 92rpx;
+  border-radius: 44rpx;
+  font-size: 24rpx;
+  font-weight: 700;
+  line-height: 88rpx;
 }
 .member-invite-refuse {
   background: #fffdfa;
@@ -717,9 +725,9 @@
   border: 0;
 }
 .member-invite-note {
-  margin-top: 18rpx;
-  color: #8b837a;
-  font-size: 19rpx;
+  margin-top: 16rpx;
+  color: #90877e;
+  font-size: 18rpx;
   line-height: 1.55;
   text-align: center;
 }

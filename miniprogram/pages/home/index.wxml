@@ -139,29 +139,42 @@
     </view>
   </view>
 
+  <view wx:if="{{homeCampaignVisible && homeCampaign}}" class="home-campaign-mask" catchtouchmove="noop">
+    <view class="home-campaign-sheet">
+      <button class="home-campaign-close" aria-label="关闭活动内容" bindtap="dismissHomeCampaign">×</button>
+      <image wx:if="{{homeCampaign.imageUrl}}" class="home-campaign-image" src="{{homeCampaign.imageUrl}}" mode="aspectFill" />
+      <image wx:else class="home-campaign-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" />
+      <text class="home-campaign-kicker">M-BOX · NOW SHOWING</text><text class="home-campaign-title">{{homeCampaign.title}}</text><text class="home-campaign-copy">{{homeCampaign.summary}}</text>
+      <button wx:if="{{homeCampaign.hasTarget}}" class="home-campaign-cta" bindtap="openHomeCampaign">{{homeCampaign.ctaLabel}}</button>
+      <button wx:else class="home-campaign-cta home-campaign-cta--quiet" bindtap="dismissHomeCampaign">知道了</button>
+      <text class="home-campaign-note">此内容由门店后台发布，可随时暂停或更新。</text>
+    </view>
+  </view>
+
   <view wx:if="{{membershipInviteVisible}}" class="member-invite-mask" catchtouchmove="noop">
     <view class="member-invite-sheet">
       <button class="member-invite-close" aria-label="关闭会员邀请" bindtap="dismissMembershipInvite">×</button>
       <text class="member-invite-kicker">M-BOX MEMBERSHIP</text>
       <text class="member-invite-title">欢迎加入 M-BOX</text>
-      <text class="member-invite-copy">加入后按已发布规则享消费积分、会员权益与活动资格。</text>
-      <image class="member-invite-logo" src="/assets/brand/mbox-logo-full.png" mode="aspectFit" aria-label="M-BOX Shanghai 1999 Logo" />
+      <text class="member-invite-copy">加入后享积分、会员权益与活动资格。</text>
+      <image class="member-invite-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX Shanghai 1999 Logo" />
       <checkbox-group bindchange="onMembershipInviteAgreementChange">
         <label class="member-invite-agreement">
           <checkbox value="agree" checked="{{membershipInviteAgreed}}" color="#315d46" />
-          <text>我已阅读并同意以下协议</text>
+          <view class="member-invite-agreement-copy">
+            <text>我已阅读并同意</text>
+            <view class="member-invite-links">
+              <text catchtap="showMembershipTerms">《{{membershipTerms.title}}》</text>
+              <text catchtap="openPrivacy">《隐私政策》</text>
+            </view>
+          </view>
         </label>
       </checkbox-group>
-      <view class="member-invite-links">
-        <text bindtap="showMembershipTerms">《{{membershipTerms.title}}》</text>
-        <text bindtap="openPrivacy">《隐私政策》</text>
-      </view>
       <view class="member-invite-actions">
         <button class="member-invite-refuse" bindtap="declineMembershipInvite">暂不加入</button>
-        <button wx:if="{{membershipInviteAgreed}}" class="member-invite-agree wx-phone-button" open-type="getPhoneNumber|agreePrivacyAuthorization" bindgetphonenumber="acceptMembershipInvite" bindagreeprivacyauthorization="onAgreePrivacyAuthorization" hover-class="none" loading="{{membershipInviteBusy}}">同意</button>
-        <button wx:else class="member-invite-agree member-invite-agree--pending" bindtap="remindMembershipInviteAgreement" hover-class="none">同意</button>
+        <button wx:if="{{membershipInviteAgreed}}" class="member-invite-agree wx-phone-button" open-type="getPhoneNumber|agreePrivacyAuthorization" bindgetphonenumber="acceptMembershipInvite" bindagreeprivacyauthorization="onAgreePrivacyAuthorization" hover-class="none" loading="{{membershipInviteBusy}}">同意入会</button>
+        <button wx:else class="member-invite-agree member-invite-agree--pending" bindtap="remindMembershipInviteAgreement" hover-class="none">同意入会</button>
       </view>
-      <text class="member-invite-note">须由您亲自勾选并授权微信手机号；拒绝或关闭不影响浏览菜单、预约及点单。</text>
     </view>
   </view>
 </view>

@@ -444,6 +444,7 @@
   font-size: 21rpx;
   line-height: 72rpx;
 }
+.member-benefit-highlight{display:flex;margin:20rpx 0 0;padding:18rpx 20rpx;align-items:center;justify-content:space-between;border:1rpx solid rgba(237,209,145,.6);border-radius:16rpx;background:linear-gradient(100deg,rgba(246,222,168,.28),rgba(255,255,255,.08));gap:18rpx}.member-benefit-highlight text:first-child{color:#ead3a8;font-size:21rpx}.member-benefit-highlight text:last-child{color:#fff;font-size:28rpx;font-weight:700}.personal-entry-section{display:grid;gap:10rpx}.personal-entry-section .section-title{margin-bottom:4rpx}.personal-entry{display:flex;width:100%;min-height:106rpx;margin:0;padding:18rpx 22rpx;align-items:center;justify-content:space-between;border:1rpx solid #ddd7cf;border-radius:18rpx;background:#fff;color:#302d29;text-align:left;gap:16rpx}.personal-entry::after{border:0}.personal-entry view{min-width:0;flex:1}.personal-entry view text{display:block}.personal-entry view text:first-child{font-size:23rpx;font-weight:700}.personal-entry view text:last-child{margin-top:7rpx;color:#817970;font-size:19rpx}.personal-entry>text{color:#958575;font-size:38rpx}
 .journey-section {
   display: grid;
   gap: 10rpx;
@@ -767,6 +768,7 @@
   text-align: center;
 }
 .member-content-boundary { display: block; margin-top: 10rpx; color: #827970; font-size: 18rpx; line-height: 1.5; }
+.member-card__links { display: flex; margin-top: 18rpx; flex-wrap: wrap; gap: 14rpx; }.member-card__links .member-ledger-link { flex: 1 1 260rpx; margin-top: 0; }
 .support-section {
   display: grid;
   gap: 10rpx;

@@ -14,6 +14,8 @@ interface Draft{
   code:string;type:CardType;title:string;summary:string;imageUrl:string;ctaLabel:string
   targetPath:string;priority:string;visibility:'public'|'member';validFrom:string;validUntil:string;reason:string
 }
+interface SupportContactView { rolloutState:'disabled'|'pilot'|'enabled'|'shadow'; contact:{phone:string;phoneLabel:string;wecomName:string;wecomQrImageUrl:string|null}|null }
+interface SupportDraft { rolloutState:'disabled'|'pilot'|'enabled'; phone:string; phoneLabel:string; wecomName:string; wecomQrImageUrl:string; reason:string }
 
 export function HomeContentManagementPanel({api,auth}:{api:NormalizedApiClient;auth:StaffAuthView}){
   const canView=auth.permissions.includes('community.activity.view')
@@ -25,16 +27,21 @@ export function HomeContentManagementPanel({api,auth}:{api:NormalizedApiClient;a
   const [draft,setDraft]=useState<Draft|null>(null)
   const [busy,setBusy]=useState('')
   const [notice,setNotice]=useState('')
+  const [supportDraft,setSupportDraft]=useState<SupportDraft|null>(null)
 
   const load=useCallback(async()=>{
     setBusy('load')
     try{
       const response=await api.getEndpoint<{data:unknown}>('/api/staff/home-content-cards')
       const next=cardList(response.data);setCards(next)
+      if(canManage){
+        const support=await api.getEndpoint<{data:unknown}>('/api/staff/customer-experience/support-contact')
+        setSupportDraft(toSupportDraft(support.data))
+      }
       if(selected){const current=next.find(item=>item.code===selected);if(current)setDraft(toDraft(current))}
     }catch(error){setNotice(message(error,'首页内容暂时无法读取'))}
     finally{setBusy('')}
-  },[api,selected])
+  },[api,canManage,selected])
   useEffect(()=>{if(expanded&&canView)void load()},[expanded,canView,load])
   if(!canView)return null
   function create(){setSelected('');setDraft(emptyDraft());setNotice('正在建立首页精选内容草稿。未发布前顾客端不可见。')}
@@ -66,6 +73,16 @@ export function HomeContentManagementPanel({api,auth}:{api:NormalizedApiClient;a
     }catch(error){setNotice(message(error,operation==='publish'?'内容没有发布':'内容没有暂停'))}
     finally{setBusy('')}
   }
+  function updateSupport<K extends keyof SupportDraft>(key:K,value:SupportDraft[K]){setSupportDraft(current=>current===null?null:{...current,[key]:value})}
+  async function saveSupport(event:FormEvent){
+    event.preventDefault();if(!supportDraft||busy)return
+    setBusy('support');setNotice('')
+    try{
+      await api.putEndpoint('/api/staff/customer-experience/support-contact',{rolloutState:supportDraft.rolloutState,configuration:{phone:supportDraft.phone,phoneLabel:supportDraft.phoneLabel,wecomName:supportDraft.wecomName,wecomQrImageUrl:supportDraft.wecomQrImageUrl||null},reason:supportDraft.reason},{idempotencyKey:key('support-contact-update')})
+      setNotice(supportDraft.rolloutState==='enabled'?'门店联系信息已发布到小程序“我的”页面。':'门店联系信息已保存为关闭状态，顾客端不会显示。');await load()
+    }catch(error){setNotice(message(error,'门店联系信息没有保存'))}
+    finally{setBusy('')}
+  }
 
   return <section className="activity-operations-panel home-content-panel" aria-label="小程序首页精选内容管理">
     <header><div><strong>小程序首页精选内容</strong><small>管理品牌故事、演出预告和精选内容；超嗨活动仍在上方活动工作台编辑发布，首页会自动取已发布活动。</small></div><button type="button" aria-expanded={expanded} onClick={()=>setExpanded(value=>!value)}>{expanded?'收起':'打开内容管理'}</button></header>
@@ -76,7 +93,7 @@ export function HomeContentManagementPanel({api,auth}:{api:NormalizedApiClient;a
       {draft&&canManage&&<details className="activity-draft-editor" open><summary>{selected?'编辑首页内容草稿':'填写新内容'}</summary><form onSubmit={event=>void save(event)}>
         <fieldset><legend>展示内容</legend>
           <label>内容编号<input required disabled={Boolean(selected)} minLength={3} maxLength={64} value={draft.code} onChange={event=>update('code',event.target.value)} placeholder="mbox-story-1999" /></label>
-          <label>内容类型<select value={draft.type} onChange={event=>update('type',event.target.value as CardType)}><option value="article">品牌故事</option><option value="show">演出内容</option><option value="activity">活动内容</option><option value="benefit">会员内容</option><option value="presale">预售内容</option><option value="return_offer">回访内容</option></select></label>
+          <label>内容类型<select value={draft.type} onChange={event=>update('type',event.target.value as CardType)}><option value="article">品牌故事</option><option value="show">演出内容</option><option value="activity">活动内容</option><option value="benefit">会员内容</option><option value="presale">首页弹窗推广 / 预售内容</option><option value="return_offer">回访内容</option></select><small>发布“首页弹窗推广 / 预售内容”后，小程序首页会在会员邀请关闭后展示排序最靠前且仍在有效期内的一条；暂停即可立即撤下。</small></label>
           <label className="wide">标题<input required minLength={2} maxLength={120} value={draft.title} onChange={event=>update('title',event.target.value)} /></label>
           <label className="wide">摘要<textarea required rows={3} minLength={2} maxLength={400} value={draft.summary} onChange={event=>update('summary',event.target.value)} /></label>
           <label className="wide">图片地址<input value={draft.imageUrl} onChange={event=>update('imageUrl',event.target.value)} placeholder="HTTPS图片地址或站内图片路径" /></label>
@@ -93,11 +110,13 @@ export function HomeContentManagementPanel({api,auth}:{api:NormalizedApiClient;a
         <div className="activity-draft-actions"><button type="submit" disabled={busy==='save'}>{selected?'保存草稿':'建立草稿'}</button></div>
       </form></details>}
       <div className="activity-operations-list">{cards.map(item=><article key={`action-${item.code}`} className="home-content-action-row"><div><strong>{item.title}</strong><small>{status(item.status)} · {item.visibility==='member'?'仅会员':'所有顾客'}</small></div><div>{item.status==='published'&&canPublish&&<button type="button" onClick={()=>void action(item,'pause')}>暂停展示</button>}{['draft','paused'].includes(item.status)&&canPublish&&<button type="button" onClick={()=>void action(item,'publish')}>发布</button>}</div></article>)}</div>
+      {supportDraft&&canManage&&<details className="activity-draft-editor"><summary>顾客联系门店</summary><form onSubmit={event=>void saveSupport(event)}><fieldset><legend>电话与企业微信</legend><label>顾客端状态<select value={supportDraft.rolloutState} onChange={event=>updateSupport('rolloutState',event.target.value as SupportDraft['rolloutState'])}><option value="disabled">暂不展示</option><option value="pilot">试运行展示</option><option value="enabled">正式展示</option></select><small>启用后，“我的”页面显示门店电话和企业微信二维码；不填二维码时仅显示电话。</small></label><label>电话名称<input required minLength={2} maxLength={40} value={supportDraft.phoneLabel} onChange={event=>updateSupport('phoneLabel',event.target.value)} placeholder="门店电话" /></label><label>门店联系电话<input required minLength={6} maxLength={31} value={supportDraft.phone} onChange={event=>updateSupport('phone',event.target.value)} placeholder="如：021-12345678" /></label><label>企业微信名称<input required minLength={2} maxLength={40} value={supportDraft.wecomName} onChange={event=>updateSupport('wecomName',event.target.value)} placeholder="M-BOX 企业微信" /></label><label className="wide">企业微信二维码地址<input value={supportDraft.wecomQrImageUrl} onChange={event=>updateSupport('wecomQrImageUrl',event.target.value)} placeholder="HTTPS 图片地址或站内图片路径" /></label><label className="wide">修改原因<input required minLength={2} maxLength={240} value={supportDraft.reason} onChange={event=>updateSupport('reason',event.target.value)} placeholder="例如：更新值班联系电话和企业微信二维码" /></label></fieldset><p className="recommendation-policy-boundary">小程序会调用原生电话能力；企业微信先展示门店审核后的二维码。直接聊天入口需在微信官方能力完成配置后再接入，不能用任意外链替代。</p><div className="activity-draft-actions"><button type="submit" disabled={busy==='support'}>保存门店联系信息</button></div></form></details>}
     </>}
   </section>
 }
 
 function emptyDraft():Draft{const start=new Date();start.setSeconds(0,0);const end=new Date(start.getTime()+30*86400000);return{code:'',type:'article',title:'',summary:'',imageUrl:'',ctaLabel:'查看内容',targetPath:'/pages/home/index',priority:'100',visibility:'public',validFrom:local(start),validUntil:local(end),reason:''}}
+function toSupportDraft(value:unknown):SupportDraft{const source=(value&&typeof value==='object'?value:{}) as Partial<SupportContactView>;const contact=source.contact;return{rolloutState:source.rolloutState==='enabled'||source.rolloutState==='pilot'?'enabled':'disabled',phone:contact?.phone??'',phoneLabel:contact?.phoneLabel??'门店电话',wecomName:contact?.wecomName??'M-BOX 企业微信',wecomQrImageUrl:contact?.wecomQrImageUrl??'',reason:'更新顾客端门店联系信息'}}
 function toDraft(value:CardView):Draft{return{code:value.code,type:value.type,title:value.title,summary:value.summary,imageUrl:value.imageUrl??'',ctaLabel:value.ctaLabel,targetPath:value.targetPath,priority:String(value.priority),visibility:value.visibility==='member'?'member':'public',validFrom:local(new Date(value.validFrom)),validUntil:local(new Date(value.validUntil)),reason:''}}
 function payload(value:Draft){return{code:value.code.trim(),type:value.type,title:value.title.trim(),summary:value.summary.trim(),imageUrl:value.imageUrl.trim()||null,ctaLabel:value.ctaLabel.trim(),targetPath:value.targetPath,priority:Number(value.priority),visibility:value.visibility,audienceMemberLevels:[],audienceLifecycleStages:[],validFrom:new Date(value.validFrom).toISOString(),validUntil:new Date(value.validUntil).toISOString(),reason:value.reason.trim()}}
 function cardList(value:unknown){if(!Array.isArray(value))throw new Error('首页内容列表格式无法识别');return value.map(card)}

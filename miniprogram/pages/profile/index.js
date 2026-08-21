@@ -219,7 +219,7 @@ Page({
     loading: true, busy: false, recoveryBusy: false, recoveryMessage: '', benefitBusyId: '', redemptionBusyId: '',
     error: '', benefitError: '', registrationError: '', redemptionError: '', preferenceError: '',
     membership: null, points: [], benefits: [], reservations: [], registrations: [], contentCards: [],
-    membershipTerms: null,
+    membershipTerms: null, supportContact: null,
     agreedToPolicies: false,
     redemptionItems: [], redemptions: [], showRedemptions: false,
     productRestrictions: [], restrictionBusyId: '', expiryNotificationOption: null,
@@ -251,8 +251,8 @@ Page({
       ])
       const data = results[0]
       const benefits = (results[1] || []).map(benefitView)
-      const reservations = (results[2].reservations || []).filter((item) => !['cancelled', 'expired', 'no_show'].includes(item.status)).map((item) => ({
-        publicId: item.publicId, title: `${dateTime(item.arrivalAt)} · ${item.guestCount}人`, statusText: ({ pending: '等待确认', confirmed: '预约已确认', arrived: '已经到店', seated: '已经入座' })[item.status] || '状态待确认',
+      const reservations = (results[2].reservations || []).filter((item) => ['pending', 'confirmed'].includes(item.status)).map((item) => ({
+        publicId: item.publicId, title: `${dateTime(item.arrivalAt)} · ${item.guestCount}人`, statusText: ({ pending: '等待确认', confirmed: '预约已确认' })[item.status] || '状态待确认',
       })).slice(0, 3)
       const registrationRows = (results[3] || []).filter((item) => item.status !== 'cancelled').slice(0, 3)
       const paymentStates = await Promise.all(registrationRows.map((item) => (
@@ -306,6 +306,7 @@ Page({
         loading: false,
         membership,
         membershipTerms: data.membershipTerms || null,
+        supportContact: data.supportContact || null,
         points: (data.points || []).slice(0, 8),
         benefits,
         benefitCount: benefits.reduce((sum, item) => sum + Number(item.quantityAvailable || 0), 0),
@@ -643,5 +644,7 @@ Page({
 
   openReservations() { wx.switchTab({ url: '/pages/reservations/index' }) },
   openPoints() { wx.navigateTo({ url: '/pages/points/index' }) },
+  openPreferenceSettings() { wx.navigateTo({ url: '/pages/profile-preferences/index' }) },
+  openContact() { wx.navigateTo({ url: '/pages/profile-contact/index' }) },
   openCommunity(event) { wx.navigateTo({ url: `/pages/community-detail/index?id=${encodeURIComponent(event.currentTarget.dataset.id)}` }) },
 })

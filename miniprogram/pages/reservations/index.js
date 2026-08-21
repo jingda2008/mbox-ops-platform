@@ -13,6 +13,9 @@ const { getRuntimeConfig } = require('../../config/index')
 const { money, dateTime } = require('../../utils/format')
 
 const STATUS_NAMES = { pending: '等待门店确认', confirmed: '预约已确认', arrived: '已经到店', seated: '已经入座', cancelled: '已取消', no_show: '未到店', expired: '已失效' }
+// “我的预约”只保留顾客仍能执行或等待门店确认的记录。到店、入座、过期等
+// 历史仍由服务端和员工端保留，不能为了简化页面而删除业务事实。
+const EXECUTABLE_RESERVATION_STATUSES = new Set(['pending', 'confirmed'])
 const DEFAULT_SEATS = [
   { code: 'no_preference', name: '由门店安排', copy: '交给现场团队按人数和当晚情况安排' },
   { code: 'comfortable_booth', name: '舒适卡座', copy: '适合多人交流与较完整的桌面服务' },
@@ -100,20 +103,22 @@ Page({
           notificationByReservation.set(option.reservationPublicId, option)
         })
       }
-      const reservations = (data.reservations || []).map((item) => ({
+      const reservations = (data.reservations || []).filter((item) => (
+        EXECUTABLE_RESERVATION_STATUSES.has(item.status)
+      )).map((item) => ({
         ...item,
         statusText: STATUS_NAMES[item.status] || '状态待确认',
         scheduledAtText: dateTime(item.arrivalAt),
         partySize: item.guestCount,
         seatName: (this.data.seatOptions.find((option) => option.code === item.seatPreference) || this.data.seatOptions[0]).name,
-        active: !['cancelled', 'expired', 'no_show'].includes(item.status),
+        active: true,
         performanceImpact: pendingByReservation.get(item.publicId) || null,
         performanceNotificationOption: notificationByReservation.get(item.publicId) || null,
       })).sort((left, right) => String(right.arrivalAt).localeCompare(String(left.arrivalAt)))
       this.setData({
         loading: false, reservations, performanceImpacts,
         impactsError: impactResult.status === 'rejected' ? '演出调整状态暂时无法读取，请重试' : '',
-        showForm: !reservations.some((item) => item.active),
+        showForm: reservations.length === 0,
       })
       await Promise.all([this.checkAvailability(), this.loadPerformances()])
     } catch (error) { this.setData({ loading: false, error: error.message || '预约信息载入失败' }) }
@@ -238,6 +243,8 @@ Page({
   onTimeChange(event) { this.setData({ reservationTime: event.detail.value }, () => this.checkAvailability()) },
   onSeatChange(event) { this.setData({ seatIndex: Number(event.detail.value) }) },
   onOccasionChange(event) { this.setData({ occasionIndex: Number(event.detail.value) }) },
+  chooseSeat(event) { this.setData({ seatIndex: Number(event.currentTarget.dataset.index) }) },
+  chooseOccasion(event) { this.setData({ occasionIndex: Number(event.currentTarget.dataset.index) }) },
   onNoteInput(event) { this.setData({ occasionNote: event.detail.value }) },
   selectPerformance(event) {
     const id = event.currentTarget.dataset.id

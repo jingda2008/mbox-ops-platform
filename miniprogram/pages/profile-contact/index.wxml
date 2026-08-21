@@ -1,0 +1,11 @@
+<view class="page profile-contact-page">
+  <view class="contact-hero"><text>M-BOX · CONTACT</text><text>联系门店</text><text>需要帮助时，直接拨打门店电话或添加企业微信。</text></view>
+  <state-panel wx:if="{{loading}}" type="loading" title="正在读取联系信息" />
+  <block wx:else>
+    <view wx:if="{{error}}" class="error-banner">{{error}}</view>
+    <view wx:if="{{contact}}" class="contact-card"><text>{{contact.phoneLabel}}</text><text>{{contact.phone}}</text><text>营业期间优先接听；如未及时接通，请使用企业微信留言。</text><button class="contact-call" bindtap="callStore">直接拨打</button></view>
+    <view wx:if="{{contact && contact.wecomQrImageUrl}}" class="wecom-card"><image src="{{contact.wecomQrImageUrl}}" mode="aspectFit" bindtap="previewWecomQr" /><view><text>{{contact.wecomName}}</text><text>点击二维码可放大保存，再通过企业微信扫码添加。</text></view></view>
+    <state-panel wx:if="{{!contact && !error}}" type="empty" title="门店联系信息暂未发布" message="门店后台发布电话或企业微信后，这里会自动显示。" />
+    <text class="contact-boundary">企业微信的直接聊天入口必须由门店在微信侧完成官方配置；未配置前不会伪造可用按钮。</text>
+  </block>
+</view>

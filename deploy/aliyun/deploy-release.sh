@@ -354,8 +354,99 @@ if [ "${uses_evidence_relay}" = 1 ]; then
   rm -rf "${relay_backup_local}"
 fi
 
-ssh "${ssh_options[@]}" "${ssh_target}" \
-  "'${remote_release_dir}/activate-release.sh' '${remote_release_dir}' '${deployment_tier}' '${public_url}' '${backup_max_age_minutes}'"
+if [ "${uses_evidence_relay}" = 1 ]; then
+  activation_log=$(mktemp "${bundle_dir}/.activation-log.XXXXXX")
+  activation_status=$(mktemp "${bundle_dir}/.activation-status.XXXXXX")
+  rm -f "${activation_status}"
+  (
+    set +e
+    ssh "${ssh_options[@]}" "${ssh_target}" \
+      "'${remote_release_dir}/activate-release.sh' '${remote_release_dir}' '${deployment_tier}' '${public_url}' '${backup_max_age_minutes}'" \
+      > "${activation_log}" 2>&1
+    printf '%s\n' "$?" > "${activation_status}"
+  ) &
+  activation_pid=$!
+  relay_activation_cleanup() {
+    if kill -0 "${activation_pid}" >/dev/null 2>&1; then
+      wait "${activation_pid}" || true
+    fi
+    if [ -f "${activation_status}" ] && [ "$(cat "${activation_status}")" != 0 ]; then
+      cat "${activation_log}" >&2
+    fi
+    rm -f "${activation_log}" "${activation_status}"
+  }
+  trap relay_activation_cleanup EXIT INT TERM
+
+  relay_post_cutover_evidence() {
+    local evidence_kind=$1
+    local marker_name=$2
+    local source_directory=$3
+    local object_prefix=$4
+    local report_name=$5
+    local relay_local relay_remote
+
+    for _ in $(seq 1 120); do
+      if ssh "${ssh_options[@]}" "${ssh_target}" \
+        "test -f '${remote_release_dir}/${marker_name}'"; then
+        break
+      fi
+      if [ -f "${activation_status}" ]; then
+        cat "${activation_log}" >&2
+        return 1
+      fi
+      sleep 2
+    done
+    ssh "${ssh_options[@]}" "${ssh_target}" \
+      "test -f '${remote_release_dir}/${marker_name}' && jq -e --arg sha '${release_sha}' --arg prefix '${object_prefix}' --arg directory '${source_directory}' --arg report '${remote_release_dir}/${report_name}' '.releaseSha == \$sha and .prefix == \$prefix and .evidenceDirectory == \$directory and .report == \$report' '${remote_release_dir}/${marker_name}' >/dev/null"
+
+    relay_local=$(mktemp -d "${bundle_dir}/.${evidence_kind}-relay.XXXXXX")
+    rsync -a --partial "${rsync_resume_option}" \
+      -e "ssh -i '${ssh_key}' -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p '${ssh_port}'" \
+      "${ssh_target}:${source_directory}/" "${relay_local}/"
+    (cd "${relay_local}" && shasum -a 256 -c SHA256SUMS >/dev/null)
+
+    relay_remote="${evidence_release_dir}/post-cutover-${evidence_kind}"
+    ssh "${evidence_ssh_options[@]}" "${evidence_ssh_target}" \
+      "rm -rf '${relay_remote}' && install -d -m 0700 '${relay_remote}'"
+    rsync -a --partial "${rsync_resume_option}" \
+      -e "ssh -i '${evidence_ssh_key}' -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p '${evidence_ssh_port}'" \
+      "${relay_local}/" "${evidence_ssh_target}:${relay_remote}/"
+    ssh "${evidence_ssh_options[@]}" "${evidence_ssh_target}" \
+      "MBOX_OSS_VERIFICATION_REPORT='${evidence_release_dir}/${report_name}' '${evidence_release_dir}/upload-oss-verified.sh' '${relay_remote}' '${object_prefix}'"
+    scp "${evidence_scp_options[@]}" \
+      "${evidence_ssh_target}:${evidence_release_dir}/${report_name}" \
+      "${relay_local}/${report_name}"
+    jq -e --arg prefix "${object_prefix}" \
+      '.verified == true and .authMode == "EcsRamRole" and .prefix == $prefix' \
+      "${relay_local}/${report_name}" >/dev/null
+    scp "${scp_options[@]}" "${relay_local}/${report_name}" \
+      "${ssh_target}:${remote_release_dir}/${report_name}"
+    ssh "${ssh_options[@]}" "${ssh_target}" \
+      "chmod 0600 '${remote_release_dir}/${report_name}'"
+    rm -rf "${relay_local}"
+  }
+
+  relay_post_cutover_evidence \
+    deployment .deployment-evidence-relay-ready.json \
+    "${remote_release_dir}/oss-deployment" \
+    "mbox/evidence/rc/v${release_version}/${release_sha}/deployment" \
+    oss-deployment-verification.json
+  relay_post_cutover_evidence \
+    completion .completion-evidence-relay-ready.json \
+    "${remote_release_dir}/oss-completion" \
+    "mbox/evidence/rc/v${release_version}/${release_sha}/completion" \
+    oss-completion-verification.json
+
+  wait "${activation_pid}"
+  activation_exit=$(cat "${activation_status}")
+  cat "${activation_log}"
+  rm -f "${activation_log}" "${activation_status}"
+  test "${activation_exit}" = 0
+  trap - EXIT INT TERM
+else
+  ssh "${ssh_options[@]}" "${ssh_target}" \
+    "'${remote_release_dir}/activate-release.sh' '${remote_release_dir}' '${deployment_tier}' '${public_url}' '${backup_max_age_minutes}'"
+fi
 
 if ! MBOX_RELEASE_SMOKE_URL="${public_url}" \
   MBOX_RELEASE_EXPECTED_SHA="${release_sha}" \

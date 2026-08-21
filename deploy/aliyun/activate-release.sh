@@ -25,6 +25,7 @@ database_backupper=${release_dir}/backup-postgres.sh
 database_restorer=${release_dir}/restore-postgres.sh
 state_file=${release_dir}/release-state.json
 database_maintenance_env=${install_root}/secrets/database-maintenance.env
+external_evidence_relay=0
 
 case "${release_dir}" in
   /opt/mbox/releases/*) ;;
@@ -44,6 +45,9 @@ test -x "${state_helper}"
 test -x "${env_normalizer}"
 test -x "${database_backupper}"
 test -x "${database_restorer}"
+if [ -f "${release_dir}/preverified-backup-upload.json" ]; then
+  external_evidence_relay=1
+fi
 jq -e '
   .deploymentScope == {
     kind: "normalized-staff-service-database",
@@ -1227,8 +1231,58 @@ cp "${state_file}" "${deployment_evidence}/release-state-before-evidence.json"
   find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
   sha256sum --check SHA256SUMS >/dev/null
 )
-MBOX_OSS_VERIFICATION_REPORT="${release_dir}/oss-deployment-verification.json" \
-  "${uploader}" "${deployment_evidence}" "mbox/evidence/rc/v${release_version}/${release_sha}/deployment"
+archive_release_evidence() {
+  local evidence_directory=$1
+  local object_prefix=$2
+  local verification_report=$3
+  local relay_marker=$4
+  local expected_count=0
+  local expected_sha relative_path expected_key expected_bytes
+
+  if [ "${external_evidence_relay}" = 0 ]; then
+    MBOX_OSS_VERIFICATION_REPORT="${verification_report}" \
+      "${uploader}" "${evidence_directory}" "${object_prefix}"
+    return
+  fi
+
+  rm -f "${verification_report}" "${relay_marker}"
+  jq -n --arg releaseSha "${release_sha}" --arg prefix "${object_prefix}" \
+    --arg evidenceDirectory "${evidence_directory}" --arg report "${verification_report}" \
+    '{schemaVersion:1,releaseSha:$releaseSha,prefix:$prefix,evidenceDirectory:$evidenceDirectory,report:$report}' \
+    > "${relay_marker}.next"
+  chmod 0600 "${relay_marker}.next"
+  mv "${relay_marker}.next" "${relay_marker}"
+
+  for _ in $(seq 1 180); do
+    [ -f "${verification_report}" ] && break
+    sleep 1
+  done
+  test -f "${verification_report}"
+  jq -e --arg prefix "${object_prefix}" \
+    '.verified == true and .authMode == "EcsRamRole" and .prefix == $prefix' \
+    "${verification_report}" >/dev/null
+
+  while read -r expected_sha relative_path; do
+    relative_path=${relative_path#\*}
+    relative_path=${relative_path#./}
+    test -n "${relative_path}"
+    expected_key="${object_prefix}/${relative_path}"
+    expected_bytes=$(stat -c '%s' "${evidence_directory}/${relative_path}")
+    jq -e --arg key "${expected_key}" --arg sha "${expected_sha}" \
+      --argjson bytes "${expected_bytes}" \
+      'any(.objects[]; .key == $key and .sha256 == $sha and .bytes == $bytes and .verified == true)' \
+      "${verification_report}" >/dev/null
+    expected_count=$((expected_count + 1))
+  done < "${evidence_directory}/SHA256SUMS"
+  test "$(jq '.objects | length' "${verification_report}")" = "${expected_count}"
+  rm -f "${relay_marker}"
+}
+
+archive_release_evidence \
+  "${deployment_evidence}" \
+  "mbox/evidence/rc/v${release_version}/${release_sha}/deployment" \
+  "${release_dir}/oss-deployment-verification.json" \
+  "${release_dir}/.deployment-evidence-relay-ready.json"
 release_state_transition "${state_file}" cutover_verified evidence_archived
 release_state_transition "${state_file}" evidence_archived completed
 completion_evidence=${release_dir}/oss-completion
@@ -1241,8 +1295,11 @@ cp "${release_dir}/deployment-manifest.json" "${completion_evidence}/"
   sha256sum release-state.json deployment-manifest.json > SHA256SUMS
   sha256sum --check SHA256SUMS >/dev/null
 )
-MBOX_OSS_VERIFICATION_REPORT="${release_dir}/oss-completion-verification.json" \
-  "${uploader}" "${completion_evidence}" "mbox/evidence/rc/v${release_version}/${release_sha}/completion"
+archive_release_evidence \
+  "${completion_evidence}" \
+  "mbox/evidence/rc/v${release_version}/${release_sha}/completion" \
+  "${release_dir}/oss-completion-verification.json" \
+  "${release_dir}/.completion-evidence-relay-ready.json"
 
 ln -sfn "${release_dir}" "${current_link}"
 ln -sfn "${release_env}" "${env_link}"

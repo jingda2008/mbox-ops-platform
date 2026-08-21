@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.0-rc.116 - 2026-08-22
+
+- Extends the two-host evidence relay through the post-cutover deployment and
+  completion archives instead of asking the private application host to use
+  OSS after public readiness succeeds.
+- Keeps activation open while the payment/evidence host uploads and reads back
+  each archive; activation rechecks the release prefix, object count, size and
+  SHA-256 before moving from `cutover_verified` to completed.
+- Supersedes rc.115, whose candidate and public cutover both verified before
+  the old local-OSS archive path triggered an automatic rollback to healthy
+  rc.104. Schema remained `098`; the WeChat mini-program was untouched.
+
 ## 1.0.0-rc.115 - 2026-08-22
 
 - Builds candidate container arguments as a single non-empty array so the

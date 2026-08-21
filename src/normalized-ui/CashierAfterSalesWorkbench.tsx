@@ -38,6 +38,26 @@ interface CancellationDraft {
   confirmed: boolean
 }
 
+interface BusinessDayClosureView {
+  businessDays: Array<{
+    businessDayId: string
+    businessDate: string
+    status: 'closed' | 'awaiting_close'
+    closedTableSessions: Array<{ tableSessionId: string; tableCode: string }>
+    blockers: Array<{
+      tableSessionId: string
+      tableCode: string
+      code: string
+      count: number
+      label: string
+      resolution: string
+    }>
+  }>
+  closedBusinessDayCount: number
+  closedTableSessionCount: number
+  blockedTableSessionCount: number
+}
+
 export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, refreshToken }: {
   api: NormalizedApiClient
   auth: StaffAuthView
@@ -50,6 +70,7 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, refresh
   const [query, setQuery] = useState('')
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [notice, setNotice] = useState<WorkbenchNotice | null>(null)
+  const [businessDayClosure, setBusinessDayClosure] = useState<BusinessDayClosureView | null>(null)
   const noticeRef = useRef<HTMLDivElement | null>(null)
   const mutationCoordinator = useRef(new CashierMutationCoordinator())
 
@@ -114,6 +135,44 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, refresh
     }
   }, [api, load, onLoginRequired, query])
 
+  const closePendingBusinessDays = useCallback(async () => {
+    const key = 'business-day-close-pending'
+    const attempt = mutationCoordinator.current.prepare(key, {})
+    setBusyKey(key)
+    setNotice(null)
+    try {
+      const result = await api.postEndpoint<BusinessDayClosureView>(
+        '/api/business-days/close-pending', {}, { idempotencyKey: attempt.idempotencyKey },
+      )
+      mutationCoordinator.current.complete(attempt.signature)
+      setBusinessDayClosure(result)
+      setNotice({
+        kind: result.blockedTableSessionCount === 0 ? 'success' : 'error',
+        text: result.businessDays.length === 0
+          ? '没有等待结束的上一营业日。'
+          : result.blockedTableSessionCount === 0
+            ? `已结束${result.closedBusinessDayCount}个营业日，并安全关闭${result.closedTableSessionCount}桌。`
+            : `已安全关闭${result.closedTableSessionCount}桌；仍有${result.blockedTableSessionCount}桌需先处理。`,
+      })
+      await load(query)
+    } catch (error) {
+      if (error instanceof NormalizedApiError && error.recovery === 'login') {
+        onLoginRequired()
+        return
+      }
+      mutationCoordinator.current.fail(
+        attempt.signature,
+        error instanceof NormalizedApiError && error.retryable,
+      )
+      setNotice({
+        kind: 'error',
+        text: error instanceof Error ? error.message : '上一营业日未能结束，请刷新后重试',
+      })
+    } finally {
+      setBusyKey(null)
+    }
+  }, [api, load, onLoginRequired, query])
+
   return <CashierAfterSalesWorkbenchView
     auth={auth}
     view={view}
@@ -122,9 +181,11 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, refresh
     busyKey={busyKey}
     notice={notice}
     noticeRef={noticeRef}
+    businessDayClosure={businessDayClosure}
     onSearch={setQuery}
     onReload={() => void load(query)}
     onMutation={mutate}
+    onClosePendingBusinessDays={closePendingBusinessDays}
   />
 }
 
@@ -136,10 +197,12 @@ export function CashierAfterSalesWorkbenchView({
   busyKey,
   notice,
   noticeRef,
+  businessDayClosure = null,
   initialExpandedOrderId = null,
   onSearch,
   onReload,
   onMutation,
+  onClosePendingBusinessDays,
 }: {
   auth: StaffAuthView
   view: CashierWorkbenchView | null
@@ -148,10 +211,12 @@ export function CashierAfterSalesWorkbenchView({
   busyKey: string | null
   notice: WorkbenchNotice | null
   noticeRef?: RefObject<HTMLDivElement | null>
+  businessDayClosure?: BusinessDayClosureView | null
   initialExpandedOrderId?: string | null
   onSearch(query: string): void
   onReload(): void
   onMutation(key: string, endpoint: string, body: unknown, successMessage: string): Promise<boolean>
+  onClosePendingBusinessDays?: () => Promise<void>
 }) {
   const [searchDraft, setSearchDraft] = useState(view?.query ?? '')
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(initialExpandedOrderId)
@@ -232,6 +297,19 @@ export function CashierAfterSalesWorkbenchView({
       {notice.kind === 'success' ? <Check size={18} /> : <CircleAlert size={18} />}
       <span>{notice.text}</span>
     </div>}
+
+    {auth.permissions.includes('business_day.close') && onClosePendingBusinessDays && <section className="cashier-business-day-close" aria-label="上一营业日结束处理">
+      <div><strong>上一营业日结束处理</strong><small>只关闭已经结清、出品和服务均完成的桌台；有未完成事项会保留并说明原因。</small></div>
+      <button type="button" disabled={busyKey !== null} onClick={() => void onClosePendingBusinessDays()}>
+        {busyKey === 'business-day-close-pending' ? <LoaderCircle className="is-spinning" size={17} /> : <Check size={17} />}
+        检查并结束
+      </button>
+      {businessDayClosure?.businessDays.flatMap((day) => day.blockers).length ? <div className="cashier-business-day-blockers">
+        {businessDayClosure.businessDays.flatMap((day) => day.blockers).map((blocker) => <p key={`${blocker.tableSessionId}:${blocker.code}`}>
+          <b>{blocker.tableCode}</b><span>{blocker.label} {blocker.count}项</span><small>{blocker.resolution}</small>
+        </p>)}
+      </div> : null}
+    </section>}
 
     <form className="cashier-workbench-search" role="search" onSubmit={submitSearch}>
       <Search size={18} aria-hidden="true" />

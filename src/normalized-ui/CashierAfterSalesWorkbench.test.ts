@@ -129,6 +129,25 @@ describe('CashierAfterSalesWorkbenchView', () => {
     const retry = coordinator.prepare('refund-reject-refund-1', body)
     expect(retry.idempotencyKey).not.toBe(first.idempotencyKey)
   })
+
+  it('shows the controlled prior-day closure action only to authorized staff',()=>{
+    const allowed=renderToStaticMarkup(createElement(CashierAfterSalesWorkbenchView,{
+      auth:{...auth(),permissions:['reconciliation.view','business_day.close']},
+      view:workbench([]),phase:'ready' as const,message:null,busyKey:null,notice:null,
+      onSearch:vi.fn(),onReload:vi.fn(),onMutation:vi.fn(async()=>true),
+      onClosePendingBusinessDays:vi.fn(async()=>undefined),
+      businessDayClosure:{businessDays:[{businessDayId:'day-1',businessDate:'2026-08-12',
+        status:'awaiting_close' as const,closedTableSessions:[],blockers:[{
+          tableSessionId:'table-session-1',tableCode:'VIP1',code:'PAYMENT_PENDING',count:2,
+          label:'仍有待确认付款',resolution:'请先确认付款终态',
+        }]}],closedBusinessDayCount:0,closedTableSessionCount:0,blockedTableSessionCount:1},
+    }))
+    const denied=render(workbench([]),['reconciliation.view'])
+    expect(allowed).toContain('检查并结束')
+    expect(allowed).toContain('VIP1')
+    expect(allowed).toContain('请先确认付款终态')
+    expect(denied).not.toContain('检查并结束')
+  })
 })
 
 function render(view: CashierWorkbenchView, permissions = auth().permissions): string {

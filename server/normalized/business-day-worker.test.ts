@@ -38,6 +38,12 @@ describe('BusinessDayRolloverWorker', () => {
       cutoff: '06:00:00',
       created: true,
       rolledOverBusinessDayIds: ['a1000000-0000-4000-8000-000000000010'],
+      closure: {
+        businessDays: [],
+        closedBusinessDayCount: 0,
+        closedTableSessionCount: 0,
+        blockedTableSessionCount: 0,
+      },
     })
     expect(queries.some((sql) => sql.includes('FOR UPDATE SKIP LOCKED'))).toBe(true)
     expect(queries.filter((sql) => sql.includes('INSERT INTO mbox.audit_events'))).toHaveLength(2)
@@ -60,6 +66,7 @@ describe('BusinessDayRolloverWorker', () => {
     await expect(worker.run(scope, 'worker:business-day')).resolves.toMatchObject({
       created: false,
       rolledOverBusinessDayIds: [],
+      closure: { closedBusinessDayCount: 0,closedTableSessionCount: 0,blockedTableSessionCount: 0 },
     })
   })
 })

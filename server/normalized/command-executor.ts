@@ -282,7 +282,7 @@ async function completeIdempotency<Result>(
   }
 }
 
-async function appendAuditEvent(
+export async function appendAuditEvent(
   transaction: ScopedTransaction,
   event: Readonly<AuditEvent>,
 ): Promise<void> {
@@ -320,7 +320,7 @@ async function appendAuditEvent(
   if (inserted.rowCount !== 1) throw new Error('Audit event insert did not affect exactly one row')
 }
 
-async function appendOutboxMessage(
+export async function appendOutboxMessage(
   transaction: ScopedTransaction,
   message: Readonly<OutboxMessage>,
 ): Promise<void> {

@@ -39,6 +39,7 @@ Page({
           dateText: dateText(item.startsAt),
           feeText: item.feeAmountMinor > 0 ? `${money(item.feeAmountMinor)}${item.feeBasis === 'per_person' ? '/人' : '/次'}` : '免费',
           availabilityText: item.remainingCapacity > 0 ? `余 ${item.remainingCapacity} 位` : '已满',
+          sequenceText: `SUPERHIGH · ${String(item.sortOrder || 0).toString().padStart(2, '0')}`,
           registrationText: registration
             ? (PAYMENT_RESOLUTION_NAMES[registration.resolutionState] || REGISTRATION_STATUS_NAMES[registration.status] || '状态待确认')
             : item.registrationStatus ? (REGISTRATION_STATUS_NAMES[item.registrationStatus] || '状态待确认') : '',

@@ -11,10 +11,10 @@
       <image class="gate-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX Logo" />
       <view class="browse-intro__copy">
         <text class="gate-kicker">M-BOX · TONIGHT MENU</text><text class="gate-title">先看今晚，再决定怎么喝</text>
-        <text class="gate-copy">菜单与价格可以提前浏览；到店扫描桌码后，才会连接实时库存、加入购物车并付款。</text>
+        <text class="gate-copy">先看看今晚的选择；到店扫码后即可点单与付款。</text>
       </view>
       <button class="primary-button gate-button" bindtap="scanTable">到店扫码点单</button>
-      <text class="gate-note">浏览菜单不要求加入会员，也不会创建订单</text>
+      <text class="gate-note">浏览不下单，也不要求加入会员</text>
     </view>
     <view wx:if="{{error}}" class="error-banner gate-error">{{error}}</view>
 
@@ -41,7 +41,7 @@
   <view wx:elif="{{connectionState === 'waiting'}}" class="gate-wrap">
     <view class="waiting-pulse"><view></view></view>
     <text class="gate-kicker">{{table.displayName}}</text><text class="gate-title">桌位已识别</text>
-    <text class="gate-copy">{{connectionMessage}}菜单将在开台后自动出现。</text>
+    <text class="gate-copy">{{connectionMessage}}开台后即可点单。</text>
     <button class="secondary-button gate-button" bindtap="retryTable">刷新开台状态</button>
   </view>
 
@@ -62,7 +62,7 @@
     </view>
 
     <view wx:if="{{checkoutLocked && !pendingPayment}}" class="checkout-recovery">
-      <view><text>上次提交结果待确认</text><text>将复用同一请求，不会重复建单</text></view>
+      <view><text>订单正在确认</text><text>请稍候或重新确认</text></view>
       <button bindtap="retryCheckout" loading="{{busy}}">重试确认</button>
       <button bindtap="openAccount">先查桌账</button>
     </view>
@@ -76,7 +76,7 @@
     </view>
 
     <view class="recommend-entry">
-      <view class="recommend-entry__copy"><text>不知道怎么选？</text><text>告诉我们今晚的场景与偏好，只展示最多三套清晰方案。</text></view>
+      <view class="recommend-entry__copy"><text>需要一点灵感？</text><text>选个场景，给你几组适合今晚的搭配。</text></view>
       <view class="decision-row">
         <picker mode="selector" range="{{occasionOptions}}" range-key="name" value="{{occasionIndex}}" bindchange="onOccasionChange"><view><text>今晚</text><text>{{occasionOptions[occasionIndex].name}}</text></view></picker>
         <picker mode="selector" range="{{alcoholOptions}}" range-key="name" value="{{alcoholIndex}}" bindchange="onAlcoholChange"><view><text>偏好</text><text>{{alcoholOptions[alcoholIndex].name}}</text></view></picker>
@@ -85,7 +85,7 @@
     </view>
 
     <view wx:if="{{recommendations.length}}" class="section recommendation-section">
-      <view class="section-title"><text>为本桌安排</text><text class="section-link">价格与理由都说清</text></view>
+      <view class="section-title"><text>今晚推荐</text><text class="section-link">按你的选择</text></view>
       <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="recommend-scroll"><view class="recommend-row">
         <view wx:for="{{recommendations}}" wx:key="productId" class="recommend-card">
           <image wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
@@ -100,7 +100,7 @@
     </view>
 
     <view class="section product-section">
-      <view class="section-title"><text>今晚可点</text><text wx:if="{{benefitCount}}" class="section-link" bindtap="openBenefits">{{benefitCount}}项权益可用</text></view>
+      <view class="section-title"><text>菜单</text><text wx:if="{{benefitCount}}" class="section-link" bindtap="openBenefits">{{benefitCount}}项权益可用</text></view>
       <view wx:if="{{visibleProducts.length}}" class="product-list">
         <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row">
           <view class="product-media">

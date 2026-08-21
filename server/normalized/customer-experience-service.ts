@@ -2031,6 +2031,12 @@ export class CustomerExperienceService {
     ), { readOnly: true })
   }
 
+  supportContact(context: StaffCustomerExperienceContext) {
+    return this.transactions.run(context.scope, (transaction) => (
+      new CustomerExperienceRepository(transaction).staffSupportContact()
+    ), { readOnly: true })
+  }
+
   setFeature(
     context: StaffCustomerExperienceContext,
     input: Readonly<{
@@ -2049,11 +2055,15 @@ export class CustomerExperienceService {
         503,
       )
     }
+    const configuration = input.featureCode === 'customer.support.contact'
+      ? (input.rolloutState === 'disabled' && Object.keys(input.configuration).length === 0
+        ? {} : supportContactConfiguration(input.configuration))
+      : input.configuration
     return this.commands.execute({
       scope: context.scope,
       operationScope: 'customer.experience.feature.set',
       idempotencyKey: input.idempotencyKey,
-      requestFingerprint: fingerprint(input),
+      requestFingerprint: fingerprint({ ...input, configuration }),
       resultCodec: objectCodec<{ featureCode: string; rolloutState: string }>(),
     }, async (transaction) => {
       const result = await transaction.query<{ feature_code: string; rollout_state: string }>(`
@@ -2073,7 +2083,7 @@ export class CustomerExperienceService {
         transaction.scope.storeId,
         input.featureCode,
         input.rolloutState,
-        JSON.stringify(input.configuration),
+        JSON.stringify(configuration),
         input.reason,
         context.employeeId,
       ])
@@ -3336,6 +3346,37 @@ function deterministicPublicId(kind: string, storeId: string, idempotencyKey: st
 function deterministicProviderId(prefix: string, storeId: string, idempotencyKey: string): string {
   const digest = createHash('sha256').update(`${prefix}:${storeId}:${idempotencyKey}`).digest('hex').slice(0, 32)
   return `${prefix}${digest}`
+}
+
+function supportContactConfiguration(value: JsonObject): JsonObject {
+  const allowed = new Set(['phone', 'phoneLabel', 'wecomName', 'wecomQrImageUrl'])
+  if (Object.keys(value).some((key) => !allowed.has(key))) {
+    throw new CustomerExperienceRequestError(
+      '门店联系配置只支持电话、电话名称、企业微信名称和企业微信二维码',
+      'SUPPORT_CONTACT_CONFIGURATION_INVALID',
+    )
+  }
+  const phone = supportText(value.phone, '门店联系电话', 6, 31)
+  if (!/^[+0-9][0-9 -]{5,30}$/.test(phone)) {
+    throw new CustomerExperienceRequestError('门店联系电话格式不正确', 'SUPPORT_CONTACT_CONFIGURATION_INVALID')
+  }
+  const phoneLabel = supportText(value.phoneLabel, '电话名称', 2, 40)
+  const wecomName = supportText(value.wecomName, '企业微信名称', 2, 40)
+  const qr = value.wecomQrImageUrl === null || value.wecomQrImageUrl === undefined || value.wecomQrImageUrl === ''
+    ? null : supportText(value.wecomQrImageUrl, '企业微信二维码地址', 1, 1000)
+  if (qr !== null && !((qr.startsWith('/') && !qr.startsWith('//')) || /^https:\/\//i.test(qr))) {
+    throw new CustomerExperienceRequestError('企业微信二维码必须是站内图片路径或HTTPS地址', 'SUPPORT_CONTACT_CONFIGURATION_INVALID')
+  }
+  return { phone, phoneLabel, wecomName, wecomQrImageUrl: qr }
+}
+
+function supportText(value: unknown, label: string, min: number, max: number): string {
+  if (typeof value !== 'string') throw new CustomerExperienceRequestError(`${label}格式不正确`, 'SUPPORT_CONTACT_CONFIGURATION_INVALID')
+  const normalized = value.trim()
+  if (normalized.length < min || normalized.length > max) {
+    throw new CustomerExperienceRequestError(`${label}长度不正确`, 'SUPPORT_CONTACT_CONFIGURATION_INVALID')
+  }
+  return normalized
 }
 
 function fingerprint(value: unknown): string {

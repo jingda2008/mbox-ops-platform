@@ -2,7 +2,7 @@ const {
   getGuestSession,
   getMiniBootstrap,
   getReservations,
-  getTodayPerformances,
+  getReservationPerformances,
   getCustomerBenefits,
   enrollMembership,
 } = require('../../utils/api')
@@ -10,6 +10,11 @@ const { getRuntimeConfig } = require('../../config/index')
 const { dateTime } = require('../../utils/format')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 const MEMBERSHIP_INVITE_DISMISSED_KEY = 'mbox.membership.invite.dismissed.until.v1'
+const HOME_CAMPAIGN_DISMISSED_PREFIX = 'mbox.home.campaign.dismissed.v1:'
+
+function shanghaiDate() {
+  return new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10)
+}
 
 function settled(loader, fallback) {
   return loader().then((value) => value).catch(() => fallback)
@@ -48,7 +53,7 @@ function performanceView(view) {
 }
 
 function reservationView(items) {
-  const active = (items || []).filter((item) => !['cancelled', 'expired', 'no_show'].includes(item.status))
+  const active = (items || []).filter((item) => ['pending', 'confirmed'].includes(item.status))
     .sort((left, right) => String(left.arrivalAt).localeCompare(String(right.arrivalAt)))[0]
   if (!active) return null
   return {
@@ -62,9 +67,10 @@ const CONTENT_TAB_TARGETS = new Set([
   '/pages/home/index', '/pages/reservations/index', '/pages/order/index',
   '/pages/community/index', '/pages/profile/index',
 ])
+const CONTENT_PAGE_TARGETS = new Set(['/pages/performances/index'])
 
 function safeContentTarget(value) {
-  return CONTENT_TAB_TARGETS.has(value) ? value : null
+  return CONTENT_TAB_TARGETS.has(value) || CONTENT_PAGE_TARGETS.has(value) ? value : null
 }
 
 function contentCardView(item) {
@@ -109,6 +115,8 @@ Page({
     upcomingReservation: null,
     performance: null,
     performancePanel: '',
+    homeCampaign: null,
+    homeCampaignVisible: false,
     visitState: 'prearrival',
     canEnter: false,
     hasTableSession: false,
@@ -152,7 +160,7 @@ Page({
     const [bootstrap, reservations, performances, benefits] = await Promise.all([
       settled(() => getMiniBootstrap(), { membership: null, activities: [] }),
       settled(() => getReservations(), { reservations: [] }),
-      settled(() => getTodayPerformances(), null),
+      settled(() => getReservationPerformances(shanghaiDate()), null),
       settled(() => getCustomerBenefits(), []),
     ])
     const app = getApp()
@@ -163,20 +171,26 @@ Page({
       && !app.globalData.membershipInvitePresented,
     )
     if (inviteVisible) app.globalData.membershipInvitePresented = true
+    const campaign = (bootstrap.content || []).filter((item) => (
+      item && item.type === 'presale'
+    )).sort((left, right) => Number(left.priority || 0) - Number(right.priority || 0))[0] || null
+    const campaignDismissed = campaign && Number(wx.getStorageSync(`${HOME_CAMPAIGN_DISMISSED_PREFIX}${campaign.code}`) || 0) > Date.now()
     this.setData({
       membership: bootstrap.membership || null,
       membershipTerms: bootstrap.membershipTerms || null,
       membershipInviteVisible: inviteVisible,
       benefitCount: (benefits || []).reduce((sum, item) => sum + Number(item.quantityAvailable || 0), 0),
       upcomingActivity: activityFeatureView(bootstrap.activities && bootstrap.activities.length ? bootstrap.activities[0] : null),
-      editorialCards: (bootstrap.content || []).filter((item) => item && !['activity', 'show'].includes(item.type))
+      editorialCards: (bootstrap.content || []).filter((item) => item && !['activity', 'show', 'presale'].includes(item.type))
         .sort((left, right) => Number(left.priority || 0) - Number(right.priority || 0))
         .slice(0, 2).map(contentCardView),
       monthlyPerformanceCard: contentCardView((bootstrap.content || []).find((item) => item && item.type === 'show') || {
-        code: '', type: 'show', title: '当月演出安排', summary: '按日期查看门店已经发布的演出场次', ctaLabel: '查看安排', targetPath: '/pages/reservations/index',
+        code: 'published-performance-calendar', type: 'show', title: '本月演出安排', summary: '按日期查看门店已发布的演出与舞台阵容', ctaLabel: '查看安排', targetPath: '/pages/performances/index',
       }),
       upcomingReservation: reservationView(reservations.reservations),
       performance: performanceView(performances),
+      homeCampaign: campaign ? contentCardView(campaign) : null,
+      homeCampaignVisible: Boolean(campaign && !campaignDismissed && !inviteVisible),
     })
     if (!this.data.hasTableSession) {
       this.setData({ loading: false, visitState: 'prearrival', canEnter: false, table: null })
@@ -238,16 +252,7 @@ Page({
   closePerformancePanel() { this.setData({ performancePanel: '' }) },
 
   openMonthlyPerformance() {
-    const card = this.data.monthlyPerformanceCard
-    if (!card || !card.code) {
-      wx.switchTab({ url: '/pages/reservations/index' })
-      return
-    }
-    if (!card.targetPath || card.targetPath === '/pages/home/index') {
-      wx.showModal({ title: card.title, content: card.summary, showCancel: false, confirmText: '知道了' })
-      return
-    }
-    wx.switchTab({ url: card.targetPath })
+    wx.navigateTo({ url: '/pages/performances/index' })
   },
 
   openFeaturedActivity() {
@@ -328,6 +333,20 @@ Page({
 
   declineMembershipInvite() {
     this.dismissMembershipInvite()
+  },
+  dismissHomeCampaign() {
+    const campaign = this.data.homeCampaign
+    if (campaign && campaign.code) {
+      wx.setStorageSync(`${HOME_CAMPAIGN_DISMISSED_PREFIX}${campaign.code}`, Date.now() + 24 * 60 * 60 * 1000)
+    }
+    this.setData({ homeCampaignVisible: false })
+  },
+  openHomeCampaign() {
+    const card = this.data.homeCampaign
+    this.dismissHomeCampaign()
+    if (!card || !card.targetPath || card.targetPath === '/pages/home/index') return
+    if (CONTENT_TAB_TARGETS.has(card.targetPath)) wx.switchTab({ url: card.targetPath })
+    else wx.navigateTo({ url: card.targetPath })
   },
   noop() {},
 })

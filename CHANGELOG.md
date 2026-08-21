@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.0-rc.114 - 2026-08-22
+
+- Routes production database backup evidence through the payment-server OSS
+  relay instead of requiring the private application host to carry an OSS RAM
+  role or long-lived cloud credential.
+- Binds the relayed backup to the release SHA and current database identity,
+  then rechecks freshness, file sizes and SHA-256 values before any database
+  write or candidate activation.
+- Adds a PostgreSQL 16 client boundary for the legacy CentOS 7 production host;
+  the backend/staff/database scope remains on schema `098` and the WeChat
+  mini-program is not uploaded or replaced.
+- Supersedes rc.113, whose tag was rejected by the existing metadata gate before
+  image construction because its package version still identified rc.112.
+
 ## 1.0.0-rc.112 - 2026-08-22
 
 - Replaces the GNU tar 1.28-only adapter-tree hash with a deterministic,

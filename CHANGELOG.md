@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.0-rc.118 - 2026-08-22
+
+- Stages each post-cutover verification report under a hidden temporary name,
+  verifies its local and remote SHA-256, then atomically publishes the final
+  filename that activation watches.
+- Prevents activation from parsing an incomplete report while `scp` is still
+  writing it; deployment and completion evidence remain exact-count,
+  exact-size and exact-digest gates.
+- Supersedes rc.117, whose candidate, public cutover and evidence uploads all
+  passed before the completion-report arrival race triggered an automatic
+  rollback to healthy rc.104. Schema remained `098`; the WeChat mini-program
+  was untouched.
+
 ## 1.0.0-rc.117 - 2026-08-22
 
 - Verifies the relayed `SHA256SUMS` ledger itself by exact object key, byte size

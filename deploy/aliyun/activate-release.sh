@@ -1237,7 +1237,7 @@ archive_release_evidence() {
   local verification_report=$3
   local relay_marker=$4
   local expected_count=0
-  local expected_sha relative_path expected_key expected_bytes
+  local expected_sha relative_path expected_key expected_bytes ledger_sha ledger_key ledger_bytes
 
   if [ "${external_evidence_relay}" = 0 ]; then
     MBOX_OSS_VERIFICATION_REPORT="${verification_report}" \
@@ -1261,6 +1261,15 @@ archive_release_evidence() {
   jq -e --arg prefix "${object_prefix}" \
     '.verified == true and .authMode == "EcsRamRole" and .prefix == $prefix' \
     "${verification_report}" >/dev/null
+
+  ledger_key="${object_prefix}/SHA256SUMS"
+  ledger_sha=$(sha256sum "${evidence_directory}/SHA256SUMS" | awk '{print $1}')
+  ledger_bytes=$(stat -c '%s' "${evidence_directory}/SHA256SUMS")
+  jq -e --arg key "${ledger_key}" --arg sha "${ledger_sha}" \
+    --argjson bytes "${ledger_bytes}" \
+    'any(.objects[]; .key == $key and .sha256 == $sha and .bytes == $bytes and .verified == true)' \
+    "${verification_report}" >/dev/null
+  expected_count=$((expected_count + 1))
 
   while read -r expected_sha relative_path; do
     relative_path=${relative_path#\*}

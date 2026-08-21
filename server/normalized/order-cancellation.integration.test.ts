@@ -20,6 +20,8 @@ integration('unpaid order cancellation', () => {
   const roleId = randomUUID()
   let pool: Pool
   let repository: PostgresOrderCancellationRepository
+  let actionBusinessDate: string
+  let sourceBusinessDate: string
 
   beforeAll(async () => {
     await runNormalizedMigrations(databaseUrl!)
@@ -49,6 +51,17 @@ integration('unpaid order cancellation', () => {
     await pool.query(`INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id)
       SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions
       WHERE tenant_id=$1 AND store_id=$2 AND code='order.cancel_unpaid'`, [tenantId, storeId, roleId])
+    const businessDates = await pool.query<{ action_business_date: string; source_business_date: string }>(`
+      SELECT authoritative.business_date::text AS action_business_date,
+        (authoritative.business_date - 1)::text AS source_business_date
+      FROM mbox.stores store
+      CROSS JOIN LATERAL (
+        SELECT ((clock_timestamp() AT TIME ZONE store.timezone)-store.business_day_cutoff)::date
+          AS business_date
+      ) authoritative
+      WHERE store.tenant_id=$1 AND store.id=$2`, [tenantId, storeId])
+    actionBusinessDate = businessDates.rows[0]!.action_business_date
+    sourceBusinessDate = businessDates.rows[0]!.source_business_date
   })
 
   afterAll(async () => { await pool?.end() })
@@ -59,7 +72,7 @@ integration('unpaid order cancellation', () => {
       scope: { tenantId, storeId },
       orderId: fixture.orderId,
       employeeId,
-      businessDate: '2026-08-21',
+      businessDate: actionBusinessDate,
       reasonCode: 'test_cleanup' as const,
       reasonNote: '跨营业日测试订单，现场确认未付款',
       idempotencyKey: `cancel-unpaid:${randomUUID()}`,
@@ -69,8 +82,8 @@ integration('unpaid order cancellation', () => {
 
     expect(first).toMatchObject({
       orderPublicId: fixture.publicId,
-      sourceBusinessDate: '2026-08-20',
-      actionBusinessDate: '2026-08-21',
+      sourceBusinessDate,
+      actionBusinessDate,
       deliveredItemCount: 1,
       cancelledItemCount: 1,
       cancelledKdsTaskCount: 1,
@@ -100,7 +113,7 @@ integration('unpaid order cancellation', () => {
       scope: { tenantId, storeId },
       orderId: fixture.orderId,
       employeeId,
-      businessDate: '2026-08-21',
+      businessDate: actionBusinessDate,
       reasonCode: 'guest_left',
       reasonNote: '客人离店，但支付结果尚未明确',
       idempotencyKey: `cancel-unpaid:${randomUUID()}`,
@@ -115,7 +128,7 @@ integration('unpaid order cancellation', () => {
       scope: { tenantId, storeId },
       orderId: fixture.orderId,
       employeeId,
-      businessDate: '2026-08-21',
+      businessDate: actionBusinessDate,
       reasonCode: 'test_cleanup' as const,
       reasonNote: '并发重试测试订单，现场确认未付款',
       idempotencyKey: `cancel-unpaid:${randomUUID()}`,
@@ -149,8 +162,9 @@ integration('unpaid order cancellation', () => {
     await pool.query(`INSERT INTO mbox.table_sessions(
       id,tenant_id,store_id,table_id,public_id,business_date,guest_count,capacity_at_open,
       guest_profile_snapshot,status,opened_by_employee_id
-    ) VALUES($1,$2,$3,$4,$5,'2026-08-20',2,4,'{}','open',$6)`, [
+    ) VALUES($1,$2,$3,$4,$5,$7::date,2,4,'{}','open',$6)`, [
       sessionId, tenantId, storeId, orderTableId, `session-${randomUUID()}`, employeeId,
+      sourceBusinessDate,
     ])
     await pool.query(`INSERT INTO mbox.products(
       id,tenant_id,store_id,code,name,category_code,fulfillment_station,product_snapshot

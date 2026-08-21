@@ -201,6 +201,26 @@
       "automaticBlocker": "activation waits for deployment and completion reports from the external evidence host and matches every staged object by prefix, count, size and SHA256 before it can complete",
       "fixCommit": "2e26005cae90e5e2932139f5efe943bc296540d3",
       "status": "covered"
+    },
+    {
+      "id": "REL-021",
+      "category": "relay-checksum-ledger-count",
+      "rootCause": "The external relay uploaded the SHA256SUMS ledger together with every listed evidence file, but activation counted only ledger entries while comparing against all uploaded objects, so a complete eight-object archive was rejected as if it contained an extra object.",
+      "earliestDetectionStage": "cutover_verified",
+      "regressionTest": "scripts/release-system-policy.test.mjs",
+      "automaticBlocker": "activation now verifies the SHA256SUMS object by exact key, size and SHA256 before checking every ledger entry and requiring the combined exact object count",
+      "fixCommit": "da5cb5ec78d19f818df07c4da7649b0e36d8033b",
+      "status": "covered"
+    },
+    {
+      "id": "REL-022",
+      "category": "fixed-business-date-test-fixture",
+      "rootCause": "The unpaid-order cancellation integration fixture hard-coded the release-day business date, so the database correctly rejected it as stale when CI crossed the store's Asia/Shanghai 06:00 business-day boundary.",
+      "earliestDetectionStage": "pull-request normalized_database",
+      "regressionTest": "server/normalized/order-cancellation.integration.test.ts",
+      "automaticBlocker": "the fixture derives the authoritative action business date from the test store timezone and cutoff and creates source facts on the immediately preceding business date",
+      "fixCommit": "7b4b3153436d1c2ed5e078c63bedbaf470b14611",
+      "status": "covered"
     }
   ]
 }

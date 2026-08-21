@@ -37,7 +37,9 @@ The public origin remains `https://mbox.shmbox.com`. Deployment reaches the
 production origin through the payment-server jump path to `10.100.80.223:22`.
 The payment server's existing short-lived RAM role relays immutable OSS release
 evidence; no cloud credential is added to the production application host or
-container.
+container. The frozen deployment command supplies `MBOX_EVIDENCE_SSH_HOST`,
+port and key explicitly, and verifies the relayed report against the exact
+release SHA and version before activation.
 
 ## Verification boundary
 

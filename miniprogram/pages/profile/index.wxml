@@ -40,7 +40,7 @@
     <view class="section personal-entry-section">
       <view class="section-title"><text>我的资料与偏好</text><text class="section-link">自主设置</text></view>
       <button class="personal-entry" bindtap="openPreferenceSettings"><view><text>昵称、生日与到店偏好</text><text>一次选好，之后随时修改</text></view><text>›</text></button>
-      <button class="personal-entry" bindtap="openPrivacy"><view><text>手机号与隐私</text><text>查看、替换或停用已验证手机号</text></view><text>›</text></button>
+      <button class="personal-entry" bindtap="openPrivacy"><view><text>隐私政策</text><text>了解个人信息处理范围</text></view><text>›</text></button>
       <button wx:if="{{supportContact}}" class="personal-entry" bindtap="openContact"><view><text>联系我们</text><text>{{supportContact.phoneLabel}} · 企业微信</text></view><text>›</text></button>
     </view>
 
@@ -74,6 +74,18 @@
         </view>
       </scroll-view>
       <text class="member-content-boundary">已到账的赠送和权益只在上方“我的权益与赠送”中显示。</text>
+    </view>
+
+    <view class="section support-section">
+      <view class="section-title"><text>服务与支持</text><text class="section-link">门店协助</text></view>
+      <button class="journey-row support-row" bindtap="openCustomerService" hover-class="button-hover">
+        <view><text>WECHAT CARE</text><text>联系微信客服</text></view>
+        <text>咨询 →</text>
+      </button>
+      <button class="journey-row support-row" bindtap="openPrivacy" hover-class="button-hover">
+        <view><text>PRIVACY</text><text>隐私政策</text></view>
+        <text>查看 →</text>
+      </button>
     </view>
   </block>
 </view>

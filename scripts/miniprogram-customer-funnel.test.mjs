@@ -43,6 +43,21 @@ test('membership consent stays unchecked and phone authorization appears only af
   assert.match(termsView, /wx:if="\{\{agreedToPolicies\}\}"[^>]*class="accept-button wx-phone-button"[^>]*open-type="getPhoneNumber\|agreePrivacyAuthorization"/)
 })
 
+test('profile opens the configured WeCom customer-service conversation through the native WeChat API', async () => {
+  const [profileLogic, profileView, runtimeConfig] = await Promise.all([
+    read('miniprogram/pages/profile/index.js'),
+    read('miniprogram/pages/profile/index.wxml'),
+    read('miniprogram/config/index.js'),
+  ])
+
+  assert.match(profileLogic, /wx\.openCustomerServiceChat\(/)
+  assert.match(profileLogic, /extInfo:\s*\{\s*url\s*\}/)
+  assert.match(profileLogic, /corpId/)
+  assert.match(profileView, /bindtap="openCustomerService"/)
+  assert.match(runtimeConfig, /wecomCorpId/)
+  assert.match(runtimeConfig, /wecomCustomerServiceUrl/)
+})
+
 test('native tab bar uses a consistent icon system with a restrained green selected state', async () => {
   const appConfig = JSON.parse(await read('miniprogram/app.json'))
   const tabBar = appConfig.tabBar
@@ -85,7 +100,7 @@ test('official M-BOX artwork replaces temporary letter marks with restrained cir
   assert.match(homeStyle, /\.member-invite-logo\s*\{[^}]*width:\s*126rpx[^}]*border-radius:\s*50%/)
   assert.match(profileStyle, /\.member-card__logo\s*\{[^}]*width:\s*60rpx[^}]*border-radius:\s*50%/)
   assert.match(orderStyle, /\.gate-logo\s*\{[^}]*width:\s*84rpx[^}]*border-radius:\s*50%/)
-  for (const [image, size] of [[fullLogo, 512], [badgeLogo, 192]]) {
+  for (const [image, size] of [[fullLogo, 360], [badgeLogo, 140]]) {
     assert.deepEqual([...image.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10])
     assert.equal(image.readUInt32BE(16), size)
     assert.equal(image.readUInt32BE(20), size)

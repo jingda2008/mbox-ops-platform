@@ -36,15 +36,29 @@
 
       <view class="section live-section">
         <view class="section-title"><text>今晚现场</text><text class="section-link">{{performance ? performance.stateText : '当晚动态'}}</text></view>
-        <button class="performance-compact {{performance && performance.stateText === '正在演出' ? 'is-live' : ''}}" bindtap="openTonightSchedule">
+        <view class="performance-compact {{performance && performance.stateText === '正在演出' ? 'is-live' : ''}}" bindtap="openTonightSchedule" hover-class="button-hover" role="button" aria-role="button">
           <image wx:if="{{performance && performance.imageUrl}}" src="{{performance.imageUrl}}" mode="aspectFill" />
           <view class="performance-compact__shade"></view>
-          <view class="performance-compact__content"><text class="performance-compact__state">{{performance ? performance.summary : 'TONIGHT'}}</text><text class="performance-compact__name">{{performance && performance.hasSchedule ? performance.performer : '今晚演出安排'}}</text><text class="performance-compact__time">{{performance && performance.hasSchedule ? performance.timeText : '当晚暂无已发布场次'}}</text></view>
-          <text class="performance-compact__action">整晚安排 →</text>
-        </button>
+          <view class="performance-compact__content">
+            <text class="performance-compact__state">{{performance ? performance.summary : 'TONIGHT'}}</text>
+            <text class="performance-compact__name">{{performance && performance.hasSchedule ? performance.performer : '今晚演出安排'}}</text>
+            <view class="performance-compact__footer">
+              <text class="performance-compact__time">{{performance && performance.hasSchedule ? performance.timeText : '当晚暂无已发布场次'}}</text>
+              <text class="performance-compact__action">整晚安排 →</text>
+            </view>
+          </view>
+        </view>
         <view class="performance-shortcuts">
-          <button bindtap="openPerformerProfile"><text>ARTIST</text><text>{{performance && performance.hasSchedule ? performance.performer : '乐队及歌手介绍'}}</text><text>{{performance && performance.tags ? performance.tags : '认识今晚的舞台阵容'}}</text></button>
-          <button bindtap="openMonthlyPerformance"><text>MONTHLY</text><text>{{monthlyPerformanceCard.title}}</text><text>{{monthlyPerformanceCard.summary}}</text></button>
+          <view class="performance-shortcut" bindtap="openPerformerProfile" hover-class="button-hover" role="button" aria-role="button">
+            <text class="performance-shortcut__kicker">ARTIST</text>
+            <text class="performance-shortcut__title">{{performance && performance.hasSchedule ? performance.performer : '乐队与歌手'}}</text>
+            <text class="performance-shortcut__copy">{{performance && performance.tags ? performance.tags : '认识今晚舞台阵容'}}</text>
+          </view>
+          <view class="performance-shortcut" bindtap="openMonthlyPerformance" hover-class="button-hover" role="button" aria-role="button">
+            <text class="performance-shortcut__kicker">MONTHLY</text>
+            <text class="performance-shortcut__title">{{monthlyPerformanceCard.title || '当月演出'}}</text>
+            <text class="performance-shortcut__copy">{{monthlyPerformanceCard.summary || '按日期查看演出场次'}}</text>
+          </view>
         </view>
       </view>
 
@@ -62,15 +76,29 @@
     <block wx:else>
       <view class="section live-section">
         <view class="section-title"><text>今晚现场</text><text class="section-link">{{performance ? performance.stateText : '当晚动态'}}</text></view>
-        <button class="performance-compact {{performance && performance.stateText === '正在演出' ? 'is-live' : ''}}" bindtap="openTonightSchedule">
+        <view class="performance-compact {{performance && performance.stateText === '正在演出' ? 'is-live' : ''}}" bindtap="openTonightSchedule" hover-class="button-hover" role="button" aria-role="button">
           <image wx:if="{{performance && performance.imageUrl}}" src="{{performance.imageUrl}}" mode="aspectFill" />
           <view class="performance-compact__shade"></view>
-          <view class="performance-compact__content"><text class="performance-compact__state">{{performance ? performance.summary : 'TONIGHT'}}</text><text class="performance-compact__name">{{performance && performance.hasSchedule ? performance.performer : '今晚演出安排'}}</text><text class="performance-compact__time">{{performance && performance.hasSchedule ? performance.timeText : '当晚暂无已发布场次'}}</text></view>
-          <text class="performance-compact__action">整晚安排 →</text>
-        </button>
+          <view class="performance-compact__content">
+            <text class="performance-compact__state">{{performance ? performance.summary : 'TONIGHT'}}</text>
+            <text class="performance-compact__name">{{performance && performance.hasSchedule ? performance.performer : '今晚演出安排'}}</text>
+            <view class="performance-compact__footer">
+              <text class="performance-compact__time">{{performance && performance.hasSchedule ? performance.timeText : '当晚暂无已发布场次'}}</text>
+              <text class="performance-compact__action">整晚安排 →</text>
+            </view>
+          </view>
+        </view>
         <view class="performance-shortcuts">
-          <button bindtap="openPerformerProfile"><text>ARTIST</text><text>{{performance && performance.hasSchedule ? performance.performer : '乐队及歌手介绍'}}</text><text>{{performance && performance.tags ? performance.tags : '认识今晚的舞台阵容'}}</text></button>
-          <button bindtap="openMonthlyPerformance"><text>MONTHLY</text><text>{{monthlyPerformanceCard.title}}</text><text>{{monthlyPerformanceCard.summary}}</text></button>
+          <view class="performance-shortcut" bindtap="openPerformerProfile" hover-class="button-hover" role="button" aria-role="button">
+            <text class="performance-shortcut__kicker">ARTIST</text>
+            <text class="performance-shortcut__title">{{performance && performance.hasSchedule ? performance.performer : '乐队与歌手'}}</text>
+            <text class="performance-shortcut__copy">{{performance && performance.tags ? performance.tags : '认识今晚舞台阵容'}}</text>
+          </view>
+          <view class="performance-shortcut" bindtap="openMonthlyPerformance" hover-class="button-hover" role="button" aria-role="button">
+            <text class="performance-shortcut__kicker">MONTHLY</text>
+            <text class="performance-shortcut__title">{{monthlyPerformanceCard.title || '当月演出'}}</text>
+            <text class="performance-shortcut__copy">{{monthlyPerformanceCard.summary || '按日期查看演出场次'}}</text>
+          </view>
         </view>
       </view>
 

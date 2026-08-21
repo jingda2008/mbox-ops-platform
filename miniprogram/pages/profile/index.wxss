@@ -769,6 +769,16 @@
 }
 .member-content-boundary { display: block; margin-top: 10rpx; color: #827970; font-size: 18rpx; line-height: 1.5; }
 .member-card__links { display: flex; margin-top: 18rpx; flex-wrap: wrap; gap: 14rpx; }.member-card__links .member-ledger-link { flex: 1 1 260rpx; margin-top: 0; }
+.support-section {
+  display: grid;
+  gap: 10rpx;
+}
+.support-section .section-title {
+  margin-bottom: 8rpx;
+}
+.support-row {
+  box-shadow: 0 8rpx 22rpx rgba(42, 32, 23, .04);
+}
 @media (max-width: 350px) {
   .redemption-card {
     width: 380rpx;

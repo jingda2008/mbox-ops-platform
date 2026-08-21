@@ -22,6 +22,7 @@ const {
 const { getTableConnection } = require('../../utils/session')
 const { dateTime, money } = require('../../utils/format')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
+const { getRuntimeConfig } = require('../../config/index')
 
 const LEVEL_NAMES = { member: 'M-BOX会员', silver: '银卡会员', gold: '金卡会员' }
 const BENEFIT_NAMES = { gift_product: '赠送好礼', discount: '折扣权益', credit: '金额权益', access: '专属资格', other: '会员权益' }
@@ -352,6 +353,45 @@ Page({
   },
 
   openPrivacy() { wx.navigateTo({ url: '/pages/privacy/index' }) },
+
+  openCustomerService() {
+    const config = getRuntimeConfig()
+    const url = String(config.wecomCustomerServiceUrl || '').trim()
+    const corpId = String(config.wecomCorpId || '').trim()
+    if (!url) {
+      wx.showToast({ title: '客服链接未配置', icon: 'none' })
+      return
+    }
+    if (!corpId) {
+      wx.showModal({
+        title: '客服暂未开通',
+        content: '已配置客服链接，但仍需填写企业微信企业ID，并在小程序后台「功能 → 客服 → 微信客服」完成绑定后才能打开会话。',
+        showCancel: false,
+        confirmText: '知道了',
+      })
+      return
+    }
+    if (typeof wx.openCustomerServiceChat !== 'function') {
+      wx.showToast({ title: '当前微信版本过低，请升级后重试', icon: 'none' })
+      return
+    }
+    wx.openCustomerServiceChat({
+      extInfo: { url },
+      corpId,
+      fail(error) {
+        const raw = String((error && (error.errMsg || error.message)) || '')
+        const unbound = /not\s*bind|未绑定|no permission|没有权限/i.test(raw)
+        wx.showModal({
+          title: unbound ? '小程序尚未绑定微信客服' : '暂时无法打开客服',
+          content: unbound
+            ? '代码侧企业ID与客服链接已配置。请管理员登录微信公众平台 → 功能 → 客服 → 微信客服，绑定企业ID：ww205bd249a5431d8b（须与小程序同主体）。绑定后再用真机重试。'
+            : ('微信返回：' + (raw || '未知错误') + '。请确认已在公众平台绑定该企业微信客服，并用真机（非仅模拟器）打开。'),
+          showCancel: false,
+          confirmText: '知道了',
+        })
+      },
+    })
+  },
 
   onAgreementChange(event) {
     const values = event && event.detail && Array.isArray(event.detail.value) ? event.detail.value : []

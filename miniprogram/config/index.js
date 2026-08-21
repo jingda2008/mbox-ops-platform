@@ -16,6 +16,9 @@ const DEVELOPMENT_DEFAULTS = Object.freeze({
   identityTenantId: '10000000-0000-4000-8000-000000000001',
   identityStoreId: '20000000-0000-4000-8000-000000000001',
   wechatAppId: 'wxdb9f2dc413484f2d',
+  // 微信客服：须与小程序后台「功能 → 客服 → 微信客服」绑定的企业 ID 一致。
+  wecomCorpId: 'ww205bd249a5431d8b',
+  wecomCustomerServiceUrl: 'https://work.weixin.qq.com/kfid/kfca1f1f83497d7b082',
 })
 
 const DEPLOYMENT_DEFAULTS = Object.freeze({
@@ -33,6 +36,8 @@ const DEPLOYMENT_DEFAULTS = Object.freeze({
   identityTenantId: '10000000-0000-4000-8000-000000000001',
   identityStoreId: '20000000-0000-4000-8000-000000000001',
   wechatAppId: 'wxdb9f2dc413484f2d',
+  wecomCorpId: 'ww205bd249a5431d8b',
+  wecomCustomerServiceUrl: 'https://work.weixin.qq.com/kfid/kfca1f1f83497d7b082',
 })
 
 function compact(object) {

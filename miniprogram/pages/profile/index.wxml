@@ -108,5 +108,17 @@
       </scroll-view>
       <text class="member-content-boundary">已到账的赠送和权益只在上方“我的权益与赠送”中显示。</text>
     </view>
+
+    <view class="section support-section">
+      <view class="section-title"><text>服务与支持</text><text class="section-link">门店协助</text></view>
+      <button class="journey-row support-row" bindtap="openCustomerService" hover-class="button-hover">
+        <view><text>WECHAT CARE</text><text>联系微信客服</text></view>
+        <text>咨询 →</text>
+      </button>
+      <button class="journey-row support-row" bindtap="openPrivacy" hover-class="button-hover">
+        <view><text>PRIVACY</text><text>隐私政策</text></view>
+        <text>查看 →</text>
+      </button>
+    </view>
   </block>
 </view>

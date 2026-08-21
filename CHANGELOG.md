@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.0-rc.115 - 2026-08-22
+
+- Builds candidate container arguments as a single non-empty array so the
+  production host's GNU Bash 4.2 can start a non-contract release under
+  `set -u` without treating an optional empty argument array as undefined.
+- Applies the same construction to the contract candidate restart and keeps
+  all worker-adapter, read-only candidate, image and database gates unchanged.
+- Supersedes rc.114, whose production attempt stopped before candidate startup
+  or traffic cutover; rc.104 remained healthy on schema `098` and the verified
+  database backup was retained.
+
 ## 1.0.0-rc.114 - 2026-08-22
 
 - Routes production database backup evidence through the payment-server OSS

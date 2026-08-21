@@ -72,7 +72,7 @@ test('configuration and migration checks precede every database write and applic
   const backup = activate.indexOf('backup_path=$(DATABASE_SERVICE=', writerDrain)
   const migrate = activate.indexOf('migrate-normalized.js')
   const provision = activate.indexOf('provision-normalized-release.js')
-  const candidate = activate.indexOf('docker run -d',provision)
+  const candidate = activate.indexOf('docker "${candidate_docker_args[@]}"', provision)
   assert.ok(config > 0 && config < migrationCompatibility)
   assert.ok(migrationCompatibility < candidateDatabaseIdentity
     && candidateDatabaseIdentity < databaseIdentityGate && databaseIdentityGate < writerDrain
@@ -307,4 +307,13 @@ test('cutover routes by verified candidate IP before the previous release is sto
   const verifier = await read('../deploy/aliyun/verify-public-app.sh')
   assert.match(verifier, /target_route_failures[\s\S]*-ge "\$\{attempts\}"[\s\S]*sleep 2/)
   assert.doesNotMatch(verifier, /target_route_failures[\s\S]*-ge 2/)
+})
+
+test('candidate docker arguments remain non-empty on the production host Bash version', async () => {
+  const activate = await read('../deploy/aliyun/activate-release.sh')
+  assert.doesNotMatch(activate, /candidate_runtime_args/)
+  assert.match(activate, /candidate_docker_args=\([\s\S]*?run -d[\s\S]*?--env-file "\$\{release_env\}"/)
+  assert.match(activate, /docker "\$\{candidate_docker_args\[@\]\}"/)
+  assert.match(activate, /full_candidate_docker_args=\([\s\S]*?run -d[\s\S]*?--env-file "\$\{release_env\}"/)
+  assert.match(activate, /docker "\$\{full_candidate_docker_args\[@\]\}"/)
 })

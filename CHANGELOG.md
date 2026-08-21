@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.0-rc.117 - 2026-08-22
+
+- Verifies the relayed `SHA256SUMS` ledger itself by exact object key, byte size
+  and SHA-256, then includes it in the strict uploaded-object count.
+- Retains per-file verification for every ledger entry and still rejects any
+  missing, modified or additional evidence object.
+- Supersedes rc.116, whose candidate and public cutover passed before the valid
+  eight-object deployment archive was miscounted as seven entries plus one
+  unexpected ledger and automatically rolled back to healthy rc.104. Schema
+  remained `098`; the WeChat mini-program was untouched.
+
 ## 1.0.0-rc.116 - 2026-08-22
 
 - Extends the two-host evidence relay through the post-cutover deployment and

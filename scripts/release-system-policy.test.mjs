@@ -224,3 +224,18 @@ test('candidate deep routes are verified without routing public traffic before c
   assert.ok(privateVerification > 0 && privateVerification < cutover)
   assert.doesNotMatch(activate.slice(0, cutover), /Caddyfile\.candidate|caddy reload --config \/tmp/)
 })
+
+test('cutover routes by verified candidate IP before the previous release is stopped', async () => {
+  const activate = await read('../deploy/aliyun/activate-release.sh')
+  const cutover = activate.indexOf('candidate_deep_verified cutover_started')
+  const routedCutover = activate.indexOf('/tmp/Caddyfile.cutover-candidate --adapter caddyfile', cutover)
+  const publicVerification = activate.indexOf('verify_release_at "${public_url}" 15', routedCutover)
+  const stopPrevious = activate.indexOf('docker stop -t 30 "${active_container}"', publicVerification)
+  assert.ok(cutover > 0 && cutover < routedCutover)
+  assert.ok(routedCutover < publicVerification && publicVerification < stopPrevious)
+  assert.match(activate.slice(0, cutover), /sed "s\/mbox-app:8787\/\$\{candidate_ip\}:8787\/g"/)
+
+  const verifier = await read('../deploy/aliyun/verify-public-app.sh')
+  assert.match(verifier, /target_route_failures[\s\S]*-ge "\$\{attempts\}"[\s\S]*sleep 2/)
+  assert.doesNotMatch(verifier, /target_route_failures[\s\S]*-ge 2/)
+})

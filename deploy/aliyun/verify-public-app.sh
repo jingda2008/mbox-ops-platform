@@ -104,11 +104,12 @@ for _ in $(seq 1 "${attempts}"); do
     >/dev/null 2>&1; then
     verify_all_app_shells && exit 0
     target_route_failures=$((target_route_failures + 1))
-    if [ "${target_route_failures}" -ge 2 ]; then
-      printf 'public application shell verification failed twice for release %s\n' "${expected_sha}" >&2
+    if [ "${target_route_failures}" -ge "${attempts}" ]; then
+      printf 'public application shell verification failed %s times for release %s\n' \
+        "${target_route_failures}" "${expected_sha}" >&2
       exit 1
     fi
-    sleep 0.25
+    sleep 2
     continue
   fi
   observed_sha=$(printf '%s' "${response}" | jq -r '.commitSha // empty' 2>/dev/null || true)

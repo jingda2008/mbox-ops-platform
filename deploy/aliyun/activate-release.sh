@@ -1012,9 +1012,28 @@ if [ "${contract_migration}" = 1 ]; then
       and .runtimeRole=="normal" and .writeEnabled==true' >/dev/null
 fi
 
+candidate_ip=$(docker inspect "${candidate}" \
+  --format "{{with index .NetworkSettings.Networks \"${network}\"}}{{.IPAddress}}{{end}}")
+[[ "${candidate_ip}" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]
+cutover_current_caddy=$(mktemp "${release_dir}/.Caddyfile.cutover-current.XXXXXX")
+cutover_candidate_caddy=$(mktemp "${release_dir}/.Caddyfile.cutover-candidate.XXXXXX")
+docker exec "${caddy_container}" cat /etc/caddy/Caddyfile > "${cutover_current_caddy}"
+grep -q 'mbox-app:8787' "${cutover_current_caddy}"
+sed "s/mbox-app:8787/${candidate_ip}:8787/g" "${cutover_current_caddy}" \
+  > "${cutover_candidate_caddy}"
+docker cp "${cutover_candidate_caddy}" "${caddy_container}:/tmp/Caddyfile.cutover-candidate"
+docker exec "${caddy_container}" caddy validate \
+  --config /tmp/Caddyfile.cutover-candidate --adapter caddyfile >/dev/null
+
 release_state_transition "${state_file}" candidate_deep_verified cutover_started
 : > "${release_dir}/.cutover-started"
 rollback_container="mbox-app-rollback-${short_sha}-$(date +%Y%m%d-%H%M%S)"
+# Keep the previous container recoverable while Caddy begins serving the
+# already deep-verified candidate through its immutable bridge address. This
+# avoids the stop/rename and Docker-DNS refresh window splitting HTML and assets.
+docker exec "${caddy_container}" caddy reload \
+  --config /tmp/Caddyfile.cutover-candidate --adapter caddyfile >/dev/null
+verify_release_at "${public_url}" 15
 docker update --restart=no "${active_container}" >/dev/null
 docker stop -t 30 "${active_container}" >/dev/null
 docker rename "${active_container}" "${rollback_container}"
@@ -1024,6 +1043,7 @@ docker update --restart=unless-stopped "${active_container}" >/dev/null
 docker exec "${caddy_container}" \
   caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
 verify_release_at "${public_url}" 15
+rm -f "${cutover_current_caddy}" "${cutover_candidate_caddy}"
 release_state_transition "${state_file}" cutover_started cutover_verified
 if [ "${contract_migration}" = 1 ] && docker inspect "${maintenance_container}" >/dev/null 2>&1; then
   docker update --restart=no "${maintenance_container}" >/dev/null

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.0-rc.107 - 2026-08-21
+
+- Routes Caddy to the already verified candidate by its fixed private address
+  before stopping the previous release, eliminating the stop/rename and stale
+  Docker-DNS window that could split the application shell from its assets.
+- Keeps the public readiness and deep-route check fail-closed, but gives
+  transient shell/asset propagation the same bounded retry window as readiness
+  instead of rolling back after two immediate failures.
+- Supersedes rc.106, whose production attempt restored rc.104 successfully
+  after the post-cutover shell check failed. The WeChat mini-program remains
+  outside the release bundle.
+
 ## 1.0.0-rc.106 - 2026-08-21
 
 - Verifies the currently active release directly through its private container

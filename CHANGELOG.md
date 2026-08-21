@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.0-rc.108 - 2026-08-21
+
+- Requires the production SSH target and public URL to be supplied explicitly,
+  rather than silently defaulting a production release to the validation host.
+- Resolves both the public origin and deployment target from the target server
+  before any remote release write or database action, and rejects a deployment
+  when they do not share an address.
+- Supersedes rc.107, whose production attempt safely restored rc.104 after the
+  deployment host and `mbox.shmbox.com` were proven to be different servers.
+  The WeChat mini-program remains outside the release bundle.
+
 ## 1.0.0-rc.107 - 2026-08-21
 
 - Routes Caddy to the already verified candidate by its fixed private address

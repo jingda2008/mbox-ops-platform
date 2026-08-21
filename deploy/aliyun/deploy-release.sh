@@ -6,11 +6,16 @@ cd "${repo_root}"
 
 : "${MBOX_RELEASE_TAG:?MBOX_RELEASE_TAG is required, for example v1.0.0-rc.48}"
 
+deployment_tier=${MBOX_DEPLOYMENT_TIER:-validation}
+if [ "${deployment_tier}" = production ]; then
+  : "${MBOX_SSH_HOST:?MBOX_SSH_HOST is required for a production deployment}"
+  : "${MBOX_PUBLIC_URL:?MBOX_PUBLIC_URL is required for a production deployment}"
+fi
+
 ssh_host=${MBOX_SSH_HOST:-139.224.254.60}
 ssh_port=${MBOX_SSH_PORT:-6122}
 ssh_user=${MBOX_SSH_USER:-root}
 ssh_key=${MBOX_SSH_KEY_PATH:-${HOME}/.ssh/mbox_aliyun_ed25519}
-deployment_tier=${MBOX_DEPLOYMENT_TIER:-validation}
 public_url=${MBOX_PUBLIC_URL:-https://139.224.254.60}
 backup_max_age_minutes=${MBOX_BACKUP_MAX_AGE_MINUTES:-720}
 bundle_dir=${MBOX_RELEASE_BUNDLE_DIR:-${repo_root}/.runtime/deploy/${MBOX_RELEASE_TAG}}
@@ -21,7 +26,17 @@ case "${deployment_tier}" in
   *) echo "MBOX_DEPLOYMENT_TIER must be validation or production" >&2; exit 1 ;;
 esac
 [[ "${backup_max_age_minutes}" =~ ^[0-9]+$ ]]
+[[ "${ssh_host}" =~ ^[A-Za-z0-9.-]+$ ]]
 test -f "${ssh_key}"
+
+public_host=$(node -e "
+  const url = new URL(process.argv[1]);
+  if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
+    throw new Error('MBOX_PUBLIC_URL must be an HTTPS origin without credentials, path, query or fragment');
+  }
+  if (!/^[A-Za-z0-9.-]+$/.test(url.hostname)) throw new Error('MBOX_PUBLIC_URL host is invalid');
+  process.stdout.write(url.hostname);
+" "${public_url%/}/")
 
 mkdir -p "${bundle_dir}"
 if [ ! -f "${bundle_dir}/release-manifest.json" ]; then
@@ -179,6 +194,25 @@ scp_options=(
   -o ConnectTimeout=15
   -P "${ssh_port}"
 )
+
+# This deployment script only owns a direct public origin. Refuse to touch a
+# database when the public hostname resolves to another server: an unmanaged
+# external edge cannot be switched atomically by this release transaction.
+public_origin_addresses=$(ssh "${ssh_options[@]}" "${ssh_target}" \
+  "getent ahostsv4 '${public_host}' | awk '{print \$1}' | sort -u")
+deployment_target_addresses=$(ssh "${ssh_options[@]}" "${ssh_target}" \
+  "getent ahostsv4 '${ssh_host}' | awk '{print \$1}' | sort -u")
+test -n "${public_origin_addresses}"
+test -n "${deployment_target_addresses}"
+if ! comm -12 \
+  <(printf '%s\n' "${public_origin_addresses}" | sort -u) \
+  <(printf '%s\n' "${deployment_target_addresses}" | sort -u) \
+  | grep -q .; then
+  printf 'deployment target mismatch: public host %s resolves to [%s], but SSH target %s resolves to [%s]\n' \
+    "${public_host}" "$(printf '%s' "${public_origin_addresses}" | tr '\n' ',')" \
+    "${ssh_host}" "$(printf '%s' "${deployment_target_addresses}" | tr '\n' ',')" >&2
+  exit 1
+fi
 
 printf 'release=%s\nsha=%s\nimage=%s\nimage_digest=%s\ntier=%s\nbundle=%s\n' \
   "${release_version}" "${release_sha}" "${image_tag}" "${image_digest}" \

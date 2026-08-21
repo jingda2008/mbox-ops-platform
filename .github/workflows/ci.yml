@@ -350,6 +350,12 @@ jobs:
             | jq -er '.manifests[] | select(.annotations["org.opencontainers.image.ref.name"] != null) | .digest' \
             | head -n 1)
           test "${image_digest}" = "sha256:$(tar -xOf "${archive}" "blobs/sha256/${image_digest#sha256:}" | sha256sum | awk '{print $1}')"
+          platform_manifest_digest=$(tar -xOf "${archive}" "blobs/sha256/${image_digest#sha256:}" \
+            | jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' \
+            | head -n 1)
+          platform_image_digest=$(tar -xOf "${archive}" "blobs/sha256/${platform_manifest_digest#sha256:}" \
+            | jq -er '.config.digest')
+          test "${platform_image_digest}" = "$(docker image inspect "${IMAGE_TAG}" --format '{{.Id}}')"
           node scripts/generate-migration-manifest.mjs \
             --directory database/normalized-migrations \
             --output release-artifact/migration-manifest.json >/dev/null
@@ -364,6 +370,7 @@ jobs:
           MBOX_BUNDLE_CONFIG_VERSION=normalized-runtime-config/v1 \
           MBOX_BUNDLE_IMAGE_TAG="${IMAGE_TAG}" \
           MBOX_BUNDLE_IMAGE_DIGEST="${image_digest}" \
+          MBOX_BUNDLE_PLATFORM_IMAGE_DIGEST="${platform_image_digest}" \
           MBOX_MIGRATION_MANIFEST=release-artifact/migration-manifest.json \
           MBOX_STORE_CONFIG=release-artifact/mbox-lujiazui.store.json \
           MBOX_CATALOG_CONFIG=release-artifact/menu-catalog-2026-07-27.json \

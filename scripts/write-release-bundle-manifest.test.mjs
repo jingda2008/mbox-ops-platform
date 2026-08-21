@@ -40,6 +40,7 @@ test('release manifest binds the exact store and catalog configuration digests',
       MBOX_BUNDLE_CONFIG_VERSION: 'normalized-runtime-config/v1',
       MBOX_BUNDLE_IMAGE_TAG: 'mbox:test',
       MBOX_BUNDLE_IMAGE_DIGEST: `sha256:${'c'.repeat(64)}`,
+      MBOX_BUNDLE_PLATFORM_IMAGE_DIGEST: `sha256:${'d'.repeat(64)}`,
       MBOX_MIGRATION_MANIFEST: migration,
       MBOX_STORE_CONFIG: store,
       MBOX_CATALOG_CONFIG: catalog,
@@ -48,7 +49,9 @@ test('release manifest binds the exact store and catalog configuration digests',
     },
   })
   const manifest = JSON.parse(readFileSync(output, 'utf8'))
-  assert.equal(manifest.schemaVersion, 5)
+  assert.equal(manifest.schemaVersion, 6)
+  assert.equal(manifest.imageDigest, `sha256:${'c'.repeat(64)}`)
+  assert.equal(manifest.platformImageDigest, `sha256:${'d'.repeat(64)}`)
   assert.deepEqual(manifest.deploymentScope, {
     kind: 'normalized-staff-service-database',
     includes: ['normalized-web', 'normalized-server', 'normalized-database'],

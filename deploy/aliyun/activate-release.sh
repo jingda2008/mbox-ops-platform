@@ -80,6 +80,7 @@ source_branch=$(jq -er '.sourceBranch' "${manifest}")
 runtime_config_version=$(jq -er '.runtimeConfigVersion' "${manifest}")
 image_tag=$(jq -er '.imageTag' "${manifest}")
 expected_digest=$(jq -er '.imageDigest' "${manifest}")
+expected_platform_image_digest=$(jq -er '.platformImageDigest' "${manifest}")
 archive_name=$(jq -er '.archive' "${manifest}")
 expected_archive_sha=$(jq -er '.archiveSha256' "${manifest}")
 migration_digest=$(jq -er '.migration.digest' "${manifest}")
@@ -121,6 +122,7 @@ emit_release_audit() {
 
 [[ "${release_sha}" =~ ^[0-9a-f]{40}$ ]]
 [[ "${expected_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+[[ "${expected_platform_image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
 [[ "${expected_schema_version}" =~ ^[0-9]+$ ]]
 [[ "${archive_name}" != */* ]]
 [[ "${store_config_name}" != */* ]]
@@ -163,6 +165,7 @@ platform_manifest_blob="blobs/sha256/${platform_manifest_hash}"
 test "$(tar -xOf "${archive}" "${platform_manifest_blob}" | sha256sum | awk '{print $1}')" = "${platform_manifest_hash}"
 
 archive_config_digest=$(tar -xOf "${archive}" "${platform_manifest_blob}" | jq -er '.config.digest')
+test "${archive_config_digest}" = "${expected_platform_image_digest}"
 archive_config_hash=${archive_config_digest#sha256:}
 archive_config_blob="blobs/sha256/${archive_config_hash}"
 test "$(tar -xOf "${archive}" "${archive_config_blob}" | sha256sum | awk '{print $1}')" = "${archive_config_hash}"
@@ -173,7 +176,7 @@ docker load --input "${archive}" >/dev/null
 actual_image_digest=$(docker image inspect "${image_tag}" --format '{{.Id}}')
 actual_sha=$(docker image inspect "${image_tag}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
 actual_version=$(docker image inspect "${image_tag}" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')
-test "${actual_image_digest}" = "${expected_digest}"
+test "${actual_image_digest}" = "${expected_platform_image_digest}"
 test "${actual_sha}" = "${release_sha}"
 test "${actual_version}" = "${release_version}"
 test "${source_branch}" = main
@@ -343,6 +346,7 @@ test -n "${previous_release_dir}"
 test -f "${previous_release_dir}/release-manifest.json"
 previous_release_sha=$(jq -er '.releaseSha' "${previous_release_dir}/release-manifest.json")
 previous_release_digest=$(jq -er '.imageDigest' "${previous_release_dir}/release-manifest.json")
+previous_platform_image_digest=$(jq -r '.platformImageDigest // empty' "${previous_release_dir}/release-manifest.json")
 previous_schema_version=$(jq -er '.migration.count' "${previous_release_dir}/release-manifest.json")
 previous_deployment_tier=$(jq -r '.tier // empty' "${previous_release_dir}/deployment-manifest.json" 2>/dev/null || true)
 if [ -z "${previous_deployment_tier}" ]; then
@@ -356,7 +360,15 @@ previous_deployment_tier=${previous_deployment_tier:-validation}
 case "${previous_deployment_tier}" in validation|production) ;; *) exit 1 ;; esac
 test "$(docker inspect "${active_container}" \
   --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "${previous_release_sha}"
-test "$(docker inspect "${active_container}" --format '{{.Image}}')" = "${previous_release_digest}"
+active_platform_image_digest=$(docker inspect "${active_container}" --format '{{.Image}}')
+if [ -z "${previous_platform_image_digest}" ]; then
+  # Releases before manifest schema 6 did not freeze the loaded platform image
+  # ID. The running container is accepted only together with its immutable
+  # revision label and the ready response's archived OCI digest below.
+  previous_platform_image_digest=${active_platform_image_digest}
+fi
+[[ "${previous_platform_image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+test "${active_platform_image_digest}" = "${previous_platform_image_digest}"
 previous_ready_file=$(mktemp "${release_dir}/.previous-ready.XXXXXX")
 fetch_active_ready_response "${previous_release_sha}" "${previous_release_digest}" \
   "${previous_schema_version}" "${previous_deployment_tier}" "${previous_ready_file}" 12
@@ -849,20 +861,20 @@ rollback_on_error() {
       --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)
     active_digest=$(docker inspect "${active_container}" --format '{{.Image}}' 2>/dev/null)
   fi
-  if [ "${active_sha}" = "${release_sha}" ] && [ "${active_digest}" = "${expected_digest}" ]; then
+  if [ "${active_sha}" = "${release_sha}" ] && [ "${active_digest}" = "${expected_platform_image_digest}" ]; then
     docker update --restart=no "${active_container}" >/dev/null 2>&1
     docker stop -t 20 "${active_container}" >/dev/null 2>&1
     docker rename "${active_container}" "${failed_container}" >/dev/null 2>&1
   elif [ -n "${active_sha}" ] \
     && { [ "${active_sha}" != "${previous_release_sha}" ] \
-      || [ "${active_digest}" != "${previous_release_digest}" ]; }; then
+      || [ "${active_digest}" != "${previous_platform_image_digest}" ]; }; then
     rollback_ok=0
   fi
 
   if ! docker inspect "${active_container}" >/dev/null 2>&1; then
     if [ -n "${rollback_container}" ] \
       && [ "$(docker inspect "${rollback_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" = "${previous_release_sha}" ] \
-      && [ "$(docker inspect "${rollback_container}" --format '{{.Image}}' 2>/dev/null)" = "${previous_release_digest}" ]; then
+      && [ "$(docker inspect "${rollback_container}" --format '{{.Image}}' 2>/dev/null)" = "${previous_platform_image_digest}" ]; then
       docker rename "${rollback_container}" "${active_container}" >/dev/null 2>&1
     else
       rollback_ok=0
@@ -870,7 +882,7 @@ rollback_on_error() {
   fi
 
   if [ "$(docker inspect "${active_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" = "${previous_release_sha}" ] \
-    && [ "$(docker inspect "${active_container}" --format '{{.Image}}' 2>/dev/null)" = "${previous_release_digest}" ]; then
+    && [ "$(docker inspect "${active_container}" --format '{{.Image}}' 2>/dev/null)" = "${previous_platform_image_digest}" ]; then
     docker start "${active_container}" >/dev/null 2>&1
     docker update --restart=unless-stopped "${active_container}" >/dev/null 2>&1
   else
@@ -887,7 +899,7 @@ rollback_on_error() {
   fi
   test "$(docker inspect "${active_container}" --format '{{.State.Running}}' 2>/dev/null)" = true || rollback_ok=0
   test "$(docker inspect "${active_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" = "${previous_release_sha}" || rollback_ok=0
-  test "$(docker inspect "${active_container}" --format '{{.Image}}' 2>/dev/null)" = "${previous_release_digest}" || rollback_ok=0
+  test "$(docker inspect "${active_container}" --format '{{.Image}}' 2>/dev/null)" = "${previous_platform_image_digest}" || rollback_ok=0
   "${public_verifier}" "${public_url}" "${previous_release_sha}" \
     "${previous_release_digest}" "${previous_schema_version}" \
     "${previous_deployment_tier}" 5 "${previous_public_extended_identity}" >/dev/null 2>&1 || rollback_ok=0
@@ -1061,12 +1073,15 @@ jq -n \
   --arg releaseVersion "${release_version}" \
   --arg imageTag "${image_tag}" \
   --arg imageDigest "${expected_digest}" \
+  --arg platformImageDigest "${expected_platform_image_digest}" \
   --arg migrationDigest "${migration_digest}" \
   --argjson migrationChanged "${migration_changed}" \
   --arg backupPath "${backup_path}" \
   --arg rollbackContainer "${rollback_container}" \
   --arg previousReleaseDir "${previous_release_dir}" \
   --arg previousReleaseSha "${previous_release_sha}" \
+  --arg previousPlatformImageDigest "${previous_platform_image_digest}" \
+  --arg previousDeploymentTier "${previous_deployment_tier}" \
   --arg storeConfigSha256 "${store_config_sha}" \
   --arg catalogConfigSha256 "${catalog_config_sha}" \
   --argjson previousIdentityComplete "${previous_public_extended_identity}" \
@@ -1086,12 +1101,15 @@ jq -n \
     releaseVersion: $releaseVersion,
     imageTag: $imageTag,
     imageDigest: $imageDigest,
+    platformImageDigest: $platformImageDigest,
     migrationDigest: $migrationDigest,
     migrationChanged: ($migrationChanged == 1),
     backupPath: (if $backupPath == "" then null else $backupPath end),
     rollbackContainer: $rollbackContainer,
     previousReleaseDir: (if $previousReleaseDir == "" then null else $previousReleaseDir end),
     previousReleaseSha: (if $previousReleaseSha == "" then null else $previousReleaseSha end),
+    previousPlatformImageDigest: $previousPlatformImageDigest,
+    previousDeploymentTier: $previousDeploymentTier,
     previousSchemaVersion: $previousSchemaVersion,
     targetSchemaVersion: $targetSchemaVersion,
     rollbackMode: (if $contractMigration == 1

@@ -70,6 +70,7 @@ release_sha=$(read_manifest releaseSha)
 release_version=$(read_manifest releaseVersion)
 image_tag=$(read_manifest imageTag)
 image_digest=$(read_manifest imageDigest)
+platform_image_digest=$(read_manifest platformImageDigest)
 archive_name=$(read_manifest archive)
 archive_sha=$(read_manifest archiveSha256)
 store_config_name=$(read_manifest configuration.store.file)
@@ -79,6 +80,7 @@ catalog_config_sha=$(read_manifest configuration.catalog.sha256)
 
 [[ "${release_sha}" =~ ^[0-9a-f]{40}$ ]]
 [[ "${image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+[[ "${platform_image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
 [[ "${archive_name}" != */* ]]
 test "${MBOX_RELEASE_TAG}" = "v${release_version}"
 test -f "${bundle_dir}/${archive_name}"
@@ -214,8 +216,8 @@ if ! comm -12 \
   exit 1
 fi
 
-printf 'release=%s\nsha=%s\nimage=%s\nimage_digest=%s\ntier=%s\nbundle=%s\n' \
-  "${release_version}" "${release_sha}" "${image_tag}" "${image_digest}" \
+printf 'release=%s\nsha=%s\nimage=%s\nimage_digest=%s\nplatform_image_digest=%s\ntier=%s\nbundle=%s\n' \
+  "${release_version}" "${release_sha}" "${image_tag}" "${image_digest}" "${platform_image_digest}" \
   "${deployment_tier}" "${bundle_dir}"
 
 if [ "${dry_run}" = 1 ]; then

@@ -181,6 +181,16 @@
       "automaticBlocker": "the application host prepares a release-bound read-only snapshot, the evidence host uploads and reads it back through OSS, and activation revalidates freshness, database identity, object count, size and SHA256 before any database write",
       "fixCommit": "9a5719444e2eac46be854d0c09e83c5968012896",
       "status": "covered"
+    },
+    {
+      "id": "REL-019",
+      "category": "legacy-host-bash-empty-array",
+      "rootCause": "Activation expanded an optional empty Bash array while nounset mode was enabled; GNU Bash 4.2 on the production host treats that expansion as an unbound variable.",
+      "earliestDetectionStage": "provisioned",
+      "regressionTest": "scripts/release-system-policy.test.mjs",
+      "automaticBlocker": "candidate Docker arguments are assembled as one non-empty array and the exact construction is exercised on the production host Bash version before release",
+      "fixCommit": "33e8bfbe554cb9bfdb9444ae62ac8f005528827f",
+      "status": "covered"
     }
   ]
 }

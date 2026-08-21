@@ -191,6 +191,16 @@
       "automaticBlocker": "candidate Docker arguments are assembled as one non-empty array and the exact construction is exercised on the production host Bash version before release",
       "fixCommit": "33e8bfbe554cb9bfdb9444ae62ac8f005528827f",
       "status": "covered"
+    },
+    {
+      "id": "REL-020",
+      "category": "post-cutover-evidence-relay",
+      "rootCause": "The backup evidence used the payment-server relay, but post-cutover deployment and completion archives still invoked OSS locally on the private application host after public readiness succeeded.",
+      "earliestDetectionStage": "cutover_verified",
+      "regressionTest": "scripts/release-system-policy.test.mjs",
+      "automaticBlocker": "activation waits for deployment and completion reports from the external evidence host and matches every staged object by prefix, count, size and SHA256 before it can complete",
+      "fixCommit": "2e26005cae90e5e2932139f5efe943bc296540d3",
+      "status": "covered"
     }
   ]
 }

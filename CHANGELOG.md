@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.100 - 2026-08-21
+
+- Publishes the inventory role correction under a new monotonic store
+  configuration version, `2026.08.21-v11`.
+- Supersedes `1.0.0-rc.99`, whose production candidate failed closed before
+  provisioning because it correctly refused different configuration content
+  under the already-published `2026.08.16-v10` identifier.
+
 ## 1.0.0-rc.99 - 2026-08-21
 
 - Restores the production inventory workflow permissions that the versioned

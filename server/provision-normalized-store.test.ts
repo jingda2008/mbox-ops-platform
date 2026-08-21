@@ -88,6 +88,7 @@ describe('normalized store provisioning config', () => {
       'utf8',
     )) as unknown
     const config = parseStoreProvisionConfig(source)
+    expect(config.version).toBe('2026.08.21-v11')
     const role = (code: string) => config.roles.find((candidate) => candidate.code === code)
 
     expect(role('MANAGER')?.permissions.filter((code) => code.startsWith('refund.')))

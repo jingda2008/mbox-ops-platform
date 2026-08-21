@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.0-rc.102 - 2026-08-21
+
+- Refines the customer mini-program experience with a compact, explicit
+  membership invitation: the customer must actively select the agreement
+  before WeChat phone authorization can be requested.
+- Adds the configured native WeCom customer-service entry to the profile
+  support area without collecting a phone number or opening a web fallback.
+- Adds staff-managed public content and customer-facing performance, profile,
+  preference and contact views while keeping the WeChat mini-program package
+  outside this server release bundle.
+- Continues to mark the public repository as a test-only system that is not
+  approved for commercial operation, real-money processing or production-store
+  use.
+
 ## 1.0.0-rc.101 - 2026-08-21
 
 - Adds the staff-side completion command for an arrived or seated reservation.

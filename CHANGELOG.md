@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.0-rc.106 - 2026-08-21
+
+- Verifies the currently active release directly through its private container
+  readiness endpoint before any database write, with exact commit, image,
+  schema, deployment-mode and worker-health checks.
+- Removes the deployment host's unreliable dependency on hairpin access to the
+  public domain during preflight; public verification remains mandatory after
+  cutover and during rollback recovery.
+- Carries forward the safe prior-business-day table closure from rc.105. The
+  release bundle still excludes the WeChat mini-program package.
+
 ## 1.0.0-rc.105 - 2026-08-21
 
 - Ends safe prior-business-day table sessions automatically instead of carrying

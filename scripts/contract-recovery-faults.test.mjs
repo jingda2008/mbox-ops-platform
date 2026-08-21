@@ -14,6 +14,61 @@ const identityStart = activate.indexOf('assert_backup_targets_application_databa
 const identityEnd = activate.indexOf('\nrestore_contract_database_and_previous_app() {', identityStart)
 assert.ok(identityStart > 0 && identityEnd > identityStart)
 const identityFunction = activate.slice(identityStart, identityEnd)
+const activeReadyStart = activate.indexOf('fetch_active_ready_response() {')
+const activeReadyEnd = activate.indexOf('\nwrite_release_failure() {', activeReadyStart)
+assert.ok(activeReadyStart > 0 && activeReadyEnd > activeReadyStart)
+const activeReadyFunction = activate.slice(activeReadyStart, activeReadyEnd)
+
+function runActiveReadyScenario(name, payload) {
+  const root = mkdtempSync(join(tmpdir(), `mbox-active-ready-${name}-`))
+  const output = join(root, 'ready.json')
+  const harness = join(root, 'harness.sh')
+  writeFileSync(harness, `#!/usr/bin/env bash
+set -Eeuo pipefail
+release_dir=${JSON.stringify(root)}
+active_container=mbox-app
+docker() {
+  [ "$1" = exec ] && [ "$2" = mbox-app ] || return 1
+  printf '%s' ${JSON.stringify(JSON.stringify(payload))}
+}
+sleep() { :; }
+${activeReadyFunction}
+fetch_active_ready_response ${'a'.repeat(40)} sha256:${'b'.repeat(64)} 98 production ${JSON.stringify(output)} 1
+`)
+  chmodSync(harness, 0o700)
+  let status = 0
+  try { execFileSync('bash', [harness], { stdio: 'pipe' }) } catch (error) { status = error.status }
+  return { status, output }
+}
+
+test('active release preflight accepts zero-padded schema only with exact healthy identity', () => {
+  const result = runActiveReadyScenario('healthy', {
+    status: 'ready',
+    commitSha: 'a'.repeat(40),
+    releaseImageDigest: `sha256:${'b'.repeat(64)}`,
+    schemaVersion: '098',
+    deploymentTier: 'production',
+    runtimeRole: 'normal',
+    writeEnabled: true,
+    workers: { status: 'healthy' },
+  })
+  assert.equal(result.status, 0)
+  assert.equal(JSON.parse(readFileSync(result.output, 'utf8')).schemaVersion, '098')
+})
+
+test('active release preflight rejects an unhealthy worker before database work', () => {
+  const result = runActiveReadyScenario('worker-unhealthy', {
+    status: 'ready',
+    commitSha: 'a'.repeat(40),
+    releaseImageDigest: `sha256:${'b'.repeat(64)}`,
+    schemaVersion: '098',
+    deploymentTier: 'production',
+    runtimeRole: 'normal',
+    writeEnabled: true,
+    workers: { status: 'degraded' },
+  })
+  assert.notEqual(result.status, 0)
+})
 
 function runIdentityScenario(name, identities) {
   const root = mkdtempSync(join(tmpdir(), `mbox-database-identity-${name}-`))

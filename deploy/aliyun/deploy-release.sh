@@ -201,6 +201,31 @@ rsync -a --partial "${rsync_resume_option}" \
 ssh "${ssh_options[@]}" "${ssh_target}" \
   "cd '${remote_release_dir}' && test \"\$(jq -r '.deploymentScripts | length' release-manifest.json)\" = 12 && jq -er '.deploymentScripts | to_entries[] | [.value.file,.value.sha256] | @tsv' release-manifest.json | while IFS=\$'\\t' read -r file sha; do test \"\$(sha256sum \"\$file\" | awk '{print \$1}')\" = \"\$sha\" || exit 1; done && chmod 0700 ./*.sh && './stage-release-evidence.sh' '${remote_release_dir}' '${remote_release_dir}/oss-ready-evidence' '${MBOX_RELEASE_TAG}'"
 
+# This check runs from the release operator, outside the production host, so it
+# proves that the current public edge is serving a healthy release without
+# relying on origin-server hairpin routing. Exact previous-release identity is
+# checked separately inside activate-release.sh before any database write.
+pre_activation_ready=${bundle_dir}/pre-activation-public-ready.json
+pre_activation_temporary=$(mktemp "${bundle_dir}/.pre-activation-ready.XXXXXX")
+pre_activation_verified=0
+for _ in $(seq 1 12); do
+  pre_activation_status=$(curl -sS --connect-timeout 3 --max-time 8 \
+    -H 'Accept: application/json' -H 'User-Agent: mbox-release-operator/1.0' \
+    -o "${pre_activation_temporary}" -w '%{http_code}' \
+    "${public_url}/api/ready" 2>/dev/null || true)
+  if [ "${pre_activation_status}" = 200 ] \
+    && jq -e --arg tier "${deployment_tier}" \
+      '.status == "ready" and .deploymentTier == $tier' \
+      "${pre_activation_temporary}" >/dev/null 2>&1; then
+    mv "${pre_activation_temporary}" "${pre_activation_ready}"
+    pre_activation_verified=1
+    break
+  fi
+  sleep 2
+done
+rm -f "${pre_activation_temporary}"
+test "${pre_activation_verified}" = 1
+
 ssh "${ssh_options[@]}" "${ssh_target}" \
   "'${remote_release_dir}/activate-release.sh' '${remote_release_dir}' '${deployment_tier}' '${public_url}' '${backup_max_age_minutes}'"
 

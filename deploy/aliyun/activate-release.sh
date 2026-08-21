@@ -207,6 +207,47 @@ fetch_public_ready_response() {
   return 1
 }
 
+# Before any database write, verify the currently active release directly
+# inside its container. The deployment host is not required to hairpin through
+# the public edge, whose DNS/routing path can differ from a real external
+# client even while the active release is healthy.
+fetch_active_ready_response() {
+  local expected_sha=$1 expected_digest=$2 expected_schema=$3 expected_tier=$4
+  local output_file=$5 attempts=${6:-12}
+  local attempt response temporary
+  [[ "${expected_sha}" =~ ^[0-9a-f]{40}$ ]]
+  [[ "${expected_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+  [[ "${expected_schema}" =~ ^[0-9]+$ ]]
+  case "${expected_tier}" in validation|production) ;; *) return 1 ;; esac
+  [[ "${attempts}" =~ ^[0-9]+$ ]]
+  [ "${attempts}" -ge 1 ] && [ "${attempts}" -le 30 ]
+  temporary=$(mktemp "${release_dir}/.active-ready.XXXXXX")
+  for attempt in $(seq 1 "${attempts}"); do
+    response=$(docker exec "${active_container}" \
+      wget -q -O - http://127.0.0.1:8787/api/ready 2>/dev/null || true)
+    if printf '%s' "${response}" | jq -e \
+      --arg sha "${expected_sha}" \
+      --arg digest "${expected_digest}" \
+      --argjson schema "${expected_schema}" \
+      --arg tier "${expected_tier}" \
+      '.status == "ready"
+        and .commitSha == $sha
+        and .releaseImageDigest == $digest
+        and (.schemaVersion | tonumber) == $schema
+        and .deploymentTier == $tier
+        and .runtimeRole == "normal"
+        and .writeEnabled == true
+        and .workers.status == "healthy"' >/dev/null 2>&1; then
+      printf '%s' "${response}" > "${temporary}"
+      mv "${temporary}" "${output_file}"
+      return 0
+    fi
+    sleep 2
+  done
+  rm -f "${temporary}"
+  return 1
+}
+
 write_release_failure() {
   local exit_code=$1 recovery=$2
   local stage active_healthy=false database_write_started=false cutover_started=false
@@ -300,10 +341,6 @@ release_state_transition "${state_file}" config_preflight_passed external_prefli
 previous_release_dir=$(readlink -f "${current_link}" 2>/dev/null || true)
 test -n "${previous_release_dir}"
 test -f "${previous_release_dir}/release-manifest.json"
-previous_ready_file=$(mktemp "${release_dir}/.previous-ready.XXXXXX")
-fetch_public_ready_response 200 "${previous_ready_file}" 12
-previous_ready=$(cat "${previous_ready_file}")
-rm -f "${previous_ready_file}"
 previous_release_sha=$(jq -er '.releaseSha' "${previous_release_dir}/release-manifest.json")
 previous_release_digest=$(jq -er '.imageDigest' "${previous_release_dir}/release-manifest.json")
 previous_schema_version=$(jq -er '.migration.count' "${previous_release_dir}/release-manifest.json")
@@ -313,20 +350,19 @@ if [ -z "${previous_deployment_tier}" ]; then
     | sed -n 's/^MBOX_DEPLOYMENT_TIER=//p' | head -n 1)
 fi
 previous_deployment_tier=${previous_deployment_tier:-validation}
-previous_public_extended_identity=0
-if printf '%s' "${previous_ready}" | jq -e \
-  --arg sha "${previous_release_sha}" \
-  --arg digest "${previous_release_digest}" \
-  --arg tier "${previous_deployment_tier}" \
-  '.commitSha == $sha and .releaseImageDigest == $digest and .deploymentTier == $tier' >/dev/null 2>&1; then
-  previous_public_extended_identity=1
-fi
-printf '%s' "${previous_ready}" | jq -e --arg sha "${previous_release_sha}" \
-  '.status == "ready" and .commitSha == $sha' >/dev/null
 [[ "${previous_release_sha}" =~ ^[0-9a-f]{40}$ ]]
 [[ "${previous_release_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
 [[ "${previous_schema_version}" =~ ^[0-9]+$ ]]
 case "${previous_deployment_tier}" in validation|production) ;; *) exit 1 ;; esac
+test "$(docker inspect "${active_container}" \
+  --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "${previous_release_sha}"
+test "$(docker inspect "${active_container}" --format '{{.Image}}')" = "${previous_release_digest}"
+previous_ready_file=$(mktemp "${release_dir}/.previous-ready.XXXXXX")
+fetch_active_ready_response "${previous_release_sha}" "${previous_release_digest}" \
+  "${previous_schema_version}" "${previous_deployment_tier}" "${previous_ready_file}" 12
+previous_ready=$(cat "${previous_ready_file}")
+rm -f "${previous_ready_file}"
+previous_public_extended_identity=1
 
 current_migration_digest=
 if [ -f "${current_link}/release-manifest.json" ]; then

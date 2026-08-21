@@ -171,6 +171,16 @@
       "automaticBlocker": "deterministic NUL-delimited path, mode and content hashing uses only production-verified find, sort -z, stat and sha256sum capabilities",
       "fixCommit": "b33e3846be45da18a9ec5954eb06d608203e59c5",
       "status": "covered"
+    },
+    {
+      "id": "REL-018",
+      "category": "database-backup-evidence-relay",
+      "rootCause": "Activation generated a valid production backup on the private application host but then required that host to have ossutil and an ECS RAM role, even though only the payment-server evidence relay is authorized for OSS.",
+      "earliestDetectionStage": "migration_compatible",
+      "regressionTest": "scripts/aliyun-evidence-pipeline.test.mjs",
+      "automaticBlocker": "the application host prepares a release-bound read-only snapshot, the evidence host uploads and reads it back through OSS, and activation revalidates freshness, database identity, object count, size and SHA256 before any database write",
+      "fixCommit": "9a5719444e2eac46be854d0c09e83c5968012896",
+      "status": "covered"
     }
   ]
 }

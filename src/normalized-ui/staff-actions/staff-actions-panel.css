@@ -200,6 +200,9 @@
 }
 .staff-action-card > button { flex: 0 0 auto; padding: 0 12px; border-radius: 6px; display: flex; align-items: center; gap: 5px; color: #fff; background: var(--staff-green); border-color: var(--staff-green); font-weight: 700; }
 .staff-action-card > button.is-readonly { color: #6c561f; background: #fff9e9; border-color: #dec98e; }
+.staff-action-card-actions { flex: 0 0 auto; display: grid; gap: 6px; }
+.staff-action-card-actions > button { min-height: 40px; padding: 0 12px; border-radius: 6px; display: flex; align-items: center; justify-content: center; gap: 5px; color: #fff; background: var(--staff-green); border-color: var(--staff-green); font-weight: 700; }
+.staff-action-card-actions > button.is-readonly { color: #6c561f; background: #fff9e9; border-color: #dec98e; }
 .staff-actions-more { margin: 2px 0 6px; color: var(--staff-muted); font-size: 12px; text-align: center; }
 .staff-actions-empty, .staff-actions-gate { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 130px; color: var(--staff-muted); }
 .staff-actions-announcer { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }

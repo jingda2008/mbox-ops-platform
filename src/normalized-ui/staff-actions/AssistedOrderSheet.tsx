@@ -48,7 +48,7 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
       setAccess(nextAccess)
       setProducts(catalog.filter((product) => {
         const amountMinor = Number(product.standardPrice?.amountMinor)
-        return product.isAvailable && Number.isSafeInteger(amountMinor) && amountMinor > 0
+        return product.status === 'active' && Number.isSafeInteger(amountMinor) && amountMinor > 0
       }))
       setPhase('ready')
     }).catch((reason: unknown) => {
@@ -283,13 +283,16 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
         {filtered.map((product) => {
           const quantity = quantities[product.id] ?? 0
           const configurationReady = product.inventoryConfigurationComplete
-          return <article className={`${quantity > 0 ? 'is-selected' : ''}${configurationReady ? '' : ' is-unavailable'}`} key={product.id}>
-            <div><strong>{product.name}</strong><small>{product.code} · {categoryLabel(product.categoryCode)}</small>{!configurationReady && <small>库存或配方配置未完成，暂不能下单</small>}</div>
+          const inventoryAvailable = product.inventoryAvailable
+          return <article className={`${quantity > 0 ? 'is-selected' : ''}${configurationReady && inventoryAvailable ? '' : ' is-unavailable'}`} key={product.id}>
+            <div><strong>{product.name}</strong><small>{product.code} · {categoryLabel(product.categoryCode)}</small>{!configurationReady
+              ? <small>库存或配方配置未完成，暂不能下单</small>
+              : !inventoryAvailable ? <small>当前可售库存不足，补货入库后自动恢复</small> : null}</div>
             <b>{money(Number(product.standardPrice?.amountMinor ?? 0), product.standardPrice?.currency ?? 'CNY')}</b>
             <div className="staff-order-quantity">
               {quantity > 0 && <button type="button" aria-label={`减少${product.name}`} onClick={() => changeQuantity(product.id, -1)}><Minus size={17} /></button>}
               {quantity > 0 && <span>{quantity}</span>}
-              <button type="button" aria-label={`添加${product.name}`} disabled={!configurationReady} onClick={() => changeQuantity(product.id, 1)}><Plus size={17} /></button>
+              <button type="button" aria-label={`添加${product.name}`} disabled={!configurationReady || !inventoryAvailable} onClick={() => changeQuantity(product.id, 1)}><Plus size={17} /></button>
             </div>
           </article>
         })}

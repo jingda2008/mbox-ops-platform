@@ -5,6 +5,7 @@ import { assistedProductAvailability } from './assisted-order-product'
 function product(
   inventoryConfigurationComplete: boolean,
   fulfillmentStation: AssistedOrderCatalogProduct['fulfillmentStation'] = 'bar',
+  inventoryAvailable = true,
 ): AssistedOrderCatalogProduct {
   return {
     id: 'product-1', code: 'TEST-1YUAN', name: '一元联调商品', productKind: 'single',
@@ -18,6 +19,7 @@ function product(
     standardPrice: { amountMinor: '100', currency: 'CNY' }, costAmountMinor: null,
     bundleComponents: [], productSnapshot: {}, isAvailable: true,
     inventoryConfigurationComplete,
+    inventoryAvailable,
   }
 }
 
@@ -32,5 +34,10 @@ describe('assistedProductAvailability', () => {
     const availability = assistedProductAvailability(product(true, 'none'))
 
     expect(availability).toEqual({ soldOut: false, enabled: true })
+  })
+
+  it('shows a configured product as sold out when available stock is exhausted', () => {
+    expect(assistedProductAvailability(product(true, 'bar', false)))
+      .toEqual({ soldOut: true, enabled: false })
   })
 })

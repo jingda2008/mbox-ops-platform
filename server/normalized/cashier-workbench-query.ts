@@ -127,16 +127,19 @@ export class PostgresCashierWorkbenchQuery {
           AND orders.store_id = $2::uuid
           AND (
             session.business_date = $3::date
-            OR (session.business_date < $3::date AND EXISTS (
-              SELECT 1 FROM mbox.payments AS carryover_payment
-              JOIN mbox.refunds AS carryover_refund
-                ON carryover_refund.tenant_id=carryover_payment.tenant_id
-               AND carryover_refund.store_id=carryover_payment.store_id
-               AND carryover_refund.payment_id=carryover_payment.id
-              WHERE carryover_payment.tenant_id=orders.tenant_id
-                AND carryover_payment.store_id=orders.store_id
-                AND carryover_payment.order_id=orders.id
-                AND carryover_refund.status IN ('requested','approved','processing')
+            OR (session.business_date < $3::date AND (
+              (orders.payment_status='unpaid' AND orders.status<>'cancelled')
+              OR EXISTS (
+                SELECT 1 FROM mbox.payments AS carryover_payment
+                JOIN mbox.refunds AS carryover_refund
+                  ON carryover_refund.tenant_id=carryover_payment.tenant_id
+                 AND carryover_refund.store_id=carryover_payment.store_id
+                 AND carryover_refund.payment_id=carryover_payment.id
+                WHERE carryover_payment.tenant_id=orders.tenant_id
+                  AND carryover_payment.store_id=orders.store_id
+                  AND carryover_payment.order_id=orders.id
+                  AND carryover_refund.status IN ('requested','approved','processing')
+              )
             ))
           )
           AND orders.status <> 'draft'

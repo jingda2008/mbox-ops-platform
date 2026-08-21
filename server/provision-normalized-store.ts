@@ -400,6 +400,7 @@ export async function provisionNormalizedStore(input: {
       const roleId = roleIds.get(role.code)
       if (!roleId) throw new Error(`role ${role.code} is missing after provisioning`)
       await reconcileRoleAccessDefaults(client, tenant.id, store.id, roleId, role, store.currency ?? 'CNY')
+      await verifyRoleAccessDefaults(client, tenant.id, store.id, roleId, role)
     }
 
     const employeeIds: Record<string, string> = {}
@@ -647,6 +648,77 @@ async function reconcileRoleAccessDefaults(
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND role_id=$3::uuid AND navigation_code=$4`, [
       tenantId, storeId, roleId, existing.navigation_code,
     ])
+  }
+}
+
+async function verifyRoleAccessDefaults(
+  client: Client,
+  tenantId: string,
+  storeId: string,
+  roleId: string,
+  role: StoreProvisionConfig['roles'][number],
+) {
+  const authorityResult = await client.query<{ configuration_kind: string; configuration_code: string }>(`
+    SELECT configuration_kind, configuration_code
+    FROM mbox.role_access_configuration_authorities
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND role_id=$3::uuid
+  `, [tenantId, storeId, roleId])
+  const runtimeManaged = new Set(authorityResult.rows.map((row) => `${row.configuration_kind}:${row.configuration_code}`))
+  const permissionResult = await client.query<{ code: string }>(`
+    SELECT permission.code
+    FROM mbox.role_permission_assignments assignment
+    JOIN mbox.staff_permission_definitions permission
+      ON permission.tenant_id=assignment.tenant_id AND permission.store_id=assignment.store_id
+      AND permission.id=assignment.permission_id
+    WHERE assignment.tenant_id=$1::uuid AND assignment.store_id=$2::uuid AND assignment.role_id=$3::uuid
+  `, [tenantId, storeId, roleId])
+  const actualPermissions = permissionResult.rows
+    .map((row) => row.code)
+    .filter((code) => !runtimeManaged.has(`permission:${code}`))
+    .toSorted()
+  const desiredPermissions = role.permissions
+    .filter((code) => !runtimeManaged.has(`permission:${code}`))
+    .toSorted()
+  if (JSON.stringify(actualPermissions) !== JSON.stringify(desiredPermissions)) {
+    throw new Error(`Role ${role.code} permission readback does not match versioned configuration`)
+  }
+
+  const navigationResult = await client.query<{
+    navigation_code: string
+    label: string
+    route: string
+    icon: string | null
+    sort_order: number
+    enabled: boolean
+  }>(`
+    SELECT navigation_code, label, route, icon, sort_order, enabled
+    FROM mbox.role_navigation_items
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND role_id=$3::uuid
+  `, [tenantId, storeId, roleId])
+  const actualNavigation = navigationResult.rows
+    .filter((entry) => !runtimeManaged.has(`navigation:${entry.navigation_code}`))
+    .map((entry) => ({
+      code: entry.navigation_code,
+      label: entry.label,
+      route: entry.route,
+      icon: entry.icon,
+      sortOrder: entry.sort_order,
+      enabled: entry.enabled,
+    }))
+    .toSorted((left, right) => left.code.localeCompare(right.code))
+  const desiredNavigation = (role.navigation ?? [])
+    .filter((entry) => !runtimeManaged.has(`navigation:${entry.code}`))
+    .map((entry) => ({
+      code: entry.code,
+      label: entry.label,
+      route: entry.route,
+      icon: entry.icon ?? null,
+      sortOrder: entry.sortOrder ?? 0,
+      enabled: true,
+    }))
+    .toSorted((left, right) => left.code.localeCompare(right.code))
+  if (JSON.stringify(actualNavigation) !== JSON.stringify(desiredNavigation)) {
+    throw new Error(`Role ${role.code} navigation readback does not match versioned configuration`)
   }
 }
 

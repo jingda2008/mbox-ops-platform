@@ -1,5 +1,5 @@
 {
-  "version": "2026.08.21-v11",
+  "version": "2026.08.21-v12",
   "tenant": {
     "id": "10000000-0000-4000-8000-000000000001",
     "code": "superhigh",
@@ -989,6 +989,7 @@
         "table.assignment.manage",
         "order.create",
         "order.view",
+        "order.cancel_unpaid",
         "order.discount",
         "order.gift",
         "fulfillment.view_all",
@@ -1172,6 +1173,7 @@
         "table.assignment.manage",
         "order.create",
         "order.view",
+        "order.cancel_unpaid",
         "order.discount",
         "order.gift",
         "fulfillment.view_all",
@@ -1378,6 +1380,7 @@
         "table.assignment.manage",
         "order.create",
         "order.view",
+        "order.cancel_unpaid",
         "order.discount",
         "order.gift",
         "fulfillment.view_all",
@@ -1562,6 +1565,7 @@
         "table.participation.manage",
         "order.create",
         "order.view",
+        "order.cancel_unpaid",
         "order.discount",
         "order.gift",
         "fulfillment.view_all",
@@ -1819,6 +1823,7 @@
       "permissions": [
         "dashboard.view",
         "order.view",
+        "order.cancel_unpaid",
         "payment.initiate.staff",
         "payment.manual.cash.record",
         "payment.manual.pos.record",

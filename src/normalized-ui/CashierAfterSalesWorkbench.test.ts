@@ -54,6 +54,30 @@ describe('CashierAfterSalesWorkbenchView', () => {
     expect(html).toContain('不会并入今日营业额')
   })
 
+  it('offers a controlled unpaid-order cancellation without pretending delivered facts disappear', () => {
+    const view = workbench([])
+    view.orders[0]!.paymentStatus = 'unpaid'
+    view.orders[0]!.businessDate = '2026-08-12'
+    view.orders[0]!.carryover = true
+    const html = render(view, ['reconciliation.view', 'order.cancel_unpaid'])
+
+    expect(html).toContain('处理未付款订单')
+    expect(html).toContain('前一营业日尚未闭环的收款或退款事项')
+    expect(html).toContain('不能申请退款')
+  })
+
+  it('keeps unpaid cancellation reachable after a failed payment attempt', () => {
+    const failedPayment = payment('postar', [])
+    failedPayment.status = 'failed'
+    failedPayment.succeededAt = null
+    const view = workbench([failedPayment])
+    view.orders[0]!.paymentStatus = 'unpaid'
+    const html = render(view, ['reconciliation.view', 'order.cancel_unpaid'])
+
+    expect(html).toContain('处理未付款订单')
+    expect(html).toContain('支付失败')
+  })
+
   it('requires a separate receipt surface for cash and physical POS manual results', () => {
     const cashHtml = render(workbench([
       payment('cash', [refund('refund-cash', 'processing', otherEmployeeId)]),
@@ -107,9 +131,9 @@ describe('CashierAfterSalesWorkbenchView', () => {
   })
 })
 
-function render(view: CashierWorkbenchView): string {
+function render(view: CashierWorkbenchView, permissions = auth().permissions): string {
   return renderToStaticMarkup(createElement(CashierAfterSalesWorkbenchView, {
-    auth: auth(),
+    auth: { ...auth(), permissions },
     view,
     phase: 'ready',
     message: null,

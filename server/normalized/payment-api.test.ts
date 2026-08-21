@@ -213,6 +213,20 @@ function fixture(overrides: Partial<PaymentApiOptions> = {}) {
   const cashierWorkbenchQuery = {
     get: vi.fn(async () => cashierWorkbench),
   }
+  const orderCancellation = {
+    cancel: vi.fn(async () => ({
+      eventId: '55555555-5555-4555-8555-555555555555',
+      orderPublicId: 'ORDER-VIP1-0001',
+      sourceBusinessDate: '2026-08-10',
+      actionBusinessDate: '2026-08-11',
+      deliveredItemCount: 1,
+      cancelledItemCount: 0,
+      cancelledKdsTaskCount: 0,
+      releasedInventoryReservationCount: 0,
+      occurredAt: '2026-08-11T12:30:00.000Z',
+      replayed: false,
+    })),
+  }
   const providerObservations = {
     recordPayment: vi.fn(async () => verifiedPaymentObservationId),
     recordRefund: vi.fn(async () => verifiedRefundObservationId),
@@ -223,6 +237,7 @@ function fixture(overrides: Partial<PaymentApiOptions> = {}) {
     providerObservations,
     reconciliationQuery,
     cashierWorkbenchQuery,
+    orderCancellation,
     resolveActorContext: () => ({
       scope: { tenantId, storeId },
       actor: { type: 'guest', ref: `guest-session:${guestSessionId}` },
@@ -246,7 +261,7 @@ function fixture(overrides: Partial<PaymentApiOptions> = {}) {
   app.register(paymentApiPlugin, { ...options, prefix: '/api' })
   return {
     app, options, commands, providerVerifier, providerObservations,
-    reconciliationQuery, cashierWorkbenchQuery,
+    reconciliationQuery, cashierWorkbenchQuery, orderCancellation,
   }
 }
 
@@ -282,6 +297,52 @@ describe('paymentApiPlugin', () => {
     const initiatedCommand = value.commands.initiate.mock.calls[0]?.[0]
     expect(initiatedCommand).toBeDefined()
     expect(initiatedCommand?.requestFingerprint).toContain(orderId)
+  })
+
+  it('cancels an unpaid order only through the scoped staff command', async () => {
+    const value = fixture({
+      resolveStaffContext: () => ({
+        scope: { tenantId, storeId },
+        actor: { type: 'employee', employeeId },
+        employeeId,
+        businessDate: '2026-08-11',
+        capabilities: ['reconciliation.view', 'order.cancel_unpaid'],
+      }),
+    })
+    const response = await value.app.inject({
+      method: 'POST',
+      url: `/api/orders/${orderId}/cancel-unpaid`,
+      headers: { 'idempotency-key': 'cancel-unpaid-order-0001' },
+      payload: { reasonCode: 'guest_left', reasonNote: '客人离店，现场确认未付款' },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(value.orderCancellation.cancel).toHaveBeenCalledWith(expect.objectContaining({
+      scope: { tenantId, storeId }, orderId, employeeId,
+      businessDate: '2026-08-11', reasonCode: 'guest_left',
+      reasonNote: '客人离店，现场确认未付款', idempotencyKey: 'cancel-unpaid-order-0001',
+    }))
+  })
+
+  it('rejects unpaid cancellation without the dedicated permission', async () => {
+    const value = fixture({
+      resolveStaffContext: () => ({
+        scope: { tenantId, storeId },
+        actor: { type: 'employee', employeeId },
+        employeeId,
+        businessDate: '2026-08-11',
+        capabilities: ['reconciliation.view'],
+      }),
+    })
+    const response = await value.app.inject({
+      method: 'POST',
+      url: `/api/orders/${orderId}/cancel-unpaid`,
+      headers: { 'idempotency-key': 'cancel-unpaid-order-denied-0001' },
+      payload: { reasonCode: 'guest_left', reasonNote: '客人离店，现场确认未付款' },
+    })
+
+    expect(response.statusCode).toBe(403)
+    expect(value.orderCancellation.cancel).not.toHaveBeenCalled()
   })
 
   it('rejects a new online payment when the store operating policy is closed', async () => {

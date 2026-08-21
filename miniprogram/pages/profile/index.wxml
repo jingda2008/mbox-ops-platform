@@ -1,52 +1,171 @@
 <view class="page profile-page">
-  <view class="profile-head"><view class="brand"><image class="brand-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX Logo" /><text>M-BOX MEMBER</text></view><text class="profile-greeting">我的今晚</text><text class="profile-copy">权益、预约、活动与偏好，都在这里清楚可见。</text></view>
+  <view class="profile-hero">
+    <view class="profile-hero__brand">
+      <image class="profile-hero__badge" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX" />
+      <text>M-BOX</text>
+    </view>
+    <view class="profile-hero__content">
+      <text class="profile-hero__kicker">MEMBER · PERSONAL</text>
+      <text class="profile-hero__title">我的夜晚</text>
+      <text class="profile-hero__copy">积分、权益与到店安排，都在这里。</text>
+    </view>
+  </view>
+
   <state-panel wx:if="{{loading}}" type="loading" title="正在读取会员与权益" />
   <block wx:else>
     <view wx:if="{{error}}" class="error-banner">{{error}}</view>
-    <view wx:if="{{membership}}" class="member-card"><view class="member-card__top"><view><text>{{membership.levelText}}</text><text>{{membership.memberNo}}</text></view><image class="member-card__logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX Logo" /></view><view class="member-balance-grid"><view class="member-balance"><text>{{membership.pointsBalance}}</text><text>可用积分</text></view><view class="member-balance"><text>{{membership.growthValue}}</text><text>成长值</text></view></view><view wx:if="{{benefitCount}}" class="member-benefit-highlight"><text>你的专属权益</text><text>{{benefitCount}} 项可用</text></view><view wx:if="{{membership.upgradeText || membership.retainText || membership.periodText}}" class="member-progress"><text wx:if="{{membership.upgradeText}}">{{membership.upgradeText}}</text><text wx:if="{{membership.retainText}}">{{membership.retainText}}</text><text wx:if="{{membership.periodText}}">{{membership.periodText}}</text></view><view wx:if="{{membership.expiryText}}" class="member-expiry"><text>{{membership.expiryText}}</text><button wx:if="{{expiryNotificationOption}}" bindtap="enableExpiryReminder">到期前提醒我</button></view><view wx:if="{{membership.pendingRecoveryPoints > 0}}" class="member-recovery">当前有 {{membership.pendingRecoveryPoints}} 积分欠额；新到账积分会优先冲抵，期间暂不可兑换</view><view class="member-card__links"><button class="member-ledger-link" bindtap="openPoints">积分与成长值明细</button><button wx:if="{{membershipTerms}}" class="member-ledger-link" bindtap="showMembershipTerms">会员权益与规则</button></view><view class="member-card__foot"><text>到店 {{membership.visitCount}} 次</text><text wx:if="{{benefitCount}}">{{benefitCount}} 项权益可用</text></view></view>
-    <view wx:else class="join-card"><text class="join-kicker">M-BOX MEMBERSHIP</text><text class="join-title">把每次相遇留下来</text><text class="join-copy">保存积分、到店偏好、活动资格和门店发放的专属权益。</text><view wx:if="{{membershipTerms}}" class="membership-terms-summary"><text>{{membershipTerms.title}} · 第{{membershipTerms.version}}版</text><text>{{membershipTerms.summary}}</text><button bindtap="showMembershipTerms">查看当前条款全文</button></view><text wx:else class="membership-terms-unavailable">当前入会条款尚未发布，新入会暂未开放；点单和找回原会员不受影响。</text><checkbox-group bindchange="onAgreementChange"><label class="join-agree-row"><checkbox value="agree" checked="{{agreedToPolicies}}" color="#2d2925" /><text class="join-agree-copy">我已阅读并同意</text></label></checkbox-group><view class="join-agree-links"><text bindtap="showMembershipTerms">《用户服务协议》</text><text bindtap="openPrivacy">《隐私政策》</text></view><button class="join-submit" bindtap="becomeMember" loading="{{busy}}" hover-class="join-submit-hover">阅读入会条款</button><button wx:if="{{agreedToPolicies}}" class="recovery-button wx-phone-button" open-type="getPhoneNumber|agreePrivacyAuthorization" bindgetphonenumber="recoverMembership" bindagreeprivacyauthorization="onAgreePrivacyAuthorization" hover-class="none" loading="{{recoveryBusy}}">授权手机号找回会员</button><button wx:else class="recovery-button recovery-button--pending" bindtap="remindAgreement" hover-class="none">授权手机号找回会员</button><text class="recovery-note">请先自行勾选同意《用户服务协议》和《隐私政策》。新客再阅读入会条款并授权手机号入会；老客勾选后可授权手机号找回原会员。不会开启短信或营销。</text><text wx:if="{{recoveryMessage}}" class="recovery-result">{{recoveryMessage}}</text></view>
 
-    <view wx:if="{{showRedemptions}}" class="section redemption-section">
-      <view class="section-title"><text>积分兑换</text><text class="section-link">不抵现金</text></view>
-      <view wx:if="{{redemptionError}}" class="warning">{{redemptionError}}</view>
-      <scroll-view wx:if="{{redemptionItems.length}}" scroll-x enhanced show-scrollbar="{{false}}" class="redemption-scroll"><view class="redemption-row">
-        <view wx:for="{{redemptionItems}}" wx:key="publicId" class="redemption-card">
-          <view class="redemption-card__head"><text>{{item.name}}</text><text>{{item.minimumTier === 'gold' ? '金卡' : item.minimumTier === 'silver' ? '银卡' : '会员'}}</text></view>
-          <text class="redemption-description">{{item.description}}</text>
-          <view class="redemption-meta"><text>{{item.inventoryText}}</text><text wx:if="{{item.availableUntilText}}">有效至 {{item.availableUntilText}}</text></view>
-          <button data-id="{{item.publicId}}" disabled="{{!item.eligible}}" loading="{{redemptionBusyId === item.publicId}}" bindtap="redeemItem">{{item.actionText}}</button>
+    <view class="identity-card">
+      <view class="identity-main">
+        <image class="identity-avatar" src="{{avatarUrl || '/assets/brand/mbox-logo-badge.png'}}" mode="aspectFill" />
+        <view class="identity-copy">
+          <view class="identity-name-row">
+            <text class="identity-name">{{displayName || (membership ? membership.levelText : '访客')}}</text>
+            <text wx:if="{{membership}}" class="identity-badge">{{membership.levelText}}</text>
+          </view>
+          <text class="identity-sub">{{membership ? membership.memberNo : '加入会员后可累计积分与权益'}}</text>
         </view>
-      </view></scroll-view>
-      <view wx:if="{{redemptions.length}}" class="redemption-history">
-        <view wx:for="{{redemptions}}" wx:key="publicId" class="redemption-history__row"><view><text>{{item.name}}</text><text>{{item.pointsUsed}}积分 · {{item.statusText}}</text></view><button wx:if="{{item.canCancel}}" data-id="{{item.publicId}}" loading="{{redemptionBusyId === item.publicId}}" bindtap="cancelRedemption">取消</button></view>
+      </view>
+      <button wx:if="{{membership}}" class="identity-action" bindtap="openMemberCenter">会员中心</button>
+      <button wx:else class="identity-action" bindtap="becomeMember" loading="{{busy}}">去入会</button>
+    </view>
+
+    <view class="metric-card">
+      <button class="metric-item" bindtap="openPoints">
+        <text class="metric-value">{{membership ? membership.pointsBalance : 0}}</text>
+        <text class="metric-label">积分</text>
+      </button>
+      <button class="metric-item" bindtap="openCoupons">
+        <text class="metric-value">{{benefitCount || 0}}</text>
+        <text class="metric-label">优惠券</text>
+      </button>
+      <button class="metric-item" bindtap="openPoints">
+        <text class="metric-value">{{membership ? membership.growthValue : 0}}</text>
+        <text class="metric-label">成长值</text>
+      </button>
+      <button class="metric-item" bindtap="openBalance">
+        <text class="metric-value">{{balanceText}}</text>
+        <text class="metric-label">余额</text>
+      </button>
+    </view>
+
+    <view wx:if="{{benefitCount}}" class="benefit-tip" bindtap="openCoupons">
+      <view>
+        <text>你有可用权益</text>
+        <text>{{benefitCount}} 项可到店使用</text>
+      </view>
+      <text>去看看 ›</text>
+    </view>
+
+    <view wx:if="{{!membership}}" class="module-card join-module">
+      <text class="module-eyebrow">JOIN</text>
+      <text class="module-title">加入 M-BOX 会员</text>
+      <text class="join-summary">{{membershipTerms ? membershipTerms.summary : '保存积分、到店偏好与门店发放的专属权益。'}}</text>
+      <checkbox-group bindchange="onAgreementChange">
+        <label class="join-agree-row">
+          <checkbox value="agree" checked="{{agreedToPolicies}}" color="#315d46" />
+          <text>我已阅读并同意</text>
+        </label>
+      </checkbox-group>
+      <view class="join-agree-links"><text bindtap="showMembershipTerms">《用户服务协议》</text></view>
+      <button class="join-primary" bindtap="becomeMember" loading="{{busy}}">阅读入会条款</button>
+      <button wx:if="{{agreedToPolicies}}" class="join-secondary recovery-button wx-phone-button" open-type="getPhoneNumber|agreePrivacyAuthorization" bindgetphonenumber="recoverMembership" bindagreeprivacyauthorization="onAgreePrivacyAuthorization" hover-class="none" loading="{{recoveryBusy}}">授权手机号找回会员</button>
+      <button wx:else class="join-secondary recovery-button recovery-button--pending" bindtap="remindAgreement">授权手机号找回会员</button>
+      <text wx:if="{{recoveryMessage}}" class="recovery-result">{{recoveryMessage}}</text>
+    </view>
+
+    <view wx:if="{{membership && (membership.upgradeText || membership.retainText || membership.expiryText || membership.pendingRecoveryPoints > 0)}}" class="module-card">
+      <text class="module-eyebrow">STATUS</text>
+      <text class="module-title">会员进度</text>
+      <text wx:if="{{membership.upgradeText}}" class="progress-line">{{membership.upgradeText}}</text>
+      <text wx:if="{{membership.retainText}}" class="progress-line">{{membership.retainText}}</text>
+      <text wx:if="{{membership.periodText}}" class="progress-line">{{membership.periodText}}</text>
+      <view wx:if="{{membership.expiryText}}" class="expiry-row">
+        <text>{{membership.expiryText}}</text>
+        <button wx:if="{{expiryNotificationOption}}" bindtap="enableExpiryReminder">到期提醒</button>
+      </view>
+      <text wx:if="{{membership.pendingRecoveryPoints > 0}}" class="progress-warn">当前有 {{membership.pendingRecoveryPoints}} 积分欠额；新到账积分会优先冲抵</text>
+    </view>
+
+    <view class="module-card service-module">
+      <text class="module-eyebrow">SERVICES</text>
+      <text class="module-title">我的服务</text>
+      <view class="service-grid">
+        <view class="service-chip" bindtap="openOrders" hover-class="service-chip--hover" role="button">
+          <view class="service-chip__face">我的订单</view>
+        </view>
+        <view class="service-chip" bindtap="openReservations" hover-class="service-chip--hover" role="button">
+          <view class="service-chip__face">我的预约</view>
+        </view>
+        <view class="service-chip" bindtap="openPreferenceSettings" hover-class="service-chip--hover" role="button">
+          <view class="service-chip__face">我的偏好</view>
+        </view>
+        <view class="service-chip" bindtap="openContact" hover-class="service-chip--hover" role="button">
+          <view class="service-chip__face">联系我们</view>
+        </view>
+        <view wx:if="{{membershipTerms}}" class="service-chip" bindtap="showMembershipTerms" hover-class="service-chip--hover" role="button">
+          <view class="service-chip__face">会员权益</view>
+        </view>
       </view>
     </view>
 
-    <view wx:if="{{benefits.length}}" class="section benefit-section">
-      <view class="section-title"><text>我的权益与赠送</text><text class="section-link">{{benefitCount}}项可用</text></view>
-      <view wx:if="{{benefitError}}" class="warning">{{benefitError}}</view>
-      <scroll-view wx:if="{{benefits.length}}" scroll-x enhanced show-scrollbar="{{false}}" class="benefit-scroll"><view class="benefit-row">
-        <view wx:for="{{benefits}}" wx:key="id" class="benefit-card"><view class="benefit-card__head"><text>{{item.typeText}}</text><text>{{item.quantityText}}</text></view><text class="benefit-title">{{item.title}}</text><text class="benefit-description">{{item.description}}</text><view class="benefit-foot"><view><text wx:if="{{item.valueText}}">{{item.valueText}}</text><text>有效至 {{item.validText}}</text></view><button data-id="{{item.id}}" loading="{{benefitBusyId === item.id}}" bindtap="requestBenefitUse">使用</button></view></view>
-      </view></scroll-view>
-    </view>
-
-    <view wx:if="{{reservations.length || registrations.length}}" class="section journey-section">
-      <view class="section-title"><text>接下来的安排</text><text class="section-link">预约与活动</text></view>
-      <button wx:for="{{reservations}}" wx:key="publicId" class="journey-row" bindtap="openReservations"><view><text>预约到店</text><text>{{item.title}}</text></view><text>{{item.statusText}} →</text></button>
-      <button wx:for="{{registrations}}" wx:key="publicId" class="journey-row" data-id="{{item.activityPublicId}}" bindtap="openCommunity"><view><text>{{item.title}}</text><text>{{item.startsText}} · {{item.partySize}}人</text></view><text>{{item.statusText}} →</text></button>
+    <view wx:if="{{reservations.length || registrations.length}}" class="module-card">
+      <text class="module-eyebrow">UP NEXT</text>
+      <text class="module-title">接下来的安排</text>
+      <button wx:for="{{reservations}}" wx:key="publicId" class="list-row" bindtap="openReservations">
+        <view><text>预约到店</text><text>{{item.title}}</text></view>
+        <text>{{item.statusText}} ›</text>
+      </button>
+      <button wx:for="{{registrations}}" wx:key="publicId" class="list-row" data-id="{{item.activityPublicId}}" bindtap="openCommunity">
+        <view><text>{{item.title}}</text><text>{{item.startsText}} · {{item.partySize}}人</text></view>
+        <text>{{item.statusText}} ›</text>
+      </button>
     </view>
     <view wx:if="{{registrationError}}" class="warning">{{registrationError}}</view>
 
-    <view class="section personal-entry-section">
-      <view class="section-title"><text>我的资料与偏好</text><text class="section-link">自主设置</text></view>
-      <button class="personal-entry" bindtap="openPreferenceSettings"><view><text>昵称、生日与到店偏好</text><text>一次选好，之后随时修改</text></view><text>›</text></button>
-      <button class="personal-entry" bindtap="openPrivacy"><view><text>隐私政策</text><text>了解个人信息处理范围</text></view><text>›</text></button>
-      <button wx:if="{{supportContact}}" class="personal-entry" bindtap="openContact"><view><text>联系我们</text><text>{{supportContact.phoneLabel}} · 企业微信</text></view><text>›</text></button>
+    <view wx:if="{{benefits.length}}" class="module-card">
+      <view class="module-head"><view><text class="module-eyebrow">BENEFITS</text><text class="module-title">可用权益</text></view><text class="module-link" bindtap="openCoupons">全部 ›</text></view>
+      <view wx:if="{{benefitError}}" class="warning">{{benefitError}}</view>
+      <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="benefit-scroll">
+        <view class="benefit-row">
+          <view wx:for="{{benefits}}" wx:key="id" class="benefit-card">
+            <view class="benefit-card__head"><text>{{item.typeText}}</text><text>{{item.quantityText}}</text></view>
+            <text class="benefit-title">{{item.title}}</text>
+            <text class="benefit-description">{{item.description}}</text>
+            <view class="benefit-foot">
+              <view><text wx:if="{{item.valueText}}">{{item.valueText}}</text><text>有效至 {{item.validText}}</text></view>
+              <button data-id="{{item.id}}" loading="{{benefitBusyId === item.id}}" bindtap="requestBenefitUse">使用</button>
+            </view>
+          </view>
+        </view>
+      </scroll-view>
     </view>
 
-    <view wx:if="{{productRestrictions.length}}" class="section restriction-section">
-      <view class="section-title"><text>不再向我推荐</text><text class="section-link">本人可撤回</text></view>
-      <view class="panel restriction-list">
+    <view wx:if="{{showRedemptions}}" class="module-card">
+      <text class="module-eyebrow">REDEEM</text>
+      <text class="module-title">积分兑换</text>
+      <view wx:if="{{redemptionError}}" class="warning">{{redemptionError}}</view>
+      <scroll-view wx:if="{{redemptionItems.length}}" scroll-x enhanced show-scrollbar="{{false}}" class="redemption-scroll">
+        <view class="redemption-row">
+          <view wx:for="{{redemptionItems}}" wx:key="publicId" class="redemption-card">
+            <view class="redemption-card__head"><text>{{item.name}}</text><text>{{item.minimumTier === 'gold' ? '金卡' : item.minimumTier === 'silver' ? '银卡' : '会员'}}</text></view>
+            <text class="redemption-description">{{item.description}}</text>
+            <view class="redemption-meta"><text>{{item.inventoryText}}</text><text wx:if="{{item.availableUntilText}}">有效至 {{item.availableUntilText}}</text></view>
+            <button data-id="{{item.publicId}}" disabled="{{!item.eligible}}" loading="{{redemptionBusyId === item.publicId}}" bindtap="redeemItem">{{item.actionText}}</button>
+          </view>
+        </view>
+      </scroll-view>
+      <view wx:if="{{redemptions.length}}" class="redemption-history">
+        <view wx:for="{{redemptions}}" wx:key="publicId" class="redemption-history__row">
+          <view><text>{{item.name}}</text><text>{{item.pointsUsed}}积分 · {{item.statusText}}</text></view>
+          <button wx:if="{{item.canCancel}}" data-id="{{item.publicId}}" loading="{{redemptionBusyId === item.publicId}}" bindtap="cancelRedemption">取消</button>
+        </view>
+      </view>
+    </view>
+
+    <view wx:if="{{productRestrictions.length}}" class="module-card">
+      <view class="module-head"><view><text class="module-eyebrow">PREFERENCE</text><text class="module-title">不再向我推荐</text></view><text class="module-link">本人可撤回</text></view>
+      <view class="restriction-list">
         <view wx:for="{{productRestrictions}}" wx:key="publicId" class="restriction-row">
           <view><text>{{item.productName}}</text><text>{{item.restrictionText}}</text></view>
           <button data-id="{{item.publicId}}" loading="{{restrictionBusyId === item.publicId}}" bindtap="withdrawRestriction">恢复推荐</button>
@@ -55,37 +174,32 @@
       </view>
     </view>
 
-    <view wx:if="{{points.length}}" class="section"><view class="section-title"><text>最近积分</text><text class="section-link">最近{{points.length}}条</text></view><view class="panel points-list"><view wx:for="{{points}}" wx:key="id" class="point-row"><view><text>{{item.description || '积分变动'}}</text><text>{{item.occurredAt}}</text></view><text class="{{item.pointsDelta > 0 ? 'positive' : ''}}">{{item.pointsDelta > 0 ? '+' : ''}}{{item.pointsDelta}}</text></view></view></view>
+    <view wx:if="{{points.length}}" class="module-card">
+      <view class="module-head"><view><text class="module-eyebrow">POINTS</text><text class="module-title">最近积分</text></view><text class="module-link" bindtap="openPoints">明细 ›</text></view>
+      <view class="points-list">
+        <view wx:for="{{points}}" wx:key="id" class="point-row">
+          <view><text>{{item.description || '积分变动'}}</text><text>{{item.occurredAt}}</text></view>
+          <text class="{{item.pointsDelta > 0 ? 'positive' : ''}}">{{item.pointsDelta > 0 ? '+' : ''}}{{item.pointsDelta}}</text>
+        </view>
+      </view>
+    </view>
 
-    <view wx:if="{{contentCards.length}}" class="section member-content-section">
-      <view class="section-title member-content-head"><view><text>活动与内容推荐</text><text>仅供了解，不代表权益已到账</text></view><text class="section-link">最多3条</text></view>
+    <view wx:if="{{contentCards.length}}" class="module-card">
+      <text class="module-eyebrow">CONTENT</text>
+      <text class="module-title">活动与内容</text>
       <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="member-content-scroll">
         <view class="member-content-row">
           <view wx:for="{{contentCards}}" wx:key="code" class="member-content-card">
-            <image wx:if="{{item.imageUrl}}" class="member-content-image" src="{{item.imageUrl}}" mode="aspectFill" aria-label="{{item.title}}" />
+            <image wx:if="{{item.imageUrl}}" class="member-content-image" src="{{item.imageUrl}}" mode="aspectFill" />
             <view class="member-content-copy">
               <text class="member-content-type">{{item.typeText}}</text>
               <text class="member-content-title">{{item.title}}</text>
               <text class="member-content-summary">{{item.summary}}</text>
               <button wx:if="{{item.hasTarget}}" data-code="{{item.code}}" bindtap="openMemberContentCard">{{item.ctaLabel}}</button>
-              <text wx:else class="member-content-static">仅供查看</text>
             </view>
           </view>
         </view>
       </scroll-view>
-      <text class="member-content-boundary">已到账的赠送和权益只在上方“我的权益与赠送”中显示。</text>
-    </view>
-
-    <view class="section support-section">
-      <view class="section-title"><text>服务与支持</text><text class="section-link">门店协助</text></view>
-      <button class="journey-row support-row" bindtap="openCustomerService" hover-class="button-hover">
-        <view><text>WECHAT CARE</text><text>联系微信客服</text></view>
-        <text>咨询 →</text>
-      </button>
-      <button class="journey-row support-row" bindtap="openPrivacy" hover-class="button-hover">
-        <view><text>PRIVACY</text><text>隐私政策</text></view>
-        <text>查看 →</text>
-      </button>
     </view>
   </block>
 </view>

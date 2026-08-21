@@ -227,7 +227,7 @@ Page({
       orderPublicId: pendingFromOrders.publicId,
       retryIdempotencyKey: randomId(`guest-payment-${pendingFromOrders.publicId}`),
       amountText: money(pendingFromOrders.payableAmountMinor),
-      statusText: pendingFromOrders.paymentAccess === 'status_review' ? '付款结果待核对' : '订单等待付款',
+      statusText: pendingFromOrders.paymentAccess === 'status_review' ? '付款结果确认中' : '还有一笔待付款',
     } : null)
     const bootstrap = results[4]
     const dismissedUntil = Number(wx.getStorageSync(MEMBERSHIP_INVITE_DISMISSED_KEY) || 0)
@@ -540,7 +540,7 @@ Page({
         paymentPublicId: data.payment && data.payment.publicId,
         retryIdempotencyKey: randomId(`guest-payment-${data.order.publicId}`),
         amountText: money(data.settlement && data.settlement.payableAmountMinor),
-        statusText: '订单已建立，等待付款',
+        statusText: '订单已备好，请完成付款',
       }
       wx.setStorageSync(PENDING_PAYMENT_KEY, pendingPayment)
       wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
@@ -567,27 +567,34 @@ Page({
   async handlePaymentAction(action) {
     if (!action || action.status !== 'ready' || action.presentation !== 'jsapi' || !action.payload) {
       const pendingPayment = Object.assign({}, this.data.pendingPayment, {
-        statusText: action && action.status === 'unknown' ? '付款结果待核对' : '付款尚未完成',
+        statusText: action && action.status === 'unknown' ? '付款结果确认中' : '付款未完成',
       })
       wx.setStorageSync(PENDING_PAYMENT_KEY, pendingPayment)
       this.setData({ pendingPayment })
       return
     }
     try {
-      await this.ensureBalanceNotificationAuthorizations()
       await new Promise((resolve, reject) => wx.requestPayment(Object.assign({}, action.payload, { success: resolve, fail: reject })))
-      const pendingPayment = Object.assign({}, this.data.pendingPayment, { statusText: '支付请求已提交，等待到账确认' })
+      const pendingPayment = Object.assign({}, this.data.pendingPayment, { statusText: '付款已提交，到账确认中' })
       wx.setStorageSync(PENDING_PAYMENT_KEY, pendingPayment)
-      this.setData({ pendingPayment, success: '支付请求已提交，最终状态以支付回调和桌账为准。' })
-      wx.showToast({ title: '支付请求已提交', icon: 'none' })
+      this.setData({ pendingPayment, success: '付款已提交，到账结果可在本桌账单查看。' })
+      this.offerOrderNotifications()
+      wx.showToast({ title: '付款已提交', icon: 'none' })
     } catch (error) {
       const cancelled = String(error.errMsg || '').includes('cancel')
       const pendingPayment = Object.assign({}, this.data.pendingPayment, {
-        statusText: cancelled ? '订单已保留，付款已取消' : '付款未完成，可继续支付',
+        statusText: cancelled ? '订单已保留，可稍后再付' : '付款未完成，可继续支付',
       })
       wx.setStorageSync(PENDING_PAYMENT_KEY, pendingPayment)
-      this.setData({ pendingPayment, error: cancelled ? '' : '付款未完成，请查询状态后继续，不要重复下单。' })
+      this.setData({ pendingPayment, error: cancelled ? '' : '付款未完成，可继续支付，无需重新下单。' })
     }
+  },
+
+  offerOrderNotifications() {
+    if (this._notificationPromptShown) return
+    this._notificationPromptShown = true
+    // 直接唤起微信原生订阅消息弹窗，由顾客点「允许/取消」。
+    this.ensureBalanceNotificationAuthorizations()
   },
 
   async ensureBalanceNotificationAuthorizations() {

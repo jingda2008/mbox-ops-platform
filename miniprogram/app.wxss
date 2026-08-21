@@ -79,7 +79,7 @@ page .balance-card {
 }
 page .progress-card,
 page .ledger-row,
-page .service-grid button,
+page .service-chip__face,
 page .custom-panel,
 page .status-card,
 page .account-total {

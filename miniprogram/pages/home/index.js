@@ -78,12 +78,13 @@ function contentCardView(item) {
   return {
     code: String(item.code || ''),
     type: String(item.type || 'article'),
-    eyebrow: item.type === 'show' ? 'M-BOX LIVE' : item.type === 'benefit' ? 'MEMBER EDIT' : 'M-BOX STORY',
+    eyebrow: item.type === 'show' ? 'M-BOX LIVE' : item.type === 'presale' ? 'TONIGHT OFFER' : item.type === 'benefit' ? 'MEMBER EDIT' : 'M-BOX STORY',
     title: String(item.title || ''),
     summary: String(item.summary || ''),
     imageUrl: item.imageUrl || '',
     ctaLabel: String(item.ctaLabel || '查看内容'),
     targetPath,
+    hasTarget: Boolean(targetPath && targetPath !== '/pages/home/index'),
   }
 }
 
@@ -93,6 +94,14 @@ function activityFeatureView(item) {
     dateText: dateTime(item.startsAt),
     availabilityText: item.remainingCapacity > 0 ? `余 ${item.remainingCapacity} 位` : '名额已满',
   })
+}
+
+function softNetworkError(error) {
+  const message = String((error && error.message) || '')
+  if (/request:fail|timeout|ERR_CONNECTION|Failed to fetch|网络/i.test(message)) {
+    return ''
+  }
+  return message || '桌台连接已失效，请重新扫描桌面二维码'
 }
 
 Page({
@@ -132,7 +141,8 @@ Page({
     this.setData({
       tableCode: session.tableCode,
       isDevelopment: config.isDevelopment,
-      hasTableSession: Boolean(session.tableToken || (config.isDevelopment && session.tableCode)),
+      // 仅有桌码、没有桌台令牌时不强制拉取会话，避免开发态出现 request:fail 红条。
+      hasTableSession: Boolean(session.tableToken),
     })
   },
 
@@ -172,7 +182,7 @@ Page({
     )
     if (inviteVisible) app.globalData.membershipInvitePresented = true
     const campaign = (bootstrap.content || []).filter((item) => (
-      item && item.type === 'presale'
+      item && ['presale', 'benefit', 'activity'].includes(item.type)
     )).sort((left, right) => Number(left.priority || 0) - Number(right.priority || 0))[0] || null
     const campaignDismissed = campaign && Number(wx.getStorageSync(`${HOME_CAMPAIGN_DISMISSED_PREFIX}${campaign.code}`) || 0) > Date.now()
     this.setData({
@@ -181,7 +191,7 @@ Page({
       membershipInviteVisible: inviteVisible,
       benefitCount: (benefits || []).reduce((sum, item) => sum + Number(item.quantityAvailable || 0), 0),
       upcomingActivity: activityFeatureView(bootstrap.activities && bootstrap.activities.length ? bootstrap.activities[0] : null),
-      editorialCards: (bootstrap.content || []).filter((item) => item && !['activity', 'show', 'presale'].includes(item.type))
+      editorialCards: (bootstrap.content || []).filter((item) => item && !['activity', 'show', 'presale', 'benefit'].includes(item.type))
         .sort((left, right) => Number(left.priority || 0) - Number(right.priority || 0))
         .slice(0, 2).map(contentCardView),
       monthlyPerformanceCard: contentCardView((bootstrap.content || []).find((item) => item && item.type === 'show') || {
@@ -224,7 +234,7 @@ Page({
         visitState: 'prearrival',
         canEnter: false,
         table: null,
-        error: error.message || '桌台连接已失效，请重新扫描桌面二维码',
+        error: silent ? this.data.error : softNetworkError(error),
       })
     }
   },
@@ -234,7 +244,8 @@ Page({
   openTab(event) { wx.switchTab({ url: event.currentTarget.dataset.url }) },
 
   openTonightSchedule() {
-    if (!this.data.performance || !this.data.performance.schedules.length) {
+    const performance = this.data.performance
+    if (!performance || !(performance.schedules && performance.schedules.length)) {
       wx.showToast({ title: '今晚暂无已发布演出', icon: 'none' })
       return
     }
@@ -242,16 +253,28 @@ Page({
   },
 
   openPerformerProfile() {
-    if (!this.data.performance || !this.data.performance.hasSchedule) {
-      wx.showToast({ title: '歌手与乐队资料待发布', icon: 'none' })
+    const performance = this.data.performance
+    if (performance && performance.hasSchedule) {
+      this.setData({ performancePanel: 'performer' })
       return
     }
-    this.setData({ performancePanel: 'performer' })
+    if (performance && performance.schedules && performance.schedules.length) {
+      this.setData({ performancePanel: 'tonight' })
+      return
+    }
+    wx.navigateTo({ url: '/pages/performances/index' })
   },
 
   closePerformancePanel() { this.setData({ performancePanel: '' }) },
 
   openMonthlyPerformance() {
+    const card = this.data.monthlyPerformanceCard
+    const target = card && card.targetPath
+    if (target && target !== '/pages/home/index') {
+      if (CONTENT_TAB_TARGETS.has(target)) wx.switchTab({ url: target })
+      else wx.navigateTo({ url: target })
+      return
+    }
     wx.navigateTo({ url: '/pages/performances/index' })
   },
 
@@ -264,11 +287,12 @@ Page({
   openEditorial(event) {
     const card = this.data.editorialCards.find((item) => item.code === event.currentTarget.dataset.code)
     if (!card) return
-    if (!card.targetPath || card.targetPath === '/pages/home/index') {
+    if (!card.hasTarget) {
       wx.showModal({ title: card.title, content: card.summary, showCancel: false, confirmText: '知道了' })
       return
     }
-    wx.switchTab({ url: card.targetPath })
+    if (CONTENT_TAB_TARGETS.has(card.targetPath)) wx.switchTab({ url: card.targetPath })
+    else wx.navigateTo({ url: card.targetPath })
   },
 
   dismissMembershipInvite() {

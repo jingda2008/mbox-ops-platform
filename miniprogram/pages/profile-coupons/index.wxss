@@ -1,0 +1,14 @@
+.coupons-page{padding-top:0;padding-bottom:48rpx}
+.coupons-hero{margin:0 -28rpx 28rpx;padding:42rpx 28rpx 36rpx;background:linear-gradient(145deg,#0d1712,#234031);color:#fff}
+.coupons-hero text{display:block}
+.coupons-hero text:nth-child(1){color:#c8a675;font-size:18rpx;font-weight:700;letter-spacing:3rpx}
+.coupons-hero text:nth-child(2){margin-top:12rpx;font-family:"Songti SC","STSong",serif;font-size:42rpx;font-weight:600}
+.coupons-hero text:nth-child(3){margin-top:10rpx;color:#d5ddd7;font-size:22rpx;line-height:1.5}
+.coupon-list{display:grid;gap:14rpx}
+.coupon-card{padding:22rpx;border:1rpx solid #e0d9d0;border-radius:18rpx;background:#fff}
+.coupon-card__head{display:flex;align-items:center;justify-content:space-between;gap:12rpx}
+.coupon-card__head text:first-child{color:#315d46;font-size:18rpx;font-weight:750}
+.coupon-card__head text:last-child{color:#8a8178;font-size:18rpx}
+.coupon-title{display:block;margin-top:10rpx;font-size:28rpx;font-weight:700}
+.coupon-copy{display:block;margin-top:8rpx;color:#746c63;font-size:21rpx;line-height:1.45}
+.coupon-foot{display:flex;margin-top:14rpx;padding-top:12rpx;align-items:center;justify-content:space-between;border-top:1rpx solid #eee7df;color:#7a7269;font-size:18rpx;gap:12rpx}

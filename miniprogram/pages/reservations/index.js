@@ -103,9 +103,14 @@ Page({
           notificationByReservation.set(option.reservationPublicId, option)
         })
       }
-      const reservations = (data.reservations || []).filter((item) => (
-        EXECUTABLE_RESERVATION_STATUSES.has(item.status)
-      )).map((item) => ({
+      const now = Date.now()
+      const reservations = (data.reservations || []).filter((item) => {
+        if (!EXECUTABLE_RESERVATION_STATUSES.has(item.status)) return false
+        const arrivalMs = Date.parse(item.arrivalAt)
+        // 已过到店时间较久的预约视为不可执行，不再占用“我的预约”。
+        if (Number.isFinite(arrivalMs) && arrivalMs < now - 12 * 60 * 60 * 1000) return false
+        return true
+      }).map((item) => ({
         ...item,
         statusText: STATUS_NAMES[item.status] || '状态待确认',
         scheduledAtText: dateTime(item.arrivalAt),

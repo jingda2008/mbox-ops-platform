@@ -165,7 +165,6 @@
             <text>我已阅读并同意</text>
             <view class="member-invite-links">
               <text catchtap="showMembershipTerms">《{{membershipTerms.title}}》</text>
-              <text catchtap="openPrivacy">《隐私政策》</text>
             </view>
           </view>
         </label>

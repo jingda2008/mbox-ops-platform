@@ -8,6 +8,8 @@
     "pages/profile/index",
     "pages/profile-preferences/index",
     "pages/profile-contact/index",
+    "pages/profile-coupons/index",
+    "pages/profile-notifications/index",
     "pages/performances/index",
     "pages/points/index",
     "pages/membership-terms/index",

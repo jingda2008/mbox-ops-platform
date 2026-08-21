@@ -1,1 +1,35 @@
-<view class="page performances-page"><view class="performance-hero"><text>M-BOX · LIVE CALENDAR</text><text>{{title}}演出安排</text><text>只展示门店已经发布的歌手、乐队与场次。</text></view><view class="date-picker-card"><text>查看日期</text><picker mode="date" value="{{selectedDate}}" start="{{minimumDate}}" bindchange="onDateChange"><view><text>{{selectedDate}}</text><text>选择日期 ›</text></view></picker></view><state-panel wx:if="{{loading}}" type="loading" title="正在读取已发布演出" /><block wx:else><view wx:if="{{error}}" class="error-banner">{{error}}</view><view wx:if="{{schedules.length}}" class="schedule-list"><view wx:for="{{schedules}}" wx:key="id" class="schedule-card"><image wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" /><view class="schedule-avatar" wx:else>LIVE</view><view><text>{{item.timeText}}</text><text>{{item.performer}}</text><text>{{item.tags || 'M-BOX 当晚舞台阵容'}}</text></view></view></view><state-panel wx:else type="empty" title="这天暂无已发布演出" message="日期可继续切换；演出发布后会自动显示在这里。" /></block><text class="schedule-note">演出安排可能调整，以门店当日已发布内容为准。</text></view>
+<view class="page performances-page">
+  <view class="performance-hero">
+    <text>M-BOX · LIVE CALENDAR</text>
+    <text>{{title}}演出</text>
+    <text>点选日期查看当晚已发布的歌手、乐队与场次。</text>
+  </view>
+  <view class="date-picker-card">
+    <text>切换月份</text>
+    <picker mode="date" fields="month" value="{{selectedDate}}" start="{{minimumDate}}" bindchange="onDateChange">
+      <view><text>{{title}}</text><text>选择 ›</text></view>
+    </picker>
+  </view>
+  <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="day-scroll">
+    <view class="day-row">
+      <button wx:for="{{days}}" wx:key="value" class="day-chip {{item.isSelected ? 'is-on' : ''}} {{item.isToday ? 'is-today' : ''}}" data-date="{{item.value}}" bindtap="selectDay">{{item.label}}</button>
+    </view>
+  </scroll-view>
+  <state-panel wx:if="{{loading}}" type="loading" title="正在读取已发布演出" />
+  <block wx:else>
+    <view wx:if="{{error}}" class="error-banner">{{error}}</view>
+    <view wx:if="{{schedules.length}}" class="schedule-list">
+      <view wx:for="{{schedules}}" wx:key="id" class="schedule-card">
+        <image wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
+        <view class="schedule-avatar" wx:else>LIVE</view>
+        <view>
+          <text>{{item.timeText}}</text>
+          <text>{{item.performer}}</text>
+          <text>{{item.tags || item.bio || 'M-BOX 当晚舞台阵容'}}</text>
+        </view>
+      </view>
+    </view>
+    <state-panel wx:else type="empty" title="这天暂无已发布演出" message="可继续切换日期；门店发布后会出现在这里。" />
+  </block>
+  <text class="schedule-note">演出安排可能调整，以门店当日已发布内容为准。</text>
+</view>

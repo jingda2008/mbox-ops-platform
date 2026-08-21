@@ -227,31 +227,48 @@ Page({
     preferenceBusyId: '', showPreferenceEvidence: false, showPreferenceEditor: false,
     preferenceTypeOptions: PREFERENCE_TYPE_OPTIONS,
     ...preferenceEditorState(0),
-    benefitCount: 0, hasTableContext: false,
+    benefitCount: 0, balanceText: '0', hasTableContext: false,
+    avatarUrl: '', displayName: '',
+    wechatNotificationAuthorizations: [],
   },
 
-  onShow() { this.load() },
+  onShow() {
+    this.setData({
+      avatarUrl: wx.getStorageSync('mbox.member.avatarUrl') || '',
+    })
+    this.load()
+  },
 
   async load() {
     this.setData({ loading: true, error: '', benefitError: '', registrationError: '', redemptionError: '', preferenceError: '' })
     try {
+      const soft = (error) => {
+        const message = String((error && error.message) || '')
+        if (/预约会话已失效|重新进入预约|登录状态已失效|登录或桌边会话已过期/.test(message)) return ''
+        return message
+      }
       const results = await Promise.all([
         getMiniBootstrap(),
-        getCustomerBenefits().catch((error) => { this.setData({ benefitError: error.message || '权益暂时无法读取' }); return [] }),
+        getCustomerBenefits().catch((error) => { this.setData({ benefitError: soft(error) || '' }); return [] }),
         getReservations().catch(() => ({ reservations: [] })),
-        getActivityRegistrations().catch((error) => { this.setData({ registrationError: error.message || '活动报名暂时无法读取' }); return [] }),
-        getRedemptionCatalog().catch((error) => { this.setData({ redemptionError: error.message || '兑换目录暂时无法读取' }); return { items: [] } }),
+        getActivityRegistrations().catch((error) => { this.setData({ registrationError: soft(error) || '' }); return [] }),
+        getRedemptionCatalog().catch((error) => { this.setData({ redemptionError: soft(error) || '' }); return { items: [] } }),
         getRedemptions().catch(() => []),
         getProductRestrictions().catch(() => []),
         getWechatNotificationAuthorizations().catch(() => ({ authorizations: [] })),
         getCustomerPreferenceFacts().catch((error) => {
-          this.setData({ preferenceError: error.message || '偏好依据暂时无法读取' })
+          this.setData({ preferenceError: soft(error) || '' })
           return { facts: [], sources: [] }
         }),
       ])
       const data = results[0]
       const benefits = (results[1] || []).map(benefitView)
-      const reservations = (results[2].reservations || []).filter((item) => ['pending', 'confirmed'].includes(item.status)).map((item) => ({
+      const reservations = (results[2].reservations || []).filter((item) => {
+        if (!['pending', 'confirmed'].includes(item.status)) return false
+        const arrivalMs = Date.parse(item.arrivalAt)
+        if (Number.isFinite(arrivalMs) && arrivalMs < Date.now() - 12 * 60 * 60 * 1000) return false
+        return true
+      }).map((item) => ({
         publicId: item.publicId, title: `${dateTime(item.arrivalAt)} · ${item.guestCount}人`, statusText: ({ pending: '等待确认', confirmed: '预约已确认' })[item.status] || '状态待确认',
       })).slice(0, 3)
       const registrationRows = (results[3] || []).filter((item) => item.status !== 'cancelled').slice(0, 3)
@@ -310,6 +327,7 @@ Page({
         points: (data.points || []).slice(0, 8),
         benefits,
         benefitCount: benefits.reduce((sum, item) => sum + Number(item.quantityAvailable || 0), 0),
+        balanceText: '0',
         reservations,
         registrations,
         redemptionItems,
@@ -317,39 +335,52 @@ Page({
         productRestrictions,
         contentCards,
         expiryNotificationOption,
+        wechatNotificationAuthorizations: (results[7] && results[7].authorizations) || [],
         showRedemptions: Boolean(membership && (redemptionItems.length || redemptions.length)),
         hasTableContext: ['active', 'already_active'].includes(tableConnection.status),
+        displayName: wx.getStorageSync('mbox.member.displayName') || '',
+        avatarUrl: wx.getStorageSync('mbox.member.avatarUrl') || '',
         ...preferenceView,
       })
-    } catch (error) { this.setData({ loading: false, error: error.message || '会员信息暂时无法读取' }) }
+    } catch (error) {
+      const message = String((error && error.message) || '')
+      const soft = /预约会话已失效|重新进入预约|登录状态已失效|登录或桌边会话已过期|请求的页面或接口不存在|ROUTE_NOT_FOUND/.test(message)
+        ? ''
+        : (message || '会员信息暂时无法读取')
+      this.setData({ loading: false, error: soft })
+    }
   },
 
   async becomeMember() {
     if (this.data.busy) return
     this.setData({ busy: true, error: '' })
     try {
-      if (!this.data.membershipTerms) {
-        try {
-          const data = await getMiniBootstrap()
-          if (data.membership) {
-            await this.load()
-            wx.showToast({ title: '您已经是会员', icon: 'none' })
-            return
-          }
-          this.setData({ membershipTerms: data.membershipTerms || null })
-        } catch (error) {
-          await explainJoinBlock(error.message || '会员信息暂时无法读取，请稍后重试')
-          return
-        }
-      }
-      if (!this.data.membershipTerms) {
-        await explainJoinBlock('当前入会条款尚未发布，暂不能新加入会员。点单和找回原会员不受影响。')
+      if (this.data.membership) {
+        wx.showToast({ title: '您已经是会员', icon: 'none' })
         return
       }
-      wx.navigateTo({ url: '/pages/membership-terms/index?source=mini_profile&action=enroll' })
+      // 直接进入入会条款页，由该页自行读取条款，避免本页重复请求被误报成「接口不存在」。
+      await new Promise((resolve) => {
+        wx.navigateTo({
+          url: '/pages/membership-terms/index?source=mini_profile&action=enroll',
+          success: () => resolve(),
+          fail: () => {
+            explainJoinBlock('入会页面暂时打不开。请重新编译并上传小程序后再试。').then(resolve)
+          },
+        })
+      })
     } finally {
       this.setData({ busy: false })
     }
+  },
+
+  openMemberCenter() {
+    if (!this.data.membership) {
+      this.becomeMember()
+      return
+    }
+    // 会员中心进入原先的积分与成长值明细页。
+    wx.navigateTo({ url: '/pages/points/index' })
   },
 
   openPrivacy() { wx.navigateTo({ url: '/pages/privacy/index' }) },
@@ -399,7 +430,7 @@ Page({
   },
 
   remindAgreement() {
-    wx.showToast({ title: '请先勾选同意协议与隐私政策', icon: 'none' })
+    wx.showToast({ title: '请先勾选同意用户服务协议', icon: 'none' })
   },
 
   onAgreePrivacyAuthorization() {},
@@ -452,9 +483,21 @@ Page({
       const challenge = await startMembershipRecovery()
       const result = await verifyMembershipRecovery(challenge.challengePublicId, authorization.code)
       this.setData({ recoveryMessage: result.message || '找回申请已经提交' })
-      if (result.status === 'completed') await this.load()
+      if (result.status === 'completed') {
+        wx.showToast({ title: '会员已找回', icon: 'success' })
+        await this.load()
+      }
     } catch (error) {
-      this.setData({ recoveryMessage: error.message || '历史会员找回暂时没有完成' })
+      const code = String((error && error.code) || '')
+      const message = String((error && error.message) || '')
+      const friendly = code === 'MEMBERSHIP_RECOVERY_PHONE_NOT_CONFIGURED'
+        || /微信手机号找回尚未接通/.test(message)
+        ? '会员手机号校验暂时不可用，请稍后重试或联系门店协助找回'
+        : /请求的页面或接口不存在|ROUTE_NOT_FOUND|会员服务暂时连不上/.test(message)
+          ? '会员找回服务暂时不可用。请稍后重试；若仍失败，请联系门店协助找回。'
+          : (message || '历史会员找回暂时没有完成')
+      this.setData({ recoveryMessage: friendly })
+      wx.showToast({ title: friendly, icon: 'none', duration: 3500 })
     } finally {
       this.setData({ recoveryBusy: false })
     }
@@ -644,7 +687,47 @@ Page({
 
   openReservations() { wx.switchTab({ url: '/pages/reservations/index' }) },
   openPoints() { wx.navigateTo({ url: '/pages/points/index' }) },
+  openOrders() { wx.navigateTo({ url: '/pages/account/index' }) },
+  openBalance() { wx.navigateTo({ url: '/pages/account/index' }) },
   openPreferenceSettings() { wx.navigateTo({ url: '/pages/profile-preferences/index' }) },
   openContact() { wx.navigateTo({ url: '/pages/profile-contact/index' }) },
+  openCoupons() { wx.navigateTo({ url: '/pages/profile-coupons/index' }) },
+  async openNotificationSettings() {
+    const authorizations = this.data.wechatNotificationAuthorizations || []
+    const options = authorizations.filter((item) => (
+      item && item.templateId && item.usesRemaining <= 0 && item.platformResult !== 'ban'
+    ))
+    if (!options.length) {
+      wx.showToast({ title: '暂无可申请的提醒', icon: 'none' })
+      return
+    }
+    if (typeof wx.requestSubscribeMessage !== 'function') {
+      wx.showToast({ title: '当前微信暂不支持订阅消息', icon: 'none' })
+      return
+    }
+    try {
+      const tmplIds = Array.from(new Set(options.map((item) => item.templateId))).slice(0, 3)
+      const result = await new Promise((resolve, reject) => wx.requestSubscribeMessage({
+        tmplIds, success: resolve, fail: reject,
+      }))
+      for (const option of options) {
+        if (!tmplIds.includes(option.templateId)) continue
+        const platformResult = result[option.templateId]
+        if (!['accept', 'reject', 'ban'].includes(platformResult)) continue
+        await recordWechatNotificationAuthorization({
+          notificationType: option.notificationType,
+          policyId: option.policyId,
+          policyVersion: option.policyVersion,
+          templateId: option.templateId,
+          expectedVersion: option.authorizationVersion,
+          platformResult,
+        })
+      }
+      wx.showToast({ title: '已按你的选择处理', icon: 'none' })
+      this.load()
+    } catch (_error) {
+      wx.showToast({ title: '未完成提醒授权', icon: 'none' })
+    }
+  },
   openCommunity(event) { wx.navigateTo({ url: `/pages/community-detail/index?id=${encodeURIComponent(event.currentTarget.dataset.id)}` }) },
 })

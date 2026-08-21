@@ -1,0 +1,19 @@
+<view class="page coupons-page">
+  <view class="coupons-hero"><text>M-BOX · COUPONS</text><text>我的优惠券</text><text>门店发放的券与可用权益都在这里。</text></view>
+  <state-panel wx:if="{{loading}}" type="loading" title="正在读取优惠券" />
+  <block wx:else>
+    <view wx:if="{{error}}" class="error-banner">{{error}}</view>
+    <view wx:if="{{coupons.length}}" class="coupon-list">
+      <view wx:for="{{coupons}}" wx:key="id" class="coupon-card">
+        <view class="coupon-card__head"><text>{{item.typeText}}</text><text>{{item.quantityText}}</text></view>
+        <text class="coupon-title">{{item.title}}</text>
+        <text class="coupon-copy">{{item.description}}</text>
+        <view class="coupon-foot">
+          <text wx:if="{{item.valueText}}">{{item.valueText}}</text>
+          <text>有效至 {{item.validText}}</text>
+        </view>
+      </view>
+    </view>
+    <state-panel wx:else type="empty" title="暂无可用优惠券" message="门店发放后会出现在这里；也可在会员卡查看权益。" />
+  </block>
+</view>

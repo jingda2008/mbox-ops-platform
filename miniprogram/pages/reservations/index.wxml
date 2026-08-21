@@ -43,11 +43,35 @@
       </view>
 
       <view wx:elif="{{step === 2}}" class="flow-panel flow-panel--experience">
-        <text class="flow-kicker">STEP 02</text><text class="flow-title">把今晚交给我们一点</text>
-        <view class="show-selection show-selection--compact"><view class="field-title"><view><text>今日演出</text><text>选中后，我们会优先留意开演时间</text></view><text>{{performances.length ? performances.length + ' 场可选' : '可不选'}}</text></view><state-panel wx:if="{{loadingShows}}" type="loading" title="正在读取演出" /><scroll-view wx:elif="{{performances.length}}" scroll-x enhanced show-scrollbar="{{false}}"><view class="show-row"><button wx:for="{{performances}}" wx:key="id" class="show-card show-card--compact {{selectedPerformanceId === item.id ? 'is-selected' : ''}}" data-id="{{item.id}}" bindtap="selectPerformance"><image wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" /><view><text>{{item.name}}</text><text>{{item.timeText}}</text></view></button></view></scroll-view><text wx:else class="empty-inline">这天暂未发布演出；预约照常进行。</text></view>
-        <view class="choice-field"><view class="choice-field__head"><text>更想坐在哪里？</text><text>{{seatOptions[seatIndex].name}}</text></view><view class="choice-grid"><button wx:for="{{seatOptions}}" wx:key="code" class="choice-card {{seatIndex === index ? 'is-selected' : ''}}" data-index="{{index}}" bindtap="chooseSeat"><text>{{item.name}}</text><text>{{item.copy}}</text></button></view></view>
-        <view class="choice-field"><view class="choice-field__head"><text>这次想怎样相聚？</text><text>可选</text></view><view class="occasion-grid"><button wx:for="{{occasionOptions}}" wx:key="code" class="occasion-chip {{occasionIndex === index ? 'is-selected' : ''}}" data-index="{{index}}" bindtap="chooseOccasion">{{item.name}}</button></view></view>
-        <label class="field reservation-note"><text class="field__label">还有想让我们提前知道的吗 <text>选填</text></text><textarea class="field__textarea" maxlength="180" value="{{occasionNote}}" placeholder="如生日称呼、希望安静聊聊或特别安排" bindinput="onNoteInput" /></label>
+        <text class="flow-kicker">STEP 02</text><text class="flow-title">演出与位置偏好</text>
+        <view class="show-selection show-selection--mini">
+          <view class="field-title"><text>今晚演出提醒</text><text>可选 · 点选即可</text></view>
+          <state-panel wx:if="{{loadingShows}}" type="loading" title="读取演出" />
+          <scroll-view wx:elif="{{performances.length}}" scroll-x enhanced show-scrollbar="{{false}}">
+            <view class="show-row show-row--mini">
+              <button wx:for="{{performances}}" wx:key="id" class="show-chip {{selectedPerformanceId === item.id ? 'is-selected' : ''}}" data-id="{{item.id}}" bindtap="selectPerformance">
+                <text>{{item.name}}</text><text>{{item.timeText}}</text>
+              </button>
+            </view>
+          </scroll-view>
+          <text wx:else class="empty-inline">这天暂未发布演出，可直接选位置。</text>
+        </view>
+        <label class="field choice-picker">
+          <text class="field__label">更想坐在哪里？ <text>下拉选择</text></text>
+          <picker mode="selector" range="{{seatOptions}}" range-key="name" value="{{seatIndex}}" bindchange="onSeatChange">
+            <view class="picker-field picker-field--select">{{seatOptions[seatIndex].name}} · 点击展开</view>
+          </picker>
+        </label>
+        <label class="field choice-picker">
+          <text class="field__label">这次想怎样相聚？ <text>下拉选择</text></text>
+          <picker mode="selector" range="{{occasionOptions}}" range-key="name" value="{{occasionIndex}}" bindchange="onOccasionChange">
+            <view class="picker-field picker-field--select">{{occasionOptions[occasionIndex].name}} · 点击展开</view>
+          </picker>
+        </label>
+        <label class="field reservation-note reservation-note--compact">
+          <text class="field__label">备注 <text>选填</text></text>
+          <input class="field__input" maxlength="80" value="{{occasionNote}}" placeholder="如生日称呼、希望安静" bindinput="onNoteInput" />
+        </label>
       </view>
 
       <view wx:else class="flow-panel">

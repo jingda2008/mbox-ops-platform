@@ -1,7 +1,7 @@
 const { request, deviceKey } = require('./request')
 const { randomId } = require('./id')
 const { getTableSession, rememberTableConnection, clearTableConnection } = require('./session')
-const { ensureCustomerSession } = require('./auth')
+const { ensureCustomerSession, renewReservationSessionOnly, isCustomerSessionInvalid, isWechatIdentityUnavailable } = require('./auth')
 const { checkoutRecommendationAttribution } = require('./recommendation-attribution')
 
 async function loadGuestSession() {
@@ -37,7 +37,25 @@ async function getGuestSession() { return { data: await loadGuestSession(), sour
 
 async function publicRequest(path, options) {
   await ensureCustomerSession(false)
-  return request(path, Object.assign({ requireTableSession: false }, options || {}))
+  try {
+    return await request(path, Object.assign({ requireTableSession: false }, options || {}))
+  } catch (error) {
+    if (!isCustomerSessionInvalid(error)) throw error
+    // 只续预约会话 cookie，不清除微信身份，避免现网微信身份接口缺失时把会员冲成访客。
+    renewReservationSessionOnly()
+    await ensureCustomerSession(true)
+    try {
+      return await request(path, Object.assign({ requireTableSession: false }, options || {}))
+    } catch (retryError) {
+      if (isWechatIdentityUnavailable(retryError) || /请求的页面或接口不存在/.test(String(retryError && retryError.message || ''))) {
+        const friendly = new Error('会员服务暂时连不上，请稍后重试；若刚授权手机号，可再试一次找回会员')
+        friendly.code = 'MEMBERSHIP_SERVICE_UNAVAILABLE'
+        friendly.statusCode = retryError && retryError.statusCode
+        throw friendly
+      }
+      throw retryError
+    }
+  }
 }
 
 async function getMiniBootstrap() { return (await publicRequest('/api/public/mini/bootstrap')).data }

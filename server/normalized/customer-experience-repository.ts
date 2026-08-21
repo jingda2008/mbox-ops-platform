@@ -4716,6 +4716,9 @@ const CONTENT_CARD_SIMPLE_TARGETS = new Set([
   '/pages/profile/index',
   '/pages/songs/index',
   '/pages/privacy/index',
+  '/pages/performances/index',
+  '/pages/points/index',
+  '/pages/account/index',
 ])
 
 export function safeContentTargetPath(value: string): string | null {

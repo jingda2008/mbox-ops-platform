@@ -1,7 +1,8 @@
 const { getCustomerProfile, updatePreferences } = require('../../utils/api')
 
+const AVATAR_KEY = 'mbox.member.avatarUrl'
 const SEATS = [
-  { value: 'no_preference', label: '交给现场安排' },
+  { value: 'no_preference', label: '交给现场' },
   { value: 'comfortable_booth', label: '舒适卡座' },
   { value: 'stage_atmosphere', label: '靠近舞台' },
   { value: 'quiet_chat', label: '方便聊天' },
@@ -36,11 +37,16 @@ function optionIndex(options, value) {
   return index < 0 ? 0 : index
 }
 
+function alcoholChips(selectedValues) {
+  const selected = new Set(selectedValues || [])
+  return ALCOHOL.map((item) => Object.assign({}, item, { selected: selected.has(item.value) }))
+}
+
 Page({
   data: {
-    loading: true, saving: false, error: '', profile: null,
-    displayName: '', seats: SEATS, service: SERVICE, alcohol: ALCOHOL, birthdays: birthdayOptions(),
-    seatIndex: 0, serviceIndex: 1, alcoholIndex: 6, birthdayIndex: 0,
+    loading: true, saving: false, error: '', profile: null, avatarUrl: '',
+    displayName: '', seats: SEATS, service: SERVICE, alcohol: alcoholChips(['mixed']), birthdays: birthdayOptions(),
+    seatValue: 'no_preference', serviceValue: 'balanced', birthdayIndex: 0,
     tasteNotes: '', musicStyles: '', dietaryNotes: '',
   },
 
@@ -51,39 +57,62 @@ Page({
     try {
       const profile = await getCustomerProfile()
       const preferences = profile.preferences || {}
+      const preferred = preferences.preferredAlcohol || 'mixed'
+      const selectedAlcohol = preferred === 'mixed' ? ['mixed'] : [preferred]
       this.setData({
         loading: false, profile,
-        displayName: profile.displayName || '',
-        seatIndex: optionIndex(SEATS, preferences.seatPreference),
-        serviceIndex: optionIndex(SERVICE, preferences.serviceIntensity),
-        alcoholIndex: optionIndex(ALCOHOL, preferences.preferredAlcohol),
+        avatarUrl: wx.getStorageSync(AVATAR_KEY) || '',
+        displayName: profile.displayName || wx.getStorageSync('mbox.member.displayName') || '',
+        seatValue: preferences.seatPreference || 'no_preference',
+        serviceValue: preferences.serviceIntensity || 'balanced',
+        alcohol: alcoholChips(selectedAlcohol),
         birthdayIndex: optionIndex(this.data.birthdays, preferences.birthdayMonthDay),
         tasteNotes: preferences.tasteNotes || '',
         musicStyles: preferences.musicStyles || '',
         dietaryNotes: preferences.dietaryNotes || '',
       })
     } catch (error) {
-      this.setData({ loading: false, error: error.message || '暂时无法读取个人资料' })
+      this.setData({ loading: false, error: error.message || '暂时无法读取偏好设置' })
     }
   },
 
+  onChooseAvatar(event) {
+    const avatarUrl = event && event.detail && event.detail.avatarUrl
+    if (!avatarUrl) return
+    wx.setStorageSync(AVATAR_KEY, avatarUrl)
+    this.setData({ avatarUrl })
+  },
   onNameInput(event) { this.setData({ displayName: event.detail.value }) },
   onTasteInput(event) { this.setData({ tasteNotes: event.detail.value }) },
   onMusicInput(event) { this.setData({ musicStyles: event.detail.value }) },
   onDietaryInput(event) { this.setData({ dietaryNotes: event.detail.value }) },
-  chooseSeat(event) { this.setData({ seatIndex: Number(event.currentTarget.dataset.index) }) },
-  chooseService(event) { this.setData({ serviceIndex: Number(event.currentTarget.dataset.index) }) },
-  chooseAlcohol(event) { this.setData({ alcoholIndex: Number(event.currentTarget.dataset.index) }) },
   onBirthdayChange(event) { this.setData({ birthdayIndex: Number(event.detail.value) }) },
+  toggleSeat(event) { this.setData({ seatValue: event.currentTarget.dataset.value }) },
+  toggleService(event) { this.setData({ serviceValue: event.currentTarget.dataset.value }) },
+  toggleAlcohol(event) {
+    const value = event.currentTarget.dataset.value
+    let selected = this.data.alcohol.filter((item) => item.selected).map((item) => item.value)
+    if (value === 'mixed') {
+      selected = selected.includes('mixed') ? [] : ['mixed']
+    } else {
+      selected = selected.filter((item) => item !== 'mixed')
+      if (selected.includes(value)) selected = selected.filter((item) => item !== value)
+      else selected = selected.concat(value)
+    }
+    if (!selected.length) selected = ['mixed']
+    this.setData({ alcohol: alcoholChips(selected) })
+  },
 
   async save() {
     if (this.data.saving) return
     const displayName = String(this.data.displayName || '').trim()
     if (displayName.length > 80) return this.setData({ error: '昵称请控制在80个字以内' })
+    const selectedAlcohol = this.data.alcohol.filter((item) => item.selected).map((item) => item.value)
+    const preferredAlcohol = selectedAlcohol.length === 1 ? selectedAlcohol[0] : 'mixed'
     const preferences = {
-      seatPreference: this.data.seats[this.data.seatIndex].value,
-      serviceIntensity: this.data.service[this.data.serviceIndex].value,
-      preferredAlcohol: this.data.alcohol[this.data.alcoholIndex].value,
+      seatPreference: this.data.seatValue,
+      serviceIntensity: this.data.serviceValue,
+      preferredAlcohol,
       birthdayMonthDay: this.data.birthdays[this.data.birthdayIndex].value,
       tasteNotes: String(this.data.tasteNotes || '').trim(),
       musicStyles: String(this.data.musicStyles || '').trim(),
@@ -92,6 +121,7 @@ Page({
     this.setData({ saving: true, error: '' })
     try {
       await updatePreferences(preferences, displayName || null)
+      wx.setStorageSync('mbox.member.displayName', displayName || '')
       wx.showToast({ title: '已保存', icon: 'success' })
       setTimeout(() => wx.navigateBack(), 550)
     } catch (error) {

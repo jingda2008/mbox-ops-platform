@@ -1,15 +1,62 @@
 <view class="page preferences-page">
-  <view class="preferences-hero"><text class="preferences-kicker">M-BOX · YOUR NIGHT</text><text class="preferences-title">我的偏好</text><text class="preferences-copy">只为本店的推荐与服务安排使用；生日仅保存月日，用于已发布的生日权益。</text></view>
+  <view class="preferences-hero">
+    <text class="preferences-kicker">M-BOX · YOUR NIGHT</text>
+    <text class="preferences-title">我的偏好</text>
+    <text class="preferences-copy">昵称、生日与到店偏好；生日仅保存月日，用于生日赠送权益。</text>
+  </view>
   <state-panel wx:if="{{loading}}" type="loading" title="正在读取偏好" />
   <block wx:else>
     <view wx:if="{{error}}" class="error-banner">{{error}}</view>
-    <view class="preference-card identity-card"><text class="field-label">怎么称呼您</text><input value="{{displayName}}" maxlength="80" placeholder="例如：张小姐" bindinput="onNameInput" /></view>
-    <view class="preference-card"><view class="card-head"><text>到店时更想坐哪里？</text><text>可随时修改</text></view><view class="chip-grid"><button wx:for="{{seats}}" wx:key="value" class="option-chip {{seatIndex === index ? 'is-selected' : ''}}" data-index="{{index}}" bindtap="chooseSeat">{{item.label}}</button></view></view>
-    <view class="preference-card"><view class="card-head"><text>希望我们怎样照顾这晚？</text><text>可随时修改</text></view><view class="chip-grid"><button wx:for="{{service}}" wx:key="value" class="option-chip {{serviceIndex === index ? 'is-selected' : ''}}" data-index="{{index}}" bindtap="chooseService">{{item.label}}</button></view></view>
-    <view class="preference-card"><view class="card-head"><text>通常会想喝什么？</text><text>用于推荐</text></view><view class="chip-grid"><button wx:for="{{alcohol}}" wx:key="value" class="option-chip {{alcoholIndex === index ? 'is-selected' : ''}}" data-index="{{index}}" bindtap="chooseAlcohol">{{item.label}}</button></view></view>
-    <view class="preference-card"><text class="field-label">生日</text><picker mode="selector" range="{{birthdays}}" range-key="label" value="{{birthdayIndex}}" bindchange="onBirthdayChange"><view class="picker-line"><text>{{birthdays[birthdayIndex].label}}</text><text>›</text></view></picker><text class="field-note">我们只保存月日，不保存出生年份。</text></view>
-    <view class="preference-card compact-fields"><label><text>口味偏好</text><input value="{{tasteNotes}}" maxlength="80" placeholder="如：清爽、少甜" bindinput="onTasteInput" /></label><label><text>音乐偏好</text><input value="{{musicStyles}}" maxlength="80" placeholder="如：流行、爵士、摇滚" bindinput="onMusicInput" /></label><label><text>饮食说明</text><input value="{{dietaryNotes}}" maxlength="80" placeholder="只填写与点单推荐有关的信息" bindinput="onDietaryInput" /></label></view>
-    <button class="save-button" loading="{{saving}}" disabled="{{saving}}" bindtap="save">保存偏好</button>
-    <text class="privacy-note">头像上传不在此页开放：目前没有可审计的头像存储与删除能力，不会把临时微信图片假装保存为个人头像。</text>
+
+    <view class="preference-card identity-card">
+      <view class="avatar-row">
+        <button class="avatar-button" open-type="chooseAvatar" bindchooseavatar="onChooseAvatar">
+          <image wx:if="{{avatarUrl}}" src="{{avatarUrl}}" mode="aspectFill" />
+          <text wx:else>选头像</text>
+        </button>
+        <view class="avatar-copy">
+          <text class="field-label">昵称与头像</text>
+          <input type="nickname" value="{{displayName}}" maxlength="80" placeholder="点此填写昵称" bindinput="onNameInput" bindblur="onNameInput" />
+          <text class="field-note">头像保存在本机，方便你识别自己的会员页。</text>
+        </view>
+      </view>
+    </view>
+
+    <view class="preference-card">
+      <text class="field-label">生日 <text>可选 · 生日赠礼</text></text>
+      <picker mode="selector" range="{{birthdays}}" range-key="label" value="{{birthdayIndex}}" bindchange="onBirthdayChange">
+        <view class="picker-line"><text>{{birthdays[birthdayIndex].label}}</text><text>选择 ›</text></view>
+      </picker>
+      <text class="field-note">只保存月日，不保存出生年份。</text>
+    </view>
+
+    <view class="preference-card">
+      <text class="field-label">位置偏好 <text>点选一项</text></text>
+      <view class="chip-grid">
+        <button wx:for="{{seats}}" wx:key="value" class="chip {{seatValue === item.value ? 'is-on' : ''}}" data-value="{{item.value}}" bindtap="toggleSeat">{{item.label}}</button>
+      </view>
+    </view>
+
+    <view class="preference-card">
+      <text class="field-label">服务节奏 <text>点选一项</text></text>
+      <view class="chip-grid">
+        <button wx:for="{{service}}" wx:key="value" class="chip {{serviceValue === item.value ? 'is-on' : ''}}" data-value="{{item.value}}" bindtap="toggleService">{{item.label}}</button>
+      </view>
+    </view>
+
+    <view class="preference-card">
+      <text class="field-label">酒水偏好 <text>可多选</text></text>
+      <view class="chip-grid">
+        <button wx:for="{{alcohol}}" wx:key="value" class="chip {{item.selected ? 'is-on' : ''}}" data-value="{{item.value}}" bindtap="toggleAlcohol">{{item.label}}</button>
+      </view>
+    </view>
+
+    <view class="preference-card compact-fields">
+      <label><text>口味偏好</text><input value="{{tasteNotes}}" maxlength="80" placeholder="如：清爽、少甜" bindinput="onTasteInput" /></label>
+      <label><text>音乐偏好</text><input value="{{musicStyles}}" maxlength="80" placeholder="如：流行、爵士、摇滚" bindinput="onMusicInput" /></label>
+      <label><text>饮食说明</text><input value="{{dietaryNotes}}" maxlength="80" placeholder="与点单推荐有关即可" bindinput="onDietaryInput" /></label>
+    </view>
+
+    <button class="save-button" loading="{{saving}}" disabled="{{saving}}" bindtap="save">确定保存</button>
   </block>
 </view>

@@ -1,0 +1,16 @@
+.notifications-page{padding-top:0;padding-bottom:48rpx}
+.notifications-hero{margin:0 -28rpx 28rpx;padding:42rpx 28rpx 36rpx;background:linear-gradient(145deg,#0d1712,#234031);color:#fff}
+.notifications-hero text{display:block}
+.notifications-hero text:nth-child(1){color:#c8a675;font-size:18rpx;font-weight:700;letter-spacing:3rpx}
+.notifications-hero text:nth-child(2){margin-top:12rpx;font-family:"Songti SC","STSong",serif;font-size:42rpx;font-weight:600}
+.notifications-hero text:nth-child(3){margin-top:10rpx;color:#d5ddd7;font-size:22rpx;line-height:1.5}
+.notice-card{padding:22rpx;border:1rpx solid #e0d9d0;border-radius:18rpx;background:#fff}
+.notice-title{display:block;font-size:24rpx;font-weight:700}
+.notice-copy{display:block;margin-top:8rpx;color:#746c63;font-size:21rpx;line-height:1.5}
+.option-list{display:grid;margin-top:18rpx;gap:12rpx}
+.option-row{display:flex;padding:20rpx;align-items:center;justify-content:space-between;gap:16rpx;border:1rpx solid #e0d9d0;border-radius:16rpx;background:#fff}
+.option-row view text{display:block}
+.option-row view text:first-child{font-size:24rpx;font-weight:650}
+.option-row view text:last-child{margin-top:6rpx;color:#7a7269;font-size:18rpx}
+.option-row button{width:auto;min-height:72rpx;margin:0;padding:0 22rpx;border-radius:36rpx;background:#315d46;color:#fff;font-size:21rpx;line-height:72rpx}
+.secondary-button{width:100%;min-height:88rpx;margin-top:24rpx;border:1rpx solid #cfc6bb;border-radius:16rpx;background:transparent;color:#5a524a;font-size:24rpx;line-height:86rpx}

@@ -201,4 +201,9 @@ function clearWechatIdentityToken() {
   wx.removeStorageSync(RESERVATION_COOKIE_KEY)
 }
 
-module.exports = { request, deviceKey, storeWechatIdentityToken, clearWechatIdentityToken }
+function clearReservationCookie() {
+  wx.removeStorageSync(RESERVATION_COOKIE_KEY)
+  wx.removeStorageSync(LEGACY_COOKIE_KEY)
+}
+
+module.exports = { request, deviceKey, storeWechatIdentityToken, clearWechatIdentityToken, clearReservationCookie }

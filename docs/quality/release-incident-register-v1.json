@@ -131,6 +131,26 @@
       "automaticBlocker": "inode-preserving Caddyfile write plus host-to-container SHA256 visibility gate",
       "fixCommit": "82e729128abf4b01ee2047e96a79686830cf0431",
       "status": "covered"
+    },
+    {
+      "id": "REL-014",
+      "category": "image-identity-runtime",
+      "rootCause": "The release manifest froze the OCI index digest but activation incorrectly required Docker's loaded platform image ID to equal that different digest.",
+      "earliestDetectionStage": "artifact_verified",
+      "regressionTest": "scripts/aliyun-evidence-pipeline.test.mjs",
+      "automaticBlocker": "manifest schema 6 freezes and independently verifies OCI and platform image digests",
+      "fixCommit": "e1605b2c6445e6969b506302b168667a5f10ef60",
+      "status": "covered"
+    },
+    {
+      "id": "REL-015",
+      "category": "evidence-host-authority",
+      "rootCause": "The deployment script assumed the application origin itself had ossutil and an ECS RAM role, although production intentionally reaches OSS through the payment-server evidence relay.",
+      "earliestDetectionStage": "predeployment_oss",
+      "regressionTest": "scripts/aliyun-evidence-pipeline.test.mjs",
+      "automaticBlocker": "explicit evidence SSH relay with SHA and version-bound report transfer before activation",
+      "fixCommit": "5629b46ea22134dfea32f18b4eb1d41b7cbaf040",
+      "status": "covered"
     }
   ]
 }

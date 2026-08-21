@@ -711,6 +711,10 @@ test -n "${candidate_database_identity}"
 release_state_transition "${state_file}" external_preflight_passed migration_compatible
 
 backup_path=
+relay_backup_verified=0
+relay_backup_stage=${release_dir}/relay-backup-ready
+relay_backup_preparation=${relay_backup_stage}/backup-preparation.json
+relay_backup_report=${release_dir}/preverified-backup-upload.json
 release_state_require "${state_file}" migration_compatible
 recent_backup=
 if [ "${contract_migration}" = 1 ]; then
@@ -777,7 +781,52 @@ else
   recent_backup=$(find "${install_root}/backups" -type f -name 'mbox-*.dump' \
     -mmin "-${backup_max_age_minutes}" -print -quit)
 fi
+
 if [ "${contract_migration}" != 1 ] \
+  && [ -f "${relay_backup_preparation}" ] \
+  && [ -f "${relay_backup_report}" ]; then
+  load_database_maintenance_secrets
+  assert_backup_targets_application_database
+  relay_generated_epoch=$(jq -er --arg sha "${release_sha}" \
+    'select(.schemaVersion == 1 and .releaseSha == $sha) | .generatedAtEpoch' \
+    "${relay_backup_preparation}")
+  [[ "${relay_generated_epoch}" =~ ^[0-9]+$ ]]
+  relay_age_seconds=$(( $(date -u +%s) - relay_generated_epoch ))
+  test "${relay_age_seconds}" -ge 0
+  test "${relay_age_seconds}" -le $(( backup_max_age_minutes * 60 ))
+  test "$(jq -er '.databaseIdentity' "${relay_backup_preparation}")" = \
+    "${candidate_database_identity}"
+  relay_backup_name=$(jq -er '.backupName' "${relay_backup_preparation}")
+  [[ "${relay_backup_name}" =~ ^mbox-[A-Za-z0-9._-]+\.dump$ ]]
+  relay_backup_prefix=$(jq -er --arg sha "${release_sha}" \
+    '.objectPrefix | select(startswith("mbox/backups/") and endswith("/" + $sha))' \
+    "${relay_backup_preparation}")
+  backup_path=${install_root}/backups/${relay_backup_name}
+  test -f "${backup_path}"
+  test -f "${backup_path}.sha256"
+  test "$(sha256sum "${backup_path}" | awk '{print $1}')" = \
+    "$(jq -er '.backupSha256' "${relay_backup_preparation}")"
+  (
+    cd "${relay_backup_stage}"
+    sha256sum --check SHA256SUMS >/dev/null
+  )
+  jq -e --arg prefix "${relay_backup_prefix}" \
+    '.verified == true and .authMode == "EcsRamRole" and .prefix == $prefix and
+      (.objects | length) == 4 and .completionMarker == ($prefix + "/_COMPLETE.json")' \
+    "${relay_backup_report}" >/dev/null
+  while IFS= read -r -d '' relay_file; do
+    relay_relative=${relay_file#${relay_backup_stage}/}
+    relay_sha=$(sha256sum "${relay_file}" | awk '{print $1}')
+    relay_bytes=$(wc -c < "${relay_file}" | tr -d ' ')
+    jq -e --arg key "${relay_backup_prefix}/${relay_relative}" \
+      --arg sha "${relay_sha}" --argjson bytes "${relay_bytes}" \
+      '.objects | any(.key == $key and .sha256 == $sha and .bytes == $bytes and .verified == true)' \
+      "${relay_backup_report}" >/dev/null
+  done < <(find "${relay_backup_stage}" -maxdepth 1 -type f -print0 | sort -z)
+  relay_backup_verified=1
+fi
+if [ "${contract_migration}" != 1 ] \
+  && [ "${relay_backup_verified}" != 1 ] \
   && { [ "${deployment_tier}" = production ] || [ "${migration_changed}" = 1 ] \
     || [ -z "${recent_backup}" ]; }; then
   load_database_maintenance_secrets
@@ -791,30 +840,34 @@ selected_backup=${backup_path:-${recent_backup}}
 test -n "${selected_backup}"
 test -f "${selected_backup}"
 test -f "${selected_backup}.sha256"
-backup_stage=${release_dir}/oss-backup
-rm -rf "${backup_stage}"
-install -d -m 0700 "${backup_stage}"
-backup_name=$(basename "${selected_backup}")
-ln "${selected_backup}" "${backup_stage}/${backup_name}" 2>/dev/null \
-  || cp "${selected_backup}" "${backup_stage}/${backup_name}"
-if [ "${contract_migration}" = 1 ]; then
-  install -m 0600 "${contract_restore_evidence}" \
-    "${backup_stage}/contract-restore-source.json"
-  install -m 0600 "${previous_release_dir}/release-manifest.json" \
-    "${backup_stage}/previous-release-manifest.json"
-fi
-(
-  cd "${backup_stage}"
+if [ "${relay_backup_verified}" = 1 ]; then
+  install -m 0600 "${relay_backup_report}" "${release_dir}/oss-backup-verification.json"
+else
+  backup_stage=${release_dir}/oss-backup
+  rm -rf "${backup_stage}"
+  install -d -m 0700 "${backup_stage}"
+  backup_name=$(basename "${selected_backup}")
+  ln "${selected_backup}" "${backup_stage}/${backup_name}" 2>/dev/null \
+    || cp "${selected_backup}" "${backup_stage}/${backup_name}"
   if [ "${contract_migration}" = 1 ]; then
-    sha256sum "${backup_name}" contract-restore-source.json previous-release-manifest.json \
-      > SHA256SUMS
-  else
-    sha256sum "${backup_name}" > SHA256SUMS
+    install -m 0600 "${contract_restore_evidence}" \
+      "${backup_stage}/contract-restore-source.json"
+    install -m 0600 "${previous_release_dir}/release-manifest.json" \
+      "${backup_stage}/previous-release-manifest.json"
   fi
-  sha256sum --check SHA256SUMS >/dev/null
-)
-MBOX_OSS_VERIFICATION_REPORT="${release_dir}/oss-backup-verification.json" \
-  "${uploader}" "${backup_stage}" "mbox/backups/$(date -u +%Y-%m-%d)/${release_sha}"
+  (
+    cd "${backup_stage}"
+    if [ "${contract_migration}" = 1 ]; then
+      sha256sum "${backup_name}" contract-restore-source.json previous-release-manifest.json \
+        > SHA256SUMS
+    else
+      sha256sum "${backup_name}" > SHA256SUMS
+    fi
+    sha256sum --check SHA256SUMS >/dev/null
+  )
+  MBOX_OSS_VERIFICATION_REPORT="${release_dir}/oss-backup-verification.json" \
+    "${uploader}" "${backup_stage}" "mbox/backups/$(date -u +%Y-%m-%d)/${release_sha}"
+fi
 if [ "${contract_migration}" = 1 ]; then
   release_state_transition "${state_file}" writer_drained post_drain_backup_verified
 else

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -209,6 +209,66 @@ test('database maintenance clients receive only password-free service references
     ...process.env, PATH: `${bin}:${process.env.PATH}`, ARGV_LOG: log,
     DATABASE_URL: `postgresql://backup:${secret}@127.0.0.1:5432/mbox`, BACKUP_DIR: backups,
   }, stdio: 'pipe' }))
+})
+
+test('a private application host prepares a release-bound backup for the OSS evidence relay', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mbox-backup-relay-'))
+  const installRoot = join(root, 'install')
+  const release = join(installRoot, 'releases', 'abcdef0')
+  const secrets = join(installRoot, 'secrets')
+  const bin = join(root, 'bin')
+  const service = join(secrets, 'database-services.conf')
+  const pass = join(secrets, 'database.pgpass')
+  const maintenance = join(secrets, 'database-maintenance.env')
+  const releaseSha = 'a'.repeat(40)
+  execFileSync('mkdir', ['-p', release, secrets, bin])
+  writeFileSync(join(release, 'release-manifest.json'), JSON.stringify({ releaseSha }))
+  writeFileSync(service, '[application]\nhost=db\n[backup]\nhost=db\n')
+  writeFileSync(pass, 'db:5432:mbox:backup:secret\n')
+  writeFileSync(maintenance, [
+    'APPLICATION_DATABASE_SERVICE=application',
+    'BACKUP_DATABASE_SERVICE=backup',
+    'ADMIN_DATABASE_SERVICE=admin',
+    `PGSERVICEFILE=${service}`,
+    `PGPASSFILE=${pass}`,
+    '',
+  ].join('\n'))
+  for (const file of [service, pass, maintenance]) chmodSync(file, 0o600)
+  writeFileSync(join(bin, 'stat'), '#!/bin/sh\nprintf "0:600\\n"\n')
+  writeFileSync(join(bin, 'docker'), `#!/bin/sh
+if [ "$1" = inspect ]; then exit 0; fi
+if [ "$1" = exec ]; then cat >/dev/null; printf 'mbox|local|5432'; exit 0; fi
+exit 64
+`)
+  writeFileSync(join(bin, 'psql'), `#!/bin/sh
+case "$*" in *--command=*) printf 'mbox|local|5432\\n' ;; *) cat >/dev/null; printf 'authorized\\n' ;; esac
+`)
+  writeFileSync(join(bin, 'pg_dump'), `#!/bin/sh
+for argument in "$@"; do case "$argument" in --file=*) printf 'verified-dump\\n' > "\${argument#--file=}" ;; esac; done
+`)
+  for (const command of ['stat', 'docker', 'psql', 'pg_dump']) chmodSync(join(bin, command), 0o700)
+  try {
+    execFileSync(resolve('deploy/aliyun/backup-postgres.sh'), ['prepare-relay', release, releaseSha], {
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        MBOX_INSTALL_ROOT: installRoot,
+        MBOX_DATABASE_MAINTENANCE_ENV: maintenance,
+      },
+      stdio: 'pipe',
+    })
+    const stage = join(release, 'relay-backup-ready')
+    assert.equal(existsSync(join(stage, 'SHA256SUMS')), true)
+    assert.equal(readdirSync(stage).length, 4)
+    const preparation = JSON.parse(readFileSync(join(stage, 'backup-preparation.json'), 'utf8'))
+    assert.equal(preparation.releaseSha, releaseSha)
+    assert.equal(preparation.databaseIdentity, 'mbox|local|5432')
+    assert.match(preparation.backupName, /^mbox-.*\.dump$/)
+    assert.equal(preparation.objectPrefix.endsWith(`/${releaseSha}`), true)
+    execFileSync('sha256sum', ['--check', 'SHA256SUMS'], { cwd: stage, stdio: 'pipe' })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('diagnostic GitHub artifacts cannot hide tests while formal OSS failures block release', async () => {

@@ -259,11 +259,13 @@ rsync -a --partial "${rsync_resume_option}" \
 ssh "${ssh_options[@]}" "${ssh_target}" \
   "cd '${remote_release_dir}' && test \"\$(jq -r '.deploymentScripts | length' release-manifest.json)\" = 12 && jq -er '.deploymentScripts | to_entries[] | [.value.file,.value.sha256] | @tsv' release-manifest.json | while IFS=\$'\\t' read -r file sha; do test \"\$(sha256sum \"\$file\" | awk '{print \$1}')\" = \"\$sha\" || exit 1; done && chmod 0700 ./*.sh"
 
+uses_evidence_relay=0
 if [ "${evidence_ssh_host}:${evidence_ssh_port}:${evidence_ssh_user}:${evidence_ssh_key}" \
   = "${ssh_host}:${ssh_port}:${ssh_user}:${ssh_key}" ]; then
   ssh "${ssh_options[@]}" "${ssh_target}" \
     "'${remote_release_dir}/stage-release-evidence.sh' '${remote_release_dir}' '${remote_release_dir}/oss-ready-evidence' '${MBOX_RELEASE_TAG}'"
 else
+  uses_evidence_relay=1
   evidence_release_dir="/opt/mbox/releases/${short_sha}-evidence-relay"
   ssh "${evidence_ssh_options[@]}" "${evidence_ssh_target}" \
     "install -d -m 0700 '${evidence_release_dir}'"
@@ -312,6 +314,45 @@ for _ in $(seq 1 12); do
 done
 rm -f "${pre_activation_temporary}"
 test "${pre_activation_verified}" = 1
+
+# The private application host intentionally has no OSS role. It creates the
+# read-only database snapshot, while the separately authenticated evidence host
+# uploads and reads it back from OSS. Activation accepts only the resulting
+# release-bound verification report and rechecks the database identity itself.
+if [ "${uses_evidence_relay}" = 1 ]; then
+  relay_backup_local=$(mktemp -d "${bundle_dir}/.backup-relay.XXXXXX")
+  ssh "${ssh_options[@]}" "${ssh_target}" \
+    "'${remote_release_dir}/backup-postgres.sh' prepare-relay '${remote_release_dir}' '${release_sha}'"
+  rsync -a --partial "${rsync_resume_option}" \
+    -e "ssh -i '${ssh_key}' -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p '${ssh_port}'" \
+    "${ssh_target}:${remote_release_dir}/relay-backup-ready/" "${relay_backup_local}/"
+  relay_backup_preparation=${relay_backup_local}/backup-preparation.json
+  test -f "${relay_backup_preparation}"
+  relay_backup_prefix=$(jq -er --arg sha "${release_sha}" '
+    select(.schemaVersion == 1 and .releaseSha == $sha)
+    | .objectPrefix
+    | select(startswith("mbox/backups/") and endswith("/" + $sha))
+  ' "${relay_backup_preparation}")
+  (cd "${relay_backup_local}" && shasum -a 256 -c SHA256SUMS >/dev/null)
+  ssh "${evidence_ssh_options[@]}" "${evidence_ssh_target}" \
+    "rm -rf '${evidence_release_dir}/relay-backup-ready' && install -d -m 0700 '${evidence_release_dir}/relay-backup-ready'"
+  rsync -a --partial "${rsync_resume_option}" \
+    -e "ssh -i '${evidence_ssh_key}' -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p '${evidence_ssh_port}'" \
+    "${relay_backup_local}/" "${evidence_ssh_target}:${evidence_release_dir}/relay-backup-ready/"
+  ssh "${evidence_ssh_options[@]}" "${evidence_ssh_target}" \
+    "MBOX_OSS_VERIFICATION_REPORT='${evidence_release_dir}/preverified-backup-upload.json' '${evidence_release_dir}/upload-oss-verified.sh' '${evidence_release_dir}/relay-backup-ready' '${relay_backup_prefix}'"
+  scp "${evidence_scp_options[@]}" \
+    "${evidence_ssh_target}:${evidence_release_dir}/preverified-backup-upload.json" \
+    "${relay_backup_local}/preverified-backup-upload.json"
+  jq -e --arg prefix "${relay_backup_prefix}" \
+    '.verified == true and .authMode == "EcsRamRole" and .prefix == $prefix and (.objects | length) == 4' \
+    "${relay_backup_local}/preverified-backup-upload.json" >/dev/null
+  scp "${scp_options[@]}" "${relay_backup_local}/preverified-backup-upload.json" \
+    "${ssh_target}:${remote_release_dir}/preverified-backup-upload.json"
+  ssh "${ssh_options[@]}" "${ssh_target}" \
+    "chmod 0600 '${remote_release_dir}/preverified-backup-upload.json' && jq -e --arg prefix '${relay_backup_prefix}' '.verified == true and .prefix == \$prefix' '${remote_release_dir}/preverified-backup-upload.json' >/dev/null"
+  rm -rf "${relay_backup_local}"
+fi
 
 ssh "${ssh_options[@]}" "${ssh_target}" \
   "'${remote_release_dir}/activate-release.sh' '${remote_release_dir}' '${deployment_tier}' '${public_url}' '${backup_max_age_minutes}'"

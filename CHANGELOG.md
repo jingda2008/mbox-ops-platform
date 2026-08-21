@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0-rc.112 - 2026-08-22
+
+- Replaces the GNU tar 1.28-only adapter-tree hash with a deterministic,
+  NUL-delimited path, mode and content hash supported by the production
+  server's verified GNU tar 1.26-era userland.
+- Keeps symlinks and unsupported filesystem entries rejected and retains the
+  immutable read-only worker-adapter evidence boundary.
+- Supersedes rc.111, whose production attempt stopped before candidate startup,
+  database writes or traffic cutover. Production remained on rc.104.
+
 ## 1.0.0-rc.111 - 2026-08-22
 
 - Accepts both OCI image indexes and directly tagged single-platform image

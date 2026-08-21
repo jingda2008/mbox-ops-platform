@@ -455,6 +455,27 @@ load_database_maintenance_secrets() {
   database_maintenance_loaded=1
 }
 
+hash_worker_adapter_tree() {
+  local directory=${1:?worker adapter directory is required} relative mode content_sha
+  test -d "${directory}"
+  (
+    cd "${directory}"
+    while IFS= read -r -d '' entry; do
+      relative=${entry#./}
+      mode=$(stat -c '%a' "${entry}")
+      if [ -d "${entry}" ]; then
+        printf 'directory\0%s\0%s\0' "${relative}" "${mode}"
+      elif [ -f "${entry}" ]; then
+        content_sha=$(sha256sum "${entry}" | awk '{print $1}')
+        printf 'file\0%s\0%s\0%s\0' "${relative}" "${mode}" "${content_sha}"
+      else
+        echo "unsupported worker adapter entry: ${relative}" >&2
+        return 1
+      fi
+    done < <(find . -mindepth 1 -print0 | LC_ALL=C sort -z)
+  ) | sha256sum | awk '{print $1}'
+}
+
 prepare_worker_adapter_mount() {
   local active_mount_source relative_module resolved_module source_module
   worker_adapter_module=$(sed -n 's/^MBOX_WORKER_ADAPTER_MODULE=//p' "${release_env}")
@@ -499,8 +520,7 @@ prepare_worker_adapter_mount() {
   test $(( 8#$(stat -c '%a' "${worker_adapter_directory}/${relative_module}") & 8#022 )) = 0
   worker_adapter_source=${active_mount_source}
   worker_adapter_sha=$(sha256sum "${worker_adapter_directory}/${relative_module}" | awk '{print $1}')
-  worker_adapter_tree_sha=$(tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 \
-    --numeric-owner -cf - -C "${worker_adapter_directory}" . | sha256sum | awk '{print $1}')
+  worker_adapter_tree_sha=$(hash_worker_adapter_tree "${worker_adapter_directory}")
   [[ "${worker_adapter_sha}" =~ ^[0-9a-f]{64}$ ]]
   [[ "${worker_adapter_tree_sha}" =~ ^[0-9a-f]{64}$ ]]
   worker_adapter_mount_args+=(

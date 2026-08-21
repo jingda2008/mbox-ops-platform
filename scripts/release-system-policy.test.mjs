@@ -317,3 +317,19 @@ test('candidate docker arguments remain non-empty on the production host Bash ve
   assert.match(activate, /full_candidate_docker_args=\([\s\S]*?run -d[\s\S]*?--env-file "\$\{release_env\}"/)
   assert.match(activate, /docker "\$\{full_candidate_docker_args\[@\]\}"/)
 })
+
+test('post-cutover evidence uses the external relay before activation can complete', async () => {
+  const activate = await read('../deploy/aliyun/activate-release.sh')
+  const deploy = await read('../deploy/aliyun/deploy-release.sh')
+  for (const kind of ['deployment', 'completion']) {
+    assert.match(activate, new RegExp(`\\.${kind}-evidence-relay-ready\\.json`))
+    assert.match(deploy, new RegExp(`oss-${kind}-verification\\.json`))
+  }
+  assert.match(deploy, /post-cutover-\$\{evidence_kind\}/)
+  assert.match(activate, /archive_release_evidence[\s\S]*authMode == "EcsRamRole"/)
+  assert.match(activate, /any\(\.objects\[\]; \.key == \$key and \.sha256 == \$sha and \.bytes == \$bytes/)
+  assert.match(deploy, /activate-release\.sh[\s\S]*> "\$\{activation_log\}" 2>&1[\s\S]*&/)
+  assert.match(deploy, /relay_post_cutover_evidence[\s\S]*deployment[\s\S]*completion/)
+  assert.match(deploy, /scp "\$\{scp_options\[@\]\}" "\$\{relay_local\}\/\$\{report_name\}"[\s\S]*remote_release_dir/)
+  assert.ok(deploy.indexOf('relay_post_cutover_evidence \\\n+    completion') < deploy.indexOf('wait "${activation_pid}"'))
+})

@@ -383,7 +383,7 @@ if [ "${uses_evidence_relay}" = 1 ]; then
     local source_directory=$3
     local object_prefix=$4
     local report_name=$5
-    local relay_local relay_remote
+    local relay_local relay_remote report_sha staged_report
 
     for _ in $(seq 1 120); do
       if ssh "${ssh_options[@]}" "${ssh_target}" \
@@ -419,10 +419,15 @@ if [ "${uses_evidence_relay}" = 1 ]; then
     jq -e --arg prefix "${object_prefix}" \
       '.verified == true and .authMode == "EcsRamRole" and .prefix == $prefix' \
       "${relay_local}/${report_name}" >/dev/null
-    scp "${scp_options[@]}" "${relay_local}/${report_name}" \
-      "${ssh_target}:${remote_release_dir}/${report_name}"
+    report_sha=$(shasum -a 256 "${relay_local}/${report_name}" | awk '{print $1}')
+    [[ "${report_sha}" =~ ^[0-9a-f]{64}$ ]]
+    staged_report="${remote_release_dir}/.${report_name}.next"
     ssh "${ssh_options[@]}" "${ssh_target}" \
-      "chmod 0600 '${remote_release_dir}/${report_name}'"
+      "rm -f '${staged_report}'"
+    scp "${scp_options[@]}" "${relay_local}/${report_name}" \
+      "${ssh_target}:${staged_report}"
+    ssh "${ssh_options[@]}" "${ssh_target}" \
+      "chmod 0600 '${staged_report}' && test \"\$(sha256sum '${staged_report}' | awk '{print \$1}')\" = '${report_sha}' && mv -f '${staged_report}' '${remote_release_dir}/${report_name}'"
     rm -rf "${relay_local}"
   }
 

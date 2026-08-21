@@ -221,6 +221,16 @@
       "automaticBlocker": "the fixture derives the authoritative action business date from the test store timezone and cutoff and creates source facts on the immediately preceding business date",
       "fixCommit": "7b4b3153436d1c2ed5e078c63bedbaf470b14611",
       "status": "covered"
+    },
+    {
+      "id": "REL-023",
+      "category": "post-cutover-report-publication-race",
+      "rootCause": "The evidence relay copied a verification report directly to the filename watched by activation, so activation could parse the destination after scp created it but before the small JSON write completed.",
+      "earliestDetectionStage": "evidence_archived",
+      "regressionTest": "scripts/release-system-policy.test.mjs",
+      "automaticBlocker": "the deployer stages each report under a hidden temporary name, verifies its SHA256 on the application host and atomically renames the complete file to the watched final path",
+      "fixCommit": "47441719c89aa57ea7bfb71505ccaa17ceabd1b1",
+      "status": "covered"
     }
   ]
 }

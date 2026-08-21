@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.0-rc.101 - 2026-08-21
+
+- Adds the staff-side completion command for an arrived or seated reservation.
+  Completion releases the reservation lock and preserves one authoritative
+  completion audit/outbox fact under concurrent requests, so a prior-business-
+  day arrival does not remain indefinitely in the active exception queue.
+- Keeps the customer mini-program outside this release bundle; it is neither
+  uploaded nor overwritten.
+- Declares the public repository as a test-only system. It remains unsuitable
+  for commercial operation, real-money processing or production-store use.
+
 ## 1.0.0-rc.100 - 2026-08-21
 
 - Publishes the inventory role correction under a new monotonic store

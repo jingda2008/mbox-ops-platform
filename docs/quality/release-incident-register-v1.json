@@ -201,6 +201,16 @@
       "automaticBlocker": "activation waits for deployment and completion reports from the external evidence host and matches every staged object by prefix, count, size and SHA256 before it can complete",
       "fixCommit": "2e26005cae90e5e2932139f5efe943bc296540d3",
       "status": "covered"
+    },
+    {
+      "id": "REL-021",
+      "category": "relay-checksum-ledger-count",
+      "rootCause": "The external relay uploaded the SHA256SUMS ledger together with every listed evidence file, but activation counted only ledger entries while comparing against all uploaded objects, so a complete eight-object archive was rejected as if it contained an extra object.",
+      "earliestDetectionStage": "cutover_verified",
+      "regressionTest": "scripts/release-system-policy.test.mjs",
+      "automaticBlocker": "activation now verifies the SHA256SUMS object by exact key, size and SHA256 before checking every ledger entry and requiring the combined exact object count",
+      "fixCommit": "da5cb5ec78d19f818df07c4da7649b0e36d8033b",
+      "status": "covered"
     }
   ]
 }

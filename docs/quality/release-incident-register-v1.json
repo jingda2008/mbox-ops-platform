@@ -161,6 +161,16 @@
       "automaticBlocker": "media-type dispatch accepts only a verified OCI index or direct image manifest and still binds the selected config digest to the loaded Docker image ID",
       "fixCommit": "fc352462bd0ef7ed266987c3c717b024981c22bc",
       "status": "covered"
+    },
+    {
+      "id": "REL-017",
+      "category": "legacy-host-tar-capability",
+      "rootCause": "Worker-adapter evidence used GNU tar --sort, an option unavailable on the production host's verified GNU tar 1.26.",
+      "earliestDetectionStage": "external_preflight_passed",
+      "regressionTest": "scripts/release-system-policy.test.mjs",
+      "automaticBlocker": "deterministic NUL-delimited path, mode and content hashing uses only production-verified find, sort -z, stat and sha256sum capabilities",
+      "fixCommit": "b33e3846be45da18a9ec5954eb06d608203e59c5",
+      "status": "covered"
     }
   ]
 }

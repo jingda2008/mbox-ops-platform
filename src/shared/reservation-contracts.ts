@@ -179,6 +179,7 @@ export type ReservationAuditEventType =
   | 'reservation.confirmed.v1'
   | 'reservation.arrived.v1'
   | 'reservation.seated.v1'
+  | 'reservation.completed.v1'
   | 'reservation.cancelled.v1'
   | 'reservation.no_show.v1'
   | 'reservation.details_updated.v1'

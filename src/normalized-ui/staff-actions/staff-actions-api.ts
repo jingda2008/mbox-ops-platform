@@ -261,7 +261,7 @@ export interface StaffActionsApiPort {
   }>):Promise<void>
   completeServiceTask(taskId: string, note?: string): Promise<void>
   runKdsAction(taskId: string, action: 'complete' | 'deliver'): Promise<void>
-  actOnReservation(reservationId: string, action: 'confirm' | 'arrive'): Promise<void>
+  actOnReservation(reservationId: string, action: 'confirm' | 'arrive' | 'complete'): Promise<void>
   loadAssistedOrderAccess(signal?: AbortSignal): Promise<AssistedOrderAccess>
   loadAssistedOrderCatalog(signal?: AbortSignal): Promise<AssistedOrderCatalogProduct[]>
   issueAssistedOrderContext(input: Readonly<{
@@ -466,7 +466,7 @@ export class StaffActionsApi implements StaffActionsApiPort {
     await this.command(`/api/commerce/kds/${encodeURIComponent(taskId)}/actions`, { action }, 'idempotency-key')
   }
 
-  async actOnReservation(reservationId: string, action: 'confirm' | 'arrive'): Promise<void> {
+  async actOnReservation(reservationId: string, action: 'confirm' | 'arrive' | 'complete'): Promise<void> {
     await this.command(
       `/api/staff/reservations/${encodeURIComponent(reservationId)}/${action}`,
       {},

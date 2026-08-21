@@ -86,7 +86,7 @@ export interface StaffReservationPerformanceContext {
   businessDate: string
 }
 
-type ReservationCommands = Pick<ReservationCommandService, 'create' | 'confirm' | 'arrive' | 'cancel'>
+type ReservationCommands = Pick<ReservationCommandService, 'create' | 'confirm' | 'arrive' | 'complete' | 'cancel'>
 type PerformanceCommands = Pick<
   PerformanceCommandService,
   | 'createPerformer'
@@ -469,7 +469,7 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
     })
   }))
 
-  for (const transition of ['confirm', 'arrive'] as const) {
+  for (const transition of ['confirm', 'arrive', 'complete'] as const) {
     app.post<{ Params: { reservationId: string } }>(
       `/staff/reservations/:reservationId/${transition}`,
       async (request, reply) => handleRoute(reply, async () => {

@@ -355,6 +355,14 @@ export class ReservationRepository {
     return this.transition(id, ['pending', 'confirmed'], 'arrived', 'confirmed')
   }
 
+  async complete(id: string): Promise<Reservation> {
+    return (await this.completeWithResult(id)).reservation
+  }
+
+  completeWithResult(id: string): Promise<ReservationMutationResult> {
+    return this.transition(id, ['arrived', 'seated'], 'completed', 'released')
+  }
+
   async cancel(id: string, options: { overridePolicy?: boolean } = {}): Promise<Reservation> {
     return (await this.cancelWithResult(id, options)).reservation
   }

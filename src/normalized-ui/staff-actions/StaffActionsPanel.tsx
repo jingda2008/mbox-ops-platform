@@ -299,14 +299,14 @@ export function StaffActionsPanel({
     }
   }
 
-  const actOnReservation = async (reservation: StaffReservation, action: 'confirm' | 'arrive') => {
+  const actOnReservation = async (reservation: StaffReservation, action: 'confirm' | 'arrive' | 'complete') => {
     const actionKey = `reservation:${reservation.id}:${action}`
     if (actionLocksRef.current.has(actionKey)) return
     actionLocksRef.current.add(actionKey)
     const snapshot = reservations
     setPendingAction(actionKey)
     setReservations((current) => current?.map((item) => item.id === reservation.id
-      ? { ...item, status: action === 'confirm' ? 'confirmed' : 'arrived' }
+      ? { ...item, status: action === 'confirm' ? 'confirmed' : action === 'arrive' ? 'arrived' : 'completed' }
       : item) ?? null)
     try {
       await api.actOnReservation(reservation.id, action)
@@ -314,7 +314,9 @@ export function StaffActionsPanel({
         kind: 'success',
         message: action === 'confirm'
           ? `${reservation.customerName} 的预约已确认`
-          : `${reservation.customerName} 已登记到店`,
+          : action === 'arrive'
+            ? `${reservation.customerName} 已登记到店`
+            : `${reservation.customerName} 的预约已完成归档`,
       })
       await loadReservations()
     } catch (error) {
@@ -634,7 +636,7 @@ function ReservationList({ reservations, message, pendingAction, canManage, onAc
   message: string | null
   pendingAction: string | null
   canManage: boolean
-  onAction(reservation: StaffReservation, action: 'confirm' | 'arrive'): void
+  onAction(reservation: StaffReservation, action: 'confirm' | 'arrive' | 'complete'): void
   onRefresh(): void
 }) {
   if (reservations === null) {
@@ -675,6 +677,11 @@ function ReservationList({ reservations, message, pendingAction, canManage, onAc
         {canManage && reservation.status === 'confirmed' && (
           <button type="button" disabled={pending} onClick={() => onAction(reservation, 'arrive')}>
             {pending ? '登记中…' : '客人到店'}
+          </button>
+        )}
+        {canManage && (reservation.status === 'arrived' || reservation.status === 'seated') && (
+          <button type="button" disabled={pending} onClick={() => onAction(reservation, 'complete')}>
+            {pending ? '归档中…' : '完成接待'}
           </button>
         )}
       </article>

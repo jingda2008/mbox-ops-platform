@@ -1,6 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool, type PoolClient } from 'pg'
-import { loadNormalizedMigrations, runNormalizedMigrations } from '../migrate-normalized.js'
+import {
+  loadNormalizedMigrations,
+  runNormalizedMigrations,
+  unwrapNormalizedMigrationTransaction,
+} from '../migrate-normalized.js'
 
 const databaseUrl = process.env.TEST_NORMALIZED_DATABASE_URL
 const integration = databaseUrl ? describe : describe.skip
@@ -62,11 +66,25 @@ integration('normalized runtime role and RLS integration', () => {
     await pool?.end()
   })
 
-  it('can reapply the runtime-role migration without role or grant conflicts', async () => {
+  it('can reapply the runtime-role migration without persisting its historical baseline grants', async () => {
     const migration = (await loadNormalizedMigrations()).find((item) => item.version === '010')
     expect(migration).toBeDefined()
-    await expect(pool.query(migration!.sql)).resolves.toBeDefined()
-    await expect(pool.query(migration!.sql)).resolves.toBeDefined()
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      const migrationBody = unwrapNormalizedMigrationTransaction(migration!.sql)
+      await expect(client.query(migrationBody)).resolves.toBeDefined()
+      await expect(client.query(migrationBody)).resolves.toBeDefined()
+    } finally {
+      await client.query('ROLLBACK').catch(() => undefined)
+      client.release()
+    }
+    const hardenedPrivileges = await pool.query<{ table_id_update: boolean; status_update: boolean }>(`
+      SELECT
+        has_column_privilege('mbox_runtime','mbox.table_sessions','table_id','UPDATE') AS table_id_update,
+        has_column_privilege('mbox_runtime','mbox.table_sessions','status','UPDATE') AS status_update
+    `)
+    expect(hardenedPrivileges.rows[0]).toEqual({ table_id_update: false, status_update: true })
   })
 
   it('creates a passwordless non-owner runtime role with least-privilege grants', async () => {

@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import type {
   CashierWorkbenchPayment,
+  CashierWorkbenchOrder,
   CashierWorkbenchRefund,
   CashierWorkbenchView,
 } from '../shared/cashier-workbench-contracts'
@@ -28,6 +29,13 @@ interface RefundDraft {
   paymentId: string
   reason: string
   amounts: Record<string, string>
+}
+
+interface CancellationDraft {
+  orderId: string
+  reasonCode: 'duplicate_order' | 'guest_left' | 'test_cleanup' | 'other'
+  reasonNote: string
+  confirmed: boolean
 }
 
 export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, refreshToken }: {
@@ -150,6 +158,7 @@ export function CashierAfterSalesWorkbenchView({
   const [refundDraft, setRefundDraft] = useState<RefundDraft | null>(null)
   const [decisionReasons, setDecisionReasons] = useState<Record<string, string>>({})
   const [manualReceipts, setManualReceipts] = useState<Record<string, string>>({})
+  const [cancellationDraft, setCancellationDraft] = useState<CancellationDraft | null>(null)
 
   function submitSearch(event: FormEvent) {
     event.preventDefault()
@@ -192,6 +201,22 @@ export function CashierAfterSalesWorkbenchView({
       '退款申请已提交，等待收银复核。',
     )
     if (completed) setRefundDraft(null)
+  }
+
+  async function submitCancellation(order: CashierWorkbenchOrder) {
+    if (cancellationDraft === null || cancellationDraft.orderId !== order.id) return
+    if (cancellationDraft.reasonNote.trim().length < 4) return
+    if (!cancellationDraft.confirmed) {
+      setCancellationDraft({ ...cancellationDraft, confirmed: true })
+      return
+    }
+    const completed = await onMutation(
+      `order-cancel-unpaid-${order.id}`,
+      `/api/orders/${encodeURIComponent(order.id)}/cancel-unpaid`,
+      { reasonCode: cancellationDraft.reasonCode, reasonNote: cancellationDraft.reasonNote.trim() },
+      '未付款订单已取消；原营业日、已送达商品和库存事实均已保留。',
+    )
+    if (completed) setCancellationDraft(null)
   }
 
   if (phase === 'loading' && view === null) {
@@ -245,7 +270,7 @@ export function CashierAfterSalesWorkbenchView({
                 <ChevronDown size={18} className={expanded ? 'is-open' : ''} />
               </button>
               {expanded && <div className="cashier-order-detail">
-                {order.carryover && <p className="cashier-guidance">这是前一营业日尚未闭环的退款事项；处理结果继续记在原订单，不会并入今日营业额。</p>}
+                {order.carryover && <p className="cashier-guidance">这是前一营业日尚未闭环的收款或退款事项；处理结果继续记在原订单，不会并入今日营业额。</p>}
                 <section>
                   <h3>原订单商品</h3>
                   {order.items.map((item) => <div className="cashier-line" key={item.id}>
@@ -276,6 +301,52 @@ export function CashierAfterSalesWorkbenchView({
                         onManualReceipt={(refundId, receipt) => setManualReceipts((current) => ({ ...current, [refundId]: receipt }))}
                         onMutation={onMutation}
                       />)}
+                  {order.paymentStatus === 'unpaid' && order.status !== 'cancelled'
+                    && auth.permissions.includes('order.cancel_unpaid') && (
+                    <div className="cashier-refund-form" aria-label="取消未付款订单">
+                      {cancellationDraft?.orderId !== order.id ? (
+                        <button type="button" className="is-secondary" onClick={() => setCancellationDraft({
+                          orderId: order.id,
+                          reasonCode: 'guest_left',
+                          reasonNote: '',
+                          confirmed: false,
+                        })}>处理未付款订单</button>
+                      ) : <>
+                        <label className="cashier-field"><span>取消原因</span><select
+                          value={cancellationDraft.reasonCode}
+                          onChange={(event) => setCancellationDraft({
+                            ...cancellationDraft,
+                            reasonCode: event.target.value as CancellationDraft['reasonCode'],
+                            confirmed: false,
+                          })}
+                        >
+                          <option value="guest_left">客人离店且未付款</option>
+                          <option value="duplicate_order">重复订单</option>
+                          <option value="test_cleanup">测试或跨日清理</option>
+                          <option value="other">其他</option>
+                        </select></label>
+                        <label className="cashier-field"><span>现场核对说明</span><textarea
+                          value={cancellationDraft.reasonNote}
+                          maxLength={500}
+                          placeholder="至少4个字；说明客人、支付状态和处理原因"
+                          onChange={(event) => setCancellationDraft({
+                            ...cancellationDraft,
+                            reasonNote: event.target.value,
+                            confirmed: false,
+                          })}
+                        /></label>
+                        <p className="cashier-guidance">仅取消未付款应收和未履约部分；已送达商品、已消耗库存和原营业日记录不会删除。</p>
+                        <div className="cashier-form-actions">
+                          <button type="button" className="is-secondary" onClick={() => setCancellationDraft(null)}>返回</button>
+                          <button
+                            type="button"
+                            disabled={busyKey === `order-cancel-unpaid-${order.id}` || cancellationDraft.reasonNote.trim().length < 4}
+                            onClick={() => void submitCancellation(order)}
+                          >{cancellationDraft.confirmed ? '再次确认取消订单' : '核对并继续'}</button>
+                        </div>
+                      </>}
+                    </div>
+                  )}
                 </section>
               </div>}
             </article>

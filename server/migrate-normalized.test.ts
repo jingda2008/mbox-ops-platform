@@ -37,7 +37,7 @@ describe('normalized migration baseline', () => {
       '037', '038', '039', '040', '041', '042', '043', '044', '045', '046', '047', '048',
       '049', '050', '051', '052', '053', '054', '055', '056', '057', '058', '059', '060',
       '061', '062', '063', '064', '065', '066', '067', '068', '069', '070', '071', '072',
-      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097',
+      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098',
     ])
     for (const migration of migrations) {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
@@ -123,6 +123,17 @@ describe('normalized migration baseline', () => {
     expect(migration?.sql).toMatch(/CHECK \(inventory_control_mode IN \('tracked', 'not_managed'\)\)/)
     expect(migration?.sql).toMatch(/WHERE category_code = 'food'/)
     expect(migration?.sql).not.toMatch(/999999|infinity/i)
+  })
+
+  it('keeps unpaid order cancellation permissioned, append-only and payment fail-closed', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '098')
+    expect(migration?.sql).toMatch(/order_cancellation_events/)
+    expect(migration?.sql).toMatch(/cancel_unpaid_order/)
+    expect(migration?.sql).toMatch(/order\.cancel_unpaid/)
+    expect(migration?.sql).toMatch(/payment\.status NOT IN \('failed','closed'\)/)
+    expect(migration?.sql).toMatch(/status NOT IN \('delivered','cancelled'\)/)
+    expect(migration?.sql).toMatch(/order_cancellation_events_append_only/)
+    expect(migration?.sql).toMatch(/REVOKE INSERT,UPDATE,DELETE ON TABLE mbox\.order_cancellation_events/)
   })
 
   it('keeps refund roles and amount limits configurable while requiring two employees', async () => {

@@ -115,6 +115,7 @@ describe('PostgresCashierWorkbenchQuery', () => {
 
     expect(view.summary.carryoverOrderCount).toBe(1)
     expect(view.orders[0]).toMatchObject({ businessDate: '2026-08-12', carryover: true })
+    expect(runner.calls[0]?.sql).toContain("orders.payment_status='unpaid'")
     expect(runner.calls[0]?.sql).toContain("carryover_refund.status IN ('requested','approved','processing')")
   })
 

@@ -73,6 +73,8 @@ export function StaffActionsPanel({
   const [transferReason, setTransferReason] = useState('')
   const [closeConfirm, setCloseConfirm] = useState(false)
   const [resolutionNotes, setResolutionNotes] = useState<Record<string, string>>({})
+  const [carryoverCancelNotes, setCarryoverCancelNotes] = useState<Record<string, string>>({})
+  const [carryoverCancelConfirmTaskId, setCarryoverCancelConfirmTaskId] = useState<string | null>(null)
   const [pendingAction, setPendingAction] = useState<string | null>(null)
   const [orderSheetMode, setOrderSheetMode] = useState<'paid' | 'gift' | null>(null)
   const [observationOpen, setObservationOpen] = useState(false)
@@ -413,6 +415,40 @@ export function StaffActionsPanel({
     }
   }
 
+  const cancelCarryoverFulfillment = async (item: StaffFulfillmentData['workItems'][number]) => {
+    if (fulfillment === null || !item.carryover) return
+    if (!permissions.includes('kds.exception.manage')) {
+      return showNotice({ kind: 'guidance', message: '跨营业日遗留取消需要出品异常处理权限，请交给值班经理。' })
+    }
+    const reasonNote = carryoverCancelNotes[item.taskId]?.trim() ?? ''
+    if (reasonNote.length < 4) {
+      return showNotice({ kind: 'guidance', message: '请记录遗留原因和现场核对结果，至少4个字。' })
+    }
+    if (carryoverCancelConfirmTaskId !== item.taskId) {
+      setCarryoverCancelConfirmTaskId(item.taskId)
+      return showNotice({ kind: 'guidance', message: '请再次确认：只取消这项历史出品，不会改写原营业日收入。' })
+    }
+    const snapshot = fulfillment
+    setPendingAction(`kds-cancel:${item.taskId}`)
+    setFulfillment({ ...snapshot, workItems: snapshot.workItems.filter((entry) => entry.taskId !== item.taskId) })
+    try {
+      await api.cancelKdsTask(item.taskId, reasonNote)
+      setCarryoverCancelNotes((current) => {
+        const next = { ...current }
+        delete next[item.taskId]
+        return next
+      })
+      setCarryoverCancelConfirmTaskId(null)
+      showNotice({ kind: 'success', message: `${item.table.code} · ${item.item.productName} 的历史出品已受控取消` })
+      await load(true)
+    } catch (error) {
+      setFulfillment(snapshot)
+      showNotice({ kind: 'error', message: actionError(error, '历史出品未取消，任务已恢复') })
+    } finally {
+      setPendingAction(null)
+    }
+  }
+
   if (operations === null && phase === 'loading') {
     return <div className="staff-actions-gate"><LoaderCircle className="is-spinning" /> 正在读取现场</div>
   }
@@ -561,13 +597,38 @@ export function StaffActionsPanel({
                   {item.carryover && <small className="staff-action-carryover">前营业日遗留 · 原营业日 {item.businessDate}，处理结果仍归原订单</small>}
                   {item.attentionMessages.map((message) => <small className="staff-action-note" key={message}>备注：{message}</small>)}
                   {item.overdue && <small className="staff-action-overdue">已超时，优先处理</small>}
+                  {item.carryover && permissions.includes('kds.exception.manage') && (
+                    <input
+                      className="staff-resolution-note"
+                      value={carryoverCancelNotes[item.taskId] ?? ''}
+                      maxLength={500}
+                      placeholder="若不再出品，记录取消原因和现场核对结果"
+                      aria-label={`${item.item.productName}历史出品取消说明`}
+                      onChange={(event) => {
+                        setCarryoverCancelConfirmTaskId(null)
+                        setCarryoverCancelNotes((current) => ({ ...current, [item.taskId]: event.target.value }))
+                      }}
+                    />
+                  )}
                 </div>
-                {fulfillmentCommand !== null && (
-                  <button type="button" onClick={() => void runFulfillmentAction(item)} disabled={pendingAction === `kds:${item.taskId}`}>
-                    {fulfillmentCommand === 'deliver' ? <Send size={18} /> : <ChefHat size={18} />}
-                    {fulfillmentCommand === 'deliver' ? '已送达' : '制作完成'}
-                  </button>
-                )}
+                <div className="staff-action-card-actions">
+                  {fulfillmentCommand !== null && (
+                    <button type="button" onClick={() => void runFulfillmentAction(item)} disabled={pendingAction === `kds:${item.taskId}`}>
+                      {fulfillmentCommand === 'deliver' ? <Send size={18} /> : <ChefHat size={18} />}
+                      {fulfillmentCommand === 'deliver' ? '已送达' : '制作完成'}
+                    </button>
+                  )}
+                  {item.carryover && permissions.includes('kds.exception.manage') && (
+                    <button
+                      type="button"
+                      className="is-readonly"
+                      onClick={() => void cancelCarryoverFulfillment(item)}
+                      disabled={pendingAction === `kds-cancel:${item.taskId}`}
+                    >
+                      {carryoverCancelConfirmTaskId === item.taskId ? '确认取消遗留' : '不再出品'}
+                    </button>
+                  )}
+                </div>
               </article>
             )
           })}

@@ -73,6 +73,7 @@ import { NotificationRepository } from './notification-repository.js'
 import { normalizedOperationsApiPlugin } from './normalized-operations-api.js'
 import { OperationsQueryService } from './operations-query-service.js'
 import { OrderRepository } from './order-repository.js'
+import { PostgresOrderCancellationRepository } from './order-cancellation-repository.js'
 import { paymentApiPlugin, PaymentProviderVerificationError, type PaymentProviderVerifier } from './payment-api.js'
 import { PaymentCommandService } from './payment-command-service.js'
 import { OnlinePaymentService } from './online-payment-service.js'
@@ -168,7 +169,7 @@ export const NORMALIZED_LOG_REDACTION_PATHS = Object.freeze([
   'payment.publicKey',
 ])
 
-export const NORMALIZED_MIN_SCHEMA_VERSION = '097'
+export const NORMALIZED_MIN_SCHEMA_VERSION = '098'
 export const NORMALIZED_INJECTABLE_PLUGIN_PORTS = Object.freeze([
   'customer-table-side',
 ] as const)
@@ -577,6 +578,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       providerObservations,
       reconciliationQuery: new PostgresReconciliationQuery(transactions),
       cashierWorkbenchQuery: new PostgresCashierWorkbenchQuery(transactions),
+      orderCancellation: new PostgresOrderCancellationRepository(transactions),
       onlinePayments,
       resolveOnlinePaymentAvailable: async (currentScope) => (await paymentPolicy(currentScope)).onlinePaymentEnabled,
       resolveActorContext: async (request) => {

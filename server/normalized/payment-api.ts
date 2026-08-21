@@ -58,6 +58,13 @@ import {
 import { PostarPaymentRejectedError } from '../postar-adapter.js'
 import type { ProviderObservationRecorderPort } from './provider-verification-observation.js'
 import { requireGuestSessionIdFromActorRef } from './guest-table-authority.js'
+import {
+  UnpaidOrderCancellationConflictError,
+  UnpaidOrderCancellationForbiddenError,
+  UnpaidOrderCancellationNotFoundError,
+  type CancelUnpaidOrderInput,
+  type CancelUnpaidOrderResult,
+} from './order-cancellation-repository.js'
 
 type PaymentCommandPort = Pick<
   PaymentCommandService,
@@ -159,12 +166,17 @@ export interface CashierWorkbenchQueryPort {
   get(input: Readonly<CashierWorkbenchQueryInput>): Promise<CashierWorkbenchView>
 }
 
+export interface OrderCancellationPort {
+  cancel(input: Readonly<CancelUnpaidOrderInput>): Promise<CancelUnpaidOrderResult>
+}
+
 export interface PaymentApiOptions {
   commands: PaymentCommandPort
   providerVerifier: PaymentProviderVerifier
   providerObservations: ProviderObservationRecorderPort
   reconciliationQuery: ReconciliationQueryPort
   cashierWorkbenchQuery: CashierWorkbenchQueryPort
+  orderCancellation: OrderCancellationPort
   onlinePayments?: Pick<
     OnlinePaymentService,
     'create' | 'query' | 'assertAvailable' | 'resolveActivePayment' | 'requestRefund' | 'queryRefund'
@@ -652,6 +664,35 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
     })
     return reply.send({ data: result })
   }))
+
+  app.post<{ Params: { orderId: string } }>('/orders/:orderId/cancel-unpaid', async (request, reply) => (
+    handleRoute(reply, async () => {
+      const context = await resolveStaffContext(options, request)
+      if (!context.capabilities.includes('order.cancel_unpaid')) {
+        throw new UnpaidOrderCancellationForbiddenError('Employee lacks unpaid order cancellation permission')
+      }
+      const body = readObject(request.body, '请求正文')
+      assertActorBinding(body, context.actor)
+      const result = await options.orderCancellation.cancel({
+        scope: context.scope,
+        orderId: readUuid(request.params.orderId, 'orderId'),
+        employeeId: context.employeeId,
+        businessDate: context.businessDate,
+        reasonCode: readUnpaidCancellationReason(body.reasonCode),
+        reasonNote: readString(body.reasonNote, 'reasonNote', 500, 4),
+        idempotencyKey: readIdempotencyKey(request),
+      })
+      return reply.send({ data: result, meta: { replayed: result.replayed } })
+    })
+  ))
+}
+
+function readUnpaidCancellationReason(value: unknown): CancelUnpaidOrderInput['reasonCode'] {
+  const result = readString(value, 'reasonCode', 32)
+  if (!['duplicate_order', 'guest_left', 'test_cleanup', 'other'].includes(result)) {
+    throw new PaymentApiRequestError('未付款订单取消原因无效')
+  }
+  return result as CancelUnpaidOrderInput['reasonCode']
 }
 
 function paymentFromProviderContext(value: ProviderPaymentContext): Payment {
@@ -1222,6 +1263,15 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
     return apiError(403, 'ACTOR_BINDING_FORBIDDEN', error.message)
   }
   if (error instanceof PaymentNotFoundError) return apiError(404, 'PAYMENT_NOT_FOUND', error.message)
+  if (error instanceof UnpaidOrderCancellationNotFoundError) {
+    return apiError(404, 'ORDER_NOT_FOUND', '订单不存在或不属于当前门店')
+  }
+  if (error instanceof UnpaidOrderCancellationForbiddenError) {
+    return apiError(403, 'ORDER_CANCEL_FORBIDDEN', '当前岗位无权取消未付款订单')
+  }
+  if (error instanceof UnpaidOrderCancellationConflictError) {
+    return apiError(409, 'ORDER_CANCEL_CONFLICT', '订单已有付款、退款或状态已变化，请刷新后按实际状态处理')
+  }
   if (error instanceof RefundNotFoundError) return apiError(404, 'REFUND_NOT_FOUND', error.message)
   if (error instanceof OrderNotPayableError) return apiError(409, 'ORDER_NOT_PAYABLE', error.message)
   if (error instanceof ProviderPaymentInProgressError) {

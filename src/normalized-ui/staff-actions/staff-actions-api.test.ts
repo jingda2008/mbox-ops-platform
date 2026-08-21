@@ -85,6 +85,15 @@ describe('StaffActionsApi', () => {
     expect(send).toHaveBeenCalledWith('/api/commerce/kds/task-1/actions', expect.objectContaining({
       method: 'POST', body: JSON.stringify({ action: 'deliver' }),
     }))
+
+    await api.cancelKdsTask('task-2', '上一营业日误留任务，现场已核对')
+    expect(send).toHaveBeenLastCalledWith('/api/commerce/kds/task-2/manager-cancel', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({
+        reasonCode: 'prior_business_day_cleanup',
+        reasonNote: '上一营业日误留任务，现场已核对',
+      }),
+    }))
   })
 
   it('binds assisted ordering to the current table context and sends gift mode without a client authority id', async () => {

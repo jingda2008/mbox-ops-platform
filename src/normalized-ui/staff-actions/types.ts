@@ -11,6 +11,7 @@ export type StaffActionPermission =
   | 'recommendation.staff.modify'
   | 'kds.prepare'
   | 'kds.deliver'
+  | 'kds.exception.manage'
 
 export interface StaffActionActor {
   id: string

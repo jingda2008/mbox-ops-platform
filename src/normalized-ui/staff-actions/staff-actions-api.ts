@@ -83,6 +83,7 @@ export interface AssistedOrderCatalogProduct {
   status: 'active' | 'sold_out' | 'inactive'
   isAvailable: boolean
   inventoryConfigurationComplete: boolean
+  inventoryAvailable: boolean
   standardPrice: null | {
     amountMinor: string | null
     currency: string | null
@@ -261,6 +262,7 @@ export interface StaffActionsApiPort {
   }>):Promise<void>
   completeServiceTask(taskId: string, note?: string): Promise<void>
   runKdsAction(taskId: string, action: 'complete' | 'deliver'): Promise<void>
+  cancelKdsTask(taskId: string, reasonNote: string): Promise<void>
   actOnReservation(reservationId: string, action: 'confirm' | 'arrive' | 'complete'): Promise<void>
   loadAssistedOrderAccess(signal?: AbortSignal): Promise<AssistedOrderAccess>
   loadAssistedOrderCatalog(signal?: AbortSignal): Promise<AssistedOrderCatalogProduct[]>
@@ -464,6 +466,14 @@ export class StaffActionsApi implements StaffActionsApiPort {
 
   async runKdsAction(taskId: string, action: 'complete' | 'deliver'): Promise<void> {
     await this.command(`/api/commerce/kds/${encodeURIComponent(taskId)}/actions`, { action }, 'idempotency-key')
+  }
+
+  async cancelKdsTask(taskId: string, reasonNote: string): Promise<void> {
+    await this.command(
+      `/api/commerce/kds/${encodeURIComponent(taskId)}/manager-cancel`,
+      { reasonCode: 'prior_business_day_cleanup', reasonNote },
+      'idempotency-key',
+    )
   }
 
   async actOnReservation(reservationId: string, action: 'confirm' | 'arrive' | 'complete'): Promise<void> {

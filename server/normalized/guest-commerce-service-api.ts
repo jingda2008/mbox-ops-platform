@@ -123,6 +123,7 @@ interface CatalogMenuRow extends Record<string, unknown> {
   guest_count: number
   guest_profile_snapshot: JsonObject
   inventory_configuration_complete: boolean
+  inventory_available: boolean
 }
 
 interface GuestServiceCommandResult {
@@ -548,7 +549,8 @@ async function searchGuestCatalog(
       price.amount_minor::text, price.currency,
       COALESCE(current_session.guest_count, 2) AS guest_count,
       COALESCE(current_session.guest_profile_snapshot, '{}'::jsonb) AS guest_profile_snapshot,
-      COALESCE(inventory_readiness.configuration_complete, false) AS inventory_configuration_complete
+      COALESCE(inventory_readiness.configuration_complete, false) AS inventory_configuration_complete,
+      COALESCE(inventory_stock.available, false) AS inventory_available
     FROM mbox.products AS product
     LEFT JOIN mbox.table_sessions AS current_session
       ON current_session.tenant_id = product.tenant_id
@@ -633,6 +635,54 @@ async function searchGuestCatalog(
           AND COALESCE(product.product_kind, 'single')='bundle'
       ) AS required_product
     ) AS inventory_readiness ON true
+    LEFT JOIN LATERAL (
+      SELECT COALESCE(bool_and(
+        required_product.inventory_control_mode='not_managed'
+        OR required_product.fulfillment_station NOT IN ('bar','kitchen')
+        OR EXISTS (
+          SELECT 1 FROM mbox.recipes recipe
+          WHERE recipe.tenant_id=product.tenant_id AND recipe.store_id=product.store_id
+            AND recipe.product_id=required_product.product_id
+            AND recipe.status='active' AND recipe.effective_at<=statement_timestamp()
+            AND EXISTS (
+              SELECT 1 FROM mbox.recipe_items recipe_item
+              WHERE recipe_item.tenant_id=recipe.tenant_id AND recipe_item.store_id=recipe.store_id
+                AND recipe_item.recipe_id=recipe.id
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM mbox.recipe_items recipe_item
+              LEFT JOIN mbox.inventory_items inventory_item
+                ON inventory_item.tenant_id=recipe_item.tenant_id
+               AND inventory_item.store_id=recipe_item.store_id
+               AND inventory_item.id=recipe_item.inventory_item_id
+              LEFT JOIN mbox.inventory_balances balance
+                ON balance.tenant_id=recipe_item.tenant_id AND balance.store_id=recipe_item.store_id
+               AND balance.inventory_item_id=recipe_item.inventory_item_id
+              WHERE recipe_item.tenant_id=recipe.tenant_id AND recipe_item.store_id=recipe.store_id
+                AND recipe_item.recipe_id=recipe.id
+                AND (inventory_item.id IS NULL OR inventory_item.status<>'active' OR balance.id IS NULL
+                  OR balance.on_hand_quantity-balance.reserved_quantity
+                    < recipe_item.quantity*required_product.multiplier)
+            )
+        )
+      ),true) AS available
+      FROM (
+        SELECT product.id AS product_id,product.fulfillment_station,product.inventory_control_mode,
+          1::numeric AS multiplier
+        WHERE COALESCE(product.product_kind,'single')<>'bundle'
+        UNION ALL
+        SELECT component_product.id,component_product.fulfillment_station,
+          component_product.inventory_control_mode,component.quantity::numeric
+        FROM mbox.product_bundle_components component
+        JOIN mbox.products component_product
+          ON component_product.tenant_id=component.tenant_id
+         AND component_product.store_id=component.store_id
+         AND component_product.id=component.component_product_id
+        WHERE component.tenant_id=product.tenant_id AND component.store_id=product.store_id
+          AND component.bundle_product_id=product.id
+          AND COALESCE(product.product_kind,'single')='bundle'
+      ) required_product
+    ) AS inventory_stock ON true
     WHERE product.tenant_id = $1::uuid
       AND product.store_id = $2::uuid
       AND ($3::uuid IS NULL OR current_session.id IS NOT NULL)
@@ -733,7 +783,8 @@ function publicCatalogProduct(row: CatalogMenuRow) {
     bundleComponents: publicBundleComponents(row.bundle_components),
     recommendation: publicRecommendation(row, amountMinor),
     available: row.status === 'active' && row.amount_minor !== null
-      && row.within_availability !== false && row.inventory_configuration_complete,
+      && row.within_availability !== false && row.inventory_configuration_complete
+      && row.inventory_available,
   }
 }
 

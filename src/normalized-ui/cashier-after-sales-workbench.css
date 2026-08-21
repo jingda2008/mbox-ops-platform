@@ -59,9 +59,12 @@
 .cashier-refund-item > input[type="text"] { grid-column: 2; width: 100%; height: 44px; padding: 0 9px; border: 1px solid #aeb5ad; border-radius: 5px; background: #fff; }
 .cashier-field { display: grid; gap: 4px; }
 .cashier-field > span { color: #626962; font-size: 10px; font-weight: 800; }
-.cashier-field input, .cashier-field textarea { width: 100%; padding: 9px; border: 1px solid #aeb5ad; border-radius: 5px; background: #fff; color: #171b17; }
+.cashier-field input, .cashier-field textarea, .cashier-field select { width: 100%; padding: 9px; border: 1px solid #aeb5ad; border-radius: 5px; background: #fff; color: #171b17; }
 .cashier-field input { height: 44px; }
+.cashier-field select { height: 44px; }
 .cashier-field textarea { min-height: 68px; resize: vertical; }
+.cashier-form-actions { display: flex; gap: 8px; }
+.cashier-form-actions > button { flex: 1; min-height: 44px; }
 .cashier-form-total { display: flex; align-items: center; justify-content: space-between; font-size: 11px; }
 .cashier-form-total strong { font-size: 17px; }
 .cashier-action-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }

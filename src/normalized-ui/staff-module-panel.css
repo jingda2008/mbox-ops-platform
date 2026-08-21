@@ -334,3 +334,402 @@
   .staff-song-catalog-list article > div:last-child { width: 100%; }
   .staff-song-catalog-list article > div:last-child button { flex: 1; }
 }
+
+/* M-BOX staff modules: premium brand-green surface treatment only. */
+.staff-module-panel {
+  --staff-module-green: #315d46;
+  --staff-module-green-deep: #214635;
+  --staff-module-line: #ded7cc;
+  background:
+    radial-gradient(circle at 8% 0%, rgb(67 116 86 / 7%), transparent 28rem),
+    radial-gradient(circle at 94% 12%, rgb(201 168 91 / 9%), transparent 22rem),
+    linear-gradient(180deg, #fbfaf6, #f2eee6);
+}
+
+.staff-module-panel > header {
+  min-height: 72px;
+  border-bottom-color: rgb(255 255 255 / 10%);
+  background:
+    radial-gradient(circle at 92% -45%, rgb(202 166 89 / 20%), transparent 50%),
+    linear-gradient(135deg, #0d1712, #234031 68%, #101512);
+  color: #f8f5ed;
+  box-shadow: 0 10px 26px rgb(24 28 22 / 20%);
+}
+
+.staff-module-panel > header small {
+  color: rgb(240 244 238 / 68%);
+}
+
+.staff-module-panel > header > span {
+  border: 1px solid rgb(236 211 147 / 42%);
+  border-radius: 11px;
+  background: rgb(235 212 151 / 14%);
+  color: #efd58e;
+}
+
+.staff-module-panel > header > button {
+  border-color: rgb(255 255 255 / 20%);
+  border-radius: 11px;
+  background: rgb(255 255 255 / 9%);
+  color: #fff;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 8%);
+}
+
+.staff-module-body {
+  gap: 10px;
+}
+
+.staff-module-summary,
+.staff-module-list article,
+.staff-settings-grid article,
+.staff-metric-grid article,
+.staff-module-empty,
+.staff-module-state,
+.staff-settings-scope,
+.staff-module-disclosure,
+.venue-management,
+.catalog-recipe {
+  border-color: var(--staff-module-line);
+  border-radius: 12px;
+  background: linear-gradient(145deg, #fff, #faf7f1);
+  box-shadow: 0 7px 20px rgb(71 57 37 / 7%);
+}
+
+.staff-module-summary {
+  min-height: 72px;
+}
+
+.staff-module-summary > span {
+  border-radius: 11px;
+  background: linear-gradient(145deg, #edf6f0, #dcebe1);
+  color: var(--staff-module-green);
+}
+
+.staff-module-summary.has-attention,
+.staff-module-list article.has-attention {
+  border-color: #dbc783;
+  background: linear-gradient(130deg, #fffaf0, #fffdf8);
+}
+
+.staff-module-list article b,
+.staff-settings-grid span,
+.venue-management-trigger > span:first-child svg {
+  color: var(--staff-module-green);
+}
+
+.staff-song-requests article > button,
+.staff-song-actions > button,
+.venue-management-actions button,
+.venue-management-list article button,
+.venue-management-form header button {
+  border-color: #8eaf9b;
+  border-radius: 9px;
+  background: #edf5f0;
+  color: var(--staff-module-green-deep);
+}
+
+.catalog-save,
+.catalog-recipe > button,
+.venue-management-form > button {
+  border-color: var(--staff-module-green-deep);
+  border-radius: 10px;
+  background: linear-gradient(135deg, #3d7055, var(--staff-module-green) 56%, var(--staff-module-green-deep));
+  box-shadow: 0 7px 17px rgb(33 70 53 / 17%);
+}
+
+.staff-module-footnote {
+  border-left-color: #c9a85b;
+  border-radius: 0 10px 10px 0;
+  background: linear-gradient(90deg, #fff8e8, #fffdf8);
+}
+
+@media (min-width: 760px) {
+  .staff-module-panel > header {
+    margin: 14px auto 0;
+    width: min(calc(100% - 28px), 920px);
+    border-radius: 16px;
+  }
+}
+
+/* Specialized staff panels share the same visual language without changing their workflows. */
+.staff-module-panel :is(
+  .activity-operations-panel,
+  .cashier-workbench,
+  .checkout-upgrade-management,
+  .ce-analytics,
+  .loyalty-emergency-panel,
+  .membership-configuration-center,
+  .performance-revision-panel,
+  .personal-contact-governance,
+  .promotion-loyalty-panel,
+  .recommendation-policy-panel,
+  .staff-access-management
+) {
+  color: #233129;
+}
+
+.staff-module-panel :is(
+  .checkout-upgrade-management,
+  .ce-analytics,
+  .loyalty-emergency-panel,
+  .membership-configuration-center,
+  .performance-revision-panel,
+  .personal-contact-governance,
+  .promotion-loyalty-panel,
+  .recommendation-policy-panel
+) {
+  border-color: var(--staff-module-line);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 95% 0%, rgb(201 168 91 / 9%), transparent 24rem),
+    linear-gradient(145deg, #fff, #faf7f1);
+  box-shadow: 0 9px 24px rgb(71 57 37 / 8%);
+}
+
+.staff-module-panel :is(
+  .checkout-upgrade-management,
+  .membership-configuration-center,
+  .promotion-loyalty-panel,
+  .recommendation-policy-panel
+) > :is(header, button:first-child) {
+  border-bottom-color: #d5ded7;
+}
+
+.staff-module-panel :is(
+  .membership-configuration-summary,
+  .promotion-loyalty-summary,
+  .recommendation-policy-summary
+) {
+  background: linear-gradient(120deg, rgb(239 246 241 / 92%), rgb(255 255 255 / 84%));
+  color: var(--staff-module-green-deep);
+}
+
+.staff-module-panel :is(
+  .membership-configuration-summary,
+  .promotion-loyalty-summary,
+  .recommendation-policy-summary
+) > span,
+.staff-module-panel .loyalty-emergency-panel > header > span {
+  border: 1px solid #d3e1d7;
+  border-radius: 11px;
+  background: linear-gradient(145deg, #f1f7f3, #dcebe1);
+  color: var(--staff-module-green);
+  box-shadow: inset 0 1px 0 #fff;
+}
+
+.staff-module-panel :is(
+  .activity-operations-detail,
+  .activity-registration-list article,
+  .cashier-business-day-close,
+  .cashier-workbench-search,
+  .cashier-workbench-summary,
+  .cashier-order,
+  .cashier-line,
+  .cashier-payment-block,
+  .checkout-upgrade-management details,
+  .checkout-rule-list article,
+  .capacity-policy-list article,
+  .ce-analytics__filters,
+  .ce-analytics__metrics article,
+  .ce-analytics__cards article,
+  .ce-analytics__suggestion,
+  .ce-analytics__table-wrap,
+  .loyalty-emergency-grid article,
+  .membership-configuration-layout > nav,
+  .membership-configuration-workspace,
+  .membership-impact-preview,
+  .performance-revision-impacts,
+  .personal-contact-governance details,
+  .governance-list article,
+  .promotion-policy-grid article,
+  .promotion-draft,
+  .recommendation-rollout-card,
+  .recommendation-policy-grid article,
+  .recommendation-policy-draft,
+  .staff-access-overview article,
+  .staff-access-map,
+  .staff-access-editor
+) {
+  border-color: var(--staff-module-line);
+  border-radius: 11px;
+  background: linear-gradient(145deg, #fff, #faf7f1);
+  box-shadow: 0 6px 18px rgb(71 57 37 / 6%);
+}
+
+.staff-module-panel :is(
+  .activity-operations-list > button.is-selected,
+  .membership-configuration-layout > nav > button[data-active="true"],
+  .staff-access-map button.is-active
+) {
+  border-color: #88aa96;
+  background: linear-gradient(135deg, #eef6f1, #fff);
+  color: var(--staff-module-green-deep);
+  box-shadow: inset 3px 0 0 var(--staff-module-green), 0 5px 14px rgb(35 68 49 / 8%);
+}
+
+.staff-module-panel :is(
+  .activity-operations-panel input,
+  .activity-operations-panel select,
+  .activity-operations-panel textarea,
+  .cashier-workbench input,
+  .cashier-workbench select,
+  .cashier-workbench textarea,
+  .checkout-upgrade-management input,
+  .checkout-upgrade-management select,
+  .checkout-upgrade-management textarea,
+  .ce-analytics input,
+  .ce-analytics select,
+  .membership-configuration-center input,
+  .membership-configuration-center select,
+  .membership-configuration-center textarea,
+  .performance-revision-panel input,
+  .performance-revision-panel select,
+  .performance-revision-panel textarea,
+  .personal-contact-governance input,
+  .personal-contact-governance select,
+  .promotion-loyalty-panel input,
+  .promotion-loyalty-panel select,
+  .promotion-loyalty-panel textarea,
+  .recommendation-policy-panel input,
+  .recommendation-policy-panel textarea,
+  .staff-access-management input,
+  .staff-access-management select,
+  .staff-access-management textarea
+) {
+  border-color: #d2cabe;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.staff-module-panel :is(
+  .activity-operations-panel input,
+  .activity-operations-panel select,
+  .activity-operations-panel textarea,
+  .cashier-workbench input,
+  .cashier-workbench select,
+  .cashier-workbench textarea,
+  .checkout-upgrade-management input,
+  .checkout-upgrade-management select,
+  .checkout-upgrade-management textarea,
+  .ce-analytics input,
+  .ce-analytics select,
+  .membership-configuration-center input,
+  .membership-configuration-center select,
+  .membership-configuration-center textarea,
+  .performance-revision-panel input,
+  .performance-revision-panel select,
+  .performance-revision-panel textarea,
+  .personal-contact-governance input,
+  .personal-contact-governance select,
+  .promotion-loyalty-panel input,
+  .promotion-loyalty-panel select,
+  .promotion-loyalty-panel textarea,
+  .recommendation-policy-panel input,
+  .recommendation-policy-panel textarea,
+  .staff-access-management input,
+  .staff-access-management select,
+  .staff-access-management textarea
+):focus-visible {
+  border-color: #5f8d72;
+  outline: 3px solid rgb(49 93 70 / 15%);
+  outline-offset: 1px;
+}
+
+.staff-module-panel :is(
+  .cashier-primary-action,
+  .cashier-business-day-close > button,
+  .ce-analytics__actions button,
+  .ce-analytics__filter-actions button:not(.ce-analytics__secondary),
+  .membership-configuration-actions .primary,
+  .promotion-submit,
+  .recommendation-policy-submit,
+  .performance-revision-panel form > button,
+  .staff-access-publish
+) {
+  border-color: var(--staff-module-green-deep);
+  border-radius: 10px;
+  background: linear-gradient(135deg, #3d7055, var(--staff-module-green) 56%, var(--staff-module-green-deep));
+  color: #fff;
+  box-shadow: 0 7px 17px rgb(33 70 53 / 17%);
+}
+
+.staff-module-panel :is(
+  .activity-operations-panel button,
+  .checkout-upgrade-management button,
+  .personal-contact-governance button,
+  .promotion-policy-grid button,
+  .promotion-create,
+  .promotion-rules button,
+  .recommendation-rollout-card button,
+  .recommendation-policy-grid button,
+  .recommendation-policy-create,
+  .staff-access-management button
+):not(.cashier-danger-action):not(.promotion-submit):not(.recommendation-policy-submit):not(.staff-access-publish) {
+  border-color: #9eb4a5;
+  border-radius: 9px;
+  background: linear-gradient(145deg, #fff, #f7f2ea);
+  color: var(--staff-module-green-deep);
+}
+
+.staff-module-panel :is(
+  .activity-operations-notice,
+  .cashier-workbench-notice,
+  .staff-access-notice
+):not(.is-error) {
+  border-color: #a8c7b4;
+  border-left-color: var(--staff-module-green);
+  border-radius: 9px;
+  background: linear-gradient(90deg, #edf6f0, #f8fbf8);
+  color: var(--staff-module-green-deep);
+}
+
+.staff-module-panel :is(
+  .activity-operations-warning,
+  .checkout-upgrade-notice,
+  .checkout-upgrade-safety,
+  .membership-configuration-separation,
+  .performance-revision-warning,
+  .recommendation-policy-boundary,
+  .cashier-workbench-boundary,
+  .cashier-guidance
+) {
+  border-left-color: #c9a85b;
+  background: linear-gradient(90deg, #fff8e8, #fffdf8);
+  color: #66562f;
+}
+
+.staff-module-panel :is(
+  .cashier-danger-action,
+  .cashier-workbench-notice.is-error,
+  .staff-access-notice.is-error
+) {
+  border-color: #dba9ad;
+  background: #fff3f3;
+  color: #94323a;
+}
+
+.staff-module-panel :is(
+  .activity-contact-line,
+  .cashier-order-detail,
+  .capacity-window-list > div,
+  .ce-analytics__cards dl div,
+  .membership-array,
+  .promotion-rule-row
+) {
+  background: #f5f0e8;
+}
+
+@media (max-width: 420px) {
+  .staff-module-panel :is(
+    .checkout-upgrade-management,
+    .ce-analytics,
+    .loyalty-emergency-panel,
+    .membership-configuration-center,
+    .performance-revision-panel,
+    .personal-contact-governance,
+    .promotion-loyalty-panel,
+    .recommendation-policy-panel
+  ) {
+    border-radius: 12px;
+  }
+}

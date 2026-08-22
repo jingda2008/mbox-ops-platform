@@ -147,12 +147,13 @@ class FakeClient implements PostgresPoolClient {
       state.outboxMessages += 1
       return result<Row>([{ message_key: messageKey } as unknown as Row])
     }
-    if (sql.startsWith('SELECT message_key, aggregate_type, aggregate_id, aggregate_version')) {
+    if (sql.startsWith('SELECT id, message_key, aggregate_type, aggregate_id, aggregate_version')) {
       const messageKey = String(values[2])
       const message = state.outbox.get(messageKey)
       return message === undefined
         ? result<Row>([])
         : result<Row>([{
+            id: '66666666-6666-4666-8666-666666666666',
             message_key: messageKey,
             aggregate_type: message.aggregateType,
             aggregate_id: message.aggregateId,

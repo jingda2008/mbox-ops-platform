@@ -797,6 +797,7 @@ function cashierWorkbenchFixture(actions: {
     actions: {
       ...actions,
       canViewReconciliation: false,
+      canManageKdsException: false,
     },
     summary: {
       orderCount: 1,
@@ -822,6 +823,7 @@ function cashierWorkbenchFixture(actions: {
         totalAmountMinor: 8_800,
         status: 'delivered',
       }],
+      kdsTasks: [],
       payments: [{
         id: 'payment-browser-refund-001',
         publicId: 'PAYMENT-BROWSER-001',

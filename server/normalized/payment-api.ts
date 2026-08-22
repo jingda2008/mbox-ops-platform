@@ -65,6 +65,13 @@ import {
   type CancelUnpaidOrderInput,
   type CancelUnpaidOrderResult,
 } from './order-cancellation-repository.js'
+import {
+  OrderSettlementExceptionConflictError,
+  OrderSettlementExceptionForbiddenError,
+  OrderSettlementExceptionNotFoundError,
+  type SettleCancelledUnpaidOrderInput,
+  type SettleCancelledUnpaidOrderResult,
+} from './order-settlement-exception-repository.js'
 
 type PaymentCommandPort = Pick<
   PaymentCommandService,
@@ -170,6 +177,10 @@ export interface OrderCancellationPort {
   cancel(input: Readonly<CancelUnpaidOrderInput>): Promise<CancelUnpaidOrderResult>
 }
 
+export interface OrderSettlementExceptionPort {
+  settle(input: Readonly<SettleCancelledUnpaidOrderInput>): Promise<SettleCancelledUnpaidOrderResult>
+}
+
 export interface PaymentApiOptions {
   commands: PaymentCommandPort
   providerVerifier: PaymentProviderVerifier
@@ -177,6 +188,7 @@ export interface PaymentApiOptions {
   reconciliationQuery: ReconciliationQueryPort
   cashierWorkbenchQuery: CashierWorkbenchQueryPort
   orderCancellation: OrderCancellationPort
+  orderSettlementException: OrderSettlementExceptionPort
   onlinePayments?: Pick<
     OnlinePaymentService,
     'create' | 'query' | 'assertAvailable' | 'resolveActivePayment' | 'requestRefund' | 'queryRefund'
@@ -344,7 +356,15 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
     '/payments/:paymentId/provider-query',
     async (request, reply) => handleRoute(reply, async () => {
       if (options.onlinePayments === undefined) throw new OnlinePaymentUnavailableError()
-      const context = await resolveActorContext(options, request)
+      let context = await resolveActorContext(options, request)
+      // Guests may query only their own payment through the bound table-session
+      // principal. Staff use the same verified provider path, but only staff
+      // expressly allowed to view reconciliation may inspect cross-day results.
+      if (context.actor.type === 'employee') {
+        const staffContext = await resolveStaffContext(options, request)
+        requireStaffCapability(staffContext, 'reconciliation.view')
+        context = staffContext
+      }
       const paymentId = readUuid(request.params.paymentId, 'paymentId')
       const idempotencyKey = readIdempotencyKey(request)
       const principal = paymentInitiationPrincipal(context)
@@ -685,6 +705,27 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       return reply.send({ data: result, meta: { replayed: result.replayed } })
     })
   ))
+
+  app.post<{ Params: { orderId: string } }>('/orders/:orderId/settle-exception', async (request, reply) => (
+    handleRoute(reply, async () => {
+      const context = await resolveStaffContext(options, request)
+      if (!context.capabilities.includes('order.settle_exception')) {
+        throw new OrderSettlementExceptionForbiddenError('Employee lacks order settlement exception permission')
+      }
+      const body = readObject(request.body, '请求正文')
+      assertActorBinding(body, context.actor)
+      const result = await options.orderSettlementException.settle({
+        scope: context.scope,
+        orderId: readUuid(request.params.orderId, 'orderId'),
+        employeeId: context.employeeId,
+        businessDate: context.businessDate,
+        reasonCode: readSettlementExceptionReason(body.reasonCode),
+        reasonNote: readString(body.reasonNote, 'reasonNote', 500, 4),
+        idempotencyKey: readIdempotencyKey(request),
+      })
+      return reply.send({ data: result, meta: { replayed: result.replayed } })
+    })
+  ))
 }
 
 function readUnpaidCancellationReason(value: unknown): CancelUnpaidOrderInput['reasonCode'] {
@@ -693,6 +734,14 @@ function readUnpaidCancellationReason(value: unknown): CancelUnpaidOrderInput['r
     throw new PaymentApiRequestError('未付款订单取消原因无效')
   }
   return result as CancelUnpaidOrderInput['reasonCode']
+}
+
+function readSettlementExceptionReason(value: unknown): SettleCancelledUnpaidOrderInput['reasonCode'] {
+  const result = readString(value, 'reasonCode', 32)
+  if (!['manager_comp', 'uncollectible', 'test_cleanup'].includes(result)) {
+    throw new PaymentApiRequestError('异常结清原因无效')
+  }
+  return result as SettleCancelledUnpaidOrderInput['reasonCode']
 }
 
 function paymentFromProviderContext(value: ProviderPaymentContext): Payment {
@@ -1271,6 +1320,15 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   }
   if (error instanceof UnpaidOrderCancellationConflictError) {
     return apiError(409, 'ORDER_CANCEL_CONFLICT', '订单已有付款、退款或状态已变化，请刷新后按实际状态处理')
+  }
+  if (error instanceof OrderSettlementExceptionNotFoundError) {
+    return apiError(404, 'ORDER_NOT_FOUND', '订单不存在或不属于当前门店')
+  }
+  if (error instanceof OrderSettlementExceptionForbiddenError) {
+    return apiError(403, 'ORDER_SETTLEMENT_EXCEPTION_FORBIDDEN', '当前岗位无权异常结清已送达未付款订单')
+  }
+  if (error instanceof OrderSettlementExceptionConflictError) {
+    return apiError(409, 'ORDER_SETTLEMENT_EXCEPTION_CONFLICT', '订单仍有未完成出品、付款或退款，请先按实际状态处理')
   }
   if (error instanceof RefundNotFoundError) return apiError(404, 'REFUND_NOT_FOUND', error.message)
   if (error instanceof OrderNotPayableError) return apiError(409, 'ORDER_NOT_PAYABLE', error.message)

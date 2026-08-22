@@ -216,7 +216,7 @@ export interface VoiceTranscriptionResult {
 export interface StaffActionsApiPort {
   loadOperations(signal?: AbortSignal): Promise<StaffOperationsData>
   loadFulfillment(signal?: AbortSignal): Promise<StaffFulfillmentData>
-  loadReservations(signal?: AbortSignal): Promise<StaffReservation[]>
+  loadReservations(options?: StaffReservationListOptions, signal?: AbortSignal): Promise<StaffReservation[]>
   loadTableAssignments(signal?: AbortSignal): Promise<StaffTableAssignment[]>
   loadTableAssignmentOptions(signal?: AbortSignal): Promise<StaffTableAssignmentOptions>
   assignTables(input: Readonly<{
@@ -321,6 +321,12 @@ export interface StaffActionsApiPort {
   }>): Promise<ObservationEvent>
 }
 
+export interface StaffReservationListOptions {
+  range?: 'current' | 'carryover' | 'history'
+  from?: string
+  to?: string
+}
+
 export interface StaffActionsApiOptions {
   fetch?: typeof fetch
   timeoutMs?: number
@@ -346,8 +352,13 @@ export class StaffActionsApi implements StaffActionsApiPort {
     return this.getData('/api/commerce/fulfillment', signal)
   }
 
-  loadReservations(signal?: AbortSignal): Promise<StaffReservation[]> {
-    return this.getData('/api/staff/reservations', signal)
+  loadReservations(options: StaffReservationListOptions = {}, signal?: AbortSignal): Promise<StaffReservation[]> {
+    const query = new URLSearchParams()
+    if (options.range !== undefined && options.range !== 'current') query.set('range', options.range)
+    if (options.from !== undefined) query.set('from', options.from)
+    if (options.to !== undefined) query.set('to', options.to)
+    const suffix = query.size === 0 ? '' : `?${query.toString()}`
+    return this.getData(`/api/staff/reservations${suffix}`, signal)
   }
 
   loadTableAssignments(signal?: AbortSignal): Promise<StaffTableAssignment[]> {

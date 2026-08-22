@@ -105,10 +105,32 @@ interface RecipeComponentDraft {
   expectedWasteQuantity: string
 }
 
+interface RecipeCostPreview {
+  id?: string
+  productId: string
+  recipeId: string
+  recipeVersion: number
+  yieldQuantity: number
+  currency: string
+  costAmountMinor: number | null
+  appliedAt?: string
+  components: Array<{
+    inventoryItemId: string
+    itemName: string
+    baseUnit: string
+    componentQuantity: string
+    expectedWasteQuantity: string
+    sourceReceiptLineId: string | null
+    sourceUnitCostMinor: string | null
+    componentCostMinor: string | null
+  }>
+}
+
 export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient; auth: StaffAuthView }) {
   const canManageProduct = auth.permissions.includes('catalog.product.manage')
   const canManagePrice = auth.permissions.includes('catalog.price.manage')
   const canManageInventory = auth.permissions.includes('inventory.manage')
+  const canViewInventoryCost = auth.permissions.includes('inventory.cost.view')
   const canConfigurePerformancePhase = auth.permissions.includes('recommendation.phase.configure')
   const [expanded, setExpanded] = useState(false)
   const [products, setProducts] = useState<CatalogProduct[]>([])
@@ -128,6 +150,8 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
   const [recipeYield, setRecipeYield] = useState('1')
   const [recipeComponents, setRecipeComponents] = useState<Record<string, RecipeComponentDraft>>({})
   const [recipeBusy, setRecipeBusy] = useState(false)
+  const [recipeCost, setRecipeCost] = useState<RecipeCostPreview | null>(null)
+  const [recipeCostReason, setRecipeCostReason] = useState('按最新已收货物料成本核算配方成本')
   const [notice, setNotice] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
   const performancePhaseRequest = useRef(0)
 
@@ -178,6 +202,8 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
     setRecipeYield('1')
     setRecipeComponents({})
     setRecipeBusy(false)
+    setRecipeCost(null)
+    setRecipeCostReason('按最新已收货物料成本核算配方成本')
   }
 
   const loadRecipeEditor = async (productId: string) => {
@@ -197,6 +223,10 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
         component.inventoryItemId,
         { quantity: component.quantity, expectedWasteQuantity: component.expectedWasteQuantity },
       ])))
+      if (recipe !== null && canViewInventoryCost) {
+        const costResponse = await api.getEndpoint<{ data: unknown }>(`/api/inventory/products/${productId}/recipe-cost`)
+        setRecipeCost(readRecipeCostPreview(costResponse.data, productId))
+      } else setRecipeCost(null)
       setRecipeState('ready')
     } catch (error) {
       setRecipeState('error')
@@ -363,6 +393,30 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
     }
   }
 
+  const applyRecipeCost = async () => {
+    if (draft?.id === null || draft === null || recipeBusy || recipeCost === null || recipeCost.costAmountMinor === null) return
+    const reason = recipeCostReason.trim()
+    if (reason.length < 2 || reason.length > 500) {
+      setNotice({ kind: 'error', text: '请填写2至500字的成本核算原因' })
+      return
+    }
+    setRecipeBusy(true)
+    setNotice(null)
+    try {
+      const result = await api.postEndpoint<unknown>(
+        `/api/inventory/products/${draft.id}/recipe-cost/apply`, { reason },
+        { idempotencyKey: operationKey('inventory-recipe-cost') },
+      )
+      setRecipeCost(readRecipeCostPreview(result, draft.id))
+      await load()
+      setNotice({ kind: 'success', text: `${draft.name} 的配方成本已按当前收货记录应用；历史订单成本不会被改写` })
+    } catch (error) {
+      setNotice({ kind: 'error', text: error instanceof Error ? error.message : '配方成本没有应用' })
+    } finally {
+      setRecipeBusy(false)
+    }
+  }
+
   const togglePerformancePhase = (phaseCode: PerformancePhaseCode) => {
     setPerformancePhaseCodes((current) => current.includes(phaseCode)
       ? current.filter((item) => item !== phaseCode)
@@ -436,6 +490,14 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
       setNotice({ kind: 'error', text: '组合商品至少选择一个组成单品' })
       return
     }
+    if (draft.id === null && draft.status === 'active' && !canManagePrice) {
+      setNotice({ kind: 'error', text: '当前岗位没有标准售价权限。新商品请先保存为停用，或由具备定价权限的员工一次完成商品与售价配置。' })
+      return
+    }
+    if (draft.id === null && draft.status === 'active' && priceAmount === null) {
+      setNotice({ kind: 'error', text: '在售新商品必须同时填写标准售价；系统不会先创建未定价商品。' })
+      return
+    }
     const bundleComponents = Object.entries(draft.componentQuantities).map(([productId, quantity], index) => ({
       productId,
       quantity: readInteger(quantity, 1, 100) ?? 0,
@@ -451,6 +513,13 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
       description: draft.description.trim(),
       imageUrl: draft.imageUrl.trim(),
     }
+    const currentPrice = draft.id === null
+      ? null
+      : products.find((product) => product.id === draft.id)?.standardPrice?.amountMinor ?? null
+    const standardPrice = canManagePrice && priceAmount !== null
+      && (draft.id === null || currentPrice === null || Number(currentPrice) !== priceAmount)
+      ? { amountMinor: priceAmount, currency: 'CNY', reason: draft.priceReason.trim() || '商品配置调整标准售价' }
+      : undefined
     const payload = {
       ...(draft.id === null ? { code: draft.code.trim() } : {}),
       name: draft.name.trim(),
@@ -483,6 +552,7 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
       fulfillmentSlaSeconds,
       costAmountMinor: costAmount,
       status: draft.status,
+      ...(standardPrice === undefined ? {} : { standardPrice }),
     }
 
     setBusy(true)
@@ -491,27 +561,9 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
       const saved = draft.id === null
         ? await api.postEndpoint<CatalogProduct>('/api/catalog/products', payload, { idempotencyKey: operationKey('catalog-create') })
         : await api.patchEndpoint<CatalogProduct>(`/api/catalog/products/${draft.id}`, payload, { idempotencyKey: operationKey('catalog-update') })
-      let priceWarning = ''
-      if (canManagePrice && priceAmount !== null) {
-        const previous = saved.standardPrice?.amountMinor === null || saved.standardPrice === null
-          ? null : Number(saved.standardPrice.amountMinor)
-        if (previous !== priceAmount) {
-          try {
-            await api.putEndpoint(`/api/catalog/products/${saved.id}/standard-price`, {
-              amountMinor: priceAmount,
-              currency: 'CNY',
-              reason: draft.priceReason.trim() || '商品配置调整标准售价',
-            }, { idempotencyKey: operationKey('catalog-price') })
-          } catch (error) {
-            priceWarning = `；商品资料已保存，但售价未确认：${error instanceof Error ? error.message : '请重新调整售价'}`
-          }
-        }
-      }
       await load()
       closeDraft()
-      setNotice(priceWarning === ''
-        ? { kind: 'success', text: `${saved.name} 已保存并从服务端读回` }
-        : { kind: 'error', text: priceWarning.slice(1) })
+      setNotice({ kind: 'success', text: `${saved.name} 已保存并从服务端读回${standardPrice === undefined ? '' : '，包含标准售价'}` })
     } catch (error) {
       setNotice({ kind: 'error', text: error instanceof Error ? error.message : '商品配置未保存' })
       await load().catch(() => undefined)
@@ -542,7 +594,7 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
             <label>销售状态<select value={draft.status} onChange={(event) => updateDraft('status', event.target.value as ProductStatus)}><option value="active">在售</option><option value="sold_out">售罄</option><option value="inactive">停用</option></select></label>
             <label>库存方式<select disabled={draft.productKind === 'bundle'} value={draft.productKind === 'bundle' ? 'tracked' : draft.inventoryControlMode} onChange={(event) => updateDraft('inventoryControlMode', event.target.value as InventoryControlMode)}><option value="tracked">跟踪库存（酒水等）</option><option value="not_managed">暂不管理数量（小吃水果）</option></select></label>
             <label>搜索文本<input maxLength={4000} value={draft.searchText} onChange={(event) => updateDraft('searchText', event.target.value)} /></label>
-            <label>标准售价（元）<input disabled={!canManagePrice} inputMode="decimal" value={draft.priceYuan} onChange={(event) => updateDraft('priceYuan', event.target.value)} /></label>
+            <label>标准售价（元）<input disabled={!canManagePrice} inputMode="decimal" value={draft.priceYuan} onChange={(event) => updateDraft('priceYuan', event.target.value)} />{!canManagePrice && <small>当前岗位不能定价；不会在保存后尝试补写售价。</small>}</label>
             <label>成本金额（元）<input inputMode="decimal" value={draft.costYuan} onChange={(event) => updateDraft('costYuan', event.target.value)} /></label>
             <label>推荐最少人数<input inputMode="numeric" value={draft.recommendationMinGuests} onChange={(event) => updateDraft('recommendationMinGuests', event.target.value)} /></label>
             <label>推荐最多人数<input inputMode="numeric" value={draft.recommendationMaxGuests} onChange={(event) => updateDraft('recommendationMaxGuests', event.target.value)} /></label>
@@ -601,6 +653,14 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
                     </article>
                   })}</div>}
                 <button type="button" disabled={recipeBusy || inventoryItems.length === 0} onClick={() => void saveRecipe()}>{recipeBusy ? '保存中' : '单独保存库存配方'}</button>
+                {canViewInventoryCost && recipeCost !== null && <section className="catalog-recipe-cost" aria-label="配方成本核算">
+                  <header><div><strong>配方成本核算</strong><small>只读取已收货的采购成本。保存配方不会自动改售价或成本，必须由有成本权限的员工明确应用。</small></div><em>{recipeCost.costAmountMinor === null ? '待补成本' : `¥${minorToYuan(recipeCost.costAmountMinor)}/份`}</em></header>
+                  {recipeCost.costAmountMinor === null
+                    ? <p>以下物料缺少已收货成本：{recipeCost.components.filter((component) => component.sourceReceiptLineId === null).map((component) => component.itemName).join('、')}。请先完成对应采购收货，再重新读取。</p>
+                    : <><div className="catalog-recipe-cost-lines">{recipeCost.components.map((component) => <span key={component.inventoryItemId}>{component.itemName} · {component.componentCostMinor === null ? '待补成本' : `¥${minorToYuan(component.componentCostMinor)}`}</span>)}</div>
+                      <label>本次核算原因<input minLength={2} maxLength={500} value={recipeCostReason} onChange={(event) => setRecipeCostReason(event.target.value)} /></label>
+                      <button type="button" disabled={recipeBusy} onClick={() => void applyRecipeCost()}>{recipeBusy ? '应用中' : '按当前收货成本应用到商品'}</button></>}
+                </section>}
               </>}
             </section>}
           </div>
@@ -691,6 +751,37 @@ function readActiveRecipe(value: unknown): {
   ))
   if (components.length !== value.components.length) throw new Error('库存配方组成返回格式无效')
   return { version: value.version as number, yieldQuantity: value.yieldQuantity as number, components }
+}
+
+function readRecipeCostPreview(value: unknown, productId: string): RecipeCostPreview {
+  if (!isRecord(value) || value.productId !== productId || typeof value.recipeId !== 'string'
+    || !Number.isSafeInteger(value.recipeVersion) || !Number.isSafeInteger(value.yieldQuantity)
+    || (value.costAmountMinor !== null && !Number.isSafeInteger(value.costAmountMinor))
+    || typeof value.currency !== 'string' || !Array.isArray(value.components)) {
+    throw new Error('配方成本返回格式无效')
+  }
+  const components = value.components.flatMap((component): RecipeCostPreview['components'] => (
+    isRecord(component) && typeof component.inventoryItemId === 'string'
+      && typeof component.itemName === 'string' && typeof component.baseUnit === 'string'
+      && typeof component.componentQuantity === 'string' && typeof component.expectedWasteQuantity === 'string'
+      && (component.sourceReceiptLineId === null || typeof component.sourceReceiptLineId === 'string')
+      && (component.sourceUnitCostMinor === null || typeof component.sourceUnitCostMinor === 'string')
+      && (component.componentCostMinor === null || typeof component.componentCostMinor === 'string')
+      ? [{
+          inventoryItemId: component.inventoryItemId, itemName: component.itemName, baseUnit: component.baseUnit,
+          componentQuantity: component.componentQuantity, expectedWasteQuantity: component.expectedWasteQuantity,
+          sourceReceiptLineId: component.sourceReceiptLineId, sourceUnitCostMinor: component.sourceUnitCostMinor,
+          componentCostMinor: component.componentCostMinor,
+        }]
+      : []
+  ))
+  if (components.length !== value.components.length) throw new Error('配方成本组成返回格式无效')
+  return {
+    ...(typeof value.id === 'string' ? { id: value.id } : {}), productId, recipeId: value.recipeId as string,
+    recipeVersion: value.recipeVersion as number, yieldQuantity: value.yieldQuantity as number, currency: value.currency as string,
+    costAmountMinor: value.costAmountMinor as number | null, components,
+    ...(typeof value.appliedAt === 'string' ? { appliedAt: value.appliedAt } : {}),
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

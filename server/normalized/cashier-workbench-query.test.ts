@@ -46,6 +46,7 @@ describe('PostgresCashierWorkbenchQuery', () => {
       canApproveRefund: true,
       canExecuteRefund: true,
       canViewReconciliation: false,
+      canManageKdsException: false,
     })
     expect(view.summary).toEqual({
       orderCount: 1,
@@ -53,6 +54,7 @@ describe('PostgresCashierWorkbenchQuery', () => {
       requestedRefundCount: 1,
       processingRefundCount: 0,
       carryoverOrderCount: 0,
+      carryoverPendingPaymentCount: 0,
     })
     expect(view.orders[0]).toMatchObject({ publicId: 'ORDER-VIP1-0001', tableCode: 'VIP1' })
     expect(view.orders[0]?.payments[0]).toMatchObject({
@@ -101,6 +103,25 @@ describe('PostgresCashierWorkbenchQuery', () => {
     expect(runner.calls).toHaveLength(1)
   })
 
+  it('projects a delivered unpaid settlement exception without describing it as payment', async () => {
+    const cancelledOrder = { ...orderRow(), status: 'cancelled', payment_status: 'unpaid' }
+    const runner = new QueryRunner([
+      [cancelledOrder], [itemRow()], [], [], [], [{
+        order_id: orderId, reason_code: 'manager_comp', settled_amount_minor: '8800',
+        occurred_at: '2026-08-13T13:00:00.000Z',
+      }],
+    ])
+    const query = new PostgresCashierWorkbenchQuery(runner as unknown as ScopedPostgresTransactionRunner)
+    const view = await query.get({
+      scope: { tenantId, storeId }, employeeId, businessDate: '2026-08-13',
+      capabilities: ['reconciliation.view', 'order.settle_exception'], limit: 20,
+    })
+    expect(view.orders[0]?.settlementException).toEqual({
+      reasonCode: 'manager_comp', settledAmountMinor: 8_800, occurredAt: '2026-08-13T13:00:00.000Z',
+    })
+    expect(runner.calls.at(-1)?.sql).toContain('order_settlement_exception_events')
+  })
+
   it('keeps an unresolved prior-business-day refund visible as handover work', async () => {
     const priorOrder = { ...orderRow(), business_date: '2026-08-12' }
     const runner = new QueryRunner([[priorOrder], [itemRow()], [paymentRow()], [refundRow()], [allocationRow()]])
@@ -116,7 +137,33 @@ describe('PostgresCashierWorkbenchQuery', () => {
     expect(view.summary.carryoverOrderCount).toBe(1)
     expect(view.orders[0]).toMatchObject({ businessDate: '2026-08-12', carryover: true })
     expect(runner.calls[0]?.sql).toContain("orders.payment_status='unpaid'")
+    expect(runner.calls[0]?.sql).toContain("carryover_payment.status IN ('created','pending')")
     expect(runner.calls[0]?.sql).toContain("carryover_refund.status IN ('requested','approved','processing')")
+  })
+
+  it('projects a completed-refund allocation onto an unstarted KDS task without treating it as an automatic cancellation', async () => {
+    const succeededRefund = { ...refundRow(), status: 'succeeded', completed_at: '2026-08-13T12:08:00.000Z' }
+    const runner = new QueryRunner([
+      [orderRow()], [itemRow()], [paymentRow()], [succeededRefund], [allocationRow()],
+      [{ id: '99999999-9999-4999-8999-999999999999', order_item_id: itemId, refundable_order_item_id: itemId, station_code: 'bar', status: 'accepted', quantity: 1 }],
+    ])
+    const query = new PostgresCashierWorkbenchQuery(runner as unknown as ScopedPostgresTransactionRunner)
+
+    const view = await query.get({
+      scope: { tenantId, storeId }, employeeId, businessDate: '2026-08-13',
+      capabilities: ['refund.execute', 'kds.exception.manage'], limit: 20,
+    })
+
+    expect(view.actions.canManageKdsException).toBe(true)
+    expect(view.orders[0]?.kdsTasks).toEqual([{
+      id: '99999999-9999-4999-8999-999999999999',
+      orderItemId: itemId,
+      stationCode: 'bar',
+      status: 'accepted',
+      quantity: 1,
+      succeededRefundAmountMinor: 1_000,
+    }])
+    expect(runner.calls.at(-2)?.sql).toContain('FROM mbox.kds_tasks')
   })
 
   it('rejects callers without a financial capability before opening the database', () => {
@@ -175,6 +222,7 @@ integration('PostgresCashierWorkbenchQuery PostgreSQL integration', () => {
   const integrationStoreId = randomUUID()
   const integrationAreaId = randomUUID()
   const integrationTableId = randomUUID()
+  const integrationCarryoverTableId = randomUUID()
   const integrationSessionId = randomUUID()
   const integrationEmployeeId = randomUUID()
   const integrationApproverId = randomUUID()
@@ -183,6 +231,10 @@ integration('PostgresCashierWorkbenchQuery PostgreSQL integration', () => {
   const integrationItemId = randomUUID()
   const integrationPaymentId = randomUUID()
   const integrationRefundId = randomUUID()
+  const integrationCarryoverSessionId = randomUUID()
+  const integrationCarryoverOrderId = randomUUID()
+  const integrationCarryoverItemId = randomUUID()
+  const integrationCarryoverPaymentId = randomUUID()
   let pool: Pool
   let query: PostgresCashierWorkbenchQuery
 
@@ -198,6 +250,8 @@ integration('PostgresCashierWorkbenchQuery PostgreSQL integration', () => {
       VALUES ($1, $2, $3, 'VIP', 'VIP区', 'indoor')`, [integrationAreaId, integrationTenantId, integrationStoreId])
     await pool.query(`INSERT INTO mbox.tables (id, tenant_id, store_id, area_id, code, display_name, capacity)
       VALUES ($1, $2, $3, $4, 'VIP1', 'VIP1', 6)`, [integrationTableId, integrationTenantId, integrationStoreId, integrationAreaId])
+    await pool.query(`INSERT INTO mbox.tables (id, tenant_id, store_id, area_id, code, display_name, capacity)
+      VALUES ($1, $2, $3, $4, 'VIP2', 'VIP2', 6)`, [integrationCarryoverTableId, integrationTenantId, integrationStoreId, integrationAreaId])
     await pool.query(`INSERT INTO mbox.employees (id, tenant_id, store_id, employee_code, display_name)
       VALUES ($1, $2, $3, $4, 'Tom'), ($5, $2, $3, $6, '李艳')`, [
       integrationEmployeeId,
@@ -280,6 +334,49 @@ integration('PostgresCashierWorkbenchQuery PostgreSQL integration', () => {
       integrationRefundId,
       integrationItemId,
     ])
+    await pool.query(`INSERT INTO mbox.table_sessions (
+      id, tenant_id, store_id, table_id, public_id, business_date, guest_count
+    ) VALUES ($1, $2, $3, $4, $5, '2026-08-12', 2)`, [
+      integrationCarryoverSessionId,
+      integrationTenantId,
+      integrationStoreId,
+      integrationCarryoverTableId,
+      `cw-carryover-session-${suffix}`,
+    ])
+    await pool.query(`INSERT INTO mbox.orders (
+      id, tenant_id, store_id, table_session_id, public_id, channel, status,
+      payment_status, subtotal_amount_minor, total_amount_minor, currency,
+      created_by_employee_id, submitted_at
+    ) VALUES ($1, $2, $3, $4, $5, 'staff_assisted', 'submitted',
+      'unpaid', 6800, 6800, 'CNY', $6, '2026-08-12T23:50:00Z')`, [
+      integrationCarryoverOrderId,
+      integrationTenantId,
+      integrationStoreId,
+      integrationCarryoverSessionId,
+      `cw-carryover-order-${suffix}`,
+      integrationEmployeeId,
+    ])
+    await pool.query(`INSERT INTO mbox.order_items (
+      id, tenant_id, store_id, order_id, product_id, quantity, unit_price_minor,
+      total_amount_minor, currency, fulfillment_station, product_snapshot, status
+    ) VALUES ($1, $2, $3, $4, $5, 1, 6800, 6800, 'CNY', 'bar',
+      '{"name":"跨日待查支付"}', 'submitted')`, [
+      integrationCarryoverItemId,
+      integrationTenantId,
+      integrationStoreId,
+      integrationCarryoverOrderId,
+      integrationProductId,
+    ])
+    await pool.query(`INSERT INTO mbox.payments (
+      id, tenant_id, store_id, order_id, public_id, provider, method,
+      amount_minor, currency, status
+    ) VALUES ($1, $2, $3, $4, $5, 'postar', 'native_qr', 6800, 'CNY', 'pending')`, [
+      integrationCarryoverPaymentId,
+      integrationTenantId,
+      integrationStoreId,
+      integrationCarryoverOrderId,
+      `cw-carryover-payment-${suffix}`,
+    ])
   })
 
   afterAll(async () => pool?.end())
@@ -290,7 +387,7 @@ integration('PostgresCashierWorkbenchQuery PostgreSQL integration', () => {
       employeeId: integrationApproverId,
       businessDate: '2026-08-13',
       capabilities: ['refund.request', 'refund.approve', 'refund.execute'],
-      query: 'VIP1',
+      query: 'VIP',
       limit: 20,
     })
     const stale = await query.get({
@@ -301,17 +398,22 @@ integration('PostgresCashierWorkbenchQuery PostgreSQL integration', () => {
       limit: 20,
     })
 
-    expect(current.orders).toHaveLength(1)
-    expect(current.orders[0]?.payments[0]).toMatchObject({
+    expect(current.orders).toHaveLength(2)
+    const currentOrder = current.orders.find((order) => order.id === integrationOrderId)
+    expect(currentOrder?.payments[0]).toMatchObject({
       reservedRefundAmountMinor: 1_000,
       remainingRefundableMinor: 7_800,
     })
-    expect(current.orders[0]?.payments[0]?.refundableItems[0]).toMatchObject({
+    expect(currentOrder?.payments[0]?.refundableItems[0]).toMatchObject({
       productName: '精酿啤酒',
       remainingRefundableMinor: 7_800,
     })
     expect(current.summary.processingRefundCount).toBe(1)
-    expect(stale.orders).toEqual([])
+    expect(current.summary.carryoverPendingPaymentCount).toBe(1)
+    expect(current.orders.some((order) => order.id === integrationCarryoverOrderId && order.carryover)).toBe(true)
+    expect(stale.orders).toHaveLength(1)
+    expect(stale.orders[0]).toMatchObject({ id: integrationCarryoverOrderId, carryover: false })
+    expect(stale.summary.carryoverPendingPaymentCount).toBe(0)
   })
 })
 

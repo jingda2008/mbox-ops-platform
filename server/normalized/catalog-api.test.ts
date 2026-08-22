@@ -438,6 +438,49 @@ describe("normalized catalog HTTP API", () => {
     ]);
   });
 
+  it("saves a requested standard price inside the same product command", async () => {
+    const fixture = await createFixture();
+    const response = await fixture.app.inject({
+      method: "POST",
+      url: "/api/catalog/products",
+      headers: { "idempotency-key": "catalog-create-priced-unit-001" },
+      payload: {
+        ...createPayload(),
+        standardPrice: {
+          amountMinor: 12800,
+          currency: "CNY",
+          reason: "新商品首次定价",
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(fixture.calls.some((call) => call.sql.includes("INSERT INTO mbox.products"))).toBe(true);
+    expect(fixture.calls.some((call) => call.sql.includes("INSERT INTO mbox.product_prices"))).toBe(true);
+    expect(fixture.outcomes[0]?.auditEvents).toHaveLength(1);
+    expect(fixture.outcomes[0]?.outboxMessages).toHaveLength(1);
+  });
+
+  it("rejects a priced product before inserting it when price permission is absent", async () => {
+    const fixture = await createFixture({ grantedPermissions: [CATALOG_PRODUCT_MANAGE_PERMISSION] });
+    const response = await fixture.app.inject({
+      method: "POST",
+      url: "/api/catalog/products",
+      headers: { "idempotency-key": "catalog-priced-denied-unit-001" },
+      payload: {
+        ...createPayload(),
+        standardPrice: {
+          amountMinor: 12800,
+          currency: "CNY",
+          reason: "无权限定价测试",
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(fixture.calls.some((call) => call.sql.includes("INSERT INTO mbox.products"))).toBe(false);
+  });
+
   it("writes operating decisions from top-level typed fields and keeps productSnapshot display-only", async () => {
     const fixture = await createFixture();
     const response = await fixture.app.inject({

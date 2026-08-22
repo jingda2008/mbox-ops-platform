@@ -385,6 +385,44 @@ describe('reservationPerformanceApiPlugin guest reservation flows', () => {
 })
 
 describe('reservationPerformanceApiPlugin staff reservation permissions', () => {
+  it('returns only unresolved prior-business-day reservations for the carryover worklist', async () => {
+    const value = fixture()
+    const response = await value.app.inject({ method: 'GET', url: '/api/staff/reservations?range=carryover' })
+
+    expect(response.statusCode).toBe(200)
+    const reservationQuery = value.query.mock.calls.find(([sql]) => String(sql).includes('FROM mbox.reservations'))
+    expect(reservationQuery?.[0]).toContain("reservation.status IN ('pending','confirmed','arrived','seated')")
+    expect(reservationQuery?.[1]).toContain('carryover')
+  })
+
+  it('requires both dates for an explicit history search', async () => {
+    const value = fixture()
+    const response = await value.app.inject({ method: 'GET', url: '/api/staff/reservations?range=history' })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({ error: { message: '历史查询必须同时提供起止时间' } })
+    expect(value.query).not.toHaveBeenCalled()
+  })
+
+  it('returns only unresolved prior-business-day reservations for the carryover worklist', async () => {
+    const value = fixture()
+    const response = await value.app.inject({ method: 'GET', url: '/api/staff/reservations?range=carryover' })
+
+    expect(response.statusCode).toBe(200)
+    const reservationQuery = value.query.mock.calls.find(([sql]) => String(sql).includes('FROM mbox.reservations'))
+    expect(reservationQuery?.[0]).toContain("reservation.status IN ('pending','confirmed','arrived','seated')")
+    expect(reservationQuery?.[1]).toContain('carryover')
+  })
+
+  it('requires both dates for an explicit history search', async () => {
+    const value = fixture()
+    const response = await value.app.inject({ method: 'GET', url: '/api/staff/reservations?range=history' })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({ error: { message: '历史查询必须同时提供起止时间' } })
+    expect(value.query).not.toHaveBeenCalled()
+  })
+
   it('checks live StaffAccessRepository permissions for reads and management commands', async () => {
     const value = fixture()
     const list = await value.app.inject({ method: 'GET', url: '/api/staff/reservations?status=pending' })
@@ -468,7 +506,7 @@ describe('reservationPerformanceApiPlugin staff reservation permissions', () => 
     expect(scopedCall?.[0]).toContain("reservation.status = 'pending'")
     expect(scopedCall?.[0]).toContain("($9::date + 1)::timestamp + reservation_store.business_day_cutoff")
     expect(scopedCall?.[1]).toEqual([
-      tenantId, storeId, null, null, null, false, [employeeId], [areaId], '2026-08-11',
+      tenantId, storeId, null, null, null, false, [employeeId], [areaId], '2026-08-11', 'current',
     ])
   })
 

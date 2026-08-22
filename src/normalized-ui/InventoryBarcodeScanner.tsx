@@ -9,69 +9,139 @@ type DetectorConstructor = {
 }
 
 const preferredFormats = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'qr_code']
+type CameraState = 'starting' | 'ready' | 'detected' | 'unavailable'
 
 export function InventoryBarcodeScanner({ onClose, onDetected }: {
   onClose(): void
   onDetected(code: string): void
 }) {
   const videoRef = useRef<HTMLVideoElement>(null)
-  const [cameraState, setCameraState] = useState<'starting' | 'ready' | 'detected' | 'unavailable'>('starting')
+  const [cameraState, setCameraState] = useState<CameraState>('starting')
   const [detectedCode, setDetectedCode] = useState('')
+  const [detail, setDetail] = useState('')
 
   useEffect(() => {
     let active = true
     let timer = 0
     let stream: MediaStream | null = null
-    const Detector = (window as Window & { BarcodeDetector?: DetectorConstructor }).BarcodeDetector
+    let stopFallback: (() => void) | null = null
+    let accepted = false
 
-    async function start() {
-      if (!Detector || !navigator.mediaDevices?.getUserMedia) {
-        setCameraState('unavailable')
-        return
+    const stopCamera = () => {
+      window.clearTimeout(timer)
+      stopFallback?.()
+      stopFallback = null
+      stream?.getTracks().forEach((track) => track.stop())
+    }
+    const accept = (value: string) => {
+      const code = value.trim()
+      if (!active || code.length < 3 || code.length > 128) return false
+      accepted = true
+      setDetectedCode(code)
+      setCameraState('detected')
+      setDetail('')
+      stopCamera()
+      return true
+    }
+    const cameraFailure = (error: unknown) => {
+      if (!active) return
+      const name = error instanceof DOMException ? error.name : ''
+      const message = name === 'NotAllowedError' || name === 'SecurityError'
+        ? '请在浏览器设置中允许本页面使用摄像头，然后重新打开扫码。'
+        : name === 'NotFoundError' || name === 'OverconstrainedError'
+          ? '没有找到可用的后置摄像头。请改用其他设备或手工输入条码。'
+          : name === 'NotReadableError' || name === 'AbortError'
+            ? '摄像头可能正被其他应用占用。请关闭占用应用后重试。'
+            : '当前浏览器无法调用摄像头，请手工输入条码。'
+      setDetail(message)
+      setCameraState('unavailable')
+    }
+
+    const startFallbackDecoder = async () => {
+      if (!stream || !videoRef.current) return
+      try {
+        const { BrowserMultiFormatReader } = await import('@zxing/browser')
+        const { BarcodeFormat, DecodeHintType } = await import('@zxing/library')
+        if (!active || !stream || !videoRef.current) return
+        const hints = new Map([[DecodeHintType.POSSIBLE_FORMATS, [
+          BarcodeFormat.EAN_13,
+          BarcodeFormat.EAN_8,
+          BarcodeFormat.UPC_A,
+          BarcodeFormat.UPC_E,
+          BarcodeFormat.CODE_128,
+          BarcodeFormat.QR_CODE,
+        ]]])
+        const reader = new BrowserMultiFormatReader(hints)
+        const controls = await reader.decodeFromStream(stream, videoRef.current, (result) => {
+          if (result !== undefined) accept(result.getText())
+        })
+        if (!active || accepted) controls.stop()
+        else stopFallback = () => controls.stop()
+        if (active) setDetail('已启用兼容识别，可扫描条形码或二维码。')
+      } catch {
+        // Keep the camera open for manual inspection; no camera frame leaves the device.
+        if (active) setDetail('摄像头已打开，但当前设备的本地识别不可用；请手工输入条码。')
       }
+    }
+
+    const startNativeDetector = async (Detector: DetectorConstructor): Promise<boolean> => {
       try {
         const supported = Detector.getSupportedFormats ? await Detector.getSupportedFormats() : preferredFormats
         const formats = preferredFormats.filter((format) => supported.includes(format))
-        if (formats.length === 0) {
-          setCameraState('unavailable')
-          return
-        }
+        // A QR-only native detector is not enough for liquor barcodes; use the local multi-format fallback.
+        if (formats.length !== preferredFormats.length) return false
         const detector = new Detector({ formats })
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
-        })
-        if (!active || !videoRef.current) return
-        videoRef.current.srcObject = stream
-        await videoRef.current.play()
-        setCameraState('ready')
         const detect = async () => {
           if (!active || !videoRef.current) return
           try {
             const results = await detector.detect(videoRef.current)
-            const code = results.map((result) => result.rawValue.trim()).find((value) => value.length >= 3 && value.length <= 128)
-            if (code) {
-              setDetectedCode(code)
-              setCameraState('detected')
-              stream?.getTracks().forEach((track) => track.stop())
-              return
-            }
+            if (results.some((result) => accept(result.rawValue))) return
           } catch {
-            // Focusing and motion can make a single camera frame unreadable.
+            // Motion and focus can make a single frame unreadable; keep the camera open.
           }
           timer = window.setTimeout(detect, 220)
         }
         timer = window.setTimeout(detect, 220)
+        return true
       } catch {
-        if (active) setCameraState('unavailable')
+        return false
+      }
+    }
+
+    const start = async () => {
+      if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+        cameraFailure(new DOMException('Camera API is unavailable', 'NotSupportedError'))
+        return
+      }
+      try {
+        // Ask for permission before deciding which local decoder can run.
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        })
+        if (!active || !videoRef.current) {
+          stopCamera()
+          return
+        }
+        videoRef.current.srcObject = stream
+        await videoRef.current.play()
+        if (!active) return
+        setCameraState('ready')
+        const Detector = (window as Window & { BarcodeDetector?: DetectorConstructor }).BarcodeDetector
+        if (Detector && await startNativeDetector(Detector)) {
+          setDetail('将条形码或二维码放入框内。')
+          return
+        }
+        await startFallbackDecoder()
+      } catch (error) {
+        cameraFailure(error)
       }
     }
 
     void start()
     return () => {
       active = false
-      window.clearTimeout(timer)
-      stream?.getTracks().forEach((track) => track.stop())
+      stopCamera()
     }
   }, [])
 
@@ -81,9 +151,9 @@ export function InventoryBarcodeScanner({ onClose, onDetected }: {
       <div className={`inventory-camera is-${cameraState}`}>
         <video ref={videoRef} muted playsInline aria-label="库存扫码摄像头画面" />
         <i aria-hidden="true" />
-        <span>{cameraState === 'detected' ? <><CheckCircle2 size={20} />识别成功</> : cameraState === 'unavailable' ? <><Camera size={20} />当前浏览器无法调用摄像头</> : <><ScanLine size={20} />{cameraState === 'ready' ? '将条码放入框内' : '正在打开后置摄像头'}</>}</span>
+        <span>{cameraState === 'detected' ? <><CheckCircle2 size={20} />识别成功</> : cameraState === 'unavailable' ? <><Camera size={20} />无法打开摄像头</> : <><ScanLine size={20} />{cameraState === 'ready' ? '将条码放入框内' : '正在打开后置摄像头'}</>}</span>
       </div>
-      {cameraState === 'unavailable' && <p>请返回后手工输入条码；也可以改用支持摄像头识别的手机浏览器。</p>}
+      {detail !== '' && <p>{detail}</p>}
       {cameraState === 'detected' && <button className="inventory-scanner-accept" type="button" onClick={() => onDetected(detectedCode)}>使用识别结果</button>}
     </section>
   </div>

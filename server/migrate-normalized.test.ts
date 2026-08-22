@@ -37,7 +37,7 @@ describe('normalized migration baseline', () => {
       '037', '038', '039', '040', '041', '042', '043', '044', '045', '046', '047', '048',
       '049', '050', '051', '052', '053', '054', '055', '056', '057', '058', '059', '060',
       '061', '062', '063', '064', '065', '066', '067', '068', '069', '070', '071', '072',
-      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099',
+      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101',
     ])
     for (const migration of migrations) {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
@@ -141,6 +141,27 @@ describe('normalized migration baseline', () => {
     expect(migration?.sql).toMatch(/reusable_across_business_dates boolean NOT NULL DEFAULT false/)
     expect(migration?.sql).toMatch(/Device leases and employee sessions retain their own expiry/)
     expect(migration?.sql).toMatch(/schema_version='099'/)
+  })
+
+  it('keeps delivered unpaid settlement exceptions distinct from payments and owner-gated for test cleanup', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '101')
+    expect(migration?.sql).toMatch(/order_settlement_exception_events/)
+    expect(migration?.sql).toMatch(/settle_cancelled_unpaid_order_exception/)
+    expect(migration?.sql).toMatch(/reason_code IN \('manager_comp','uncollectible','test_cleanup'\)/)
+    expect(migration?.sql).toMatch(/role\.code='OWNER'/)
+    expect(migration?.sql).toMatch(/order\.settle_exception/)
+    expect(migration?.sql).toMatch(/REVOKE INSERT,UPDATE,DELETE ON TABLE mbox\.order_settlement_exception_events/)
+  })
+
+  it('keeps uploaded public images and recipe costs strong, bounded and append-only', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '100')
+    expect(migration?.sql).toMatch(/CREATE TABLE mbox\.media_assets/)
+    expect(migration?.sql).toMatch(/byte_length BETWEEN 1 AND 204800/)
+    expect(migration?.sql).toMatch(/media_assets_append_only/)
+    expect(migration?.sql).toMatch(/CREATE TABLE mbox\.recipe_cost_versions/)
+    expect(migration?.sql).toMatch(/CREATE TABLE mbox\.recipe_cost_components/)
+    expect(migration?.sql).toMatch(/cost_source IN \('manual','recipe'\)/)
+    expect(migration?.sql).toMatch(/schema_version='100'/)
   })
 
   it('keeps refund roles and amount limits configurable while requiring two employees', async () => {

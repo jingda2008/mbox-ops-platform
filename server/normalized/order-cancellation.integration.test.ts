@@ -6,6 +6,10 @@ import {
   PostgresOrderCancellationRepository,
   UnpaidOrderCancellationConflictError,
 } from './order-cancellation-repository.js'
+import {
+  OrderSettlementExceptionForbiddenError,
+  PostgresOrderSettlementExceptionRepository,
+} from './order-settlement-exception-repository.js'
 import { ScopedPostgresTransactionRunner, type PostgresPool } from './transaction-runner.js'
 
 const databaseUrl = process.env.TEST_NORMALIZED_DATABASE_URL
@@ -20,6 +24,7 @@ integration('unpaid order cancellation', () => {
   const roleId = randomUUID()
   let pool: Pool
   let repository: PostgresOrderCancellationRepository
+  let settlementRepository: PostgresOrderSettlementExceptionRepository
   let actionBusinessDate: string
   let sourceBusinessDate: string
 
@@ -27,6 +32,9 @@ integration('unpaid order cancellation', () => {
     await runNormalizedMigrations(databaseUrl!)
     pool = new Pool({ connectionString: databaseUrl, max: 4 })
     repository = new PostgresOrderCancellationRepository(
+      new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool),
+    )
+    settlementRepository = new PostgresOrderSettlementExceptionRepository(
       new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool),
     )
     await pool.query(`INSERT INTO mbox.tenants(id,code,name) VALUES($1,$2,'Cancellation Tenant')`, [
@@ -51,6 +59,12 @@ integration('unpaid order cancellation', () => {
     await pool.query(`INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id)
       SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions
       WHERE tenant_id=$1 AND store_id=$2 AND code='order.cancel_unpaid'`, [tenantId, storeId, roleId])
+    await pool.query(`INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name)
+      VALUES($1,$2,'order.settle_exception','异常结清')
+      ON CONFLICT(tenant_id,store_id,code) DO UPDATE SET status='active'`, [tenantId, storeId])
+    await pool.query(`INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id)
+      SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions
+      WHERE tenant_id=$1 AND store_id=$2 AND code='order.settle_exception'`, [tenantId, storeId, roleId])
     const businessDates = await pool.query<{ action_business_date: string; source_business_date: string }>(`
       SELECT authoritative.business_date::text AS action_business_date,
         (authoritative.business_date - 1)::text AS source_business_date
@@ -120,6 +134,43 @@ integration('unpaid order cancellation', () => {
     })).rejects.toBeInstanceOf(UnpaidOrderCancellationConflictError)
     const order = await pool.query(`SELECT status FROM mbox.orders WHERE id=$1`, [fixture.orderId])
     expect(order.rows[0]?.status).toBe('submitted')
+  })
+
+  it('lets a manager close a delivered unpaid receivable only after explicit exception evidence', async () => {
+    const fixture = await createOrder('unpaid', null, true)
+    await repository.cancel({
+      scope: { tenantId, storeId }, orderId: fixture.orderId, employeeId, businessDate: actionBusinessDate,
+      reasonCode: 'guest_left', reasonNote: '客人离店且未付款，取消未送达部分',
+      idempotencyKey: `cancel-before-settlement:${randomUUID()}`,
+    })
+    const input = {
+      scope: { tenantId, storeId }, orderId: fixture.orderId, employeeId, businessDate: actionBusinessDate,
+      reasonCode: 'manager_comp' as const, reasonNote: '店长确认已送达部分免单结清',
+      idempotencyKey: `settlement-exception:${randomUUID()}`,
+    }
+    const first = await settlementRepository.settle(input)
+    const replay = await settlementRepository.settle(input)
+    expect(first).toMatchObject({
+      orderPublicId: fixture.publicId, sourceBusinessDate, actionBusinessDate,
+      settledAmountMinor: 100, replayed: false,
+    })
+    expect(replay).toEqual({ ...first, replayed: true })
+    const evidence = await pool.query(`SELECT reason_code,settled_amount_minor::text FROM mbox.order_settlement_exception_events WHERE order_id=$1`, [fixture.orderId])
+    expect(evidence.rows[0]).toEqual({ reason_code: 'manager_comp', settled_amount_minor: '100' })
+  })
+
+  it('keeps test cleanup owner-only even when another role can settle an exception', async () => {
+    const fixture = await createOrder('unpaid', null)
+    await repository.cancel({
+      scope: { tenantId, storeId }, orderId: fixture.orderId, employeeId, businessDate: actionBusinessDate,
+      reasonCode: 'guest_left', reasonNote: '客人离店且未付款，订单已取消',
+      idempotencyKey: `cancel-before-test-cleanup:${randomUUID()}`,
+    })
+    await expect(settlementRepository.settle({
+      scope: { tenantId, storeId }, orderId: fixture.orderId, employeeId, businessDate: actionBusinessDate,
+      reasonCode: 'test_cleanup', reasonNote: '测试数据清理已现场确认',
+      idempotencyKey: `test-cleanup-settlement:${randomUUID()}`,
+    })).rejects.toBeInstanceOf(OrderSettlementExceptionForbiddenError)
   })
 
   it('serializes concurrent retries into one cancellation fact', async () => {

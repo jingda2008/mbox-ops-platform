@@ -53,3 +53,20 @@ test('rejects conflicting, malformed or unknown scene values instead of choosing
   assert.throws(() => session.applyLaunchSession({ query: { scene: 'redirect=https%3A%2F%2Fevil.invalid' } }, production), /scene无效/)
   assert.throws(() => session.applyLaunchSession({ query: { scene: '%E0%A4%A' } }, production), /scene无效/)
 })
+
+test('the in-mini-program scanner accepts official mini-program codes without allowing album replay', async () => {
+  const source = await readFile(new URL('../miniprogram/pages/order/index.js', import.meta.url), 'utf8')
+  assert.match(source, /onlyFromCamera:\s*true/)
+  assert.match(source, /scanType:\s*\[\s*['"]qrCode['"]\s*,\s*['"]wxCode['"]\s*\]/)
+  assert.match(source, /parseScanValue\(result\.path \|\| result\.result\)/)
+})
+
+test('published activity and home images resolve against the reviewed API host in the mini-program', async () => {
+  const source = await readFile(new URL('../miniprogram/utils/media.js', import.meta.url), 'utf8')
+  assert.match(source, /startsWith\('\/api\/public\/media-assets\/'\)/)
+  assert.match(source, /getRuntimeConfig\(\)\.apiBaseUrl/)
+  for (const page of ['home/index.js', 'community/index.js', 'community-detail/index.js', 'profile/index.js']) {
+    const pageSource = await readFile(new URL(`../miniprogram/pages/${page}`, import.meta.url), 'utf8')
+    assert.match(pageSource, /publicImageUrl/)
+  }
+})

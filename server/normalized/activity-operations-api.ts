@@ -148,11 +148,13 @@ function draft(value: Record<string, unknown>): ActivityDraftInput {
   if (paymentMode === 'full_required' && (feeAmountMinor <= 0 || depositAmountMinor !== 0)) {
     throw invalid('全额预付必须配置正数费用且订金为0')
   }
+  const coverUrl = optionalText(value.coverUrl, '封面地址', 1_000)
+  if (coverUrl !== null && !safeAssetUrl(coverUrl)) throw invalid('封面地址必须是站内路径或HTTPS地址')
   return {
     kind: enumeration(value.kind, '活动类型', ['member_night','hike','camping','city_walk','music_picnic','proposal','other'] as const),
     title: text(value.title, '活动名称', 2, 120),
     summary: text(value.summary, '列表摘要', 2, 600),
-    coverUrl: optionalText(value.coverUrl, '封面地址', 1_000),
+    coverUrl,
     startsAt,
     endsAt,
     assemblyLocation: text(value.assemblyLocation, '集合地点', 2, 240),
@@ -240,6 +242,10 @@ function text(value: unknown, label: string, minimum: number, maximum: number): 
 function optionalText(value: unknown, label: string, maximum: number): string | null {
   if (value === undefined || value === null || value === '') return null
   return text(value, label, 1, maximum)
+}
+
+function safeAssetUrl(value: string): boolean {
+  return (value.startsWith('/') && !value.startsWith('//')) || /^https:\/\//i.test(value)
 }
 
 function timestamp(value: unknown, label: string): string {

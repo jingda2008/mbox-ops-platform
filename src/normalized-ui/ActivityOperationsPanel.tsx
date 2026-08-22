@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { CheckCircle2, ChevronDown, RefreshCw, UserCheck, XCircle } from 'lucide-react'
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
+import { MediaAssetPicker } from './MediaAssetPicker'
 import './activity-operations-panel.css'
 
 type ActivityStatus = 'draft' | 'published' | 'full' | 'cancelled' | 'completed'
@@ -290,7 +291,8 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
             <label>结束时间<input type="datetime-local" required value={draft.endsAt} onChange={(event) => updateDraft('endsAt', event.target.value)} /></label>
             <label>集合地点<input value={draft.assemblyLocation} onChange={(event) => updateDraft('assemblyLocation', event.target.value)} /></label>
             <label>人数上限<input type="number" min={1} max={1000} value={draft.capacity} onChange={(event) => updateDraft('capacity', event.target.value)} /></label>
-            <label className="wide">封面地址（可选）<input type="url" value={draft.coverUrl} onChange={(event) => updateDraft('coverUrl', event.target.value)} /></label>
+            <label className="wide">封面图片地址（可选）<input type="url" value={draft.coverUrl} onChange={(event) => updateDraft('coverUrl', event.target.value)} placeholder="上传后会自动填入站内地址；也可填写已核对的 HTTPS 地址" /></label>
+            <div className="wide"><MediaAssetPicker api={api} purpose="community_activity" value={draft.coverUrl} onChange={(coverUrl)=>updateDraft('coverUrl',coverUrl)} label="上传活动封面" /></div>
           </fieldset>
           <fieldset><legend>费用、权益和客群</legend>
             <label>计价方式<select value={draft.feeBasis} onChange={(event) => updateDraft('feeBasis', event.target.value)}><option value="per_registration">每次报名/每组</option><option value="per_person">每人</option></select></label>

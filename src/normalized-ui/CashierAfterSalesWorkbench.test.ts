@@ -54,6 +54,48 @@ describe('CashierAfterSalesWorkbenchView', () => {
     expect(html).toContain('不会并入今日营业额')
   })
 
+  it('shows a controlled KDS disposition only after a linked refund has succeeded and the task has not started', () => {
+    const view = workbench([payment('postar', [refund('refund-kds', 'succeeded', otherEmployeeId)])])
+    view.orders[0]!.kdsTasks = [{
+      id: 'kds-1', orderItemId: 'item-1', stationCode: 'bar', status: 'accepted', quantity: 1,
+      succeededRefundAmountMinor: 6_800,
+    }]
+    const allowed = render(view, ['reconciliation.view', 'kds.exception.manage'])
+    const deniedView = { ...view, actions: { ...view.actions, canManageKdsException: false } }
+    const denied = render(deniedView, ['reconciliation.view'])
+
+    expect(allowed).toContain('关联出品')
+    expect(allowed).toContain('退款成功不等于自动取消制作')
+    expect(allowed).toContain('核对退款后处理出品')
+    expect(denied).toContain('没有“处理出品异常”权限')
+    expect(denied).not.toContain('核对退款后处理出品')
+  })
+
+  it('does not offer cancellation for a refund that is not provider-confirmed or a task already in production', () => {
+    const view = workbench([payment('postar', [refund('refund-kds', 'processing', otherEmployeeId)])])
+    view.orders[0]!.kdsTasks = [{
+      id: 'kds-1', orderItemId: 'item-1', stationCode: 'bar', status: 'preparing', quantity: 1,
+      succeededRefundAmountMinor: 0,
+    }]
+    const html = render(view, ['reconciliation.view', 'kds.exception.manage'])
+
+    expect(html).toContain('不能从这里终止任务')
+    expect(html).not.toContain('核对退款后处理出品')
+  })
+
+  it('offers a no-repeat provider query for an older payment still awaiting a channel result', () => {
+    const view = workbench([payment('postar', [])])
+    view.orders[0]!.businessDate = '2026-08-12'
+    view.orders[0]!.carryover = true
+    view.orders[0]!.payments[0]!.status = 'pending'
+    view.summary.carryoverPendingPaymentCount = 1
+    const html = render(view)
+
+    expect(html).toContain('待查渠道')
+    expect(html).toContain('查询渠道结果')
+    expect(html).toContain('不会再次扣款')
+  })
+
   it('offers a controlled unpaid-order cancellation without pretending delivered facts disappear', () => {
     const view = workbench([])
     view.orders[0]!.paymentStatus = 'unpaid'
@@ -76,6 +118,32 @@ describe('CashierAfterSalesWorkbenchView', () => {
 
     expect(html).toContain('处理未付款订单')
     expect(html).toContain('支付失败')
+  })
+
+  it('separates delivered unpaid exception settlement from ordinary cancellation', () => {
+    const view = workbench([])
+    view.orders[0]!.status = 'cancelled'
+    view.orders[0]!.paymentStatus = 'unpaid'
+    view.orders[0]!.settlementException = null
+    const allowed = render(view, ['reconciliation.view', 'order.settle_exception'])
+    const denied = render(view, ['reconciliation.view'])
+
+    expect(allowed).toContain('异常结清已送达金额')
+    expect(allowed).not.toContain('处理未付款订单')
+    expect(denied).not.toContain('异常结清已送达金额')
+  })
+
+  it('shows a completed exception as an audit fact rather than a payment', () => {
+    const view = workbench([])
+    view.orders[0]!.status = 'cancelled'
+    view.orders[0]!.paymentStatus = 'unpaid'
+    view.orders[0]!.settlementException = {
+      reasonCode: 'manager_comp', settledAmountMinor: 6_800, occurredAt: '2026-08-13T13:00:00.000Z',
+    }
+    const html = render(view, ['reconciliation.view', 'order.settle_exception'])
+
+    expect(html).toContain('已异常结清 ¥68.00；未生成付款。')
+    expect(html).not.toContain('异常结清已送达金额')
   })
 
   it('requires a separate receipt surface for cash and physical POS manual results', () => {
@@ -190,6 +258,7 @@ function workbench(payments: CashierWorkbenchPayment[]): CashierWorkbenchView {
       canApproveRefund: true,
       canExecuteRefund: true,
       canViewReconciliation: true,
+      canManageKdsException: true,
     },
     summary: {
       orderCount: 1,
@@ -209,6 +278,7 @@ function workbench(payments: CashierWorkbenchPayment[]): CashierWorkbenchView {
       submittedAt: '2026-08-13T12:00:00.000Z',
       createdAt: '2026-08-13T11:59:00.000Z',
       items: [{ id: 'item-1', productName: '精酿啤酒', quantity: 1, totalAmountMinor: 6_800, status: 'delivered' }],
+      kdsTasks: [],
       payments,
     }],
   }

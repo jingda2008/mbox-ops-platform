@@ -245,7 +245,19 @@ async function readSessionBlockers(
       (SELECT count(*)::text FROM scoped_orders order_row
         WHERE NOT ((order_row.status='completed'
             AND order_row.payment_status IN ('paid','partially_refunded','refunded'))
-          OR (order_row.status='cancelled' AND order_row.payment_status IN ('unpaid','refunded')))) AS order_unsettled,
+          OR (order_row.status='cancelled' AND order_row.payment_status='refunded')
+          OR (order_row.status='cancelled' AND order_row.payment_status='unpaid'
+            AND NOT EXISTS (
+              SELECT 1 FROM mbox.order_items delivered_item
+              WHERE delivered_item.tenant_id=$1::uuid AND delivered_item.store_id=$2::uuid
+                AND delivered_item.order_id=order_row.id AND delivered_item.status='delivered'
+            ))
+          OR (order_row.status='cancelled' AND order_row.payment_status='unpaid'
+            AND EXISTS (
+              SELECT 1 FROM mbox.order_settlement_exception_events settlement_exception
+              WHERE settlement_exception.tenant_id=$1::uuid AND settlement_exception.store_id=$2::uuid
+                AND settlement_exception.order_id=order_row.id
+            )))) AS order_unsettled,
       (SELECT count(*)::text FROM mbox.order_items item
         WHERE item.tenant_id=$1::uuid AND item.store_id=$2::uuid
           AND item.order_id=ANY(SELECT id FROM scoped_orders)

@@ -64,6 +64,20 @@ describe('activity operations API', () => {
     await app.close()
   })
 
+  it('accepts only reviewed same-site or HTTPS activity cover addresses', async () => {
+    const service = serviceMock()
+    const app = await application(service)
+    const response = await app.inject({
+      method: 'POST', url: '/staff/activity-operations',
+      headers: { 'idempotency-key': 'activity-draft-cover-invalid-001' },
+      payload: { ...validDraft(), coverUrl: 'javascript:alert(1)' },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.json().error.message).toContain('封面地址必须是站内路径或HTTPS地址')
+    expect(service.createDraft).not.toHaveBeenCalled()
+    await app.close()
+  })
+
   it('maps compact registration actions and keeps mutation permission separate', async () => {
     const permissions: string[] = []
     const service = serviceMock()

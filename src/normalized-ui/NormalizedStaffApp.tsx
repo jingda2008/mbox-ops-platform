@@ -154,7 +154,7 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
       </header>
       {isStaffActionsTab(staffRoute)
         ? <StaffActionsPanel initialTab={staffRoute} onLoginRequired={loginRequired} />
-        : <StaffModulePanel api={api} auth={auth} module={staffRoute} onLoginRequired={loginRequired} />}
+        : <StaffModulePanel key={authenticatedSessionId} api={api} auth={auth} module={staffRoute} onLoginRequired={loginRequired} />}
     </main>
   ) : (<>
       {message !== null && <p className="normalized-route-notice" role="status">{message}</p>}

@@ -74,6 +74,7 @@ import { normalizedOperationsApiPlugin } from './normalized-operations-api.js'
 import { OperationsQueryService } from './operations-query-service.js'
 import { OrderRepository } from './order-repository.js'
 import { PostgresOrderCancellationRepository } from './order-cancellation-repository.js'
+import { PostgresOrderSettlementExceptionRepository } from './order-settlement-exception-repository.js'
 import { paymentApiPlugin, PaymentProviderVerificationError, type PaymentProviderVerifier } from './payment-api.js'
 import { PaymentCommandService } from './payment-command-service.js'
 import { OnlinePaymentService } from './online-payment-service.js'
@@ -130,6 +131,8 @@ import { wechatLoyaltyNotificationApiPlugin } from './wechat-loyalty-notificatio
 import { MembershipTermsService } from './membership-terms-service.js'
 import { memberContentCardApiPlugin } from './member-content-card-api.js'
 import { MemberContentCardService } from './member-content-card-service.js'
+import { mediaAssetApiPlugin } from './media-asset-api.js'
+import { MediaAssetService } from './media-asset-service.js'
 import { createActivityContactProtectionKeyring } from './personal-contact-protection.js'
 import { personalContactGovernanceApiPlugin } from './personal-contact-governance-api.js'
 import { PersonalContactGovernanceService } from './personal-contact-governance-service.js'
@@ -169,7 +172,7 @@ export const NORMALIZED_LOG_REDACTION_PATHS = Object.freeze([
   'payment.publicKey',
 ])
 
-export const NORMALIZED_MIN_SCHEMA_VERSION = '099'
+export const NORMALIZED_MIN_SCHEMA_VERSION = '101'
 export const NORMALIZED_INJECTABLE_PLUGIN_PORTS = Object.freeze([
   'customer-table-side',
 ] as const)
@@ -518,6 +521,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       new CustomerCommandService(commandExecutor),
       options.config.payment !== null,
     )
+    const mediaAssets = new MediaAssetService(transactions, commandExecutor)
     const personalContactGovernance = new PersonalContactGovernanceService(
       transactions,activityContactProtection,
     )
@@ -579,6 +583,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       reconciliationQuery: new PostgresReconciliationQuery(transactions),
       cashierWorkbenchQuery: new PostgresCashierWorkbenchQuery(transactions),
       orderCancellation: new PostgresOrderCancellationRepository(transactions),
+      orderSettlementException: new PostgresOrderSettlementExceptionRepository(transactions),
       onlinePayments,
       resolveOnlinePaymentAvailable: async (currentScope) => (await paymentPolicy(currentScope)).onlinePaymentEnabled,
       resolveActorContext: async (request) => {
@@ -870,6 +875,12 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         transactions,
         service: new MemberContentCardService(transactions, commandExecutor),
         resolveStaffContext: staffReservationContext,
+      })
+      await reservationApp.register(mediaAssetApiPlugin, {
+        transactions,
+        service: mediaAssets,
+        resolveStaffContext: staffReservationContext,
+        resolveScope: () => scope,
       })
       await reservationApp.register(customerPreferenceApiPlugin, {
         service: customerPreferences,

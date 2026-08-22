@@ -345,13 +345,30 @@ async function executeTableTransition(
 
 async function assertTableSessionSettled(transaction: ScopedTransaction, sessionId: string): Promise<void> {
   const result = await transaction.query<{ order_count: string; outstanding_amount_minor: string }>(`
-    SELECT count(*)::text AS order_count,
-      COALESCE(sum(total_amount_minor), 0)::text AS outstanding_amount_minor
-    FROM mbox.orders
-    WHERE tenant_id = $1::uuid AND store_id = $2::uuid
-      AND table_session_id = $3::uuid
-      AND total_amount_minor > 0
-      AND payment_status IN ('unpaid', 'pending')
+    WITH unsettled_orders AS (
+      SELECT ordering.id,
+        CASE
+          WHEN settlement_exception.id IS NOT NULL THEN 0::bigint
+          WHEN ordering.status='cancelled' THEN COALESCE((
+            SELECT sum(item.total_amount_minor)
+            FROM mbox.order_items item
+            WHERE item.tenant_id=ordering.tenant_id AND item.store_id=ordering.store_id
+              AND item.order_id=ordering.id AND item.status='delivered'
+          ),0)::bigint
+          ELSE ordering.total_amount_minor
+        END AS outstanding_amount_minor
+      FROM mbox.orders ordering
+      LEFT JOIN mbox.order_settlement_exception_events settlement_exception
+        ON settlement_exception.tenant_id=ordering.tenant_id
+       AND settlement_exception.store_id=ordering.store_id
+       AND settlement_exception.order_id=ordering.id
+      WHERE ordering.tenant_id=$1::uuid AND ordering.store_id=$2::uuid
+        AND ordering.table_session_id=$3::uuid
+        AND ordering.payment_status IN ('unpaid','pending')
+    ) SELECT count(*) FILTER (WHERE outstanding_amount_minor>0)::text AS order_count,
+      COALESCE(sum(outstanding_amount_minor) FILTER (WHERE outstanding_amount_minor>0),0)::text
+        AS outstanding_amount_minor
+    FROM unsettled_orders
   `, [transaction.scope.tenantId, transaction.scope.storeId, sessionId])
   const row = result.rows[0]
   const orderCount = Number(row?.order_count ?? 0)

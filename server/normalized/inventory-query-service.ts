@@ -5,6 +5,7 @@ import {
 } from "./staff-access-repository.js";
 import type { StoreScope } from "./transaction-runner.js";
 import { ScopedPostgresTransactionRunner } from "./transaction-runner.js";
+import { InventoryRepository, type RecipeCostPreview } from './inventory-repository.js';
 
 export interface InventoryItemView {
   id: string;
@@ -390,6 +391,17 @@ export class InventoryQueryService {
       },
       { readOnly: true },
     );
+  }
+
+  getRecipeCostPreview(
+    scope: Readonly<StoreScope>,
+    employeeId: string,
+    productId: string,
+  ): Promise<RecipeCostPreview> {
+    return this.transactions.run(scope, async (transaction) => {
+      await new StaffAccessRepository(transaction).assertPermission(employeeId, 'inventory.cost.view');
+      return new InventoryRepository(transaction).previewRecipeCost(productId);
+    }, { readOnly: true });
   }
 }
 

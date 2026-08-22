@@ -356,8 +356,15 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
     const status = readOptionalReservationStatus(query.status)
     const from = readOptionalTimestamp(query.from, 'from')
     const to = readOptionalTimestamp(query.to, 'to')
+    const range = readReservationListRange(query.range)
     if (from !== null && to !== null && Date.parse(to) <= Date.parse(from)) {
       throw new ApiRequestError('to必须晚于from')
+    }
+    if (range === 'carryover' && (from !== null || to !== null)) {
+      throw new ApiRequestError('跨日待办不接受自定义时间范围')
+    }
+    if (range === 'history' && (from === null || to === null)) {
+      throw new ApiRequestError('历史查询必须同时提供起止时间')
     }
     const visibility = reservationVisibility(context)
     const reservations = await options.transactions.run(context.scope, async (transaction) => {
@@ -368,8 +375,18 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
           AND ($4::timestamptz IS NULL OR reservation.arrival_at >= $4::timestamptz)
           AND ($5::timestamptz IS NULL OR reservation.arrival_at < $5::timestamptz)
           AND (
-            $4::timestamptz IS NOT NULL OR $5::timestamptz IS NOT NULL
-            OR EXISTS (
+            ($10::text = 'carryover' AND reservation.status IN ('pending','confirmed','arrived','seated')
+              AND EXISTS (
+                SELECT 1 FROM mbox.stores AS carryover_store
+                WHERE carryover_store.tenant_id=reservation.tenant_id
+                  AND carryover_store.id=reservation.store_id
+                  AND reservation.arrival_at < (($9::date::timestamp + carryover_store.business_day_cutoff)
+                    AT TIME ZONE carryover_store.timezone)
+              )
+            )
+            OR ($10::text <> 'carryover' AND (
+              $4::timestamptz IS NOT NULL OR $5::timestamptz IS NOT NULL
+              OR EXISTS (
               SELECT 1 FROM mbox.stores AS reservation_store
               WHERE reservation_store.tenant_id=reservation.tenant_id
                 AND reservation_store.id=reservation.store_id
@@ -386,7 +403,8 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
                       AT TIME ZONE reservation_store.timezone)
                   )
                 )
-            )
+              )
+            ))
           )
           AND (
             $6::boolean
@@ -416,6 +434,7 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
         visibility.ownerEmployeeIds,
         visibility.areaIds,
         context.businessDate,
+        range,
       ])
       return hydrateReservations(createReservations(transaction), ids.rows)
     }, { readOnly: true })
@@ -1275,6 +1294,12 @@ function readOptionalReservationStatus(value: unknown): ReservationStatus | null
   const statuses: readonly ReservationStatus[] = ['pending', 'confirmed', 'arrived', 'seated', 'completed', 'cancelled', 'no_show']
   if (typeof value !== 'string' || !statuses.includes(value as ReservationStatus)) throw new ApiRequestError('预约状态筛选无效')
   return value as ReservationStatus
+}
+
+function readReservationListRange(value: unknown): 'current' | 'carryover' | 'history' {
+  if (value === undefined || value === null || value === '') return 'current'
+  if (value === 'current' || value === 'carryover' || value === 'history') return value
+  throw new ApiRequestError('预约范围筛选无效')
 }
 
 function readSongRequestType(value: unknown): SongRequestType {

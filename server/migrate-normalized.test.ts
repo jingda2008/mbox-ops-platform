@@ -37,7 +37,7 @@ describe('normalized migration baseline', () => {
       '037', '038', '039', '040', '041', '042', '043', '044', '045', '046', '047', '048',
       '049', '050', '051', '052', '053', '054', '055', '056', '057', '058', '059', '060',
       '061', '062', '063', '064', '065', '066', '067', '068', '069', '070', '071', '072',
-      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101',
+      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101', '102', '103',
     ])
     for (const migration of migrations) {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
@@ -258,9 +258,9 @@ describe('normalized migration baseline', () => {
   })
 
   it('records the Superhigh membership invitation as its own mini-program entry', async () => {
-    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '101')
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '103')
     expect(migration?.sql).toMatch(/'mini_community'/)
-    expect(migration?.sql).toMatch(/schema_version='101'/)
+    expect(migration?.sql).toMatch(/schema_version='103'/)
   })
 
   it('tracks every loyalty refund application as a strong append-only idempotency fact', async () => {

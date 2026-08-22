@@ -2,12 +2,16 @@ import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 
 describe('staff mobile inventory scanning contract', () => {
-  it('uses the phone rear camera with manual fallback and stops camera tracks', async () => {
+  it('opens the phone rear camera before selecting a local decoder, supports common liquor codes, and stops tracks', async () => {
     const source = await readFile(new URL('./InventoryBarcodeScanner.tsx', import.meta.url), 'utf8')
     expect(source).toContain("facingMode: { ideal: 'environment' }")
     expect(source).toContain("'ean_13'")
+    expect(source).toContain('BarcodeFormat.EAN_13')
+    expect(source).toContain('BarcodeFormat.CODE_128')
     expect(source).toContain("'qr_code'")
+    expect(source).toContain("import('@zxing/browser')")
     expect(source).toContain("track.stop()")
+    expect(source.indexOf('navigator.mediaDevices.getUserMedia')).toBeLessThan(source.indexOf('BarcodeDetector'))
     expect(source).toContain('当前浏览器无法调用摄像头')
   })
 
@@ -23,5 +27,16 @@ describe('staff mobile inventory scanning contract', () => {
     expect(source).not.toContain('单件成本（元）')
     expect(source).not.toContain('unitCostMinor,')
     expect(source).toContain("item.categoryCode !== 'food'")
+  })
+
+  it('lets an authorized employee establish the first alcohol inventory item and exposes the active operation', async () => {
+    const source = await readFile(new URL('./StaffModulePanel.tsx', import.meta.url), 'utf8')
+    expect(source).toContain("'/api/inventory/items'")
+    expect(source).toContain('新建酒水物料')
+    expect(source).toContain('建立物料并继续绑定条码')
+    expect(source).toContain("setMode('bind')")
+    expect(source).toContain('aria-pressed={mode ===')
+    const styles = await readFile(new URL('./staff-module-panel.css', import.meta.url), 'utf8')
+    expect(styles).toContain("content: '当前'")
   })
 })

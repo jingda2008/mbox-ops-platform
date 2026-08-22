@@ -10,6 +10,7 @@ const {
 } = require('../../utils/api')
 const { randomId } = require('../../utils/id')
 const { money, dateTime } = require('../../utils/format')
+const { publicImageUrl } = require('../../utils/media')
 
 const KIND_NAMES = { member_night: '会员之夜', hike: '城市轻徒步', camping: '露营计划', city_walk: '城市漫游', music_picnic: '音乐野餐', proposal: '特别企划', other: '超嗨活动' }
 const LOCAL_REGISTRATIONS_KEY = 'mbox.community.registrations.v1'
@@ -92,6 +93,7 @@ function viewActivity(raw) {
   else if (clientPaymentBlocked) paymentBlockedText = '本活动当前没有可供小程序使用的微信支付方式，暂不接受收费报名。'
   else if (!safetyPolicyVersion || !refundPolicyVersion) paymentBlockedText = '活动安全或退款规则缺少可核验版本，本活动暂不接受报名。'
   return Object.assign({}, raw, {
+    coverUrl: publicImageUrl(raw.coverUrl),
     kindText: KIND_NAMES[raw.kind] || '超嗨活动',
     startsText: dateTime(raw.startsAt),
     endsText: dateTime(raw.endsAt),

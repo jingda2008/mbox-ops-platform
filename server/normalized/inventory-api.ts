@@ -16,6 +16,7 @@ import type {
   InventoryDashboard,
   InventoryQueryService,
 } from "./inventory-query-service.js";
+import { assertInventoryPermission } from './inventory-query-service.js';
 import type {
   CreateInventoryItemInput,
   CreatePurchaseReceiptInput,
@@ -26,6 +27,7 @@ import type {
   StockCountLineInput,
   StockCountRecord,
   StoredBottleRecord,
+  AppliedRecipeCost,
 } from "./inventory-repository.js";
 import {
   InsufficientInventoryError,
@@ -48,7 +50,7 @@ import type { ScopedTransaction } from "./transaction-runner.js";
 
 export interface InventoryApiOptions {
   commands: Pick<NormalizedCommandExecutor, "execute">;
-  query: Pick<InventoryQueryService, "getDashboard" | "getActiveRecipe">;
+  query: Pick<InventoryQueryService, "getDashboard" | "getActiveRecipe" | "getRecipeCostPreview">;
   resolveContext(
     request: FastifyRequest,
   ):
@@ -97,6 +99,18 @@ export const inventoryApiPlugin: FastifyPluginAsync<
           context.scope,
           context.employeeId,
           productId,
+        );
+        return reply.send({ data });
+      }),
+  );
+
+  app.get<{ Params: { productId: string } }>(
+    "/inventory/products/:productId/recipe-cost",
+    async (request, reply) =>
+      handleRoute(reply, async () => {
+        const context = await options.resolveContext(request);
+        const data = await options.query.getRecipeCostPreview(
+          context.scope, context.employeeId, readUuid(request.params.productId, 'productId'),
         );
         return reply.send({ data });
       }),
@@ -204,6 +218,26 @@ export const inventoryApiPlugin: FastifyPluginAsync<
           codec<{ id: string; version: number }>(),
           async (transaction) =>
             createInventory(transaction).replaceActiveRecipe(input),
+        );
+        return reply.send(response(execution));
+      }),
+  );
+
+  app.post<{ Params: { productId: string } }>(
+    "/inventory/products/:productId/recipe-cost/apply",
+    async (request, reply) =>
+      handleRoute(reply, async () => {
+        const context = await options.resolveContext(request);
+        const body = readObject(request.body);
+        const productId = readUuid(request.params.productId, 'productId');
+        const execution = await execute(
+          options, context, request, 'inventory.recipe.cost.apply', 'catalog.product.manage',
+          codec<AppliedRecipeCost>(), async (transaction, permissions) => {
+            assertInventoryPermission(permissions, 'inventory.cost.view');
+            return createInventory(transaction).applyRecipeCost(
+              productId, context.employeeId, readString(body.reason, 'reason', 500),
+            );
+          },
         );
         return reply.send(response(execution));
       }),

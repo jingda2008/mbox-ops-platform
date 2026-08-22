@@ -1,5 +1,6 @@
 const { getActivities, getActivityRegistrations } = require('../../utils/api')
 const { money } = require('../../utils/format')
+const { publicImageUrl } = require('../../utils/media')
 
 const KIND_NAMES = {
   member_night: '会员之夜', hike: '城市轻徒步', camping: '露营计划', city_walk: '城市漫游',
@@ -35,6 +36,7 @@ Page({
       const activities = (rawActivities || []).map((item) => {
         const registration = registrations.get(item.publicId)
         return Object.assign({}, item, {
+          coverUrl: publicImageUrl(item.coverUrl),
           kindText: KIND_NAMES[item.kind] || '超嗨活动',
           dateText: dateText(item.startsAt),
           feeText: item.feeAmountMinor > 0 ? `${money(item.feeAmountMinor)}${item.feeBasis === 'per_person' ? '/人' : '/次'}` : '免费',

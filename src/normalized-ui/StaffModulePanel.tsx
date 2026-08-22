@@ -576,7 +576,7 @@ function PerformanceModule({ api, auth, view, performers, requests, phases, onCh
 }
 
 function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiClient; auth: StaffAuthView; view: InventoryView | null; onChanged(): Promise<void> }) {
-  const [mode, setMode] = useState<'count' | 'waste' | 'receive' | 'bind' | null>(null)
+  const [mode, setMode] = useState<'create' | 'count' | 'waste' | 'receive' | 'bind' | null>(null)
   const [itemId, setItemId] = useState('')
   const [quantity, setQuantity] = useState('')
   const [reason, setReason] = useState('')
@@ -588,6 +588,10 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
   const [supplierName, setSupplierName] = useState('')
   const [packageQuantity, setPackageQuantity] = useState('1')
   const [codeType, setCodeType] = useState<'barcode' | 'qr'>('barcode')
+  const [newItemSku, setNewItemSku] = useState('')
+  const [newItemName, setNewItemName] = useState('')
+  const [newItemBaseUnit, setNewItemBaseUnit] = useState<'ml' | 'bottle' | 'piece'>('bottle')
+  const [newItemLowStockThreshold, setNewItemLowStockThreshold] = useState('')
   const [pendingReceipt, setPendingReceipt] = useState<PurchaseReceiptCommandView | null>(null)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
@@ -602,9 +606,14 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
   const bindableItems = view.items.filter((item) => item.categoryCode !== 'food' && (item.itemType === 'ingredient' || item.itemType === 'bottle'))
   const selectedBindableItem = bindableItems.find((item) => item.id === itemId) ?? null
 
-  function chooseMode(nextMode: 'count' | 'waste' | 'receive' | 'bind') {
-    setMode(mode === nextMode ? null : nextMode)
-    setNotice('')
+  const modeLabel: Record<Exclude<typeof mode, null>, string> = {
+    create: '新建酒水物料', receive: '手机扫码入库', bind: '首次绑定条码', count: '单项盘点', waste: '登记损耗',
+  }
+
+  function chooseMode(nextMode: Exclude<typeof mode, null>) {
+    const next = mode === nextMode ? null : nextMode
+    setMode(next)
+    setNotice(next === null ? `已收起“${modeLabel[nextMode]}”` : `已切换至“${modeLabel[nextMode]}”，请填写并确认后再提交`)
     if (nextMode !== 'receive') setPendingReceipt(null)
   }
 
@@ -612,6 +621,42 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
     setScanCode(code)
     setScannerOpen(false)
     setNotice('条码已识别，请核对后继续')
+  }
+
+  async function createInventoryItem(event: React.FormEvent) {
+    event.preventDefault()
+    if (busy) return
+    const sku = newItemSku.trim()
+    const name = newItemName.trim()
+    const threshold = newItemLowStockThreshold.trim()
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(sku)) { setNotice('物料编号需为1至64位字母、数字、点、下划线或连字符'); return }
+    if (name.length < 2 || name.length > 200) { setNotice('请填写2至200字的酒水物料名称'); return }
+    if (threshold !== '' && !/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(threshold)) { setNotice('安全库存必须是非负数字'); return }
+    setBusy(true)
+    setNotice('')
+    try {
+      const item = await api.postEndpoint<InventoryItemView>('/api/inventory/items', {
+        sku,
+        name,
+        itemType: 'bottle',
+        baseUnit: newItemBaseUnit,
+        categoryCode: 'drinks',
+        lowStockThreshold: threshold === '' ? null : threshold,
+        wholeUnitCount: newItemBaseUnit === 'bottle' || newItemBaseUnit === 'piece',
+        reasonableWasteQuantity: '0',
+      }, { idempotencyKey: operationIdempotency('inventory-item-create') })
+      setItemId(item.id)
+      setNewItemSku('')
+      setNewItemName('')
+      setNewItemLowStockThreshold('')
+      setMode('bind')
+      setNotice(`${item.name} 已建立。下一步请绑定条码，随后即可扫码建立待收货单。`)
+      await onChanged()
+    } catch (error) {
+      setNotice(inventoryActionMessage(error, '酒水物料未建立'))
+    } finally {
+      setBusy(false)
+    }
   }
 
   async function submitInventoryAction(event: React.FormEvent) {
@@ -728,12 +773,21 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
   return <div className="staff-module-body">
     <div className={`staff-module-summary${view.lowStockCount > 0 ? ' has-attention' : ''}`}><span><PackageSearch size={18} /></span><div><strong>{view.lowStockCount} 项低库存 · {view.items.length} 项物料</strong><small>{view.receipts.length} 笔进货记录 · {view.storedBottles.length} 笔存酒</small></div></div>
     {notice !== '' && <p className="staff-module-notice" role="status">{notice}</p>}
-    {(canCount || canWaste || canReceive || canManage) && <div className="staff-module-actions">
-      {canReceive && <button type="button" className="is-primary" onClick={() => chooseMode('receive')}><ScanLine size={16} />手机扫码入库</button>}
-      {canManage && <button type="button" onClick={() => chooseMode('bind')}>首次绑定条码</button>}
-      {canCount && <button type="button" onClick={() => chooseMode('count')}>单项盘点</button>}
-      {canWaste && <button type="button" onClick={() => chooseMode('waste')}>登记损耗</button>}
+    {(canCount || canWaste || canReceive || canManage) && <div className="staff-module-actions" aria-label="库存操作">
+      {canManage && <button type="button" className={mode === 'create' ? 'is-active' : ''} aria-pressed={mode === 'create'} onClick={() => chooseMode('create')}>新建酒水物料</button>}
+      {canReceive && <button type="button" className={`is-primary${mode === 'receive' ? ' is-active' : ''}`} aria-pressed={mode === 'receive'} onClick={() => chooseMode('receive')}><ScanLine size={16} />手机扫码入库</button>}
+      {canManage && <button type="button" className={mode === 'bind' ? 'is-active' : ''} aria-pressed={mode === 'bind'} onClick={() => chooseMode('bind')}>首次绑定条码</button>}
+      {canCount && <button type="button" className={mode === 'count' ? 'is-active' : ''} aria-pressed={mode === 'count'} onClick={() => chooseMode('count')}>单项盘点</button>}
+      {canWaste && <button type="button" className={mode === 'waste' ? 'is-active' : ''} aria-pressed={mode === 'waste'} onClick={() => chooseMode('waste')}>登记损耗</button>}
     </div>}
+    {mode === 'create' && <form className="staff-module-form inventory-create-form" onSubmit={(event) => void createInventoryItem(event)}>
+      <header><strong>新建酒水物料</strong><small>用于新酒款、瓶装酒或配方原料。建立物料本身不增加库存；成本和数量请在后续收货单中如实登记并确认。</small></header>
+      <label>物料编号<input required maxLength={64} pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" value={newItemSku} onChange={(event) => setNewItemSku(event.target.value)} placeholder="例如 WHISKY-SIM-700ML" /></label>
+      <label>物料名称<input required maxLength={200} value={newItemName} onChange={(event) => setNewItemName(event.target.value)} placeholder="例如 演练用威士忌 700ml" /></label>
+      <label>库存单位<select value={newItemBaseUnit} onChange={(event) => setNewItemBaseUnit(event.target.value as 'ml' | 'bottle' | 'piece')}><option value="bottle">瓶</option><option value="ml">毫升（ml）</option><option value="piece">件</option></select></label>
+      <label>安全库存（选填）<input inputMode="decimal" value={newItemLowStockThreshold} onChange={(event) => setNewItemLowStockThreshold(event.target.value)} placeholder={newItemBaseUnit === 'ml' ? '例如 1500' : '例如 3'} /></label>
+      <button type="submit" disabled={busy}>{busy ? '正在建立' : '建立物料并继续绑定条码'}</button>
+    </form>}
     {canReceive && draftReceipts.length > 0 && <section className="inventory-draft-receipts" aria-label="待确认收货单">
       <header><strong>待确认收货</strong><small>刷新或退出页面后仍可在这里继续。确认实物前不会增加库存。</small></header>
       {draftReceipts.map((receipt) => <article key={receipt.id}><div><strong>{receipt.publicId}</strong><small>{receipt.lineCount} 项 · {formatDateTime(receipt.createdAt)}</small>{receipt.lines.map((line) => <span key={`${line.inventoryItemId}:${line.batchCode}`}>{line.itemName} · 批次 {line.batchCode} · {line.quantity}{line.baseUnit}</span>)}</div><button type="button" disabled={busy} onClick={() => void confirmReceipt(receipt)}>{busy ? '正在确认' : '核对并确认入库'}</button></article>)}

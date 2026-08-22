@@ -23,6 +23,7 @@ const { getTableConnection } = require('../../utils/session')
 const { dateTime, money } = require('../../utils/format')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 const { getRuntimeConfig } = require('../../config/index')
+const { publicImageUrl } = require('../../utils/media')
 
 const LEVEL_NAMES = { member: 'M-BOX会员', silver: '银卡会员', gold: '金卡会员' }
 const BENEFIT_NAMES = { gift_product: '赠送好礼', discount: '折扣权益', credit: '金额权益', access: '专属资格', other: '会员权益' }
@@ -150,7 +151,7 @@ function memberContentCardView(item) {
     typeText: CONTENT_CARD_TYPE_NAMES[item.type] || '内容推荐',
     title: item.title,
     summary: item.summary,
-    imageUrl: item.imageUrl || '',
+    imageUrl: publicImageUrl(item.imageUrl),
     ctaLabel: item.ctaLabel || '查看',
     targetPath,
     hasTarget: Boolean(targetPath),

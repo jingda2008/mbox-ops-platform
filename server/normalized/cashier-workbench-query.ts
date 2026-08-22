@@ -4,6 +4,8 @@ import type {
   CashierPaymentStatus as PaymentStatus,
   CashierRefundStatus as RefundStatus,
   CashierWorkbenchItem,
+  CashierWorkbenchKdsStatus,
+  CashierWorkbenchKdsTask,
   CashierWorkbenchOrder,
   CashierWorkbenchRefund,
   CashierWorkbenchView,
@@ -81,6 +83,22 @@ interface RefundAllocationRow extends Record<string, unknown> {
   amount_minor: string | number
 }
 
+interface KdsTaskRow extends Record<string, unknown> {
+  id: string
+  order_item_id: string
+  refundable_order_item_id: string
+  station_code: 'bar' | 'kitchen'
+  status: CashierWorkbenchKdsStatus
+  quantity: number
+}
+
+interface SettlementExceptionRow extends Record<string, unknown> {
+  order_id: string
+  reason_code: 'manager_comp' | 'uncollectible' | 'test_cleanup'
+  settled_amount_minor: string | number
+  occurred_at: string
+}
+
 const CAPTURED_PAYMENT_STATUSES: readonly PaymentStatus[] = [
   'succeeded',
   'partially_refunded',
@@ -129,6 +147,19 @@ export class PostgresCashierWorkbenchQuery {
             session.business_date = $3::date
             OR (session.business_date < $3::date AND (
               (orders.payment_status='unpaid' AND orders.status<>'cancelled')
+              OR EXISTS (
+                SELECT 1 FROM mbox.order_settlement_exception_events carryover_settlement_exception
+                WHERE carryover_settlement_exception.tenant_id=orders.tenant_id
+                  AND carryover_settlement_exception.store_id=orders.store_id
+                  AND carryover_settlement_exception.order_id=orders.id
+              )
+              OR EXISTS (
+                SELECT 1 FROM mbox.payments AS carryover_payment
+                WHERE carryover_payment.tenant_id=orders.tenant_id
+                  AND carryover_payment.store_id=orders.store_id
+                  AND carryover_payment.order_id=orders.id
+                  AND carryover_payment.status IN ('created','pending')
+              )
               OR EXISTS (
                 SELECT 1 FROM mbox.payments AS carryover_payment
                 JOIN mbox.refunds AS carryover_refund
@@ -249,6 +280,26 @@ export class PostgresCashierWorkbenchQuery {
               AND refund_id = ANY($3::uuid[])
             ORDER BY created_at, id
           `, [input.scope.tenantId, input.scope.storeId, refundIds])
+      const kdsResult = await transaction.query<KdsTaskRow>(`
+          SELECT task.id, task.order_item_id,
+            COALESCE(item.parent_order_item_id, item.id) AS refundable_order_item_id,
+            task.station_code, task.status, task.quantity
+          FROM mbox.kds_tasks AS task
+          JOIN mbox.order_items AS item
+            ON item.tenant_id = task.tenant_id
+           AND item.store_id = task.store_id
+           AND item.id = task.order_item_id
+          WHERE task.tenant_id = $1::uuid
+            AND task.store_id = $2::uuid
+            AND item.order_id = ANY($3::uuid[])
+          ORDER BY task.created_at, task.id
+        `, [input.scope.tenantId, input.scope.storeId, orderIds])
+      const settlementExceptionResult = await transaction.query<SettlementExceptionRow>(`
+          SELECT order_id,reason_code,settled_amount_minor,occurred_at::text
+          FROM mbox.order_settlement_exception_events
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND order_id=ANY($3::uuid[])
+          ORDER BY occurred_at,id
+        `, [input.scope.tenantId, input.scope.storeId, orderIds])
 
       return assembleView(
         input,
@@ -258,6 +309,8 @@ export class PostgresCashierWorkbenchQuery {
         paymentResult.rows,
         refundResult.rows,
         allocationResult.rows,
+        kdsResult.rows,
+        settlementExceptionResult.rows,
       )
     }, { readOnly: true })
   }
@@ -271,11 +324,25 @@ function assembleView(
   paymentRows: readonly PaymentRow[],
   refundRows: readonly RefundRow[],
   allocationRows: readonly RefundAllocationRow[],
+  kdsTaskRows: readonly KdsTaskRow[],
+  settlementExceptionRows: readonly SettlementExceptionRow[],
 ): CashierWorkbenchView {
+  const orderById = new Map(orderRows.map((order) => [order.id, order]))
   const itemsByOrder = group(itemRows, (row) => row.order_id)
   const paymentsByOrder = group(paymentRows, (row) => row.order_id)
   const refundsByPayment = group(refundRows, (row) => row.payment_id)
   const allocationsByRefund = group(allocationRows, (row) => row.refund_id)
+  const kdsByOrderItem = group(kdsTaskRows, (row) => row.refundable_order_item_id)
+  const settlementExceptionByOrder = new Map(settlementExceptionRows.map((row) => [row.order_id, row]))
+  const succeededRefundAmountByItem = new Map<string, number>()
+  const succeededRefundIds = new Set(refundRows.filter((refund) => refund.status === 'succeeded').map((refund) => refund.id))
+  for (const allocation of allocationRows) {
+    if (!succeededRefundIds.has(allocation.refund_id)) continue
+    succeededRefundAmountByItem.set(
+      allocation.order_item_id,
+      (succeededRefundAmountByItem.get(allocation.order_item_id) ?? 0) + asSafeMinor(allocation.amount_minor, 'succeeded refund allocation'),
+    )
+  }
   const orders = orderRows.map((order): CashierWorkbenchOrder => {
     const items = (itemsByOrder.get(order.id) ?? []).map(mapItem)
     const payments = (paymentsByOrder.get(order.id) ?? []).map((payment) => {
@@ -337,7 +404,27 @@ function assembleView(
       createdAt: order.created_at,
       businessDate: order.business_date,
       carryover: order.business_date < input.businessDate,
+      settlementException: settlementExceptionByOrder.has(order.id)
+        ? {
+            reasonCode: settlementExceptionByOrder.get(order.id)!.reason_code,
+            settledAmountMinor: asSafeMinor(
+              settlementExceptionByOrder.get(order.id)!.settled_amount_minor,
+              'settlement exception amount',
+            ),
+            occurredAt: settlementExceptionByOrder.get(order.id)!.occurred_at,
+          }
+        : null,
       items,
+      kdsTasks: items.flatMap((item): CashierWorkbenchKdsTask[] => (
+        (kdsByOrderItem.get(item.id) ?? []).map((task) => ({
+          id: task.id,
+          orderItemId: task.order_item_id,
+          stationCode: task.station_code,
+          status: task.status,
+          quantity: task.quantity,
+          succeededRefundAmountMinor: succeededRefundAmountByItem.get(task.refundable_order_item_id) ?? 0,
+        }))
+      )),
       payments,
     }
   })
@@ -351,6 +438,9 @@ function assembleView(
       requestedRefundCount: refundRows.filter((refund) => refund.status === 'requested').length,
       processingRefundCount: refundRows.filter((refund) => refund.status === 'approved' || refund.status === 'processing').length,
       carryoverOrderCount: orders.filter((order) => order.carryover === true).length,
+      carryoverPendingPaymentCount: paymentRows.filter((payment) => (
+        payment.status === 'created' || payment.status === 'pending'
+      ) && (orderById.get(payment.order_id)?.business_date ?? input.businessDate) < input.businessDate).length,
     },
     orders,
   }
@@ -361,7 +451,14 @@ function emptyView(input: Readonly<CashierWorkbenchQueryInput>, query: string): 
     businessDate: input.businessDate,
     query,
     actions: actions(input.capabilities),
-    summary: { orderCount: 0, capturedPaymentCount: 0, requestedRefundCount: 0, processingRefundCount: 0, carryoverOrderCount: 0 },
+    summary: {
+      orderCount: 0,
+      capturedPaymentCount: 0,
+      requestedRefundCount: 0,
+      processingRefundCount: 0,
+      carryoverOrderCount: 0,
+      carryoverPendingPaymentCount: 0,
+    },
     orders: [],
   }
 }
@@ -373,6 +470,7 @@ function actions(capabilities: readonly string[]) {
     canApproveRefund: set.has('refund.approve'),
     canExecuteRefund: set.has('refund.execute'),
     canViewReconciliation: set.has('reconciliation.view'),
+    canManageKdsException: set.has('kds.exception.manage'),
   }
 }
 

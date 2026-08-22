@@ -61,6 +61,23 @@
 .activity-registration-actions { display: flex; flex-wrap: wrap; gap: 7px; }
 .activity-registration-actions button { flex: 0 1 auto; }
 
+.media-asset-picker { display: grid; gap: 9px; }
+.media-asset-picker-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.media-asset-picker-actions button { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.media-asset-picker-actions .is-text { border-color: transparent; background: transparent; color: #416553; }
+.media-asset-picker figure { margin: 0; display: grid; gap: 5px; }
+.media-asset-picker figure img { width: min(100%, 360px); max-height: 180px; object-fit: cover; border: 1px solid #d5ded8; border-radius: 8px; background: #edf2ee; }
+.media-asset-picker figcaption, .media-asset-library small { color: #62736a; font-size: 11px; line-height: 1.45; }
+.media-asset-library { padding: 10px; border: 1px solid #bfd4c7; border-radius: 8px; background: #f3faf6; display: grid; gap: 10px; }
+.media-asset-upload { display: grid; gap: 5px; color: #315943; font-weight: 700; font-size: 12px; }
+.media-asset-upload input { max-width: 100%; min-height: 40px; padding: 6px; border: 1px dashed #78a78d; border-radius: 7px; background: #fff; }
+.media-asset-library > p { margin: 0; display: flex; align-items: center; gap: 6px; font-size: 12px; color: #486554; }
+.media-asset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+.media-asset-grid button { min-width: 0; min-height: auto; padding: 5px; display: grid; justify-items: start; gap: 4px; border: 1px solid #c7d8ce; border-radius: 7px; background: #fff; color: #263e31; text-align: left; }
+.media-asset-grid button.is-selected { border-color: #1e7854; box-shadow: 0 0 0 2px #cfe8da; }
+.media-asset-grid img { width: 100%; height: 72px; object-fit: cover; border-radius: 4px; background: #e8efea; }
+.media-asset-grid span { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 700; }
+
 @media (max-width: 760px) {
   .activity-operations-panel > header { align-items: stretch; flex-direction: column; }
   .activity-operations-list { grid-template-columns: 1fr; }

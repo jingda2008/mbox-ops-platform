@@ -63,6 +63,9 @@
 .staff-module-actions { display: flex; flex-wrap: wrap; gap: 7px; }
 .staff-module-actions button { min-height: 44px; padding: 0 13px; border: 1px solid #1a704e; border-radius: 6px; background: #fff; color: #185d43; font-size: 12px; font-weight: 750; box-shadow: 0 2px 0 #b9c9c0; }
 .staff-module-actions button.is-primary { background: #176f4c; color: #fff; display: inline-flex; align-items: center; gap: 6px; }
+.staff-module-actions button.is-active { border-color: #0d4f38; background: #e4f3eb; color: #0d4f38; box-shadow: inset 0 0 0 1px #0d4f38, 0 2px 0 #8eb69f; }
+.staff-module-actions button.is-primary.is-active { background: #0d5b40; color: #fff; box-shadow: inset 0 0 0 1px rgba(255,255,255,.52), 0 2px 0 #083d2b; }
+.staff-module-actions button[aria-pressed="true"]::after { content: '当前'; margin-left: 5px; font-size: 10px; font-weight: 800; letter-spacing: .04em; }
 .staff-module-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; padding: 12px; border: 1px solid #c9d0c8; border-top: 3px solid #d4b44f; border-radius: 7px; background: #fff; }
 .staff-module-form > header { grid-column: 1 / -1; display: grid; gap: 3px; }
 .staff-module-form > header strong { font-size: 14px; }
@@ -233,6 +236,9 @@
 .catalog-performance-phase > button { min-height: 44px; padding: 0 12px; border: 1px solid #715f25; border-radius: 5px; background: #715f25; color: #fff; font: inherit; font-size: 11px; font-weight: 800; }
 .catalog-performance-phase > button:disabled { border-color: #c8c1aa; background: #c8c1aa; }
 .catalog-recipe { padding: 11px; border: 1px solid #aac8b8; border-radius: 6px; background: #f2faf6; display: grid; gap: 9px; }
+.customer-experience-publishing-intro { margin: 12px 0; padding: 13px 14px; border: 1px solid #8fc9ac; border-radius: 10px; background: linear-gradient(135deg, #effaf3, #f9fcf9); display: grid; gap: 4px; color: #194d35; }
+.customer-experience-publishing-intro strong { font-size: 15px; }
+.customer-experience-publishing-intro small { color: #4c725d; line-height: 1.55; }
 .catalog-recipe > header { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
 .catalog-recipe > header > div { min-width: 0; display: grid; gap: 3px; }
 .catalog-recipe > header small { color: #5f7268; font-size: 10px; line-height: 1.45; }
@@ -242,6 +248,17 @@
 .catalog-recipe > label input { min-height: 42px; padding: 0 9px; border: 1px solid #adc2b6; border-radius: 5px; background: #fff; }
 .catalog-recipe > button { min-height: 44px; padding: 0 12px; border: 1px solid #176b4c; border-radius: 5px; background: #176b4c; color: #fff; font: inherit; font-size: 11px; font-weight: 800; }
 .catalog-recipe > button:disabled { border-color: #aebbb4; background: #aebbb4; }
+.catalog-recipe-cost { padding: 10px; border: 1px solid #b8d3c3; border-radius: 5px; background: #fff; display: grid; gap: 8px; }
+.catalog-recipe-cost > header { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
+.catalog-recipe-cost > header > div { min-width: 0; display: grid; gap: 3px; }
+.catalog-recipe-cost > header small { color: #5f7268; font-size: 10px; line-height: 1.45; }
+.catalog-recipe-cost > header em { flex: 0 0 auto; color: #176b4c; font-size: 12px; font-style: normal; font-weight: 800; }
+.catalog-recipe-cost > p { margin: 0; color: #7c5723; font-size: 11px; line-height: 1.5; }
+.catalog-recipe-cost > label { display: grid; gap: 5px; color: #40574b; font-size: 11px; font-weight: 750; }
+.catalog-recipe-cost input { min-height: 40px; padding: 0 9px; border: 1px solid #adc2b6; border-radius: 5px; background: #fff; }
+.catalog-recipe-cost > button { min-height: 42px; padding: 0 12px; border: 1px solid #176b4c; border-radius: 5px; background: #176b4c; color: #fff; font: inherit; font-size: 11px; font-weight: 800; }
+.catalog-recipe-cost-lines { display: flex; flex-wrap: wrap; gap: 5px; }
+.catalog-recipe-cost-lines span { padding: 4px 6px; border-radius: 4px; background: #edf6f0; color: #40574b; font-size: 10px; }
 .catalog-recipe-items { max-height: 320px; overflow-y: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
 .catalog-recipe-items article { min-width: 0; padding: 8px; border: 1px solid #c8d5ce; border-radius: 5px; background: #fff; display: grid; gap: 8px; }
 .catalog-recipe-items article.is-selected { border-color: #2a805f; box-shadow: inset 3px 0 0 #2a805f; }

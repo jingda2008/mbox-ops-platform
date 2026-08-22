@@ -200,6 +200,12 @@ interface ProductListQuery {
   offset: number;
 }
 
+interface StandardPriceInput {
+  amountMinor: number;
+  currency: string;
+  reason: string;
+}
+
 interface ApiErrorBody {
   error: { code: string; message: string };
 }
@@ -294,6 +300,13 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
             context.employeeId,
             CATALOG_PRODUCT_MANAGE_PERMISSION,
           );
+          if (input.standardPrice !== null) {
+            await assertLivePermission(
+              transaction,
+              context.employeeId,
+              CATALOG_PRICE_MANAGE_PERMISSION,
+            );
+          }
           const result = await transaction.query<IdRow>(
             `
         INSERT INTO mbox.products (
@@ -354,6 +367,9 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
           const productId = result.rows[0]?.id;
           if (productId === undefined) throw new Error("Product insert did not return an id");
           await replaceBundleComponents(transaction, productId, input.bundleComponents);
+          if (input.standardPrice !== null) {
+            await replaceCurrentStandardPrice(transaction, productId, input.standardPrice);
+          }
           const product = mapProduct(await getProduct(transaction, productId));
           return catalogOutcome(
             request,
@@ -364,7 +380,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
             product,
             null,
             product,
-            null,
+            input.standardPrice?.reason ?? null,
           );
         },
       );
@@ -397,6 +413,13 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               context.employeeId,
               CATALOG_PRODUCT_MANAGE_PERMISSION,
             );
+            if (patch.standardPrice !== null) {
+              await assertLivePermission(
+                transaction,
+                context.employeeId,
+                CATALOG_PRICE_MANAGE_PERMISSION,
+              );
+            }
             await lockProduct(transaction, productId);
             const before = mapProduct(await getProduct(transaction, productId));
             const displaySnapshot = patch.productSnapshot ?? before.productSnapshot;
@@ -448,6 +471,14 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               kds_priority = $29::smallint,
               fulfillment_sla_seconds = $30::integer,
               cost_amount_minor = $31::bigint,
+              cost_source = CASE
+                WHEN $31::bigint IS DISTINCT FROM cost_amount_minor THEN 'manual'
+                ELSE cost_source
+              END,
+              recipe_cost_version_id = CASE
+                WHEN $31::bigint IS DISTINCT FROM cost_amount_minor THEN NULL
+                ELSE recipe_cost_version_id
+              END,
               inventory_control_mode = COALESCE($32::text, inventory_control_mode),
               updated_at = clock_timestamp()
           WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
@@ -495,6 +526,9 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
             ) {
               await replaceBundleComponents(transaction, productId, targetComponents);
             }
+            if (patch.standardPrice !== null) {
+              await replaceCurrentStandardPrice(transaction, productId, patch.standardPrice);
+            }
             const product = mapProduct(
               await getProduct(transaction, productId),
             );
@@ -507,7 +541,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               product,
               before,
               product,
-              null,
+              patch.standardPrice?.reason ?? null,
             );
           },
         );
@@ -540,58 +574,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
             );
             await lockProduct(transaction, productId);
             const before = mapProduct(await getProduct(transaction, productId));
-            const effectiveAt = await readDatabaseTimestamp(transaction);
-            await rejectFutureStandardPrice(
-              transaction,
-              productId,
-              price.currency,
-              effectiveAt,
-            );
-            await transaction.query(
-              `
-          UPDATE mbox.product_prices
-          SET valid_until = $5::timestamptz
-          WHERE tenant_id = $1::uuid AND store_id = $2::uuid
-            AND product_id = $3::uuid AND price_type = 'standard' AND currency = $4
-            AND valid_from < $5::timestamptz
-            AND (valid_until IS NULL OR valid_until > $5::timestamptz)
-        `,
-              [
-                transaction.scope.tenantId,
-                transaction.scope.storeId,
-                productId,
-                price.currency,
-                effectiveAt,
-              ],
-            );
-            await transaction.query(
-              `
-          INSERT INTO mbox.product_prices (
-            tenant_id, store_id, product_id, price_type,
-            amount_minor, currency, valid_from
-          ) VALUES ($1::uuid, $2::uuid, $3::uuid, 'standard', $4::bigint, $5, $6::timestamptz)
-        `,
-              [
-                transaction.scope.tenantId,
-                transaction.scope.storeId,
-                productId,
-                price.amountMinor.toString(),
-                price.currency,
-                effectiveAt,
-              ],
-            );
-            await transaction.query(
-              `
-          UPDATE mbox.products
-          SET updated_at = clock_timestamp()
-          WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
-        `,
-              [
-                transaction.scope.tenantId,
-                transaction.scope.storeId,
-                productId,
-              ],
-            );
+            await replaceCurrentStandardPrice(transaction, productId, price);
             const product = mapProduct(
               await getProduct(transaction, productId),
             );
@@ -1043,6 +1026,56 @@ async function rejectFutureStandardPrice(
   }
 }
 
+async function replaceCurrentStandardPrice(
+  transaction: ScopedTransaction,
+  productId: string,
+  price: Readonly<StandardPriceInput>,
+): Promise<void> {
+  const effectiveAt = await readDatabaseTimestamp(transaction);
+  await rejectFutureStandardPrice(transaction, productId, price.currency, effectiveAt);
+  await transaction.query(
+    `
+      UPDATE mbox.product_prices
+      SET valid_until = $5::timestamptz
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+        AND product_id = $3::uuid AND price_type = 'standard' AND currency = $4
+        AND valid_from < $5::timestamptz
+        AND (valid_until IS NULL OR valid_until > $5::timestamptz)
+    `,
+    [
+      transaction.scope.tenantId,
+      transaction.scope.storeId,
+      productId,
+      price.currency,
+      effectiveAt,
+    ],
+  );
+  await transaction.query(
+    `
+      INSERT INTO mbox.product_prices (
+        tenant_id, store_id, product_id, price_type,
+        amount_minor, currency, valid_from
+      ) VALUES ($1::uuid, $2::uuid, $3::uuid, 'standard', $4::bigint, $5, $6::timestamptz)
+    `,
+    [
+      transaction.scope.tenantId,
+      transaction.scope.storeId,
+      productId,
+      price.amountMinor.toString(),
+      price.currency,
+      effectiveAt,
+    ],
+  );
+  await transaction.query(
+    `
+      UPDATE mbox.products
+      SET updated_at = clock_timestamp()
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
+    `,
+    [transaction.scope.tenantId, transaction.scope.storeId, productId],
+  );
+}
+
 async function getProduct(
   transaction: ScopedTransaction,
   productId: string,
@@ -1438,6 +1471,7 @@ function readCreateProduct(value: unknown): {
   productSnapshot: JsonObject;
   operationalFields: ProductOperationalFields;
   status: ProductStatus;
+  standardPrice: StandardPriceInput | null;
 } {
   const body = readJsonObject(value, "请求正文");
   const code = requiredCode(body.code, "code");
@@ -1450,6 +1484,7 @@ function readCreateProduct(value: unknown): {
   assertProductShape(productKind, fulfillmentStation, bundleComponents);
   const operationalFields = strongProductOperationalFields(body, { code, name }, productSnapshot);
   const status = body.status === undefined ? "active" : readStatus(body.status, false);
+  const standardPrice = body.standardPrice === undefined ? null : readStandardPrice(body.standardPrice);
   const inventoryControlMode = body.inventoryControlMode === undefined
     ? (requiredCode(body.categoryCode, "categoryCode") === "food" ? "not_managed" : "tracked")
     : readInventoryControlMode(body.inventoryControlMode);
@@ -1465,6 +1500,7 @@ function readCreateProduct(value: unknown): {
     productSnapshot,
     operationalFields,
     status,
+    standardPrice,
   };
 }
 
@@ -1478,6 +1514,7 @@ function readUpdateProduct(value: unknown): {
   productSnapshot: JsonObject | null;
   operationalInput: JsonObject;
   status: ProductStatus | null;
+  standardPrice: StandardPriceInput | null;
 } {
   const body = readJsonObject(value, "请求正文");
   const productSnapshot = body.productSnapshot === undefined
@@ -1504,9 +1541,10 @@ function readUpdateProduct(value: unknown): {
     productSnapshot,
     operationalInput: body,
     status: body.status === undefined ? null : readStatus(body.status, false),
+    standardPrice: body.standardPrice === undefined ? null : readStandardPrice(body.standardPrice),
   };
   if ([patch.name, patch.categoryCode, patch.fulfillmentStation, patch.productKind, patch.inventoryControlMode,
-    patch.bundleComponents, patch.productSnapshot, patch.status].every((item) => item === null)
+    patch.bundleComponents, patch.productSnapshot, patch.status, patch.standardPrice].every((item) => item === null)
     && !PRODUCT_OPERATIONAL_INPUT_KEYS.some((key) => body[key] !== undefined)) {
     throw new CatalogRequestError("至少提供一个可修改字段");
   }
@@ -1596,11 +1634,7 @@ function assertActiveProductCost(status: ProductStatus, costAmountMinor: number 
   }
 }
 
-function readStandardPrice(value: unknown): JsonObject & {
-  amountMinor: number;
-  currency: string;
-  reason: string;
-} {
+function readStandardPrice(value: unknown): StandardPriceInput {
   const body = readJsonObject(value, "请求正文");
   const amountMinor = readInteger(
     body.amountMinor,

@@ -227,6 +227,17 @@ function fixture(overrides: Partial<PaymentApiOptions> = {}) {
       replayed: false,
     })),
   }
+  const orderSettlementException = {
+    settle: vi.fn(async () => ({
+      eventId: '66666666-6666-4666-8666-666666666666',
+      orderPublicId: 'ORDER-VIP1-0001',
+      sourceBusinessDate: '2026-08-10',
+      actionBusinessDate: '2026-08-11',
+      settledAmountMinor: 1_000,
+      occurredAt: '2026-08-11T12:31:00.000Z',
+      replayed: false,
+    })),
+  }
   const providerObservations = {
     recordPayment: vi.fn(async () => verifiedPaymentObservationId),
     recordRefund: vi.fn(async () => verifiedRefundObservationId),
@@ -238,6 +249,7 @@ function fixture(overrides: Partial<PaymentApiOptions> = {}) {
     reconciliationQuery,
     cashierWorkbenchQuery,
     orderCancellation,
+    orderSettlementException,
     resolveActorContext: () => ({
       scope: { tenantId, storeId },
       actor: { type: 'guest', ref: `guest-session:${guestSessionId}` },
@@ -261,7 +273,7 @@ function fixture(overrides: Partial<PaymentApiOptions> = {}) {
   app.register(paymentApiPlugin, { ...options, prefix: '/api' })
   return {
     app, options, commands, providerVerifier, providerObservations,
-    reconciliationQuery, cashierWorkbenchQuery, orderCancellation,
+    reconciliationQuery, cashierWorkbenchQuery, orderCancellation, orderSettlementException,
   }
 }
 
@@ -343,6 +355,37 @@ describe('paymentApiPlugin', () => {
 
     expect(response.statusCode).toBe(403)
     expect(value.orderCancellation.cancel).not.toHaveBeenCalled()
+  })
+
+  it('records a delivered unpaid settlement exception only through the dedicated manager command', async () => {
+    const value = fixture({
+      resolveStaffContext: () => ({
+        scope: { tenantId, storeId }, actor: { type: 'employee', employeeId }, employeeId,
+        businessDate: '2026-08-11', capabilities: ['reconciliation.view', 'order.settle_exception'],
+      }),
+    })
+    const response = await value.app.inject({
+      method: 'POST', url: `/api/orders/${orderId}/settle-exception`,
+      headers: { 'idempotency-key': 'settle-exception-order-0001' },
+      payload: { reasonCode: 'manager_comp', reasonNote: '店长确认本单免单结清' },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(value.orderSettlementException.settle).toHaveBeenCalledWith(expect.objectContaining({
+      scope: { tenantId, storeId }, orderId, employeeId, businessDate: '2026-08-11',
+      reasonCode: 'manager_comp', reasonNote: '店长确认本单免单结清',
+      idempotencyKey: 'settle-exception-order-0001',
+    }))
+  })
+
+  it('rejects settlement exception without its dedicated permission', async () => {
+    const value = fixture()
+    const response = await value.app.inject({
+      method: 'POST', url: `/api/orders/${orderId}/settle-exception`,
+      headers: { 'idempotency-key': 'settle-exception-denied-0001' },
+      payload: { reasonCode: 'manager_comp', reasonNote: '店长确认本单免单结清' },
+    })
+    expect(response.statusCode).toBe(403)
+    expect(value.orderSettlementException.settle).not.toHaveBeenCalled()
   })
 
   it('rejects a new online payment when the store operating policy is closed', async () => {
@@ -541,6 +584,59 @@ describe('paymentApiPlugin', () => {
       }),
       verifiedObservationId: verifiedPaymentObservationId,
     }))
+  })
+
+  it('lets a reconciliation-authorized employee query an unresolved payment without relying on a guest session', async () => {
+    const query = vi.fn(async () => ({
+      context: {
+        id: payment.id, orderId: payment.orderId, orderPublicId: 'OORDER0001',
+        publicId: payment.publicId, provider: payment.provider, providerTransactionId: null,
+        method: payment.method, amountMinor: payment.amountMinor, currency: payment.currency,
+        status: 'pending' as const, tableSessionId, tableCode: 'W01', createdAt: payment.createdAt,
+      },
+      observation: {
+        paymentIntentId: payment.publicId, providerTransactionId: 'POSTAR-TX-0002',
+        status: 'pending' as const, amount: payment.amountMinor,
+        providerReportedAmount: payment.amountMinor, currency: payment.currency,
+        settlementChannel: 'wechat' as const, merchantId: trustedMerchant.merchantId,
+        occurredAt: '2026-08-11T12:06:00.000Z',
+      },
+      verifiedObservationId: verifiedPaymentObservationId,
+    }))
+    const value = fixture({
+      resolveActorContext: () => ({
+        scope: { tenantId, storeId }, actor: { type: 'employee', employeeId }, businessDate: '2026-08-11',
+      }),
+      onlinePayments: { assertAvailable: vi.fn(), resolveActivePayment: vi.fn(), create: vi.fn(), query },
+    })
+    const response = await value.app.inject({
+      method: 'POST', url: `/api/payments/${paymentId}/provider-query`,
+      headers: { 'idempotency-key': 'staff-provider-query-0001' }, payload: {},
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(query).toHaveBeenCalledWith(expect.objectContaining({
+      principal: { type: 'employee', employeeId },
+    }))
+  })
+
+  it('refuses staff provider query without reconciliation permission', async () => {
+    const value = fixture({
+      resolveActorContext: () => ({
+        scope: { tenantId, storeId }, actor: { type: 'employee', employeeId }, businessDate: '2026-08-11',
+      }),
+      resolveStaffContext: () => ({
+        scope: { tenantId, storeId }, actor: { type: 'employee', employeeId }, employeeId,
+        businessDate: '2026-08-11', capabilities: ['payment.manual.cash.record'],
+      }),
+      onlinePayments: { assertAvailable: vi.fn(), resolveActivePayment: vi.fn(), create: vi.fn(), query: vi.fn() },
+    })
+    const response = await value.app.inject({
+      method: 'POST', url: `/api/payments/${paymentId}/provider-query`,
+      headers: { 'idempotency-key': 'staff-provider-query-denied-0001' }, payload: {},
+    })
+
+    expect(response.statusCode).toBe(403)
   })
 
   it('records cash or physical POS evidence with the authenticated employee, not a body actor', async () => {

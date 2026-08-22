@@ -17,6 +17,14 @@ export type CashierRefundStatus =
   | 'failed'
   | 'cancelled'
 
+export type CashierWorkbenchKdsStatus =
+  | 'pending'
+  | 'accepted'
+  | 'preparing'
+  | 'ready'
+  | 'cancelled'
+  | 'failed'
+
 export interface CashierWorkbenchItem {
   id: string
   productName: string
@@ -55,6 +63,20 @@ export interface CashierWorkbenchRefundableItem extends CashierWorkbenchItem {
   remainingRefundableMinor: number
 }
 
+/**
+ * A fulfillment task associated with the order. `succeededRefundAmountMinor`
+ * is derived only from provider-confirmed refund allocations; it is not an
+ * instruction to automatically cancel production.
+ */
+export interface CashierWorkbenchKdsTask {
+  id: string
+  orderItemId: string
+  stationCode: 'bar' | 'kitchen'
+  status: CashierWorkbenchKdsStatus
+  quantity: number
+  succeededRefundAmountMinor: number
+}
+
 export interface CashierWorkbenchPayment {
   id: string
   publicId: string
@@ -86,7 +108,13 @@ export interface CashierWorkbenchOrder {
   /** Source business day; older unresolved refunds remain visible for handover. */
   businessDate?: string
   carryover?: boolean
+  settlementException?: {
+    reasonCode: 'manager_comp' | 'uncollectible' | 'test_cleanup'
+    settledAmountMinor: number
+    occurredAt: string
+  } | null
   items: CashierWorkbenchItem[]
+  kdsTasks: CashierWorkbenchKdsTask[]
   payments: CashierWorkbenchPayment[]
 }
 
@@ -98,6 +126,7 @@ export interface CashierWorkbenchView {
     canApproveRefund: boolean
     canExecuteRefund: boolean
     canViewReconciliation: boolean
+    canManageKdsException: boolean
   }
   summary: {
     orderCount: number
@@ -105,6 +134,8 @@ export interface CashierWorkbenchView {
     requestedRefundCount: number
     processingRefundCount: number
     carryoverOrderCount?: number
+    /** Older initiated payments that still require a provider result query. */
+    carryoverPendingPaymentCount?: number
   }
   orders: CashierWorkbenchOrder[]
 }

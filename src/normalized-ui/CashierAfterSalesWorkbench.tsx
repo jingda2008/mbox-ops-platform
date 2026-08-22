@@ -14,6 +14,7 @@ import type {
   CashierWorkbenchPayment,
   CashierWorkbenchOrder,
   CashierWorkbenchRefund,
+  CashierWorkbenchKdsTask,
   CashierWorkbenchView,
 } from '../shared/cashier-workbench-contracts'
 import { NormalizedApiClient, NormalizedApiError, type StaffAuthView } from '../normalized-api'
@@ -34,6 +35,19 @@ interface RefundDraft {
 interface CancellationDraft {
   orderId: string
   reasonCode: 'duplicate_order' | 'guest_left' | 'test_cleanup' | 'other'
+  reasonNote: string
+  confirmed: boolean
+}
+
+interface SettlementExceptionDraft {
+  orderId: string
+  reasonCode: 'manager_comp' | 'uncollectible' | 'test_cleanup'
+  reasonNote: string
+  confirmed: boolean
+}
+
+interface KdsCancellationDraft {
+  taskId: string
   reasonNote: string
   confirmed: boolean
 }
@@ -224,6 +238,8 @@ export function CashierAfterSalesWorkbenchView({
   const [decisionReasons, setDecisionReasons] = useState<Record<string, string>>({})
   const [manualReceipts, setManualReceipts] = useState<Record<string, string>>({})
   const [cancellationDraft, setCancellationDraft] = useState<CancellationDraft | null>(null)
+  const [kdsCancellationDraft, setKdsCancellationDraft] = useState<KdsCancellationDraft | null>(null)
+  const [settlementExceptionDraft, setSettlementExceptionDraft] = useState<SettlementExceptionDraft | null>(null)
 
   function submitSearch(event: FormEvent) {
     event.preventDefault()
@@ -279,9 +295,41 @@ export function CashierAfterSalesWorkbenchView({
       `order-cancel-unpaid-${order.id}`,
       `/api/orders/${encodeURIComponent(order.id)}/cancel-unpaid`,
       { reasonCode: cancellationDraft.reasonCode, reasonNote: cancellationDraft.reasonNote.trim() },
-      '未付款订单已取消；原营业日、已送达商品和库存事实均已保留。',
+      '未付款订单已取消。若已有送达商品，仍需由店长或老板完成异常结清后才能关台。',
     )
     if (completed) setCancellationDraft(null)
+  }
+
+  async function submitSettlementException(order: CashierWorkbenchOrder) {
+    if (settlementExceptionDraft === null || settlementExceptionDraft.orderId !== order.id) return
+    if (settlementExceptionDraft.reasonNote.trim().length < 4) return
+    if (!settlementExceptionDraft.confirmed) {
+      setSettlementExceptionDraft({ ...settlementExceptionDraft, confirmed: true })
+      return
+    }
+    const completed = await onMutation(
+      `order-settle-exception-${order.id}`,
+      `/api/orders/${encodeURIComponent(order.id)}/settle-exception`,
+      { reasonCode: settlementExceptionDraft.reasonCode, reasonNote: settlementExceptionDraft.reasonNote.trim() },
+      '异常结清已登记：未生成付款，已送达、库存和原营业日记录均已保留；未付款结算阻断已解除，如仍有其他现场任务系统会继续提示。',
+    )
+    if (completed) setSettlementExceptionDraft(null)
+  }
+
+  async function submitKdsCancellation(task: CashierWorkbenchKdsTask) {
+    if (kdsCancellationDraft === null || kdsCancellationDraft.taskId !== task.id) return
+    if (kdsCancellationDraft.reasonNote.trim().length < 4) return
+    if (!kdsCancellationDraft.confirmed) {
+      setKdsCancellationDraft({ ...kdsCancellationDraft, confirmed: true })
+      return
+    }
+    const completed = await onMutation(
+      `refund-kds-cancel-${task.id}`,
+      `/api/commerce/kds/${encodeURIComponent(task.id)}/manager-cancel`,
+      { reasonCode: 'refund_completed_unprepared', reasonNote: kdsCancellationDraft.reasonNote.trim() },
+      '退款已核对；未开始制作的出品任务已受控取消，财务和库存将保留原事实等待复核。',
+    )
+    if (completed) setKdsCancellationDraft(null)
   }
 
   if (phase === 'loading' && view === null) {
@@ -329,6 +377,7 @@ export function CashierAfterSalesWorkbenchView({
       <span className={view.summary.requestedRefundCount > 0 ? 'has-attention' : ''}><b>{view.summary.requestedRefundCount}</b><small>待复核</small></span>
       <span className={view.summary.processingRefundCount > 0 ? 'has-attention' : ''}><b>{view.summary.processingRefundCount}</b><small>待执行</small></span>
       {(view.summary.carryoverOrderCount ?? 0) > 0 && <span className="has-attention"><b>{view.summary.carryoverOrderCount}</b><small>交班遗留</small></span>}
+      {(view.summary.carryoverPendingPaymentCount ?? 0) > 0 && <span className="has-attention"><b>{view.summary.carryoverPendingPaymentCount}</b><small>待查渠道</small></span>}
     </div>
 
     {view.orders.length === 0
@@ -356,6 +405,51 @@ export function CashierAfterSalesWorkbenchView({
                     <strong>¥{formatAmount(item.totalAmountMinor)}</strong>
                   </div>)}
                 </section>
+                {order.kdsTasks.length > 0 && <section className="cashier-kds-section" aria-label="关联出品任务">
+                  <h3>关联出品</h3>
+                  <p className="cashier-workbench-boundary">退款成功不等于自动取消制作。仅未开始制作的任务可由具备出品异常权限的员工核对、填写原因后终止；制作中或已送达必须转入现场异常复核。</p>
+                  {order.kdsTasks.map((task) => {
+                    const confirmedRefund = task.succeededRefundAmountMinor > 0
+                    const canCancel = confirmedRefund && ['pending', 'accepted'].includes(task.status)
+                    const requiresEscalation = confirmedRefund && ['preparing', 'ready'].includes(task.status)
+                    const drafting = kdsCancellationDraft?.taskId === task.id
+                    return <div className={`cashier-kds-task is-${task.status}`} key={task.id}>
+                      <div className="cashier-kds-heading">
+                        <span><b>{task.stationCode === 'bar' ? '吧台出品' : '后厨出品'}</b><small>{task.quantity} 份 · {kdsStatusLabel(task.status)}</small></span>
+                        {confirmedRefund && <strong>已退款 ¥{formatAmount(task.succeededRefundAmountMinor)}</strong>}
+                      </div>
+                      {!confirmedRefund && <p>未见与该出品明细关联的渠道退款成功记录，不能从这里终止任务。</p>}
+                      {requiresEscalation && <p className="cashier-kds-escalation">该任务已进入{kdsStatusLabel(task.status)}，请由现场负责人核对实物、库存和客人沟通结果；本页不提供取消。</p>}
+                      {canCancel && !view.actions.canManageKdsException && <p className="cashier-kds-escalation">退款已成功，但当前账号没有“处理出品异常”权限，请交给值班经理处理。</p>}
+                      {canCancel && view.actions.canManageKdsException && (drafting ? <div className="cashier-refund-form">
+                        <label className="cashier-field"><span>现场核对说明</span><textarea
+                          value={kdsCancellationDraft.reasonNote}
+                          maxLength={500}
+                          placeholder="至少4个字，例如：客人取消，吧台确认尚未开始制作"
+                          onChange={(event) => setKdsCancellationDraft({
+                            ...kdsCancellationDraft,
+                            reasonNote: event.target.value,
+                            confirmed: false,
+                          })}
+                        /></label>
+                        <p className="cashier-guidance">此操作只终止未开始制作的出品任务；退款、原订单、库存和原营业日事实不会被改写。</p>
+                        <div className="cashier-form-actions">
+                          <button type="button" className="is-secondary" onClick={() => setKdsCancellationDraft(null)}>返回</button>
+                          <button
+                            type="button"
+                            disabled={busyKey === `refund-kds-cancel-${task.id}` || kdsCancellationDraft.reasonNote.trim().length < 4}
+                            onClick={() => void submitKdsCancellation(task)}
+                          >{kdsCancellationDraft.confirmed ? '再次确认终止出品' : '核对并继续'}</button>
+                        </div>
+                      </div> : <button
+                        type="button"
+                        className="cashier-secondary-action"
+                        disabled={busyKey !== null}
+                        onClick={() => setKdsCancellationDraft({ taskId: task.id, reasonNote: '', confirmed: false })}
+                      >核对退款后处理出品</button>)}
+                    </div>
+                  })}
+                </section>}
                 <section>
                   <h3>收款与退款</h3>
                   {order.payments.length === 0
@@ -425,6 +519,56 @@ export function CashierAfterSalesWorkbenchView({
                       </>}
                     </div>
                   )}
+                  {order.paymentStatus === 'unpaid' && order.status === 'cancelled'
+                    && order.items.some((item) => item.status === 'delivered')
+                    && order.settlementException == null
+                    && auth.permissions.includes('order.settle_exception') && (
+                    <div className="cashier-refund-form" aria-label="异常结清已送达未付款订单">
+                      {settlementExceptionDraft?.orderId !== order.id ? (
+                        <button type="button" className="is-secondary" onClick={() => setSettlementExceptionDraft({
+                          orderId: order.id,
+                          reasonCode: 'manager_comp',
+                          reasonNote: '',
+                          confirmed: false,
+                        })}>异常结清已送达金额</button>
+                      ) : <>
+                        <label className="cashier-field"><span>结清原因</span><select
+                          value={settlementExceptionDraft.reasonCode}
+                          onChange={(event) => setSettlementExceptionDraft({
+                            ...settlementExceptionDraft,
+                            reasonCode: event.target.value as SettlementExceptionDraft['reasonCode'],
+                            confirmed: false,
+                          })}
+                        >
+                          <option value="manager_comp">店长确认免单</option>
+                          <option value="uncollectible">确认无法收回</option>
+                          {auth.employee.roleCodes.includes('OWNER') && <option value="test_cleanup">测试数据清理（老板）</option>}
+                        </select></label>
+                        <label className="cashier-field"><span>现场说明</span><textarea
+                          value={settlementExceptionDraft.reasonNote}
+                          maxLength={500}
+                          placeholder="至少4个字；说明为何不生成实际收款"
+                          onChange={(event) => setSettlementExceptionDraft({
+                            ...settlementExceptionDraft,
+                            reasonNote: event.target.value,
+                            confirmed: false,
+                          })}
+                        /></label>
+                        <p className="cashier-guidance">这不是收款：系统只留存异常结清事实。已送达商品、库存和原营业日记录不会删除。</p>
+                        <div className="cashier-form-actions">
+                          <button type="button" className="is-secondary" onClick={() => setSettlementExceptionDraft(null)}>返回</button>
+                          <button
+                            type="button"
+                            disabled={busyKey === `order-settle-exception-${order.id}` || settlementExceptionDraft.reasonNote.trim().length < 4}
+                            onClick={() => void submitSettlementException(order)}
+                          >{settlementExceptionDraft.confirmed ? '再次确认异常结清' : '核对并继续'}</button>
+                        </div>
+                      </>}
+                    </div>
+                  )}
+                  {order.settlementException != null && <p className="cashier-guidance">
+                    已异常结清 ¥{formatAmount(order.settlementException.settledAmountMinor)}；未生成付款。
+                  </p>}
                 </section>
               </div>}
             </article>
@@ -496,6 +640,21 @@ function PaymentBlock({
     {actions.canRequestRefund && payment.remainingRefundableMinor > 0 && !drafting && <button type="button" className="cashier-secondary-action" onClick={() => onOpenRefund(payment)}>
       选择原商品发起退款
     </button>}
+
+    {actions.canViewReconciliation && payment.provider === 'postar' && (payment.status === 'created' || payment.status === 'pending') && <div className="cashier-provider-query">
+      <p>这笔线上付款尚无明确结果。查询只读取支付渠道的签名结果，不会再次扣款。</p>
+      <button
+        type="button"
+        className="cashier-secondary-action"
+        disabled={busyKey !== null}
+        onClick={() => void onMutation(
+          `payment-provider-query-${payment.id}`,
+          `/api/payments/${encodeURIComponent(payment.id)}/provider-query`,
+          {},
+          '已完成渠道查单，结果已按渠道回传更新。',
+        )}
+      >{busyKey === `payment-provider-query-${payment.id}` ? <LoaderCircle className="is-spinning" size={17} /> : null}查询渠道结果</button>
+    </div>}
 
     {drafting && <div className="cashier-refund-form">
       <h4>选择本次退款商品和金额</h4>
@@ -707,4 +866,7 @@ function refundStatusLabel(value: string): string {
 }
 function itemStatusLabel(value: string): string {
   return ({ submitted: '已下单', accepted: '已接单', preparing: '制作中', ready: '待送达', delivered: '已送达', cancelled: '已取消' } as Record<string, string>)[value] ?? value
+}
+function kdsStatusLabel(value: CashierWorkbenchKdsTask['status']): string {
+  return ({ pending: '待接单', accepted: '已接单未制作', preparing: '制作中', ready: '制作完成', cancelled: '已取消', failed: '制作异常' } as Record<CashierWorkbenchKdsTask['status'], string>)[value]
 }

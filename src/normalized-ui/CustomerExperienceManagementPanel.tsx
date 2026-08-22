@@ -295,6 +295,12 @@ export function CustomerExperienceManagementPanel({ api, auth, dashboard, onChan
       <article><small>待办/已发布活动</small><strong>{dashboard.activities.length}</strong></article>
     </div>
     {notice && <p className="staff-module-notice" role="status">{notice}</p>}
+    <section className="customer-experience-publishing-intro">
+      <strong>超嗨发布工作台</strong>
+      <small>先上传并选择图片，再保存草稿；活动和首页内容都必须由拥有发布权限的员工复核后才会在小程序展示。</small>
+    </section>
+    <ActivityOperationsPanel api={api} auth={auth} />
+    <HomeContentManagementPanel api={api} auth={auth} />
     {legacyActivityEditorEnabled && canCreate && <div className="staff-module-actions"><button type="button" onClick={() => setShowCreate((value) => !value)}><CalendarPlus size={17} /> 配置新活动</button></div>}
     {legacyActivityEditorEnabled && showCreate && <form className="staff-module-form activity-config-form" onSubmit={(event) => void createActivity(event)}>
       <header><strong>活动报名与付款规则</strong><small>先保存草稿。付款规则、金额、退款说明都进入报名快照，后续修改不会偷偷改变已报名客户的口径。</small></header>
@@ -339,8 +345,6 @@ export function CustomerExperienceManagementPanel({ api, auth, dashboard, onChan
     <MembershipTermsManagementPanel api={api} auth={auth} />
     <MembershipRecoveryPanel api={api} auth={auth} />
     <PersonalContactGovernancePanel api={api} auth={auth} />
-    <ActivityOperationsPanel api={api} auth={auth} />
-    <HomeContentManagementPanel api={api} auth={auth} />
     {legacyActivityEditorEnabled && <section className="activity-admin-list" aria-label="活动列表">
       <header><strong>活动列表</strong><small>草稿必须经过有发布权限的人员复核</small></header>
       {dashboard.activities.length === 0 && <p>还没有活动草稿。</p>}

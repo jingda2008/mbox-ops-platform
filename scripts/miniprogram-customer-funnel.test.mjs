@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8')
@@ -113,6 +113,15 @@ test('official M-BOX artwork replaces temporary letter marks with restrained cir
   assert.ok(badgeLogo.length < 64 * 1024)
 })
 
+test('every packaged mini-program image stays within the 200KB asset budget', async () => {
+  const paths = await imagePaths(new URL('../miniprogram/assets/', import.meta.url))
+  assert.ok(paths.length > 0)
+  for (const path of paths) {
+    const image = await readFile(path)
+    assert.ok(image.length <= 200 * 1024, `${path.pathname} exceeds the 200KB image budget`)
+  }
+})
+
 test('customers can browse a read-only menu before scanning, but the browse view cannot add products', async () => {
   const [orderView, apiSource] = await Promise.all([
     read('miniprogram/pages/order/index.wxml'),
@@ -132,6 +141,16 @@ test('customers can browse a read-only menu before scanning, but the browse view
   assert.doesNotMatch(browseView, /bindtap="addProduct"/)
   assert.match(apiSource, /publicRequest\(`\/api\/public\/mini\/menu\/products/)
 })
+
+async function imagePaths(directory) {
+  const entries = await readdir(directory, { withFileTypes: true })
+  const nested = await Promise.all(entries.map(async (entry) => {
+    const path = new URL(entry.name, directory)
+    if (entry.isDirectory()) return imagePaths(new URL(`${entry.name}/`, directory))
+    return /\.(?:png|jpe?g|webp)$/i.test(entry.name) ? [path] : []
+  }))
+  return nested.flat()
+}
 
 test('customer-facing primary controls keep a comfortable touch target and checkout uses M-BOX brand green', async () => {
   const [homeStyle, orderStyle] = await Promise.all([

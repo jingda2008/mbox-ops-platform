@@ -9,6 +9,7 @@ const {
 const { getRuntimeConfig } = require('../../config/index')
 const { dateTime } = require('../../utils/format')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
+const { publicImageUrl } = require('../../utils/media')
 const MEMBERSHIP_INVITE_DISMISSED_KEY = 'mbox.membership.invite.dismissed.until.v1'
 const HOME_CAMPAIGN_DISMISSED_PREFIX = 'mbox.home.campaign.dismissed.v1:'
 
@@ -27,7 +28,7 @@ function performanceView(view) {
   const schedules = (view.schedules || []).filter((item) => item.status !== 'cancelled').map((item) => ({
     id: item.id,
     performer: item.performerStageName,
-    imageUrl: item.performerProfile && item.performerProfile.imageUrl,
+    imageUrl: publicImageUrl(item.performerProfile && item.performerProfile.imageUrl),
     bio: item.performerProfile && item.performerProfile.bio || '',
     tags: item.performerProfile && ([]).concat(item.performerProfile.genres || [], item.performerProfile.styles || []).slice(0, 3).join(' · '),
     timeText: `${dateTime(item.startsAt)}–${dateTime(item.endsAt).slice(6)}`,
@@ -42,7 +43,7 @@ function performanceView(view) {
   return {
     hasSchedule: true,
     performer: schedule.performerStageName,
-    imageUrl: schedule.performerProfile && schedule.performerProfile.imageUrl,
+    imageUrl: publicImageUrl(schedule.performerProfile && schedule.performerProfile.imageUrl),
     bio: schedule.performerProfile && schedule.performerProfile.bio || '',
     tags: schedule.performerProfile && ([]).concat(schedule.performerProfile.genres || [], schedule.performerProfile.styles || []).slice(0, 3).join(' · '),
     timeText: `${dateTime(schedule.startsAt)}–${dateTime(schedule.endsAt).slice(6)}`,
@@ -81,7 +82,7 @@ function contentCardView(item) {
     eyebrow: item.type === 'show' ? 'M-BOX LIVE' : item.type === 'presale' ? 'TONIGHT OFFER' : item.type === 'benefit' ? 'MEMBER EDIT' : 'M-BOX STORY',
     title: String(item.title || ''),
     summary: String(item.summary || ''),
-    imageUrl: item.imageUrl || '',
+    imageUrl: publicImageUrl(item.imageUrl),
     ctaLabel: String(item.ctaLabel || '查看内容'),
     targetPath,
     hasTarget: Boolean(targetPath && targetPath !== '/pages/home/index'),
@@ -91,6 +92,7 @@ function contentCardView(item) {
 function activityFeatureView(item) {
   if (!item) return null
   return Object.assign({}, item, {
+    coverUrl: publicImageUrl(item.coverUrl),
     dateText: dateTime(item.startsAt),
     availabilityText: item.remainingCapacity > 0 ? `余 ${item.remainingCapacity} 位` : '名额已满',
   })

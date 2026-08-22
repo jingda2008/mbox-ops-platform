@@ -100,6 +100,33 @@ export interface ReplaceRecipeInput {
   components: readonly RecipeComponentInput[];
 }
 
+export interface RecipeCostComponent {
+  recipeItemId: string;
+  inventoryItemId: string;
+  itemName: string;
+  baseUnit: string;
+  componentQuantity: string;
+  expectedWasteQuantity: string;
+  sourceReceiptLineId: string | null;
+  sourceUnitCostMinor: string | null;
+  componentCostMinor: string | null;
+}
+
+export interface RecipeCostPreview {
+  productId: string;
+  recipeId: string;
+  recipeVersion: number;
+  yieldQuantity: number;
+  currency: string;
+  costAmountMinor: number | null;
+  components: readonly RecipeCostComponent[];
+}
+
+export interface AppliedRecipeCost extends RecipeCostPreview {
+  id: string;
+  appliedAt: string;
+}
+
 export interface PurchaseReceiptLineInput {
   inventoryItemId: string;
   batchCode: string;
@@ -166,6 +193,21 @@ interface InventoryItemRow extends Record<string, unknown> {
   whole_unit_count: boolean;
   reasonable_waste_quantity: string;
   status: string;
+}
+
+interface RecipeCostRow extends Record<string, unknown> {
+  recipe_id: string;
+  recipe_version: number;
+  yield_quantity: number;
+  recipe_item_id: string;
+  inventory_item_id: string;
+  item_name: string;
+  base_unit: string;
+  component_quantity: string;
+  expected_waste_quantity: string;
+  source_receipt_line_id: string | null;
+  source_unit_cost_minor: string | null;
+  component_cost_minor: string | null;
 }
 
 interface ReceiptRow extends Record<string, unknown> {
@@ -451,6 +493,104 @@ export class InventoryRepository {
       );
     }
     return { id: recipe.id, version: nextVersion };
+  }
+
+  async previewRecipeCost(productId: string): Promise<RecipeCostPreview> {
+    return this.recipeCostSnapshot(productId, false);
+  }
+
+  async applyRecipeCost(
+    productId: string,
+    employeeId: string,
+    reason: string,
+  ): Promise<AppliedRecipeCost> {
+    if (reason.trim().length < 2 || reason.trim().length > 500)
+      throw new TypeError('Recipe cost calculation reason must be 2 to 500 characters');
+    const preview = await this.recipeCostSnapshot(productId, true);
+    if (preview.costAmountMinor === null)
+      throw new InventoryConflictError('所有配方物料都必须有已收货的单位成本，才能计算并应用商品成本');
+    const inserted = requireOne(await this.transaction.query<{ id: string; calculated_at: string }>(`
+      INSERT INTO mbox.recipe_cost_versions(
+        tenant_id,store_id,product_id,recipe_id,recipe_version,cost_amount_minor,currency,
+        calculated_by_employee_id,calculation_reason
+      ) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6::bigint,$7,$8::uuid,$9)
+      RETURNING id,calculated_at::text
+    `, [
+      this.transaction.scope.tenantId,this.transaction.scope.storeId,productId,preview.recipeId,
+      preview.recipeVersion,preview.costAmountMinor,preview.currency,employeeId,reason.trim(),
+    ]), 'recipe cost version insert');
+    for (const component of preview.components) {
+      if (component.sourceReceiptLineId === null || component.sourceUnitCostMinor === null || component.componentCostMinor === null)
+        throw new InventoryConflictError('配方成本来源不完整，不能应用');
+      await this.transaction.query(`
+        INSERT INTO mbox.recipe_cost_components(
+          tenant_id,store_id,recipe_cost_version_id,recipe_item_id,inventory_item_id,source_receipt_line_id,
+          component_quantity,expected_waste_quantity,yield_quantity,source_unit_cost_minor,component_cost_minor
+        ) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,$7::numeric,$8::numeric,$9,$10::numeric,$11::numeric)
+      `, [
+        this.transaction.scope.tenantId,this.transaction.scope.storeId,inserted.id,component.recipeItemId,
+        component.inventoryItemId,component.sourceReceiptLineId,component.componentQuantity,
+        component.expectedWasteQuantity,preview.yieldQuantity,component.sourceUnitCostMinor,component.componentCostMinor,
+      ]);
+    }
+    const product = await this.transaction.query<{ id: string }>(`
+      UPDATE mbox.products
+      SET cost_amount_minor=$4::bigint,cost_source='recipe',recipe_cost_version_id=$5::uuid,
+        updated_at=clock_timestamp()
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+      RETURNING id
+    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,productId,preview.costAmountMinor,inserted.id]);
+    if (product.rows[0] === undefined) throw new InventoryNotFoundError('product', productId);
+    return { ...preview, id: inserted.id, appliedAt: inserted.calculated_at };
+  }
+
+  private async recipeCostSnapshot(productId: string, lock: boolean): Promise<RecipeCostPreview> {
+    const result = await this.transaction.query<RecipeCostRow>(`
+      SELECT recipe.id AS recipe_id,recipe.version AS recipe_version,recipe.yield_quantity,
+        component.id AS recipe_item_id,item.id AS inventory_item_id,item.name AS item_name,item.base_unit,
+        component.quantity::text AS component_quantity,
+        component.expected_waste_quantity::text AS expected_waste_quantity,
+        latest.id AS source_receipt_line_id,latest.unit_cost_minor::text AS source_unit_cost_minor,
+        CASE WHEN latest.id IS NULL THEN NULL
+          ELSE ((component.quantity+component.expected_waste_quantity)*latest.unit_cost_minor/recipe.yield_quantity)::numeric(18,6)::text
+        END AS component_cost_minor
+      FROM mbox.recipes AS recipe
+      JOIN mbox.recipe_items AS component
+        ON component.tenant_id=recipe.tenant_id AND component.store_id=recipe.store_id
+       AND component.recipe_id=recipe.id
+      JOIN mbox.inventory_items AS item
+        ON item.tenant_id=component.tenant_id AND item.store_id=component.store_id
+       AND item.id=component.inventory_item_id
+      LEFT JOIN LATERAL (
+        SELECT line.id,line.unit_cost_minor
+        FROM mbox.purchase_receipt_lines AS line
+        JOIN mbox.purchase_receipts AS receipt
+          ON receipt.tenant_id=line.tenant_id AND receipt.store_id=line.store_id
+         AND receipt.id=line.receipt_id AND receipt.status='received'
+        WHERE line.tenant_id=component.tenant_id AND line.store_id=component.store_id
+          AND line.inventory_item_id=component.inventory_item_id
+        ORDER BY receipt.received_at DESC,line.id DESC
+        LIMIT 1
+      ) AS latest ON true
+      WHERE recipe.tenant_id=$1::uuid AND recipe.store_id=$2::uuid
+        AND recipe.product_id=$3::uuid AND recipe.status='active'
+      ORDER BY component.id
+      ${lock ? 'FOR UPDATE OF recipe,component' : ''}
+    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,productId]);
+    if (result.rows.length === 0) throw new InventoryNotFoundError('active inventory recipe', productId);
+    const first = result.rows[0]!;
+    const components = result.rows.map((row): RecipeCostComponent => ({
+      recipeItemId: row.recipe_item_id,inventoryItemId: row.inventory_item_id,itemName: row.item_name,
+      baseUnit: row.base_unit,componentQuantity: row.component_quantity,
+      expectedWasteQuantity: row.expected_waste_quantity,sourceReceiptLineId: row.source_receipt_line_id,
+      sourceUnitCostMinor: row.source_unit_cost_minor,componentCostMinor: row.component_cost_minor,
+    }));
+    const total = components.every((component) => component.componentCostMinor !== null)
+      ? Math.ceil(components.reduce((sum, component) => sum + Number(component.componentCostMinor), 0))
+      : null;
+    if (total !== null && (!Number.isSafeInteger(total) || total < 0)) throw new InventoryConflictError('配方成本超出允许范围');
+    return { productId,recipeId: first.recipe_id,recipeVersion: first.recipe_version,yieldQuantity: first.yield_quantity,
+      currency: 'CNY',costAmountMinor: total,components };
   }
 
   async createPurchaseReceipt(

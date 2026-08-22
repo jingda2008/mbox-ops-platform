@@ -77,6 +77,38 @@ describe('StaffActionsApi', () => {
     expect(send).toHaveBeenNthCalledWith(3, '/api/staff/reservations/reservation-1/complete', expect.objectContaining({ method: 'POST' }))
   })
 
+  it('requests carryover and explicit history reservation scopes without substituting browser dates', async () => {
+    const send = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [] }), { status: 200 }))
+    const api = new StaffActionsApi({ fetch: send })
+
+    await api.loadReservations({ range: 'carryover' })
+    await api.loadReservations({
+      range: 'history', from: '2026-08-20T16:00:00.000Z', to: '2026-08-22T16:00:00.000Z',
+    })
+
+    expect(send.mock.calls[0]?.[0]).toBe('/api/staff/reservations?range=carryover')
+    expect(String(send.mock.calls[1]?.[0])).toContain('range=history')
+    expect(String(send.mock.calls[1]?.[0])).toContain('from=2026-08-20T16%3A00%3A00.000Z')
+  })
+
+  it('requests carryover and explicit history reservation scopes without substituting browser dates', async () => {
+    const send = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [] }), { status: 200 }))
+    const api = new StaffActionsApi({ fetch: send })
+
+    await api.loadReservations({ range: 'carryover' })
+    await api.loadReservations({
+      range: 'history', from: '2026-08-20T16:00:00.000Z', to: '2026-08-22T16:00:00.000Z',
+    })
+
+    expect(send.mock.calls[0]?.[0]).toBe('/api/staff/reservations?range=carryover')
+    expect(String(send.mock.calls[1]?.[0])).toContain('range=history')
+    expect(String(send.mock.calls[1]?.[0])).toContain('from=2026-08-20T16%3A00%3A00.000Z')
+  })
+
   it('sends only supported KDS actions to the authoritative KDS endpoint', async () => {
     const send = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ data: {} }), { status: 200 }))
     const api = new StaffActionsApi({ fetch: send, createIdempotencyKey: () => 'kds-key-0001' })

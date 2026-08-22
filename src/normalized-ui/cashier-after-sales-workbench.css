@@ -44,7 +44,21 @@
 .cashier-line b { font-size: 12px; }
 .cashier-line small, .cashier-payment-heading small { color: #6b726b; font-size: 9px; }
 .cashier-line strong { font-size: 12px; white-space: nowrap; }
+.cashier-kds-section { align-content: start; }
+.cashier-kds-task { display: grid; gap: 7px; padding: 9px; border: 1px solid #d7dbd4; border-left: 4px solid #a6ada4; border-radius: 5px; background: #f8f8f4; }
+.cashier-kds-task.is-pending, .cashier-kds-task.is-accepted { border-left-color: #c49627; }
+.cashier-kds-task.is-preparing { border-left-color: #b8702f; background: #fff8ed; }
+.cashier-kds-task.is-ready { border-left-color: #3d7891; background: #f1f8fa; }
+.cashier-kds-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.cashier-kds-heading > span { min-width: 0; display: grid; gap: 2px; }
+.cashier-kds-heading b { font-size: 12px; }
+.cashier-kds-heading small { color: #687068; font-size: 9px; }
+.cashier-kds-heading strong { color: #1c6c48; font-size: 11px; white-space: nowrap; }
+.cashier-kds-task > p { margin: 0; color: #596158; font-size: 10px; line-height: 1.45; }
+.cashier-kds-task .cashier-kds-escalation { padding: 7px 8px; border-left: 3px solid #bd7b2f; background: #fff8e9; color: #73531c; font-weight: 700; }
 .cashier-payment-block { display: grid; gap: 8px; padding: 10px; border: 1px solid #cdd3ca; border-radius: 6px; background: #fbfaf6; }
+.cashier-provider-query { display: grid; gap: 7px; padding: 10px; border: 1px solid #d9e7df; border-radius: 6px; background: #f4faf6; }
+.cashier-provider-query p { margin: 0; color: #486055; font-size: 13px; line-height: 1.55; }
 .cashier-payment-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .cashier-payment-heading > span { min-width: 0; display: grid; gap: 2px; }
 .cashier-payment-heading > span:last-child { justify-items: end; }

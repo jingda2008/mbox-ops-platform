@@ -1,5 +1,6 @@
 import { useCallback,useEffect,useState,type FormEvent } from 'react'
 import type { NormalizedApiClient,StaffAuthView } from '../normalized-api'
+import { MediaAssetPicker } from './MediaAssetPicker'
 import './activity-operations-panel.css'
 
 type CardStatus='draft'|'published'|'paused'|'retired'
@@ -96,7 +97,8 @@ export function HomeContentManagementPanel({api,auth}:{api:NormalizedApiClient;a
           <label>内容类型<select value={draft.type} onChange={event=>update('type',event.target.value as CardType)}><option value="article">品牌故事</option><option value="show">演出内容</option><option value="activity">活动内容</option><option value="benefit">会员内容</option><option value="presale">首页弹窗推广 / 预售内容</option><option value="return_offer">回访内容</option></select><small>发布“首页弹窗推广 / 预售内容”后，小程序首页会在会员邀请关闭后展示排序最靠前且仍在有效期内的一条；暂停即可立即撤下。</small></label>
           <label className="wide">标题<input required minLength={2} maxLength={120} value={draft.title} onChange={event=>update('title',event.target.value)} /></label>
           <label className="wide">摘要<textarea required rows={3} minLength={2} maxLength={400} value={draft.summary} onChange={event=>update('summary',event.target.value)} /></label>
-          <label className="wide">图片地址<input value={draft.imageUrl} onChange={event=>update('imageUrl',event.target.value)} placeholder="HTTPS图片地址或站内图片路径" /></label>
+          <label className="wide">图片地址<input value={draft.imageUrl} onChange={event=>update('imageUrl',event.target.value)} placeholder="上传后会自动填入站内地址；也可填写已核对的 HTTPS 地址" /></label>
+          <div className="wide"><MediaAssetPicker api={api} purpose="home_content" value={draft.imageUrl} onChange={(imageUrl)=>update('imageUrl',imageUrl)} label="上传首页图片" /></div>
         </fieldset>
         <fieldset><legend>操作与排期</legend>
           <label>操作文案<input required maxLength={20} value={draft.ctaLabel} onChange={event=>update('ctaLabel',event.target.value)} /></label>

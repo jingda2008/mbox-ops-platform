@@ -17,7 +17,7 @@ import {
   TableProperties,
   Users,
 } from 'lucide-react'
-import { StaffActionsApi, StaffActionsApiError, type StaffActionsApiPort } from './staff-actions-api'
+import { StaffActionsApi, StaffActionsApiError, type StaffActionsApiPort, type StaffReservationListOptions } from './staff-actions-api'
 import { AssistedOrderSheet } from './AssistedOrderSheet'
 import { ResponsibilityAssignmentPanel } from './ResponsibilityAssignmentPanel'
 import { TableObservationSheet } from './TableObservationSheet'
@@ -64,6 +64,9 @@ export function StaffActionsPanel({
   const [fulfillment, setFulfillment] = useState<StaffFulfillmentData | null>(null)
   const [reservations, setReservations] = useState<StaffReservation[] | null>(null)
   const [reservationMessage, setReservationMessage] = useState<string | null>(null)
+  const [reservationRange, setReservationRange] = useState<'current' | 'carryover' | 'history'>('current')
+  const [reservationHistoryFrom, setReservationHistoryFrom] = useState('')
+  const [reservationHistoryTo, setReservationHistoryTo] = useState('')
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
   const [notice, setNotice] = useState<StaffActionNotice>(null)
   const [selectedTableId, setSelectedTableId] = useState<string | null>(null)
@@ -137,8 +140,14 @@ export function StaffActionsPanel({
     reservationRequestRef.current?.abort()
     const controller = new AbortController()
     reservationRequestRef.current = controller
+    const query = reservationListQuery(reservationRange, reservationHistoryFrom, reservationHistoryTo)
+    if (query === null) {
+      setReservations([])
+      setReservationMessage('请选择历史查询的起止日期')
+      return
+    }
     try {
-      setReservations(await api.loadReservations(controller.signal))
+      setReservations(await api.loadReservations(query, controller.signal))
       setReservationMessage(null)
     } catch (error) {
       if (error instanceof StaffActionsApiError && error.code === 'ABORTED') return
@@ -154,7 +163,7 @@ export function StaffActionsPanel({
       setReservations([])
       setReservationMessage('预约信息暂时无法读取，请刷新重试')
     }
-  }, [api, onLoginRequired])
+  }, [api, onLoginRequired, reservationHistoryFrom, reservationHistoryTo, reservationRange])
 
   useEffect(() => {
     void load()
@@ -644,6 +653,12 @@ export function StaffActionsPanel({
           message={reservationMessage}
           pendingAction={pendingAction}
           canManage={permissions.includes('reservation.manage')}
+          range={reservationRange}
+          historyFrom={reservationHistoryFrom}
+          historyTo={reservationHistoryTo}
+          onRangeChange={setReservationRange}
+          onHistoryFromChange={setReservationHistoryFrom}
+          onHistoryToChange={setReservationHistoryTo}
           onAction={(reservation, action) => void actOnReservation(reservation, action)}
           onRefresh={() => void loadReservations()}
         />
@@ -692,11 +707,20 @@ export function StaffActionsPanel({
   )
 }
 
-function ReservationList({ reservations, message, pendingAction, canManage, onAction, onRefresh }: {
+function ReservationList({
+  reservations, message, pendingAction, canManage, range, historyFrom, historyTo,
+  onRangeChange, onHistoryFromChange, onHistoryToChange, onAction, onRefresh,
+}: {
   reservations: StaffReservation[] | null
   message: string | null
   pendingAction: string | null
   canManage: boolean
+  range: 'current' | 'carryover' | 'history'
+  historyFrom: string
+  historyTo: string
+  onRangeChange(value: 'current' | 'carryover' | 'history'): void
+  onHistoryFromChange(value: string): void
+  onHistoryToChange(value: string): void
   onAction(reservation: StaffReservation, action: 'confirm' | 'arrive' | 'complete'): void
   onRefresh(): void
 }) {
@@ -708,9 +732,19 @@ function ReservationList({ reservations, message, pendingAction, canManage, onAc
     .sort((left, right) => Date.parse(left.arrivalAt) - Date.parse(right.arrivalAt))
   return <section className="staff-reservations" aria-label="预约工作台">
     <header>
-      <div><CalendarDays size={20} /><span><strong>预约与到店</strong><small>待确认预约和当日到店安排</small></span></div>
+      <div><CalendarDays size={20} /><span><strong>预约与到店</strong><small>{range === 'carryover' ? '跨日仍未闭环的预约' : range === 'history' ? '按原日期查询历史预约' : '待确认预约和当日到店安排'}</small></span></div>
       <button type="button" onClick={onRefresh}><RefreshCw size={17} /> 刷新</button>
     </header>
+    <div className="staff-reservation-ranges" aria-label="预约范围">
+      <button type="button" className={range === 'current' ? 'is-active' : ''} aria-pressed={range === 'current'} onClick={() => onRangeChange('current')}>当前营业日</button>
+      <button type="button" className={range === 'carryover' ? 'is-active' : ''} aria-pressed={range === 'carryover'} onClick={() => onRangeChange('carryover')}>跨日未闭环</button>
+      <button type="button" className={range === 'history' ? 'is-active' : ''} aria-pressed={range === 'history'} onClick={() => onRangeChange('history')}>历史查询</button>
+    </div>
+    {range === 'history' && <div className="staff-reservation-history-range">
+      <label>开始日期<input type="date" value={historyFrom} onChange={(event) => onHistoryFromChange(event.target.value)} /></label>
+      <label>结束日期<input type="date" min={historyFrom || undefined} value={historyTo} onChange={(event) => onHistoryToChange(event.target.value)} /></label>
+      <button type="button" disabled={historyFrom === '' || historyTo === ''} onClick={onRefresh}>查询</button>
+    </div>}
     {message !== null && <p className="staff-reservation-message">{message}</p>}
     {active.length === 0 ? <p className="staff-reservation-empty">当前没有待处理预约</p> : active.map((reservation) => {
       const pending = pendingAction?.startsWith(`reservation:${reservation.id}:`) === true
@@ -748,6 +782,23 @@ function ReservationList({ reservations, message, pendingAction, canManage, onAc
       </article>
     })}
   </section>
+}
+
+function reservationListQuery(
+  range: 'current' | 'carryover' | 'history',
+  from: string,
+  to: string,
+): StaffReservationListOptions | null {
+  if (range === 'current') return { range }
+  if (range === 'carryover') return { range }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || to < from) return null
+  const end = new Date(`${to}T00:00:00.000+08:00`)
+  end.setUTCDate(end.getUTCDate() + 1)
+  return {
+    range,
+    from: new Date(`${from}T00:00:00.000+08:00`).toISOString(),
+    to: end.toISOString(),
+  }
 }
 
 function formatReservationTime(value: string): string {

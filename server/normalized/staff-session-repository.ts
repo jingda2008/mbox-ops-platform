@@ -15,6 +15,8 @@ export interface DailyStoreCredential {
   credentialHash: string
   validFrom: string
   validUntil: string
+  configuredByEmployeeId: string
+  reusableAcrossBusinessDates: boolean
 }
 
 export interface DeviceAccessLease {
@@ -50,6 +52,8 @@ interface CredentialRow extends Record<string, unknown> {
   credential_hash: string
   valid_from: string
   valid_until: string
+  configured_by_employee_id: string
+  reusable_across_business_dates: boolean
 }
 
 interface LeaseRow extends Record<string, unknown> {
@@ -98,6 +102,12 @@ export function hashDeviceKey(deviceKey: string) {
 export class StaffSessionRepository {
   constructor(private readonly transaction: ScopedTransaction) {}
 
+  async lockDailyCredentialScope(): Promise<void> {
+    await this.transaction.query(`
+      SELECT pg_advisory_xact_lock(hashtextextended($1 || ':' || $2 || ':daily-store-credential', 0))
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId])
+  }
+
   async findEmployeeByCode(employeeCode: string): Promise<StaffAuthenticationRecord | null> {
     const result = await this.transaction.query<EmployeeAuthRow>(`
       SELECT id, employee_code, display_name, pin_hash, status
@@ -139,7 +149,8 @@ export class StaffSessionRepository {
       UPDATE mbox.store_daily_credentials
       SET revoked_at = $4::timestamptz
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
-        AND business_date = $3::date AND revoked_at IS NULL
+        AND (business_date = $3::date OR reusable_across_business_dates = true)
+        AND revoked_at IS NULL
       RETURNING id
     `, [
       this.transaction.scope.tenantId,
@@ -160,9 +171,10 @@ export class StaffSessionRepository {
     const result = await this.transaction.query<CredentialRow>(`
       INSERT INTO mbox.store_daily_credentials (
         tenant_id, store_id, business_date, credential_hash,
-        valid_from, valid_until, configured_by_employee_id
-      ) VALUES ($1::uuid, $2::uuid, $3::date, $4, $5::timestamptz, $6::timestamptz, $7::uuid)
-      RETURNING id, business_date::text, credential_hash, valid_from::text, valid_until::text
+        valid_from, valid_until, configured_by_employee_id, reusable_across_business_dates
+      ) VALUES ($1::uuid, $2::uuid, $3::date, $4, $5::timestamptz, $6::timestamptz, $7::uuid, false)
+      RETURNING id, business_date::text, credential_hash, valid_from::text, valid_until::text,
+        configured_by_employee_id, reusable_across_business_dates
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -179,7 +191,8 @@ export class StaffSessionRepository {
 
   async findActiveDailyCredential(businessDate: string, now: string) {
     const result = await this.transaction.query<CredentialRow>(`
-      SELECT id, business_date::text, credential_hash, valid_from::text, valid_until::text
+      SELECT id, business_date::text, credential_hash, valid_from::text, valid_until::text,
+        configured_by_employee_id, reusable_across_business_dates
       FROM mbox.store_daily_credentials
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND business_date = $3::date AND revoked_at IS NULL
@@ -187,6 +200,67 @@ export class StaffSessionRepository {
       FOR UPDATE
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, businessDate, now])
     return result.rows[0] ? mapCredential(result.rows[0]) : null
+  }
+
+  async findReusableDailyCredential(): Promise<DailyStoreCredential | null> {
+    const result = await this.transaction.query<CredentialRow>(`
+      SELECT id, business_date::text, credential_hash, valid_from::text, valid_until::text,
+        configured_by_employee_id, reusable_across_business_dates
+      FROM mbox.store_daily_credentials
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+        AND revoked_at IS NULL AND reusable_across_business_dates = true
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1
+      FOR UPDATE
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId])
+    return result.rows[0] ? mapCredential(result.rows[0]) : null
+  }
+
+  async renewReusableDailyCredential(input: {
+    source: DailyStoreCredential
+    businessDate: string
+    now: string
+    validUntil: string
+  }): Promise<DailyStoreCredential> {
+    if (!input.source.reusableAcrossBusinessDates) throw new DeviceAccessDeniedError()
+    if (input.source.businessDate === input.businessDate) {
+      const refreshed = await this.transaction.query<CredentialRow>(`
+        UPDATE mbox.store_daily_credentials
+        SET valid_until = $4::timestamptz
+        WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
+          AND revoked_at IS NULL AND reusable_across_business_dates = true
+        RETURNING id, business_date::text, credential_hash, valid_from::text, valid_until::text,
+          configured_by_employee_id, reusable_across_business_dates
+      `, [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        input.source.id,
+        input.validUntil,
+      ])
+      const row = refreshed.rows[0]
+      if (refreshed.rowCount !== 1 || !row) throw new DeviceAccessDeniedError()
+      return mapCredential(row)
+    }
+
+    const created = await this.transaction.query<CredentialRow>(`
+      INSERT INTO mbox.store_daily_credentials (
+        tenant_id, store_id, business_date, credential_hash,
+        valid_from, valid_until, configured_by_employee_id, reusable_across_business_dates
+      ) VALUES ($1::uuid, $2::uuid, $3::date, $4, $5::timestamptz, $6::timestamptz, $7::uuid, true)
+      RETURNING id, business_date::text, credential_hash, valid_from::text, valid_until::text,
+        configured_by_employee_id, reusable_across_business_dates
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      input.businessDate,
+      input.source.credentialHash,
+      input.now,
+      input.validUntil,
+      input.source.configuredByEmployeeId,
+    ])
+    const row = created.rows[0]
+    if (created.rowCount !== 1 || !row) throw new DeviceAccessDeniedError()
+    return mapCredential(row)
   }
 
   async createDeviceAccessLease(input: {
@@ -370,6 +444,8 @@ function mapCredential(row: CredentialRow): DailyStoreCredential {
     credentialHash: row.credential_hash,
     validFrom: row.valid_from,
     validUntil: row.valid_until,
+    configuredByEmployeeId: row.configured_by_employee_id,
+    reusableAcrossBusinessDates: row.reusable_across_business_dates,
   }
 }
 

@@ -53,3 +53,10 @@ test('rejects conflicting, malformed or unknown scene values instead of choosing
   assert.throws(() => session.applyLaunchSession({ query: { scene: 'redirect=https%3A%2F%2Fevil.invalid' } }, production), /scene无效/)
   assert.throws(() => session.applyLaunchSession({ query: { scene: '%E0%A4%A' } }, production), /scene无效/)
 })
+
+test('the in-mini-program scanner accepts official mini-program codes without allowing album replay', async () => {
+  const source = await readFile(new URL('../miniprogram/pages/order/index.js', import.meta.url), 'utf8')
+  assert.match(source, /onlyFromCamera:\s*true/)
+  assert.match(source, /scanType:\s*\[\s*['"]qrCode['"]\s*,\s*['"]wxCode['"]\s*\]/)
+  assert.match(source, /parseScanValue\(result\.path \|\| result\.result\)/)
+})

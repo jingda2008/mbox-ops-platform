@@ -282,7 +282,7 @@ Page({
   scanTable() {
     wx.scanCode({
       onlyFromCamera: true,
-      scanType: ['qrCode'],
+      scanType: ['qrCode', 'wxCode'],
       success: (result) => {
         const query = parseScanValue(result.path || result.result)
         getApp().refreshRuntime({ query })

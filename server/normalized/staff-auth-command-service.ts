@@ -27,6 +27,7 @@ import {
 
 const SESSION_DURATION_MS = 6 * 60 * 60 * 1_000
 const ONLINE_LEASE_MS = 90 * 1_000
+const DEVICE_CREDENTIAL_WINDOW_MS = 30 * 60 * 60 * 1_000
 
 export interface StaffLoginRateLimitAttempt {
   scope: Readonly<StoreScope>
@@ -293,14 +294,38 @@ export class StaffAuthCommandService {
     try {
       const result = await this.transactions.run(input.scope, async (transaction) => {
         const repository = new StaffSessionRepository(transaction)
-        const credential = await repository.findActiveDailyCredential(input.businessDate, now)
-        if (!credential || !await this.hasher.verify(input.credential, credential.credentialHash)) {
+        await repository.lockDailyCredentialScope()
+        let credential = await repository.findActiveDailyCredential(input.businessDate, now)
+        const sourceCredential = credential ?? await repository.findReusableDailyCredential()
+        if (!sourceCredential || !await this.hasher.verify(input.credential, sourceCredential.credentialHash)) {
           throw new StoreCredentialVerificationError()
+        }
+        if (!credential) {
+          credential = await repository.renewReusableDailyCredential({
+            source: sourceCredential,
+            businessDate: input.businessDate,
+            now,
+            validUntil: new Date(this.clock.now().getTime() + DEVICE_CREDENTIAL_WINDOW_MS).toISOString(),
+          })
+          await appendSecurityEvidence(transaction, {
+            actor: { type: 'system', ref: 'store-access-gate' },
+            action: 'staff.daily-credential.renewed',
+            objectType: 'store_daily_credential',
+            objectId: credential.id,
+            businessDate: input.businessDate,
+            eventType: 'staff.daily-credential.renewed.v1',
+            payload: {
+              sourceCredentialId: sourceCredential.id,
+              credentialId: credential.id,
+              businessDate: input.businessDate,
+              validUntil: credential.validUntil,
+            },
+          })
         }
         const leaseToken = this.tokenSource.create()
         const lease = await repository.createDeviceAccessLease({
           dailyCredentialId: credential.id,
-          businessDate: credential.businessDate,
+          businessDate: input.businessDate,
           deviceKeyHash,
           leaseTokenHash: hashOpaqueToken(leaseToken),
           now,
@@ -311,7 +336,7 @@ export class StaffAuthCommandService {
           action: 'staff.device-access.granted',
           objectType: 'store_device_access_lease',
           objectId: lease.id,
-          businessDate: credential.businessDate,
+          businessDate: input.businessDate,
           eventType: 'staff.device-access.granted.v1',
           payload: { leaseId: lease.id, businessDate: lease.businessDate, expiresAt: lease.expiresAt },
         })

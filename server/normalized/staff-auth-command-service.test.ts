@@ -6,6 +6,7 @@ import {
   InvalidStaffCredentialsError,
   ScryptCredentialHasher,
   StaffAuthCommandService,
+  StoreCredentialVerificationError,
   type AuthClock,
   type StaffLoginRateLimitAttempt,
   type StaffLoginRateLimiter,
@@ -532,6 +533,51 @@ integration('normalized staff authentication PostgreSQL integration', () => {
       .rejects.toBeInstanceOf(StaffSessionNotFoundError)
   })
 
+  it('renews the fixed store credential for a later business date without making a bad guess valid', async () => {
+    clock.set('2026-08-13T10:00:00.000Z')
+    await expect(service.verifyDailyStoreCredential({
+      scope: { tenantId, storeId },
+      businessDate: '2026-08-13',
+      credential: 'MBOX_WRONG_2026',
+      deviceKey: 'later-day-wrong-device',
+    })).rejects.toBeInstanceOf(StoreCredentialVerificationError)
+
+    const before = await pool.query<{ count: string }>(`
+      SELECT count(*)::text AS count
+      FROM mbox.store_daily_credentials
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND business_date='2026-08-13'::date
+    `, [tenantId, storeId])
+    expect(before.rows[0]?.count).toBe('0')
+
+    const grant = await service.verifyDailyStoreCredential({
+      scope: { tenantId, storeId },
+      businessDate: '2026-08-13',
+      credential: storeCredential,
+      deviceKey: 'later-day-valid-device',
+    })
+    expect(grant.businessDate).toBe('2026-08-13')
+    expect(new Date(grant.expiresAt).getTime()).toBe(new Date('2026-08-14T16:00:00.000Z').getTime())
+
+    const renewed = await pool.query<{
+      reusable_across_business_dates: boolean
+      configured_by_employee_id: string
+      evidence_count: string
+    }>(`
+      SELECT credential.reusable_across_business_dates, credential.configured_by_employee_id,
+        (SELECT count(*)::text FROM mbox.audit_events event
+         WHERE event.tenant_id=credential.tenant_id AND event.store_id=credential.store_id
+           AND event.action='staff.daily-credential.renewed') AS evidence_count
+      FROM mbox.store_daily_credentials credential
+      WHERE credential.tenant_id=$1::uuid AND credential.store_id=$2::uuid
+        AND credential.business_date='2026-08-13'::date AND credential.revoked_at IS NULL
+    `, [tenantId, storeId])
+    expect(renewed.rows[0]).toEqual({
+      reusable_across_business_dates: true,
+      configured_by_employee_id: adminId,
+      evidence_count: '1',
+    })
+  })
+
   it('keeps an issued six-hour session independent when the daily store credential rotates', async () => {
     const device = await grantDevice(service, 'credential-rotation-device')
     const loggedIn = await service.login({
@@ -694,12 +740,12 @@ async function resetAuthenticationState(pool: Pool, hasher: ScryptCredentialHash
   await pool.query(`
     INSERT INTO mbox.store_daily_credentials (
       tenant_id, store_id, business_date, credential_hash,
-      valid_from, valid_until, configured_by_employee_id
+      valid_from, valid_until, configured_by_employee_id, reusable_across_business_dates
     ) VALUES (
       $1::uuid, $2::uuid, $3::date, $4,
       '2026-08-11T00:00:00.000Z'::timestamptz,
       '2026-08-12T06:00:00.000Z'::timestamptz,
-      $5::uuid
+      $5::uuid, true
     )
   `, [tenantId, storeId, businessDate, credentialHash, adminId])
 }

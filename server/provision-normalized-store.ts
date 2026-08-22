@@ -432,10 +432,12 @@ export async function provisionNormalizedStore(input: {
       const validFrom = new Date(now.getTime() - 60_000)
       const validUntil = new Date(now.getTime() + 30 * 60 * 60 * 1_000)
       await client.query(`UPDATE mbox.store_daily_credentials SET revoked_at=clock_timestamp()
-        WHERE tenant_id=$1 AND store_id=$2 AND business_date=$3 AND revoked_at IS NULL`, [tenant.id, store.id, businessDate])
+        WHERE tenant_id=$1 AND store_id=$2 AND revoked_at IS NULL
+          AND (business_date=$3 OR reusable_across_business_dates=true)`, [tenant.id, store.id, businessDate])
       await client.query(`INSERT INTO mbox.store_daily_credentials(
-          tenant_id, store_id, business_date, credential_hash, valid_from, valid_until, configured_by_employee_id)
-        VALUES ($1,$2,$3,$4,$5,$6,$7)`, [tenant.id, store.id, businessDate, dailyCredentialHash,
+          tenant_id, store_id, business_date, credential_hash, valid_from, valid_until,
+          configured_by_employee_id, reusable_across_business_dates)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,true)`, [tenant.id, store.id, businessDate, dailyCredentialHash,
         validFrom.toISOString(), validUntil.toISOString(), employeeIds[input.config.bootstrapAdminEmployeeCode ?? '']])
     }
     await client.query(`INSERT INTO mbox.audit_events(

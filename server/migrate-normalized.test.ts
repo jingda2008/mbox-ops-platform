@@ -37,7 +37,7 @@ describe('normalized migration baseline', () => {
       '037', '038', '039', '040', '041', '042', '043', '044', '045', '046', '047', '048',
       '049', '050', '051', '052', '053', '054', '055', '056', '057', '058', '059', '060',
       '061', '062', '063', '064', '065', '066', '067', '068', '069', '070', '071', '072',
-      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098',
+      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099',
     ])
     for (const migration of migrations) {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
@@ -134,6 +134,13 @@ describe('normalized migration baseline', () => {
     expect(migration?.sql).toMatch(/status NOT IN \('delivered','cancelled'\)/)
     expect(migration?.sql).toMatch(/order_cancellation_events_append_only/)
     expect(migration?.sql).toMatch(/REVOKE INSERT,UPDATE,DELETE ON TABLE mbox\.order_cancellation_events/)
+  })
+
+  it('keeps a fixed store login credential reusable without making device or employee sessions permanent', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '099')
+    expect(migration?.sql).toMatch(/reusable_across_business_dates boolean NOT NULL DEFAULT false/)
+    expect(migration?.sql).toMatch(/Device leases and employee sessions retain their own expiry/)
+    expect(migration?.sql).toMatch(/schema_version='099'/)
   })
 
   it('keeps refund roles and amount limits configurable while requiring two employees', async () => {

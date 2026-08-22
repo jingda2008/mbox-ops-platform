@@ -220,9 +220,20 @@ test('every packaged mini-program image stays within the 200KB asset budget', as
   }
 })
 
+test('every public menu image available to the mini-program stays within the 200KB budget', async () => {
+  const paths = await imagePaths(new URL('../public/menu/', import.meta.url))
+  assert.ok(paths.length >= 135)
+  for (const path of paths) {
+    const image = await readFile(path)
+    assert.ok(image.length <= 200 * 1024, `${path.pathname} exceeds the 200KB image budget`)
+  }
+})
+
 test('customers can browse a read-only menu before scanning, but the browse view cannot add products', async () => {
-  const [orderView, apiSource] = await Promise.all([
+  const [orderView, orderLogic, mediaSource, apiSource] = await Promise.all([
     read('miniprogram/pages/order/index.wxml'),
+    read('miniprogram/pages/order/index.js'),
+    read('miniprogram/utils/media.js'),
     read('miniprogram/utils/api.js'),
   ])
   const browseStart = orderView.indexOf("connectionState === 'needs_scan'")
@@ -237,6 +248,9 @@ test('customers can browse a read-only menu before scanning, but the browse view
   assert.equal((browseView.match(/bindtap="scanTable"/g) || []).length, 1)
   assert.doesNotMatch(browseView, /已到店，扫描桌码开始点单/)
   assert.doesNotMatch(browseView, /bindtap="addProduct"/)
+  assert.match(orderLogic, /const \{ publicImageUrl \} = require\('\.\.\/\.\.\/utils\/media'\)/)
+  assert.match(orderLogic, /imageUrl: publicImageUrl\(item\.imageUrl\)/)
+  assert.match(mediaSource, /trimmed\.startsWith\('\/menu\/'\)/)
   assert.match(apiSource, /publicRequest\(`\/api\/public\/mini\/menu\/products/)
 })
 

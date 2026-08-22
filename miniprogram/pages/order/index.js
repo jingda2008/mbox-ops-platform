@@ -20,6 +20,7 @@ const { getTableSession } = require('../../utils/session')
 const { randomId } = require('../../utils/id')
 const { money, dateTime } = require('../../utils/format')
 const { checkoutRecommendationAttribution } = require('../../utils/recommendation-attribution')
+const { publicImageUrl } = require('../../utils/media')
 
 const PENDING_PAYMENT_KEY = 'mbox.pending.guest.payment.v1'
 const CHECKOUT_ATTEMPT_KEY = 'mbox.pending.guest.checkout.v1'
@@ -70,7 +71,7 @@ function menuProducts(items, includeUnavailable) {
   }).map((item) => Object.assign({}, item, {
     priceText: money(item.amountMinor),
     includedText: (item.bundleComponents || []).map((line) => `${line.name || '组合内容'}×${line.quantity || 1}`).join(' · '),
-    imageUrl: item.imageUrl || '',
+    imageUrl: publicImageUrl(item.imageUrl),
     availabilityText: item.available ? '到店可点' : '暂不可点',
   }))
 }

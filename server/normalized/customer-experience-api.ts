@@ -887,44 +887,6 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
     }))
   }
 
-  app.post('/staff/community-activities', async (request, reply) => handle(reply, async () => {
-    const context = await staffContextWithPermission(options, request, 'community.activity.manage')
-    const body = objectBody(request.body)
-    const result = await options.service.createActivity(context, {
-      kind: enumValue(body.kind, '活动类型', ['member_night', 'hike', 'camping', 'city_walk', 'music_picnic', 'proposal', 'other'] as const),
-      title: text(body.title, '活动名称', 2, 120),
-      summary: text(body.summary, '活动说明', 2, 600),
-      coverUrl: optionalText(body.coverUrl, '封面地址', 1000),
-      startsAt: timestamp(body.startsAt, '开始时间'),
-      endsAt: timestamp(body.endsAt, '结束时间'),
-      assemblyLocation: text(body.assemblyLocation, '集合地点', 2, 240),
-      capacity: integer(body.capacity, '人数上限', 1, 1000),
-      feeAmountMinor: integer(body.feeAmountMinor, '活动费用', 0, 100_000_000),
-      depositAmountMinor: integer(body.depositAmountMinor, '活动订金', 0, 100_000_000),
-      feeBasis: enumValue(body.feeBasis, '计价方式', ['per_person', 'per_registration'] as const),
-      paymentMode: enumValue(body.paymentMode, '预付方式', ['none', 'deposit_optional', 'deposit_required', 'full_required'] as const),
-      paymentDeadlineMinutes: integer(body.paymentDeadlineMinutes, '付款时限', 5, 1440),
-      paymentRuleText: text(body.paymentRuleText, '付款规则说明', 2, 240),
-      refundPolicySnapshot: object(body.refundPolicySnapshot, '退款规则'),
-      pointsReward: integer(body.pointsReward, '积分奖励（当前停用）', 0, 0),
-      visibility: enumValue(body.visibility, '可见范围', ['public', 'member', 'segment'] as const),
-      audienceRule: object(body.audienceRule, '客群规则'),
-      safetySnapshot: object(body.safetySnapshot, '安全规则'),
-      salesCopy: object(body.salesCopy, '销售文案'),
-      idempotencyKey: idempotencyKey(request),
-    })
-    return reply.code(result.replayed ? 200 : 201).send({ data: result.value, meta: { replayed: result.replayed } })
-  }))
-
-  app.post<{ Params: { publicId: string } }>('/staff/community-activities/:publicId/publish', async (request, reply) => handle(reply, async () => {
-    const context = await staffContextWithPermission(options, request, 'community.activity.publish')
-    const result = await options.service.publishActivity(context, {
-      publicId: publicId(request.params.publicId),
-      idempotencyKey: idempotencyKey(request),
-    })
-    return reply.send({ data: result.value, meta: { replayed: result.replayed } })
-  }))
-
   app.post<{ Params: { registrationPublicId: string } }>(
     '/staff/community-activity-registrations/:registrationPublicId/refunds',
     async (request, reply) => handle(reply, async () => {

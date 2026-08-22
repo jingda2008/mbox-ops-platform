@@ -311,7 +311,7 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
             <label>结束时间<input type="datetime-local" required value={draft.endsAt} onChange={(event) => updateDraft('endsAt', event.target.value)} /></label>
             <label>集合地点<input value={draft.assemblyLocation} onChange={(event) => updateDraft('assemblyLocation', event.target.value)} /></label>
             <label>人数上限<input type="number" min={1} max={1000} value={draft.capacity} onChange={(event) => updateDraft('capacity', event.target.value)} /></label>
-            <label className="wide">封面图片地址（可选）<input type="url" value={draft.coverUrl} onChange={(event) => updateDraft('coverUrl', event.target.value)} placeholder="上传后会自动填入站内地址；也可填写已核对的 HTTPS 地址" /></label>
+            <label className="wide">封面图片（可选）<input readOnly value={draft.coverUrl} placeholder="请通过下方图片库上传或选择（单张不超过 200KB）" /></label>
             <div className="wide"><MediaAssetPicker api={api} purpose="community_activity" value={draft.coverUrl} onChange={(coverUrl)=>updateDraft('coverUrl',coverUrl)} label="上传活动封面" /></div>
           </fieldset>
           <fieldset><legend>费用、权益和客群</legend>

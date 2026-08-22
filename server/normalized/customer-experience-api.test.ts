@@ -16,6 +16,15 @@ afterEach(async () => {
 })
 
 describe('customer experience activity contact API', () => {
+  it('retires the legacy activity writer so the operations workbench is the only activity entry', async () => {
+    const app = recoveryFixture({ start: vi.fn(), verify: vi.fn() })
+    const response = await app.inject({
+      method: 'POST', url: '/staff/community-activities',
+      headers: { 'idempotency-key': 'legacy-activity-entry-0001' }, payload: {},
+    })
+    expect(response.statusCode).toBe(404)
+  })
+
   it('keeps redemption creation bound to both named sessions when table authority is present', async () => {
     const createRedemption = vi.fn(async (_context, input) => ({
       replayed: false, value: { publicId: 'redemption-dual-session', tableAuthority: input.tableAuthority },

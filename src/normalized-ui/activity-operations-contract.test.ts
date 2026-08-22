@@ -71,7 +71,7 @@ describe('activity operations staff and customer contract', () => {
     expect(detail).not.toContain('activity.pointsReward')
     expect(staff).toContain('旧字段没有规则版本、预算和发放状态机')
     expect(staff).toContain('pointsReward: 0')
-    expect(api).toContain("'积分奖励（当前停用）', 0, 0")
+    expect(api).not.toContain("app.post('/staff/community-activities'")
   })
 
   it('retires the duplicate activity editor and excludes unapproved black-tier targeting', () => {
@@ -81,6 +81,7 @@ describe('activity operations staff and customer contract', () => {
     expect(management).toContain('const legacyActivityEditorEnabled = false')
     expect(management).toContain('legacyActivityEditorEnabled && canCreate')
     expect(management).toContain('legacyActivityEditorEnabled && <section className="activity-admin-list"')
+    expect(management).not.toContain("'/api/staff/activity-operations'")
     expect(panel).not.toContain("['black'")
     expect(panel).not.toContain('value="black"')
     expect(management).not.toContain('value="black"')

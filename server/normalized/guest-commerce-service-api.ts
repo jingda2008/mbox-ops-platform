@@ -62,6 +62,7 @@ import {
   requireGuestSessionIdFromActorRef,
 } from './guest-table-authority.js'
 import { ReservationGuestSessionInvalidError } from './reservation-guest-session.js'
+import { publicMiniProgramImageUrl } from './media-asset-url.js'
 import type {
   ScopedPostgresTransactionRunner,
   ScopedTransaction,
@@ -768,7 +769,8 @@ function publicCatalogProduct(row: CatalogMenuRow) {
       ?? publicString(source.specification),
     aliases: publicStringArray(row.product_snapshot.aliases ?? source.aliases),
     tags: publicStringArray(row.product_snapshot.tags ?? source.tags),
-    imageUrl: publicString(row.product_snapshot.imageUrl) ?? publicString(source.imageUrl),
+    imageUrl: publicMiniProgramImageUrl(publicString(row.product_snapshot.imageUrl))
+      ?? publicMiniProgramImageUrl(publicString(source.imageUrl)),
     description: publicString(row.product_snapshot.description) ?? publicString(source.description),
     sortOrder: row.menu_sort_order,
     availableFrom: row.available_from,

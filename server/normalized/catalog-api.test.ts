@@ -188,6 +188,41 @@ integration("normalized catalog PostgreSQL integration", () => {
     expect(conflictingReplay.json().error.code).toBe("IDEMPOTENCY_CONFLICT");
   });
 
+  it("accepts only a controlled menu image or a bounded image-library asset", async () => {
+    await setPermission(pool, CATALOG_PRODUCT_MANAGE_PERMISSION, true);
+    const invalid = await app.inject({
+      method: "POST",
+      url: "/api/catalog/products",
+      headers: { "idempotency-key": integrationKey("external-image") },
+      payload: {
+        code: `CATALOG-IMAGE-INVALID-${integrationRunToken}`,
+        name: "图片地址校验商品",
+        categoryCode: "cocktail",
+        fulfillmentStation: "bar",
+        costAmountMinor: 3200,
+        productSnapshot: { imageUrl: "https://example.com/unbounded-menu.jpg" },
+      },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json().error.message).toContain("商品图片必须从受控菜单素材或站内图片库选择");
+
+    const accepted = await app.inject({
+      method: "POST",
+      url: "/api/catalog/products",
+      headers: { "idempotency-key": integrationKey("controlled-image") },
+      payload: {
+        code: `CATALOG-IMAGE-VALID-${randomUUID().slice(0, 8)}`,
+        name: "受控菜单图片商品",
+        categoryCode: "cocktail",
+        fulfillmentStation: "bar",
+        costAmountMinor: 3200,
+        productSnapshot: { imageUrl: "/menu/2026-08/items/classic-01.jpg" },
+      },
+    });
+    expect(accepted.statusCode).toBe(201);
+    expect(accepted.json().data.productSnapshot.imageUrl).toBe("/menu/2026-08/items/classic-01.jpg");
+  });
+
   it("supports guest alias, specification and pinyin search without an employee identity", async () => {
     const response = await app.inject({
       method: "GET",

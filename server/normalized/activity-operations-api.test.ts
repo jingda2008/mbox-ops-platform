@@ -64,17 +64,32 @@ describe('activity operations API', () => {
     await app.close()
   })
 
-  it('accepts only reviewed same-site or HTTPS activity cover addresses', async () => {
+  it('accepts only a bounded image-library cover address', async () => {
     const service = serviceMock()
     const app = await application(service)
     const response = await app.inject({
       method: 'POST', url: '/staff/activity-operations',
       headers: { 'idempotency-key': 'activity-draft-cover-invalid-001' },
-      payload: { ...validDraft(), coverUrl: 'javascript:alert(1)' },
+      payload: { ...validDraft(), coverUrl: 'https://example.com/unbounded-cover.png' },
     })
     expect(response.statusCode).toBe(400)
-    expect(response.json().error.message).toContain('封面地址必须是站内路径或HTTPS地址')
+    expect(response.json().error.message).toContain('封面必须从站内图片库选择')
     expect(service.createDraft).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it('accepts an immutable public media asset as the activity cover', async () => {
+    const service = serviceMock()
+    const app = await application(service)
+    const response = await app.inject({
+      method: 'POST', url: '/staff/activity-operations',
+      headers: { 'idempotency-key': 'activity-draft-cover-media-001' },
+      payload: { ...validDraft(), coverUrl: '/api/public/media-assets/MA00000000000000000000000000000001' },
+    })
+    expect(response.statusCode).toBe(201)
+    expect(service.createDraft).toHaveBeenCalledWith(context, expect.objectContaining({
+      draft: expect.objectContaining({ coverUrl: '/api/public/media-assets/MA00000000000000000000000000000001' }),
+    }))
     await app.close()
   })
 

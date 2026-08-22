@@ -48,6 +48,7 @@ import {
 } from './loyalty-redemption-repository.js'
 import { CheckoutUpgradeManagementRepository } from './checkout-upgrade-management-repository.js'
 import { lockBoundGuestTablePosition } from './guest-table-authority.js'
+import { isPublicMediaAssetUrl } from './media-asset-url.js'
 
 type TransactionRunner = Pick<ScopedPostgresTransactionRunner, 'run'>
 
@@ -3364,8 +3365,8 @@ function supportContactConfiguration(value: JsonObject): JsonObject {
   const wecomName = supportText(value.wecomName, '企业微信名称', 2, 40)
   const qr = value.wecomQrImageUrl === null || value.wecomQrImageUrl === undefined || value.wecomQrImageUrl === ''
     ? null : supportText(value.wecomQrImageUrl, '企业微信二维码地址', 1, 1000)
-  if (qr !== null && !((qr.startsWith('/') && !qr.startsWith('//')) || /^https:\/\//i.test(qr))) {
-    throw new CustomerExperienceRequestError('企业微信二维码必须是站内图片路径或HTTPS地址', 'SUPPORT_CONTACT_CONFIGURATION_INVALID')
+  if (qr !== null && !isPublicMediaAssetUrl(qr)) {
+    throw new CustomerExperienceRequestError('企业微信二维码必须从站内图片库选择，单张不超过200KB', 'SUPPORT_CONTACT_CONFIGURATION_INVALID')
   }
   return { phone, phoneLabel, wecomName, wecomQrImageUrl: qr }
 }

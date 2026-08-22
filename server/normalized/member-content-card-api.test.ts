@@ -21,12 +21,14 @@ describe('member home content management API',()=>{
     await app.close()
   })
 
-  it('rejects external links and invalid display windows before writing',async()=>{
+  it('rejects external links, external images, and invalid display windows before writing',async()=>{
     const service=fakeService();const app=await build(service,async()=>{})
     const external=await app.inject({method:'POST',url:'/staff/home-content-cards',headers:{'idempotency-key':'home-content-invalid-001'},payload:{...draft(),targetPath:'https://example.com'}})
-    const window=await app.inject({method:'POST',url:'/staff/home-content-cards',headers:{'idempotency-key':'home-content-invalid-002'},payload:{...draft(),validUntil:'2026-08-19T20:00:00+08:00'}})
-    const mode=await app.inject({method:'POST',url:'/staff/home-content-cards',headers:{'idempotency-key':'home-content-invalid-003'},payload:{...draft(),displayMode:'popup'}})
-    expect(external.statusCode).toBe(400);expect(window.statusCode).toBe(400);expect(mode.statusCode).toBe(400)
+    const image=await app.inject({method:'POST',url:'/staff/home-content-cards',headers:{'idempotency-key':'home-content-invalid-002'},payload:{...draft(),imageUrl:'https://example.com/unbounded-story.png'}})
+    const window=await app.inject({method:'POST',url:'/staff/home-content-cards',headers:{'idempotency-key':'home-content-invalid-003'},payload:{...draft(),validUntil:'2026-08-19T20:00:00+08:00'}})
+    const mode=await app.inject({method:'POST',url:'/staff/home-content-cards',headers:{'idempotency-key':'home-content-invalid-004'},payload:{...draft(),displayMode:'popup'}})
+    expect(external.statusCode).toBe(400);expect(image.statusCode).toBe(400);expect(window.statusCode).toBe(400);expect(mode.statusCode).toBe(400)
+    expect(image.json().error.message).toContain('图片必须从站内图片库选择')
     expect(service.create).not.toHaveBeenCalled();await app.close()
   })
 
@@ -55,7 +57,7 @@ function fakeService(){const value={code:'mbox-story-1999',status:'draft'};retur
   pause:vi.fn(async()=>({value:{...value,status:'paused'},replayed:false})),
 }}
 function draft(){return{
-  code:'mbox-story-1999',type:'article',title:'从1999开始',summary:'关于上海、现场与M-BOX的真实故事。',imageUrl:'/assets/brand/mbox-logo-badge.png',
+  code:'mbox-story-1999',type:'article',title:'从1999开始',summary:'关于上海、现场与M-BOX的真实故事。',imageUrl:'/api/public/media-assets/MA00000000000000000000000000000001',
   ctaLabel:'阅读故事',targetPath:'/pages/home/index',priority:100,displayMode:'pinned',visibility:'public',audienceMemberLevels:[],audienceLifecycleStages:[],
   validFrom:'2026-08-20T20:00:00+08:00',validUntil:'2026-09-20T20:00:00+08:00',reason:'建立M-BOX品牌故事首页内容',
 }}

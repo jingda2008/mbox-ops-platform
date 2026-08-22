@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { JsonObject } from './command-executor.js'
 import type { ScopedTransaction } from './transaction-runner.js'
+import { publicMediaAssetUrl, publicMiniProgramImageUrl } from './media-asset-url.js'
 import { PaymentRepository, type PaymentMethod } from './payment-repository.js'
 import type { PublicMembershipTerms } from './membership-terms-service.js'
 import { CustomerPreferenceRepository } from './customer-preference-repository.js'
@@ -4059,7 +4060,7 @@ function productView(
     code: row.code,
     name: row.name,
     description: row.description,
-    imageUrl: safeAssetUrl(row.image_url),
+    imageUrl: publicMiniProgramImageUrl(row.image_url),
     beverageFamily: row.beverage_family,
     amountMinor: amount,
     separateAmountMinor: separate,
@@ -4211,23 +4212,18 @@ function publicSupportContact(value: JsonObject): PublicSupportContact {
   const wecomName = typeof value.wecomName === 'string' ? value.wecomName.trim() : ''
   const wecomQrImageUrl = typeof value.wecomQrImageUrl === 'string' ? value.wecomQrImageUrl.trim() : ''
   if (!isPublicSupportPhone(phone) || phoneLabel.length < 2 || phoneLabel.length > 40
-    || wecomName.length < 2 || wecomName.length > 40
-    || (wecomQrImageUrl !== '' && !isPublicSupportAsset(wecomQrImageUrl))) {
+    || wecomName.length < 2 || wecomName.length > 40) {
     throw new CustomerExperienceRequestError(
       '门店联系信息配置无效，已停止向顾客端展示',
       'SUPPORT_CONTACT_CONFIGURATION_INVALID',
       503,
     )
   }
-  return { phone, phoneLabel, wecomName, wecomQrImageUrl: wecomQrImageUrl || null }
+  return { phone, phoneLabel, wecomName, wecomQrImageUrl: publicMediaAssetUrl(wecomQrImageUrl) }
 }
 
 function isPublicSupportPhone(value: string): boolean {
   return /^[+0-9][0-9 -]{5,30}$/.test(value)
-}
-
-function isPublicSupportAsset(value: string): boolean {
-  return (value.startsWith('/') && !value.startsWith('//')) || /^https:\/\//i.test(value)
 }
 
 function cardView(row: CardRow): PublicContentCard {
@@ -4236,7 +4232,7 @@ function cardView(row: CardRow): PublicContentCard {
     type: row.card_type,
     title: row.title,
     summary: row.summary,
-    imageUrl: safeAssetUrl(row.image_url),
+    imageUrl: publicMediaAssetUrl(row.image_url),
     ctaLabel: row.cta_label,
     targetPath: safeContentTargetPath(row.target_path),
     priority: row.priority,
@@ -4259,7 +4255,7 @@ function activityView(row: ActivityRow, providerConfigured: boolean): PublicActi
     kind: row.activity_kind,
     title: row.title,
     summary: row.summary,
-    coverUrl: safeAssetUrl(row.cover_url),
+    coverUrl: publicMediaAssetUrl(row.cover_url),
     startsAt: row.starts_at,
     endsAt: row.ends_at,
     assemblyLocation: row.assembly_location,
@@ -4677,13 +4673,6 @@ export function serverActivityTermsAcknowledgement(
       source: 'mini_program',
     },
   }
-}
-
-function safeAssetUrl(value: string | null): string | null {
-  if (value === null || value.trim() === '') return null
-  if (value.startsWith('/') && !value.startsWith('//')) return value
-  if (/^https:\/\//i.test(value)) return value
-  return null
 }
 
 function recommendationPolicyVersionView(row: RecommendationPolicyVersionRow): RecommendationPolicyVersionView {

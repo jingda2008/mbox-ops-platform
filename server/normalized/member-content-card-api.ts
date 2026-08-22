@@ -13,6 +13,7 @@ import {
   IdempotencyConflictError,IdempotencyInProgressError,IdempotencyRecordError,OutboxMessageConflictError,
 } from './command-executor.js'
 import { StaffAccessDeniedError,StaffAccessRepository } from './staff-access-repository.js'
+import { isPublicMediaAssetUrl } from './media-asset-url.js'
 import type { ScopedPostgresTransactionRunner,ScopedTransaction } from './transaction-runner.js'
 
 export interface MemberContentCardApiOptions {
@@ -78,7 +79,7 @@ function draft(value:Record<string,unknown>,fixedCode?:string):MemberContentCard
   const targetPath=text(value.targetPath,'小程序目标页面',1,256)
   if(safeContentTargetPath(targetPath)===null)throw invalid('目标页面不在允许的小程序页面内')
   const imageUrl=optionalText(value.imageUrl,'图片地址',1000)
-  if(imageUrl!==null&&!safeAssetUrl(imageUrl))throw invalid('图片地址必须是站内路径或HTTPS地址')
+  if(imageUrl!==null&&!isPublicMediaAssetUrl(imageUrl))throw invalid('图片必须从站内图片库选择，单张不超过200KB')
   return{
     code:fixedCode?cardCode(fixedCode):cardCode(value.code),
     type:enumeration(value.type,'内容类型',['activity','presale','benefit','article','return_offer','show'] as const) as MemberContentCardType,
@@ -112,4 +113,3 @@ function enumeration<const Values extends readonly string[]>(value:unknown,label
 function list<const Values extends readonly string[]>(value:unknown,label:string,values:Values){if(!Array.isArray(value)||value.some(item=>typeof item!=='string'||!values.includes(item)))throw invalid(`${label}格式不正确`);return [...new Set(value)] as Values[number][]}
 function cardCode(value:unknown){const result=text(value,'内容编号',3,64);if(!/^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/.test(result))throw invalid('内容编号只能使用字母、数字、点、横线或下划线');return result}
 function key(request:FastifyRequest){const value=request.headers['idempotency-key'];if(Array.isArray(value))throw invalid('Idempotency-Key格式不正确');const result=text(value,'Idempotency-Key',8,128);if(!/^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$/.test(result))throw invalid('Idempotency-Key格式不正确');return result}
-function safeAssetUrl(value:string){return(value.startsWith('/')&&!value.startsWith('//'))||/^https:\/\//i.test(value)}

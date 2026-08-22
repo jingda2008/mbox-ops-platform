@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, CirclePlus, LoaderCircle, PackageOpen, Pencil } from 'lucide-react'
 import { NormalizedApiClient, type StaffAuthView } from '../normalized-api'
+import { MediaAssetPicker } from './MediaAssetPicker'
 import { menuImageOptions } from './menu-image-library'
 
 type ProductStatus = 'active' | 'sold_out' | 'inactive'
@@ -618,8 +619,9 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
               <label>口味标签<input value={draft.recommendationTasteTags} placeholder="refreshing,layered" onChange={(event) => updateDraft('recommendationTasteTags', event.target.value)} /></label>
               <label>停留标签<input value={draft.recommendationDwellTags} placeholder="one_set,stay_longer" onChange={(event) => updateDraft('recommendationDwellTags', event.target.value)} /></label>
               <label className="catalog-wide">商品文案<input maxLength={1000} value={draft.description} onChange={(event) => updateDraft('description', event.target.value)} /></label>
-              <label className="catalog-wide">菜单图片<select value={menuImageOptions.some((option) => option.url === draft.imageUrl) ? draft.imageUrl : ''} onChange={(event) => updateDraft('imageUrl', event.target.value)}><option value="">自定义地址或暂不设置</option>{menuImageOptions.map((option) => <option value={option.url} key={option.url}>{option.label}</option>)}</select></label>
-              <label className="catalog-wide">图片地址<input maxLength={2000} value={draft.imageUrl} onChange={(event) => updateDraft('imageUrl', event.target.value)} placeholder="可选择上方已核对素材，也可输入同站安全地址" /></label>
+              <label className="catalog-wide">菜单图片<select value={menuImageOptions.some((option) => option.url === draft.imageUrl) ? draft.imageUrl : ''} onChange={(event) => updateDraft('imageUrl', event.target.value)}><option value="">从下方图片库选择或暂不设置</option>{menuImageOptions.map((option) => <option value={option.url} key={option.url}>{option.label}</option>)}</select></label>
+              <label className="catalog-wide">已选图片<input readOnly value={draft.imageUrl} placeholder="请选择受控菜单素材，或从下方图片库上传（单张不超过 200KB）" /></label>
+              <div className="catalog-wide"><MediaAssetPicker api={api} purpose="menu" value={draft.imageUrl} onChange={(imageUrl) => updateDraft('imageUrl', imageUrl)} label="上传或选择菜单图片" /></div>
               {draft.imageUrl !== '' && <figure className="catalog-image-preview catalog-wide"><img src={draft.imageUrl} alt={`${draft.name || '商品'}菜单图预览`} /><figcaption>保存前预览；图片中的“以实物为准”提示不会替代真实配方、品牌和份量核对。</figcaption></figure>}
               <label className="catalog-check"><input type="checkbox" checked={draft.recommendationSingleWaveEligible} onChange={(event) => updateDraft('recommendationSingleWaveEligible', event.target.checked)} />可一次出齐</label>
               <fieldset className="catalog-wide"><legend>允许下单渠道</legend>{[['guest_qr', '顾客扫码'], ['staff_assisted', '员工协助'], ['cashier', '收银'], ['reservation', '预约'], ['integration', '系统接入']].map(([value, label]) => <label className="catalog-check" key={value}><input type="checkbox" checked={draft.allowedChannels.includes(value)} onChange={() => updateDraft('allowedChannels', draft.allowedChannels.includes(value) ? draft.allowedChannels.filter((item) => item !== value) : [...draft.allowedChannels, value])} />{label}</label>)}</fieldset>

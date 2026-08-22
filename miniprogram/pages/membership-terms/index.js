@@ -9,7 +9,8 @@ Page({
   },
 
   onLoad(query) {
-    const source = query && query.source === 'mini_menu' ? 'mini_menu' : 'mini_profile'
+    const source = query && ['mini_menu', 'mini_profile', 'mini_community'].includes(query.source)
+      ? query.source : 'mini_profile'
     this.setData({
       acknowledgementSource: source,
       allowEnrollment: Boolean(query && query.action === 'enroll'),

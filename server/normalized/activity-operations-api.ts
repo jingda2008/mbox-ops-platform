@@ -9,6 +9,7 @@ import {
   ActivityOperationsService,
   type ActivityOperationsStaffContext,
 } from './activity-operations-service.js'
+import type { CustomerExperienceService } from './customer-experience-service.js'
 import {
   IdempotencyConflictError,
   IdempotencyInProgressError,
@@ -22,6 +23,7 @@ import type { ScopedPostgresTransactionRunner, ScopedTransaction } from './trans
 export interface ActivityOperationsApiOptions {
   transactions: Pick<ScopedPostgresTransactionRunner, 'run'>
   service: ActivityOperationsService
+  activityPublisher: Pick<CustomerExperienceService, 'publishActivity'>
   activityPayments: Pick<ActivityPaymentService, 'requestRefund'>
   resolveStaffContext(request: FastifyRequest):
     | ActivityOperationsStaffContext
@@ -63,6 +65,32 @@ export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsA
         publicId: publicId(request.params.publicId),
         draft: draft(body),
         reason: text(body.reason, '修改原因', 2, 500),
+        idempotencyKey: idempotencyKey(request),
+      })
+      return reply.send({ data: result.value, meta: { replayed: result.replayed } })
+    }),
+  )
+
+  app.post<{ Params: { publicId: string } }>(
+    '/staff/activity-operations/:publicId/publish',
+    async (request, reply) => handle(reply, async () => {
+      const context = await authorized(options, request, ['community.activity.publish'])
+      const result = await options.activityPublisher.publishActivity(context, {
+        publicId: publicId(request.params.publicId),
+        idempotencyKey: idempotencyKey(request),
+      })
+      return reply.send({ data: result.value, meta: { replayed: result.replayed } })
+    }),
+  )
+
+  app.post<{ Params: { publicId: string } }>(
+    '/staff/activity-operations/:publicId/waitlist-retry',
+    async (request, reply) => handle(reply, async () => {
+      const context = await authorized(options, request, ['community.activity.manage'])
+      const body = object(request.body, '候补任务重试')
+      const result = await options.service.retryWaitlistPromotion(context, {
+        publicId: publicId(request.params.publicId),
+        reason: text(body.reason, '重试原因', 2, 500),
         idempotencyKey: idempotencyKey(request),
       })
       return reply.send({ data: result.value, meta: { replayed: result.replayed } })

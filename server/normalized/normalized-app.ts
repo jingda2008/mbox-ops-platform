@@ -868,6 +868,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       await reservationApp.register(activityOperationsApiPlugin, {
         transactions,
         service: new ActivityOperationsService(transactions, commandExecutor),
+        activityPublisher: customerExperience,
         activityPayments,
         resolveStaffContext: staffReservationContext,
       })

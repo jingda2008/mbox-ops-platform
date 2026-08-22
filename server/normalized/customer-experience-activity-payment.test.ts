@@ -234,6 +234,24 @@ describe('activity payment configuration', () => {
     })
   })
 
+  it('requires an M-BOX membership before an activity can be viewed or registered', async () => {
+    const transaction = activityTransaction('none', 'per_registration', 0, 0, false, false)
+    const repository = new CustomerExperienceRepository(transaction)
+    await expect(repository.publicActivity(customerId, 'community-activity-test-0001')).rejects.toMatchObject({
+      code: 'ACTIVITY_MEMBERSHIP_REQUIRED', statusCode: 403,
+    })
+    await expect(repository.registerActivity({
+      activityPublicId: 'community-activity-test-0001', customerId, partySize: 1,
+      protectedContact, termsAcknowledged: true,
+      acknowledgedSafetyPolicyVersion: 'safety-2026-08',
+      acknowledgedRefundPolicyVersion: 'refund-v1', paymentChoice: 'none',
+      paymentMethod: 'native_qr', paymentPublicId: 'activity-payment-nonmember-0001',
+      publicId: 'activity-registration-nonmember-0001',
+      idempotencyKey: 'activity-registration-nonmember-key-0001',
+    })).rejects.toMatchObject({ code: 'ACTIVITY_MEMBERSHIP_REQUIRED', statusCode: 403 })
+    expect(transaction.lastActivityRegistrationValues).toBeUndefined()
+  })
+
   it('allows a paid-mode waitlist without creating payment while preserving the requested payment intent', async () => {
     const transaction = activityTransaction('deposit_required', 'per_person', 10_000, 2_000, true)
     await expect(new CustomerExperienceRepository(transaction).registerActivity({
@@ -319,6 +337,7 @@ function activityTransaction(
   feeAmountMinor = 10_000,
   depositAmountMinor = 2_000,
   full = false,
+  withMembership = true,
 ): ScopedTransaction & { lastActivityRegistrationValues?: readonly unknown[] } {
   const transaction: ScopedTransaction & { lastActivityRegistrationValues?: readonly unknown[] } = {
     scope,
@@ -346,7 +365,7 @@ function activityTransaction(
           registration_status: null, registered_count: full ? '20' : '0',
         }])
       }
-      if (sql.includes('FROM mbox.customer_memberships')) return rows<Row>([])
+      if (sql.includes('FROM mbox.customer_memberships')) return rows<Row>(withMembership ? [membershipRow()] : [])
       if (sql.includes('SELECT id FROM ancestry WHERE merged_into_customer_id IS NULL')) {
         return rows<Row>([{ id: customerId }])
       }
@@ -368,6 +387,18 @@ function activityTransaction(
     },
   }
   return transaction
+}
+
+function membershipRow() {
+  return {
+    id: '82000000-0000-4000-8000-000000000005', member_no: 'MBX-ACTIVITY-TEST', level: 'member',
+    lifecycle_stage: 'new', points_balance: 0, growth_value: 0, pending_recovery_points: 0,
+    redemption_status: 'active', visit_count: 0, joined_at: '2026-08-15T00:00:00.000Z',
+    evaluation_window_months: null, silver_upgrade_growth: null, silver_retain_growth: null,
+    gold_upgrade_growth: null, gold_retain_growth: null, rolling_growth: null,
+    period_status: null, period_ends_at: null, grace_ends_at: null,
+    expiring_points_30_days: null, next_expiry_at: null,
+  }
 }
 
 const databaseUrl = process.env.TEST_NORMALIZED_DATABASE_URL
@@ -416,6 +447,18 @@ integration('activity registration state and contact privacy with PostgreSQL', (
       paidCustomerId, `customer-${paidCustomerId}`,
       concurrentCustomerId, `customer-${concurrentCustomerId}`,
     ])
+    await pool.query(`
+      WITH memberships AS (
+        INSERT INTO mbox.customer_memberships (tenant_id, store_id, customer_id, member_no)
+        VALUES
+          ($1, $2, $3, 'MBX-ACTIVITY-FREE'),
+          ($1, $2, $4, 'MBX-ACTIVITY-PAID'),
+          ($1, $2, $5, 'MBX-ACTIVITY-CONCURRENT')
+        RETURNING id, tenant_id, store_id, customer_id
+      )
+      INSERT INTO mbox.loyalty_accounts (tenant_id, store_id, membership_id, customer_id)
+      SELECT tenant_id, store_id, id, customer_id FROM memberships
+    `, [tenantId, storeId, customerId, paidCustomerId, concurrentCustomerId])
     const common = [
       tenantId, storeId, employeeId,
       JSON.stringify({

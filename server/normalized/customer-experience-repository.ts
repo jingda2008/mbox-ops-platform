@@ -136,6 +136,7 @@ export interface PublicContentCard {
   ctaLabel: string
   targetPath: string | null
   priority: number
+  displayMode: 'pinned' | 'rotation'
 }
 
 export interface PublicActivity {
@@ -450,6 +451,7 @@ interface CardRow extends Record<string, unknown> {
   cta_label: string
   target_path: string
   priority: number
+  display_mode: PublicContentCard['displayMode']
   audience_visibility: 'public' | 'member' | 'segment'
   audience_member_levels: string[]
   audience_lifecycle_stages: string[]
@@ -771,16 +773,20 @@ export class CustomerExperienceRepository {
   async publicActivity(customerId: string | null, publicId: string): Promise<PublicActivity> {
     const membership = customerId === null ? null : await this.findMembership(customerId)
     const publicMembership = membership === null ? null : membershipView(membership)
-    const activity = (await this.listActivities(customerId, publicId))
-      .filter((entry) => audienceAllows(
-        entry.visibility,
-        entry.audience_member_levels,
-        entry.audience_lifecycle_stages,
-        publicMembership,
-      ))
-      .map((activity) => activityView(activity, this.activityPaymentProviderConfigured))[0]
+    if (publicMembership === null) throw new CustomerExperienceRequestError(
+      '加入 M-BOX 会员并授权手机号后，才可查看和报名超嗨活动',
+      'ACTIVITY_MEMBERSHIP_REQUIRED',
+      403,
+    )
+    const activity = (await this.listActivities(customerId, publicId))[0]
     if (!activity) throw new CustomerExperienceRequestError('活动不存在或当前不可见', 'ACTIVITY_NOT_FOUND', 404)
-    return activity
+    if (!audienceAllows(
+      activity.visibility,
+      activity.audience_member_levels,
+      activity.audience_lifecycle_stages,
+      publicMembership,
+    )) throw new CustomerExperienceRequestError('活动不存在或当前不可见', 'ACTIVITY_NOT_FOUND', 404)
+    return activityView(activity, this.activityPaymentProviderConfigured)
   }
 
   async publicActivityRegistrations(customerId: string): Promise<PublicActivityRegistration[]> {
@@ -1086,6 +1092,13 @@ export class CustomerExperienceRepository {
     paymentPublicId: string | null
   }> {
     assertProtectedActivityRegistrationContact(input.protectedContact)
+    const membership = await this.findMembership(input.customerId)
+    const publicMembership = membership === null ? null : membershipView(membership)
+    if (publicMembership === null) throw new CustomerExperienceRequestError(
+      '加入 M-BOX 会员并授权手机号后，才可报名超嗨活动',
+      'ACTIVITY_MEMBERSHIP_REQUIRED',
+      403,
+    )
     const activity = await this.transaction.query<ActivityRow & { id: string }>(`
       SELECT activity.id, activity.public_id, activity.activity_kind, activity.title,
         activity.summary, activity.cover_url, activity.starts_at::text, activity.ends_at::text,
@@ -1129,8 +1142,6 @@ export class CustomerExperienceRepository {
     const row = activity.rows[0]
     if (!row) throw new CustomerExperienceRequestError('这个活动已结束或暂停报名', 'ACTIVITY_UNAVAILABLE', 409)
     const registrationCustomerId = await this.canonicalCustomerId(input.customerId)
-    const membership = await this.findMembership(input.customerId)
-    const publicMembership = membership === null ? null : membershipView(membership)
     if (!audienceAllows(
       row.visibility,
       row.audience_member_levels,
@@ -3269,7 +3280,7 @@ export class CustomerExperienceRepository {
   private async listContentCards(): Promise<CardRow[]> {
     const result = await this.transaction.query<CardRow>(`
       SELECT code, card_type, title, summary, image_url, cta_label,
-        target_path, priority, audience_visibility, audience_member_levels,
+        target_path, priority, display_mode, audience_visibility, audience_member_levels,
         audience_lifecycle_stages
       FROM mbox.member_content_cards
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
@@ -4229,6 +4240,7 @@ function cardView(row: CardRow): PublicContentCard {
     ctaLabel: row.cta_label,
     targetPath: safeContentTargetPath(row.target_path),
     priority: row.priority,
+    displayMode: row.display_mode,
   }
 }
 

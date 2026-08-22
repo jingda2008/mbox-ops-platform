@@ -18,6 +18,7 @@ const {
   withdrawProductRestriction,
   getWechatNotificationAuthorizations,
   recordWechatNotificationAuthorization,
+  enrollMembership,
 } = require('../../utils/api')
 const { getTableConnection } = require('../../utils/session')
 const { dateTime, money } = require('../../utils/format')
@@ -176,16 +177,6 @@ function preferenceEditorState(index) {
   }
 }
 
-function explainJoinBlock(content) {
-  return new Promise((resolve) => wx.showModal({
-    title: '暂时无法加入',
-    content,
-    showCancel: false,
-    confirmText: '知道了',
-    complete: () => resolve(),
-  }))
-}
-
 function customerPreferenceView(snapshot) {
   const facts = ((snapshot && snapshot.facts) || []).map((fact) => ({
     viewKey: `${fact.key}:${fact.value}`,
@@ -272,7 +263,10 @@ Page({
       }).map((item) => ({
         publicId: item.publicId, title: `${dateTime(item.arrivalAt)} · ${item.guestCount}人`, statusText: ({ pending: '等待确认', confirmed: '预约已确认' })[item.status] || '状态待确认',
       })).slice(0, 3)
-      const registrationRows = (results[3] || []).filter((item) => item.status !== 'cancelled').slice(0, 3)
+      const registrationRows = (results[3] || [])
+        .filter((item) => !['cancelled', 'refunded', 'expired'].includes(item.status))
+        .sort((left, right) => String(left.startsAt || '').localeCompare(String(right.startsAt || '')))
+        .slice(0, 5)
       const paymentStates = await Promise.all(registrationRows.map((item) => (
         getActivityRegistrationPayment(item.publicId).catch(() => null)
       )))
@@ -352,24 +346,56 @@ Page({
     }
   },
 
-  async becomeMember() {
+  focusJoinInvitation() {
+    if (this.data.membership) {
+      this.openMemberCenter()
+      return
+    }
+    wx.pageScrollTo({
+      selector: '#membership-invitation',
+      duration: 320,
+      fail: () => wx.showToast({ title: '入会邀请正在加载，请稍后再试', icon: 'none' }),
+    })
+  },
+
+  async confirmMembershipJoin(event) {
     if (this.data.busy) return
+    if (!this.data.agreedToPolicies) {
+      this.remindAgreement()
+      return
+    }
+    const terms = this.data.membershipTerms
+    if (!terms) {
+      wx.showModal({
+        title: '暂时无法加入',
+        content: '当前入会条款尚未发布，暂不能新加入会员。点单和找回原会员不受影响。',
+        showCancel: false,
+        confirmText: '知道了',
+      })
+      return
+    }
+    const authorization = readWechatPhoneAuthorization(event)
+    if (!authorization.code) {
+      wx.showToast({ title: authorization.message, icon: 'none' })
+      return
+    }
     this.setData({ busy: true, error: '' })
     try {
       if (this.data.membership) {
         wx.showToast({ title: '您已经是会员', icon: 'none' })
         return
       }
-      // 直接进入入会条款页，由该页自行读取条款，避免本页重复请求被误报成「接口不存在」。
-      await new Promise((resolve) => {
-        wx.navigateTo({
-          url: '/pages/membership-terms/index?source=mini_profile&action=enroll',
-          success: () => resolve(),
-          fail: () => {
-            explainJoinBlock('入会页面暂时打不开。请重新编译并上传小程序后再试。').then(resolve)
-          },
-        })
-      })
+      await enrollMembership(terms.version, 'mini_profile', authorization.code)
+      this.setData({ agreedToPolicies: false })
+      wx.showToast({ title: '入会成功', icon: 'success' })
+      await this.load()
+    } catch (error) {
+      const message = String((error && error.message) || '')
+      const friendly = /请求的页面或接口不存在|ROUTE_NOT_FOUND|会员服务暂时连不上/.test(message)
+        ? '入会服务暂时不可用，请稍后重试或联系门店'
+        : (message || '入会暂时没有完成')
+      this.setData({ error: friendly })
+      wx.showToast({ title: friendly, icon: 'none' })
     } finally {
       this.setData({ busy: false })
     }
@@ -377,7 +403,7 @@ Page({
 
   openMemberCenter() {
     if (!this.data.membership) {
-      this.becomeMember()
+      this.focusJoinInvitation()
       return
     }
     // 会员中心进入原先的积分与成长值明细页。
@@ -687,6 +713,18 @@ Page({
   },
 
   openReservations() { wx.switchTab({ url: '/pages/reservations/index' }) },
+  openSuperhighService() {
+    if (this.data.registrations.length) {
+      wx.pageScrollTo({
+        selector: '#registered-activities',
+        duration: 320,
+        fail: () => wx.showToast({ title: '报名活动正在加载，请稍后再试', icon: 'none' }),
+      })
+      return
+    }
+    this.openSuperhighTab()
+  },
+  openSuperhighTab() { wx.switchTab({ url: '/pages/community/index' }) },
   openPoints() { wx.navigateTo({ url: '/pages/points/index' }) },
   openOrders() { wx.navigateTo({ url: '/pages/account/index' }) },
   openBalance() { wx.navigateTo({ url: '/pages/account/index' }) },

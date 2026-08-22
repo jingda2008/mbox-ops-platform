@@ -3,6 +3,7 @@ import { safeContentTargetPath } from './customer-experience-repository.js'
 import {
   MemberContentCardError,
   type MemberContentCardDraft,
+  type MemberContentCardDisplayMode,
   type MemberContentCardType,
   type MemberContentCardVisibility,
 } from './member-content-card-repository.js'
@@ -83,7 +84,9 @@ function draft(value:Record<string,unknown>,fixedCode?:string):MemberContentCard
     type:enumeration(value.type,'内容类型',['activity','presale','benefit','article','return_offer','show'] as const) as MemberContentCardType,
     title:text(value.title,'标题',2,120),summary:text(value.summary,'摘要',2,400),imageUrl,
     ctaLabel:text(value.ctaLabel,'操作文案',1,20),targetPath,
-    priority:integer(value.priority,'展示顺序',0,10000),visibility:visibility as MemberContentCardVisibility,
+    priority:integer(value.priority,'展示顺序',0,10000),
+    displayMode:enumeration(value.displayMode,'首页展示方式',['pinned','rotation'] as const) as MemberContentCardDisplayMode,
+    visibility:visibility as MemberContentCardVisibility,
     audienceMemberLevels:levels,audienceLifecycleStages:stages,validFrom,validUntil,
   }
 }

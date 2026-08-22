@@ -98,6 +98,12 @@ export interface ActivityOperationsDetail {
   registrations: ActivityOperationsRegistration[]
 }
 
+export interface ActivityWaitlistRetry {
+  activityPublicId: string
+  state: 'queued' | 'not_required'
+  nextAttemptAt: string | null
+}
+
 export interface ActivityDraftInput {
   kind: ActivityKind
   title: string
@@ -516,6 +522,53 @@ export class ActivityOperationsRepository {
       await this.cancelUnpaidRegistration(current, reason)
     }
     return this.registrationById(current.id)
+  }
+
+  /**
+   * This deliberately never promotes a customer. It only brings an already
+   * queued, unprocessed release event forward for the normal FIFO worker.
+   */
+  async retryWaitlistPromotion(publicId: string): Promise<ActivityWaitlistRetry> {
+    const activity = await this.transaction.query<{ id: string; public_id: string }>(`
+      SELECT id,public_id
+      FROM mbox.community_activities
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND public_id=$3
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, publicId])
+    const current = activity.rows[0]
+    if (!current) throw new ActivityOperationsError(
+      '活动不存在或不属于当前门店', 'ACTIVITY_OPERATION_NOT_FOUND', 404,
+    )
+    const pending = await this.transaction.query<{ id: string }>(`
+      SELECT id
+      FROM mbox.activity_waitlist_release_events
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND activity_id=$3::uuid
+        AND processed_at IS NULL
+      ORDER BY next_attempt_at,created_at,id
+      FOR UPDATE SKIP LOCKED
+      LIMIT 1
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, current.id])
+    const event = pending.rows[0]
+    if (!event) return {
+      activityPublicId: current.public_id,
+      state: 'not_required',
+      nextAttemptAt: null,
+    }
+    const retried = await this.transaction.query<{ next_attempt_at: string }>(`
+      UPDATE mbox.activity_waitlist_release_events
+      SET next_attempt_at=clock_timestamp(),last_block_reason=NULL
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+        AND processed_at IS NULL
+      RETURNING next_attempt_at::text
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, event.id])
+    const result = retried.rows[0]
+    if (!result) throw new ActivityOperationsError(
+      '候补任务状态刚刚变化，请刷新后查看', 'ACTIVITY_WAITLIST_RETRY_CONFLICT', 409,
+    )
+    return {
+      activityPublicId: current.public_id,
+      state: 'queued',
+      nextAttemptAt: result.next_attempt_at,
+    }
   }
 
   private async cancelUnpaidRegistration(current: LockedRegistrationRow, reason: string): Promise<void> {

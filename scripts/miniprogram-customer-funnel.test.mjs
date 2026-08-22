@@ -43,6 +43,104 @@ test('membership consent stays unchecked and phone authorization appears only af
   assert.match(termsView, /wx:if="\{\{agreedToPolicies\}\}"[^>]*class="accept-button wx-phone-button"[^>]*open-type="getPhoneNumber\|agreePrivacyAuthorization"/)
 })
 
+test('activity cards are horizontal brand-green surfaces and profile actions expose their destinations', async () => {
+  const [homeView, homeStyle, communityView, communityStyle, profileView, profileLogic, profileStyle] = await Promise.all([
+    read('miniprogram/pages/home/index.wxml'),
+    read('miniprogram/pages/home/index.wxss'),
+    read('miniprogram/pages/community/index.wxml'),
+    read('miniprogram/pages/community/index.wxss'),
+    read('miniprogram/pages/profile/index.wxml'),
+    read('miniprogram/pages/profile/index.js'),
+    read('miniprogram/pages/profile/index.wxss'),
+  ])
+
+  assert.match(homeView, /featured-activity-card__art/)
+  assert.match(homeStyle, /\.featured-activity-card\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*228rpx minmax\(0, 1fr\)[^}]*linear-gradient\(145deg, #315d46, #214635/)
+  assert.match(homeView, /class="published-content-card/)
+  assert.match(homeStyle, /\.published-content-card\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*208rpx minmax\(0, 1fr\)[^}]*linear-gradient\(145deg, #315d46, #214635/)
+  assert.doesNotMatch(homeView, /home-campaign-mask/)
+  assert.match(communityView, /hover-class="activity-card--hover"/)
+  assert.match(communityStyle, /\.activity-card\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*236rpx minmax\(0, 1fr\)[^}]*linear-gradient\(145deg, #315d46, #214635/)
+  assert.equal((profileView.match(/class="metric-icon"/g) || []).length, 4)
+  assert.match(profileView, /class="service-chip__icon"/)
+  assert.match(profileView, /bindtap="openSuperhighService"/)
+  assert.match(profileView, /已报名的超嗨活动/)
+  assert.match(profileLogic, /if \(this\.data\.registrations\.length\)/)
+  assert.match(profileLogic, /selector: '#registered-activities'/)
+  assert.match(profileLogic, /wx\.switchTab\(\{ url: '\/pages\/community\/index' \}\)/)
+  assert.match(profileStyle, /\.metric-icon\s*\{[^}]*border-radius:\s*50%/)
+})
+
+test('activity registration distinguishes confirmed, payment-pending, and waitlist states', async () => {
+  const [detailLogic, detailView, communityLogic, communityView, operationsPanel, operationsApi] = await Promise.all([
+    read('miniprogram/pages/community-detail/index.js'),
+    read('miniprogram/pages/community-detail/index.wxml'),
+    read('miniprogram/pages/community/index.js'),
+    read('miniprogram/pages/community/index.wxml'),
+    read('src/normalized-ui/ActivityOperationsPanel.tsx'),
+    read('server/normalized/activity-operations-api.ts'),
+  ])
+
+  assert.match(detailView, /'免费报名'/)
+  assert.match(detailView, /'提交报名并支付'/)
+  assert.match(detailView, /'提交报名'/)
+  assert.match(detailView, /'加入候补'/)
+  assert.match(detailView, />完成支付<\/button>/)
+  assert.doesNotMatch(detailView, /确认报名/)
+  assert.match(detailLogic, /报名成功，名额已为您确认。/)
+  assert.match(detailLogic, /完成付款后才算报名成功。/)
+  assert.match(detailLogic, /requiresPaymentOnSubmit/)
+  assert.match(detailLogic, /已加入候补，按报名顺序自动递补；现在无需付款。/)
+  assert.match(communityLogic, /REGISTRATION_STATUS_NAMES\[registration\.status\]/)
+  assert.match(communityLogic, /paymentStateText/)
+  assert.match(communityView, /class="activity-payment-state"/)
+  assert.match(operationsPanel, /\/api\/staff\/activity-operations\/\$\{encodeURIComponent\(activity\.publicId\)\}\/publish/)
+  assert.doesNotMatch(operationsPanel, /\/api\/staff\/community-activities\//)
+  assert.match(operationsPanel, /重试系统候补任务/)
+  assert.match(operationsPanel, /不会人工确认任何报名或改变候补顺序/)
+  assert.match(operationsApi, /\/staff\/activity-operations\/:publicId\/publish/)
+  assert.match(operationsApi, /\/staff\/activity-operations\/:publicId\/waitlist-retry/)
+})
+
+test('Superhigh activity access invites non-members to join with native WeChat phone authorization', async () => {
+  const [communityLogic, communityView, detailLogic, detailView, termsLogic, repository] = await Promise.all([
+    read('miniprogram/pages/community/index.js'),
+    read('miniprogram/pages/community/index.wxml'),
+    read('miniprogram/pages/community-detail/index.js'),
+    read('miniprogram/pages/community-detail/index.wxml'),
+    read('miniprogram/pages/membership-terms/index.js'),
+    read('server/normalized/customer-experience-repository.ts'),
+  ])
+
+  assert.match(communityLogic, /getMiniBootstrap, enrollMembership/)
+  assert.match(communityLogic, /if \(!this\.data\.membership\)/)
+  assert.match(communityLogic, /enrollMembership\(terms\.version, 'mini_community', authorization\.code\)/)
+  assert.match(communityView, /加入会员，解锁超嗨活动/)
+  assert.match(communityView, /wx:if="\{\{membershipInviteAgreed\}\}"[^>]*open-type="getPhoneNumber\|agreePrivacyAuthorization"[^>]*bindgetphonenumber="acceptMembershipInvite"/)
+  assert.match(detailLogic, /const bootstrap = await getMiniBootstrap\(\)/)
+  assert.match(detailLogic, /membershipInviteVisible: true/)
+  assert.match(detailLogic, /enrollMembership\(terms\.version, 'mini_community', authorization\.code\)/)
+  assert.match(detailView, /加入会员，解锁超嗨活动/)
+  assert.match(detailView, /open-type="getPhoneNumber\|agreePrivacyAuthorization"/)
+  assert.match(termsLogic, /'mini_community'/)
+  assert.match(repository, /ACTIVITY_MEMBERSHIP_REQUIRED/)
+  assert.match(repository, /才可查看和报名超嗨活动/)
+})
+
+test('profile membership invitation enrolls after one explicit checkbox and one confirmation button', async () => {
+  const [profileView, profileLogic] = await Promise.all([
+    read('miniprogram/pages/profile/index.wxml'),
+    read('miniprogram/pages/profile/index.js'),
+  ])
+
+  assert.match(profileView, /邀请加入 M-BOX 会员/)
+  assert.match(profileView, /checked="\{\{agreedToPolicies\}\}"/)
+  assert.match(profileView, /catchtap="showMembershipTerms"/)
+  assert.match(profileView, /wx:if="\{\{agreedToPolicies\}\}"[^>]*class="join-primary wx-phone-button"[^>]*bindgetphonenumber="confirmMembershipJoin"[^>]*>确定入会<\/button>/)
+  assert.doesNotMatch(profileView, /阅读入会条款/)
+  assert.match(profileLogic, /enrollMembership\(terms\.version, 'mini_profile', authorization\.code\)/)
+})
+
 test('profile opens the configured WeCom customer-service conversation through the native WeChat API', async () => {
   const [profileLogic, profileView, contactLogic, contactView, runtimeConfig] = await Promise.all([
     read('miniprogram/pages/profile/index.js'),

@@ -16,7 +16,7 @@ import type {
   StoreScope,
 } from './transaction-runner.js'
 
-export type MembershipTermsAcknowledgementSource = 'mini_menu' | 'mini_profile'
+export type MembershipTermsAcknowledgementSource = 'mini_menu' | 'mini_profile' | 'mini_community'
 
 export interface PublicMembershipTerms {
   version: number

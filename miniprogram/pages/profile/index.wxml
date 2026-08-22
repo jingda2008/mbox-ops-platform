@@ -20,32 +20,37 @@
         <image class="identity-avatar" src="{{avatarUrl || '/assets/brand/mbox-logo-badge.png'}}" mode="aspectFill" />
         <view class="identity-copy">
           <view class="identity-name-row">
-            <text class="identity-name">{{displayName || (membership ? membership.levelText : '访客')}}</text>
+            <text class="identity-name">{{displayName || (membership ? membership.levelText : 'M-BOX 访客')}}</text>
             <text wx:if="{{membership}}" class="identity-badge">{{membership.levelText}}</text>
+            <text wx:else class="identity-badge identity-badge--invite">邀请入会</text>
           </view>
-          <text class="identity-sub">{{membership ? membership.memberNo : '加入会员后可累计积分与权益'}}</text>
+          <text class="identity-sub">{{membership ? membership.memberNo : '勾选同意后即可确认加入会员'}}</text>
         </view>
       </view>
       <button wx:if="{{membership}}" class="identity-action" bindtap="openMemberCenter">会员中心</button>
-      <button wx:else class="identity-action" bindtap="becomeMember" loading="{{busy}}">去入会</button>
+      <button wx:else class="identity-action" bindtap="focusJoinInvitation">立即加入</button>
     </view>
 
     <view class="metric-card">
-      <button class="metric-item" bindtap="openPoints">
+      <button class="metric-item" bindtap="openPoints" hover-class="metric-item--hover">
+        <text class="metric-icon">积</text>
         <text class="metric-value">{{membership ? membership.pointsBalance : 0}}</text>
-        <text class="metric-label">积分</text>
+        <view class="metric-label-row"><text class="metric-label">积分</text><text class="metric-chevron">›</text></view>
       </button>
-      <button class="metric-item" bindtap="openCoupons">
+      <button class="metric-item" bindtap="openCoupons" hover-class="metric-item--hover">
+        <text class="metric-icon">券</text>
         <text class="metric-value">{{benefitCount || 0}}</text>
-        <text class="metric-label">优惠券</text>
+        <view class="metric-label-row"><text class="metric-label">优惠券</text><text class="metric-chevron">›</text></view>
       </button>
-      <button class="metric-item" bindtap="openPoints">
+      <button class="metric-item" bindtap="openPoints" hover-class="metric-item--hover">
+        <text class="metric-icon">升</text>
         <text class="metric-value">{{membership ? membership.growthValue : 0}}</text>
-        <text class="metric-label">成长值</text>
+        <view class="metric-label-row"><text class="metric-label">成长值</text><text class="metric-chevron">›</text></view>
       </button>
-      <button class="metric-item" bindtap="openBalance">
+      <button class="metric-item" bindtap="openBalance" hover-class="metric-item--hover">
+        <text class="metric-icon">¥</text>
         <text class="metric-value">{{balanceText}}</text>
-        <text class="metric-label">余额</text>
+        <view class="metric-label-row"><text class="metric-label">余额</text><text class="metric-chevron">›</text></view>
       </button>
     </view>
 
@@ -57,20 +62,23 @@
       <text>去看看 ›</text>
     </view>
 
-    <view wx:if="{{!membership}}" class="module-card join-module">
-      <text class="module-eyebrow">JOIN</text>
-      <text class="module-title">加入 M-BOX 会员</text>
+    <view wx:if="{{!membership}}" id="membership-invitation" class="module-card join-module">
+      <text class="module-eyebrow">INVITATION</text>
+      <text class="module-title">邀请加入 M-BOX 会员</text>
       <text class="join-summary">{{membershipTerms ? membershipTerms.summary : '保存积分、到店偏好与门店发放的专属权益。'}}</text>
       <checkbox-group bindchange="onAgreementChange">
         <label class="join-agree-row">
           <checkbox value="agree" checked="{{agreedToPolicies}}" color="#315d46" />
-          <text>我已阅读并同意</text>
+          <view class="join-agree-copy">
+            <text>我已阅读并同意</text>
+            <text class="join-agree-link" catchtap="showMembershipTerms">《{{membershipTerms ? membershipTerms.title : '用户服务协议'}}》</text>
+          </view>
         </label>
       </checkbox-group>
-      <view class="join-agree-links"><text bindtap="showMembershipTerms">《用户服务协议》</text></view>
-      <button class="join-primary" bindtap="becomeMember" loading="{{busy}}">阅读入会条款</button>
-      <button wx:if="{{agreedToPolicies}}" class="join-secondary recovery-button wx-phone-button" open-type="getPhoneNumber|agreePrivacyAuthorization" bindgetphonenumber="recoverMembership" bindagreeprivacyauthorization="onAgreePrivacyAuthorization" hover-class="none" loading="{{recoveryBusy}}">授权手机号找回会员</button>
-      <button wx:else class="join-secondary recovery-button recovery-button--pending" bindtap="remindAgreement">授权手机号找回会员</button>
+      <button wx:if="{{agreedToPolicies}}" class="join-primary wx-phone-button" open-type="getPhoneNumber|agreePrivacyAuthorization" bindgetphonenumber="confirmMembershipJoin" bindagreeprivacyauthorization="onAgreePrivacyAuthorization" hover-class="none" loading="{{busy}}">确定入会</button>
+      <button wx:else class="join-primary join-primary--pending" bindtap="remindAgreement" hover-class="none">确定入会</button>
+      <button wx:if="{{agreedToPolicies}}" class="join-recovery-link recovery-button wx-phone-button" open-type="getPhoneNumber|agreePrivacyAuthorization" bindgetphonenumber="recoverMembership" bindagreeprivacyauthorization="onAgreePrivacyAuthorization" hover-class="none" loading="{{recoveryBusy}}">已有会员？授权手机号找回会员</button>
+      <button wx:else class="join-recovery-link recovery-button recovery-button--pending" bindtap="remindAgreement" hover-class="none">已有会员？授权手机号找回会员</button>
       <text wx:if="{{recoveryMessage}}" class="recovery-result">{{recoveryMessage}}</text>
     </view>
 
@@ -92,32 +100,40 @@
       <text class="module-title">我的服务</text>
       <view class="service-grid">
         <view class="service-chip" bindtap="openOrders" hover-class="service-chip--hover" role="button">
-          <view class="service-chip__face">我的订单</view>
+          <view class="service-chip__face"><image class="service-chip__icon" src="/assets/tabbar/order-active.png" mode="aspectFit" /><view class="service-chip__copy"><text>我的订单</text><text>订单与桌账</text></view><text class="service-chip__arrow">›</text></view>
         </view>
         <view class="service-chip" bindtap="openReservations" hover-class="service-chip--hover" role="button">
-          <view class="service-chip__face">我的预约</view>
+          <view class="service-chip__face"><image class="service-chip__icon" src="/assets/tabbar/reservations-active.png" mode="aspectFit" /><view class="service-chip__copy"><text>我的预约</text><text>到店安排</text></view><text class="service-chip__arrow">›</text></view>
+        </view>
+        <view class="service-chip" bindtap="openSuperhighService" hover-class="service-chip--hover" role="button">
+          <view class="service-chip__face"><image class="service-chip__icon" src="/assets/tabbar/community-active.png" mode="aspectFit" /><view class="service-chip__copy"><text>超嗨活动</text><text>{{registrationError ? '记录待刷新' : (registrations.length ? '已报名 ' + registrations.length + ' 场' : '发现最新活动')}}</text></view><text class="service-chip__arrow">›</text></view>
         </view>
         <view class="service-chip" bindtap="openPreferenceSettings" hover-class="service-chip--hover" role="button">
-          <view class="service-chip__face">我的偏好</view>
+          <view class="service-chip__face"><image class="service-chip__icon" src="/assets/tabbar/profile-active.png" mode="aspectFit" /><view class="service-chip__copy"><text>我的偏好</text><text>口味与服务</text></view><text class="service-chip__arrow">›</text></view>
         </view>
         <view class="service-chip" bindtap="openContact" hover-class="service-chip--hover" role="button">
-          <view class="service-chip__face">联系我们</view>
+          <view class="service-chip__face"><image class="service-chip__icon service-chip__icon--badge" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" /><view class="service-chip__copy"><text>联系我们</text><text>门店客服</text></view><text class="service-chip__arrow">›</text></view>
         </view>
         <view wx:if="{{membershipTerms}}" class="service-chip" bindtap="showMembershipTerms" hover-class="service-chip--hover" role="button">
-          <view class="service-chip__face">会员权益</view>
+          <view class="service-chip__face"><image class="service-chip__icon service-chip__icon--badge" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" /><view class="service-chip__copy"><text>会员权益</text><text>等级与规则</text></view><text class="service-chip__arrow">›</text></view>
         </view>
       </view>
     </view>
 
-    <view wx:if="{{reservations.length || registrations.length}}" class="module-card">
-      <text class="module-eyebrow">UP NEXT</text>
-      <text class="module-title">接下来的安排</text>
-      <button wx:for="{{reservations}}" wx:key="publicId" class="list-row" bindtap="openReservations">
-        <view><text>预约到店</text><text>{{item.title}}</text></view>
+    <view wx:if="{{registrations.length}}" id="registered-activities" class="module-card registered-activity-module">
+      <view class="module-head"><view><text class="module-eyebrow">SUPERHIGH</text><text class="module-title">已报名的超嗨活动</text></view><text class="module-link" bindtap="openSuperhighTab">更多活动 ›</text></view>
+      <button wx:for="{{registrations}}" wx:key="publicId" class="list-row activity-registration-row" data-id="{{item.activityPublicId}}" bindtap="openCommunity">
+        <image class="list-row__icon" src="/assets/tabbar/community-active.png" mode="aspectFit" />
+        <view><text>{{item.title}}</text><text>{{item.startsText}} · {{item.partySize}}人</text></view>
         <text>{{item.statusText}} ›</text>
       </button>
-      <button wx:for="{{registrations}}" wx:key="publicId" class="list-row" data-id="{{item.activityPublicId}}" bindtap="openCommunity">
-        <view><text>{{item.title}}</text><text>{{item.startsText}} · {{item.partySize}}人</text></view>
+    </view>
+
+    <view wx:if="{{reservations.length}}" class="module-card">
+      <text class="module-eyebrow">RESERVATIONS</text>
+      <text class="module-title">我的预约</text>
+      <button wx:for="{{reservations}}" wx:key="publicId" class="list-row" bindtap="openReservations">
+        <view><text>预约到店</text><text>{{item.title}}</text></view>
         <text>{{item.statusText}} ›</text>
       </button>
     </view>

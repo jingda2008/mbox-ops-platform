@@ -99,6 +99,52 @@ describe('activity operations API', () => {
     await app.close()
   })
 
+  it('publishes through the canonical activity operations entrance', async () => {
+    const permissions: string[] = []
+    const service = serviceMock()
+    const publisher = { publishActivity: vi.fn(async () => ({
+      value: { publicId: 'community-activity-001', status: 'published' }, replayed: false,
+    })) }
+    const app = await application(service, {
+      assertPermission: async (_employeeId: string, permission: string) => { permissions.push(permission) },
+    }, undefined, publisher)
+    const response = await app.inject({
+      method: 'POST', url: '/staff/activity-operations/community-activity-001/publish',
+      headers: { 'idempotency-key': 'activity-publish-key-001' }, payload: {},
+    })
+    expect(response.statusCode).toBe(200)
+    expect(permissions).toEqual(['community.activity.publish'])
+    expect(publisher.publishActivity).toHaveBeenCalledWith(context, {
+      publicId: 'community-activity-001', idempotencyKey: 'activity-publish-key-001',
+    })
+    await app.close()
+  })
+
+  it('can only bring an existing waitlist task forward; it cannot confirm a registration', async () => {
+    const permissions: string[] = []
+    const service = serviceMock()
+    service.retryWaitlistPromotion.mockResolvedValueOnce({
+      value: { activityPublicId: 'community-activity-001', state: 'queued', nextAttemptAt: '2026-08-22T00:00:00.000Z' },
+      replayed: false,
+    })
+    const app = await application(service, {
+      assertPermission: async (_employeeId: string, permission: string) => { permissions.push(permission) },
+    })
+    const response = await app.inject({
+      method: 'POST', url: '/staff/activity-operations/community-activity-001/waitlist-retry',
+      headers: { 'idempotency-key': 'activity-waitlist-retry-key-001' },
+      payload: { reason: '核对候补任务运行状态' },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(permissions).toEqual(['community.activity.manage'])
+    expect(service.retryWaitlistPromotion).toHaveBeenCalledWith(context, {
+      publicId: 'community-activity-001', reason: '核对候补任务运行状态',
+      idempotencyKey: 'activity-waitlist-retry-key-001',
+    })
+    expect(service.transitionRegistration).not.toHaveBeenCalled()
+    await app.close()
+  })
+
   it('requires both manager activity authority and refund request authority for paid cancellation', async () => {
     const permissions: string[] = []
     const service = serviceMock()
@@ -179,6 +225,7 @@ function serviceMock() {
     createDraft: vi.fn(async () => ({ value: { publicId: 'community-activity-new', status: 'draft' }, replayed: false })),
     updateDraft: vi.fn(async () => ({ value: {}, replayed: false })),
     transitionRegistration: vi.fn(async () => ({ value: { status: 'checked_in' }, replayed: false })),
+    retryWaitlistPromotion: vi.fn(async () => ({ value: { state: 'not_required' }, replayed: false })),
   }
 }
 
@@ -186,11 +233,13 @@ async function application(
   service = serviceMock(),
   access = { assertPermission: async () => undefined },
   requestRefund = vi.fn(async () => ({ value: { id: 'refund-id', status: 'requested' }, replayed: false })),
+  publisher = { publishActivity: vi.fn(async () => ({ value: { status: 'published' }, replayed: false })) },
 ) {
   const app = Fastify()
   await app.register(activityOperationsApiPlugin, {
     transactions: { run: async (_scope, callback) => callback({ scope } as never) },
     service: service as never,
+    activityPublisher: publisher as never,
     activityPayments: { requestRefund } as never,
     resolveStaffContext: () => context,
     createStaffAccessRepository: () => access,

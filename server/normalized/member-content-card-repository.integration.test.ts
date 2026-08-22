@@ -35,14 +35,14 @@ integration('member home content PostgreSQL contract',()=>{
     const draft={
       code:`story-${randomUUID().slice(0,8)}`,type:'article' as const,title:'从1999开始',
       summary:'关于上海、现场与M-BOX的真实故事。',imageUrl:'/assets/brand/mbox-logo-badge.png',
-      ctaLabel:'阅读故事',targetPath:'/pages/home/index',priority:80,visibility:'segment' as const,
+      ctaLabel:'阅读故事',targetPath:'/pages/home/index',priority:80,displayMode:'pinned' as const,visibility:'segment' as const,
       audienceMemberLevels:['gold','member','gold'],audienceLifecycleStages:['active'],
       validFrom:'2026-08-20T12:00:00.000Z',validUntil:'2027-08-20T12:00:00.000Z',
     }
     const scope={tenantId,storeId}
     const created=await transactions.run(scope,(transaction)=>new MemberContentCardRepository(transaction).create(draft))
     expect(created).toMatchObject({
-      code:draft.code,status:'draft',visibility:'segment',
+      code:draft.code,status:'draft',displayMode:'pinned',visibility:'segment',
       audienceMemberLevels:['gold','member'],audienceLifecycleStages:['active'],
       publishedByEmployeeId:null,
     })

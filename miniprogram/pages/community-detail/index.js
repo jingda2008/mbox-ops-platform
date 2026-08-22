@@ -7,10 +7,13 @@ const {
   startActivityRegistrationPayment,
   queryActivityRegistrationPayment,
   cancelActivityRegistration,
+  getMiniBootstrap,
+  enrollMembership,
 } = require('../../utils/api')
 const { randomId } = require('../../utils/id')
 const { money, dateTime } = require('../../utils/format')
 const { publicImageUrl } = require('../../utils/media')
+const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 
 const KIND_NAMES = { member_night: '会员之夜', hike: '城市轻徒步', camping: '露营计划', city_walk: '城市漫游', music_picnic: '音乐野餐', proposal: '特别企划', other: '超嗨活动' }
 const LOCAL_REGISTRATIONS_KEY = 'mbox.community.registrations.v1'
@@ -20,8 +23,8 @@ const PAYMENT_QUERY_ATTEMPTS_KEY = 'mbox.community.payment.queries.v1'
 const CANCELLATION_ATTEMPTS_KEY = 'mbox.community.registration.cancellations.v1'
 const ALLOWED_PAYMENT_ACTIONS = ['start_payment', 'query_payment', 'cancel_registration']
 const REGISTRATION_STATUS_NAMES = {
-  reserved: '名额已暂留', payment_pending: '等待付款', confirmed: '报名已经确认',
-  waitlisted: '当前在候补名单', checked_in: '已经签到', no_show: '未到场',
+  reserved: '待付款', payment_pending: '待付款', confirmed: '已报名',
+  waitlisted: '候补中', checked_in: '已签到', no_show: '未到场',
   cancelled: '报名已取消', refunded: '已退款', expired: '报名已失效',
 }
 const RESOLUTION_STATE_NAMES = {
@@ -113,6 +116,7 @@ function viewActivity(raw) {
     safetyPolicyText: safetyPolicyVersion ? `安全规则版本 ${safetyPolicyVersion}` : '安全规则版本缺失',
     availablePaymentChoices,
     availablePaymentMethods,
+    requiresPaymentOnSubmit: raw.feeAmountMinor > 0 && !availablePaymentChoices.includes('none'),
     safetyFacts,
     registrationBlocked,
     paymentBlockedText,
@@ -133,6 +137,13 @@ function viewRegistration(raw) {
   const paymentAmountMinor = Number(payment.amountMinor || payment.amountDueMinor || raw.amountDueMinor || 0)
   const manualStates = ['confirmed', 'refund_requested', 'refunding', 'refunded']
   const refundComplete = resolutionState === 'refunded' || refundStatus === 'succeeded'
+  const stateGuide = status === 'confirmed'
+    ? '报名成功，名额已确认。'
+    : ['reserved', 'payment_pending'].includes(status)
+      ? '名额已暂留，完成付款后才算报名成功。'
+      : status === 'waitlisted'
+        ? '候补中，按报名顺序自动递补；现在无需付款。'
+        : ''
   return Object.assign({}, raw, {
     status,
     statusText: REGISTRATION_STATUS_NAMES[status] || '状态待确认',
@@ -153,6 +164,7 @@ function viewRegistration(raw) {
     seatHoldText: raw.seatHoldExpiresAt || raw.expiresAt || payment.expiresAt
       ? dateTime(raw.seatHoldExpiresAt || raw.expiresAt || payment.expiresAt) : '',
     paymentMethodText: payment.method === 'jsapi' ? '微信支付' : payment.method === 'native_qr' ? '二维码支付' : '',
+    stateGuide,
   })
 }
 
@@ -182,6 +194,8 @@ Page({
   data: {
     id: '', loading: true, busy: false, error: '', success: '', activity: null,
     partySize: 1, contact: '', ruleAcknowledged: false, registration: null, loyaltyBenefits: [],
+    membership: null, membershipTerms: null,
+    membershipInviteVisible: false, membershipInviteAgreed: false, membershipInviteBusy: false,
   },
 
   onLoad(options) { this.setData({ id: options.id || '' }) },
@@ -190,6 +204,20 @@ Page({
   async load() {
     this.setData({ loading: true, error: '', success: '' })
     try {
+      const bootstrap = await getMiniBootstrap()
+      const membership = bootstrap.membership || null
+      const membershipTerms = bootstrap.membershipTerms || null
+      if (!membership) {
+        this.setData({
+          loading: false,
+          activity: null,
+          membership: null,
+          membershipTerms,
+          membershipInviteVisible: true,
+        })
+        return
+      }
+      this.setData({ membership, membershipTerms })
       const raw = await getActivity(this.data.id)
       if (!raw) throw new Error('活动已结束、暂停或不在您的可见范围内')
       let loyaltyBenefits = []
@@ -222,8 +250,67 @@ Page({
       const registration = viewRegistration(registrationRaw)
       if (registration) this.rememberRegistration(registration, raw.publicId)
       this.setData({ loading: false, activity: viewActivity(raw), loyaltyBenefits, registration, error: paymentReadError || registrationReadError })
-    } catch (error) { this.setData({ loading: false, error: error.message || '活动详情暂时无法读取' }) }
+    } catch (error) {
+      if (error && error.code === 'ACTIVITY_MEMBERSHIP_REQUIRED') {
+        this.setData({ loading: false, activity: null, membership: null, membershipInviteVisible: true, error: '' })
+        return
+      }
+      this.setData({ loading: false, error: error.message || '活动详情暂时无法读取' })
+    }
   },
+
+  dismissMembershipInvite() {
+    this.setData({ membershipInviteVisible: false, membershipInviteAgreed: false })
+    wx.navigateBack({ fail: () => wx.switchTab({ url: '/pages/community/index' }) })
+  },
+
+  onMembershipInviteAgreementChange(event) {
+    const values = event && event.detail && Array.isArray(event.detail.value) ? event.detail.value : []
+    this.setData({ membershipInviteAgreed: values.indexOf('agree') >= 0 })
+  },
+
+  remindMembershipInviteAgreement() {
+    wx.showToast({ title: '请先勾选同意会员协议', icon: 'none' })
+  },
+
+  showMembershipTerms() {
+    wx.navigateTo({ url: '/pages/membership-terms/index?source=mini_community&action=view' })
+  },
+
+  onAgreePrivacyAuthorization() {},
+
+  async acceptMembershipInvite(event) {
+    if (this.data.membershipInviteBusy) return
+    if (!this.data.membershipInviteAgreed) return this.remindMembershipInviteAgreement()
+    const terms = this.data.membershipTerms
+    if (!terms) {
+      wx.showToast({ title: '当前会员协议暂时无法读取', icon: 'none' })
+      return
+    }
+    const authorization = readWechatPhoneAuthorization(event)
+    if (!authorization.code) {
+      wx.showToast({ title: authorization.message, icon: 'none' })
+      return
+    }
+    this.setData({ membershipInviteBusy: true, error: '' })
+    try {
+      const result = await enrollMembership(terms.version, 'mini_community', authorization.code)
+      if (!result.membership) throw new Error('会员状态暂时未刷新，请稍后重试')
+      this.setData({
+        membership: result.membership,
+        membershipInviteVisible: false,
+        membershipInviteAgreed: false,
+        membershipInviteBusy: false,
+      })
+      wx.showToast({ title: '入会成功', icon: 'success' })
+      await this.load()
+    } catch (error) {
+      this.setData({ membershipInviteBusy: false, error: error.message || '入会暂时没有完成' })
+      wx.showToast({ title: error.message || '入会未完成', icon: 'none' })
+    }
+  },
+
+  noop() {},
 
   changePartySize(event) {
     const delta = Number(event.currentTarget.dataset.delta)
@@ -295,9 +382,10 @@ Page({
       const registration = await this.readPaymentState(registrationRaw)
       this.rememberRegistration(registration, activity.publicId)
       this.setData({ registration })
-      if (registration && registration.canStartPayment) this.setData({ success: `名额已暂留至 ${registration.seatHoldText || '页面所示时限'}，请完成付款。` })
-      else if (result.status === 'waitlisted') this.setData({ success: '当前名额已满，已经进入候补；未确认前不会收取费用。' })
-      else this.setData({ success: '报名状态已更新，可在“我的”中继续查看。' })
+      if (registration && registration.canStartPayment) this.setData({ success: `名额已暂留至 ${registration.seatHoldText || '页面所示时限'}；完成付款后才算报名成功。` })
+      else if (result.status === 'waitlisted') this.setData({ success: '已加入候补，按报名顺序自动递补；现在无需付款。' })
+      else if (result.status === 'confirmed') this.setData({ success: '报名成功，名额已为您确认。' })
+      else this.setData({ success: '报名已提交，请在“我的”中查看当前状态。' })
     } catch (error) {
       const recovered = await this.recoverRegistration(activity.publicId, attempt)
       if (!recovered) {

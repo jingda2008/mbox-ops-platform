@@ -164,6 +164,19 @@ describe('normalized migration baseline', () => {
     expect(migration?.sql).toMatch(/schema_version='100'/)
   })
 
+  it('gives homepage content an explicit pinned or rotating display mode', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '102')
+    expect(migration?.sql).toMatch(/ADD COLUMN display_mode text NOT NULL DEFAULT 'rotation'/)
+    expect(migration?.sql).toMatch(/display_mode IN \('pinned', 'rotation'\)/)
+    expect(migration?.sql).toMatch(/schema_version='102'/)
+  })
+
+  it('allows explicit community membership consent as a separate mini-program source', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '103')
+    expect(migration?.sql).toMatch(/acknowledgement_source IN \('mini_menu','mini_profile','mini_community'\)/)
+    expect(migration?.sql).toMatch(/schema_version='103'/)
+  })
+
   it('keeps refund roles and amount limits configurable while requiring two employees', async () => {
     const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '049')
     expect(migration?.sql).toMatch(/'refund\.request',\s*'退款发起额度'/)
@@ -242,6 +255,12 @@ describe('normalized migration baseline', () => {
     expect(migration?.sql).toMatch(/membership_terms_acceptances_append_only/)
     expect(migration?.sql).toMatch(/membership\.terms\.publish/)
     expect(migration?.sql).not.toMatch(/jsonb/)
+  })
+
+  it('records the Superhigh membership invitation as its own mini-program entry', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '101')
+    expect(migration?.sql).toMatch(/'mini_community'/)
+    expect(migration?.sql).toMatch(/schema_version='101'/)
   })
 
   it('tracks every loyalty refund application as a strong append-only idempotency fact', async () => {

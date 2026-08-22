@@ -11,7 +11,7 @@ const { dateTime } = require('../../utils/format')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 const { publicImageUrl } = require('../../utils/media')
 const MEMBERSHIP_INVITE_DISMISSED_KEY = 'mbox.membership.invite.dismissed.until.v1'
-const HOME_CAMPAIGN_DISMISSED_PREFIX = 'mbox.home.campaign.dismissed.v1:'
+const CONTENT_ROTATION_WINDOW_MS = 6 * 60 * 60 * 1000
 
 function shanghaiDate() {
   return new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10)
@@ -79,14 +79,27 @@ function contentCardView(item) {
   return {
     code: String(item.code || ''),
     type: String(item.type || 'article'),
-    eyebrow: item.type === 'show' ? 'M-BOX LIVE' : item.type === 'presale' ? 'TONIGHT OFFER' : item.type === 'benefit' ? 'MEMBER EDIT' : 'M-BOX STORY',
+    eyebrow: item.type === 'show' ? 'M-BOX LIVE' : item.type === 'activity' ? 'SUPERHIGH' : item.type === 'presale' ? 'TONIGHT OFFER' : item.type === 'benefit' ? 'MEMBER EDIT' : item.type === 'return_offer' ? 'WELCOME BACK' : 'M-BOX STORY',
     title: String(item.title || ''),
     summary: String(item.summary || ''),
     imageUrl: publicImageUrl(item.imageUrl),
     ctaLabel: String(item.ctaLabel || '查看内容'),
     targetPath,
+    displayMode: item.displayMode === 'pinned' ? 'pinned' : 'rotation',
     hasTarget: Boolean(targetPath && targetPath !== '/pages/home/index'),
   }
+}
+
+function homepageContentCards(items) {
+  const cards = (items || []).filter((item) => item && item.type !== 'show')
+    .sort((left, right) => Number(left.priority || 0) - Number(right.priority || 0))
+    .map(contentCardView)
+  const pinned = cards.filter((item) => item.displayMode === 'pinned')
+  const rotating = cards.filter((item) => item.displayMode === 'rotation')
+  if (!rotating.length) return pinned
+  const shanghaiWindow = Math.floor((Date.now() + 8 * 60 * 60 * 1000) / CONTENT_ROTATION_WINDOW_MS)
+  const rotationIndex = shanghaiWindow % rotating.length
+  return pinned.concat(rotating[rotationIndex])
 }
 
 function activityFeatureView(item) {
@@ -126,8 +139,6 @@ Page({
     upcomingReservation: null,
     performance: null,
     performancePanel: '',
-    homeCampaign: null,
-    homeCampaignVisible: false,
     visitState: 'prearrival',
     canEnter: false,
     hasTableSession: false,
@@ -183,26 +194,18 @@ Page({
       && !app.globalData.membershipInvitePresented,
     )
     if (inviteVisible) app.globalData.membershipInvitePresented = true
-    const campaign = (bootstrap.content || []).filter((item) => (
-      item && ['presale', 'benefit', 'activity'].includes(item.type)
-    )).sort((left, right) => Number(left.priority || 0) - Number(right.priority || 0))[0] || null
-    const campaignDismissed = campaign && Number(wx.getStorageSync(`${HOME_CAMPAIGN_DISMISSED_PREFIX}${campaign.code}`) || 0) > Date.now()
     this.setData({
       membership: bootstrap.membership || null,
       membershipTerms: bootstrap.membershipTerms || null,
       membershipInviteVisible: inviteVisible,
       benefitCount: (benefits || []).reduce((sum, item) => sum + Number(item.quantityAvailable || 0), 0),
       upcomingActivity: activityFeatureView(bootstrap.activities && bootstrap.activities.length ? bootstrap.activities[0] : null),
-      editorialCards: (bootstrap.content || []).filter((item) => item && !['activity', 'show', 'presale', 'benefit'].includes(item.type))
-        .sort((left, right) => Number(left.priority || 0) - Number(right.priority || 0))
-        .slice(0, 2).map(contentCardView),
+      editorialCards: homepageContentCards(bootstrap.content),
       monthlyPerformanceCard: contentCardView((bootstrap.content || []).find((item) => item && item.type === 'show') || {
         code: 'published-performance-calendar', type: 'show', title: '本月演出安排', summary: '按日期查看门店已发布的演出与舞台阵容', ctaLabel: '查看安排', targetPath: '/pages/performances/index',
       }),
       upcomingReservation: reservationView(reservations.reservations),
       performance: performanceView(performances),
-      homeCampaign: campaign ? contentCardView(campaign) : null,
-      homeCampaignVisible: Boolean(campaign && !campaignDismissed && !inviteVisible),
     })
     if (!this.data.hasTableSession) {
       this.setData({ loading: false, visitState: 'prearrival', canEnter: false, table: null })
@@ -289,10 +292,7 @@ Page({
   openEditorial(event) {
     const card = this.data.editorialCards.find((item) => item.code === event.currentTarget.dataset.code)
     if (!card) return
-    if (!card.hasTarget) {
-      wx.showModal({ title: card.title, content: card.summary, showCancel: false, confirmText: '知道了' })
-      return
-    }
+    if (!card.hasTarget) return
     if (CONTENT_TAB_TARGETS.has(card.targetPath)) wx.switchTab({ url: card.targetPath })
     else wx.navigateTo({ url: card.targetPath })
   },
@@ -359,20 +359,6 @@ Page({
 
   declineMembershipInvite() {
     this.dismissMembershipInvite()
-  },
-  dismissHomeCampaign() {
-    const campaign = this.data.homeCampaign
-    if (campaign && campaign.code) {
-      wx.setStorageSync(`${HOME_CAMPAIGN_DISMISSED_PREFIX}${campaign.code}`, Date.now() + 24 * 60 * 60 * 1000)
-    }
-    this.setData({ homeCampaignVisible: false })
-  },
-  openHomeCampaign() {
-    const card = this.data.homeCampaign
-    this.dismissHomeCampaign()
-    if (!card || !card.targetPath || card.targetPath === '/pages/home/index') return
-    if (CONTENT_TAB_TARGETS.has(card.targetPath)) wx.switchTab({ url: card.targetPath })
-    else wx.navigateTo({ url: card.targetPath })
   },
   noop() {},
 })

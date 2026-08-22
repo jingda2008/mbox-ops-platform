@@ -114,16 +114,30 @@
 
     <view wx:if="{{upcomingActivity || editorialCards.length}}" class="section home-editorial-section">
       <view class="section-title"><text>发现 M-BOX</text><text class="section-link">精选内容</text></view>
-      <button wx:if="{{upcomingActivity}}" class="featured-activity-card" bindtap="openFeaturedActivity">
-        <image wx:if="{{upcomingActivity.coverUrl}}" src="{{upcomingActivity.coverUrl}}" mode="aspectFill" />
-        <view class="featured-activity-card__shade"></view>
-        <view class="featured-activity-card__copy"><text>超嗨 · 本期精选</text><text>{{upcomingActivity.title}}</text><text>{{upcomingActivity.dateText}} · {{upcomingActivity.availabilityText}}</text><text>查看活动详情 →</text></view>
+      <button wx:if="{{upcomingActivity}}" class="featured-activity-card" bindtap="openFeaturedActivity" hover-class="featured-activity-card--hover">
+        <view class="featured-activity-card__art">
+          <image wx:if="{{upcomingActivity.coverUrl}}" src="{{upcomingActivity.coverUrl}}" mode="aspectFill" />
+          <image wx:else class="featured-activity-card__mark" src="/assets/brand/superhigh-mark.png" mode="aspectFit" aria-hidden="true" />
+          <view class="featured-activity-card__shade"></view>
+          <text class="featured-activity-card__badge">SUPERHIGH</text>
+        </view>
+        <view class="featured-activity-card__copy"><text>超嗨 · 本期精选</text><text>{{upcomingActivity.title}}</text><text>{{upcomingActivity.dateText}} · {{upcomingActivity.availabilityText}}</text><text>查看活动详情</text></view>
+        <text class="featured-activity-card__arrow">›</text>
       </button>
-      <button wx:for="{{editorialCards}}" wx:key="code" class="editorial-story-card" data-code="{{item.code}}" bindtap="openEditorial">
-        <image wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
-        <image wx:else src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" />
-        <view><text>{{item.eyebrow}}</text><text>{{item.title}}</text><text>{{item.summary}}</text><text>{{item.ctaLabel}} →</text></view>
-      </button>
+      <scroll-view wx:if="{{editorialCards.length}}" class="published-content-scroll" scroll-x enhanced show-scrollbar="{{false}}">
+        <view class="published-content-track">
+          <button wx:for="{{editorialCards}}" wx:key="code" class="published-content-card {{editorialCards.length === 1 ? 'is-single' : ''}}" data-code="{{item.code}}" bindtap="openEditorial" hover-class="published-content-card--hover">
+            <view class="published-content-card__art">
+              <image wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
+              <image wx:else class="published-content-card__logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" />
+              <view class="published-content-card__shade"></view>
+              <text class="published-content-card__badge">{{item.eyebrow}}</text>
+            </view>
+            <view class="published-content-card__copy"><text>{{item.title}}</text><text>{{item.summary}}</text><text>{{item.ctaLabel}}</text></view>
+            <text wx:if="{{item.hasTarget}}" class="published-content-card__arrow">›</text>
+          </button>
+        </view>
+      </scroll-view>
     </view>
   </block>
 
@@ -136,18 +150,6 @@
       </view>
       <view wx:else class="performance-panel__artist"><image wx:if="{{performance.imageUrl}}" src="{{performance.imageUrl}}" mode="aspectFill" /><view><text>{{performance.performer}}</text><text>{{performance.tags || 'M-BOX 当晚舞台阵容'}}</text><text>{{performance.bio || '更多介绍由门店发布后展示。'}}</text></view></view>
       <text class="performance-panel__note">演出时间与阵容以门店当日已发布安排为准。</text>
-    </view>
-  </view>
-
-  <view wx:if="{{homeCampaignVisible && homeCampaign}}" class="home-campaign-mask" catchtouchmove="noop">
-    <view class="home-campaign-sheet">
-      <button class="home-campaign-close" aria-label="关闭活动内容" bindtap="dismissHomeCampaign">×</button>
-      <image wx:if="{{homeCampaign.imageUrl}}" class="home-campaign-image" src="{{homeCampaign.imageUrl}}" mode="aspectFill" />
-      <image wx:else class="home-campaign-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" />
-      <text class="home-campaign-kicker">M-BOX · NOW SHOWING</text><text class="home-campaign-title">{{homeCampaign.title}}</text><text class="home-campaign-copy">{{homeCampaign.summary}}</text>
-      <button wx:if="{{homeCampaign.hasTarget}}" class="home-campaign-cta" bindtap="openHomeCampaign">{{homeCampaign.ctaLabel}}</button>
-      <button wx:else class="home-campaign-cta home-campaign-cta--quiet" bindtap="dismissHomeCampaign">知道了</button>
-      <text class="home-campaign-note">此内容由门店后台发布，可随时暂停或更新。</text>
     </view>
   </view>
 

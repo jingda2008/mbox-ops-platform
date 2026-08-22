@@ -12,6 +12,7 @@ import {
   type ActivityOperationsActivity,
   type ActivityOperationsRegistration,
   type ActivityRegistrationOperation,
+  type ActivityWaitlistRetry,
 } from './activity-operations-repository.js'
 import type { ScopedPostgresTransactionRunner, StoreScope } from './transaction-runner.js'
 
@@ -148,6 +149,33 @@ export class ActivityOperationsService {
             paymentStatus: result.paymentStatus,
             partySize: result.partySize,
           },
+        })],
+        outboxMessages: [],
+      }
+    })
+  }
+
+  retryWaitlistPromotion(
+    context: ActivityOperationsStaffContext,
+    input: Readonly<{ publicId: string; reason: string; idempotencyKey: string }>,
+  ): Promise<CommandExecution<ActivityWaitlistRetry>> {
+    return this.commands.execute({
+      scope: context.scope,
+      operationScope: 'community.activity.waitlist.retry',
+      idempotencyKey: input.idempotencyKey,
+      requestFingerprint: fingerprint(input),
+      resultCodec: objectCodec<ActivityWaitlistRetry>(),
+    }, async (transaction) => {
+      const result = await new ActivityOperationsRepository(transaction)
+        .retryWaitlistPromotion(input.publicId)
+      return {
+        result,
+        auditEvents: [audit(context, {
+          action: 'community.activity.waitlist_retry_requested',
+          objectType: 'community_activity',
+          objectId: input.publicId,
+          reason: input.reason,
+          afterData: { state: result.state, nextAttemptAt: result.nextAttemptAt },
         })],
         outboxMessages: [],
       }

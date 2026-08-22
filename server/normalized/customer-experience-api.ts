@@ -352,7 +352,7 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
     const result = await options.membershipEnrollment.enroll(context, {
       termsVersion: integer(body.termsVersion, '入会条款版本', 1, 2_000_000_000),
       acknowledgementSource: enumValue(
-        body.acknowledgementSource, '入会确认入口', ['mini_menu','mini_profile'] as const,
+        body.acknowledgementSource, '入会确认入口', ['mini_menu','mini_profile','mini_community'] as const,
       ),
       phoneAuthorizationCode: text(body.phoneAuthorizationCode, '微信手机号授权凭证', 8, 512),
       idempotencyKey: idempotencyKey(request),

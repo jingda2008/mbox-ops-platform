@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.0-rc.119 - 2026-08-22
+
+- Keeps the configured store login code reusable across business dates, so the
+  fixed configured value can establish the next business day's device access
+  without a release or manual database rewrite.
+- Preserves employee PIN checks, device binding, rate limits, revocation,
+  expiring device leases and six-hour employee sessions; the shared store code
+  does not become a permanent staff session.
+- Adds normalized migration `099` and append-only audit/outbox evidence for each
+  automatic business-date credential renewal.
+- Does not build, upload or overwrite the WeChat mini-program package.
+
 ## 1.0.0-rc.118 - 2026-08-22
 
 - Stages each post-cutover verification report under a hidden temporary name,

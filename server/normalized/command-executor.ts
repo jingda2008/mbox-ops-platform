@@ -323,10 +323,10 @@ export async function appendAuditEvent(
 export async function appendOutboxMessage(
   transaction: ScopedTransaction,
   message: Readonly<OutboxMessage>,
-): Promise<void> {
+): Promise<string> {
   validateOutboxMessage(message)
   const messageKey = outboxMessageKey(message)
-  const inserted = await transaction.query<{ message_key: string }>(`
+  const inserted = await transaction.query<{ id: string }>(`
     INSERT INTO mbox.outbox_messages (
       tenant_id, store_id, message_key, aggregate_type, aggregate_id,
       aggregate_version, message_type, payload, headers, occurred_at, available_at
@@ -337,7 +337,7 @@ export async function appendOutboxMessage(
       COALESCE($11::timestamptz, clock_timestamp())
     )
     ON CONFLICT (tenant_id, store_id, message_key) DO NOTHING
-    RETURNING message_key
+    RETURNING id
   `, [
     transaction.scope.tenantId,
     transaction.scope.storeId,
@@ -351,10 +351,10 @@ export async function appendOutboxMessage(
     message.occurredAt ?? null,
     message.availableAt ?? null,
   ])
-  if (inserted.rowCount === 1) return
+  if (inserted.rowCount === 1 && inserted.rows[0]?.id) return inserted.rows[0].id
 
-  const existing = await transaction.query<ExistingOutboxMessageRow>(`
-    SELECT message_key, aggregate_type, aggregate_id, aggregate_version,
+  const existing = await transaction.query<ExistingOutboxMessageRow & { id: string }>(`
+    SELECT id, message_key, aggregate_type, aggregate_id, aggregate_version,
       message_type, payload, headers
     FROM mbox.outbox_messages
     WHERE tenant_id = $1::uuid
@@ -365,6 +365,7 @@ export async function appendOutboxMessage(
   if (existing.rowCount !== 1 || row === undefined || !sameOutboxMessage(row, message)) {
     throw new OutboxMessageConflictError(messageKey)
   }
+  return row.id
 }
 
 function outboxMessageKey(message: Readonly<OutboxMessage>): string {

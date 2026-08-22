@@ -88,7 +88,7 @@ describe('normalized store provisioning config', () => {
       'utf8',
     )) as unknown
     const config = parseStoreProvisionConfig(source)
-    expect(config.version).toBe('2026.08.21-v12')
+    expect(config.version).toBe('2026.08.22-v13')
     const role = (code: string) => config.roles.find((candidate) => candidate.code === code)
 
     expect(role('MANAGER')?.permissions.filter((code) => code.startsWith('refund.')))
@@ -101,6 +101,11 @@ describe('normalized store provisioning config', () => {
     expect(role('CASHIER')?.approvalLimits).toContainEqual(expect.objectContaining({
       code: 'refund.approve', amountMinor: 200_000, currency: 'CNY', enabled: true,
     }))
+    const cashierPermissions = new Set(role('CASHIER')?.permissions)
+    expect(cashierPermissions.has('printer.manage')).toBe(true)
+    for (const permission of ['hardware.view_all', 'hardware.manage', 'hardware.command', 'print.view_all', 'print.retry']) {
+      expect(cashierPermissions.has(permission)).toBe(false)
+    }
     expect(config.roles.filter((candidate) => candidate.code !== 'MANAGER' && candidate.code !== 'CASHIER')
       .flatMap((candidate) => candidate.permissions.filter((code) => code.startsWith('refund.'))))
       .toEqual([])

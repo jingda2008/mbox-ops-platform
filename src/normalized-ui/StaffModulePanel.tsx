@@ -839,8 +839,9 @@ function DevicesModule({ api, auth, devices, jobs, onChanged }: { api: Normalize
   const [reason, setReason] = useState('现场人工检查后操作')
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [notice, setNotice] = useState('')
-  const canCommand = auth.permissions.includes('hardware.command')
-  const canRetry = auth.permissions.includes('print.retry')
+  const canManagePrinter = auth.permissions.includes('printer.manage')
+  const canCommand = auth.permissions.includes('hardware.command') || canManagePrinter
+  const canRetry = auth.permissions.includes('print.retry') || canManagePrinter
   const attention = devices.filter((device) => device.connectivityStatus === 'offline' || device.connectivityStatus === 'degraded').length
     + jobs.filter((job) => job.status === 'failed' || job.status === 'dead').length
 
@@ -951,7 +952,7 @@ function SettingsModule({ api, auth, policy, onChanged }: { api: NormalizedApiCl
       <summary><span><strong>查看当前可配置范围</strong><small>员工、设备、演出、支付和门店数据</small></span><ChevronRight size={17} /></summary>
       <div className="staff-settings-grid">
         <article><strong>员工与岗位</strong><span>{auth.permissions.includes('staff.access.configure') ? '可配置并留痕' : '只读'}</span></article>
-        <article><strong>设备与打印</strong><span>{auth.permissions.includes('hardware.manage') ? '可配置' : '只读'}</span></article>
+        <article><strong>设备与打印</strong><span>{auth.permissions.includes('hardware.manage') || auth.permissions.includes('printer.manage') ? '可配置' : '只读'}</span></article>
         <article><strong>演员与演出</strong><span>{auth.permissions.includes('song.manage') ? '可配置' : '只读'}</span></article>
         <article><strong>线上支付开关</strong><span className={policy?.onlinePaymentEnabled === true ? '' : 'is-blocked'}>{canManagePayment ? paymentPresentation?.summary ?? '状态待读取' : '无管理权限'}</span></article>
         <article><strong>门店业务数据</strong><span>规范化数据库</span></article>

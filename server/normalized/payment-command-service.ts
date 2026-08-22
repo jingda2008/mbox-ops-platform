@@ -5,7 +5,9 @@ import type {
   JsonCodec,
   JsonObject,
   NormalizedCommandExecutor,
+  OutboxMessage,
 } from './command-executor.js'
+import { appendOutboxMessage } from './command-executor.js'
 import type { ChannelPaymentStatus } from '../../src/shared/payment-contracts.js'
 import {
   PaymentRepository,
@@ -40,6 +42,7 @@ import {
   RejectingProviderObservationAuthority,
   type ProviderObservationAuthorityPort,
 } from './provider-verification-observation.js'
+import { PrintTicketSourceRepository } from './print-ticket-source.js'
 
 interface CommandMetadata {
   scope: Readonly<StoreScope>
@@ -140,6 +143,7 @@ export class PaymentCommandService {
     private readonly commands: Pick<NormalizedCommandExecutor, 'execute'>,
     private readonly authorization: PaymentCapabilityAuthorizationPort,
     private readonly providerObservations: ProviderObservationAuthorityPort = new RejectingProviderObservationAuthority(),
+    private readonly options: Readonly<{ printTicketSources?: boolean }> = {},
   ) {}
 
   initiate(input: Readonly<InitiatePaymentCommand>): Promise<CommandExecution<Payment>> {
@@ -171,7 +175,7 @@ export class PaymentCommandService {
       })
       if (payment.orderId === null) throw new Error('Order payment lost its order target')
       await payments.syncOrderPaymentStatus(payment.orderId)
-      return paymentOutcome(input, payment, 'payment.initiated', 1)
+      return await paymentOutcome(transaction, input, payment, 'payment.initiated', 1, undefined, undefined, this.options.printTicketSources === true)
     })
   }
 
@@ -233,7 +237,7 @@ export class PaymentCommandService {
         metadata: { paymentId: payment.id, paymentProvider: payment.provider },
         paymentId: payment.id,
       })
-      return paymentOutcome(input, payment, 'payment.manual_recorded', 1, undefined, activation)
+      return await paymentOutcome(transaction, input, payment, 'payment.manual_recorded', 1, undefined, activation, this.options.printTicketSources === true)
     })
   }
 
@@ -302,7 +306,8 @@ export class PaymentCommandService {
           paymentId: payment.id,
         })
       }
-      return paymentOutcome(
+      return await paymentOutcome(
+        transaction,
         input,
         payment,
         'payment.succeeded',
@@ -313,6 +318,7 @@ export class PaymentCommandService {
           input.providerTransactionId,
         ),
         activation,
+        this.options.printTicketSources === true,
       )
     })
   }
@@ -405,7 +411,8 @@ export class PaymentCommandService {
         : input.status === 'failed' || input.status === 'closed'
           ? 'payment.provider_failed'
           : 'payment.provider_pending'
-      return paymentOutcome(
+      return await paymentOutcome(
+        transaction,
         input,
         payment,
         action,
@@ -414,6 +421,7 @@ export class PaymentCommandService {
           ? paymentBusinessEventKey('succeeded', payment.provider, input.providerTransactionId)
           : undefined,
         fulfillmentResult,
+        this.options.printTicketSources === true,
       )
     })
   }
@@ -663,14 +671,16 @@ function command<Result>(
   }
 }
 
-function paymentOutcome(
+async function paymentOutcome(
+  transaction: import('./transaction-runner.js').ScopedTransaction,
   input: Readonly<CommandMetadata>,
   payment: Payment,
   action: string,
   version: number,
   businessEventKey?: string,
   fulfillment?: PaymentFulfillmentActivation | PaymentFulfillmentRelease,
-) {
+  printTicketSources = false,
+): Promise<CommandOutcome<Payment>> {
   const snapshot = paymentToJson(payment)
   const fulfillmentChanged = fulfillment !== undefined && (
     ('activated' in fulfillment && fulfillment.activated)
@@ -696,6 +706,39 @@ function paymentOutcome(
             reservationCount: fulfillment.reservationCount,
           } as JsonObject,
         }
+  const paymentOutbox: OutboxMessage = {
+    businessEventKey,
+    aggregateType: 'payment',
+    aggregateId: payment.id,
+    aggregateVersion: version,
+    eventType: `${action}.v1`,
+    payload: snapshot,
+  }
+  const producesCashierTicket = printTicketSources && payment.orderId !== null && (
+    action === 'payment.initiated' || payment.status === 'succeeded'
+  )
+  if (producesCashierTicket) {
+    const sourceOutboxMessageId = await appendOutboxMessage(transaction, paymentOutbox)
+    const sources = new PrintTicketSourceRepository(transaction)
+    if (action === 'payment.initiated') {
+      await sources.materializeCashierSettlement(sourceOutboxMessageId, payment.id)
+    } else {
+      await sources.materializeCashierPayment(sourceOutboxMessageId, payment.id)
+    }
+  }
+  const fulfillmentOutbox: OutboxMessage | null = fulfillmentEvent === null ? null : {
+    businessEventKey: `fulfillment:${fulfillmentEvent.action}:${fulfillment!.orderId}`,
+    aggregateType: 'order',
+    aggregateId: fulfillment!.orderId,
+    aggregateVersion: 2,
+    eventType: fulfillmentEvent.eventType,
+    payload: fulfillmentEvent.payload,
+  }
+  const producesProductionTicket = printTicketSources && fulfillmentOutbox !== null && 'activated' in fulfillment! && fulfillment!.activated
+  if (producesProductionTicket && fulfillmentOutbox !== null) {
+    const sourceOutboxMessageId = await appendOutboxMessage(transaction, fulfillmentOutbox)
+    await new PrintTicketSourceRepository(transaction).materializeOrderProduction(sourceOutboxMessageId, fulfillment!.orderId)
+  }
   return {
     result: payment,
     auditEvents: [{
@@ -713,21 +756,10 @@ function paymentOutcome(
       businessDate: input.businessDate,
       afterData: fulfillmentEvent.payload,
     }])],
-    outboxMessages: [{
-      businessEventKey,
-      aggregateType: 'payment',
-      aggregateId: payment.id,
-      aggregateVersion: version,
-      eventType: `${action}.v1`,
-      payload: snapshot,
-    }, ...(fulfillmentEvent === null ? [] : [{
-      businessEventKey: `fulfillment:${fulfillmentEvent.action}:${fulfillment!.orderId}`,
-      aggregateType: 'order',
-      aggregateId: fulfillment!.orderId,
-      aggregateVersion: 2,
-      eventType: fulfillmentEvent.eventType,
-      payload: fulfillmentEvent.payload,
-    }])],
+    outboxMessages: [
+      ...(producesCashierTicket ? [] : [paymentOutbox]),
+      ...(fulfillmentOutbox === null || producesProductionTicket ? [] : [fulfillmentOutbox]),
+    ],
   }
 }
 

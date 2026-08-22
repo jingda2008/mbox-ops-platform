@@ -59,6 +59,45 @@ describe('hardware API role cropping', () => {
     }))
   })
 
+  it('lets a printer manager maintain only printers, never other hardware', async () => {
+    const fake = repository()
+    fake.listDevices.mockResolvedValue([
+      { id: deviceId, deviceType: 'printer', name: '收银热敏打印机' },
+      { id: '26200000-0000-4000-8000-000000000009', deviceType: 'headset', name: '服务耳机' },
+    ])
+    const app = await build(['printer.manage'], fake)
+
+    const devices = await app.inject({ method: 'GET', url: '/hardware/devices' })
+    expect(devices.statusCode).toBe(200)
+    expect(devices.json().data).toEqual([{ id: deviceId, deviceType: 'printer', name: '收银热敏打印机' }])
+
+    const blockedDevice = await app.inject({
+      method: 'POST', url: '/hardware/devices',
+      headers: { 'idempotency-key': 'printer-manager-device-0001' },
+      payload: { code: 'headset-01', name: '服务耳机', deviceType: 'headset', reason: '无权配置非打印设备' },
+    })
+    expect(blockedDevice.statusCode).toBe(403)
+    expect(fake.createDevice).not.toHaveBeenCalled()
+
+    const blockedCommand = await app.inject({
+      method: 'POST', url: `/hardware/devices/${deviceId}/commands`,
+      headers: { 'idempotency-key': 'printer-manager-command-0001' },
+      payload: { commandType: 'open_cash_drawer', reason: '不允许用打印维护权限开钱箱' },
+    })
+    expect(blockedCommand.statusCode).toBe(403)
+    expect(fake.requestHardwareCommand).not.toHaveBeenCalled()
+
+    const accepted = await app.inject({
+      method: 'POST', url: `/hardware/devices/${deviceId}/commands`,
+      headers: { 'idempotency-key': 'printer-manager-command-0002' },
+      payload: { commandType: 'test_print', reason: '确认80毫米热敏纸打印正常' },
+    })
+    expect(accepted.statusCode).toBe(202)
+    expect(fake.requestHardwareCommand).toHaveBeenCalledWith(expect.objectContaining({
+      commandType: 'test_print', printerOnly: true,
+    }))
+  })
+
   it('rejects kitchen print access for a bartender', async () => {
     const fake = repository()
     const app = await build(['print.view', 'work.bar'], fake)

@@ -259,6 +259,7 @@ export const staffPermissionIds = [
   'hardware.view',
   'hardware.operate',
   'hardware.manage',
+  'printer.manage',
   'store_import.apply',
 ] as const
 

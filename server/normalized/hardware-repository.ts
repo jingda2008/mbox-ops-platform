@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { JsonObject } from './command-executor.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
@@ -110,6 +111,7 @@ export interface RequestHardwareCommandInput {
   requestedByEmployeeId: string
   reason: string
   payloadSnapshot?: JsonObject
+  printerOnly?: boolean
 }
 
 interface DeviceRow extends Record<string, unknown> {
@@ -341,7 +343,7 @@ export class HardwareRepository {
 
     const jobs: PrintJob[] = []
     for (const route of routes.rows) {
-      const businessKey = `print:${input.sourceOutboxMessageId}:${route.id}`
+      const businessKey = printBusinessKey(input.sourceOutboxMessageId, route.id, input.sourceReference)
       const inserted = await this.transaction.query<{ id: string }>(`
         INSERT INTO mbox.print_jobs (
           tenant_id, store_id, business_key, source_outbox_message_id,
@@ -523,6 +525,7 @@ export class HardwareRepository {
       FROM mbox.devices AS device
       WHERE device.tenant_id = $1::uuid AND device.store_id = $2::uuid
         AND device.id = $4::uuid AND device.status <> 'retired'
+        AND ($9::boolean IS FALSE OR device.device_type='printer')
       RETURNING id, public_id, device_id, command_type, status, created_at
     `, [
       this.transaction.scope.tenantId,
@@ -533,6 +536,7 @@ export class HardwareRepository {
       input.requestedByEmployeeId,
       input.reason.trim(),
       JSON.stringify(input.payloadSnapshot ?? {}),
+      input.printerOnly === true,
     ])
     if (!result.rows[0]) throw new HardwareNotFoundError('设备不存在或已退役')
     return {
@@ -688,6 +692,11 @@ function canonicalJson(value: unknown): string {
     )).join(',')}}`
   }
   return JSON.stringify(value)
+}
+
+function printBusinessKey(sourceOutboxMessageId: string, routeId: string, sourceReference: string): string {
+  const variant = createHash('sha256').update(sourceReference, 'utf8').digest('hex').slice(0, 20)
+  return `print:${sourceOutboxMessageId}:${routeId}:${variant}`
 }
 
 function validateDeviceInput(input: Readonly<CreateDeviceInput>) {

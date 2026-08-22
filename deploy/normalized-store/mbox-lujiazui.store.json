@@ -1,5 +1,5 @@
 {
-  "version": "2026.08.21-v12",
+  "version": "2026.08.22-v13",
   "tenant": {
     "id": "10000000-0000-4000-8000-000000000001",
     "code": "superhigh",
@@ -1834,7 +1834,8 @@
         "refund.approve",
         "refund.execute",
         "reconciliation.view",
-        "reservation.view"
+        "reservation.view",
+        "printer.manage"
       ],
       "navigation": [
         {

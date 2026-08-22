@@ -172,7 +172,7 @@ export const NORMALIZED_LOG_REDACTION_PATHS = Object.freeze([
   'payment.publicKey',
 ])
 
-export const NORMALIZED_MIN_SCHEMA_VERSION = '101'
+export const NORMALIZED_MIN_SCHEMA_VERSION = '102'
 export const NORMALIZED_INJECTABLE_PLUGIN_PORTS = Object.freeze([
   'customer-table-side',
 ] as const)
@@ -513,6 +513,9 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       {
         inventoryEnforcementMode: options.config.inventoryEnforcementMode,
         guestOrderSafetyPolicy: options.config.guestOrderSafetyPolicy,
+        printTicketSources: options.config.integrations?.modes.printing !== 'disabled'
+          && options.config.workerAdapterModule !== null
+          && options.config.runtimeRole !== 'contract_candidate',
       },
     )
     const customerExperience = new CustomerExperienceService(
@@ -573,6 +576,11 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       commandExecutor,
       new NormalizedPaymentCapabilityAuthorization(),
       new NormalizedProviderObservationAuthority(),
+      {
+        printTicketSources: options.config.integrations?.modes.printing !== 'disabled'
+          && options.config.workerAdapterModule !== null
+          && options.config.runtimeRole !== 'contract_candidate',
+      },
     )
     const activityPayments = new ActivityPaymentService(transactions, paymentCommands, onlinePayments)
     instance.register(paymentApiPlugin, {

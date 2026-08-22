@@ -416,7 +416,7 @@ function categoryLabel(category: string): string {
 const permissionLabels: Record<string, string> = {
   'ai.execute': '执行AI命令', 'ai.schedule': '创建定时AI任务', 'business_day.close': '结束营业日', 'business_day.view': '查看营业日',
   'commercial.cost.manage': '维护经营成本', 'commercial.profit.view': '查看利润', 'commercial.sales.view': '查看本人销售', 'commercial.sales.view_all': '查看全员销售',
-  'dashboard.view': '查看工作台', 'fulfillment.view_all': '查看全店出品', 'hardware.manage': '管理设备', 'hardware.view_all': '查看全部设备',
+  'dashboard.view': '查看工作台', 'fulfillment.view_all': '查看全店出品', 'hardware.manage': '管理设备', 'hardware.view_all': '查看全部设备', 'printer.manage': '配置与维护打印机',
   'inventory.cost.view': '查看库存成本', 'inventory.manage': '管理库存', 'inventory.view': '查看库存', 'kds.deliver': '配送并确认送达',
   'kds.exception.manage': '处理出品异常', 'kds.prepare': '制作并完成出品', 'order.create': '创建订单', 'order.discount': '订单折扣',
   'order.gift': '赠送商品', 'order.view': '查看订单', 'payment.initiate.staff': '发起员工协助收款', 'payment.manual.cash.record': '登记现金收款',

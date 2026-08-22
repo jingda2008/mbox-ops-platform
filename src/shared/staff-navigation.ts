@@ -27,7 +27,7 @@ export const staffNavigationPermissions: Record<StaffNavigationId, readonly Staf
   payments: ['finance.view', 'payment.collect', 'payment.pos_report', 'payment.refund.request', 'payment.refund.approve'],
   benefits: ['benefit.view', 'benefit.grant', 'benefit.approve', 'benefit.manage'],
   operations: ['config.manage', 'inventory.manage', 'inventory.approve', 'payment.collect', 'finance.view', 'benefit.manage'],
-  devices: ['hardware.view', 'hardware.operate', 'hardware.manage'],
+  devices: ['hardware.view', 'hardware.operate', 'hardware.manage', 'printer.manage'],
   songs: ['song.view', 'song.manage'],
   layout: ['table.manage'],
   master: ['identity.manage', 'master_data.manage', 'shift.manage'],

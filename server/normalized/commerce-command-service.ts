@@ -4,7 +4,7 @@ import type {
   JsonCodec,
   JsonObject,
 } from './command-executor.js'
-import type { NormalizedCommandExecutor } from './command-executor.js'
+import { appendOutboxMessage, type NormalizedCommandExecutor, type OutboxMessage } from './command-executor.js'
 import type { ScopedTransaction, StoreScope } from './transaction-runner.js'
 import {
   AssistedOrderContextDeniedError,
@@ -43,6 +43,7 @@ import {
 } from './customer-experience-repository.js'
 import { ExperiencePlanActivationRepository } from './experience-plan-activation-repository.js'
 import { lockBoundGuestTablePosition } from './guest-table-authority.js'
+import { PrintTicketSourceRepository } from './print-ticket-source.js'
 
 export interface KdsSchedulingOverride {
   priority?: number
@@ -89,6 +90,7 @@ export interface SubmittedCommerceResult {
 export interface CommerceCommandServiceOptions {
   inventoryEnforcementMode?: 'strict' | 'audit_only'
   guestOrderSafetyPolicy?: Readonly<GuestOrderSafetyPolicy>
+  printTicketSources?: boolean
 }
 
 export class GuestTablePositionChangedError extends Error {
@@ -221,6 +223,21 @@ export class CommerceCommandService {
         inventoryConsumptions,
         paymentNextStep: paymentNextStep(order),
       }
+      const outboxMessage: OutboxMessage = {
+        aggregateType: 'order',
+        aggregateId: order.id,
+        aggregateVersion: 1,
+        eventType: 'order.submitted.v1',
+        payload: orderOutboxPayload(
+          result, pricingAuthorization, context, schedulingOverride, inventoryControl, selectedUpgrade?.offerId ?? null,
+          orderedRecommendation,
+        ),
+      }
+      const productionSourceMaterialized = this.options.printTicketSources === true && result.kdsTasks.length > 0
+      if (productionSourceMaterialized) {
+        const sourceOutboxMessageId = await appendOutboxMessage(transaction, outboxMessage)
+        await new PrintTicketSourceRepository(transaction).materializeOrderProduction(sourceOutboxMessageId, order.id)
+      }
       return {
         result,
         auditEvents: [{
@@ -234,16 +251,7 @@ export class CommerceCommandService {
             orderedRecommendation,
           ),
         }],
-        outboxMessages: [{
-          aggregateType: 'order',
-          aggregateId: order.id,
-          aggregateVersion: 1,
-          eventType: 'order.submitted.v1',
-          payload: orderOutboxPayload(
-            result, pricingAuthorization, context, schedulingOverride, inventoryControl, selectedUpgrade?.offerId ?? null,
-            orderedRecommendation,
-          ),
-        }],
+        outboxMessages: productionSourceMaterialized ? [] : [outboxMessage],
       }
     })
   }

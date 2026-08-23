@@ -291,7 +291,7 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
     if (module === 'performance') return <PerformanceModule api={api} auth={auth} view={data.performance} performers={data.performers} requests={data.songRequests} phases={data.performancePhases} onChanged={refresh} />
     if (module === 'inventory') return <InventoryModule api={api} auth={auth} view={data.inventory} onChanged={refresh} />
     if (module === 'operations') return <OperationsModule view={data.profit} sales={data.employeeSales} canViewProfit={auth.permissions.includes('commercial.profit.view')} />
-    if (module === 'experience' && data.customerExperience !== null) return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={data.customerExperience} onChanged={refresh} />
+    if (module === 'experience' && data.customerExperience !== null) return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={data.customerExperience} />
     if (module === 'devices') return <DevicesModule api={api} auth={auth} devices={data.devices} jobs={data.printJobs} onChanged={refresh} />
     return <SettingsModule api={api} auth={auth} policy={data.commercePolicy} onChanged={refresh} />
   }, [api, auth, data, module, onLoginRequired, paymentRefreshToken, refresh])

@@ -65,7 +65,7 @@ describe('activity operations staff and customer contract', () => {
 
   it('does not promise the dead unversioned activity points field to customers', () => {
     const detail = read('miniprogram/pages/community-detail/index.wxml')
-    const staff = read('src/normalized-ui/CustomerExperienceManagementPanel.tsx')
+    const staff = read('src/normalized-ui/ActivityOperationsPanel.tsx')
     const api = read('server/normalized/customer-experience-api.ts')
     expect(detail).not.toContain('完成积分')
     expect(detail).not.toContain('activity.pointsReward')
@@ -78,9 +78,9 @@ describe('activity operations staff and customer contract', () => {
     const panel = read('src/normalized-ui/ActivityOperationsPanel.tsx')
     const management = read('src/normalized-ui/CustomerExperienceManagementPanel.tsx')
     const api = read('server/normalized/activity-operations-api.ts')
-    expect(management).toContain('const legacyActivityEditorEnabled = false')
-    expect(management).toContain('legacyActivityEditorEnabled && canCreate')
-    expect(management).toContain('legacyActivityEditorEnabled && <section className="activity-admin-list"')
+    expect(management).not.toContain('/api/staff/community-activities')
+    expect(management).not.toContain('legacyActivityEditorEnabled')
+    expect(management).toContain('<ActivityOperationsPanel api={api} auth={auth} />')
     expect(management).not.toContain("'/api/staff/activity-operations'")
     expect(panel).not.toContain("['black'")
     expect(panel).not.toContain('value="black"')

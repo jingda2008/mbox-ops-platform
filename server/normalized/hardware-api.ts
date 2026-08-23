@@ -18,6 +18,8 @@ import {
   type PrintJobStatus,
 } from './hardware-repository.js'
 import type { NormalizedOperationsRequestContext } from './normalized-operations-api.js'
+import { NormalizedAuthenticationRequiredError } from './normalized-request-context.js'
+import { StaffSessionNotFoundError } from './staff-session-repository.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction } from './transaction-runner.js'
 
 type TransactionPort = Pick<ScopedPostgresTransactionRunner, 'run'>
@@ -391,6 +393,9 @@ async function handle(reply: FastifyReply, operation: () => Promise<FastifyReply
   try {
     return await operation()
   } catch (error) {
+    if (error instanceof NormalizedAuthenticationRequiredError || error instanceof StaffSessionNotFoundError) {
+      return reply.code(401).send({ error: { code: 'AUTH_REQUIRED', message: '登录信息无效或已过期，请重新登录' } })
+    }
     if (error instanceof HardwareAccessDeniedError) {
       return reply.code(403).send({ error: { code: 'HARDWARE_FORBIDDEN', message: error.message } })
     }

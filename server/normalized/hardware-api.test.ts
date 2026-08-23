@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { NormalizedCommandExecutor } from './command-executor.js'
 import { hardwareApiPlugin } from './hardware-api.js'
 import type { HardwareRepository } from './hardware-repository.js'
+import { NormalizedAuthenticationRequiredError } from './normalized-request-context.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
 const tenantId = '26200000-0000-4000-8000-000000000001'
@@ -14,6 +15,24 @@ const apps: ReturnType<typeof Fastify>[] = []
 afterEach(async () => Promise.all(apps.splice(0).map((app) => app.close())))
 
 describe('hardware API role cropping', () => {
+  it('returns 401 instead of an internal error when the staff session is missing', async () => {
+    const app = Fastify()
+    apps.push(app)
+    await app.register(hardwareApiPlugin, {
+      transactions: { run: async (_scope, operation) => operation(transaction()) },
+      commands: commandExecutor(),
+      resolveContext: () => { throw new NormalizedAuthenticationRequiredError() },
+      createRepository: () => repository() as unknown as HardwareRepository,
+    })
+
+    const response = await app.inject({ method: 'GET', url: '/hardware/printer-routes' })
+
+    expect(response.statusCode).toBe(401)
+    expect(response.json()).toEqual({
+      error: { code: 'AUTH_REQUIRED', message: '登录信息无效或已过期，请重新登录' },
+    })
+  })
+
   it('shows a bartender only bar production work, never kitchen work', async () => {
     const fake = repository()
     const app = await build(['print.view', 'work.bar'], fake)

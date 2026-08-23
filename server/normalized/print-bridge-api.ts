@@ -1,11 +1,13 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import { appendAuditEvent, type JsonObject } from './command-executor.js'
 import type { NormalizedOperationsRequestContext } from './normalized-operations-api.js'
+import { NormalizedAuthenticationRequiredError } from './normalized-request-context.js'
 import {
   PrintBridgeAuthenticationError,
   PrintBridgeRepository,
   PrintBridgeRequestError,
 } from './print-bridge-repository.js'
+import { StaffSessionNotFoundError } from './staff-session-repository.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction, StoreScope } from './transaction-runner.js'
 
 export interface PrintBridgeApiOptions {
@@ -214,6 +216,9 @@ async function handle(reply: FastifyReply, operation: () => Promise<FastifyReply
   try {
     return await operation()
   } catch (error) {
+    if (error instanceof NormalizedAuthenticationRequiredError || error instanceof StaffSessionNotFoundError) {
+      return reply.code(401).send({ error: { code: 'AUTH_REQUIRED', message: '登录信息无效或已过期，请重新登录' } })
+    }
     if (error instanceof PrintBridgeAuthenticationError) {
       return reply.code(401).send({ error: { code: 'PRINT_BRIDGE_UNAUTHORIZED', message: error.message } })
     }

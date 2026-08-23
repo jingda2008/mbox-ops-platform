@@ -2,6 +2,7 @@ import Fastify from 'fastify'
 import { describe, expect, it, vi } from 'vitest'
 import { printBridgeApiPlugin } from './print-bridge-api.js'
 import type { PrintBridgeRepository } from './print-bridge-repository.js'
+import { NormalizedAuthenticationRequiredError } from './normalized-request-context.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
 const scope = {
@@ -11,6 +12,25 @@ const scope = {
 const employeeId = '33333333-3333-4333-8333-333333333333'
 
 describe('print bridge API', () => {
+  it('returns 401 instead of an internal error when the staff session is missing', async () => {
+    const repository = { list: vi.fn() }
+    const app = Fastify()
+    await app.register(printBridgeApiPlugin, {
+      ...options(repository, []),
+      resolveStaffContext: async () => { throw new NormalizedAuthenticationRequiredError() },
+      prefix: '/api',
+    })
+
+    const response = await app.inject({ method: 'GET', url: '/api/hardware/print-bridges' })
+
+    expect(response.statusCode).toBe(401)
+    expect(response.json()).toEqual({
+      error: { code: 'AUTH_REQUIRED', message: '登录信息无效或已过期，请重新登录' },
+    })
+    expect(repository.list).not.toHaveBeenCalled()
+    await app.close()
+  })
+
   it('returns 403 to an authenticated employee without printer authority', async () => {
     const repository = { list: vi.fn() }
     const app = Fastify()

@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.0-rc.124 - 2026-08-24
+
+- Maps missing or expired employee sessions on the device and printing
+  management APIs to an explicit `401 AUTH_REQUIRED` response instead of
+  exposing them as a false `500` device-service failure.
+- Adds regression coverage for both printer-route and print-bridge management
+  entry points while preserving the separate print-bridge device credential
+  boundary.
+- Supersedes `rc.123` without changing schema `105`, cash collection rules,
+  permission-derived navigation or the native WeChat upload boundary.
+
 ## 1.0.0-rc.123 - 2026-08-24
 
 - Allows authorized staff to record full outstanding cash or physical POS

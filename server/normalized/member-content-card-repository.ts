@@ -3,6 +3,7 @@ import type { ScopedTransaction } from './transaction-runner.js'
 export type MemberContentCardType = 'activity' | 'presale' | 'benefit' | 'article' | 'return_offer' | 'show'
 export type MemberContentCardStatus = 'draft' | 'published' | 'paused' | 'retired'
 export type MemberContentCardVisibility = 'public' | 'member' | 'segment'
+export type MemberContentCardDisplayMode = 'pinned' | 'rotation'
 
 export interface MemberContentCardDraft {
   code: string
@@ -13,6 +14,7 @@ export interface MemberContentCardDraft {
   ctaLabel: string
   targetPath: string
   priority: number
+  displayMode: MemberContentCardDisplayMode
   visibility: MemberContentCardVisibility
   audienceMemberLevels: readonly string[]
   audienceLifecycleStages: readonly string[]
@@ -36,6 +38,7 @@ interface CardRow extends Record<string, unknown> {
   cta_label: string
   target_path: string
   priority: number
+  display_mode: MemberContentCardDisplayMode
   audience_visibility: MemberContentCardVisibility
   audience_member_levels: string[]
   audience_lifecycle_stages: string[]
@@ -55,7 +58,7 @@ export class MemberContentCardError extends Error {
 }
 
 const CARD_COLUMNS = `
-  code,card_type,title,summary,image_url,cta_label,target_path,priority,
+  code,card_type,title,summary,image_url,cta_label,target_path,priority,display_mode,
   audience_visibility,audience_member_levels,audience_lifecycle_stages,
   valid_from::text,valid_until::text,status,approved_by_employee_id,
   created_at::text,updated_at::text
@@ -79,12 +82,12 @@ export class MemberContentCardRepository {
     const result = await this.transaction.query<CardRow>(`
       INSERT INTO mbox.member_content_cards(
         tenant_id,store_id,code,card_type,title,summary,image_url,cta_label,target_path,
-        priority,audience_rule,source_ref,valid_from,valid_until,status,
+        priority,display_mode,audience_rule,source_ref,valid_from,valid_until,status,
         audience_visibility,audience_member_levels,audience_lifecycle_stages
       ) VALUES(
         $1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10,
-        jsonb_build_object('memberLevels',$12::text[],'lifecycleStages',$13::text[]),
-        NULL,$14::timestamptz,$15::timestamptz,'draft',$11,$12::text[],$13::text[]
+        $11,jsonb_build_object('memberLevels',$13::text[],'lifecycleStages',$14::text[]),
+        NULL,$15::timestamptz,$16::timestamptz,'draft',$12,$13::text[],$14::text[]
       )
       RETURNING ${CARD_COLUMNS}
     `, values(this.transaction, input))
@@ -99,10 +102,10 @@ export class MemberContentCardRepository {
     const result = await this.transaction.query<CardRow>(`
       UPDATE mbox.member_content_cards
       SET card_type=$4,title=$5,summary=$6,image_url=$7,cta_label=$8,target_path=$9,
-        priority=$10,audience_visibility=$11,audience_member_levels=$12::text[],
-        audience_lifecycle_stages=$13::text[],
-        audience_rule=jsonb_build_object('memberLevels',$12::text[],'lifecycleStages',$13::text[]),
-        valid_from=$14::timestamptz,valid_until=$15::timestamptz,status='draft',
+        priority=$10,display_mode=$11,audience_visibility=$12,audience_member_levels=$13::text[],
+        audience_lifecycle_stages=$14::text[],
+        audience_rule=jsonb_build_object('memberLevels',$13::text[],'lifecycleStages',$14::text[]),
+        valid_from=$15::timestamptz,valid_until=$16::timestamptz,status='draft',
         approved_by_employee_id=NULL,updated_at=clock_timestamp()
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND code=$3
         AND status IN ('draft','paused')
@@ -166,7 +169,7 @@ export class MemberContentCardRepository {
 function values(transaction: ScopedTransaction, input: Readonly<MemberContentCardDraft>): unknown[] {
   return [
     transaction.scope.tenantId,transaction.scope.storeId,input.code,input.type,input.title,input.summary,
-    input.imageUrl,input.ctaLabel,input.targetPath,input.priority,input.visibility,
+    input.imageUrl,input.ctaLabel,input.targetPath,input.priority,input.displayMode,input.visibility,
     [...new Set(input.audienceMemberLevels)].toSorted(),
     [...new Set(input.audienceLifecycleStages)].toSorted(),input.validFrom,input.validUntil,
   ]
@@ -175,7 +178,7 @@ function values(transaction: ScopedTransaction, input: Readonly<MemberContentCar
 function cardView(row: CardRow): MemberContentCardView {
   return {
     code:row.code,type:row.card_type,title:row.title,summary:row.summary,imageUrl:row.image_url,
-    ctaLabel:row.cta_label,targetPath:row.target_path,priority:row.priority,
+    ctaLabel:row.cta_label,targetPath:row.target_path,priority:row.priority,displayMode:row.display_mode,
     visibility:row.audience_visibility,audienceMemberLevels:[...row.audience_member_levels],
     audienceLifecycleStages:[...row.audience_lifecycle_stages],validFrom:row.valid_from,
     validUntil:row.valid_until,status:row.status,publishedByEmployeeId:row.approved_by_employee_id,

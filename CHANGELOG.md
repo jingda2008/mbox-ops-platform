@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.0-rc.120 - 2026-08-22
+
+- Integrates operations, inventory media and settlement safeguards with
+  normalized migrations `100` through `103`, including immutable public media
+  assets, recipe cost versions, order settlement exceptions, home content display
+  mode and membership terms community source facts.
+- Keeps the WeChat mini-program package out of this staff/service/database
+  release bundle; mini-program upload remains a separate candidate step.
+- Supersedes rc.119 on the same production route through the payment-server
+  evidence relay and maintenance-window database contract.
+
 ## 1.0.0-rc.119 - 2026-08-22
 
 - Keeps the configured store login code reusable across business dates, so the

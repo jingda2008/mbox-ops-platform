@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { JsonObject } from './command-executor.js'
 import type { ScopedTransaction } from './transaction-runner.js'
+import { publicMediaAssetUrl, publicMiniProgramImageUrl } from './media-asset-url.js'
 import { PaymentRepository, type PaymentMethod } from './payment-repository.js'
 import type { PublicMembershipTerms } from './membership-terms-service.js'
 import { CustomerPreferenceRepository } from './customer-preference-repository.js'
@@ -136,6 +137,7 @@ export interface PublicContentCard {
   ctaLabel: string
   targetPath: string | null
   priority: number
+  displayMode: 'pinned' | 'rotation'
 }
 
 export interface PublicActivity {
@@ -450,6 +452,7 @@ interface CardRow extends Record<string, unknown> {
   cta_label: string
   target_path: string
   priority: number
+  display_mode: PublicContentCard['displayMode']
   audience_visibility: 'public' | 'member' | 'segment'
   audience_member_levels: string[]
   audience_lifecycle_stages: string[]
@@ -771,16 +774,20 @@ export class CustomerExperienceRepository {
   async publicActivity(customerId: string | null, publicId: string): Promise<PublicActivity> {
     const membership = customerId === null ? null : await this.findMembership(customerId)
     const publicMembership = membership === null ? null : membershipView(membership)
-    const activity = (await this.listActivities(customerId, publicId))
-      .filter((entry) => audienceAllows(
-        entry.visibility,
-        entry.audience_member_levels,
-        entry.audience_lifecycle_stages,
-        publicMembership,
-      ))
-      .map((activity) => activityView(activity, this.activityPaymentProviderConfigured))[0]
+    if (publicMembership === null) throw new CustomerExperienceRequestError(
+      '加入 M-BOX 会员并授权手机号后，才可查看和报名超嗨活动',
+      'ACTIVITY_MEMBERSHIP_REQUIRED',
+      403,
+    )
+    const activity = (await this.listActivities(customerId, publicId))[0]
     if (!activity) throw new CustomerExperienceRequestError('活动不存在或当前不可见', 'ACTIVITY_NOT_FOUND', 404)
-    return activity
+    if (!audienceAllows(
+      activity.visibility,
+      activity.audience_member_levels,
+      activity.audience_lifecycle_stages,
+      publicMembership,
+    )) throw new CustomerExperienceRequestError('活动不存在或当前不可见', 'ACTIVITY_NOT_FOUND', 404)
+    return activityView(activity, this.activityPaymentProviderConfigured)
   }
 
   async publicActivityRegistrations(customerId: string): Promise<PublicActivityRegistration[]> {
@@ -1086,6 +1093,13 @@ export class CustomerExperienceRepository {
     paymentPublicId: string | null
   }> {
     assertProtectedActivityRegistrationContact(input.protectedContact)
+    const membership = await this.findMembership(input.customerId)
+    const publicMembership = membership === null ? null : membershipView(membership)
+    if (publicMembership === null) throw new CustomerExperienceRequestError(
+      '加入 M-BOX 会员并授权手机号后，才可报名超嗨活动',
+      'ACTIVITY_MEMBERSHIP_REQUIRED',
+      403,
+    )
     const activity = await this.transaction.query<ActivityRow & { id: string }>(`
       SELECT activity.id, activity.public_id, activity.activity_kind, activity.title,
         activity.summary, activity.cover_url, activity.starts_at::text, activity.ends_at::text,
@@ -1129,8 +1143,6 @@ export class CustomerExperienceRepository {
     const row = activity.rows[0]
     if (!row) throw new CustomerExperienceRequestError('这个活动已结束或暂停报名', 'ACTIVITY_UNAVAILABLE', 409)
     const registrationCustomerId = await this.canonicalCustomerId(input.customerId)
-    const membership = await this.findMembership(input.customerId)
-    const publicMembership = membership === null ? null : membershipView(membership)
     if (!audienceAllows(
       row.visibility,
       row.audience_member_levels,
@@ -3269,7 +3281,7 @@ export class CustomerExperienceRepository {
   private async listContentCards(): Promise<CardRow[]> {
     const result = await this.transaction.query<CardRow>(`
       SELECT code, card_type, title, summary, image_url, cta_label,
-        target_path, priority, audience_visibility, audience_member_levels,
+        target_path, priority, display_mode, audience_visibility, audience_member_levels,
         audience_lifecycle_stages
       FROM mbox.member_content_cards
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
@@ -4048,7 +4060,7 @@ function productView(
     code: row.code,
     name: row.name,
     description: row.description,
-    imageUrl: safeAssetUrl(row.image_url),
+    imageUrl: publicMiniProgramImageUrl(row.image_url),
     beverageFamily: row.beverage_family,
     amountMinor: amount,
     separateAmountMinor: separate,
@@ -4200,23 +4212,18 @@ function publicSupportContact(value: JsonObject): PublicSupportContact {
   const wecomName = typeof value.wecomName === 'string' ? value.wecomName.trim() : ''
   const wecomQrImageUrl = typeof value.wecomQrImageUrl === 'string' ? value.wecomQrImageUrl.trim() : ''
   if (!isPublicSupportPhone(phone) || phoneLabel.length < 2 || phoneLabel.length > 40
-    || wecomName.length < 2 || wecomName.length > 40
-    || (wecomQrImageUrl !== '' && !isPublicSupportAsset(wecomQrImageUrl))) {
+    || wecomName.length < 2 || wecomName.length > 40) {
     throw new CustomerExperienceRequestError(
       '门店联系信息配置无效，已停止向顾客端展示',
       'SUPPORT_CONTACT_CONFIGURATION_INVALID',
       503,
     )
   }
-  return { phone, phoneLabel, wecomName, wecomQrImageUrl: wecomQrImageUrl || null }
+  return { phone, phoneLabel, wecomName, wecomQrImageUrl: publicMediaAssetUrl(wecomQrImageUrl) }
 }
 
 function isPublicSupportPhone(value: string): boolean {
   return /^[+0-9][0-9 -]{5,30}$/.test(value)
-}
-
-function isPublicSupportAsset(value: string): boolean {
-  return (value.startsWith('/') && !value.startsWith('//')) || /^https:\/\//i.test(value)
 }
 
 function cardView(row: CardRow): PublicContentCard {
@@ -4225,10 +4232,11 @@ function cardView(row: CardRow): PublicContentCard {
     type: row.card_type,
     title: row.title,
     summary: row.summary,
-    imageUrl: safeAssetUrl(row.image_url),
+    imageUrl: publicMediaAssetUrl(row.image_url),
     ctaLabel: row.cta_label,
     targetPath: safeContentTargetPath(row.target_path),
     priority: row.priority,
+    displayMode: row.display_mode,
   }
 }
 
@@ -4247,7 +4255,7 @@ function activityView(row: ActivityRow, providerConfigured: boolean): PublicActi
     kind: row.activity_kind,
     title: row.title,
     summary: row.summary,
-    coverUrl: safeAssetUrl(row.cover_url),
+    coverUrl: publicMediaAssetUrl(row.cover_url),
     startsAt: row.starts_at,
     endsAt: row.ends_at,
     assemblyLocation: row.assembly_location,
@@ -4665,13 +4673,6 @@ export function serverActivityTermsAcknowledgement(
       source: 'mini_program',
     },
   }
-}
-
-function safeAssetUrl(value: string | null): string | null {
-  if (value === null || value.trim() === '') return null
-  if (value.startsWith('/') && !value.startsWith('//')) return value
-  if (/^https:\/\//i.test(value)) return value
-  return null
 }
 
 function recommendationPolicyVersionView(row: RecommendationPolicyVersionRow): RecommendationPolicyVersionView {

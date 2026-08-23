@@ -1,6 +1,7 @@
-const { getActivities, getActivityRegistrations } = require('../../utils/api')
+const { getActivities, getActivityRegistrations, getMiniBootstrap, enrollMembership } = require('../../utils/api')
 const { money } = require('../../utils/format')
 const { publicImageUrl } = require('../../utils/media')
+const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 
 const KIND_NAMES = {
   member_night: '会员之夜', hike: '城市轻徒步', camping: '露营计划', city_walk: '城市漫游',
@@ -21,16 +22,21 @@ function dateText(value) {
 }
 
 Page({
-  data: { loading: true, error: '', activities: [] },
+  data: {
+    loading: true, error: '', activities: [], membership: null, membershipTerms: null,
+    membershipInviteVisible: false, membershipInviteAgreed: false, membershipInviteBusy: false,
+    pendingActivityId: '',
+  },
   onShow() { this.load() },
   onPullDownRefresh() { this.load().finally(() => wx.stopPullDownRefresh()) },
 
   async load() {
     this.setData({ loading: true, error: '' })
     try {
-      const [rawActivities, rawRegistrations] = await Promise.all([
+      const [rawActivities, rawRegistrations, bootstrap] = await Promise.all([
         getActivities(),
         getActivityRegistrations().catch(() => []),
+        getMiniBootstrap(),
       ])
       const registrations = new Map((rawRegistrations || []).map((item) => [item.activityPublicId, item]))
       const activities = (rawActivities || []).map((item) => {
@@ -43,15 +49,95 @@ Page({
           availabilityText: item.remainingCapacity > 0 ? `余 ${item.remainingCapacity} 位` : '已满',
           sequenceText: `SUPERHIGH · ${String(item.sortOrder || 0).toString().padStart(2, '0')}`,
           registrationText: registration
-            ? (PAYMENT_RESOLUTION_NAMES[registration.resolutionState] || REGISTRATION_STATUS_NAMES[registration.status] || '状态待确认')
+            ? (REGISTRATION_STATUS_NAMES[registration.status] || '状态待确认')
             : item.registrationStatus ? (REGISTRATION_STATUS_NAMES[item.registrationStatus] || '状态待确认') : '',
+          paymentStateText: registration && registration.resolutionState
+            && registration.resolutionState !== 'not_required'
+            ? `付款：${PAYMENT_RESOLUTION_NAMES[registration.resolutionState] || '状态待确认'}`
+            : '',
         })
       })
-      this.setData({ loading: false, activities })
-    } catch (error) { this.setData({ loading: false, error: error.message || '活动暂时没有接上' }) }
+      this.setData({
+        loading: false,
+        activities,
+        membership: bootstrap.membership || null,
+        membershipTerms: bootstrap.membershipTerms || null,
+        membershipInviteVisible: !bootstrap.membership,
+        membershipInviteAgreed: bootstrap.membership ? false : this.data.membershipInviteAgreed,
+      })
+    } catch (error) { this.setData({ loading: false, error: error.message || '活动或会员服务暂时没有接上' }) }
   },
 
   openDetail(event) {
-    wx.navigateTo({ url: `/pages/community-detail/index?id=${encodeURIComponent(event.currentTarget.dataset.id)}` })
+    const activityId = String(event.currentTarget.dataset.id || '').trim()
+    if (!activityId) return
+    if (!this.data.membership) {
+      this.setData({
+        membershipInviteVisible: true,
+        membershipInviteAgreed: false,
+        pendingActivityId: activityId,
+      })
+      return
+    }
+    this.navigateToActivity(activityId)
   },
+
+  navigateToActivity(activityId) {
+    wx.navigateTo({ url: `/pages/community-detail/index?id=${encodeURIComponent(activityId)}` })
+  },
+
+  dismissMembershipInvite() {
+    this.setData({ membershipInviteVisible: false, membershipInviteAgreed: false, pendingActivityId: '' })
+  },
+
+  onMembershipInviteAgreementChange(event) {
+    const values = event && event.detail && Array.isArray(event.detail.value) ? event.detail.value : []
+    this.setData({ membershipInviteAgreed: values.indexOf('agree') >= 0 })
+  },
+
+  remindMembershipInviteAgreement() {
+    wx.showToast({ title: '请先勾选同意会员协议', icon: 'none' })
+  },
+
+  showMembershipTerms() {
+    wx.navigateTo({ url: '/pages/membership-terms/index?source=mini_community&action=view' })
+  },
+
+  onAgreePrivacyAuthorization() {},
+
+  async acceptMembershipInvite(event) {
+    if (this.data.membershipInviteBusy) return
+    if (!this.data.membershipInviteAgreed) return this.remindMembershipInviteAgreement()
+    const terms = this.data.membershipTerms
+    if (!terms) {
+      wx.showToast({ title: '当前会员协议暂时无法读取', icon: 'none' })
+      return
+    }
+    const authorization = readWechatPhoneAuthorization(event)
+    if (!authorization.code) {
+      wx.showToast({ title: authorization.message, icon: 'none' })
+      return
+    }
+    this.setData({ membershipInviteBusy: true, error: '' })
+    try {
+      const result = await enrollMembership(terms.version, 'mini_community', authorization.code)
+      const membership = result.membership || null
+      this.setData({
+        membership,
+        membershipInviteVisible: false,
+        membershipInviteAgreed: false,
+        membershipInviteBusy: false,
+      })
+      if (!membership) throw new Error('会员状态暂时未刷新，请稍后重试')
+      const activityId = this.data.pendingActivityId
+      this.setData({ pendingActivityId: '' })
+      wx.showToast({ title: '入会成功', icon: 'success' })
+      if (activityId) this.navigateToActivity(activityId)
+    } catch (error) {
+      this.setData({ membershipInviteBusy: false, error: error.message || '入会暂时没有完成' })
+      wx.showToast({ title: error.message || '入会未完成', icon: 'none' })
+    }
+  },
+
+  noop() {},
 })

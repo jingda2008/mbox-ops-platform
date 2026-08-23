@@ -24,6 +24,7 @@ describe('member content card public navigation', () => {
     const source = readFileSync(new URL('./customer-experience-repository.ts', import.meta.url), 'utf8')
     const query = source.slice(source.indexOf('private async listContentCards'), source.indexOf('private async listBenefits'))
     expect(query).toContain('audience_visibility')
+    expect(query).toContain('display_mode')
     expect(query).toContain('audience_member_levels')
     expect(query).toContain('audience_lifecycle_stages')
     expect(query).not.toContain('audience_rule')

@@ -36,6 +36,7 @@ import {
   extractProductOperationalFields,
   type ProductOperationalFields,
 } from "./product-operational-fields.js";
+import { isPublicMiniProgramImageUrl } from './media-asset-url.js';
 
 export const CATALOG_PRODUCT_MANAGE_PERMISSION = "catalog.product.manage";
 export const CATALOG_PRICE_MANAGE_PERMISSION = "catalog.price.manage";
@@ -1606,6 +1607,11 @@ function strongProductOperationalFields(
 }
 
 function assertDisplayOnlyProductSnapshot(snapshot: Readonly<JsonObject>): void {
+  const imageUrl = snapshot.imageUrl;
+  if (imageUrl !== undefined && imageUrl !== null
+    && (typeof imageUrl !== 'string' || (imageUrl.trim() !== '' && !isPublicMiniProgramImageUrl(imageUrl)))) {
+    throw new CatalogRequestError('商品图片必须从受控菜单素材或站内图片库选择，单张不超过200KB');
+  }
   const topLevel = new Set([
     'guestVisible', 'searchText', 'sortOrder', 'availableFrom', 'availableUntil',
     'allowedChannels', 'maxOrderQuantity', 'kdsPriority', 'fulfillmentSlaSeconds',

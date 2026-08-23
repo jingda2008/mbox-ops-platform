@@ -64,17 +64,32 @@ describe('activity operations API', () => {
     await app.close()
   })
 
-  it('accepts only reviewed same-site or HTTPS activity cover addresses', async () => {
+  it('accepts only a bounded image-library cover address', async () => {
     const service = serviceMock()
     const app = await application(service)
     const response = await app.inject({
       method: 'POST', url: '/staff/activity-operations',
       headers: { 'idempotency-key': 'activity-draft-cover-invalid-001' },
-      payload: { ...validDraft(), coverUrl: 'javascript:alert(1)' },
+      payload: { ...validDraft(), coverUrl: 'https://example.com/unbounded-cover.png' },
     })
     expect(response.statusCode).toBe(400)
-    expect(response.json().error.message).toContain('封面地址必须是站内路径或HTTPS地址')
+    expect(response.json().error.message).toContain('封面必须从站内图片库选择')
     expect(service.createDraft).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it('accepts an immutable public media asset as the activity cover', async () => {
+    const service = serviceMock()
+    const app = await application(service)
+    const response = await app.inject({
+      method: 'POST', url: '/staff/activity-operations',
+      headers: { 'idempotency-key': 'activity-draft-cover-media-001' },
+      payload: { ...validDraft(), coverUrl: '/api/public/media-assets/MA00000000000000000000000000000001' },
+    })
+    expect(response.statusCode).toBe(201)
+    expect(service.createDraft).toHaveBeenCalledWith(context, expect.objectContaining({
+      draft: expect.objectContaining({ coverUrl: '/api/public/media-assets/MA00000000000000000000000000000001' }),
+    }))
     await app.close()
   })
 
@@ -96,6 +111,52 @@ describe('activity operations API', () => {
       publicId: 'activity-registration-001', operation: 'check_in',
       reason: '现场核对本人到场', idempotencyKey: 'activity-check-in-key-001',
     })
+    await app.close()
+  })
+
+  it('publishes through the canonical activity operations entrance', async () => {
+    const permissions: string[] = []
+    const service = serviceMock()
+    const publisher = { publishActivity: vi.fn(async () => ({
+      value: { publicId: 'community-activity-001', status: 'published' }, replayed: false,
+    })) }
+    const app = await application(service, {
+      assertPermission: async (_employeeId: string, permission: string) => { permissions.push(permission) },
+    }, undefined, publisher)
+    const response = await app.inject({
+      method: 'POST', url: '/staff/activity-operations/community-activity-001/publish',
+      headers: { 'idempotency-key': 'activity-publish-key-001' }, payload: {},
+    })
+    expect(response.statusCode).toBe(200)
+    expect(permissions).toEqual(['community.activity.publish'])
+    expect(publisher.publishActivity).toHaveBeenCalledWith(context, {
+      publicId: 'community-activity-001', idempotencyKey: 'activity-publish-key-001',
+    })
+    await app.close()
+  })
+
+  it('can only bring an existing waitlist task forward; it cannot confirm a registration', async () => {
+    const permissions: string[] = []
+    const service = serviceMock()
+    service.retryWaitlistPromotion.mockResolvedValueOnce({
+      value: { activityPublicId: 'community-activity-001', state: 'queued', nextAttemptAt: '2026-08-22T00:00:00.000Z' },
+      replayed: false,
+    })
+    const app = await application(service, {
+      assertPermission: async (_employeeId: string, permission: string) => { permissions.push(permission) },
+    })
+    const response = await app.inject({
+      method: 'POST', url: '/staff/activity-operations/community-activity-001/waitlist-retry',
+      headers: { 'idempotency-key': 'activity-waitlist-retry-key-001' },
+      payload: { reason: '核对候补任务运行状态' },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(permissions).toEqual(['community.activity.manage'])
+    expect(service.retryWaitlistPromotion).toHaveBeenCalledWith(context, {
+      publicId: 'community-activity-001', reason: '核对候补任务运行状态',
+      idempotencyKey: 'activity-waitlist-retry-key-001',
+    })
+    expect(service.transitionRegistration).not.toHaveBeenCalled()
     await app.close()
   })
 
@@ -179,6 +240,7 @@ function serviceMock() {
     createDraft: vi.fn(async () => ({ value: { publicId: 'community-activity-new', status: 'draft' }, replayed: false })),
     updateDraft: vi.fn(async () => ({ value: {}, replayed: false })),
     transitionRegistration: vi.fn(async () => ({ value: { status: 'checked_in' }, replayed: false })),
+    retryWaitlistPromotion: vi.fn(async () => ({ value: { state: 'not_required' }, replayed: false })),
   }
 }
 
@@ -186,11 +248,13 @@ async function application(
   service = serviceMock(),
   access = { assertPermission: async () => undefined },
   requestRefund = vi.fn(async () => ({ value: { id: 'refund-id', status: 'requested' }, replayed: false })),
+  publisher = { publishActivity: vi.fn(async () => ({ value: { status: 'published' }, replayed: false })) },
 ) {
   const app = Fastify()
   await app.register(activityOperationsApiPlugin, {
     transactions: { run: async (_scope, callback) => callback({ scope } as never) },
     service: service as never,
+    activityPublisher: publisher as never,
     activityPayments: { requestRefund } as never,
     resolveStaffContext: () => context,
     createStaffAccessRepository: () => access,

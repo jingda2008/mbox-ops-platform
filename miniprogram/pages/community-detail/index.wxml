@@ -51,7 +51,8 @@
     </view>
 
     <view wx:if="{{registration}}" class="registration-status">
-      <view class="registration-status__head"><text>{{registration.statusText}}</text><text wx:if="{{registration.resolutionText}}">{{registration.resolutionText}}</text></view>
+      <view class="registration-status__head"><text>{{registration.statusText}}</text><text wx:if="{{registration.resolutionText}}">付款：{{registration.resolutionText}}</text></view>
+      <text wx:if="{{registration.stateGuide}}" class="registration-state-guide">{{registration.stateGuide}}</text>
       <text>报名编号 {{registration.publicId}}</text>
       <text wx:if="{{registration.paymentAmountMinor > 0}}">本次应付 {{registration.amountDueText}}<text wx:if="{{registration.paymentMethodText}}"> · {{registration.paymentMethodText}}</text></text>
       <text wx:if="{{registration.seatHoldText}}">名额保留至 {{registration.seatHoldText}}</text>
@@ -64,8 +65,8 @@
     <view class="detail-bottom-space"></view>
     <view class="detail-dock">
       <view><text>{{registration && registration.resolutionText ? registration.resolutionText : activity.feeText}}</text><text>{{activity.registrationBlocked ? '报名条件暂未开放' : registration && registration.seatHoldText ? ('名额保留至 ' + registration.seatHoldText) : activity.remainingCapacity > 0 ? ('剩余 ' + activity.remainingCapacity + ' 位') : '名额已满，可申请候补'}}</text></view>
-      <button wx:if="{{!registration || registration.canReRegister}}" disabled="{{busy}}" loading="{{busy}}" bindtap="register">{{activity.registrationBlocked ? '暂不开放' : registration && registration.canReRegister ? '重新报名' : activity.remainingCapacity > 0 ? '确认报名' : '加入候补'}}</button>
-      <button wx:elif="{{registration.canStartPayment}}" class="payment-button" loading="{{busy}}" bindtap="startPayment">微信支付</button>
+      <button wx:if="{{!registration || registration.canReRegister}}" disabled="{{busy}}" loading="{{busy}}" bindtap="register">{{activity.registrationBlocked ? '暂不开放' : registration && registration.canReRegister ? '重新报名' : activity.remainingCapacity <= 0 ? '加入候补' : activity.requiresPaymentOnSubmit ? '提交报名并支付' : activity.feeAmountMinor > 0 ? '提交报名' : '免费报名'}}</button>
+      <button wx:elif="{{registration.canStartPayment}}" class="payment-button" loading="{{busy}}" bindtap="startPayment">完成支付</button>
       <button wx:elif="{{registration.canQueryPayment}}" loading="{{busy}}" bindtap="queryPayment">查询付款结果</button>
       <button wx:elif="{{registration.canCancelDirectly}}" class="cancel-button" loading="{{busy}}" bindtap="cancelRegistration">取消报名</button>
       <button wx:elif="{{registration.requiresManualCancellation}}" class="cancel-button" bindtap="showCancellationHelp">退款与联系</button>
@@ -73,4 +74,23 @@
     </view>
   </block>
   <state-panel wx:else type="error" title="活动不可用" message="{{error}}" />
+
+  <view wx:if="{{membershipInviteVisible}}" class="detail-member-mask" catchtouchmove="noop">
+    <view class="detail-member-sheet">
+      <button class="detail-member-close" aria-label="关闭会员邀请" bindtap="dismissMembershipInvite">×</button>
+      <text class="detail-member-kicker">M-BOX MEMBERSHIP</text>
+      <text class="detail-member-title">加入会员，解锁超嗨活动</text>
+      <text class="detail-member-copy">授权手机号后即可查看活动详情、报名并接收活动安排。</text>
+      <image class="detail-member-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX Shanghai 1999 Logo" />
+      <checkbox-group bindchange="onMembershipInviteAgreementChange">
+        <label class="detail-member-agreement">
+          <checkbox value="agree" checked="{{membershipInviteAgreed}}" color="#315d46" />
+          <view><text>我已阅读并同意</text><text class="detail-member-terms" catchtap="showMembershipTerms">《{{membershipTerms.title}}》</text></view>
+        </label>
+      </checkbox-group>
+      <button wx:if="{{membershipInviteAgreed}}" class="detail-member-authorize wx-phone-button" open-type="getPhoneNumber|agreePrivacyAuthorization" bindgetphonenumber="acceptMembershipInvite" bindagreeprivacyauthorization="onAgreePrivacyAuthorization" loading="{{membershipInviteBusy}}">授权手机号并加入</button>
+      <button wx:else class="detail-member-authorize detail-member-authorize--disabled" bindtap="remindMembershipInviteAgreement">授权手机号并加入</button>
+      <text class="detail-member-note">授权仅用于建立会员身份和活动服务联系。</text>
+    </view>
+  </view>
 </view>

@@ -9,6 +9,7 @@ import {
   ActivityOperationsService,
   type ActivityOperationsStaffContext,
 } from './activity-operations-service.js'
+import type { CustomerExperienceService } from './customer-experience-service.js'
 import {
   IdempotencyConflictError,
   IdempotencyInProgressError,
@@ -16,12 +17,14 @@ import {
   OutboxMessageConflictError,
 } from './command-executor.js'
 import { CustomerExperienceRequestError } from './customer-experience-repository.js'
+import { isPublicMediaAssetUrl } from './media-asset-url.js'
 import { StaffAccessDeniedError, StaffAccessRepository } from './staff-access-repository.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction } from './transaction-runner.js'
 
 export interface ActivityOperationsApiOptions {
   transactions: Pick<ScopedPostgresTransactionRunner, 'run'>
   service: ActivityOperationsService
+  activityPublisher: Pick<CustomerExperienceService, 'publishActivity'>
   activityPayments: Pick<ActivityPaymentService, 'requestRefund'>
   resolveStaffContext(request: FastifyRequest):
     | ActivityOperationsStaffContext
@@ -63,6 +66,32 @@ export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsA
         publicId: publicId(request.params.publicId),
         draft: draft(body),
         reason: text(body.reason, '修改原因', 2, 500),
+        idempotencyKey: idempotencyKey(request),
+      })
+      return reply.send({ data: result.value, meta: { replayed: result.replayed } })
+    }),
+  )
+
+  app.post<{ Params: { publicId: string } }>(
+    '/staff/activity-operations/:publicId/publish',
+    async (request, reply) => handle(reply, async () => {
+      const context = await authorized(options, request, ['community.activity.publish'])
+      const result = await options.activityPublisher.publishActivity(context, {
+        publicId: publicId(request.params.publicId),
+        idempotencyKey: idempotencyKey(request),
+      })
+      return reply.send({ data: result.value, meta: { replayed: result.replayed } })
+    }),
+  )
+
+  app.post<{ Params: { publicId: string } }>(
+    '/staff/activity-operations/:publicId/waitlist-retry',
+    async (request, reply) => handle(reply, async () => {
+      const context = await authorized(options, request, ['community.activity.manage'])
+      const body = object(request.body, '候补任务重试')
+      const result = await options.service.retryWaitlistPromotion(context, {
+        publicId: publicId(request.params.publicId),
+        reason: text(body.reason, '重试原因', 2, 500),
         idempotencyKey: idempotencyKey(request),
       })
       return reply.send({ data: result.value, meta: { replayed: result.replayed } })
@@ -149,7 +178,7 @@ function draft(value: Record<string, unknown>): ActivityDraftInput {
     throw invalid('全额预付必须配置正数费用且订金为0')
   }
   const coverUrl = optionalText(value.coverUrl, '封面地址', 1_000)
-  if (coverUrl !== null && !safeAssetUrl(coverUrl)) throw invalid('封面地址必须是站内路径或HTTPS地址')
+  if (coverUrl !== null && !isPublicMediaAssetUrl(coverUrl)) throw invalid('封面必须从站内图片库选择，单张不超过200KB')
   return {
     kind: enumeration(value.kind, '活动类型', ['member_night','hike','camping','city_walk','music_picnic','proposal','other'] as const),
     title: text(value.title, '活动名称', 2, 120),
@@ -242,10 +271,6 @@ function text(value: unknown, label: string, minimum: number, maximum: number): 
 function optionalText(value: unknown, label: string, maximum: number): string | null {
   if (value === undefined || value === null || value === '') return null
   return text(value, label, 1, maximum)
-}
-
-function safeAssetUrl(value: string): boolean {
-  return (value.startsWith('/') && !value.startsWith('//')) || /^https:\/\//i.test(value)
 }
 
 function timestamp(value: unknown, label: string): string {

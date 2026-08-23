@@ -103,6 +103,7 @@
 .registration-status__head text:first-child { color: #3d342b; font-size: 25rpx; font-weight: 700; }
 .registration-status__head text:last-child { color: #7c5b35; font-size: 21rpx; font-weight: 650; text-align: right; }
 .registration-status > text { color: #786951; font-size: 20rpx; line-height: 1.55; }
+.registration-status .registration-state-guide { color: #365f4a; font-weight: 650; }
 .registration-status .refund-state { color: #79502f; font-weight: 650; }
 .status-secondary { min-height: 44px; margin: 10rpx 0 0; border: 1rpx solid #b9a98f; border-radius: 999rpx; background: transparent; color: #694f34; font-size: 22rpx; line-height: 44px; }
 .status-secondary::after { border: 0; }
@@ -130,6 +131,25 @@
 .detail-dock > button.payment-button { background: linear-gradient(145deg, #315d46, #214635); box-shadow: 0 10rpx 24rpx rgba(35, 78, 58, .2); }
 .detail-dock > button::after { border: 0; }
 .detail-dock > button.cancel-button { border: 1rpx solid #b8a58c; background: #fff; color: #664d31; }
+
+.detail-member-mask { position: fixed; z-index: 100; inset: 0; display: flex; padding: 30rpx; align-items: flex-end; background: rgba(9, 19, 13, .66); backdrop-filter: blur(8rpx); }
+.detail-member-sheet { position: relative; width: 100%; padding: 46rpx 42rpx calc(34rpx + env(safe-area-inset-bottom)); border-radius: 32rpx 32rpx 0 0; background: #fffefb; box-shadow: 0 -18rpx 56rpx rgba(0, 0, 0, .22); text-align: center; }
+.detail-member-close { position: absolute; top: 20rpx; right: 24rpx; width: 58rpx; height: 58rpx; margin: 0; padding: 0; border: 0; border-radius: 50%; background: rgba(43, 39, 34, .06); color: #79716a; font-size: 34rpx; line-height: 56rpx; }
+.detail-member-close::after, .detail-member-authorize::after { border: 0; }
+.detail-member-kicker, .detail-member-title, .detail-member-copy, .detail-member-note { display: block; }
+.detail-member-kicker { color: #5a806a; font-size: 17rpx; font-weight: 700; letter-spacing: 3.5rpx; }
+.detail-member-title { margin-top: 14rpx; color: #1e3829; font-family: "Songti SC", "STSong", serif; font-size: 42rpx; font-weight: 600; }
+.detail-member-copy { margin-top: 14rpx; color: #706860; font-size: 22rpx; line-height: 1.6; }
+.detail-member-logo { display: block; width: 108rpx; height: 108rpx; margin: 26rpx auto 20rpx; border: 1rpx solid rgba(49, 93, 70, .2); border-radius: 50%; background: #000; }
+.detail-member-agreement { display: flex; min-height: 62rpx; align-items: flex-start; color: #675f57; font-size: 21rpx; line-height: 1.55; text-align: left; gap: 10rpx; }
+.detail-member-agreement checkbox { flex: 0 0 auto; margin-top: 1rpx; transform: scale(.86); }
+.detail-member-agreement .wx-checkbox-input { width: 34rpx; height: 34rpx; border: 1rpx solid #bdb5ac; border-radius: 50%; }
+.detail-member-agreement .wx-checkbox-input.wx-checkbox-input-checked { border-color: #315d46; background: #315d46; }
+.detail-member-agreement view { flex: 1; min-width: 0; }
+.detail-member-terms { display: block; color: #315d46; }
+.detail-member-authorize { width: 100%; min-height: 88rpx; margin: 24rpx 0 0; border: 1rpx solid #315d46; border-radius: 44rpx; background: #315d46; color: #fff; font-size: 24rpx; font-weight: 700; line-height: 88rpx; }
+.detail-member-authorize--disabled { border-color: #c5c1ba; background: #c5c1ba; }
+.detail-member-note { margin-top: 16rpx; color: #90877e; font-size: 18rpx; line-height: 1.55; }
 
 @media (max-width: 350px) {
   .detail-hero { height: 450rpx; margin-right: -22rpx; margin-left: -22rpx; }

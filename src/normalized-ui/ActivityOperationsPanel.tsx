@@ -244,7 +244,7 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
     )) return
     setBusy('publish'); setNotice('')
     try {
-      await api.postEndpoint(`/api/staff/community-activities/${encodeURIComponent(activity.publicId)}/publish`, {}, {
+      await api.postEndpoint(`/api/staff/activity-operations/${encodeURIComponent(activity.publicId)}/publish`, {}, {
         idempotencyKey: operationKey('activity-publish'),
       })
       setNotice('活动已由发布人员复核发布，顾客端将按当前承诺展示。')
@@ -252,6 +252,26 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
       const response = await api.getEndpoint<{ data: unknown }>('/api/staff/activity-operations')
       setActivities(activityList(response.data))
     } catch (error) { setNotice(message(error, '活动没有发布')) }
+    finally { setBusy('') }
+  }
+
+  async function retryWaitlistPromotion(activity: ActivityDetail) {
+    const normalizedReason = reason.trim()
+    if (normalizedReason.length < 2) return setNotice('请先填写候补任务重试原因（至少2个字）')
+    if (busy || !window.confirm('只会把已有候补任务提前交给系统按报名顺序处理，不会人工确认任何报名或改变候补顺序。是否继续？')) return
+    setBusy('waitlist-retry'); setNotice('')
+    try {
+      const result = await api.postEndpoint<{ activityPublicId: string; state: 'queued' | 'not_required' }>(
+        `/api/staff/activity-operations/${encodeURIComponent(activity.publicId)}/waitlist-retry`,
+        { reason: normalizedReason },
+        { idempotencyKey: operationKey('activity-waitlist-retry') },
+      )
+      setReason('')
+      setNotice(result.state === 'queued'
+        ? '候补任务已进入下一轮系统处理；系统仍会按报名时间和可用名额自动递补。'
+        : '当前没有待重试的候补任务；有名额释放时系统会自动建立并处理候补任务。')
+      await refreshSelected()
+    } catch (error) { setNotice(message(error, '候补任务没有进入重试队列')) }
     finally { setBusy('') }
   }
 
@@ -291,7 +311,7 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
             <label>结束时间<input type="datetime-local" required value={draft.endsAt} onChange={(event) => updateDraft('endsAt', event.target.value)} /></label>
             <label>集合地点<input value={draft.assemblyLocation} onChange={(event) => updateDraft('assemblyLocation', event.target.value)} /></label>
             <label>人数上限<input type="number" min={1} max={1000} value={draft.capacity} onChange={(event) => updateDraft('capacity', event.target.value)} /></label>
-            <label className="wide">封面图片地址（可选）<input type="url" value={draft.coverUrl} onChange={(event) => updateDraft('coverUrl', event.target.value)} placeholder="上传后会自动填入站内地址；也可填写已核对的 HTTPS 地址" /></label>
+            <label className="wide">封面图片（可选）<input readOnly value={draft.coverUrl} placeholder="请通过下方图片库上传或选择（单张不超过 200KB）" /></label>
             <div className="wide"><MediaAssetPicker api={api} purpose="community_activity" value={draft.coverUrl} onChange={(coverUrl)=>updateDraft('coverUrl',coverUrl)} label="上传活动封面" /></div>
           </fieldset>
           <fieldset><legend>费用、权益和客群</legend>
@@ -320,8 +340,9 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
           </fieldset>
           <button type="submit" disabled={busy === 'draft'}>{busy === 'draft' ? '保存中' : detail.activity.publicId === '' ? '建立草稿并读回' : '保存草稿并读回'}</button>
         </form></details>}
-        {detail.activity.publicId !== '' && <section className="activity-registration-roster"><header><div><strong>报名与候补名单</strong><small>候补按报名时间排序；收费候补不预扣款。</small></div><span>{detail.registrations.length} 条</span></header>
+        {detail.activity.publicId !== '' && <section className="activity-registration-roster"><header><div><strong>报名与候补名单</strong><small>免费报名自动确认；收费报名须支付确认。候补按报名时间排序，收费候补不预扣款。</small></div><span>{detail.registrations.length} 条</span></header>
           {canManage && <label className="activity-operation-reason">本次操作原因<input minLength={2} maxLength={1000} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="例如：顾客来电取消 / 现场确认未到" /></label>}
+          {canManage && detail.activity.waitlistedSeats > 0 && <button type="button" disabled={busy === 'waitlist-retry'} onClick={() => void retryWaitlistPromotion(detail.activity)}>重试系统候补任务</button>}
           {detail.registrations.length === 0 && <p>当前还没有报名。</p>}
           <div className="activity-registration-list">{detail.registrations.map((registration) => <article key={registration.publicId} className={`status-${registration.status}`}>
             <header><div><strong>{registration.customerLabel}</strong><small>{registration.partySize} 人 · {dateText(registration.registeredAt)}</small></div><em>{registrationStatusLabel(registration.status)}</em></header>

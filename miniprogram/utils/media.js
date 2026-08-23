@@ -6,7 +6,7 @@ const { getRuntimeConfig } = require('../config/index')
 function publicImageUrl(value) {
   if (typeof value !== 'string') return ''
   const trimmed = value.trim()
-  if (trimmed.startsWith('/api/public/media-assets/')) {
+  if (trimmed.startsWith('/api/public/media-assets/') || trimmed.startsWith('/menu/')) {
     return `${getRuntimeConfig().apiBaseUrl}${trimmed}`
   }
   return trimmed

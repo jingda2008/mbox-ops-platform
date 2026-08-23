@@ -231,6 +231,16 @@
       "automaticBlocker": "the deployer stages each report under a hidden temporary name, verifies its SHA256 on the application host and atomically renames the complete file to the watched final path",
       "fixCommit": "47441719c89aa57ea7bfb71505ccaa17ceabd1b1",
       "status": "covered"
+    },
+    {
+      "id": "REL-024",
+      "category": "production-migration-lineage-reuse",
+      "rootCause": "Two integrated branches had independently assigned normalized migration 102. The merge renumbered the printer permission migration already applied in production to 104 instead of preserving the immutable production prefix, so migration preflight correctly rejected the candidate before any database write.",
+      "earliestDetectionStage": "external_preflight_passed",
+      "regressionTest": "server/migrate-normalized.test.ts",
+      "automaticBlocker": "the migration baseline now anchors versions 102 through 104 by exact filename and SHA256, including the production-applied printer permission checksum, before CI can build a release image",
+      "fixCommit": "c90f65528dfc72e40294bff0881abc31e7ccc785",
+      "status": "covered"
     }
   ]
 }

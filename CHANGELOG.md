@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.0-rc.122 - 2026-08-24
+
+- Preserves the production-applied normalized migration `102` printer
+  permission filename and SHA-256 instead of renumbering that immutable fact.
+- Moves the not-yet-applied homepage display mode and Superhigh membership
+  consent changes to migrations `103` and `104` respectively.
+- Adds an exact migration-lineage regression gate after `rc.121` safely stopped
+  before database writes or traffic cutover.
+- Retains all scanned-menu, assisted-order, live-state, touch-target and
+  acceptance corrections from `rc.121`.
+
 ## 1.0.0-rc.121 - 2026-08-23
 
 - Shows the real menu while a scanned table is waiting for staff opening, and

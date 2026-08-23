@@ -42,3 +42,28 @@ The public origin is `https://mbox.shmbox.com`. Production deployment must use
 the immutable GitHub pre-release, the private application host at
 `10.100.80.223:22` through its configured jump path, and the separate evidence
 relay at `139.224.254.60:6122`.
+
+## Verified deployment evidence
+
+- Main CI `32661896113`, tag CI `32662338043` and release workflow
+  `32662338040` completed successfully for commit
+  `518dd69b1b070466a816730ba30df77af7d482a6`.
+- Production activated image digest
+  `sha256:2c8993b002a192d69a2dcd68174f16e37b398671bba52febb5393dc1a9b40ed6`
+  at `2026-08-23T19:59:14Z`; schema remained `105` and a verified backup was
+  retained at `/opt/mbox/backups/mbox-20260823T195812Z-aK0apj.dump`.
+- Release smoke and real-browser checks passed for `/`, `/guest?table=W01`,
+  `/reserve` and `/staff/live`. A separate internet host then completed 70
+  repeated public route, readiness and unauthenticated printer-management
+  checks with zero failures.
+- Both `/api/hardware/print-bridges` and `/api/hardware/printer-routes` returned
+  `401 AUTH_REQUIRED`; the payment and print-bridge credential boundaries also
+  rejected empty unauthenticated requests with `401`.
+- DNS resolved the public origin to `139.196.99.138`, HTTP redirected to HTTPS,
+  and the deployed TLS certificate for `mbox.shmbox.com` was valid through
+  `2027-02-28`.
+
+This evidence proves the deployed software and public authorization response.
+It does not prove cash was physically received, a physical POS completed, paper
+was printed, or the native WeChat package was uploaded; those remain separate
+field and platform acceptance actions.

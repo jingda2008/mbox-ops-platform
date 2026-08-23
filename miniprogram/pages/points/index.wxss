@@ -48,7 +48,7 @@
 .ledger-note text, .empty-member text { display: block; font-size: 22rpx; line-height: 1.6; }
 .ledger-note text:first-child { margin-bottom: 7rpx; color: #2e2924; font-weight: 650; }
 .empty-member button, .error-banner button { min-height: 88rpx; margin-top: 18rpx; font-size: 23rpx; }
-@media (max-width: 350px) {
+@media (max-width: 390px) {
   .points-head { padding-bottom: 34rpx; }
   .points-title { font-size: 40rpx; }
   .ledger-row { align-items: flex-start; }

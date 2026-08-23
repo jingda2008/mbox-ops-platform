@@ -421,12 +421,14 @@
 
 .benefit-scroll,
 .redemption-scroll,
-.member-content-scroll { width: 100%; margin-top: 12rpx; }
+.member-content-scroll { width: 100%; margin-top: 12rpx; white-space: nowrap; }
 .benefit-row,
 .redemption-row,
 .member-content-row {
-  display: flex;
+  display: inline-flex;
+  min-width: 100%;
   padding-bottom: 6rpx;
+  align-items: stretch;
   gap: 12rpx;
 }
 .benefit-card,
@@ -581,21 +583,23 @@
 .point-row > text.positive { color: #315d46; }
 
 .member-content-card {
-  display: grid;
+  display: flex;
   width: 620rpx;
   min-height: 208rpx;
-  flex: 0 0 auto;
+  flex: 0 0 620rpx;
   overflow: hidden;
-  grid-template-columns: 208rpx minmax(0, 1fr);
+  flex-direction: row;
+  align-items: stretch;
   border: 1rpx solid rgba(201, 171, 112, .36);
   border-radius: 18rpx;
   background: linear-gradient(145deg, #315d46, #214635 72%, #172c21);
   box-shadow: 0 12rpx 30rpx rgba(27, 65, 44, .14), inset 0 1rpx rgba(255, 255, 255, .1);
 }
-.member-content-image { display: block; width: 100%; min-height: 208rpx; height: 100%; background: #214635; }
+.member-content-card.is-single { width: 100%; flex-basis: 100%; }
+.member-content-image { display: block; flex: 0 0 208rpx; width: 208rpx; min-height: 208rpx; height: 100%; background: #214635; }
 .member-content-image--placeholder { display: grid; padding: 38rpx; box-sizing: border-box; place-items: center; background: radial-gradient(circle at 72% 22%, rgba(222, 190, 126, .26), transparent 34%), linear-gradient(145deg, #294f3b, #152b20); }
 .member-content-image--placeholder image { width: 100%; height: 100%; opacity: .42; }
-.member-content-copy { display: grid; min-width: 0; min-height: 208rpx; padding: 20rpx 22rpx; align-content: center; box-sizing: border-box; }
+.member-content-copy { display: grid; min-width: 0; flex: 1; min-height: 208rpx; padding: 20rpx 22rpx; align-content: center; box-sizing: border-box; }
 .member-content-type { color: #ddc390; font-size: 18rpx; font-weight: 750; }
 .member-content-title {
   display: -webkit-box;
@@ -641,7 +645,7 @@
 .error-banner { background: #fdeeee; color: #a14545; }
 .warning { background: #f7f0e6; color: #8a6a3d; }
 
-@media (max-width: 350px) {
+@media (max-width: 390px) {
   .profile-page { padding-right: 22rpx; padding-left: 22rpx; }
   .profile-hero__title { font-size: 40rpx; }
   .metric-value { font-size: 27rpx; }
@@ -650,6 +654,9 @@
   .service-chip__face { min-height: 96rpx; padding: 12rpx 10rpx; gap: 8rpx; }
   .service-chip__icon { width: 30rpx; height: 30rpx; flex-basis: 30rpx; }
   .service-chip__copy text:first-child { font-size: 20rpx; }
+  .member-content-card { width: 580rpx; flex-basis: 580rpx; }
+  .member-content-image { flex: 0 0 188rpx; width: 188rpx; min-height: 200rpx; }
+  .member-content-copy { min-height: 200rpx; padding: 18rpx 20rpx; }
 }
 
 .identity-main--hover { opacity: 0.92; }

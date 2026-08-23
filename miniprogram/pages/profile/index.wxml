@@ -188,7 +188,7 @@
       <text class="module-title">活动与内容</text>
       <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="member-content-scroll">
         <view class="member-content-row">
-          <view wx:for="{{contentCards}}" wx:key="code" class="member-content-card">
+          <view wx:for="{{contentCards}}" wx:key="code" class="member-content-card {{contentCards.length === 1 ? 'is-single' : ''}}">
             <image wx:if="{{item.imageUrl}}" class="member-content-image" src="{{item.imageUrl}}" mode="aspectFill" />
             <view wx:else class="member-content-image member-content-image--placeholder">
               <image src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX" />

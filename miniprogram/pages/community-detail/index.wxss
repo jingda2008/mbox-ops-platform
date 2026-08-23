@@ -151,7 +151,7 @@
 .detail-member-authorize--disabled { border-color: #c5c1ba; background: #c5c1ba; }
 .detail-member-note { margin-top: 16rpx; color: #90877e; font-size: 18rpx; line-height: 1.55; }
 
-@media (max-width: 350px) {
+@media (max-width: 390px) {
   .detail-hero { height: 450rpx; margin-right: -22rpx; margin-left: -22rpx; }
   .detail-title { right: 22rpx; left: 22rpx; }
   .detail-title text:nth-child(2) { font-size: 40rpx; }

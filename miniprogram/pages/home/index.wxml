@@ -119,7 +119,7 @@
 
     <view wx:if="{{upcomingActivity || editorialCards.length}}" class="section home-editorial-section">
       <view class="section-title"><text>发现 M-BOX</text><text class="section-link">精选内容</text></view>
-      <button wx:if="{{upcomingActivity}}" class="featured-activity-card" bindtap="openFeaturedActivity" hover-class="featured-activity-card--hover">
+      <view wx:if="{{upcomingActivity}}" class="featured-activity-card" bindtap="openFeaturedActivity" hover-class="featured-activity-card--hover" role="button" aria-role="button">
         <view class="featured-activity-card__art">
           <image wx:if="{{upcomingActivity.coverUrl}}" src="{{upcomingActivity.coverUrl}}" mode="aspectFill" />
           <image wx:else class="featured-activity-card__mark" src="/assets/brand/superhigh-mark.png" mode="aspectFit" aria-hidden="true" />
@@ -128,10 +128,10 @@
         </view>
         <view class="featured-activity-card__copy"><text>超嗨 · 本期精选</text><text>{{upcomingActivity.title}}</text><text>{{upcomingActivity.dateText}} · {{upcomingActivity.availabilityText}}</text><text>查看活动详情</text></view>
         <text class="featured-activity-card__arrow">›</text>
-      </button>
+      </view>
       <scroll-view wx:if="{{editorialCards.length}}" class="published-content-scroll" scroll-x enhanced show-scrollbar="{{false}}">
         <view class="published-content-track">
-          <button wx:for="{{editorialCards}}" wx:key="code" class="published-content-card {{editorialCards.length === 1 ? 'is-single' : ''}}" data-code="{{item.code}}" bindtap="openEditorial" hover-class="published-content-card--hover">
+          <view wx:for="{{editorialCards}}" wx:key="code" class="published-content-card {{editorialCards.length === 1 ? 'is-single' : ''}}" data-code="{{item.code}}" bindtap="openEditorial" hover-class="published-content-card--hover" role="button" aria-role="button">
             <view class="published-content-card__art">
               <image wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
               <image wx:else class="published-content-card__logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" />
@@ -140,7 +140,7 @@
             </view>
             <view class="published-content-card__copy"><text>{{item.title}}</text><text>{{item.summary}}</text><text>{{item.ctaLabel}}</text></view>
             <text wx:if="{{item.canOpen}}" class="published-content-card__arrow">›</text>
-          </button>
+          </view>
         </view>
       </scroll-view>
     </view>

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   PaymentProviderActionRepository,
+  ProviderPaymentStatusAccessError,
   ProviderPaymentMethodConflictError,
 } from './payment-provider-action-repository.js'
 import type { ScopedTransaction } from './transaction-runner.js'
@@ -51,6 +52,42 @@ describe('PaymentProviderActionRepository', () => {
       { lock: false },
     )).resolves.toMatchObject({ id: paymentId, method: 'native_qr', tableCode: 'W01' })
     expect(capturedSql).not.toContain('FOR SHARE')
+  })
+
+  it('does not let another employee use an opaque payment id to watch an assisted payment', async () => {
+    const transaction = {
+      scope: { tenantId, storeId },
+      query: async (text: string) => {
+        if (text.includes('FROM mbox.payment_provider_actions')) {
+          return { rows: [{ initiated_by_type: 'employee', initiated_by_ref: employeeId }], rowCount: 1 }
+        }
+        return { rows: [{
+          id: paymentId,
+          payable_kind: 'order',
+          order_id: '88888888-8888-4888-8888-888888888888',
+          order_public_id: 'order-shared-payment-0001',
+          activity_registration_id: null,
+          activity_registration_public_id: null,
+          public_id: 'payment-shared-0001',
+          provider: 'postar',
+          provider_transaction_id: null,
+          method: 'native_qr',
+          amount_minor: '8800',
+          currency: 'CNY',
+          status: 'pending',
+          table_session_id: tableSessionId,
+          customer_id: null,
+          table_code: 'W01',
+          created_at: '2026-08-14T00:00:00.000Z',
+        }], rowCount: 1 }
+      },
+    } as unknown as ScopedTransaction
+    const repository = new PaymentProviderActionRepository(transaction, secret)
+
+    await expect(repository.resolveInitiatedPaymentStatus(
+      paymentId,
+      { type: 'employee', employeeId: '99999999-9999-4999-8999-999999999999' },
+    )).rejects.toBeInstanceOf(ProviderPaymentStatusAccessError)
   })
 
   it('encrypts and reuses one QR action across staff and guests at the same table', async () => {

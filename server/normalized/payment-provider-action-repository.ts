@@ -85,6 +85,18 @@ export class ProviderPaymentUnknownError extends Error {
   }
 }
 
+/**
+ * A passive status read is deliberately narrower than a provider query. The
+ * employee who created a presentation may observe its result, but cannot use
+ * an opaque payment id to inspect another employee's payment.
+ */
+export class ProviderPaymentStatusAccessError extends Error {
+  constructor() {
+    super('当前员工无权查看这笔协助收款状态')
+    this.name = 'ProviderPaymentStatusAccessError'
+  }
+}
+
 export class WechatPaymentIdentityRequiredError extends Error {
   constructor() {
     super('当前微信身份尚未完成安全绑定，请改用客人扫码支付')
@@ -144,6 +156,28 @@ export class PaymentProviderActionRepository {
     if (row === undefined) throw new Error('支付记录不存在')
     await this.assertAccess(row, principal)
     return mapContext(row)
+  }
+
+  async resolveInitiatedPaymentStatus(
+    paymentId: string,
+    principal: Readonly<PaymentPrincipal>,
+  ): Promise<ProviderPaymentContext> {
+    const context = await this.resolvePaymentContext(paymentId, principal, { lock: false })
+    const action = await this.transaction.query<{
+      initiated_by_type: PaymentPrincipal['type']
+      initiated_by_ref: string
+    }>(`
+      SELECT initiated_by_type, initiated_by_ref::text
+      FROM mbox.payment_provider_actions
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND payment_id = $3::uuid
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
+    const owner = action.rows[0]
+    if (owner === undefined
+      || owner.initiated_by_type !== principal.type
+      || owner.initiated_by_ref !== principalReference(principal)) {
+      throw new ProviderPaymentStatusAccessError()
+    }
+    return context
   }
 
   async resolveOrderForGuest(

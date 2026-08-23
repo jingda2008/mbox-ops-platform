@@ -472,7 +472,6 @@ describe('Postar ordinary partial refund', () => {
         orderStatus: '4',
         orderTime: '20260714120600',
         realRefundAmt: '-1200',
-        threeOrderNo: 'RefundABC123',
       },
       msg: 'accepted',
     }))
@@ -483,7 +482,7 @@ describe('Postar ordinary partial refund', () => {
     expect(observation).toMatchObject({
       amount: 1200,
       providerRefundId: 'RefundABC123',
-      providerRefundTransactionId: null,
+      providerRefundTransactionId: 'POSTARREFUND001',
       status: 'processing',
     })
     const decoded = decodeRequest(post.mock.calls[0]![0])
@@ -494,6 +493,19 @@ describe('Postar ordinary partial refund', () => {
       refundAmount: '1200',
       tag: '2',
     })
+  })
+
+  it('rejects a contradictory merchant refund echo when the provider includes it', async () => {
+    const adapter = new PostarPaymentProviderAdapter(testOptions(async () => response({
+      code: '000000',
+      data: {
+        agetId: 'AGENCY001', custId: 'MERCHANT001', orderFlowNo: 'POSTARREFUND001',
+        orderStatus: '4', orderTime: '20260714120600', realRefundAmt: '-1200',
+        threeOrderNo: 'AnotherRefundABC123',
+      },
+      msg: 'accepted',
+    })))
+    await expect(adapter.requestRefund(refundRequest, context)).rejects.toThrow('退款响应三方单号不匹配')
   })
 
   it('maps a signed ordinary refund query result and rejects withdrawal states', async () => {

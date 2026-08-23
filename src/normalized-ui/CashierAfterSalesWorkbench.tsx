@@ -657,6 +657,23 @@ function PaymentBlock({
       >{busyKey === `payment-provider-query-${payment.id}` ? <LoaderCircle className="is-spinning" size={17} /> : null}查询渠道结果</button>
     </div>}
 
+    {actions.canExecuteRefund && payment.provider === 'postar' && payment.refunds
+      .filter((refund) => refund.status === 'processing')
+      .map((refund) => <div className="cashier-provider-query" key={`refund-query-${refund.id}`}>
+        <p>这笔线上退款正在等待渠道确认。查询只读取退款结果，不会再次提交退款。</p>
+        <button
+          type="button"
+          className="cashier-secondary-action"
+          disabled={busyKey !== null}
+          onClick={() => void onMutation(
+            `refund-provider-query-${refund.id}`,
+            `/api/refunds/${encodeURIComponent(refund.id)}/provider-query`,
+            {},
+            '已完成退款渠道查询，结果已按渠道回传更新。',
+          )}
+        >{busyKey === `refund-provider-query-${refund.id}` ? <LoaderCircle className="is-spinning" size={17} /> : null}查询退款渠道结果</button>
+      </div>)}
+
     {drafting && <div className="cashier-refund-form">
       <h4>选择本次退款商品和金额</h4>
       {payment.refundableItems.map((item) => {

@@ -208,6 +208,20 @@ describe('StaffActionsApi', () => {
     expect(request?.method).toBe('POST')
   })
 
+  it('only reads the persisted payment outcome for the assisted order auto-refresh', async () => {
+    const paymentId = '11111111-1111-4111-8111-111111111111'
+    const send = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      data: { id: paymentId, status: 'succeeded' },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const api = new StaffActionsApi({ fetch: send })
+
+    await expect(api.loadOnlinePaymentStatus(paymentId)).resolves.toBe('succeeded')
+    const [url, request] = send.mock.calls[0]!
+    expect(url).toBe(`/api/payments/${paymentId}/status`)
+    expect(request?.method).toBe('GET')
+    expect(new Headers(request?.headers).get('idempotency-key')).toBeNull()
+  })
+
   it('keeps the table observation contract aligned with the server and reuses the saved urgency choice', async () => {
     const draft = {
       publicId: 'observation-0001', status: 'draft', inputKind: 'text', rawContent: '红色那杯太甜',

@@ -38,6 +38,8 @@ describe('CashierAfterSalesWorkbenchView', () => {
 
     expect(html).toContain('待支付渠道回传结果')
     expect(html).toContain('本页不能把线上退款手工改成成功')
+    expect(html).toContain('查询退款渠道结果')
+    expect(html).toContain('不会再次提交退款')
     expect(html).not.toContain('登记已退')
     expect(html).not.toContain('退款凭证号')
   })

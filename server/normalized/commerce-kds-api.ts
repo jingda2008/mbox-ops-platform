@@ -225,6 +225,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
         canCreateOrder,
         canInitiatePayment: onlinePaymentAvailable
           && access.permissions.includes('payment.initiate.staff'),
+        canQueryOnlinePayment: access.permissions.includes('reconciliation.view'),
         onlinePaymentProvider: options.onlinePaymentProvider ?? null,
         gift: giftLimit === null ? null : {
           enabled: giftLimit.allowFullGift,

@@ -312,6 +312,36 @@ describe('mini-program mobile business flow contract', () => {
     expect(reservationCss).toContain('@media(max-width:390px)')
   })
 
+  it('keeps every customer page usable in the expanded Mate X5 viewport', () => {
+    const globalCss = read('miniprogram/app.wxss')
+    const homeCss = read('miniprogram/pages/home/index.wxss')
+    const customerViews = collectFiles(new URL('miniprogram/pages/', projectRoot).pathname, /\.wxml$/)
+    const foldFrameClasses = [
+      '.top-band', '.home-hero', '.community-hero', '.detail-hero', '.profile-hero', '.points-head',
+      '.contact-hero', '.order-head',
+      '.reservation-head', '.service-head', '.status-head', '.performance-hero',
+      '.preferences-hero', '.coupons-hero', '.notifications-hero',
+    ]
+    const foldOverlayClasses = [
+      '.editorial-panel-mask', '.performance-panel-mask', '.member-invite-mask',
+      '.community-member-mask', '.detail-member-mask', '.login-sheet-mask', '.sheet-mask',
+    ]
+
+    expect(globalCss).toContain('@media (min-width: 700px)')
+    expect(globalCss).toMatch(/\.page \{[\s\S]*max-width: 720px;/)
+    expect(globalCss).toContain('padding-right: 32px;')
+    expect(globalCss).toContain('width: 620px;')
+    expect(globalCss).toContain('max-height: calc(100vh - 64px);')
+    foldFrameClasses.forEach((className) => expect(globalCss).toContain(`page ${className}`))
+    foldOverlayClasses.forEach((className) => expect(globalCss).toContain(`page ${className}`))
+    expect(globalCss).toContain('page .detail-dock')
+    expect(globalCss).toContain('page .terms-dock')
+    expect(globalCss).toContain('page .cart-dock')
+    expect(homeCss).toContain('@media (min-width: 700px)')
+    expect(homeCss).toMatch(/\.published-content-card \{[\s\S]*flex-basis: 100%;/)
+    customerViews.forEach((path) => expect(readFileSync(path, 'utf8')).toMatch(/^<view class="page(?:\s|\")/))
+  })
+
   it('keeps verified phone and activity contact correction inside a compact privacy disclosure',()=>{
     const view=read('miniprogram/pages/privacy/index.wxml')
     const page=read('miniprogram/pages/privacy/index.js')

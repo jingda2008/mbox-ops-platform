@@ -840,3 +840,10 @@
     padding: 20rpx 40rpx 20rpx 18rpx;
   }
 }
+
+@media (min-width: 700px) {
+  .published-content-card {
+    width: 100%;
+    flex-basis: 100%;
+  }
+}

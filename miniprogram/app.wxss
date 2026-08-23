@@ -136,3 +136,84 @@ page .detail-dock > button.payment-button {
     linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,0) 44%),
     linear-gradient(145deg, #315d46, #214635);
 }
+
+/* Folded devices keep the phone layout; the expanded Mate X5 viewport needs a readable content frame. */
+@media (min-width: 700px) {
+  .page {
+    width: 100%;
+    max-width: 720px;
+    margin-right: auto;
+    margin-left: auto;
+    padding-right: 32px;
+    padding-left: 32px;
+  }
+
+  .page.profile-page,
+  .page.profile-contact-page,
+  .page.terms-page {
+    padding-right: 32px;
+    padding-left: 32px;
+  }
+
+  page .top-band,
+  page .home-hero,
+  page .community-hero,
+  page .detail-hero,
+  page .profile-hero,
+  page .points-head,
+  page .contact-hero,
+  page .order-head,
+  page .reservation-head,
+  page .service-head,
+  page .status-head,
+  page .performance-hero,
+  page .preferences-hero,
+  page .coupons-hero,
+  page .notifications-hero {
+    margin-right: -32px;
+    margin-left: -32px;
+    padding-right: 32px;
+    padding-left: 32px;
+  }
+
+  page .detail-title {
+    right: 32px;
+    left: 32px;
+  }
+
+  page .detail-dock,
+  page .terms-dock,
+  page .cart-dock {
+    right: auto;
+    left: 50%;
+    width: 720px;
+    max-width: 100%;
+    transform: translateX(-50%);
+  }
+
+  page .editorial-panel-mask,
+  page .performance-panel-mask,
+  page .member-invite-mask,
+  page .community-member-mask,
+  page .detail-member-mask,
+  page .login-sheet-mask,
+  page .sheet-mask {
+    padding: 32px;
+    align-items: center;
+  }
+
+  page .editorial-panel,
+  page .performance-panel,
+  page .member-invite-sheet,
+  page .community-member-sheet,
+  page .detail-member-sheet,
+  page .login-sheet,
+  page .upgrade-sheet {
+    width: 620px;
+    max-width: 100%;
+    max-height: calc(100vh - 64px);
+    overflow-y: auto;
+    border-radius: 28px;
+    box-sizing: border-box;
+  }
+}

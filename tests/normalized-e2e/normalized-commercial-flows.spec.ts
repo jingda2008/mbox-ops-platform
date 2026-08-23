@@ -526,9 +526,9 @@ test('mobile manager completes device verification and reaches role-scoped works
     await expect(page.getByRole('heading', { name: '现在要做什么' })).toBeVisible()
     await expect(page.locator('.normalized-mobile-nav')).toBeVisible()
   }
-  const liveSummary = page.getByRole('button', { name: /营业桌台.*1.*进行中/ })
+  const liveSummary = page.getByRole('button', { name: /营业桌台/ })
   await expect(liveSummary).toBeVisible()
-  await expect(page.getByText('0', { exact: true })).toHaveCount(0)
+  await expect(liveSummary).toContainText(/[1-9]\d* 项进行中/)
 
   await liveSummary.click()
   await expect(page.getByRole('heading', { name: '找到桌台，直接处理' })).toBeVisible()

@@ -127,6 +127,7 @@ Page({
   data: {
     loading: true,
     browseOnly: false,
+    browseCatalogLoaded: false,
     busy: false,
     error: '',
     success: '',
@@ -188,12 +189,13 @@ Page({
       const result = await getGuestSession()
       const connected = result.data || {}
       if (connected.status === 'waiting_for_table') {
-        this.setData({
-          loading: false,
+        const waitingView = {
           connectionState: 'waiting',
-          connectionMessage: connected.message || '桌位已识别，等待工作人员开台。',
+          connectionMessage: '请联系服务人员开台。开台后可直接下单。',
           table: connected.table || null,
-        })
+        }
+        if (this.data.browseCatalogLoaded) this.setData(Object.assign({ loading: false }, waitingView))
+        else await this.loadBrowseData('', waitingView)
         this.scheduleWaitingPoll()
         return
       }
@@ -208,7 +210,12 @@ Page({
     }
   },
 
-  async loadBrowseData(connectionError) {
+  async loadBrowseData(connectionError, view) {
+    const browseView = Object.assign({
+      connectionState: 'needs_scan',
+      connectionMessage: '',
+      table: null,
+    }, view || {})
     try {
       const [menu, performance] = await Promise.all([
         getPublicMenu({}),
@@ -218,8 +225,10 @@ Page({
       this.setData({
         loading: false,
         browseOnly: true,
-        connectionState: 'needs_scan',
-        table: null,
+        browseCatalogLoaded: true,
+        connectionState: browseView.connectionState,
+        connectionMessage: browseView.connectionMessage,
+        table: browseView.table,
         products,
         categories: menuCategories(products),
         performance: performanceView(performance),
@@ -230,8 +239,10 @@ Page({
       this.setData({
         loading: false,
         browseOnly: true,
-        connectionState: 'needs_scan',
-        table: null,
+        browseCatalogLoaded: false,
+        connectionState: browseView.connectionState,
+        connectionMessage: browseView.connectionMessage,
+        table: browseView.table,
         products: [],
         visibleProducts: [],
         error: connectionError || error.message || '今晚菜单暂时无法读取，请稍后再试',

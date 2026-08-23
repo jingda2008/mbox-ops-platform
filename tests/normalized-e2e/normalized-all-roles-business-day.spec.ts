@@ -145,7 +145,7 @@ async function expectStaffRoute(page: Page, route: string) {
     '/staff/fulfillment': '只做当前下一步',
     '/staff/payments': '收银与退款',
     '/staff/performance': '演出与点歌',
-    '/staff/inventory': '库存与存酒',
+    '/staff/inventory': '库存与酒水上架',
     '/staff/operations': '经营数据',
     '/staff/customer-experience': '客户体验与活动',
     '/staff/devices': '设备与打印',
@@ -187,7 +187,13 @@ test('one business-day order and guest requests flow through bartender, kitchen,
   await cart.getByPlaceholder('如：少冰、不要香菜、酒水和小食一起上').fill('营业日验收：未付款订单不得出品')
   await cart.getByRole('button', { name: /确认订单并微信支付/ }).click()
   await guest.getByRole('dialog', { name: '确认上单' }).getByRole('button', { name: '确认上单' }).click()
-  await expect(guest.getByRole('heading', { name: /支付已经完成|测试订单已建立|等待微信支付/ })).toBeVisible()
+  const resultDialog = guest.getByRole('dialog', { name: '订单与支付状态' })
+  const duplicateConfirmation = guest.getByRole('button', { name: '确认继续加单' })
+  await expect(resultDialog.or(duplicateConfirmation)).toBeVisible()
+  if (await duplicateConfirmation.isVisible()) await duplicateConfirmation.click()
+  await expect(resultDialog).toBeVisible()
+  await expect(resultDialog.getByRole('heading', { name: /支付已经完成|测试订单已建立|等待微信支付|等待扫码支付|付款状态待核对|正在准备付款/ })).toBeVisible()
+  await expect(resultDialog).toContainText('付款状态每 2 秒自动核对')
   await guestContext.close()
 
   const orderManager = await staffPage(browser, data, 'liyan')
@@ -211,7 +217,9 @@ test('one business-day order and guest requests flow through bartender, kitchen,
   await bartender.page.getByRole('button', { name: '吧台出品', exact: true }).first().click()
   const barCard = bartender.page.locator('.staff-action-card').filter({ hasText: data.orderableProductName }).first()
   await expect(barCard).toBeVisible()
-  await expect(bartender.page.locator('.staff-action-card').filter({ hasText: data.kitchenProductName })).toHaveCount(0)
+  const bartenderKitchenCard = bartender.page.locator('.staff-action-card').filter({ hasText: data.kitchenProductName }).first()
+  await expect(bartenderKitchenCard).toContainText('当前账号可查看，不能确认制作')
+  await expect(bartenderKitchenCard.getByRole('button', { name: '制作完成' })).toHaveCount(0)
   await expect(bartender.page.locator('.staff-action-card').filter({ hasText: '未付款订单不得出品' })).toHaveCount(0)
   await expect(barCard).toContainText('营业日验收：酒水小食一起上')
   await barCard.getByRole('button', { name: '制作完成' }).click()
@@ -339,8 +347,9 @@ test('manager completes a walk-in table lifecycle without leaving the mobile ope
   await expect(manager.page.getByRole('status')).toContainText(`${sourceCode} 已转至 ${targetCode}`)
   await expect(manager.page.locator('.staff-table-tile').filter({ hasText: targetCode }).first()).toContainText('已开台')
 
-  await manager.page.getByRole('button', { name: '关台/翻台' }).click()
-  await manager.page.getByRole('button', { name: '再次确认关台' }).click()
+  await manager.page.getByRole('button', { name: '准备结台' }).click()
+  await expect(manager.page.getByRole('status')).toContainText('请再次确认结台')
+  await manager.page.getByRole('button', { name: '确认结台' }).click()
   await expect(manager.page.getByRole('status')).toContainText(`${targetCode} 已关台`)
   await expect(manager.page.locator('.staff-table-tile').filter({ hasText: targetCode }).first()).not.toContainText('已开台')
   await expectNoHorizontalOverflow(manager.page)
@@ -388,9 +397,9 @@ test('店长可在经营配置中修改商品推荐字段并从服务端读回',
   const data = await fixture()
   const manager = await staffPage(browser, data, 'liyan')
   await manager.page.setViewportSize({ width: 430, height: 880 })
-  await manager.page.goto('/staff/settings')
-  await expect(manager.page.getByRole('heading', { name: '系统配置状态' })).toBeVisible()
-  await manager.page.getByRole('button', { name: /商品、售价与推荐/ }).click()
+  await manager.page.goto('/staff/inventory')
+  await expect(manager.page.getByRole('heading', { name: '库存与酒水上架' })).toBeVisible()
+  await manager.page.getByRole('button', { name: /酒水上架流程/ }).click()
   await expect(manager.page.getByLabel('搜索配置商品')).toBeVisible()
   await manager.page.getByLabel('搜索配置商品').fill(data.orderableProductName)
   const product = manager.page.locator('.catalog-management-list article').filter({ hasText: data.orderableProductName }).first()

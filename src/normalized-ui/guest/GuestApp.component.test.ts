@@ -2,7 +2,8 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { rankMenuRecommendations } from '../../shared/menu-recommendation'
-import { GuestApp, GuestGate } from './GuestApp'
+import { GuestApp, GuestGate, paymentStatusCopy } from './GuestApp'
+import type { GuestOrderResult, GuestTableOrder } from './guest-api'
 import { guestGatePresentation } from './guest-gate-model'
 import { guestMenuProductToMenuProduct } from './menu-product-adapter'
 import { guestCartStorageKey, menuRequestDelayMs, type GuestMenuProduct } from './guest-model'
@@ -124,5 +125,19 @@ describe('GuestApp', () => {
     }
     expect(guestCartStorageKey({ ...base, cartScope: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }))
       .not.toBe(guestCartStorageKey({ ...base, cartScope: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' }))
+  })
+
+  it('lets the authoritative table order replace a stale initial payment result', () => {
+    const result = {
+      payment: {
+        status: 'pending', simulated: false, mode: 'wechat_jsapi',
+        providerAction: { status: 'pending', payload: {} },
+      },
+    } as GuestOrderResult
+    const paidOrder = { paymentStatus: 'paid', paymentAccess: 'not_required' } as GuestTableOrder
+    const reviewingOrder = { paymentStatus: 'pending', paymentAccess: 'status_review' } as GuestTableOrder
+
+    expect(paymentStatusCopy(result, paidOrder).title).toBe('支付已经完成')
+    expect(paymentStatusCopy(result, reviewingOrder).title).toBe('订单已建立，付款状态待核对')
   })
 })

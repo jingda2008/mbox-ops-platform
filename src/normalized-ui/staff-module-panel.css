@@ -201,7 +201,7 @@
 .inventory-selling-flow > ol > li > span { min-width: 0; display: grid; gap: 3px; }
 .inventory-selling-flow > ol > li strong { color: #274b3a; font-size: 11px; }
 .inventory-selling-flow > ol > li small { color: #68766d; font-size: 10px; line-height: 1.4; }
-.inventory-selling-flow > ol > li > button, .inventory-selling-flow > ol > li > em { grid-column: 1 / -1; min-height: 36px; padding: 0 8px; border: 1px solid #257b59; border-radius: 5px; background: #edf7f0; color: #176b4c; font: inherit; font-size: 10px; font-style: normal; font-weight: 800; }
+.inventory-selling-flow > ol > li > button, .inventory-selling-flow > ol > li > em { grid-column: 1 / -1; min-height: 44px; padding: 0 8px; border: 1px solid #257b59; border-radius: 5px; background: #edf7f0; color: #176b4c; font: inherit; font-size: 10px; font-style: normal; font-weight: 800; }
 .inventory-selling-flow > ol > li > em { display: flex; align-items: center; justify-content: center; border-color: #d7b966; background: #fff8e7; color: #796025; }
 .catalog-management.is-inventory-flow { border-color: #9bc8b0; }
 .catalog-selling-flow { padding: 11px; border: 1px solid #b6d7c2; border-radius: 7px; background: #f0faf4; display: grid; gap: 8px; }

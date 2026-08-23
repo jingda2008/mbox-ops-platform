@@ -264,13 +264,15 @@ test('customers can browse a read-only menu before scanning, but the browse view
     read('miniprogram/utils/media.js'),
     read('miniprogram/utils/api.js'),
   ])
-  const browseStart = orderView.indexOf("connectionState === 'needs_scan'")
-  const waitingStart = orderView.indexOf("connectionState === 'waiting'")
-  assert.ok(browseStart >= 0 && waitingStart > browseStart)
-  const browseView = orderView.slice(browseStart, waitingStart)
+  const browseStart = orderView.indexOf("connectionState === 'needs_scan' || connectionState === 'waiting'")
+  const browseEnd = orderView.indexOf('<block wx:else>')
+  assert.ok(browseStart >= 0 && browseEnd > browseStart)
+  const browseView = orderView.slice(browseStart, browseEnd)
 
   assert.match(browseView, /今晚菜单/)
   assert.match(browseView, /随便看看也完全可以/)
+  assert.match(browseView, /请联系服务人员开台/)
+  assert.match(browseView, /等待期间可以先查看今晚真实菜单/)
   assert.match(browseView, /\{\{item\.availabilityText\}\}/)
   assert.match(browseView, /product-list--browse/)
   assert.doesNotMatch(browseView, /preview-product-grid/)
@@ -281,6 +283,8 @@ test('customers can browse a read-only menu before scanning, but the browse view
   assert.match(orderLogic, /const \{ publicImageUrl \} = require\('\.\.\/\.\.\/utils\/media'\)/)
   assert.match(orderLogic, /imageUrl: publicImageUrl\(item\.imageUrl\)/)
   assert.match(orderLogic, /function menuProducts\(items\)/)
+  assert.match(orderLogic, /if \(connected\.status === 'waiting_for_table'\)[\s\S]*?await this\.loadBrowseData\('', waitingView\)/)
+  assert.match(orderLogic, /connectionMessage: '请联系服务人员开台。开台后可直接下单。'/)
   assert.doesNotMatch(orderLogic, /includeUnavailable/)
   assert.match(orderLogic, /const products = menuProducts\(results\[0\]\)/)
   assert.match(orderLogic, /function menuRecommendations\(items, products\)/)

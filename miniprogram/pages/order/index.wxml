@@ -6,8 +6,17 @@
 
   <state-panel wx:if="{{loading}}" type="loading" title="正在确认桌次与菜单" />
 
-  <view wx:elif="{{connectionState === 'needs_scan'}}" class="gate-wrap">
-    <view class="browse-intro">
+  <view wx:elif="{{connectionState === 'needs_scan' || connectionState === 'waiting'}}" class="gate-wrap">
+    <view wx:if="{{connectionState === 'waiting'}}" class="browse-intro">
+      <view class="waiting-pulse"><view></view></view>
+      <view class="browse-intro__copy">
+        <text class="gate-kicker">{{table.displayName}}</text><text class="gate-title">请联系服务人员开台</text>
+        <text class="gate-copy">{{connectionMessage}}</text>
+      </view>
+      <button class="secondary-button gate-button" bindtap="retryTable">刷新开台状态</button>
+      <text class="gate-note">等待期间可以先查看今晚真实菜单</text>
+    </view>
+    <view wx:else class="browse-intro">
       <image class="gate-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX Logo" />
       <view class="browse-intro__copy">
         <text class="gate-kicker">M-BOX · TONIGHT MENU</text><text class="gate-title">先看今晚，再决定怎么喝</text>
@@ -19,7 +28,7 @@
     <view wx:if="{{error}}" class="error-banner gate-error">{{error}}</view>
 
     <view class="browse-menu">
-      <view class="browse-menu__heading"><view><text>今晚菜单</text><text>价格透明 · 到店后按实时库存下单</text></view><text>{{visibleProducts.length}} 款</text></view>
+      <view class="browse-menu__heading"><view><text>今晚菜单</text><text>价格透明 · {{connectionState === 'waiting' ? '开台后按实时库存下单' : '到店后按实时库存下单'}}</text></view><text>{{visibleProducts.length}} 款</text></view>
       <view class="menu-tools menu-tools--browse">
         <view class="search-box"><text>⌕</text><input value="{{searchText}}" placeholder="搜索酒水、套餐或口味" bindinput="onSearchInput" /></view>
         <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="category-scroll"><view class="category-row"><button wx:for="{{categories}}" wx:key="code" class="{{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory">{{item.name}}</button></view></scroll-view>
@@ -31,18 +40,11 @@
             <view wx:else class="product-media__placeholder"><text>M</text></view>
           </view>
           <view class="product-main"><text class="product-kind">{{item.productKind === 'bundle' ? '体验组合' : item.categoryName}}</text><text class="product-name">{{item.name}}</text><text class="product-copy">{{item.description || item.includedText || '详情以当晚正式菜单为准'}}</text></view>
-          <view class="product-action"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.availabilityText}}</text><text class="product-availability-copy">{{item.available ? '到店扫码后可下单' : item.availabilityDetail}}</text></view>
+          <view class="product-action"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.availabilityText}}</text><text class="product-availability-copy">{{item.available ? (connectionState === 'waiting' ? '服务人员开台后可下单' : '到店扫码后可下单') : item.availabilityDetail}}</text></view>
         </view>
       </view>
       <state-panel wx:else type="empty" title="没有找到符合条件的商品" message="可清空搜索或切换分类" />
     </view>
-  </view>
-
-  <view wx:elif="{{connectionState === 'waiting'}}" class="gate-wrap">
-    <view class="waiting-pulse"><view></view></view>
-    <text class="gate-kicker">{{table.displayName}}</text><text class="gate-title">已找到你的桌</text>
-    <text class="gate-copy">服务人员开台后，这里就能点单。</text>
-    <button class="secondary-button gate-button" bindtap="retryTable">刷新一下</button>
   </view>
 
   <block wx:else>

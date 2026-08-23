@@ -10,7 +10,7 @@ import type {
   AssistedOrderResult,
   StaffActionsApiPort,
 } from './staff-actions-api'
-import { assistedProductAvailability } from './assisted-order-product'
+import { assistedProductAvailability, isAssistedOrderCatalogProduct } from './assisted-order-product'
 
 export interface AssistedOrderSheetProps {
   api: StaffActionsApiPort
@@ -49,10 +49,7 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
       api.loadAssistedOrderCatalog(controller.signal),
     ]).then(([nextAccess, catalog]) => {
       setAccess(nextAccess)
-      setProducts(catalog.filter((product) => {
-        const amountMinor = Number(product.standardPrice?.amountMinor)
-        return product.status === 'active' && Number.isSafeInteger(amountMinor) && amountMinor > 0
-      }))
+      setProducts(catalog.filter(isAssistedOrderCatalogProduct))
       setPhase('ready')
     }).catch((reason: unknown) => {
       if (controller.signal.aborted) return

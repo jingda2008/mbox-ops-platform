@@ -63,6 +63,7 @@ export interface AssistedOrderCatalogProduct {
     note: string | null
   }>
   productSnapshot: Record<string, unknown>
+  allowedChannels: Array<'guest_qr' | 'staff_assisted' | 'cashier' | 'reservation' | 'integration'>
   guestVisible: boolean
   recommendationEnabled: boolean
   recommendationMinGuests: number

@@ -308,9 +308,9 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   }, [connectTable, phase])
 
   useEffect(() => {
-    if (phase !== 'ready' || panel !== 'orders') return
+    if (phase !== 'ready' || (panel !== 'orders' && panel !== 'checkout')) return
     const refresh = () => { if (document.visibilityState === 'visible') void loadTableOrders(true) }
-    const timer = window.setInterval(refresh, 8_000)
+    const timer = window.setInterval(refresh, panel === 'checkout' ? 2_000 : 8_000)
     document.addEventListener('visibilitychange', refresh)
     return () => {
       window.clearInterval(timer)
@@ -511,6 +511,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
         />}
         {panel === 'checkout' && orderResult !== null && <CheckoutPanel
           result={orderResult}
+          tableOrder={tableOrders.find((order) => order.publicId === orderResult.order.publicId) ?? null}
           onRetryPayment={() => void payTableOrder(orderResult.order.publicId)}
           onClose={() => setPanel(null)}
         />}
@@ -723,14 +724,16 @@ function ServicePanel({ kind, detail, pending, onDetailChange, onSubmit }: {
   </div>
 }
 
-function CheckoutPanel({ result, onRetryPayment, onClose }: {
+function CheckoutPanel({ result, tableOrder, onRetryPayment, onClose }: {
   result: GuestOrderResult
+  tableOrder: GuestTableOrder | null
   onRetryPayment: () => void
   onClose: () => void
 }) {
-  const paymentCopy = paymentStatusCopy(result)
+  const paymentCopy = paymentStatusCopy(result, tableOrder)
   return <div className="guest-checkout-result">
     <span className="guest-checkout-icon"><Check /></span><small>订单 {result.order.publicId}</small><h3>{paymentCopy.title}</h3><p>{paymentCopy.detail}</p>
+    <small>付款状态每 2 秒自动核对，以支付通道和本桌账单为准</small>
     {result.order.attentionRequired && <div className="guest-attention">{result.order.kdsNotice ?? '备注已保存，付款成功后同步给出品和配送人员'}</div>}
     <div className="guest-checkout-amount"><span>本次应付</span><strong>{formatMoney(result.settlement.payableAmountMinor, result.settlement.currency)}</strong></div>
     {!result.payment.simulated && result.payment.providerAction.status === 'pending' && result.payment.providerAction.payload !== null && <button type="button" className="guest-primary" onClick={() => void presentOnlinePayment(result.payment.providerAction)}>
@@ -768,7 +771,9 @@ async function presentOnlinePayment(action: OnlinePaymentAction): Promise<void> 
   })
 }
 
-function paymentStatusCopy(result: GuestOrderResult): { title: string; detail: string } {
+export function paymentStatusCopy(result: GuestOrderResult, tableOrder: GuestTableOrder | null): { title: string; detail: string } {
+  if (tableOrder?.paymentStatus === 'paid') return { title: '支付已经完成', detail: '吧台与收银已经收到付款状态。' }
+  if (tableOrder?.paymentAccess === 'status_review') return { title: '订单已建立，付款状态待核对', detail: '系统正在向支付机构核对结果，请勿重复付款。' }
   if (result.payment.status === 'paid') return { title: '支付已经完成', detail: '吧台与收银已经收到付款状态。' }
   if (result.payment.simulated) return { title: '测试订单已建立', detail: '当前是测试支付，仍待人工测试确认，没有产生真实收款。' }
   if (result.payment.providerAction.status === 'failed') return { title: '订单已建立，付款尚未发起', detail: '支付机构刚才没有受理，可在本桌订单中重新发起，不需要重复下单。' }

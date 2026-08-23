@@ -134,7 +134,7 @@ test('five-tab customer preview keeps pre-scan menu browsing, three-step reserva
 
     await openPreview(page, viewport.width, viewport.height)
     await page.getByRole('button', { name: '超嗨', exact: true }).click()
-    await page.locator('.mini-event-card').getByRole('button', { name: /查看详情/ }).click()
+    await page.locator('.mini-event-card').first().getByRole('button', { name: /详情/ }).click()
     await expect(page.getByRole('heading', { name: /歌手主场后的/ })).toBeVisible()
     await expect(page.getByText('报名成功赠送饮品券 1 张')).toBeVisible()
     await expect(page.getByRole('button', { name: '收费报名暂未开放' })).toBeDisabled()
@@ -143,7 +143,7 @@ test('five-tab customer preview keeps pre-scan menu browsing, three-step reserva
 
     await openPreview(page, viewport.width, viewport.height)
     await page.getByRole('button', { name: '超嗨', exact: true }).click()
-    await page.locator('.mini-event-row').getByRole('button', { name: /详情/ }).click()
+    await page.locator('.mini-event-card').filter({ hasText: '陆家嘴夜景音乐散步' }).getByRole('button', { name: /详情/ }).click()
     await expect(page.getByRole('heading', { name: /陆家嘴夜景/ })).toBeVisible()
     await expect(page.getByRole('button', { name: '免费报名' })).toBeEnabled()
     await expect(page.getByText('签到后赠送无酒精饮品券')).toBeVisible()
@@ -153,9 +153,10 @@ test('five-tab customer preview keeps pre-scan menu browsing, three-step reserva
     await openPreview(page, viewport.width, viewport.height)
     await page.getByRole('button', { name: '我的', exact: true }).click()
     await expect(page.getByRole('heading', { name: '你的今晚，都在这里' })).toBeVisible()
-    await expect(page.getByText('我的权益与赠送')).toBeVisible()
-    await expect(page.getByText('活动限定饮品券')).toBeVisible()
-    await expect(page.getByText('1 个待参加')).toBeVisible()
+    await expect(page.getByRole('heading', { name: '邀请加入 M-BOX 会员' })).toBeVisible()
+    await expect(page.getByRole('button', { name: /0 优惠券/ })).toBeVisible()
+    await expect(page.getByRole('button', { name: /超嗨活动 1 场已报名/ })).toBeVisible()
+    await expect(page.getByText('已报名的超嗨活动')).toBeVisible()
     await expectTouchTargets(page, '.mini-preview-shell', `${suffix}px profile`)
     await captureExpandedPreview(page, `member-benefits-${suffix}`)
   }

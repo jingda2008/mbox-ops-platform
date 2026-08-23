@@ -174,7 +174,7 @@ test('manager mobile pages prioritize current actions and keep low-frequency det
     ['/staff/reservations', '确认预约与到店'],
     ['/staff/payments', '收银与退款'],
     ['/staff/performance', '演出与点歌'],
-    ['/staff/inventory', '库存与存酒'],
+    ['/staff/inventory', '库存与酒水上架'],
     ['/staff/operations', '经营数据'],
     ['/staff/devices', '设备与打印'],
   ] as const
@@ -185,15 +185,8 @@ test('manager mobile pages prioritize current actions and keep low-frequency det
     await expectTouchTargets(page, 'body', `portrait ${route}`)
   }
 
-  await page.goto('/staff/settings')
-  await expect(page.getByRole('heading', { name: '系统配置状态' })).toBeVisible()
-  await expect(page.getByText('查看当前可配置范围')).toBeVisible()
-  await expect(page.getByText('员工与岗位')).not.toBeVisible()
-  await expect(page.getByText('支付安全边界')).toBeVisible()
-  await expectNoHorizontalOverflow(page, 'settings')
-  await expectTouchTargets(page, '.staff-module-panel', 'settings')
-
-  await page.getByRole('button', { name: /商品、售价与推荐/ }).click()
+  await page.goto('/staff/inventory')
+  await page.getByRole('button', { name: /酒水上架流程/ }).click()
   await page.getByLabel('搜索配置商品').fill(data.orderableProductName)
   await page.locator('.catalog-management-list article').filter({ hasText: data.orderableProductName }).first().getByRole('button', { name: '编辑' }).click()
   await expect(page.getByLabel('推荐优先级')).toBeVisible()
@@ -214,7 +207,7 @@ test('manager operational routes remain usable in phone landscape', async ({ pag
     ['/staff/reservations', '确认预约与到店'],
     ['/staff/payments', '收银与退款'],
     ['/staff/performance', '演出与点歌'],
-    ['/staff/inventory', '库存与存酒'],
+    ['/staff/inventory', '库存与酒水上架'],
     ['/staff/operations', '经营数据'],
     ['/staff/devices', '设备与打印'],
     ['/staff/settings', '系统配置状态'],

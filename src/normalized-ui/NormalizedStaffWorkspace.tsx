@@ -116,11 +116,11 @@ export function NormalizedStaffWorkspace({
   const bootstrapEtag = useRef<string | null>(null)
   const bootstrapAbort = useRef<AbortController | null>(null)
 
-  const loadBootstrap = useCallback(async () => {
+  const loadBootstrap = useCallback(async (quiet = false) => {
     bootstrapAbort.current?.abort()
     const controller = new AbortController()
     bootstrapAbort.current = controller
-    dispatch({ type: 'bootstrap-loading' })
+    if (!quiet) dispatch({ type: 'bootstrap-loading' })
     try {
       const result = await api.getStaffBootstrap({
         etag: bootstrapEtag.current ?? undefined,
@@ -149,6 +149,21 @@ export function NormalizedStaffWorkspace({
     if (initialBootstrap !== null) return
     void loadBootstrap()
   }, [initialBootstrap, loadBootstrap])
+
+  useEffect(() => {
+    if (state.bootstrap === null) return
+    const refresh = () => {
+      if (document.visibilityState === 'visible') void loadBootstrap(true)
+    }
+    const timer = globalThis.setInterval(refresh, 15_000)
+    document.addEventListener('visibilitychange', refresh)
+    window.addEventListener('online', refresh)
+    return () => {
+      globalThis.clearInterval(timer)
+      document.removeEventListener('visibilitychange', refresh)
+      window.removeEventListener('online', refresh)
+    }
+  }, [loadBootstrap, state.bootstrap])
 
   useEffect(() => () => bootstrapAbort.current?.abort(), [])
 

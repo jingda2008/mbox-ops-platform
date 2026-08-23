@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.0-rc.121 - 2026-08-23
+
+- Shows the real menu while a scanned table is waiting for staff opening, and
+  filters employee assisted ordering to the explicitly enabled channel.
+- Adds visible-state workspace refresh and authoritative checkout payment
+  synchronization instead of leaving stale table and payment snapshots.
+- Restores 44px mobile touch targets and updates stale browser/mini-program
+  acceptance to the current inventory, closing, activity and member layouts.
+- Keeps the WeChat package upload separate and commercial release denied until
+  real funds, devices, field shifts and recovery evidence are complete.
+
 ## 1.0.0-rc.120 - 2026-08-22
 
 - Integrates operations, inventory media and settlement safeguards with

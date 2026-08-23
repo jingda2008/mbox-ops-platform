@@ -12,6 +12,7 @@ import {
   RecommendationStaffModificationService,
   type RecommendationStaffContext,
 } from './recommendation-staff-modification-service.js'
+import { isStaffAuthenticationRequiredError, STAFF_AUTHENTICATION_REQUIRED_ERROR } from './staff-api-authentication.js'
 import { StaffAccessDeniedError } from './staff-access-repository.js'
 
 export interface RecommendationStaffModificationApiOptions {
@@ -55,6 +56,9 @@ export const recommendationStaffModificationApiPlugin: FastifyPluginAsync<
 
 async function handle(reply: FastifyReply, execute: () => Promise<unknown>) {
   try { return await execute() } catch (error) {
+    if (isStaffAuthenticationRequiredError(error)) return reply.code(401).send({
+      error: STAFF_AUTHENTICATION_REQUIRED_ERROR,
+    })
     if (error instanceof RecommendationStaffModificationApiError) return reply.code(400).send({
       error: { code: 'RECOMMENDATION_STAFF_MODIFICATION_INPUT_INVALID',message: error.message },
     })

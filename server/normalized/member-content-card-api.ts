@@ -14,6 +14,7 @@ import {
 } from './command-executor.js'
 import { StaffAccessDeniedError,StaffAccessRepository } from './staff-access-repository.js'
 import { isPublicMediaAssetUrl } from './media-asset-url.js'
+import { isStaffAuthenticationRequiredError, STAFF_AUTHENTICATION_REQUIRED_ERROR } from './staff-api-authentication.js'
 import type { ScopedPostgresTransactionRunner,ScopedTransaction } from './transaction-runner.js'
 
 export interface MemberContentCardApiOptions {
@@ -107,6 +108,7 @@ function draft(value:Record<string,unknown>,fixedCode?:string):MemberContentCard
 }
 
 async function handle(reply:FastifyReply,execute:()=>Promise<unknown>){try{return await execute()}catch(error){
+  if(isStaffAuthenticationRequiredError(error))return reply.code(401).send({error:STAFF_AUTHENTICATION_REQUIRED_ERROR})
   if(error instanceof InputError)return reply.code(400).send({error:{code:'HOME_CONTENT_INPUT_INVALID',message:error.message}})
   if(error instanceof MemberContentCardError)return reply.code(error.statusCode).send({error:{code:error.code,message:error.message}})
   if(error instanceof StaffAccessDeniedError)return reply.code(403).send({error:{code:'STAFF_ACCESS_DENIED',message:'没有管理首页内容的权限'}})

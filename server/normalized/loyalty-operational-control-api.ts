@@ -14,6 +14,7 @@ import {
   LoyaltyOperationalControlError,
   LoyaltyOperationalControlService,
 } from './loyalty-operational-control-service.js'
+import { isStaffAuthenticationRequiredError, STAFF_AUTHENTICATION_REQUIRED_ERROR } from './staff-api-authentication.js'
 import { StaffAccessDeniedError, StaffAccessRepository } from './staff-access-repository.js'
 import type { StaffCustomerExperienceContext } from './customer-experience-service.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction } from './transaction-runner.js'
@@ -67,6 +68,9 @@ async function authorized(
 
 async function handle(reply:FastifyReply,execute:()=>Promise<unknown>) {
   try { return await execute() } catch (error) {
+    if (isStaffAuthenticationRequiredError(error)) {
+      return reply.code(401).send({ error: STAFF_AUTHENTICATION_REQUIRED_ERROR })
+    }
     if (error instanceof CustomerExperienceRequestError) {
       return reply.code(error.statusCode).send({ error:{ code:error.code,message:error.message } })
     }

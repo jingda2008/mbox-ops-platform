@@ -2,6 +2,7 @@ import Fastify from 'fastify'
 import { describe, expect, it, vi } from 'vitest'
 import { mediaAssetApiPlugin } from './media-asset-api.js'
 import { StaffAccessDeniedError } from './staff-access-repository.js'
+import { StaffSessionNotFoundError } from './staff-session-repository.js'
 
 const scope = {
   tenantId: '10000000-0000-4000-8000-000000000001',
@@ -15,6 +16,20 @@ const context = {
 const pngHeader = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString('base64')
 
 describe('media asset API', () => {
+  it('returns 401 instead of a false image-service failure after session expiry', async () => {
+    const service = serviceMock()
+    const app = await application(
+      service,
+      { assertPermission: async () => undefined },
+      async () => { throw new StaffSessionNotFoundError() },
+    )
+    const response = await app.inject({ method: 'GET', url: '/staff/media-assets' })
+    expect(response.statusCode).toBe(401)
+    expect(response.json().error.code).toBe('AUTH_REQUIRED')
+    expect(service.list).not.toHaveBeenCalled()
+    await app.close()
+  })
+
   it('lets an activity manager read the image library required by the editor', async () => {
     const permissions: string[] = []
     const service = serviceMock()
@@ -145,11 +160,15 @@ function asset() {
   }
 }
 
-async function application(service = serviceMock(), access = { assertPermission: async () => undefined }) {
+async function application(
+  service = serviceMock(),
+  access = { assertPermission: async () => undefined },
+  resolveStaffContext = () => context,
+) {
   const app = Fastify()
   await app.register(mediaAssetApiPlugin, {
     transactions: { run: async (_scope, callback) => callback({ scope } as never) },
-    service: service as never, resolveStaffContext: () => context, resolveScope: () => scope,
+    service: service as never, resolveStaffContext, resolveScope: () => scope,
     createStaffAccessRepository: () => access,
   })
   return app

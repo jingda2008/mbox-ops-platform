@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0-rc.126 - 2026-08-24
+
+- Maps expired or missing employee sessions to an explicit `401 AUTH_REQUIRED`
+  response across every API that resolves a staff context.
+- Prevents activity, homepage content, image library, customer analytics,
+  loyalty configuration and performance revision pages from misreporting an
+  expired login as a false `500` service failure.
+- Adds a source-wide regression gate so a new staff-context API cannot omit
+  authentication classification; schema remains `105`.
+
 ## 1.0.0-rc.125 - 2026-08-24
 
 - Prevents a previous employee's cached workspace and navigation from returning

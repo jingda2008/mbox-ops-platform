@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { activityOperationsApiPlugin } from './activity-operations-api.js'
 import { ActivityOperationsError } from './activity-operations-repository.js'
 import { StaffAccessDeniedError } from './staff-access-repository.js'
+import { StaffSessionNotFoundError } from './staff-session-repository.js'
 
 const scope = {
   tenantId: '10000000-0000-4000-8000-000000000001',
@@ -15,6 +16,24 @@ const context = {
 }
 
 describe('activity operations API', () => {
+  it('returns a clear authentication response when the staff session expired', async () => {
+    const service = serviceMock()
+    const app = await application(
+      service,
+      { assertPermission: async () => undefined },
+      undefined,
+      undefined,
+      async () => { throw new StaffSessionNotFoundError() },
+    )
+    const response = await app.inject({ method: 'GET', url: '/staff/activity-operations' })
+    expect(response.statusCode).toBe(401)
+    expect(response.json()).toEqual({
+      error: { code: 'AUTH_REQUIRED', message: '登录信息无效或已过期，请重新登录' },
+    })
+    expect(service.list).not.toHaveBeenCalled()
+    await app.close()
+  })
+
   it('requires activity view permission before listing operational data', async () => {
     const permissions: string[] = []
     const service = serviceMock()
@@ -265,6 +284,7 @@ async function application(
   access = { assertPermission: async () => undefined },
   requestRefund = vi.fn(async () => ({ value: { id: 'refund-id', status: 'requested' }, replayed: false })),
   publisher = { publishActivity: vi.fn(async () => ({ value: { status: 'published' }, replayed: false })) },
+  resolveStaffContext = () => context,
 ) {
   const app = Fastify()
   await app.register(activityOperationsApiPlugin, {
@@ -272,7 +292,7 @@ async function application(
     service: service as never,
     activityPublisher: publisher as never,
     activityPayments: { requestRefund } as never,
-    resolveStaffContext: () => context,
+    resolveStaffContext,
     createStaffAccessRepository: () => access,
   })
   return app

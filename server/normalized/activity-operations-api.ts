@@ -18,6 +18,7 @@ import {
 } from './command-executor.js'
 import { CustomerExperienceRequestError } from './customer-experience-repository.js'
 import { isPublicMediaAssetUrl } from './media-asset-url.js'
+import { isStaffAuthenticationRequiredError, STAFF_AUTHENTICATION_REQUIRED_ERROR } from './staff-api-authentication.js'
 import { StaffAccessDeniedError, StaffAccessRepository } from './staff-access-repository.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction } from './transaction-runner.js'
 
@@ -236,6 +237,9 @@ function draft(value: Record<string, unknown>): ActivityDraftInput {
 
 async function handle(reply: FastifyReply, execute: () => Promise<unknown>) {
   try { return await execute() } catch (error) {
+    if (isStaffAuthenticationRequiredError(error)) {
+      return reply.code(401).send({ error: STAFF_AUTHENTICATION_REQUIRED_ERROR })
+    }
     if (error instanceof ActivityOperationsApiRequestError) {
       return reply.code(400).send({ error: { code: 'ACTIVITY_OPERATION_INPUT_INVALID', message: error.message } })
     }

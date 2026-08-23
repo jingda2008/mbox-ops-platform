@@ -5,6 +5,7 @@ import { IdempotencyConflictError, IdempotencyInProgressError, IdempotencyRecord
 import { MediaAssetRepository, type MediaAssetView, type MediaPurpose } from './media-asset-repository.js'
 import { MediaAssetService } from './media-asset-service.js'
 import { OutboxMessageConflictError } from './command-executor.js'
+import { isStaffAuthenticationRequiredError, STAFF_AUTHENTICATION_REQUIRED_ERROR } from './staff-api-authentication.js'
 import { StaffAccessDeniedError, StaffAccessRepository } from './staff-access-repository.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction, StoreScope } from './transaction-runner.js'
 
@@ -99,6 +100,7 @@ async function authorizedAny(options: MediaAssetApiOptions, request: FastifyRequ
 }
 
 async function handle(reply: FastifyReply, execute: () => Promise<unknown>) { try { return await execute() } catch (error) {
+  if (isStaffAuthenticationRequiredError(error)) return reply.code(401).send({ error: STAFF_AUTHENTICATION_REQUIRED_ERROR })
   if (error instanceof InputError) return reply.code(400).send({ error: { code: 'MEDIA_ASSET_INPUT_INVALID', message: error.message } })
   if (error instanceof StaffAccessDeniedError) return reply.code(403).send({ error: { code: 'STAFF_ACCESS_DENIED', message: '没有管理图片素材的权限' } })
   if (error instanceof IdempotencyConflictError || error instanceof OutboxMessageConflictError) return reply.code(409).send({ error: { code: 'IDEMPOTENCY_CONFLICT', message: '重复图片请求内容不一致' } })

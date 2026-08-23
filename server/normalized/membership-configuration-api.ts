@@ -8,6 +8,7 @@ import {
   type MembershipConfigurationContent,
   type MembershipConfigurationDomain,
 } from './membership-configuration-draft-service.js'
+import { isStaffAuthenticationRequiredError, STAFF_AUTHENTICATION_REQUIRED_ERROR } from './staff-api-authentication.js'
 import { StaffAccessDeniedError, StaffAccessRepository } from './staff-access-repository.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction } from './transaction-runner.js'
 
@@ -117,6 +118,7 @@ async function authorized(options:MembershipConfigurationApiOptions,request:Fast
   return context
 }
 async function handle(reply:FastifyReply,execute:()=>Promise<unknown>){try{return await execute()}catch(error){
+  if(isStaffAuthenticationRequiredError(error))return reply.code(401).send({error:STAFF_AUTHENTICATION_REQUIRED_ERROR})
   if(error instanceof StaffAccessDeniedError)return reply.code(403).send({error:{code:'STAFF_ACCESS_DENIED',message:'没有执行该操作的权限'}})
   if(error instanceof MembershipConfigurationDraftError)return reply.code(409).send({error:{code:error.code,message:error.message}})
   if(error instanceof CustomerExperienceRequestError)return reply.code(error.statusCode).send({error:{code:error.code,message:error.message}})

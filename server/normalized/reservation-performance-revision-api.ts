@@ -15,6 +15,7 @@ import {
   type ReservationPerformanceCustomerContext,
   type ReservationPerformanceStaffContext,
 } from './reservation-performance-revision-service.js'
+import { isStaffAuthenticationRequiredError, STAFF_AUTHENTICATION_REQUIRED_ERROR } from './staff-api-authentication.js'
 import { StaffAccessDeniedError, StaffAccessRepository } from './staff-access-repository.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction } from './transaction-runner.js'
 
@@ -112,6 +113,9 @@ async function handle(reply: FastifyReply, execute: () => Promise<unknown>) {
   try {
     return await execute()
   } catch (error) {
+    if (isStaffAuthenticationRequiredError(error)) {
+      return reply.code(401).send({ error: STAFF_AUTHENTICATION_REQUIRED_ERROR })
+    }
     if (error instanceof ReservationPerformanceApiInputError) {
       return reply.code(400).send({
         error: { code: 'RESERVATION_PERFORMANCE_INPUT_INVALID', message: error.message },

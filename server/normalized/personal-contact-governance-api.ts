@@ -7,6 +7,7 @@ import {
   PersonalContactGovernanceService,
 } from './personal-contact-governance-service.js'
 import type { ActivityContactProtectionKeyring } from './personal-contact-protection.js'
+import { isStaffAuthenticationRequiredError, STAFF_AUTHENTICATION_REQUIRED_ERROR } from './staff-api-authentication.js'
 import { StaffAccessDeniedError, StaffAccessRepository } from './staff-access-repository.js'
 import type { ScopedPostgresTransactionRunner } from './transaction-runner.js'
 import type { JsonObject } from './command-executor.js'
@@ -144,6 +145,9 @@ async function staff(options:Options,request:FastifyRequest,permission:string) {
 async function handle(reply:FastifyReply,run:()=>Promise<unknown>) {
   try { return await run() }
   catch (error) {
+    if (isStaffAuthenticationRequiredError(error)) {
+      return reply.code(401).send({ error: STAFF_AUTHENTICATION_REQUIRED_ERROR })
+    }
     if (error instanceof PersonalContactGovernanceError) {
       return reply.code(error.statusCode).send({ error:{ code:error.code,message:error.message } })
     }

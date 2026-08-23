@@ -3,6 +3,7 @@ import { describe,expect,it,vi } from 'vitest'
 import { memberContentCardApiPlugin } from './member-content-card-api.js'
 import type { MemberContentCardService } from './member-content-card-service.js'
 import { StaffAccessDeniedError } from './staff-access-repository.js'
+import { StaffSessionNotFoundError } from './staff-session-repository.js'
 
 const context={
   scope:{tenantId:'10000000-0000-4000-8000-000000000001',storeId:'10000000-0000-4000-8000-000000000002'},
@@ -10,6 +11,16 @@ const context={
 }
 
 describe('member home content management API',()=>{
+  it('returns 401 instead of a false content-service failure after session expiry',async()=>{
+    const service=fakeService()
+    const app=await build(service,async()=>{},async()=>{throw new StaffSessionNotFoundError()})
+    const response=await app.inject({method:'GET',url:'/staff/home-content-cards'})
+    expect(response.statusCode).toBe(401)
+    expect(response.json().error.code).toBe('AUTH_REQUIRED')
+    expect(service.list).not.toHaveBeenCalled()
+    await app.close()
+  })
+
   it('lets an activity manager read the content list needed before editing',async()=>{
     const service=fakeService();const permissions:string[]=[]
     const app=await build(service,async(_employeeId,permission)=>{
@@ -54,11 +65,15 @@ describe('member home content management API',()=>{
   })
 })
 
-async function build(service:ReturnType<typeof fakeService>,assertPermission:(employeeId:string,permission:string)=>Promise<void>){
+async function build(
+  service:ReturnType<typeof fakeService>,
+  assertPermission:(employeeId:string,permission:string)=>Promise<void>,
+  resolveStaffContext=()=>context,
+){
   const app=Fastify()
   await app.register(memberContentCardApiPlugin,{
     transactions:{run:async(_scope,handler)=>handler({scope:context.scope} as never)},
-    service:service as unknown as MemberContentCardService,resolveStaffContext:()=>context,
+    service:service as unknown as MemberContentCardService,resolveStaffContext,
     createStaffAccessRepository:()=>({assertPermission}),
   })
   return app

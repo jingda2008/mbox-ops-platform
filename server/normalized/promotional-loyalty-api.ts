@@ -16,6 +16,7 @@ import {
   type PromotionalLoyaltyService,
   type PromotionalLoyaltyStaffContext,
 } from './promotional-loyalty-service.js'
+import { isStaffAuthenticationRequiredError, STAFF_AUTHENTICATION_REQUIRED_ERROR } from './staff-api-authentication.js'
 import { StaffAccessDeniedError, StaffAccessRepository } from './staff-access-repository.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction } from './transaction-runner.js'
 
@@ -123,6 +124,9 @@ async function handle(reply: FastifyReply, execute: () => Promise<unknown>) {
   try {
     return await execute()
   } catch (error) {
+    if (isStaffAuthenticationRequiredError(error)) {
+      return reply.code(401).send({ error: STAFF_AUTHENTICATION_REQUIRED_ERROR })
+    }
     if (error instanceof PromotionalLoyaltyError) {
       return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message } })
     }

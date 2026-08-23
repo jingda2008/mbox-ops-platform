@@ -4,6 +4,7 @@ import {
   type CustomerExperienceAnalyticsFilter,
   type PerformancePhaseCode,
 } from './customer-experience-analytics-repository.js'
+import { isStaffAuthenticationRequiredError, STAFF_AUTHENTICATION_REQUIRED_ERROR } from './staff-api-authentication.js'
 import { StaffAccessDeniedError, StaffAccessRepository } from './staff-access-repository.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction, StoreScope } from './transaction-runner.js'
 
@@ -85,6 +86,9 @@ function analyticsFilter(value: unknown): CustomerExperienceAnalyticsFilter {
 
 async function handle(reply: FastifyReply, execute: () => Promise<unknown>) {
   try { return await execute() } catch (error) {
+    if (isStaffAuthenticationRequiredError(error)) {
+      return reply.code(401).send({ error: STAFF_AUTHENTICATION_REQUIRED_ERROR })
+    }
     if (error instanceof AnalyticsRequestError) {
       return reply.code(400).send({ error: { code: 'ANALYTICS_FILTER_INVALID', message: error.message } })
     }

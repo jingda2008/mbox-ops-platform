@@ -27,7 +27,8 @@ describe('StaffActionsPanel', () => {
       openTable: vi.fn(), closeTable: vi.fn(), transferTable: vi.fn(),
       completeServiceTask: vi.fn(), runKdsAction: vi.fn(), cancelKdsTask: vi.fn(), actOnReservation: vi.fn(),
       loadAssistedOrderAccess: vi.fn(), loadAssistedOrderCatalog: vi.fn(),
-      issueAssistedOrderContext: vi.fn(), submitAssistedOrder: vi.fn(), createOnlinePayment: vi.fn(), queryOnlinePayment: vi.fn(),
+      issueAssistedOrderContext: vi.fn(), submitAssistedOrder: vi.fn(), createOnlinePayment: vi.fn(),
+      loadOnlinePaymentStatus: vi.fn(), queryOnlinePayment: vi.fn(),
     }
     const html = renderToStaticMarkup(createElement(StaffActionsPanel, { api }))
 

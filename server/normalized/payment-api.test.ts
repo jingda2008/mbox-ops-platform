@@ -12,6 +12,7 @@ import { PaymentAuthorizationError } from './payment-security-policy.js'
 import type { ReconciliationEntry } from './reconciliation-repository.js'
 import { RefundApprovalRequiredError, type Refund } from './refund-repository.js'
 import type { CashierWorkbenchView } from '../../src/shared/cashier-workbench-contracts.js'
+import { OnlineRefundStatusUnknownError } from './online-payment-service.js'
 
 const tenantId = '11111111-1111-4111-8111-111111111111'
 const storeId = '22222222-2222-4222-8222-222222222222'
@@ -639,6 +640,52 @@ describe('paymentApiPlugin', () => {
     expect(response.statusCode).toBe(403)
   })
 
+  it('lets the assisting employee passively refresh only their own persisted payment outcome', async () => {
+    const readInitiatedPaymentStatus = vi.fn(async () => ({
+      id: payment.id,
+      payableKind: 'order' as const,
+      orderId: payment.orderId,
+      orderPublicId: 'OORDER0001',
+      activityRegistrationId: null,
+      activityRegistrationPublicId: null,
+      publicId: payment.publicId,
+      provider: payment.provider,
+      providerTransactionId: 'POSTAR-TX-0001',
+      method: payment.method,
+      amountMinor: payment.amountMinor,
+      currency: payment.currency,
+      status: 'succeeded',
+      customerId: null,
+      tableSessionId,
+      tableCode: 'W01',
+      createdAt: payment.createdAt,
+    }))
+    const query = vi.fn()
+    const value = fixture({
+      resolveActorContext: () => ({
+        scope: { tenantId, storeId }, actor: { type: 'employee', employeeId }, businessDate: '2026-08-11',
+      }),
+      resolveStaffContext: () => ({
+        scope: { tenantId, storeId }, actor: { type: 'employee', employeeId }, employeeId,
+        businessDate: '2026-08-11', capabilities: ['payment.initiate.staff'],
+      }),
+      onlinePayments: {
+        assertAvailable: vi.fn(), resolveActivePayment: vi.fn(), create: vi.fn(), query,
+        readInitiatedPaymentStatus, requestRefund: vi.fn(), queryRefund: vi.fn(),
+      },
+    })
+    const response = await value.app.inject({ method: 'GET', url: `/api/payments/${paymentId}/status` })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['cache-control']).toBe('private, no-store')
+    expect(response.headers.pragma).toBe('no-cache')
+    expect(response.json()).toEqual({ data: { id: paymentId, status: 'succeeded' } })
+    expect(readInitiatedPaymentStatus).toHaveBeenCalledWith({
+      scope: { tenantId, storeId }, paymentId, principal: { type: 'employee', employeeId },
+    })
+    expect(query).not.toHaveBeenCalled()
+  })
+
   it('records cash or physical POS evidence with the authenticated employee, not a body actor', async () => {
     const value = fixture()
     const response = await value.app.inject({
@@ -871,6 +918,30 @@ describe('paymentApiPlugin', () => {
       status: 'succeeded', amountMinor: refund.amountMinor, currency: 'CNY',
       occurredAt: '2026-08-11T12:21:00.000Z',
     })
+  })
+
+  it('keeps a submitted online refund in the safe query-only path when its execution outcome is unknown', async () => {
+    const value = fixture({
+      onlinePayments: {
+        create: vi.fn(), query: vi.fn(), assertAvailable: vi.fn(), resolveActivePayment: vi.fn(),
+        requestRefund: vi.fn(async () => { throw new Error('provider transport response could not be classified') }),
+        queryRefund: vi.fn(),
+      },
+    })
+    const response = await value.app.inject({
+      method: 'POST', url: `/api/refunds/${refundId}/execute`,
+      headers: { 'idempotency-key': 'refund-execute-outcome-unknown-0001' },
+    })
+
+    expect(response.statusCode).toBe(409)
+    expect(response.json()).toEqual({
+      error: {
+        code: 'REFUND_STATUS_UNKNOWN',
+        message: new OnlineRefundStatusUnknownError().message,
+      },
+    })
+    expect(value.commands.beginRefundExecution).toHaveBeenCalledOnce()
+    expect(value.commands.recordProviderRefundResult).not.toHaveBeenCalled()
   })
 
   it('preserves authorization and approval guards from the payment command service', async () => {

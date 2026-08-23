@@ -793,8 +793,17 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
     const data = requireDataObject(response)
     assertAgency(data, agencyId)
     assertMerchant(data, metadata.merchantId)
-    const returnedRefundId = requiredString(data, 'threeOrderNo')
-    if (returnedRefundId !== request.refundId) throw new Error('星驿退款响应三方单号不匹配')
+    // The ordinary-refund contract guarantees the provider refund flow number
+    // (`orderFlowNo`), but does not require echoing the merchant refund order
+    // number (`threeOrderNo`). The signed request, response merchant/agency
+    // values and amount bind the acknowledgement to this unique request. When
+    // an installation does echo `threeOrderNo`, keep the stricter equality
+    // check instead of treating it as decorative data.
+    const echoedRefundId = optionalString(data, 'threeOrderNo')
+    if (echoedRefundId !== undefined && echoedRefundId !== request.refundId) {
+      throw new Error('星驿退款响应三方单号不匹配')
+    }
+    const providerRefundTransactionId = requiredString(data, 'orderFlowNo')
     const amount = Math.abs(parseMoney(data.realRefundAmt, '星驿退款受理金额', { allowNegative: true }))
     if (amount !== request.amount) throw new Error('星驿退款受理金额不匹配')
     return {
@@ -802,7 +811,7 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
       currency: request.currency,
       occurredAt: parsePostarDateTime(requiredString(data, 'orderTime'), '星驿退款创建时间'),
       providerRefundId: request.refundId,
-      providerRefundTransactionId: null,
+      providerRefundTransactionId,
       originalProviderTransactionId: request.providerTransactionId,
       refundId: request.refundId,
       status: 'processing',

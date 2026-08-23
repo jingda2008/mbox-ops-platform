@@ -38,6 +38,7 @@ export class StaffActionsApiError extends Error {
 export interface AssistedOrderAccess {
   canCreateOrder: boolean
   canInitiatePayment: boolean
+  canQueryOnlinePayment: boolean
   onlinePaymentProvider: 'postar' | 'simulation' | null
   gift: null | {
     enabled: boolean
@@ -284,6 +285,10 @@ export interface StaffActionsApiPort {
     method: 'native_qr' | 'auth_code'
     customerAuthCode?: string
   }>): Promise<OnlinePaymentAction>
+  loadOnlinePaymentStatus(
+    paymentId: string,
+    signal?: AbortSignal,
+  ): Promise<'pending' | 'succeeded' | 'failed' | 'closed'>
   queryOnlinePayment(paymentId: string): Promise<'pending' | 'succeeded' | 'failed' | 'closed'>
   transcribeObservationAudio(input: Readonly<{
     audioBase64: string
@@ -585,6 +590,21 @@ export class StaffActionsApi implements StaffActionsApiPort {
       throw new StaffActionsApiError('查单结果无法识别，请到收银页面核对', 'INVALID_PAYMENT_QUERY_RESPONSE', response.status)
     }
     return status
+  }
+
+  async loadOnlinePaymentStatus(
+    paymentId: string,
+    signal?: AbortSignal,
+  ): Promise<'pending' | 'succeeded' | 'failed' | 'closed'> {
+    const body = await this.getData<{ id: string; status: unknown }>(
+      `/api/payments/${encodeURIComponent(paymentId)}/status`,
+      signal,
+    )
+    if (body.status !== 'pending' && body.status !== 'succeeded'
+      && body.status !== 'failed' && body.status !== 'closed') {
+      throw new StaffActionsApiError('支付状态无法识别，请到收银页面核对', 'INVALID_PAYMENT_STATUS_RESPONSE', null)
+    }
+    return body.status
   }
 
   async parseObservation(input: Readonly<{

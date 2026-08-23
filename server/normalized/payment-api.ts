@@ -32,6 +32,7 @@ import {
   RefundLimitError,
   RefundNotFoundError,
   RefundTransitionError,
+  type Refund,
   type RefundAllocation,
 } from './refund-repository.js'
 import {
@@ -47,10 +48,12 @@ import type { OnlineRefundResult } from './online-payment-service.js'
 import {
   OnlinePaymentUnavailableError,
   OnlinePaymentUnknownError,
+  OnlineRefundStatusUnknownError,
 } from './online-payment-service.js'
 import {
   ProviderPaymentInProgressError,
   ProviderPaymentMethodConflictError,
+  ProviderPaymentStatusAccessError,
   ProviderPaymentUnknownError,
   WechatPaymentIdentityRequiredError,
   type ProviderPaymentContext,
@@ -192,7 +195,7 @@ export interface PaymentApiOptions {
   onlinePayments?: Pick<
     OnlinePaymentService,
     'create' | 'query' | 'assertAvailable' | 'resolveActivePayment' | 'requestRefund' | 'queryRefund'
-  >
+  > & Partial<Pick<OnlinePaymentService, 'readInitiatedPaymentStatus'>>
   resolveOnlinePaymentAvailable?: (scope: Readonly<StoreScope>) => Promise<boolean>
   resolveActorContext(request: FastifyRequest): Promise<PaymentApiActorContext> | PaymentApiActorContext
   resolveStaffContext(request: FastifyRequest): Promise<PaymentApiStaffContext> | PaymentApiStaffContext
@@ -408,6 +411,25 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
     }),
   )
 
+  app.get<{ Params: { paymentId: string } }>(
+    '/payments/:paymentId/status',
+    async (request, reply) => handleRoute(reply, async () => {
+      if (options.onlinePayments?.readInitiatedPaymentStatus === undefined) {
+        throw new OnlinePaymentUnavailableError()
+      }
+      const context = await resolveActorContext(options, request)
+      const paymentId = readUuid(request.params.paymentId, 'paymentId')
+      const payment = await options.onlinePayments.readInitiatedPaymentStatus({
+        scope: context.scope,
+        paymentId,
+        principal: paymentInitiationPrincipal(context),
+      })
+      reply.header('cache-control', 'private, no-store')
+      reply.header('pragma', 'no-cache')
+      return reply.send({ data: { id: payment.id, status: displayPaymentStatus(payment.status) } })
+    }),
+  )
+
   app.post<{ Params: { provider: string } }>(
     '/payments/providers/:provider/callback',
     async (request, reply) => handleRoute(reply, async () => {
@@ -518,14 +540,34 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       if (execution.value.paymentProvider !== 'postar') return reply.send(executionResponse(execution))
       if (options.onlinePayments === undefined) throw new OnlinePaymentUnavailableError('线上退款执行尚未配置')
       const providerQueryBindingId = providerResultIdempotencyKey(idempotencyKey)
-      const provider = await options.onlinePayments.requestRefund(
-        context.scope,
-        refundId,
-        providerQueryBindingId,
-      )
-      const terminal = await applyTerminalRefundObservation(
-        options, request, context, provider, providerQueryBindingId,
-      )
+      let provider: OnlineRefundResult
+      let terminal: CommandExecution<Refund> | null
+      try {
+        provider = await options.onlinePayments.requestRefund(
+          context.scope,
+          refundId,
+          providerQueryBindingId,
+        )
+        terminal = await applyTerminalRefundObservation(
+          options, request, context, provider, providerQueryBindingId,
+        )
+      } catch (error) {
+        if (
+          error instanceof OnlinePaymentUnavailableError
+          || error instanceof OnlineRefundStatusUnknownError
+          || error instanceof PostarPaymentRejectedError
+          || error instanceof RefundCallbackMismatchError
+          || error instanceof RefundTransitionError
+        ) {
+          throw error
+        }
+        request.log.warn({
+          operation: 'postar_refund_execute_outcome_unknown',
+          refundRef: createHash('sha256').update(refundId).digest('hex').slice(0, 16),
+          errorName: safeErrorName(error),
+        }, 'Refund result requires a provider query')
+        throw new OnlineRefundStatusUnknownError()
+      }
       return reply.send(terminal === null
         ? { ...executionResponse(execution), provider: publicRefundObservation(provider) }
         : { ...executionResponse(terminal), provider: publicRefundObservation(provider) })
@@ -1001,6 +1043,13 @@ function paymentExecutionResponse(
   }
 }
 
+function displayPaymentStatus(status: string): 'pending' | 'succeeded' | 'failed' | 'closed' {
+  if (status === 'created' || status === 'pending') return 'pending'
+  if (status === 'succeeded' || status === 'partially_refunded' || status === 'refunded') return 'succeeded'
+  if (status === 'failed') return 'failed'
+  return 'closed'
+}
+
 function defaultPublicId(kind: 'payment' | 'refund'): string {
   return `${kind === 'payment' ? 'P' : 'R'}${randomUUID().replaceAll('-', '')}`
 }
@@ -1302,6 +1351,7 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
     error instanceof PaymentAuthorizationError
     || error instanceof StaffAccessDeniedError
     || error instanceof StaffNotFoundError
+    || error instanceof ProviderPaymentStatusAccessError
   ) {
     return apiError(403, 'FINANCIAL_ACTION_FORBIDDEN', '当前员工无权执行此财务操作')
   }
@@ -1340,6 +1390,9 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   }
   if (error instanceof ProviderPaymentUnknownError || error instanceof OnlinePaymentUnknownError) {
     return apiError(409, 'PAYMENT_STATUS_UNKNOWN', error.message)
+  }
+  if (error instanceof OnlineRefundStatusUnknownError) {
+    return apiError(409, 'REFUND_STATUS_UNKNOWN', error.message)
   }
   if (error instanceof WechatPaymentIdentityRequiredError) {
     return apiError(409, 'WECHAT_IDENTITY_REQUIRED', error.message)
@@ -1386,6 +1439,11 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
     return apiError(400, 'PAYMENT_REQUEST_INVALID', error.message)
   }
   return apiError(500, 'PAYMENT_INTERNAL_ERROR', '支付服务暂时不可用，请稍后重试')
+}
+
+function safeErrorName(error: unknown): string {
+  const value = error instanceof Error ? error.name : 'UnknownError'
+  return value.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 96) || 'UnknownError'
 }
 
 function apiError(statusCode: number, code: string, message: string) {

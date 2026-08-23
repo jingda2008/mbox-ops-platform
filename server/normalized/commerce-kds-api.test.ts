@@ -360,6 +360,7 @@ describe('commerceKdsApiPlugin', () => {
       data: {
         canCreateOrder: true,
         canInitiatePayment: false,
+        canQueryOnlinePayment: false,
         onlinePaymentProvider: null,
         gift: { enabled: true, maximumAmountMinor: 50_000, currency: 'CNY' },
       },
@@ -379,6 +380,7 @@ describe('commerceKdsApiPlugin', () => {
     expect(response.json()).toMatchObject({ data: {
       canCreateOrder: true,
       canInitiatePayment: true,
+      canQueryOnlinePayment: false,
       onlinePaymentProvider: 'simulation',
     } })
   })

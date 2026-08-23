@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Check, Gift, LoaderCircle, Minus, Plus, QrCode, RefreshCcw, ScanLine, Search, ShoppingCart, X } from 'lucide-react'
 import { MenuOrderingWorkspace, type MenuSubmitOptions } from '../../components/MenuOrderingWorkspace'
 import { CustomerPaymentCodeScanner } from '../../components/CustomerPaymentCodeScanner'
@@ -36,8 +36,11 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
   const [settlementMode, setSettlementMode] = useState<'immediate_payment' | 'table_tab'>('table_tab')
   const [paymentOrder, setPaymentOrder] = useState<AssistedOrderResult | null>(null)
   const [paymentAction, setPaymentAction] = useState<OnlinePaymentAction | null>(null)
+  const [paymentStatus, setPaymentStatus] = useState<'pending' | 'succeeded' | 'failed' | 'closed'>('pending')
+  const [paymentWaitingLong, setPaymentWaitingLong] = useState(false)
   const [paymentBusy, setPaymentBusy] = useState(false)
   const [showPaymentScanner, setShowPaymentScanner] = useState(false)
+  const announcedPaymentId = useRef<string | null>(null)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -58,6 +61,45 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
     })
     return () => controller.abort()
   }, [api])
+
+  useEffect(() => {
+    if (paymentAction === null || paymentStatus !== 'pending') return
+    const controller = new AbortController()
+    let active = true
+    const synchronize = async () => {
+      try {
+        const status = await api.loadOnlinePaymentStatus(paymentAction.paymentId, controller.signal)
+        if (!active || status === 'pending') return
+        setPaymentStatus(status)
+        if (status === 'succeeded' && announcedPaymentId.current !== paymentAction.paymentId) {
+          announcedPaymentId.current = paymentAction.paymentId
+          onSubmitted(`${table.code} 已确认到账，订单已提交出品；收银和出品打印将按门店配置进入队列`)
+        }
+        if (status === 'failed' || status === 'closed') {
+          setError('支付机构已确认本次未成功，可以重新发起收款。')
+        }
+      } catch {
+        if (!active || controller.signal.aborted) return
+        // A transient read failure must not turn a confirmed payment into a failed payment.
+      }
+    }
+    void synchronize()
+    const interval = window.setInterval(() => { void synchronize() }, 2_000)
+    return () => {
+      active = false
+      controller.abort()
+      window.clearInterval(interval)
+    }
+  }, [api, onSubmitted, paymentAction, paymentStatus, table.code])
+
+  useEffect(() => {
+    if (paymentAction === null || paymentStatus !== 'pending') {
+      setPaymentWaitingLong(false)
+      return
+    }
+    const timeout = window.setTimeout(() => setPaymentWaitingLong(true), 60_000)
+    return () => window.clearTimeout(timeout)
+  }, [paymentAction, paymentStatus])
 
   const categories = useMemo(() => Array.from(new Set(products.map((product) => product.categoryCode))), [products])
   const filtered = useMemo(() => {
@@ -157,6 +199,8 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
         ...(customerAuthCode === undefined ? {} : { customerAuthCode }),
       })
       setPaymentAction(action)
+      setPaymentStatus(action.status === 'failed' ? 'failed' : 'pending')
+      setPaymentWaitingLong(false)
       setShowPaymentScanner(false)
       onSubmitted(method === 'native_qr'
         ? `${table.code} 付款码已生成；客人手机也可从本桌订单发起同一笔付款`
@@ -177,12 +221,12 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
     try {
       const status = await api.queryOnlinePayment(paymentAction.paymentId)
       if (status === 'succeeded') {
+        setPaymentStatus('succeeded')
         onSubmitted(`${table.code} 已确认到账，订单和收银状态已同步`)
-        onClose()
         return
       }
       if (status === 'failed' || status === 'closed') {
-        setPaymentAction(null)
+        setPaymentStatus(status)
         setError('支付机构已确认本次未成功，可以重新发起收款。')
         return
       }
@@ -219,6 +263,9 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
           amountMinor={paymentOrder.paymentNextStep.amountMinor}
           currency={paymentOrder.paymentNextStep.currency}
           busy={paymentBusy}
+          status={paymentStatus}
+          waitingLong={paymentWaitingLong}
+          canQuery={access?.canQueryOnlinePayment === true}
           tableCode={table.code}
           onCreateQr={() => void createPayment('native_qr')}
           onScan={() => setShowPaymentScanner(true)}
@@ -318,11 +365,14 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
   </div>
 }
 
-function StaffPaymentChoice({ action, amountMinor, currency, busy, tableCode, onCreateQr, onScan, onQuery, onDone }: {
+function StaffPaymentChoice({ action, amountMinor, currency, busy, status, waitingLong, canQuery, tableCode, onCreateQr, onScan, onQuery, onDone }: {
   action: OnlinePaymentAction | null
   amountMinor: number
   currency: string
   busy: boolean
+  status: 'pending' | 'succeeded' | 'failed' | 'closed'
+  waitingLong: boolean
+  canQuery: boolean
   tableCode: string
   onCreateQr(): void
   onScan(): void
@@ -334,20 +384,35 @@ function StaffPaymentChoice({ action, amountMinor, currency, busy, tableCode, on
     : null
   return <section className="staff-payment-choice" aria-label={`${tableCode}收款`}>
     <div className="staff-payment-summary"><small>{tableCode} · 订单已同步本桌</small><strong>{money(amountMinor, currency)}</strong><span>只发起一笔付款，到账结果以支付通知为准。</span></div>
-    {action?.payload?.presentation === 'simulation' ? <>
+    {status === 'succeeded' ? <>
+      <span className="staff-payment-result is-succeeded"><Check /><strong>支付成功，已同步出品</strong></span>
+      <p>收银状态已更新；后厨、吧台和打印会按本单商品与门店配置继续处理。</p>
+      <button type="button" className="staff-payment-done" onClick={onDone}><Check size={18} />完成</button>
+    </> : status === 'failed' || status === 'closed' ? <>
+      <span className="staff-payment-result"><X /><strong>本次付款未成功</strong></span>
+      <p>请重新生成付款码或改由收银处理；不要把上一笔付款当作已到账。</p>
+      <div className="staff-payment-methods">
+        <button type="button" disabled={busy} onClick={onCreateQr}><QrCode /><strong>重新生成付款码</strong><small>客人扫码付款</small></button>
+        <button type="button" disabled={busy} onClick={onScan}><ScanLine /><strong>扫描客人付款码</strong><small>摄像头或扫码枪</small></button>
+      </div>
+    </> : action?.payload?.presentation === 'simulation' ? <>
       <span className="staff-payment-result"><Check /><strong>测试付款动作已建立</strong></span>
       <p>当前仅验证订单同步和操作流程，没有产生真实收款。</p>
       <button type="button" className="staff-payment-done" onClick={onDone}><Check size={18} />完成演练</button>
     </> : qrValue !== null ? <>
       <StaffPaymentQr value={qrValue} />
       <h3>请客人扫码付款</h3>
-      <p>客人也可以打开桌码中的“本桌已点”，从自己的手机继续这笔付款。</p>
-      <button type="button" className="staff-payment-query" disabled={busy} onClick={onQuery}><RefreshCcw size={18} />核对是否到账</button>
+      <p>{waitingLong
+        ? '仍在等待支付机构回传，请勿重复收款；请联系收银核对这笔付款。'
+        : '支付成功后页面会自动更新；客人也可以打开桌码中的“本桌已点”，从自己的手机继续这笔付款。'}</p>
+      {canQuery && <button type="button" className="staff-payment-query" disabled={busy} onClick={onQuery}><RefreshCcw size={18} />收银查单</button>}
       <button type="button" className="staff-payment-done" onClick={onDone}><Check size={18} />暂时收起</button>
     </> : action?.presentation === 'barcode' ? <>
       <span className="staff-payment-result"><LoaderCircle className="is-spinning" /><strong>付款已受理，正在确认到账</strong></span>
-      <p>不要重复扫描；收银与订单状态会在支付通知到达后同步更新。</p>
-      <button type="button" className="staff-payment-query" disabled={busy} onClick={onQuery}><RefreshCcw size={18} />核对是否到账</button>
+      <p>{waitingLong
+        ? '仍在等待支付机构回传，请勿重复扫描；请联系收银核对这笔付款。'
+        : '不要重复扫描；支付成功后页面会自动同步订单与出品状态。'}</p>
+      {canQuery && <button type="button" className="staff-payment-query" disabled={busy} onClick={onQuery}><RefreshCcw size={18} />收银查单</button>}
       <button type="button" className="staff-payment-done" onClick={onDone}><Check size={18} />完成</button>
     </> : <>
       <div className="staff-payment-methods">

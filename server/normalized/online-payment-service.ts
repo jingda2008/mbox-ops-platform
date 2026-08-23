@@ -39,6 +39,12 @@ export interface ActiveOnlinePaymentInput {
   principal: Readonly<PaymentPrincipal>
 }
 
+export interface InitiatedOnlinePaymentStatusInput {
+  scope: Readonly<StoreScope>
+  paymentId: string
+  principal: Readonly<PaymentPrincipal>
+}
+
 export interface QueryOnlinePaymentInput {
   scope: Readonly<StoreScope>
   paymentId: string
@@ -103,6 +109,19 @@ export class OnlinePaymentUnknownError extends Error {
   }
 }
 
+/**
+ * A refund command has already been moved to `processing`; returning a generic
+ * server error tempts an employee to submit the same refund again. Keep the
+ * distinction explicit so the only next action is an idempotent provider
+ * query or a signed callback.
+ */
+export class OnlineRefundStatusUnknownError extends Error {
+  constructor() {
+    super('退款已进入渠道处理或结果暂时无法确认，请查询渠道结果，不要再次执行退款')
+    this.name = 'OnlineRefundStatusUnknownError'
+  }
+}
+
 export class OnlinePaymentService {
   private readonly adapter: OnlinePaymentAdapter | null
   private readonly secrets: PaymentProviderSecretSource | null
@@ -142,6 +161,16 @@ export class OnlinePaymentService {
     return this.transactions.run(input.scope, async (transaction) => (
       new PaymentProviderActionRepository(transaction, this.secret)
         .resolveActivePaymentForOrder(input.orderId, input.principal)
+    ), { readOnly: true })
+  }
+
+  /** Reads the already-persisted outcome only. It never calls the provider. */
+  async readInitiatedPaymentStatus(
+    input: Readonly<InitiatedOnlinePaymentStatusInput>,
+  ): Promise<ProviderPaymentContext> {
+    return this.transactions.run(input.scope, async (transaction) => (
+      new PaymentProviderActionRepository(transaction, this.secret)
+        .resolveInitiatedPaymentStatus(input.paymentId, input.principal)
     ), { readOnly: true })
   }
 
@@ -240,7 +269,8 @@ export class OnlinePaymentService {
       return onlineRefundResult(claimedContext, observation, null)
     } catch (error) {
       if (error instanceof PostarPaymentRejectedError) throw error
-      throw new OnlinePaymentUnknownError()
+      if (error instanceof OnlinePaymentUnavailableError) throw error
+      throw new OnlineRefundStatusUnknownError()
     }
   }
 
@@ -288,8 +318,10 @@ export class OnlinePaymentService {
         })
       return onlineRefundResult(context, observation, verifiedObservationId)
     } catch (error) {
-      if (error instanceof OnlinePaymentUnknownError) throw error
-      throw new OnlinePaymentUnknownError()
+      if (error instanceof OnlinePaymentUnavailableError || error instanceof OnlineRefundStatusUnknownError) {
+        throw error
+      }
+      throw new OnlineRefundStatusUnknownError()
     }
   }
 

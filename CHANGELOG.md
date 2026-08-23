@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.0-rc.123 - 2026-08-24
+
+- Allows authorized staff to record full outstanding cash or physical POS
+  collection directly for an ordinary unpaid order, while keeping provider-
+  submitted or unknown online payments blocked until authoritative query or
+  closure prevents duplicate collection.
+- Derives staff module entry visibility from final effective permissions, so
+  grants reveal the parent page and denials or revocations hide both navigation
+  and direct-route access.
+- Adds normalized migration `105` and the store Windows print bridge for
+  revocable pairing, queue discovery, routed bar/kitchen/receipt jobs, heartbeat,
+  leases, failure handling and audited printer configuration.
+- Keeps native WeChat upload and physical printer/cash field acceptance outside
+  this backend, staff-web and database deployment.
+
 ## 1.0.0-rc.122 - 2026-08-24
 
 - Preserves the production-applied normalized migration `102` printer

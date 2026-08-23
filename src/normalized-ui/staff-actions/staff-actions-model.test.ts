@@ -7,6 +7,7 @@ import {
   tableMoodPresentation,
   unifiedActionQueue,
   validateOpenTableInput,
+  visibleFulfillmentItems,
   visibleStaffTables,
 } from './staff-actions-model'
 import type { StaffActionTable, StaffFulfillmentItem, StaffServiceTask } from './types'
@@ -38,7 +39,7 @@ describe('staff actions model', () => {
     expect(actionableServiceTasks(tasks, 'employee-1').map((task) => task.id)).toEqual(['table-mine', 'mine', 'urgent', 'normal'])
   })
 
-  it('shows only executable KDS work and orders overdue then delivery before production', () => {
+  it('keeps every visible KDS item inspectable while reserving the action queue for executable work', () => {
     const items: StaffFulfillmentItem[] = [
       fulfillmentItem({ taskId: 'prepare', canPrepare: true, kdsStatus: 'pending' }),
       fulfillmentItem({ taskId: 'deliver', canDeliver: true, readyForDelivery: true, kdsStatus: 'ready' }),
@@ -47,6 +48,7 @@ describe('staff actions model', () => {
     ]
     const actionable = actionableFulfillmentItems(items)
     expect(actionable.map((item) => item.taskId)).toEqual(['overdue', 'deliver', 'prepare'])
+    expect(visibleFulfillmentItems(items).map((item) => item.taskId)).toEqual(['overdue', 'deliver', 'prepare', 'readonly'])
     expect(fulfillmentAction(actionable[0]!)).toBe('complete')
     expect(fulfillmentAction(actionable[1]!)).toBe('deliver')
     expect(fulfillmentAction(items[3]!)).toBeNull()

@@ -68,7 +68,7 @@ export function StaffAccessManagementPanel({ api }: { api: NormalizedApiClient }
   const visiblePermissions = useMemo(() => (overview?.permissions ?? []).filter((permission) => {
     const normalizedQuery = query.trim().toLowerCase()
     return (category === 'all' || permission.category === category)
-      && (normalizedQuery === '' || `${permission.name} ${permission.code} ${permission.description ?? ''}`.toLowerCase().includes(normalizedQuery))
+      && (normalizedQuery === '' || `${permissionLabel(permission.code, permission.name)} ${permissionDescription(permission.code, permission.description)}`.toLowerCase().includes(normalizedQuery))
   }), [category, overview, query])
 
   const pendingChanges = useMemo<StaffPermissionDeploymentChange[]>(() => {
@@ -143,8 +143,8 @@ export function StaffAccessManagementPanel({ api }: { api: NormalizedApiClient }
       <label className="staff-access-target"><span>{mode === 'employee' ? '选择员工' : '选择岗位'}</span><select aria-label={mode === 'employee' ? '选择员工' : '选择岗位'} value={targetId} onChange={(event) => chooseTarget(event.target.value)}>
         <option value="">请选择</option>
         {mode === 'employee'
-          ? employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName}（{employee.roleCodes.join(' / ') || '未分岗'}）</option>)
-          : roles.map((role) => <option key={role.id} value={role.id}>{role.name}（{role.memberCount}人）</option>)}
+          ? employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName}（{employee.roleCodes.map(roleCodeLabel).join(' / ') || '未分岗'}）</option>)
+          : roles.map((role) => <option key={role.id} value={role.id}>{roleLabel(role.code, role.name)}（{role.memberCount}人）</option>)}
       </select></label>
 
       {selectedTarget !== null && <>
@@ -200,7 +200,7 @@ function PermissionEditor({ mode, role, employee, draft, setDraft, query, setQue
           <div><strong>{permissionLabel(permission.code, permission.name)}</strong><small>{permissionDescription(permission.code, permission.description)}</small></div>
           {mode === 'role'
             ? <label className="staff-access-switch"><input type="checkbox" checked={value === true} onChange={(event) => setDraft((current) => ({ ...current, [permission.code]: event.target.checked }))} /><span>{value === true ? '允许' : '不允许'}</span></label>
-            : <select aria-label={`${permission.name}员工例外`} value={value === true || value === false ? '' : value ?? ''} onChange={(event) => setDraft((current) => ({ ...current, [permission.code]: event.target.value === '' ? null : event.target.value as 'grant' | 'deny' }))}><option value="">随岗位</option><option value="grant">额外允许</option><option value="deny">明确禁止</option></select>}
+            : <select aria-label={`${permissionLabel(permission.code, permission.name)}员工例外`} value={value === true || value === false ? '' : value ?? ''} onChange={(event) => setDraft((current) => ({ ...current, [permission.code]: event.target.value === '' ? null : event.target.value as 'grant' | 'deny' }))}><option value="">随岗位</option><option value="grant">额外允许</option><option value="deny">明确禁止</option></select>}
         </article>
       })}
       {permissions.length === 0 && <p>没有匹配的权限。</p>}
@@ -425,9 +425,69 @@ const permissionLabels: Record<string, string> = {
   'reservation.view': '查看本人预约', 'reservation.view.all': '查看全部预约', 'service.execute': '处理服务需求', 'service.manage': '调度服务任务',
   'service.view': '查看服务需求', 'song.manage': '管理演出与点歌', 'song.view': '查看演出与点歌', 'staff.access.configure': '配置员工权限',
   'table.assignment.manage': '分配责任桌台', 'table.close': '结台', 'table.open': '开台', 'table.transfer': '转台', 'table.view_all': '查看全店桌台',
+  'table.participation.manage': '管理桌台顾客拆并', 'kds.priority.override': '调整出品优先级', 'order.cancel_unpaid': '取消未付款订单', 'order.settle_exception': '登记异常结清',
+  'payment.collect': '收款', 'payment.initiate': '发起收款', 'payment.policy.manage': '管理收款规则', 'payment.settlement.view': '查看收款结算',
+  'reconciliation.manage': '管理对账', 'commercial.config.update': '配置经营数据', 'commercial.cost.correct': '更正经营成本', 'commercial.cost.create': '录入经营成本',
+  'commercial.sales.attribute': '归因销售业绩', 'commercial.sales.rule.manage': '管理销售归因规则', 'commercial.voucher.redeem': '核销经营券', 'commercial.voucher.view': '查看经营券',
+  'inventory.approve': '审批库存操作', 'inventory.barcode.bind': '绑定库存条码', 'inventory.count': '盘点库存', 'inventory.receive': '确认入库',
+  'inventory.recipe.cost.apply': '应用配方成本', 'inventory.recipe.publish': '发布库存配方', 'inventory.recipe.replace': '调整库存配方', 'inventory.waste': '登记库存损耗',
+  'checkout.upgrade.rule.view': '查看结账推荐规则', 'checkout.upgrade.rule.draft': '起草结账推荐规则', 'checkout.upgrade.rule.approve': '审批结账推荐规则', 'checkout.upgrade.rule.publish': '发布结账推荐规则',
+  'fulfillment.capacity.view': '查看出品容量', 'fulfillment.capacity.draft': '起草出品容量', 'fulfillment.capacity.approve': '审批出品容量', 'fulfillment.capacity.publish': '发布出品容量',
+  'recommendation.rule.view': '查看智能推荐规则', 'recommendation.rule.draft': '起草智能推荐规则', 'recommendation.rule.approve': '审批智能推荐规则', 'recommendation.rule.publish': '发布智能推荐规则',
+  'recommendation.staff.modify': '调整桌台推荐', 'observation.record': '记录桌台情况', 'loyalty.operations.view': '查看会员运营', 'loyalty.operations.control': '管理会员运营',
+  'loyalty.promotion.view': '查看会员促销', 'loyalty.promotion.manage': '管理会员促销', 'loyalty.promotion.approve': '审批会员促销', 'loyalty.promotion.publish': '发布会员促销',
+  'membership.terms.view': '查看会员条款', 'membership.terms.manage': '管理会员条款', 'membership.terms.approve': '审批会员条款', 'membership.terms.publish': '发布会员条款',
+  'customer.membership.recovery.verify': '核验会员找回', 'customer.membership.merge.approve': '审批会员合并',
 }
 
-function permissionLabel(code: string, configuredName: string): string { return permissionLabels[code] ?? (configuredName === code ? code : configuredName) }
-function permissionDescription(code: string, configuredDescription: string | null): string { return configuredDescription === 'Provisioned from versioned store configuration' || configuredDescription === null ? code : configuredDescription }
+const permissionDescriptions: Record<string, string> = {
+  'kds.prepare': '允许在所属出品站点确认制作完成。',
+  'kds.deliver': '允许在实际送达后确认送达。',
+  'table.close': '仅在本桌订单、出品与服务已处理完毕后可结台。',
+  'table.open': '允许登记顾客到店并开启新的桌台服务。',
+  'table.transfer': '允许保留订单与责任记录后转至其他桌台。',
+  'fulfillment.view_all': '可查看全店出品进度；不代表可以确认制作或送达。',
+  'staff.access.configure': '可调整岗位和员工的权限配置，发布后立即生效并留痕。',
+}
+
+function permissionLabel(code: string, configuredName: string): string {
+  return permissionLabels[code] ?? (containsChinese(configuredName) ? configuredName : generatedPermissionLabel(code))
+}
+
+function permissionDescription(code: string, configuredDescription: string | null): string {
+  if (permissionDescriptions[code] !== undefined) return permissionDescriptions[code]
+  if (configuredDescription !== null && containsChinese(configuredDescription)) return configuredDescription
+  return '按岗位配置此项操作权限。'
+}
+
+function generatedPermissionLabel(code: string): string {
+  const parts = code.split('.')
+  const domain = permissionDomainLabels[parts[0] ?? ''] ?? '其他功能'
+  const action = permissionActionLabels[parts.at(-1) ?? ''] ?? '相关操作'
+  return `${domain}${action}`
+}
+
+const permissionDomainLabels: Record<string, string> = {
+  ai: '智能助手', business_day: '营业日', checkout: '结账推荐', commercial: '经营数据', customer: '顾客会员', dashboard: '工作台',
+  fulfillment: '出品', hardware: '设备', inventory: '库存', kds: '出品', loyalty: '会员运营', membership: '会员',
+  observation: '桌台记录', order: '订单', payment: '收款', print: '打印', printer: '打印设备', recommendation: '智能推荐',
+  reconciliation: '对账', refund: '退款', reservation: '预约', service: '服务', song: '演出点歌', staff: '员工', table: '桌台',
+}
+
+const permissionActionLabels: Record<string, string> = {
+  view: '查看', view_all: '查看全部', manage: '管理', configure: '配置', create: '新增', update: '更新', delete: '删除',
+  draft: '起草', approve: '审批', publish: '发布', execute: '执行', open: '开台', close: '结台', transfer: '转台',
+  prepare: '制作', deliver: '确认送达', receive: '确认入库', bind: '绑定', record: '登记', request: '发起', redeem: '核销',
+}
+
+function containsChinese(value: string): boolean { return /[\u3400-\u9fff]/.test(value) }
+function roleLabel(code: string, name: string): string { return containsChinese(name) ? name : roleCodeLabel(code) }
+function roleCodeLabel(code: string): string {
+  return ({
+    OWNER: '店主', ADMIN: '系统管理员', MANAGER: '店长', STORE_MANAGER: '门店经理', OPERATIONS_MANAGER: '运营经理',
+    DEPUTY_MANAGER: '副店长', OPS_LEAD: '运营主管', SERVER: '服务员', CASHIER: '收银员', BARTENDER: '调酒师',
+    KITCHEN: '后厨', HOST: '门迎', PERFORMER: '演出人员',
+  } as Record<string, string>)[code] ?? '已分配岗位'
+}
 function message(error: unknown) { return error instanceof Error && error.message.trim() ? error.message : '系统暂时无法确认结果' }
 function sameJson(left: unknown, right: unknown) { return JSON.stringify(left) === JSON.stringify(right) }

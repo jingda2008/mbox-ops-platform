@@ -235,7 +235,7 @@ export interface StaffActionsApiPort {
     guestCount: number
     capacityOverrideReason?: string
   }>): Promise<void>
-  closeTable(sessionId: string): Promise<void>
+  closeTable(sessionId: string, sessionStatus?: 'open' | 'closing'): Promise<void>
   transferTable(input: Readonly<{
     tableSessionId: string
     targetTableId: string
@@ -402,14 +402,17 @@ export class StaffActionsApi implements StaffActionsApiPort {
     await this.command('/api/table-management/sessions/open', input, 'x-idempotency-key')
   }
 
-  async closeTable(sessionId: string): Promise<void> {
+  async closeTable(sessionId: string, sessionStatus: 'open' | 'closing' = 'open'): Promise<void> {
     const operationKey = `staff-close-${sessionId}`
-    await this.command(
-      `/api/table-sessions/${encodeURIComponent(sessionId)}/begin-closing`,
-      {},
-      'idempotency-key',
-      `${operationKey}-begin`,
-    )
+    const beganClosing = sessionStatus === 'open'
+    if (beganClosing) {
+      await this.command(
+        `/api/table-sessions/${encodeURIComponent(sessionId)}/begin-closing`,
+        {},
+        'idempotency-key',
+        `${operationKey}-begin`,
+      )
+    }
     try {
       await this.command(
         `/api/table-sessions/${encodeURIComponent(sessionId)}/close`,
@@ -418,6 +421,7 @@ export class StaffActionsApi implements StaffActionsApiPort {
         `${operationKey}-complete`,
       )
     } catch (error) {
+      if (!beganClosing) throw error
       const message = error instanceof Error ? error.message : '关台结果无法确认'
       throw new StaffActionsApiError(message, 'TABLE_CLOSE_PARTIAL', null, true)
     }

@@ -59,17 +59,22 @@ export function actionableServiceTasks(
 }
 
 export function actionableFulfillmentItems(items: readonly StaffFulfillmentItem[]): StaffFulfillmentItem[] {
-  return items
-    .filter((item) => item.canPrepare || item.canDeliver)
-    .toSorted((left, right) => {
-      if (left.overdue !== right.overdue) return left.overdue ? -1 : 1
-      const leftReady = left.canDeliver && left.readyForDelivery ? 1 : 0
-      const rightReady = right.canDeliver && right.readyForDelivery ? 1 : 0
-      if (leftReady !== rightReady) return rightReady - leftReady
-      if (left.priority !== right.priority) return right.priority - left.priority
-      return eventTime(left.dueAt ?? left.nextActionAt ?? left.createdAt)
-        - eventTime(right.dueAt ?? right.nextActionAt ?? right.createdAt)
-    })
+  return visibleFulfillmentItems(items).filter((item) => item.canPrepare || item.canDeliver)
+}
+
+export function visibleFulfillmentItems(items: readonly StaffFulfillmentItem[]): StaffFulfillmentItem[] {
+  return items.toSorted((left, right) => {
+    if (left.overdue !== right.overdue) return left.overdue ? -1 : 1
+    const leftActionable = left.canPrepare || left.canDeliver ? 1 : 0
+    const rightActionable = right.canPrepare || right.canDeliver ? 1 : 0
+    if (leftActionable !== rightActionable) return rightActionable - leftActionable
+    const leftReady = left.canDeliver && left.readyForDelivery ? 1 : 0
+    const rightReady = right.canDeliver && right.readyForDelivery ? 1 : 0
+    if (leftReady !== rightReady) return rightReady - leftReady
+    if (left.priority !== right.priority) return right.priority - left.priority
+    return eventTime(left.dueAt ?? left.nextActionAt ?? left.createdAt)
+      - eventTime(right.dueAt ?? right.nextActionAt ?? right.createdAt)
+  })
 }
 
 export function unifiedActionQueue(
@@ -171,8 +176,8 @@ export function guidanceForPermission(permission: StaffActionPermission): string
   if (permission === 'table.close') return '关台会结束本桌服务，请联系店长或有翻台权限的同事处理。'
   if (permission === 'table.transfer') return '转桌需要有转桌权限的同事处理，系统会保留原桌次和责任记录。'
   if (permission === 'service.execute') return '这项服务需要负责服务的同事或值班经理处理。'
-  if (permission === 'kds.prepare') return '该出品只能由对应制作岗位完成。'
-  return '该出品已制作完成，需要负责本桌或候补服务员确认送达。'
+  if (permission === 'kds.prepare') return '当前账号没有该出品站点的制作权限，请由对应制作岗位处理。'
+  return '当前账号没有送达确认权限，请由负责本桌或候补服务员确认送达。'
 }
 
 function eventTime(value: string): number {

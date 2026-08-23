@@ -312,7 +312,12 @@ async function executeTableTransition(
     resultCodec: tableSessionCodec,
   }, async (transaction) => {
     const repository = options.createTableSessionRepository(transaction)
-    if (transition === 'close') await assertTableSessionSettled(transaction, sessionId)
+    // Do not move a table into the intermediate closing state until it is actually
+    // eligible to close. Otherwise an unpaid or unfulfilled order leaves staff
+    // with a table that cannot be resumed through the ordinary close flow.
+    if (transition === 'begin-closing' || transition === 'close') {
+      await assertTableSessionSettled(transaction, sessionId)
+    }
     const session = transition === 'begin-closing'
       ? await repository.beginClosing(sessionId, context.employeeId)
       : await repository.completeClosing(sessionId, context.employeeId)

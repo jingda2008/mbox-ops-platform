@@ -313,6 +313,34 @@ describe('normalizedOperationsApiPlugin', () => {
     expect(value.tableRepository.completeClosing).not.toHaveBeenCalled()
   })
 
+  it('does not enter the closing state while payable orders remain unsettled', async () => {
+    const unsettledTransaction: ScopedTransaction = {
+      scope: { tenantId, storeId },
+      query: vi.fn(async (sql: string) => sql.includes('outstanding_amount_minor')
+        ? { rows: [{ order_count: '1', outstanding_amount_minor: '8800' }], rowCount: 1 }
+        : { rows: [], rowCount: 0 }),
+    }
+    const commandExecutor = {
+      execute: vi.fn(async <Result>(
+        _command: Readonly<IdempotentCommand<Result>>,
+        handler: (value: ScopedTransaction) => Promise<CommandOutcome<Result>>,
+      ) => ({ value: (await handler(unsettledTransaction)).result, replayed: false })),
+    }
+    const value = fixture({ commandExecutor })
+
+    const response = await value.app.inject({
+      method: 'POST',
+      url: `/api/table-sessions/${sessionId}/begin-closing`,
+      headers: { 'idempotency-key': 'closing-unsettled-vip1-0001' },
+    })
+
+    expect(response.statusCode).toBe(409)
+    expect(response.json()).toEqual({
+      error: { code: 'TABLE_SESSION_UNSETTLED', message: '本桌仍有1笔未结订单（待收¥88.00），请先完成收款再关台' },
+    })
+    expect(value.tableRepository.beginClosing).not.toHaveBeenCalled()
+  })
+
   it('lets authorized managers safely process only awaiting prior business days',async()=>{
     const value=fixture({resolveContext:()=>({
       scope:{tenantId,storeId},employeeId,businessDate:'2026-08-11',

@@ -293,9 +293,10 @@
 .staff-table-sheet > header > div { flex: 1; display: flex; flex-direction: column; }
 .staff-table-sheet > header small { color: var(--staff-muted); }
 .staff-table-sheet-icon { width: 36px; height: 36px; display: grid; place-items: center; background: #f3ecd9; border-radius: 5px; }
-.status-free, .status-open { font-size: 12px; padding: 4px 7px; border-radius: 4px; }
+.status-free, .status-open, .status-closing { font-size: 12px; padding: 4px 7px; border-radius: 4px; }
 .status-free { color: #666; background: #edf0ec; }
 .status-open { color: var(--staff-green); background: #e1f1e9; }
+.status-closing { color: #7b5610; background: #fff3d7; }
 .staff-open-table, .staff-open-session { margin-top: 12px; }
 .staff-open-table > label { display: flex; align-items: center; gap: 6px; font-weight: 700; margin-bottom: 7px; }
 .staff-count-picks { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
@@ -309,6 +310,8 @@
 .staff-open-session > p { display: flex; align-items: baseline; gap: 9px; margin: 0 0 9px; }
 .staff-open-session > p strong { font-size: 20px; }
 .staff-open-session > p span { color: var(--staff-muted); }
+.staff-close-issue { margin: 0 0 9px !important; padding: 8px 9px; border: 1px solid #e1b2a6; border-radius: 5px; color: #8d3429; background: #fff4f1; font-size: 12px; line-height: 1.5; }
+.staff-close-issue strong { margin-right: 4px; }
 .staff-session-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .staff-session-actions button { border-radius: 6px; display: flex; align-items: center; justify-content: center; gap: 6px; font-weight: 700; }
 .staff-session-actions .is-commerce { color: #155c46; border-color: #81ad9d; background: #eef8f4; }
@@ -331,6 +334,7 @@
 .staff-action-card-main .staff-action-note { color: #7d5d14; font-weight: 700; }
 .staff-action-card-main .staff-action-carryover { color: #76540b; font-weight: 800; }
 .staff-action-card-main .staff-action-overdue { color: var(--staff-red); font-weight: 700; }
+.staff-action-card-main .staff-action-readonly { color: #735516; font-weight: 700; }
 .staff-resolution-note {
   width: 100%;
   min-height: 38px;

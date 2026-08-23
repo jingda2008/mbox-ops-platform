@@ -33,6 +33,7 @@ import {
   tableMoodPresentation,
   tableGroups,
   validateOpenTableInput,
+  visibleFulfillmentItems,
   visibleStaffTables,
   type StaffTableScope,
 } from './staff-actions-model'
@@ -75,6 +76,7 @@ export function StaffActionsPanel({
   const [transferTargetId, setTransferTargetId] = useState<string | null>(null)
   const [transferReason, setTransferReason] = useState('')
   const [closeConfirm, setCloseConfirm] = useState(false)
+  const [closeIssue, setCloseIssue] = useState<string | null>(null)
   const [resolutionNotes, setResolutionNotes] = useState<Record<string, string>>({})
   const [carryoverCancelNotes, setCarryoverCancelNotes] = useState<Record<string, string>>({})
   const [carryoverCancelConfirmTaskId, setCarryoverCancelConfirmTaskId] = useState<string | null>(null)
@@ -214,6 +216,7 @@ export function StaffActionsPanel({
     ? []
     : actionableServiceTasks(operations.tasks, operations.actor.id), [operations])
   const fulfillmentActions = useMemo(() => actionableFulfillmentItems(fulfillment?.workItems ?? []), [fulfillment])
+  const fulfillmentVisibleItems = useMemo(() => visibleFulfillmentItems(fulfillment?.workItems ?? []), [fulfillment])
   const attentionTableIds = useMemo(() => new Set([
     ...serviceActions.map((task) => task.tableId),
     ...fulfillmentActions.map((item) => item.table.id),
@@ -247,6 +250,7 @@ export function StaffActionsPanel({
     setTransferTargetId(null)
     setTransferReason('')
     setCloseConfirm(false)
+    setCloseIssue(null)
     setNotice(null)
     setOrderSheetMode(null)
     setObservationOpen(false)
@@ -286,6 +290,7 @@ export function StaffActionsPanel({
     if (!hasPermission(permissions, 'table.close')) return revealPermissionGuidance('table.close')
     if (!closeConfirm) {
       setCloseConfirm(true)
+      showNotice({ kind: 'guidance', message: '请再次确认结台。系统会先核对付款和出品；有未结事项时会保留桌台并说明原因。' })
       return
     }
     const snapshot = operations
@@ -296,14 +301,18 @@ export function StaffActionsPanel({
     setPendingAction(`table:${selectedTable.id}`)
     setOperations(replaceTableSession(snapshot, selectedTable.id, null))
     try {
-      await api.closeTable(sessionId)
+      await api.closeTable(sessionId, selectedTable.activeSession.status)
       showNotice({ kind: 'success', message: `${selectedTable.code} 已关台，可安排下一桌客人` })
       setCloseConfirm(false)
+      setCloseIssue(null)
       await load(true)
     } catch (error) {
       if (error instanceof StaffActionsApiError && error.partialMutation) await load(true)
       else setOperations(snapshot)
-      showNotice({ kind: 'error', message: actionError(error, '关台未完成，已恢复真实桌台状态') })
+      const issue = actionError(error, '关台未完成，已恢复真实桌台状态')
+      setCloseConfirm(false)
+      setCloseIssue(issue)
+      showNotice({ kind: 'error', message: issue })
     } finally {
       actionLocksRef.current.delete(actionKey)
       setPendingAction(null)
@@ -513,7 +522,7 @@ export function StaffActionsPanel({
                     disabled={pendingAction === `table:${table.id}`}
                   >
                     <strong>{table.code}</strong>
-                    <span>{table.activeSession === null ? `${table.capacity}人` : `${table.activeSession.guestCount}人 · 已开台`}</span>
+                    <span>{table.activeSession === null ? `${table.capacity}人` : `${table.activeSession.guestCount}人 · ${table.activeSession.status === 'closing' ? '结台中' : '已开台'}`}</span>
                     {table.assignedToActor && <small>负责桌</small>}
                     {mood !== null && (
                       <span className="staff-table-mood" title={`客人状态：${mood.label}`} aria-label={`客人状态：${mood.label}`}>
@@ -536,6 +545,7 @@ export function StaffActionsPanel({
               transferTargetId={transferTargetId}
               transferReason={transferReason}
               closeConfirm={closeConfirm}
+              closeIssue={closeIssue}
               pending={pendingAction === `table:${selectedTable.id}`}
               onGuestCount={setGuestCount}
               onCapacityReason={setCapacityReason}
@@ -595,9 +605,10 @@ export function StaffActionsPanel({
       )}
 
       {tab === 'fulfillment' && operations !== null && (
-        <ActionList empty="当前没有需要制作或配送的出品">
-          {fulfillmentActions.slice(0, 8).map((item) => {
+        <ActionList empty={fulfillment === null ? '出品队列暂时无法读取，请刷新后重试' : '当前没有需要制作或配送的出品'}>
+          {fulfillmentVisibleItems.slice(0, 8).map((item) => {
             const fulfillmentCommand = fulfillmentAction(item)
+            const missingPermission = item.readyForDelivery ? 'kds.deliver' : 'kds.prepare'
             return (
               <article className={`staff-action-card ${item.overdue ? 'is-overdue' : ''}`} key={item.taskId}>
                 <div className="staff-action-card-main">
@@ -606,6 +617,7 @@ export function StaffActionsPanel({
                   {item.carryover && <small className="staff-action-carryover">前营业日遗留 · 原营业日 {item.businessDate}，处理结果仍归原订单</small>}
                   {item.attentionMessages.map((message) => <small className="staff-action-note" key={message}>备注：{message}</small>)}
                   {item.overdue && <small className="staff-action-overdue">已超时，优先处理</small>}
+                  {fulfillmentCommand === null && <small className="staff-action-readonly">当前账号可查看，不能确认{item.readyForDelivery ? '送达' : '制作'}。</small>}
                   {item.carryover && permissions.includes('kds.exception.manage') && (
                     <input
                       className="staff-resolution-note"
@@ -627,6 +639,9 @@ export function StaffActionsPanel({
                       {fulfillmentCommand === 'deliver' ? '已送达' : '制作完成'}
                     </button>
                   )}
+                  {fulfillmentCommand === null && (
+                    <button type="button" className="is-readonly" onClick={() => revealPermissionGuidance(missingPermission)}>查看权限说明</button>
+                  )}
                   {item.carryover && permissions.includes('kds.exception.manage') && (
                     <button
                       type="button"
@@ -641,8 +656,8 @@ export function StaffActionsPanel({
               </article>
             )
           })}
-          {fulfillmentActions.length > 8 && (
-            <p className="staff-actions-more">还有 {fulfillmentActions.length - 8} 项，完成当前事项后自动补入</p>
+          {fulfillmentVisibleItems.length > 8 && (
+            <p className="staff-actions-more">还有 {fulfillmentVisibleItems.length - 8} 项，完成当前事项后自动补入</p>
           )}
         </ActionList>
       )}
@@ -843,6 +858,7 @@ interface TableActionSheetProps {
   transferTargetId: string | null
   transferReason: string
   closeConfirm: boolean
+  closeIssue: string | null
   pending: boolean
   onGuestCount(value: string): void
   onCapacityReason(value: string): void
@@ -875,7 +891,7 @@ function TableActionSheet(props: TableActionSheetProps) {
       <header>
         <span className="staff-table-sheet-icon"><TableProperties size={20} /></span>
         <div><strong>{table.code} · {table.displayName}</strong><small>{table.areaName} · 容量{table.capacity}人</small></div>
-        <span className={table.activeSession === null ? 'status-free' : 'status-open'}>{table.activeSession === null ? '空闲' : '已开台'}</span>
+        <span className={table.activeSession === null ? 'status-free' : table.activeSession.status === 'closing' ? 'status-closing' : 'status-open'}>{table.activeSession === null ? '空闲' : table.activeSession.status === 'closing' ? '结台中' : '已开台'}</span>
       </header>
 
       {table.activeSession === null ? (
@@ -912,7 +928,8 @@ function TableActionSheet(props: TableActionSheetProps) {
         </div>
       ) : (
         <div className="staff-open-session">
-          <p><strong>{table.activeSession.guestCount}人</strong><span>本桌服务进行中</span></p>
+          <p><strong>{table.activeSession.guestCount}人</strong><span>{table.activeSession.status === 'closing' ? '结台待完成，请先处理下方提示' : '本桌服务进行中'}</span></p>
+          {props.closeIssue !== null && <p className="staff-close-issue" role="alert"><strong>暂不能结台：</strong>{props.closeIssue}</p>}
           <div className="staff-session-actions">
             {hasPermission(props.permissions, 'observation.record') && (
               <button type="button" className="is-observation" onClick={props.onObservation}><MessageSquareText size={17} /> 记录桌台情况</button>
@@ -938,7 +955,7 @@ function TableActionSheet(props: TableActionSheetProps) {
             )}
             {hasPermission(props.permissions, 'table.close') ? (
               <button type="button" className="is-danger" onClick={props.onClose} disabled={props.pending}>
-                {props.pending ? '正在关台…' : props.closeConfirm ? '再次确认关台' : '关台/翻台'}
+                {props.pending ? '正在结台…' : props.closeConfirm ? table.activeSession.status === 'closing' ? '确认完成结台' : '确认结台' : table.activeSession.status === 'closing' ? '继续结台' : '准备结台'}
               </button>
             ) : (
               <button type="button" onClick={() => props.onPermissionGuidance('table.close')}>关台说明</button>

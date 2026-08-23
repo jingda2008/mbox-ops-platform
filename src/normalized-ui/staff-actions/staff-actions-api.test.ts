@@ -61,6 +61,18 @@ describe('StaffActionsApi', () => {
     expect(closeHeaders.get('idempotency-key')).toBe('staff-close-session-1-complete')
   })
 
+  it('resumes an already-closing table without trying to begin closing twice', async () => {
+    const send = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ data: {} }), { status: 200 }))
+    const api = new StaffActionsApi({ fetch: send, createIdempotencyKey: () => 'close-key-0002' })
+
+    await api.closeTable('session-1', 'closing')
+
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(send).toHaveBeenCalledWith('/api/table-sessions/session-1/close', expect.any(Object))
+    const headers = send.mock.calls[0]?.[1]?.headers as Headers
+    expect(headers.get('idempotency-key')).toBe('staff-close-session-1-complete')
+  })
+
   it('loads and updates staff reservations through normalized routes', async () => {
     const send = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: [] }), { status: 200 }))

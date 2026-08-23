@@ -9,6 +9,7 @@ interface Fixture {
   employeeCode: string
   employeePin: string
   orderableProductName: string
+  employees: Array<{ code: string; navigationRoutes: string[] }>
 }
 
 const phoneProfiles = [
@@ -168,6 +169,7 @@ test('manager mobile pages prioritize current actions and keep low-frequency det
   const responsibilityHeight = await page.evaluate(() => document.documentElement.scrollHeight)
   expect(responsibilityHeight).toBeLessThan(2_400)
 
+  const managerNavigation = new Set(data.employees.find((employee) => employee.code === data.employeeCode)?.navigationRoutes ?? [])
   const operationalRoutes = [
     ['/staff/tasks', '只看需要服务的事'],
     ['/staff/fulfillment', '只做当前下一步'],
@@ -178,11 +180,15 @@ test('manager mobile pages prioritize current actions and keep low-frequency det
     ['/staff/operations', '经营数据'],
     ['/staff/devices', '设备与打印'],
   ] as const
-  for (const [route, heading] of operationalRoutes) {
+  for (const [route, heading] of operationalRoutes.filter(([route]) => managerNavigation.has(route))) {
     await page.goto(route)
     await expect(page.getByRole('heading', { name: heading })).toBeVisible()
     await expectNoHorizontalOverflow(page, `portrait ${route}`)
     await expectTouchTargets(page, 'body', `portrait ${route}`)
+  }
+  if (!managerNavigation.has('/staff/devices')) {
+    await page.goto('/staff/devices')
+    await expect(page.getByRole('alert')).toContainText('当前账号没有这个页面的有效权限')
   }
 
   await page.goto('/staff/inventory')
@@ -200,6 +206,7 @@ test('manager operational routes remain usable in phone landscape', async ({ pag
   const data = await fixture()
   await page.setViewportSize({ width: 844, height: 390 })
   await loginManager(page, data)
+  const managerNavigation = new Set(data.employees.find((employee) => employee.code === data.employeeCode)?.navigationRoutes ?? [])
   const routes = [
     ['/staff/live', '找到桌台，直接处理'],
     ['/staff/tasks', '只看需要服务的事'],
@@ -212,9 +219,13 @@ test('manager operational routes remain usable in phone landscape', async ({ pag
     ['/staff/devices', '设备与打印'],
     ['/staff/settings', '系统配置状态'],
   ] as const
-  for (const [route, heading] of routes) {
+  for (const [route, heading] of routes.filter(([route]) => managerNavigation.has(route))) {
     await page.goto(route)
     await expect(page.getByRole('heading', { name: heading })).toBeVisible()
     await expectNoHorizontalOverflow(page, `landscape ${route}`)
+  }
+  if (!managerNavigation.has('/staff/devices')) {
+    await page.goto('/staff/devices')
+    await expect(page.getByRole('alert')).toContainText('当前账号没有这个页面的有效权限')
   }
 })

@@ -10,6 +10,7 @@ import { TableQrProvisioner } from '../server/normalized/table-qr-provisioner.js
 import { TableSessionCommandService } from '../server/normalized/table-session-repository.js'
 import { parseNormalizedCatalog, provisionNormalizedCatalog } from '../server/provision-normalized-catalog.js'
 import { parseStoreProvisionConfig, provisionNormalizedStore, shanghaiBusinessDate } from '../server/provision-normalized-store.js'
+import { effectiveStaffNavigation } from '../src/shared/staff-module-access.js'
 
 const adminSource = required('TEST_NORMALIZED_ADMIN_URL')
 const storePath = resolve(process.env.STORE_CONFIG_FILE ?? 'deploy/normalized-store/mbox-lujiazui.store.json')
@@ -121,11 +122,21 @@ try {
       if (!role) throw new Error(`normalized browser fixture role is missing: ${roleCode}`)
       return role
     })
-    const highFrequencyEntries = Array.from(new Map(roles.flatMap((role) => role.navigation ?? [])
-      .filter((entry) => entry.highFrequency === true)
-      .map((entry) => [entry.route, { label: entry.label, route: entry.route }])).values())
-    const navigationRoutes = Array.from(new Set(roles.flatMap((role) => role.navigation ?? [])
-      .map((entry) => entry.route)))
+    const permissions = Array.from(new Set(roles.flatMap((role) => role.permissions)))
+    const configuredNavigation = Array.from(new Map(roles.flatMap((role) => role.navigation ?? [])
+      .map((entry) => [entry.code, {
+        code: entry.code,
+        label: entry.label,
+        route: entry.route,
+        icon: entry.icon ?? null,
+        sortOrder: entry.sortOrder ?? 0,
+        displayConfig: { highFrequency: entry.highFrequency ?? false },
+      }])).values())
+    const navigation = effectiveStaffNavigation(permissions, configuredNavigation)
+    const highFrequencyEntries = navigation
+      .filter((entry) => entry.displayConfig.highFrequency === true)
+      .map((entry) => ({ label: entry.label, route: entry.route }))
+    const navigationRoutes = navigation.map((entry) => entry.route)
     return {
       code: employee.code,
       name: employee.name,

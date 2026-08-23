@@ -689,6 +689,7 @@ async function searchGuestCatalog(
       AND ($3::uuid IS NULL OR current_session.id IS NOT NULL)
       AND product.status = 'active'
       AND product.guest_visible
+      AND 'guest_qr'=ANY(product.allowed_channels)
       AND price.amount_minor IS NOT NULL
       AND (
         product.product_kind = 'single'
@@ -756,6 +757,7 @@ async function searchGuestCatalog(
 function publicCatalogProduct(row: CatalogMenuRow) {
   const source = jsonObject(row.product_snapshot.source)
   const amountMinor = row.amount_minor === null ? null : Number(row.amount_minor)
+  const availabilityStatus = publicCatalogAvailabilityStatus(row)
   return {
     productId: row.id,
     code: row.code,
@@ -784,10 +786,19 @@ function publicCatalogProduct(row: CatalogMenuRow) {
     productKind: row.product_kind,
     bundleComponents: publicBundleComponents(row.bundle_components),
     recommendation: publicRecommendation(row, amountMinor),
-    available: row.status === 'active' && row.amount_minor !== null
-      && row.within_availability !== false && row.inventory_configuration_complete
-      && row.inventory_available,
+    availabilityStatus,
+    available: availabilityStatus === 'available',
   }
+}
+
+function publicCatalogAvailabilityStatus(row: CatalogMenuRow): 'available' | 'configuration_incomplete' | 'inventory_unavailable' | 'scheduled' | 'unavailable' {
+  // Keep the public menu's status order aligned with assisted ordering: a missing
+  // recipe/configuration takes precedence over a time-window label, then stock.
+  if (row.status !== 'active' || row.amount_minor === null) return 'unavailable'
+  if (!row.inventory_configuration_complete) return 'configuration_incomplete'
+  if (!row.inventory_available) return 'inventory_unavailable'
+  if (row.within_availability === false) return 'scheduled'
+  return 'available'
 }
 
 function publicRecommendation(row: CatalogMenuRow, amountMinor: number | null) {

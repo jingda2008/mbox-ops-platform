@@ -79,7 +79,7 @@ describe('guest commerce/service API trust boundaries', () => {
     expect(response.statusCode).toBe(200)
     expect(resolvePublicContext).toHaveBeenCalledOnce()
     expect(response.json()).toMatchObject({
-      data: [{ productId, name: '青岛啤酒', amountMinor: 6800, available: true }],
+      data: [{ productId, name: '青岛啤酒', amountMinor: 6800, availabilityStatus: 'available', available: true }],
       meta: { partySize: null, recommendationScene: null, orderingRequiresTableScan: true },
     })
     expect(value.query).toHaveBeenCalledOnce()
@@ -137,6 +137,7 @@ describe('guest commerce/service API trust boundaries', () => {
     const catalogSql = value.query.mock.calls.find(([sql]) => sql.includes('product.recommendation_priority'))?.[0]
     expect(catalogSql).toContain('product.recommendation_priority DESC')
     expect(catalogSql).toContain('product.recommendation_beverage_family')
+    expect(catalogSql).toContain("'guest_qr'=ANY(product.allowed_channels)")
     expect(catalogSql).not.toContain("product.product_snapshot -> 'recommendation'")
     expect(response.json()).toMatchObject({
       data: [{
@@ -145,6 +146,7 @@ describe('guest commerce/service API trust boundaries', () => {
         beverageFamily: 'beer',
         specification: '330ml',
         amountMinor: 6800,
+        availabilityStatus: 'available',
         available: true,
         recommendation: { enabled: true },
       }],
@@ -765,7 +767,7 @@ integration('guest service and mood API with PostgreSQL', () => {
 
     expect(response.statusCode).toBe(200)
     expect(response.json()).toMatchObject({
-      data: [{ productId: integrationProductId, name: '公开菜单测试饮品', available: false }],
+      data: [{ productId: integrationProductId, name: '公开菜单测试饮品', availabilityStatus: 'configuration_incomplete', available: false }],
       meta: { partySize: null, recommendationScene: null, orderingRequiresTableScan: true },
     })
   })
@@ -778,7 +780,7 @@ integration('guest service and mood API with PostgreSQL', () => {
 
     expect(response.statusCode).toBe(200)
     expect(response.json()).toMatchObject({
-      data: [{ productId: integrationNotManagedProductId, name: '公开菜单测试小食', available: true }],
+      data: [{ productId: integrationNotManagedProductId, name: '公开菜单测试小食', availabilityStatus: 'available', available: true }],
     })
   })
 
@@ -789,7 +791,7 @@ integration('guest service and mood API with PostgreSQL', () => {
     })
     expect(unavailable.statusCode).toBe(200)
     expect(unavailable.json()).toMatchObject({
-      data: [{ productId: integrationStockedProductId, available: false }],
+      data: [{ productId: integrationStockedProductId, availabilityStatus: 'inventory_unavailable', available: false }],
     })
 
     await pool.query(
@@ -804,7 +806,7 @@ integration('guest service and mood API with PostgreSQL', () => {
     })
     expect(available.statusCode).toBe(200)
     expect(available.json()).toMatchObject({
-      data: [{ productId: integrationStockedProductId, available: true }],
+      data: [{ productId: integrationStockedProductId, availabilityStatus: 'available', available: true }],
     })
   })
 

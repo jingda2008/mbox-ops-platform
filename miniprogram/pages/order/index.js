@@ -17,7 +17,6 @@ const {
 } = require('../../utils/api')
 const { getRuntimeConfig } = require('../../config/index')
 const { getTableSession } = require('../../utils/session')
-const { requireMembershipLogin } = require('../../utils/membership-gate')
 const { randomId } = require('../../utils/id')
 const { money, dateTime } = require('../../utils/format')
 const { checkoutRecommendationAttribution } = require('../../utils/recommendation-attribution')
@@ -65,16 +64,53 @@ function parseScanValue(value) {
   }, {})
 }
 
-function menuProducts(items, includeUnavailable) {
-  return (items || []).filter((item) => includeUnavailable || item.available).sort((left, right) => {
+function menuAvailability(item) {
+  if (item.available) return { text: '可下单', detail: '当前桌可直接加入购物车' }
+  if (item.availabilityStatus === 'configuration_incomplete') {
+    return { text: '暂不可点', detail: '库存或配方配置未完成' }
+  }
+  if (item.availabilityStatus === 'inventory_unavailable') {
+    return { text: '暂不可点', detail: '当前可售库存不足' }
+  }
+  if (item.availabilityStatus === 'scheduled') {
+    const range = item.availableFrom && item.availableUntil ? `供应时间 ${item.availableFrom}-${item.availableUntil}` : '当前不在供应时段'
+    return { text: '暂不可点', detail: range }
+  }
+  return { text: '暂不可点', detail: '当前暂不能下单' }
+}
+
+function menuProducts(items) {
+  return (items || []).sort((left, right) => {
     if (left.productKind !== right.productKind) return left.productKind === 'bundle' ? -1 : 1
     return (left.sortOrder || 0) - (right.sortOrder || 0)
-  }).map((item) => Object.assign({}, item, {
-    priceText: money(item.amountMinor),
-    includedText: (item.bundleComponents || []).map((line) => `${line.name || '组合内容'}×${line.quantity || 1}`).join(' · '),
-    imageUrl: publicImageUrl(item.imageUrl),
-    availabilityText: item.available ? '到店可点' : '暂不可点',
-  }))
+  }).map((item) => {
+    const availability = menuAvailability(item)
+    return Object.assign({}, item, {
+      priceText: money(item.amountMinor),
+      includedText: (item.bundleComponents || []).map((line) => `${line.name || '组合内容'}×${line.quantity || 1}`).join(' · '),
+      imageUrl: publicImageUrl(item.imageUrl),
+      availabilityText: availability.text,
+      availabilityDetail: availability.detail,
+    })
+  })
+}
+
+function menuRecommendations(items, products) {
+  const orderableProducts = new Map((products || [])
+    .filter((product) => product.available)
+    .map((product) => [product.productId, product]))
+  return (items || []).map((item) => {
+    const product = orderableProducts.get(item.productId)
+    if (!product) return null
+    return Object.assign({}, item, {
+      name: product.name,
+      amountMinor: product.amountMinor,
+      currency: product.currency,
+      imageUrl: product.imageUrl,
+      description: product.description,
+      includedText: product.includedText,
+    })
+  }).filter(Boolean)
 }
 
 function menuCategories(products) {
@@ -178,7 +214,7 @@ Page({
         getPublicMenu({}),
         getTodayPerformances().catch(() => null),
       ])
-      const products = menuProducts(menu, true)
+      const products = menuProducts(menu)
       this.setData({
         loading: false,
         browseOnly: true,
@@ -215,7 +251,14 @@ Page({
     const products = menuProducts(results[0])
     const categories = menuCategories(products)
     const storedCart = wx.getStorageSync(this.cartStorageKey()) || []
-    const cart = storedCart.filter((line) => products.some((product) => product.productId === line.productId))
+    const cart = storedCart.filter((line) => products.some((product) => (
+      product.productId === line.productId && product.available
+    )))
+    const recommendations = menuRecommendations(this.data.recommendations, products)
+    const recommendationAttribution = this.data.recommendationAttribution
+      && recommendations.some((item) => item.productId === this.data.recommendationAttribution.selectedProductId)
+      ? this.data.recommendationAttribution
+      : null
     const tableOrders = results[3] || []
     let storedPending = wx.getStorageSync(PENDING_PAYMENT_KEY) || null
     const storedOrder = storedPending && tableOrders.find((item) => item.publicId === storedPending.orderPublicId)
@@ -237,6 +280,8 @@ Page({
       browseOnly: false,
       products,
       categories,
+      recommendations,
+      recommendationAttribution,
       performance: performanceView(results[1]),
       benefitCount: (results[2] || []).reduce((sum, item) => sum + Number(item.quantityAvailable || 0), 0),
       pendingPayment,
@@ -279,20 +324,17 @@ Page({
   },
 
   scanTable() {
-    requireMembershipLogin('登录会员后才能扫码点单').then((allowed) => {
-      if (!allowed) return
-      wx.scanCode({
-        onlyFromCamera: true,
-        scanType: ['qrCode', 'wxCode'],
-        success: (result) => {
-          const query = parseScanValue(result.path || result.result)
-          getApp().refreshRuntime({ query })
-          this.preparePage()
-        },
-        fail: (error) => {
-          if (!String(error.errMsg || '').includes('cancel')) this.setData({ error: '没有识别到有效桌码，请扫描桌面固定二维码' })
-        },
-      })
+    wx.scanCode({
+      onlyFromCamera: true,
+      scanType: ['qrCode', 'wxCode'],
+      success: (result) => {
+        const query = parseScanValue(result.path || result.result)
+        getApp().refreshRuntime({ query })
+        this.preparePage()
+      },
+      fail: (error) => {
+        if (!String(error.errMsg || '').includes('cancel')) this.setData({ error: '没有识别到有效桌码，请扫描桌面固定二维码' })
+      },
     })
   },
 
@@ -319,13 +361,17 @@ Page({
       const occasion = this.data.occasionOptions[this.data.occasionIndex].code
       const alcoholPreference = this.data.alcoholOptions[this.data.alcoholIndex].code
       const result = await recommendExperience({ occasion, alcoholPreference, experienceLevel: 'enhanced', serviceIntensity: 'balanced' })
-      const recommendations = (result.recommendations || []).map((item) => Object.assign({}, item, {
+      const recommendations = menuRecommendations(result.recommendations, this.data.products).map((item) => Object.assign({}, item, {
         priceText: money(item.amountMinor),
         savingsText: item.savingsAmountMinor > 0 ? `比单点省 ${money(item.savingsAmountMinor)}` : '',
         tierText: item.tier === 'signature' ? '完整体验' : item.tier === 'enhanced' ? '今晚推荐' : '轻松开始',
       }))
-      this.setData({ recommendations, recommendationPublicId: result.publicId || '' })
-      if (result.publicId) {
+      this.setData({
+        recommendations,
+        recommendationPublicId: recommendations.length ? result.publicId || '' : '',
+        recommendationAttribution: null,
+      })
+      if (result.publicId && recommendations.length) {
         recordRecommendationEvent(result.publicId, 'exposed', null, { surface: 'guest_order_recommendations' }).catch(() => {})
       }
     } catch (error) { this.setData({ error: error.message || '暂时无法生成推荐' }) }
@@ -335,8 +381,11 @@ Page({
   async addProduct(event) {
     if (this.data.checkoutLocked || this.data.pendingPayment) return
     const productId = event.currentTarget.dataset.id
-    const product = this.data.products.concat(this.data.recommendations).find((item) => item.productId === productId)
-    if (!product) return
+    const product = this.data.products.find((item) => item.productId === productId)
+    if (!product || !product.available) {
+      wx.showToast({ title: '这款商品当前暂不可点', icon: 'none' })
+      return
+    }
     // 推荐只影响当前购物车。体验承诺必须在有效订单且付款门禁通过后由服务端建立，
     // 这里不能提前派发服务节点或把“选择推荐”误当作已购买权益。
     const cart = this.data.cart.map((item) => Object.assign({}, item))
@@ -420,6 +469,11 @@ Page({
     if (this.data.checkoutLocked || this.data.pendingPayment) return
     const productId = event.currentTarget.dataset.id
     const delta = Number(event.currentTarget.dataset.delta)
+    const product = this.data.products.find((item) => item.productId === productId)
+    if (delta > 0 && (!product || !product.available)) {
+      wx.showToast({ title: '这款商品当前暂不可点', icon: 'none' })
+      return
+    }
     const cart = this.data.cart.map((item) => Object.assign({}, item))
     const item = cart.find((line) => line.productId === productId)
     if (item) item.quantity += delta

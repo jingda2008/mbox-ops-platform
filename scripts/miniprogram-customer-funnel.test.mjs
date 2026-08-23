@@ -48,8 +48,9 @@ test('membership consent stays unchecked and phone authorization appears only af
 })
 
 test('activity cards are horizontal brand-green surfaces and profile actions expose their destinations', async () => {
-  const [homeView, homeStyle, communityView, communityStyle, profileView, profileLogic, profileStyle] = await Promise.all([
+  const [homeView, homeLogic, homeStyle, communityView, communityStyle, profileView, profileLogic, profileStyle] = await Promise.all([
     read('miniprogram/pages/home/index.wxml'),
+    read('miniprogram/pages/home/index.js'),
     read('miniprogram/pages/home/index.wxss'),
     read('miniprogram/pages/community/index.wxml'),
     read('miniprogram/pages/community/index.wxss'),
@@ -61,6 +62,10 @@ test('activity cards are horizontal brand-green surfaces and profile actions exp
   assert.match(homeView, /featured-activity-card__art/)
   assert.match(homeStyle, /\.featured-activity-card\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*228rpx minmax\(0, 1fr\)[^}]*linear-gradient\(145deg, #315d46, #214635/)
   assert.match(homeView, /class="published-content-card/)
+  assert.match(homeView, /wx:if="\{\{editorialPanel\}\}" class="editorial-panel-mask"/)
+  assert.match(homeView, /bindtap="openEditorialTarget"/)
+  assert.match(homeLogic, /openEditorialTarget\(candidate\)/)
+  assert.match(homeLogic, /card\.type === 'article' \|\| !card\.hasTarget/)
   assert.match(homeStyle, /\.published-content-card\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*208rpx minmax\(0, 1fr\)[^}]*linear-gradient\(145deg, #315d46, #214635/)
   assert.doesNotMatch(homeView, /home-campaign-mask/)
   assert.match(communityView, /hover-class="activity-card--hover"/)
@@ -69,8 +74,9 @@ test('activity cards are horizontal brand-green surfaces and profile actions exp
   assert.match(profileView, /class="service-chip__icon"/)
   assert.match(profileView, /bindtap="openSuperhighService"/)
   assert.match(profileView, /已报名的超嗨活动/)
-  assert.match(profileLogic, /if \(this\.data\.registrations\.length\)/)
+  assert.match(profileLogic, /activityRegistrationViews\(await getActivityRegistrations\(\)\)/)
   assert.match(profileLogic, /selector: '#registered-activities'/)
+  assert.match(profileLogic, /当前不会跳转到活动列表/)
   assert.match(profileLogic, /wx\.switchTab\(\{ url: '\/pages\/community\/index' \}\)/)
   assert.match(profileStyle, /\.metric-icon\s*\{[^}]*border-radius:\s*50%/)
   assert.match(profileStyle, /\.member-content-card\s*\{[^}]*background:\s*linear-gradient\(145deg, #315d46, #214635/)
@@ -93,6 +99,9 @@ test('activity registration distinguishes confirmed, payment-pending, and waitli
   assert.match(detailView, />完成支付<\/button>/)
   assert.doesNotMatch(detailView, /确认报名/)
   assert.match(detailLogic, /报名成功，名额已为您确认。/)
+  assert.match(detailLogic, /showRegistrationOutcome/)
+  assert.match(detailLogic, /confirmText: '我的活动'/)
+  assert.match(detailLogic, /await this\.refreshActivityAvailability\(\)/)
   assert.match(detailLogic, /完成付款后才算报名成功。/)
   assert.match(detailLogic, /requiresPaymentOnSubmit/)
   assert.match(detailLogic, /已加入候补，按报名顺序自动递补；现在无需付款。/)
@@ -263,14 +272,36 @@ test('customers can browse a read-only menu before scanning, but the browse view
   assert.match(browseView, /今晚菜单/)
   assert.match(browseView, /随便看看也完全可以/)
   assert.match(browseView, /\{\{item\.availabilityText\}\}/)
+  assert.match(browseView, /product-list--browse/)
+  assert.doesNotMatch(browseView, /preview-product-grid/)
   assert.match(browseView, /bindtap="scanTable"/)
   assert.equal((browseView.match(/bindtap="scanTable"/g) || []).length, 1)
   assert.doesNotMatch(browseView, /已到店，扫描桌码开始点单/)
   assert.doesNotMatch(browseView, /bindtap="addProduct"/)
   assert.match(orderLogic, /const \{ publicImageUrl \} = require\('\.\.\/\.\.\/utils\/media'\)/)
   assert.match(orderLogic, /imageUrl: publicImageUrl\(item\.imageUrl\)/)
+  assert.match(orderLogic, /function menuProducts\(items\)/)
+  assert.doesNotMatch(orderLogic, /includeUnavailable/)
+  assert.match(orderLogic, /const products = menuProducts\(results\[0\]\)/)
+  assert.match(orderLogic, /function menuRecommendations\(items, products\)/)
+  assert.match(orderLogic, /const recommendations = menuRecommendations\(result\.recommendations, this\.data\.products\)/)
+  assert.match(orderView, /wx:else class="product-unavailable" disabled="\{\{true\}\}"/)
   assert.match(mediaSource, /trimmed\.startsWith\('\/menu\/'\)/)
   assert.match(apiSource, /publicRequest\(`\/api\/public\/mini\/menu\/products/)
+})
+
+test('recommendations stay inside the current table menu and never bypass guest ordering gates', async () => {
+  const [orderLogic, recommendationRepository] = await Promise.all([
+    read('miniprogram/pages/order/index.js'),
+    read('server/normalized/customer-experience-repository.ts'),
+  ])
+
+  assert.match(orderLogic, /function menuRecommendations\(items, products\)/)
+  assert.match(orderLogic, /\.filter\(\(product\) => product\.available\)/)
+  assert.match(orderLogic, /const product = this\.data\.products\.find\(\(item\) => item\.productId === productId\)/)
+  assert.match(recommendationRepository, /AND 'guest_qr'=ANY\(product\.allowed_channels\)/)
+  assert.match(recommendationRepository, /mbox\.inventory_balances balance/)
+  assert.match(recommendationRepository, /recipe\.status='active'/)
 })
 
 async function imagePaths(directory) {
@@ -343,7 +374,8 @@ test('customer-only reservations stay executable, performances use the public sc
   assert.match(profileLogic, /openLoginSheet/)
   assert.match(profileView, /login-action-link/)
   assert.match(profileLogic, /openReservations\(\)\s*\{[^}]*requireMembership/)
-  assert.match(orderLogic, /requireMembershipLogin/)
+  assert.doesNotMatch(orderLogic, /requireMembershipLogin/)
+  assert.match(orderLogic, /wx\.scanCode\(\{/)
   assert.match(reservationLogic, /membershipRequired/)
   assert.match(reservationView, /membership-gate/)
   assert.doesNotMatch(profileView, /class="login-dock"/)

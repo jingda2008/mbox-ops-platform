@@ -139,7 +139,7 @@
               <text class="published-content-card__badge">{{item.eyebrow}}</text>
             </view>
             <view class="published-content-card__copy"><text>{{item.title}}</text><text>{{item.summary}}</text><text>{{item.ctaLabel}}</text></view>
-            <text wx:if="{{item.hasTarget}}" class="published-content-card__arrow">›</text>
+            <text wx:if="{{item.canOpen}}" class="published-content-card__arrow">›</text>
           </button>
         </view>
       </scroll-view>
@@ -155,6 +155,21 @@
       </view>
       <view wx:else class="performance-panel__artist"><image wx:if="{{performance.imageUrl}}" src="{{performance.imageUrl}}" mode="aspectFill" /><view><text>{{performance.performer}}</text><text>{{performance.tags || 'M-BOX 当晚舞台阵容'}}</text><text>{{performance.bio || '更多介绍由门店发布后展示。'}}</text></view></view>
       <text class="performance-panel__note">演出时间与阵容以门店当日已发布安排为准。</text>
+    </view>
+  </view>
+
+  <view wx:if="{{editorialPanel}}" class="editorial-panel-mask" bindtap="closeEditorial" catchtouchmove="noop">
+    <view class="editorial-panel" catchtap="noop">
+      <button class="editorial-panel__close" aria-label="关闭内容" bindtap="closeEditorial">×</button>
+      <image wx:if="{{editorialPanel.imageUrl}}" class="editorial-panel__image" src="{{editorialPanel.imageUrl}}" mode="aspectFill" />
+      <view wx:else class="editorial-panel__art"><image src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" /></view>
+      <view class="editorial-panel__body">
+        <text class="editorial-panel__eyebrow">{{editorialPanel.eyebrow}}</text>
+        <text class="editorial-panel__title">{{editorialPanel.title}}</text>
+        <text class="editorial-panel__summary">{{editorialPanel.summary}}</text>
+        <button wx:if="{{editorialPanel.hasTarget}}" class="editorial-panel__action" bindtap="openEditorialTarget">{{editorialPanel.ctaLabel}}</button>
+        <button wx:else class="editorial-panel__action" bindtap="closeEditorial">知道了</button>
+      </view>
     </view>
   </view>
 

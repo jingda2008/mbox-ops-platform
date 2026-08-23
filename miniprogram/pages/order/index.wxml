@@ -24,14 +24,14 @@
         <view class="search-box"><text>⌕</text><input value="{{searchText}}" placeholder="搜索酒水、套餐或口味" bindinput="onSearchInput" /></view>
         <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="category-scroll"><view class="category-row"><button wx:for="{{categories}}" wx:key="code" class="{{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory">{{item.name}}</button></view></scroll-view>
       </view>
-      <view wx:if="{{visibleProducts.length}}" class="preview-product-grid">
-        <view wx:for="{{visibleProducts}}" wx:key="productId" class="preview-product-card">
-          <view class="preview-product-card__visual">
+      <view wx:if="{{visibleProducts.length}}" class="product-list product-list--browse">
+        <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row {{item.available ? '' : 'is-unavailable'}}">
+          <view class="product-media">
             <image wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
-            <view wx:else class="preview-product-card__placeholder"><text>M</text><text>{{item.productKind === 'bundle' ? 'EXPERIENCE' : 'SELECTION'}}</text></view>
-            <text class="preview-product-card__kind">{{item.productKind === 'bundle' ? '体验组合' : item.categoryName}}</text>
+            <view wx:else class="product-media__placeholder"><text>M</text></view>
           </view>
-          <view class="preview-product-card__body"><text class="preview-product-card__name">{{item.name}}</text><text class="preview-product-card__copy">{{item.description || item.includedText || '当晚正式菜单精选'}}</text><view><text>{{item.priceText}}</text><text class="{{item.available ? '' : 'is-unavailable'}}">{{item.availabilityText}}</text></view></view>
+          <view class="product-main"><text class="product-kind">{{item.productKind === 'bundle' ? '体验组合' : item.categoryName}}</text><text class="product-name">{{item.name}}</text><text class="product-copy">{{item.description || item.includedText || '详情以当晚正式菜单为准'}}</text></view>
+          <view class="product-action"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.availabilityText}}</text><text class="product-availability-copy">{{item.available ? '到店扫码后可下单' : item.availabilityDetail}}</text></view>
         </view>
       </view>
       <state-panel wx:else type="empty" title="没有找到符合条件的商品" message="可清空搜索或切换分类" />
@@ -101,13 +101,13 @@
     <view class="section product-section">
       <view class="section-title"><text>菜单</text><text wx:if="{{benefitCount}}" class="section-link" bindtap="openBenefits">{{benefitCount}}项权益可用</text></view>
       <view wx:if="{{visibleProducts.length}}" class="product-list">
-        <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row">
+        <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row {{item.available ? '' : 'is-unavailable'}}">
           <view class="product-media">
             <image wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
             <view wx:else class="product-media__placeholder"><text>M</text></view>
           </view>
           <view class="product-main"><text class="product-kind">{{item.productKind === 'bundle' ? '体验组合' : item.categoryName}}</text><text class="product-name">{{item.name}}</text><text class="product-copy">{{item.description || item.includedText || '详情以当晚正式菜单为准'}}</text></view>
-          <view class="product-action"><text class="product-price">{{item.priceText}}</text><button aria-label="添加{{item.name}}" data-id="{{item.productId}}" bindtap="addProduct">＋</button></view>
+          <view class="product-action"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.availabilityText}}</text><button wx:if="{{item.available}}" aria-label="添加{{item.name}}" data-id="{{item.productId}}" bindtap="addProduct">＋</button><button wx:else class="product-unavailable" disabled="{{true}}">{{item.availabilityDetail}}</button></view>
         </view>
       </view>
       <state-panel wx:else type="empty" title="没有找到符合条件的商品" message="可清空搜索或切换分类" />

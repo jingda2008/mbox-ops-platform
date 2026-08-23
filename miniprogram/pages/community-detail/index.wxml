@@ -64,7 +64,7 @@
 
     <view class="detail-bottom-space"></view>
     <view class="detail-dock">
-      <view><text>{{registration && registration.resolutionText ? registration.resolutionText : activity.feeText}}</text><text>{{activity.registrationBlocked ? '报名条件暂未开放' : registration && registration.seatHoldText ? ('名额保留至 ' + registration.seatHoldText) : activity.remainingCapacity > 0 ? ('剩余 ' + activity.remainingCapacity + ' 位') : '名额已满，可申请候补'}}</text></view>
+      <view><text>{{registration ? registration.statusText : (activity.registrationBlocked ? '暂不开放' : activity.feeText)}}</text><text>{{registration ? (registration.stateGuide || registration.resolutionText || '请在“我的活动”中查看状态') : (activity.registrationBlocked ? '报名条件暂未开放' : activity.remainingCapacity > 0 ? ('剩余 ' + activity.remainingCapacity + ' 位') : '名额已满，可加入候补')}}</text></view>
       <button wx:if="{{!registration || registration.canReRegister}}" disabled="{{busy}}" loading="{{busy}}" bindtap="register">{{activity.registrationBlocked ? '暂不开放' : registration && registration.canReRegister ? '重新报名' : activity.remainingCapacity <= 0 ? '加入候补' : activity.requiresPaymentOnSubmit ? '提交报名并支付' : activity.feeAmountMinor > 0 ? '提交报名' : '免费报名'}}</button>
       <button wx:elif="{{registration.canStartPayment}}" class="payment-button" loading="{{busy}}" bindtap="startPayment">完成支付</button>
       <button wx:elif="{{registration.canQueryPayment}}" loading="{{busy}}" bindtap="queryPayment">查询付款结果</button>

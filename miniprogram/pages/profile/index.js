@@ -91,6 +91,31 @@ const CONTENT_CARD_TAB_TARGETS = new Set([
   '/pages/community/index', '/pages/profile/index',
 ])
 
+function activeActivityRegistrationRows(items) {
+  return (items || [])
+    .filter((item) => !['cancelled', 'refunded', 'expired'].includes(item.status))
+    .sort((left, right) => String(left.startsAt || '').localeCompare(String(right.startsAt || '')))
+    .slice(0, 5)
+}
+
+async function activityRegistrationViews(items) {
+  const rows = activeActivityRegistrationRows(items)
+  const paymentStates = await Promise.all(rows.map((item) => (
+    getActivityRegistrationPayment(item.publicId).catch(() => null)
+  )))
+  return rows.map((item, index) => {
+    const state = paymentStates[index] || {}
+    return Object.assign({}, item, state, {
+      title: item.activityTitle || '超嗨活动',
+      startsText: dateTime(item.startsAt),
+      statusText: REFUND_STATUS_NAMES[state.refundStatus]
+        || PAYMENT_RESOLUTION_NAMES[state.resolutionState]
+        || REGISTRATION_STATUS_NAMES[item.status]
+        || '状态待确认',
+    })
+  })
+}
+
 function membershipView(item) {
   const progress = item.tierProgress
   const nextTierName = progress && progress.nextTier ? LEVEL_NAMES[progress.nextTier] : ''
@@ -277,24 +302,7 @@ Page({
       }).map((item) => ({
         publicId: item.publicId, title: `${dateTime(item.arrivalAt)} · ${item.guestCount}人`, statusText: ({ pending: '等待确认', confirmed: '预约已确认' })[item.status] || '状态待确认',
       })).slice(0, 3)
-      const registrationRows = (results[3] || [])
-        .filter((item) => !['cancelled', 'refunded', 'expired'].includes(item.status))
-        .sort((left, right) => String(left.startsAt || '').localeCompare(String(right.startsAt || '')))
-        .slice(0, 5)
-      const paymentStates = await Promise.all(registrationRows.map((item) => (
-        getActivityRegistrationPayment(item.publicId).catch(() => null)
-      )))
-      const registrations = registrationRows.map((item, index) => {
-        const state = paymentStates[index] || {}
-        return Object.assign({}, item, state, {
-          title: item.activityTitle || '超嗨活动',
-          startsText: dateTime(item.startsAt),
-          statusText: REFUND_STATUS_NAMES[state.refundStatus]
-            || PAYMENT_RESOLUTION_NAMES[state.resolutionState]
-            || REGISTRATION_STATUS_NAMES[item.status]
-            || '状态待确认',
-        })
-      })
+      const registrations = await activityRegistrationViews(results[3])
       const membership = data.membership ? membershipView(data.membership) : null
       const productRestrictions = (results[6] || []).map((item) => Object.assign({}, item, {
         restrictionText: item.restrictionType === 'allergy_or_cannot_consume'
@@ -816,16 +824,28 @@ Page({
     if (!this.requireMembership()) return
     wx.switchTab({ url: '/pages/reservations/index' })
   },
-  openSuperhighService() {
-    if (this.data.registrations.length) {
-      wx.pageScrollTo({
-        selector: '#registered-activities',
-        duration: 320,
-        fail: () => wx.showToast({ title: '报名活动正在加载，请稍后再试', icon: 'none' }),
+  async openSuperhighService() {
+    if (!this.requireMembership()) return
+    try {
+      const registrations = await activityRegistrationViews(await getActivityRegistrations())
+      this.setData({ registrations, registrationError: '' }, () => {
+        if (!registrations.length) return this.openSuperhighTab()
+        wx.pageScrollTo({
+          selector: '#registered-activities',
+          duration: 320,
+          fail: () => wx.showToast({ title: '已报名活动正在显示，请稍后重试', icon: 'none' }),
+        })
       })
-      return
+    } catch (error) {
+      const message = error.message || '报名记录暂时无法读取'
+      this.setData({ registrationError: message })
+      wx.showModal({
+        title: '暂时无法读取报名记录',
+        content: '为避免重复报名，当前不会跳转到活动列表。请稍后重试。',
+        showCancel: false,
+        confirmText: '知道了',
+      })
     }
-    this.openSuperhighTab()
   },
   openSuperhighTab() { wx.switchTab({ url: '/pages/community/index' }) },
   openPoints() {

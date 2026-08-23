@@ -337,6 +337,10 @@ Page({
       return
     }
     if (activity.registrationBlocked) return this.setData({ error: activity.paymentBlockedText })
+    if (this.data.registration && !this.data.registration.canReRegister) {
+      await this.showRegistrationOutcome(this.data.registration)
+      return
+    }
     const attempts = storageObject(REGISTRATION_ATTEMPTS_KEY)
     const previous = attempts[activity.publicId]
     if (typeof previous === 'string') {
@@ -395,10 +399,16 @@ Page({
       const registration = await this.readPaymentState(registrationRaw)
       this.rememberRegistration(registration, activity.publicId)
       this.setData({ registration })
-      if (registration && registration.canStartPayment) this.setData({ success: `名额已暂留至 ${registration.seatHoldText || '页面所示时限'}；完成付款后才算报名成功。` })
-      else if (result.status === 'waitlisted') this.setData({ success: '已加入候补，按报名顺序自动递补；现在无需付款。' })
-      else if (result.status === 'confirmed') this.setData({ success: '报名成功，名额已为您确认。' })
-      else this.setData({ success: '报名已提交，请在“我的”中查看当前状态。' })
+      await this.refreshActivityAvailability()
+      const success = registration && registration.canStartPayment
+        ? `名额已暂留至 ${registration.seatHoldText || '页面所示时限'}；完成付款后才算报名成功。`
+        : result.status === 'waitlisted'
+          ? '已加入候补，按报名顺序自动递补；现在无需付款。'
+          : result.status === 'confirmed'
+            ? '报名成功，名额已为您确认。'
+            : '报名已提交，请在“我的”中查看当前状态。'
+      this.setData({ success })
+      await this.showRegistrationOutcome(registration)
     } catch (error) {
       const recovered = await this.recoverRegistration(activity.publicId, attempt)
       if (!recovered) {
@@ -421,6 +431,7 @@ Page({
       this.setData({ error: '当前没有可供小程序使用的付款选择，本次不会提交报名。' })
       return null
     }
+    if (options.length === 1 && options[0].choice === 'none' && !item.feeAmountMinor) return options[0]
     if (options.length === 1) return await this.confirmPayment(`本次选择：${options[0].label}。提交后将按页面展示的退款与安全规则处理。`) ? options[0] : null
     return new Promise((resolve) => wx.showActionSheet({
       itemList: options.map((option) => option.label), success: (result) => resolve(options[result.tapIndex] || null), fail: () => resolve(null),
@@ -428,7 +439,31 @@ Page({
   },
 
   confirmPayment(content) {
-    return new Promise((resolve) => wx.showModal({ title: '确认报名规则', content, confirmText: '继续', success: (result) => resolve(result.confirm), fail: () => resolve(false) }))
+    return new Promise((resolve) => wx.showModal({ title: '确认本次报名', content, confirmText: '继续', success: (result) => resolve(result.confirm), fail: () => resolve(false) }))
+  },
+
+  showRegistrationOutcome(registration) {
+    if (!registration) return Promise.resolve()
+    const status = registration.status
+    const content = status === 'confirmed'
+      ? '报名成功，名额已为您确认。活动详情与签到安排可在“我的活动”中查看。'
+      : ['reserved', 'payment_pending'].includes(status)
+        ? `名额已暂留${registration.seatHoldText ? `至 ${registration.seatHoldText}` : ''}。完成付款后才算报名成功。`
+        : status === 'waitlisted'
+          ? '您已进入候补队列。系统会按报名时间自动递补；当前无需付款。'
+          : registration.stateGuide || '报名状态已更新，可在“我的活动”中查看。'
+    const title = status === 'confirmed' ? '报名成功' : status === 'waitlisted' ? '已加入候补' : '报名状态已更新'
+    return new Promise((resolve) => wx.showModal({
+      title,
+      content,
+      confirmText: '我的活动',
+      cancelText: '留在本页',
+      success: (result) => {
+        if (result.confirm) wx.switchTab({ url: '/pages/profile/index' })
+        resolve()
+      },
+      fail: () => resolve(),
+    }))
   },
 
   async readPaymentState(registrationRaw) {
@@ -442,6 +477,15 @@ Page({
     }
   },
 
+  async refreshActivityAvailability() {
+    try {
+      const raw = await getActivity(this.data.id)
+      if (raw) this.setData({ activity: viewActivity(raw) })
+    } catch (_error) {
+      // 报名状态已由报名接口确认；名额显示会在下次进入页面时再以服务端数据刷新。
+    }
+  },
+
   async recoverRegistration(activityPublicId, attempt) {
     try {
       const registrations = await getActivityRegistrations()
@@ -452,6 +496,8 @@ Page({
       this.clearRegistrationAttempt(activityPublicId)
       this.rememberRegistration(registration, activityPublicId)
       this.setData({ registration, success: '已找回刚才的报名记录，没有重复提交。', error: '' })
+      await this.refreshActivityAvailability()
+      await this.showRegistrationOutcome(registration)
       return true
     } catch (_error) { return false }
   },
@@ -565,6 +611,7 @@ Page({
       const next = viewRegistration(Object.assign({}, registration, { status: 'cancelled', registrationStatus: 'cancelled', allowedActions: [] }))
       this.rememberRegistration(next)
       this.setData({ registration: next, success: '报名已经取消，是否重新报名将以当前活动名额和规则重新判断。' })
+      await this.refreshActivityAvailability()
     } catch (error) {
       if (['PAYMENT_RESULT_UNKNOWN', 'ACTIVITY_PAYMENT_RESULT_UNKNOWN', 'ACTIVITY_PAID_CANCELLATION_REQUIRES_REFUND_WORKFLOW'].includes(error.code)) await this.refreshPaymentState(false)
       this.setData({ error: ['PAYMENT_RESULT_UNKNOWN', 'ACTIVITY_PAYMENT_RESULT_UNKNOWN'].includes(error.code)

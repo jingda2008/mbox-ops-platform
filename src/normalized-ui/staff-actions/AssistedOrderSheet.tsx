@@ -477,6 +477,7 @@ function assistedProductToMenuProduct(product: AssistedOrderCatalogProduct): Men
     tags: stringArray(snapshot.tags),
     sortOrder: product.menuSortOrder,
     soldOut: availability.soldOut,
+    soldOutReason: assistedAvailabilityReason(product),
     availableFrom: product.availableFrom,
     availableUntil: product.availableUntil,
     guestVisible: product.guestVisible,
@@ -488,6 +489,13 @@ function assistedProductToMenuProduct(product: AssistedOrderCatalogProduct): Men
     enabled: availability.enabled,
     configVersion: integer(snapshot.configVersion, 1),
   }
+}
+
+function assistedAvailabilityReason(product: AssistedOrderCatalogProduct): string | undefined {
+  if (!product.inventoryConfigurationComplete) return '库存或配方配置未完成'
+  if (!product.inventoryAvailable) return '当前可售库存不足'
+  if (!product.isAvailable) return '当前暂不可点'
+  return undefined
 }
 
 function menuRecommendation(

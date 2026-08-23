@@ -87,6 +87,7 @@ function contentCardView(item) {
     targetPath,
     displayMode: item.displayMode === 'pinned' ? 'pinned' : 'rotation',
     hasTarget: Boolean(targetPath && targetPath !== '/pages/home/index'),
+    canOpen: true,
   }
 }
 
@@ -140,6 +141,7 @@ Page({
     upcomingReservation: null,
     performance: null,
     performancePanel: '',
+    editorialPanel: null,
     visitState: 'prearrival',
     canEnter: false,
     hasTableSession: false,
@@ -298,9 +300,22 @@ Page({
   openEditorial(event) {
     const card = this.data.editorialCards.find((item) => item.code === event.currentTarget.dataset.code)
     if (!card) return
-    if (!card.hasTarget) return
-    if (CONTENT_TAB_TARGETS.has(card.targetPath)) wx.switchTab({ url: card.targetPath })
-    else wx.navigateTo({ url: card.targetPath })
+    if (card.type === 'article' || !card.hasTarget) {
+      this.setData({ editorialPanel: card })
+      return
+    }
+    this.openEditorialTarget(card)
+  },
+
+  closeEditorial() { this.setData({ editorialPanel: null }) },
+
+  openEditorialTarget(candidate) {
+    const card = candidate && candidate.targetPath ? candidate : this.data.editorialPanel
+    const target = card && card.targetPath
+    if (!target || target === '/pages/home/index') return this.closeEditorial()
+    this.closeEditorial()
+    if (CONTENT_TAB_TARGETS.has(target)) wx.switchTab({ url: target })
+    else wx.navigateTo({ url: target })
   },
 
   openMembershipInvite() {

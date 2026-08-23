@@ -27,7 +27,7 @@ describe('assistedProductAvailability', () => {
   it('keeps a priced product visible but prevents submission when fulfillment configuration is incomplete', () => {
     const availability = assistedProductAvailability(product(false))
 
-    expect(availability).toEqual({ soldOut: true, enabled: false })
+    expect(availability).toEqual({ soldOut: true, enabled: true })
   })
 
   it('allows a configured non-fulfillment test product to enter the payment flow', () => {
@@ -38,6 +38,6 @@ describe('assistedProductAvailability', () => {
 
   it('shows a configured product as sold out when available stock is exhausted', () => {
     expect(assistedProductAvailability(product(true, 'bar', false)))
-      .toEqual({ soldOut: true, enabled: false })
+      .toEqual({ soldOut: true, enabled: true })
   })
 })

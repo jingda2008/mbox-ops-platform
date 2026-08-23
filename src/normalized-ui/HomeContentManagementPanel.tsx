@@ -87,7 +87,7 @@ export function HomeContentManagementPanel({api,auth}:{api:NormalizedApiClient;a
   }
 
   return <section className="activity-operations-panel home-content-panel" aria-label="小程序首页精选内容管理">
-    <header><div><strong>小程序首页精选内容</strong><small>品牌故事、推广和活动内容统一以品牌绿横向图文卡展示，不再弹窗打断顾客。</small></div><button type="button" aria-expanded={expanded} onClick={()=>setExpanded(value=>!value)}>{expanded?'收起':'打开内容管理'}</button></header>
+    <header><div><strong>小程序首页精选内容</strong><small>品牌故事、推广和活动内容统一以品牌绿横向图文卡展示；品牌故事点开后在小程序内展示图文内容。</small></div><button type="button" aria-expanded={expanded} onClick={()=>setExpanded(value=>!value)}>{expanded?'收起':'打开内容管理'}</button></header>
     {expanded&&<>
       {notice&&<p className="activity-operations-notice" role="status">{notice}</p>}
       <div className="activity-operations-toolbar"><span>{cards.length} 条内容</span><div>{canManage&&<button type="button" onClick={create}>新建内容草稿</button>}<button type="button" disabled={busy==='load'} onClick={()=>void load()}>刷新</button></div></div>

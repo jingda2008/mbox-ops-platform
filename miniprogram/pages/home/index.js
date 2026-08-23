@@ -187,17 +187,10 @@ Page({
       settled(() => getCustomerBenefits(), []),
     ])
     const app = getApp()
-    const dismissedUntil = Number(wx.getStorageSync(MEMBERSHIP_INVITE_DISMISSED_KEY) || 0)
-    const inviteVisible = Boolean(
-      bootstrap && !bootstrap.membership && bootstrap.membershipTerms
-      && Date.now() >= dismissedUntil
-      && !app.globalData.membershipInvitePresented,
-    )
-    if (inviteVisible) app.globalData.membershipInvitePresented = true
     this.setData({
       membership: bootstrap.membership || null,
       membershipTerms: bootstrap.membershipTerms || null,
-      membershipInviteVisible: inviteVisible,
+      membershipInviteVisible: false,
       benefitCount: (benefits || []).reduce((sum, item) => sum + Number(item.quantityAvailable || 0), 0),
       upcomingActivity: activityFeatureView(bootstrap.activities && bootstrap.activities.length ? bootstrap.activities[0] : null),
       editorialCards: homepageContentCards(bootstrap.content),
@@ -295,6 +288,11 @@ Page({
     if (!card.hasTarget) return
     if (CONTENT_TAB_TARGETS.has(card.targetPath)) wx.switchTab({ url: card.targetPath })
     else wx.navigateTo({ url: card.targetPath })
+  },
+
+  openMembershipInvite() {
+    if (this.data.membership || !this.data.membershipTerms) return
+    this.setData({ membershipInviteVisible: true, membershipInviteAgreed: false })
   },
 
   dismissMembershipInvite() {

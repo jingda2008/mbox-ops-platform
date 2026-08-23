@@ -62,8 +62,8 @@ Page({
         activities,
         membership: bootstrap.membership || null,
         membershipTerms: bootstrap.membershipTerms || null,
-        membershipInviteVisible: !bootstrap.membership,
-        membershipInviteAgreed: bootstrap.membership ? false : this.data.membershipInviteAgreed,
+        membershipInviteVisible: false,
+        membershipInviteAgreed: false,
       })
     } catch (error) { this.setData({ loading: false, error: error.message || '活动或会员服务暂时没有接上' }) }
   },

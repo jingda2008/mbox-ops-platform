@@ -744,6 +744,43 @@
   line-height: 1.55;
   text-align: center;
 }
+.membership-inline-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20rpx;
+  margin-top: 24rpx;
+  padding: 28rpx 30rpx;
+  border: 1rpx solid #d8e3dc;
+  border-radius: 22rpx;
+  background: linear-gradient(135deg, #f7faf8, #eef5f0);
+}
+.membership-inline-card__kicker {
+  display: block;
+  color: #6f8a7b;
+  font-size: 20rpx;
+  letter-spacing: 0.08em;
+}
+.membership-inline-card__title {
+  display: block;
+  margin-top: 8rpx;
+  color: #214635;
+  font-size: 30rpx;
+  font-weight: 700;
+}
+.membership-inline-card__copy {
+  display: block;
+  margin-top: 8rpx;
+  color: #6d6760;
+  font-size: 22rpx;
+  line-height: 1.5;
+}
+.membership-inline-card__action {
+  flex-shrink: 0;
+  color: #315d46;
+  font-size: 28rpx;
+  font-weight: 700;
+}
 @media (max-width: 350px) {
   .hero-content {
     margin-top: 28rpx;

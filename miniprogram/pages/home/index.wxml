@@ -110,6 +110,11 @@
         <view class="state-card__icon">⌁</view>
         <view class="state-card__body"><text class="state-card__eyebrow">当前状态</text><text class="state-card__title">尚未连接桌位</text><text class="state-card__copy">到店后从“点单”页扫描桌码，即可进入实时菜单和桌边服务。</text></view>
       </view>
+
+      <view wx:if="{{!membership && membershipTerms}}" class="membership-inline-card" bindtap="openMembershipInvite" hover-class="button-hover" role="button" aria-role="button">
+        <view><text class="membership-inline-card__kicker">M-BOX MEMBERSHIP</text><text class="membership-inline-card__title">加入会员，享积分与活动</text><text class="membership-inline-card__copy">可先浏览内容，需要时再登录</text></view>
+        <text class="membership-inline-card__action">了解 ›</text>
+      </view>
     </block>
 
     <view wx:if="{{upcomingActivity || editorialCards.length}}" class="section home-editorial-section">

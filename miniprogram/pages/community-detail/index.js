@@ -207,16 +207,6 @@ Page({
       const bootstrap = await getMiniBootstrap()
       const membership = bootstrap.membership || null
       const membershipTerms = bootstrap.membershipTerms || null
-      if (!membership) {
-        this.setData({
-          loading: false,
-          activity: null,
-          membership: null,
-          membershipTerms,
-          membershipInviteVisible: true,
-        })
-        return
-      }
       this.setData({ membership, membershipTerms })
       const raw = await getActivity(this.data.id)
       if (!raw) throw new Error('活动已结束、暂停或不在您的可见范围内')
@@ -252,7 +242,7 @@ Page({
       this.setData({ loading: false, activity: viewActivity(raw), loyaltyBenefits, registration, error: paymentReadError || registrationReadError })
     } catch (error) {
       if (error && error.code === 'ACTIVITY_MEMBERSHIP_REQUIRED') {
-        this.setData({ loading: false, activity: null, membership: null, membershipInviteVisible: true, error: '' })
+        this.setData({ loading: false, activity: null, membership: null, error: error.message || '活动详情暂时无法读取' })
         return
       }
       this.setData({ loading: false, error: error.message || '活动详情暂时无法读取' })
@@ -323,6 +313,10 @@ Page({
   async register() {
     const activity = this.data.activity
     if (!activity || this.data.busy) return
+    if (!this.data.membership) {
+      this.setData({ membershipInviteVisible: true, membershipInviteAgreed: false, error: '' })
+      return
+    }
     if (activity.registrationBlocked) return this.setData({ error: activity.paymentBlockedText })
     const attempts = storageObject(REGISTRATION_ATTEMPTS_KEY)
     const previous = attempts[activity.publicId]

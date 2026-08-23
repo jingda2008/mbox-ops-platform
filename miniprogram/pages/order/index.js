@@ -232,7 +232,6 @@ Page({
       statusText: pendingFromOrders.paymentAccess === 'status_review' ? '付款结果确认中' : '还有一笔待付款',
     } : null)
     const bootstrap = results[4]
-    const dismissedUntil = Number(wx.getStorageSync(MEMBERSHIP_INVITE_DISMISSED_KEY) || 0)
     this.setData({
       loading: false,
       browseOnly: false,
@@ -243,9 +242,7 @@ Page({
       pendingPayment,
       checkoutLocked: Boolean(wx.getStorageSync(CHECKOUT_ATTEMPT_KEY)),
       membershipTerms: bootstrap && bootstrap.membershipTerms ? bootstrap.membershipTerms : null,
-      membershipInviteVisible: Boolean(
-        bootstrap && !bootstrap.membership && bootstrap.membershipTerms && Date.now() >= dismissedUntil,
-      ),
+      membershipInviteVisible: false,
       wechatNotificationAuthorizations: (results[5] && results[5].authorizations) || [],
     })
     this.updateCart(cart, false)

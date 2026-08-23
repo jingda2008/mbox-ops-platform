@@ -241,6 +241,16 @@
       "automaticBlocker": "the migration baseline now anchors versions 102 through 104 by exact filename and SHA256, including the production-applied printer permission checksum, before CI can build a release image",
       "fixCommit": "c90f65528dfc72e40294bff0881abc31e7ccc785",
       "status": "covered"
+    },
+    {
+      "id": "REL-025",
+      "category": "active-release-control-pointer-drift",
+      "rootCause": "Production was serving release 3b587e0 with schema 102, while /opt/mbox/current and /opt/mbox/.env still referenced older release e7efbd6 after an earlier recovery. Trusting the stale control pointer would have selected the wrong rollback identity.",
+      "earliestDetectionStage": "external_preflight_passed",
+      "regressionTest": "scripts/release-system-policy.test.mjs",
+      "automaticBlocker": "before any database write, activation requires the current release manifest identity to match the active container revision and its private ready response, including digest, schema, tier, normal runtime role, write availability and healthy workers",
+      "fixCommit": "c83db933f84c4a41bbfe22539ac0770573a986a2",
+      "status": "covered"
     }
   ]
 }

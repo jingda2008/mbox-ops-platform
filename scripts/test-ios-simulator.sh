@@ -25,6 +25,12 @@ if [[ -z "$device_id" ]]; then
   device_id="$(xcrun simctl create "$DEVICE_NAME" "$DEVICE_TYPE" "$RUNTIME")"
 fi
 
+# The native Xcode project references Capacitor's generated web bundle.  A
+# clean checkout does not contain those generated files, so refresh them
+# before building instead of relying on a developer having run sync manually.
+cd "$ROOT_DIR"
+npm run ios:sync
+
 xcrun simctl boot "$device_id" 2>/dev/null || true
 xcodebuild \
   -project "$PROJECT" \

@@ -49,7 +49,7 @@
     "test": "npm run test:normalized",
     "test:integration": "npm run test:normalized:postgres",
     "test:performance": "npm run acceptance:normalized:load",
-    "test:browser-startup": "node scripts/measure-browser-startup.mjs",
+    "test:browser-startup": "playwright test --config playwright.normalized.config.ts tests/normalized-e2e/normalized-startup-performance.spec.ts",
     "test:commercial": "MBOX_MINIPROGRAM_RELEASE_STAGE=release npm run release:miniprogram:verify && npm run check && npm run test:normalized:postgres && npm run test:e2e:normalized && npm run acceptance:normalized:load",
     "test:voice": "vitest run src/components/voice-command.test.ts src/components/voice-command-agent.test.ts src/components/voice-command-dictionary.test.ts src/components/voice-page-controls.test.ts src/components/voice-speech.test.ts",
     "test:watch": "vitest",

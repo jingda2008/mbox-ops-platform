@@ -9,13 +9,13 @@ stat -c '%u:%a' /tmp >/dev/null
 
 lock_root=$(mktemp -d)
 trap 'rm -rf "${lock_root}"' EXIT
-(release_lock_acquire "${lock_root}" "$(id -u)"; sleep 2) &
+(release_lock_acquire "${lock_root}" "$(id -u)"; touch "${lock_root}/lock-held"; sleep 2) &
 lock_holder=$!
 for _ in $(seq 1 50); do
-  [ -f "${lock_root}/locks/release.lock" ] && break
+  [ -f "${lock_root}/lock-held" ] && break
   sleep 0.02
 done
-test -f "${lock_root}/locks/release.lock"
+test -f "${lock_root}/lock-held"
 if (release_lock_acquire "${lock_root}" "$(id -u)"); then
   echo 'second release acquired the global maintenance lock' >&2
   exit 1

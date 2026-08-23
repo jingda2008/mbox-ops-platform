@@ -299,7 +299,7 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
   const modulePresentation = {
     payments: { title: '收银与退款', icon: CircleDollarSign },
     performance: { title: '演出与点歌', icon: Music2 },
-    inventory: { title: '库存与存酒', icon: PackageSearch },
+    inventory: { title: '库存与酒水上架', icon: PackageSearch },
     operations: { title: '经营数据', icon: BarChart3 },
     experience: { title: '客户体验与活动', icon: CalendarClock },
     devices: { title: '设备与打印', icon: Printer },
@@ -595,7 +595,9 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
   const [pendingReceipt, setPendingReceipt] = useState<PurchaseReceiptCommandView | null>(null)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
-  if (view === null) return <EmptyState text="库存数据暂时为空" />
+  const [catalogOpenRequest, setCatalogOpenRequest] = useState(0)
+  const canManageCatalog = auth.permissions.includes('catalog.product.manage')
+  if (view === null) return <div className="staff-module-body"><EmptyState text="库存数据暂时为空" />{canManageCatalog && <CatalogManagementPanel api={api} auth={auth} placement="inventory" openRequest={catalogOpenRequest} />}</div>
   const lowStock = view.items.filter((item) => item.lowStock)
   const visibleItems = [...lowStock, ...view.items.filter((item) => !item.lowStock)].slice(0, 20)
   const canCount = auth.permissions.includes('inventory.count')
@@ -772,6 +774,7 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
 
   return <div className="staff-module-body">
     <div className={`staff-module-summary${view.lowStockCount > 0 ? ' has-attention' : ''}`}><span><PackageSearch size={18} /></span><div><strong>{view.lowStockCount} 项低库存 · {view.items.length} 项物料</strong><small>{view.receipts.length} 笔进货记录 · {view.storedBottles.length} 笔存酒</small></div></div>
+    <section className="inventory-selling-flow" aria-label="酒水从建档到小程序可售流程"><header><div><strong>酒水从建档到小程序可售</strong><small>只按下面顺序操作；每一步都保留库存、售价与权限校验，不会因为集中操作而绕过实际库存。</small></div><em>5 步</em></header><ol><li><b>01</b><span><strong>建立物料</strong><small>新酒款先建立库存物料。</small></span>{canManage && <button type="button" onClick={() => chooseMode('create')}>开始</button>}</li><li><b>02</b><span><strong>绑定并扫码收货</strong><small>首次绑定条码；每次收货都需实物确认。</small></span>{canReceive && <button type="button" onClick={() => chooseMode('receive')}>扫码入库</button>}</li><li><b>03</b><span><strong>确认实际库存</strong><small>核对待收货单；差异走盘点，不手工放行。</small></span>{draftReceipts.length > 0 && <em>待确认 {draftReceipts.length}</em>}</li><li><b>04</b><span><strong>建立商品与售价</strong><small>默认先保存为停用，避免未配方就上架。</small></span>{canManageCatalog && <button type="button" onClick={() => setCatalogOpenRequest((current) => current + 1)}>继续</button>}</li><li><b>05</b><span><strong>配置配方并小程序上架</strong><small>系统会明确列出仍未满足的小程序可售条件。</small></span>{canManageCatalog && <button type="button" onClick={() => setCatalogOpenRequest((current) => current + 1)}>检查</button>}</li></ol></section>
     {notice !== '' && <p className="staff-module-notice" role="status">{notice}</p>}
     {(canCount || canWaste || canReceive || canManage) && <div className="staff-module-actions" aria-label="库存操作">
       {canManage && <button type="button" className={mode === 'create' ? 'is-active' : ''} aria-pressed={mode === 'create'} onClick={() => chooseMode('create')}>新建酒水物料</button>}
@@ -813,6 +816,7 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
     </form>}
     {visibleItems.length === 0 ? <EmptyState text="当前没有库存物料" /> : <div className="staff-module-list">{visibleItems.map((item) => <article key={item.id} className={item.lowStock ? 'has-attention' : ''}><div><strong>{item.name}</strong><small>{item.sku} · 可用 {item.availableQuantity} {item.baseUnit}</small></div><em>{item.lowStock ? '需补货' : '正常'}</em></article>)}</div>}
     <p className="staff-module-footnote">酒水按配方扣减库存；小吃和水果标记为暂不管理库存时不拦截下单。盘点须复核后生效，扫码进货必须经过建立收货单和实物确认两步。</p>
+    {canManageCatalog && <CatalogManagementPanel api={api} auth={auth} placement="inventory" openRequest={catalogOpenRequest} />}
     {scannerOpen && <InventoryBarcodeScanner onClose={() => setScannerOpen(false)} onDetected={acceptScan} />}
   </div>
 }
@@ -962,7 +966,6 @@ function SettingsModule({ api, auth, policy, onChanged }: { api: NormalizedApiCl
     {notice !== '' && <p className="staff-module-notice" role="status">{notice}</p>}
     <details className="staff-module-disclosure"><summary>支付安全边界</summary><p className="staff-module-footnote">支付渠道密钥和远端连接只能由受控部署配置提供，门店开关不会读取、显示或覆盖它们。每次调整要求原因、版本校验、幂等键和审计记录；关闭只阻止新支付，不得中断在途回调、查单、退款或对账。</p></details>
     {auth.permissions.includes('table.manage') && <VenueManagementPanel api={api} />}
-    {auth.permissions.includes('catalog.product.manage') && <CatalogManagementPanel api={api} auth={auth} />}
     {auth.permissions.includes('staff.access.configure') && <StaffAccessManagementPanel api={api} />}
   </div>
 }

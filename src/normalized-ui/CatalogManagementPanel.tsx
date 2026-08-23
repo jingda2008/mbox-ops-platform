@@ -51,6 +51,9 @@ interface CatalogProduct {
   fulfillmentSlaSeconds: number | null
   costAmountMinor: number | null
   status: ProductStatus
+  isAvailable: boolean
+  inventoryConfigurationComplete: boolean
+  inventoryAvailable: boolean
   standardPrice: null | { amountMinor: string | null; currency: string | null }
   updatedAt: string
 }
@@ -127,7 +130,17 @@ interface RecipeCostPreview {
   }>
 }
 
-export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient; auth: StaffAuthView }) {
+export function CatalogManagementPanel({
+  api,
+  auth,
+  placement = 'settings',
+  openRequest = 0,
+}: {
+  api: NormalizedApiClient
+  auth: StaffAuthView
+  placement?: 'inventory' | 'settings'
+  openRequest?: number
+}) {
   const canManageProduct = auth.permissions.includes('catalog.product.manage')
   const canManagePrice = auth.permissions.includes('catalog.price.manage')
   const canManageInventory = auth.permissions.includes('inventory.manage')
@@ -172,6 +185,10 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
     if (expanded && phase === 'idle') void load()
   }, [expanded, load, phase])
 
+  useEffect(() => {
+    if (openRequest > 0) setExpanded(true)
+  }, [openRequest])
+
   const visibleProducts = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase('zh-CN')
     if (normalized === '') return products
@@ -184,6 +201,11 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
   )), [draft?.id, products])
   const performancePhaseDirty = performancePhaseState === 'ready'
     && !samePerformancePhases(performancePhaseCodes, savedPerformancePhaseCodes)
+  const isInventoryFlow = placement === 'inventory'
+  const currentProduct = draft?.id === null || draft === null
+    ? null
+    : products.find((product) => product.id === draft.id) ?? null
+  const currentSaleBlockers = currentProduct === null ? [] : sellingBlockers(currentProduct)
 
   if (!canManageProduct) return null
 
@@ -386,6 +408,7 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
         { idempotencyKey: operationKey('inventory-recipe') },
       )
       await loadRecipeEditor(draft.id)
+      await load()
       setNotice({ kind: 'success', text: `${draft.name} 的库存配方已保存并读回核对` })
     } catch (error) {
       setNotice({ kind: 'error', text: error instanceof Error ? error.message : '商品库存配方未保存' })
@@ -487,6 +510,16 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
       setNotice({ kind: 'error', text: '请核对推荐、供应时段、渠道、限购和出品时限；在售商品必须填写成本' })
       return
     }
+    if (draft.productKind === 'single' && draft.inventoryControlMode === 'tracked' && draft.status === 'active') {
+      if (draft.id === null) {
+        setNotice({ kind: 'error', text: '新建跟踪库存商品请先保存为停用；完成配方和入库后，再切换为在售。' })
+        return
+      }
+      if (recipeState === 'ready' && recipeVersion === null) {
+        setNotice({ kind: 'error', text: '请先保存库存扣减配方；没有配方的跟踪库存酒水不能切换为在售。' })
+        return
+      }
+    }
     if (draft.productKind === 'bundle' && Object.keys(draft.componentQuantities).length === 0) {
       setNotice({ kind: 'error', text: '组合商品至少选择一个组成单品' })
       return
@@ -573,9 +606,9 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
     }
   }
 
-  return <section className={`catalog-management ${expanded ? 'is-expanded' : ''}`} aria-label="商品与推荐配置">
+  return <section className={`catalog-management ${isInventoryFlow ? 'is-inventory-flow ' : ''}${expanded ? 'is-expanded' : ''}`} aria-label={isInventoryFlow ? '酒水上架流程' : '商品与推荐配置'}>
     <button type="button" className="catalog-management-trigger" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
-      <span><PackageOpen size={19} /><strong>商品、售价与推荐</strong><small>上架、搜索、人数范围、优先级、成本和组合</small></span>
+      <span><PackageOpen size={19} /><strong>{isInventoryFlow ? '酒水上架流程' : '商品、售价与推荐'}</strong><small>{isInventoryFlow ? '第 4–5 步：商品、售价、配方与可售校验' : '上架、搜索、人数范围、优先级、成本和组合'}</small></span>
       <span>{products.length > 0 ? `${products.length}项` : '经营配置'} <ChevronDown size={17} /></span>
     </button>
     {expanded && <div className="catalog-management-body">
@@ -583,7 +616,8 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
       {notice !== null && <p className={`catalog-management-notice is-${notice.kind}`} role="status">{notice.kind === 'success' && <Check size={17} />}{notice.text}</p>}
       {phase === 'error' && <button type="button" onClick={() => void load()}>重新读取商品</button>}
       {phase === 'ready' && <>
-        <div className="catalog-management-tools"><input aria-label="搜索配置商品" placeholder="搜索商品名、编号或分类" value={query} onChange={(event) => setQuery(event.target.value)} /><button type="button" onClick={startCreate}><CirclePlus size={17} /> 新增商品</button></div>
+        {isInventoryFlow && <section className="catalog-selling-flow" aria-label="酒水上架步骤说明"><header><strong>第 4–5 步：建立商品并确认可售</strong><small>先建立停用商品和售价，再保存库存配方；已收货库存充足后，切换为“在售”。</small></header><ol><li><b>4</b><span><strong>商品与售价</strong><small>商品名称、售价、顾客可见与下单渠道。</small></span></li><li><b>5</b><span><strong>配方与开售</strong><small>每份用量、损耗、库存状态和实际可售结果。</small></span></li></ol><p>“在售”仅是商品状态；顾客可点还要通过配方和实时库存校验，系统不会因方便操作而跳过。</p></section>}
+        <div className="catalog-management-tools"><input aria-label="搜索配置商品" placeholder="搜索商品名、编号或分类" value={query} onChange={(event) => setQuery(event.target.value)} /><button type="button" onClick={startCreate}><CirclePlus size={17} /> 新增商品</button><button type="button" onClick={() => void load()}>刷新可售状态</button></div>
         {draft !== null && <form className="catalog-management-form" onSubmit={(event) => void save(event)}>
           <header><strong>{draft.id === null ? '新增商品' : `编辑 ${draft.name}`}</strong><button type="button" onClick={closeDraft}>取消</button></header>
           <div className="catalog-form-grid">
@@ -602,6 +636,7 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
             <label>推荐优先级<input inputMode="numeric" value={draft.recommendationPriority} onChange={(event) => updateDraft('recommendationPriority', event.target.value)} /></label>
             <label className="catalog-check"><input type="checkbox" checked={draft.guestVisible} onChange={(event) => updateDraft('guestVisible', event.target.checked)} />顾客菜单可见</label>
             <label className="catalog-check"><input type="checkbox" checked={draft.recommendationEnabled} onChange={(event) => updateDraft('recommendationEnabled', event.target.checked)} />参与商品推荐</label>
+            {isInventoryFlow && <section className={`catalog-sale-readiness catalog-wide${currentSaleBlockers.length === 0 && currentProduct !== null ? ' is-ready' : ''}`} aria-label="酒水小程序可售检查"><header><div><strong>第 5 步：小程序可售检查</strong><small>{draft.id === null ? '新酒水先保存为停用；保存后可配置配方并读取真实可售状态。' : currentSaleBlockers.length === 0 ? '该商品已通过当前的售价、配方、库存和小程序菜单校验。' : '请按以下提示完成；保存商品状态不等于顾客已经可以下单。'}</small></div><em>{draft.id === null ? '待建档' : currentSaleBlockers.length === 0 ? '小程序可售' : '待完成'}</em></header>{currentProduct !== null && currentSaleBlockers.length > 0 && <ul>{currentSaleBlockers.map((item) => <li key={item}>{item}</li>)}</ul>}</section>}
             {canManagePrice && <label className="catalog-wide">调价原因<input maxLength={500} value={draft.priceReason} onChange={(event) => updateDraft('priceReason', event.target.value)} /></label>}
             <button type="button" className="catalog-advanced-toggle catalog-wide" aria-expanded={showAdvanced} onClick={() => setShowAdvanced((value) => !value)}>{showAdvanced ? '收起高级字段' : '显示高级字段（供应、标签与渠道）'}<ChevronDown size={17} /></button>
             {showAdvanced && <>
@@ -654,7 +689,7 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
                       {component !== undefined && <div><label>每份用量<input inputMode="decimal" value={component.quantity} onChange={(event) => updateRecipeComponent(item.id, 'quantity', event.target.value)} /></label><label>预计损耗<input inputMode="decimal" value={component.expectedWasteQuantity} onChange={(event) => updateRecipeComponent(item.id, 'expectedWasteQuantity', event.target.value)} /></label></div>}
                     </article>
                   })}</div>}
-                <button type="button" disabled={recipeBusy || inventoryItems.length === 0} onClick={() => void saveRecipe()}>{recipeBusy ? '保存中' : '单独保存库存配方'}</button>
+                <button type="button" disabled={recipeBusy || inventoryItems.length === 0} onClick={() => void saveRecipe()}>{recipeBusy ? '保存中' : '保存配方并刷新可售检查'}</button>
                 {canViewInventoryCost && recipeCost !== null && <section className="catalog-recipe-cost" aria-label="配方成本核算">
                   <header><div><strong>配方成本核算</strong><small>只读取已收货的采购成本。保存配方不会自动改售价或成本，必须由有成本权限的员工明确应用。</small></div><em>{recipeCost.costAmountMinor === null ? '待补成本' : `¥${minorToYuan(recipeCost.costAmountMinor)}/份`}</em></header>
                   {recipeCost.costAmountMinor === null
@@ -669,7 +704,10 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
           {draft.productKind === 'bundle' && <section className="catalog-components"><strong>组合内容</strong><div>{singleProducts.map((product) => <label key={product.id} className={product.id in draft.componentQuantities ? 'is-selected' : ''}><input type="checkbox" checked={product.id in draft.componentQuantities} onChange={() => toggleComponent(product.id)} /><span>{product.name}</span>{product.id in draft.componentQuantities && <input aria-label={`${product.name}数量`} inputMode="numeric" value={draft.componentQuantities[product.id]} onChange={(event) => updateDraft('componentQuantities', { ...draft.componentQuantities, [product.id]: event.target.value })} />}</label>)}</div></section>}
           <button type="submit" className="catalog-save" disabled={busy || performancePhaseDirty}>{busy ? <LoaderCircle className="is-spinning" size={18} /> : <Check size={18} />}{performancePhaseDirty ? '请先处理阶段配置' : '保存并读回验证'}</button>
         </form>}
-        <div className="catalog-management-list">{visibleProducts.map((product) => <article key={product.id}><div><strong>{product.name}</strong><span>{product.code} · {product.categoryCode} · {product.productKind === 'bundle' ? '组合' : stationLabel(product.fulfillmentStation)}</span><small>{statusLabel(product.status)} · {product.inventoryControlMode === 'tracked' ? '跟踪库存' : '暂不管理数量'} · {product.guestVisible ? '顾客可见' : '顾客隐藏'} · {product.standardPrice?.amountMinor == null ? '未定价' : `¥${minorToYuan(product.standardPrice.amountMinor)}`}</small></div><button type="button" onClick={() => startEdit(product)}><Pencil size={16} /> 编辑</button></article>)}</div>
+        <div className="catalog-management-list">{visibleProducts.map((product) => {
+          const blockers = sellingBlockers(product)
+          return <article key={product.id}><div><strong>{product.name}</strong><span>{product.code} · {product.categoryCode} · {product.productKind === 'bundle' ? '组合' : stationLabel(product.fulfillmentStation)}</span><small>{statusLabel(product.status)} · {product.inventoryControlMode === 'tracked' ? '跟踪库存' : '暂不管理数量'} · {product.guestVisible ? '顾客可见' : '顾客隐藏'} · {product.standardPrice?.amountMinor == null ? '未定价' : `¥${minorToYuan(product.standardPrice.amountMinor)}`}</small>{isInventoryFlow && <small className={blockers.length === 0 ? 'catalog-sale-state is-ready' : 'catalog-sale-state'}>{blockers.length === 0 ? '小程序可售' : `待完成：${blockers[0]}`}</small>}</div><button type="button" onClick={() => startEdit(product)}><Pencil size={16} /> 编辑</button></article>
+        })}</div>
       </>}
     </div>}
   </section>
@@ -678,7 +716,7 @@ export function CatalogManagementPanel({ api, auth }: { api: NormalizedApiClient
 function emptyDraft(): ProductDraft {
   return {
     id: null, code: '', name: '', categoryCode: 'drinks', fulfillmentStation: 'bar', productKind: 'single', inventoryControlMode: 'tracked',
-    status: 'active', guestVisible: true, searchText: '', recommendationEnabled: false,
+    status: 'inactive', guestVisible: true, searchText: '', recommendationEnabled: false,
     recommendationMinGuests: '1', recommendationMaxGuests: '100', recommendationPriority: '100',
     recommendationSceneTags: '', recommendationIntentTags: '', recommendationTasteTags: '',
     recommendationDwellTags: '', recommendationSingleWaveEligible: true,
@@ -718,6 +756,8 @@ function readProducts(value: unknown): CatalogProduct[] {
     && typeof item.categoryCode === 'string' && (item.inventoryControlMode === 'tracked' || item.inventoryControlMode === 'not_managed') && isRecord(item.productSnapshot)
     && typeof item.guestVisible === 'boolean' && typeof item.searchText === 'string'
     && typeof item.recommendationEnabled === 'boolean'
+    && typeof item.isAvailable === 'boolean' && typeof item.inventoryConfigurationComplete === 'boolean'
+    && typeof item.inventoryAvailable === 'boolean'
     && Array.isArray(item.allowedChannels)
     && Array.isArray(item.bundleComponents) && typeof item.updatedAt === 'string'
     ? [item as unknown as CatalogProduct] : [])
@@ -731,6 +771,18 @@ function readInventoryItems(value: unknown): InventoryItemOption[] {
       ? [{ id: item.id, sku: item.sku, name: item.name, baseUnit: item.baseUnit }]
       : []
   ))
+}
+
+function sellingBlockers(product: CatalogProduct): string[] {
+  const blockers: string[] = []
+  if (product.status !== 'active') blockers.push('销售状态尚未设为“在售”')
+  if (product.standardPrice?.amountMinor === null || product.standardPrice === null) blockers.push('尚未设置标准售价')
+  if (!product.guestVisible) blockers.push('尚未设为顾客菜单可见')
+  if (!product.allowedChannels.includes('guest_qr')) blockers.push('尚未开放顾客扫码点单渠道')
+  if (product.inventoryControlMode === 'tracked' && !product.inventoryConfigurationComplete) blockers.push('库存扣减配方未完成')
+  if (product.inventoryControlMode === 'tracked' && !product.inventoryAvailable) blockers.push('当前可售库存不足，请完成入库或盘点')
+  if (!product.isAvailable && blockers.length === 0) blockers.push('当前供应时段或组合内容未满足')
+  return blockers
 }
 
 function readActiveRecipe(value: unknown): {

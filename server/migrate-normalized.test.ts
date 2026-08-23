@@ -43,6 +43,23 @@ describe('normalized migration baseline', () => {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
       expect(unwrapNormalizedMigrationTransaction(migration.sql).trim().length).toBeGreaterThan(0)
     }
+    expect(migrations.slice(-3).map(({ version, filename, checksum }) => ({ version, filename, checksum }))).toEqual([
+      {
+        version: '102',
+        filename: '102_printer_management_permission.sql',
+        checksum: '77e93d7e32dc7da3c9d71ec7893372d07842a3cdb0321351714796ce60e41e16',
+      },
+      {
+        version: '103',
+        filename: '103_home_content_display_mode.sql',
+        checksum: '9ff3f562b7d67b5f076b95866cce16b814ca43adc02ac333aca0c9af8236f34c',
+      },
+      {
+        version: '104',
+        filename: '104_membership_terms_community_source.sql',
+        checksum: '8804baccfbb3bf7b1371ace9e786214654c37203530e7e51598ea4bd2ab18680',
+      },
+    ])
   })
 
   it('keeps recommendation publication separate from customer rollout', async () => {
@@ -165,23 +182,23 @@ describe('normalized migration baseline', () => {
   })
 
   it('gives homepage content an explicit pinned or rotating display mode', async () => {
-    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '102')
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '103')
     expect(migration?.sql).toMatch(/ADD COLUMN display_mode text NOT NULL DEFAULT 'rotation'/)
     expect(migration?.sql).toMatch(/display_mode IN \('pinned', 'rotation'\)/)
-    expect(migration?.sql).toMatch(/schema_version='102'/)
-  })
-
-  it('allows explicit community membership consent as a separate mini-program source', async () => {
-    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '103')
-    expect(migration?.sql).toMatch(/acknowledgement_source IN \('mini_menu','mini_profile','mini_community'\)/)
     expect(migration?.sql).toMatch(/schema_version='103'/)
   })
 
-  it('keeps printer management permission in the next immutable migration version', async () => {
+  it('allows explicit community membership consent as a separate mini-program source', async () => {
     const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '104')
+    expect(migration?.sql).toMatch(/acknowledgement_source IN \('mini_menu','mini_profile','mini_community'\)/)
+    expect(migration?.sql).toMatch(/schema_version='104'/)
+  })
+
+  it('keeps the production-applied printer permission migration immutable', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '102')
     expect(migration?.sql).toMatch(/'printer\.manage'/)
     expect(migration?.sql).toMatch(/不授权摄像头、耳机、钱箱或其他硬件控制/)
-    expect(migration?.sql).toMatch(/schema_version='104'/)
+    expect(migration?.sql).toMatch(/schema_version='102'/)
   })
 
   it('keeps refund roles and amount limits configurable while requiring two employees', async () => {
@@ -265,9 +282,9 @@ describe('normalized migration baseline', () => {
   })
 
   it('records the Superhigh membership invitation as its own mini-program entry', async () => {
-    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '103')
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '104')
     expect(migration?.sql).toMatch(/'mini_community'/)
-    expect(migration?.sql).toMatch(/schema_version='103'/)
+    expect(migration?.sql).toMatch(/schema_version='104'/)
   })
 
   it('tracks every loyalty refund application as a strong append-only idempotency fact', async () => {

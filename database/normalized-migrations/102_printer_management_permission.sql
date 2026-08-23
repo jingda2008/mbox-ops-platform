@@ -10,7 +10,7 @@ ON CONFLICT (tenant_id,store_id,code) DO UPDATE SET
   name=EXCLUDED.name,category=EXCLUDED.category,description=EXCLUDED.description,status='active';
 
 UPDATE mbox.normalized_schema_metadata
-SET schema_version='104',updated_at=clock_timestamp()
+SET schema_version='102',updated_at=clock_timestamp()
 WHERE singleton=true AND schema_flavor='normalized-core-v1';
 
 COMMIT;

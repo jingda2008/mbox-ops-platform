@@ -9,7 +9,7 @@ COMMENT ON COLUMN mbox.membership_terms_acceptances.acknowledgement_source IS
   'Customer-visible mini-program entry where the current published membership terms were explicitly accepted.';
 
 UPDATE mbox.normalized_schema_metadata
-SET schema_version='103',updated_at=clock_timestamp()
+SET schema_version='104',updated_at=clock_timestamp()
 WHERE singleton=true AND schema_flavor='normalized-core-v1';
 
 COMMIT;

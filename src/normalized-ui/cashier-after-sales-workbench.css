@@ -20,11 +20,15 @@
 .cashier-workbench-search input { width: 100%; min-width: 0; height: 44px; border: 0; outline: 0; background: transparent; color: #171b17; font-size: 14px; }
 .cashier-workbench-search button { min-width: 62px; padding: 0 13px; border: 1px solid #8d7a3f; border-radius: 5px; background: #f2df9d; color: #3b321b; box-shadow: 0 2px 0 #9f8741; font-weight: 800; }
 .cashier-workbench-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); overflow: hidden; border: 1px solid #d1d5ce; border-radius: 7px; background: #fbfaf6; }
-.cashier-workbench-summary span { min-width: 0; display: grid; gap: 2px; place-items: center; padding: 8px 3px; border-right: 1px solid #dde0da; text-align: center; }
-.cashier-workbench-summary span:last-child { border-right: 0; }
+.cashier-workbench-summary span, .cashier-workbench-summary .cashier-summary-filter { min-width: 0; display: grid; gap: 2px; place-items: center; padding: 8px 3px; border-right: 1px solid #dde0da; text-align: center; }
+.cashier-workbench-summary span:last-child, .cashier-workbench-summary .cashier-summary-filter:last-child { border-right: 0; }
 .cashier-workbench-summary b { font-size: 16px; }
 .cashier-workbench-summary small { color: #697069; font-size: 9px; }
 .cashier-workbench-summary .has-attention { background: #fff4d4; color: #765b0d; }
+.cashier-summary-filter { border: 0; background: transparent; color: inherit; cursor: pointer; touch-action: manipulation; }
+.cashier-summary-filter.is-active { outline: 2px solid #217a51; outline-offset: -2px; background: #edf7f1; }
+.cashier-summary-filter-note { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0; }
+.cashier-workflow-guidance { margin: 0; padding: 9px 10px; border: 1px solid #c9d9cf; border-left: 4px solid #217a51; border-radius: 6px; background: #f1f8f4; color: #1f5a3f; font-size: 11px; font-weight: 750; line-height: 1.5; }
 .cashier-order-list { display: grid; gap: 8px; }
 .cashier-order { overflow: hidden; border: 1px solid #cbd0c8; border-radius: 7px; background: #fbfaf6; box-shadow: 0 2px 0 #d3d7d0; }
 .cashier-order-toggle { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto 22px; align-items: center; gap: 9px; padding: 10px 11px; border: 0; background: transparent; color: #171b17; text-align: left; }

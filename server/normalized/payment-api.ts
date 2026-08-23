@@ -51,6 +51,12 @@ import {
   OnlineRefundStatusUnknownError,
 } from './online-payment-service.js'
 import {
+  reconcileStalePendingOnlinePayment,
+  reconcileStalePendingOnlinePaymentsForStore,
+  reconciliationQueryBinding,
+  shouldReconcilePaymentContext,
+} from './pending-online-payment-reconciliation.js'
+import {
   ProviderPaymentInProgressError,
   ProviderPaymentMethodConflictError,
   ProviderPaymentStatusAccessError,
@@ -194,7 +200,8 @@ export interface PaymentApiOptions {
   orderSettlementException: OrderSettlementExceptionPort
   onlinePayments?: Pick<
     OnlinePaymentService,
-    'create' | 'query' | 'assertAvailable' | 'resolveActivePayment' | 'requestRefund' | 'queryRefund'
+    'create' | 'query' | 'querySystem' | 'assertAvailable' | 'resolveActivePayment'
+    | 'requestRefund' | 'queryRefund' | 'listStalePendingPostarPaymentIds'
   > & Partial<Pick<OnlinePaymentService, 'readInitiatedPaymentStatus'>>
   resolveOnlinePaymentAvailable?: (scope: Readonly<StoreScope>) => Promise<boolean>
   resolveActorContext(request: FastifyRequest): Promise<PaymentApiActorContext> | PaymentApiActorContext
@@ -419,10 +426,35 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       }
       const context = await resolveActorContext(options, request)
       const paymentId = readUuid(request.params.paymentId, 'paymentId')
+      const principal = paymentInitiationPrincipal(context)
+      if (options.onlinePayments.query !== undefined) {
+        try {
+          const current = await options.onlinePayments.readInitiatedPaymentStatus({
+            scope: context.scope,
+            paymentId,
+            principal,
+          })
+          if (shouldReconcilePaymentContext(current)) {
+            await reconcileStalePendingOnlinePayment(
+              { onlinePayments: options.onlinePayments, commands: options.commands },
+              {
+                scope: context.scope,
+                businessDate: context.businessDate,
+                actor: { type: 'integration', ref: 'postar-active-query' },
+              },
+              paymentId,
+              reconciliationQueryBinding('payment-status-reconcile'),
+              principal,
+            )
+          }
+        } catch {
+          // Status reads must stay available even when provider reconciliation fails transiently.
+        }
+      }
       const payment = await options.onlinePayments.readInitiatedPaymentStatus({
         scope: context.scope,
         paymentId,
-        principal: paymentInitiationPrincipal(context),
+        principal,
       })
       reply.header('cache-control', 'private, no-store')
       reply.header('pragma', 'no-cache')
@@ -716,6 +748,21 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       'refund.execute',
     ])
     const query = readObject(request.query, '查询参数')
+    if (options.onlinePayments?.querySystem !== undefined) {
+      try {
+        await reconcileStalePendingOnlinePaymentsForStore(
+          { onlinePayments: options.onlinePayments, commands: options.commands },
+          {
+            scope: context.scope,
+            businessDate: context.businessDate,
+            actor: { type: 'integration', ref: 'cashier-workbench-reconcile' },
+          },
+          reconciliationQueryBinding('workbench-reconcile'),
+        )
+      } catch {
+        // Workbench reads must not fail when provider reconciliation is temporarily unavailable.
+      }
+    }
     const result = await options.cashierWorkbenchQuery.get({
       scope: context.scope,
       employeeId: context.employeeId,

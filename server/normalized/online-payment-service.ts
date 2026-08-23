@@ -240,6 +240,68 @@ export class OnlinePaymentService {
     return { context, observation, verifiedObservationId }
   }
 
+  async querySystem(input: Readonly<{
+    scope: Readonly<StoreScope>
+    paymentId: string
+    queryBindingId: string
+  }>): Promise<OnlinePaymentQueryResult> {
+    if (this.adapter === null || this.secrets === null || this.config === null) {
+      throw new OnlinePaymentUnavailableError()
+    }
+    const context = await this.transactions.run(input.scope, async (transaction) => (
+      new PaymentProviderActionRepository(transaction, this.secret)
+        .resolvePaymentContextForSystem(input.paymentId, { lock: false })
+    ), { readOnly: true })
+    if (context.provider !== 'postar') {
+      throw new OnlinePaymentUnavailableError('当前付款不支持星驿主动查单')
+    }
+    if (!['created', 'pending'].includes(context.status)) {
+      throw new OnlinePaymentUnavailableError('这笔付款已有明确结果，无需重复查单')
+    }
+    const observation = await this.adapter.queryPayment({
+      paymentIntentId: context.publicId,
+      merchantId: this.config.merchantId,
+      amount: context.amountMinor,
+      currency: context.currency,
+      providerTransactionId: context.providerTransactionId,
+      orderDate: postarOrderDate(context.createdAt),
+    }, { secrets: this.secrets })
+    if (observation.amount !== context.amountMinor || observation.currency !== context.currency) {
+      throw new OnlinePaymentUnknownError()
+    }
+    const evidence = paymentQueryEvidence(observation)
+    const verifiedObservationId = await this.providerObservations.recordPayment({
+      scope: input.scope,
+      provider: 'postar',
+      verificationKind: 'active_query_binding',
+      providerEventId: providerObservationEventId([
+        'payment-query', input.queryBindingId, context.publicId, observation.providerTransactionId,
+        observation.status, observation.amount, observation.currency, observation.occurredAt,
+      ]),
+      integrationRef: 'postar-active-query',
+      paymentPublicId: context.publicId,
+      providerTransactionId: observation.providerTransactionId,
+      reportedAmountMinor: observation.amount,
+      reportedCurrency: observation.currency,
+      status: observation.status,
+      settlementChannel: observation.settlementChannel,
+      occurredAt: observation.occurredAt,
+      evidence,
+    })
+    return { context, observation, verifiedObservationId }
+  }
+
+  listStalePendingPostarPaymentIds(
+    scope: Readonly<StoreScope>,
+    minAgeSeconds: number,
+    limit: number,
+  ): Promise<string[]> {
+    return this.transactions.run(scope, async (transaction) => (
+      new PaymentProviderActionRepository(transaction, this.secret)
+        .listStalePendingPostarPaymentIds(minAgeSeconds, limit)
+    ), { readOnly: true })
+  }
+
   async requestRefund(
     scope: Readonly<StoreScope>,
     refundId: string,

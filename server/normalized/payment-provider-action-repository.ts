@@ -158,6 +158,66 @@ export class PaymentProviderActionRepository {
     return mapContext(row)
   }
 
+  async resolvePaymentContextForSystem(
+    paymentId: string,
+    options: Readonly<{ lock?: boolean }> = {},
+  ): Promise<ProviderPaymentContext> {
+    const lockClause = options.lock === false ? '' : 'FOR SHARE OF payment'
+    const result = await this.transaction.query<ContextRow>(`
+      SELECT payment.id, payment.payable_kind, payment.order_id,
+        ordering.public_id AS order_public_id,
+        payment.activity_registration_id,
+        activity_registration.public_id AS activity_registration_public_id,
+        payment.public_id, payment.provider, payment.provider_transaction_id,
+        payment.method, payment.amount_minor,
+        payment.currency, payment.status, payment.created_at::text,
+        activity_registration.customer_id,
+        ordering.table_session_id, venue_table.code AS table_code
+      FROM mbox.payments payment
+      LEFT JOIN mbox.orders ordering
+        ON ordering.tenant_id = payment.tenant_id
+       AND ordering.store_id = payment.store_id
+       AND ordering.id = payment.order_id
+      LEFT JOIN mbox.table_sessions table_session
+        ON table_session.tenant_id = ordering.tenant_id
+       AND table_session.store_id = ordering.store_id
+       AND table_session.id = ordering.table_session_id
+      LEFT JOIN mbox.tables venue_table
+        ON venue_table.tenant_id = table_session.tenant_id
+       AND venue_table.store_id = table_session.store_id
+       AND venue_table.id = table_session.table_id
+      LEFT JOIN mbox.community_activity_registrations activity_registration
+        ON activity_registration.tenant_id = payment.tenant_id
+       AND activity_registration.store_id = payment.store_id
+       AND activity_registration.id = payment.activity_registration_id
+      WHERE payment.tenant_id = $1::uuid
+        AND payment.store_id = $2::uuid
+        AND payment.id = $3::uuid
+      ${lockClause}
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
+    const row = result.rows[0]
+    if (row === undefined) throw new Error('支付记录不存在')
+    return mapContext(row)
+  }
+
+  async listStalePendingPostarPaymentIds(
+    minAgeSeconds: number,
+    limit: number,
+  ): Promise<string[]> {
+    const result = await this.transaction.query<{ id: string }>(`
+      SELECT payment.id
+      FROM mbox.payments payment
+      WHERE payment.tenant_id = $1::uuid
+        AND payment.store_id = $2::uuid
+        AND payment.provider = 'postar'
+        AND payment.status IN ('created', 'pending')
+        AND payment.created_at <= clock_timestamp() - make_interval(secs => $3::integer)
+      ORDER BY payment.created_at ASC, payment.id ASC
+      LIMIT $4::integer
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, minAgeSeconds, limit])
+    return result.rows.map((row) => row.id)
+  }
+
   async resolveInitiatedPaymentStatus(
     paymentId: string,
     principal: Readonly<PaymentPrincipal>,

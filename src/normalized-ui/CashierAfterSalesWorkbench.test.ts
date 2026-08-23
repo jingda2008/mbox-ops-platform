@@ -81,8 +81,35 @@ describe('CashierAfterSalesWorkbenchView', () => {
     }]
     const html = render(view, ['reconciliation.view', 'kds.exception.manage'])
 
-    expect(html).toContain('不能从这里终止任务')
+    expect(html).toContain('请先在上方「收款与退款」完成退款')
     expect(html).not.toContain('核对退款后处理出品')
+  })
+
+  it('tells cashier-only staff to have a manager request the refund first', () => {
+    const view = workbench([payment('postar', [])])
+    view.orders[0]!.paymentStatus = 'paid'
+    view.actions.canRequestRefund = false
+    view.actions.canApproveRefund = true
+    view.actions.canExecuteRefund = true
+    const html = render(view, ['reconciliation.view', 'refund.approve', 'refund.execute'])
+
+    expect(html).toContain('本岗位不能直接发起退款')
+    expect(html).toContain('请店长或服务员登录后在本页发起')
+    expect(html).not.toContain('选择原商品发起退款')
+    expect(html).not.toContain('不能从这里终止任务')
+  })
+
+  it('guides request-capable staff to start refunds before KDS cancellation', () => {
+    const view = workbench([payment('postar', [])])
+    view.orders[0]!.paymentStatus = 'paid'
+    view.orders[0]!.kdsTasks = [{
+      id: 'kds-1', orderItemId: 'item-1', stationCode: 'bar', status: 'pending', quantity: 1,
+      succeededRefundAmountMinor: 0,
+    }]
+    const html = render(view, ['reconciliation.view', 'refund.request'])
+
+    expect(html).toContain('请先在下方「收款与退款」点击「选择原商品发起退款」')
+    expect(html).not.toContain('不能从这里终止任务')
   })
 
   it('offers a no-repeat provider query for an older payment still awaiting a channel result', () => {

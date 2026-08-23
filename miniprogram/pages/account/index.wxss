@@ -15,7 +15,7 @@
 .payment-line__hint { flex: 1; color: #746d64; font-size: 23rpx; line-height: 1.5; }
 .payment-line__button { width: 184rpx; min-height: 72rpx; margin: 8rpx 0; padding: 0 18rpx; border: 1rpx solid #315d46; border-radius: 999rpx; background: #315d46; color: #fff; font-size: 24rpx; font-weight: 700; line-height: 70rpx; box-shadow: 0 8rpx 20rpx rgba(49, 93, 70, .16); }
 .payment-line__button::after { border: 0; }
-@media (max-width: 350px) {
+@media (max-width: 390px) {
   .order-card__head { display: block; }
   .order-card__amount { margin-top: 14rpx; text-align: left; }
   .payment-line { align-items: flex-start; flex-direction: column; padding: 14rpx 0; }

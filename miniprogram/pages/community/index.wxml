@@ -21,7 +21,7 @@
       <text>{{activities.length}}</text>
     </view>
     <view wx:if="{{activities.length}}" class="activity-list">
-      <button wx:for="{{activities}}" wx:key="publicId" class="activity-card" data-id="{{item.publicId}}" bindtap="openDetail" hover-class="activity-card--hover">
+      <view wx:for="{{activities}}" wx:key="publicId" class="activity-card" data-id="{{item.publicId}}" bindtap="openDetail" hover-class="activity-card--hover" role="button" aria-role="button">
         <view class="activity-art">
           <image wx:if="{{item.coverUrl}}" src="{{item.coverUrl}}" mode="aspectFill" />
           <view wx:else class="activity-placeholder">
@@ -45,7 +45,7 @@
             <text>详情 →</text>
           </view>
         </view>
-      </button>
+      </view>
     </view>
     <state-panel wx:else type="empty" title="下一场正在准备" message="通过发布审批的活动会第一时间出现在这里" />
   </block>

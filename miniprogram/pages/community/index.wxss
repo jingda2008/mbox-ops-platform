@@ -109,13 +109,14 @@
 
 .activity-list { display: grid; gap: 22rpx; }
 .activity-card {
-  display: grid;
+  display: flex;
   overflow: hidden;
   width: 100%;
   min-height: 238rpx;
   margin: 0;
   padding: 0;
-  grid-template-columns: 236rpx minmax(0, 1fr);
+  flex-direction: row;
+  align-items: stretch;
   border: 1rpx solid rgba(205, 177, 118, .34);
   border-radius: 24rpx;
   background: linear-gradient(145deg, #315d46, #214635 74%, #172c21);
@@ -148,6 +149,8 @@
 .activity-art {
   position: relative;
   overflow: hidden;
+  flex: 0 0 236rpx;
+  width: 236rpx;
   min-height: 238rpx;
   border-right: 1rpx solid rgba(234, 213, 171, .2);
   background: radial-gradient(circle at 74% 20%, rgba(223, 190, 126, .25), transparent 35%), linear-gradient(145deg, #294f3b, #152b20);
@@ -216,6 +219,7 @@
 .activity-card__body {
   display: flex;
   min-width: 0;
+  flex: 1;
   padding: 22rpx 22rpx 20rpx;
   flex-direction: column;
   justify-content: center;
@@ -262,35 +266,43 @@
   margin-top: 12rpx;
   padding-top: 11rpx;
   align-items: center;
+  flex-wrap: wrap;
   justify-content: space-between;
   border-top: 1rpx solid rgba(255, 255, 255, .15);
+  gap: 6rpx 10rpx;
 }
 .activity-fee {
+  min-width: 0;
+  flex: 1 1 auto;
   color: #f0d8a7;
   font-size: 24rpx;
   font-weight: 800;
 }
 .activity-payment-state {
-  max-width: 45%;
+  max-width: 100%;
   overflow: hidden;
+  flex: 1 1 100%;
   color: rgba(255, 255, 255, .72);
   font-size: 18rpx;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .activity-footer > text:last-child {
+  flex: 0 0 auto;
   color: #f0d8a7;
   font-size: 18rpx;
   font-weight: 700;
 }
 
-@media (max-width: 350px) {
+@media (max-width: 390px) {
   .community-hero { padding: 28rpx 22rpx 30rpx; }
   .community-hero__logo { width: 78%; }
   .community-hero__title { font-size: 42rpx; }
-  .activity-card { min-height: 216rpx; grid-template-columns: 204rpx minmax(0, 1fr); }
-  .activity-art { min-height: 216rpx; }
-  .activity-card__body { padding: 18rpx; }
+  .activity-card { min-height: 216rpx; flex-direction: row; }
+  .activity-art { flex: 0 0 204rpx; width: 204rpx; min-height: 216rpx; }
+  .activity-card__body { padding: 18rpx 18rpx 16rpx; }
   .activity-title { font-size: 27rpx; }
   .activity-summary { display: none !important; }
+  .activity-date { font-size: 17rpx; }
+  .activity-fee { font-size: 22rpx; }
 }

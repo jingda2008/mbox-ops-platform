@@ -139,7 +139,7 @@ describe('mini-program mobile business flow contract', () => {
     expect(pointsCss).toMatch(/\.ledger-tabs button \{[^}]*min-height: 88rpx;/)
     expect(pointsCss).toContain('.progress-card')
     expect(pointsCss).toContain('overflow-wrap: anywhere')
-    expect(pointsCss).toContain('@media (max-width: 350px)')
+    expect(pointsCss).toContain('@media (max-width: 390px)')
   })
 
   it('persists only explicit product restrictions and keeps controls compact and reversible', () => {
@@ -307,9 +307,9 @@ describe('mini-program mobile business flow contract', () => {
     const reservationCss = read('miniprogram/pages/reservations/index.wxss')
     expect(globalCss).toMatch(/\.primary-button, \.secondary-button, \.danger-button \{ min-height: 88rpx;/)
     expect(globalCss).toMatch(/\.field__input \{ height: 88rpx;/)
-    expect(globalCss).toContain('@media (max-width: 350px)')
+    expect(globalCss).toContain('@media (max-width: 390px)')
     expect(reservationCss).toMatch(/\.picker-field\{[^}]*min-height:88rpx/)
-    expect(reservationCss).toContain('@media(max-width:350px)')
+    expect(reservationCss).toContain('@media(max-width:390px)')
   })
 
   it('keeps verified phone and activity contact correction inside a compact privacy disclosure',()=>{

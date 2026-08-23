@@ -21,4 +21,4 @@
 .manager-entry view text:last-child{margin-top:7rpx;color:#8d6c65;font-size:20rpx}
 .manager-entry>text{font-size:34rpx}
 .status-link{margin-top:16rpx}
-@media(max-width:350px){.service-grid{grid-template-columns:1fr}.service-grid button{min-height:126rpx}.manager-order{display:block}.manager-order picker{max-width:100%;margin-top:8rpx;text-align:left}}
+@media(max-width:390px){.service-grid{grid-template-columns:1fr}.service-grid button{min-height:126rpx}.manager-order{display:block}.manager-order picker{max-width:100%;margin-top:8rpx;text-align:left}}

@@ -37,13 +37,13 @@ describe('normalized migration baseline', () => {
       '037', '038', '039', '040', '041', '042', '043', '044', '045', '046', '047', '048',
       '049', '050', '051', '052', '053', '054', '055', '056', '057', '058', '059', '060',
       '061', '062', '063', '064', '065', '066', '067', '068', '069', '070', '071', '072',
-      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101', '102', '103', '104',
+      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101', '102', '103', '104', '105',
     ])
     for (const migration of migrations) {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
       expect(unwrapNormalizedMigrationTransaction(migration.sql).trim().length).toBeGreaterThan(0)
     }
-    expect(migrations.slice(-3).map(({ version, filename, checksum }) => ({ version, filename, checksum }))).toEqual([
+    expect(migrations.filter((migration) => ['102', '103', '104'].includes(migration.version)).map(({ version, filename, checksum }) => ({ version, filename, checksum }))).toEqual([
       {
         version: '102',
         filename: '102_printer_management_permission.sql',
@@ -60,6 +60,18 @@ describe('normalized migration baseline', () => {
         checksum: '8804baccfbb3bf7b1371ace9e786214654c37203530e7e51598ea4bd2ab18680',
       },
     ])
+  })
+
+  it('adds revocable Windows print bridges and typed bridge-pull printer jobs', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '105')
+    expect(migration?.sql).toMatch(/CREATE TABLE mbox\.print_bridges/)
+    expect(migration?.sql).toMatch(/CREATE TABLE mbox\.print_bridge_pairing_codes/)
+    expect(migration?.sql).toMatch(/ADD COLUMN print_bridge_id uuid/)
+    expect(migration?.sql).toMatch(/windows_queue_name text/)
+    expect(migration?.sql).toMatch(/print_profile IN \('escpos_58','escpos_80','windows_text'\)/)
+    expect(migration?.sql).toMatch(/delivery_mode IN \('cloud_adapter','bridge_pull'\)/)
+    expect(migration?.sql).toMatch(/ENABLE ROW LEVEL SECURITY/)
+    expect(migration?.sql).toMatch(/schema_version='105'/)
   })
 
   it('keeps recommendation publication separate from customer rollout', async () => {

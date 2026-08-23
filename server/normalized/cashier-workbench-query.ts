@@ -7,6 +7,7 @@ import type {
   CashierWorkbenchKdsStatus,
   CashierWorkbenchKdsTask,
   CashierWorkbenchOrder,
+  CashierWorkbenchPayment,
   CashierWorkbenchRefund,
   CashierWorkbenchView,
 } from '../../src/shared/cashier-workbench-contracts.js'
@@ -51,6 +52,7 @@ interface PaymentRow extends Record<string, unknown> {
   provider: PaymentProvider
   method: PaymentMethod
   provider_transaction_id: string | null
+  provider_action_state: CashierWorkbenchPayment['providerActionState']
   amount_minor: string | number
   currency: string
   status: PaymentStatus
@@ -234,13 +236,20 @@ export class PostgresCashierWorkbenchQuery {
           ORDER BY item.created_at, item.id
         `, [input.scope.tenantId, input.scope.storeId, orderIds])
       const paymentResult = await transaction.query<PaymentRow>(`
-          SELECT id, order_id, public_id, provider, method, provider_transaction_id,
-            amount_minor, currency, status, succeeded_at::text, created_at::text
-          FROM mbox.payments
-          WHERE tenant_id = $1::uuid
-            AND store_id = $2::uuid
-            AND order_id = ANY($3::uuid[])
-          ORDER BY created_at DESC, id DESC
+          SELECT payment.id, payment.order_id, payment.public_id, payment.provider,
+            payment.method, payment.provider_transaction_id,
+            provider_action.state AS provider_action_state,
+            payment.amount_minor, payment.currency, payment.status,
+            payment.succeeded_at::text, payment.created_at::text
+          FROM mbox.payments payment
+          LEFT JOIN mbox.payment_provider_actions provider_action
+            ON provider_action.tenant_id = payment.tenant_id
+           AND provider_action.store_id = payment.store_id
+           AND provider_action.payment_id = payment.id
+          WHERE payment.tenant_id = $1::uuid
+            AND payment.store_id = $2::uuid
+            AND payment.order_id = ANY($3::uuid[])
+          ORDER BY payment.created_at DESC, payment.id DESC
         `, [input.scope.tenantId, input.scope.storeId, orderIds])
       const refundResult = await transaction.query<RefundRow>(`
           SELECT refund.id, refund.payment_id, refund.public_id, refund.provider_refund_id,
@@ -373,6 +382,7 @@ function assembleView(
         provider: payment.provider,
         method: payment.method,
         providerTransactionId: payment.provider_transaction_id,
+        providerActionState: payment.provider_action_state,
         amountMinor: asSafeMinor(payment.amount_minor, 'payment amount'),
         currency: payment.currency,
         status: payment.status,
@@ -393,6 +403,13 @@ function assembleView(
         refunds,
       }
     })
+    const grossPaidMinor = payments
+      .filter((payment) => CAPTURED_PAYMENT_STATUSES.includes(payment.status))
+      .reduce((sum, payment) => sum + payment.amountMinor, 0)
+    const refundedMinor = payments.reduce((sum, payment) => sum + payment.refunds
+      .filter((refund) => refund.status === 'succeeded')
+      .reduce((refundSum, refund) => refundSum + refund.amountMinor, 0), 0)
+    const totalAmountMinor = asSafeMinor(order.total_amount_minor, 'order total')
     return {
       id: order.id,
       publicId: order.public_id,
@@ -400,7 +417,8 @@ function assembleView(
       channel: order.channel,
       status: order.status,
       paymentStatus: order.payment_status,
-      totalAmountMinor: asSafeMinor(order.total_amount_minor, 'order total'),
+      totalAmountMinor,
+      outstandingAmountMinor: Math.max(0, totalAmountMinor - (grossPaidMinor - refundedMinor)),
       currency: order.currency,
       submittedAt: order.submitted_at,
       createdAt: order.created_at,
@@ -468,6 +486,8 @@ function emptyView(input: Readonly<CashierWorkbenchQueryInput>, query: string): 
 function actions(capabilities: readonly string[]) {
   const set = new Set(capabilities)
   return {
+    canRecordManualCash: set.has('payment.manual.cash.record'),
+    canRecordManualPos: set.has('payment.manual.pos.record'),
     canRequestRefund: set.has('refund.request'),
     canApproveRefund: set.has('refund.approve'),
     canExecuteRefund: set.has('refund.execute'),

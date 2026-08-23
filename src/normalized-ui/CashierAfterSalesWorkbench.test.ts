@@ -117,12 +117,49 @@ describe('CashierAfterSalesWorkbenchView', () => {
     view.orders[0]!.businessDate = '2026-08-12'
     view.orders[0]!.carryover = true
     view.orders[0]!.payments[0]!.status = 'pending'
+    view.orders[0]!.payments[0]!.providerActionState = 'ready'
     view.summary.carryoverPendingPaymentCount = 1
     const html = render(view)
 
     expect(html).toContain('待查渠道')
     expect(html).toContain('查询渠道结果')
     expect(html).toContain('不会再次扣款')
+  })
+
+  it('allows direct cash for an ordinary unpaid order and an unpresented online record', () => {
+    const direct = workbench([])
+    direct.orders[0]!.paymentStatus = 'unpaid'
+    direct.orders[0]!.outstandingAmountMinor = 6_800
+    const directHtml = render(direct)
+    expect(directHtml).toContain('登记现金收款')
+    expect(directHtml).not.toContain('入口已锁定')
+
+    const unpresented = payment('postar', [])
+    unpresented.status = 'pending'
+    unpresented.succeededAt = null
+    unpresented.providerTransactionId = null
+    unpresented.providerActionState = null
+    const view = workbench([unpresented])
+    view.orders[0]!.paymentStatus = 'unpaid'
+    view.orders[0]!.outstandingAmountMinor = 6_800
+    const html = render(view)
+    expect(html).toContain('尚未向支付渠道发起')
+    expect(html).toContain('登记现金收款')
+  })
+
+  it('locks cash only after the provider action started or its result became unknown', () => {
+    const pending = payment('postar', [])
+    pending.status = 'pending'
+    pending.succeededAt = null
+    pending.providerActionState = 'ready'
+    const view = workbench([pending])
+    view.orders[0]!.paymentStatus = 'unpaid'
+    view.orders[0]!.outstandingAmountMinor = 6_800
+    const html = render(view)
+    expect(html).toContain('已经向渠道发起')
+    expect(html).toContain('入口已锁定')
+    expect(html).toContain('查询渠道结果')
+    expect(html).not.toContain('登记现金收款</button>')
   })
 
   it('offers a controlled unpaid-order cancellation without pretending delivered facts disappear', () => {
@@ -283,6 +320,8 @@ function workbench(payments: CashierWorkbenchPayment[]): CashierWorkbenchView {
     businessDate: '2026-08-13',
     query: 'VIP1',
     actions: {
+      canRecordManualCash: true,
+      canRecordManualPos: true,
       canRequestRefund: true,
       canApproveRefund: true,
       canExecuteRefund: true,
@@ -303,6 +342,7 @@ function workbench(payments: CashierWorkbenchPayment[]): CashierWorkbenchView {
       status: 'submitted',
       paymentStatus: 'paid',
       totalAmountMinor: 6_800,
+      outstandingAmountMinor: 0,
       currency: 'CNY',
       submittedAt: '2026-08-13T12:00:00.000Z',
       createdAt: '2026-08-13T11:59:00.000Z',
@@ -323,6 +363,7 @@ function payment(
     provider,
     method: provider === 'cash' ? 'cash' : provider === 'physical_pos' ? 'card' : 'native_qr',
     providerTransactionId: `TX-${provider}`,
+    providerActionState: provider === 'postar' || provider === 'wechat' ? 'consumed' : null,
     amountMinor: 6_800,
     currency: 'CNY',
     status: 'succeeded',

@@ -23,6 +23,7 @@ import type {
   StaffPermissionDeploymentChange,
   StaffPermissionDeploymentResult,
 } from '../shared/normalized-contracts'
+import { staffModuleForPermission, staffPermissionImpactLabel } from '../shared/staff-module-access'
 import './staff-access-management.css'
 
 type EditorMode = 'role' | 'employee' | 'policy' | 'navigation'
@@ -103,9 +104,13 @@ export function StaffAccessManagementPanel({ api }: { api: NormalizedApiClient }
       if (failed.length > 0) throw new Error(`${failed.length}项配置写入后复核不一致`)
       setOverview(result.overview); resetDrafts()
       const effective = result.changes.reduce((sum, change) => sum + change.effectiveEmployeeCount, 0)
+      const affectedModules = [...new Set(result.changes.flatMap((change) => {
+        const module = staffModuleForPermission(change.configurationCode)
+        return module === null ? [] : [module.label]
+      }))]
       setNotice({
         tone: 'success', title: `${result.changes.length}项配置已发布并复核生效`,
-        detail: `服务端已重新读取数据库；涉及${effective}人次当前有效配置，发布记录已留痕。`,
+        detail: `服务端已重新读取数据库；涉及${effective}人次当前有效配置${affectedModules.length === 0 ? '' : `，入口联动：${affectedModules.join('、')}`}，发布记录已留痕。`,
       })
     } catch (error) {
       setNotice({ tone: 'error', title: '配置没有发布成功', detail: `${message(error)}；原配置保持不变，请核对后重试。` })
@@ -197,7 +202,7 @@ function PermissionEditor({ mode, role, employee, draft, setDraft, query, setQue
         const employeeEffect = employee?.overrides.find((item) => item.permissionCode === permission.code)?.effect ?? null
         const value = draft[permission.code] ?? (mode === 'role' ? roleEnabled : employeeEffect)
         return <article key={permission.code}>
-          <div><strong>{permissionLabel(permission.code, permission.name)}</strong><small>{permissionDescription(permission.code, permission.description)}</small></div>
+          <div><strong>{permissionLabel(permission.code, permission.name)}</strong><small>{permissionDescription(permission.code, permission.description)}</small>{staffPermissionImpactLabel(permission.code) !== null && <small>授权后显示：{staffPermissionImpactLabel(permission.code)}</small>}</div>
           {mode === 'role'
             ? <label className="staff-access-switch"><input type="checkbox" checked={value === true} onChange={(event) => setDraft((current) => ({ ...current, [permission.code]: event.target.checked }))} /><span>{value === true ? '允许' : '不允许'}</span></label>
             : <select aria-label={`${permissionLabel(permission.code, permission.name)}员工例外`} value={value === true || value === false ? '' : value ?? ''} onChange={(event) => setDraft((current) => ({ ...current, [permission.code]: event.target.value === '' ? null : event.target.value as 'grant' | 'deny' }))}><option value="">随岗位</option><option value="grant">额外允许</option><option value="deny">明确禁止</option></select>}

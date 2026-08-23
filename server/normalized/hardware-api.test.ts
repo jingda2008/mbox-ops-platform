@@ -98,6 +98,33 @@ describe('hardware API role cropping', () => {
     }))
   })
 
+  it('lets a printer manager edit and pause a printer with a required audited reason', async () => {
+    const fake = repository()
+    fake.updateDevice.mockResolvedValue({
+      before: { id: deviceId, deviceType: 'printer', name: '旧打印机', status: 'active' },
+      device: { id: deviceId, deviceType: 'printer', name: '收银打印机', status: 'paused' },
+    })
+    const app = await build(['printer.manage'], fake)
+    const missingReason = await app.inject({
+      method: 'PATCH', url: `/hardware/devices/${deviceId}`,
+      headers: { 'idempotency-key': 'printer-update-missing-reason' },
+      payload: { status: 'paused' },
+    })
+    expect(missingReason.statusCode).toBe(400)
+    expect(fake.updateDevice).not.toHaveBeenCalled()
+
+    const updated = await app.inject({
+      method: 'PATCH', url: `/hardware/devices/${deviceId}`,
+      headers: { 'idempotency-key': 'printer-update-with-reason' },
+      payload: { name: '收银打印机', status: 'paused', reason: '更换纸卷暂停使用' },
+    })
+    expect(updated.statusCode).toBe(200)
+    expect(fake.updateDevice).toHaveBeenCalledWith(expect.objectContaining({
+      id: deviceId, name: '收银打印机', status: 'paused', printerOnly: true,
+    }))
+    expect(updated.json().data).toMatchObject({ id: deviceId, name: '收银打印机', status: 'paused' })
+  })
+
   it('rejects kitchen print access for a bartender', async () => {
     const fake = repository()
     const app = await build(['print.view', 'work.bar'], fake)
@@ -138,6 +165,8 @@ function repository() {
     listPrintJobs: vi.fn().mockResolvedValue([]),
     listDeliveryWork: vi.fn().mockResolvedValue([{ kdsTaskId: 'delivery-1', tableCode: 'VIP1' }]),
     createDevice: vi.fn(),
+    updateDevice: vi.fn(),
+    getPrinterRouteByCode: vi.fn().mockResolvedValue(null),
     upsertPrinterRoute: vi.fn(),
     retryPrintJob: vi.fn(),
     requestHardwareCommand: vi.fn().mockResolvedValue({

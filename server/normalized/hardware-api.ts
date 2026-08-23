@@ -51,8 +51,9 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
 
   app.get('/hardware/devices', async (request, reply) => handle(reply, async () => {
     const context = await options.resolveContext(request)
-    requireAny(context, ['hardware.view', 'hardware.view_all', 'printer.manage'])
-    const printerManagerOnly = hasCapability(context, 'printer.manage') && !hasAnyCapability(context, ['hardware.view', 'hardware.view_all'])
+    requireAny(context, ['hardware.view', 'hardware.view_all', 'hardware.command', 'hardware.manage', 'printer.manage'])
+    const printerManagerOnly = hasCapability(context, 'printer.manage')
+      && !hasAnyCapability(context, ['hardware.view', 'hardware.view_all', 'hardware.command', 'hardware.manage'])
     const stations = printerManagerOnly ? undefined : deviceStationsFor(context)
     const data = await options.transactions.run(
       context.scope,
@@ -64,7 +65,7 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
 
   app.get('/hardware/print-jobs', async (request, reply) => handle(reply, async () => {
     const context = await options.resolveContext(request)
-    requireAny(context, ['print.view', 'print.view_all', 'printer.manage'])
+    requireAny(context, ['print.view', 'print.view_all', 'hardware.manage', 'printer.manage'])
     const stations = printStationsFor(context)
     const query = readObject(request.query ?? {})
     const requestedStation = optionalEnum(query.station, ['bar', 'kitchen', 'cashier']) as HardwareStation | undefined
@@ -77,6 +78,17 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
         statuses,
         limit: optionalInteger(query.limit, 1, 200),
       }),
+      { readOnly: true },
+    )
+    return reply.send({ data })
+  }))
+
+  app.get('/hardware/printer-routes', async (request, reply) => handle(reply, async () => {
+    const context = await options.resolveContext(request)
+    requireAny(context, ['hardware.view_all', 'hardware.manage', 'printer.manage'])
+    const data = await options.transactions.run(
+      context.scope,
+      (transaction) => repository(transaction).listPrinterRoutes(),
       { readOnly: true },
     )
     return reply.send({ data })
@@ -102,6 +114,7 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
   app.post('/hardware/devices', async (request, reply) => handle(reply, async () => {
     const context = await options.resolveContext(request)
     const body = readObject(request.body)
+    const reason = readString(body.reason, 'reason', 1000, 3)
     const deviceType = readEnum(body.deviceType, ['printer', 'kds_display', 'cash_drawer', 'headset', 'controller'])
     requireAny(context, ['hardware.manage', 'printer.manage'])
     if (!hasCapability(context, 'hardware.manage') && deviceType !== 'printer') throw new HardwareAccessDeniedError()
@@ -113,19 +126,55 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
         stationCode: optionalEnum(body.stationCode, ['bar', 'kitchen', 'cashier', 'service']) as DeviceStation | undefined,
         capabilities: optionalStringArray(body.capabilities),
         configSnapshot: optionalObject(body.configSnapshot),
+        printBridgeId: optionalUuid(body.printBridgeId, 'printBridgeId'),
+        windowsQueueName: optionalString(body.windowsQueueName, 'windowsQueueName', 180),
+        printProfile: optionalEnum(body.printProfile, ['escpos_58', 'escpos_80', 'windows_text']) as never,
       })
-      return outcome(context, 'hardware.device.created.v1', 'device', result.id, body.reason, result)
+      return outcome(context, 'hardware.device.created.v1', 'device', result.id, reason, result)
     })
     return reply.code(execution.replayed ? 200 : 201).send({ data: execution.value, replayed: execution.replayed })
+  }))
+
+  app.patch('/hardware/devices/:deviceId', async (request, reply) => handle(reply, async () => {
+    const context = await options.resolveContext(request)
+    const body = readObject(request.body)
+    const reason = readString(body.reason, 'reason', 1000, 3)
+    requireAny(context, ['hardware.manage', 'printer.manage'])
+    const printerManagerOnly = hasCapability(context, 'printer.manage') && !hasCapability(context, 'hardware.manage')
+    const execution = await options.commands.execute(command(request, context, 'hardware.device.update', body, codec()), async (transaction) => {
+      const changed = await repository(transaction).updateDevice({
+        id: readUuid(readObject(request.params).deviceId, 'deviceId'),
+        name: optionalString(body.name, 'name', 120),
+        stationCode: optionalEnum(body.stationCode, ['bar', 'kitchen', 'cashier', 'service']) as DeviceStation | undefined,
+        status: optionalEnum(body.status, ['active', 'paused', 'retired']) as never,
+        printBridgeId: optionalUuid(body.printBridgeId, 'printBridgeId'),
+        windowsQueueName: optionalString(body.windowsQueueName, 'windowsQueueName', 180),
+        printProfile: optionalEnum(body.printProfile, ['escpos_58', 'escpos_80', 'windows_text']) as never,
+        printerOnly: printerManagerOnly,
+      })
+      return outcome(
+        context,
+        'hardware.device.updated.v1',
+        'device',
+        changed.device.id,
+        reason,
+        changed.device,
+        changed.before,
+      )
+    })
+    return reply.send({ data: execution.value, replayed: execution.replayed })
   }))
 
   app.put('/hardware/printer-routes/:routeCode', async (request, reply) => handle(reply, async () => {
     const context = await options.resolveContext(request)
     requireAny(context, ['hardware.manage', 'printer.manage'])
     const body = readObject(request.body)
+    const reason = readString(body.reason, 'reason', 1000, 3)
     const routeCode = readString(readObject(request.params).routeCode, 'routeCode', 64)
     const execution = await options.commands.execute(command(request, context, 'hardware.route.upsert', body, codec()), async (transaction) => {
-      const result = await repository(transaction).upsertPrinterRoute({
+      const store = repository(transaction)
+      const before = await store.getPrinterRouteByCode(routeCode, true)
+      const result = await store.upsertPrinterRoute({
         code: routeCode,
         name: readString(body.name, 'name', 120),
         stationCode: readEnum(body.stationCode, ['bar', 'kitchen', 'cashier']) as HardwareStation,
@@ -135,7 +184,7 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
         priority: optionalInteger(body.priority, 0, 1000),
         status: optionalEnum(body.status, ['active', 'paused', 'retired']) as never,
       })
-      return outcome(context, 'hardware.route.configured.v1', 'printer_route', result.id, body.reason, result)
+      return outcome(context, 'hardware.route.configured.v1', 'printer_route', result.id, reason, result, before ?? undefined)
     })
     return reply.send({ data: execution.value, replayed: execution.replayed })
   }))
@@ -209,6 +258,7 @@ function outcome(
   objectId: string,
   reasonValue: unknown,
   result: object,
+  before?: object,
 ) {
   const reason = typeof reasonValue === 'string' && reasonValue.trim() ? reasonValue.trim() : '现场设备配置'
   return {
@@ -220,7 +270,8 @@ function outcome(
       objectId,
       businessDate: context.businessDate,
       reason,
-      afterData: { id: objectId },
+      ...(before === undefined ? {} : { beforeData: before as JsonObject }),
+      afterData: result as JsonObject,
     }],
     outboxMessages: [{
       aggregateType: objectType,
@@ -233,7 +284,7 @@ function outcome(
 }
 
 function deviceStationsFor(context: NormalizedOperationsRequestContext): DeviceStation[] | undefined {
-  if (context.capabilities.includes('hardware.view_all')) return undefined
+  if (context.capabilities.includes('hardware.view_all') || context.capabilities.includes('hardware.manage')) return undefined
   const stations: DeviceStation[] = []
   if (context.capabilities.includes('work.bar')) stations.push('bar')
   if (context.capabilities.includes('work.kitchen')) stations.push('kitchen')
@@ -243,7 +294,8 @@ function deviceStationsFor(context: NormalizedOperationsRequestContext): DeviceS
 }
 
 function printStationsFor(context: NormalizedOperationsRequestContext): HardwareStation[] {
-  if (context.capabilities.includes('print.view_all') || context.capabilities.includes('printer.manage')) return ['bar', 'kitchen', 'cashier']
+  if (context.capabilities.includes('print.view_all') || context.capabilities.includes('printer.manage')
+    || context.capabilities.includes('hardware.manage')) return ['bar', 'kitchen', 'cashier']
   const stations: HardwareStation[] = []
   if (context.capabilities.includes('work.bar')) stations.push('bar')
   if (context.capabilities.includes('work.kitchen')) stations.push('kitchen')
@@ -298,6 +350,11 @@ function readUuid(value: unknown, field: string) {
     throw new HardwareRequestError(`${field}格式无效`)
   }
   return normalized
+}
+
+function optionalUuid(value: unknown, field: string) {
+  if (value === undefined || value === null || value === '') return undefined
+  return readUuid(value, field)
 }
 
 function readEnum(value: unknown, choices: readonly string[]) {

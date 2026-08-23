@@ -123,4 +123,19 @@ integration('HardwareRepository PostgreSQL', () => {
     expect(result.bar).toHaveLength(0)
     expect(result.kitchen).toHaveLength(1)
   })
+
+  it('edits and pauses a printer without changing its immutable device code', async () => {
+    const changed = await transactions.run(scope, (transaction) => (
+      new HardwareRepository(transaction).updateDevice({
+        id: barPrinterId,
+        name: '吧台打印机（暂停维护）',
+        status: 'paused',
+        printerOnly: true,
+      })
+    ))
+    expect(changed.before).toMatchObject({ code: 'bar-printer-01', status: 'active' })
+    expect(changed.device).toMatchObject({
+      code: 'bar-printer-01', name: '吧台打印机（暂停维护）', status: 'paused',
+    })
+  })
 })

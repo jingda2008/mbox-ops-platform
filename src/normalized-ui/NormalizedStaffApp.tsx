@@ -6,7 +6,7 @@ import { NormalizedStaffWorkspace, StaffBottomNavigation } from './NormalizedSta
 import { StaffModulePanel } from './StaffModulePanel'
 import { StaffActionsPanel } from './staff-actions'
 import type { StaffActionsTab } from './staff-actions/types'
-import { normalizedStaffRoute, type NormalizedStaffRoute } from './normalized-staff-routes'
+import { normalizedStaffNavigationCode, normalizedStaffRoute, type NormalizedStaffRoute } from './normalized-staff-routes'
 import { clearDeviceLease, getOrCreateDeviceKey, hasUsableDeviceLease, saveDeviceLease } from './staff-device'
 import staffLogo from './assets/mbox-logo-badge.png'
 import './normalized-staff-login.css'
@@ -152,7 +152,9 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
         }}><ArrowLeft size={18} /> 工作台</button>
         {sessionControls}
       </header>
-      {isStaffActionsTab(staffRoute)
+      {staffNavigation === null ? <StaffGateLoading /> : !staffNavigation.some((item) => item.code === normalizedStaffNavigationCode(window.location.pathname))
+        ? <div className="normalized-route-notice" role="alert">当前账号没有这个页面的有效权限。请由管理员授权后刷新；直接输入页面地址不会绕过权限。</div>
+        : isStaffActionsTab(staffRoute)
         ? <StaffActionsPanel initialTab={staffRoute} onLoginRequired={loginRequired} />
         : <StaffModulePanel key={authenticatedSessionId} api={api} auth={auth} module={staffRoute} onLoginRequired={loginRequired} />}
     </main>

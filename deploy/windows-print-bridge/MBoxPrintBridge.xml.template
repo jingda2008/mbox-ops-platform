@@ -1,0 +1,17 @@
+<service>
+  <id>MBoxPrintBridge</id>
+  <name>M-BOX 门店打印桥</name>
+  <description>主动从 M-BOX 云端领取吧台、后厨和收银打印任务。</description>
+  <executable>{{NODE_EXE}}</executable>
+  <arguments>&quot;%BASE%\bridge.mjs&quot; run</arguments>
+  <workingdirectory>%BASE%</workingdirectory>
+  <log mode="roll-by-size">
+    <sizeThreshold>10485760</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+  <onfailure action="restart" delay="10 sec" />
+  <onfailure action="restart" delay="30 sec" />
+  <resetfailure>1 hour</resetfailure>
+  <stoptimeout>20 sec</stoptimeout>
+  <startmode>Automatic</startmode>
+</service>

@@ -42,6 +42,8 @@ describe('PostgresCashierWorkbenchQuery', () => {
     expect(view.businessDate).toBe('2026-08-13')
     expect(view.query).toBe('VIP1')
     expect(view.actions).toEqual({
+      canRecordManualCash: false,
+      canRecordManualPos: false,
       canRequestRefund: true,
       canApproveRefund: true,
       canExecuteRefund: true,
@@ -56,7 +58,7 @@ describe('PostgresCashierWorkbenchQuery', () => {
       carryoverOrderCount: 0,
       carryoverPendingPaymentCount: 0,
     })
-    expect(view.orders[0]).toMatchObject({ publicId: 'ORDER-VIP1-0001', tableCode: 'VIP1' })
+    expect(view.orders[0]).toMatchObject({ publicId: 'ORDER-VIP1-0001', tableCode: 'VIP1', outstandingAmountMinor: 0 })
     expect(view.orders[0]?.payments[0]).toMatchObject({
       id: paymentId,
       reservedRefundAmountMinor: 1_000,
@@ -241,6 +243,17 @@ describe('PostgresCashierWorkbenchQuery', () => {
       capabilities: ['refund.request'],
       limit: 20,
     })).resolves.toMatchObject({ actions: { canRequestRefund: true, canApproveRefund: false } })
+  })
+
+  it('exposes cash collection independently from online payment initiation', async () => {
+    const runner = new QueryRunner([[]])
+    const query = new PostgresCashierWorkbenchQuery(runner as unknown as ScopedPostgresTransactionRunner)
+    await expect(query.get({
+      scope: { tenantId, storeId }, employeeId, businessDate: '2026-08-13',
+      capabilities: ['payment.manual.cash.record'], limit: 20,
+    })).resolves.toMatchObject({
+      actions: { canRecordManualCash: true, canRecordManualPos: false },
+    })
   })
 
   it('does not treat payment initiation alone as permission to read the store-wide workbench', () => {
@@ -525,6 +538,7 @@ function paymentRow(): Record<string, unknown> {
     provider: 'postar',
     method: 'native_qr',
     provider_transaction_id: 'POSTAR-TX-0001',
+    provider_action_state: 'consumed',
     amount_minor: '8800',
     currency: 'CNY',
     status: 'succeeded',

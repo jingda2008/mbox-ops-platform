@@ -1,5 +1,6 @@
 import type { JsonObject, JsonValue } from './command-executor.js'
 import type { ScopedTransaction } from './transaction-runner.js'
+import { effectiveStaffNavigation } from '../../src/shared/staff-module-access.js'
 
 export interface EffectiveDataScope {
   key: string
@@ -205,14 +206,14 @@ export class StaffAccessRepository {
         value: scopeValue(row),
       })),
       approvalLimits: approvalRows.map(approvalView),
-      navigation: navigationRows.map((row) => ({
+      navigation: effectiveStaffNavigation(permissions, navigationRows.map((row) => ({
         code: row.navigation_code,
         label: row.label,
         route: row.route,
         icon: row.icon,
         sortOrder: row.sort_order,
         displayConfig: row.display_config,
-      })),
+      }))),
       resolvedAt,
     }
   }

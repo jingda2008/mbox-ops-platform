@@ -196,6 +196,10 @@ export class PaymentCommandService {
       const fulfillment = new PaymentFulfillmentRepository(transaction)
       await fulfillment.ensureReservationBeforePayment(input.orderId)
       const payments = new PaymentRepository(transaction)
+      const supersededOnlinePayments = await payments.closeUnpresentedOnlinePaymentsForManualCollection(
+        input.orderId,
+        employeeId,
+      )
       const reference = requiredEvidenceString(evidence, 'receiptReference')
       const payment = await payments.createForOrder({
         orderId: input.orderId,
@@ -237,7 +241,53 @@ export class PaymentCommandService {
         metadata: { paymentId: payment.id, paymentProvider: payment.provider },
         paymentId: payment.id,
       })
-      return await paymentOutcome(transaction, input, payment, 'payment.manual_recorded', 1, undefined, activation, this.options.printTicketSources === true)
+      const outcome = await paymentOutcome(
+        transaction,
+        input,
+        payment,
+        'payment.manual_recorded',
+        1,
+        undefined,
+        activation,
+        this.options.printTicketSources === true,
+      )
+      if (supersededOnlinePayments.length === 0) return outcome
+      return {
+        ...outcome,
+        auditEvents: [
+          ...supersededOnlinePayments.map((superseded) => ({
+            actor: input.actor,
+            action: 'payment.unpresented_closed_for_manual',
+            objectType: 'payment',
+            objectId: superseded.id,
+            businessDate: input.businessDate,
+            afterData: {
+              publicId: superseded.publicId,
+              provider: superseded.provider,
+              status: 'closed',
+              replacementPaymentId: payment.id,
+            },
+            reason: '尚未向支付渠道发起，改为现场收款',
+          })),
+          ...outcome.auditEvents,
+        ],
+        outboxMessages: [
+          ...supersededOnlinePayments.map((superseded) => ({
+            aggregateType: 'payment',
+            aggregateId: superseded.id,
+            aggregateVersion: 2,
+            eventType: 'payment.unpresented_closed_for_manual.v1',
+            payload: {
+              id: superseded.id,
+              publicId: superseded.publicId,
+              provider: superseded.provider,
+              status: 'closed',
+              replacementPaymentId: payment.id,
+            },
+          })),
+          ...outcome.outboxMessages,
+        ],
+      }
     })
   }
 

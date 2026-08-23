@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import {
   BarChart3,
   CalendarClock,
@@ -133,11 +133,40 @@ interface ProfitView {
 
 interface HardwareDeviceView {
   id: string
+  code: string
   name: string
   deviceType: string
   stationCode: string | null
   status: string
   connectivityStatus: string
+  printBridgeId: string | null
+  windowsQueueName: string | null
+  printProfile: 'escpos_58' | 'escpos_80' | 'windows_text' | null
+}
+
+interface PrintBridgeView {
+  id: string
+  publicId: string
+  name: string
+  status: 'active' | 'revoked'
+  hostname: string
+  softwareVersion: string
+  lastSeenAt: string | null
+  printerCount: number
+  online: boolean
+  queues: string[]
+}
+
+interface PrinterRouteView {
+  id: string
+  code: string
+  name: string
+  stationCode: 'bar' | 'kitchen' | 'cashier'
+  productCategoryCode: string | null
+  printerDeviceId: string
+  copies: number
+  priority: number
+  status: string
 }
 
 interface PrintJobView {
@@ -181,6 +210,8 @@ interface ModuleData {
   profit: ProfitView | null
   devices: HardwareDeviceView[]
   printJobs: PrintJobView[]
+  printBridges: PrintBridgeView[]
+  printerRoutes: PrinterRouteView[]
   employeeSales: EmployeeSalesView[]
   commercePolicy: CommercePolicyView | null
   customerExperience: CustomerExperienceDashboard | null
@@ -195,6 +226,8 @@ const emptyData: ModuleData = {
   profit: null,
   devices: [],
   printJobs: [],
+  printBridges: [],
+  printerRoutes: [],
   employeeSales: [],
   commercePolicy: null,
   customerExperience: null,
@@ -247,11 +280,20 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
         const response = await api.getEndpoint<{ data: unknown }>('/api/staff/customer-experience/dashboard')
         setData({ ...emptyData, customerExperience: customerExperienceDashboard(response.data) })
       } else if (module === 'devices') {
-        const [devices, jobs] = await Promise.all([
+        const canManagePrinters = auth.permissions.includes('printer.manage') || auth.permissions.includes('hardware.manage')
+        const canViewPrintJobs = canManagePrinters || auth.permissions.includes('print.view') || auth.permissions.includes('print.view_all')
+        const canViewRoutes = canManagePrinters || auth.permissions.includes('hardware.view_all')
+        const [devices, jobs, bridges, routes] = await Promise.all([
           api.getEndpoint<{ data: unknown }>('/api/hardware/devices'),
-          api.getEndpoint<{ data: unknown }>('/api/hardware/print-jobs?status=pending,printing,failed,dead&limit=50'),
+          canViewPrintJobs ? api.getEndpoint<{ data: unknown }>('/api/hardware/print-jobs?status=pending,printing,failed,dead&limit=50') : Promise.resolve({ data: [] }),
+          canManagePrinters ? api.getEndpoint<{ data: unknown }>('/api/hardware/print-bridges') : Promise.resolve({ data: [] }),
+          canViewRoutes ? api.getEndpoint<{ data: unknown }>('/api/hardware/printer-routes') : Promise.resolve({ data: [] }),
         ])
-        setData({ ...emptyData, devices: hardwareDevices(devices.data), printJobs: printJobs(jobs.data) })
+        setData({
+          ...emptyData,
+          devices: hardwareDevices(devices.data), printJobs: printJobs(jobs.data),
+          printBridges: printBridges(bridges.data), printerRoutes: printerRoutes(routes.data),
+        })
       } else {
         if (auth.permissions.includes('payment.policy.manage')) {
           const response = await api.getEndpoint<{ data: unknown }>('/api/store/commerce-policy')
@@ -292,7 +334,7 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
     if (module === 'inventory') return <InventoryModule api={api} auth={auth} view={data.inventory} onChanged={refresh} />
     if (module === 'operations') return <OperationsModule view={data.profit} sales={data.employeeSales} canViewProfit={auth.permissions.includes('commercial.profit.view')} />
     if (module === 'experience' && data.customerExperience !== null) return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={data.customerExperience} />
-    if (module === 'devices') return <DevicesModule api={api} auth={auth} devices={data.devices} jobs={data.printJobs} onChanged={refresh} />
+    if (module === 'devices') return <DevicesModule api={api} auth={auth} devices={data.devices} jobs={data.printJobs} bridges={data.printBridges} routes={data.printerRoutes} onChanged={refresh} />
     return <SettingsModule api={api} auth={auth} policy={data.commercePolicy} onChanged={refresh} />
   }, [api, auth, data, module, onLoginRequired, paymentRefreshToken, refresh])
 
@@ -839,15 +881,42 @@ function OperationsModule({ view, sales, canViewProfit }: { view: ProfitView | n
   </div>
 }
 
-function DevicesModule({ api, auth, devices, jobs, onChanged }: { api: NormalizedApiClient; auth: StaffAuthView; devices: HardwareDeviceView[]; jobs: PrintJobView[]; onChanged(): Promise<void> }) {
+function DevicesModule({ api, auth, devices, jobs, bridges, routes, onChanged }: {
+  api: NormalizedApiClient
+  auth: StaffAuthView
+  devices: HardwareDeviceView[]
+  jobs: PrintJobView[]
+  bridges: PrintBridgeView[]
+  routes: PrinterRouteView[]
+  onChanged(): Promise<void>
+}) {
   const [reason, setReason] = useState('现场人工检查后操作')
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [notice, setNotice] = useState('')
+  const [mode, setMode] = useState<'overview' | 'bridge' | 'printer' | 'route'>('overview')
+  const [pairing, setPairing] = useState<{ pairingCode: string; expiresAt: string } | null>(null)
+  const [printerCode, setPrinterCode] = useState('')
+  const [editingPrinterId, setEditingPrinterId] = useState<string | null>(null)
+  const [printerName, setPrinterName] = useState('')
+  const [printerStation, setPrinterStation] = useState<'bar' | 'kitchen' | 'cashier'>('cashier')
+  const [printBridgeId, setPrintBridgeId] = useState('')
+  const [windowsQueueName, setWindowsQueueName] = useState('')
+  const [printProfile, setPrintProfile] = useState<'escpos_58' | 'escpos_80' | 'windows_text'>('escpos_80')
+  const [routeCode, setRouteCode] = useState('')
+  const [editingRouteCode, setEditingRouteCode] = useState<string | null>(null)
+  const [routeName, setRouteName] = useState('')
+  const [routeStation, setRouteStation] = useState<'bar' | 'kitchen' | 'cashier'>('cashier')
+  const [routePrinterId, setRoutePrinterId] = useState('')
+  const [routeCopies, setRouteCopies] = useState('1')
   const canManagePrinter = auth.permissions.includes('printer.manage')
+    || auth.permissions.includes('hardware.manage')
   const canCommand = auth.permissions.includes('hardware.command') || canManagePrinter
   const canRetry = auth.permissions.includes('print.retry') || canManagePrinter
   const attention = devices.filter((device) => device.connectivityStatus === 'offline' || device.connectivityStatus === 'degraded').length
     + jobs.filter((job) => job.status === 'failed' || job.status === 'dead').length
+  const reportedPrinterQueues = bridges.find((bridge) => bridge.id === printBridgeId)?.queues ?? []
+  const availablePrinterQueues = windowsQueueName !== '' && !reportedPrinterQueues.includes(windowsQueueName)
+    ? [windowsQueueName, ...reportedPrinterQueues] : reportedPrinterQueues
 
   async function run(key: string, operation: () => Promise<unknown>, success: string) {
     if (busyKey !== null) return
@@ -878,11 +947,146 @@ function DevicesModule({ api, auth, devices, jobs, onChanged }: { api: Normalize
     }), '打印任务已进入重试队列')
   }
 
+  function createPairingCode() {
+    void run('bridge-pairing', async () => {
+      const response = await api.postEndpoint<{ data: { pairingCode: string; expiresAt: string } }>('/api/hardware/print-bridges/pairing-code', {
+        reason: reason.trim(), ttlSeconds: 600,
+      })
+      setPairing(response.data)
+    }, '一次性配对码已生成，请在10分钟内填入门店Windows打印桥')
+  }
+
+  function clearPrinterForm() {
+    setEditingPrinterId(null); setPrinterCode(''); setPrinterName(''); setPrinterStation('cashier')
+    setPrintBridgeId(''); setWindowsQueueName(''); setPrintProfile('escpos_80')
+  }
+
+  function openPrinter(device?: HardwareDeviceView) {
+    if (device === undefined) clearPrinterForm()
+    else {
+      setEditingPrinterId(device.id); setPrinterCode(device.code); setPrinterName(device.name)
+      setPrinterStation(device.stationCode === 'bar' || device.stationCode === 'kitchen' ? device.stationCode : 'cashier')
+      setPrintBridgeId(device.printBridgeId ?? ''); setWindowsQueueName(device.windowsQueueName ?? '')
+      setPrintProfile(device.printProfile ?? 'escpos_80')
+    }
+    setMode('printer')
+  }
+
+  function savePrinter(event: FormEvent) {
+    event.preventDefault()
+    const hasAnyBridgeField = printBridgeId !== '' || windowsQueueName.trim() !== ''
+    if ((editingPrinterId === null || hasAnyBridgeField) && (!printBridgeId || !windowsQueueName.trim())) {
+      setNotice('Windows打印必须同时选择打印桥和打印机队列'); return
+    }
+    const key = editingPrinterId === null ? 'printer-create' : `printer-update-${editingPrinterId}`
+    void run(key, async () => {
+      const bridgeFields = printBridgeId && windowsQueueName.trim()
+        ? { printBridgeId, windowsQueueName: windowsQueueName.trim(), printProfile } : {}
+      if (editingPrinterId === null) {
+        await api.postEndpoint('/api/hardware/devices', {
+          code: printerCode.trim(), name: printerName.trim(), deviceType: 'printer', stationCode: printerStation,
+          ...bridgeFields, reason: reason.trim(),
+        }, { idempotencyKey: operationIdempotency('printer-create') })
+      } else {
+        await api.patchEndpoint(`/api/hardware/devices/${editingPrinterId}`, {
+          name: printerName.trim(), stationCode: printerStation, ...bridgeFields, reason: reason.trim(),
+        }, { idempotencyKey: operationIdempotency('printer-update') })
+      }
+      clearPrinterForm(); setMode('overview')
+    }, editingPrinterId === null
+      ? '打印机已保存；下一步请配置打印分流并执行测试打印'
+      : '打印机配置已更新；请重新执行检测和测试打印')
+  }
+
+  function setPrinterStatus(device: HardwareDeviceView, status: 'active' | 'paused') {
+    const verb = status === 'active' ? '启用' : '暂停'
+    if (!window.confirm(`确认${verb}“${device.name}”？${status === 'paused' ? '暂停后新任务不会再分流到这台打印机。' : '启用前请确认驱动、队列和实体测试页正常。'}`)) return
+    void run(`printer-status-${device.id}-${status}`, () => api.patchEndpoint(`/api/hardware/devices/${device.id}`, {
+      status, reason: reason.trim(),
+    }, { idempotencyKey: operationIdempotency(`printer-${status}`) }), `打印机已${verb}`)
+  }
+
+  function saveRoute(event: FormEvent) {
+    event.preventDefault()
+    const copies = Number(routeCopies)
+    if (!routePrinterId || !Number.isInteger(copies) || copies < 1 || copies > 5) { setNotice('请选择打印机，份数必须为1至5'); return }
+    void run('route-save', async () => {
+      await api.putEndpoint(`/api/hardware/printer-routes/${encodeURIComponent(routeCode.trim())}`, {
+        name: routeName.trim(), stationCode: routeStation, printerDeviceId: routePrinterId,
+        copies, priority: 100, status: 'active', reason: reason.trim(),
+      }, { idempotencyKey: operationIdempotency('printer-route') })
+      setEditingRouteCode(null); setRouteCode(''); setRouteName(''); setRoutePrinterId(''); setRouteCopies('1'); setMode('overview')
+    }, '打印分流已保存；请测试打印并核对吧台、后厨或收银票据')
+  }
+
+  function openRoute(route?: PrinterRouteView) {
+    if (route === undefined) {
+      setEditingRouteCode(null); setRouteCode(''); setRouteName(''); setRouteStation('cashier')
+      setRoutePrinterId(''); setRouteCopies('1')
+    } else {
+      setEditingRouteCode(route.code); setRouteCode(route.code); setRouteName(route.name)
+      setRouteStation(route.stationCode); setRoutePrinterId(route.printerDeviceId); setRouteCopies(String(route.copies))
+    }
+    setMode('route')
+  }
+
+  function setRouteStatus(route: PrinterRouteView, status: 'active' | 'paused') {
+    const verb = status === 'active' ? '启用' : '暂停'
+    if (!window.confirm(`确认${verb}“${route.name}”打印分流？`)) return
+    void run(`route-status-${route.id}-${status}`, () => api.putEndpoint(`/api/hardware/printer-routes/${encodeURIComponent(route.code)}`, {
+      name: route.name, stationCode: route.stationCode, productCategoryCode: route.productCategoryCode,
+      printerDeviceId: route.printerDeviceId, copies: route.copies, priority: route.priority,
+      status, reason: reason.trim(),
+    }, { idempotencyKey: operationIdempotency(`printer-route-${status}`) }), `打印分流已${verb}`)
+  }
+
+  function revokeBridge(bridge: PrintBridgeView) {
+    if (!window.confirm(`确认撤销“${bridge.name}”的打印桥凭据？该电脑将立即不能领取新任务。`)) return
+    void run(`bridge-revoke-${bridge.id}`, () => api.postEndpoint(`/api/hardware/print-bridges/${bridge.id}/revoke`, {
+      reason: reason.trim(),
+    }), '打印桥凭据已撤销，关联打印机已标记离线')
+  }
+
   return <div className="staff-module-body">
     <div className={`staff-module-summary${attention > 0 ? ' has-attention' : ''}`}><span><Printer size={18} /></span><div><strong>{devices.length} 台设备 · {jobs.length} 项打印待办</strong><small>{attention > 0 ? `${attention} 项需要管理员检查` : '当前没有设备或打印异常'}</small></div></div>
     {(canCommand || canRetry) && <label className="staff-device-reason">本次操作原因<input value={reason} maxLength={1000} onChange={(event) => setReason(event.target.value)} /></label>}
     {notice !== '' && <p className="staff-module-notice" role="status">{notice}</p>}
-    {devices.length === 0 ? <EmptyState text="尚未配置真实打印或硬件设备" /> : <div className="staff-module-list">{devices.map((device) => <article key={device.id} className={device.connectivityStatus === 'offline' ? 'has-attention' : ''}><div><strong>{device.name}</strong><small>{device.stationCode ?? '全店'} · {hardwareType(device.deviceType)}</small></div><div className="staff-inline-actions"><em>{connectivityLabel(device.connectivityStatus)}</em>{canCommand && <button type="button" disabled={busyKey !== null} onClick={() => command(device, 'ping')}>检测</button>}{canCommand && device.connectivityStatus !== 'online' && <button type="button" disabled={busyKey !== null} onClick={() => command(device, 'reconnect')}>重连</button>}{canCommand && device.deviceType === 'printer' && <button type="button" disabled={busyKey !== null} onClick={() => command(device, 'test_print')}>测试打印</button>}</div></article>)}</div>}
+    {canManagePrinter && <section className="staff-print-setup-flow">
+      <header><div><strong>打印机上线流程</strong><small>按顺序完成，配置、在线状态、路由和测试都集中在这里。</small></div><em>{bridges.some((bridge) => bridge.online) && routes.some((route) => route.status === 'active') ? '可联调' : '待配置'}</em></header>
+      <ol>
+        <li><b>1</b><span><strong>连接门店电脑</strong><small>安装Windows打印桥并用一次性码配对</small></span><button type="button" onClick={() => setMode('bridge')}>打开</button></li>
+        <li><b>2</b><span><strong>登记打印机</strong><small>填写Windows队列、纸宽和所在位置</small></span><button type="button" onClick={() => openPrinter()}>打开</button></li>
+        <li><b>3</b><span><strong>配置分流</strong><small>吧台、后厨、收银分别选择目标打印机</small></span><button type="button" onClick={() => openRoute()}>打开</button></li>
+        <li><b>4</b><span><strong>测试并验收</strong><small>实体出纸后核对标题、桌号、订单号和备注</small></span><button type="button" onClick={() => setMode('overview')}>查看设备</button></li>
+      </ol>
+    </section>}
+    {mode === 'bridge' && canManagePrinter && <section className="staff-module-form staff-print-config">
+      <header><strong>门店Windows打印桥</strong><small>打印桥作为系统服务随电脑开机启动，不使用员工账号；门店电脑只主动通过HTTPS领取任务。</small></header>
+      <button type="button" disabled={busyKey !== null} onClick={createPairingCode}>生成10分钟一次性配对码</button>
+      {pairing && <div className="staff-print-pairing"><strong>{pairing.pairingCode}</strong><small>有效至 {formatDateTime(pairing.expiresAt)}。只输入到门店打印桥，不要发到群聊或截图留存。</small></div>}
+      <div className="staff-print-bridge-list">{bridges.length === 0 ? <p>尚无已配对打印桥。</p> : bridges.map((bridge) => <article key={bridge.id}><div><strong>{bridge.name}</strong><small>{bridge.hostname} · 版本 {bridge.softwareVersion} · {bridge.printerCount}台打印机</small></div><em>{bridge.status === 'revoked' ? '已撤销' : bridge.online ? '在线' : '离线'}</em>{bridge.status === 'active' && <button type="button" className="is-danger" onClick={() => revokeBridge(bridge)}>撤销</button>}</article>)}</div>
+    </section>}
+    {mode === 'printer' && canManagePrinter && <form className="staff-module-form staff-print-config" onSubmit={savePrinter}>
+      <header><strong>{editingPrinterId === null ? '登记Windows打印机' : '编辑打印机'}</strong><small>先在Windows“打印机和扫描仪”完成驱动和测试页；队列名称只从打印桥实际读取。</small></header>
+      <label>设备编号<input required readOnly={editingPrinterId !== null} pattern="[A-Za-z0-9][A-Za-z0-9_.-]{1,63}" value={printerCode} onChange={(event) => setPrinterCode(event.target.value)} placeholder="例如 CASHIER-USB-01" /></label>
+      <label>显示名称<input required maxLength={120} value={printerName} onChange={(event) => setPrinterName(event.target.value)} placeholder="例如 收银吧台USB打印机" /></label>
+      <label>所在位置<select value={printerStation} onChange={(event) => setPrinterStation(event.target.value as typeof printerStation)}><option value="cashier">收银/吧台</option><option value="bar">吧台</option><option value="kitchen">后厨</option></select></label>
+      <label>打印桥<select required value={printBridgeId} onChange={(event) => { setPrintBridgeId(event.target.value); setWindowsQueueName('') }}><option value="">请选择</option>{bridges.filter((bridge) => bridge.status === 'active').map((bridge) => <option key={bridge.id} value={bridge.id}>{bridge.name}（{bridge.online ? '在线' : '离线'}）</option>)}</select></label>
+      <label>Windows打印机队列<select required value={windowsQueueName} onChange={(event) => setWindowsQueueName(event.target.value)}><option value="">{printBridgeId === '' ? '请先选择打印桥' : availablePrinterQueues.length === 0 ? '尚未读取到队列，请确认打印桥在线' : '请选择Windows队列'}</option>{availablePrinterQueues.map((queue) => <option value={queue} key={queue}>{queue}</option>)}</select><small>队列由门店电脑自动上报，避免手工输入错误。</small></label>
+      <label>打印规格<select value={printProfile} onChange={(event) => setPrintProfile(event.target.value as typeof printProfile)}><option value="escpos_80">80毫米热敏票据</option><option value="escpos_58">58毫米热敏票据</option><option value="windows_text">Windows文本驱动</option></select></label>
+      <div className="staff-inline-actions"><button type="submit" disabled={busyKey !== null}>保存打印机</button>{editingPrinterId !== null && <button type="button" onClick={() => { clearPrinterForm(); setMode('overview') }}>取消编辑</button>}</div>
+    </form>}
+    {mode === 'route' && canManagePrinter && <form className="staff-module-form staff-print-config" onSubmit={saveRoute}>
+      <header><strong>配置打印分流</strong><small>酒水制作单去吧台，小吃制作单去后厨，支付成功后的消费凭条去收银打印机。</small></header>
+      <label>分流编号<input required readOnly={editingRouteCode !== null} pattern="[A-Za-z0-9][A-Za-z0-9_.-]{1,63}" value={routeCode} onChange={(event) => setRouteCode(event.target.value)} placeholder="例如 CASHIER-RECEIPT" /></label>
+      <label>分流名称<input required maxLength={120} value={routeName} onChange={(event) => setRouteName(event.target.value)} placeholder="例如 收银付款凭条" /></label>
+      <label>业务内容<select value={routeStation} onChange={(event) => setRouteStation(event.target.value as typeof routeStation)}><option value="bar">酒水/调酒制作单</option><option value="kitchen">小吃/食品制作单</option><option value="cashier">付款凭条</option></select></label>
+      <label>目标打印机<select required value={routePrinterId} onChange={(event) => setRoutePrinterId(event.target.value)}><option value="">请选择</option>{devices.filter((device) => device.deviceType === 'printer' && device.status === 'active').map((device) => <option key={device.id} value={device.id}>{device.name}（{device.windowsQueueName ?? '未配置队列'}）</option>)}</select></label>
+      <label>打印份数<input required type="number" min={1} max={5} value={routeCopies} onChange={(event) => setRouteCopies(event.target.value)} /></label>
+      <button type="submit" disabled={busyKey !== null}>保存打印分流</button>
+    </form>}
+    {routes.length > 0 && <section className="staff-song-requests"><h3>当前打印分流</h3>{routes.map((route) => <article key={route.id}><div><strong>{hardwareStationLabel(route.stationCode)} · {route.name}</strong><span>{devices.find((device) => device.id === route.printerDeviceId)?.name ?? '打印机已移除'} · {route.copies}份</span></div><div className="staff-inline-actions"><em>{route.status === 'active' ? '启用' : '暂停'}</em>{canManagePrinter && <button type="button" onClick={() => openRoute(route)}>编辑</button>}{canManagePrinter && route.status !== 'retired' && <button type="button" onClick={() => setRouteStatus(route, route.status === 'active' ? 'paused' : 'active')}>{route.status === 'active' ? '暂停' : '启用'}</button>}</div></article>)}</section>}
+    {devices.length === 0 ? <EmptyState text="尚未配置真实打印或硬件设备" /> : <div className="staff-module-list">{devices.map((device) => <article key={device.id} className={device.connectivityStatus === 'offline' ? 'has-attention' : ''}><div><strong>{device.name}</strong><small>{device.stationCode ?? '全店'} · {hardwareType(device.deviceType)} · {device.status === 'active' ? '启用' : device.status === 'paused' ? '暂停' : '退役'}</small></div><div className="staff-inline-actions"><em>{connectivityLabel(device.connectivityStatus)}</em>{canManagePrinter && device.deviceType === 'printer' && <button type="button" disabled={busyKey !== null} onClick={() => openPrinter(device)}>编辑</button>}{canManagePrinter && device.deviceType === 'printer' && device.status !== 'retired' && <button type="button" disabled={busyKey !== null} onClick={() => setPrinterStatus(device, device.status === 'active' ? 'paused' : 'active')}>{device.status === 'active' ? '暂停' : '启用'}</button>}{canCommand && <button type="button" disabled={busyKey !== null || device.status !== 'active'} onClick={() => command(device, 'ping')}>检测</button>}{canCommand && device.connectivityStatus !== 'online' && <button type="button" disabled={busyKey !== null || device.status !== 'active'} onClick={() => command(device, 'reconnect')}>重连</button>}{canCommand && device.deviceType === 'printer' && <button type="button" disabled={busyKey !== null || device.status !== 'active'} onClick={() => command(device, 'test_print')}>测试打印</button>}</div></article>)}</div>}
     {jobs.some((job) => job.status === 'failed' || job.status === 'dead') && <section className="staff-song-requests"><h3>打印失败待办</h3>{jobs.filter((job) => job.status === 'failed' || job.status === 'dead').map((job) => <article key={job.id}><div><strong>{job.printerName}</strong><span>{job.stationCode} · 已尝试{job.attempts}/{job.maxAttempts}次</span></div>{canRetry ? <button type="button" disabled={busyKey !== null || job.status === 'dead'} onClick={() => retry(job)}>{job.status === 'dead' ? '已停止自动重试' : '检查后重试'}</button> : <span>需打印重试权限</span>}</article>)}</section>}
     {jobs.some((job) => job.status === 'failed' || job.status === 'dead') && <p className="staff-module-footnote">重试前必须确认设备在线并检查是否已实际出单；已停止自动重试的任务需管理员排查，不能直接重复发送。</p>}
   </div>
@@ -1124,6 +1328,28 @@ function printJobs(value: unknown): PrintJobView[] {
     ? [item as unknown as PrintJobView] : [])
 }
 
+function printBridges(value: unknown): PrintBridgeView[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((item) => isRecord(item)
+    && typeof item.id === 'string' && typeof item.publicId === 'string' && typeof item.name === 'string'
+    && (item.status === 'active' || item.status === 'revoked') && typeof item.hostname === 'string'
+    && typeof item.softwareVersion === 'string' && (typeof item.lastSeenAt === 'string' || item.lastSeenAt === null)
+    && typeof item.printerCount === 'number' && typeof item.online === 'boolean'
+    && Array.isArray(item.queues) && item.queues.every((queue) => typeof queue === 'string')
+    ? [item as unknown as PrintBridgeView] : [])
+}
+
+function printerRoutes(value: unknown): PrinterRouteView[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((item) => isRecord(item)
+    && typeof item.id === 'string' && typeof item.code === 'string' && typeof item.name === 'string'
+    && (item.stationCode === 'bar' || item.stationCode === 'kitchen' || item.stationCode === 'cashier')
+    && (typeof item.productCategoryCode === 'string' || item.productCategoryCode === null)
+    && typeof item.printerDeviceId === 'string' && typeof item.copies === 'number'
+    && typeof item.priority === 'number' && typeof item.status === 'string'
+    ? [item as unknown as PrinterRouteView] : [])
+}
+
 function employeeSales(value: unknown): EmployeeSalesView[] {
   if (!Array.isArray(value)) return []
   return value.flatMap((item) => isRecord(item)
@@ -1186,6 +1412,7 @@ function performancePhaseCodeLabel(value: PerformancePhaseCode): string {
 function scheduleStatus(value: string): string { return ({ scheduled: '待演出', performing: '演出中', completed: '已结束', cancelled: '已取消' } as Record<string, string>)[value] ?? '状态待确认' }
 function songStatus(value: string): string { return ({ requested: '待确认', accepted: '已接受', rejected: '未接受', paid: '已收费', performed: '已演唱', cancelled: '已取消' } as Record<string, string>)[value] ?? '状态待确认' }
 function hardwareType(value: string): string { return ({ printer: '打印机', kds_display: '出品屏', cash_drawer: '钱箱', headset: '耳机', controller: '控制器' } as Record<string, string>)[value] ?? '其他设备' }
+function hardwareStationLabel(value: string): string { return ({ bar: '吧台', kitchen: '后厨', cashier: '收银台' } as Record<string, string>)[value] ?? value }
 function connectivityLabel(value: string): string { return ({ online: '在线', offline: '离线', degraded: '需检查', unknown: '未检测' } as Record<string, string>)[value] ?? '未检测' }
 function operationIdempotency(scope: string): string { return `${scope}-${crypto.randomUUID()}` }
 function localDateTimeIso(value: string): string {

@@ -1,5 +1,6 @@
 import type { StaffModule } from './StaffModulePanel'
 import type { StaffActionsTab } from './staff-actions/types'
+import { staffModuleForRoute } from '../shared/staff-module-access'
 
 export type NormalizedStaffRoute = StaffActionsTab | StaffModule
 
@@ -16,4 +17,8 @@ export function normalizedStaffRoute(path: string): NormalizedStaffRoute | null 
   if (path === '/staff/devices') return 'devices'
   if (path === '/staff/settings') return 'settings'
   return null
+}
+
+export function normalizedStaffNavigationCode(path: string): string | null {
+  return staffModuleForRoute(path)?.code ?? null
 }

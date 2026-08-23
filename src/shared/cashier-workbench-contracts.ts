@@ -90,6 +90,12 @@ export interface CashierWorkbenchPayment {
   provider: CashierPaymentProvider
   method: CashierPaymentMethod
   providerTransactionId: string | null
+  /**
+   * Whether the customer-facing provider action was actually started. A
+   * pending payment row with no action has not left M-BOX yet and may be
+   * safely superseded by an in-person collection inside one transaction.
+   */
+  providerActionState: 'creating' | 'ready' | 'unknown' | 'failed' | 'consumed' | null
   amountMinor: number
   currency: string
   status: CashierPaymentStatus
@@ -109,6 +115,7 @@ export interface CashierWorkbenchOrder {
   status: string
   paymentStatus: string
   totalAmountMinor: number
+  outstandingAmountMinor: number
   currency: string
   submittedAt: string | null
   createdAt: string
@@ -129,6 +136,8 @@ export interface CashierWorkbenchView {
   businessDate: string
   query: string
   actions: {
+    canRecordManualCash: boolean
+    canRecordManualPos: boolean
     canRequestRefund: boolean
     canApproveRefund: boolean
     canExecuteRefund: boolean

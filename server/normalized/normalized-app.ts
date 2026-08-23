@@ -45,6 +45,7 @@ import {
 import { guestSessionApiPlugin } from './guest-session-api.js'
 import { GuestSessionService, GuestTableSessionEndedError } from './guest-session-repository.js'
 import { hardwareApiPlugin } from './hardware-api.js'
+import { printBridgeApiPlugin } from './print-bridge-api.js'
 import { inventoryApiPlugin } from './inventory-api.js'
 import { InventoryQueryService } from './inventory-query-service.js'
 import { KdsRepository } from './kds-repository.js'
@@ -706,6 +707,14 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       transactions,
       commands: commandExecutor,
       resolveContext: operationsContext,
+    })
+    instance.register(printBridgeApiPlugin, {
+      prefix: '/api',
+      scope,
+      transactions,
+      hashSecret: options.config.secret,
+      requireHttps: options.config.deploymentTier === 'production',
+      resolveStaffContext: operationsContext,
     })
     instance.register(storeCommercePolicyApiPlugin, {
       prefix: '/api',

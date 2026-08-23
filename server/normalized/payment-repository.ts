@@ -109,6 +109,21 @@ interface SettlementRow extends Record<string, unknown> {
   has_pending: boolean
 }
 
+interface PendingOnlinePaymentRow extends Record<string, unknown> {
+  id: string
+  public_id: string
+  provider: Extract<PaymentProvider, 'wechat' | 'postar'>
+  provider_transaction_id: string | null
+  provider_action_state: 'creating' | 'ready' | 'unknown' | 'failed' | 'consumed' | null
+  provider_order_created: boolean
+}
+
+export interface ClosedUnpresentedOnlinePayment {
+  id: string
+  publicId: string
+  provider: Extract<PaymentProvider, 'wechat' | 'postar'>
+}
+
 const CAPTURED_PAYMENT_STATUSES: readonly PaymentStatus[] = [
   'succeeded',
   'partially_refunded',
@@ -152,6 +167,78 @@ export class PaymentTransitionError extends Error {
 
 export class PaymentRepository {
   constructor(private readonly transaction: ScopedTransaction) {}
+
+  /**
+   * Closes only payment rows that never left M-BOX. Once a provider action was
+   * started, or a provider order/reference exists, the remote rail may still
+   * capture money and must be queried or explicitly closed by that provider
+   * before an in-person collection is allowed.
+   */
+  async closeUnpresentedOnlinePaymentsForManualCollection(
+    orderId: string,
+    employeeId: string,
+  ): Promise<ClosedUnpresentedOnlinePayment[]> {
+    const order = await this.lockOrder(orderId)
+    if (order.status === 'draft' || order.status === 'cancelled') {
+      throw new OrderNotPayableError(order.id, `status is ${order.status}`)
+    }
+    const selected = await this.transaction.query<PendingOnlinePaymentRow>(`
+      SELECT payment.id, payment.public_id, payment.provider,
+        payment.provider_transaction_id,
+        provider_action.state AS provider_action_state,
+        (payment.provider_snapshot ? 'providerOrderCreatedAt'
+          OR payment.provider_snapshot ? 'providerOrderId') AS provider_order_created
+      FROM mbox.payments payment
+      LEFT JOIN mbox.payment_provider_actions provider_action
+        ON provider_action.tenant_id = payment.tenant_id
+       AND provider_action.store_id = payment.store_id
+       AND provider_action.payment_id = payment.id
+      WHERE payment.tenant_id = $1::uuid
+        AND payment.store_id = $2::uuid
+        AND payment.order_id = $3::uuid
+        AND payment.provider IN ('wechat', 'postar')
+        AND payment.status IN ('created', 'pending')
+      ORDER BY payment.created_at, payment.id
+      FOR UPDATE OF payment
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
+    if (selected.rows.length === 0) return []
+    const unsafe = selected.rows.find((payment) => (
+      payment.provider_transaction_id !== null
+      || payment.provider_order_created
+      || (payment.provider_action_state !== null && payment.provider_action_state !== 'failed')
+    ))
+    if (unsafe !== undefined) {
+      throw new OrderNotPayableError(
+        orderId,
+        'online payment was presented or its provider result is unknown; query or close it before manual collection',
+      )
+    }
+    const ids = selected.rows.map((payment) => payment.id)
+    const closed = await this.transaction.query<{ id: string }>(`
+      UPDATE mbox.payments
+      SET status = 'closed',
+          provider_snapshot = provider_snapshot || jsonb_build_object(
+            'providerStatus', 'closed',
+            'closeReason', 'replaced_by_manual_collection_before_provider_submission',
+            'closedByEmployeeId', $4::uuid,
+            'closedAt', clock_timestamp()::text
+          ),
+          updated_at = clock_timestamp()
+      WHERE tenant_id = $1::uuid
+        AND store_id = $2::uuid
+        AND id = ANY($3::uuid[])
+        AND status IN ('created', 'pending')
+      RETURNING id
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, ids, employeeId])
+    if (closed.rowCount !== ids.length) {
+      throw new OrderNotPayableError(orderId, 'online payment changed while switching to manual collection')
+    }
+    return selected.rows.map((payment) => ({
+      id: payment.id,
+      publicId: payment.public_id,
+      provider: payment.provider,
+    }))
+  }
 
   async createForOrder(input: Readonly<CreatePaymentForOrderInput>): Promise<Payment> {
     validateCreateInput(input)

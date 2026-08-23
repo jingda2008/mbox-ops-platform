@@ -8,6 +8,7 @@ export type DeviceType = 'printer' | 'kds_display' | 'cash_drawer' | 'headset' |
 export type DeviceStatus = 'active' | 'paused' | 'retired'
 export type ConnectivityStatus = 'unknown' | 'online' | 'offline' | 'degraded'
 export type PrintJobStatus = 'pending' | 'printing' | 'printed' | 'failed' | 'dead' | 'cancelled'
+export type PrintProfile = 'escpos_58' | 'escpos_80' | 'windows_text'
 
 export interface HardwareDevice {
   id: string
@@ -18,6 +19,9 @@ export interface HardwareDevice {
   status: DeviceStatus
   connectivityStatus: ConnectivityStatus
   capabilities: string[]
+  printBridgeId: string | null
+  windowsQueueName: string | null
+  printProfile: PrintProfile | null
   lastSeenAt: string | null
   createdAt: string
   updatedAt: string
@@ -80,6 +84,20 @@ export interface CreateDeviceInput {
   stationCode?: DeviceStation | null
   capabilities?: readonly string[]
   configSnapshot?: JsonObject
+  printBridgeId?: string | null
+  windowsQueueName?: string | null
+  printProfile?: PrintProfile | null
+}
+
+export interface UpdateDeviceInput {
+  id: string
+  name?: string
+  stationCode?: DeviceStation | null
+  status?: DeviceStatus
+  printBridgeId?: string | null
+  windowsQueueName?: string | null
+  printProfile?: PrintProfile | null
+  printerOnly?: boolean
 }
 
 export interface UpsertPrinterRouteInput {
@@ -123,6 +141,9 @@ interface DeviceRow extends Record<string, unknown> {
   status: DeviceStatus
   connectivity_status: ConnectivityStatus
   capabilities: string[]
+  print_bridge_id: string | null
+  windows_queue_name: string | null
+  print_profile: PrintProfile | null
   last_seen_at: string | null
   created_at: string
   updated_at: string
@@ -140,6 +161,7 @@ interface RouteRow extends Record<string, unknown> {
   status: DeviceStatus
   created_at: string
   updated_at: string
+  device_print_bridge_id?: string | null
 }
 
 interface PrintJobRow extends Record<string, unknown> {
@@ -210,13 +232,17 @@ export class HardwareRepository {
 
   async createDevice(input: Readonly<CreateDeviceInput>): Promise<HardwareDevice> {
     validateDeviceInput(input)
+    if (input.printBridgeId && input.windowsQueueName) {
+      await this.assertActiveBridgeQueue(input.printBridgeId, input.windowsQueueName)
+    }
     const result = await this.transaction.query<DeviceRow>(`
       INSERT INTO mbox.devices (
         tenant_id, store_id, code, name, device_type, station_code,
-        capabilities, config_snapshot
-      ) VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7::text[], $8::jsonb)
+        capabilities, config_snapshot, print_bridge_id, windows_queue_name, print_profile
+      ) VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7::text[], $8::jsonb, $9::uuid, $10, $11)
       RETURNING id, code, name, device_type, station_code, status,
-        connectivity_status, capabilities, last_seen_at, created_at, updated_at
+        connectivity_status, capabilities, print_bridge_id, windows_queue_name,
+        print_profile, last_seen_at, created_at, updated_at
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -226,8 +252,68 @@ export class HardwareRepository {
       input.stationCode ?? null,
       [...new Set(input.capabilities ?? [])],
       JSON.stringify(input.configSnapshot ?? {}),
+      input.printBridgeId ?? null,
+      input.windowsQueueName?.trim() ?? null,
+      input.printProfile ?? null,
     ])
     return mapDevice(requireRow(result.rows[0], '设备创建失败'))
+  }
+
+  async updateDevice(input: Readonly<UpdateDeviceInput>): Promise<{
+    before: HardwareDevice
+    device: HardwareDevice
+  }> {
+    assertUuid(input.id, 'deviceId')
+    const selected = await this.transaction.query<DeviceRow>(`
+      SELECT id, code, name, device_type, station_code, status,
+        connectivity_status, capabilities, print_bridge_id, windows_queue_name,
+        print_profile, last_seen_at, created_at, updated_at
+      FROM mbox.devices
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+      FOR UPDATE
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.id])
+    if (selected.rows[0] === undefined) throw new HardwareNotFoundError('设备不存在')
+    const before = mapDevice(selected.rows[0])
+    if (input.printerOnly && before.deviceType !== 'printer') {
+      throw new HardwarePolicyError('打印维护权限只能修改打印机')
+    }
+    if (before.status === 'retired' && input.status !== undefined && input.status !== 'retired') {
+      throw new HardwarePolicyError('已退役设备不能重新启用，请新建设备并重新验收')
+    }
+    const next: CreateDeviceInput & { status: DeviceStatus } = {
+      code: before.code,
+      name: input.name ?? before.name,
+      deviceType: before.deviceType,
+      stationCode: input.stationCode === undefined ? before.stationCode : input.stationCode,
+      capabilities: before.capabilities,
+      printBridgeId: input.printBridgeId === undefined ? before.printBridgeId : input.printBridgeId,
+      windowsQueueName: input.windowsQueueName === undefined ? before.windowsQueueName : input.windowsQueueName,
+      printProfile: input.printProfile === undefined ? before.printProfile : input.printProfile,
+      status: input.status ?? before.status,
+    }
+    validateDeviceInput(next)
+    assertEnum(next.status, ['active', 'paused', 'retired'], 'status')
+    const printConfigurationChanged = next.printBridgeId !== before.printBridgeId
+      || next.windowsQueueName !== before.windowsQueueName
+      || next.printProfile !== before.printProfile
+    if (next.status === 'active' && next.printBridgeId && next.windowsQueueName
+      && (printConfigurationChanged || before.status !== 'active')) {
+      await this.assertActiveBridgeQueue(next.printBridgeId, next.windowsQueueName)
+    }
+    const updated = await this.transaction.query<DeviceRow>(`
+      UPDATE mbox.devices
+      SET name=$4,station_code=$5,status=$6,print_bridge_id=$7::uuid,
+        windows_queue_name=$8,print_profile=$9
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+      RETURNING id, code, name, device_type, station_code, status,
+        connectivity_status, capabilities, print_bridge_id, windows_queue_name,
+        print_profile, last_seen_at, created_at, updated_at
+    `, [
+      this.transaction.scope.tenantId, this.transaction.scope.storeId, input.id,
+      next.name.trim(), next.stationCode ?? null, next.status, next.printBridgeId ?? null,
+      next.windowsQueueName?.trim() ?? null, next.printProfile ?? null,
+    ])
+    return { before, device: mapDevice(requireRow(updated.rows[0], '设备修改失败')) }
   }
 
   async recordConnectivity(
@@ -242,7 +328,8 @@ export class HardwareRepository {
           last_seen_at = CASE WHEN $4 IN ('online', 'degraded') THEN clock_timestamp() ELSE last_seen_at END
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
       RETURNING id, code, name, device_type, station_code, status,
-        connectivity_status, capabilities, last_seen_at, created_at, updated_at
+        connectivity_status, capabilities, print_bridge_id, windows_queue_name,
+        print_profile, last_seen_at, created_at, updated_at
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, deviceId, connectivityStatus])
     if (!result.rows[0]) throw new HardwareNotFoundError('设备不存在')
     return mapDevice(result.rows[0])
@@ -290,6 +377,29 @@ export class HardwareRepository {
     return mapRoute(requireRow(result.rows[0], '打印路由保存失败'))
   }
 
+  async listPrinterRoutes(): Promise<PrinterRoute[]> {
+    const result = await this.transaction.query<RouteRow>(`
+      SELECT id,code,name,station_code,product_category_code,printer_device_id,
+        copies,priority,status,created_at,updated_at
+      FROM mbox.printer_routes
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+      ORDER BY status,station_code,priority,code,id
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId])
+    return result.rows.map(mapRoute)
+  }
+
+  async getPrinterRouteByCode(code: string, lock = false): Promise<PrinterRoute | null> {
+    if (!CODE_PATTERN.test(code)) throw new HardwarePolicyError('路由编码格式无效')
+    const result = await this.transaction.query<RouteRow>(`
+      SELECT id,code,name,station_code,product_category_code,printer_device_id,
+        copies,priority,status,created_at,updated_at
+      FROM mbox.printer_routes
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND code=$3
+      ${lock ? 'FOR UPDATE' : ''}
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, code])
+    return result.rows[0] ? mapRoute(result.rows[0]) : null
+  }
+
   async materializeFromOutbox(input: Readonly<MaterializePrintJobsInput>): Promise<PrintJob[]> {
     validateMaterializeInput(input)
     const source = await this.transaction.query<{ id: string }>(`
@@ -302,7 +412,8 @@ export class HardwareRepository {
     const routes = await this.transaction.query<RouteRow>(`
       SELECT route.id, route.code, route.name, route.station_code,
         route.product_category_code, route.printer_device_id, route.copies,
-        route.priority, route.status, route.created_at, route.updated_at
+        route.priority, route.status, route.created_at, route.updated_at,
+        device.print_bridge_id AS device_print_bridge_id
       FROM mbox.printer_routes AS route
       JOIN mbox.devices AS device
         ON device.tenant_id = route.tenant_id AND device.store_id = route.store_id
@@ -349,10 +460,11 @@ export class HardwareRepository {
           tenant_id, store_id, business_key, source_outbox_message_id,
           printer_route_id, printer_device_id, station_code, product_category_code,
           source_type, source_reference, print_snapshot, contains_priority_note,
-          copies, max_attempts
+          copies, max_attempts, delivery_mode, print_bridge_id
         ) VALUES (
           $1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6::uuid, $7, $8,
-          $9, $10, $11::jsonb, $12, $13, $14
+          $9, $10, $11::jsonb, $12, $13, $14,
+          CASE WHEN $15::uuid IS NULL THEN 'cloud_adapter' ELSE 'bridge_pull' END, $15::uuid
         )
         ON CONFLICT (tenant_id, store_id, business_key) DO NOTHING
         RETURNING id
@@ -371,6 +483,7 @@ export class HardwareRepository {
         input.containsPriorityNote ?? false,
         route.copies,
         input.maxAttempts ?? 8,
+        route.device_print_bridge_id ?? null,
       ])
       const job = await this.getByBusinessKey(businessKey, true)
       if (!job) throw new HardwareConflictError('打印任务创建后无法读取')
@@ -403,13 +516,29 @@ export class HardwareRepository {
     const normalized = stations ? [...new Set(stations)] : null
     const result = await this.transaction.query<DeviceRow>(`
       SELECT id, code, name, device_type, station_code, status,
-        connectivity_status, capabilities, last_seen_at, created_at, updated_at
+        connectivity_status, capabilities, print_bridge_id, windows_queue_name,
+        print_profile, last_seen_at, created_at, updated_at
       FROM mbox.devices
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND ($3::text[] IS NULL OR station_code = ANY($3::text[]))
       ORDER BY station_code NULLS LAST, name, id
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, normalized])
     return result.rows.map(mapDevice)
+  }
+
+  private async assertActiveBridgeQueue(printBridgeId: string, windowsQueueName: string) {
+    const result = await this.transaction.query<{ id: string }>(`
+      SELECT id FROM mbox.print_bridges
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+        AND status='active' AND queue_snapshot ? $4
+      FOR SHARE
+    `, [
+      this.transaction.scope.tenantId, this.transaction.scope.storeId,
+      printBridgeId, windowsQueueName.trim(),
+    ])
+    if (result.rows[0] === undefined) {
+      throw new HardwarePolicyError('打印桥未启用或没有上报该Windows打印机队列')
+    }
   }
 
   async listPrintJobs(input: Readonly<{
@@ -623,6 +752,9 @@ function mapDevice(row: DeviceRow): HardwareDevice {
     status: row.status,
     connectivityStatus: row.connectivity_status,
     capabilities: row.capabilities,
+    printBridgeId: row.print_bridge_id,
+    windowsQueueName: row.windows_queue_name,
+    printProfile: row.print_profile,
     lastSeenAt: row.last_seen_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -704,6 +836,17 @@ function validateDeviceInput(input: Readonly<CreateDeviceInput>) {
   requireText(input.name, 'name', 1, 120)
   assertEnum(input.deviceType, ['printer', 'kds_display', 'cash_drawer', 'headset', 'controller'], 'deviceType')
   if (input.stationCode) assertEnum(input.stationCode, ['bar', 'kitchen', 'cashier', 'service'], 'stationCode')
+  const bridgeConfigured = input.printBridgeId !== undefined && input.printBridgeId !== null
+    || input.windowsQueueName !== undefined && input.windowsQueueName !== null
+    || input.printProfile !== undefined && input.printProfile !== null
+  if (bridgeConfigured) {
+    if (input.deviceType !== 'printer' || input.printBridgeId == null || input.windowsQueueName == null || input.printProfile == null) {
+      throw new HardwarePolicyError('Windows打印队列必须同时选择打印桥、队列名称和打印规格')
+    }
+    assertUuid(input.printBridgeId, 'printBridgeId')
+    requireText(input.windowsQueueName, 'windowsQueueName', 1, 180)
+    assertEnum(input.printProfile, ['escpos_58', 'escpos_80', 'windows_text'], 'printProfile')
+  }
   for (const capability of input.capabilities ?? []) {
     if (!CAPABILITY_PATTERN.test(capability)) throw new HardwarePolicyError('设备能力编码格式无效')
   }

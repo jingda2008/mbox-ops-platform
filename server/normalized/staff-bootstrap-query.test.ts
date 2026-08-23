@@ -135,7 +135,7 @@ describe('StaffBootstrapQuery', () => {
       store: { id: storeId, name: 'M-BOX', timezone: 'Asia/Shanghai' },
       businessDay: { date: '2026-08-11', status: 'open' },
       staff: { id: employeeId, displayName: '李艳', roleCodes: ['MANAGER'] },
-      highFrequencyEntries: [{ code: 'live', route: '/live' }],
+      highFrequencyEntries: [{ code: 'live', route: '/staff/live' }],
     })
     expect(first.view.domainSummaries).toEqual([
       expect.objectContaining({ key: 'live', activeCount: 6 }),
@@ -344,8 +344,12 @@ postgresIt('executes the compact bootstrap query against normalized PostgreSQL t
         'recommendation.staff.modify.all',
         'table.participation.manage',
       ] },
-      navigation: [{ code: 'live', route: '/live' }],
-      highFrequencyEntries: [{ code: 'live', route: '/live' }],
+      navigation: [
+        { code: 'live', route: '/staff/live' },
+        { code: 'performance', route: '/staff/performance' },
+        { code: 'experience', route: '/staff/customer-experience' },
+      ],
+      highFrequencyEntries: [{ code: 'live', route: '/staff/live' }],
     })
   } finally {
     await pool.end()

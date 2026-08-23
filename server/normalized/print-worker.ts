@@ -117,6 +117,7 @@ async function claimJobs(
       SELECT job.id
       FROM mbox.print_jobs AS job
       WHERE job.tenant_id = $1::uuid AND job.store_id = $2::uuid
+        AND job.delivery_mode = 'cloud_adapter'
         AND job.attempts < job.max_attempts
         AND (
           (job.status IN ('pending', 'failed') AND job.available_at <= clock_timestamp())

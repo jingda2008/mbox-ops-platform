@@ -434,8 +434,14 @@ export function CashierAfterSalesWorkbenchView({
                 </section>
                 <section>
                   <h3>收款与退款</h3>
+                  <ManualCollectionPanel
+                    order={order}
+                    actions={view.actions}
+                    busyKey={busyKey}
+                    onMutation={onMutation}
+                  />
                   {order.payments.length === 0
-                    ? <p className="cashier-guidance">该订单尚无支付记录，不能申请退款。</p>
+                    ? <p className="cashier-guidance">该订单尚无支付记录；只有实际收到现金或实体POS确认到账后才能登记，未收款不能申请退款。</p>
                     : order.payments.map((payment) => <PaymentBlock
                         key={payment.id}
                         payment={payment}
@@ -610,6 +616,81 @@ export function CashierAfterSalesWorkbenchView({
   </div>
 }
 
+function ManualCollectionPanel({ order, actions, busyKey, onMutation }: {
+  order: CashierWorkbenchOrder
+  actions: CashierWorkbenchView['actions']
+  busyKey: string | null
+  onMutation(key: string, endpoint: string, body: unknown, successMessage: string): Promise<boolean>
+}) {
+  const [provider, setProvider] = useState<'cash' | 'physical_pos' | null>(null)
+  const [receiptReference, setReceiptReference] = useState('')
+  const [terminalId, setTerminalId] = useState('')
+  const [confirmed, setConfirmed] = useState(false)
+  const activeOnlinePayment = order.payments.find((payment) => (
+    (payment.provider === 'postar' || payment.provider === 'wechat')
+    && (payment.status === 'created' || payment.status === 'pending')
+    && (payment.providerTransactionId !== null
+      || (payment.providerActionState !== null && payment.providerActionState !== 'failed'))
+  ))
+  const unpresentedOnlinePayment = order.payments.find((payment) => (
+    (payment.provider === 'postar' || payment.provider === 'wechat')
+    && (payment.status === 'created' || payment.status === 'pending')
+    && payment.providerTransactionId === null
+    && (payment.providerActionState === null || payment.providerActionState === 'failed')
+  ))
+  const canCollect = order.status !== 'cancelled' && order.outstandingAmountMinor > 0
+    && (actions.canRecordManualCash || actions.canRecordManualPos)
+  if (!canCollect) return null
+  const blocked = activeOnlinePayment !== undefined
+  const mutationKey = provider === null ? '' : `manual-payment-${provider}-${order.id}`
+
+  async function submit() {
+    if (provider === null || blocked || receiptReference.trim().length < 3) return
+    if (!confirmed) { setConfirmed(true); return }
+    const completed = await onMutation(
+      mutationKey,
+      '/api/payments/manual',
+      {
+        orderId: order.id,
+        provider,
+        method: provider === 'cash' ? 'cash' : 'card',
+        receiptReference: receiptReference.trim(),
+        ...(provider === 'physical_pos' && terminalId.trim() ? { terminalId: terminalId.trim() } : {}),
+        occurredAt: new Date().toISOString(),
+      },
+      provider === 'cash'
+        ? '现金收款已登记，订单支付状态已刷新；已配置收银打印路由时会生成支付凭条。'
+        : '实体POS收款已登记，订单支付状态已刷新；已配置收银打印路由时会生成支付凭条。',
+    )
+    if (completed) {
+      setProvider(null); setReceiptReference(''); setTerminalId(''); setConfirmed(false)
+    }
+  }
+
+  return <div className={`cashier-manual-collection${blocked ? ' is-blocked' : ''}`}>
+    <div><strong>现场收款</strong><small>剩余应收 ¥{formatAmount(order.outstandingAmountMinor)}；本次登记会收清全部剩余应收，不支持拆分金额。</small></div>
+    {blocked ? <p className="cashier-channel-pending">已有线上支付“{shortReference(activeOnlinePayment.publicId)}”已经向渠道发起，客人仍可能完成付款。现金和实体POS入口已锁定；客人表示付过但系统没收到结果时，请先在下方查询渠道结果，确认失败或关闭后再改收现金。</p> : <>
+      {unpresentedOnlinePayment !== undefined && <p className="cashier-guidance">系统发现一笔尚未向支付渠道发起的线上记录。登记现场收款时会在同一笔操作中安全关闭该记录，不需要客人继续线上待支付。</p>}
+      {provider === null ? <div className="cashier-action-row">
+        {actions.canRecordManualCash && <button type="button" className="cashier-primary-action" disabled={busyKey !== null} onClick={() => setProvider('cash')}>登记现金收款</button>}
+        {actions.canRecordManualPos && <button type="button" className="cashier-secondary-action" disabled={busyKey !== null} onClick={() => setProvider('physical_pos')}>登记实体POS收款</button>}
+      </div> : <div className="cashier-manual-result">
+        <strong>{provider === 'cash' ? '登记现金收款' : '登记实体POS收款'}</strong>
+        <p>只在款项已经实际收到后登记。系统将记录当前登录员工、时间和凭证，不允许代填他人身份。</p>
+        <label className="cashier-field"><span>{provider === 'cash' ? '现金收款凭证号' : 'POS小票/交易号'}</span><input value={receiptReference} maxLength={256} placeholder={provider === 'cash' ? '例如 XJ-20260824-L01-001' : '例如 POS-20260824-0001'} onChange={(event) => { setReceiptReference(event.target.value); setConfirmed(false) }} /></label>
+        {provider === 'physical_pos' && <label className="cashier-field"><span>POS终端编号（选填）</span><input value={terminalId} maxLength={128} placeholder="例如 POS-01" onChange={(event) => { setTerminalId(event.target.value); setConfirmed(false) }} /></label>}
+        {confirmed && <p className="cashier-guidance">请再次核对：已经实际收到{provider === 'cash' ? '现金' : 'POS款项'} ¥{formatAmount(order.outstandingAmountMinor)}，凭证号为“{receiptReference.trim()}”。确认后将计入收款和对账。</p>}
+        <div className="cashier-action-row">
+          <button type="button" className="cashier-quiet-action" disabled={busyKey !== null} onClick={() => { setProvider(null); setConfirmed(false) }}>返回</button>
+          <button type="button" className="cashier-primary-action" disabled={busyKey !== null || receiptReference.trim().length < 3} onClick={() => void submit()}>
+            {busyKey === mutationKey ? <LoaderCircle className="is-spinning" size={17} /> : null}{confirmed ? `确认已收到${provider === 'cash' ? '现金' : 'POS款项'}` : '核对并继续'}
+          </button>
+        </div>
+      </div>}
+    </>}
+  </div>
+}
+
 function PaymentBlock({
   payment,
   auth,
@@ -672,7 +753,10 @@ function PaymentBlock({
       选择原商品发起退款
     </button>}
 
-    {actions.canViewReconciliation && payment.provider === 'postar' && (payment.status === 'created' || payment.status === 'pending') && <div className="cashier-provider-query">
+    {actions.canViewReconciliation && payment.provider === 'postar'
+      && (payment.status === 'created' || payment.status === 'pending')
+      && payment.providerActionState !== null && payment.providerActionState !== 'failed'
+      && <div className="cashier-provider-query">
       <p>这笔线上付款尚无明确结果。查询只读取支付渠道的签名结果，不会再次扣款。</p>
       <button
         type="button"

@@ -1,3 +1,5 @@
+import type { StaffNavigationJsonObject } from './staff-module-access.js'
+
 export const STAFF_BOOTSTRAP_SCHEMA_VERSION = 1 as const
 
 export type StaffBusinessDayStatus = 'open' | 'awaiting_close' | 'closed' | 'not_initialized'
@@ -17,7 +19,7 @@ export interface StaffNavigationItem {
   route: string
   icon: string | null
   sortOrder: number
-  displayConfig: Record<string, unknown>
+  displayConfig: StaffNavigationJsonObject
 }
 
 export interface StaffHighFrequencyEntry {

@@ -467,7 +467,7 @@ integration('normalized staff authentication PostgreSQL integration', () => {
     expect(sessions.rows[0]?.count).toBe('2')
   })
 
-  it('keeps role scopes, approval limits and high-frequency navigation configurable and live', async () => {
+  it('keeps role scopes, approval limits and eligible navigation presentation configurable and live', async () => {
     await service.setRoleDataScope({
       ...metadata('staff-role-scope-0001'),
       roleId: serverRoleId,
@@ -489,9 +489,9 @@ integration('normalized staff authentication PostgreSQL integration', () => {
     await service.setRoleNavigation({
       ...metadata('staff-role-navigation-0001'),
       roleId: serverRoleId,
-      navigationCode: 'tasks',
-      label: '任务',
-      route: '/tasks',
+      navigationCode: 'commerce',
+      label: '取送',
+      route: '/staff/fulfillment',
       icon: 'list-checks',
       sortOrder: 1,
       enabled: true,
@@ -510,7 +510,12 @@ integration('normalized staff authentication PostgreSQL integration', () => {
       code: 'gift.approve',
       amountMinor: 8800,
     }))
-    expect(access.navigation).toContainEqual(expect.objectContaining({ code: 'tasks', route: '/tasks' }))
+    expect(access.navigation).toContainEqual(expect.objectContaining({
+      code: 'commerce',
+      label: '取送',
+      route: '/staff/fulfillment',
+      sortOrder: 1,
+    }))
   })
 
   it('creates a replacement employee session without asking for the daily store credential again', async () => {

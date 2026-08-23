@@ -19,9 +19,9 @@ describe('StaffAccessRepository', () => {
 
     expect(access.roleCodes).toEqual(['SERVER'])
     expect(access.roleNames).toEqual(['服务员'])
-    expect(access.permissions).toEqual(['service.complete'])
+    expect(access.permissions).toEqual(['service.execute'])
     expect(access.deniedPermissions).toEqual(['order.create'])
-    expect(access.navigation).toEqual([expect.objectContaining({ code: 'tasks', route: '/tasks' })])
+    expect(access.navigation).toEqual([expect.objectContaining({ code: 'tasks', route: '/staff/tasks' })])
     expect(access.approvalLimits).toEqual([
       expect.objectContaining({ code: 'order.gift', amountMinor: 8800, currency: 'CNY' }),
     ])
@@ -73,7 +73,7 @@ class AccessFixtureTransaction implements ScopedTransaction {
     if (sql.includes('permission_facts')) {
       return result<Row>([
         { code: 'order.create', role_granted: true, override_granted: true, override_denied: true },
-        { code: 'service.complete', role_granted: true, override_granted: false, override_denied: false },
+        { code: 'service.execute', role_granted: true, override_granted: false, override_denied: false },
       ])
     }
     if (sql.includes('FROM mbox.role_data_scopes')) {

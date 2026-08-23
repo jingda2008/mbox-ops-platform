@@ -7,6 +7,7 @@ import type {
   StaffHighFrequencyEntry,
 } from '../../src/shared/normalized-contracts.js'
 import { STAFF_BOOTSTRAP_SCHEMA_VERSION } from '../../src/shared/normalized-contracts.js'
+import { effectiveStaffNavigation } from '../../src/shared/staff-module-access.js'
 import {
   ScopedPostgresTransactionRunner,
   type ScopedTransaction,
@@ -160,7 +161,7 @@ const DOMAIN_DEFINITIONS: readonly DomainDefinition[] = [
   },
   {
     key: 'printing', label: '打印任务', endpointRef: 'hardwareWork',
-    permissionPrefixes: ['print.', 'hardware.'], navigationCodes: ['devices'],
+    permissionPrefixes: ['print.', 'printer.', 'hardware.'], navigationCodes: ['devices'],
     values: (row) => counts(row.active_print_jobs, row.failed_print_jobs, '0', '0'),
   },
 ]
@@ -199,7 +200,7 @@ export class StaffBootstrapQuery {
     const deniedPermissions = stringArray(identity.denied_permissions)
     const dataScopes = dataScopeArray(identity.data_scopes)
     const approvalLimits = approvalLimitArray(identity.approval_limits)
-    const navigation = navigationArray(identity.navigation)
+    const navigation = effectiveStaffNavigation(permissions, navigationArray(identity.navigation))
     const watermark = hashWatermark([
       scope.tenantId,
       scope.storeId,
@@ -706,7 +707,7 @@ function navigationArray(value: unknown): StaffBootstrapView['navigation'] {
       route: item.route,
       icon: item.icon,
       sortOrder: item.sortOrder as number,
-      displayConfig: item.displayConfig,
+      displayConfig: item.displayConfig as StaffBootstrapView['navigation'][number]['displayConfig'],
     }
   })
 }

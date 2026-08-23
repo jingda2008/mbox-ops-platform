@@ -18,6 +18,51 @@ const customerId = '77777777-7777-4777-8777-777777777777'
 const employeePrincipal = { type: 'employee' as const, employeeId }
 
 describe('PaymentRepository', () => {
+  it('closes only an online payment that never left M-BOX before manual collection', async () => {
+    const transaction = new ScriptedTransaction([
+      rows([orderRow(8800)]),
+      rows([{
+        id: paymentId,
+        public_id: 'payment-unpresented-0001',
+        provider: 'postar',
+        provider_transaction_id: null,
+        provider_action_state: null,
+        provider_order_created: false,
+      }]),
+      rows([{ id: paymentId }]),
+    ])
+
+    await expect(new PaymentRepository(transaction).closeUnpresentedOnlinePaymentsForManualCollection(
+      orderId,
+      employeeId,
+    )).resolves.toEqual([{
+      id: paymentId, publicId: 'payment-unpresented-0001', provider: 'postar',
+    }])
+    expect(transaction.calls[1]?.sql).toContain('FOR UPDATE OF payment')
+    expect(transaction.calls[2]?.sql).toContain("SET status = 'closed'")
+    expect(transaction.calls[2]?.values[3]).toBe(employeeId)
+  })
+
+  it('blocks cash when a provider presentation exists or its result is unknown', async () => {
+    const transaction = new ScriptedTransaction([
+      rows([orderRow(8800)]),
+      rows([{
+        id: paymentId,
+        public_id: 'payment-presented-0001',
+        provider: 'postar',
+        provider_transaction_id: 'POSTAR-REMOTE-1',
+        provider_action_state: 'ready',
+        provider_order_created: true,
+      }]),
+    ])
+
+    await expect(new PaymentRepository(transaction).closeUnpresentedOnlinePaymentsForManualCollection(
+      orderId,
+      employeeId,
+    )).rejects.toThrow('query or close it before manual collection')
+    expect(transaction.calls).toHaveLength(2)
+  })
+
   it('derives the payment amount only from the locked order and existing database settlement', async () => {
     const transaction = new ScriptedTransaction([
       rows([orderRow(12800)]),

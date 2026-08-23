@@ -344,6 +344,30 @@
 .venue-management-list article { min-height: 58px; padding: 8px; border: 1px solid #d7ddd6; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
 .venue-management-list article > div { min-width: 0; display: grid; gap: 3px; }
 .venue-management-list article small { color: #687068; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.staff-print-setup-flow { display: grid; gap: 10px; padding: 12px; border: 1px solid #b8ccbf; border-left: 4px solid #176b4c; border-radius: 7px; background: #f3f8f4; }
+.staff-print-setup-flow > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.staff-print-setup-flow > header > div { display: grid; gap: 3px; }
+.staff-print-setup-flow > header strong { font-size: 14px; }
+.staff-print-setup-flow > header small { color: #687068; font-size: 10px; line-height: 1.45; }
+.staff-print-setup-flow > header em { flex: 0 0 auto; padding: 4px 7px; border-radius: 999px; background: #e2efe7; color: #176b4c; font-size: 10px; font-style: normal; font-weight: 800; }
+.staff-print-setup-flow > ol { margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; list-style: none; }
+.staff-print-setup-flow li { min-width: 0; min-height: 118px; padding: 9px; display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: 1fr auto; align-items: start; gap: 7px; border: 1px solid #d4ded7; border-radius: 6px; background: #fff; }
+.staff-print-setup-flow li > b { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%; background: #176b4c; color: #fff; font-size: 11px; }
+.staff-print-setup-flow li > span { min-width: 0; display: grid; gap: 3px; }
+.staff-print-setup-flow li > span strong { font-size: 11px; }
+.staff-print-setup-flow li > span small { color: #687068; font-size: 9px; line-height: 1.45; }
+.staff-print-setup-flow li > button { grid-column: 1 / -1; min-height: 40px; border: 1px solid #176b4c; border-radius: 5px; background: #eef7f2; color: #175d42; font-size: 11px; font-weight: 800; }
+.staff-print-config > button { min-height: 44px; align-self: end; border: 1px solid #176b4c; border-radius: 6px; background: #176b4c; color: #fff; font-weight: 800; }
+.staff-print-pairing { grid-column: 1 / -1; display: grid; gap: 5px; padding: 12px; border: 1px dashed #8cb49d; border-radius: 6px; background: #eff8f3; }
+.staff-print-pairing strong { color: #174f39; font: 800 19px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .08em; }
+.staff-print-pairing small { color: #52665a; font-size: 10px; line-height: 1.5; }
+.staff-print-bridge-list { grid-column: 1 / -1; display: grid; gap: 7px; }
+.staff-print-bridge-list > p { margin: 0; color: #687068; font-size: 11px; }
+.staff-print-bridge-list article { min-height: 58px; padding: 9px 10px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; border: 1px solid #d4dbd4; border-radius: 6px; background: #fff; }
+.staff-print-bridge-list article > div { min-width: 0; display: grid; gap: 3px; }
+.staff-print-bridge-list article small { color: #687068; font-size: 10px; }
+.staff-print-bridge-list article em { color: #176b4c; font-size: 10px; font-style: normal; font-weight: 800; }
+.staff-print-bridge-list article button { min-height: 40px; padding: 0 10px; border: 1px solid #b44248; border-radius: 5px; background: #fff3f3; color: #953139; font-size: 10px; font-weight: 800; }
 @media (min-width: 760px) {
   .staff-module-body { max-width: 860px; margin: 0 auto; padding: 18px; }
 }
@@ -389,6 +413,11 @@
   .staff-song-catalog-list article { align-items: flex-start; flex-direction: column; }
   .staff-song-catalog-list article > div:last-child { width: 100%; }
   .staff-song-catalog-list article > div:last-child button { flex: 1; }
+  .staff-print-setup-flow > ol { grid-template-columns: 1fr; }
+  .staff-print-setup-flow li { min-height: 0; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: 1fr; align-items: center; }
+  .staff-print-setup-flow li > button { grid-column: auto; min-width: 64px; }
+  .staff-print-bridge-list article { grid-template-columns: minmax(0, 1fr) auto; }
+  .staff-print-bridge-list article button { grid-column: 1 / -1; }
 }
 
 /* M-BOX staff modules: premium brand-green surface treatment only. */

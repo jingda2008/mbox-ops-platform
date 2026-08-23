@@ -7,6 +7,7 @@ import { StaffModulePanel } from './StaffModulePanel'
 import { StaffActionsPanel } from './staff-actions'
 import type { StaffActionsTab } from './staff-actions/types'
 import { normalizedStaffNavigationCode, normalizedStaffRoute, type NormalizedStaffRoute } from './normalized-staff-routes'
+import { bootstrapForAuthenticatedStaff, staffWorkspaceIdentityKey } from './staff-workspace-identity'
 import { clearDeviceLease, getOrCreateDeviceKey, hasUsableDeviceLease, saveDeviceLease } from './staff-device'
 import staffLogo from './assets/mbox-logo-badge.png'
 import './normalized-staff-login.css'
@@ -20,9 +21,12 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
   const [staffRoute, setStaffRoute] = useState(() => normalizedStaffRoute(window.location.pathname))
   const [staffNavigation, setStaffNavigation] = useState<StaffBootstrapView['navigation'] | null>(null)
   const authenticatedSessionId = auth?.session.id ?? null
+  const authenticatedEmployeeId = auth?.employee.id ?? null
   const rememberStaffNavigation = useCallback((bootstrap: StaffBootstrapView) => {
+    if (bootstrap.staff.id !== authenticatedEmployeeId) return
+    setInitialBootstrap(bootstrap)
     setStaffNavigation(bootstrap.navigation)
-  }, [])
+  }, [authenticatedEmployeeId])
 
   const checkSession = useCallback(async () => {
     setPhase('checking')
@@ -31,10 +35,13 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
         api.getStaffSession(),
         api.getStaffBootstrap().catch(() => null),
       ])
+      const bootstrap = bootstrapForAuthenticatedStaff(bootstrapResult?.data ?? null, session)
       setAuth(session)
-      setInitialBootstrap(bootstrapResult?.data ?? null)
-      if (bootstrapResult?.data !== null && bootstrapResult?.data !== undefined) {
-        setStaffNavigation(bootstrapResult.data.navigation)
+      setInitialBootstrap(bootstrap)
+      if (bootstrap !== null) {
+        setStaffNavigation(bootstrap.navigation)
+      } else {
+        setStaffNavigation(null)
       }
       setPhase('ready')
     } catch (error) {
@@ -61,6 +68,7 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
         if (!stopped && error instanceof NormalizedApiError && error.recovery === 'login') {
           setAuth(null)
           setStaffNavigation(null)
+          setInitialBootstrap(null)
           setMessage('登录状态已结束，请重新登录')
           setPhase('login')
         }
@@ -87,7 +95,6 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
     window.addEventListener('popstate', syncRoute)
     return () => window.removeEventListener('popstate', syncRoute)
   }, [])
-  useEffect(() => { setStaffNavigation(null) }, [authenticatedSessionId])
   useEffect(() => {
     if (phase !== 'ready' || auth === null || staffRoute === null || staffNavigation !== null) return
     const controller = new AbortController()
@@ -109,10 +116,10 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
   if (phase === 'login') {
     return <EmployeeLoginForm api={api} message={message} onCredentialRequired={() => {
       clearDeviceLease(); setMessage('这台设备需要重新验证门店口令'); setPhase('credential')
-    }} onReady={(session) => { setMessage(null); setStaffNavigation(null); setAuth(session); setPhase('ready') }} />
+    }} onReady={(session) => { setMessage(null); setStaffNavigation(null); setInitialBootstrap(null); setAuth(session); setPhase('ready') }} />
   }
   if (auth === null) return <StaffGateLoading />
-  const loginRequired = () => { setAuth(null); setStaffNavigation(null); setPhase('login') }
+  const loginRequired = () => { setAuth(null); setStaffNavigation(null); setInitialBootstrap(null); setPhase('login') }
   const switchReady = (session: StaffAuthView) => {
     window.history.replaceState({}, '', '/')
     setStaffRoute(null)
@@ -156,14 +163,14 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
         ? <div className="normalized-route-notice" role="alert">当前账号没有这个页面的有效权限。请由管理员授权后刷新；直接输入页面地址不会绕过权限。</div>
         : isStaffActionsTab(staffRoute)
         ? <StaffActionsPanel initialTab={staffRoute} onLoginRequired={loginRequired} />
-        : <StaffModulePanel key={authenticatedSessionId} api={api} auth={auth} module={staffRoute} onLoginRequired={loginRequired} />}
+        : <StaffModulePanel key={staffWorkspaceIdentityKey(auth)} api={api} auth={auth} module={staffRoute} onLoginRequired={loginRequired} />}
     </main>
   ) : (<>
       {message !== null && <p className="normalized-route-notice" role="status">{message}</p>}
       <NormalizedStaffWorkspace
-        key={authenticatedSessionId}
+        key={staffWorkspaceIdentityKey(auth)}
         api={api}
-        initialBootstrap={initialBootstrap}
+        initialBootstrap={bootstrapForAuthenticatedStaff(initialBootstrap, auth)}
         onNavigate={navigate}
         onLoginRequired={loginRequired}
         onBootstrapReady={rememberStaffNavigation}

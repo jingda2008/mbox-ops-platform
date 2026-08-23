@@ -143,9 +143,8 @@ export class InventoryQueryService {
     return this.transactions.run(
       scope,
       async (transaction) => {
-        const access = await new StaffAccessRepository(
-          transaction,
-        ).assertPermission(employeeId, "inventory.view");
+        const access = await new StaffAccessRepository(transaction).resolve(employeeId);
+        assertInventoryDashboardAccess(access.permissions);
         const canViewCosts = access.permissions.includes("inventory.cost.view");
         const canViewBottles =
           access.permissions.includes("bottle.view") ||
@@ -413,4 +412,14 @@ export function assertInventoryPermission(
     throw new StaffAccessDeniedError(
       `Employee does not have permission ${permission}`,
     );
+}
+
+export function assertInventoryDashboardAccess(permissions: readonly string[]): void {
+  const dashboardPermissions = [
+    'inventory.view', 'inventory.manage', 'inventory.cost.view', 'inventory.receive',
+    'inventory.count', 'inventory.waste', 'inventory.barcode.bind',
+  ]
+  if (!dashboardPermissions.some((permission) => permissions.includes(permission))) {
+    throw new StaffAccessDeniedError('Employee does not have inventory dashboard access')
+  }
 }

@@ -742,10 +742,14 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
     const context = await resolveStaffContext(options, request)
     requireAnyStaffCapability(context, [
       'reconciliation.view',
+      'reconciliation.manage',
+      'payment.settlement.view',
       'payment.manual.cash.record',
       'payment.manual.pos.record',
+      'refund.request',
       'refund.approve',
       'refund.execute',
+      'business_day.close',
     ])
     const query = readObject(request.query, '查询参数')
     if (options.onlinePayments?.querySystem !== undefined) {

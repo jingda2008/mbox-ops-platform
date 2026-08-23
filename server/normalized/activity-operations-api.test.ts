@@ -28,6 +28,22 @@ describe('activity operations API', () => {
     await app.close()
   })
 
+  it('treats activity management as including the read needed to open its page', async () => {
+    const permissions: string[] = []
+    const service = serviceMock()
+    const app = await application(service, {
+      assertPermission: async (_employeeId: string, permission: string) => {
+        permissions.push(permission)
+        if (permission === 'community.activity.view') throw new StaffAccessDeniedError('denied')
+      },
+    })
+    const response = await app.inject({ method: 'GET', url: '/staff/activity-operations' })
+    expect(response.statusCode).toBe(200)
+    expect(permissions).toEqual(['community.activity.view', 'community.activity.manage'])
+    expect(service.list).toHaveBeenCalledOnce()
+    await app.close()
+  })
+
   it('creates a fully typed draft through the single operations contract', async () => {
     const permissions: string[] = []
     const service = serviceMock()

@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.0-rc.125 - 2026-08-24
+
+- Prevents a previous employee's cached workspace and navigation from returning
+  after staff switching by binding page state to both the employee and session.
+- Aligns permission-derived entries with the APIs and controls they open for
+  payments, inventory, customer activities, loyalty, privacy and performance.
+- Allows management and publishing capabilities to read only the parent data
+  required by their visible pages without relaxing mutation authorization.
+- Supersedes `rc.124` on schema `105`; the native WeChat mini-program package
+  remains a separate upload and review boundary.
+
 ## 1.0.0-rc.124 - 2026-08-24
 
 - Maps missing or expired employee sessions on the device and printing

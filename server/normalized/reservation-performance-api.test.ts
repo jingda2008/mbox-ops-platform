@@ -669,6 +669,25 @@ describe('reservationPerformanceApiPlugin performance and song requests', () => 
     }))
   })
 
+  it('lets schedule revisers read the schedule required by their visible revision panel', async () => {
+    const assertPermission = vi.fn(async (_employeeId: string, permission: string) => {
+      if (permission !== 'performance.schedule.revise') throw new StaffAccessDeniedError(permission)
+      return scopedAccess({
+        employeeId,
+        roleCodes: ['MANAGER'],
+        permissions: ['performance.schedule.revise'],
+        dataScopes: [],
+      })
+    })
+    const value = fixture({ createStaffAccessRepository: () => ({ assertPermission }) })
+
+    const response = await value.app.inject({ method: 'GET', url: '/api/staff/performances/today' })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json().data.schedules).toHaveLength(1)
+    expect(assertPermission).toHaveBeenCalledWith(employeeId, 'performance.schedule.revise')
+  })
+
   it('prevents a customer without an open table session from submitting song requests', async () => {
     const value = fixture({
       resolveGuestContext: vi.fn(async () => ({ ...guestContext, tableSessionId: null })),

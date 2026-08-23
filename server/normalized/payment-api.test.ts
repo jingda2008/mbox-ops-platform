@@ -1176,6 +1176,24 @@ describe('paymentApiPlugin', () => {
     expect(value.cashierWorkbenchQuery.get).not.toHaveBeenCalled()
   })
 
+  it('lets a refund requester open the same workbench needed to choose the authoritative payment', async () => {
+    const value = fixture({
+      resolveStaffContext: () => ({
+        scope: { tenantId, storeId },
+        actor: { type: 'employee', employeeId },
+        employeeId,
+        businessDate: '2026-08-11',
+        capabilities: ['refund.request'],
+      }),
+    })
+    const response = await value.app.inject({ method: 'GET', url: '/api/payments/workbench' })
+
+    expect(response.statusCode).toBe(200)
+    expect(value.cashierWorkbenchQuery.get).toHaveBeenCalledWith(expect.objectContaining({
+      employeeId, capabilities: ['refund.request'],
+    }))
+  })
+
   it('maps malformed requests and idempotency conflicts to stable errors', async () => {
     const value = fixture()
     const malformed = await value.app.inject({

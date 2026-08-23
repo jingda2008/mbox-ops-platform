@@ -45,14 +45,14 @@ export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsA
   }))
 
   app.get('/staff/activity-operations', async (request, reply) => handle(reply, async () => {
-    const context = await authorized(options, request, ['community.activity.view'])
+    const context = await authorizedAny(options, request, ['community.activity.view', 'community.activity.manage', 'community.activity.publish'])
     return reply.send({ data: await options.service.list(context) })
   }))
 
   app.get<{ Params: { publicId: string } }>(
     '/staff/activity-operations/:publicId',
     async (request, reply) => handle(reply, async () => {
-      const context = await authorized(options, request, ['community.activity.view'])
+      const context = await authorizedAny(options, request, ['community.activity.view', 'community.activity.manage', 'community.activity.publish'])
       return reply.send({ data: await options.service.detail(context, publicId(request.params.publicId)) })
     }),
   )
@@ -138,6 +138,29 @@ async function authorized(
   await options.transactions.run(context.scope, async (transaction) => {
     const access = options.createStaffAccessRepository?.(transaction) ?? new StaffAccessRepository(transaction)
     for (const permission of permissions) await access.assertPermission(context.employeeId, permission)
+  }, { readOnly: true })
+  return context
+}
+
+async function authorizedAny(
+  options: ActivityOperationsApiOptions,
+  request: FastifyRequest,
+  permissions: readonly string[],
+): Promise<ActivityOperationsStaffContext> {
+  const context = await options.resolveStaffContext(request)
+  await options.transactions.run(context.scope, async (transaction) => {
+    const access = options.createStaffAccessRepository?.(transaction) ?? new StaffAccessRepository(transaction)
+    let denied: unknown = new StaffAccessDeniedError('当前岗位没有活动读取权限')
+    for (const permission of permissions) {
+      try {
+        await access.assertPermission(context.employeeId, permission)
+        return
+      } catch (error) {
+        if (!(error instanceof StaffAccessDeniedError)) throw error
+        denied = error
+      }
+    }
+    throw denied
   }, { readOnly: true })
   return context
 }

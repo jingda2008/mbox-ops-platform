@@ -25,7 +25,7 @@ export interface MemberContentCardApiOptions {
 
 export const memberContentCardApiPlugin:FastifyPluginAsync<MemberContentCardApiOptions>=async(app,options)=>{
   app.get('/staff/home-content-cards',async(request,reply)=>handle(reply,async()=>{
-    const context=await authorized(options,request,'community.activity.view')
+    const context=await authorizedAny(options,request,['community.activity.view','community.activity.manage','community.activity.publish'])
     return reply.send({data:await options.service.list(context)})
   }))
 
@@ -63,6 +63,20 @@ async function authorized(options:MemberContentCardApiOptions,request:FastifyReq
   await options.transactions.run(context.scope,async(transaction)=>{
     const access=options.createStaffAccessRepository?.(transaction)??new StaffAccessRepository(transaction)
     await access.assertPermission(context.employeeId,permission)
+  },{readOnly:true})
+  return context
+}
+
+async function authorizedAny(options:MemberContentCardApiOptions,request:FastifyRequest,permissions:readonly string[]){
+  const context=await options.resolveStaffContext(request)
+  await options.transactions.run(context.scope,async(transaction)=>{
+    const access=options.createStaffAccessRepository?.(transaction)??new StaffAccessRepository(transaction)
+    let denied:unknown=new StaffAccessDeniedError('当前岗位没有首页内容读取权限')
+    for(const permission of permissions){
+      try{await access.assertPermission(context.employeeId,permission);return}
+      catch(error){if(!(error instanceof StaffAccessDeniedError))throw error;denied=error}
+    }
+    throw denied
   },{readOnly:true})
   return context
 }

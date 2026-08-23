@@ -678,7 +678,9 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
   }))
 
   app.get('/staff/customer-experience/performance-phases/current', async (request, reply) => handle(reply, async () => {
-    const context = await staffContextWithPermission(options, request, 'song.view')
+    const context = await staffContextWithAnyPermission(options, request, [
+      'song.view', 'song.manage', 'performance.phase.manage',
+    ])
     return reply.send({ data: await options.service.performancePhases(context) })
   }))
 

@@ -1,8 +1,13 @@
 import { createElement, type FormEvent } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { StaffSessionMenuView } from './NormalizedStaffApp'
+import type { StaffAuthView } from '../normalized-api'
+import type { StaffBootstrapView } from '../shared/normalized-contracts'
+import {
+  StaffSessionMenuView,
+} from './NormalizedStaffApp'
 import { getOrCreateDeviceKey } from './staff-device'
+import { bootstrapForAuthenticatedStaff, staffWorkspaceIdentityKey } from './staff-workspace-identity'
 
 const callbacks = {
   onOpen: vi.fn(),
@@ -65,5 +70,26 @@ describe('normalized staff device identity', () => {
 
     expect(first).toBe('web-01234567-89ab-4def-8123-456789abcdef')
     expect(getOrCreateDeviceKey(storage, () => 'unused')).toBe(first)
+  })
+})
+
+describe('normalized staff workspace identity', () => {
+  const auth = (employeeId: string): StaffAuthView => ({
+    session: {
+      id: 'same-browser-session', employeeId, issuedAt: '2026-08-24T00:00:00Z',
+      expiresAt: '2026-08-24T06:00:00Z', onlineLeaseUntil: '2026-08-24T00:01:00Z', isOnline: true,
+    },
+    employee: { id: employeeId, code: employeeId, displayName: employeeId, roleCodes: [] },
+    permissions: [], deniedPermissions: [],
+  })
+  const bootstrap = (employeeId: string) => ({ staff: { id: employeeId } }) as StaffBootstrapView
+
+  it('does not render a previous employee bootstrap after login or employee switching', () => {
+    expect(bootstrapForAuthenticatedStaff(bootstrap('liyan'), auth('wuya'))).toBeNull()
+    expect(bootstrapForAuthenticatedStaff(bootstrap('wuya'), auth('wuya'))).not.toBeNull()
+  })
+
+  it('remounts staff pages when the employee changes inside the same browser session', () => {
+    expect(staffWorkspaceIdentityKey(auth('liyan'))).not.toBe(staffWorkspaceIdentityKey(auth('wuya')))
   })
 })

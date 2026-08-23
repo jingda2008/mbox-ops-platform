@@ -252,11 +252,18 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
       if (module === 'payments') {
         setData(emptyData)
       } else if (module === 'performance') {
+        const canReadSongs = auth.permissions.includes('song.view') || auth.permissions.includes('song.manage')
+        const canManagePhase = auth.permissions.includes('performance.phase.manage')
+        const canReviseSchedule = auth.permissions.includes('performance.schedule.revise')
         const [performance, requests, performers, phases] = await Promise.all([
-          api.getEndpoint<{ data: unknown }>('/api/staff/performances/today'),
-          api.getEndpoint<{ data: unknown }>('/api/staff/song-requests'),
-          api.getEndpoint<{ data: unknown }>('/api/staff/performers'),
-          api.getEndpoint<{ data: unknown }>('/api/staff/customer-experience/performance-phases/current'),
+          canReadSongs || canManagePhase || canReviseSchedule
+            ? api.getEndpoint<{ data: unknown }>('/api/staff/performances/today')
+            : Promise.resolve({ data: null }),
+          canReadSongs ? api.getEndpoint<{ data: unknown }>('/api/staff/song-requests') : Promise.resolve({ data: [] }),
+          canReadSongs ? api.getEndpoint<{ data: unknown }>('/api/staff/performers') : Promise.resolve({ data: [] }),
+          canReadSongs || canManagePhase
+            ? api.getEndpoint<{ data: unknown }>('/api/staff/customer-experience/performance-phases/current')
+            : Promise.resolve({ data: [] }),
         ])
         setData({
           ...emptyData,
@@ -266,8 +273,16 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
           performancePhases: performancePhaseEvents(phases.data),
         })
       } else if (module === 'inventory') {
-        const response = await api.getEndpoint<{ data: unknown }>('/api/inventory')
-        setData({ ...emptyData, inventory: inventoryView(response.data) })
+        const canReadInventory = auth.permissions.some((permission) => [
+          'inventory.view', 'inventory.manage', 'inventory.cost.view', 'inventory.receive',
+          'inventory.count', 'inventory.waste', 'inventory.barcode.bind',
+        ].includes(permission))
+        if (canReadInventory) {
+          const response = await api.getEndpoint<{ data: unknown }>('/api/inventory')
+          setData({ ...emptyData, inventory: inventoryView(response.data) })
+        } else {
+          setData(emptyData)
+        }
       } else if (module === 'operations') {
         if (auth.permissions.includes('commercial.profit.view')) {
           const response = await api.getEndpoint<{ data: unknown }>('/api/commercial-ops/profit?period=day')
@@ -277,8 +292,12 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
           setData({ ...emptyData, employeeSales: employeeSales(response.data) })
         }
       } else if (module === 'experience') {
-        const response = await api.getEndpoint<{ data: unknown }>('/api/staff/customer-experience/dashboard')
-        setData({ ...emptyData, customerExperience: customerExperienceDashboard(response.data) })
+        if (auth.permissions.includes('customer.experience.view')) {
+          const response = await api.getEndpoint<{ data: unknown }>('/api/staff/customer-experience/dashboard')
+          setData({ ...emptyData, customerExperience: customerExperienceDashboard(response.data) })
+        } else {
+          setData(emptyData)
+        }
       } else if (module === 'devices') {
         const canManagePrinters = auth.permissions.includes('printer.manage') || auth.permissions.includes('hardware.manage')
         const canViewPrintJobs = canManagePrinters || auth.permissions.includes('print.view') || auth.permissions.includes('print.view_all')
@@ -333,7 +352,7 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
     if (module === 'performance') return <PerformanceModule api={api} auth={auth} view={data.performance} performers={data.performers} requests={data.songRequests} phases={data.performancePhases} onChanged={refresh} />
     if (module === 'inventory') return <InventoryModule api={api} auth={auth} view={data.inventory} onChanged={refresh} />
     if (module === 'operations') return <OperationsModule view={data.profit} sales={data.employeeSales} canViewProfit={auth.permissions.includes('commercial.profit.view')} />
-    if (module === 'experience' && data.customerExperience !== null) return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={data.customerExperience} />
+    if (module === 'experience') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={data.customerExperience} />
     if (module === 'devices') return <DevicesModule api={api} auth={auth} devices={data.devices} jobs={data.printJobs} bridges={data.printBridges} routes={data.printerRoutes} onChanged={refresh} />
     return <SettingsModule api={api} auth={auth} policy={data.commercePolicy} onChanged={refresh} />
   }, [api, auth, data, module, onLoginRequired, paymentRefreshToken, refresh])
@@ -646,6 +665,7 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
   const canWaste = auth.permissions.includes('inventory.waste')
   const canReceive = auth.permissions.includes('inventory.receive')
   const canManage = auth.permissions.includes('inventory.manage')
+  const canBindBarcode = canManage || auth.permissions.includes('inventory.barcode.bind')
   const draftReceipts = view.receipts.filter((receipt) => receipt.status === 'draft' && receipt.id !== pendingReceipt?.id)
   const bindableItems = view.items.filter((item) => item.categoryCode !== 'food' && (item.itemType === 'ingredient' || item.itemType === 'bottle'))
   const selectedBindableItem = bindableItems.find((item) => item.id === itemId) ?? null
@@ -818,10 +838,10 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
     <div className={`staff-module-summary${view.lowStockCount > 0 ? ' has-attention' : ''}`}><span><PackageSearch size={18} /></span><div><strong>{view.lowStockCount} 项低库存 · {view.items.length} 项物料</strong><small>{view.receipts.length} 笔进货记录 · {view.storedBottles.length} 笔存酒</small></div></div>
     <section className="inventory-selling-flow" aria-label="酒水从建档到小程序可售流程"><header><div><strong>酒水从建档到小程序可售</strong><small>只按下面顺序操作；每一步都保留库存、售价与权限校验，不会因为集中操作而绕过实际库存。</small></div><em>5 步</em></header><ol><li><b>01</b><span><strong>建立物料</strong><small>新酒款先建立库存物料。</small></span>{canManage && <button type="button" onClick={() => chooseMode('create')}>开始</button>}</li><li><b>02</b><span><strong>绑定并扫码收货</strong><small>首次绑定条码；每次收货都需实物确认。</small></span>{canReceive && <button type="button" onClick={() => chooseMode('receive')}>扫码入库</button>}</li><li><b>03</b><span><strong>确认实际库存</strong><small>核对待收货单；差异走盘点，不手工放行。</small></span>{draftReceipts.length > 0 && <em>待确认 {draftReceipts.length}</em>}</li><li><b>04</b><span><strong>建立商品与售价</strong><small>默认先保存为停用，避免未配方就上架。</small></span>{canManageCatalog && <button type="button" onClick={() => setCatalogOpenRequest((current) => current + 1)}>继续</button>}</li><li><b>05</b><span><strong>配置配方并小程序上架</strong><small>系统会明确列出仍未满足的小程序可售条件。</small></span>{canManageCatalog && <button type="button" onClick={() => setCatalogOpenRequest((current) => current + 1)}>检查</button>}</li></ol></section>
     {notice !== '' && <p className="staff-module-notice" role="status">{notice}</p>}
-    {(canCount || canWaste || canReceive || canManage) && <div className="staff-module-actions" aria-label="库存操作">
+    {(canCount || canWaste || canReceive || canManage || canBindBarcode) && <div className="staff-module-actions" aria-label="库存操作">
       {canManage && <button type="button" className={mode === 'create' ? 'is-active' : ''} aria-pressed={mode === 'create'} onClick={() => chooseMode('create')}>新建酒水物料</button>}
       {canReceive && <button type="button" className={`is-primary${mode === 'receive' ? ' is-active' : ''}`} aria-pressed={mode === 'receive'} onClick={() => chooseMode('receive')}><ScanLine size={16} />手机扫码入库</button>}
-      {canManage && <button type="button" className={mode === 'bind' ? 'is-active' : ''} aria-pressed={mode === 'bind'} onClick={() => chooseMode('bind')}>首次绑定条码</button>}
+      {canBindBarcode && <button type="button" className={mode === 'bind' ? 'is-active' : ''} aria-pressed={mode === 'bind'} onClick={() => chooseMode('bind')}>首次绑定条码</button>}
       {canCount && <button type="button" className={mode === 'count' ? 'is-active' : ''} aria-pressed={mode === 'count'} onClick={() => chooseMode('count')}>单项盘点</button>}
       {canWaste && <button type="button" className={mode === 'waste' ? 'is-active' : ''} aria-pressed={mode === 'waste'} onClick={() => chooseMode('waste')}>登记损耗</button>}
     </div>}

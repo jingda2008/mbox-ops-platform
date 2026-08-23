@@ -24,19 +24,25 @@ export interface MediaAssetApiOptions {
 
 export const mediaAssetApiPlugin: FastifyPluginAsync<MediaAssetApiOptions> = async (app, options) => {
   app.get('/staff/media-assets', async (request, reply) => handle(reply, async () => {
-    const context = await authorized(options, request, 'community.activity.view')
+    const context = await authorizedAny(options, request, [
+      'community.activity.view', 'community.activity.manage', 'community.activity.publish',
+      'customer.experience.feature.manage',
+    ])
     return reply.send({ data: await options.service.list(context) })
   }))
 
   app.post('/staff/media-assets', { bodyLimit: MEDIA_UPLOAD_BODY_LIMIT_BYTES }, async (request, reply) => handle(reply, async () => {
-    const context = await authorized(options, request, 'community.activity.manage')
     const body = object(request.body)
+    const purpose = enumeration(body.purpose, '图片用途', ['community_activity','home_content','menu','performer','support_contact'] as const) as MediaPurpose
+    const context = purpose === 'support_contact'
+      ? await authorizedAny(options, request, ['community.activity.manage', 'customer.experience.feature.manage'])
+      : await authorized(options, request, 'community.activity.manage')
     const mimeType = enumeration(body.mimeType, '图片格式', ['image/jpeg','image/png','image/webp'] as const)
     const bytes = decodeBase64(body.base64)
     if (bytes.length > MAX_IMAGE_BYTES) throw invalid('图片压缩后不能超过 200KB')
     if (!matchesSignature(bytes, mimeType)) throw invalid('图片内容与声明格式不一致')
     const result = await options.service.upload(context, {
-      purpose: enumeration(body.purpose, '图片用途', ['community_activity','home_content','menu','performer','support_contact'] as const) as MediaPurpose,
+      purpose,
       originalFileName: fileName(body.fileName), mimeType, bytes,
       sha256: createHash('sha256').update(bytes).digest('hex'), idempotencyKey: key(request),
     })
@@ -44,7 +50,10 @@ export const mediaAssetApiPlugin: FastifyPluginAsync<MediaAssetApiOptions> = asy
   }))
 
   app.get<{ Params: { publicId: string } }>('/staff/media-assets/:publicId', async (request, reply) => handle(reply, async () => {
-    const context = await authorized(options, request, 'community.activity.view')
+    const context = await authorizedAny(options, request, [
+      'community.activity.view', 'community.activity.manage', 'community.activity.publish',
+      'customer.experience.feature.manage',
+    ])
     const value = await options.transactions.run(context.scope, (transaction) => (
       new MediaAssetRepository(transaction).staffBytes(assetPublicId(request.params.publicId))
     ), { readOnly: true })
@@ -71,6 +80,20 @@ async function authorized(options: MediaAssetApiOptions, request: FastifyRequest
   await options.transactions.run(context.scope, async (transaction) => {
     const access = options.createStaffAccessRepository?.(transaction) ?? new StaffAccessRepository(transaction)
     await access.assertPermission(context.employeeId, permission)
+  }, { readOnly: true })
+  return context
+}
+
+async function authorizedAny(options: MediaAssetApiOptions, request: FastifyRequest, permissions: readonly string[]) {
+  const context = await options.resolveStaffContext(request)
+  await options.transactions.run(context.scope, async (transaction) => {
+    const access = options.createStaffAccessRepository?.(transaction) ?? new StaffAccessRepository(transaction)
+    let denied: unknown = new StaffAccessDeniedError('当前岗位没有图片读取权限')
+    for (const permission of permissions) {
+      try { await access.assertPermission(context.employeeId, permission); return }
+      catch (error) { if (!(error instanceof StaffAccessDeniedError)) throw error; denied = error }
+    }
+    throw denied
   }, { readOnly: true })
   return context
 }

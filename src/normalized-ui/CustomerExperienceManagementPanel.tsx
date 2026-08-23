@@ -182,15 +182,15 @@ export interface CustomerExperienceDashboard {
 export function CustomerExperienceManagementPanel({ api, auth, dashboard }: {
   api: NormalizedApiClient
   auth: StaffAuthView
-  dashboard: CustomerExperienceDashboard
+  dashboard: CustomerExperienceDashboard | null
 }) {
   return <div className="staff-module-body customer-experience-management">
-    <div className="staff-metric-grid">
+    {dashboard !== null && <div className="staff-metric-grid">
       <article><small>进行中的桌台体验</small><strong>{dashboard.activePlanCount}</strong></article>
       <article><small>待执行体验节点</small><strong>{dashboard.cueQueue.length}</strong></article>
       <article><small>待跟进客户</small><strong>{dashboard.followups.length}</strong></article>
       <article><small>待办/已发布活动</small><strong>{dashboard.activities.length}</strong></article>
-    </div>
+    </div>}
     <section className="customer-experience-publishing-intro">
       <strong>超嗨发布工作台</strong>
       <small>先上传并选择图片，再保存草稿；活动和首页内容都必须由拥有发布权限的员工复核后才会在小程序展示。</small>

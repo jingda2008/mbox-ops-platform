@@ -20,9 +20,10 @@ interface SupportContactView { rolloutState:'disabled'|'pilot'|'enabled'|'shadow
 interface SupportDraft { rolloutState:'disabled'|'pilot'|'enabled'; phone:string; phoneLabel:string; wecomName:string; wecomQrImageUrl:string; reason:string }
 
 export function HomeContentManagementPanel({api,auth}:{api:NormalizedApiClient;auth:StaffAuthView}){
-  const canView=auth.permissions.includes('community.activity.view')
   const canManage=auth.permissions.includes('community.activity.manage')
   const canPublish=auth.permissions.includes('community.activity.publish')
+  const canView=auth.permissions.includes('community.activity.view')||canManage||canPublish
+  const canManageSupport=auth.permissions.includes('customer.experience.feature.manage')
   const [expanded,setExpanded]=useState(false)
   const [cards,setCards]=useState<CardView[]>([])
   const [selected,setSelected]=useState('')
@@ -34,18 +35,20 @@ export function HomeContentManagementPanel({api,auth}:{api:NormalizedApiClient;a
   const load=useCallback(async()=>{
     setBusy('load')
     try{
-      const response=await api.getEndpoint<{data:unknown}>('/api/staff/home-content-cards')
-      const next=cardList(response.data);setCards(next)
-      if(canManage){
+      const next=canView
+        ?cardList((await api.getEndpoint<{data:unknown}>('/api/staff/home-content-cards')).data)
+        :[]
+      setCards(next)
+      if(canManageSupport){
         const support=await api.getEndpoint<{data:unknown}>('/api/staff/customer-experience/support-contact')
         setSupportDraft(toSupportDraft(support.data))
       }
       if(selected){const current=next.find(item=>item.code===selected);if(current)setDraft(toDraft(current))}
     }catch(error){setNotice(message(error,'首页内容暂时无法读取'))}
     finally{setBusy('')}
-  },[api,canManage,selected])
-  useEffect(()=>{if(expanded&&canView)void load()},[expanded,canView,load])
-  if(!canView)return null
+  },[api,canManageSupport,canView,selected])
+  useEffect(()=>{if(expanded&&(canView||canManageSupport))void load()},[expanded,canManageSupport,canView,load])
+  if(!canView&&!canManageSupport)return null
   function create(){setSelected('');setDraft(emptyDraft());setNotice('正在建立首页精选内容草稿。未发布前顾客端不可见。')}
   function edit(card:CardView){setSelected(card.code);setDraft(toDraft(card));setNotice(card.status==='published'?'已发布内容需先暂停展示，再修改。':'正在编辑草稿。')}
   function update<K extends keyof Draft>(key:K,value:Draft[K]){setDraft(current=>current===null?null:{...current,[key]:value})}
@@ -86,10 +89,11 @@ export function HomeContentManagementPanel({api,auth}:{api:NormalizedApiClient;a
     finally{setBusy('')}
   }
 
-  return <section className="activity-operations-panel home-content-panel" aria-label="小程序首页精选内容管理">
-    <header><div><strong>小程序首页精选内容</strong><small>品牌故事、推广和活动内容统一以品牌绿横向图文卡展示；品牌故事点开后在小程序内展示图文内容。</small></div><button type="button" aria-expanded={expanded} onClick={()=>setExpanded(value=>!value)}>{expanded?'收起':'打开内容管理'}</button></header>
+  return <section className="activity-operations-panel home-content-panel" aria-label="小程序内容与门店联系管理">
+    <header><div><strong>小程序内容与门店联系</strong><small>品牌故事、推广和活动内容统一以品牌绿横向图文卡展示；有联系配置权限时可单独维护电话和企业微信。</small></div><button type="button" aria-expanded={expanded} onClick={()=>setExpanded(value=>!value)}>{expanded?'收起':'打开管理'}</button></header>
     {expanded&&<>
       {notice&&<p className="activity-operations-notice" role="status">{notice}</p>}
+      {canView&&<>
       <div className="activity-operations-toolbar"><span>{cards.length} 条内容</span><div>{canManage&&<button type="button" onClick={create}>新建内容草稿</button>}<button type="button" disabled={busy==='load'} onClick={()=>void load()}>刷新</button></div></div>
       <div className="activity-operations-list">{cards.map(item=><button type="button" className={selected===item.code?'is-selected':''} key={item.code} onClick={()=>edit(item)}><strong>{item.title}</strong><span>{status(item.status)} · {displayMode(item.displayMode)} · 顺序 {item.priority}</span><small>{date(item.validFrom)}—{date(item.validUntil)}</small></button>)}</div>
       {draft&&canManage&&<details className="activity-draft-editor" open><summary>{selected?'编辑首页内容草稿':'填写新内容'}</summary><form onSubmit={event=>void save(event)}>
@@ -114,7 +118,8 @@ export function HomeContentManagementPanel({api,auth}:{api:NormalizedApiClient;a
         <div className="activity-draft-actions"><button type="submit" disabled={busy==='save'}>{selected?'保存草稿':'建立草稿'}</button></div>
       </form></details>}
       <div className="activity-operations-list">{cards.map(item=><article key={`action-${item.code}`} className="home-content-action-row"><div><strong>{item.title}</strong><small>{status(item.status)} · {item.visibility==='member'?'仅会员':'所有顾客'}</small></div><div>{item.status==='published'&&canPublish&&<button type="button" onClick={()=>void action(item,'pause')}>撤下首页</button>}{['draft','paused'].includes(item.status)&&canPublish&&<button type="button" onClick={()=>void action(item,'publish')}>发布</button>}</div></article>)}</div>
-      {supportDraft&&canManage&&<details className="activity-draft-editor"><summary>顾客联系门店</summary><form onSubmit={event=>void saveSupport(event)}><fieldset><legend>电话与企业微信</legend><label>顾客端状态<select value={supportDraft.rolloutState} onChange={event=>updateSupport('rolloutState',event.target.value as SupportDraft['rolloutState'])}><option value="disabled">暂不展示</option><option value="pilot">试运行展示</option><option value="enabled">正式展示</option></select><small>启用后，“我的”页面显示门店电话和企业微信二维码；不填二维码时仅显示电话。</small></label><label>电话名称<input required minLength={2} maxLength={40} value={supportDraft.phoneLabel} onChange={event=>updateSupport('phoneLabel',event.target.value)} placeholder="门店电话" /></label><label>门店联系电话<input required minLength={6} maxLength={31} value={supportDraft.phone} onChange={event=>updateSupport('phone',event.target.value)} placeholder="如：021-12345678" /></label><label>企业微信名称<input required minLength={2} maxLength={40} value={supportDraft.wecomName} onChange={event=>updateSupport('wecomName',event.target.value)} placeholder="M-BOX 企业微信" /></label><label className="wide">企业微信二维码（可选）<input readOnly value={supportDraft.wecomQrImageUrl} placeholder="请通过下方图片库上传或选择（单张不超过 200KB）" /></label><div className="wide"><MediaAssetPicker api={api} purpose="support_contact" value={supportDraft.wecomQrImageUrl} onChange={(wecomQrImageUrl)=>updateSupport('wecomQrImageUrl',wecomQrImageUrl)} label="上传企业微信二维码" /></div><label className="wide">修改原因<input required minLength={2} maxLength={240} value={supportDraft.reason} onChange={event=>updateSupport('reason',event.target.value)} placeholder="例如：更新值班联系电话和企业微信二维码" /></label></fieldset><p className="recommendation-policy-boundary">小程序会调用原生电话能力；企业微信二维码必须从站内图片库上传。直接聊天入口需在微信官方能力完成配置后再接入。</p><div className="activity-draft-actions"><button type="submit" disabled={busy==='support'}>保存门店联系信息</button></div></form></details>}
+      </>}
+      {supportDraft&&canManageSupport&&<details className="activity-draft-editor"><summary>顾客联系门店</summary><form onSubmit={event=>void saveSupport(event)}><fieldset><legend>电话与企业微信</legend><label>顾客端状态<select value={supportDraft.rolloutState} onChange={event=>updateSupport('rolloutState',event.target.value as SupportDraft['rolloutState'])}><option value="disabled">暂不展示</option><option value="pilot">试运行展示</option><option value="enabled">正式展示</option></select><small>启用后，“我的”页面显示门店电话和企业微信二维码；不填二维码时仅显示电话。</small></label><label>电话名称<input required minLength={2} maxLength={40} value={supportDraft.phoneLabel} onChange={event=>updateSupport('phoneLabel',event.target.value)} placeholder="门店电话" /></label><label>门店联系电话<input required minLength={6} maxLength={31} value={supportDraft.phone} onChange={event=>updateSupport('phone',event.target.value)} placeholder="如：021-12345678" /></label><label>企业微信名称<input required minLength={2} maxLength={40} value={supportDraft.wecomName} onChange={event=>updateSupport('wecomName',event.target.value)} placeholder="M-BOX 企业微信" /></label><label className="wide">企业微信二维码（可选）<input readOnly value={supportDraft.wecomQrImageUrl} placeholder="请通过下方图片库上传或选择（单张不超过 200KB）" /></label><div className="wide"><MediaAssetPicker api={api} purpose="support_contact" value={supportDraft.wecomQrImageUrl} onChange={(wecomQrImageUrl)=>updateSupport('wecomQrImageUrl',wecomQrImageUrl)} label="上传企业微信二维码" /></div><label className="wide">修改原因<input required minLength={2} maxLength={240} value={supportDraft.reason} onChange={event=>updateSupport('reason',event.target.value)} placeholder="例如：更新值班联系电话和企业微信二维码" /></label></fieldset><p className="recommendation-policy-boundary">小程序会调用原生电话能力；企业微信二维码必须从站内图片库上传。直接聊天入口需在微信官方能力完成配置后再接入。</p><div className="activity-draft-actions"><button type="submit" disabled={busy==='support'}>保存门店联系信息</button></div></form></details>}
     </>}
   </section>
 }

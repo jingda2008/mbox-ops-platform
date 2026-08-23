@@ -53,9 +53,9 @@ const memberLevels = [['member','普通会员'],['silver','银卡'],['gold','金
 const lifecycleStages = [['new','新会员'],['active','活跃'],['high_value','高价值'],['at_risk','有流失风险'],['dormant','沉睡']] as const
 
 export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClient; auth: StaffAuthView }) {
-  const canView = auth.permissions.includes('community.activity.view')
   const canManage = auth.permissions.includes('community.activity.manage')
   const canPublish = auth.permissions.includes('community.activity.publish')
+  const canView = auth.permissions.includes('community.activity.view') || canManage || canPublish
   const canRequestRefund = canManage && auth.permissions.includes('refund.request')
   const canApproveRefund = auth.permissions.includes('refund.approve')
   const canExecuteRefund = auth.permissions.includes('refund.execute')

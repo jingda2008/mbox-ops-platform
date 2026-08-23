@@ -13,7 +13,11 @@ export interface StaffModuleAccessDefinition {
 export const staffModuleAccessDefinitions: readonly StaffModuleAccessDefinition[] = Object.freeze([
   {
     code: 'live', label: '现场', route: '/staff/live', sortOrder: 210,
-    permissionCodes: ['dashboard.view', 'table.view_all', 'table.open', 'table.close', 'table.transfer', 'table.assignment.manage', 'table.participation.manage'],
+    permissionCodes: [
+      'dashboard.view', 'table.view_all', 'table.open', 'table.close', 'table.transfer',
+      'table.assignment.manage', 'table.participation.manage',
+      'recommendation.staff.modify', 'observation.record',
+    ],
   },
   {
     code: 'tasks', label: '任务', route: '/staff/tasks', sortOrder: 220,
@@ -30,8 +34,8 @@ export const staffModuleAccessDefinitions: readonly StaffModuleAccessDefinition[
   {
     code: 'payments', label: '收银与退款', route: '/staff/payments', sortOrder: 250,
     permissionCodes: [
-      'payment.initiate.staff', 'payment.manual.cash.record', 'payment.manual.pos.record',
-      'payment.collect', 'payment.settlement.view', 'refund.request', 'refund.approve',
+      'payment.manual.cash.record', 'payment.manual.pos.record',
+      'payment.settlement.view', 'refund.request', 'refund.approve',
       'refund.execute', 'reconciliation.view', 'reconciliation.manage', 'business_day.close',
     ],
   },
@@ -39,8 +43,7 @@ export const staffModuleAccessDefinitions: readonly StaffModuleAccessDefinition[
     code: 'inventory', label: '库存', route: '/staff/inventory', sortOrder: 260,
     permissionCodes: [
       'inventory.view', 'inventory.manage', 'inventory.cost.view', 'inventory.receive',
-      'inventory.count', 'inventory.approve', 'inventory.waste', 'inventory.barcode.bind',
-      'inventory.recipe.cost.apply', 'inventory.recipe.publish', 'inventory.recipe.replace',
+      'inventory.count', 'inventory.waste', 'inventory.barcode.bind', 'catalog.product.manage',
     ],
   },
   {
@@ -51,15 +54,36 @@ export const staffModuleAccessDefinitions: readonly StaffModuleAccessDefinition[
     code: 'operations', label: '经营数据', route: '/staff/operations', sortOrder: 280,
     permissionCodes: [
       'commercial.sales.view', 'commercial.sales.view_all', 'commercial.profit.view',
-      'commercial.cost.manage', 'commercial.cost.create', 'commercial.cost.correct',
-      'commercial.sales.attribute', 'commercial.sales.rule.manage',
     ],
   },
   {
     code: 'experience', label: '客户体验与活动', route: '/staff/customer-experience', sortOrder: 285,
     permissionCodes: [
-      'community.activity.manage', 'community.activity.contact.reveal',
-      'recommendation.staff.modify', 'observation.record',
+      'customer.experience.view', 'customer.experience.manage', 'customer.experience.feature.manage',
+      'community.activity.view', 'community.activity.manage', 'community.activity.publish',
+      'recommendation.analytics.view', 'product.observation.analytics.view', 'observation.view.raw',
+      'recommendation.rule.view', 'recommendation.rule.draft', 'recommendation.rule.approve',
+      'recommendation.rule.publish',
+      'loyalty.operations.view', 'loyalty.operations.control',
+      'loyalty.configuration.view', 'loyalty.configuration.edit', 'loyalty.configuration.preview',
+      'loyalty.configuration.approve',
+      'loyalty.promotion.view', 'loyalty.promotion.manage', 'loyalty.promotion.approve',
+      'loyalty.promotion.publish',
+      'loyalty.policy.view', 'loyalty.policy.manage', 'loyalty.policy.approve', 'loyalty.policy.publish',
+      'loyalty.redemption.catalog.manage', 'loyalty.redemption.catalog.approve',
+      'loyalty.redemption.catalog.publish', 'loyalty.redemption.control',
+      'loyalty.redemption.fulfill', 'loyalty.redemption.exception',
+      'loyalty.accrual.exception.view', 'loyalty.accrual.request', 'loyalty.accrual.approve',
+      'membership.terms.view', 'membership.terms.manage', 'membership.terms.approve',
+      'membership.terms.publish',
+      'customer.membership.recovery.verify', 'customer.membership.merge.approve',
+      'checkout.upgrade.rule.view', 'checkout.upgrade.rule.draft',
+      'checkout.upgrade.rule.approve', 'checkout.upgrade.rule.publish',
+      'fulfillment.capacity.view', 'fulfillment.capacity.draft',
+      'fulfillment.capacity.approve', 'fulfillment.capacity.publish',
+      'privacy.contact.retention.view', 'privacy.contact.retention.draft',
+      'privacy.contact.retention.approve', 'privacy.contact.retention.publish',
+      'privacy.contact.legal_hold',
     ],
   },
   {
@@ -71,7 +95,7 @@ export const staffModuleAccessDefinitions: readonly StaffModuleAccessDefinition[
   },
   {
     code: 'settings', label: '系统配置', route: '/staff/settings', sortOrder: 300,
-    permissionCodes: ['staff.access.configure', 'payment.policy.manage', 'ai.schedule', 'config.manage'],
+    permissionCodes: ['staff.access.configure', 'payment.policy.manage', 'table.manage'],
   },
 ])
 

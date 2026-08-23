@@ -543,7 +543,7 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
   )
 
   app.get('/staff/performers', async (request, reply) => handleRoute(reply, async () => {
-    const context = await authorizedStaff(options, request, 'song.view', createAccess)
+    const context = await authorizedStaffAny(options, request, ['song.view', 'song.manage'], createAccess)
     const performers = await options.transactions.run(context.scope, async (transaction) => {
       const ids = await transaction.query<IdRow>(`
         SELECT id FROM mbox.performers
@@ -602,7 +602,7 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
   app.get<{ Params: { performerId: string } }>(
     '/staff/performers/:performerId/songs',
     async (request, reply) => handleRoute(reply, async () => {
-      const context = await authorizedStaff(options, request, 'song.view', createAccess)
+      const context = await authorizedStaffAny(options, request, ['song.view', 'song.manage'], createAccess)
       const performerId = readUuid(request.params.performerId, 'performerId')
       const query = readQuery(request)
       const search = query.search === undefined ? '' : readString(query.search, 'search', 120, 0)
@@ -658,7 +658,9 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
   )
 
   app.get('/staff/performances/today', async (request, reply) => handleRoute(reply, async () => {
-    const context = await authorizedStaff(options, request, 'song.view', createAccess)
+    const context = await authorizedStaffAny(options, request, [
+      'song.view', 'song.manage', 'performance.phase.manage', 'performance.schedule.revise',
+    ], createAccess)
     const view = await options.transactions.run(context.scope, (transaction) => (
       createSchedules(transaction).getDailyView(context.businessDate, now())
     ), { readOnly: true })
@@ -726,7 +728,7 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
   )
 
   app.get('/staff/song-requests', async (request, reply) => handleRoute(reply, async () => {
-    const context = await authorizedStaff(options, request, 'song.view', createAccess)
+    const context = await authorizedStaffAny(options, request, ['song.view', 'song.manage'], createAccess)
     const query = readQuery(request)
     const status = readOptionalSongStatus(query.status)
     const requests = await options.transactions.run(context.scope, async (transaction) => {
@@ -838,6 +840,29 @@ async function authorizedStaff(
   readUuid(context.employeeId, 'employeeId')
   const access = await options.transactions.run(context.scope, async (transaction) => {
     return createAccess(transaction).assertPermission(context.employeeId, permission)
+  }, { readOnly: true })
+  return { ...context, access }
+}
+
+async function authorizedStaffAny(
+  options: ReservationPerformanceApiOptions,
+  request: FastifyRequest,
+  permissions: readonly string[],
+  createAccess: (transaction: ScopedTransaction) => StaffAccessPort,
+): Promise<AuthorizedStaffContext> {
+  const context = await options.resolveStaffContext(request)
+  validateScopeAndBusinessDate(context.scope, context.businessDate)
+  readUuid(context.employeeId, 'employeeId')
+  const access = await options.transactions.run(context.scope, async (transaction) => {
+    const repository = createAccess(transaction)
+    for (const permission of permissions) {
+      try {
+        return await repository.assertPermission(context.employeeId, permission)
+      } catch (error) {
+        if (!(error instanceof StaffAccessDeniedError)) throw error
+      }
+    }
+    throw new StaffAccessDeniedError(permissions.join(' or '))
   }, { readOnly: true })
   return { ...context, access }
 }

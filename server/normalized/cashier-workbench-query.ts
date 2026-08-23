@@ -115,11 +115,14 @@ const RESERVING_REFUND_STATUSES: readonly RefundStatus[] = [
 ]
 const WORKBENCH_CAPABILITIES = [
   'reconciliation.view',
+  'reconciliation.manage',
+  'payment.settlement.view',
   'payment.manual.cash.record',
   'payment.manual.pos.record',
   'refund.request',
   'refund.approve',
   'refund.execute',
+  'business_day.close',
 ] as const
 
 export class PostgresCashierWorkbenchQuery {

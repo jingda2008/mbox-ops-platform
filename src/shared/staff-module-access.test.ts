@@ -32,4 +32,19 @@ describe('permission-derived staff modules', () => {
     expect(staffModuleForRoute('/staff/devices')).toMatchObject({ code: 'devices' })
     expect(staffModuleForRoute('https://example.com')).toBeNull()
   })
+
+  it('does not advertise a top-level page for a capability whose action lives inside another workflow', () => {
+    expect(staffModuleForPermission('payment.initiate.staff')).toBeNull()
+    expect(staffModuleForPermission('commercial.cost.manage')).toBeNull()
+    expect(staffModuleForPermission('observation.record')).toMatchObject({ code: 'live' })
+    expect(staffModuleForPermission('catalog.product.manage')).toMatchObject({ code: 'inventory' })
+  })
+
+  it('maps every independently rendered customer and loyalty panel to its parent page', () => {
+    expect(staffModuleForPermission('community.activity.publish')?.code).toBe('experience')
+    expect(staffModuleForPermission('loyalty.configuration.edit')?.code).toBe('experience')
+    expect(staffModuleForPermission('recommendation.rule.approve')?.code).toBe('experience')
+    expect(staffModuleForPermission('privacy.contact.retention.publish')?.code).toBe('experience')
+    expect(staffModuleForPermission('community.activity.contact.reveal')).toBeNull()
+  })
 })

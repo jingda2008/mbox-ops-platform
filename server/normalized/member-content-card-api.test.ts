@@ -2,6 +2,7 @@ import Fastify from 'fastify'
 import { describe,expect,it,vi } from 'vitest'
 import { memberContentCardApiPlugin } from './member-content-card-api.js'
 import type { MemberContentCardService } from './member-content-card-service.js'
+import { StaffAccessDeniedError } from './staff-access-repository.js'
 
 const context={
   scope:{tenantId:'10000000-0000-4000-8000-000000000001',storeId:'10000000-0000-4000-8000-000000000002'},
@@ -9,6 +10,18 @@ const context={
 }
 
 describe('member home content management API',()=>{
+  it('lets an activity manager read the content list needed before editing',async()=>{
+    const service=fakeService();const permissions:string[]=[]
+    const app=await build(service,async(_employeeId,permission)=>{
+      permissions.push(permission)
+      if(permission==='community.activity.view')throw new StaffAccessDeniedError('denied')
+    })
+    const response=await app.inject({method:'GET',url:'/staff/home-content-cards'})
+    expect(response.statusCode).toBe(200)
+    expect(permissions).toEqual(['community.activity.view','community.activity.manage'])
+    await app.close()
+  })
+
   it('lets managers save a typed draft and requires publish authority separately',async()=>{
     const service=fakeService();const permissions:string[]=[]
     const app=await build(service,async(_employeeId,permission)=>{permissions.push(permission)})

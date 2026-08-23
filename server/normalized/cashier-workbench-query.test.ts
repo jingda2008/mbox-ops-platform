@@ -85,6 +85,53 @@ describe('PostgresCashierWorkbenchQuery', () => {
     expect(runner.readOnly).toBe(true)
   })
 
+  it('keeps per-item and payment-level remaining capacity after a succeeded partial refund', async () => {
+    const dishItemId = '88888888-8888-4888-8888-888888888888'
+    const drinkItemId = '99999999-9999-4999-8999-999999999999'
+    const succeededRefundId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const runner = new QueryRunner([
+      [orderRow()],
+      [
+        { ...itemRow(), id: dishItemId, product_name: '主菜', total_amount_minor: '6000' },
+        { ...itemRow(), id: drinkItemId, product_name: '酒水', total_amount_minor: '4000' },
+      ],
+      [{ ...paymentRow(), amount_minor: '10000' }],
+      [{
+        ...refundRow(),
+        id: succeededRefundId,
+        amount_minor: '2000',
+        status: 'succeeded',
+        completed_at: '2026-08-13T12:10:00.000Z',
+      }],
+      [{ refund_id: succeededRefundId, order_item_id: dishItemId, amount_minor: '2000' }],
+      [],
+      [],
+      [],
+    ])
+    const query = new PostgresCashierWorkbenchQuery(
+      runner as unknown as ScopedPostgresTransactionRunner,
+    )
+
+    const view = await query.get({
+      scope: { tenantId, storeId },
+      employeeId,
+      businessDate: '2026-08-13',
+      capabilities: ['refund.request'],
+      limit: 20,
+    })
+
+    const payment = view.orders[0]?.payments[0]
+    expect(payment).toMatchObject({
+      amountMinor: 10_000,
+      reservedRefundAmountMinor: 2_000,
+      remainingRefundableMinor: 8_000,
+    })
+    expect(payment?.refundableItems).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: dishItemId, remainingRefundableMinor: 4_000 }),
+      expect.objectContaining({ id: drinkItemId, remainingRefundableMinor: 4_000 }),
+    ]))
+  })
+
   it('returns an empty workbench without running detail queries', async () => {
     const runner = new QueryRunner([[]])
     const query = new PostgresCashierWorkbenchQuery(
@@ -495,6 +542,7 @@ function refundRow(): Record<string, unknown> {
     amount_minor: '1000',
     currency: 'CNY',
     status: 'requested',
+    provider_submission_state: 'not_started',
     reason: '商品未出品',
     requested_by_employee_id: employeeId,
     requested_by_employee_name: 'Tom',

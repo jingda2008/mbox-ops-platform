@@ -171,6 +171,17 @@ function clearCustomerSession() {
   clearWechatIdentityToken()
 }
 
+function rotateAnonymousAssertion() {
+  wx.removeStorageSync(ASSERTION_KEY)
+  return anonymousAssertion()
+}
+
+async function restartAnonymousCustomerSession() {
+  clearCustomerSession()
+  rotateAnonymousAssertion()
+  await issueReservationSession('anonymous', anonymousAssertion())
+}
+
 function renewReservationSessionOnly() {
   wx.removeStorageSync(EXPIRY_KEY)
   clearReservationCookie()
@@ -179,6 +190,7 @@ function renewReservationSessionOnly() {
 module.exports = {
   ensureCustomerSession,
   clearCustomerSession,
+  restartAnonymousCustomerSession,
   renewReservationSessionOnly,
   isCustomerSessionInvalid,
   isWechatIdentityUnavailable,

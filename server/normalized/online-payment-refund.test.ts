@@ -46,7 +46,9 @@ describe('OnlinePaymentService provider refund closure', () => {
     }), expect.objectContaining({ secrets: expect.anything() }))
     expect(result).toMatchObject({ merchantRefundId, observation: { status: 'processing' } })
     expect(transaction.calls.filter((sql) => sql.includes("providerStatus', 'submission_started'"))).toHaveLength(1)
-    expect(transaction.calls.filter((sql) => sql.includes("'merchantRefundId', $4"))).toHaveLength(2)
+    expect(transaction.calls.filter((sql) => sql.includes("'merchantRefundId', $4::text"))).toHaveLength(2)
+    expect(transaction.calls.filter((sql) => sql.includes('merchant_refund_id=$4::text'))).toHaveLength(2)
+    expect(transaction.calls.filter((sql) => sql.includes("'providerStatus', $5::text"))).toHaveLength(1)
   })
 
   it('preserves existing order refund allocations while using the authoritative settlement channel', async () => {
@@ -100,6 +102,30 @@ describe('OnlinePaymentService provider refund closure', () => {
     expect(result.observation.status).toBe('succeeded')
     expect(result.verifiedObservationId).toBeNull()
     expect(recorder.recordRefund).not.toHaveBeenCalled()
+  })
+
+  it('records a verified rejection when the provider synchronously refuses the refund', async () => {
+    const requestRefund = vi.fn(async () => ({
+      refundId: merchantRefundId, providerRefundId: merchantRefundId,
+      providerRefundTransactionId: null, originalProviderTransactionId: 'POSTAR-PAYMENT-001',
+      status: 'failed' as const, amount: 2_000, currency: 'CNY',
+      failureReason: '021000: 商户余额不足',
+      occurredAt: '2026-08-16T12:00:00.000Z',
+    }))
+    const recorder = observationRecorder()
+    const service = new OnlinePaymentService(
+      runner(new RefundTransaction(true)), 'test-secret-at-least-thirty-two-bytes', secrets,
+      { createPayment: vi.fn(), queryPayment: vi.fn(), requestRefund, queryRefund: vi.fn() } as never,
+      recorder,
+    )
+    const result = await service.requestRefund(scope, refundId, 'refund-submit-binding-failed')
+
+    expect(result.observation.status).toBe('failed')
+    expect(result.verifiedObservationId).toBe(verifiedObservationId)
+    expect(recorder.recordRefund).toHaveBeenCalledWith(expect.objectContaining({
+      integrationRef: 'postar-refund-submit-rejection',
+      status: 'failed',
+    }))
   })
 
   it.each(['native_qr', 'jsapi'] as const)(

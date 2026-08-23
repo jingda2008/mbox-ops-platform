@@ -1,4 +1,5 @@
 const {
+  getMiniBootstrap,
   getReservations,
   getReservationAvailability,
   getReservationPerformances,
@@ -8,6 +9,7 @@ const {
   getReservationPerformanceNotificationAuthorizations,
   recordReservationPerformanceNotificationAuthorization,
 } = require('../../utils/api')
+const { redirectToMembershipLogin } = require('../../utils/membership-gate')
 const { randomId } = require('../../utils/id')
 const { getRuntimeConfig } = require('../../config/index')
 const { money, dateTime } = require('../../utils/format')
@@ -65,7 +67,7 @@ function impactView(impact) {
 Page({
   data: {
     loading: true, checking: false, submitting: false, loadingShows: false,
-    error: '', success: '', isDevelopment: false,
+    error: '', success: '', isDevelopment: false, membershipRequired: false,
     reservations: [], showForm: true, step: 1,
     performanceImpacts: [], impactsError: '', impactBusyId: '', impactNotice: '',
     expandedImpactId: '', impactAttempts: {},
@@ -85,6 +87,19 @@ Page({
   async loadData() {
     this.setData({ loading: true, error: '' })
     try {
+      const bootstrap = await getMiniBootstrap()
+      if (!bootstrap.membership) {
+        this.setData({
+          loading: false,
+          membershipRequired: true,
+          reservations: [],
+          showForm: false,
+          performanceImpacts: [],
+          impactsError: '',
+        })
+        return
+      }
+      this.setData({ membershipRequired: false })
       const [reservationResult, impactResult, notificationResult] = await Promise.allSettled([
         getReservations(), getReservationPerformanceImpacts(),
         getReservationPerformanceNotificationAuthorizations(),
@@ -237,6 +252,7 @@ Page({
   },
 
   startNewReservation() { this.setData({ showForm: true, step: 1, error: '', success: '' }) },
+  goMembershipLogin() { redirectToMembershipLogin() },
   closeForm() { if (this.data.reservations.length) this.setData({ showForm: false, error: '' }) },
   onNameInput(event) { this.setData({ customerName: event.detail.value }) },
   onContactInput(event) { this.setData({ contact: event.detail.value }) },
@@ -274,6 +290,10 @@ Page({
   previousStep() { this.setData({ step: Math.max(1, this.data.step - 1), error: '' }) },
 
   async submitReservation() {
+    if (this.data.membershipRequired) {
+      redirectToMembershipLogin()
+      return
+    }
     if (this.data.submitting) return
     const customerName = this.data.customerName.trim()
     const contact = this.data.contact.trim()

@@ -91,6 +91,7 @@ interface RefundStoredRow extends Record<string, unknown> {
   approved_by_employee_id: string | null
   decision_reason: string | null
   provider_snapshot: JsonObject
+  provider_submission_state: 'not_started' | 'submitting' | 'submitted' | 'manual_review'
   completed_at: string | null
   created_at: string
   updated_at: string
@@ -374,6 +375,9 @@ export class RefundRepository {
 
   async beginExecution(refundId: string): Promise<Refund> {
     const current = await this.lockRefund(refundId)
+    if (current.status === 'processing' && current.provider_submission_state === 'not_started') {
+      return mapRefund(current)
+    }
     if (current.status !== 'approved' || current.approved_by_employee_id === null) {
       throw new RefundApprovalRequiredError(current.id, current.status)
     }
@@ -669,7 +673,7 @@ type PaymentRefundStatus = 'succeeded' | 'partially_refunded' | 'refunded'
 const REFUND_BASE_COLUMNS = `
   id, payment_id, public_id, provider_refund_id, amount_minor, currency,
   status, reason, requested_by_employee_id, approved_by_employee_id, decision_reason,
-  provider_snapshot, completed_at::text, created_at::text, updated_at::text
+  provider_snapshot, provider_submission_state, completed_at::text, created_at::text, updated_at::text
 `
 
 const JOINED_REFUND_COLUMNS = `
@@ -678,7 +682,7 @@ const JOINED_REFUND_COLUMNS = `
   p.provider_transaction_id AS payment_provider_transaction_id,
   r.public_id, r.provider_refund_id, r.amount_minor, r.currency,
   r.status, r.reason, r.requested_by_employee_id, r.approved_by_employee_id, r.decision_reason,
-  r.provider_snapshot, r.completed_at::text, r.created_at::text, r.updated_at::text,
+  r.provider_snapshot, r.provider_submission_state, r.completed_at::text, r.created_at::text, r.updated_at::text,
   COALESCE((
     SELECT jsonb_agg(jsonb_build_object(
       'orderItemId', refund_item.order_item_id,

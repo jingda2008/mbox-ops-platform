@@ -38,6 +38,12 @@ export interface CashierWorkbenchRefundAllocation {
   amountMinor: number
 }
 
+export type CashierRefundProviderSubmissionState =
+  | 'not_started'
+  | 'submitting'
+  | 'submitted'
+  | 'manual_review'
+
 export interface CashierWorkbenchRefund {
   id: string
   publicId: string
@@ -46,6 +52,7 @@ export interface CashierWorkbenchRefund {
   amountMinor: number
   currency: string
   status: CashierRefundStatus
+  providerSubmissionState: CashierRefundProviderSubmissionState
   reason: string
   requestedByEmployeeId: string
   requestedByEmployeeName: string

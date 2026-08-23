@@ -66,6 +66,7 @@ interface RefundRow extends Record<string, unknown> {
   amount_minor: string | number
   currency: string
   status: RefundStatus
+  provider_submission_state: 'not_started' | 'submitting' | 'submitted' | 'manual_review'
   reason: string
   requested_by_employee_id: string
   requested_by_employee_name: string
@@ -243,7 +244,8 @@ export class PostgresCashierWorkbenchQuery {
         `, [input.scope.tenantId, input.scope.storeId, orderIds])
       const refundResult = await transaction.query<RefundRow>(`
           SELECT refund.id, refund.payment_id, refund.public_id, refund.provider_refund_id,
-            refund.amount_minor, refund.currency, refund.status, refund.reason,
+            refund.amount_minor, refund.currency, refund.status, refund.provider_submission_state,
+            refund.reason,
             refund.requested_by_employee_id,
             requester.display_name AS requested_by_employee_name,
             refund.approved_by_employee_id,
@@ -496,6 +498,7 @@ function mapRefund(
     amountMinor: asSafeMinor(row.amount_minor, 'refund amount'),
     currency: row.currency,
     status: row.status,
+    providerSubmissionState: row.provider_submission_state,
     reason: row.reason,
     requestedByEmployeeId: row.requested_by_employee_id,
     requestedByEmployeeName: row.requested_by_employee_name,

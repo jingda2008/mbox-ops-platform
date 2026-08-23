@@ -91,6 +91,17 @@ describe('RefundRepository', () => {
     })).rejects.toThrow(`Cumulative refund exceeds order item ${itemId}`)
   })
 
+  it('allows cashier to retry execution when provider submission never started', async () => {
+    const transaction = new ScriptedTransaction([
+      rows([paymentTargetRow()]),
+      rows([{ id: orderId }]),
+      rows([{ ...refundJoinedRow('processing', 2500, approverId), provider_submission_state: 'not_started' }]),
+    ])
+    const refund = await new RefundRepository(transaction).beginExecution(refundId)
+    expect(refund.status).toBe('processing')
+    expect(transaction.calls).toHaveLength(3)
+  })
+
   it('does not allow a requested refund to execute before human approval', async () => {
     const transaction = new ScriptedTransaction([
       rows([paymentTargetRow()]),
@@ -235,6 +246,7 @@ function refundBaseRow(status: RefundStatus, amountMinor: number): Record<string
     approved_by_employee_id: null,
     decision_reason: null,
     provider_snapshot: { requestEvidence: {} },
+    provider_submission_state: 'not_started',
     allocations: [{ orderItemId: itemId, amountMinor }],
     completed_at: null,
     created_at: '2026-08-11T12:00:00.000Z',

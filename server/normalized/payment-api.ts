@@ -1013,7 +1013,9 @@ async function applyTerminalRefundObservation(
   idempotencyKey: string,
 ) {
   const observed = result.observation
-  if (observed.status === 'processing' || result.verifiedObservationId === null) return null
+  if (observed.status === 'processing') return null
+  if (observed.status === 'succeeded' && result.verifiedObservationId === null) return null
+  if (result.verifiedObservationId === null) return null
   const actor: AuditActor = { type: 'integration', ref: 'postar-refund-active-query' }
   const providerSnapshot: JsonObject = {
     merchantRefundId: result.merchantRefundId,
@@ -1021,6 +1023,7 @@ async function applyTerminalRefundObservation(
     providerReportedAmountMinor: observed.amount,
     occurredAt: observed.occurredAt,
     receivedAt: new Date().toISOString(),
+    ...(observed.failureReason === undefined ? {} : { failureReason: observed.failureReason }),
   }
   return options.commands.recordProviderRefundResult({
     ...metadata(request, { ...context, actor }, idempotencyKey, {

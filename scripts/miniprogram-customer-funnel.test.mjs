@@ -57,7 +57,7 @@ test('activity cards are horizontal brand-green surfaces and profile actions exp
   assert.match(homeView, /featured-activity-card__art/)
   assert.match(homeStyle, /\.featured-activity-card\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*228rpx minmax\(0, 1fr\)[^}]*linear-gradient\(145deg, #315d46, #214635/)
   assert.match(homeView, /class="published-content-card/)
-  assert.match(homeStyle, /\.published-content-card\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*208rpx minmax\(0, 1fr\)[^}]*linear-gradient\(145deg, #315d46, #214635/)
+  assert.match(homeStyle, /\.published-content-card\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*208rpx minmax\(0, 1fr\)[^}]*linear-gradient\(135deg, #fff, #f4eee6\)/)
   assert.doesNotMatch(homeView, /home-campaign-mask/)
   assert.match(communityView, /hover-class="activity-card--hover"/)
   assert.match(communityStyle, /\.activity-card\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*236rpx minmax\(0, 1fr\)[^}]*linear-gradient\(145deg, #315d46, #214635/)
@@ -133,10 +133,11 @@ test('profile membership invitation enrolls after one explicit checkbox and one 
     read('miniprogram/pages/profile/index.js'),
   ])
 
-  assert.match(profileView, /邀请加入 M-BOX 会员/)
+  assert.match(profileView, /登录会员/)
+  assert.match(profileView, /loginSheetVisible/)
   assert.match(profileView, /checked="\{\{agreedToPolicies\}\}"/)
   assert.match(profileView, /catchtap="showMembershipTerms"/)
-  assert.match(profileView, /wx:if="\{\{agreedToPolicies\}\}"[^>]*class="join-primary wx-phone-button"[^>]*bindgetphonenumber="confirmMembershipJoin"[^>]*>确定入会<\/button>/)
+  assert.match(profileView, /wx:if="\{\{agreedToPolicies\}\}"[^>]*class="login-action-link[^"]*wx-phone-button"[^>]*bindgetphonenumber="quickLoginAndEnroll"/)
   assert.doesNotMatch(profileView, /阅读入会条款/)
   assert.match(profileLogic, /enrollMembership\(terms\.version, 'mini_profile', authorization\.code\)/)
 })
@@ -282,9 +283,10 @@ test('customer-facing primary controls keep a comfortable touch target and check
 })
 
 test('customer-only reservations stay executable, performances use the public schedule, and store contact is opt-in configured', async () => {
-  const [reservationLogic, reservationView, homeLogic, profileLogic, profileView, contactLogic, contactView, supportService, supportApi] = await Promise.all([
+  const [reservationLogic, reservationView, orderLogic, homeLogic, profileLogic, profileView, contactLogic, contactView, supportService, supportApi] = await Promise.all([
     read('miniprogram/pages/reservations/index.js'),
     read('miniprogram/pages/reservations/index.wxml'),
+    read('miniprogram/pages/order/index.js'),
     read('miniprogram/pages/home/index.js'),
     read('miniprogram/pages/profile/index.js'),
     read('miniprogram/pages/profile/index.wxml'),
@@ -315,6 +317,24 @@ test('customer-only reservations stay executable, performances use the public sc
   assert.match(profileView, /metric-label">优惠券/)
   assert.match(profileView, /metric-label">成长值/)
   assert.match(profileView, /metric-label">余额/)
+  assert.match(profileView, /metric-icon">积/)
+  assert.match(profileView, /超嗨活动/)
+  assert.match(profileView, /loginSheetVisible/)
+  assert.match(profileView, /login-sheet-mask/)
+  assert.match(profileLogic, /requireMembership/)
+  assert.match(profileLogic, /openLoginSheet/)
+  assert.match(profileView, /login-action-link/)
+  assert.match(profileLogic, /openReservations\(\)\s*\{[^}]*requireMembership/)
+  assert.match(orderLogic, /requireMembershipLogin/)
+  assert.match(reservationLogic, /membershipRequired/)
+  assert.match(reservationView, /membership-gate/)
+  assert.doesNotMatch(profileView, /class="login-dock"/)
+  assert.match(profileView, /微信手机号快捷登录/)
+  assert.match(profileLogic, /quickLoginAndEnroll/)
+  assert.match(profileView, /退出登录/)
+  assert.match(profileLogic, /logoutMember/)
+  assert.match(profileLogic, /restartAnonymousCustomerSession/)
+  assert.match(profileView, /点击登录\/注册/)
   assert.doesNotMatch(profileView, /消息提醒/)
   assert.doesNotMatch(profileView, /我的资料/)
   assert.doesNotMatch(profileView, /了解个人信息处理范围/)

@@ -6,6 +6,7 @@ import {
   Clock3,
   LoaderCircle,
   ReceiptText,
+  RefreshCcw,
   Search,
   Send,
   X,
@@ -738,7 +739,9 @@ function RefundBlock({
   const [manualConfirmation, setManualConfirmation] = useState<'failed' | 'succeeded' | null>(null)
   const ownRequest = refund.requestedByEmployeeId === auth.employee.id
   const canDecide = refund.status === 'requested' && actions.canApproveRefund && !ownRequest
-  const canBegin = refund.status === 'approved' && actions.canExecuteRefund
+  const canBegin = (refund.status === 'approved'
+    || (refund.status === 'processing' && refund.providerSubmissionState === 'not_started'))
+    && actions.canExecuteRefund
   const canRecordManual = refund.status === 'processing' && actions.canExecuteRefund && manualProvider
   return <div className={`cashier-refund-row is-${refund.status}`}>
     <div className="cashier-refund-heading">
@@ -793,7 +796,25 @@ function RefundBlock({
       )}
     >{busyKey === `refund-execute-${refund.id}` ? <LoaderCircle className="is-spinning" size={17} /> : <ReceiptText size={17} />}{manualProvider ? '开始人工退款' : '进入渠道待处理'}</button>}
 
-    {refund.status === 'processing' && !manualProvider && <p className="cashier-channel-pending">待支付渠道回传结果。本页不能把线上退款手工改成成功。</p>}
+    {refund.status === 'processing' && !manualProvider && payment.provider === 'postar'
+      && refund.providerSubmissionState !== 'not_started' && actions.canExecuteRefund
+      && <div className="cashier-provider-query">
+        <button
+          type="button"
+          className="cashier-quiet-action"
+          disabled={busyKey !== null}
+          onClick={() => void onMutation(
+            `refund-provider-query-${refund.id}`,
+            `/api/refunds/${encodeURIComponent(refund.id)}/provider-query`,
+            {},
+            '已查询渠道退款结果。',
+          )}
+        >{busyKey === `refund-provider-query-${refund.id}` ? <LoaderCircle className="is-spinning" size={17} /> : <RefreshCcw size={17} />}查询渠道结果</button>
+      </div>}
+    {refund.status === 'processing' && !manualProvider && refund.providerSubmissionState !== 'not_started'
+      && <p className="cashier-channel-pending">待支付渠道回传结果。本页不能把线上退款手工改成成功。</p>}
+    {refund.status === 'processing' && !manualProvider && refund.providerSubmissionState === 'not_started'
+      && <p className="cashier-guidance">上次提交支付渠道失败，可再次进入渠道待处理重试。</p>}
 
     {canRecordManual && <div className="cashier-manual-result">
       <label className="cashier-field"><span>{payment.provider === 'cash' ? '现金退款凭证号' : 'POS退款小票/交易号'}</span><input value={manualReceipt} placeholder="必须与原收款凭证分开" onChange={(event) => onManualReceipt(refund.id, event.target.value)} /></label>

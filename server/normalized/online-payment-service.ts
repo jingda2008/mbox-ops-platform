@@ -235,10 +235,17 @@ export class OnlinePaymentService {
         settlementChannel,
       }, { secrets: this.secrets! })
       await this.recordRefundObservation(scope, claimedContext.refund_id, observation)
+      if (observation.status === 'failed') {
+        const verifiedObservationId = await this.recordVerifiedSubmitRejection(
+          scope, claimedContext, observation, queryBindingId,
+        )
+        return onlineRefundResult(claimedContext, observation, verifiedObservationId)
+      }
       // The refund endpoint only acknowledges submission. StarPay requires a
       // signed callback or refund query before any terminal result is trusted.
       return onlineRefundResult(claimedContext, observation, null)
     } catch (error) {
+      await this.releaseRefundSubmission(scope, context.refund_id)
       if (error instanceof PostarPaymentRejectedError) throw error
       throw new OnlinePaymentUnknownError()
     }
@@ -483,14 +490,14 @@ export class OnlinePaymentService {
         UPDATE mbox.refunds
         SET provider_submission_state='submitted',
           provider_snapshot=provider_snapshot || jsonb_build_object(
-          'merchantRefundId', $4,
-          'providerStatus', $5,
-          'occurredAt', $6
+          'merchantRefundId', $4::text,
+          'providerStatus', $5::text,
+          'occurredAt', $6::text
         ), updated_at=clock_timestamp()
         WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
           AND status='processing'
           AND provider_submission_state IN ('submitting', 'submitted')
-          AND merchant_refund_id=$4
+          AND merchant_refund_id=$4::text
       `, [
         scope.tenantId, scope.storeId, refundId,
         observation.refundId, observation.status, observation.occurredAt,
@@ -499,15 +506,56 @@ export class OnlinePaymentService {
     })
   }
 
+  private recordVerifiedSubmitRejection(
+    scope: Readonly<StoreScope>,
+    context: Readonly<RefundExecutionRow>,
+    observation: Readonly<ProviderRefundObservation>,
+    queryBindingId: string,
+  ): Promise<string> {
+    return this.providerObservations.recordRefund({
+      scope,
+      provider: 'postar',
+      verificationKind: 'active_query_binding',
+      providerEventId: providerObservationEventId([
+        'refund-submit-rejection', queryBindingId, context.refund_id, observation.refundId,
+        observation.status, observation.amount, observation.currency, observation.occurredAt,
+        observation.failureReason ?? '',
+      ]),
+      integrationRef: 'postar-refund-submit-rejection',
+      refundPublicId: context.refund_public_id,
+      providerTransactionId: observation.providerRefundTransactionId ?? observation.refundId,
+      originalProviderTransactionId: observation.originalProviderTransactionId,
+      reportedAmountMinor: observation.amount,
+      reportedCurrency: observation.currency,
+      status: 'failed',
+      occurredAt: observation.occurredAt,
+      evidence: refundQueryEvidence(observation),
+    })
+  }
+
+  private releaseRefundSubmission(scope: Readonly<StoreScope>, refundId: string): Promise<void> {
+    return this.transactions.run(scope, async (transaction) => {
+      await transaction.query(`
+        UPDATE mbox.refunds
+        SET provider_submission_state='not_started',
+          merchant_refund_id=NULL,
+          provider_submission_started_at=NULL,
+          updated_at=clock_timestamp()
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+          AND status='processing' AND provider_submission_state='submitting'
+      `, [scope.tenantId, scope.storeId, refundId])
+    })
+  }
+
   private claimRefundSubmission(scope: Readonly<StoreScope>, refundId: string): Promise<boolean> {
     return this.transactions.run(scope, async (transaction) => {
       const claimed = await transaction.query(`
         UPDATE mbox.refunds
-        SET merchant_refund_id=$4,
+        SET merchant_refund_id=$4::text,
           provider_submission_started_at=clock_timestamp(),
           provider_submission_state='submitting',
           provider_snapshot=provider_snapshot || jsonb_build_object(
-          'merchantRefundId', $4,
+          'merchantRefundId', $4::text,
           'providerStatus', 'submission_started',
           'occurredAt', clock_timestamp()::text
         ), updated_at=clock_timestamp()

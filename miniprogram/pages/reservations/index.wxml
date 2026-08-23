@@ -2,6 +2,12 @@
   <view class="reservation-head"><view class="brand-row"><view><text class="eyebrow">M-BOX · RESERVATION</text><text class="reservation-title">预约到店</text></view><text wx:if="{{isDevelopment}}" class="dev-badge">开发模式</text></view><text class="reservation-copy">分三步完成，只在最后确认联系信息与费用规则。</text></view>
   <state-panel wx:if="{{loading}}" type="loading" title="正在读取本人预约" />
   <block wx:else>
+    <view wx:if="{{membershipRequired}}" class="membership-gate">
+      <text class="membership-gate__title">请先登录会员</text>
+      <text class="membership-gate__copy">登录后才能预约到店、查看和管理您的预约。</text>
+      <button class="membership-gate__action" bindtap="goMembershipLogin">去登录</button>
+    </view>
+    <block wx:else>
     <view wx:if="{{error}}" class="error-banner">{{error}}</view><view wx:if="{{success}}" class="success-banner">{{success}}</view>
 
     <view wx:if="{{reservations.length}}" class="section reservation-history">
@@ -85,5 +91,6 @@
       <view class="flow-actions"><button wx:if="{{step > 1}}" class="secondary-button" bindtap="previousStep">上一步</button><button wx:if="{{step < 3}}" class="primary-button" disabled="{{checking}}" bindtap="nextStep">下一步</button><button wx:else class="primary-button" loading="{{submitting}}" disabled="{{submitting}}" bindtap="submitReservation">确认提交</button></view>
       <button wx:if="{{reservations.length}}" class="close-flow" bindtap="closeForm">暂不新建预约</button>
     </view>
+    </block>
   </block>
 </view>

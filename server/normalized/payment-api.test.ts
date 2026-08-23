@@ -824,6 +824,49 @@ describe('paymentApiPlugin', () => {
     expect(value.commands.recordManualRefundResult).not.toHaveBeenCalled()
   })
 
+  it('closes a refund as failed when the provider synchronously rejects execute', async () => {
+    const merchantRefundId = refundId.replaceAll('-', '')
+    const requestRefund = vi.fn(async () => ({
+      refundId, refundPublicId: refund.publicId, merchantRefundId,
+      paymentPublicId: payment.publicId,
+      originalProviderTransactionId: 'POSTAR-TX-0001',
+      amountMinor: refund.amountMinor, currency: refund.currency,
+      observation: {
+        refundId: merchantRefundId, providerRefundId: merchantRefundId,
+        providerRefundTransactionId: null,
+        originalProviderTransactionId: 'POSTAR-TX-0001',
+        status: 'failed' as const, amount: refund.amountMinor, currency: refund.currency,
+        failureReason: '021000: 商户余额不足',
+        occurredAt: '2026-08-11T12:20:00.000Z',
+      },
+      verifiedObservationId: verifiedRefundObservationId,
+    }))
+    const value = fixture({
+      onlinePayments: {
+        create: vi.fn(), query: vi.fn(), assertAvailable: vi.fn(), resolveActivePayment: vi.fn(),
+        requestRefund, queryRefund: vi.fn(),
+      },
+    })
+    await value.app.inject({
+      method: 'POST',
+      url: `/api/refunds/${refundId}/approve`,
+      headers: { 'idempotency-key': 'refund-approve-failed-0001' },
+      payload: { reason: '商品未出品，同意退款' },
+    })
+    const executed = await value.app.inject({
+      method: 'POST',
+      url: `/api/refunds/${refundId}/execute`,
+      headers: { 'idempotency-key': 'refund-execute-failed-0001' },
+    })
+
+    expect(executed.statusCode).toBe(200)
+    expect(value.commands.recordProviderRefundResult).toHaveBeenCalledWith(expect.objectContaining({
+      succeeded: false,
+      verifiedObservationId: verifiedRefundObservationId,
+      providerSnapshot: expect.objectContaining({ failureReason: '021000: 商户余额不足' }),
+    }))
+  })
+
   it('writes a terminal refund only from a bound provider query', async () => {
     const merchantRefundId = refundId.replaceAll('-', '')
     const queryRefund = vi.fn(async () => ({

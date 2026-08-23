@@ -16,15 +16,14 @@
     <view wx:if="{{error}}" class="error-banner">{{error}}</view>
 
     <view class="identity-card">
-      <view class="identity-main">
+      <view class="identity-main" bindtap="onIdentityTap" hover-class="identity-main--hover">
         <image class="identity-avatar" src="{{avatarUrl || '/assets/brand/mbox-logo-badge.png'}}" mode="aspectFill" />
         <view class="identity-copy">
           <view class="identity-name-row">
-            <text class="identity-name">{{displayName || (membership ? membership.levelText : 'M-BOX 访客')}}</text>
+            <text class="identity-name">{{membership ? (displayName || membership.levelText) : '点击登录/注册'}}</text>
             <text wx:if="{{membership}}" class="identity-badge">{{membership.levelText}}</text>
-            <text wx:else class="identity-badge identity-badge--invite">邀请入会</text>
           </view>
-          <text class="identity-sub">{{membership ? membership.memberNo : '勾选同意后即可确认加入会员'}}</text>
+          <text class="identity-sub">{{membership ? membership.memberNo : '点击头像登录会员'}}</text>
         </view>
       </view>
       <button wx:if="{{membership}}" class="identity-action" bindtap="openMemberCenter">会员中心</button>
@@ -54,32 +53,12 @@
       </button>
     </view>
 
-    <view wx:if="{{benefitCount}}" class="benefit-tip" bindtap="openCoupons">
+    <view wx:if="{{membership && benefitCount}}" class="benefit-tip" bindtap="openCoupons">
       <view>
         <text>你有可用权益</text>
         <text>{{benefitCount}} 项可到店使用</text>
       </view>
       <text>去看看 ›</text>
-    </view>
-
-    <view wx:if="{{!membership}}" id="membership-invitation" class="module-card join-module">
-      <text class="module-eyebrow">INVITATION</text>
-      <text class="module-title">邀请加入 M-BOX 会员</text>
-      <text class="join-summary">{{membershipTerms ? membershipTerms.summary : '保存积分、到店偏好与门店发放的专属权益。'}}</text>
-      <checkbox-group bindchange="onAgreementChange">
-        <label class="join-agree-row">
-          <checkbox value="agree" checked="{{agreedToPolicies}}" color="#315d46" />
-          <view class="join-agree-copy">
-            <text>我已阅读并同意</text>
-            <text class="join-agree-link" catchtap="showMembershipTerms">《{{membershipTerms ? membershipTerms.title : '用户服务协议'}}》</text>
-          </view>
-        </label>
-      </checkbox-group>
-      <button wx:if="{{agreedToPolicies}}" class="join-primary wx-phone-button" open-type="getPhoneNumber|agreePrivacyAuthorization" bindgetphonenumber="confirmMembershipJoin" bindagreeprivacyauthorization="onAgreePrivacyAuthorization" hover-class="none" loading="{{busy}}">确定入会</button>
-      <button wx:else class="join-primary join-primary--pending" bindtap="remindAgreement" hover-class="none">确定入会</button>
-      <button wx:if="{{agreedToPolicies}}" class="join-recovery-link recovery-button wx-phone-button" open-type="getPhoneNumber|agreePrivacyAuthorization" bindgetphonenumber="recoverMembership" bindagreeprivacyauthorization="onAgreePrivacyAuthorization" hover-class="none" loading="{{recoveryBusy}}">已有会员？授权手机号找回会员</button>
-      <button wx:else class="join-recovery-link recovery-button recovery-button--pending" bindtap="remindAgreement" hover-class="none">已有会员？授权手机号找回会员</button>
-      <text wx:if="{{recoveryMessage}}" class="recovery-result">{{recoveryMessage}}</text>
     </view>
 
     <view wx:if="{{membership && (membership.upgradeText || membership.retainText || membership.expiryText || membership.pendingRecoveryPoints > 0)}}" class="module-card">
@@ -114,10 +93,14 @@
         <view class="service-chip" bindtap="openContact" hover-class="service-chip--hover" role="button">
           <view class="service-chip__face"><image class="service-chip__icon service-chip__icon--badge" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" /><view class="service-chip__copy"><text>联系我们</text><text>门店客服</text></view><text class="service-chip__arrow">›</text></view>
         </view>
-        <view wx:if="{{membershipTerms}}" class="service-chip" bindtap="showMembershipTerms" hover-class="service-chip--hover" role="button">
+        <view wx:if="{{membershipTerms}}" class="service-chip" bindtap="openMembershipBenefits" hover-class="service-chip--hover" role="button">
           <view class="service-chip__face"><image class="service-chip__icon service-chip__icon--badge" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" /><view class="service-chip__copy"><text>会员权益</text><text>等级与规则</text></view><text class="service-chip__arrow">›</text></view>
         </view>
       </view>
+    </view>
+
+    <view wx:if="{{membership}}" class="account-footer">
+      <button class="logout-button" loading="{{logoutBusy}}" bindtap="logoutMember">退出登录</button>
     </view>
 
     <view wx:if="{{registrations.length}}" id="registered-activities" class="module-card registered-activity-module">
@@ -218,4 +201,46 @@
       </scroll-view>
     </view>
   </block>
+  <view wx:if="{{loginSheetVisible}}" class="login-sheet-mask" catchtouchmove="noop" bindtap="closeLoginSheet">
+    <view class="login-sheet" catchtap="noop">
+      <button class="login-sheet__close" aria-label="关闭登录" bindtap="closeLoginSheet">×</button>
+      <text class="login-sheet__kicker">M-BOX MEMBERSHIP</text>
+      <text class="login-sheet__title">登录会员</text>
+      <text class="login-sheet__copy">登录后享受积分、优惠券与专属权益</text>
+      <image class="login-sheet__logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX" />
+      <checkbox-group bindchange="onAgreementChange">
+        <label class="login-agree">
+          <checkbox value="agree" checked="{{agreedToPolicies}}" color="#315d46" />
+          <text class="login-agree-text">我已阅读并同意</text>
+          <text class="login-agree-link" catchtap="showMembershipTerms">《用户服务协议》</text>
+          <text class="login-agree-text">与</text>
+          <text class="login-agree-link" catchtap="openPrivacy">《隐私政策》</text>
+        </label>
+      </checkbox-group>
+      <view class="login-actions">
+        <button
+          wx:if="{{agreedToPolicies}}"
+          class="login-action-link login-action-link--primary wx-phone-button"
+          open-type="getPhoneNumber|agreePrivacyAuthorization"
+          bindgetphonenumber="quickLoginAndEnroll"
+          bindagreeprivacyauthorization="onAgreePrivacyAuthorization"
+          hover-class="none"
+          loading="{{busy}}"
+        >微信手机号快捷登录</button>
+        <button wx:else class="login-action-link login-action-link--primary login-action-link--pending" bindtap="remindAgreement">微信手机号快捷登录</button>
+        <button
+          wx:if="{{agreedToPolicies}}"
+          class="login-action-link wx-phone-button"
+          open-type="getPhoneNumber|agreePrivacyAuthorization"
+          bindgetphonenumber="recoverMembership"
+          bindagreeprivacyauthorization="onAgreePrivacyAuthorization"
+          hover-class="none"
+          loading="{{recoveryBusy}}"
+        >找回原会员</button>
+        <button wx:else class="login-action-link login-action-link--pending" bindtap="remindAgreement">找回原会员</button>
+      </view>
+      <text wx:if="{{recoveryMessage}}" class="login-recovery-note">{{recoveryMessage}}</text>
+      <text wx:if="{{error}}" class="login-recovery-note login-recovery-note--error">{{error}}</text>
+    </view>
+  </view>
 </view>

@@ -600,6 +600,29 @@ async function getTodayPerformances() {
   return (await request('/api/guest/performances/today', { requireTableSession: false })).data
 }
 
+async function logoutWechatIdentity() {
+  const storageKey = 'mbox.wechat.logout.attempt.v1'
+  const stored = wx.getStorageSync(storageKey)
+  const attempt = stored && typeof stored === 'object'
+    && typeof stored.idempotencyKey === 'string' && stored.idempotencyKey.length >= 8
+    ? stored : { idempotencyKey: randomId('wechat-logout') }
+  wx.setStorageSync(storageKey, attempt)
+  try {
+    const result = await request('/api/wechat/logout', {
+      method: 'POST',
+      requireTableSession: false,
+      credentialDomain: 'wechat_identity',
+      headers: { 'idempotency-key': attempt.idempotencyKey },
+      data: { idempotencyKey: attempt.idempotencyKey },
+    })
+    wx.removeStorageSync(storageKey)
+    return result
+  } catch (error) {
+    if (error && error.code !== 'NETWORK_ERROR') wx.removeStorageSync(storageKey)
+    throw error
+  }
+}
+
 module.exports = {
   getGuestSession, getMiniBootstrap, getMiniLoyalty, getMiniLoyaltyLedger,
   getNotificationConsent, recordNotificationConsent,
@@ -621,4 +644,5 @@ module.exports = {
   checkout, getTableOrders, retryOrderPayment,
   createServiceTask, getServiceRequests, actOnServiceTask,
   getCustomerBenefits, getCustomerProfile, reserveCustomerBenefit, submitSongRequest, getTodayPerformances,
+  logoutWechatIdentity,
 }

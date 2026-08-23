@@ -327,6 +327,7 @@ function refund(
     amountMinor: 1_000,
     currency: 'CNY',
     status,
+    providerSubmissionState: status === 'processing' ? 'submitted' : 'not_started',
     reason: '商品未出品',
     requestedByEmployeeId,
     requestedByEmployeeName: requestedByEmployeeId === employeeId ? '李艳' : 'Tom',

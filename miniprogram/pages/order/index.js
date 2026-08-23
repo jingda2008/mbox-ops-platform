@@ -17,6 +17,7 @@ const {
 } = require('../../utils/api')
 const { getRuntimeConfig } = require('../../config/index')
 const { getTableSession } = require('../../utils/session')
+const { requireMembershipLogin } = require('../../utils/membership-gate')
 const { randomId } = require('../../utils/id')
 const { money, dateTime } = require('../../utils/format')
 const { checkoutRecommendationAttribution } = require('../../utils/recommendation-attribution')
@@ -281,17 +282,20 @@ Page({
   },
 
   scanTable() {
-    wx.scanCode({
-      onlyFromCamera: true,
-      scanType: ['qrCode', 'wxCode'],
-      success: (result) => {
-        const query = parseScanValue(result.path || result.result)
-        getApp().refreshRuntime({ query })
-        this.preparePage()
-      },
-      fail: (error) => {
-        if (!String(error.errMsg || '').includes('cancel')) this.setData({ error: '没有识别到有效桌码，请扫描桌面固定二维码' })
-      },
+    requireMembershipLogin('登录会员后才能扫码点单').then((allowed) => {
+      if (!allowed) return
+      wx.scanCode({
+        onlyFromCamera: true,
+        scanType: ['qrCode', 'wxCode'],
+        success: (result) => {
+          const query = parseScanValue(result.path || result.result)
+          getApp().refreshRuntime({ query })
+          this.preparePage()
+        },
+        fail: (error) => {
+          if (!String(error.errMsg || '').includes('cancel')) this.setData({ error: '没有识别到有效桌码，请扫描桌面固定二维码' })
+        },
+      })
     })
   },
 

@@ -42,6 +42,18 @@ Integration modes are `disabled`, `test`, `uat` or `production`. Disabled
 integrations reject leftover provider fields; enabled integrations require the
 whole group. Secrets are checked but never printed.
 
+## Production hosts (陆家嘴)
+
+| 角色 | 地址 | 说明 |
+|------|------|------|
+| 运营 / 小程序机（`mbox.shmbox.com`） | 公网 `139.196.99.138`，内网 `10.100.80.223` | 主机名 `chaohai-app`；顾客小程序与员工后台 |
+| 支付 / 证据中继机（`pay.shmbox.com`） | `139.224.254.60:6122` | 星驿支付与 OSS 证据中继；**不是**运营入口部署目标 |
+
+生产部署必须显式指定运营机，并把 `MBOX_PUBLIC_URL` 设为 `https://mbox.shmbox.com`。
+经支付机跳板时，SSH 目标用内网 `10.100.80.223:22`，证据变量仍指向 `139.224.254.60:6122`。
+
+> **已废弃：** 旧文档中的 `10.100.80.233` 不是现网小程序机，请勿再用于部署或 SSH。
+
 ## Deployment
 
 The client must have the deployment private key. Password authentication is
@@ -49,7 +61,12 @@ not supported.
 
 ```bash
 MBOX_RELEASE_TAG=v1.0.0-rc.83 \
-MBOX_DEPLOYMENT_TIER=validation \
+MBOX_DEPLOYMENT_TIER=production \
+MBOX_SSH_HOST=10.100.80.223 \
+MBOX_SSH_PORT=22 \
+MBOX_PUBLIC_URL=https://mbox.shmbox.com \
+MBOX_EVIDENCE_SSH_HOST=139.224.254.60 \
+MBOX_EVIDENCE_SSH_PORT=6122 \
 ./deploy/aliyun/deploy-release.sh
 ```
 

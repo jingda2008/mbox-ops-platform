@@ -19,7 +19,10 @@ const {
   getWechatNotificationAuthorizations,
   recordWechatNotificationAuthorization,
   enrollMembership,
+  logoutWechatIdentity,
 } = require('../../utils/api')
+const { restartAnonymousCustomerSession } = require('../../utils/auth')
+const { consumeMembershipLoginRedirect } = require('../../utils/membership-gate')
 const { getTableConnection } = require('../../utils/session')
 const { dateTime, money } = require('../../utils/format')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
@@ -206,9 +209,14 @@ function customerPreferenceView(snapshot) {
   }
 }
 
+function clearMemberLocalCache() {
+  wx.removeStorageSync('mbox.member.avatarUrl')
+  wx.removeStorageSync('mbox.member.displayName')
+}
+
 Page({
   data: {
-    loading: true, busy: false, recoveryBusy: false, recoveryMessage: '', benefitBusyId: '', redemptionBusyId: '',
+    loading: true, busy: false, logoutBusy: false, recoveryBusy: false, recoveryMessage: '', benefitBusyId: '', redemptionBusyId: '',
     error: '', benefitError: '', registrationError: '', redemptionError: '', preferenceError: '',
     membership: null, points: [], benefits: [], reservations: [], registrations: [], contentCards: [],
     membershipTerms: null, supportContact: null,
@@ -221,15 +229,21 @@ Page({
     ...preferenceEditorState(0),
     benefitCount: 0, balanceText: '0', hasTableContext: false,
     avatarUrl: '', displayName: '',
+    loginSheetVisible: false,
     wechatNotificationAuthorizations: [],
   },
 
   onShow() {
+    const shouldOpenLogin = consumeMembershipLoginRedirect()
     this.setData({
       avatarUrl: wx.getStorageSync('mbox.member.avatarUrl') || '',
     })
-    this.load()
+    this.load().then(() => {
+      if (shouldOpenLogin && !this.data.membership) this.openLoginSheet()
+    })
   },
+
+
 
   async load() {
     this.setData({ loading: true, error: '', benefitError: '', registrationError: '', redemptionError: '', preferenceError: '' })
@@ -351,66 +365,47 @@ Page({
       this.openMemberCenter()
       return
     }
-    wx.pageScrollTo({
-      selector: '#membership-invitation',
-      duration: 320,
-      fail: () => wx.showToast({ title: '入会邀请正在加载，请稍后再试', icon: 'none' }),
-    })
+    this.openLoginSheet()
   },
 
-  async confirmMembershipJoin(event) {
+  onIdentityTap() {
+    if (this.data.membership) return
+    this.openLoginSheet()
+  },
+
+  async becomeMember() {
     if (this.data.busy) return
-    if (!this.data.agreedToPolicies) {
-      this.remindAgreement()
+    if (this.data.membership) {
+      wx.showToast({ title: '您已经是会员', icon: 'none' })
       return
     }
-    const terms = this.data.membershipTerms
-    if (!terms) {
-      wx.showModal({
-        title: '暂时无法加入',
-        content: '当前入会条款尚未发布，暂不能新加入会员。点单和找回原会员不受影响。',
-        showCancel: false,
-        confirmText: '知道了',
-      })
-      return
-    }
-    const authorization = readWechatPhoneAuthorization(event)
-    if (!authorization.code) {
-      wx.showToast({ title: authorization.message, icon: 'none' })
-      return
-    }
-    this.setData({ busy: true, error: '' })
-    try {
-      if (this.data.membership) {
-        wx.showToast({ title: '您已经是会员', icon: 'none' })
-        return
-      }
-      await enrollMembership(terms.version, 'mini_profile', authorization.code)
-      this.setData({ agreedToPolicies: false })
-      wx.showToast({ title: '入会成功', icon: 'success' })
-      await this.load()
-    } catch (error) {
-      const message = String((error && error.message) || '')
-      const friendly = /请求的页面或接口不存在|ROUTE_NOT_FOUND|会员服务暂时连不上/.test(message)
-        ? '入会服务暂时不可用，请稍后重试或联系门店'
-        : (message || '入会暂时没有完成')
-      this.setData({ error: friendly })
-      wx.showToast({ title: friendly, icon: 'none' })
-    } finally {
-      this.setData({ busy: false })
-    }
+    this.openLoginSheet()
   },
 
   openMemberCenter() {
-    if (!this.data.membership) {
-      this.focusJoinInvitation()
-      return
-    }
-    // 会员中心进入原先的积分与成长值明细页。
+    if (!this.requireMembership()) return
     wx.navigateTo({ url: '/pages/points/index' })
   },
 
+  noop() {},
+
+  requireMembership() {
+    if (this.data.membership) return true
+    this.openLoginSheet()
+    return false
+  },
+
+  openLoginSheet() {
+    if (this.data.membership) return
+    this.setData({ loginSheetVisible: true, agreedToPolicies: false, recoveryMessage: '', error: '' })
+  },
+
+  closeLoginSheet() {
+    this.setData({ loginSheetVisible: false, recoveryMessage: '' })
+  },
+
   openPrivacy() { wx.navigateTo({ url: '/pages/privacy/index' }) },
+
 
   openCustomerService() {
     const config = getRuntimeConfig()
@@ -456,14 +451,111 @@ Page({
     this.setData({ agreedToPolicies: values.indexOf('agree') >= 0 })
   },
 
-  remindAgreement() {
-    wx.showToast({ title: '请先勾选同意用户服务协议', icon: 'none' })
+  async logoutMember() {
+    if (this.data.logoutBusy || !this.data.membership) return
+    const confirmed = await new Promise((resolve) => wx.showModal({
+      title: '退出登录',
+      content: '退出后需要重新授权手机号登录',
+      confirmText: '退出',
+      cancelText: '取消',
+      success: (result) => resolve(Boolean(result.confirm)),
+      fail: () => resolve(false),
+    }))
+    if (!confirmed) return
+    this.setData({ logoutBusy: true })
+    try {
+      try {
+        await logoutWechatIdentity()
+      } catch (_error) {
+        // 服务端注销失败时仍清除本地会话，避免卡在半登录态。
+      }
+      clearMemberLocalCache()
+      wx.removeStorageSync('mbox.membership.enroll.attempt.v1')
+      wx.removeStorageSync('mbox.membership.recovery.attempt.v1')
+      await restartAnonymousCustomerSession()
+      this.setData({
+        agreedToPolicies: false,
+        loginSheetVisible: false,
+        membership: null,
+        displayName: '',
+        avatarUrl: '',
+        recoveryMessage: '',
+        error: '',
+        benefitError: '',
+        registrationError: '',
+        redemptionError: '',
+        preferenceError: '',
+        benefits: [],
+        benefitCount: 0,
+        points: [],
+        reservations: [],
+        registrations: [],
+        redemptionItems: [],
+        redemptions: [],
+        showRedemptions: false,
+        productRestrictions: [],
+        contentCards: [],
+      })
+      wx.showToast({ title: '已退出登录', icon: 'success', duration: 1200 })
+      await this.load()
+    } finally {
+      this.setData({ logoutBusy: false })
+    }
+  },
+
+  async quickLoginAndEnroll(event) {
+    if (this.data.busy) return
+    if (!this.data.agreedToPolicies) {
+      this.remindAgreement()
+      return
+    }
+    if (this.data.membership) {
+      wx.showToast({ title: '您已经是会员', icon: 'none' })
+      return
+    }
+    const terms = this.data.membershipTerms
+    if (!terms) {
+      wx.showModal({
+        title: '暂时无法登录',
+        content: '当前会员协议尚未发布，暂不能新加入会员。点单和找回原会员不受影响。',
+        showCancel: false,
+        confirmText: '知道了',
+      })
+      return
+    }
+    const authorization = readWechatPhoneAuthorization(event)
+    if (!authorization.code) {
+      this.setData({ error: authorization.message })
+      wx.showToast({ title: authorization.message, icon: 'none' })
+      return
+    }
+    this.setData({ busy: true, error: '' })
+    try {
+      await enrollMembership(terms.version, 'mini_profile', authorization.code)
+      this.setData({ loginSheetVisible: false })
+      wx.showToast({ title: '登录成功', icon: 'success', duration: 1200 })
+      await this.load()
+    } catch (error) {
+      const message = String((error && error.message) || '')
+      const friendly = /请求的页面或接口不存在|ROUTE_NOT_FOUND|会员服务暂时连不上/.test(message)
+        ? '会员登录服务暂时不可用，请稍后重试或联系门店'
+        : (message || '登录暂时没有完成')
+      this.setData({ error: friendly })
+      wx.showToast({ title: friendly, icon: 'none' })
+    } finally {
+      this.setData({ busy: false })
+    }
   },
 
   onAgreePrivacyAuthorization() {},
 
   showMembershipTerms() {
     wx.navigateTo({ url: '/pages/membership-terms/index?source=mini_profile&action=view' })
+  },
+
+  openMembershipBenefits() {
+    if (!this.requireMembership()) return
+    this.showMembershipTerms()
   },
 
   async enableExpiryReminder() {
@@ -511,6 +603,7 @@ Page({
       const result = await verifyMembershipRecovery(challenge.challengePublicId, authorization.code)
       this.setData({ recoveryMessage: result.message || '找回申请已经提交' })
       if (result.status === 'completed') {
+        this.setData({ loginSheetVisible: false })
         wx.showToast({ title: '会员已找回', icon: 'success' })
         await this.load()
       }
@@ -662,6 +755,7 @@ Page({
   },
 
   async requestBenefitUse(event) {
+    if (!this.requireMembership()) return
     const id = event.currentTarget.dataset.id
     if (!this.data.hasTableContext) return wx.showModal({ title: '到店后使用', content: '请入座并扫描桌码后申请使用，现场人员确认后才会核销。', showCancel: false })
     this.setData({ benefitBusyId: id, benefitError: '' })
@@ -674,6 +768,7 @@ Page({
   },
 
   async redeemItem(event) {
+    if (!this.requireMembership()) return
     const id = event.currentTarget.dataset.id
     const item = this.data.redemptionItems.find((candidate) => candidate.publicId === id)
     if (!item || !item.eligible || this.data.redemptionBusyId) return
@@ -697,6 +792,7 @@ Page({
   },
 
   async cancelRedemption(event) {
+    if (!this.requireMembership()) return
     const id = event.currentTarget.dataset.id
     if (!id || this.data.redemptionBusyId) return
     const confirmed = await new Promise((resolve) => wx.showModal({
@@ -712,7 +808,10 @@ Page({
     finally { this.setData({ redemptionBusyId: '' }) }
   },
 
-  openReservations() { wx.switchTab({ url: '/pages/reservations/index' }) },
+  openReservations() {
+    if (!this.requireMembership()) return
+    wx.switchTab({ url: '/pages/reservations/index' })
+  },
   openSuperhighService() {
     if (this.data.registrations.length) {
       wx.pageScrollTo({
@@ -725,12 +824,30 @@ Page({
     this.openSuperhighTab()
   },
   openSuperhighTab() { wx.switchTab({ url: '/pages/community/index' }) },
-  openPoints() { wx.navigateTo({ url: '/pages/points/index' }) },
-  openOrders() { wx.navigateTo({ url: '/pages/account/index' }) },
-  openBalance() { wx.navigateTo({ url: '/pages/account/index' }) },
-  openPreferenceSettings() { wx.navigateTo({ url: '/pages/profile-preferences/index' }) },
-  openContact() { wx.navigateTo({ url: '/pages/profile-contact/index' }) },
-  openCoupons() { wx.navigateTo({ url: '/pages/profile-coupons/index' }) },
+  openPoints() {
+    if (!this.requireMembership()) return
+    wx.navigateTo({ url: '/pages/points/index' })
+  },
+  openOrders() {
+    if (!this.requireMembership()) return
+    wx.navigateTo({ url: '/pages/account/index' })
+  },
+  openBalance() {
+    if (!this.requireMembership()) return
+    wx.navigateTo({ url: '/pages/account/index' })
+  },
+  openPreferenceSettings() {
+    if (!this.requireMembership()) return
+    wx.navigateTo({ url: '/pages/profile-preferences/index' })
+  },
+  openContact() {
+    if (!this.requireMembership()) return
+    wx.navigateTo({ url: '/pages/profile-contact/index' })
+  },
+  openCoupons() {
+    if (!this.requireMembership()) return
+    wx.navigateTo({ url: '/pages/profile-coupons/index' })
+  },
   async openNotificationSettings() {
     const authorizations = this.data.wechatNotificationAuthorizations || []
     const options = authorizations.filter((item) => (
@@ -768,5 +885,6 @@ Page({
       wx.showToast({ title: '未完成提醒授权', icon: 'none' })
     }
   },
-  openCommunity(event) { wx.navigateTo({ url: `/pages/community-detail/index?id=${encodeURIComponent(event.currentTarget.dataset.id)}` }) },
+  openCommunity(event) {
+    if (!this.requireMembership()) return wx.navigateTo({ url: `/pages/community-detail/index?id=${encodeURIComponent(event.currentTarget.dataset.id)}` }) },
 })

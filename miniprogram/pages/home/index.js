@@ -132,6 +132,7 @@ Page({
     membershipInviteVisible: false,
     membershipInviteAgreed: false,
     membershipInviteBusy: false,
+    pendingActivityId: '',
     benefitCount: 0,
     upcomingActivity: null,
     editorialCards: [],
@@ -279,6 +280,18 @@ Page({
   openFeaturedActivity() {
     const activity = this.data.upcomingActivity
     if (!activity || !activity.publicId) return
+    if (!this.data.membership) {
+      if (!this.data.membershipTerms) {
+        wx.showToast({ title: '当前会员协议暂时无法读取', icon: 'none' })
+        return
+      }
+      this.setData({
+        membershipInviteVisible: true,
+        membershipInviteAgreed: false,
+        pendingActivityId: activity.publicId,
+      })
+      return
+    }
     wx.navigateTo({ url: `/pages/community-detail/index?id=${encodeURIComponent(activity.publicId)}` })
   },
 
@@ -292,7 +305,7 @@ Page({
 
   openMembershipInvite() {
     if (this.data.membership || !this.data.membershipTerms) return
-    this.setData({ membershipInviteVisible: true, membershipInviteAgreed: false })
+    this.setData({ membershipInviteVisible: true, membershipInviteAgreed: false, pendingActivityId: '' })
   },
 
   dismissMembershipInvite() {
@@ -300,7 +313,7 @@ Page({
     const cooldownHours = Number.isFinite(configuredHours) && configuredHours >= 1 && configuredHours <= 2160
       ? configuredHours : 24
     wx.setStorageSync(MEMBERSHIP_INVITE_DISMISSED_KEY, Date.now() + cooldownHours * 60 * 60 * 1000)
-    this.setData({ membershipInviteVisible: false, membershipInviteAgreed: false })
+    this.setData({ membershipInviteVisible: false, membershipInviteAgreed: false, pendingActivityId: '' })
   },
 
   onMembershipInviteAgreementChange(event) {
@@ -309,7 +322,7 @@ Page({
   },
 
   remindMembershipInviteAgreement() {
-    wx.showToast({ title: '请先阅读并勾选同意协议', icon: 'none' })
+    wx.showToast({ title: '请先勾选同意协议', icon: 'none' })
   },
 
   showMembershipTerms() {
@@ -341,12 +354,19 @@ Page({
     this.setData({ membershipInviteBusy: true, error: '' })
     try {
       const result = await enrollMembership(terms.version, 'mini_profile', authorization.code)
+      const membership = result.membership || null
+      if (!membership) throw new Error('会员状态暂时未刷新，请稍后重试')
+      const pendingActivityId = this.data.pendingActivityId
       this.setData({
-        membership: result.membership || null,
+        membership,
         membershipInviteVisible: false,
         membershipInviteAgreed: false,
+        pendingActivityId: '',
       })
       wx.showToast({ title: '入会成功', icon: 'success' })
+      if (pendingActivityId) {
+        wx.navigateTo({ url: `/pages/community-detail/index?id=${encodeURIComponent(pendingActivityId)}` })
+      }
     } catch (error) {
       this.setData({ error: error.message || '入会暂时没有完成' })
       wx.showToast({ title: error.message || '入会未完成', icon: 'none' })

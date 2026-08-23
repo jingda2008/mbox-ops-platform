@@ -581,21 +581,27 @@
 .point-row > text.positive { color: #315d46; }
 
 .member-content-card {
-  width: 420rpx;
+  display: grid;
+  width: 620rpx;
+  min-height: 208rpx;
   flex: 0 0 auto;
   overflow: hidden;
-  border: 1rpx solid #ebe5dc;
+  grid-template-columns: 208rpx minmax(0, 1fr);
+  border: 1rpx solid rgba(201, 171, 112, .36);
   border-radius: 18rpx;
-  background: #fbf8f2;
+  background: linear-gradient(145deg, #315d46, #214635 72%, #172c21);
+  box-shadow: 0 12rpx 30rpx rgba(27, 65, 44, .14), inset 0 1rpx rgba(255, 255, 255, .1);
 }
-.member-content-image { width: 100%; height: 150rpx; background: #efe8dc; }
-.member-content-copy { padding: 18rpx 20rpx 20rpx; }
-.member-content-type { color: #315d46; font-size: 18rpx; font-weight: 750; }
+.member-content-image { display: block; width: 100%; min-height: 208rpx; height: 100%; background: #214635; }
+.member-content-image--placeholder { display: grid; padding: 38rpx; box-sizing: border-box; place-items: center; background: radial-gradient(circle at 72% 22%, rgba(222, 190, 126, .26), transparent 34%), linear-gradient(145deg, #294f3b, #152b20); }
+.member-content-image--placeholder image { width: 100%; height: 100%; opacity: .42; }
+.member-content-copy { display: grid; min-width: 0; min-height: 208rpx; padding: 20rpx 22rpx; align-content: center; box-sizing: border-box; }
+.member-content-type { color: #ddc390; font-size: 18rpx; font-weight: 750; }
 .member-content-title {
   display: -webkit-box;
   margin-top: 6rpx;
   overflow: hidden;
-  color: #211e1a;
+  color: #fff;
   font-size: 26rpx;
   font-weight: 700;
   -webkit-box-orient: vertical;
@@ -605,7 +611,7 @@
   display: -webkit-box;
   margin-top: 6rpx;
   overflow: hidden;
-  color: #6f675e;
+  color: rgba(255, 255, 255, .72);
   font-size: 20rpx;
   line-height: 1.4;
   -webkit-box-orient: vertical;
@@ -617,8 +623,8 @@
   margin-top: 12rpx;
   padding: 0 18rpx;
   border-radius: 28rpx;
-  background: #315d46;
-  color: #fff;
+  background: #fffefb;
+  color: #214635;
   font-size: 20rpx;
   line-height: 88rpx;
 }
@@ -1087,4 +1093,3 @@
   line-height: 72rpx;
 }
 .logout-button::after { border: 0; }
-

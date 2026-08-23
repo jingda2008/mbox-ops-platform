@@ -37,7 +37,7 @@ describe('normalized migration baseline', () => {
       '037', '038', '039', '040', '041', '042', '043', '044', '045', '046', '047', '048',
       '049', '050', '051', '052', '053', '054', '055', '056', '057', '058', '059', '060',
       '061', '062', '063', '064', '065', '066', '067', '068', '069', '070', '071', '072',
-      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101', '102', '103',
+      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101', '102', '103', '104',
     ])
     for (const migration of migrations) {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
@@ -175,6 +175,13 @@ describe('normalized migration baseline', () => {
     const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '103')
     expect(migration?.sql).toMatch(/acknowledgement_source IN \('mini_menu','mini_profile','mini_community'\)/)
     expect(migration?.sql).toMatch(/schema_version='103'/)
+  })
+
+  it('keeps printer management permission in the next immutable migration version', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '104')
+    expect(migration?.sql).toMatch(/'printer\.manage'/)
+    expect(migration?.sql).toMatch(/不授权摄像头、耳机、钱箱或其他硬件控制/)
+    expect(migration?.sql).toMatch(/schema_version='104'/)
   })
 
   it('keeps refund roles and amount limits configurable while requiring two employees', async () => {

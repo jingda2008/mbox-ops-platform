@@ -55,7 +55,7 @@
       <button class="community-member-close" aria-label="关闭会员邀请" bindtap="dismissMembershipInvite">×</button>
       <text class="community-member-kicker">M-BOX MEMBERSHIP</text>
       <text class="community-member-title">加入会员，解锁超嗨活动</text>
-      <text class="community-member-copy">报名活动需要先加入会员并授权手机号，浏览活动列表与详情无需登录。</text>
+      <text class="community-member-copy">查看和报名活动需要先加入会员并授权手机号。</text>
       <image class="community-member-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX Shanghai 1999 Logo" />
       <checkbox-group bindchange="onMembershipInviteAgreementChange">
         <label class="community-member-agreement">

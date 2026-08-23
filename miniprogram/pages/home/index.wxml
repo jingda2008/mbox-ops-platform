@@ -112,7 +112,7 @@
       </view>
 
       <view wx:if="{{!membership && membershipTerms}}" class="membership-inline-card" bindtap="openMembershipInvite" hover-class="button-hover" role="button" aria-role="button">
-        <view><text class="membership-inline-card__kicker">M-BOX MEMBERSHIP</text><text class="membership-inline-card__title">加入会员，享积分与活动</text><text class="membership-inline-card__copy">可先浏览内容，需要时再登录</text></view>
+        <view><text class="membership-inline-card__kicker">M-BOX MEMBERSHIP</text><text class="membership-inline-card__title">加入会员，享积分与活动</text><text class="membership-inline-card__copy">可先浏览首页和菜单，参与超嗨活动时再加入</text></view>
         <text class="membership-inline-card__action">了解 ›</text>
       </view>
     </block>

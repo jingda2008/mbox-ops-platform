@@ -208,6 +208,17 @@ Page({
       const membership = bootstrap.membership || null
       const membershipTerms = bootstrap.membershipTerms || null
       this.setData({ membership, membershipTerms })
+      if (!membership) {
+        this.setData({
+          loading: false,
+          activity: null,
+          registration: null,
+          membershipInviteVisible: true,
+          membershipInviteAgreed: false,
+          error: '',
+        })
+        return
+      }
       const raw = await getActivity(this.data.id)
       if (!raw) throw new Error('活动已结束、暂停或不在您的可见范围内')
       let loyaltyBenefits = []
@@ -242,7 +253,15 @@ Page({
       this.setData({ loading: false, activity: viewActivity(raw), loyaltyBenefits, registration, error: paymentReadError || registrationReadError })
     } catch (error) {
       if (error && error.code === 'ACTIVITY_MEMBERSHIP_REQUIRED') {
-        this.setData({ loading: false, activity: null, membership: null, error: error.message || '活动详情暂时无法读取' })
+        this.setData({
+          loading: false,
+          activity: null,
+          registration: null,
+          membership: null,
+          membershipInviteVisible: true,
+          membershipInviteAgreed: false,
+          error: '',
+        })
         return
       }
       this.setData({ loading: false, error: error.message || '活动详情暂时无法读取' })

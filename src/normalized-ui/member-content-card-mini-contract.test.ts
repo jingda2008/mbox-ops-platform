@@ -33,10 +33,12 @@ describe('member content card mini-program contract', () => {
   it.each([320, 390])('uses a compact horizontal card rail at %ipx without reducing action targets', (viewportWidth) => {
     const view = read('miniprogram/pages/profile/index.wxml')
     const css = read('miniprogram/pages/profile/index.wxss')
-    const cardWidthRpx = 420
+    const cardWidthRpx = 620
     const cardWidth = viewportWidth * cardWidthRpx / 750
     expect(cardWidth).toBeLessThan(viewportWidth - 40)
     expect(view).toContain('<scroll-view scroll-x enhanced')
+    expect(view).toContain('member-content-image--placeholder')
+    expect(css).toMatch(/\.member-content-card\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*208rpx minmax\(0, 1fr\)/s)
     expect(css).toMatch(/\.member-content-copy button \{[^}]*min-height: 88rpx;/s)
     expect(css).toMatch(/\.member-content-title \{[^}]*-webkit-line-clamp: 2;/s)
     expect(css).toMatch(/\.member-content-summary \{[^}]*-webkit-line-clamp: 2;/s)

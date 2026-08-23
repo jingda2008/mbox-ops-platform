@@ -451,6 +451,10 @@ Page({
     this.setData({ agreedToPolicies: values.indexOf('agree') >= 0 })
   },
 
+  remindAgreement() {
+    wx.showToast({ title: '请先勾选并同意会员协议', icon: 'none' })
+  },
+
   async logoutMember() {
     if (this.data.logoutBusy || !this.data.membership) return
     const confirmed = await new Promise((resolve) => wx.showModal({
@@ -886,5 +890,9 @@ Page({
     }
   },
   openCommunity(event) {
-    if (!this.requireMembership()) return wx.navigateTo({ url: `/pages/community-detail/index?id=${encodeURIComponent(event.currentTarget.dataset.id)}` }) },
+    if (!this.requireMembership()) return
+    const activityId = String(event.currentTarget.dataset.id || '').trim()
+    if (!activityId) return
+    wx.navigateTo({ url: `/pages/community-detail/index?id=${encodeURIComponent(activityId)}` })
+  },
 })

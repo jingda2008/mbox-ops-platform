@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   OnlinePaymentService,
   OnlinePaymentUnavailableError,
-  OnlinePaymentUnknownError,
+  OnlineRefundStatusUnknownError,
 } from './online-payment-service.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
@@ -253,7 +253,7 @@ describe('OnlinePaymentService provider refund closure', () => {
       observationRecorder(),
     )
     await expect(service.queryRefund(scope, refundId, 'refund-query-binding-0002'))
-      .rejects.toBeInstanceOf(OnlinePaymentUnknownError)
+      .rejects.toBeInstanceOf(OnlineRefundStatusUnknownError)
   })
 })
 

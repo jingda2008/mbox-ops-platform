@@ -22,7 +22,7 @@ test('home offers menu browsing and an explicit opt-in membership invitation', a
   assert.match(homeView, /checked="\{\{membershipInviteAgreed\}\}"/)
   assert.match(homeView, /membership-inline-card/)
   assert.match(homeView, /bindtap="openMembershipInvite"/)
-  assert.match(homeView, /可先浏览内容，需要时再登录/)
+  assert.match(homeView, /可先浏览首页和菜单，参与超嗨活动时再加入/)
   assert.match(homeView, /暂不加入/)
   assert.match(homeView, />同意入会<\/button>/)
   assert.match(homeView, /wx:if="\{\{membershipInviteAgreed\}\}"[^>]*class="member-invite-agree wx-phone-button"[^>]*open-type="getPhoneNumber\|agreePrivacyAuthorization"/)
@@ -61,7 +61,7 @@ test('activity cards are horizontal brand-green surfaces and profile actions exp
   assert.match(homeView, /featured-activity-card__art/)
   assert.match(homeStyle, /\.featured-activity-card\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*228rpx minmax\(0, 1fr\)[^}]*linear-gradient\(145deg, #315d46, #214635/)
   assert.match(homeView, /class="published-content-card/)
-  assert.match(homeStyle, /\.published-content-card\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*208rpx minmax\(0, 1fr\)[^}]*linear-gradient\(135deg, #fff, #f4eee6\)/)
+  assert.match(homeStyle, /\.published-content-card\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*208rpx minmax\(0, 1fr\)[^}]*linear-gradient\(145deg, #315d46, #214635/)
   assert.doesNotMatch(homeView, /home-campaign-mask/)
   assert.match(communityView, /hover-class="activity-card--hover"/)
   assert.match(communityStyle, /\.activity-card\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*236rpx minmax\(0, 1fr\)[^}]*linear-gradient\(145deg, #315d46, #214635/)
@@ -73,6 +73,7 @@ test('activity cards are horizontal brand-green surfaces and profile actions exp
   assert.match(profileLogic, /selector: '#registered-activities'/)
   assert.match(profileLogic, /wx\.switchTab\(\{ url: '\/pages\/community\/index' \}\)/)
   assert.match(profileStyle, /\.metric-icon\s*\{[^}]*border-radius:\s*50%/)
+  assert.match(profileStyle, /\.member-content-card\s*\{[^}]*background:\s*linear-gradient\(145deg, #315d46, #214635/)
 })
 
 test('activity registration distinguishes confirmed, payment-pending, and waitlist states', async () => {
@@ -107,30 +108,40 @@ test('activity registration distinguishes confirmed, payment-pending, and waitli
 })
 
 test('Superhigh activity access invites non-members to join with native WeChat phone authorization', async () => {
-  const [communityLogic, communityView, detailLogic, detailView, termsLogic, repository] = await Promise.all([
+  const [homeLogic, communityLogic, communityView, detailLogic, detailView, profileLogic, termsLogic, repository] = await Promise.all([
+    read('miniprogram/pages/home/index.js'),
     read('miniprogram/pages/community/index.js'),
     read('miniprogram/pages/community/index.wxml'),
     read('miniprogram/pages/community-detail/index.js'),
     read('miniprogram/pages/community-detail/index.wxml'),
+    read('miniprogram/pages/profile/index.js'),
     read('miniprogram/pages/membership-terms/index.js'),
     read('server/normalized/customer-experience-repository.ts'),
   ])
 
+  assert.match(homeLogic, /openFeaturedActivity\(\)\s*\{[\s\S]*?if \(!this\.data\.membership\)[\s\S]*?pendingActivityId: activity\.publicId/)
+  assert.match(homeLogic, /const pendingActivityId = this\.data\.pendingActivityId/)
+  assert.match(homeLogic, /if \(pendingActivityId\)\s*\{[\s\S]*?wx\.navigateTo/)
   assert.match(communityLogic, /getMiniBootstrap, enrollMembership/)
   assert.match(communityLogic, /if \(!this\.data\.membership\)/)
   assert.match(communityLogic, /membershipInviteVisible: false/)
   assert.match(communityLogic, /enrollMembership\(terms\.version, 'mini_community', authorization\.code\)/)
   assert.match(communityView, /加入会员，解锁超嗨活动/)
+  assert.match(communityView, /查看和报名活动需要先加入会员并授权手机号。/)
   assert.match(communityView, /wx:if="\{\{membershipInviteAgreed\}\}"[^>]*open-type="getPhoneNumber\|agreePrivacyAuthorization"[^>]*bindgetphonenumber="acceptMembershipInvite"/)
   assert.match(detailLogic, /const bootstrap = await getMiniBootstrap\(\)/)
   assert.match(detailLogic, /membershipInviteVisible: true/)
+  assert.match(detailLogic, /if \(!membership\)\s*\{[\s\S]*?membershipInviteVisible: true/)
   assert.match(detailLogic, /if \(!this\.data\.membership\)/)
   assert.match(detailLogic, /enrollMembership\(terms\.version, 'mini_community', authorization\.code\)/)
   assert.match(detailView, /加入会员，解锁超嗨活动/)
+  assert.match(detailView, /查看和报名活动需要先加入会员并授权手机号。/)
   assert.match(detailView, /open-type="getPhoneNumber\|agreePrivacyAuthorization"/)
   assert.match(termsLogic, /'mini_community'/)
   assert.match(repository, /ACTIVITY_MEMBERSHIP_REQUIRED/)
   assert.match(repository, /才可查看和报名超嗨活动/)
+  assert.match(profileLogic, /openCommunity\(event\)\s*\{\s*if \(!this\.requireMembership\(\)\) return\s+const activityId[\s\S]*?wx\.navigateTo/)
+  assert.doesNotMatch(profileLogic, /if \(!this\.requireMembership\(\)\) return wx\.navigateTo/)
 })
 
 test('profile membership invitation enrolls after one explicit checkbox and one confirmation button', async () => {
@@ -139,10 +150,11 @@ test('profile membership invitation enrolls after one explicit checkbox and one 
     read('miniprogram/pages/profile/index.js'),
   ])
 
-  assert.match(profileView, /登录会员/)
+  assert.match(profileView, /邀请加入 M-BOX 会员/)
   assert.match(profileView, /loginSheetVisible/)
   assert.match(profileView, /checked="\{\{agreedToPolicies\}\}"/)
   assert.match(profileView, /catchtap="showMembershipTerms"/)
+  assert.match(profileView, /确定加入并授权手机号/)
   assert.match(profileView, /wx:if="\{\{agreedToPolicies\}\}"[^>]*class="login-action-link[^"]*wx-phone-button"[^>]*bindgetphonenumber="quickLoginAndEnroll"/)
   assert.doesNotMatch(profileView, /阅读入会条款/)
   assert.match(profileLogic, /enrollMembership\(terms\.version, 'mini_profile', authorization\.code\)/)
@@ -335,12 +347,12 @@ test('customer-only reservations stay executable, performances use the public sc
   assert.match(reservationLogic, /membershipRequired/)
   assert.match(reservationView, /membership-gate/)
   assert.doesNotMatch(profileView, /class="login-dock"/)
-  assert.match(profileView, /微信手机号快捷登录/)
+  assert.match(profileView, /确定加入并授权手机号/)
   assert.match(profileLogic, /quickLoginAndEnroll/)
   assert.match(profileView, /退出登录/)
   assert.match(profileLogic, /logoutMember/)
   assert.match(profileLogic, /restartAnonymousCustomerSession/)
-  assert.match(profileView, /点击登录\/注册/)
+  assert.match(profileView, /'访客'/)
   assert.doesNotMatch(profileView, /消息提醒/)
   assert.doesNotMatch(profileView, /我的资料/)
   assert.doesNotMatch(profileView, /了解个人信息处理范围/)

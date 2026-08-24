@@ -42,6 +42,9 @@ export interface GuestSessionView {
   businessDate?: string
   expiresAt?: string
   cartScope?: string | null
+  // Sessions opened before the shared-cart migration remain on v1 until they
+  // close. Missing is treated as v1 so a mixed-version rollout fails safe.
+  cartProtocolVersion?: 1 | 2 | null
   capabilities?: string[]
 }
 
@@ -82,6 +85,30 @@ export interface GuestOrderResult {
     simulated: boolean
     providerAction: OnlinePaymentAction
   }
+}
+
+export interface GuestSharedCart {
+  cartPublicId: string
+  generation: number
+  version: number
+  status: 'open' | 'submitting' | 'submitted' | 'expired'
+  lines: Array<{
+    productId: string
+    name: string
+    quantity: number
+    unitPriceMinor: number | null
+    subtotalAmountMinor: number | null
+    currency: string | null
+    available: boolean
+  }>
+  totalAmountMinor: number | null
+  currency: string | null
+  updatedAt: string
+  allowedActions: string[]
+}
+
+export interface GuestSharedCartCheckoutResult extends GuestOrderResult {
+  sharedCart: GuestSharedCart
 }
 
 export interface GuestTableOrder {
@@ -229,6 +256,43 @@ export class GuestApiClient {
     return data
   }
 
+  async loadSharedCart(options: Readonly<RequestOptions> = {}): Promise<GuestSharedCart> {
+    const body = await this.request<unknown>('/api/guest/shared-cart', {
+      method: 'GET', signal: options.signal,
+    })
+    const data = responseData(body)
+    if (!isSharedCart(data)) throw invalidResponse()
+    return data
+  }
+
+  async adjustSharedCart(
+    input: Readonly<{ productId: string; delta: number; expectedVersion: number }>,
+    options: Readonly<RequestOptions> & { idempotencyKey: string },
+  ): Promise<GuestSharedCart> {
+    const body = await this.request<unknown>('/api/guest/shared-cart/lines', {
+      method: 'POST', body: input, signal: options.signal, idempotencyKey: options.idempotencyKey,
+    })
+    const data = responseData(body)
+    if (!isSharedCart(data)) throw invalidResponse()
+    return data
+  }
+
+  async checkoutSharedCart(
+    input: Readonly<{
+      expectedVersion: number
+      note: string | null
+      confirmedDuplicateOrderId?: string
+    }>,
+    options: Readonly<RequestOptions> & { idempotencyKey: string },
+  ): Promise<GuestSharedCartCheckoutResult> {
+    const body = await this.request<unknown>('/api/guest/shared-cart/checkout', {
+      method: 'POST', body: input, signal: options.signal, idempotencyKey: options.idempotencyKey,
+    })
+    const data = responseData(body)
+    if (!isSharedCartCheckoutResult(data)) throw invalidResponse()
+    return data
+  }
+
   async loadTableOrders(options: Readonly<RequestOptions> = {}): Promise<GuestTableOrder[]> {
     const body = await this.request<unknown>('/api/guest/orders/table', {
       method: 'GET', signal: options.signal,
@@ -369,7 +433,32 @@ function isSessionView(value: unknown): value is GuestSessionView {
   if (!isObject(value) || !['active', 'already_active', 'waiting_for_table'].includes(String(value.status))) return false
   if (typeof value.message !== 'string' && value.status !== 'active') return false
   if (value.status !== 'waiting_for_table' && (typeof value.cartScope !== 'string' || !/^[A-Za-z0-9_-]{32}$/.test(value.cartScope))) return false
-  return isObject(value.table) && typeof value.table.code === 'string' && typeof value.table.displayName === 'string'
+  return isObject(value.table)
+    && typeof value.table.code === 'string'
+    && typeof value.table.displayName === 'string'
+    && (value.cartProtocolVersion === undefined || value.cartProtocolVersion === null || value.cartProtocolVersion === 1 || value.cartProtocolVersion === 2)
+}
+
+function isSharedCart(value: unknown): value is GuestSharedCart {
+  return isObject(value)
+    && typeof value.cartPublicId === 'string'
+    && Number.isSafeInteger(value.generation)
+    && Number.isSafeInteger(value.version)
+    && ['open', 'submitting', 'submitted', 'expired'].includes(String(value.status))
+    && Array.isArray(value.lines)
+    && value.lines.every((line) => isObject(line)
+      && typeof line.productId === 'string'
+      && typeof line.name === 'string'
+      && Number.isSafeInteger(line.quantity)
+      && (line.unitPriceMinor === null || Number.isSafeInteger(line.unitPriceMinor))
+      && (line.subtotalAmountMinor === null || Number.isSafeInteger(line.subtotalAmountMinor))
+      && (line.currency === null || typeof line.currency === 'string')
+      && typeof line.available === 'boolean')
+    && (value.totalAmountMinor === null || Number.isSafeInteger(value.totalAmountMinor))
+    && (value.currency === null || typeof value.currency === 'string')
+    && typeof value.updatedAt === 'string'
+    && Array.isArray(value.allowedActions)
+    && value.allowedActions.every((action) => typeof action === 'string')
 }
 
 function isMenuProduct(value: unknown): value is GuestMenuProduct {
@@ -496,6 +585,10 @@ function isOrderResult(value: unknown): value is GuestOrderResult {
     && typeof value.payment.status === 'string'
     && typeof value.payment.simulated === 'boolean'
     && isOnlinePaymentAction(value.payment.providerAction)
+}
+
+function isSharedCartCheckoutResult(value: unknown): value is GuestSharedCartCheckoutResult {
+  return isOrderResult(value) && isObject(value) && isSharedCart(value.sharedCart)
 }
 
 function isOnlinePaymentAction(value: unknown): value is OnlinePaymentAction {

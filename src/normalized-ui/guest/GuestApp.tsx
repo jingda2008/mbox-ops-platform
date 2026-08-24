@@ -23,6 +23,7 @@ import {
   GuestApiClient,
   GuestApiError,
   type GuestOrderResult,
+  type GuestSharedCart,
   type GuestDailyPerformanceView,
   type OnlinePaymentAction,
   type GuestSessionView,
@@ -42,7 +43,7 @@ import { guestGatePresentation, type GuestGateReason } from './guest-gate-model'
 import { guestMenuProductToMenuProduct } from './menu-product-adapter'
 import './guest-app.css'
 
-type GuestApiPort = Pick<GuestApiClient, 'scanTable' | 'loadSession' | 'searchMenu' | 'submitOrder' | 'loadTableOrders' | 'loadTodayPerformance' | 'payTableOrder' | 'requestService' | 'recordMood'>
+type GuestApiPort = Pick<GuestApiClient, 'scanTable' | 'loadSession' | 'searchMenu' | 'submitOrder' | 'loadSharedCart' | 'adjustSharedCart' | 'checkoutSharedCart' | 'loadTableOrders' | 'loadTodayPerformance' | 'payTableOrder' | 'requestService' | 'recordMood'>
 type ServiceType = 'call_staff' | 'complaint' | 'custom'
 type Panel = 'orders' | 'complaint' | 'custom' | 'checkout' | null
 export type { GuestGateReason } from './guest-gate-model'
@@ -81,6 +82,9 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const [gateRefreshing, setGateRefreshing] = useState(false)
   const [table, setTable] = useState<GuestSessionView['table'] | null>(null)
   const [cartStorageKey, setCartStorageKey] = useState<string | undefined>()
+  const [cartProtocolVersion, setCartProtocolVersion] = useState<1 | 2>(1)
+  const [sharedCart, setSharedCart] = useState<GuestSharedCart | null>(null)
+  const [sharedCartError, setSharedCartError] = useState<string | null>(null)
   const [products, setProducts] = useState<GuestMenuProduct[]>([])
   const [partySize, setPartySize] = useState(1)
   const [recommendationScene, setRecommendationScene] = useState<MenuRecommendationScene | undefined>()
@@ -111,6 +115,12 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const toastSequence = useRef(0)
 
   const menuProducts = useMemo(() => products.map(guestMenuProductToMenuProduct), [products])
+  const sharedCartItems = useMemo(() => Object.fromEntries((sharedCart?.lines ?? [])
+    .filter((line) => line.quantity > 0)
+    .map((line) => [line.productId, line.quantity])), [sharedCart])
+  const sharedCartUnitAmountMinors = useMemo(() => Object.fromEntries((sharedCart?.lines ?? [])
+    .filter((line): line is typeof line & { unitPriceMinor: number } => Number.isSafeInteger(line.unitPriceMinor))
+    .map((line) => [line.productId, line.unitPriceMinor])), [sharedCart])
 
   const notify = useCallback((message: string, tone: ToastState['tone'] = 'info') => {
     setToast({ id: ++toastSequence.current, message, tone })
@@ -161,6 +171,24 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       }
     } finally {
       if (!quiet) setTableOrdersLoading(false)
+    }
+  }, [blockForSession, notify])
+
+  const loadSharedCart = useCallback(async (quiet = false) => {
+    const api = apiRef.current
+    if (api === null) return null
+    try {
+      const cart = await api.loadSharedCart()
+      setSharedCart(cart)
+      setSharedCartError(null)
+      return cart
+    } catch (error) {
+      if (!blockForSession(error)) {
+        const message = errorMessage(error, '同桌购物车暂时没有同步，请稍后再试。')
+        setSharedCartError(message)
+        if (!quiet) notify(message, 'error')
+      }
+      return null
     }
   }, [blockForSession, notify])
 
@@ -225,6 +253,8 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       return false
     }
     setTable(session.table)
+    setSharedCart(null)
+    setSharedCartError(null)
     if (session.status === 'waiting_for_table') {
       setCartStorageKey(undefined)
       setPhase('waiting')
@@ -232,7 +262,9 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       setGateMessage(session.message ?? '座位正在准备中，请稍候。')
       return false
     }
-    setCartStorageKey(guestCartStorageKey(session))
+    const protocolVersion = session.cartProtocolVersion === 2 ? 2 : 1
+    setCartProtocolVersion(protocolVersion)
+    setCartStorageKey(protocolVersion === 1 ? guestCartStorageKey(session) : undefined)
     qrCredentialRef.current = null
     setPhase('ready')
     return true
@@ -294,7 +326,19 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     void loadMenu()
     void loadTableOrders(true)
     void loadPerformance()
-  }, [loadMenu, loadPerformance, loadTableOrders, phase])
+    if (cartProtocolVersion === 2) void loadSharedCart(true)
+  }, [cartProtocolVersion, loadMenu, loadPerformance, loadSharedCart, loadTableOrders, phase])
+
+  useEffect(() => {
+    if (phase !== 'ready' || cartProtocolVersion !== 2) return
+    const refresh = () => { if (document.visibilityState === 'visible') void loadSharedCart(true) }
+    const timer = window.setInterval(refresh, 2_500)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [cartProtocolVersion, loadSharedCart, phase])
 
   useEffect(() => {
     if (phase !== 'waiting') return
@@ -363,6 +407,27 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     }
   }, [blockForSession, notify, pendingMood, selectedMood])
 
+  const adjustSharedCart = useCallback(async (productId: string, delta: number) => {
+    const api = apiRef.current
+    if (api === null || sharedCart === null) throw new Error('同桌购物车正在同步，请稍后再试。')
+    try {
+      const cart = await api.adjustSharedCart({
+        productId,
+        delta,
+        expectedVersion: sharedCart.version,
+      }, { idempotencyKey: safeIdempotencyKey('guest-shared-cart-adjust') })
+      setSharedCart(cart)
+      setSharedCartError(null)
+    } catch (error) {
+      if (error instanceof GuestApiError && error.code === 'SHARED_CART_VERSION_CONFLICT') {
+        await loadSharedCart(true)
+        throw new Error('同桌购物车已经更新，已为您刷新，请确认后再操作。')
+      }
+      if (blockForSession(error)) throw new Error('桌次已失效，请重新扫码后继续。')
+      throw new Error(errorMessage(error, '同桌购物车暂时没有更新，请稍后再试。'))
+    }
+  }, [blockForSession, loadSharedCart, sharedCart])
+
   const submitOrder = useCallback(async (
     items: Array<{ productId: string; quantity: number }>,
     options: MenuSubmitOptions,
@@ -384,19 +449,31 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     setSubmittingOrder(true)
     haptic(8)
     try {
-      const result = await api.submitOrder(
-        {
-          items,
-          note: options.fulfillmentNote || null,
-          ...(options.confirmedDuplicateOrderId
-            ? { confirmedDuplicateOrderId: options.confirmedDuplicateOrderId }
-            : {}),
-        },
-        { idempotencyKey: safeIdempotencyKey('guest-order') },
-      )
+      const result = cartProtocolVersion === 2
+        ? await (() => {
+          if (sharedCart === null) throw new Error('同桌购物车正在同步，请稍后再试。')
+          return api.checkoutSharedCart({
+            expectedVersion: sharedCart.version,
+            note: options.fulfillmentNote || null,
+            ...(options.confirmedDuplicateOrderId
+              ? { confirmedDuplicateOrderId: options.confirmedDuplicateOrderId }
+              : {}),
+          }, { idempotencyKey: safeIdempotencyKey('guest-shared-cart-checkout') })
+        })()
+        : await api.submitOrder(
+          {
+            items,
+            note: options.fulfillmentNote || null,
+            ...(options.confirmedDuplicateOrderId
+              ? { confirmedDuplicateOrderId: options.confirmedDuplicateOrderId }
+              : {}),
+          },
+          { idempotencyKey: safeIdempotencyKey('guest-order') },
+        )
       setOrderResult(result)
       setPanel('checkout')
       void loadTableOrders(true)
+      if (cartProtocolVersion === 2) await loadSharedCart(true)
       notify('订单已经送达吧台与收银，请完成付款。', 'success')
       if (!result.payment.simulated
         && result.payment.providerAction.status === 'pending'
@@ -409,7 +486,9 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       }
     } catch (error) {
       if (error instanceof GuestApiError
-        && error.code === 'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED') {
+        && (error.code === 'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED'
+          || error.code === 'SHARED_CART_VERSION_CONFLICT')) {
+        if (error.code === 'SHARED_CART_VERSION_CONFLICT') await loadSharedCart(true)
         throw new ApiError(error.message, error.status ?? 409, error.code, error.details)
       }
       if (blockForSession(error)) {
@@ -420,7 +499,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       orderSubmittingRef.current = false
       setSubmittingOrder(false)
     }
-  }, [blockForSession, loadTableOrders, notify, tableOrders])
+  }, [blockForSession, cartProtocolVersion, loadSharedCart, loadTableOrders, notify, sharedCart, tableOrders])
 
   if (phase !== 'ready') {
     return <GuestGate
@@ -481,13 +560,13 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       </section>
 
       {menuError !== null && <div className="guest-inline-error" role="alert"><AlertCircle /><span>{menuError}</span><button type="button" onClick={() => void loadMenu()}>重试</button></div>}
-      {menuLoading && menuProducts.length === 0 ? <div className="guest-menu-loading"><LoaderCircle className="is-spinning" /> 正在准备菜单</div> : (
+      {menuLoading || (cartProtocolVersion === 2 && sharedCart === null) ? <div className="guest-menu-loading"><LoaderCircle className="is-spinning" /> {sharedCartError ?? (cartProtocolVersion === 2 ? '正在同步同桌购物车' : '正在准备菜单')}{sharedCartError !== null && <button type="button" onClick={() => void loadSharedCart()}>重试</button>}</div> : (
         <MenuOrderingWorkspace
           key={cartStorageKey}
           products={menuProducts}
           tableLabel={table?.displayName ?? table?.code ?? ''}
           submitLabel="确认订单并微信支付"
-          submitHint="这里只提交本次购物车；历史订单不会重复提交。"
+          submitHint={cartProtocolVersion === 2 ? '本桌共同可见，任何人的改动都会同步到这里。' : '这里只提交本次购物车；历史订单不会重复提交。'}
           busy={submittingOrder}
           orderSafety={guestOrderSafety}
           compactCart
@@ -496,6 +575,12 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
           partySize={partySize}
           recommendationScene={recommendationScene}
           cartStorageKey={cartStorageKey}
+          {...(cartProtocolVersion === 2 ? {
+            cart: sharedCartItems,
+            cartUnitAmountMinors: sharedCartUnitAmountMinors,
+            cartTotalAmountMinor: sharedCart?.totalAmountMinor,
+            onCartAdjust: adjustSharedCart,
+          } : {})}
           onSubmit={submitOrder}
         />
       )}

@@ -152,7 +152,7 @@
 .menu-cart-summary-copy { min-width: 0; display: grid; gap: 1px; }
 .menu-cart-summary-copy strong { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
 .menu-cart-summary-copy small { overflow: hidden; color: #78672f; font-size: 10px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.menu-ordering-workspace.has-gentle-cart-summary .menu-cart-summary-copy small { color: #747b74; }
+.menu-ordering-workspace.has-gentle-cart-summary .menu-cart-summary-copy small { color: #687068; }
 .menu-cart-dock .menu-submit-button { width: 100%; min-height: 46px; padding: 0 14px; border-color: #742b34; background: #963943; font-size: 14px; box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 3px 0 #69242c, 0 7px 14px rgba(92, 31, 39, .18); }
 .menu-cart-dock .menu-submit-button:hover:not(:disabled) { background: #a6404b; }
 .menu-cart-dock .menu-submit-button:active:not(:disabled) { background: #7e3039; box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 1px 0 #69242c, 0 3px 7px rgba(92, 31, 39, .16); }

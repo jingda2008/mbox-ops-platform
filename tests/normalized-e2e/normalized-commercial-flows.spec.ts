@@ -68,6 +68,14 @@ async function fixture(): Promise<Fixture> {
   )) as Fixture
 }
 
+async function guestCartItemCount(cartDock: import('@playwright/test').Locator): Promise<number> {
+  const copy = await cartDock.locator('.menu-cart-summary-copy strong').textContent()
+  if (copy?.includes('本次还未选择')) return 0
+  const match = copy?.match(/本次待提交\s*(\d+)\s*件/)
+  if (!match) throw new Error(`无法读取购物车件数: ${copy ?? ''}`)
+  return Number(match[1])
+}
+
 test('mobile guest scans a fixed table QR, searches, orders and sees payment result', async ({ page }) => {
   const data = await fixture()
   await page.goto(data.guestUrl)
@@ -190,8 +198,9 @@ test('narrow mobile guest keeps mood and service controls compact above the menu
       expect(quickAddBox!.y + quickAddBox!.height).toBeLessThanOrEqual(dockBox!.y)
       expect(quickAddBox!.width).toBeGreaterThanOrEqual(44)
       expect(quickAddBox!.height).toBeGreaterThanOrEqual(44)
+      const beforeCount = await guestCartItemCount(checkoutDock)
       await quickAdd.click()
-      await expect(checkoutDock).toContainText('本次待提交 1 件')
+      await expect.poll(() => guestCartItemCount(checkoutDock)).toBe(beforeCount + 1)
       await page.screenshot({ path: 'artifacts/normalized-browser/audit-rc78-guest-menu-cart-320.png', fullPage: true })
     }
     if (width === 390) {
@@ -780,6 +789,45 @@ test('mobile manager payment choices stay synchronized with two guests at the sa
   await expect(secondGuestOrders.getByTestId(`guest-table-order-${staffQrBody.data.providerAction.orderPublicId}`)).toContainText(data.orderableProductName)
   await expect(secondGuestOrders.getByTestId(`guest-table-order-${barcodeBody.data.providerAction.orderPublicId}`)).toContainText('员工正在扫描付款码，请勿重复支付')
   await secondGuestContext.close()
+})
+
+test('two guests see the same server cart before either one checks out', async ({ page, browser }) => {
+  const data = await fixture()
+  const secondGuestContext = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    locale: 'zh-CN',
+    timezoneId: 'Asia/Shanghai',
+  })
+  const secondGuest = await secondGuestContext.newPage()
+  const sharedCartRequests: string[] = []
+  page.on('request', (request) => {
+    if (request.url().includes('/api/guest/shared-cart')) sharedCartRequests.push(request.url())
+  })
+
+  try {
+    await page.goto(data.guestUrl)
+    await secondGuest.goto(data.guestUrl)
+    await expect(page.getByTestId('normalized-guest-app')).toBeVisible()
+    await expect(secondGuest.getByTestId('normalized-guest-app')).toBeVisible()
+
+    const firstCart = page.getByRole('complementary', { name: '订单结算' })
+    const secondCart = secondGuest.getByRole('complementary', { name: '订单结算' })
+    await expect(firstCart).toBeVisible()
+    await expect(secondCart).toBeVisible()
+    const beforeCount = await guestCartItemCount(firstCart)
+    await page.getByLabel('搜索菜单商品').fill(data.orderableProductName)
+    const add = page.getByRole('button', { name: `加入${data.orderableProductName}` })
+    const increase = page.getByRole('button', { name: `增加${data.orderableProductName}` })
+    await expect(add.or(increase)).toBeVisible()
+    if (await add.isVisible()) await add.click()
+    else await increase.click()
+
+    await expect.poll(() => guestCartItemCount(firstCart)).toBe(beforeCount + 1)
+    await expect.poll(() => guestCartItemCount(secondCart)).toBe(beforeCount + 1)
+    expect(sharedCartRequests.some((url) => url.endsWith('/api/guest/shared-cart/lines'))).toBe(true)
+  } finally {
+    await secondGuestContext.close()
+  }
 })
 
 function cashierWorkbenchFixture(actions: {

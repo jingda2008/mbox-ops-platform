@@ -95,7 +95,7 @@ integration('loyalty supplement and refund consistency PostgreSQL integration', 
     ])
   })
 
-  it('records a tiny zero-point refund and serializes concurrent replay without duplicate effects', async () => {
+  it('records a tiny exact-carry refund and serializes concurrent replay without duplicate effects', async () => {
     const failedScenario = await createScenario(pool)
     await accrue(failedScenario)
     const failedRefund = await insertRefund(pool, failedScenario, 1_000, 'failed', 'failed')
@@ -108,13 +108,13 @@ integration('loyalty supplement and refund consistency PostgreSQL integration', 
     await accrue(tiny)
     const tinyRefund = await insertRefund(pool, tiny, 1, 'tiny')
     const tinyApplied = await reverse(tiny, tinyRefund.refundId, tinyRefund.completedAt)
-    expect(tinyApplied).toMatchObject({ applied: true, pointsDelta: 0, growthDelta: 0 })
+    expect(tinyApplied).toMatchObject({ applied: true, pointsDelta: -1, growthDelta: -1 })
     expect((await reverse(tiny, tinyRefund.refundId, tinyRefund.completedAt)).applied).toBe(false)
     const tinyFact = await pool.query(`
       SELECT eligible_refund_amount_minor::text AS amount, reversed_points, reversed_growth
       FROM mbox.loyalty_award_refund_applications WHERE refund_id=$1
     `, [tinyRefund.refundId])
-    expect(tinyFact.rows[0]).toEqual({ amount: '1', reversed_points: 0, reversed_growth: 0 })
+    expect(tinyFact.rows[0]).toEqual({ amount: '1', reversed_points: 1, reversed_growth: 1 })
     expect((await pool.query(`SELECT reversed_amount_minor::text AS amount FROM mbox.loyalty_order_awards WHERE order_id=$1`,
       [tiny.orderId])).rows[0]?.amount).toBe('1')
 

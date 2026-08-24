@@ -307,6 +307,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
         tableSessionId: context.tableSessionId,
         customerId: context.customerId,
         expectedVersion: input.expectedVersion,
+        note: input.note,
         confirmedDuplicateOrderId: input.confirmedDuplicateOrderId,
         checkoutUpgradeOfferPublicId: input.checkoutUpgradeOfferPublicId,
         recommendationPublicId: input.recommendationPublicId,
@@ -332,6 +333,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
         channel: 'guest_qr',
         settlementMode: 'immediate_payment',
         lines: cart.lines,
+        note: input.note,
         createdByCustomerId: context.customerId,
         confirmedDuplicateOrderPublicId: input.confirmedDuplicateOrderId,
         checkoutUpgradeOfferPublicId: input.checkoutUpgradeOfferPublicId,
@@ -1394,13 +1396,14 @@ function readSharedCartAdjustment(value: unknown): {
 
 function readSharedCartCheckout(value: unknown): {
   expectedVersion: number
+  note: string | null
   confirmedDuplicateOrderId: string | null
   checkoutUpgradeOfferPublicId: string | null
   recommendationPublicId: string | null
   selectedRecommendationProductId: string | null
 } {
   const body = readStrictObject(value, '共享购物车结账请求', [
-    'expectedVersion', 'confirmedDuplicateOrderId', 'checkoutUpgradeOfferPublicId',
+    'expectedVersion', 'note', 'confirmedDuplicateOrderId', 'checkoutUpgradeOfferPublicId',
     'recommendationPublicId', 'selectedRecommendationProductId',
   ])
   const confirmedDuplicateOrderId = readOptionalString(
@@ -1432,6 +1435,7 @@ function readSharedCartCheckout(value: unknown): {
   }
   return {
     expectedVersion: readInteger(body.expectedVersion, 'expectedVersion', 0, 2_147_483_647),
+    note: readOptionalString(body.note, 'note', 500),
     confirmedDuplicateOrderId,
     checkoutUpgradeOfferPublicId,
     recommendationPublicId,

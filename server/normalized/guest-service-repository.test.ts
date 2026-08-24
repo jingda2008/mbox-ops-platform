@@ -183,16 +183,22 @@ integration('normalized guest service requests with PostgreSQL', () => {
 
   it('lists only the current table service state and records idempotent guest feedback', async () => {
     const employeeId = randomUUID()
+    const approverEmployeeId = randomUUID()
     await pool.query(`
       INSERT INTO mbox.employees (id, tenant_id, store_id, employee_code, display_name)
-      VALUES ($1::uuid, $2::uuid, $3::uuid, $4, '李艳')
-    `, [employeeId, tenantId, storeId, `GS-${employeeId.slice(0, 8)}`])
+      VALUES
+        ($1::uuid, $2::uuid, $3::uuid, $4, '李艳'),
+        ($5::uuid, $2::uuid, $3::uuid, $6, '服务名审批人')
+    `, [
+      employeeId, tenantId, storeId, `GS-${employeeId.slice(0, 8)}`,
+      approverEmployeeId, `GS-APPROVER-${approverEmployeeId.slice(0, 8)}`,
+    ])
     await pool.query(`
       INSERT INTO mbox.employee_customer_public_profiles(
         tenant_id,store_id,employee_id,public_display_name,status,
-        approved_by_employee_id,approved_at,effective_at
-      ) VALUES ($1::uuid,$2::uuid,$3::uuid,'李艳','published',$3::uuid,clock_timestamp(),clock_timestamp())
-    `, [tenantId, storeId, employeeId])
+        drafted_by_employee_id,approved_by_employee_id,approved_at,effective_at,approval_reference
+      ) VALUES ($1::uuid,$2::uuid,$3::uuid,'李艳','published',$3::uuid,$4::uuid,clock_timestamp(),clock_timestamp(),$5)
+    `, [tenantId, storeId, employeeId, approverEmployeeId, 'HR-TEST-APPROVAL-001'])
     await pool.query(`
       UPDATE mbox.service_tasks
       SET assigned_employee_id = $4::uuid, detail = '内部备注不得对客显示'

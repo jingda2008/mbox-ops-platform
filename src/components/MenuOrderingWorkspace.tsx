@@ -129,6 +129,14 @@ interface MenuOrderingWorkspaceProps {
   partySize?: number
   recommendationScene?: MenuRecommendationScene
   cartStorageKey?: string
+  /**
+   * When supplied, quantity is owned by an authoritative cart outside this
+   * component (for example, a table-wide cart shared by several guests).
+   */
+  cart?: Readonly<Record<string, number>>
+  cartUnitAmountMinors?: Readonly<Record<string, number>>
+  cartTotalAmountMinor?: number | null
+  onCartAdjust?: (productId: string, delta: number) => Promise<void>
   onSubmit: (items: MenuCartItem[], options: MenuSubmitOptions) => Promise<void>
   onInteraction?: (interaction: MenuInteraction) => void
   onCartCountChange?: (itemCount: number) => void
@@ -154,9 +162,14 @@ export function MenuOrderingWorkspace({
   partySize = 1,
   recommendationScene,
   cartStorageKey,
+  cart: controlledCart,
+  cartUnitAmountMinors,
+  cartTotalAmountMinor,
+  onCartAdjust,
   onCartCountChange,
 }: MenuOrderingWorkspaceProps) {
-  const [cart, setCart] = useState<Record<string, number>>(() => readPersistedCart(cartStorageKey))
+  const [persistedCart, setPersistedCart] = useState<Record<string, number>>(() => readPersistedCart(cartStorageKey))
+  const cart = controlledCart ?? persistedCart
   const [categoryId, setCategoryId] = useState('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [clock, setClock] = useState(() => Date.now() + clockOffsetMs)
@@ -177,12 +190,17 @@ export function MenuOrderingWorkspace({
   const [detailProductId, setDetailProductId] = useState('')
   const [upgradePromptProductId, setUpgradePromptProductId] = useState('')
   const [upgradeSourceProductId, setUpgradeSourceProductId] = useState('')
+  const [cartMutating, setCartMutating] = useState(false)
+  const [cartAdjustmentError, setCartAdjustmentError] = useState('')
   const lastRecommendationImpressionRef = useRef('')
   const handledRecommendationUpdateRef = useRef(0)
   const previousRecommendationIdsRef = useRef('')
   const cartAbandonmentRef = useRef('')
   const suggestedUpgradeSourceIdsRef = useRef(new Set<string>())
-  useEffect(() => persistCart(cartStorageKey, cart), [cart, cartStorageKey])
+  useEffect(() => {
+    if (controlledCart !== undefined) return
+    persistCart(cartStorageKey, persistedCart)
+  }, [cartStorageKey, controlledCart, persistedCart])
   useEffect(() => {
     const updateClock = () => setClock(Date.now() + clockOffsetMs)
     updateClock()
@@ -286,7 +304,12 @@ export function MenuOrderingWorkspace({
     (cart[product.id] ?? 0) > 0 && availability.get(product.id)?.orderable
   ))
   const itemCount = cartProducts.reduce((sum, product) => sum + (cart[product.id] ?? 0), 0)
-  const total = cartProducts.reduce((sum, product) => sum + product.listPriceAmount * (cart[product.id] ?? 0), 0)
+  const calculatedCartTotal = cartProducts.reduce((sum, product) => (
+    sum + cartUnitAmount(product) * (cart[product.id] ?? 0)
+  ), 0)
+  const total = typeof cartTotalAmountMinor === 'number' && Number.isSafeInteger(cartTotalAmountMinor) && cartTotalAmountMinor >= 0
+    ? cartTotalAmountMinor
+    : calculatedCartTotal
 
   useEffect(() => {
     if (!recommendationFeedback) return
@@ -386,20 +409,26 @@ export function MenuOrderingWorkspace({
   ])
 
   useEffect(() => {
-    setCart((current) => {
+    if (controlledCart !== undefined) return
+    setPersistedCart((current) => {
       const next = Object.fromEntries(Object.entries(current).filter(([productId]) => {
         const product = products.find((item) => item.id === productId)
         return product && productAvailability(product, new Date(clock), timeZone).orderable
       }))
       return Object.keys(next).length === Object.keys(current).length ? current : next
     })
-  }, [clock, products, timeZone])
+  }, [clock, controlledCart, products, timeZone])
 
   function emitInteraction(
     type: GuestBehaviorEventType,
     fields: Omit<MenuInteraction, 'type'> = {},
   ) {
     onInteraction?.({ type, ...fields })
+  }
+
+  function cartUnitAmount(product: MenuProduct): number {
+    const amount = cartUnitAmountMinors?.[product.id]
+    return typeof amount === 'number' && Number.isSafeInteger(amount) && amount >= 0 ? amount : product.listPriceAmount
   }
 
   function changeGuestMenuView(view: typeof guestMenuViews[number]['id']) {
@@ -466,20 +495,36 @@ export function MenuOrderingWorkspace({
 
   function applyQuantityChange(productId: string, delta: number) {
     if (guestSalesMode) menuHaptic(delta > 0 ? 5 : 3)
-    setProductQuantity(productId, (cart[productId] ?? 0) + delta, delta > 0 ? 'product_added' : 'product_removed')
+    void setProductQuantity(productId, (cart[productId] ?? 0) + delta, delta > 0 ? 'product_added' : 'product_removed')
   }
 
-  function setProductQuantity(productId: string, requestedQuantity: number, interactionType: 'product_added' | 'product_removed' = 'product_added') {
+  async function setProductQuantity(productId: string, requestedQuantity: number, interactionType: 'product_added' | 'product_removed' = 'product_added') {
     const product = products.find((item) => item.id === productId)
     const nextQuantity = Math.max(0, Math.min(product?.maxOrderQuantity ?? 50, Math.round(requestedQuantity)))
-    setCart((current) => {
-      if (nextQuantity === 0) {
-        const next = { ...current }
-        delete next[productId]
-        return next
+    const currentQuantity = cart[productId] ?? 0
+    const delta = nextQuantity - currentQuantity
+    if (delta === 0 || cartMutating) return
+    if (onCartAdjust !== undefined) {
+      setCartMutating(true)
+      setCartAdjustmentError('')
+      try {
+        await onCartAdjust(productId, delta)
+      } catch (error) {
+        setCartAdjustmentError(error instanceof Error ? error.message : '购物车暂时没有更新，请稍后再试。')
+        return
+      } finally {
+        setCartMutating(false)
       }
-      return { ...current, [productId]: nextQuantity }
-    })
+    } else {
+      setPersistedCart((current) => {
+        if (nextQuantity === 0) {
+          const next = { ...current }
+          delete next[productId]
+          return next
+        }
+        return { ...current, [productId]: nextQuantity }
+      })
+    }
     onInteraction?.({
       type: interactionType,
       productId,
@@ -487,6 +532,7 @@ export function MenuOrderingWorkspace({
     })
     if (
       guestSalesMode
+      && onCartAdjust === undefined
       && interactionType === 'product_added'
       && nextQuantity === 1
       && product?.recommendation?.upgradeProductId
@@ -501,12 +547,7 @@ export function MenuOrderingWorkspace({
   }
 
   function removeProduct(productId: string) {
-    setCart((current) => {
-      const next = { ...current }
-      delete next[productId]
-      return next
-    })
-    onInteraction?.({ type: 'product_removed', productId, quantity: 0 })
+    void setProductQuantity(productId, 0, 'product_removed')
   }
 
   async function submit() {
@@ -526,8 +567,10 @@ export function MenuOrderingWorkspace({
         cartProducts.map((product) => ({ productId: product.id, quantity: cart[product.id]! })),
         { confirmedDuplicateOrderId: duplicateOrderId, fulfillmentNote: fulfillmentNote.trim() },
       )
-      setCart({})
-      clearPersistedCart(cartStorageKey)
+      if (controlledCart === undefined) {
+        setPersistedCart({})
+        clearPersistedCart(cartStorageKey)
+      }
       setFulfillmentNote('')
       setCartOpen(false)
       setLastSubmittedAt(Date.now())
@@ -574,7 +617,7 @@ export function MenuOrderingWorkspace({
     <div className="menu-cart-empty"><ShoppingCart size={28} /><span>点击商品图片旁的加号</span></div>
   ) : cartProducts.map((product) => (
     <div className="menu-cart-line" key={product.id}>
-      <div><strong>{product.name}</strong><span>¥{(product.listPriceAmount / 100).toFixed(0)} × {cart[product.id]}</span></div>
+      <div><strong>{product.name}</strong><span>¥{(cartUnitAmount(product) / 100).toFixed(0)} × {cart[product.id]}</span></div>
       <div className={`menu-stepper${(product.maxOrderQuantity ?? 50) > 50 ? ' has-direct-input' : ''}`}>
         <button type="button" title={`移除${product.name}`} onClick={() => removeProduct(product.id)}><Trash2 size={15} /></button>
         {(product.maxOrderQuantity ?? 50) > 50
@@ -619,6 +662,8 @@ export function MenuOrderingWorkspace({
         </div>
         {tableControl}
       </header>
+
+      {cartAdjustmentError && <div className="menu-confirm-error" role="alert">{cartAdjustmentError}</div>}
 
       {guestSalesMode && <GuestRecommendationTools
         context={recommendationContext}
@@ -947,7 +992,7 @@ export function MenuOrderingWorkspace({
             }}>保持现在这样</button>
             <button className="primary-button" onClick={() => {
               removeProduct(upgradeSourceProduct.id)
-              setProductQuantity(upgradeProduct.id, 1)
+              void setProductQuantity(upgradeProduct.id, 1)
               emitInteraction('upgrade_accepted', {
                 productId: upgradeProduct.id,
                 metadata: { fromProductId: upgradeSourceProduct.id },
@@ -967,7 +1012,7 @@ export function MenuOrderingWorkspace({
             <button className="icon-button" title="关闭" onClick={() => setConfirmation(null)}><X size={19} /></button>
           </header>
           {confirmation === 'continue' ? <p>您刚完成一次下单。确认是新一轮加单后再继续，避免手滑重复上单。</p> : <>
-            <div className="menu-confirm-lines">{cartProducts.map((product) => <div key={product.id}><span>{product.name} × {cart[product.id]}</span><strong>¥{((product.listPriceAmount * cart[product.id]!) / 100).toFixed(2)}</strong></div>)}</div>
+            <div className="menu-confirm-lines">{cartProducts.map((product) => <div key={product.id}><span>{product.name} × {cart[product.id]}</span><strong>¥{((cartUnitAmount(product) * cart[product.id]!) / 100).toFixed(2)}</strong></div>)}</div>
             <div className="menu-confirm-total"><span>{complimentaryMode ? `赠送价值 · 共 ${itemCount} 件` : `共 ${itemCount} 件`}</span><strong>{complimentaryMode ? '客人零应付' : `¥${(total / 100).toFixed(2)}`}</strong></div>
             {fulfillmentNoteField}
             <p>{confirmation === 'duplicate' ? '请先查看订单记录。只有确定需要再上一份相同商品时，才继续加单。' : complimentaryMode ? '确认后按当前登录员工本人的赠送权限校验，零应付并直接送往吧台或厨房。' : '确认后订单会送到吧台或厨房，请勿连续点击或重复提交。'}</p>

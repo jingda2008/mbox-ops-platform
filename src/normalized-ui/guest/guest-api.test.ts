@@ -106,6 +106,37 @@ describe('GuestApiClient', () => {
     })
   })
 
+  it('uses the server-authoritative shared cart for v2 table sessions', async () => {
+    const send = vi.fn<(url: string | URL | Request, init?: RequestInit) => Promise<Response>>()
+      .mockResolvedValueOnce(jsonResponse({ data: sharedCart() }))
+      .mockResolvedValueOnce(jsonResponse({ data: sharedCart({ version: 3, quantity: 2 }) }))
+      .mockResolvedValueOnce(jsonResponse({ data: { ...orderResult(), sharedCart: sharedCart({ status: 'submitted', version: 4, quantity: 2 }) } }, 201))
+    const client = new GuestApiClient(deviceKey, { fetch: send })
+
+    await expect(client.loadSharedCart()).resolves.toMatchObject({ version: 2, lines: [{ quantity: 1 }] })
+    await expect(client.adjustSharedCart({
+      productId: '55555555-5555-4555-8555-555555555555', delta: 1, expectedVersion: 2,
+    }, { idempotencyKey: 'shared-cart-adjust-test-0001' })).resolves.toMatchObject({ version: 3, lines: [{ quantity: 2 }] })
+    await expect(client.checkoutSharedCart({
+      expectedVersion: 3, note: '酒水和小食一起上', confirmedDuplicateOrderId: 'guest-order-existing-0001',
+    }, { idempotencyKey: 'shared-cart-checkout-test-0001' })).resolves.toMatchObject({
+      order: { publicId: 'guest-order-public-0001' }, sharedCart: { status: 'submitted' },
+    })
+
+    expect(send.mock.calls.map(([url]) => url)).toEqual([
+      '/api/guest/shared-cart',
+      '/api/guest/shared-cart/lines',
+      '/api/guest/shared-cart/checkout',
+    ])
+    expect(JSON.parse(String(send.mock.calls[1]?.[1]?.body))).toEqual({
+      productId: '55555555-5555-4555-8555-555555555555', delta: 1, expectedVersion: 2,
+    })
+    expect(JSON.parse(String(send.mock.calls[2]?.[1]?.body))).toEqual({
+      expectedVersion: 3, note: '酒水和小食一起上', confirmedDuplicateOrderId: 'guest-order-existing-0001',
+    })
+    expect(new Headers(send.mock.calls[2]?.[1]?.headers).get('idempotency-key')).toBe('shared-cart-checkout-test-0001')
+  })
+
   it('preserves server duplicate details for the confirmation dialog', async () => {
     const send = vi.fn(async () => jsonResponse({ error: {
       code: 'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED',
@@ -208,6 +239,28 @@ function orderResult() {
       publicId: 'guest-payment-public-0001', mode: 'wechat_jsapi', provider: 'postar', method: 'jsapi',
       status: 'pending', simulated: false, providerAction: onlinePaymentAction('jsapi'),
     },
+  }
+}
+
+function sharedCart(overrides: Partial<{ version: number; status: string; quantity: number }> = {}) {
+  return {
+    cartPublicId: 'GSC1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+    generation: 1,
+    version: overrides.version ?? 2,
+    status: overrides.status ?? 'open',
+    lines: [{
+      productId: '55555555-5555-4555-8555-555555555555',
+      name: '青岛啤酒',
+      quantity: overrides.quantity ?? 1,
+      unitPriceMinor: 6_800,
+      subtotalAmountMinor: 6_800 * (overrides.quantity ?? 1),
+      currency: 'CNY',
+      available: true,
+    }],
+    totalAmountMinor: 6_800 * (overrides.quantity ?? 1),
+    currency: 'CNY',
+    updatedAt: '2026-08-11T12:00:00.000Z',
+    allowedActions: overrides.status === 'submitted' ? [] : ['adjust', 'checkout'],
   }
 }
 

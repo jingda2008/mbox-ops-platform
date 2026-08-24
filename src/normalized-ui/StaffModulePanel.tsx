@@ -19,6 +19,7 @@ import { CashierAfterSalesWorkbench } from './CashierAfterSalesWorkbench'
 import { CatalogManagementPanel } from './CatalogManagementPanel'
 import { VenueManagementPanel } from './VenueManagementPanel'
 import { StaffAccessManagementPanel } from './StaffAccessManagementPanel'
+import { CustomerPublicationPanel } from './CustomerPublicationPanel'
 import {
   CustomerExperienceManagementPanel,
   customerExperienceDashboard,
@@ -1191,6 +1192,11 @@ function SettingsModule({ api, auth, policy, onChanged }: { api: NormalizedApiCl
     <details className="staff-module-disclosure"><summary>支付安全边界</summary><p className="staff-module-footnote">支付渠道密钥和远端连接只能由受控部署配置提供，门店开关不会读取、显示或覆盖它们。每次调整要求原因、版本校验、幂等键和审计记录；关闭只阻止新支付，不得中断在途回调、查单、退款或对账。</p></details>
     {auth.permissions.includes('table.manage') && <VenueManagementPanel api={api} />}
     {auth.permissions.includes('staff.access.configure') && <StaffAccessManagementPanel api={api} />}
+    {(auth.permissions.includes('customer.public-profile.manage')
+      || auth.permissions.includes('customer.public-profile.publish')
+      || auth.permissions.includes('privacy.policy.view')
+      || auth.permissions.includes('privacy.policy.manage')
+      || auth.permissions.includes('privacy.policy.publish')) && <CustomerPublicationPanel api={api} permissions={auth.permissions} />}
   </div>
 }
 

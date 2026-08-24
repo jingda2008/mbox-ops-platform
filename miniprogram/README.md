@@ -6,7 +6,7 @@
 
 - 服务请求、投诉和“已解决/仍未解决”调用现有任务 API，不在前端伪造提交成功。
 - 桌账从签名桌码 `/api/guest/session` 的本桌脱敏数据生成，只读展示。
-- 会员页在开发环境调用 `/api/dev/member-portal/:memberId`；生产环境使用微信客户会话调用 `/api/wechat/member-portal`，未绑定会员时明确拒绝。
+- 会员资料、积分、入会协议和权益只使用规范化的“我的”及关联页面；已移除旧运行时会员页和 `/api/wechat/member-portal` 数据源，避免与规范化会员账本混用。
 - 点歌页调用 `/api/guest/song-requests`，后端按签名桌码绑定当前桌台，仅提交点歌意向。
 - 开发 API 不可用时可展示明确标注的开发占位数据，但所有写操作会被禁用。
 - 小程序中没有 `AppSecret`、支付密钥、微信 access token 或员工会话密钥。

@@ -54,6 +54,32 @@
 .staff-settings-scope .staff-settings-grid { padding: 0 9px 9px; }
 .staff-module-disclosure > summary { color: #655f4e; font-size: 11px; font-weight: 800; }
 .staff-module-disclosure .staff-module-footnote { margin: 0; border-left: 0; border-top: 1px solid #ead69f; }
+.customer-publication-panel { display: grid; gap: 9px; padding: 12px; border: 1px solid #c9d0c8; border-top: 3px solid #d4b44f; border-radius: 7px; background: #fff; }
+.customer-publication-panel > header, .customer-publication-list > header { display: flex; align-items: end; justify-content: space-between; gap: 10px; }
+.customer-publication-panel > header > div, .customer-publication-list > header > div { display: grid; gap: 3px; }
+.customer-publication-panel h3, .customer-publication-list strong { margin: 0; font-size: 14px; }
+.customer-publication-panel header small, .customer-publication-list header small { color: #687068; font-size: 10px; line-height: 1.45; }
+.customer-publication-panel > header > button { min-width: 70px; min-height: 42px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid #aeb8ae; border-radius: 6px; background: #fff; color: #374137; font: inherit; font-size: 11px; font-weight: 750; }
+.customer-publication-panel > header > button svg { width: 15px; }
+.customer-publication-wide { grid-column: 1 / -1; }
+.customer-publication-policy-form textarea { min-height: 160px; }
+.customer-publication-approval, .customer-publication-approval-grid label { display: grid; gap: 5px; color: #535b54; font-size: 11px; font-weight: 750; }
+.customer-publication-approval input, .customer-publication-approval-grid input { width: 100%; min-height: 44px; padding: 8px 10px; border: 1px solid #c4cbc3; border-radius: 6px; background: #fff; color: #202621; font: inherit; }
+.customer-publication-approval-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.customer-publication-list { display: grid; gap: 7px; }
+.customer-publication-list > p { margin: 0; padding: 16px; border: 1px dashed #c8cdc6; border-radius: 6px; color: #687068; text-align: center; font-size: 11px; }
+.customer-publication-list article { min-height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 9px; padding: 9px 10px; border: 1px solid #d5d9d2; border-radius: 6px; background: #fbfcfa; }
+.customer-publication-list article > div:first-child { min-width: 0; display: grid; gap: 3px; }
+.customer-publication-list article strong { font-size: 12px; overflow-wrap: anywhere; }
+.customer-publication-list article small { color: #687068; font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; }
+.customer-publication-list article > div:last-child { flex: 0 0 auto; }
+.customer-publication-list article button { min-height: 42px; padding: 0 10px; border: 1px solid #176b4c; border-radius: 5px; background: #eef7f2; color: #185d43; font: inherit; font-size: 11px; font-weight: 800; }
+.customer-publication-list article button.is-danger { border-color: #d6a6a8; background: #fff4f4; color: #9a3137; }
+.customer-publication-notice { display: flex; align-items: flex-start; gap: 7px; margin: 0; padding: 9px 10px; border: 1px solid #b9d6c7; border-left: 4px solid #176b4c; border-radius: 6px; background: #eff8f3; color: #175c43; font-size: 11px; line-height: 1.5; }
+.customer-publication-notice svg, .customer-publication-panel > .staff-module-footnote svg { flex: 0 0 auto; width: 15px; margin-top: 1px; }
+.customer-publication-notice.is-error { border-color: #e1b8ba; border-left-color: #b3383f; background: #fff6f6; color: #9a3137; }
+.customer-publication-panel > .staff-module-footnote { display: flex; align-items: flex-start; gap: 6px; }
+@media (max-width: 480px) { .customer-publication-approval-grid { grid-template-columns: 1fr; } }
 .staff-metric-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
 .staff-metric-grid article { min-height: 82px; display: grid; align-content: center; gap: 5px; padding: 11px; border: 1px solid #d5d9d2; border-radius: 6px; background: #fff; }
 .staff-metric-grid small { color: #656c64; font-size: 10px; }

@@ -3,7 +3,7 @@ import {
   effectiveStaffNavigation,
   staffModuleForPermission,
   staffModuleForRoute,
-} from './staff-module-access'
+} from './staff-module-access.js'
 
 describe('permission-derived staff modules', () => {
   it('shows a parent module from an effective personal grant even without role navigation', () => {
@@ -12,6 +12,9 @@ describe('permission-derived staff modules', () => {
     ])
     expect(effectiveStaffNavigation(['payment.manual.cash.record'], [])).toEqual([
       expect.objectContaining({ code: 'payments', label: '收银与退款', route: '/staff/payments' }),
+    ])
+    expect(effectiveStaffNavigation(['privacy.policy.publish'], [])).toEqual([
+      expect.objectContaining({ code: 'settings', label: '系统配置', route: '/staff/settings' }),
     ])
   })
 

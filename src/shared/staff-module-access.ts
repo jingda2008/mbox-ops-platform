@@ -95,7 +95,11 @@ export const staffModuleAccessDefinitions: readonly StaffModuleAccessDefinition[
   },
   {
     code: 'settings', label: '系统配置', route: '/staff/settings', sortOrder: 300,
-    permissionCodes: ['staff.access.configure', 'payment.policy.manage', 'table.manage'],
+    permissionCodes: [
+      'staff.access.configure', 'payment.policy.manage', 'table.manage',
+      'customer.public-profile.manage', 'customer.public-profile.publish',
+      'privacy.policy.view', 'privacy.policy.manage', 'privacy.policy.publish',
+    ],
   },
 ])
 

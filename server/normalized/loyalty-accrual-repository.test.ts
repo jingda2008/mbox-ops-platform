@@ -102,6 +102,102 @@ integration('loyalty accrual PostgreSQL integration', () => {
     expect(award.rows[0]).toEqual({ reversed_amount_minor: '8000', reversed_points: 80, reversed_growth: 80 })
   })
 
+  it('carries sub-unit rewards across orders, reverses the original exact contribution, and isolates a new policy version', async () => {
+    const tiny = {
+      customer: randomUUID(), membership: randomUUID(), account: randomUUID(), policy: randomUUID(), nextPolicy: randomUUID(),
+      firstOrder: randomUUID(), firstItem: randomUUID(), firstPayment: randomUUID(),
+      secondOrder: randomUUID(), secondItem: randomUUID(), secondPayment: randomUUID(),
+      thirdOrder: randomUUID(), thirdItem: randomUUID(), thirdPayment: randomUUID(),
+      refund: randomUUID(), refundItem: randomUUID(),
+    }
+    const suffix = tiny.customer.replaceAll('-', '').slice(0, 10)
+    await pool.query(`INSERT INTO mbox.customers(id,tenant_id,store_id,public_id,status) VALUES($1,$2,$3,$4,'active')`, [
+      tiny.customer, id.tenant, id.store, `tiny-customer-${suffix}`,
+    ])
+    await pool.query(`INSERT INTO mbox.customer_memberships(id,tenant_id,store_id,customer_id,member_no,level,status) VALUES($1,$2,$3,$4,$5,'member','active')`, [
+      tiny.membership, id.tenant, id.store, tiny.customer, `MBXTINY${suffix.toUpperCase()}`,
+    ])
+    await pool.query(`INSERT INTO mbox.loyalty_accounts(id,tenant_id,store_id,membership_id,customer_id) VALUES($1,$2,$3,$4,$5)`, [
+      tiny.account, id.tenant, id.store, tiny.membership, tiny.customer,
+    ])
+    await pool.query(`
+      INSERT INTO mbox.loyalty_policy_versions(
+        id,tenant_id,store_id,policy_code,version,status,points_numerator,points_denominator_minor,
+        growth_numerator,growth_denominator_minor,rounding_mode,points_validity_months,effective_from,
+        drafted_by_employee_id,approved_by_employee_id,approved_at,published_by_employee_id,published_at,
+        publication_mode,reason
+      ) VALUES
+        ($1,$2,$3,$4,1,'published',1,100,1,100,'floor',18,'2026-01-01T00:00:00Z',$5,$6,'2026-01-01T00:00:00Z',$7,'2026-01-01T00:01:00Z','separated','不足一元跨订单精确累计'),
+        ($8,$2,$3,$9,1,'published',1,100,1,100,'floor',18,'2026-01-01T00:00:00Z',$5,$6,'2026-01-01T00:00:00Z',$7,'2026-01-01T00:01:00Z','separated','换版后余数必须隔离')
+    `, [tiny.policy, id.tenant, id.store, `TINY${suffix.toUpperCase()}`, id.drafter, id.approver, id.publisher, tiny.nextPolicy, `TINY2${suffix.toUpperCase()}`])
+    await seedTinyPaidOrder(pool, {
+      orderId: tiny.firstOrder, itemId: tiny.firstItem, paymentId: tiny.firstPayment,
+      policyId: tiny.policy, customerId: tiny.customer, suffix: `tiny-first-${suffix}`,
+    })
+    await seedTinyPaidOrder(pool, {
+      orderId: tiny.secondOrder, itemId: tiny.secondItem, paymentId: tiny.secondPayment,
+      policyId: tiny.policy, customerId: tiny.customer, suffix: `tiny-second-${suffix}`,
+    })
+    expect(await recordTiny(tiny.firstOrder, tiny.firstPayment)).toMatchObject({ applied: true, pointsDelta: 0, growthDelta: 0 })
+    await pool.query(`
+      UPDATE mbox.orders
+      SET loyalty_points_multiplier_numerator=2,loyalty_points_multiplier_denominator=2
+      WHERE id=$1
+    `, [tiny.secondOrder])
+    expect(await recordTiny(tiny.secondOrder, tiny.secondPayment)).toMatchObject({ applied: true, pointsDelta: 1, growthDelta: 1 })
+    expect((await recordTiny(tiny.secondOrder, tiny.secondPayment)).applied).toBe(false)
+    expect((await pool.query(`SELECT available_points,growth_value FROM mbox.loyalty_accounts WHERE id=$1`, [tiny.account])).rows[0])
+      .toEqual({ available_points: 1, growth_value: 1 })
+    expect((await pool.query(`SELECT count(*)::integer AS count FROM mbox.loyalty_order_reward_contributions WHERE membership_id=$1`, [tiny.membership])).rows[0])
+      .toEqual({ count: 2 })
+
+    await pool.query(`
+      INSERT INTO mbox.refunds(
+        id,tenant_id,store_id,payment_id,public_id,provider_refund_id,amount_minor,currency,status,reason,
+        requested_by_employee_id,approved_by_employee_id,decision_reason,completed_at
+      ) VALUES($1,$2,$3,$4,$5,$6,25,'CNY','succeeded','第一笔订单部分退款',$7,$8,'收银复核通过','2026-08-17T01:00:00Z')
+    `, [tiny.refund, id.tenant, id.store, tiny.firstPayment, `tiny-refund-${suffix}`, `tiny-refund-provider-${suffix}`, id.drafter, id.approver])
+    await pool.query(`INSERT INTO mbox.refund_items(id,tenant_id,store_id,refund_id,order_item_id,amount_minor,currency) VALUES($1,$2,$3,$4,$5,25,'CNY')`, [
+      tiny.refundItem, id.tenant, id.store, tiny.refund, tiny.firstItem,
+    ])
+    const reversed = await runner.run({ tenantId: id.tenant, storeId: id.store }, (transaction) => (
+      new LoyaltyAccrualRepository(transaction).reverseSucceededRefund({
+        orderId: tiny.firstOrder, paymentId: tiny.firstPayment, refundId: tiny.refund,
+        occurredAt: '2026-08-17T01:00:00.000Z',
+      })
+    ))
+    expect(reversed).toMatchObject({ applied: true, pointsDelta: -1, growthDelta: -1, pendingRecoveryPoints: 0 })
+    expect((await pool.query(`SELECT available_points,growth_value FROM mbox.loyalty_accounts WHERE id=$1`, [tiny.account])).rows[0])
+      .toEqual({ available_points: 0, growth_value: 0 })
+    expect((await pool.query(`SELECT awarded_points,reversed_points,calculation_model FROM mbox.loyalty_order_awards WHERE order_id=$1`, [tiny.firstOrder])).rows[0])
+      .toEqual({ awarded_points: 0, reversed_points: 1, calculation_model: 'exact_carry' })
+
+    await seedTinyPaidOrder(pool, {
+      orderId: tiny.thirdOrder, itemId: tiny.thirdItem, paymentId: tiny.thirdPayment,
+      policyId: tiny.nextPolicy, customerId: tiny.customer, suffix: `tiny-third-${suffix}`,
+    })
+    expect(await recordTiny(tiny.thirdOrder, tiny.thirdPayment)).toMatchObject({ applied: true, pointsDelta: 0, growthDelta: 0 })
+    const carries = await pool.query(`
+      SELECT policy_version_id,reward_kind,denominator::text AS denominator,remainder_numerator::text AS remainder
+      FROM mbox.loyalty_reward_carry_balances WHERE membership_id=$1
+      ORDER BY policy_version_id,reward_kind
+    `, [tiny.membership])
+    expect(carries.rows).toEqual(expect.arrayContaining([
+      { policy_version_id: tiny.policy, reward_kind: 'points', denominator: '200', remainder: '150' },
+      { policy_version_id: tiny.policy, reward_kind: 'growth', denominator: '100', remainder: '75' },
+      { policy_version_id: tiny.nextPolicy, reward_kind: 'points', denominator: '100', remainder: '50' },
+      { policy_version_id: tiny.nextPolicy, reward_kind: 'growth', denominator: '100', remainder: '50' },
+    ]))
+
+    async function recordTiny(orderId: string, paymentId: string) {
+      return runner.run({ tenantId: id.tenant, storeId: id.store }, (transaction) => (
+        new LoyaltyAccrualRepository(transaction).recordPaidOrder({
+          orderId, paymentId, occurredAt: '2026-08-17T00:00:00.000Z',
+        })
+      ))
+    }
+  })
+
   it('separates policy approval from publication and keeps the current version active until cut-over', async () => {
     const cutoverAt = new Date(Math.ceil((Date.now() + 60_000) / 1000) * 1000)
     const cutoverIso = cutoverAt.toISOString()
@@ -365,4 +461,34 @@ async function insertRefund(
     INSERT INTO mbox.refund_items(id,tenant_id,store_id,refund_id,order_item_id,amount_minor,currency)
     VALUES($1,$2,$3,$4,$5,$6,'CNY')
   `, [refundItemId, id.tenant, id.store, refundId, orderItemId, amountMinor])
+}
+
+async function seedTinyPaidOrder(pool: Pool, input: Readonly<{
+  orderId: string
+  itemId: string
+  paymentId: string
+  policyId: string
+  customerId: string
+  suffix: string
+}>) {
+  await pool.query(`
+    INSERT INTO mbox.orders(
+      id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,
+      subtotal_amount_minor,discount_amount_minor,total_amount_minor,currency,created_by_customer_id,
+      submitted_at,settlement_mode,fulfillment_state,loyalty_policy_version_id
+    ) VALUES($1,$2,$3,$4,$5,'guest_qr','submitted','paid',50,0,50,'CNY',$6,
+      '2026-08-17T00:00:00Z','immediate_payment','active',$7::uuid)
+  `, [input.orderId, id.tenant, id.store, id.session, input.suffix, input.customerId, input.policyId])
+  await pool.query(`
+    INSERT INTO mbox.order_items(
+      id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,discount_amount_minor,
+      total_amount_minor,currency,fulfillment_station,product_snapshot,loyalty_eligible_at_submission,
+      loyalty_eligibility_source,status
+    ) VALUES($1,$2,$3,$4,$5,1,50,0,50,'CNY','bar','{}',true,'catalog_product','submitted')
+  `, [input.itemId, id.tenant, id.store, input.orderId, id.eligibleProduct])
+  await pool.query(`
+    INSERT INTO mbox.payments(
+      id,tenant_id,store_id,order_id,public_id,provider,provider_transaction_id,method,amount_minor,currency,status,succeeded_at
+    ) VALUES($1,$2,$3,$4,$5,'cash',$6,'cash',50,'CNY','succeeded','2026-08-17T00:00:00Z')
+  `, [input.paymentId, id.tenant, id.store, input.orderId, `tiny-payment-${input.suffix}`, `tiny-provider-${input.suffix}`])
 }

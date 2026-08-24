@@ -508,6 +508,100 @@ describe('customer experience activity contact API', () => {
     }))
   })
 
+  it('keeps customer-visible staff names and privacy policies inside independent publication permissions', async () => {
+    const checkedPermissions: string[] = []
+    vi.spyOn(StaffAccessRepository.prototype, 'assertPermission').mockImplementation(async (_employeeId, permission) => {
+      checkedPermissions.push(permission)
+      return {} as never
+    })
+    const profileId = '82000000-0000-4000-8000-000000000020'
+    const employeeId = '82000000-0000-4000-8000-000000000021'
+    const profile = { id: profileId, employeeId, publicDisplayName: '小林', status: 'draft' as const }
+    const privacy = {
+      id: '82000000-0000-4000-8000-000000000022', policyVersion: 'PIPL.2026.08',
+      contentSha256: 'a'.repeat(64), status: 'draft' as const,
+    }
+    const listCustomerPublicationEmployees = vi.fn(async () => [{
+      id: employeeId, employeeCode: 'EMP-001', displayName: '林晓',
+    }])
+    const listCustomerPublicProfiles = vi.fn(async () => [profile])
+    const draftCustomerPublicProfile = vi.fn(async () => ({ value: profile, replayed: false }))
+    const publishCustomerPublicProfile = vi.fn(async () => ({
+      value: { ...profile, status: 'published' as const, effectiveAt: '2026-08-24T00:00:00.000Z' }, replayed: false,
+    }))
+    const withdrawCustomerPublicProfile = vi.fn(async () => ({
+      value: { id: profileId, status: 'withdrawn' as const, withdrawnAt: '2026-08-24T01:00:00.000Z' }, replayed: false,
+    }))
+    const listPrivacyPolicyReleases = vi.fn(async () => [privacy])
+    const draftPrivacyPolicy = vi.fn(async () => ({ value: privacy, replayed: false }))
+    const publishPrivacyPolicy = vi.fn(async () => ({
+      value: { ...privacy, status: 'published' as const, effectiveAt: '2026-08-24T00:00:00.000Z' }, replayed: false,
+    }))
+    const withdrawPrivacyPolicy = vi.fn(async () => ({
+      value: { id: privacy.id, policyVersion: privacy.policyVersion, status: 'withdrawn' as const, withdrawnAt: '2026-08-24T01:00:00.000Z' }, replayed: false,
+    }))
+    const app = staffReleaseFixture({
+      listCustomerPublicationEmployees, listCustomerPublicProfiles, draftCustomerPublicProfile, publishCustomerPublicProfile,
+      withdrawCustomerPublicProfile, listPrivacyPolicyReleases, draftPrivacyPolicy, publishPrivacyPolicy,
+      withdrawPrivacyPolicy,
+    })
+    const content = 'M-BOX 顾客隐私政策正式正文。'.repeat(8)
+
+    expect((await app.inject({ method: 'GET', url: '/staff/customer-publication/employees' })).statusCode).toBe(200)
+    expect((await app.inject({ method: 'GET', url: '/staff/customer-publication/profiles' })).statusCode).toBe(200)
+    expect((await app.inject({
+      method: 'PUT', url: `/staff/customer-publication/profiles/${employeeId}/draft`,
+      headers: { 'idempotency-key': 'customer-profile-draft-api-0001' },
+      payload: { publicDisplayName: '小林', reason: '员工已确认顾客公开服务名' },
+    })).statusCode).toBe(201)
+    expect((await app.inject({
+      method: 'POST', url: `/staff/customer-publication/profiles/${profileId}/publish`,
+      headers: { 'idempotency-key': 'customer-profile-publish-api-0001' },
+      payload: { approvalReference: 'HR-2026-0824-001', effectiveAt: '2026-08-24T00:00:00Z', reason: '人事复核完成' },
+    })).statusCode).toBe(200)
+    expect((await app.inject({
+      method: 'POST', url: `/staff/customer-publication/profiles/${profileId}/withdraw`,
+      headers: { 'idempotency-key': 'customer-profile-withdraw-api-0001' },
+      payload: { reason: '员工服务范围调整' },
+    })).statusCode).toBe(200)
+    expect((await app.inject({ method: 'GET', url: '/staff/customer-publication/privacy-policies' })).statusCode).toBe(200)
+    expect((await app.inject({
+      method: 'POST', url: '/staff/customer-publication/privacy-policies/drafts',
+      headers: { 'idempotency-key': 'privacy-policy-draft-api-0001' },
+      payload: {
+        policyVersion: privacy.policyVersion, content, contentSha256: 'a'.repeat(64),
+        operatorName: 'M-BOX 运营主体', contact: 'privacy@example.test',
+        dataRetentionPolicyVersion: 'retention-v1', thirdPartyRegisterVersion: 'third-party-v1',
+        reason: '录入法务提供的正式政策正文',
+      },
+    })).statusCode).toBe(201)
+    expect((await app.inject({
+      method: 'POST', url: `/staff/customer-publication/privacy-policies/${privacy.policyVersion}/publish`,
+      headers: { 'idempotency-key': 'privacy-policy-publish-api-0001' },
+      payload: {
+        approvedBy: '法务复核人', approvalReference: 'LEGAL-2026-0824-001',
+        effectiveAt: '2026-08-24T00:00:00Z', reason: '法务与运营复核完成',
+      },
+    })).statusCode).toBe(200)
+    expect((await app.inject({
+      method: 'POST', url: `/staff/customer-publication/privacy-policies/${privacy.policyVersion}/withdraw`,
+      headers: { 'idempotency-key': 'privacy-policy-withdraw-api-0001' },
+      payload: { reason: '等待更新后的法务版本' },
+    })).statusCode).toBe(200)
+
+    expect(checkedPermissions).toEqual([
+      'customer.public-profile.manage', 'customer.public-profile.manage', 'customer.public-profile.manage',
+      'customer.public-profile.publish', 'customer.public-profile.publish',
+      'privacy.policy.view', 'privacy.policy.manage', 'privacy.policy.publish', 'privacy.policy.publish',
+    ])
+    expect(listCustomerPublicationEmployees).toHaveBeenCalledTimes(1)
+    expect(draftCustomerPublicProfile).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ employeeId, publicDisplayName: '小林' }))
+    expect(publishCustomerPublicProfile).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ approvalReference: 'HR-2026-0824-001' }))
+    expect(draftPrivacyPolicy).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contentSha256: 'a'.repeat(64), content }))
+    expect(publishPrivacyPolicy).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ approvedBy: '法务复核人' }))
+    expect(withdrawPrivacyPolicy).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ policyVersion: privacy.policyVersion }))
+  })
+
   it('keeps product restrictions customer-owned and performance phase writes permission-scoped', async () => {
     const restriction = {
       publicId: 'product-restriction-api-test',

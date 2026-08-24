@@ -2,7 +2,7 @@ import cors from '@fastify/cors'
 import compress from '@fastify/compress'
 import fastifyStatic from '@fastify/static'
 import Fastify from 'fastify'
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { ZodError } from 'zod'
@@ -29,7 +29,6 @@ import { dispatchDueSopActions, sopActionsWouldDispatch } from './sop-action-dis
 import { createSopActionAdapters } from './sop-action-runtime.js'
 import { registerSopActionRoutes, SopActionBusinessError } from './sop-action-api.js'
 import { registerBenefitRoutes } from './benefit-domain.js'
-import { buildMemberPortal, registerMemberPortalRoutes } from './member-portal.js'
 import { registerNotificationRoutes } from './notification-api.js'
 import { dispatchDueNotifications, notificationsWouldDispatch } from './notification-dispatch.js'
 import { BenefitRedemptionBusinessError, registerBenefitRedemptionRoutes } from './benefit-redemption.js'
@@ -476,22 +475,6 @@ if (runtimeConfig.wechatEnabled || customerNotificationsEnabled) {
         }, occurredAt)
       },
     })
-    app.get('/api/wechat/member-portal', async (request, reply) => {
-      const authorization = request.headers.authorization
-      if (!authorization?.startsWith('Bearer ')) {
-        return reply.status(401).send({ code: 'WECHAT_SESSION_REQUIRED', message: '缺少微信身份会话' })
-      }
-      const accessToken = authorization.slice(7).trim()
-      const accessTokenHash = createHash('sha256').update(accessToken).digest('base64url')
-      const session = await wechatIdentityRepository!.findSession(accessTokenHash)
-      if (!session || session.revokedAt !== null || session.expiresAt <= Date.now()) {
-        return reply.status(401).send({ code: 'WECHAT_SESSION_INVALID', message: '微信身份会话无效或已过期' })
-      }
-      if (!session.principal.memberId) {
-        return reply.status(403).send({ code: 'MEMBER_NOT_BOUND', message: '当前微信身份尚未绑定会员账户' })
-      }
-      return buildMemberPortal(await repository.read(), session.principal.memberId)
-    })
     registerWechatReservationRoutes(app, repository, {
       identityRepository: wechatIdentityRepository,
       tenantId: runtimeConfig.tenantId!,
@@ -820,7 +803,6 @@ registerProactiveServiceRoutes(app, repository)
 registerTableSessionRoutes(app, repository)
 registerBusinessDayRoutes(app, repository)
 registerBenefitRoutes(app, repository)
-registerMemberPortalRoutes(app, repository)
 registerNotificationRoutes(app, repository)
 registerBenefitRedemptionRoutes(app, repository)
 registerSongRoutes(app, repository)

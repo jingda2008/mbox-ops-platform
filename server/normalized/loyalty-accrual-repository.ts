@@ -43,6 +43,16 @@ interface AwardRow extends Record<string, unknown> {
   pending_recovery_points: number
   growth_value: number
   refund_amount_minor: string | number
+  calculation_model: 'per_order_rounded' | 'exact_carry'
+}
+
+interface ExactContributionRow extends Record<string, unknown> {
+  points_numerator_per_minor: string | number
+  points_denominator: string | number
+  growth_numerator_per_minor: string | number
+  growth_denominator: string | number
+  rounding_mode: 'floor' | 'nearest'
+  reversed_eligible_amount_minor: string | number
 }
 
 interface SupplementExecutionContextRow extends Record<string, unknown> {
@@ -187,18 +197,21 @@ export class LoyaltyAccrualRepository {
     if (existing.rowCount === 1) return NO_OP
 
     const eligibleAmountMinor = money(row.eligible_amount_minor)
-    const points = applyMultiplier(calculateReward(
-      eligibleAmountMinor,
-      row.points_numerator,
-      row.points_denominator_minor,
-      row.rounding_mode,
-    ), row.points_multiplier_numerator, row.points_multiplier_denominator, row.rounding_mode)
-    const growth = calculateReward(
-      eligibleAmountMinor,
-      row.growth_numerator,
-      row.growth_denominator_minor,
-      row.rounding_mode,
+    const pointsSpec = exactRewardSpec(
+      row.points_numerator, row.points_denominator_minor,
+      row.points_multiplier_numerator, row.points_multiplier_denominator,
     )
+    const growthSpec = exactRewardSpec(row.growth_numerator, row.growth_denominator_minor, 1, 1)
+    const points = await this.applyExactCarry({
+      membershipId: row.membership_id, policyVersionId: row.policy_version_id, currency: row.currency,
+      rewardKind: 'points', denominator: pointsSpec.denominator, roundingMode: row.rounding_mode,
+      numeratorDelta: BigInt(eligibleAmountMinor) * pointsSpec.numeratorPerMinor,
+    })
+    const growth = await this.applyExactCarry({
+      membershipId: row.membership_id, policyVersionId: row.policy_version_id, currency: row.currency,
+      rewardKind: 'growth', denominator: growthSpec.denominator, roundingMode: row.rounding_mode,
+      numeratorDelta: BigInt(eligibleAmountMinor) * growthSpec.numeratorPerMinor,
+    })
     const recoveredDebt = Math.min(row.pending_recovery_points, points)
     const creditedPoints = points - recoveredDebt
     const availablePoints = row.available_points + creditedPoints
@@ -207,8 +220,8 @@ export class LoyaltyAccrualRepository {
     const awardInserted = await this.transaction.query<{ id: string }>(`
       INSERT INTO mbox.loyalty_order_awards (
         tenant_id, store_id, membership_id, customer_id, order_id, payment_id,
-        policy_version_id, eligible_amount_minor, awarded_points, awarded_growth, currency, awarded_at
-      ) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,$7::uuid,$8::bigint,$9,$10,$11,$12::timestamptz)
+        policy_version_id, eligible_amount_minor, awarded_points, awarded_growth, currency, awarded_at,calculation_model
+      ) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,$7::uuid,$8::bigint,$9,$10,$11,$12::timestamptz,'exact_carry')
       RETURNING id
     `, [
       this.transaction.scope.tenantId, this.transaction.scope.storeId,
@@ -217,6 +230,21 @@ export class LoyaltyAccrualRepository {
     ])
     const awardId = awardInserted.rows[0]?.id
     if (!awardId) throw new Error('Loyalty order award was not inserted')
+    await this.transaction.query(`
+      INSERT INTO mbox.loyalty_order_reward_contributions (
+        tenant_id,store_id,award_id,membership_id,customer_id,order_id,payment_id,policy_version_id,currency,
+        eligible_amount_minor,points_numerator_per_minor,points_denominator,
+        growth_numerator_per_minor,growth_denominator,rounding_mode
+      ) VALUES (
+        $1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,$7::uuid,$8::uuid,$9,$10::bigint,
+        $11::bigint,$12::bigint,$13::bigint,$14::bigint,$15
+      )
+    `, [
+      this.transaction.scope.tenantId, this.transaction.scope.storeId, awardId,
+      row.membership_id, row.customer_id, row.order_id, row.payment_id, row.policy_version_id,
+      row.currency, eligibleAmountMinor, pointsSpec.numeratorPerMinor.toString(), pointsSpec.denominator.toString(),
+      growthSpec.numeratorPerMinor.toString(), growthSpec.denominator.toString(), row.rounding_mode,
+    ])
     await this.transaction.query(`
       UPDATE mbox.loyalty_accounts
       SET available_points=$4, pending_recovery_points=$5, growth_value=$6,
@@ -368,7 +396,7 @@ export class LoyaltyAccrualRepository {
       SELECT award.id, award.membership_id, award.customer_id, award.order_id, award.payment_id,
         award.policy_version_id, award.eligible_amount_minor, award.awarded_points,
         award.awarded_growth, award.reversed_amount_minor, award.reversed_points,
-        award.reversed_growth, award.currency, account.available_points,
+        award.reversed_growth, award.currency, award.calculation_model, account.available_points,
         account.pending_recovery_points, account.growth_value,
         eligible_refund.amount_minor AS refund_amount_minor
       FROM mbox.loyalty_order_awards award
@@ -393,10 +421,56 @@ export class LoyaltyAccrualRepository {
     if (targetAmount > eligible) {
       throw new Error('Succeeded eligible refunds exceed the authoritative loyalty award amount')
     }
-    const targetPoints = eligible === 0 ? 0 : proportional(row.awarded_points, targetAmount, eligible)
-    const targetGrowth = eligible === 0 ? 0 : proportional(row.awarded_growth, targetAmount, eligible)
-    const pointsToReverse = Math.max(0, targetPoints - row.reversed_points)
-    const growthToReverse = Math.max(0, targetGrowth - row.reversed_growth)
+    let targetPoints: number
+    let targetGrowth: number
+    let pointsToReverse: number
+    let growthToReverse: number
+    if (row.calculation_model === 'exact_carry') {
+      const contribution = (await this.transaction.query<ExactContributionRow>(`
+        SELECT points_numerator_per_minor,points_denominator,growth_numerator_per_minor,
+          growth_denominator,rounding_mode,reversed_eligible_amount_minor
+        FROM mbox.loyalty_order_reward_contributions
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND order_id=$3::uuid AND payment_id=$4::uuid
+        FOR UPDATE
+      `, [
+        this.transaction.scope.tenantId, this.transaction.scope.storeId, row.order_id, row.payment_id,
+      ])).rows[0]
+      if (!contribution) throw new Error('Exact-carry loyalty award is missing its original contribution fact')
+      if (money(contribution.reversed_eligible_amount_minor) + money(row.refund_amount_minor) !== targetAmount) {
+        throw new Error('Exact-carry loyalty contribution refund amount no longer matches its award')
+      }
+      const pointsDelta = await this.applyExactCarry({
+        membershipId: row.membership_id, policyVersionId: row.policy_version_id, currency: row.currency,
+        rewardKind: 'points', denominator: bigint(contribution.points_denominator, 'points carry denominator'),
+        roundingMode: contribution.rounding_mode,
+        numeratorDelta: -BigInt(money(row.refund_amount_minor))
+          * bigint(contribution.points_numerator_per_minor, 'points contribution numerator'),
+      })
+      const growthDelta = await this.applyExactCarry({
+        membershipId: row.membership_id, policyVersionId: row.policy_version_id, currency: row.currency,
+        rewardKind: 'growth', denominator: bigint(contribution.growth_denominator, 'growth carry denominator'),
+        roundingMode: contribution.rounding_mode,
+        numeratorDelta: -BigInt(money(row.refund_amount_minor))
+          * bigint(contribution.growth_numerator_per_minor, 'growth contribution numerator'),
+      })
+      if (pointsDelta > 0 || growthDelta > 0) throw new Error('Exact-carry refund unexpectedly increased a reward')
+      pointsToReverse = -pointsDelta
+      growthToReverse = -growthDelta
+      targetPoints = row.reversed_points + pointsToReverse
+      targetGrowth = row.reversed_growth + growthToReverse
+      await this.transaction.query(`
+        UPDATE mbox.loyalty_order_reward_contributions
+        SET reversed_eligible_amount_minor=$4::bigint
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND order_id=$3::uuid
+      `, [
+        this.transaction.scope.tenantId, this.transaction.scope.storeId, row.order_id, targetAmount,
+      ])
+    } else {
+      targetPoints = eligible === 0 ? 0 : proportional(row.awarded_points, targetAmount, eligible)
+      targetGrowth = eligible === 0 ? 0 : proportional(row.awarded_growth, targetAmount, eligible)
+      pointsToReverse = Math.max(0, targetPoints - row.reversed_points)
+      growthToReverse = Math.max(0, targetGrowth - row.reversed_growth)
+    }
 
     const applicationInserted = await this.transaction.query<{ id: string }>(`
       INSERT INTO mbox.loyalty_award_refund_applications (
@@ -508,6 +582,62 @@ export class LoyaltyAccrualRepository {
       growthDelta: -growthToReverse,
       pendingRecoveryPoints,
     }
+  }
+
+  private async applyExactCarry(input: Readonly<{
+    membershipId: string
+    policyVersionId: string
+    currency: string
+    rewardKind: 'points' | 'growth'
+    denominator: bigint
+    roundingMode: 'floor' | 'nearest'
+    numeratorDelta: bigint
+  }>): Promise<number> {
+    assertPostgresBigInt(input.denominator, 'loyalty carry denominator')
+    if (input.denominator <= 0n) throw new RangeError('Loyalty carry denominator must be positive')
+    assertPostgresBigInt(input.numeratorDelta, 'loyalty carry contribution')
+    await this.transaction.query(`
+      INSERT INTO mbox.loyalty_reward_carry_balances (
+        tenant_id,store_id,membership_id,policy_version_id,currency,reward_kind,denominator,rounding_mode
+      ) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6,$7::bigint,$8)
+      ON CONFLICT (tenant_id,store_id,membership_id,policy_version_id,currency,reward_kind) DO NOTHING
+    `, [
+      this.transaction.scope.tenantId, this.transaction.scope.storeId, input.membershipId,
+      input.policyVersionId, input.currency, input.rewardKind, input.denominator.toString(), input.roundingMode,
+    ])
+    const selected = await this.transaction.query<{
+      id: string; denominator: string | number; remainder_numerator: string | number
+      rounding_mode: 'floor' | 'nearest'
+    }>(`
+      SELECT id,denominator,remainder_numerator,rounding_mode
+      FROM mbox.loyalty_reward_carry_balances
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND membership_id=$3::uuid
+        AND policy_version_id=$4::uuid AND currency=$5 AND reward_kind=$6
+      FOR UPDATE
+    `, [
+      this.transaction.scope.tenantId, this.transaction.scope.storeId, input.membershipId,
+      input.policyVersionId, input.currency, input.rewardKind,
+    ])
+    const carry = selected.rows[0]
+    if (!carry || carry.rounding_mode !== input.roundingMode) {
+      throw new Error('Loyalty exact carry identity does not match its frozen policy')
+    }
+    const previousDenominator = bigint(carry.denominator, 'loyalty carry denominator')
+    const denominator = leastCommonMultiple(previousDenominator, input.denominator)
+    const total = bigint(carry.remainder_numerator, 'loyalty carry remainder')
+      * (denominator / previousDenominator)
+      + input.numeratorDelta * (denominator / input.denominator)
+    const settled = roundExact(total, denominator, input.roundingMode)
+    const remainder = total - settled * denominator
+    assertPostgresBigInt(remainder, 'loyalty carry remainder')
+    await this.transaction.query(`
+      UPDATE mbox.loyalty_reward_carry_balances
+      SET remainder_numerator=$4::bigint,denominator=$5::bigint
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+    `, [
+      this.transaction.scope.tenantId, this.transaction.scope.storeId, carry.id, remainder.toString(), denominator.toString(),
+    ])
+    return safeRewardInteger(settled, 'Exact loyalty carry reward')
   }
 
   async executeApprovedSupplement(input: Readonly<{
@@ -1200,6 +1330,72 @@ function money(value: string | number): number {
   const parsed = Number(value)
   if (!Number.isSafeInteger(parsed) || parsed < 0) throw new RangeError('Loyalty money amount is outside the safe integer range')
   return parsed
+}
+
+function bigint(value: string | number, label: string): bigint {
+  try {
+    const parsed = BigInt(value)
+    assertPostgresBigInt(parsed, label)
+    return parsed
+  } catch {
+    throw new RangeError(`${label} is outside the supported integer range`)
+  }
+}
+
+function exactRewardSpec(
+  numerator: number,
+  denominatorMinor: number,
+  multiplierNumerator: number,
+  multiplierDenominator: number,
+): Readonly<{ numeratorPerMinor: bigint; denominator: bigint }> {
+  if (![numerator, denominatorMinor, multiplierNumerator, multiplierDenominator]
+    .every((value) => Number.isSafeInteger(value) && value > 0)) {
+    throw new RangeError('Loyalty exact reward policy contains an invalid ratio')
+  }
+  const numeratorPerMinor = BigInt(numerator) * BigInt(multiplierNumerator)
+  const denominator = BigInt(denominatorMinor) * BigInt(multiplierDenominator)
+  assertPostgresBigInt(numeratorPerMinor, 'loyalty reward numerator per minor')
+  assertPostgresBigInt(denominator, 'loyalty reward denominator')
+  return { numeratorPerMinor, denominator }
+}
+
+function roundExact(value: bigint, denominator: bigint, rounding: 'floor' | 'nearest'): bigint {
+  if (rounding === 'floor') return floorDiv(value, denominator)
+  return floorDiv(value + denominator / 2n, denominator)
+}
+
+function floorDiv(value: bigint, denominator: bigint): bigint {
+  if (denominator <= 0n) throw new RangeError('Loyalty reward denominator must be positive')
+  if (value >= 0n) return value / denominator
+  return -((-value + denominator - 1n) / denominator)
+}
+
+function leastCommonMultiple(left: bigint, right: bigint): bigint {
+  const divisor = greatestCommonDivisor(left, right)
+  const result = (left / divisor) * right
+  assertPostgresBigInt(result, 'loyalty carry common denominator')
+  return result
+}
+
+function greatestCommonDivisor(left: bigint, right: bigint): bigint {
+  let dividend = left < 0n ? -left : left
+  let divisor = right < 0n ? -right : right
+  while (divisor !== 0n) [dividend, divisor] = [divisor, dividend % divisor]
+  return dividend
+}
+
+function safeRewardInteger(value: bigint, label: string): number {
+  const numeric = Number(value)
+  if (!Number.isSafeInteger(numeric) || Math.abs(numeric) > 2_000_000_000) {
+    throw new RangeError(`${label} is outside the supported range`)
+  }
+  return numeric
+}
+
+function assertPostgresBigInt(value: bigint, label: string): void {
+  if (value < -9_223_372_036_854_775_808n || value > 9_223_372_036_854_775_807n) {
+    throw new RangeError(`${label} is outside the PostgreSQL bigint range`)
+  }
 }
 
 function calculateReward(

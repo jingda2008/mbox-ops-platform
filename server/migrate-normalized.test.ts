@@ -37,7 +37,7 @@ describe('normalized migration baseline', () => {
       '037', '038', '039', '040', '041', '042', '043', '044', '045', '046', '047', '048',
       '049', '050', '051', '052', '053', '054', '055', '056', '057', '058', '059', '060',
       '061', '062', '063', '064', '065', '066', '067', '068', '069', '070', '071', '072',
-      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101', '102', '103', '104', '105', '106',
+      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101', '102', '103', '104', '105', '106', '107', '108',
     ])
     for (const migration of migrations) {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
@@ -87,6 +87,29 @@ describe('normalized migration baseline', () => {
     expect(migration?.sql).toMatch(/guest_shared_cart_operations_append_only/)
     expect(migration?.sql).toMatch(/FORCE ROW LEVEL SECURITY/)
     expect(migration?.sql).toMatch(/schema_version='106'/)
+  })
+
+  it('requires independent employee publication and formal privacy-policy operations', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '107')
+    expect(migration?.sql).toMatch(/drafted_by_employee_id uuid/)
+    expect(migration?.sql).toMatch(/approval_reference text/)
+    expect(migration?.sql).toMatch(/customer\.public-profile\.manage/)
+    expect(migration?.sql).toMatch(/privacy\.policy\.publish/)
+    expect(migration?.sql).toMatch(/published employee customer profile is immutable until withdrawn/)
+    expect(migration?.sql).toMatch(/published privacy policy is immutable until withdrawn/)
+    expect(migration?.sql).toMatch(/schema_version='107'/)
+  })
+
+  it('keeps under-one-unit loyalty rewards as exact original-policy carry facts', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '108')
+    expect(migration?.sql).toMatch(/calculation_model IN \('per_order_rounded','exact_carry'\)/)
+    expect(migration?.sql).toMatch(/CREATE TABLE mbox\.loyalty_order_reward_contributions/)
+    expect(migration?.sql).toMatch(/points_numerator_per_minor bigint NOT NULL/)
+    expect(migration?.sql).toMatch(/reversed_eligible_amount_minor bigint NOT NULL DEFAULT 0/)
+    expect(migration?.sql).toMatch(/CREATE TABLE mbox\.loyalty_reward_carry_balances/)
+    expect(migration?.sql).toMatch(/remainder_numerator bigint NOT NULL DEFAULT 0/)
+    expect(migration?.sql).toMatch(/FORCE ROW LEVEL SECURITY/)
+    expect(migration?.sql).toMatch(/schema_version='108'/)
   })
 
   it('keeps recommendation publication separate from customer rollout', async () => {

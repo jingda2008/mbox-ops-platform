@@ -117,6 +117,118 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
     return reply.send({ data: policy, meta: { published: policy !== null } })
   }))
 
+  app.get('/staff/customer-publication/employees', async (request, reply) => handle(reply, async () => {
+    const context = await staffContextWithPermission(options, request, 'customer.public-profile.manage')
+    return reply.send({ data: await options.service.listCustomerPublicationEmployees(context) })
+  }))
+
+  app.get('/staff/customer-publication/profiles', async (request, reply) => handle(reply, async () => {
+    const context = await staffContextWithAnyPermission(options, request, [
+      'customer.public-profile.manage', 'customer.public-profile.publish',
+    ])
+    return reply.send({ data: await options.service.listCustomerPublicProfiles(context) })
+  }))
+
+  app.put<{ Params: { employeeId: string } }>(
+    '/staff/customer-publication/profiles/:employeeId/draft',
+    async (request, reply) => handle(reply, async () => {
+      const context = await staffContextWithPermission(options, request, 'customer.public-profile.manage')
+      const body = objectBody(request.body)
+      const result = await options.service.draftCustomerPublicProfile(context, {
+        employeeId: uuid(request.params.employeeId, '员工'),
+        publicDisplayName: text(body.publicDisplayName, '顾客公开服务名', 1, 80),
+        reason: text(body.reason, '草拟说明', 2, 500),
+        idempotencyKey: idempotencyKey(request),
+      })
+      return reply.code(result.replayed ? 200 : 201).send({ data: result.value, meta: { replayed: result.replayed } })
+    }),
+  )
+
+  app.post<{ Params: { profileId: string } }>(
+    '/staff/customer-publication/profiles/:profileId/publish',
+    async (request, reply) => handle(reply, async () => {
+      const context = await staffContextWithPermission(options, request, 'customer.public-profile.publish')
+      const body = objectBody(request.body)
+      const result = await options.service.publishCustomerPublicProfile(context, {
+        profileId: uuid(request.params.profileId, '顾客公开服务名'),
+        approvalReference: text(body.approvalReference, '门店或人事确认编号', 8, 240),
+        effectiveAt: timestamp(body.effectiveAt, '生效时间'),
+        reason: text(body.reason, '发布说明', 2, 500),
+        idempotencyKey: idempotencyKey(request),
+      })
+      return reply.send({ data: result.value, meta: { replayed: result.replayed } })
+    }),
+  )
+
+  app.post<{ Params: { profileId: string } }>(
+    '/staff/customer-publication/profiles/:profileId/withdraw',
+    async (request, reply) => handle(reply, async () => {
+      const context = await staffContextWithPermission(options, request, 'customer.public-profile.publish')
+      const body = objectBody(request.body)
+      const result = await options.service.withdrawCustomerPublicProfile(context, {
+        profileId: uuid(request.params.profileId, '顾客公开服务名'),
+        reason: text(body.reason, '撤下原因', 2, 500),
+        idempotencyKey: idempotencyKey(request),
+      })
+      return reply.send({ data: result.value, meta: { replayed: result.replayed } })
+    }),
+  )
+
+  app.get('/staff/customer-publication/privacy-policies', async (request, reply) => handle(reply, async () => {
+    const context = await staffContextWithAnyPermission(options, request, [
+      'privacy.policy.view', 'privacy.policy.manage', 'privacy.policy.publish',
+    ])
+    return reply.send({ data: await options.service.listPrivacyPolicyReleases(context) })
+  }))
+
+  app.post('/staff/customer-publication/privacy-policies/drafts', async (request, reply) => handle(reply, async () => {
+    const context = await staffContextWithPermission(options, request, 'privacy.policy.manage')
+    const body = objectBody(request.body)
+    const result = await options.service.draftPrivacyPolicy(context, {
+      policyVersion: privacyPolicyVersion(body.policyVersion),
+      content: text(body.content, '隐私政策正文', 80, 50_000),
+      contentSha256: sha256(body.contentSha256, '隐私政策内容摘要'),
+      operatorName: text(body.operatorName, '运营主体', 2, 200),
+      contact: text(body.contact, '联系渠道', 2, 500),
+      dataRetentionPolicyVersion: text(body.dataRetentionPolicyVersion, '数据保留规则版本', 2, 80),
+      thirdPartyRegisterVersion: text(body.thirdPartyRegisterVersion, '第三方服务清单版本', 2, 80),
+      reason: text(body.reason, '草拟说明', 2, 500),
+      idempotencyKey: idempotencyKey(request),
+    })
+    return reply.code(result.replayed ? 200 : 201).send({ data: result.value, meta: { replayed: result.replayed } })
+  }))
+
+  app.post<{ Params: { policyVersion: string } }>(
+    '/staff/customer-publication/privacy-policies/:policyVersion/publish',
+    async (request, reply) => handle(reply, async () => {
+      const context = await staffContextWithPermission(options, request, 'privacy.policy.publish')
+      const body = objectBody(request.body)
+      const result = await options.service.publishPrivacyPolicy(context, {
+        policyVersion: privacyPolicyVersion(request.params.policyVersion),
+        approvedBy: text(body.approvedBy, '法务或运营批准人', 2, 200),
+        approvalReference: text(body.approvalReference, '批准材料编号', 8, 240),
+        effectiveAt: timestamp(body.effectiveAt, '生效时间'),
+        reason: text(body.reason, '发布说明', 2, 500),
+        idempotencyKey: idempotencyKey(request),
+      })
+      return reply.send({ data: result.value, meta: { replayed: result.replayed } })
+    }),
+  )
+
+  app.post<{ Params: { policyVersion: string } }>(
+    '/staff/customer-publication/privacy-policies/:policyVersion/withdraw',
+    async (request, reply) => handle(reply, async () => {
+      const context = await staffContextWithPermission(options, request, 'privacy.policy.publish')
+      const body = objectBody(request.body)
+      const result = await options.service.withdrawPrivacyPolicy(context, {
+        policyVersion: privacyPolicyVersion(request.params.policyVersion),
+        reason: text(body.reason, '撤下原因', 2, 500),
+        idempotencyKey: idempotencyKey(request),
+      })
+      return reply.send({ data: result.value, meta: { replayed: result.replayed } })
+    }),
+  )
+
   app.get('/public/mini/loyalty', async (request, reply) => handle(reply, async () => {
     const context = await options.resolvePublicContext(request)
     return reply.send({ data: await options.service.loyalty(context) })
@@ -1564,6 +1676,17 @@ function featureCode(value: string): string {
 function ruleCode(value: string): string {
   if (!/^[A-Z][A-Z0-9_-]{2,63}$/.test(value)) throw new CustomerExperienceRequestError('规则编号格式不正确')
   return value
+}
+function privacyPolicyVersion(value: unknown): string {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$/.test(value)) {
+    throw new CustomerExperienceRequestError('隐私政策版本格式不正确')
+  }
+  return value
+}
+function sha256(value: unknown, label: string): string {
+  const result = text(value, label, 64, 64)
+  if (!/^[0-9a-f]{64}$/.test(result)) throw new CustomerExperienceRequestError(`${label}不正确`)
+  return result
 }
 function redemptionItemCode(value: unknown): string {
   if (typeof value !== 'string' || !/^[A-Z][A-Z0-9_]{2,63}$/.test(value)) {

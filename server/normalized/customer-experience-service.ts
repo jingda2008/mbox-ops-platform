@@ -85,6 +85,385 @@ export class CustomerExperienceService {
     ), { readOnly: true })
   }
 
+  listCustomerPublicationEmployees(context: StaffCustomerExperienceContext) {
+    return this.transactions.run(context.scope, async (transaction) => {
+      const result = await transaction.query<{
+        id: string; employee_code: string; display_name: string
+      }>(`
+        SELECT id,employee_code,display_name
+        FROM mbox.employees
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND status='active'
+        ORDER BY display_name,employee_code,id
+      `, [context.scope.tenantId, context.scope.storeId])
+      return result.rows.map((row) => ({
+        id: row.id, employeeCode: row.employee_code, displayName: row.display_name,
+      }))
+    }, { readOnly: true })
+  }
+
+  listCustomerPublicProfiles(context: StaffCustomerExperienceContext) {
+    return this.transactions.run(context.scope, async (transaction) => {
+      const result = await transaction.query<{
+        id: string; employee_id: string; employee_display_name: string; public_display_name: string
+        status: 'draft' | 'published' | 'withdrawn'; drafted_by_employee_id: string | null
+        approved_by_employee_id: string | null; approved_at: string | null; effective_at: string | null
+        withdrawn_at: string | null; withdrawal_reason: string | null; approval_reference: string | null
+        created_at: string; updated_at: string
+      }>(`
+        SELECT profile.id,profile.employee_id,employee.display_name AS employee_display_name,
+          profile.public_display_name,profile.status,profile.drafted_by_employee_id,
+          profile.approved_by_employee_id,profile.approved_at::text,profile.effective_at::text,
+          profile.withdrawn_at::text,profile.withdrawal_reason,profile.approval_reference,
+          profile.created_at::text,profile.updated_at::text
+        FROM mbox.employee_customer_public_profiles profile
+        JOIN mbox.employees employee
+          ON employee.tenant_id=profile.tenant_id AND employee.store_id=profile.store_id
+         AND employee.id=profile.employee_id
+        WHERE profile.tenant_id=$1::uuid AND profile.store_id=$2::uuid
+        ORDER BY employee.display_name,profile.created_at DESC,profile.id DESC
+      `, [context.scope.tenantId, context.scope.storeId])
+      return result.rows.map((row) => ({
+        id: row.id, employeeId: row.employee_id, employeeDisplayName: row.employee_display_name,
+        publicDisplayName: row.public_display_name, status: row.status,
+        draftedByEmployeeId: row.drafted_by_employee_id,
+        approvedByEmployeeId: row.approved_by_employee_id, approvedAt: row.approved_at,
+        effectiveAt: row.effective_at, withdrawnAt: row.withdrawn_at,
+        withdrawalReason: row.withdrawal_reason, approvalReference: row.approval_reference,
+        createdAt: row.created_at, updatedAt: row.updated_at,
+      }))
+    }, { readOnly: true })
+  }
+
+  draftCustomerPublicProfile(
+    context: StaffCustomerExperienceContext,
+    input: Readonly<{
+      employeeId: string; publicDisplayName: string; reason: string; idempotencyKey: string
+    }>,
+  ) {
+    return this.commands.execute({
+      scope: context.scope,
+      operationScope: 'customer.public-profile.draft',
+      idempotencyKey: input.idempotencyKey,
+      requestFingerprint: fingerprint(input),
+      resultCodec: objectCodec<{ id: string; employeeId: string; publicDisplayName: string; status: 'draft' }>(),
+    }, async (transaction) => {
+      const existing = await transaction.query<{ id: string }>(`
+        SELECT id FROM mbox.employee_customer_public_profiles
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND employee_id=$3::uuid
+          AND status='draft'
+        ORDER BY created_at DESC,id DESC LIMIT 1 FOR UPDATE
+      `, [transaction.scope.tenantId, transaction.scope.storeId, input.employeeId])
+      const current = existing.rows[0]
+      const drafted = current
+        ? await transaction.query<{ id: string; employee_id: string; public_display_name: string }>(`
+          UPDATE mbox.employee_customer_public_profiles
+          SET public_display_name=$4,drafted_by_employee_id=$5::uuid,
+            approved_by_employee_id=NULL,approved_at=NULL,effective_at=NULL,
+            approval_reference=NULL,withdrawn_at=NULL,withdrawal_reason=NULL
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status='draft'
+          RETURNING id,employee_id,public_display_name
+        `, [
+          transaction.scope.tenantId, transaction.scope.storeId, current.id,
+          input.publicDisplayName, context.employeeId,
+        ])
+        : await transaction.query<{ id: string; employee_id: string; public_display_name: string }>(`
+          INSERT INTO mbox.employee_customer_public_profiles (
+            tenant_id,store_id,employee_id,public_display_name,status,drafted_by_employee_id
+          ) VALUES ($1::uuid,$2::uuid,$3::uuid,$4,'draft',$5::uuid)
+          RETURNING id,employee_id,public_display_name
+        `, [
+          transaction.scope.tenantId, transaction.scope.storeId, input.employeeId,
+          input.publicDisplayName, context.employeeId,
+        ])
+      const row = drafted.rows[0]
+      if (!row) throw new CustomerExperienceRequestError('顾客公开服务名草稿保存失败', 'CUSTOMER_PUBLIC_PROFILE_DRAFT_FAILED', 409)
+      const result = { id: row.id, employeeId: row.employee_id, publicDisplayName: row.public_display_name, status: 'draft' as const }
+      return commandOutcome(
+        result, staffActor(context), 'customer.public-profile.drafted', 'employee_customer_public_profile', row.id,
+        context.businessDate, { employeeId: row.employee_id, publicDisplayName: row.public_display_name, reason: input.reason },
+      )
+    })
+  }
+
+  publishCustomerPublicProfile(
+    context: StaffCustomerExperienceContext,
+    input: Readonly<{
+      profileId: string; approvalReference: string; effectiveAt: string; reason: string; idempotencyKey: string
+    }>,
+  ) {
+    return this.commands.execute({
+      scope: context.scope,
+      operationScope: 'customer.public-profile.publish',
+      idempotencyKey: input.idempotencyKey,
+      requestFingerprint: fingerprint(input),
+      resultCodec: objectCodec<{ id: string; employeeId: string; publicDisplayName: string; status: 'published'; effectiveAt: string }>(),
+    }, async (transaction) => {
+      const selected = await transaction.query<{
+        id: string; employee_id: string; public_display_name: string; drafted_by_employee_id: string | null
+      }>(`
+        SELECT id,employee_id,public_display_name,drafted_by_employee_id
+        FROM mbox.employee_customer_public_profiles
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status='draft'
+        FOR UPDATE
+      `, [transaction.scope.tenantId, transaction.scope.storeId, input.profileId])
+      const profile = selected.rows[0]
+      if (!profile || profile.drafted_by_employee_id === null) throw new CustomerExperienceRequestError(
+        '只有有效的顾客公开服务名草稿可以发布', 'CUSTOMER_PUBLIC_PROFILE_NOT_DRAFT', 409,
+      )
+      if (profile.employee_id === context.employeeId || profile.drafted_by_employee_id === context.employeeId) {
+        throw new CustomerExperienceRequestError(
+          '服务名所属员工和草拟人不能自行发布', 'CUSTOMER_PUBLIC_PROFILE_PUBLISHER_NOT_INDEPENDENT', 409,
+        )
+      }
+      const replaced = await transaction.query(`
+        UPDATE mbox.employee_customer_public_profiles
+        SET status='withdrawn',withdrawn_at=clock_timestamp(),
+          withdrawal_reason='已由新批准的顾客公开服务名替换'
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND employee_id=$3::uuid
+          AND status='published'
+      `, [transaction.scope.tenantId, transaction.scope.storeId, profile.employee_id])
+      if ((replaced.rowCount ?? 0) > 1) throw new Error('Customer public profile publication has multiple active records')
+      const published = await transaction.query<{
+        id: string; employee_id: string; public_display_name: string; effective_at: string
+      }>(`
+        UPDATE mbox.employee_customer_public_profiles
+        SET status='published',approved_by_employee_id=$4::uuid,approved_at=clock_timestamp(),
+          effective_at=$5::timestamptz,approval_reference=$6
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status='draft'
+        RETURNING id,employee_id,public_display_name,effective_at::text
+      `, [
+        transaction.scope.tenantId, transaction.scope.storeId, input.profileId,
+        context.employeeId, input.effectiveAt, input.approvalReference,
+      ])
+      const row = published.rows[0]
+      if (!row) throw new CustomerExperienceRequestError('顾客公开服务名发布失败', 'CUSTOMER_PUBLIC_PROFILE_PUBLISH_FAILED', 409)
+      const result = {
+        id: row.id, employeeId: row.employee_id, publicDisplayName: row.public_display_name,
+        status: 'published' as const, effectiveAt: row.effective_at,
+      }
+      return commandOutcome(
+        result, staffActor(context), 'customer.public-profile.published', 'employee_customer_public_profile', row.id,
+        context.businessDate, { employeeId: row.employee_id, publicDisplayName: row.public_display_name, effectiveAt: row.effective_at, reason: input.reason },
+      )
+    })
+  }
+
+  withdrawCustomerPublicProfile(
+    context: StaffCustomerExperienceContext,
+    input: Readonly<{ profileId: string; reason: string; idempotencyKey: string }>,
+  ) {
+    return this.commands.execute({
+      scope: context.scope,
+      operationScope: 'customer.public-profile.withdraw',
+      idempotencyKey: input.idempotencyKey,
+      requestFingerprint: fingerprint(input),
+      resultCodec: objectCodec<{ id: string; status: 'withdrawn'; withdrawnAt: string }>(),
+    }, async (transaction) => {
+      const withdrawn = await transaction.query<{ id: string; withdrawn_at: string }>(`
+        UPDATE mbox.employee_customer_public_profiles
+        SET status='withdrawn',withdrawn_at=clock_timestamp(),withdrawal_reason=$4
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status='published'
+        RETURNING id,withdrawn_at::text
+      `, [transaction.scope.tenantId, transaction.scope.storeId, input.profileId, input.reason])
+      const row = withdrawn.rows[0]
+      if (!row) throw new CustomerExperienceRequestError(
+        '只有已发布的顾客公开服务名可以撤下', 'CUSTOMER_PUBLIC_PROFILE_NOT_PUBLISHED', 409,
+      )
+      const result = { id: row.id, status: 'withdrawn' as const, withdrawnAt: row.withdrawn_at }
+      return commandOutcome(
+        result, staffActor(context), 'customer.public-profile.withdrawn', 'employee_customer_public_profile', row.id,
+        context.businessDate, { reason: input.reason },
+      )
+    })
+  }
+
+  listPrivacyPolicyReleases(context: StaffCustomerExperienceContext) {
+    return this.transactions.run(context.scope, async (transaction) => {
+      const result = await transaction.query<{
+        id: string; policy_version: string; content_markdown: string; content_sha256: string
+        operator_name: string; contact: string; data_retention_policy_version: string
+        third_party_register_version: string; status: 'draft' | 'published' | 'withdrawn'
+        drafted_by_employee_id: string | null; approved_by: string | null; approved_at: string | null
+        effective_at: string | null; withdrawn_at: string | null; withdrawal_reason: string | null
+        approval_reference: string | null; created_at: string; updated_at: string
+      }>(`
+        SELECT id,policy_version,content_markdown,content_sha256,operator_name,contact,
+          data_retention_policy_version,third_party_register_version,status,drafted_by_employee_id,
+          approved_by,approved_at::text,effective_at::text,withdrawn_at::text,withdrawal_reason,
+          approval_reference,created_at::text,updated_at::text
+        FROM mbox.privacy_policy_releases
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        ORDER BY created_at DESC,id DESC
+      `, [context.scope.tenantId, context.scope.storeId])
+      return result.rows.map((row) => ({
+        id: row.id, policyVersion: row.policy_version, content: row.content_markdown,
+        contentSha256: row.content_sha256, operatorName: row.operator_name, contact: row.contact,
+        dataRetentionPolicyVersion: row.data_retention_policy_version,
+        thirdPartyRegisterVersion: row.third_party_register_version, status: row.status,
+        draftedByEmployeeId: row.drafted_by_employee_id, approvedBy: row.approved_by,
+        approvedAt: row.approved_at, effectiveAt: row.effective_at, withdrawnAt: row.withdrawn_at,
+        withdrawalReason: row.withdrawal_reason, approvalReference: row.approval_reference,
+        createdAt: row.created_at, updatedAt: row.updated_at,
+      }))
+    }, { readOnly: true })
+  }
+
+  draftPrivacyPolicy(
+    context: StaffCustomerExperienceContext,
+    input: Readonly<{
+      policyVersion: string; content: string; contentSha256: string; operatorName: string; contact: string
+      dataRetentionPolicyVersion: string; thirdPartyRegisterVersion: string; reason: string; idempotencyKey: string
+    }>,
+  ) {
+    if (createHash('sha256').update(input.content).digest('hex') !== input.contentSha256) {
+      throw new CustomerExperienceRequestError('政策内容摘要与正文不一致', 'PRIVACY_POLICY_HASH_MISMATCH', 409)
+    }
+    return this.commands.execute({
+      scope: context.scope,
+      operationScope: 'privacy.policy.draft',
+      idempotencyKey: input.idempotencyKey,
+      requestFingerprint: fingerprint(input),
+      resultCodec: objectCodec<{ id: string; policyVersion: string; contentSha256: string; status: 'draft' }>(),
+    }, async (transaction) => {
+      const drafted = await transaction.query<{ id: string; policy_version: string; content_sha256: string }>(`
+        INSERT INTO mbox.privacy_policy_releases (
+          tenant_id,store_id,policy_version,content_markdown,content_sha256,operator_name,contact,
+          data_retention_policy_version,third_party_register_version,status,drafted_by_employee_id
+        ) VALUES (
+          $1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8,$9,'draft',$10::uuid
+        )
+        ON CONFLICT (tenant_id,store_id,policy_version) DO UPDATE
+        SET content_markdown=EXCLUDED.content_markdown,content_sha256=EXCLUDED.content_sha256,
+          operator_name=EXCLUDED.operator_name,contact=EXCLUDED.contact,
+          data_retention_policy_version=EXCLUDED.data_retention_policy_version,
+          third_party_register_version=EXCLUDED.third_party_register_version,
+          drafted_by_employee_id=EXCLUDED.drafted_by_employee_id,updated_at=clock_timestamp()
+        WHERE mbox.privacy_policy_releases.status='draft'
+        RETURNING id,policy_version,content_sha256
+      `, [
+        transaction.scope.tenantId, transaction.scope.storeId, input.policyVersion, input.content,
+        input.contentSha256, input.operatorName, input.contact, input.dataRetentionPolicyVersion,
+        input.thirdPartyRegisterVersion, context.employeeId,
+      ])
+      const row = drafted.rows[0]
+      if (!row) throw new CustomerExperienceRequestError(
+        '已发布或已撤下的隐私政策不能直接改写，请建立新版本', 'PRIVACY_POLICY_IMMUTABLE', 409,
+      )
+      const result = { id: row.id, policyVersion: row.policy_version, contentSha256: row.content_sha256, status: 'draft' as const }
+      return commandOutcome(
+        result, staffActor(context), 'privacy.policy.drafted', 'privacy_policy_release', row.id,
+        context.businessDate, { policyVersion: row.policy_version, contentSha256: row.content_sha256, reason: input.reason },
+      )
+    })
+  }
+
+  publishPrivacyPolicy(
+    context: StaffCustomerExperienceContext,
+    input: Readonly<{
+      policyVersion: string; approvedBy: string; approvalReference: string; effectiveAt: string
+      reason: string; idempotencyKey: string
+    }>,
+  ) {
+    if (Date.parse(input.effectiveAt) > Date.now() + 60_000) throw new CustomerExperienceRequestError(
+      '当前隐私政策仅支持立即生效；未来版本请在生效时重新发布', 'PRIVACY_POLICY_SCHEDULE_UNSUPPORTED', 409,
+    )
+    return this.commands.execute({
+      scope: context.scope,
+      operationScope: 'privacy.policy.publish',
+      idempotencyKey: input.idempotencyKey,
+      requestFingerprint: fingerprint(input),
+      resultCodec: objectCodec<{ id: string; policyVersion: string; contentSha256: string; status: 'published'; effectiveAt: string }>(),
+    }, async (transaction) => {
+      const selected = await transaction.query<{
+        id: string; policy_version: string; content_sha256: string; drafted_by_employee_id: string | null
+      }>(`
+        SELECT id,policy_version,content_sha256,drafted_by_employee_id
+        FROM mbox.privacy_policy_releases
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND policy_version=$3 AND status='draft'
+        FOR UPDATE
+      `, [transaction.scope.tenantId, transaction.scope.storeId, input.policyVersion])
+      const policy = selected.rows[0]
+      if (!policy || policy.drafted_by_employee_id === null) throw new CustomerExperienceRequestError(
+        '只有有效的隐私政策草稿可以发布', 'PRIVACY_POLICY_NOT_DRAFT', 409,
+      )
+      if (policy.drafted_by_employee_id === context.employeeId) throw new CustomerExperienceRequestError(
+        '隐私政策草拟人不能自行发布', 'PRIVACY_POLICY_PUBLISHER_NOT_INDEPENDENT', 409,
+      )
+      const active = await transaction.query<{ id: string }>(`
+        SELECT id FROM mbox.privacy_policy_releases
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND status='published' AND withdrawn_at IS NULL
+        FOR UPDATE
+      `, [transaction.scope.tenantId, transaction.scope.storeId])
+      for (const previous of active.rows) {
+        await transaction.query(`
+          UPDATE mbox.privacy_policy_releases
+          SET status='withdrawn',withdrawn_at=clock_timestamp(),withdrawal_reason=$4
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status='published'
+        `, [
+          transaction.scope.tenantId, transaction.scope.storeId, previous.id,
+          `已由正式隐私政策 ${policy.policy_version} 替换`,
+        ])
+      }
+      const published = await transaction.query<{
+        id: string; policy_version: string; content_sha256: string; effective_at: string
+      }>(`
+        UPDATE mbox.privacy_policy_releases
+        SET status='published',approved_by=$4,approved_at=clock_timestamp(),effective_at=$5::timestamptz,
+          approval_reference=$6
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status='draft'
+        RETURNING id,policy_version,content_sha256,effective_at::text
+      `, [
+        transaction.scope.tenantId, transaction.scope.storeId, policy.id,
+        input.approvedBy, input.effectiveAt, input.approvalReference,
+      ])
+      const row = published.rows[0]
+      if (!row) throw new CustomerExperienceRequestError('隐私政策发布失败', 'PRIVACY_POLICY_PUBLISH_FAILED', 409)
+      const result = {
+        id: row.id, policyVersion: row.policy_version, contentSha256: row.content_sha256,
+        status: 'published' as const, effectiveAt: row.effective_at,
+      }
+      return commandOutcome(
+        result, staffActor(context), 'privacy.policy.published', 'privacy_policy_release', row.id,
+        context.businessDate, { policyVersion: row.policy_version, contentSha256: row.content_sha256, effectiveAt: row.effective_at, reason: input.reason },
+      )
+    })
+  }
+
+  withdrawPrivacyPolicy(
+    context: StaffCustomerExperienceContext,
+    input: Readonly<{ policyVersion: string; reason: string; idempotencyKey: string }>,
+  ) {
+    return this.commands.execute({
+      scope: context.scope,
+      operationScope: 'privacy.policy.withdraw',
+      idempotencyKey: input.idempotencyKey,
+      requestFingerprint: fingerprint(input),
+      resultCodec: objectCodec<{ id: string; policyVersion: string; status: 'withdrawn'; withdrawnAt: string }>(),
+    }, async (transaction) => {
+      const withdrawn = await transaction.query<{
+        id: string; policy_version: string; withdrawn_at: string
+      }>(`
+        UPDATE mbox.privacy_policy_releases
+        SET status='withdrawn',withdrawn_at=clock_timestamp(),withdrawal_reason=$4
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND policy_version=$3
+          AND status='published' AND withdrawn_at IS NULL
+        RETURNING id,policy_version,withdrawn_at::text
+      `, [transaction.scope.tenantId, transaction.scope.storeId, input.policyVersion, input.reason])
+      const row = withdrawn.rows[0]
+      if (!row) throw new CustomerExperienceRequestError(
+        '只有当前已发布的隐私政策可以撤下', 'PRIVACY_POLICY_NOT_PUBLISHED', 409,
+      )
+      const result = {
+        id: row.id, policyVersion: row.policy_version,
+        status: 'withdrawn' as const, withdrawnAt: row.withdrawn_at,
+      }
+      return commandOutcome(
+        result, staffActor(context), 'privacy.policy.withdrawn', 'privacy_policy_release', row.id,
+        context.businessDate, { policyVersion: row.policy_version, reason: input.reason },
+      )
+    })
+  }
+
   notificationConsent(
     context: PublicCustomerExperienceContext,
     policy: Readonly<{ serviceTemplateId: string; policyVersion: string }> | null,
@@ -1200,6 +1579,7 @@ export class CustomerExperienceService {
           COALESCE(award.awarded_points,0) AS existing_points,
           COALESCE(award.awarded_growth,0) AS existing_growth,
           CASE WHEN award.id IS NULL THEN 'missing'
+            WHEN award.calculation_model='exact_carry' THEN 'matched'
             WHEN award.awarded_points<>expected.expected_points
               OR award.awarded_growth<>expected.expected_growth
               THEN 'mismatch' ELSE 'matched' END AS status
@@ -1370,21 +1750,24 @@ export class CustomerExperienceService {
             ON membership.tenant_id=$1::uuid AND membership.store_id=$2::uuid
            AND membership.customer_id IN (SELECT id FROM family) AND membership.status='active'
           ORDER BY membership.joined_at, membership.id LIMIT 1
-        )
-        SELECT calculated.order_id, calculated.membership_id, calculated.customer_id,
-          calculated.policy_version_id,
-          CASE calculated.rounding_mode WHEN 'nearest'
+        ), expected AS (
+          SELECT calculated.*, CASE calculated.rounding_mode WHEN 'nearest'
             THEN ((calculated.base_points * calculated.multiplier_numerator
               + calculated.multiplier_denominator / 2) / calculated.multiplier_denominator)::integer
             ELSE ((calculated.base_points * calculated.multiplier_numerator)
-              / calculated.multiplier_denominator)::integer END AS expected_points,
-          calculated.expected_growth,
-          COALESCE(award.awarded_points,0) AS existing_points,
-          COALESCE(award.awarded_growth,0) AS existing_growth
-        FROM calculated
+              / calculated.multiplier_denominator)::integer END AS expected_points
+          FROM calculated
+        )
+        SELECT expected.order_id, expected.membership_id, expected.customer_id,
+          expected.policy_version_id, expected.expected_points, expected.expected_growth,
+          CASE WHEN award.calculation_model='exact_carry' THEN expected.expected_points
+            ELSE COALESCE(award.awarded_points,0) END AS existing_points,
+          CASE WHEN award.calculation_model='exact_carry' THEN expected.expected_growth
+            ELSE COALESCE(award.awarded_growth,0) END AS existing_growth
+        FROM expected
         LEFT JOIN mbox.loyalty_order_awards award
           ON award.tenant_id=$1::uuid AND award.store_id=$2::uuid
-         AND award.order_id=calculated.order_id
+         AND award.order_id=expected.order_id
       `, [transaction.scope.tenantId, transaction.scope.storeId, input.orderPublicId])
       const row = selected.rows[0]
       if (!row) throw new CustomerExperienceRequestError(

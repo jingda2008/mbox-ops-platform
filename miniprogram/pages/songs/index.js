@@ -70,7 +70,7 @@ Page({
       const request = result.request || {}
       this.setData({
         songTitle: '', note: '', requestExtension: false,
-        success: request.status ? `已提交，当前状态：${request.status}。舞台确认后才会安排。` : '点歌意向已提交，等待舞台确认。',
+        success: '点歌意向已提交，舞台确认后会显示处理进度。',
       })
     } catch (error) {
       this.setData({ error: customerErrorMessage(error, '点歌意向未提交') })

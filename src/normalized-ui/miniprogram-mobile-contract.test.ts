@@ -252,11 +252,16 @@ describe('mini-program mobile business flow contract', () => {
     expect(config).toContain('membershipInviteCooldownHours: 24')
     const privacy = read('miniprogram/pages/privacy/index.wxml')
     const privacyPage = read('miniprogram/pages/privacy/index.js')
-    expect(privacy).toContain('正式政策全文')
-    expect(privacy).toContain('等待正式发布')
-    expect(privacy).not.toContain('候选')
-    expect(privacyPage).not.toContain('候选')
+    expect(privacy).toContain('政策全文')
+    expect(privacy).not.toMatch(/等待正式发布|暂未展示政策|候选/)
+    expect(privacyPage).not.toMatch(/尚未正式发布|候选/)
     expect(privacy).not.toContain('当前小程序不发起或模拟支付')
+  })
+
+  it('does not render internal song-request states to customers', () => {
+    const songs = read('miniprogram/pages/songs/index.js')
+    expect(songs).toContain('点歌意向已提交，舞台确认后会显示处理进度。')
+    expect(songs).not.toContain('当前状态：${request.status}')
   })
 
   it('keeps membership join tappable so WeChat review is not a silent disabled button', () => {

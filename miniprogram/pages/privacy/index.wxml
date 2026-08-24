@@ -2,18 +2,18 @@
   <view class="top-band">
     <text class="eyebrow">M-BOX 客户桌码服务</text>
     <text class="privacy-title">隐私政策</text>
-    <text class="privacy-version">{{policy ? ('正式版本 · ' + policy.version) : '等待正式发布'}}</text>
+    <text class="privacy-version">{{policy ? ('政策版本 · ' + policy.version) : '隐私政策'}}</text>
   </view>
-  <view wx:if="{{policyLoading}}" class="privacy-section"><text>正在读取正式隐私政策…</text></view>
+  <view wx:if="{{policyLoading}}" class="privacy-section"><text>正在加载隐私政策…</text></view>
   <block wx:elif="{{policy}}">
     <view class="privacy-section"><text>运营主体</text><text>{{policy.operatorName}}</text></view>
     <view class="privacy-section"><text>联系渠道</text><text>{{policy.contact}}</text></view>
     <view class="privacy-section"><text>数据保留规则版本</text><text>{{policy.dataRetentionPolicyVersion}}</text></view>
     <view class="privacy-section"><text>第三方服务清单版本</text><text>{{policy.thirdPartyRegisterVersion}}</text></view>
     <view class="privacy-section"><text>生效时间</text><text>{{policy.effectiveAt}}</text></view>
-    <view class="privacy-section"><text>正式政策全文</text><text>{{policy.content}}</text></view>
+    <view class="privacy-section"><text>政策全文</text><text>{{policy.content}}</text></view>
   </block>
-  <view wx:else class="privacy-section privacy-release-note"><text>暂未展示政策</text><text>{{policyMessage}}</text></view>
+  <view wx:else class="privacy-section privacy-release-note"><text>隐私政策暂时无法读取</text><text>{{policyMessage}}</text></view>
   <view class="privacy-contact-tools">
     <button class="privacy-contact-toggle" bindtap="toggleContactTools">{{contactToolsOpen ? '收起我的联系方式' : '管理我的联系方式'}}</button>
     <view wx:if="{{contactToolsOpen}}" class="privacy-contact-body">

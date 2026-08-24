@@ -34,7 +34,7 @@ Page({
       this.setData({
         policyLoading: false,
         policy: policy || null,
-        policyMessage: policy ? '' : '当前门店的隐私政策尚未正式发布。为保护您的权益，请联系门店服务人员。',
+        policyMessage: policy ? '' : '隐私政策暂时无法读取，请稍后重试或联系门店。',
       })
     } catch (error) {
       this.setData({

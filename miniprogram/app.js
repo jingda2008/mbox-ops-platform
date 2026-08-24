@@ -1,6 +1,7 @@
 const { getRuntimeConfig } = require('./config/index')
 const { applyLaunchSession } = require('./utils/session')
 const { ensureCustomerSession } = require('./utils/auth')
+const { customerErrorMessage } = require('./utils/customer-error')
 
 App({
   globalData: {
@@ -13,7 +14,7 @@ App({
     this.globalData.config = config
     this.globalData.tableSession = applyLaunchSession(options, config)
     ensureCustomerSession().catch((error) => {
-      this.globalData.identityError = error.message || '微信身份初始化失败'
+      this.globalData.identityError = customerErrorMessage(error, '微信身份初始化失败')
     })
   },
 

@@ -1,6 +1,6 @@
 <view class="page">
   <view class="top-band song-band">
-    <view class="brand-row"><view><text class="eyebrow">{{tableCode}} · 当晚真实排班</text><text class="song-title">现场点歌</text></view><text wx:if="{{isDevelopment}}" class="dev-badge">开发模式</text></view>
+    <view class="brand-row"><view><text class="eyebrow">{{tableCode}} · 当晚真实排班</text><text class="song-title">现场点歌</text></view></view>
     <text class="song-subtitle">{{phaseText}}。提交的是点歌意向，舞台确认后才会安排。</text>
   </view>
   <state-panel wx:if="{{loading}}" type="loading" title="正在读取当晚排班" />

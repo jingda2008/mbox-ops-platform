@@ -45,7 +45,7 @@ export interface GuestServiceRequestView {
   publicId: string
   requestType: GuestServiceRequestType
   status: ServiceTask['status']
-  assignedStaffName: string | null
+  publicServiceName: string | null
   requestCount: number
   createdAt: string
 }
@@ -89,7 +89,7 @@ interface GuestServiceViewRow extends Record<string, unknown> {
   public_id: string
   request_type: GuestServiceRequestType
   status: ServiceTask['status']
-  assigned_staff_name: string | null
+  public_service_name: string | null
   request_count: number
   created_at: string
 }
@@ -238,18 +238,19 @@ export class GuestServiceRepository {
     await this.requireOpenTableMembership(tableSessionId, customerId, false)
     const result = await this.transaction.query<GuestServiceViewRow>(`
       SELECT task.public_id, request_group.request_type, task.status,
-        assigned_employee.display_name AS assigned_staff_name,
+        public_profile.public_display_name AS public_service_name,
         request_group.request_count, task.created_at::text
       FROM mbox.guest_service_request_groups AS request_group
       JOIN mbox.service_tasks AS task
         ON task.tenant_id = request_group.tenant_id
        AND task.store_id = request_group.store_id
        AND task.id = request_group.current_service_task_id
-      LEFT JOIN mbox.employees AS assigned_employee
-        ON assigned_employee.tenant_id = task.tenant_id
-       AND assigned_employee.store_id = task.store_id
-       AND assigned_employee.id = task.assigned_employee_id
-       AND assigned_employee.status = 'active'
+      LEFT JOIN mbox.employee_customer_public_profiles AS public_profile
+        ON public_profile.tenant_id = task.tenant_id
+       AND public_profile.store_id = task.store_id
+       AND public_profile.employee_id = task.assigned_employee_id
+       AND public_profile.status = 'published'
+       AND public_profile.effective_at <= clock_timestamp()
       WHERE request_group.tenant_id = $1::uuid
         AND request_group.store_id = $2::uuid
         AND request_group.table_session_id = $3::uuid
@@ -264,7 +265,7 @@ export class GuestServiceRepository {
       publicId: row.public_id,
       requestType: row.request_type,
       status: row.status,
-      assignedStaffName: row.assigned_staff_name,
+      publicServiceName: row.public_service_name,
       requestCount: Number(row.request_count),
       createdAt: timestamp(row.created_at),
     }))

@@ -59,6 +59,7 @@ async function publicRequest(path, options) {
 }
 
 async function getMiniBootstrap() { return (await publicRequest('/api/public/mini/bootstrap')).data }
+async function getPrivacyPolicy() { return (await publicRequest('/api/public/mini/privacy-policy')).data }
 async function getMiniLoyalty() { return (await publicRequest('/api/public/mini/loyalty')).data }
 async function getMiniLoyaltyLedger() { return (await publicRequest('/api/public/mini/loyalty/ledger')).data }
 async function getNotificationConsent() { return (await publicRequest('/api/public/mini/notification-consent')).data }
@@ -549,6 +550,31 @@ async function checkout(items, checkoutUpgradeOfferPublicId, idempotencyKey, rec
     },
   })
 }
+async function getSharedCart() { return (await request('/api/guest/shared-cart')).data }
+async function adjustSharedCart(productId, delta, expectedVersion, idempotencyKey) {
+  return (await request('/api/guest/shared-cart/lines', {
+    method: 'POST', headers: { 'idempotency-key': idempotencyKey || randomId('shared-cart-adjust') },
+    data: { productId, delta, expectedVersion },
+  })).data
+}
+async function checkoutSharedCart(input, idempotencyKey) {
+  const attribution = checkoutRecommendationAttribution(
+    input.checkoutUpgradeOfferPublicId,
+    input.recommendationAttribution,
+  )
+  return request('/api/guest/shared-cart/checkout', {
+    method: 'POST', headers: { 'idempotency-key': idempotencyKey || randomId('shared-cart-checkout') },
+    data: {
+      expectedVersion: input.expectedVersion,
+      confirmedDuplicateOrderId: input.confirmedDuplicateOrderId || null,
+      checkoutUpgradeOfferPublicId: input.checkoutUpgradeOfferPublicId || null,
+      ...(attribution ? {
+        recommendationPublicId: attribution.recommendationPublicId,
+        selectedRecommendationProductId: attribution.selectedProductId,
+      } : {}),
+    },
+  })
+}
 async function getTableOrders() { return (await request('/api/guest/orders/table')).data }
 async function retryOrderPayment(orderPublicId, idempotencyKey) {
   return (await request(`/api/guest/orders/${encodeURIComponent(orderPublicId)}/payment`, {
@@ -624,7 +650,7 @@ async function logoutWechatIdentity() {
 }
 
 module.exports = {
-  getGuestSession, getMiniBootstrap, getMiniLoyalty, getMiniLoyaltyLedger,
+  getGuestSession, getMiniBootstrap, getPrivacyPolicy, getMiniLoyalty, getMiniLoyaltyLedger,
   getNotificationConsent, recordNotificationConsent,
   getWechatNotificationAuthorizations, recordWechatNotificationAuthorization,
   getProductRestrictions, withdrawProductRestriction,
@@ -641,7 +667,7 @@ module.exports = {
   getReservationPerformanceNotificationAuthorizations,
   recordReservationPerformanceNotificationAuthorization,
   getMenu, getPublicMenu, recommendExperience, recordRecommendationEvent, prepareCheckoutUpgrade, recordCheckoutUpgradeEvent,
-  checkout, getTableOrders, retryOrderPayment,
+  checkout, getSharedCart, adjustSharedCart, checkoutSharedCart, getTableOrders, retryOrderPayment,
   createServiceTask, getServiceRequests, actOnServiceTask,
   getCustomerBenefits, getCustomerProfile, reserveCustomerBenefit, submitSongRequest, getTodayPerformances,
   logoutWechatIdentity,

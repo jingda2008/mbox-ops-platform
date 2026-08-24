@@ -1,6 +1,7 @@
 const { createServiceTask, getTableOrders } = require('../../utils/api')
 const { getRuntimeConfig } = require('../../config/index')
 const { getTableSession } = require('../../utils/session')
+const { customerErrorMessage } = require('../../utils/customer-error')
 
 const LOCAL_REQUESTS_KEY = 'mbox.guest.service.requests.v2'
 
@@ -75,7 +76,7 @@ Page({
       wx.setStorageSync(LOCAL_REQUESTS_KEY, [record].concat(stored.filter((item) => item.publicId !== record.publicId)).slice(0, 30))
       this.setData({ success: task.message || '收到，我们马上来照顾您。', note: '' })
     } catch (error) {
-      this.setData({ error: error.message || '请求暂时没有送达，请稍后重试' })
+      this.setData({ error: customerErrorMessage(error, '请求暂时没有送达，请稍后重试') })
     } finally { this.setData({ submittingId: '' }) }
   },
 

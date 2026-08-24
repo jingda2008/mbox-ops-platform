@@ -13,6 +13,7 @@ const { redirectToMembershipLogin } = require('../../utils/membership-gate')
 const { randomId } = require('../../utils/id')
 const { getRuntimeConfig } = require('../../config/index')
 const { money, dateTime } = require('../../utils/format')
+const { customerErrorCode, customerErrorMessage } = require('../../utils/customer-error')
 
 const STATUS_NAMES = { pending: '等待门店确认', confirmed: '预约已确认', arrived: '已经到店', seated: '已经入座', cancelled: '已取消', no_show: '未到店', expired: '已失效' }
 // “我的预约”只保留顾客仍能执行或等待门店确认的记录。到店、入座、过期等
@@ -141,7 +142,7 @@ Page({
         showForm: reservations.length === 0,
       })
       await Promise.all([this.checkAvailability(), this.loadPerformances()])
-    } catch (error) { this.setData({ loading: false, error: error.message || '预约信息载入失败' }) }
+    } catch (error) { this.setData({ loading: false, error: customerErrorMessage(error, '预约信息载入失败') }) }
   },
 
   retryImpacts() { this.loadData() },
@@ -173,7 +174,7 @@ Page({
       })
       await this.loadData()
     } catch (error) {
-      this.setData({ impactNotice: `${error.message || '确认未完成'}；选择已保留，可直接重试。` })
+      this.setData({ impactNotice: `${customerErrorMessage(error, '确认未完成')}；选择已保留，可直接重试。` })
     } finally { this.setData({ impactBusyId: '' }) }
   },
 
@@ -207,9 +208,9 @@ Page({
       await this.loadData()
     } catch (error) {
       this.setData({
-        notificationNotice: error && error.code === 'NETWORK_ERROR'
-          ? `${error.message || '提醒授权未完成'}；授权结果已保留，可直接重试。`
-          : `${error.message || '提醒授权未完成'}；请刷新预约后重试。`,
+        notificationNotice: customerErrorCode(error) === 'NETWORK_ERROR'
+          ? `${customerErrorMessage(error, '提醒授权未完成')}；授权结果已保留，可直接重试。`
+          : `${customerErrorMessage(error, '提醒授权未完成')}；请刷新预约后重试。`,
       })
     } finally { this.setData({ notificationBusyId: '' }) }
   },
@@ -232,7 +233,7 @@ Page({
         depositText: rule.enabled ? `需付${money(rule.amountMinor || 0)}定金 · ${rule.ruleText || '提交前再次确认'}` : '当前不要求线上定金',
       })
     } catch (error) {
-      this.setData({ availability: null, availabilityText: error.message || '暂时无法确认容量', depositText: '' })
+      this.setData({ availability: null, availabilityText: customerErrorMessage(error, '暂时无法确认容量'), depositText: '' })
     } finally { this.setData({ checking: false }) }
   },
 
@@ -317,7 +318,7 @@ Page({
       })
       this.setData({ success: '预约已提交，门店确认后会更新状态。', occasionNote: '', showForm: false, step: 1 })
       await this.loadData()
-    } catch (error) { this.setData({ error: error.message || '预约提交失败' }) }
+    } catch (error) { this.setData({ error: customerErrorMessage(error, '预约提交失败') }) }
     finally { this.setData({ submitting: false }) }
   },
 })

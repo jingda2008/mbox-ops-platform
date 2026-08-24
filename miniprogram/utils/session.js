@@ -15,8 +15,8 @@ function decodeScene(scene) {
       result[key] = value
     }
     return result
-  } catch (error) {
-    throw new Error(`桌码scene无效：${error && error.message ? error.message : '无法解码'}`)
+  } catch {
+    throw new Error('桌码scene无效，无法识别当前桌位')
   }
 }
 

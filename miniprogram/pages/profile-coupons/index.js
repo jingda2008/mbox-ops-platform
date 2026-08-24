@@ -1,5 +1,6 @@
 const { getCustomerBenefits } = require('../../utils/api')
 const { money } = require('../../utils/format')
+const { customerErrorMessage } = require('../../utils/customer-error')
 
 const BENEFIT_NAMES = {
   gift_product: '赠送好礼',
@@ -31,7 +32,7 @@ Page({
       })
       this.setData({ loading: false, coupons })
     } catch (error) {
-      this.setData({ loading: false, error: error.message || '优惠券暂时无法读取' })
+      this.setData({ loading: false, error: customerErrorMessage(error, '优惠券暂时无法读取') })
     }
   },
 })

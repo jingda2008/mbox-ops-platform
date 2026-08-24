@@ -1,5 +1,6 @@
 const { getReservationPerformances } = require('../../utils/api')
 const { dateTime } = require('../../utils/format')
+const { customerErrorMessage } = require('../../utils/customer-error')
 
 function shanghaiDate(offsetDays) {
   return new Date(Date.now() + (offsetDays || 0) * 86400000 + 8 * 60 * 60 * 1000).toISOString().slice(0, 10)
@@ -71,7 +72,7 @@ Page({
       }))
       this.setData({ loading: false, schedules, phase: data.phase || '' })
     } catch (error) {
-      this.setData({ loading: false, schedules: [], error: error.message || '演出安排暂时无法读取' })
+      this.setData({ loading: false, schedules: [], error: customerErrorMessage(error, '演出安排暂时无法读取') })
     }
   },
 })

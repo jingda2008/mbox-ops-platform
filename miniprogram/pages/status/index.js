@@ -2,6 +2,7 @@ const { getServiceRequests, actOnServiceTask } = require('../../utils/api')
 const { getRuntimeConfig } = require('../../config/index')
 const { getTableSession } = require('../../utils/session')
 const { TASK_STATUS, dateTime } = require('../../utils/format')
+const { customerErrorMessage } = require('../../utils/customer-error')
 
 const LOCAL_REQUESTS_KEY = 'mbox.guest.service.requests.v2'
 const REQUEST_TYPE_NAMES = {
@@ -25,8 +26,8 @@ function normalizeTask(task) {
     publicId: task.publicId || task.taskPublicId || task.id,
     name: task.name || task.serviceName || task.requestTypeName || REQUEST_TYPE_NAMES[task.requestType] || '桌边服务',
     detail: task.detail || task.note || '',
-    ownerText: task.assignedStaffName || task.ownerName || task.assigneeName
-      ? `由 ${task.assignedStaffName || task.ownerName || task.assigneeName} 负责`
+    ownerText: task.publicServiceName
+      ? `由 ${task.publicServiceName} 负责`
       : '等待服务人员接单',
     requestCountText: Number(task.requestCount || 1) > 1 ? `已合并 ${Number(task.requestCount)} 次同类请求` : '',
     status,
@@ -68,7 +69,7 @@ Page({
         loading: false,
         tasks: stored.map(normalizeTask),
         live: false,
-        error: stored.length ? '实时状态暂时未连接，以下为本机最近提交记录。请勿重复呼叫。' : (error.message || '服务进度暂时无法读取'),
+        error: stored.length ? '实时状态暂时未连接，以下为本机最近提交记录。请勿重复呼叫。' : customerErrorMessage(error, '服务进度暂时无法读取'),
       })
     }
   },
@@ -81,7 +82,7 @@ Page({
       await actOnServiceTask(taskPublicId, action)
       this.setData({ success: action === 'confirm' ? '感谢确认，本次服务已经解决。' : '已继续升级处理，值班负责人会跟进。' })
       await this.loadData()
-    } catch (error) { this.setData({ error: error.message || '反馈没有送达，请稍后重试' }) }
+    } catch (error) { this.setData({ error: customerErrorMessage(error, '反馈没有送达，请稍后重试') }) }
     finally { this.setData({ feedbackTaskId: '' }) }
   },
 

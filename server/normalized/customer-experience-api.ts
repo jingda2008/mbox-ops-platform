@@ -72,10 +72,49 @@ const LEVELS = ['comfortable', 'enhanced', 'signature'] as const
 const INTENSITIES = ['quiet', 'balanced', 'hosted'] as const
 const PERFORMANCE_PHASES = ['before_show', 'acoustic', 'band_live', 'intermission', 'after_show'] as const
 
+interface PrivacyPolicyReleaseRow extends Record<string, unknown> {
+  policy_version: string
+  content_markdown: string
+  content_sha256: string
+  operator_name: string
+  contact: string
+  data_retention_policy_version: string
+  third_party_register_version: string
+  effective_at: string
+}
+
 export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceApiOptions> = async (app, options) => {
   app.get('/public/mini/bootstrap', async (request, reply) => handle(reply, async () => {
     const context = await options.resolvePublicContext(request)
     return reply.send({ data: await options.service.portal(context) })
+  }))
+
+  app.get('/public/mini/privacy-policy', async (request, reply) => handle(reply, async () => {
+    const context = await options.resolvePublicContext(request)
+    const policy = await options.transactions.run(context.scope, async (transaction) => {
+      const result = await transaction.query<PrivacyPolicyReleaseRow>(`
+        SELECT policy_version,content_markdown,content_sha256,operator_name,contact,
+          data_retention_policy_version,third_party_register_version,effective_at
+        FROM mbox.privacy_policy_releases
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+          AND status='published' AND effective_at<=clock_timestamp() AND withdrawn_at IS NULL
+        ORDER BY effective_at DESC,id DESC
+        LIMIT 1
+      `, [context.scope.tenantId, context.scope.storeId])
+      const row = result.rows[0]
+      return row === undefined ? null : {
+        version: row.policy_version,
+        content: row.content_markdown,
+        contentSha256: row.content_sha256,
+        operatorName: row.operator_name,
+        contact: row.contact,
+        dataRetentionPolicyVersion: row.data_retention_policy_version,
+        thirdPartyRegisterVersion: row.third_party_register_version,
+        effectiveAt: timestamp(row.effective_at, '隐私政策生效时间'),
+      }
+    })
+    reply.header('cache-control', 'no-store')
+    return reply.send({ data: policy, meta: { published: policy !== null } })
   }))
 
   app.get('/public/mini/loyalty', async (request, reply) => handle(reply, async () => {

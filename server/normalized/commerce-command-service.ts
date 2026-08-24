@@ -1,6 +1,7 @@
 import type {
   AuditActor,
   CommandExecution,
+  CommandOutcome,
   JsonCodec,
   JsonObject,
 } from './command-executor.js'
@@ -119,7 +120,14 @@ export class CommerceCommandService {
       idempotencyKey: input.idempotencyKey,
       requestFingerprint: canonicalSubmitFingerprint(input),
       resultCodec: submittedCommerceCodec,
-    }, async (transaction) => {
+    }, (transaction) => this.submitOrderInTransaction(transaction, input))
+  }
+
+  async submitOrderInTransaction(
+    transaction: ScopedTransaction,
+    input: Readonly<SubmitOrderCommand>,
+  ): Promise<CommandOutcome<SubmittedCommerceResult>> {
+      validateCommand(input)
       const context = await resolveAuthoritativeTableContext(transaction, input)
       if (input.channel === 'guest_qr') {
         const lockedSession=await transaction.query<{ id:string }>(`
@@ -253,7 +261,6 @@ export class CommerceCommandService {
         }],
         outboxMessages: productionSourceMaterialized ? [] : [outboxMessage],
       }
-    })
   }
 
   private authorizePricing(

@@ -1,6 +1,7 @@
 const { createServiceTask } = require('../../utils/api')
 const { getRuntimeConfig } = require('../../config/index')
 const { getTableSession } = require('../../utils/session')
+const { customerErrorMessage } = require('../../utils/customer-error')
 
 Page({
   data: {
@@ -34,7 +35,7 @@ Page({
       const result = response.data || response
       this.setData({ success: result.message || '已收到，值班经理会尽快到桌了解情况。', details: '' })
     } catch (error) {
-      this.setData({ error: error.message || '投诉未提交，请重试' })
+      this.setData({ error: customerErrorMessage(error, '投诉未提交，请重试') })
     } finally {
       this.setData({ submitting: false })
     }

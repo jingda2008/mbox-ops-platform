@@ -29,7 +29,7 @@ import {
   type Refund,
   type RefundAllocation,
 } from './refund-repository.js'
-import type { StoreScope } from './transaction-runner.js'
+import type { ScopedTransaction, StoreScope } from './transaction-runner.js'
 import {
   PaymentFulfillmentRepository,
   type PaymentFulfillmentActivation,
@@ -147,8 +147,16 @@ export class PaymentCommandService {
   ) {}
 
   initiate(input: Readonly<InitiatePaymentCommand>): Promise<CommandExecution<Payment>> {
-    const providerHints = sanitizeClientPaymentHints(input.providerSnapshot)
-    return this.commands.execute(command(input, 'payment.initiate', paymentCodec), async (transaction) => {
+    return this.commands.execute(command(input, 'payment.initiate', paymentCodec), (transaction) => (
+      this.initiateInTransaction(transaction, input)
+    ))
+  }
+
+  async initiateInTransaction(
+    transaction: ScopedTransaction,
+    input: Readonly<InitiatePaymentCommand>,
+  ): Promise<CommandOutcome<Payment>> {
+      const providerHints = sanitizeClientPaymentHints(input.providerSnapshot)
       if (input.principal.type === 'employee') {
         const employeeId = requireEmployee(input.actor, 'Staff payment initiation')
         if (employeeId !== input.principal.employeeId) {
@@ -175,8 +183,7 @@ export class PaymentCommandService {
       })
       if (payment.orderId === null) throw new Error('Order payment lost its order target')
       await payments.syncOrderPaymentStatus(payment.orderId)
-      return await paymentOutcome(transaction, input, payment, 'payment.initiated', 1, undefined, undefined, this.options.printTicketSources === true)
-    })
+      return paymentOutcome(transaction, input, payment, 'payment.initiated', 1, undefined, undefined, this.options.printTicketSources === true)
   }
 
   recordManual(input: Readonly<RecordManualPaymentCommand>): Promise<CommandExecution<Payment>> {

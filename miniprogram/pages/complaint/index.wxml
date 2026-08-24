@@ -1,6 +1,6 @@
 <view class="page">
   <view class="top-band complaint-band">
-    <view class="brand-row"><view><text class="eyebrow">{{tableCode}} · 独立处理通道</text><text class="complaint-title">由值班经理接管</text></view><text wx:if="{{isDevelopment}}" class="dev-badge">开发模式</text></view>
+    <view class="brand-row"><view><text class="eyebrow">{{tableCode}} · 独立处理通道</text><text class="complaint-title">由值班负责人接手</text></view></view>
     <text class="complaint-subtitle">投诉会进入经理关注队列，当前服务员不能自行关闭。</text>
   </view>
   <view wx:if="{{error}}" class="error-banner">{{error}}</view>

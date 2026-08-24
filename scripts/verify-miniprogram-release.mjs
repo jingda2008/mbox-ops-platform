@@ -51,7 +51,11 @@ export async function verifyMiniProgramRelease(input) {
     for (const [field, label] of [
       ['operatorName', '运营主体名称'], ['contact', '隐私联系信息'],
       ['dataRetentionPolicyVersion', '数据保留策略版本'], ['thirdPartyRegisterVersion', '第三方清单版本'],
+      ['policyVersion', '正式隐私政策版本'], ['approvedBy', '隐私政策批准人'],
     ]) if (!meaningful(privacy[field])) failures.push(`缺少有效${label}`)
+    digest(privacy.contentSha256, '正式隐私政策内容摘要', failures)
+    validPastIsoTime(privacy.approvedAt, '隐私政策批准时间', failures)
+    validPastIsoTime(privacy.effectiveAt, '隐私政策生效时间', failures)
     validPastIsoTime(privacy.reviewedAt, '隐私复核时间', failures)
     await verifyEvidenceRef(evidenceRoot, privacy.evidenceRef, '隐私复核附件', failures)
 

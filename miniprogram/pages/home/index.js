@@ -10,6 +10,7 @@ const { getRuntimeConfig } = require('../../config/index')
 const { dateTime } = require('../../utils/format')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 const { publicImageUrl } = require('../../utils/media')
+const { customerErrorMessage } = require('../../utils/customer-error')
 const MEMBERSHIP_INVITE_DISMISSED_KEY = 'mbox.membership.invite.dismissed.until.v1'
 const CONTENT_ROTATION_WINDOW_MS = 6 * 60 * 60 * 1000
 
@@ -48,7 +49,7 @@ function performanceView(view) {
     tags: schedule.performerProfile && ([]).concat(schedule.performerProfile.genres || [], schedule.performerProfile.styles || []).slice(0, 3).join(' · '),
     timeText: `${dateTime(schedule.startsAt)}–${dateTime(schedule.endsAt).slice(6)}`,
     stateText: current ? '正在演出' : '即将开始',
-    summary: current ? 'LIVE NOW' : 'UP NEXT',
+    summary: current ? '正在演出' : '即将开始',
     schedules,
   }
 }
@@ -79,7 +80,7 @@ function contentCardView(item) {
   return {
     code: String(item.code || ''),
     type: String(item.type || 'article'),
-    eyebrow: item.type === 'show' ? 'M-BOX LIVE' : item.type === 'activity' ? 'SUPERHIGH' : item.type === 'presale' ? 'TONIGHT OFFER' : item.type === 'benefit' ? 'MEMBER EDIT' : item.type === 'return_offer' ? 'WELCOME BACK' : 'M-BOX STORY',
+    eyebrow: item.type === 'show' ? 'M-BOX 现场演出' : item.type === 'activity' ? 'SUPERHIGH 活动' : item.type === 'presale' ? '今晚推荐' : item.type === 'benefit' ? '会员专享' : item.type === 'return_offer' ? '欢迎回来' : 'M-BOX 故事',
     title: String(item.title || ''),
     summary: String(item.summary || ''),
     imageUrl: publicImageUrl(item.imageUrl),
@@ -117,7 +118,7 @@ function softNetworkError(error) {
   if (/request:fail|timeout|ERR_CONNECTION|Failed to fetch|网络/i.test(message)) {
     return ''
   }
-  return message || '桌台连接已失效，请重新扫描桌面二维码'
+  return customerErrorMessage(error, '桌台连接已失效，请重新扫描桌面二维码')
 }
 
 Page({
@@ -146,7 +147,7 @@ Page({
     canEnter: false,
     hasTableSession: false,
     connectionMessage: '',
-    serviceOwner: '现场服务组',
+    serviceOwner: '服务人员处理中',
     guestCountText: '人数待确认',
   },
 
@@ -224,7 +225,7 @@ Page({
         canEnter: active,
         visitState: active ? 'active' : waiting ? 'waiting' : 'prearrival',
         connectionMessage: session.message || (waiting ? '桌位已识别，等待工作人员开台。' : ''),
-        serviceOwner: session.primaryServiceName || '现场服务组',
+        serviceOwner: session.primaryServiceName || '服务人员处理中',
         guestCountText: Number(session.guestCount) > 0 ? `${Number(session.guestCount)}位` : '人数待确认',
         error: '',
       })
@@ -383,8 +384,8 @@ Page({
         wx.navigateTo({ url: `/pages/community-detail/index?id=${encodeURIComponent(pendingActivityId)}` })
       }
     } catch (error) {
-      this.setData({ error: error.message || '入会暂时没有完成' })
-      wx.showToast({ title: error.message || '入会未完成', icon: 'none' })
+      this.setData({ error: customerErrorMessage(error, '入会暂时没有完成') })
+      wx.showToast({ title: customerErrorMessage(error, '入会未完成'), icon: 'none' })
     } finally {
       this.setData({ membershipInviteBusy: false })
     }

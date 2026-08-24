@@ -28,6 +28,7 @@ const { dateTime, money } = require('../../utils/format')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 const { getRuntimeConfig } = require('../../config/index')
 const { publicImageUrl } = require('../../utils/media')
+const { customerErrorCode, customerErrorMessage } = require('../../utils/customer-error')
 
 const LEVEL_NAMES = { member: 'M-BOX会员', silver: '银卡会员', gold: '金卡会员' }
 const BENEFIT_NAMES = { gift_product: '赠送好礼', discount: '折扣权益', credit: '金额权益', access: '专属资格', other: '会员权益' }
@@ -276,7 +277,7 @@ Page({
       const soft = (error) => {
         const message = String((error && error.message) || '')
         if (/预约会话已失效|重新进入预约|登录状态已失效|登录或桌边会话已过期/.test(message)) return ''
-        return message
+        return customerErrorMessage(error, '会员信息暂时无法读取')
       }
       const results = await Promise.all([
         getMiniBootstrap(),
@@ -363,7 +364,7 @@ Page({
       const message = String((error && error.message) || '')
       const soft = /预约会话已失效|重新进入预约|登录状态已失效|登录或桌边会话已过期|请求的页面或接口不存在|ROUTE_NOT_FOUND/.test(message)
         ? ''
-        : (message || '会员信息暂时无法读取')
+        : customerErrorMessage(error, '会员信息暂时无法读取')
       this.setData({ loading: false, error: soft })
     }
   },
@@ -445,8 +446,8 @@ Page({
         wx.showModal({
           title: unbound ? '小程序尚未绑定微信客服' : '暂时无法打开客服',
           content: unbound
-            ? '代码侧企业ID与客服链接已配置。请管理员登录微信公众平台 → 功能 → 客服 → 微信客服，绑定企业ID：ww205bd249a5431d8b（须与小程序同主体）。绑定后再用真机重试。'
-            : ('微信返回：' + (raw || '未知错误') + '。请确认已在公众平台绑定该企业微信客服，并用真机（非仅模拟器）打开。'),
+            ? '微信客服尚未完成平台绑定。请稍后重试，或使用门店公布的联系方式。'
+            : '微信客服暂时无法打开，请稍后重试，或使用门店公布的联系方式。',
           showCancel: false,
           confirmText: '知道了',
         })
@@ -548,10 +549,9 @@ Page({
       wx.showToast({ title: '登录成功', icon: 'success', duration: 1200 })
       await this.load()
     } catch (error) {
-      const message = String((error && error.message) || '')
-      const friendly = /请求的页面或接口不存在|ROUTE_NOT_FOUND|会员服务暂时连不上/.test(message)
+      const friendly = customerErrorCode(error) === 'ROUTE_NOT_FOUND'
         ? '会员登录服务暂时不可用，请稍后重试或联系门店'
-        : (message || '登录暂时没有完成')
+        : customerErrorMessage(error, '登录暂时没有完成')
       this.setData({ error: friendly })
       wx.showToast({ title: friendly, icon: 'none' })
     } finally {
@@ -621,13 +621,11 @@ Page({
       }
     } catch (error) {
       const code = String((error && error.code) || '')
-      const message = String((error && error.message) || '')
       const friendly = code === 'MEMBERSHIP_RECOVERY_PHONE_NOT_CONFIGURED'
-        || /微信手机号找回尚未接通/.test(message)
         ? '会员手机号校验暂时不可用，请稍后重试或联系门店协助找回'
-        : /请求的页面或接口不存在|ROUTE_NOT_FOUND|会员服务暂时连不上/.test(message)
+        : customerErrorCode(error) === 'ROUTE_NOT_FOUND'
           ? '会员找回服务暂时不可用。请稍后重试；若仍失败，请联系门店协助找回。'
-          : (message || '历史会员找回暂时没有完成')
+          : customerErrorMessage(error, '历史会员找回暂时没有完成')
       this.setData({ recoveryMessage: friendly })
       wx.showToast({ title: friendly, icon: 'none', duration: 3500 })
     } finally {
@@ -674,7 +672,7 @@ Page({
       this.setData({ showPreferenceEditor: false, preferenceTextValue: '' })
       wx.showToast({ title: '偏好已记录', icon: 'success' })
     } catch (error) {
-      this.setData({ preferenceError: error.message || '偏好暂时无法记录' })
+      this.setData({ preferenceError: customerErrorMessage(error, '偏好暂时无法记录') })
     } finally {
       this.setData({ preferenceBusyId: '' })
     }
@@ -698,7 +696,7 @@ Page({
       this.applyCustomerPreferenceSnapshot(snapshot)
       wx.showToast({ title: '已记录纠正', icon: 'success' })
     } catch (error) {
-      this.setData({ preferenceError: error.message || '这项纠正暂时没有保存' })
+      this.setData({ preferenceError: customerErrorMessage(error, '这项纠正暂时没有保存') })
     } finally {
       this.setData({ preferenceBusyId: '' })
     }
@@ -721,7 +719,7 @@ Page({
       this.applyCustomerPreferenceSnapshot(snapshot)
       wx.showToast({ title: '已撤回', icon: 'success' })
     } catch (error) {
-      this.setData({ preferenceError: error.message || '这条依据暂时无法撤回' })
+      this.setData({ preferenceError: customerErrorMessage(error, '这条依据暂时无法撤回') })
     } finally {
       this.setData({ preferenceBusyId: '' })
     }
@@ -760,7 +758,7 @@ Page({
       })
       wx.showToast({ title: '已恢复推荐', icon: 'success' })
     } catch (error) {
-      this.setData({ error: error.message || '暂时无法撤回，请稍后再试' })
+      this.setData({ error: customerErrorMessage(error, '暂时无法撤回，请稍后再试') })
     } finally {
       this.setData({ restrictionBusyId: '' })
     }
@@ -775,7 +773,7 @@ Page({
       await reserveCustomerBenefit(id, 1)
       wx.showModal({ title: '已经申请使用', content: '权益已经为本桌暂留，需由服务人员完成实际交付和核销。', showCancel: false })
       await this.load()
-    } catch (error) { this.setData({ benefitError: error.message || '权益暂时无法申请使用' }) }
+    } catch (error) { this.setData({ benefitError: customerErrorMessage(error, '权益暂时无法申请使用') }) }
     finally { this.setData({ benefitBusyId: '' }) }
   },
 
@@ -799,7 +797,7 @@ Page({
       await createRedemption(id)
       wx.showModal({ title: '兑换已确认', content: '积分已扣减并生成交付记录；需要制作的商品现已进入对应出品工位。', showCancel: false })
       await this.load()
-    } catch (error) { this.setData({ redemptionError: error.message || '兑换没有完成' }) }
+    } catch (error) { this.setData({ redemptionError: customerErrorMessage(error, '兑换没有完成') }) }
     finally { this.setData({ redemptionBusyId: '' }) }
   },
 
@@ -816,7 +814,7 @@ Page({
     if (!confirmed) return
     this.setData({ redemptionBusyId: id, redemptionError: '' })
     try { await cancelRedemptionRequest(id, '顾客在交付前取消兑换'); await this.load() }
-    catch (error) { this.setData({ redemptionError: error.message || '兑换暂时不能取消' }) }
+    catch (error) { this.setData({ redemptionError: customerErrorMessage(error, '兑换暂时不能取消') }) }
     finally { this.setData({ redemptionBusyId: '' }) }
   },
 
@@ -837,8 +835,7 @@ Page({
         })
       })
     } catch (error) {
-      const message = error.message || '报名记录暂时无法读取'
-      this.setData({ registrationError: message })
+      this.setData({ registrationError: customerErrorMessage(error, '报名记录暂时无法读取') })
       wx.showModal({
         title: '暂时无法读取报名记录',
         content: '为避免重复报名，当前不会跳转到活动列表。请稍后重试。',

@@ -14,6 +14,7 @@ const { randomId } = require('../../utils/id')
 const { money, dateTime } = require('../../utils/format')
 const { publicImageUrl } = require('../../utils/media')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
+const { customerErrorMessage, isWechatCancellation } = require('../../utils/customer-error')
 
 const KIND_NAMES = { member_night: '会员之夜', hike: '城市轻徒步', camping: '露营计划', city_walk: '城市漫游', music_picnic: '音乐野餐', proposal: '特别企划', other: '超嗨活动' }
 const LOCAL_REGISTRATIONS_KEY = 'mbox.community.registrations.v1'
@@ -96,9 +97,7 @@ function registrationFailureMessage(error) {
   if (code === 'ACTIVITY_ALREADY_REGISTERED') {
     return '您已有这个活动的有效报名，请下拉刷新后查看状态。'
   }
-  const message = error && error.message ? String(error.message).trim() : ''
-  if (message) return message
-  return '报名没有成功，请检查网络后重试。'
+  return customerErrorMessage(error, '报名没有成功，请检查网络后重试。')
 }
 
 function shouldClearRegistrationAttempt(error) {
@@ -280,7 +279,7 @@ Page({
       }
       let registrations = []
       let registrationReadError = ''
-      try { registrations = await getActivityRegistrations() } catch (error) { registrationReadError = error.message || '报名记录暂时无法读取' }
+      try { registrations = await getActivityRegistrations() } catch (error) { registrationReadError = customerErrorMessage(error, '报名记录暂时无法读取') }
       const local = storageObject(LOCAL_REGISTRATIONS_KEY)
       const authoritative = (registrations || []).find((item) => item.activityPublicId === raw.publicId)
       let registrationRaw = authoritative || local[raw.publicId] || null
@@ -291,7 +290,7 @@ Page({
           registrationRaw = Object.assign({}, registrationRaw, paymentState, {
             status: paymentState.registrationStatus || registrationRaw.status,
           })
-        } catch (error) { paymentReadError = error.message || '付款状态暂时无法读取' }
+        } catch (error) { paymentReadError = customerErrorMessage(error, '付款状态暂时无法读取') }
       }
       const pendingAttempt = storageObject(REGISTRATION_ATTEMPTS_KEY)[raw.publicId]
       const sameCancelledRegistration = authoritative && authoritative.status === 'cancelled' && (
@@ -315,7 +314,7 @@ Page({
         })
         return
       }
-      this.setData({ loading: false, error: error.message || '活动详情暂时无法读取' })
+      this.setData({ loading: false, error: customerErrorMessage(error, '活动详情暂时无法读取') })
     }
   },
 
@@ -365,8 +364,8 @@ Page({
       wx.showToast({ title: '入会成功', icon: 'success' })
       await this.load()
     } catch (error) {
-      this.setData({ membershipInviteBusy: false, error: error.message || '入会暂时没有完成' })
-      wx.showToast({ title: error.message || '入会未完成', icon: 'none' })
+      this.setData({ membershipInviteBusy: false, error: customerErrorMessage(error, '入会暂时没有完成') })
+      wx.showToast({ title: customerErrorMessage(error, '入会未完成'), icon: 'none' })
     }
   },
 
@@ -533,7 +532,7 @@ Page({
       const paymentState = await getActivityRegistrationPayment(registrationRaw.publicId)
       return viewRegistration(Object.assign({}, registrationRaw, paymentState, { status: paymentState.registrationStatus || registrationRaw.status }))
     } catch (error) {
-      this.setData({ error: `报名已记录，但付款状态暂时无法核对：${error.message || '请稍后刷新'}` })
+      this.setData({ error: `报名已记录，但付款状态暂时无法核对：${customerErrorMessage(error, '请稍后刷新')}` })
       return viewRegistration(registrationRaw)
     }
   },
@@ -597,14 +596,14 @@ Page({
         this.setData({ success: '支付请求已提交，正在向支付通道核对最终结果。' })
         await this.performPaymentQuery()
       } catch (error) {
-        const cancelled = String(error.errMsg || error.message || '').toLowerCase().includes('cancel')
+        const cancelled = isWechatCancellation(error)
         if (cancelled) this.setData({ success: '已取消支付，报名仍保留为待付款；可稍后查询或继续处理。', error: '' })
         else this.setData({ error: '支付窗口返回异常，结果尚未确认。请先查单，不要重复报名或重复付款。' })
         await this.refreshPaymentState(false)
       }
     } catch (error) {
       await this.refreshPaymentState(false)
-      this.setData({ error: error.message || '支付动作结果暂时无法确认，请先查单，不要重复付款。' })
+      this.setData({ error: customerErrorMessage(error, '支付动作结果暂时无法确认，请先查单，不要重复付款。') })
     } finally { this.setData({ busy: false }) }
   },
 
@@ -636,7 +635,7 @@ Page({
       else if (next.resolutionState === 'failed') this.setData({ error: '支付通道已明确返回失败，可按页面允许的动作取消报名。' })
       else if (next.resolutionState === 'refunded') this.setData({ success: '退款状态已由系统确认。', error: '' })
       else this.setData({ success: '已刷新权威付款状态。', error: '' })
-    } catch (error) { this.setData({ error: error.message || '查单结果暂时无法确认；本页不会重建报名或重复付款。' }) }
+    } catch (error) { this.setData({ error: customerErrorMessage(error, '查单结果暂时无法确认；本页不会重建报名或重复付款。') }) }
   },
 
   async refreshPaymentState(showError = true) {
@@ -647,7 +646,7 @@ Page({
       const next = viewRegistration(Object.assign({}, registration, state, { status: state.registrationStatus || registration.status }))
       this.rememberRegistration(next)
       this.setData({ registration: next })
-    } catch (error) { if (showError) this.setData({ error: error.message || '付款状态暂时无法读取' }) }
+    } catch (error) { if (showError) this.setData({ error: customerErrorMessage(error, '付款状态暂时无法读取') }) }
   },
 
   async cancelRegistration() {
@@ -679,7 +678,7 @@ Page({
         ? '付款结果未知，当前不能取消；请先查单。'
         : error.code === 'ACTIVITY_PAID_CANCELLATION_REQUIRES_REFUND_WORKFLOW'
           ? '该报名已经付款，顾客端不能直接取消。退款需由店长发起、收银复核。'
-          : error.message || '当前报名无法取消，请稍后重试或联系活动负责人。' })
+          : customerErrorMessage(error, '当前报名无法取消，请稍后重试或联系活动负责人。') })
     } finally { this.setData({ busy: false }) }
   },
 

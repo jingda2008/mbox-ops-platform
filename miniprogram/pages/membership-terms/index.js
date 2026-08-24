@@ -1,5 +1,6 @@
 const { getMiniBootstrap, enrollMembership } = require('../../utils/api')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
+const { customerErrorCode, customerErrorMessage } = require('../../utils/customer-error')
 
 Page({
   data: {
@@ -30,12 +31,12 @@ Page({
         terms: bootstrap.membershipTerms || null,
       })
     } catch (error) {
-      const message = String((error && error.message) || '')
+      const code = customerErrorCode(error)
       this.setData({
         loading: false,
-        error: /请求的页面或接口不存在|ROUTE_NOT_FOUND/.test(message)
+        error: code === 'ROUTE_NOT_FOUND'
           ? '会员服务暂时连不上，请稍后重试或确认小程序已指向最新服务端'
-          : (message || '当前入会条款暂时无法读取'),
+          : customerErrorMessage(error, '当前入会条款暂时无法读取'),
       })
     }
   },
@@ -91,16 +92,16 @@ Page({
         })
       }, 1200)
     } catch (error) {
-      const message = String((error && error.message) || '')
+      const code = customerErrorCode(error)
       this.setData({
-        error: /请求的页面或接口不存在|ROUTE_NOT_FOUND|会员服务暂时连不上/.test(message)
+        error: code === 'ROUTE_NOT_FOUND'
           ? '入会服务暂时不可用，请稍后重试或联系门店'
-          : (message || '入会暂时没有完成'),
+          : customerErrorMessage(error, '入会暂时没有完成'),
       })
       wx.showToast({
-        title: /请求的页面或接口不存在|ROUTE_NOT_FOUND/.test(message)
+        title: code === 'ROUTE_NOT_FOUND'
           ? '入会服务暂时不可用'
-          : (message || '入会未完成'),
+          : customerErrorMessage(error, '入会未完成'),
         icon: 'none',
       })
     } finally {

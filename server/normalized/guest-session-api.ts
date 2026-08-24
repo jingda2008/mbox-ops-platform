@@ -29,7 +29,7 @@ export interface GuestSessionApiOptions {
   loadTableOverview(
     scope: Readonly<StoreScope>,
     tableSessionId: string,
-  ): Promise<{ guestCount: number; primaryServiceName: string | null }>
+  ): Promise<{ guestCount: number; primaryServiceName: string | null; cartProtocolVersion: 1 | 2 }>
 }
 
 interface ApiErrorBody {
@@ -75,6 +75,7 @@ export const guestSessionApiPlugin: FastifyPluginAsync<GuestSessionApiOptions> =
           cartScope: cartScope(result.session.tableSessionId),
           guestCount: overview.guestCount,
           primaryServiceName: overview.primaryServiceName,
+          cartProtocolVersion: overview.cartProtocolVersion,
           capabilities: result.session.scopes,
         },
       })
@@ -94,6 +95,7 @@ export const guestSessionApiPlugin: FastifyPluginAsync<GuestSessionApiOptions> =
           cartScope: cartScope(result.session.tableSessionId),
           guestCount: overview.guestCount,
           primaryServiceName: overview.primaryServiceName,
+          cartProtocolVersion: overview.cartProtocolVersion,
           capabilities: result.session.scopes,
         },
       })
@@ -129,7 +131,7 @@ export const guestSessionApiPlugin: FastifyPluginAsync<GuestSessionApiOptions> =
   app.get('/session', async (request, reply) => handleRoute(reply, async () => {
     const context = await options.requestContext.resolve(request)
     const overview = context.tableSessionId === null
-      ? { guestCount: null, primaryServiceName: null }
+      ? { guestCount: null, primaryServiceName: null, cartProtocolVersion: null }
       : await options.loadTableOverview(context.scope, context.tableSessionId)
     reply.header('cache-control', 'no-store')
     return reply.send({
@@ -145,6 +147,7 @@ export const guestSessionApiPlugin: FastifyPluginAsync<GuestSessionApiOptions> =
         cartScope: cartScope(context.tableSessionId),
         guestCount: overview.guestCount,
         primaryServiceName: overview.primaryServiceName,
+        cartProtocolVersion: overview.cartProtocolVersion,
         capabilities: context.capabilities,
       },
     })

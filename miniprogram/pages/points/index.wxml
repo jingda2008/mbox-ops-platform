@@ -1,6 +1,6 @@
 <view class="page points-page">
   <view class="points-head">
-    <text class="eyebrow">M-BOX MEMBER</text>
+    <text class="eyebrow">M-BOX 会员</text>
     <text class="points-title">积分与成长值</text>
     <text class="points-copy">积分只兑换指定商品或权益，不抵现金；成长值仅用于会员等级。</text>
   </view>

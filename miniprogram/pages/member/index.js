@@ -1,5 +1,6 @@
 const { getMemberPortal } = require('../../utils/api')
 const { getRuntimeConfig } = require('../../config/index')
+const { customerErrorMessage } = require('../../utils/customer-error')
 
 const LEVEL_NAMES = { standard: '会员', silver: '银卡会员', gold: '金卡会员', platinum: '白金会员' }
 const KIND_NAMES = { product_gift: '商品权益', amount_coupon: '金额券', service: '服务权益', song: '点歌权益' }
@@ -45,7 +46,7 @@ Page({
         totalQuantity: result.data.benefits.reduce((sum, item) => sum + item.remainingQuantity, 0),
       })
     } catch (error) {
-      this.setData({ loading: false, error: error.message || '会员账户载入失败' })
+      this.setData({ loading: false, error: customerErrorMessage(error, '会员账户载入失败') })
     }
   },
 })

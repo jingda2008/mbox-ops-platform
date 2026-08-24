@@ -1,11 +1,10 @@
 <view class="page home-page">
   <view class="home-hero">
     <view class="brand-row">
-      <view class="brand"><image class="brand-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX Logo" /><text>M-BOX</text></view>
-      <text wx:if="{{isDevelopment}}" class="dev-badge">开发模式</text>
+      <view class="brand"><image class="brand-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX 标志" /><text>M-BOX</text></view>
     </view>
     <view class="hero-content">
-      <text class="hero-kicker">LIVE MUSIC · SOCIAL NIGHT</text>
+      <text class="hero-kicker">现场音乐 · 城市夜晚</text>
       <text class="hero-title">{{visitState === 'active' ? table.displayName : visitState === 'waiting' ? table.displayName : '今晚，刚刚好'}}</text>
       <text class="hero-copy">{{visitState === 'active' ? ('本桌已连接 · ' + serviceOwner) : visitState === 'waiting' ? '桌码已识别，开台后菜单会自动出现' : '现场音乐、精心酒水与刚好的相遇'}}</text>
     </view>
@@ -40,7 +39,7 @@
           <image wx:if="{{performance && performance.imageUrl}}" src="{{performance.imageUrl}}" mode="aspectFill" />
           <view class="performance-compact__shade"></view>
           <view class="performance-compact__content">
-            <text class="performance-compact__state">{{performance ? performance.summary : 'TONIGHT'}}</text>
+            <text class="performance-compact__state">{{performance ? performance.summary : '今晚'}}</text>
             <text class="performance-compact__name">{{performance && performance.hasSchedule ? performance.performer : '今晚演出安排'}}</text>
             <view class="performance-compact__footer">
               <text class="performance-compact__time">{{performance && performance.hasSchedule ? performance.timeText : '当晚暂无已发布场次'}}</text>
@@ -50,12 +49,12 @@
         </view>
         <view class="performance-shortcuts">
           <view class="performance-shortcut" bindtap="openPerformerProfile" hover-class="button-hover" role="button" aria-role="button">
-            <text class="performance-shortcut__kicker">ARTIST</text>
+            <text class="performance-shortcut__kicker">艺人</text>
             <text class="performance-shortcut__title">{{performance && performance.hasSchedule ? performance.performer : '乐队与歌手'}}</text>
             <text class="performance-shortcut__copy">{{performance && performance.tags ? performance.tags : '认识今晚舞台阵容'}}</text>
           </view>
           <view class="performance-shortcut" bindtap="openMonthlyPerformance" hover-class="button-hover" role="button" aria-role="button">
-            <text class="performance-shortcut__kicker">MONTHLY</text>
+            <text class="performance-shortcut__kicker">月度</text>
             <text class="performance-shortcut__title">{{monthlyPerformanceCard.title || '当月演出'}}</text>
             <text class="performance-shortcut__copy">{{monthlyPerformanceCard.summary || '按日期查看演出场次'}}</text>
           </view>
@@ -80,7 +79,7 @@
           <image wx:if="{{performance && performance.imageUrl}}" src="{{performance.imageUrl}}" mode="aspectFill" />
           <view class="performance-compact__shade"></view>
           <view class="performance-compact__content">
-            <text class="performance-compact__state">{{performance ? performance.summary : 'TONIGHT'}}</text>
+            <text class="performance-compact__state">{{performance ? performance.summary : '今晚'}}</text>
             <text class="performance-compact__name">{{performance && performance.hasSchedule ? performance.performer : '今晚演出安排'}}</text>
             <view class="performance-compact__footer">
               <text class="performance-compact__time">{{performance && performance.hasSchedule ? performance.timeText : '当晚暂无已发布场次'}}</text>
@@ -90,12 +89,12 @@
         </view>
         <view class="performance-shortcuts">
           <view class="performance-shortcut" bindtap="openPerformerProfile" hover-class="button-hover" role="button" aria-role="button">
-            <text class="performance-shortcut__kicker">ARTIST</text>
+            <text class="performance-shortcut__kicker">艺人</text>
             <text class="performance-shortcut__title">{{performance && performance.hasSchedule ? performance.performer : '乐队与歌手'}}</text>
             <text class="performance-shortcut__copy">{{performance && performance.tags ? performance.tags : '认识今晚舞台阵容'}}</text>
           </view>
           <view class="performance-shortcut" bindtap="openMonthlyPerformance" hover-class="button-hover" role="button" aria-role="button">
-            <text class="performance-shortcut__kicker">MONTHLY</text>
+            <text class="performance-shortcut__kicker">月度</text>
             <text class="performance-shortcut__title">{{monthlyPerformanceCard.title || '当月演出'}}</text>
             <text class="performance-shortcut__copy">{{monthlyPerformanceCard.summary || '按日期查看演出场次'}}</text>
           </view>
@@ -112,7 +111,7 @@
       </view>
 
       <view wx:if="{{!membership && membershipTerms}}" class="membership-inline-card" bindtap="openMembershipInvite" hover-class="button-hover" role="button" aria-role="button">
-        <view><text class="membership-inline-card__kicker">M-BOX MEMBERSHIP</text><text class="membership-inline-card__title">加入会员，享积分与活动</text><text class="membership-inline-card__copy">可先浏览首页和菜单，参与超嗨活动时再加入</text></view>
+        <view><text class="membership-inline-card__kicker">M-BOX 会员</text><text class="membership-inline-card__title">加入会员，享积分与活动</text><text class="membership-inline-card__copy">可先浏览首页和菜单，参与超嗨活动时再加入</text></view>
         <text class="membership-inline-card__action">了解 ›</text>
       </view>
     </block>
@@ -149,7 +148,7 @@
   <view wx:if="{{performancePanel}}" class="performance-panel-mask" bindtap="closePerformancePanel" catchtouchmove="noop">
     <view class="performance-panel" catchtap="noop">
       <view class="performance-panel__handle"></view>
-      <view class="performance-panel__head"><view><text>{{performancePanel === 'tonight' ? 'TONIGHT AT M-BOX' : 'ARTIST PROFILE'}}</text><text>{{performancePanel === 'tonight' ? '整晚演出安排' : performance.performer}}</text></view><button bindtap="closePerformancePanel">×</button></view>
+      <view class="performance-panel__head"><view><text>{{performancePanel === 'tonight' ? 'M-BOX 今晚现场' : '艺人介绍'}}</text><text>{{performancePanel === 'tonight' ? '整晚演出安排' : performance.performer}}</text></view><button bindtap="closePerformancePanel">×</button></view>
       <view wx:if="{{performancePanel === 'tonight'}}" class="performance-panel__schedule">
         <view wx:for="{{performance.schedules}}" wx:key="id" class="performance-schedule-row {{item.stateText === '正在演出' ? 'is-current' : ''}}"><view><text>{{item.stateText}}</text><text>{{item.timeText}}</text></view><view><text>{{item.performer}}</text><text>{{item.tags || '现场演出'}}</text></view></view>
       </view>
@@ -176,7 +175,7 @@
   <view wx:if="{{membershipInviteVisible}}" class="member-invite-mask" catchtouchmove="noop">
     <view class="member-invite-sheet">
       <button class="member-invite-close" aria-label="关闭会员邀请" bindtap="dismissMembershipInvite">×</button>
-      <text class="member-invite-kicker">M-BOX MEMBERSHIP</text>
+      <text class="member-invite-kicker">M-BOX 会员</text>
       <text class="member-invite-title">欢迎加入 M-BOX</text>
       <text class="member-invite-copy">加入后享积分、会员权益与活动资格。</text>
       <image class="member-invite-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX Shanghai 1999 Logo" />

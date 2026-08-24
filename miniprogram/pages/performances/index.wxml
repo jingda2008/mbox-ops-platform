@@ -1,6 +1,6 @@
 <view class="page performances-page">
   <view class="performance-hero">
-    <text>M-BOX · LIVE CALENDAR</text>
+    <text>M-BOX · 演出日历</text>
     <text>{{title}}演出</text>
     <text>点选日期查看当晚已发布的歌手、乐队与场次。</text>
   </view>
@@ -21,7 +21,7 @@
     <view wx:if="{{schedules.length}}" class="schedule-list">
       <view wx:for="{{schedules}}" wx:key="id" class="schedule-card">
         <image wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
-        <view class="schedule-avatar" wx:else>LIVE</view>
+        <view class="schedule-avatar" wx:else>现场</view>
         <view>
           <text>{{item.timeText}}</text>
           <text>{{item.performer}}</text>

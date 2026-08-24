@@ -5,7 +5,7 @@
       <text>M-BOX</text>
     </view>
     <view class="profile-hero__content">
-      <text class="profile-hero__kicker">MEMBER · PERSONAL</text>
+      <text class="profile-hero__kicker">会员 · 我的</text>
       <text class="profile-hero__title">我的夜晚</text>
       <text class="profile-hero__copy">积分、权益与到店安排，都在这里。</text>
     </view>
@@ -62,7 +62,7 @@
     </view>
 
     <view wx:if="{{membership && (membership.upgradeText || membership.retainText || membership.expiryText || membership.pendingRecoveryPoints > 0)}}" class="module-card">
-      <text class="module-eyebrow">STATUS</text>
+      <text class="module-eyebrow">服务状态</text>
       <text class="module-title">会员进度</text>
       <text wx:if="{{membership.upgradeText}}" class="progress-line">{{membership.upgradeText}}</text>
       <text wx:if="{{membership.retainText}}" class="progress-line">{{membership.retainText}}</text>
@@ -75,7 +75,7 @@
     </view>
 
     <view class="module-card service-module">
-      <text class="module-eyebrow">SERVICES</text>
+      <text class="module-eyebrow">服务</text>
       <text class="module-title">我的服务</text>
       <view class="service-grid">
         <view class="service-chip" bindtap="openOrders" hover-class="service-chip--hover" role="button">
@@ -100,7 +100,7 @@
     </view>
 
     <view wx:if="{{registrations.length}}" id="registered-activities" class="module-card registered-activity-module">
-      <view class="module-head"><view><text class="module-eyebrow">SUPERHIGH</text><text class="module-title">已报名的超嗨活动</text></view><text class="module-link" bindtap="openSuperhighTab">更多活动 ›</text></view>
+      <view class="module-head"><view><text class="module-eyebrow">超嗨</text><text class="module-title">已报名的超嗨活动</text></view><text class="module-link" bindtap="openSuperhighTab">更多活动 ›</text></view>
       <button wx:for="{{registrations}}" wx:key="publicId" class="list-row activity-registration-row" data-id="{{item.activityPublicId}}" bindtap="openCommunity">
         <image class="list-row__icon" src="/assets/tabbar/community-active.png" mode="aspectFit" />
         <view><text>{{item.title}}</text><text>{{item.startsText}} · {{item.partySize}}人</text></view>
@@ -113,7 +113,7 @@
     </view>
 
     <view wx:if="{{reservations.length}}" class="module-card">
-      <text class="module-eyebrow">RESERVATIONS</text>
+      <text class="module-eyebrow">预约</text>
       <text class="module-title">我的预约</text>
       <button wx:for="{{reservations}}" wx:key="publicId" class="list-row" bindtap="openReservations">
         <view><text>预约到店</text><text>{{item.title}}</text></view>
@@ -123,7 +123,7 @@
     <view wx:if="{{registrationError}}" class="warning">{{registrationError}}</view>
 
     <view wx:if="{{benefits.length}}" class="module-card">
-      <view class="module-head"><view><text class="module-eyebrow">BENEFITS</text><text class="module-title">可用权益</text></view><text class="module-link" bindtap="openCoupons">全部 ›</text></view>
+      <view class="module-head"><view><text class="module-eyebrow">权益</text><text class="module-title">可用权益</text></view><text class="module-link" bindtap="openCoupons">全部 ›</text></view>
       <view wx:if="{{benefitError}}" class="warning">{{benefitError}}</view>
       <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="benefit-scroll">
         <view class="benefit-row">
@@ -141,7 +141,7 @@
     </view>
 
     <view wx:if="{{showRedemptions}}" class="module-card">
-      <text class="module-eyebrow">REDEEM</text>
+      <text class="module-eyebrow">兑换</text>
       <text class="module-title">积分兑换</text>
       <view wx:if="{{redemptionError}}" class="warning">{{redemptionError}}</view>
       <scroll-view wx:if="{{redemptionItems.length}}" scroll-x enhanced show-scrollbar="{{false}}" class="redemption-scroll">
@@ -163,7 +163,7 @@
     </view>
 
     <view wx:if="{{productRestrictions.length}}" class="module-card">
-      <view class="module-head"><view><text class="module-eyebrow">PREFERENCE</text><text class="module-title">不再向我推荐</text></view><text class="module-link">本人可撤回</text></view>
+      <view class="module-head"><view><text class="module-eyebrow">偏好</text><text class="module-title">不再向我推荐</text></view><text class="module-link">本人可撤回</text></view>
       <view class="restriction-list">
         <view wx:for="{{productRestrictions}}" wx:key="publicId" class="restriction-row">
           <view><text>{{item.productName}}</text><text>{{item.restrictionText}}</text></view>
@@ -174,7 +174,7 @@
     </view>
 
     <view wx:if="{{points.length}}" class="module-card">
-      <view class="module-head"><view><text class="module-eyebrow">POINTS</text><text class="module-title">最近积分</text></view><text class="module-link" bindtap="openPoints">明细 ›</text></view>
+      <view class="module-head"><view><text class="module-eyebrow">积分</text><text class="module-title">最近积分</text></view><text class="module-link" bindtap="openPoints">明细 ›</text></view>
       <view class="points-list">
         <view wx:for="{{points}}" wx:key="id" class="point-row">
           <view><text>{{item.description || '积分变动'}}</text><text>{{item.occurredAt}}</text></view>
@@ -184,7 +184,7 @@
     </view>
 
     <view wx:if="{{contentCards.length}}" class="module-card">
-      <text class="module-eyebrow">CONTENT</text>
+      <text class="module-eyebrow">内容</text>
       <text class="module-title">活动与内容</text>
       <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="member-content-scroll">
         <view class="member-content-row">
@@ -207,7 +207,7 @@
   <view wx:if="{{loginSheetVisible}}" class="login-sheet-mask" catchtouchmove="noop" bindtap="closeLoginSheet">
     <view class="login-sheet" catchtap="noop">
       <button class="login-sheet__close" aria-label="关闭登录" bindtap="closeLoginSheet">×</button>
-      <text class="login-sheet__kicker">M-BOX MEMBERSHIP</text>
+      <text class="login-sheet__kicker">M-BOX 会员</text>
       <text class="login-sheet__title">邀请加入 M-BOX 会员</text>
       <text class="login-sheet__copy">勾选协议后，授权微信手机号即可加入并享受积分、优惠券与活动资格。</text>
       <image class="login-sheet__logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX" />

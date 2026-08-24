@@ -1,5 +1,5 @@
 <view class="page notifications-page">
-  <view class="notifications-hero"><text>M-BOX · ALERTS</text><text>消息提醒</text><text>由你决定是否接收；关闭后不影响点单与预约。</text></view>
+  <view class="notifications-hero"><text>M-BOX · 消息提醒</text><text>消息提醒</text><text>由你决定是否接收；关闭后不影响点单与预约。</text></view>
   <state-panel wx:if="{{loading}}" type="loading" title="正在读取提醒设置" />
   <block wx:else>
     <view wx:if="{{error}}" class="error-banner">{{error}}</view>

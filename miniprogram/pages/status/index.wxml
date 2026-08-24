@@ -1,5 +1,5 @@
 <view class="page status-page">
-  <view class="status-head"><text class="eyebrow">{{tableCode}} · SERVICE STATUS</text><text class="status-title">处理进度</text><text class="status-copy">{{live ? '接单、到桌和完成状态会自动更新' : '当前展示本机最近记录'}}</text></view>
+  <view class="status-head"><text class="eyebrow">{{tableCode}} · 服务状态</text><text class="status-title">处理进度</text><text class="status-copy">{{live ? '接单、到桌和完成状态会自动更新' : '当前展示本机最近记录'}}</text></view>
   <state-panel wx:if="{{loading}}" type="loading" title="正在同步最新状态" />
   <block wx:else>
     <view wx:if="{{error}}" class="warning">{{error}}</view><view wx:if="{{success}}" class="success-banner">{{success}}</view>

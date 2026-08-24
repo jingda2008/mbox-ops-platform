@@ -883,7 +883,7 @@ integration('guest service and mood API with PostgreSQL', () => {
     const visible = await app.inject({ method: 'GET', url: '/api/guest/service-requests' })
     expect(visible.statusCode).toBe(200)
     expect(visible.json()).toMatchObject({
-      data: [{ requestType: 'call_staff', status: 'pending', assignedStaffName: null }],
+      data: [{ requestType: 'call_staff', status: 'pending', publicServiceName: null }],
       meta: { count: 1 },
     })
     expect(visible.body).not.toMatch(/detail|requestSnapshot|customerId|employeeId/i)

@@ -1,4 +1,5 @@
 const { getCustomerProfile, updatePreferences } = require('../../utils/api')
+const { customerErrorMessage } = require('../../utils/customer-error')
 
 const AVATAR_KEY = 'mbox.member.avatarUrl'
 const SEATS = [
@@ -72,7 +73,7 @@ Page({
         dietaryNotes: preferences.dietaryNotes || '',
       })
     } catch (error) {
-      this.setData({ loading: false, error: error.message || '暂时无法读取偏好设置' })
+      this.setData({ loading: false, error: customerErrorMessage(error, '暂时无法读取偏好设置') })
     }
   },
 
@@ -125,7 +126,7 @@ Page({
       wx.showToast({ title: '已保存', icon: 'success' })
       setTimeout(() => wx.navigateBack(), 550)
     } catch (error) {
-      this.setData({ error: error.message || '暂时没有保存成功' })
+      this.setData({ error: customerErrorMessage(error, '暂时没有保存成功') })
     } finally { this.setData({ saving: false }) }
   },
 })

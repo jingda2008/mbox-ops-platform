@@ -5,7 +5,7 @@
     <state-panel wx:if="{{!terms}}" type="empty" title="当前入会条款尚未发布" message="新入会暂未开放；点单、预约和找回原会员不受影响" />
     <block wx:else>
       <view class="terms-head">
-        <text class="terms-kicker">M-BOX MEMBERSHIP TERMS</text>
+        <text class="terms-kicker">M-BOX 会员条款</text>
         <text class="terms-title">{{terms.title}}</text>
         <text class="terms-version">第 {{terms.version}} 版 · 生效时间 {{terms.effectiveFrom}}</text>
         <text class="terms-summary">{{terms.summary}}</text>

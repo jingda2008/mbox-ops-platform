@@ -11,8 +11,6 @@ function readWechatPhoneAuthorization(event) {
     message = '请先同意微信弹出的隐私保护指引，再点授权手机号。'
   } else if (/deny|cancel/i.test(errMsg)) {
     message = '未授权微信手机号，本次不会入会，不影响浏览菜单、预约和点单。'
-  } else if (errMsg && !/ok$/i.test(errMsg)) {
-    message = errMsg.replace(/^getPhoneNumber:/i, '').trim() || message
   }
   return { code: '', message }
 }

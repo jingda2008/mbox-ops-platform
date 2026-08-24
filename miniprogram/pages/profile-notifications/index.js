@@ -4,6 +4,7 @@ const {
   getNotificationConsent,
   recordNotificationConsent,
 } = require('../../utils/api')
+const { customerErrorMessage } = require('../../utils/customer-error')
 
 const TITLE_NAMES = {
   loyalty_points_credited: '积分到账提醒',
@@ -37,7 +38,7 @@ Page({
       })
       this.setData({ loading: false, options })
     } catch (error) {
-      this.setData({ loading: false, error: error.message || '提醒设置暂时无法读取' })
+      this.setData({ loading: false, error: customerErrorMessage(error, '提醒设置暂时无法读取') })
     }
   },
 
@@ -71,7 +72,7 @@ Page({
       this.setData({ notice: platformResult === 'accept' ? '已开启提醒' : '已记录你的选择' })
       await this.load()
     } catch (error) {
-      this.setData({ error: error.message || '暂时无法开启提醒' })
+      this.setData({ error: customerErrorMessage(error, '暂时无法开启提醒') })
     } finally {
       this.setData({ busyId: '' })
     }

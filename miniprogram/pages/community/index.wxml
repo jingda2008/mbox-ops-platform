@@ -2,12 +2,12 @@
   <view class="community-hero">
     <image class="community-hero__watermark" src="/assets/brand/superhigh-mark.png" mode="aspectFit" aria-hidden="true" />
     <view class="community-hero__brand">
-      <image class="community-hero__badge" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX" />
+      <image class="community-hero__badge" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX 标志" />
       <text>M-BOX</text>
     </view>
     <view class="community-hero__content">
-      <image class="community-hero__logo" src="/assets/brand/superhigh-horizontal-clear.png" mode="widthFix" aria-label="SUPERHIGH" />
-      <text class="community-hero__kicker">LIVE · FRIENDS · CITY</text>
+      <image class="community-hero__logo" src="/assets/brand/superhigh-horizontal-clear.png" mode="widthFix" aria-label="超嗨" />
+      <text class="community-hero__kicker">现场 · 朋友 · 城市</text>
       <text class="community-hero__title">超嗨部落</text>
       <text class="community-hero__copy">现场、朋友与城市活动，都在这里集合。</text>
     </view>
@@ -53,10 +53,10 @@
   <view wx:if="{{membershipInviteVisible}}" class="community-member-mask" catchtouchmove="noop">
     <view class="community-member-sheet">
       <button class="community-member-close" aria-label="关闭会员邀请" bindtap="dismissMembershipInvite">×</button>
-      <text class="community-member-kicker">M-BOX MEMBERSHIP</text>
+      <text class="community-member-kicker">M-BOX 会员</text>
       <text class="community-member-title">加入会员，解锁超嗨活动</text>
       <text class="community-member-copy">查看和报名活动需要先加入会员并授权手机号。</text>
-      <image class="community-member-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX Shanghai 1999 Logo" />
+      <image class="community-member-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX 标志" />
       <checkbox-group bindchange="onMembershipInviteAgreementChange">
         <label class="community-member-agreement">
           <checkbox value="agree" checked="{{membershipInviteAgreed}}" color="#315d46" />

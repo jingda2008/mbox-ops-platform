@@ -6,7 +6,9 @@ const {
   recordRecommendationEvent,
   prepareCheckoutUpgrade,
   recordCheckoutUpgradeEvent,
-  checkout,
+  checkoutSharedCart,
+  getSharedCart,
+  adjustSharedCart,
   getTableOrders,
   retryOrderPayment,
   getTodayPerformances,
@@ -21,6 +23,7 @@ const { randomId } = require('../../utils/id')
 const { money, dateTime } = require('../../utils/format')
 const { checkoutRecommendationAttribution } = require('../../utils/recommendation-attribution')
 const { publicImageUrl } = require('../../utils/media')
+const { customerErrorMessage, isWechatCancellation } = require('../../utils/customer-error')
 
 const PENDING_PAYMENT_KEY = 'mbox.pending.guest.payment.v1'
 const CHECKOUT_ATTEMPT_KEY = 'mbox.pending.guest.checkout.v1'
@@ -123,6 +126,30 @@ function menuCategories(products) {
   return categories
 }
 
+function sharedCartView(sharedCart, products) {
+  const byProductId = new Map((products || []).map((product) => [product.productId, product]))
+  return (sharedCart && Array.isArray(sharedCart.lines) ? sharedCart.lines : []).map((line) => {
+    const product = byProductId.get(line.productId)
+    const amountMinor = Number(line.unitPriceMinor)
+    const subtotalAmountMinor = Number(line.subtotalAmountMinor)
+    const available = line.available === true
+      && Number.isSafeInteger(amountMinor)
+      && amountMinor >= 0
+      && Number.isSafeInteger(subtotalAmountMinor)
+      && subtotalAmountMinor >= 0
+    return {
+      productId: line.productId,
+      quantity: Number(line.quantity || 0),
+      name: typeof line.name === 'string' && line.name.trim() ? line.name : '暂不可用商品',
+      amountMinor: available ? amountMinor : 0,
+      subtotalAmountMinor: available ? subtotalAmountMinor : 0,
+      priceText: available ? money(amountMinor) : '价格待确认',
+      subtotalText: available ? money(subtotalAmountMinor) : '暂不可结算',
+      available: available && Boolean(product && product.available),
+    }
+  }).filter((line) => line.quantity > 0)
+}
+
 Page({
   data: {
     loading: true,
@@ -148,6 +175,9 @@ Page({
     alcoholOptions: ALCOHOL,
     alcoholIndex: 6,
     cart: [],
+    cartVersion: 0,
+    cartGeneration: 0,
+    cartSyncing: false,
     cartTotal: '¥0.00',
     cartCount: 0,
     upgradeOffer: null,
@@ -163,8 +193,8 @@ Page({
   },
 
   onShow() { this.preparePage() },
-  onHide() { this.stopWaitingPoll() },
-  onUnload() { this.stopWaitingPoll() },
+  onHide() { this.stopWaitingPoll(); this.stopSharedCartPolling() },
+  onUnload() { this.stopWaitingPoll(); this.stopSharedCartPolling() },
 
   stopWaitingPoll() {
     if (this.waitingTimer) clearTimeout(this.waitingTimer)
@@ -176,8 +206,31 @@ Page({
     this.waitingTimer = setTimeout(() => this.preparePage(true), 6000)
   },
 
+  stopSharedCartPolling() {
+    if (this.sharedCartTimer) clearTimeout(this.sharedCartTimer)
+    this.sharedCartTimer = null
+    this.sharedCartPollFailures = 0
+  },
+
+  startSharedCartPolling() {
+    this.stopSharedCartPolling()
+    this.scheduleSharedCartPoll(5000)
+  },
+
+  scheduleSharedCartPoll(delay) {
+    if (this.data.connectionState !== 'active' || this.data.checkoutLocked) return
+    this.sharedCartTimer = setTimeout(async () => {
+      this.sharedCartTimer = null
+      const synchronized = await this.refreshSharedCart(true)
+      this.sharedCartPollFailures = synchronized ? 0 : (this.sharedCartPollFailures || 0) + 1
+      const nextDelay = Math.min(60000, 5000 * (2 ** Math.min(this.sharedCartPollFailures, 4)))
+      this.scheduleSharedCartPoll(nextDelay)
+    }, delay)
+  },
+
   async preparePage(silent) {
     this.stopWaitingPoll()
+    this.stopSharedCartPolling()
     if (!silent) this.setData({ loading: true, error: '', success: '' })
     const session = getTableSession()
     const config = getRuntimeConfig()
@@ -203,10 +256,18 @@ Page({
         this.setData({ loading: false, connectionState: 'needs_scan', table: null })
         return
       }
+      if (Number(connected.cartProtocolVersion) !== 2) {
+        await this.loadBrowseData('', {
+          connectionState: 'upgrade_required',
+          connectionMessage: '本桌正在完成旧版点单。为避免两套购物车混用，请在结台后重新扫码。',
+          table: connected.table || null,
+        })
+        return
+      }
       this.setData({ connectionState: 'active', table: connected.table || null })
       await this.loadActiveData()
     } catch (error) {
-      await this.loadBrowseData(error.message || '桌台连接已失效，请重新扫描桌面二维码')
+      await this.loadBrowseData(customerErrorMessage(error, '桌台连接已失效，请重新扫描桌面二维码'))
     }
   },
 
@@ -245,7 +306,7 @@ Page({
         table: browseView.table,
         products: [],
         visibleProducts: [],
-        error: connectionError || error.message || '今晚菜单暂时无法读取，请稍后再试',
+        error: connectionError || customerErrorMessage(error, '今晚菜单暂时无法读取，请稍后再试'),
       })
     }
   },
@@ -256,15 +317,14 @@ Page({
       getTodayPerformances().catch(() => null),
       getCustomerBenefits().catch(() => []),
       getTableOrders().catch(() => []),
+      getSharedCart(),
       getMiniBootstrap().catch(() => null),
       getWechatNotificationAuthorizations().catch(() => ({ available: false, authorizations: [] })),
     ])
     const products = menuProducts(results[0])
     const categories = menuCategories(products)
-    const storedCart = wx.getStorageSync(this.cartStorageKey()) || []
-    const cart = storedCart.filter((line) => products.some((product) => (
-      product.productId === line.productId && product.available
-    )))
+    const sharedCart = results[4]
+    const cart = sharedCartView(sharedCart, products)
     const recommendations = menuRecommendations(this.data.recommendations, products)
     const recommendationAttribution = this.data.recommendationAttribution
       && recommendations.some((item) => item.productId === this.data.recommendationAttribution.selectedProductId)
@@ -277,7 +337,7 @@ Page({
       wx.removeStorageSync(PENDING_PAYMENT_KEY)
       storedPending = null
     }
-    const pendingFromOrders = tableOrders.find((item) => item.isMine && Number(item.payableAmountMinor || 0) > 0
+    const pendingFromOrders = tableOrders.find((item) => Number(item.payableAmountMinor || 0) > 0
       && ['available', 'payment_in_progress', 'status_review'].includes(item.paymentAccess))
     const pendingPayment = storedPending || (pendingFromOrders ? {
       orderPublicId: pendingFromOrders.publicId,
@@ -285,7 +345,7 @@ Page({
       amountText: money(pendingFromOrders.payableAmountMinor),
       statusText: pendingFromOrders.paymentAccess === 'status_review' ? '付款结果确认中' : '还有一笔待付款',
     } : null)
-    const bootstrap = results[4]
+    const bootstrap = results[5]
     this.setData({
       loading: false,
       browseOnly: false,
@@ -299,10 +359,11 @@ Page({
       checkoutLocked: Boolean(wx.getStorageSync(CHECKOUT_ATTEMPT_KEY)),
       membershipTerms: bootstrap && bootstrap.membershipTerms ? bootstrap.membershipTerms : null,
       membershipInviteVisible: false,
-      wechatNotificationAuthorizations: (results[5] && results[5].authorizations) || [],
+      wechatNotificationAuthorizations: (results[6] && results[6].authorizations) || [],
     })
-    this.updateCart(cart, false)
+    this.updateCart(cart, sharedCart)
     this.applyFilters()
+    this.startSharedCartPolling()
   },
 
   dismissMembershipInvite() {
@@ -327,11 +388,6 @@ Page({
       return
     }
     wx.navigateTo({ url: '/pages/membership-terms/index?source=mini_menu&action=enroll' })
-  },
-
-  cartStorageKey() {
-    const table = this.data.table && this.data.table.code ? this.data.table.code : getTableSession().tableCode || 'unknown'
-    return `mbox.guest.cart.${table}`
   },
 
   scanTable() {
@@ -385,7 +441,7 @@ Page({
       if (result.publicId && recommendations.length) {
         recordRecommendationEvent(result.publicId, 'exposed', null, { surface: 'guest_order_recommendations' }).catch(() => {})
       }
-    } catch (error) { this.setData({ error: error.message || '暂时无法生成推荐' }) }
+    } catch (error) { this.setData({ error: customerErrorMessage(error, '暂时无法生成推荐') }) }
     finally { this.setData({ busy: false }) }
   },
 
@@ -397,13 +453,9 @@ Page({
       wx.showToast({ title: '这款商品当前暂不可点', icon: 'none' })
       return
     }
+    if (!await this.adjustSharedCart(productId, 1)) return
     // 推荐只影响当前购物车。体验承诺必须在有效订单且付款门禁通过后由服务端建立，
     // 这里不能提前派发服务节点或把“选择推荐”误当作已购买权益。
-    const cart = this.data.cart.map((item) => Object.assign({}, item))
-    const existing = cart.find((item) => item.productId === productId)
-    if (existing) existing.quantity += 1
-    else cart.push({ productId, name: product.name, quantity: 1, amountMinor: product.amountMinor })
-    this.updateCart(cart)
     if (event.currentTarget.dataset.source === 'recommendation' && this.data.recommendationPublicId) {
       this.setData({
         recommendationAttribution: {
@@ -468,7 +520,7 @@ Page({
     } catch (error) {
       if (this.data.recommendationPublicId !== recommendationPublicId) return
       this.setData({
-        error: error.message || '暂时无法记录，请稍后再试',
+        error: customerErrorMessage(error, '暂时无法记录，请稍后再试'),
         recommendations: this.data.recommendations.map((item) => (
           item.productId === productId ? Object.assign({}, item, { rejecting: false }) : item
         )),
@@ -476,7 +528,7 @@ Page({
     }
   },
 
-  changeQuantity(event) {
+  async changeQuantity(event) {
     if (this.data.checkoutLocked || this.data.pendingPayment) return
     const productId = event.currentTarget.dataset.id
     const delta = Number(event.currentTarget.dataset.delta)
@@ -485,16 +537,15 @@ Page({
       wx.showToast({ title: '这款商品当前暂不可点', icon: 'none' })
       return
     }
-    const cart = this.data.cart.map((item) => Object.assign({}, item))
-    const item = cart.find((line) => line.productId === productId)
-    if (item) item.quantity += delta
+    const item = this.data.cart.find((line) => line.productId === productId)
+    if (!item) return
     const attribution = this.data.recommendationAttribution
     const removedSelectedRecommendation = Boolean(
-      item && item.quantity <= 0 && attribution
+      item && item.quantity + delta <= 0 && attribution
       && attribution.recommendationPublicId === this.data.recommendationPublicId
       && attribution.selectedProductId === productId,
     )
-    this.updateCart(cart.filter((line) => line.quantity > 0))
+    if (!await this.adjustSharedCart(productId, delta)) return
     if (removedSelectedRecommendation) {
       // Only an explicit removal of the selected recommendation is an ignored fact.
       // Quantity reductions that leave the item in the cart are ambiguous and are not inferred.
@@ -505,18 +556,54 @@ Page({
     }
   },
 
-  updateCart(cart, persist) {
-    const total = cart.reduce((sum, item) => sum + item.amountMinor * item.quantity, 0)
+  updateCart(cart, sharedCart) {
+    const serverTotal = sharedCart && Number(sharedCart.totalAmountMinor)
+    const total = Number.isSafeInteger(serverTotal) && serverTotal >= 0
+      ? serverTotal
+      : cart.reduce((sum, item) => sum + item.subtotalAmountMinor, 0)
     const attribution = this.data.recommendationAttribution
     this.setData({
       cart,
       cartTotal: money(total),
       cartCount: cart.reduce((sum, item) => sum + item.quantity, 0),
+      cartVersion: sharedCart ? Number(sharedCart.version || 0) : this.data.cartVersion,
+      cartGeneration: sharedCart ? Number(sharedCart.generation || 0) : this.data.cartGeneration,
       recommendationAttribution: attribution && cart.some((item) => item.productId === attribution.selectedProductId)
         ? attribution
         : null,
     })
-    if (persist !== false) wx.setStorageSync(this.cartStorageKey(), cart)
+  },
+
+  async refreshSharedCart(silent) {
+    if (this.data.connectionState !== 'active' || this.data.checkoutLocked) return
+    try {
+      const sharedCart = await getSharedCart()
+      this.updateCart(sharedCartView(sharedCart, this.data.products), sharedCart)
+      return true
+    } catch (error) {
+      if (!silent) this.setData({ error: customerErrorMessage(error, '购物车暂时无法同步，请稍后重试') })
+      return false
+    }
+  },
+
+  async adjustSharedCart(productId, delta) {
+    if (this.data.cartSyncing) return false
+    this.setData({ cartSyncing: true, error: '' })
+    try {
+      const sharedCart = await adjustSharedCart(
+        productId, delta, this.data.cartVersion, randomId('shared-cart-adjust'),
+      )
+      this.updateCart(sharedCartView(sharedCart, this.data.products), sharedCart)
+      return true
+    } catch (error) {
+      if (error && error.code === 'SHARED_CART_VERSION_CONFLICT') {
+        await this.refreshSharedCart(true)
+        this.setData({ error: '同桌购物车已经更新，已为你刷新，请确认后再操作。' })
+      } else {
+        this.setData({ error: customerErrorMessage(error, '购物车暂时无法更新，请稍后重试') })
+      }
+      return false
+    } finally { this.setData({ cartSyncing: false }) }
   },
 
   openService() { wx.navigateTo({ url: '/pages/service/index' }) },
@@ -527,6 +614,10 @@ Page({
   async openCheckout() {
     if (!this.data.cart.length || this.data.busy || this.data.pendingPayment) return
     if (this.data.checkoutLocked) return this.retryCheckout()
+    if (this.data.cart.some((item) => !item.available)) {
+      this.setData({ error: '购物车中有暂不可用商品，请先移除后再结账。' })
+      return
+    }
     this.setData({ busy: true, error: '', upgradeOffer: null })
     const items = this.data.cart.map((item) => ({ productId: item.productId, quantity: item.quantity }))
     try {
@@ -538,7 +629,7 @@ Page({
     } catch (error) {
       const blockingCodes = ['GUEST_SESSION_INVALID', 'TABLE_SESSION_ENDED', 'GUEST_CAPABILITY_DENIED', 'STORE_ACCESS_FORBIDDEN']
       if (blockingCodes.includes(error && error.code)) {
-        this.setData({ error: error.message || '当前桌次已失效，请重新扫码' })
+        this.setData({ error: customerErrorMessage(error, '当前桌次已失效，请重新扫码') })
       } else {
         // 付款前升级是可选建议。建议生成失败不能阻断原购物车结账；
         // 真正的桌次、商品、库存和支付校验仍由同一个下单命令失败关闭。
@@ -553,7 +644,7 @@ Page({
     this.setData({ upgradeOffer: null })
     if (offer) {
       // 埋点失败不能阻断顾客按原购物车下单。
-      try { await recordCheckoutUpgradeEvent(offer.publicId, 'declined', 'kept_original') } catch (_) {}
+      try { await recordCheckoutUpgradeEvent(offer.publicId, 'declined', 'kept_original') } catch {}
     }
     await this.submitOrder(null)
   },
@@ -566,7 +657,7 @@ Page({
 
   async retryCheckout() {
     const attempt = wx.getStorageSync(CHECKOUT_ATTEMPT_KEY)
-    if (!attempt || !attempt.items) {
+    if (!attempt || !Number.isSafeInteger(attempt.expectedVersion)) {
       wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
       this.setData({ checkoutLocked: false })
       return
@@ -582,7 +673,7 @@ Page({
     )
     const attempt = previousAttempt || {
       idempotencyKey: randomId('guest-order'),
-      items: this.data.cart.map((item) => ({ productId: item.productId, quantity: item.quantity })),
+      expectedVersion: this.data.cartVersion,
       offerPublicId: offerPublicId || null,
       recommendationPublicId: currentAttribution ? currentAttribution.recommendationPublicId : null,
       selectedRecommendationProductId: currentAttribution ? currentAttribution.selectedProductId : null,
@@ -595,12 +686,11 @@ Page({
         recommendationPublicId: attempt.recommendationPublicId,
         selectedProductId: attempt.selectedRecommendationProductId,
       })
-      const result = await checkout(
-        attempt.items,
-        attempt.offerPublicId,
-        attempt.idempotencyKey,
-        attemptAttribution,
-      )
+      const result = await checkoutSharedCart({
+        expectedVersion: attempt.expectedVersion,
+        checkoutUpgradeOfferPublicId: attempt.offerPublicId,
+        recommendationAttribution: attemptAttribution,
+      }, attempt.idempotencyKey)
       const data = result.data || result
       const pendingPayment = {
         orderPublicId: data.order.publicId,
@@ -611,14 +701,24 @@ Page({
       }
       wx.setStorageSync(PENDING_PAYMENT_KEY, pendingPayment)
       wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
-      this.updateCart([])
+      this.updateCart([], data.sharedCart || null)
       this.setData({ pendingPayment, checkoutLocked: false })
       await this.handlePaymentAction(data.payment && data.payment.providerAction)
     } catch (error) {
+      if (error && error.code === 'SHARED_CART_VERSION_CONFLICT') {
+        wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
+        await this.refreshSharedCart(true)
+        this.setData({
+          error: '同桌购物车已经更新，原结账请求没有提交。请确认最新商品后再结账。',
+          checkoutLocked: false,
+          upgradeOffer: null,
+        })
+        return
+      }
       if (String(error && error.code || '').startsWith('CHECKOUT_UPGRADE_')) {
         wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
         this.setData({
-          error: error.message || '升级内容已经变化，请重新确认后再结账。',
+          error: customerErrorMessage(error, '升级内容已经变化，请重新确认后再结账。'),
           checkoutLocked: false,
           upgradeOffer: null,
         })
@@ -648,7 +748,7 @@ Page({
       this.offerOrderNotifications()
       wx.showToast({ title: '付款已提交', icon: 'none' })
     } catch (error) {
-      const cancelled = String(error.errMsg || '').includes('cancel')
+      const cancelled = isWechatCancellation(error)
       const pendingPayment = Object.assign({}, this.data.pendingPayment, {
         statusText: cancelled ? '订单已保留，可稍后再付' : '付款未完成，可继续支付',
       })
@@ -698,7 +798,7 @@ Page({
           )),
         })
       }
-    } catch (_error) {
+    } catch {
       // Notification permission is optional and must never block payment.
     }
   },
@@ -715,7 +815,7 @@ Page({
       const action = await retryOrderPayment(pending.orderPublicId, retryIdempotencyKey)
       await this.handlePaymentAction(action)
     } catch (error) {
-      this.setData({ error: error.message || '暂时无法恢复付款，请在桌账确认状态或联系服务人员' })
+      this.setData({ error: customerErrorMessage(error, '暂时无法恢复付款，请在桌账确认状态或联系服务人员') })
     } finally { this.setData({ busy: false }) }
   },
 })

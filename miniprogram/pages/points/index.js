@@ -1,4 +1,5 @@
 const { getMiniBootstrap, getMiniLoyaltyLedger } = require('../../utils/api')
+const { customerErrorMessage } = require('../../utils/customer-error')
 
 const POINT_TYPE_NAMES = {
   earn: '消费积分到账',
@@ -106,7 +107,7 @@ Page({
         })),
       })
     } catch (error) {
-      this.setData({ loading: false, error: error.message || '积分明细暂时无法读取' })
+      this.setData({ loading: false, error: customerErrorMessage(error, '积分明细暂时无法读取') })
     }
   },
 

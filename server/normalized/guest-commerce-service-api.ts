@@ -1,8 +1,9 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type {
   AuditActor,
   CommandExecution,
+  CommandOutcome,
   JsonCodec,
   JsonObject,
   NormalizedCommandExecutor,
@@ -33,6 +34,13 @@ import {
 } from './guest-service-repository.js'
 import { loadGuestTableOrders } from './guest-table-orders-query.js'
 import {
+  GuestSharedCartEmptyError,
+  GuestSharedCartOperationConflictError,
+  GuestSharedCartRepository,
+  GuestSharedCartVersionConflictError,
+  type GuestSharedCart,
+} from './guest-shared-cart-repository.js'
+import {
   GuestAuthenticationRequiredError,
   GuestCapabilityDeniedError,
   GuestDeviceBindingError,
@@ -41,7 +49,7 @@ import {
   requireGuestCapability,
 } from './guest-request-context.js'
 import { OrderProductUnavailableError, TableSessionUnavailableForOrderError } from './order-repository.js'
-import type { PaymentCommandService } from './payment-command-service.js'
+import type { InitiatePaymentCommand, PaymentCommandService } from './payment-command-service.js'
 import { OrderNotPayableError, type Payment } from './payment-repository.js'
 import { FulfillmentCapacityUnavailableError } from './fulfillment-capacity-repository.js'
 import type { OnlinePaymentAction, OnlinePaymentService } from './online-payment-service.js'
@@ -75,7 +83,9 @@ export interface GuestCommerceServiceApiOptions {
   transactions: Pick<ScopedPostgresTransactionRunner, 'run'>
   commandExecutor: Pick<NormalizedCommandExecutor, 'execute'>
   commerce: Pick<CommerceCommandService, 'submitOrder'>
+    & Partial<Pick<CommerceCommandService, 'submitOrderInTransaction'>>
   payments: Pick<PaymentCommandService, 'initiate'>
+    & Partial<Pick<PaymentCommandService, 'initiateInTransaction'>>
   onlinePayments: Pick<OnlinePaymentService, 'create' | 'resolveGuestMethod' | 'assertAvailable' | 'resolveActivePayment'>
   resolveGuestContext(request: FastifyRequest): Promise<GuestRequestContext> | GuestRequestContext
   resolvePublicContext(request: FastifyRequest): Promise<{ scope: Readonly<StoreScope> }> | { scope: Readonly<StoreScope> }
@@ -194,6 +204,10 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
 
   app.post('/guest/orders', async (request, reply) => handleRoute(reply, async () => {
     const context = await requireTableContext(options, request, 'guest.order.create')
+    await options.transactions.run(context.scope, async (transaction) => {
+      if (!await lockBoundGuestTablePosition(transaction, context)) throw new GuestAuthenticationRequiredError()
+      await requireGuestCartProtocol(transaction, context.tableSessionId, 1)
+    })
     const paymentMode = await effectivePaymentMode(options, context.scope)
     options.onlinePayments.assertAvailable(paymentMode === 'simulation' ? 'simulation' : 'postar')
     const input = readGuestOrder(request.body)
@@ -242,6 +256,125 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       return loadGuestTableOrders(transaction, context.tableSessionId, context.customerId)
     })
     return reply.send({ data: orders, meta: { tableSessionId: context.tableSessionId, count: orders.length } })
+  }))
+
+  app.get('/guest/shared-cart', async (request, reply) => handleRoute(reply, async () => {
+    const context = await requireTableContext(options, request, 'guest.session.read')
+    const cart = await options.transactions.run(context.scope, async (transaction) => {
+      if (!await lockBoundGuestTablePosition(transaction, context)) throw new GuestAuthenticationRequiredError()
+      await requireGuestCartProtocol(transaction, context.tableSessionId, 2)
+      return new GuestSharedCartRepository(transaction).readOpen(
+        context.tableSessionId,
+        createSharedCartPublicId(),
+      )
+    })
+    return reply.send({ data: publicSharedCart(cart), meta: { tableSessionId: context.tableSessionId } })
+  }))
+
+  app.post('/guest/shared-cart/lines', async (request, reply) => handleRoute(reply, async () => {
+    const context = await requireTableContext(options, request, 'guest.order.create')
+    const input = readSharedCartAdjustment(request.body)
+    const operationId = readIdempotencyKey(request)
+    const cart = await options.transactions.run(context.scope, async (transaction) => {
+      if (!await lockBoundGuestTablePosition(transaction, context)) throw new GuestAuthenticationRequiredError()
+      await requireGuestCartProtocol(transaction, context.tableSessionId, 2)
+      return new GuestSharedCartRepository(transaction).adjust(context.tableSessionId, createSharedCartPublicId(), {
+        ...input,
+        operationId,
+        actorSessionRef: context.actorRef,
+      })
+    })
+    return reply.send({ data: publicSharedCart(cart) })
+  }))
+
+  app.post('/guest/shared-cart/checkout', async (request, reply) => handleRoute(reply, async () => {
+    const context = await requireTableContext(options, request, 'guest.order.create')
+    const paymentMode = await effectivePaymentMode(options, context.scope)
+    options.onlinePayments.assertAvailable(paymentMode === 'simulation' ? 'simulation' : 'postar')
+    const input = readSharedCartCheckout(request.body)
+    const idempotencyKey = readIdempotencyKey(request)
+    const paymentCommand = await guestPaymentCommand(options, context, idempotencyKey, createPublicId, paymentMode)
+    if (!options.commerce.submitOrderInTransaction || !options.payments.initiateInTransaction) {
+      throw new Error('Shared cart checkout service is unavailable')
+    }
+    const submitOrderInTransaction = options.commerce.submitOrderInTransaction.bind(options.commerce)
+    const initiatePaymentInTransaction = options.payments.initiateInTransaction.bind(options.payments)
+    const execution = await options.commandExecutor.execute({
+      scope: context.scope,
+      operationScope: 'guest.shared-cart.checkout',
+      idempotencyKey,
+      requestFingerprint: stableJson({
+        tableSessionId: context.tableSessionId,
+        customerId: context.customerId,
+        expectedVersion: input.expectedVersion,
+        confirmedDuplicateOrderId: input.confirmedDuplicateOrderId,
+        checkoutUpgradeOfferPublicId: input.checkoutUpgradeOfferPublicId,
+        recommendationPublicId: input.recommendationPublicId,
+        selectedRecommendationProductId: input.selectedRecommendationProductId,
+      }),
+      resultCodec: sharedCartCheckoutCodec,
+    }, async (transaction) => {
+      if (!await lockBoundGuestTablePosition(transaction, context)) throw new GuestAuthenticationRequiredError()
+      await requireGuestCartProtocol(transaction, context.tableSessionId, 2)
+      const repository = new GuestSharedCartRepository(transaction)
+      const cart = await repository.beginCheckout(context.tableSessionId, createSharedCartPublicId(), {
+        expectedVersion: input.expectedVersion,
+        operationId: idempotencyKey,
+        actorSessionRef: context.actorRef,
+      })
+      const orderOutcome = await submitOrderInTransaction(transaction, {
+        scope: context.scope,
+        actor: guestActor(context),
+        businessDate: context.businessDate,
+        idempotencyKey: `shared-cart-order-${createHash('sha256').update(idempotencyKey).digest('hex').slice(0, 48)}`,
+        tableSessionId: context.tableSessionId,
+        publicId: createPublicId('order', `${context.scope.storeId}:${idempotencyKey}`),
+        channel: 'guest_qr',
+        settlementMode: 'immediate_payment',
+        lines: cart.lines,
+        createdByCustomerId: context.customerId,
+        confirmedDuplicateOrderPublicId: input.confirmedDuplicateOrderId,
+        checkoutUpgradeOfferPublicId: input.checkoutUpgradeOfferPublicId,
+        ...(input.recommendationPublicId === null ? {} : {
+          recommendationAttribution: {
+            recommendationPublicId: input.recommendationPublicId,
+            selectedProductId: input.selectedRecommendationProductId!,
+          },
+        }),
+      })
+      const paymentOutcome = await initiatePaymentInTransaction(transaction, {
+        ...paymentCommand,
+        orderId: orderOutcome.result.order.id,
+        requestFingerprint: stableJson({
+          orderId: orderOutcome.result.order.id,
+          publicId: paymentCommand.publicId,
+          provider: paymentCommand.provider,
+          method: paymentCommand.method,
+          customerId: context.customerId,
+          tableSessionId: context.tableSessionId,
+        }),
+      })
+      const completedCart = await repository.completeCheckout(cart, {
+        orderId: orderOutcome.result.order.id,
+        expectedVersion: input.expectedVersion,
+        operationId: idempotencyKey,
+        actorSessionRef: context.actorRef,
+      })
+      return combineSharedCartCheckoutOutcomes(completedCart, orderOutcome, paymentOutcome, context)
+    })
+    const providerAction = await createGuestProviderAction(
+        options, context, execution.value.payment, execution.value.order.order.publicId, request.ip,
+    )
+    const response = checkoutResponse(
+      { value: execution.value.order, replayed: execution.replayed },
+      { value: execution.value.payment, replayed: execution.replayed },
+      paymentMode,
+      providerAction,
+    )
+    return reply.code(execution.replayed ? 200 : 201).send({
+      ...response,
+      data: { ...response.data, sharedCart: publicSharedCart(execution.value.cart) },
+    })
   }))
 
   app.post<{ Params: { orderPublicId: string } }>(
@@ -515,6 +648,33 @@ async function requireTableContext(
     throw new GuestApiRequestError('TABLE_SESSION_REQUIRED', '请扫描已开台桌面的二维码后再继续', 409)
   }
   return context as GuestRequestContext & { tableSessionId: string; businessDate: string }
+}
+
+class GuestCartProtocolVersionError extends Error {
+  constructor(expectedVersion: 1 | 2) {
+    super(expectedVersion === 2
+      ? '本桌正在完成旧版点单，请在结台后更新小程序再继续点单'
+      : '当前桌次已升级为共享购物车，请更新小程序后继续点单')
+    this.name = 'GuestCartProtocolVersionError'
+  }
+}
+
+async function requireGuestCartProtocol(
+  transaction: ScopedTransaction,
+  tableSessionId: string,
+  expectedVersion: 1 | 2,
+): Promise<void> {
+  const result = await transaction.query<{ id: string }>(`
+    SELECT id
+    FROM mbox.table_sessions
+    WHERE tenant_id=$1::uuid
+      AND store_id=$2::uuid
+      AND id=$3::uuid
+      AND status='open'
+      AND guest_cart_protocol_version=$4::smallint
+    FOR KEY SHARE
+  `, [transaction.scope.tenantId, transaction.scope.storeId, tableSessionId, expectedVersion])
+  if (result.rows[0] === undefined) throw new GuestCartProtocolVersionError(expectedVersion)
 }
 
 async function searchGuestCatalog(
@@ -854,6 +1014,19 @@ async function initiateGuestPayment(
   createPublicId: NonNullable<GuestCommerceServiceApiOptions['createPublicId']>,
   paymentMode: GuestCheckoutPaymentMode,
 ): Promise<CommandExecution<Payment>> {
+  return options.payments.initiate(await guestPaymentCommand(
+    options, context, orderIdempotencyKey, createPublicId, paymentMode, commerce.order.id,
+  ))
+}
+
+async function guestPaymentCommand(
+  options: GuestCommerceServiceApiOptions,
+  context: GuestRequestContext & { tableSessionId: string; businessDate: string },
+  orderIdempotencyKey: string,
+  createPublicId: NonNullable<GuestCommerceServiceApiOptions['createPublicId']>,
+  paymentMode: GuestCheckoutPaymentMode,
+  orderId = 'shared-cart-order-pending',
+): Promise<InitiatePaymentCommand> {
   // WeChat is the customer-facing channel; Postar is the acquiring provider
   // whose order and callback identities must match the persisted payment.
   const provider = paymentMode === 'simulation' ? 'simulation' : 'postar'
@@ -862,26 +1035,101 @@ async function initiateGuestPayment(
     : await options.onlinePayments.resolveGuestMethod(context.scope, context.customerId)
   const idempotencyKey = `guest-pay-${createHash('sha256').update(orderIdempotencyKey).digest('hex').slice(0, 48)}`
   const publicId = createPublicId('payment', `${context.scope.storeId}:${idempotencyKey}`)
-  return options.payments.initiate({
+  return {
     scope: context.scope,
     actor: guestActor(context),
     businessDate: context.businessDate,
     idempotencyKey,
     requestFingerprint: stableJson({
-      orderId: commerce.order.id,
+      orderId,
       publicId,
       provider,
       method,
       customerId: context.customerId,
       tableSessionId: context.tableSessionId,
     }),
-    orderId: commerce.order.id,
+    orderId,
     publicId,
     provider,
     method,
     principal: guestPaymentPrincipal(context),
     providerSnapshot: { source: 'guest_checkout', configuredMode: paymentMode },
-  })
+  }
+}
+
+interface SharedCartCheckoutResult {
+  cart: GuestSharedCart
+  order: SubmittedCommerceResult
+  payment: Payment
+}
+
+const sharedCartCheckoutCodec: JsonCodec<SharedCartCheckoutResult> = {
+  encode: (value) => JSON.parse(JSON.stringify(value)) as JsonObject,
+  decode: (value) => {
+    const record = jsonObject(value)
+    if (!isRecord(value) || !isRecord(record.cart) || !isRecord(record.order) || !isRecord(record.payment)) {
+      throw new TypeError('Stored shared cart checkout result is invalid')
+    }
+    return value as unknown as SharedCartCheckoutResult
+  },
+}
+
+function combineSharedCartCheckoutOutcomes(
+  cart: GuestSharedCart,
+  order: CommandOutcome<SubmittedCommerceResult>,
+  payment: CommandOutcome<Payment>,
+  context: GuestRequestContext & { businessDate: string },
+): CommandOutcome<SharedCartCheckoutResult> {
+  const cartSnapshot = publicSharedCart(cart) as JsonObject
+  return {
+    result: { cart, order: order.result, payment: payment.result },
+    auditEvents: [
+      ...order.auditEvents,
+      ...payment.auditEvents,
+      {
+        actor: guestActor(context), action: 'guest.shared_cart.submitted', objectType: 'guest_shared_cart',
+        objectId: cart.id, businessDate: context.businessDate, afterData: {
+          ...cartSnapshot, orderId: order.result.order.id, orderPublicId: order.result.order.publicId,
+        },
+      },
+    ],
+    outboxMessages: [
+      ...order.outboxMessages,
+      ...payment.outboxMessages,
+      {
+        aggregateType: 'guest_shared_cart', aggregateId: cart.id, aggregateVersion: cart.version,
+        eventType: 'guest.shared_cart.submitted.v1',
+        payload: { ...cartSnapshot, orderPublicId: order.result.order.publicId },
+      },
+    ],
+  }
+}
+
+function publicSharedCart(cart: GuestSharedCart) {
+  return {
+    cartPublicId: cart.publicId,
+    generation: cart.generation,
+    version: cart.version,
+    status: cart.status,
+    lines: cart.lines.map((line) => ({
+      productId: line.productId,
+      quantity: line.quantity,
+      name: line.name,
+      unitPriceMinor: line.unitPriceMinor,
+      subtotalAmountMinor: line.subtotalAmountMinor,
+      currency: line.currency,
+      available: line.available,
+    })),
+    totalAmountMinor: cart.totalAmountMinor,
+    currency: cart.currency,
+    updatedAt: cart.updatedAt,
+    allowedActions: cart.status === 'open' ? ['adjust', 'checkout'] : [],
+  }
+}
+
+function createSharedCartPublicId(): string {
+  const token = randomUUID().replace(/-/g, '').toUpperCase()
+  return `GSC${token}`
 }
 
 async function effectivePaymentMode(
@@ -1131,6 +1379,66 @@ function readGuestOrder(value: unknown): {
   }
 }
 
+function readSharedCartAdjustment(value: unknown): {
+  productId: string
+  delta: number
+  expectedVersion: number
+} {
+  const body = readStrictObject(value, '共享购物车请求', ['productId', 'delta', 'expectedVersion'])
+  return {
+    productId: readUuid(body.productId, 'productId'),
+    delta: readInteger(body.delta, 'delta', -99, 99),
+    expectedVersion: readInteger(body.expectedVersion, 'expectedVersion', 0, 2_147_483_647),
+  }
+}
+
+function readSharedCartCheckout(value: unknown): {
+  expectedVersion: number
+  confirmedDuplicateOrderId: string | null
+  checkoutUpgradeOfferPublicId: string | null
+  recommendationPublicId: string | null
+  selectedRecommendationProductId: string | null
+} {
+  const body = readStrictObject(value, '共享购物车结账请求', [
+    'expectedVersion', 'confirmedDuplicateOrderId', 'checkoutUpgradeOfferPublicId',
+    'recommendationPublicId', 'selectedRecommendationProductId',
+  ])
+  const confirmedDuplicateOrderId = readOptionalString(
+    body.confirmedDuplicateOrderId, 'confirmedDuplicateOrderId', 128,
+  )
+  if (confirmedDuplicateOrderId !== null && confirmedDuplicateOrderId.length < 8) {
+    throw new GuestApiRequestError('DUPLICATE_CONFIRMATION_INVALID', '重复订单确认信息无效')
+  }
+  const checkoutUpgradeOfferPublicId = readOptionalString(
+    body.checkoutUpgradeOfferPublicId, 'checkoutUpgradeOfferPublicId', 128,
+  )
+  if (checkoutUpgradeOfferPublicId !== null && checkoutUpgradeOfferPublicId.length < 8) {
+    throw new GuestApiRequestError('CHECKOUT_UPGRADE_INVALID', '付款前升级编号无效')
+  }
+  const recommendationPublicId = readOptionalString(
+    body.recommendationPublicId, 'recommendationPublicId', 128,
+  )
+  if (recommendationPublicId !== null && recommendationPublicId.length < 8) {
+    throw new GuestApiRequestError('RECOMMENDATION_ATTRIBUTION_INVALID', '推荐编号无效')
+  }
+  const selectedRecommendationProductId = body.selectedRecommendationProductId === undefined
+    || body.selectedRecommendationProductId === null
+    ? null
+    : readUuid(body.selectedRecommendationProductId, 'selectedRecommendationProductId')
+  if ((recommendationPublicId === null) !== (selectedRecommendationProductId === null)) {
+    throw new GuestApiRequestError(
+      'RECOMMENDATION_ATTRIBUTION_INVALID', '推荐编号和所选推荐商品必须同时提供',
+    )
+  }
+  return {
+    expectedVersion: readInteger(body.expectedVersion, 'expectedVersion', 0, 2_147_483_647),
+    confirmedDuplicateOrderId,
+    checkoutUpgradeOfferPublicId,
+    recommendationPublicId,
+    selectedRecommendationProductId,
+  }
+}
+
 function readServiceRequest(value: unknown): {
   requestType: GuestServiceRequestType
   detail: string | null
@@ -1283,6 +1591,9 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<unknown
     if (error instanceof OrderProductUnavailableError) {
       return reply.code(409).send({ error: { code: 'PRODUCT_UNAVAILABLE', message: '有商品暂时无法供应，请返回购物车调整后再试' } })
     }
+    if (error instanceof GuestCartProtocolVersionError) {
+      return reply.code(409).send({ error: { code: 'CART_PROTOCOL_UPGRADE_REQUIRED', message: error.message } })
+    }
     if (error instanceof FulfillmentCapacityUnavailableError) {
       return reply.code(409).send({ error: { code: error.code, message: error.message } })
     }
@@ -1325,6 +1636,15 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<unknown
     if (error instanceof OnlinePaymentUnavailableError) {
       return reply.code(503).send({ error: { code: 'ONLINE_PAYMENT_UNAVAILABLE', message: error.message } })
     }
+    if (error instanceof GuestSharedCartVersionConflictError) {
+      return reply.code(409).send({ error: { code: 'SHARED_CART_VERSION_CONFLICT', message: error.message } })
+    }
+    if (error instanceof GuestSharedCartEmptyError) {
+      return reply.code(409).send({ error: { code: 'SHARED_CART_EMPTY', message: error.message } })
+    }
+    if (error instanceof GuestSharedCartOperationConflictError) {
+      return reply.code(409).send({ error: { code: 'SHARED_CART_OPERATION_CONFLICT', message: error.message } })
+    }
     if (error instanceof PostarPaymentRejectedError) {
       return reply.code(409).send({ error: { code: 'PROVIDER_PAYMENT_REJECTED', message: '支付机构未受理本次付款，请核对后重试' } })
     }
@@ -1351,6 +1671,10 @@ function jsonObject(value: unknown): JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? value as JsonObject
     : {}
+}
+
+function isRecord(value: unknown): value is JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function readUuid(value: unknown, name: string): string {

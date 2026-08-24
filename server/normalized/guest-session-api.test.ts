@@ -52,9 +52,10 @@ afterEach(async () => {
 
 function fixture(
   result: TableScanResult = { status: 'active', sessionToken, session },
-  overview: { guestCount: number; primaryServiceName: string | null } = {
+  overview: { guestCount: number; primaryServiceName: string | null; cartProtocolVersion: 1 | 2 } = {
     guestCount: 4,
     primaryServiceName: '李艳',
+    cartProtocolVersion: 2,
   },
 ) {
   const scanTable = vi.fn(async () => result)
@@ -114,6 +115,7 @@ describe('guestSessionApiPlugin', () => {
         cartScope: publicCartScope,
         guestCount: 4,
         primaryServiceName: '李艳',
+        cartProtocolVersion: 2,
         capabilities: session.scopes,
       },
     })
@@ -172,6 +174,7 @@ describe('guestSessionApiPlugin', () => {
         table: { code: 'VIP1', displayName: 'VIP 1' },
         guestCount: 4,
         primaryServiceName: '李艳',
+        cartProtocolVersion: 2,
       },
     })
   })
@@ -197,6 +200,7 @@ describe('guestSessionApiPlugin', () => {
         cartScope: publicCartScope,
         guestCount: 4,
         primaryServiceName: '李艳',
+        cartProtocolVersion: 2,
         capabilities: session.scopes,
       },
     })
@@ -212,7 +216,7 @@ describe('guestSessionApiPlugin', () => {
   })
 
   it('returns null instead of inventing a primary service employee', async () => {
-    const value = fixture(undefined, { guestCount: 4, primaryServiceName: null })
+    const value = fixture(undefined, { guestCount: 4, primaryServiceName: null, cartProtocolVersion: 2 })
     const response = await value.app.inject({
       method: 'GET',
       url: '/api/guest/session',

@@ -3,6 +3,7 @@ const { getRuntimeConfig } = require('../../config/index')
 const { getTableSession } = require('../../utils/session')
 const { randomId } = require('../../utils/id')
 const { money, dateTime } = require('../../utils/format')
+const { customerErrorMessage, isWechatCancellation } = require('../../utils/customer-error')
 
 const PENDING_PAYMENT_KEY = 'mbox.pending.guest.payment.v1'
 
@@ -84,7 +85,7 @@ Page({
       const outstanding = orders.reduce((sum, order) => sum + order.payableAmountMinor, 0)
       this.setData({ loading: false, orders, outstandingText: money(outstanding) })
     } catch (error) {
-      this.setData({ loading: false, error: error.message || '桌账载入失败' })
+      this.setData({ loading: false, error: customerErrorMessage(error, '桌账载入失败') })
     }
   },
 
@@ -129,7 +130,7 @@ Page({
       this.setData({ success: '支付请求已提交，最终结果正在以支付回调和桌账核对。' })
       await this.loadData(true)
     } catch (error) {
-      const cancelled = String(error.errMsg || error.message || '').includes('cancel')
+      const cancelled = isWechatCancellation(error)
       const statusText = cancelled ? '订单已保留，付款已取消' : '付款未完成，可稍后继续'
       wx.setStorageSync(PENDING_PAYMENT_KEY, Object.assign({}, pendingPayment, { statusText }))
       this.setData({ error: cancelled ? '' : '付款未完成，请勿重新下单。', success: cancelled ? statusText : '' })

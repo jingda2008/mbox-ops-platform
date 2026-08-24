@@ -188,6 +188,12 @@ integration('normalized guest service requests with PostgreSQL', () => {
       VALUES ($1::uuid, $2::uuid, $3::uuid, $4, '李艳')
     `, [employeeId, tenantId, storeId, `GS-${employeeId.slice(0, 8)}`])
     await pool.query(`
+      INSERT INTO mbox.employee_customer_public_profiles(
+        tenant_id,store_id,employee_id,public_display_name,status,
+        approved_by_employee_id,approved_at,effective_at
+      ) VALUES ($1::uuid,$2::uuid,$3::uuid,'李艳','published',$3::uuid,clock_timestamp(),clock_timestamp())
+    `, [tenantId, storeId, employeeId])
+    await pool.query(`
       UPDATE mbox.service_tasks
       SET assigned_employee_id = $4::uuid, detail = '内部备注不得对客显示'
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
@@ -201,7 +207,7 @@ integration('normalized guest service requests with PostgreSQL', () => {
     expect(visible[0]).toMatchObject({
       requestType: 'call_staff',
       status: 'pending',
-      assignedStaffName: '李艳',
+      publicServiceName: '李艳',
       requestCount: 4,
     })
     expect(visible[0]).not.toHaveProperty('detail')

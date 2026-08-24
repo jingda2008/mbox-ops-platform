@@ -459,9 +459,10 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
           const selected = await transaction.query<{
             guest_count: number
             primary_service_name: string | null
+            guest_cart_protocol_version: number
           }>(`
-            SELECT table_session.guest_count,
-              CASE WHEN count(employee.id) = 1 THEN min(employee.display_name) ELSE NULL END
+            SELECT table_session.guest_count,table_session.guest_cart_protocol_version,
+              CASE WHEN count(public_profile.id) = 1 THEN min(public_profile.public_display_name) ELSE NULL END
                 AS primary_service_name
             FROM mbox.table_sessions AS table_session
             LEFT JOIN mbox.table_assignments AS assignment
@@ -476,17 +477,24 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
              AND employee.store_id = assignment.store_id
              AND employee.id = assignment.employee_id
              AND employee.status = 'active'
+            LEFT JOIN mbox.employee_customer_public_profiles AS public_profile
+              ON public_profile.tenant_id = employee.tenant_id
+             AND public_profile.store_id = employee.store_id
+             AND public_profile.employee_id = employee.id
+             AND public_profile.status = 'published'
+             AND public_profile.effective_at <= clock_timestamp()
             WHERE table_session.tenant_id = $1::uuid
               AND table_session.store_id = $2::uuid
               AND table_session.id = $3::uuid
               AND table_session.status = 'open'
-            GROUP BY table_session.id, table_session.guest_count
+            GROUP BY table_session.id, table_session.guest_count,table_session.guest_cart_protocol_version
           `, [transaction.scope.tenantId, transaction.scope.storeId, tableSessionId])
           const row = selected.rows[0]
           if (row === undefined) throw new GuestTableSessionEndedError()
           return {
             guestCount: Number(row.guest_count),
             primaryServiceName: row.primary_service_name,
+            cartProtocolVersion: Number(row.guest_cart_protocol_version) as 1 | 2,
           }
         },
         { readOnly: true },

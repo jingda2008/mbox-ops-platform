@@ -2,6 +2,7 @@ const { getActivities, getActivityRegistrations, getMiniBootstrap, enrollMembers
 const { money } = require('../../utils/format')
 const { publicImageUrl } = require('../../utils/media')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
+const { customerErrorMessage } = require('../../utils/customer-error')
 
 const KIND_NAMES = {
   member_night: '会员之夜', hike: '城市轻徒步', camping: '露营计划', city_walk: '城市漫游',
@@ -65,7 +66,7 @@ Page({
         membershipInviteVisible: false,
         membershipInviteAgreed: false,
       })
-    } catch (error) { this.setData({ loading: false, error: error.message || '活动或会员服务暂时没有接上' }) }
+    } catch (error) { this.setData({ loading: false, error: customerErrorMessage(error, '活动或会员服务暂时没有接上') }) }
   },
 
   openDetail(event) {
@@ -134,8 +135,8 @@ Page({
       wx.showToast({ title: '入会成功', icon: 'success' })
       if (activityId) this.navigateToActivity(activityId)
     } catch (error) {
-      this.setData({ membershipInviteBusy: false, error: error.message || '入会暂时没有完成' })
-      wx.showToast({ title: error.message || '入会未完成', icon: 'none' })
+      this.setData({ membershipInviteBusy: false, error: customerErrorMessage(error, '入会暂时没有完成') })
+      wx.showToast({ title: customerErrorMessage(error, '入会未完成'), icon: 'none' })
     }
   },
 

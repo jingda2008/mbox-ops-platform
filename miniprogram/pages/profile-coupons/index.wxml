@@ -1,5 +1,5 @@
 <view class="page coupons-page">
-  <view class="coupons-hero"><text>M-BOX · COUPONS</text><text>我的优惠券</text><text>门店发放的券与可用权益都在这里。</text></view>
+  <view class="coupons-hero"><text>M-BOX · 优惠券</text><text>我的优惠券</text><text>门店发放的券与可用权益都在这里。</text></view>
   <state-panel wx:if="{{loading}}" type="loading" title="正在读取优惠券" />
   <block wx:else>
     <view wx:if="{{error}}" class="error-banner">{{error}}</view>

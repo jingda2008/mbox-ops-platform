@@ -1,12 +1,12 @@
 <view class="page order-page">
   <view class="order-head">
-    <view><text class="eyebrow">M-BOX · LIVE ORDER</text><text class="order-title">今晚点单</text></view>
+    <view><text class="eyebrow">M-BOX · 今晚点单</text><text class="order-title">今晚点单</text></view>
     <button wx:if="{{connectionState === 'active'}}" class="service-entry" bindtap="openService">需要服务</button>
   </view>
 
   <state-panel wx:if="{{loading}}" type="loading" title="正在确认桌次与菜单" />
 
-  <view wx:elif="{{connectionState === 'needs_scan' || connectionState === 'waiting'}}" class="gate-wrap">
+  <view wx:elif="{{connectionState === 'needs_scan' || connectionState === 'waiting' || connectionState === 'upgrade_required'}}" class="gate-wrap">
     <view wx:if="{{connectionState === 'waiting'}}" class="browse-intro">
       <view class="waiting-pulse"><view></view></view>
       <view class="browse-intro__copy">
@@ -16,10 +16,18 @@
       <button class="secondary-button gate-button" bindtap="retryTable">刷新开台状态</button>
       <text class="gate-note">等待期间可以先查看今晚真实菜单</text>
     </view>
-    <view wx:else class="browse-intro">
-      <image class="gate-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX Logo" />
+    <view wx:elif="{{connectionState === 'upgrade_required'}}" class="browse-intro">
       <view class="browse-intro__copy">
-        <text class="gate-kicker">M-BOX · TONIGHT MENU</text><text class="gate-title">先看今晚，再决定怎么喝</text>
+        <text class="gate-kicker">{{table.displayName}}</text><text class="gate-title">本桌正在完成旧版点单</text>
+        <text class="gate-copy">{{connectionMessage}}</text>
+      </view>
+      <button class="secondary-button gate-button" bindtap="retryTable">结台后重新扫码</button>
+      <text class="gate-note">你可以先查看今晚菜单</text>
+    </view>
+    <view wx:else class="browse-intro">
+      <image class="gate-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX 标志" />
+      <view class="browse-intro__copy">
+        <text class="gate-kicker">M-BOX · 今晚菜单</text><text class="gate-title">先看今晚，再决定怎么喝</text>
         <text class="gate-copy">先慢慢看；到店扫码后就能下单付款。</text>
       </view>
       <button class="primary-button gate-button" bindtap="scanTable">到店扫码点单</button>
@@ -37,7 +45,7 @@
         <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row {{item.available ? '' : 'is-unavailable'}}">
           <view class="product-media">
             <image wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
-            <view wx:else class="product-media__placeholder"><text>M</text></view>
+            <view wx:else class="product-media__placeholder"><text>M-BOX</text></view>
           </view>
           <view class="product-main"><text class="product-kind">{{item.productKind === 'bundle' ? '体验组合' : item.categoryName}}</text><text class="product-name">{{item.name}}</text><text class="product-copy">{{item.description || item.includedText || '详情以当晚正式菜单为准'}}</text></view>
           <view class="product-action"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.availabilityText}}</text><text class="product-availability-copy">{{item.available ? (connectionState === 'waiting' ? '服务人员开台后可下单' : '到店扫码后可下单') : item.availabilityDetail}}</text></view>
@@ -106,7 +114,7 @@
         <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row {{item.available ? '' : 'is-unavailable'}}">
           <view class="product-media">
             <image wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
-            <view wx:else class="product-media__placeholder"><text>M</text></view>
+            <view wx:else class="product-media__placeholder"><text>M-BOX</text></view>
           </view>
           <view class="product-main"><text class="product-kind">{{item.productKind === 'bundle' ? '体验组合' : item.categoryName}}</text><text class="product-name">{{item.name}}</text><text class="product-copy">{{item.description || item.includedText || '详情以当晚正式菜单为准'}}</text></view>
           <view class="product-action"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.availabilityText}}</text><button wx:if="{{item.available}}" aria-label="添加{{item.name}}" data-id="{{item.productId}}" bindtap="addProduct">＋</button><button wx:else class="product-unavailable" disabled="{{true}}">{{item.availabilityDetail}}</button></view>
@@ -117,8 +125,8 @@
   </block>
 
   <view wx:if="{{connectionState === 'active' && cart.length}}" class="cart-dock">
-    <view class="cart-summary"><view><text>{{cartCount}}件 · {{cartTotal}}</text><text>点击数量可继续调整</text></view><button class="checkout-button" bindtap="openCheckout" loading="{{busy}}">确认并付款</button></view>
-    <scroll-view scroll-y class="cart-lines"><view wx:for="{{cart}}" wx:key="productId"><text>{{item.name}}</text><view><button data-id="{{item.productId}}" data-delta="-1" bindtap="changeQuantity">−</button><text>{{item.quantity}}</text><button data-id="{{item.productId}}" data-delta="1" bindtap="changeQuantity">＋</button></view></view></scroll-view>
+    <view class="cart-summary"><view><text>本桌共享购物车 · {{cartCount}}件 · {{cartTotal}}</text><text>{{cartSyncing ? '正在同步同桌选择' : '同桌顾客可共同查看和调整'}}</text></view><button class="checkout-button" bindtap="openCheckout" loading="{{busy}}" disabled="{{cartSyncing}}">确认并付款</button></view>
+    <scroll-view scroll-y class="cart-lines"><view wx:for="{{cart}}" wx:key="productId"><view><text>{{item.name}}</text><text>{{item.priceText}} × {{item.quantity}} · 小计 {{item.subtotalText}}</text></view><view><button data-id="{{item.productId}}" data-delta="-1" bindtap="changeQuantity" disabled="{{cartSyncing}}">−</button><text>{{item.quantity}}</text><button data-id="{{item.productId}}" data-delta="1" bindtap="changeQuantity" disabled="{{cartSyncing || !item.available}}">＋</button></view></view></scroll-view>
   </view>
 
   <view wx:if="{{upgradeOffer}}" class="sheet-mask"><view class="upgrade-sheet">

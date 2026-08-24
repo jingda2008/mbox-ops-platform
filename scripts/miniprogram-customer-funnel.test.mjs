@@ -297,6 +297,34 @@ test('customers can browse a read-only menu before scanning, but the browse view
   assert.match(apiSource, /publicRequest\(`\/api\/public\/mini\/menu\/products/)
 })
 
+test('customer pages use Chinese release copy and the table cart is server-authoritative', async () => {
+  const [orderView, orderLogic, apiSource, errorSource, sessionApi, cartRepository] = await Promise.all([
+    read('miniprogram/pages/order/index.wxml'),
+    read('miniprogram/pages/order/index.js'),
+    read('miniprogram/utils/api.js'),
+    read('miniprogram/utils/customer-error.js'),
+    read('server/normalized/guest-session-api.ts'),
+    read('server/normalized/guest-shared-cart-repository.ts'),
+  ])
+  const appConfig = JSON.parse(await read('miniprogram/app.json'))
+  const views = await Promise.all(appConfig.pages.map((page) => read(`miniprogram/${page}.wxml`)))
+
+  for (const view of [orderView, ...views]) {
+    assert.doesNotMatch(view, /开发模式|上架候选版|正式发布提示|STEP\s*0[1-3]|LIVE ORDER|TONIGHT MENU|M-BOX MEMBERSHIP|MEMBER · PERSONAL|SERVICE STATUS|TONIGHT AT M-BOX|ARTIST PROFILE|>STATUS<|>SERVICES</)
+  }
+  assert.match(orderView, /本桌共享购物车/)
+  assert.match(orderView, /小计 \{\{item\.subtotalText\}\}/)
+  assert.match(orderLogic, /getSharedCart,\s*adjustSharedCart/)
+  assert.doesNotMatch(orderLogic, /mbox\.guest\.cart\./)
+  assert.doesNotMatch(orderLogic, /setInterval\(\(\) => this\.refreshSharedCart/)
+  assert.match(orderLogic, /Math\.min\(60000, 5000 \* \(2 \*\* Math\.min\(this\.sharedCartPollFailures, 4\)\)\)/)
+  assert.match(apiSource, /\/api\/guest\/shared-cart/)
+  assert.match(errorSource, /CART_PROTOCOL_UPGRADE_REQUIRED/)
+  assert.match(sessionApi, /cartProtocolVersion/)
+  assert.match(cartRepository, /new OrderRepository\(this\.transaction\)\.assertCurrentOrderable/)
+  assert.match(cartRepository, /totalAmountMinor/)
+})
+
 test('recommendations stay inside the current table menu and never bypass guest ordering gates', async () => {
   const [orderLogic, recommendationRepository] = await Promise.all([
     read('miniprogram/pages/order/index.js'),

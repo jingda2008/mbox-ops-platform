@@ -37,7 +37,7 @@ describe('normalized migration baseline', () => {
       '037', '038', '039', '040', '041', '042', '043', '044', '045', '046', '047', '048',
       '049', '050', '051', '052', '053', '054', '055', '056', '057', '058', '059', '060',
       '061', '062', '063', '064', '065', '066', '067', '068', '069', '070', '071', '072',
-      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101', '102', '103', '104', '105',
+      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101', '102', '103', '104', '105', '106',
     ])
     for (const migration of migrations) {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
@@ -72,6 +72,21 @@ describe('normalized migration baseline', () => {
     expect(migration?.sql).toMatch(/delivery_mode IN \('cloud_adapter','bridge_pull'\)/)
     expect(migration?.sql).toMatch(/ENABLE ROW LEVEL SECURITY/)
     expect(migration?.sql).toMatch(/schema_version='105'/)
+  })
+
+  it('separates customer-visible employee names, formal privacy policies and table-scoped carts', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '106')
+    expect(migration?.sql).toMatch(/CREATE TABLE mbox\.employee_customer_public_profiles/)
+    expect(migration?.sql).toMatch(/public_display_name text NOT NULL/)
+    expect(migration?.sql).toMatch(/status IN \('draft','published','withdrawn'\)/)
+    expect(migration?.sql).toMatch(/CREATE TABLE mbox\.privacy_policy_releases/)
+    expect(migration?.sql).toMatch(/content_sha256 char\(64\)/)
+    expect(migration?.sql).toMatch(/CREATE TABLE mbox\.guest_shared_carts/)
+    expect(migration?.sql).toMatch(/generation integer NOT NULL/)
+    expect(migration?.sql).toMatch(/CREATE TABLE mbox\.guest_shared_cart_operations/)
+    expect(migration?.sql).toMatch(/guest_shared_cart_operations_append_only/)
+    expect(migration?.sql).toMatch(/FORCE ROW LEVEL SECURITY/)
+    expect(migration?.sql).toMatch(/schema_version='106'/)
   })
 
   it('keeps recommendation publication separate from customer rollout', async () => {

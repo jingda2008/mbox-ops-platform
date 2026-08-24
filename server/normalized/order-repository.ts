@@ -224,6 +224,23 @@ export class OrderDeliveryBlockedError extends Error {
 export class OrderRepository {
   constructor(private readonly transaction: ScopedTransaction) {}
 
+  /**
+   * Reuses the order-price authority for a server-owned cart before it accepts
+   * a quantity increase.  Checkout repeats the full order and inventory
+   * validation in the same transaction that creates the submitted order.
+   */
+  async assertCurrentOrderable(
+    lines: readonly SubmitOrderLineInput[],
+    channel: OrderChannel,
+  ): Promise<void> {
+    const requested = normalizeRequestedLines(lines)
+    const priced = await this.loadCurrentPrices(requested)
+    for (const [index, price] of priced.entries()) {
+      assertProductOrderable(price, requested[index]!, channel)
+    }
+    await this.loadBundleComponents(requested, priced)
+  }
+
   async createSubmitted(
     input: Readonly<CreateSubmittedOrderInput>,
     pricingAuthorization?: Readonly<VerifiedPricingAuthorization>,

@@ -1,6 +1,6 @@
 <view class="page preferences-page">
   <view class="preferences-hero">
-    <text class="preferences-kicker">M-BOX · YOUR NIGHT</text>
+    <text class="preferences-kicker">M-BOX · 今晚偏好</text>
     <text class="preferences-title">我的偏好</text>
     <text class="preferences-copy">昵称、生日与到店偏好；生日仅保存月日，用于生日赠送权益。</text>
   </view>

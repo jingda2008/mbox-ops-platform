@@ -147,6 +147,8 @@ async function readyFixture(stage) {
     privacy: {
       operatorName: '上海某某文化公司', contact: 'privacy@shmbox.cn',
       dataRetentionPolicyVersion: 'retention-v1', thirdPartyRegisterVersion: 'vendors-v1',
+      policyVersion: 'privacy-v1', contentSha256: 'c'.repeat(64), approvedBy: '法务复核人',
+      approvedAt: timestamp, effectiveAt: timestamp,
       reviewedAt: timestamp, evidenceRef: proof,
     },
     deviceValidation: {

@@ -78,7 +78,7 @@
   <view wx:if="{{membershipInviteVisible}}" class="detail-member-mask" catchtouchmove="noop">
     <view class="detail-member-sheet">
       <button class="detail-member-close" aria-label="关闭会员邀请" bindtap="dismissMembershipInvite">×</button>
-      <text class="detail-member-kicker">M-BOX MEMBERSHIP</text>
+      <text class="detail-member-kicker">M-BOX 会员</text>
       <text class="detail-member-title">加入会员，解锁超嗨活动</text>
       <text class="detail-member-copy">查看和报名活动需要先加入会员并授权手机号。</text>
       <image class="detail-member-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX Shanghai 1999 Logo" />

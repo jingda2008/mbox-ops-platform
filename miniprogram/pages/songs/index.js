@@ -2,6 +2,7 @@ const { getTodayPerformances, submitSongRequest } = require('../../utils/api')
 const { getRuntimeConfig } = require('../../config/index')
 const { getTableSession } = require('../../utils/session')
 const { dateTime } = require('../../utils/format')
+const { customerErrorMessage } = require('../../utils/customer-error')
 
 Page({
   data: {
@@ -42,7 +43,7 @@ Page({
         phaseText: phaseText(view.phase),
       })
     } catch (error) {
-      this.setData({ loading: false, error: error.message || '当晚演出排班载入失败' })
+      this.setData({ loading: false, error: customerErrorMessage(error, '当晚演出排班载入失败') })
     }
   },
 
@@ -72,7 +73,7 @@ Page({
         success: request.status ? `已提交，当前状态：${request.status}。舞台确认后才会安排。` : '点歌意向已提交，等待舞台确认。',
       })
     } catch (error) {
-      this.setData({ error: error.message || '点歌意向未提交' })
+      this.setData({ error: customerErrorMessage(error, '点歌意向未提交') })
     } finally {
       this.setData({ submitting: false })
     }

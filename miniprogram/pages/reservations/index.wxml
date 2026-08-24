@@ -1,5 +1,5 @@
 <view class="page reservations-page">
-  <view class="reservation-head"><view class="brand-row"><view><text class="eyebrow">M-BOX · RESERVATION</text><text class="reservation-title">预约到店</text></view><text wx:if="{{isDevelopment}}" class="dev-badge">开发模式</text></view><text class="reservation-copy">分三步完成，只在最后确认联系信息与费用规则。</text></view>
+  <view class="reservation-head"><view class="brand-row"><view><text class="eyebrow">M-BOX · 到店预约</text><text class="reservation-title">预约到店</text></view></view><text class="reservation-copy">分三步完成，只在最后确认联系信息与费用规则。</text></view>
   <state-panel wx:if="{{loading}}" type="loading" title="正在读取本人预约" />
   <block wx:else>
     <view wx:if="{{membershipRequired}}" class="membership-gate">
@@ -42,14 +42,14 @@
       <view class="step-head"><view class="step-progress"><view class="{{step >= 1 ? 'is-active' : ''}}"><text>1</text><text>时间人数</text></view><view class="step-line {{step >= 2 ? 'is-active' : ''}}"></view><view class="{{step >= 2 ? 'is-active' : ''}}"><text>2</text><text>演出位置</text></view><view class="step-line {{step >= 3 ? 'is-active' : ''}}"></view><view class="{{step >= 3 ? 'is-active' : ''}}"><text>3</text><text>确认提交</text></view></view></view>
 
       <view wx:if="{{step === 1}}" class="flow-panel">
-        <text class="flow-kicker">STEP 01</text><text class="flow-title">什么时候来，几位？</text>
+        <text class="flow-kicker">第一步</text><text class="flow-title">什么时候来，几位？</text>
         <view class="field-row"><label class="field"><text class="field__label">日期</text><picker mode="date" value="{{reservationDate}}" start="{{minimumDate}}" bindchange="onDateChange"><view class="picker-field">{{reservationDate}}</view></picker></label><label class="field"><text class="field__label">时间</text><picker mode="time" value="{{reservationTime}}" bindchange="onTimeChange"><view class="picker-field">{{reservationTime}}</view></picker></label></view>
         <label class="field"><text class="field__label">到店人数</text><input class="field__input" type="number" value="{{partySize}}" bindinput="onPartySizeInput" bindblur="onPartySizeConfirm" /></label>
         <view class="availability {{availability && availability.acceptingReservations ? 'is-available' : ''}}"><text>{{checking ? '正在确认容量…' : availabilityText}}</text><text wx:if="{{depositText}}">{{depositText}}</text></view>
       </view>
 
       <view wx:elif="{{step === 2}}" class="flow-panel flow-panel--experience">
-        <text class="flow-kicker">STEP 02</text><text class="flow-title">演出与位置偏好</text>
+        <text class="flow-kicker">第二步</text><text class="flow-title">演出与位置偏好</text>
         <view class="show-selection show-selection--mini">
           <view class="field-title"><text>今晚演出提醒</text><text>可选 · 点选即可</text></view>
           <state-panel wx:if="{{loadingShows}}" type="loading" title="读取演出" />
@@ -81,7 +81,7 @@
       </view>
 
       <view wx:else class="flow-panel">
-        <text class="flow-kicker">STEP 03</text><text class="flow-title">最后核对</text>
+        <text class="flow-kicker">第三步</text><text class="flow-title">最后核对</text>
         <view class="booking-summary"><view><text>到店</text><text>{{reservationDate}} {{reservationTime}} · {{partySize}}人</text></view><view><text>位置</text><text>{{seatOptions[seatIndex].name}}</text></view><view><text>场景</text><text>{{occasionOptions[occasionIndex].name}}</text></view><view wx:if="{{selectedPerformance}}"><text>演出</text><text>{{selectedPerformance.name}} · {{selectedPerformance.timeText}}</text></view></view>
         <label class="field"><text class="field__label">预约称呼</text><input class="field__input" maxlength="100" value="{{customerName}}" placeholder="如：林女士" bindinput="onNameInput" /></label>
         <label class="field"><text class="field__label">手机号或微信</text><input class="field__input" maxlength="100" value="{{contact}}" placeholder="仅用于本次预约联系" bindinput="onContactInput" /></label>
